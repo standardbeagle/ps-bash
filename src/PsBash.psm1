@@ -1548,6 +1548,207 @@ function Invoke-BashWc {
     }
 }
 
+# --- find Command ---
+
+function Invoke-BashFind {
+    $Arguments = [string[]]$args
+
+    # Manual arg parsing for find's predicate-style flags
+    $searchPath = '.'
+    $namePattern = $null
+    $typeFilter = $null
+    $maxDepth = [int]::MaxValue
+    $sizeExpr = $null
+    $mtimeExpr = $null
+    $findEmpty = $false
+    $operands = [System.Collections.Generic.List[string]]::new()
+
+    $i = 0
+    while ($i -lt $Arguments.Count) {
+        $arg = $Arguments[$i]
+
+        switch ($arg) {
+            '-name' {
+                $i++
+                if ($i -lt $Arguments.Count) { $namePattern = $Arguments[$i] }
+                $i++
+                continue
+            }
+            '-type' {
+                $i++
+                if ($i -lt $Arguments.Count) { $typeFilter = $Arguments[$i] }
+                $i++
+                continue
+            }
+            '-maxdepth' {
+                $i++
+                if ($i -lt $Arguments.Count) { $maxDepth = [int]$Arguments[$i] }
+                $i++
+                continue
+            }
+            '-size' {
+                $i++
+                if ($i -lt $Arguments.Count) { $sizeExpr = $Arguments[$i] }
+                $i++
+                continue
+            }
+            '-mtime' {
+                $i++
+                if ($i -lt $Arguments.Count) { $mtimeExpr = $Arguments[$i] }
+                $i++
+                continue
+            }
+            '-empty' {
+                $findEmpty = $true
+                $i++
+                continue
+            }
+            default {
+                $operands.Add($arg)
+                $i++
+            }
+        }
+    }
+
+    if ($operands.Count -gt 0) {
+        $searchPath = $operands[0]
+    }
+
+    if (-not (Test-Path -LiteralPath $searchPath)) {
+        Write-Error -Message "find: '$searchPath': No such file or directory" -ErrorAction Continue
+        return
+    }
+
+    $resolvedRoot = (Resolve-Path -LiteralPath $searchPath).Path
+    $rootDepth = ($resolvedRoot.TrimEnd([System.IO.Path]::DirectorySeparatorChar, [System.IO.Path]::AltDirectorySeparatorChar) -split '[\\/]').Count
+
+    # Collect all filesystem items recursively
+    $allItems = [System.Collections.Generic.List[System.IO.FileSystemInfo]]::new()
+
+    # Include the search path itself (find includes the root)
+    $rootItem = Get-Item -LiteralPath $resolvedRoot -Force
+    $allItems.Add($rootItem)
+
+    if ($rootItem -is [System.IO.DirectoryInfo]) {
+        try {
+            $children = Get-ChildItem -LiteralPath $resolvedRoot -Force -Recurse -ErrorAction SilentlyContinue
+            foreach ($child in $children) { $allItems.Add($child) }
+        } catch { }
+    }
+
+    # Parse size expression: +1k, -500c, +1M etc.
+    $sizeOp = $null
+    $sizeBytes = 0
+    if ($null -ne $sizeExpr) {
+        if ($sizeExpr -match '^([+-])(\d+)([ckMG]?)$') {
+            $sizeOp = $Matches[1]
+            $sizeNum = [long]$Matches[2]
+            $sizeSuffix = $Matches[3]
+            $sizeBytes = switch ($sizeSuffix) {
+                'c' { $sizeNum }
+                'k' { $sizeNum * 1024 }
+                'M' { $sizeNum * 1048576 }
+                'G' { $sizeNum * 1073741824 }
+                default { $sizeNum * 512 }
+            }
+        }
+    }
+
+    # Parse mtime expression: -7 (less than 7 days ago), +30 (more than 30 days ago)
+    $mtimeOp = $null
+    $mtimeDays = 0
+    if ($null -ne $mtimeExpr) {
+        if ($mtimeExpr -match '^([+-])(\d+)$') {
+            $mtimeOp = $Matches[1]
+            $mtimeDays = [int]$Matches[2]
+        }
+    }
+
+    $now = [datetime]::Now
+
+    foreach ($item in $allItems) {
+        $itemPath = $item.FullName
+        $itemDepth = ($itemPath -split '[\\/]').Count
+        $relativeDepth = $itemDepth - $rootDepth
+
+        # maxdepth filter
+        if ($relativeDepth -gt $maxDepth) { continue }
+
+        $isDir = $item -is [System.IO.DirectoryInfo]
+
+        # type filter
+        if ($null -ne $typeFilter) {
+            if ($typeFilter -eq 'f' -and $isDir) { continue }
+            if ($typeFilter -eq 'd' -and -not $isDir) { continue }
+        }
+
+        # name filter (glob pattern)
+        if ($null -ne $namePattern) {
+            if ($item.Name -notlike $namePattern) { continue }
+        }
+
+        # size filter
+        if ($null -ne $sizeOp) {
+            $fileSize = if ($isDir) { 0 } else { $item.Length }
+            if ($sizeOp -eq '+' -and $fileSize -le $sizeBytes) { continue }
+            if ($sizeOp -eq '-' -and $fileSize -ge $sizeBytes) { continue }
+        }
+
+        # mtime filter
+        if ($null -ne $mtimeOp) {
+            $daysAgo = ($now - $item.LastWriteTime).TotalDays
+            if ($mtimeOp -eq '-' -and $daysAgo -ge $mtimeDays) { continue }
+            if ($mtimeOp -eq '+' -and $daysAgo -le $mtimeDays) { continue }
+        }
+
+        # empty filter
+        if ($findEmpty) {
+            if ($isDir) {
+                $dirChildren = @(Get-ChildItem -LiteralPath $item.FullName -Force -ErrorAction SilentlyContinue)
+                if ($dirChildren.Count -gt 0) { continue }
+            } else {
+                if ($item.Length -gt 0) { continue }
+            }
+        }
+
+        # Build relative path with forward slashes
+        $relativePath = $itemPath.Substring($resolvedRoot.Length)
+        $relativePath = $relativePath -replace '\\', '/'
+        if ($relativePath.StartsWith('/')) {
+            $relativePath = $relativePath.Substring(1)
+        }
+
+        $displayPath = if ($searchPath -eq '.') {
+            if ($relativePath -eq '') { '.' } else { "./$relativePath" }
+        } else {
+            $normalized = $searchPath -replace '\\', '/'
+            if ($relativePath -eq '') { $normalized } else { "$normalized/$relativePath" }
+        }
+
+        # Reuse Get-BashFileInfo for metadata
+        $fileInfo = Get-BashFileInfo -Item $item
+
+        $obj = [PSCustomObject]@{
+            PSTypeName   = 'PsBash.FindEntry'
+            Path         = $displayPath
+            Name         = $item.Name
+            FullPath     = $itemPath
+            IsDirectory  = $isDir
+            SizeBytes    = $fileInfo.SizeBytes
+            Permissions  = $fileInfo.Permissions
+            LinkCount    = $fileInfo.LinkCount
+            Owner        = $fileInfo.Owner
+            Group        = $fileInfo.Group
+            LastModified = $item.LastWriteTime
+            BashText     = $displayPath
+        }
+        $obj | Add-Member -MemberType ScriptMethod -Name 'ToString' -Value {
+            $this.BashText
+        } -Force
+        $obj
+    }
+}
+
 # --- Aliases ---
 
 Set-Alias -Name 'echo'   -Value 'Invoke-BashEcho'   -Force -Scope Global -Option AllScope
@@ -1559,3 +1760,4 @@ Set-Alias -Name 'sort'    -Value 'Invoke-BashSort'    -Force -Scope Global -Opti
 Set-Alias -Name 'head'    -Value 'Invoke-BashHead'    -Force -Scope Global -Option AllScope
 Set-Alias -Name 'tail'    -Value 'Invoke-BashTail'    -Force -Scope Global -Option AllScope
 Set-Alias -Name 'wc'      -Value 'Invoke-BashWc'      -Force -Scope Global -Option AllScope
+Set-Alias -Name 'find'    -Value 'Invoke-BashFind'    -Force -Scope Global -Option AllScope

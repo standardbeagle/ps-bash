@@ -1117,3 +1117,227 @@ Describe 'Invoke-BashWc — Pipeline Mode' {
         "$($results[0])" | Should -Be $results[0].BashText
     }
 }
+
+Describe 'Invoke-BashFind' {
+    BeforeAll {
+        $findDir = Join-Path ([System.IO.Path]::GetTempPath()) "psbash-find-test-$(Get-Random)"
+        New-Item -Path $findDir -ItemType Directory -Force | Out-Null
+
+        # Create test structure
+        Set-Content -Path (Join-Path $findDir 'file1.txt') -Value 'hello'
+        Set-Content -Path (Join-Path $findDir 'file2.txt') -Value 'world'
+        Set-Content -Path (Join-Path $findDir 'test_data.txt') -Value 'test content here'
+        Set-Content -Path (Join-Path $findDir 'script.ps1') -Value 'Write-Host hello'
+
+        $subDir = Join-Path $findDir 'subdir'
+        New-Item -Path $subDir -ItemType Directory -Force | Out-Null
+        Set-Content -Path (Join-Path $subDir 'nested.txt') -Value 'nested content'
+        Set-Content -Path (Join-Path $subDir 'nested.ps1') -Value 'Write-Host nested'
+
+        $deepDir = Join-Path $subDir 'deep'
+        New-Item -Path $deepDir -ItemType Directory -Force | Out-Null
+        Set-Content -Path (Join-Path $deepDir 'deep.txt') -Value 'deep file'
+
+        # Create a large file (>1k)
+        $largeContent = 'x' * 2048
+        Set-Content -Path (Join-Path $findDir 'large.txt') -Value $largeContent
+
+        # Create an empty file
+        [System.IO.File]::WriteAllBytes((Join-Path $findDir 'empty.txt'), [byte[]]@())
+
+        # Create an empty directory
+        New-Item -Path (Join-Path $findDir 'emptydir') -ItemType Directory -Force | Out-Null
+    }
+
+    AfterAll {
+        Remove-Item -Path $findDir -Recurse -Force -ErrorAction SilentlyContinue
+    }
+
+    It 'find . -name *.txt returns FindEntry objects with BashText paths' {
+        $results = @(Invoke-BashFind $findDir -name '*.txt')
+        $results.Count | Should -BeGreaterOrEqual 5
+        $results[0].PSObject.TypeNames[0] | Should -Be 'PsBash.FindEntry'
+        $results[0].BashText | Should -Not -BeNullOrEmpty
+        $results[0].Path | Should -Not -BeNullOrEmpty
+    }
+
+    It 'find paths use forward slashes' {
+        $results = @(Invoke-BashFind $findDir -name '*.txt')
+        $nested = $results | Where-Object { $_.Name -eq 'nested.txt' }
+        $nested | Should -Not -BeNullOrEmpty
+        $nested.BashText | Should -Not -Match '\\'
+        $nested.BashText | Should -Match '/'
+    }
+
+    It 'find . -type f returns files only' {
+        $results = @(Invoke-BashFind $findDir -type f)
+        $results | Should -Not -BeNullOrEmpty
+        $dirs = @($results | Where-Object { $_.IsDirectory })
+        $dirs.Count | Should -Be 0
+    }
+
+    It 'find . -type d returns directories only' {
+        $results = @(Invoke-BashFind $findDir -type d)
+        $results | Should -Not -BeNullOrEmpty
+        $files = @($results | Where-Object { -not $_.IsDirectory })
+        $files.Count | Should -Be 0
+    }
+
+    It 'find . -name *.txt -size +1k returns large files' {
+        $results = @(Invoke-BashFind $findDir -name '*.txt' -size '+1k')
+        $results.Count | Should -BeGreaterOrEqual 1
+        $large = @($results | Where-Object { $_.Name -eq 'large.txt' })
+        $large.Count | Should -Be 1
+    }
+
+    It 'find . -maxdepth 2 limits search depth' {
+        # maxdepth 0 = root only, 1 = root + direct children, 2 = two levels
+        $results = @(Invoke-BashFind $findDir -maxdepth 1)
+        $deep = @($results | Where-Object { $_.Name -eq 'deep.txt' })
+        $deep.Count | Should -Be 0
+
+        $nested = @($results | Where-Object { $_.Name -eq 'nested.txt' })
+        $nested.Count | Should -Be 0
+
+        $direct = @($results | Where-Object { $_.Name -eq 'file1.txt' })
+        $direct.Count | Should -Be 1
+    }
+
+    It 'find . -maxdepth 2 includes two levels deep' {
+        $results = @(Invoke-BashFind $findDir -maxdepth 2)
+        $nested = @($results | Where-Object { $_.Name -eq 'nested.txt' })
+        $nested.Count | Should -Be 1
+
+        $deep = @($results | Where-Object { $_.Name -eq 'deep.txt' })
+        $deep.Count | Should -Be 0
+    }
+
+    It 'find . -mtime -7 finds recently modified files' {
+        $results = @(Invoke-BashFind $findDir -mtime '-7')
+        $results.Count | Should -BeGreaterOrEqual 1
+        # All test files were just created, so all should match
+        $txtFiles = @($results | Where-Object { $_.Name -eq 'file1.txt' })
+        $txtFiles.Count | Should -Be 1
+    }
+
+    It 'find . -empty finds empty files and dirs' {
+        $results = @(Invoke-BashFind $findDir -empty)
+        $emptyFile = @($results | Where-Object { $_.Name -eq 'empty.txt' })
+        $emptyFile.Count | Should -Be 1
+
+        $emptyDir = @($results | Where-Object { $_.Name -eq 'emptydir' })
+        $emptyDir.Count | Should -Be 1
+    }
+
+    It 'find . -name *.txt | grep test works with pipeline bridge' {
+        $results = @(Invoke-BashFind $findDir -name '*.txt' | Invoke-BashGrep 'test')
+        $results.Count | Should -BeGreaterOrEqual 1
+        # Should find test_data.txt in path
+        $testData = @($results | Where-Object { $_.BashText -match 'test' })
+        $testData.Count | Should -BeGreaterOrEqual 1
+    }
+
+    It 'find outputs objects suitable for xargs-style consumption' {
+        $results = @(Invoke-BashFind $findDir -name '*.txt' -type f)
+        $results | Should -Not -BeNullOrEmpty
+        # Each result has FullPath for xargs-style use
+        foreach ($r in $results) {
+            $r.FullPath | Should -Not -BeNullOrEmpty
+            Test-Path -LiteralPath $r.FullPath | Should -Be $true
+        }
+    }
+
+    It 'FindEntry has metadata from Get-BashFileInfo' {
+        $results = @(Invoke-BashFind $findDir -name 'file1.txt')
+        $results.Count | Should -Be 1
+        $results[0].Permissions | Should -Not -BeNullOrEmpty
+        $results[0].SizeBytes | Should -BeGreaterOrEqual 0
+        $results[0].LastModified | Should -Not -BeNullOrEmpty
+    }
+
+    It 'FindEntry ToString returns BashText' {
+        $results = @(Invoke-BashFind $findDir -name 'file1.txt')
+        "$($results[0])" | Should -Be $results[0].BashText
+    }
+
+    It 'find nonexistent path writes error' {
+        $result = Invoke-BashFind '/nonexistent/path/xyz' 2>&1
+        $errMsg = @($result | Where-Object { $_ -is [System.Management.Automation.ErrorRecord] })
+        $errMsg.Count | Should -BeGreaterOrEqual 1
+    }
+
+    It 'find includes root directory itself' {
+        $results = @(Invoke-BashFind $findDir)
+        $root = @($results | Where-Object { $_.FullPath -eq (Resolve-Path $findDir).Path })
+        $root.Count | Should -Be 1
+    }
+}
+
+Describe 'Integration: Multi-Command Pipelines' {
+    BeforeAll {
+        $intDir = Join-Path ([System.IO.Path]::GetTempPath()) "psbash-integration-test-$(Get-Random)"
+        New-Item -Path $intDir -ItemType Directory -Force | Out-Null
+
+        # Create files with varying sizes for sorting
+        Set-Content -Path (Join-Path $intDir 'alpha.txt') -Value 'alpha content'
+        Set-Content -Path (Join-Path $intDir 'beta.txt') -Value 'beta content here longer'
+        Set-Content -Path (Join-Path $intDir 'gamma.log') -Value 'gamma log data'
+        Set-Content -Path (Join-Path $intDir 'delta.txt') -Value 'x'
+
+        # Create a file with specific patterns for grep
+        $patternContent = "line one has pattern`nline two is plain`nline three has pattern again`nline four is plain"
+        [System.IO.File]::WriteAllText((Join-Path $intDir 'patterns.txt'), $patternContent, [System.Text.UTF8Encoding]::new($false))
+
+        # Create ps1 files for find tests
+        Set-Content -Path (Join-Path $intDir 'a.ps1') -Value 'script a'
+        Set-Content -Path (Join-Path $intDir 'b.ps1') -Value 'script b'
+        Set-Content -Path (Join-Path $intDir 'c.ps1') -Value 'script c'
+
+        $intSub = Join-Path $intDir 'sub'
+        New-Item -Path $intSub -ItemType Directory -Force | Out-Null
+        Set-Content -Path (Join-Path $intSub 'd.ps1') -Value 'script d'
+        Set-Content -Path (Join-Path $intSub 'e.ps1') -Value 'script e'
+        Set-Content -Path (Join-Path $intSub 'f.ps1') -Value 'script f'
+    }
+
+    AfterAll {
+        Remove-Item -Path $intDir -Recurse -Force -ErrorAction SilentlyContinue
+    }
+
+    It 'ls -la | grep .txt | sort -k5 -n preserves LsEntry objects through 3 stages' {
+        $results = @(Invoke-BashLs -la $intDir | Invoke-BashGrep '\.txt' | Invoke-BashSort -k 5 -n)
+        $results.Count | Should -BeGreaterOrEqual 1
+        # Objects should still have LsEntry properties
+        $results[0].PSObject.TypeNames[0] | Should -Be 'PsBash.LsEntry'
+        $results[0].SizeBytes | Should -Not -BeNullOrEmpty
+    }
+
+    It 'ls -la | grep .txt | head -n 3 returns filtered limited LsEntry objects' {
+        $results = @(Invoke-BashLs -la $intDir | Invoke-BashGrep '\.txt' | Invoke-BashHead -n 3)
+        $results.Count | Should -BeLessOrEqual 3
+        $results.Count | Should -BeGreaterOrEqual 1
+        $results[0].PSObject.TypeNames[0] | Should -Be 'PsBash.LsEntry'
+    }
+
+    It 'cat file.txt | grep pattern | wc -l counts matching lines' {
+        $patternsFile = Join-Path $intDir 'patterns.txt'
+        $results = @(Invoke-BashCat $patternsFile | Invoke-BashGrep 'pattern' | Invoke-BashWc -l)
+        $results.Count | Should -Be 1
+        $results[0].Lines | Should -Be 2
+    }
+
+    It 'find . -name *.ps1 | head -n 5 returns limited FindEntry objects' {
+        $results = @(Invoke-BashFind $intDir -name '*.ps1' | Invoke-BashHead -n 5)
+        $results.Count | Should -BeLessOrEqual 5
+        $results.Count | Should -BeGreaterOrEqual 1
+        # Pipeline bridge: find emits FindEntry, head passes through
+        $results[0].PSObject.TypeNames[0] | Should -Be 'PsBash.FindEntry'
+    }
+
+    It 'ls -lh | sort -h | tail -n 5 returns largest files as LsEntry objects' {
+        $results = @(Invoke-BashLs -lh $intDir | Invoke-BashSort -h | Invoke-BashTail -n 5)
+        $results.Count | Should -BeLessOrEqual 5
+        $results.Count | Should -BeGreaterOrEqual 1
+        $results[0].PSObject.TypeNames[0] | Should -Be 'PsBash.LsEntry'
+    }
+}
