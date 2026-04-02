@@ -625,9 +625,269 @@ function Invoke-BashCat {
     }
 }
 
+# --- BashText Extraction Helper ---
+
+function Get-BashText {
+    [CmdletBinding()]
+    [OutputType([string])]
+    param(
+        [Parameter(Mandatory)]
+        [AllowNull()]
+        $InputObject
+    )
+
+    if ($null -eq $InputObject) { return '' }
+    if ($null -ne $InputObject.PSObject -and $null -ne $InputObject.PSObject.Properties['BashText']) {
+        return [string]$InputObject.BashText
+    }
+    return "$InputObject"
+}
+
+# --- grep Command ---
+
+function Invoke-BashGrep {
+    $Arguments = [string[]]$args
+    $pipelineInput = @($input)
+
+    # Parse arguments manually because grep has value-bearing flags (-A, -B, -C, -m)
+    $ignoreCase = $false
+    $invertMatch = $false
+    $showLineNumbers = $false
+    $countOnly = $false
+    $recursive = $false
+    $filesOnly = $false
+    $extendedRegex = $false
+    $afterContext = 0
+    $beforeContext = 0
+    $pattern = $null
+    $operands = [System.Collections.Generic.List[string]]::new()
+    $pastDoubleDash = $false
+
+    $i = 0
+    while ($i -lt $Arguments.Count) {
+        $arg = $Arguments[$i]
+
+        if ($pastDoubleDash) {
+            $operands.Add($arg)
+            $i++
+            continue
+        }
+
+        if ($arg -eq '--') {
+            $pastDoubleDash = $true
+            $i++
+            continue
+        }
+
+        # Handle -A NUM, -B NUM, -C NUM as separate args or joined (e.g. -A2)
+        if ($arg -cmatch '^-([ABC])(\d+)$') {
+            switch ($Matches[1]) {
+                'A' { $afterContext = [int]$Matches[2] }
+                'B' { $beforeContext = [int]$Matches[2] }
+                'C' { $afterContext = [int]$Matches[2]; $beforeContext = [int]$Matches[2] }
+            }
+            $i++
+            continue
+        }
+
+        if ($arg -cmatch '^-([ABC])$') {
+            $flag = $Matches[1]
+            $i++
+            if ($i -lt $Arguments.Count) {
+                $val = [int]$Arguments[$i]
+                switch ($flag) {
+                    'A' { $afterContext = $val }
+                    'B' { $beforeContext = $val }
+                    'C' { $afterContext = $val; $beforeContext = $val }
+                }
+            }
+            $i++
+            continue
+        }
+
+        if ($arg.StartsWith('-') -and $arg.Length -gt 1 -and -not $arg.StartsWith('--')) {
+            foreach ($ch in $arg.Substring(1).ToCharArray()) {
+                switch ($ch) {
+                    'i' { $ignoreCase = $true }
+                    'v' { $invertMatch = $true }
+                    'n' { $showLineNumbers = $true }
+                    'c' { $countOnly = $true }
+                    'r' { $recursive = $true }
+                    'l' { $filesOnly = $true }
+                    'E' { $extendedRegex = $true }
+                }
+            }
+            $i++
+            continue
+        }
+
+        $operands.Add($arg)
+        $i++
+    }
+
+    if ($operands.Count -eq 0) {
+        throw 'grep: usage: grep [options] pattern [file ...]'
+    }
+
+    $pattern = $operands[0]
+    $fileOperands = @(if ($operands.Count -gt 1) { $operands.GetRange(1, $operands.Count - 1) } else { @() })
+
+    # Build regex options
+    $regexOpts = [System.Text.RegularExpressions.RegexOptions]::None
+    if ($ignoreCase) { $regexOpts = $regexOpts -bor [System.Text.RegularExpressions.RegexOptions]::IgnoreCase }
+
+    # For basic regex (non -E), escape special chars except basic ones that grep always supports
+    $regexPattern = if (-not $extendedRegex) {
+        # Basic grep: . * ^ $ [ ] are special; escape (){}|+?
+        $pattern -replace '(?<!\\)\(', '\(' -replace '(?<!\\)\)', '\)' -replace '(?<!\\)\{', '\{' -replace '(?<!\\)\}', '\}' -replace '(?<!\\)\|', '\|' -replace '(?<!\\)\+', '\+' -replace '(?<!\\)\?', '\?'
+    } else {
+        $pattern
+    }
+
+    $regex = [regex]::new($regexPattern, $regexOpts)
+
+    # --- Pipeline mode ---
+    if ($fileOperands.Count -eq 0 -and -not $recursive) {
+        $matchCount = 0
+
+        foreach ($item in $pipelineInput) {
+            $text = Get-BashText -InputObject $item
+            # Strip trailing newline for matching (echo adds \n)
+            $matchText = $text -replace "`n$", ''
+            $isMatch = $regex.IsMatch($matchText)
+            if ($invertMatch) { $isMatch = -not $isMatch }
+
+            if ($isMatch) {
+                $matchCount++
+                if (-not $countOnly) {
+                    # Pipeline bridge: pass through the original object
+                    $item
+                }
+            }
+        }
+
+        if ($countOnly) {
+            New-BashObject -BashText "$matchCount"
+        }
+        return
+    }
+
+    # --- File mode ---
+    $filePaths = [System.Collections.Generic.List[string]]::new()
+
+    if ($recursive) {
+        $searchDir = if ($fileOperands.Count -gt 0) { $fileOperands[0] } else { '.' }
+        if (Test-Path -LiteralPath $searchDir -PathType Container) {
+            Get-ChildItem -LiteralPath $searchDir -Recurse -File | ForEach-Object { $filePaths.Add($_.FullName) }
+        } elseif (Test-Path -LiteralPath $searchDir) {
+            $filePaths.Add((Resolve-Path -LiteralPath $searchDir).Path)
+        }
+    } else {
+        foreach ($fp in $fileOperands) {
+            if (-not (Test-Path -LiteralPath $fp)) {
+                Write-Error -Message "grep: ${fp}: No such file or directory" -ErrorAction Continue
+                continue
+            }
+            $filePaths.Add((Resolve-Path -LiteralPath $fp).Path)
+        }
+    }
+
+    $multipleFiles = $filePaths.Count -gt 1 -or $recursive
+    $matchedFiles = [System.Collections.Generic.List[string]]::new()
+    $perFileCounts = [System.Collections.Generic.Dictionary[string,int]]::new()
+    $totalMatchCount = 0
+
+    foreach ($filePath in $filePaths) {
+        $bytes = [System.IO.File]::ReadAllBytes($filePath)
+        $byteOffset = 0
+        if ($bytes.Length -ge 3 -and $bytes[0] -eq 0xEF -and $bytes[1] -eq 0xBB -and $bytes[2] -eq 0xBF) {
+            $byteOffset = 3
+        }
+        $rawText = [System.Text.Encoding]::UTF8.GetString($bytes, $byteOffset, $bytes.Length - $byteOffset)
+        $rawText = $rawText -replace "`r`n", "`n"
+        if ($rawText.EndsWith("`n")) {
+            $rawText = $rawText.Substring(0, $rawText.Length - 1)
+        }
+        $lines = $rawText.Split("`n")
+
+        $matchIndices = [System.Collections.Generic.List[int]]::new()
+        for ($li = 0; $li -lt $lines.Count; $li++) {
+            $isMatch = $regex.IsMatch($lines[$li])
+            if ($invertMatch) { $isMatch = -not $isMatch }
+            if ($isMatch) { $matchIndices.Add($li) }
+        }
+
+        $fileMatchCount = $matchIndices.Count
+        $totalMatchCount += $fileMatchCount
+        $perFileCounts[$filePath] = $fileMatchCount
+
+        if ($filesOnly) {
+            if ($fileMatchCount -gt 0) { $matchedFiles.Add($filePath) }
+            continue
+        }
+
+        if ($countOnly) { continue }
+
+        # Determine which lines to emit (matches + context)
+        $emitLines = [System.Collections.Generic.HashSet[int]]::new()
+        foreach ($mi in $matchIndices) {
+            $start = [System.Math]::Max(0, $mi - $beforeContext)
+            $end = [System.Math]::Min($lines.Count - 1, $mi + $afterContext)
+            for ($li = $start; $li -le $end; $li++) {
+                [void]$emitLines.Add($li)
+            }
+        }
+
+        $sortedEmit = $emitLines | Sort-Object
+        foreach ($li in $sortedEmit) {
+            $line = $lines[$li]
+            $lineNum = $li + 1
+            $prefix = ''
+            if ($multipleFiles) { $prefix = "${filePath}:" }
+
+            $bashText = $line
+            if ($showLineNumbers) {
+                $bashText = "${prefix}${lineNum}:${line}"
+            } elseif ($multipleFiles) {
+                $bashText = "${prefix}${line}"
+            }
+
+            $obj = [PSCustomObject]@{
+                PSTypeName = 'PsBash.GrepMatch'
+                FileName   = $filePath
+                LineNumber = $lineNum
+                Line       = $line
+                BashText   = $bashText
+            }
+            $obj | Add-Member -MemberType ScriptMethod -Name 'ToString' -Value {
+                $this.BashText
+            } -Force
+            $obj
+        }
+    }
+
+    if ($filesOnly) {
+        foreach ($fp in $matchedFiles) {
+            New-BashObject -BashText $fp
+        }
+        return
+    }
+
+    if ($countOnly) {
+        if ($multipleFiles) {
+            foreach ($filePath in $filePaths) {
+                New-BashObject -BashText "${filePath}:$($perFileCounts[$filePath])"
+            }
+        } else {
+            New-BashObject -BashText "$totalMatchCount"
+        }
+    }
+}
+
 # --- Aliases ---
 
 Set-Alias -Name 'echo'   -Value 'Invoke-BashEcho'   -Force -Scope Global -Option AllScope
 Set-Alias -Name 'printf'  -Value 'Invoke-BashPrintf'  -Force -Scope Global -Option AllScope
 Set-Alias -Name 'ls'      -Value 'Invoke-BashLs'      -Force -Scope Global -Option AllScope
 Set-Alias -Name 'cat'     -Value 'Invoke-BashCat'     -Force -Scope Global -Option AllScope
+Set-Alias -Name 'grep'    -Value 'Invoke-BashGrep'    -Force -Scope Global -Option AllScope

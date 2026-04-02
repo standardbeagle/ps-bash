@@ -505,3 +505,230 @@ Describe 'Invoke-BashCat' {
         "$($results[0])" | Should -Be $results[0].BashText
     }
 }
+
+Describe 'Get-BashText' {
+    It 'extracts BashText from BashObject' {
+        $obj = New-BashObject -BashText 'hello'
+        Get-BashText -InputObject $obj | Should -Be 'hello'
+    }
+
+    It 'returns string representation for plain strings' {
+        Get-BashText -InputObject 'plain' | Should -Be 'plain'
+    }
+
+    It 'returns empty string for null' {
+        Get-BashText -InputObject $null | Should -Be ''
+    }
+
+    It 'extracts BashText from LsEntry' {
+        $entry = [PSCustomObject]@{
+            PSTypeName = 'PsBash.LsEntry'
+            Name       = 'test.txt'
+            BashText   = '-rw-r--r-- 1 user group 1024 Jan  1 00:00 test.txt'
+        }
+        Get-BashText -InputObject $entry | Should -Be '-rw-r--r-- 1 user group 1024 Jan  1 00:00 test.txt'
+    }
+}
+
+Describe 'Invoke-BashGrep — Standalone' {
+    It 'echo hello | grep h returns object with BashText hello' {
+        $result = @(Invoke-BashEcho -n 'hello' | Invoke-BashGrep 'h')
+        $result.Count | Should -Be 1
+        $result[0].BashText | Should -Be 'hello'
+    }
+
+    It 'echo hello | grep x returns nothing' {
+        $result = @(Invoke-BashEcho -n 'hello' | Invoke-BashGrep 'x')
+        $result.Count | Should -Be 0
+    }
+
+    It 'exports grep alias pointing to Invoke-BashGrep' {
+        $alias = Get-Alias -Name grep -Scope Global
+        $alias.Definition | Should -Be 'Invoke-BashGrep'
+    }
+
+    It 'throws with no arguments' {
+        { Invoke-BashGrep } | Should -Throw
+    }
+}
+
+Describe 'Invoke-BashGrep — File Mode' {
+    BeforeAll {
+        $grepDir = Join-Path ([System.IO.Path]::GetTempPath()) "psbash-grep-test-$(Get-Random)"
+        New-Item -Path $grepDir -ItemType Directory -Force | Out-Null
+
+        $grepFile = Join-Path $grepDir 'sample.txt'
+        [System.IO.File]::WriteAllText($grepFile, "hello world`nfoo bar`nHELLO UPPER`nskip this`nbaz foo`n", [System.Text.UTF8Encoding]::new($false))
+
+        $grepFile2 = Join-Path $grepDir 'other.txt'
+        [System.IO.File]::WriteAllText($grepFile2, "alpha`nbeta`ngamma`n", [System.Text.UTF8Encoding]::new($false))
+
+        $contextFile = Join-Path $grepDir 'context.txt'
+        [System.IO.File]::WriteAllText($contextFile, "line1`nline2`nmatch here`nline4`nline5`nline6`n", [System.Text.UTF8Encoding]::new($false))
+
+        $subDir = Join-Path $grepDir 'sub'
+        New-Item -Path $subDir -ItemType Directory -Force | Out-Null
+        $nestedFile = Join-Path $subDir 'nested.txt'
+        [System.IO.File]::WriteAllText($nestedFile, "nested match`nno match here wait yes match`n", [System.Text.UTF8Encoding]::new($false))
+    }
+
+    AfterAll {
+        Remove-Item -Path $grepDir -Recurse -Force -ErrorAction SilentlyContinue
+    }
+
+    It 'grep pattern file returns GrepMatch objects' {
+        $results = @(Invoke-BashGrep 'hello' $grepFile)
+        $results.Count | Should -Be 1
+        $results[0].PSTypeNames[0] | Should -Be 'PsBash.GrepMatch'
+        $results[0].Line | Should -Be 'hello world'
+        $results[0].LineNumber | Should -Be 1
+        $results[0].FileName | Should -Be $grepFile
+    }
+
+    It 'grep -i HELLO file matches case insensitively' {
+        $results = @(Invoke-BashGrep -i 'HELLO' $grepFile)
+        $results.Count | Should -Be 2
+        $results[0].Line | Should -Be 'hello world'
+        $results[1].Line | Should -Be 'HELLO UPPER'
+    }
+
+    It 'grep -v skip file returns inverted matches' {
+        $results = @(Invoke-BashGrep -v 'skip' $grepFile)
+        $results.Count | Should -Be 4
+        $results | ForEach-Object { $_.Line | Should -Not -Match 'skip' }
+    }
+
+    It 'grep -n pattern file shows line numbers in BashText' {
+        $results = @(Invoke-BashGrep -n 'foo' $grepFile)
+        $results.Count | Should -Be 2
+        $results[0].BashText | Should -Be "2:foo bar"
+        $results[1].BashText | Should -Be "5:baz foo"
+    }
+
+    It 'grep -c pattern file returns count only' {
+        $results = @(Invoke-BashGrep -c 'foo' $grepFile)
+        $results.Count | Should -Be 1
+        $results[0].BashText | Should -Be '2'
+    }
+
+    It 'grep -r pattern dir searches recursively' {
+        $results = @(Invoke-BashGrep -r 'match' $grepDir)
+        $results.Count | Should -BeGreaterOrEqual 3
+    }
+
+    It 'grep -l pattern file returns filenames only' {
+        $results = @(Invoke-BashGrep -l 'hello' $grepFile $grepFile2)
+        $results.Count | Should -Be 1
+        $results[0].BashText | Should -Be $grepFile
+    }
+
+    It 'grep -E extended regex with alternation' {
+        $results = @(Invoke-BashGrep -E '(foo|alpha)' $grepFile)
+        $results.Count | Should -Be 2
+        $results[0].Line | Should -Be 'foo bar'
+        $results[1].Line | Should -Be 'baz foo'
+    }
+
+    It 'grep -A2 -B1 pattern file returns context lines' {
+        $results = @(Invoke-BashGrep -A2 -B1 'match' $contextFile)
+        $lines = $results | ForEach-Object { $_.Line }
+        $lines | Should -Contain 'line2'
+        $lines | Should -Contain 'match here'
+        $lines | Should -Contain 'line4'
+        $lines | Should -Contain 'line5'
+    }
+
+    It 'grep nonexistent file writes error' {
+        $result = Invoke-BashGrep 'pattern' '/nonexistent/xyz.txt' 2>&1
+        $errors = @($result | Where-Object { $_ -is [System.Management.Automation.ErrorRecord] })
+        $errors.Count | Should -BeGreaterThan 0
+    }
+
+    It 'GrepMatch ToString returns BashText' {
+        $results = @(Invoke-BashGrep 'hello' $grepFile)
+        "$($results[0])" | Should -Be $results[0].BashText
+    }
+
+    It 'grep -n with multiple files includes filename in BashText' {
+        $results = @(Invoke-BashGrep -n 'alpha' $grepFile $grepFile2)
+        $match = $results | Where-Object { $_.Line -eq 'alpha' }
+        $match.BashText | Should -Match ':'
+        $match.BashText | Should -Match 'alpha'
+    }
+}
+
+Describe 'Invoke-BashGrep — Pipeline Bridge' {
+    BeforeAll {
+        $bridgeDir = Join-Path ([System.IO.Path]::GetTempPath()) "psbash-bridge-test-$(Get-Random)"
+        New-Item -Path $bridgeDir -ItemType Directory -Force | Out-Null
+        Set-Content -Path (Join-Path $bridgeDir 'file1.txt') -Value 'hello'
+        Set-Content -Path (Join-Path $bridgeDir 'file2.log') -Value 'world'
+        New-Item -Path (Join-Path $bridgeDir 'subdir') -ItemType Directory -Force | Out-Null
+
+        $bridgeCatFile = Join-Path $bridgeDir 'data.txt'
+        [System.IO.File]::WriteAllText($bridgeCatFile, "alpha line`nbeta line`ngamma line`n", [System.Text.UTF8Encoding]::new($false))
+    }
+
+    AfterAll {
+        Remove-Item -Path $bridgeDir -Recurse -Force -ErrorAction SilentlyContinue
+    }
+
+    It 'ls | grep .txt returns PsBash.LsEntry objects' {
+        $results = @(Invoke-BashLs $bridgeDir | Invoke-BashGrep '.txt')
+        $results.Count | Should -BeGreaterOrEqual 1
+        $results[0].PSTypeNames[0] | Should -Be 'PsBash.LsEntry'
+    }
+
+    It '(ls | grep .txt)[0].Name works (object preserved)' {
+        $results = @(Invoke-BashLs $bridgeDir | Invoke-BashGrep '.txt')
+        $names = $results | ForEach-Object { $_.Name }
+        $names | Should -Contain 'file1.txt'
+    }
+
+    It '(ls | grep .txt)[0].SizeBytes works (property preserved)' {
+        $results = @(Invoke-BashLs $bridgeDir | Invoke-BashGrep '.txt')
+        $results[0].SizeBytes | Should -BeGreaterOrEqual 0
+    }
+
+    It 'cat file | grep pattern returns PsBash.CatLine objects' {
+        $results = @(Invoke-BashCat $bridgeCatFile | Invoke-BashGrep 'beta')
+        $results.Count | Should -Be 1
+        $results[0].PSTypeNames[0] | Should -Be 'PsBash.CatLine'
+        $results[0].Content | Should -Be 'beta line'
+    }
+
+    It 'plain string | grep pattern works' {
+        $results = @('plain text' | Invoke-BashGrep 'plain')
+        $results.Count | Should -Be 1
+        "$($results[0])" | Should -Be 'plain text'
+    }
+
+    It 'pipeline grep -v inverts correctly' {
+        $results = @(Invoke-BashLs $bridgeDir | Invoke-BashGrep -v '.txt')
+        $names = $results | ForEach-Object { $_.Name }
+        $names | Should -Not -Contain 'file1.txt'
+    }
+
+    It 'pipeline grep -c returns count' {
+        $results = @(Invoke-BashCat $bridgeCatFile | Invoke-BashGrep -c 'line')
+        $results.Count | Should -Be 1
+        $results[0].BashText | Should -Be '3'
+    }
+
+    It 'pipeline grep -i is case insensitive' {
+        $results = @(Invoke-BashEcho -n 'Hello World' | Invoke-BashGrep -i 'hello')
+        $results.Count | Should -Be 1
+    }
+
+    It 'ls -la | grep .txt preserves IsDirectory property' {
+        $results = @(Invoke-BashLs -la $bridgeDir | Invoke-BashGrep '.txt')
+        $results[0].IsDirectory | Should -Be $false
+    }
+
+    It 'multiple pipeline objects filter correctly' {
+        $results = @(
+            @('apple', 'banana', 'cherry', 'avocado') | Invoke-BashGrep '^a'
+        )
+        $results.Count | Should -Be 2
+    }
+}
