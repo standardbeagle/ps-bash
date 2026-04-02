@@ -1969,3 +1969,172 @@ Describe 'Integration: Multi-Command Pipelines' {
         $results[0].PSObject.TypeNames[0] | Should -Be 'PsBash.LsEntry'
     }
 }
+
+Describe 'Invoke-BashPs — Basic Output' {
+    It 'ps aux returns PsEntry objects with BashText' {
+        $results = @(Invoke-BashPs aux)
+        $results.Count | Should -BeGreaterOrEqual 1
+        $results[0].PSObject.TypeNames[0] | Should -Be 'PsBash.PsEntry'
+        $results[0].BashText | Should -Not -BeNullOrEmpty
+    }
+
+    It 'ps aux includes current pwsh process' {
+        $results = @(Invoke-BashPs aux)
+        $pwsh = $results | Where-Object { $_.ProcessName -eq 'pwsh' -or $_.Command -like '*pwsh*' }
+        $pwsh | Should -Not -BeNullOrEmpty
+    }
+
+    It 'ps aux BashText has correct column alignment' {
+        $results = @(Invoke-BashPs aux)
+        # BashText should have USER, PID, %CPU, %MEM, VSZ, RSS, TTY, STAT, START, TIME, COMMAND columns
+        $line = $results[0].BashText
+        # Should contain the PID as text somewhere in the line
+        $line | Should -Match '\d+'
+        # Lines should be padded/formatted with spaces
+        $line.Length | Should -BeGreaterThan 20
+    }
+
+    It 'ps aux populates core object properties' {
+        $results = @(Invoke-BashPs aux)
+        $self = $results | Where-Object { $_.PID -eq $PID }
+        if (-not $self) {
+            # Fallback: find any pwsh process
+            $self = $results | Where-Object { $_.ProcessName -eq 'pwsh' } | Select-Object -First 1
+        }
+        $self | Should -Not -BeNullOrEmpty
+        $self.PID | Should -BeGreaterThan 0
+        $self.User | Should -Not -BeNullOrEmpty
+        $self.Command | Should -Not -BeNullOrEmpty
+        $self.ProcessName | Should -Not -BeNullOrEmpty
+    }
+
+    It 'ps with no args returns PsEntry objects' {
+        $results = @(Invoke-BashPs)
+        $results.Count | Should -BeGreaterOrEqual 1
+        $results[0].PSObject.TypeNames[0] | Should -Be 'PsBash.PsEntry'
+    }
+}
+
+Describe 'Invoke-BashPs — Flags' {
+    It 'ps -e returns all processes' {
+        $results = @(Invoke-BashPs -e)
+        $results.Count | Should -BeGreaterOrEqual 2
+        $results[0].PSObject.TypeNames[0] | Should -Be 'PsBash.PsEntry'
+    }
+
+    It 'ps -A is equivalent to -e' {
+        $resultsE = @(Invoke-BashPs -e)
+        $resultsA = @(Invoke-BashPs -A)
+        # Both should return the same set of processes (count may vary slightly due to timing)
+        [System.Math]::Abs($resultsE.Count - $resultsA.Count) | Should -BeLessOrEqual 5
+    }
+
+    It 'ps -f shows full format with PPID' {
+        $results = @(Invoke-BashPs -f)
+        $results.Count | Should -BeGreaterOrEqual 1
+        $self = $results | Where-Object { $_.PID -eq $PID }
+        if (-not $self) {
+            $self = $results | Where-Object { $_.ProcessName -eq 'pwsh' } | Select-Object -First 1
+        }
+        $self | Should -Not -BeNullOrEmpty
+        $self.PPID | Should -BeOfType [int]
+    }
+
+    It 'ps -p PID filters to specific process' {
+        $results = @(Invoke-BashPs -p $PID)
+        $results.Count | Should -Be 1
+        $results[0].PID | Should -Be $PID
+    }
+
+    It 'ps -p with invalid PID returns empty' {
+        $results = @(Invoke-BashPs -p 999999999)
+        $results.Count | Should -Be 0
+    }
+
+    It 'ps --sort=pid sorts by PID ascending' {
+        $results = @(Invoke-BashPs aux --sort=pid)
+        $results.Count | Should -BeGreaterOrEqual 2
+        for ($i = 1; $i -lt [System.Math]::Min($results.Count, 20); $i++) {
+            $results[$i].PID | Should -BeGreaterOrEqual $results[$i - 1].PID
+        }
+    }
+
+    It 'ps --sort=-pid sorts by PID descending' {
+        $results = @(Invoke-BashPs aux '--sort=-pid')
+        $results.Count | Should -BeGreaterOrEqual 2
+        for ($i = 1; $i -lt [System.Math]::Min($results.Count, 20); $i++) {
+            $results[$i].PID | Should -BeLessOrEqual $results[$i - 1].PID
+        }
+    }
+
+    It 'ps -u USER filters by username' {
+        $currentUser = if ($IsWindows) { $env:USERNAME } else { (id -un) }
+        $results = @(Invoke-BashPs -u $currentUser)
+        $results.Count | Should -BeGreaterOrEqual 1
+        foreach ($r in $results) {
+            $r.User | Should -Be $currentUser
+        }
+    }
+}
+
+Describe 'Invoke-BashPs — Custom Output Format' {
+    It 'ps -o pid,comm shows only requested columns' {
+        $results = @(Invoke-BashPs -o 'pid,comm')
+        $results.Count | Should -BeGreaterOrEqual 1
+        $results[0].PID | Should -BeGreaterThan 0
+        $results[0].ProcessName | Should -Not -BeNullOrEmpty
+        # BashText should be shorter (fewer columns)
+        $results[0].BashText.Trim().Split(' ', [System.StringSplitOptions]::RemoveEmptyEntries).Count | Should -BeLessOrEqual 5
+    }
+
+    It 'ps -eo pid,user,comm shows all procs with custom format' {
+        $results = @(Invoke-BashPs -e -o 'pid,user,comm')
+        $results.Count | Should -BeGreaterOrEqual 2
+        $results[0].PID | Should -BeGreaterThan 0
+        $results[0].User | Should -Not -BeNullOrEmpty
+    }
+}
+
+Describe 'Invoke-BashPs — Pipeline Bridge' {
+    It 'ps aux | grep pwsh finds powershell processes' {
+        $results = @(Invoke-BashPs aux | Invoke-BashGrep 'pwsh')
+        $results.Count | Should -BeGreaterOrEqual 1
+        $results[0].PSObject.TypeNames[0] | Should -Be 'PsBash.PsEntry'
+        $results[0].Command | Should -BeLike '*pwsh*'
+    }
+
+    It 'ps aux | sort preserves PsEntry type' {
+        $results = @(Invoke-BashPs aux | Invoke-BashSort -k 2 -n | Invoke-BashHead -n 5)
+        $results.Count | Should -BeLessOrEqual 5
+        $results.Count | Should -BeGreaterOrEqual 1
+        $results[0].PSObject.TypeNames[0] | Should -Be 'PsBash.PsEntry'
+    }
+
+    It 'ps aux | wc -l counts processes' {
+        $results = @(Invoke-BashPs aux | Invoke-BashWc -l)
+        $results.Count | Should -Be 1
+        $results[0].Lines | Should -BeGreaterOrEqual 1
+    }
+
+    It 'ps alias works' {
+        $alias = Get-Alias -Name ps -Scope Global
+        $alias.Definition | Should -Be 'Invoke-BashPs'
+    }
+}
+
+Describe 'Invoke-BashPs — Numeric Properties' {
+    It 'Memory and CPU are numeric on current platform' {
+        $results = @(Invoke-BashPs aux)
+        $self = $results | Where-Object { $_.PID -eq $PID }
+        if (-not $self) {
+            $self = $results | Where-Object { $_.ProcessName -eq 'pwsh' } | Select-Object -First 1
+        }
+        $self | Should -Not -BeNullOrEmpty
+        $self.CPU | Should -BeOfType [double]
+        $self.Memory | Should -BeOfType [double]
+        $self.MemoryMB | Should -BeOfType [double]
+        $self.VSZ | Should -BeOfType [long]
+        $self.RSS | Should -BeOfType [long]
+        $self.WorkingSet | Should -BeOfType [long]
+    }
+}

@@ -2449,6 +2449,484 @@ function Invoke-BashLn {
     }
 }
 
+# --- ps Command ---
+
+function Get-LinuxProcEntry {
+    [CmdletBinding()]
+    [OutputType([PSCustomObject])]
+    param(
+        [Parameter(Mandatory)]
+        [string]$ProcDir
+    )
+
+    $pidStr = Split-Path $ProcDir -Leaf
+    $pid = [int]$pidStr
+
+    # Read /proc/[pid]/stat
+    $statPath = Join-Path $ProcDir 'stat'
+    if (-not (Test-Path -LiteralPath $statPath)) { return $null }
+    $statRaw = $null
+    try { $statRaw = [System.IO.File]::ReadAllText($statPath) } catch { return $null }
+
+    # Parse stat: PID (comm) state PPID ... — comm can contain spaces and parens
+    if ($statRaw -notmatch '^\d+\s+\((.+)\)\s+(\S+)\s+(\d+)\s+(.*)$') { return $null }
+    $comm = $Matches[1]
+    $state = $Matches[2]
+    $ppid = [int]$Matches[3]
+    $restFields = $Matches[4] -split '\s+'
+
+    # Fields after PPID in /proc/[pid]/stat (0-indexed from field 5 onward):
+    # 0=pgrp 1=session 2=tty_nr 3=tpgid 4=flags 5=minflt 6=cminflt 7=majflt
+    # 8=cmajflt 9=utime 10=stime 11=cutime 12=cstime 13=priority 14=nice
+    # 15=num_threads 16=itrealvalue 17=starttime 18=vsize 19=rss
+    $ttyNr = if ($restFields.Count -gt 2) { [int]$restFields[2] } else { 0 }
+    $utime = if ($restFields.Count -gt 9) { [long]$restFields[9] } else { 0 }
+    $stime = if ($restFields.Count -gt 10) { [long]$restFields[10] } else { 0 }
+    $starttime = if ($restFields.Count -gt 17) { [long]$restFields[17] } else { 0 }
+    $vsize = if ($restFields.Count -gt 18) { [long]$restFields[18] } else { 0 }
+    $rssPages = if ($restFields.Count -gt 19) { [long]$restFields[19] } else { 0 }
+
+    # Read /proc/[pid]/status for Uid (user)
+    $uid = 0
+    $statusPath = Join-Path $ProcDir 'status'
+    try {
+        $statusLines = [System.IO.File]::ReadAllLines($statusPath)
+        foreach ($line in $statusLines) {
+            if ($line.StartsWith('Uid:')) {
+                $uidParts = $line.Substring(4).Trim() -split '\s+'
+                $uid = [int]$uidParts[0]
+                break
+            }
+        }
+    } catch {}
+
+    # Resolve username from UID
+    $userName = $uid.ToString()
+    try {
+        $passwdLine = & /usr/bin/getent passwd $uid 2>$null
+        if ($passwdLine) { $userName = ($passwdLine -split ':')[0] }
+    } catch {}
+
+    # Read /proc/[pid]/cmdline
+    $cmdline = ''
+    $cmdlinePath = Join-Path $ProcDir 'cmdline'
+    try {
+        $cmdlineBytes = [System.IO.File]::ReadAllBytes($cmdlinePath)
+        if ($cmdlineBytes.Length -gt 0) {
+            $cmdline = [System.Text.Encoding]::UTF8.GetString($cmdlineBytes).TrimEnd([char]0) -replace [char]0, ' '
+        }
+    } catch {}
+    if ([string]::IsNullOrWhiteSpace($cmdline)) { $cmdline = "[$comm]" }
+
+    # TTY resolution
+    $tty = '?'
+    if ($ttyNr -ne 0) {
+        $major = ($ttyNr -shr 8) -band 0xFF
+        $minor = $ttyNr -band 0xFF
+        if ($major -eq 136) { $tty = "pts/$minor" }
+        elseif ($major -eq 4) { $tty = "tty$minor" }
+        else { $tty = "$major/$minor" }
+    }
+
+    # CPU time in seconds (clock ticks -> seconds, typically 100 ticks/sec)
+    $clkTck = 100
+    $totalCpuSec = ($utime + $stime) / $clkTck
+    $cpuMin = [System.Math]::Floor($totalCpuSec / 60)
+    $cpuSec = [int]($totalCpuSec % 60)
+    $cpuTime = '{0}:{1:D2}' -f $cpuMin, $cpuSec
+
+    # Start time: boot time + starttime ticks
+    $bootTime = [System.DateTimeOffset]::UtcNow
+    try {
+        $uptimeStr = [System.IO.File]::ReadAllText('/proc/uptime').Trim().Split(' ')[0]
+        $uptimeSec = [double]$uptimeStr
+        $bootTime = [System.DateTimeOffset]::UtcNow.AddSeconds(-$uptimeSec)
+    } catch {}
+    $startDate = $bootTime.AddSeconds($starttime / $clkTck).LocalDateTime
+
+    # RSS in KB, VSZ in KB
+    $pageSize = 4096
+    $rssKB = [long]($rssPages * $pageSize / 1024)
+    $vszKB = [long]($vsize / 1024)
+
+    # CPU% approximate (snapshot, not accumulated — use 0.0 for snapshot mode)
+    $cpuPct = [double]0.0
+
+    # Memory %
+    $totalMemKB = [long]1
+    try {
+        $memLines = [System.IO.File]::ReadAllLines('/proc/meminfo')
+        foreach ($ml in $memLines) {
+            if ($ml.StartsWith('MemTotal:')) {
+                $totalMemKB = [long](($ml -replace '[^\d]', '').Trim())
+                break
+            }
+        }
+    } catch {}
+    $memPct = if ($totalMemKB -gt 0) { [System.Math]::Round(($rssKB / $totalMemKB) * 100.0, 1) } else { [double]0.0 }
+
+    # Process state to STAT string
+    $statStr = $state
+
+    [PSCustomObject]@{
+        PID         = $pid
+        PPID        = $ppid
+        User        = $userName
+        CPU         = [double]$cpuPct
+        Memory      = [double]$memPct
+        MemoryMB    = [double][System.Math]::Round($rssKB / 1024.0, 1)
+        VSZ         = [long]$vszKB
+        RSS         = [long]$rssKB
+        TTY         = $tty
+        Stat        = $statStr
+        Start       = $startDate
+        Time        = $cpuTime
+        Command     = $cmdline
+        CommandLine = $cmdline
+        ProcessName = $comm
+        WorkingSet  = [long]($rssKB * 1024)
+    }
+}
+
+function Get-DotNetProcEntry {
+    [CmdletBinding()]
+    [OutputType([PSCustomObject])]
+    param(
+        [Parameter(Mandatory)]
+        [System.Diagnostics.Process]$Process
+    )
+
+    $p = $Process
+    $procName = $p.ProcessName
+    $pid = $p.Id
+    $ppid = 0
+    $userName = ''
+    $cpu = [double]0.0
+    $memPct = [double]0.0
+    $vszKB = [long]0
+    $rssKB = [long]0
+    $ws = [long]0
+    $tty = '?'
+    $statStr = 'S'
+    $startDate = [System.DateTime]::Now
+    $cpuTime = '0:00'
+    $cmdline = ''
+
+    try { $ws = [long]$p.WorkingSet64 } catch {}
+    $rssKB = [long]($ws / 1024)
+    try { $vszKB = [long]($p.VirtualMemorySize64 / 1024) } catch {}
+
+    $totalMemBytes = [long]1
+    try {
+        if ($IsWindows) {
+            $totalMemBytes = [long](Get-CimInstance Win32_OperatingSystem).TotalVisibleMemorySize * 1024
+        } elseif ($IsMacOS) {
+            $sysctl = & /usr/sbin/sysctl -n hw.memsize 2>$null
+            if ($sysctl) { $totalMemBytes = [long]$sysctl }
+        }
+    } catch {}
+    if ($totalMemBytes -gt 0) {
+        $memPct = [double][System.Math]::Round(($ws / $totalMemBytes) * 100.0, 1)
+    }
+
+    try { $startDate = $p.StartTime } catch {}
+    try {
+        $totalSec = $p.TotalProcessorTime.TotalSeconds
+        $cpuMin = [System.Math]::Floor($totalSec / 60)
+        $cpuSec = [int]($totalSec % 60)
+        $cpuTime = '{0}:{1:D2}' -f $cpuMin, $cpuSec
+    } catch {}
+
+    if ($IsWindows) {
+        try {
+            $cim = Get-CimInstance Win32_Process -Filter "ProcessId = $pid" -ErrorAction SilentlyContinue
+            if ($cim) {
+                $cmdline = $cim.CommandLine
+                $userName = $cim.GetOwner().User
+                if ($cim.ParentProcessId) { $ppid = [int]$cim.ParentProcessId }
+            }
+        } catch {}
+        if ([string]::IsNullOrEmpty($userName)) {
+            try { $userName = $env:USERNAME } catch {}
+        }
+        if ($p.SessionId -gt 0) { $tty = "con$($p.SessionId)" }
+    } elseif ($IsMacOS) {
+        try {
+            $psLine = & /bin/ps -o user=,ppid=,tty= -p $pid 2>$null
+            if ($psLine) {
+                $parts = $psLine.Trim() -split '\s+', 3
+                $userName = $parts[0]
+                $ppid = [int]$parts[1]
+                $tty = if ($parts[2] -eq '??') { '?' } else { $parts[2] }
+            }
+        } catch {}
+    }
+
+    if ([string]::IsNullOrEmpty($cmdline)) { $cmdline = $procName }
+    if ([string]::IsNullOrEmpty($userName)) { $userName = '?' }
+
+    if (-not $p.Responding -and -not $IsWindows) { $statStr = 'D' }
+    elseif ($p.Threads.Count -gt 1) { $statStr = 'Sl' }
+
+    [PSCustomObject]@{
+        PID         = $pid
+        PPID        = $ppid
+        User        = $userName
+        CPU         = [double]$cpu
+        Memory      = [double]$memPct
+        MemoryMB    = [double][System.Math]::Round($rssKB / 1024.0, 1)
+        VSZ         = [long]$vszKB
+        RSS         = [long]$rssKB
+        TTY         = $tty
+        Stat        = $statStr
+        Start       = $startDate
+        Time        = $cpuTime
+        Command     = $cmdline
+        CommandLine = $cmdline
+        ProcessName = $procName
+        WorkingSet  = [long]$ws
+    }
+}
+
+function Format-PsAuxLine {
+    [CmdletBinding()]
+    [OutputType([string])]
+    param(
+        [Parameter(Mandatory)]
+        [PSCustomObject]$Entry
+    )
+
+    $startStr = $Entry.Start.ToString('HH:mm')
+    '{0,-8} {1,7} {2,4:F1} {3,4:F1} {4,7} {5,6} {6,-7} {7,-4} {8,5} {9,8} {10}' -f `
+        $Entry.User,
+        $Entry.PID,
+        $Entry.CPU,
+        $Entry.Memory,
+        $Entry.VSZ,
+        $Entry.RSS,
+        $Entry.TTY,
+        $Entry.Stat,
+        $startStr,
+        $Entry.Time,
+        $Entry.Command
+}
+
+function Format-PsCustomLine {
+    [CmdletBinding()]
+    [OutputType([string])]
+    param(
+        [Parameter(Mandatory)]
+        [PSCustomObject]$Entry,
+
+        [Parameter(Mandatory)]
+        [string[]]$Columns
+    )
+
+    $parts = [System.Collections.Generic.List[string]]::new()
+    foreach ($col in $Columns) {
+        switch ($col.ToLower().Trim()) {
+            'pid'     { $parts.Add('{0,7}' -f $Entry.PID) }
+            'ppid'    { $parts.Add('{0,7}' -f $Entry.PPID) }
+            'user'    { $parts.Add('{0,-8}' -f $Entry.User) }
+            '%cpu'    { $parts.Add('{0,4:F1}' -f $Entry.CPU) }
+            'cpu'     { $parts.Add('{0,4:F1}' -f $Entry.CPU) }
+            '%mem'    { $parts.Add('{0,4:F1}' -f $Entry.Memory) }
+            'mem'     { $parts.Add('{0,4:F1}' -f $Entry.Memory) }
+            'vsz'     { $parts.Add('{0,7}' -f $Entry.VSZ) }
+            'rss'     { $parts.Add('{0,6}' -f $Entry.RSS) }
+            'tty'     { $parts.Add('{0,-7}' -f $Entry.TTY) }
+            'stat'    { $parts.Add('{0,-4}' -f $Entry.Stat) }
+            'start'   { $parts.Add('{0,5}' -f $Entry.Start.ToString('HH:mm')) }
+            'time'    { $parts.Add('{0,8}' -f $Entry.Time) }
+            'command' { $parts.Add($Entry.Command) }
+            'cmd'     { $parts.Add($Entry.Command) }
+            'comm'    { $parts.Add($Entry.ProcessName) }
+            'args'    { $parts.Add($Entry.CommandLine) }
+            default   { $parts.Add('?') }
+        }
+    }
+    $parts -join ' '
+}
+
+function Invoke-BashPs {
+    $Arguments = [string[]]$args
+
+    $showAll = $false
+    $bsdAux = $false
+    $fullFormat = $false
+    $filterUser = $null
+    $filterPid = $null
+    $sortKey = $null
+    $sortDescending = $false
+    $customFormat = $null
+
+    $i = 0
+    while ($i -lt $Arguments.Count) {
+        $arg = $Arguments[$i]
+        if ($arg -eq 'aux' -or $arg -eq '-aux') {
+            $bsdAux = $true
+            $showAll = $true
+            $i++; continue
+        }
+        if ($arg -eq '-e' -or $arg -eq '-A') {
+            $showAll = $true
+            $i++; continue
+        }
+        if ($arg -eq '-f') {
+            $fullFormat = $true
+            $i++; continue
+        }
+        if ($arg -eq '-u' -and ($i + 1) -lt $Arguments.Count) {
+            $filterUser = $Arguments[$i + 1]
+            $i += 2; continue
+        }
+        if ($arg -eq '-p' -and ($i + 1) -lt $Arguments.Count) {
+            $filterPid = [int]$Arguments[$i + 1]
+            $i += 2; continue
+        }
+        if ($arg -match '^--sort=(.+)$') {
+            $sk = $Matches[1]
+            if ($sk.StartsWith('-')) {
+                $sortDescending = $true
+                $sk = $sk.Substring(1)
+            }
+            $sortKey = $sk
+            $i++; continue
+        }
+        if ($arg -eq '-o' -and ($i + 1) -lt $Arguments.Count) {
+            $customFormat = $Arguments[$i + 1]
+            $i += 2; continue
+        }
+        $i++
+    }
+
+    # Gather process entries
+    $entries = [System.Collections.Generic.List[PSCustomObject]]::new()
+
+    if ($IsLinux) {
+        $currentUser = & /usr/bin/id -un 2>$null
+        $procDirs = [System.IO.Directory]::GetDirectories('/proc')
+        foreach ($dir in $procDirs) {
+            $dirName = [System.IO.Path]::GetFileName($dir)
+            if ($dirName -notmatch '^\d+$') { continue }
+
+            if ($null -ne $filterPid -and [int]$dirName -ne $filterPid) { continue }
+
+            $entry = Get-LinuxProcEntry -ProcDir $dir
+            if ($null -eq $entry) { continue }
+
+            if (-not $showAll -and -not $bsdAux -and $null -eq $filterPid) {
+                if ($fullFormat) {
+                    # ps -f: show current user's processes (no TTY restriction)
+                    if ($entry.User -ne $currentUser) { continue }
+                } else {
+                    # Default ps: show current user's processes with a TTY
+                    if ($entry.User -ne $currentUser -or $entry.TTY -eq '?') { continue }
+                }
+            }
+
+            if ($null -ne $filterUser -and $entry.User -ne $filterUser) { continue }
+
+            $entries.Add($entry)
+        }
+    } else {
+        # Windows / macOS: use Get-Process
+        $procs = if ($null -ne $filterPid) {
+            Get-Process -Id $filterPid -ErrorAction SilentlyContinue
+        } else {
+            Get-Process -ErrorAction SilentlyContinue
+        }
+        if ($procs) {
+            foreach ($p in $procs) {
+                $entry = Get-DotNetProcEntry -Process $p
+                if ($null -eq $entry) { continue }
+
+                if (-not $showAll -and -not $bsdAux -and $null -eq $filterPid) {
+                    if ($IsWindows) {
+                        $currentUser = $env:USERNAME
+                    } else {
+                        $currentUser = & /usr/bin/id -un 2>$null
+                    }
+                    if ($null -ne $currentUser -and $entry.User -ne $currentUser) { continue }
+                }
+
+                if ($null -ne $filterUser -and $entry.User -ne $filterUser) { continue }
+
+                $entries.Add($entry)
+            }
+        }
+    }
+
+    # Sort
+    if ($null -ne $sortKey) {
+        $propName = switch ($sortKey.ToLower()) {
+            'pid'  { 'PID' }
+            'ppid' { 'PPID' }
+            'cpu'  { 'CPU' }
+            '%cpu' { 'CPU' }
+            'mem'  { 'Memory' }
+            '%mem' { 'Memory' }
+            'rss'  { 'RSS' }
+            'vsz'  { 'VSZ' }
+            'user' { 'User' }
+            'comm' { 'ProcessName' }
+            'time' { 'Time' }
+            default { 'PID' }
+        }
+        if ($sortDescending) {
+            $entries = [System.Collections.Generic.List[PSCustomObject]]@(
+                $entries | Sort-Object -Property $propName -Descending
+            )
+        } else {
+            $entries = [System.Collections.Generic.List[PSCustomObject]]@(
+                $entries | Sort-Object -Property $propName
+            )
+        }
+    }
+
+    # Format columns
+    $columns = $null
+    if ($null -ne $customFormat) {
+        $columns = $customFormat -split ','
+    }
+
+    # Emit objects
+    foreach ($entry in $entries) {
+        $bashText = if ($null -ne $columns) {
+            Format-PsCustomLine -Entry $entry -Columns $columns
+        } elseif ($bsdAux -or $fullFormat) {
+            Format-PsAuxLine -Entry $entry
+        } else {
+            '{0,7} {1,-7} {2,8} {3}' -f $entry.PID, $entry.TTY, $entry.Time, $entry.Command
+        }
+
+        $psEntry = [PSCustomObject]@{
+            PSTypeName  = 'PsBash.PsEntry'
+            PID         = [int]$entry.PID
+            PPID        = [int]$entry.PPID
+            User        = [string]$entry.User
+            CPU         = [double]$entry.CPU
+            Memory      = [double]$entry.Memory
+            MemoryMB    = [double]$entry.MemoryMB
+            VSZ         = [long]$entry.VSZ
+            RSS         = [long]$entry.RSS
+            TTY         = [string]$entry.TTY
+            Stat        = [string]$entry.Stat
+            Start       = $entry.Start
+            Time        = [string]$entry.Time
+            Command     = [string]$entry.Command
+            CommandLine = [string]$entry.CommandLine
+            ProcessName = [string]$entry.ProcessName
+            WorkingSet  = [long]$entry.WorkingSet
+            BashText    = "$bashText`n"
+        }
+        $psEntry | Add-Member -MemberType ScriptMethod -Name 'ToString' -Value {
+            $this.BashText
+        } -Force
+        $psEntry
+    }
+}
+
 # --- Aliases ---
 
 Set-Alias -Name 'echo'   -Value 'Invoke-BashEcho'   -Force -Scope Global -Option AllScope
@@ -2469,3 +2947,4 @@ Set-Alias -Name 'mkdir'   -Value 'Invoke-BashMkdir'   -Force -Scope Global -Opti
 Set-Alias -Name 'rmdir'   -Value 'Invoke-BashRmdir'   -Force -Scope Global -Option AllScope
 Set-Alias -Name 'touch'   -Value 'Invoke-BashTouch'   -Force -Scope Global -Option AllScope
 Set-Alias -Name 'ln'      -Value 'Invoke-BashLn'      -Force -Scope Global -Option AllScope
+Set-Alias -Name 'ps'      -Value 'Invoke-BashPs'      -Force -Scope Global -Option AllScope

@@ -81,7 +81,9 @@ FunctionsToExport = 'Invoke-BashEcho', 'Invoke-BashPrintf', 'Get-BashPlatform',
                'Invoke-BashStat', 'Format-StatString',
                'Invoke-BashCp', 'Invoke-BashMv', 'Invoke-BashRm',
                'Invoke-BashMkdir', 'Invoke-BashRmdir', 'Invoke-BashTouch',
-               'Invoke-BashLn'
+               'Invoke-BashLn',
+               'Invoke-BashPs', 'Get-LinuxProcEntry', 'Get-DotNetProcEntry',
+               'Format-PsAuxLine', 'Format-PsCustomLine'
 
 # Cmdlets to export from this module, for best performance, do not use wildcards and do not delete the entry, use an empty array if there are no cmdlets to export.
 CmdletsToExport = @()
@@ -91,7 +93,7 @@ CmdletsToExport = @()
 
 # Aliases to export from this module, for best performance, do not use wildcards and do not delete the entry, use an empty array if there are no aliases to export.
 AliasesToExport = 'echo', 'printf', 'ls', 'cat', 'grep', 'sort', 'head', 'tail', 'wc', 'find', 'stat',
-               'cp', 'mv', 'rm', 'mkdir', 'rmdir', 'touch', 'ln'
+               'cp', 'mv', 'rm', 'mkdir', 'rmdir', 'touch', 'ln', 'ps'
 
 # DSC resources to export from this module
 # DscResourcesToExport = @()
