@@ -106,6 +106,9 @@ FunctionsToExport = 'Invoke-BashEcho', 'Invoke-BashPrintf', 'Get-BashPlatform',
                'Invoke-BashSha256sum', 'Invoke-BashFile',
                'Invoke-BashRg',
                'Invoke-BashGzip', 'Invoke-BashTar',
+               'Invoke-BashYq', 'ConvertFrom-SimpleYaml', 'ConvertFrom-YamlValue',
+               'ConvertTo-SimpleYaml',
+               'Invoke-BashXan',
                'Register-BashCompletions',
                'Test-BashHelpFlag', 'Show-BashHelp'
 
@@ -127,7 +130,8 @@ AliasesToExport = 'echo', 'printf', 'ls', 'cat', 'grep', 'sort', 'head', 'tail',
                'fold', 'expand', 'unexpand', 'strings', 'split', 'tac',
                'base64', 'md5sum', 'sha1sum', 'sha256sum', 'file',
                'rg',
-               'gzip', 'gunzip', 'zcat', 'tar'
+               'gzip', 'gunzip', 'zcat', 'tar',
+               'yq', 'xan'
 
 # DSC resources to export from this module
 # DscResourcesToExport = @()

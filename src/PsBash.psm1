@@ -5678,7 +5678,7 @@ function ConvertTo-JqJson {
     if ($null -eq $Value) { return 'null' }
 
     if ($Value -is [bool]) {
-        return if ($Value) { 'true' } else { 'false' }
+        if ($Value) { return 'true' } else { return 'false' }
     }
     if ($Value -is [int] -or $Value -is [long] -or $Value -is [double] -or $Value -is [decimal]) {
         return "$Value"
@@ -8716,6 +8716,375 @@ function Invoke-BashTar {
     }
 }
 
+# --- yq Command ---
+
+function ConvertFrom-SimpleYaml {
+    param([string]$Text)
+
+    $lines = $Text -split "`n"
+    $root = [ordered]@{}
+    # Stack: list of {indent, container, lastKey}
+    # container is always the dict that owns keys at this level
+    $stack = [System.Collections.Generic.List[object]]::new()
+    $stack.Add(@{ indent = -2; container = $root; lastKey = $null })
+
+    foreach ($rawLine in $lines) {
+        $line = $rawLine -replace "`r$", ''
+        if ($line.Trim() -eq '' -or $line.Trim().StartsWith('#')) { continue }
+
+        $stripped = $line.TrimStart()
+        $indent = $line.Length - $stripped.Length
+
+        # Pop deeper or same-level entries to find the correct parent
+        while ($stack.Count -gt 1 -and $stack[$stack.Count - 1].indent -ge $indent) {
+            $stack.RemoveAt($stack.Count - 1)
+        }
+
+        $top = $stack[$stack.Count - 1]
+
+        # List item
+        if ($stripped.StartsWith('- ')) {
+            $itemText = $stripped.Substring(2).Trim()
+            # The list lives under the parent's lastKey
+            $parentKey = $top.lastKey
+            $parentContainer = $top.container
+            if ($null -ne $parentKey -and $parentContainer -is [System.Collections.IDictionary]) {
+                if (-not ($parentContainer[$parentKey] -is [System.Collections.IList])) {
+                    $parentContainer[$parentKey] = [System.Collections.Generic.List[object]]::new()
+                }
+                $parentContainer[$parentKey].Add((ConvertFrom-YamlValue $itemText))
+            }
+            continue
+        }
+
+        # Key: value pair
+        $colonIdx = $stripped.IndexOf(':')
+        if ($colonIdx -lt 0) { continue }
+        $key = $stripped.Substring(0, $colonIdx).Trim()
+        $valPart = ''
+        if ($colonIdx + 1 -lt $stripped.Length) {
+            $valPart = $stripped.Substring($colonIdx + 1).Trim()
+        }
+
+        $target = $top.container
+        # If the top of stack points to a dict that was created for nesting,
+        # and lastKey is set, resolve the child dict
+        if ($null -ne $top.lastKey -and $target -is [System.Collections.IDictionary] -and $target.Contains($top.lastKey) -and $target[$top.lastKey] -is [System.Collections.IDictionary]) {
+            $target = $target[$top.lastKey]
+        }
+
+        if ($valPart -eq '') {
+            $child = [ordered]@{}
+            $target[$key] = $child
+            $stack.Add(@{ indent = $indent; container = $target; lastKey = $key })
+        } else {
+            $target[$key] = ConvertFrom-YamlValue $valPart
+        }
+    }
+
+    $root
+}
+
+function ConvertFrom-YamlValue {
+    param([string]$Raw)
+
+    $s = $Raw.Trim()
+    if ($s -eq 'null' -or $s -eq '~') { return $null }
+    if ($s -eq 'true') { return $true }
+    if ($s -eq 'false') { return $false }
+    if ($s -match '^\-?\d+$') { return [long]$s }
+    if ($s -match '^\-?\d+\.\d+$') { return [double]$s }
+    # Quoted strings
+    if (($s.StartsWith('"') -and $s.EndsWith('"')) -or ($s.StartsWith("'") -and $s.EndsWith("'"))) {
+        return $s.Substring(1, $s.Length - 2)
+    }
+    $s
+}
+
+function ConvertTo-SimpleYaml {
+    param([object]$Data, [int]$Indent = 0)
+
+    $prefix = ' ' * $Indent
+    $sb = [System.Text.StringBuilder]::new()
+
+    if ($null -eq $Data) {
+        $sb.Append('null') | Out-Null
+    } elseif ($Data -is [bool]) {
+        $sb.Append($(if ($Data) { 'true' } else { 'false' })) | Out-Null
+    } elseif ($Data -is [int] -or $Data -is [long] -or $Data -is [double] -or $Data -is [decimal]) {
+        $sb.Append("$Data") | Out-Null
+    } elseif ($Data -is [string]) {
+        if ($Data -match '[:,{}\[\]#&*!|>''"%@`]' -or $Data -eq '') {
+            $escaped = $Data -replace '"', '\"'
+            $sb.Append("`"$escaped`"") | Out-Null
+        } else {
+            $sb.Append($Data) | Out-Null
+        }
+    } elseif ($Data -is [array] -or $Data -is [System.Collections.IList]) {
+        $first = $true
+        foreach ($item in $Data) {
+            if (-not $first) { $sb.Append("`n") | Out-Null }
+            $sb.Append("${prefix}- ") | Out-Null
+            $valYaml = ConvertTo-SimpleYaml -Data $item -Indent ($Indent + 2)
+            $sb.Append($valYaml) | Out-Null
+            $first = $false
+        }
+    } elseif ($Data -is [System.Collections.IDictionary]) {
+        $first = $true
+        foreach ($key in $Data.Keys) {
+            if (-not $first) { $sb.Append("`n") | Out-Null }
+            $val = $Data[$key]
+            if ($val -is [System.Collections.IDictionary] -or $val -is [array] -or $val -is [System.Collections.IList]) {
+                $sb.Append("${prefix}${key}:") | Out-Null
+                $sb.Append("`n") | Out-Null
+                $sb.Append((ConvertTo-SimpleYaml -Data $val -Indent ($Indent + 2))) | Out-Null
+            } else {
+                $sb.Append("${prefix}${key}: ") | Out-Null
+                $sb.Append((ConvertTo-SimpleYaml -Data $val -Indent 0)) | Out-Null
+            }
+            $first = $false
+        }
+    } else {
+        $sb.Append("$Data") | Out-Null
+    }
+
+    $sb.ToString()
+}
+
+function Invoke-BashYq {
+    $Arguments = [string[]]$args
+    $pipelineInput = @($input)
+    if ($Arguments -contains '--help') { return Show-BashHelp 'yq' }
+
+    $rawOutput = $false
+    $outputFormat = 'json'
+    $filterExpr = '.'
+    $filterSet = $false
+    $files = [System.Collections.Generic.List[string]]::new()
+
+    $i = 0
+    while ($i -lt $Arguments.Count) {
+        $arg = $Arguments[$i]
+
+        if ($arg -ceq '-r' -or $arg -ceq '--raw-output') {
+            $rawOutput = $true
+            $i++
+            continue
+        }
+        if ($arg -ceq '-o' -or $arg -ceq '--output-format') {
+            $i++
+            if ($i -lt $Arguments.Count) { $outputFormat = $Arguments[$i] }
+            $i++
+            continue
+        }
+
+        if (-not $filterSet) {
+            $filterExpr = $arg
+            $filterSet = $true
+        } else {
+            $files.Add($arg)
+        }
+        $i++
+    }
+
+    # Collect YAML input
+    $yamlTexts = [System.Collections.Generic.List[string]]::new()
+
+    if ($files.Count -gt 0) {
+        foreach ($file in $files) {
+            $resolved = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($file)
+            if (-not (Test-Path -LiteralPath $resolved)) {
+                Write-Error "yq: $file`: No such file or directory" -ErrorAction Continue
+                return
+            }
+            $yamlTexts.Add((Get-Content -LiteralPath $resolved -Raw))
+        }
+    } else {
+        $textParts = [System.Text.StringBuilder]::new()
+        foreach ($item in $pipelineInput) {
+            $text = Get-BashText -InputObject $item
+            $textParts.Append($text) | Out-Null
+        }
+        $combined = $textParts.ToString().Trim()
+        if ($combined -ne '') {
+            $yamlTexts.Add($combined)
+        }
+    }
+
+    if ($yamlTexts.Count -eq 0) { return }
+
+    foreach ($yamlText in $yamlTexts) {
+        $parsed = ConvertFrom-SimpleYaml -Text $yamlText
+        $results = @(Invoke-JqFilter -Data $parsed -Filter $filterExpr)
+        foreach ($result in $results) {
+            if ($outputFormat -eq 'yaml') {
+                $text = ConvertTo-SimpleYaml -Data $result
+                New-BashObject -BashText $text
+            } else {
+                $text = ConvertTo-JqJson -Value $result -Compact $false -SortKeys $false -RawOutput $rawOutput
+                New-BashObject -BashText $text
+            }
+        }
+    }
+}
+
+# --- xan Command ---
+
+function Invoke-BashXan {
+    # Normalize args: PowerShell comma operator creates arrays, rejoin them
+    $Arguments = [System.Collections.Generic.List[string]]::new()
+    foreach ($a in $args) {
+        if ($a -is [array]) {
+            $Arguments.Add(($a -join ','))
+        } else {
+            $Arguments.Add([string]$a)
+        }
+    }
+    $pipelineInput = @($input)
+    if ($Arguments -contains '--help') { return Show-BashHelp 'xan' }
+
+    $delimiter = ','
+    $subcommand = $null
+    $subArgs = [System.Collections.Generic.List[string]]::new()
+
+    $i = 0
+    # Parse global flags before subcommand
+    while ($i -lt $Arguments.Count) {
+        $arg = $Arguments[$i]
+        if ($arg -ceq '-d') {
+            $i++
+            if ($i -lt $Arguments.Count) { $delimiter = $Arguments[$i] }
+            $i++
+            continue
+        }
+        if ($null -eq $subcommand -and -not $arg.StartsWith('-')) {
+            $subcommand = $arg
+            $i++
+            while ($i -lt $Arguments.Count) {
+                $subArgs.Add($Arguments[$i])
+                $i++
+            }
+            break
+        }
+        $i++
+    }
+
+    if (-not $subcommand) {
+        Write-Error 'xan: missing subcommand (headers, count, select, search, table)' -ErrorAction Continue
+        return
+    }
+
+    # Resolve CSV text: last subArg may be a file, or pipeline
+    $csvText = $null
+    $fileArg = $null
+
+    # For select/search: last arg is file if it exists on disk, rest are the operand.
+    # PowerShell comma operator splits 'a,b' into separate args, so rejoin them.
+    switch ($subcommand) {
+        'headers' {
+            if ($subArgs.Count -gt 0) { $fileArg = $subArgs[$subArgs.Count - 1] }
+        }
+        'count' {
+            if ($subArgs.Count -gt 0) { $fileArg = $subArgs[$subArgs.Count - 1] }
+        }
+        'select' {
+            if ($subArgs.Count -gt 1) { $fileArg = $subArgs[$subArgs.Count - 1] }
+        }
+        'search' {
+            if ($subArgs.Count -gt 1) { $fileArg = $subArgs[$subArgs.Count - 1] }
+        }
+        'table' {
+            if ($subArgs.Count -gt 0) { $fileArg = $subArgs[$subArgs.Count - 1] }
+        }
+        default {
+            Write-Error "xan: unknown subcommand '$subcommand'" -ErrorAction Continue
+            return
+        }
+    }
+
+    if ($fileArg) {
+        $resolved = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($fileArg)
+        if (-not (Test-Path -LiteralPath $resolved)) {
+            Write-Error "xan: $fileArg`: No such file or directory" -ErrorAction Continue
+            return
+        }
+        $csvText = Get-Content -LiteralPath $resolved -Raw
+    } else {
+        $textParts = [System.Text.StringBuilder]::new()
+        foreach ($item in $pipelineInput) {
+            $text = Get-BashText -InputObject $item
+            $textParts.Append($text) | Out-Null
+        }
+        $csvText = $textParts.ToString().Trim()
+    }
+
+    if (-not $csvText -or $csvText -eq '') { return }
+
+    $records = @($csvText | ConvertFrom-Csv -Delimiter $delimiter)
+    if ($records.Count -eq 0 -and $csvText.Trim() -ne '') {
+        # Header-only: ConvertFrom-Csv returns empty for header-only
+        $headerLine = ($csvText -split "`n")[0].Trim()
+        $headers = $headerLine -split [regex]::Escape($delimiter)
+    } else {
+        $headers = @($records[0].PSObject.Properties | ForEach-Object { $_.Name })
+    }
+
+    switch ($subcommand) {
+        'headers' {
+            foreach ($h in $headers) {
+                New-BashObject -BashText $h
+            }
+        }
+        'count' {
+            New-BashObject -BashText "$($records.Count)"
+        }
+        'select' {
+            $cols = @($subArgs[0] -split ',')
+            $outLines = [System.Collections.Generic.List[string]]::new()
+            $outLines.Add(($cols -join $delimiter))
+            foreach ($rec in $records) {
+                $vals = @(foreach ($c in $cols) { $rec.$c })
+                $outLines.Add(($vals -join $delimiter))
+            }
+            foreach ($line in $outLines) {
+                New-BashObject -BashText $line
+            }
+        }
+        'search' {
+            $pattern = $subArgs[0]
+            $outLines = [System.Collections.Generic.List[string]]::new()
+            $outLines.Add(($headers -join $delimiter))
+            foreach ($rec in $records) {
+                $rowText = ($headers | ForEach-Object { $rec.$_ }) -join $delimiter
+                if ($rowText -match $pattern) {
+                    $outLines.Add($rowText)
+                }
+            }
+            foreach ($line in $outLines) {
+                New-BashObject -BashText $line
+            }
+        }
+        'table' {
+            $colWidths = @{}
+            foreach ($h in $headers) { $colWidths[$h] = $h.Length }
+            foreach ($rec in $records) {
+                foreach ($h in $headers) {
+                    $val = "$($rec.$h)"
+                    if ($val.Length -gt $colWidths[$h]) { $colWidths[$h] = $val.Length }
+                }
+            }
+            $sb = [System.Text.StringBuilder]::new()
+            $headerParts = @(foreach ($h in $headers) { $h.PadRight($colWidths[$h]) })
+            $sb.AppendLine(($headerParts -join '  ')) | Out-Null
+            foreach ($rec in $records) {
+                $parts = @(foreach ($h in $headers) { "$($rec.$h)".PadRight($colWidths[$h]) })
+                $sb.AppendLine(($parts -join '  ')) | Out-Null
+            }
+            New-BashObject -BashText $sb.ToString().TrimEnd()
+        }
+    }
+}
+
 # --- Help Support ---
 
 $script:BashHelpSpecs = @{
@@ -8778,6 +9147,8 @@ $script:BashHelpSpecs = @{
     'file'     = 'Determine file type.'
     'gzip'     = 'Compress or expand files.'
     'tar'      = 'Store and extract files from an archive.'
+    'yq'       = 'Command-line YAML/JSON processor.'
+    'xan'      = 'CSV toolkit for column selection, search, and display.'
 }
 
 function Test-BashHelpFlag {
@@ -8921,6 +9292,14 @@ $script:BashFlagSpecs = @{
         @('-f', 'archive file'),         @('-z', 'gzip filter'),       @('-v', 'verbose'),
         @('-C', 'change directory'),     @('--exclude', 'exclude pattern')
     )
+    'yq'       = @(
+        @('-r', 'raw output'),           @('-o', 'output format (json, yaml)')
+    )
+    'xan'      = @(
+        @('-d', 'delimiter'),            @('headers', 'show column headers'),
+        @('count', 'count rows'),        @('select', 'select columns'),
+        @('search', 'search rows'),      @('table', 'pretty table display')
+    )
 }
 
 $script:BashCompleters = @{}
@@ -9023,3 +9402,5 @@ Set-Alias -Name 'gzip'     -Value 'Invoke-BashGzip'     -Force -Scope Global -Op
 Set-Alias -Name 'gunzip'   -Value 'Invoke-BashGzip'     -Force -Scope Global -Option AllScope
 Set-Alias -Name 'zcat'     -Value 'Invoke-BashGzip'     -Force -Scope Global -Option AllScope
 Set-Alias -Name 'tar'      -Value 'Invoke-BashTar'      -Force -Scope Global -Option AllScope
+Set-Alias -Name 'yq'       -Value 'Invoke-BashYq'       -Force -Scope Global -Option AllScope
+Set-Alias -Name 'xan'      -Value 'Invoke-BashXan'      -Force -Scope Global -Option AllScope

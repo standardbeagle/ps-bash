@@ -5769,3 +5769,249 @@ Describe 'Invoke-BashTar — archive operations' {
         $alias.Definition | Should -Be 'Invoke-BashTar'
     }
 }
+
+# --- yq Command ---
+
+Describe 'Invoke-BashYq -- Simple Field Access' {
+    It 'extracts a string field with quotes by default' {
+        $r = Invoke-BashEcho "name: John" | Invoke-BashYq '.name'
+        (Get-BashText $r) | Should -Be '"John"'
+    }
+
+    It 'extracts a string field raw with -r' {
+        $r = Invoke-BashEcho "name: John" | Invoke-BashYq -r '.name'
+        (Get-BashText $r) | Should -Be 'John'
+    }
+
+    It 'extracts a numeric field' {
+        $r = Invoke-BashEcho "age: 30" | Invoke-BashYq '.age'
+        (Get-BashText $r) | Should -Be '30'
+    }
+
+    It 'extracts nested fields' {
+        $yaml = "a:`n  b: 42"
+        $r = Invoke-BashEcho $yaml | Invoke-BashYq '.a.b'
+        (Get-BashText $r) | Should -Be '42'
+    }
+
+    It 'returns null for missing field' {
+        $r = Invoke-BashEcho "name: John" | Invoke-BashYq '.missing'
+        (Get-BashText $r) | Should -Be 'null'
+    }
+}
+
+Describe 'Invoke-BashYq -- Output Format' {
+    It 'outputs JSON with -o json on identity filter' {
+        $yaml = "a: 1`nb: 2"
+        $r = Invoke-BashEcho $yaml | Invoke-BashYq -o json '.'
+        $text = Get-BashText $r
+        $parsed = $text | ConvertFrom-Json
+        $parsed.a | Should -Be 1
+        $parsed.b | Should -Be 2
+    }
+
+    It 'outputs YAML with -o yaml on identity filter' {
+        $yaml = "name: John"
+        $r = Invoke-BashEcho $yaml | Invoke-BashYq -o yaml '.'
+        $text = Get-BashText $r
+        $text | Should -Match 'name: John'
+    }
+
+    It 'defaults to JSON output' {
+        $yaml = "x: 5"
+        $r = Invoke-BashEcho $yaml | Invoke-BashYq '.'
+        $text = Get-BashText $r
+        $parsed = $text | ConvertFrom-Json
+        $parsed.x | Should -Be 5
+    }
+}
+
+Describe 'Invoke-BashYq -- File Mode' {
+    It 'reads YAML from a file' {
+        $file = Join-Path $TestDrive 'test.yaml'
+        Set-Content -Path $file -Value "color: blue" -NoNewline
+        $r = Invoke-BashYq '.color' $file
+        (Get-BashText $r) | Should -Be '"blue"'
+    }
+
+    It 'reads multi-key YAML from a file' {
+        $file = Join-Path $TestDrive 'multi.yaml'
+        Set-Content -Path $file -Value "a: 1`nb: 2`nc: 3" -NoNewline
+        $r = Invoke-BashYq -r '.b' $file
+        (Get-BashText $r) | Should -Be '2'
+    }
+
+    It 'errors on missing file' {
+        $result = Invoke-BashYq '.' '/nonexistent/file.yaml' 2>&1
+        $errors = @($result | Where-Object { $_ -is [System.Management.Automation.ErrorRecord] })
+        $errors.Count | Should -BeGreaterThan 0
+    }
+}
+
+Describe 'Invoke-BashYq -- YAML Features' {
+    It 'handles boolean values' {
+        $r = Invoke-BashEcho "enabled: true" | Invoke-BashYq '.enabled'
+        (Get-BashText $r) | Should -Be 'true'
+    }
+
+    It 'handles null values' {
+        $r = Invoke-BashEcho "val: null" | Invoke-BashYq '.val'
+        (Get-BashText $r) | Should -Be 'null'
+    }
+
+    It 'handles list values' {
+        $yaml = "items:`n  - one`n  - two`n  - three"
+        $r = Invoke-BashEcho $yaml | Invoke-BashYq '.'
+        $text = Get-BashText $r
+        $parsed = $text | ConvertFrom-Json
+        $parsed.items.Count | Should -Be 3
+    }
+
+    It 'handles quoted strings with colons' {
+        $r = Invoke-BashEcho 'url: "http://example.com"' | Invoke-BashYq -r '.url'
+        (Get-BashText $r) | Should -Be 'http://example.com'
+    }
+
+    It 'handles empty input gracefully' {
+        $r = @('' | Invoke-BashYq '.')
+        $r.Count | Should -Be 0
+    }
+}
+
+Describe 'Invoke-BashYq -- Help and Alias' {
+    It 'returns help with --help' {
+        $result = yq --help
+        $result.BashText | Should -Match 'Usage: yq'
+    }
+
+    It 'exports yq alias' {
+        $alias = Get-Alias -Name yq -Scope Global
+        $alias.Definition | Should -Be 'Invoke-BashYq'
+    }
+}
+
+# --- xan Command ---
+
+Describe 'Invoke-BashXan -- Headers' {
+    It 'lists column headers from CSV file' {
+        $file = Join-Path $TestDrive 'data.csv'
+        Set-Content -Path $file -Value "name,age,city`nAlice,30,NYC`nBob,25,LA"
+        $results = @(Invoke-BashXan headers $file)
+        $texts = @($results | ForEach-Object { Get-BashText $_ })
+        $texts | Should -Contain 'name'
+        $texts | Should -Contain 'age'
+        $texts | Should -Contain 'city'
+    }
+
+    It 'lists headers with custom delimiter' {
+        $file = Join-Path $TestDrive 'tab.csv'
+        Set-Content -Path $file -Value "name`tage`tcity`nAlice`t30`tNYC"
+        $results = @(Invoke-BashXan -d "`t" headers $file)
+        $texts = @($results | ForEach-Object { Get-BashText $_ })
+        $texts | Should -Contain 'name'
+        $texts | Should -Contain 'age'
+    }
+}
+
+Describe 'Invoke-BashXan -- Count' {
+    It 'counts rows excluding header' {
+        $file = Join-Path $TestDrive 'count.csv'
+        Set-Content -Path $file -Value "name,age`nAlice,30`nBob,25`nCharlie,35"
+        $r = Invoke-BashXan count $file
+        (Get-BashText $r) | Should -Be '3'
+    }
+
+    It 'counts zero rows for header-only file' {
+        $file = Join-Path $TestDrive 'empty.csv'
+        Set-Content -Path $file -Value "name,age"
+        $r = Invoke-BashXan count $file
+        (Get-BashText $r) | Should -Be '0'
+    }
+}
+
+Describe 'Invoke-BashXan -- Select' {
+    It 'selects specific columns' {
+        $file = Join-Path $TestDrive 'sel.csv'
+        Set-Content -Path $file -Value "name,age,city`nAlice,30,NYC`nBob,25,LA"
+        $results = @(Invoke-BashXan select name,city $file)
+        $text = ($results | ForEach-Object { Get-BashText $_ }) -join "`n"
+        $text | Should -Match 'name'
+        $text | Should -Match 'city'
+        $text | Should -Match 'Alice'
+        $text | Should -Match 'NYC'
+        $text | Should -Not -Match '30'
+    }
+}
+
+Describe 'Invoke-BashXan -- Search' {
+    It 'searches rows matching pattern' {
+        $file = Join-Path $TestDrive 'search.csv'
+        Set-Content -Path $file -Value "name,age,city`nAlice,30,NYC`nBob,25,LA`nCharlie,35,NYC"
+        $results = @(Invoke-BashXan search 'NYC' $file)
+        $text = ($results | ForEach-Object { Get-BashText $_ }) -join "`n"
+        $text | Should -Match 'Alice'
+        $text | Should -Match 'Charlie'
+        $text | Should -Not -Match 'Bob'
+    }
+
+    It 'returns header plus matching rows' {
+        $file = Join-Path $TestDrive 'srch2.csv'
+        Set-Content -Path $file -Value "name,age`nAlice,30`nBob,25"
+        $results = @(Invoke-BashXan search 'Alice' $file)
+        $text = ($results | ForEach-Object { Get-BashText $_ }) -join "`n"
+        $text | Should -Match 'name,age'
+        $text | Should -Match 'Alice'
+    }
+}
+
+Describe 'Invoke-BashXan -- Table' {
+    It 'displays aligned table' {
+        $file = Join-Path $TestDrive 'tbl.csv'
+        Set-Content -Path $file -Value "name,age`nAlice,30`nBob,25"
+        $r = Invoke-BashXan table $file
+        $text = Get-BashText $r
+        $text | Should -Match 'name'
+        $text | Should -Match 'Alice'
+        $text | Should -Match 'Bob'
+    }
+}
+
+Describe 'Invoke-BashXan -- Pipeline Mode' {
+    It 'reads CSV from pipeline for headers' {
+        $results = @(Invoke-BashEcho "name,age`nAlice,30" | Invoke-BashXan headers)
+        $texts = @($results | ForEach-Object { Get-BashText $_ })
+        $texts | Should -Contain 'name'
+        $texts | Should -Contain 'age'
+    }
+
+    It 'reads CSV from pipeline for count' {
+        $r = Invoke-BashEcho "name,age`nAlice,30`nBob,25" | Invoke-BashXan count
+        (Get-BashText $r) | Should -Be '2'
+    }
+}
+
+Describe 'Invoke-BashXan -- Error Handling' {
+    It 'errors on missing file' {
+        $result = Invoke-BashXan headers '/nonexistent/file.csv' 2>&1
+        $errors = @($result | Where-Object { $_ -is [System.Management.Automation.ErrorRecord] })
+        $errors.Count | Should -BeGreaterThan 0
+    }
+
+    It 'errors on unknown subcommand' {
+        $result = Invoke-BashXan unknown 2>&1
+        $errors = @($result | Where-Object { $_ -is [System.Management.Automation.ErrorRecord] })
+        $errors.Count | Should -BeGreaterThan 0
+    }
+}
+
+Describe 'Invoke-BashXan -- Help and Alias' {
+    It 'returns help with --help' {
+        $result = xan --help
+        $result.BashText | Should -Match 'Usage: xan'
+    }
+
+    It 'exports xan alias' {
+        $alias = Get-Alias -Name xan -Scope Global
+        $alias.Definition | Should -Be 'Invoke-BashXan'
+    }
+}
