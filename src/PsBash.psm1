@@ -884,6 +884,352 @@ function Invoke-BashGrep {
     }
 }
 
+# --- Human-Numeric Comparator ---
+
+function ConvertFrom-HumanNumeric {
+    [CmdletBinding()]
+    [OutputType([double])]
+    param(
+        [Parameter(Mandatory)]
+        [AllowEmptyString()]
+        [string]$Value
+    )
+
+    $trimmed = $Value.Trim()
+    if ($trimmed -eq '') { return 0.0 }
+
+    $multipliers = @{
+        'K' = 1024.0
+        'M' = 1048576.0
+        'G' = 1073741824.0
+        'T' = 1099511627776.0
+        'P' = 1125899906842624.0
+    }
+
+    if ($trimmed -cmatch '^([0-9]*\.?[0-9]+)\s*([KMGTP])$') {
+        $num = [double]$Matches[1]
+        $suffix = $Matches[2]
+        return $num * $multipliers[$suffix]
+    }
+
+    $parsed = 0.0
+    if ([double]::TryParse($trimmed, [ref]$parsed)) {
+        return $parsed
+    }
+    return 0.0
+}
+
+# --- Version Comparator ---
+
+function Compare-Version {
+    [CmdletBinding()]
+    [OutputType([int])]
+    param(
+        [Parameter(Mandatory)]
+        [AllowEmptyString()]
+        [string]$Left,
+
+        [Parameter(Mandatory)]
+        [AllowEmptyString()]
+        [string]$Right
+    )
+
+    $leftParts = $Left -split '[.\-]'
+    $rightParts = $Right -split '[.\-]'
+    $max = [System.Math]::Max($leftParts.Count, $rightParts.Count)
+
+    for ($i = 0; $i -lt $max; $i++) {
+        $lp = if ($i -lt $leftParts.Count) { $leftParts[$i] } else { '0' }
+        $rp = if ($i -lt $rightParts.Count) { $rightParts[$i] } else { '0' }
+
+        $ln = 0; $rn = 0
+        $lIsNum = [int]::TryParse($lp, [ref]$ln)
+        $rIsNum = [int]::TryParse($rp, [ref]$rn)
+
+        if ($lIsNum -and $rIsNum) {
+            if ($ln -ne $rn) { return ($ln - $rn) }
+        } else {
+            $cmp = [string]::Compare($lp, $rp, [System.StringComparison]::Ordinal)
+            if ($cmp -ne 0) { return $cmp }
+        }
+    }
+    return 0
+}
+
+# --- Month Comparator ---
+
+function ConvertFrom-MonthName {
+    [CmdletBinding()]
+    [OutputType([int])]
+    param(
+        [Parameter(Mandatory)]
+        [AllowEmptyString()]
+        [string]$Value
+    )
+
+    $monthMap = @{
+        'jan' = 1; 'feb' = 2; 'mar' = 3; 'apr' = 4
+        'may' = 5; 'jun' = 6; 'jul' = 7; 'aug' = 8
+        'sep' = 9; 'oct' = 10; 'nov' = 11; 'dec' = 12
+    }
+
+    $trimmed = $Value.Trim().ToLower()
+    if ($trimmed.Length -ge 3) {
+        $key = $trimmed.Substring(0, 3)
+        if ($monthMap.ContainsKey($key)) { return $monthMap[$key] }
+    }
+    return 0
+}
+
+# --- sort Command ---
+
+function Invoke-BashSort {
+    $Arguments = [string[]]$args
+    $pipelineInput = @($input)
+
+    # Manual arg parsing for value-bearing flags (-k, -t)
+    $reverse = $false
+    $numeric = $false
+    $unique = $false
+    $foldCase = $false
+    $humanNumeric = $false
+    $versionSort = $false
+    $monthSort = $false
+    $checkOnly = $false
+    $keyField = $null
+    $delimiter = $null
+    $operands = [System.Collections.Generic.List[string]]::new()
+    $pastDoubleDash = $false
+
+    $i = 0
+    while ($i -lt $Arguments.Count) {
+        $arg = $Arguments[$i]
+
+        if ($pastDoubleDash) {
+            $operands.Add($arg)
+            $i++
+            continue
+        }
+
+        if ($arg -eq '--') {
+            $pastDoubleDash = $true
+            $i++
+            continue
+        }
+
+        # -t with joined value (e.g. -t:)
+        if ($arg -cmatch '^-t(.+)$') {
+            $delimiter = $Matches[1]
+            $i++
+            continue
+        }
+
+        # -k with joined value (e.g. -k2)
+        if ($arg -cmatch '^-k(\d+.*)$') {
+            $keyField = [int]($Matches[1] -replace '[^0-9].*', '')
+            $i++
+            continue
+        }
+
+        # -t as separate arg
+        if ($arg -ceq '-t') {
+            $i++
+            if ($i -lt $Arguments.Count) {
+                $delimiter = $Arguments[$i]
+            }
+            $i++
+            continue
+        }
+
+        # -k as separate arg
+        if ($arg -ceq '-k') {
+            $i++
+            if ($i -lt $Arguments.Count) {
+                $keyField = [int]($Arguments[$i] -replace '[^0-9].*', '')
+            }
+            $i++
+            continue
+        }
+
+        if ($arg.StartsWith('-') -and $arg.Length -gt 1 -and -not $arg.StartsWith('--')) {
+            foreach ($ch in $arg.Substring(1).ToCharArray()) {
+                switch ($ch) {
+                    'r' { $reverse = $true }
+                    'n' { $numeric = $true }
+                    'u' { $unique = $true }
+                    'f' { $foldCase = $true }
+                    'h' { $humanNumeric = $true }
+                    'V' { $versionSort = $true }
+                    'M' { $monthSort = $true }
+                    'c' { $checkOnly = $true }
+                }
+            }
+            $i++
+            continue
+        }
+
+        $operands.Add($arg)
+        $i++
+    }
+
+    # Collect items from pipeline or file operands
+    $items = [System.Collections.Generic.List[object]]::new()
+
+    if ($pipelineInput.Count -gt 0) {
+        foreach ($item in $pipelineInput) {
+            $text = Get-BashText -InputObject $item
+            $text = $text -replace "`n$", ''
+            if ($text.Contains("`n")) {
+                foreach ($line in $text.Split("`n")) {
+                    $items.Add((New-BashObject -BashText $line))
+                }
+            } else {
+                $items.Add($item)
+            }
+        }
+    }
+
+    foreach ($filePath in $operands) {
+        if (-not (Test-Path -LiteralPath $filePath)) {
+            Write-Error -Message "sort: cannot read: ${filePath}: No such file or directory" -ErrorAction Continue
+            continue
+        }
+        $bytes = [System.IO.File]::ReadAllBytes($filePath)
+        $byteOffset = 0
+        if ($bytes.Length -ge 3 -and $bytes[0] -eq 0xEF -and $bytes[1] -eq 0xBB -and $bytes[2] -eq 0xBF) {
+            $byteOffset = 3
+        }
+        $rawText = [System.Text.Encoding]::UTF8.GetString($bytes, $byteOffset, $bytes.Length - $byteOffset)
+        $rawText = $rawText -replace "`r`n", "`n"
+        if ($rawText.EndsWith("`n")) {
+            $rawText = $rawText.Substring(0, $rawText.Length - 1)
+        }
+        foreach ($line in $rawText.Split("`n")) {
+            $items.Add((New-BashObject -BashText $line))
+        }
+    }
+
+    # Extract sort key from an item
+    $getSortText = {
+        param($item)
+        $text = Get-BashText -InputObject $item
+        $text = $text -replace "`n$", ''
+        if ($null -ne $keyField) {
+            $sep = if ($null -ne $delimiter) { [regex]::Escape($delimiter) } else { '\s+' }
+            $parts = $text -split $sep
+            $idx = $keyField - 1
+            if ($idx -ge 0 -and $idx -lt $parts.Count) {
+                return $parts[$idx]
+            }
+            return ''
+        }
+        return $text
+    }
+
+    # Smart path: -h with LsEntry objects uses SizeBytes directly
+    $useSizeBytesPath = $humanNumeric -and $items.Count -gt 0 -and
+        $null -ne $items[0].PSObject -and
+        $null -ne $items[0].PSObject.Properties['SizeBytes']
+
+    # Check-only mode
+    if ($checkOnly) {
+        for ($idx = 1; $idx -lt $items.Count; $idx++) {
+            $prevText = & $getSortText $items[$idx - 1]
+            $currText = & $getSortText $items[$idx]
+            $cmp = [string]::Compare($prevText, $currText, [System.StringComparison]::Ordinal)
+            if ($cmp -gt 0) {
+                $global:LASTEXITCODE = 1
+                return
+            }
+        }
+        $global:LASTEXITCODE = 0
+        return
+    }
+
+    # Build sort key for each item
+    $indexed = [System.Collections.Generic.List[object]]::new()
+    for ($idx = 0; $idx -lt $items.Count; $idx++) {
+        $indexed.Add(@{
+            Index = $idx
+            Item  = $items[$idx]
+        })
+    }
+
+    # Sort using a comparison
+    $sorted = $indexed | Sort-Object -Property @{
+        Expression = {
+            $item = $_.Item
+
+            if ($useSizeBytesPath) {
+                return [double]$item.SizeBytes
+            }
+
+            $text = & $getSortText $item
+
+            if ($humanNumeric) {
+                return ConvertFrom-HumanNumeric -Value $text
+            }
+            if ($numeric) {
+                $n = 0.0
+                if ([double]::TryParse($text, [ref]$n)) { return $n }
+                return 0.0
+            }
+            if ($monthSort) {
+                return ConvertFrom-MonthName -Value $text
+            }
+            if ($foldCase) {
+                return $text.ToLower()
+            }
+            return $text
+        }
+    } -Stable
+
+    if ($versionSort) {
+        $list = [System.Collections.Generic.List[object]]::new(@($sorted))
+        for ($i2 = 1; $i2 -lt $list.Count; $i2++) {
+            $current = $list[$i2]
+            $currentText = (& $getSortText $current.Item) -replace "`n$", ''
+            $j = $i2 - 1
+            while ($j -ge 0) {
+                $otherText = (& $getSortText $list[$j].Item) -replace "`n$", ''
+                if ((Compare-Version -Left $otherText -Right $currentText) -le 0) { break }
+                $list[$j + 1] = $list[$j]
+                $j--
+            }
+            $list[$j + 1] = $current
+        }
+        $sorted = $list
+    }
+
+    if ($reverse) {
+        $reversed = [System.Collections.Generic.List[object]]::new()
+        $asList = @($sorted)
+        for ($idx = $asList.Count - 1; $idx -ge 0; $idx--) {
+            $reversed.Add($asList[$idx])
+        }
+        $sorted = $reversed
+    }
+
+    # Unique: deduplicate by sort text
+    if ($unique) {
+        $seen = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::Ordinal)
+        $deduped = [System.Collections.Generic.List[object]]::new()
+        foreach ($entry in $sorted) {
+            $text = & $getSortText $entry.Item
+            $key = if ($foldCase) { $text.ToLower() } else { $text }
+            if ($seen.Add($key)) {
+                $deduped.Add($entry)
+            }
+        }
+        $sorted = $deduped
+    }
+
+    # Emit original objects (pipeline bridge: preserve types)
+    foreach ($entry in $sorted) {
+        $entry.Item
+    }
+}
+
 # --- Aliases ---
 
 Set-Alias -Name 'echo'   -Value 'Invoke-BashEcho'   -Force -Scope Global -Option AllScope
@@ -891,3 +1237,4 @@ Set-Alias -Name 'printf'  -Value 'Invoke-BashPrintf'  -Force -Scope Global -Opti
 Set-Alias -Name 'ls'      -Value 'Invoke-BashLs'      -Force -Scope Global -Option AllScope
 Set-Alias -Name 'cat'     -Value 'Invoke-BashCat'     -Force -Scope Global -Option AllScope
 Set-Alias -Name 'grep'    -Value 'Invoke-BashGrep'    -Force -Scope Global -Option AllScope
+Set-Alias -Name 'sort'    -Value 'Invoke-BashSort'    -Force -Scope Global -Option AllScope

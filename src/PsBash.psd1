@@ -74,7 +74,8 @@ FunctionsToExport = 'Invoke-BashEcho', 'Invoke-BashPrintf', 'Get-BashPlatform',
                'New-FlagDefs', 'Invoke-BashLs', 'Get-BashFileInfo',
                'Format-BashSize', 'Format-BashDate', 'Format-LsLine',
                'ConvertTo-PermissionString', 'Invoke-BashCat', 'Get-BashText',
-               'Invoke-BashGrep'
+               'Invoke-BashGrep', 'Invoke-BashSort', 'ConvertFrom-HumanNumeric',
+               'Compare-Version', 'ConvertFrom-MonthName'
 
 # Cmdlets to export from this module, for best performance, do not use wildcards and do not delete the entry, use an empty array if there are no cmdlets to export.
 CmdletsToExport = @()
@@ -83,7 +84,7 @@ CmdletsToExport = @()
 # VariablesToExport = @()
 
 # Aliases to export from this module, for best performance, do not use wildcards and do not delete the entry, use an empty array if there are no aliases to export.
-AliasesToExport = 'echo', 'printf', 'ls', 'cat', 'grep'
+AliasesToExport = 'echo', 'printf', 'ls', 'cat', 'grep', 'sort'
 
 # DSC resources to export from this module
 # DscResourcesToExport = @()

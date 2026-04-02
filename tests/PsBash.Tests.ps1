@@ -732,3 +732,168 @@ Describe 'Invoke-BashGrep — Pipeline Bridge' {
         $results.Count | Should -Be 2
     }
 }
+
+Describe 'Invoke-BashSort — Standalone' {
+    It 'echo lines | sort returns alphabetical order' {
+        $results = @(Invoke-BashEcho -ne "b\na\nc" | Invoke-BashSort)
+        $texts = $results | ForEach-Object { (Get-BashText -InputObject $_) -replace "`n$", '' }
+        $texts[0] | Should -Be 'a'
+        $texts[1] | Should -Be 'b'
+        $texts[2] | Should -Be 'c'
+    }
+
+    It 'sort -r reverses order' {
+        $results = @(Invoke-BashEcho -ne "a\nb\nc" | Invoke-BashSort -r)
+        $texts = $results | ForEach-Object { (Get-BashText -InputObject $_) -replace "`n$", '' }
+        $texts[0] | Should -Be 'c'
+        $texts[1] | Should -Be 'b'
+        $texts[2] | Should -Be 'a'
+    }
+
+    It 'sort -n sorts numerically (1, 2, 10 not 1, 10, 2)' {
+        $results = @(Invoke-BashEcho -ne "10\n1\n2" | Invoke-BashSort -n)
+        $texts = $results | ForEach-Object { (Get-BashText -InputObject $_) -replace "`n$", '' }
+        $texts[0] | Should -Be '1'
+        $texts[1] | Should -Be '2'
+        $texts[2] | Should -Be '10'
+    }
+
+    It 'sort -u removes duplicates' {
+        $results = @(Invoke-BashEcho -ne "a\nb\na\nc\nb" | Invoke-BashSort -u)
+        $texts = $results | ForEach-Object { (Get-BashText -InputObject $_) -replace "`n$", '' }
+        $texts.Count | Should -Be 3
+        $texts[0] | Should -Be 'a'
+        $texts[1] | Should -Be 'b'
+        $texts[2] | Should -Be 'c'
+    }
+
+    It 'sort -f sorts case insensitively' {
+        $results = @(Invoke-BashEcho -ne "Banana\napple\nCherry" | Invoke-BashSort -f)
+        $texts = $results | ForEach-Object { (Get-BashText -InputObject $_) -replace "`n$", '' }
+        $texts[0] | Should -Be 'apple'
+        $texts[1] | Should -Be 'Banana'
+        $texts[2] | Should -Be 'Cherry'
+    }
+
+    It 'sort -k2 sorts by field 2' {
+        $results = @(Invoke-BashEcho -ne "x 3\ny 1\nz 2" | Invoke-BashSort -k2)
+        $texts = $results | ForEach-Object { (Get-BashText -InputObject $_) -replace "`n$", '' }
+        $texts[0] | Should -Be 'y 1'
+        $texts[1] | Should -Be 'z 2'
+        $texts[2] | Should -Be 'x 3'
+    }
+
+    It 'sort -t: -k3 sorts by field 3 with colon delimiter' {
+        $results = @(Invoke-BashEcho -ne "a:b:3\nc:d:1\ne:f:2" | Invoke-BashSort -t: -k3)
+        $texts = $results | ForEach-Object { (Get-BashText -InputObject $_) -replace "`n$", '' }
+        $texts[0] | Should -Be 'c:d:1'
+        $texts[1] | Should -Be 'e:f:2'
+        $texts[2] | Should -Be 'a:b:3'
+    }
+
+    It 'sort -h sorts human-readable sizes (1K < 1M < 1G)' {
+        $results = @(Invoke-BashEcho -ne "1G\n1K\n1M" | Invoke-BashSort -h)
+        $texts = $results | ForEach-Object { (Get-BashText -InputObject $_) -replace "`n$", '' }
+        $texts[0] | Should -Be '1K'
+        $texts[1] | Should -Be '1M'
+        $texts[2] | Should -Be '1G'
+    }
+
+    It 'sort -V sorts version numbers (1.2 < 1.10)' {
+        $results = @(Invoke-BashEcho -ne "1.10\n1.2\n1.1" | Invoke-BashSort -V)
+        $texts = $results | ForEach-Object { (Get-BashText -InputObject $_) -replace "`n$", '' }
+        $texts[0] | Should -Be '1.1'
+        $texts[1] | Should -Be '1.2'
+        $texts[2] | Should -Be '1.10'
+    }
+
+    It 'sort -M sorts month names (Jan < Feb < Mar)' {
+        $results = @(Invoke-BashEcho -ne "Mar\nJan\nFeb" | Invoke-BashSort -M)
+        $texts = $results | ForEach-Object { (Get-BashText -InputObject $_) -replace "`n$", '' }
+        $texts[0] | Should -Be 'Jan'
+        $texts[1] | Should -Be 'Feb'
+        $texts[2] | Should -Be 'Mar'
+    }
+
+    It 'sort -c returns exit code 1 if unsorted' {
+        Invoke-BashEcho -ne "b\na" | Invoke-BashSort -c
+        $global:LASTEXITCODE | Should -Be 1
+    }
+
+    It 'sort -c returns exit code 0 if sorted' {
+        Invoke-BashEcho -ne "a\nb" | Invoke-BashSort -c
+        $global:LASTEXITCODE | Should -Be 0
+    }
+
+    It 'exports sort alias pointing to Invoke-BashSort' {
+        $alias = Get-Alias -Name sort -Scope Global
+        $alias.Definition | Should -Be 'Invoke-BashSort'
+    }
+}
+
+Describe 'Invoke-BashSort — Object-Aware' {
+    BeforeAll {
+        $sortDir = Join-Path ([System.IO.Path]::GetTempPath()) "psbash-sort-test-$(Get-Random)"
+        New-Item -Path $sortDir -ItemType Directory -Force | Out-Null
+        # Create files with different sizes
+        [System.IO.File]::WriteAllBytes((Join-Path $sortDir 'tiny.txt'), [byte[]]::new(100))
+        [System.IO.File]::WriteAllBytes((Join-Path $sortDir 'medium.txt'), [byte[]]::new(5000))
+        [System.IO.File]::WriteAllBytes((Join-Path $sortDir 'large.txt'), [byte[]]::new(50000))
+
+        $sortCatFile = Join-Path $sortDir 'words.txt'
+        [System.IO.File]::WriteAllText($sortCatFile, "cherry`napple`nbanana`n", [System.Text.UTF8Encoding]::new($false))
+    }
+
+    AfterAll {
+        Remove-Item -Path $sortDir -Recurse -Force -ErrorAction SilentlyContinue
+    }
+
+    It 'ls -lh | sort -h returns LsEntry objects sorted by size' {
+        $results = @(Invoke-BashLs -lh $sortDir | Invoke-BashSort -h)
+        $results.Count | Should -BeGreaterOrEqual 3
+        $results[0].PSTypeNames[0] | Should -Be 'PsBash.LsEntry'
+        $sizes = $results | ForEach-Object { $_.SizeBytes }
+        for ($i = 1; $i -lt $sizes.Count; $i++) {
+            $sizes[$i] | Should -BeGreaterOrEqual $sizes[$i - 1]
+        }
+    }
+
+    It '(ls -lh | sort -h)[0].SizeBytes returns smallest file size' {
+        $results = @(Invoke-BashLs -lh $sortDir | Invoke-BashSort -h)
+        $results[0].SizeBytes | Should -BeLessOrEqual $results[-1].SizeBytes
+    }
+
+    It 'ls -la | sort -k5 -n sorts by size field numerically' {
+        $results = @(Invoke-BashLs -la $sortDir | Invoke-BashSort -k5 -n)
+        $results[0].PSTypeNames[0] | Should -Be 'PsBash.LsEntry'
+        # Field 5 in ls -l output is the size column
+        $sizes = $results | ForEach-Object { $_.SizeBytes }
+        for ($i = 1; $i -lt $sizes.Count; $i++) {
+            $sizes[$i] | Should -BeGreaterOrEqual $sizes[$i - 1]
+        }
+    }
+
+    It 'cat file.txt | sort sorts CatLine objects by BashText' {
+        $results = @(Invoke-BashCat $sortCatFile | Invoke-BashSort)
+        $results.Count | Should -Be 3
+        $results[0].PSTypeNames[0] | Should -Be 'PsBash.CatLine'
+        $results[0].Content | Should -Be 'apple'
+        $results[1].Content | Should -Be 'banana'
+        $results[2].Content | Should -Be 'cherry'
+    }
+
+    It 'sort preserves original object types in output' {
+        $lsResults = @(Invoke-BashLs -lh $sortDir | Invoke-BashSort -h)
+        foreach ($r in $lsResults) {
+            $r.PSTypeNames[0] | Should -Be 'PsBash.LsEntry'
+            $r.Name | Should -Not -BeNullOrEmpty
+            $r.SizeBytes | Should -Not -BeNullOrEmpty
+        }
+
+        $catResults = @(Invoke-BashCat $sortCatFile | Invoke-BashSort)
+        foreach ($r in $catResults) {
+            $r.PSTypeNames[0] | Should -Be 'PsBash.CatLine'
+            $r.LineNumber | Should -BeGreaterThan 0
+        }
+    }
+}
