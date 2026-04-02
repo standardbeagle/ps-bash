@@ -5590,3 +5590,182 @@ Describe 'rg --help -- returns help with all rg flags' {
         $result.BashText | Should -Match '--hidden'
     }
 }
+
+# --- gzip / gunzip / zcat ---
+
+Describe 'Invoke-BashGzip — compress files' {
+    It 'gzip file.txt creates file.txt.gz and removes original' {
+        $f = Join-Path $TestDrive 'file.txt'
+        Set-Content -Path $f -Value 'hello world' -NoNewline
+        gzip $f
+        Test-Path -LiteralPath "$f.gz" | Should -BeTrue
+        Test-Path -LiteralPath $f | Should -BeFalse
+    }
+
+    It 'gzip -k file.txt keeps original' {
+        $f = Join-Path $TestDrive 'keep.txt'
+        Set-Content -Path $f -Value 'keep me' -NoNewline
+        gzip -k $f
+        Test-Path -LiteralPath "$f.gz" | Should -BeTrue
+        Test-Path -LiteralPath $f | Should -BeTrue
+    }
+
+    It 'gzip -c file.txt outputs compressed data to stdout' {
+        $f = Join-Path $TestDrive 'stdout.txt'
+        Set-Content -Path $f -Value 'compress me' -NoNewline
+        $result = gzip -c $f
+        $result.BashText | Should -Not -BeNullOrEmpty
+        Test-Path -LiteralPath $f | Should -BeTrue
+        Test-Path -LiteralPath "$f.gz" | Should -BeFalse
+    }
+
+    It 'gunzip file.txt.gz decompresses and removes .gz' {
+        $f = Join-Path $TestDrive 'gunzip.txt'
+        Set-Content -Path $f -Value 'decompress me' -NoNewline
+        gzip $f
+        Test-Path -LiteralPath "$f.gz" | Should -BeTrue
+        gunzip "$f.gz"
+        Test-Path -LiteralPath $f | Should -BeTrue
+        Test-Path -LiteralPath "$f.gz" | Should -BeFalse
+        Get-Content -Path $f -Raw | Should -Be 'decompress me'
+    }
+
+    It 'zcat file.txt.gz outputs decompressed text' {
+        $f = Join-Path $TestDrive 'zcat.txt'
+        Set-Content -Path $f -Value 'read me' -NoNewline
+        gzip -k $f
+        $result = zcat "$f.gz"
+        $result.BashText | Should -Be 'read me'
+    }
+
+    It 'gzip -l file.txt.gz lists compressed file info' {
+        $f = Join-Path $TestDrive 'list.txt'
+        Set-Content -Path $f -Value 'list info' -NoNewline
+        gzip -k $f
+        $result = gzip -l "$f.gz"
+        $result.CompressedSize | Should -BeGreaterThan 0
+        $result.UncompressedSize | Should -Be 9
+        $result.FileName | Should -Match 'list\.txt\.gz'
+    }
+
+    It 'gzip -v file.txt shows verbose output' {
+        $f = Join-Path $TestDrive 'verbose.txt'
+        Set-Content -Path $f -Value 'verbose test' -NoNewline
+        $result = gzip -v $f
+        $result.BashText | Should -Match '\d+(\.\d+)?%'
+    }
+
+    It 'gzip errors on missing file' {
+        $result = gzip '/nonexistent/file.txt' 2>&1
+        $errors = @($result | Where-Object { $_ -is [System.Management.Automation.ErrorRecord] })
+        $errors.Count | Should -BeGreaterThan 0
+    }
+
+    It 'returns help with --help' {
+        $result = gzip --help
+        $result.BashText | Should -Match 'Usage: gzip'
+    }
+
+    It 'exports gzip alias' {
+        $alias = Get-Alias -Name gzip -Scope Global
+        $alias.Definition | Should -Be 'Invoke-BashGzip'
+    }
+
+    It 'exports gunzip alias' {
+        $alias = Get-Alias -Name gunzip -Scope Global
+        $alias.Definition | Should -Be 'Invoke-BashGzip'
+    }
+
+    It 'exports zcat alias' {
+        $alias = Get-Alias -Name zcat -Scope Global
+        $alias.Definition | Should -Be 'Invoke-BashGzip'
+    }
+}
+
+# --- tar ---
+
+Describe 'Invoke-BashTar — archive operations' {
+    It 'tar -cf archive.tar dir/ creates archive' {
+        $dir = Join-Path $TestDrive 'tardir'
+        New-Item -Path $dir -ItemType Directory -Force | Out-Null
+        Set-Content -Path (Join-Path $dir 'a.txt') -Value 'aaa' -NoNewline
+        Set-Content -Path (Join-Path $dir 'b.txt') -Value 'bbb' -NoNewline
+        $archive = Join-Path $TestDrive 'archive.tar'
+        tar -cf $archive $dir
+        Test-Path -LiteralPath $archive | Should -BeTrue
+    }
+
+    It 'tar -tf archive.tar lists contents' {
+        $dir = Join-Path $TestDrive 'listdir'
+        New-Item -Path $dir -ItemType Directory -Force | Out-Null
+        Set-Content -Path (Join-Path $dir 'one.txt') -Value 'one' -NoNewline
+        Set-Content -Path (Join-Path $dir 'two.txt') -Value 'two' -NoNewline
+        $archive = Join-Path $TestDrive 'list.tar'
+        tar -cf $archive $dir
+        $results = @(tar -tf $archive)
+        $results.Count | Should -BeGreaterOrEqual 2
+        $names = $results | ForEach-Object { $_.Name }
+        $names | Should -Contain 'one.txt'
+        $names | Should -Contain 'two.txt'
+    }
+
+    It 'tar -xf archive.tar extracts files' {
+        $dir = Join-Path $TestDrive 'exdir'
+        New-Item -Path $dir -ItemType Directory -Force | Out-Null
+        Set-Content -Path (Join-Path $dir 'ex.txt') -Value 'extract me' -NoNewline
+        $archive = Join-Path $TestDrive 'extract.tar'
+        tar -cf $archive $dir
+        $outDir = Join-Path $TestDrive 'exout'
+        New-Item -Path $outDir -ItemType Directory -Force | Out-Null
+        tar -xf $archive -C $outDir
+        $extracted = Get-ChildItem -Path $outDir -Recurse -File
+        $extracted.Count | Should -BeGreaterOrEqual 1
+    }
+
+    It 'tar -czf archive.tar.gz dir/ creates compressed archive' {
+        $dir = Join-Path $TestDrive 'gzdir'
+        New-Item -Path $dir -ItemType Directory -Force | Out-Null
+        Set-Content -Path (Join-Path $dir 'gz.txt') -Value 'compressed' -NoNewline
+        $archive = Join-Path $TestDrive 'comp.tar.gz'
+        tar -czf $archive $dir
+        Test-Path -LiteralPath $archive | Should -BeTrue
+    }
+
+    It 'tar -xzf archive.tar.gz extracts compressed archive' {
+        $dir = Join-Path $TestDrive 'gzex'
+        New-Item -Path $dir -ItemType Directory -Force | Out-Null
+        Set-Content -Path (Join-Path $dir 'data.txt') -Value 'gzip data' -NoNewline
+        $archive = Join-Path $TestDrive 'gzex.tar.gz'
+        tar -czf $archive $dir
+        $outDir = Join-Path $TestDrive 'gzout'
+        New-Item -Path $outDir -ItemType Directory -Force | Out-Null
+        tar -xzf $archive -C $outDir
+        $extracted = Get-ChildItem -Path $outDir -Recurse -File
+        $extracted.Count | Should -BeGreaterOrEqual 1
+    }
+
+    It 'tar -v shows verbose output during create' {
+        $dir = Join-Path $TestDrive 'vdir'
+        New-Item -Path $dir -ItemType Directory -Force | Out-Null
+        Set-Content -Path (Join-Path $dir 'v.txt') -Value 'verbose' -NoNewline
+        $archive = Join-Path $TestDrive 'verbose.tar'
+        $results = @(tar -cvf $archive $dir)
+        $results.Count | Should -BeGreaterOrEqual 1
+    }
+
+    It 'tar errors on missing archive for extract' {
+        $result = tar -xf '/nonexistent/archive.tar' 2>&1
+        $errors = @($result | Where-Object { $_ -is [System.Management.Automation.ErrorRecord] })
+        $errors.Count | Should -BeGreaterThan 0
+    }
+
+    It 'returns help with --help' {
+        $result = tar --help
+        $result.BashText | Should -Match 'Usage: tar'
+    }
+
+    It 'exports tar alias' {
+        $alias = Get-Alias -Name tar -Scope Global
+        $alias.Definition | Should -Be 'Invoke-BashTar'
+    }
+}

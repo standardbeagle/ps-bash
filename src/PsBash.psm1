@@ -8277,6 +8277,445 @@ function Invoke-BashRg {
     }
 }
 
+# --- gzip / gunzip / zcat ---
+
+function Invoke-BashGzip {
+    $Arguments = [string[]]$args
+    if ($Arguments -contains '--help') { return Show-BashHelp 'gzip' }
+
+    $decompress = $false
+    $toStdout = $false
+    $keep = $false
+    $force = $false
+    $verbose = $false
+    $list = $false
+    $level = 6
+    $operands = [System.Collections.Generic.List[string]]::new()
+
+    # Detect gunzip/zcat invocation via alias
+    $invokedAs = $MyInvocation.InvocationName
+    if ($invokedAs -eq 'gunzip') { $decompress = $true }
+    if ($invokedAs -eq 'zcat') { $decompress = $true; $toStdout = $true }
+
+    $i = 0
+    while ($i -lt $Arguments.Count) {
+        $arg = $Arguments[$i]
+
+        if ($arg -eq '--') { $i++; while ($i -lt $Arguments.Count) { $operands.Add($Arguments[$i]); $i++ }; break }
+        if ($arg -eq '--decompress' -or $arg -eq '--uncompress') { $decompress = $true; $i++; continue }
+        if ($arg -eq '--stdout' -or $arg -eq '--to-stdout') { $toStdout = $true; $i++; continue }
+        if ($arg -eq '--keep') { $keep = $true; $i++; continue }
+        if ($arg -eq '--force') { $force = $true; $i++; continue }
+        if ($arg -eq '--verbose') { $verbose = $true; $i++; continue }
+        if ($arg -eq '--list') { $list = $true; $i++; continue }
+
+        if ($arg -cmatch '^-(\d)$') {
+            $level = [int]$Matches[1]
+            $i++
+            continue
+        }
+
+        if ($arg.StartsWith('-') -and $arg.Length -gt 1 -and -not $arg.StartsWith('--')) {
+            foreach ($ch in $arg.Substring(1).ToCharArray()) {
+                switch ($ch) {
+                    'd' { $decompress = $true }
+                    'c' { $toStdout = $true }
+                    'k' { $keep = $true }
+                    'f' { $force = $true }
+                    'v' { $verbose = $true }
+                    'l' { $list = $true }
+                    default {
+                        if ($ch -match '\d') { $level = [int][string]$ch }
+                    }
+                }
+            }
+            $i++
+            continue
+        }
+
+        $operands.Add($arg)
+        $i++
+    }
+
+    if ($operands.Count -eq 0) {
+        Write-Error -Message 'gzip: missing file operand' -ErrorAction Continue
+        return
+    }
+
+    foreach ($filePath in $operands) {
+        if (-not (Test-Path -LiteralPath $filePath)) {
+            Write-Error -Message "gzip: ${filePath}: No such file or directory" -ErrorAction Continue
+            continue
+        }
+
+        if ($list) {
+            $compressedBytes = [System.IO.File]::ReadAllBytes($filePath)
+            $compressedSize = $compressedBytes.Length
+            $ms = [System.IO.MemoryStream]::new($compressedBytes)
+            try {
+                $gs = [System.IO.Compression.GZipStream]::new($ms, [System.IO.Compression.CompressionMode]::Decompress)
+                $buf = [System.IO.MemoryStream]::new()
+                try { $gs.CopyTo($buf) } finally { $gs.Dispose(); $buf.Dispose() }
+                $uncompressedSize = $buf.ToArray().Length
+            } finally {
+                $ms.Dispose()
+            }
+            $ratio = if ($uncompressedSize -gt 0) {
+                '{0:F1}%' -f ((1.0 - ($compressedSize / $uncompressedSize)) * 100)
+            } else { '0.0%' }
+            $line = '{0,10} {1,10} {2,6} {3}' -f $compressedSize, $uncompressedSize, $ratio, $filePath
+            $obj = [PSCustomObject]@{
+                PSTypeName       = 'PsBash.GzipListOutput'
+                BashText         = $line
+                CompressedSize   = $compressedSize
+                UncompressedSize = $uncompressedSize
+                Ratio            = $ratio
+                FileName         = $filePath
+            }
+            $obj | Add-Member -MemberType ScriptMethod -Name 'ToString' -Value { $this.BashText } -Force
+            $obj
+            continue
+        }
+
+        if ($decompress) {
+            $compressedBytes = [System.IO.File]::ReadAllBytes($filePath)
+            $ms = [System.IO.MemoryStream]::new($compressedBytes)
+            $outBytes = $null
+            try {
+                $gs = [System.IO.Compression.GZipStream]::new($ms, [System.IO.Compression.CompressionMode]::Decompress)
+                $buf = [System.IO.MemoryStream]::new()
+                try { $gs.CopyTo($buf); $outBytes = $buf.ToArray() } finally { $gs.Dispose(); $buf.Dispose() }
+            } finally {
+                $ms.Dispose()
+            }
+
+            if ($toStdout) {
+                $text = [System.Text.Encoding]::UTF8.GetString($outBytes)
+                New-BashObject -BashText $text
+            } else {
+                $outPath = $filePath -replace '\.gz$', ''
+                [System.IO.File]::WriteAllBytes($outPath, $outBytes)
+                if (-not $keep) { Remove-Item -LiteralPath $filePath -Force }
+                if ($verbose) {
+                    $ratio = if ($outBytes.Length -gt 0) {
+                        '{0:F1}%' -f ((1.0 - ($compressedBytes.Length / $outBytes.Length)) * 100)
+                    } else { '0.0%' }
+                    New-BashObject -BashText "${filePath}: $ratio"
+                }
+            }
+        } else {
+            $rawBytes = [System.IO.File]::ReadAllBytes($filePath)
+            $ms = [System.IO.MemoryStream]::new()
+            try {
+                $compLevel = switch ($level) {
+                    { $_ -le 1 } { [System.IO.Compression.CompressionLevel]::Fastest }
+                    { $_ -ge 9 } { [System.IO.Compression.CompressionLevel]::SmallestSize }
+                    default       { [System.IO.Compression.CompressionLevel]::Optimal }
+                }
+                $gs = [System.IO.Compression.GZipStream]::new($ms, $compLevel, $true)
+                try { $gs.Write($rawBytes, 0, $rawBytes.Length) } finally { $gs.Dispose() }
+                $compressedBytes = $ms.ToArray()
+            } finally {
+                $ms.Dispose()
+            }
+
+            if ($toStdout) {
+                $b64 = [System.Convert]::ToBase64String($compressedBytes)
+                New-BashObject -BashText $b64
+            } else {
+                $outPath = "${filePath}.gz"
+                [System.IO.File]::WriteAllBytes($outPath, $compressedBytes)
+                if (-not $keep) { Remove-Item -LiteralPath $filePath -Force }
+                if ($verbose) {
+                    $ratio = if ($rawBytes.Length -gt 0) {
+                        '{0:F1}%' -f ((1.0 - ($compressedBytes.Length / $rawBytes.Length)) * 100)
+                    } else { '0.0%' }
+                    New-BashObject -BashText "${filePath}: $ratio"
+                }
+            }
+        }
+    }
+}
+
+# --- tar ---
+
+function Invoke-BashTar {
+    $Arguments = [string[]]$args
+    if ($Arguments -contains '--help') { return Show-BashHelp 'tar' }
+
+    $create = $false
+    $extract = $false
+    $listMode = $false
+    $gzipFilter = $false
+    $verbose = $false
+    $archiveFile = $null
+    $changeDir = $null
+    $excludePatterns = [System.Collections.Generic.List[string]]::new()
+    $operands = [System.Collections.Generic.List[string]]::new()
+
+    $i = 0
+    while ($i -lt $Arguments.Count) {
+        $arg = $Arguments[$i]
+
+        if ($arg -eq '--') { $i++; while ($i -lt $Arguments.Count) { $operands.Add($Arguments[$i]); $i++ }; break }
+        if ($arg -eq '--create') { $create = $true; $i++; continue }
+        if ($arg -eq '--extract' -or $arg -eq '--get') { $extract = $true; $i++; continue }
+        if ($arg -eq '--list') { $listMode = $true; $i++; continue }
+        if ($arg -eq '--gzip' -or $arg -eq '--gunzip') { $gzipFilter = $true; $i++; continue }
+        if ($arg -eq '--verbose') { $verbose = $true; $i++; continue }
+
+        if ($arg -eq '--file' -or $arg -ceq '-f') {
+            $i++
+            if ($i -lt $Arguments.Count) { $archiveFile = $Arguments[$i] }
+            $i++
+            continue
+        }
+        if ($arg -cmatch '^--file=(.+)$') {
+            $archiveFile = $Matches[1]; $i++; continue
+        }
+
+        if ($arg -eq '--directory' -or $arg -ceq '-C') {
+            $i++
+            if ($i -lt $Arguments.Count) { $changeDir = $Arguments[$i] }
+            $i++
+            continue
+        }
+        if ($arg -cmatch '^--directory=(.+)$') {
+            $changeDir = $Matches[1]; $i++; continue
+        }
+
+        if ($arg -cmatch '^--exclude=(.+)$') {
+            $excludePatterns.Add($Matches[1]); $i++; continue
+        }
+
+        if ($arg.StartsWith('-') -and $arg.Length -gt 1 -and -not $arg.StartsWith('--')) {
+            $chars = $arg.Substring(1).ToCharArray()
+            for ($j = 0; $j -lt $chars.Length; $j++) {
+                $ch = $chars[$j]
+                if ($ch -eq 'c') { $create = $true }
+                elseif ($ch -eq 'x') { $extract = $true }
+                elseif ($ch -eq 't') { $listMode = $true }
+                elseif ($ch -eq 'z') { $gzipFilter = $true }
+                elseif ($ch -eq 'v') { $verbose = $true }
+                elseif ($ch -eq 'p') { }
+                elseif ($ch -eq 'f') {
+                    $rest = [string]::new($chars, $j + 1, $chars.Length - $j - 1)
+                    if ($rest.Length -gt 0) {
+                        $archiveFile = $rest
+                    } else {
+                        $i++
+                        if ($i -lt $Arguments.Count) { $archiveFile = $Arguments[$i] }
+                    }
+                    break
+                }
+                elseif ($ch -eq 'C') {
+                    $rest = [string]::new($chars, $j + 1, $chars.Length - $j - 1)
+                    if ($rest.Length -gt 0) {
+                        $changeDir = $rest
+                    } else {
+                        $i++
+                        if ($i -lt $Arguments.Count) { $changeDir = $Arguments[$i] }
+                    }
+                    break
+                }
+            }
+            $i++
+            continue
+        }
+
+        $operands.Add($arg)
+        $i++
+    }
+
+    if (-not $archiveFile) {
+        Write-Error -Message 'tar: you must specify -f archive' -ErrorAction Continue
+        return
+    }
+
+    if ($create) {
+        if ($operands.Count -eq 0) {
+            Write-Error -Message 'tar: no files to archive' -ErrorAction Continue
+            return
+        }
+
+        $ms = [System.IO.MemoryStream]::new()
+        try {
+            $zip = [System.IO.Compression.ZipArchive]::new($ms, [System.IO.Compression.ZipArchiveMode]::Create, $true)
+            try {
+                foreach ($source in $operands) {
+                    if (-not (Test-Path -LiteralPath $source)) {
+                        Write-Error -Message "tar: ${source}: No such file or directory" -ErrorAction Continue
+                        continue
+                    }
+
+                    $resolvedSource = (Resolve-Path -LiteralPath $source).Path
+                    if (Test-Path -LiteralPath $resolvedSource -PathType Container) {
+                        $baseName = Split-Path $resolvedSource -Leaf
+                        $files = Get-ChildItem -LiteralPath $resolvedSource -Recurse -File
+                        foreach ($file in $files) {
+                            $relPath = $file.FullName.Substring($resolvedSource.Length).TrimStart([System.IO.Path]::DirectorySeparatorChar, [System.IO.Path]::AltDirectorySeparatorChar)
+                            $entryName = "${baseName}/$($relPath -replace '\\', '/')"
+                            $skip = $false
+                            foreach ($pat in $excludePatterns) {
+                                if ($file.Name -like $pat) { $skip = $true; break }
+                            }
+                            if ($skip) { continue }
+                            $entry = $zip.CreateEntry($entryName)
+                            $entryStream = $entry.Open()
+                            try {
+                                $fileBytes = [System.IO.File]::ReadAllBytes($file.FullName)
+                                $entryStream.Write($fileBytes, 0, $fileBytes.Length)
+                            } finally {
+                                $entryStream.Dispose()
+                            }
+                            if ($verbose) {
+                                New-BashObject -BashText $entryName
+                            }
+                        }
+                    } else {
+                        $entryName = Split-Path $resolvedSource -Leaf
+                        $skip = $false
+                        foreach ($pat in $excludePatterns) {
+                            if ($entryName -like $pat) { $skip = $true; break }
+                        }
+                        if ($skip) { continue }
+                        $entry = $zip.CreateEntry($entryName)
+                        $entryStream = $entry.Open()
+                        try {
+                            $fileBytes = [System.IO.File]::ReadAllBytes($resolvedSource)
+                            $entryStream.Write($fileBytes, 0, $fileBytes.Length)
+                        } finally {
+                            $entryStream.Dispose()
+                        }
+                        if ($verbose) {
+                            New-BashObject -BashText $entryName
+                        }
+                    }
+                }
+            } finally {
+                $zip.Dispose()
+            }
+
+            $zipBytes = $ms.ToArray()
+        } finally {
+            $ms.Dispose()
+        }
+
+        if ($gzipFilter) {
+            $gms = [System.IO.MemoryStream]::new()
+            try {
+                $gs = [System.IO.Compression.GZipStream]::new($gms, [System.IO.Compression.CompressionLevel]::Optimal, $true)
+                try { $gs.Write($zipBytes, 0, $zipBytes.Length) } finally { $gs.Dispose() }
+                [System.IO.File]::WriteAllBytes($archiveFile, $gms.ToArray())
+            } finally {
+                $gms.Dispose()
+            }
+        } else {
+            [System.IO.File]::WriteAllBytes($archiveFile, $zipBytes)
+        }
+    } elseif ($listMode) {
+        if (-not (Test-Path -LiteralPath $archiveFile)) {
+            Write-Error -Message "tar: ${archiveFile}: No such file or directory" -ErrorAction Continue
+            return
+        }
+
+        $archiveBytes = [System.IO.File]::ReadAllBytes($archiveFile)
+        $zipBytes = $archiveBytes
+        if ($gzipFilter) {
+            $ims = [System.IO.MemoryStream]::new($archiveBytes)
+            try {
+                $gs = [System.IO.Compression.GZipStream]::new($ims, [System.IO.Compression.CompressionMode]::Decompress)
+                $oms = [System.IO.MemoryStream]::new()
+                try { $gs.CopyTo($oms); $zipBytes = $oms.ToArray() } finally { $gs.Dispose(); $oms.Dispose() }
+            } finally {
+                $ims.Dispose()
+            }
+        }
+
+        $zms = [System.IO.MemoryStream]::new($zipBytes)
+        try {
+            $zip = [System.IO.Compression.ZipArchive]::new($zms, [System.IO.Compression.ZipArchiveMode]::Read)
+            try {
+                foreach ($entry in $zip.Entries) {
+                    if ($entry.FullName.EndsWith('/')) { continue }
+                    $obj = [PSCustomObject]@{
+                        PSTypeName   = 'PsBash.TarListOutput'
+                        BashText     = $entry.FullName
+                        Name         = $entry.Name
+                        Size         = $entry.Length
+                        ModifiedDate = $entry.LastWriteTime.DateTime
+                    }
+                    $obj | Add-Member -MemberType ScriptMethod -Name 'ToString' -Value { $this.BashText } -Force
+                    $obj
+                }
+            } finally {
+                $zip.Dispose()
+            }
+        } finally {
+            $zms.Dispose()
+        }
+    } elseif ($extract) {
+        if (-not (Test-Path -LiteralPath $archiveFile)) {
+            Write-Error -Message "tar: ${archiveFile}: No such file or directory" -ErrorAction Continue
+            return
+        }
+
+        $targetDir = if ($changeDir) { $changeDir } else { Get-Location | Select-Object -ExpandProperty Path }
+        if (-not (Test-Path -LiteralPath $targetDir)) {
+            New-Item -Path $targetDir -ItemType Directory -Force | Out-Null
+        }
+
+        $archiveBytes = [System.IO.File]::ReadAllBytes($archiveFile)
+        $zipBytes = $archiveBytes
+        if ($gzipFilter) {
+            $ims = [System.IO.MemoryStream]::new($archiveBytes)
+            try {
+                $gs = [System.IO.Compression.GZipStream]::new($ims, [System.IO.Compression.CompressionMode]::Decompress)
+                $oms = [System.IO.MemoryStream]::new()
+                try { $gs.CopyTo($oms); $zipBytes = $oms.ToArray() } finally { $gs.Dispose(); $oms.Dispose() }
+            } finally {
+                $ims.Dispose()
+            }
+        }
+
+        $zms = [System.IO.MemoryStream]::new($zipBytes)
+        try {
+            $zip = [System.IO.Compression.ZipArchive]::new($zms, [System.IO.Compression.ZipArchiveMode]::Read)
+            try {
+                foreach ($entry in $zip.Entries) {
+                    if ($entry.FullName.EndsWith('/')) { continue }
+                    $outPath = Join-Path $targetDir ($entry.FullName -replace '/', [System.IO.Path]::DirectorySeparatorChar)
+                    $outDir = Split-Path $outPath -Parent
+                    if (-not (Test-Path -LiteralPath $outDir)) {
+                        New-Item -Path $outDir -ItemType Directory -Force | Out-Null
+                    }
+                    $entryStream = $entry.Open()
+                    try {
+                        $buf = [System.IO.MemoryStream]::new()
+                        try {
+                            $entryStream.CopyTo($buf)
+                            [System.IO.File]::WriteAllBytes($outPath, $buf.ToArray())
+                        } finally {
+                            $buf.Dispose()
+                        }
+                    } finally {
+                        $entryStream.Dispose()
+                    }
+                    if ($verbose) {
+                        New-BashObject -BashText $entry.FullName
+                    }
+                }
+            } finally {
+                $zip.Dispose()
+            }
+        } finally {
+            $zms.Dispose()
+        }
+    } else {
+        Write-Error -Message 'tar: you must specify one of -c, -x, -t' -ErrorAction Continue
+    }
+}
+
 # --- Help Support ---
 
 $script:BashHelpSpecs = @{
@@ -8337,6 +8776,8 @@ $script:BashHelpSpecs = @{
     'sha1sum'  = 'Compute and check SHA1 message digest.'
     'sha256sum' = 'Compute and check SHA256 message digest.'
     'file'     = 'Determine file type.'
+    'gzip'     = 'Compress or expand files.'
+    'tar'      = 'Store and extract files from an archive.'
 }
 
 function Test-BashHelpFlag {
@@ -8470,6 +8911,16 @@ $script:BashFlagSpecs = @{
     'sha1sum'  = @( @('-c', 'check'), @('-b', 'binary mode') )
     'sha256sum' = @( @('-c', 'check'), @('-b', 'binary mode') )
     'file'     = @( @('-b', 'brief'), @('-i', 'MIME type'), @('-L', 'follow symlinks') )
+    'gzip'     = @(
+        @('-d', 'decompress'),           @('-c', 'write to stdout'),   @('-k', 'keep original'),
+        @('-f', 'force'),                @('-v', 'verbose'),           @('-l', 'list'),
+        @('-1', 'fastest compression'),  @('-9', 'best compression')
+    )
+    'tar'      = @(
+        @('-c', 'create archive'),       @('-x', 'extract archive'),   @('-t', 'list contents'),
+        @('-f', 'archive file'),         @('-z', 'gzip filter'),       @('-v', 'verbose'),
+        @('-C', 'change directory'),     @('--exclude', 'exclude pattern')
+    )
 }
 
 $script:BashCompleters = @{}
@@ -8568,3 +9019,7 @@ Set-Alias -Name 'sha1sum'  -Value 'Invoke-BashSha1sum'  -Force -Scope Global -Op
 Set-Alias -Name 'sha256sum' -Value 'Invoke-BashSha256sum' -Force -Scope Global -Option AllScope
 Set-Alias -Name 'file'     -Value 'Invoke-BashFile'     -Force -Scope Global -Option AllScope
 Set-Alias -Name 'rg'       -Value 'Invoke-BashRg'       -Force -Scope Global -Option AllScope
+Set-Alias -Name 'gzip'     -Value 'Invoke-BashGzip'     -Force -Scope Global -Option AllScope
+Set-Alias -Name 'gunzip'   -Value 'Invoke-BashGzip'     -Force -Scope Global -Option AllScope
+Set-Alias -Name 'zcat'     -Value 'Invoke-BashGzip'     -Force -Scope Global -Option AllScope
+Set-Alias -Name 'tar'      -Value 'Invoke-BashTar'      -Force -Scope Global -Option AllScope
