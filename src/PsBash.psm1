@@ -1230,6 +1230,324 @@ function Invoke-BashSort {
     }
 }
 
+# --- head Command ---
+
+function Invoke-BashHead {
+    $Arguments = [string[]]$args
+    $pipelineInput = @($input)
+
+    # Manual arg parsing for value-bearing -n flag
+    $count = 10
+    $operands = [System.Collections.Generic.List[string]]::new()
+    $pastDoubleDash = $false
+
+    $i = 0
+    while ($i -lt $Arguments.Count) {
+        $arg = $Arguments[$i]
+
+        if ($pastDoubleDash) {
+            $operands.Add($arg)
+            $i++
+            continue
+        }
+
+        if ($arg -eq '--') {
+            $pastDoubleDash = $true
+            $i++
+            continue
+        }
+
+        if ($arg -cmatch '^-n(\d+)$') {
+            $count = [int]$Matches[1]
+            $i++
+            continue
+        }
+
+        if ($arg -ceq '-n') {
+            $i++
+            if ($i -lt $Arguments.Count) {
+                $count = [int]$Arguments[$i]
+            }
+            $i++
+            continue
+        }
+
+        $operands.Add($arg)
+        $i++
+    }
+
+    # Pipeline mode
+    if ($operands.Count -eq 0 -and $pipelineInput.Count -gt 0) {
+        $emitted = 0
+        foreach ($item in $pipelineInput) {
+            if ($emitted -ge $count) { break }
+            $item
+            $emitted++
+        }
+        return
+    }
+
+    # File mode
+    foreach ($filePath in $operands) {
+        if (-not (Test-Path -LiteralPath $filePath)) {
+            Write-Error -Message "head: cannot open '$filePath' for reading: No such file or directory" -ErrorAction Continue
+            continue
+        }
+
+        $bytes = [System.IO.File]::ReadAllBytes($filePath)
+        $byteOffset = 0
+        if ($bytes.Length -ge 3 -and $bytes[0] -eq 0xEF -and $bytes[1] -eq 0xBB -and $bytes[2] -eq 0xBF) {
+            $byteOffset = 3
+        }
+        $rawText = [System.Text.Encoding]::UTF8.GetString($bytes, $byteOffset, $bytes.Length - $byteOffset)
+        $rawText = $rawText -replace "`r`n", "`n"
+        if ($rawText.EndsWith("`n")) {
+            $rawText = $rawText.Substring(0, $rawText.Length - 1)
+        }
+
+        $lines = $rawText.Split("`n")
+        $lineCount = [System.Math]::Min($count, $lines.Count)
+        for ($li = 0; $li -lt $lineCount; $li++) {
+            $obj = [PSCustomObject]@{
+                PSTypeName = 'PsBash.CatLine'
+                LineNumber = $li + 1
+                Content    = $lines[$li]
+                FileName   = $filePath
+                BashText   = $lines[$li]
+            }
+            $obj | Add-Member -MemberType ScriptMethod -Name 'ToString' -Value {
+                $this.BashText
+            } -Force
+            $obj
+        }
+    }
+}
+
+# --- tail Command ---
+
+function Invoke-BashTail {
+    $Arguments = [string[]]$args
+    $pipelineInput = @($input)
+
+    # Manual arg parsing for value-bearing -n flag
+    $count = 10
+    $fromLine = $false
+    $operands = [System.Collections.Generic.List[string]]::new()
+    $pastDoubleDash = $false
+
+    $i = 0
+    while ($i -lt $Arguments.Count) {
+        $arg = $Arguments[$i]
+
+        if ($pastDoubleDash) {
+            $operands.Add($arg)
+            $i++
+            continue
+        }
+
+        if ($arg -eq '--') {
+            $pastDoubleDash = $true
+            $i++
+            continue
+        }
+
+        # -n +N syntax (from line N onward)
+        if ($arg -cmatch '^-n\+(\d+)$') {
+            $count = [int]$Matches[1]
+            $fromLine = $true
+            $i++
+            continue
+        }
+
+        if ($arg -cmatch '^-n(\d+)$') {
+            $count = [int]$Matches[1]
+            $i++
+            continue
+        }
+
+        if ($arg -ceq '-n') {
+            $i++
+            if ($i -lt $Arguments.Count) {
+                $val = $Arguments[$i]
+                if ($val.StartsWith('+')) {
+                    $count = [int]$val.Substring(1)
+                    $fromLine = $true
+                } else {
+                    $count = [int]$val
+                }
+            }
+            $i++
+            continue
+        }
+
+        $operands.Add($arg)
+        $i++
+    }
+
+    # Pipeline mode
+    if ($operands.Count -eq 0 -and $pipelineInput.Count -gt 0) {
+        if ($fromLine) {
+            $startIdx = $count - 1
+            for ($idx = $startIdx; $idx -lt $pipelineInput.Count; $idx++) {
+                $pipelineInput[$idx]
+            }
+        } else {
+            $startIdx = [System.Math]::Max(0, $pipelineInput.Count - $count)
+            for ($idx = $startIdx; $idx -lt $pipelineInput.Count; $idx++) {
+                $pipelineInput[$idx]
+            }
+        }
+        return
+    }
+
+    # File mode
+    foreach ($filePath in $operands) {
+        if (-not (Test-Path -LiteralPath $filePath)) {
+            Write-Error -Message "tail: cannot open '$filePath' for reading: No such file or directory" -ErrorAction Continue
+            continue
+        }
+
+        $bytes = [System.IO.File]::ReadAllBytes($filePath)
+        $byteOffset = 0
+        if ($bytes.Length -ge 3 -and $bytes[0] -eq 0xEF -and $bytes[1] -eq 0xBB -and $bytes[2] -eq 0xBF) {
+            $byteOffset = 3
+        }
+        $rawText = [System.Text.Encoding]::UTF8.GetString($bytes, $byteOffset, $bytes.Length - $byteOffset)
+        $rawText = $rawText -replace "`r`n", "`n"
+        if ($rawText.EndsWith("`n")) {
+            $rawText = $rawText.Substring(0, $rawText.Length - 1)
+        }
+
+        $lines = $rawText.Split("`n")
+
+        if ($fromLine) {
+            $startIdx = $count - 1
+        } else {
+            $startIdx = [System.Math]::Max(0, $lines.Count - $count)
+        }
+
+        for ($li = $startIdx; $li -lt $lines.Count; $li++) {
+            $obj = [PSCustomObject]@{
+                PSTypeName = 'PsBash.CatLine'
+                LineNumber = $li + 1
+                Content    = $lines[$li]
+                FileName   = $filePath
+                BashText   = $lines[$li]
+            }
+            $obj | Add-Member -MemberType ScriptMethod -Name 'ToString' -Value {
+                $this.BashText
+            } -Force
+            $obj
+        }
+    }
+}
+
+# --- wc Command ---
+
+function Invoke-BashWc {
+    $Arguments = [string[]]$args
+    $pipelineInput = @($input)
+
+    $defs = New-FlagDefs -Entries @(
+        '-l', 'line count only'
+        '-w', 'word count only'
+        '-c', 'byte count only'
+    )
+
+    $parsed = ConvertFrom-BashArgs -Arguments $Arguments -FlagDefs $defs
+    $linesOnly = $parsed.Flags['-l']
+    $wordsOnly = $parsed.Flags['-w']
+    $bytesOnly = $parsed.Flags['-c']
+    $noFlags = -not $linesOnly -and -not $wordsOnly -and -not $bytesOnly
+
+    $operands = $parsed.Operands
+
+    $emitResult = {
+        param([int]$Lines, [int]$Words, [int]$Bytes, [string]$FileName)
+
+        $parts = [System.Collections.Generic.List[string]]::new()
+        if ($linesOnly)      { $parts.Add($Lines.ToString().PadLeft(7)) }
+        elseif ($wordsOnly)  { $parts.Add($Words.ToString().PadLeft(7)) }
+        elseif ($bytesOnly)  { $parts.Add($Bytes.ToString().PadLeft(7)) }
+        else {
+            $parts.Add($Lines.ToString().PadLeft(7))
+            $parts.Add($Words.ToString().PadLeft(8))
+            $parts.Add($Bytes.ToString().PadLeft(8))
+        }
+        if ($FileName -ne '') { $parts.Add(" $FileName") }
+
+        $bashText = ($parts -join '') -replace '^\s+', ' '
+        $bashText = $bashText.TrimStart()
+
+        $obj = [PSCustomObject]@{
+            PSTypeName = 'PsBash.WcResult'
+            Lines      = $Lines
+            Words      = $Words
+            Bytes      = $Bytes
+            FileName   = $FileName
+            BashText   = $bashText
+        }
+        $obj | Add-Member -MemberType ScriptMethod -Name 'ToString' -Value {
+            $this.BashText
+        } -Force
+        $obj
+    }
+
+    # Pipeline mode
+    if ($operands.Count -eq 0 -and $pipelineInput.Count -gt 0) {
+        $totalLines = 0
+        $totalWords = 0
+        $totalBytes = 0
+
+        foreach ($item in $pipelineInput) {
+            $text = Get-BashText -InputObject $item
+            $text = $text -replace "`n$", ''
+            $totalLines++
+            $lineWords = @($text -split '\s+' | Where-Object { $_ -ne '' }).Count
+            $totalWords += $lineWords
+            $totalBytes += [System.Text.Encoding]::UTF8.GetByteCount($text) + 1
+        }
+
+        & $emitResult $totalLines $totalWords $totalBytes ''
+        return
+    }
+
+    # File mode
+    $totalLines = 0
+    $totalWords = 0
+    $totalBytes = 0
+    $multipleFiles = $operands.Count -gt 1
+
+    foreach ($filePath in $operands) {
+        if (-not (Test-Path -LiteralPath $filePath)) {
+            Write-Error -Message "wc: ${filePath}: No such file or directory" -ErrorAction Continue
+            continue
+        }
+
+        $bytes = [System.IO.File]::ReadAllBytes($filePath)
+        $byteOffset = 0
+        if ($bytes.Length -ge 3 -and $bytes[0] -eq 0xEF -and $bytes[1] -eq 0xBB -and $bytes[2] -eq 0xBF) {
+            $byteOffset = 3
+        }
+        $rawText = [System.Text.Encoding]::UTF8.GetString($bytes, $byteOffset, $bytes.Length - $byteOffset)
+        $rawText = $rawText -replace "`r`n", "`n"
+
+        $fileBytes = $bytes.Length - $byteOffset
+        $lineCount = @($rawText.ToCharArray() | Where-Object { $_ -eq "`n" }).Count
+        $wordCount = @($rawText -split '\s+' | Where-Object { $_ -ne '' }).Count
+
+        $totalLines += $lineCount
+        $totalWords += $wordCount
+        $totalBytes += $fileBytes
+
+        & $emitResult $lineCount $wordCount $fileBytes $filePath
+    }
+
+    if ($multipleFiles) {
+        & $emitResult $totalLines $totalWords $totalBytes 'total'
+    }
+}
+
 # --- Aliases ---
 
 Set-Alias -Name 'echo'   -Value 'Invoke-BashEcho'   -Force -Scope Global -Option AllScope
@@ -1238,3 +1556,6 @@ Set-Alias -Name 'ls'      -Value 'Invoke-BashLs'      -Force -Scope Global -Opti
 Set-Alias -Name 'cat'     -Value 'Invoke-BashCat'     -Force -Scope Global -Option AllScope
 Set-Alias -Name 'grep'    -Value 'Invoke-BashGrep'    -Force -Scope Global -Option AllScope
 Set-Alias -Name 'sort'    -Value 'Invoke-BashSort'    -Force -Scope Global -Option AllScope
+Set-Alias -Name 'head'    -Value 'Invoke-BashHead'    -Force -Scope Global -Option AllScope
+Set-Alias -Name 'tail'    -Value 'Invoke-BashTail'    -Force -Scope Global -Option AllScope
+Set-Alias -Name 'wc'      -Value 'Invoke-BashWc'      -Force -Scope Global -Option AllScope

@@ -897,3 +897,223 @@ Describe 'Invoke-BashSort — Object-Aware' {
         }
     }
 }
+
+Describe 'Invoke-BashHead — Pipeline' {
+    BeforeAll {
+        $headDir = Join-Path ([System.IO.Path]::GetTempPath()) "psbash-head-test-$(Get-Random)"
+        New-Item -Path $headDir -ItemType Directory -Force | Out-Null
+
+        $headFile = Join-Path $headDir 'lines.txt'
+        $content = (1..15 | ForEach-Object { "line$_" }) -join "`n"
+        [System.IO.File]::WriteAllText($headFile, "$content`n", [System.Text.UTF8Encoding]::new($false))
+
+        Set-Content -Path (Join-Path $headDir 'a.txt') -Value 'aaa'
+        Set-Content -Path (Join-Path $headDir 'b.txt') -Value 'bbb'
+        Set-Content -Path (Join-Path $headDir 'c.txt') -Value 'ccc'
+    }
+
+    AfterAll {
+        Remove-Item -Path $headDir -Recurse -Force -ErrorAction SilentlyContinue
+    }
+
+    It 'cat file.txt | head returns first 10 lines (objects preserved)' {
+        $results = @(Invoke-BashCat $headFile | Invoke-BashHead)
+        $results.Count | Should -Be 10
+        $results[0].PSTypeNames[0] | Should -Be 'PsBash.CatLine'
+        $results[0].Content | Should -Be 'line1'
+        $results[9].Content | Should -Be 'line10'
+    }
+
+    It 'cat file.txt | head -n 5 returns first 5' {
+        $results = @(Invoke-BashCat $headFile | Invoke-BashHead -n 5)
+        $results.Count | Should -Be 5
+        $results[0].Content | Should -Be 'line1'
+        $results[4].Content | Should -Be 'line5'
+    }
+
+    It 'head -n 3 file.txt works in file mode' {
+        $results = @(Invoke-BashHead -n 3 $headFile)
+        $results.Count | Should -Be 3
+        $results[0].PSTypeNames[0] | Should -Be 'PsBash.CatLine'
+        $results[0].Content | Should -Be 'line1'
+        $results[2].Content | Should -Be 'line3'
+    }
+
+    It 'ls -la | head -n 5 returns LsEntry objects' {
+        $results = @(Invoke-BashLs -la $headDir | Invoke-BashHead -n 5)
+        $results.Count | Should -BeLessOrEqual 5
+        $results[0].PSTypeNames[0] | Should -Be 'PsBash.LsEntry'
+    }
+
+    It '(ls -la | head -n 1).Name works' {
+        $results = @(Invoke-BashLs $headDir | Invoke-BashHead -n 1)
+        $results[0].Name | Should -Not -BeNullOrEmpty
+    }
+
+    It 'exports head alias pointing to Invoke-BashHead' {
+        $alias = Get-Alias -Name head -Scope Global
+        $alias.Definition | Should -Be 'Invoke-BashHead'
+    }
+
+    It 'head nonexistent file writes error' {
+        $result = Invoke-BashHead -n 1 '/nonexistent/xyz.txt' 2>&1
+        $errors = @($result | Where-Object { $_ -is [System.Management.Automation.ErrorRecord] })
+        $errors.Count | Should -BeGreaterThan 0
+    }
+}
+
+Describe 'Invoke-BashTail — Pipeline' {
+    BeforeAll {
+        $tailDir = Join-Path ([System.IO.Path]::GetTempPath()) "psbash-tail-test-$(Get-Random)"
+        New-Item -Path $tailDir -ItemType Directory -Force | Out-Null
+
+        $tailFile = Join-Path $tailDir 'lines.txt'
+        $content = (1..15 | ForEach-Object { "line$_" }) -join "`n"
+        [System.IO.File]::WriteAllText($tailFile, "$content`n", [System.Text.UTF8Encoding]::new($false))
+
+        Set-Content -Path (Join-Path $tailDir 'a.txt') -Value 'aaa'
+        Set-Content -Path (Join-Path $tailDir 'b.txt') -Value 'bbb'
+        Set-Content -Path (Join-Path $tailDir 'c.txt') -Value 'ccc'
+    }
+
+    AfterAll {
+        Remove-Item -Path $tailDir -Recurse -Force -ErrorAction SilentlyContinue
+    }
+
+    It 'cat file.txt | tail returns last 10 lines' {
+        $results = @(Invoke-BashCat $tailFile | Invoke-BashTail)
+        $results.Count | Should -Be 10
+        $results[0].Content | Should -Be 'line6'
+        $results[9].Content | Should -Be 'line15'
+    }
+
+    It 'cat file.txt | tail -n 5 returns last 5' {
+        $results = @(Invoke-BashCat $tailFile | Invoke-BashTail -n 5)
+        $results.Count | Should -Be 5
+        $results[0].Content | Should -Be 'line11'
+        $results[4].Content | Should -Be 'line15'
+    }
+
+    It 'tail -n +3 file.txt returns from line 3 onward' {
+        $results = @(Invoke-BashTail -n +3 $tailFile)
+        $results.Count | Should -Be 13
+        $results[0].Content | Should -Be 'line3'
+        $results[-1].Content | Should -Be 'line15'
+    }
+
+    It 'ls -la | tail -n 5 returns LsEntry objects' {
+        $results = @(Invoke-BashLs $tailDir | Invoke-BashTail -n 5)
+        $results.Count | Should -BeLessOrEqual 5
+        foreach ($r in $results) {
+            $r.PSTypeNames[0] | Should -Be 'PsBash.LsEntry'
+        }
+    }
+
+    It 'exports tail alias pointing to Invoke-BashTail' {
+        $alias = Get-Alias -Name tail -Scope Global
+        $alias.Definition | Should -Be 'Invoke-BashTail'
+    }
+
+    It 'tail nonexistent file writes error' {
+        $result = Invoke-BashTail -n 1 '/nonexistent/xyz.txt' 2>&1
+        $errors = @($result | Where-Object { $_ -is [System.Management.Automation.ErrorRecord] })
+        $errors.Count | Should -BeGreaterThan 0
+    }
+
+    It 'tail -n +3 in pipeline mode returns from item 3 onward' {
+        $results = @(Invoke-BashCat $tailFile | Invoke-BashTail -n +3)
+        $results.Count | Should -Be 13
+        $results[0].Content | Should -Be 'line3'
+    }
+}
+
+Describe 'Invoke-BashWc — File Mode' {
+    BeforeAll {
+        $wcDir = Join-Path ([System.IO.Path]::GetTempPath()) "psbash-wc-test-$(Get-Random)"
+        New-Item -Path $wcDir -ItemType Directory -Force | Out-Null
+
+        $wcFile1 = Join-Path $wcDir 'file1.txt'
+        [System.IO.File]::WriteAllText($wcFile1, "hello world`nfoo bar baz`n", [System.Text.UTF8Encoding]::new($false))
+
+        $wcFile2 = Join-Path $wcDir 'file2.txt'
+        [System.IO.File]::WriteAllText($wcFile2, "one two`nthree`n", [System.Text.UTF8Encoding]::new($false))
+    }
+
+    AfterAll {
+        Remove-Item -Path $wcDir -Recurse -Force -ErrorAction SilentlyContinue
+    }
+
+    It 'wc file.txt returns lines, words, bytes in BashText format' {
+        $results = @(Invoke-BashWc $wcFile1)
+        $results.Count | Should -Be 1
+        $results[0].PSTypeNames[0] | Should -Be 'PsBash.WcResult'
+        $results[0].Lines | Should -Be 2
+        $results[0].Words | Should -Be 5
+        $results[0].Bytes | Should -Be 24
+        $results[0].FileName | Should -Be $wcFile1
+    }
+
+    It 'wc -l file.txt returns line count only' {
+        $results = @(Invoke-BashWc -l $wcFile1)
+        $results.Count | Should -Be 1
+        $results[0].Lines | Should -Be 2
+        $results[0].BashText | Should -Match '2'
+        $results[0].BashText | Should -Match ([regex]::Escape($wcFile1))
+    }
+
+    It 'wc -l file1.txt file2.txt returns per-file and total' {
+        $results = @(Invoke-BashWc -l $wcFile1 $wcFile2)
+        $results.Count | Should -Be 3
+        $results[0].Lines | Should -Be 2
+        $results[0].FileName | Should -Be $wcFile1
+        $results[1].Lines | Should -Be 2
+        $results[1].FileName | Should -Be $wcFile2
+        $results[2].Lines | Should -Be 4
+        $results[2].FileName | Should -Be 'total'
+    }
+
+    It 'wc nonexistent file writes error' {
+        $result = Invoke-BashWc '/nonexistent/xyz.txt' 2>&1
+        $errors = @($result | Where-Object { $_ -is [System.Management.Automation.ErrorRecord] })
+        $errors.Count | Should -BeGreaterThan 0
+    }
+
+    It 'exports wc alias pointing to Invoke-BashWc' {
+        $alias = Get-Alias -Name wc -Scope Global
+        $alias.Definition | Should -Be 'Invoke-BashWc'
+    }
+}
+
+Describe 'Invoke-BashWc — Pipeline Mode' {
+    BeforeAll {
+        $wcPipeDir = Join-Path ([System.IO.Path]::GetTempPath()) "psbash-wc-pipe-test-$(Get-Random)"
+        New-Item -Path $wcPipeDir -ItemType Directory -Force | Out-Null
+
+        $wcPipeFile = Join-Path $wcPipeDir 'data.txt'
+        [System.IO.File]::WriteAllText($wcPipeFile, "hello world`nfoo bar baz`n", [System.Text.UTF8Encoding]::new($false))
+
+        Set-Content -Path (Join-Path $wcPipeDir 'a.txt') -Value 'aaa'
+        Set-Content -Path (Join-Path $wcPipeDir 'b.txt') -Value 'bbb'
+    }
+
+    AfterAll {
+        Remove-Item -Path $wcPipeDir -Recurse -Force -ErrorAction SilentlyContinue
+    }
+
+    It 'cat file.txt | wc -l counts BashText lines' {
+        $results = @(Invoke-BashCat $wcPipeFile | Invoke-BashWc -l)
+        $results.Count | Should -Be 1
+        $results[0].Lines | Should -Be 2
+    }
+
+    It 'ls -la | wc -l counts objects' {
+        $results = @(Invoke-BashLs $wcPipeDir | Invoke-BashWc -l)
+        $results.Count | Should -Be 1
+        $results[0].Lines | Should -BeGreaterOrEqual 2
+    }
+
+    It 'WcResult ToString returns BashText' {
+        $results = @(Invoke-BashCat $wcPipeFile | Invoke-BashWc -l)
+        "$($results[0])" | Should -Be $results[0].BashText
+    }
+}
