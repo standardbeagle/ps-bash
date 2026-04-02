@@ -4702,3 +4702,141 @@ Describe 'Register-BashCompletions — Function Export' {
         $cmd | Should -Not -BeNullOrEmpty
     }
 }
+
+# --- Slice 25: --help flag support ---
+
+Describe 'Test-BashHelpFlag — detects --help in args' {
+    It 'returns true when --help is present' {
+        $result = Test-BashHelpFlag @('--help')
+        $result | Should -BeTrue
+    }
+
+    It 'returns true when --help is among other args' {
+        $result = Test-BashHelpFlag @('-l', '--help', 'foo')
+        $result | Should -BeTrue
+    }
+
+    It 'returns false when --help is absent' {
+        $result = Test-BashHelpFlag @('-l', '-a')
+        $result | Should -BeFalse
+    }
+
+    It 'returns false for empty args' {
+        $result = Test-BashHelpFlag @()
+        $result | Should -BeFalse
+    }
+}
+
+Describe 'Show-BashHelp — renders help text' {
+    It 'returns BashObject with help as BashText' {
+        $result = Show-BashHelp 'ls'
+        $result.PSObject.TypeNames | Should -Contain 'PsBash.TextOutput'
+        $result.BashText | Should -Not -BeNullOrEmpty
+    }
+
+    It 'includes Usage line with command name' {
+        $result = Show-BashHelp 'ls'
+        $result.BashText | Should -Match 'Usage: ls'
+    }
+
+    It 'includes synopsis from BashHelpSpecs' {
+        $result = Show-BashHelp 'ls'
+        $result.BashText | Should -Match 'List directory contents'
+    }
+
+    It 'includes all flags from BashFlagSpecs' {
+        $result = Show-BashHelp 'grep'
+        $flagSpecs = & (Get-Module PsBash) { $script:BashFlagSpecs['grep'] }
+        foreach ($entry in $flagSpecs) {
+            $flag = $entry[0]
+            $result.BashText | Should -Match ([regex]::Escape($flag))
+        }
+    }
+
+    It 'includes flag descriptions' {
+        $result = Show-BashHelp 'ls'
+        $result.BashText | Should -Match 'long listing'
+        $result.BashText | Should -Match 'show hidden'
+    }
+
+    It 'formats Options section' {
+        $result = Show-BashHelp 'ls'
+        $result.BashText | Should -Match 'Options:'
+    }
+}
+
+Describe 'ls --help — returns help text' {
+    It 'returns help with Usage: ls' {
+        $result = ls --help
+        $result.BashText | Should -Match 'Usage: ls'
+    }
+}
+
+Describe 'grep --help — returns help with all grep flags' {
+    It 'returns help with all grep flags' {
+        $result = grep --help
+        $result.BashText | Should -Match 'Usage: grep'
+        $result.BashText | Should -Match '-i'
+        $result.BashText | Should -Match '-v'
+        $result.BashText | Should -Match '-n'
+    }
+}
+
+Describe '--help — at least 10 commands respond' {
+    $helpCommands = @(
+        @{ Cmd = 'ls';     Fn = 'Invoke-BashLs' },
+        @{ Cmd = 'cat';    Fn = 'Invoke-BashCat' },
+        @{ Cmd = 'grep';   Fn = 'Invoke-BashGrep' },
+        @{ Cmd = 'sort';   Fn = 'Invoke-BashSort' },
+        @{ Cmd = 'head';   Fn = 'Invoke-BashHead' },
+        @{ Cmd = 'tail';   Fn = 'Invoke-BashTail' },
+        @{ Cmd = 'wc';     Fn = 'Invoke-BashWc' },
+        @{ Cmd = 'find';   Fn = 'Invoke-BashFind' },
+        @{ Cmd = 'cp';     Fn = 'Invoke-BashCp' },
+        @{ Cmd = 'mv';     Fn = 'Invoke-BashMv' },
+        @{ Cmd = 'rm';     Fn = 'Invoke-BashRm' },
+        @{ Cmd = 'sed';    Fn = 'Invoke-BashSed' },
+        @{ Cmd = 'awk';    Fn = 'Invoke-BashAwk' },
+        @{ Cmd = 'cut';    Fn = 'Invoke-BashCut' },
+        @{ Cmd = 'tr';     Fn = 'Invoke-BashTr' }
+    )
+
+    It '<Cmd> --help returns help text' -ForEach $helpCommands {
+        $result = & $Fn '--help'
+        $result.BashText | Should -Match "Usage: $Cmd"
+    }
+}
+
+Describe '--help — commands without BashFlagSpecs' {
+    It 'echo --help returns help text' {
+        $result = Invoke-BashEcho '--help'
+        $result.BashText | Should -Match 'Usage: echo'
+    }
+
+    It 'rev --help returns help text' {
+        $result = rev --help
+        $result.BashText | Should -Match 'Usage: rev'
+    }
+
+    It 'hostname --help returns help text' {
+        $result = hostname --help
+        $result.BashText | Should -Match 'Usage: hostname'
+    }
+
+    It 'whoami --help returns help text' {
+        $result = whoami --help
+        $result.BashText | Should -Match 'Usage: whoami'
+    }
+}
+
+Describe 'Show-BashHelp — exported function' {
+    It 'Show-BashHelp function exists' {
+        $cmd = Get-Command Show-BashHelp -ErrorAction SilentlyContinue
+        $cmd | Should -Not -BeNullOrEmpty
+    }
+
+    It 'Test-BashHelpFlag function exists' {
+        $cmd = Get-Command Test-BashHelpFlag -ErrorAction SilentlyContinue
+        $cmd | Should -Not -BeNullOrEmpty
+    }
+}

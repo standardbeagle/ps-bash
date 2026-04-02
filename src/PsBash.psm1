@@ -142,6 +142,7 @@ function New-FlagDefs {
 
 function Invoke-BashEcho {
     $Arguments = [string[]]$args
+    if ($Arguments -contains '--help') { return Show-BashHelp 'echo' }
 
     $defs = New-FlagDefs -Entries @(
         '-n', 'no trailing newline'
@@ -168,6 +169,7 @@ function Invoke-BashEcho {
 
 function Invoke-BashPrintf {
     $Arguments = [string[]]$args
+    if ($Arguments -contains '--help') { return Show-BashHelp 'printf' }
 
     if (-not $Arguments -or $Arguments.Count -eq 0) {
         throw 'printf: usage: printf format [arguments]'
@@ -414,6 +416,7 @@ function Format-LsLine {
 
 function Invoke-BashLs {
     $Arguments = [string[]]$args
+    if ($Arguments -contains '--help') { return Show-BashHelp 'ls' }
 
     $defs = New-FlagDefs -Entries @(
         '-l', 'long listing'
@@ -508,6 +511,7 @@ function Invoke-BashLs {
 function Invoke-BashCat {
     $Arguments = [string[]]$args
     $pipelineInput = @($input)
+    if ($Arguments -contains '--help') { return Show-BashHelp 'cat' }
 
     $defs = New-FlagDefs -Entries @(
         '-n', 'number all lines'
@@ -648,6 +652,7 @@ function Get-BashText {
 function Invoke-BashGrep {
     $Arguments = [string[]]$args
     $pipelineInput = @($input)
+    if ($Arguments -contains '--help') { return Show-BashHelp 'grep' }
 
     # Parse arguments manually because grep has value-bearing flags (-A, -B, -C, -m)
     $ignoreCase = $false
@@ -986,6 +991,7 @@ function ConvertFrom-MonthName {
 function Invoke-BashSort {
     $Arguments = [string[]]$args
     $pipelineInput = @($input)
+    if ($Arguments -contains '--help') { return Show-BashHelp 'sort' }
 
     # Manual arg parsing for value-bearing flags (-k, -t)
     $reverse = $false
@@ -1236,6 +1242,7 @@ function Invoke-BashSort {
 function Invoke-BashHead {
     $Arguments = [string[]]$args
     $pipelineInput = @($input)
+    if ($Arguments -contains '--help') { return Show-BashHelp 'head' }
 
     # Manual arg parsing for value-bearing -n flag
     $count = 10
@@ -1329,6 +1336,7 @@ function Invoke-BashHead {
 function Invoke-BashTail {
     $Arguments = [string[]]$args
     $pipelineInput = @($input)
+    if ($Arguments -contains '--help') { return Show-BashHelp 'tail' }
 
     # Manual arg parsing for value-bearing -n flag
     $count = 10
@@ -1448,6 +1456,7 @@ function Invoke-BashTail {
 function Invoke-BashWc {
     $Arguments = [string[]]$args
     $pipelineInput = @($input)
+    if ($Arguments -contains '--help') { return Show-BashHelp 'wc' }
 
     $defs = New-FlagDefs -Entries @(
         '-l', 'line count only'
@@ -1553,6 +1562,7 @@ function Invoke-BashWc {
 
 function Invoke-BashFind {
     $Arguments = [string[]]$args
+    if ($Arguments -contains '--help') { return Show-BashHelp 'find' }
 
     # Manual arg parsing for find's predicate-style flags
     $searchPath = '.'
@@ -1754,6 +1764,7 @@ function Invoke-BashFind {
 
 function Invoke-BashStat {
     $Arguments = [string[]]$args
+    if ($Arguments -contains '--help') { return Show-BashHelp 'stat' }
 
     $formatString = $null
     $printfString = $null
@@ -1965,6 +1976,7 @@ function Format-StatString {
 
 function Invoke-BashCp {
     $Arguments = [string[]]$args
+    if ($Arguments -contains '--help') { return Show-BashHelp 'cp' }
 
     $defs = New-FlagDefs -Entries @(
         '-r', 'recursive'
@@ -2048,6 +2060,7 @@ function Invoke-BashCp {
 
 function Invoke-BashMv {
     $Arguments = [string[]]$args
+    if ($Arguments -contains '--help') { return Show-BashHelp 'mv' }
 
     $defs = New-FlagDefs -Entries @(
         '-v', 'verbose'
@@ -2106,6 +2119,7 @@ function Invoke-BashMv {
 
 function Invoke-BashRm {
     $Arguments = [string[]]$args
+    if ($Arguments -contains '--help') { return Show-BashHelp 'rm' }
 
     $defs = New-FlagDefs -Entries @(
         '-r', 'recursive'
@@ -2204,6 +2218,7 @@ function Invoke-BashRm {
 
 function Invoke-BashMkdir {
     $Arguments = [string[]]$args
+    if ($Arguments -contains '--help') { return Show-BashHelp 'mkdir' }
 
     $defs = New-FlagDefs -Entries @(
         '-p', 'parents'
@@ -2260,6 +2275,7 @@ function Invoke-BashMkdir {
 
 function Invoke-BashRmdir {
     $Arguments = [string[]]$args
+    if ($Arguments -contains '--help') { return Show-BashHelp 'rmdir' }
 
     $defs = New-FlagDefs -Entries @(
         '-p', 'parents'
@@ -2331,6 +2347,7 @@ function Invoke-BashRmdir {
 
 function Invoke-BashTouch {
     $Arguments = [string[]]$args
+    if ($Arguments -contains '--help') { return Show-BashHelp 'touch' }
 
     # Manual arg parsing for -d which takes a value
     $verbose = $false
@@ -2401,6 +2418,7 @@ function Invoke-BashTouch {
 
 function Invoke-BashLn {
     $Arguments = [string[]]$args
+    if ($Arguments -contains '--help') { return Show-BashHelp 'ln' }
 
     $defs = New-FlagDefs -Entries @(
         '-s', 'symbolic'
@@ -2751,6 +2769,7 @@ function Format-PsCustomLine {
 
 function Invoke-BashPs {
     $Arguments = [string[]]$args
+    if ($Arguments -contains '--help') { return Show-BashHelp 'ps' }
 
     $showAll = $false
     $bsdAux = $false
@@ -2933,6 +2952,7 @@ function Invoke-BashPs {
 function Invoke-BashSed {
     $Arguments = [string[]]$args
     $pipelineInput = @($input)
+    if ($Arguments -contains '--help') { return Show-BashHelp 'sed' }
 
     # Parse flags and expressions
     $suppressDefault = $false
@@ -3359,6 +3379,7 @@ function Test-SedAddress {
 function Invoke-BashAwk {
     $Arguments = [string[]]$args
     $pipelineInput = @($input)
+    if ($Arguments -contains '--help') { return Show-BashHelp 'awk' }
 
     # Parse flags: -F FS, -v VAR=VAL
     $fieldSep = ' '
@@ -4194,6 +4215,7 @@ function Resolve-AwkStringFunc {
 function Invoke-BashCut {
     $Arguments = [string[]]$args
     $pipelineInput = @($input)
+    if ($Arguments -contains '--help') { return Show-BashHelp 'cut' }
 
     # Parse flags: -d (delimiter), -f (fields), -c (characters)
     $delimiter = "`t"
@@ -4357,6 +4379,7 @@ function Invoke-BashCut {
 function Invoke-BashTr {
     $Arguments = [string[]]$args
     $pipelineInput = @($input)
+    if ($Arguments -contains '--help') { return Show-BashHelp 'tr' }
 
     # Parse flags: -d (delete), -s (squeeze)
     $deleteMode = $false
@@ -4510,6 +4533,7 @@ function Invoke-BashTr {
 function Invoke-BashUniq {
     $Arguments = [string[]]$args
     $pipelineInput = @($input)
+    if ($Arguments -contains '--help') { return Show-BashHelp 'uniq' }
 
     $countMode = $false
     $duplicatesOnly = $false
@@ -4604,6 +4628,7 @@ function Invoke-BashUniq {
 function Invoke-BashRev {
     $Arguments = [string[]]$args
     $pipelineInput = @($input)
+    if ($Arguments -contains '--help') { return Show-BashHelp 'rev' }
 
     # Collect lines
     $lines = [System.Collections.Generic.List[string]]::new()
@@ -4650,6 +4675,7 @@ function Invoke-BashRev {
 function Invoke-BashNl {
     $Arguments = [string[]]$args
     $pipelineInput = @($input)
+    if ($Arguments -contains '--help') { return Show-BashHelp 'nl' }
 
     # Parse flags: -ba (number all lines including blank)
     $numberAll = $false
@@ -4741,6 +4767,7 @@ function Invoke-BashNl {
 function Invoke-BashDiff {
     $Arguments = [string[]]$args
     $pipelineInput = @($input)
+    if ($Arguments -contains '--help') { return Show-BashHelp 'diff' }
 
     $unified = $false
     $operands = [System.Collections.Generic.List[string]]::new()
@@ -4976,6 +5003,7 @@ function Invoke-BashDiff {
 function Invoke-BashComm {
     $Arguments = [string[]]$args
     $pipelineInput = @($input)
+    if ($Arguments -contains '--help') { return Show-BashHelp 'comm' }
 
     $suppress1 = $false
     $suppress2 = $false
@@ -5095,6 +5123,7 @@ function Invoke-BashComm {
 function Invoke-BashColumn {
     $Arguments = [string[]]$args
     $pipelineInput = @($input)
+    if ($Arguments -contains '--help') { return Show-BashHelp 'column' }
 
     $tableMode = $false
     $separator = $null
@@ -5225,6 +5254,7 @@ function Invoke-BashColumn {
 function Invoke-BashJoin {
     $Arguments = [string[]]$args
     $pipelineInput = @($input)
+    if ($Arguments -contains '--help') { return Show-BashHelp 'join' }
 
     $delimiter = ' '
     $field1 = 1
@@ -5359,6 +5389,7 @@ function Invoke-BashJoin {
 function Invoke-BashPaste {
     $Arguments = [string[]]$args
     $pipelineInput = @($input)
+    if ($Arguments -contains '--help') { return Show-BashHelp 'paste' }
 
     $delimiter = "`t"
     $serial = $false
@@ -5468,6 +5499,7 @@ function Invoke-BashPaste {
 function Invoke-BashTee {
     $Arguments = [string[]]$args
     $pipelineInput = @($input)
+    if ($Arguments -contains '--help') { return Show-BashHelp 'tee' }
 
     $append = $false
     $operands = [System.Collections.Generic.List[string]]::new()
@@ -5543,6 +5575,7 @@ function Invoke-BashTee {
 function Invoke-BashXargs {
     $Arguments = [string[]]$args
     $pipelineInput = @($input)
+    if ($Arguments -contains '--help') { return Show-BashHelp 'xargs' }
 
     $replaceStr = $null
     $maxArgs = 0
@@ -6146,6 +6179,7 @@ function Resolve-JqStringInterpolation {
 function Invoke-BashJq {
     $Arguments = [string[]]$args
     $pipelineInput = @($input)
+    if ($Arguments -contains '--help') { return Show-BashHelp 'jq' }
 
     $rawOutput = $false
     $compact = $false
@@ -6256,6 +6290,7 @@ function Invoke-BashJq {
 
 function Invoke-BashDate {
     $Arguments = [string[]]$args
+    if ($Arguments -contains '--help') { return Show-BashHelp 'date' }
 
     $dateString = $null
     $format = $null
@@ -6421,6 +6456,7 @@ function Convert-DateFormat {
 
 function Invoke-BashSeq {
     $Arguments = [string[]]$args
+    if ($Arguments -contains '--help') { return Show-BashHelp 'seq' }
 
     $separator = $null
     $equalWidth = $false
@@ -6541,6 +6577,7 @@ function Invoke-BashSeq {
 
 function Invoke-BashExpr {
     $Arguments = [string[]]$args
+    if ($Arguments -contains '--help') { return Show-BashHelp 'expr' }
 
     if ($Arguments.Count -eq 0) {
         Write-Error 'expr: missing operand' -ErrorAction Continue
@@ -6662,6 +6699,7 @@ function Invoke-BashExpr {
 
 function Invoke-BashDu {
     $Arguments = [string[]]$args
+    if ($Arguments -contains '--help') { return Show-BashHelp 'du' }
 
     $humanReadable = $false
     $summarize = $false
@@ -6877,6 +6915,7 @@ function Invoke-BashDu {
 
 function Invoke-BashTree {
     $Arguments = [string[]]$args
+    if ($Arguments -contains '--help') { return Show-BashHelp 'tree' }
 
     $showAll = $false
     $dirsOnly = $false
@@ -7056,6 +7095,7 @@ function Invoke-BashTree {
 
 function Invoke-BashEnv {
     $Arguments = [string[]]$args
+    if ($Arguments -contains '--help') { return Show-BashHelp 'env' }
 
     if ($Arguments.Count -gt 0) {
         $varName = $Arguments[0]
@@ -7096,6 +7136,7 @@ function Invoke-BashEnv {
 
 function Invoke-BashBasename {
     $Arguments = [string[]]$args
+    if ($Arguments -contains '--help') { return Show-BashHelp 'basename' }
 
     $suffix = $null
     $operands = [System.Collections.Generic.List[string]]::new()
@@ -7143,6 +7184,7 @@ function Invoke-BashBasename {
 
 function Invoke-BashDirname {
     $Arguments = [string[]]$args
+    if ($Arguments -contains '--help') { return Show-BashHelp 'dirname' }
 
     foreach ($path in $Arguments) {
         $normalized = $path -replace '\\', '/'
@@ -7169,6 +7211,7 @@ function Invoke-BashDirname {
 
 function Invoke-BashPwd {
     $Arguments = [string[]]$args
+    if ($Arguments -contains '--help') { return Show-BashHelp 'pwd' }
 
     $physical = $false
     foreach ($arg in $Arguments) {
@@ -7188,6 +7231,8 @@ function Invoke-BashPwd {
 # --- hostname ---
 
 function Invoke-BashHostname {
+    $Arguments = [string[]]$args
+    if ($Arguments -contains '--help') { return Show-BashHelp 'hostname' }
     $name = [System.Net.Dns]::GetHostName()
     New-BashObject -BashText $name -TypeName 'PsBash.TextOutput'
 }
@@ -7195,13 +7240,105 @@ function Invoke-BashHostname {
 # --- whoami ---
 
 function Invoke-BashWhoami {
+    $Arguments = [string[]]$args
+    if ($Arguments -contains '--help') { return Show-BashHelp 'whoami' }
     $name = [System.Environment]::UserName
     New-BashObject -BashText $name -TypeName 'PsBash.TextOutput'
+}
+
+# --- Help Support ---
+
+$script:BashHelpSpecs = @{
+    'echo'     = 'Display a line of text.'
+    'printf'   = 'Format and print data.'
+    'ls'       = 'List directory contents.'
+    'cat'      = 'Concatenate files and print on the standard output.'
+    'grep'     = 'Print lines that match patterns.'
+    'sort'     = 'Sort lines of text files.'
+    'head'     = 'Output the first part of files.'
+    'tail'     = 'Output the last part of files.'
+    'wc'       = 'Print newline, word, and byte counts for each file.'
+    'find'     = 'Search for files in a directory hierarchy.'
+    'stat'     = 'Display file or file system status.'
+    'cp'       = 'Copy files and directories.'
+    'mv'       = 'Move (rename) files.'
+    'rm'       = 'Remove files or directories.'
+    'mkdir'    = 'Make directories.'
+    'rmdir'    = 'Remove empty directories.'
+    'touch'    = 'Change file timestamps.'
+    'ln'       = 'Make links between files.'
+    'ps'       = 'Report a snapshot of the current processes.'
+    'sed'      = 'Stream editor for filtering and transforming text.'
+    'awk'      = 'Pattern scanning and processing language.'
+    'cut'      = 'Remove sections from each line of files.'
+    'tr'       = 'Translate or delete characters.'
+    'uniq'     = 'Report or omit repeated lines.'
+    'rev'      = 'Reverse lines characterwise.'
+    'nl'       = 'Number lines of files.'
+    'diff'     = 'Compare files line by line.'
+    'comm'     = 'Compare two sorted files line by line.'
+    'column'   = 'Columnate lists.'
+    'join'     = 'Join lines of two files on a common field.'
+    'paste'    = 'Merge lines of files.'
+    'tee'      = 'Read from standard input and write to standard output and files.'
+    'xargs'    = 'Build and execute command lines from standard input.'
+    'jq'       = 'Command-line JSON processor.'
+    'date'     = 'Print or set the system date and time.'
+    'seq'      = 'Print a sequence of numbers.'
+    'expr'     = 'Evaluate expressions.'
+    'du'       = 'Estimate file space usage.'
+    'tree'     = 'List contents of directories in a tree-like format.'
+    'env'      = 'Print the environment or run a program in a modified environment.'
+    'basename' = 'Strip directory and suffix from filenames.'
+    'dirname'  = 'Strip last component from file name.'
+    'pwd'      = 'Print name of current/working directory.'
+    'hostname' = 'Show the system host name.'
+    'whoami'   = 'Print effective userid.'
+}
+
+function Test-BashHelpFlag {
+    [CmdletBinding()]
+    param([string[]]$Arguments)
+    return ($Arguments -contains '--help')
+}
+
+function Show-BashHelp {
+    [CmdletBinding()]
+    param([Parameter(Mandatory)][string]$CommandName)
+
+    $synopsis = $script:BashHelpSpecs[$CommandName]
+    if (-not $synopsis) { $synopsis = '' }
+
+    $lines = [System.Collections.Generic.List[string]]::new()
+    $lines.Add("Usage: $CommandName [OPTION]... [ARG]...")
+    $lines.Add($synopsis)
+    $lines.Add('')
+
+    $flagEntries = $script:BashFlagSpecs[$CommandName]
+    if ($flagEntries -and $flagEntries.Count -gt 0) {
+        # Single-flag commands flatten to a string array; wrap back into nested array
+        if ($flagEntries[0] -is [string]) {
+            $flagEntries = @(,$flagEntries)
+        }
+        $lines.Add('Options:')
+        foreach ($entry in $flagEntries) {
+            $flag = $entry[0]
+            $desc = $entry[1]
+            $pad = ' ' * [Math]::Max(1, 14 - $flag.Length)
+            $lines.Add("  $flag$pad$desc")
+        }
+    }
+
+    $text = ($lines -join "`n") + "`n"
+    New-BashObject -BashText $text
 }
 
 # --- Tab Completion ---
 
 $script:BashFlagSpecs = @{
+    'echo'     = @(
+        @('-n', 'no trailing newline'), @('-e', 'enable escape sequences'), @('-E', 'disable escape sequences')
+    )
     'ls'       = @(
         @('-l', 'long listing'),    @('-a', 'show hidden'),      @('-h', 'human readable sizes'),
         @('-R', 'recursive'),       @('-S', 'sort by size'),     @('-t', 'sort by time'),
