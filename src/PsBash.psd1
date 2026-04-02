@@ -71,7 +71,9 @@ FormatsToProcess = 'PsBash.Format.ps1xml'
 # Functions to export from this module, for best performance, do not use wildcards and do not delete the entry, use an empty array if there are no functions to export.
 FunctionsToExport = 'Invoke-BashEcho', 'Invoke-BashPrintf', 'Get-BashPlatform',
                'New-BashObject', 'ConvertFrom-BashArgs', 'Expand-EscapeSequences',
-               'New-FlagDefs'
+               'New-FlagDefs', 'Invoke-BashLs', 'Get-BashFileInfo',
+               'Format-BashSize', 'Format-BashDate', 'Format-LsLine',
+               'ConvertTo-PermissionString'
 
 # Cmdlets to export from this module, for best performance, do not use wildcards and do not delete the entry, use an empty array if there are no cmdlets to export.
 CmdletsToExport = @()
@@ -80,7 +82,7 @@ CmdletsToExport = @()
 # VariablesToExport = @()
 
 # Aliases to export from this module, for best performance, do not use wildcards and do not delete the entry, use an empty array if there are no aliases to export.
-AliasesToExport = 'echo', 'printf'
+AliasesToExport = 'echo', 'printf', 'ls'
 
 # DSC resources to export from this module
 # DscResourcesToExport = @()

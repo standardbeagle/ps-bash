@@ -230,7 +230,281 @@ function Invoke-BashPrintf {
     New-BashObject -BashText $result
 }
 
+# --- Human-readable Size Formatter ---
+
+function Format-BashSize {
+    [CmdletBinding()]
+    [OutputType([string])]
+    param(
+        [Parameter(Mandatory)]
+        [long]$Bytes
+    )
+
+    if ($Bytes -lt 1024) {
+        return "$Bytes"
+    }
+
+    $units = @('K', 'M', 'G', 'T', 'P')
+    $value = [double]$Bytes
+    $unitIdx = -1
+
+    while ($value -ge 1024 -and $unitIdx -lt ($units.Count - 1)) {
+        $value /= 1024
+        $unitIdx++
+    }
+
+    if ($value -ge 10) {
+        $rounded = [System.Math]::Ceiling($value)
+        return "{0}{1}" -f $rounded, $units[$unitIdx]
+    }
+    $rounded = [System.Math]::Ceiling($value * 10) / 10
+    return "{0:F1}{1}" -f $rounded, $units[$unitIdx]
+}
+
+# --- Bash Date Formatter ---
+
+function Format-BashDate {
+    [CmdletBinding()]
+    [OutputType([string])]
+    param(
+        [Parameter(Mandatory)]
+        [datetime]$Date
+    )
+
+    $now = [datetime]::Now
+    $sixMonthsAgo = $now.AddMonths(-6)
+
+    $month = $Date.ToString('MMM', [System.Globalization.CultureInfo]::InvariantCulture)
+    $day = $Date.Day.ToString().PadLeft(2)
+
+    if ($Date -lt $sixMonthsAgo -or $Date -gt $now) {
+        return "$month $day  $($Date.Year)"
+    }
+    $time = $Date.ToString('HH:mm')
+    return "$month $day $time"
+}
+
+# --- Unix File Mode to Permission String ---
+
+function ConvertTo-PermissionString {
+    [CmdletBinding()]
+    [OutputType([string])]
+    param(
+        [Parameter(Mandatory)]
+        [int]$Mode
+    )
+
+    $sb = [System.Text.StringBuilder]::new(9)
+    $bits = @(
+        @(256, 'r'), @(128, 'w'), @(64, 'x'),
+        @(32, 'r'),  @(16, 'w'),  @(8, 'x'),
+        @(4, 'r'),   @(2, 'w'),   @(1, 'x')
+    )
+    foreach ($pair in $bits) {
+        if ($Mode -band $pair[0]) {
+            [void]$sb.Append($pair[1])
+        } else {
+            [void]$sb.Append('-')
+        }
+    }
+    $sb.ToString()
+}
+
+# --- Platform File Info Adapter ---
+
+function Get-BashFileInfo {
+    [CmdletBinding()]
+    [OutputType([PSCustomObject])]
+    param(
+        [Parameter(Mandatory)]
+        [System.IO.FileSystemInfo]$Item
+    )
+
+    $isDir = $Item -is [System.IO.DirectoryInfo]
+    $size = if ($isDir) { 4096 } else { $Item.Length }
+    $linkCount = 1
+    $owner = ''
+    $group = ''
+    $permString = 'rwxr-xr-x'
+
+    if (-not $IsWindows) {
+        $mode = [int]$Item.UnixFileMode
+        $permString = ConvertTo-PermissionString -Mode $mode
+        $statArgs = if ($IsMacOS) { @('-f', '%l %Su %Sg', $Item.FullName) } else { @('-c', '%h %U %G', $Item.FullName) }
+        $statOutput = & stat @statArgs 2>$null
+        if ($statOutput) {
+            $parts = $statOutput -split ' ', 3
+            $linkCount = [int]$parts[0]
+            $owner = $parts[1]
+            $group = $parts[2]
+        }
+        if ($isDir) {
+            $size = 4096
+        }
+    } else {
+        try {
+            $acl = Get-Acl -Path $Item.FullName
+            $owner = ($acl.Owner -split '\\')[-1]
+            $group = ($acl.Group -split '\\')[-1]
+            $userRead = $false; $userWrite = $false; $userExec = $false
+            foreach ($rule in $acl.Access) {
+                $rights = $rule.FileSystemRights
+                if ($rights -band [System.Security.AccessControl.FileSystemRights]::Read) { $userRead = $true }
+                if ($rights -band [System.Security.AccessControl.FileSystemRights]::Write) { $userWrite = $true }
+                if ($rights -band [System.Security.AccessControl.FileSystemRights]::ExecuteFile) { $userExec = $true }
+            }
+            $u = "$(if ($userRead) {'r'} else {'-'})$(if ($userWrite) {'w'} else {'-'})$(if ($userExec) {'x'} else {'-'})"
+            $permString = "$u$u$u"
+        } catch {
+            $permString = if ($isDir) { 'rwxr-xr-x' } else { 'rw-r--r--' }
+            $owner = $env:USERNAME
+            $group = $env:USERNAME
+        }
+    }
+
+    $typeChar = if ($isDir) { 'd' } elseif ($Item.Attributes -band [System.IO.FileAttributes]::ReparsePoint) { 'l' } else { '-' }
+
+    [PSCustomObject]@{
+        PSTypeName   = 'PsBash.LsEntry'
+        Name         = $Item.Name
+        FullPath     = $Item.FullName
+        IsDirectory  = $isDir
+        SizeBytes    = $size
+        Permissions  = "$typeChar$permString"
+        LinkCount    = $linkCount
+        Owner        = $owner
+        Group        = $group
+        LastModified = $Item.LastWriteTime
+        BashText     = ''
+    }
+}
+
+# --- Format ls -l line ---
+
+function Format-LsLine {
+    [CmdletBinding()]
+    [OutputType([string])]
+    param(
+        [Parameter(Mandatory)]
+        [PSCustomObject]$Entry,
+
+        [Parameter()]
+        [switch]$HumanReadable
+    )
+
+    $size = if ($HumanReadable) {
+        (Format-BashSize -Bytes $Entry.SizeBytes).PadLeft(4)
+    } else {
+        $Entry.SizeBytes.ToString().PadLeft(8)
+    }
+
+    $date = Format-BashDate -Date $Entry.LastModified
+
+    "{0} {1} {2} {3} {4} {5} {6}" -f `
+        $Entry.Permissions,
+        $Entry.LinkCount,
+        $Entry.Owner,
+        $Entry.Group,
+        $size,
+        $date,
+        $Entry.Name
+}
+
+# --- ls Command ---
+
+function Invoke-BashLs {
+    $Arguments = [string[]]$args
+
+    $defs = New-FlagDefs -Entries @(
+        '-l', 'long listing'
+        '-a', 'show hidden'
+        '-h', 'human readable sizes'
+        '-R', 'recursive'
+        '-S', 'sort by size'
+        '-t', 'sort by time'
+        '-r', 'reverse sort'
+        '-1', 'one per line'
+    )
+
+    $parsed = ConvertFrom-BashArgs -Arguments $Arguments -FlagDefs $defs
+
+    $longMode = $parsed.Flags['-l']
+    $showHidden = $parsed.Flags['-a']
+    $humanSizes = $parsed.Flags['-h']
+    $recursive = $parsed.Flags['-R']
+    $sortBySize = $parsed.Flags['-S']
+    $sortByTime = $parsed.Flags['-t']
+    $reverseSort = $parsed.Flags['-r']
+
+    $targets = if ($parsed.Operands.Count -gt 0) { $parsed.Operands } else { @('.') }
+
+    $allEntries = [System.Collections.Generic.List[PSCustomObject]]::new()
+    $hadError = $false
+
+    foreach ($target in $targets) {
+        if (-not (Test-Path -LiteralPath $target)) {
+            $msg = "ls: cannot access '$target': No such file or directory"
+            Write-Error -Message $msg -ErrorAction Continue
+            $hadError = $true
+            continue
+        }
+
+        $item = Get-Item -LiteralPath $target -Force
+        if ($item -is [System.IO.DirectoryInfo]) {
+            $children = if ($recursive) {
+                Get-ChildItem -LiteralPath $target -Force -Recurse
+            } else {
+                Get-ChildItem -LiteralPath $target -Force
+            }
+            foreach ($child in $children) {
+                if (-not $showHidden -and $child.Name.StartsWith('.')) { continue }
+                $entry = Get-BashFileInfo -Item $child
+                $allEntries.Add($entry)
+            }
+        } else {
+            $entry = Get-BashFileInfo -Item $item
+            $allEntries.Add($entry)
+        }
+    }
+
+    if ($sortBySize) {
+        $sorted = $allEntries | Sort-Object -Property SizeBytes -Descending
+        $allEntries = [System.Collections.Generic.List[PSCustomObject]]::new()
+        foreach ($e in $sorted) { $allEntries.Add($e) }
+    } elseif ($sortByTime) {
+        $sorted = $allEntries | Sort-Object -Property LastModified -Descending
+        $allEntries = [System.Collections.Generic.List[PSCustomObject]]::new()
+        foreach ($e in $sorted) { $allEntries.Add($e) }
+    }
+
+    if ($reverseSort) {
+        $reversed = [System.Collections.Generic.List[PSCustomObject]]::new()
+        for ($i = $allEntries.Count - 1; $i -ge 0; $i--) {
+            $reversed.Add($allEntries[$i])
+        }
+        $allEntries = $reversed
+    }
+
+    foreach ($entry in $allEntries) {
+        if ($longMode) {
+            $line = Format-LsLine -Entry $entry -HumanReadable:$humanSizes
+            $entry.BashText = $line
+        } else {
+            $entry.BashText = $entry.Name
+        }
+        $entry | Add-Member -MemberType ScriptMethod -Name 'ToString' -Value {
+            $this.BashText
+        } -Force
+        $entry
+    }
+
+    if ($hadError -and $allEntries.Count -eq 0) {
+        $global:LASTEXITCODE = 2
+    }
+}
+
 # --- Aliases ---
 
 Set-Alias -Name 'echo'   -Value 'Invoke-BashEcho'   -Force -Scope Global -Option AllScope
 Set-Alias -Name 'printf'  -Value 'Invoke-BashPrintf'  -Force -Scope Global -Option AllScope
+Set-Alias -Name 'ls'      -Value 'Invoke-BashLs'      -Force -Scope Global -Option AllScope
