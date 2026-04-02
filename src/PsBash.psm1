@@ -6252,6 +6252,412 @@ function Invoke-BashJq {
     }
 }
 
+# --- Date ---
+
+function Invoke-BashDate {
+    $Arguments = [string[]]$args
+
+    $dateString = $null
+    $format = $null
+    $utc = $false
+    $refFile = $null
+
+    $i = 0
+    while ($i -lt $Arguments.Count) {
+        $arg = $Arguments[$i]
+
+        if ($arg -ceq '-u' -or $arg -ceq '--utc' -or $arg -ceq '--universal') {
+            $utc = $true
+            $i++
+            continue
+        }
+
+        if ($arg -ceq '-d' -or $arg -ceq '--date') {
+            $i++
+            if ($i -lt $Arguments.Count) { $dateString = $Arguments[$i] }
+            $i++
+            continue
+        }
+
+        if ($arg -cmatch '^--date=(.+)$') {
+            $dateString = $Matches[1]
+            $i++
+            continue
+        }
+
+        if ($arg -ceq '-r' -or $arg -ceq '--reference') {
+            $i++
+            if ($i -lt $Arguments.Count) { $refFile = $Arguments[$i] }
+            $i++
+            continue
+        }
+
+        if ($arg -cmatch '^--reference=(.+)$') {
+            $refFile = $Matches[1]
+            $i++
+            continue
+        }
+
+        if ($arg.StartsWith('+')) {
+            $format = $arg.Substring(1)
+            $i++
+            continue
+        }
+
+        $i++
+    }
+
+    # Determine the source datetime
+    [System.DateTimeOffset]$dto = if ($null -ne $refFile) {
+        $resolved = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($refFile)
+        if (-not (Test-Path -LiteralPath $resolved)) {
+            Write-Error "date: '$refFile': No such file or directory" -ErrorAction Continue
+            return
+        }
+        $mtime = (Get-Item -LiteralPath $resolved).LastWriteTime
+        [System.DateTimeOffset]::new($mtime)
+    } elseif ($null -ne $dateString) {
+        [System.DateTimeOffset]::Parse($dateString, [System.Globalization.CultureInfo]::InvariantCulture)
+    } else {
+        [System.DateTimeOffset]::Now
+    }
+
+    if ($utc) {
+        $dto = $dto.ToUniversalTime()
+    }
+
+    # Build format output
+    if ($null -ne $format) {
+        $text = Convert-DateFormat -DTO $dto -Format $format
+    } else {
+        # Default: "Thu Jan  2 15:04:05 MST 2006" style
+        $ci = [System.Globalization.CultureInfo]::InvariantCulture
+        $dow = $dto.ToString('ddd', $ci)
+        $mon = $dto.ToString('MMM', $ci)
+        $day = $dto.Day.ToString().PadLeft(2)
+        $time = $dto.ToString('HH:mm:ss')
+        $tz = if ($utc) { 'UTC' } else { [System.TimeZoneInfo]::Local.Id }
+        $yr = $dto.Year
+        $text = "$dow $mon $day $time $tz $yr"
+    }
+
+    $epoch = [long]($dto.ToUnixTimeSeconds())
+    $ci2 = [System.Globalization.CultureInfo]::InvariantCulture
+
+    $obj = [PSCustomObject]@{
+        PSTypeName = 'PsBash.DateOutput'
+        Year       = [int]$dto.Year
+        Month      = [int]$dto.Month
+        Day        = [int]$dto.Day
+        Hour       = [int]$dto.Hour
+        Minute     = [int]$dto.Minute
+        Second     = [int]$dto.Second
+        Epoch      = $epoch
+        DayOfWeek  = $dto.ToString('dddd', $ci2)
+        TimeZone   = if ($utc) { 'UTC' } else { [System.TimeZoneInfo]::Local.Id }
+        DateTime   = $dto
+        BashText   = $text
+    }
+    $obj | Add-Member -MemberType ScriptMethod -Name 'ToString' -Value {
+        $this.BashText
+    } -Force
+    $obj
+}
+
+function Convert-DateFormat {
+    [CmdletBinding()]
+    [OutputType([string])]
+    param(
+        [Parameter(Mandatory)]
+        [System.DateTimeOffset]$DTO,
+        [Parameter(Mandatory)]
+        [string]$Format
+    )
+
+    $ci = [System.Globalization.CultureInfo]::InvariantCulture
+    $sb = [System.Text.StringBuilder]::new()
+    $chars = $Format.ToCharArray()
+    $i = 0
+    while ($i -lt $chars.Length) {
+        if ($chars[$i] -eq '%' -and ($i + 1) -lt $chars.Length) {
+            $spec = $chars[$i + 1]
+            switch -CaseSensitive ($spec) {
+                'Y' { $sb.Append($DTO.ToString('yyyy', $ci)) | Out-Null }
+                'm' { $sb.Append($DTO.ToString('MM', $ci))   | Out-Null }
+                'd' { $sb.Append($DTO.ToString('dd', $ci))   | Out-Null }
+                'H' { $sb.Append($DTO.ToString('HH', $ci))   | Out-Null }
+                'M' { $sb.Append($DTO.ToString('mm', $ci))   | Out-Null }
+                'S' { $sb.Append($DTO.ToString('ss', $ci))   | Out-Null }
+                's' { $sb.Append([string]$DTO.ToUnixTimeSeconds()) | Out-Null }
+                'A' { $sb.Append($DTO.ToString('dddd', $ci)) | Out-Null }
+                'B' { $sb.Append($DTO.ToString('MMMM', $ci)) | Out-Null }
+                'Z' {
+                    if ($DTO.Offset -eq [System.TimeSpan]::Zero) {
+                        $sb.Append('UTC') | Out-Null
+                    } else {
+                        $sb.Append([System.TimeZoneInfo]::Local.Id) | Out-Null
+                    }
+                }
+                'a' { $sb.Append($DTO.ToString('ddd', $ci))  | Out-Null }
+                'b' { $sb.Append($DTO.ToString('MMM', $ci))  | Out-Null }
+                'e' { $sb.Append($DTO.Day.ToString().PadLeft(2)) | Out-Null }
+                'j' { $sb.Append($DTO.DayOfYear.ToString('000')) | Out-Null }
+                'p' { $sb.Append($DTO.ToString('tt', $ci))   | Out-Null }
+                'n' { $sb.Append("`n") | Out-Null }
+                't' { $sb.Append("`t") | Out-Null }
+                '%' { $sb.Append('%') | Out-Null }
+                default { $sb.Append('%').Append($spec) | Out-Null }
+            }
+            $i += 2
+        } else {
+            $sb.Append($chars[$i]) | Out-Null
+            $i++
+        }
+    }
+    $sb.ToString()
+}
+
+# --- Seq ---
+
+function Invoke-BashSeq {
+    $Arguments = [string[]]$args
+
+    $separator = $null
+    $equalWidth = $false
+    $operands = [System.Collections.Generic.List[string]]::new()
+
+    $i = 0
+    while ($i -lt $Arguments.Count) {
+        $arg = $Arguments[$i]
+
+        if ($arg -ceq '-s' -or $arg -ceq '--separator') {
+            $i++
+            if ($i -lt $Arguments.Count) { $separator = $Arguments[$i] }
+            $i++
+            continue
+        }
+
+        if ($arg -cmatch '^--separator=(.*)$') {
+            $separator = $Matches[1]
+            $i++
+            continue
+        }
+
+        if ($arg -ceq '-w' -or $arg -ceq '--equal-width') {
+            $equalWidth = $true
+            $i++
+            continue
+        }
+
+        $operands.Add($arg)
+        $i++
+    }
+
+    # Determine first, increment, last
+    [double]$first = 1
+    [double]$increment = 1
+    [double]$last = 1
+
+    if ($operands.Count -eq 1) {
+        $last = [double]$operands[0]
+    } elseif ($operands.Count -eq 2) {
+        $first = [double]$operands[0]
+        $last = [double]$operands[1]
+    } elseif ($operands.Count -ge 3) {
+        $first = [double]$operands[0]
+        $increment = [double]$operands[1]
+        $last = [double]$operands[2]
+    }
+
+    # Detect if inputs are integers
+    $isInteger = ($first -eq [System.Math]::Floor($first)) -and
+                 ($increment -eq [System.Math]::Floor($increment)) -and
+                 ($last -eq [System.Math]::Floor($last))
+
+    # Determine decimal places for formatting
+    $decPlaces = 0
+    if (-not $isInteger) {
+        foreach ($op in $operands) {
+            $dotPos = $op.IndexOf('.')
+            if ($dotPos -ge 0) {
+                $dp = $op.Length - $dotPos - 1
+                if ($dp -gt $decPlaces) { $decPlaces = $dp }
+            }
+        }
+    }
+
+    # Determine width for -w padding
+    $padWidth = 0
+    if ($equalWidth -and $isInteger) {
+        $maxVal = [System.Math]::Max([System.Math]::Abs($first), [System.Math]::Abs($last))
+        $padWidth = [string][long]$maxVal
+        $padWidth = $padWidth.Length
+    }
+
+    # Generate values
+    $values = [System.Collections.Generic.List[string]]::new()
+    $index = 0
+    $current = $first
+
+    $ascending = $increment -gt 0
+    while (($ascending -and $current -le ($last + [double]1e-9)) -or
+           (-not $ascending -and $current -ge ($last - [double]1e-9))) {
+        $formatted = if ($isInteger) {
+            $intVal = [long][System.Math]::Round($current)
+            if ($equalWidth -and $padWidth -gt 0) {
+                $intVal.ToString().PadLeft($padWidth, '0')
+            } else {
+                [string]$intVal
+            }
+        } else {
+            $current.ToString("F$decPlaces", [System.Globalization.CultureInfo]::InvariantCulture)
+        }
+        $values.Add($formatted)
+        $index++
+        $current = $first + ($increment * $index)
+    }
+
+    # Output
+    if ($null -ne $separator) {
+        $text = $values -join $separator
+        New-BashObject -BashText $text
+    } else {
+        for ($j = 0; $j -lt $values.Count; $j++) {
+            $obj = [PSCustomObject]@{
+                PSTypeName = 'PsBash.SeqOutput'
+                Value      = if ($isInteger) { [long][System.Math]::Round([double]$values[$j]) } else { [double]$values[$j] }
+                Index      = $j
+                BashText   = $values[$j]
+            }
+            $obj | Add-Member -MemberType ScriptMethod -Name 'ToString' -Value {
+                $this.BashText
+            } -Force
+            $obj
+        }
+    }
+}
+
+# --- Expr ---
+
+function Invoke-BashExpr {
+    $Arguments = [string[]]$args
+
+    if ($Arguments.Count -eq 0) {
+        Write-Error 'expr: missing operand' -ErrorAction Continue
+        return
+    }
+
+    $result = $null
+
+    # String operations (keyword first)
+    $keyword = $Arguments[0]
+
+    if ($keyword -ceq 'length' -and $Arguments.Count -ge 2) {
+        $result = [string]($Arguments[1].Length)
+    } elseif ($keyword -ceq 'substr' -and $Arguments.Count -ge 4) {
+        $str = $Arguments[1]
+        $pos = [int]$Arguments[2]
+        $len = [int]$Arguments[3]
+        $result = $str.Substring($pos - 1, [System.Math]::Min($len, $str.Length - $pos + 1))
+    } elseif ($keyword -ceq 'index' -and $Arguments.Count -ge 3) {
+        $str = $Arguments[1]
+        $chars = $Arguments[2]
+        $minPos = -1
+        foreach ($ch in $chars.ToCharArray()) {
+            $pos = $str.IndexOf($ch)
+            if ($pos -ge 0 -and ($minPos -lt 0 -or $pos -lt $minPos)) {
+                $minPos = $pos
+            }
+        }
+        $val = if ($minPos -ge 0) { $minPos + 1 } else { 0 }
+        $result = [string]$val
+    } elseif ($keyword -ceq 'match' -and $Arguments.Count -ge 3) {
+        $str = $Arguments[1]
+        $pattern = $Arguments[2]
+        # Convert POSIX BRE \(...\) to .NET (...)
+        $netPattern = $pattern -replace '\\\(', '(' -replace '\\\)', ')'
+        # Anchor at start like expr does
+        if (-not $netPattern.StartsWith('^')) { $netPattern = "^$netPattern" }
+        if ($str -match $netPattern) {
+            if ($Matches.Count -gt 1) {
+                $result = $Matches[1]
+            } else {
+                $result = [string]$Matches[0].Length
+            }
+        } else {
+            $result = '0'
+        }
+    } elseif ($Arguments.Count -ge 3) {
+        # Infix: operand1 operator operand2
+        $left = $Arguments[0]
+        $op = $Arguments[1]
+        $right = $Arguments[2]
+
+        $isNumericLeft = $left -match '^-?\d+$'
+        $isNumericRight = $right -match '^-?\d+$'
+
+        if ($isNumericLeft -and $isNumericRight) {
+            $l = [long]$left
+            $r = [long]$right
+
+            $result = switch ($op) {
+                '+'  { [string]($l + $r) }
+                '-'  { [string]($l - $r) }
+                '*'  { [string]($l * $r) }
+                '/'  {
+                    if ($r -eq 0) { Write-Error 'expr: division by zero' -ErrorAction Continue; return }
+                    [string]([long][System.Math]::Truncate($l / $r))
+                }
+                '%'  {
+                    if ($r -eq 0) { Write-Error 'expr: division by zero' -ErrorAction Continue; return }
+                    [string]($l % $r)
+                }
+                '<'  { if ($l -lt $r) { '1' } else { '0' } }
+                '<=' { if ($l -le $r) { '1' } else { '0' } }
+                '='  { if ($l -eq $r) { '1' } else { '0' } }
+                '!=' { if ($l -ne $r) { '1' } else { '0' } }
+                '>=' { if ($l -ge $r) { '1' } else { '0' } }
+                '>'  { if ($l -gt $r) { '1' } else { '0' } }
+                default {
+                    Write-Error "expr: unknown operator '$op'" -ErrorAction Continue
+                    return
+                }
+            }
+        } else {
+            # String comparison
+            $result = switch ($op) {
+                '<'  { if ($left -lt $right) { '1' } else { '0' } }
+                '<=' { if ($left -le $right) { '1' } else { '0' } }
+                '='  { if ($left -ceq $right) { '1' } else { '0' } }
+                '!=' { if ($left -cne $right) { '1' } else { '0' } }
+                '>=' { if ($left -ge $right) { '1' } else { '0' } }
+                '>'  { if ($left -gt $right) { '1' } else { '0' } }
+                default {
+                    Write-Error "expr: non-integer argument" -ErrorAction Continue
+                    return
+                }
+            }
+        }
+    } else {
+        # Single operand: echo it
+        $result = $Arguments[0]
+    }
+
+    # Determine Value type
+    $numericResult = $result -match '^-?\d+$'
+    $value = if ($numericResult) { [long]$result } else { $result }
+
+    $obj = [PSCustomObject]@{
+        PSTypeName = 'PsBash.ExprOutput'
+        Value      = $value
+        BashText   = $result
+    }
+    $obj | Add-Member -MemberType ScriptMethod -Name 'ToString' -Value {
+        $this.BashText
+    } -Force
+    $obj
+}
+
 # --- Aliases ---
 
 Set-Alias -Name 'echo'   -Value 'Invoke-BashEcho'   -Force -Scope Global -Option AllScope
@@ -6288,3 +6694,6 @@ Set-Alias -Name 'paste'   -Value 'Invoke-BashPaste'   -Force -Scope Global -Opti
 Set-Alias -Name 'tee'     -Value 'Invoke-BashTee'     -Force -Scope Global -Option AllScope
 Set-Alias -Name 'xargs'   -Value 'Invoke-BashXargs'   -Force -Scope Global -Option AllScope
 Set-Alias -Name 'jq'      -Value 'Invoke-BashJq'      -Force -Scope Global -Option AllScope
+Set-Alias -Name 'date'    -Value 'Invoke-BashDate'    -Force -Scope Global -Option AllScope
+Set-Alias -Name 'seq'     -Value 'Invoke-BashSeq'     -Force -Scope Global -Option AllScope
+Set-Alias -Name 'expr'    -Value 'Invoke-BashExpr'    -Force -Scope Global -Option AllScope

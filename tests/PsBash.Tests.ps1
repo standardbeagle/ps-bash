@@ -3785,3 +3785,332 @@ Describe 'Invoke-BashJq — Alias' {
         $alias.Definition | Should -Be 'Invoke-BashJq'
     }
 }
+
+# ── Invoke-BashDate ──────────────────────────────────────────────────
+
+Describe 'Invoke-BashDate — Default Output' {
+    It 'returns current date/time in default format' {
+        $r = Invoke-BashDate
+        $r.BashText | Should -Match '^\w{3} \w{3} [ \d]\d \d{2}:\d{2}:\d{2} \S+ \d{4}$'
+    }
+
+    It 'returns object with Year, Month, Day properties' {
+        $r = Invoke-BashDate
+        $now = [datetime]::Now
+        $r.Year | Should -Be $now.Year
+        $r.Month | Should -Be $now.Month
+        $r.Day | Should -Be $now.Day
+    }
+
+    It 'returns object with Hour, Minute, Second properties' {
+        $r = Invoke-BashDate
+        $r.PSObject.Properties['Hour'] | Should -Not -BeNullOrEmpty
+        $r.PSObject.Properties['Minute'] | Should -Not -BeNullOrEmpty
+        $r.PSObject.Properties['Second'] | Should -Not -BeNullOrEmpty
+    }
+
+    It 'returns Epoch as integer seconds' {
+        $r = Invoke-BashDate
+        $r.Epoch | Should -BeOfType [long]
+        $r.Epoch | Should -BeGreaterThan 1700000000
+    }
+
+    It 'returns DayOfWeek as string' {
+        $r = Invoke-BashDate
+        $r.DayOfWeek | Should -BeIn @('Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday')
+    }
+
+    It 'returns DateTime as DateTimeOffset' {
+        $r = Invoke-BashDate
+        $r.DateTime | Should -BeOfType [System.DateTimeOffset]
+    }
+}
+
+Describe 'Invoke-BashDate — Format String' {
+    It 'formats with +%Y-%m-%d' {
+        $r = Invoke-BashDate '+%Y-%m-%d'
+        $expected = [datetime]::Now.ToString('yyyy-MM-dd')
+        $r.BashText | Should -Be $expected
+    }
+
+    It 'formats with +%H:%M:%S' {
+        $r = Invoke-BashDate '+%H:%M:%S'
+        $r.BashText | Should -Match '^\d{2}:\d{2}:\d{2}$'
+    }
+
+    It 'formats epoch with +%s' {
+        $r = Invoke-BashDate '+%s'
+        [long]$r.BashText | Should -BeGreaterThan 1700000000
+    }
+
+    It 'formats weekday with +%A' {
+        $r = Invoke-BashDate -d '2024-01-15' '+%A'
+        $r.BashText | Should -Be 'Monday'
+    }
+
+    It 'formats month name with +%B' {
+        $r = Invoke-BashDate -d '2024-03-01' '+%B'
+        $r.BashText | Should -Be 'March'
+    }
+
+    It 'formats timezone with +%Z' {
+        $r = Invoke-BashDate '+%Z'
+        $r.BashText | Should -Not -BeNullOrEmpty
+    }
+
+    It 'handles literal text in format' {
+        $r = Invoke-BashDate -d '2024-06-15' '+Date: %Y/%m/%d'
+        $r.BashText | Should -Be 'Date: 2024/06/15'
+    }
+}
+
+Describe 'Invoke-BashDate — UTC Flag' {
+    It 'returns UTC time with -u' {
+        $r = Invoke-BashDate -u '+%Z'
+        $r.BashText | Should -Be 'UTC'
+    }
+
+    It 'DateTime is UTC with -u' {
+        $r = Invoke-BashDate -u
+        $r.DateTime.Offset | Should -Be ([System.TimeSpan]::Zero)
+    }
+}
+
+Describe 'Invoke-BashDate — Date String (-d)' {
+    It 'parses ISO date string' {
+        $r = Invoke-BashDate -d '2024-01-15' '+%Y-%m-%d'
+        $r.BashText | Should -Be '2024-01-15'
+    }
+
+    It 'parses date with time' {
+        $r = Invoke-BashDate -d '2024-01-15 14:30:00' '+%H:%M:%S'
+        $r.BashText | Should -Be '14:30:00'
+    }
+
+    It 'sets object properties from date string' {
+        $r = Invoke-BashDate -d '2024-07-04'
+        $r.Year | Should -Be 2024
+        $r.Month | Should -Be 7
+        $r.Day | Should -Be 4
+    }
+}
+
+Describe 'Invoke-BashDate — Reference File (-r)' {
+    It 'returns modification time of a file' {
+        $tmp = New-TemporaryFile
+        try {
+            $r = Invoke-BashDate -r $tmp.FullName '+%Y'
+            $r.BashText | Should -Match '^\d{4}$'
+        } finally {
+            Remove-Item $tmp.FullName -Force
+        }
+    }
+}
+
+Describe 'Invoke-BashDate — Alias' {
+    It 'date alias resolves to Invoke-BashDate' {
+        $alias = Get-Alias -Name date -Scope Global
+        $alias.Definition | Should -Be 'Invoke-BashDate'
+    }
+}
+
+# ── Invoke-BashSeq ──────────────────────────────────────────────────
+
+Describe 'Invoke-BashSeq — Basic Sequences' {
+    It 'seq 5 produces 1 through 5' {
+        $r = @(Invoke-BashSeq 5)
+        $r.Count | Should -Be 5
+        (Get-BashText $r[0]) | Should -Be '1'
+        (Get-BashText $r[4]) | Should -Be '5'
+    }
+
+    It 'seq 2 5 produces 2 through 5' {
+        $r = @(Invoke-BashSeq 2 5)
+        $r.Count | Should -Be 4
+        (Get-BashText $r[0]) | Should -Be '2'
+        (Get-BashText $r[3]) | Should -Be '5'
+    }
+
+    It 'seq 1 2 10 produces 1 3 5 7 9' {
+        $r = @(Invoke-BashSeq 1 2 10)
+        $r.Count | Should -Be 5
+        (Get-BashText $r[0]) | Should -Be '1'
+        (Get-BashText $r[1]) | Should -Be '3'
+        (Get-BashText $r[2]) | Should -Be '5'
+        (Get-BashText $r[3]) | Should -Be '7'
+        (Get-BashText $r[4]) | Should -Be '9'
+    }
+
+    It 'seq with decrement 5 -1 1' {
+        $r = @(Invoke-BashSeq 5 -1 1)
+        $r.Count | Should -Be 5
+        (Get-BashText $r[0]) | Should -Be '5'
+        (Get-BashText $r[4]) | Should -Be '1'
+    }
+
+    It 'seq with decimal increment 0.5 0.5 2.5' {
+        $r = @(Invoke-BashSeq 0.5 0.5 2.5)
+        $r.Count | Should -Be 5
+        (Get-BashText $r[0]) | Should -Be '0.5'
+        (Get-BashText $r[4]) | Should -Be '2.5'
+    }
+}
+
+Describe 'Invoke-BashSeq — Flags' {
+    It '-w pads to equal width' {
+        $r = @(Invoke-BashSeq -w 1 10)
+        (Get-BashText $r[0]) | Should -Be '01'
+        (Get-BashText $r[9]) | Should -Be '10'
+    }
+
+    It '-s sets separator in BashText' {
+        $r = @(Invoke-BashSeq -s ',' 1 3)
+        $r.Count | Should -Be 1
+        (Get-BashText $r[0]) | Should -Be '1,2,3'
+    }
+
+    It '-w with three-digit range' {
+        $r = @(Invoke-BashSeq -w 1 100)
+        (Get-BashText $r[0]) | Should -Be '001'
+        (Get-BashText $r[99]) | Should -Be '100'
+    }
+}
+
+Describe 'Invoke-BashSeq — Object Properties' {
+    It 'returns Value and Index properties' {
+        $r = @(Invoke-BashSeq 3)
+        $r[0].Value | Should -Be 1
+        $r[0].Index | Should -Be 0
+        $r[2].Value | Should -Be 3
+        $r[2].Index | Should -Be 2
+    }
+}
+
+Describe 'Invoke-BashSeq — Alias' {
+    It 'seq alias resolves to Invoke-BashSeq' {
+        $alias = Get-Alias -Name seq -Scope Global
+        $alias.Definition | Should -Be 'Invoke-BashSeq'
+    }
+}
+
+# ── Invoke-BashExpr ──────────────────────────────────────────────────
+
+Describe 'Invoke-BashExpr — Arithmetic' {
+    It 'adds two numbers' {
+        $r = Invoke-BashExpr 2 + 3
+        $r.Value | Should -Be 5
+        $r.BashText | Should -Be '5'
+    }
+
+    It 'subtracts' {
+        $r = Invoke-BashExpr 10 - 3
+        $r.Value | Should -Be 7
+    }
+
+    It 'multiplies' {
+        $r = Invoke-BashExpr 4 '*' 5
+        $r.Value | Should -Be 20
+    }
+
+    It 'integer division' {
+        $r = Invoke-BashExpr 10 / 3
+        $r.Value | Should -Be 3
+    }
+
+    It 'modulo' {
+        $r = Invoke-BashExpr 10 '%' 3
+        $r.Value | Should -Be 1
+    }
+}
+
+Describe 'Invoke-BashExpr — Comparison' {
+    It 'less than true returns 1' {
+        $r = Invoke-BashExpr 2 '<' 3
+        $r.Value | Should -Be 1
+        $r.BashText | Should -Be '1'
+    }
+
+    It 'less than false returns 0' {
+        $r = Invoke-BashExpr 5 '<' 3
+        $r.Value | Should -Be 0
+        $r.BashText | Should -Be '0'
+    }
+
+    It 'equals true' {
+        $r = Invoke-BashExpr 5 '=' 5
+        $r.Value | Should -Be 1
+    }
+
+    It 'not equals' {
+        $r = Invoke-BashExpr 5 '!=' 3
+        $r.Value | Should -Be 1
+    }
+
+    It 'greater or equal' {
+        $r = Invoke-BashExpr 5 '>=' 5
+        $r.Value | Should -Be 1
+    }
+}
+
+Describe 'Invoke-BashExpr — String Operations' {
+    It 'length returns string length' {
+        $r = Invoke-BashExpr length 'hello'
+        $r.Value | Should -Be 5
+        $r.BashText | Should -Be '5'
+    }
+
+    It 'substr extracts substring (1-based)' {
+        $r = Invoke-BashExpr substr 'hello' 2 3
+        $r.Value | Should -Be 'ell'
+        $r.BashText | Should -Be 'ell'
+    }
+
+    It 'index finds first char position (1-based)' {
+        $r = Invoke-BashExpr index 'hello' 'lo'
+        $r.Value | Should -Be 3
+    }
+
+    It 'index returns 0 when not found' {
+        $r = Invoke-BashExpr index 'hello' 'z'
+        $r.Value | Should -Be 0
+    }
+
+    It 'match returns matched portion length' {
+        $r = Invoke-BashExpr match 'abc123' '[a-z]*'
+        $r.Value | Should -Be 3
+    }
+
+    It 'match with capture group returns captured text' {
+        $r = Invoke-BashExpr match 'abc123def' '[^0-9]*\([0-9]*\)'
+        $r.Value | Should -Be '123'
+    }
+}
+
+Describe 'Invoke-BashExpr — Alias' {
+    It 'expr alias resolves to Invoke-BashExpr' {
+        $alias = Get-Alias -Name expr -Scope Global
+        $alias.Definition | Should -Be 'Invoke-BashExpr'
+    }
+}
+
+Describe 'Invoke-BashDate — Pipeline Bridge' {
+    It 'outputs BashObjects' {
+        $r = Invoke-BashDate
+        $r.PSObject.Properties['BashText'] | Should -Not -BeNullOrEmpty
+    }
+}
+
+Describe 'Invoke-BashSeq — Pipeline Bridge' {
+    It 'seq output pipes to grep' {
+        $r = @(Invoke-BashSeq 1 10 | Invoke-BashGrep '5')
+        $r.Count | Should -Be 1
+        (Get-BashText $r[0]) | Should -Be '5'
+    }
+}
+
+Describe 'Invoke-BashExpr — Pipeline Bridge' {
+    It 'outputs BashObject' {
+        $r = Invoke-BashExpr 1 + 1
+        $r.PSObject.Properties['BashText'] | Should -Not -BeNullOrEmpty
+    }
+}
