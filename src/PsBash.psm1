@@ -2927,6 +2927,432 @@ function Invoke-BashPs {
     }
 }
 
+# --- sed Command ---
+
+function Invoke-BashSed {
+    $Arguments = [string[]]$args
+    $pipelineInput = @($input)
+
+    # Parse flags and expressions
+    $suppressDefault = $false
+    $inPlace = $false
+    $extendedRegex = $false
+    $expressions = [System.Collections.Generic.List[string]]::new()
+    $operands = [System.Collections.Generic.List[string]]::new()
+    $pastDoubleDash = $false
+
+    $i = 0
+    while ($i -lt $Arguments.Count) {
+        $arg = $Arguments[$i]
+
+        if ($pastDoubleDash) {
+            $operands.Add($arg)
+            $i++
+            continue
+        }
+
+        if ($arg -eq '--') {
+            $pastDoubleDash = $true
+            $i++
+            continue
+        }
+
+        if ($arg -ceq '-e') {
+            $i++
+            if ($i -lt $Arguments.Count) {
+                $expressions.Add($Arguments[$i])
+            }
+            $i++
+            continue
+        }
+
+        if ($arg.StartsWith('-') -and $arg.Length -gt 1 -and -not $arg.StartsWith('--')) {
+            foreach ($ch in $arg.Substring(1).ToCharArray()) {
+                switch ($ch) {
+                    'n' { $suppressDefault = $true }
+                    'i' { $inPlace = $true }
+                    'E' { $extendedRegex = $true }
+                }
+            }
+            $i++
+            continue
+        }
+
+        $operands.Add($arg)
+        $i++
+    }
+
+    # First operand is the expression if no -e was used
+    if ($expressions.Count -eq 0 -and $operands.Count -gt 0) {
+        $expressions.Add($operands[0])
+        $operands.RemoveAt(0)
+    }
+
+    if ($expressions.Count -eq 0) {
+        throw 'sed: usage: sed [options] expression [file ...]'
+    }
+
+    # Parse sed commands from expressions
+    $commands = [System.Collections.Generic.List[hashtable]]::new()
+    foreach ($expr in $expressions) {
+        $commands.Add((ConvertFrom-SedExpression -Expression $expr -ExtendedRegex $extendedRegex))
+    }
+
+    # Apply commands to a single line, return $null to delete
+    $applyCommands = {
+        param([string]$line, [int]$lineNum, [int]$totalLines, [string[]]$allLines)
+
+        $currentLine = $line
+        $printed = $false
+        $deleted = $false
+
+        foreach ($cmd in $commands) {
+            if ($deleted) { break }
+
+            # Check address match
+            if (-not (Test-SedAddress -Cmd $cmd -Line $currentLine -LineNum $lineNum -TotalLines $totalLines -AllLines $allLines)) {
+                continue
+            }
+
+            switch ($cmd.Type) {
+                's' {
+                    $regex = $cmd.Regex
+                    if ($cmd.Global) {
+                        $currentLine = $regex.Replace($currentLine, $cmd.Replacement)
+                    } else {
+                        $currentLine = $regex.Replace($currentLine, $cmd.Replacement, 1)
+                    }
+                }
+                'd' {
+                    $deleted = $true
+                }
+                'p' {
+                    $printed = $true
+                }
+                'y' {
+                    $sb = [System.Text.StringBuilder]::new($currentLine.Length)
+                    foreach ($ch in $currentLine.ToCharArray()) {
+                        $idx = $cmd.Source.IndexOf($ch)
+                        if ($idx -ge 0) {
+                            [void]$sb.Append($cmd.Dest[$idx])
+                        } else {
+                            [void]$sb.Append($ch)
+                        }
+                    }
+                    $currentLine = $sb.ToString()
+                }
+            }
+        }
+
+        @{
+            Line    = $currentLine
+            Deleted = $deleted
+            Printed = $printed
+        }
+    }
+
+    # --- File mode (including in-place) ---
+    if ($operands.Count -gt 0) {
+        foreach ($filePath in $operands) {
+            if (-not (Test-Path -LiteralPath $filePath)) {
+                Write-Error -Message "sed: ${filePath}: No such file or directory" -ErrorAction Continue
+                continue
+            }
+
+            $bytes = [System.IO.File]::ReadAllBytes($filePath)
+            $byteOffset = 0
+            if ($bytes.Length -ge 3 -and $bytes[0] -eq 0xEF -and $bytes[1] -eq 0xBB -and $bytes[2] -eq 0xBF) {
+                $byteOffset = 3
+            }
+            $rawText = [System.Text.Encoding]::UTF8.GetString($bytes, $byteOffset, $bytes.Length - $byteOffset)
+            $rawText = $rawText -replace "`r`n", "`n"
+            $hadTrailingNewline = $rawText.EndsWith("`n")
+            if ($hadTrailingNewline) {
+                $rawText = $rawText.Substring(0, $rawText.Length - 1)
+            }
+            $lines = $rawText.Split("`n")
+
+            $outputLines = [System.Collections.Generic.List[string]]::new()
+            for ($li = 0; $li -lt $lines.Count; $li++) {
+                $result = & $applyCommands $lines[$li] ($li + 1) $lines.Count $lines
+                if (-not $result.Deleted) {
+                    if (-not $suppressDefault) {
+                        $outputLines.Add($result.Line)
+                    }
+                    if ($result.Printed) {
+                        $outputLines.Add($result.Line)
+                    }
+                }
+            }
+
+            if ($inPlace) {
+                $outText = ($outputLines -join "`n")
+                if ($hadTrailingNewline) { $outText += "`n" }
+                [System.IO.File]::WriteAllText($filePath, $outText, [System.Text.Encoding]::UTF8)
+            } else {
+                foreach ($outLine in $outputLines) {
+                    New-BashObject -BashText "$outLine`n"
+                }
+            }
+        }
+        return
+    }
+
+    # --- Pipeline mode ---
+    if ($pipelineInput.Count -eq 0) { return }
+
+    # Collect all lines for address matching that needs total count
+    $items = @($pipelineInput)
+    $allTexts = [string[]]::new($items.Count)
+    for ($idx = 0; $idx -lt $items.Count; $idx++) {
+        $text = Get-BashText -InputObject $items[$idx]
+        $allTexts[$idx] = $text -replace "`n$", ''
+    }
+
+    for ($idx = 0; $idx -lt $items.Count; $idx++) {
+        $lineText = $allTexts[$idx]
+        $result = & $applyCommands $lineText ($idx + 1) $items.Count $allTexts
+
+        if ($result.Deleted) { continue }
+
+        # Pipeline bridge: modify BashText on the original object
+        $item = $items[$idx]
+        if ($null -ne $item.PSObject -and $null -ne $item.PSObject.Properties['BashText']) {
+            $item.BashText = "$($result.Line)`n"
+        }
+
+        if (-not $suppressDefault) {
+            $item
+        }
+        if ($result.Printed) {
+            $item
+        }
+    }
+}
+
+function ConvertFrom-SedExpression {
+    [CmdletBinding()]
+    [OutputType([hashtable])]
+    param(
+        [Parameter(Mandatory)]
+        [string]$Expression,
+
+        [Parameter()]
+        [bool]$ExtendedRegex = $false
+    )
+
+    $addr = $null
+    $pos = 0
+
+    # Parse address prefix
+    if ($Expression.Length -gt 0 -and $Expression[$pos] -eq '/') {
+        # /pattern/ address
+        $pos++
+        $endSlash = $Expression.IndexOf('/', $pos)
+        if ($endSlash -lt 0) { throw "sed: unterminated address regex" }
+        $addr = @{ Type = 'regex'; Pattern = $Expression.Substring($pos, $endSlash - $pos) }
+        $pos = $endSlash + 1
+
+        # Check for range: /start/,/end/
+        if ($pos -lt $Expression.Length -and $Expression[$pos] -eq ',') {
+            $pos++
+            if ($pos -lt $Expression.Length -and $Expression[$pos] -eq '/') {
+                $pos++
+                $endSlash2 = $Expression.IndexOf('/', $pos)
+                if ($endSlash2 -lt 0) { throw "sed: unterminated address regex" }
+                $addr = @{
+                    Type         = 'range_regex'
+                    StartPattern = $addr.Pattern
+                    EndPattern   = $Expression.Substring($pos, $endSlash2 - $pos)
+                }
+                $pos = $endSlash2 + 1
+            }
+        }
+    } elseif ($Expression.Length -gt 0 -and $Expression[$pos] -match '^\d') {
+        # Numeric address
+        $numStr = ''
+        while ($pos -lt $Expression.Length -and $Expression[$pos] -match '\d') {
+            $numStr += $Expression[$pos]
+            $pos++
+        }
+        $startNum = [int]$numStr
+
+        if ($pos -lt $Expression.Length -and $Expression[$pos] -eq ',') {
+            $pos++
+            if ($pos -lt $Expression.Length -and $Expression[$pos] -eq '$') {
+                $addr = @{ Type = 'range_num'; Start = $startNum; End = [int]::MaxValue }
+                $pos++
+            } else {
+                $numStr2 = ''
+                while ($pos -lt $Expression.Length -and $Expression[$pos] -match '\d') {
+                    $numStr2 += $Expression[$pos]
+                    $pos++
+                }
+                $addr = @{ Type = 'range_num'; Start = $startNum; End = [int]$numStr2 }
+            }
+        } else {
+            $addr = @{ Type = 'line'; Line = $startNum }
+        }
+    }
+
+    $remaining = $Expression.Substring($pos)
+
+    # Parse command
+    if ($remaining.Length -eq 0) {
+        throw "sed: missing command"
+    }
+
+    $cmdChar = $remaining[0]
+
+    switch ($cmdChar) {
+        's' {
+            $delim = $remaining[1]
+            $parts = [System.Collections.Generic.List[string]]::new()
+            $current = [System.Text.StringBuilder]::new()
+            $escaped = $false
+            for ($ci = 2; $ci -lt $remaining.Length; $ci++) {
+                $c = $remaining[$ci]
+                if ($escaped) {
+                    if ($c -ne $delim) { [void]$current.Append('\') }
+                    [void]$current.Append($c)
+                    $escaped = $false
+                    continue
+                }
+                if ($c -eq '\') {
+                    $escaped = $true
+                    continue
+                }
+                if ($c -eq $delim) {
+                    $parts.Add($current.ToString())
+                    $current = [System.Text.StringBuilder]::new()
+                    continue
+                }
+                [void]$current.Append($c)
+            }
+            $parts.Add($current.ToString())
+
+            if ($parts.Count -lt 2) { throw "sed: bad substitution" }
+
+            $searchPattern = $parts[0]
+            $replacement = $parts[1]
+            $flags = if ($parts.Count -gt 2) { $parts[2] } else { '' }
+            $global = $flags.Contains('g')
+
+            $regexOpts = [System.Text.RegularExpressions.RegexOptions]::None
+            if ($flags.Contains('I') -or $flags.Contains('i')) {
+                $regexOpts = $regexOpts -bor [System.Text.RegularExpressions.RegexOptions]::IgnoreCase
+            }
+
+            if (-not $ExtendedRegex) {
+                $searchPattern = $searchPattern -replace '(?<!\\)\(', '\(' -replace '(?<!\\)\)', '\)' -replace '(?<!\\)\{', '\{' -replace '(?<!\\)\}', '\}' -replace '(?<!\\)\|', '\|' -replace '(?<!\\)\+', '\+' -replace '(?<!\\)\?', '\?'
+            }
+
+            $regex = [regex]::new($searchPattern, $regexOpts)
+
+            @{
+                Type        = 's'
+                Address     = $addr
+                Regex       = $regex
+                Replacement = $replacement
+                Global      = $global
+            }
+        }
+        'd' {
+            @{
+                Type    = 'd'
+                Address = $addr
+            }
+        }
+        'p' {
+            @{
+                Type    = 'p'
+                Address = $addr
+            }
+        }
+        'y' {
+            $delim = $remaining[1]
+            $parts = $remaining.Substring(2).Split($delim)
+            if ($parts.Count -lt 2) { throw "sed: bad transliteration" }
+            $source = $parts[0]
+            $dest = $parts[1]
+            if ($source.Length -ne $dest.Length) {
+                throw "sed: y: source and dest must be the same length"
+            }
+            @{
+                Type    = 'y'
+                Address = $addr
+                Source  = $source
+                Dest    = $dest
+            }
+        }
+        default {
+            throw "sed: unsupported command '$cmdChar'"
+        }
+    }
+}
+
+function Test-SedAddress {
+    [CmdletBinding()]
+    [OutputType([bool])]
+    param(
+        [Parameter(Mandatory)]
+        [hashtable]$Cmd,
+
+        [Parameter(Mandatory)]
+        [AllowEmptyString()]
+        [string]$Line,
+
+        [Parameter(Mandatory)]
+        [int]$LineNum,
+
+        [Parameter(Mandatory)]
+        [int]$TotalLines,
+
+        [Parameter()]
+        [string[]]$AllLines
+    )
+
+    $addr = $Cmd.Address
+    if ($null -eq $addr) { return $true }
+
+    switch ($addr.Type) {
+        'regex' {
+            return [regex]::IsMatch($Line, $addr.Pattern)
+        }
+        'line' {
+            return $LineNum -eq $addr.Line
+        }
+        'range_num' {
+            return ($LineNum -ge $addr.Start -and $LineNum -le $addr.End)
+        }
+        'range_regex' {
+            $inRange = $false
+            $rangeActive = $false
+            for ($ri = 0; $ri -lt $AllLines.Count; $ri++) {
+                if (-not $rangeActive) {
+                    if ([regex]::IsMatch($AllLines[$ri], $addr.StartPattern)) {
+                        $rangeActive = $true
+                    }
+                }
+                if ($rangeActive -and ($ri + 1) -eq $LineNum) {
+                    $inRange = $true
+                }
+                if ($rangeActive -and ($ri + 1) -ne $LineNum -and
+                    [regex]::IsMatch($AllLines[$ri], $addr.EndPattern)) {
+                    $rangeActive = $false
+                }
+                if ($rangeActive -and ($ri + 1) -eq $LineNum -and
+                    [regex]::IsMatch($AllLines[$ri], $addr.EndPattern)) {
+                    $rangeActive = $false
+                }
+                if (($ri + 1) -gt $LineNum) { break }
+            }
+            return $inRange
+        }
+    }
+    return $false
+}
+
 # --- Aliases ---
 
 Set-Alias -Name 'echo'   -Value 'Invoke-BashEcho'   -Force -Scope Global -Option AllScope
@@ -2948,3 +3374,4 @@ Set-Alias -Name 'rmdir'   -Value 'Invoke-BashRmdir'   -Force -Scope Global -Opti
 Set-Alias -Name 'touch'   -Value 'Invoke-BashTouch'   -Force -Scope Global -Option AllScope
 Set-Alias -Name 'ln'      -Value 'Invoke-BashLn'      -Force -Scope Global -Option AllScope
 Set-Alias -Name 'ps'      -Value 'Invoke-BashPs'      -Force -Scope Global -Option AllScope
+Set-Alias -Name 'sed'     -Value 'Invoke-BashSed'     -Force -Scope Global -Option AllScope

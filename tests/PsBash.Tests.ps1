@@ -2122,6 +2122,167 @@ Describe 'Invoke-BashPs — Pipeline Bridge' {
     }
 }
 
+# ── sed Tests ──
+
+Describe 'Invoke-BashSed — Basic Substitution' {
+    It 'echo hello world | sed s/world/earth/ -> hello earth' {
+        $result = @(Invoke-BashEcho 'hello world' | Invoke-BashSed 's/world/earth/')
+        $result.Count | Should -Be 1
+        ($result[0].BashText -replace "`n$", '') | Should -Be 'hello earth'
+    }
+
+    It 'substitutes first occurrence only by default' {
+        $result = @(Invoke-BashEcho 'aaa' | Invoke-BashSed 's/a/b/')
+        ($result[0].BashText -replace "`n$", '') | Should -Be 'baa'
+    }
+
+    It 's///g replaces all occurrences' {
+        $result = @(Invoke-BashEcho 'aaa' | Invoke-BashSed 's/a/b/g')
+        ($result[0].BashText -replace "`n$", '') | Should -Be 'bbb'
+    }
+}
+
+Describe 'Invoke-BashSed — File Mode' {
+    BeforeEach {
+        $testDir = Join-Path ([System.IO.Path]::GetTempPath()) "psbash-sed-$([guid]::NewGuid().ToString('N').Substring(0,8))"
+        New-Item -ItemType Directory -Path $testDir -Force | Out-Null
+    }
+    AfterEach {
+        if (Test-Path $testDir) { Remove-Item -Recurse -Force $testDir }
+    }
+
+    It 'sed s/old/new/g file.txt replaces globally in file' {
+        $file = Join-Path $testDir 'test.txt'
+        Set-Content -Path $file -Value "old is old`nold again" -NoNewline
+        $results = @(Invoke-BashSed 's/old/new/g' $file)
+        $results.Count | Should -Be 2
+        ($results[0].BashText -replace "`n$", '') | Should -Be 'new is new'
+        ($results[1].BashText -replace "`n$", '') | Should -Be 'new again'
+    }
+
+    It 'sed -n 2,4p file.txt prints only lines 2-4' {
+        $file = Join-Path $testDir 'lines.txt'
+        Set-Content -Path $file -Value "line1`nline2`nline3`nline4`nline5" -NoNewline
+        $results = @(Invoke-BashSed -n '2,4p' $file)
+        $results.Count | Should -Be 3
+        ($results[0].BashText -replace "`n$", '') | Should -Be 'line2'
+        ($results[1].BashText -replace "`n$", '') | Should -Be 'line3'
+        ($results[2].BashText -replace "`n$", '') | Should -Be 'line4'
+    }
+
+    It 'sed /pattern/d deletes matching lines' {
+        $file = Join-Path $testDir 'del.txt'
+        Set-Content -Path $file -Value "keep`nremove this`nkeep too" -NoNewline
+        $results = @(Invoke-BashSed '/remove/d' $file)
+        $results.Count | Should -Be 2
+        ($results[0].BashText -replace "`n$", '') | Should -Be 'keep'
+        ($results[1].BashText -replace "`n$", '') | Should -Be 'keep too'
+    }
+
+    It 'sed -i s/old/new/g modifies file in place' {
+        $file = Join-Path $testDir 'inplace.txt'
+        Set-Content -Path $file -Value "old text`nold line" -NoNewline
+        $results = @(Invoke-BashSed -i 's/old/new/g' $file)
+        $results.Count | Should -Be 0
+        $content = Get-Content -Raw $file
+        $content | Should -BeLike '*new text*'
+        $content | Should -BeLike '*new line*'
+    }
+}
+
+Describe 'Invoke-BashSed — Extended Regex' {
+    It 'sed -E s/(foo|bar)/baz/g replaces alternation' {
+        $result = @(Invoke-BashEcho 'foo and bar' | Invoke-BashSed -E 's/(foo|bar)/baz/g')
+        ($result[0].BashText -replace "`n$", '') | Should -Be 'baz and baz'
+    }
+}
+
+Describe 'Invoke-BashSed — Transliterate' {
+    It 'sed y/abc/xyz/ transliterates characters' {
+        $result = @(Invoke-BashEcho 'aabbcc' | Invoke-BashSed 'y/abc/xyz/')
+        ($result[0].BashText -replace "`n$", '') | Should -Be 'xxyyzz'
+    }
+
+    It 'transliterate leaves non-mapped characters unchanged' {
+        $result = @(Invoke-BashEcho 'abcdef' | Invoke-BashSed 'y/abc/xyz/')
+        ($result[0].BashText -replace "`n$", '') | Should -Be 'xyzdef'
+    }
+}
+
+Describe 'Invoke-BashSed — Range Delete' {
+    BeforeEach {
+        $testDir = Join-Path ([System.IO.Path]::GetTempPath()) "psbash-sed-range-$([guid]::NewGuid().ToString('N').Substring(0,8))"
+        New-Item -ItemType Directory -Path $testDir -Force | Out-Null
+    }
+    AfterEach {
+        if (Test-Path $testDir) { Remove-Item -Recurse -Force $testDir }
+    }
+
+    It 'sed /start/,/end/d deletes range of lines' {
+        $file = Join-Path $testDir 'range.txt'
+        Set-Content -Path $file -Value "before`nstart here`nmiddle`nend here`nafter" -NoNewline
+        $results = @(Invoke-BashSed '/start/,/end/d' $file)
+        $results.Count | Should -Be 2
+        ($results[0].BashText -replace "`n$", '') | Should -Be 'before'
+        ($results[1].BashText -replace "`n$", '') | Should -Be 'after'
+    }
+}
+
+Describe 'Invoke-BashSed — Pipeline Bridge' {
+    It 'ls | sed transforms BashText but preserves object type' {
+        $testDir = Join-Path ([System.IO.Path]::GetTempPath()) "psbash-sed-ls-$([guid]::NewGuid().ToString('N').Substring(0,8))"
+        New-Item -ItemType Directory -Path $testDir -Force | Out-Null
+        try {
+            Set-Content -Path (Join-Path $testDir 'test.txt') -Value 'content'
+            $results = @(Invoke-BashLs -la $testDir | Invoke-BashSed 's/\.txt/.bak/')
+            $txtEntry = $results | Where-Object {
+                $null -ne $_.PSObject.Properties['BashText'] -and
+                $_.BashText -match '\.bak'
+            }
+            $txtEntry | Should -Not -BeNullOrEmpty
+            $txtEntry.PSObject.TypeNames[0] | Should -Be 'PsBash.LsEntry'
+        } finally {
+            Remove-Item -Recurse -Force $testDir
+        }
+    }
+
+    It 'pipeline sed preserves original object properties' {
+        $obj = [PSCustomObject]@{
+            PSTypeName = 'PsBash.TestObj'
+            BashText   = "hello world`n"
+            Name       = 'original'
+        }
+        $obj | Add-Member -MemberType ScriptMethod -Name 'ToString' -Value { $this.BashText } -Force
+        $results = @($obj | Invoke-BashSed 's/world/earth/')
+        $results.Count | Should -Be 1
+        $results[0].Name | Should -Be 'original'
+        ($results[0].BashText -replace "`n$", '') | Should -Be 'hello earth'
+        $results[0].PSObject.TypeNames[0] | Should -Be 'PsBash.TestObj'
+    }
+
+    It 'pipeline sed /pattern/d filters out matching objects' {
+        $obj1 = New-BashObject -BashText "keep this`n"
+        $obj2 = New-BashObject -BashText "remove this`n"
+        $obj3 = New-BashObject -BashText "keep also`n"
+        $results = @($obj1, $obj2, $obj3 | Invoke-BashSed '/remove/d')
+        $results.Count | Should -Be 2
+    }
+}
+
+Describe 'Invoke-BashSed — Multiple Expressions' {
+    It 'sed -e expr1 -e expr2 applies both' {
+        $result = @(Invoke-BashEcho 'hello world' | Invoke-BashSed -e 's/hello/hi/' -e 's/world/earth/')
+        ($result[0].BashText -replace "`n$", '') | Should -Be 'hi earth'
+    }
+}
+
+Describe 'Invoke-BashSed — Alias' {
+    It 'sed alias works' {
+        $alias = Get-Alias -Name sed -Scope Global
+        $alias.Definition | Should -Be 'Invoke-BashSed'
+    }
+}
+
 Describe 'Invoke-BashPs — Numeric Properties' {
     It 'Memory and CPU are numeric on current platform' {
         $results = @(Invoke-BashPs aux)
