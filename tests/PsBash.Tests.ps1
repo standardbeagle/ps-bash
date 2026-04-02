@@ -6015,3 +6015,231 @@ Describe 'Invoke-BashXan -- Help and Alias' {
         $alias.Definition | Should -Be 'Invoke-BashXan'
     }
 }
+
+# ── sleep ──
+
+Describe 'Invoke-BashSleep' {
+    It 'sleep 0 returns immediately' {
+        $elapsed = (Measure-Command { Invoke-BashSleep 0 }).TotalSeconds
+        $elapsed | Should -BeLessThan 1
+    }
+
+    It 'accepts fractional seconds' {
+        $elapsed = (Measure-Command { Invoke-BashSleep 0.1 }).TotalSeconds
+        $elapsed | Should -BeGreaterOrEqual 0.05
+        $elapsed | Should -BeLessThan 2
+    }
+
+    It 'accepts suffix s for seconds' {
+        $elapsed = (Measure-Command { Invoke-BashSleep '0s' }).TotalSeconds
+        $elapsed | Should -BeLessThan 1
+    }
+
+    It 'accepts suffix m for minutes' {
+        $elapsed = (Measure-Command { Invoke-BashSleep '0m' }).TotalSeconds
+        $elapsed | Should -BeLessThan 1
+    }
+
+    It 'errors on invalid duration' {
+        $result = Invoke-BashSleep 'abc' 2>&1
+        $errors = @($result | Where-Object { $_ -is [System.Management.Automation.ErrorRecord] })
+        $errors.Count | Should -BeGreaterThan 0
+    }
+
+    It 'errors on negative duration' {
+        $result = Invoke-BashSleep '-1' 2>&1
+        $errors = @($result | Where-Object { $_ -is [System.Management.Automation.ErrorRecord] })
+        $errors.Count | Should -BeGreaterThan 0
+    }
+}
+
+Describe 'Invoke-BashSleep -- Help and Alias' {
+    It 'returns help with --help' {
+        $result = Invoke-BashSleep --help
+        $result.BashText | Should -Match 'Usage: sleep'
+    }
+
+    It 'exports sleep alias' {
+        $alias = Get-Alias -Name sleep -Scope Global
+        $alias.Definition | Should -Be 'Invoke-BashSleep'
+    }
+}
+
+# ── time ──
+
+Describe 'Invoke-BashTime' {
+    It 'measures echo command and returns timing info' {
+        $result = Invoke-BashTime 'Invoke-BashEcho' 'hello'
+        $result.PSObject.Properties.Name | Should -Contain 'RealTime'
+        $result.PSObject.Properties.Name | Should -Contain 'Command'
+        $result.PSObject.Properties.Name | Should -Contain 'ExitCode'
+        $result.PSObject.Properties.Name | Should -Contain 'BashText'
+        $result.RealTime | Should -BeOfType [timespan]
+        $result.ExitCode | Should -Be 0
+    }
+
+    It 'captures command output in BashText' {
+        $result = Invoke-BashTime 'Invoke-BashEcho' 'hello'
+        $result.BashText | Should -Match 'hello'
+    }
+
+    It 'measures a slow command' {
+        $result = Invoke-BashTime 'Invoke-BashSleep' '0.1'
+        $result.RealTime.TotalMilliseconds | Should -BeGreaterOrEqual 50
+    }
+
+    It 'sets non-zero exit code on failure' {
+        $result = Invoke-BashTime 'Get-Item' '/nonexistent_path_xyz' 2>&1
+        # Filter to get the timing result (not error records)
+        $timingResult = @($result | Where-Object { $_ -isnot [System.Management.Automation.ErrorRecord] })
+        if ($timingResult.Count -gt 0) {
+            $timingResult[0].ExitCode | Should -Be 1
+        }
+    }
+
+    It 'errors with no arguments' {
+        $result = Invoke-BashTime 2>&1
+        $errors = @($result | Where-Object { $_ -is [System.Management.Automation.ErrorRecord] })
+        $errors.Count | Should -BeGreaterThan 0
+    }
+}
+
+Describe 'Invoke-BashTime -- Help and Alias' {
+    It 'returns help with --help' {
+        $result = Invoke-BashTime --help
+        $result.BashText | Should -Match 'Usage: time'
+    }
+
+    It 'exports time alias' {
+        $alias = Get-Alias -Name time -Scope Global
+        $alias.Definition | Should -Be 'Invoke-BashTime'
+    }
+}
+
+# ── which ──
+
+Describe 'Invoke-BashWhich' {
+    It 'finds pwsh command' {
+        $result = Invoke-BashWhich 'pwsh'
+        $result.BashText | Should -Not -BeNullOrEmpty
+        $result.PSObject.Properties.Name | Should -Contain 'Command'
+        $result.PSObject.Properties.Name | Should -Contain 'Path'
+        $result.PSObject.Properties.Name | Should -Contain 'Type'
+    }
+
+    It 'finds echo alias' {
+        $result = Invoke-BashWhich 'echo'
+        $result.BashText | Should -Not -BeNullOrEmpty
+    }
+
+    It 'shows all matches with -a' {
+        $results = @(Invoke-BashWhich '-a' 'echo')
+        $results.Count | Should -BeGreaterOrEqual 1
+    }
+
+    It 'errors on unknown command' {
+        $result = Invoke-BashWhich 'nonexistent_cmd_xyz_123' 2>&1
+        $errors = @($result | Where-Object { $_ -is [System.Management.Automation.ErrorRecord] })
+        $errors.Count | Should -BeGreaterThan 0
+    }
+
+    It 'errors with no arguments' {
+        $result = Invoke-BashWhich 2>&1
+        $errors = @($result | Where-Object { $_ -is [System.Management.Automation.ErrorRecord] })
+        $errors.Count | Should -BeGreaterThan 0
+    }
+}
+
+Describe 'Invoke-BashWhich -- Help and Alias' {
+    It 'returns help with --help' {
+        $result = Invoke-BashWhich --help
+        $result.BashText | Should -Match 'Usage: which'
+    }
+
+    It 'exports which alias' {
+        $alias = Get-Alias -Name which -Scope Global
+        $alias.Definition | Should -Be 'Invoke-BashWhich'
+    }
+}
+
+# ── alias / unalias ──
+
+Describe 'Invoke-BashAlias' {
+    BeforeEach {
+        Invoke-BashAlias '-u' '-a'
+    }
+
+    It 'lists empty aliases initially' {
+        $results = @(Invoke-BashAlias)
+        $results.Count | Should -Be 0
+    }
+
+    It 'creates an alias with name=value syntax' {
+        Invoke-BashAlias 'foo=bar'
+        $result = @(Invoke-BashAlias)
+        $result.Count | Should -Be 1
+        $result[0].Name | Should -Be 'foo'
+        $result[0].Value | Should -Be 'bar'
+        $result[0].BashText | Should -Be "alias foo='bar'"
+    }
+
+    It 'shows a specific alias' {
+        Invoke-BashAlias 'greeting=hello world'
+        $result = @(Invoke-BashAlias 'greeting')
+        $result.Count | Should -Be 1
+        $result[0].Name | Should -Be 'greeting'
+        $result[0].Value | Should -Be 'hello world'
+    }
+
+    It 'lists all aliases with -p' {
+        Invoke-BashAlias 'a=1'
+        Invoke-BashAlias 'b=2'
+        $results = @(Invoke-BashAlias '-p')
+        $results.Count | Should -Be 2
+    }
+
+    It 'removes an alias with unalias' {
+        Invoke-BashAlias 'foo=bar'
+        Invoke-BashAlias '-u' 'foo'
+        $results = @(Invoke-BashAlias)
+        $results.Count | Should -Be 0
+    }
+
+    It 'removes all aliases with unalias -a' {
+        Invoke-BashAlias 'a=1'
+        Invoke-BashAlias 'b=2'
+        Invoke-BashAlias '-u' '-a'
+        $results = @(Invoke-BashAlias)
+        $results.Count | Should -Be 0
+    }
+
+    It 'errors on unalias of nonexistent alias' {
+        $result = Invoke-BashAlias '-u' 'nonexistent' 2>&1
+        $errors = @($result | Where-Object { $_ -is [System.Management.Automation.ErrorRecord] })
+        $errors.Count | Should -BeGreaterThan 0
+    }
+
+    It 'overwrites existing alias' {
+        Invoke-BashAlias 'foo=bar'
+        Invoke-BashAlias 'foo=baz'
+        $result = @(Invoke-BashAlias 'foo')
+        $result[0].Value | Should -Be 'baz'
+    }
+}
+
+Describe 'Invoke-BashAlias -- Help and Alias' {
+    It 'returns help with --help' {
+        $result = Invoke-BashAlias --help
+        $result.BashText | Should -Match 'Usage: alias'
+    }
+
+    It 'exports alias command alias' {
+        $a = Get-Alias -Name 'balias' -Scope Global
+        $a.Definition | Should -Be 'Invoke-BashAlias'
+    }
+
+    It 'exports unalias command alias' {
+        $a = Get-Alias -Name 'unalias' -Scope Global
+        $a.Definition | Should -Be 'Invoke-BashAlias'
+    }
+}

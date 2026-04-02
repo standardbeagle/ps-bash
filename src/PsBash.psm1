@@ -9085,6 +9085,231 @@ function Invoke-BashXan {
     }
 }
 
+# --- sleep ---
+
+function Invoke-BashSleep {
+    $Arguments = [string[]]$args
+    if ($Arguments -contains '--help') { return Show-BashHelp 'sleep' }
+
+    if ($Arguments.Count -eq 0) {
+        Write-Error 'sleep: missing operand'
+        return
+    }
+
+    $totalSeconds = 0.0
+    foreach ($arg in $Arguments) {
+        $multiplier = 1.0
+        $numStr = $arg
+        if ($arg -match '^([\d.]+)([smhd])$') {
+            $numStr = $Matches[1]
+            switch ($Matches[2]) {
+                's' { $multiplier = 1.0 }
+                'm' { $multiplier = 60.0 }
+                'h' { $multiplier = 3600.0 }
+                'd' { $multiplier = 86400.0 }
+            }
+        }
+        $val = 0.0
+        if (-not [double]::TryParse($numStr, [ref]$val)) {
+            Write-Error "sleep: invalid time interval '$arg'"
+            return
+        }
+        if ($val -lt 0) {
+            Write-Error "sleep: invalid time interval '$arg'"
+            return
+        }
+        $totalSeconds += $val * $multiplier
+    }
+
+    if ($totalSeconds -gt 0) {
+        $ms = [int]([Math]::Ceiling($totalSeconds * 1000))
+        Start-Sleep -Milliseconds $ms
+    }
+}
+
+# --- time ---
+
+function Invoke-BashTime {
+    $Arguments = [string[]]$args
+    if ($Arguments -contains '--help') { return Show-BashHelp 'time' }
+
+    if ($Arguments.Count -eq 0) {
+        Write-Error 'time: missing command'
+        return
+    }
+
+    $cmd = $Arguments[0]
+    $cmdArgs = @()
+    if ($Arguments.Count -gt 1) {
+        $cmdArgs = $Arguments[1..($Arguments.Count - 1)]
+    }
+
+    $sw = [System.Diagnostics.Stopwatch]::StartNew()
+    $exitCode = 0
+    $outputText = ''
+    try {
+        $output = @(& $cmd @cmdArgs 2>&1)
+        $sw.Stop()
+        $errors = @($output | Where-Object { $_ -is [System.Management.Automation.ErrorRecord] })
+        $normal = @($output | Where-Object { $_ -isnot [System.Management.Automation.ErrorRecord] })
+        foreach ($e in $errors) { Write-Error $e }
+        if ($errors.Count -gt 0) { $exitCode = 1 }
+        $textParts = @(foreach ($item in $normal) {
+            if ($item.PSObject.Properties['BashText']) { $item.BashText } else { "$item" }
+        })
+        $outputText = $textParts -join "`n"
+    } catch {
+        $sw.Stop()
+        $exitCode = 1
+        Write-Error $_
+    }
+
+    $realTime = $sw.Elapsed
+    $formatted = 'real    {0:N3}s' -f $realTime.TotalSeconds
+    [Console]::Error.WriteLine($formatted)
+
+    $obj = [PSCustomObject]@{
+        PSTypeName = 'PsBash.TimeOutput'
+        RealTime   = $realTime
+        Command    = $cmd
+        ExitCode   = $exitCode
+        BashText   = $outputText
+    }
+    $obj | Add-Member -MemberType ScriptMethod -Name 'ToString' -Value {
+        $this.BashText
+    } -Force
+    $obj
+}
+
+# --- which ---
+
+function Invoke-BashWhich {
+    $Arguments = [string[]]$args
+    if ($Arguments -contains '--help') { return Show-BashHelp 'which' }
+
+    $showAll = $false
+    $operands = [System.Collections.Generic.List[string]]::new()
+    foreach ($arg in $Arguments) {
+        if ($arg -ceq '-a') { $showAll = $true }
+        else { $operands.Add($arg) }
+    }
+
+    if ($operands.Count -eq 0) {
+        Write-Error 'which: missing operand'
+        return
+    }
+
+    foreach ($name in $operands) {
+        $cmds = @(Get-Command $name -ErrorAction SilentlyContinue)
+        if ($cmds.Count -eq 0) {
+            Write-Error "which: no $name in PATH"
+            continue
+        }
+
+        $toShow = if ($showAll) { $cmds } else { @($cmds[0]) }
+        foreach ($c in $toShow) {
+            $path = if ($c.Source) { $c.Source }
+                    elseif ($c.Definition) { $c.Definition }
+                    else { $name }
+            $type = $c.CommandType.ToString().ToLower()
+            $obj = [PSCustomObject]@{
+                PSTypeName = 'PsBash.WhichOutput'
+                Command    = $name
+                Path       = $path
+                Type       = $type
+                BashText   = $path
+            }
+            $obj | Add-Member -MemberType ScriptMethod -Name 'ToString' -Value {
+                $this.BashText
+            } -Force
+            $obj
+        }
+    }
+}
+
+# --- alias / unalias ---
+
+$script:BashUserAliases = [System.Collections.Generic.Dictionary[string,string]]::new(
+    [System.StringComparer]::Ordinal
+)
+
+function Invoke-BashAlias {
+    $Arguments = [string[]]$args
+    if ($Arguments -contains '--help') { return Show-BashHelp 'alias' }
+
+    $unaliasMode = $false
+    $removeAll = $false
+    $operands = [System.Collections.Generic.List[string]]::new()
+
+    $i = 0
+    while ($i -lt $Arguments.Count) {
+        $arg = $Arguments[$i]
+        if ($arg -ceq '-u') {
+            $unaliasMode = $true
+        } elseif ($arg -ceq '-a' -and $unaliasMode) {
+            $removeAll = $true
+        } elseif ($arg -ceq '-p') {
+            # list mode, same as bare alias
+        } else {
+            $operands.Add($arg)
+        }
+        $i++
+    }
+
+    if ($unaliasMode) {
+        if ($removeAll) {
+            $script:BashUserAliases.Clear()
+            return
+        }
+        foreach ($name in $operands) {
+            if (-not $script:BashUserAliases.ContainsKey($name)) {
+                Write-Error "unalias: ${name}: not found"
+                continue
+            }
+            $script:BashUserAliases.Remove($name) | Out-Null
+        }
+        return
+    }
+
+    if ($operands.Count -eq 0) {
+        foreach ($kvp in $script:BashUserAliases.GetEnumerator()) {
+            $obj = [PSCustomObject]@{
+                PSTypeName = 'PsBash.AliasOutput'
+                Name       = $kvp.Key
+                Value      = $kvp.Value
+                BashText   = "alias $($kvp.Key)='$($kvp.Value)'"
+            }
+            $obj | Add-Member -MemberType ScriptMethod -Name 'ToString' -Value {
+                $this.BashText
+            } -Force
+            $obj
+        }
+        return
+    }
+
+    foreach ($arg in $operands) {
+        if ($arg -match '^([^=]+)=(.*)$') {
+            $script:BashUserAliases[$Matches[1]] = $Matches[2]
+        } else {
+            if ($script:BashUserAliases.ContainsKey($arg)) {
+                $val = $script:BashUserAliases[$arg]
+                $obj = [PSCustomObject]@{
+                    PSTypeName = 'PsBash.AliasOutput'
+                    Name       = $arg
+                    Value      = $val
+                    BashText   = "alias $arg='$val'"
+                }
+                $obj | Add-Member -MemberType ScriptMethod -Name 'ToString' -Value {
+                    $this.BashText
+                } -Force
+                $obj
+            } else {
+                Write-Error "alias: ${arg}: not found"
+            }
+        }
+    }
+}
+
 # --- Help Support ---
 
 $script:BashHelpSpecs = @{
@@ -9149,6 +9374,10 @@ $script:BashHelpSpecs = @{
     'tar'      = 'Store and extract files from an archive.'
     'yq'       = 'Command-line YAML/JSON processor.'
     'xan'      = 'CSV toolkit for column selection, search, and display.'
+    'sleep'    = 'Delay for a specified amount of time.'
+    'time'     = 'Run programs and summarize system resource usage.'
+    'which'    = 'Locate a command.'
+    'alias'    = 'Define or display aliases.'
 }
 
 function Test-BashHelpFlag {
@@ -9300,6 +9529,10 @@ $script:BashFlagSpecs = @{
         @('count', 'count rows'),        @('select', 'select columns'),
         @('search', 'search rows'),      @('table', 'pretty table display')
     )
+    'sleep'    = @( @('NUMBER', 'seconds to sleep (suffix: s/m/h/d)') )
+    'time'     = @( @('COMMAND', 'command to time') )
+    'which'    = @( @('-a', 'show all matches') )
+    'alias'    = @( @('-p', 'list all aliases'), @('-u', 'unalias mode'), @('-a', 'remove all (with -u)') )
 }
 
 $script:BashCompleters = @{}
@@ -9404,3 +9637,8 @@ Set-Alias -Name 'zcat'     -Value 'Invoke-BashGzip'     -Force -Scope Global -Op
 Set-Alias -Name 'tar'      -Value 'Invoke-BashTar'      -Force -Scope Global -Option AllScope
 Set-Alias -Name 'yq'       -Value 'Invoke-BashYq'       -Force -Scope Global -Option AllScope
 Set-Alias -Name 'xan'      -Value 'Invoke-BashXan'      -Force -Scope Global -Option AllScope
+Set-Alias -Name 'sleep'    -Value 'Invoke-BashSleep'    -Force -Scope Global -Option AllScope
+Set-Alias -Name 'time'     -Value 'Invoke-BashTime'     -Force -Scope Global -Option AllScope
+Set-Alias -Name 'which'    -Value 'Invoke-BashWhich'    -Force -Scope Global -Option AllScope
+Set-Alias -Name 'balias'   -Value 'Invoke-BashAlias'    -Force -Scope Global -Option AllScope
+Set-Alias -Name 'unalias'  -Value 'Invoke-BashAlias'    -Force -Scope Global -Option AllScope

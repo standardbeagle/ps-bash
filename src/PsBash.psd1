@@ -110,7 +110,9 @@ FunctionsToExport = 'Invoke-BashEcho', 'Invoke-BashPrintf', 'Get-BashPlatform',
                'ConvertTo-SimpleYaml',
                'Invoke-BashXan',
                'Register-BashCompletions',
-               'Test-BashHelpFlag', 'Show-BashHelp'
+               'Test-BashHelpFlag', 'Show-BashHelp',
+               'Invoke-BashSleep', 'Invoke-BashTime', 'Invoke-BashWhich',
+               'Invoke-BashAlias'
 
 # Cmdlets to export from this module, for best performance, do not use wildcards and do not delete the entry, use an empty array if there are no cmdlets to export.
 CmdletsToExport = @()
@@ -131,7 +133,8 @@ AliasesToExport = 'echo', 'printf', 'ls', 'cat', 'grep', 'sort', 'head', 'tail',
                'base64', 'md5sum', 'sha1sum', 'sha256sum', 'file',
                'rg',
                'gzip', 'gunzip', 'zcat', 'tar',
-               'yq', 'xan'
+               'yq', 'xan',
+               'sleep', 'time', 'which', 'balias', 'unalias'
 
 # DSC resources to export from this module
 # DscResourcesToExport = @()
