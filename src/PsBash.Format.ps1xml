@@ -35,5 +35,22 @@
         </CustomEntries>
       </CustomControl>
     </View>
+    <View>
+      <Name>PsBash.CatLine</Name>
+      <ViewSelectedBy>
+        <TypeName>PsBash.CatLine</TypeName>
+      </ViewSelectedBy>
+      <CustomControl>
+        <CustomEntries>
+          <CustomEntry>
+            <CustomItem>
+              <ExpressionBinding>
+                <ScriptBlock>$_.BashText</ScriptBlock>
+              </ExpressionBinding>
+            </CustomItem>
+          </CustomEntry>
+        </CustomEntries>
+      </CustomControl>
+    </View>
   </ViewDefinitions>
 </Configuration>

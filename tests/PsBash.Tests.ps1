@@ -363,3 +363,145 @@ Describe 'Invoke-BashLs' {
         }
     }
 }
+
+Describe 'Invoke-BashCat' {
+    BeforeAll {
+        $catDir = Join-Path ([System.IO.Path]::GetTempPath()) "psbash-cat-test-$(Get-Random)"
+        New-Item -Path $catDir -ItemType Directory -Force | Out-Null
+
+        $file1 = Join-Path $catDir 'file1.txt'
+        $file2 = Join-Path $catDir 'file2.txt'
+        $tabFile = Join-Path $catDir 'tabs.txt'
+        $blankFile = Join-Path $catDir 'blanks.txt'
+
+        # Write files with explicit LF line endings for cross-platform consistency
+        [System.IO.File]::WriteAllText($file1, "hello`nworld`n", [System.Text.UTF8Encoding]::new($false))
+        [System.IO.File]::WriteAllText($file2, "foo`nbar`n", [System.Text.UTF8Encoding]::new($false))
+        [System.IO.File]::WriteAllText($tabFile, "col1`tcol2`nval1`tval2`n", [System.Text.UTF8Encoding]::new($false))
+        [System.IO.File]::WriteAllText($blankFile, "line1`n`n`nline2`n`nline3`n", [System.Text.UTF8Encoding]::new($false))
+    }
+
+    AfterAll {
+        Remove-Item -Path $catDir -Recurse -Force -ErrorAction SilentlyContinue
+    }
+
+    It 'cat file.txt returns one BashObject per line' {
+        $results = @(Invoke-BashCat $file1)
+        $results.Count | Should -Be 2
+        $results[0].PSTypeNames[0] | Should -Be 'PsBash.CatLine'
+        $results[0].Content | Should -Be 'hello'
+        $results[1].Content | Should -Be 'world'
+    }
+
+    It 'cat file.txt has LineNumber, Content, FileName, BashText' {
+        $results = @(Invoke-BashCat $file1)
+        $results[0].LineNumber | Should -Be 1
+        $results[0].Content | Should -Be 'hello'
+        $results[0].FileName | Should -Be $file1
+        $results[0].BashText | Should -Be 'hello'
+    }
+
+    It 'cat -n numbers all lines' {
+        $results = @(Invoke-BashCat -n $file1)
+        $results[0].BashText | Should -Be "     1`thello"
+        $results[1].BashText | Should -Be "     2`tworld"
+    }
+
+    It 'cat -b numbers only non-blank lines' {
+        $results = @(Invoke-BashCat -b $blankFile)
+        $numbered = $results | Where-Object { $_.BashText -match '^\s+\d' }
+        $blank = $results | Where-Object { $_.Content -eq '' }
+        $numbered.Count | Should -Be 3
+        $blank | ForEach-Object { $_.BashText | Should -Be '' }
+    }
+
+    It 'cat -s squeezes consecutive blank lines' {
+        $results = @(Invoke-BashCat -s $blankFile)
+        # Original: line1, '', '', line2, '', line3 => line1, '', line2, '', line3
+        $contents = $results | ForEach-Object { $_.Content }
+        # No two consecutive blank lines
+        for ($i = 0; $i -lt $contents.Count - 1; $i++) {
+            if ($contents[$i] -eq '') {
+                $contents[$i + 1] | Should -Not -Be ''
+            }
+        }
+    }
+
+    It 'cat -E shows $ at end of each line' {
+        $results = @(Invoke-BashCat -E $file1)
+        $results[0].BashText | Should -Be 'hello$'
+        $results[1].BashText | Should -Be 'world$'
+    }
+
+    It 'cat -T shows ^I for tabs' {
+        $results = @(Invoke-BashCat -T $tabFile)
+        $results[0].BashText | Should -Be 'col1^Icol2'
+        $results[1].BashText | Should -Be 'val1^Ival2'
+    }
+
+    It 'cat nonexistent.txt writes to stderr with exit code 1' {
+        $result = Invoke-BashCat '/nonexistent/path/xyz.txt' 2>&1
+        $errors = @($result | Where-Object { $_ -is [System.Management.Automation.ErrorRecord] })
+        $errors.Count | Should -BeGreaterThan 0
+        $errors[0].ToString() | Should -Match 'cat:.*No such file or directory'
+        $global:LASTEXITCODE | Should -Be 1
+    }
+
+    It 'cat file1.txt file2.txt concatenates' {
+        $results = @(Invoke-BashCat $file1 $file2)
+        $results.Count | Should -Be 4
+        $results[0].Content | Should -Be 'hello'
+        $results[1].Content | Should -Be 'world'
+        $results[2].Content | Should -Be 'foo'
+        $results[3].Content | Should -Be 'bar'
+        $results[2].FileName | Should -Be $file2
+    }
+
+    It 'pipeline input passes through (stdin mode)' {
+        $results = @('hello', 'world' | ForEach-Object { New-BashObject -BashText $_ } | Invoke-BashCat)
+        $results.Count | Should -Be 2
+        $results[0].Content | Should -Be 'hello'
+        $results[1].Content | Should -Be 'world'
+    }
+
+    It 'cat - reads from pipeline' {
+        $results = @('alpha', 'beta' | ForEach-Object { New-BashObject -BashText $_ } | Invoke-BashCat '-')
+        $results.Count | Should -Be 2
+        $results[0].Content | Should -Be 'alpha'
+        $results[1].Content | Should -Be 'beta'
+    }
+
+    It 'exports cat alias pointing to Invoke-BashCat' {
+        $alias = Get-Alias -Name cat -Scope Global
+        $alias.Definition | Should -Be 'Invoke-BashCat'
+    }
+
+    It 'handles CRLF line endings transparently' {
+        $crlfFile = Join-Path $catDir 'crlf.txt'
+        [System.IO.File]::WriteAllText($crlfFile, "line1`r`nline2`r`n", [System.Text.UTF8Encoding]::new($false))
+        $results = @(Invoke-BashCat $crlfFile)
+        $results[0].Content | Should -Be 'line1'
+        $results[1].Content | Should -Be 'line2'
+    }
+
+    It 'handles UTF-8 BOM transparently' {
+        $bomFile = Join-Path $catDir 'bom.txt'
+        [System.IO.File]::WriteAllText($bomFile, "bomtest`n", [System.Text.UTF8Encoding]::new($true))
+        $results = @(Invoke-BashCat $bomFile)
+        $results[0].Content | Should -Be 'bomtest'
+    }
+
+    It 'cat -n with blanks file numbers all lines including blank' {
+        $results = @(Invoke-BashCat -n $blankFile)
+        # All lines should be numbered sequentially
+        for ($i = 0; $i -lt $results.Count; $i++) {
+            $results[$i].LineNumber | Should -Be ($i + 1)
+            $results[$i].BashText | Should -Match "^\s+$($i + 1)`t"
+        }
+    }
+
+    It 'ToString returns BashText' {
+        $results = @(Invoke-BashCat $file1)
+        "$($results[0])" | Should -Be $results[0].BashText
+    }
+}

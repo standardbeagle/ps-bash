@@ -503,8 +503,131 @@ function Invoke-BashLs {
     }
 }
 
+# --- cat Command ---
+
+function Invoke-BashCat {
+    $Arguments = [string[]]$args
+    $pipelineInput = @($input)
+
+    $defs = New-FlagDefs -Entries @(
+        '-n', 'number all lines'
+        '-b', 'number non-blank lines'
+        '-s', 'squeeze blank lines'
+        '-E', 'show $ at line end'
+        '-T', 'show ^I for tabs'
+    )
+
+    $parsed = ConvertFrom-BashArgs -Arguments $Arguments -FlagDefs $defs
+
+    $numberAll     = $parsed.Flags['-n']
+    $numberNonBlank = $parsed.Flags['-b']
+    $squeezeBlanks = $parsed.Flags['-s']
+    $showEnds      = $parsed.Flags['-E']
+    $showTabs      = $parsed.Flags['-T']
+
+    $operands = $parsed.Operands
+    $readStdin = $operands.Count -eq 0 -or $operands -contains '-'
+
+    $lineNum = 0
+    $nonBlankNum = 0
+    $lastWasBlank = $false
+    $hadError = $false
+
+    $emitLine = {
+        param([string]$Content, [string]$FileName)
+
+        $isBlank = $Content -eq ''
+
+        if ($squeezeBlanks -and $isBlank -and $lastWasBlank) {
+            return
+        }
+        Set-Variable -Name lastWasBlank -Value $isBlank -Scope 1
+
+        $ln = (Get-Variable -Name lineNum -Scope 1).Value + 1
+        Set-Variable -Name lineNum -Value $ln -Scope 1
+
+        if (-not $isBlank) {
+            $nb = (Get-Variable -Name nonBlankNum -Scope 1).Value + 1
+            Set-Variable -Name nonBlankNum -Value $nb -Scope 1
+        }
+
+        $text = $Content
+
+        if ($showTabs) {
+            $text = $text -replace "`t", '^I'
+        }
+
+        if ($showEnds) {
+            $text = $text + '$'
+        }
+
+        if ($numberNonBlank) {
+            if (-not $isBlank) {
+                $nbCurrent = (Get-Variable -Name nonBlankNum -Scope 1).Value
+                $text = "{0}`t{1}" -f $nbCurrent.ToString().PadLeft(6), $text
+            }
+        } elseif ($numberAll) {
+            $text = "{0}`t{1}" -f $ln.ToString().PadLeft(6), $text
+        }
+
+        $obj = [PSCustomObject]@{
+            PSTypeName = 'PsBash.CatLine'
+            LineNumber = $ln
+            Content    = $Content
+            FileName   = $FileName
+            BashText   = $text
+        }
+        $obj | Add-Member -MemberType ScriptMethod -Name 'ToString' -Value {
+            $this.BashText
+        } -Force
+        $obj
+    }
+
+    if ($readStdin -and $pipelineInput.Count -gt 0) {
+        foreach ($item in $pipelineInput) {
+            $content = if ($null -ne $item.BashText) { $item.BashText } else { "$item" }
+            & $emitLine $content ''
+        }
+    }
+
+    $fileOperands = @($operands | Where-Object { $_ -ne '-' })
+    foreach ($filePath in $fileOperands) {
+        if (-not (Test-Path -LiteralPath $filePath)) {
+            $normalized = $filePath -replace '\\', '/'
+            $msg = "cat: ${normalized}: No such file or directory"
+            Write-Error -Message $msg -ErrorAction Continue
+            $hadError = $true
+            continue
+        }
+
+        $bytes = [System.IO.File]::ReadAllBytes($filePath)
+
+        $byteOffset = 0
+        if ($bytes.Length -ge 3 -and $bytes[0] -eq 0xEF -and $bytes[1] -eq 0xBB -and $bytes[2] -eq 0xBF) {
+            $byteOffset = 3
+        }
+
+        $rawText = [System.Text.Encoding]::UTF8.GetString($bytes, $byteOffset, $bytes.Length - $byteOffset)
+        $rawText = $rawText -replace "`r`n", "`n"
+
+        if ($rawText.EndsWith("`n")) {
+            $rawText = $rawText.Substring(0, $rawText.Length - 1)
+        }
+
+        $lines = $rawText.Split("`n")
+        foreach ($line in $lines) {
+            & $emitLine $line $filePath
+        }
+    }
+
+    if ($hadError) {
+        $global:LASTEXITCODE = 1
+    }
+}
+
 # --- Aliases ---
 
 Set-Alias -Name 'echo'   -Value 'Invoke-BashEcho'   -Force -Scope Global -Option AllScope
 Set-Alias -Name 'printf'  -Value 'Invoke-BashPrintf'  -Force -Scope Global -Option AllScope
 Set-Alias -Name 'ls'      -Value 'Invoke-BashLs'      -Force -Scope Global -Option AllScope
+Set-Alias -Name 'cat'     -Value 'Invoke-BashCat'     -Force -Scope Global -Option AllScope
