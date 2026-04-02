@@ -6658,6 +6658,400 @@ function Invoke-BashExpr {
     $obj
 }
 
+# --- du Command ---
+
+function Invoke-BashDu {
+    $Arguments = [string[]]$args
+
+    $humanReadable = $false
+    $summarize = $false
+    $allFiles = $false
+    $showTotal = $false
+    $maxDepth = [int]::MaxValue
+    $operands = [System.Collections.Generic.List[string]]::new()
+
+    $i = 0
+    while ($i -lt $Arguments.Count) {
+        $arg = $Arguments[$i]
+
+        if ($arg -eq '-d' -and ($i + 1) -lt $Arguments.Count) {
+            $maxDepth = [int]$Arguments[$i + 1]
+            $i += 2
+            continue
+        }
+
+        if ($arg.StartsWith('-') -and $arg.Length -gt 1 -and -not $arg.StartsWith('--')) {
+            foreach ($ch in $arg.Substring(1).ToCharArray()) {
+                switch ($ch) {
+                    'h' { $humanReadable = $true }
+                    's' { $summarize = $true }
+                    'a' { $allFiles = $true }
+                    'c' { $showTotal = $true }
+                    default { }
+                }
+            }
+            $i++
+            continue
+        }
+
+        $operands.Add($arg)
+        $i++
+    }
+
+    if ($operands.Count -eq 0) {
+        $operands.Add('.')
+    }
+
+    $grandTotal = [long]0
+
+    foreach ($target in $operands) {
+        if (-not (Test-Path -LiteralPath $target)) {
+            Write-Error -Message "du: cannot access '$target': No such file or directory" -ErrorAction Continue
+            continue
+        }
+
+        $resolvedRoot = (Resolve-Path -LiteralPath $target).Path
+        $rootItem = Get-Item -LiteralPath $resolvedRoot -Force
+
+        if ($rootItem -isnot [System.IO.DirectoryInfo]) {
+            $sizeBytes = $rootItem.Length
+            $grandTotal += $sizeBytes
+            $sizeKb = [long][System.Math]::Ceiling($sizeBytes / 1024)
+            $sizeHuman = Format-BashSize -Bytes $sizeBytes
+            $displaySize = if ($humanReadable) { $sizeHuman } else { $sizeKb.ToString() }
+            $displayPath = $target -replace '\\', '/'
+
+            $obj = [PSCustomObject]@{
+                PSTypeName = 'PsBash.DuEntry'
+                Size       = $sizeKb
+                SizeBytes  = $sizeBytes
+                SizeHuman  = $sizeHuman
+                Path       = $displayPath
+                Depth      = 0
+                IsTotal    = $false
+                BashText   = "$displaySize`t$displayPath"
+            }
+            $obj | Add-Member -MemberType ScriptMethod -Name 'ToString' -Value {
+                $this.BashText
+            } -Force
+            $obj
+            continue
+        }
+
+        $rootDepth = ($resolvedRoot.TrimEnd([System.IO.Path]::DirectorySeparatorChar, [System.IO.Path]::AltDirectorySeparatorChar) -split '[\\/]').Count
+
+        # Collect all directories and compute sizes bottom-up
+        $allDirs = [System.Collections.Generic.List[System.IO.DirectoryInfo]]::new()
+        $allDirs.Add($rootItem)
+        try {
+            $children = Get-ChildItem -LiteralPath $resolvedRoot -Force -Recurse -Directory -ErrorAction SilentlyContinue
+            foreach ($child in $children) { $allDirs.Add($child) }
+        } catch { }
+
+        # Calculate size for each directory (files directly inside it)
+        $dirSizes = [System.Collections.Generic.Dictionary[string,long]]::new([System.StringComparer]::Ordinal)
+        foreach ($dir in $allDirs) {
+            $dirFiles = @(Get-ChildItem -LiteralPath $dir.FullName -Force -File -ErrorAction SilentlyContinue)
+            $dirSize = [long]0
+            foreach ($f in $dirFiles) { $dirSize += $f.Length }
+            $dirSizes[$dir.FullName] = $dirSize
+        }
+
+        # Accumulate sizes: each directory includes all descendants
+        $accumSizes = [System.Collections.Generic.Dictionary[string,long]]::new([System.StringComparer]::Ordinal)
+        # Sort directories deepest-first for bottom-up accumulation
+        $sortedDirs = $allDirs | Sort-Object { $_.FullName.Length } -Descending
+        foreach ($dir in $sortedDirs) {
+            $total = $dirSizes[$dir.FullName]
+            $subDirs = @(Get-ChildItem -LiteralPath $dir.FullName -Force -Directory -ErrorAction SilentlyContinue)
+            foreach ($sd in $subDirs) {
+                if ($accumSizes.ContainsKey($sd.FullName)) {
+                    $total += $accumSizes[$sd.FullName]
+                }
+            }
+            $accumSizes[$dir.FullName] = $total
+        }
+
+        # Build output entries
+        $entries = [System.Collections.Generic.List[PSObject]]::new()
+
+        foreach ($dir in $allDirs) {
+            $itemDepth = ($dir.FullName -split '[\\/]').Count - $rootDepth
+            if ($itemDepth -gt $maxDepth) { continue }
+            if ($summarize -and $dir.FullName -ne $resolvedRoot) { continue }
+
+            $sizeBytes = $accumSizes[$dir.FullName]
+            $sizeKb = [long][System.Math]::Ceiling($sizeBytes / 1024)
+            if ($sizeKb -eq 0 -and $sizeBytes -gt 0) { $sizeKb = 1 }
+            $sizeHuman = Format-BashSize -Bytes $sizeBytes
+            $displaySize = if ($humanReadable) { $sizeHuman } else { $sizeKb.ToString() }
+
+            $relativePath = $dir.FullName.Substring($resolvedRoot.Length) -replace '\\', '/'
+            if ($relativePath.StartsWith('/')) { $relativePath = $relativePath.Substring(1) }
+            $normalized = $target -replace '\\', '/'
+            $displayPath = if ($relativePath -eq '') { $normalized } else { "$normalized/$relativePath" }
+
+            $obj = [PSCustomObject]@{
+                PSTypeName = 'PsBash.DuEntry'
+                Size       = $sizeKb
+                SizeBytes  = $sizeBytes
+                SizeHuman  = $sizeHuman
+                Path       = $displayPath
+                Depth      = $itemDepth
+                IsTotal    = $false
+                BashText   = "$displaySize`t$displayPath"
+            }
+            $obj | Add-Member -MemberType ScriptMethod -Name 'ToString' -Value {
+                $this.BashText
+            } -Force
+            $entries.Add($obj)
+        }
+
+        # Also add individual file entries when -a
+        if ($allFiles) {
+            $allFileItems = @(Get-ChildItem -LiteralPath $resolvedRoot -Force -Recurse -File -ErrorAction SilentlyContinue)
+            foreach ($file in $allFileItems) {
+                $fileDepth = ($file.FullName -split '[\\/]').Count - $rootDepth
+                if ($fileDepth -gt $maxDepth) { continue }
+                if ($summarize) { continue }
+
+                $sizeBytes = $file.Length
+                $sizeKb = [long][System.Math]::Ceiling($sizeBytes / 1024)
+                if ($sizeKb -eq 0 -and $sizeBytes -gt 0) { $sizeKb = 1 }
+                $sizeHuman = Format-BashSize -Bytes $sizeBytes
+                $displaySize = if ($humanReadable) { $sizeHuman } else { $sizeKb.ToString() }
+
+                $relativePath = $file.FullName.Substring($resolvedRoot.Length) -replace '\\', '/'
+                if ($relativePath.StartsWith('/')) { $relativePath = $relativePath.Substring(1) }
+                $normalized = $target -replace '\\', '/'
+                $displayPath = if ($relativePath -eq '') { $normalized } else { "$normalized/$relativePath" }
+
+                $obj = [PSCustomObject]@{
+                    PSTypeName = 'PsBash.DuEntry'
+                    Size       = $sizeKb
+                    SizeBytes  = $sizeBytes
+                    SizeHuman  = $sizeHuman
+                    Path       = $displayPath
+                    Depth      = $fileDepth
+                    IsTotal    = $false
+                    BashText   = "$displaySize`t$displayPath"
+                }
+                $obj | Add-Member -MemberType ScriptMethod -Name 'ToString' -Value {
+                    $this.BashText
+                } -Force
+                $entries.Add($obj)
+            }
+        }
+
+        # Sort: subdirectories first (deepest first), then root
+        $sorted = $entries | Sort-Object { $_.Path }
+        foreach ($e in $sorted) { $e }
+
+        $grandTotal += $accumSizes[$resolvedRoot]
+    }
+
+    if ($showTotal) {
+        $sizeKb = [long][System.Math]::Ceiling($grandTotal / 1024)
+        if ($sizeKb -eq 0 -and $grandTotal -gt 0) { $sizeKb = 1 }
+        $sizeHuman = Format-BashSize -Bytes $grandTotal
+        $displaySize = if ($humanReadable) { $sizeHuman } else { $sizeKb.ToString() }
+
+        $obj = [PSCustomObject]@{
+            PSTypeName = 'PsBash.DuEntry'
+            Size       = $sizeKb
+            SizeBytes  = $grandTotal
+            SizeHuman  = $sizeHuman
+            Path       = 'total'
+            Depth      = 0
+            IsTotal    = $true
+            BashText   = "$displaySize`ttotal"
+        }
+        $obj | Add-Member -MemberType ScriptMethod -Name 'ToString' -Value {
+            $this.BashText
+        } -Force
+        $obj
+    }
+}
+
+# --- tree Command ---
+
+function Invoke-BashTree {
+    $Arguments = [string[]]$args
+
+    $showAll = $false
+    $dirsOnly = $false
+    $maxDepth = [int]::MaxValue
+    $excludePattern = $null
+    $dirsFirst = $false
+    $operands = [System.Collections.Generic.List[string]]::new()
+
+    $i = 0
+    while ($i -lt $Arguments.Count) {
+        $arg = $Arguments[$i]
+
+        if ($arg -eq '-L' -and ($i + 1) -lt $Arguments.Count) {
+            $maxDepth = [int]$Arguments[$i + 1]
+            $i += 2
+            continue
+        }
+        if ($arg -eq '-I' -and ($i + 1) -lt $Arguments.Count) {
+            $excludePattern = $Arguments[$i + 1]
+            $i += 2
+            continue
+        }
+        if ($arg -eq '--dirsfirst') {
+            $dirsFirst = $true
+            $i++
+            continue
+        }
+
+        if ($arg.StartsWith('-') -and $arg.Length -gt 1 -and -not $arg.StartsWith('--')) {
+            foreach ($ch in $arg.Substring(1).ToCharArray()) {
+                switch ($ch) {
+                    'a' { $showAll = $true }
+                    'd' { $dirsOnly = $true }
+                    default { }
+                }
+            }
+            $i++
+            continue
+        }
+
+        $operands.Add($arg)
+        $i++
+    }
+
+    if ($operands.Count -eq 0) {
+        $operands.Add('.')
+    }
+
+    $target = $operands[0]
+    if (-not (Test-Path -LiteralPath $target)) {
+        Write-Error -Message "tree: '$target': No such file or directory" -ErrorAction Continue
+        return
+    }
+
+    $resolvedRoot = (Resolve-Path -LiteralPath $target).Path
+    $rootItem = Get-Item -LiteralPath $resolvedRoot -Force
+    $rootName = $rootItem.Name
+
+    # Root entry
+    $rootObj = [PSCustomObject]@{
+        PSTypeName = 'PsBash.TreeEntry'
+        Name       = $rootName
+        Path       = ($target -replace '\\', '/')
+        Depth      = 0
+        IsDirectory = $true
+        TreePrefix = ''
+        BashText   = $rootName
+    }
+    $rootObj | Add-Member -MemberType ScriptMethod -Name 'ToString' -Value {
+        $this.BashText
+    } -Force
+    $rootObj
+
+    $dirCount = 0
+    $fileCount = 0
+
+    # Recursive tree walker
+    function Write-TreeLevel {
+        param(
+            [string]$DirPath,
+            [int]$CurrentDepth,
+            [string]$Prefix
+        )
+
+        if ($CurrentDepth -gt $maxDepth) { return }
+
+        $items = @(Get-ChildItem -LiteralPath $DirPath -Force -ErrorAction SilentlyContinue)
+
+        # Filter dotfiles unless -a
+        if (-not $showAll) {
+            $items = @($items | Where-Object { -not $_.Name.StartsWith('.') })
+        }
+
+        # Filter excluded pattern
+        if ($null -ne $excludePattern) {
+            $items = @($items | Where-Object { $_.Name -notlike $excludePattern })
+        }
+
+        # Filter files if -d
+        if ($dirsOnly) {
+            $items = @($items | Where-Object { $_ -is [System.IO.DirectoryInfo] })
+        }
+
+        # Sort: dirsfirst if requested, then alphabetical
+        if ($dirsFirst) {
+            $items = @($items | Sort-Object @{Expression={if ($_ -is [System.IO.DirectoryInfo]) { 0 } else { 1 }}}, Name)
+        } else {
+            $items = @($items | Sort-Object Name)
+        }
+
+        for ($idx = 0; $idx -lt $items.Count; $idx++) {
+            $item = $items[$idx]
+            $isLast = ($idx -eq ($items.Count - 1))
+            $connector = if ($isLast) { [char]0x2514 + [string]([char]0x2500) + [string]([char]0x2500) + ' ' } else { [char]0x251C + [string]([char]0x2500) + [string]([char]0x2500) + ' ' }
+            $childPrefix = if ($isLast) { $Prefix + '    ' } else { $Prefix + [char]0x2502 + '   ' }
+
+            $isDir = $item -is [System.IO.DirectoryInfo]
+            if ($isDir) {
+                Set-Variable -Name dirCount -Value ($dirCount + 1) -Scope 2
+            } else {
+                Set-Variable -Name fileCount -Value ($fileCount + 1) -Scope 2
+            }
+
+            $relativePath = $item.FullName.Substring($resolvedRoot.Length) -replace '\\', '/'
+            if ($relativePath.StartsWith('/')) { $relativePath = $relativePath.Substring(1) }
+
+            $treePrefix = "$Prefix$connector"
+            $bashText = "$Prefix$connector$($item.Name)"
+
+            $entryObj = [PSCustomObject]@{
+                PSTypeName  = 'PsBash.TreeEntry'
+                Name        = $item.Name
+                Path        = $relativePath
+                Depth       = $CurrentDepth
+                IsDirectory = $isDir
+                TreePrefix  = $treePrefix
+                BashText    = $bashText
+            }
+            $entryObj | Add-Member -MemberType ScriptMethod -Name 'ToString' -Value {
+                $this.BashText
+            } -Force
+            $entryObj
+
+            if ($isDir) {
+                Write-TreeLevel -DirPath $item.FullName -CurrentDepth ($CurrentDepth + 1) -Prefix $childPrefix
+            }
+        }
+    }
+
+    Write-TreeLevel -DirPath $resolvedRoot -CurrentDepth 1 -Prefix ''
+
+    # Summary line
+    $dirLabel = if ($dirCount -eq 1) { 'directory' } else { 'directories' }
+    $fileLabel = if ($fileCount -eq 1) { 'file' } else { 'files' }
+    $summaryText = if ($dirsOnly) {
+        "$dirCount $dirLabel"
+    } else {
+        "$dirCount $dirLabel, $fileCount $fileLabel"
+    }
+
+    $summaryObj = [PSCustomObject]@{
+        PSTypeName  = 'PsBash.TreeEntry'
+        Name        = ''
+        Path        = ''
+        Depth       = 0
+        IsDirectory = $false
+        TreePrefix  = ''
+        BashText    = $summaryText
+    }
+    $summaryObj | Add-Member -MemberType ScriptMethod -Name 'ToString' -Value {
+        $this.BashText
+    } -Force
+    $summaryObj
+}
+
 # --- Aliases ---
 
 Set-Alias -Name 'echo'   -Value 'Invoke-BashEcho'   -Force -Scope Global -Option AllScope
@@ -6697,3 +7091,5 @@ Set-Alias -Name 'jq'      -Value 'Invoke-BashJq'      -Force -Scope Global -Opti
 Set-Alias -Name 'date'    -Value 'Invoke-BashDate'    -Force -Scope Global -Option AllScope
 Set-Alias -Name 'seq'     -Value 'Invoke-BashSeq'     -Force -Scope Global -Option AllScope
 Set-Alias -Name 'expr'    -Value 'Invoke-BashExpr'    -Force -Scope Global -Option AllScope
+Set-Alias -Name 'du'      -Value 'Invoke-BashDu'      -Force -Scope Global -Option AllScope
+Set-Alias -Name 'tree'    -Value 'Invoke-BashTree'    -Force -Scope Global -Option AllScope

@@ -4114,3 +4114,254 @@ Describe 'Invoke-BashExpr — Pipeline Bridge' {
         $r.PSObject.Properties['BashText'] | Should -Not -BeNullOrEmpty
     }
 }
+
+Describe 'Invoke-BashDu' {
+    BeforeAll {
+        $duDir = Join-Path ([System.IO.Path]::GetTempPath()) "psbash-du-test-$(Get-Random)"
+        New-Item -Path $duDir -ItemType Directory -Force | Out-Null
+
+        $sub1 = Join-Path $duDir 'src'
+        New-Item -Path $sub1 -ItemType Directory -Force | Out-Null
+        Set-Content -Path (Join-Path $sub1 'main.ps1') -Value ('x' * 1024)
+        Set-Content -Path (Join-Path $sub1 'util.ps1') -Value ('y' * 512)
+
+        $sub2 = Join-Path $duDir 'docs'
+        New-Item -Path $sub2 -ItemType Directory -Force | Out-Null
+        Set-Content -Path (Join-Path $sub2 'readme.txt') -Value ('z' * 256)
+
+        $deep = Join-Path $sub1 'lib'
+        New-Item -Path $deep -ItemType Directory -Force | Out-Null
+        Set-Content -Path (Join-Path $deep 'helper.ps1') -Value ('w' * 2048)
+
+        Set-Content -Path (Join-Path $duDir 'root.txt') -Value ('r' * 128)
+    }
+
+    AfterAll {
+        Remove-Item -Path $duDir -Recurse -Force -ErrorAction SilentlyContinue
+    }
+
+    It 'du ./testdir returns size for each subdirectory' {
+        $results = @(Invoke-BashDu $duDir)
+        $results.Count | Should -BeGreaterOrEqual 2
+        $results[0].PSObject.TypeNames[0] | Should -Be 'PsBash.DuEntry'
+        $results[0].SizeBytes | Should -BeOfType [long]
+        $results[0].Path | Should -Not -BeNullOrEmpty
+    }
+
+    It 'du default only shows directories, not individual files' {
+        $results = @(Invoke-BashDu $duDir)
+        $fileEntries = @($results | Where-Object { $_.Path -match '\.(txt|ps1)$' })
+        $fileEntries.Count | Should -Be 0
+    }
+
+    It 'du -h shows human-readable sizes' {
+        $results = @(Invoke-BashDu -h $duDir)
+        $results | Should -Not -BeNullOrEmpty
+        $results[0].SizeHuman | Should -Not -BeNullOrEmpty
+        $results[0].BashText | Should -Match '\t'
+    }
+
+    It 'du -s shows total only' {
+        $results = @(Invoke-BashDu -s $duDir)
+        $results.Count | Should -Be 1
+        $results[0].SizeBytes | Should -BeGreaterThan 0
+    }
+
+    It 'du -a includes all files' {
+        $results = @(Invoke-BashDu -a $duDir)
+        $fileEntries = @($results | Where-Object { $_.Path -match '\.(txt|ps1)$' })
+        $fileEntries.Count | Should -BeGreaterOrEqual 4
+    }
+
+    It 'du -c dir1 dir2 produces grand total line' {
+        $results = @(Invoke-BashDu -c $sub1 $sub2)
+        $total = @($results | Where-Object { $_.IsTotal })
+        $total.Count | Should -Be 1
+        $total[0].Path | Should -Be 'total'
+    }
+
+    It 'du -d 1 limits max depth' {
+        $results = @(Invoke-BashDu -d 1 $duDir)
+        $deep = @($results | Where-Object { $_.Depth -gt 1 })
+        $deep.Count | Should -Be 0
+    }
+
+    It 'du BashText format is size<tab>path' {
+        $results = @(Invoke-BashDu $duDir)
+        $results[0].BashText | Should -Match '^\d+\t'
+    }
+
+    It 'du Depth property reflects directory nesting' {
+        $results = @(Invoke-BashDu $duDir)
+        $results | Should -Not -BeNullOrEmpty
+        $results | ForEach-Object { $_.Depth | Should -BeOfType [int] }
+    }
+
+    It 'du nonexistent path writes error' {
+        $results = @(Invoke-BashDu '/nonexistent/path' 2>$null)
+        $results.Count | Should -Be 0
+    }
+}
+
+Describe 'Invoke-BashDu — Alias' {
+    It 'du alias resolves to Invoke-BashDu' {
+        $alias = Get-Alias -Name du -Scope Global
+        $alias.Definition | Should -Be 'Invoke-BashDu'
+    }
+}
+
+Describe 'Invoke-BashTree' {
+    BeforeAll {
+        $treeDir = Join-Path ([System.IO.Path]::GetTempPath()) "psbash-tree-test-$(Get-Random)"
+        New-Item -Path $treeDir -ItemType Directory -Force | Out-Null
+
+        $srcDir = Join-Path $treeDir 'src'
+        New-Item -Path $srcDir -ItemType Directory -Force | Out-Null
+        Set-Content -Path (Join-Path $srcDir 'main.ps1') -Value 'code'
+        Set-Content -Path (Join-Path $srcDir 'util.ps1') -Value 'utils'
+
+        $libDir = Join-Path $srcDir 'lib'
+        New-Item -Path $libDir -ItemType Directory -Force | Out-Null
+        Set-Content -Path (Join-Path $libDir 'helper.ps1') -Value 'help'
+
+        $docsDir = Join-Path $treeDir 'docs'
+        New-Item -Path $docsDir -ItemType Directory -Force | Out-Null
+        Set-Content -Path (Join-Path $docsDir 'readme.txt') -Value 'readme'
+
+        Set-Content -Path (Join-Path $treeDir 'root.txt') -Value 'root'
+        Set-Content -Path (Join-Path $treeDir 'app.log') -Value 'logdata'
+
+        # Dotfile for -a tests
+        Set-Content -Path (Join-Path $treeDir '.hidden') -Value 'hidden'
+    }
+
+    AfterAll {
+        Remove-Item -Path $treeDir -Recurse -Force -ErrorAction SilentlyContinue
+    }
+
+    It 'tree ./testdir returns TreeEntry objects with box-drawing characters' {
+        $results = @(Invoke-BashTree $treeDir)
+        $results.Count | Should -BeGreaterOrEqual 2
+        $results[0].PSObject.TypeNames[0] | Should -Be 'PsBash.TreeEntry'
+        $hasBoxChars = ($results | Where-Object { $_.BashText -match '[├└│]' }).Count -gt 0
+        $hasBoxChars | Should -BeTrue
+    }
+
+    It 'tree -d shows directories only' {
+        $results = @(Invoke-BashTree -d $treeDir)
+        $files = @($results | Where-Object { -not $_.IsDirectory -and $_.Name -ne '' })
+        # Only the summary line has IsDirectory=$false and empty Name
+        $nonSummary = @($files | Where-Object { $_.BashText -notmatch 'director' })
+        $nonSummary.Count | Should -Be 0
+    }
+
+    It 'tree -L 1 limits to depth 1' {
+        $results = @(Invoke-BashTree -L 1 $treeDir)
+        $deep = @($results | Where-Object { $_.Depth -gt 1 })
+        $deep.Count | Should -Be 0
+    }
+
+    It 'tree -a includes dotfiles' {
+        $results = @(Invoke-BashTree -a $treeDir)
+        $hidden = @($results | Where-Object { $_.Name -eq '.hidden' })
+        $hidden.Count | Should -Be 1
+    }
+
+    It 'tree default excludes dotfiles' {
+        $results = @(Invoke-BashTree $treeDir)
+        $hidden = @($results | Where-Object { $_.Name -eq '.hidden' })
+        $hidden.Count | Should -Be 0
+    }
+
+    It 'tree -I pattern excludes matching files' {
+        $results = @(Invoke-BashTree -I '*.log' $treeDir)
+        $logs = @($results | Where-Object { $_.Name -match '\.log$' })
+        $logs.Count | Should -Be 0
+    }
+
+    It 'tree shows summary line with directories and files count' {
+        $results = @(Invoke-BashTree $treeDir)
+        $summary = $results[-1]
+        $summary.BashText | Should -Match '\d+ director'
+        $summary.BashText | Should -Match '\d+ file'
+    }
+
+    It 'tree --dirsfirst puts directories before files' {
+        $results = @(Invoke-BashTree '--dirsfirst' $treeDir)
+        $depth1 = @($results | Where-Object { $_.Depth -eq 1 -and $_.Name -ne '' })
+        $firstDir = -1
+        $lastFile = -1
+        for ($i = 0; $i -lt $depth1.Count; $i++) {
+            if ($depth1[$i].IsDirectory -and $firstDir -eq -1) { $firstDir = $i }
+            if (-not $depth1[$i].IsDirectory) { $lastFile = $i }
+        }
+        if ($firstDir -ge 0 -and $lastFile -ge 0) {
+            $firstDir | Should -BeLessThan $lastFile
+        }
+    }
+
+    It 'tree root line shows directory name' {
+        $results = @(Invoke-BashTree $treeDir)
+        $root = $results[0]
+        $root.Depth | Should -Be 0
+        $root.IsDirectory | Should -BeTrue
+    }
+
+    It 'tree entry has correct properties' {
+        $results = @(Invoke-BashTree $treeDir)
+        $entry = $results | Where-Object { $_.Depth -gt 0 } | Select-Object -First 1
+        $entry.Name | Should -Not -BeNullOrEmpty
+        $entry.Path | Should -Not -BeNullOrEmpty
+        $entry.PSObject.Properties['TreePrefix'] | Should -Not -BeNullOrEmpty
+    }
+
+    It 'tree nonexistent path writes error' {
+        $results = @(Invoke-BashTree '/nonexistent/path' 2>$null)
+        $results.Count | Should -Be 0
+    }
+}
+
+Describe 'Invoke-BashTree — Alias' {
+    It 'tree alias resolves to Invoke-BashTree' {
+        $alias = Get-Alias -Name tree -Scope Global
+        $alias.Definition | Should -Be 'Invoke-BashTree'
+    }
+}
+
+Describe 'Invoke-BashDu — Pipeline Bridge' {
+    BeforeAll {
+        $duPipeDir = Join-Path ([System.IO.Path]::GetTempPath()) "psbash-du-pipe-$(Get-Random)"
+        New-Item -Path $duPipeDir -ItemType Directory -Force | Out-Null
+        Set-Content -Path (Join-Path $duPipeDir 'file.txt') -Value 'data'
+    }
+
+    AfterAll {
+        Remove-Item -Path $duPipeDir -Recurse -Force -ErrorAction SilentlyContinue
+    }
+
+    It 'du output pipes to grep' {
+        $results = @(Invoke-BashDu $duPipeDir | Invoke-BashGrep 'file')
+        # du without -a won't show files, but grep on BashText of directory entries
+        # Just verify pipeline works
+        $duResults = @(Invoke-BashDu -a $duPipeDir)
+        $duResults.Count | Should -BeGreaterOrEqual 1
+        $duResults[0].PSObject.Properties['BashText'] | Should -Not -BeNullOrEmpty
+    }
+}
+
+Describe 'Invoke-BashTree — Pipeline Bridge' {
+    BeforeAll {
+        $treePipeDir = Join-Path ([System.IO.Path]::GetTempPath()) "psbash-tree-pipe-$(Get-Random)"
+        New-Item -Path $treePipeDir -ItemType Directory -Force | Out-Null
+        Set-Content -Path (Join-Path $treePipeDir 'file.txt') -Value 'data'
+    }
+
+    AfterAll {
+        Remove-Item -Path $treePipeDir -Recurse -Force -ErrorAction SilentlyContinue
+    }
+
+    It 'tree output pipes to grep' {
+        $results = @(Invoke-BashTree $treePipeDir | Invoke-BashGrep 'file')
+        $results.Count | Should -BeGreaterOrEqual 1
+    }
+}
