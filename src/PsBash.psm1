@@ -1080,8 +1080,9 @@ function Invoke-BashSort {
             $text = Get-BashText -InputObject $item
             $text = $text -replace "`n$", ''
             if ($text.Contains("`n")) {
+                $typeName = if ($null -ne $item.PSObject -and $item.PSObject.TypeNames.Count -gt 0) { $item.PSObject.TypeNames[0] } else { 'PsBash.TextOutput' }
                 foreach ($line in $text.Split("`n")) {
-                    $items.Add((New-BashObject -BashText $line))
+                    $items.Add((New-BashObject -BashText $line -TypeName $typeName))
                 }
             } else {
                 $items.Add($item)
@@ -5636,6 +5637,621 @@ function Invoke-BashXargs {
     }
 }
 
+# --- jq Command ---
+
+function ConvertTo-JqJson {
+    param([object]$Value, [bool]$Compact, [bool]$SortKeys, [bool]$RawOutput)
+
+    if ($null -eq $Value) { return 'null' }
+
+    if ($Value -is [bool]) {
+        return if ($Value) { 'true' } else { 'false' }
+    }
+    if ($Value -is [int] -or $Value -is [long] -or $Value -is [double] -or $Value -is [decimal]) {
+        return "$Value"
+    }
+    if ($Value -is [string]) {
+        if ($RawOutput) { return $Value }
+        $escaped = $Value -replace '\\', '\\' -replace '"', '\"' -replace "`n", '\n' -replace "`r", '\r' -replace "`t", '\t'
+        return "`"$escaped`""
+    }
+    if ($Value -is [array] -or $Value -is [System.Collections.IList]) {
+        $items = @(foreach ($item in $Value) {
+            ConvertTo-JqJson -Value $item -Compact $Compact -SortKeys $SortKeys -RawOutput $false
+        })
+        if ($Compact) {
+            return '[' + ($items -join ',') + ']'
+        }
+        if ($items.Count -eq 0) { return '[]' }
+        $inner = ($items | ForEach-Object { "  $_" }) -join ",`n"
+        return "[`n$inner`n]"
+    }
+    if ($Value -is [System.Collections.IDictionary]) {
+        $keys = @($Value.Keys)
+        if ($SortKeys) { $keys = @($keys | Sort-Object) }
+        $pairs = @(foreach ($k in $keys) {
+            $kJson = "`"$k`""
+            $vJson = ConvertTo-JqJson -Value $Value[$k] -Compact $Compact -SortKeys $SortKeys -RawOutput $false
+            if ($Compact) { "${kJson}:${vJson}" } else { "  ${kJson}: ${vJson}" }
+        })
+        if ($Compact) {
+            return '{' + ($pairs -join ',') + '}'
+        }
+        if ($pairs.Count -eq 0) { return '{}' }
+        return "{`n" + ($pairs -join ",`n") + "`n}"
+    }
+    if ($Value -is [PSCustomObject]) {
+        $dict = [ordered]@{}
+        foreach ($prop in $Value.PSObject.Properties) {
+            if ($prop.Name -eq 'PSTypeName') { continue }
+            $dict[$prop.Name] = $prop.Value
+        }
+        return ConvertTo-JqJson -Value $dict -Compact $Compact -SortKeys $SortKeys -RawOutput $false
+    }
+    return "`"$Value`""
+}
+
+function Invoke-JqFilter {
+    param([object]$Data, [string]$Filter)
+
+    $filter = $Filter.Trim()
+    if ($filter -eq '') { return @(, $Data) }
+
+    # Handle pipe: split on top-level | (not inside parens/brackets/strings)
+    [string[]]$pipeSegments = @(Split-JqPipe -Filter $filter)
+    if ($pipeSegments.Count -gt 1) {
+        $current = @(, $Data)
+        foreach ($seg in $pipeSegments) {
+            $next = @()
+            foreach ($item in $current) {
+                $next += @(Invoke-JqFilter -Data $item -Filter $seg)
+            }
+            $current = $next
+        }
+        return $current
+    }
+
+    # Handle comma (multiple outputs) at top level
+    [string[]]$commaSegments = @(Split-JqComma -Filter $filter)
+    if ($commaSegments.Count -gt 1) {
+        $results = @()
+        foreach ($seg in $commaSegments) {
+            $results += @(Invoke-JqFilter -Data $Data -Filter $seg.Trim())
+        }
+        return $results
+    }
+
+    # Identity
+    if ($filter -eq '.') { return @(, $Data) }
+
+    # Array construction: [expr]
+    if ($filter.StartsWith('[') -and (Get-JqMatchingBracket -S $filter -Open '[' -Close ']' -Start 0) -eq ($filter.Length - 1)) {
+        $inner = $filter.Substring(1, $filter.Length - 2)
+        $items = @(Invoke-JqFilter -Data $Data -Filter $inner)
+        return @(, $items)
+    }
+
+    # Object construction: {key: expr, ...}
+    if ($filter.StartsWith('{') -and (Get-JqMatchingBracket -S $filter -Open '{' -Close '}' -Start 0) -eq ($filter.Length - 1)) {
+        $inner = $filter.Substring(1, $filter.Length - 2).Trim()
+        $result = [ordered]@{}
+        [string[]]$pairs = @(Split-JqComma -Filter $inner)
+        foreach ($pair in $pairs) {
+            $pair = $pair.Trim()
+            $colonIdx = Find-JqTopLevelChar -S $pair -Ch ':'
+            if ($colonIdx -ge 0) {
+                $keyPart = $pair.Substring(0, $colonIdx).Trim()
+                $valExpr = $pair.Substring($colonIdx + 1).Trim()
+                # Strip quotes from key if present
+                if ($keyPart.StartsWith('"') -and $keyPart.EndsWith('"')) {
+                    $keyPart = $keyPart.Substring(1, $keyPart.Length - 2)
+                }
+                $vals = @(Invoke-JqFilter -Data $Data -Filter $valExpr)
+                $result[$keyPart] = if ($vals.Count -eq 1) { $vals[0] } else { $vals }
+            } else {
+                # Shorthand: just a name means {name: .name}
+                $keyPart = $pair.TrimStart('.')
+                $vals = @(Invoke-JqFilter -Data $Data -Filter ".$keyPart")
+                $result[$keyPart] = if ($vals.Count -eq 1) { $vals[0] } else { $vals }
+            }
+        }
+        return @(, $result)
+    }
+
+    # String literal with interpolation: "...\(expr)..."
+    if ($filter.StartsWith('"') -and $filter.EndsWith('"')) {
+        $strContent = $filter.Substring(1, $filter.Length - 2)
+        $result = Resolve-JqStringInterpolation -S $strContent -Data $Data
+        return @(, $result)
+    }
+
+    # Built-in functions
+    if ($filter -eq 'keys') {
+        if ($Data -is [System.Collections.IDictionary]) {
+            return @(, @($Data.Keys | Sort-Object))
+        }
+        if ($Data -is [PSCustomObject]) {
+            $names = @($Data.PSObject.Properties | Where-Object { $_.Name -ne 'PSTypeName' } | ForEach-Object { $_.Name } | Sort-Object)
+            return @(, $names)
+        }
+        if ($Data -is [array] -or $Data -is [System.Collections.IList]) {
+            return @(, @(0..($Data.Count - 1)))
+        }
+        return @(, @())
+    }
+    if ($filter -eq 'values') {
+        if ($Data -is [System.Collections.IDictionary]) {
+            return @(, @($Data.Values))
+        }
+        if ($Data -is [PSCustomObject]) {
+            $vals = @($Data.PSObject.Properties | Where-Object { $_.Name -ne 'PSTypeName' } | ForEach-Object { $_.Value })
+            return @(, $vals)
+        }
+        if ($Data -is [array] -or $Data -is [System.Collections.IList]) {
+            return @(, @($Data))
+        }
+        return @(, @())
+    }
+    if ($filter -eq 'length') {
+        if ($null -eq $Data) { return @(, 0) }
+        if ($Data -is [string]) { return @(, $Data.Length) }
+        if ($Data -is [array] -or $Data -is [System.Collections.IList]) { return @(, $Data.Count) }
+        if ($Data -is [System.Collections.IDictionary]) { return @(, $Data.Count) }
+        if ($Data -is [PSCustomObject]) {
+            $count = @($Data.PSObject.Properties | Where-Object { $_.Name -ne 'PSTypeName' }).Count
+            return @(, $count)
+        }
+        return @(, 0)
+    }
+    if ($filter -eq 'type') {
+        if ($null -eq $Data) { return @(, 'null') }
+        if ($Data -is [bool]) { return @(, 'boolean') }
+        if ($Data -is [int] -or $Data -is [long] -or $Data -is [double] -or $Data -is [decimal]) { return @(, 'number') }
+        if ($Data -is [string]) { return @(, 'string') }
+        if ($Data -is [array] -or $Data -is [System.Collections.IList]) { return @(, 'array') }
+        if ($Data -is [System.Collections.IDictionary] -or $Data -is [PSCustomObject]) { return @(, 'object') }
+        return @(, 'unknown')
+    }
+
+    # not
+    if ($filter -eq 'not') {
+        $falsy = ($null -eq $Data) -or ($Data -is [bool] -and -not $Data) -or ($Data -eq $false)
+        return @(, $falsy)
+    }
+
+    # map(expr)
+    if ($filter -match '^map\((.+)\)$') {
+        $innerExpr = $Matches[1]
+        $items = @()
+        if ($Data -is [array] -or $Data -is [System.Collections.IList]) {
+            foreach ($elem in $Data) {
+                $items += @(Invoke-JqFilter -Data $elem -Filter $innerExpr)
+            }
+        }
+        return @(, $items)
+    }
+
+    # select(expr)
+    if ($filter -match '^select\((.+)\)$') {
+        $expr = $Matches[1]
+        $result = Invoke-JqSelect -Data $Data -Expr $expr
+        if ($result) { return @(, $Data) }
+        return @()
+    }
+
+    # Field access chain: .foo, .foo.bar, .[0], .[], .[].foo etc.
+    if ($filter.StartsWith('.')) {
+        return @(Resolve-JqDotPath -Data $Data -Path $filter)
+    }
+
+    # Numeric literal
+    if ($filter -match '^\-?\d+(\.\d+)?$') {
+        return @(, [double]$filter)
+    }
+
+    # Boolean/null literals
+    if ($filter -eq 'true') { return @(, $true) }
+    if ($filter -eq 'false') { return @(, $false) }
+    if ($filter -eq 'null') { return @(, $null) }
+
+    Write-Error "jq: unknown filter: $filter" -ErrorAction Continue
+    return @()
+}
+
+function Split-JqPipe {
+    param([string]$Filter)
+    $segments = [System.Collections.Generic.List[string]]::new()
+    $depth = 0
+    $inStr = $false
+    $current = [System.Text.StringBuilder]::new()
+
+    for ($i = 0; $i -lt $Filter.Length; $i++) {
+        $c = $Filter[$i]
+        if ($inStr) {
+            $current.Append($c) | Out-Null
+            if ($c -eq '\' -and ($i + 1) -lt $Filter.Length) {
+                $i++
+                $current.Append($Filter[$i]) | Out-Null
+            } elseif ($c -eq '"') {
+                $inStr = $false
+            }
+            continue
+        }
+        if ($c -eq '"') { $inStr = $true; $current.Append($c) | Out-Null; continue }
+        if ($c -eq '(' -or $c -eq '[' -or $c -eq '{') { $depth++ }
+        if ($c -eq ')' -or $c -eq ']' -or $c -eq '}') { $depth-- }
+        if ($c -eq '|' -and $depth -eq 0) {
+            $segments.Add($current.ToString().Trim())
+            $current = [System.Text.StringBuilder]::new()
+            continue
+        }
+        $current.Append($c) | Out-Null
+    }
+    $last = $current.ToString().Trim()
+    if ($last -ne '') { $segments.Add($last) }
+    return @($segments)
+}
+
+function Split-JqComma {
+    param([string]$Filter)
+    $segments = [System.Collections.Generic.List[string]]::new()
+    $depth = 0
+    $inStr = $false
+    $current = [System.Text.StringBuilder]::new()
+
+    for ($i = 0; $i -lt $Filter.Length; $i++) {
+        $c = $Filter[$i]
+        if ($inStr) {
+            $current.Append($c) | Out-Null
+            if ($c -eq '\' -and ($i + 1) -lt $Filter.Length) {
+                $i++
+                $current.Append($Filter[$i]) | Out-Null
+            } elseif ($c -eq '"') {
+                $inStr = $false
+            }
+            continue
+        }
+        if ($c -eq '"') { $inStr = $true; $current.Append($c) | Out-Null; continue }
+        if ($c -eq '(' -or $c -eq '[' -or $c -eq '{') { $depth++ }
+        if ($c -eq ')' -or $c -eq ']' -or $c -eq '}') { $depth-- }
+        if ($c -eq ',' -and $depth -eq 0) {
+            $segments.Add($current.ToString().Trim())
+            $current = [System.Text.StringBuilder]::new()
+            continue
+        }
+        $current.Append($c) | Out-Null
+    }
+    $last = $current.ToString().Trim()
+    if ($last -ne '') { $segments.Add($last) }
+    return @($segments)
+}
+
+function Get-JqMatchingBracket {
+    param([string]$S, [char]$Open, [char]$Close, [int]$Start)
+    $depth = 0
+    $inStr = $false
+    for ($i = $Start; $i -lt $S.Length; $i++) {
+        $c = $S[$i]
+        if ($inStr) {
+            if ($c -eq '\' -and ($i + 1) -lt $S.Length) { $i++; continue }
+            if ($c -eq '"') { $inStr = $false }
+            continue
+        }
+        if ($c -eq '"') { $inStr = $true; continue }
+        if ($c -eq $Open) { $depth++ }
+        if ($c -eq $Close) { $depth--; if ($depth -eq 0) { return $i } }
+    }
+    return -1
+}
+
+function Find-JqTopLevelChar {
+    param([string]$S, [char]$Ch)
+    $depth = 0
+    $inStr = $false
+    for ($i = 0; $i -lt $S.Length; $i++) {
+        $c = $S[$i]
+        if ($inStr) {
+            if ($c -eq '\' -and ($i + 1) -lt $S.Length) { $i++; continue }
+            if ($c -eq '"') { $inStr = $false }
+            continue
+        }
+        if ($c -eq '"') { $inStr = $true; continue }
+        if ($c -eq '(' -or $c -eq '[' -or $c -eq '{') { $depth++ }
+        if ($c -eq ')' -or $c -eq ']' -or $c -eq '}') { $depth-- }
+        if ($c -eq $Ch -and $depth -eq 0) { return $i }
+    }
+    return -1
+}
+
+function Resolve-JqDotPath {
+    param([object]$Data, [string]$Path)
+
+    $pos = 1  # skip leading dot
+    $current = @(, $Data)
+
+    while ($pos -lt $Path.Length) {
+        $ch = $Path[$pos]
+
+        # Array iterate: .[]
+        if ($ch -eq '[') {
+            $closeIdx = Get-JqMatchingBracket -S $Path -Open '[' -Close ']' -Start $pos
+            if ($closeIdx -lt 0) {
+                Write-Error "jq: unmatched [ in path" -ErrorAction Continue
+                return @()
+            }
+            $inner = $Path.Substring($pos + 1, $closeIdx - $pos - 1).Trim()
+            $pos = $closeIdx + 1
+
+            $next = @()
+            if ($inner -eq '') {
+                # .[] iterate
+                foreach ($item in $current) {
+                    if ($item -is [array] -or $item -is [System.Collections.IList]) {
+                        foreach ($elem in $item) { $next += @(, $elem) }
+                    } elseif ($item -is [System.Collections.IDictionary]) {
+                        foreach ($val in $item.Values) { $next += @(, $val) }
+                    } elseif ($item -is [PSCustomObject]) {
+                        foreach ($prop in $item.PSObject.Properties) {
+                            if ($prop.Name -ne 'PSTypeName') { $next += @(, $prop.Value) }
+                        }
+                    }
+                }
+            } else {
+                # .[N] index
+                $idx = [int]$inner
+                foreach ($item in $current) {
+                    if ($item -is [array] -or $item -is [System.Collections.IList]) {
+                        if ($idx -lt 0) { $idx = $item.Count + $idx }
+                        if ($idx -ge 0 -and $idx -lt $item.Count) {
+                            $next += @(, $item[$idx])
+                        } else {
+                            $next += @(, $null)
+                        }
+                    }
+                }
+            }
+            $current = $next
+            continue
+        }
+
+        # Field access: .fieldname
+        if ($ch -eq '.') {
+            $pos++
+            continue
+        }
+
+        # Read field name
+        $nameStart = $pos
+        while ($pos -lt $Path.Length -and $Path[$pos] -ne '.' -and $Path[$pos] -ne '[') {
+            $pos++
+        }
+        $fieldName = $Path.Substring($nameStart, $pos - $nameStart)
+        if ($fieldName -eq '') { continue }
+
+        $next = @()
+        foreach ($item in $current) {
+            $val = $null
+            if ($item -is [System.Collections.IDictionary]) {
+                if ($item.Contains($fieldName)) { $val = $item[$fieldName] }
+            } elseif ($item -is [PSCustomObject]) {
+                $prop = $item.PSObject.Properties[$fieldName]
+                if ($null -ne $prop) { $val = $prop.Value }
+            }
+            $next += @(, $val)
+        }
+        $current = $next
+    }
+
+    return $current
+}
+
+function Invoke-JqSelect {
+    param([object]$Data, [string]$Expr)
+
+    # Parse comparison: . op value, .field op value
+    $ops = @('>=', '<=', '!=', '==', '>', '<')
+    foreach ($op in $ops) {
+        $opIdx = Find-JqTopLevelStr -S $Expr -Sub $op
+        if ($opIdx -ge 0) {
+            $leftExpr = $Expr.Substring(0, $opIdx).Trim()
+            $rightExpr = $Expr.Substring($opIdx + $op.Length).Trim()
+
+            $leftVals = @(Invoke-JqFilter -Data $Data -Filter $leftExpr)
+            $rightVals = @(Invoke-JqFilter -Data $Data -Filter $rightExpr)
+            $left = if ($leftVals.Count -gt 0) { $leftVals[0] } else { $null }
+            $right = if ($rightVals.Count -gt 0) { $rightVals[0] } else { $null }
+
+            switch ($op) {
+                '==' { return $left -eq $right }
+                '!=' { return $left -ne $right }
+                '>'  { return $left -gt $right }
+                '<'  { return $left -lt $right }
+                '>=' { return $left -ge $right }
+                '<=' { return $left -le $right }
+            }
+        }
+    }
+
+    # Boolean check: just evaluate the expression and check truthiness
+    $vals = @(Invoke-JqFilter -Data $Data -Filter $Expr)
+    if ($vals.Count -eq 0) { return $false }
+    $val = $vals[0]
+    return ($null -ne $val) -and ($val -ne $false)
+}
+
+function Find-JqTopLevelStr {
+    param([string]$S, [string]$Sub)
+    $depth = 0
+    $inStr = $false
+    for ($i = 0; $i -le ($S.Length - $Sub.Length); $i++) {
+        $c = $S[$i]
+        if ($inStr) {
+            if ($c -eq '\' -and ($i + 1) -lt $S.Length) { $i++; continue }
+            if ($c -eq '"') { $inStr = $false }
+            continue
+        }
+        if ($c -eq '"') { $inStr = $true; continue }
+        if ($c -eq '(' -or $c -eq '[' -or $c -eq '{') { $depth++ }
+        if ($c -eq ')' -or $c -eq ']' -or $c -eq '}') { $depth-- }
+        if ($depth -eq 0 -and $S.Substring($i, $Sub.Length) -eq $Sub) {
+            return $i
+        }
+    }
+    return -1
+}
+
+function Resolve-JqStringInterpolation {
+    param([string]$S, [object]$Data)
+    $result = [System.Text.StringBuilder]::new()
+    $i = 0
+    while ($i -lt $S.Length) {
+        if ($S[$i] -eq '\' -and ($i + 1) -lt $S.Length) {
+            $nc = $S[$i + 1]
+            if ($nc -eq '(') {
+                # Find matching )
+                $depth = 1
+                $start = $i + 2
+                $j = $start
+                while ($j -lt $S.Length -and $depth -gt 0) {
+                    if ($S[$j] -eq '(') { $depth++ }
+                    if ($S[$j] -eq ')') { $depth-- }
+                    if ($depth -gt 0) { $j++ }
+                }
+                $expr = $S.Substring($start, $j - $start)
+                $vals = @(Invoke-JqFilter -Data $Data -Filter $expr)
+                $val = if ($vals.Count -gt 0) { $vals[0] } else { '' }
+                $result.Append("$val") | Out-Null
+                $i = $j + 1
+                continue
+            } elseif ($nc -eq 'n') {
+                $result.Append("`n") | Out-Null
+                $i += 2; continue
+            } elseif ($nc -eq 't') {
+                $result.Append("`t") | Out-Null
+                $i += 2; continue
+            } elseif ($nc -eq '\') {
+                $result.Append('\') | Out-Null
+                $i += 2; continue
+            } elseif ($nc -eq '"') {
+                $result.Append('"') | Out-Null
+                $i += 2; continue
+            }
+        }
+        $result.Append($S[$i]) | Out-Null
+        $i++
+    }
+    return $result.ToString()
+}
+
+function Invoke-BashJq {
+    $Arguments = [string[]]$args
+    $pipelineInput = @($input)
+
+    $rawOutput = $false
+    $compact = $false
+    $sortKeys = $false
+    $slurp = $false
+    $filterExpr = '.'
+    $filterSet = $false
+    $files = [System.Collections.Generic.List[string]]::new()
+    $pastDoubleDash = $false
+
+    $i = 0
+    while ($i -lt $Arguments.Count) {
+        $arg = $Arguments[$i]
+
+        if ($pastDoubleDash) {
+            $files.Add($arg)
+            $i++
+            continue
+        }
+
+        if ($arg -eq '--') {
+            $pastDoubleDash = $true
+            $i++
+            continue
+        }
+
+        if ($arg -ceq '-r' -or $arg -ceq '--raw-output') {
+            $rawOutput = $true
+            $i++
+            continue
+        }
+        if ($arg -ceq '-c' -or $arg -ceq '--compact-output') {
+            $compact = $true
+            $i++
+            continue
+        }
+        if ($arg -ceq '-S' -or $arg -ceq '--sort-keys') {
+            $sortKeys = $true
+            $i++
+            continue
+        }
+        if ($arg -ceq '-s' -or $arg -ceq '--slurp') {
+            $slurp = $true
+            $i++
+            continue
+        }
+
+        # First non-flag argument is the filter, rest are files
+        if (-not $filterSet) {
+            $filterExpr = $arg
+            $filterSet = $true
+        } else {
+            $files.Add($arg)
+        }
+        $i++
+    }
+
+    # Collect JSON input
+    $jsonTexts = [System.Collections.Generic.List[string]]::new()
+
+    if ($files.Count -gt 0) {
+        foreach ($file in $files) {
+            $resolved = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($file)
+            if (-not (Test-Path -LiteralPath $resolved)) {
+                Write-Error "jq: $file`: No such file or directory" -ErrorAction Continue
+                return
+            }
+            $jsonTexts.Add((Get-Content -LiteralPath $resolved -Raw))
+        }
+    } else {
+        # Pipeline input
+        $textParts = [System.Text.StringBuilder]::new()
+        foreach ($item in $pipelineInput) {
+            $text = Get-BashText -InputObject $item
+            $textParts.Append($text) | Out-Null
+        }
+        $combined = $textParts.ToString().Trim()
+        if ($combined -ne '') {
+            $jsonTexts.Add($combined)
+        }
+    }
+
+    if ($jsonTexts.Count -eq 0) { return }
+
+    # Parse and process
+    $allData = [System.Collections.Generic.List[object]]::new()
+    foreach ($jsonText in $jsonTexts) {
+        $parsed = $jsonText | ConvertFrom-Json -AsHashtable -ErrorAction Stop
+        $allData.Add($parsed)
+    }
+
+    if ($slurp) {
+        $dataToProcess = @(, [object[]]@($allData))
+    } else {
+        $dataToProcess = [System.Collections.Generic.List[object]]$allData
+    }
+
+    foreach ($data in $dataToProcess) {
+        $results = @(Invoke-JqFilter -Data $data -Filter $filterExpr)
+        foreach ($result in $results) {
+            $text = ConvertTo-JqJson -Value $result -Compact $compact -SortKeys $sortKeys -RawOutput $rawOutput
+            New-BashObject -BashText $text
+        }
+    }
+}
+
 # --- Aliases ---
 
 Set-Alias -Name 'echo'   -Value 'Invoke-BashEcho'   -Force -Scope Global -Option AllScope
@@ -5671,3 +6287,4 @@ Set-Alias -Name 'join'    -Value 'Invoke-BashJoin'    -Force -Scope Global -Opti
 Set-Alias -Name 'paste'   -Value 'Invoke-BashPaste'   -Force -Scope Global -Option AllScope
 Set-Alias -Name 'tee'     -Value 'Invoke-BashTee'     -Force -Scope Global -Option AllScope
 Set-Alias -Name 'xargs'   -Value 'Invoke-BashXargs'   -Force -Scope Global -Option AllScope
+Set-Alias -Name 'jq'      -Value 'Invoke-BashJq'      -Force -Scope Global -Option AllScope

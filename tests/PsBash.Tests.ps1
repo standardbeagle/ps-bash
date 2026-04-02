@@ -3521,3 +3521,267 @@ Describe 'Invoke-BashXargs — Alias' {
         $alias.Definition | Should -Be 'Invoke-BashXargs'
     }
 }
+
+Describe 'Invoke-BashJq — Field Access' {
+    It 'extracts a string field with quotes' {
+        $r = Invoke-BashEcho "{`"name`":`"John`"}" | Invoke-BashJq '.name'
+        (Get-BashText $r) | Should -Be '"John"'
+    }
+
+    It 'extracts a string field raw with -r' {
+        $r = Invoke-BashEcho "{`"name`":`"John`"}" | Invoke-BashJq -r '.name'
+        (Get-BashText $r) | Should -Be 'John'
+    }
+
+    It 'extracts nested fields' {
+        $r = Invoke-BashEcho "{`"a`":{`"b`":1}}" | Invoke-BashJq '.a.b'
+        (Get-BashText $r) | Should -Be '1'
+    }
+
+    It 'returns null for missing field' {
+        $r = Invoke-BashEcho "{`"a`":1}" | Invoke-BashJq '.b'
+        (Get-BashText $r) | Should -Be 'null'
+    }
+}
+
+Describe 'Invoke-BashJq — Array Access' {
+    It 'accesses array element by index' {
+        $r = Invoke-BashEcho '[1,2,3]' | Invoke-BashJq '.[0]'
+        (Get-BashText $r) | Should -Be '1'
+    }
+
+    It 'accesses array element with negative index' {
+        $r = Invoke-BashEcho '[1,2,3]' | Invoke-BashJq '.[-1]'
+        (Get-BashText $r) | Should -Be '3'
+    }
+
+    It 'iterates array elements with .[]' {
+        $results = @(Invoke-BashEcho '[1,2,3]' | Invoke-BashJq '.[]')
+        $results.Count | Should -Be 3
+        (Get-BashText $results[0]) | Should -Be '1'
+        (Get-BashText $results[1]) | Should -Be '2'
+        (Get-BashText $results[2]) | Should -Be '3'
+    }
+
+    It 'chains iterate and field access' {
+        $results = @(Invoke-BashEcho '[{"n":"a"},{"n":"b"}]' | Invoke-BashJq '.[].n')
+        $results.Count | Should -Be 2
+        (Get-BashText $results[0]) | Should -Be '"a"'
+        (Get-BashText $results[1]) | Should -Be '"b"'
+    }
+}
+
+Describe 'Invoke-BashJq — Identity and Pipe' {
+    It 'passes through with identity filter' {
+        $r = Invoke-BashEcho '42' | Invoke-BashJq '.'
+        (Get-BashText $r) | Should -Be '42'
+    }
+
+    It 'chains filters with pipe' {
+        $r = Invoke-BashEcho '{"a":[1,2,3]}' | Invoke-BashJq '.a | length'
+        (Get-BashText $r) | Should -Be '3'
+    }
+
+    It 'chains iterate with select via pipe' {
+        $results = @(Invoke-BashEcho '[1,2,3]' | Invoke-BashJq '.[] | select(. > 1)')
+        $results.Count | Should -Be 2
+        (Get-BashText $results[0]) | Should -Be '2'
+        (Get-BashText $results[1]) | Should -Be '3'
+    }
+}
+
+Describe 'Invoke-BashJq — Map and Select' {
+    It 'maps a field from array of objects' {
+        $r = Invoke-BashEcho '[{"a":1},{"a":2}]' | Invoke-BashJq 'map(.a)'
+        (Get-BashText $r) | Should -Match '^\['
+        (Get-BashText $r) | Should -Match '1'
+        (Get-BashText $r) | Should -Match '2'
+    }
+
+    It 'filters with select on iterated values' {
+        $results = @(Invoke-BashEcho '[10,20,30]' | Invoke-BashJq '.[] | select(. >= 20)')
+        $results.Count | Should -Be 2
+        (Get-BashText $results[0]) | Should -Be '20'
+        (Get-BashText $results[1]) | Should -Be '30'
+    }
+
+    It 'select with equality' {
+        $results = @(Invoke-BashEcho '[{"n":"a"},{"n":"b"}]' | Invoke-BashJq '.[] | select(.n == "b")')
+        $results.Count | Should -Be 1
+    }
+}
+
+Describe 'Invoke-BashJq — Built-in Functions' {
+    It 'returns sorted keys of an object' {
+        $r = Invoke-BashEcho '{"b":2,"a":1}' | Invoke-BashJq 'keys'
+        $text = Get-BashText $r
+        $text | Should -Match '"a"'
+        $text | Should -Match '"b"'
+    }
+
+    It 'returns values of an object' {
+        $r = Invoke-BashEcho '{"a":1,"b":2}' | Invoke-BashJq 'values'
+        $text = Get-BashText $r
+        $text | Should -Match '1'
+        $text | Should -Match '2'
+    }
+
+    It 'returns length of an array' {
+        $r = Invoke-BashEcho '[1,2,3]' | Invoke-BashJq 'length'
+        (Get-BashText $r) | Should -Be '3'
+    }
+
+    It 'returns length of a string' {
+        $r = Invoke-BashEcho '"hello"' | Invoke-BashJq 'length'
+        (Get-BashText $r) | Should -Be '5'
+    }
+
+    It 'returns length of an object' {
+        $r = Invoke-BashEcho '{"a":1,"b":2}' | Invoke-BashJq 'length'
+        (Get-BashText $r) | Should -Be '2'
+    }
+
+    It 'returns type for number' {
+        $r = Invoke-BashEcho '42' | Invoke-BashJq 'type'
+        (Get-BashText $r) | Should -Be '"number"'
+    }
+
+    It 'returns type for string' {
+        $r = Invoke-BashEcho '"hello"' | Invoke-BashJq 'type'
+        (Get-BashText $r) | Should -Be '"string"'
+    }
+
+    It 'returns type for array' {
+        $r = Invoke-BashEcho '[1,2]' | Invoke-BashJq 'type'
+        (Get-BashText $r) | Should -Be '"array"'
+    }
+
+    It 'returns type for object' {
+        $r = Invoke-BashEcho '{"a":1}' | Invoke-BashJq 'type'
+        (Get-BashText $r) | Should -Be '"object"'
+    }
+
+    It 'returns type for null' {
+        $r = Invoke-BashEcho 'null' | Invoke-BashJq 'type'
+        (Get-BashText $r) | Should -Be '"null"'
+    }
+
+    It 'returns type for boolean' {
+        $r = Invoke-BashEcho 'true' | Invoke-BashJq 'type'
+        (Get-BashText $r) | Should -Be '"boolean"'
+    }
+}
+
+Describe 'Invoke-BashJq — Output Flags' {
+    It 'produces compact output with -c' {
+        $r = Invoke-BashEcho '{"a":1,"b":2}' | Invoke-BashJq -c '.'
+        (Get-BashText $r) | Should -Be '{"a":1,"b":2}'
+    }
+
+    It 'sorts keys with -S' {
+        $r = Invoke-BashEcho '{"b":1,"a":2}' | Invoke-BashJq -S -c '.'
+        (Get-BashText $r) | Should -Be '{"a":2,"b":1}'
+    }
+
+    It 'combines -S and pretty output' {
+        $r = Invoke-BashEcho '{"b":1,"a":2}' | Invoke-BashJq -S '.'
+        $text = Get-BashText $r
+        $lines = $text -split "`n"
+        $lines[0] | Should -Be '{'
+        $lines[1].Trim() | Should -Match '"a"'
+    }
+}
+
+Describe 'Invoke-BashJq — Slurp Mode' {
+    It 'wraps input in array with -s' {
+        $r = Invoke-BashEcho '[1,2,3]' | Invoke-BashJq -s '.'
+        $text = Get-BashText $r
+        $text | Should -Match '^\['
+    }
+
+    It 'slurp with length returns 1 for single input' {
+        $r = Invoke-BashEcho '[1,2,3]' | Invoke-BashJq -s 'length'
+        (Get-BashText $r) | Should -Be '1'
+    }
+}
+
+Describe 'Invoke-BashJq — Object Construction' {
+    It 'constructs object with renamed keys' {
+        $r = Invoke-BashEcho '{"a":1}' | Invoke-BashJq -c '{x: .a}'
+        (Get-BashText $r) | Should -Be '{"x":1}'
+    }
+
+    It 'constructs object with multiple keys' {
+        $r = Invoke-BashEcho '{"first":"A","last":"B"}' | Invoke-BashJq -c '{f: .first, l: .last}'
+        (Get-BashText $r) | Should -Be '{"f":"A","l":"B"}'
+    }
+}
+
+Describe 'Invoke-BashJq — Array Construction' {
+    It 'constructs array from iterated fields' {
+        $r = Invoke-BashEcho '[{"n":"a"},{"n":"b"}]' | Invoke-BashJq -c '[.[] | .n]'
+        (Get-BashText $r) | Should -Be '["a","b"]'
+    }
+
+    It 'constructs array from map' {
+        $r = Invoke-BashEcho '[1,2,3]' | Invoke-BashJq -c '[.[] | select(. > 1)]'
+        (Get-BashText $r) | Should -Be '[2,3]'
+    }
+}
+
+Describe 'Invoke-BashJq — String Interpolation' {
+    It 'interpolates field values in strings' {
+        $r = Invoke-BashEcho '{"name":"world"}' | Invoke-BashJq -r "`"hello \(.name)`""
+        (Get-BashText $r) | Should -Be 'hello world'
+    }
+
+    It 'interpolates nested expressions' {
+        $r = Invoke-BashEcho '{"a":{"b":"val"}}' | Invoke-BashJq -r "`"result: \(.a.b)`""
+        (Get-BashText $r) | Should -Be 'result: val'
+    }
+}
+
+Describe 'Invoke-BashJq — File Mode' {
+    BeforeAll {
+        $testDir = Join-Path ([System.IO.Path]::GetTempPath()) "psbash-jq-$([guid]::NewGuid().ToString('N').Substring(0,8))"
+        New-Item -ItemType Directory -Path $testDir -Force | Out-Null
+        Set-Content -Path (Join-Path $testDir 'data.json') -Value '{"name":"Alice","age":30}' -NoNewline
+    }
+    AfterAll {
+        Remove-Item -Recurse -Force $testDir -ErrorAction SilentlyContinue
+    }
+
+    It 'reads JSON from file' {
+        $r = Invoke-BashJq '.name' (Join-Path $testDir 'data.json')
+        (Get-BashText $r) | Should -Be '"Alice"'
+    }
+
+    It 'applies filter to file data' {
+        $r = Invoke-BashJq -r '.name' (Join-Path $testDir 'data.json')
+        (Get-BashText $r) | Should -Be 'Alice'
+    }
+
+    It 'errors on missing file' {
+        $results = @(Invoke-BashJq '.name' (Join-Path $testDir 'missing.json') 2>&1)
+        $results[0] | Should -BeOfType [System.Management.Automation.ErrorRecord]
+    }
+}
+
+Describe 'Invoke-BashJq — Pipeline Bridge' {
+    It 'accepts BashObject pipeline input' {
+        $r = Invoke-BashEcho '{"x":42}' | Invoke-BashJq '.x'
+        (Get-BashText $r) | Should -Be '42'
+    }
+
+    It 'outputs BashObjects' {
+        $r = Invoke-BashEcho '{"a":1}' | Invoke-BashJq '.'
+        $r.PSObject.Properties['BashText'] | Should -Not -BeNullOrEmpty
+    }
+}
+
+Describe 'Invoke-BashJq — Alias' {
+    It 'jq alias resolves to Invoke-BashJq' {
+        $alias = Get-Alias -Name jq -Scope Global
+        $alias.Definition | Should -Be 'Invoke-BashJq'
+    }
+}
