@@ -84,7 +84,10 @@ FunctionsToExport = 'Invoke-BashEcho', 'Invoke-BashPrintf', 'Get-BashPlatform',
                'Invoke-BashLn',
                'Invoke-BashPs', 'Get-LinuxProcEntry', 'Get-DotNetProcEntry',
                'Format-PsAuxLine', 'Format-PsCustomLine',
-               'Invoke-BashSed', 'ConvertFrom-SedExpression', 'Test-SedAddress'
+               'Invoke-BashSed', 'ConvertFrom-SedExpression', 'Test-SedAddress',
+               'Invoke-BashAwk', 'ConvertFrom-AwkProgram', 'Split-AwkFields',
+               'Test-AwkPattern', 'Resolve-AwkExpression', 'Invoke-AwkAction',
+               'Format-AwkPrintf', 'Resolve-AwkStringFunc'
 
 # Cmdlets to export from this module, for best performance, do not use wildcards and do not delete the entry, use an empty array if there are no cmdlets to export.
 CmdletsToExport = @()
@@ -94,7 +97,7 @@ CmdletsToExport = @()
 
 # Aliases to export from this module, for best performance, do not use wildcards and do not delete the entry, use an empty array if there are no aliases to export.
 AliasesToExport = 'echo', 'printf', 'ls', 'cat', 'grep', 'sort', 'head', 'tail', 'wc', 'find', 'stat',
-               'cp', 'mv', 'rm', 'mkdir', 'rmdir', 'touch', 'ln', 'ps', 'sed'
+               'cp', 'mv', 'rm', 'mkdir', 'rmdir', 'touch', 'ln', 'ps', 'sed', 'awk'
 
 # DSC resources to export from this module
 # DscResourcesToExport = @()

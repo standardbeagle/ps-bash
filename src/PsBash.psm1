@@ -3353,6 +3353,841 @@ function Test-SedAddress {
     return $false
 }
 
+# --- awk Command ---
+
+function Invoke-BashAwk {
+    $Arguments = [string[]]$args
+    $pipelineInput = @($input)
+
+    # Parse flags: -F FS, -v VAR=VAL
+    $fieldSep = ' '
+    $fieldSepIsDefault = $true
+    $variables = @{}
+    $programText = $null
+    $i = 0
+
+    while ($i -lt $Arguments.Count) {
+        $arg = $Arguments[$i]
+
+        if ($arg -ceq '-F') {
+            $i++
+            if ($i -lt $Arguments.Count) {
+                $fieldSep = $Arguments[$i] -replace '\\t', "`t"
+                $fieldSepIsDefault = $false
+            }
+            $i++
+            continue
+        }
+
+        if ($arg.Length -gt 2 -and $arg.StartsWith('-F')) {
+            $fieldSep = $arg.Substring(2) -replace '\\t', "`t"
+            $fieldSepIsDefault = $false
+            $i++
+            continue
+        }
+
+        if ($arg -ceq '-v') {
+            $i++
+            if ($i -lt $Arguments.Count) {
+                $eqIdx = $Arguments[$i].IndexOf('=')
+                if ($eqIdx -gt 0) {
+                    $vName = $Arguments[$i].Substring(0, $eqIdx)
+                    $vVal = $Arguments[$i].Substring($eqIdx + 1)
+                    $variables[$vName] = $vVal
+                }
+            }
+            $i++
+            continue
+        }
+
+        if ($null -eq $programText) {
+            $programText = $arg
+        }
+        $i++
+    }
+
+    if ($null -eq $programText) {
+        throw 'awk: usage: awk [options] program [file ...]'
+    }
+
+    # Parse program into rules (pattern/action pairs)
+    $rules = ConvertFrom-AwkProgram -Program $programText
+
+    # Apply FS/OFS from variables or BEGIN blocks
+    if ($variables.ContainsKey('FS')) {
+        $fieldSep = $variables['FS']
+        $fieldSepIsDefault = $false
+    }
+    if (-not $variables.ContainsKey('OFS')) {
+        $variables['OFS'] = ' '
+    }
+    if (-not $variables.ContainsKey('NR')) {
+        $variables['NR'] = 0
+    }
+
+    # Execute BEGIN rules first
+    $beginOutput = [System.Collections.Generic.List[string]]::new()
+    foreach ($rule in $rules) {
+        if ($rule.Pattern -eq 'BEGIN') {
+            Invoke-AwkAction -Action $rule.Action -Fields @('') -Variables $variables -Output $beginOutput -FieldSep $fieldSep
+            # BEGIN can set FS/OFS
+            if ($variables.ContainsKey('FS') -and $fieldSepIsDefault) {
+                $fieldSep = $variables['FS']
+                $fieldSepIsDefault = $false
+            }
+        }
+    }
+
+    # Emit BEGIN output
+    foreach ($line in $beginOutput) {
+        New-BashObject -BashText "$line`n"
+    }
+
+    # Process input lines
+    if ($pipelineInput.Count -eq 0) {
+        # Still run END blocks
+        $endOutput = [System.Collections.Generic.List[string]]::new()
+        foreach ($rule in $rules) {
+            if ($rule.Pattern -eq 'END') {
+                Invoke-AwkAction -Action $rule.Action -Fields @('') -Variables $variables -Output $endOutput -FieldSep $fieldSep
+            }
+        }
+        foreach ($line in $endOutput) {
+            New-BashObject -BashText "$line`n"
+        }
+        return
+    }
+
+    $printfBuffer = [System.Text.StringBuilder]::new()
+    $items = @($pipelineInput)
+    for ($idx = 0; $idx -lt $items.Count; $idx++) {
+        $text = Get-BashText -InputObject $items[$idx]
+        $text = $text -replace "`n$", ''
+        $variables['NR'] = $idx + 1
+
+        # Split into fields
+        $fields = Split-AwkFields -Line $text -FieldSep $fieldSep -IsDefault $fieldSepIsDefault
+        $variables['NF'] = $fields.Count - 1
+
+        $lineOutput = [System.Collections.Generic.List[string]]::new()
+        $matched = $false
+
+        foreach ($rule in $rules) {
+            if ($rule.Pattern -eq 'BEGIN' -or $rule.Pattern -eq 'END') { continue }
+
+            if (Test-AwkPattern -Pattern $rule.Pattern -Fields $fields -Variables $variables) {
+                $matched = $true
+                if ($null -ne $rule.Action -and $rule.Action.Length -gt 0) {
+                    Invoke-AwkAction -Action $rule.Action -Fields $fields -Variables $variables -Output $lineOutput -FieldSep $fieldSep -PrintfBuffer $printfBuffer
+                } else {
+                    $lineOutput.Add($fields[0])
+                }
+            }
+        }
+
+        foreach ($outLine in $lineOutput) {
+            New-BashObject -BashText "$outLine`n"
+        }
+    }
+
+    # Flush printf buffer
+    if ($printfBuffer.Length -gt 0) {
+        New-BashObject -BashText "$($printfBuffer.ToString())`n"
+    }
+
+    # Execute END rules
+    $endOutput = [System.Collections.Generic.List[string]]::new()
+    foreach ($rule in $rules) {
+        if ($rule.Pattern -eq 'END') {
+            Invoke-AwkAction -Action $rule.Action -Fields @('') -Variables $variables -Output $endOutput -FieldSep $fieldSep
+        }
+    }
+    foreach ($line in $endOutput) {
+        New-BashObject -BashText "$line`n"
+    }
+}
+
+function Split-AwkFields {
+    [CmdletBinding()]
+    [OutputType([string[]])]
+    param(
+        [string]$Line,
+        [string]$FieldSep,
+        [bool]$IsDefault
+    )
+
+    if ($IsDefault) {
+        # Default awk behavior: split on runs of whitespace, trim leading/trailing
+        $parts = $Line.Trim() -split '\s+'
+        if ($parts.Count -eq 1 -and $parts[0] -eq '') {
+            return @($Line)
+        }
+    } else {
+        $escaped = [regex]::Escape($FieldSep)
+        $parts = $Line -split $escaped
+    }
+
+    $result = [string[]]::new($parts.Count + 1)
+    $result[0] = $Line
+    for ($j = 0; $j -lt $parts.Count; $j++) {
+        $result[$j + 1] = $parts[$j]
+    }
+    return $result
+}
+
+function ConvertFrom-AwkProgram {
+    [CmdletBinding()]
+    [OutputType([hashtable[]])]
+    param(
+        [Parameter(Mandatory)]
+        [string]$Program
+    )
+
+    $rules = [System.Collections.Generic.List[hashtable]]::new()
+    $pos = 0
+    $len = $Program.Length
+
+    while ($pos -lt $len) {
+        # Skip whitespace and semicolons between rules
+        while ($pos -lt $len -and ($Program[$pos] -match '[\s;]')) { $pos++ }
+        if ($pos -ge $len) { break }
+
+        $pattern = ''
+        $action = $null
+
+        # Check for BEGIN/END
+        if ($pos + 5 -le $len -and $Program.Substring($pos, 5) -eq 'BEGIN') {
+            $pattern = 'BEGIN'
+            $pos += 5
+            while ($pos -lt $len -and $Program[$pos] -match '\s') { $pos++ }
+            if ($pos -lt $len -and $Program[$pos] -eq '{') {
+                $action = Read-AwkBlock -Program $Program -Pos ([ref]$pos)
+            }
+            $rules.Add(@{ Pattern = $pattern; Action = $action })
+            continue
+        }
+
+        if ($pos + 3 -le $len -and $Program.Substring($pos, 3) -eq 'END') {
+            $afterEnd = $pos + 3
+            if ($afterEnd -ge $len -or $Program[$afterEnd] -match '[\s{]') {
+                $pattern = 'END'
+                $pos = $afterEnd
+                while ($pos -lt $len -and $Program[$pos] -match '\s') { $pos++ }
+                if ($pos -lt $len -and $Program[$pos] -eq '{') {
+                    $action = Read-AwkBlock -Program $Program -Pos ([ref]$pos)
+                }
+                $rules.Add(@{ Pattern = $pattern; Action = $action })
+                continue
+            }
+        }
+
+        # Check for /regex/ pattern
+        if ($Program[$pos] -eq '/') {
+            $endSlash = $pos + 1
+            while ($endSlash -lt $len) {
+                if ($Program[$endSlash] -eq '\') { $endSlash += 2; continue }
+                if ($Program[$endSlash] -eq '/') { break }
+                $endSlash++
+            }
+            $pattern = $Program.Substring($pos, $endSlash - $pos + 1)
+            $pos = $endSlash + 1
+            while ($pos -lt $len -and $Program[$pos] -match '\s') { $pos++ }
+            if ($pos -lt $len -and $Program[$pos] -eq '{') {
+                $action = Read-AwkBlock -Program $Program -Pos ([ref]$pos)
+            }
+            $rules.Add(@{ Pattern = $pattern; Action = $action })
+            continue
+        }
+
+        # Check for action-only rule {action}
+        if ($Program[$pos] -eq '{') {
+            $action = Read-AwkBlock -Program $Program -Pos ([ref]$pos)
+            $rules.Add(@{ Pattern = ''; Action = $action })
+            continue
+        }
+
+        # Expression pattern (e.g. $2 > 8, NR > 1, $1 == "value")
+        $exprStart = $pos
+        while ($pos -lt $len -and $Program[$pos] -ne '{' -and -not ($pos -gt $exprStart -and $Program[$pos] -match '[\s]' -and $pos + 1 -lt $len -and $Program[$pos + 1] -eq '{')) {
+            if ($Program[$pos] -eq '"') {
+                $pos++
+                while ($pos -lt $len -and $Program[$pos] -ne '"') {
+                    if ($Program[$pos] -eq '\') { $pos++ }
+                    $pos++
+                }
+                if ($pos -lt $len) { $pos++ }
+                continue
+            }
+            $pos++
+        }
+        # Trim trailing whitespace from pattern
+        $patEnd = $pos
+        while ($patEnd -gt $exprStart -and $Program[$patEnd - 1] -match '\s') { $patEnd-- }
+        $pattern = $Program.Substring($exprStart, $patEnd - $exprStart)
+
+        while ($pos -lt $len -and $Program[$pos] -match '\s') { $pos++ }
+        if ($pos -lt $len -and $Program[$pos] -eq '{') {
+            $action = Read-AwkBlock -Program $Program -Pos ([ref]$pos)
+        }
+        $rules.Add(@{ Pattern = $pattern; Action = $action })
+    }
+
+    return , $rules.ToArray()
+}
+
+function Read-AwkBlock {
+    param(
+        [string]$Program,
+        [ref]$Pos
+    )
+
+    $start = $Pos.Value + 1
+    $depth = 1
+    $p = $start
+
+    while ($p -lt $Program.Length -and $depth -gt 0) {
+        $ch = $Program[$p]
+        if ($ch -eq '"') {
+            $p++
+            while ($p -lt $Program.Length -and $Program[$p] -ne '"') {
+                if ($Program[$p] -eq '\') { $p++ }
+                $p++
+            }
+        } elseif ($ch -eq '/') {
+            # Could be regex in gsub/sub context - skip to closing /
+            $prev = if ($p -gt 0) { $Program[$p - 1] } else { '' }
+            if ($prev -eq '(' -or $prev -eq ',') {
+                $p++
+                while ($p -lt $Program.Length -and $Program[$p] -ne '/') {
+                    if ($Program[$p] -eq '\') { $p++ }
+                    $p++
+                }
+            }
+        } elseif ($ch -eq '{') {
+            $depth++
+        } elseif ($ch -eq '}') {
+            $depth--
+        }
+        $p++
+    }
+
+    $result = $Program.Substring($start, $p - $start - 1).Trim()
+    $Pos.Value = $p
+    return $result
+}
+
+function Test-AwkPattern {
+    [CmdletBinding()]
+    [OutputType([bool])]
+    param(
+        [string]$Pattern,
+        [string[]]$Fields,
+        [hashtable]$Variables
+    )
+
+    if ($Pattern -eq '' -or $null -eq $Pattern) { return $true }
+
+    # Regex pattern /pattern/
+    if ($Pattern.StartsWith('/') -and $Pattern.EndsWith('/') -and $Pattern.Length -gt 2) {
+        $regex = $Pattern.Substring(1, $Pattern.Length - 2)
+        return [regex]::IsMatch($Fields[0], $regex)
+    }
+
+    # Expression pattern
+    $val = Resolve-AwkExpression -Expr $Pattern -Fields $Fields -Variables $Variables
+    if ($val -is [bool]) { return $val }
+    if ($val -is [double] -or $val -is [int]) { return $val -ne 0 }
+    if ($val -is [string]) { return $val.Length -gt 0 }
+    return [bool]$val
+}
+
+function Resolve-AwkExpression {
+    param(
+        [string]$Expr,
+        [string[]]$Fields,
+        [hashtable]$Variables
+    )
+
+    $e = $Expr.Trim()
+
+    # String literal
+    if ($e.StartsWith('"') -and $e.EndsWith('"')) {
+        return Expand-AwkString -Str $e.Substring(1, $e.Length - 2)
+    }
+
+    # Comparison operators (scan for >, <, >=, <=, ==, !=, ~ outside strings)
+    $opPos = -1
+    $opLen = 0
+    $opType = ''
+    $depth = 0
+    $inStr = $false
+
+    for ($ci = 0; $ci -lt $e.Length; $ci++) {
+        $ch = $e[$ci]
+        if ($ch -eq '"') { $inStr = -not $inStr; continue }
+        if ($inStr) { continue }
+        if ($ch -eq '(') { $depth++; continue }
+        if ($ch -eq ')') { $depth--; continue }
+        if ($depth -gt 0) { continue }
+
+        if ($ci + 1 -lt $e.Length) {
+            $two = $e.Substring($ci, 2)
+            if ($two -eq '==' -or $two -eq '!=' -or $two -eq '>=' -or $two -eq '<=') {
+                $opPos = $ci; $opLen = 2; $opType = $two; break
+            }
+        }
+        if ($ch -eq '>' -and ($ci + 1 -ge $e.Length -or $e[$ci + 1] -ne '=')) {
+            $opPos = $ci; $opLen = 1; $opType = '>'; break
+        }
+        if ($ch -eq '<' -and ($ci + 1 -ge $e.Length -or $e[$ci + 1] -ne '=')) {
+            $opPos = $ci; $opLen = 1; $opType = '<'; break
+        }
+    }
+
+    if ($opPos -gt 0) {
+        $left = Resolve-AwkExpression -Expr $e.Substring(0, $opPos) -Fields $Fields -Variables $Variables
+        $right = Resolve-AwkExpression -Expr $e.Substring($opPos + $opLen) -Fields $Fields -Variables $Variables
+
+        # Try numeric comparison
+        $leftNum = 0.0
+        $rightNum = 0.0
+        $bothNumeric = [double]::TryParse("$left", [ref]$leftNum) -and [double]::TryParse("$right", [ref]$rightNum)
+
+        switch ($opType) {
+            '==' { if ($bothNumeric) { return $leftNum -eq $rightNum } else { return "$left" -eq "$right" } }
+            '!=' { if ($bothNumeric) { return $leftNum -ne $rightNum } else { return "$left" -ne "$right" } }
+            '>'  { if ($bothNumeric) { return $leftNum -gt $rightNum } else { return "$left" -gt "$right" } }
+            '<'  { if ($bothNumeric) { return $leftNum -lt $rightNum } else { return "$left" -lt "$right" } }
+            '>=' { if ($bothNumeric) { return $leftNum -ge $rightNum } else { return "$left" -ge "$right" } }
+            '<=' { if ($bothNumeric) { return $leftNum -le $rightNum } else { return "$left" -le "$right" } }
+        }
+    }
+
+    # Arithmetic: + - * / % (scan right-to-left for +/- then */% for precedence)
+    $depth = 0; $inStr = $false
+    for ($ci = $e.Length - 1; $ci -ge 1; $ci--) {
+        $ch = $e[$ci]
+        if ($ch -eq '"') { $inStr = -not $inStr; continue }
+        if ($inStr) { continue }
+        if ($ch -eq ')') { $depth++; continue }
+        if ($ch -eq '(') { $depth--; continue }
+        if ($depth -gt 0) { continue }
+
+        if (($ch -eq '+' -or $ch -eq '-') -and $ci -gt 0) {
+            $left = Resolve-AwkExpression -Expr $e.Substring(0, $ci) -Fields $Fields -Variables $Variables
+            $right = Resolve-AwkExpression -Expr $e.Substring($ci + 1) -Fields $Fields -Variables $Variables
+            $lv = 0.0; $rv = 0.0
+            [void][double]::TryParse("$left", [ref]$lv)
+            [void][double]::TryParse("$right", [ref]$rv)
+            if ($ch -eq '+') { return $lv + $rv } else { return $lv - $rv }
+        }
+    }
+
+    $depth = 0; $inStr = $false
+    for ($ci = $e.Length - 1; $ci -ge 1; $ci--) {
+        $ch = $e[$ci]
+        if ($ch -eq '"') { $inStr = -not $inStr; continue }
+        if ($inStr) { continue }
+        if ($ch -eq ')') { $depth++; continue }
+        if ($ch -eq '(') { $depth--; continue }
+        if ($depth -gt 0) { continue }
+
+        if ($ch -eq '*' -or $ch -eq '/' -or $ch -eq '%') {
+            $left = Resolve-AwkExpression -Expr $e.Substring(0, $ci) -Fields $Fields -Variables $Variables
+            $right = Resolve-AwkExpression -Expr $e.Substring($ci + 1) -Fields $Fields -Variables $Variables
+            $lv = 0.0; $rv = 0.0
+            [void][double]::TryParse("$left", [ref]$lv)
+            [void][double]::TryParse("$right", [ref]$rv)
+            if ($ch -eq '*') { return $lv * $rv }
+            if ($ch -eq '/' -and $rv -ne 0) { return $lv / $rv }
+            if ($ch -eq '%' -and $rv -ne 0) { return $lv % $rv }
+            return 0
+        }
+    }
+
+    # Parenthesized expression
+    if ($e.StartsWith('(') -and $e.EndsWith(')')) {
+        return Resolve-AwkExpression -Expr $e.Substring(1, $e.Length - 2) -Fields $Fields -Variables $Variables
+    }
+
+    # Function call: name(args)
+    $funcMatch = [regex]::Match($e, '^(length|substr|tolower|toupper)\s*\((.*)$')
+    if ($funcMatch.Success) {
+        $fName = $funcMatch.Groups[1].Value
+        $rest = $funcMatch.Groups[2].Value
+        # Find matching closing paren
+        $pd = 1; $pi = 0
+        $inQ = $false
+        while ($pi -lt $rest.Length -and $pd -gt 0) {
+            if ($rest[$pi] -eq '"') { $inQ = -not $inQ }
+            if (-not $inQ) {
+                if ($rest[$pi] -eq '(') { $pd++ }
+                if ($rest[$pi] -eq ')') { $pd-- }
+            }
+            if ($pd -gt 0) { $pi++ }
+        }
+        $argText = $rest.Substring(0, $pi)
+        $fArgs = @(Split-AwkFuncArgs -Text $argText)
+        return Resolve-AwkStringFunc -FuncName $fName -FuncArgs $fArgs -Fields $Fields -Variables $Variables
+    }
+
+    # Field reference $N or $NF
+    if ($e.StartsWith('$')) {
+        $fieldExpr = $e.Substring(1)
+        if ($fieldExpr -eq 'NF') {
+            $idx = $Fields.Count - 1
+        } else {
+            $idx = 0
+            [void][int]::TryParse($fieldExpr, [ref]$idx)
+        }
+        if ($idx -ge 0 -and $idx -lt $Fields.Count) {
+            return $Fields[$idx]
+        }
+        return ''
+    }
+
+    # Numeric literal
+    $numVal = 0.0
+    if ([double]::TryParse($e, [ref]$numVal)) {
+        return $numVal
+    }
+
+    # Built-in variable or user variable
+    if ($Variables.ContainsKey($e)) {
+        return $Variables[$e]
+    }
+
+    return $e
+}
+
+function Expand-AwkString {
+    param([string]$Str)
+    $Str = $Str -replace '\\n', "`n"
+    $Str = $Str -replace '\\t', "`t"
+    $Str = $Str -replace '\\\\', '\'
+    return $Str
+}
+
+function Invoke-AwkAction {
+    param(
+        [string]$Action,
+        [string[]]$Fields,
+        [hashtable]$Variables,
+        [System.Collections.Generic.List[string]]$Output,
+        [string]$FieldSep,
+        [System.Text.StringBuilder]$PrintfBuffer = $null
+    )
+
+    # Split action into statements by semicolons (respecting strings and parens)
+    $statements = @(Split-AwkStatements -Text $Action)
+
+    foreach ($stmt in $statements) {
+        $s = $stmt.Trim()
+        if ($s.Length -eq 0) { continue }
+
+        # Assignment: var = expr (but not ==)
+        $assignMatch = [regex]::Match($s, '^([A-Za-z_]\w*)\s*=\s*(.+)$')
+        if ($assignMatch.Success -and -not $s.Contains('==')) {
+            $vName = $assignMatch.Groups[1].Value
+            $vVal = Resolve-AwkExpression -Expr $assignMatch.Groups[2].Value -Fields $Fields -Variables $Variables
+            $Variables[$vName] = $vVal
+            if ($vName -eq 'OFS' -or $vName -eq 'FS') {
+                # These are tracked via the variables hashtable
+            }
+            continue
+        }
+
+        # gsub(/regex/, "replacement") or gsub(/regex/, "replacement", target)
+        if ($s -match '^gsub\s*\(') {
+            $argsStr = $s.Substring($s.IndexOf('(') + 1)
+            $argsStr = $argsStr.Substring(0, $argsStr.LastIndexOf(')'))
+            $gsubArgs = @(Split-AwkFuncArgs -Text $argsStr)
+            if ($gsubArgs.Count -ge 2) {
+                $regex = $gsubArgs[0].Trim()
+                if ($regex.StartsWith('/') -and $regex.EndsWith('/')) {
+                    $regex = $regex.Substring(1, $regex.Length - 2)
+                }
+                $repl = Resolve-AwkExpression -Expr $gsubArgs[1].Trim() -Fields $Fields -Variables $Variables
+                $Fields[0] = [regex]::Replace($Fields[0], $regex, "$repl")
+                # Re-split fields
+                $newFields = Split-AwkFields -Line $Fields[0] -FieldSep $FieldSep -IsDefault ($FieldSep -eq ' ')
+                for ($fi = 0; $fi -lt $newFields.Count -and $fi -lt $Fields.Count; $fi++) {
+                    $Fields[$fi] = $newFields[$fi]
+                }
+            }
+            continue
+        }
+
+        # sub(/regex/, "replacement")
+        if ($s -match '^sub\s*\(') {
+            $argsStr = $s.Substring($s.IndexOf('(') + 1)
+            $argsStr = $argsStr.Substring(0, $argsStr.LastIndexOf(')'))
+            $subArgs = @(Split-AwkFuncArgs -Text $argsStr)
+            if ($subArgs.Count -ge 2) {
+                $regex = $subArgs[0].Trim()
+                if ($regex.StartsWith('/') -and $regex.EndsWith('/')) {
+                    $regex = $regex.Substring(1, $regex.Length - 2)
+                }
+                $repl = Resolve-AwkExpression -Expr $subArgs[1].Trim() -Fields $Fields -Variables $Variables
+                $Fields[0] = [regex]::new($regex).Replace($Fields[0], "$repl", 1)
+                $newFields = Split-AwkFields -Line $Fields[0] -FieldSep $FieldSep -IsDefault ($FieldSep -eq ' ')
+                for ($fi = 0; $fi -lt $newFields.Count -and $fi -lt $Fields.Count; $fi++) {
+                    $Fields[$fi] = $newFields[$fi]
+                }
+            }
+            continue
+        }
+
+        # printf "fmt", args...
+        if ($s -match '^printf\s+') {
+            $printfArgs = $s.Substring(6).Trim()
+            $parts = @(Split-AwkFuncArgs -Text $printfArgs)
+            if ($parts.Count -ge 1) {
+                $fmt = Resolve-AwkExpression -Expr $parts[0].Trim() -Fields $Fields -Variables $Variables
+                $fmtStr = "$fmt"
+                $argVals = @()
+                for ($ai = 1; $ai -lt $parts.Count; $ai++) {
+                    $argVals += Resolve-AwkExpression -Expr $parts[$ai].Trim() -Fields $Fields -Variables $Variables
+                }
+                $formatted = Format-AwkPrintf -Format $fmtStr -FormatArgs $argVals
+                if ($null -ne $PrintfBuffer) {
+                    [void]$PrintfBuffer.Append($formatted)
+                    # Emit complete lines from buffer
+                    $bufStr = $PrintfBuffer.ToString()
+                    while ($bufStr.Contains("`n")) {
+                        $nlIdx = $bufStr.IndexOf("`n")
+                        $Output.Add($bufStr.Substring(0, $nlIdx))
+                        $bufStr = $bufStr.Substring($nlIdx + 1)
+                    }
+                    [void]$PrintfBuffer.Clear()
+                    [void]$PrintfBuffer.Append($bufStr)
+                } else {
+                    $Output.Add($formatted)
+                }
+            }
+            continue
+        }
+
+        # print expr, expr, ...
+        if ($s -match '^print\s*(.*)$') {
+            $printArgs = $Matches[1].Trim()
+            if ($printArgs.Length -eq 0) {
+                $Output.Add($Fields[0])
+            } else {
+                $ofs = if ($Variables.ContainsKey('OFS')) { "$($Variables['OFS'])" } else { ' ' }
+                $parts = @(Split-AwkFuncArgs -Text $printArgs)
+                $vals = [System.Collections.Generic.List[string]]::new()
+                foreach ($part in $parts) {
+                    $val = Resolve-AwkExpression -Expr $part.Trim() -Fields $Fields -Variables $Variables
+                    $numCheck = 0.0
+                    if ($val -is [double]) {
+                        $intVal = [int]$val
+                        if ([double]$intVal -eq [double]$val) {
+                            $vals.Add("$intVal")
+                        } else {
+                            $vals.Add("$val")
+                        }
+                    } else {
+                        $vals.Add("$val")
+                    }
+                }
+                $Output.Add($vals -join $ofs)
+            }
+            continue
+        }
+
+        # Bare print (no arguments, just "print")
+        if ($s -eq 'print') {
+            $Output.Add($Fields[0])
+            continue
+        }
+    }
+}
+
+function Split-AwkStatements {
+    param([string]$Text)
+
+    $results = [System.Collections.Generic.List[string]]::new()
+    $current = [System.Text.StringBuilder]::new()
+    $inStr = $false
+    $depth = 0
+
+    for ($ci = 0; $ci -lt $Text.Length; $ci++) {
+        $ch = $Text[$ci]
+        if ($ch -eq '"' -and ($ci -eq 0 -or $Text[$ci - 1] -ne '\')) {
+            $inStr = -not $inStr
+            [void]$current.Append($ch)
+            continue
+        }
+        if ($inStr) { [void]$current.Append($ch); continue }
+        if ($ch -eq '(') { $depth++; [void]$current.Append($ch); continue }
+        if ($ch -eq ')') { $depth--; [void]$current.Append($ch); continue }
+        if ($ch -eq ';' -and $depth -eq 0) {
+            $results.Add($current.ToString())
+            [void]$current.Clear()
+            continue
+        }
+        [void]$current.Append($ch)
+    }
+    if ($current.Length -gt 0) { $results.Add($current.ToString()) }
+    return $results.ToArray()
+}
+
+function Split-AwkFuncArgs {
+    param([string]$Text)
+
+    $results = [System.Collections.Generic.List[string]]::new()
+    $current = [System.Text.StringBuilder]::new()
+    $inStr = $false
+    $depth = 0
+    $inRegex = $false
+
+    for ($ci = 0; $ci -lt $Text.Length; $ci++) {
+        $ch = $Text[$ci]
+        if ($ch -eq '/' -and -not $inStr) {
+            if (-not $inRegex -and ($ci -eq 0 -or $Text[$ci - 1] -match '[,(]')) {
+                $inRegex = $true
+                [void]$current.Append($ch)
+                continue
+            } elseif ($inRegex) {
+                $inRegex = $false
+                [void]$current.Append($ch)
+                continue
+            }
+        }
+        if ($inRegex) { [void]$current.Append($ch); continue }
+        if ($ch -eq '"' -and ($ci -eq 0 -or $Text[$ci - 1] -ne '\')) {
+            $inStr = -not $inStr
+            [void]$current.Append($ch)
+            continue
+        }
+        if ($inStr) { [void]$current.Append($ch); continue }
+        if ($ch -eq '(') { $depth++; [void]$current.Append($ch); continue }
+        if ($ch -eq ')') { $depth--; [void]$current.Append($ch); continue }
+        if ($ch -eq ',' -and $depth -eq 0) {
+            $results.Add($current.ToString())
+            [void]$current.Clear()
+            continue
+        }
+        [void]$current.Append($ch)
+    }
+    if ($current.Length -gt 0) { $results.Add($current.ToString()) }
+    return $results.ToArray()
+}
+
+function Format-AwkPrintf {
+    param(
+        [string]$Format,
+        [array]$FormatArgs
+    )
+
+    $result = [System.Text.StringBuilder]::new()
+    $argIdx = 0
+    $i = 0
+
+    while ($i -lt $Format.Length) {
+        $ch = $Format[$i]
+        if ($ch -eq '%' -and ($i + 1) -lt $Format.Length) {
+            $i++
+            # Read flags, width, precision
+            $fmtSpec = [System.Text.StringBuilder]::new()
+            while ($i -lt $Format.Length -and $Format[$i] -match '[-+ 0#]') {
+                [void]$fmtSpec.Append($Format[$i])
+                $i++
+            }
+            while ($i -lt $Format.Length -and $Format[$i] -match '\d') {
+                [void]$fmtSpec.Append($Format[$i])
+                $i++
+            }
+            if ($i -lt $Format.Length -and $Format[$i] -eq '.') {
+                [void]$fmtSpec.Append($Format[$i])
+                $i++
+                while ($i -lt $Format.Length -and $Format[$i] -match '\d') {
+                    [void]$fmtSpec.Append($Format[$i])
+                    $i++
+                }
+            }
+            if ($i -lt $Format.Length) {
+                $conv = $Format[$i]
+                $argVal = if ($argIdx -lt $FormatArgs.Count) { $FormatArgs[$argIdx] } else { '' }
+                $argIdx++
+                switch ($conv) {
+                    's' { [void]$result.Append("$argVal") }
+                    'd' {
+                        $nv = 0; [void][int]::TryParse("$argVal", [ref]$nv)
+                        [void]$result.Append($nv)
+                    }
+                    'f' {
+                        $nv = 0.0; [void][double]::TryParse("$argVal", [ref]$nv)
+                        [void]$result.Append($nv.ToString('F6'))
+                    }
+                    '%' { [void]$result.Append('%'); $argIdx-- }
+                    default { [void]$result.Append($conv) }
+                }
+                $i++
+            }
+        } elseif ($ch -eq '\' -and ($i + 1) -lt $Format.Length) {
+            $i++
+            switch ($Format[$i]) {
+                'n' { [void]$result.Append("`n") }
+                't' { [void]$result.Append("`t") }
+                '\' { [void]$result.Append('\') }
+                default { [void]$result.Append('\'); [void]$result.Append($Format[$i]) }
+            }
+            $i++
+        } else {
+            [void]$result.Append($ch)
+            $i++
+        }
+    }
+
+    return $result.ToString()
+}
+
+# String function support in Resolve-AwkExpression
+# Extend Resolve-AwkExpression to handle function calls
+function Resolve-AwkStringFunc {
+    param(
+        [string]$FuncName,
+        [string[]]$FuncArgs,
+        [string[]]$Fields,
+        [hashtable]$Variables
+    )
+
+    switch ($FuncName) {
+        'length' {
+            $val = if ($FuncArgs.Count -gt 0) {
+                Resolve-AwkExpression -Expr $FuncArgs[0] -Fields $Fields -Variables $Variables
+            } else { $Fields[0] }
+            return "$val".Length
+        }
+        'substr' {
+            if ($FuncArgs.Count -ge 2) {
+                $str = "$(Resolve-AwkExpression -Expr $FuncArgs[0] -Fields $Fields -Variables $Variables)"
+                $start = 0; [void][int]::TryParse("$(Resolve-AwkExpression -Expr $FuncArgs[1] -Fields $Fields -Variables $Variables)", [ref]$start)
+                $start-- # awk is 1-based
+                if ($start -lt 0) { $start = 0 }
+                if ($FuncArgs.Count -ge 3) {
+                    $len = 0; [void][int]::TryParse("$(Resolve-AwkExpression -Expr $FuncArgs[2] -Fields $Fields -Variables $Variables)", [ref]$len)
+                    if ($start + $len -gt $str.Length) { $len = $str.Length - $start }
+                    return $str.Substring($start, $len)
+                }
+                return $str.Substring($start)
+            }
+            return ''
+        }
+        'tolower' {
+            $val = Resolve-AwkExpression -Expr $FuncArgs[0] -Fields $Fields -Variables $Variables
+            return "$val".ToLower()
+        }
+        'toupper' {
+            $val = Resolve-AwkExpression -Expr $FuncArgs[0] -Fields $Fields -Variables $Variables
+            return "$val".ToUpper()
+        }
+        default { return '' }
+    }
+}
+
 # --- Aliases ---
 
 Set-Alias -Name 'echo'   -Value 'Invoke-BashEcho'   -Force -Scope Global -Option AllScope
@@ -3375,3 +4210,4 @@ Set-Alias -Name 'touch'   -Value 'Invoke-BashTouch'   -Force -Scope Global -Opti
 Set-Alias -Name 'ln'      -Value 'Invoke-BashLn'      -Force -Scope Global -Option AllScope
 Set-Alias -Name 'ps'      -Value 'Invoke-BashPs'      -Force -Scope Global -Option AllScope
 Set-Alias -Name 'sed'     -Value 'Invoke-BashSed'     -Force -Scope Global -Option AllScope
+Set-Alias -Name 'awk'     -Value 'Invoke-BashAwk'     -Force -Scope Global -Option AllScope

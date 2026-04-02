@@ -2283,6 +2283,261 @@ Describe 'Invoke-BashSed — Alias' {
     }
 }
 
+Describe 'Invoke-BashAwk — Field Extraction' {
+    It 'echo hello world | awk {print $1} -> hello' {
+        $result = @(Invoke-BashEcho 'hello world' | Invoke-BashAwk '{print $1}')
+        $result.Count | Should -Be 1
+        ($result[0].BashText -replace "`n$", '') | Should -Be 'hello'
+    }
+
+    It 'echo hello world | awk {print $2} -> world' {
+        $result = @(Invoke-BashEcho 'hello world' | Invoke-BashAwk '{print $2}')
+        ($result[0].BashText -replace "`n$", '') | Should -Be 'world'
+    }
+
+    It 'echo hello world | awk {print $0} -> hello world' {
+        $result = @(Invoke-BashEcho 'hello world' | Invoke-BashAwk '{print $0}')
+        ($result[0].BashText -replace "`n$", '') | Should -Be 'hello world'
+    }
+
+    It 'print NF gives field count' {
+        $result = @(Invoke-BashEcho 'a b c d' | Invoke-BashAwk '{print NF}')
+        ($result[0].BashText -replace "`n$", '') | Should -Be '4'
+    }
+
+    It 'print $NF gives last field' {
+        $result = @(Invoke-BashEcho 'a b c d' | Invoke-BashAwk '{print $NF}')
+        ($result[0].BashText -replace "`n$", '') | Should -Be 'd'
+    }
+}
+
+Describe 'Invoke-BashAwk — Field Separator' {
+    It 'awk -F: {print $2} splits on colon' {
+        $result = @(Invoke-BashEcho 'a:b:c' | Invoke-BashAwk -F: '{print $2}')
+        ($result[0].BashText -replace "`n$", '') | Should -Be 'b'
+    }
+
+    It 'awk -F with tab separator' {
+        $obj = New-BashObject -BashText "a`tb`tc`n"
+        $result = @($obj | Invoke-BashAwk '-F\t' '{print $2}')
+        ($result[0].BashText -replace "`n$", '') | Should -Be 'b'
+    }
+
+    It 'awk -F with multi-char separator' {
+        $result = @(Invoke-BashEcho 'a::b::c' | Invoke-BashAwk '-F::' '{print $2}')
+        ($result[0].BashText -replace "`n$", '') | Should -Be 'b'
+    }
+}
+
+Describe 'Invoke-BashAwk — NR (Line Numbers)' {
+    It 'awk {print NR, $0} numbers lines' {
+        $obj1 = New-BashObject -BashText "a`n"
+        $obj2 = New-BashObject -BashText "b`n"
+        $obj3 = New-BashObject -BashText "c`n"
+        $results = @($obj1, $obj2, $obj3 | Invoke-BashAwk '{print NR, $0}')
+        $results.Count | Should -Be 3
+        ($results[0].BashText -replace "`n$", '') | Should -Be '1 a'
+        ($results[1].BashText -replace "`n$", '') | Should -Be '2 b'
+        ($results[2].BashText -replace "`n$", '') | Should -Be '3 c'
+    }
+}
+
+Describe 'Invoke-BashAwk — BEGIN/END Blocks' {
+    It 'BEGIN{OFS="\t"} {print $1,$2} uses tab OFS' {
+        $obj1 = New-BashObject -BashText "a 1`n"
+        $obj2 = New-BashObject -BashText "b 2`n"
+        $results = @($obj1, $obj2 | Invoke-BashAwk 'BEGIN{OFS="\t"} {print $1,$2}')
+        $results.Count | Should -Be 2
+        ($results[0].BashText -replace "`n$", '') | Should -Be "a`t1"
+        ($results[1].BashText -replace "`n$", '') | Should -Be "b`t2"
+    }
+
+    It 'END{print NR} prints line count' {
+        $obj1 = New-BashObject -BashText "a`n"
+        $obj2 = New-BashObject -BashText "b`n"
+        $results = @($obj1, $obj2 | Invoke-BashAwk 'END{print NR}')
+        $results.Count | Should -Be 1
+        ($results[0].BashText -replace "`n$", '') | Should -Be '2'
+    }
+
+    It 'BEGIN{print "header"} prints before input' {
+        $obj = New-BashObject -BashText "data`n"
+        $results = @($obj | Invoke-BashAwk 'BEGIN{print "header"} {print $0}')
+        $results.Count | Should -Be 2
+        ($results[0].BashText -replace "`n$", '') | Should -Be 'header'
+        ($results[1].BashText -replace "`n$", '') | Should -Be 'data'
+    }
+}
+
+Describe 'Invoke-BashAwk — Pattern Matching' {
+    It '/regex/ filters matching lines' {
+        $obj1 = New-BashObject -BashText "foo`n"
+        $obj2 = New-BashObject -BashText "bar`n"
+        $obj3 = New-BashObject -BashText "baz`n"
+        $results = @($obj1, $obj2, $obj3 | Invoke-BashAwk '/ba/')
+        $results.Count | Should -Be 2
+        ($results[0].BashText -replace "`n$", '') | Should -Be 'bar'
+        ($results[1].BashText -replace "`n$", '') | Should -Be 'baz'
+    }
+
+    It '$2 > 8 filters by field comparison' {
+        $obj1 = New-BashObject -BashText "a 10`n"
+        $obj2 = New-BashObject -BashText "b 20`n"
+        $obj3 = New-BashObject -BashText "c 5`n"
+        $results = @($obj1, $obj2, $obj3 | Invoke-BashAwk '$2 > 8')
+        $results.Count | Should -Be 2
+        ($results[0].BashText -replace "`n$", '') | Should -Be 'a 10'
+        ($results[1].BashText -replace "`n$", '') | Should -Be 'b 20'
+    }
+
+    It '$1 == "value" filters by equality' {
+        $obj1 = New-BashObject -BashText "alice 30`n"
+        $obj2 = New-BashObject -BashText "bob 25`n"
+        $obj3 = New-BashObject -BashText "alice 40`n"
+        $results = @($obj1, $obj2, $obj3 | Invoke-BashAwk '$1 == "alice" {print $1, $2}')
+        $results.Count | Should -Be 2
+        ($results[0].BashText -replace "`n$", '') | Should -Be 'alice 30'
+    }
+
+    It 'NR > 1 skips first line' {
+        $obj1 = New-BashObject -BashText "header`n"
+        $obj2 = New-BashObject -BashText "data1`n"
+        $obj3 = New-BashObject -BashText "data2`n"
+        $results = @($obj1, $obj2, $obj3 | Invoke-BashAwk 'NR > 1')
+        $results.Count | Should -Be 2
+        ($results[0].BashText -replace "`n$", '') | Should -Be 'data1'
+    }
+}
+
+Describe 'Invoke-BashAwk — String Functions' {
+    It 'tolower($0) converts to lowercase' {
+        $result = @(Invoke-BashEcho 'HELLO' | Invoke-BashAwk '{print tolower($0)}')
+        ($result[0].BashText -replace "`n$", '') | Should -Be 'hello'
+    }
+
+    It 'toupper($0) converts to uppercase' {
+        $result = @(Invoke-BashEcho 'hello' | Invoke-BashAwk '{print toupper($0)}')
+        ($result[0].BashText -replace "`n$", '') | Should -Be 'HELLO'
+    }
+
+    It 'length($0) returns string length' {
+        $result = @(Invoke-BashEcho 'hello' | Invoke-BashAwk '{print length($0)}')
+        ($result[0].BashText -replace "`n$", '') | Should -Be '5'
+    }
+
+    It 'substr($0,2,3) extracts substring' {
+        $result = @(Invoke-BashEcho 'hello' | Invoke-BashAwk '{print substr($0,2,3)}')
+        ($result[0].BashText -replace "`n$", '') | Should -Be 'ell'
+    }
+
+    It 'gsub replaces all occurrences' {
+        $result = @(Invoke-BashEcho 'aabaa' | Invoke-BashAwk '{gsub(/a/,"x"); print}')
+        ($result[0].BashText -replace "`n$", '') | Should -Be 'xxbxx'
+    }
+
+    It 'sub replaces first occurrence' {
+        $result = @(Invoke-BashEcho 'aabaa' | Invoke-BashAwk '{sub(/a/,"x"); print}')
+        ($result[0].BashText -replace "`n$", '') | Should -Be 'xabaa'
+    }
+}
+
+Describe 'Invoke-BashAwk — Math Expressions' {
+    It '$3 + $4 adds fields' {
+        $result = @(Invoke-BashEcho 'a b 10 20' | Invoke-BashAwk '{print $3 + $4}')
+        ($result[0].BashText -replace "`n$", '') | Should -Be '30'
+    }
+
+    It '$2 * 2 multiplies' {
+        $result = @(Invoke-BashEcho 'item 5' | Invoke-BashAwk '{print $2 * 2}')
+        ($result[0].BashText -replace "`n$", '') | Should -Be '10'
+    }
+
+    It 'arithmetic in pattern condition' {
+        $obj1 = New-BashObject -BashText "a 10`n"
+        $obj2 = New-BashObject -BashText "b 3`n"
+        $results = @($obj1, $obj2 | Invoke-BashAwk '$2 * 2 > 15 {print $1}')
+        $results.Count | Should -Be 1
+        ($results[0].BashText -replace "`n$", '') | Should -Be 'a'
+    }
+}
+
+Describe 'Invoke-BashAwk — Variables' {
+    It '-v VAR=VAL assigns variable' {
+        $result = @(Invoke-BashEcho 'hello' | Invoke-BashAwk -v 'greeting=hi' '{print greeting, $1}')
+        ($result[0].BashText -replace "`n$", '') | Should -Be 'hi hello'
+    }
+
+    It 'OFS controls output field separator in print' {
+        $result = @(Invoke-BashEcho 'a b c' | Invoke-BashAwk 'BEGIN{OFS=","} {print $1,$2,$3}')
+        ($result[0].BashText -replace "`n$", '') | Should -Be 'a,b,c'
+    }
+
+    It 'FS set in BEGIN controls field splitting' {
+        $result = @(Invoke-BashEcho 'a:b:c' | Invoke-BashAwk 'BEGIN{FS=":"} {print $2}')
+        ($result[0].BashText -replace "`n$", '') | Should -Be 'b'
+    }
+}
+
+Describe 'Invoke-BashAwk — Printf' {
+    It 'printf formats output' {
+        $result = @(Invoke-BashEcho 'hello 42' | Invoke-BashAwk '{printf "%s=%d\n", $1, $2}')
+        ($result[0].BashText -replace "`n$", '') | Should -Be 'hello=42'
+    }
+
+    It 'printf without newline concatenates' {
+        $obj1 = New-BashObject -BashText "a`n"
+        $obj2 = New-BashObject -BashText "b`n"
+        $results = @($obj1, $obj2 | Invoke-BashAwk '{printf "%s", $1}')
+        $results.Count | Should -Be 1
+        ($results[0].BashText -replace "`n$", '') | Should -Be 'ab'
+    }
+}
+
+Describe 'Invoke-BashAwk — Pipeline Bridge' {
+    It 'ls | awk {print $NF} extracts last field from LsEntry' {
+        $testDir = Join-Path ([System.IO.Path]::GetTempPath()) "psbash-awk-ls-$([guid]::NewGuid().ToString('N').Substring(0,8))"
+        New-Item -ItemType Directory -Path $testDir -Force | Out-Null
+        try {
+            Set-Content -Path (Join-Path $testDir 'myfile.txt') -Value 'content'
+            $results = @(Invoke-BashLs -la $testDir | Invoke-BashAwk '{print $NF}')
+            $fileResult = $results | Where-Object {
+                $null -ne $_.PSObject.Properties['BashText'] -and
+                ($_.BashText -replace "`n$", '') -eq 'myfile.txt'
+            }
+            $fileResult | Should -Not -BeNullOrEmpty
+        } finally {
+            Remove-Item -Recurse -Force $testDir
+        }
+    }
+
+    It 'awk produces BashObjects with PsBash.TextOutput type' {
+        $result = @(Invoke-BashEcho 'test' | Invoke-BashAwk '{print $1}')
+        $result[0].PSObject.TypeNames[0] | Should -Be 'PsBash.TextOutput'
+    }
+
+    It 'pattern filter with pipeline objects' {
+        $obj1 = New-BashObject -BashText "alice 90`n"
+        $obj2 = New-BashObject -BashText "bob 30`n"
+        $obj3 = New-BashObject -BashText "carol 80`n"
+        $results = @($obj1, $obj2, $obj3 | Invoke-BashAwk '$2 > 50 {print $1, $2}')
+        $results.Count | Should -Be 2
+    }
+}
+
+Describe 'Invoke-BashAwk — Multiple Statements' {
+    It 'semicolon separates statements in action' {
+        $result = @(Invoke-BashEcho 'hello world' | Invoke-BashAwk '{x = $1; print x}')
+        ($result[0].BashText -replace "`n$", '') | Should -Be 'hello'
+    }
+}
+
+Describe 'Invoke-BashAwk — Alias' {
+    It 'awk alias works' {
+        $alias = Get-Alias -Name awk -Scope Global
+        $alias.Definition | Should -Be 'Invoke-BashAwk'
+    }
+}
+
 Describe 'Invoke-BashPs — Numeric Properties' {
     It 'Memory and CPU are numeric on current platform' {
         $results = @(Invoke-BashPs aux)
