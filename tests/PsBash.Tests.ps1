@@ -5085,7 +5085,12 @@ Describe '--help — at least 10 commands respond' {
         @{ Cmd = 'unexpand'; Fn = 'Invoke-BashUnexpand' },
         @{ Cmd = 'strings'; Fn = 'Invoke-BashStrings' },
         @{ Cmd = 'split';  Fn = 'Invoke-BashSplit' },
-        @{ Cmd = 'tac';    Fn = 'Invoke-BashTac' }
+        @{ Cmd = 'tac';    Fn = 'Invoke-BashTac' },
+        @{ Cmd = 'base64'; Fn = 'Invoke-BashBase64' },
+        @{ Cmd = 'md5sum'; Fn = 'Invoke-BashMd5sum' },
+        @{ Cmd = 'sha1sum'; Fn = 'Invoke-BashSha1sum' },
+        @{ Cmd = 'sha256sum'; Fn = 'Invoke-BashSha256sum' },
+        @{ Cmd = 'file';   Fn = 'Invoke-BashFile' }
     )
 
     It '<Cmd> --help returns help text' -ForEach $helpCommands {
@@ -5125,5 +5130,247 @@ Describe 'Show-BashHelp — exported function' {
     It 'Test-BashHelpFlag function exists' {
         $cmd = Get-Command Test-BashHelpFlag -ErrorAction SilentlyContinue
         $cmd | Should -Not -BeNullOrEmpty
+    }
+}
+
+# ===== Slice 20: base64 / md5sum / sha1sum / sha256sum / file =====
+
+Describe 'Invoke-BashBase64 — encode text from pipeline' {
+    It 'encodes hello to base64' {
+        $result = echo 'hello' | base64
+        $result.BashText | Should -Be 'aGVsbG8K'
+    }
+
+    It 'encodes multi-line text' {
+        $result = echo "line1`nline2" | base64
+        $result.BashText | Should -Be 'bGluZTEKbGluZTIK'
+    }
+
+    It 'decodes base64 with -d flag' {
+        $result = echo 'aGVsbG8K' | base64 -d
+        $result.BashText | Should -Be 'hello'
+    }
+
+    It 'decodes base64 with --decode flag' {
+        $result = echo 'aGVsbG8K' | base64 --decode
+        $result.BashText | Should -Be 'hello'
+    }
+
+    It 'wraps output at specified column with -w' {
+        $result = echo 'hello world this is a long string for base64' | base64 -w 20
+        $lines = $result.BashText -split "`n"
+        foreach ($line in $lines) {
+            if ($line.Length -gt 0) {
+                $line.Length | Should -BeLessOrEqual 20
+            }
+        }
+    }
+
+    It 'encodes file content' {
+        $tmpFile = Join-Path $TestDrive 'b64input.txt'
+        Set-Content -Path $tmpFile -Value 'hello' -NoNewline
+        $result = base64 $tmpFile
+        $result.BashText | Should -Be 'aGVsbG8='
+    }
+
+    It 'decodes file content with -d' {
+        $tmpFile = Join-Path $TestDrive 'b64encoded.txt'
+        Set-Content -Path $tmpFile -Value 'aGVsbG8=' -NoNewline
+        $result = base64 -d $tmpFile
+        $result.BashText | Should -Be 'hello'
+    }
+
+    It 'returns help with --help' {
+        $result = base64 --help
+        $result.BashText | Should -Match 'Usage: base64'
+    }
+
+    It 'default wrap at 76 columns' {
+        $longInput = 'A' * 100
+        $tmpFile = Join-Path $TestDrive 'b64long.txt'
+        Set-Content -Path $tmpFile -Value $longInput -NoNewline
+        $result = base64 $tmpFile
+        $lines = $result.BashText -split "`n"
+        $lines[0].Length | Should -BeLessOrEqual 76
+    }
+
+    It 'no wrapping with -w 0' {
+        $longInput = 'A' * 100
+        $tmpFile = Join-Path $TestDrive 'b64nowrap.txt'
+        Set-Content -Path $tmpFile -Value $longInput -NoNewline
+        $result = base64 -w 0 $tmpFile
+        $lines = ($result.BashText -split "`n") | Where-Object { $_.Length -gt 0 }
+        $lines.Count | Should -Be 1
+    }
+}
+
+Describe 'Invoke-BashMd5sum — compute MD5 hash' {
+    It 'hashes a file and shows hash + filename' {
+        $tmpFile = Join-Path $TestDrive 'md5test.txt'
+        Set-Content -Path $tmpFile -Value 'hello' -NoNewline
+        $result = md5sum $tmpFile
+        $result.BashText | Should -Match '^[a-f0-9]{32}  .+'
+        $result.Hash | Should -Be '5d41402abc4b2a76b9719d911017c592'
+        $result.Algorithm | Should -Be 'MD5'
+    }
+
+    It 'hashes pipeline input' {
+        $result = echo 'test' | md5sum
+        $result.Hash | Should -Not -BeNullOrEmpty
+        $result.Hash.Length | Should -Be 32
+        $result.FileName | Should -Be '-'
+    }
+
+    It 'hashes multiple files' {
+        $f1 = Join-Path $TestDrive 'md5a.txt'
+        $f2 = Join-Path $TestDrive 'md5b.txt'
+        Set-Content -Path $f1 -Value 'aaa' -NoNewline
+        Set-Content -Path $f2 -Value 'bbb' -NoNewline
+        $results = md5sum $f1 $f2
+        $results.Count | Should -Be 2
+    }
+
+    It 'returns help with --help' {
+        $result = md5sum --help
+        $result.BashText | Should -Match 'Usage: md5sum'
+    }
+}
+
+Describe 'Invoke-BashSha1sum — compute SHA1 hash' {
+    It 'hashes a file' {
+        $tmpFile = Join-Path $TestDrive 'sha1test.txt'
+        Set-Content -Path $tmpFile -Value 'hello' -NoNewline
+        $result = sha1sum $tmpFile
+        $result.Hash | Should -Be 'aaf4c61ddcc5e8a2dabede0f3b482cd9aea9434d'
+        $result.Algorithm | Should -Be 'SHA1'
+        $result.BashText | Should -Match '^[a-f0-9]{40}  .+'
+    }
+
+    It 'hashes pipeline input' {
+        $result = echo 'test' | sha1sum
+        $result.Hash.Length | Should -Be 40
+        $result.FileName | Should -Be '-'
+    }
+
+    It 'returns help with --help' {
+        $result = sha1sum --help
+        $result.BashText | Should -Match 'Usage: sha1sum'
+    }
+}
+
+Describe 'Invoke-BashSha256sum — compute SHA256 hash' {
+    It 'hashes a file' {
+        $tmpFile = Join-Path $TestDrive 'sha256test.txt'
+        Set-Content -Path $tmpFile -Value 'hello' -NoNewline
+        $result = sha256sum $tmpFile
+        $result.Hash | Should -Be '2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824'
+        $result.Algorithm | Should -Be 'SHA256'
+        $result.BashText | Should -Match '^[a-f0-9]{64}  .+'
+    }
+
+    It 'hashes pipeline input' {
+        $result = echo 'test' | sha256sum
+        $result.Hash.Length | Should -Be 64
+        $result.FileName | Should -Be '-'
+    }
+
+    It 'returns help with --help' {
+        $result = sha256sum --help
+        $result.BashText | Should -Match 'Usage: sha256sum'
+    }
+}
+
+Describe 'Invoke-BashFile — detect file type' {
+    It 'detects PNG image by magic bytes' {
+        $tmpFile = Join-Path $TestDrive 'test.png'
+        $bytes = [byte[]]@(0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0x00, 0x00, 0x00, 0x0D)
+        [System.IO.File]::WriteAllBytes($tmpFile, $bytes)
+        $result = file $tmpFile
+        $result.BashText | Should -Match 'PNG image data'
+        $result.FileType | Should -Match 'PNG'
+        $result.FileName | Should -Be $tmpFile
+    }
+
+    It 'detects JPEG by magic bytes' {
+        $tmpFile = Join-Path $TestDrive 'test.jpg'
+        $bytes = [byte[]]@(0xFF, 0xD8, 0xFF, 0xE0, 0x00, 0x10)
+        [System.IO.File]::WriteAllBytes($tmpFile, $bytes)
+        $result = file $tmpFile
+        $result.FileType | Should -Match 'JPEG'
+    }
+
+    It 'detects PDF by magic bytes' {
+        $tmpFile = Join-Path $TestDrive 'test.pdf'
+        $bytes = [System.Text.Encoding]::ASCII.GetBytes('%PDF-1.4 fake content')
+        [System.IO.File]::WriteAllBytes($tmpFile, $bytes)
+        $result = file $tmpFile
+        $result.FileType | Should -Match 'PDF'
+    }
+
+    It 'detects ZIP by magic bytes' {
+        $tmpFile = Join-Path $TestDrive 'test.zip'
+        $bytes = [byte[]]@(0x50, 0x4B, 0x03, 0x04, 0x00, 0x00)
+        [System.IO.File]::WriteAllBytes($tmpFile, $bytes)
+        $result = file $tmpFile
+        $result.FileType | Should -Match 'Zip'
+    }
+
+    It 'brief mode with -b omits filename' {
+        $tmpFile = Join-Path $TestDrive 'brief.png'
+        $bytes = [byte[]]@(0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0x00, 0x00, 0x00, 0x0D)
+        [System.IO.File]::WriteAllBytes($tmpFile, $bytes)
+        $result = file -b $tmpFile
+        $result.BashText | Should -Not -Match [regex]::Escape($tmpFile)
+        $result.BashText | Should -Match 'PNG image data'
+    }
+
+    It 'MIME mode with -i returns MIME type' {
+        $tmpFile = Join-Path $TestDrive 'mime.txt'
+        Set-Content -Path $tmpFile -Value 'hello world' -NoNewline
+        $result = file -i $tmpFile
+        $result.BashText | Should -Match 'text/plain'
+        $result.MimeType | Should -Be 'text/plain'
+    }
+
+    It 'detects plain text by content' {
+        $tmpFile = Join-Path $TestDrive 'plain.txt'
+        Set-Content -Path $tmpFile -Value 'just some text' -NoNewline
+        $result = file $tmpFile
+        $result.FileType | Should -Match 'text'
+    }
+
+    It 'detects ELF binary by magic bytes' {
+        $tmpFile = Join-Path $TestDrive 'test.elf'
+        $bytes = [byte[]]@(0x7F, 0x45, 0x4C, 0x46, 0x02, 0x01)
+        [System.IO.File]::WriteAllBytes($tmpFile, $bytes)
+        $result = file $tmpFile
+        $result.FileType | Should -Match 'ELF'
+    }
+
+    It 'handles multiple files' {
+        $f1 = Join-Path $TestDrive 'multi1.txt'
+        $f2 = Join-Path $TestDrive 'multi2.txt'
+        Set-Content -Path $f1 -Value 'hello' -NoNewline
+        Set-Content -Path $f2 -Value 'world' -NoNewline
+        $results = file $f1 $f2
+        $results.Count | Should -Be 2
+    }
+
+    It 'returns help with --help' {
+        $result = file --help
+        $result.BashText | Should -Match 'Usage: file'
+    }
+
+    It 'errors on missing file' {
+        $result = file '/nonexistent/path/abc.xyz' 2>&1
+        "$result" | Should -Match 'No such file'
+    }
+
+    It 'detects GIF by magic bytes' {
+        $tmpFile = Join-Path $TestDrive 'test.gif'
+        $bytes = [System.Text.Encoding]::ASCII.GetBytes('GIF89a')
+        [System.IO.File]::WriteAllBytes($tmpFile, $bytes)
+        $result = file $tmpFile
+        $result.FileType | Should -Match 'GIF'
     }
 }

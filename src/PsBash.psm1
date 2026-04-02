@@ -7697,6 +7697,280 @@ function Invoke-BashTac {
     }
 }
 
+# --- base64 Command ---
+
+function Invoke-BashBase64 {
+    $Arguments = [string[]]$args
+    $pipelineInput = @($input)
+    if ($Arguments -contains '--help') { return Show-BashHelp 'base64' }
+
+    $decode = $false
+    $wrapCol = 76
+    $operands = [System.Collections.Generic.List[string]]::new()
+
+    $i = 0
+    while ($i -lt $Arguments.Count) {
+        $arg = $Arguments[$i]
+        if ($arg -ceq '-d' -or $arg -eq '--decode') {
+            $decode = $true; $i++; continue
+        }
+        if ($arg -ceq '-w' -and ($i + 1) -lt $Arguments.Count) {
+            $wrapCol = [int]$Arguments[$i + 1]; $i += 2; continue
+        }
+        if ($arg -match '^--wrap=(.+)$') {
+            $wrapCol = [int]$Matches[1]; $i++; continue
+        }
+        $operands.Add($arg); $i++
+    }
+
+    $rawBytes = $null
+    $rawText = $null
+
+    if ($operands.Count -gt 0) {
+        $filePath = $operands[0]
+        if (-not (Test-Path -LiteralPath $filePath)) {
+            Write-Error -Message "base64: ${filePath}: No such file or directory" -ErrorAction Continue
+            $global:LASTEXITCODE = 1
+            return
+        }
+        if ($decode) {
+            $rawText = [System.IO.File]::ReadAllText($filePath).Trim()
+        } else {
+            $rawBytes = [System.IO.File]::ReadAllBytes($filePath)
+        }
+    } elseif ($pipelineInput.Count -gt 0) {
+        $parts = [System.Collections.Generic.List[string]]::new()
+        foreach ($item in $pipelineInput) {
+            $parts.Add((Get-BashText -InputObject $item))
+        }
+        $text = $parts -join "`n"
+        if (-not $text.EndsWith("`n")) { $text += "`n" }
+        if ($decode) {
+            $rawText = $text.Trim()
+        } else {
+            $rawBytes = [System.Text.Encoding]::UTF8.GetBytes($text)
+        }
+    } else {
+        return
+    }
+
+    if ($decode) {
+        $decoded = [System.Convert]::FromBase64String($rawText)
+        $output = [System.Text.Encoding]::UTF8.GetString($decoded)
+        $output = $output -replace "`n$", ''
+        New-BashObject -BashText $output
+    } else {
+        $encoded = [System.Convert]::ToBase64String($rawBytes)
+        if ($wrapCol -gt 0) {
+            $wrapped = [System.Text.StringBuilder]::new()
+            for ($c = 0; $c -lt $encoded.Length; $c += $wrapCol) {
+                $len = [System.Math]::Min($wrapCol, $encoded.Length - $c)
+                [void]$wrapped.AppendLine($encoded.Substring($c, $len))
+            }
+            $output = $wrapped.ToString().TrimEnd("`r", "`n")
+        } else {
+            $output = $encoded
+        }
+        New-BashObject -BashText $output
+    }
+}
+
+# --- Checksum Helper ---
+
+function Invoke-BashChecksum {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][string]$Algorithm,
+        [Parameter(Mandatory)][string]$CommandName,
+        [string[]]$Arguments,
+        [object[]]$PipelineInput
+    )
+
+    $operands = [System.Collections.Generic.List[string]]::new()
+    $i = 0
+    while ($i -lt $Arguments.Count) {
+        $operands.Add($Arguments[$i]); $i++
+    }
+
+    $hasher = switch ($Algorithm) {
+        'MD5'    { [System.Security.Cryptography.MD5]::Create() }
+        'SHA1'   { [System.Security.Cryptography.SHA1]::Create() }
+        'SHA256' { [System.Security.Cryptography.SHA256]::Create() }
+    }
+
+    try {
+        if ($operands.Count -gt 0) {
+            foreach ($filePath in $operands) {
+                if (-not (Test-Path -LiteralPath $filePath)) {
+                    Write-Error -Message "${CommandName}: ${filePath}: No such file or directory" -ErrorAction Continue
+                    continue
+                }
+                $bytes = [System.IO.File]::ReadAllBytes($filePath)
+                $hashBytes = $hasher.ComputeHash($bytes)
+                $hex = [System.BitConverter]::ToString($hashBytes).Replace('-', '').ToLower()
+                $obj = [PSCustomObject]@{
+                    PSTypeName = 'PsBash.TextOutput'
+                    BashText   = "$hex  $filePath"
+                    Hash       = $hex
+                    FileName   = $filePath
+                    Algorithm  = $Algorithm
+                }
+                $obj | Add-Member -MemberType ScriptMethod -Name 'ToString' -Value {
+                    $this.BashText
+                } -Force
+                $obj
+            }
+        } elseif ($PipelineInput.Count -gt 0) {
+            $parts = [System.Collections.Generic.List[string]]::new()
+            foreach ($item in $PipelineInput) {
+                $parts.Add((Get-BashText -InputObject $item))
+            }
+            $text = ($parts -join "`n") + "`n"
+            $textBytes = [System.Text.Encoding]::UTF8.GetBytes($text)
+            $hashBytes = $hasher.ComputeHash($textBytes)
+            $hex = [System.BitConverter]::ToString($hashBytes).Replace('-', '').ToLower()
+            $obj = [PSCustomObject]@{
+                PSTypeName = 'PsBash.TextOutput'
+                BashText   = "$hex  -"
+                Hash       = $hex
+                FileName   = '-'
+                Algorithm  = $Algorithm
+            }
+            $obj | Add-Member -MemberType ScriptMethod -Name 'ToString' -Value {
+                $this.BashText
+            } -Force
+            $obj
+        }
+    } finally {
+        $hasher.Dispose()
+    }
+}
+
+# --- md5sum Command ---
+
+function Invoke-BashMd5sum {
+    $Arguments = [string[]]$args
+    $pipelineInput = @($input)
+    if ($Arguments -contains '--help') { return Show-BashHelp 'md5sum' }
+    Invoke-BashChecksum -Algorithm 'MD5' -CommandName 'md5sum' -Arguments $Arguments -PipelineInput $pipelineInput
+}
+
+# --- sha1sum Command ---
+
+function Invoke-BashSha1sum {
+    $Arguments = [string[]]$args
+    $pipelineInput = @($input)
+    if ($Arguments -contains '--help') { return Show-BashHelp 'sha1sum' }
+    Invoke-BashChecksum -Algorithm 'SHA1' -CommandName 'sha1sum' -Arguments $Arguments -PipelineInput $pipelineInput
+}
+
+# --- sha256sum Command ---
+
+function Invoke-BashSha256sum {
+    $Arguments = [string[]]$args
+    $pipelineInput = @($input)
+    if ($Arguments -contains '--help') { return Show-BashHelp 'sha256sum' }
+    Invoke-BashChecksum -Algorithm 'SHA256' -CommandName 'sha256sum' -Arguments $Arguments -PipelineInput $pipelineInput
+}
+
+# --- file Command ---
+
+function Invoke-BashFile {
+    $Arguments = [string[]]$args
+    $pipelineInput = @($input)
+    if ($Arguments -contains '--help') { return Show-BashHelp 'file' }
+
+    $brief = $false
+    $mime = $false
+    $operands = [System.Collections.Generic.List[string]]::new()
+
+    $i = 0
+    while ($i -lt $Arguments.Count) {
+        $arg = $Arguments[$i]
+        if ($arg -ceq '-b' -or $arg -eq '--brief') {
+            $brief = $true; $i++; continue
+        }
+        if ($arg -ceq '-i' -or $arg -eq '--mime') {
+            $mime = $true; $i++; continue
+        }
+        if ($arg -ceq '-L' -or $arg -eq '--dereference') {
+            $i++; continue
+        }
+        $operands.Add($arg); $i++
+    }
+
+    foreach ($filePath in $operands) {
+        if (-not (Test-Path -LiteralPath $filePath)) {
+            Write-Error -Message "file: cannot open '${filePath}' (No such file or directory)" -ErrorAction Continue
+            continue
+        }
+
+        $resolvedPath = (Resolve-Path -LiteralPath $filePath).Path
+        $bytes = [byte[]]@()
+        try {
+            $stream = [System.IO.File]::OpenRead($resolvedPath)
+            $buf = [byte[]]::new(16)
+            $read = $stream.Read($buf, 0, 16)
+            $stream.Close()
+            if ($read -gt 0) { $bytes = $buf[0..($read - 1)] }
+        } catch {
+            $bytes = [byte[]]@()
+        }
+
+        $fileType = $null
+        $mimeType = 'application/octet-stream'
+
+        if ($bytes.Count -ge 8 -and $bytes[0] -eq 0x89 -and $bytes[1] -eq 0x50 -and $bytes[2] -eq 0x4E -and $bytes[3] -eq 0x47) {
+            $fileType = 'PNG image data'; $mimeType = 'image/png'
+        } elseif ($bytes.Count -ge 2 -and $bytes[0] -eq 0xFF -and $bytes[1] -eq 0xD8) {
+            $fileType = 'JPEG image data'; $mimeType = 'image/jpeg'
+        } elseif ($bytes.Count -ge 4 -and $bytes[0] -eq 0x25 -and $bytes[1] -eq 0x50 -and $bytes[2] -eq 0x44 -and $bytes[3] -eq 0x46) {
+            $fileType = 'PDF document'; $mimeType = 'application/pdf'
+        } elseif ($bytes.Count -ge 4 -and $bytes[0] -eq 0x50 -and $bytes[1] -eq 0x4B -and $bytes[2] -eq 0x03 -and $bytes[3] -eq 0x04) {
+            $fileType = 'Zip archive data'; $mimeType = 'application/zip'
+        } elseif ($bytes.Count -ge 4 -and $bytes[0] -eq 0x7F -and $bytes[1] -eq 0x45 -and $bytes[2] -eq 0x4C -and $bytes[3] -eq 0x46) {
+            $fileType = 'ELF executable'; $mimeType = 'application/x-executable'
+        } elseif ($bytes.Count -ge 4 -and $bytes[0] -eq 0x47 -and $bytes[1] -eq 0x49 -and $bytes[2] -eq 0x46 -and $bytes[3] -eq 0x38) {
+            $fileType = 'GIF image data'; $mimeType = 'image/gif'
+        } elseif ($bytes.Count -ge 4 -and $bytes[0] -eq 0x52 -and $bytes[1] -eq 0x49 -and $bytes[2] -eq 0x46 -and $bytes[3] -eq 0x46) {
+            $fileType = 'RIFF data'; $mimeType = 'application/octet-stream'
+        }
+
+        if (-not $fileType) {
+            $allText = $true
+            $fileBytes = [System.IO.File]::ReadAllBytes($resolvedPath)
+            foreach ($b in $fileBytes) {
+                if ($b -lt 0x07 -or ($b -gt 0x0D -and $b -lt 0x20 -and $b -ne 0x1B)) {
+                    $allText = $false; break
+                }
+            }
+            if ($allText) {
+                $fileType = 'ASCII text'; $mimeType = 'text/plain'
+            } else {
+                $fileType = 'data'; $mimeType = 'application/octet-stream'
+            }
+        }
+
+        if ($mime) {
+            $bashText = if ($brief) { $mimeType } else { "${filePath}: $mimeType" }
+        } else {
+            $bashText = if ($brief) { $fileType } else { "${filePath}: $fileType" }
+        }
+
+        $obj = [PSCustomObject]@{
+            PSTypeName = 'PsBash.TextOutput'
+            BashText   = $bashText
+            FileName   = $filePath
+            FileType   = $fileType
+            MimeType   = $mimeType
+        }
+        $obj | Add-Member -MemberType ScriptMethod -Name 'ToString' -Value {
+            $this.BashText
+        } -Force
+        $obj
+    }
+}
+
 # --- Help Support ---
 
 $script:BashHelpSpecs = @{
@@ -7751,6 +8025,11 @@ $script:BashHelpSpecs = @{
     'strings'  = 'Print the sequences of printable characters in files.'
     'split'    = 'Split a file into pieces.'
     'tac'      = 'Concatenate and print files in reverse.'
+    'base64'   = 'Base64 encode/decode data and print to standard output.'
+    'md5sum'   = 'Compute and check MD5 message digest.'
+    'sha1sum'  = 'Compute and check SHA1 message digest.'
+    'sha256sum' = 'Compute and check SHA256 message digest.'
+    'file'     = 'Determine file type.'
 }
 
 function Test-BashHelpFlag {
@@ -7872,6 +8151,11 @@ $script:BashFlagSpecs = @{
     'strings'  = @( @('-n', 'minimum string length') )
     'split'    = @( @('-l', 'lines per file'), @('-d', 'numeric suffixes'), @('-a', 'suffix length') )
     'tac'      = @( @('-s', 'separator') )
+    'base64'   = @( @('-d', 'decode'), @('-w', 'wrap at column') )
+    'md5sum'   = @( @('-c', 'check'), @('-b', 'binary mode') )
+    'sha1sum'  = @( @('-c', 'check'), @('-b', 'binary mode') )
+    'sha256sum' = @( @('-c', 'check'), @('-b', 'binary mode') )
+    'file'     = @( @('-b', 'brief'), @('-i', 'MIME type'), @('-L', 'follow symlinks') )
 }
 
 $script:BashCompleters = @{}
@@ -7964,3 +8248,8 @@ Set-Alias -Name 'unexpand' -Value 'Invoke-BashUnexpand' -Force -Scope Global -Op
 Set-Alias -Name 'strings'  -Value 'Invoke-BashStrings'  -Force -Scope Global -Option AllScope
 Set-Alias -Name 'split'    -Value 'Invoke-BashSplit'    -Force -Scope Global -Option AllScope
 Set-Alias -Name 'tac'      -Value 'Invoke-BashTac'      -Force -Scope Global -Option AllScope
+Set-Alias -Name 'base64'   -Value 'Invoke-BashBase64'   -Force -Scope Global -Option AllScope
+Set-Alias -Name 'md5sum'   -Value 'Invoke-BashMd5sum'   -Force -Scope Global -Option AllScope
+Set-Alias -Name 'sha1sum'  -Value 'Invoke-BashSha1sum'  -Force -Scope Global -Option AllScope
+Set-Alias -Name 'sha256sum' -Value 'Invoke-BashSha256sum' -Force -Scope Global -Option AllScope
+Set-Alias -Name 'file'     -Value 'Invoke-BashFile'     -Force -Scope Global -Option AllScope
