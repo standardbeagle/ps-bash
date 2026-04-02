@@ -2899,3 +2899,449 @@ Describe 'Invoke-BashNl — Alias' {
         $alias.Definition | Should -Be 'Invoke-BashNl'
     }
 }
+
+# ============================================================================
+# diff Command Tests
+# ============================================================================
+
+Describe 'Invoke-BashDiff — Normal Format' {
+    BeforeAll {
+        $testDir = Join-Path ([System.IO.Path]::GetTempPath()) "psbash-diff-$([guid]::NewGuid().ToString('N').Substring(0,8))"
+        New-Item -ItemType Directory -Path $testDir -Force | Out-Null
+        Set-Content -Path (Join-Path $testDir 'file1.txt') -Value "alpha`nbeta`ngamma" -NoNewline
+        Set-Content -Path (Join-Path $testDir 'file2.txt') -Value "alpha`nBETA`ngamma" -NoNewline
+        Set-Content -Path (Join-Path $testDir 'identical.txt') -Value "alpha`nbeta`ngamma" -NoNewline
+        Set-Content -Path (Join-Path $testDir 'added.txt') -Value "alpha`nbeta`ngamma`ndelta" -NoNewline
+        Set-Content -Path (Join-Path $testDir 'deleted.txt') -Value "alpha`ngamma" -NoNewline
+    }
+    AfterAll {
+        Remove-Item -Recurse -Force $testDir -ErrorAction SilentlyContinue
+    }
+
+    It 'shows normal diff output for changed line' {
+        $results = @(Invoke-BashDiff (Join-Path $testDir 'file1.txt') (Join-Path $testDir 'file2.txt'))
+        $results.Count | Should -BeGreaterThan 0
+        $results[0].BashText | Should -Be '2c2'
+        $results[1].BashText | Should -Be '< beta'
+        $results[2].BashText | Should -Be '---'
+        $results[3].BashText | Should -Be '> BETA'
+    }
+
+    It 'produces no output for identical files' {
+        $results = @(Invoke-BashDiff (Join-Path $testDir 'file1.txt') (Join-Path $testDir 'identical.txt'))
+        $results.Count | Should -Be 0
+    }
+
+    It 'shows additions in normal format' {
+        $results = @(Invoke-BashDiff (Join-Path $testDir 'file1.txt') (Join-Path $testDir 'added.txt'))
+        $results.Count | Should -BeGreaterThan 0
+        $found = $false
+        foreach ($r in $results) {
+            if ($r.BashText -match '^\d+a\d+') { $found = $true }
+        }
+        $found | Should -Be $true
+    }
+
+    It 'shows deletions in normal format' {
+        $results = @(Invoke-BashDiff (Join-Path $testDir 'file1.txt') (Join-Path $testDir 'deleted.txt'))
+        $results.Count | Should -BeGreaterThan 0
+        $found = $false
+        foreach ($r in $results) {
+            if ($r.BashText -match '^\d+d\d+') { $found = $true }
+        }
+        $found | Should -Be $true
+    }
+
+    It 'writes error on missing file' {
+        $Error.Clear()
+        Invoke-BashDiff (Join-Path $testDir 'nope.txt') (Join-Path $testDir 'file1.txt') 2>$null
+        $Error.Count | Should -BeGreaterThan 0
+        $Error[0].Exception.Message | Should -BeLike '*No such file*'
+    }
+}
+
+Describe 'Invoke-BashDiff — Unified Format' {
+    BeforeAll {
+        $testDir = Join-Path ([System.IO.Path]::GetTempPath()) "psbash-diffu-$([guid]::NewGuid().ToString('N').Substring(0,8))"
+        New-Item -ItemType Directory -Path $testDir -Force | Out-Null
+        Set-Content -Path (Join-Path $testDir 'file1.txt') -Value "alpha`nbeta`ngamma" -NoNewline
+        Set-Content -Path (Join-Path $testDir 'file2.txt') -Value "alpha`nBETA`ngamma" -NoNewline
+    }
+    AfterAll {
+        Remove-Item -Recurse -Force $testDir -ErrorAction SilentlyContinue
+    }
+
+    It 'produces unified format with -u flag' {
+        $results = @(Invoke-BashDiff -u (Join-Path $testDir 'file1.txt') (Join-Path $testDir 'file2.txt'))
+        $results.Count | Should -BeGreaterThan 0
+        $results[0].BashText | Should -BeLike '--- *'
+        $results[1].BashText | Should -BeLike '+++ *'
+        $results[2].BashText | Should -BeLike '@@ *'
+    }
+
+    It 'includes context lines around changes' {
+        $results = @(Invoke-BashDiff -u (Join-Path $testDir 'file1.txt') (Join-Path $testDir 'file2.txt'))
+        $contextLines = @($results | Where-Object { $_.BashText.StartsWith(' ') })
+        $contextLines.Count | Should -BeGreaterThan 0
+    }
+
+    It 'marks removed lines with - and added with +' {
+        $results = @(Invoke-BashDiff -u (Join-Path $testDir 'file1.txt') (Join-Path $testDir 'file2.txt'))
+        $removed = @($results | Where-Object { $_.BashText -cmatch '^-[^-]' })
+        $added = @($results | Where-Object { $_.BashText -cmatch '^\+[^+]' })
+        $removed.Count | Should -BeGreaterThan 0
+        $added.Count | Should -BeGreaterThan 0
+    }
+}
+
+Describe 'Invoke-BashDiff — Pipeline Bridge' {
+    It 'produces BashObjects' {
+        $testDir = Join-Path ([System.IO.Path]::GetTempPath()) "psbash-diffpb-$([guid]::NewGuid().ToString('N').Substring(0,8))"
+        New-Item -ItemType Directory -Path $testDir -Force | Out-Null
+        Set-Content -Path (Join-Path $testDir 'a.txt') -Value "x" -NoNewline
+        Set-Content -Path (Join-Path $testDir 'b.txt') -Value "y" -NoNewline
+        $results = @(Invoke-BashDiff (Join-Path $testDir 'a.txt') (Join-Path $testDir 'b.txt'))
+        $results[0].PSTypeNames[0] | Should -Be 'PsBash.TextOutput'
+        Remove-Item -Recurse -Force $testDir -ErrorAction SilentlyContinue
+    }
+}
+
+Describe 'Invoke-BashDiff — Alias' {
+    It 'diff alias resolves to Invoke-BashDiff' {
+        $alias = Get-Alias -Name diff -Scope Global
+        $alias.Definition | Should -Be 'Invoke-BashDiff'
+    }
+}
+
+# ============================================================================
+# comm Command Tests
+# ============================================================================
+
+Describe 'Invoke-BashComm — Three Column Output' {
+    BeforeAll {
+        $testDir = Join-Path ([System.IO.Path]::GetTempPath()) "psbash-comm-$([guid]::NewGuid().ToString('N').Substring(0,8))"
+        New-Item -ItemType Directory -Path $testDir -Force | Out-Null
+        Set-Content -Path (Join-Path $testDir 'file1.txt') -Value "apple`nbanana`ncherry" -NoNewline
+        Set-Content -Path (Join-Path $testDir 'file2.txt') -Value "banana`ncherry`ndate" -NoNewline
+    }
+    AfterAll {
+        Remove-Item -Recurse -Force $testDir -ErrorAction SilentlyContinue
+    }
+
+    It 'shows three columns: unique-to-1, unique-to-2, common' {
+        $results = @(Invoke-BashComm (Join-Path $testDir 'file1.txt') (Join-Path $testDir 'file2.txt'))
+        $results.Count | Should -Be 4
+        $results[0].BashText | Should -Be 'apple'
+        $results[1].BashText | Should -Be "`t`tbanana"
+        $results[2].BashText | Should -Be "`t`tcherry"
+        $results[3].BashText | Should -Be "`tdate"
+    }
+
+    It 'suppresses column 1 with -1' {
+        $results = @(Invoke-BashComm -1 (Join-Path $testDir 'file1.txt') (Join-Path $testDir 'file2.txt'))
+        # apple suppressed, banana/cherry common (1 tab), date unique-to-2 (no tab)
+        $results.Count | Should -Be 3
+        $results[0].BashText | Should -Be "`tbanana"
+        $results[1].BashText | Should -Be "`tcherry"
+        $results[2].BashText | Should -Be 'date'
+    }
+
+    It 'shows only common lines with -12' {
+        $results = @(Invoke-BashComm -12 (Join-Path $testDir 'file1.txt') (Join-Path $testDir 'file2.txt'))
+        $results.Count | Should -Be 2
+        $results[0].BashText | Should -Be 'banana'
+        $results[1].BashText | Should -Be 'cherry'
+    }
+
+    It 'writes error on missing file' {
+        $Error.Clear()
+        Invoke-BashComm (Join-Path $testDir 'nope.txt') (Join-Path $testDir 'file1.txt') 2>$null
+        $Error.Count | Should -BeGreaterThan 0
+        $Error[0].Exception.Message | Should -BeLike '*No such file*'
+    }
+}
+
+Describe 'Invoke-BashComm — Suppress Combinations' {
+    BeforeAll {
+        $testDir = Join-Path ([System.IO.Path]::GetTempPath()) "psbash-comm2-$([guid]::NewGuid().ToString('N').Substring(0,8))"
+        New-Item -ItemType Directory -Path $testDir -Force | Out-Null
+        Set-Content -Path (Join-Path $testDir 'f1.txt') -Value "a`nb`nc" -NoNewline
+        Set-Content -Path (Join-Path $testDir 'f2.txt') -Value "b`nc`nd" -NoNewline
+    }
+    AfterAll {
+        Remove-Item -Recurse -Force $testDir -ErrorAction SilentlyContinue
+    }
+
+    It 'suppresses column 2 with -2' {
+        $results = @(Invoke-BashComm -2 (Join-Path $testDir 'f1.txt') (Join-Path $testDir 'f2.txt'))
+        # a (unique-to-1), b (common, 1 tab), c (common, 1 tab); d suppressed
+        $results.Count | Should -Be 3
+        $results[0].BashText | Should -Be 'a'
+        $results[1].BashText | Should -Be "`tb"
+        $results[2].BashText | Should -Be "`tc"
+    }
+
+    It 'suppresses column 3 with -3' {
+        $results = @(Invoke-BashComm -3 (Join-Path $testDir 'f1.txt') (Join-Path $testDir 'f2.txt'))
+        $results.Count | Should -Be 2
+        $results[0].BashText | Should -Be 'a'
+        $results[1].BashText | Should -Be "`td"
+    }
+}
+
+Describe 'Invoke-BashComm — Pipeline Bridge' {
+    It 'produces BashObjects' {
+        $testDir = Join-Path ([System.IO.Path]::GetTempPath()) "psbash-commpb-$([guid]::NewGuid().ToString('N').Substring(0,8))"
+        New-Item -ItemType Directory -Path $testDir -Force | Out-Null
+        Set-Content -Path (Join-Path $testDir 'a.txt') -Value "x" -NoNewline
+        Set-Content -Path (Join-Path $testDir 'b.txt') -Value "x" -NoNewline
+        $results = @(Invoke-BashComm (Join-Path $testDir 'a.txt') (Join-Path $testDir 'b.txt'))
+        $results[0].PSTypeNames[0] | Should -Be 'PsBash.TextOutput'
+        Remove-Item -Recurse -Force $testDir -ErrorAction SilentlyContinue
+    }
+}
+
+Describe 'Invoke-BashComm — Alias' {
+    It 'comm alias resolves to Invoke-BashComm' {
+        $alias = Get-Alias -Name comm -Scope Global
+        $alias.Definition | Should -Be 'Invoke-BashComm'
+    }
+}
+
+# ============================================================================
+# column Command Tests
+# ============================================================================
+
+Describe 'Invoke-BashColumn — Table Mode' {
+    It 'auto-aligns whitespace-separated columns' {
+        $results = @(Invoke-BashEcho -e "Name Age City`nAlice 30 London`nBob 25 Paris" | Invoke-BashColumn -t)
+        $results.Count | Should -Be 3
+        # All rows should have same-width columns (padded)
+        $results[0].BashText | Should -Match '^Name\s+Age\s+City$'
+        $results[1].BashText | Should -Match '^Alice\s+30\s+London$'
+        $results[2].BashText | Should -Match '^Bob\s+25\s+Paris$'
+    }
+
+    It 'uses custom delimiter with -s' {
+        $results = @(Invoke-BashEcho -e "root:0:root`nbin:1:bin" | Invoke-BashColumn -s: -t)
+        $results.Count | Should -Be 2
+        $results[0].BashText | Should -Match '^root\s+0\s+root$'
+        $results[1].BashText | Should -Match '^bin\s+1\s+bin$'
+    }
+
+    It 'passes through without -t' {
+        $results = @(Invoke-BashEcho -e "hello world" | Invoke-BashColumn)
+        $results[0].BashText | Should -Be 'hello world'
+    }
+}
+
+Describe 'Invoke-BashColumn — File Mode' {
+    BeforeAll {
+        $testDir = Join-Path ([System.IO.Path]::GetTempPath()) "psbash-column-$([guid]::NewGuid().ToString('N').Substring(0,8))"
+        New-Item -ItemType Directory -Path $testDir -Force | Out-Null
+        Set-Content -Path (Join-Path $testDir 'data.txt') -Value "a 1`nbb 22`nccc 333" -NoNewline
+    }
+    AfterAll {
+        Remove-Item -Recurse -Force $testDir -ErrorAction SilentlyContinue
+    }
+
+    It 'reads from file and aligns' {
+        $results = @(Invoke-BashColumn -t (Join-Path $testDir 'data.txt'))
+        $results.Count | Should -Be 3
+        $results[0].BashText | Should -Match '^a\s+1$'
+        $results[1].BashText | Should -Match '^bb\s+22$'
+        $results[2].BashText | Should -Match '^ccc\s+333$'
+    }
+
+    It 'writes error on missing file' {
+        $Error.Clear()
+        Invoke-BashColumn -t (Join-Path $testDir 'nope.txt') 2>$null
+        $Error.Count | Should -BeGreaterThan 0
+        $Error[0].Exception.Message | Should -BeLike '*No such file*'
+    }
+}
+
+Describe 'Invoke-BashColumn — Pipeline Bridge' {
+    It 'produces BashObjects' {
+        $results = @(Invoke-BashEcho -n 'test' | Invoke-BashColumn -t)
+        $results[0].PSTypeNames[0] | Should -Be 'PsBash.TextOutput'
+    }
+}
+
+Describe 'Invoke-BashColumn — Alias' {
+    It 'column alias resolves to Invoke-BashColumn' {
+        $alias = Get-Alias -Name column -Scope Global
+        $alias.Definition | Should -Be 'Invoke-BashColumn'
+    }
+}
+
+# ============================================================================
+# join Command Tests
+# ============================================================================
+
+Describe 'Invoke-BashJoin — Basic Join' {
+    BeforeAll {
+        $testDir = Join-Path ([System.IO.Path]::GetTempPath()) "psbash-join-$([guid]::NewGuid().ToString('N').Substring(0,8))"
+        New-Item -ItemType Directory -Path $testDir -Force | Out-Null
+        Set-Content -Path (Join-Path $testDir 'file1.txt') -Value "1 Alice`n2 Bob`n3 Charlie" -NoNewline
+        Set-Content -Path (Join-Path $testDir 'file2.txt') -Value "1 HR`n2 Eng`n4 Sales" -NoNewline
+    }
+    AfterAll {
+        Remove-Item -Recurse -Force $testDir -ErrorAction SilentlyContinue
+    }
+
+    It 'joins on first field by default' {
+        $results = @(Invoke-BashJoin (Join-Path $testDir 'file1.txt') (Join-Path $testDir 'file2.txt'))
+        $results.Count | Should -Be 2
+        $results[0].BashText | Should -Be '1 Alice HR'
+        $results[1].BashText | Should -Be '2 Bob Eng'
+    }
+
+    It 'writes error on missing file' {
+        $Error.Clear()
+        Invoke-BashJoin (Join-Path $testDir 'nope.txt') (Join-Path $testDir 'file1.txt') 2>$null
+        $Error.Count | Should -BeGreaterThan 0
+        $Error[0].Exception.Message | Should -BeLike '*No such file*'
+    }
+}
+
+Describe 'Invoke-BashJoin — Custom Fields and Delimiter' {
+    BeforeAll {
+        $testDir = Join-Path ([System.IO.Path]::GetTempPath()) "psbash-join2-$([guid]::NewGuid().ToString('N').Substring(0,8))"
+        New-Item -ItemType Directory -Path $testDir -Force | Out-Null
+        Set-Content -Path (Join-Path $testDir 'f1.txt') -Value "Alice:1`nBob:2" -NoNewline
+        Set-Content -Path (Join-Path $testDir 'f2.txt') -Value "1:HR`n2:Eng" -NoNewline
+    }
+    AfterAll {
+        Remove-Item -Recurse -Force $testDir -ErrorAction SilentlyContinue
+    }
+
+    It 'joins on specific fields with custom delimiter' {
+        $results = @(Invoke-BashJoin -t: -1 2 -2 1 (Join-Path $testDir 'f1.txt') (Join-Path $testDir 'f2.txt'))
+        $results.Count | Should -Be 2
+        $results[0].BashText | Should -Be '1:Alice:HR'
+        $results[1].BashText | Should -Be '2:Bob:Eng'
+    }
+}
+
+Describe 'Invoke-BashJoin — Pipeline Bridge' {
+    It 'produces BashObjects' {
+        $testDir = Join-Path ([System.IO.Path]::GetTempPath()) "psbash-joinpb-$([guid]::NewGuid().ToString('N').Substring(0,8))"
+        New-Item -ItemType Directory -Path $testDir -Force | Out-Null
+        Set-Content -Path (Join-Path $testDir 'a.txt') -Value "1 x" -NoNewline
+        Set-Content -Path (Join-Path $testDir 'b.txt') -Value "1 y" -NoNewline
+        $results = @(Invoke-BashJoin (Join-Path $testDir 'a.txt') (Join-Path $testDir 'b.txt'))
+        $results[0].PSTypeNames[0] | Should -Be 'PsBash.TextOutput'
+        Remove-Item -Recurse -Force $testDir -ErrorAction SilentlyContinue
+    }
+}
+
+Describe 'Invoke-BashJoin — Alias' {
+    It 'join alias resolves to Invoke-BashJoin' {
+        $alias = Get-Alias -Name join -Scope Global
+        $alias.Definition | Should -Be 'Invoke-BashJoin'
+    }
+}
+
+# ============================================================================
+# paste Command Tests
+# ============================================================================
+
+Describe 'Invoke-BashPaste — Merge Files' {
+    BeforeAll {
+        $testDir = Join-Path ([System.IO.Path]::GetTempPath()) "psbash-paste-$([guid]::NewGuid().ToString('N').Substring(0,8))"
+        New-Item -ItemType Directory -Path $testDir -Force | Out-Null
+        Set-Content -Path (Join-Path $testDir 'names.txt') -Value "Alice`nBob`nCharlie" -NoNewline
+        Set-Content -Path (Join-Path $testDir 'ages.txt') -Value "30`n25`n35" -NoNewline
+    }
+    AfterAll {
+        Remove-Item -Recurse -Force $testDir -ErrorAction SilentlyContinue
+    }
+
+    It 'merges files side-by-side with tab delimiter' {
+        $results = @(Invoke-BashPaste (Join-Path $testDir 'names.txt') (Join-Path $testDir 'ages.txt'))
+        $results.Count | Should -Be 3
+        $results[0].BashText | Should -Be "Alice`t30"
+        $results[1].BashText | Should -Be "Bob`t25"
+        $results[2].BashText | Should -Be "Charlie`t35"
+    }
+
+    It 'uses custom delimiter with -d' {
+        $results = @(Invoke-BashPaste '-d,' (Join-Path $testDir 'names.txt') (Join-Path $testDir 'ages.txt'))
+        $results.Count | Should -Be 3
+        $results[0].BashText | Should -Be 'Alice,30'
+        $results[1].BashText | Should -Be 'Bob,25'
+        $results[2].BashText | Should -Be 'Charlie,35'
+    }
+
+    It 'writes error on missing file' {
+        $Error.Clear()
+        Invoke-BashPaste (Join-Path $testDir 'nope.txt') (Join-Path $testDir 'names.txt') 2>$null
+        $Error.Count | Should -BeGreaterThan 0
+        $Error[0].Exception.Message | Should -BeLike '*No such file*'
+    }
+}
+
+Describe 'Invoke-BashPaste — Serial Mode' {
+    BeforeAll {
+        $testDir = Join-Path ([System.IO.Path]::GetTempPath()) "psbash-pastes-$([guid]::NewGuid().ToString('N').Substring(0,8))"
+        New-Item -ItemType Directory -Path $testDir -Force | Out-Null
+        Set-Content -Path (Join-Path $testDir 'data.txt') -Value "a`nb`nc" -NoNewline
+        Set-Content -Path (Join-Path $testDir 'data2.txt') -Value "1`n2`n3" -NoNewline
+    }
+    AfterAll {
+        Remove-Item -Recurse -Force $testDir -ErrorAction SilentlyContinue
+    }
+
+    It 'transposes each file to a single line in serial mode' {
+        $results = @(Invoke-BashPaste -s (Join-Path $testDir 'data.txt') (Join-Path $testDir 'data2.txt'))
+        $results.Count | Should -Be 2
+        $results[0].BashText | Should -Be "a`tb`tc"
+        $results[1].BashText | Should -Be "1`t2`t3"
+    }
+
+    It 'serial mode with custom delimiter' {
+        $results = @(Invoke-BashPaste -s '-d,' (Join-Path $testDir 'data.txt'))
+        $results.Count | Should -Be 1
+        $results[0].BashText | Should -Be 'a,b,c'
+    }
+}
+
+Describe 'Invoke-BashPaste — Uneven Files' {
+    BeforeAll {
+        $testDir = Join-Path ([System.IO.Path]::GetTempPath()) "psbash-pasteu-$([guid]::NewGuid().ToString('N').Substring(0,8))"
+        New-Item -ItemType Directory -Path $testDir -Force | Out-Null
+        Set-Content -Path (Join-Path $testDir 'short.txt') -Value "a`nb" -NoNewline
+        Set-Content -Path (Join-Path $testDir 'long.txt') -Value "1`n2`n3" -NoNewline
+    }
+    AfterAll {
+        Remove-Item -Recurse -Force $testDir -ErrorAction SilentlyContinue
+    }
+
+    It 'pads shorter file with empty strings' {
+        $results = @(Invoke-BashPaste (Join-Path $testDir 'short.txt') (Join-Path $testDir 'long.txt'))
+        $results.Count | Should -Be 3
+        $results[0].BashText | Should -Be "a`t1"
+        $results[1].BashText | Should -Be "b`t2"
+        $results[2].BashText | Should -Be "`t3"
+    }
+}
+
+Describe 'Invoke-BashPaste — Pipeline Bridge' {
+    It 'produces BashObjects' {
+        $testDir = Join-Path ([System.IO.Path]::GetTempPath()) "psbash-pastepb-$([guid]::NewGuid().ToString('N').Substring(0,8))"
+        New-Item -ItemType Directory -Path $testDir -Force | Out-Null
+        Set-Content -Path (Join-Path $testDir 'a.txt') -Value "x" -NoNewline
+        Set-Content -Path (Join-Path $testDir 'b.txt') -Value "y" -NoNewline
+        $results = @(Invoke-BashPaste (Join-Path $testDir 'a.txt') (Join-Path $testDir 'b.txt'))
+        $results[0].PSTypeNames[0] | Should -Be 'PsBash.TextOutput'
+        Remove-Item -Recurse -Force $testDir -ErrorAction SilentlyContinue
+    }
+}
+
+Describe 'Invoke-BashPaste — Alias' {
+    It 'paste alias resolves to Invoke-BashPaste' {
+        $alias = Get-Alias -Name paste -Scope Global
+        $alias.Definition | Should -Be 'Invoke-BashPaste'
+    }
+}

@@ -89,7 +89,9 @@ FunctionsToExport = 'Invoke-BashEcho', 'Invoke-BashPrintf', 'Get-BashPlatform',
                'Test-AwkPattern', 'Resolve-AwkExpression', 'Invoke-AwkAction',
                'Format-AwkPrintf', 'Resolve-AwkStringFunc',
                'Invoke-BashCut', 'Invoke-BashTr', 'Invoke-BashUniq',
-               'Invoke-BashRev', 'Invoke-BashNl'
+               'Invoke-BashRev', 'Invoke-BashNl',
+               'Invoke-BashDiff', 'Invoke-BashComm', 'Invoke-BashColumn',
+               'Invoke-BashJoin', 'Invoke-BashPaste'
 
 # Cmdlets to export from this module, for best performance, do not use wildcards and do not delete the entry, use an empty array if there are no cmdlets to export.
 CmdletsToExport = @()
@@ -100,7 +102,8 @@ CmdletsToExport = @()
 # Aliases to export from this module, for best performance, do not use wildcards and do not delete the entry, use an empty array if there are no aliases to export.
 AliasesToExport = 'echo', 'printf', 'ls', 'cat', 'grep', 'sort', 'head', 'tail', 'wc', 'find', 'stat',
                'cp', 'mv', 'rm', 'mkdir', 'rmdir', 'touch', 'ln', 'ps', 'sed', 'awk',
-               'cut', 'tr', 'uniq', 'rev', 'nl'
+               'cut', 'tr', 'uniq', 'rev', 'nl',
+               'diff', 'comm', 'column', 'join', 'paste'
 
 # DSC resources to export from this module
 # DscResourcesToExport = @()

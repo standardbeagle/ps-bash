@@ -4735,6 +4735,733 @@ function Invoke-BashNl {
     }
 }
 
+# --- diff Command ---
+
+function Invoke-BashDiff {
+    $Arguments = [string[]]$args
+    $pipelineInput = @($input)
+
+    $unified = $false
+    $operands = [System.Collections.Generic.List[string]]::new()
+    $pastDoubleDash = $false
+
+    $i = 0
+    while ($i -lt $Arguments.Count) {
+        $arg = $Arguments[$i]
+
+        if ($pastDoubleDash) {
+            $operands.Add($arg)
+            $i++
+            continue
+        }
+
+        if ($arg -eq '--') {
+            $pastDoubleDash = $true
+            $i++
+            continue
+        }
+
+        if ($arg -ceq '-u') {
+            $unified = $true
+            $i++
+            continue
+        }
+
+        $operands.Add($arg)
+        $i++
+    }
+
+    $readFileLines = {
+        param([string]$FilePath)
+        if (-not (Test-Path -LiteralPath $FilePath)) {
+            Write-Error -Message "diff: ${FilePath}: No such file or directory" -ErrorAction Continue
+            return $null
+        }
+        $bytes = [System.IO.File]::ReadAllBytes($FilePath)
+        $byteOffset = 0
+        if ($bytes.Length -ge 3 -and $bytes[0] -eq 0xEF -and $bytes[1] -eq 0xBB -and $bytes[2] -eq 0xBF) {
+            $byteOffset = 3
+        }
+        $rawText = [System.Text.Encoding]::UTF8.GetString($bytes, $byteOffset, $bytes.Length - $byteOffset)
+        $rawText = $rawText -replace "`r`n", "`n"
+        if ($rawText.EndsWith("`n")) {
+            $rawText = $rawText.Substring(0, $rawText.Length - 1)
+        }
+        if ($rawText -eq '') { return @() }
+        return @($rawText.Split("`n"))
+    }
+
+    if ($operands.Count -lt 2) {
+        Write-Error -Message 'diff: missing operand' -ErrorAction Continue
+        return
+    }
+
+    $result1 = & $readFileLines $operands[0]
+    if ($null -eq $result1) { return }
+    [string[]]$lines1 = @($result1)
+    $result2 = & $readFileLines $operands[1]
+    if ($null -eq $result2) { return }
+    [string[]]$lines2 = @($result2)
+
+    # Compute LCS table for diff
+    $n = $lines1.Count
+    $m = $lines2.Count
+    $dp = [int[,]]::new($n + 1, $m + 1)
+    for ($xi = $n - 1; $xi -ge 0; $xi--) {
+        for ($yi = $m - 1; $yi -ge 0; $yi--) {
+            if ($lines1[$xi] -ceq $lines2[$yi]) {
+                $dp[$xi, $yi] = $dp[($xi + 1), ($yi + 1)] + 1
+            } else {
+                $a = $dp[($xi + 1), $yi]
+                $b = $dp[$xi, ($yi + 1)]
+                $dp[$xi, $yi] = if ($a -ge $b) { $a } else { $b }
+            }
+        }
+    }
+
+    # Build edit script
+    $edits = [System.Collections.Generic.List[object]]::new()
+    $xi = 0; $yi = 0
+    while ($xi -lt $n -and $yi -lt $m) {
+        if ($lines1[$xi] -ceq $lines2[$yi]) {
+            $edits.Add(@{ Op = '='; Line1 = $xi; Line2 = $yi })
+            $xi++; $yi++
+        } elseif ($dp[($xi + 1), $yi] -ge $dp[$xi, ($yi + 1)]) {
+            $edits.Add(@{ Op = '-'; Line1 = $xi })
+            $xi++
+        } else {
+            $edits.Add(@{ Op = '+'; Line2 = $yi })
+            $yi++
+        }
+    }
+    while ($xi -lt $n) {
+        $edits.Add(@{ Op = '-'; Line1 = $xi })
+        $xi++
+    }
+    while ($yi -lt $m) {
+        $edits.Add(@{ Op = '+'; Line2 = $yi })
+        $yi++
+    }
+
+    # Check if files are identical
+    $hasDiff = $false
+    foreach ($e in $edits) {
+        if ($e.Op -ne '=') { $hasDiff = $true; break }
+    }
+    if (-not $hasDiff) { return }
+
+    if ($unified) {
+        # Unified format
+        New-BashObject -BashText "--- $($operands[0])"
+        New-BashObject -BashText "+++ $($operands[1])"
+
+        # Group edits into hunks
+        $hunkEdits = [System.Collections.Generic.List[object]]::new()
+        $contextLines = 3
+        $ei = 0
+        while ($ei -lt $edits.Count) {
+            if ($edits[$ei].Op -ne '=') {
+                $start = [Math]::Max(0, $ei - $contextLines)
+                $end = $ei
+                while ($end -lt $edits.Count) {
+                    if ($edits[$end].Op -ne '=') {
+                        $end++
+                        continue
+                    }
+                    $lookAhead = 0
+                    $j = $end
+                    while ($j -lt $edits.Count -and $edits[$j].Op -eq '=') {
+                        $lookAhead++
+                        $j++
+                    }
+                    if ($lookAhead -le $contextLines * 2 -and $j -lt $edits.Count) {
+                        $end = $j
+                    } else {
+                        $end = [Math]::Min($end + $contextLines, $edits.Count)
+                        break
+                    }
+                }
+                for ($k = $start; $k -lt $end; $k++) {
+                    $hunkEdits.Add($edits[$k])
+                }
+                $ei = $end
+            } else {
+                $ei++
+            }
+        }
+
+        if ($hunkEdits.Count -gt 0) {
+            $l1Start = -1; $l1Count = 0; $l2Start = -1; $l2Count = 0
+            $hunkLines = [System.Collections.Generic.List[string]]::new()
+            foreach ($e in $hunkEdits) {
+                switch ($e.Op) {
+                    '=' {
+                        if ($l1Start -eq -1) { $l1Start = $e.Line1 + 1 }
+                        if ($l2Start -eq -1) { $l2Start = $e.Line2 + 1 }
+                        $l1Count++; $l2Count++
+                        $hunkLines.Add(" $($lines1[$e.Line1])")
+                    }
+                    '-' {
+                        if ($l1Start -eq -1) { $l1Start = $e.Line1 + 1 }
+                        if ($l2Start -eq -1) { $l2Start = $e.Line1 + 1 }
+                        $l1Count++
+                        $hunkLines.Add("-$($lines1[$e.Line1])")
+                    }
+                    '+' {
+                        if ($l1Start -eq -1) { $l1Start = $e.Line2 + 1 }
+                        if ($l2Start -eq -1) { $l2Start = $e.Line2 + 1 }
+                        $l2Count++
+                        $hunkLines.Add("+$($lines2[$e.Line2])")
+                    }
+                }
+            }
+            New-BashObject -BashText "@@ -${l1Start},${l1Count} +${l2Start},${l2Count} @@"
+            foreach ($hl in $hunkLines) {
+                New-BashObject -BashText $hl
+            }
+        }
+    } else {
+        # Normal diff format
+        $ei = 0
+        while ($ei -lt $edits.Count) {
+            if ($edits[$ei].Op -eq '=') { $ei++; continue }
+
+            $delStart = -1; $delEnd = -1
+            $addStart = -1; $addEnd = -1
+            $delLines = [System.Collections.Generic.List[string]]::new()
+            $addLines = [System.Collections.Generic.List[string]]::new()
+
+            while ($ei -lt $edits.Count -and $edits[$ei].Op -ne '=') {
+                $e = $edits[$ei]
+                if ($e.Op -eq '-') {
+                    if ($delStart -eq -1) { $delStart = $e.Line1 + 1 }
+                    $delEnd = $e.Line1 + 1
+                    $delLines.Add($lines1[$e.Line1])
+                } elseif ($e.Op -eq '+') {
+                    if ($addStart -eq -1) { $addStart = $e.Line2 + 1 }
+                    $addEnd = $e.Line2 + 1
+                    $addLines.Add($lines2[$e.Line2])
+                }
+                $ei++
+            }
+
+            $delRange = if ($delStart -eq $delEnd -or $delStart -eq -1) { "$delStart" } else { "${delStart},${delEnd}" }
+            $addRange = if ($addStart -eq $addEnd -or $addStart -eq -1) { "$addStart" } else { "${addStart},${addEnd}" }
+
+            if ($delLines.Count -gt 0 -and $addLines.Count -gt 0) {
+                New-BashObject -BashText "${delRange}c${addRange}"
+                foreach ($dl in $delLines) { New-BashObject -BashText "< $dl" }
+                New-BashObject -BashText '---'
+                foreach ($al in $addLines) { New-BashObject -BashText "> $al" }
+            } elseif ($delLines.Count -gt 0) {
+                $addPos = if ($addStart -eq -1) {
+                    if ($delStart -gt 1) { $delStart - 1 } else { 0 }
+                } else { $addStart }
+                New-BashObject -BashText "${delRange}d${addPos}"
+                foreach ($dl in $delLines) { New-BashObject -BashText "< $dl" }
+            } elseif ($addLines.Count -gt 0) {
+                $delPos = if ($delStart -eq -1) {
+                    if ($addStart -gt 1) { $addStart - 1 } else { 0 }
+                } else { $delStart }
+                New-BashObject -BashText "${delPos}a${addRange}"
+                foreach ($al in $addLines) { New-BashObject -BashText "> $al" }
+            }
+        }
+    }
+}
+
+# --- comm Command ---
+
+function Invoke-BashComm {
+    $Arguments = [string[]]$args
+    $pipelineInput = @($input)
+
+    $suppress1 = $false
+    $suppress2 = $false
+    $suppress3 = $false
+    $operands = [System.Collections.Generic.List[string]]::new()
+    $pastDoubleDash = $false
+
+    $i = 0
+    while ($i -lt $Arguments.Count) {
+        $arg = $Arguments[$i]
+
+        if ($pastDoubleDash) {
+            $operands.Add($arg)
+            $i++
+            continue
+        }
+
+        if ($arg -eq '--') {
+            $pastDoubleDash = $true
+            $i++
+            continue
+        }
+
+        if ($arg.StartsWith('-') -and $arg.Length -gt 1 -and $arg -cmatch '^-[123]+$') {
+            foreach ($ch in $arg.Substring(1).ToCharArray()) {
+                switch ($ch) {
+                    '1' { $suppress1 = $true }
+                    '2' { $suppress2 = $true }
+                    '3' { $suppress3 = $true }
+                }
+            }
+            $i++
+            continue
+        }
+
+        $operands.Add($arg)
+        $i++
+    }
+
+    $readFileLines = {
+        param([string]$FilePath)
+        if (-not (Test-Path -LiteralPath $FilePath)) {
+            Write-Error -Message "comm: ${FilePath}: No such file or directory" -ErrorAction Continue
+            return $null
+        }
+        $bytes = [System.IO.File]::ReadAllBytes($FilePath)
+        $byteOffset = 0
+        if ($bytes.Length -ge 3 -and $bytes[0] -eq 0xEF -and $bytes[1] -eq 0xBB -and $bytes[2] -eq 0xBF) {
+            $byteOffset = 3
+        }
+        $rawText = [System.Text.Encoding]::UTF8.GetString($bytes, $byteOffset, $bytes.Length - $byteOffset)
+        $rawText = $rawText -replace "`r`n", "`n"
+        if ($rawText.EndsWith("`n")) {
+            $rawText = $rawText.Substring(0, $rawText.Length - 1)
+        }
+        if ($rawText -eq '') { return @() }
+        return @($rawText.Split("`n"))
+    }
+
+    if ($operands.Count -lt 2) {
+        Write-Error -Message 'comm: missing operand' -ErrorAction Continue
+        return
+    }
+
+    $result1 = & $readFileLines $operands[0]
+    if ($null -eq $result1) { return }
+    [string[]]$lines1 = @($result1)
+    $result2 = & $readFileLines $operands[1]
+    if ($null -eq $result2) { return }
+    [string[]]$lines2 = @($result2)
+
+    $i1 = 0; $i2 = 0
+    while ($i1 -lt $lines1.Count -and $i2 -lt $lines2.Count) {
+        $cmp = [string]::Compare($lines1[$i1], $lines2[$i2], [System.StringComparison]::Ordinal)
+        if ($cmp -eq 0) {
+            if (-not $suppress3) {
+                $prefix = ''
+                if (-not $suppress1) { $prefix += "`t" }
+                if (-not $suppress2) { $prefix += "`t" }
+                New-BashObject -BashText "${prefix}$($lines1[$i1])"
+            }
+            $i1++; $i2++
+        } elseif ($cmp -lt 0) {
+            if (-not $suppress1) {
+                New-BashObject -BashText $lines1[$i1]
+            }
+            $i1++
+        } else {
+            if (-not $suppress2) {
+                $prefix = ''
+                if (-not $suppress1) { $prefix += "`t" }
+                New-BashObject -BashText "${prefix}$($lines2[$i2])"
+            }
+            $i2++
+        }
+    }
+
+    while ($i1 -lt $lines1.Count) {
+        if (-not $suppress1) {
+            New-BashObject -BashText $lines1[$i1]
+        }
+        $i1++
+    }
+
+    while ($i2 -lt $lines2.Count) {
+        if (-not $suppress2) {
+            $prefix = ''
+            if (-not $suppress1) { $prefix += "`t" }
+            New-BashObject -BashText "${prefix}$($lines2[$i2])"
+        }
+        $i2++
+    }
+}
+
+# --- column Command ---
+
+function Invoke-BashColumn {
+    $Arguments = [string[]]$args
+    $pipelineInput = @($input)
+
+    $tableMode = $false
+    $separator = $null
+    $operands = [System.Collections.Generic.List[string]]::new()
+    $pastDoubleDash = $false
+
+    $i = 0
+    while ($i -lt $Arguments.Count) {
+        $arg = $Arguments[$i]
+
+        if ($pastDoubleDash) {
+            $operands.Add($arg)
+            $i++
+            continue
+        }
+
+        if ($arg -eq '--') {
+            $pastDoubleDash = $true
+            $i++
+            continue
+        }
+
+        if ($arg -ceq '-t') {
+            $tableMode = $true
+            $i++
+            continue
+        }
+
+        if ($arg -ceq '-s') {
+            $i++
+            if ($i -lt $Arguments.Count) {
+                $separator = $Arguments[$i]
+            }
+            $i++
+            continue
+        }
+
+        if ($arg -cmatch '^-s(.)$') {
+            $separator = $Matches[1]
+            $i++
+            continue
+        }
+
+        $operands.Add($arg)
+        $i++
+    }
+
+    $lines = [System.Collections.Generic.List[string]]::new()
+
+    if ($operands.Count -eq 0 -and $pipelineInput.Count -gt 0) {
+        foreach ($item in $pipelineInput) {
+            $text = Get-BashText -InputObject $item
+            $text = $text -replace "`n$", ''
+            foreach ($l in $text.Split("`n")) {
+                $lines.Add($l)
+            }
+        }
+    } else {
+        foreach ($filePath in $operands) {
+            if (-not (Test-Path -LiteralPath $filePath)) {
+                Write-Error -Message "column: ${filePath}: No such file or directory" -ErrorAction Continue
+                continue
+            }
+            $bytes = [System.IO.File]::ReadAllBytes($filePath)
+            $byteOffset = 0
+            if ($bytes.Length -ge 3 -and $bytes[0] -eq 0xEF -and $bytes[1] -eq 0xBB -and $bytes[2] -eq 0xBF) {
+                $byteOffset = 3
+            }
+            $rawText = [System.Text.Encoding]::UTF8.GetString($bytes, $byteOffset, $bytes.Length - $byteOffset)
+            $rawText = $rawText -replace "`r`n", "`n"
+            if ($rawText.EndsWith("`n")) {
+                $rawText = $rawText.Substring(0, $rawText.Length - 1)
+            }
+            foreach ($l in $rawText.Split("`n")) {
+                $lines.Add($l)
+            }
+        }
+    }
+
+    if (-not $tableMode) {
+        foreach ($line in $lines) {
+            New-BashObject -BashText $line
+        }
+        return
+    }
+
+    # Table mode: split each line into fields and align columns
+    $splitPattern = if ($null -ne $separator) { [regex]::Escape($separator) } else { '\s+' }
+    $rows = [System.Collections.Generic.List[string[]]]::new()
+    $maxCols = 0
+
+    foreach ($line in $lines) {
+        if ($line -eq '') {
+            $rows.Add(@(''))
+            continue
+        }
+        $fields = [regex]::Split($line.Trim(), $splitPattern)
+        $rows.Add($fields)
+        if ($fields.Count -gt $maxCols) { $maxCols = $fields.Count }
+    }
+
+    # Calculate column widths
+    $widths = [int[]]::new($maxCols)
+    foreach ($row in $rows) {
+        for ($c = 0; $c -lt $row.Count; $c++) {
+            if ($row[$c].Length -gt $widths[$c]) {
+                $widths[$c] = $row[$c].Length
+            }
+        }
+    }
+
+    foreach ($row in $rows) {
+        $sb = [System.Text.StringBuilder]::new()
+        for ($c = 0; $c -lt $row.Count; $c++) {
+            if ($c -gt 0) { [void]$sb.Append('  ') }
+            if ($c -lt $row.Count - 1) {
+                [void]$sb.Append($row[$c].PadRight($widths[$c]))
+            } else {
+                [void]$sb.Append($row[$c])
+            }
+        }
+        New-BashObject -BashText $sb.ToString()
+    }
+}
+
+# --- join Command ---
+
+function Invoke-BashJoin {
+    $Arguments = [string[]]$args
+    $pipelineInput = @($input)
+
+    $delimiter = ' '
+    $field1 = 1
+    $field2 = 1
+    $operands = [System.Collections.Generic.List[string]]::new()
+    $pastDoubleDash = $false
+
+    $i = 0
+    while ($i -lt $Arguments.Count) {
+        $arg = $Arguments[$i]
+
+        if ($pastDoubleDash) {
+            $operands.Add($arg)
+            $i++
+            continue
+        }
+
+        if ($arg -eq '--') {
+            $pastDoubleDash = $true
+            $i++
+            continue
+        }
+
+        if ($arg -ceq '-t') {
+            $i++
+            if ($i -lt $Arguments.Count) {
+                $delimiter = $Arguments[$i]
+            }
+            $i++
+            continue
+        }
+
+        if ($arg -cmatch '^-t(.)$') {
+            $delimiter = $Matches[1]
+            $i++
+            continue
+        }
+
+        if ($arg -ceq '-1') {
+            $i++
+            if ($i -lt $Arguments.Count) {
+                $field1 = [int]$Arguments[$i]
+            }
+            $i++
+            continue
+        }
+
+        if ($arg -ceq '-2') {
+            $i++
+            if ($i -lt $Arguments.Count) {
+                $field2 = [int]$Arguments[$i]
+            }
+            $i++
+            continue
+        }
+
+        $operands.Add($arg)
+        $i++
+    }
+
+    $readFileLines = {
+        param([string]$FilePath)
+        if (-not (Test-Path -LiteralPath $FilePath)) {
+            Write-Error -Message "join: ${FilePath}: No such file or directory" -ErrorAction Continue
+            return $null
+        }
+        $bytes = [System.IO.File]::ReadAllBytes($FilePath)
+        $byteOffset = 0
+        if ($bytes.Length -ge 3 -and $bytes[0] -eq 0xEF -and $bytes[1] -eq 0xBB -and $bytes[2] -eq 0xBF) {
+            $byteOffset = 3
+        }
+        $rawText = [System.Text.Encoding]::UTF8.GetString($bytes, $byteOffset, $bytes.Length - $byteOffset)
+        $rawText = $rawText -replace "`r`n", "`n"
+        if ($rawText.EndsWith("`n")) {
+            $rawText = $rawText.Substring(0, $rawText.Length - 1)
+        }
+        if ($rawText -eq '') { return @() }
+        return @($rawText.Split("`n"))
+    }
+
+    if ($operands.Count -lt 2) {
+        Write-Error -Message 'join: missing operand' -ErrorAction Continue
+        return
+    }
+
+    $result1 = & $readFileLines $operands[0]
+    if ($null -eq $result1) { return }
+    [string[]]$lines1 = @($result1)
+    $result2 = & $readFileLines $operands[1]
+    if ($null -eq $result2) { return }
+    [string[]]$lines2 = @($result2)
+
+    # Build lookup from file2 keyed by join field
+    $file2Map = [System.Collections.Generic.Dictionary[string, System.Collections.Generic.List[string[]]]]::new(
+        [System.StringComparer]::Ordinal
+    )
+    foreach ($line in $lines2) {
+        $fields = $line.Split($delimiter)
+        $keyIdx = $field2 - 1
+        if ($keyIdx -ge $fields.Count) { continue }
+        $key = $fields[$keyIdx]
+        if (-not $file2Map.ContainsKey($key)) {
+            $file2Map[$key] = [System.Collections.Generic.List[string[]]]::new()
+        }
+        $file2Map[$key].Add($fields)
+    }
+
+    foreach ($line in $lines1) {
+        $fields1 = $line.Split($delimiter)
+        $keyIdx1 = $field1 - 1
+        if ($keyIdx1 -ge $fields1.Count) { continue }
+        $key = $fields1[$keyIdx1]
+
+        if ($file2Map.ContainsKey($key)) {
+            foreach ($fields2 in $file2Map[$key]) {
+                $parts = [System.Collections.Generic.List[string]]::new()
+                $parts.Add($key)
+                for ($c = 0; $c -lt $fields1.Count; $c++) {
+                    if ($c -ne $keyIdx1) { $parts.Add($fields1[$c]) }
+                }
+                for ($c = 0; $c -lt $fields2.Count; $c++) {
+                    if ($c -ne ($field2 - 1)) { $parts.Add($fields2[$c]) }
+                }
+                New-BashObject -BashText ($parts -join $delimiter)
+            }
+        }
+    }
+}
+
+# --- paste Command ---
+
+function Invoke-BashPaste {
+    $Arguments = [string[]]$args
+    $pipelineInput = @($input)
+
+    $delimiter = "`t"
+    $serial = $false
+    $operands = [System.Collections.Generic.List[string]]::new()
+    $pastDoubleDash = $false
+
+    $i = 0
+    while ($i -lt $Arguments.Count) {
+        $arg = $Arguments[$i]
+
+        if ($pastDoubleDash) {
+            $operands.Add($arg)
+            $i++
+            continue
+        }
+
+        if ($arg -eq '--') {
+            $pastDoubleDash = $true
+            $i++
+            continue
+        }
+
+        if ($arg -ceq '-s') {
+            $serial = $true
+            $i++
+            continue
+        }
+
+        if ($arg -ceq '-d') {
+            $i++
+            if ($i -lt $Arguments.Count) {
+                $delimiter = $Arguments[$i]
+            }
+            $i++
+            continue
+        }
+
+        if ($arg -cmatch '^-d(.+)$') {
+            $delimiter = $Matches[1]
+            $i++
+            continue
+        }
+
+        $operands.Add($arg)
+        $i++
+    }
+
+    $readFileLines = {
+        param([string]$FilePath)
+        if (-not (Test-Path -LiteralPath $FilePath)) {
+            Write-Error -Message "paste: ${FilePath}: No such file or directory" -ErrorAction Continue
+            return $null
+        }
+        $bytes = [System.IO.File]::ReadAllBytes($FilePath)
+        $byteOffset = 0
+        if ($bytes.Length -ge 3 -and $bytes[0] -eq 0xEF -and $bytes[1] -eq 0xBB -and $bytes[2] -eq 0xBF) {
+            $byteOffset = 3
+        }
+        $rawText = [System.Text.Encoding]::UTF8.GetString($bytes, $byteOffset, $bytes.Length - $byteOffset)
+        $rawText = $rawText -replace "`r`n", "`n"
+        if ($rawText.EndsWith("`n")) {
+            $rawText = $rawText.Substring(0, $rawText.Length - 1)
+        }
+        if ($rawText -eq '') { return @() }
+        return @($rawText.Split("`n"))
+    }
+
+    # Read all files
+    $allFiles = [System.Collections.Generic.List[string[]]]::new()
+    foreach ($filePath in $operands) {
+        $fileResult = & $readFileLines $filePath
+        if ($null -eq $fileResult) { return }
+        [string[]]$fileLines = @($fileResult)
+        $allFiles.Add($fileLines)
+    }
+
+    if ($allFiles.Count -eq 0) { return }
+
+    if ($serial) {
+        # Serial mode: each file becomes one line with fields joined
+        foreach ($fileLines in $allFiles) {
+            New-BashObject -BashText ($fileLines -join $delimiter)
+        }
+    } else {
+        # Normal mode: merge files line by line
+        $maxLines = 0
+        foreach ($fileLines in $allFiles) {
+            if ($fileLines.Count -gt $maxLines) { $maxLines = $fileLines.Count }
+        }
+
+        for ($lineIdx = 0; $lineIdx -lt $maxLines; $lineIdx++) {
+            $parts = [System.Collections.Generic.List[string]]::new()
+            foreach ($fileLines in $allFiles) {
+                if ($lineIdx -lt $fileLines.Count) {
+                    $parts.Add($fileLines[$lineIdx])
+                } else {
+                    $parts.Add('')
+                }
+            }
+            New-BashObject -BashText ($parts -join $delimiter)
+        }
+    }
+}
+
 # --- Aliases ---
 
 Set-Alias -Name 'echo'   -Value 'Invoke-BashEcho'   -Force -Scope Global -Option AllScope
@@ -4763,3 +5490,8 @@ Set-Alias -Name 'tr'      -Value 'Invoke-BashTr'      -Force -Scope Global -Opti
 Set-Alias -Name 'uniq'    -Value 'Invoke-BashUniq'    -Force -Scope Global -Option AllScope
 Set-Alias -Name 'rev'     -Value 'Invoke-BashRev'     -Force -Scope Global -Option AllScope
 Set-Alias -Name 'nl'      -Value 'Invoke-BashNl'      -Force -Scope Global -Option AllScope
+Set-Alias -Name 'diff'    -Value 'Invoke-BashDiff'    -Force -Scope Global -Option AllScope
+Set-Alias -Name 'comm'    -Value 'Invoke-BashComm'    -Force -Scope Global -Option AllScope
+Set-Alias -Name 'column'  -Value 'Invoke-BashColumn'  -Force -Scope Global -Option AllScope
+Set-Alias -Name 'join'    -Value 'Invoke-BashJoin'    -Force -Scope Global -Option AllScope
+Set-Alias -Name 'paste'   -Value 'Invoke-BashPaste'   -Force -Scope Global -Option AllScope
