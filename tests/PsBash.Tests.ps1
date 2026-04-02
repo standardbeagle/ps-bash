@@ -1273,6 +1273,173 @@ Describe 'Invoke-BashFind' {
     }
 }
 
+Describe 'Invoke-BashStat' {
+    BeforeAll {
+        $statDir = Join-Path ([System.IO.Path]::GetTempPath()) "psbash-stat-test-$(Get-Random)"
+        New-Item -Path $statDir -ItemType Directory -Force | Out-Null
+
+        $statFile = Join-Path $statDir 'file.txt'
+        [System.IO.File]::WriteAllText($statFile, 'hello world', [System.Text.UTF8Encoding]::new($false))
+
+        $statSubDir = Join-Path $statDir 'subdir'
+        New-Item -Path $statSubDir -ItemType Directory -Force | Out-Null
+    }
+
+    AfterAll {
+        Remove-Item -Path $statDir -Recurse -Force -ErrorAction SilentlyContinue
+    }
+
+    It 'stat file.txt returns StatEntry with all properties' {
+        $result = @(Invoke-BashStat $statFile)
+        $result.Count | Should -Be 1
+        $entry = $result[0]
+        $entry.PSObject.TypeNames[0] | Should -Be 'PsBash.StatEntry'
+        $entry.Name | Should -Be 'file.txt'
+        $entry.FullPath | Should -Be (Resolve-Path $statFile).Path
+        $entry.SizeBytes | Should -Be 11
+        $entry.Permissions | Should -Not -BeNullOrEmpty
+        $entry.OctalPerms | Should -Match '^\d{4}$'
+        $entry.LinkCount | Should -BeGreaterOrEqual 1
+        $entry.Owner | Should -Not -BeNullOrEmpty
+        $entry.Group | Should -Not -BeNullOrEmpty
+        $entry.Inode | Should -BeOfType [long]
+        $entry.Blocks | Should -BeOfType [long]
+        $entry.Device | Should -BeOfType [long]
+        $entry.LastModified | Should -BeOfType [datetime]
+        $entry.MtimeEpoch | Should -BeGreaterThan 0
+        $entry.BashText | Should -Not -BeNullOrEmpty
+    }
+
+    It 'stat -c %s file.txt returns size only' {
+        $result = @(Invoke-BashStat -c '%s' $statFile)
+        $result.Count | Should -Be 1
+        $result[0].BashText | Should -Be "11`n"
+    }
+
+    It 'stat -c "%a %n" file.txt returns octal permissions + name' {
+        $result = @(Invoke-BashStat -c '%a %n' $statFile)
+        $result.Count | Should -Be 1
+        $text = $result[0].BashText.TrimEnd("`n")
+        $text | Should -Match '^\d{4} file\.txt$'
+    }
+
+    It 'stat --printf="%s\n" file.txt returns printf-style with no trailing newline' {
+        $result = @(Invoke-BashStat '--printf=%s\n' $statFile)
+        $result.Count | Should -Be 1
+        # printf-style: escape sequences processed, no auto-trailing newline
+        $result[0].BashText | Should -Be "11`n"
+    }
+
+    It 'stat --printf="%s" file.txt has no trailing newline' {
+        $result = @(Invoke-BashStat '--printf=%s' $statFile)
+        $result.Count | Should -Be 1
+        $result[0].BashText | Should -Be '11'
+    }
+
+    It 'stat -t file.txt returns terse format' {
+        $result = @(Invoke-BashStat -t $statFile)
+        $result.Count | Should -Be 1
+        $fields = $result[0].BashText.TrimEnd("`n") -split ' '
+        $fields.Count | Should -Be 14
+        $fields[0] | Should -Be 'file.txt'
+        $fields[1] | Should -Be '11'
+    }
+
+    It 'stat nonexistent writes error and sets exit code 1' {
+        $result = Invoke-BashStat '/nonexistent/path/xyz' 2>&1
+        $errMsg = @($result | Where-Object { $_ -is [System.Management.Automation.ErrorRecord] })
+        $errMsg.Count | Should -BeGreaterOrEqual 1
+        $errMsg[0].Exception.Message | Should -BeLike "stat: cannot stat*"
+        $global:LASTEXITCODE | Should -Be 1
+    }
+
+    It 'stat on directory returns correct type' {
+        $result = @(Invoke-BashStat $statSubDir)
+        $result.Count | Should -Be 1
+        $result[0].IsDirectory | Should -Be $true
+        $result[0].BashText | Should -Match 'directory'
+    }
+
+    It 'stat default output contains File, Size, Device, Inode, Access, Modify lines' {
+        $result = @(Invoke-BashStat $statFile)
+        $text = $result[0].BashText
+        $text | Should -Match 'File:'
+        $text | Should -Match 'Size:'
+        $text | Should -Match 'Blocks:'
+        $text | Should -Match 'Device:'
+        $text | Should -Match 'Inode:'
+        $text | Should -Match 'Access:'
+        $text | Should -Match 'Modify:'
+    }
+
+    It 'stat -c "%U %G" returns owner and group' {
+        $result = @(Invoke-BashStat -c '%U %G' $statFile)
+        $text = $result[0].BashText.TrimEnd("`n")
+        $parts = $text -split ' '
+        $parts.Count | Should -Be 2
+        $parts[0] | Should -Not -BeNullOrEmpty
+        $parts[1] | Should -Not -BeNullOrEmpty
+    }
+
+    It 'stat -c "%i %b %d" returns inode blocks device' {
+        $result = @(Invoke-BashStat -c '%i %b %d' $statFile)
+        $text = $result[0].BashText.TrimEnd("`n")
+        $parts = $text -split ' '
+        $parts.Count | Should -Be 3
+        [long]::TryParse($parts[0], [ref]$null) | Should -Be $true
+        [long]::TryParse($parts[1], [ref]$null) | Should -Be $true
+        [long]::TryParse($parts[2], [ref]$null) | Should -Be $true
+    }
+
+    It 'stat -c "%A" returns permission string like drwx or -rw-' {
+        $result = @(Invoke-BashStat -c '%A' $statFile)
+        $text = $result[0].BashText.TrimEnd("`n")
+        $text | Should -Match '^[-dlrwx]{10}$'
+    }
+
+    It 'stat -c "%Y" returns mtime epoch as positive integer' {
+        $result = @(Invoke-BashStat -c '%Y' $statFile)
+        $text = $result[0].BashText.TrimEnd("`n")
+        [long]$epoch = [long]$text
+        $epoch | Should -BeGreaterThan 0
+    }
+
+    It 'stat multiple files returns one entry per file' {
+        $result = @(Invoke-BashStat $statFile $statSubDir)
+        $result.Count | Should -Be 2
+        $result[0].Name | Should -Be 'file.txt'
+        $result[1].Name | Should -Be 'subdir'
+    }
+
+    It 'stat -c "%%s" returns literal %s' {
+        $result = @(Invoke-BashStat -c '%%s' $statFile)
+        $text = $result[0].BashText.TrimEnd("`n")
+        $text | Should -Be '%s'
+    }
+
+    It 'StatEntry ToString returns BashText' {
+        $result = @(Invoke-BashStat $statFile)
+        "$($result[0])" | Should -Be $result[0].BashText
+    }
+
+    It 'stat exports stat alias pointing to Invoke-BashStat' {
+        $alias = Get-Alias -Name stat -Scope Global
+        $alias.Definition | Should -Be 'Invoke-BashStat'
+    }
+
+    It 'stat on Linux returns real inode and blocks' -Skip:($IsWindows -or $IsMacOS) {
+        $result = @(Invoke-BashStat $statFile)
+        $result[0].Inode | Should -BeGreaterThan 0
+        $result[0].Blocks | Should -BeGreaterOrEqual 0
+    }
+
+    It 'stat on Windows synthesizes inode=0 and device from drive' -Skip:(-not $IsWindows) {
+        $result = @(Invoke-BashStat $statFile)
+        $result[0].Inode | Should -Be 0
+        $result[0].Device | Should -BeGreaterOrEqual 0
+    }
+}
+
 Describe 'Integration: Multi-Command Pipelines' {
     BeforeAll {
         $intDir = Join-Path ([System.IO.Path]::GetTempPath()) "psbash-integration-test-$(Get-Random)"

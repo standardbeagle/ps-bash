@@ -331,7 +331,7 @@ function Get-BashFileInfo {
         $mode = [int]$Item.UnixFileMode
         $permString = ConvertTo-PermissionString -Mode $mode
         $statArgs = if ($IsMacOS) { @('-f', '%l %Su %Sg', $Item.FullName) } else { @('-c', '%h %U %G', $Item.FullName) }
-        $statOutput = & stat @statArgs 2>$null
+        $statOutput = & /usr/bin/stat @statArgs 2>$null
         if ($statOutput) {
             $parts = $statOutput -split ' ', 3
             $linkCount = [int]$parts[0]
@@ -1749,6 +1749,217 @@ function Invoke-BashFind {
     }
 }
 
+# --- stat Command ---
+
+function Invoke-BashStat {
+    $Arguments = [string[]]$args
+
+    $formatString = $null
+    $printfString = $null
+    $terseMode = $false
+    $operands = [System.Collections.Generic.List[string]]::new()
+
+    $i = 0
+    while ($i -lt $Arguments.Count) {
+        $arg = $Arguments[$i]
+        if ($arg -eq '-c' -and ($i + 1) -lt $Arguments.Count) {
+            $formatString = $Arguments[$i + 1]
+            $i += 2
+            continue
+        }
+        if ($arg -match '^--printf=(.+)$') {
+            $printfString = $Matches[1]
+            $i++
+            continue
+        }
+        if ($arg -eq '-t') {
+            $terseMode = $true
+            $i++
+            continue
+        }
+        $operands.Add($arg)
+        $i++
+    }
+
+    if ($operands.Count -eq 0) {
+        Write-Error -Message "stat: missing operand" -ErrorAction Continue
+        $global:LASTEXITCODE = 1
+        return
+    }
+
+    $hadError = $false
+
+    foreach ($target in $operands) {
+        if (-not (Test-Path -LiteralPath $target)) {
+            $msg = "stat: cannot stat '$target': No such file or directory"
+            Write-Error -Message $msg -ErrorAction Continue
+            $hadError = $true
+            continue
+        }
+
+        $item = Get-Item -LiteralPath $target -Force
+        $fileInfo = Get-BashFileInfo -Item $item
+        $isDir = $item -is [System.IO.DirectoryInfo]
+        $size = if ($isDir) { 4096 } else { $item.Length }
+
+        # Cross-platform: inode, blocks, device
+        $inode = [long]0
+        $blocks = [long]([System.Math]::Ceiling($size / 512.0))
+        $device = [long]0
+
+        if (-not $IsWindows) {
+            $nativeArgs = if ($IsMacOS) {
+                @('-f', '%i %b %d', $item.FullName)
+            } else {
+                @('-c', '%i %b %d', $item.FullName)
+            }
+            $nativeOutput = & /usr/bin/stat @nativeArgs 2>$null
+            if ($nativeOutput) {
+                $parts = $nativeOutput -split '\s+', 3
+                $inode = [long]$parts[0]
+                $blocks = [long]$parts[1]
+                $device = [long]$parts[2]
+            }
+        } else {
+            # Windows: synthesize inode=0, blocks from size, device from drive letter
+            $driveLetter = $item.FullName.Substring(0, 1).ToUpper()
+            $device = [long]([byte][char]$driveLetter) - [long]([byte][char]'A')
+        }
+
+        $mode = 0
+        if (-not $IsWindows) {
+            $mode = [int]$item.UnixFileMode
+        } else {
+            # Approximate from permission string
+            $perm = $fileInfo.Permissions.Substring(1)
+            $bitMap = @{ 'r' = @(256,32,4); 'w' = @(128,16,2); 'x' = @(64,8,1) }
+            for ($ci = 0; $ci -lt 9; $ci++) {
+                $ch = $perm[$ci]
+                if ($ch -ne '-') {
+                    $groupIdx = [System.Math]::Floor($ci / 3)
+                    $typeIdx = $ci % 3
+                    $typeChar = @('r','w','x')[$typeIdx]
+                    $mode = $mode -bor $bitMap[$typeChar][$groupIdx]
+                }
+            }
+        }
+
+        $octalPerms = [System.Convert]::ToString(($mode -band 0x1FF), 8).PadLeft(4, '0')
+        $mtime = $item.LastWriteTime
+        $mtimeEpoch = [long]([System.DateTimeOffset]::new($mtime).ToUnixTimeSeconds())
+        $accessTime = $item.LastAccessTime
+        $atimeEpoch = [long]([System.DateTimeOffset]::new($accessTime).ToUnixTimeSeconds())
+
+        $statEntry = [PSCustomObject]@{
+            PSTypeName   = 'PsBash.StatEntry'
+            Name         = $item.Name
+            FullPath     = $item.FullName
+            IsDirectory  = $isDir
+            SizeBytes    = $size
+            Permissions  = $fileInfo.Permissions
+            OctalPerms   = $octalPerms
+            LinkCount    = $fileInfo.LinkCount
+            Owner        = $fileInfo.Owner
+            Group        = $fileInfo.Group
+            Inode        = $inode
+            Blocks       = $blocks
+            Device       = $device
+            LastModified = $mtime
+            MtimeEpoch   = $mtimeEpoch
+            AccessTime   = $accessTime
+            AtimeEpoch   = $atimeEpoch
+            BashText     = ''
+        }
+
+        # Format output
+        if ($null -ne $printfString) {
+            $text = Format-StatString -Entry $statEntry -FormatStr $printfString
+            $text = Expand-EscapeSequences -Text $text
+            $statEntry.BashText = $text
+        } elseif ($null -ne $formatString) {
+            $text = Format-StatString -Entry $statEntry -FormatStr $formatString
+            $statEntry.BashText = $text + "`n"
+        } elseif ($terseMode) {
+            $statEntry.BashText = "{0} {1} {2} {3} {4} {5} {6} {7} {8} {9} {10} {11} {12} {13}`n" -f `
+                $statEntry.Name,
+                $statEntry.SizeBytes,
+                $statEntry.Blocks,
+                $octalPerms,
+                $statEntry.Owner,
+                $statEntry.Group,
+                $statEntry.Device,
+                $statEntry.Inode,
+                $statEntry.LinkCount,
+                '0',
+                '0',
+                $statEntry.AtimeEpoch,
+                $statEntry.MtimeEpoch,
+                '0'
+        } else {
+            $typeDesc = if ($isDir) { 'directory' } else { 'regular file' }
+            $sb = [System.Text.StringBuilder]::new()
+            [void]$sb.AppendLine("  File: $($statEntry.Name)")
+            [void]$sb.AppendLine("  Size: $($statEntry.SizeBytes)`tBlocks: $($statEntry.Blocks)`tIO Block: 4096`t$typeDesc")
+            [void]$sb.AppendLine("Device: $($statEntry.Device)`tInode: $($statEntry.Inode)`tLinks: $($statEntry.LinkCount)")
+            [void]$sb.AppendLine("Access: ($octalPerms/$($statEntry.Permissions))`tUid: ($($statEntry.Owner))`tGid: ($($statEntry.Group))")
+            [void]$sb.Append("Modify: $($mtime.ToString('yyyy-MM-dd HH:mm:ss.fffffff zzz'))")
+            $statEntry.BashText = $sb.ToString() + "`n"
+        }
+
+        $statEntry | Add-Member -MemberType ScriptMethod -Name 'ToString' -Value {
+            $this.BashText
+        } -Force
+        $statEntry
+    }
+
+    if ($hadError) {
+        $global:LASTEXITCODE = 1
+    }
+}
+
+function Format-StatString {
+    [CmdletBinding()]
+    [OutputType([string])]
+    param(
+        [Parameter(Mandatory)]
+        [PSCustomObject]$Entry,
+
+        [Parameter(Mandatory)]
+        [string]$FormatStr
+    )
+
+    $sb = [System.Text.StringBuilder]::new()
+    $i = 0
+    while ($i -lt $FormatStr.Length) {
+        if ($FormatStr[$i] -eq '%' -and ($i + 1) -lt $FormatStr.Length) {
+            $spec = $FormatStr[$i + 1]
+            switch -CaseSensitive ($spec) {
+                's' { [void]$sb.Append($Entry.SizeBytes);   $i += 2; break }
+                'a' { [void]$sb.Append($Entry.OctalPerms);  $i += 2; break }
+                'A' { [void]$sb.Append($Entry.Permissions); $i += 2; break }
+                'n' { [void]$sb.Append($Entry.Name);        $i += 2; break }
+                'N' { [void]$sb.Append($Entry.FullPath);    $i += 2; break }
+                'U' { [void]$sb.Append($Entry.Owner);       $i += 2; break }
+                'G' { [void]$sb.Append($Entry.Group);       $i += 2; break }
+                'i' { [void]$sb.Append($Entry.Inode);       $i += 2; break }
+                'b' { [void]$sb.Append($Entry.Blocks);      $i += 2; break }
+                'd' { [void]$sb.Append($Entry.Device);      $i += 2; break }
+                'Y' { [void]$sb.Append($Entry.MtimeEpoch);  $i += 2; break }
+                'h' { [void]$sb.Append($Entry.LinkCount);   $i += 2; break }
+                '%' { [void]$sb.Append('%');                 $i += 2; break }
+                default {
+                    [void]$sb.Append($FormatStr[$i])
+                    $i++
+                }
+            }
+        } else {
+            [void]$sb.Append($FormatStr[$i])
+            $i++
+        }
+    }
+    $sb.ToString()
+}
+
 # --- Aliases ---
 
 Set-Alias -Name 'echo'   -Value 'Invoke-BashEcho'   -Force -Scope Global -Option AllScope
@@ -1761,3 +1972,4 @@ Set-Alias -Name 'head'    -Value 'Invoke-BashHead'    -Force -Scope Global -Opti
 Set-Alias -Name 'tail'    -Value 'Invoke-BashTail'    -Force -Scope Global -Option AllScope
 Set-Alias -Name 'wc'      -Value 'Invoke-BashWc'      -Force -Scope Global -Option AllScope
 Set-Alias -Name 'find'    -Value 'Invoke-BashFind'    -Force -Scope Global -Option AllScope
+Set-Alias -Name 'stat'    -Value 'Invoke-BashStat'    -Force -Scope Global -Option AllScope
