@@ -99,7 +99,8 @@ FunctionsToExport = 'Invoke-BashEcho', 'Invoke-BashPrintf', 'Get-BashPlatform',
                'Invoke-BashExpr',
                'Invoke-BashDu', 'Invoke-BashTree',
                'Invoke-BashEnv', 'Invoke-BashBasename', 'Invoke-BashDirname',
-               'Invoke-BashPwd', 'Invoke-BashHostname', 'Invoke-BashWhoami'
+               'Invoke-BashPwd', 'Invoke-BashHostname', 'Invoke-BashWhoami',
+               'Register-BashCompletions'
 
 # Cmdlets to export from this module, for best performance, do not use wildcards and do not delete the entry, use an empty array if there are no cmdlets to export.
 CmdletsToExport = @()

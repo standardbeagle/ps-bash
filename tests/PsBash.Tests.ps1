@@ -4574,3 +4574,131 @@ Describe 'Slice 19 — Pipeline Bridge' {
         $result | Should -Not -BeNullOrEmpty
     }
 }
+
+# ── Tab Completion (Slice 24) ──────────────────────────────────────────
+
+Describe 'Register-BashCompletions — Flag Spec Data' {
+    It 'BashFlagSpecs contains ls with expected flags' {
+        $specs = & (Get-Module PsBash) { $script:BashFlagSpecs }
+        $specs | Should -Not -BeNullOrEmpty
+        $specs.ContainsKey('ls') | Should -BeTrue
+        $lsFlags = $specs['ls']
+        $lsFlags.Count | Should -BeGreaterOrEqual 8
+        ($lsFlags | Where-Object { $_[0] -eq '-l' }) | Should -Not -BeNullOrEmpty
+        ($lsFlags | Where-Object { $_[0] -eq '-a' }) | Should -Not -BeNullOrEmpty
+        ($lsFlags | Where-Object { $_[0] -eq '-h' }) | Should -Not -BeNullOrEmpty
+        ($lsFlags | Where-Object { $_[0] -eq '-R' }) | Should -Not -BeNullOrEmpty
+    }
+
+    It 'BashFlagSpecs contains grep with short and context flags' {
+        $specs = & (Get-Module PsBash) { $script:BashFlagSpecs }
+        $specs.ContainsKey('grep') | Should -BeTrue
+        $grepFlags = $specs['grep']
+        ($grepFlags | Where-Object { $_[0] -eq '-i' }) | Should -Not -BeNullOrEmpty
+        ($grepFlags | Where-Object { $_[0] -eq '-A' }) | Should -Not -BeNullOrEmpty
+        ($grepFlags | Where-Object { $_[0] -eq '-B' }) | Should -Not -BeNullOrEmpty
+        ($grepFlags | Where-Object { $_[0] -eq '-C' }) | Should -Not -BeNullOrEmpty
+    }
+
+    It 'BashFlagSpecs contains all expected commands' {
+        $specs = & (Get-Module PsBash) { $script:BashFlagSpecs }
+        $expectedCommands = @(
+            'ls', 'cat', 'grep', 'sort', 'head', 'tail', 'wc',
+            'find', 'stat', 'cp', 'mv', 'rm', 'mkdir', 'rmdir',
+            'touch', 'ln', 'ps', 'sed', 'awk', 'cut', 'tr',
+            'uniq', 'nl', 'diff', 'comm', 'column', 'join',
+            'paste', 'tee', 'xargs', 'jq', 'date', 'seq',
+            'du', 'tree', 'basename', 'pwd'
+        )
+        foreach ($cmd in $expectedCommands) {
+            $specs.ContainsKey($cmd) | Should -BeTrue -Because "$cmd should have flag specs"
+        }
+    }
+}
+
+Describe 'Register-BashCompletions — Completer Results' {
+    It 'ls completer returns flags when word starts with -' {
+        $completer = & (Get-Module PsBash) { $script:BashCompleters['ls'] }
+        $completer | Should -Not -BeNullOrEmpty
+        $results = @(& $completer '-' $null $null)
+        $results | Should -Not -BeNullOrEmpty
+        $results | Should -HaveCount 8
+        $names = $results | ForEach-Object { $_.CompletionText }
+        $names | Should -Contain '-l'
+        $names | Should -Contain '-a'
+        $names | Should -Contain '-h'
+        $names | Should -Contain '-R'
+    }
+
+    It 'grep completer returns matching flags for -' {
+        $completer = & (Get-Module PsBash) { $script:BashCompleters['grep'] }
+        $results = @(& $completer '-' $null $null)
+        $results | Should -Not -BeNullOrEmpty
+        $names = $results | ForEach-Object { $_.CompletionText }
+        $names | Should -Contain '-i'
+        $names | Should -Contain '-v'
+        $names | Should -Contain '-n'
+    }
+
+    It 'completions have correct CompletionResultType' {
+        $completer = & (Get-Module PsBash) { $script:BashCompleters['ls'] }
+        $results = @(& $completer '-' $null $null)
+        foreach ($r in $results) {
+            $r | Should -BeOfType [System.Management.Automation.CompletionResult]
+            $r.ResultType | Should -Be ([System.Management.Automation.CompletionResultType]::ParameterValue)
+        }
+    }
+
+    It 'completions include description tooltip' {
+        $completer = & (Get-Module PsBash) { $script:BashCompleters['ls'] }
+        $results = @(& $completer '-l' $null $null)
+        $match = $results | Where-Object { $_.CompletionText -eq '-l' }
+        $match | Should -Not -BeNullOrEmpty
+        $match.ToolTip | Should -Be 'long listing'
+    }
+
+    It 'completer returns nothing for non-flag words' {
+        $completer = & (Get-Module PsBash) { $script:BashCompleters['ls'] }
+        $results = @(& $completer 'foo' $null $null)
+        $results.Count | Should -Be 0
+    }
+
+    It 'completer filters by prefix' {
+        $completer = & (Get-Module PsBash) { $script:BashCompleters['sort'] }
+        $results = @(& $completer '-n' $null $null)
+        $results | Should -Not -BeNullOrEmpty
+        $names = $results | ForEach-Object { $_.CompletionText }
+        $names | Should -Contain '-n'
+        $names | Should -Not -Contain '-r'
+    }
+
+    It 'stat completer returns --printf' {
+        $completer = & (Get-Module PsBash) { $script:BashCompleters['stat'] }
+        $results = @(& $completer '--' $null $null)
+        $names = $results | ForEach-Object { $_.CompletionText }
+        $names | Should -Contain '--printf'
+    }
+
+    It 'tree completer returns --dirsfirst' {
+        $completer = & (Get-Module PsBash) { $script:BashCompleters['tree'] }
+        $results = @(& $completer '--' $null $null)
+        $names = $results | ForEach-Object { $_.CompletionText }
+        $names | Should -Contain '--dirsfirst'
+    }
+
+    It 'find completer returns -name, -type, -maxdepth' {
+        $completer = & (Get-Module PsBash) { $script:BashCompleters['find'] }
+        $results = @(& $completer '-' $null $null)
+        $names = $results | ForEach-Object { $_.CompletionText }
+        $names | Should -Contain '-name'
+        $names | Should -Contain '-type'
+        $names | Should -Contain '-maxdepth'
+    }
+}
+
+Describe 'Register-BashCompletions — Function Export' {
+    It 'Register-BashCompletions function exists' {
+        $cmd = Get-Command Register-BashCompletions -ErrorAction SilentlyContinue
+        $cmd | Should -Not -BeNullOrEmpty
+    }
+}

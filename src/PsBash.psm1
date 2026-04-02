@@ -7199,6 +7199,117 @@ function Invoke-BashWhoami {
     New-BashObject -BashText $name -TypeName 'PsBash.TextOutput'
 }
 
+# --- Tab Completion ---
+
+$script:BashFlagSpecs = @{
+    'ls'       = @(
+        @('-l', 'long listing'),    @('-a', 'show hidden'),      @('-h', 'human readable sizes'),
+        @('-R', 'recursive'),       @('-S', 'sort by size'),     @('-t', 'sort by time'),
+        @('-r', 'reverse sort'),    @('-1', 'one per line')
+    )
+    'cat'      = @(
+        @('-n', 'number all lines'),   @('-b', 'number non-blank lines'), @('-s', 'squeeze blank lines'),
+        @('-E', 'show $ at line end'), @('-T', 'show ^I for tabs')
+    )
+    'grep'     = @(
+        @('-i', 'ignore case'),       @('-v', 'invert match'),     @('-n', 'line numbers'),
+        @('-c', 'count only'),        @('-r', 'recursive'),        @('-l', 'files with matches'),
+        @('-E', 'extended regex'),    @('-A', 'after context'),    @('-B', 'before context'),
+        @('-C', 'context')
+    )
+    'sort'     = @(
+        @('-r', 'reverse'),           @('-n', 'numeric sort'),     @('-u', 'unique'),
+        @('-f', 'fold case'),         @('-k', 'key field'),        @('-t', 'field separator'),
+        @('-h', 'human numeric'),     @('-V', 'version sort'),     @('-M', 'month sort'),
+        @('-c', 'check sorted')
+    )
+    'head'     = @( @('-n', 'number of lines') )
+    'tail'     = @( @('-n', 'number of lines') )
+    'wc'       = @( @('-l', 'line count'), @('-w', 'word count'), @('-c', 'byte count') )
+    'find'     = @(
+        @('-name', 'name pattern'),   @('-type', 'file type'),     @('-size', 'file size'),
+        @('-maxdepth', 'max depth'),  @('-mtime', 'modify time'),  @('-empty', 'empty files')
+    )
+    'stat'     = @( @('-c', 'format string'), @('-t', 'terse'), @('--printf', 'printf format') )
+    'cp'       = @( @('-r', 'recursive'), @('-v', 'verbose'), @('-n', 'no-clobber'), @('-f', 'force') )
+    'mv'       = @( @('-v', 'verbose'), @('-n', 'no-clobber'), @('-f', 'force') )
+    'rm'       = @( @('-r', 'recursive'), @('-f', 'force'), @('-v', 'verbose') )
+    'mkdir'    = @( @('-p', 'parents'), @('-v', 'verbose') )
+    'rmdir'    = @( @('-p', 'parents'), @('-v', 'verbose') )
+    'touch'    = @( @('-d', 'date string') )
+    'ln'       = @( @('-s', 'symbolic'), @('-f', 'force'), @('-v', 'verbose') )
+    'ps'       = @(
+        @('-e', 'all processes'),     @('-A', 'all processes'),    @('-f', 'full format'),
+        @('-u', 'filter user'),       @('-p', 'filter pid'),       @('--sort', 'sort key'),
+        @('-o', 'output format')
+    )
+    'sed'      = @( @('-n', 'suppress default'), @('-i', 'in-place'), @('-E', 'extended regex'), @('-e', 'expression') )
+    'awk'      = @( @('-F', 'field separator'), @('-v', 'variable') )
+    'cut'      = @( @('-d', 'delimiter'), @('-f', 'fields'), @('-c', 'characters') )
+    'tr'       = @( @('-d', 'delete'), @('-s', 'squeeze') )
+    'uniq'     = @( @('-c', 'count'), @('-d', 'duplicates only') )
+    'nl'       = @( @('-ba', 'number all lines') )
+    'diff'     = @( @('-u', 'unified format') )
+    'comm'     = @( @('-1', 'suppress col 1'), @('-2', 'suppress col 2'), @('-3', 'suppress col 3') )
+    'column'   = @( @('-t', 'table mode'), @('-s', 'separator') )
+    'join'     = @( @('-t', 'delimiter'), @('-1', 'field from file 1'), @('-2', 'field from file 2') )
+    'paste'    = @( @('-d', 'delimiter'), @('-s', 'serial') )
+    'tee'      = @( @('-a', 'append') )
+    'xargs'    = @( @('-I', 'replace string'), @('-n', 'max args') )
+    'jq'       = @(
+        @('-r', 'raw output'),        @('-c', 'compact output'),   @('-S', 'sort keys'),
+        @('-s', 'slurp')
+    )
+    'date'     = @( @('-d', 'date string'), @('-u', 'UTC'), @('-r', 'reference file'), @('+FORMAT', 'output format') )
+    'seq'      = @( @('-s', 'separator'), @('-w', 'equal width') )
+    'du'       = @(
+        @('-h', 'human readable'),    @('-s', 'summarize'),        @('-a', 'all files'),
+        @('-c', 'show total'),        @('-d', 'max depth')
+    )
+    'tree'     = @(
+        @('-a', 'all files'),         @('-d', 'directories only'), @('-L', 'max depth'),
+        @('-I', 'exclude pattern'),   @('--dirsfirst', 'directories first')
+    )
+    'basename' = @( @('-s', 'suffix') )
+    'pwd'      = @( @('-P', 'physical path') )
+}
+
+$script:BashCompleters = @{}
+
+function Register-BashCompletions {
+    [CmdletBinding()]
+    param()
+
+    foreach ($commandName in $script:BashFlagSpecs.Keys) {
+        $flagEntries = $script:BashFlagSpecs[$commandName]
+
+        $completerBlock = {
+            param($wordToComplete, $commandAst, $cursorPosition)
+
+            $word = if ($wordToComplete) { $wordToComplete } else { '' }
+            if (-not $word.StartsWith('-')) { return }
+
+            foreach ($entry in $flagEntries) {
+                $flag = $entry[0]
+                $desc = $entry[1]
+                if ($flag.StartsWith($word)) {
+                    [System.Management.Automation.CompletionResult]::new(
+                        $flag,
+                        $flag,
+                        [System.Management.Automation.CompletionResultType]::ParameterValue,
+                        $desc
+                    )
+                }
+            }
+        }.GetNewClosure()
+
+        $script:BashCompleters[$commandName] = $completerBlock
+        Register-ArgumentCompleter -Native -CommandName $commandName -ScriptBlock $completerBlock
+    }
+}
+
+Register-BashCompletions
+
 # --- Aliases ---
 
 Set-Alias -Name 'echo'   -Value 'Invoke-BashEcho'   -Force -Scope Global -Option AllScope
