@@ -2554,3 +2554,348 @@ Describe 'Invoke-BashPs — Numeric Properties' {
         $self.WorkingSet | Should -BeOfType [long]
     }
 }
+
+# --- cut Tests ---
+
+Describe 'Invoke-BashCut — Field Mode' {
+    It 'extracts a single field with delimiter' {
+        $result = Invoke-BashEcho -n 'a:b:c' | Invoke-BashCut -d: -f2
+        $result.BashText | Should -Be 'b'
+    }
+
+    It 'extracts multiple fields with comma-separated spec' {
+        $result = Invoke-BashEcho -n 'a:b:c' | Invoke-BashCut -d: -f '1,3'
+        $result.BashText | Should -Be 'a:c'
+    }
+
+    It 'extracts field range' {
+        $result = Invoke-BashEcho -n 'a:b:c:d' | Invoke-BashCut -d: -f '2-3'
+        $result.BashText | Should -Be 'b:c'
+    }
+
+    It 'uses tab as default delimiter' {
+        $result = Invoke-BashEcho -n "one`ttwo`tthree" | Invoke-BashCut -f2
+        $result.BashText | Should -Be 'two'
+    }
+
+    It 'handles missing fields gracefully' {
+        $result = Invoke-BashEcho -n 'a:b' | Invoke-BashCut -d: -f '1,5'
+        $result.BashText | Should -Be 'a'
+    }
+}
+
+Describe 'Invoke-BashCut — Character Mode' {
+    It 'extracts character range' {
+        $result = Invoke-BashEcho -n 'hello world' | Invoke-BashCut -c '1-3'
+        $result.BashText | Should -Be 'hel'
+    }
+
+    It 'extracts specific character positions' {
+        $result = Invoke-BashEcho -n 'abcdef' | Invoke-BashCut -c '1,3,5'
+        $result.BashText | Should -Be 'ace'
+    }
+}
+
+Describe 'Invoke-BashCut — File Mode' {
+    BeforeAll {
+        $testDir = Join-Path ([System.IO.Path]::GetTempPath()) "psbash-cut-$([guid]::NewGuid().ToString('N').Substring(0,8))"
+        New-Item -ItemType Directory -Path $testDir -Force | Out-Null
+        Set-Content -Path (Join-Path $testDir 'data.csv') -Value "name,age,city`nalice,30,london`nbob,25,paris" -NoNewline
+    }
+    AfterAll {
+        Remove-Item -Recurse -Force $testDir -ErrorAction SilentlyContinue
+    }
+
+    It 'reads from file and extracts fields' {
+        $results = @(Invoke-BashCut '-d,' -f2 (Join-Path $testDir 'data.csv'))
+        $results.Count | Should -Be 3
+        $results[0].BashText | Should -Be 'age'
+        $results[1].BashText | Should -Be '30'
+        $results[2].BashText | Should -Be '25'
+    }
+
+    It 'writes error on missing file' {
+        $Error.Clear()
+        Invoke-BashCut '-d,' -f1 (Join-Path $testDir 'nope.txt') 2>$null
+        $Error.Count | Should -BeGreaterThan 0
+        $Error[0].Exception.Message | Should -BeLike '*No such file*'
+    }
+}
+
+Describe 'Invoke-BashCut — Pipeline Bridge' {
+    It 'works on BashText of pipeline objects' {
+        $results = @(Invoke-BashEcho -n 'a:b:c' | Invoke-BashCut -d: -f2)
+        $results[0].PSTypeNames[0] | Should -Be 'PsBash.TextOutput'
+        $results[0].BashText | Should -Be 'b'
+    }
+}
+
+Describe 'Invoke-BashCut — Alias' {
+    It 'cut alias resolves to Invoke-BashCut' {
+        $alias = Get-Alias -Name cut -Scope Global
+        $alias.Definition | Should -Be 'Invoke-BashCut'
+    }
+}
+
+# --- tr Tests ---
+
+Describe 'Invoke-BashTr — Character Translation' {
+    It 'translates uppercase to lowercase' {
+        $result = Invoke-BashEcho -n 'HELLO' | Invoke-BashTr 'A-Z' 'a-z'
+        $result.BashText | Should -Be 'hello'
+    }
+
+    It 'translates lowercase to uppercase' {
+        $result = Invoke-BashEcho -n 'world' | Invoke-BashTr 'a-z' 'A-Z'
+        $result.BashText | Should -Be 'WORLD'
+    }
+
+    It 'translates specific characters' {
+        $result = Invoke-BashEcho -n 'abc' | Invoke-BashTr 'abc' 'xyz'
+        $result.BashText | Should -Be 'xyz'
+    }
+}
+
+Describe 'Invoke-BashTr — Delete Mode' {
+    It 'deletes vowels' {
+        $result = Invoke-BashEcho -n 'hello world' | Invoke-BashTr -d 'aeiou'
+        $result.BashText | Should -Be 'hll wrld'
+    }
+
+    It 'deletes a character range' {
+        $result = Invoke-BashEcho -n 'abc123def' | Invoke-BashTr -d '0-9'
+        $result.BashText | Should -Be 'abcdef'
+    }
+}
+
+Describe 'Invoke-BashTr — Squeeze Mode' {
+    It 'squeezes repeated spaces' {
+        $result = Invoke-BashEcho -n 'hello   world' | Invoke-BashTr -s ' '
+        $result.BashText | Should -Be 'hello world'
+    }
+
+    It 'squeezes repeated characters' {
+        $result = Invoke-BashEcho -n 'aabbcc' | Invoke-BashTr -s 'a-z'
+        $result.BashText | Should -Be 'abc'
+    }
+}
+
+Describe 'Invoke-BashTr — Pipeline Bridge' {
+    It 'produces BashObjects with transformed text' {
+        $result = Invoke-BashEcho -n 'TEST' | Invoke-BashTr 'A-Z' 'a-z'
+        $result.PSTypeNames[0] | Should -Be 'PsBash.TextOutput'
+        $result.BashText | Should -Be 'test'
+    }
+
+    It 'handles multiline input' {
+        $results = @(Invoke-BashEcho -e 'ABC\nDEF' | Invoke-BashTr 'A-Z' 'a-z')
+        $results.Count | Should -Be 2
+        $results[0].BashText | Should -Be 'abc'
+        $results[1].BashText | Should -Be 'def'
+    }
+}
+
+Describe 'Invoke-BashTr — Alias' {
+    It 'tr alias resolves to Invoke-BashTr' {
+        $alias = Get-Alias -Name tr -Scope Global
+        $alias.Definition | Should -Be 'Invoke-BashTr'
+    }
+}
+
+# --- uniq Tests ---
+
+Describe 'Invoke-BashUniq — Basic' {
+    It 'removes consecutive duplicate lines' {
+        $results = @(Invoke-BashEcho -e 'a\na\nb' | Invoke-BashUniq)
+        $results.Count | Should -Be 2
+        $results[0].BashText | Should -Be 'a'
+        $results[1].BashText | Should -Be 'b'
+    }
+
+    It 'keeps non-consecutive duplicates' {
+        $results = @(Invoke-BashEcho -e 'a\nb\na' | Invoke-BashUniq)
+        $results.Count | Should -Be 3
+        $results[0].BashText | Should -Be 'a'
+        $results[1].BashText | Should -Be 'b'
+        $results[2].BashText | Should -Be 'a'
+    }
+}
+
+Describe 'Invoke-BashUniq — Count Mode' {
+    It 'prefixes lines with count' {
+        $results = @(Invoke-BashEcho -e 'a\na\nb' | Invoke-BashUniq -c)
+        $results.Count | Should -Be 2
+        $results[0].BashText | Should -Match '^\s*2 a$'
+        $results[1].BashText | Should -Match '^\s*1 b$'
+    }
+}
+
+Describe 'Invoke-BashUniq — Duplicates Only' {
+    It 'shows only duplicated lines' {
+        $results = @(Invoke-BashEcho -e 'a\na\nb\nc\nc' | Invoke-BashUniq -d)
+        $results.Count | Should -Be 2
+        $results[0].BashText | Should -Be 'a'
+        $results[1].BashText | Should -Be 'c'
+    }
+}
+
+Describe 'Invoke-BashUniq — File Mode' {
+    BeforeAll {
+        $testDir = Join-Path ([System.IO.Path]::GetTempPath()) "psbash-uniq-$([guid]::NewGuid().ToString('N').Substring(0,8))"
+        New-Item -ItemType Directory -Path $testDir -Force | Out-Null
+        Set-Content -Path (Join-Path $testDir 'dupes.txt') -Value "alpha`nalpha`nbeta`nbeta`nbeta`ngamma" -NoNewline
+    }
+    AfterAll {
+        Remove-Item -Recurse -Force $testDir -ErrorAction SilentlyContinue
+    }
+
+    It 'reads from file and deduplicates' {
+        $results = @(Invoke-BashUniq (Join-Path $testDir 'dupes.txt'))
+        $results.Count | Should -Be 3
+        $results[0].BashText | Should -Be 'alpha'
+        $results[1].BashText | Should -Be 'beta'
+        $results[2].BashText | Should -Be 'gamma'
+    }
+}
+
+Describe 'Invoke-BashUniq — Pipeline Bridge' {
+    It 'produces BashObjects' {
+        $results = @(Invoke-BashEcho -e 'x\nx\ny' | Invoke-BashUniq)
+        $results[0].PSTypeNames[0] | Should -Be 'PsBash.TextOutput'
+    }
+}
+
+Describe 'Invoke-BashUniq — Alias' {
+    It 'uniq alias resolves to Invoke-BashUniq' {
+        $alias = Get-Alias -Name uniq -Scope Global
+        $alias.Definition | Should -Be 'Invoke-BashUniq'
+    }
+}
+
+# --- rev Tests ---
+
+Describe 'Invoke-BashRev — Basic' {
+    It 'reverses a string' {
+        $result = Invoke-BashEcho -n 'hello' | Invoke-BashRev
+        $result.BashText | Should -Be 'olleh'
+    }
+
+    It 'reverses multiple lines' {
+        $results = @(Invoke-BashEcho -e 'abc\ndef' | Invoke-BashRev)
+        $results.Count | Should -Be 2
+        $results[0].BashText | Should -Be 'cba'
+        $results[1].BashText | Should -Be 'fed'
+    }
+
+    It 'handles single character' {
+        $result = Invoke-BashEcho -n 'x' | Invoke-BashRev
+        $result.BashText | Should -Be 'x'
+    }
+
+    It 'handles palindrome' {
+        $result = Invoke-BashEcho -n 'racecar' | Invoke-BashRev
+        $result.BashText | Should -Be 'racecar'
+    }
+}
+
+Describe 'Invoke-BashRev — File Mode' {
+    BeforeAll {
+        $testDir = Join-Path ([System.IO.Path]::GetTempPath()) "psbash-rev-$([guid]::NewGuid().ToString('N').Substring(0,8))"
+        New-Item -ItemType Directory -Path $testDir -Force | Out-Null
+        Set-Content -Path (Join-Path $testDir 'words.txt') -Value "hello`nworld" -NoNewline
+    }
+    AfterAll {
+        Remove-Item -Recurse -Force $testDir -ErrorAction SilentlyContinue
+    }
+
+    It 'reverses lines from a file' {
+        $results = @(Invoke-BashRev (Join-Path $testDir 'words.txt'))
+        $results.Count | Should -Be 2
+        $results[0].BashText | Should -Be 'olleh'
+        $results[1].BashText | Should -Be 'dlrow'
+    }
+}
+
+Describe 'Invoke-BashRev — Pipeline Bridge' {
+    It 'produces BashObjects' {
+        $result = Invoke-BashEcho -n 'test' | Invoke-BashRev
+        $result.PSTypeNames[0] | Should -Be 'PsBash.TextOutput'
+    }
+}
+
+Describe 'Invoke-BashRev — Alias' {
+    It 'rev alias resolves to Invoke-BashRev' {
+        $alias = Get-Alias -Name rev -Scope Global
+        $alias.Definition | Should -Be 'Invoke-BashRev'
+    }
+}
+
+# --- nl Tests ---
+
+Describe 'Invoke-BashNl — Basic' {
+    It 'numbers non-blank lines' {
+        $results = @(Invoke-BashEcho -e 'alpha\nbeta\ngamma' | Invoke-BashNl)
+        $results.Count | Should -Be 3
+        $results[0].BashText | Should -Match '^\s+1\talpha$'
+        $results[1].BashText | Should -Match '^\s+2\tbeta$'
+        $results[2].BashText | Should -Match '^\s+3\tgamma$'
+    }
+
+    It 'skips numbering blank lines by default' {
+        $results = @(Invoke-BashEcho -e 'a\n\nb' | Invoke-BashNl)
+        $results.Count | Should -Be 3
+        $results[0].BashText | Should -Match '^\s+1\ta$'
+        $results[1].BashText | Should -Be ''
+        $results[2].BashText | Should -Match '^\s+2\tb$'
+    }
+}
+
+Describe 'Invoke-BashNl — Number All Lines' {
+    It 'numbers all lines including blank with -ba' {
+        $results = @(Invoke-BashEcho -e 'a\n\nb' | Invoke-BashNl -ba)
+        $results.Count | Should -Be 3
+        $results[0].BashText | Should -Match '^\s+1\ta$'
+        $results[1].BashText | Should -Match '^\s+2\t$'
+        $results[2].BashText | Should -Match '^\s+3\tb$'
+    }
+}
+
+Describe 'Invoke-BashNl — File Mode' {
+    BeforeAll {
+        $testDir = Join-Path ([System.IO.Path]::GetTempPath()) "psbash-nl-$([guid]::NewGuid().ToString('N').Substring(0,8))"
+        New-Item -ItemType Directory -Path $testDir -Force | Out-Null
+        Set-Content -Path (Join-Path $testDir 'lines.txt') -Value "first`nsecond`nthird" -NoNewline
+    }
+    AfterAll {
+        Remove-Item -Recurse -Force $testDir -ErrorAction SilentlyContinue
+    }
+
+    It 'numbers lines from a file' {
+        $results = @(Invoke-BashNl (Join-Path $testDir 'lines.txt'))
+        $results.Count | Should -Be 3
+        $results[0].BashText | Should -Match '^\s+1\tfirst$'
+        $results[1].BashText | Should -Match '^\s+2\tsecond$'
+        $results[2].BashText | Should -Match '^\s+3\tthird$'
+    }
+
+    It 'writes error on missing file' {
+        $Error.Clear()
+        Invoke-BashNl (Join-Path $testDir 'nope.txt') 2>$null
+        $Error.Count | Should -BeGreaterThan 0
+        $Error[0].Exception.Message | Should -BeLike '*No such file*'
+    }
+}
+
+Describe 'Invoke-BashNl — Pipeline Bridge' {
+    It 'produces BashObjects' {
+        $results = @(Invoke-BashEcho -e 'test' | Invoke-BashNl)
+        $results[0].PSTypeNames[0] | Should -Be 'PsBash.TextOutput'
+    }
+}
+
+Describe 'Invoke-BashNl — Alias' {
+    It 'nl alias resolves to Invoke-BashNl' {
+        $alias = Get-Alias -Name nl -Scope Global
+        $alias.Definition | Should -Be 'Invoke-BashNl'
+    }
+}
