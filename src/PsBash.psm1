@@ -1960,6 +1960,495 @@ function Format-StatString {
     $sb.ToString()
 }
 
+# --- cp Command ---
+
+function Invoke-BashCp {
+    $Arguments = [string[]]$args
+
+    $defs = New-FlagDefs -Entries @(
+        '-r', 'recursive'
+        '-R', 'recursive'
+        '-v', 'verbose'
+        '-n', 'no-clobber'
+        '-f', 'force'
+    )
+
+    $parsed = ConvertFrom-BashArgs -Arguments $Arguments -FlagDefs $defs
+
+    $recursive = $parsed.Flags['-r'] -or $parsed.Flags['-R']
+    $verbose = $parsed.Flags['-v']
+    $noClobber = $parsed.Flags['-n']
+    $force = $parsed.Flags['-f']
+
+    if ($parsed.Operands.Count -lt 2) {
+        Write-Error -Message "cp: missing file operand" -ErrorAction Continue
+        $global:LASTEXITCODE = 1
+        return
+    }
+
+    $dest = $parsed.Operands[$parsed.Operands.Count - 1]
+    $sources = $parsed.Operands[0..($parsed.Operands.Count - 2)]
+
+    $hadError = $false
+
+    foreach ($src in $sources) {
+        if (-not (Test-Path -LiteralPath $src)) {
+            Write-Error -Message "cp: cannot stat '$src': No such file or directory" -ErrorAction Continue
+            $hadError = $true
+            continue
+        }
+
+        $srcItem = Get-Item -LiteralPath $src -Force
+        $isDir = $srcItem -is [System.IO.DirectoryInfo]
+
+        if ($isDir -and -not $recursive) {
+            Write-Error -Message "cp: -r not specified; omitting directory '$src'" -ErrorAction Continue
+            $hadError = $true
+            continue
+        }
+
+        $targetPath = $dest
+        if ((Test-Path -LiteralPath $dest) -and (Get-Item -LiteralPath $dest -Force) -is [System.IO.DirectoryInfo]) {
+            $targetPath = Join-Path $dest $srcItem.Name
+        }
+
+        if ($noClobber -and (Test-Path -LiteralPath $targetPath)) {
+            continue
+        }
+
+        if ($isDir) {
+            if (Test-Path -LiteralPath $targetPath) {
+                if ($force) {
+                    Remove-Item -LiteralPath $targetPath -Recurse -Force
+                }
+            }
+            Copy-Item -LiteralPath $src -Destination $targetPath -Recurse -Force
+        } else {
+            $destDir = Split-Path $targetPath -Parent
+            if ($destDir -and -not (Test-Path -LiteralPath $destDir)) {
+                New-Item -Path $destDir -ItemType Directory -Force | Out-Null
+            }
+            Copy-Item -LiteralPath $src -Destination $targetPath -Force
+        }
+
+        if ($verbose) {
+            $bashSrc = $src -replace '\\', '/'
+            $bashDest = $targetPath -replace '\\', '/'
+            New-BashObject -BashText "'$bashSrc' -> '$bashDest'`n"
+        }
+    }
+
+    if ($hadError) {
+        $global:LASTEXITCODE = 1
+    }
+}
+
+# --- mv Command ---
+
+function Invoke-BashMv {
+    $Arguments = [string[]]$args
+
+    $defs = New-FlagDefs -Entries @(
+        '-v', 'verbose'
+        '-n', 'no-clobber'
+        '-f', 'force'
+    )
+
+    $parsed = ConvertFrom-BashArgs -Arguments $Arguments -FlagDefs $defs
+
+    $verbose = $parsed.Flags['-v']
+    $noClobber = $parsed.Flags['-n']
+
+    if ($parsed.Operands.Count -lt 2) {
+        Write-Error -Message "mv: missing file operand" -ErrorAction Continue
+        $global:LASTEXITCODE = 1
+        return
+    }
+
+    $dest = $parsed.Operands[$parsed.Operands.Count - 1]
+    $sources = $parsed.Operands[0..($parsed.Operands.Count - 2)]
+
+    $hadError = $false
+
+    foreach ($src in $sources) {
+        if (-not (Test-Path -LiteralPath $src)) {
+            Write-Error -Message "mv: cannot stat '$src': No such file or directory" -ErrorAction Continue
+            $hadError = $true
+            continue
+        }
+
+        $srcItem = Get-Item -LiteralPath $src -Force
+        $targetPath = $dest
+        if ((Test-Path -LiteralPath $dest) -and (Get-Item -LiteralPath $dest -Force) -is [System.IO.DirectoryInfo]) {
+            $targetPath = Join-Path $dest $srcItem.Name
+        }
+
+        if ($noClobber -and (Test-Path -LiteralPath $targetPath)) {
+            continue
+        }
+
+        Move-Item -LiteralPath $src -Destination $targetPath -Force
+
+        if ($verbose) {
+            $bashSrc = $src -replace '\\', '/'
+            $bashDest = $targetPath -replace '\\', '/'
+            New-BashObject -BashText "'$bashSrc' -> '$bashDest'`n"
+        }
+    }
+
+    if ($hadError) {
+        $global:LASTEXITCODE = 1
+    }
+}
+
+# --- rm Command ---
+
+function Invoke-BashRm {
+    $Arguments = [string[]]$args
+
+    $defs = New-FlagDefs -Entries @(
+        '-r', 'recursive'
+        '-R', 'recursive'
+        '-f', 'force'
+        '-v', 'verbose'
+    )
+
+    $parsed = ConvertFrom-BashArgs -Arguments $Arguments -FlagDefs $defs
+
+    $recursive = $parsed.Flags['-r'] -or $parsed.Flags['-R']
+    $force = $parsed.Flags['-f']
+    $verbose = $parsed.Flags['-v']
+
+    if ($parsed.Operands.Count -eq 0) {
+        if (-not $force) {
+            Write-Error -Message "rm: missing operand" -ErrorAction Continue
+            $global:LASTEXITCODE = 1
+        }
+        return
+    }
+
+    $hadError = $false
+
+    foreach ($target in $parsed.Operands) {
+        # Safety: refuse to delete root or home directory
+        $resolved = $null
+        try {
+            if (Test-Path -LiteralPath $target) {
+                $resolved = (Resolve-Path -LiteralPath $target).Path
+            }
+        } catch { }
+
+        if ($null -ne $resolved) {
+            $normalized = $resolved.TrimEnd([System.IO.Path]::DirectorySeparatorChar, [System.IO.Path]::AltDirectorySeparatorChar)
+            $roots = @(
+                [System.IO.Path]::GetPathRoot($resolved).TrimEnd([System.IO.Path]::DirectorySeparatorChar, [System.IO.Path]::AltDirectorySeparatorChar)
+            )
+            $homeDir = [System.Environment]::GetFolderPath('UserProfile')
+            if ($homeDir) {
+                $roots += $homeDir.TrimEnd([System.IO.Path]::DirectorySeparatorChar, [System.IO.Path]::AltDirectorySeparatorChar)
+            }
+            foreach ($root in $roots) {
+                if ($normalized -eq $root) {
+                    Write-Error -Message "rm: refusing to remove '$target': protected path" -ErrorAction Continue
+                    $hadError = $true
+                    continue
+                }
+            }
+            # Skip this target if it matched a protected path
+            $isProtected = $false
+            foreach ($root in $roots) {
+                if ($normalized -eq $root) { $isProtected = $true; break }
+            }
+            if ($isProtected) { continue }
+        }
+
+        if (-not (Test-Path -LiteralPath $target)) {
+            if (-not $force) {
+                Write-Error -Message "rm: cannot remove '$target': No such file or directory" -ErrorAction Continue
+                $hadError = $true
+            }
+            continue
+        }
+
+        $item = Get-Item -LiteralPath $target -Force
+        $isDir = $item -is [System.IO.DirectoryInfo]
+
+        if ($isDir -and -not $recursive) {
+            Write-Error -Message "rm: cannot remove '$target': Is a directory" -ErrorAction Continue
+            $hadError = $true
+            continue
+        }
+
+        if ($verbose) {
+            if ($isDir -and $recursive) {
+                $children = Get-ChildItem -LiteralPath $target -Force -Recurse
+                foreach ($child in $children) {
+                    $relPath = $child.FullName -replace '\\', '/'
+                    New-BashObject -BashText "removed '$relPath'`n"
+                }
+            }
+            $bashTarget = $target -replace '\\', '/'
+            New-BashObject -BashText "removed '$bashTarget'`n"
+        }
+
+        Remove-Item -LiteralPath $target -Recurse:$recursive -Force
+    }
+
+    if ($hadError) {
+        $global:LASTEXITCODE = 1
+    }
+}
+
+# --- mkdir Command ---
+
+function Invoke-BashMkdir {
+    $Arguments = [string[]]$args
+
+    $defs = New-FlagDefs -Entries @(
+        '-p', 'parents'
+        '-v', 'verbose'
+    )
+
+    $parsed = ConvertFrom-BashArgs -Arguments $Arguments -FlagDefs $defs
+
+    $parents = $parsed.Flags['-p']
+    $verbose = $parsed.Flags['-v']
+
+    if ($parsed.Operands.Count -eq 0) {
+        Write-Error -Message "mkdir: missing operand" -ErrorAction Continue
+        $global:LASTEXITCODE = 1
+        return
+    }
+
+    $hadError = $false
+
+    foreach ($dir in $parsed.Operands) {
+        if (Test-Path -LiteralPath $dir) {
+            if (-not $parents) {
+                Write-Error -Message "mkdir: cannot create directory '$dir': File exists" -ErrorAction Continue
+                $hadError = $true
+            }
+            continue
+        }
+
+        $parentDir = Split-Path $dir -Parent
+        if ($parentDir -and -not (Test-Path -LiteralPath $parentDir) -and -not $parents) {
+            Write-Error -Message "mkdir: cannot create directory '$dir': No such file or directory" -ErrorAction Continue
+            $hadError = $true
+            continue
+        }
+
+        if ($parents) {
+            New-Item -Path $dir -ItemType Directory -Force | Out-Null
+        } else {
+            New-Item -Path $dir -ItemType Directory | Out-Null
+        }
+
+        if ($verbose) {
+            $bashDir = $dir -replace '\\', '/'
+            New-BashObject -BashText "mkdir: created directory '$bashDir'`n"
+        }
+    }
+
+    if ($hadError) {
+        $global:LASTEXITCODE = 1
+    }
+}
+
+# --- rmdir Command ---
+
+function Invoke-BashRmdir {
+    $Arguments = [string[]]$args
+
+    $defs = New-FlagDefs -Entries @(
+        '-p', 'parents'
+        '-v', 'verbose'
+    )
+
+    $parsed = ConvertFrom-BashArgs -Arguments $Arguments -FlagDefs $defs
+
+    $removeParents = $parsed.Flags['-p']
+    $verbose = $parsed.Flags['-v']
+
+    if ($parsed.Operands.Count -eq 0) {
+        Write-Error -Message "rmdir: missing operand" -ErrorAction Continue
+        $global:LASTEXITCODE = 1
+        return
+    }
+
+    $hadError = $false
+
+    foreach ($dir in $parsed.Operands) {
+        if (-not (Test-Path -LiteralPath $dir)) {
+            Write-Error -Message "rmdir: failed to remove '$dir': No such file or directory" -ErrorAction Continue
+            $hadError = $true
+            continue
+        }
+
+        $item = Get-Item -LiteralPath $dir -Force
+        if ($item -isnot [System.IO.DirectoryInfo]) {
+            Write-Error -Message "rmdir: failed to remove '$dir': Not a directory" -ErrorAction Continue
+            $hadError = $true
+            continue
+        }
+
+        $children = Get-ChildItem -LiteralPath $dir -Force
+        if ($children) {
+            Write-Error -Message "rmdir: failed to remove '$dir': Directory not empty" -ErrorAction Continue
+            $hadError = $true
+            continue
+        }
+
+        Remove-Item -LiteralPath $dir -Force
+
+        if ($verbose) {
+            $bashDir = $dir -replace '\\', '/'
+            New-BashObject -BashText "rmdir: removing directory, '$bashDir'`n"
+        }
+
+        if ($removeParents) {
+            $parent = Split-Path $dir -Parent
+            while ($parent -and (Test-Path -LiteralPath $parent)) {
+                $parentChildren = Get-ChildItem -LiteralPath $parent -Force
+                if ($parentChildren) { break }
+                if ($verbose) {
+                    $bashParent = $parent -replace '\\', '/'
+                    New-BashObject -BashText "rmdir: removing directory, '$bashParent'`n"
+                }
+                Remove-Item -LiteralPath $parent -Force
+                $parent = Split-Path $parent -Parent
+            }
+        }
+    }
+
+    if ($hadError) {
+        $global:LASTEXITCODE = 1
+    }
+}
+
+# --- touch Command ---
+
+function Invoke-BashTouch {
+    $Arguments = [string[]]$args
+
+    # Manual arg parsing for -d which takes a value
+    $verbose = $false
+    $dateStr = $null
+    $operands = [System.Collections.Generic.List[string]]::new()
+
+    $i = 0
+    while ($i -lt $Arguments.Count) {
+        $arg = $Arguments[$i]
+
+        switch ($arg) {
+            '-d' {
+                $i++
+                if ($i -lt $Arguments.Count) { $dateStr = $Arguments[$i] }
+                $i++
+                continue
+            }
+            '-v' {
+                $verbose = $true
+                $i++
+                continue
+            }
+            default {
+                $operands.Add($arg)
+                $i++
+            }
+        }
+    }
+
+    if ($operands.Count -eq 0) {
+        Write-Error -Message "touch: missing file operand" -ErrorAction Continue
+        $global:LASTEXITCODE = 1
+        return
+    }
+
+    $timestamp = [System.DateTime]::Now
+    if ($null -ne $dateStr) {
+        try {
+            $timestamp = [System.DateTime]::Parse($dateStr)
+        } catch {
+            Write-Error -Message "touch: invalid date format '$dateStr'" -ErrorAction Continue
+            $global:LASTEXITCODE = 1
+            return
+        }
+    }
+
+    foreach ($file in $operands) {
+        if (Test-Path -LiteralPath $file) {
+            $item = Get-Item -LiteralPath $file -Force
+            $item.LastWriteTime = $timestamp
+            $item.LastAccessTime = $timestamp
+        } else {
+            $parentDir = Split-Path $file -Parent
+            if ($parentDir -and -not (Test-Path -LiteralPath $parentDir)) {
+                Write-Error -Message "touch: cannot touch '$file': No such file or directory" -ErrorAction Continue
+                $global:LASTEXITCODE = 1
+                continue
+            }
+            New-Item -Path $file -ItemType File -Force | Out-Null
+            $item = Get-Item -LiteralPath $file -Force
+            $item.LastWriteTime = $timestamp
+            $item.LastAccessTime = $timestamp
+        }
+    }
+}
+
+# --- ln Command ---
+
+function Invoke-BashLn {
+    $Arguments = [string[]]$args
+
+    $defs = New-FlagDefs -Entries @(
+        '-s', 'symbolic'
+        '-f', 'force'
+        '-v', 'verbose'
+    )
+
+    $parsed = ConvertFrom-BashArgs -Arguments $Arguments -FlagDefs $defs
+
+    $symbolic = $parsed.Flags['-s']
+    $force = $parsed.Flags['-f']
+    $verbose = $parsed.Flags['-v']
+
+    if ($parsed.Operands.Count -lt 2) {
+        Write-Error -Message "ln: missing file operand" -ErrorAction Continue
+        $global:LASTEXITCODE = 1
+        return
+    }
+
+    $target = $parsed.Operands[0]
+    $linkName = $parsed.Operands[1]
+
+    if ($force -and (Test-Path -LiteralPath $linkName)) {
+        Remove-Item -LiteralPath $linkName -Force
+    }
+
+    if (Test-Path -LiteralPath $linkName) {
+        Write-Error -Message "ln: failed to create $( if ($symbolic) { 'symbolic ' } else { '' })link '$linkName': File exists" -ErrorAction Continue
+        $global:LASTEXITCODE = 1
+        return
+    }
+
+    if ($symbolic) {
+        New-Item -ItemType SymbolicLink -Path $linkName -Target $target -Force | Out-Null
+    } else {
+        New-Item -ItemType HardLink -Path $linkName -Target $target -Force | Out-Null
+    }
+
+    if ($verbose) {
+        $bashLink = $linkName -replace '\\', '/'
+        $bashTarget = $target -replace '\\', '/'
+        if ($symbolic) {
+            New-BashObject -BashText "'$bashLink' -> '$bashTarget'`n"
+        } else {
+            New-BashObject -BashText "'$bashLink' => '$bashTarget'`n"
+        }
+    }
+}
+
 # --- Aliases ---
 
 Set-Alias -Name 'echo'   -Value 'Invoke-BashEcho'   -Force -Scope Global -Option AllScope
@@ -1973,3 +2462,10 @@ Set-Alias -Name 'tail'    -Value 'Invoke-BashTail'    -Force -Scope Global -Opti
 Set-Alias -Name 'wc'      -Value 'Invoke-BashWc'      -Force -Scope Global -Option AllScope
 Set-Alias -Name 'find'    -Value 'Invoke-BashFind'    -Force -Scope Global -Option AllScope
 Set-Alias -Name 'stat'    -Value 'Invoke-BashStat'    -Force -Scope Global -Option AllScope
+Set-Alias -Name 'cp'      -Value 'Invoke-BashCp'      -Force -Scope Global -Option AllScope
+Set-Alias -Name 'mv'      -Value 'Invoke-BashMv'      -Force -Scope Global -Option AllScope
+Set-Alias -Name 'rm'      -Value 'Invoke-BashRm'      -Force -Scope Global -Option AllScope
+Set-Alias -Name 'mkdir'   -Value 'Invoke-BashMkdir'   -Force -Scope Global -Option AllScope
+Set-Alias -Name 'rmdir'   -Value 'Invoke-BashRmdir'   -Force -Scope Global -Option AllScope
+Set-Alias -Name 'touch'   -Value 'Invoke-BashTouch'   -Force -Scope Global -Option AllScope
+Set-Alias -Name 'ln'      -Value 'Invoke-BashLn'      -Force -Scope Global -Option AllScope

@@ -1440,6 +1440,467 @@ Describe 'Invoke-BashStat' {
     }
 }
 
+Describe 'Invoke-BashCp' {
+    BeforeAll {
+        $cpDir = Join-Path ([System.IO.Path]::GetTempPath()) "psbash-cp-test-$(Get-Random)"
+        New-Item -Path $cpDir -ItemType Directory -Force | Out-Null
+    }
+
+    AfterAll {
+        Remove-Item -Path $cpDir -Recurse -Force -ErrorAction SilentlyContinue
+    }
+
+    It 'cp src.txt dst.txt copies a file' {
+        $src = Join-Path $cpDir 'src.txt'
+        Set-Content -Path $src -Value 'hello'
+        $dst = Join-Path $cpDir 'dst.txt'
+        Invoke-BashCp $src $dst
+        Test-Path -LiteralPath $dst | Should -Be $true
+        Get-Content $dst | Should -Be 'hello'
+    }
+
+    It 'cp -r dir1 dir2 copies directory recursively' {
+        $srcDir = Join-Path $cpDir 'srcdir'
+        New-Item -Path $srcDir -ItemType Directory -Force | Out-Null
+        Set-Content -Path (Join-Path $srcDir 'inner.txt') -Value 'nested'
+        $dstDir = Join-Path $cpDir 'dstdir'
+        Invoke-BashCp -r $srcDir $dstDir
+        Test-Path -LiteralPath (Join-Path $dstDir 'inner.txt') | Should -Be $true
+        Get-Content (Join-Path $dstDir 'inner.txt') | Should -Be 'nested'
+    }
+
+    It 'cp -v src.txt dst.txt returns verbose BashObject output' {
+        $src = Join-Path $cpDir 'vsrc.txt'
+        Set-Content -Path $src -Value 'verbose test'
+        $dst = Join-Path $cpDir 'vdst.txt'
+        $result = @(Invoke-BashCp -v $src $dst)
+        $result.Count | Should -Be 1
+        $result[0].BashText | Should -Match "->.*"
+    }
+
+    It 'cp without -r on directory emits error' {
+        $srcDir = Join-Path $cpDir 'norecurse'
+        New-Item -Path $srcDir -ItemType Directory -Force | Out-Null
+        $dstDir = Join-Path $cpDir 'norecurse-dst'
+        $result = Invoke-BashCp $srcDir $dstDir 2>&1
+        $errMsgs = @($result | Where-Object { $_ -is [System.Management.Automation.ErrorRecord] })
+        $errMsgs.Count | Should -BeGreaterOrEqual 1
+        "$($errMsgs[0])" | Should -Match 'omitting directory'
+    }
+
+    It 'cp -n does not overwrite existing file' {
+        $src = Join-Path $cpDir 'nsrc.txt'
+        $dst = Join-Path $cpDir 'ndst.txt'
+        Set-Content -Path $src -Value 'new content'
+        Set-Content -Path $dst -Value 'original'
+        Invoke-BashCp -n $src $dst
+        Get-Content $dst | Should -Be 'original'
+    }
+
+    It 'cp nonexistent file emits error' {
+        $result = Invoke-BashCp (Join-Path $cpDir 'nope.txt') (Join-Path $cpDir 'out.txt') 2>&1
+        $errMsgs = @($result | Where-Object { $_ -is [System.Management.Automation.ErrorRecord] })
+        $errMsgs.Count | Should -BeGreaterOrEqual 1
+        "$($errMsgs[0])" | Should -Match 'No such file or directory'
+    }
+
+    It 'cp missing operand emits error' {
+        $result = Invoke-BashCp (Join-Path $cpDir 'src.txt') 2>&1
+        $errMsgs = @($result | Where-Object { $_ -is [System.Management.Automation.ErrorRecord] })
+        $errMsgs.Count | Should -BeGreaterOrEqual 1
+        "$($errMsgs[0])" | Should -Match 'missing file operand'
+    }
+}
+
+Describe 'Invoke-BashMv' {
+    BeforeAll {
+        $mvDir = Join-Path ([System.IO.Path]::GetTempPath()) "psbash-mv-test-$(Get-Random)"
+        New-Item -Path $mvDir -ItemType Directory -Force | Out-Null
+    }
+
+    AfterAll {
+        Remove-Item -Path $mvDir -Recurse -Force -ErrorAction SilentlyContinue
+    }
+
+    It 'mv old.txt new.txt renames a file' {
+        $old = Join-Path $mvDir 'old.txt'
+        Set-Content -Path $old -Value 'move me'
+        $new = Join-Path $mvDir 'new.txt'
+        Invoke-BashMv $old $new
+        Test-Path -LiteralPath $old | Should -Be $false
+        Test-Path -LiteralPath $new | Should -Be $true
+        Get-Content $new | Should -Be 'move me'
+    }
+
+    It 'mv -n does not overwrite existing file' {
+        $src = Join-Path $mvDir 'mvnsrc.txt'
+        $dst = Join-Path $mvDir 'mvndst.txt'
+        Set-Content -Path $src -Value 'new content'
+        Set-Content -Path $dst -Value 'keep me'
+        Invoke-BashMv -n $src $dst
+        Get-Content $dst | Should -Be 'keep me'
+        Test-Path -LiteralPath $src | Should -Be $true
+    }
+
+    It 'mv -v returns verbose BashObject output' {
+        $src = Join-Path $mvDir 'mvsrc.txt'
+        Set-Content -Path $src -Value 'verbose move'
+        $dst = Join-Path $mvDir 'mvdst.txt'
+        $result = @(Invoke-BashMv -v $src $dst)
+        $result.Count | Should -Be 1
+        $result[0].BashText | Should -Match "->.*"
+    }
+
+    It 'mv nonexistent file emits error' {
+        $result = Invoke-BashMv (Join-Path $mvDir 'nope.txt') (Join-Path $mvDir 'out.txt') 2>&1
+        $errMsgs = @($result | Where-Object { $_ -is [System.Management.Automation.ErrorRecord] })
+        $errMsgs.Count | Should -BeGreaterOrEqual 1
+        "$($errMsgs[0])" | Should -Match 'No such file or directory'
+    }
+
+    It 'mv file into existing directory' {
+        $src = Join-Path $mvDir 'mvfile.txt'
+        Set-Content -Path $src -Value 'into dir'
+        $destDir = Join-Path $mvDir 'mvtargetdir'
+        New-Item -Path $destDir -ItemType Directory -Force | Out-Null
+        Invoke-BashMv $src $destDir
+        Test-Path -LiteralPath (Join-Path $destDir 'mvfile.txt') | Should -Be $true
+    }
+}
+
+Describe 'Invoke-BashRm' {
+    BeforeAll {
+        $rmDir = Join-Path ([System.IO.Path]::GetTempPath()) "psbash-rm-test-$(Get-Random)"
+        New-Item -Path $rmDir -ItemType Directory -Force | Out-Null
+    }
+
+    AfterAll {
+        Remove-Item -Path $rmDir -Recurse -Force -ErrorAction SilentlyContinue
+    }
+
+    It 'rm file.txt removes a file' {
+        $file = Join-Path $rmDir 'rmme.txt'
+        Set-Content -Path $file -Value 'delete me'
+        Invoke-BashRm $file
+        Test-Path -LiteralPath $file | Should -Be $false
+    }
+
+    It 'rm -rf dir removes directory recursively' {
+        $dir = Join-Path $rmDir 'rmrecurse'
+        New-Item -Path $dir -ItemType Directory -Force | Out-Null
+        Set-Content -Path (Join-Path $dir 'a.txt') -Value 'a'
+        New-Item -Path (Join-Path $dir 'sub') -ItemType Directory -Force | Out-Null
+        Set-Content -Path (Join-Path $dir 'sub' 'b.txt') -Value 'b'
+        Invoke-BashRm -rf $dir
+        Test-Path -LiteralPath $dir | Should -Be $false
+    }
+
+    It 'rm directory without -r emits error' {
+        $dir = Join-Path $rmDir 'rmdironly'
+        New-Item -Path $dir -ItemType Directory -Force | Out-Null
+        $result = Invoke-BashRm $dir 2>&1
+        $errMsgs = @($result | Where-Object { $_ -is [System.Management.Automation.ErrorRecord] })
+        $errMsgs.Count | Should -BeGreaterOrEqual 1
+        "$($errMsgs[0])" | Should -Match 'Is a directory'
+        Test-Path -LiteralPath $dir | Should -Be $true
+    }
+
+    It 'rm nonexistent file emits error' {
+        $result = Invoke-BashRm (Join-Path $rmDir 'nope.txt') 2>&1
+        $errMsgs = @($result | Where-Object { $_ -is [System.Management.Automation.ErrorRecord] })
+        $errMsgs.Count | Should -BeGreaterOrEqual 1
+        "$($errMsgs[0])" | Should -Match 'No such file or directory'
+    }
+
+    It 'rm -f nonexistent file is silent' {
+        $result = Invoke-BashRm -f (Join-Path $rmDir 'nope.txt') 2>&1
+        $errMsgs = @($result | Where-Object { $_ -is [System.Management.Automation.ErrorRecord] })
+        $errMsgs.Count | Should -Be 0
+    }
+
+    It 'rm -v outputs verbose messages' {
+        $file = Join-Path $rmDir 'rmverbose.txt'
+        Set-Content -Path $file -Value 'verbose delete'
+        $result = @(Invoke-BashRm -v $file)
+        $result.Count | Should -Be 1
+        $result[0].BashText | Should -Match 'removed'
+    }
+
+    It 'rm refuses to delete root path' {
+        $rootPath = [System.IO.Path]::GetPathRoot((Get-Location).Path)
+        $result = Invoke-BashRm -rf $rootPath 2>&1
+        $errMsgs = @($result | Where-Object { $_ -is [System.Management.Automation.ErrorRecord] })
+        $errMsgs.Count | Should -BeGreaterOrEqual 1
+        "$($errMsgs[0])" | Should -Match 'protected path'
+    }
+
+    It 'rm refuses to delete home directory' {
+        $homePath = [System.Environment]::GetFolderPath('UserProfile')
+        $result = Invoke-BashRm -rf $homePath 2>&1
+        $errMsgs = @($result | Where-Object { $_ -is [System.Management.Automation.ErrorRecord] })
+        $errMsgs.Count | Should -BeGreaterOrEqual 1
+        "$($errMsgs[0])" | Should -Match 'protected path'
+    }
+
+    It 'rm with no args and no -f emits error' {
+        $result = Invoke-BashRm 2>&1
+        $errMsgs = @($result | Where-Object { $_ -is [System.Management.Automation.ErrorRecord] })
+        $errMsgs.Count | Should -BeGreaterOrEqual 1
+        "$($errMsgs[0])" | Should -Match 'missing operand'
+    }
+}
+
+Describe 'Invoke-BashMkdir' {
+    BeforeAll {
+        $mkdirDir = Join-Path ([System.IO.Path]::GetTempPath()) "psbash-mkdir-test-$(Get-Random)"
+        New-Item -Path $mkdirDir -ItemType Directory -Force | Out-Null
+    }
+
+    AfterAll {
+        Remove-Item -Path $mkdirDir -Recurse -Force -ErrorAction SilentlyContinue
+    }
+
+    It 'mkdir creates a directory' {
+        $dir = Join-Path $mkdirDir 'newdir'
+        Invoke-BashMkdir $dir
+        Test-Path -LiteralPath $dir | Should -Be $true
+        (Get-Item $dir) -is [System.IO.DirectoryInfo] | Should -Be $true
+    }
+
+    It 'mkdir -p a/b/c creates parent directories' {
+        $dir = Join-Path $mkdirDir 'a' 'b' 'c'
+        Invoke-BashMkdir -p $dir
+        Test-Path -LiteralPath $dir | Should -Be $true
+    }
+
+    It 'mkdir existing directory emits error' {
+        $dir = Join-Path $mkdirDir 'existing'
+        New-Item -Path $dir -ItemType Directory -Force | Out-Null
+        $result = Invoke-BashMkdir $dir 2>&1
+        $errMsgs = @($result | Where-Object { $_ -is [System.Management.Automation.ErrorRecord] })
+        $errMsgs.Count | Should -BeGreaterOrEqual 1
+        "$($errMsgs[0])" | Should -Match 'File exists'
+    }
+
+    It 'mkdir -p existing directory is silent' {
+        $dir = Join-Path $mkdirDir 'pexisting'
+        New-Item -Path $dir -ItemType Directory -Force | Out-Null
+        $result = Invoke-BashMkdir -p $dir 2>&1
+        $errMsgs = @($result | Where-Object { $_ -is [System.Management.Automation.ErrorRecord] })
+        $errMsgs.Count | Should -Be 0
+    }
+
+    It 'mkdir -v outputs verbose message' {
+        $dir = Join-Path $mkdirDir 'verbosedir'
+        $result = @(Invoke-BashMkdir -v $dir)
+        $result.Count | Should -Be 1
+        $result[0].BashText | Should -Match 'created directory'
+    }
+
+    It 'mkdir without -p and missing parent emits error' {
+        $dir = Join-Path $mkdirDir 'nope' 'child'
+        $result = Invoke-BashMkdir $dir 2>&1
+        $errMsgs = @($result | Where-Object { $_ -is [System.Management.Automation.ErrorRecord] })
+        $errMsgs.Count | Should -BeGreaterOrEqual 1
+        "$($errMsgs[0])" | Should -Match 'No such file or directory'
+    }
+}
+
+Describe 'Invoke-BashRmdir' {
+    BeforeAll {
+        $rmdirDir = Join-Path ([System.IO.Path]::GetTempPath()) "psbash-rmdir-test-$(Get-Random)"
+        New-Item -Path $rmdirDir -ItemType Directory -Force | Out-Null
+    }
+
+    AfterAll {
+        Remove-Item -Path $rmdirDir -Recurse -Force -ErrorAction SilentlyContinue
+    }
+
+    It 'rmdir removes empty directory' {
+        $dir = Join-Path $rmdirDir 'emptydir'
+        New-Item -Path $dir -ItemType Directory -Force | Out-Null
+        Invoke-BashRmdir $dir
+        Test-Path -LiteralPath $dir | Should -Be $false
+    }
+
+    It 'rmdir non-empty directory emits error' {
+        $dir = Join-Path $rmdirDir 'notempty'
+        New-Item -Path $dir -ItemType Directory -Force | Out-Null
+        Set-Content -Path (Join-Path $dir 'file.txt') -Value 'content'
+        $result = Invoke-BashRmdir $dir 2>&1
+        $errMsgs = @($result | Where-Object { $_ -is [System.Management.Automation.ErrorRecord] })
+        $errMsgs.Count | Should -BeGreaterOrEqual 1
+        "$($errMsgs[0])" | Should -Match 'Directory not empty'
+        Test-Path -LiteralPath $dir | Should -Be $true
+    }
+
+    It 'rmdir nonexistent directory emits error' {
+        $result = Invoke-BashRmdir (Join-Path $rmdirDir 'nope') 2>&1
+        $errMsgs = @($result | Where-Object { $_ -is [System.Management.Automation.ErrorRecord] })
+        $errMsgs.Count | Should -BeGreaterOrEqual 1
+        "$($errMsgs[0])" | Should -Match 'No such file or directory'
+    }
+
+    It 'rmdir -v outputs verbose message' {
+        $dir = Join-Path $rmdirDir 'verbosermdir'
+        New-Item -Path $dir -ItemType Directory -Force | Out-Null
+        $result = @(Invoke-BashRmdir -v $dir)
+        $result.Count | Should -Be 1
+        $result[0].BashText | Should -Match 'removing directory'
+    }
+
+    It 'rmdir on file emits error' {
+        $file = Join-Path $rmdirDir 'afile.txt'
+        Set-Content -Path $file -Value 'not a dir'
+        $result = Invoke-BashRmdir $file 2>&1
+        $errMsgs = @($result | Where-Object { $_ -is [System.Management.Automation.ErrorRecord] })
+        $errMsgs.Count | Should -BeGreaterOrEqual 1
+        "$($errMsgs[0])" | Should -Match 'Not a directory'
+    }
+
+    It 'rmdir -p removes parent directories when empty' {
+        $base = Join-Path $rmdirDir 'p1'
+        $child = Join-Path $base 'p2'
+        $leaf = Join-Path $child 'p3'
+        New-Item -Path $leaf -ItemType Directory -Force | Out-Null
+        Invoke-BashRmdir -p $leaf
+        Test-Path -LiteralPath $leaf | Should -Be $false
+        Test-Path -LiteralPath $child | Should -Be $false
+        Test-Path -LiteralPath $base | Should -Be $false
+    }
+}
+
+Describe 'Invoke-BashTouch' {
+    BeforeAll {
+        $touchDir = Join-Path ([System.IO.Path]::GetTempPath()) "psbash-touch-test-$(Get-Random)"
+        New-Item -Path $touchDir -ItemType Directory -Force | Out-Null
+    }
+
+    AfterAll {
+        Remove-Item -Path $touchDir -Recurse -Force -ErrorAction SilentlyContinue
+    }
+
+    It 'touch creates new empty file' {
+        $file = Join-Path $touchDir 'newfile.txt'
+        Invoke-BashTouch $file
+        Test-Path -LiteralPath $file | Should -Be $true
+        (Get-Item $file).Length | Should -Be 0
+    }
+
+    It 'touch updates timestamp on existing file' {
+        $file = Join-Path $touchDir 'existing.txt'
+        Set-Content -Path $file -Value 'content'
+        $before = (Get-Item $file).LastWriteTime
+        Start-Sleep -Milliseconds 100
+        Invoke-BashTouch $file
+        $after = (Get-Item $file).LastWriteTime
+        $after | Should -BeGreaterThan $before
+    }
+
+    It 'touch -d sets specific date' {
+        $file = Join-Path $touchDir 'dated.txt'
+        Set-Content -Path $file -Value 'content'
+        Invoke-BashTouch -d '2024-01-01' $file
+        $mtime = (Get-Item $file).LastWriteTime
+        $mtime.Year | Should -Be 2024
+        $mtime.Month | Should -Be 1
+        $mtime.Day | Should -Be 1
+    }
+
+    It 'touch multiple files creates all' {
+        $f1 = Join-Path $touchDir 'multi1.txt'
+        $f2 = Join-Path $touchDir 'multi2.txt'
+        Invoke-BashTouch $f1 $f2
+        Test-Path -LiteralPath $f1 | Should -Be $true
+        Test-Path -LiteralPath $f2 | Should -Be $true
+    }
+
+    It 'touch missing parent emits error' {
+        $file = Join-Path $touchDir 'nope' 'child.txt'
+        $result = Invoke-BashTouch $file 2>&1
+        $errMsgs = @($result | Where-Object { $_ -is [System.Management.Automation.ErrorRecord] })
+        $errMsgs.Count | Should -BeGreaterOrEqual 1
+        "$($errMsgs[0])" | Should -Match 'No such file or directory'
+    }
+
+    It 'touch with invalid date emits error' {
+        $file = Join-Path $touchDir 'baddate.txt'
+        Set-Content -Path $file -Value 'content'
+        $result = Invoke-BashTouch -d 'not-a-date' $file 2>&1
+        $errMsgs = @($result | Where-Object { $_ -is [System.Management.Automation.ErrorRecord] })
+        $errMsgs.Count | Should -BeGreaterOrEqual 1
+        "$($errMsgs[0])" | Should -Match 'invalid date'
+    }
+}
+
+Describe 'Invoke-BashLn' {
+    BeforeAll {
+        $lnDir = Join-Path ([System.IO.Path]::GetTempPath()) "psbash-ln-test-$(Get-Random)"
+        New-Item -Path $lnDir -ItemType Directory -Force | Out-Null
+    }
+
+    AfterAll {
+        Remove-Item -Path $lnDir -Recurse -Force -ErrorAction SilentlyContinue
+    }
+
+    It 'ln -s creates symbolic link' -Skip:$IsWindows {
+        $target = Join-Path $lnDir 'lntarget.txt'
+        Set-Content -Path $target -Value 'target content'
+        $link = Join-Path $lnDir 'lnlink.txt'
+        Invoke-BashLn -s $target $link
+        Test-Path -LiteralPath $link | Should -Be $true
+        $item = Get-Item $link
+        $item.LinkType | Should -Be 'SymbolicLink'
+        Get-Content $link | Should -Be 'target content'
+    }
+
+    It 'ln creates hard link' -Skip:$IsWindows {
+        $target = Join-Path $lnDir 'hlntarget.txt'
+        Set-Content -Path $target -Value 'hard link content'
+        $link = Join-Path $lnDir 'hlnlink.txt'
+        Invoke-BashLn $target $link
+        Test-Path -LiteralPath $link | Should -Be $true
+        Get-Content $link | Should -Be 'hard link content'
+    }
+
+    It 'ln -s -v returns verbose BashObject output' -Skip:$IsWindows {
+        $target = Join-Path $lnDir 'vlntarget.txt'
+        Set-Content -Path $target -Value 'verbose'
+        $link = Join-Path $lnDir 'vlnlink.txt'
+        $result = @(Invoke-BashLn -sv $target $link)
+        $result.Count | Should -Be 1
+        $result[0].BashText | Should -Match '->'
+    }
+
+    It 'ln existing link without -f emits error' -Skip:$IsWindows {
+        $target = Join-Path $lnDir 'existtarget.txt'
+        Set-Content -Path $target -Value 'target'
+        $link = Join-Path $lnDir 'existlink.txt'
+        Set-Content -Path $link -Value 'existing'
+        $result = Invoke-BashLn -s $target $link 2>&1
+        $errMsgs = @($result | Where-Object { $_ -is [System.Management.Automation.ErrorRecord] })
+        $errMsgs.Count | Should -BeGreaterOrEqual 1
+        "$($errMsgs[0])" | Should -Match 'File exists'
+    }
+
+    It 'ln -sf overwrites existing link' -Skip:$IsWindows {
+        $target = Join-Path $lnDir 'forcetarget.txt'
+        Set-Content -Path $target -Value 'force target'
+        $link = Join-Path $lnDir 'forcelink.txt'
+        Set-Content -Path $link -Value 'will be overwritten'
+        Invoke-BashLn -sf $target $link
+        $item = Get-Item $link
+        $item.LinkType | Should -Be 'SymbolicLink'
+    }
+
+    It 'ln missing operand emits error' {
+        $result = Invoke-BashLn -s (Join-Path $lnDir 'only.txt') 2>&1
+        $errMsgs = @($result | Where-Object { $_ -is [System.Management.Automation.ErrorRecord] })
+        $errMsgs.Count | Should -BeGreaterOrEqual 1
+        "$($errMsgs[0])" | Should -Match 'missing file operand'
+    }
+}
+
 Describe 'Integration: Multi-Command Pipelines' {
     BeforeAll {
         $intDir = Join-Path ([System.IO.Path]::GetTempPath()) "psbash-integration-test-$(Get-Random)"
