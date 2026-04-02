@@ -7246,6 +7246,457 @@ function Invoke-BashWhoami {
     New-BashObject -BashText $name -TypeName 'PsBash.TextOutput'
 }
 
+# --- fold Command ---
+
+function Invoke-BashFold {
+    $Arguments = [string[]]$args
+    $pipelineInput = @($input)
+    if ($Arguments -contains '--help') { return Show-BashHelp 'fold' }
+
+    $width = 80
+    $breakSpaces = $false
+    $operands = [System.Collections.Generic.List[string]]::new()
+
+    $i = 0
+    while ($i -lt $Arguments.Count) {
+        $arg = $Arguments[$i]
+        if ($arg -eq '-w' -and ($i + 1) -lt $Arguments.Count) {
+            $width = [int]$Arguments[$i + 1]; $i += 2; continue
+        }
+        if ($arg -match '^--width=(.+)$') {
+            $width = [int]$Matches[1]; $i++; continue
+        }
+        if ($arg -ceq '-s' -or $arg -eq '--spaces') {
+            $breakSpaces = $true; $i++; continue
+        }
+        if ($arg -ceq '-b' -or $arg -eq '--bytes') {
+            $i++; continue  # bytes mode is default for ASCII
+        }
+        $operands.Add($arg); $i++
+    }
+
+    $lines = [System.Collections.Generic.List[string]]::new()
+    if ($operands.Count -eq 0 -and $pipelineInput.Count -gt 0) {
+        foreach ($item in $pipelineInput) {
+            $text = Get-BashText -InputObject $item
+            $text = $text -replace "`n$", ''
+            foreach ($l in $text.Split("`n")) { $lines.Add($l) }
+        }
+    } else {
+        foreach ($filePath in $operands) {
+            if (-not (Test-Path -LiteralPath $filePath)) {
+                Write-Error -Message "fold: ${filePath}: No such file or directory" -ErrorAction Continue
+                continue
+            }
+            $bytes = [System.IO.File]::ReadAllBytes($filePath)
+            $byteOffset = 0
+            if ($bytes.Length -ge 3 -and $bytes[0] -eq 0xEF -and $bytes[1] -eq 0xBB -and $bytes[2] -eq 0xBF) {
+                $byteOffset = 3
+            }
+            $rawText = [System.Text.Encoding]::UTF8.GetString($bytes, $byteOffset, $bytes.Length - $byteOffset)
+            $rawText = $rawText -replace "`r`n", "`n"
+            if ($rawText.EndsWith("`n")) {
+                $rawText = $rawText.Substring(0, $rawText.Length - 1)
+            }
+            foreach ($l in $rawText.Split("`n")) { $lines.Add($l) }
+        }
+    }
+
+    foreach ($line in $lines) {
+        if ($line.Length -le $width) {
+            New-BashObject -BashText $line
+            continue
+        }
+        $pos = 0
+        while ($pos -lt $line.Length) {
+            $remaining = $line.Length - $pos
+            if ($remaining -le $width) {
+                New-BashObject -BashText $line.Substring($pos)
+                break
+            }
+            $chunkEnd = $pos + $width
+            if ($breakSpaces) {
+                $spaceIdx = $line.LastIndexOf(' ', $chunkEnd - 1, $width)
+                if ($spaceIdx -gt $pos) {
+                    $chunkEnd = $spaceIdx + 1
+                }
+            }
+            New-BashObject -BashText $line.Substring($pos, $chunkEnd - $pos)
+            $pos = $chunkEnd
+        }
+    }
+}
+
+# --- expand Command ---
+
+function Invoke-BashExpand {
+    $Arguments = [string[]]$args
+    $pipelineInput = @($input)
+    if ($Arguments -contains '--help') { return Show-BashHelp 'expand' }
+
+    $tabWidth = 8
+    $operands = [System.Collections.Generic.List[string]]::new()
+
+    $i = 0
+    while ($i -lt $Arguments.Count) {
+        $arg = $Arguments[$i]
+        if ($arg -eq '-t' -and ($i + 1) -lt $Arguments.Count) {
+            $tabWidth = [int]$Arguments[$i + 1]; $i += 2; continue
+        }
+        if ($arg -match '^--tabs=(.+)$') {
+            $tabWidth = [int]$Matches[1]; $i++; continue
+        }
+        $operands.Add($arg); $i++
+    }
+
+    $lines = [System.Collections.Generic.List[string]]::new()
+    if ($operands.Count -eq 0 -and $pipelineInput.Count -gt 0) {
+        foreach ($item in $pipelineInput) {
+            $text = Get-BashText -InputObject $item
+            $text = $text -replace "`n$", ''
+            foreach ($l in $text.Split("`n")) { $lines.Add($l) }
+        }
+    } else {
+        foreach ($filePath in $operands) {
+            if (-not (Test-Path -LiteralPath $filePath)) {
+                Write-Error -Message "expand: ${filePath}: No such file or directory" -ErrorAction Continue
+                continue
+            }
+            $bytes = [System.IO.File]::ReadAllBytes($filePath)
+            $byteOffset = 0
+            if ($bytes.Length -ge 3 -and $bytes[0] -eq 0xEF -and $bytes[1] -eq 0xBB -and $bytes[2] -eq 0xBF) {
+                $byteOffset = 3
+            }
+            $rawText = [System.Text.Encoding]::UTF8.GetString($bytes, $byteOffset, $bytes.Length - $byteOffset)
+            $rawText = $rawText -replace "`r`n", "`n"
+            if ($rawText.EndsWith("`n")) {
+                $rawText = $rawText.Substring(0, $rawText.Length - 1)
+            }
+            foreach ($l in $rawText.Split("`n")) { $lines.Add($l) }
+        }
+    }
+
+    foreach ($line in $lines) {
+        $sb = [System.Text.StringBuilder]::new()
+        $col = 0
+        foreach ($ch in $line.ToCharArray()) {
+            if ($ch -eq "`t") {
+                $spaces = $tabWidth - ($col % $tabWidth)
+                [void]$sb.Append(' ', $spaces)
+                $col += $spaces
+            } else {
+                [void]$sb.Append($ch)
+                $col++
+            }
+        }
+        New-BashObject -BashText $sb.ToString()
+    }
+}
+
+# --- unexpand Command ---
+
+function Invoke-BashUnexpand {
+    $Arguments = [string[]]$args
+    $pipelineInput = @($input)
+    if ($Arguments -contains '--help') { return Show-BashHelp 'unexpand' }
+
+    $tabWidth = 8
+    $allSpaces = $false
+    $operands = [System.Collections.Generic.List[string]]::new()
+
+    $i = 0
+    while ($i -lt $Arguments.Count) {
+        $arg = $Arguments[$i]
+        if ($arg -eq '-t' -and ($i + 1) -lt $Arguments.Count) {
+            $tabWidth = [int]$Arguments[$i + 1]; $i += 2; continue
+        }
+        if ($arg -match '^--tabs=(.+)$') {
+            $tabWidth = [int]$Matches[1]; $i++; continue
+        }
+        if ($arg -ceq '-a' -or $arg -eq '--all') {
+            $allSpaces = $true; $i++; continue
+        }
+        if ($arg -eq '--first-only') {
+            $allSpaces = $false; $i++; continue
+        }
+        $operands.Add($arg); $i++
+    }
+
+    $lines = [System.Collections.Generic.List[string]]::new()
+    if ($operands.Count -eq 0 -and $pipelineInput.Count -gt 0) {
+        foreach ($item in $pipelineInput) {
+            $text = Get-BashText -InputObject $item
+            $text = $text -replace "`n$", ''
+            foreach ($l in $text.Split("`n")) { $lines.Add($l) }
+        }
+    } else {
+        foreach ($filePath in $operands) {
+            if (-not (Test-Path -LiteralPath $filePath)) {
+                Write-Error -Message "unexpand: ${filePath}: No such file or directory" -ErrorAction Continue
+                continue
+            }
+            $bytes = [System.IO.File]::ReadAllBytes($filePath)
+            $byteOffset = 0
+            if ($bytes.Length -ge 3 -and $bytes[0] -eq 0xEF -and $bytes[1] -eq 0xBB -and $bytes[2] -eq 0xBF) {
+                $byteOffset = 3
+            }
+            $rawText = [System.Text.Encoding]::UTF8.GetString($bytes, $byteOffset, $bytes.Length - $byteOffset)
+            $rawText = $rawText -replace "`r`n", "`n"
+            if ($rawText.EndsWith("`n")) {
+                $rawText = $rawText.Substring(0, $rawText.Length - 1)
+            }
+            foreach ($l in $rawText.Split("`n")) { $lines.Add($l) }
+        }
+    }
+
+    foreach ($line in $lines) {
+        if ($allSpaces) {
+            $sb = [System.Text.StringBuilder]::new()
+            $col = 0
+            $spaceRun = 0
+            foreach ($ch in $line.ToCharArray()) {
+                if ($ch -eq ' ') {
+                    $spaceRun++
+                    $col++
+                    if (($col % $tabWidth) -eq 0 -and $spaceRun -ge 2) {
+                        [void]$sb.Append("`t")
+                        $spaceRun = 0
+                    }
+                } else {
+                    if ($spaceRun -gt 0) {
+                        [void]$sb.Append(' ', $spaceRun)
+                        $spaceRun = 0
+                    }
+                    [void]$sb.Append($ch)
+                    $col++
+                }
+            }
+            if ($spaceRun -gt 0) { [void]$sb.Append(' ', $spaceRun) }
+            New-BashObject -BashText $sb.ToString()
+        } else {
+            # Leading spaces only
+            $leadingSpaces = 0
+            while ($leadingSpaces -lt $line.Length -and $line[$leadingSpaces] -eq ' ') {
+                $leadingSpaces++
+            }
+            $tabs = [System.Math]::Floor($leadingSpaces / $tabWidth)
+            $remainSpaces = $leadingSpaces % $tabWidth
+            $prefix = ("`t" * $tabs) + (' ' * $remainSpaces)
+            New-BashObject -BashText ($prefix + $line.Substring($leadingSpaces))
+        }
+    }
+}
+
+# --- strings Command ---
+
+function Invoke-BashStrings {
+    $Arguments = [string[]]$args
+    $pipelineInput = @($input)
+    if ($Arguments -contains '--help') { return Show-BashHelp 'strings' }
+
+    $minLength = 4
+    $operands = [System.Collections.Generic.List[string]]::new()
+
+    $i = 0
+    while ($i -lt $Arguments.Count) {
+        $arg = $Arguments[$i]
+        if ($arg -eq '-n' -and ($i + 1) -lt $Arguments.Count) {
+            $minLength = [int]$Arguments[$i + 1]; $i += 2; continue
+        }
+        if ($arg -match '^--bytes=(.+)$') {
+            $minLength = [int]$Matches[1]; $i++; continue
+        }
+        $operands.Add($arg); $i++
+    }
+
+    $content = ''
+    if ($operands.Count -eq 0 -and $pipelineInput.Count -gt 0) {
+        $parts = [System.Collections.Generic.List[string]]::new()
+        foreach ($item in $pipelineInput) {
+            $parts.Add((Get-BashText -InputObject $item))
+        }
+        $content = $parts -join "`n"
+    } else {
+        foreach ($filePath in $operands) {
+            if (-not (Test-Path -LiteralPath $filePath)) {
+                Write-Error -Message "strings: ${filePath}: No such file or directory" -ErrorAction Continue
+                continue
+            }
+            $content += [System.IO.File]::ReadAllText($filePath)
+        }
+    }
+
+    $pattern = "[\x20-\x7E]{$minLength,}"
+    $matches = [regex]::Matches($content, $pattern)
+    foreach ($m in $matches) {
+        New-BashObject -BashText $m.Value
+    }
+}
+
+# --- split Command ---
+
+function Invoke-BashSplit {
+    $Arguments = [string[]]$args
+    $pipelineInput = @($input)
+    if ($Arguments -contains '--help') { return Show-BashHelp 'split' }
+
+    $lineCount = $null
+    $numericSuffix = $false
+    $suffixLength = 2
+    $operands = [System.Collections.Generic.List[string]]::new()
+
+    $i = 0
+    while ($i -lt $Arguments.Count) {
+        $arg = $Arguments[$i]
+        if ($arg -eq '-l' -and ($i + 1) -lt $Arguments.Count) {
+            $lineCount = [int]$Arguments[$i + 1]; $i += 2; continue
+        }
+        if ($arg -match '^--lines=(.+)$') {
+            $lineCount = [int]$Matches[1]; $i++; continue
+        }
+        if ($arg -ceq '-d' -or $arg -eq '--numeric-suffixes') {
+            $numericSuffix = $true; $i++; continue
+        }
+        if ($arg -eq '-a' -and ($i + 1) -lt $Arguments.Count) {
+            $suffixLength = [int]$Arguments[$i + 1]; $i += 2; continue
+        }
+        if ($arg -match '^--suffix-length=(.+)$') {
+            $suffixLength = [int]$Matches[1]; $i++; continue
+        }
+        $operands.Add($arg); $i++
+    }
+
+    if (-not $lineCount) { $lineCount = 1000 }
+
+    $lines = [System.Collections.Generic.List[string]]::new()
+    $prefix = 'x'
+
+    if ($operands.Count -ge 1) {
+        $filePath = $operands[0]
+        if ($filePath -eq '-') {
+            foreach ($item in $pipelineInput) {
+                $text = Get-BashText -InputObject $item
+                $text = $text -replace "`n$", ''
+                foreach ($l in $text.Split("`n")) { $lines.Add($l) }
+            }
+        } else {
+            if (-not (Test-Path -LiteralPath $filePath)) {
+                Write-Error -Message "split: cannot open '${filePath}' for reading: No such file or directory" -ErrorAction Continue
+                $global:LASTEXITCODE = 1
+                return
+            }
+            $bytes = [System.IO.File]::ReadAllBytes($filePath)
+            $byteOffset = 0
+            if ($bytes.Length -ge 3 -and $bytes[0] -eq 0xEF -and $bytes[1] -eq 0xBB -and $bytes[2] -eq 0xBF) {
+                $byteOffset = 3
+            }
+            $rawText = [System.Text.Encoding]::UTF8.GetString($bytes, $byteOffset, $bytes.Length - $byteOffset)
+            $rawText = $rawText -replace "`r`n", "`n"
+            if ($rawText.EndsWith("`n")) {
+                $rawText = $rawText.Substring(0, $rawText.Length - 1)
+            }
+            foreach ($l in $rawText.Split("`n")) { $lines.Add($l) }
+        }
+        if ($operands.Count -ge 2) { $prefix = $operands[1] }
+    } elseif ($pipelineInput.Count -gt 0) {
+        foreach ($item in $pipelineInput) {
+            $text = Get-BashText -InputObject $item
+            $text = $text -replace "`n$", ''
+            foreach ($l in $text.Split("`n")) { $lines.Add($l) }
+        }
+    } else {
+        Write-Error -Message "split: missing operand" -ErrorAction Continue
+        $global:LASTEXITCODE = 1
+        return
+    }
+
+    $chunkIndex = 0
+    for ($start = 0; $start -lt $lines.Count; $start += $lineCount) {
+        $end = [System.Math]::Min($start + $lineCount, $lines.Count)
+        $chunk = $lines.GetRange($start, $end - $start)
+        if ($numericSuffix) {
+            $suffix = $chunkIndex.ToString().PadLeft($suffixLength, '0')
+        } else {
+            $suffix = ''
+            $idx = [int]$chunkIndex
+            for ($si = 0; $si -lt $suffixLength; $si++) {
+                $charCode = [int]([int][char]'a' + ($idx % 26))
+                $suffix = [char]$charCode + $suffix
+                $idx = [int][System.Math]::Floor($idx / 26)
+            }
+        }
+        $outName = "${prefix}${suffix}"
+        $outPath = if ([System.IO.Path]::IsPathRooted($outName)) { $outName } else { Join-Path $PWD $outName }
+        $content = ($chunk -join "`n") + "`n"
+        [System.IO.File]::WriteAllText($outPath, $content)
+        $chunkIndex++
+    }
+}
+
+# --- tac Command ---
+
+function Invoke-BashTac {
+    $Arguments = [string[]]$args
+    $pipelineInput = @($input)
+    if ($Arguments -contains '--help') { return Show-BashHelp 'tac' }
+
+    $separator = $null
+    $operands = [System.Collections.Generic.List[string]]::new()
+
+    $i = 0
+    while ($i -lt $Arguments.Count) {
+        $arg = $Arguments[$i]
+        if ($arg -eq '-s' -and ($i + 1) -lt $Arguments.Count) {
+            $separator = $Arguments[$i + 1]; $i += 2; continue
+        }
+        if ($arg -match '^--separator=(.+)$') {
+            $separator = $Matches[1]; $i++; continue
+        }
+        $operands.Add($arg); $i++
+    }
+
+    $lines = [System.Collections.Generic.List[string]]::new()
+    if ($operands.Count -eq 0 -and $pipelineInput.Count -gt 0) {
+        foreach ($item in $pipelineInput) {
+            $text = Get-BashText -InputObject $item
+            $text = $text -replace "`n$", ''
+            foreach ($l in $text.Split("`n")) { $lines.Add($l) }
+        }
+    } else {
+        foreach ($filePath in $operands) {
+            if (-not (Test-Path -LiteralPath $filePath)) {
+                Write-Error -Message "tac: ${filePath}: No such file or directory" -ErrorAction Continue
+                continue
+            }
+            $bytes = [System.IO.File]::ReadAllBytes($filePath)
+            $byteOffset = 0
+            if ($bytes.Length -ge 3 -and $bytes[0] -eq 0xEF -and $bytes[1] -eq 0xBB -and $bytes[2] -eq 0xBF) {
+                $byteOffset = 3
+            }
+            $rawText = [System.Text.Encoding]::UTF8.GetString($bytes, $byteOffset, $bytes.Length - $byteOffset)
+            $rawText = $rawText -replace "`r`n", "`n"
+            if ($rawText.EndsWith("`n")) {
+                $rawText = $rawText.Substring(0, $rawText.Length - 1)
+            }
+            foreach ($l in $rawText.Split("`n")) { $lines.Add($l) }
+        }
+    }
+
+    if ($separator) {
+        $all = $lines -join "`n"
+        $chunks = $all.Split($separator)
+        [System.Array]::Reverse($chunks)
+        foreach ($chunk in $chunks) {
+            New-BashObject -BashText $chunk
+        }
+    } else {
+        $lines.Reverse()
+        foreach ($line in $lines) {
+            New-BashObject -BashText $line
+        }
+    }
+}
+
 # --- Help Support ---
 
 $script:BashHelpSpecs = @{
@@ -7294,6 +7745,12 @@ $script:BashHelpSpecs = @{
     'pwd'      = 'Print name of current/working directory.'
     'hostname' = 'Show the system host name.'
     'whoami'   = 'Print effective userid.'
+    'fold'     = 'Wrap each input line to fit in specified width.'
+    'expand'   = 'Convert tabs to spaces.'
+    'unexpand' = 'Convert spaces to tabs.'
+    'strings'  = 'Print the sequences of printable characters in files.'
+    'split'    = 'Split a file into pieces.'
+    'tac'      = 'Concatenate and print files in reverse.'
 }
 
 function Test-BashHelpFlag {
@@ -7409,6 +7866,12 @@ $script:BashFlagSpecs = @{
     )
     'basename' = @( @('-s', 'suffix') )
     'pwd'      = @( @('-P', 'physical path') )
+    'fold'     = @( @('-w', 'wrap width'), @('-s', 'break at spaces'), @('-b', 'count bytes') )
+    'expand'   = @( @('-t', 'tab width') )
+    'unexpand' = @( @('-t', 'tab width'), @('-a', 'convert all spaces') )
+    'strings'  = @( @('-n', 'minimum string length') )
+    'split'    = @( @('-l', 'lines per file'), @('-d', 'numeric suffixes'), @('-a', 'suffix length') )
+    'tac'      = @( @('-s', 'separator') )
 }
 
 $script:BashCompleters = @{}
@@ -7495,3 +7958,9 @@ Set-Alias -Name 'dirname'  -Value 'Invoke-BashDirname'  -Force -Scope Global -Op
 Set-Alias -Name 'pwd'      -Value 'Invoke-BashPwd'      -Force -Scope Global -Option AllScope
 Set-Alias -Name 'hostname' -Value 'Invoke-BashHostname' -Force -Scope Global -Option AllScope
 Set-Alias -Name 'whoami'   -Value 'Invoke-BashWhoami'   -Force -Scope Global -Option AllScope
+Set-Alias -Name 'fold'     -Value 'Invoke-BashFold'     -Force -Scope Global -Option AllScope
+Set-Alias -Name 'expand'   -Value 'Invoke-BashExpand'   -Force -Scope Global -Option AllScope
+Set-Alias -Name 'unexpand' -Value 'Invoke-BashUnexpand' -Force -Scope Global -Option AllScope
+Set-Alias -Name 'strings'  -Value 'Invoke-BashStrings'  -Force -Scope Global -Option AllScope
+Set-Alias -Name 'split'    -Value 'Invoke-BashSplit'    -Force -Scope Global -Option AllScope
+Set-Alias -Name 'tac'      -Value 'Invoke-BashTac'      -Force -Scope Global -Option AllScope

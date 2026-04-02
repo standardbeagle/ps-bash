@@ -100,6 +100,8 @@ FunctionsToExport = 'Invoke-BashEcho', 'Invoke-BashPrintf', 'Get-BashPlatform',
                'Invoke-BashDu', 'Invoke-BashTree',
                'Invoke-BashEnv', 'Invoke-BashBasename', 'Invoke-BashDirname',
                'Invoke-BashPwd', 'Invoke-BashHostname', 'Invoke-BashWhoami',
+               'Invoke-BashFold', 'Invoke-BashExpand', 'Invoke-BashUnexpand',
+               'Invoke-BashStrings', 'Invoke-BashSplit', 'Invoke-BashTac',
                'Register-BashCompletions',
                'Test-BashHelpFlag', 'Show-BashHelp'
 
@@ -117,7 +119,8 @@ AliasesToExport = 'echo', 'printf', 'ls', 'cat', 'grep', 'sort', 'head', 'tail',
                'tee', 'xargs', 'jq',
                'date', 'seq', 'expr',
                'du', 'tree',
-               'env', 'printenv', 'basename', 'dirname', 'pwd', 'hostname', 'whoami'
+               'env', 'printenv', 'basename', 'dirname', 'pwd', 'hostname', 'whoami',
+               'fold', 'expand', 'unexpand', 'strings', 'split', 'tac'
 
 # DSC resources to export from this module
 # DscResourcesToExport = @()

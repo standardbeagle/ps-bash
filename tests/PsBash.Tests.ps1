@@ -4703,6 +4703,287 @@ Describe 'Register-BashCompletions — Function Export' {
     }
 }
 
+# --- fold Tests ---
+
+Describe 'Invoke-BashFold -- Basic' {
+    It 'wraps long line at default width 80' {
+        $long = 'a' * 100
+        $results = @(Invoke-BashEcho -n $long | Invoke-BashFold)
+        $results.Count | Should -Be 2
+        $results[0].BashText.Length | Should -Be 80
+        $results[1].BashText.Length | Should -Be 20
+    }
+
+    It 'wraps at specified width' {
+        $results = @(Invoke-BashEcho -n 'abcdefghij' | Invoke-BashFold -w 3)
+        $results.Count | Should -Be 4
+        $results[0].BashText | Should -Be 'abc'
+        $results[1].BashText | Should -Be 'def'
+        $results[2].BashText | Should -Be 'ghi'
+        $results[3].BashText | Should -Be 'j'
+    }
+
+    It 'does not wrap short lines' {
+        $results = @(Invoke-BashEcho -n 'short' | Invoke-BashFold -w 10)
+        $results.Count | Should -Be 1
+        $results[0].BashText | Should -Be 'short'
+    }
+
+    It 'breaks at spaces with -s' {
+        $results = @(Invoke-BashEcho -n 'hello world foo' | Invoke-BashFold -s -w 10)
+        $results.Count | Should -Be 2
+        $results[0].BashText | Should -Be 'hello '
+        $results[1].BashText | Should -Be 'world foo'
+    }
+}
+
+Describe 'Invoke-BashFold -- File Mode' {
+    BeforeAll {
+        $testDir = Join-Path ([System.IO.Path]::GetTempPath()) "psbash-fold-$([guid]::NewGuid().ToString('N').Substring(0,8))"
+        New-Item -ItemType Directory -Path $testDir -Force | Out-Null
+        Set-Content -Path (Join-Path $testDir 'wide.txt') -Value ('x' * 20) -NoNewline
+    }
+    AfterAll {
+        Remove-Item -Recurse -Force $testDir -ErrorAction SilentlyContinue
+    }
+
+    It 'reads from file' {
+        $results = @(Invoke-BashFold -w 5 (Join-Path $testDir 'wide.txt'))
+        $results.Count | Should -Be 4
+        $results[0].BashText | Should -Be 'xxxxx'
+    }
+}
+
+Describe 'Invoke-BashFold -- Pipeline Bridge' {
+    It 'produces BashObjects' {
+        $result = Invoke-BashEcho -n 'test' | Invoke-BashFold
+        $result.PSTypeNames[0] | Should -Be 'PsBash.TextOutput'
+    }
+}
+
+Describe 'Invoke-BashFold -- Alias' {
+    It 'fold alias resolves to Invoke-BashFold' {
+        $alias = Get-Alias -Name fold -Scope Global
+        $alias.Definition | Should -Be 'Invoke-BashFold'
+    }
+}
+
+# --- expand Tests ---
+
+Describe 'Invoke-BashExpand -- Basic' {
+    It 'expands tabs to 8 spaces by default' {
+        $result = Invoke-BashEcho -n "a`tb" | Invoke-BashExpand
+        $result.BashText | Should -Be 'a       b'
+    }
+
+    It 'expands tabs to specified width' {
+        $result = Invoke-BashEcho -n "a`tb" | Invoke-BashExpand -t 4
+        $result.BashText | Should -Be 'a   b'
+    }
+
+    It 'handles multiple tabs' {
+        $result = Invoke-BashEcho -n "`t`t" | Invoke-BashExpand -t 4
+        $result.BashText | Should -Be '        '
+    }
+
+    It 'aligns tabs to tab stops' {
+        $result = Invoke-BashEcho -n "ab`tc" | Invoke-BashExpand -t 4
+        $result.BashText | Should -Be 'ab  c'
+    }
+}
+
+Describe 'Invoke-BashExpand -- File Mode' {
+    BeforeAll {
+        $testDir = Join-Path ([System.IO.Path]::GetTempPath()) "psbash-expand-$([guid]::NewGuid().ToString('N').Substring(0,8))"
+        New-Item -ItemType Directory -Path $testDir -Force | Out-Null
+        Set-Content -Path (Join-Path $testDir 'tabs.txt') -Value "a`tb" -NoNewline
+    }
+    AfterAll {
+        Remove-Item -Recurse -Force $testDir -ErrorAction SilentlyContinue
+    }
+
+    It 'reads from file' {
+        $result = Invoke-BashExpand -t 4 (Join-Path $testDir 'tabs.txt')
+        $result.BashText | Should -Be 'a   b'
+    }
+}
+
+Describe 'Invoke-BashExpand -- Alias' {
+    It 'expand alias resolves to Invoke-BashExpand' {
+        $alias = Get-Alias -Name expand -Scope Global
+        $alias.Definition | Should -Be 'Invoke-BashExpand'
+    }
+}
+
+# --- unexpand Tests ---
+
+Describe 'Invoke-BashUnexpand -- Basic' {
+    It 'converts leading spaces to tabs' {
+        $result = Invoke-BashEcho -n '        hello' | Invoke-BashUnexpand
+        $result.BashText | Should -Be "`thello"
+    }
+
+    It 'uses specified tab width' {
+        $result = Invoke-BashEcho -n '    hello' | Invoke-BashUnexpand -t 4
+        $result.BashText | Should -Be "`thello"
+    }
+
+    It 'converts all spaces with -a' {
+        $result = Invoke-BashEcho -n 'a       b' | Invoke-BashUnexpand -a
+        $result.BashText | Should -Be "a`tb"
+    }
+
+    It 'keeps partial leading spaces' {
+        $result = Invoke-BashEcho -n '   hello' | Invoke-BashUnexpand -t 4
+        $result.BashText | Should -Be '   hello'
+    }
+}
+
+Describe 'Invoke-BashUnexpand -- Alias' {
+    It 'unexpand alias resolves to Invoke-BashUnexpand' {
+        $alias = Get-Alias -Name unexpand -Scope Global
+        $alias.Definition | Should -Be 'Invoke-BashUnexpand'
+    }
+}
+
+# --- strings Tests ---
+
+Describe 'Invoke-BashStrings -- Basic' {
+    It 'extracts printable strings from input' {
+        $result = @(Invoke-BashEcho -n 'hello world' | Invoke-BashStrings)
+        $result.Count | Should -Be 1
+        $result[0].BashText | Should -Be 'hello world'
+    }
+
+    It 'uses default minimum length of 4' {
+        $results = @(Invoke-BashEcho -n 'ab hello cd' | Invoke-BashStrings)
+        $results.Count | Should -Be 1
+        $results[0].BashText | Should -Be 'ab hello cd'
+    }
+
+    It 'filters by minimum length' {
+        $input = "hi" + [char]0 + "hello"
+        $results = @(Invoke-BashEcho -n $input | Invoke-BashStrings -n 4)
+        $results.Count | Should -Be 1
+        $results[0].BashText | Should -Be 'hello'
+    }
+}
+
+Describe 'Invoke-BashStrings -- Alias' {
+    It 'strings alias resolves to Invoke-BashStrings' {
+        $alias = Get-Alias -Name strings -Scope Global
+        $alias.Definition | Should -Be 'Invoke-BashStrings'
+    }
+}
+
+# --- split Tests ---
+
+Describe 'Invoke-BashSplit -- Basic' {
+    BeforeAll {
+        $testDir = Join-Path ([System.IO.Path]::GetTempPath()) "psbash-split-$([guid]::NewGuid().ToString('N').Substring(0,8))"
+        New-Item -ItemType Directory -Path $testDir -Force | Out-Null
+        Set-Content -Path (Join-Path $testDir 'input.txt') -Value "a`nb`nc`nd`ne" -NoNewline
+    }
+    AfterAll {
+        Remove-Item -Recurse -Force $testDir -ErrorAction SilentlyContinue
+    }
+
+    It 'splits file by line count' {
+        Push-Location $testDir
+        try {
+            Invoke-BashSplit -l 2 (Join-Path $testDir 'input.txt')
+            $xaa = Get-Content (Join-Path $testDir 'xaa') -Raw
+            $xab = Get-Content (Join-Path $testDir 'xab') -Raw
+            $xac = Get-Content (Join-Path $testDir 'xac') -Raw
+            $xaa.TrimEnd("`n") | Should -Be "a`nb"
+            $xab.TrimEnd("`n") | Should -Be "c`nd"
+            $xac.TrimEnd("`n") | Should -Be 'e'
+        } finally {
+            Pop-Location
+        }
+    }
+
+    It 'uses numeric suffixes with -d' {
+        Push-Location $testDir
+        try {
+            Invoke-BashSplit -l 2 -d (Join-Path $testDir 'input.txt')
+            Test-Path (Join-Path $testDir 'x00') | Should -BeTrue
+            Test-Path (Join-Path $testDir 'x01') | Should -BeTrue
+        } finally {
+            Pop-Location
+        }
+    }
+
+    It 'uses custom prefix' {
+        Push-Location $testDir
+        try {
+            Invoke-BashSplit -l 2 (Join-Path $testDir 'input.txt') (Join-Path $testDir 'out')
+            Test-Path (Join-Path $testDir 'outaa') | Should -BeTrue
+            Test-Path (Join-Path $testDir 'outab') | Should -BeTrue
+        } finally {
+            Pop-Location
+        }
+    }
+}
+
+Describe 'Invoke-BashSplit -- Alias' {
+    It 'split alias resolves to Invoke-BashSplit' {
+        $alias = Get-Alias -Name split -Scope Global
+        $alias.Definition | Should -Be 'Invoke-BashSplit'
+    }
+}
+
+# --- tac Tests ---
+
+Describe 'Invoke-BashTac -- Basic' {
+    It 'reverses lines from pipeline' {
+        $results = @(Invoke-BashEcho -e "a`nb`nc" | Invoke-BashTac)
+        $results.Count | Should -Be 3
+        $results[0].BashText | Should -Be 'c'
+        $results[1].BashText | Should -Be 'b'
+        $results[2].BashText | Should -Be 'a'
+    }
+
+    It 'handles single line' {
+        $results = @(Invoke-BashEcho -n 'only' | Invoke-BashTac)
+        $results.Count | Should -Be 1
+        $results[0].BashText | Should -Be 'only'
+    }
+}
+
+Describe 'Invoke-BashTac -- File Mode' {
+    BeforeAll {
+        $testDir = Join-Path ([System.IO.Path]::GetTempPath()) "psbash-tac-$([guid]::NewGuid().ToString('N').Substring(0,8))"
+        New-Item -ItemType Directory -Path $testDir -Force | Out-Null
+        Set-Content -Path (Join-Path $testDir 'lines.txt') -Value "first`nsecond`nthird" -NoNewline
+    }
+    AfterAll {
+        Remove-Item -Recurse -Force $testDir -ErrorAction SilentlyContinue
+    }
+
+    It 'reverses lines from a file' {
+        $results = @(Invoke-BashTac (Join-Path $testDir 'lines.txt'))
+        $results.Count | Should -Be 3
+        $results[0].BashText | Should -Be 'third'
+        $results[1].BashText | Should -Be 'second'
+        $results[2].BashText | Should -Be 'first'
+    }
+}
+
+Describe 'Invoke-BashTac -- Pipeline Bridge' {
+    It 'produces BashObjects' {
+        $result = @(Invoke-BashEcho -n 'test' | Invoke-BashTac)
+        $result[0].PSTypeNames[0] | Should -Be 'PsBash.TextOutput'
+    }
+}
+
+Describe 'Invoke-BashTac -- Alias' {
+    It 'tac alias resolves to Invoke-BashTac' {
+        $alias = Get-Alias -Name tac -Scope Global
+        $alias.Definition | Should -Be 'Invoke-BashTac'
+    }
+}
+
 # --- Slice 25: --help flag support ---
 
 Describe 'Test-BashHelpFlag — detects --help in args' {
@@ -4798,7 +5079,13 @@ Describe '--help — at least 10 commands respond' {
         @{ Cmd = 'sed';    Fn = 'Invoke-BashSed' },
         @{ Cmd = 'awk';    Fn = 'Invoke-BashAwk' },
         @{ Cmd = 'cut';    Fn = 'Invoke-BashCut' },
-        @{ Cmd = 'tr';     Fn = 'Invoke-BashTr' }
+        @{ Cmd = 'tr';     Fn = 'Invoke-BashTr' },
+        @{ Cmd = 'fold';   Fn = 'Invoke-BashFold' },
+        @{ Cmd = 'expand'; Fn = 'Invoke-BashExpand' },
+        @{ Cmd = 'unexpand'; Fn = 'Invoke-BashUnexpand' },
+        @{ Cmd = 'strings'; Fn = 'Invoke-BashStrings' },
+        @{ Cmd = 'split';  Fn = 'Invoke-BashSplit' },
+        @{ Cmd = 'tac';    Fn = 'Invoke-BashTac' }
     )
 
     It '<Cmd> --help returns help text' -ForEach $helpCommands {
