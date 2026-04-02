@@ -7052,6 +7052,153 @@ function Invoke-BashTree {
     $summaryObj
 }
 
+# --- env / printenv ---
+
+function Invoke-BashEnv {
+    $Arguments = [string[]]$args
+
+    if ($Arguments.Count -gt 0) {
+        $varName = $Arguments[0]
+        $val = [System.Environment]::GetEnvironmentVariable($varName)
+        if ($null -eq $val) {
+            Write-Error "env: '$varName': not set" -ErrorAction Continue
+            return
+        }
+        $obj = [PSCustomObject]@{
+            PSTypeName = 'PsBash.EnvEntry'
+            Name       = $varName
+            Value      = $val
+            BashText   = "$varName=$val"
+        }
+        $obj | Add-Member -MemberType ScriptMethod -Name 'ToString' -Value {
+            $this.BashText
+        } -Force
+        return $obj
+    }
+
+    $entries = [System.Environment]::GetEnvironmentVariables()
+    foreach ($key in ($entries.Keys | Sort-Object)) {
+        $val = $entries[$key]
+        $obj = [PSCustomObject]@{
+            PSTypeName = 'PsBash.EnvEntry'
+            Name       = [string]$key
+            Value      = [string]$val
+            BashText   = "$key=$val"
+        }
+        $obj | Add-Member -MemberType ScriptMethod -Name 'ToString' -Value {
+            $this.BashText
+        } -Force
+        $obj
+    }
+}
+
+# --- basename ---
+
+function Invoke-BashBasename {
+    $Arguments = [string[]]$args
+
+    $suffix = $null
+    $operands = [System.Collections.Generic.List[string]]::new()
+
+    $i = 0
+    while ($i -lt $Arguments.Count) {
+        $arg = $Arguments[$i]
+
+        if ($arg -ceq '-s' -or $arg -ceq '--suffix') {
+            $i++
+            if ($i -lt $Arguments.Count) { $suffix = $Arguments[$i] }
+            $i++
+            continue
+        }
+
+        if ($arg -cmatch '^--suffix=(.+)$') {
+            $suffix = $Matches[1]
+            $i++
+            continue
+        }
+
+        $operands.Add($arg)
+        $i++
+    }
+
+    foreach ($path in $operands) {
+        $normalized = $path -replace '\\', '/'
+        $normalized = $normalized.TrimEnd('/')
+        if ($normalized -eq '') { $normalized = '/' }
+
+        $slashIdx = $normalized.LastIndexOf('/')
+        $name = if ($slashIdx -ge 0) { $normalized.Substring($slashIdx + 1) } else { $normalized }
+        if ($name -eq '') { $name = '/' }
+
+        if ($null -ne $suffix -and $name.Length -gt $suffix.Length -and $name.EndsWith($suffix)) {
+            $name = $name.Substring(0, $name.Length - $suffix.Length)
+        }
+
+        $obj = New-BashObject -BashText $name -TypeName 'PsBash.TextOutput'
+        $obj
+    }
+}
+
+# --- dirname ---
+
+function Invoke-BashDirname {
+    $Arguments = [string[]]$args
+
+    foreach ($path in $Arguments) {
+        $normalized = $path -replace '\\', '/'
+        $normalized = $normalized.TrimEnd('/')
+        if ($normalized -eq '') {
+            $dir = '/'
+        } else {
+            $slashIdx = $normalized.LastIndexOf('/')
+            if ($slashIdx -lt 0) {
+                $dir = '.'
+            } elseif ($slashIdx -eq 0) {
+                $dir = '/'
+            } else {
+                $dir = $normalized.Substring(0, $slashIdx)
+            }
+        }
+
+        $obj = New-BashObject -BashText $dir -TypeName 'PsBash.TextOutput'
+        $obj
+    }
+}
+
+# --- pwd ---
+
+function Invoke-BashPwd {
+    $Arguments = [string[]]$args
+
+    $physical = $false
+    foreach ($arg in $Arguments) {
+        if ($arg -ceq '-P') { $physical = $true }
+    }
+
+    $location = if ($physical) {
+        [System.IO.Directory]::GetCurrentDirectory()
+    } else {
+        (Get-Location).Path
+    }
+
+    $location = $location -replace '\\', '/'
+    New-BashObject -BashText $location -TypeName 'PsBash.TextOutput'
+}
+
+# --- hostname ---
+
+function Invoke-BashHostname {
+    $name = [System.Net.Dns]::GetHostName()
+    New-BashObject -BashText $name -TypeName 'PsBash.TextOutput'
+}
+
+# --- whoami ---
+
+function Invoke-BashWhoami {
+    $name = [System.Environment]::UserName
+    New-BashObject -BashText $name -TypeName 'PsBash.TextOutput'
+}
+
 # --- Aliases ---
 
 Set-Alias -Name 'echo'   -Value 'Invoke-BashEcho'   -Force -Scope Global -Option AllScope
@@ -7093,3 +7240,10 @@ Set-Alias -Name 'seq'     -Value 'Invoke-BashSeq'     -Force -Scope Global -Opti
 Set-Alias -Name 'expr'    -Value 'Invoke-BashExpr'    -Force -Scope Global -Option AllScope
 Set-Alias -Name 'du'      -Value 'Invoke-BashDu'      -Force -Scope Global -Option AllScope
 Set-Alias -Name 'tree'    -Value 'Invoke-BashTree'    -Force -Scope Global -Option AllScope
+Set-Alias -Name 'env'      -Value 'Invoke-BashEnv'      -Force -Scope Global -Option AllScope
+Set-Alias -Name 'printenv' -Value 'Invoke-BashEnv'      -Force -Scope Global -Option AllScope
+Set-Alias -Name 'basename' -Value 'Invoke-BashBasename' -Force -Scope Global -Option AllScope
+Set-Alias -Name 'dirname'  -Value 'Invoke-BashDirname'  -Force -Scope Global -Option AllScope
+Set-Alias -Name 'pwd'      -Value 'Invoke-BashPwd'      -Force -Scope Global -Option AllScope
+Set-Alias -Name 'hostname' -Value 'Invoke-BashHostname' -Force -Scope Global -Option AllScope
+Set-Alias -Name 'whoami'   -Value 'Invoke-BashWhoami'   -Force -Scope Global -Option AllScope

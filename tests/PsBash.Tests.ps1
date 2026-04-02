@@ -4365,3 +4365,212 @@ Describe 'Invoke-BashTree — Pipeline Bridge' {
         $results.Count | Should -BeGreaterOrEqual 1
     }
 }
+
+# ── Invoke-BashEnv ──────────────────────────────────────────────────────
+
+Describe 'Invoke-BashEnv — List All' {
+    It 'returns env vars as objects with Name, Value, BashText' {
+        $results = @(Invoke-BashEnv)
+        $results.Count | Should -BeGreaterThan 0
+        $first = $results[0]
+        $first.PSObject.Properties['Name'] | Should -Not -BeNullOrEmpty
+        $first.PSObject.Properties['Value'] | Should -Not -BeNullOrEmpty
+        $first.BashText | Should -Match '^[^=]+=.*'
+    }
+
+    It 'BashText format is NAME=value' {
+        $results = @(Invoke-BashEnv)
+        $sample = $results | Where-Object { $_.Name -eq 'PATH' } | Select-Object -First 1
+        $sample | Should -Not -BeNullOrEmpty
+        $sample.BashText | Should -Be "PATH=$($sample.Value)"
+    }
+}
+
+Describe 'Invoke-BashEnv — Filter by Name' {
+    It 'returns just the value for a specific variable' {
+        $result = Invoke-BashEnv 'PATH'
+        $result.Value | Should -Be $env:PATH
+        $result.BashText | Should -Be "PATH=$($env:PATH)"
+    }
+
+    It 'returns error for nonexistent variable' {
+        $result = Invoke-BashEnv 'PSBASH_NONEXISTENT_VAR_12345' 2>&1
+        $result | Should -Match 'not set'
+    }
+}
+
+Describe 'Invoke-BashEnv — Alias' {
+    It 'env alias resolves to Invoke-BashEnv' {
+        $alias = Get-Alias -Name env -Scope Global
+        $alias.Definition | Should -Be 'Invoke-BashEnv'
+    }
+
+    It 'printenv alias resolves to Invoke-BashEnv' {
+        $alias = Get-Alias -Name printenv -Scope Global
+        $alias.Definition | Should -Be 'Invoke-BashEnv'
+    }
+}
+
+# ── Invoke-BashBasename ─────────────────────────────────────────────────
+
+Describe 'Invoke-BashBasename — Basic' {
+    It 'extracts filename from path' {
+        $result = Invoke-BashBasename '/foo/bar.txt'
+        $result.BashText | Should -Be 'bar.txt'
+    }
+
+    It 'strips trailing slash from directory path' {
+        $result = Invoke-BashBasename '/foo/bar/'
+        $result.BashText | Should -Be 'bar'
+    }
+
+    It 'returns name when no directory' {
+        $result = Invoke-BashBasename 'file.txt'
+        $result.BashText | Should -Be 'file.txt'
+    }
+}
+
+Describe 'Invoke-BashBasename — Suffix Removal' {
+    It 'removes suffix with -s flag' {
+        $result = Invoke-BashBasename -s '.txt' '/foo/bar.txt'
+        $result.BashText | Should -Be 'bar'
+    }
+
+    It 'does not remove suffix if it does not match' {
+        $result = Invoke-BashBasename -s '.log' '/foo/bar.txt'
+        $result.BashText | Should -Be 'bar.txt'
+    }
+
+    It 'does not remove suffix that equals the entire name' {
+        $result = Invoke-BashBasename -s 'bar' '/foo/bar'
+        $result.BashText | Should -Be 'bar'
+    }
+}
+
+Describe 'Invoke-BashBasename — Multiple Paths' {
+    It 'handles multiple path arguments' {
+        $results = @(Invoke-BashBasename '/a/one.txt' '/b/two.txt')
+        $results.Count | Should -Be 2
+        $results[0].BashText | Should -Be 'one.txt'
+        $results[1].BashText | Should -Be 'two.txt'
+    }
+}
+
+Describe 'Invoke-BashBasename — Alias' {
+    It 'basename alias resolves to Invoke-BashBasename' {
+        $alias = Get-Alias -Name basename -Scope Global
+        $alias.Definition | Should -Be 'Invoke-BashBasename'
+    }
+}
+
+# ── Invoke-BashDirname ──────────────────────────────────────────────────
+
+Describe 'Invoke-BashDirname — Basic' {
+    It 'extracts directory from path' {
+        $result = Invoke-BashDirname '/foo/bar.txt'
+        $result.BashText | Should -Be '/foo'
+    }
+
+    It 'returns parent for nested directory' {
+        $result = Invoke-BashDirname '/foo/bar/baz'
+        $result.BashText | Should -Be '/foo/bar'
+    }
+
+    It 'returns . for bare filename' {
+        $result = Invoke-BashDirname 'file.txt'
+        $result.BashText | Should -Be '.'
+    }
+
+    It 'returns / for root path' {
+        $result = Invoke-BashDirname '/file.txt'
+        $result.BashText | Should -Be '/'
+    }
+}
+
+Describe 'Invoke-BashDirname — Multiple Paths' {
+    It 'handles multiple path arguments' {
+        $results = @(Invoke-BashDirname '/a/one.txt' '/b/two.txt')
+        $results.Count | Should -Be 2
+        $results[0].BashText | Should -Be '/a'
+        $results[1].BashText | Should -Be '/b'
+    }
+}
+
+Describe 'Invoke-BashDirname — Alias' {
+    It 'dirname alias resolves to Invoke-BashDirname' {
+        $alias = Get-Alias -Name dirname -Scope Global
+        $alias.Definition | Should -Be 'Invoke-BashDirname'
+    }
+}
+
+# ── Invoke-BashPwd ──────────────────────────────────────────────────────
+
+Describe 'Invoke-BashPwd — Basic' {
+    It 'returns current directory with forward slashes' {
+        $result = Invoke-BashPwd
+        $result.BashText | Should -Not -BeNullOrEmpty
+        $result.BashText | Should -Not -Match '\\'
+    }
+
+    It 'matches Get-Location result' {
+        $result = Invoke-BashPwd
+        $expected = (Get-Location).Path -replace '\\', '/'
+        $result.BashText | Should -Be $expected
+    }
+}
+
+Describe 'Invoke-BashPwd — Alias' {
+    It 'pwd alias resolves to Invoke-BashPwd' {
+        $alias = Get-Alias -Name pwd -Scope Global
+        $alias.Definition | Should -Be 'Invoke-BashPwd'
+    }
+}
+
+# ── Invoke-BashHostname ─────────────────────────────────────────────────
+
+Describe 'Invoke-BashHostname — Basic' {
+    It 'returns machine hostname' {
+        $result = Invoke-BashHostname
+        $result.BashText | Should -Not -BeNullOrEmpty
+        $result.BashText | Should -Be ([System.Net.Dns]::GetHostName())
+    }
+}
+
+Describe 'Invoke-BashHostname — Alias' {
+    It 'hostname alias resolves to Invoke-BashHostname' {
+        $alias = Get-Alias -Name hostname -Scope Global
+        $alias.Definition | Should -Be 'Invoke-BashHostname'
+    }
+}
+
+# ── Invoke-BashWhoami ───────────────────────────────────────────────────
+
+Describe 'Invoke-BashWhoami — Basic' {
+    It 'returns current username' {
+        $result = Invoke-BashWhoami
+        $result.BashText | Should -Not -BeNullOrEmpty
+        $expected = [System.Environment]::UserName
+        $result.BashText | Should -Be $expected
+    }
+}
+
+Describe 'Invoke-BashWhoami — Alias' {
+    It 'whoami alias resolves to Invoke-BashWhoami' {
+        $alias = Get-Alias -Name whoami -Scope Global
+        $alias.Definition | Should -Be 'Invoke-BashWhoami'
+    }
+}
+
+# ── Slice 19 Pipeline Bridge ────────────────────────────────────────────
+
+Describe 'Slice 19 — Pipeline Bridge' {
+    It 'env output pipes to grep' {
+        $results = @(Invoke-BashEnv | Invoke-BashGrep 'PATH')
+        $results.Count | Should -BeGreaterOrEqual 1
+    }
+
+    It 'basename output pipes to grep' {
+        $result = Invoke-BashBasename '/foo/bar.txt' | Invoke-BashGrep 'bar'
+        $result | Should -Not -BeNullOrEmpty
+    }
+}
