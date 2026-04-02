@@ -7971,6 +7971,312 @@ function Invoke-BashFile {
     }
 }
 
+# --- rg (ripgrep-style search) ---
+
+function Invoke-BashRg {
+    $Arguments = [string[]]$args
+    $pipelineInput = @($input)
+    if ($Arguments -contains '--help') { return Show-BashHelp 'rg' }
+
+    $ignoreCase = $false
+    $wordRegexp = $false
+    $countOnly = $false
+    $filesOnly = $false
+    $showLineNumbers = $true
+    $onlyMatching = $false
+    $invertMatch = $false
+    $fixedStrings = $false
+    $includeHidden = $false
+    $afterContext = 0
+    $beforeContext = 0
+    $globPattern = $null
+    $pattern = $null
+    $operands = [System.Collections.Generic.List[string]]::new()
+    $pastDoubleDash = $false
+
+    $i = 0
+    while ($i -lt $Arguments.Count) {
+        $arg = $Arguments[$i]
+
+        if ($pastDoubleDash) {
+            $operands.Add($arg)
+            $i++
+            continue
+        }
+
+        if ($arg -eq '--') {
+            $pastDoubleDash = $true
+            $i++
+            continue
+        }
+
+        if ($arg -cmatch '^-([ABC])(\d+)$') {
+            switch ($Matches[1]) {
+                'A' { $afterContext = [int]$Matches[2] }
+                'B' { $beforeContext = [int]$Matches[2] }
+                'C' { $afterContext = [int]$Matches[2]; $beforeContext = [int]$Matches[2] }
+            }
+            $i++
+            continue
+        }
+
+        if ($arg -cmatch '^-([ABC])$') {
+            $flag = $Matches[1]
+            $i++
+            if ($i -lt $Arguments.Count) {
+                $val = [int]$Arguments[$i]
+                switch ($flag) {
+                    'A' { $afterContext = $val }
+                    'B' { $beforeContext = $val }
+                    'C' { $afterContext = $val; $beforeContext = $val }
+                }
+            }
+            $i++
+            continue
+        }
+
+        if ($arg -eq '-g' -or $arg -eq '--glob') {
+            $i++
+            if ($i -lt $Arguments.Count) { $globPattern = $Arguments[$i] }
+            $i++
+            continue
+        }
+
+        if ($arg -cmatch '^-g(.+)$') {
+            $globPattern = $Matches[1]
+            $i++
+            continue
+        }
+
+        if ($arg -eq '--hidden') {
+            $includeHidden = $true
+            $i++
+            continue
+        }
+
+        if ($arg.StartsWith('-') -and $arg.Length -gt 1 -and -not $arg.StartsWith('--')) {
+            foreach ($ch in $arg.Substring(1).ToCharArray()) {
+                switch ($ch) {
+                    'i' { $ignoreCase = $true }
+                    'w' { $wordRegexp = $true }
+                    'c' { $countOnly = $true }
+                    'l' { $filesOnly = $true }
+                    'n' { $showLineNumbers = $true }
+                    'N' { $showLineNumbers = $false }
+                    'o' { $onlyMatching = $true }
+                    'v' { $invertMatch = $true }
+                    'F' { $fixedStrings = $true }
+                }
+            }
+            $i++
+            continue
+        }
+
+        if ($arg -eq '--ignore-case') { $ignoreCase = $true; $i++; continue }
+        if ($arg -eq '--word-regexp') { $wordRegexp = $true; $i++; continue }
+        if ($arg -eq '--count') { $countOnly = $true; $i++; continue }
+        if ($arg -eq '--files-with-matches') { $filesOnly = $true; $i++; continue }
+        if ($arg -eq '--line-number') { $showLineNumbers = $true; $i++; continue }
+        if ($arg -eq '--no-line-number') { $showLineNumbers = $false; $i++; continue }
+        if ($arg -eq '--only-matching') { $onlyMatching = $true; $i++; continue }
+        if ($arg -eq '--invert-match') { $invertMatch = $true; $i++; continue }
+        if ($arg -eq '--fixed-strings') { $fixedStrings = $true; $i++; continue }
+
+        $operands.Add($arg)
+        $i++
+    }
+
+    if ($operands.Count -eq 0) {
+        throw 'rg: usage: rg [options] pattern [path ...]'
+    }
+
+    $pattern = $operands[0]
+    $fileOperands = @(if ($operands.Count -gt 1) { $operands.GetRange(1, $operands.Count - 1) } else { @() })
+
+    if ($fixedStrings) { $pattern = [regex]::Escape($pattern) }
+    if ($wordRegexp) { $pattern = "\b${pattern}\b" }
+
+    $regexOpts = [System.Text.RegularExpressions.RegexOptions]::None
+    if ($ignoreCase) { $regexOpts = $regexOpts -bor [System.Text.RegularExpressions.RegexOptions]::IgnoreCase }
+    $regex = [regex]::new($pattern, $regexOpts)
+
+    # --- Pipeline mode ---
+    if ($pipelineInput.Count -gt 0 -and $fileOperands.Count -eq 0) {
+        $matchCount = 0
+
+        foreach ($item in $pipelineInput) {
+            $text = Get-BashText -InputObject $item
+            $matchText = $text -replace "`n$", ''
+            $isMatch = $regex.IsMatch($matchText)
+            if ($invertMatch) { $isMatch = -not $isMatch }
+
+            if ($isMatch) {
+                $matchCount++
+                if (-not $countOnly) {
+                    if ($onlyMatching) {
+                        foreach ($m in $regex.Matches($matchText)) {
+                            New-BashObject -BashText $m.Value
+                        }
+                    } else {
+                        $item
+                    }
+                }
+            }
+        }
+
+        if ($countOnly) {
+            New-BashObject -BashText "$matchCount"
+        }
+        return
+    }
+
+    # --- File mode (recursive by default) ---
+    $filePaths = [System.Collections.Generic.List[string]]::new()
+    $searchTargets = if ($fileOperands.Count -gt 0) { $fileOperands } else { @('.') }
+
+    foreach ($target in $searchTargets) {
+        if (-not (Test-Path -LiteralPath $target)) {
+            Write-Error -Message "rg: ${target}: No such file or directory" -ErrorAction Continue
+            continue
+        }
+
+        if (Test-Path -LiteralPath $target -PathType Container) {
+            Get-ChildItem -LiteralPath $target -Recurse -File -Force:$includeHidden | ForEach-Object {
+                $rel = $_.FullName
+                if ($rel -match '[\\/]\.git[\\/]') { return }
+                if (-not $includeHidden) {
+                    $relFromTarget = $rel.Substring((Resolve-Path -LiteralPath $target).Path.Length)
+                    if ($relFromTarget -match '[\\/]\.[^\\/]') { return }
+                }
+                if ($globPattern) {
+                    if (-not ($_.Name -like $globPattern)) { return }
+                }
+                $filePaths.Add($_.FullName)
+            }
+        } else {
+            $filePaths.Add((Resolve-Path -LiteralPath $target).Path)
+        }
+    }
+
+    $multipleFiles = $filePaths.Count -gt 1 -or @($searchTargets | Where-Object { Test-Path -LiteralPath $_ -PathType Container }).Count -gt 0
+    $matchedFiles = [System.Collections.Generic.List[string]]::new()
+    $perFileCounts = [System.Collections.Generic.Dictionary[string,int]]::new()
+    $totalMatchCount = 0
+
+    foreach ($filePath in $filePaths) {
+        $bytes = [System.IO.File]::ReadAllBytes($filePath)
+        $byteOffset = 0
+        if ($bytes.Length -ge 3 -and $bytes[0] -eq 0xEF -and $bytes[1] -eq 0xBB -and $bytes[2] -eq 0xBF) {
+            $byteOffset = 3
+        }
+        $rawText = [System.Text.Encoding]::UTF8.GetString($bytes, $byteOffset, $bytes.Length - $byteOffset)
+        $rawText = $rawText -replace "`r`n", "`n"
+        if ($rawText.EndsWith("`n")) {
+            $rawText = $rawText.Substring(0, $rawText.Length - 1)
+        }
+        $lines = $rawText.Split("`n")
+
+        $matchIndices = [System.Collections.Generic.List[int]]::new()
+        for ($li = 0; $li -lt $lines.Count; $li++) {
+            $isMatch = $regex.IsMatch($lines[$li])
+            if ($invertMatch) { $isMatch = -not $isMatch }
+            if ($isMatch) { $matchIndices.Add($li) }
+        }
+
+        $fileMatchCount = $matchIndices.Count
+        $totalMatchCount += $fileMatchCount
+        $perFileCounts[$filePath] = $fileMatchCount
+
+        if ($filesOnly) {
+            if ($fileMatchCount -gt 0) { $matchedFiles.Add($filePath) }
+            continue
+        }
+
+        if ($countOnly) { continue }
+
+        $emitLines = [System.Collections.Generic.HashSet[int]]::new()
+        foreach ($mi in $matchIndices) {
+            $start = [System.Math]::Max(0, $mi - $beforeContext)
+            $end = [System.Math]::Min($lines.Count - 1, $mi + $afterContext)
+            for ($li = $start; $li -le $end; $li++) {
+                [void]$emitLines.Add($li)
+            }
+        }
+
+        $sortedEmit = $emitLines | Sort-Object
+        foreach ($li in $sortedEmit) {
+            $line = $lines[$li]
+            $lineNum = $li + 1
+
+            if ($onlyMatching -and $matchIndices.Contains($li)) {
+                foreach ($m in $regex.Matches($line)) {
+                    $matchText = $m.Value
+                    $bashText = if ($multipleFiles -and $showLineNumbers) {
+                        "${filePath}:${lineNum}:${matchText}"
+                    } elseif ($multipleFiles) {
+                        "${filePath}:${matchText}"
+                    } elseif ($showLineNumbers) {
+                        "${lineNum}:${matchText}"
+                    } else {
+                        $matchText
+                    }
+                    $obj = [PSCustomObject]@{
+                        PSTypeName = 'PsBash.RgMatch'
+                        FileName   = $filePath
+                        LineNumber = $lineNum
+                        Line       = $line
+                        BashText   = $bashText
+                    }
+                    $obj | Add-Member -MemberType ScriptMethod -Name 'ToString' -Value {
+                        $this.BashText
+                    } -Force
+                    $obj
+                }
+                continue
+            }
+
+            $bashText = if ($multipleFiles -and $showLineNumbers) {
+                "${filePath}:${lineNum}:${line}"
+            } elseif ($multipleFiles) {
+                "${filePath}:${line}"
+            } elseif ($showLineNumbers) {
+                "${lineNum}:${line}"
+            } else {
+                $line
+            }
+
+            $obj = [PSCustomObject]@{
+                PSTypeName = 'PsBash.RgMatch'
+                FileName   = $filePath
+                LineNumber = $lineNum
+                Line       = $line
+                BashText   = $bashText
+            }
+            $obj | Add-Member -MemberType ScriptMethod -Name 'ToString' -Value {
+                $this.BashText
+            } -Force
+            $obj
+        }
+    }
+
+    if ($filesOnly) {
+        foreach ($fp in $matchedFiles) {
+            New-BashObject -BashText $fp
+        }
+        return
+    }
+
+    if ($countOnly) {
+        if ($multipleFiles) {
+            foreach ($filePath in $filePaths) {
+                New-BashObject -BashText "${filePath}:$($perFileCounts[$filePath])"
+            }
+        } else {
+            New-BashObject -BashText "$totalMatchCount"
+        }
+    }
+}
+
 # --- Help Support ---
 
 $script:BashHelpSpecs = @{
@@ -7979,6 +8285,7 @@ $script:BashHelpSpecs = @{
     'ls'       = 'List directory contents.'
     'cat'      = 'Concatenate files and print on the standard output.'
     'grep'     = 'Print lines that match patterns.'
+    'rg'       = 'Recursively search the current directory for a regex pattern.'
     'sort'     = 'Sort lines of text files.'
     'head'     = 'Output the first part of files.'
     'tail'     = 'Output the last part of files.'
@@ -8089,6 +8396,13 @@ $script:BashFlagSpecs = @{
         @('-c', 'count only'),        @('-r', 'recursive'),        @('-l', 'files with matches'),
         @('-E', 'extended regex'),    @('-A', 'after context'),    @('-B', 'before context'),
         @('-C', 'context')
+    )
+    'rg'       = @(
+        @('-i', 'ignore case'),       @('-w', 'word regexp'),      @('-c', 'count matches'),
+        @('-l', 'files with matches'),@('-n', 'line numbers'),     @('-N', 'no line numbers'),
+        @('-o', 'only matching'),     @('-v', 'invert match'),     @('-F', 'fixed strings'),
+        @('-g', 'glob filter'),       @('-A', 'after context'),    @('-B', 'before context'),
+        @('-C', 'context'),           @('--hidden', 'include dotfiles')
     )
     'sort'     = @(
         @('-r', 'reverse'),           @('-n', 'numeric sort'),     @('-u', 'unique'),
@@ -8253,3 +8567,4 @@ Set-Alias -Name 'md5sum'   -Value 'Invoke-BashMd5sum'   -Force -Scope Global -Op
 Set-Alias -Name 'sha1sum'  -Value 'Invoke-BashSha1sum'  -Force -Scope Global -Option AllScope
 Set-Alias -Name 'sha256sum' -Value 'Invoke-BashSha256sum' -Force -Scope Global -Option AllScope
 Set-Alias -Name 'file'     -Value 'Invoke-BashFile'     -Force -Scope Global -Option AllScope
+Set-Alias -Name 'rg'       -Value 'Invoke-BashRg'       -Force -Scope Global -Option AllScope

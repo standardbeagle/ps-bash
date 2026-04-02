@@ -104,6 +104,7 @@ FunctionsToExport = 'Invoke-BashEcho', 'Invoke-BashPrintf', 'Get-BashPlatform',
                'Invoke-BashStrings', 'Invoke-BashSplit', 'Invoke-BashTac',
                'Invoke-BashBase64', 'Invoke-BashMd5sum', 'Invoke-BashSha1sum',
                'Invoke-BashSha256sum', 'Invoke-BashFile',
+               'Invoke-BashRg',
                'Register-BashCompletions',
                'Test-BashHelpFlag', 'Show-BashHelp'
 
@@ -123,7 +124,8 @@ AliasesToExport = 'echo', 'printf', 'ls', 'cat', 'grep', 'sort', 'head', 'tail',
                'du', 'tree',
                'env', 'printenv', 'basename', 'dirname', 'pwd', 'hostname', 'whoami',
                'fold', 'expand', 'unexpand', 'strings', 'split', 'tac',
-               'base64', 'md5sum', 'sha1sum', 'sha256sum', 'file'
+               'base64', 'md5sum', 'sha1sum', 'sha256sum', 'file',
+               'rg'
 
 # DSC resources to export from this module
 # DscResourcesToExport = @()

@@ -5374,3 +5374,219 @@ Describe 'Invoke-BashFile — detect file type' {
         $result.FileType | Should -Match 'GIF'
     }
 }
+
+# --- rg (ripgrep-style search) ---
+
+Describe 'Invoke-BashRg -- File Mode' {
+    BeforeAll {
+        $rgDir = Join-Path ([System.IO.Path]::GetTempPath()) "psbash-rg-test-$(Get-Random)"
+        New-Item -Path $rgDir -ItemType Directory -Force | Out-Null
+
+        $rgFile = Join-Path $rgDir 'sample.txt'
+        [System.IO.File]::WriteAllText($rgFile, "hello world`nfoo bar`nHELLO UPPER`nskip this`nbaz foo`n", [System.Text.UTF8Encoding]::new($false))
+
+        $rgFile2 = Join-Path $rgDir 'other.txt'
+        [System.IO.File]::WriteAllText($rgFile2, "alpha`nbeta`ngamma`n", [System.Text.UTF8Encoding]::new($false))
+
+        $contextFile = Join-Path $rgDir 'context.txt'
+        [System.IO.File]::WriteAllText($contextFile, "line1`nline2`nmatch here`nline4`nline5`nline6`n", [System.Text.UTF8Encoding]::new($false))
+
+        $subDir = Join-Path $rgDir 'sub'
+        New-Item -Path $subDir -ItemType Directory -Force | Out-Null
+        $nestedFile = Join-Path $subDir 'nested.txt'
+        [System.IO.File]::WriteAllText($nestedFile, "nested match`nno match here wait yes match`n", [System.Text.UTF8Encoding]::new($false))
+
+        $dotFile = Join-Path $rgDir '.hidden.txt'
+        [System.IO.File]::WriteAllText($dotFile, "secret match`n", [System.Text.UTF8Encoding]::new($false))
+
+        $gitDir = Join-Path $rgDir '.git'
+        New-Item -Path $gitDir -ItemType Directory -Force | Out-Null
+        $gitFile = Join-Path $gitDir 'config'
+        [System.IO.File]::WriteAllText($gitFile, "match in git`n", [System.Text.UTF8Encoding]::new($false))
+    }
+
+    AfterAll {
+        Remove-Item -Path $rgDir -Recurse -Force -ErrorAction SilentlyContinue
+    }
+
+    It 'rg pattern file.txt returns matches with file:line:content format' {
+        $results = @(Invoke-BashRg 'hello' $rgFile)
+        $results.Count | Should -Be 1
+        $results[0].PSTypeNames[0] | Should -Be 'PsBash.RgMatch'
+        $results[0].Line | Should -Be 'hello world'
+        $results[0].LineNumber | Should -Be 1
+        $results[0].FileName | Should -Be $rgFile
+        $results[0].BashText | Should -Be "1:hello world"
+    }
+
+    It 'rg pattern ./dir searches recursively by default' {
+        $results = @(Invoke-BashRg 'match' $rgDir)
+        $matchLines = $results | ForEach-Object { $_.Line }
+        $matchLines | Should -Contain 'match here'
+        $matchLines | Should -Contain 'nested match'
+    }
+
+    It 'rg -i PATTERN file.txt matches case insensitively' {
+        $results = @(Invoke-BashRg -i 'HELLO' $rgFile)
+        $results.Count | Should -Be 2
+        $results[0].Line | Should -Be 'hello world'
+        $results[1].Line | Should -Be 'HELLO UPPER'
+    }
+
+    It 'rg -c pattern file.txt counts per file' {
+        $results = @(Invoke-BashRg -c 'foo' $rgFile)
+        $results.Count | Should -Be 1
+        $results[0].BashText | Should -Be '2'
+    }
+
+    It 'rg -l pattern ./dir shows filenames only' {
+        $results = @(Invoke-BashRg -l 'match' $rgDir)
+        $results.Count | Should -BeGreaterOrEqual 2
+        $texts = $results | ForEach-Object { $_.BashText }
+        ($texts | Where-Object { $_ -match 'context\.txt' }).Count | Should -Be 1
+        ($texts | Where-Object { $_ -match 'nested\.txt' }).Count | Should -Be 1
+    }
+
+    It 'rg -w word file.txt matches whole words only' {
+        $results = @(Invoke-BashRg -w 'foo' $rgFile)
+        $results.Count | Should -Be 2
+        $results[0].Line | Should -Be 'foo bar'
+        $results[1].Line | Should -Be 'baz foo'
+    }
+
+    It 'rg -F literal. file.txt escapes regex metacharacters' {
+        $literalFile = Join-Path $rgDir 'literal.txt'
+        [System.IO.File]::WriteAllText($literalFile, "a.b`naxb`na\.b`n", [System.Text.UTF8Encoding]::new($false))
+        $results = @(Invoke-BashRg -F 'a.b' $literalFile)
+        $results.Count | Should -Be 1
+        $results[0].Line | Should -Be 'a.b'
+    }
+
+    It 'rg -v skip file.txt inverts match' {
+        $results = @(Invoke-BashRg -v 'skip' $rgFile)
+        $results.Count | Should -Be 4
+        $results | ForEach-Object { $_.Line | Should -Not -Match 'skip' }
+    }
+
+    It 'rg -g *.txt pattern ./dir filters by glob' {
+        $logFile = Join-Path $rgDir 'data.log'
+        [System.IO.File]::WriteAllText($logFile, "match in log`n", [System.Text.UTF8Encoding]::new($false))
+        $results = @(Invoke-BashRg -g '*.txt' 'match' $rgDir)
+        $fileNames = $results | ForEach-Object { $_.FileName }
+        $fileNames | ForEach-Object { $_ | Should -Match '\.txt$' }
+    }
+
+    It 'rg -o pattern file.txt returns only matching part' {
+        $results = @(Invoke-BashRg -o 'foo' $rgFile)
+        $results.Count | Should -Be 2
+        $results[0].BashText | Should -Match 'foo'
+        $results[1].BashText | Should -Match 'foo'
+    }
+
+    It 'rg -N pattern file.txt suppresses line numbers' {
+        $results = @(Invoke-BashRg -N 'hello' $rgFile)
+        $results[0].BashText | Should -Be 'hello world'
+    }
+
+    It 'rg skips dotfiles by default' {
+        $results = @(Invoke-BashRg 'secret' $rgDir)
+        $fileNames = $results | ForEach-Object { $_.FileName }
+        $fileNames | ForEach-Object { $_ | Should -Not -Match '\.hidden\.txt' }
+    }
+
+    It 'rg --hidden includes dotfiles' {
+        $results = @(Invoke-BashRg --hidden 'secret' $rgDir)
+        $fileNames = $results | ForEach-Object { $_.FileName }
+        ($fileNames | Where-Object { $_ -match '\.hidden\.txt' }).Count | Should -Be 1
+    }
+
+    It 'rg always skips .git directories' {
+        $results = @(Invoke-BashRg --hidden 'match' $rgDir)
+        $fileNames = $results | ForEach-Object { $_.FileName }
+        $fileNames | ForEach-Object { $_ | Should -Not -Match '[\\/]\.git[\\/]' }
+    }
+
+    It 'rg -A2 -B1 pattern file shows context lines' {
+        $results = @(Invoke-BashRg -A2 -B1 'match' $contextFile)
+        $lines = $results | ForEach-Object { $_.Line }
+        $lines | Should -Contain 'line2'
+        $lines | Should -Contain 'match here'
+        $lines | Should -Contain 'line4'
+        $lines | Should -Contain 'line5'
+    }
+
+    It 'rg -C1 pattern file shows symmetric context' {
+        $results = @(Invoke-BashRg -C1 'match' $contextFile)
+        $lines = $results | ForEach-Object { $_.Line }
+        $lines | Should -Contain 'line2'
+        $lines | Should -Contain 'match here'
+        $lines | Should -Contain 'line4'
+    }
+
+    It 'rg with multiple files shows filename in BashText' {
+        $results = @(Invoke-BashRg 'alpha' $rgFile $rgFile2)
+        $match = $results | Where-Object { $_.Line -eq 'alpha' }
+        $match.BashText | Should -Match ':'
+        $match.BashText | Should -Match 'alpha'
+    }
+
+    It 'RgMatch ToString returns BashText' {
+        $results = @(Invoke-BashRg 'hello' $rgFile)
+        "$($results[0])" | Should -Be $results[0].BashText
+    }
+
+    It 'rg nonexistent file writes error' {
+        $result = Invoke-BashRg 'pattern' '/nonexistent/xyz.txt' 2>&1
+        $errors = @($result | Where-Object { $_ -is [System.Management.Automation.ErrorRecord] })
+        $errors.Count | Should -BeGreaterThan 0
+    }
+
+    It 'throws with no arguments' {
+        { Invoke-BashRg } | Should -Throw
+    }
+
+    It 'exports rg alias pointing to Invoke-BashRg' {
+        $alias = Get-Alias -Name rg -Scope Global
+        $alias.Definition | Should -Be 'Invoke-BashRg'
+    }
+}
+
+Describe 'Invoke-BashRg -- Pipeline Bridge' {
+    It 'echo hello | rg h passes through original objects' {
+        $result = @(Invoke-BashEcho -n 'hello' | Invoke-BashRg 'h')
+        $result.Count | Should -Be 1
+        $result[0].BashText | Should -Be 'hello'
+    }
+
+    It 'echo hello | rg x returns nothing' {
+        $result = @(Invoke-BashEcho -n 'hello' | Invoke-BashRg 'x')
+        $result.Count | Should -Be 0
+    }
+
+    It 'pipeline with -c returns count' {
+        $result = @(Invoke-BashEcho -n 'hello' | Invoke-BashRg -c 'h')
+        $result[0].BashText | Should -Be '1'
+    }
+
+    It 'pipeline with -v inverts match' {
+        $result = @(Invoke-BashEcho -n 'hello' | Invoke-BashRg -v 'x')
+        $result.Count | Should -Be 1
+    }
+
+    It 'pipeline with -o returns only matching part' {
+        $result = @(Invoke-BashEcho -n 'hello world' | Invoke-BashRg -o 'wor')
+        $result.Count | Should -Be 1
+        $result[0].BashText | Should -Be 'wor'
+    }
+}
+
+Describe 'rg --help -- returns help with all rg flags' {
+    It 'returns help text' {
+        $result = rg --help
+        $result.BashText | Should -Match 'Usage: rg'
+        $result.BashText | Should -Match '-i'
+        $result.BashText | Should -Match '-w'
+        $result.BashText | Should -Match '-F'
+        $result.BashText | Should -Match '--hidden'
+    }
+}
