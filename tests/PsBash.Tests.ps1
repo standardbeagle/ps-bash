@@ -3345,3 +3345,179 @@ Describe 'Invoke-BashPaste — Alias' {
         $alias.Definition | Should -Be 'Invoke-BashPaste'
     }
 }
+
+# ── tee ──────────────────────────────────────────────────────────────
+
+Describe 'Invoke-BashTee — Basic Output' {
+    BeforeAll {
+        $testDir = Join-Path ([System.IO.Path]::GetTempPath()) "psbash-tee-$([guid]::NewGuid().ToString('N').Substring(0,8))"
+        New-Item -ItemType Directory -Path $testDir -Force | Out-Null
+    }
+    AfterAll {
+        Remove-Item -Recurse -Force $testDir -ErrorAction SilentlyContinue
+    }
+
+    It 'writes to file and passes through to stdout' {
+        $outFile = Join-Path $testDir 'out.txt'
+        $results = @(Invoke-BashEcho 'hello' | Invoke-BashTee $outFile)
+        $results.Count | Should -Be 1
+        (Get-BashText -InputObject $results[0]) | Should -Be "hello`n"
+        $content = [System.IO.File]::ReadAllText($outFile)
+        $content | Should -Be "hello`n"
+    }
+
+    It 'writes multiple lines to file' {
+        $outFile = Join-Path $testDir 'multi.txt'
+        $results = @(Invoke-BashEcho -e "a`nb`nc" | Invoke-BashTee $outFile)
+        $results.Count | Should -Be 1
+        $content = [System.IO.File]::ReadAllText($outFile)
+        $content | Should -Be "a`nb`nc`n"
+    }
+}
+
+Describe 'Invoke-BashTee — Append Mode' {
+    BeforeAll {
+        $testDir = Join-Path ([System.IO.Path]::GetTempPath()) "psbash-teea-$([guid]::NewGuid().ToString('N').Substring(0,8))"
+        New-Item -ItemType Directory -Path $testDir -Force | Out-Null
+    }
+    AfterAll {
+        Remove-Item -Recurse -Force $testDir -ErrorAction SilentlyContinue
+    }
+
+    It 'appends to existing file with -a flag' {
+        $outFile = Join-Path $testDir 'append.txt'
+        Invoke-BashEcho 'first' | Invoke-BashTee $outFile | Out-Null
+        Invoke-BashEcho 'second' | Invoke-BashTee -a $outFile | Out-Null
+        $content = [System.IO.File]::ReadAllText($outFile)
+        $content | Should -Be "first`nsecond`n"
+    }
+
+    It 'creates file in append mode if not exists' {
+        $outFile = Join-Path $testDir 'newappend.txt'
+        Invoke-BashEcho 'data' | Invoke-BashTee -a $outFile | Out-Null
+        $content = [System.IO.File]::ReadAllText($outFile)
+        $content | Should -Be "data`n"
+    }
+}
+
+Describe 'Invoke-BashTee — Object Passthrough' {
+    BeforeAll {
+        $testDir = Join-Path ([System.IO.Path]::GetTempPath()) "psbash-teeobj-$([guid]::NewGuid().ToString('N').Substring(0,8))"
+        New-Item -ItemType Directory -Path $testDir -Force | Out-Null
+    }
+    AfterAll {
+        Remove-Item -Recurse -Force $testDir -ErrorAction SilentlyContinue
+    }
+
+    It 'passes original objects through pipeline while writing BashText to file' {
+        Set-Content -Path (Join-Path $testDir 'sample.txt') -Value 'test' -NoNewline
+        $outFile = Join-Path $testDir 'listing.txt'
+        $results = @(Invoke-BashLs $testDir | Invoke-BashTee $outFile)
+        $results.Count | Should -BeGreaterThan 0
+        $results[0].PSTypeNames[0] | Should -BeLike 'PsBash.*'
+        (Test-Path -LiteralPath $outFile) | Should -Be $true
+        $fileContent = [System.IO.File]::ReadAllText($outFile)
+        $fileContent.Length | Should -BeGreaterThan 0
+    }
+
+    It 'writes to multiple files simultaneously' {
+        $out1 = Join-Path $testDir 'copy1.txt'
+        $out2 = Join-Path $testDir 'copy2.txt'
+        $results = @(Invoke-BashEcho 'multi' | Invoke-BashTee $out1 $out2)
+        $results.Count | Should -Be 1
+        [System.IO.File]::ReadAllText($out1) | Should -Be "multi`n"
+        [System.IO.File]::ReadAllText($out2) | Should -Be "multi`n"
+    }
+}
+
+Describe 'Invoke-BashTee — Error Handling' {
+    It 'errors on nonexistent parent directory' {
+        $badPath = Join-Path ([System.IO.Path]::GetTempPath()) 'nonexistent' 'file.txt'
+        { Invoke-BashEcho 'test' | Invoke-BashTee $badPath 2>&1 | Out-Null } | Should -Not -Throw
+        (Test-Path -LiteralPath $badPath) | Should -Be $false
+    }
+}
+
+Describe 'Invoke-BashTee — Alias' {
+    It 'tee alias resolves to Invoke-BashTee' {
+        $alias = Get-Alias -Name tee -Scope Global
+        $alias.Definition | Should -Be 'Invoke-BashTee'
+    }
+}
+
+# ── xargs ────────────────────────────────────────────────────────────
+
+Describe 'Invoke-BashXargs — Basic' {
+    It 'collects input lines and passes as arguments' {
+        $results = @(Invoke-BashEcho -e "a`nb`nc" | Invoke-BashXargs Invoke-BashEcho)
+        $results.Count | Should -Be 1
+        (Get-BashText -InputObject $results[0]) | Should -Be "a b c`n"
+    }
+
+    It 'works with no pipeline input (empty)' {
+        $results = @(@() | Invoke-BashXargs Invoke-BashEcho)
+        $results.Count | Should -Be 1
+        (Get-BashText -InputObject $results[0]) | Should -Be "`n"
+    }
+}
+
+Describe 'Invoke-BashXargs — Replacement Mode' {
+    It 'replaces {} with each input line using -I' {
+        $results = @(Invoke-BashEcho -e "a`nb" | Invoke-BashXargs -I '{}' Invoke-BashEcho 'file: {}')
+        $results.Count | Should -Be 2
+        (Get-BashText -InputObject $results[0]) | Should -Be "file: a`n"
+        (Get-BashText -InputObject $results[1]) | Should -Be "file: b`n"
+    }
+}
+
+Describe 'Invoke-BashXargs — Max Args' {
+    It 'limits args per invocation with -n' {
+        $results = @(Invoke-BashEcho -e "a`nb`nc`nd" | Invoke-BashXargs -n 2 Invoke-BashEcho)
+        $results.Count | Should -Be 2
+        (Get-BashText -InputObject $results[0]) | Should -Be "a b`n"
+        (Get-BashText -InputObject $results[1]) | Should -Be "c d`n"
+    }
+
+    It 'handles remainder when not evenly divisible' {
+        $results = @(Invoke-BashEcho -e "a`nb`nc" | Invoke-BashXargs -n 2 Invoke-BashEcho)
+        $results.Count | Should -Be 2
+        (Get-BashText -InputObject $results[0]) | Should -Be "a b`n"
+        (Get-BashText -InputObject $results[1]) | Should -Be "c`n"
+    }
+}
+
+Describe 'Invoke-BashXargs — Integration with PsBash Commands' {
+    BeforeAll {
+        $testDir = Join-Path ([System.IO.Path]::GetTempPath()) "psbash-xargs-$([guid]::NewGuid().ToString('N').Substring(0,8))"
+        New-Item -ItemType Directory -Path $testDir -Force | Out-Null
+        Set-Content -Path (Join-Path $testDir 'a.txt') -Value "hello" -NoNewline
+        Set-Content -Path (Join-Path $testDir 'b.txt') -Value "world" -NoNewline
+    }
+    AfterAll {
+        Remove-Item -Recurse -Force $testDir -ErrorAction SilentlyContinue
+    }
+
+    It 'works with find piped to xargs wc' {
+        $results = @(Invoke-BashFind $testDir -name '*.txt' | Invoke-BashXargs Invoke-BashWc -l)
+        $results.Count | Should -BeGreaterThan 0
+    }
+
+    It 'works with find piped to xargs cat' {
+        $results = @(Invoke-BashFind $testDir -name '*.txt' | Invoke-BashSort | Invoke-BashXargs Invoke-BashCat)
+        $results.Count | Should -Be 2
+    }
+}
+
+Describe 'Invoke-BashXargs — Error Handling' {
+    It 'errors when no command specified' {
+        $results = @(@('a') | Invoke-BashXargs 2>&1)
+        $results[0] | Should -BeOfType [System.Management.Automation.ErrorRecord]
+    }
+}
+
+Describe 'Invoke-BashXargs — Alias' {
+    It 'xargs alias resolves to Invoke-BashXargs' {
+        $alias = Get-Alias -Name xargs -Scope Global
+        $alias.Definition | Should -Be 'Invoke-BashXargs'
+    }
+}

@@ -5462,6 +5462,180 @@ function Invoke-BashPaste {
     }
 }
 
+# --- tee Command ---
+
+function Invoke-BashTee {
+    $Arguments = [string[]]$args
+    $pipelineInput = @($input)
+
+    $append = $false
+    $operands = [System.Collections.Generic.List[string]]::new()
+    $pastDoubleDash = $false
+
+    $i = 0
+    while ($i -lt $Arguments.Count) {
+        $arg = $Arguments[$i]
+
+        if ($pastDoubleDash) {
+            $operands.Add($arg)
+            $i++
+            continue
+        }
+
+        if ($arg -eq '--') {
+            $pastDoubleDash = $true
+            $i++
+            continue
+        }
+
+        if ($arg -ceq '-a') {
+            $append = $true
+            $i++
+            continue
+        }
+
+        $operands.Add($arg)
+        $i++
+    }
+
+    # Collect BashText for file output
+    $textParts = [System.Collections.Generic.List[string]]::new()
+    foreach ($item in $pipelineInput) {
+        $textParts.Add((Get-BashText -InputObject $item))
+    }
+
+    # Join parts: if BashText already has trailing newlines (echo), concatenate directly
+    # If not (ls, grep), join with newlines and add trailing newline
+    $textContent = ''
+    if ($textParts.Count -gt 0) {
+        $hasTrailingNewlines = $textParts[0].EndsWith("`n")
+        if ($hasTrailingNewlines) {
+            $textContent = $textParts -join ''
+        } else {
+            $textContent = ($textParts -join "`n") + "`n"
+        }
+    }
+
+    # Write to each file
+    foreach ($filePath in $operands) {
+        $parentDir = Split-Path -Parent $filePath
+        if ($parentDir -and -not (Test-Path -LiteralPath $parentDir)) {
+            Write-Error -Message "tee: ${filePath}: No such file or directory" -ErrorAction Continue
+            continue
+        }
+        if ($append -and (Test-Path -LiteralPath $filePath)) {
+            $existing = [System.IO.File]::ReadAllText($filePath)
+            [System.IO.File]::WriteAllText($filePath, $existing + $textContent)
+        } else {
+            [System.IO.File]::WriteAllText($filePath, $textContent)
+        }
+    }
+
+    # Pass through original objects
+    foreach ($item in $pipelineInput) {
+        $item
+    }
+}
+
+# --- xargs Command ---
+
+function Invoke-BashXargs {
+    $Arguments = [string[]]$args
+    $pipelineInput = @($input)
+
+    $replaceStr = $null
+    $maxArgs = 0
+    $operands = [System.Collections.Generic.List[string]]::new()
+    $pastDoubleDash = $false
+
+    $i = 0
+    while ($i -lt $Arguments.Count) {
+        $arg = $Arguments[$i]
+
+        if ($pastDoubleDash) {
+            $operands.Add($arg)
+            $i++
+            continue
+        }
+
+        if ($arg -eq '--') {
+            $pastDoubleDash = $true
+            $i++
+            continue
+        }
+
+        if ($arg -ceq '-I') {
+            $i++
+            if ($i -lt $Arguments.Count) {
+                $replaceStr = $Arguments[$i]
+            }
+            $i++
+            continue
+        }
+
+        if ($arg -ceq '-n') {
+            $i++
+            if ($i -lt $Arguments.Count) {
+                $maxArgs = [int]$Arguments[$i]
+            }
+            $i++
+            continue
+        }
+
+        if ($arg -cmatch '^-n(\d+)$') {
+            $maxArgs = [int]$Matches[1]
+            $i++
+            continue
+        }
+
+        $operands.Add($arg)
+        $i++
+    }
+
+    if ($operands.Count -eq 0) {
+        Write-Error -Message "xargs: no command specified" -ErrorAction Continue
+        return
+    }
+
+    $cmd = $operands[0]
+    $cmdArgs = @()
+    if ($operands.Count -gt 1) {
+        $cmdArgs = @($operands[1..($operands.Count - 1)])
+    }
+
+    # Collect input lines: split each BashText by newlines for individual args
+    $inputLines = [System.Collections.Generic.List[string]]::new()
+    foreach ($item in $pipelineInput) {
+        $text = Get-BashText -InputObject $item
+        $splitLines = $text -split "`n"
+        foreach ($line in $splitLines) {
+            if ($line -ne '') {
+                $inputLines.Add($line)
+            }
+        }
+    }
+
+    if ($null -ne $replaceStr) {
+        # Replacement mode: run command once per input line
+        foreach ($line in $inputLines) {
+            $replacedArgs = @($cmdArgs | ForEach-Object { $_ -replace [regex]::Escape($replaceStr), $line })
+            & $cmd @replacedArgs
+        }
+    } elseif ($maxArgs -gt 0) {
+        # Batch mode: run command with N args at a time
+        for ($bi = 0; $bi -lt $inputLines.Count; $bi += $maxArgs) {
+            $end = [System.Math]::Min($bi + $maxArgs, $inputLines.Count) - 1
+            $batch = @($inputLines[$bi..$end])
+            $allArgs = @($cmdArgs) + $batch
+            & $cmd @allArgs
+        }
+    } else {
+        # Default: all args in one invocation
+        $allArgs = @($cmdArgs) + @($inputLines)
+        & $cmd @allArgs
+    }
+}
+
 # --- Aliases ---
 
 Set-Alias -Name 'echo'   -Value 'Invoke-BashEcho'   -Force -Scope Global -Option AllScope
@@ -5495,3 +5669,5 @@ Set-Alias -Name 'comm'    -Value 'Invoke-BashComm'    -Force -Scope Global -Opti
 Set-Alias -Name 'column'  -Value 'Invoke-BashColumn'  -Force -Scope Global -Option AllScope
 Set-Alias -Name 'join'    -Value 'Invoke-BashJoin'    -Force -Scope Global -Option AllScope
 Set-Alias -Name 'paste'   -Value 'Invoke-BashPaste'   -Force -Scope Global -Option AllScope
+Set-Alias -Name 'tee'     -Value 'Invoke-BashTee'     -Force -Scope Global -Option AllScope
+Set-Alias -Name 'xargs'   -Value 'Invoke-BashXargs'   -Force -Scope Global -Option AllScope
