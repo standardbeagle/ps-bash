@@ -73,17 +73,19 @@ PS> find . -name '*.log' -mtime +7 | xargs rm -f    # actually works on Windows
 
 ## Feature Comparison
 
-| | **PsBash** | **Crescendo** | **WSL** | **Manual Parsing** |
-|---|---|---|---|---|
-| Install | `Install-Module` | Per-command XML config | Windows-only VM | N/A |
-| `rm -rf` works | Yes | Depends on wrapper | Yes | N/A |
-| Typed objects | Always | If configured | Never (strings) | Manual effort |
-| Object pipeline | `ls \| grep \| sort` preserves types | Varies | Strings only | Breaks constantly |
-| Cross-platform | Win/Lin/Mac | Win/Lin/Mac | Windows only | Win/Lin/Mac |
-| Commands | 68 built-in | Define your own | All of Linux | Only what you wrap |
-| jq/awk/sed | Built-in, no binaries | Not included | Native Linux | External install |
-| Dependencies | Zero | PowerShell module | Hyper-V/WSL2 | Varies |
-| Learning curve | None if you know bash | XML schema + C# types | Linux admin | Regex/string ops |
+| | **PsBash** | **Git Bash** | **Cygwin** | **WSL** | **Crescendo** |
+|---|---|---|---|---|---|
+| Install | `Install-Module` | Git for Windows | 50+ packages | Hyper-V/WSL2 | Per-command XML |
+| Footprint | **340 KB**, 3 files | ~300 MB (MSYS2 runtime) | ~1-4 GB | ~1-15 GB (full distro) | Module + your wrappers |
+| `rm -rf` works | Yes | Yes | Yes | Yes | If you configure it |
+| Typed objects | Always | Never (strings) | Never (strings) | Never (strings) | If configured |
+| Object pipeline | Types survive `grep \| sort \| head` | Strings only | Strings only | Strings only | Varies |
+| PowerShell integration | Native -- objects flow into cmdlets | Separate shell | Separate shell | Separate shell | Native |
+| Cross-platform | Win/Lin/Mac | Windows only | Windows only | Windows only | Win/Lin/Mac |
+| Commands | 68 built-in | ~80 (GNU coreutils) | ~200+ (full GNU) | All of Linux | Define your own |
+| jq/awk/sed | Built-in, zero binaries | awk/sed yes, jq no | Yes (install pkg) | Yes (apt install) | Not included |
+| PATH conflicts | None (AllScope aliases) | Shadows PowerShell | Shadows PowerShell | Filesystem boundary | None |
+| Startup overhead | ~100 ms (module load) | New process per call | New process per call | ~1s (cold), ~200ms (warm) | ~100 ms |
 
 ## Quick Start
 
