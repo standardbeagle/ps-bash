@@ -2635,7 +2635,7 @@ function Get-DotNetProcEntry {
     $rssKB = [long]($ws / 1024)
     try { $vszKB = [long]($p.VirtualMemorySize64 / 1024) } catch {}
 
-    if ($null -eq $script:TotalMemBytes) {
+    if (-not (Get-Variable -Name TotalMemBytes -Scope Script -ErrorAction SilentlyContinue)) {
         $script:TotalMemBytes = [long]1
         try {
             if ($IsWindows) {
