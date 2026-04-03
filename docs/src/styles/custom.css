@@ -1,0 +1,38 @@
+:root {
+  --sl-font: 'Segoe UI', system-ui, sans-serif;
+  --sl-font-mono: 'Cascadia Code', 'JetBrains Mono', 'Fira Code', ui-monospace, monospace;
+  --sl-color-accent-low: #0d2137;
+  --sl-color-accent: #3b82f6;
+  --sl-color-accent-high: #93c5fd;
+  --sl-color-white: #e2e8f0;
+  --sl-color-gray-1: #cbd5e1;
+  --sl-color-gray-2: #94a3b8;
+  --sl-color-gray-3: #64748b;
+  --sl-color-gray-4: #334155;
+  --sl-color-gray-5: #1e293b;
+  --sl-color-gray-6: #0f172a;
+  --sl-color-black: #020617;
+}
+
+[data-theme='light'] {
+  --sl-color-accent-low: #dbeafe;
+  --sl-color-accent: #2563eb;
+  --sl-color-accent-high: #1e3a5f;
+  --sl-color-white: #020617;
+  --sl-color-gray-1: #1e293b;
+  --sl-color-gray-2: #475569;
+  --sl-color-gray-3: #94a3b8;
+  --sl-color-gray-4: #cbd5e1;
+  --sl-color-gray-5: #e2e8f0;
+  --sl-color-gray-6: #f8fafc;
+  --sl-color-black: #ffffff;
+}
+
+.hero h1 {
+  font-family: var(--sl-font-mono);
+}
+
+code {
+  font-family: var(--sl-font-mono);
+  font-size: 0.9em;
+}

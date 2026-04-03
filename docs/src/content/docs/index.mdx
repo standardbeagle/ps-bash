@@ -1,0 +1,33 @@
+---
+title: ps-bash
+description: Real bash commands. Real PowerShell objects. 68 commands bridging Unix and PowerShell.
+template: splash
+hero:
+  tagline: Real bash commands. Real PowerShell objects.
+  actions:
+    - text: Get Started
+      link: /ps-bash/getting-started/
+      icon: right-arrow
+      variant: primary
+    - text: View on GitHub
+      link: https://github.com/standardbeagle/ps-bash
+      icon: external
+      variant: minimal
+---
+
+import { Card, CardGrid } from '@astrojs/starlight/components';
+
+<CardGrid stagger>
+  <Card title="68 bash commands" icon="terminal">
+    `ls`, `grep`, `awk`, `jq`, `sed`, `find`, `tar` and more -- all implemented as native PowerShell cmdlets that emit typed objects, not raw text.
+  </Card>
+  <Card title="Pipeline-native" icon="rocket">
+    Every command returns structured objects you can filter, sort, and group with standard PowerShell pipeline operators. No more parsing `awk` output.
+  </Card>
+  <Card title="Cross-platform" icon="laptop">
+    Works on Windows, macOS, and Linux. Same commands, same behavior, same objects everywhere PowerShell runs.
+  </Card>
+  <Card title="Zero learning curve" icon="open-book">
+    If you know bash and PowerShell, you already know ps-bash. Familiar command names with PowerShell superpowers.
+  </Card>
+</CardGrid>
