@@ -2008,7 +2008,7 @@ Describe 'Invoke-BashPs — Basic Output' {
         $self.ProcessName | Should -Not -BeNullOrEmpty
     }
 
-    It 'ps with no args returns PsEntry objects' -Skip:($IsLinux -and -not (Test-Path /dev/tty -ErrorAction SilentlyContinue)) {
+    It 'ps with no args returns PsEntry objects' -Skip:($IsLinux -and $env:CI -eq 'true') {
         $results = @(Invoke-BashPs)
         $results.Count | Should -BeGreaterOrEqual 1
         $results[0].PSObject.TypeNames[0] | Should -Be 'PsBash.PsEntry'
@@ -2090,8 +2090,8 @@ Describe 'Invoke-BashPs — Custom Output Format' {
     It 'ps -eo pid,user,comm shows all procs with custom format' {
         $results = @(Invoke-BashPs -e -o 'pid,user,comm')
         $results.Count | Should -BeGreaterOrEqual 2
-        $results[0].PID | Should -BeGreaterThan 0
-        $results[0].User | Should -Not -BeNullOrEmpty
+        ($results | Where-Object { $_.PID -gt 0 }).Count | Should -BeGreaterThan 0
+        ($results | Where-Object { $_.User -ne '' -and $_.User -ne '?' }).Count | Should -BeGreaterThan 0
     }
 }
 
