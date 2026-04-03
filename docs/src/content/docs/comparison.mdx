@@ -125,22 +125,18 @@ WSL gives you a real Linux kernel. PsBash gives you bash-style commands inside t
 | Installation | `Install-Module PsBash` | Windows feature + distro download |
 | Startup time | Instant (module load) | Seconds (VM boot) |
 
-### When WSL Wins
+### When You Need WSL Instead
 
-- **Real Linux tools** -- not reimplementations. The actual GNU coreutils, compiled for Linux.
-- **Shell scripting** -- full bash, zsh, fish with all features: job control, signals, process groups.
-- **Linux-specific software** -- anything that requires a Linux kernel (Docker, systemd, eBPF).
-- **Development environments** -- Node.js, Python, Ruby with Linux-native performance and paths.
-- **Existing scripts** -- your `.bashrc`, shell scripts, and Makefiles run unmodified.
+- **Running existing bash scripts** that use shell features (job control, process substitution, signals).
+- **Docker with Linux containers** or software requiring a Linux kernel.
 
-### When PsBash Wins
+### Why PsBash Over WSL
 
-- **Cross-platform** -- works on macOS and Linux too, not just Windows.
-- **No VM overhead** -- no memory allocation for a Linux instance, no startup delay.
-- **Object pipeline** -- results integrate with PowerShell. `ls -la | Where-Object { $_.SizeBytes -gt 1MB }` works natively.
+- **No VM** -- no 1-15 GB distro, no Hyper-V, no startup delay.
+- **Objects flow into PowerShell** -- `ls -la | Where-Object { $_.SizeBytes -gt 1MB }` works natively. WSL output is text you have to parse.
 - **No filesystem boundary** -- no `/mnt/c` path translation, no permission mismatches, no line-ending issues.
-- **Single environment** -- stay in one shell. No switching between PowerShell and WSL terminals.
-- **.NET access** -- pipe bash-style output directly into .NET APIs, C# code, or PowerShell modules.
+- **Cross-platform** -- works on macOS and Linux too. WSL is Windows-only.
+- **One shell** -- no switching between PowerShell and WSL terminals.
 
 </TabItem>
 <TabItem label="vs Git Bash">
@@ -179,21 +175,19 @@ PS> grep -r 'TODO' src/ | ForEach-Object { $_.FileName } | Sort-Object -Unique
 # Result: objects. Can pipe to any cmdlet.
 ```
 
-### When Git Bash Wins
+### When You Need Git Bash Instead
 
-- **Full GNU compatibility** -- 100% compatible with Linux scripts and Stack Overflow answers.
-- **Shell scripting** -- real bash with job control, process substitution, signal handling.
-- **Already installed** -- if you have Git for Windows, you have Git Bash.
-- **Makefiles** -- `make` needs a real shell, not PowerShell.
+- **Running existing bash scripts** or Makefiles that need a real shell.
+- **You already have it** and just need quick Unix commands outside PowerShell.
 
-### When PsBash Wins
+### Why PsBash Over Git Bash
 
-- **PowerShell integration** -- objects flow into cmdlets, .NET, and scripts without parsing.
-- **No context switching** -- stay in one terminal, one shell, one pipeline.
-- **Cross-platform** -- same commands on macOS and Linux too.
-- **340 KB vs 300 MB** -- PsBash is 1000x smaller.
-- **No PATH conflicts** -- Git Bash prepends MSYS2 to PATH, potentially shadowing Windows tools. PsBash uses PowerShell-scoped aliases.
-- **No line-ending issues** -- MSYS2's `\r\n` translation causes subtle bugs with binary files and git operations.
+- **340 KB vs 300 MB** -- 1000x smaller. No MSYS2 runtime.
+- **Objects, not strings** -- `(ls -la | grep '.log').SizeBytes` vs parsing awk output.
+- **Stays in PowerShell** -- no context switching, no separate process, objects flow into cmdlets.
+- **No PATH conflicts** -- Git Bash prepends MSYS2 to system PATH, shadowing Windows tools. PsBash uses PowerShell-scoped aliases.
+- **No line-ending bugs** -- MSYS2's `\r\n` translation corrupts binary files and causes subtle git issues.
+- **Cross-platform** -- Git Bash is Windows-only. PsBash works everywhere.
 
 </TabItem>
 <TabItem label="vs Cygwin">
@@ -212,45 +206,36 @@ Cygwin is the heavyweight option: a full POSIX compatibility layer for Windows w
 | File paths | Native Windows paths | `/cygdrive/c/Users/...` |
 | Fork support | N/A (no process forking) | Emulated via `cygwin1.dll` (slow) |
 | Package manager | PowerShell Gallery | Cygwin setup.exe (no CLI package manager) |
-| Commands | 68 (focused) | 200+ (full GNU, X11, compilers) |
+| Commands | 68 (focused on scripting) | 200+ (full GNU userland) |
 | Symlinks | PowerShell API | Cygwin-internal (often broken outside Cygwin) |
 | Pipeline to .NET | Native | Not possible |
 | Update process | `Update-Module PsBash` | Rerun setup.exe |
 
-### What Cygwin Gives You That PsBash Does Not
+### When You Need Cygwin Instead
 
-Cygwin includes compilers (gcc), X11, system libraries, man pages, and hundreds of tools PsBash does not reimplement. If you need `rsync`, `ssh-agent`, `make`, `gcc`, `screen`, `tmux`, or X11 forwarding -- you need Cygwin or WSL.
+- **Compiling Linux software on Windows** (gcc, make, autotools).
+- **Running legacy scripts** in organizations with decades of Cygwin workflows.
 
-### What PsBash Gives You That Cygwin Does Not
+### Why PsBash Over Cygwin
 
-Typed objects. One line install. Cross-platform. PowerShell integration. 340 KB.
+- **340 KB vs 1-4 GB** -- ~10,000x smaller. No POSIX emulation layer.
+- **`Install-Module` vs GUI wizard** -- Cygwin's installer has 2000 package checkboxes. PsBash is one command.
+- **Native paths** -- no `/cygdrive/c/` translation. Files are where Windows expects them.
+- **Objects flow into PowerShell** -- Cygwin is a walled garden. Nothing crosses back.
+- **No DLL conflicts** -- `cygwin1.dll` can break other software. PsBash is pure PowerShell.
+- **No fork penalty** -- Cygwin's fork emulation on Windows is notoriously slow. PsBash runs natively.
+- **Updates** -- `Update-Module PsBash` vs re-downloading a 400 MB setup.exe.
+- **Cross-platform** -- Cygwin is Windows-only.
 
 ```powershell
-# Cygwin: real find, but strings, and path translation headaches
+# Cygwin: path translation headaches
 $ find /cygdrive/c/project -name '*.cs' -exec grep -l 'TODO' {} \;
-# Result: /cygdrive/c/project/src/Foo.cs  (Cygwin paths, not Windows paths)
+# /cygdrive/c/project/src/Foo.cs  -- Cygwin paths, not Windows paths
 
 # PsBash: native paths, typed objects
 PS> find . -name '*.cs' | grep 'TODO' -r
-# Result: objects with .FileName = "C:\project\src\Foo.cs" (native Windows paths)
+# objects with .FileName = "C:\project\src\Foo.cs"
 ```
-
-### When Cygwin Wins
-
-- **Full GNU toolchain** -- gcc, make, autotools, everything needed to build Linux software on Windows.
-- **X11 applications** -- run graphical Linux apps on Windows.
-- **Maximum compatibility** -- closest to a real Linux userland without a VM.
-- **Historical scripts** -- organizations with 20+ years of Cygwin scripts and workflows.
-
-### When PsBash Wins
-
-- **Size** -- 340 KB vs 1-4 GB. PsBash is ~10,000x smaller.
-- **Install** -- one command vs a GUI wizard with 2000 package checkboxes.
-- **Integration** -- objects flow into PowerShell. Cygwin is a walled garden.
-- **No DLL conflicts** -- Cygwin's `cygwin1.dll` can conflict with other software. PsBash is pure PowerShell.
-- **Cross-platform** -- Cygwin is Windows-only. PsBash works on macOS and Linux too.
-- **Maintainability** -- updating is `Update-Module PsBash`, not re-downloading a 400 MB setup.exe.
-- **No fork penalty** -- Cygwin's fork emulation on Windows is notoriously slow. PsBash runs natively.
 
 </TabItem>
 </Tabs>
