@@ -1,8 +1,461 @@
 ---
 title: File Operations
-description: cp, mv, rm, mkdir, rmdir, touch, and ln commands.
+description: "cp, mv, rm, mkdir, rmdir, touch, and ln — copy, move, delete, create directories, update timestamps, and create links."
 ---
 
-# File Operations
+import { Aside, Tabs, TabItem } from '@astrojs/starlight/components';
 
-`cp`, `mv`, `rm`, `mkdir`, `rmdir`, `touch`, and `ln` commands.
+Commands for copying, moving, removing, and linking files and directories. All return `PsBash.TextOutput` objects when producing verbose output.
+
+---
+
+## cp
+
+Copy files and directories.
+
+```
+cp [OPTION]... SOURCE... DEST
+```
+
+### Flags
+
+| Flag | Description |
+|------|-------------|
+| `-r`, `-R` | Copy directories recursively |
+| `-v` | Explain what is being done |
+| `-n` | Do not overwrite an existing file |
+| `-f` | Force: remove existing destination directory before copying |
+
+### Return type
+
+No output by default. With `-v`, returns `PsBash.TextOutput` showing each copy operation.
+
+### Examples
+
+Copy a single file:
+
+```powershell
+cp config.json config.backup.json
+```
+
+Copy a directory recursively with verbose output:
+
+```powershell
+cp -rv src/ src-backup/
+```
+
+```text
+'src/main.ps1' -> 'src-backup/main.ps1'
+'src/util.ps1' -> 'src-backup/util.ps1'
+```
+
+Copy without overwriting existing files:
+
+```powershell
+cp -n defaults.json settings.json
+```
+
+Copy multiple files into a directory:
+
+```powershell
+cp file1.txt file2.txt dest/
+```
+
+### Behavior notes
+
+- When `DEST` is an existing directory, sources are copied into it.
+- `-n` silently skips files that already exist at the destination.
+- `-f` removes an existing destination directory before copying (useful for replacing a directory tree).
+- `-r` is required for directories; without it, `cp` emits an error and skips.
+
+### Comparison with bash
+
+Identical syntax. The difference is that verbose output returns a `PsBash.TextOutput` object with a `.BashText` property instead of plain text.
+
+---
+
+## mv
+
+Move or rename files and directories.
+
+```
+mv [OPTION]... SOURCE... DEST
+```
+
+### Flags
+
+| Flag | Description |
+|------|-------------|
+| `-v` | Explain what is being done |
+| `-n` | Do not overwrite an existing file |
+| `-f` | Force (do not prompt before overwriting) |
+
+### Return type
+
+No output by default. With `-v`, returns `PsBash.TextOutput` showing each move operation.
+
+### Examples
+
+Rename a file:
+
+```powershell
+mv old-name.txt new-name.txt
+```
+
+Move files into a directory with verbose output:
+
+```powershell
+mv -v *.log archive/
+```
+
+```text
+'error.log' -> 'archive/error.log'
+'access.log' -> 'archive/access.log'
+```
+
+Move without overwriting:
+
+```powershell
+mv -n draft.md final.md
+```
+
+### Behavior notes
+
+- When `DEST` is an existing directory, sources are moved into it.
+- `-n` silently skips when the destination already exists.
+- Works on both files and directories without needing a recursive flag.
+
+### Comparison with bash
+
+Identical syntax and semantics.
+
+---
+
+## rm
+
+Remove files or directories.
+
+```
+rm [OPTION]... FILE...
+```
+
+### Flags
+
+| Flag | Description |
+|------|-------------|
+| `-r`, `-R` | Remove directories and their contents recursively |
+| `-f` | Ignore nonexistent files, never prompt |
+| `-v` | Explain what is being done |
+
+### Return type
+
+No output by default. With `-v`, returns `PsBash.TextOutput` listing each removed path.
+
+### Examples
+
+Remove a single file:
+
+```powershell
+rm temp.txt
+```
+
+Remove a directory tree with verbose output:
+
+```powershell
+rm -rv build/
+```
+
+```text
+removed 'build/output.js'
+removed 'build/output.css'
+removed 'build/'
+```
+
+Silently remove files that may not exist:
+
+```powershell
+rm -f maybe-missing.txt
+```
+
+<Aside type="caution" title="Safety guards">
+`rm` refuses to delete the filesystem root (`/` or drive root) and the user home directory (`~`). Attempting to do so produces an error: `rm: refusing to remove '...': protected path`.
+</Aside>
+
+### Behavior notes
+
+- Without `-r`, attempting to remove a directory produces an error.
+- `-f` suppresses errors for missing files and suppresses the "missing operand" error when called with no arguments.
+- With `-v`, child items are listed before the parent directory.
+
+### Comparison with bash
+
+Identical flags. The safety guards against `rm /` and `rm ~` match common GNU coreutils `--preserve-root` behavior, enabled by default.
+
+---
+
+## mkdir
+
+Create directories.
+
+```
+mkdir [OPTION]... DIRECTORY...
+```
+
+### Flags
+
+| Flag | Description |
+|------|-------------|
+| `-p` | Create parent directories as needed, no error if existing |
+| `-v` | Print a message for each created directory |
+
+### Return type
+
+No output by default. With `-v`, returns `PsBash.TextOutput` for each directory created.
+
+### Examples
+
+Create a single directory:
+
+```powershell
+mkdir output
+```
+
+Create nested directories:
+
+```powershell
+mkdir -p src/components/ui
+```
+
+Create with verbose output:
+
+```powershell
+mkdir -v logs
+```
+
+```text
+mkdir: created directory 'logs'
+```
+
+### Behavior notes
+
+- Without `-p`, creating a directory that already exists produces an error.
+- Without `-p`, creating a directory whose parent does not exist produces an error.
+- `-p` silently succeeds when the directory already exists.
+
+### Comparison with bash
+
+Identical syntax and semantics.
+
+---
+
+## rmdir
+
+Remove empty directories.
+
+```
+rmdir [OPTION]... DIRECTORY...
+```
+
+### Flags
+
+| Flag | Description |
+|------|-------------|
+| `-p` | Remove directory and its empty ancestors |
+| `-v` | Print a message for each removed directory |
+
+### Return type
+
+No output by default. With `-v`, returns `PsBash.TextOutput` for each directory removed.
+
+### Examples
+
+Remove an empty directory:
+
+```powershell
+rmdir old-output
+```
+
+Remove a chain of empty parent directories:
+
+```powershell
+rmdir -pv a/b/c
+```
+
+```text
+rmdir: removing directory, 'a/b/c'
+rmdir: removing directory, 'a/b'
+rmdir: removing directory, 'a'
+```
+
+Attempt to remove a non-empty directory (produces an error):
+
+```powershell
+rmdir src
+# rmdir: failed to remove 'src': Directory not empty
+```
+
+### Behavior notes
+
+- Only removes empty directories. Use `rm -r` for directories with contents.
+- `-p` walks up the path removing each ancestor only while it is empty.
+- Errors on non-directory targets and missing paths.
+
+### Comparison with bash
+
+Identical syntax and semantics.
+
+---
+
+## touch
+
+Create files or update timestamps.
+
+```
+touch [OPTION]... FILE...
+```
+
+### Flags
+
+| Flag | Description |
+|------|-------------|
+| `-d` | Use the specified date string instead of the current time |
+
+### Return type
+
+No output. Creates missing files as empty files and updates `LastWriteTime` and `LastAccessTime` on existing files.
+
+### Examples
+
+Create a new empty file:
+
+```powershell
+touch notes.txt
+```
+
+Update the timestamp of an existing file to now:
+
+```powershell
+touch README.md
+```
+
+Set a specific timestamp:
+
+```powershell
+touch -d '2025-01-15 09:30:00' report.txt
+```
+
+Create multiple files at once:
+
+```powershell
+touch file1.txt file2.txt file3.txt
+```
+
+### Behavior notes
+
+- If the file does not exist and its parent directory exists, an empty file is created.
+- If the parent directory does not exist, `touch` emits an error instead of creating intermediate directories.
+- `-d` accepts any date string parseable by `[System.DateTime]::Parse()`.
+
+### Comparison with bash
+
+Supports `-d` for setting timestamps. Bash `touch` also supports `-t`, `-a`, `-m`, and `-c`; those are not implemented.
+
+---
+
+## ln
+
+Create hard or symbolic links between files.
+
+```
+ln [OPTION]... TARGET LINK_NAME
+```
+
+### Flags
+
+| Flag | Description |
+|------|-------------|
+| `-s` | Create a symbolic link instead of a hard link |
+| `-f` | Remove existing destination file before creating the link |
+| `-v` | Explain what is being done |
+
+### Return type
+
+No output by default. With `-v`, returns `PsBash.TextOutput` showing the created link.
+
+### Examples
+
+Create a symbolic link:
+
+```powershell
+ln -s /path/to/target shortcut
+```
+
+Create a hard link with verbose output:
+
+```powershell
+ln -v original.txt hardlink.txt
+```
+
+```text
+'hardlink.txt' => 'original.txt'
+```
+
+Force-replace an existing link:
+
+```powershell
+ln -sf /new/target existing-link
+```
+
+Create a symbolic link with verbose output:
+
+```powershell
+ln -sv config.json config-link.json
+```
+
+```text
+'config-link.json' -> 'config.json'
+```
+
+<Aside type="caution" title="Windows symlinks">
+Creating symbolic links on Windows requires **Developer Mode** enabled or running PowerShell as **Administrator**. Hard links work without elevation but only within the same volume.
+</Aside>
+
+### Behavior notes
+
+- Without `-s`, creates a hard link (target must be a file on the same filesystem).
+- With `-s`, creates a symbolic link (can target files or directories, and can cross filesystems).
+- `-f` removes the existing destination before creating the link.
+- Verbose output uses `->` for symbolic links and `=>` for hard links.
+
+### Comparison with bash
+
+Identical flags. The Windows symlink restriction is a platform limitation, not a PsBash difference.
+
+---
+
+## Cross-platform notes
+
+<Tabs>
+<TabItem label="Path separators">
+
+All commands accept both `/` and `\` as path separators on all platforms. Verbose output always uses forward slashes (`/`) for consistency with bash conventions.
+
+</TabItem>
+<TabItem label="Symlinks on Windows">
+
+Symbolic links (`ln -s`) on Windows require one of:
+- **Developer Mode** enabled in Settings > Update & Security > For developers
+- Running PowerShell as **Administrator**
+
+Hard links (`ln` without `-s`) work without elevation but the target must be a file on the same NTFS volume.
+
+</TabItem>
+<TabItem label="Permissions">
+
+File permission behavior differs by platform:
+
+- **Linux/macOS**: File permissions are preserved during `cp` and `mv` operations via the underlying .NET APIs.
+- **Windows**: NTFS ACLs apply. Unix-style permission strings shown by `ls -l` are approximated from file attributes.
+
+</TabItem>
+</Tabs>

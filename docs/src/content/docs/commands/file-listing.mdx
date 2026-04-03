@@ -1,8 +1,662 @@
 ---
 title: File Listing
-description: ls, find, stat, tree, du, pwd, basename, and dirname commands.
+description: ls, find, stat, tree, du, pwd, basename, and dirname commands for listing files, navigating directories, and inspecting metadata.
+head:
+  - tag: meta
+    attrs:
+      name: keywords
+      content: powershell ls, powershell find files, powershell stat, powershell tree, powershell du disk usage, powershell pwd, powershell basename dirname, bash file listing powershell
 ---
 
-# File Listing
+import { Aside, Tabs, TabItem } from '@astrojs/starlight/components';
 
-`ls`, `find`, `stat`, `tree`, `du`, `pwd`, `basename`, and `dirname` commands.
+Every command on this page returns typed PowerShell objects. Terminal output looks like bash, but you can access properties like `.SizeBytes`, `.Permissions`, and `.IsDirectory` directly.
+
+<Aside type="tip">
+Objects survive the entire pipeline. `ls -la | grep '.ps1' | sort -k5 -h` returns `LsEntry` objects -- not strings.
+</Aside>
+
+---
+
+## ls
+
+List directory contents.
+
+### Synopsis
+
+```
+ls [flags] [path...]
+```
+
+### Flags
+
+| Flag | Description |
+|------|-------------|
+| `-l` | Long listing with permissions, owner, size, and date |
+| `-a` | Show hidden files (names starting with `.`) |
+| `-h` | Human-readable sizes (`4.0K`, `1.2M`) in long listing |
+| `-R` | Recurse into subdirectories |
+| `-S` | Sort by file size (largest first) |
+| `-t` | Sort by modification time (newest first) |
+| `-r` | Reverse the sort order |
+| `-1` | One entry per line |
+
+### Return Type: `PsBash.LsEntry`
+
+| Property | Type | Description |
+|----------|------|-------------|
+| `Name` | string | File or directory name |
+| `FullPath` | string | Absolute path on disk |
+| `IsDirectory` | bool | `$true` for directories |
+| `SizeBytes` | long | Size in bytes (4096 for directories) |
+| `Permissions` | string | Unix-style permission string (e.g., `-rw-r--r--`) |
+| `LinkCount` | int | Number of hard links |
+| `Owner` | string | File owner name |
+| `Group` | string | File group name |
+| `LastModified` | DateTime | Last modification time |
+| `BashText` | string | Formatted terminal output |
+
+### Examples
+
+**List files with details:**
+
+```powershell
+ls -la
+```
+
+```text
+drwxr-xr-x  5 beagle beagle 4096 Apr  2 10:30 .
+drwxr-xr-x  3 beagle beagle 4096 Apr  1 09:15 ..
+-rw-r--r--  1 beagle beagle 1084 Apr  2 10:30 README.md
+drwxr-xr-x  2 beagle beagle 4096 Apr  2 10:28 src
+```
+
+**Sort by size, human-readable:**
+
+```powershell
+ls -lSh
+```
+
+```text
+-rw-r--r--  1 beagle beagle 141K Apr  2 10:30 PsBash.psm1
+-rw-r--r--  1 beagle beagle 1.1K Apr  2 10:28 PsBash.psd1
+-rw-r--r--  1 beagle beagle  512 Apr  1 09:15 README.md
+```
+
+**Access typed properties:**
+
+```powershell
+$files = ls -la
+$files[0].Name          # "README.md"
+$files[0].SizeBytes     # 1084
+$files[0].Permissions   # "-rw-r--r--"
+$files[0].LastModified  # 04/02/2026 10:30:00
+```
+
+**Pipeline: filter and sort while preserving objects:**
+
+```powershell
+$scripts = ls -la | grep '.ps1' | sort -k5 -h
+$scripts[0].Name       # "PsBash.psm1"
+$scripts[0].SizeBytes  # 141234
+```
+
+**Recursive listing with reverse time sort:**
+
+```powershell
+ls -laRtr src/
+```
+
+---
+
+## find
+
+Search for files in a directory hierarchy.
+
+### Synopsis
+
+```
+find [path] [predicates...]
+```
+
+### Flags
+
+| Flag | Argument | Description |
+|------|----------|-------------|
+| `-name` | pattern | Glob pattern to match file names (e.g., `'*.ps1'`) |
+| `-type` | `f` or `d` | Filter by type: `f` for files, `d` for directories |
+| `-size` | expr | Size filter: `+1M` (larger than 1 MB), `-500c` (smaller than 500 bytes). Suffixes: `c` bytes, `k` KiB, `M` MiB, `G` GiB. No suffix = 512-byte blocks |
+| `-maxdepth` | N | Descend at most N levels below the start path |
+| `-mtime` | expr | Modification time in days: `-7` (within last 7 days), `+30` (more than 30 days ago) |
+| `-empty` | -- | Match empty files (0 bytes) and empty directories |
+
+### Return Type: `PsBash.FindEntry`
+
+| Property | Type | Description |
+|----------|------|-------------|
+| `Path` | string | Display path relative to search root (e.g., `./src/main.ps1`) |
+| `Name` | string | File or directory name |
+| `FullPath` | string | Absolute path on disk |
+| `IsDirectory` | bool | `$true` for directories |
+| `SizeBytes` | long | Size in bytes |
+| `Permissions` | string | Unix-style permission string |
+| `LinkCount` | int | Number of hard links |
+| `Owner` | string | File owner name |
+| `Group` | string | File group name |
+| `LastModified` | DateTime | Last modification time |
+| `BashText` | string | Display path (same as `Path`) |
+
+### Examples
+
+**Find all PowerShell files:**
+
+```powershell
+find . -name '*.ps1'
+```
+
+```text
+./src/PsBash.psm1
+./tests/PsBash.Tests.ps1
+```
+
+**Find large files:**
+
+```powershell
+find . -type f -size +1M
+```
+
+**Find recently modified directories:**
+
+```powershell
+find . -type d -mtime -7
+```
+
+**Combine with pipeline for typed access:**
+
+```powershell
+$bigFiles = find . -type f -size +100k
+$bigFiles | ForEach-Object { "$($_.Name): $($_.SizeBytes) bytes" }
+```
+
+**Limit search depth and find empty files:**
+
+```powershell
+find . -maxdepth 2 -empty
+```
+
+---
+
+## stat
+
+Display file or file system status.
+
+### Synopsis
+
+```
+stat [flags] file...
+```
+
+### Flags
+
+| Flag | Argument | Description |
+|------|----------|-------------|
+| `-c` | format | Format string using `%` specifiers (see table below) |
+| `-t` | -- | Terse output: single line of space-separated values |
+| `--printf` | format | Like `-c` but interprets escape sequences (`\n`, `\t`) and does not append a trailing newline |
+
+### Format Specifiers (for `-c` and `--printf`)
+
+| Specifier | Value |
+|-----------|-------|
+| `%s` | Size in bytes |
+| `%a` | Octal permissions (e.g., `0644`) |
+| `%A` | Human-readable permissions (e.g., `-rw-r--r--`) |
+| `%n` | File name |
+| `%N` | Full path |
+| `%U` | Owner name |
+| `%G` | Group name |
+| `%i` | Inode number |
+| `%b` | Number of 512-byte blocks |
+| `%d` | Device number |
+| `%Y` | Modification time as Unix epoch |
+| `%h` | Number of hard links |
+| `%%` | Literal `%` |
+
+### Return Type: `PsBash.StatEntry`
+
+| Property | Type | Description |
+|----------|------|-------------|
+| `Name` | string | File name |
+| `FullPath` | string | Absolute path |
+| `IsDirectory` | bool | `$true` for directories |
+| `SizeBytes` | long | Size in bytes (4096 for directories) |
+| `Permissions` | string | Unix-style permission string |
+| `OctalPerms` | string | Octal permission string (e.g., `0644`) |
+| `LinkCount` | int | Hard link count |
+| `Owner` | string | Owner name |
+| `Group` | string | Group name |
+| `Inode` | long | Inode number (0 on Windows) |
+| `Blocks` | long | Number of 512-byte blocks |
+| `Device` | long | Device number |
+| `LastModified` | DateTime | Last modification time |
+| `MtimeEpoch` | long | Modification time as Unix epoch seconds |
+| `AccessTime` | DateTime | Last access time |
+| `AtimeEpoch` | long | Access time as Unix epoch seconds |
+| `BashText` | string | Formatted output |
+
+### Examples
+
+**Default output:**
+
+```powershell
+stat README.md
+```
+
+```text
+  File: README.md
+  Size: 1084	Blocks: 8	IO Block: 4096	regular file
+Device: 0	Inode: 12345	Links: 1
+Access: (0644/-rw-r--r--)	Uid: (beagle)	Gid: (beagle)
+Modify: 2026-04-02 10:30:00.0000000 -07:00
+```
+
+**Custom format -- size and name:**
+
+```powershell
+stat -c '%s %n' README.md
+```
+
+```text
+1084 README.md
+```
+
+**Terse mode:**
+
+```powershell
+stat -t README.md
+```
+
+**Access typed properties:**
+
+```powershell
+$info = stat README.md
+$info.SizeBytes     # 1084
+$info.OctalPerms    # "0644"
+$info.MtimeEpoch    # 1743530400
+$info.Owner         # "beagle"
+```
+
+**Printf with escape sequences:**
+
+```powershell
+stat --printf='%n\t%s\n' README.md src/
+```
+
+---
+
+## tree
+
+List contents of directories in a tree-like format with box-drawing characters.
+
+### Synopsis
+
+```
+tree [flags] [path]
+```
+
+### Flags
+
+| Flag | Argument | Description |
+|------|----------|-------------|
+| `-a` | -- | Show hidden files (names starting with `.`) |
+| `-d` | -- | List directories only |
+| `-L` | N | Descend at most N levels deep |
+| `-I` | pattern | Exclude files matching glob pattern |
+| `--dirsfirst` | -- | Sort directories before files at each level |
+
+### Return Type: `PsBash.TreeEntry`
+
+| Property | Type | Description |
+|----------|------|-------------|
+| `Name` | string | File or directory name (empty for summary line) |
+| `Path` | string | Path relative to tree root |
+| `Depth` | int | Nesting depth (0 for root and summary) |
+| `IsDirectory` | bool | `$true` for directories |
+| `TreePrefix` | string | Box-drawing prefix characters |
+| `BashText` | string | Full formatted line with prefix and name |
+
+### Examples
+
+**Show directory tree:**
+
+```powershell
+tree src/
+```
+
+```text
+src
+├── PsBash.Format.ps1xml
+├── PsBash.psd1
+└── PsBash.psm1
+
+0 directories, 3 files
+```
+
+**Limit depth:**
+
+```powershell
+tree -L 2 .
+```
+
+**Directories only, directories first:**
+
+```powershell
+tree -d --dirsfirst .
+```
+
+**Filter typed entries from the pipeline:**
+
+```powershell
+$entries = tree src/
+$dirs = $entries | Where-Object { $_.IsDirectory -and $_.Name -ne '' }
+$dirs.Name   # list of directory names
+```
+
+**Exclude patterns:**
+
+```powershell
+tree -I 'node_modules' -L 3 .
+```
+
+---
+
+## du
+
+Estimate file space usage.
+
+### Synopsis
+
+```
+du [flags] [path...]
+```
+
+### Flags
+
+| Flag | Argument | Description |
+|------|----------|-------------|
+| `-h` | -- | Human-readable sizes (`4.0K`, `1.2M`) |
+| `-s` | -- | Summarize: show only the total for each argument |
+| `-a` | -- | Show sizes for individual files, not just directories |
+| `-c` | -- | Produce a grand total line at the end |
+| `-d` | N | Max depth of directory reporting |
+
+### Return Type: `PsBash.DuEntry`
+
+| Property | Type | Description |
+|----------|------|-------------|
+| `Size` | long | Size in KiB (ceiling) |
+| `SizeBytes` | long | Exact size in bytes |
+| `SizeHuman` | string | Human-readable size string |
+| `Path` | string | Display path |
+| `Depth` | int | Directory depth relative to target |
+| `IsTotal` | bool | `$true` for the grand total line (`-c`) |
+| `BashText` | string | Formatted `size\tpath` output |
+
+### Examples
+
+**Summarize current directory:**
+
+```powershell
+du -sh .
+```
+
+```text
+1.2M	.
+```
+
+**Show all files with human-readable sizes:**
+
+```powershell
+du -ah src/
+```
+
+**Limit depth and show grand total:**
+
+```powershell
+du -hc -d 1 .
+```
+
+```text
+140K	./src
+32K	./tests
+8.0K	./docs
+180K	.
+180K	total
+```
+
+**Access typed sizes for computation:**
+
+```powershell
+$usage = du -a src/
+$totalBytes = ($usage | Measure-Object -Property SizeBytes -Sum).Sum
+"Total: $totalBytes bytes"
+```
+
+**Find largest subdirectories:**
+
+```powershell
+du -d 1 . | sort -k1 -rn | head 5
+```
+
+---
+
+## pwd
+
+Print name of current/working directory.
+
+### Synopsis
+
+```
+pwd [flags]
+```
+
+### Flags
+
+| Flag | Description |
+|------|-------------|
+| `-P` | Print the physical directory path (resolve symlinks via the OS) |
+
+Without `-P`, `pwd` returns the PowerShell logical path from `Get-Location`. With `-P`, it calls `[System.IO.Directory]::GetCurrentDirectory()` to resolve symlinks.
+
+### Return Type: `PsBash.TextOutput`
+
+| Property | Type | Description |
+|----------|------|-------------|
+| `BashText` | string | Working directory path with forward slashes |
+
+### Examples
+
+**Print working directory:**
+
+```powershell
+pwd
+```
+
+```text
+/home/beagle/work/project
+```
+
+**Physical path (resolve symlinks):**
+
+```powershell
+pwd -P
+```
+
+**Store and use in pipeline:**
+
+```powershell
+$cwd = pwd
+"Working in: $cwd"
+```
+
+---
+
+## basename
+
+Strip directory and suffix from filenames.
+
+### Synopsis
+
+```
+basename [-s suffix] path...
+```
+
+### Flags
+
+| Flag | Argument | Description |
+|------|----------|-------------|
+| `-s` | suffix | Remove trailing suffix from the result |
+
+Also supports `--suffix=EXT` long form.
+
+### Return Type: `PsBash.TextOutput`
+
+| Property | Type | Description |
+|----------|------|-------------|
+| `BashText` | string | Filename with directory components stripped |
+
+### Examples
+
+**Extract filename from path:**
+
+```powershell
+basename /home/beagle/work/script.ps1
+```
+
+```text
+script.ps1
+```
+
+**Strip extension:**
+
+```powershell
+basename -s .ps1 /home/beagle/work/script.ps1
+```
+
+```text
+script
+```
+
+**Process multiple paths:**
+
+```powershell
+basename /usr/bin/ls /usr/bin/cat
+```
+
+```text
+ls
+cat
+```
+
+**Combine with find:**
+
+```powershell
+find . -name '*.ps1' | ForEach-Object { basename $_.Path }
+```
+
+---
+
+## dirname
+
+Strip last component from file name, returning the directory portion.
+
+### Synopsis
+
+```
+dirname path...
+```
+
+### Return Type: `PsBash.TextOutput`
+
+| Property | Type | Description |
+|----------|------|-------------|
+| `BashText` | string | Directory portion of the path |
+
+### Examples
+
+**Extract directory from path:**
+
+```powershell
+dirname /home/beagle/work/script.ps1
+```
+
+```text
+/home/beagle/work
+```
+
+**Bare filename returns current directory marker:**
+
+```powershell
+dirname script.ps1
+```
+
+```text
+.
+```
+
+**Root path:**
+
+```powershell
+dirname /usr
+```
+
+```text
+/
+```
+
+**Combine with other commands:**
+
+```powershell
+$dir = dirname /home/beagle/work/script.ps1
+ls -la $dir.BashText
+```
+
+---
+
+## Pipeline Bridge Patterns
+
+The real power of these commands comes from combining them through the pipeline while keeping typed objects intact.
+
+**Filter ls output and access properties:**
+
+```powershell
+$large = ls -la | grep '.psm1' | sort -k5 -rn
+$large[0].Name       # "PsBash.psm1"
+$large[0].SizeBytes  # 141234
+$large[0].Permissions # "-rw-r--r--"
+```
+
+**Combine find with stat for detailed metadata:**
+
+```powershell
+find . -name '*.ps1' | ForEach-Object {
+    $s = stat $_.FullPath
+    [PSCustomObject]@{
+        Name  = $_.Name
+        Size  = $s.SizeBytes
+        Owner = $s.Owner
+    }
+}
+```
+
+**Disk usage analysis:**
+
+```powershell
+du -ah . | sort -k1 -rn | head 10
+```
+
+**Directory tree filtered to directories:**
+
+```powershell
+tree -d -L 2 . | Where-Object { $_.IsDirectory }
+```

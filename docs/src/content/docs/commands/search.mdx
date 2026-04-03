@@ -1,8 +1,320 @@
 ---
-title: Search
-description: grep and rg commands for pattern matching and recursive search.
+title: "Search: grep & rg"
+description: "grep and rg commands for pattern matching and recursive search in PowerShell. The grep command bridges bash-style text matching with PowerShell's typed object pipeline."
+head:
+  - tag: meta
+    attrs:
+      name: keywords
+      content: powershell grep, grep in powershell, powershell pattern matching, powershell ripgrep, bash grep powershell, search text powershell, rg powershell
 ---
 
-# Search
+import { Aside, Tabs, TabItem } from '@astrojs/starlight/components';
 
-`grep` and `rg` commands for pattern matching and recursive search.
+# Search Commands
+
+`grep` and `rg` for pattern matching and recursive search.
+
+---
+
+## grep
+
+Search for patterns in files or filter pipeline objects by matching against their text representation.
+
+```
+grep [OPTIONS] PATTERN [FILE...]
+```
+
+### Two Modes
+
+**grep** operates in two distinct modes depending on how you call it:
+
+<Tabs>
+<TabItem label="Pipeline mode">
+
+When objects are piped in and no file arguments are given, grep matches against each object's `BashText` representation and emits the **original typed object** on match.
+
+```powershell
+ls -la | grep '.ps1'
+```
+
+```text
+-rw-r--r-- 1 you you 141234 Apr  2 10:30 PsBash.psm1
+-rw-r--r-- 1 you you  28400 Apr  2 10:28 PsBash.Tests.ps1
+```
+
+The output looks like text, but each result is still an `LsEntry` object:
+
+```powershell
+$result = ls -la | grep '.ps1'
+$result[0].GetType().Name   # PSCustomObject (LsEntry type)
+$result[0].Name             # "PsBash.psm1"
+$result[0].SizeBytes        # 141234
+$result[0].Permissions      # "-rw-r--r--"
+```
+
+This is the **pipeline bridge pattern**: grep reads `.BashText` for matching but passes through the original object unchanged. Types survive the entire pipeline:
+
+```powershell
+$big = ls -la | grep '.ps1' | sort -k5 -rn | head 1
+$big[0].SizeBytes   # 141234 -- still a real integer
+```
+
+</TabItem>
+<TabItem label="File mode">
+
+When file paths are given as arguments, grep reads the files and returns `GrepMatch` objects.
+
+```powershell
+grep 'function' src/PsBash.psm1
+```
+
+```text
+function Get-BashPlatform {
+function New-BashObject {
+function ConvertFrom-BashArgs {
+```
+
+Each result is a `GrepMatch` with typed properties:
+
+```powershell
+$matches = grep -n 'function' src/PsBash.psm1
+$matches[0].FileName    # "/home/you/src/PsBash.psm1"
+$matches[0].LineNumber   # 7
+$matches[0].Line         # "function Get-BashPlatform {"
+```
+
+With multiple files, output includes the filename prefix:
+
+```powershell
+grep 'Import-Module' *.ps1
+```
+
+```text
+profile.ps1:Import-Module PsBash
+setup.ps1:Import-Module Pester
+```
+
+</TabItem>
+</Tabs>
+
+### Flags
+
+| Flag | Description |
+|------|-------------|
+| `-i` | Case-insensitive matching |
+| `-v` | Invert match (select non-matching lines) |
+| `-n` | Prefix each line with its line number |
+| `-c` | Print count of matching lines only |
+| `-r` | Recursive search through directories |
+| `-l` | Print only names of files with matches |
+| `-E` | Extended regular expressions (ERE syntax) |
+| `-A NUM` | Show NUM lines after each match |
+| `-B NUM` | Show NUM lines before each match |
+| `-C NUM` | Show NUM lines before and after each match |
+
+### GrepMatch Properties
+
+In file mode, each result is a `PsBash.GrepMatch` object:
+
+| Property | Type | Description |
+|----------|------|-------------|
+| `FileName` | string | Absolute path to the matched file |
+| `LineNumber` | int | 1-based line number of the match |
+| `Line` | string | Full text of the matched line |
+| `BashText` | string | Formatted output string (includes filename/line number prefixes) |
+
+<Aside type="tip">
+In pipeline mode, grep does **not** return `GrepMatch` objects. It returns whatever objects were piped in. This is what makes pipeline composition work -- types survive through `grep`, `sort`, `head`, and `tail` without losing structure.
+</Aside>
+
+### Examples
+
+**Case-insensitive search:**
+
+```powershell
+grep -i 'error' /var/log/app.log
+```
+
+**Regex with extended syntax:**
+
+```powershell
+grep -E 'warn|error|fatal' server.log
+```
+
+**Inverted match (exclude lines):**
+
+```powershell
+cat config.yml | grep -v '^#'
+```
+
+**Count matches per file:**
+
+```powershell
+grep -rc 'import' src/
+```
+
+```text
+src/main.ps1:3
+src/utils.ps1:1
+```
+
+**Context lines around matches:**
+
+```powershell
+grep -B2 -A2 'throw' src/PsBash.psm1
+```
+
+**List files containing a pattern:**
+
+```powershell
+grep -rl 'Invoke-BashGrep' src/
+```
+
+**Recursive search from a directory:**
+
+```powershell
+grep -r 'function' src/
+```
+
+**Pipeline bridge with further processing:**
+
+```powershell
+# Find large .log files -- types preserved through grep
+$logs = ls -la | grep '\.log'
+$logs | ForEach-Object { $_.SizeBytes } | Measure-Object -Sum
+```
+
+---
+
+## rg
+
+Recursive search across files, modeled after [ripgrep](https://github.com/BurntSushi/ripgrep). Searches recursively by default, skips `.git` directories, and excludes dotfiles unless `--hidden` is specified.
+
+```
+rg [OPTIONS] PATTERN [PATH...]
+```
+
+### Flags
+
+| Flag | Description |
+|------|-------------|
+| `-i` | Case-insensitive matching |
+| `-w` | Match whole words only (wraps pattern in `\b...\b`) |
+| `-c` | Print count of matching lines only |
+| `-l` | Print only names of files with matches |
+| `-n` | Show line numbers (default) |
+| `-N` | Suppress line numbers |
+| `-o` | Print only the matched portion of each line |
+| `-v` | Invert match (select non-matching lines) |
+| `-F` | Treat pattern as a fixed string, not a regex |
+| `-g GLOB` | Filter files by glob pattern (e.g., `-g '*.ps1'`) |
+| `-A NUM` | Show NUM lines after each match |
+| `-B NUM` | Show NUM lines before each match |
+| `-C NUM` | Show NUM lines before and after each match |
+| `--hidden` | Include dotfiles and hidden directories |
+
+### RgMatch Properties
+
+Each result is a `PsBash.RgMatch` object:
+
+| Property | Type | Description |
+|----------|------|-------------|
+| `FileName` | string | Absolute path to the matched file |
+| `LineNumber` | int | 1-based line number of the match |
+| `Line` | string | Full text of the matched line |
+| `BashText` | string | Formatted output string (includes filename/line number prefixes) |
+
+<Aside type="note">
+Like grep, rg also supports pipeline mode. When objects are piped in with no file arguments, rg matches against `BashText` and passes through the original objects.
+</Aside>
+
+### Examples
+
+**Search the current directory recursively:**
+
+```powershell
+rg 'function'
+```
+
+```text
+src/PsBash.psm1:7:function Get-BashPlatform {
+src/PsBash.psm1:20:function New-BashObject {
+src/PsBash.psm1:43:function ConvertFrom-BashArgs {
+```
+
+**Filter by file type with glob:**
+
+```powershell
+rg -g '*.ps1' 'Import-Module'
+```
+
+**Case-insensitive whole-word search:**
+
+```powershell
+rg -iw 'error'
+```
+
+**Fixed string search (no regex interpretation):**
+
+```powershell
+rg -F '$_.Name'
+```
+
+**Only show matched text:**
+
+```powershell
+rg -o '\d+\.\d+\.\d+' package.json
+```
+
+```text
+package.json:3:0.1.0
+```
+
+**Context lines around matches:**
+
+```powershell
+rg -C3 'throw' src/
+```
+
+**Count matches per file:**
+
+```powershell
+rg -c 'function' src/
+```
+
+```text
+src/PsBash.psm1:69
+src/Help.psm1:2
+```
+
+**List files containing a pattern:**
+
+```powershell
+rg -l 'Invoke-Bash'
+```
+
+**Include hidden files:**
+
+```powershell
+rg --hidden 'alias' .
+```
+
+**Suppress line numbers for clean output:**
+
+```powershell
+rg -N 'version' package.json
+```
+
+### grep vs rg
+
+| | `grep` | `rg` |
+|---|--------|------|
+| Recursive | Requires `-r` flag | Recursive by default |
+| Dotfiles | Includes everything with `-r` | Excludes by default, `--hidden` to include |
+| `.git` directory | Included with `-r` | Always skipped |
+| Glob filtering | Not supported | `-g '*.ext'` |
+| Only-matching | Not supported | `-o` flag |
+| Fixed strings | Not supported | `-F` flag |
+| Word boundaries | Not supported | `-w` flag |
+| Line numbers | Off by default, `-n` to enable | On by default, `-N` to disable |
+| Pipeline bridge | Passes original objects | Passes original objects |

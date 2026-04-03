@@ -3,6 +3,292 @@ title: Output
 description: echo and printf commands for formatted text output.
 ---
 
-# Output
+import { Aside, Tabs, TabItem } from '@astrojs/starlight/components';
 
-`echo` and `printf` commands for formatted text output.
+## echo
+
+Print text to the pipeline with optional escape sequence expansion.
+
+### Syntax
+
+```text
+echo [OPTIONS] [STRING...]
+```
+
+### Flags
+
+| Flag | Description | Example |
+|------|-------------|---------|
+| `-n` | Suppress trailing newline | `echo -n 'no newline'` |
+| `-e` | Enable interpretation of escape sequences | `echo -e 'line1\nline2'` |
+| `-E` | Disable interpretation of escape sequences (default) | `echo -E 'literal \n'` |
+
+### Escape sequences (`-e`)
+
+When `-e` is active, the following sequences are expanded:
+
+| Sequence | Meaning |
+|----------|---------|
+| `\n` | Newline |
+| `\t` | Horizontal tab |
+| `\r` | Carriage return |
+| `\a` | Alert (bell) |
+| `\b` | Backspace |
+| `\f` | Form feed |
+| `\v` | Vertical tab |
+| `\\` | Literal backslash |
+
+<Aside type="note">
+The current implementation does not support octal (`\0NNN`) or hex (`\xHH`) escape sequences. If you need those, use `printf` with format specifiers or PowerShell string literals.
+</Aside>
+
+### Return type
+
+`PsBash.TextOutput` with a single property:
+
+| Property | Type | Description |
+|----------|------|-------------|
+| `BashText` | `string` | The formatted output text (includes trailing newline unless `-n` is used) |
+
+### Examples
+
+**Basic output:**
+
+```powershell
+echo 'Hello, world!'
+```
+
+```text
+Hello, world!
+```
+
+**Multiple arguments are joined with spaces:**
+
+```powershell
+echo one two three
+```
+
+```text
+one two three
+```
+
+**Suppress trailing newline with `-n`:**
+
+```powershell
+echo -n 'prompt> '
+```
+
+```text
+prompt>
+```
+
+The output has no trailing newline, so subsequent output appears on the same line.
+
+**Escape sequences with `-e`:**
+
+```powershell
+echo -e 'column1\tcolumn2\nrow1\trow2'
+```
+
+```text
+column1	column2
+row1	row2
+```
+
+**Access the object programmatically:**
+
+```powershell
+$out = echo -n 'hello'
+$out.BashText        # "hello"
+$out.BashText.Length  # 5
+```
+
+### Comparison
+
+<Tabs>
+<TabItem label="Bash">
+
+```bash
+echo -e 'hello\tworld'
+# hello	world
+```
+
+Bash `echo` behavior varies across implementations (GNU coreutils vs built-in). The `-e` flag is not POSIX-standard; some shells enable escapes by default.
+
+</TabItem>
+<TabItem label="PsBash">
+
+```powershell
+echo -e 'hello\tworld'
+# hello	world
+```
+
+PsBash `echo` defaults to `-E` (no escape expansion), matching GNU coreutils behavior. The `-e` flag must be explicit.
+
+</TabItem>
+<TabItem label="PowerShell">
+
+```powershell
+Write-Output "hello`tworld"
+# hello	world
+```
+
+Native PowerShell uses backtick escapes (`` `t ``, `` `n ``) inside double-quoted strings. `Write-Output` has no flag-based escape control.
+
+</TabItem>
+</Tabs>
+
+---
+
+## printf
+
+Format and print text using C-style format specifiers.
+
+### Syntax
+
+```text
+printf FORMAT [ARGUMENTS...]
+```
+
+The FORMAT string is required. If no ARGUMENTS are provided, format specifiers consume nothing and produce empty output for that position.
+
+### Format specifiers
+
+| Specifier | Description | Example |
+|-----------|-------------|---------|
+| `%s` | String | `printf '%s' 'hello'` produces `hello` |
+| `%d` | Decimal integer | `printf '%d' 42` produces `42` |
+| `%f` | Floating-point (6 decimal places) | `printf '%f' 3.14` produces `3.140000` |
+| `%%` | Literal percent sign | `printf '100%%'` produces `100%` |
+
+<Aside type="note">
+The current implementation supports `%s`, `%d`, `%f`, and `%%`. Hex (`%x`), octal (`%o`), and width/precision modifiers (`%-10s`, `%05d`, `%.2f`) are not yet implemented. For those, use PowerShell's `-f` operator or `[string]::Format()`.
+</Aside>
+
+### Escape sequences in FORMAT
+
+The format string automatically expands the same escape sequences as `echo -e`:
+
+| Sequence | Meaning |
+|----------|---------|
+| `\n` | Newline |
+| `\t` | Horizontal tab |
+| `\r` | Carriage return |
+| `\a` | Alert (bell) |
+| `\b` | Backspace |
+| `\f` | Form feed |
+| `\v` | Vertical tab |
+| `\\` | Literal backslash |
+
+### Argument type conversion
+
+`printf` automatically converts string arguments to the type required by the format specifier:
+
+- Arguments that parse as integers are passed as `[int]` to `%d`
+- Arguments that parse as decimals are passed as `[double]` to `%f`
+- All other arguments remain as `[string]`
+
+### Return type
+
+`PsBash.TextOutput` with a single property:
+
+| Property | Type | Description |
+|----------|------|-------------|
+| `BashText` | `string` | The formatted output text (no automatic trailing newline) |
+
+### Examples
+
+**Simple string formatting:**
+
+```powershell
+printf 'Hello, %s!\n' 'world'
+```
+
+```text
+Hello, world!
+```
+
+**Multiple arguments with mixed types:**
+
+```powershell
+printf 'Name: %s, Age: %d, Score: %f\n' 'Alice' 30 95.5
+```
+
+```text
+Name: Alice, Age: 30, Score: 95.500000
+```
+
+**Tab-separated table:**
+
+```powershell
+printf '%s\t%s\t%s\n' 'Name' 'Role' 'Team'
+printf '%s\t%s\t%s\n' 'Alice' 'Dev' 'Platform'
+printf '%s\t%s\t%s\n' 'Bob' 'QA' 'Platform'
+```
+
+```text
+Name	Role	Team
+Alice	Dev	Platform
+Bob	QA	Platform
+```
+
+**Literal percent sign:**
+
+```powershell
+printf 'Disk usage: %d%%\n' 73
+```
+
+```text
+Disk usage: 73%
+```
+
+**Access the object programmatically:**
+
+```powershell
+$out = printf '%s-%d' 'build' 42
+$out.BashText  # "build-42"
+```
+
+### Error handling
+
+Calling `printf` with no arguments throws an error:
+
+```powershell
+printf
+# printf: usage: printf format [arguments]
+```
+
+### Comparison
+
+<Tabs>
+<TabItem label="Bash">
+
+```bash
+printf 'Name: %s, Count: %d\n' 'items' 5
+# Name: items, Count: 5
+```
+
+Bash `printf` supports the full POSIX set of specifiers including `%x`, `%o`, `%e`, `%g`, width modifiers, and precision. It also reuses the format string if there are more arguments than specifiers.
+
+</TabItem>
+<TabItem label="PsBash">
+
+```powershell
+printf 'Name: %s, Count: %d\n' 'items' 5
+# Name: items, Count: 5
+```
+
+PsBash `printf` supports `%s`, `%d`, `%f`, and `%%`. Unlike bash, it does not cycle the format string over excess arguments.
+
+</TabItem>
+<TabItem label="PowerShell">
+
+```powershell
+'Name: {0}, Count: {1}' -f 'items', 5
+# Name: items, Count: 5
+```
+
+PowerShell uses .NET composite format strings with `{0}`, `{1}` placeholders and the `-f` operator. This supports full .NET format specifiers like `{0:N2}`, `{1:X}`, and padding via `{0,-10}`.
+
+</TabItem>
+</Tabs>
