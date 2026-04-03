@@ -14,8 +14,6 @@ RootModule = 'PsBash.psm1'
 # Version number of this module.
 ModuleVersion = '0.1.0'
 
-# Supported PSEditions
-# CompatiblePSEditions = @()
 
 # ID used to uniquely identify this module
 GUID = 'a1b2c3d4-e5f6-7890-abcd-ef1234567890'
@@ -30,7 +28,10 @@ CompanyName = 'Unknown'
 Copyright = '(c) Andy Brummer. All rights reserved.'
 
 # Description of the functionality provided by this module
-Description = 'Cross-platform PowerShell module implementing bash commands with BashText bridge pattern'
+Description = 'Real bash commands for PowerShell with typed objects. 68 commands (ls, grep, sort, awk, sed, jq, find, ps, du, tar, etc.) that accept real bash flags and return structured PowerShell objects while producing identical text output. Pipeline bridge pattern preserves typed objects through grep, sort, head, tail.'
+
+# Supported PSEditions
+CompatiblePSEditions = 'Core'
 
 # Minimum version of the PowerShell engine required by this module
 PowerShellVersion = '7.0'
@@ -150,29 +151,16 @@ PrivateData = @{
 
     PSData = @{
 
-        # Tags applied to this module. These help with module discovery in online galleries.
-        Tags = 'bash', 'linux', 'cross-platform', 'text'
+        Tags = @('bash', 'linux', 'cross-platform', 'cli', 'grep', 'awk', 'sed', 'jq',
+                 'pipeline', 'typed-objects', 'powershell-module', 'devops', 'unix',
+                 'shell', 'commands', 'windows', 'macos', 'PSEdition_Core')
 
-        # A URL to the license for this module.
-        # LicenseUri = ''
+        LicenseUri = 'https://github.com/standardbeagle/ps-bash/blob/main/LICENSE'
 
-        # A URL to the main website for this project.
-        # ProjectUri = ''
-
-        # A URL to an icon representing this module.
-        # IconUri = ''
+        ProjectUri = 'https://github.com/standardbeagle/ps-bash'
 
         # ReleaseNotes of this module
-        # ReleaseNotes = ''
-
-        # Prerelease string of this module
-        # Prerelease = ''
-
-        # Flag to indicate whether the module requires explicit user acceptance for install/update/save
-        # RequireLicenseAcceptance = $false
-
-        # External dependent modules of this module
-        # ExternalModuleDependencies = @()
+        ReleaseNotes = 'Initial release: 68 bash commands with typed objects, pipeline bridge, cross-platform support.'
 
     } # End of PSData hashtable
 

@@ -1,0 +1,62 @@
+name: Publish to PSGallery
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version to publish (e.g. 0.1.0)'
+        required: true
+
+jobs:
+  test:
+    strategy:
+      matrix:
+        os: [windows-latest, ubuntu-latest, macos-latest]
+      fail-fast: true
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Pester
+        shell: pwsh
+        run: Install-Module -Name Pester -MinimumVersion 5.0 -Force -Scope CurrentUser
+
+      - name: Run Tests
+        shell: pwsh
+        run: |
+          $config = New-PesterConfiguration
+          $config.Run.Path = './tests'
+          $config.Output.Verbosity = 'Detailed'
+          $config.Run.Exit = $true
+          Invoke-Pester -Configuration $config
+
+  publish:
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set version from release tag
+        shell: pwsh
+        run: |
+          $version = if ('${{ github.event_name }}' -eq 'release') {
+              '${{ github.event.release.tag_name }}' -replace '^v', ''
+          } else {
+              '${{ github.event.inputs.version }}'
+          }
+          Write-Host "Publishing version: $version"
+          $manifest = Get-Content ./src/PsBash.psd1 -Raw
+          $manifest = $manifest -replace "ModuleVersion = '.*'", "ModuleVersion = '$version'"
+          Set-Content ./src/PsBash.psd1 -Value $manifest
+          # Verify
+          $data = Import-PowerShellDataFile ./src/PsBash.psd1
+          Write-Host "Manifest version: $($data.ModuleVersion)"
+
+      - name: Publish to PSGallery
+        shell: pwsh
+        env:
+          PSGALLERY_API_KEY: ${{ secrets.PSGALLERY_API_KEY }}
+        run: |
+          Publish-Module -Path ./src -NuGetApiKey $env:PSGALLERY_API_KEY -Repository PSGallery -Verbose
