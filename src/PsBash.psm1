@@ -2635,15 +2635,18 @@ function Get-DotNetProcEntry {
     $rssKB = [long]($ws / 1024)
     try { $vszKB = [long]($p.VirtualMemorySize64 / 1024) } catch {}
 
-    $totalMemBytes = [long]1
-    try {
-        if ($IsWindows) {
-            $totalMemBytes = [long](Get-CimInstance Win32_OperatingSystem).TotalVisibleMemorySize * 1024
-        } elseif ($IsMacOS) {
-            $sysctl = & /usr/sbin/sysctl -n hw.memsize 2>$null
-            if ($sysctl) { $totalMemBytes = [long]$sysctl }
-        }
-    } catch {}
+    if ($null -eq $script:TotalMemBytes) {
+        $script:TotalMemBytes = [long]1
+        try {
+            if ($IsWindows) {
+                $script:TotalMemBytes = [long](Get-CimInstance Win32_OperatingSystem).TotalVisibleMemorySize * 1024
+            } elseif ($IsMacOS) {
+                $sysctl = & /usr/sbin/sysctl -n hw.memsize 2>$null
+                if ($sysctl) { $script:TotalMemBytes = [long]$sysctl }
+            }
+        } catch {}
+    }
+    $totalMemBytes = $script:TotalMemBytes
     if ($totalMemBytes -gt 0) {
         $memPct = [double][System.Math]::Round(($ws / $totalMemBytes) * 100.0, 1)
     }
@@ -2830,9 +2833,9 @@ function Invoke-BashPs {
             $entry = Get-LinuxProcEntry -ProcDir $dir
             if ($null -eq $entry) { continue }
 
-            if (-not $showAll -and -not $bsdAux -and $null -eq $filterPid -and $null -eq $filterUser -and $null -eq $customFormat) {
-                if ($fullFormat) {
-                    # ps -f: show current user's processes (no TTY restriction)
+            if (-not $showAll -and -not $bsdAux -and $null -eq $filterPid -and $null -eq $filterUser) {
+                if ($fullFormat -or $null -ne $customFormat) {
+                    # ps -f or ps -o: show current user's processes (no TTY restriction)
                     if ($entry.User -ne $currentUser) { continue }
                 } else {
                     # Default ps: show current user's processes with a TTY
@@ -2892,7 +2895,7 @@ function Invoke-BashPs {
                 $entry = Get-DotNetProcEntry -Process $p
                 if ($null -eq $entry) { continue }
 
-                if (-not $showAll -and -not $bsdAux -and $null -eq $filterPid -and $null -eq $filterUser -and $null -eq $customFormat) {
+                if (-not $showAll -and -not $bsdAux -and $null -eq $filterPid -and $null -eq $filterUser) {
                     if ($IsWindows) {
                         $currentUser = $env:USERNAME
                     } else {
@@ -9183,8 +9186,16 @@ function Invoke-BashTime {
         $sw.Stop()
         $errors = @($output | Where-Object { $_ -is [System.Management.Automation.ErrorRecord] })
         $normal = @($output | Where-Object { $_ -isnot [System.Management.Automation.ErrorRecord] })
-        foreach ($e in $errors) { Write-Error $e }
+        foreach ($e in $errors) { Write-Error $e -ErrorAction Continue }
         if ($errors.Count -gt 0) { $exitCode = 1 }
+    } catch {
+        $sw.Stop()
+        Write-Error $_.Exception.Message -ErrorAction Continue
+        $exitCode = 1
+        $errors = @($_)
+        $normal = @()
+    }
+    try {
         $textParts = @(foreach ($item in $normal) {
             if ($item.PSObject.Properties['BashText']) { $item.BashText } else { "$item" }
         })

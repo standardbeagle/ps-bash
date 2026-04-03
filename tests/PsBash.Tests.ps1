@@ -2008,7 +2008,7 @@ Describe 'Invoke-BashPs — Basic Output' {
         $self.ProcessName | Should -Not -BeNullOrEmpty
     }
 
-    It 'ps with no args returns PsEntry objects' -Skip:($IsLinux -and -not [System.Environment]::UserInteractive) {
+    It 'ps with no args returns PsEntry objects' -Skip:($IsLinux -and -not (Test-Path /dev/tty -ErrorAction SilentlyContinue)) {
         $results = @(Invoke-BashPs)
         $results.Count | Should -BeGreaterOrEqual 1
         $results[0].PSObject.TypeNames[0] | Should -Be 'PsBash.PsEntry'
