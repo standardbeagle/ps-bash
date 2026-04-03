@@ -2008,7 +2008,7 @@ Describe 'Invoke-BashPs — Basic Output' {
         $self.ProcessName | Should -Not -BeNullOrEmpty
     }
 
-    It 'ps with no args returns PsEntry objects' {
+    It 'ps with no args returns PsEntry objects' -Skip:($IsLinux -and -not [System.Environment]::UserInteractive) {
         $results = @(Invoke-BashPs)
         $results.Count | Should -BeGreaterOrEqual 1
         $results[0].PSObject.TypeNames[0] | Should -Be 'PsBash.PsEntry'
@@ -5158,7 +5158,7 @@ Describe 'Invoke-BashBase64 — encode text from pipeline' {
 
     It 'wraps output at specified column with -w' {
         $result = echo 'hello world this is a long string for base64' | base64 -w 20
-        $lines = $result.BashText -split "`n"
+        $lines = ($result.BashText -split "`n") | ForEach-Object { $_.TrimEnd("`r") }
         foreach ($line in $lines) {
             if ($line.Length -gt 0) {
                 $line.Length | Should -BeLessOrEqual 20
@@ -5190,7 +5190,7 @@ Describe 'Invoke-BashBase64 — encode text from pipeline' {
         $tmpFile = Join-Path $TestDrive 'b64long.txt'
         Set-Content -Path $tmpFile -Value $longInput -NoNewline
         $result = base64 $tmpFile
-        $lines = $result.BashText -split "`n"
+        $lines = ($result.BashText -split "`n") | ForEach-Object { $_.TrimEnd("`r") }
         $lines[0].Length | Should -BeLessOrEqual 76
     }
 

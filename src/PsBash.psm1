@@ -2657,28 +2657,23 @@ function Get-DotNetProcEntry {
     } catch {}
 
     if ($IsWindows) {
-        try {
-            $cim = Get-CimInstance Win32_Process -Filter "ProcessId = $pid" -ErrorAction SilentlyContinue
-            if ($cim) {
-                $cmdline = $cim.CommandLine
-                $userName = $cim.GetOwner().User
-                if ($cim.ParentProcessId) { $ppid = [int]$cim.ParentProcessId }
-            }
-        } catch {}
+        if ($null -ne $script:WinCimLookup -and $script:WinCimLookup.ContainsKey($pid)) {
+            $info = $script:WinCimLookup[$pid]
+            $cmdline = $info.CommandLine
+            $userName = $info.User
+            $ppid = $info.PPID
+        }
         if ([string]::IsNullOrEmpty($userName)) {
             try { $userName = $env:USERNAME } catch {}
         }
         if ($p.SessionId -gt 0) { $tty = "con$($p.SessionId)" }
     } elseif ($IsMacOS) {
-        try {
-            $psLine = & /bin/ps -o user=,ppid=,tty= -p $pid 2>$null
-            if ($psLine) {
-                $parts = $psLine.Trim() -split '\s+', 3
-                $userName = $parts[0]
-                $ppid = [int]$parts[1]
-                $tty = if ($parts[2] -eq '??') { '?' } else { $parts[2] }
-            }
-        } catch {}
+        if ($null -ne $script:MacPsLookup -and $script:MacPsLookup.ContainsKey($pid)) {
+            $info = $script:MacPsLookup[$pid]
+            $userName = $info.User
+            $ppid = $info.PPID
+            $tty = $info.TTY
+        }
     }
 
     if ([string]::IsNullOrEmpty($cmdline)) { $cmdline = $procName }
@@ -2715,7 +2710,7 @@ function Format-PsAuxLine {
         [PSCustomObject]$Entry
     )
 
-    $startStr = $Entry.Start.ToString('HH:mm')
+    $startStr = if ($null -ne $Entry.Start) { $Entry.Start.ToString('HH:mm') } else { '?' }
     '{0,-8} {1,7} {2,4:F1} {3,4:F1} {4,7} {5,6} {6,-7} {7,-4} {8,5} {9,8} {10}' -f `
         $Entry.User,
         $Entry.PID,
@@ -2835,7 +2830,7 @@ function Invoke-BashPs {
             $entry = Get-LinuxProcEntry -ProcDir $dir
             if ($null -eq $entry) { continue }
 
-            if (-not $showAll -and -not $bsdAux -and $null -eq $filterPid) {
+            if (-not $showAll -and -not $bsdAux -and $null -eq $filterPid -and $null -eq $filterUser -and $null -eq $customFormat) {
                 if ($fullFormat) {
                     # ps -f: show current user's processes (no TTY restriction)
                     if ($entry.User -ne $currentUser) { continue }
@@ -2856,12 +2851,48 @@ function Invoke-BashPs {
         } else {
             Get-Process -ErrorAction SilentlyContinue
         }
+
+        # Windows: batch-fetch cmdline/user/ppid for all processes in one CIM call
+        if ($IsWindows -and $procs) {
+            $script:WinCimLookup = [System.Collections.Generic.Dictionary[int,PSCustomObject]]::new()
+            try {
+                $cimProcs = Get-CimInstance Win32_Process -ErrorAction SilentlyContinue
+                foreach ($cim in $cimProcs) {
+                    $cimUser = ''
+                    try { $cimUser = $cim.GetOwner().User } catch {}
+                    $script:WinCimLookup[[int]$cim.ProcessId] = [PSCustomObject]@{
+                        CommandLine = $cim.CommandLine
+                        User        = $cimUser
+                        PPID        = if ($cim.ParentProcessId) { [int]$cim.ParentProcessId } else { 0 }
+                    }
+                }
+            } catch {}
+        }
+
+        # macOS: batch-fetch user/ppid/tty for all PIDs in one /bin/ps call
+        if ($IsMacOS -and $procs) {
+            $script:MacPsLookup = [System.Collections.Generic.Dictionary[int,PSCustomObject]]::new()
+            try {
+                $psOutput = & /bin/ps -axo pid=,user=,ppid=,tty= 2>$null
+                foreach ($line in $psOutput) {
+                    $parts = $line.Trim() -split '\s+', 4
+                    if ($parts.Count -ge 4 -and $parts[0] -match '^\d+$') {
+                        $script:MacPsLookup[[int]$parts[0]] = [PSCustomObject]@{
+                            User = $parts[1]
+                            PPID = [int]$parts[2]
+                            TTY  = if ($parts[3] -eq '??') { '?' } else { $parts[3] }
+                        }
+                    }
+                }
+            } catch {}
+        }
+
         if ($procs) {
             foreach ($p in $procs) {
                 $entry = Get-DotNetProcEntry -Process $p
                 if ($null -eq $entry) { continue }
 
-                if (-not $showAll -and -not $bsdAux -and $null -eq $filterPid) {
+                if (-not $showAll -and -not $bsdAux -and $null -eq $filterPid -and $null -eq $filterUser -and $null -eq $customFormat) {
                     if ($IsWindows) {
                         $currentUser = $env:USERNAME
                     } else {
@@ -9092,7 +9123,7 @@ function Invoke-BashSleep {
     if ($Arguments -contains '--help') { return Show-BashHelp 'sleep' }
 
     if ($Arguments.Count -eq 0) {
-        Write-Error 'sleep: missing operand'
+        Write-Error 'sleep: missing operand' -ErrorAction Continue
         return
     }
 
@@ -9111,11 +9142,11 @@ function Invoke-BashSleep {
         }
         $val = 0.0
         if (-not [double]::TryParse($numStr, [ref]$val)) {
-            Write-Error "sleep: invalid time interval '$arg'"
+            Write-Error "sleep: invalid time interval '$arg'" -ErrorAction Continue
             return
         }
         if ($val -lt 0) {
-            Write-Error "sleep: invalid time interval '$arg'"
+            Write-Error "sleep: invalid time interval '$arg'" -ErrorAction Continue
             return
         }
         $totalSeconds += $val * $multiplier
@@ -9134,7 +9165,7 @@ function Invoke-BashTime {
     if ($Arguments -contains '--help') { return Show-BashHelp 'time' }
 
     if ($Arguments.Count -eq 0) {
-        Write-Error 'time: missing command'
+        Write-Error 'time: missing command' -ErrorAction Continue
         return
     }
 
@@ -9195,14 +9226,14 @@ function Invoke-BashWhich {
     }
 
     if ($operands.Count -eq 0) {
-        Write-Error 'which: missing operand'
+        Write-Error 'which: missing operand' -ErrorAction Continue
         return
     }
 
     foreach ($name in $operands) {
         $cmds = @(Get-Command $name -ErrorAction SilentlyContinue)
         if ($cmds.Count -eq 0) {
-            Write-Error "which: no $name in PATH"
+            Write-Error "which: no $name in PATH" -ErrorAction Continue
             continue
         }
 
@@ -9263,7 +9294,7 @@ function Invoke-BashAlias {
         }
         foreach ($name in $operands) {
             if (-not $script:BashUserAliases.ContainsKey($name)) {
-                Write-Error "unalias: ${name}: not found"
+                Write-Error "unalias: ${name}: not found" -ErrorAction Continue
                 continue
             }
             $script:BashUserAliases.Remove($name) | Out-Null
