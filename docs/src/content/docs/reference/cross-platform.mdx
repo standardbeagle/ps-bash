@@ -1,8 +1,254 @@
 ---
-title: Cross-Platform
-description: Platform-specific behavior and compatibility notes for ps-bash.
+title: Cross-Platform Guide
+description: "How ps-bash behaves on Linux, macOS, and Windows — file permissions, process listing, symlinks, paths, and CI testing."
 ---
 
-# Cross-Platform
+import { Aside, Tabs, TabItem } from '@astrojs/starlight/components';
 
-Platform-specific behavior and compatibility notes for ps-bash.
+Ps-bash targets identical command syntax across all three platforms. Under the hood, each platform uses different OS primitives. This page documents where behavior diverges and how ps-bash bridges the gaps.
+
+---
+
+## File Permissions
+
+The `ls -l` and `stat` commands display Unix-style permission strings (`rwxr-xr-x`) on every platform, but the source of truth differs.
+
+<Tabs>
+<TabItem label="Linux / macOS">
+
+`Get-BashFileInfo` reads the real POSIX mode via .NET's `UnixFileMode` property and converts it to a permission string with `ConvertTo-PermissionString`:
+
+```powershell
+$mode = [int]$Item.UnixFileMode          # real kernel mode bits
+$permString = ConvertTo-PermissionString -Mode $mode   # e.g. "rwxr-xr-x"
+```
+
+Owner, group, and hard-link count come from a native `stat` call:
+
+```powershell
+# Linux
+& /usr/bin/stat -c '%h %U %G' $Item.FullName
+
+# macOS (BSD stat)
+& /usr/bin/stat -f '%l %Su %Sg' $Item.FullName
+```
+
+</TabItem>
+<TabItem label="Windows">
+
+Windows has no POSIX mode bits. `Get-BashFileInfo` reads the NTFS ACL via `Get-Acl` and maps the first matching access rules to an approximation:
+
+```powershell
+$acl = Get-Acl -Path $Item.FullName
+# Check FileSystemRights: Read, Write, ExecuteFile
+# Build user bits, then replicate to group and other
+$permString = "$u$u$u"      # e.g. "rwxrwxrwx" or "rw-rw-rw-"
+```
+
+Owner and group are extracted from the ACL, stripping the domain prefix (`DOMAIN\user` becomes `user`). If ACL access fails, the function falls back to `rw-r--r--` for files and `rwxr-xr-x` for directories.
+
+</TabItem>
+</Tabs>
+
+<Aside type="tip">
+The typed `LsEntry` and `StatEntry` objects carry the same properties on every platform. Only the precision of `Permissions`, `LinkCount`, `Owner`, and `Group` varies.
+</Aside>
+
+---
+
+## Process Listing (ps)
+
+The `ps` command returns identical column names (`PID`, `User`, `TTY`, `Stat`, `Command`, etc.) on all platforms, but the data sources differ significantly.
+
+<Tabs>
+<TabItem label="Linux">
+
+`Get-LinuxProcEntry` reads the `/proc` filesystem directly:
+
+| Data | Source |
+|------|--------|
+| PID, PPID, state, CPU ticks | `/proc/[pid]/stat` |
+| UID (resolved to username) | `/proc/[pid]/status` + `/usr/bin/getent passwd` |
+| Command line | `/proc/[pid]/cmdline` (null-byte separated) |
+| Memory | `/proc/meminfo` for total, RSS from stat |
+| TTY | Decoded from `tty_nr` (major/minor device numbers) |
+
+TTY values are real device names like `pts/0` or `tty1`. The `Stat` column reflects the kernel process state character (`S`, `R`, `D`, `Z`, etc.).
+
+</TabItem>
+<TabItem label="Windows">
+
+`Get-DotNetProcEntry` uses .NET `System.Diagnostics.Process` plus WMI:
+
+| Data | Source |
+|------|--------|
+| PID, process name, memory | `System.Diagnostics.Process` |
+| PPID, command line, owner | `Win32_Process` via `Get-CimInstance` |
+| Total memory (for %MEM) | `Win32_OperatingSystem.TotalVisibleMemorySize` |
+| TTY | Session ID mapped to `con1`, `con2`, etc. |
+
+TTY shows `con1` (console session 1) instead of Unix-style `pts/0`. The `Stat` column is inferred: `Sl` for multi-threaded, `S` otherwise.
+
+</TabItem>
+<TabItem label="macOS">
+
+macOS also uses `Get-DotNetProcEntry` but supplements with the native `ps` command:
+
+```powershell
+& /bin/ps -o user=,ppid=,tty= -p $pid
+```
+
+This provides real username, PPID, and TTY values. Total memory comes from `sysctl -n hw.memsize`. TTY values use native names (e.g. `ttys001`) or `?` for daemon processes.
+
+</TabItem>
+</Tabs>
+
+### Column availability comparison
+
+| Column | Linux | macOS | Windows |
+|--------|-------|-------|---------|
+| `PID` | `/proc` | .NET | .NET |
+| `PPID` | `/proc` | `/bin/ps` | WMI |
+| `User` | `/proc` + getent | `/bin/ps` | WMI or `$env:USERNAME` |
+| `TTY` | device decode | `/bin/ps` | session ID |
+| `Stat` | kernel state | inferred | inferred |
+| `VSZ` / `RSS` | `/proc` | .NET | .NET |
+| `Command` | `/proc/cmdline` | process name | WMI CommandLine |
+
+---
+
+## Symlinks (ln -s)
+
+<Tabs>
+<TabItem label="Linux / macOS">
+
+Symbolic and hard links work without restrictions:
+
+```powershell
+ln -s target linkname        # symbolic link
+ln target linkname           # hard link
+ln -sf target linkname       # force-replace existing
+```
+
+</TabItem>
+<TabItem label="Windows">
+
+Symbolic links require elevated privileges:
+- **Developer Mode** enabled (Settings > Update & Security > For developers), or
+- Running PowerShell as **Administrator**
+
+Hard links work without elevation but the target must be a file on the same NTFS volume.
+
+The test suite skips all 5 symlink tests on Windows:
+
+```powershell
+It 'ln -s creates symbolic link' -Skip:$IsWindows { ... }
+```
+
+</TabItem>
+</Tabs>
+
+---
+
+## Native Command Resolution
+
+Ps-bash calls native executables by absolute path on Unix platforms to avoid alias recursion.
+
+<Tabs>
+<TabItem label="Linux / macOS">
+
+When ps-bash needs native OS data it cannot get through .NET alone, it calls the real binary directly:
+
+| Command | Path |
+|---------|------|
+| `stat` | `/usr/bin/stat` |
+| `getent` | `/usr/bin/getent` (Linux only) |
+| `ps` | `/bin/ps` (macOS only) |
+| `id` | `/usr/bin/id` |
+| `sysctl` | `/usr/sbin/sysctl` (macOS only) |
+
+Using absolute paths prevents infinite recursion when the user has aliased `stat` to `Invoke-BashStat` or similar.
+
+</TabItem>
+<TabItem label="Windows">
+
+Windows has no native `stat`, `ls`, `ps`, or `id` commands. All data comes from .NET APIs and WMI:
+
+| Unix equivalent | Windows source |
+|----------------|----------------|
+| `stat` | `Get-Item` + `Get-Acl` |
+| `ls` | `Get-ChildItem` + `Get-Acl` |
+| `ps` | `Get-Process` + `Get-CimInstance Win32_Process` |
+| `id -un` | `$env:USERNAME` |
+
+No native binary calls are needed on Windows.
+
+</TabItem>
+</Tabs>
+
+---
+
+## stat Format Strings
+
+The `stat -c` format specifiers work identically across all platforms:
+
+| Specifier | Meaning | Linux/macOS | Windows |
+|-----------|---------|-------------|---------|
+| `%s` | Size in bytes | exact | exact |
+| `%a` | Octal permissions | real mode | approximated from ACL |
+| `%A` | Permission string | real mode | approximated from ACL |
+| `%n` | File name | exact | exact |
+| `%N` | Full path | exact | exact |
+| `%U` | Owner name | real | from ACL |
+| `%G` | Group name | real | from ACL |
+| `%i` | Inode number | real | always 0 |
+| `%b` | Block count | real | calculated from size |
+| `%d` | Device number | real | derived from drive letter |
+| `%Y` | Mtime (epoch) | exact | exact |
+| `%h` | Hard link count | real | always 1 |
+
+<Aside>
+On Windows, inode is always `0` and device is derived from the drive letter (`C:` = 2, `D:` = 3, etc.). Block count is calculated as `ceil(size / 512)`. The test suite validates these platform-specific behaviors with conditional tests.
+</Aside>
+
+---
+
+## Path Handling
+
+### Forward-slash normalization
+
+All ps-bash commands accept both `/` and `\` as path separators on every platform. When producing BashText output, backslashes are normalized to forward slashes for bash-style display:
+
+```powershell
+$bashLink = $linkName -replace '\\', '/'
+```
+
+This normalization happens in verbose output for `cp`, `mv`, `ln`, `mkdir`, `rmdir`, `find`, and `cat` error messages.
+
+### Tilde expansion
+
+PowerShell handles `~` expansion natively via its provider system, so `ls ~/Documents` works on all platforms without ps-bash needing custom logic. The `find` command resolves the home directory via `[System.Environment]::GetFolderPath('UserProfile')` when building search roots.
+
+---
+
+## CI Matrix
+
+The GitHub Actions workflow (`.github/workflows/ci.yml`) tests every commit on all three platforms:
+
+```yaml
+strategy:
+  matrix:
+    os: [windows-latest, ubuntu-latest, macos-latest]
+  fail-fast: false
+```
+
+The test suite contains 751 test cases. Platform-conditional skips handle OS-specific limitations:
+
+| Test category | Linux | macOS | Windows |
+|---------------|-------|-------|---------|
+| Symlink tests (5 tests) | run | run | skipped |
+| stat Linux inode test | run | skipped | skipped |
+| stat Windows device test | skipped | skipped | run |
+| All other tests | run | run | run |
+
+All non-skipped tests pass on every platform. Skipped tests are marked with Pester's `-Skip:` parameter tied to platform detection variables (`$IsWindows`, `$IsMacOS`, `$IsLinux`).

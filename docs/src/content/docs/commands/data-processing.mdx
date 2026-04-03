@@ -1,8 +1,571 @@
 ---
-title: Data Processing
-description: jq, yq, and xan commands for JSON, YAML, and CSV processing.
+title: "Data Processing: jq, yq & xan"
+description: "jq, yq, and xan commands for JSON, YAML, and CSV processing in PowerShell. Use jq in PowerShell to query and transform JSON data with the same filter syntax you know from the command line."
+head:
+  - tag: meta
+    attrs:
+      name: keywords
+      content: jq in powershell, powershell json processing, powershell jq, yq powershell, powershell yaml, powershell csv, xan csv toolkit, json filter powershell, yaml to json powershell
 ---
+
+import { Aside, Tabs, TabItem } from '@astrojs/starlight/components';
 
 # Data Processing
 
-`jq`, `yq`, and `xan` commands for JSON, YAML, and CSV processing.
+`jq`, `yq`, and `xan` for JSON, YAML, and CSV processing.
+
+---
+
+## jq
+
+JSON processor. Reads JSON from files or pipeline input, applies a filter expression, and outputs the results.
+
+```
+jq [OPTIONS] FILTER [FILE...]
+```
+
+### Flags
+
+| Flag | Description |
+|------|-------------|
+| `-r` | Raw output -- strings are printed without quotes |
+| `-c` | Compact output -- no whitespace or newlines in JSON |
+| `-S` | Sort object keys alphabetically |
+| `-s` | Slurp -- read all inputs into a single array before filtering |
+
+### Filter syntax
+
+jq uses a path-based filter language to navigate and transform JSON.
+
+#### Field access
+
+| Expression | Description |
+|------------|-------------|
+| `.` | Identity -- returns the entire input |
+| `.field` | Access a top-level field |
+| `.field.nested` | Access nested fields |
+| `.[0]` | Access array element by index |
+| `.[-1]` | Access array element from the end |
+| `.[]` | Iterate all elements of an array or values of an object |
+
+#### Built-in functions
+
+| Function | Description |
+|----------|-------------|
+| `keys` | Array of keys (sorted) from an object, or indices from an array |
+| `values` | Array of values from an object or array |
+| `length` | Number of elements in an array/object, or character count of a string |
+| `type` | Type name: `"string"`, `"number"`, `"boolean"`, `"array"`, `"object"`, or `"null"` |
+| `map(expr)` | Apply `expr` to each element of an array, return the results as an array |
+| `select(expr)` | Keep the input if `expr` is truthy, discard it otherwise |
+| `not` | Boolean negation |
+
+#### Pipe expressions
+
+Use `|` to chain filters. The output of the left side becomes the input of the right side:
+
+```
+.[] | .name
+```
+
+#### Multiple outputs
+
+Use `,` to produce multiple outputs from a single input:
+
+```
+.name, .age
+```
+
+#### Object construction
+
+Build new objects from the input:
+
+```
+{name: .user.name, id: .user.id}
+```
+
+#### Array construction
+
+Collect results into an array:
+
+```
+[.[] | .name]
+```
+
+#### String interpolation
+
+Build strings with embedded expressions:
+
+```
+"Name: \(.name), Age: \(.age)"
+```
+
+#### Comparison operators
+
+`select()` supports `==`, `!=`, `>`, `<`, `>=`, `<=`:
+
+```
+.[] | select(.age >= 21)
+```
+
+### Return type
+
+Each result is a `BashObject` with `BashText` set to the formatted JSON string (or raw string with `-r`).
+
+### Examples
+
+**Extract a nested field:**
+
+```powershell
+echo '{"database": {"host": "localhost", "port": 5432}}' | jq '.database.host'
+```
+
+```text
+"localhost"
+```
+
+**Raw output (no quotes):**
+
+```powershell
+echo '{"name": "alice"}' | jq -r '.name'
+```
+
+```text
+alice
+```
+
+**Iterate array elements:**
+
+```powershell
+echo '[1, 2, 3]' | jq '.[]'
+```
+
+```text
+1
+2
+3
+```
+
+**Access by index:**
+
+```powershell
+echo '["a", "b", "c"]' | jq '.[1]'
+```
+
+```text
+"b"
+```
+
+**Pipe through filters:**
+
+```powershell
+echo '[{"name": "alice"}, {"name": "bob"}]' | jq '.[] | .name'
+```
+
+```text
+"alice"
+"bob"
+```
+
+**Select with a condition:**
+
+```powershell
+echo '[{"name": "alice", "age": 30}, {"name": "bob", "age": 17}]' | jq '.[] | select(.age >= 21)'
+```
+
+```text
+{
+  "name": "alice",
+  "age": 30
+}
+```
+
+**Map over an array:**
+
+```powershell
+echo '[1, 2, 3]' | jq 'map(. * 2)'
+```
+
+```text
+[
+  2,
+  4,
+  6
+]
+```
+
+**Get keys of an object:**
+
+```powershell
+echo '{"b": 2, "a": 1, "c": 3}' | jq 'keys'
+```
+
+```text
+[
+  "a",
+  "b",
+  "c"
+]
+```
+
+**Compact output:**
+
+```powershell
+echo '{"name": "alice", "age": 30}' | jq -c '.'
+```
+
+```text
+{"name":"alice","age":30}
+```
+
+**Sort keys:**
+
+```powershell
+echo '{"z": 1, "a": 2}' | jq -S '.'
+```
+
+```text
+{
+  "a": 2,
+  "z": 1
+}
+```
+
+**Slurp multiple JSON values into an array:**
+
+```powershell
+echo '{"a":1}
+{"b":2}' | jq -s '.'
+```
+
+```text
+[
+  {
+    "a": 1
+  },
+  {
+    "b": 2
+  }
+]
+```
+
+**Construct a new object:**
+
+```powershell
+echo '{"first": "alice", "last": "smith", "age": 30}' | jq '{fullName: "\(.first) \(.last)", age: .age}'
+```
+
+```text
+{
+  "fullName": "alice smith",
+  "age": 30
+}
+```
+
+**Read from a file:**
+
+```powershell
+jq '.version' package.json
+```
+
+**Get the type of a value:**
+
+```powershell
+echo '"hello"' | jq 'type'
+```
+
+```text
+"string"
+```
+
+---
+
+## yq
+
+YAML processor. Parses YAML input and applies the same filter syntax as `jq`. Can output as JSON (default) or YAML.
+
+```
+yq [OPTIONS] FILTER [FILE...]
+```
+
+### Flags
+
+| Flag | Description |
+|------|-------------|
+| `-r` | Raw output -- strings are printed without quotes |
+| `-o FORMAT` | Output format: `json` (default) or `yaml` |
+
+### Filter syntax
+
+yq reuses the full jq filter engine. All filter expressions, built-in functions, pipe expressions, and construction syntax documented under [jq](#jq) work identically in yq.
+
+### Return type
+
+Each result is a `BashObject` with `BashText` set to the formatted output (JSON or YAML).
+
+### Examples
+
+**Extract a field from YAML:**
+
+```powershell
+echo "database:
+  host: localhost
+  port: 5432" | yq '.database.host'
+```
+
+```text
+"localhost"
+```
+
+**Raw output:**
+
+```powershell
+echo "name: alice" | yq -r '.name'
+```
+
+```text
+alice
+```
+
+**Convert YAML to JSON:**
+
+```powershell
+echo "name: alice
+age: 30
+tags:
+  - admin
+  - user" | yq '.'
+```
+
+```text
+{
+  "name": "alice",
+  "age": 30,
+  "tags": [
+    "admin",
+    "user"
+  ]
+}
+```
+
+**Convert JSON to YAML:**
+
+```powershell
+echo '{"name": "alice", "age": 30}' | yq -o yaml '.'
+```
+
+```text
+name: alice
+age: 30
+```
+
+**Filter nested YAML and output as YAML:**
+
+```powershell
+echo "services:
+  web:
+    port: 8080
+  db:
+    port: 5432" | yq -o yaml '.services.web'
+```
+
+```text
+port: 8080
+```
+
+**Read from a file:**
+
+```powershell
+yq '.spec.containers' deployment.yaml
+```
+
+**Iterate array elements in YAML:**
+
+```powershell
+echo "items:
+  - name: alpha
+  - name: beta" | yq '.items[] | .name'
+```
+
+```text
+"alpha"
+"beta"
+```
+
+---
+
+## xan
+
+CSV toolkit. Provides subcommands for inspecting, querying, and formatting CSV data.
+
+```
+xan [-d DELIMITER] SUBCOMMAND [ARGS...] [FILE]
+```
+
+### Global flags
+
+| Flag | Description |
+|------|-------------|
+| `-d CHAR` | Set the field delimiter (default: `,`) |
+
+### Subcommands
+
+#### headers
+
+Print the column names from the CSV header row, one per line.
+
+```
+xan headers [FILE]
+```
+
+#### count
+
+Print the number of data rows (excluding the header).
+
+```
+xan count [FILE]
+```
+
+#### select
+
+Select specific columns by name. Multiple columns are separated by commas.
+
+```
+xan select COLUMNS [FILE]
+```
+
+#### search
+
+Filter rows where any field matches a regex pattern. Outputs matching rows with the header.
+
+```
+xan search PATTERN [FILE]
+```
+
+#### table
+
+Pretty-print the CSV as an aligned table.
+
+```
+xan table [FILE]
+```
+
+### Return type
+
+Each subcommand returns `BashObject` results:
+- **headers**: one object per column name
+- **count**: a single object with the row count
+- **select**: one object per output line (header + matching rows)
+- **search**: one object per output line (header + matching rows)
+- **table**: a single object with the formatted table
+
+### Examples
+
+**List column names:**
+
+```powershell
+echo "name,age,city
+alice,30,portland
+bob,25,seattle" | xan headers
+```
+
+```text
+name
+age
+city
+```
+
+**Count rows:**
+
+```powershell
+echo "name,age
+alice,30
+bob,25
+carol,35" | xan count
+```
+
+```text
+3
+```
+
+**Select specific columns:**
+
+```powershell
+echo "name,age,city
+alice,30,portland
+bob,25,seattle" | xan select name,city
+```
+
+```text
+name,city
+alice,portland
+bob,seattle
+```
+
+**Search for a pattern:**
+
+```powershell
+echo "name,age,city
+alice,30,portland
+bob,25,seattle
+carol,35,portland" | xan search portland
+```
+
+```text
+name,age,city
+alice,30,portland
+carol,35,portland
+```
+
+**Pretty-print as a table:**
+
+```powershell
+echo "name,age,city
+alice,30,portland
+bob,25,seattle" | xan table
+```
+
+```text
+name   age  city
+alice  30   portland
+bob    25   seattle
+```
+
+**Use a custom delimiter (TSV):**
+
+```powershell
+echo "name	age	city
+alice	30	portland
+bob	25	seattle" | xan -d '	' headers
+```
+
+```text
+name
+age
+city
+```
+
+**Read from a file:**
+
+```powershell
+xan headers data.csv
+```
+
+**Pipeline: select columns then search:**
+
+```powershell
+xan select name,city data.csv | xan search portland
+```
+
+### jq + xan together
+
+Combine JSON and CSV tools in a pipeline:
+
+```powershell
+# Extract names from JSON array, format as CSV
+echo '[{"name":"alice","age":30},{"name":"bob","age":25}]' | jq -r '.[] | "\(.name),\(.age)"' | xan table
+```
+
+<Aside type="tip">
+All three commands accept input from the pipeline or from file arguments. When used with pipeline input, they read the `BashText` representation of each incoming object, making them composable with every other PsBash command.
+</Aside>

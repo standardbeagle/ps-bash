@@ -3,6 +3,695 @@ title: System Info
 description: ps, env, date, hostname, whoami, which, alias, time, and sleep commands.
 ---
 
+import { Aside } from '@astrojs/starlight/components';
+
 # System Info
 
-`ps`, `env`, `date`, `hostname`, `whoami`, `which`, `alias`, `time`, and `sleep` commands.
+`ps`, `env`, `date`, `hostname`, `whoami`, `which`, `balias`, `time`, and `sleep` commands for process listing, environment inspection, and shell utilities.
+
+---
+
+## ps
+
+Report a snapshot of the current processes. Returns structured `PsEntry` objects with typed properties for process ID, CPU, memory, and more.
+
+### Syntax
+
+```text
+ps [OPTIONS]
+```
+
+### Flags
+
+| Flag | Description |
+|------|-------------|
+| `aux` | BSD-style: show all processes with full columns |
+| `-e` / `-A` | Show all processes |
+| `-f` | Full-format listing (current user's processes, no TTY restriction) |
+| `-u USER` | Filter by username |
+| `-p PID` | Filter by process ID |
+| `--sort=KEY` | Sort by key (prefix with `-` for descending) |
+| `-o COLS` | Custom column output (comma-separated) |
+
+**Sort keys:** `pid`, `ppid`, `cpu`, `%cpu`, `mem`, `%mem`, `rss`, `vsz`, `user`, `comm`, `time`
+
+**Custom columns (`-o`):** `pid`, `ppid`, `user`, `%cpu`, `cpu`, `%mem`, `mem`, `vsz`, `rss`, `tty`, `stat`, `start`, `time`, `command`, `cmd`, `comm`, `args`
+
+### PsEntry Properties
+
+Each result is a `PsBash.PsEntry` object:
+
+| Property | Type | Description |
+|----------|------|-------------|
+| `PID` | `int` | Process ID |
+| `PPID` | `int` | Parent process ID |
+| `User` | `string` | Username of the process owner |
+| `CPU` | `double` | CPU usage percentage |
+| `Memory` | `double` | Memory usage percentage |
+| `MemoryMB` | `double` | Resident memory in megabytes |
+| `VSZ` | `long` | Virtual memory size in KB |
+| `RSS` | `long` | Resident set size in KB |
+| `TTY` | `string` | Controlling terminal |
+| `Stat` | `string` | Process state code |
+| `Start` | `DateTime` | Process start time |
+| `Time` | `string` | Cumulative CPU time (`M:SS` format) |
+| `Command` | `string` | Command line |
+| `CommandLine` | `string` | Full command line |
+| `ProcessName` | `string` | Short process name |
+| `WorkingSet` | `long` | Working set in bytes |
+| `BashText` | `string` | Formatted text output line |
+
+<Aside type="note">
+Cross-platform: on Linux, `ps` reads `/proc` directly for accurate data. On Windows and macOS, it uses .NET `System.Diagnostics.Process` with platform-specific enrichment (CIM on Windows, `/bin/ps` on macOS).
+</Aside>
+
+### Examples
+
+**List all processes (BSD-style):**
+
+```powershell
+ps aux
+```
+
+```text
+root         1  0.0  0.1   2456  1024 ?       S     09:15     0:01 /sbin/init
+you       1234  2.5  1.3  45600 13312 pts/0   Sl    10:30     1:42 pwsh
+```
+
+**Top 5 processes by CPU usage:**
+
+```powershell
+ps aux | sort -k3 -rn | head 5
+```
+
+The output looks like text, but each result is still a `PsEntry` object. Properties survive the pipeline:
+
+```powershell
+$top = ps aux | sort -k3 -rn | head 1
+$top[0].PID         # 1234
+$top[0].MemoryMB    # 13.0
+```
+
+**Filter by user:**
+
+```powershell
+ps -u root
+```
+
+**Filter by PID:**
+
+```powershell
+ps -p 1
+```
+
+**Sort by memory descending:**
+
+```powershell
+ps aux --sort=-%mem
+```
+
+**Custom column output:**
+
+```powershell
+ps -e -o pid,user,%cpu,%mem,command
+```
+
+```text
+    1 root      0.0  0.1 /sbin/init
+ 1234 you       2.5  1.3 pwsh
+```
+
+**Access properties programmatically:**
+
+```powershell
+$procs = ps aux
+$procs | Where-Object { $_.Memory -gt 1.0 } | ForEach-Object {
+    '{0}: {1} MB' -f $_.ProcessName, $_.MemoryMB
+}
+```
+
+---
+
+## env / printenv
+
+Print environment variables as structured objects. Both `env` and `printenv` call the same function.
+
+### Syntax
+
+```text
+env [VARNAME]
+printenv [VARNAME]
+```
+
+When called with no arguments, lists all environment variables sorted by name. When called with a variable name, returns that single variable.
+
+### EnvEntry Properties
+
+Each result is a `PsBash.EnvEntry` object:
+
+| Property | Type | Description |
+|----------|------|-------------|
+| `Name` | `string` | Environment variable name |
+| `Value` | `string` | Environment variable value |
+| `BashText` | `string` | Formatted as `NAME=VALUE` |
+
+### Examples
+
+**List all environment variables:**
+
+```powershell
+env
+```
+
+```text
+HOME=/home/you
+PATH=/usr/bin:/bin
+SHELL=/bin/bash
+```
+
+**Get a specific variable:**
+
+```powershell
+env HOME
+```
+
+```text
+HOME=/home/you
+```
+
+**Access the value programmatically:**
+
+```powershell
+$home = env HOME
+$home.Value    # "/home/you"
+$home.Name     # "HOME"
+```
+
+**Filter environment variables with grep:**
+
+```powershell
+env | grep PATH
+```
+
+```text
+PATH=/usr/bin:/bin
+MANPATH=/usr/share/man
+```
+
+**Count environment variables:**
+
+```powershell
+env | wc -l
+```
+
+---
+
+## date
+
+Print the current date and time, or format a specific date. Returns a `DateOutput` object with typed date components.
+
+### Syntax
+
+```text
+date [OPTIONS] [+FORMAT]
+```
+
+### Flags
+
+| Flag | Description |
+|------|-------------|
+| `-d STRING` / `--date=STRING` | Display time described by STRING instead of now |
+| `-u` / `--utc` / `--universal` | Print in UTC |
+| `-r FILE` / `--reference=FILE` | Display the last modification time of FILE |
+| `+FORMAT` | Output format using `%` specifiers |
+
+### Format Specifiers
+
+| Specifier | Description | Example |
+|-----------|-------------|---------|
+| `%Y` | Four-digit year | `2026` |
+| `%m` | Month (01-12) | `04` |
+| `%d` | Day of month (01-31) | `02` |
+| `%H` | Hour, 24-hour (00-23) | `14` |
+| `%M` | Minute (00-59) | `30` |
+| `%S` | Second (00-59) | `45` |
+| `%s` | Seconds since Unix epoch | `1775340645` |
+| `%A` | Full weekday name | `Thursday` |
+| `%B` | Full month name | `April` |
+| `%Z` | Timezone | `UTC` |
+| `%a` | Abbreviated weekday | `Thu` |
+| `%b` | Abbreviated month | `Apr` |
+| `%e` | Day of month, space-padded | ` 2` |
+| `%j` | Day of year (001-366) | `092` |
+| `%p` | AM/PM | `PM` |
+| `%n` | Newline | |
+| `%t` | Tab | |
+| `%%` | Literal `%` | `%` |
+
+### DateOutput Properties
+
+Each result is a `PsBash.DateOutput` object:
+
+| Property | Type | Description |
+|----------|------|-------------|
+| `Year` | `int` | Four-digit year |
+| `Month` | `int` | Month number (1-12) |
+| `Day` | `int` | Day of month (1-31) |
+| `Hour` | `int` | Hour (0-23) |
+| `Minute` | `int` | Minute (0-59) |
+| `Second` | `int` | Second (0-59) |
+| `Epoch` | `long` | Unix timestamp (seconds since 1970-01-01) |
+| `DayOfWeek` | `string` | Full weekday name |
+| `TimeZone` | `string` | Timezone identifier |
+| `DateTime` | `DateTimeOffset` | The underlying .NET DateTimeOffset |
+| `BashText` | `string` | Formatted date string |
+
+### Examples
+
+**Current date and time (default format):**
+
+```powershell
+date
+```
+
+```text
+Thu Apr  2 14:30:45 America/Chicago 2026
+```
+
+**Custom format:**
+
+```powershell
+date '+%Y-%m-%d %H:%M:%S'
+```
+
+```text
+2026-04-02 14:30:45
+```
+
+**Unix epoch timestamp:**
+
+```powershell
+date '+%s'
+```
+
+```text
+1775340645
+```
+
+**Display a specific date:**
+
+```powershell
+date -d '2025-12-25'
+```
+
+```text
+Thu Dec 25 00:00:00 America/Chicago 2025
+```
+
+**UTC output:**
+
+```powershell
+date -u
+```
+
+```text
+Thu Apr  2 19:30:45 UTC 2026
+```
+
+**Last modification time of a file:**
+
+```powershell
+date -r package.json
+```
+
+**Access properties programmatically:**
+
+```powershell
+$d = date
+$d.Year       # 2026
+$d.Epoch      # 1775340645
+$d.DayOfWeek  # "Thursday"
+```
+
+---
+
+## hostname
+
+Print the system hostname.
+
+### Syntax
+
+```text
+hostname
+```
+
+### Return Type
+
+`PsBash.TextOutput` with a single property:
+
+| Property | Type | Description |
+|----------|------|-------------|
+| `BashText` | `string` | The system hostname |
+
+Uses `[System.Net.Dns]::GetHostName()` for cross-platform compatibility.
+
+### Examples
+
+**Print the hostname:**
+
+```powershell
+hostname
+```
+
+```text
+my-workstation
+```
+
+**Access the value programmatically:**
+
+```powershell
+$h = hostname
+$h.BashText    # "my-workstation"
+```
+
+**Use in a formatted string:**
+
+```powershell
+$user = whoami
+$host = hostname
+printf '%s@%s\n' $user.BashText $host.BashText
+```
+
+```text
+you@my-workstation
+```
+
+---
+
+## whoami
+
+Print the current username.
+
+### Syntax
+
+```text
+whoami
+```
+
+### Return Type
+
+`PsBash.TextOutput` with a single property:
+
+| Property | Type | Description |
+|----------|------|-------------|
+| `BashText` | `string` | The current username |
+
+Uses `[System.Environment]::UserName` for cross-platform compatibility.
+
+### Examples
+
+**Print the current user:**
+
+```powershell
+whoami
+```
+
+```text
+you
+```
+
+**Access the value programmatically:**
+
+```powershell
+$me = whoami
+$me.BashText    # "you"
+```
+
+**Combine with other commands:**
+
+```powershell
+ps -u (whoami).BashText
+```
+
+---
+
+## which
+
+Locate a command by name. Returns the path to the executable or function definition.
+
+### Syntax
+
+```text
+which [OPTIONS] NAME...
+```
+
+### Flags
+
+| Flag | Description |
+|------|-------------|
+| `-a` | Show all matches, not just the first |
+
+### WhichOutput Properties
+
+Each result is a `PsBash.WhichOutput` object:
+
+| Property | Type | Description |
+|----------|------|-------------|
+| `Command` | `string` | The command name that was looked up |
+| `Path` | `string` | Resolved path or definition |
+| `Type` | `string` | Command type (e.g., `application`, `function`, `alias`) |
+| `BashText` | `string` | The resolved path |
+
+### Examples
+
+**Locate a command:**
+
+```powershell
+which pwsh
+```
+
+```text
+/usr/bin/pwsh
+```
+
+**Show all matches:**
+
+```powershell
+which -a python
+```
+
+```text
+/usr/bin/python
+/usr/local/bin/python
+```
+
+**Check the command type:**
+
+```powershell
+$w = which grep
+$w.Type       # "alias"
+$w.Path       # "Invoke-BashGrep"
+$w.Command    # "grep"
+```
+
+**Locate multiple commands:**
+
+```powershell
+which ls cat grep
+```
+
+```text
+Invoke-BashLs
+Invoke-BashCat
+Invoke-BashGrep
+```
+
+---
+
+## balias / unalias
+
+Define, display, or remove shell aliases. The command is named `balias` to avoid conflicting with PowerShell's built-in `alias` command. The `unalias` command is also available.
+
+### Syntax
+
+```text
+balias [OPTIONS] [NAME[=VALUE]...]
+unalias NAME...
+unalias -a
+```
+
+### Flags
+
+| Flag | Description |
+|------|-------------|
+| `-p` | List all aliases (same as calling `balias` with no arguments) |
+| `-u` | Unalias mode (remove aliases) |
+| `-a` | Remove all aliases (used with `-u`) |
+
+<Aside type="note">
+The `unalias` command calls the same function as `balias` but you must use `-u` to trigger removal mode. Use `balias -u NAME` to remove a single alias, or `balias -u -a` to remove all aliases.
+</Aside>
+
+### AliasOutput Properties
+
+Each result is a `PsBash.AliasOutput` object:
+
+| Property | Type | Description |
+|----------|------|-------------|
+| `Name` | `string` | Alias name |
+| `Value` | `string` | Alias value (the command it expands to) |
+| `BashText` | `string` | Formatted as `alias name='value'` |
+
+### Examples
+
+**Define an alias:**
+
+```powershell
+balias ll='ls -la'
+```
+
+**List all aliases:**
+
+```powershell
+balias
+```
+
+```text
+alias ll='ls -la'
+```
+
+**Look up a specific alias:**
+
+```powershell
+balias ll
+```
+
+```text
+alias ll='ls -la'
+```
+
+**Access properties programmatically:**
+
+```powershell
+balias mygrep='grep -rn'
+$a = balias mygrep
+$a.Name     # "mygrep"
+$a.Value    # "grep -rn"
+```
+
+**Remove an alias:**
+
+```powershell
+balias -u ll
+```
+
+**Remove all aliases:**
+
+```powershell
+balias -u -a
+```
+
+---
+
+## time
+
+Run a command and measure its execution time. Returns the command's output along with timing information.
+
+### Syntax
+
+```text
+time COMMAND [ARGS...]
+```
+
+### TimeOutput Properties
+
+Each result is a `PsBash.TimeOutput` object:
+
+| Property | Type | Description |
+|----------|------|-------------|
+| `RealTime` | `TimeSpan` | Wall-clock elapsed time |
+| `Command` | `string` | The command that was timed |
+| `ExitCode` | `int` | Exit code of the command (0 = success) |
+| `BashText` | `string` | The command's text output |
+
+The real time is also printed to stderr in the format `real    0.123s`.
+
+### Examples
+
+**Time a command:**
+
+```powershell
+time ls -la
+```
+
+```text
+-rw-r--r-- 1 you you 141234 Apr  2 10:30 PsBash.psm1
+real    0.045s
+```
+
+**Access timing properties:**
+
+```powershell
+$t = time sleep 2
+$t.RealTime.TotalSeconds    # ~2.0
+$t.ExitCode                 # 0
+$t.Command                  # "sleep"
+```
+
+**Time a pipeline-producing command:**
+
+```powershell
+$t = time grep -r 'function' src/
+$t.RealTime.TotalMilliseconds    # elapsed ms
+```
+
+---
+
+## sleep
+
+Delay execution for a specified amount of time. Produces no output.
+
+### Syntax
+
+```text
+sleep NUMBER[SUFFIX]...
+```
+
+### Duration Suffixes
+
+| Suffix | Meaning | Example |
+|--------|---------|---------|
+| `s` | Seconds (default) | `sleep 5s` |
+| `m` | Minutes | `sleep 2m` |
+| `h` | Hours | `sleep 1h` |
+| `d` | Days | `sleep 1d` |
+
+When no suffix is given, the number is treated as seconds. Multiple arguments are summed together.
+
+### Examples
+
+**Sleep for 3 seconds:**
+
+```powershell
+sleep 3
+```
+
+**Sleep for 500 milliseconds:**
+
+```powershell
+sleep 0.5
+```
+
+**Sleep with a suffix:**
+
+```powershell
+sleep 2m
+```
+
+**Combine multiple durations:**
+
+```powershell
+sleep 1m 30s
+```
+
+This sleeps for 90 seconds total (1 minute + 30 seconds).

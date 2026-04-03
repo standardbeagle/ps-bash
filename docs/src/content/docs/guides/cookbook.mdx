@@ -1,8 +1,512 @@
 ---
 title: Pipeline Cookbook
-description: Practical recipes for combining ps-bash commands in PowerShell pipelines.
+description: "15 real-world pipeline recipes for DevOps, data processing, file management, and text analysis using ps-bash typed objects."
+head:
+  - tag: meta
+    attrs:
+      name: keywords
+      content: powershell pipeline recipes, bash pipeline examples, devops powershell scripts, powershell grep sort head, ps-bash cookbook, unix pipeline powershell
 ---
 
-# Pipeline Cookbook
+import { Aside, Card, CardGrid, Tabs, TabItem } from '@astrojs/starlight/components';
 
-Practical recipes for combining ps-bash commands in PowerShell pipelines.
+Real-world pipeline recipes organized by use case. Every recipe shows the one-liner command, what it does, expected output, and the typed object properties available after the pipeline completes.
+
+<Aside type="tip">
+Every pipeline preserves typed objects. Assign the result to a variable and access properties directly -- no string parsing required.
+</Aside>
+
+## DevOps Recipes
+
+### Find Large Files
+
+```powershell
+find . -size +10M -type f | sort -k5 -rn
+```
+
+Recursively finds files larger than 10 MB and sorts them by size (column 5) in descending numeric order. Useful for identifying bloat in a repository or deployment directory.
+
+```text
+./logs/app-2026-03.log          52428800    2026-03-30 14:22
+./dist/bundle.js                15728640    2026-03-28 09:15
+./data/export.csv               11534336    2026-03-25 16:45
+```
+
+**Object properties available:**
+
+| Property | Type | Example |
+|----------|------|---------|
+| `Name` | string | `app-2026-03.log` |
+| `FullPath` | string | `./logs/app-2026-03.log` |
+| `SizeBytes` | long | `52428800` |
+| `IsDirectory` | bool | `False` |
+
+```powershell
+# Programmatic access after pipeline
+$big = find . -size +10M -type f | sort -k5 -rn
+$big.SizeBytes | Measure-Object -Sum    # total bytes in large files
+$big | Where-Object { $_.Name -like '*.log' }  # filter to logs only
+```
+
+---
+
+### Disk Usage Hogs
+
+```powershell
+du -sh * | sort -rh | head 10
+```
+
+Shows disk usage of each item in the current directory with human-readable sizes, sorted largest first, limited to the top 10 entries.
+
+```text
+1.2G    node_modules
+256M    dist
+48M     logs
+12M     src
+4.0K    README.md
+```
+
+**Object properties available:**
+
+| Property | Type | Example |
+|----------|------|---------|
+| `SizeBytes` | long | `1288490188` |
+| `Path` | string | `node_modules` |
+| `BashText` | string | `1.2G    node_modules` |
+
+```powershell
+$usage = du -sh * | sort -rh | head 10
+$usage.SizeBytes | Measure-Object -Sum   # total disk usage
+```
+
+---
+
+### Log Error Analysis
+
+```powershell
+cat app.log | grep 'ERROR' | cut -d' ' -f1-3 | sort | uniq -c | sort -rn
+```
+
+Reads a log file, filters to error lines, extracts the first three fields (typically timestamp components), then counts and ranks by frequency. Shows which time periods have the most errors.
+
+```text
+      47 2026-03-30 14:22:01
+      23 2026-03-30 14:22:02
+      12 2026-03-30 09:15:33
+       3 2026-03-29 23:01:17
+```
+
+**Object properties available:**
+
+| Property | Type | Example |
+|----------|------|---------|
+| `BashText` | string | `      47 2026-03-30 14:22:01` |
+
+<Aside type="note">
+The `cut`, `uniq -c`, and final `sort` stages produce `TextOutput` objects. For richer analysis, capture the `grep` output before the text transforms: `$errors = cat app.log | grep 'ERROR'` gives you `GrepMatch` objects with `.LineNumber` and `.Line`.
+</Aside>
+
+---
+
+### Top CPU Processes
+
+```powershell
+ps aux | sort -k3 -rn | head 10
+```
+
+Lists all processes, sorts by CPU percentage (column 3) in descending order, and shows the top 10 consumers.
+
+```text
+USER       PID %CPU %MEM    VSZ   RSS TTY      STAT START   TIME COMMAND
+you       1234  8.2  1.4  45600 14200 pts/0    S    10:00   0:12 pwsh
+root         1  0.3  0.1   2400  1200 ?        Ss   09:00   0:01 init
+you       5678  0.1  0.5  12300  5100 pts/1    S    10:15   0:00 node server.js
+```
+
+**Object properties available:**
+
+| Property | Type | Example |
+|----------|------|---------|
+| `PID` | int | `1234` |
+| `CPU` | double | `8.2` |
+| `Memory` | double | `1.4` |
+| `Command` | string | `pwsh` |
+| `User` | string | `you` |
+
+```powershell
+$procs = ps aux | sort -k3 -rn | head 10
+$procs.CPU | Measure-Object -Sum -Average   # CPU stats for top consumers
+$procs | Where-Object { $_.CPU -gt 1.0 }    # only high-CPU processes
+```
+
+---
+
+### Find Recent Changes
+
+```powershell
+find . -mtime -7 -type f | sort
+```
+
+Finds all files modified in the last 7 days and sorts them alphabetically. Useful for reviewing what changed during a sprint or after a deployment.
+
+```text
+./src/Commands.ps1
+./src/PsBash.psd1
+./tests/Commands.Tests.ps1
+```
+
+**Object properties available:**
+
+| Property | Type | Example |
+|----------|------|---------|
+| `Name` | string | `Commands.ps1` |
+| `FullPath` | string | `./src/Commands.ps1` |
+| `SizeBytes` | long | `14200` |
+| `IsDirectory` | bool | `False` |
+
+```powershell
+$recent = find . -mtime -7 -type f | sort
+$recent | Where-Object { $_.Name -like '*.Tests.*' }   # only test files
+```
+
+---
+
+## Data Pipeline Recipes
+
+### JSON Field Extraction
+
+```powershell
+cat api-response.json | jq '.data[] | .name'
+```
+
+Reads a JSON file and extracts the `name` field from every element in the `data` array. Works on Windows without installing a separate `jq` binary.
+
+```text
+"Alice"
+"Bob"
+"Charlie"
+```
+
+**Object properties available:**
+
+| Property | Type | Example |
+|----------|------|---------|
+| `BashText` | string | `"Alice"` |
+
+```powershell
+# Parse the full objects for richer access
+$names = cat api-response.json | jq '.data[] | .name'
+$names.Count   # number of entries
+```
+
+---
+
+### CSV Filtering
+
+```powershell
+xan select name,email users.csv | xan search 'admin'
+```
+
+Selects only the `name` and `email` columns from a CSV file, then filters to rows containing "admin". Combines column projection with row filtering in a single pipeline.
+
+```text
+name,email
+Alice Admin,alice@example.com
+Bob Administrator,bob@example.com
+```
+
+**Object properties available:**
+
+| Property | Type | Example |
+|----------|------|---------|
+| `BashText` | string | `Alice Admin,alice@example.com` |
+
+---
+
+### YAML Config Lookup
+
+```powershell
+cat config.yml | yq '.database.host'
+```
+
+Extracts a nested value from a YAML configuration file. Reads the `host` field under the `database` key.
+
+```text
+db.example.com
+```
+
+**Object properties available:**
+
+| Property | Type | Example |
+|----------|------|---------|
+| `BashText` | string | `db.example.com` |
+
+```powershell
+# Chain multiple lookups
+$host = cat config.yml | yq '.database.host'
+$port = cat config.yml | yq '.database.port'
+echo "$host`:$port"   # db.example.com:5432
+```
+
+---
+
+## File Management Recipes
+
+### Find and Delete Stale Files
+
+```powershell
+find . -name '*.tmp' -mtime +7 | xargs rm -f
+```
+
+Finds `.tmp` files older than 7 days and passes them to `rm -f` for removal. The `xargs` bridge converts the `FindEntry` stream into arguments for `rm`.
+
+```text
+(no output -- files are deleted silently with -f)
+```
+
+**Object properties available (before xargs):**
+
+| Property | Type | Example |
+|----------|------|---------|
+| `Name` | string | `build-cache.tmp` |
+| `FullPath` | string | `./tmp/build-cache.tmp` |
+| `SizeBytes` | long | `8192` |
+
+```powershell
+# Preview before deleting
+find . -name '*.tmp' -mtime +7
+# Then delete
+find . -name '*.tmp' -mtime +7 | xargs rm -f
+```
+
+---
+
+### Archive Source Files
+
+```powershell
+find src/ -name '*.ps1' | tar -czf scripts.tar.gz -T -
+```
+
+Finds all PowerShell scripts under `src/` and pipes the file list into `tar` to create a compressed archive. The `-T -` flag tells `tar` to read file names from standard input.
+
+```text
+(no output -- archive created at scripts.tar.gz)
+```
+
+**Object properties available (from find, before tar):**
+
+| Property | Type | Example |
+|----------|------|---------|
+| `Name` | string | `PsBash.psm1` |
+| `FullPath` | string | `src/PsBash.psm1` |
+| `SizeBytes` | long | `245760` |
+
+```powershell
+# Verify the archive contents
+tar -tzf scripts.tar.gz
+```
+
+---
+
+### Count Files by Extension
+
+```powershell
+find . -type f | sed 's/.*\.//' | sort | uniq -c | sort -rn
+```
+
+Lists all files, strips everything before the last dot to isolate the extension, then counts and ranks by frequency. Quick way to understand a project's file composition.
+
+```text
+     142 ps1
+      38 txt
+      25 json
+      12 md
+       7 yml
+```
+
+**Object properties available:**
+
+| Property | Type | Example |
+|----------|------|---------|
+| `BashText` | string | `     142 ps1` |
+
+<Aside type="tip">
+For a richer alternative, capture the `find` output first: `$files = find . -type f` gives you `FindEntry` objects. Then use PowerShell grouping: `$files | Group-Object { $_.Name -replace '.*\.' } | Sort-Object Count -Descending`.
+</Aside>
+
+---
+
+## Text Processing Recipes
+
+### Word Frequency Analysis
+
+```powershell
+cat text.txt | tr ' ' '\n' | sort | uniq -c | sort -rn | head 20
+```
+
+Splits text into one word per line, sorts alphabetically (so identical words are adjacent), counts consecutive duplicates, and ranks by frequency. The top 20 most common words appear first.
+
+```text
+      87 the
+      54 and
+      41 of
+      38 to
+      29 a
+```
+
+**Object properties available:**
+
+| Property | Type | Example |
+|----------|------|---------|
+| `BashText` | string | `      87 the` |
+
+```powershell
+# Alternative: capture and use PowerShell grouping
+$words = cat text.txt | tr ' ' '\n'
+$words | Group-Object { $_.BashText.Trim() } | Sort-Object Count -Descending | Select-Object -First 20
+```
+
+---
+
+### Column Extraction from Processes
+
+```powershell
+ps aux | awk '{print $1, $3, $11}' | sort -k2 -rn
+```
+
+Extracts the user, CPU percentage, and command name columns from the process list, then sorts by CPU descending. A concise summary of who is consuming resources.
+
+```text
+you 8.2 pwsh
+root 0.3 init
+you 0.1 node
+```
+
+**Object properties available:**
+
+| Property | Type | Example |
+|----------|------|---------|
+| `BashText` | string | `you 8.2 pwsh` |
+
+<Aside type="tip">
+For typed access, skip `awk` and use the `PsEntry` properties directly: `ps aux | sort -k3 -rn | ForEach-Object { "$($_.User) $($_.CPU) $($_.Command)" }`.
+</Aside>
+
+---
+
+### Checksum Verification
+
+```powershell
+find . -name '*.ps1' | xargs sha256sum | tee checksums.txt
+```
+
+Finds all PowerShell scripts, computes their SHA-256 checksums, writes the results to `checksums.txt`, and passes them through to the terminal. Useful for verifying file integrity before or after a transfer.
+
+```text
+a1b2c3d4e5f6...  ./src/PsBash.psm1
+f6e5d4c3b2a1...  ./src/Helpers.ps1
+1234567890ab...  ./tests/PsBash.Tests.ps1
+```
+
+**Object properties available:**
+
+| Property | Type | Example |
+|----------|------|---------|
+| `BashText` | string | `a1b2c3d4e5f6...  ./src/PsBash.psm1` |
+
+---
+
+## The Power Move: Object Access After Pipeline
+
+The real advantage of ps-bash is that typed objects survive the entire pipeline. Assign any pipeline result to a variable and you get full property access, PowerShell filtering, and aggregation.
+
+```powershell
+$files = ls -la | grep '.ps1' | sort -k5 -h
+```
+
+This pipeline lists files, filters to `.ps1` matches, and sorts by size. Every stage preserves the original `LsEntry` objects.
+
+```text
+-rw-r--r--  1 you you    1084 Apr  2 10:30 Helpers.ps1
+-rw-r--r--  1 you you   14200 Apr  2 10:28 Commands.ps1
+-rw-r--r--  1 you you  245760 Apr  2 10:29 PsBash.psm1
+```
+
+Now use those objects programmatically:
+
+```powershell
+# Array of file names
+$files.Name
+```
+
+```text
+Helpers.ps1
+Commands.ps1
+PsBash.psm1
+```
+
+```powershell
+# Total size across all matched files
+$files.SizeBytes | Measure-Object -Sum
+```
+
+```text
+Count    : 3
+Average  :
+Sum      : 261044
+Maximum  :
+Minimum  :
+Property :
+```
+
+```powershell
+# PowerShell filtering on typed properties
+$files | Where-Object { $_.SizeBytes -gt 10000 }
+```
+
+```text
+-rw-r--r--  1 you you   14200 Apr  2 10:28 Commands.ps1
+-rw-r--r--  1 you you  245760 Apr  2 10:29 PsBash.psm1
+```
+
+```powershell
+# Group processes by user, count per user
+$procs = ps aux
+$procs | Group-Object User | Sort-Object Count -Descending
+```
+
+```text
+Count Name     Group
+----- ----     -----
+   42 you      {PsBash.PsEntry, PsBash.PsEntry, ...}
+   15 root     {PsBash.PsEntry, PsBash.PsEntry, ...}
+```
+
+<CardGrid>
+  <Card title="Pipeline objects are typed" icon="information">
+    Every command returns objects with named properties. `grep`, `sort`, `head`, and `tail` pass through the original objects unchanged.
+  </Card>
+  <Card title="Text in the terminal, objects in code" icon="pencil">
+    The terminal renders `BashText` so output looks like real bash. Variables hold the full typed object for programmatic use.
+  </Card>
+  <Card title="PowerShell cmdlets just work" icon="rocket">
+    `Measure-Object`, `Where-Object`, `Group-Object`, `Select-Object`, and `ForEach-Object` all work because the pipeline carries structured data.
+  </Card>
+  <Card title="No string parsing required" icon="approve-check-circle">
+    Replace `awk '{print $5}'` with `.SizeBytes`. Replace `cut -d: -f2` with `.Value`. Named properties replace field extraction.
+  </Card>
+</CardGrid>
+
+**Properties available on common pipeline types:**
+
+| Pipeline Source | Type | Key Properties |
+|----------------|------|----------------|
+| `ls -la` | `LsEntry` | `Name`, `SizeBytes`, `Permissions`, `Owner`, `LastModified` |
+| `find` | `FindEntry` | `Name`, `FullPath`, `SizeBytes`, `IsDirectory` |
+| `ps aux` | `PsEntry` | `PID`, `CPU`, `Memory`, `Command`, `User` |
+| `grep` | `GrepMatch` | `FileName`, `LineNumber`, `Line` |
+| `du` | `DuEntry` | `SizeBytes`, `Path` |
+| `cat` | `CatLine` | `LineNumber`, `Content`, `FileName` |
+| `wc` | `WcResult` | `Lines`, `Words`, `Bytes`, `FileName` |
+
+For the full property reference, see the [Object Types](/ps-bash/reference/object-types/) page.

@@ -1,8 +1,217 @@
 ---
-title: Compression
-description: gzip, gunzip, zcat, and tar commands for compression and archiving.
+title: Compression & Archiving
+description: gzip, gunzip, zcat, and tar commands for compressing, decompressing, and archiving files.
 ---
 
-# Compression
+import { Aside } from '@astrojs/starlight/components';
 
-`gzip`, `gunzip`, `zcat`, and `tar` commands for compression and archiving.
+Commands for compressing and decompressing files with gzip, and creating or extracting archives with tar.
+
+---
+
+## gzip
+
+Compress files using the gzip format. By default, replaces each file with a compressed `.gz` version.
+
+### Syntax
+
+```text
+gzip [OPTIONS] FILE...
+```
+
+### Flags
+
+| Flag | Description |
+|------|-------------|
+| `-d` | Decompress (same as `gunzip`) |
+| `-c` | Write output to stdout instead of replacing the file |
+| `-k` | Keep the original file (do not delete after compress/decompress) |
+| `-f` | Force overwrite of output files |
+| `-v` | Verbose -- show compression ratio for each file |
+| `-l` | List compression statistics instead of compressing |
+| `-1` .. `-9` | Compression level (`-1` fastest, `-9` smallest, default `-6`) |
+
+### Return type
+
+With `-l`, each result is a `PsBash.GzipListOutput` object:
+
+| Property | Type | Description |
+|----------|------|-------------|
+| `CompressedSize` | int | Size of the compressed file in bytes |
+| `UncompressedSize` | int | Original uncompressed size in bytes |
+| `Ratio` | string | Compression ratio as a percentage (e.g. `"72.5%"`) |
+| `FileName` | string | Path to the compressed file |
+| `BashText` | string | Formatted text output |
+
+With `-v`, returns `BashObject` lines showing the compression ratio per file.
+
+### Examples
+
+```powershell
+# Compress a file, keeping the original
+gzip -k data.csv
+```
+
+```powershell
+# Compress with maximum compression
+gzip -9 largefile.bin
+```
+
+```powershell
+# List compression statistics for a .gz file
+gzip -l archive.gz
+```
+
+```powershell
+# Access typed properties from the list output
+$info = gzip -l backup.gz
+$info.CompressedSize     # 14320
+$info.UncompressedSize   # 52480
+$info.Ratio              # "72.7%"
+```
+
+---
+
+## gunzip
+
+Decompress gzip-compressed files. This is an alias for `gzip -d` -- it automatically sets the decompress flag.
+
+### Syntax
+
+```text
+gunzip [OPTIONS] FILE...
+```
+
+### Flags
+
+| Flag | Description |
+|------|-------------|
+| `-c` | Write decompressed output to stdout |
+| `-k` | Keep the `.gz` file after decompression |
+| `-f` | Force overwrite of output files |
+| `-v` | Verbose -- show compression ratio |
+
+<Aside type="note">
+`gunzip` shares the same flags as `gzip`. The `-d` flag is implicit -- you do not need to pass it.
+</Aside>
+
+### Examples
+
+```powershell
+# Decompress a file, removing the .gz
+gunzip data.csv.gz
+```
+
+```powershell
+# Decompress but keep the original .gz file
+gunzip -k archive.gz
+```
+
+```powershell
+# Decompress to stdout for piping
+gunzip -c logs.gz | grep 'ERROR'
+```
+
+---
+
+## zcat
+
+Decompress gzip files and write the content to stdout. This is equivalent to `gzip -dc` -- both decompress and stdout flags are set automatically.
+
+### Syntax
+
+```text
+zcat FILE...
+```
+
+### Examples
+
+```powershell
+# View compressed file contents
+zcat readme.txt.gz
+```
+
+```powershell
+# Pipe decompressed content into other commands
+zcat access.log.gz | grep '404' | wc -l
+```
+
+```powershell
+# Preview the first few lines of a compressed file
+zcat data.csv.gz | head 5
+```
+
+<Aside type="tip">
+`zcat` always writes to stdout and never modifies the original file, so there is no need for the `-k` flag.
+</Aside>
+
+---
+
+## tar
+
+Create, extract, and list archive files. Uses `System.IO.Compression.ZipArchive` internally, with optional gzip wrapping via the `-z` flag.
+
+### Syntax
+
+```text
+tar [OPTIONS] [FILE...]
+```
+
+### Flags
+
+| Flag | Description |
+|------|-------------|
+| `-c` | Create a new archive |
+| `-x` | Extract files from an archive |
+| `-t` | List the contents of an archive |
+| `-f FILE` | Specify the archive filename (required) |
+| `-z` | Filter the archive through gzip (compress on create, decompress on extract/list) |
+| `-v` | Verbose -- print filenames as they are processed |
+| `-C DIR` | Change to DIR before extracting |
+| `--exclude=PATTERN` | Exclude files matching the glob pattern |
+
+### Return type
+
+With `-t`, each entry is a `PsBash.TarListOutput` object:
+
+| Property | Type | Description |
+|----------|------|-------------|
+| `Name` | string | Filename within the archive |
+| `Size` | long | Uncompressed size in bytes |
+| `ModifiedDate` | DateTime | Last modification timestamp |
+| `BashText` | string | Entry path as displayed in the listing |
+
+### Examples
+
+```powershell
+# Create a gzip-compressed archive from a directory
+tar -czf project.tar.gz src/
+```
+
+```powershell
+# Extract a gzip-compressed archive to a specific directory
+tar -xzf project.tar.gz -C /tmp/output
+```
+
+```powershell
+# List contents of an archive
+tar -tzf backup.tar.gz
+```
+
+```powershell
+# Access typed properties from the listing
+$entries = tar -tzf project.tar.gz
+$entries[0].Name          # "app.js"
+$entries[0].Size          # 2048
+$entries[0].ModifiedDate  # 4/1/2026 3:22:00 PM
+```
+
+```powershell
+# Create an archive excluding test files
+tar -czf release.tar.gz src/ --exclude=*.test.ps1
+```
+
+```powershell
+# Verbose extract to see each file as it is written
+tar -xzvf archive.tar.gz
+```

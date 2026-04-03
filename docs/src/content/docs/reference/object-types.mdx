@@ -1,8 +1,904 @@
 ---
 title: Object Types
-description: Reference for all typed objects returned by ps-bash commands.
+description: Complete reference for all 20 typed objects returned by ps-bash commands, with properties, examples, and pipeline behavior.
+head:
+  - tag: meta
+    attrs:
+      name: keywords
+      content: ps-bash types, PsBash.LsEntry, PsBash.TextOutput, powershell bash objects, typed pipeline objects, BashText bridge
 ---
 
-# Object Types
+import { Aside } from '@astrojs/starlight/components';
 
-Reference for all typed objects returned by ps-bash commands.
+Every ps-bash command returns a typed `PSCustomObject`. Each object carries a `.BashText` property for terminal display and typed properties for programmatic access. This page documents all 20 object types.
+
+<Aside type="tip">
+All types include a `ToString()` method that returns `BashText`, so string interpolation and pipeline formatting work automatically.
+</Aside>
+
+## Quick Reference
+
+| Command(s) | Type | Key Properties |
+|-------------|------|----------------|
+| `echo`, `printf`, `pwd`, `hostname`, `whoami`, `basename`, `dirname` | `PsBash.TextOutput` | `BashText` |
+| `ls` | `PsBash.LsEntry` | `Name`, `FullPath`, `SizeBytes`, `Permissions`, `IsDirectory` |
+| `cat` | `PsBash.CatLine` | `LineNumber`, `Content`, `FileName` |
+| `grep` (file mode) | `PsBash.GrepMatch` | `FileName`, `LineNumber`, `Line` |
+| `wc` | `PsBash.WcResult` | `Lines`, `Words`, `Bytes`, `FileName` |
+| `find` | `PsBash.FindEntry` | `Path`, `Name`, `FullPath`, `SizeBytes`, `IsDirectory` |
+| `stat` | `PsBash.StatEntry` | `Name`, `SizeBytes`, `Permissions`, `OctalPerms`, `Inode` |
+| `ps` | `PsBash.PsEntry` | `PID`, `User`, `CPU`, `Memory`, `Command` |
+| `date` | `PsBash.DateOutput` | `Year`, `Month`, `Day`, `Epoch`, `DateTime` |
+| `seq` | `PsBash.SeqOutput` | `Value`, `Index` |
+| `expr` | `PsBash.ExprOutput` | `Value` |
+| `du` | `PsBash.DuEntry` | `Size`, `SizeBytes`, `Path`, `Depth` |
+| `tree` | `PsBash.TreeEntry` | `Name`, `Path`, `Depth`, `IsDirectory` |
+| `env`, `printenv` | `PsBash.EnvEntry` | `Name`, `Value` |
+| `rg` | `PsBash.RgMatch` | `FileName`, `LineNumber`, `Line` |
+| `gzip -l` | `PsBash.GzipListOutput` | `CompressedSize`, `UncompressedSize`, `Ratio` |
+| `tar -t` | `PsBash.TarListOutput` | `Name`, `Size`, `ModifiedDate` |
+| `time` | `PsBash.TimeOutput` | `RealTime`, `Command`, `ExitCode` |
+| `which` | `PsBash.WhichOutput` | `Command`, `Path`, `Type` |
+| `alias` | `PsBash.AliasOutput` | `Name`, `Value` |
+
+---
+
+## PsBash.TextOutput
+
+The base type for commands that produce plain text output. Also used as the foundation for every other type via `New-BashObject`.
+
+### Produced by
+
+`echo`, `printf`, `pwd`, `hostname`, `whoami`, `basename`, `dirname`, `file`, `md5sum`, `sha1sum`, `sha256sum`, `base64`, and various pipeline utilities in text mode.
+
+### Properties
+
+| Property | Type | Description |
+|----------|------|-------------|
+| `BashText` | `string` | Formatted output text |
+
+Some commands add extra properties to their `TextOutput` objects:
+
+**`file` command** adds `FileName` (string), `FileType` (string), and `MimeType` (string).
+
+**`md5sum` / `sha1sum` / `sha256sum`** add `Hash` (string), `FileName` (string), and `Algorithm` (string).
+
+### BashText format
+
+```text
+Hello, world!\n
+```
+
+### Example
+
+```powershell
+$out = echo 'Hello, world!'
+$out.BashText          # "Hello, world!\n"
+
+$loc = pwd
+$loc.BashText          # "/home/beagle/projects"
+
+$info = file README.md
+$info.FileType         # "ASCII text"
+$info.MimeType         # "text/plain"
+```
+
+### Pipeline bridge
+
+Survives `grep`, `sort`, `head`, `tail`, and `tee`. Bridge commands match against `BashText` and pass the original object through.
+
+---
+
+## PsBash.LsEntry
+
+Represents a single file or directory entry from `ls`.
+
+### Produced by
+
+`ls`
+
+### Properties
+
+| Property | Type | Description |
+|----------|------|-------------|
+| `Name` | `string` | File or directory name |
+| `FullPath` | `string` | Absolute path on disk |
+| `IsDirectory` | `bool` | `$true` for directories |
+| `SizeBytes` | `long` | File size in bytes (0 for directories) |
+| `Permissions` | `string` | Unix-style permission string (e.g. `-rw-r--r--`) |
+| `LinkCount` | `int` | Number of hard links |
+| `Owner` | `string` | File owner name |
+| `Group` | `string` | File group name |
+| `LastModified` | `DateTime` | Last modification timestamp |
+| `BashText` | `string` | Formatted ls output line |
+
+### BashText format
+
+```text
+-rw-r--r-- 1 beagle beagle     4096 Mar 15 10:30 script.ps1
+```
+
+### Example
+
+```powershell
+$files = ls -la
+$files[0].Name          # "script.ps1"
+$files[0].SizeBytes     # 4096
+$files[0].IsDirectory   # False
+$files[0].Permissions   # "-rw-r--r--"
+$files[0].LastModified  # 03/15/2026 10:30:00
+```
+
+### Pipeline bridge
+
+Survives `grep`, `sort`, `head`, `tail`, and `tee`. Filter by name and still access typed properties:
+
+```powershell
+$ps1 = ls -la | grep '.ps1'
+$ps1[0].SizeBytes       # still an integer
+```
+
+---
+
+## PsBash.CatLine
+
+Represents a single line of file content from `cat`.
+
+### Produced by
+
+`cat`, `head` (file mode), `tail` (file mode)
+
+### Properties
+
+| Property | Type | Description |
+|----------|------|-------------|
+| `LineNumber` | `int` | 1-based line number in the file |
+| `Content` | `string` | Raw line content without formatting |
+| `FileName` | `string` | Source file name (empty for stdin) |
+| `BashText` | `string` | Formatted output (may include line numbers if `-n` flag used) |
+
+### BashText format
+
+```text
+     1	first line of the file
+```
+
+### Example
+
+```powershell
+$lines = cat -n myfile.txt
+$lines[0].LineNumber   # 1
+$lines[0].Content      # "first line of the file"
+$lines[0].FileName     # "myfile.txt"
+```
+
+### Pipeline bridge
+
+Survives `grep`, `sort`, `head`, `tail`, and `tee`.
+
+---
+
+## PsBash.GrepMatch
+
+Represents a single match from `grep` when searching files directly. In pipeline mode, `grep` passes through the original input type instead.
+
+### Produced by
+
+`grep` (file mode only)
+
+### Properties
+
+| Property | Type | Description |
+|----------|------|-------------|
+| `FileName` | `string` | Path of the file containing the match |
+| `LineNumber` | `int` | 1-based line number of the match |
+| `Line` | `string` | Full text of the matching line |
+| `BashText` | `string` | Formatted match output |
+
+### BashText format
+
+```text
+src/main.ps1:42:function Get-Data {
+```
+
+### Example
+
+```powershell
+$matches = grep -rn 'function' src/
+$matches[0].FileName    # "src/main.ps1"
+$matches[0].LineNumber  # 42
+$matches[0].Line        # "function Get-Data {"
+```
+
+### Pipeline bridge
+
+In pipeline mode, `grep` does not produce `GrepMatch` objects. It filters the incoming objects by matching against their `BashText` and passes the original typed objects through unchanged.
+
+```powershell
+# File mode: produces GrepMatch
+grep 'pattern' file.txt
+
+# Pipeline mode: passes through LsEntry objects
+ls -la | grep '.ps1'
+```
+
+---
+
+## PsBash.WcResult
+
+Represents word, line, and byte counts from `wc`.
+
+### Produced by
+
+`wc`
+
+### Properties
+
+| Property | Type | Description |
+|----------|------|-------------|
+| `Lines` | `int` | Number of lines |
+| `Words` | `int` | Number of words |
+| `Bytes` | `int` | Number of bytes |
+| `FileName` | `string` | Source file name (empty for stdin) |
+| `BashText` | `string` | Formatted count output |
+
+### BashText format
+
+```text
+ 42  318 2048 myfile.txt
+```
+
+### Example
+
+```powershell
+$count = wc myfile.txt
+$count.Lines     # 42
+$count.Words     # 318
+$count.Bytes     # 2048
+$count.FileName  # "myfile.txt"
+```
+
+### Pipeline bridge
+
+Survives `grep`, `sort`, `head`, `tail`, and `tee`.
+
+---
+
+## PsBash.FindEntry
+
+Represents a single file or directory found by `find`.
+
+### Produced by
+
+`find`
+
+### Properties
+
+| Property | Type | Description |
+|----------|------|-------------|
+| `Path` | `string` | Display path (relative to search root) |
+| `Name` | `string` | File or directory name |
+| `FullPath` | `string` | Absolute path on disk |
+| `IsDirectory` | `bool` | `$true` for directories |
+| `SizeBytes` | `long` | File size in bytes |
+| `Permissions` | `string` | Unix-style permission string |
+| `LinkCount` | `int` | Number of hard links |
+| `Owner` | `string` | File owner name |
+| `Group` | `string` | File group name |
+| `LastModified` | `DateTime` | Last modification timestamp |
+| `BashText` | `string` | Display path (same as `Path`) |
+
+### BashText format
+
+```text
+./src/main.ps1
+```
+
+### Example
+
+```powershell
+$found = find . -name '*.ps1'
+$found[0].Path         # "./src/main.ps1"
+$found[0].Name         # "main.ps1"
+$found[0].SizeBytes    # 4096
+$found[0].IsDirectory  # False
+```
+
+### Pipeline bridge
+
+Survives `grep`, `sort`, `head`, `tail`, and `tee`.
+
+---
+
+## PsBash.StatEntry
+
+Represents detailed file metadata from `stat`.
+
+### Produced by
+
+`stat`
+
+### Properties
+
+| Property | Type | Description |
+|----------|------|-------------|
+| `Name` | `string` | File or directory name |
+| `FullPath` | `string` | Absolute path on disk |
+| `IsDirectory` | `bool` | `$true` for directories |
+| `SizeBytes` | `long` | File size in bytes |
+| `Permissions` | `string` | Unix-style permission string (e.g. `-rw-r--r--`) |
+| `OctalPerms` | `string` | Octal permission code (e.g. `0644`) |
+| `LinkCount` | `int` | Number of hard links |
+| `Owner` | `string` | File owner name |
+| `Group` | `string` | File group name |
+| `Inode` | `long` | Inode number |
+| `Blocks` | `long` | Number of 512-byte blocks allocated |
+| `Device` | `string` | Device identifier |
+| `LastModified` | `DateTime` | Last modification timestamp |
+| `MtimeEpoch` | `long` | Modification time as Unix epoch seconds |
+| `AccessTime` | `DateTime` | Last access timestamp |
+| `AtimeEpoch` | `long` | Access time as Unix epoch seconds |
+| `BashText` | `string` | Formatted stat output |
+
+### BashText format
+
+```text
+  File: script.ps1
+  Size: 4096       Blocks: 8          IO Block: 4096   regular file
+Device: 820h/2080d Inode: 1234567     Links: 1
+Access: (0644/-rw-r--r--)  Uid: ( 1000/  beagle)   Gid: ( 1000/  beagle)
+Access: 2026-03-15 10:30:00.000000000
+Modify: 2026-03-15 10:30:00.000000000
+```
+
+### Example
+
+```powershell
+$info = stat myfile.txt
+$info.SizeBytes     # 4096
+$info.OctalPerms    # "0644"
+$info.Inode         # 1234567
+$info.MtimeEpoch   # 1773849000
+$info.Blocks        # 8
+```
+
+### Pipeline bridge
+
+Survives `grep`, `sort`, `head`, `tail`, and `tee`.
+
+---
+
+## PsBash.PsEntry
+
+Represents a single process entry from `ps`.
+
+### Produced by
+
+`ps`
+
+### Properties
+
+| Property | Type | Description |
+|----------|------|-------------|
+| `PID` | `int` | Process ID |
+| `PPID` | `int` | Parent process ID |
+| `User` | `string` | Process owner |
+| `CPU` | `double` | CPU usage percentage |
+| `Memory` | `double` | Memory usage percentage |
+| `MemoryMB` | `double` | Memory usage in megabytes |
+| `VSZ` | `long` | Virtual memory size in KB |
+| `RSS` | `long` | Resident set size in KB |
+| `TTY` | `string` | Controlling terminal |
+| `Stat` | `string` | Process state code |
+| `Start` | `object` | Process start time |
+| `Time` | `string` | Cumulative CPU time |
+| `Command` | `string` | Command name |
+| `CommandLine` | `string` | Full command line |
+| `ProcessName` | `string` | Process name |
+| `WorkingSet` | `long` | Working set size in bytes |
+| `BashText` | `string` | Formatted ps output line |
+
+### BashText format
+
+```text
+beagle    1234  0.1  2.3  123456  45678 ?     Ss   10:30   0:01 pwsh
+```
+
+### Example
+
+```powershell
+$procs = ps aux
+$procs[0].PID          # 1234
+$procs[0].User         # "beagle"
+$procs[0].CPU          # 0.1
+$procs[0].Memory       # 2.3
+$procs[0].Command      # "pwsh"
+$procs[0].MemoryMB     # 44.6
+```
+
+### Pipeline bridge
+
+Survives `grep`, `sort`, `head`, `tail`, and `tee`.
+
+---
+
+## PsBash.DateOutput
+
+Represents a parsed date/time value from `date`.
+
+### Produced by
+
+`date`
+
+### Properties
+
+| Property | Type | Description |
+|----------|------|-------------|
+| `Year` | `int` | Four-digit year |
+| `Month` | `int` | Month number (1-12) |
+| `Day` | `int` | Day of month (1-31) |
+| `Hour` | `int` | Hour (0-23) |
+| `Minute` | `int` | Minute (0-59) |
+| `Second` | `int` | Second (0-59) |
+| `Epoch` | `long` | Unix epoch seconds |
+| `DayOfWeek` | `string` | Full day name (e.g. `Wednesday`) |
+| `TimeZone` | `string` | Time zone identifier |
+| `DateTime` | `DateTimeOffset` | Full .NET DateTimeOffset value |
+| `BashText` | `string` | Formatted date string |
+
+### BashText format
+
+```text
+Wed Mar 15 10:30:00 PDT 2026
+```
+
+### Example
+
+```powershell
+$now = date
+$now.Year        # 2026
+$now.Epoch       # 1773849000
+$now.DayOfWeek   # "Wednesday"
+$now.DateTime    # System.DateTimeOffset value
+
+$epoch = date '+%s'
+```
+
+### Pipeline bridge
+
+Survives `grep`, `sort`, `head`, `tail`, and `tee`.
+
+---
+
+## PsBash.SeqOutput
+
+Represents a single value in a numeric sequence from `seq`.
+
+### Produced by
+
+`seq`
+
+### Properties
+
+| Property | Type | Description |
+|----------|------|-------------|
+| `Value` | `long` or `double` | Numeric value (integer when possible, double for fractional sequences) |
+| `Index` | `int` | 0-based position in the sequence |
+| `BashText` | `string` | Formatted number string |
+
+### BashText format
+
+```text
+5
+```
+
+### Example
+
+```powershell
+$nums = seq 1 5
+$nums[0].Value   # 1
+$nums[0].Index   # 0
+$nums[4].Value   # 5
+$nums[4].Index   # 4
+```
+
+### Pipeline bridge
+
+Survives `grep`, `sort`, `head`, `tail`, and `tee`.
+
+---
+
+## PsBash.ExprOutput
+
+Represents the result of an arithmetic or string expression from `expr`.
+
+### Produced by
+
+`expr`
+
+### Properties
+
+| Property | Type | Description |
+|----------|------|-------------|
+| `Value` | `long` or `string` | Result value (integer for arithmetic, string for string operations) |
+| `BashText` | `string` | Formatted result string |
+
+### BashText format
+
+```text
+42
+```
+
+### Example
+
+```powershell
+$result = expr 6 '*' 7
+$result.Value     # 42
+$result.BashText  # "42"
+
+$len = expr length 'hello'
+$len.Value        # 5
+```
+
+### Pipeline bridge
+
+Survives `grep`, `sort`, `head`, `tail`, and `tee`.
+
+---
+
+## PsBash.DuEntry
+
+Represents a disk usage entry from `du`.
+
+### Produced by
+
+`du`
+
+### Properties
+
+| Property | Type | Description |
+|----------|------|-------------|
+| `Size` | `long` | Size in kilobytes |
+| `SizeBytes` | `long` | Size in bytes |
+| `SizeHuman` | `string` | Human-readable size (e.g. `4.0K`) |
+| `Path` | `string` | Directory or file path |
+| `Depth` | `int` | Directory depth relative to search root |
+| `IsTotal` | `bool` | `$true` for the grand total line |
+| `BashText` | `string` | Formatted du output line |
+
+### BashText format
+
+```text
+4096	./src
+```
+
+### Example
+
+```powershell
+$usage = du -sh src/
+$usage[0].SizeBytes    # 4096
+$usage[0].SizeHuman    # "4.0K"
+$usage[0].Path         # "src"
+$usage[0].Depth        # 0
+```
+
+### Pipeline bridge
+
+Survives `grep`, `sort`, `head`, `tail`, and `tee`.
+
+---
+
+## PsBash.TreeEntry
+
+Represents a single node in a directory tree from `tree`.
+
+### Produced by
+
+`tree`
+
+### Properties
+
+| Property | Type | Description |
+|----------|------|-------------|
+| `Name` | `string` | File or directory name (empty for summary line) |
+| `Path` | `string` | Relative path from tree root (empty for root and summary) |
+| `Depth` | `int` | Nesting depth (0 for root and summary) |
+| `IsDirectory` | `bool` | `$true` for directories |
+| `TreePrefix` | `string` | Unicode tree-drawing prefix characters |
+| `BashText` | `string` | Formatted tree line with prefix and name |
+
+### BashText format
+
+```text
+src
+├── main.ps1
+├── lib/
+│   └── utils.ps1
+└── tests/
+3 directories, 2 files
+```
+
+### Example
+
+```powershell
+$nodes = tree src/
+$nodes[0].Name         # "src"
+$nodes[0].IsDirectory  # True
+$nodes[1].Name         # "main.ps1"
+$nodes[1].Depth        # 1
+$nodes[1].TreePrefix   # "├── "
+```
+
+### Pipeline bridge
+
+Survives `grep`, `sort`, `head`, `tail`, and `tee`.
+
+---
+
+## PsBash.EnvEntry
+
+Represents a single environment variable from `env` or `printenv`.
+
+### Produced by
+
+`env`, `printenv`
+
+### Properties
+
+| Property | Type | Description |
+|----------|------|-------------|
+| `Name` | `string` | Variable name |
+| `Value` | `string` | Variable value |
+| `BashText` | `string` | Formatted as `NAME=value` |
+
+### BashText format
+
+```text
+PATH=/usr/local/bin:/usr/bin:/bin
+```
+
+### Example
+
+```powershell
+$vars = env
+$path = env PATH
+$path.Name    # "PATH"
+$path.Value   # "/usr/local/bin:/usr/bin:/bin"
+```
+
+### Pipeline bridge
+
+Survives `grep`, `sort`, `head`, `tail`, and `tee`.
+
+---
+
+## PsBash.RgMatch
+
+Represents a single match from `rg` (ripgrep-style search).
+
+### Produced by
+
+`rg`
+
+### Properties
+
+| Property | Type | Description |
+|----------|------|-------------|
+| `FileName` | `string` | Path of the file containing the match |
+| `LineNumber` | `int` | 1-based line number of the match |
+| `Line` | `string` | Full text of the matching line |
+| `BashText` | `string` | Formatted match output |
+
+### BashText format
+
+```text
+src/main.ps1:42:function Get-Data {
+```
+
+### Example
+
+```powershell
+$hits = rg -n 'function' src/
+$hits[0].FileName    # "src/main.ps1"
+$hits[0].LineNumber  # 42
+$hits[0].Line        # "function Get-Data {"
+```
+
+### Pipeline bridge
+
+Survives `grep`, `sort`, `head`, `tail`, and `tee`.
+
+---
+
+## PsBash.GzipListOutput
+
+Represents compression metadata from `gzip -l`.
+
+### Produced by
+
+`gzip -l`
+
+### Properties
+
+| Property | Type | Description |
+|----------|------|-------------|
+| `CompressedSize` | `long` | Compressed file size in bytes |
+| `UncompressedSize` | `long` | Original file size in bytes |
+| `Ratio` | `string` | Compression ratio (e.g. `72.5%`) |
+| `FileName` | `string` | Path to the compressed file |
+| `BashText` | `string` | Formatted listing line |
+
+### BashText format
+
+```text
+      1024       4096  75.0% data.gz
+```
+
+### Example
+
+```powershell
+$info = gzip -l archive.gz
+$info.CompressedSize     # 1024
+$info.UncompressedSize   # 4096
+$info.Ratio              # "75.0%"
+$info.FileName           # "archive.gz"
+```
+
+### Pipeline bridge
+
+Survives `grep`, `sort`, `head`, `tail`, and `tee`.
+
+---
+
+## PsBash.TarListOutput
+
+Represents a single entry listed from a tar archive with `tar -t`.
+
+### Produced by
+
+`tar -t`
+
+### Properties
+
+| Property | Type | Description |
+|----------|------|-------------|
+| `Name` | `string` | Entry file name (without directory path) |
+| `Size` | `long` | Uncompressed file size in bytes |
+| `ModifiedDate` | `DateTime` | Last modification timestamp of the entry |
+| `BashText` | `string` | Full entry path in the archive |
+
+### BashText format
+
+```text
+src/main.ps1
+```
+
+### Example
+
+```powershell
+$entries = tar -tf archive.tar.gz
+$entries[0].Name           # "main.ps1"
+$entries[0].Size           # 4096
+$entries[0].ModifiedDate   # 03/15/2026 10:30:00
+$entries[0].BashText       # "src/main.ps1"
+```
+
+### Pipeline bridge
+
+Survives `grep`, `sort`, `head`, `tail`, and `tee`.
+
+---
+
+## PsBash.TimeOutput
+
+Represents the result of timing a command with `time`.
+
+### Produced by
+
+`time`
+
+### Properties
+
+| Property | Type | Description |
+|----------|------|-------------|
+| `RealTime` | `TimeSpan` | Wall-clock elapsed time |
+| `Command` | `string` | The command that was timed |
+| `ExitCode` | `int` | Exit code of the timed command (0 for success) |
+| `BashText` | `string` | Output text from the timed command |
+
+### BashText format
+
+The `BashText` contains the stdout of the timed command. The timing information is written to stderr:
+
+```text
+real    0.042s
+```
+
+### Example
+
+```powershell
+$result = time { ls -la }
+$result.RealTime          # 00:00:00.0420000
+$result.RealTime.TotalSeconds  # 0.042
+$result.Command           # "{ ls -la }"
+$result.ExitCode          # 0
+```
+
+### Pipeline bridge
+
+Survives `grep`, `sort`, `head`, `tail`, and `tee`.
+
+---
+
+## PsBash.WhichOutput
+
+Represents a resolved command location from `which`.
+
+### Produced by
+
+`which`
+
+### Properties
+
+| Property | Type | Description |
+|----------|------|-------------|
+| `Command` | `string` | Command name that was looked up |
+| `Path` | `string` | Resolved path or definition |
+| `Type` | `string` | Command type (e.g. `application`, `function`, `alias`) |
+| `BashText` | `string` | Resolved path |
+
+### BashText format
+
+```text
+/usr/bin/git
+```
+
+### Example
+
+```powershell
+$loc = which git
+$loc.Command   # "git"
+$loc.Path      # "/usr/bin/git"
+$loc.Type      # "application"
+```
+
+### Pipeline bridge
+
+Survives `grep`, `sort`, `head`, `tail`, and `tee`.
+
+---
+
+## PsBash.AliasOutput
+
+Represents a shell alias definition from `alias`.
+
+### Produced by
+
+`alias`
+
+### Properties
+
+| Property | Type | Description |
+|----------|------|-------------|
+| `Name` | `string` | Alias name |
+| `Value` | `string` | Alias expansion value |
+| `BashText` | `string` | Formatted alias definition |
+
+### BashText format
+
+```text
+alias ll='ls -la'
+```
+
+### Example
+
+```powershell
+alias ll='ls -la'
+$aliases = alias
+$aliases[0].Name    # "ll"
+$aliases[0].Value   # "ls -la"
+```
+
+### Pipeline bridge
+
+Survives `grep`, `sort`, `head`, `tail`, and `tee`.

@@ -1,8 +1,371 @@
 ---
-title: Encoding & Hashing
-description: base64, md5sum, sha1sum, sha256sum, and file commands for encoding and integrity.
+title: "Encoding & Hashing"
+description: "base64, md5sum, sha1sum, sha256sum, and file commands for encoding, integrity checking, and file type detection in PowerShell."
+head:
+  - tag: meta
+    attrs:
+      name: keywords
+      content: powershell base64, base64 encode powershell, md5sum powershell, sha256sum powershell, file type detection powershell, bash checksum powershell, sha1sum powershell
 ---
+
+import { Aside, Tabs, TabItem } from '@astrojs/starlight/components';
 
 # Encoding & Hashing
 
-`base64`, `md5sum`, `sha1sum`, `sha256sum`, and `file` commands for encoding and integrity.
+`base64`, `md5sum`, `sha1sum`, `sha256sum`, and `file` for encoding, integrity checking, and file type detection.
+
+---
+
+## base64
+
+Encode or decode data in Base64 format.
+
+```
+base64 [OPTIONS] [FILE]
+```
+
+### Flags
+
+| Flag | Description |
+|------|-------------|
+| `-d`, `--decode` | Decode Base64 input back to original data |
+| `-w NUM`, `--wrap=NUM` | Wrap encoded output at NUM columns (default: 76, 0 = no wrap) |
+
+### Return Type
+
+Returns a `PsBash.TextOutput` object with the encoded or decoded string as `BashText`.
+
+### Examples
+
+**Encode a string from the pipeline:**
+
+```powershell
+echo 'hello' | base64
+```
+
+```text
+aGVsbG8K
+```
+
+**Decode a Base64 string:**
+
+```powershell
+echo 'aGVsbG8K' | base64 -d
+```
+
+```text
+hello
+```
+
+**Encode a file:**
+
+```powershell
+base64 image.png
+```
+
+**Encode without line wrapping:**
+
+```powershell
+echo 'a longer string that would normally wrap' | base64 -w 0
+```
+
+**Decode a Base64 file:**
+
+```powershell
+base64 -d encoded.txt
+```
+
+---
+
+## md5sum
+
+Compute MD5 message digest for files or pipeline input.
+
+```
+md5sum [OPTIONS] [FILE...]
+```
+
+### Flags
+
+| Flag | Description |
+|------|-------------|
+| `-c`, `--check` | Read checksums from file and verify them |
+| `-b`, `--binary` | Read files in binary mode |
+
+### TextOutput Properties
+
+Each result is a `PsBash.TextOutput` object:
+
+| Property | Type | Description |
+|----------|------|-------------|
+| `Hash` | string | Hex-encoded MD5 digest |
+| `FileName` | string | Path to the hashed file, or `-` for pipeline input |
+| `Algorithm` | string | `MD5` |
+| `BashText` | string | Formatted `hash  filename` output |
+
+### Examples
+
+**Hash a file:**
+
+```powershell
+md5sum README.md
+```
+
+```text
+d41d8cd98f00b204e9800998ecf8427e  README.md
+```
+
+**Hash multiple files:**
+
+```powershell
+md5sum file1.txt file2.txt
+```
+
+```text
+098f6bcd4621d373cade4e832627b4f6  file1.txt
+ad0234829205b9033196ba818f7a872b  file2.txt
+```
+
+**Hash pipeline input:**
+
+```powershell
+echo 'data' | md5sum
+```
+
+```text
+8d777f385d3dfec8815d20f7496026dc  -
+```
+
+**Access the hash property directly:**
+
+```powershell
+$result = md5sum README.md
+$result.Hash        # "d41d8cd98f00b204e9800998ecf8427e"
+$result.Algorithm   # "MD5"
+```
+
+---
+
+## sha1sum
+
+Compute SHA-1 message digest for files or pipeline input. Same interface as `md5sum`.
+
+```
+sha1sum [OPTIONS] [FILE...]
+```
+
+### Flags
+
+| Flag | Description |
+|------|-------------|
+| `-c`, `--check` | Read checksums from file and verify them |
+| `-b`, `--binary` | Read files in binary mode |
+
+### TextOutput Properties
+
+Each result is a `PsBash.TextOutput` object:
+
+| Property | Type | Description |
+|----------|------|-------------|
+| `Hash` | string | Hex-encoded SHA-1 digest |
+| `FileName` | string | Path to the hashed file, or `-` for pipeline input |
+| `Algorithm` | string | `SHA1` |
+| `BashText` | string | Formatted `hash  filename` output |
+
+### Examples
+
+**Hash a file:**
+
+```powershell
+sha1sum README.md
+```
+
+```text
+da39a3ee5e6b4b0d3255bfef95601890afd80709  README.md
+```
+
+**Hash from pipeline:**
+
+```powershell
+echo 'data' | sha1sum
+```
+
+```text
+a17c9aaa61e80a1bf71d0d850af4e5baa9800bbd  -
+```
+
+**Use the typed properties:**
+
+```powershell
+$result = sha1sum config.yml
+$result.Hash       # hex digest string
+$result.FileName   # "config.yml"
+```
+
+---
+
+## sha256sum
+
+Compute SHA-256 message digest for files or pipeline input. Same interface as `md5sum`.
+
+```
+sha256sum [OPTIONS] [FILE...]
+```
+
+### Flags
+
+| Flag | Description |
+|------|-------------|
+| `-c`, `--check` | Read checksums from file and verify them |
+| `-b`, `--binary` | Read files in binary mode |
+
+### TextOutput Properties
+
+Each result is a `PsBash.TextOutput` object:
+
+| Property | Type | Description |
+|----------|------|-------------|
+| `Hash` | string | Hex-encoded SHA-256 digest |
+| `FileName` | string | Path to the hashed file, or `-` for pipeline input |
+| `Algorithm` | string | `SHA256` |
+| `BashText` | string | Formatted `hash  filename` output |
+
+### Examples
+
+**Hash a file:**
+
+```powershell
+sha256sum README.md
+```
+
+```text
+e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855  README.md
+```
+
+**Hash pipeline input:**
+
+```powershell
+echo 'data' | sha256sum
+```
+
+```text
+b8e2f6eb2098b6d0fcbabf2db0b3b5e24bfe7b6eab9a573ae322e4f0a7c17e3c  -
+```
+
+**Compare checksums programmatically:**
+
+```powershell
+$expected = 'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855'
+$actual = (sha256sum README.md).Hash
+$expected -eq $actual   # True
+```
+
+<Aside type="tip">
+All three checksum commands -- `md5sum`, `sha1sum`, and `sha256sum` -- share the same interface and return the same `TextOutput` structure. The only differences are the `Algorithm` property and the hash length.
+</Aside>
+
+---
+
+## file
+
+Determine the type of a file by inspecting its contents (magic bytes).
+
+```
+file [OPTIONS] FILE...
+```
+
+### Flags
+
+| Flag | Description |
+|------|-------------|
+| `-b`, `--brief` | Omit the filename prefix from output |
+| `-i`, `--mime` | Output MIME type instead of human-readable description |
+| `-L`, `--dereference` | Follow symbolic links (accepted for compatibility) |
+
+### Detected File Types
+
+| Type | Magic Bytes | Description | MIME Type |
+|------|-------------|-------------|-----------|
+| PNG | `89 50 4E 47` | PNG image data | `image/png` |
+| JPEG | `FF D8` | JPEG image data | `image/jpeg` |
+| PDF | `25 50 44 46` | PDF document | `application/pdf` |
+| ZIP | `50 4B 03 04` | Zip archive data | `application/zip` |
+| ELF | `7F 45 4C 46` | ELF executable | `application/x-executable` |
+| GIF | `47 49 46 38` | GIF image data | `image/gif` |
+| RIFF | `52 49 46 46` | RIFF data | `application/octet-stream` |
+| Text | (no binary bytes) | ASCII text | `text/plain` |
+
+Files that match no magic signature and contain binary bytes are reported as `data` with MIME type `application/octet-stream`.
+
+### TextOutput Properties
+
+Each result is a `PsBash.TextOutput` object:
+
+| Property | Type | Description |
+|----------|------|-------------|
+| `FileName` | string | Path to the inspected file |
+| `FileType` | string | Human-readable type description |
+| `MimeType` | string | MIME type string |
+| `BashText` | string | Formatted output string |
+
+### Examples
+
+**Detect file type:**
+
+```powershell
+file image.png
+```
+
+```text
+image.png: PNG image data
+```
+
+**Brief output (no filename):**
+
+```powershell
+file -b image.png
+```
+
+```text
+PNG image data
+```
+
+**MIME type output:**
+
+```powershell
+file -i document.pdf
+```
+
+```text
+document.pdf: application/pdf
+```
+
+**Combine brief and MIME:**
+
+```powershell
+file -bi archive.zip
+```
+
+```text
+application/zip
+```
+
+**Check multiple files:**
+
+```powershell
+file script.ps1 photo.jpg data.bin
+```
+
+```text
+script.ps1: ASCII text
+photo.jpg: JPEG image data
+data.bin: data
+```
+
+**Access typed properties:**
+
+```powershell
+$info = file image.png
+$info.FileType   # "PNG image data"
+$info.MimeType   # "image/png"
+```
