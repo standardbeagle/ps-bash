@@ -3,6 +3,246 @@ title: Getting Started
 description: Install ps-bash and run your first bash-style commands in PowerShell.
 ---
 
-# Getting Started
+import { Tabs, TabItem, Aside, Steps } from '@astrojs/starlight/components';
 
-Install ps-bash and run your first bash-style commands in PowerShell.
+## Prerequisites
+
+ps-bash requires **PowerShell 7.0 or later**. Check your version:
+
+```powershell
+$PSVersionTable.PSVersion
+```
+
+If you need to install or update PowerShell, see the
+[official installation guide](https://learn.microsoft.com/en-us/powershell/scripting/install/installing-powershell).
+
+## Installation
+
+<Tabs>
+  <TabItem label="Quick try">
+    Clone the repository and import the module directly:
+
+    ```powershell
+    git clone https://github.com/standardbeagle/ps-bash.git
+    Import-Module ./ps-bash/src/PsBash.psd1
+    ```
+
+    This loads ps-bash for the current session only.
+  </TabItem>
+  <TabItem label="Permanent install">
+    Copy the module into a directory on your `PSModulePath` so PowerShell finds it automatically.
+
+    <Tabs>
+      <TabItem label="Linux / macOS">
+        ```powershell
+        $dest = "$HOME/.local/share/powershell/Modules/PsBash"
+        New-Item -ItemType Directory -Path $dest -Force
+        Copy-Item -Path ./ps-bash/src/* -Destination $dest -Recurse
+        Import-Module PsBash
+        ```
+      </TabItem>
+      <TabItem label="Windows">
+        ```powershell
+        $dest = "$HOME\Documents\PowerShell\Modules\PsBash"
+        New-Item -ItemType Directory -Path $dest -Force
+        Copy-Item -Path .\ps-bash\src\* -Destination $dest -Recurse
+        Import-Module PsBash
+        ```
+      </TabItem>
+    </Tabs>
+  </TabItem>
+  <TabItem label="Profile auto-load">
+    Add the import to your PowerShell profile so ps-bash loads every time you open a terminal:
+
+    ```powershell
+    Add-Content -Path $PROFILE -Value 'Import-Module PsBash'
+    ```
+
+    Restart your terminal or reload the profile:
+
+    ```powershell
+    . $PROFILE
+    ```
+  </TabItem>
+</Tabs>
+
+## Verify installation
+
+```powershell
+Get-Module PsBash          # Should list the PsBash module
+Get-Command ls             # Should show Alias -> Invoke-BashLs
+ls --help                  # Should display flag descriptions
+```
+
+If `Get-Module` returns nothing, run `Import-Module PsBash` and try again.
+
+## Your first 5 commands
+
+### 1. List files with details
+
+```powershell
+ls -la
+```
+
+```text
+total 12
+drwxr-xr-x  5 you you 4096 Apr  2 10:30 .
+drwxr-xr-x  3 you you 4096 Apr  1 09:15 ..
+-rw-r--r--  1 you you 1084 Apr  2 10:30 README.md
+drwxr-xr-x  2 you you 4096 Apr  2 10:28 src
+drwxr-xr-x  2 you you 4096 Apr  2 10:29 tests
+```
+
+Each row is an `LsEntry` object. You can access its typed properties directly:
+
+```powershell
+$files = ls -la
+$files[2].Name        # README.md
+$files[2].SizeBytes   # 1084
+$files[2].Permissions # -rw-r--r--
+```
+
+### 2. Pipeline composition
+
+```powershell
+cat README.md | grep 'bash' | wc -l
+```
+
+```text
+3
+```
+
+`cat` reads the file, `grep` filters lines containing "bash", and `wc -l` counts the matches. Each stage passes typed objects through the pipeline.
+
+### 3. Find files by pattern
+
+```powershell
+find . -name '*.ps1' -type f
+```
+
+```text
+./src/PsBash.psm1
+./tests/PsBash.Tests.ps1
+```
+
+### 4. Top CPU processes
+
+```powershell
+ps aux | sort -k3 -rn | head 5
+```
+
+```text
+USER       PID %CPU %MEM    VSZ   RSS TTY      STAT START   TIME COMMAND
+you       1234  8.2  1.4  45600 14200 pts/0    S    10:00   0:12 pwsh
+root         1  0.3  0.1   2400  1200 ?        Ss   09:00   0:01 init
+you       5678  0.1  0.5  12300  5100 pts/1    S    10:15   0:00 node
+root       890  0.0  0.2   5600  2400 ?        S    09:01   0:00 sshd
+you       9999  0.0  0.1   3400  1100 pts/0    R+   10:30   0:00 ps
+```
+
+Each row is a `PsEntry` with properties like `PID`, `CPU`, `Memory`, and `Command`.
+
+### 5. JSON processing
+
+```powershell
+echo '{"name":"ps-bash","version":"0.1.0"}' | jq '.name'
+```
+
+```text
+"ps-bash"
+```
+
+## The typed-object difference
+
+Every ps-bash command returns structured PowerShell objects, not plain text. This is the key difference from real bash.
+
+```powershell
+$result = ls -la | grep '.ps1'
+$result[0].GetType().Name   # PSCustomObject
+$result.FileName             # Array of matched file paths
+```
+
+Because `grep` returns `GrepMatch` objects, you can access `.FileName`, `.LineNumber`, and `.Line` directly instead of parsing text with `awk` or `cut`.
+
+```powershell
+$sizes = ls -la
+$sizes.SizeBytes | Measure-Object -Sum -Average
+
+# Count  : 5
+# Sum    : 14488
+# Average: 2897.6
+```
+
+Standard PowerShell cmdlets like `Measure-Object`, `Where-Object`, and `Group-Object` work seamlessly because the pipeline carries typed data.
+
+## Tab completion
+
+Type `ls -` and press **Tab** to cycle through available flags:
+
+```text
+-l   -a   -A   -h   -r   -R   -S   -t   -1   --help
+```
+
+All ps-bash commands register argument completers, so your shell suggests valid flags as you type.
+
+## Getting help
+
+Every command supports the `--help` flag:
+
+```powershell
+grep --help
+```
+
+```text
+grep - search for patterns in text
+
+Usage: grep [OPTIONS] PATTERN [FILE...]
+
+Flags:
+  -i          case-insensitive matching
+  -v          invert match (select non-matching lines)
+  -c          print count of matching lines
+  -l          print only names of files with matches
+  -n          prefix each line with its line number
+  -r          recursive search
+  -w          match whole words only
+  -E          extended regular expressions (default)
+  --help      show this help
+```
+
+## Troubleshooting
+
+**"ls still shows native output"**
+
+The module is not loaded, or it was loaded after your shell already resolved `ls` as a native alias. Run:
+
+```powershell
+Import-Module PsBash -Force
+```
+
+If your shell has a built-in `ls` alias, remove it first:
+
+```powershell
+Remove-Alias ls -Force -ErrorAction SilentlyContinue
+Import-Module PsBash -Force
+```
+
+**"Execution policy error"**
+
+On Windows, you may need to allow script execution:
+
+```powershell
+Set-ExecutionPolicy RemoteSigned -Scope CurrentUser
+```
+
+**"Alias conflicts with existing commands"**
+
+If another module defines the same alias, remove the conflict and reimport:
+
+```powershell
+Remove-Alias ls -Force -ErrorAction SilentlyContinue
+Remove-Alias cat -Force -ErrorAction SilentlyContinue
+Import-Module PsBash -Force
+```
+
+To make this permanent, add the remove-and-import sequence to your `$PROFILE`.

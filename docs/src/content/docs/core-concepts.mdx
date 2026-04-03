@@ -3,6 +3,191 @@ title: Core Concepts
 description: How ps-bash bridges bash commands and PowerShell's typed object pipeline.
 ---
 
-# Core Concepts
+import { Aside } from '@astrojs/starlight/components';
 
-How ps-bash bridges bash commands and PowerShell's typed object pipeline.
+Ps-bash looks like bash in your terminal, but underneath every command returns rich PowerShell objects. This page explains the four architectural patterns that make that possible.
+
+## The BashText Bridge Pattern
+
+Every ps-bash command returns a `PSCustomObject` with a `.BashText` property containing the formatted string you would see in a real bash terminal. The object also carries typed properties for programmatic access.
+
+```
+User types: ls -la
+     |
+     v
+Invoke-BashLs runs
+     |
+     v
+Creates [PsBash.LsEntry] objects via New-BashObject
+     |
+     v
+Each object has:
+  .Name, .SizeBytes, .Permissions   (typed properties)
+  .BashText = "-rw-r--r-- 1 beagle wheel  4096 ..."  (formatted string)
+  .ToString() returns .BashText
+     |
+     v
+Terminal renders BashText via Format.ps1xml
+Code accesses typed properties
+```
+
+Three pieces work together to make this seamless:
+
+**`New-BashObject`** creates a `PSCustomObject` with a `PSTypeName`, a `BashText` property, and a `ToString()` override that returns `BashText`. Every command calls this factory (or sets the same structure inline for richer types like `LsEntry`).
+
+**`ToString()` override** means string interpolation just works. When PowerShell evaluates `"File is $obj"`, it calls `ToString()` and gets the bash-formatted text.
+
+**`PsBash.Format.ps1xml`** registers a custom view for each `PsBash.*` type. The view renders `$_.BashText`, so the terminal output looks exactly like bash without losing the underlying object.
+
+```powershell
+# Terminal shows bash-style output
+ls -la
+# -rw-r--r-- 1 beagle wheel  4096 Mar 15 10:30 script.ps1
+
+# But the objects are fully typed
+$files = ls -la
+$files[0].SizeBytes      # 4096 (integer)
+$files[0].Permissions     # "-rw-r--r--" (string)
+$files[0].LastModified    # 03/15/2026 10:30:00 (DateTime)
+$files[0].BashText        # "-rw-r--r-- 1 beagle wheel  4096 Mar 15 10:30 script.ps1"
+```
+
+## The Pipeline Bridge
+
+Commands like `grep`, `sort`, `head`, `tail`, and `tee` are "bridge" commands. They match and filter against the `BashText` representation but pass through the **original typed object** unchanged.
+
+The key function is `Get-BashText`: it extracts the text string from any object (reading `.BashText` if present, falling back to `ToString()`). Bridge commands use this text for matching, then emit the original object.
+
+Here is the code path for `grep` in pipeline mode:
+
+```powershell
+# Inside Invoke-BashGrep pipeline mode:
+foreach ($item in $pipelineInput) {
+    $text = Get-BashText -InputObject $item   # extract text for matching
+    $isMatch = $regex.IsMatch($text)
+    if ($isMatch) {
+        $item                                  # emit ORIGINAL object, not text
+    }
+}
+```
+
+This means types survive the entire pipeline:
+
+```powershell
+$result = ls -la | grep '.ps1'
+$result[0].PSObject.TypeNames[0]   # PsBash.LsEntry -- NOT a string
+$result[0].SizeBytes                # 141234 -- real integer
+
+$top = ps aux | sort -k5 -rn | head 5
+$top[0].PSObject.TypeNames[0]      # PsBash.PsEntry
+$top[0].CPU                         # 12.3 -- real double
+$top[0].Memory                      # 2.1 -- real double
+$top[0].Command                     # "node server.js" -- real string
+```
+
+Each bridge command preserves types in its own way:
+
+| Command | Text operation | Object behavior |
+|---------|---------------|-----------------|
+| `grep` | Regex match against BashText | Emits original object on match |
+| `sort` | Extracts sort key from BashText (via `-k` column) | Reorders original objects |
+| `head` | None | Emits first N original objects |
+| `tail` | None | Emits last N original objects |
+| `tee` | Writes BashText to file | Passes original objects through |
+
+<Aside type="tip">
+Because bridge commands preserve types, you can chain them freely and still access typed properties at the end: `ls -la | grep '.log' | sort -k5 -rn | head 3 | ForEach-Object { $_.SizeBytes }` returns real integers.
+</Aside>
+
+## AllScope Aliases
+
+Ps-bash registers 69 aliases using `-Option AllScope`, which makes them visible in every scope (modules, scripts, nested functions):
+
+```powershell
+Set-Alias -Name 'ls' -Value 'Invoke-BashLs' -Force -Scope Global -Option AllScope
+```
+
+PowerShell resolves commands in this order:
+
+1. **Alias** (highest priority)
+2. **Function**
+3. **Cmdlet**
+4. **Application** (external executables)
+
+Because aliases win, `ls` resolves to `Invoke-BashLs` instead of the built-in `Get-ChildItem` alias on Windows or `/usr/bin/ls` on Linux. The same applies to all 69 commands: `cat`, `grep`, `sort`, `ps`, `rm`, and so on.
+
+To temporarily use a native command, call the full cmdlet name or remove the alias:
+
+```powershell
+# Use the PowerShell cmdlet directly
+Get-ChildItem -Path .
+
+# Or remove the alias for the current session
+Remove-Alias ls -Force
+```
+
+<Aside type="note">
+Aliases are restored when you re-import the module. Running `Import-Module PsBash -Force` brings them all back.
+</Aside>
+
+## Case-Sensitive Flag Parsing
+
+Bash flags are case-sensitive: `echo -e` enables escape sequences while `echo -E` disables them. PowerShell hashtables are case-insensitive by default, so `$hash['-e']` and `$hash['-E']` would return the same value.
+
+Ps-bash solves this with `New-FlagDefs`, which creates a `Dictionary<string,string>` using `StringComparer.Ordinal`:
+
+```powershell
+function New-FlagDefs {
+    param([string[]]$Entries)
+    $dict = [System.Collections.Generic.Dictionary[string,string]]::new(
+        [System.StringComparer]::Ordinal    # case-sensitive comparison
+    )
+    for ($i = 0; $i -lt $Entries.Count; $i += 2) {
+        $dict[$Entries[$i]] = $Entries[$i + 1]
+    }
+    $dict
+}
+```
+
+`ConvertFrom-BashArgs` then uses a matching `Dictionary<string,bool>` with `StringComparer.Ordinal` to track which flags are set. This preserves the distinction between `-e` and `-E`, `-n` and `-N`, or any other case pair.
+
+Here is how `echo` defines its flags:
+
+```powershell
+$defs = New-FlagDefs -Entries @(
+    '-n', 'no trailing newline'
+    '-e', 'enable escape sequences'
+    '-E', 'disable escape sequences'
+)
+$parsed = ConvertFrom-BashArgs -Arguments $Arguments -FlagDefs $defs
+# $parsed.Flags['-e'] and $parsed.Flags['-E'] are independent booleans
+```
+
+Ps-bash commands also use `$args` and `$input` instead of `[CmdletBinding()]` param blocks. This avoids conflicts with PowerShell common parameters like `-ErrorAction` and `-ErrorVariable`, which would collide with bash flags like `-E` (extended regex in `grep`, disabled escapes in `echo`).
+
+## Object Type System
+
+Ps-bash defines 20 custom types. Each command returns objects with a specific `PSTypeName` so you can identify them, filter by type, and access their properties.
+
+| Command | Type | Key properties |
+|---------|------|---------------|
+| `echo`, `printf`, `seq`, `expr` | `PsBash.TextOutput` | `BashText` |
+| `ls` | `PsBash.LsEntry` | `Name`, `SizeBytes`, `Permissions`, `Owner`, `LastModified` |
+| `cat`, `head`, `tail` | `PsBash.CatLine` | `LineNumber`, `Content`, `FileName` |
+| `grep` | `PsBash.GrepMatch` | `FileName`, `LineNumber`, `Line` |
+| `wc` | `PsBash.WcResult` | `Lines`, `Words`, `Bytes`, `FileName` |
+| `find` | `PsBash.FindEntry` | `Name`, `FullPath`, `IsDirectory`, `SizeBytes` |
+| `stat` | `PsBash.StatEntry` | `Name`, `SizeBytes`, `Permissions`, `LastModified` |
+| `ps` | `PsBash.PsEntry` | `PID`, `CPU`, `Memory`, `Command`, `User` |
+| `date` | `PsBash.DateOutput` | `BashText` |
+| `du` | `PsBash.DuEntry` | `SizeBytes`, `Path` |
+| `tree` | `PsBash.TreeEntry` | `Name`, `FullPath`, `Depth` |
+| `env` | `PsBash.EnvEntry` | `Name`, `Value` |
+| `rg` | `PsBash.RgMatch` | `FileName`, `LineNumber`, `Line` |
+| `gzip -l` | `PsBash.GzipListOutput` | `CompressedSize`, `UncompressedSize` |
+| `tar -t` | `PsBash.TarListOutput` | `Name`, `SizeBytes` |
+| `time` | `PsBash.TimeOutput` | `BashText` |
+| `which` | `PsBash.WhichOutput` | `Name`, `Path` |
+| `alias` | `PsBash.AliasOutput` | `Name`, `Definition` |
+
+For the full property reference, see the [Object Types](/ps-bash/reference/object-types/) page.

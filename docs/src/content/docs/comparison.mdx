@@ -1,8 +1,159 @@
 ---
-title: Comparison
-description: ps-bash vs native bash, vs PowerShell aliases, vs third-party modules.
+title: "PsBash vs Bash vs PowerShell vs WSL"
+description: "Compare PsBash with native bash, PowerShell cmdlets, and WSL. See side-by-side examples, character counts, and feature matrices to find the right tool for your workflow."
+head:
+  - tag: meta
+    attrs:
+      name: keywords
+      content: powershell bash commands, bash in powershell, powershell for linux users, powershell vs bash, powershell bash alternative, unix commands powershell
 ---
 
-# Comparison
+import { Tabs, TabItem, Card, CardGrid } from '@astrojs/starlight/components';
 
-ps-bash vs native bash, vs PowerShell aliases, vs third-party modules.
+# PsBash vs Bash vs PowerShell vs WSL
+
+PsBash gives you bash syntax with PowerShell objects underneath.
+This page compares it honestly against native bash, PowerShell cmdlets, and WSL so you can decide what fits your workflow.
+
+<Tabs>
+<TabItem label="vs Bash">
+
+## PsBash vs Bash
+
+The commands are identical. The difference is what comes out of the pipeline.
+
+| Task | Bash | PsBash | The PsBash Advantage |
+|------|------|--------|---------------------|
+| List files | `ls -la` | `ls -la` | Returns `LsEntry` objects with `.Name`, `.SizeBytes`, `.Modified` |
+| Find text | `grep -r 'TODO' src/` | `grep -r 'TODO' src/` | Returns `GrepMatch` objects with `.LineNumber`, `.FileName`, `.MatchText` |
+| Top CPU processes | `ps aux \| sort -k3 -rn \| head 5` | `ps aux \| sort -k3 -rn \| head 5` | `PsEntry` objects with `.CPU` as a decimal, not a string to parse |
+| File sizes | `ls -la \| awk '{print $5}'` | `(ls -la).SizeBytes` | Direct property access replaces awk field extraction |
+| JSON queries | `cat f.json \| jq '.name'` | `cat f.json \| jq '.name'` | Works on Windows without installing jq separately |
+| Count lines | `wc -l file.txt` | `wc -l file.txt` | `WcResult` with `.Lines`, `.Words`, `.Bytes` as integers |
+| Find files | `find . -name '*.ps1'` | `find . -name '*.ps1'` | `FindEntry` objects with `.Path`, `.SizeBytes`, `.IsDirectory` |
+| Disk usage | `du -sh src/` | `du -sh src/` | `DuEntry` with `.SizeBytes` as a number, not `4.2M` to parse |
+| File info | `stat file.txt` | `stat file.txt` | `StatEntry` with typed `.AccessTime`, `.ModifyTime`, `.SizeBytes` |
+| Search (ripgrep) | `rg 'pattern' src/` | `rg 'pattern' src/` | `RgMatch` objects with `.LineNumber`, `.FileName`, `.MatchText` |
+| Environment vars | `env \| grep PATH` | `env \| grep PATH` | `EnvEntry` objects with `.Name` and `.Value` properties |
+| Directory tree | `tree src/` | `tree src/` | `TreeEntry` objects with `.Path`, `.Depth`, `.IsDirectory` |
+
+### When Bash Wins
+
+- **Shell scripting** -- bash scripts, conditionals, loops, and functions are a complete programming language. PsBash provides commands, not a shell.
+- **Process substitution** -- `diff <(cmd1) <(cmd2)` has no PsBash equivalent.
+- **Heredocs** -- `cat <<EOF` style multi-line strings are a bash feature, not a command.
+- **Full POSIX compliance** -- PsBash reimplements common commands, not the full POSIX specification.
+- **System administration on Linux** -- bash is the native shell. PsBash adds a layer.
+
+### When PsBash Wins
+
+- **Typed objects** -- no more `awk '{print $5}'` or `cut -d: -f2` to extract fields. Properties are named and typed.
+- **Windows support** -- every command works on Windows, macOS, and Linux without WSL or Cygwin.
+- **.NET integration** -- pipe PsBash output into any .NET API or PowerShell cmdlet.
+- **No string parsing** -- `(ls -la).SizeBytes` instead of `ls -la | awk '{sum += $5} END {print sum}'`.
+- **Pipeline safety** -- objects survive through `grep`, `sort`, `head`, `tail` without losing structure.
+
+</TabItem>
+<TabItem label="vs PowerShell">
+
+## PsBash vs Native PowerShell
+
+Same results, fewer characters. PsBash commands average 50-70% shorter than their native PowerShell equivalents.
+
+| Task | PsBash | Chars | PowerShell | Chars | Saved |
+|------|--------|-------|------------|-------|-------|
+| List files | `ls -la` | 5 | `Get-ChildItem -Force` | 21 | 76% |
+| Find text | `grep -r 'TODO' src/` | 19 | `Select-String -Pattern TODO -Path src/* -Recurse` | 50 | 62% |
+| Top CPU | `ps aux \| sort -k3 -rn \| head 5` | 32 | `Get-Process \| Sort-Object CPU -Desc \| Select-Object -First 5` | 55 | 42% |
+| JSON query | `cat f.json \| jq '.name'` | 22 | `(Get-Content f.json \| ConvertFrom-Json).name` | 46 | 52% |
+| First 10 lines | `head -n 10 file.txt` | 18 | `Get-Content file.txt -Head 10` | 30 | 40% |
+| Count lines | `wc -l file.txt` | 13 | `(Get-Content file.txt \| Measure-Object -Line).Lines` | 52 | 75% |
+| Find files | `find . -name '*.ps1'` | 19 | `Get-ChildItem -Recurse -Filter *.ps1` | 38 | 50% |
+| Sort by column | `sort -k5 -h` | 10 | `Sort-Object { $_.Length }` | 26 | 62% |
+
+### When Native PowerShell Wins
+
+- **Full parameter sets** -- cmdlets like `Get-ChildItem` expose dozens of parameters (`-Depth`, `-Hidden`, `-ReadOnly`, `-Attributes`) that PsBash flags may not cover.
+- **PowerShell remoting** -- `Invoke-Command -ComputerName` has no PsBash equivalent.
+- **-WhatIf and -Confirm** -- native cmdlets support dry-run and confirmation prompts. PsBash commands execute immediately.
+- **Format-\* cmdlets** -- `Format-Table`, `Format-List`, `Format-Wide` give fine-grained output control.
+- **Tab completion** -- native cmdlets have richer parameter completion out of the box.
+- **Official documentation** -- Microsoft-maintained help for every parameter and example.
+
+### When PsBash Wins
+
+- **Brevity** -- 50-70% fewer characters for everyday tasks.
+- **Muscle memory** -- if you know bash, you know PsBash. No learning curve.
+- **Text pipeline compatibility** -- output looks like bash, so existing scripts and colleagues can read it.
+- **Familiar to bash users** -- onboard Linux-native developers to PowerShell without retraining.
+- **Consistent flags** -- `-la`, `-r`, `-n` work the way bash users expect.
+
+</TabItem>
+<TabItem label="vs WSL">
+
+## PsBash vs WSL
+
+WSL gives you a real Linux kernel. PsBash gives you bash-style commands inside the PowerShell pipeline. They solve different problems.
+
+| Feature | PsBash | WSL |
+|---------|--------|-----|
+| Platform | Windows, Linux, macOS | Windows only |
+| Runtime overhead | None (native PowerShell) | Linux VM with memory allocation |
+| Object pipeline | Typed objects (`LsEntry`, `GrepMatch`) | Text strings |
+| .NET integration | Full -- pipe into any cmdlet or API | None -- separate OS boundary |
+| Real Linux kernel | No | Yes |
+| Shell scripting | PowerShell scripting | Full bash/zsh scripting |
+| File system | Native (no boundary crossing) | `/mnt/c` translation layer |
+| Package managers | PowerShell Gallery | apt, yum, pacman |
+| System services | PowerShell/Windows services | systemd, cron |
+| Network stack | Host network | Bridged or NAT |
+| Docker | Docker Desktop | Native Linux Docker |
+| Installation | `Install-Module PsBash` | Windows feature + distro download |
+| Startup time | Instant (module load) | Seconds (VM boot) |
+
+### When WSL Wins
+
+- **Real Linux tools** -- not reimplementations. The actual GNU coreutils, compiled for Linux.
+- **Shell scripting** -- full bash, zsh, fish with all features: job control, signals, process groups.
+- **Linux-specific software** -- anything that requires a Linux kernel (Docker, systemd, eBPF).
+- **Development environments** -- Node.js, Python, Ruby with Linux-native performance and paths.
+- **Existing scripts** -- your `.bashrc`, shell scripts, and Makefiles run unmodified.
+
+### When PsBash Wins
+
+- **Cross-platform** -- works on macOS and Linux too, not just Windows.
+- **No VM overhead** -- no memory allocation for a Linux instance, no startup delay.
+- **Object pipeline** -- results integrate with PowerShell. `ls -la | Where-Object { $_.SizeBytes -gt 1MB }` works natively.
+- **No filesystem boundary** -- no `/mnt/c` path translation, no permission mismatches, no line-ending issues.
+- **Single environment** -- stay in one shell. No switching between PowerShell and WSL terminals.
+- **.NET access** -- pipe bash-style output directly into .NET APIs, C# code, or PowerShell modules.
+
+</TabItem>
+</Tabs>
+
+## Who Should Use PsBash?
+
+<CardGrid>
+  <Card title="Linux Sysadmins Moving to PowerShell" icon="rocket">
+    Keep your bash muscle memory while learning PowerShell concepts. Same commands, new capabilities.
+  </Card>
+  <Card title="Cross-Platform DevOps Engineers" icon="laptop">
+    Write scripts that work on Windows, macOS, and Linux without platform-specific branching or WSL dependencies.
+  </Card>
+  <Card title="Developers Who Think in Bash" icon="terminal">
+    Use `grep`, `awk`, `jq`, and `find` the way you always have, but get typed objects for downstream processing.
+  </Card>
+  <Card title="Teams Hiring Bash-Native Talent" icon="setting">
+    Onboard Linux-experienced engineers to a PowerShell codebase without forcing them to learn `Get-ChildItem` on day one.
+  </Card>
+</CardGrid>
+
+## The Bottom Line
+
+PsBash is not a replacement for bash, PowerShell, or WSL. It is a bridge.
+
+If you need a full Linux environment, use WSL.
+If you need deep PowerShell parameter control, use native cmdlets.
+If you need POSIX shell scripting, use bash.
+
+If you need **bash syntax with typed PowerShell objects** that work across Windows, macOS, and Linux -- that is what PsBash does.
