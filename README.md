@@ -8,6 +8,9 @@
 [![Tests: 775](https://img.shields.io/badge/tests-775%20passing-brightgreen.svg)](#testing)
 [![Commands: 68](https://img.shields.io/badge/commands-68-blue.svg)](#command-reference)
 [![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20Linux%20%7C%20macOS-lightgrey.svg)](#cross-platform)
+[![Docs](https://img.shields.io/badge/docs-standardbeagle.github.io%2Fps--bash-blue.svg)](https://standardbeagle.github.io/ps-bash/)
+
+> **[Full documentation at standardbeagle.github.io/ps-bash](https://standardbeagle.github.io/ps-bash/)** — command reference, pipeline cookbook, object type specs, cross-platform guide.
 
 Use the bash commands you already know — `ls -la`, `grep -r`, `ps aux | sort -k3 -rn | head 5` — and get **typed PowerShell objects** underneath. Same flags, same output, but every result has structured properties you can access programmatically.
 
