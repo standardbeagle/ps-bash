@@ -54,9 +54,15 @@ jobs:
           $data = Import-PowerShellDataFile ./src/PsBash.psd1
           Write-Host "Manifest version: $($data.ModuleVersion)"
 
+      - name: Prepare module directory
+        shell: pwsh
+        run: |
+          Copy-Item -Path ./src -Destination ./PsBash -Recurse
+          Test-ModuleManifest -Path ./PsBash/PsBash.psd1
+
       - name: Publish to PSGallery
         shell: pwsh
         env:
           PSGALLERY_API_KEY: ${{ secrets.PSGALLERY_API_KEY }}
         run: |
-          Publish-Module -Path ./src -NuGetApiKey $env:PSGALLERY_API_KEY -Repository PSGallery -Verbose
+          Publish-Module -Path ./PsBash -NuGetApiKey $env:PSGALLERY_API_KEY -Repository PSGallery -Verbose
