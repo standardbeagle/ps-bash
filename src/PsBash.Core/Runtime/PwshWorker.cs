@@ -21,8 +21,7 @@ public sealed class PwshWorker : IAsyncDisposable
         string? workerScriptPath = null,
         CancellationToken ct = default)
     {
-        var scriptPath = workerScriptPath
-            ?? Path.Combine(AppContext.BaseDirectory, "ps-bash-worker.ps1");
+        var scriptPath = workerScriptPath ?? await ExtractWorkerScriptAsync(ct);
 
         var psi = new ProcessStartInfo
         {
@@ -71,8 +70,19 @@ public sealed class PwshWorker : IAsyncDisposable
             Console.WriteLine(line);
         }
 
-        throw new InvalidOperationException(
-            "Worker process ended without sending exit sentinel");
+        // Stdout closed — process exited (e.g. via "exit N"). Return its exit code.
+        await _process.WaitForExitAsync(ct);
+        return _process.ExitCode;
+    }
+
+    private static async Task<string> ExtractWorkerScriptAsync(CancellationToken ct)
+    {
+        var dest = Path.Combine(Path.GetTempPath(), "ps-bash-worker.ps1");
+        using var stream = typeof(PwshWorker).Assembly
+            .GetManifestResourceStream("ps-bash-worker.ps1")!;
+        using var file = new FileStream(dest, FileMode.Create, FileAccess.Write, FileShare.None);
+        await stream.CopyToAsync(file, ct);
+        return dest;
     }
 
     public async ValueTask DisposeAsync()

@@ -34,10 +34,12 @@ while ($true) {
                 [Console]::Out.WriteLine($_)
             }
         }
-        [Console]::Out.WriteLine("<<<EXIT:0>>>")
+        $exitCode = if ($LASTEXITCODE -ne $null) { $LASTEXITCODE } else { 0 }
+        [Console]::Out.WriteLine("<<<EXIT:$exitCode>>>")
     } catch {
         [Console]::Error.WriteLine($_.Exception.Message)
-        [Console]::Out.WriteLine("<<<EXIT:1>>>")
+        $exitCode = if ($LASTEXITCODE -ne $null) { $LASTEXITCODE } else { 1 }
+        [Console]::Out.WriteLine("<<<EXIT:$exitCode>>>")
     } finally {
         [Console]::Out.Flush()
     }

@@ -7,4 +7,8 @@
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
   </PropertyGroup>
 
+  <ItemGroup>
+    <EmbeddedResource Include="..\..\scripts\ps-bash-worker.ps1" LogicalName="ps-bash-worker.ps1" />
+  </ItemGroup>
+
 </Project>
