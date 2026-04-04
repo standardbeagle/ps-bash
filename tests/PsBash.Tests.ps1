@@ -1,7 +1,7 @@
 #Requires -Modules Pester
 
 BeforeAll {
-    $modulePath = Join-Path $PSScriptRoot '..' 'src' 'PsBash.psd1'
+    $modulePath = Join-Path $PSScriptRoot '..' 'src' 'PsBash.Module' 'PsBash.psd1'
     Import-Module $modulePath -Force
 }
 
