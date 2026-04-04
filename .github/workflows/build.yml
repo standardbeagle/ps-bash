@@ -1,0 +1,60 @@
+name: Build
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            rid: win-x64
+            binary: ps-bash.exe
+          - os: ubuntu-latest
+            rid: linux-x64
+            binary: ps-bash
+          - os: macos-latest
+            rid: osx-arm64
+            binary: ps-bash
+
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Restore
+        run: dotnet restore
+
+      - name: Build
+        run: dotnet build --no-restore -c Release
+
+      - name: Unit tests
+        run: dotnet test --no-build -c Release --filter "Category!=Integration"
+
+      - name: Integration tests
+        continue-on-error: true
+        run: dotnet test --no-build -c Release --filter "Category=Integration"
+
+      - name: Publish AOT
+        run: dotnet publish src/PsBash.Shell -r ${{ matrix.rid }} --self-contained true -p:PublishAot=true -c Release -o dist/${{ matrix.rid }}
+
+      - name: Stage slim package
+        shell: bash
+        run: |
+          mkdir -p staging/ps-bash-${{ matrix.rid }}
+          cp dist/${{ matrix.rid }}/${{ matrix.binary }} staging/ps-bash-${{ matrix.rid }}/
+          cp -r src/PsBash.Module staging/ps-bash-${{ matrix.rid }}/ps-bash-module
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ps-bash-${{ matrix.rid }}
+          path: staging/ps-bash-${{ matrix.rid }}

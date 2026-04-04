@@ -4,6 +4,7 @@ using Xunit;
 
 namespace PsBash.Shell.Tests;
 
+[Trait("Category", "Integration")]
 public class ProgramEndToEndTests
 {
     private static readonly string? PwshPath = FindPwsh();

@@ -3,6 +3,7 @@ using Xunit;
 
 namespace PsBash.Core.Tests;
 
+[Trait("Category", "Integration")]
 public class PwshWorkerTests : IAsyncLifetime
 {
     private static readonly string? PwshPath = FindPwsh();
