@@ -187,6 +187,51 @@ public class BashParserTests
     }
 
     [Fact]
+    public void Parse_SimplePipeline_ReturnsPipelineNode()
+    {
+        var result = Parse("ls | grep foo");
+
+        var pipeline = Assert.IsType<Command.Pipeline>(result);
+        Assert.Equal(2, pipeline.Commands.Length);
+        Assert.Equal(new[] { "|" }, pipeline.Ops.ToArray());
+        Assert.False(pipeline.Negated);
+
+        var left = Assert.IsType<Command.Simple>(pipeline.Commands[0]);
+        Assert.Equal(["ls"], GetWordValues(left));
+
+        var right = Assert.IsType<Command.Simple>(pipeline.Commands[1]);
+        Assert.Equal(["grep", "foo"], GetWordValues(right));
+    }
+
+    [Fact]
+    public void Parse_ThreeCommandPipeline_ReturnsThreeChildren()
+    {
+        var result = Parse("cat file | head -n 5 | sort");
+
+        var pipeline = Assert.IsType<Command.Pipeline>(result);
+        Assert.Equal(3, pipeline.Commands.Length);
+        Assert.Equal(new[] { "|", "|" }, pipeline.Ops.ToArray());
+    }
+
+    [Fact]
+    public void Parse_PipeAmpersand_RecognizedAsStderrPipe()
+    {
+        var result = Parse("cmd |& other");
+
+        var pipeline = Assert.IsType<Command.Pipeline>(result);
+        Assert.Equal(2, pipeline.Commands.Length);
+        Assert.Equal(new[] { "|&" }, pipeline.Ops.ToArray());
+    }
+
+    [Fact]
+    public void Parse_SingleCommand_NoPipe_ReturnsSimple()
+    {
+        var result = Parse("echo hello");
+
+        Assert.IsType<Command.Simple>(result);
+    }
+
+    [Fact]
     public void Parse_MixedQuoteWord_ProducesMultipleParts()
     {
         // hello'world'"$USER" -> Literal("hello"), SingleQuoted("world"), DoubleQuoted([SimpleVarSub("USER")])

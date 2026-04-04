@@ -65,18 +65,35 @@ public class PsEmitterTests
     }
 
     [Fact]
-    public void Emit_Pipeline_ThrowsNotSupported()
+    public void Transpile_LsPipeGrep_EmitsMappedPipeline()
     {
-        var pipeline = new Command.Pipeline(
-            ImmutableArray.Create<Command>(
-                new Command.Simple(
-                    ImmutableArray.Create(MakeWord("ls")),
-                    ImmutableArray<EnvPair>.Empty,
-                    ImmutableArray<Redirect>.Empty)),
-            ImmutableArray.Create("|"),
-            false);
+        var result = PsEmitter.Transpile("ls | grep foo");
 
-        Assert.Throws<NotSupportedException>(() => PsEmitter.Emit(pipeline));
+        Assert.Equal("ls | Invoke-Grep \"foo\"", result);
+    }
+
+    [Fact]
+    public void Transpile_CatPipeHeadPipeSort_EmitsMultiStagePipeline()
+    {
+        var result = PsEmitter.Transpile("cat file | head -n 5 | sort");
+
+        Assert.Equal("cat file | Select-Object -First 5 | Sort-Object", result);
+    }
+
+    [Fact]
+    public void Transpile_PipeAmpersand_EmitsStderrMerge()
+    {
+        var result = PsEmitter.Transpile("cmd |& other");
+
+        Assert.Equal("cmd 2>&1 | other", result);
+    }
+
+    [Fact]
+    public void Transpile_EchoPipeWcL_EmitsMeasureObject()
+    {
+        var result = PsEmitter.Transpile("echo hello | wc -l");
+
+        Assert.Equal("echo hello | Measure-Object -Line | Select-Object -Expand Lines", result);
     }
 
     [Fact]

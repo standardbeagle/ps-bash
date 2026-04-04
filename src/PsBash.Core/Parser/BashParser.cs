@@ -45,7 +45,38 @@ public sealed class BashParser
         if (Peek().Kind == BashTokenKind.Eof)
             return null;
 
-        return ParseSimpleCommand();
+        return ParsePipeline();
+    }
+
+    private Command ParsePipeline()
+    {
+        var first = ParseSimpleCommand();
+        if (Peek().Kind != BashTokenKind.Pipe)
+            return first;
+
+        var commands = ImmutableArray.CreateBuilder<Command>();
+        var ops = ImmutableArray.CreateBuilder<string>();
+        commands.Add(first);
+
+        while (Peek().Kind == BashTokenKind.Pipe)
+        {
+            Advance(); // consume |
+
+            // |& is Pipe followed by Amp -- means stderr-merge pipe
+            if (Peek().Kind == BashTokenKind.Amp)
+            {
+                Advance(); // consume &
+                ops.Add("|&");
+            }
+            else
+            {
+                ops.Add("|");
+            }
+
+            commands.Add(ParseSimpleCommand());
+        }
+
+        return new Command.Pipeline(commands.ToImmutable(), ops.ToImmutable(), Negated: false);
     }
 
     private Command.Simple ParseSimpleCommand()

@@ -1,3 +1,4 @@
+using System.Collections.Immutable;
 using System.Text;
 using PsBash.Core.Parser.Ast;
 
@@ -5,7 +6,6 @@ namespace PsBash.Core.Parser;
 
 /// <summary>
 /// Walks parsed AST nodes and emits equivalent PowerShell strings.
-/// Currently handles SimpleCommand only; other command types are not yet supported.
 /// </summary>
 public static class PsEmitter
 {
@@ -15,7 +15,7 @@ public static class PsEmitter
     public static string Emit(Command cmd) => cmd switch
     {
         Command.Simple simple => EmitSimple(simple),
-        Command.Pipeline => throw new NotSupportedException("Pipeline commands are not yet supported."),
+        Command.Pipeline pipeline => EmitPipeline(pipeline),
         Command.AndOrList => throw new NotSupportedException("AndOr commands are not yet supported."),
         Command.CommandList => throw new NotSupportedException("CommandList commands are not yet supported."),
         Command.ShAssignment => throw new NotSupportedException("ShAssignment commands are not yet supported."),
@@ -104,5 +104,237 @@ public static class PsEmitter
             sb.Append(EmitWordPart(part));
         sb.Append('"');
         return sb.ToString();
+    }
+
+    private static string EmitPipeline(Command.Pipeline pipeline)
+    {
+        var sb = new StringBuilder();
+        for (int i = 0; i < pipeline.Commands.Length; i++)
+        {
+            if (i > 0)
+            {
+                var op = pipeline.Ops[i - 1];
+                if (op == "|&")
+                    sb.Append(" 2>&1 | ");
+                else
+                    sb.Append(" | ");
+            }
+
+            var cmd = pipeline.Commands[i];
+            if (i > 0 && cmd is Command.Simple simple && TryEmitMappedCommand(simple, out var mapped))
+                sb.Append(mapped);
+            else
+                sb.Append(Emit(cmd));
+        }
+
+        return sb.ToString();
+    }
+
+    /// <summary>
+    /// Tries to emit a mapped PowerShell equivalent for known bash pipe-target commands.
+    /// Returns false if the command is not a recognized pipe target.
+    /// </summary>
+    private static bool TryEmitMappedCommand(Command.Simple cmd, out string result)
+    {
+        result = "";
+        if (cmd.Words.IsEmpty)
+            return false;
+
+        var name = GetLiteralValue(cmd.Words[0]);
+        if (name is null)
+            return false;
+
+        var args = cmd.Words.RemoveAt(0);
+
+        switch (name)
+        {
+            case "grep":
+                result = EmitGrep(args);
+                return true;
+            case "head":
+                result = EmitHead(args);
+                return true;
+            case "tail":
+                result = EmitTail(args);
+                return true;
+            case "wc":
+                result = EmitWc(args);
+                return true;
+            case "sort":
+                result = EmitSort(args);
+                return true;
+            case "uniq":
+                result = "Get-Unique";
+                return true;
+            case "sed":
+                result = EmitPassthrough("Invoke-Sed", args);
+                return true;
+            case "awk":
+                result = EmitPassthrough("Invoke-Awk", args);
+                return true;
+            case "cut":
+                result = EmitCut(args);
+                return true;
+            case "xargs":
+                result = EmitPassthrough("Invoke-Xargs", args);
+                return true;
+            case "tr":
+                result = EmitPassthrough("Invoke-Tr", args);
+                return true;
+            case "tee":
+                result = EmitTee(args);
+                return true;
+            default:
+                return false;
+        }
+    }
+
+    private static string? GetLiteralValue(CompoundWord word)
+    {
+        if (word.Parts.Length == 1 && word.Parts[0] is WordPart.Literal lit)
+            return lit.Value;
+        return null;
+    }
+
+    private static string EmitGrep(ImmutableArray<CompoundWord> args)
+    {
+        var flags = new List<string>();
+        string? pattern = null;
+        var rest = new List<string>();
+
+        foreach (var arg in args)
+        {
+            var val = GetLiteralValue(arg);
+            if (val is not null && val.StartsWith('-') && pattern is null)
+            {
+                foreach (var c in val.AsSpan(1))
+                {
+                    switch (c)
+                    {
+                        case 'v': flags.Add("-NotMatch"); break;
+                        case 'i': flags.Add("-CaseInsensitive"); break;
+                        case 'r': flags.Add("-Recurse"); break;
+                    }
+                }
+            }
+            else if (pattern is null)
+            {
+                pattern = $"\"{EmitWord(arg)}\"";
+            }
+            else
+            {
+                rest.Add(EmitWord(arg));
+            }
+        }
+
+        var parts = new List<string> { "Invoke-Grep" };
+        parts.AddRange(flags);
+        if (pattern is not null)
+            parts.Add(pattern);
+        parts.AddRange(rest);
+
+        return string.Join(' ', parts);
+    }
+
+    private static string EmitHead(ImmutableArray<CompoundWord> args)
+    {
+        var count = ExtractNumericFlag(args, "-n");
+        return count is not null
+            ? $"Select-Object -First {count}"
+            : $"Select-Object -First 10";
+    }
+
+    private static string EmitTail(ImmutableArray<CompoundWord> args)
+    {
+        var count = ExtractNumericFlag(args, "-n");
+        return count is not null
+            ? $"Select-Object -Last {count}"
+            : $"Select-Object -Last 10";
+    }
+
+    private static string EmitWc(ImmutableArray<CompoundWord> args)
+    {
+        if (args.Any(a => GetLiteralValue(a) == "-l"))
+            return "Measure-Object -Line | Select-Object -Expand Lines";
+        return "Measure-Object -Line";
+    }
+
+    private static string EmitSort(ImmutableArray<CompoundWord> args)
+    {
+        var hasReverse = args.Any(a => GetLiteralValue(a) == "-r");
+        return hasReverse ? "Sort-Object -Descending" : "Sort-Object";
+    }
+
+    private static string EmitCut(ImmutableArray<CompoundWord> args)
+    {
+        string? delim = null;
+        string? field = null;
+
+        for (int i = 0; i < args.Length; i++)
+        {
+            var val = GetLiteralValue(args[i]);
+            if (val is null) continue;
+
+            if (val.StartsWith("-d") && val.Length > 2)
+            {
+                delim = val[2..];
+            }
+            else if (val == "-d" && i + 1 < args.Length)
+            {
+                delim = GetLiteralValue(args[++i]);
+            }
+            else if (val.StartsWith("-f") && val.Length > 2)
+            {
+                field = val[2..];
+            }
+            else if (val == "-f" && i + 1 < args.Length)
+            {
+                field = GetLiteralValue(args[++i]);
+            }
+        }
+
+        var sb = new StringBuilder("Invoke-Cut");
+        if (delim is not null)
+            sb.Append($" -Delimiter {delim}");
+        if (field is not null)
+            sb.Append($" -Field {field}");
+        return sb.ToString();
+    }
+
+    private static string EmitTee(ImmutableArray<CompoundWord> args)
+    {
+        if (args.Length > 0)
+            return $"Tee-Object {EmitWord(args[0])}";
+        return "Tee-Object";
+    }
+
+    private static string EmitPassthrough(string cmdlet, ImmutableArray<CompoundWord> args)
+    {
+        if (args.IsEmpty)
+            return cmdlet;
+
+        var sb = new StringBuilder(cmdlet);
+        foreach (var arg in args)
+        {
+            sb.Append(' ');
+            sb.Append(EmitWord(arg));
+        }
+        return sb.ToString();
+    }
+
+    private static string? ExtractNumericFlag(ImmutableArray<CompoundWord> args, string flag)
+    {
+        for (int i = 0; i < args.Length; i++)
+        {
+            var val = GetLiteralValue(args[i]);
+            if (val is null) continue;
+
+            if (val == flag && i + 1 < args.Length)
+                return GetLiteralValue(args[i + 1]);
+
+            if (val.StartsWith(flag) && val.Length > flag.Length)
+                return val[flag.Length..];
+        }
+        return null;
     }
 }
