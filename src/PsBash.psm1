@@ -6774,6 +6774,12 @@ function Invoke-BashDu {
     while ($i -lt $Arguments.Count) {
         $arg = $Arguments[$i]
 
+        if ($arg -cmatch '^-d(\d+)$') {
+            $maxDepth = [int]$Matches[1]
+            $i++
+            continue
+        }
+
         if ($arg -eq '-d' -and ($i + 1) -lt $Arguments.Count) {
             $maxDepth = [int]$Arguments[$i + 1]
             $i += 2
@@ -6990,6 +6996,11 @@ function Invoke-BashTree {
     while ($i -lt $Arguments.Count) {
         $arg = $Arguments[$i]
 
+        if ($arg -cmatch '^-L(\d+)$') {
+            $maxDepth = [int]$Matches[1]
+            $i++
+            continue
+        }
         if ($arg -eq '-L' -and ($i + 1) -lt $Arguments.Count) {
             $maxDepth = [int]$Arguments[$i + 1]
             $i += 2
@@ -7322,6 +7333,9 @@ function Invoke-BashFold {
     $i = 0
     while ($i -lt $Arguments.Count) {
         $arg = $Arguments[$i]
+        if ($arg -cmatch '^-w(\d+)$') {
+            $width = [int]$Matches[1]; $i++; continue
+        }
         if ($arg -eq '-w' -and ($i + 1) -lt $Arguments.Count) {
             $width = [int]$Arguments[$i + 1]; $i += 2; continue
         }
@@ -7402,6 +7416,9 @@ function Invoke-BashExpand {
     $i = 0
     while ($i -lt $Arguments.Count) {
         $arg = $Arguments[$i]
+        if ($arg -cmatch '^-t(\d+)$') {
+            $tabWidth = [int]$Matches[1]; $i++; continue
+        }
         if ($arg -eq '-t' -and ($i + 1) -lt $Arguments.Count) {
             $tabWidth = [int]$Arguments[$i + 1]; $i += 2; continue
         }
@@ -7469,6 +7486,9 @@ function Invoke-BashUnexpand {
     $i = 0
     while ($i -lt $Arguments.Count) {
         $arg = $Arguments[$i]
+        if ($arg -cmatch '^-t(\d+)$') {
+            $tabWidth = [int]$Matches[1]; $i++; continue
+        }
         if ($arg -eq '-t' -and ($i + 1) -lt $Arguments.Count) {
             $tabWidth = [int]$Arguments[$i + 1]; $i += 2; continue
         }
