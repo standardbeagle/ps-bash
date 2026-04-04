@@ -43,7 +43,7 @@ public class BashTranspilerTests
     public void HomePathWithPipe_TransformsBoth()
     {
         var result = BashTranspiler.Transpile("ls ~/.config | head -n 5");
-        Assert.Equal("ls $HOME\\.config | Select-Object -First 5", result);
+        Assert.Equal("ls $HOME\\.config | Invoke-BashHead -n 5", result);
     }
 
     [Fact]
@@ -51,7 +51,7 @@ public class BashTranspilerTests
     {
         var result = BashTranspiler.Transpile("cat /tmp/data.csv | grep -v header | sort | uniq | wc -l");
         Assert.Equal(
-            "cat $env:TEMP\\data.csv | Invoke-BashGrep -NotMatch \"header\" | Sort-Object | Get-Unique | Measure-Object -Line | Select-Object -Expand Lines",
+            "cat $env:TEMP\\data.csv | Invoke-BashGrep -NotMatch \"header\" | Invoke-BashSort | Invoke-BashUniq | Invoke-BashWc -l",
             result);
     }
 

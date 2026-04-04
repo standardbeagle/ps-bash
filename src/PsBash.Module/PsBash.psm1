@@ -15,6 +15,27 @@ function Get-BashPlatform {
     return 'Unknown'
 }
 
+# --- Process Substitution Helper ---
+
+function Invoke-ProcessSub {
+    [CmdletBinding()]
+    [OutputType([string])]
+    param(
+        [Parameter(Mandatory)]
+        [scriptblock]$Command
+    )
+
+    $tmp = [System.IO.Path]::GetTempFileName()
+    try {
+        & $Command | Out-File -FilePath $tmp -Encoding utf8NoBOM
+        return $tmp
+    }
+    catch {
+        Remove-Item -Path $tmp -Force -ErrorAction SilentlyContinue
+        throw
+    }
+}
+
 # --- BashObject Factory ---
 
 function Set-BashDisplayProperty {
@@ -445,6 +466,99 @@ function Format-LsLine {
         $Entry.Name
 }
 
+# --- ls Grid Formatting ---
+
+function Get-LsDisplayName {
+    [CmdletBinding()]
+    [OutputType([string])]
+    param(
+        [Parameter(Mandatory)]
+        [PSCustomObject]$Entry
+    )
+
+    $name = $Entry.Name
+    if ($Entry.IsDirectory) {
+        $name += '/'
+    }
+    $name
+}
+
+function Format-LsGrid {
+    [CmdletBinding()]
+    [OutputType([string[]])]
+    param(
+        [Parameter(Mandatory)]
+        [string[]]$Names,
+
+        [Parameter()]
+        [int]$TerminalWidth = 80
+    )
+
+    if ($Names.Count -eq 0) { return @() }
+    if ($Names.Count -eq 1) { return @($Names[0]) }
+
+    $columnGap = 2
+    $maxNameLen = 0
+    foreach ($n in $Names) {
+        if ($n.Length -gt $maxNameLen) { $maxNameLen = $n.Length }
+    }
+
+    $bestCols = 1
+    $bestColWidths = @($maxNameLen)
+
+    $maxPossibleCols = [Math]::Max(1, [Math]::Floor($TerminalWidth / ($columnGap + 1)))
+    if ($maxPossibleCols -gt $Names.Count) { $maxPossibleCols = $Names.Count }
+
+    for ($tryCol = $maxPossibleCols; $tryCol -ge 2; $tryCol--) {
+        $rows = [Math]::Ceiling($Names.Count / $tryCol)
+        $colWidths = [int[]]::new($tryCol)
+
+        for ($c = 0; $c -lt $tryCol; $c++) {
+            $widest = 0
+            for ($r = 0; $r -lt $rows; $r++) {
+                $idx = $r + $c * $rows
+                if ($idx -lt $Names.Count -and $Names[$idx].Length -gt $widest) {
+                    $widest = $Names[$idx].Length
+                }
+            }
+            $colWidths[$c] = $widest
+        }
+
+        $totalWidth = 0
+        for ($c = 0; $c -lt $tryCol; $c++) {
+            $totalWidth += $colWidths[$c]
+            if ($c -lt $tryCol - 1) { $totalWidth += $columnGap }
+        }
+
+        if ($totalWidth -le $TerminalWidth) {
+            $bestCols = $tryCol
+            $bestColWidths = $colWidths
+            break
+        }
+    }
+
+    $rows = [Math]::Ceiling($Names.Count / $bestCols)
+    $lines = [System.Collections.Generic.List[string]]::new()
+
+    for ($r = 0; $r -lt $rows; $r++) {
+        $parts = [System.Text.StringBuilder]::new()
+        for ($c = 0; $c -lt $bestCols; $c++) {
+            $idx = $r + $c * $rows
+            if ($idx -ge $Names.Count) { break }
+            $name = $Names[$idx]
+            if ($c -lt $bestCols - 1) {
+                $padded = $name.PadRight($bestColWidths[$c] + $columnGap)
+                [void]$parts.Append($padded)
+            } else {
+                [void]$parts.Append($name)
+            }
+        }
+        $lines.Add($parts.ToString())
+    }
+
+    $lines.ToArray()
+}
+
 # --- ls Command ---
 
 function Invoke-BashLs {
@@ -471,6 +585,7 @@ function Invoke-BashLs {
     $sortBySize = $parsed.Flags['-S']
     $sortByTime = $parsed.Flags['-t']
     $reverseSort = $parsed.Flags['-r']
+    $onePerLine = $parsed.Flags['-1']
 
     $targets = if ($parsed.Operands.Count -gt 0) { $parsed.Operands } else { @('.') }
 
@@ -521,14 +636,35 @@ function Invoke-BashLs {
         $allEntries = $reversed
     }
 
-    foreach ($entry in $allEntries) {
-        if ($longMode) {
+    $gridMode = -not $longMode -and -not $onePerLine
+
+    if ($longMode) {
+        foreach ($entry in $allEntries) {
             $line = Format-LsLine -Entry $entry -HumanReadable:$humanSizes
             $entry.BashText = $line
-        } else {
-            $entry.BashText = $entry.Name
+            Set-BashDisplayProperty $entry
         }
-        Set-BashDisplayProperty $entry
+    } elseif ($gridMode -and $allEntries.Count -gt 0) {
+        $displayNames = [string[]]::new($allEntries.Count)
+        for ($i = 0; $i -lt $allEntries.Count; $i++) {
+            $displayNames[$i] = Get-LsDisplayName -Entry $allEntries[$i]
+        }
+
+        $termWidth = 80
+        try {
+            $w = $Host.UI.RawUI.WindowSize.Width
+            if ($w -gt 0) { $termWidth = $w }
+        } catch { }
+
+        $gridLines = Format-LsGrid -Names $displayNames -TerminalWidth $termWidth
+        foreach ($line in $gridLines) {
+            New-BashObject -BashText $line -TypeName 'PsBash.TextOutput'
+        }
+    } else {
+        foreach ($entry in $allEntries) {
+            $entry.BashText = Get-LsDisplayName -Entry $entry
+            Set-BashDisplayProperty $entry
+        }
     }
 
     if ($hadError -and $allEntries.Count -eq 0) {
