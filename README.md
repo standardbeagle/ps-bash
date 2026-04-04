@@ -4,7 +4,7 @@
 
 [![CI](https://github.com/standardbeagle/ps-bash/actions/workflows/ci.yml/badge.svg)](https://github.com/standardbeagle/ps-bash/actions/workflows/ci.yml)
 [![PSGallery](https://img.shields.io/powershellgallery/v/PsBash.svg?label=PSGallery)](https://www.powershellgallery.com/packages/PsBash)
-[![Tests](https://img.shields.io/badge/tests-776%20passing-brightgreen.svg)](#testing)
+[![Tests](https://img.shields.io/badge/tests-795%20passing-brightgreen.svg)](#testing)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 [![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20Linux%20%7C%20macOS-lightgrey.svg)](#cross-platform)
 [![Docs](https://img.shields.io/badge/docs-standardbeagle.github.io%2Fps--bash-blue.svg)](https://standardbeagle.github.io/ps-bash/)
@@ -176,7 +176,7 @@ Both sides give you objects. PsBash just lets you type what you already know.
 
 ```powershell
 Invoke-Pester ./tests/PsBash.Tests.ps1
-# 776 tests: 775 passing, 1 skipped (Windows-specific)
+# 795 tests: 795 passing, 1 skipped (Windows-specific)
 ```
 
 CI runs on Windows, Linux, and macOS via GitHub Actions.
