@@ -194,6 +194,29 @@ CI runs on Windows, Linux, and macOS via GitHub Actions.
 
 **[standardbeagle.github.io/ps-bash](https://standardbeagle.github.io/ps-bash/)** -- full command reference, object type specs, pipeline cookbook, cross-platform guide.
 
+## Shell Binary (ps-bash)
+
+`ps-bash` is also available as a standalone shell binary that AI coding agents can use as a `SHELL=` replacement on Windows. It translates bash commands to PowerShell at invocation time, so agents like Claude Code, opencode, and Gemini CLI can emit standard Unix commands on Windows without Git Bash, Cygwin, or WSL.
+
+**Quick install:**
+
+```bash
+# Download from GitHub Releases
+# https://github.com/standardbeagle/ps-bash/releases
+
+# Set as your shell (Windows)
+$env:SHELL = 'C:\tools\ps-bash\ps-bash.exe'
+
+# Set as your shell (Linux/macOS)
+export SHELL=/usr/local/ps-bash/ps-bash
+```
+
+The binary requires PowerShell 7+ (`pwsh`). A full package that bundles PowerShell is available for containers and air-gapped environments.
+
+**Supported agents:** Claude Code, opencode, Gemini CLI. See [docs/agent-setup.md](docs/agent-setup.md) for per-agent configuration.
+
+**How it works:** The binary accepts `SHELL -c "command"` (the standard agent invocation), transpiles bash syntax to PowerShell, and executes it via a persistent `pwsh` worker process. Exit codes, stdout, and stderr pass through exactly. See [docs/specs/shell-binary.md](docs/specs/shell-binary.md) for the full specification.
+
 ## License
 
 MIT
