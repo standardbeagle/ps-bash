@@ -1,10 +1,13 @@
 #Requires -Version 7.0
-param()
+param([string]$ModulePath = '')
 
-# Load ps-bash module
-$modulePath = Join-Path $PSScriptRoot "Modules" "ps-bash"
-if (Test-Path $modulePath) {
-    Import-Module $modulePath -ErrorAction Stop
+# Load ps-bash module: explicit path > PSBASH_MODULE env > system ps-bash
+$resolvedModule = if ($ModulePath) { $ModulePath }
+                  elseif ($env:PSBASH_MODULE) { $env:PSBASH_MODULE }
+                  else { $null }
+
+if ($resolvedModule -and (Test-Path $resolvedModule)) {
+    Import-Module $resolvedModule -ErrorAction Stop
 } else {
     Import-Module ps-bash -ErrorAction SilentlyContinue
 }

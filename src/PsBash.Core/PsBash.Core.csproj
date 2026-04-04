@@ -9,6 +9,9 @@
 
   <ItemGroup>
     <EmbeddedResource Include="..\..\scripts\ps-bash-worker.ps1" LogicalName="ps-bash-worker.ps1" />
+    <EmbeddedResource Include="..\PsBash.Module\PsBash.psd1" LogicalName="PsBash.Module/PsBash.psd1" />
+    <EmbeddedResource Include="..\PsBash.Module\PsBash.psm1" LogicalName="PsBash.Module/PsBash.psm1" />
+    <EmbeddedResource Include="..\PsBash.Module\PsBash.Format.ps1xml" LogicalName="PsBash.Module/PsBash.Format.ps1xml" />
   </ItemGroup>
 
 </Project>

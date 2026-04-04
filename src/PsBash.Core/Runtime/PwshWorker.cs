@@ -19,6 +19,7 @@ public sealed class PwshWorker : IAsyncDisposable
     public static async Task<PwshWorker> StartAsync(
         string pwshPath,
         string? workerScriptPath = null,
+        string? modulePath = null,
         CancellationToken ct = default)
     {
         var scriptPath = workerScriptPath ?? await ExtractWorkerScriptAsync(ct);
@@ -26,7 +27,8 @@ public sealed class PwshWorker : IAsyncDisposable
         var psi = new ProcessStartInfo
         {
             FileName = pwshPath,
-            ArgumentList = { "-NoProfile", "-NonInteractive", "-File", scriptPath },
+            ArgumentList = { "-NoProfile", "-NonInteractive", "-File", scriptPath,
+                             "-ModulePath", modulePath ?? "" },
             RedirectStandardInput = true,
             RedirectStandardOutput = true,
             RedirectStandardError = false,

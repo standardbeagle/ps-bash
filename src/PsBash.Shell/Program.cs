@@ -2,6 +2,7 @@ using PsBash.Core.Runtime;
 using PsBash.Core.Transpiler;
 using PsBash.Shell;
 
+
 var debug = Environment.GetEnvironmentVariable("PSBASH_DEBUG") == "1";
 
 var shellArgs = ShellArgs.Parse(args);
@@ -43,9 +44,13 @@ if (debug)
     Console.Error.WriteLine($"[ps-bash] pwsh:       {pwshPath}");
 }
 
+var modulePath = Environment.GetEnvironmentVariable("PSBASH_MODULE")
+    ?? ModuleExtractor.ExtractEmbedded();
+
 await using var worker = await PwshWorker.StartAsync(
     pwshPath,
-    workerScriptPath: Environment.GetEnvironmentVariable("PSBASH_WORKER"));
+    workerScriptPath: Environment.GetEnvironmentVariable("PSBASH_WORKER"),
+    modulePath: modulePath);
 
 var exitCode = await worker.ExecuteAsync(pwshCommand);
 
