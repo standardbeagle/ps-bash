@@ -24,7 +24,7 @@ public sealed partial class WhileLoopTransform : ITransform
 
         body = Regex.Replace(body, @$"\$env:{varName}(?!\w)", "$$_");
 
-        return $"ForEach-Object {{ {body} }}";
+        return $"ForEach-Object {{ if ($_.PSObject.Properties['BashText']) {{ $_.BashText }} else {{ \"$_\" }} }} | ForEach-Object {{ $_ -split \"`n\" }} | ForEach-Object {{ {body} }}";
     }
 
     private static string ReplaceWhile(Match m)

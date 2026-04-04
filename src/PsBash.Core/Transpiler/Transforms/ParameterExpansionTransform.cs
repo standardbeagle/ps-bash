@@ -28,34 +28,34 @@ public sealed partial class ParameterExpansionTransform : ITransform
     }
 
     private static string DefaultValueReplacer(Match m) =>
-        $"($env:{m.Groups[1].Value} ?? '{m.Groups[2].Value}')";
+        $"$($env:{m.Groups[1].Value} ?? '{m.Groups[2].Value}')";
 
     private static string StringLengthReplacer(Match m) =>
-        $"($env:{m.Groups[1].Value}).Length";
+        $"$(($env:{m.Groups[1].Value}).Length)";
 
     private static string ReplaceAllReplacer(Match m) =>
-        $"($env:{m.Groups[1].Value} -replace '{m.Groups[2].Value}','{m.Groups[3].Value}')";
+        $"$($env:{m.Groups[1].Value} -replace '{m.Groups[2].Value}','{m.Groups[3].Value}')";
 
     private static string ReplaceFirstReplacer(Match m) =>
-        $"($env:{m.Groups[1].Value} -replace '{m.Groups[2].Value}','{m.Groups[3].Value}')";
+        $"$($env:{m.Groups[1].Value} -replace '{m.Groups[2].Value}','{m.Groups[3].Value}')";
 
     private static string RemoveLongestPrefixReplacer(Match m) =>
-        $"($env:{m.Groups[1].Value} -replace '^{m.Groups[2].Value}','')";
+        $"$($env:{m.Groups[1].Value} -replace '^{m.Groups[2].Value}','')";
 
     private static string RemoveShortestPrefixReplacer(Match m) =>
-        $"($env:{m.Groups[1].Value} -replace '^{m.Groups[2].Value}','')";
+        $"$($env:{m.Groups[1].Value} -replace '^{m.Groups[2].Value}','')";
 
     private static string RemoveLongestSuffixReplacer(Match m) =>
-        $"($env:{m.Groups[1].Value} -replace '{m.Groups[2].Value}$','')";
+        $"$($env:{m.Groups[1].Value} -replace '{m.Groups[2].Value}$','')";
 
     private static string RemoveShortestSuffixReplacer(Match m) =>
-        $"($env:{m.Groups[1].Value} -replace '{m.Groups[2].Value}$','')";
+        $"$($env:{m.Groups[1].Value} -replace '{m.Groups[2].Value}$','')";
 
     private static string UppercaseAllReplacer(Match m) =>
-        $"($env:{m.Groups[1].Value}).ToUpper()";
+        $"$(($env:{m.Groups[1].Value}).ToUpper())";
 
     private static string LowercaseAllReplacer(Match m) =>
-        $"($env:{m.Groups[1].Value}).ToLower()";
+        $"$(($env:{m.Groups[1].Value}).ToLower())";
 
     // Order matters: longer operators must be matched before shorter ones
 

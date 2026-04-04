@@ -19,7 +19,7 @@ public class WhileLoopTransformTests
     public void WhileRead_TransformsToForEachObject()
     {
         Assert.Equal(
-            "ForEach-Object { echo $_ }",
+            "ForEach-Object { if ($_.PSObject.Properties['BashText']) { $_.BashText } else { \"$_\" } } | ForEach-Object { $_ -split \"`n\" } | ForEach-Object { echo $_ }",
             Apply("while read line; do echo $env:line; done"));
     }
 
@@ -27,7 +27,7 @@ public class WhileLoopTransformTests
     public void WhileRead_ReplacesVarReferences()
     {
         Assert.Equal(
-            "ForEach-Object { process $_ }",
+            "ForEach-Object { if ($_.PSObject.Properties['BashText']) { $_.BashText } else { \"$_\" } } | ForEach-Object { $_ -split \"`n\" } | ForEach-Object { process $_ }",
             Apply("while read item; do process $env:item; done"));
     }
 
@@ -35,7 +35,7 @@ public class WhileLoopTransformTests
     public void WhileRead_DoesNotReplaceSimilarVarNames()
     {
         Assert.Equal(
-            "ForEach-Object { echo $env:liner $_ }",
+            "ForEach-Object { if ($_.PSObject.Properties['BashText']) { $_.BashText } else { \"$_\" } } | ForEach-Object { $_ -split \"`n\" } | ForEach-Object { echo $env:liner $_ }",
             Apply("while read line; do echo $env:liner $env:line; done"));
     }
 
@@ -82,7 +82,7 @@ public class WhileLoopTransformTests
     public void FullPipeline_WhileReadLine()
     {
         var result = BashTranspiler.Transpile("while read line; do echo $line; done");
-        Assert.Equal("ForEach-Object { echo $_ }", result);
+        Assert.Equal("ForEach-Object { if ($_.PSObject.Properties['BashText']) { $_.BashText } else { \"$_\" } } | ForEach-Object { $_ -split \"`n\" } | ForEach-Object { echo $_ }", result);
     }
 
     [Fact]

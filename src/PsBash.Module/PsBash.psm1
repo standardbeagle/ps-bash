@@ -752,7 +752,7 @@ function Invoke-BashCat {
 
     if ($readStdin -and $pipelineInput.Count -gt 0) {
         foreach ($item in $pipelineInput) {
-            $content = if ($null -ne $item.BashText) { $item.BashText } else { "$item" }
+            $content = if ($null -ne $item.PSObject -and $null -ne $item.PSObject.Properties['BashText']) { $item.BashText } else { "$item" }
             & $emitLine $content ''
         }
     }

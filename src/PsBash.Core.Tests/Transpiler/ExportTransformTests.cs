@@ -69,4 +69,90 @@ public class ExportTransformTests
         var input = "echo hello";
         Assert.Equal(input, Apply(input));
     }
+
+    // Bare assignment tests
+
+    [Fact]
+    public void BareUnquoted_Transforms()
+    {
+        Assert.Equal("$env:X = \"hello\"", Apply("X=hello"));
+    }
+
+    [Fact]
+    public void BareQuoted_Transforms()
+    {
+        Assert.Equal("$env:NAME = \"world\"", Apply("NAME=\"world\""));
+    }
+
+    [Fact]
+    public void BareUnquoted_NumberValue_Transforms()
+    {
+        Assert.Equal("$env:count = \"0\"", Apply("count=0"));
+    }
+
+    [Fact]
+    public void BareUnquoted_WithSemicolonChain_Transforms()
+    {
+        Assert.Equal("$env:X = \"hello\"; echo $X", Apply("X=hello; echo $X"));
+    }
+
+    [Fact]
+    public void BareQuoted_WithSemicolonChain_Transforms()
+    {
+        Assert.Equal("$env:NAME = \"world\"; echo $NAME", Apply("NAME=\"world\"; echo $NAME"));
+    }
+
+    [Fact]
+    public void BareUnquoted_WithAndChain_Transforms()
+    {
+        Assert.Equal("$env:X = \"1\" && echo $X", Apply("X=1 && echo $X"));
+    }
+
+    [Fact]
+    public void BareUnquoted_AfterSemicolon_Transforms()
+    {
+        Assert.Equal("echo hi; $env:X = \"1\"", Apply("echo hi; X=1"));
+    }
+
+    [Fact]
+    public void BareUnquoted_AfterAndChain_Transforms()
+    {
+        Assert.Equal("echo hi && $env:X = \"1\"", Apply("echo hi && X=1"));
+    }
+
+    [Fact]
+    public void BareUnquoted_AfterOrChain_Transforms()
+    {
+        Assert.Equal("echo hi || $env:X = \"1\"", Apply("echo hi || X=1"));
+    }
+
+    // Negative tests: must NOT match
+
+    [Fact]
+    public void ArrayAssignment_NotTransformed()
+    {
+        var input = "arr=(a b c)";
+        Assert.Equal(input, Apply(input));
+    }
+
+    [Fact]
+    public void InsideSingleQuotes_NotTransformed()
+    {
+        var input = "awk '{x=1}'";
+        Assert.Equal(input, Apply(input));
+    }
+
+    [Fact]
+    public void EchoArgument_NotTransformed()
+    {
+        var input = "echo X=hello";
+        Assert.Equal(input, Apply(input));
+    }
+
+    [Fact]
+    public void DoubleEquals_NotTransformed()
+    {
+        var input = "[ $x == 1 ]";
+        Assert.Equal(input, Apply(input));
+    }
 }
