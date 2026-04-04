@@ -40,6 +40,30 @@ public class ExportTransformTests
     }
 
     [Fact]
+    public void ExportQuoted_WithAndChain_TransformsExportOnly()
+    {
+        Assert.Equal(
+            "$env:DEMO = \"it works\" && echo $DEMO",
+            Apply("export DEMO=\"it works\" && echo $DEMO"));
+    }
+
+    [Fact]
+    public void ExportUnquoted_WithAndChain_TransformsExportOnly()
+    {
+        Assert.Equal(
+            "$env:FOO = \"bar\" && echo $FOO",
+            Apply("export FOO=bar && echo $FOO"));
+    }
+
+    [Fact]
+    public void ExportQuoted_WithOrChain_TransformsExportOnly()
+    {
+        Assert.Equal(
+            "$env:FOO = \"bar\" || echo failed",
+            Apply("export FOO=\"bar\" || echo failed"));
+    }
+
+    [Fact]
     public void NoExport_Unchanged()
     {
         var input = "echo hello";

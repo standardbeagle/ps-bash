@@ -14,6 +14,7 @@ public static class BashTranspiler
         new PipeTransform(),
         new EnvVarTransform(),
         new RedirectTransform(),
+        new ChainOperatorTransform(),
     ];
 
     public static string Transpile(string bashCommand)

@@ -29,14 +29,14 @@ public class BashTranspilerTests
     public void TmpPathWithGrep_TransformsBoth()
     {
         var result = BashTranspiler.Transpile("cat /tmp/log.txt | grep error");
-        Assert.Equal("cat $env:TEMP\\log.txt | Invoke-Grep \"error\"", result);
+        Assert.Equal("cat $env:TEMP\\log.txt | Invoke-BashGrep \"error\"", result);
     }
 
     [Fact]
     public void FileTestWithVar_TransformsBoth()
     {
         var result = BashTranspiler.Transpile("[ -f /etc/config ] && echo $MSG");
-        Assert.Equal("(Test-Path \"/etc/config\" -PathType Leaf) && echo $env:MSG", result);
+        Assert.Equal("[void](Test-Path \"/etc/config\" -PathType Leaf) && echo $env:MSG", result);
     }
 
     [Fact]
@@ -51,7 +51,7 @@ public class BashTranspilerTests
     {
         var result = BashTranspiler.Transpile("cat /tmp/data.csv | grep -v header | sort | uniq | wc -l");
         Assert.Equal(
-            "cat $env:TEMP\\data.csv | Invoke-Grep -NotMatch \"header\" | Sort-Object | Get-Unique | Measure-Object -Line | Select-Object -Expand Lines",
+            "cat $env:TEMP\\data.csv | Invoke-BashGrep -NotMatch \"header\" | Sort-Object | Get-Unique | Measure-Object -Line | Select-Object -Expand Lines",
             result);
     }
 
@@ -84,13 +84,41 @@ public class BashTranspilerTests
     public void PipeSedAndAwk_TransformsBoth()
     {
         var result = BashTranspiler.Transpile("cat file | sed 's/old/new/' | awk '{print $1}'");
-        Assert.Equal("cat file | Invoke-Sed 's/old/new/' | Invoke-Awk '{print $1}'", result);
+        Assert.Equal("cat file | Invoke-BashSed 's/old/new/' | Invoke-BashAwk '{print $1}'", result);
     }
 
     [Fact]
     public void FileTestEmptyVar_TransformsCorrectly()
     {
         var result = BashTranspiler.Transpile("[ -z \"$HOME\" ] && echo empty");
-        Assert.Contains("[string]::IsNullOrEmpty($HOME)", result);
+        Assert.Equal("[void]([string]::IsNullOrEmpty($HOME)) && echo empty", result);
+    }
+
+    [Fact]
+    public void FileTestWithAnd_WrapsInVoid()
+    {
+        var result = BashTranspiler.Transpile("[ -f ./README.md ] && echo \"exists\"");
+        Assert.Equal("[void](Test-Path \"./README.md\" -PathType Leaf) && echo \"exists\"", result);
+    }
+
+    [Fact]
+    public void DirTestWithAnd_WrapsInVoid()
+    {
+        var result = BashTranspiler.Transpile("[ -d ./src ] && echo \"is dir\"");
+        Assert.Equal("[void](Test-Path \"./src\" -PathType Container) && echo \"is dir\"", result);
+    }
+
+    [Fact]
+    public void ExportWithAnd_WrapsInVoid()
+    {
+        var result = BashTranspiler.Transpile("export FOO=\"bar\" && echo $FOO");
+        Assert.Equal("[void]($env:FOO = \"bar\") && echo $env:FOO", result);
+    }
+
+    [Fact]
+    public void FileTestWithOr_WrapsInVoid()
+    {
+        var result = BashTranspiler.Transpile("[ -f missing ] || echo \"not found\"");
+        Assert.Equal("[void](Test-Path \"missing\" -PathType Leaf) || echo \"not found\"", result);
     }
 }
