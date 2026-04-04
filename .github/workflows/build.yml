@@ -47,14 +47,20 @@ jobs:
       - name: Publish AOT
         run: dotnet publish src/PsBash.Shell -r ${{ matrix.rid }} --self-contained true -p:PublishAot=true -c Release -o dist/${{ matrix.rid }}
 
-      - name: Stage slim package
-        shell: bash
-        run: |
-          mkdir -p staging/ps-bash-${{ matrix.rid }}
-          cp dist/${{ matrix.rid }}/${{ matrix.binary }} staging/ps-bash-${{ matrix.rid }}/
-          cp -r src/PsBash.Module staging/ps-bash-${{ matrix.rid }}/ps-bash-module
+      - name: Package slim
+        shell: pwsh
+        run: ./scripts/package-slim.ps1 -RID ${{ matrix.rid }}
+
+      - name: Package full
+        shell: pwsh
+        run: ./scripts/package-full.ps1 -RID ${{ matrix.rid }}
 
       - uses: actions/upload-artifact@v4
         with:
-          name: ps-bash-${{ matrix.rid }}
-          path: staging/ps-bash-${{ matrix.rid }}
+          name: ps-bash-slim-${{ matrix.rid }}
+          path: dist/slim/${{ matrix.rid }}
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ps-bash-full-${{ matrix.rid }}
+          path: dist/full/${{ matrix.rid }}
