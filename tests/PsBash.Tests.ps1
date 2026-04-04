@@ -992,6 +992,65 @@ Describe 'Invoke-BashHead — Pipeline' {
         $results.Count | Should -Be 2
         $results[0].Content | Should -Be 'line1'
     }
+
+    It 'head -n 1 with glob pattern resolves files' {
+        $results = @(Invoke-BashHead -n 1 (Join-Path $headDir '*.txt'))
+        $results.Count | Should -BeGreaterOrEqual 1
+        $results[0].PSTypeNames[0] | Should -Be 'PsBash.CatLine'
+    }
+}
+
+Describe 'Invoke-BashHead — Formatting' {
+    It 'head output uses CustomControl BashText display' {
+        $result = Invoke-BashHead -n 1 (Join-Path ([System.IO.Path]::GetTempPath()) 'psbash-format-test.txt') 2>$null
+        # Create a temp file for this test
+        $tmpFile = Join-Path ([System.IO.Path]::GetTempPath()) "psbash-fmttest-$(Get-Random).txt"
+        Set-Content -Path $tmpFile -Value 'hello world'
+        $result = Invoke-BashHead -n 1 $tmpFile
+        $result.BashText | Should -Be 'hello world'
+        $result.ToString() | Should -Be 'hello world'
+        Remove-Item $tmpFile -Force
+    }
+}
+
+Describe 'Glob Expansion' {
+    BeforeAll {
+        $globDir = Join-Path ([System.IO.Path]::GetTempPath()) "psbash-glob-test-$(Get-Random)"
+        New-Item -Path $globDir -ItemType Directory -Force | Out-Null
+        Set-Content -Path (Join-Path $globDir 'file1.txt') -Value 'one'
+        Set-Content -Path (Join-Path $globDir 'file2.txt') -Value 'two'
+        Set-Content -Path (Join-Path $globDir 'data.csv') -Value 'csv'
+    }
+
+    AfterAll {
+        Remove-Item -Path $globDir -Recurse -Force -ErrorAction SilentlyContinue
+    }
+
+    It 'head with glob reads matching files' {
+        $results = @(Invoke-BashHead -n 1 (Join-Path $globDir '*.txt'))
+        $results.Count | Should -Be 2
+    }
+
+    It 'cat with glob reads all matching files' {
+        $results = @(Invoke-BashCat (Join-Path $globDir '*.txt'))
+        $results.Count | Should -Be 2
+    }
+
+    It 'tail with glob reads matching files' {
+        $results = @(Invoke-BashTail -n 1 (Join-Path $globDir '*.txt'))
+        $results.Count | Should -BeGreaterOrEqual 1
+    }
+
+    It 'head with non-matching glob writes error' {
+        $result = Invoke-BashHead -n 1 (Join-Path $globDir '*.xyz') 2>&1
+        $errors = @($result | Where-Object { $_ -is [System.Management.Automation.ErrorRecord] })
+        $errors.Count | Should -BeGreaterThan 0
+    }
+
+    It 'wc with glob counts matching files' {
+        $results = @(Invoke-BashWc -l (Join-Path $globDir '*.txt'))
+        $results.Count | Should -BeGreaterOrEqual 1
+    }
 }
 
 Describe 'Invoke-BashTail — Pipeline' {

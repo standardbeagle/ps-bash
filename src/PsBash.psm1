@@ -17,6 +17,18 @@ function Get-BashPlatform {
 
 # --- BashObject Factory ---
 
+function Set-BashDisplayProperty {
+    # Configures a PSCustomObject for bash-style display:
+    # - Adds ToString() returning BashText
+    # - Sets DefaultDisplayProperty to BashText (single-property shortcut)
+    # The ps1xml TableControl view handles multi-object display.
+    param([PSCustomObject]$Object)
+    $Object | Add-Member -MemberType ScriptMethod -Name 'ToString' -Value {
+        $this.BashText
+    } -Force
+    $Object
+}
+
 function New-BashObject {
     [CmdletBinding()]
     param(
@@ -32,10 +44,31 @@ function New-BashObject {
         PSTypeName = $TypeName
         BashText   = $BashText
     }
-    $obj | Add-Member -MemberType ScriptMethod -Name 'ToString' -Value {
-        $this.BashText
-    } -Force
-    $obj
+    Set-BashDisplayProperty $obj
+}
+
+# --- Glob Expansion ---
+
+function Resolve-BashGlob {
+    # Expands glob patterns in file operands, matching bash behavior.
+    # Literal paths pass through unchanged. Patterns with * or ? are resolved.
+    # Returns expanded list of file paths.
+    param([string[]]$Paths)
+    $resolved = [System.Collections.Generic.List[string]]::new()
+    foreach ($p in $Paths) {
+        if ($p -match '[*?]') {
+            $expanded = @(Resolve-Path -Path $p -ErrorAction SilentlyContinue | ForEach-Object { $_.Path })
+            if ($expanded.Count -eq 0) {
+                # No matches — pass through literally so the caller can emit its own error
+                $resolved.Add($p)
+            } else {
+                foreach ($e in $expanded) { $resolved.Add($e) }
+            }
+        } else {
+            $resolved.Add($p)
+        }
+    }
+    $resolved
 }
 
 # --- Arg Parser ---
@@ -495,10 +528,7 @@ function Invoke-BashLs {
         } else {
             $entry.BashText = $entry.Name
         }
-        $entry | Add-Member -MemberType ScriptMethod -Name 'ToString' -Value {
-            $this.BashText
-        } -Force
-        $entry
+        Set-BashDisplayProperty $entry
     }
 
     if ($hadError -and $allEntries.Count -eq 0) {
@@ -581,10 +611,7 @@ function Invoke-BashCat {
             FileName   = $FileName
             BashText   = $text
         }
-        $obj | Add-Member -MemberType ScriptMethod -Name 'ToString' -Value {
-            $this.BashText
-        } -Force
-        $obj
+        Set-BashDisplayProperty $obj
     }
 
     if ($readStdin -and $pipelineInput.Count -gt 0) {
@@ -595,7 +622,8 @@ function Invoke-BashCat {
     }
 
     $fileOperands = @($operands | Where-Object { $_ -ne '-' })
-    foreach ($filePath in $fileOperands) {
+    $resolvedFiles = Resolve-BashGlob -Paths $fileOperands
+    foreach ($filePath in $resolvedFiles) {
         if (-not (Test-Path -LiteralPath $filePath)) {
             $normalized = $filePath -replace '\\', '/'
             $msg = "cat: ${normalized}: No such file or directory"
@@ -802,7 +830,7 @@ function Invoke-BashGrep {
     $perFileCounts = [System.Collections.Generic.Dictionary[string,int]]::new()
     $totalMatchCount = 0
 
-    foreach ($filePath in $filePaths) {
+    foreach ($filePath in (Resolve-BashGlob -Paths $filePaths)) {
         $bytes = [System.IO.File]::ReadAllBytes($filePath)
         $byteOffset = 0
         if ($bytes.Length -ge 3 -and $bytes[0] -eq 0xEF -and $bytes[1] -eq 0xBB -and $bytes[2] -eq 0xBF) {
@@ -864,10 +892,7 @@ function Invoke-BashGrep {
                 Line       = $line
                 BashText   = $bashText
             }
-            $obj | Add-Member -MemberType ScriptMethod -Name 'ToString' -Value {
-                $this.BashText
-            } -Force
-            $obj
+            Set-BashDisplayProperty $obj
         }
     }
 
@@ -880,7 +905,7 @@ function Invoke-BashGrep {
 
     if ($countOnly) {
         if ($multipleFiles) {
-            foreach ($filePath in $filePaths) {
+            foreach ($filePath in (Resolve-BashGlob -Paths $filePaths)) {
                 New-BashObject -BashText "${filePath}:$($perFileCounts[$filePath])"
             }
         } else {
@@ -1096,7 +1121,7 @@ function Invoke-BashSort {
         }
     }
 
-    foreach ($filePath in $operands) {
+    foreach ($filePath in (Resolve-BashGlob -Paths $operands)) {
         if (-not (Test-Path -LiteralPath $filePath)) {
             Write-Error -Message "sort: cannot read: ${filePath}: No such file or directory" -ErrorAction Continue
             continue
@@ -1309,8 +1334,9 @@ function Invoke-BashHead {
         return
     }
 
-    # File mode
-    foreach ($filePath in $operands) {
+    # File mode — resolve globs
+    $resolvedFiles = Resolve-BashGlob -Paths $operands
+    foreach ($filePath in $resolvedFiles) {
         if (-not (Test-Path -LiteralPath $filePath)) {
             Write-Error -Message "head: cannot open '$filePath' for reading: No such file or directory" -ErrorAction Continue
             continue
@@ -1337,10 +1363,7 @@ function Invoke-BashHead {
                 FileName   = $filePath
                 BashText   = $lines[$li]
             }
-            $obj | Add-Member -MemberType ScriptMethod -Name 'ToString' -Value {
-                $this.BashText
-            } -Force
-            $obj
+            Set-BashDisplayProperty $obj
         }
     }
 }
@@ -1437,8 +1460,9 @@ function Invoke-BashTail {
         return
     }
 
-    # File mode
-    foreach ($filePath in $operands) {
+    # File mode — resolve globs
+    $resolvedFiles = Resolve-BashGlob -Paths $operands
+    foreach ($filePath in $resolvedFiles) {
         if (-not (Test-Path -LiteralPath $filePath)) {
             Write-Error -Message "tail: cannot open '$filePath' for reading: No such file or directory" -ErrorAction Continue
             continue
@@ -1471,10 +1495,7 @@ function Invoke-BashTail {
                 FileName   = $filePath
                 BashText   = $lines[$li]
             }
-            $obj | Add-Member -MemberType ScriptMethod -Name 'ToString' -Value {
-                $this.BashText
-            } -Force
-            $obj
+            Set-BashDisplayProperty $obj
         }
     }
 }
@@ -1525,10 +1546,7 @@ function Invoke-BashWc {
             FileName   = $FileName
             BashText   = $bashText
         }
-        $obj | Add-Member -MemberType ScriptMethod -Name 'ToString' -Value {
-            $this.BashText
-        } -Force
-        $obj
+        Set-BashDisplayProperty $obj
     }
 
     # Pipeline mode
@@ -1556,7 +1574,7 @@ function Invoke-BashWc {
     $totalBytes = 0
     $multipleFiles = $operands.Count -gt 1
 
-    foreach ($filePath in $operands) {
+    foreach ($filePath in (Resolve-BashGlob -Paths $operands)) {
         if (-not (Test-Path -LiteralPath $filePath)) {
             Write-Error -Message "wc: ${filePath}: No such file or directory" -ErrorAction Continue
             continue
@@ -1781,10 +1799,7 @@ function Invoke-BashFind {
             LastModified = $item.LastWriteTime
             BashText     = $displayPath
         }
-        $obj | Add-Member -MemberType ScriptMethod -Name 'ToString' -Value {
-            $this.BashText
-        } -Force
-        $obj
+        Set-BashDisplayProperty $obj
     }
 }
 
@@ -1946,10 +1961,7 @@ function Invoke-BashStat {
             $statEntry.BashText = $sb.ToString() + "`n"
         }
 
-        $statEntry | Add-Member -MemberType ScriptMethod -Name 'ToString' -Value {
-            $this.BashText
-        } -Force
-        $statEntry
+        Set-BashDisplayProperty $statEntry
     }
 
     if ($hadError) {
@@ -3002,10 +3014,7 @@ function Invoke-BashPs {
             WorkingSet  = [long]$entry.WorkingSet
             BashText    = "$bashText`n"
         }
-        $psEntry | Add-Member -MemberType ScriptMethod -Name 'ToString' -Value {
-            $this.BashText
-        } -Force
-        $psEntry
+        Set-BashDisplayProperty $psEntry
     }
 }
 
@@ -3136,7 +3145,7 @@ function Invoke-BashSed {
 
     # --- File mode (including in-place) ---
     if ($operands.Count -gt 0) {
-        foreach ($filePath in $operands) {
+        foreach ($filePath in (Resolve-BashGlob -Paths $operands)) {
             if (-not (Test-Path -LiteralPath $filePath)) {
                 Write-Error -Message "sed: ${filePath}: No such file or directory" -ErrorAction Continue
                 continue
@@ -4409,7 +4418,7 @@ function Invoke-BashCut {
             }
         }
     } else {
-        foreach ($filePath in $operands) {
+        foreach ($filePath in (Resolve-BashGlob -Paths $operands)) {
             if (-not (Test-Path -LiteralPath $filePath)) {
                 Write-Error -Message "cut: ${filePath}: No such file or directory" -ErrorAction Continue
                 continue
@@ -4632,7 +4641,7 @@ function Invoke-BashUniq {
             }
         }
     } else {
-        foreach ($filePath in $operands) {
+        foreach ($filePath in (Resolve-BashGlob -Paths $operands)) {
             if (-not (Test-Path -LiteralPath $filePath)) {
                 Write-Error -Message "uniq: ${filePath}: No such file or directory" -ErrorAction Continue
                 continue
@@ -4704,7 +4713,7 @@ function Invoke-BashRev {
             }
         }
     } else {
-        foreach ($filePath in $Arguments) {
+        foreach ($filePath in (Resolve-BashGlob -Paths $Arguments)) {
             if (-not (Test-Path -LiteralPath $filePath)) {
                 Write-Error -Message "rev: ${filePath}: No such file or directory" -ErrorAction Continue
                 continue
@@ -4791,7 +4800,7 @@ function Invoke-BashNl {
             }
         }
     } else {
-        foreach ($filePath in $operands) {
+        foreach ($filePath in (Resolve-BashGlob -Paths $operands)) {
             if (-not (Test-Path -LiteralPath $filePath)) {
                 Write-Error -Message "nl: ${filePath}: No such file or directory" -ErrorAction Continue
                 continue
@@ -5244,7 +5253,7 @@ function Invoke-BashColumn {
             }
         }
     } else {
-        foreach ($filePath in $operands) {
+        foreach ($filePath in (Resolve-BashGlob -Paths $operands)) {
             if (-not (Test-Path -LiteralPath $filePath)) {
                 Write-Error -Message "column: ${filePath}: No such file or directory" -ErrorAction Continue
                 continue
@@ -5521,7 +5530,7 @@ function Invoke-BashPaste {
 
     # Read all files
     $allFiles = [System.Collections.Generic.List[string[]]]::new()
-    foreach ($filePath in $operands) {
+    foreach ($filePath in (Resolve-BashGlob -Paths $operands)) {
         $fileResult = & $readFileLines $filePath
         if ($null -eq $fileResult) { return }
         [string[]]$fileLines = @($fileResult)
@@ -5612,7 +5621,7 @@ function Invoke-BashTee {
     }
 
     # Write to each file
-    foreach ($filePath in $operands) {
+    foreach ($filePath in (Resolve-BashGlob -Paths $operands)) {
         $parentDir = Split-Path -Parent $filePath
         if ($parentDir -and -not (Test-Path -LiteralPath $parentDir)) {
             Write-Error -Message "tee: ${filePath}: No such file or directory" -ErrorAction Continue
@@ -6455,10 +6464,7 @@ function Invoke-BashDate {
         DateTime   = $dto
         BashText   = $text
     }
-    $obj | Add-Member -MemberType ScriptMethod -Name 'ToString' -Value {
-        $this.BashText
-    } -Force
-    $obj
+    Set-BashDisplayProperty $obj
 }
 
 function Convert-DateFormat {
@@ -6627,10 +6633,7 @@ function Invoke-BashSeq {
                 Index      = $j
                 BashText   = $values[$j]
             }
-            $obj | Add-Member -MemberType ScriptMethod -Name 'ToString' -Value {
-                $this.BashText
-            } -Force
-            $obj
+            Set-BashDisplayProperty $obj
         }
     }
 }
@@ -6751,10 +6754,7 @@ function Invoke-BashExpr {
         Value      = $value
         BashText   = $result
     }
-    $obj | Add-Member -MemberType ScriptMethod -Name 'ToString' -Value {
-        $this.BashText
-    } -Force
-    $obj
+    Set-BashDisplayProperty $obj
 }
 
 # --- du Command ---
@@ -6837,10 +6837,7 @@ function Invoke-BashDu {
                 IsTotal    = $false
                 BashText   = "$displaySize`t$displayPath"
             }
-            $obj | Add-Member -MemberType ScriptMethod -Name 'ToString' -Value {
-                $this.BashText
-            } -Force
-            $obj
+            Set-BashDisplayProperty $obj
             continue
         }
 
@@ -6907,9 +6904,7 @@ function Invoke-BashDu {
                 IsTotal    = $false
                 BashText   = "$displaySize`t$displayPath"
             }
-            $obj | Add-Member -MemberType ScriptMethod -Name 'ToString' -Value {
-                $this.BashText
-            } -Force
+            Set-BashDisplayProperty $obj | Out-Null
             $entries.Add($obj)
         }
 
@@ -6942,9 +6937,7 @@ function Invoke-BashDu {
                     IsTotal    = $false
                     BashText   = "$displaySize`t$displayPath"
                 }
-                $obj | Add-Member -MemberType ScriptMethod -Name 'ToString' -Value {
-                    $this.BashText
-                } -Force
+                Set-BashDisplayProperty $obj | Out-Null
                 $entries.Add($obj)
             }
         }
@@ -6972,10 +6965,7 @@ function Invoke-BashDu {
             IsTotal    = $true
             BashText   = "$displaySize`ttotal"
         }
-        $obj | Add-Member -MemberType ScriptMethod -Name 'ToString' -Value {
-            $this.BashText
-        } -Force
-        $obj
+        Set-BashDisplayProperty $obj
     }
 }
 
@@ -7057,10 +7047,7 @@ function Invoke-BashTree {
         TreePrefix = ''
         BashText   = $rootName
     }
-    $rootObj | Add-Member -MemberType ScriptMethod -Name 'ToString' -Value {
-        $this.BashText
-    } -Force
-    $rootObj
+    Set-BashDisplayProperty $rootObj
 
     $dirCount = 0
     $fileCount = 0
@@ -7127,10 +7114,7 @@ function Invoke-BashTree {
                 TreePrefix  = $treePrefix
                 BashText    = $bashText
             }
-            $entryObj | Add-Member -MemberType ScriptMethod -Name 'ToString' -Value {
-                $this.BashText
-            } -Force
-            $entryObj
+            Set-BashDisplayProperty $entryObj
 
             if ($isDir) {
                 Write-TreeLevel -DirPath $item.FullName -CurrentDepth ($CurrentDepth + 1) -Prefix $childPrefix
@@ -7158,10 +7142,7 @@ function Invoke-BashTree {
         TreePrefix  = ''
         BashText    = $summaryText
     }
-    $summaryObj | Add-Member -MemberType ScriptMethod -Name 'ToString' -Value {
-        $this.BashText
-    } -Force
-    $summaryObj
+    Set-BashDisplayProperty $summaryObj
 }
 
 # --- env / printenv ---
@@ -7183,10 +7164,7 @@ function Invoke-BashEnv {
             Value      = $val
             BashText   = "$varName=$val"
         }
-        $obj | Add-Member -MemberType ScriptMethod -Name 'ToString' -Value {
-            $this.BashText
-        } -Force
-        return $obj
+        return (Set-BashDisplayProperty $obj)
     }
 
     $entries = [System.Environment]::GetEnvironmentVariables()
@@ -7198,10 +7176,7 @@ function Invoke-BashEnv {
             Value      = [string]$val
             BashText   = "$key=$val"
         }
-        $obj | Add-Member -MemberType ScriptMethod -Name 'ToString' -Value {
-            $this.BashText
-        } -Force
-        $obj
+        Set-BashDisplayProperty $obj
     }
 }
 
@@ -7359,7 +7334,7 @@ function Invoke-BashFold {
             foreach ($l in $text.Split("`n")) { $lines.Add($l) }
         }
     } else {
-        foreach ($filePath in $operands) {
+        foreach ($filePath in (Resolve-BashGlob -Paths $operands)) {
             if (-not (Test-Path -LiteralPath $filePath)) {
                 Write-Error -Message "fold: ${filePath}: No such file or directory" -ErrorAction Continue
                 continue
@@ -7436,7 +7411,7 @@ function Invoke-BashExpand {
             foreach ($l in $text.Split("`n")) { $lines.Add($l) }
         }
     } else {
-        foreach ($filePath in $operands) {
+        foreach ($filePath in (Resolve-BashGlob -Paths $operands)) {
             if (-not (Test-Path -LiteralPath $filePath)) {
                 Write-Error -Message "expand: ${filePath}: No such file or directory" -ErrorAction Continue
                 continue
@@ -7512,7 +7487,7 @@ function Invoke-BashUnexpand {
             foreach ($l in $text.Split("`n")) { $lines.Add($l) }
         }
     } else {
-        foreach ($filePath in $operands) {
+        foreach ($filePath in (Resolve-BashGlob -Paths $operands)) {
             if (-not (Test-Path -LiteralPath $filePath)) {
                 Write-Error -Message "unexpand: ${filePath}: No such file or directory" -ErrorAction Continue
                 continue
@@ -7599,7 +7574,7 @@ function Invoke-BashStrings {
         }
         $content = $parts -join "`n"
     } else {
-        foreach ($filePath in $operands) {
+        foreach ($filePath in (Resolve-BashGlob -Paths $operands)) {
             if (-not (Test-Path -LiteralPath $filePath)) {
                 Write-Error -Message "strings: ${filePath}: No such file or directory" -ErrorAction Continue
                 continue
@@ -7745,7 +7720,7 @@ function Invoke-BashTac {
             foreach ($l in $text.Split("`n")) { $lines.Add($l) }
         }
     } else {
-        foreach ($filePath in $operands) {
+        foreach ($filePath in (Resolve-BashGlob -Paths $operands)) {
             if (-not (Test-Path -LiteralPath $filePath)) {
                 Write-Error -Message "tac: ${filePath}: No such file or directory" -ErrorAction Continue
                 continue
@@ -7882,7 +7857,7 @@ function Invoke-BashChecksum {
 
     try {
         if ($operands.Count -gt 0) {
-            foreach ($filePath in $operands) {
+            foreach ($filePath in (Resolve-BashGlob -Paths $operands)) {
                 if (-not (Test-Path -LiteralPath $filePath)) {
                     Write-Error -Message "${CommandName}: ${filePath}: No such file or directory" -ErrorAction Continue
                     continue
@@ -7897,10 +7872,7 @@ function Invoke-BashChecksum {
                     FileName   = $filePath
                     Algorithm  = $Algorithm
                 }
-                $obj | Add-Member -MemberType ScriptMethod -Name 'ToString' -Value {
-                    $this.BashText
-                } -Force
-                $obj
+                Set-BashDisplayProperty $obj
             }
         } elseif ($PipelineInput.Count -gt 0) {
             $parts = [System.Collections.Generic.List[string]]::new()
@@ -7918,10 +7890,7 @@ function Invoke-BashChecksum {
                 FileName   = '-'
                 Algorithm  = $Algorithm
             }
-            $obj | Add-Member -MemberType ScriptMethod -Name 'ToString' -Value {
-                $this.BashText
-            } -Force
-            $obj
+            Set-BashDisplayProperty $obj
         }
     } finally {
         $hasher.Dispose()
@@ -7981,7 +7950,7 @@ function Invoke-BashFile {
         $operands.Add($arg); $i++
     }
 
-    foreach ($filePath in $operands) {
+    foreach ($filePath in (Resolve-BashGlob -Paths $operands)) {
         if (-not (Test-Path -LiteralPath $filePath)) {
             Write-Error -Message "file: cannot open '${filePath}' (No such file or directory)" -ErrorAction Continue
             continue
@@ -8046,10 +8015,7 @@ function Invoke-BashFile {
             FileType   = $fileType
             MimeType   = $mimeType
         }
-        $obj | Add-Member -MemberType ScriptMethod -Name 'ToString' -Value {
-            $this.BashText
-        } -Force
-        $obj
+        Set-BashDisplayProperty $obj
     }
 }
 
@@ -8245,7 +8211,7 @@ function Invoke-BashRg {
     $perFileCounts = [System.Collections.Generic.Dictionary[string,int]]::new()
     $totalMatchCount = 0
 
-    foreach ($filePath in $filePaths) {
+    foreach ($filePath in (Resolve-BashGlob -Paths $filePaths)) {
         $bytes = [System.IO.File]::ReadAllBytes($filePath)
         $byteOffset = 0
         if ($bytes.Length -ge 3 -and $bytes[0] -eq 0xEF -and $bytes[1] -eq 0xBB -and $bytes[2] -eq 0xBF) {
@@ -8309,10 +8275,7 @@ function Invoke-BashRg {
                         Line       = $line
                         BashText   = $bashText
                     }
-                    $obj | Add-Member -MemberType ScriptMethod -Name 'ToString' -Value {
-                        $this.BashText
-                    } -Force
-                    $obj
+                    Set-BashDisplayProperty $obj
                 }
                 continue
             }
@@ -8334,10 +8297,7 @@ function Invoke-BashRg {
                 Line       = $line
                 BashText   = $bashText
             }
-            $obj | Add-Member -MemberType ScriptMethod -Name 'ToString' -Value {
-                $this.BashText
-            } -Force
-            $obj
+            Set-BashDisplayProperty $obj
         }
     }
 
@@ -8350,7 +8310,7 @@ function Invoke-BashRg {
 
     if ($countOnly) {
         if ($multipleFiles) {
-            foreach ($filePath in $filePaths) {
+            foreach ($filePath in (Resolve-BashGlob -Paths $filePaths)) {
                 New-BashObject -BashText "${filePath}:$($perFileCounts[$filePath])"
             }
         } else {
@@ -8424,7 +8384,7 @@ function Invoke-BashGzip {
         return
     }
 
-    foreach ($filePath in $operands) {
+    foreach ($filePath in (Resolve-BashGlob -Paths $operands)) {
         if (-not (Test-Path -LiteralPath $filePath)) {
             Write-Error -Message "gzip: ${filePath}: No such file or directory" -ErrorAction Continue
             continue
@@ -8454,8 +8414,7 @@ function Invoke-BashGzip {
                 Ratio            = $ratio
                 FileName         = $filePath
             }
-            $obj | Add-Member -MemberType ScriptMethod -Name 'ToString' -Value { $this.BashText } -Force
-            $obj
+            Set-BashDisplayProperty $obj
             continue
         }
 
@@ -8727,8 +8686,7 @@ function Invoke-BashTar {
                         Size         = $entry.Length
                         ModifiedDate = $entry.LastWriteTime.DateTime
                     }
-                    $obj | Add-Member -MemberType ScriptMethod -Name 'ToString' -Value { $this.BashText } -Force
-                    $obj
+                    Set-BashDisplayProperty $obj
                 }
             } finally {
                 $zip.Dispose()
@@ -9265,10 +9223,7 @@ function Invoke-BashTime {
         ExitCode   = $exitCode
         BashText   = $outputText
     }
-    $obj | Add-Member -MemberType ScriptMethod -Name 'ToString' -Value {
-        $this.BashText
-    } -Force
-    $obj
+    Set-BashDisplayProperty $obj
 }
 
 # --- which ---
@@ -9309,10 +9264,7 @@ function Invoke-BashWhich {
                 Type       = $type
                 BashText   = $path
             }
-            $obj | Add-Member -MemberType ScriptMethod -Name 'ToString' -Value {
-                $this.BashText
-            } -Force
-            $obj
+            Set-BashDisplayProperty $obj
         }
     }
 }
@@ -9369,10 +9321,7 @@ function Invoke-BashAlias {
                 Value      = $kvp.Value
                 BashText   = "alias $($kvp.Key)='$($kvp.Value)'"
             }
-            $obj | Add-Member -MemberType ScriptMethod -Name 'ToString' -Value {
-                $this.BashText
-            } -Force
-            $obj
+            Set-BashDisplayProperty $obj
         }
         return
     }
@@ -9389,10 +9338,7 @@ function Invoke-BashAlias {
                     Value      = $val
                     BashText   = "alias $arg='$val'"
                 }
-                $obj | Add-Member -MemberType ScriptMethod -Name 'ToString' -Value {
-                    $this.BashText
-                } -Force
-                $obj
+                Set-BashDisplayProperty $obj
             } else {
                 Write-Error "alias: ${arg}: not found"
             }
