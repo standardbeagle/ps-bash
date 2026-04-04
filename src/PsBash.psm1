@@ -1280,6 +1280,20 @@ function Invoke-BashHead {
             continue
         }
 
+        # Legacy -N shorthand (e.g., head -5)
+        if ($arg -cmatch '^-(\d+)$') {
+            $count = [int]$Matches[1]
+            $i++
+            continue
+        }
+
+        # Bare positional number (e.g., head 5)
+        if ($arg -cmatch '^\d+$' -and $operands.Count -eq 0) {
+            $count = [int]$arg
+            $i++
+            continue
+        }
+
         $operands.Add($arg)
         $i++
     }
@@ -1385,6 +1399,20 @@ function Invoke-BashTail {
                     $count = [int]$val
                 }
             }
+            $i++
+            continue
+        }
+
+        # Legacy -N shorthand (e.g., tail -5)
+        if ($arg -cmatch '^-(\d+)$') {
+            $count = [int]$Matches[1]
+            $i++
+            continue
+        }
+
+        # Bare positional number (e.g., tail 5)
+        if ($arg -cmatch '^\d+$' -and $operands.Count -eq 0) {
+            $count = [int]$arg
             $i++
             continue
         }
