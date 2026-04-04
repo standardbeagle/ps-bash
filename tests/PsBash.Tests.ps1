@@ -960,6 +960,38 @@ Describe 'Invoke-BashHead — Pipeline' {
         $errors = @($result | Where-Object { $_ -is [System.Management.Automation.ErrorRecord] })
         $errors.Count | Should -BeGreaterThan 0
     }
+
+    It 'head -5 shorthand returns first 5 lines' {
+        $results = @(Invoke-BashCat $headFile | Invoke-BashHead -5)
+        $results.Count | Should -Be 5
+        $results[0].Content | Should -Be 'line1'
+        $results[4].Content | Should -Be 'line5'
+    }
+
+    It 'head 3 bare positional returns first 3 lines' {
+        $results = @(Invoke-BashCat $headFile | Invoke-BashHead 3)
+        $results.Count | Should -Be 3
+        $results[0].Content | Should -Be 'line1'
+        $results[2].Content | Should -Be 'line3'
+    }
+
+    It 'head -n5 joined returns first 5 lines' {
+        $results = @(Invoke-BashCat $headFile | Invoke-BashHead -n5)
+        $results.Count | Should -Be 5
+        $results[4].Content | Should -Be 'line5'
+    }
+
+    It 'head -3 file.txt works in file mode' {
+        $results = @(Invoke-BashHead -3 $headFile)
+        $results.Count | Should -Be 3
+        $results[0].Content | Should -Be 'line1'
+    }
+
+    It 'head 2 file.txt works in file mode' {
+        $results = @(Invoke-BashHead 2 $headFile)
+        $results.Count | Should -Be 2
+        $results[0].Content | Should -Be 'line1'
+    }
 }
 
 Describe 'Invoke-BashTail — Pipeline' {
@@ -1024,6 +1056,26 @@ Describe 'Invoke-BashTail — Pipeline' {
         $results = @(Invoke-BashCat $tailFile | Invoke-BashTail -n +3)
         $results.Count | Should -Be 13
         $results[0].Content | Should -Be 'line3'
+    }
+
+    It 'tail -5 shorthand returns last 5 lines' {
+        $results = @(Invoke-BashCat $tailFile | Invoke-BashTail -5)
+        $results.Count | Should -Be 5
+        $results[0].Content | Should -Be 'line11'
+        $results[4].Content | Should -Be 'line15'
+    }
+
+    It 'tail 3 bare positional returns last 3 lines' {
+        $results = @(Invoke-BashCat $tailFile | Invoke-BashTail 3)
+        $results.Count | Should -Be 3
+        $results[0].Content | Should -Be 'line13'
+        $results[2].Content | Should -Be 'line15'
+    }
+
+    It 'tail -3 file.txt works in file mode' {
+        $results = @(Invoke-BashTail -3 $tailFile)
+        $results.Count | Should -Be 3
+        $results[0].Content | Should -Be 'line13'
     }
 }
 
@@ -4186,6 +4238,12 @@ Describe 'Invoke-BashDu' {
         $deep.Count | Should -Be 0
     }
 
+    It 'du -d1 joined limits max depth' {
+        $results = @(Invoke-BashDu -d1 $duDir)
+        $deep = @($results | Where-Object { $_.Depth -gt 1 })
+        $deep.Count | Should -Be 0
+    }
+
     It 'du BashText format is size<tab>path' {
         $results = @(Invoke-BashDu $duDir)
         $results[0].BashText | Should -Match '^\d+\t'
@@ -4257,6 +4315,12 @@ Describe 'Invoke-BashTree' {
 
     It 'tree -L 1 limits to depth 1' {
         $results = @(Invoke-BashTree -L 1 $treeDir)
+        $deep = @($results | Where-Object { $_.Depth -gt 1 })
+        $deep.Count | Should -Be 0
+    }
+
+    It 'tree -L1 joined limits to depth 1' {
+        $results = @(Invoke-BashTree -L1 $treeDir)
         $deep = @($results | Where-Object { $_.Depth -gt 1 })
         $deep.Count | Should -Be 0
     }
@@ -4735,6 +4799,13 @@ Describe 'Invoke-BashFold -- Basic' {
         $results[0].BashText | Should -Be 'hello '
         $results[1].BashText | Should -Be 'world foo'
     }
+
+    It 'wraps at joined -w3 width' {
+        $results = @(Invoke-BashEcho -n 'abcdefghij' | Invoke-BashFold -w3)
+        $results.Count | Should -Be 4
+        $results[0].BashText | Should -Be 'abc'
+        $results[3].BashText | Should -Be 'j'
+    }
 }
 
 Describe 'Invoke-BashFold -- File Mode' {
@@ -4790,6 +4861,11 @@ Describe 'Invoke-BashExpand -- Basic' {
         $result = Invoke-BashEcho -n "ab`tc" | Invoke-BashExpand -t 4
         $result.BashText | Should -Be 'ab  c'
     }
+
+    It 'expands tabs with joined -t4' {
+        $result = Invoke-BashEcho -n "a`tb" | Invoke-BashExpand -t4
+        $result.BashText | Should -Be 'a   b'
+    }
 }
 
 Describe 'Invoke-BashExpand -- File Mode' {
@@ -4836,6 +4912,11 @@ Describe 'Invoke-BashUnexpand -- Basic' {
     It 'keeps partial leading spaces' {
         $result = Invoke-BashEcho -n '   hello' | Invoke-BashUnexpand -t 4
         $result.BashText | Should -Be '   hello'
+    }
+
+    It 'converts spaces with joined -t4' {
+        $result = Invoke-BashEcho -n '    hello' | Invoke-BashUnexpand -t4
+        $result.BashText | Should -Be "`thello"
     }
 }
 
