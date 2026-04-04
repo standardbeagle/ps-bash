@@ -19,8 +19,7 @@ catch (PwshNotFoundException ex)
 
 if (shellArgs.Interactive)
 {
-    Console.Error.WriteLine("ps-bash: interactive mode not yet supported");
-    return 1;
+    return await InteractiveShell.RunAsync(pwshPath);
 }
 
 if (shellArgs.ReadFromStdin)
