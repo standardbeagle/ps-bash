@@ -45,7 +45,28 @@ public sealed class BashParser
         if (Peek().Kind == BashTokenKind.Eof)
             return null;
 
-        return ParsePipeline();
+        return ParseAndOr();
+    }
+
+    private Command ParseAndOr()
+    {
+        var first = ParsePipeline();
+
+        if (Peek().Kind is not BashTokenKind.AndIf and not BashTokenKind.OrIf)
+            return first;
+
+        var commands = ImmutableArray.CreateBuilder<Command>();
+        var ops = ImmutableArray.CreateBuilder<string>();
+        commands.Add(first);
+
+        while (Peek().Kind is BashTokenKind.AndIf or BashTokenKind.OrIf)
+        {
+            var opToken = Advance();
+            ops.Add(opToken.Value);
+            commands.Add(ParsePipeline());
+        }
+
+        return new Command.AndOrList(commands.ToImmutable(), ops.ToImmutable());
     }
 
     private Command ParsePipeline()
@@ -79,22 +100,132 @@ public sealed class BashParser
         return new Command.Pipeline(commands.ToImmutable(), ops.ToImmutable(), Negated: false);
     }
 
-    private Command.Simple ParseSimpleCommand()
+    private Command ParseSimpleCommand()
     {
-        var words = ImmutableArray.CreateBuilder<CompoundWord>();
-
-        while (Peek().Kind == BashTokenKind.Word)
+        // Check for "export" keyword followed by assignment words.
+        if (Peek().Kind == BashTokenKind.Word && Peek().Value == "export")
         {
-            var token = Advance();
-            var parts = DecomposeWord(token.Value);
-            words.Add(new CompoundWord(parts));
+            int saved = _pos;
+            Advance(); // consume "export"
+
+            if (Peek().Kind == BashTokenKind.AssignmentWord)
+            {
+                var pairs = ImmutableArray.CreateBuilder<Assignment>();
+                while (Peek().Kind == BashTokenKind.AssignmentWord)
+                    pairs.Add(ParseAssignmentWord());
+                return new Command.ShAssignment(pairs.ToImmutable());
+            }
+
+            // Not followed by assignment — rewind and parse as normal command.
+            _pos = saved;
+        }
+
+        // Collect leading assignment words (VAR=val ...).
+        var assignments = ImmutableArray.CreateBuilder<EnvPair>();
+        while (Peek().Kind == BashTokenKind.AssignmentWord)
+        {
+            var (name, value) = SplitAssignmentWord(Advance().Value);
+            assignments.Add(new EnvPair(name, value));
+        }
+
+        var words = ImmutableArray.CreateBuilder<CompoundWord>();
+        var redirects = ImmutableArray.CreateBuilder<Redirect>();
+
+        while (true)
+        {
+            var kind = Peek().Kind;
+
+            if (kind == BashTokenKind.Word)
+            {
+                var token = Advance();
+                var parts = DecomposeWord(token.Value);
+                words.Add(new CompoundWord(parts));
+            }
+            else if (kind == BashTokenKind.IoNumber || IsRedirectOp(kind))
+            {
+                redirects.Add(ParseRedirect());
+            }
+            else
+            {
+                break;
+            }
+        }
+
+        // If only assignments and no command words, it's a bare assignment.
+        if (assignments.Count > 0 && words.Count == 0 && redirects.Count == 0)
+        {
+            var pairs = assignments.Select(
+                e => new Assignment(e.Name, AssignOp.Equal, e.Value)).ToImmutableArray();
+            return new Command.ShAssignment(pairs);
         }
 
         return new Command.Simple(
             words.ToImmutable(),
-            ImmutableArray<EnvPair>.Empty,
-            ImmutableArray<Redirect>.Empty);
+            assignments.ToImmutable(),
+            redirects.ToImmutable());
     }
+
+    private Assignment ParseAssignmentWord()
+    {
+        var token = Advance();
+        var (name, value) = SplitAssignmentWord(token.Value);
+        return new Assignment(name, AssignOp.Equal, value);
+    }
+
+    private (string Name, CompoundWord? Value) SplitAssignmentWord(string raw)
+    {
+        int eqIndex = raw.IndexOf('=');
+        string name = raw[..eqIndex];
+        string valueRaw = raw[(eqIndex + 1)..];
+
+        if (valueRaw.Length == 0)
+            return (name, null);
+
+        var parts = DecomposeWord(valueRaw);
+        return (name, new CompoundWord(parts));
+    }
+
+    private Redirect ParseRedirect()
+    {
+        int fd = -1;
+
+        if (Peek().Kind == BashTokenKind.IoNumber)
+        {
+            fd = int.Parse(Advance().Value);
+        }
+
+        var opToken = Advance();
+        string op = opToken.Kind switch
+        {
+            BashTokenKind.Great => ">",
+            BashTokenKind.DGreat => ">>",
+            BashTokenKind.Less => "<",
+            BashTokenKind.GreatAnd => ">&",
+            BashTokenKind.LessAnd => "<&",
+            BashTokenKind.DLess => "<<",
+            BashTokenKind.DLessDash => "<<-",
+            _ => opToken.Value,
+        };
+
+        // Default fd: 0 for input redirects, 1 for output redirects.
+        if (fd == -1)
+        {
+            fd = op[0] == '<' ? 0 : 1;
+        }
+
+        // Consume the target word.
+        var targetToken = Advance();
+        var targetParts = DecomposeWord(targetToken.Value);
+        var target = new CompoundWord(targetParts);
+
+        return new Redirect(op, fd, target);
+    }
+
+    private static bool IsRedirectOp(BashTokenKind kind) =>
+        kind is BashTokenKind.Great or BashTokenKind.DGreat
+            or BashTokenKind.Less or BashTokenKind.GreatAnd
+            or BashTokenKind.LessAnd or BashTokenKind.DLess
+            or BashTokenKind.DLessDash;
 
     /// <summary>
     /// Sub-parse a WORD token's raw text into typed WordPart children.

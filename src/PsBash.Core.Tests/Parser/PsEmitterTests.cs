@@ -97,17 +97,23 @@ public class PsEmitterTests
     }
 
     [Fact]
-    public void Emit_AndOrList_ThrowsNotSupported()
+    public void Emit_AndOrList_EmitsPassthrough()
     {
         var andOr = new Command.AndOrList(
             ImmutableArray.Create<Command>(
                 new Command.Simple(
-                    ImmutableArray.Create(MakeWord("true")),
+                    ImmutableArray.Create(MakeWord("cmd1")),
+                    ImmutableArray<EnvPair>.Empty,
+                    ImmutableArray<Redirect>.Empty),
+                new Command.Simple(
+                    ImmutableArray.Create(MakeWord("cmd2")),
                     ImmutableArray<EnvPair>.Empty,
                     ImmutableArray<Redirect>.Empty)),
             ImmutableArray.Create("&&"));
 
-        Assert.Throws<NotSupportedException>(() => PsEmitter.Emit(andOr));
+        var result = PsEmitter.Emit(andOr);
+
+        Assert.Equal("cmd1 && cmd2", result);
     }
 
     [Fact]
@@ -124,13 +130,63 @@ public class PsEmitterTests
     }
 
     [Fact]
-    public void Emit_ShAssignment_ThrowsNotSupported()
+    public void Emit_ShAssignment_EmitsEnvAssignment()
     {
         var assignment = new Command.ShAssignment(
             ImmutableArray.Create(
                 new Assignment("x", AssignOp.Equal, MakeWord("1"))));
 
-        Assert.Throws<NotSupportedException>(() => PsEmitter.Emit(assignment));
+        var result = PsEmitter.Emit(assignment);
+
+        Assert.Equal("$env:x = \"1\"", result);
+    }
+
+    [Fact]
+    public void Transpile_ExportFooBar_EmitsEnvAssignment()
+    {
+        var result = PsEmitter.Transpile("export FOO=bar");
+
+        Assert.Equal("$env:FOO = \"bar\"", result);
+    }
+
+    [Fact]
+    public void Transpile_ExportFooQuotedValue_EmitsEnvAssignment()
+    {
+        var result = PsEmitter.Transpile("export FOO=\"hello world\"");
+
+        Assert.Equal("$env:FOO = \"hello world\"", result);
+    }
+
+    [Fact]
+    public void Transpile_BareAssignment_EmitsEnvAssignment()
+    {
+        var result = PsEmitter.Transpile("FOO=bar");
+
+        Assert.Equal("$env:FOO = \"bar\"", result);
+    }
+
+    [Fact]
+    public void Transpile_AssignmentWithCommand_EmitsEnvPrefix()
+    {
+        var result = PsEmitter.Transpile("FOO=bar baz");
+
+        Assert.Equal("$env:FOO = \"bar\"; baz", result);
+    }
+
+    [Fact]
+    public void Transpile_MultipleAssignmentsWithCommand_EmitsEnvPairs()
+    {
+        var result = PsEmitter.Transpile("FOO=1 BAR=2 cmd");
+
+        Assert.Equal("$env:FOO = \"1\"; $env:BAR = \"2\"; cmd", result);
+    }
+
+    [Fact]
+    public void Transpile_ExportPathWithExpansion_EmitsCorrectExpansion()
+    {
+        var result = PsEmitter.Transpile("export PATH=\"$PATH:/new\"");
+
+        Assert.Equal("$env:PATH = \"$env:PATH:/new\"", result);
     }
 
     [Fact]
@@ -259,6 +315,114 @@ public class PsEmitterTests
         var result = PsEmitter.Emit(cmd);
 
         Assert.Equal("echo hello` world", result);
+    }
+
+    [Fact]
+    public void Transpile_OutputRedirectToFile_Passthrough()
+    {
+        var result = PsEmitter.Transpile("cmd > file");
+
+        Assert.Equal("cmd >file", result);
+    }
+
+    [Fact]
+    public void Transpile_AppendRedirectToFile_Passthrough()
+    {
+        var result = PsEmitter.Transpile("cmd >> file");
+
+        Assert.Equal("cmd >>file", result);
+    }
+
+    [Fact]
+    public void Transpile_StderrToDevNull_EmitsNullTarget()
+    {
+        var result = PsEmitter.Transpile("cmd 2> /dev/null");
+
+        Assert.Equal("cmd 2>$null", result);
+    }
+
+    [Fact]
+    public void Transpile_OutputToDevNullWithStderrMerge_EmitsBoth()
+    {
+        var result = PsEmitter.Transpile("cmd > /dev/null 2>&1");
+
+        Assert.Equal("cmd >$null 2>&1", result);
+    }
+
+    [Fact]
+    public void Transpile_InputRedirect_EmitsGetContent()
+    {
+        var result = PsEmitter.Transpile("cmd < input.txt");
+
+        Assert.Equal("Get-Content input.txt | cmd", result);
+    }
+
+    [Fact]
+    public void Transpile_StderrToStdout_Passthrough()
+    {
+        var result = PsEmitter.Transpile("cmd 2>&1");
+
+        Assert.Equal("cmd 2>&1", result);
+    }
+
+    [Fact]
+    public void Transpile_IoNumber3_EmitsFdPrefix()
+    {
+        var result = PsEmitter.Transpile("cmd 3> file");
+
+        Assert.Equal("cmd 3>file", result);
+    }
+
+    [Fact]
+    public void Transpile_RedirectToTmpPath_TransformsTempEnv()
+    {
+        var result = PsEmitter.Transpile("cmd > /tmp/out.log");
+
+        Assert.Equal("cmd >$env:TEMP\\out.log", result);
+    }
+
+    [Fact]
+    public void Transpile_MkdirAndCd_Passthrough()
+    {
+        var result = PsEmitter.Transpile("mkdir dir && cd dir");
+
+        Assert.Equal("mkdir dir && cd dir", result);
+    }
+
+    [Fact]
+    public void Transpile_TestOrEcho_Passthrough()
+    {
+        var result = PsEmitter.Transpile("test -f file || echo missing");
+
+        Assert.Equal("test -f file || echo missing", result);
+    }
+
+    [Fact]
+    public void Transpile_ThreeCommandAndOrList_CorrectPrecedence()
+    {
+        var result = PsEmitter.Transpile("cmd1 && cmd2 || cmd3");
+
+        Assert.Equal("cmd1 && cmd2 || cmd3", result);
+    }
+
+    [Fact]
+    public void Emit_AndOrList_OrIf_EmitsPassthrough()
+    {
+        var andOr = new Command.AndOrList(
+            ImmutableArray.Create<Command>(
+                new Command.Simple(
+                    ImmutableArray.Create(MakeWord("test"), MakeWord("-f"), MakeWord("file")),
+                    ImmutableArray<EnvPair>.Empty,
+                    ImmutableArray<Redirect>.Empty),
+                new Command.Simple(
+                    ImmutableArray.Create(MakeWord("echo"), MakeWord("missing")),
+                    ImmutableArray<EnvPair>.Empty,
+                    ImmutableArray<Redirect>.Empty)),
+            ImmutableArray.Create("||"));
+
+        var result = PsEmitter.Emit(andOr);
+
+        Assert.Equal("test -f file || echo missing", result);
     }
 
     private static CompoundWord MakeWord(string value) =>

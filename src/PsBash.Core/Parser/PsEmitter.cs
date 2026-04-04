@@ -16,9 +16,9 @@ public static class PsEmitter
     {
         Command.Simple simple => EmitSimple(simple),
         Command.Pipeline pipeline => EmitPipeline(pipeline),
-        Command.AndOrList => throw new NotSupportedException("AndOr commands are not yet supported."),
+        Command.AndOrList andOr => EmitAndOrList(andOr),
+        Command.ShAssignment assign => EmitShAssignment(assign),
         Command.CommandList => throw new NotSupportedException("CommandList commands are not yet supported."),
-        Command.ShAssignment => throw new NotSupportedException("ShAssignment commands are not yet supported."),
         _ => throw new NotSupportedException($"Unknown command type: {cmd.GetType().Name}"),
     };
 
@@ -34,8 +34,34 @@ public static class PsEmitter
         return Emit(cmd);
     }
 
+    private static string EmitShAssignment(Command.ShAssignment cmd)
+    {
+        var sb = new StringBuilder();
+        for (int i = 0; i < cmd.Pairs.Length; i++)
+        {
+            if (i > 0)
+                sb.Append("; ");
+
+            var pair = cmd.Pairs[i];
+            sb.Append("$env:");
+            sb.Append(pair.Name);
+            sb.Append(" = ");
+            sb.Append(EmitAssignmentValue(pair.Value));
+        }
+        return sb.ToString();
+    }
+
     private static string EmitSimple(Command.Simple cmd)
     {
+        // Input redirects (< file) become "Get-Content file | cmd".
+        var inputRedirect = cmd.Redirects.FirstOrDefault(r => r.Op == "<");
+        if (inputRedirect is not null)
+        {
+            var remaining = cmd.Redirects.Remove(inputRedirect);
+            var innerCmd = new Command.Simple(cmd.Words, cmd.EnvPairs, remaining);
+            return $"Get-Content {EmitWord(inputRedirect.Target)} | {EmitSimple(innerCmd)}";
+        }
+
         var sb = new StringBuilder();
 
         foreach (var envPair in cmd.EnvPairs)
@@ -43,16 +69,7 @@ public static class PsEmitter
             sb.Append("$env:");
             sb.Append(envPair.Name);
             sb.Append(" = ");
-            if (envPair.Value is not null)
-            {
-                sb.Append('"');
-                sb.Append(EmitWord(envPair.Value));
-                sb.Append('"');
-            }
-            else
-            {
-                sb.Append("\"\"");
-            }
+            sb.Append(EmitAssignmentValue(envPair.Value));
             sb.Append("; ");
         }
 
@@ -63,7 +80,56 @@ public static class PsEmitter
             sb.Append(EmitWord(cmd.Words[i]));
         }
 
+        foreach (var redirect in cmd.Redirects)
+        {
+            sb.Append(' ');
+            sb.Append(EmitRedirect(redirect));
+        }
+
         return sb.ToString();
+    }
+
+    private static string EmitRedirect(Redirect r)
+    {
+        var target = TransformRedirectTarget(EmitWord(r.Target));
+
+        return r.Op switch
+        {
+            ">" => r.Fd == 1 ? $">{target}" : $"{r.Fd}>{target}",
+            ">>" => r.Fd == 1 ? $">>{target}" : $"{r.Fd}>>{target}",
+            ">&" => $"{r.Fd}>&{target}",
+            _ => $"{r.Fd}{r.Op}{target}",
+        };
+    }
+
+    private static string TransformRedirectTarget(string target)
+    {
+        if (target == "/dev/null")
+            return "$null";
+        if (target.StartsWith("/tmp/"))
+            return $"$env:TEMP\\{target[5..]}";
+        return target;
+    }
+
+    /// <summary>
+    /// Emit a value in assignment context: bare literals get wrapped in double quotes,
+    /// already-quoted values are emitted as-is.
+    /// </summary>
+    private static string EmitAssignmentValue(CompoundWord? value)
+    {
+        if (value is null)
+            return "\"\"";
+
+        // If the value is a single double-quoted part, emit it directly (already has quotes).
+        if (value.Parts.Length == 1 && value.Parts[0] is WordPart.DoubleQuoted)
+            return EmitWordPart(value.Parts[0]);
+
+        // If the value is a single single-quoted part, emit it directly.
+        if (value.Parts.Length == 1 && value.Parts[0] is WordPart.SingleQuoted)
+            return EmitWordPart(value.Parts[0]);
+
+        // Otherwise wrap the emitted content in double quotes.
+        return $"\"{EmitWord(value)}\"";
     }
 
     private static string EmitWord(CompoundWord word)
@@ -103,6 +169,24 @@ public static class PsEmitter
         foreach (var part in dq.Parts)
             sb.Append(EmitWordPart(part));
         sb.Append('"');
+        return sb.ToString();
+    }
+
+    private static string EmitAndOrList(Command.AndOrList andOr)
+    {
+        var sb = new StringBuilder();
+        for (int i = 0; i < andOr.Commands.Length; i++)
+        {
+            if (i > 0)
+            {
+                sb.Append(' ');
+                sb.Append(andOr.Ops[i - 1]);
+                sb.Append(' ');
+            }
+
+            sb.Append(Emit(andOr.Commands[i]));
+        }
+
         return sb.ToString();
     }
 
