@@ -14,4 +14,8 @@
     <EmbeddedResource Include="..\PsBash.Module\PsBash.Format.ps1xml" LogicalName="PsBash.Module/PsBash.Format.ps1xml" />
   </ItemGroup>
 
+  <ItemGroup>
+    <PackageReference Include="Parlot" Version="1.5.7" />
+  </ItemGroup>
+
 </Project>
