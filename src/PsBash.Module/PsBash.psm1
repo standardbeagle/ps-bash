@@ -1465,8 +1465,17 @@ function Invoke-BashHead {
         $emitted = 0
         foreach ($item in $pipelineInput) {
             if ($emitted -ge $count) { break }
-            $item
-            $emitted++
+            $text = Get-BashText -InputObject $item
+            if ($text -match "`n") {
+                foreach ($line in $text.Split("`n")) {
+                    if ($emitted -ge $count) { break }
+                    New-BashObject -BashText $line
+                    $emitted++
+                }
+            } else {
+                $item
+                $emitted++
+            }
         }
         return
     }
@@ -4626,6 +4635,11 @@ function Invoke-BashTr {
         $i++
     }
 
+    # Expand escape sequences in operands before character class expansion
+    for ($ei = 0; $ei -lt $operands.Count; $ei++) {
+        $operands[$ei] = Expand-EscapeSequences -Text $operands[$ei]
+    }
+
     $expandClass = {
         param([string]$Spec)
         $result = [System.Text.StringBuilder]::new()
@@ -5819,8 +5833,14 @@ function Invoke-BashXargs {
         if ($arg -ceq '-I') {
             $i++
             if ($i -lt $Arguments.Count) {
-                $replaceStr = $Arguments[$i]
+                $replaceStr = [string]$Arguments[$i]
             }
+            $i++
+            continue
+        }
+
+        if ($arg.Length -gt 2 -and $arg.StartsWith('-I')) {
+            $replaceStr = $arg.Substring(2)
             $i++
             continue
         }
@@ -5870,7 +5890,7 @@ function Invoke-BashXargs {
     if ($null -ne $replaceStr) {
         # Replacement mode: run command once per input line
         foreach ($line in $inputLines) {
-            $replacedArgs = @($cmdArgs | ForEach-Object { $_ -replace [regex]::Escape($replaceStr), $line })
+            $replacedArgs = @($cmdArgs | ForEach-Object { $_.Replace($replaceStr, $line) })
             & $cmd @replacedArgs
         }
     } elseif ($maxArgs -gt 0) {

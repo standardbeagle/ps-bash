@@ -88,6 +88,12 @@ public class PipeTransformTests
     }
 
     [Fact]
+    public void PipeAwk_WithFlags_Transforms()
+    {
+        Assert.Equal("cmd | Invoke-BashAwk \"-F,\" '{print $1, $3}'", Apply("cmd | awk -F, '{print $1, $3}'"));
+    }
+
+    [Fact]
     public void PipeCut_Transforms()
     {
         Assert.Equal("cmd | Invoke-BashCut -Delimiter : -Field 1", Apply("cmd | cut -d: -f1"));

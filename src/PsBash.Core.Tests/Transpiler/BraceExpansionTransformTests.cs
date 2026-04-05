@@ -58,4 +58,11 @@ public class BraceExpansionTransformTests
         var input = "echo {hello}";
         Assert.Equal(input, Apply(input));
     }
+
+    [Fact]
+    public void QuotedBraces_NotExpanded()
+    {
+        var input = "awk -F, '{print $1, $3}'";
+        Assert.Equal(input, Apply(input));
+    }
 }

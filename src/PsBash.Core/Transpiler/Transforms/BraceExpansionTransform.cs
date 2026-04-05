@@ -21,6 +21,11 @@ public sealed partial class BraceExpansionTransform : ITransform
         var prefix = m.Groups["prefix"].Value;
         var items = m.Groups["items"].Value;
         var suffix = m.Groups["suffix"].Value;
+
+        // Don't expand braces inside quoted strings
+        if (prefix.Length > 0 && (prefix[^1] == '\'' || prefix[^1] == '"'))
+            return m.Value;
+
         var parts = items.Split(',');
         return string.Join(" ", parts.Select(p => $"{prefix}{p}{suffix}"));
     }

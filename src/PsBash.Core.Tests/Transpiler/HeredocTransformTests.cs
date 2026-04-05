@@ -91,4 +91,12 @@ public class HeredocTransformTests
         var expected = "@\"\nhello $NAME\n\"@ | cat";
         Assert.Equal(expected, Apply(input));
     }
+
+    [Fact]
+    public void WcHeredoc_WithActualNewlines()
+    {
+        var input = "wc -l << EOF\none\ntwo\nEOF";
+        var expected = "@\"\none\ntwo\n\"@ | wc -l";
+        Assert.Equal(expected, Apply(input));
+    }
 }

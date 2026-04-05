@@ -14,9 +14,9 @@ public sealed partial class PipeTransform : ITransform
         result = PipeSort().Replace(result, PipeSortReplacer);
         result = PipeUniq().Replace(result, "| Invoke-BashUniq");
         result = PipeSed().Replace(result, "| Invoke-BashSed ${expr}");
-        result = PipeAwk().Replace(result, "| Invoke-BashAwk ${expr}");
+        result = PipeAwk().Replace(result, PipeAwkReplacer);
         result = PipeCut().Replace(result, PipeCutReplacer);
-        result = PipeXargs().Replace(result, "| Invoke-BashXargs");
+        result = PipeXargs().Replace(result, PipeXargsReplacer);
         result = PipeTr().Replace(result, "| Invoke-BashTr ${args}");
         result = PipeTee().Replace(result, "| Invoke-BashTee ${file}");
         if (!ReferenceEquals(result, input))
@@ -54,6 +54,15 @@ public sealed partial class PipeTransform : ITransform
             ? "| Invoke-BashSort -r"
             : "| Invoke-BashSort";
 
+    private static string PipeAwkReplacer(Match m)
+    {
+        var flags = m.Groups["flags"].Value.Trim();
+        var expr = m.Groups["expr"].Value;
+        if (string.IsNullOrEmpty(flags))
+            return $"| Invoke-BashAwk {expr}";
+        return $"| Invoke-BashAwk \"{flags}\" {expr}";
+    }
+
     private static string PipeCutReplacer(Match m) =>
         $"| Invoke-BashCut -Delimiter {m.Groups["delim"].Value} -Field {m.Groups["field"].Value}";
 
@@ -78,13 +87,24 @@ public sealed partial class PipeTransform : ITransform
     [GeneratedRegex(@"\|\s*sed\s+(?<expr>'[^']*'|""[^""]*"")")]
     private static partial Regex PipeSed();
 
-    [GeneratedRegex(@"\|\s*awk\s+(?<expr>'[^']*'|""[^""]*"")")]
+    [GeneratedRegex(@"\|\s*awk\s+(?<flags>-\S+\s+)?(?<expr>'[^']*'|""[^""]*"")")]
     private static partial Regex PipeAwk();
 
     [GeneratedRegex(@"\|\s*cut\s+-d(?<delim>\S)\s+-f(?<field>\d+)")]
     private static partial Regex PipeCut();
 
-    [GeneratedRegex(@"\|\s*xargs(?=\s*$|\s*\|)")]
+    private static string PipeXargsReplacer(Match m)
+    {
+        var xargsArgs = m.Groups["xargs_args"].Value.Trim();
+        if (string.IsNullOrEmpty(xargsArgs))
+            return "| Invoke-BashXargs";
+        // Split -I{} into -I '{}' and quote standalone {} for PowerShell
+        xargsArgs = Regex.Replace(xargsArgs, @"-I\{\}", "-I '{}'");
+        xargsArgs = Regex.Replace(xargsArgs, @"(?<=\s)\{\}(?=\s|$)", "'{}'");
+        return $"| Invoke-BashXargs {xargsArgs}";
+    }
+
+    [GeneratedRegex(@"\|\s*xargs(?<xargs_args>\s+[^|]+)?(?=\s*$|\s*\|)")]
     private static partial Regex PipeXargs();
 
     [GeneratedRegex(@"\|\s*tr\s+(?<args>'[^']*'\s+'[^']*'|""[^""]*""\s+""[^""]*"")")]

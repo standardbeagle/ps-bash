@@ -88,6 +88,13 @@ public class BashTranspilerTests
     }
 
     [Fact]
+    public void AwkWithFlags_PreservesExpression()
+    {
+        var result = BashTranspiler.Transpile("echo \"a,b,c\" | awk -F, '{print $1, $3}'");
+        Assert.Equal("echo \"a,b,c\" | Invoke-BashAwk \"-F,\" '{print $1, $3}'", result);
+    }
+
+    [Fact]
     public void FileTestEmptyVar_TransformsCorrectly()
     {
         var result = BashTranspiler.Transpile("[ -z \"$HOME\" ] && echo empty");

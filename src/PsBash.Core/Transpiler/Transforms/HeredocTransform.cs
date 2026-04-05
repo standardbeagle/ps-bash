@@ -27,6 +27,6 @@ public sealed partial class HeredocTransform : ITransform
         return $"{open}\n{body}\n{close} | {command}";
     }
 
-    [GeneratedRegex(@"(?<cmd>\S+(?:\s+\S+)*?)\s*<<(?<quote>'?)(?<delim>\w+)\k<quote>\n(?<body>.*?)\n\k<delim>", RegexOptions.Singleline)]
+    [GeneratedRegex(@"(?<cmd>\S+(?:\s+\S+)*?)\s*<<\s*(?<quote>'?)(?<delim>\w+)\k<quote>(?:\n|\\n)(?<body>.*?)(?:\n|\\n)\k<delim>", RegexOptions.Singleline)]
     private static partial Regex Heredoc();
 }
