@@ -200,15 +200,16 @@ public class BashTranspilerTests
     }
 
     [Fact]
-    public void ParserMode_Default_IsAuto()
+    public void ParserMode_Default_IsV1Regex()
     {
         var prev = Environment.GetEnvironmentVariable("PSBASH_PARSER");
         try
         {
             Environment.SetEnvironmentVariable("PSBASH_PARSER", null);
-            // Default is auto mode: v2 parser with v1 regex fallback
-            var result = BashTranspiler.Transpile("echo hello");
-            Assert.Equal("echo hello", result);
+            // Default (no env var) MUST use v1 regex, NOT parser-v2.
+            // /tmp/ is transformed by v1 regex but not by v2 parser — proves v1 is running.
+            var result = BashTranspiler.Transpile("echo /tmp/test");
+            Assert.Contains("$env:TEMP", result);
         }
         finally
         {
