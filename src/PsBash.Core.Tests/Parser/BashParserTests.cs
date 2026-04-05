@@ -1073,4 +1073,66 @@ public class BashParserTests
         Assert.True(assign.IsLocal);
         Assert.Equal("x", assign.Pairs[0].Name);
     }
+
+    [Fact]
+    public void Parse_SimpleSubshell_ReturnsSubshellNode()
+    {
+        var result = Parse("(echo hello; echo world)");
+
+        var subshell = Assert.IsType<Command.Subshell>(result);
+        var list = Assert.IsType<Command.CommandList>(subshell.Body);
+        Assert.Equal(2, list.Commands.Length);
+        Assert.Empty(subshell.Redirects);
+    }
+
+    [Fact]
+    public void Parse_BraceGroup_ReturnsBraceGroupNode()
+    {
+        var result = Parse("{ echo hello; echo world; }");
+
+        var braceGroup = Assert.IsType<Command.BraceGroup>(result);
+        var list = Assert.IsType<Command.CommandList>(braceGroup.Body);
+        Assert.Equal(2, list.Commands.Length);
+    }
+
+    [Fact]
+    public void Parse_SubshellWithRedirect_CapturesRedirects()
+    {
+        var result = Parse("(echo hello) > out.txt");
+
+        var subshell = Assert.IsType<Command.Subshell>(result);
+        Assert.IsType<Command.Simple>(subshell.Body);
+        Assert.Single(subshell.Redirects);
+        Assert.Equal(">", subshell.Redirects[0].Op);
+    }
+
+    [Fact]
+    public void Parse_NestedSubshells_ReturnsNestedSubshellNodes()
+    {
+        var result = Parse("(echo a; (echo b))");
+
+        var outer = Assert.IsType<Command.Subshell>(result);
+        var list = Assert.IsType<Command.CommandList>(outer.Body);
+        Assert.Equal(2, list.Commands.Length);
+        var inner = Assert.IsType<Command.Subshell>(list.Commands[1]);
+        Assert.IsType<Command.Simple>(inner.Body);
+    }
+
+    [Fact]
+    public void Parse_SingleCommandSubshell_DoesNotWrapInList()
+    {
+        var result = Parse("(echo hello)");
+
+        var subshell = Assert.IsType<Command.Subshell>(result);
+        Assert.IsType<Command.Simple>(subshell.Body);
+    }
+
+    [Fact]
+    public void Parse_SingleCommandBraceGroup_DoesNotWrapInList()
+    {
+        var result = Parse("{ echo hello; }");
+
+        var braceGroup = Assert.IsType<Command.BraceGroup>(result);
+        Assert.IsType<Command.Simple>(braceGroup.Body);
+    }
 }

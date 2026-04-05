@@ -151,6 +151,14 @@ public sealed class BashParser
         if (Peek().Kind == BashTokenKind.Word && IsParensFunctionDef())
             return ParseParensFunction();
 
+        // Subshell: (cmd1; cmd2)
+        if (Peek().Kind == BashTokenKind.LParen)
+            return ParseSubshell();
+
+        // Standalone brace group: { cmd1; cmd2; }
+        if (Peek().Kind == BashTokenKind.LBrace)
+            return ParseStandaloneBraceGroup();
+
         // Bail for compound constructs not yet implemented — triggers regex fallback in auto mode.
         if (Peek().Kind == BashTokenKind.Word && IsUnimplementedCompoundKeyword(Peek().Value))
             throw new NotSupportedException($"Compound construct '{Peek().Value}' not yet implemented in parser-v2.");
@@ -577,9 +585,51 @@ public sealed class BashParser
         return new Command.ShFunction(name, body);
     }
 
+    private Command.Subshell ParseSubshell()
+    {
+        Advance(); // consume (
+        SkipTerminators();
+
+        var commands = ImmutableArray.CreateBuilder<Command>();
+
+        while (true)
+        {
+            SkipTerminators();
+            if (Peek().Kind == BashTokenKind.Eof)
+                break;
+            if (Peek().Kind == BashTokenKind.RParen)
+                break;
+
+            commands.Add(ParseAndOr());
+            SkipTerminators();
+        }
+
+        if (Peek().Kind != BashTokenKind.RParen)
+            throw new FormatException(
+                $"Expected ')' but got '{Peek().Value}' ({Peek().Kind}) at position {Peek().Position}");
+        Advance(); // consume )
+
+        Command body = commands.Count == 1
+            ? commands[0]
+            : new Command.CommandList(commands.ToImmutable());
+
+        // Collect trailing redirects (e.g. (cmd) > out.txt)
+        var redirects = ImmutableArray.CreateBuilder<Redirect>();
+        while (Peek().Kind == BashTokenKind.IoNumber || IsRedirectOp(Peek().Kind))
+            redirects.Add(ParseRedirect());
+
+        return new Command.Subshell(body, redirects.ToImmutable());
+    }
+
+    private Command.BraceGroup ParseStandaloneBraceGroup()
+    {
+        var body = ParseBraceGroup();
+        return new Command.BraceGroup(body);
+    }
+
     /// <summary>
     /// Parse a brace group: <c>{ commands }</c>.
-    /// Used for function bodies.
+    /// Used for function bodies and standalone brace groups.
     /// </summary>
     private Command ParseBraceGroup()
     {

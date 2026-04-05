@@ -107,6 +107,20 @@ public abstract record Command : BashNode
     public sealed record ShFunction(
         string Name,
         Command Body) : Command;
+
+    /// <summary>
+    /// A subshell: <c>(cmd1; cmd2)</c> runs commands in a child process.
+    /// Maps to PowerShell <c>&amp; { cmd1; cmd2 }</c>.
+    /// </summary>
+    public sealed record Subshell(
+        Command Body,
+        ImmutableArray<Redirect> Redirects) : Command;
+
+    /// <summary>
+    /// A brace group: <c>{ cmd1; cmd2; }</c> runs commands in the current shell.
+    /// Emitted inline (passthrough, same scope).
+    /// </summary>
+    public sealed record BraceGroup(Command Body) : Command;
 }
 
 /// <summary>

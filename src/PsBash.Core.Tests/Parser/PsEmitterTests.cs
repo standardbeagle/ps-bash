@@ -1104,6 +1104,38 @@ public class PsEmitterTests
         Assert.Equal("function setup { echo start; echo end }", result);
     }
 
+    [Fact]
+    public void Transpile_SimpleSubshell_EmitsScriptBlockInvocation()
+    {
+        var result = PsEmitter.Transpile("(echo hello; echo world)");
+
+        Assert.Equal("& { echo hello; echo world }", result);
+    }
+
+    [Fact]
+    public void Transpile_BraceGroup_EmitsInline()
+    {
+        var result = PsEmitter.Transpile("{ echo hello; echo world; }");
+
+        Assert.Equal("echo hello; echo world", result);
+    }
+
+    [Fact]
+    public void Transpile_SubshellWithRedirect_EmitsRedirect()
+    {
+        var result = PsEmitter.Transpile("(echo hello) > out.txt");
+
+        Assert.Equal("& { echo hello } >out.txt", result);
+    }
+
+    [Fact]
+    public void Transpile_NestedSubshells_EmitsNestedBlocks()
+    {
+        var result = PsEmitter.Transpile("(echo a; (echo b))");
+
+        Assert.Equal("& { echo a; & { echo b } }", result);
+    }
+
     private static CompoundWord MakeWord(string value) =>
         new(ImmutableArray.Create<WordPart>(new WordPart.Literal(value)));
 }

@@ -27,6 +27,8 @@ public static class PsEmitter
         Command.ForArith forArith => EmitForArith(forArith),
         Command.While whileCmd => EmitWhile(whileCmd),
         Command.Case caseCmd => EmitCase(caseCmd),
+        Command.Subshell subshell => EmitSubshell(subshell),
+        Command.BraceGroup braceGroup => EmitBraceGroup(braceGroup),
         Command.ShFunction func => EmitFunction(func),
         Command.Simple simple => EmitSimple(simple),
         Command.Pipeline pipeline => EmitPipeline(pipeline),
@@ -273,6 +275,26 @@ public static class PsEmitter
         sb.Append(Emit(func.Body));
         sb.Append(" }");
         return sb.ToString();
+    }
+
+    private static string EmitSubshell(Command.Subshell subshell)
+    {
+        var sb = new StringBuilder("& { ");
+        sb.Append(Emit(subshell.Body));
+        sb.Append(" }");
+
+        foreach (var redirect in subshell.Redirects)
+        {
+            sb.Append(' ');
+            sb.Append(EmitRedirect(redirect));
+        }
+
+        return sb.ToString();
+    }
+
+    private static string EmitBraceGroup(Command.BraceGroup braceGroup)
+    {
+        return Emit(braceGroup.Body);
     }
 
     private static string EmitWhileCondition(Command cond)
