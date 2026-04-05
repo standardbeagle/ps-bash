@@ -1654,6 +1654,20 @@ public class PsEmitterTests
         Assert.Equal("cmd 2>err.log", result);
     }
 
+    [Fact]
+    public void Transpile_StdoutToStderr_EmitsConsoleErrorPipe()
+    {
+        var result = PsEmitter.Transpile("echo hello >&2");
+        Assert.Equal("echo hello | ForEach-Object { [Console]::Error.WriteLine($_) }", result);
+    }
+
+    [Fact]
+    public void Transpile_ExplicitFd1ToStderr_EmitsConsoleErrorPipe()
+    {
+        var result = PsEmitter.Transpile("echo hello 1>&2");
+        Assert.Equal("echo hello | ForEach-Object { [Console]::Error.WriteLine($_) }", result);
+    }
+
     // Backslash escapes inside double quotes
     [Fact]
     public void Transpile_BackslashNInDoubleQuotes_PreservedAsLiteral()

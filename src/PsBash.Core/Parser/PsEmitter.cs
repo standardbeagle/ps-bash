@@ -786,6 +786,17 @@ public static class PsEmitter
             return $"{hereString} | {cmdText}";
         }
 
+        // Stdout-to-stderr redirects (>&2 or 1>&2) — PowerShell reserves 1>&2,
+        // so pipe through [Console]::Error.WriteLine instead.
+        var stderrRedirect = cmd.Redirects.FirstOrDefault(r =>
+            r.Op == ">&" && r.Fd == 1 && GetLiteralValue(r.Target) == "2");
+        if (stderrRedirect is not null)
+        {
+            var remaining = cmd.Redirects.Remove(stderrRedirect);
+            var innerCmd = new Command.Simple(cmd.Words, cmd.EnvPairs, remaining);
+            return $"{EmitSimple(innerCmd)} | ForEach-Object {{ [Console]::Error.WriteLine($_) }}";
+        }
+
         // Input redirects (< file) become "Get-Content file | cmd".
         var inputRedirect = cmd.Redirects.FirstOrDefault(r => r.Op == "<");
         if (inputRedirect is not null)
