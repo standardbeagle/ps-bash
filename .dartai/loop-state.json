@@ -7,9 +7,9 @@
   "runner_email": "claude@anthropic.com",
   "runner_dart_id": null,
   "started_at": "2026-04-04T22:43:00Z",
-  "iterations": 13,
+  "iterations": 14,
   "spawns": 0,
-  "last_iteration_at": "2026-04-05T00:15:00Z",
+  "last_iteration_at": "2026-04-05T00:25:00Z",
   "last_subagent": "task-executor",
   "tasks": [
     {
@@ -232,6 +232,22 @@
       "tests_added": 6,
       "plan_adjustments": 0,
       "completion_summary": "Semicolons and command lists: ParseList method collects commands separated by Semi tokens into Command.CommandList AST nodes. EmitCommandList joins children with '; '. Trailing semicolons produce single command (no empty list).",
+      "failure_reason": null,
+      "fix_task_created": false,
+      "fix_task_id": null
+    },
+    {
+      "task_id": "IwvublXEvuDa",
+      "iteration": 14,
+      "status": "completed",
+      "started_at": "2026-04-05T00:20:00Z",
+      "completed_at": "2026-04-05T00:25:00Z",
+      "phase_completed": "phase-9",
+      "failed_phase": null,
+      "files_changed": 3,
+      "tests_added": 5,
+      "plan_adjustments": 1,
+      "completion_summary": "Wired Parlot parser into BashTranspiler.Transpile() with PSBASH_PARSER env var (v1/v2/auto) and regex fallback. Added test-construct bailout in PsEmitter for [ commands. All 342 tests pass.",
       "failure_reason": null,
       "fix_task_created": false,
       "fix_task_id": null
