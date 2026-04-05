@@ -1751,6 +1751,164 @@ public class PsEmitterTests
         Assert.Contains("Invoke-BashTr", result);
     }
 
+    // ── Real-world pattern coverage (from web audit) ──────────────────────────
+
+    // Array literal: single-quoted elements must not double-quote
+    [Fact]
+    public void Transpile_ArrayLiteralSingleQuoted_NoDoubledQuotes()
+    {
+        var result = PsEmitter.Transpile("Fruits=('Apple' 'Banana' 'Orange')");
+        Assert.Contains("@('Apple','Banana','Orange')", result);
+        Assert.DoesNotContain("''Apple''", result);
+    }
+
+    [Fact]
+    public void Transpile_ArrayAppend_EmitsPlusEquals()
+    {
+        var result = PsEmitter.Transpile("Fruits+=('Watermelon')");
+        Assert.Contains("$Fruits += @('Watermelon')", result);
+    }
+
+    // while read -r VAR (with flag) triggers ForEach-Object path
+    [Fact]
+    public void Transpile_WhileReadDashR_EmitsForEachObject()
+    {
+        var result = PsEmitter.Transpile("while read -r line; do echo $line; done");
+        Assert.Contains("ForEach-Object", result);
+    }
+
+    // read -p "prompt" VAR -> $VAR = Read-Host "prompt"
+    [Fact]
+    public void Transpile_ReadWithPrompt_EmitsReadHost()
+    {
+        var result = PsEmitter.Transpile("read -p \"Enter name: \" NAME");
+        Assert.Contains("$NAME = Read-Host", result);
+        Assert.Contains("Enter name:", result);
+    }
+
+    [Fact]
+    public void Transpile_ReadNoPrompt_EmitsReadHost()
+    {
+        var result = PsEmitter.Transpile("read -r LINE");
+        Assert.Equal("$LINE = Read-Host", result);
+    }
+
+    // set -euo pipefail -> $ErrorActionPreference = 'Stop'
+    [Fact]
+    public void Transpile_SetEuoPipefail_EmitsErrorActionStop()
+    {
+        var result = PsEmitter.Transpile("set -euo pipefail");
+        Assert.Equal("$ErrorActionPreference = 'Stop'", result);
+    }
+
+    [Fact]
+    public void Transpile_SetOErrexit_EmitsErrorActionStop()
+    {
+        var result = PsEmitter.Transpile("set -o errexit");
+        Assert.Equal("$ErrorActionPreference = 'Stop'", result);
+    }
+
+    [Fact]
+    public void Transpile_SetX_EmitsPSDebugTrace()
+    {
+        var result = PsEmitter.Transpile("set -x");
+        Assert.Equal("Set-PSDebug -Trace 1", result);
+    }
+
+    // source file.sh -> . file.ps1
+    [Fact]
+    public void Transpile_SourceShFile_EmitsDotSourcePs1()
+    {
+        var result = PsEmitter.Transpile("source ./lib.sh");
+        Assert.Equal(". ./lib.ps1", result);
+    }
+
+    [Fact]
+    public void Transpile_DotSourceShFile_EmitsDotSourcePs1()
+    {
+        var result = PsEmitter.Transpile(". ./lib.sh");
+        Assert.Equal(". ./lib.ps1", result);
+    }
+
+    // -e file exists test
+    [Fact]
+    public void Transpile_FileExistsTest_EmitsTestPath()
+    {
+        var result = PsEmitter.Transpile("if [[ -e file.txt ]]; then echo yes; fi");
+        Assert.Contains("Test-Path", result);
+        Assert.Contains("file.txt", result);
+    }
+
+    // declare -i -> [int]$var = 0
+    [Fact]
+    public void Transpile_DeclareInt_EmitsTypedVar()
+    {
+        var result = PsEmitter.Transpile("declare -i count");
+        Assert.Equal("[int]$count = 0", result);
+    }
+
+    // ${str/foo/bar} -> replace first
+    [Fact]
+    public void Transpile_ParamReplaceFirst_EmitsRegexReplace()
+    {
+        var result = PsEmitter.Transpile("echo ${str/foo/bar}");
+        Assert.Contains("-replace", result);
+        Assert.Contains("foo", result);
+        Assert.Contains("bar", result);
+    }
+
+    // ${str//foo/bar} -> replace all
+    [Fact]
+    public void Transpile_ParamReplaceAll_EmitsReplace()
+    {
+        var result = PsEmitter.Transpile("echo ${str//foo/bar}");
+        Assert.Contains("-replace", result);
+        Assert.Contains("foo", result);
+        Assert.Contains("bar", result);
+    }
+
+    // ${name:0:2} -> substring
+    [Fact]
+    public void Transpile_ParamSlice_EmitsSubstring()
+    {
+        var result = PsEmitter.Transpile("echo ${name:0:2}");
+        Assert.Contains("Substring(0, 2)", result);
+    }
+
+    // ${str^^} -> ToUpper
+    [Fact]
+    public void Transpile_ParamUpperCase_EmitsToUpper()
+    {
+        var result = PsEmitter.Transpile("echo ${str^^}");
+        Assert.Contains(".ToUpper()", result);
+    }
+
+    // ${str,,} -> ToLower
+    [Fact]
+    public void Transpile_ParamLowerCase_EmitsToLower()
+    {
+        var result = PsEmitter.Transpile("echo ${str,,}");
+        Assert.Contains(".ToLower()", result);
+    }
+
+    // ${!arr[@]} -> .Keys
+    [Fact]
+    public void Transpile_ArrayKeys_EmitsDotKeys()
+    {
+        var result = PsEmitter.Transpile("echo ${!sounds[@]}");
+        Assert.Contains("$sounds.Keys", result);
+    }
+
+    // {5..50..5} brace range with step
+    [Fact]
+    public void Transpile_BraceRangeWithStep_ExpandsCorrectly()
+    {
+        var result = PsEmitter.Transpile("echo {5..50..5}");
+        Assert.Contains("5", result);
+        Assert.Contains("50", result);
+        Assert.DoesNotContain("5..50..5", result);
+    }
+
     private static CompoundWord MakeWord(string value) =>
         new(ImmutableArray.Create<WordPart>(new WordPart.Literal(value)));
 }

@@ -400,11 +400,19 @@ public static class PsEmitter
         varName = "";
         if (cond is not Command.Simple simple)
             return false;
-        if (simple.Words.Length != 2)
+        if (simple.Words.Length < 2)
             return false;
         if (GetLiteralValue(simple.Words[0]) != "read")
             return false;
-        var name = GetLiteralValue(simple.Words[1]);
+        // Accept: read VAR  or  read -r VAR  or  read -r -a VAR etc.
+        // The variable name is the last non-flag word.
+        string? name = null;
+        for (int i = 1; i < simple.Words.Length; i++)
+        {
+            var val = GetLiteralValue(simple.Words[i]);
+            if (val is not null && !val.StartsWith('-'))
+                name = val;
+        }
         if (name is null)
             return false;
         varName = name;
@@ -683,9 +691,21 @@ public static class PsEmitter
                 {
                     if (j > 0)
                         sb.Append(',');
-                    sb.Append('\'');
-                    sb.Append(EmitWord(pair.ArrayValue.Elements[j]));
-                    sb.Append('\'');
+                    var elem = pair.ArrayValue.Elements[j];
+                    // If the element is a pure single-quoted word, emit 'value' directly
+                    // to avoid doubled quotes ('value' -> ''value'').
+                    if (elem.Parts.Length == 1 && elem.Parts[0] is WordPart.SingleQuoted sq)
+                    {
+                        sb.Append('\'');
+                        sb.Append(sq.Value);
+                        sb.Append('\'');
+                    }
+                    else
+                    {
+                        sb.Append('\'');
+                        sb.Append(EmitWord(elem));
+                        sb.Append('\'');
+                    }
                 }
                 sb.Append(')');
                 continue;
@@ -762,6 +782,74 @@ public static class PsEmitter
                     bool isInt = cmd.Words.Skip(1).Any(w => GetLiteralValue(w) == "-i");
                     return isInt ? $"[int]${varName} = 0" : $"${varName} = @()";
                 }
+            }
+        }
+
+        if (cmd.Words.Length >= 1)
+        {
+            var cmd0 = GetLiteralValue(cmd.Words[0]);
+
+            // read [-r] [-p "prompt"] VAR -> $VAR = Read-Host ["prompt"]
+            if (cmd0 == "read")
+            {
+                string? prompt = null;
+                string? targetVar = null;
+                for (int i = 1; i < cmd.Words.Length; i++)
+                {
+                    var val = GetLiteralValue(cmd.Words[i]);
+                    if (val == "-p" && i + 1 < cmd.Words.Length)
+                    {
+                        prompt = EmitWord(cmd.Words[i + 1]);
+                        i++; // skip prompt value
+                    }
+                    else if (val is not null && !val.StartsWith('-'))
+                        targetVar = val;
+                }
+                if (targetVar is not null)
+                {
+                    string readHostCall = prompt is not null
+                        ? $"Read-Host {prompt}"
+                        : "Read-Host";
+                    return $"${targetVar} = {readHostCall}";
+                }
+            }
+
+            // set -e / set -o errexit -> $ErrorActionPreference = 'Stop'
+            // set -x / set -o xtrace -> Set-PSDebug -Trace 1
+            if (cmd0 == "set" && cmd.Words.Length >= 2)
+            {
+                var args = cmd.Words.Skip(1).Select(w => GetLiteralValue(w)).ToList();
+                // Handle combined flags like -euo or -eu
+                bool hasE = args.Any(a => a is not null && (a == "-o" && false || a == "errexit" || (a!.StartsWith('-') && a.Contains('e') && !a.StartsWith("--"))));
+                bool hasX = args.Any(a => a is not null && (a == "xtrace" || (a!.StartsWith('-') && a.Contains('x') && !a.StartsWith("--"))));
+                bool longOpt = args.Any(a => a == "-o");
+                if (longOpt)
+                {
+                    // set -o OPTION form
+                    var optVal = args.SkipWhile(a => a != "-o").Skip(1).FirstOrDefault();
+                    if (optVal == "errexit") return "$ErrorActionPreference = 'Stop'";
+                    if (optVal == "xtrace") return "Set-PSDebug -Trace 1";
+                }
+                else
+                {
+                    // set -euo pipefail style — check if any flag contains 'e' or 'x'
+                    var flags = args.Where(a => a is not null && a.StartsWith('-') && !a.StartsWith("--")).ToList();
+                    bool e = flags.Any(f => f!.Contains('e'));
+                    bool x = flags.Any(f => f!.Contains('x'));
+                    if (e && x) return "$ErrorActionPreference = 'Stop'; Set-PSDebug -Trace 1";
+                    if (e) return "$ErrorActionPreference = 'Stop'";
+                    if (x) return "Set-PSDebug -Trace 1";
+                }
+            }
+
+            // source FILE / . FILE -> . FILE (PS dot-source, .sh -> .ps1)
+            if ((cmd0 == "source" || cmd0 == ".") && cmd.Words.Length >= 2)
+            {
+                string file = EmitWord(cmd.Words[1]);
+                // Translate .sh extension to .ps1
+                if (file.EndsWith(".sh", StringComparison.OrdinalIgnoreCase))
+                    file = file[..^3] + ".ps1";
+                return $". {file}";
             }
         }
 
