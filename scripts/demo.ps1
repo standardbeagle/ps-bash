@@ -4,6 +4,7 @@
 $exe = "$PSScriptRoot/../src/PsBash.Shell/bin/Release/net10.0/win-x64/publish/ps-bash.exe"
 $env:PSBASH_MODULE = "$PSScriptRoot/../src/PsBash.Module/PsBash.psd1"
 $env:PSBASH_WORKER = "$PSScriptRoot/ps-bash-worker.ps1"
+$env:PSBASH_PARSER = "v1"  # Use regex transpiler until parser-v2 is complete
 
 $commands = @(
     # --- Redirects & env vars ---
