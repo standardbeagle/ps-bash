@@ -25,7 +25,9 @@ function Invoke-ProcessSub {
         [scriptblock]$Command
     )
 
-    $tmp = [System.IO.Path]::GetTempFileName()
+    $subDir = [System.IO.Path]::Combine([System.IO.Path]::GetTempPath(), 'ps-bash', 'proc-sub')
+    [void][System.IO.Directory]::CreateDirectory($subDir)
+    $tmp = [System.IO.Path]::Combine($subDir, [System.IO.Path]::GetRandomFileName())
     try {
         & $Command | Out-File -FilePath $tmp -Encoding utf8NoBOM
         return $tmp
@@ -1701,13 +1703,21 @@ function Invoke-BashWc {
         $totalWords = 0
         $totalBytes = 0
 
+        # Flatten multi-line BashText into individual lines for accurate counting
+        $allLines = [System.Collections.Generic.List[string]]::new()
         foreach ($item in $pipelineInput) {
             $text = Get-BashText -InputObject $item
             $text = $text -replace "`n$", ''
+            foreach ($subLine in $text.Split("`n")) {
+                $allLines.Add($subLine)
+            }
+        }
+
+        foreach ($line in $allLines) {
             $totalLines++
-            $lineWords = @($text -split '\s+' | Where-Object { $_ -ne '' }).Count
+            $lineWords = @($line -split '\s+' | Where-Object { $_ -ne '' }).Count
             $totalWords += $lineWords
-            $totalBytes += [System.Text.Encoding]::UTF8.GetByteCount($text) + 1
+            $totalBytes += [System.Text.Encoding]::UTF8.GetByteCount($line) + 1
         }
 
         & $emitResult $totalLines $totalWords $totalBytes ''
@@ -3699,10 +3709,17 @@ function Invoke-BashAwk {
     }
 
     $printfBuffer = [System.Text.StringBuilder]::new()
-    $items = @($pipelineInput)
-    for ($idx = 0; $idx -lt $items.Count; $idx++) {
-        $text = Get-BashText -InputObject $items[$idx]
+    # Flatten pipeline items: split any multi-line BashText into individual records
+    $allLines = [System.Collections.Generic.List[string]]::new()
+    foreach ($item in $pipelineInput) {
+        $text = Get-BashText -InputObject $item
         $text = $text -replace "`n$", ''
+        foreach ($subLine in $text.Split("`n")) {
+            $allLines.Add($subLine)
+        }
+    }
+    for ($idx = 0; $idx -lt $allLines.Count; $idx++) {
+        $text = $allLines[$idx]
         $variables['NR'] = $idx + 1
 
         # Split into fields

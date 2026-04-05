@@ -1501,12 +1501,13 @@ public static class PsEmitter
     private static bool NeedsPassthroughQuoting(string arg)
     {
         // Flags like -F, contain commas which are PowerShell array separators.
+        // Flags like -I{} contain braces which PowerShell parses as scriptblocks.
         // Quote them to prevent misinterpretation. Skip already-quoted args.
         if (arg.Length < 2 || arg[0] != '-')
             return false;
         if (arg[0] == '"' || arg[0] == '\'')
             return false;
-        return arg.Contains(',');
+        return arg.Contains(',') || arg.Contains('{') || arg.Contains('}');
     }
 
     private static string? ExtractNumericFlag(ImmutableArray<CompoundWord> args, string flag)

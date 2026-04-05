@@ -1699,6 +1699,58 @@ public class PsEmitterTests
         Assert.DoesNotContain("'01'", result);
     }
 
+    // --- Regression tests for reported runtime issues ---
+
+    [Fact]
+    public void Transpile_XargsWithBraces_QuotesBracesToPreventScriptBlockParsing()
+    {
+        // Issue 14: -I{} was parsed by PowerShell as -I + empty scriptblock
+        var result = PsEmitter.Transpile("echo test | xargs -I{} echo \"found: {}\"");
+
+        Assert.Contains("\"-I{}\"", result);
+    }
+
+    [Fact]
+    public void Transpile_HeadWithHeredoc_ParsesCorrectly()
+    {
+        // Issue 7: head -n 2 << EOF was misparsed as head -n 2<<EOF
+        // (2 was reclassified as IoNumber). Now 2 stays as a word arg.
+        var result = PsEmitter.Transpile("head -n 2 << EOF\nline1\nline2\nline3\nEOF");
+
+        Assert.Contains("head -n 2", result);
+        Assert.Contains("line1", result);
+    }
+
+    [Fact]
+    public void Transpile_WcHeredoc_EmitsHereStringPipedToWc()
+    {
+        // Issue 8: wc -l with heredoc input
+        var result = PsEmitter.Transpile("wc -l << EOF\nhello\nworld\nEOF");
+
+        Assert.Contains("wc -l", result);
+        Assert.Contains("hello", result);
+        Assert.Contains("world", result);
+    }
+
+    [Fact]
+    public void Transpile_AwkWithFieldSepComma_QuotesFlag()
+    {
+        // Issue 6: awk -F, should quote the flag to prevent PS array interpretation
+        var result = PsEmitter.Transpile("echo test | awk -F, '{print $1, $3}'");
+
+        Assert.Contains("Invoke-BashAwk", result);
+        Assert.Contains("\"-F,\"", result);
+    }
+
+    [Fact]
+    public void Transpile_TrWithEscapeChar_PassesThrough()
+    {
+        // Issue 12: tr ' ' '\n' should pass through literal \n for runtime expansion
+        var result = PsEmitter.Transpile("echo test | tr ' ' '\\n'");
+
+        Assert.Contains("Invoke-BashTr", result);
+    }
+
     private static CompoundWord MakeWord(string value) =>
         new(ImmutableArray.Create<WordPart>(new WordPart.Literal(value)));
 }

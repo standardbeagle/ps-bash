@@ -92,7 +92,7 @@ public static class BashLexer
                 // <<- must be checked before <<.
                 if (two == "<<" && pos + 2 < len && input[pos + 2] == '-')
                 {
-                    TryReclassifyIoNumber(tokens);
+                    TryReclassifyIoNumber(tokens, pos);
                     tokens.Add(new BashToken(BashTokenKind.DLessDash, "<<-", pos));
                     pos += 3;
                     continue;
@@ -112,7 +112,7 @@ public static class BashLexer
                 if (twoKind is not null)
                 {
                     if (IsRedirectKind(twoKind.Value))
-                        TryReclassifyIoNumber(tokens);
+                        TryReclassifyIoNumber(tokens, pos);
 
                     tokens.Add(new BashToken(twoKind.Value, two, pos));
                     pos += 2;
@@ -149,7 +149,7 @@ public static class BashLexer
             if (oneKind is not null)
             {
                 if (IsRedirectKind(oneKind.Value))
-                    TryReclassifyIoNumber(tokens);
+                    TryReclassifyIoNumber(tokens, pos);
 
                 tokens.Add(new BashToken(oneKind.Value, c.ToString(), pos));
                 pos++;
@@ -407,7 +407,12 @@ public static class BashLexer
     /// If the last token is a Word consisting entirely of digits and we're about to
     /// emit a redirect operator, reclassify it as IoNumber.
     /// </summary>
-    private static void TryReclassifyIoNumber(List<BashToken> tokens)
+    /// <summary>
+    /// Reclassify the last token as an IoNumber if it is a digit-only word
+    /// immediately adjacent to the redirect operator (no whitespace between).
+    /// <paramref name="redirectPos"/> is the position of the redirect operator.
+    /// </summary>
+    private static void TryReclassifyIoNumber(List<BashToken> tokens, int redirectPos)
     {
         if (tokens.Count == 0)
             return;
@@ -417,6 +422,11 @@ public static class BashLexer
             return;
 
         if (!IsAllDigits(last.Value))
+            return;
+
+        // Only reclassify if the digit word is immediately adjacent to the redirect
+        // operator (no whitespace). In bash, "2>" is fd redirect but "2 >" is arg + redirect.
+        if (last.Position + last.Value.Length != redirectPos)
             return;
 
         tokens[^1] = last with { Kind = BashTokenKind.IoNumber };

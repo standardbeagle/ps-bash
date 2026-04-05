@@ -20,6 +20,16 @@ public static class ModuleExtractor
         var dir = Path.Combine(Path.GetTempPath(), "ps-bash", $"module-{version}");
         var marker = Path.Combine(dir, ".extracted");
 
+        // Invalidate cache if the assembly has been rebuilt since extraction.
+        var asmPath = asm.Location;
+        if (File.Exists(marker) && !string.IsNullOrEmpty(asmPath) && File.Exists(asmPath))
+        {
+            var asmTime = File.GetLastWriteTimeUtc(asmPath);
+            var markerTime = File.GetLastWriteTimeUtc(marker);
+            if (asmTime > markerTime)
+                File.Delete(marker);
+        }
+
         // Skip if already extracted for this version
         if (File.Exists(marker))
             return Path.Combine(dir, "PsBash.psd1");

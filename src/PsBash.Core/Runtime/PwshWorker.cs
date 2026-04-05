@@ -79,10 +79,25 @@ public sealed class PwshWorker : IAsyncDisposable
 
     private static async Task<string> ExtractWorkerScriptAsync(CancellationToken ct)
     {
-        var dest = Path.Combine(Path.GetTempPath(), "ps-bash-worker.ps1");
-        using var stream = typeof(PwshWorker).Assembly
-            .GetManifestResourceStream("ps-bash-worker.ps1")!;
-        using var file = new FileStream(dest, FileMode.Create, FileAccess.Write, FileShare.None);
+        // Use the same version-stamped directory as ModuleExtractor so the
+        // worker script is cached alongside the module and invalidated together.
+        var asm = typeof(PwshWorker).Assembly;
+        var version = asm.GetName().Version?.ToString() ?? "0.0.0";
+        var dir = Path.Combine(Path.GetTempPath(), "ps-bash", $"module-{version}");
+        Directory.CreateDirectory(dir);
+        var dest = Path.Combine(dir, "ps-bash-worker.ps1");
+
+        // Skip extraction if already present and newer than the assembly.
+        if (File.Exists(dest))
+        {
+            var asmPath = asm.Location;
+            if (string.IsNullOrEmpty(asmPath) || !File.Exists(asmPath)
+                || File.GetLastWriteTimeUtc(dest) >= File.GetLastWriteTimeUtc(asmPath))
+                return dest;
+        }
+
+        using var stream = asm.GetManifestResourceStream("ps-bash-worker.ps1")!;
+        using var file = new FileStream(dest, FileMode.Create, FileAccess.Write, FileShare.ReadWrite);
         await stream.CopyToAsync(file, ct);
         return dest;
     }

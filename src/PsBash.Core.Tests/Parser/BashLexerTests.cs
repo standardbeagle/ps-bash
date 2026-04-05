@@ -474,4 +474,31 @@ public class BashLexerTests
             (BashTokenKind.Great, ">"),
             (BashTokenKind.Word, "out"));
     }
+
+    [Fact]
+    public void Tokenize_IoNumberAdjacentToRedirect_ReclassifiesAsIoNumber()
+    {
+        // 2> (no space) — the 2 is an IO number for fd redirection
+        var tokens = Tokenize("cmd 2>/dev/null");
+
+        AssertTokens(tokens,
+            (BashTokenKind.Word, "cmd"),
+            (BashTokenKind.IoNumber, "2"),
+            (BashTokenKind.Great, ">"),
+            (BashTokenKind.Word, "/dev/null"));
+    }
+
+    [Fact]
+    public void Tokenize_DigitWithSpaceBeforeRedirect_StaysAsWord()
+    {
+        // 2 << (with space) — the 2 is a regular word argument, not an IO number
+        var tokens = Tokenize("head -n 2 << EOF");
+
+        AssertTokens(tokens,
+            (BashTokenKind.Word, "head"),
+            (BashTokenKind.Word, "-n"),
+            (BashTokenKind.Word, "2"),
+            (BashTokenKind.DLess, "<<"),
+            (BashTokenKind.Word, "EOF"));
+    }
 }
