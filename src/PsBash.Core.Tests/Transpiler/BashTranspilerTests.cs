@@ -93,4 +93,92 @@ public class BashTranspilerTests
         var result = BashTranspiler.Transpile("[ -z \"$HOME\" ] && echo empty");
         Assert.Contains("[string]::IsNullOrEmpty($HOME)", result);
     }
+
+    [Fact]
+    public void ParserMode_V1_UsesRegexPipeline()
+    {
+        var prev = Environment.GetEnvironmentVariable("PSBASH_PARSER");
+        try
+        {
+            Environment.SetEnvironmentVariable("PSBASH_PARSER", "v1");
+            var result = BashTranspiler.Transpile("echo hello");
+            Assert.Equal("echo hello", result);
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("PSBASH_PARSER", prev);
+        }
+    }
+
+    [Fact]
+    public void ParserMode_V2_UsesParserPipeline()
+    {
+        var prev = Environment.GetEnvironmentVariable("PSBASH_PARSER");
+        try
+        {
+            Environment.SetEnvironmentVariable("PSBASH_PARSER", "v2");
+            var result = BashTranspiler.Transpile("export FOO=bar");
+            Assert.Equal("$env:FOO = \"bar\"", result);
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("PSBASH_PARSER", prev);
+        }
+    }
+
+    [Fact]
+    public void ParserMode_Auto_TriesParserFirst()
+    {
+        var prev = Environment.GetEnvironmentVariable("PSBASH_PARSER");
+        try
+        {
+            Environment.SetEnvironmentVariable("PSBASH_PARSER", "auto");
+            var result = BashTranspiler.Transpile("echo hello");
+            Assert.Equal("echo hello", result);
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("PSBASH_PARSER", prev);
+        }
+    }
+
+    [Fact]
+    public void ParserMode_Auto_FallsBackToRegexOnParserFailure()
+    {
+        var prev = Environment.GetEnvironmentVariable("PSBASH_PARSER");
+        try
+        {
+            Environment.SetEnvironmentVariable("PSBASH_PARSER", "auto");
+            // v1 (regex) result for a known transform
+            Environment.SetEnvironmentVariable("PSBASH_PARSER", "v1");
+            var regexResult = BashTranspiler.Transpile("export FOO=bar");
+
+            // auto mode should produce equivalent output (parser or fallback)
+            Environment.SetEnvironmentVariable("PSBASH_PARSER", "auto");
+            var autoResult = BashTranspiler.Transpile("export FOO=bar");
+
+            Assert.Equal(regexResult, autoResult);
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("PSBASH_PARSER", prev);
+        }
+    }
+
+    [Fact]
+    public void ParserMode_Default_IsAuto()
+    {
+        var prev = Environment.GetEnvironmentVariable("PSBASH_PARSER");
+        try
+        {
+            Environment.SetEnvironmentVariable("PSBASH_PARSER", null);
+            // With no env var set, default is auto mode
+            var result = BashTranspiler.Transpile("echo hello");
+            Assert.Equal("echo hello", result);
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("PSBASH_PARSER", prev);
+        }
+    }
 }

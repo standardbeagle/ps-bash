@@ -53,6 +53,16 @@ public static class PsEmitter
 
     private static string EmitSimple(Command.Simple cmd)
     {
+        // Bail on bash test constructs ([ -f ... ], [ -z ... ]) so the
+        // caller can fall back to the regex pipeline which handles them.
+        if (!cmd.Words.IsEmpty)
+        {
+            var name = cmd.Words[0].Parts.Length == 1 && cmd.Words[0].Parts[0] is WordPart.Literal lit
+                ? lit.Value : null;
+            if (name == "[")
+                throw new NotSupportedException("Test constructs are not yet supported by the parser.");
+        }
+
         // Input redirects (< file) become "Get-Content file | cmd".
         var inputRedirect = cmd.Redirects.FirstOrDefault(r => r.Op == "<");
         if (inputRedirect is not null)
