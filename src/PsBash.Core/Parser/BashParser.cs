@@ -4,17 +4,61 @@ using PsBash.Core.Parser.Ast;
 namespace PsBash.Core.Parser;
 
 /// <summary>
+/// Exception thrown when the bash parser encounters unsupported or invalid syntax.
+/// Includes source location (line/column) and the parser rule that failed.
+/// </summary>
+public sealed class ParseException : Exception
+{
+    public int Line { get; }
+    public int Column { get; }
+    public string Rule { get; }
+
+    public ParseException(string message, int line, int column, string rule)
+        : base(message)
+    {
+        Line = line;
+        Column = column;
+        Rule = rule;
+    }
+
+    /// <summary>
+    /// Compute 1-based line and column from a zero-based character offset in the input.
+    /// </summary>
+    internal static (int Line, int Column) ComputeLineCol(string input, int position)
+    {
+        int line = 1;
+        int col = 1;
+        int end = Math.Min(position, input.Length);
+        for (int i = 0; i < end; i++)
+        {
+            if (input[i] == '\n')
+            {
+                line++;
+                col = 1;
+            }
+            else
+            {
+                col++;
+            }
+        }
+        return (line, col);
+    }
+}
+
+/// <summary>
 /// Hand-rolled recursive descent parser for bash input.
 /// Consumes the flat token list produced by <see cref="BashLexer"/> and builds an AST.
 /// </summary>
 public sealed class BashParser
 {
     private readonly List<BashToken> _tokens;
+    private readonly string _input;
     private int _pos;
 
-    private BashParser(List<BashToken> tokens)
+    private BashParser(List<BashToken> tokens, string input)
     {
         _tokens = tokens;
+        _input = input;
         _pos = 0;
     }
 
@@ -25,8 +69,16 @@ public sealed class BashParser
     public static Command? Parse(string input)
     {
         var tokens = BashLexer.Tokenize(input);
-        var parser = new BashParser(tokens);
+        var parser = new BashParser(tokens, input);
         return parser.ParseCommand();
+    }
+
+    private ParseException MakeError(string message, int position, string rule)
+    {
+        var (line, col) = ParseException.ComputeLineCol(_input, position);
+        return new ParseException(
+            $"{message} at line {line}, col {col}",
+            line, col, rule);
     }
 
     private BashToken Peek() => _tokens[_pos];
@@ -161,7 +213,9 @@ public sealed class BashParser
 
         // Bail for compound constructs not yet implemented — triggers regex fallback in auto mode.
         if (Peek().Kind == BashTokenKind.Word && IsUnimplementedCompoundKeyword(Peek().Value))
-            throw new NotSupportedException($"Compound construct '{Peek().Value}' not yet implemented in parser-v2.");
+            throw MakeError(
+                $"Compound construct '{Peek().Value}' is not supported; use PSBASH_PARSER=auto for regex fallback",
+                Peek().Position, "ParseCompoundOrSimple");
 
         return ParseSimpleCommand();
     }
@@ -303,7 +357,9 @@ public sealed class BashParser
     {
         var token = Peek();
         if (token.Kind != BashTokenKind.Word || token.Value != word)
-            throw new FormatException($"Expected '{word}' but got '{token.Value}' ({token.Kind}) at position {token.Position}");
+            throw MakeError(
+                $"Expected '{word}' but got '{token.Value}' ({token.Kind})",
+                token.Position, "Expect");
         Advance();
     }
 
@@ -465,8 +521,9 @@ public sealed class BashParser
         }
 
         if (Peek().Kind != BashTokenKind.RParen)
-            throw new FormatException(
-                $"Expected ')' after case pattern but got '{Peek().Value}' ({Peek().Kind}) at position {Peek().Position}");
+            throw MakeError(
+                $"Expected ')' after case pattern but got '{Peek().Value}' ({Peek().Kind})",
+                Peek().Position, "ParseCaseArm");
         Advance(); // consume )
 
         SkipTerminators();
@@ -605,8 +662,9 @@ public sealed class BashParser
         }
 
         if (Peek().Kind != BashTokenKind.RParen)
-            throw new FormatException(
-                $"Expected ')' but got '{Peek().Value}' ({Peek().Kind}) at position {Peek().Position}");
+            throw MakeError(
+                $"Expected ')' to close subshell but got '{Peek().Value}' ({Peek().Kind})",
+                Peek().Position, "ParseSubshell");
         Advance(); // consume )
 
         Command body = commands.Count == 1
@@ -634,8 +692,9 @@ public sealed class BashParser
     private Command ParseBraceGroup()
     {
         if (Peek().Kind != BashTokenKind.LBrace)
-            throw new FormatException(
-                $"Expected '{{' but got '{Peek().Value}' ({Peek().Kind}) at position {Peek().Position}");
+            throw MakeError(
+                $"Expected '{{' but got '{Peek().Value}' ({Peek().Kind})",
+                Peek().Position, "ParseBraceGroup");
         Advance(); // consume {
         SkipTerminators();
 
@@ -654,8 +713,9 @@ public sealed class BashParser
         }
 
         if (Peek().Kind != BashTokenKind.RBrace)
-            throw new FormatException(
-                $"Expected '}}' but got '{Peek().Value}' ({Peek().Kind}) at position {Peek().Position}");
+            throw MakeError(
+                $"Expected '}}' but got '{Peek().Value}' ({Peek().Kind})",
+                Peek().Position, "ParseBraceGroup");
         Advance(); // consume }
 
         if (commands.Count == 1)

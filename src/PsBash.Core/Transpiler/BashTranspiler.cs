@@ -5,6 +5,8 @@ namespace PsBash.Core.Transpiler;
 
 public static class BashTranspiler
 {
+    private static bool IsDebug =>
+        Environment.GetEnvironmentVariable("PSBASH_DEBUG") == "1";
     private static readonly ITransform[] Pipeline =
     [
         new BacktickTransform(),
@@ -37,10 +39,21 @@ public static class BashTranspiler
     public static string Transpile(string bashCommand)
     {
         var mode = Environment.GetEnvironmentVariable("PSBASH_PARSER");
+        bool debug = IsDebug;
 
         // v2 parser is opt-in only — set PSBASH_PARSER=v2 or PSBASH_PARSER=auto to enable
         if (mode == "v2")
-            return PsEmitter.Transpile(bashCommand) ?? bashCommand;
+        {
+            try
+            {
+                return PsEmitter.Transpile(bashCommand) ?? bashCommand;
+            }
+            catch (ParseException ex)
+            {
+                if (debug) LogParseFailure(bashCommand, ex, fallbackToRegex: false);
+                throw;
+            }
+        }
 
         if (mode == "auto")
         {
@@ -50,13 +63,28 @@ public static class BashTranspiler
                 if (result is not null)
                     return result;
             }
-            catch
+            catch (ParseException ex)
             {
+                if (debug) LogParseFailure(bashCommand, ex, fallbackToRegex: true);
                 // Parser failed; fall through to regex pipeline
+            }
+            catch (Exception ex) when (ex is not OutOfMemoryException)
+            {
+                if (debug)
+                    Console.Error.WriteLine($"[ps-bash] parser-v2 threw {ex.GetType().Name}: {ex.Message}; falling back to regex");
             }
         }
 
         return TranspileRegex(bashCommand);
+    }
+
+    private static void LogParseFailure(string input, ParseException ex, bool fallbackToRegex)
+    {
+        Console.Error.WriteLine($"[ps-bash] parser-v2 input:    {input}");
+        Console.Error.WriteLine($"[ps-bash] parser-v2 error:    {ex.Message}");
+        Console.Error.WriteLine($"[ps-bash] parser-v2 location: line {ex.Line}, col {ex.Column}");
+        Console.Error.WriteLine($"[ps-bash] parser-v2 rule:     {ex.Rule}");
+        Console.Error.WriteLine($"[ps-bash] parser-v2 fallback: {(fallbackToRegex ? "regex" : "none")}");
     }
 
     private static string TranspileRegex(string bashCommand)

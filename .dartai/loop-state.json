@@ -8,9 +8,9 @@
   "runner_dart_id": null,
   "started_at": "2026-04-04T22:43:00Z",
   "resumed_at": "2026-04-05T03:00:00Z",
-  "iterations": 15,
+  "iterations": 17,
   "spawns": 0,
-  "last_iteration_at": "2026-04-05T05:55:00Z",
+  "last_iteration_at": "2026-04-05T06:42:00Z",
   "last_subagent": "task-executor",
   "tasks": [
     {
@@ -281,6 +281,22 @@
       "tests_added": 10,
       "plan_adjustments": 0,
       "completion_summary": "Parse and emit subshells and brace groups: Subshell AST node with redirects, BraceGroup AST node, ParseSubshell with trailing redirect capture, ParseStandaloneBraceGroup reusing ParseBraceGroup, EmitSubshell as '& { ... }', EmitBraceGroup as inline passthrough. All 577 tests pass.",
+      "failure_reason": null,
+      "fix_task_created": false,
+      "fix_task_id": null
+    },
+    {
+      "task_id": "z68fIeU0iQ8S",
+      "iteration": 17,
+      "status": "completed",
+      "started_at": "2026-04-05T06:34:00Z",
+      "completed_at": "2026-04-05T06:42:00Z",
+      "phase_completed": "phase-9",
+      "failed_phase": null,
+      "files_changed": 3,
+      "tests_added": 7,
+      "plan_adjustments": 1,
+      "completion_summary": "Added ParseException with line/column source location and parser rule tracking. Replaced all FormatException/NotSupportedException throws with ParseException. Added PSBASH_DEBUG logging in BashTranspiler for parse failures. All 620 tests pass.",
       "failure_reason": null,
       "fix_task_created": false,
       "fix_task_id": null

@@ -1135,4 +1135,88 @@ public class BashParserTests
         var braceGroup = Assert.IsType<Command.BraceGroup>(result);
         Assert.IsType<Command.Simple>(braceGroup.Body);
     }
+
+    // --- Error reporting tests ---
+
+    [Fact]
+    public void Parse_MissingFi_ThrowsParseExceptionWithLineAndColumn()
+    {
+        var ex = Assert.Throws<ParseException>(() => Parse("if true; then echo hi"));
+
+        Assert.Equal(1, ex.Line);
+        Assert.True(ex.Column > 0);
+        Assert.Contains("fi", ex.Message);
+        Assert.NotEmpty(ex.Rule);
+    }
+
+    [Fact]
+    public void Parse_UnsupportedSelect_ThrowsParseExceptionWithSuggestion()
+    {
+        var ex = Assert.Throws<ParseException>(() => Parse("select x in a b c; do echo $x; done"));
+
+        Assert.Equal(1, ex.Line);
+        Assert.Equal(1, ex.Column);
+        Assert.Contains("select", ex.Message);
+        Assert.Contains("not supported", ex.Message);
+        Assert.Equal("ParseCompoundOrSimple", ex.Rule);
+    }
+
+    [Fact]
+    public void Parse_MultilineError_PointsToCorrectLine()
+    {
+        // Missing 'fi' on a multiline if/then — error at EOF references the right location.
+        var input = "if true; then\n  echo inside";
+
+        var ex = Assert.Throws<ParseException>(() => Parse(input));
+
+        // The error should be at or after line 2 where EOF is hit instead of 'fi'.
+        Assert.True(ex.Line >= 2, $"Expected error on line 2 or later, got line {ex.Line}");
+        Assert.True(ex.Column > 0);
+        Assert.Contains("line", ex.Message);
+        Assert.Contains("col", ex.Message);
+    }
+
+    [Fact]
+    public void Parse_MissingDone_ThrowsParseExceptionNotStackOverflow()
+    {
+        var ex = Assert.Throws<ParseException>(() => Parse("while true; do echo loop"));
+
+        Assert.Equal(1, ex.Line);
+        Assert.Contains("done", ex.Message);
+        Assert.NotEmpty(ex.Rule);
+    }
+
+    [Fact]
+    public void Parse_MissingEsac_ThrowsParseExceptionWithPosition()
+    {
+        var input = "case $x in\n  a) echo yes;;";
+
+        var ex = Assert.Throws<ParseException>(() => Parse(input));
+
+        Assert.True(ex.Line >= 1);
+        Assert.Contains("esac", ex.Message);
+    }
+
+    [Fact]
+    public void Parse_UnclosedBraceGroup_ThrowsParseExceptionWithPosition()
+    {
+        var ex = Assert.Throws<ParseException>(() => Parse("{ echo hello"));
+
+        Assert.Equal(1, ex.Line);
+        Assert.Contains("}", ex.Message);
+    }
+
+    [Fact]
+    public void Parse_MultilineIfError_ReportsLine2()
+    {
+        // The error is on line 2 where 'then' is expected but 'echo' comes instead.
+        // "if true\necho" — missing 'then' keyword.
+        var input = "if true\necho hi";
+
+        var ex = Assert.Throws<ParseException>(() => Parse(input));
+
+        Assert.Contains("then", ex.Message);
+        // The 'echo' token is on line 2
+        Assert.Equal(2, ex.Line);
+    }
 }
