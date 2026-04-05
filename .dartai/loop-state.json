@@ -1,5 +1,5 @@
 {
-  "status": "running",
+  "status": "interrupted",
   "loop_task_id": "l9kozDqqLxLO",
   "dartboard": "Personal/ps-bash",
   "loop_type": "quality",
@@ -7,10 +7,10 @@
   "runner_email": "claude@anthropic.com",
   "runner_dart_id": null,
   "started_at": "2026-04-04T22:43:00Z",
-  "resumed_at": "2026-04-05T01:20:00Z",
-  "iterations": 18,
+  "resumed_at": "2026-04-05T00:30:00Z",
+  "iterations": 14,
   "spawns": 0,
-  "last_iteration_at": "2026-04-05T02:42:00Z",
+  "last_iteration_at": "2026-04-05T00:25:00Z",
   "last_subagent": "task-executor",
   "tasks": [
     {
@@ -104,7 +104,7 @@
       "files_changed": 5,
       "tests_added": 14,
       "plan_adjustments": 1,
-      "completion_summary": "Implemented command substitution $() and backtick parsing with recursive transpilation. Lexer scans $() and backtick forms as atomic word content. Parser DecomposeWord creates CommandSub nodes with recursively parsed inner commands. Emitter recursively transpiles inner commands. 322 tests pass.",
+      "completion_summary": "Parser decomposes WORD tokens into typed WordParts (SingleQuoted, DoubleQuoted with $VAR expansion, EscapedLiteral, bare Literal). Emitter handles backtick escapes and $env: substitution. 236 tests pass.",
       "failure_reason": null,
       "fix_task_created": false,
       "fix_task_id": null
@@ -252,70 +252,7 @@
       "failure_reason": null,
       "fix_task_created": false,
       "fix_task_id": null
-    },
-    {
-      "task_id": "9QDZxFHqnoYj",
-      "iteration": 15,
-      "status": "completed",
-      "started_at": "2026-04-05T01:20:00Z",
-      "completed_at": "2026-04-05T01:35:00Z",
-      "phase_completed": "phase-9",
-      "failed_phase": null,
-      "files_changed": 6,
-      "tests_added": 13,
-      "plan_adjustments": 1,
-      "completion_summary": "Added if/elif/else/fi parsing and emission to parser-v2. If/IfArm AST nodes, recursive descent parsing with compound body support, condition translation for [ -f ] and [ -d ] test constructs to Test-Path, and PowerShell if/elseif/else emission. Updated IfElseTransform integration tests to match parser-v2 output. 13 new tests, all 240 parser tests pass.",
-      "failure_reason": null,
-      "fix_task_created": false,
-      "fix_task_id": null
-    },
-    {
-      "task_id": "xITMjSMfj2so",
-      "iteration": 16,
-      "status": "completed",
-      "started_at": "2026-04-05T01:55:00Z",
-      "completed_at": "2026-04-05T02:15:00Z",
-      "phase_completed": "phase-9",
-      "failed_phase": null,
-      "files_changed": 5,
-      "tests_added": 21,
-      "plan_adjustments": 1,
-      "completion_summary": "Added BoolExpr AST node and full parsing/emission of [ ] and [[ ]] test expressions. Parser handles <, >, ! operator tokens and && / || logical operators inside [[ ]]. Emitter translates -f/-d to Test-Path, -z/-n to IsNullOrEmpty, ==/>/<!/=~/glob to PowerShell operators, and wraps standalone tests in [void] for && / || chains. 562 tests pass.",
-      "failure_reason": null,
-      "fix_task_created": false,
-      "fix_task_id": null
-    },
-    {
-      "task_id": "ucoALJmdnwmT",
-      "iteration": 17,
-      "status": "completed",
-      "started_at": "2026-04-05T02:17:00Z",
-      "completed_at": "2026-04-05T02:30:00Z",
-      "phase_completed": "phase-9",
-      "failed_phase": null,
-      "files_changed": 4,
-      "tests_added": 11,
-      "plan_adjustments": 1,
-      "completion_summary": "Added ForIn and ForArith AST nodes, ParseFor() with for-in/implicit-args/C-style dispatch, EmitForIn with list formatting and Resolve-Path for globs, EmitForArith with C-to-PS operator translation, and ThreadStatic loop variable scoping so $x emits as $x not $env:x in loop bodies. 573 tests pass.",
-      "failure_reason": null,
-      "fix_task_created": false,
-      "fix_task_id": null
-    },
-    {
-      "task_id": "SqAnIkSAAEdW",
-      "iteration": 18,
-      "status": "completed",
-      "started_at": "2026-04-05T02:32:00Z",
-      "completed_at": "2026-04-05T02:42:00Z",
-      "phase_completed": "phase-9",
-      "failed_phase": null,
-      "files_changed": 5,
-      "tests_added": 13,
-      "plan_adjustments": 1,
-      "completion_summary": "Added Command.While AST node, ParseWhile() for while/until keywords, EmitWhile with condition negation for until, special while-read-to-ForEach-Object pipeline transform, true/false to $true/$false condition mapping, and BoolExpr condition unwrapping for test expressions. 586 tests pass.",
-      "failure_reason": null,
-      "fix_task_created": false,
-      "fix_task_id": null
     }
-  ]
+  ],
+  "interrupted_at": "2026-04-05T02:51:54.425Z"
 }
