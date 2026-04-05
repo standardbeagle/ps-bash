@@ -1983,6 +1983,48 @@ public class PsEmitterTests
         Assert.Equal("Invoke-BashGrep error log.txt", result);
     }
 
+    [Fact]
+    public void Transpile_BracedVarDefaultInsideDoubleQuotes_EmitsSubexpression()
+    {
+        var result = PsEmitter.Transpile("echo \"${UNSET_VAR:-fallback}\"");
+        Assert.Equal("echo \"$($env:UNSET_VAR ?? 'fallback')\"", result);
+    }
+
+    [Fact]
+    public void Transpile_BracedVarSuffixRemovalInsideDoubleQuotes_EmitsSubexpression()
+    {
+        var result = PsEmitter.Transpile("echo \"${FOO%%l*}\"");
+        Assert.Equal("echo \"$($env:FOO -replace 'l*$','')\"", result);
+    }
+
+    [Fact]
+    public void Transpile_BracedVarLengthInsideDoubleQuotes_EmitsSubexpression()
+    {
+        var result = PsEmitter.Transpile("echo \"${#VAR}\"");
+        Assert.Equal("echo \"$($env:VAR.Length)\"", result);
+    }
+
+    [Fact]
+    public void Transpile_BracedVarPrefixRemovalInsideDoubleQuotes_EmitsSubexpression()
+    {
+        var result = PsEmitter.Transpile("echo \"${PATH##*/}\"");
+        Assert.Equal("echo \"$($env:PATH -replace '^*/','')\"", result);
+    }
+
+    [Fact]
+    public void Transpile_BracedVarAlternativeInsideDoubleQuotes_EmitsSubexpression()
+    {
+        var result = PsEmitter.Transpile("echo \"${VAR:+yes}\"");
+        Assert.Equal("echo \"$($env:VAR ? 'yes' : '')\"", result);
+    }
+
+    [Fact]
+    public void Transpile_SimpleBracedVarInsideDoubleQuotes_NoSubexpression()
+    {
+        var result = PsEmitter.Transpile("echo \"${USER}\"");
+        Assert.Equal("echo \"$env:USER\"", result);
+    }
+
     private static CompoundWord MakeWord(string value) =>
         new(ImmutableArray.Create<WordPart>(new WordPart.Literal(value)));
 }

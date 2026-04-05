@@ -1200,7 +1200,7 @@ public static class PsEmitter
         };
     }
 
-    private static string EmitBracedVar(WordPart.BracedVarSub bvs)
+    private static string EmitBracedVar(WordPart.BracedVarSub bvs, bool inDoubleQuote = false)
     {
         if (bvs.Suffix is null)
             return EmitSimpleVar(bvs.Name);
@@ -1228,61 +1228,63 @@ public static class PsEmitter
         }
 
         string varRef = EmitSimpleVar(bvs.Name);
+        string open = inDoubleQuote ? "$(" : "(";
+        char q = inDoubleQuote ? '\'' : '"';
 
         // Length: ${#VAR}
         if (bvs.Suffix == "#")
-            return $"{varRef}.Length";
+            return inDoubleQuote ? $"$({varRef}.Length)" : $"{varRef}.Length";
 
         // Default value: ${VAR:-default}
         if (bvs.Suffix.StartsWith(":-"))
         {
             string defaultVal = bvs.Suffix[2..];
-            return $"({varRef} ?? \"{defaultVal}\")";
+            return $"{open}{varRef} ?? {q}{defaultVal}{q})";
         }
 
         // Assign default: ${VAR:=default}
         if (bvs.Suffix.StartsWith(":="))
         {
             string defaultVal = bvs.Suffix[2..];
-            return $"({varRef} ?? ({varRef} = \"{defaultVal}\"))";
+            return $"{open}{varRef} ?? ({varRef} = {q}{defaultVal}{q}))";
         }
 
         // Use alternative: ${VAR:+alt}
         if (bvs.Suffix.StartsWith(":+"))
         {
             string alt = bvs.Suffix[2..];
-            return $"({varRef} ? \"{alt}\" : \"\")";
+            return $"{open}{varRef} ? {q}{alt}{q} : {q}{q})";
         }
 
         // Error if unset: ${VAR:?message}
         if (bvs.Suffix.StartsWith(":?"))
         {
             string msg = bvs.Suffix[2..];
-            return $"({varRef} ?? $(throw \"{msg}\"))";
+            return $"{open}{varRef} ?? $(throw {q}{msg}{q}))";
         }
 
         // Remove suffix: ${VAR%%pattern} or ${VAR%pattern}
         if (bvs.Suffix.StartsWith("%%"))
         {
             string pattern = bvs.Suffix[2..];
-            return $"({varRef} -replace '{pattern}$','')";
+            return $"{open}{varRef} -replace '{pattern}$','')";
         }
         if (bvs.Suffix.StartsWith("%"))
         {
             string pattern = bvs.Suffix[1..];
-            return $"({varRef} -replace '{pattern}$','')";
+            return $"{open}{varRef} -replace '{pattern}$','')";
         }
 
         // Remove prefix: ${VAR##pattern} or ${VAR#pattern}
         if (bvs.Suffix.StartsWith("##"))
         {
             string pattern = bvs.Suffix[2..];
-            return $"({varRef} -replace '^{pattern}','')";
+            return $"{open}{varRef} -replace '^{pattern}','')";
         }
         if (bvs.Suffix.StartsWith("#"))
         {
             string pattern = bvs.Suffix[1..];
-            return $"({varRef} -replace '^{pattern}','')";
+            return $"{open}{varRef} -replace '^{pattern}','')";
         }
 
         // Array keys: ${!arr[@]} -> $arr.Keys
@@ -1294,7 +1296,7 @@ public static class PsEmitter
         {
             var parts = bvs.Suffix[1..].Split('/', 2);
             string find = parts[0], replace = parts.Length > 1 ? parts[1] : "";
-            return $"({varRef} -replace [regex]::Escape('{find}'),'{replace}')";
+            return $"{open}{varRef} -replace [regex]::Escape('{find}'),'{replace}')";
         }
 
         // Replace all: ${VAR//find/replace}
@@ -1302,7 +1304,7 @@ public static class PsEmitter
         {
             var parts = bvs.Suffix[2..].Split('/', 2);
             string find = parts[0], replace = parts.Length > 1 ? parts[1] : "";
-            return $"({varRef} -replace '{find}','{replace}')";
+            return $"{open}{varRef} -replace '{find}','{replace}')";
         }
 
         // Slice: ${VAR:offset:length} or ${VAR:offset}
@@ -1310,20 +1312,20 @@ public static class PsEmitter
         {
             var sliceParts = bvs.Suffix[1..].Split(':', 2);
             if (sliceParts.Length == 2 && int.TryParse(sliceParts[0], out int offset) && int.TryParse(sliceParts[1], out int length))
-                return $"{varRef}.Substring({offset}, {length})";
+                return inDoubleQuote ? $"$({varRef}.Substring({offset}, {length}))" : $"{varRef}.Substring({offset}, {length})";
             if (int.TryParse(sliceParts[0], out int off2))
-                return $"{varRef}.Substring({off2})";
+                return inDoubleQuote ? $"$({varRef}.Substring({off2}))" : $"{varRef}.Substring({off2})";
         }
 
         // Case conversion: ${VAR^^} ${VAR,,} ${VAR^} ${VAR,}
         if (bvs.Suffix == "^^")
-            return $"{varRef}.ToUpper()";
+            return inDoubleQuote ? $"$({varRef}.ToUpper())" : $"{varRef}.ToUpper()";
         if (bvs.Suffix == ",,")
-            return $"{varRef}.ToLower()";
+            return inDoubleQuote ? $"$({varRef}.ToLower())" : $"{varRef}.ToLower()";
         if (bvs.Suffix == "^")
-            return $"({varRef}.Substring(0,1).ToUpper() + {varRef}.Substring(1))";
+            return $"{open}{varRef}.Substring(0,1).ToUpper() + {varRef}.Substring(1))";
         if (bvs.Suffix == ",")
-            return $"({varRef}.Substring(0,1).ToLower() + {varRef}.Substring(1))";
+            return $"{open}{varRef}.Substring(0,1).ToLower() + {varRef}.Substring(1))";
 
         // Fallback: emit as-is
         return varRef;
@@ -1334,7 +1336,12 @@ public static class PsEmitter
         var sb = new StringBuilder();
         sb.Append('"');
         foreach (var part in dq.Parts)
-            sb.Append(EmitWordPart(part));
+        {
+            if (part is WordPart.BracedVarSub bvs)
+                sb.Append(EmitBracedVar(bvs, inDoubleQuote: true));
+            else
+                sb.Append(EmitWordPart(part));
+        }
         sb.Append('"');
         return sb.ToString();
     }
