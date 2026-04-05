@@ -1332,4 +1332,118 @@ public class BashParserTests
         Assert.NotNull(simple.HereDoc);
         Assert.Equal("hello foo\nbar", simple.HereDoc.Body);
     }
+
+    // ── Case/esac parser tests ──────────────────────────────────────────────
+
+    [Fact]
+    public void Parse_SimpleCase_ProducesCaseNode()
+    {
+        var result = Parse("case $x in\na) echo a;;\nesac");
+
+        var c = Assert.IsType<Command.Case>(result);
+        var lit = Assert.IsType<WordPart.SimpleVarSub>(Assert.Single(c.Expr.Parts));
+        Assert.Equal("x", lit.Name);
+        Assert.Single(c.Arms);
+        Assert.Equal("a", Assert.Single(c.Arms[0].Patterns));
+    }
+
+    [Fact]
+    public void Parse_CaseTwoArms_ProducesTwoArms()
+    {
+        var result = Parse("case $v in\nfoo) echo foo;;\nbar) echo bar;;\nesac");
+
+        var c = Assert.IsType<Command.Case>(result);
+        Assert.Equal(2, c.Arms.Length);
+        Assert.Equal("foo", Assert.Single(c.Arms[0].Patterns));
+        Assert.Equal("bar", Assert.Single(c.Arms[1].Patterns));
+    }
+
+    [Fact]
+    public void Parse_CaseMultiPattern_StoresAllPatterns()
+    {
+        var result = Parse("case $x in\na|b|c) echo abc;;\nesac");
+
+        var c = Assert.IsType<Command.Case>(result);
+        var arm = Assert.Single(c.Arms);
+        Assert.Equal(["a", "b", "c"], arm.Patterns.ToArray());
+    }
+
+    [Fact]
+    public void Parse_CaseWildcardDefault_PatternIsStar()
+    {
+        var result = Parse("case $x in\n*) echo other;;\nesac");
+
+        var c = Assert.IsType<Command.Case>(result);
+        var arm = Assert.Single(c.Arms);
+        Assert.Equal("*", Assert.Single(arm.Patterns));
+    }
+
+    [Fact]
+    public void Parse_CaseArmBody_IsSimpleCommand()
+    {
+        var result = Parse("case $x in\nhello) echo hi;;\nesac");
+
+        var c = Assert.IsType<Command.Case>(result);
+        var body = Assert.IsType<Command.Simple>(c.Arms[0].Body);
+        Assert.Equal("echo", GetWordValues(body)[0]);
+    }
+
+    [Fact]
+    public void Parse_CaseLeadingParen_ArmParsedCorrectly()
+    {
+        // Some scripts write (pattern) instead of pattern)
+        var result = Parse("case $x in\n(yes) echo y;;\nesac");
+
+        var c = Assert.IsType<Command.Case>(result);
+        Assert.Equal("yes", Assert.Single(c.Arms[0].Patterns));
+    }
+
+    // ── Standalone arithmetic command (( )) parser tests ───────────────────
+
+    [Fact]
+    public void Parse_ArithCommand_Addition_ProducesArithCommandNode()
+    {
+        var result = Parse("(( x + 1 ))");
+
+        var arith = Assert.IsType<Command.ArithCommand>(result);
+        Assert.Equal("x + 1", arith.Expr);
+    }
+
+    [Fact]
+    public void Parse_ArithCommand_Increment_ProducesCorrectExpr()
+    {
+        var result = Parse("(( x++ ))");
+
+        var arith = Assert.IsType<Command.ArithCommand>(result);
+        Assert.Equal("x++", arith.Expr);
+    }
+
+    [Fact]
+    public void Parse_ArithCommand_Comparison_ProducesCorrectExpr()
+    {
+        var result = Parse("(( x > 5 ))");
+
+        var arith = Assert.IsType<Command.ArithCommand>(result);
+        Assert.Equal("x > 5", arith.Expr);
+    }
+
+    [Fact]
+    public void Parse_ArithCommand_Assignment_ProducesCorrectExpr()
+    {
+        var result = Parse("(( x = y + 2 ))");
+
+        var arith = Assert.IsType<Command.ArithCommand>(result);
+        Assert.Equal("x = y + 2", arith.Expr);
+    }
+
+    [Fact]
+    public void Parse_ArithCommand_InList_ParsedCorrectly()
+    {
+        // (( x++ )); echo done  — arith cmd in a command list
+        var result = Parse("(( x++ )); echo done");
+
+        var list = Assert.IsType<Command.CommandList>(result);
+        Assert.IsType<Command.ArithCommand>(list.Commands[0]);
+        Assert.IsType<Command.Simple>(list.Commands[1]);
+    }
 }
