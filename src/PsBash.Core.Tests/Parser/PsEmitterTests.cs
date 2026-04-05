@@ -1416,6 +1416,43 @@ public class PsEmitterTests
         Assert.Equal("echo @('log1.txt','log2.txt','log3.txt')", result);
     }
 
+    [Fact]
+    public void Transpile_DiffWithTwoInputProcessSubs()
+    {
+        var result = PsEmitter.Transpile("diff <(ls dir1) <(ls dir2)");
+        Assert.Equal("diff (Invoke-ProcessSub { ls dir1 }) (Invoke-ProcessSub { ls dir2 })", result);
+    }
+
+    [Fact]
+    public void Transpile_OutputProcessSub()
+    {
+        var result = PsEmitter.Transpile("cmd >(tee log.txt)");
+        Assert.Equal("cmd (Invoke-ProcessSub { tee log.txt })", result);
+    }
+
+    [Fact]
+    public void Transpile_NestedProcessSub()
+    {
+        var result = PsEmitter.Transpile("diff <(sort <(cat file1)) <(sort file2)");
+        Assert.Equal(
+            "diff (Invoke-ProcessSub { sort (Invoke-ProcessSub { cat file1 }) }) (Invoke-ProcessSub { sort file2 })",
+            result);
+    }
+
+    [Fact]
+    public void Transpile_ProcessSubWithPipe()
+    {
+        var result = PsEmitter.Transpile("diff <(sort file1 | uniq) file2");
+        Assert.Equal("diff (Invoke-ProcessSub { sort file1 | Invoke-BashUniq }) file2", result);
+    }
+
+    [Fact]
+    public void Transpile_GrepWithProcessSub()
+    {
+        var result = PsEmitter.Transpile("grep -f <(cat patterns.txt) data.txt");
+        Assert.Equal("grep -f (Invoke-ProcessSub { cat patterns.txt }) data.txt", result);
+    }
+
     private static CompoundWord MakeWord(string value) =>
         new(ImmutableArray.Create<WordPart>(new WordPart.Literal(value)));
 }

@@ -1253,4 +1253,31 @@ public class BashParserTests
         Assert.Single(parts);
         Assert.Equal("+(*.py|*.js)", ((WordPart.GlobPart)parts[0]).Pattern);
     }
+
+    [Fact]
+    public void Parse_InputProcessSub_ProducesProcessSubPart()
+    {
+        var simple = Assert.IsType<Command.Simple>(Parse("diff <(ls dir1) <(ls dir2)"));
+
+        Assert.Equal(3, simple.Words.Length);
+        Assert.Equal("diff", Assert.IsType<WordPart.Literal>(Assert.Single(simple.Words[0].Parts)).Value);
+
+        var ps1 = Assert.IsType<WordPart.ProcessSub>(Assert.Single(simple.Words[1].Parts));
+        Assert.True(ps1.IsInput);
+        var innerCmd1 = Assert.IsType<Command.Simple>(ps1.Body);
+        Assert.Equal("ls", Assert.IsType<WordPart.Literal>(Assert.Single(innerCmd1.Words[0].Parts)).Value);
+
+        var ps2 = Assert.IsType<WordPart.ProcessSub>(Assert.Single(simple.Words[2].Parts));
+        Assert.True(ps2.IsInput);
+    }
+
+    [Fact]
+    public void Parse_OutputProcessSub_ProducesProcessSubPart()
+    {
+        var simple = Assert.IsType<Command.Simple>(Parse("cmd >(tee log.txt)"));
+
+        Assert.Equal(2, simple.Words.Length);
+        var ps = Assert.IsType<WordPart.ProcessSub>(Assert.Single(simple.Words[1].Parts));
+        Assert.False(ps.IsInput);
+    }
 }

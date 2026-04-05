@@ -933,8 +933,15 @@ public static class PsEmitter
         WordPart.GlobPart gp => gp.Pattern,
         WordPart.BracedTuple bt => FormatBraceArray(new List<string>(bt.Items)),
         WordPart.BracedRange br => FormatBraceArray(ExpandBrace(br)),
+        WordPart.ProcessSub ps => EmitProcessSub(ps),
         _ => throw new NotSupportedException($"Unknown word part type: {part.GetType().Name}"),
     };
+
+    private static string EmitProcessSub(WordPart.ProcessSub ps)
+    {
+        string inner = Emit((Command)ps.Body);
+        return $"(Invoke-ProcessSub {{ {inner} }})";
+    }
 
     private static string EmitArithSub(WordPart.ArithSub arith)
     {

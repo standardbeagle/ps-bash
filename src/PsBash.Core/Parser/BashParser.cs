@@ -968,6 +968,10 @@ public sealed class BashParser
             {
                 pos = ParseBacktickCommandSub(raw, pos, parts);
             }
+            else if (IsProcessSubStart(raw, pos))
+            {
+                pos = ParseProcessSub(raw, pos, parts);
+            }
             else if (IsGlobStart(raw, pos))
             {
                 pos = ParseGlob(raw, pos, parts);
@@ -1223,6 +1227,33 @@ public sealed class BashParser
         return pos;
     }
 
+    private static bool IsProcessSubStart(string raw, int pos) =>
+        pos + 1 < raw.Length && raw[pos] is '<' or '>' && raw[pos + 1] == '(';
+
+    private static int ParseProcessSub(string raw, int pos, ImmutableArray<WordPart>.Builder parts)
+    {
+        bool isInput = raw[pos] == '<';
+        pos += 2; // skip <( or >(
+        int depth = 1;
+        int start = pos;
+        while (pos < raw.Length && depth > 0)
+        {
+            if (raw[pos] == '(') depth++;
+            else if (raw[pos] == ')') depth--;
+            if (depth > 0) pos++;
+        }
+        string inner = raw[start..pos];
+        if (pos < raw.Length)
+            pos++; // skip closing )
+
+        var body = Parse(inner);
+        parts.Add(new WordPart.ProcessSub(body ?? new Command.Simple(
+            ImmutableArray<CompoundWord>.Empty,
+            ImmutableArray<EnvPair>.Empty,
+            ImmutableArray<Redirect>.Empty), isInput));
+        return pos;
+    }
+
     private static int ParseTilde(string raw, ImmutableArray<WordPart>.Builder parts)
     {
         int pos = 1; // skip ~
@@ -1264,6 +1295,9 @@ public sealed class BashParser
                 break;
             // Brace expansion: {a,b,c} or {1..10}
             if (IsBraceExpansionStart(raw, pos))
+                break;
+            // Process substitution: <(...) or >(...)
+            if (IsProcessSubStart(raw, pos))
                 break;
             pos++;
         }

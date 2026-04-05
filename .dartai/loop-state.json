@@ -8,9 +8,9 @@
   "runner_dart_id": null,
   "started_at": "2026-04-04T22:43:00Z",
   "resumed_at": "2026-04-05T03:00:00Z",
-  "iterations": 21,
+  "iterations": 22,
   "spawns": 0,
-  "last_iteration_at": "2026-04-05T07:28:00Z",
+  "last_iteration_at": "2026-04-05T07:41:00Z",
   "last_subagent": "task-executor",
   "tasks": [
     {
@@ -361,6 +361,22 @@
       "tests_added": 5,
       "plan_adjustments": 1,
       "completion_summary": "Parse and emit brace expansion. Added BracedTuple and BracedRange AST nodes. Lexer detects {a,b,c} and {1..10} as word content (not LBrace). Parser DecomposeWord creates BracedTuple/BracedRange nodes. Emitter produces @('a','b','c') for tuples, PS range operator for numeric ranges, zero-padded string arrays for leading-zero ranges, and expanded arrays for prefix/suffix combinations. All 660 tests pass.",
+      "failure_reason": null,
+      "fix_task_created": false,
+      "fix_task_id": null
+    },
+    {
+      "task_id": "9thu6tQ5SyHk",
+      "iteration": 22,
+      "status": "completed",
+      "started_at": "2026-04-05T07:30:00Z",
+      "completed_at": "2026-04-05T07:41:00Z",
+      "phase_completed": "phase-9",
+      "failed_phase": null,
+      "files_changed": 5,
+      "tests_added": 7,
+      "plan_adjustments": 1,
+      "completion_summary": "Parse and emit process substitution <() and >(). Added ProcessSub WordPart. Lexer recognizes <(...) and >(...) as Word tokens. Parser DecomposeWord creates ProcessSub nodes with recursive inner command parsing. Emitter produces Invoke-ProcessSub { ... } matching the existing module helper. All 667 tests pass.",
       "failure_reason": null,
       "fix_task_created": false,
       "fix_task_id": null

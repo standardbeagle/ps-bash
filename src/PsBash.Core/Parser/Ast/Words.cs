@@ -52,6 +52,13 @@ public abstract record WordPart : BashNode
     /// When <paramref name="ZeroPad"/> is greater than zero, values are left-padded with zeros.
     /// </summary>
     public sealed record BracedRange(int Start, int End, int ZeroPad) : WordPart;
+
+    /// <summary>
+    /// A process substitution, e.g. <c>&lt;(cmd)</c> (input) or <c>&gt;(cmd)</c> (output).
+    /// The <paramref name="Body"/> is the parsed command inside the substitution.
+    /// <paramref name="IsInput"/> is true for <c>&lt;(...)</c>, false for <c>&gt;(...)</c>.
+    /// </summary>
+    public sealed record ProcessSub(BashNode Body, bool IsInput) : WordPart;
 }
 
 /// <summary>

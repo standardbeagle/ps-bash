@@ -65,6 +65,25 @@ public static class BashLexer
                 continue;
             }
 
+            // Process substitution: <(...) or >(...) — consume as a word.
+            if (c is '<' or '>' && pos + 1 < len && input[pos + 1] == '(')
+            {
+                int psStart = pos;
+                pos += 2; // skip <( or >(
+                int depth = 1;
+                while (pos < len && depth > 0)
+                {
+                    if (input[pos] == '(') depth++;
+                    else if (input[pos] == ')') depth--;
+                    if (depth > 0) pos++;
+                }
+                if (pos < len)
+                    pos++; // skip closing )
+                string psText = input[psStart..pos];
+                tokens.Add(new BashToken(BashTokenKind.Word, psText, psStart));
+                continue;
+            }
+
             // Two-character and three-character operators.
             if (pos + 1 < len)
             {
