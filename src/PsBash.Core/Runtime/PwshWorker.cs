@@ -96,9 +96,19 @@ public sealed class PwshWorker : IAsyncDisposable
                 return dest;
         }
 
-        using var stream = asm.GetManifestResourceStream("ps-bash-worker.ps1")!;
-        using var file = new FileStream(dest, FileMode.Create, FileAccess.Write, FileShare.ReadWrite);
-        await stream.CopyToAsync(file, ct);
+        // Write with FileShare.Read so concurrent processes can read the file
+        // while it's being written. Retry once on IOException (another process writing).
+        try
+        {
+            using var stream = asm.GetManifestResourceStream("ps-bash-worker.ps1")!;
+            using var file = new FileStream(dest, FileMode.Create, FileAccess.Write, FileShare.Read);
+            await stream.CopyToAsync(file, ct);
+        }
+        catch (IOException)
+        {
+            // Another process is writing. Wait briefly then use whatever exists.
+            await Task.Delay(500, ct);
+        }
         return dest;
     }
 

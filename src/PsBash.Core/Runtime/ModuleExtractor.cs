@@ -12,6 +12,7 @@ public static class ModuleExtractor
     /// <summary>
     /// Extracts the embedded PsBash module to a temp directory and returns the path to PsBash.psd1.
     /// Uses a version-stamped directory so concurrent processes don't conflict.
+    /// Thread-safe: uses a lock file to serialize extraction across processes.
     /// </summary>
     public static string ExtractEmbedded()
     {
@@ -19,6 +20,7 @@ public static class ModuleExtractor
         var version = asm.GetName().Version?.ToString() ?? "0.0.0";
         var dir = Path.Combine(Path.GetTempPath(), "ps-bash", $"module-{version}");
         var marker = Path.Combine(dir, ".extracted");
+        var psd1Path = Path.Combine(dir, "PsBash.psd1");
 
         // Invalidate cache if the assembly has been rebuilt since extraction.
         var asmPath = asm.Location;
@@ -27,25 +29,63 @@ public static class ModuleExtractor
             var asmTime = File.GetLastWriteTimeUtc(asmPath);
             var markerTime = File.GetLastWriteTimeUtc(marker);
             if (asmTime > markerTime)
-                File.Delete(marker);
+            {
+                try { File.Delete(marker); }
+                catch (IOException) { /* another process may be extracting */ }
+            }
         }
 
         // Skip if already extracted for this version
         if (File.Exists(marker))
-            return Path.Combine(dir, "PsBash.psd1");
+            return psd1Path;
 
         Directory.CreateDirectory(dir);
-        foreach (var file in ModuleFiles)
+
+        // Use a lock file to serialize extraction across concurrent processes.
+        var lockPath = Path.Combine(dir, ".lock");
+        try
         {
-            var destPath = Path.Combine(dir, file);
-            using var stream = asm.GetManifestResourceStream($"PsBash.Module/{file}")!;
-            using var dest = new FileStream(
-                destPath, FileMode.Create, FileAccess.Write, FileShare.None);
-            stream.CopyTo(dest);
+            using var lockFile = new FileStream(
+                lockPath, FileMode.OpenOrCreate, FileAccess.ReadWrite,
+                FileShare.None, 4096, FileOptions.DeleteOnClose);
+
+            // Re-check marker after acquiring lock — another process may have finished.
+            if (File.Exists(marker))
+                return psd1Path;
+
+            foreach (var file in ModuleFiles)
+            {
+                var destPath = Path.Combine(dir, file);
+                using var stream = asm.GetManifestResourceStream($"PsBash.Module/{file}")!;
+                using var dest = new FileStream(
+                    destPath, FileMode.Create, FileAccess.Write, FileShare.Read);
+                stream.CopyTo(dest);
+            }
+
+            // Write marker after all files extracted successfully
+            File.WriteAllText(marker, version);
+        }
+        catch (IOException)
+        {
+            // Another process holds the lock and is extracting. Wait for marker.
+            WaitForMarker(marker);
         }
 
-        // Write marker after all files extracted successfully
-        File.WriteAllText(marker, version);
-        return Path.Combine(dir, "PsBash.psd1");
+        return psd1Path;
+    }
+
+    /// <summary>
+    /// Wait for another process to finish extraction (up to 10 seconds).
+    /// </summary>
+    private static void WaitForMarker(string marker)
+    {
+        for (int i = 0; i < 100; i++)
+        {
+            if (File.Exists(marker))
+                return;
+            Thread.Sleep(100);
+        }
+        // If marker never appears, proceed anyway — the files may be partially extracted
+        // but pwsh will fail with a clear error rather than a mysterious lock exception.
     }
 }
