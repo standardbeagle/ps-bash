@@ -24,6 +24,7 @@ public enum BashTokenKind
     LessAnd,
     GreatAnd,
     DLessDash,
+    TLess, // <<<  (here-string)
     Bang,
     IoNumber,
     Eof,

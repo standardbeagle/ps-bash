@@ -1412,16 +1412,16 @@ public static class PsEmitter
                 result = EmitGrep(args);
                 return true;
             case "head":
-                result = EmitHead(args);
+                result = EmitPassthrough("Invoke-BashHead", args);
                 return true;
             case "tail":
-                result = EmitTail(args);
+                result = EmitPassthrough("Invoke-BashTail", args);
                 return true;
             case "wc":
-                result = EmitWc(args);
+                result = EmitPassthrough("Invoke-BashWc", args);
                 return true;
             case "sort":
-                result = EmitSort(args);
+                result = EmitPassthrough("Invoke-BashSort", args);
                 return true;
             case "uniq":
                 result = "Invoke-BashUniq";
@@ -1433,7 +1433,7 @@ public static class PsEmitter
                 result = EmitPassthrough("Invoke-BashAwk", args);
                 return true;
             case "cut":
-                result = EmitCut(args);
+                result = EmitPassthrough("Invoke-BashCut", args);
                 return true;
             case "xargs":
                 result = EmitPassthrough("Invoke-BashXargs", args);

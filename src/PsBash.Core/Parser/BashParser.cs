@@ -819,6 +819,7 @@ public sealed class BashParser
 
         var words = ImmutableArray.CreateBuilder<CompoundWord>();
         var redirects = ImmutableArray.CreateBuilder<Redirect>();
+        HereDoc? hereDoc = null;
         string? heredocDelimiter = null;
         bool heredocExpand = true;
         bool heredocStripTabs = false;
@@ -836,6 +837,22 @@ public sealed class BashParser
                 var token = Advance();
                 var parts = DecomposeWord(token.Value);
                 words.Add(new CompoundWord(parts));
+            }
+            else if (kind == BashTokenKind.TLess)
+            {
+                // Here-string: <<< word — the word becomes the body directly.
+                Advance(); // consume <<<
+                var wordToken = Advance();
+                string raw = wordToken.Value;
+                // Strip surrounding quotes from the here-string word.
+                bool expand = true;
+                if ((raw.StartsWith('\'') && raw.EndsWith('\''))
+                    || (raw.StartsWith('"') && raw.EndsWith('"')))
+                {
+                    expand = raw[0] == '"';
+                    raw = raw[1..^1];
+                }
+                hereDoc = new HereDoc(raw, expand, StripTabs: false);
             }
             else if (kind is BashTokenKind.DLess or BashTokenKind.DLessDash)
             {
@@ -869,11 +886,10 @@ public sealed class BashParser
 
         // If only assignments and no command words, it's a bare assignment.
         if (assignmentPairs.Count > 0 && words.Count == 0 && redirects.Count == 0
-            && heredocDelimiter is null)
+            && heredocDelimiter is null && hereDoc is null)
             return new Command.ShAssignment(assignmentPairs.ToImmutable());
 
-        // Collect heredoc body if a heredoc redirect was found.
-        HereDoc? hereDoc = null;
+        // Collect heredoc body if a heredoc redirect was found (not for here-strings).
         if (heredocDelimiter is not null)
             hereDoc = CollectHereDocBody(heredocDelimiter, heredocExpand, heredocStripTabs);
 

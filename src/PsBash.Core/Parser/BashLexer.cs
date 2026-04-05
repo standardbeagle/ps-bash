@@ -89,6 +89,14 @@ public static class BashLexer
             {
                 string two = input.Substring(pos, 2);
 
+                // <<< (here-string) must be checked before <<- and <<.
+                if (two == "<<" && pos + 2 < len && input[pos + 2] == '<')
+                {
+                    tokens.Add(new BashToken(BashTokenKind.TLess, "<<<", pos));
+                    pos += 3;
+                    continue;
+                }
+
                 // <<- must be checked before <<.
                 if (two == "<<" && pos + 2 < len && input[pos + 2] == '-')
                 {
