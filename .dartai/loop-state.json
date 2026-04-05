@@ -1,5 +1,5 @@
 {
-  "status": "running",
+  "status": "interrupted",
   "loop_task_id": "1ZWBT36ZF2HR",
   "dartboard": "Personal/ps-bash",
   "loop_type": "feature",
@@ -7,9 +7,9 @@
   "runner_email": "claude@anthropic.com",
   "runner_dart_id": null,
   "started_at": "2026-04-04T20:48:00Z",
-  "iterations": 20,
+  "iterations": 21,
   "spawns": 0,
-  "last_iteration_at": "2026-04-04T22:55:00Z",
+  "last_iteration_at": "2026-04-05T00:33:00Z",
   "last_subagent": null,
   "tasks": [
     {
@@ -328,6 +328,22 @@
       "tests_added": 0,
       "plan_adjustments": 0,
       "completion_summary": "Fixed two pipeline object type mismatches: Invoke-BashCat now uses PSObject.Properties check for BashText instead of direct property access (matching codebase pattern), and WhileLoopTransform now emits a three-stage pipeline that extracts BashText, splits on newlines, then runs the body",
+      "failure_reason": null,
+      "fix_task_created": false,
+      "fix_task_id": null
+    },
+    {
+      "task_id": "gijbTSIMoSW3",
+      "iteration": 21,
+      "status": "completed",
+      "started_at": "2026-04-05T00:30:00Z",
+      "completed_at": "2026-04-05T00:34:00Z",
+      "phase_completed": "phase-9",
+      "failed_phase": null,
+      "files_changed": 1,
+      "tests_added": 0,
+      "plan_adjustments": 0,
+      "completion_summary": "Fixed all 9 .NET file API path resolution issues: added GetUnresolvedProviderPathFromPSPath for split/diff/comm/join/base64/tar, added Resolve-BashGlob for ls/cp/mv/rm glob expansion, replaced .NET CWD with PS $PWD in pwd -P",
       "failure_reason": null,
       "fix_task_created": false,
       "fix_task_id": null

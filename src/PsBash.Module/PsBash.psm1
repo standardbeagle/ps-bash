@@ -86,7 +86,8 @@ function Resolve-BashGlob {
                 foreach ($e in $expanded) { $resolved.Add($e) }
             }
         } else {
-            $resolved.Add($p)
+            # Resolve relative paths against PowerShell's $PWD (not .NET CurrentDirectory)
+            $resolved.Add($ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($p))
         }
     }
     $resolved
@@ -587,7 +588,7 @@ function Invoke-BashLs {
     $reverseSort = $parsed.Flags['-r']
     $onePerLine = $parsed.Flags['-1']
 
-    $targets = if ($parsed.Operands.Count -gt 0) { $parsed.Operands } else { @('.') }
+    $targets = if ($parsed.Operands.Count -gt 0) { Resolve-BashGlob -Paths $parsed.Operands } else { @('.') }
 
     $allEntries = [System.Collections.Generic.List[PSCustomObject]]::new()
     $hadError = $false
@@ -2176,7 +2177,7 @@ function Invoke-BashCp {
     }
 
     $dest = $parsed.Operands[$parsed.Operands.Count - 1]
-    $sources = $parsed.Operands[0..($parsed.Operands.Count - 2)]
+    $sources = Resolve-BashGlob -Paths $parsed.Operands[0..($parsed.Operands.Count - 2)]
 
     $hadError = $false
 
@@ -2256,7 +2257,7 @@ function Invoke-BashMv {
     }
 
     $dest = $parsed.Operands[$parsed.Operands.Count - 1]
-    $sources = $parsed.Operands[0..($parsed.Operands.Count - 2)]
+    $sources = Resolve-BashGlob -Paths $parsed.Operands[0..($parsed.Operands.Count - 2)]
 
     $hadError = $false
 
@@ -2318,9 +2319,10 @@ function Invoke-BashRm {
         return
     }
 
+    $resolvedOperands = Resolve-BashGlob -Paths $parsed.Operands
     $hadError = $false
 
-    foreach ($target in $parsed.Operands) {
+    foreach ($target in $resolvedOperands) {
         # Safety: refuse to delete root or home directory
         $resolved = $null
         try {
@@ -5031,10 +5033,13 @@ function Invoke-BashDiff {
         return
     }
 
-    $result1 = & $readFileLines $operands[0]
+    $path1 = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($operands[0])
+    $path2 = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($operands[1])
+
+    $result1 = & $readFileLines $path1
     if ($null -eq $result1) { return }
     [string[]]$lines1 = @($result1)
-    $result2 = & $readFileLines $operands[1]
+    $result2 = & $readFileLines $path2
     if ($null -eq $result2) { return }
     [string[]]$lines2 = @($result2)
 
@@ -5275,10 +5280,13 @@ function Invoke-BashComm {
         return
     }
 
-    $result1 = & $readFileLines $operands[0]
+    $path1 = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($operands[0])
+    $path2 = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($operands[1])
+
+    $result1 = & $readFileLines $path1
     if ($null -eq $result1) { return }
     [string[]]$lines1 = @($result1)
-    $result2 = & $readFileLines $operands[1]
+    $result2 = & $readFileLines $path2
     if ($null -eq $result2) { return }
     [string[]]$lines2 = @($result2)
 
@@ -5547,10 +5555,13 @@ function Invoke-BashJoin {
         return
     }
 
-    $result1 = & $readFileLines $operands[0]
+    $path1 = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($operands[0])
+    $path2 = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($operands[1])
+
+    $result1 = & $readFileLines $path1
     if ($null -eq $result1) { return }
     [string[]]$lines1 = @($result1)
-    $result2 = & $readFileLines $operands[1]
+    $result2 = & $readFileLines $path2
     if ($null -eq $result2) { return }
     [string[]]$lines2 = @($result2)
 
@@ -7403,7 +7414,7 @@ function Invoke-BashPwd {
     }
 
     $location = if ($physical) {
-        [System.IO.Directory]::GetCurrentDirectory()
+        (Resolve-Path -Path (Get-Location).Path).ProviderPath
     } else {
         (Get-Location).Path
     }
@@ -7766,6 +7777,9 @@ function Invoke-BashSplit {
 
     if ($operands.Count -ge 1) {
         $filePath = $operands[0]
+        if ($filePath -ne '-') {
+            $filePath = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($filePath)
+        }
         if ($filePath -eq '-') {
             foreach ($item in $pipelineInput) {
                 $text = Get-BashText -InputObject $item
@@ -7920,9 +7934,9 @@ function Invoke-BashBase64 {
     $rawText = $null
 
     if ($operands.Count -gt 0) {
-        $filePath = $operands[0]
+        $filePath = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($operands[0])
         if (-not (Test-Path -LiteralPath $filePath)) {
-            Write-Error -Message "base64: ${filePath}: No such file or directory" -ErrorAction Continue
+            Write-Error -Message "base64: $($operands[0]): No such file or directory" -ErrorAction Continue
             $global:LASTEXITCODE = 1
             return
         }
@@ -8702,6 +8716,13 @@ function Invoke-BashTar {
 
         $operands.Add($arg)
         $i++
+    }
+
+    if ($archiveFile) {
+        $archiveFile = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($archiveFile)
+    }
+    if ($changeDir) {
+        $changeDir = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($changeDir)
     }
 
     if (-not $archiveFile) {
