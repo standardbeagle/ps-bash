@@ -1424,7 +1424,7 @@ public static class PsEmitter
                 result = EmitPassthrough("Invoke-BashSort", args);
                 return true;
             case "uniq":
-                result = "Invoke-BashUniq";
+                result = EmitPassthrough("Invoke-BashUniq", args);
                 return true;
             case "sed":
                 result = EmitPassthrough("Invoke-BashSed", args);
@@ -1442,7 +1442,166 @@ public static class PsEmitter
                 result = EmitPassthrough("Invoke-BashTr", args);
                 return true;
             case "tee":
-                result = EmitTee(args);
+                result = EmitPassthrough("Invoke-BashTee", args);
+                return true;
+            case "echo":
+                result = EmitPassthrough("Invoke-BashEcho", args);
+                return true;
+            case "printf":
+                result = EmitPassthrough("Invoke-BashPrintf", args);
+                return true;
+            case "cat":
+                result = EmitPassthrough("Invoke-BashCat", args);
+                return true;
+            case "ls":
+                result = EmitPassthrough("Invoke-BashLs", args);
+                return true;
+            case "find":
+                result = EmitPassthrough("Invoke-BashFind", args);
+                return true;
+            case "stat":
+                result = EmitPassthrough("Invoke-BashStat", args);
+                return true;
+            case "cp":
+                result = EmitPassthrough("Invoke-BashCp", args);
+                return true;
+            case "mv":
+                result = EmitPassthrough("Invoke-BashMv", args);
+                return true;
+            case "rm":
+                result = EmitPassthrough("Invoke-BashRm", args);
+                return true;
+            case "mkdir":
+                result = EmitPassthrough("Invoke-BashMkdir", args);
+                return true;
+            case "rmdir":
+                result = EmitPassthrough("Invoke-BashRmdir", args);
+                return true;
+            case "touch":
+                result = EmitPassthrough("Invoke-BashTouch", args);
+                return true;
+            case "ln":
+                result = EmitPassthrough("Invoke-BashLn", args);
+                return true;
+            case "ps":
+                result = EmitPassthrough("Invoke-BashPs", args);
+                return true;
+            case "rev":
+                result = EmitPassthrough("Invoke-BashRev", args);
+                return true;
+            case "nl":
+                result = EmitPassthrough("Invoke-BashNl", args);
+                return true;
+            case "diff":
+                result = EmitPassthrough("Invoke-BashDiff", args);
+                return true;
+            case "comm":
+                result = EmitPassthrough("Invoke-BashComm", args);
+                return true;
+            case "column":
+                result = EmitPassthrough("Invoke-BashColumn", args);
+                return true;
+            case "join":
+                result = EmitPassthrough("Invoke-BashJoin", args);
+                return true;
+            case "paste":
+                result = EmitPassthrough("Invoke-BashPaste", args);
+                return true;
+            case "jq":
+                result = EmitPassthrough("Invoke-BashJq", args);
+                return true;
+            case "date":
+                result = EmitPassthrough("Invoke-BashDate", args);
+                return true;
+            case "seq":
+                result = EmitPassthrough("Invoke-BashSeq", args);
+                return true;
+            case "expr":
+                result = EmitPassthrough("Invoke-BashExpr", args);
+                return true;
+            case "du":
+                result = EmitPassthrough("Invoke-BashDu", args);
+                return true;
+            case "tree":
+                result = EmitPassthrough("Invoke-BashTree", args);
+                return true;
+            case "env":
+                result = EmitPassthrough("Invoke-BashEnv", args);
+                return true;
+            case "basename":
+                result = EmitPassthrough("Invoke-BashBasename", args);
+                return true;
+            case "dirname":
+                result = EmitPassthrough("Invoke-BashDirname", args);
+                return true;
+            case "pwd":
+                result = EmitPassthrough("Invoke-BashPwd", args);
+                return true;
+            case "hostname":
+                result = EmitPassthrough("Invoke-BashHostname", args);
+                return true;
+            case "whoami":
+                result = EmitPassthrough("Invoke-BashWhoami", args);
+                return true;
+            case "fold":
+                result = EmitPassthrough("Invoke-BashFold", args);
+                return true;
+            case "expand":
+                result = EmitPassthrough("Invoke-BashExpand", args);
+                return true;
+            case "unexpand":
+                result = EmitPassthrough("Invoke-BashUnexpand", args);
+                return true;
+            case "strings":
+                result = EmitPassthrough("Invoke-BashStrings", args);
+                return true;
+            case "split":
+                result = EmitPassthrough("Invoke-BashSplit", args);
+                return true;
+            case "tac":
+                result = EmitPassthrough("Invoke-BashTac", args);
+                return true;
+            case "base64":
+                result = EmitPassthrough("Invoke-BashBase64", args);
+                return true;
+            case "md5sum":
+                result = EmitPassthrough("Invoke-BashMd5sum", args);
+                return true;
+            case "sha1sum":
+                result = EmitPassthrough("Invoke-BashSha1sum", args);
+                return true;
+            case "sha256sum":
+                result = EmitPassthrough("Invoke-BashSha256sum", args);
+                return true;
+            case "file":
+                result = EmitPassthrough("Invoke-BashFile", args);
+                return true;
+            case "rg":
+                result = EmitPassthrough("Invoke-BashRg", args);
+                return true;
+            case "gzip":
+                result = EmitPassthrough("Invoke-BashGzip", args);
+                return true;
+            case "tar":
+                result = EmitPassthrough("Invoke-BashTar", args);
+                return true;
+            case "yq":
+                result = EmitPassthrough("Invoke-BashYq", args);
+                return true;
+            case "xan":
+                result = EmitPassthrough("Invoke-BashXan", args);
+                return true;
+            case "sleep":
+                result = EmitPassthrough("Invoke-BashSleep", args);
+                return true;
+            case "time":
+                result = EmitPassthrough("Invoke-BashTime", args);
+                return true;
+            case "which":
+                result = EmitPassthrough("Invoke-BashWhich", args);
+                return true;
+            case "alias":
+                result = EmitPassthrough("Invoke-BashAlias", args);
                 return true;
             default:
                 return false;
@@ -1559,13 +1718,6 @@ public static class PsEmitter
         if (field is not null)
             sb.Append($" -Field {field}");
         return sb.ToString();
-    }
-
-    private static string EmitTee(ImmutableArray<CompoundWord> args)
-    {
-        if (args.Length > 0)
-            return $"Tee-Object {EmitWord(args[0])}";
-        return "Tee-Object";
     }
 
     private static string EmitPassthrough(string cmdlet, ImmutableArray<CompoundWord> args)

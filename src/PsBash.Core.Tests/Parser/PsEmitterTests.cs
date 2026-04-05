@@ -1909,6 +1909,46 @@ public class PsEmitterTests
         Assert.DoesNotContain("5..50..5", result);
     }
 
+    [Fact]
+    public void Transpile_PipeToRev_EmitsInvokeBashRev()
+    {
+        var result = PsEmitter.Transpile("echo hello | rev");
+
+        Assert.Equal("echo hello | Invoke-BashRev", result);
+    }
+
+    [Fact]
+    public void Transpile_PipeToJqWithFilter_EmitsInvokeBashJq()
+    {
+        var result = PsEmitter.Transpile("curl http://api | jq .name");
+
+        Assert.Equal("curl http://api | Invoke-BashJq .name", result);
+    }
+
+    [Fact]
+    public void Transpile_PipeToNlWithFlags_EmitsInvokeBashNl()
+    {
+        var result = PsEmitter.Transpile("cat file | nl -ba");
+
+        Assert.Equal("cat file | Invoke-BashNl -ba", result);
+    }
+
+    [Fact]
+    public void Transpile_PipeToColumnWithFlag_EmitsInvokeBashColumn()
+    {
+        var result = PsEmitter.Transpile("cat data.csv | column -t");
+
+        Assert.Equal("cat data.csv | Invoke-BashColumn -t", result);
+    }
+
+    [Fact]
+    public void Transpile_PipeToTee_EmitsInvokeBashTee()
+    {
+        var result = PsEmitter.Transpile("echo hello | tee output.txt");
+
+        Assert.Equal("echo hello | Invoke-BashTee output.txt", result);
+    }
+
     private static CompoundWord MakeWord(string value) =>
         new(ImmutableArray.Create<WordPart>(new WordPart.Literal(value)));
 }
