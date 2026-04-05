@@ -21,37 +21,108 @@ The emitter **MUST NOT**:
 - Assume which flags a command supports -- forward all of them and let the
   runtime sort it out.
 
-The only exception is `grep`, which needs special quoting of its pattern
-argument (see Section 3 below).
+There are no exceptions -- every mapped command uses the same `EmitPassthrough`
+path.
 
 ---
 
-## 2. Pipe-Target Mapping (`TryEmitMappedCommand`)
+## 2. Command Mapping (`TryEmitMappedCommand`)
 
-`TryEmitMappedCommand` is called for every command after the first in a
-pipeline. It inspects the command name and dispatches to the appropriate
-emitter.
+`TryEmitMappedCommand` is called in two contexts:
 
-| Bash command | PowerShell function   | Emitter method     |
-|--------------|-----------------------|--------------------|
-| `grep`       | `Invoke-BashGrep`     | `EmitPassthrough`  |
-| `head`       | `Invoke-BashHead`     | `EmitPassthrough`  |
-| `tail`       | `Invoke-BashTail`     | `EmitPassthrough`  |
-| `wc`         | `Invoke-BashWc`       | `EmitPassthrough`  |
-| `sort`       | `Invoke-BashSort`     | `EmitPassthrough`  |
-| `uniq`       | `Invoke-BashUniq`     | (no args emitted)  |
-| `sed`        | `Invoke-BashSed`      | `EmitPassthrough`  |
-| `awk`        | `Invoke-BashAwk`      | `EmitPassthrough`  |
-| `cut`        | `Invoke-BashCut`      | `EmitPassthrough`  |
-| `xargs`      | `Invoke-BashXargs`    | `EmitPassthrough`  |
-| `tr`         | `Invoke-BashTr`       | `EmitPassthrough`  |
-| `tee`        | `Tee-Object`          | `EmitTee`          |
+1. **Pipe targets** -- every command after the first in a pipeline.
+2. **Standalone commands** -- any `Command.Simple` whose command name is in the
+   mapping table and is **not** a PowerShell builtin alias (see Section 2.2).
+
+It inspects the command name and dispatches to `EmitPassthrough`. All 67 mapped
+commands use the same `EmitPassthrough` path with no exceptions.
+
+### 2.1 Mapped Commands (67 total)
+
+| Bash command | PowerShell function      |
+|--------------|--------------------------|
+| `grep`       | `Invoke-BashGrep`        |
+| `head`       | `Invoke-BashHead`        |
+| `tail`       | `Invoke-BashTail`        |
+| `wc`         | `Invoke-BashWc`          |
+| `sort`       | `Invoke-BashSort`        |
+| `uniq`       | `Invoke-BashUniq`        |
+| `sed`        | `Invoke-BashSed`         |
+| `awk`        | `Invoke-BashAwk`         |
+| `cut`        | `Invoke-BashCut`         |
+| `xargs`      | `Invoke-BashXargs`       |
+| `tr`         | `Invoke-BashTr`          |
+| `tee`        | `Invoke-BashTee`         |
+| `echo`       | `Invoke-BashEcho`        |
+| `printf`     | `Invoke-BashPrintf`      |
+| `cat`        | `Invoke-BashCat`         |
+| `ls`         | `Invoke-BashLs`          |
+| `find`       | `Invoke-BashFind`        |
+| `stat`       | `Invoke-BashStat`        |
+| `cp`         | `Invoke-BashCp`          |
+| `mv`         | `Invoke-BashMv`          |
+| `rm`         | `Invoke-BashRm`          |
+| `mkdir`      | `Invoke-BashMkdir`       |
+| `rmdir`      | `Invoke-BashRmdir`       |
+| `touch`      | `Invoke-BashTouch`       |
+| `ln`         | `Invoke-BashLn`          |
+| `ps`         | `Invoke-BashPs`          |
+| `rev`        | `Invoke-BashRev`         |
+| `nl`         | `Invoke-BashNl`          |
+| `diff`       | `Invoke-BashDiff`        |
+| `comm`       | `Invoke-BashComm`        |
+| `column`     | `Invoke-BashColumn`      |
+| `join`       | `Invoke-BashJoin`        |
+| `paste`      | `Invoke-BashPaste`       |
+| `jq`         | `Invoke-BashJq`          |
+| `date`       | `Invoke-BashDate`        |
+| `seq`        | `Invoke-BashSeq`         |
+| `expr`       | `Invoke-BashExpr`        |
+| `du`         | `Invoke-BashDu`          |
+| `tree`       | `Invoke-BashTree`        |
+| `env`        | `Invoke-BashEnv`         |
+| `basename`   | `Invoke-BashBasename`    |
+| `dirname`    | `Invoke-BashDirname`     |
+| `pwd`        | `Invoke-BashPwd`         |
+| `hostname`   | `Invoke-BashHostname`    |
+| `whoami`     | `Invoke-BashWhoami`      |
+| `fold`       | `Invoke-BashFold`        |
+| `expand`     | `Invoke-BashExpand`      |
+| `unexpand`   | `Invoke-BashUnexpand`    |
+| `strings`    | `Invoke-BashStrings`     |
+| `split`      | `Invoke-BashSplit`       |
+| `tac`        | `Invoke-BashTac`         |
+| `base64`     | `Invoke-BashBase64`      |
+| `md5sum`     | `Invoke-BashMd5sum`      |
+| `sha1sum`    | `Invoke-BashSha1sum`     |
+| `sha256sum`  | `Invoke-BashSha256sum`   |
+| `file`       | `Invoke-BashFile`        |
+| `rg`         | `Invoke-BashRg`          |
+| `gzip`       | `Invoke-BashGzip`        |
+| `tar`        | `Invoke-BashTar`         |
+| `yq`         | `Invoke-BashYq`          |
+| `xan`        | `Invoke-BashXan`         |
+| `sleep`      | `Invoke-BashSleep`       |
+| `time`       | `Invoke-BashTime`        |
+| `which`      | `Invoke-BashWhich`       |
+| `alias`      | `Invoke-BashAlias`       |
 
 Commands not in this table are emitted via the general `Emit` path (i.e., they
 are not rewritten).
 
-`uniq` maps to `Invoke-BashUniq` with no arguments. `tee` maps to the native
-PowerShell `Tee-Object` cmdlet, forwarding the first argument as the file path.
+### 2.2 Standalone Mapping
+
+When a mapped command appears as a standalone statement (not a pipe target),
+`EmitSimple` also routes it through `TryEmitMappedCommand` -- unless the command
+name is in the `PsBuiltinAliases` set. PowerShell has built-in aliases for
+common commands (`echo`, `cat`, `ls`, `cd`, `pwd`, `mkdir`, `cp`, `mv`, `rm`,
+`sort`, `diff`, `sleep`) that resolve correctly without rewriting. These are
+excluded from standalone mapping to avoid unnecessary `Invoke-Bash*` calls when
+the native alias already does the right thing.
+
+For all other mapped commands used standalone (e.g., `grep file.txt`, `awk '{print}'
+data.csv`), the emitter rewrites them to `Invoke-Bash*` calls so the runtime
+function handles flag parsing.
 
 ---
 
@@ -79,7 +150,7 @@ splitting on the comma. `xargs -I{}` emits as `Invoke-BashXargs "-I{}"`.
 
 ---
 
-## 5. `EmitSimple` -- The Main Command Emitter
+## 4. `EmitSimple` -- The Main Command Emitter
 
 `EmitSimple` handles `Command.Simple` nodes (single commands that are not
 pipelines or control flow). It processes several special forms before falling
@@ -141,7 +212,7 @@ Words are emitted in order via `EmitWord`, redirects appended via
 
 ---
 
-## 6. `EmitPipeline`
+## 5. `EmitPipeline`
 
 `EmitPipeline` processes `Command.Pipeline` nodes:
 
@@ -152,12 +223,12 @@ Words are emitted in order via `EmitWord`, redirects appended via
    used. Otherwise, the general `Emit` path is used.
 3. Pipe operators: `|` emits as ` | `, `|&` emits as ` 2>&1 | `.
 
-This means command mapping only applies to pipe targets, never to the first
-command in a pipeline.
+Note: standalone commands are also mapped via `EmitSimple` (see Section 2.2),
+so mapping applies to both pipe targets and standalone invocations.
 
 ---
 
-## 7. Other Emitters
+## 6. Other Emitters
 
 ### `EmitWord`
 
@@ -213,7 +284,7 @@ Maps bash special variables to PowerShell equivalents:
 
 ---
 
-## 8. Anti-patterns
+## 7. Anti-patterns
 
 Historical emitter implementations translated bash flags into PowerShell named
 parameters. This caused persistent bugs because the emitter's translation logic

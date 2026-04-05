@@ -16,8 +16,9 @@ Key layers:
 1. **PsEmitter** (C#) -- transpiles bash AST nodes into PowerShell expressions.
 2. **PwshWorker** (C#) -- spawns a `pwsh` process, imports the module, and evaluates
    transpiled expressions over stdin/stdout.
-3. **PsBash.psm1** (PowerShell) -- the runtime library providing ~60 `Invoke-Bash*`
-   functions, the BashObject model, escape handling, glob expansion, and tab completion.
+3. **PsBash.psm1** (PowerShell) -- the runtime library providing 66 `Invoke-Bash*`
+   functions (65 commands + 1 internal helper), the BashObject model, escape handling,
+   glob expansion, and tab completion.
 
 ## BashObject Model
 
