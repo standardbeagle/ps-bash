@@ -34,7 +34,7 @@ emitter.
 
 | Bash command | PowerShell function   | Emitter method     |
 |--------------|-----------------------|--------------------|
-| `grep`       | `Invoke-BashGrep`     | `EmitGrep`         |
+| `grep`       | `Invoke-BashGrep`     | `EmitPassthrough`  |
 | `head`       | `Invoke-BashHead`     | `EmitPassthrough`  |
 | `tail`       | `Invoke-BashTail`     | `EmitPassthrough`  |
 | `wc`         | `Invoke-BashWc`       | `EmitPassthrough`  |
@@ -55,24 +55,7 @@ PowerShell `Tee-Object` cmdlet, forwarding the first argument as the file path.
 
 ---
 
-## 3. `EmitGrep` -- The One Non-Passthrough Mapping
-
-`EmitGrep` is intentionally not a pure passthrough. It wraps the pattern
-argument in double quotes to prevent PowerShell from misinterpreting regex
-metacharacters. The logic:
-
-1. Walk args left to right.
-2. Flags starting with `-` (before the pattern is found) are expanded
-   character-by-character: `v` -> `-NotMatch`, `i` -> `-CaseInsensitive`,
-   `r` -> `-Recurse`.
-3. The first non-flag argument is the pattern, emitted as `"pattern"`.
-4. Remaining arguments are forwarded as-is (file paths, etc.).
-
-Result: `Invoke-BashGrep [-NotMatch] [-CaseInsensitive] [-Recurse] "pattern" [files...]`
-
----
-
-## 4. `EmitPassthrough`
+## 3. `EmitPassthrough`
 
 ```
 EmitPassthrough(cmdlet, args) -> "cmdlet arg1 arg2 ..."

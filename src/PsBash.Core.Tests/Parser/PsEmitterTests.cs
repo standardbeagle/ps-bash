@@ -69,7 +69,7 @@ public class PsEmitterTests
     {
         var result = PsEmitter.Transpile("ls | grep foo");
 
-        Assert.Equal("ls | Invoke-BashGrep \"foo\"", result);
+        Assert.Equal("ls | Invoke-BashGrep foo", result);
     }
 
     [Fact]
@@ -600,7 +600,7 @@ public class PsEmitterTests
     {
         var result = PsEmitter.Transpile("echo $(ls | grep foo)");
 
-        Assert.Equal("echo $(ls | Invoke-BashGrep \"foo\")", result);
+        Assert.Equal("echo $(ls | Invoke-BashGrep foo)", result);
     }
 
     [Fact]
@@ -1450,7 +1450,7 @@ public class PsEmitterTests
     public void Transpile_GrepWithProcessSub()
     {
         var result = PsEmitter.Transpile("grep -f <(cat patterns.txt) data.txt");
-        Assert.Equal("Invoke-BashGrep \"(Invoke-ProcessSub { cat patterns.txt })\" data.txt", result);
+        Assert.Equal("Invoke-BashGrep -f (Invoke-ProcessSub { cat patterns.txt }) data.txt", result);
     }
 
     // --- Array and associative array tests ---
@@ -1548,7 +1548,7 @@ public class PsEmitterTests
     {
         var result = PsEmitter.Transpile("grep -i foo <<EOF\nhello foo\nbar\nEOF");
 
-        Assert.Equal("@\"\nhello foo\nbar\n\"@ | Invoke-BashGrep -CaseInsensitive \"foo\"", result);
+        Assert.Equal("@\"\nhello foo\nbar\n\"@ | Invoke-BashGrep -i foo", result);
     }
 
     // ── Regression tests: bugs found in integration testing ─────────────────
@@ -1980,7 +1980,7 @@ public class PsEmitterTests
     {
         var result = PsEmitter.Transpile("grep error log.txt");
 
-        Assert.Equal("Invoke-BashGrep \"error\" log.txt", result);
+        Assert.Equal("Invoke-BashGrep error log.txt", result);
     }
 
     private static CompoundWord MakeWord(string value) =>

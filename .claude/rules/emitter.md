@@ -19,7 +19,7 @@ The emitter maps bash command names to `Invoke-Bash*` functions and forwards ALL
 
 ## Pipe Target Mapping
 
-All pipe targets in `TryEmitMappedCommand` should use `EmitPassthrough` except `grep` (which needs special pattern quoting).
+All pipe targets in `TryEmitMappedCommand` should use `EmitPassthrough`.
 
 When adding a new command:
 1. Add a case to `TryEmitMappedCommand` switch

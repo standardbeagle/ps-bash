@@ -1429,7 +1429,7 @@ public static class PsEmitter
         switch (name)
         {
             case "grep":
-                result = EmitGrep(args);
+                result = EmitPassthrough("Invoke-BashGrep", args);
                 return true;
             case "head":
                 result = EmitPassthrough("Invoke-BashHead", args);
@@ -1633,46 +1633,6 @@ public static class PsEmitter
         if (word.Parts.Length == 1 && word.Parts[0] is WordPart.Literal lit)
             return lit.Value;
         return null;
-    }
-
-    private static string EmitGrep(ImmutableArray<CompoundWord> args)
-    {
-        var flags = new List<string>();
-        string? pattern = null;
-        var rest = new List<string>();
-
-        foreach (var arg in args)
-        {
-            var val = GetLiteralValue(arg);
-            if (val is not null && val.StartsWith('-') && pattern is null)
-            {
-                foreach (var c in val.AsSpan(1))
-                {
-                    switch (c)
-                    {
-                        case 'v': flags.Add("-NotMatch"); break;
-                        case 'i': flags.Add("-CaseInsensitive"); break;
-                        case 'r': flags.Add("-Recurse"); break;
-                    }
-                }
-            }
-            else if (pattern is null)
-            {
-                pattern = $"\"{EmitWord(arg)}\"";
-            }
-            else
-            {
-                rest.Add(EmitWord(arg));
-            }
-        }
-
-        var parts = new List<string> { "Invoke-BashGrep" };
-        parts.AddRange(flags);
-        if (pattern is not null)
-            parts.Add(pattern);
-        parts.AddRange(rest);
-
-        return string.Join(' ', parts);
     }
 
     private static string EmitHead(ImmutableArray<CompoundWord> args)

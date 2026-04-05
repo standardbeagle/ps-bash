@@ -29,7 +29,7 @@ public class BashTranspilerTests
     public void TmpPathWithGrep_TransformsBoth()
     {
         var result = BashTranspiler.Transpile("cat /tmp/log.txt | grep error");
-        Assert.Equal("cat $env:TEMP\\log.txt | Invoke-BashGrep \"error\"", result);
+        Assert.Equal("cat $env:TEMP\\log.txt | Invoke-BashGrep error", result);
     }
 
     [Fact]
@@ -51,7 +51,7 @@ public class BashTranspilerTests
     {
         var result = BashTranspiler.Transpile("cat /tmp/data.csv | grep -v header | sort | uniq | wc -l");
         Assert.Equal(
-            "cat $env:TEMP\\data.csv | Invoke-BashGrep -NotMatch \"header\" | Invoke-BashSort | Invoke-BashUniq | Invoke-BashWc -l",
+            "cat $env:TEMP\\data.csv | Invoke-BashGrep -v header | Invoke-BashSort | Invoke-BashUniq | Invoke-BashWc -l",
             result);
     }
 
