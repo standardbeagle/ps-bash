@@ -1630,6 +1630,9 @@ public static class PsEmitter
             case "alias":
                 result = EmitPassthrough("Invoke-BashAlias", args);
                 return true;
+            case "trap":
+                result = EmitPassthrough("Invoke-BashTrap", args);
+                return true;
             default:
                 return false;
         }

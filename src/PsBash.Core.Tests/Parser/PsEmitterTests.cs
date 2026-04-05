@@ -2025,6 +2025,27 @@ public class PsEmitterTests
         Assert.Equal("echo \"$env:USER\"", result);
     }
 
+    [Fact]
+    public void Transpile_TrapCommandExit_EmitsPassthrough()
+    {
+        var result = PsEmitter.Transpile("trap 'echo cleanup' EXIT");
+        Assert.Equal("Invoke-BashTrap 'echo cleanup' EXIT", result);
+    }
+
+    [Fact]
+    public void Transpile_TrapCommandErr_EmitsPassthrough()
+    {
+        var result = PsEmitter.Transpile("trap 'echo error' ERR");
+        Assert.Equal("Invoke-BashTrap 'echo error' ERR", result);
+    }
+
+    [Fact]
+    public void Transpile_TrapEmptyInt_EmitsPassthrough()
+    {
+        var result = PsEmitter.Transpile("trap '' INT");
+        Assert.Equal("Invoke-BashTrap '' INT", result);
+    }
+
     private static CompoundWord MakeWord(string value) =>
         new(ImmutableArray.Create<WordPart>(new WordPart.Literal(value)));
 }

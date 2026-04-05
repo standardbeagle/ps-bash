@@ -115,7 +115,7 @@ FunctionsToExport = 'Invoke-ProcessSub',
                'Register-BashCompletions',
                'Test-BashHelpFlag', 'Show-BashHelp',
                'Invoke-BashSleep', 'Invoke-BashTime', 'Invoke-BashWhich',
-               'Invoke-BashAlias'
+               'Invoke-BashAlias', 'Invoke-BashTrap'
 
 # Cmdlets to export from this module, for best performance, do not use wildcards and do not delete the entry, use an empty array if there are no cmdlets to export.
 CmdletsToExport = @()

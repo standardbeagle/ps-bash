@@ -9568,6 +9568,93 @@ function Invoke-BashAlias {
     }
 }
 
+# --- trap ---
+
+$script:BashTrapHandlers = [System.Collections.Generic.Dictionary[string,object]]::new(
+    [System.StringComparer]::OrdinalIgnoreCase
+)
+
+function Invoke-BashTrap {
+    $Arguments = [string[]]$args
+    if ($Arguments -contains '--help') { return Show-BashHelp 'trap' }
+
+    if ($Arguments.Count -eq 0) {
+        foreach ($kvp in $script:BashTrapHandlers.GetEnumerator()) {
+            $obj = [PSCustomObject]@{
+                PSTypeName = 'PsBash.TrapOutput'
+                Signal     = $kvp.Key
+                Action     = $kvp.Value
+                BashText   = "trap -- '$($kvp.Value)' $($kvp.Key)"
+            }
+            Set-BashDisplayProperty $obj
+        }
+        return
+    }
+
+    if ($Arguments.Count -eq 1 -and $Arguments[0] -ceq '-l') {
+        $signals = @('EXIT', 'ERR', 'INT', 'TERM', 'HUP', 'QUIT', 'PIPE', 'ALRM', 'USR1', 'USR2')
+        $obj = [PSCustomObject]@{
+            PSTypeName = 'PsBash.TrapOutput'
+            Signal     = $null
+            Action     = $null
+            BashText   = ($signals -join ' ')
+        }
+        Set-BashDisplayProperty $obj
+        return
+    }
+
+    $action = $null
+    $signals = [System.Collections.Generic.List[string]]::new()
+    $resetMode = $false
+
+    if ($Arguments[0] -ceq '-' -or $Arguments[0] -ceq '--') {
+        $resetMode = $true
+        for ($i = 1; $i -lt $Arguments.Count; $i++) {
+            $signals.Add($Arguments[$i].ToUpper())
+        }
+    } else {
+        $action = $Arguments[0]
+        for ($i = 1; $i -lt $Arguments.Count; $i++) {
+            $signals.Add($Arguments[$i].ToUpper())
+        }
+    }
+
+    if ($signals.Count -eq 0) {
+        $signals.Add('EXIT')
+    }
+
+    foreach ($signal in $signals) {
+        if ($resetMode -or ($action -eq '')) {
+            if ($script:BashTrapHandlers.ContainsKey($signal)) {
+                if ($signal -ceq 'EXIT') {
+                    $existing = $script:BashTrapHandlers[$signal]
+                    if ($existing -is [System.Management.Automation.PSEventSubscriber]) {
+                        Unregister-Event -SubscriptionId $existing.SubscriptionId -ErrorAction SilentlyContinue
+                    }
+                }
+                $script:BashTrapHandlers.Remove($signal) | Out-Null
+            }
+            continue
+        }
+
+        switch ($signal) {
+            'EXIT' {
+                $sb = [scriptblock]::Create($action)
+                $sub = Register-EngineEvent -SourceIdentifier PowerShell.Exiting -Action $sb
+                $script:BashTrapHandlers['EXIT'] = $sub
+            }
+            'ERR' {
+                $sb = [scriptblock]::Create($action)
+                $script:BashTrapHandlers['ERR'] = $action
+                Set-Variable -Name __BashTrapERR -Value $sb -Scope Global -Force
+            }
+            default {
+                $script:BashTrapHandlers[$signal] = $action
+            }
+        }
+    }
+}
+
 # --- Help Support ---
 
 $script:BashHelpSpecs = @{
@@ -9636,6 +9723,7 @@ $script:BashHelpSpecs = @{
     'time'     = 'Run programs and summarize system resource usage.'
     'which'    = 'Locate a command.'
     'alias'    = 'Define or display aliases.'
+    'trap'     = 'Trap signals and other events.'
 }
 
 function Test-BashHelpFlag {

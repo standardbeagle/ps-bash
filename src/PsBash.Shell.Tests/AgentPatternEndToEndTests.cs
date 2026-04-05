@@ -326,6 +326,32 @@ public class AgentPatternEndToEndTests
         Assert.Contains("three", stdout);
     }
 
+    // ── Trap ─────────────────────────────────────────────────────────────────
+
+    [SkippableFact]
+    public async Task Trap_ExitHandler_DoesNotCrash()
+    {
+        Skip.If(PwshPath is null, "pwsh not available");
+
+        var (exitCode, stdout, stderr) = await RunShellAsync(
+            "-c", "trap 'echo cleanup' EXIT; echo hello");
+
+        Assert.Equal(0, exitCode);
+        Assert.Contains("hello", stdout);
+    }
+
+    [SkippableFact]
+    public async Task Trap_EmptyIntSignal_DoesNotCrash()
+    {
+        Skip.If(PwshPath is null, "pwsh not available");
+
+        var (exitCode, stdout, _) = await RunShellAsync(
+            "-c", "trap '' INT; echo ok");
+
+        Assert.Equal(0, exitCode);
+        Assert.Contains("ok", stdout);
+    }
+
     // ── Command substitution ─────────────────────────────────────────────────
 
     [SkippableFact]
