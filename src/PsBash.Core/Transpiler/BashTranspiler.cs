@@ -38,10 +38,11 @@ public static class BashTranspiler
 
     public static string Transpile(string bashCommand)
     {
-        var mode = Environment.GetEnvironmentVariable("PSBASH_PARSER");
+        var mode = Environment.GetEnvironmentVariable("PSBASH_PARSER") ?? "auto";
         bool debug = IsDebug;
 
-        // v2 parser is opt-in only — set PSBASH_PARSER=v2 or PSBASH_PARSER=auto to enable
+        // v2 parser with v1 regex fallback is the default (auto mode)
+        // Set PSBASH_PARSER=v1 to force regex-only, or v2 to force parser-only
         if (mode == "v2")
         {
             try

@@ -146,7 +146,7 @@ public class BashTranspilerTests
         {
             Environment.SetEnvironmentVariable("PSBASH_PARSER", "v2");
             var result = BashTranspiler.Transpile("export FOO=bar");
-            Assert.Equal("[void]($env:FOO = \"bar\")", result);
+            Assert.Equal("$env:FOO = \"bar\"", result);
         }
         finally
         {
@@ -193,13 +193,13 @@ public class BashTranspilerTests
     }
 
     [Fact]
-    public void ParserMode_Default_IsV1()
+    public void ParserMode_Default_IsAuto()
     {
         var prev = Environment.GetEnvironmentVariable("PSBASH_PARSER");
         try
         {
             Environment.SetEnvironmentVariable("PSBASH_PARSER", null);
-            // With no env var set, default is v1 (regex) — v2 is opt-in only
+            // Default is auto mode: v2 parser with v1 regex fallback
             var result = BashTranspiler.Transpile("echo hello");
             Assert.Equal("echo hello", result);
         }

@@ -140,7 +140,7 @@ public class PsEmitterTests
 
         var result = PsEmitter.Emit(assignment);
 
-        Assert.Equal("[void]($env:x = \"1\")", result);
+        Assert.Equal("$env:x = \"1\"", result);
     }
 
     [Fact]
@@ -148,7 +148,7 @@ public class PsEmitterTests
     {
         var result = PsEmitter.Transpile("export FOO=bar");
 
-        Assert.Equal("[void]($env:FOO = \"bar\")", result);
+        Assert.Equal("$env:FOO = \"bar\"", result);
     }
 
     [Fact]
@@ -156,7 +156,7 @@ public class PsEmitterTests
     {
         var result = PsEmitter.Transpile("export FOO=\"hello world\"");
 
-        Assert.Equal("[void]($env:FOO = \"hello world\")", result);
+        Assert.Equal("$env:FOO = \"hello world\"", result);
     }
 
     [Fact]
@@ -164,7 +164,7 @@ public class PsEmitterTests
     {
         var result = PsEmitter.Transpile("FOO=bar");
 
-        Assert.Equal("[void]($env:FOO = \"bar\")", result);
+        Assert.Equal("$env:FOO = \"bar\"", result);
     }
 
     [Fact]
@@ -188,7 +188,7 @@ public class PsEmitterTests
     {
         var result = PsEmitter.Transpile("export PATH=\"$PATH:/new\"");
 
-        Assert.Equal("[void]($env:PATH = \"$env:PATH:/new\")", result);
+        Assert.Equal("$env:PATH = \"$env:PATH:/new\"", result);
     }
 
     [Fact]
@@ -616,7 +616,7 @@ public class PsEmitterTests
     {
         var result = PsEmitter.Transpile("VAR=$(cat file)");
 
-        Assert.Equal("[void]($env:VAR = \"$(cat file)\")", result);
+        Assert.Equal("$env:VAR = \"$(cat file)\"", result);
     }
 
     [Fact]
@@ -728,7 +728,7 @@ public class PsEmitterTests
     {
         var result = PsEmitter.Transpile("if [ -f file ]; then echo yes; fi");
 
-        Assert.Equal("if (Test-Path \"file\" -PathType Leaf) { echo yes }", result);
+        Assert.Equal("if ((Test-Path \"file\" -PathType Leaf)) { echo yes }", result);
     }
 
     [Fact]
@@ -744,7 +744,7 @@ public class PsEmitterTests
     {
         var result = PsEmitter.Transpile("if [ -d dir ]; then echo yes; fi");
 
-        Assert.Equal("if (Test-Path \"dir\" -PathType Container) { echo yes }", result);
+        Assert.Equal("if ((Test-Path \"dir\" -PathType Container)) { echo yes }", result);
     }
 
     [Fact]
@@ -962,7 +962,7 @@ public class PsEmitterTests
     {
         var result = PsEmitter.Transpile("until cmd; do body; done");
 
-        Assert.Equal("while (!(cmd)) { body }", result);
+        Assert.Equal("while (-not (cmd)) { body }", result);
     }
 
     [Fact]
@@ -989,7 +989,7 @@ public class PsEmitterTests
     {
         var result = PsEmitter.Transpile("while [ -f file ]; do echo yes; done");
 
-        Assert.Equal("while (Test-Path \"file\" -PathType Leaf) { echo yes }", result);
+        Assert.Equal("while ((Test-Path \"file\" -PathType Leaf)) { echo yes }", result);
     }
 
     [Fact]
@@ -997,7 +997,7 @@ public class PsEmitterTests
     {
         var result = PsEmitter.Transpile("until [ -f file ]; do sleep 1; done");
 
-        Assert.Equal("while (!(Test-Path \"file\" -PathType Leaf)) { sleep 1 }", result);
+        Assert.Equal("while (-not ((Test-Path \"file\" -PathType Leaf))) { sleep 1 }", result);
     }
 
     [Fact]

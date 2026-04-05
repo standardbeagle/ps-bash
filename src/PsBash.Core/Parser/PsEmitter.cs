@@ -199,7 +199,7 @@ public static class PsEmitter
 
         if (whileCmd.IsUntil)
         {
-            sb.Append("!(");
+            sb.Append("-not (");
             sb.Append(condText);
             sb.Append(')');
         }
@@ -424,7 +424,10 @@ public static class PsEmitter
     private static string EmitCondition(Command cond)
     {
         if (cond is Command.BoolExpr boolExpr)
-            return EmitBoolExprInner(boolExpr);
+            return "(" + EmitBoolExprInner(boolExpr) + ")";
+
+        if (cond is Command.Subshell subshell)
+            return Emit(subshell.Body);
 
         return Emit(cond);
     }
@@ -590,11 +593,10 @@ public static class PsEmitter
             }
             else
             {
-                sb.Append("[void]($env:");
+                sb.Append("$env:");
                 sb.Append(pair.Name);
                 sb.Append(" = ");
                 sb.Append(EmitAssignmentValue(pair.Value));
-                sb.Append(')');
             }
         }
         return sb.ToString();
@@ -844,12 +846,23 @@ public static class PsEmitter
             }
 
             var cmd = andOr.Commands[i];
-            // Wrap BoolExpr in [void](...) when used in && / || chains
-            // so PowerShell doesn't output the boolean result.
+            // Wrap BoolExpr and ShAssignment in [void](...) when used in && / || chains
+            // so PowerShell doesn't output the boolean result or assignment value.
             if (cmd is Command.BoolExpr)
+            {
                 sb.Append("[void]");
-
-            sb.Append(Emit(cmd));
+                sb.Append(Emit(cmd));
+            }
+            else if (cmd is Command.ShAssignment)
+            {
+                sb.Append("[void](");
+                sb.Append(Emit(cmd));
+                sb.Append(')');
+            }
+            else
+            {
+                sb.Append(Emit(cmd));
+            }
         }
 
         return sb.ToString();
