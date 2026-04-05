@@ -15,6 +15,7 @@ public static class PsEmitter
     public static string Emit(Command cmd) => cmd switch
     {
         Command.If ifCmd => EmitIf(ifCmd),
+        Command.BoolExpr boolExpr => EmitBoolExpr(boolExpr),
         Command.Simple simple => EmitSimple(simple),
         Command.Pipeline pipeline => EmitPipeline(pipeline),
         Command.AndOrList andOr => EmitAndOrList(andOr),
@@ -65,62 +66,159 @@ public static class PsEmitter
     }
 
     /// <summary>
-    /// Emit a condition expression. Translates <c>[ ... ]</c> test constructs
-    /// into PowerShell equivalents; plain commands are emitted as-is.
+    /// Emit a condition expression for use inside <c>if</c>/<c>elif</c>.
+    /// BoolExpr nodes are unwrapped (no outer parens); plain commands are emitted as-is.
     /// </summary>
     private static string EmitCondition(Command cond)
     {
-        if (cond is Command.Simple simple && !simple.Words.IsEmpty)
-        {
-            var firstName = GetLiteralValue(simple.Words[0]);
-            if (firstName == "[")
-                return EmitTestConstruct(simple.Words);
-        }
+        if (cond is Command.BoolExpr boolExpr)
+            return EmitBoolExprInner(boolExpr);
 
         return Emit(cond);
     }
 
-    private static string EmitTestConstruct(ImmutableArray<CompoundWord> words)
+    private static string EmitBoolExpr(Command.BoolExpr expr)
     {
-        // Strip leading "[" and trailing "]".
-        var inner = words.RemoveAt(0);
-        if (!inner.IsEmpty && GetLiteralValue(inner[^1]) == "]")
-            inner = inner.RemoveAt(inner.Length - 1);
+        return "(" + EmitBoolExprInner(expr) + ")";
+    }
 
-        if (inner.Length >= 2)
+    private static string EmitBoolExprInner(Command.BoolExpr expr)
+    {
+        if (expr.Extended)
+            return EmitExtendedTest(expr.Inner);
+        return TranslateTestCondition(expr.Inner);
+    }
+
+    private static string EmitExtendedTest(ImmutableArray<CompoundWord> inner)
+    {
+        // Split on logical operators (&& / ||) into sub-expressions.
+        var segments = SplitLogical(inner);
+
+        if (segments.Count == 1)
+            return TranslateTestCondition(segments[0].Words);
+
+        var sb = new StringBuilder();
+        for (int i = 0; i < segments.Count; i++)
         {
-            var flag = GetLiteralValue(inner[0]);
+            if (i > 0)
+            {
+                sb.Append(' ');
+                sb.Append(segments[i - 1].TrailingOp);
+                sb.Append(' ');
+            }
+            sb.Append(TranslateTestCondition(segments[i].Words));
+        }
+        return sb.ToString();
+    }
+
+    private static string TranslateTestCondition(ImmutableArray<CompoundWord> words)
+    {
+        if (words.Length >= 2)
+        {
+            var flag = GetLiteralValue(words[0]);
             if (flag == "-f")
-            {
-                var path = EmitWord(inner[1]);
-                return $"Test-Path \"{path}\" -PathType Leaf";
-            }
+                return $"Test-Path \"{EmitWord(words[1])}\" -PathType Leaf";
             if (flag == "-d")
-            {
-                var path = EmitWord(inner[1]);
-                return $"Test-Path \"{path}\" -PathType Container";
-            }
+                return $"Test-Path \"{EmitWord(words[1])}\" -PathType Container";
             if (flag == "-z")
-            {
-                var val = EmitWord(inner[1]);
-                return $"[string]::IsNullOrEmpty({val})";
-            }
+                return $"[string]::IsNullOrEmpty({EmitTestArg(words[1])})";
             if (flag == "-n")
+                return $"-not [string]::IsNullOrEmpty({EmitTestArg(words[1])})";
+        }
+
+        if (words.Length == 3)
+        {
+            var lhs = EmitWord(words[0]);
+            var op = GetLiteralValue(words[1]);
+            var rhs = EmitWord(words[2]);
+
+            if (op == "=~")
+                return $"{lhs} -match '{rhs}'";
+
+            if (op is "==" or "=")
             {
-                var val = EmitWord(inner[1]);
-                return $"-not [string]::IsNullOrEmpty({val})";
+                var unquoted = StripQuotes(rhs);
+                if (HasGlobChars(unquoted))
+                    return $"{lhs} -like '{unquoted}'";
+                return $"{lhs} -eq {rhs}";
             }
+
+            var psOp = op switch
+            {
+                "!=" => "-ne",
+                "<" => "-lt",
+                ">" => "-gt",
+                _ => op,
+            };
+            return $"{lhs} {psOp} {rhs}";
         }
 
         // Fallback: emit the inner words as a plain expression.
         var sb = new StringBuilder();
-        for (int i = 0; i < inner.Length; i++)
+        for (int i = 0; i < words.Length; i++)
         {
             if (i > 0) sb.Append(' ');
-            sb.Append(EmitWord(inner[i]));
+            sb.Append(EmitWord(words[i]));
         }
         return sb.ToString();
     }
+
+    /// <summary>
+    /// Emit a word used as a test expression argument, unwrapping outer double quotes
+    /// so that variable references appear bare (e.g. <c>$HOME</c> not <c>"$HOME"</c>).
+    /// </summary>
+    private static string EmitTestArg(CompoundWord word)
+    {
+        if (word.Parts.Length == 1 && word.Parts[0] is WordPart.DoubleQuoted dq)
+        {
+            var sb = new StringBuilder();
+            foreach (var part in dq.Parts)
+                sb.Append(EmitWordPart(part));
+            return sb.ToString();
+        }
+        return EmitWord(word);
+    }
+
+    private static bool HasGlobChars(string value) =>
+        value.Contains('*') || value.Contains('?') || value.Contains('[');
+
+    private static string StripQuotes(string value)
+    {
+        if (value.Length >= 2 && value[0] == '"' && value[^1] == '"')
+            return value[1..^1];
+        if (value.Length >= 2 && value[0] == '\'' && value[^1] == '\'')
+            return value[1..^1];
+        return value;
+    }
+
+    private readonly record struct LogicalSegment(
+        ImmutableArray<CompoundWord> Words,
+        string? TrailingOp);
+
+    private static List<LogicalSegment> SplitLogical(ImmutableArray<CompoundWord> inner)
+    {
+        var segments = new List<LogicalSegment>();
+        var current = ImmutableArray.CreateBuilder<CompoundWord>();
+
+        foreach (var word in inner)
+        {
+            var lit = GetLiteralValue(word);
+            if (lit is "&&" or "||")
+            {
+                var psOp = lit == "&&" ? "-and" : "-or";
+                segments.Add(new LogicalSegment(current.ToImmutable(), psOp));
+                current.Clear();
+            }
+            else
+            {
+                current.Add(word);
+            }
+        }
+
+        segments.Add(new LogicalSegment(current.ToImmutable(), null));
+        return segments;
+    }
+
 
     private static string EmitShAssignment(Command.ShAssignment cmd)
     {
@@ -142,12 +240,6 @@ public static class PsEmitter
 
     private static string EmitSimple(Command.Simple cmd)
     {
-        // Bail on standalone bash test constructs ([ ... ] and [[ ... ]]) so the
-        // caller can fall back to the regex pipeline which handles them.
-        // Test constructs inside if-conditions are handled by EmitCondition.
-        if (!cmd.Words.IsEmpty && GetLiteralValue(cmd.Words[0]) is "[" or "[[")
-            throw new NotSupportedException("Standalone test constructs are not yet supported by the parser.");
-
         // Input redirects (< file) become "Get-Content file | cmd".
         var inputRedirect = cmd.Redirects.FirstOrDefault(r => r.Op == "<");
         if (inputRedirect is not null)
@@ -382,7 +474,13 @@ public static class PsEmitter
                 sb.Append(' ');
             }
 
-            sb.Append(Emit(andOr.Commands[i]));
+            var cmd = andOr.Commands[i];
+            // Wrap BoolExpr in [void](...) when used in && / || chains
+            // so PowerShell doesn't output the boolean result.
+            if (cmd is Command.BoolExpr)
+                sb.Append("[void]");
+
+            sb.Append(Emit(cmd));
         }
 
         return sb.ToString();

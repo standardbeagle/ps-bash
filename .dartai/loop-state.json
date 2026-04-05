@@ -8,9 +8,9 @@
   "runner_dart_id": null,
   "started_at": "2026-04-04T22:43:00Z",
   "resumed_at": "2026-04-05T01:20:00Z",
-  "iterations": 15,
+  "iterations": 16,
   "spawns": 0,
-  "last_iteration_at": "2026-04-05T01:30:00Z",
+  "last_iteration_at": "2026-04-05T02:15:00Z",
   "last_subagent": "task-executor",
   "tasks": [
     {
@@ -265,6 +265,22 @@
       "tests_added": 13,
       "plan_adjustments": 1,
       "completion_summary": "Added if/elif/else/fi parsing and emission to parser-v2. If/IfArm AST nodes, recursive descent parsing with compound body support, condition translation for [ -f ] and [ -d ] test constructs to Test-Path, and PowerShell if/elseif/else emission. Updated IfElseTransform integration tests to match parser-v2 output. 13 new tests, all 240 parser tests pass.",
+      "failure_reason": null,
+      "fix_task_created": false,
+      "fix_task_id": null
+    },
+    {
+      "task_id": "xITMjSMfj2so",
+      "iteration": 16,
+      "status": "completed",
+      "started_at": "2026-04-05T01:55:00Z",
+      "completed_at": "2026-04-05T02:15:00Z",
+      "phase_completed": "phase-9",
+      "failed_phase": null,
+      "files_changed": 5,
+      "tests_added": 21,
+      "plan_adjustments": 1,
+      "completion_summary": "Added BoolExpr AST node and full parsing/emission of [ ] and [[ ]] test expressions. Parser handles <, >, ! operator tokens and && / || logical operators inside [[ ]]. Emitter translates -f/-d to Test-Path, -z/-n to IsNullOrEmpty, ==/>/<!/=~/glob to PowerShell operators, and wraps standalone tests in [void] for && / || chains. Removed the bailout in EmitSimple. 562 tests pass.",
       "failure_reason": null,
       "fix_task_created": false,
       "fix_task_id": null

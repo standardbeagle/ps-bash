@@ -53,6 +53,14 @@ public abstract record Command : BashNode
     public sealed record If(
         ImmutableArray<IfArm> Arms,
         Command? ElseBody) : Command;
+
+    /// <summary>
+    /// A test expression: <c>[ ... ]</c> or <c>[[ ... ]]</c>.
+    /// The inner words are stored without the surrounding brackets.
+    /// </summary>
+    public sealed record BoolExpr(
+        ImmutableArray<CompoundWord> Inner,
+        bool Extended) : Command;
 }
 
 /// <summary>

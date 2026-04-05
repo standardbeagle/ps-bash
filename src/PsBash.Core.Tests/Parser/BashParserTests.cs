@@ -816,15 +816,18 @@ public class BashParserTests
     }
 
     [Fact]
-    public void Parse_IfTestConstruct_ParsesTestAsCondition()
+    public void Parse_IfTestConstruct_ParsesTestAsBoolExpr()
     {
         var result = Parse("if [ -f file ]; then echo yes; fi");
 
         var ifCmd = Assert.IsType<Command.If>(result);
         Assert.Single(ifCmd.Arms);
 
-        var cond = Assert.IsType<Command.Simple>(ifCmd.Arms[0].Cond);
-        Assert.Equal(["[", "-f", "file", "]"], GetWordValues(cond));
+        var cond = Assert.IsType<Command.BoolExpr>(ifCmd.Arms[0].Cond);
+        Assert.False(cond.Extended);
+        Assert.Equal(2, cond.Inner.Length);
+        Assert.Equal("-f", Assert.IsType<WordPart.Literal>(Assert.Single(cond.Inner[0].Parts)).Value);
+        Assert.Equal("file", Assert.IsType<WordPart.Literal>(Assert.Single(cond.Inner[1].Parts)).Value);
     }
 
     [Fact]
@@ -852,5 +855,58 @@ public class BashParserTests
         var ifCmd = Assert.IsType<Command.If>(result);
         var body = Assert.IsType<Command.CommandList>(ifCmd.Arms[0].Body);
         Assert.Equal(2, body.Commands.Length);
+    }
+
+    [Fact]
+    public void Parse_SingleBracketTest_ReturnsBoolExpr()
+    {
+        var result = Parse("[ -f file ]");
+
+        var boolExpr = Assert.IsType<Command.BoolExpr>(result);
+        Assert.False(boolExpr.Extended);
+        Assert.Equal(2, boolExpr.Inner.Length);
+        Assert.Equal("-f", Assert.IsType<WordPart.Literal>(Assert.Single(boolExpr.Inner[0].Parts)).Value);
+        Assert.Equal("file", Assert.IsType<WordPart.Literal>(Assert.Single(boolExpr.Inner[1].Parts)).Value);
+    }
+
+    [Fact]
+    public void Parse_DoubleBracketTest_ReturnsBoolExprExtended()
+    {
+        var result = Parse("[[ -f file ]]");
+
+        var boolExpr = Assert.IsType<Command.BoolExpr>(result);
+        Assert.True(boolExpr.Extended);
+        Assert.Equal(2, boolExpr.Inner.Length);
+    }
+
+    [Fact]
+    public void Parse_DoubleBracketWithLogicalAnd_CapturesAndOp()
+    {
+        var result = Parse("[[ -f file && -d dir ]]");
+
+        var boolExpr = Assert.IsType<Command.BoolExpr>(result);
+        Assert.True(boolExpr.Extended);
+        Assert.Equal(5, boolExpr.Inner.Length);
+        Assert.Equal("&&", Assert.IsType<WordPart.Literal>(Assert.Single(boolExpr.Inner[2].Parts)).Value);
+    }
+
+    [Fact]
+    public void Parse_DoubleBracketComparison_CapturesThreeWords()
+    {
+        var result = Parse("[[ $a == \"foo\" ]]");
+
+        var boolExpr = Assert.IsType<Command.BoolExpr>(result);
+        Assert.True(boolExpr.Extended);
+        Assert.Equal(3, boolExpr.Inner.Length);
+    }
+
+    [Fact]
+    public void Parse_SingleBracketInAndOr_ReturnsBoolExprInAndOrList()
+    {
+        var result = Parse("[ -f file ] && echo yes");
+
+        var andOr = Assert.IsType<Command.AndOrList>(result);
+        Assert.IsType<Command.BoolExpr>(andOr.Commands[0]);
+        Assert.IsType<Command.Simple>(andOr.Commands[1]);
     }
 }

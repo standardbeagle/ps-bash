@@ -132,12 +132,80 @@ public sealed class BashParser
         if (Peek().Kind == BashTokenKind.Word && Peek().Value == "if")
             return ParseIf();
 
+        if (Peek().Kind == BashTokenKind.Word && Peek().Value is "[" or "[[")
+            return ParseTestExpr();
+
         // Bail for compound constructs not yet implemented — triggers regex fallback in auto mode.
         if (Peek().Kind == BashTokenKind.Word && IsUnimplementedCompoundKeyword(Peek().Value))
             throw new NotSupportedException($"Compound construct '{Peek().Value}' not yet implemented in parser-v2.");
 
         return ParseSimpleCommand();
     }
+
+    private Command.BoolExpr ParseTestExpr()
+    {
+        var open = Advance(); // consume "[" or "[["
+        bool extended = open.Value == "[[";
+        string close = extended ? "]]" : "]";
+
+        var inner = ImmutableArray.CreateBuilder<CompoundWord>();
+        while (Peek().Kind != BashTokenKind.Eof)
+        {
+            if (Peek().Kind == BashTokenKind.Word && Peek().Value == close)
+            {
+                Advance(); // consume closing bracket
+                break;
+            }
+
+            // Inside [[ ]], && and || are logical operators, not shell operators.
+            // The lexer produces them as AndIf/OrIf tokens, so consume them as words.
+            if (extended && Peek().Kind is BashTokenKind.AndIf or BashTokenKind.OrIf)
+            {
+                var opToken = Advance();
+                inner.Add(new CompoundWord(ImmutableArray.Create<WordPart>(
+                    new WordPart.Literal(opToken.Value))));
+                continue;
+            }
+
+            // Inside test expressions, operator tokens like <, >, ! are comparison
+            // operators, not shell redirects/negation. Consume them as literal words.
+            if (IsTestOperatorToken(Peek().Kind))
+            {
+                var opToken = Advance();
+                // Handle != (Bang followed by word starting with =)
+                if (opToken.Kind == BashTokenKind.Bang
+                    && Peek().Kind == BashTokenKind.Word
+                    && Peek().Value.StartsWith('='))
+                {
+                    var eqToken = Advance();
+                    inner.Add(new CompoundWord(ImmutableArray.Create<WordPart>(
+                        new WordPart.Literal("!" + eqToken.Value))));
+                }
+                else
+                {
+                    inner.Add(new CompoundWord(ImmutableArray.Create<WordPart>(
+                        new WordPart.Literal(opToken.Value))));
+                }
+                continue;
+            }
+
+            if (Peek().Kind == BashTokenKind.Word)
+            {
+                var token = Advance();
+                var parts = DecomposeWord(token.Value);
+                inner.Add(new CompoundWord(parts));
+            }
+            else
+            {
+                break;
+            }
+        }
+
+        return new Command.BoolExpr(inner.ToImmutable(), extended);
+    }
+
+    private static bool IsTestOperatorToken(BashTokenKind kind) =>
+        kind is BashTokenKind.Less or BashTokenKind.Great or BashTokenKind.Bang;
 
     private static bool IsUnimplementedCompoundKeyword(string word) =>
         word is "for" or "while" or "until" or "case" or "function" or "select";

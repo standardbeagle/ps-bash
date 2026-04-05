@@ -755,6 +755,134 @@ public class PsEmitterTests
         Assert.Equal("if (cmd) { a; b }", result);
     }
 
+    [Fact]
+    public void Transpile_StandaloneFileTest_EmitsTestPath()
+    {
+        var result = PsEmitter.Transpile("[ -f file ]");
+
+        Assert.Equal("(Test-Path \"file\" -PathType Leaf)", result);
+    }
+
+    [Fact]
+    public void Transpile_StandaloneDirTest_EmitsTestPathContainer()
+    {
+        var result = PsEmitter.Transpile("[ -d dir ]");
+
+        Assert.Equal("(Test-Path \"dir\" -PathType Container)", result);
+    }
+
+    [Fact]
+    public void Transpile_StandaloneFileTestWithAnd_EmitsVoidWrapped()
+    {
+        var result = PsEmitter.Transpile("[ -f file ] && echo yes");
+
+        Assert.Equal("[void](Test-Path \"file\" -PathType Leaf) && echo yes", result);
+    }
+
+    [Fact]
+    public void Transpile_StandaloneZeroLengthTest_EmitsIsNullOrEmpty()
+    {
+        var result = PsEmitter.Transpile("[ -z \"$VAR\" ]");
+
+        Assert.Equal("([string]::IsNullOrEmpty($env:VAR))", result);
+    }
+
+    [Fact]
+    public void Transpile_StandaloneNonEmptyTest_EmitsNegatedIsNullOrEmpty()
+    {
+        var result = PsEmitter.Transpile("[ -n \"$VAR\" ]");
+
+        Assert.Equal("(-not [string]::IsNullOrEmpty($env:VAR))", result);
+    }
+
+    [Fact]
+    public void Transpile_ExtendedFileTest_EmitsTestPath()
+    {
+        var result = PsEmitter.Transpile("[[ -f file ]]");
+
+        Assert.Equal("(Test-Path \"file\" -PathType Leaf)", result);
+    }
+
+    [Fact]
+    public void Transpile_ExtendedStringEquals_EmitsEq()
+    {
+        var result = PsEmitter.Transpile("[[ $var == \"foo\" ]]");
+
+        Assert.Equal("($env:var -eq \"foo\")", result);
+    }
+
+    [Fact]
+    public void Transpile_ExtendedIntComparison_EmitsOp()
+    {
+        var result = PsEmitter.Transpile("[[ $a -eq $b ]]");
+
+        Assert.Equal("($env:a -eq $env:b)", result);
+    }
+
+    [Fact]
+    public void Transpile_ExtendedRegex_EmitsMatch()
+    {
+        var result = PsEmitter.Transpile("[[ $a =~ ^[0-9]+$ ]]");
+
+        Assert.Equal("($env:a -match '^[0-9]+$')", result);
+    }
+
+    [Fact]
+    public void Transpile_ExtendedGlob_EmitsLike()
+    {
+        var result = PsEmitter.Transpile("[[ $a == foo* ]]");
+
+        Assert.Equal("($env:a -like 'foo*')", result);
+    }
+
+    [Fact]
+    public void Transpile_ExtendedLogicalAnd_EmitsAndOp()
+    {
+        var result = PsEmitter.Transpile("[[ -f file && -d dir ]]");
+
+        Assert.Equal("(Test-Path \"file\" -PathType Leaf -and Test-Path \"dir\" -PathType Container)", result);
+    }
+
+    [Fact]
+    public void Transpile_ExtendedLogicalOr_EmitsOrOp()
+    {
+        var result = PsEmitter.Transpile("[[ $a == \"x\" || $b == \"y\" ]]");
+
+        Assert.Equal("($env:a -eq \"x\" -or $env:b -eq \"y\")", result);
+    }
+
+    [Fact]
+    public void Transpile_ExtendedNotEquals_EmitsNe()
+    {
+        var result = PsEmitter.Transpile("[[ $a != \"bar\" ]]");
+
+        Assert.Equal("($env:a -ne \"bar\")", result);
+    }
+
+    [Fact]
+    public void Transpile_ExtendedLessThan_EmitsLt()
+    {
+        var result = PsEmitter.Transpile("[[ $a < $b ]]");
+
+        Assert.Equal("($env:a -lt $env:b)", result);
+    }
+
+    [Fact]
+    public void Transpile_ExtendedGreaterThan_EmitsGt()
+    {
+        var result = PsEmitter.Transpile("[[ $a > $b ]]");
+
+        Assert.Equal("($env:a -gt $env:b)", result);
+    }
+
+    [Fact]
+    public void Transpile_StandaloneFileTestWithOr_EmitsVoidWrapped()
+    {
+        var result = PsEmitter.Transpile("[ -f file ] || echo no");
+
+        Assert.Equal("[void](Test-Path \"file\" -PathType Leaf) || echo no", result);
+    }
+
     private static CompoundWord MakeWord(string value) =>
         new(ImmutableArray.Create<WordPart>(new WordPart.Literal(value)));
 }
