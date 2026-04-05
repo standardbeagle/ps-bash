@@ -1551,6 +1551,154 @@ public class PsEmitterTests
         Assert.Equal("@\"\nhello foo\nbar\n\"@ | grep -i foo", result);
     }
 
+    // ── Regression tests: bugs found in integration testing ─────────────────
+
+    // Bug: BraceExpansionTransform/parser expanded awk '{print $1, $3}' as
+    // comma brace expansion because it contained a comma inside braces.
+    [Fact]
+    public void Transpile_AwkWithCommaInsideBraces_NotBraceExpanded()
+    {
+        // awk standalone: passes through as-is; braces+comma must NOT be brace-expanded
+        var result = PsEmitter.Transpile("awk '{print $1, $3}' file.txt");
+        Assert.Equal("awk '{print $1, $3}' file.txt", result);
+        Assert.DoesNotContain("@(", result); // no brace expansion array
+    }
+
+    [Fact]
+    public void Transpile_AwkInPipelineWithFlagAndCommaExpression_NotBraceExpanded()
+    {
+        // awk in a pipeline gets Invoke-BashAwk; braces+comma still must not be expanded
+        var result = PsEmitter.Transpile("echo \"a,b,c\" | awk -F, '{print $1, $3}'");
+        Assert.Equal("echo \"a,b,c\" | Invoke-BashAwk \"-F,\" '{print $1, $3}'", result);
+        Assert.DoesNotContain("@(", result);
+    }
+
+    [Fact]
+    public void Transpile_AwkWithMultipleFields_NotBraceExpanded()
+    {
+        // standalone awk — braces with multiple commas must not be expanded
+        var result = PsEmitter.Transpile("awk '{print $1, $2, $3}'");
+        Assert.Equal("awk '{print $1, $2, $3}'", result);
+        Assert.DoesNotContain("@(", result);
+    }
+
+    // Bug: parameter expansion inside double quotes wasn't subexpression-wrapped
+    [Fact]
+    public void Transpile_VarExpansionInsideDoubleQuotes_EmitsDollarEnvInString()
+    {
+        var result = PsEmitter.Transpile("echo \"hello $NAME\"");
+        Assert.Equal("echo \"hello $env:NAME\"", result);
+    }
+
+    [Fact]
+    public void Transpile_BracedVarInsideDoubleQuotes_EmitsDollarEnv()
+    {
+        var result = PsEmitter.Transpile("echo \"${FOO} world\"");
+        Assert.Equal("echo \"$env:FOO world\"", result);
+    }
+
+    // Bug: [void]() wrapping needed when assignment is chained with && or ||
+    [Fact]
+    public void Transpile_ExportWithAndChain_WrapsInVoid()
+    {
+        var result = PsEmitter.Transpile("export FOO=bar && echo $FOO");
+        Assert.Equal("[void]($env:FOO = \"bar\") && echo $env:FOO", result);
+    }
+
+    [Fact]
+    public void Transpile_AssignmentWithOrChain_WrapsInVoid()
+    {
+        var result = PsEmitter.Transpile("x=1 || echo failed");
+        Assert.Contains("[void]", result);
+        Assert.DoesNotContain("True\n", result);
+    }
+
+    // Bug: != in [ ] test — lexer splits ! and =word as separate tokens
+    [Fact]
+    public void Transpile_SingleBracketNotEqual_EmitsCorrectly()
+    {
+        var result = PsEmitter.Transpile("[ \"$A\" != \"$B\" ] && echo diff");
+        Assert.Contains("-ne", result);
+        Assert.Contains("$env:A", result);
+        Assert.Contains("$env:B", result);
+    }
+
+    [Fact]
+    public void Transpile_ExtendedTestNotEqual_EmitsCorrectly()
+    {
+        var result = PsEmitter.Transpile("[[ $A != $B ]]");
+        Assert.Contains("$env:A", result);
+        Assert.Contains("$env:B", result);
+        Assert.Contains("-ne", result);
+    }
+
+    // IoNumber reclassification edge cases
+    [Fact]
+    public void Transpile_StderrToStdout_2And1Passthrough()
+    {
+        var result = PsEmitter.Transpile("cmd 2>&1");
+        Assert.Equal("cmd 2>&1", result);
+    }
+
+    [Fact]
+    public void Transpile_StdoutAndStderrToDevNull_EmitsBothNulls()
+    {
+        var result = PsEmitter.Transpile("cmd > /dev/null 2>&1");
+        Assert.Equal("cmd >$null 2>&1", result);
+    }
+
+    [Fact]
+    public void Transpile_StderrToFile_EmitsFileRedirect()
+    {
+        var result = PsEmitter.Transpile("cmd 2> err.log");
+        Assert.Equal("cmd 2>err.log", result);
+    }
+
+    // Backslash escapes inside double quotes
+    [Fact]
+    public void Transpile_BackslashNInDoubleQuotes_PreservedAsLiteral()
+    {
+        // \n inside double quotes stays as-is in word output
+        var result = PsEmitter.Transpile("echo \"line1\\nline2\"");
+        Assert.Contains("line1", result);
+        Assert.Contains("line2", result);
+    }
+
+    [Fact]
+    public void Transpile_BackslashDollarInDoubleQuotes_LiteralDollar()
+    {
+        // \$ escapes the dollar — should not become $env:
+        var result = PsEmitter.Transpile("echo \"cost \\$5\"");
+        Assert.Contains("$5", result);
+        Assert.DoesNotContain("$env:5", result);
+    }
+
+    [Fact]
+    public void Transpile_BackslashQuoteInDoubleQuotes_LiteralQuote()
+    {
+        var result = PsEmitter.Transpile("echo \"say \\\"hi\\\"\"");
+        Assert.Contains("hi", result);
+    }
+
+    // Brace expansion: leading-zero edge cases (real bug from IsPlainInteger)
+    [Fact]
+    public void Transpile_BraceRangeLeadingZero_EmitsStringArray()
+    {
+        var result = PsEmitter.Transpile("echo {01..05}");
+        // Should emit padded strings, NOT 1..5 range operator
+        Assert.Contains("'01'", result);
+        Assert.Contains("'05'", result);
+        Assert.DoesNotContain("1..5", result);
+    }
+
+    [Fact]
+    public void Transpile_BraceRangeNoLeadingZero_EmitsRangeOperator()
+    {
+        var result = PsEmitter.Transpile("echo {1..5}");
+        Assert.Contains("1..5", result);
+        Assert.DoesNotContain("'01'", result);
+    }
+
     private static CompoundWord MakeWord(string value) =>
         new(ImmutableArray.Create<WordPart>(new WordPart.Literal(value)));
 }
