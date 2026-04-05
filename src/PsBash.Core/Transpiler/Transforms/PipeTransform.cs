@@ -8,17 +8,17 @@ public sealed partial class PipeTransform : ITransform
     {
         var input = context.Result;
         var result = PipeGrep().Replace(input, PipeGrepReplacer);
-        result = PipeHead().Replace(result, "| Select-Object -First ${n}");
-        result = PipeTail().Replace(result, "| Select-Object -Last ${n}");
-        result = PipeWcL().Replace(result, "| Measure-Object -Line | Select-Object -Expand Lines");
+        result = PipeHead().Replace(result, "| Invoke-BashHead -n ${n}");
+        result = PipeTail().Replace(result, "| Invoke-BashTail -n ${n}");
+        result = PipeWcL().Replace(result, "| Invoke-BashWc -l");
         result = PipeSort().Replace(result, PipeSortReplacer);
-        result = PipeUniq().Replace(result, "| Get-Unique");
-        result = PipeSed().Replace(result, "| Invoke-Sed ${expr}");
-        result = PipeAwk().Replace(result, "| Invoke-Awk ${expr}");
+        result = PipeUniq().Replace(result, "| Invoke-BashUniq");
+        result = PipeSed().Replace(result, "| Invoke-BashSed ${expr}");
+        result = PipeAwk().Replace(result, "| Invoke-BashAwk ${expr}");
         result = PipeCut().Replace(result, PipeCutReplacer);
-        result = PipeXargs().Replace(result, "| Invoke-Xargs");
-        result = PipeTr().Replace(result, "| Invoke-Tr ${args}");
-        result = PipeTee().Replace(result, "| Tee-Object ${file}");
+        result = PipeXargs().Replace(result, "| Invoke-BashXargs");
+        result = PipeTr().Replace(result, "| Invoke-BashTr ${args}");
+        result = PipeTee().Replace(result, "| Invoke-BashTee ${file}");
         if (!ReferenceEquals(result, input))
         {
             context.Result = result;
@@ -32,7 +32,7 @@ public sealed partial class PipeTransform : ITransform
         var pattern = m.Groups["pat"].Value;
         var rest = m.Groups["rest"].Value.Trim();
 
-        var parts = new List<string> { "| Invoke-Grep" };
+        var parts = new List<string> { "| Invoke-BashGrep" };
 
         if (flags.Contains('v'))
             parts.Add("-NotMatch");
@@ -51,11 +51,11 @@ public sealed partial class PipeTransform : ITransform
 
     private static string PipeSortReplacer(Match m) =>
         m.Groups["rev"].Value == "-r"
-            ? "| Sort-Object -Descending"
-            : "| Sort-Object";
+            ? "| Invoke-BashSort -r"
+            : "| Invoke-BashSort";
 
     private static string PipeCutReplacer(Match m) =>
-        $"| Invoke-Cut -Delimiter {m.Groups["delim"].Value} -Field {m.Groups["field"].Value}";
+        $"| Invoke-BashCut -Delimiter {m.Groups["delim"].Value} -Field {m.Groups["field"].Value}";
 
     [GeneratedRegex(@"\|\s*grep\s+(?<flags>-[a-zA-Z]+\s+)?""?(?<pat>[^""\s|]+)""?(?:\s+(?<rest>[^|]+))?")]
     private static partial Regex PipeGrep();

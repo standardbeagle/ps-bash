@@ -9,6 +9,7 @@
     <InvariantGlobalization>true</InvariantGlobalization>
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
     <StripSymbols>true</StripSymbols>
+    <AssemblyName>ps-bash</AssemblyName>
   </PropertyGroup>
 
   <ItemGroup>
