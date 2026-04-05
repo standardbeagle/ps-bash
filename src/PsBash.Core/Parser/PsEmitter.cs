@@ -1440,9 +1440,24 @@ public static class PsEmitter
         foreach (var arg in args)
         {
             sb.Append(' ');
-            sb.Append(EmitWord(arg));
+            var emitted = EmitWord(arg);
+            if (NeedsPassthroughQuoting(emitted))
+                sb.Append('"').Append(emitted).Append('"');
+            else
+                sb.Append(emitted);
         }
         return sb.ToString();
+    }
+
+    private static bool NeedsPassthroughQuoting(string arg)
+    {
+        // Flags like -F, contain commas which are PowerShell array separators.
+        // Quote them to prevent misinterpretation. Skip already-quoted args.
+        if (arg.Length < 2 || arg[0] != '-')
+            return false;
+        if (arg[0] == '"' || arg[0] == '\'')
+            return false;
+        return arg.Contains(',');
     }
 
     private static string? ExtractNumericFlag(ImmutableArray<CompoundWord> args, string flag)

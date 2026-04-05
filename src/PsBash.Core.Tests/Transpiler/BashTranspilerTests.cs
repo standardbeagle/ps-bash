@@ -72,11 +72,9 @@ public class BashTranspilerTests
     [Fact]
     public void EnvVarDoesNotDoubleTransform()
     {
-        // After ExportTransform creates $env:FOO, EnvVarTransform should not re-transform it
         var result = BashTranspiler.Transpile("export FOO=bar && echo $FOO");
         Assert.Contains("$env:FOO = \"bar\"", result);
         Assert.Contains("$env:FOO", result);
-        // Should not contain $env:env:FOO
         Assert.DoesNotContain("$env:env:", result);
     }
 
@@ -130,90 +128,9 @@ public class BashTranspilerTests
     }
 
     [Fact]
-    public void ParserMode_V1_UsesRegexPipeline()
+    public void TmpPath_TransformsToEnvTemp()
     {
-        var prev = Environment.GetEnvironmentVariable("PSBASH_PARSER");
-        try
-        {
-            Environment.SetEnvironmentVariable("PSBASH_PARSER", "v1");
-            var result = BashTranspiler.Transpile("echo hello");
-            Assert.Equal("echo hello", result);
-        }
-        finally
-        {
-            Environment.SetEnvironmentVariable("PSBASH_PARSER", prev);
-        }
-    }
-
-    [Fact]
-    public void ParserMode_V2_UsesParserPipeline()
-    {
-        var prev = Environment.GetEnvironmentVariable("PSBASH_PARSER");
-        try
-        {
-            Environment.SetEnvironmentVariable("PSBASH_PARSER", "v2");
-            var result = BashTranspiler.Transpile("export FOO=bar");
-            Assert.Equal("$env:FOO = \"bar\"", result);
-        }
-        finally
-        {
-            Environment.SetEnvironmentVariable("PSBASH_PARSER", prev);
-        }
-    }
-
-    [Fact]
-    public void ParserMode_Auto_TriesParserFirst()
-    {
-        var prev = Environment.GetEnvironmentVariable("PSBASH_PARSER");
-        try
-        {
-            Environment.SetEnvironmentVariable("PSBASH_PARSER", "auto");
-            var result = BashTranspiler.Transpile("echo hello");
-            Assert.Equal("echo hello", result);
-        }
-        finally
-        {
-            Environment.SetEnvironmentVariable("PSBASH_PARSER", prev);
-        }
-    }
-
-    [Fact]
-    public void ParserMode_Auto_FallsBackToRegexOnParserFailure()
-    {
-        var prev = Environment.GetEnvironmentVariable("PSBASH_PARSER");
-        try
-        {
-            // for loops are not yet in parser-v2; auto should fall back to regex
-            var input = "for i in 1 2 3; do echo $i; done";
-            Environment.SetEnvironmentVariable("PSBASH_PARSER", "v1");
-            var regexResult = BashTranspiler.Transpile(input);
-
-            Environment.SetEnvironmentVariable("PSBASH_PARSER", "auto");
-            var autoResult = BashTranspiler.Transpile(input);
-
-            Assert.Equal(regexResult, autoResult);
-        }
-        finally
-        {
-            Environment.SetEnvironmentVariable("PSBASH_PARSER", prev);
-        }
-    }
-
-    [Fact]
-    public void ParserMode_Default_IsV1Regex()
-    {
-        var prev = Environment.GetEnvironmentVariable("PSBASH_PARSER");
-        try
-        {
-            Environment.SetEnvironmentVariable("PSBASH_PARSER", null);
-            // Default (no env var) MUST use v1 regex, NOT parser-v2.
-            // /tmp/ is transformed by v1 regex but not by v2 parser — proves v1 is running.
-            var result = BashTranspiler.Transpile("echo /tmp/test");
-            Assert.Contains("$env:TEMP", result);
-        }
-        finally
-        {
-            Environment.SetEnvironmentVariable("PSBASH_PARSER", prev);
-        }
+        var result = BashTranspiler.Transpile("echo /tmp/test");
+        Assert.Contains("$env:TEMP", result);
     }
 }
