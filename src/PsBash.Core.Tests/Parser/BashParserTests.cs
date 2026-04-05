@@ -952,4 +952,57 @@ public class BashParserTests
         Assert.Equal("x", forIn.Var);
         Assert.Equal(3, forIn.List.Length);
     }
+
+    [Fact]
+    public void Parse_WhileTrue_ReturnsWhileNode()
+    {
+        var result = Parse("while true; do echo hi; done");
+
+        var whileCmd = Assert.IsType<Command.While>(result);
+        Assert.False(whileCmd.IsUntil);
+        var cond = Assert.IsType<Command.Simple>(whileCmd.Cond);
+        Assert.Equal("true", GetWordValues(cond)[0]);
+        Assert.IsType<Command.Simple>(whileCmd.Body);
+    }
+
+    [Fact]
+    public void Parse_WhileReadLine_ReturnsWhileNode()
+    {
+        var result = Parse("while read line; do echo $line; done");
+
+        var whileCmd = Assert.IsType<Command.While>(result);
+        Assert.False(whileCmd.IsUntil);
+        var cond = Assert.IsType<Command.Simple>(whileCmd.Cond);
+        Assert.Equal(new[] { "read", "line" }, GetWordValues(cond));
+    }
+
+    [Fact]
+    public void Parse_Until_ReturnsWhileNodeWithIsUntilTrue()
+    {
+        var result = Parse("until cmd; do body; done");
+
+        var whileCmd = Assert.IsType<Command.While>(result);
+        Assert.True(whileCmd.IsUntil);
+        var cond = Assert.IsType<Command.Simple>(whileCmd.Cond);
+        Assert.Equal("cmd", GetWordValues(cond)[0]);
+    }
+
+    [Fact]
+    public void Parse_WhileWithTestExpr_ReturnsWhileWithBoolExprCond()
+    {
+        var result = Parse("while [ -f file ]; do echo yes; done");
+
+        var whileCmd = Assert.IsType<Command.While>(result);
+        Assert.False(whileCmd.IsUntil);
+        Assert.IsType<Command.BoolExpr>(whileCmd.Cond);
+    }
+
+    [Fact]
+    public void Parse_WhileWithNewlines_ReturnsWhileNode()
+    {
+        var result = Parse("while true\ndo\necho hi\ndone");
+
+        var whileCmd = Assert.IsType<Command.While>(result);
+        Assert.False(whileCmd.IsUntil);
+    }
 }

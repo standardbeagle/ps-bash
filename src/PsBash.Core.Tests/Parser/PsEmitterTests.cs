@@ -941,6 +941,73 @@ public class PsEmitterTests
         Assert.Contains("echo $env:idx $i", result);
     }
 
+    [Fact]
+    public void Transpile_WhileTrue_EmitsWhileLoop()
+    {
+        var result = PsEmitter.Transpile("while true; do echo hi; done");
+
+        Assert.Equal("while ($true) { echo hi }", result);
+    }
+
+    [Fact]
+    public void Transpile_WhileCmd_EmitsWhileLoop()
+    {
+        var result = PsEmitter.Transpile("while cmd; do body; done");
+
+        Assert.Equal("while (cmd) { body }", result);
+    }
+
+    [Fact]
+    public void Transpile_UntilCmd_EmitsNegatedWhileLoop()
+    {
+        var result = PsEmitter.Transpile("until cmd; do body; done");
+
+        Assert.Equal("while (!(cmd)) { body }", result);
+    }
+
+    [Fact]
+    public void Transpile_WhileReadLine_EmitsForEachObjectPipeline()
+    {
+        var result = PsEmitter.Transpile("while read line; do echo $line; done");
+
+        Assert.Equal(
+            "ForEach-Object { if ($_.PSObject.Properties['BashText']) { $_.BashText } else { \"$_\" } } | ForEach-Object { $_ -split \"`n\" } | ForEach-Object { echo $_ }",
+            result);
+    }
+
+    [Fact]
+    public void Transpile_WhileReadLine_DoesNotReplaceSimilarVarNames()
+    {
+        var result = PsEmitter.Transpile("while read line; do echo $liner $line; done");
+
+        Assert.Contains("$env:liner", result);
+        Assert.Contains("$_", result);
+    }
+
+    [Fact]
+    public void Transpile_WhileFileTest_EmitsWhileWithTestPath()
+    {
+        var result = PsEmitter.Transpile("while [ -f file ]; do echo yes; done");
+
+        Assert.Equal("while (Test-Path \"file\" -PathType Leaf) { echo yes }", result);
+    }
+
+    [Fact]
+    public void Transpile_UntilFileTest_EmitsNegatedWhileWithTestPath()
+    {
+        var result = PsEmitter.Transpile("until [ -f file ]; do sleep 1; done");
+
+        Assert.Equal("while (!(Test-Path \"file\" -PathType Leaf)) { sleep 1 }", result);
+    }
+
+    [Fact]
+    public void Transpile_WhileMultipleBodyCommands_EmitsAll()
+    {
+        var result = PsEmitter.Transpile("while true; do echo a; echo b; done");
+
+        Assert.Equal("while ($true) { echo a; echo b }", result);
+    }
+
     private static CompoundWord MakeWord(string value) =>
         new(ImmutableArray.Create<WordPart>(new WordPart.Literal(value)));
 }

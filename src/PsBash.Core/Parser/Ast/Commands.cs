@@ -80,6 +80,15 @@ public abstract record Command : BashNode
         string Cond,
         string Step,
         Command Body) : Command;
+
+    /// <summary>
+    /// A while or until loop: <c>while cmd; do body; done</c> / <c>until cmd; do body; done</c>.
+    /// When <paramref name="IsUntil"/> is true, the condition is logically negated.
+    /// </summary>
+    public sealed record While(
+        bool IsUntil,
+        Command Cond,
+        Command Body) : Command;
 }
 
 /// <summary>

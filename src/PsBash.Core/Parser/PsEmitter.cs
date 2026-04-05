@@ -25,6 +25,7 @@ public static class PsEmitter
         Command.BoolExpr boolExpr => EmitBoolExpr(boolExpr),
         Command.ForIn forIn => EmitForIn(forIn),
         Command.ForArith forArith => EmitForArith(forArith),
+        Command.While whileCmd => EmitWhile(whileCmd),
         Command.Simple simple => EmitSimple(simple),
         Command.Pipeline pipeline => EmitPipeline(pipeline),
         Command.AndOrList andOr => EmitAndOrList(andOr),
@@ -181,6 +182,76 @@ public static class PsEmitter
 
         sb.Append(" }");
         return sb.ToString();
+    }
+
+    private static string EmitWhile(Command.While whileCmd)
+    {
+        // Special case: while read VAR -> ForEach-Object pipeline
+        if (IsWhileRead(whileCmd.Cond, out var readVar))
+            return EmitWhileRead(readVar, whileCmd.Body);
+
+        var sb = new StringBuilder("while (");
+        var condText = EmitWhileCondition(whileCmd.Cond);
+
+        if (whileCmd.IsUntil)
+        {
+            sb.Append("!(");
+            sb.Append(condText);
+            sb.Append(')');
+        }
+        else
+        {
+            sb.Append(condText);
+        }
+
+        sb.Append(") { ");
+        sb.Append(Emit(whileCmd.Body));
+        sb.Append(" }");
+        return sb.ToString();
+    }
+
+    private static string EmitWhileCondition(Command cond)
+    {
+        // Bare "true"/"false" commands map to PowerShell boolean constants
+        if (cond is Command.Simple simple && simple.Words.Length == 1
+            && simple.EnvPairs.IsEmpty && simple.Redirects.IsEmpty)
+        {
+            var word = GetLiteralValue(simple.Words[0]);
+            if (word is "true") return "$true";
+            if (word is "false") return "$false";
+        }
+
+        return EmitCondition(cond);
+    }
+
+    private static bool IsWhileRead(Command cond, out string varName)
+    {
+        varName = "";
+        if (cond is not Command.Simple simple)
+            return false;
+        if (simple.Words.Length != 2)
+            return false;
+        if (GetLiteralValue(simple.Words[0]) != "read")
+            return false;
+        var name = GetLiteralValue(simple.Words[1]);
+        if (name is null)
+            return false;
+        varName = name;
+        return true;
+    }
+
+    private static string EmitWhileRead(string varName, Command body)
+    {
+        var bodyText = Emit(body);
+        // Replace $env:VAR with $_ (exact match, not prefix of longer name)
+        // Note: $_ in Regex.Replace is a special substitution; use $$ to produce literal $.
+        bodyText = System.Text.RegularExpressions.Regex.Replace(
+            bodyText, @$"\$env:{varName}(?!\w)", "$$_");
+        // Also replace bare $VAR references (loop var scope)
+        bodyText = System.Text.RegularExpressions.Regex.Replace(
+            bodyText, @$"\${varName}(?!\w)", "$$_");
+
+        return $"ForEach-Object {{ if ($_.PSObject.Properties['BashText']) {{ $_.BashText }} else {{ \"$_\" }} }} | ForEach-Object {{ $_ -split \"`n\" }} | ForEach-Object {{ {bodyText} }}";
     }
 
     private static string? ExtractArithVar(string init)

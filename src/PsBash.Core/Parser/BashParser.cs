@@ -135,6 +135,9 @@ public sealed class BashParser
         if (Peek().Kind == BashTokenKind.Word && Peek().Value == "for")
             return ParseFor();
 
+        if (Peek().Kind == BashTokenKind.Word && Peek().Value is "while" or "until")
+            return ParseWhile();
+
         if (Peek().Kind == BashTokenKind.Word && Peek().Value is "[" or "[[")
             return ParseTestExpr();
 
@@ -211,7 +214,7 @@ public sealed class BashParser
         kind is BashTokenKind.Less or BashTokenKind.Great or BashTokenKind.Bang;
 
     private static bool IsUnimplementedCompoundKeyword(string word) =>
-        word is "while" or "until" or "case" or "function" or "select";
+        word is "case" or "function" or "select";
 
     private Command.If ParseIf()
     {
@@ -383,6 +386,22 @@ public sealed class BashParser
             parts.Add(token.Value);
         }
         return string.Join("", parts);
+    }
+
+    private Command.While ParseWhile()
+    {
+        var keyword = Advance(); // consume "while" or "until"
+        bool isUntil = keyword.Value == "until";
+
+        SkipTerminators();
+        var cond = ParseAndOr();
+        SkipTerminators();
+        Expect("do");
+        SkipTerminators();
+        var body = ParseCompoundBody("done");
+        Expect("done");
+
+        return new Command.While(isUntil, cond, body);
     }
 
     private Command ParseSimpleCommand()

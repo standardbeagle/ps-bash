@@ -98,7 +98,7 @@ public class WhileLoopTransformTests
     public void FullPipeline_UntilWithFileTest()
     {
         var result = BashTranspiler.Transpile("until [ -f /tmp/done ]; do sleep 1; done");
-        Assert.Contains("while (-not", result);
+        Assert.Contains("while (!(", result);
         Assert.Contains("Test-Path", result);
     }
 }
