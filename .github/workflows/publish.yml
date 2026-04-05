@@ -47,17 +47,17 @@ jobs:
               '${{ github.event.inputs.version }}'
           }
           Write-Host "Publishing version: $version"
-          $manifest = Get-Content ./src/PsBash.psd1 -Raw
+          $manifest = Get-Content ./src/PsBash.Module/PsBash.psd1 -Raw
           $manifest = $manifest -replace "ModuleVersion = '.*'", "ModuleVersion = '$version'"
-          Set-Content ./src/PsBash.psd1 -Value $manifest
+          Set-Content ./src/PsBash.Module/PsBash.psd1 -Value $manifest
           # Verify
-          $data = Import-PowerShellDataFile ./src/PsBash.psd1
+          $data = Import-PowerShellDataFile ./src/PsBash.Module/PsBash.psd1
           Write-Host "Manifest version: $($data.ModuleVersion)"
 
       - name: Prepare module directory
         shell: pwsh
         run: |
-          Copy-Item -Path ./src -Destination ./PsBash -Recurse
+          Copy-Item -Path ./src/PsBash.Module -Destination ./PsBash -Recurse
           Test-ModuleManifest -Path ./PsBash/PsBash.psd1
 
       - name: Publish to PSGallery
