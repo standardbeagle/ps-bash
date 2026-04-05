@@ -935,8 +935,8 @@ public sealed class BashParser
     private Assignment ParseAssignmentWord()
     {
         var token = Advance();
-        var (name, value) = SplitAssignmentWord(token.Value);
-        return new Assignment(name, AssignOp.Equal, value);
+        var (name, value, op) = SplitAssignmentWord(token.Value);
+        return new Assignment(name, op, value);
     }
 
     /// <summary>
@@ -945,9 +945,9 @@ public sealed class BashParser
     private Assignment ParseAssignmentWordWithArray()
     {
         var token = Advance();
-        var (name, value) = SplitAssignmentWord(token.Value);
+        var (name, value, op) = SplitAssignmentWord(token.Value);
 
-        // Array assignment: arr=(a b c) — value is empty and next token is LParen.
+        // Array assignment: arr=(a b c) or arr+=('x') — value is empty and next token is LParen.
         if (value is null && Peek().Kind == BashTokenKind.LParen)
         {
             Advance(); // consume (
@@ -966,24 +966,26 @@ public sealed class BashParser
             }
             if (Peek().Kind == BashTokenKind.RParen)
                 Advance(); // consume )
-            return new Assignment(name, AssignOp.Equal, null,
+            return new Assignment(name, op, null,
                 new ArrayWord(elements.ToImmutable()));
         }
 
-        return new Assignment(name, AssignOp.Equal, value);
+        return new Assignment(name, op, value);
     }
 
-    private (string Name, CompoundWord? Value) SplitAssignmentWord(string raw)
+    private (string Name, CompoundWord? Value, AssignOp Op) SplitAssignmentWord(string raw)
     {
         int eqIndex = raw.IndexOf('=');
-        string name = raw[..eqIndex];
+        bool isPlus = eqIndex > 0 && raw[eqIndex - 1] == '+';
+        string name = isPlus ? raw[..(eqIndex - 1)] : raw[..eqIndex];
         string valueRaw = raw[(eqIndex + 1)..];
+        var op = isPlus ? AssignOp.PlusEqual : AssignOp.Equal;
 
         if (valueRaw.Length == 0)
-            return (name, null);
+            return (name, null, op);
 
         var parts = DecomposeWord(valueRaw);
-        return (name, new CompoundWord(parts));
+        return (name, new CompoundWord(parts), op);
     }
 
     private Redirect ParseRedirect()
@@ -1206,6 +1208,29 @@ public sealed class BashParser
         pos += 2; // skip ${
         int len = raw.Length;
 
+        // ${!arr[@]} or ${!arr[*]} -> array keys operator
+        if (pos < len && raw[pos] == '!')
+        {
+            pos++; // skip !
+            int nameStart = pos;
+            while (pos < len && IsVarChar(raw[pos]))
+                pos++;
+            string name = raw[nameStart..pos];
+            string keysSuffix = "![@]";
+            if (pos < len && raw[pos] == '[')
+            {
+                pos++; // skip [
+                while (pos < len && raw[pos] != ']')
+                    pos++;
+                if (pos < len)
+                    pos++; // skip ]
+            }
+            if (pos < len && raw[pos] == '}')
+                pos++; // skip }
+            parts.Add(new WordPart.BracedVarSub(name, keysSuffix));
+            return pos;
+        }
+
         // ${#VAR} or ${#arr[@]} -> length operator
         if (pos < len && raw[pos] == '#')
         {
@@ -1261,11 +1286,15 @@ public sealed class BashParser
         string? suffix = null;
         if (pos < len && raw[pos] != '}')
         {
-            // Read operator: :-, :=, :+, :?, %, %%, #, ##
+            // Read operator: :-, :=, :+, :?, :offset:len, %, %%, #, ##, /, //, ^^, ,,, ^, ,
             int opStart = pos;
             if (pos < len && raw[pos] == ':' && pos + 1 < len && raw[pos + 1] is '-' or '=' or '+' or '?')
             {
                 pos += 2;
+            }
+            else if (pos < len && raw[pos] == ':' && pos + 1 < len && (char.IsDigit(raw[pos + 1]) || raw[pos + 1] == '-'))
+            {
+                pos++; // just the leading ':', rest goes into val
             }
             else if (pos < len && raw[pos] == '%')
             {
@@ -1277,6 +1306,24 @@ public sealed class BashParser
             {
                 pos++;
                 if (pos < len && raw[pos] == '#')
+                    pos++;
+            }
+            else if (pos < len && raw[pos] == '/')
+            {
+                pos++;
+                if (pos < len && raw[pos] == '/')
+                    pos++;
+            }
+            else if (pos < len && raw[pos] == '^')
+            {
+                pos++;
+                if (pos < len && raw[pos] == '^')
+                    pos++;
+            }
+            else if (pos < len && raw[pos] == ',')
+            {
+                pos++;
+                if (pos < len && raw[pos] == ',')
                     pos++;
             }
             string op = raw[opStart..pos];
@@ -1591,12 +1638,22 @@ public sealed class BashParser
         if (closePos < len)
             closePos++;
 
-        // Check for range pattern: N..M
+        // Check for range pattern: N..M or N..M..S
         int dotDot = inner.IndexOf("..", StringComparison.Ordinal);
         if (dotDot >= 0 && !inner.Contains(','))
         {
             string startStr = inner[..dotDot];
-            string endStr = inner[(dotDot + 2)..];
+            string rest = inner[(dotDot + 2)..];
+            int stepVal = 0;
+            string endStr = rest;
+
+            // Check for optional step: N..M..S
+            int dotDot2 = rest.IndexOf("..", StringComparison.Ordinal);
+            if (dotDot2 >= 0)
+            {
+                endStr = rest[..dotDot2];
+                int.TryParse(rest[(dotDot2 + 2)..], out stepVal);
+            }
 
             if (int.TryParse(startStr, out int startVal) && int.TryParse(endStr, out int endVal))
             {
@@ -1608,7 +1665,7 @@ public sealed class BashParser
                     zeroPad = Math.Max(startStr.Length, endStr.Length);
                 }
 
-                parts.Add(new WordPart.BracedRange(startVal, endVal, zeroPad));
+                parts.Add(new WordPart.BracedRange(startVal, endVal, zeroPad, stepVal));
                 return closePos;
             }
         }

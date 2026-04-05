@@ -389,6 +389,9 @@ public static class BashLexer
                     i++; // skip ]
             }
 
+            // Support += as well as plain =
+            if (i < value.Length && value[i] == '+' && i + 1 < value.Length && value[i + 1] == '=')
+                return BashTokenKind.AssignmentWord;
             if (i < value.Length && value[i] == '=')
                 return BashTokenKind.AssignmentWord;
         }

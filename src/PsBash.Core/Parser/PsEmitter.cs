@@ -559,6 +559,8 @@ public static class PsEmitter
                 return $"Test-Path \"{EmitWord(words[1])}\" -PathType Leaf";
             if (flag == "-d")
                 return $"Test-Path \"{EmitWord(words[1])}\" -PathType Container";
+            if (flag == "-e")
+                return $"Test-Path \"{EmitWord(words[1])}\"";
             if (flag == "-z")
                 return $"[string]::IsNullOrEmpty({EmitTestArg(words[1])})";
             if (flag == "-n")
@@ -671,11 +673,12 @@ public static class PsEmitter
             string varPrefix = cmd.IsLocal ? "$" : "$env:";
 
             // Array assignment: arr=(a b c) -> $arr = @('a','b','c')
+            // Array append:     arr+=('x')  -> $arr += @('x')
             if (pair.ArrayValue is not null)
             {
                 sb.Append('$');
                 sb.Append(pair.Name);
-                sb.Append(" = @(");
+                sb.Append(pair.Op == AssignOp.PlusEqual ? " += @(" : " = @(");
                 for (int j = 0; j < pair.ArrayValue.Elements.Length; j++)
                 {
                     if (j > 0)
@@ -706,7 +709,7 @@ public static class PsEmitter
 
             sb.Append(varPrefix);
             sb.Append(pair.Name);
-            sb.Append(" = ");
+            sb.Append(pair.Op == AssignOp.PlusEqual ? " += " : " = ");
             sb.Append(EmitAssignmentValue(pair.Value));
         }
         return sb.ToString();
@@ -750,10 +753,15 @@ public static class PsEmitter
                 {
                     var val = GetLiteralValue(word);
                     if (val == "-A") isAssoc = true;
+                    else if (val == "-i") { /* integer — handled below */ }
                     else if (val is not null && !val.StartsWith('-')) varName = val;
                 }
                 if (varName is not null)
-                    return isAssoc ? $"${varName} = @{{}}" : $"${varName} = @()";
+                {
+                    if (isAssoc) return $"${varName} = @{{}}";
+                    bool isInt = cmd.Words.Skip(1).Any(w => GetLiteralValue(w) == "-i");
+                    return isInt ? $"[int]${varName} = 0" : $"${varName} = @()";
+                }
             }
         }
 
@@ -961,7 +969,8 @@ public static class PsEmitter
 
         var range = (WordPart.BracedRange)part;
         var items = new List<string>();
-        int step = range.Start <= range.End ? 1 : -1;
+        int step = range.Step != 0 ? Math.Abs(range.Step) * (range.Start <= range.End ? 1 : -1)
+                                   : (range.Start <= range.End ? 1 : -1);
         for (int v = range.Start; ; v += step)
         {
             if (range.ZeroPad > 0)
@@ -1168,7 +1177,47 @@ public static class PsEmitter
             return $"({varRef} -replace '^{pattern}','')";
         }
 
-        // Fallback: emit as-is with comment about unsupported operator
+        // Array keys: ${!arr[@]} -> $arr.Keys
+        if (bvs.Suffix.StartsWith("!"))
+            return $"${bvs.Name}.Keys";
+
+        // Replace first: ${VAR/find/replace}
+        if (bvs.Suffix.StartsWith("/") && !bvs.Suffix.StartsWith("//"))
+        {
+            var parts = bvs.Suffix[1..].Split('/', 2);
+            string find = parts[0], replace = parts.Length > 1 ? parts[1] : "";
+            return $"({varRef} -replace [regex]::Escape('{find}'),'{replace}')";
+        }
+
+        // Replace all: ${VAR//find/replace}
+        if (bvs.Suffix.StartsWith("//"))
+        {
+            var parts = bvs.Suffix[2..].Split('/', 2);
+            string find = parts[0], replace = parts.Length > 1 ? parts[1] : "";
+            return $"({varRef} -replace '{find}','{replace}')";
+        }
+
+        // Slice: ${VAR:offset:length} or ${VAR:offset}
+        if (bvs.Suffix.StartsWith(":") && bvs.Suffix.Length > 1 && (char.IsDigit(bvs.Suffix[1]) || bvs.Suffix[1] == '-'))
+        {
+            var sliceParts = bvs.Suffix[1..].Split(':', 2);
+            if (sliceParts.Length == 2 && int.TryParse(sliceParts[0], out int offset) && int.TryParse(sliceParts[1], out int length))
+                return $"{varRef}.Substring({offset}, {length})";
+            if (int.TryParse(sliceParts[0], out int off2))
+                return $"{varRef}.Substring({off2})";
+        }
+
+        // Case conversion: ${VAR^^} ${VAR,,} ${VAR^} ${VAR,}
+        if (bvs.Suffix == "^^")
+            return $"{varRef}.ToUpper()";
+        if (bvs.Suffix == ",,")
+            return $"{varRef}.ToLower()";
+        if (bvs.Suffix == "^")
+            return $"({varRef}.Substring(0,1).ToUpper() + {varRef}.Substring(1))";
+        if (bvs.Suffix == ",")
+            return $"({varRef}.Substring(0,1).ToLower() + {varRef}.Substring(1))";
+
+        // Fallback: emit as-is
         return varRef;
     }
 

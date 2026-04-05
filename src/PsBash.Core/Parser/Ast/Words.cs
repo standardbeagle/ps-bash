@@ -48,10 +48,11 @@ public abstract record WordPart : BashNode
     public sealed record BracedTuple(ImmutableArray<string> Items) : WordPart;
 
     /// <summary>
-    /// A brace expansion with a numeric range, e.g. <c>{1..10}</c> or <c>{01..05}</c>.
+    /// A brace expansion with a numeric range, e.g. <c>{1..10}</c>, <c>{01..05}</c>, or <c>{1..10..2}</c>.
     /// When <paramref name="ZeroPad"/> is greater than zero, values are left-padded with zeros.
+    /// When <paramref name="Step"/> is non-zero, the range increments by that value.
     /// </summary>
-    public sealed record BracedRange(int Start, int End, int ZeroPad) : WordPart;
+    public sealed record BracedRange(int Start, int End, int ZeroPad, int Step = 0) : WordPart;
 
     /// <summary>
     /// A process substitution, e.g. <c>&lt;(cmd)</c> (input) or <c>&gt;(cmd)</c> (output).
