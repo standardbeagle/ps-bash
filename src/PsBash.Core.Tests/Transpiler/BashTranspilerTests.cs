@@ -22,7 +22,7 @@ public class BashTranspilerTests
     public void ExportAndEchoVar_TransformsBoth()
     {
         var result = BashTranspiler.Transpile("export FOO=bar");
-        Assert.Equal("[void]($env:FOO = \"bar\")", result);
+        Assert.Equal("$env:FOO = \"bar\"", result);
     }
 
     [Fact]
@@ -59,7 +59,7 @@ public class BashTranspilerTests
     public void ExportQuotedValue_TransformsCorrectly()
     {
         var result = BashTranspiler.Transpile("export NODE_ENV=\"production\"");
-        Assert.Equal("[void]($env:NODE_ENV = \"production\")", result);
+        Assert.Equal("$env:NODE_ENV = \"production\"", result);
     }
 
     [Fact]
@@ -193,13 +193,13 @@ public class BashTranspilerTests
     }
 
     [Fact]
-    public void ParserMode_Default_IsAuto()
+    public void ParserMode_Default_IsV1()
     {
         var prev = Environment.GetEnvironmentVariable("PSBASH_PARSER");
         try
         {
             Environment.SetEnvironmentVariable("PSBASH_PARSER", null);
-            // With no env var set, default is auto mode
+            // With no env var set, default is v1 (regex) — v2 is opt-in only
             var result = BashTranspiler.Transpile("echo hello");
             Assert.Equal("echo hello", result);
         }

@@ -36,23 +36,24 @@ public static class BashTranspiler
 
     public static string Transpile(string bashCommand)
     {
-        var mode = Environment.GetEnvironmentVariable("PSBASH_PARSER") ?? "auto";
+        var mode = Environment.GetEnvironmentVariable("PSBASH_PARSER");
 
-        if (mode == "v1")
-            return TranspileRegex(bashCommand);
+        // v2 parser is opt-in only — set PSBASH_PARSER=v2 or PSBASH_PARSER=auto to enable
         if (mode == "v2")
             return PsEmitter.Transpile(bashCommand) ?? bashCommand;
 
-        // auto mode: try parser first, fall back to regex on any failure
-        try
+        if (mode == "auto")
         {
-            var result = PsEmitter.Transpile(bashCommand);
-            if (result is not null)
-                return result;
-        }
-        catch
-        {
-            // Parser failed; fall through to regex pipeline
+            try
+            {
+                var result = PsEmitter.Transpile(bashCommand);
+                if (result is not null)
+                    return result;
+            }
+            catch
+            {
+                // Parser failed; fall through to regex pipeline
+            }
         }
 
         return TranspileRegex(bashCommand);
