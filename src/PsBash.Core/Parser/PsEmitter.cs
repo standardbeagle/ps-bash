@@ -14,6 +14,7 @@ public static class PsEmitter
     /// </summary>
     public static string Emit(Command cmd) => cmd switch
     {
+        Command.If ifCmd => EmitIf(ifCmd),
         Command.Simple simple => EmitSimple(simple),
         Command.Pipeline pipeline => EmitPipeline(pipeline),
         Command.AndOrList andOr => EmitAndOrList(andOr),
@@ -34,6 +35,93 @@ public static class PsEmitter
         return Emit(cmd);
     }
 
+    private static string EmitIf(Command.If ifCmd)
+    {
+        var sb = new StringBuilder();
+
+        for (int i = 0; i < ifCmd.Arms.Length; i++)
+        {
+            var arm = ifCmd.Arms[i];
+            if (i == 0)
+                sb.Append("if");
+            else
+                sb.Append(" elseif");
+
+            sb.Append(" (");
+            sb.Append(EmitCondition(arm.Cond));
+            sb.Append(") { ");
+            sb.Append(Emit(arm.Body));
+            sb.Append(" }");
+        }
+
+        if (ifCmd.ElseBody is not null)
+        {
+            sb.Append(" else { ");
+            sb.Append(Emit(ifCmd.ElseBody));
+            sb.Append(" }");
+        }
+
+        return sb.ToString();
+    }
+
+    /// <summary>
+    /// Emit a condition expression. Translates <c>[ ... ]</c> test constructs
+    /// into PowerShell equivalents; plain commands are emitted as-is.
+    /// </summary>
+    private static string EmitCondition(Command cond)
+    {
+        if (cond is Command.Simple simple && !simple.Words.IsEmpty)
+        {
+            var firstName = GetLiteralValue(simple.Words[0]);
+            if (firstName == "[")
+                return EmitTestConstruct(simple.Words);
+        }
+
+        return Emit(cond);
+    }
+
+    private static string EmitTestConstruct(ImmutableArray<CompoundWord> words)
+    {
+        // Strip leading "[" and trailing "]".
+        var inner = words.RemoveAt(0);
+        if (!inner.IsEmpty && GetLiteralValue(inner[^1]) == "]")
+            inner = inner.RemoveAt(inner.Length - 1);
+
+        if (inner.Length >= 2)
+        {
+            var flag = GetLiteralValue(inner[0]);
+            if (flag == "-f")
+            {
+                var path = EmitWord(inner[1]);
+                return $"Test-Path \"{path}\" -PathType Leaf";
+            }
+            if (flag == "-d")
+            {
+                var path = EmitWord(inner[1]);
+                return $"Test-Path \"{path}\" -PathType Container";
+            }
+            if (flag == "-z")
+            {
+                var val = EmitWord(inner[1]);
+                return $"[string]::IsNullOrEmpty({val})";
+            }
+            if (flag == "-n")
+            {
+                var val = EmitWord(inner[1]);
+                return $"-not [string]::IsNullOrEmpty({val})";
+            }
+        }
+
+        // Fallback: emit the inner words as a plain expression.
+        var sb = new StringBuilder();
+        for (int i = 0; i < inner.Length; i++)
+        {
+            if (i > 0) sb.Append(' ');
+            sb.Append(EmitWord(inner[i]));
+        }
+        return sb.ToString();
+    }
+
     private static string EmitShAssignment(Command.ShAssignment cmd)
     {
         var sb = new StringBuilder();
@@ -43,25 +131,22 @@ public static class PsEmitter
                 sb.Append("; ");
 
             var pair = cmd.Pairs[i];
-            sb.Append("$env:");
+            sb.Append("[void]($env:");
             sb.Append(pair.Name);
             sb.Append(" = ");
             sb.Append(EmitAssignmentValue(pair.Value));
+            sb.Append(')');
         }
         return sb.ToString();
     }
 
     private static string EmitSimple(Command.Simple cmd)
     {
-        // Bail on bash test constructs ([ -f ... ], [ -z ... ]) so the
+        // Bail on standalone bash test constructs ([ ... ] and [[ ... ]]) so the
         // caller can fall back to the regex pipeline which handles them.
-        if (!cmd.Words.IsEmpty)
-        {
-            var name = cmd.Words[0].Parts.Length == 1 && cmd.Words[0].Parts[0] is WordPart.Literal lit
-                ? lit.Value : null;
-            if (name == "[")
-                throw new NotSupportedException("Test constructs are not yet supported by the parser.");
-        }
+        // Test constructs inside if-conditions are handled by EmitCondition.
+        if (!cmd.Words.IsEmpty && GetLiteralValue(cmd.Words[0]) is "[" or "[[")
+            throw new NotSupportedException("Standalone test constructs are not yet supported by the parser.");
 
         // Input redirects (< file) become "Get-Content file | cmd".
         var inputRedirect = cmd.Redirects.FirstOrDefault(r => r.Op == "<");
@@ -361,22 +446,22 @@ public static class PsEmitter
                 result = EmitSort(args);
                 return true;
             case "uniq":
-                result = "Get-Unique";
+                result = "Invoke-BashUniq";
                 return true;
             case "sed":
-                result = EmitPassthrough("Invoke-Sed", args);
+                result = EmitPassthrough("Invoke-BashSed", args);
                 return true;
             case "awk":
-                result = EmitPassthrough("Invoke-Awk", args);
+                result = EmitPassthrough("Invoke-BashAwk", args);
                 return true;
             case "cut":
                 result = EmitCut(args);
                 return true;
             case "xargs":
-                result = EmitPassthrough("Invoke-Xargs", args);
+                result = EmitPassthrough("Invoke-BashXargs", args);
                 return true;
             case "tr":
-                result = EmitPassthrough("Invoke-Tr", args);
+                result = EmitPassthrough("Invoke-BashTr", args);
                 return true;
             case "tee":
                 result = EmitTee(args);
@@ -424,7 +509,7 @@ public static class PsEmitter
             }
         }
 
-        var parts = new List<string> { "Invoke-Grep" };
+        var parts = new List<string> { "Invoke-BashGrep" };
         parts.AddRange(flags);
         if (pattern is not null)
             parts.Add(pattern);
@@ -437,29 +522,29 @@ public static class PsEmitter
     {
         var count = ExtractNumericFlag(args, "-n");
         return count is not null
-            ? $"Select-Object -First {count}"
-            : $"Select-Object -First 10";
+            ? $"Invoke-BashHead -n {count}"
+            : "Invoke-BashHead";
     }
 
     private static string EmitTail(ImmutableArray<CompoundWord> args)
     {
         var count = ExtractNumericFlag(args, "-n");
         return count is not null
-            ? $"Select-Object -Last {count}"
-            : $"Select-Object -Last 10";
+            ? $"Invoke-BashTail -n {count}"
+            : "Invoke-BashTail";
     }
 
     private static string EmitWc(ImmutableArray<CompoundWord> args)
     {
         if (args.Any(a => GetLiteralValue(a) == "-l"))
-            return "Measure-Object -Line | Select-Object -Expand Lines";
-        return "Measure-Object -Line";
+            return "Invoke-BashWc -l";
+        return "Invoke-BashWc";
     }
 
     private static string EmitSort(ImmutableArray<CompoundWord> args)
     {
         var hasReverse = args.Any(a => GetLiteralValue(a) == "-r");
-        return hasReverse ? "Sort-Object -Descending" : "Sort-Object";
+        return hasReverse ? "Invoke-BashSort -r" : "Invoke-BashSort";
     }
 
     private static string EmitCut(ImmutableArray<CompoundWord> args)
@@ -490,7 +575,7 @@ public static class PsEmitter
             }
         }
 
-        var sb = new StringBuilder("Invoke-Cut");
+        var sb = new StringBuilder("Invoke-BashCut");
         if (delim is not null)
             sb.Append($" -Delimiter {delim}");
         if (field is not null)

@@ -756,4 +756,101 @@ public class BashParserTests
         var simple = Assert.IsType<Command.Simple>(result);
         Assert.Equal(["echo", "a"], GetWordValues(simple));
     }
+
+    [Fact]
+    public void Parse_IfThenFi_ReturnsIfNodeWithOneArm()
+    {
+        var result = Parse("if cmd; then echo yes; fi");
+
+        var ifCmd = Assert.IsType<Command.If>(result);
+        Assert.Single(ifCmd.Arms);
+        Assert.Null(ifCmd.ElseBody);
+
+        var cond = Assert.IsType<Command.Simple>(ifCmd.Arms[0].Cond);
+        Assert.Equal(["cmd"], GetWordValues(cond));
+
+        var body = Assert.IsType<Command.Simple>(ifCmd.Arms[0].Body);
+        Assert.Equal(["echo", "yes"], GetWordValues(body));
+    }
+
+    [Fact]
+    public void Parse_IfThenElseFi_ReturnsIfNodeWithElse()
+    {
+        var result = Parse("if cmd; then a; else b; fi");
+
+        var ifCmd = Assert.IsType<Command.If>(result);
+        Assert.Single(ifCmd.Arms);
+        Assert.NotNull(ifCmd.ElseBody);
+
+        var cond = Assert.IsType<Command.Simple>(ifCmd.Arms[0].Cond);
+        Assert.Equal(["cmd"], GetWordValues(cond));
+
+        var body = Assert.IsType<Command.Simple>(ifCmd.Arms[0].Body);
+        Assert.Equal(["a"], GetWordValues(body));
+
+        var elseBody = Assert.IsType<Command.Simple>(ifCmd.ElseBody);
+        Assert.Equal(["b"], GetWordValues(elseBody));
+    }
+
+    [Fact]
+    public void Parse_IfElifElseFi_ReturnsIfNodeWithMultipleArms()
+    {
+        var result = Parse("if cmd1; then a; elif cmd2; then b; else c; fi");
+
+        var ifCmd = Assert.IsType<Command.If>(result);
+        Assert.Equal(2, ifCmd.Arms.Length);
+        Assert.NotNull(ifCmd.ElseBody);
+
+        var cond1 = Assert.IsType<Command.Simple>(ifCmd.Arms[0].Cond);
+        Assert.Equal(["cmd1"], GetWordValues(cond1));
+        var body1 = Assert.IsType<Command.Simple>(ifCmd.Arms[0].Body);
+        Assert.Equal(["a"], GetWordValues(body1));
+
+        var cond2 = Assert.IsType<Command.Simple>(ifCmd.Arms[1].Cond);
+        Assert.Equal(["cmd2"], GetWordValues(cond2));
+        var body2 = Assert.IsType<Command.Simple>(ifCmd.Arms[1].Body);
+        Assert.Equal(["b"], GetWordValues(body2));
+
+        var elseBody = Assert.IsType<Command.Simple>(ifCmd.ElseBody);
+        Assert.Equal(["c"], GetWordValues(elseBody));
+    }
+
+    [Fact]
+    public void Parse_IfTestConstruct_ParsesTestAsCondition()
+    {
+        var result = Parse("if [ -f file ]; then echo yes; fi");
+
+        var ifCmd = Assert.IsType<Command.If>(result);
+        Assert.Single(ifCmd.Arms);
+
+        var cond = Assert.IsType<Command.Simple>(ifCmd.Arms[0].Cond);
+        Assert.Equal(["[", "-f", "file", "]"], GetWordValues(cond));
+    }
+
+    [Fact]
+    public void Parse_NestedIf_ParsesCorrectly()
+    {
+        var result = Parse("if cmd1; then if cmd2; then inner; fi; fi");
+
+        var outer = Assert.IsType<Command.If>(result);
+        Assert.Single(outer.Arms);
+        Assert.Null(outer.ElseBody);
+
+        var inner = Assert.IsType<Command.If>(outer.Arms[0].Body);
+        Assert.Single(inner.Arms);
+        var innerCond = Assert.IsType<Command.Simple>(inner.Arms[0].Cond);
+        Assert.Equal(["cmd2"], GetWordValues(innerCond));
+        var innerBody = Assert.IsType<Command.Simple>(inner.Arms[0].Body);
+        Assert.Equal(["inner"], GetWordValues(innerBody));
+    }
+
+    [Fact]
+    public void Parse_IfWithMultipleBodyCommands_ReturnsCommandList()
+    {
+        var result = Parse("if cmd; then a; b; fi");
+
+        var ifCmd = Assert.IsType<Command.If>(result);
+        var body = Assert.IsType<Command.CommandList>(ifCmd.Arms[0].Body);
+        Assert.Equal(2, body.Commands.Length);
+    }
 }

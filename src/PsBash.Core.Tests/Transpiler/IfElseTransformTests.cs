@@ -50,14 +50,14 @@ public class IfElseTransformTests
     public void FullPipeline_IfThenFi()
     {
         var result = BashTranspiler.Transpile("if [ -f file ]; then echo \"exists\"; fi");
-        Assert.Equal("if ((Test-Path \"file\" -PathType Leaf)) { echo \"exists\" }", result);
+        Assert.Equal("if (Test-Path \"file\" -PathType Leaf) { echo \"exists\" }", result);
     }
 
     [Fact]
     public void FullPipeline_IfElseFi()
     {
         var result = BashTranspiler.Transpile("if [ -f file ]; then echo \"yes\"; else echo \"no\"; fi");
-        Assert.Equal("if ((Test-Path \"file\" -PathType Leaf)) { echo \"yes\" } else { echo \"no\" }", result);
+        Assert.Equal("if (Test-Path \"file\" -PathType Leaf) { echo \"yes\" } else { echo \"no\" }", result);
     }
 
     [Fact]
@@ -65,7 +65,7 @@ public class IfElseTransformTests
     {
         var result = BashTranspiler.Transpile("if [ -f a ]; then echo \"a\"; elif [ -f b ]; then echo \"b\"; else echo \"none\"; fi");
         Assert.Equal(
-            "if ((Test-Path \"a\" -PathType Leaf)) { echo \"a\" } elseif ((Test-Path \"b\" -PathType Leaf)) { echo \"b\" } else { echo \"none\" }",
+            "if (Test-Path \"a\" -PathType Leaf) { echo \"a\" } elseif (Test-Path \"b\" -PathType Leaf) { echo \"b\" } else { echo \"none\" }",
             result);
     }
 }

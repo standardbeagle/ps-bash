@@ -7,10 +7,10 @@
   "runner_email": "claude@anthropic.com",
   "runner_dart_id": null,
   "started_at": "2026-04-04T22:43:00Z",
-  "resumed_at": "2026-04-05T00:30:00Z",
-  "iterations": 14,
+  "resumed_at": "2026-04-05T01:20:00Z",
+  "iterations": 15,
   "spawns": 0,
-  "last_iteration_at": "2026-04-05T00:25:00Z",
+  "last_iteration_at": "2026-04-05T01:30:00Z",
   "last_subagent": "task-executor",
   "tasks": [
     {
@@ -249,6 +249,22 @@
       "tests_added": 5,
       "plan_adjustments": 1,
       "completion_summary": "Wired Parlot parser into BashTranspiler.Transpile() with PSBASH_PARSER env var (v1/v2/auto) and regex fallback. Added test-construct bailout in PsEmitter for [ commands. All 342 tests pass.",
+      "failure_reason": null,
+      "fix_task_created": false,
+      "fix_task_id": null
+    },
+    {
+      "task_id": "9QDZxFHqnoYj",
+      "iteration": 15,
+      "status": "completed",
+      "started_at": "2026-04-05T01:20:00Z",
+      "completed_at": "2026-04-05T01:35:00Z",
+      "phase_completed": "phase-9",
+      "failed_phase": null,
+      "files_changed": 6,
+      "tests_added": 13,
+      "plan_adjustments": 1,
+      "completion_summary": "Added if/elif/else/fi parsing and emission to parser-v2. If/IfArm AST nodes, recursive descent parsing with compound body support, condition translation for [ -f ] and [ -d ] test constructs to Test-Path, and PowerShell if/elseif/else emission. Updated IfElseTransform integration tests to match parser-v2 output. 13 new tests, all 240 parser tests pass.",
       "failure_reason": null,
       "fix_task_created": false,
       "fix_task_id": null

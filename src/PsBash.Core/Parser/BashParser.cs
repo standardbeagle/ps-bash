@@ -98,7 +98,7 @@ public sealed class BashParser
 
     private Command ParsePipeline()
     {
-        var first = ParseSimpleCommand();
+        var first = ParseCompoundOrSimple();
         if (Peek().Kind != BashTokenKind.Pipe)
             return first;
 
@@ -121,10 +121,107 @@ public sealed class BashParser
                 ops.Add("|");
             }
 
-            commands.Add(ParseSimpleCommand());
+            commands.Add(ParseCompoundOrSimple());
         }
 
         return new Command.Pipeline(commands.ToImmutable(), ops.ToImmutable(), Negated: false);
+    }
+
+    private Command ParseCompoundOrSimple()
+    {
+        if (Peek().Kind == BashTokenKind.Word && Peek().Value == "if")
+            return ParseIf();
+
+        // Bail for compound constructs not yet implemented — triggers regex fallback in auto mode.
+        if (Peek().Kind == BashTokenKind.Word && IsUnimplementedCompoundKeyword(Peek().Value))
+            throw new NotSupportedException($"Compound construct '{Peek().Value}' not yet implemented in parser-v2.");
+
+        return ParseSimpleCommand();
+    }
+
+    private static bool IsUnimplementedCompoundKeyword(string word) =>
+        word is "for" or "while" or "until" or "case" or "function" or "select";
+
+    private Command.If ParseIf()
+    {
+        var arms = ImmutableArray.CreateBuilder<IfArm>();
+
+        // Parse "if cond; then body" (first arm).
+        Expect("if");
+        arms.Add(ParseIfArm());
+
+        // Parse zero or more "elif cond; then body" arms.
+        while (Peek().Kind == BashTokenKind.Word && Peek().Value == "elif")
+        {
+            Advance(); // consume "elif"
+            arms.Add(ParseIfArm());
+        }
+
+        // Parse optional "else body".
+        Command? elseBody = null;
+        if (Peek().Kind == BashTokenKind.Word && Peek().Value == "else")
+        {
+            Advance(); // consume "else"
+            SkipTerminators();
+            elseBody = ParseCompoundBody("fi", "fi");
+        }
+
+        Expect("fi");
+        return new Command.If(arms.ToImmutable(), elseBody);
+    }
+
+    private IfArm ParseIfArm()
+    {
+        SkipTerminators();
+        var cond = ParseAndOr();
+        SkipTerminators();
+        Expect("then");
+        SkipTerminators();
+        var body = ParseCompoundBody("elif", "else", "fi");
+        return new IfArm(cond, body);
+    }
+
+    /// <summary>
+    /// Parse a sequence of commands until one of the stop words is seen.
+    /// Returns a single command or a CommandList.
+    /// </summary>
+    private Command ParseCompoundBody(params string[] stopWords)
+    {
+        var commands = ImmutableArray.CreateBuilder<Command>();
+
+        while (true)
+        {
+            SkipTerminators();
+            if (Peek().Kind == BashTokenKind.Eof)
+                break;
+            if (Peek().Kind == BashTokenKind.Word && stopWords.Contains(Peek().Value))
+                break;
+
+            commands.Add(ParseAndOr());
+            SkipTerminators();
+        }
+
+        if (commands.Count == 1)
+            return commands[0];
+
+        return new Command.CommandList(commands.ToImmutable());
+    }
+
+    private void Expect(string word)
+    {
+        var token = Peek();
+        if (token.Kind != BashTokenKind.Word || token.Value != word)
+            throw new FormatException($"Expected '{word}' but got '{token.Value}' ({token.Kind}) at position {token.Position}");
+        Advance();
+    }
+
+    /// <summary>
+    /// Skip semicolons and newlines (used between compound command parts).
+    /// </summary>
+    private void SkipTerminators()
+    {
+        while (Peek().Kind is BashTokenKind.Semi or BashTokenKind.Newline)
+            _pos++;
     }
 
     private Command ParseSimpleCommand()
@@ -164,6 +261,10 @@ public sealed class BashParser
 
             if (kind == BashTokenKind.Word)
             {
+                // Stop at reserved words that delimit compound commands.
+                if (IsCompoundDelimiter(Peek().Value))
+                    break;
+
                 var token = Advance();
                 var parts = DecomposeWord(token.Value);
                 words.Add(new CompoundWord(parts));
@@ -253,6 +354,10 @@ public sealed class BashParser
             or BashTokenKind.Less or BashTokenKind.GreatAnd
             or BashTokenKind.LessAnd or BashTokenKind.DLess
             or BashTokenKind.DLessDash;
+
+    private static bool IsCompoundDelimiter(string word) =>
+        word is "then" or "elif" or "else" or "fi"
+            or "do" or "done" or "esac";
 
     /// <summary>
     /// Sub-parse a WORD token's raw text into typed WordPart children.

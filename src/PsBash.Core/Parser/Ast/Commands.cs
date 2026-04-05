@@ -45,4 +45,17 @@ public abstract record Command : BashNode
     /// Modeled after oils command.ShAssignment.
     /// </summary>
     public sealed record ShAssignment(ImmutableArray<Assignment> Pairs) : Command;
+
+    /// <summary>
+    /// An if/elif/else statement.
+    /// Modeled after oils command.If.
+    /// </summary>
+    public sealed record If(
+        ImmutableArray<IfArm> Arms,
+        Command? ElseBody) : Command;
 }
+
+/// <summary>
+/// A single arm of an if/elif chain: condition plus body.
+/// </summary>
+public sealed record IfArm(Command Cond, Command Body) : BashNode;

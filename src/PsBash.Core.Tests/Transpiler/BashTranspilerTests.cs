@@ -22,7 +22,7 @@ public class BashTranspilerTests
     public void ExportAndEchoVar_TransformsBoth()
     {
         var result = BashTranspiler.Transpile("export FOO=bar");
-        Assert.Equal("$env:FOO = \"bar\"", result);
+        Assert.Equal("[void]($env:FOO = \"bar\")", result);
     }
 
     [Fact]
@@ -59,7 +59,7 @@ public class BashTranspilerTests
     public void ExportQuotedValue_TransformsCorrectly()
     {
         var result = BashTranspiler.Transpile("export NODE_ENV=\"production\"");
-        Assert.Equal("$env:NODE_ENV = \"production\"", result);
+        Assert.Equal("[void]($env:NODE_ENV = \"production\")", result);
     }
 
     [Fact]
@@ -146,7 +146,7 @@ public class BashTranspilerTests
         {
             Environment.SetEnvironmentVariable("PSBASH_PARSER", "v2");
             var result = BashTranspiler.Transpile("export FOO=bar");
-            Assert.Equal("$env:FOO = \"bar\"", result);
+            Assert.Equal("[void]($env:FOO = \"bar\")", result);
         }
         finally
         {
@@ -176,14 +176,13 @@ public class BashTranspilerTests
         var prev = Environment.GetEnvironmentVariable("PSBASH_PARSER");
         try
         {
-            Environment.SetEnvironmentVariable("PSBASH_PARSER", "auto");
-            // v1 (regex) result for a known transform
+            // for loops are not yet in parser-v2; auto should fall back to regex
+            var input = "for i in 1 2 3; do echo $i; done";
             Environment.SetEnvironmentVariable("PSBASH_PARSER", "v1");
-            var regexResult = BashTranspiler.Transpile("export FOO=bar");
+            var regexResult = BashTranspiler.Transpile(input);
 
-            // auto mode should produce equivalent output (parser or fallback)
             Environment.SetEnvironmentVariable("PSBASH_PARSER", "auto");
-            var autoResult = BashTranspiler.Transpile("export FOO=bar");
+            var autoResult = BashTranspiler.Transpile(input);
 
             Assert.Equal(regexResult, autoResult);
         }

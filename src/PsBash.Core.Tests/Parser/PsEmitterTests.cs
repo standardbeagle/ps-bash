@@ -69,7 +69,7 @@ public class PsEmitterTests
     {
         var result = PsEmitter.Transpile("ls | grep foo");
 
-        Assert.Equal("ls | Invoke-Grep \"foo\"", result);
+        Assert.Equal("ls | Invoke-BashGrep \"foo\"", result);
     }
 
     [Fact]
@@ -77,7 +77,7 @@ public class PsEmitterTests
     {
         var result = PsEmitter.Transpile("cat file | head -n 5 | sort");
 
-        Assert.Equal("cat file | Select-Object -First 5 | Sort-Object", result);
+        Assert.Equal("cat file | Invoke-BashHead -n 5 | Invoke-BashSort", result);
     }
 
     [Fact]
@@ -93,7 +93,7 @@ public class PsEmitterTests
     {
         var result = PsEmitter.Transpile("echo hello | wc -l");
 
-        Assert.Equal("echo hello | Measure-Object -Line | Select-Object -Expand Lines", result);
+        Assert.Equal("echo hello | Invoke-BashWc -l", result);
     }
 
     [Fact]
@@ -140,7 +140,7 @@ public class PsEmitterTests
 
         var result = PsEmitter.Emit(assignment);
 
-        Assert.Equal("$env:x = \"1\"", result);
+        Assert.Equal("[void]($env:x = \"1\")", result);
     }
 
     [Fact]
@@ -148,7 +148,7 @@ public class PsEmitterTests
     {
         var result = PsEmitter.Transpile("export FOO=bar");
 
-        Assert.Equal("$env:FOO = \"bar\"", result);
+        Assert.Equal("[void]($env:FOO = \"bar\")", result);
     }
 
     [Fact]
@@ -156,7 +156,7 @@ public class PsEmitterTests
     {
         var result = PsEmitter.Transpile("export FOO=\"hello world\"");
 
-        Assert.Equal("$env:FOO = \"hello world\"", result);
+        Assert.Equal("[void]($env:FOO = \"hello world\")", result);
     }
 
     [Fact]
@@ -164,7 +164,7 @@ public class PsEmitterTests
     {
         var result = PsEmitter.Transpile("FOO=bar");
 
-        Assert.Equal("$env:FOO = \"bar\"", result);
+        Assert.Equal("[void]($env:FOO = \"bar\")", result);
     }
 
     [Fact]
@@ -188,7 +188,7 @@ public class PsEmitterTests
     {
         var result = PsEmitter.Transpile("export PATH=\"$PATH:/new\"");
 
-        Assert.Equal("$env:PATH = \"$env:PATH:/new\"", result);
+        Assert.Equal("[void]($env:PATH = \"$env:PATH:/new\")", result);
     }
 
     [Fact]
@@ -600,7 +600,7 @@ public class PsEmitterTests
     {
         var result = PsEmitter.Transpile("echo $(ls | grep foo)");
 
-        Assert.Equal("echo $(ls | Invoke-Grep \"foo\")", result);
+        Assert.Equal("echo $(ls | Invoke-BashGrep \"foo\")", result);
     }
 
     [Fact]
@@ -616,7 +616,7 @@ public class PsEmitterTests
     {
         var result = PsEmitter.Transpile("VAR=$(cat file)");
 
-        Assert.Equal("$env:VAR = \"$(cat file)\"", result);
+        Assert.Equal("[void]($env:VAR = \"$(cat file)\")", result);
     }
 
     [Fact]
@@ -697,6 +697,62 @@ public class PsEmitterTests
         var result = PsEmitter.Transpile("echo a;");
 
         Assert.Equal("echo a", result);
+    }
+
+    [Fact]
+    public void Transpile_IfThenFi_EmitsIfBlock()
+    {
+        var result = PsEmitter.Transpile("if cmd; then echo yes; fi");
+
+        Assert.Equal("if (cmd) { echo yes }", result);
+    }
+
+    [Fact]
+    public void Transpile_IfThenElseFi_EmitsIfElseBlock()
+    {
+        var result = PsEmitter.Transpile("if cmd; then a; else b; fi");
+
+        Assert.Equal("if (cmd) { a } else { b }", result);
+    }
+
+    [Fact]
+    public void Transpile_IfElifElseFi_EmitsFullChain()
+    {
+        var result = PsEmitter.Transpile("if cmd1; then a; elif cmd2; then b; else c; fi");
+
+        Assert.Equal("if (cmd1) { a } elseif (cmd2) { b } else { c }", result);
+    }
+
+    [Fact]
+    public void Transpile_IfFileTest_EmitsTestPath()
+    {
+        var result = PsEmitter.Transpile("if [ -f file ]; then echo yes; fi");
+
+        Assert.Equal("if (Test-Path \"file\" -PathType Leaf) { echo yes }", result);
+    }
+
+    [Fact]
+    public void Transpile_NestedIf_EmitsNestedBlocks()
+    {
+        var result = PsEmitter.Transpile("if cmd1; then if cmd2; then inner; fi; fi");
+
+        Assert.Equal("if (cmd1) { if (cmd2) { inner } }", result);
+    }
+
+    [Fact]
+    public void Transpile_IfDirTest_EmitsTestPathContainer()
+    {
+        var result = PsEmitter.Transpile("if [ -d dir ]; then echo yes; fi");
+
+        Assert.Equal("if (Test-Path \"dir\" -PathType Container) { echo yes }", result);
+    }
+
+    [Fact]
+    public void Transpile_IfWithMultipleBodyCommands_EmitsAll()
+    {
+        var result = PsEmitter.Transpile("if cmd; then a; b; fi");
+
+        Assert.Equal("if (cmd) { a; b }", result);
     }
 
     private static CompoundWord MakeWord(string value) =>
