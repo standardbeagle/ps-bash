@@ -151,27 +151,19 @@ public sealed class BashParser
     private Command ParsePipeline()
     {
         var first = ParseCompoundOrSimple();
-        if (Peek().Kind != BashTokenKind.Pipe)
+        if (Peek().Kind is not BashTokenKind.Pipe and not BashTokenKind.PipeAmp)
             return first;
 
         var commands = ImmutableArray.CreateBuilder<Command>();
         var ops = ImmutableArray.CreateBuilder<string>();
         commands.Add(first);
 
-        while (Peek().Kind == BashTokenKind.Pipe)
+        while (Peek().Kind is BashTokenKind.Pipe or BashTokenKind.PipeAmp)
         {
-            Advance(); // consume |
+            var isPipeAmp = Peek().Kind == BashTokenKind.PipeAmp;
+            Advance(); // consume | or |&
 
-            // |& is Pipe followed by Amp -- means stderr-merge pipe
-            if (Peek().Kind == BashTokenKind.Amp)
-            {
-                Advance(); // consume &
-                ops.Add("|&");
-            }
-            else
-            {
-                ops.Add("|");
-            }
+            ops.Add(isPipeAmp ? "|&" : "|");
 
             commands.Add(ParseCompoundOrSimple());
         }

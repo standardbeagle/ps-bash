@@ -11,6 +11,7 @@ public enum BashTokenKind
     Semi,
     Amp,
     Pipe,
+    PipeAmp,
     AndIf,
     OrIf,
     LParen,

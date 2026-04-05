@@ -110,6 +110,7 @@ public static class BashLexer
                 {
                     "&&" => BashTokenKind.AndIf,
                     "||" => BashTokenKind.OrIf,
+                    "|&" => BashTokenKind.PipeAmp,
                     ">>" => BashTokenKind.DGreat,
                     "<<" => BashTokenKind.DLess,
                     "<&" => BashTokenKind.LessAnd,

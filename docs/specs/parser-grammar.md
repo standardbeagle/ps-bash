@@ -23,6 +23,7 @@ Source files:
 | `Semi`          | `;`                  | `;`             |
 | `Amp`           | `&`                  | `&`             |
 | `Pipe`          | `\|`                 | `\|`            |
+| `PipeAmp`       | `\|&`                | `\|&`           |
 | `AndIf`         | `&&`                 | `&&`            |
 | `OrIf`          | `\|\|`               | `\|\|`          |
 | `LParen`        | `(`                  | `(`             |
@@ -111,10 +112,10 @@ The parser is a hand-rolled recursive-descent parser consuming the flat token li
 input       -> list EOF
 list        -> and_or (';' and_or)* ';'?
 and_or      -> pipeline (('&&' | '||') pipeline)*
-pipeline    -> compound_or_simple ('|' compound_or_simple)*
+pipeline    -> compound_or_simple (('|' | '|&') compound_or_simple)*
 ```
 
-`|&` (stderr-merge pipe) is detected as `Pipe` followed by `Amp`; the ops array stores `"|&"`.
+`|&` (stderr-merge pipe) is a distinct `PipeAmp` token; the ops array stores `"|&"`.
 
 ### 3.2 Compound-or-Simple Dispatch
 

@@ -90,6 +90,17 @@ public class BashLexerTests
     }
 
     [Fact]
+    public void Tokenize_PipeAmp_ReturnsPipeAmpToken()
+    {
+        var tokens = Tokenize("cmd1 |& cmd2");
+
+        AssertTokens(tokens,
+            (BashTokenKind.Word, "cmd1"),
+            (BashTokenKind.PipeAmp, "|&"),
+            (BashTokenKind.Word, "cmd2"));
+    }
+
+    [Fact]
     public void Tokenize_Semicolon_ReturnsSemiToken()
     {
         var tokens = Tokenize("a; b");
