@@ -1511,6 +1511,46 @@ public class PsEmitterTests
         Assert.Equal("echo $map['key']", result);
     }
 
+    [Fact]
+    public void Transpile_BasicHeredoc_EmitsDoubleQuoteHereString()
+    {
+        var result = PsEmitter.Transpile("cat <<EOF\nline 1\nline 2\nEOF");
+
+        Assert.Equal("@\"\nline 1\nline 2\n\"@ | cat", result);
+    }
+
+    [Fact]
+    public void Transpile_HeredocWithVariableExpansion_EmitsPsEnvVar()
+    {
+        var result = PsEmitter.Transpile("cat <<EOF\nhello $NAME\nEOF");
+
+        Assert.Equal("@\"\nhello $env:NAME\n\"@ | cat", result);
+    }
+
+    [Fact]
+    public void Transpile_QuotedDelimiter_EmitsSingleQuoteHereString()
+    {
+        var result = PsEmitter.Transpile("cat <<'EOF'\nhello $NAME\nEOF");
+
+        Assert.Equal("@'\nhello $NAME\n'@ | cat", result);
+    }
+
+    [Fact]
+    public void Transpile_DLessDash_StripsLeadingTabs()
+    {
+        var result = PsEmitter.Transpile("cat <<-EOF\n\tline 1\n\tline 2\nEOF");
+
+        Assert.Equal("@\"\nline 1\nline 2\n\"@ | cat", result);
+    }
+
+    [Fact]
+    public void Transpile_HeredocWithCommandArgs_PipesToCommand()
+    {
+        var result = PsEmitter.Transpile("grep -i foo <<EOF\nhello foo\nbar\nEOF");
+
+        Assert.Equal("@\"\nhello foo\nbar\n\"@ | grep -i foo", result);
+    }
+
     private static CompoundWord MakeWord(string value) =>
         new(ImmutableArray.Create<WordPart>(new WordPart.Literal(value)));
 }

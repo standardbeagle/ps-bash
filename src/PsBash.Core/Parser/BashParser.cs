@@ -819,6 +819,9 @@ public sealed class BashParser
 
         var words = ImmutableArray.CreateBuilder<CompoundWord>();
         var redirects = ImmutableArray.CreateBuilder<Redirect>();
+        string? heredocDelimiter = null;
+        bool heredocExpand = true;
+        bool heredocStripTabs = false;
 
         while (true)
         {
@@ -834,6 +837,26 @@ public sealed class BashParser
                 var parts = DecomposeWord(token.Value);
                 words.Add(new CompoundWord(parts));
             }
+            else if (kind is BashTokenKind.DLess or BashTokenKind.DLessDash)
+            {
+                heredocStripTabs = kind == BashTokenKind.DLessDash;
+                Advance(); // consume << or <<-
+                var delimToken = Advance();
+                string rawDelim = delimToken.Value;
+
+                // Quoted delimiter (single or double quotes) suppresses expansion.
+                if ((rawDelim.StartsWith('\'') && rawDelim.EndsWith('\''))
+                    || (rawDelim.StartsWith('"') && rawDelim.EndsWith('"')))
+                {
+                    heredocExpand = false;
+                    heredocDelimiter = rawDelim[1..^1];
+                }
+                else
+                {
+                    heredocExpand = true;
+                    heredocDelimiter = rawDelim;
+                }
+            }
             else if (kind == BashTokenKind.IoNumber || IsRedirectOp(kind))
             {
                 redirects.Add(ParseRedirect());
@@ -845,13 +868,68 @@ public sealed class BashParser
         }
 
         // If only assignments and no command words, it's a bare assignment.
-        if (assignmentPairs.Count > 0 && words.Count == 0 && redirects.Count == 0)
+        if (assignmentPairs.Count > 0 && words.Count == 0 && redirects.Count == 0
+            && heredocDelimiter is null)
             return new Command.ShAssignment(assignmentPairs.ToImmutable());
+
+        // Collect heredoc body if a heredoc redirect was found.
+        HereDoc? hereDoc = null;
+        if (heredocDelimiter is not null)
+            hereDoc = CollectHereDocBody(heredocDelimiter, heredocExpand, heredocStripTabs);
 
         return new Command.Simple(
             words.ToImmutable(),
             envPairs.ToImmutable(),
-            redirects.ToImmutable());
+            redirects.ToImmutable(),
+            hereDoc);
+    }
+
+    /// <summary>
+    /// Collect the body lines of a here-document from the token stream.
+    /// Consumes tokens after the current line's newline until the delimiter
+    /// is found on its own line.
+    /// </summary>
+    private HereDoc CollectHereDocBody(string delimiter, bool expand, bool stripTabs)
+    {
+        // Skip the newline that ends the command line containing <<.
+        if (Peek().Kind == BashTokenKind.Newline)
+            Advance();
+
+        var bodyLines = new List<string>();
+
+        while (Peek().Kind != BashTokenKind.Eof)
+        {
+            // Collect all tokens on the current line into a single string.
+            var lineTokens = new List<string>();
+            while (Peek().Kind != BashTokenKind.Newline && Peek().Kind != BashTokenKind.Eof)
+            {
+                lineTokens.Add(Advance().Value);
+            }
+
+            string line = string.Join(" ", lineTokens);
+
+            // For <<- the delimiter line may have leading tabs.
+            string trimmedLine = stripTabs ? line.TrimStart('\t') : line;
+            if (trimmedLine == delimiter)
+            {
+                // Consume the newline after the delimiter if present.
+                if (Peek().Kind == BashTokenKind.Newline)
+                    Advance();
+                break;
+            }
+
+            if (stripTabs)
+                line = line.TrimStart('\t');
+
+            bodyLines.Add(line);
+
+            // Consume the newline separator between body lines.
+            if (Peek().Kind == BashTokenKind.Newline)
+                Advance();
+        }
+
+        string body = string.Join("\n", bodyLines);
+        return new HereDoc(body, expand, stripTabs);
     }
 
     private Assignment ParseAssignmentWord()

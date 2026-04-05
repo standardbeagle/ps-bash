@@ -714,6 +714,20 @@ public static class PsEmitter
 
     private static string EmitSimple(Command.Simple cmd)
     {
+        // Heredoc: emit as @"body"@ | cmd (or @'body'@ for no-expand).
+        if (cmd.HereDoc is not null)
+        {
+            var innerCmd = new Command.Simple(cmd.Words, cmd.EnvPairs, cmd.Redirects);
+            string body = cmd.HereDoc.Body;
+            if (cmd.HereDoc.Expand)
+                body = TranslateHereDocVars(body);
+            string hereString = cmd.HereDoc.Expand
+                ? $"@\"\n{body}\n\"@"
+                : $"@'\n{body}\n'@";
+            string cmdText = EmitSimple(innerCmd);
+            return $"{hereString} | {cmdText}";
+        }
+
         // Input redirects (< file) become "Get-Content file | cmd".
         var inputRedirect = cmd.Redirects.FirstOrDefault(r => r.Op == "<");
         if (inputRedirect is not null)
@@ -791,6 +805,59 @@ public static class PsEmitter
             return $"$env:TEMP\\{target[5..]}";
         return target;
     }
+
+    /// <summary>
+    /// Translate bash variable references ($VAR, ${VAR}) in heredoc body text
+    /// to PowerShell equivalents ($env:VAR).
+    /// </summary>
+    private static string TranslateHereDocVars(string body)
+    {
+        var sb = new StringBuilder();
+        int pos = 0;
+        int len = body.Length;
+
+        while (pos < len)
+        {
+            if (body[pos] == '$' && pos + 1 < len && body[pos + 1] == '{')
+            {
+                // ${VAR} -> $env:VAR
+                int close = body.IndexOf('}', pos + 2);
+                if (close >= 0)
+                {
+                    string name = body[(pos + 2)..close];
+                    sb.Append(EmitSimpleVar(name));
+                    pos = close + 1;
+                }
+                else
+                {
+                    sb.Append(body[pos]);
+                    pos++;
+                }
+            }
+            else if (body[pos] == '$' && pos + 1 < len && IsHereDocVarStart(body[pos + 1]))
+            {
+                pos++; // skip $
+                int start = pos;
+                while (pos < len && IsHereDocVarChar(body[pos]))
+                    pos++;
+                string name = body[start..pos];
+                sb.Append(EmitSimpleVar(name));
+            }
+            else
+            {
+                sb.Append(body[pos]);
+                pos++;
+            }
+        }
+
+        return sb.ToString();
+    }
+
+    private static bool IsHereDocVarStart(char c) =>
+        c is (>= 'a' and <= 'z') or (>= 'A' and <= 'Z') or '_';
+
+    private static bool IsHereDocVarChar(char c) =>
+        c is (>= 'a' and <= 'z') or (>= 'A' and <= 'Z') or '_' or (>= '0' and <= '9');
 
     /// <summary>
     /// Emit a value in assignment context: bare literals get wrapped in double quotes,

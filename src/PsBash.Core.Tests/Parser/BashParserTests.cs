@@ -1280,4 +1280,56 @@ public class BashParserTests
         var ps = Assert.IsType<WordPart.ProcessSub>(Assert.Single(simple.Words[1].Parts));
         Assert.False(ps.IsInput);
     }
+
+    [Fact]
+    public void Parse_BasicHeredoc_ProducesHereDocNode()
+    {
+        var simple = Assert.IsType<Command.Simple>(Parse("cat <<EOF\nline 1\nline 2\nEOF"));
+
+        Assert.NotNull(simple.HereDoc);
+        Assert.Equal("line 1\nline 2", simple.HereDoc.Body);
+        Assert.True(simple.HereDoc.Expand);
+        Assert.False(simple.HereDoc.StripTabs);
+    }
+
+    [Fact]
+    public void Parse_HeredocWithVariableExpansion_SetsExpandTrue()
+    {
+        var simple = Assert.IsType<Command.Simple>(Parse("cat <<EOF\nhello $NAME\nEOF"));
+
+        Assert.NotNull(simple.HereDoc);
+        Assert.Equal("hello $NAME", simple.HereDoc.Body);
+        Assert.True(simple.HereDoc.Expand);
+    }
+
+    [Fact]
+    public void Parse_QuotedDelimiter_SetsExpandFalse()
+    {
+        var simple = Assert.IsType<Command.Simple>(Parse("cat <<'EOF'\nhello $NAME\nEOF"));
+
+        Assert.NotNull(simple.HereDoc);
+        Assert.Contains("$NAME", simple.HereDoc.Body);
+        Assert.False(simple.HereDoc.Expand);
+    }
+
+    [Fact]
+    public void Parse_DLessDash_SetsStripTabsTrue()
+    {
+        var simple = Assert.IsType<Command.Simple>(Parse("cat <<-EOF\n\tline 1\n\tline 2\nEOF"));
+
+        Assert.NotNull(simple.HereDoc);
+        Assert.Equal("line 1\nline 2", simple.HereDoc.Body);
+        Assert.True(simple.HereDoc.StripTabs);
+    }
+
+    [Fact]
+    public void Parse_HeredocAsStdin_CommandWordsPreserved()
+    {
+        var simple = Assert.IsType<Command.Simple>(Parse("grep -i foo <<EOF\nhello foo\nbar\nEOF"));
+
+        var words = GetWordValues(simple);
+        Assert.Equal(["grep", "-i", "foo"], words);
+        Assert.NotNull(simple.HereDoc);
+        Assert.Equal("hello foo\nbar", simple.HereDoc.Body);
+    }
 }

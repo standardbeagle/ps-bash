@@ -7,6 +7,14 @@ namespace PsBash.Core.Parser.Ast;
 public sealed record Redirect(string Op, int Fd, CompoundWord Target) : BashNode;
 
 /// <summary>
+/// A here-document redirect, e.g. <c>&lt;&lt;EOF\ntext\nEOF</c>.
+/// <paramref name="Body"/> is the collected text between delimiters.
+/// <paramref name="Expand"/> is true when variable expansion should occur (unquoted delimiter).
+/// <paramref name="StripTabs"/> is true for <c>&lt;&lt;-</c> (leading tabs stripped from body).
+/// </summary>
+public sealed record HereDoc(string Body, bool Expand, bool StripTabs) : BashNode;
+
+/// <summary>
 /// Assignment operator: <c>=</c> or <c>+=</c>.
 /// </summary>
 public enum AssignOp

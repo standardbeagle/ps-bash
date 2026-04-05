@@ -15,7 +15,8 @@ public abstract record Command : BashNode
     public sealed record Simple(
         ImmutableArray<CompoundWord> Words,
         ImmutableArray<EnvPair> EnvPairs,
-        ImmutableArray<Redirect> Redirects) : Command;
+        ImmutableArray<Redirect> Redirects,
+        HereDoc? HereDoc = null) : Command;
 
     /// <summary>
     /// A pipeline of commands connected by <c>|</c> or <c>|&amp;</c>.
