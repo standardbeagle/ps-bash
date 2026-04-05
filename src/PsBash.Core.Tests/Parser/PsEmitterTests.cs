@@ -1140,7 +1140,7 @@ public class PsEmitterTests
     public void Transpile_ArithSub_BasicAddition()
     {
         var result = PsEmitter.Transpile("echo $((x + 1))");
-        Assert.Equal("echo $($x + 1)", result);
+        Assert.Equal("echo $($env:x + 1)", result);
     }
 
     [Fact]
@@ -1154,91 +1154,91 @@ public class PsEmitterTests
     public void Transpile_ArithSub_Multiplication()
     {
         var result = PsEmitter.Transpile("echo $((x * y))");
-        Assert.Equal("echo $($x * $y)", result);
+        Assert.Equal("echo $($env:x * $env:y)", result);
     }
 
     [Fact]
     public void Transpile_ArithCommand_Increment()
     {
         var result = PsEmitter.Transpile("(( x++ ))");
-        Assert.Equal("$x++", result);
+        Assert.Equal("$env:x++", result);
     }
 
     [Fact]
     public void Transpile_ArithCommand_Decrement()
     {
         var result = PsEmitter.Transpile("(( x-- ))");
-        Assert.Equal("$x--", result);
+        Assert.Equal("$env:x--", result);
     }
 
     [Fact]
     public void Transpile_ArithCommand_PreIncrement()
     {
         var result = PsEmitter.Transpile("(( ++x ))");
-        Assert.Equal("++$x", result);
+        Assert.Equal("++$env:x", result);
     }
 
     [Fact]
     public void Transpile_ArithCommand_PreDecrement()
     {
         var result = PsEmitter.Transpile("(( --x ))");
-        Assert.Equal("--$x", result);
+        Assert.Equal("--$env:x", result);
     }
 
     [Fact]
     public void Transpile_ArithCommand_Comparison_GreaterThan()
     {
         var result = PsEmitter.Transpile("(( x > 5 ))");
-        Assert.Equal("$x -gt 5", result);
+        Assert.Equal("$env:x -gt 5", result);
     }
 
     [Fact]
     public void Transpile_ArithCommand_Comparison_LessThan()
     {
         var result = PsEmitter.Transpile("(( x < 5 ))");
-        Assert.Equal("$x -lt 5", result);
+        Assert.Equal("$env:x -lt 5", result);
     }
 
     [Fact]
     public void Transpile_ArithCommand_Comparison_GreaterEqual()
     {
         var result = PsEmitter.Transpile("(( x >= 5 ))");
-        Assert.Equal("$x -ge 5", result);
+        Assert.Equal("$env:x -ge 5", result);
     }
 
     [Fact]
     public void Transpile_ArithCommand_Comparison_LessEqual()
     {
         var result = PsEmitter.Transpile("(( x <= 5 ))");
-        Assert.Equal("$x -le 5", result);
+        Assert.Equal("$env:x -le 5", result);
     }
 
     [Fact]
     public void Transpile_ArithCommand_Comparison_Equal()
     {
         var result = PsEmitter.Transpile("(( x == 5 ))");
-        Assert.Equal("$x -eq 5", result);
+        Assert.Equal("$env:x -eq 5", result);
     }
 
     [Fact]
     public void Transpile_ArithCommand_Comparison_NotEqual()
     {
         var result = PsEmitter.Transpile("(( x != 5 ))");
-        Assert.Equal("$x -ne 5", result);
+        Assert.Equal("$env:x -ne 5", result);
     }
 
     [Fact]
     public void Transpile_ArithCommand_Ternary()
     {
         var result = PsEmitter.Transpile("(( x > 0 ? 1 : 0 ))");
-        Assert.Equal("if ($x -gt 0) { 1 } else { 0 }", result);
+        Assert.Equal("if ($env:x -gt 0) { 1 } else { 0 }", result);
     }
 
     [Fact]
     public void Transpile_ArithSub_InAssignment()
     {
         var result = PsEmitter.Transpile("result=$((x + 1))");
-        Assert.Equal("$env:result = \"$($x + 1)\"", result);
+        Assert.Equal("$env:result = \"$($env:x + 1)\"", result);
     }
 
     [Fact]
@@ -1259,7 +1259,7 @@ public class PsEmitterTests
     public void Transpile_ArithSub_NestedInString()
     {
         var result = PsEmitter.Transpile("echo \"result is $((x + 1))\"");
-        Assert.Equal("echo \"result is $($x + 1)\"", result);
+        Assert.Equal("echo \"result is $($env:x + 1)\"", result);
     }
 
     [Fact]

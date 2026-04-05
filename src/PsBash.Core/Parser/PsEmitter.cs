@@ -175,29 +175,27 @@ public static class PsEmitter
 
     private static string EmitForArith(Command.ForArith forArith)
     {
-        var sb = new StringBuilder("for (");
-        sb.Append(TranslateArithClause(forArith.Init, isInit: true));
-        sb.Append("; ");
-        sb.Append(TranslateArithCondition(forArith.Cond));
-        sb.Append("; ");
-        sb.Append(TranslateArithClause(forArith.Step, isInit: false));
-        sb.Append(") { ");
-
-        // Extract variable name from init clause (e.g. "i=0" -> "i")
+        // Register loop var before emitting header so init/cond/step all use $var
         string? loopVar = ExtractArithVar(forArith.Init);
         var vars = _loopVars ??= new HashSet<string>();
         bool added = loopVar is not null && vars.Add(loopVar);
         try
         {
+            var sb = new StringBuilder("for (");
+            sb.Append(TranslateArithClause(forArith.Init, isInit: true));
+            sb.Append("; ");
+            sb.Append(TranslateArithCondition(forArith.Cond));
+            sb.Append("; ");
+            sb.Append(TranslateArithClause(forArith.Step, isInit: false));
+            sb.Append(") { ");
             sb.Append(Emit(forArith.Body));
+            sb.Append(" }");
+            return sb.ToString();
         }
         finally
         {
             if (added) vars.Remove(loopVar!);
         }
-
-        sb.Append(" }");
-        return sb.ToString();
     }
 
     private static string EmitWhile(Command.While whileCmd)
@@ -313,17 +311,17 @@ public static class PsEmitter
     {
         string expr = arith.Expr.Trim();
 
-        // Increment/decrement: x++ -> $x++, ++x -> ++$x
+        // Increment/decrement: x++ -> $env:x++, ++x -> ++$env:x
         if (expr.EndsWith("++") || expr.EndsWith("--"))
         {
             string varPart = expr[..^2].Trim();
-            if (!varPart.StartsWith('$')) varPart = "$" + varPart;
+            if (!varPart.StartsWith('$')) varPart = ArithVarRef(varPart);
             return varPart + expr[^2..];
         }
         if (expr.StartsWith("++") || expr.StartsWith("--"))
         {
             string varPart = expr[2..].Trim();
-            if (!varPart.StartsWith('$')) varPart = "$" + varPart;
+            if (!varPart.StartsWith('$')) varPart = ArithVarRef(varPart);
             return expr[..2] + varPart;
         }
 
@@ -460,21 +458,21 @@ public static class PsEmitter
         // Prefix bare variables with $
         clause = PrefixBareVar(clause);
 
-        // Convert assignment: i=0 -> $i = 0
+        // Convert assignment: i=0 -> $env:i = 0
         if (isInit && clause.Contains('=') && !clause.Contains("=="))
         {
             int eq = clause.IndexOf('=');
             string varPart = clause[..eq].Trim();
             string valPart = clause[(eq + 1)..].Trim();
-            if (!varPart.StartsWith('$')) varPart = "$" + varPart;
+            if (!varPart.StartsWith('$')) varPart = ArithVarRef(varPart);
             return $"{varPart} = {valPart}";
         }
 
-        // Convert increment/decrement: i++ -> $i++
+        // Convert increment/decrement: i++ -> $env:i++
         if (clause.EndsWith("++") || clause.EndsWith("--"))
         {
             string varPart = clause[..^2].Trim();
-            if (!varPart.StartsWith('$')) varPart = "$" + varPart;
+            if (!varPart.StartsWith('$')) varPart = ArithVarRef(varPart);
             return varPart + clause[^2..];
         }
 
@@ -503,9 +501,30 @@ public static class PsEmitter
         return cond;
     }
 
+    private static readonly HashSet<string> _psBuiltins = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "true", "false", "null", "HOME", "LASTEXITCODE", "PID", "args",
+    };
+
     /// <summary>
-    /// Prefix bare variable names (identifiers not already starting with $) with $.
-    /// Skips identifiers preceded by $ or - (PowerShell operators like -lt).
+    /// Return the PowerShell variable reference for a bare name:
+    /// loop vars and PS builtins get <c>$name</c>, others get <c>$env:name</c>.
+    /// </summary>
+    private static string ArithVarRef(string name)
+    {
+        if (_psBuiltins.Contains(name))
+            return "$" + name;
+        if (_loopVars is not null && _loopVars.Contains(name))
+            return "$" + name;
+        return "$env:" + name;
+    }
+
+    /// <summary>
+    /// Prefix bare variable names in arithmetic expressions with the correct
+    /// PowerShell variable form. Loop variables (tracked in <c>_loopVars</c>)
+    /// become <c>$var</c>; PS builtins keep <c>$var</c>; all other user
+    /// variables become <c>$env:var</c>.
+    /// Skips identifiers preceded by <c>$</c> or <c>-</c> (PowerShell operators).
     /// </summary>
     private static string PrefixBareVar(string expr)
     {
@@ -516,7 +535,12 @@ public static class PsEmitter
             {
                 if (m.Index > 0 && expr[m.Index - 1] is '$' or '-')
                     return m.Value;
-                return "$" + m.Value;
+                string name = m.Value;
+                if (_psBuiltins.Contains(name))
+                    return "$" + name;
+                if (_loopVars is not null && _loopVars.Contains(name))
+                    return "$" + name;
+                return "$env:" + name;
             });
     }
 
