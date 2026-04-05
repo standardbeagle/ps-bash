@@ -8,9 +8,9 @@
   "runner_dart_id": null,
   "started_at": "2026-04-04T22:43:00Z",
   "resumed_at": "2026-04-05T03:00:00Z",
-  "iterations": 18,
+  "iterations": 19,
   "spawns": 0,
-  "last_iteration_at": "2026-04-05T06:56:00Z",
+  "last_iteration_at": "2026-04-05T07:07:00Z",
   "last_subagent": "task-executor",
   "tasks": [
     {
@@ -313,6 +313,22 @@
       "tests_added": 0,
       "plan_adjustments": 0,
       "completion_summary": "Parser-v2 feature parity achieved. Fixed 7 test failures: removed unnecessary [void]() from standalone assignments (kept for chain context), added double parens for BoolExpr conditions in if/while, unwrapped subshell conditions, changed !() to -not () for until. Switched default parser mode to auto (v2 with v1 fallback). All 620 tests pass in all modes.",
+      "failure_reason": null,
+      "fix_task_created": false,
+      "fix_task_id": null
+    },
+    {
+      "task_id": "msKTPTpO3PLv",
+      "iteration": 19,
+      "status": "completed",
+      "started_at": "2026-04-05T06:57:00Z",
+      "completed_at": "2026-04-05T07:07:00Z",
+      "phase_completed": "phase-9",
+      "failed_phase": null,
+      "files_changed": 6,
+      "tests_added": 18,
+      "plan_adjustments": 1,
+      "completion_summary": "Parse and emit arithmetic expansion $(( )) and (( )). Added ArithSub WordPart and ArithCommand node. Lexer detects $(( )) as atomic token. Parser handles standalone (( )) using raw input extraction. Emitter supports binary ops, comparisons, increment/decrement, ternary. All 638 tests pass.",
       "failure_reason": null,
       "fix_task_created": false,
       "fix_task_id": null
