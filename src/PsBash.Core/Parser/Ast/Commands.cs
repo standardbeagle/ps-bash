@@ -44,7 +44,9 @@ public abstract record Command : BashNode
     /// A bare assignment command, e.g. <c>x=1 y=2</c>.
     /// Modeled after oils command.ShAssignment.
     /// </summary>
-    public sealed record ShAssignment(ImmutableArray<Assignment> Pairs) : Command;
+    public sealed record ShAssignment(
+        ImmutableArray<Assignment> Pairs,
+        bool IsLocal = false) : Command;
 
     /// <summary>
     /// An if/elif/else statement.
@@ -97,6 +99,14 @@ public abstract record Command : BashNode
     public sealed record Case(
         CompoundWord Expr,
         ImmutableArray<CaseArm> Arms) : Command;
+
+    /// <summary>
+    /// A function definition: <c>function name { body }</c> or <c>name() { body }</c>.
+    /// Maps to PowerShell <c>function name { body }</c>.
+    /// </summary>
+    public sealed record ShFunction(
+        string Name,
+        Command Body) : Command;
 }
 
 /// <summary>

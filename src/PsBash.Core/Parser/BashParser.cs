@@ -141,8 +141,15 @@ public sealed class BashParser
         if (Peek().Kind == BashTokenKind.Word && Peek().Value == "case")
             return ParseCase();
 
+        if (Peek().Kind == BashTokenKind.Word && Peek().Value == "function")
+            return ParseFunction();
+
         if (Peek().Kind == BashTokenKind.Word && Peek().Value is "[" or "[[")
             return ParseTestExpr();
+
+        // name() { body } form: Word followed by LParen RParen
+        if (Peek().Kind == BashTokenKind.Word && IsParensFunctionDef())
+            return ParseParensFunction();
 
         // Bail for compound constructs not yet implemented — triggers regex fallback in auto mode.
         if (Peek().Kind == BashTokenKind.Word && IsUnimplementedCompoundKeyword(Peek().Value))
@@ -217,7 +224,7 @@ public sealed class BashParser
         kind is BashTokenKind.Less or BashTokenKind.Great or BashTokenKind.Bang;
 
     private static bool IsUnimplementedCompoundKeyword(string word) =>
-        word is "function" or "select";
+        word is "select";
 
     private Command.If ParseIf()
     {
@@ -528,6 +535,85 @@ public sealed class BashParser
         && _pos + 1 < _tokens.Count
         && _tokens[_pos + 1].Kind == BashTokenKind.Semi;
 
+    private Command.ShFunction ParseFunction()
+    {
+        Expect("function");
+        var nameToken = Advance();
+        string name = nameToken.Value;
+
+        // Optional () after name in "function name() { body }" form
+        if (Peek().Kind == BashTokenKind.LParen)
+        {
+            Advance(); // consume (
+            if (Peek().Kind == BashTokenKind.RParen)
+                Advance(); // consume )
+        }
+
+        SkipTerminators();
+        var body = ParseBraceGroup();
+        return new Command.ShFunction(name, body);
+    }
+
+    /// <summary>
+    /// Check whether the current position starts a <c>name() { ... }</c> function definition.
+    /// Requires Word LParen RParen ahead without consuming tokens.
+    /// </summary>
+    private bool IsParensFunctionDef()
+    {
+        if (_pos + 2 >= _tokens.Count)
+            return false;
+        return _tokens[_pos + 1].Kind == BashTokenKind.LParen
+            && _tokens[_pos + 2].Kind == BashTokenKind.RParen;
+    }
+
+    private Command.ShFunction ParseParensFunction()
+    {
+        var nameToken = Advance(); // consume name
+        string name = nameToken.Value;
+        Advance(); // consume (
+        Advance(); // consume )
+        SkipTerminators();
+        var body = ParseBraceGroup();
+        return new Command.ShFunction(name, body);
+    }
+
+    /// <summary>
+    /// Parse a brace group: <c>{ commands }</c>.
+    /// Used for function bodies.
+    /// </summary>
+    private Command ParseBraceGroup()
+    {
+        if (Peek().Kind != BashTokenKind.LBrace)
+            throw new FormatException(
+                $"Expected '{{' but got '{Peek().Value}' ({Peek().Kind}) at position {Peek().Position}");
+        Advance(); // consume {
+        SkipTerminators();
+
+        var commands = ImmutableArray.CreateBuilder<Command>();
+
+        while (true)
+        {
+            SkipTerminators();
+            if (Peek().Kind == BashTokenKind.Eof)
+                break;
+            if (Peek().Kind == BashTokenKind.RBrace)
+                break;
+
+            commands.Add(ParseAndOr());
+            SkipTerminators();
+        }
+
+        if (Peek().Kind != BashTokenKind.RBrace)
+            throw new FormatException(
+                $"Expected '}}' but got '{Peek().Value}' ({Peek().Kind}) at position {Peek().Position}");
+        Advance(); // consume }
+
+        if (commands.Count == 1)
+            return commands[0];
+
+        return new Command.CommandList(commands.ToImmutable());
+    }
+
     private Command ParseSimpleCommand()
     {
         // Check for "export" keyword followed by assignment words.
@@ -542,6 +628,24 @@ public sealed class BashParser
                 while (Peek().Kind == BashTokenKind.AssignmentWord)
                     pairs.Add(ParseAssignmentWord());
                 return new Command.ShAssignment(pairs.ToImmutable());
+            }
+
+            // Not followed by assignment — rewind and parse as normal command.
+            _pos = saved;
+        }
+
+        // Check for "local" keyword followed by assignment words.
+        if (Peek().Kind == BashTokenKind.Word && Peek().Value == "local")
+        {
+            int saved = _pos;
+            Advance(); // consume "local"
+
+            if (Peek().Kind == BashTokenKind.AssignmentWord)
+            {
+                var pairs = ImmutableArray.CreateBuilder<Assignment>();
+                while (Peek().Kind == BashTokenKind.AssignmentWord)
+                    pairs.Add(ParseAssignmentWord());
+                return new Command.ShAssignment(pairs.ToImmutable(), IsLocal: true);
             }
 
             // Not followed by assignment — rewind and parse as normal command.

@@ -27,6 +27,7 @@ public static class PsEmitter
         Command.ForArith forArith => EmitForArith(forArith),
         Command.While whileCmd => EmitWhile(whileCmd),
         Command.Case caseCmd => EmitCase(caseCmd),
+        Command.ShFunction func => EmitFunction(func),
         Command.Simple simple => EmitSimple(simple),
         Command.Pipeline pipeline => EmitPipeline(pipeline),
         Command.AndOrList andOr => EmitAndOrList(andOr),
@@ -260,6 +261,16 @@ public static class PsEmitter
             }
         }
 
+        sb.Append(" }");
+        return sb.ToString();
+    }
+
+    private static string EmitFunction(Command.ShFunction func)
+    {
+        var sb = new StringBuilder("function ");
+        sb.Append(func.Name);
+        sb.Append(" { ");
+        sb.Append(Emit(func.Body));
         sb.Append(" }");
         return sb.ToString();
     }
@@ -548,11 +559,21 @@ public static class PsEmitter
                 sb.Append("; ");
 
             var pair = cmd.Pairs[i];
-            sb.Append("[void]($env:");
-            sb.Append(pair.Name);
-            sb.Append(" = ");
-            sb.Append(EmitAssignmentValue(pair.Value));
-            sb.Append(')');
+            if (cmd.IsLocal)
+            {
+                sb.Append('$');
+                sb.Append(pair.Name);
+                sb.Append(" = ");
+                sb.Append(EmitAssignmentValue(pair.Value));
+            }
+            else
+            {
+                sb.Append("[void]($env:");
+                sb.Append(pair.Name);
+                sb.Append(" = ");
+                sb.Append(EmitAssignmentValue(pair.Value));
+                sb.Append(')');
+            }
         }
         return sb.ToString();
     }

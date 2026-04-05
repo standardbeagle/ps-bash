@@ -4,3 +4,5 @@ dist/
 *.user
 *.suo
 .vs/
+**/TestResults/
+*.dmp

@@ -1005,4 +1005,72 @@ public class BashParserTests
         var whileCmd = Assert.IsType<Command.While>(result);
         Assert.False(whileCmd.IsUntil);
     }
+
+    [Fact]
+    public void Parse_FunctionKeywordForm_ReturnsShFunction()
+    {
+        var result = Parse("function greet { echo hello }");
+
+        var func = Assert.IsType<Command.ShFunction>(result);
+        Assert.Equal("greet", func.Name);
+        var body = Assert.IsType<Command.Simple>(func.Body);
+        Assert.Equal(new[] { "echo", "hello" }, GetWordValues(body));
+    }
+
+    [Fact]
+    public void Parse_FunctionParensForm_ReturnsShFunction()
+    {
+        var result = Parse("greet() { echo hello }");
+
+        var func = Assert.IsType<Command.ShFunction>(result);
+        Assert.Equal("greet", func.Name);
+        var body = Assert.IsType<Command.Simple>(func.Body);
+        Assert.Equal(new[] { "echo", "hello" }, GetWordValues(body));
+    }
+
+    [Fact]
+    public void Parse_FunctionParensWithSpace_ReturnsShFunction()
+    {
+        var result = Parse("greet () { echo hello }");
+
+        var func = Assert.IsType<Command.ShFunction>(result);
+        Assert.Equal("greet", func.Name);
+        var body = Assert.IsType<Command.Simple>(func.Body);
+        Assert.Equal(new[] { "echo", "hello" }, GetWordValues(body));
+    }
+
+    [Fact]
+    public void Parse_FunctionWithLocalVars_ReturnsShFunctionWithLocalAssignment()
+    {
+        var result = Parse("function add { local result=42; echo $result }");
+
+        var func = Assert.IsType<Command.ShFunction>(result);
+        Assert.Equal("add", func.Name);
+        var list = Assert.IsType<Command.CommandList>(func.Body);
+        Assert.Equal(2, list.Commands.Length);
+        var assign = Assert.IsType<Command.ShAssignment>(list.Commands[0]);
+        Assert.True(assign.IsLocal);
+        Assert.Equal("result", assign.Pairs[0].Name);
+    }
+
+    [Fact]
+    public void Parse_FunctionWithMultipleCommands_ReturnsShFunctionWithCommandList()
+    {
+        var result = Parse("function setup {\n  echo start\n  echo end\n}");
+
+        var func = Assert.IsType<Command.ShFunction>(result);
+        Assert.Equal("setup", func.Name);
+        var list = Assert.IsType<Command.CommandList>(func.Body);
+        Assert.Equal(2, list.Commands.Length);
+    }
+
+    [Fact]
+    public void Parse_LocalAssignment_ReturnsShAssignmentWithIsLocal()
+    {
+        var result = Parse("local x=10");
+
+        var assign = Assert.IsType<Command.ShAssignment>(result);
+        Assert.True(assign.IsLocal);
+        Assert.Equal("x", assign.Pairs[0].Name);
+    }
 }

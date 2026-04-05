@@ -1053,6 +1053,57 @@ public class PsEmitterTests
             result);
     }
 
+    [Fact]
+    public void Transpile_FunctionKeywordForm_EmitsPsFunction()
+    {
+        var result = PsEmitter.Transpile("function greet { echo hello }");
+
+        Assert.Equal("function greet { echo hello }", result);
+    }
+
+    [Fact]
+    public void Transpile_FunctionParensForm_EmitsPsFunction()
+    {
+        var result = PsEmitter.Transpile("greet() { echo hello }");
+
+        Assert.Equal("function greet { echo hello }", result);
+    }
+
+    [Fact]
+    public void Transpile_FunctionParensWithSpace_EmitsPsFunction()
+    {
+        var result = PsEmitter.Transpile("greet () { echo hello }");
+
+        Assert.Equal("function greet { echo hello }", result);
+    }
+
+    [Fact]
+    public void Transpile_FunctionWithLocalVars_EmitsLocalAssignment()
+    {
+        var result = PsEmitter.Transpile("function add { local result=42; echo $result }");
+
+        Assert.Equal("function add { $result = \"42\"; echo $env:result }", result);
+    }
+
+    [Fact]
+    public void Transpile_FunctionCallingFunction_EmitsNestedCalls()
+    {
+        var result = PsEmitter.Transpile(
+            "function greet { echo hello }; function main { greet }");
+
+        Assert.Equal(
+            "function greet { echo hello }; function main { greet }",
+            result);
+    }
+
+    [Fact]
+    public void Transpile_FunctionWithMultilineBody_EmitsFunction()
+    {
+        var result = PsEmitter.Transpile("function setup {\n  echo start\n  echo end\n}");
+
+        Assert.Equal("function setup { echo start; echo end }", result);
+    }
+
     private static CompoundWord MakeWord(string value) =>
         new(ImmutableArray.Create<WordPart>(new WordPart.Literal(value)));
 }
