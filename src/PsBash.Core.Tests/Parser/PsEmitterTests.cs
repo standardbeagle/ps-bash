@@ -883,6 +883,64 @@ public class PsEmitterTests
         Assert.Equal("[void](Test-Path \"file\" -PathType Leaf) || echo no", result);
     }
 
+    [Fact]
+    public void Transpile_ForInWords_EmitsForeach()
+    {
+        var result = PsEmitter.Transpile("for x in a b c; do echo $x; done");
+
+        Assert.Equal("foreach ($x in 'a','b','c') { echo $x }", result);
+    }
+
+    [Fact]
+    public void Transpile_ForInNumbers_EmitsForeach()
+    {
+        var result = PsEmitter.Transpile("for i in 1 2 3; do echo $i; done");
+
+        Assert.Equal("foreach ($i in 1,2,3) { echo $i }", result);
+    }
+
+    [Fact]
+    public void Transpile_ForInGlob_EmitsResolvePath()
+    {
+        var result = PsEmitter.Transpile("for f in *.txt; do cat $f; done");
+
+        Assert.Equal("foreach ($f in (Resolve-Path *.txt)) { cat $f }", result);
+    }
+
+    [Fact]
+    public void Transpile_ForImplicitArgs_EmitsArgsIteration()
+    {
+        var result = PsEmitter.Transpile("for x; do echo $x; done");
+
+        Assert.Equal("foreach ($x in $args) { echo $x }", result);
+    }
+
+    [Fact]
+    public void Transpile_ForArith_EmitsCStyleFor()
+    {
+        var result = PsEmitter.Transpile("for ((i=0; i<10; i++)); do echo $i; done");
+
+        Assert.Equal("for ($i = 0; $i -lt 10; $i++) { echo $i }", result);
+    }
+
+    [Fact]
+    public void Transpile_ForIn_LoopVarNotEnvVar()
+    {
+        var result = PsEmitter.Transpile("for i in 1 2 3; do echo $i; done");
+
+        Assert.Contains("$i", result);
+        Assert.DoesNotContain("$env:i", result);
+    }
+
+    [Fact]
+    public void Transpile_ForIn_SimilarVarNameNotClobbered()
+    {
+        var result = PsEmitter.Transpile("for i in 1 2; do echo $idx $i; done");
+
+        Assert.Contains("$env:idx", result);
+        Assert.Contains("echo $env:idx $i", result);
+    }
+
     private static CompoundWord MakeWord(string value) =>
         new(ImmutableArray.Create<WordPart>(new WordPart.Literal(value)));
 }

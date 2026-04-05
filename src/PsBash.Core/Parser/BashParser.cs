@@ -132,6 +132,9 @@ public sealed class BashParser
         if (Peek().Kind == BashTokenKind.Word && Peek().Value == "if")
             return ParseIf();
 
+        if (Peek().Kind == BashTokenKind.Word && Peek().Value == "for")
+            return ParseFor();
+
         if (Peek().Kind == BashTokenKind.Word && Peek().Value is "[" or "[[")
             return ParseTestExpr();
 
@@ -208,7 +211,7 @@ public sealed class BashParser
         kind is BashTokenKind.Less or BashTokenKind.Great or BashTokenKind.Bang;
 
     private static bool IsUnimplementedCompoundKeyword(string word) =>
-        word is "for" or "while" or "until" or "case" or "function" or "select";
+        word is "while" or "until" or "case" or "function" or "select";
 
     private Command.If ParseIf()
     {
@@ -290,6 +293,96 @@ public sealed class BashParser
     {
         while (Peek().Kind is BashTokenKind.Semi or BashTokenKind.Newline)
             _pos++;
+    }
+
+    private Command ParseFor()
+    {
+        Expect("for");
+
+        // C-style: for ((init; cond; step)); do body; done
+        if (Peek().Kind == BashTokenKind.LParen)
+        {
+            return ParseForArith();
+        }
+
+        // for-in: for var [in words]; do body; done
+        var varToken = Advance();
+        string varName = varToken.Value;
+
+        var list = ImmutableArray.CreateBuilder<CompoundWord>();
+
+        SkipTerminators();
+
+        // "in" keyword introduces list; absence means implicit $@
+        if (Peek().Kind == BashTokenKind.Word && Peek().Value == "in")
+        {
+            Advance(); // consume "in"
+
+            while (Peek().Kind == BashTokenKind.Word
+                && Peek().Value != "do"
+                && !IsCompoundDelimiter(Peek().Value))
+            {
+                var token = Advance();
+                var parts = DecomposeWord(token.Value);
+                list.Add(new CompoundWord(parts));
+            }
+        }
+
+        SkipTerminators();
+        Expect("do");
+        SkipTerminators();
+        var body = ParseCompoundBody("done");
+        Expect("done");
+
+        return new Command.ForIn(varName, list.ToImmutable(), body);
+    }
+
+    private Command ParseForArith()
+    {
+        Advance(); // consume first (
+        Advance(); // consume second (
+
+        // Collect tokens for each of the three clauses, separated by Semi.
+        string init = CollectArithClause();
+        string cond = CollectArithClause();
+        string step = CollectArithClause();
+
+        // Consume closing )) — may already be past them if CollectArithClause consumed RParen
+        SkipTerminators();
+        Expect("do");
+        SkipTerminators();
+        var body = ParseCompoundBody("done");
+        Expect("done");
+
+        return new Command.ForArith(init, cond, step, body);
+    }
+
+    /// <summary>
+    /// Collect tokens for one clause of a C-style for loop's arithmetic expression.
+    /// Stops at Semi (consumes it) or RParen (consumed to close the (( ))).
+    /// </summary>
+    private string CollectArithClause()
+    {
+        var parts = new List<string>();
+        while (Peek().Kind != BashTokenKind.Eof)
+        {
+            if (Peek().Kind == BashTokenKind.Semi)
+            {
+                Advance(); // consume ;
+                break;
+            }
+            if (Peek().Kind == BashTokenKind.RParen)
+            {
+                Advance(); // consume first )
+                if (Peek().Kind == BashTokenKind.RParen)
+                    Advance(); // consume second )
+                break;
+            }
+
+            var token = Advance();
+            parts.Add(token.Value);
+        }
+        return string.Join("", parts);
     }
 
     private Command ParseSimpleCommand()

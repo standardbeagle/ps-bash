@@ -61,6 +61,25 @@ public abstract record Command : BashNode
     public sealed record BoolExpr(
         ImmutableArray<CompoundWord> Inner,
         bool Extended) : Command;
+
+    /// <summary>
+    /// A for-in loop: <c>for x in a b c; do body; done</c>.
+    /// An empty list means implicit <c>$@</c> (<c>for x; do ...</c>).
+    /// </summary>
+    public sealed record ForIn(
+        string Var,
+        ImmutableArray<CompoundWord> List,
+        Command Body) : Command;
+
+    /// <summary>
+    /// A C-style arithmetic for loop: <c>for ((init; cond; step)); do body; done</c>.
+    /// The three clauses are stored as raw strings.
+    /// </summary>
+    public sealed record ForArith(
+        string Init,
+        string Cond,
+        string Step,
+        Command Body) : Command;
 }
 
 /// <summary>

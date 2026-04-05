@@ -12,10 +12,19 @@ public static class PsEmitter
     /// <summary>
     /// Emit PowerShell for the given command AST node.
     /// </summary>
+    /// <summary>
+    /// Set of loop variable names currently in scope.
+    /// Variables declared by for-in or for-arith loops emit as <c>$var</c> rather than <c>$env:var</c>.
+    /// </summary>
+    [ThreadStatic]
+    private static HashSet<string>? _loopVars;
+
     public static string Emit(Command cmd) => cmd switch
     {
         Command.If ifCmd => EmitIf(ifCmd),
         Command.BoolExpr boolExpr => EmitBoolExpr(boolExpr),
+        Command.ForIn forIn => EmitForIn(forIn),
+        Command.ForArith forArith => EmitForArith(forArith),
         Command.Simple simple => EmitSimple(simple),
         Command.Pipeline pipeline => EmitPipeline(pipeline),
         Command.AndOrList andOr => EmitAndOrList(andOr),
@@ -63,6 +72,191 @@ public static class PsEmitter
         }
 
         return sb.ToString();
+    }
+
+    private static string EmitForIn(Command.ForIn forIn)
+    {
+        var sb = new StringBuilder();
+
+        // Empty list means implicit $@ → $args
+        if (forIn.List.IsEmpty)
+        {
+            sb.Append($"foreach (${forIn.Var} in $args) {{ ");
+        }
+        else
+        {
+            sb.Append($"foreach (${forIn.Var} in ");
+            sb.Append(FormatForInList(forIn.List));
+            sb.Append(") { ");
+        }
+
+        var vars = _loopVars ??= new HashSet<string>();
+        bool added = vars.Add(forIn.Var);
+        try
+        {
+            sb.Append(Emit(forIn.Body));
+        }
+        finally
+        {
+            if (added) vars.Remove(forIn.Var);
+        }
+
+        sb.Append(" }");
+        return sb.ToString();
+    }
+
+    private static string FormatForInList(ImmutableArray<CompoundWord> list)
+    {
+        if (list.Length == 1)
+        {
+            var single = EmitWord(list[0]);
+            if (HasGlobChars(single))
+                return $"(Resolve-Path {single})";
+            return single;
+        }
+
+        // Check for glob patterns
+        bool hasGlob = false;
+        foreach (var word in list)
+        {
+            if (HasGlobChars(EmitWord(word)))
+            {
+                hasGlob = true;
+                break;
+            }
+        }
+
+        if (hasGlob)
+        {
+            var sb = new StringBuilder("(Resolve-Path ");
+            for (int i = 0; i < list.Length; i++)
+            {
+                if (i > 0) sb.Append(' ');
+                sb.Append(EmitWord(list[i]));
+            }
+            sb.Append(')');
+            return sb.ToString();
+        }
+
+        // Multiple items: join with commas, quoting strings
+        var items = new List<string>();
+        foreach (var word in list)
+        {
+            var val = EmitWord(word);
+            items.Add(FormatForItem(val));
+        }
+        return string.Join(",", items);
+    }
+
+    private static string FormatForItem(string item)
+    {
+        if (double.TryParse(item, System.Globalization.NumberStyles.Any,
+            System.Globalization.CultureInfo.InvariantCulture, out _))
+            return item;
+        return $"'{item}'";
+    }
+
+    private static string EmitForArith(Command.ForArith forArith)
+    {
+        var sb = new StringBuilder("for (");
+        sb.Append(TranslateArithClause(forArith.Init, isInit: true));
+        sb.Append("; ");
+        sb.Append(TranslateArithCondition(forArith.Cond));
+        sb.Append("; ");
+        sb.Append(TranslateArithClause(forArith.Step, isInit: false));
+        sb.Append(") { ");
+
+        // Extract variable name from init clause (e.g. "i=0" -> "i")
+        string? loopVar = ExtractArithVar(forArith.Init);
+        var vars = _loopVars ??= new HashSet<string>();
+        bool added = loopVar is not null && vars.Add(loopVar);
+        try
+        {
+            sb.Append(Emit(forArith.Body));
+        }
+        finally
+        {
+            if (added) vars.Remove(loopVar!);
+        }
+
+        sb.Append(" }");
+        return sb.ToString();
+    }
+
+    private static string? ExtractArithVar(string init)
+    {
+        int eq = init.IndexOf('=');
+        if (eq > 0)
+            return init[..eq].Trim().TrimStart('$');
+        return null;
+    }
+
+    private static string TranslateArithClause(string clause, bool isInit)
+    {
+        clause = clause.Trim();
+        if (clause.Length == 0) return "";
+
+        // Prefix bare variables with $
+        clause = PrefixBareVar(clause);
+
+        // Convert assignment: i=0 -> $i = 0
+        if (isInit && clause.Contains('=') && !clause.Contains("=="))
+        {
+            int eq = clause.IndexOf('=');
+            string varPart = clause[..eq].Trim();
+            string valPart = clause[(eq + 1)..].Trim();
+            if (!varPart.StartsWith('$')) varPart = "$" + varPart;
+            return $"{varPart} = {valPart}";
+        }
+
+        // Convert increment/decrement: i++ -> $i++
+        if (clause.EndsWith("++") || clause.EndsWith("--"))
+        {
+            string varPart = clause[..^2].Trim();
+            if (!varPart.StartsWith('$')) varPart = "$" + varPart;
+            return varPart + clause[^2..];
+        }
+
+        return clause;
+    }
+
+    private static string TranslateArithCondition(string cond)
+    {
+        cond = cond.Trim();
+        if (cond.Length == 0) return "";
+
+        // Replace multi-char operators before single-char to avoid partial matches
+        cond = cond.Replace("<=", " -le ")
+                   .Replace(">=", " -ge ")
+                   .Replace("!=", " -ne ")
+                   .Replace("==", " -eq ");
+
+        // Handle bare < and > (not already part of -le/-ge/-ne/-eq)
+        cond = cond.Replace("<", " -lt ").Replace(">", " -gt ");
+
+        cond = PrefixBareVar(cond);
+
+        // Clean up multiple spaces
+        cond = System.Text.RegularExpressions.Regex.Replace(cond, @"\s+", " ").Trim();
+
+        return cond;
+    }
+
+    /// <summary>
+    /// Prefix bare variable names (identifiers not already starting with $) with $.
+    /// Skips identifiers preceded by $ or - (PowerShell operators like -lt).
+    /// </summary>
+    private static string PrefixBareVar(string expr)
+    {
+        return System.Text.RegularExpressions.Regex.Replace(
+            expr,
+            @"\b([a-zA-Z_]\w*)\b(?!\s*\()",
+            m =>
+            {
+                if (m.Index > 0 && expr[m.Index - 1] is '$' or '-')
+                    return m.Value;
+                return "$" + m.Value;
+            });
     }
 
     /// <summary>
@@ -359,19 +553,26 @@ public static class PsEmitter
         _ => throw new NotSupportedException($"Unknown word part type: {part.GetType().Name}"),
     };
 
-    private static string EmitSimpleVar(string name) => name switch
+    private static string EmitSimpleVar(string name)
     {
-        "null" or "true" or "false" or "HOME" or "LASTEXITCODE" => $"${name}",
-        "?" => "$LASTEXITCODE",
-        "@" or "*" => "$args",
-        "#" => "$args.Count",
-        "0" => "$MyInvocation.MyCommand.Name",
-        "$" => "$PID",
-        "!" => "$PID",
-        "-" => "$PSBoundParameters",
-        var d when d.Length == 1 && d[0] is >= '1' and <= '9' => $"$args[{int.Parse(d) - 1}]",
-        _ => $"$env:{name}",
-    };
+        // Loop variables emit as $var, not $env:var
+        if (_loopVars is not null && _loopVars.Contains(name))
+            return $"${name}";
+
+        return name switch
+        {
+            "null" or "true" or "false" or "HOME" or "LASTEXITCODE" => $"${name}",
+            "?" => "$LASTEXITCODE",
+            "@" or "*" => "$args",
+            "#" => "$args.Count",
+            "0" => "$MyInvocation.MyCommand.Name",
+            "$" => "$PID",
+            "!" => "$PID",
+            "-" => "$PSBoundParameters",
+            var d when d.Length == 1 && d[0] is >= '1' and <= '9' => $"$args[{int.Parse(d) - 1}]",
+            _ => $"$env:{name}",
+        };
+    }
 
     private static string EmitBracedVar(WordPart.BracedVarSub bvs)
     {

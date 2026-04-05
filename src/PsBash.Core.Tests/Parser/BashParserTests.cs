@@ -909,4 +909,47 @@ public class BashParserTests
         Assert.IsType<Command.BoolExpr>(andOr.Commands[0]);
         Assert.IsType<Command.Simple>(andOr.Commands[1]);
     }
+
+    [Fact]
+    public void Parse_ForInWords_ReturnsForInNode()
+    {
+        var result = Parse("for x in a b c; do echo $x; done");
+
+        var forIn = Assert.IsType<Command.ForIn>(result);
+        Assert.Equal("x", forIn.Var);
+        Assert.Equal(3, forIn.List.Length);
+        Assert.IsType<Command.Simple>(forIn.Body);
+    }
+
+    [Fact]
+    public void Parse_ForImplicitArgs_ReturnsForInWithEmptyList()
+    {
+        var result = Parse("for x; do echo $x; done");
+
+        var forIn = Assert.IsType<Command.ForIn>(result);
+        Assert.Equal("x", forIn.Var);
+        Assert.True(forIn.List.IsEmpty);
+    }
+
+    [Fact]
+    public void Parse_ForArith_ReturnsForArithNode()
+    {
+        var result = Parse("for ((i=0; i<10; i++)); do echo $i; done");
+
+        var forArith = Assert.IsType<Command.ForArith>(result);
+        Assert.Equal("i=0", forArith.Init);
+        Assert.Equal("i<10", forArith.Cond);
+        Assert.Equal("i++", forArith.Step);
+        Assert.IsType<Command.Simple>(forArith.Body);
+    }
+
+    [Fact]
+    public void Parse_ForInWithNewlines_ReturnsForInNode()
+    {
+        var result = Parse("for x in a b c\ndo\necho $x\ndone");
+
+        var forIn = Assert.IsType<Command.ForIn>(result);
+        Assert.Equal("x", forIn.Var);
+        Assert.Equal(3, forIn.List.Length);
+    }
 }
