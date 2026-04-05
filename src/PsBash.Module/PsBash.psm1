@@ -922,18 +922,29 @@ function Invoke-BashGrep {
     if ($fileOperands.Count -eq 0 -and -not $recursive) {
         $matchCount = 0
 
+        # Flatten multi-line BashText into individual lines
+        $allLines = [System.Collections.Generic.List[string]]::new()
         foreach ($item in $pipelineInput) {
             $text = Get-BashText -InputObject $item
-            # Strip trailing newline for matching (echo adds \n)
-            $matchText = $text -replace "`n$", ''
-            $isMatch = $regex.IsMatch($matchText)
+            $text = $text -replace "`n$", ''
+            foreach ($subLine in $text.Split("`n")) {
+                $allLines.Add($subLine)
+            }
+        }
+
+        for ($li = 0; $li -lt $allLines.Count; $li++) {
+            $lineText = $allLines[$li]
+            $isMatch = $regex.IsMatch($lineText)
             if ($invertMatch) { $isMatch = -not $isMatch }
 
             if ($isMatch) {
                 $matchCount++
                 if (-not $countOnly) {
-                    # Pipeline bridge: pass through the original object
-                    $item
+                    if ($showLineNumbers) {
+                        New-BashObject -BashText "$($li + 1):$lineText"
+                    } else {
+                        New-BashObject -BashText $lineText
+                    }
                 }
             }
         }
@@ -1594,15 +1605,25 @@ function Invoke-BashTail {
 
     # Pipeline mode
     if ($operands.Count -eq 0 -and $pipelineInput.Count -gt 0) {
+        # Flatten multi-line BashText into individual lines
+        $allLines = [System.Collections.Generic.List[string]]::new()
+        foreach ($item in $pipelineInput) {
+            $text = Get-BashText -InputObject $item
+            $text = $text -replace "`n$", ''
+            foreach ($subLine in $text.Split("`n")) {
+                $allLines.Add($subLine)
+            }
+        }
+
         if ($fromLine) {
             $startIdx = $count - 1
-            for ($idx = $startIdx; $idx -lt $pipelineInput.Count; $idx++) {
-                $pipelineInput[$idx]
+            for ($idx = $startIdx; $idx -lt $allLines.Count; $idx++) {
+                New-BashObject -BashText $allLines[$idx]
             }
         } else {
-            $startIdx = [System.Math]::Max(0, $pipelineInput.Count - $count)
-            for ($idx = $startIdx; $idx -lt $pipelineInput.Count; $idx++) {
-                $pipelineInput[$idx]
+            $startIdx = [System.Math]::Max(0, $allLines.Count - $count)
+            for ($idx = $startIdx; $idx -lt $allLines.Count; $idx++) {
+                New-BashObject -BashText $allLines[$idx]
             }
         }
         return
@@ -3350,31 +3371,29 @@ function Invoke-BashSed {
     # --- Pipeline mode ---
     if ($pipelineInput.Count -eq 0) { return }
 
-    # Collect all lines for address matching that needs total count
-    $items = @($pipelineInput)
-    $allTexts = [string[]]::new($items.Count)
-    for ($idx = 0; $idx -lt $items.Count; $idx++) {
-        $text = Get-BashText -InputObject $items[$idx]
-        $allTexts[$idx] = $text -replace "`n$", ''
+    # Flatten multi-line BashText into individual lines
+    $allLines = [System.Collections.Generic.List[string]]::new()
+    foreach ($item in $pipelineInput) {
+        $text = Get-BashText -InputObject $item
+        $text = $text -replace "`n$", ''
+        foreach ($subLine in $text.Split("`n")) {
+            $allLines.Add($subLine)
+        }
     }
 
-    for ($idx = 0; $idx -lt $items.Count; $idx++) {
+    $allTexts = [string[]]$allLines.ToArray()
+
+    for ($idx = 0; $idx -lt $allTexts.Count; $idx++) {
         $lineText = $allTexts[$idx]
-        $result = & $applyCommands $lineText ($idx + 1) $items.Count $allTexts
+        $result = & $applyCommands $lineText ($idx + 1) $allTexts.Count $allTexts
 
         if ($result.Deleted) { continue }
 
-        # Pipeline bridge: modify BashText on the original object
-        $item = $items[$idx]
-        if ($null -ne $item.PSObject -and $null -ne $item.PSObject.Properties['BashText']) {
-            $item.BashText = "$($result.Line)`n"
-        }
-
         if (-not $suppressDefault) {
-            $item
+            New-BashObject -BashText "$($result.Line)`n"
         }
         if ($result.Printed) {
-            $item
+            New-BashObject -BashText "$($result.Line)`n"
         }
     }
 }
@@ -8339,21 +8358,30 @@ function Invoke-BashRg {
     if ($pipelineInput.Count -gt 0 -and $fileOperands.Count -eq 0) {
         $matchCount = 0
 
+        # Flatten multi-line BashText into individual lines
+        $allLines = [System.Collections.Generic.List[string]]::new()
         foreach ($item in $pipelineInput) {
             $text = Get-BashText -InputObject $item
-            $matchText = $text -replace "`n$", ''
-            $isMatch = $regex.IsMatch($matchText)
+            $text = $text -replace "`n$", ''
+            foreach ($subLine in $text.Split("`n")) {
+                $allLines.Add($subLine)
+            }
+        }
+
+        for ($li = 0; $li -lt $allLines.Count; $li++) {
+            $lineText = $allLines[$li]
+            $isMatch = $regex.IsMatch($lineText)
             if ($invertMatch) { $isMatch = -not $isMatch }
 
             if ($isMatch) {
                 $matchCount++
                 if (-not $countOnly) {
                     if ($onlyMatching) {
-                        foreach ($m in $regex.Matches($matchText)) {
+                        foreach ($m in $regex.Matches($lineText)) {
                             New-BashObject -BashText $m.Value
                         }
                     } else {
-                        $item
+                        New-BashObject -BashText $lineText
                     }
                 }
             }
