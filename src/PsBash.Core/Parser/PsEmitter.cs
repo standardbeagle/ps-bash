@@ -668,20 +668,46 @@ public static class PsEmitter
                 sb.Append("; ");
 
             var pair = cmd.Pairs[i];
-            if (cmd.IsLocal)
+            string varPrefix = cmd.IsLocal ? "$" : "$env:";
+
+            // Array assignment: arr=(a b c) -> $arr = @('a','b','c')
+            if (pair.ArrayValue is not null)
             {
                 sb.Append('$');
                 sb.Append(pair.Name);
-                sb.Append(" = ");
-                sb.Append(EmitAssignmentValue(pair.Value));
+                sb.Append(" = @(");
+                for (int j = 0; j < pair.ArrayValue.Elements.Length; j++)
+                {
+                    if (j > 0)
+                        sb.Append(',');
+                    sb.Append('\'');
+                    sb.Append(EmitWord(pair.ArrayValue.Elements[j]));
+                    sb.Append('\'');
+                }
+                sb.Append(')');
+                continue;
             }
-            else
+
+            // Subscript assignment: map[key]=val -> $map['key'] = 'val'
+            if (pair.Name.Contains('['))
             {
-                sb.Append("$env:");
-                sb.Append(pair.Name);
-                sb.Append(" = ");
-                sb.Append(EmitAssignmentValue(pair.Value));
+                int bracketIdx = pair.Name.IndexOf('[');
+                string baseName = pair.Name[..bracketIdx];
+                string subscript = pair.Name[(bracketIdx + 1)..^1]; // strip [ and ]
+                sb.Append('$');
+                sb.Append(baseName);
+                sb.Append("['");
+                sb.Append(subscript);
+                sb.Append("'] = '");
+                sb.Append(pair.Value is not null ? EmitWord(pair.Value) : "");
+                sb.Append('\'');
+                continue;
             }
+
+            sb.Append(varPrefix);
+            sb.Append(pair.Name);
+            sb.Append(" = ");
+            sb.Append(EmitAssignmentValue(pair.Value));
         }
         return sb.ToString();
     }
@@ -695,6 +721,26 @@ public static class PsEmitter
             var remaining = cmd.Redirects.Remove(inputRedirect);
             var innerCmd = new Command.Simple(cmd.Words, cmd.EnvPairs, remaining);
             return $"Get-Content {EmitWord(inputRedirect.Target)} | {EmitSimple(innerCmd)}";
+        }
+
+        // declare -A map -> $map = @{} (associative array / hashtable declaration)
+        // declare -a arr -> $arr = @() (indexed array declaration)
+        if (cmd.Words.Length >= 2)
+        {
+            var name = GetLiteralValue(cmd.Words[0]);
+            if (name == "declare")
+            {
+                bool isAssoc = false;
+                string? varName = null;
+                foreach (var word in cmd.Words.Skip(1))
+                {
+                    var val = GetLiteralValue(word);
+                    if (val == "-A") isAssoc = true;
+                    else if (val is not null && !val.StartsWith('-')) varName = val;
+                }
+                if (varName is not null)
+                    return isAssoc ? $"${varName} = @{{}}" : $"${varName} = @()";
+            }
         }
 
         var sb = new StringBuilder();
@@ -974,6 +1020,28 @@ public static class PsEmitter
     {
         if (bvs.Suffix is null)
             return EmitSimpleVar(bvs.Name);
+
+        // Array subscript access: ${arr[0]}, ${arr[@]}, ${arr[*]}, ${arr[key]}
+        if (bvs.Suffix.StartsWith('[') && bvs.Suffix.EndsWith(']'))
+        {
+            string subscript = bvs.Suffix[1..^1]; // strip [ and ]
+            string arrayVar = $"${bvs.Name}";
+            if (subscript is "@" or "*")
+                return arrayVar; // ${arr[@]} -> $arr (whole array)
+            // Numeric subscript: ${arr[0]} -> $arr[0]
+            if (int.TryParse(subscript, out _))
+                return $"{arrayVar}[{subscript}]";
+            // Associative key: ${map[key]} -> $map['key']
+            return $"{arrayVar}['{subscript}']";
+        }
+
+        // Array length: ${#arr[@]} or ${#arr[*]} -> $arr.Count
+        if (bvs.Suffix.StartsWith("#[") && bvs.Suffix.EndsWith(']'))
+        {
+            string subscript = bvs.Suffix[2..^1]; // strip #[ and ]
+            if (subscript is "@" or "*")
+                return $"${bvs.Name}.Count";
+        }
 
         string varRef = EmitSimpleVar(bvs.Name);
 

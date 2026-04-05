@@ -8,9 +8,9 @@
   "runner_dart_id": null,
   "started_at": "2026-04-04T22:43:00Z",
   "resumed_at": "2026-04-05T03:00:00Z",
-  "iterations": 22,
+  "iterations": 23,
   "spawns": 0,
-  "last_iteration_at": "2026-04-05T07:41:00Z",
+  "last_iteration_at": "2026-04-05T08:00:00Z",
   "last_subagent": "task-executor",
   "tasks": [
     {
@@ -377,6 +377,22 @@
       "tests_added": 7,
       "plan_adjustments": 1,
       "completion_summary": "Parse and emit process substitution <() and >(). Added ProcessSub WordPart. Lexer recognizes <(...) and >(...) as Word tokens. Parser DecomposeWord creates ProcessSub nodes with recursive inner command parsing. Emitter produces Invoke-ProcessSub { ... } matching the existing module helper. All 667 tests pass.",
+      "failure_reason": null,
+      "fix_task_created": false,
+      "fix_task_id": null
+    },
+    {
+      "task_id": "eMvXCPO3HQWC",
+      "iteration": 23,
+      "status": "completed",
+      "started_at": "2026-04-05T07:43:00Z",
+      "completed_at": "2026-04-05T08:00:00Z",
+      "phase_completed": "phase-9",
+      "failed_phase": null,
+      "files_changed": 6,
+      "tests_added": 8,
+      "plan_adjustments": 0,
+      "completion_summary": "Parse and emit bash arrays and associative arrays. Lexer ClassifyWord extended for name[sub]= assignments. Parser ParseBracedVar handles array subscripts [idx], [@], #[@]. Added ParseAssignmentWordWithArray for arr=(a b c). Emitter produces @() arrays, @{} hashtables, $arr[0] indexing, $arr.Count length, $map['key'] access. All 675 tests pass.",
       "failure_reason": null,
       "fix_task_created": false,
       "fix_task_id": null

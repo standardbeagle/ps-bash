@@ -371,17 +371,26 @@ public static class BashLexer
     private static BashTokenKind ClassifyWord(string value)
     {
         // ASSIGNMENT_WORD: starts with NAME (letter/underscore, then alnum/underscore), then '='.
+        // Also handles NAME[subscript]= for array element assignment (e.g. map[key]=val).
         // The '=' must not be inside quotes.
         if (value.Length >= 2 && IsNameStart(value[0]))
         {
-            for (int i = 1; i < value.Length; i++)
+            int i = 1;
+            while (i < value.Length && IsNameChar(value[i]))
+                i++;
+
+            // Allow optional [subscript] after the name.
+            if (i < value.Length && value[i] == '[')
             {
-                char c = value[i];
-                if (c == '=')
-                    return BashTokenKind.AssignmentWord;
-                if (!IsNameChar(c))
-                    break;
+                i++; // skip [
+                while (i < value.Length && value[i] != ']')
+                    i++;
+                if (i < value.Length)
+                    i++; // skip ]
             }
+
+            if (i < value.Length && value[i] == '=')
+                return BashTokenKind.AssignmentWord;
         }
 
         return BashTokenKind.Word;

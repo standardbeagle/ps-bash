@@ -791,7 +791,7 @@ public sealed class BashParser
             {
                 var pairs = ImmutableArray.CreateBuilder<Assignment>();
                 while (Peek().Kind == BashTokenKind.AssignmentWord)
-                    pairs.Add(ParseAssignmentWord());
+                    pairs.Add(ParseAssignmentWordWithArray());
                 return new Command.ShAssignment(pairs.ToImmutable(), IsLocal: true);
             }
 
@@ -800,12 +800,22 @@ public sealed class BashParser
         }
 
         // Collect leading assignment words (VAR=val ...).
-        var assignments = ImmutableArray.CreateBuilder<EnvPair>();
+        // Array assignments like arr=(a b c) are detected and consumed here.
+        var assignmentPairs = ImmutableArray.CreateBuilder<Assignment>();
+        var envPairs = ImmutableArray.CreateBuilder<EnvPair>();
+        bool hasArrayAssignment = false;
         while (Peek().Kind == BashTokenKind.AssignmentWord)
         {
-            var (name, value) = SplitAssignmentWord(Advance().Value);
-            assignments.Add(new EnvPair(name, value));
+            var assign = ParseAssignmentWordWithArray();
+            if (assign.ArrayValue is not null)
+                hasArrayAssignment = true;
+            assignmentPairs.Add(assign);
+            envPairs.Add(new EnvPair(assign.Name, assign.Value));
         }
+
+        // If we consumed array assignments, they must be bare assignments.
+        if (hasArrayAssignment)
+            return new Command.ShAssignment(assignmentPairs.ToImmutable());
 
         var words = ImmutableArray.CreateBuilder<CompoundWord>();
         var redirects = ImmutableArray.CreateBuilder<Redirect>();
@@ -835,16 +845,12 @@ public sealed class BashParser
         }
 
         // If only assignments and no command words, it's a bare assignment.
-        if (assignments.Count > 0 && words.Count == 0 && redirects.Count == 0)
-        {
-            var pairs = assignments.Select(
-                e => new Assignment(e.Name, AssignOp.Equal, e.Value)).ToImmutableArray();
-            return new Command.ShAssignment(pairs);
-        }
+        if (assignmentPairs.Count > 0 && words.Count == 0 && redirects.Count == 0)
+            return new Command.ShAssignment(assignmentPairs.ToImmutable());
 
         return new Command.Simple(
             words.ToImmutable(),
-            assignments.ToImmutable(),
+            envPairs.ToImmutable(),
             redirects.ToImmutable());
     }
 
@@ -852,6 +858,40 @@ public sealed class BashParser
     {
         var token = Advance();
         var (name, value) = SplitAssignmentWord(token.Value);
+        return new Assignment(name, AssignOp.Equal, value);
+    }
+
+    /// <summary>
+    /// Parse an assignment word, consuming a trailing array literal <c>(a b c)</c> if present.
+    /// </summary>
+    private Assignment ParseAssignmentWordWithArray()
+    {
+        var token = Advance();
+        var (name, value) = SplitAssignmentWord(token.Value);
+
+        // Array assignment: arr=(a b c) — value is empty and next token is LParen.
+        if (value is null && Peek().Kind == BashTokenKind.LParen)
+        {
+            Advance(); // consume (
+            var elements = ImmutableArray.CreateBuilder<CompoundWord>();
+            while (Peek().Kind != BashTokenKind.RParen && Peek().Kind != BashTokenKind.Eof)
+            {
+                if (Peek().Kind == BashTokenKind.Word)
+                {
+                    var wordToken = Advance();
+                    elements.Add(new CompoundWord(DecomposeWord(wordToken.Value)));
+                }
+                else
+                {
+                    break;
+                }
+            }
+            if (Peek().Kind == BashTokenKind.RParen)
+                Advance(); // consume )
+            return new Assignment(name, AssignOp.Equal, null,
+                new ArrayWord(elements.ToImmutable()));
+        }
+
         return new Assignment(name, AssignOp.Equal, value);
     }
 
@@ -1088,7 +1128,7 @@ public sealed class BashParser
         pos += 2; // skip ${
         int len = raw.Length;
 
-        // ${#VAR} -> length operator
+        // ${#VAR} or ${#arr[@]} -> length operator
         if (pos < len && raw[pos] == '#')
         {
             pos++; // skip #
@@ -1096,9 +1136,23 @@ public sealed class BashParser
             while (pos < len && IsVarChar(raw[pos]))
                 pos++;
             string name = raw[nameStart..pos];
+
+            // Check for array subscript: ${#arr[@]} or ${#arr[*]}
+            string lengthSuffix = "#";
+            if (pos < len && raw[pos] == '[')
+            {
+                int subStart = pos;
+                pos++; // skip [
+                while (pos < len && raw[pos] != ']')
+                    pos++;
+                if (pos < len)
+                    pos++; // skip ]
+                lengthSuffix = "#" + raw[subStart..pos];
+            }
+
             if (pos < len && raw[pos] == '}')
                 pos++; // skip }
-            parts.Add(new WordPart.BracedVarSub(name, "#"));
+            parts.Add(new WordPart.BracedVarSub(name, lengthSuffix));
             return pos;
         }
 
@@ -1107,6 +1161,23 @@ public sealed class BashParser
         while (pos < len && IsVarChar(raw[pos]))
             pos++;
         string varName = raw[varStart..pos];
+
+        // Check for array subscript: ${arr[0]}, ${arr[@]}, ${arr[key]}
+        if (pos < len && raw[pos] == '[')
+        {
+            int subStart = pos;
+            pos++; // skip [
+            while (pos < len && raw[pos] != ']')
+                pos++;
+            if (pos < len)
+                pos++; // skip ]
+            string subscript = raw[subStart..pos];
+
+            if (pos < len && raw[pos] == '}')
+                pos++; // skip }
+            parts.Add(new WordPart.BracedVarSub(varName, subscript));
+            return pos;
+        }
 
         // Check for suffix operator or closing brace
         string? suffix = null;

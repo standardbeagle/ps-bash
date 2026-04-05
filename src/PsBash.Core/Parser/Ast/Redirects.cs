@@ -17,9 +17,15 @@ public enum AssignOp
 
 /// <summary>
 /// A variable assignment, e.g. <c>foo=bar</c> or <c>foo+=baz</c>.
+/// For array assignments like <c>arr=(a b c)</c>, <see cref="ArrayValue"/> is set
+/// and <see cref="Value"/> is null.
 /// Modeled after oils syntax.asdl AssignPair.
 /// </summary>
-public sealed record Assignment(string Name, AssignOp Op, CompoundWord? Value) : BashNode;
+public sealed record Assignment(
+    string Name,
+    AssignOp Op,
+    CompoundWord? Value,
+    ArrayWord? ArrayValue = null) : BashNode;
 
 /// <summary>
 /// An environment pair for command prefix, e.g. <c>FOO=bar cmd</c>.

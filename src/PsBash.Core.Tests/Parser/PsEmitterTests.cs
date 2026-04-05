@@ -1453,6 +1453,64 @@ public class PsEmitterTests
         Assert.Equal("grep -f (Invoke-ProcessSub { cat patterns.txt }) data.txt", result);
     }
 
+    // --- Array and associative array tests ---
+
+    [Fact]
+    public void Transpile_ArrayDeclaration_EmitsPsArray()
+    {
+        var result = PsEmitter.Transpile("arr=(a b c)");
+        Assert.Equal("$arr = @('a','b','c')", result);
+    }
+
+    [Fact]
+    public void Transpile_ArrayIndexAccess_EmitsPsIndex()
+    {
+        var result = PsEmitter.Transpile("echo ${arr[0]}");
+        Assert.Equal("echo $arr[0]", result);
+    }
+
+    [Fact]
+    public void Transpile_ArrayAllElements_EmitsPsArrayRef()
+    {
+        var result = PsEmitter.Transpile("echo ${arr[@]}");
+        Assert.Equal("echo $arr", result);
+    }
+
+    [Fact]
+    public void Transpile_ArrayLength_EmitsPsCount()
+    {
+        var result = PsEmitter.Transpile("echo ${#arr[@]}");
+        Assert.Equal("echo $arr.Count", result);
+    }
+
+    [Fact]
+    public void Transpile_ArrayIteration_EmitsForEachOverArray()
+    {
+        var result = PsEmitter.Transpile("for item in ${arr[@]}; do echo $item; done");
+        Assert.Equal("foreach ($item in $arr) { echo $item }", result);
+    }
+
+    [Fact]
+    public void Transpile_DeclareAssociativeArray_EmitsHashtable()
+    {
+        var result = PsEmitter.Transpile("declare -A map");
+        Assert.Equal("$map = @{}", result);
+    }
+
+    [Fact]
+    public void Transpile_AssociativeArrayAssignment_EmitsHashtableEntry()
+    {
+        var result = PsEmitter.Transpile("map[key]=val");
+        Assert.Equal("$map['key'] = 'val'", result);
+    }
+
+    [Fact]
+    public void Transpile_AssociativeArrayAccess_EmitsHashtableAccess()
+    {
+        var result = PsEmitter.Transpile("echo ${map[key]}");
+        Assert.Equal("echo $map['key']", result);
+    }
+
     private static CompoundWord MakeWord(string value) =>
         new(ImmutableArray.Create<WordPart>(new WordPart.Literal(value)));
 }

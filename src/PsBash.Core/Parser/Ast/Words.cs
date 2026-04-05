@@ -66,3 +66,9 @@ public abstract record WordPart : BashNode
 /// Modeled after oils syntax.asdl CompoundWord.
 /// </summary>
 public sealed record CompoundWord(ImmutableArray<WordPart> Parts) : BashNode;
+
+/// <summary>
+/// An array literal value, e.g. <c>(a b c)</c> in <c>arr=(a b c)</c>.
+/// Stored as a list of compound words representing each element.
+/// </summary>
+public sealed record ArrayWord(ImmutableArray<CompoundWord> Elements) : BashNode;
