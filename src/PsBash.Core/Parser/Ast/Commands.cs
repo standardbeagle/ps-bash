@@ -89,9 +89,24 @@ public abstract record Command : BashNode
         bool IsUntil,
         Command Cond,
         Command Body) : Command;
+
+    /// <summary>
+    /// A case/esac statement: <c>case expr in pattern) body;; esac</c>.
+    /// Maps to PowerShell <c>switch</c>.
+    /// </summary>
+    public sealed record Case(
+        CompoundWord Expr,
+        ImmutableArray<CaseArm> Arms) : Command;
 }
 
 /// <summary>
 /// A single arm of an if/elif chain: condition plus body.
 /// </summary>
 public sealed record IfArm(Command Cond, Command Body) : BashNode;
+
+/// <summary>
+/// A single arm of a case/esac statement: one or more patterns and a body.
+/// </summary>
+public sealed record CaseArm(
+    ImmutableArray<string> Patterns,
+    Command Body) : BashNode;

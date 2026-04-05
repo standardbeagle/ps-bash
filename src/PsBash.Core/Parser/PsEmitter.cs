@@ -26,6 +26,7 @@ public static class PsEmitter
         Command.ForIn forIn => EmitForIn(forIn),
         Command.ForArith forArith => EmitForArith(forArith),
         Command.While whileCmd => EmitWhile(whileCmd),
+        Command.Case caseCmd => EmitCase(caseCmd),
         Command.Simple simple => EmitSimple(simple),
         Command.Pipeline pipeline => EmitPipeline(pipeline),
         Command.AndOrList andOr => EmitAndOrList(andOr),
@@ -206,6 +207,59 @@ public static class PsEmitter
 
         sb.Append(") { ");
         sb.Append(Emit(whileCmd.Body));
+        sb.Append(" }");
+        return sb.ToString();
+    }
+
+    private static string EmitCase(Command.Case caseCmd)
+    {
+        bool useWildcard = false;
+        foreach (var arm in caseCmd.Arms)
+        {
+            foreach (var pattern in arm.Patterns)
+            {
+                if (pattern != "*" && HasGlobChars(pattern))
+                {
+                    useWildcard = true;
+                    break;
+                }
+            }
+            if (useWildcard) break;
+        }
+
+        var sb = new StringBuilder("switch");
+        if (useWildcard)
+            sb.Append(" -Wildcard");
+        sb.Append(" (");
+        sb.Append(EmitWord(caseCmd.Expr));
+        sb.Append(") { ");
+
+        for (int i = 0; i < caseCmd.Arms.Length; i++)
+        {
+            if (i > 0) sb.Append(' ');
+            var arm = caseCmd.Arms[i];
+            var bodyText = Emit(arm.Body);
+
+            if (arm.Patterns.Length == 1 && arm.Patterns[0] == "*")
+            {
+                sb.Append("default { ");
+                sb.Append(bodyText);
+                sb.Append(" }");
+            }
+            else
+            {
+                for (int p = 0; p < arm.Patterns.Length; p++)
+                {
+                    if (p > 0) sb.Append(' ');
+                    sb.Append('\'');
+                    sb.Append(arm.Patterns[p]);
+                    sb.Append("' { ");
+                    sb.Append(bodyText);
+                    sb.Append(" }");
+                }
+            }
+        }
+
         sb.Append(" }");
         return sb.ToString();
     }

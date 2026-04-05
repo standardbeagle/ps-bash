@@ -1008,6 +1008,51 @@ public class PsEmitterTests
         Assert.Equal("while ($true) { echo a; echo b }", result);
     }
 
+    [Fact]
+    public void Transpile_SimpleCase_EmitsSwitch()
+    {
+        var result = PsEmitter.Transpile("case $x in a) echo a;; b) echo b;; esac");
+
+        Assert.Equal("switch ($env:x) { 'a' { echo a } 'b' { echo b } }", result);
+    }
+
+    [Fact]
+    public void Transpile_CaseMultiplePatterns_EmitsSeparateClauses()
+    {
+        var result = PsEmitter.Transpile("case $x in a|b) echo ab;; esac");
+
+        Assert.Equal("switch ($env:x) { 'a' { echo ab } 'b' { echo ab } }", result);
+    }
+
+    [Fact]
+    public void Transpile_CaseDefaultStar_EmitsDefault()
+    {
+        var result = PsEmitter.Transpile("case $x in a) echo a;; *) echo other;; esac");
+
+        Assert.Equal("switch ($env:x) { 'a' { echo a } default { echo other } }", result);
+    }
+
+    [Fact]
+    public void Transpile_NestedCase_EmitsNestedSwitch()
+    {
+        var result = PsEmitter.Transpile(
+            "case $x in a) case $y in b) echo b;; esac;; esac");
+
+        Assert.Equal(
+            "switch ($env:x) { 'a' { switch ($env:y) { 'b' { echo b } } } }",
+            result);
+    }
+
+    [Fact]
+    public void Transpile_CaseWithGlobPattern_EmitsWildcard()
+    {
+        var result = PsEmitter.Transpile("case $f in *.txt) echo text;; *) echo other;; esac");
+
+        Assert.Equal(
+            "switch -Wildcard ($env:f) { '*.txt' { echo text } default { echo other } }",
+            result);
+    }
+
     private static CompoundWord MakeWord(string value) =>
         new(ImmutableArray.Create<WordPart>(new WordPart.Literal(value)));
 }

@@ -138,6 +138,9 @@ public sealed class BashParser
         if (Peek().Kind == BashTokenKind.Word && Peek().Value is "while" or "until")
             return ParseWhile();
 
+        if (Peek().Kind == BashTokenKind.Word && Peek().Value == "case")
+            return ParseCase();
+
         if (Peek().Kind == BashTokenKind.Word && Peek().Value is "[" or "[[")
             return ParseTestExpr();
 
@@ -214,7 +217,7 @@ public sealed class BashParser
         kind is BashTokenKind.Less or BashTokenKind.Great or BashTokenKind.Bang;
 
     private static bool IsUnimplementedCompoundKeyword(string word) =>
-        word is "case" or "function" or "select";
+        word is "function" or "select";
 
     private Command.If ParseIf()
     {
@@ -403,6 +406,127 @@ public sealed class BashParser
 
         return new Command.While(isUntil, cond, body);
     }
+
+    private Command.Case ParseCase()
+    {
+        Expect("case");
+
+        var exprToken = Advance();
+        var exprParts = DecomposeWord(exprToken.Value);
+        var expr = new CompoundWord(exprParts);
+
+        SkipTerminators();
+        Expect("in");
+        SkipTerminators();
+
+        var arms = ImmutableArray.CreateBuilder<CaseArm>();
+
+        while (Peek().Kind != BashTokenKind.Eof
+            && !(Peek().Kind == BashTokenKind.Word && Peek().Value == "esac"))
+        {
+            arms.Add(ParseCaseArm());
+            SkipTerminators();
+        }
+
+        Expect("esac");
+        return new Command.Case(expr, arms.ToImmutable());
+    }
+
+    private CaseArm ParseCaseArm()
+    {
+        // Collect patterns separated by Pipe until RParen.
+        var patterns = ImmutableArray.CreateBuilder<string>();
+
+        // Optional leading ( before pattern list.
+        if (Peek().Kind == BashTokenKind.LParen)
+            Advance();
+
+        patterns.Add(ConsumeCasePattern());
+
+        while (Peek().Kind == BashTokenKind.Pipe)
+        {
+            Advance(); // consume |
+            patterns.Add(ConsumeCasePattern());
+        }
+
+        if (Peek().Kind != BashTokenKind.RParen)
+            throw new FormatException(
+                $"Expected ')' after case pattern but got '{Peek().Value}' ({Peek().Kind}) at position {Peek().Position}");
+        Advance(); // consume )
+
+        SkipTerminators();
+
+        // Parse body commands until ;; or esac.
+        var body = ParseCaseBody();
+
+        // Consume ;; (two Semi tokens) if present.
+        if (Peek().Kind == BashTokenKind.Semi)
+        {
+            Advance();
+            if (Peek().Kind == BashTokenKind.Semi)
+                Advance();
+        }
+
+        return new CaseArm(patterns.ToImmutable(), body);
+    }
+
+    /// <summary>
+    /// Consume a single case pattern. The pattern may contain glob chars like *.
+    /// Stops at Pipe or RParen.
+    /// </summary>
+    private string ConsumeCasePattern()
+    {
+        var parts = new List<string>();
+
+        while (Peek().Kind != BashTokenKind.Eof
+            && Peek().Kind != BashTokenKind.Pipe
+            && Peek().Kind != BashTokenKind.RParen)
+        {
+            parts.Add(Advance().Value);
+        }
+
+        return string.Join("", parts).Trim();
+    }
+
+    /// <summary>
+    /// Parse commands inside a case arm until ;; or esac is seen.
+    /// Only skips newlines between commands, not semicolons (to detect ;; delimiter).
+    /// </summary>
+    private Command ParseCaseBody()
+    {
+        var commands = ImmutableArray.CreateBuilder<Command>();
+
+        while (true)
+        {
+            SkipNewlines();
+            if (Peek().Kind == BashTokenKind.Eof)
+                break;
+            if (Peek().Kind == BashTokenKind.Word && Peek().Value == "esac")
+                break;
+            if (IsDoubleSemi())
+                break;
+
+            commands.Add(ParseAndOr());
+
+            // After a command, consume a single ; separator if present,
+            // but stop if it's ;; (arm delimiter).
+            SkipNewlines();
+            if (IsDoubleSemi())
+                break;
+            if (Peek().Kind == BashTokenKind.Semi)
+                Advance();
+        }
+
+        if (commands.Count == 1)
+            return commands[0];
+
+        return new Command.CommandList(commands.ToImmutable());
+    }
+
+    private bool IsDoubleSemi() =>
+        Peek().Kind == BashTokenKind.Semi
+        && _pos + 1 < _tokens.Count
+        && _tokens[_pos + 1].Kind == BashTokenKind.Semi;
 
     private Command ParseSimpleCommand()
     {
