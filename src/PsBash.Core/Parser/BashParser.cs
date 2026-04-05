@@ -972,6 +972,10 @@ public sealed class BashParser
             {
                 pos = ParseGlob(raw, pos, parts);
             }
+            else if (IsBraceExpansionStart(raw, pos))
+            {
+                pos = ParseBraceExpansion(raw, pos, parts);
+            }
             else
             {
                 pos = ParseBareLiteral(raw, pos, parts);
@@ -1258,6 +1262,9 @@ public sealed class BashParser
             // Extglob: +( *( ?( !( @( preceded by nothing special.
             if ((c is '+' or '*' or '?' or '!' or '@') && pos + 1 < len && raw[pos + 1] == '(')
                 break;
+            // Brace expansion: {a,b,c} or {1..10}
+            if (IsBraceExpansionStart(raw, pos))
+                break;
             pos++;
         }
         if (pos > start)
@@ -1355,6 +1362,79 @@ public sealed class BashParser
         if ((c is '+' or '!' or '@') && pos + 1 < raw.Length && raw[pos + 1] == '(')
             return true;
         return false;
+    }
+
+    /// <summary>
+    /// Returns true if position <paramref name="pos"/> starts a brace expansion:
+    /// <c>{</c> followed by content containing <c>,</c> or <c>..</c>, ending with <c>}</c>.
+    /// </summary>
+    private static bool IsBraceExpansionStart(string raw, int pos)
+    {
+        if (pos >= raw.Length || raw[pos] != '{')
+            return false;
+
+        int i = pos + 1;
+        int len = raw.Length;
+        bool hasComma = false;
+        bool hasDotDot = false;
+
+        while (i < len)
+        {
+            char c = raw[i];
+            if (c == '}')
+                return hasComma || hasDotDot;
+            if (c == ',')
+                hasComma = true;
+            if (c == '.' && i + 1 < len && raw[i + 1] == '.')
+                hasDotDot = true;
+            i++;
+        }
+        return false;
+    }
+
+    private static int ParseBraceExpansion(string raw, int pos, ImmutableArray<WordPart>.Builder parts)
+    {
+        pos++; // skip {
+        int len = raw.Length;
+
+        // Find closing brace
+        int closePos = pos;
+        while (closePos < len && raw[closePos] != '}')
+            closePos++;
+
+        string inner = raw[pos..closePos];
+
+        // Advance past closing brace
+        if (closePos < len)
+            closePos++;
+
+        // Check for range pattern: N..M
+        int dotDot = inner.IndexOf("..", StringComparison.Ordinal);
+        if (dotDot >= 0 && !inner.Contains(','))
+        {
+            string startStr = inner[..dotDot];
+            string endStr = inner[(dotDot + 2)..];
+
+            if (int.TryParse(startStr, out int startVal) && int.TryParse(endStr, out int endVal))
+            {
+                // Determine zero-padding width from the longer of the two operands
+                int zeroPad = 0;
+                if ((startStr.Length > 1 && startStr[0] == '0') ||
+                    (endStr.Length > 1 && endStr[0] == '0'))
+                {
+                    zeroPad = Math.Max(startStr.Length, endStr.Length);
+                }
+
+                parts.Add(new WordPart.BracedRange(startVal, endVal, zeroPad));
+                return closePos;
+            }
+        }
+
+        // Comma-separated tuple: split on commas
+        string[] items = inner.Split(',');
+        parts.Add(new WordPart.BracedTuple(
+            ImmutableArray.Create(items)));
+        return closePos;
     }
 
     private static bool IsVarStart(char c) =>

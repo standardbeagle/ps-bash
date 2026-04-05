@@ -40,6 +40,18 @@ public abstract record WordPart : BashNode
     /// like <c>+(*.py|*.js)</c>. The <paramref name="Pattern"/> holds the raw text.
     /// </summary>
     public sealed record GlobPart(string Pattern) : WordPart;
+
+    /// <summary>
+    /// A brace expansion with comma-separated items, e.g. <c>{a,b,c}</c>.
+    /// Each item is a string literal.
+    /// </summary>
+    public sealed record BracedTuple(ImmutableArray<string> Items) : WordPart;
+
+    /// <summary>
+    /// A brace expansion with a numeric range, e.g. <c>{1..10}</c> or <c>{01..05}</c>.
+    /// When <paramref name="ZeroPad"/> is greater than zero, values are left-padded with zeros.
+    /// </summary>
+    public sealed record BracedRange(int Start, int End, int ZeroPad) : WordPart;
 }
 
 /// <summary>

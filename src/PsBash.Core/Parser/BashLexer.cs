@@ -101,6 +101,16 @@ public static class BashLexer
                 }
             }
 
+            // Brace expansion: {a,b,c} or {1..10} — treat as a word, not LBrace.
+            if (c == '{' && IsBraceExpansion(input, pos))
+            {
+                int braceStart = pos;
+                pos = ScanWord(input, pos);
+                string braceText = input[braceStart..pos];
+                tokens.Add(new BashToken(BashTokenKind.Word, braceText, braceStart));
+                continue;
+            }
+
             // Single-character operators.
             BashTokenKind? oneKind = c switch
             {
@@ -145,6 +155,37 @@ public static class BashLexer
     /// </summary>
     public static bool IsReservedWord(string word) => ReservedWords.Contains(word);
 
+    /// <summary>
+    /// Returns true if position <paramref name="pos"/> starts a brace expansion pattern:
+    /// <c>{</c> followed by content containing <c>,</c> or <c>..</c>, ending with <c>}</c>,
+    /// with no unquoted whitespace inside.
+    /// </summary>
+    private static bool IsBraceExpansion(string input, int pos)
+    {
+        int len = input.Length;
+        if (pos >= len || input[pos] != '{')
+            return false;
+
+        int i = pos + 1;
+        bool hasComma = false;
+        bool hasDotDot = false;
+
+        while (i < len)
+        {
+            char c = input[i];
+            if (c is ' ' or '\t' or '\n' or '\r')
+                return false;
+            if (c == '}')
+                return hasComma || hasDotDot;
+            if (c == ',')
+                hasComma = true;
+            if (c == '.' && i + 1 < len && input[i + 1] == '.')
+                hasDotDot = true;
+            i++;
+        }
+        return false;
+    }
+
     private static int ScanWord(string input, int pos)
     {
         int len = input.Length;
@@ -152,6 +193,17 @@ public static class BashLexer
         while (pos < len)
         {
             char c = input[pos];
+
+            // Brace expansion: {items,here} or {1..10} — consume through closing brace.
+            if (c == '{' && IsBraceExpansion(input, pos))
+            {
+                pos++; // skip {
+                while (pos < len && input[pos] != '}')
+                    pos++;
+                if (pos < len)
+                    pos++; // skip }
+                continue;
+            }
 
             // Extglob: +(...) *(...) ?(...) !(...) @(...) — consume through matching ')'.
             if ((c is '+' or '*' or '?' or '!' or '@') && pos + 1 < len && input[pos + 1] == '(')

@@ -1381,6 +1381,41 @@ public class PsEmitterTests
         Assert.Equal("foreach ($f in (Resolve-Path [abc]*.txt)) { cat $f }", result);
     }
 
+    [Fact]
+    public void Transpile_BracedTuple_EmitsArray()
+    {
+        var result = PsEmitter.Transpile("echo {a,b,c}");
+        Assert.Equal("echo @('a','b','c')", result);
+    }
+
+    [Fact]
+    public void Transpile_BracedRange_EmitsPsRange()
+    {
+        var result = PsEmitter.Transpile("echo {1..10}");
+        Assert.Equal("echo 1..10", result);
+    }
+
+    [Fact]
+    public void Transpile_BracedRangeLeadingZeros_EmitsZeroPaddedArray()
+    {
+        var result = PsEmitter.Transpile("echo {01..05}");
+        Assert.Equal("echo @('01','02','03','04','05')", result);
+    }
+
+    [Fact]
+    public void Transpile_BracedTupleWithPrefixSuffix_EmitsExpandedArray()
+    {
+        var result = PsEmitter.Transpile("echo file{1,2,3}.txt");
+        Assert.Equal("echo @('file1.txt','file2.txt','file3.txt')", result);
+    }
+
+    [Fact]
+    public void Transpile_BracedRangeWithPrefix_EmitsExpandedArray()
+    {
+        var result = PsEmitter.Transpile("echo log{1..3}.txt");
+        Assert.Equal("echo @('log1.txt','log2.txt','log3.txt')", result);
+    }
+
     private static CompoundWord MakeWord(string value) =>
         new(ImmutableArray.Create<WordPart>(new WordPart.Literal(value)));
 }

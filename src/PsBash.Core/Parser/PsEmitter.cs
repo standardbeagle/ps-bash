@@ -769,6 +769,10 @@ public static class PsEmitter
 
     private static string EmitWord(CompoundWord word)
     {
+        // Check for brace expansion parts that need prefix/suffix combination.
+        if (HasBraceExpansion(word.Parts))
+            return EmitBraceExpandedWord(word.Parts);
+
         if (word.Parts.Length == 1)
             return TransformWordPath(EmitWordPart(word.Parts[0]));
 
@@ -783,6 +787,127 @@ public static class PsEmitter
                 sb.Append('\\');
         }
         return TransformWordPath(sb.ToString());
+    }
+
+    private static bool HasBraceExpansion(ImmutableArray<WordPart> parts)
+    {
+        foreach (var part in parts)
+        {
+            if (part is WordPart.BracedTuple or WordPart.BracedRange)
+                return true;
+        }
+        return false;
+    }
+
+    private static string EmitBraceExpandedWord(ImmutableArray<WordPart> parts)
+    {
+        // Collect prefix (parts before brace), brace expansion, suffix (parts after brace).
+        var prefix = new StringBuilder();
+        var suffix = new StringBuilder();
+        WordPart? bracePart = null;
+        bool foundBrace = false;
+
+        for (int i = 0; i < parts.Length; i++)
+        {
+            var part = parts[i];
+            if (!foundBrace && part is WordPart.BracedTuple or WordPart.BracedRange)
+            {
+                bracePart = part;
+                foundBrace = true;
+            }
+            else if (!foundBrace)
+            {
+                prefix.Append(EmitWordPart(part));
+            }
+            else
+            {
+                suffix.Append(EmitWordPart(part));
+            }
+        }
+
+        string pre = prefix.ToString();
+        string suf = suffix.ToString();
+        var expanded = ExpandBrace(bracePart!);
+
+        // If no prefix/suffix, emit the bare expansion.
+        if (pre.Length == 0 && suf.Length == 0)
+            return FormatBraceArray(expanded);
+
+        // With prefix/suffix, generate explicit items.
+        var items = new List<string>();
+        foreach (string item in expanded)
+            items.Add($"'{pre}{item}{suf}'");
+
+        return $"@({string.Join(',', items)})";
+    }
+
+    private static List<string> ExpandBrace(WordPart part)
+    {
+        if (part is WordPart.BracedTuple tuple)
+            return new List<string>(tuple.Items);
+
+        var range = (WordPart.BracedRange)part;
+        var items = new List<string>();
+        int step = range.Start <= range.End ? 1 : -1;
+        for (int v = range.Start; ; v += step)
+        {
+            if (range.ZeroPad > 0)
+                items.Add(v.ToString().PadLeft(range.ZeroPad, '0'));
+            else
+                items.Add(v.ToString());
+
+            if (v == range.End) break;
+        }
+        return items;
+    }
+
+    private static string FormatBraceArray(List<string> items)
+    {
+        // Check if all items are integers — use PS range operator if sequential.
+        if (items.Count >= 2 && items.All(IsPlainInteger))
+        {
+            int first = int.Parse(items[0]);
+            int last = int.Parse(items[^1]);
+            bool isSequential = true;
+            int step = first <= last ? 1 : -1;
+            for (int i = 0; i < items.Count; i++)
+            {
+                if (int.Parse(items[i]) != first + i * step)
+                {
+                    isSequential = false;
+                    break;
+                }
+            }
+            if (isSequential)
+                return $"{first}..{last}";
+        }
+
+        // Otherwise emit as array literal.
+        var formatted = new List<string>();
+        foreach (string item in items)
+        {
+            if (IsPlainInteger(item))
+                formatted.Add(item);
+            else
+                formatted.Add($"'{item}'");
+        }
+        return $"@({string.Join(',', formatted)})";
+    }
+
+    private static bool IsPlainInteger(string s)
+    {
+        if (s.Length == 0) return false;
+        int start = s[0] == '-' ? 1 : 0;
+        if (start >= s.Length) return false;
+        // Leading zeros mean it's a zero-padded string, not a plain integer.
+        if (s.Length - start > 1 && s[start] == '0')
+            return false;
+        for (int i = start; i < s.Length; i++)
+        {
+            if (s[i] is not (>= '0' and <= '9'))
+                return false;
+        }
+        return true;
     }
 
     private static string TransformWordPath(string value)
@@ -806,6 +931,8 @@ public static class PsEmitter
         WordPart.ArithSub arith => EmitArithSub(arith),
         WordPart.TildeSub ts => ts.User is null ? "$HOME" : $"~{ts.User}",
         WordPart.GlobPart gp => gp.Pattern,
+        WordPart.BracedTuple bt => FormatBraceArray(new List<string>(bt.Items)),
+        WordPart.BracedRange br => FormatBraceArray(ExpandBrace(br)),
         _ => throw new NotSupportedException($"Unknown word part type: {part.GetType().Name}"),
     };
 
