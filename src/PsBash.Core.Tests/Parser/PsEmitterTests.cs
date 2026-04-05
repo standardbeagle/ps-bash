@@ -592,7 +592,7 @@ public class PsEmitterTests
     {
         var result = PsEmitter.Transpile("echo $(whoami)");
 
-        Assert.Equal("echo $(whoami)", result);
+        Assert.Equal("echo $(Invoke-BashWhoami)", result);
     }
 
     [Fact]
@@ -608,7 +608,7 @@ public class PsEmitterTests
     {
         var result = PsEmitter.Transpile("echo `date`");
 
-        Assert.Equal("echo $(date)", result);
+        Assert.Equal("echo $(Invoke-BashDate)", result);
     }
 
     [Fact]
@@ -624,7 +624,7 @@ public class PsEmitterTests
     {
         var result = PsEmitter.Transpile("echo $(echo $(whoami))");
 
-        Assert.Equal("echo $(echo $(whoami))", result);
+        Assert.Equal("echo $(echo $(Invoke-BashWhoami))", result);
     }
 
     [Fact]
@@ -1427,7 +1427,7 @@ public class PsEmitterTests
     public void Transpile_OutputProcessSub()
     {
         var result = PsEmitter.Transpile("cmd >(tee log.txt)");
-        Assert.Equal("cmd (Invoke-ProcessSub { tee log.txt })", result);
+        Assert.Equal("cmd (Invoke-ProcessSub { Invoke-BashTee log.txt })", result);
     }
 
     [Fact]
@@ -1450,7 +1450,7 @@ public class PsEmitterTests
     public void Transpile_GrepWithProcessSub()
     {
         var result = PsEmitter.Transpile("grep -f <(cat patterns.txt) data.txt");
-        Assert.Equal("grep -f (Invoke-ProcessSub { cat patterns.txt }) data.txt", result);
+        Assert.Equal("Invoke-BashGrep \"(Invoke-ProcessSub { cat patterns.txt })\" data.txt", result);
     }
 
     // --- Array and associative array tests ---
@@ -1548,7 +1548,7 @@ public class PsEmitterTests
     {
         var result = PsEmitter.Transpile("grep -i foo <<EOF\nhello foo\nbar\nEOF");
 
-        Assert.Equal("@\"\nhello foo\nbar\n\"@ | grep -i foo", result);
+        Assert.Equal("@\"\nhello foo\nbar\n\"@ | Invoke-BashGrep -CaseInsensitive \"foo\"", result);
     }
 
     // ── Regression tests: bugs found in integration testing ─────────────────
@@ -1558,9 +1558,9 @@ public class PsEmitterTests
     [Fact]
     public void Transpile_AwkWithCommaInsideBraces_NotBraceExpanded()
     {
-        // awk standalone: passes through as-is; braces+comma must NOT be brace-expanded
+        // awk standalone: mapped through Invoke-BashAwk; braces+comma must NOT be brace-expanded
         var result = PsEmitter.Transpile("awk '{print $1, $3}' file.txt");
-        Assert.Equal("awk '{print $1, $3}' file.txt", result);
+        Assert.Equal("Invoke-BashAwk '{print $1, $3}' file.txt", result);
         Assert.DoesNotContain("@(", result); // no brace expansion array
     }
 
@@ -1578,7 +1578,7 @@ public class PsEmitterTests
     {
         // standalone awk — braces with multiple commas must not be expanded
         var result = PsEmitter.Transpile("awk '{print $1, $2, $3}'");
-        Assert.Equal("awk '{print $1, $2, $3}'", result);
+        Assert.Equal("Invoke-BashAwk '{print $1, $2, $3}'", result);
         Assert.DoesNotContain("@(", result);
     }
 
@@ -1717,7 +1717,7 @@ public class PsEmitterTests
         // (2 was reclassified as IoNumber). Now 2 stays as a word arg.
         var result = PsEmitter.Transpile("head -n 2 << EOF\nline1\nline2\nline3\nEOF");
 
-        Assert.Contains("head -n 2", result);
+        Assert.Contains("Invoke-BashHead -n 2", result);
         Assert.Contains("line1", result);
     }
 
@@ -1727,7 +1727,7 @@ public class PsEmitterTests
         // Issue 8: wc -l with heredoc input
         var result = PsEmitter.Transpile("wc -l << EOF\nhello\nworld\nEOF");
 
-        Assert.Contains("wc -l", result);
+        Assert.Contains("Invoke-BashWc -l", result);
         Assert.Contains("hello", result);
         Assert.Contains("world", result);
     }
@@ -1947,6 +1947,40 @@ public class PsEmitterTests
         var result = PsEmitter.Transpile("echo hello | tee output.txt");
 
         Assert.Equal("echo hello | Invoke-BashTee output.txt", result);
+    }
+
+    // --- Standalone mapped command tests ---
+
+    [Fact]
+    public void Transpile_StandaloneHead_EmitsInvokeBashHead()
+    {
+        var result = PsEmitter.Transpile("head -n 5 file.txt");
+
+        Assert.Equal("Invoke-BashHead -n 5 file.txt", result);
+    }
+
+    [Fact]
+    public void Transpile_StandaloneWc_EmitsInvokeBashWc()
+    {
+        var result = PsEmitter.Transpile("wc -l file.txt");
+
+        Assert.Equal("Invoke-BashWc -l file.txt", result);
+    }
+
+    [Fact]
+    public void Transpile_StandaloneFind_EmitsInvokeBashFind()
+    {
+        var result = PsEmitter.Transpile("find . -name '*.txt'");
+
+        Assert.Equal("Invoke-BashFind . -name '*.txt'", result);
+    }
+
+    [Fact]
+    public void Transpile_StandaloneGrep_EmitsInvokeBashGrep()
+    {
+        var result = PsEmitter.Transpile("grep error log.txt");
+
+        Assert.Equal("Invoke-BashGrep \"error\" log.txt", result);
     }
 
     private static CompoundWord MakeWord(string value) =>

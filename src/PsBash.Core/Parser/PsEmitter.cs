@@ -19,6 +19,17 @@ public static class PsEmitter
     [ThreadStatic]
     private static HashSet<string>? _loopVars;
 
+    /// <summary>
+    /// Commands that have PowerShell built-in aliases and should NOT be mapped
+    /// to Invoke-Bash* when used as standalone (non-piped) commands.
+    /// These work fine via PS aliases; only their piped forms need mapping.
+    /// </summary>
+    private static readonly HashSet<string> PsBuiltinAliases = new(StringComparer.Ordinal)
+    {
+        "echo", "cat", "ls", "cd", "pwd", "mkdir", "cp", "mv", "rm",
+        "sort", "diff", "sleep",
+    };
+
     public static string Emit(Command cmd) => cmd switch
     {
         Command.If ifCmd => EmitIf(ifCmd),
@@ -850,6 +861,15 @@ public static class PsEmitter
                 if (file.EndsWith(".sh", StringComparison.OrdinalIgnoreCase))
                     file = file[..^3] + ".ps1";
                 return $". {file}";
+            }
+
+            // Standalone mapped commands: rewrite through TryEmitMappedCommand
+            // unless the command is a PS builtin alias that works fine as-is.
+            if (cmd0 is not null
+                && !PsBuiltinAliases.Contains(cmd0)
+                && TryEmitMappedCommand(cmd, out var mapped))
+            {
+                return mapped;
             }
         }
 
