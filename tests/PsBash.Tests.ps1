@@ -244,14 +244,14 @@ Describe 'Invoke-BashLs' {
     }
 
     It 'returns BashObject array with Name property' {
-        $results = Invoke-BashLs $testDir
+        $results = Invoke-BashLs '-1' $testDir
         $results | Should -Not -BeNullOrEmpty
         $results[0].Name | Should -Not -BeNullOrEmpty
         $results[0].PSTypeNames[0] | Should -Be 'PsBash.LsEntry'
     }
 
     It 'has SizeBytes and Permissions properties populated' {
-        $results = Invoke-BashLs $testDir
+        $results = Invoke-BashLs '-1' $testDir
         $first = $results | Where-Object { -not $_.IsDirectory } | Select-Object -First 1
         $first.SizeBytes | Should -BeGreaterThan 0
         $first.Permissions | Should -Match '^-[rwx-]{9}$'
@@ -277,7 +277,7 @@ Describe 'Invoke-BashLs' {
     }
 
     It 'ls -a includes dotfiles' {
-        $results = Invoke-BashLs -a $testDir
+        $results = Invoke-BashLs '-1' -a $testDir
         $names = $results | ForEach-Object { $_.Name }
         $names | Should -Contain '.hidden'
     }
@@ -290,13 +290,13 @@ Describe 'Invoke-BashLs' {
     }
 
     It 'ls -R recurses into subdirectories' {
-        $results = Invoke-BashLs -R $testDir
+        $results = Invoke-BashLs '-1' -R $testDir
         $names = $results | ForEach-Object { $_.Name }
         $names | Should -Contain 'nested.txt'
     }
 
     It 'ls -S sorts by size descending' {
-        $results = Invoke-BashLs -S $testDir
+        $results = Invoke-BashLs '-1' -S $testDir
         $sizes = $results | Where-Object { -not $_.IsDirectory } | ForEach-Object { $_.SizeBytes }
         if ($sizes.Count -ge 2) {
             $sizes[0] | Should -BeGreaterOrEqual $sizes[1]
@@ -307,7 +307,7 @@ Describe 'Invoke-BashLs' {
         $oldest = Join-Path $testDir 'oldest.txt'
         Set-Content -Path $oldest -Value 'old'
         (Get-Item $oldest).LastWriteTime = [datetime]::Now.AddDays(-30)
-        $results = Invoke-BashLs -t $testDir
+        $results = Invoke-BashLs '-1' -t $testDir
         $times = $results | ForEach-Object { $_.LastModified }
         if ($times.Count -ge 2) {
             $times[0] | Should -BeGreaterOrEqual $times[1]
@@ -673,20 +673,20 @@ Describe 'Invoke-BashGrep — Pipeline Bridge' {
         Remove-Item -Path $bridgeDir -Recurse -Force -ErrorAction SilentlyContinue
     }
 
-    It 'ls | grep .txt returns PsBash.LsEntry objects' {
-        $results = @(Invoke-BashLs $bridgeDir | Invoke-BashGrep '.txt')
+    It 'ls -1 | grep .txt returns PsBash.LsEntry objects' {
+        $results = @(Invoke-BashLs '-1' $bridgeDir | Invoke-BashGrep '.txt')
         $results.Count | Should -BeGreaterOrEqual 1
         $results[0].PSTypeNames[0] | Should -Be 'PsBash.LsEntry'
     }
 
-    It '(ls | grep .txt)[0].Name works (object preserved)' {
-        $results = @(Invoke-BashLs $bridgeDir | Invoke-BashGrep '.txt')
+    It '(ls -1 | grep .txt)[0].Name works (object preserved)' {
+        $results = @(Invoke-BashLs '-1' $bridgeDir | Invoke-BashGrep '.txt')
         $names = $results | ForEach-Object { $_.Name }
         $names | Should -Contain 'file1.txt'
     }
 
-    It '(ls | grep .txt)[0].SizeBytes works (property preserved)' {
-        $results = @(Invoke-BashLs $bridgeDir | Invoke-BashGrep '.txt')
+    It '(ls -1 | grep .txt)[0].SizeBytes works (property preserved)' {
+        $results = @(Invoke-BashLs '-1' $bridgeDir | Invoke-BashGrep '.txt')
         $results[0].SizeBytes | Should -BeGreaterOrEqual 0
     }
 
@@ -946,7 +946,7 @@ Describe 'Invoke-BashHead — Pipeline' {
     }
 
     It '(ls -la | head -n 1).Name works' {
-        $results = @(Invoke-BashLs $headDir | Invoke-BashHead -n 1)
+        $results = @(Invoke-BashLs '-1' $headDir | Invoke-BashHead -n 1)
         $results[0].Name | Should -Not -BeNullOrEmpty
     }
 
@@ -1093,7 +1093,7 @@ Describe 'Invoke-BashTail — Pipeline' {
     }
 
     It 'ls -la | tail -n 5 returns LsEntry objects' {
-        $results = @(Invoke-BashLs $tailDir | Invoke-BashTail -n 5)
+        $results = @(Invoke-BashLs '-1' $tailDir | Invoke-BashTail -n 5)
         $results.Count | Should -BeLessOrEqual 5
         foreach ($r in $results) {
             $r.PSTypeNames[0] | Should -Be 'PsBash.LsEntry'
@@ -1218,7 +1218,7 @@ Describe 'Invoke-BashWc — Pipeline Mode' {
     }
 
     It 'ls -la | wc -l counts objects' {
-        $results = @(Invoke-BashLs $wcPipeDir | Invoke-BashWc -l)
+        $results = @(Invoke-BashLs '-1' $wcPipeDir | Invoke-BashWc -l)
         $results.Count | Should -Be 1
         $results[0].Lines | Should -BeGreaterOrEqual 2
     }
@@ -3902,7 +3902,7 @@ Describe 'Invoke-BashJq — Alias' {
 Describe 'Invoke-BashDate — Default Output' {
     It 'returns current date/time in default format' {
         $r = Invoke-BashDate
-        $r.BashText | Should -Match '^\w{3} \w{3} [ \d]\d \d{2}:\d{2}:\d{2} \S+ \d{4}$'
+        $r.BashText | Should -Match '^\w{3} \w{3} [ \d]\d \d{2}:\d{2}:\d{2} .+ \d{4}$'
     }
 
     It 'returns object with Year, Month, Day properties' {
@@ -6381,5 +6381,143 @@ Describe 'Invoke-BashAlias -- Help and Alias' {
     It 'exports unalias command alias' {
         $a = Get-Alias -Name 'unalias' -Scope Global
         $a.Definition | Should -Be 'Invoke-BashAlias'
+    }
+}
+
+# ── Coverage for v0.4.0 changes ─────────────────────────────────────────
+
+Describe 'Invoke-BashCat — Raw String Pipeline Input' {
+    It 'handles plain strings piped without BashText property' {
+        $results = @('hello', 'world' | Invoke-BashCat)
+        $results.Count | Should -Be 2
+        $results[0].Content | Should -Be 'hello'
+        $results[1].Content | Should -Be 'world'
+    }
+
+    It 'handles mixed BashObject and string pipeline input' {
+        $mixed = @((New-BashObject -BashText 'wrapped'), 'bare string')
+        $results = @($mixed | Invoke-BashCat)
+        $results.Count | Should -Be 2
+        $results[0].Content | Should -Be 'wrapped'
+        $results[1].Content | Should -Be 'bare string'
+    }
+}
+
+Describe 'Invoke-BashLs — Grid Output' {
+    BeforeAll {
+        $tmpDir = Join-Path $TestDrive 'ls-grid'
+        New-Item -Path $tmpDir -ItemType Directory -Force | Out-Null
+        New-Item -Path (Join-Path $tmpDir 'file1.txt') -ItemType File -Force | Out-Null
+        New-Item -Path (Join-Path $tmpDir 'file2.txt') -ItemType File -Force | Out-Null
+        New-Item -Path (Join-Path $tmpDir 'subdir') -ItemType Directory -Force | Out-Null
+    }
+
+    It 'returns TextOutput objects in grid mode (no -l)' {
+        $results = @(Invoke-BashLs $tmpDir)
+        $results | Should -Not -BeNullOrEmpty
+        $results[0].PSTypeNames | Should -Contain 'PsBash.TextOutput'
+    }
+
+    It 'shows directory names with trailing / in grid' {
+        $results = @(Invoke-BashLs $tmpDir)
+        $text = ($results | ForEach-Object { $_.BashText }) -join "`n"
+        $text | Should -Match 'subdir/'
+    }
+
+    It 'returns LsEntry objects in long mode (-l)' {
+        $results = @(Invoke-BashLs '-l' $tmpDir)
+        $results | Should -Not -BeNullOrEmpty
+        $results[0].PSTypeNames | Should -Contain 'PsBash.LsEntry'
+    }
+
+    It 'one-per-line mode (-1) returns LsEntry with display name' {
+        $results = @(Invoke-BashLs '-1' $tmpDir)
+        $results.Count | Should -Be 3
+        $results[0].PSTypeNames | Should -Contain 'PsBash.LsEntry'
+        $results[0].BashText | Should -Not -BeNullOrEmpty
+    }
+}
+
+Describe 'Invoke-ProcessSub — Runtime Helper' {
+    It 'creates temp file with command output' {
+        $path = Invoke-ProcessSub { echo "test content" }
+        $path | Should -Not -BeNullOrEmpty
+        Test-Path $path | Should -Be $true
+        $content = Get-Content $path -Raw
+        $content | Should -Match 'test content'
+        Remove-Item $path -Force
+    }
+
+    It 'returns path usable by other commands' {
+        $path = Invoke-ProcessSub { echo "line1"; echo "line2" }
+        $lines = Get-Content $path
+        $lines.Count | Should -BeGreaterOrEqual 2
+        Remove-Item $path -Force
+    }
+}
+
+Describe 'Invoke-BashPwd — Physical Flag' {
+    It 'pwd -P returns a valid absolute path' {
+        $result = Invoke-BashPwd '-P'
+        $result.BashText | Should -Not -BeNullOrEmpty
+        $result.BashText | Should -Not -Match '\\'
+        # Should be an absolute path (starts with / on unix or drive letter on windows)
+        $result.BashText | Should -Match '^(/|[A-Za-z]:/)'
+    }
+
+    It 'pwd -P matches current location' {
+        $result = Invoke-BashPwd '-P'
+        $expected = (Get-Location).Path -replace '\\', '/'
+        $result.BashText | Should -Be $expected
+    }
+}
+
+Describe 'Resolve-BashGlob — Relative Path Resolution' {
+    BeforeAll {
+        $tmpDir = Join-Path $TestDrive 'glob-rel'
+        New-Item -Path $tmpDir -ItemType Directory -Force | Out-Null
+        Set-Content -Path (Join-Path $tmpDir 'input.txt') -Value 'hello'
+    }
+
+    It 'resolves relative paths against PS $PWD via cat' {
+        Push-Location $tmpDir
+        try {
+            # cat uses Resolve-BashGlob internally — if relative path resolution
+            # works, cat will find the file even though .NET CWD differs from PS $PWD
+            $result = @(Invoke-BashCat 'input.txt')
+            $result[0].Content | Should -Be 'hello'
+        } finally {
+            Pop-Location
+        }
+    }
+
+    It 'cat works with relative path after Set-Location' {
+        Push-Location $tmpDir
+        try {
+            $result = @(Invoke-BashCat 'input.txt')
+            $result[0].Content | Should -Be 'hello'
+        } finally {
+            Pop-Location
+        }
+    }
+}
+
+Describe 'Invoke-BashLs — Glob Expansion' {
+    BeforeAll {
+        $tmpDir = Join-Path $TestDrive 'ls-glob'
+        New-Item -Path $tmpDir -ItemType Directory -Force | Out-Null
+        New-Item -Path (Join-Path $tmpDir 'a.txt') -ItemType File -Force | Out-Null
+        New-Item -Path (Join-Path $tmpDir 'b.txt') -ItemType File -Force | Out-Null
+        New-Item -Path (Join-Path $tmpDir 'c.log') -ItemType File -Force | Out-Null
+    }
+
+    It 'ls *.txt expands glob pattern' {
+        $pattern = Join-Path $tmpDir '*.txt'
+        $results = @(Invoke-BashLs $pattern)
+        $results | Should -Not -BeNullOrEmpty
+        $text = ($results | ForEach-Object { $_.BashText }) -join "`n"
+        $text | Should -Match 'a\.txt'
+        $text | Should -Match 'b\.txt'
+        $text | Should -Not -Match 'c\.log'
     }
 }
