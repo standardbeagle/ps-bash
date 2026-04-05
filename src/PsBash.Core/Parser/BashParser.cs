@@ -45,7 +45,34 @@ public sealed class BashParser
         if (Peek().Kind == BashTokenKind.Eof)
             return null;
 
-        return ParseAndOr();
+        return ParseList();
+    }
+
+    private Command ParseList()
+    {
+        var first = ParseAndOr();
+
+        if (Peek().Kind != BashTokenKind.Semi)
+            return first;
+
+        var commands = ImmutableArray.CreateBuilder<Command>();
+        commands.Add(first);
+
+        while (Peek().Kind == BashTokenKind.Semi)
+        {
+            Advance(); // consume ;
+            SkipNewlines();
+
+            if (Peek().Kind == BashTokenKind.Eof)
+                break;
+
+            commands.Add(ParseAndOr());
+        }
+
+        if (commands.Count == 1)
+            return commands[0];
+
+        return new Command.CommandList(commands.ToImmutable());
     }
 
     private Command ParseAndOr()
@@ -238,6 +265,12 @@ public sealed class BashParser
         int pos = 0;
         int len = raw.Length;
 
+        // Detect tilde at the start of a word.
+        if (len > 0 && raw[0] == '~')
+        {
+            pos = ParseTilde(raw, parts);
+        }
+
         while (pos < len)
         {
             char c = raw[pos];
@@ -255,9 +288,21 @@ public sealed class BashParser
                 parts.Add(new WordPart.EscapedLiteral(raw[pos + 1].ToString()));
                 pos += 2;
             }
+            else if (c == '$' && pos + 1 < len && raw[pos + 1] == '(')
+            {
+                pos = ParseCommandSub(raw, pos, parts);
+            }
+            else if (c == '$' && pos + 1 < len && raw[pos + 1] == '{')
+            {
+                pos = ParseBracedVar(raw, pos, parts);
+            }
             else if (c == '$' && pos + 1 < len && IsVarStart(raw[pos + 1]))
             {
                 pos = ParseSimpleVar(raw, pos, parts);
+            }
+            else if (c == '`')
+            {
+                pos = ParseBacktickCommandSub(raw, pos, parts);
             }
             else
             {
@@ -307,14 +352,26 @@ public sealed class BashParser
                     pos++;
                 }
             }
+            else if (c == '$' && pos + 1 < len && raw[pos + 1] == '(')
+            {
+                pos = ParseCommandSub(raw, pos, innerParts);
+            }
+            else if (c == '$' && pos + 1 < len && raw[pos + 1] == '{')
+            {
+                pos = ParseBracedVar(raw, pos, innerParts);
+            }
             else if (c == '$' && pos + 1 < len && IsVarStart(raw[pos + 1]))
             {
                 pos = ParseSimpleVar(raw, pos, innerParts);
             }
+            else if (c == '`')
+            {
+                pos = ParseBacktickCommandSub(raw, pos, innerParts);
+            }
             else
             {
                 int start = pos;
-                while (pos < len && raw[pos] != '"' && raw[pos] != '\\' && raw[pos] != '$')
+                while (pos < len && raw[pos] != '"' && raw[pos] != '\\' && raw[pos] != '$' && raw[pos] != '`')
                     pos++;
                 innerParts.Add(new WordPart.Literal(raw[start..pos]));
             }
@@ -346,6 +403,140 @@ public sealed class BashParser
         return pos;
     }
 
+    private static int ParseBracedVar(string raw, int pos, ImmutableArray<WordPart>.Builder parts)
+    {
+        pos += 2; // skip ${
+        int len = raw.Length;
+
+        // ${#VAR} -> length operator
+        if (pos < len && raw[pos] == '#')
+        {
+            pos++; // skip #
+            int nameStart = pos;
+            while (pos < len && IsVarChar(raw[pos]))
+                pos++;
+            string name = raw[nameStart..pos];
+            if (pos < len && raw[pos] == '}')
+                pos++; // skip }
+            parts.Add(new WordPart.BracedVarSub(name, "#"));
+            return pos;
+        }
+
+        // Read variable name
+        int varStart = pos;
+        while (pos < len && IsVarChar(raw[pos]))
+            pos++;
+        string varName = raw[varStart..pos];
+
+        // Check for suffix operator or closing brace
+        string? suffix = null;
+        if (pos < len && raw[pos] != '}')
+        {
+            // Read operator: :-, :=, :+, :?, %, %%, #, ##
+            int opStart = pos;
+            if (pos < len && raw[pos] == ':' && pos + 1 < len && raw[pos + 1] is '-' or '=' or '+' or '?')
+            {
+                pos += 2;
+            }
+            else if (pos < len && raw[pos] == '%')
+            {
+                pos++;
+                if (pos < len && raw[pos] == '%')
+                    pos++;
+            }
+            else if (pos < len && raw[pos] == '#')
+            {
+                pos++;
+                if (pos < len && raw[pos] == '#')
+                    pos++;
+            }
+            string op = raw[opStart..pos];
+
+            // Read value until closing brace
+            int valStart = pos;
+            int braceDepth = 1;
+            while (pos < len && braceDepth > 0)
+            {
+                if (raw[pos] == '{') braceDepth++;
+                else if (raw[pos] == '}') braceDepth--;
+                if (braceDepth > 0) pos++;
+            }
+            string val = raw[valStart..pos];
+            suffix = op + val;
+        }
+
+        if (pos < len && raw[pos] == '}')
+            pos++; // skip }
+
+        parts.Add(new WordPart.BracedVarSub(varName, suffix));
+        return pos;
+    }
+
+    private static int ParseCommandSub(string raw, int pos, ImmutableArray<WordPart>.Builder parts)
+    {
+        pos += 2; // skip $(
+        int depth = 1;
+        int start = pos;
+        while (pos < raw.Length && depth > 0)
+        {
+            if (raw[pos] == '(') depth++;
+            else if (raw[pos] == ')') depth--;
+            if (depth > 0) pos++;
+        }
+        string inner = raw[start..pos];
+        if (pos < raw.Length)
+            pos++; // skip closing )
+
+        var body = Parse(inner);
+        parts.Add(new WordPart.CommandSub(body ?? new Command.Simple(
+            ImmutableArray<CompoundWord>.Empty,
+            ImmutableArray<EnvPair>.Empty,
+            ImmutableArray<Redirect>.Empty)));
+        return pos;
+    }
+
+    private static int ParseBacktickCommandSub(string raw, int pos, ImmutableArray<WordPart>.Builder parts)
+    {
+        pos++; // skip opening `
+        int start = pos;
+        while (pos < raw.Length && raw[pos] != '`')
+        {
+            if (raw[pos] == '\\' && pos + 1 < raw.Length)
+                pos++; // skip escaped char
+            pos++;
+        }
+        string inner = raw[start..pos];
+        if (pos < raw.Length)
+            pos++; // skip closing `
+
+        var body = Parse(inner);
+        parts.Add(new WordPart.CommandSub(body ?? new Command.Simple(
+            ImmutableArray<CompoundWord>.Empty,
+            ImmutableArray<EnvPair>.Empty,
+            ImmutableArray<Redirect>.Empty)));
+        return pos;
+    }
+
+    private static int ParseTilde(string raw, ImmutableArray<WordPart>.Builder parts)
+    {
+        int pos = 1; // skip ~
+        int len = raw.Length;
+
+        // Read optional username until '/' or end of word.
+        int start = pos;
+        while (pos < len && raw[pos] != '/')
+            pos++;
+
+        string? user = pos > start ? raw[start..pos] : null;
+        parts.Add(new WordPart.TildeSub(user));
+
+        // Consume the '/' separator so it doesn't appear in the following literal.
+        if (pos < len && raw[pos] == '/')
+            pos++;
+
+        return pos;
+    }
+
     private static int ParseBareLiteral(string raw, int pos, ImmutableArray<WordPart>.Builder parts)
     {
         int start = pos;
@@ -353,9 +544,9 @@ public sealed class BashParser
         while (pos < len)
         {
             char c = raw[pos];
-            if (c is '\'' or '"' or '\\')
+            if (c is '\'' or '"' or '\\' or '`')
                 break;
-            if (c == '$' && pos + 1 < len && IsVarStart(raw[pos + 1]))
+            if (c == '$' && pos + 1 < len && (IsVarStart(raw[pos + 1]) || raw[pos + 1] == '{' || raw[pos + 1] == '('))
                 break;
             pos++;
         }

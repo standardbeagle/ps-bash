@@ -117,7 +117,7 @@ public class PsEmitterTests
     }
 
     [Fact]
-    public void Emit_CommandList_ThrowsNotSupported()
+    public void Emit_CommandList_SingleCommand_EmitsCommand()
     {
         var list = new Command.CommandList(
             ImmutableArray.Create<Command>(
@@ -126,7 +126,9 @@ public class PsEmitterTests
                     ImmutableArray<EnvPair>.Empty,
                     ImmutableArray<Redirect>.Empty)));
 
-        Assert.Throws<NotSupportedException>(() => PsEmitter.Emit(list));
+        var result = PsEmitter.Emit(list);
+
+        Assert.Equal("echo", result);
     }
 
     [Fact]
@@ -423,6 +425,278 @@ public class PsEmitterTests
         var result = PsEmitter.Emit(andOr);
 
         Assert.Equal("test -f file || echo missing", result);
+    }
+
+    [Fact]
+    public void Transpile_EchoHome_PsBuiltinPassthrough()
+    {
+        var result = PsEmitter.Transpile("echo $HOME");
+
+        Assert.Equal("echo $HOME", result);
+    }
+
+    [Fact]
+    public void Transpile_EchoFoo_EmitsEnvVar()
+    {
+        var result = PsEmitter.Transpile("echo $FOO");
+
+        Assert.Equal("echo $env:FOO", result);
+    }
+
+    [Fact]
+    public void Transpile_BracedVar_EmitsEnvVar()
+    {
+        var result = PsEmitter.Transpile("echo ${PATH}");
+
+        Assert.Equal("echo $env:PATH", result);
+    }
+
+    [Fact]
+    public void Transpile_BracedVarWithDefault_EmitsNullCoalescing()
+    {
+        var result = PsEmitter.Transpile("echo ${VAR:-fallback}");
+
+        Assert.Equal("echo ($env:VAR ?? \"fallback\")", result);
+    }
+
+    [Fact]
+    public void Transpile_SpecialVarQuestionMark_EmitsLastExitCode()
+    {
+        var result = PsEmitter.Transpile("echo $?");
+
+        Assert.Equal("echo $LASTEXITCODE", result);
+    }
+
+    [Fact]
+    public void Transpile_BracedVarLength_EmitsLength()
+    {
+        var result = PsEmitter.Transpile("echo ${#VAR}");
+
+        Assert.Equal("echo $env:VAR.Length", result);
+    }
+
+    [Fact]
+    public void Transpile_SpecialVarAt_EmitsArgs()
+    {
+        var result = PsEmitter.Transpile("echo $@");
+
+        Assert.Equal("echo $args", result);
+    }
+
+    [Fact]
+    public void Transpile_SpecialVarHash_EmitsArgsCount()
+    {
+        var result = PsEmitter.Transpile("echo $#");
+
+        Assert.Equal("echo $args.Count", result);
+    }
+
+    [Fact]
+    public void Transpile_SpecialVarDollarDollar_EmitsPid()
+    {
+        var result = PsEmitter.Transpile("echo $$");
+
+        Assert.Equal("echo $PID", result);
+    }
+
+    [Fact]
+    public void Transpile_PositionalVar1_EmitsArgsIndex()
+    {
+        var result = PsEmitter.Transpile("echo $1");
+
+        Assert.Equal("echo $args[0]", result);
+    }
+
+    [Fact]
+    public void Transpile_PositionalVar9_EmitsArgsIndex()
+    {
+        var result = PsEmitter.Transpile("echo $9");
+
+        Assert.Equal("echo $args[8]", result);
+    }
+
+    [Fact]
+    public void Transpile_SpecialVar0_EmitsMyCommand()
+    {
+        var result = PsEmitter.Transpile("echo $0");
+
+        Assert.Equal("echo $MyInvocation.MyCommand.Name", result);
+    }
+
+    [Fact]
+    public void Transpile_BracedVarAssignDefault_EmitsNullCoalescingAssign()
+    {
+        var result = PsEmitter.Transpile("echo ${VAR:=default}");
+
+        Assert.Equal("echo ($env:VAR ?? ($env:VAR = \"default\"))", result);
+    }
+
+    [Fact]
+    public void Transpile_BracedVarAlternative_EmitsConditional()
+    {
+        var result = PsEmitter.Transpile("echo ${VAR:+yes}");
+
+        Assert.Equal("echo ($env:VAR ? \"yes\" : \"\")", result);
+    }
+
+    [Fact]
+    public void Transpile_BracedVarError_EmitsThrow()
+    {
+        var result = PsEmitter.Transpile("echo ${VAR:?error msg}");
+
+        Assert.Equal("echo ($env:VAR ?? $(throw \"error msg\"))", result);
+    }
+
+    [Fact]
+    public void Transpile_BracedVarSuffixRemoval_EmitsReplace()
+    {
+        var result = PsEmitter.Transpile("echo ${VAR%%pattern}");
+
+        Assert.Equal("echo ($env:VAR -replace 'pattern$','')", result);
+    }
+
+    [Fact]
+    public void Transpile_BracedVarPrefixRemoval_EmitsReplace()
+    {
+        var result = PsEmitter.Transpile("echo ${VAR##pattern}");
+
+        Assert.Equal("echo ($env:VAR -replace '^pattern','')", result);
+    }
+
+    [Fact]
+    public void Transpile_BracedVarInsideDoubleQuotes_EmitsEnvVar()
+    {
+        var result = PsEmitter.Transpile("echo \"${USER}\"");
+
+        Assert.Equal("echo \"$env:USER\"", result);
+    }
+
+    [Fact]
+    public void Transpile_SpecialVarStar_EmitsArgs()
+    {
+        var result = PsEmitter.Transpile("echo $*");
+
+        Assert.Equal("echo $args", result);
+    }
+
+    [Fact]
+    public void Transpile_BracedVarHomePsBuiltin_EmitsHomeDirect()
+    {
+        var result = PsEmitter.Transpile("echo ${HOME}");
+
+        Assert.Equal("echo $HOME", result);
+    }
+
+    [Fact]
+    public void Transpile_CommandSub_SimpleCommand_Passthrough()
+    {
+        var result = PsEmitter.Transpile("echo $(whoami)");
+
+        Assert.Equal("echo $(whoami)", result);
+    }
+
+    [Fact]
+    public void Transpile_CommandSub_InnerPipeline_TranspilesInnerCommands()
+    {
+        var result = PsEmitter.Transpile("echo $(ls | grep foo)");
+
+        Assert.Equal("echo $(ls | Invoke-Grep \"foo\")", result);
+    }
+
+    [Fact]
+    public void Transpile_BacktickCommandSub_NormalizedToDollarParen()
+    {
+        var result = PsEmitter.Transpile("echo `date`");
+
+        Assert.Equal("echo $(date)", result);
+    }
+
+    [Fact]
+    public void Transpile_AssignmentWithCommandSub_EmitsEnvAssignment()
+    {
+        var result = PsEmitter.Transpile("VAR=$(cat file)");
+
+        Assert.Equal("$env:VAR = \"$(cat file)\"", result);
+    }
+
+    [Fact]
+    public void Transpile_NestedCommandSub_EmitsCorrectNesting()
+    {
+        var result = PsEmitter.Transpile("echo $(echo $(whoami))");
+
+        Assert.Equal("echo $(echo $(whoami))", result);
+    }
+
+    [Fact]
+    public void Transpile_TildePathDocs_EmitsHomePath()
+    {
+        var result = PsEmitter.Transpile("ls ~/docs");
+
+        Assert.Equal("ls $HOME\\docs", result);
+    }
+
+    [Fact]
+    public void Transpile_TmpPath_EmitsTempEnv()
+    {
+        var result = PsEmitter.Transpile("cat /tmp/log.txt");
+
+        Assert.Equal("cat $env:TEMP\\log.txt", result);
+    }
+
+    [Fact]
+    public void Transpile_DevNullAsArgument_EmitsNull()
+    {
+        var result = PsEmitter.Transpile("echo /dev/null");
+
+        Assert.Equal("echo $null", result);
+    }
+
+    [Fact]
+    public void Transpile_SemicolonTwoCommands_EmitsCommandList()
+    {
+        var result = PsEmitter.Transpile("echo a; echo b");
+
+        Assert.Equal("echo a; echo b", result);
+    }
+
+    [Fact]
+    public void Transpile_SemicolonThreeCommands_EmitsCommandList()
+    {
+        var result = PsEmitter.Transpile("echo a; echo b; echo c");
+
+        Assert.Equal("echo a; echo b; echo c", result);
+    }
+
+    [Fact]
+    public void Transpile_BareTilde_EmitsHome()
+    {
+        var result = PsEmitter.Transpile("cd ~");
+
+        Assert.Equal("cd $HOME", result);
+    }
+
+    [Fact]
+    public void Transpile_TildeNestedPath_EmitsHomePath()
+    {
+        var result = PsEmitter.Transpile("ls ~/.config/app");
+
+        Assert.Equal("ls $HOME\\.config/app", result);
+    }
+
+    [Fact]
+    public void Transpile_TildeUser_Passthrough()
+    {
+        var result = PsEmitter.Transpile("ls ~bob/docs");
+
+        Assert.Equal("ls ~bob\\docs", result);
+    }
+
+    [Fact]
+    public void Transpile_TrailingSemicolon_EmitsSingleCommand()
+    {
+        var result = PsEmitter.Transpile("echo a;");
+
+        Assert.Equal("echo a", result);
     }
 
     private static CompoundWord MakeWord(string value) =>

@@ -191,6 +191,63 @@ public static class BashLexer
                 continue;
             }
 
+            // Brace expansion ${...}: consume through closing brace.
+            if (c == '$' && pos + 1 < len && input[pos + 1] == '{')
+            {
+                pos += 2; // skip ${
+                int depth = 1;
+                while (pos < len && depth > 0)
+                {
+                    if (input[pos] == '{') depth++;
+                    else if (input[pos] == '}') depth--;
+                    if (depth > 0) pos++;
+                }
+                if (pos < len)
+                    pos++; // skip closing }
+                continue;
+            }
+
+            // Command substitution $(...): consume through matching closing paren.
+            if (c == '$' && pos + 1 < len && input[pos + 1] == '(')
+            {
+                pos += 2; // skip $(
+                int depth = 1;
+                while (pos < len && depth > 0)
+                {
+                    char ch = input[pos];
+                    if (ch == '(') depth++;
+                    else if (ch == ')') depth--;
+                    if (depth > 0) pos++;
+                }
+                if (pos < len)
+                    pos++; // skip closing )
+                continue;
+            }
+
+            // Backtick command substitution `...`: consume through closing backtick.
+            if (c == '`')
+            {
+                pos++; // skip opening `
+                while (pos < len && input[pos] != '`')
+                {
+                    if (input[pos] == '\\' && pos + 1 < len)
+                        pos++; // skip escaped char
+                    pos++;
+                }
+                if (pos < len)
+                    pos++; // skip closing `
+                continue;
+            }
+
+            // Special variable: $# $? $! $$ $@ $* $- $0-$9 must not break on the second char.
+            if (c == '$' && pos + 1 < len
+                && input[pos + 1] is '#' or '?' or '!' or '$' or '@' or '*' or '-'
+                    or (>= '0' and <= '9'))
+            {
+                pos += 2;
+                continue;
+            }
+
             pos++;
         }
 

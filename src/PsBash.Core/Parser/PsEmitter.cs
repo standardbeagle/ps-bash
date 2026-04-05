@@ -18,7 +18,7 @@ public static class PsEmitter
         Command.Pipeline pipeline => EmitPipeline(pipeline),
         Command.AndOrList andOr => EmitAndOrList(andOr),
         Command.ShAssignment assign => EmitShAssignment(assign),
-        Command.CommandList => throw new NotSupportedException("CommandList commands are not yet supported."),
+        Command.CommandList list => EmitCommandList(list),
         _ => throw new NotSupportedException($"Unknown command type: {cmd.GetType().Name}"),
     };
 
@@ -135,12 +135,28 @@ public static class PsEmitter
     private static string EmitWord(CompoundWord word)
     {
         if (word.Parts.Length == 1)
-            return EmitWordPart(word.Parts[0]);
+            return TransformWordPath(EmitWordPart(word.Parts[0]));
 
         var sb = new StringBuilder();
-        foreach (var part in word.Parts)
+        for (int i = 0; i < word.Parts.Length; i++)
+        {
+            var part = word.Parts[i];
             sb.Append(EmitWordPart(part));
-        return sb.ToString();
+
+            // After TildeSub, insert backslash separator if more parts follow.
+            if (part is WordPart.TildeSub && i + 1 < word.Parts.Length)
+                sb.Append('\\');
+        }
+        return TransformWordPath(sb.ToString());
+    }
+
+    private static string TransformWordPath(string value)
+    {
+        if (value == "/dev/null")
+            return "$null";
+        if (value.StartsWith("/tmp/"))
+            return $"$env:TEMP\\{value[5..]}";
+        return value;
     }
 
     private static string EmitWordPart(WordPart part) => part switch
@@ -150,17 +166,92 @@ public static class PsEmitter
         WordPart.SingleQuoted sq => $"'{sq.Value}'",
         WordPart.DoubleQuoted dq => EmitDoubleQuoted(dq),
         WordPart.SimpleVarSub vs => EmitSimpleVar(vs.Name),
-        WordPart.BracedVarSub bvs => $"$env:{bvs.Name}",
-        WordPart.CommandSub => throw new NotSupportedException("Command substitution is not yet supported."),
-        WordPart.TildeSub ts => ts.User is null ? "$HOME" : throw new NotSupportedException("~user substitution is not yet supported."),
+        WordPart.BracedVarSub bvs => EmitBracedVar(bvs),
+        WordPart.CommandSub cs => $"$({Emit((Command)cs.Body)})",
+        WordPart.TildeSub ts => ts.User is null ? "$HOME" : $"~{ts.User}",
         _ => throw new NotSupportedException($"Unknown word part type: {part.GetType().Name}"),
     };
 
     private static string EmitSimpleVar(string name) => name switch
     {
         "null" or "true" or "false" or "HOME" or "LASTEXITCODE" => $"${name}",
+        "?" => "$LASTEXITCODE",
+        "@" or "*" => "$args",
+        "#" => "$args.Count",
+        "0" => "$MyInvocation.MyCommand.Name",
+        "$" => "$PID",
+        "!" => "$PID",
+        "-" => "$PSBoundParameters",
+        var d when d.Length == 1 && d[0] is >= '1' and <= '9' => $"$args[{int.Parse(d) - 1}]",
         _ => $"$env:{name}",
     };
+
+    private static string EmitBracedVar(WordPart.BracedVarSub bvs)
+    {
+        if (bvs.Suffix is null)
+            return EmitSimpleVar(bvs.Name);
+
+        string varRef = EmitSimpleVar(bvs.Name);
+
+        // Length: ${#VAR}
+        if (bvs.Suffix == "#")
+            return $"{varRef}.Length";
+
+        // Default value: ${VAR:-default}
+        if (bvs.Suffix.StartsWith(":-"))
+        {
+            string defaultVal = bvs.Suffix[2..];
+            return $"({varRef} ?? \"{defaultVal}\")";
+        }
+
+        // Assign default: ${VAR:=default}
+        if (bvs.Suffix.StartsWith(":="))
+        {
+            string defaultVal = bvs.Suffix[2..];
+            return $"({varRef} ?? ({varRef} = \"{defaultVal}\"))";
+        }
+
+        // Use alternative: ${VAR:+alt}
+        if (bvs.Suffix.StartsWith(":+"))
+        {
+            string alt = bvs.Suffix[2..];
+            return $"({varRef} ? \"{alt}\" : \"\")";
+        }
+
+        // Error if unset: ${VAR:?message}
+        if (bvs.Suffix.StartsWith(":?"))
+        {
+            string msg = bvs.Suffix[2..];
+            return $"({varRef} ?? $(throw \"{msg}\"))";
+        }
+
+        // Remove suffix: ${VAR%%pattern} or ${VAR%pattern}
+        if (bvs.Suffix.StartsWith("%%"))
+        {
+            string pattern = bvs.Suffix[2..];
+            return $"({varRef} -replace '{pattern}$','')";
+        }
+        if (bvs.Suffix.StartsWith("%"))
+        {
+            string pattern = bvs.Suffix[1..];
+            return $"({varRef} -replace '{pattern}$','')";
+        }
+
+        // Remove prefix: ${VAR##pattern} or ${VAR#pattern}
+        if (bvs.Suffix.StartsWith("##"))
+        {
+            string pattern = bvs.Suffix[2..];
+            return $"({varRef} -replace '^{pattern}','')";
+        }
+        if (bvs.Suffix.StartsWith("#"))
+        {
+            string pattern = bvs.Suffix[1..];
+            return $"({varRef} -replace '^{pattern}','')";
+        }
+
+        // Fallback: emit as-is with comment about unsupported operator
+        return varRef;
+    }
 
     private static string EmitDoubleQuoted(WordPart.DoubleQuoted dq)
     {
@@ -169,6 +260,18 @@ public static class PsEmitter
         foreach (var part in dq.Parts)
             sb.Append(EmitWordPart(part));
         sb.Append('"');
+        return sb.ToString();
+    }
+
+    private static string EmitCommandList(Command.CommandList list)
+    {
+        var sb = new StringBuilder();
+        for (int i = 0; i < list.Commands.Length; i++)
+        {
+            if (i > 0)
+                sb.Append("; ");
+            sb.Append(Emit(list.Commands[i]));
+        }
         return sb.ToString();
     }
 

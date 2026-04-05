@@ -484,4 +484,276 @@ public class BashParserTests
         var right = Assert.IsType<Command.Simple>(andOr.Commands[1]);
         Assert.Equal(["echo", "found"], GetWordValues(right));
     }
+
+    [Fact]
+    public void Parse_BracedVarSimple_ReturnsBracedVarSub()
+    {
+        var result = Parse("echo ${PATH}");
+
+        var simple = Assert.IsType<Command.Simple>(result);
+        var bvs = Assert.IsType<WordPart.BracedVarSub>(Assert.Single(simple.Words[1].Parts));
+        Assert.Equal("PATH", bvs.Name);
+        Assert.Null(bvs.Suffix);
+    }
+
+    [Fact]
+    public void Parse_BracedVarWithDefault_ReturnsBracedVarSubWithSuffix()
+    {
+        var result = Parse("echo ${VAR:-fallback}");
+
+        var simple = Assert.IsType<Command.Simple>(result);
+        var bvs = Assert.IsType<WordPart.BracedVarSub>(Assert.Single(simple.Words[1].Parts));
+        Assert.Equal("VAR", bvs.Name);
+        Assert.Equal(":-fallback", bvs.Suffix);
+    }
+
+    [Fact]
+    public void Parse_BracedVarLength_ReturnsBracedVarSubWithHashSuffix()
+    {
+        var result = Parse("echo ${#VAR}");
+
+        var simple = Assert.IsType<Command.Simple>(result);
+        var bvs = Assert.IsType<WordPart.BracedVarSub>(Assert.Single(simple.Words[1].Parts));
+        Assert.Equal("VAR", bvs.Name);
+        Assert.Equal("#", bvs.Suffix);
+    }
+
+    [Fact]
+    public void Parse_BracedVarAssignDefault_ReturnsSuffix()
+    {
+        var result = Parse("echo ${VAR:=default}");
+
+        var simple = Assert.IsType<Command.Simple>(result);
+        var bvs = Assert.IsType<WordPart.BracedVarSub>(Assert.Single(simple.Words[1].Parts));
+        Assert.Equal("VAR", bvs.Name);
+        Assert.Equal(":=default", bvs.Suffix);
+    }
+
+    [Fact]
+    public void Parse_BracedVarSuffixRemoval_ReturnsSuffix()
+    {
+        var result = Parse("echo ${VAR%%pattern}");
+
+        var simple = Assert.IsType<Command.Simple>(result);
+        var bvs = Assert.IsType<WordPart.BracedVarSub>(Assert.Single(simple.Words[1].Parts));
+        Assert.Equal("VAR", bvs.Name);
+        Assert.Equal("%%pattern", bvs.Suffix);
+    }
+
+    [Fact]
+    public void Parse_BracedVarPrefixRemoval_ReturnsSuffix()
+    {
+        var result = Parse("echo ${VAR##pattern}");
+
+        var simple = Assert.IsType<Command.Simple>(result);
+        var bvs = Assert.IsType<WordPart.BracedVarSub>(Assert.Single(simple.Words[1].Parts));
+        Assert.Equal("VAR", bvs.Name);
+        Assert.Equal("##pattern", bvs.Suffix);
+    }
+
+    [Fact]
+    public void Parse_BracedVarInsideDoubleQuotes_ReturnsBracedVarSub()
+    {
+        var result = Parse("echo \"${USER}\"");
+
+        var simple = Assert.IsType<Command.Simple>(result);
+        var dq = Assert.IsType<WordPart.DoubleQuoted>(Assert.Single(simple.Words[1].Parts));
+        var bvs = Assert.IsType<WordPart.BracedVarSub>(Assert.Single(dq.Parts));
+        Assert.Equal("USER", bvs.Name);
+        Assert.Null(bvs.Suffix);
+    }
+
+    [Fact]
+    public void Parse_SpecialVarQuestionMark_ReturnsSimpleVarSub()
+    {
+        var result = Parse("echo $?");
+
+        var simple = Assert.IsType<Command.Simple>(result);
+        var vs = Assert.IsType<WordPart.SimpleVarSub>(Assert.Single(simple.Words[1].Parts));
+        Assert.Equal("?", vs.Name);
+    }
+
+    [Fact]
+    public void Parse_SpecialVarAt_ReturnsSimpleVarSub()
+    {
+        var result = Parse("echo $@");
+
+        var simple = Assert.IsType<Command.Simple>(result);
+        var vs = Assert.IsType<WordPart.SimpleVarSub>(Assert.Single(simple.Words[1].Parts));
+        Assert.Equal("@", vs.Name);
+    }
+
+    [Fact]
+    public void Parse_SpecialVarDollarDollar_ReturnsSimpleVarSub()
+    {
+        var result = Parse("echo $$");
+
+        var simple = Assert.IsType<Command.Simple>(result);
+        var vs = Assert.IsType<WordPart.SimpleVarSub>(Assert.Single(simple.Words[1].Parts));
+        Assert.Equal("$", vs.Name);
+    }
+
+    [Fact]
+    public void Parse_PositionalVar1_ReturnsSimpleVarSub()
+    {
+        var result = Parse("echo $1");
+
+        var simple = Assert.IsType<Command.Simple>(result);
+        var vs = Assert.IsType<WordPart.SimpleVarSub>(Assert.Single(simple.Words[1].Parts));
+        Assert.Equal("1", vs.Name);
+    }
+
+    [Fact]
+    public void Parse_BracedVarWithAlternative_ReturnsSuffix()
+    {
+        var result = Parse("echo ${VAR:+yes}");
+
+        var simple = Assert.IsType<Command.Simple>(result);
+        var bvs = Assert.IsType<WordPart.BracedVarSub>(Assert.Single(simple.Words[1].Parts));
+        Assert.Equal("VAR", bvs.Name);
+        Assert.Equal(":+yes", bvs.Suffix);
+    }
+
+    [Fact]
+    public void Parse_BracedVarWithError_ReturnsSuffix()
+    {
+        var result = Parse("echo ${VAR:?error msg}");
+
+        var simple = Assert.IsType<Command.Simple>(result);
+        var bvs = Assert.IsType<WordPart.BracedVarSub>(Assert.Single(simple.Words[1].Parts));
+        Assert.Equal("VAR", bvs.Name);
+        Assert.Equal(":?error msg", bvs.Suffix);
+    }
+
+    [Fact]
+    public void Parse_CommandSub_SimpleCommand_ReturnsCommandSubPart()
+    {
+        var result = Parse("echo $(whoami)");
+
+        var simple = Assert.IsType<Command.Simple>(result);
+        Assert.Equal(2, simple.Words.Length);
+        var cs = Assert.IsType<WordPart.CommandSub>(Assert.Single(simple.Words[1].Parts));
+        var inner = Assert.IsType<Command.Simple>(cs.Body);
+        Assert.Equal("whoami", Assert.IsType<WordPart.Literal>(Assert.Single(inner.Words[0].Parts)).Value);
+    }
+
+    [Fact]
+    public void Parse_CommandSub_InnerPipeline_ParsesRecursively()
+    {
+        var result = Parse("echo $(ls | grep foo)");
+
+        var simple = Assert.IsType<Command.Simple>(result);
+        var cs = Assert.IsType<WordPart.CommandSub>(Assert.Single(simple.Words[1].Parts));
+        var pipeline = Assert.IsType<Command.Pipeline>(cs.Body);
+        Assert.Equal(2, pipeline.Commands.Length);
+    }
+
+    [Fact]
+    public void Parse_BacktickCommandSub_ReturnsCommandSubPart()
+    {
+        var result = Parse("echo `date`");
+
+        var simple = Assert.IsType<Command.Simple>(result);
+        Assert.Equal(2, simple.Words.Length);
+        var cs = Assert.IsType<WordPart.CommandSub>(Assert.Single(simple.Words[1].Parts));
+        var inner = Assert.IsType<Command.Simple>(cs.Body);
+        Assert.Equal("date", Assert.IsType<WordPart.Literal>(Assert.Single(inner.Words[0].Parts)).Value);
+    }
+
+    [Fact]
+    public void Parse_AssignmentWithCommandSub_ParsesCorrectly()
+    {
+        var result = Parse("VAR=$(cat file)");
+
+        var assign = Assert.IsType<Command.ShAssignment>(result);
+        var pair = Assert.Single(assign.Pairs);
+        Assert.Equal("VAR", pair.Name);
+        var cs = Assert.IsType<WordPart.CommandSub>(Assert.Single(pair.Value!.Parts));
+        var inner = Assert.IsType<Command.Simple>(cs.Body);
+        Assert.Equal("cat", Assert.IsType<WordPart.Literal>(Assert.Single(inner.Words[0].Parts)).Value);
+        Assert.Equal("file", Assert.IsType<WordPart.Literal>(Assert.Single(inner.Words[1].Parts)).Value);
+    }
+
+    [Fact]
+    public void Parse_NestedCommandSub_ParsesRecursively()
+    {
+        var result = Parse("echo $(echo $(whoami))");
+
+        var simple = Assert.IsType<Command.Simple>(result);
+        var cs = Assert.IsType<WordPart.CommandSub>(Assert.Single(simple.Words[1].Parts));
+        var outerInner = Assert.IsType<Command.Simple>(cs.Body);
+        Assert.Equal("echo", Assert.IsType<WordPart.Literal>(Assert.Single(outerInner.Words[0].Parts)).Value);
+        var nestedCs = Assert.IsType<WordPart.CommandSub>(Assert.Single(outerInner.Words[1].Parts));
+        var innermost = Assert.IsType<Command.Simple>(nestedCs.Body);
+        Assert.Equal("whoami", Assert.IsType<WordPart.Literal>(Assert.Single(innermost.Words[0].Parts)).Value);
+    }
+
+    [Fact]
+    public void Parse_TildePath_ReturnsTildeSubAndLiteral()
+    {
+        var result = Parse("ls ~/docs");
+
+        var simple = Assert.IsType<Command.Simple>(result);
+        Assert.Equal(2, simple.Words.Length);
+        var parts = simple.Words[1].Parts;
+        Assert.Equal(2, parts.Length);
+        var tilde = Assert.IsType<WordPart.TildeSub>(parts[0]);
+        Assert.Null(tilde.User);
+        Assert.Equal("docs", Assert.IsType<WordPart.Literal>(parts[1]).Value);
+    }
+
+    [Fact]
+    public void Parse_BareTilde_ReturnsTildeSubOnly()
+    {
+        var result = Parse("cd ~");
+
+        var simple = Assert.IsType<Command.Simple>(result);
+        Assert.Equal(2, simple.Words.Length);
+        var tilde = Assert.IsType<WordPart.TildeSub>(Assert.Single(simple.Words[1].Parts));
+        Assert.Null(tilde.User);
+    }
+
+    [Fact]
+    public void Parse_TildeUser_ReturnsTildeSubWithUser()
+    {
+        var result = Parse("ls ~bob/docs");
+
+        var simple = Assert.IsType<Command.Simple>(result);
+        var parts = simple.Words[1].Parts;
+        Assert.Equal(2, parts.Length);
+        var tilde = Assert.IsType<WordPart.TildeSub>(parts[0]);
+        Assert.Equal("bob", tilde.User);
+        Assert.Equal("docs", Assert.IsType<WordPart.Literal>(parts[1]).Value);
+    }
+
+    [Fact]
+    public void Parse_Semicolon_TwoCommands_ReturnsCommandList()
+    {
+        var result = Parse("echo a; echo b");
+
+        var list = Assert.IsType<Command.CommandList>(result);
+        Assert.Equal(2, list.Commands.Length);
+        var first = Assert.IsType<Command.Simple>(list.Commands[0]);
+        Assert.Equal(["echo", "a"], GetWordValues(first));
+        var second = Assert.IsType<Command.Simple>(list.Commands[1]);
+        Assert.Equal(["echo", "b"], GetWordValues(second));
+    }
+
+    [Fact]
+    public void Parse_Semicolon_ThreeCommands_ReturnsCommandList()
+    {
+        var result = Parse("echo a; echo b; echo c");
+
+        var list = Assert.IsType<Command.CommandList>(result);
+        Assert.Equal(3, list.Commands.Length);
+    }
+
+    [Fact]
+    public void Parse_TrailingSemicolon_ReturnsSingleCommand()
+    {
+        var result = Parse("echo a;");
+
+        var simple = Assert.IsType<Command.Simple>(result);
+        Assert.Equal(["echo", "a"], GetWordValues(simple));
+    }
 }
