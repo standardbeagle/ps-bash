@@ -1262,6 +1262,125 @@ public class PsEmitterTests
         Assert.Equal("echo \"result is $($x + 1)\"", result);
     }
 
+    [Fact]
+    public void Transpile_GlobStar_PassesThrough()
+    {
+        var result = PsEmitter.Transpile("echo *.py");
+        Assert.Equal("echo *.py", result);
+    }
+
+    [Fact]
+    public void Transpile_GlobQuestionMark_PassesThrough()
+    {
+        var result = PsEmitter.Transpile("echo file?.txt");
+        Assert.Equal("echo file?.txt", result);
+    }
+
+    [Fact]
+    public void Transpile_GlobCharClass_PassesThrough()
+    {
+        var result = PsEmitter.Transpile("echo [abc]*");
+        Assert.Equal("echo [abc]*", result);
+    }
+
+    [Fact]
+    public void Transpile_GlobMixedWithLiteral_PassesThrough()
+    {
+        var result = PsEmitter.Transpile("echo src/*.py");
+        Assert.Equal("echo src/*.py", result);
+    }
+
+    [Fact]
+    public void Transpile_GlobStandalone_PassesThrough()
+    {
+        var result = PsEmitter.Transpile("echo *");
+        Assert.Equal("echo *", result);
+    }
+
+    [Fact]
+    public void Transpile_ExtGlob_PassesThrough()
+    {
+        var result = PsEmitter.Transpile("echo +(*.py|*.js)");
+        Assert.Equal("echo +(*.py|*.js)", result);
+    }
+
+    [Fact]
+    public void Transpile_GlobPrefix_PassesThrough()
+    {
+        var result = PsEmitter.Transpile("echo *.log");
+        Assert.Equal("echo *.log", result);
+    }
+
+    [Fact]
+    public void Transpile_GlobSuffix_PassesThrough()
+    {
+        var result = PsEmitter.Transpile("echo test*");
+        Assert.Equal("echo test*", result);
+    }
+
+    [Fact]
+    public void Parse_GlobStar_ProducesGlobPart()
+    {
+        var cmd = Assert.IsType<Command.Simple>(BashParser.Parse("echo *.py"));
+        var parts = cmd.Words[1].Parts;
+        Assert.Equal(2, parts.Length);
+        Assert.IsType<WordPart.GlobPart>(parts[0]);
+        Assert.Equal("*", ((WordPart.GlobPart)parts[0]).Pattern);
+        Assert.Equal(".py", ((WordPart.Literal)parts[1]).Value);
+    }
+
+    [Fact]
+    public void Parse_GlobQuestionMark_ProducesGlobPart()
+    {
+        var cmd = Assert.IsType<Command.Simple>(BashParser.Parse("echo file?.txt"));
+        var parts = cmd.Words[1].Parts;
+        Assert.Equal(3, parts.Length);
+        Assert.Equal("file", ((WordPart.Literal)parts[0]).Value);
+        Assert.IsType<WordPart.GlobPart>(parts[1]);
+        Assert.Equal("?", ((WordPart.GlobPart)parts[1]).Pattern);
+        Assert.Equal(".txt", ((WordPart.Literal)parts[2]).Value);
+    }
+
+    [Fact]
+    public void Parse_GlobCharClass_ProducesGlobPart()
+    {
+        var cmd = Assert.IsType<Command.Simple>(BashParser.Parse("echo [abc]*"));
+        var parts = cmd.Words[1].Parts;
+        Assert.Equal(2, parts.Length);
+        Assert.IsType<WordPart.GlobPart>(parts[0]);
+        Assert.Equal("[abc]", ((WordPart.GlobPart)parts[0]).Pattern);
+        Assert.IsType<WordPart.GlobPart>(parts[1]);
+        Assert.Equal("*", ((WordPart.GlobPart)parts[1]).Pattern);
+    }
+
+    [Fact]
+    public void Parse_ExtGlob_ProducesGlobPart()
+    {
+        var cmd = Assert.IsType<Command.Simple>(BashParser.Parse("echo +(*.py|*.js)"));
+        var parts = cmd.Words[1].Parts;
+        Assert.Single(parts);
+        Assert.IsType<WordPart.GlobPart>(parts[0]);
+        Assert.Equal("+(*.py|*.js)", ((WordPart.GlobPart)parts[0]).Pattern);
+    }
+
+    [Fact]
+    public void Parse_GlobMixedWithPath_SplitsCorrectly()
+    {
+        var cmd = Assert.IsType<Command.Simple>(BashParser.Parse("echo src/*.py"));
+        var parts = cmd.Words[1].Parts;
+        Assert.Equal(3, parts.Length);
+        Assert.Equal("src/", ((WordPart.Literal)parts[0]).Value);
+        Assert.Equal("*", ((WordPart.GlobPart)parts[1]).Pattern);
+        Assert.Equal(".py", ((WordPart.Literal)parts[2]).Value);
+    }
+
+    [Fact]
+    public void Transpile_ForInGlobCharClass_EmitsResolvePath()
+    {
+        var result = PsEmitter.Transpile("for f in [abc]*.txt; do cat $f; done");
+        Assert.Equal("foreach ($f in (Resolve-Path [abc]*.txt)) { cat $f }", result);
+    }
+
     private static CompoundWord MakeWord(string value) =>
         new(ImmutableArray.Create<WordPart>(new WordPart.Literal(value)));
 }

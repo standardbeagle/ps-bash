@@ -153,6 +153,22 @@ public static class BashLexer
         {
             char c = input[pos];
 
+            // Extglob: +(...) *(...) ?(...) !(...) @(...) — consume through matching ')'.
+            if ((c is '+' or '*' or '?' or '!' or '@') && pos + 1 < len && input[pos + 1] == '(')
+            {
+                pos += 2; // skip operator + '('
+                int depth = 1;
+                while (pos < len && depth > 0)
+                {
+                    if (input[pos] == '(') depth++;
+                    else if (input[pos] == ')') depth--;
+                    if (depth > 0) pos++;
+                }
+                if (pos < len)
+                    pos++; // skip closing )
+                continue;
+            }
+
             // Unquoted metacharacters end the word.
             if (c is ' ' or '\t' or '\n' or '\r' or '|' or '&' or ';'
                 or '(' or ')' or '<' or '>' or '#')

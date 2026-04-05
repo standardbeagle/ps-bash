@@ -805,6 +805,7 @@ public static class PsEmitter
         WordPart.CommandSub cs => $"$({Emit((Command)cs.Body)})",
         WordPart.ArithSub arith => EmitArithSub(arith),
         WordPart.TildeSub ts => ts.User is null ? "$HOME" : $"~{ts.User}",
+        WordPart.GlobPart gp => gp.Pattern,
         _ => throw new NotSupportedException($"Unknown word part type: {part.GetType().Name}"),
     };
 

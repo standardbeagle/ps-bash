@@ -1219,4 +1219,38 @@ public class BashParserTests
         // The 'echo' token is on line 2
         Assert.Equal(2, ex.Line);
     }
+
+    [Fact]
+    public void Parse_GlobStar_ProducesGlobPart()
+    {
+        var simple = Assert.IsType<Command.Simple>(Parse("echo *.py"));
+
+        Assert.Equal(2, simple.Words.Length);
+        var parts = simple.Words[1].Parts;
+        Assert.Equal(2, parts.Length);
+        Assert.IsType<WordPart.GlobPart>(parts[0]);
+        Assert.Equal("*", ((WordPart.GlobPart)parts[0]).Pattern);
+        Assert.Equal(".py", ((WordPart.Literal)parts[1]).Value);
+    }
+
+    [Fact]
+    public void Parse_GlobCharClass_ProducesGlobPart()
+    {
+        var simple = Assert.IsType<Command.Simple>(Parse("echo [abc]*"));
+
+        var parts = simple.Words[1].Parts;
+        Assert.Equal(2, parts.Length);
+        Assert.Equal("[abc]", ((WordPart.GlobPart)parts[0]).Pattern);
+        Assert.Equal("*", ((WordPart.GlobPart)parts[1]).Pattern);
+    }
+
+    [Fact]
+    public void Parse_ExtGlob_ProducesGlobPart()
+    {
+        var simple = Assert.IsType<Command.Simple>(Parse("echo +(*.py|*.js)"));
+
+        var parts = simple.Words[1].Parts;
+        Assert.Single(parts);
+        Assert.Equal("+(*.py|*.js)", ((WordPart.GlobPart)parts[0]).Pattern);
+    }
 }

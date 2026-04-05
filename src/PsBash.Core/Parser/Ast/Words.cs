@@ -34,6 +34,12 @@ public abstract record WordPart : BashNode
 
     /// <summary>A tilde substitution, e.g. <c>~</c> or <c>~user</c>.</summary>
     public sealed record TildeSub(string? User) : WordPart;
+
+    /// <summary>
+    /// A glob pattern fragment: <c>*</c>, <c>?</c>, <c>[abc]</c>, or an extglob
+    /// like <c>+(*.py|*.js)</c>. The <paramref name="Pattern"/> holds the raw text.
+    /// </summary>
+    public sealed record GlobPart(string Pattern) : WordPart;
 }
 
 /// <summary>

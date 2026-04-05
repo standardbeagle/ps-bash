@@ -968,6 +968,10 @@ public sealed class BashParser
             {
                 pos = ParseBacktickCommandSub(raw, pos, parts);
             }
+            else if (IsGlobStart(raw, pos))
+            {
+                pos = ParseGlob(raw, pos, parts);
+            }
             else
             {
                 pos = ParseBareLiteral(raw, pos, parts);
@@ -1246,10 +1250,111 @@ public sealed class BashParser
                 break;
             if (c == '$' && pos + 1 < len && (IsVarStart(raw[pos + 1]) || raw[pos + 1] == '{' || raw[pos + 1] == '('))
                 break;
+            // Stop before glob characters so they get parsed separately.
+            if (c is '*' or '?')
+                break;
+            if (c == '[' && ContainsBracketGlob(raw, pos))
+                break;
+            // Extglob: +( *( ?( !( @( preceded by nothing special.
+            if ((c is '+' or '*' or '?' or '!' or '@') && pos + 1 < len && raw[pos + 1] == '(')
+                break;
             pos++;
         }
-        parts.Add(new WordPart.Literal(raw[start..pos]));
+        if (pos > start)
+            parts.Add(new WordPart.Literal(raw[start..pos]));
         return pos;
+    }
+
+    private static int ParseGlob(string raw, int pos, ImmutableArray<WordPart>.Builder parts)
+    {
+        int len = raw.Length;
+        char c = raw[pos];
+
+        // Extglob: +(...) *(...) ?(...) !(...) @(...)
+        if ((c is '+' or '*' or '?' or '!' or '@') && pos + 1 < len && raw[pos + 1] == '(')
+            return ParseExtGlob(raw, pos, parts);
+
+        // Simple * or ?
+        if (c is '*' or '?')
+        {
+            parts.Add(new WordPart.GlobPart(c.ToString()));
+            return pos + 1;
+        }
+
+        // Character class [...]
+        if (c == '[')
+        {
+            int start = pos;
+            pos++; // skip [
+            // Allow leading ] or ! as part of the class
+            if (pos < len && raw[pos] is '!' or '^')
+                pos++;
+            if (pos < len && raw[pos] == ']')
+                pos++;
+            while (pos < len && raw[pos] != ']')
+                pos++;
+            if (pos < len)
+                pos++; // skip closing ]
+            parts.Add(new WordPart.GlobPart(raw[start..pos]));
+            return pos;
+        }
+
+        // Shouldn't reach here, but treat as literal.
+        parts.Add(new WordPart.Literal(c.ToString()));
+        return pos + 1;
+    }
+
+    private static int ParseExtGlob(string raw, int pos, ImmutableArray<WordPart>.Builder parts)
+    {
+        int start = pos;
+        pos += 2; // skip operator + '('
+        int depth = 1;
+        while (pos < raw.Length && depth > 0)
+        {
+            if (raw[pos] == '(') depth++;
+            else if (raw[pos] == ')') depth--;
+            if (depth > 0) pos++;
+        }
+        if (pos < raw.Length)
+            pos++; // skip closing )
+        parts.Add(new WordPart.GlobPart(raw[start..pos]));
+        return pos;
+    }
+
+    /// <summary>
+    /// Returns true if position <paramref name="pos"/> starts a bracket glob class
+    /// (i.e. <c>[</c> followed eventually by <c>]</c>).
+    /// </summary>
+    private static bool ContainsBracketGlob(string raw, int pos)
+    {
+        int i = pos + 1;
+        int len = raw.Length;
+        // Allow leading ! or ^ for negation
+        if (i < len && raw[i] is '!' or '^')
+            i++;
+        // Allow leading ] as literal member
+        if (i < len && raw[i] == ']')
+            i++;
+        while (i < len)
+        {
+            if (raw[i] == ']')
+                return true;
+            i++;
+        }
+        return false;
+    }
+
+    private static bool IsGlobStart(string raw, int pos)
+    {
+        char c = raw[pos];
+        if (c is '*' or '?')
+            return true;
+        if (c == '[' && ContainsBracketGlob(raw, pos))
+            return true;
+        // Extglob: +( !( @( (and *( ?( already covered by * ? above when not followed by '(')
+        if ((c is '+' or '!' or '@') && pos + 1 < raw.Length && raw[pos + 1] == '(')
+            return true;
+        return false;
     }
 
     private static bool IsVarStart(char c) =>
