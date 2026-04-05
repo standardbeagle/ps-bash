@@ -203,6 +203,10 @@ public sealed class BashParser
         if (Peek().Kind == BashTokenKind.Word && IsParensFunctionDef())
             return ParseParensFunction();
 
+        // Standalone arithmetic: (( expr ))
+        if (Peek().Kind == BashTokenKind.LParen && IsDoubleLParen())
+            return ParseArithCommand();
+
         // Subshell: (cmd1; cmd2)
         if (Peek().Kind == BashTokenKind.LParen)
             return ParseSubshell();
@@ -642,6 +646,39 @@ public sealed class BashParser
         return new Command.ShFunction(name, body);
     }
 
+    private bool IsDoubleLParen() =>
+        _pos + 1 < _tokens.Count
+        && _tokens[_pos + 1].Kind == BashTokenKind.LParen;
+
+    private Command.ArithCommand ParseArithCommand()
+    {
+        Advance(); // consume first (
+        var secondParen = Advance(); // consume second (
+        int exprStart = secondParen.Position + 1;
+
+        while (Peek().Kind != BashTokenKind.Eof)
+        {
+            if (Peek().Kind == BashTokenKind.RParen && IsDoubleRParen())
+            {
+                int exprEnd = Peek().Position;
+                Advance(); // consume first )
+                Advance(); // consume second )
+                string expr = _input[exprStart..exprEnd].Trim();
+                return new Command.ArithCommand(expr);
+            }
+
+            Advance();
+        }
+
+        // Reached EOF without finding ))
+        string remaining = _input[exprStart..].Trim();
+        return new Command.ArithCommand(remaining);
+    }
+
+    private bool IsDoubleRParen() =>
+        _pos + 1 < _tokens.Count
+        && _tokens[_pos + 1].Kind == BashTokenKind.RParen;
+
     private Command.Subshell ParseSubshell()
     {
         Advance(); // consume (
@@ -911,6 +948,10 @@ public sealed class BashParser
                 parts.Add(new WordPart.EscapedLiteral(raw[pos + 1].ToString()));
                 pos += 2;
             }
+            else if (c == '$' && pos + 2 < len && raw[pos + 1] == '(' && raw[pos + 2] == '(')
+            {
+                pos = ParseArithSub(raw, pos, parts);
+            }
             else if (c == '$' && pos + 1 < len && raw[pos + 1] == '(')
             {
                 pos = ParseCommandSub(raw, pos, parts);
@@ -974,6 +1015,10 @@ public sealed class BashParser
                     innerParts.Add(new WordPart.Literal("\\"));
                     pos++;
                 }
+            }
+            else if (c == '$' && pos + 2 < len && raw[pos + 1] == '(' && raw[pos + 2] == '(')
+            {
+                pos = ParseArithSub(raw, pos, innerParts);
             }
             else if (c == '$' && pos + 1 < len && raw[pos + 1] == '(')
             {
@@ -1092,6 +1137,36 @@ public sealed class BashParser
             pos++; // skip }
 
         parts.Add(new WordPart.BracedVarSub(varName, suffix));
+        return pos;
+    }
+
+    private static int ParseArithSub(string raw, int pos, ImmutableArray<WordPart>.Builder parts)
+    {
+        pos += 3; // skip $((
+        int depth = 1;
+        int start = pos;
+        while (pos < raw.Length && depth > 0)
+        {
+            if (pos + 1 < raw.Length && raw[pos] == '(' && raw[pos + 1] == '(')
+            {
+                depth++;
+                pos += 2;
+            }
+            else if (pos + 1 < raw.Length && raw[pos] == ')' && raw[pos + 1] == ')')
+            {
+                depth--;
+                if (depth > 0) pos += 2;
+            }
+            else
+            {
+                pos++;
+            }
+        }
+        string expr = raw[start..pos];
+        if (pos < raw.Length)
+            pos += 2; // skip closing ))
+
+        parts.Add(new WordPart.ArithSub(expr.Trim()));
         return pos;
     }
 

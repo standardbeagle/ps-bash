@@ -1136,6 +1136,132 @@ public class PsEmitterTests
         Assert.Equal("& { echo a; & { echo b } }", result);
     }
 
+    [Fact]
+    public void Transpile_ArithSub_BasicAddition()
+    {
+        var result = PsEmitter.Transpile("echo $((x + 1))");
+        Assert.Equal("echo $($x + 1)", result);
+    }
+
+    [Fact]
+    public void Transpile_ArithSub_LiteralAddition()
+    {
+        var result = PsEmitter.Transpile("echo $((2 + 3))");
+        Assert.Equal("echo $(2 + 3)", result);
+    }
+
+    [Fact]
+    public void Transpile_ArithSub_Multiplication()
+    {
+        var result = PsEmitter.Transpile("echo $((x * y))");
+        Assert.Equal("echo $($x * $y)", result);
+    }
+
+    [Fact]
+    public void Transpile_ArithCommand_Increment()
+    {
+        var result = PsEmitter.Transpile("(( x++ ))");
+        Assert.Equal("$x++", result);
+    }
+
+    [Fact]
+    public void Transpile_ArithCommand_Decrement()
+    {
+        var result = PsEmitter.Transpile("(( x-- ))");
+        Assert.Equal("$x--", result);
+    }
+
+    [Fact]
+    public void Transpile_ArithCommand_PreIncrement()
+    {
+        var result = PsEmitter.Transpile("(( ++x ))");
+        Assert.Equal("++$x", result);
+    }
+
+    [Fact]
+    public void Transpile_ArithCommand_PreDecrement()
+    {
+        var result = PsEmitter.Transpile("(( --x ))");
+        Assert.Equal("--$x", result);
+    }
+
+    [Fact]
+    public void Transpile_ArithCommand_Comparison_GreaterThan()
+    {
+        var result = PsEmitter.Transpile("(( x > 5 ))");
+        Assert.Equal("$x -gt 5", result);
+    }
+
+    [Fact]
+    public void Transpile_ArithCommand_Comparison_LessThan()
+    {
+        var result = PsEmitter.Transpile("(( x < 5 ))");
+        Assert.Equal("$x -lt 5", result);
+    }
+
+    [Fact]
+    public void Transpile_ArithCommand_Comparison_GreaterEqual()
+    {
+        var result = PsEmitter.Transpile("(( x >= 5 ))");
+        Assert.Equal("$x -ge 5", result);
+    }
+
+    [Fact]
+    public void Transpile_ArithCommand_Comparison_LessEqual()
+    {
+        var result = PsEmitter.Transpile("(( x <= 5 ))");
+        Assert.Equal("$x -le 5", result);
+    }
+
+    [Fact]
+    public void Transpile_ArithCommand_Comparison_Equal()
+    {
+        var result = PsEmitter.Transpile("(( x == 5 ))");
+        Assert.Equal("$x -eq 5", result);
+    }
+
+    [Fact]
+    public void Transpile_ArithCommand_Comparison_NotEqual()
+    {
+        var result = PsEmitter.Transpile("(( x != 5 ))");
+        Assert.Equal("$x -ne 5", result);
+    }
+
+    [Fact]
+    public void Transpile_ArithCommand_Ternary()
+    {
+        var result = PsEmitter.Transpile("(( x > 0 ? 1 : 0 ))");
+        Assert.Equal("if ($x -gt 0) { 1 } else { 0 }", result);
+    }
+
+    [Fact]
+    public void Transpile_ArithSub_InAssignment()
+    {
+        var result = PsEmitter.Transpile("result=$((x + 1))");
+        Assert.Equal("$env:result = \"$($x + 1)\"", result);
+    }
+
+    [Fact]
+    public void Transpile_ArithSub_Power()
+    {
+        var result = PsEmitter.Transpile("echo $((2 ** 3))");
+        Assert.Equal("echo $(2 ** 3)", result);
+    }
+
+    [Fact]
+    public void Transpile_ArithSub_Modulo()
+    {
+        var result = PsEmitter.Transpile("echo $((10 % 3))");
+        Assert.Equal("echo $(10 % 3)", result);
+    }
+
+    [Fact]
+    public void Transpile_ArithSub_NestedInString()
+    {
+        var result = PsEmitter.Transpile("echo \"result is $((x + 1))\"");
+        Assert.Equal("echo \"result is $($x + 1)\"", result);
+    }
+
     private static CompoundWord MakeWord(string value) =>
         new(ImmutableArray.Create<WordPart>(new WordPart.Literal(value)));
 }

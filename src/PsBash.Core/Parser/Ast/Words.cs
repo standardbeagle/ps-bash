@@ -29,6 +29,9 @@ public abstract record WordPart : BashNode
     /// <summary>A command substitution, e.g. <c>$(cmd)</c> or <c>`cmd`</c>.</summary>
     public sealed record CommandSub(BashNode Body) : WordPart;
 
+    /// <summary>An arithmetic substitution, e.g. <c>$(( x + 1 ))</c>.</summary>
+    public sealed record ArithSub(string Expr) : WordPart;
+
     /// <summary>A tilde substitution, e.g. <c>~</c> or <c>~user</c>.</summary>
     public sealed record TildeSub(string? User) : WordPart;
 }

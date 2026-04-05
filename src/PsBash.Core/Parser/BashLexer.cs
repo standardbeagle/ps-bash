@@ -207,6 +207,33 @@ public static class BashLexer
                 continue;
             }
 
+            // Arithmetic expansion $(( ... )): consume through matching )).
+            if (c == '$' && pos + 2 < len && input[pos + 1] == '(' && input[pos + 2] == '(')
+            {
+                pos += 3; // skip $((
+                int depth = 1;
+                while (pos < len && depth > 0)
+                {
+                    if (pos + 1 < len && input[pos] == '(' && input[pos + 1] == '(')
+                    {
+                        depth++;
+                        pos += 2;
+                    }
+                    else if (pos + 1 < len && input[pos] == ')' && input[pos + 1] == ')')
+                    {
+                        depth--;
+                        if (depth > 0) pos += 2;
+                    }
+                    else
+                    {
+                        pos++;
+                    }
+                }
+                if (pos < len)
+                    pos += 2; // skip closing ))
+                continue;
+            }
+
             // Command substitution $(...): consume through matching closing paren.
             if (c == '$' && pos + 1 < len && input[pos + 1] == '(')
             {

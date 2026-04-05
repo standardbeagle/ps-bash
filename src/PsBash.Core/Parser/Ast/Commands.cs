@@ -101,6 +101,12 @@ public abstract record Command : BashNode
         ImmutableArray<CaseArm> Arms) : Command;
 
     /// <summary>
+    /// A standalone arithmetic command: <c>(( expr ))</c>.
+    /// Maps to PowerShell arithmetic expression or comparison.
+    /// </summary>
+    public sealed record ArithCommand(string Expr) : Command;
+
+    /// <summary>
     /// A function definition: <c>function name { body }</c> or <c>name() { body }</c>.
     /// Maps to PowerShell <c>function name { body }</c>.
     /// </summary>

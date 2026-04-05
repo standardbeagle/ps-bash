@@ -27,6 +27,7 @@ public static class PsEmitter
         Command.ForArith forArith => EmitForArith(forArith),
         Command.While whileCmd => EmitWhile(whileCmd),
         Command.Case caseCmd => EmitCase(caseCmd),
+        Command.ArithCommand arith => EmitArithCommand(arith),
         Command.Subshell subshell => EmitSubshell(subshell),
         Command.BraceGroup braceGroup => EmitBraceGroup(braceGroup),
         Command.ShFunction func => EmitFunction(func),
@@ -295,6 +296,89 @@ public static class PsEmitter
     private static string EmitBraceGroup(Command.BraceGroup braceGroup)
     {
         return Emit(braceGroup.Body);
+    }
+
+    private static string EmitArithCommand(Command.ArithCommand arith)
+    {
+        string expr = arith.Expr.Trim();
+
+        // Increment/decrement: x++ -> $x++, ++x -> ++$x
+        if (expr.EndsWith("++") || expr.EndsWith("--"))
+        {
+            string varPart = expr[..^2].Trim();
+            if (!varPart.StartsWith('$')) varPart = "$" + varPart;
+            return varPart + expr[^2..];
+        }
+        if (expr.StartsWith("++") || expr.StartsWith("--"))
+        {
+            string varPart = expr[2..].Trim();
+            if (!varPart.StartsWith('$')) varPart = "$" + varPart;
+            return expr[..2] + varPart;
+        }
+
+        // Ternary: x > 0 ? 1 : 0 -> if ($x -gt 0) { 1 } else { 0 }
+        int qIdx = FindTernaryQuestion(expr);
+        if (qIdx >= 0)
+        {
+            int cIdx = expr.IndexOf(':', qIdx + 1);
+            if (cIdx >= 0)
+            {
+                string cond = expr[..qIdx].Trim();
+                string trueVal = expr[(qIdx + 1)..cIdx].Trim();
+                string falseVal = expr[(cIdx + 1)..].Trim();
+                string psCond = TranslateArithCondition(cond);
+                trueVal = PrefixBareVar(trueVal);
+                falseVal = PrefixBareVar(falseVal);
+                return $"if ({psCond}) {{ {trueVal} }} else {{ {falseVal} }}";
+            }
+        }
+
+        // Comparison: x > 5 -> $x -gt 5 (contains comparison operator)
+        if (HasComparisonOp(expr))
+            return TranslateArithCondition(expr);
+
+        // Assignment: x = 5 -> $x = 5
+        if (expr.Contains('=') && !expr.Contains("==") && !expr.Contains("!=")
+            && !expr.Contains("<=") && !expr.Contains(">="))
+        {
+            return TranslateArithClause(expr, isInit: true);
+        }
+
+        // General arithmetic: x + 1 -> $x + 1
+        return PrefixBareVar(expr);
+    }
+
+    private static int FindTernaryQuestion(string expr)
+    {
+        for (int i = 0; i < expr.Length; i++)
+        {
+            if (expr[i] == '?' && i > 0 && (i + 1 >= expr.Length || expr[i + 1] != '?'))
+                return i;
+        }
+        return -1;
+    }
+
+    private static bool HasComparisonOp(string expr) =>
+        expr.Contains("==") || expr.Contains("!=")
+        || expr.Contains("<=") || expr.Contains(">=")
+        || ContainsBareComparison(expr);
+
+    private static bool ContainsBareComparison(string expr)
+    {
+        for (int i = 0; i < expr.Length; i++)
+        {
+            char c = expr[i];
+            if (c == '<' || c == '>')
+            {
+                // Skip <= >= (already checked) and << >> (shift operators)
+                if (i + 1 < expr.Length && expr[i + 1] is '=' or '<' or '>')
+                    continue;
+                if (i > 0 && expr[i - 1] is '<' or '>')
+                    continue;
+                return true;
+            }
+        }
+        return false;
     }
 
     private static string EmitWhileCondition(Command cond)
@@ -719,9 +803,16 @@ public static class PsEmitter
         WordPart.SimpleVarSub vs => EmitSimpleVar(vs.Name),
         WordPart.BracedVarSub bvs => EmitBracedVar(bvs),
         WordPart.CommandSub cs => $"$({Emit((Command)cs.Body)})",
+        WordPart.ArithSub arith => EmitArithSub(arith),
         WordPart.TildeSub ts => ts.User is null ? "$HOME" : $"~{ts.User}",
         _ => throw new NotSupportedException($"Unknown word part type: {part.GetType().Name}"),
     };
+
+    private static string EmitArithSub(WordPart.ArithSub arith)
+    {
+        string expr = PrefixBareVar(arith.Expr);
+        return $"$({expr})";
+    }
 
     private static string EmitSimpleVar(string name)
     {
