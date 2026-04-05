@@ -33,8 +33,15 @@ while ($true) {
         # Agent-internal only: commands come from the transpiler, not user input
         $result = Invoke-Expression $command
         if ($null -ne $result) {
-            $result | Out-String -Stream | ForEach-Object {
-                [Console]::Out.WriteLine($_)
+            foreach ($item in @($result)) {
+                if ($null -ne $item.PSObject -and $null -ne $item.PSObject.Properties['BashText']) {
+                    $text = [string]$item.BashText -replace "`n$", ''
+                    [Console]::Out.WriteLine($text)
+                } else {
+                    $item | Out-String -Stream | ForEach-Object {
+                        [Console]::Out.WriteLine($_)
+                    }
+                }
             }
         }
         $exitCode = if ($LASTEXITCODE -ne $null) { $LASTEXITCODE } else { 0 }
