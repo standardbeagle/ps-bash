@@ -1392,7 +1392,7 @@ public static class PsEmitter
         return $"$({expr})";
     }
 
-    private static string EmitSimpleVar(string name)
+    private static string EmitSimpleVar(string name, bool inDoubleQuote = false)
     {
         // Loop variables emit as $var, not $env:var
         if (_loopVars is not null && _loopVars.Contains(name))
@@ -1403,12 +1403,13 @@ public static class PsEmitter
             "null" or "true" or "false" or "HOME" or "LASTEXITCODE" => $"${name}",
             "?" => "$LASTEXITCODE",
             "@" or "*" => "$args",
-            "#" => "$args.Count",
-            "0" => "$MyInvocation.MyCommand.Name",
+            "#" => inDoubleQuote ? "$($args.Count)" : "$args.Count",
+            "0" => inDoubleQuote ? "$($MyInvocation.MyCommand.Name)" : "$MyInvocation.MyCommand.Name",
             "$" => "$PID",
             "!" => "$PID", // bash $! = last background PID; no PS equivalent, $PID is approximate
             "-" => "$PSBoundParameters",
-            var d when d.Length == 1 && d[0] is >= '1' and <= '9' => $"$args[{int.Parse(d) - 1}]",
+            var d when d.Length == 1 && d[0] is >= '1' and <= '9' =>
+                inDoubleQuote ? $"$($args[{int.Parse(d) - 1}])" : $"$args[{int.Parse(d) - 1}]",
             _ => $"$env:{name}",
         };
     }
@@ -1552,6 +1553,8 @@ public static class PsEmitter
         {
             if (part is WordPart.BracedVarSub bvs)
                 sb.Append(EmitBracedVar(bvs, inDoubleQuote: true));
+            else if (part is WordPart.SimpleVarSub vs)
+                sb.Append(EmitSimpleVar(vs.Name, inDoubleQuote: true));
             else
                 sb.Append(EmitWordPart(part));
         }

@@ -2249,6 +2249,43 @@ public class PsEmitterTests
         Assert.Contains("?? 100000)", result);
     }
 
+    // Bug fix: $1-$9 inside double quotes need $() subexpression wrapping
+
+    [Fact]
+    public void Transpile_PositionalVarInDoubleQuotes_EmitsSubexpression()
+    {
+        var result = PsEmitter.Transpile("echo \"hello $1\"");
+        Assert.Equal("echo \"hello $($args[0])\"", result);
+    }
+
+    [Fact]
+    public void Transpile_MultiplePositionalVarsInDoubleQuotes_EmitsSubexpressions()
+    {
+        var result = PsEmitter.Transpile("echo \"$1 and $2\"");
+        Assert.Equal("echo \"$($args[0]) and $($args[1])\"", result);
+    }
+
+    [Fact]
+    public void Transpile_PositionalVarOutsideQuotes_NoSubexpression()
+    {
+        var result = PsEmitter.Transpile("echo $1");
+        Assert.Equal("echo $args[0]", result);
+    }
+
+    [Fact]
+    public void Transpile_ArgCountInDoubleQuotes_EmitsSubexpression()
+    {
+        var result = PsEmitter.Transpile("echo \"count: $#\"");
+        Assert.Equal("echo \"count: $($args.Count)\"", result);
+    }
+
+    [Fact]
+    public void Transpile_Var0InDoubleQuotes_EmitsSubexpression()
+    {
+        var result = PsEmitter.Transpile("echo \"script: $0\"");
+        Assert.Equal("echo \"script: $($MyInvocation.MyCommand.Name)\"", result);
+    }
+
     private static CompoundWord MakeWord(string value) =>
         new(ImmutableArray.Create<WordPart>(new WordPart.Literal(value)));
 }
