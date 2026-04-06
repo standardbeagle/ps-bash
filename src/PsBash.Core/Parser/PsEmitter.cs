@@ -1803,9 +1803,6 @@ public static class PsEmitter
         return null;
     }
 
-    // Dead code removed: EmitHead, EmitTail, EmitWc, EmitSort, EmitCut
-    // All pipe commands use EmitPassthrough per the passthrough principle.
-
     private static string EmitPassthrough(string cmdlet, ImmutableArray<CompoundWord> args)
     {
         if (args.IsEmpty)
