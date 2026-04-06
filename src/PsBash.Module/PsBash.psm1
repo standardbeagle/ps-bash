@@ -796,6 +796,31 @@ function Invoke-BashCat {
     }
 }
 
+# --- File Redirect Helper ---
+
+function Invoke-BashRedirect {
+    param(
+        [Parameter(Mandatory)][string]$Path,
+        [switch]$Append
+    )
+    $pipelineInput = @($input)
+
+    $lines = [System.Collections.Generic.List[string]]::new()
+    foreach ($item in $pipelineInput) {
+        $text = Get-BashText -InputObject $item
+        $text = $text -replace "`n$", ''
+        $lines.Add($text)
+    }
+    $content = ($lines -join "`n")
+    if ($lines.Count -gt 0) { $content += "`n" }
+
+    if ($Append) {
+        [System.IO.File]::AppendAllText($Path, $content)
+    } else {
+        [System.IO.File]::WriteAllText($Path, $content)
+    }
+}
+
 # --- BashText Extraction Helper ---
 
 function Get-BashText {

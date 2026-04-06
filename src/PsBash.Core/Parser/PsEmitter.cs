@@ -293,10 +293,32 @@ public static class PsEmitter
         sb.Append(Emit(subshell.Body));
         sb.Append(" }");
 
+        Redirect? fileRedirect = null;
         foreach (var redirect in subshell.Redirects)
         {
-            sb.Append(' ');
-            sb.Append(EmitRedirect(redirect));
+            var target = TransformRedirectTarget(EmitWord(redirect.Target));
+            bool isStdoutFile = redirect.Fd == 1
+                && (redirect.Op == ">" || redirect.Op == ">>")
+                && target != "$null";
+
+            if (isStdoutFile && fileRedirect is null)
+            {
+                fileRedirect = redirect;
+            }
+            else
+            {
+                sb.Append(' ');
+                sb.Append(EmitRedirect(redirect));
+            }
+        }
+
+        if (fileRedirect is not null)
+        {
+            var target = TransformRedirectTarget(EmitWord(fileRedirect.Target));
+            sb.Append(" | Invoke-BashRedirect -Path ");
+            sb.Append(target);
+            if (fileRedirect.Op == ">>")
+                sb.Append(" -Append");
         }
 
         return sb.ToString();
@@ -945,10 +967,35 @@ public static class PsEmitter
             sb.Append(EmitWord(cmd.Words[i]));
         }
 
+        // Separate stdout file redirects from other redirects.
+        // Stdout file redirects (> file, >> file) use Invoke-BashRedirect to avoid
+        // lingering file handles that cause IO.IOException in chained commands.
+        Redirect? fileRedirect = null;
         foreach (var redirect in cmd.Redirects)
         {
-            sb.Append(' ');
-            sb.Append(EmitRedirect(redirect));
+            var target = TransformRedirectTarget(EmitWord(redirect.Target));
+            bool isStdoutFile = redirect.Fd == 1
+                && (redirect.Op == ">" || redirect.Op == ">>")
+                && target != "$null";
+
+            if (isStdoutFile && fileRedirect is null)
+            {
+                fileRedirect = redirect;
+            }
+            else
+            {
+                sb.Append(' ');
+                sb.Append(EmitRedirect(redirect));
+            }
+        }
+
+        if (fileRedirect is not null)
+        {
+            var target = TransformRedirectTarget(EmitWord(fileRedirect.Target));
+            sb.Append(" | Invoke-BashRedirect -Path ");
+            sb.Append(target);
+            if (fileRedirect.Op == ">>")
+                sb.Append(" -Append");
         }
 
         return sb.ToString();

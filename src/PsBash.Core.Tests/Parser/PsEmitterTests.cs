@@ -320,19 +320,19 @@ public class PsEmitterTests
     }
 
     [Fact]
-    public void Transpile_OutputRedirectToFile_Passthrough()
+    public void Transpile_OutputRedirectToFile_EmitsBashRedirect()
     {
         var result = PsEmitter.Transpile("cmd > file");
 
-        Assert.Equal("cmd >file", result);
+        Assert.Equal("cmd | Invoke-BashRedirect -Path file", result);
     }
 
     [Fact]
-    public void Transpile_AppendRedirectToFile_Passthrough()
+    public void Transpile_AppendRedirectToFile_EmitsBashRedirectAppend()
     {
         var result = PsEmitter.Transpile("cmd >> file");
 
-        Assert.Equal("cmd >>file", result);
+        Assert.Equal("cmd | Invoke-BashRedirect -Path file -Append", result);
     }
 
     [Fact]
@@ -380,7 +380,7 @@ public class PsEmitterTests
     {
         var result = PsEmitter.Transpile("cmd > /tmp/out.log");
 
-        Assert.Equal("cmd >$env:TEMP\\out.log", result);
+        Assert.Equal("cmd | Invoke-BashRedirect -Path $env:TEMP\\out.log", result);
     }
 
     [Fact]
@@ -1121,11 +1121,11 @@ public class PsEmitterTests
     }
 
     [Fact]
-    public void Transpile_SubshellWithRedirect_EmitsRedirect()
+    public void Transpile_SubshellWithRedirect_EmitsBashRedirect()
     {
         var result = PsEmitter.Transpile("(echo hello) > out.txt");
 
-        Assert.Equal("& { echo hello } >out.txt", result);
+        Assert.Equal("& { echo hello } | Invoke-BashRedirect -Path out.txt", result);
     }
 
     [Fact]
@@ -2100,6 +2100,23 @@ public class PsEmitterTests
     {
         var result = PsEmitter.Transpile("type -t echo");
         Assert.Equal("Invoke-BashType -t echo", result);
+    }
+
+    [Fact]
+    public void Transpile_WriteAndAppendChain_EmitsBashRedirectPipes()
+    {
+        var result = PsEmitter.Transpile("echo line1 > /tmp/test.txt && echo append >> /tmp/test.txt");
+
+        Assert.Contains("echo line1 | Invoke-BashRedirect -Path $env:TEMP\\test.txt", result);
+        Assert.Contains("echo append | Invoke-BashRedirect -Path $env:TEMP\\test.txt -Append", result);
+    }
+
+    [Fact]
+    public void Transpile_OutputToDevNull_KeepsNativeRedirect()
+    {
+        var result = PsEmitter.Transpile("cmd > /dev/null");
+
+        Assert.Equal("cmd >$null", result);
     }
 
     private static CompoundWord MakeWord(string value) =>
