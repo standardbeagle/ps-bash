@@ -115,7 +115,8 @@ FunctionsToExport = 'Invoke-ProcessSub',
                'Register-BashCompletions',
                'Test-BashHelpFlag', 'Show-BashHelp',
                'Invoke-BashSleep', 'Invoke-BashTime', 'Invoke-BashWhich',
-               'Invoke-BashAlias', 'Invoke-BashTrap'
+               'Invoke-BashAlias', 'Invoke-BashTrap',
+               'Invoke-BashReadlink', 'Invoke-BashMktemp', 'Invoke-BashType'
 
 # Cmdlets to export from this module, for best performance, do not use wildcards and do not delete the entry, use an empty array if there are no cmdlets to export.
 CmdletsToExport = @()
@@ -137,7 +138,8 @@ AliasesToExport = 'echo', 'printf', 'ls', 'cat', 'grep', 'sort', 'head', 'tail',
                'rg',
                'gzip', 'gunzip', 'zcat', 'tar',
                'yq', 'xan',
-               'sleep', 'time', 'which', 'balias', 'unalias'
+               'sleep', 'time', 'which', 'balias', 'unalias',
+               'readlink', 'mktemp', 'type'
 
 # DSC resources to export from this module
 # DscResourcesToExport = @()

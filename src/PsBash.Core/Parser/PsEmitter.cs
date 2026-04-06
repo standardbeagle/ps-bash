@@ -1668,6 +1668,15 @@ public static class PsEmitter
             case "trap":
                 result = EmitPassthrough("Invoke-BashTrap", args);
                 return true;
+            case "readlink":
+                result = EmitPassthrough("Invoke-BashReadlink", args);
+                return true;
+            case "mktemp":
+                result = EmitPassthrough("Invoke-BashMktemp", args);
+                return true;
+            case "type":
+                result = EmitPassthrough("Invoke-BashType", args);
+                return true;
             default:
                 return false;
         }

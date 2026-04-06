@@ -2060,6 +2060,48 @@ public class PsEmitterTests
         Assert.Equal("Invoke-BashTrap '' INT", result);
     }
 
+    [Fact]
+    public void Transpile_ReadlinkCanonical_EmitsPassthrough()
+    {
+        var result = PsEmitter.Transpile("readlink -f /some/path");
+        Assert.Equal("Invoke-BashReadlink -f /some/path", result);
+    }
+
+    [Fact]
+    public void Transpile_ReadlinkBare_EmitsPassthrough()
+    {
+        var result = PsEmitter.Transpile("readlink /some/link");
+        Assert.Equal("Invoke-BashReadlink /some/link", result);
+    }
+
+    [Fact]
+    public void Transpile_Mktemp_EmitsPassthrough()
+    {
+        var result = PsEmitter.Transpile("mktemp");
+        Assert.Equal("Invoke-BashMktemp", result);
+    }
+
+    [Fact]
+    public void Transpile_MktempDirectory_EmitsPassthrough()
+    {
+        var result = PsEmitter.Transpile("mktemp -d");
+        Assert.Equal("Invoke-BashMktemp -d", result);
+    }
+
+    [Fact]
+    public void Transpile_TypeCommand_EmitsPassthrough()
+    {
+        var result = PsEmitter.Transpile("type echo");
+        Assert.Equal("Invoke-BashType echo", result);
+    }
+
+    [Fact]
+    public void Transpile_TypeWithFlag_EmitsPassthrough()
+    {
+        var result = PsEmitter.Transpile("type -t echo");
+        Assert.Equal("Invoke-BashType -t echo", result);
+    }
+
     private static CompoundWord MakeWord(string value) =>
         new(ImmutableArray.Create<WordPart>(new WordPart.Literal(value)));
 }

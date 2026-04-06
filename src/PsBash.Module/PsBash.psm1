@@ -9655,6 +9655,137 @@ function Invoke-BashTrap {
     }
 }
 
+# --- readlink ---
+
+function Invoke-BashReadlink {
+    $Arguments = [string[]]$args
+    if ($Arguments -contains '--help') { return Show-BashHelp 'readlink' }
+
+    $canonicalize = $false
+    $operands = [System.Collections.Generic.List[string]]::new()
+    foreach ($arg in $Arguments) {
+        if ($arg -ceq '-f') { $canonicalize = $true }
+        else { $operands.Add($arg) }
+    }
+
+    if ($operands.Count -eq 0) {
+        Write-Error 'readlink: missing operand' -ErrorAction Continue
+        return
+    }
+
+    foreach ($path in $operands) {
+        if ($canonicalize) {
+            $resolved = (Resolve-Path -Path $path -ErrorAction SilentlyContinue)
+            if (-not $resolved) {
+                Write-Error "readlink: ${path}: No such file or directory" -ErrorAction Continue
+                continue
+            }
+            $text = $resolved.Path
+        } else {
+            $item = Get-Item -Path $path -ErrorAction SilentlyContinue
+            if (-not $item) {
+                Write-Error "readlink: ${path}: No such file or directory" -ErrorAction Continue
+                continue
+            }
+            $text = if ($item.Target) { $item.Target } else { $item.FullName }
+        }
+        $obj = [PSCustomObject]@{
+            PSTypeName = 'PsBash.ReadlinkOutput'
+            Path       = $text
+            BashText   = $text
+        }
+        Set-BashDisplayProperty $obj
+    }
+}
+
+# --- mktemp ---
+
+function Invoke-BashMktemp {
+    $Arguments = [string[]]$args
+    if ($Arguments -contains '--help') { return Show-BashHelp 'mktemp' }
+
+    $makeDir = $false
+    $template = $null
+    foreach ($arg in $Arguments) {
+        if ($arg -ceq '-d') { $makeDir = $true }
+        else { $template = $arg }
+    }
+
+    $subDir = [System.IO.Path]::Combine([System.IO.Path]::GetTempPath(), 'ps-bash', 'proc-sub')
+    [void][System.IO.Directory]::CreateDirectory($subDir)
+
+    $name = [System.IO.Path]::GetRandomFileName()
+    if ($template) {
+        $prefix = $template -replace 'X+$', ''
+        $prefix = [System.IO.Path]::GetFileName($prefix)
+        $name = $prefix + [System.IO.Path]::GetRandomFileName()
+    }
+
+    $fullPath = [System.IO.Path]::Combine($subDir, $name)
+
+    if ($makeDir) {
+        [void][System.IO.Directory]::CreateDirectory($fullPath)
+    } else {
+        [void][System.IO.File]::WriteAllText($fullPath, '')
+    }
+
+    $obj = [PSCustomObject]@{
+        PSTypeName = 'PsBash.MktempOutput'
+        Path       = $fullPath
+        BashText   = $fullPath
+    }
+    Set-BashDisplayProperty $obj
+}
+
+# --- type ---
+
+function Invoke-BashType {
+    $Arguments = [string[]]$args
+    if ($Arguments -contains '--help') { return Show-BashHelp 'type' }
+
+    $typeOnly = $false
+    $operands = [System.Collections.Generic.List[string]]::new()
+    foreach ($arg in $Arguments) {
+        if ($arg -ceq '-t') { $typeOnly = $true }
+        else { $operands.Add($arg) }
+    }
+
+    if ($operands.Count -eq 0) {
+        Write-Error 'type: missing operand' -ErrorAction Continue
+        return
+    }
+
+    $builtins = @('echo', 'printf', 'type', 'cd', 'exit', 'return', 'export',
+                   'unset', 'set', 'shift', 'read', 'eval', 'source', 'trap',
+                   'alias', 'unalias', 'test', '[', 'true', 'false')
+
+    foreach ($name in $operands) {
+        $isBuiltin = $builtins -contains $name
+        if ($isBuiltin) {
+            $kind = 'builtin'
+            $text = if ($typeOnly) { $kind } else { "$name is a shell builtin" }
+        } else {
+            $cmd = Get-Command $name -ErrorAction SilentlyContinue
+            if (-not $cmd) {
+                Write-Error "bash: type: ${name}: not found" -ErrorAction Continue
+                continue
+            }
+            switch ($cmd.CommandType) {
+                'Alias'    { $kind = 'alias'; $text = if ($typeOnly) { $kind } else { "$name is aliased to ``$($cmd.Definition)''" } }
+                'Function' { $kind = 'function'; $text = if ($typeOnly) { $kind } else { "$name is a function" } }
+                default    { $kind = 'file'; $text = if ($typeOnly) { $kind } else { "$name is $($cmd.Source)" } }
+            }
+        }
+        $obj = [PSCustomObject]@{
+            PSTypeName = 'PsBash.TypeOutput'
+            Command    = $name
+            Kind       = $kind
+            BashText   = $text
+        }
+        Set-BashDisplayProperty $obj
+    }
+}
+
 # --- Help Support ---
 
 $script:BashHelpSpecs = @{
@@ -9724,6 +9855,9 @@ $script:BashHelpSpecs = @{
     'which'    = 'Locate a command.'
     'alias'    = 'Define or display aliases.'
     'trap'     = 'Trap signals and other events.'
+    'readlink' = 'Print resolved symbolic links or canonical file names.'
+    'mktemp'   = 'Create a temporary file or directory.'
+    'type'     = 'Display information about command type.'
 }
 
 function Test-BashHelpFlag {
@@ -9988,3 +10122,6 @@ Set-Alias -Name 'time'     -Value 'Invoke-BashTime'     -Force -Scope Global -Op
 Set-Alias -Name 'which'    -Value 'Invoke-BashWhich'    -Force -Scope Global -Option AllScope
 Set-Alias -Name 'balias'   -Value 'Invoke-BashAlias'    -Force -Scope Global -Option AllScope
 Set-Alias -Name 'unalias'  -Value 'Invoke-BashAlias'    -Force -Scope Global -Option AllScope
+Set-Alias -Name 'readlink' -Value 'Invoke-BashReadlink' -Force -Scope Global -Option AllScope
+Set-Alias -Name 'mktemp'   -Value 'Invoke-BashMktemp'   -Force -Scope Global -Option AllScope
+Set-Alias -Name 'type'     -Value 'Invoke-BashType'     -Force -Scope Global -Option AllScope
