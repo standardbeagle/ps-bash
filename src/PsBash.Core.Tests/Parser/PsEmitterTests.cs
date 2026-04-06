@@ -987,7 +987,7 @@ public class PsEmitterTests
         var result = PsEmitter.Transpile("while read line; do echo $line; done");
 
         Assert.Equal(
-            "ForEach-Object { if ($_.PSObject.Properties['BashText']) { $_.BashText } else { \"$_\" } } | ForEach-Object { $_ -split \"`n\" } | ForEach-Object { echo $_ }",
+            "ForEach-Object { if ($_.PSObject.Properties['BashText']) { $_.BashText } else { \"$_\" } } | ForEach-Object { ($_ -replace \"`n$\",\"\") -split \"`n\" } | ForEach-Object { echo $_ }",
             result);
     }
 
@@ -2240,6 +2240,13 @@ public class PsEmitterTests
     {
         var result = PsEmitter.Transpile("while read line; do echo $line; done");
         Assert.DoesNotContain("$__psbash_iter", result);
+    }
+
+    [Fact]
+    public void Transpile_WhileRead_StripsTrailingNewlineBeforeSplit()
+    {
+        var result = PsEmitter.Transpile("while read x; do echo $x; done");
+        Assert.Contains(@"($_ -replace ""`n$"","""") -split ""`n""", result);
     }
 
     [Fact]

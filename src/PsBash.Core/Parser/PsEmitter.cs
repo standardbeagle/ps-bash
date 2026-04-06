@@ -526,7 +526,7 @@ public static class PsEmitter
         bodyText = System.Text.RegularExpressions.Regex.Replace(
             bodyText, @$"\${varName}(?!\w)", "$$_");
 
-        return $"ForEach-Object {{ if ($_.PSObject.Properties['BashText']) {{ $_.BashText }} else {{ \"$_\" }} }} | ForEach-Object {{ $_ -split \"`n\" }} | ForEach-Object {{ {bodyText} }}";
+        return $"ForEach-Object {{ if ($_.PSObject.Properties['BashText']) {{ $_.BashText }} else {{ \"$_\" }} }} | ForEach-Object {{ ($_ -replace \"`n$\",\"\") -split \"`n\" }} | ForEach-Object {{ {bodyText} }}";
     }
 
     private static string? ExtractArithVar(string init)
