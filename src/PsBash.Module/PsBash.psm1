@@ -6010,6 +6010,9 @@ function Invoke-BashXargs {
     }
 
     $cmd = $operands[0]
+    # Resolve to Invoke-Bash* if the command has a runtime function
+    $bashCmd = 'Invoke-Bash' + ($cmd.Substring(0,1).ToUpper() + $cmd.Substring(1))
+    if (Get-Command $bashCmd -ErrorAction SilentlyContinue) { $cmd = $bashCmd }
     $cmdArgs = @()
     if ($operands.Count -gt 1) {
         $cmdArgs = @($operands[1..($operands.Count - 1)])

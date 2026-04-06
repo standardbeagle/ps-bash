@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Linq;
 using PsBash.Core.Runtime;
 using Xunit;
 
@@ -313,7 +314,7 @@ public class AgentPatternEndToEndTests
     // ── Xargs ────────────────────────────────────────────────────────────────
 
     [SkippableFact]
-    public async Task Pipe_XargsEcho_ConcatenatesInput()
+    public async Task Pipe_XargsEcho_ConcatenatesInputOnOneLine()
     {
         Skip.If(PwshPath is null, "pwsh not available");
 
@@ -321,9 +322,24 @@ public class AgentPatternEndToEndTests
             "-c", "printf 'one\\ntwo\\nthree\\n' | xargs echo");
 
         Assert.Equal(0, exitCode);
-        Assert.Contains("one", stdout);
-        Assert.Contains("two", stdout);
-        Assert.Contains("three", stdout);
+        Assert.Equal("one two three", stdout.Trim());
+    }
+
+    [SkippableFact]
+    public async Task Pipe_XargsN1Echo_OutputsSeparateLines()
+    {
+        Skip.If(PwshPath is null, "pwsh not available");
+
+        var (exitCode, stdout, _) = await RunShellAsync(
+            "-c", "printf 'a\\nb\\nc\\n' | xargs -n 1 echo");
+
+        Assert.Equal(0, exitCode);
+        var lines = stdout.Trim().Split('\n', StringSplitOptions.RemoveEmptyEntries)
+            .Select(l => l.Trim()).ToArray();
+        Assert.Equal(3, lines.Length);
+        Assert.Equal("a", lines[0]);
+        Assert.Equal("b", lines[1]);
+        Assert.Equal("c", lines[2]);
     }
 
     // ── Trap ─────────────────────────────────────────────────────────────────
