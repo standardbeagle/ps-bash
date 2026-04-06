@@ -597,6 +597,15 @@ public static class PsEmitter
         if (cond is Command.Subshell subshell)
             return Emit(subshell.Body);
 
+        // Bare true/false as condition need raw $true/$false (not [void] wrapped)
+        if (cond is Command.Simple simple && simple.Words.Length == 1
+            && simple.EnvPairs.IsEmpty && simple.Redirects.IsEmpty)
+        {
+            var word = GetLiteralValue(simple.Words[0]);
+            if (word is "true") return "$true";
+            if (word is "false") return "$false";
+        }
+
         return Emit(cond);
     }
 
