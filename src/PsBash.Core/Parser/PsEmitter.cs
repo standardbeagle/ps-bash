@@ -876,6 +876,12 @@ public static class PsEmitter
         {
             var cmd0 = GetLiteralValue(cmd.Words[0]);
 
+            // true -> no-op success; false -> silent failure (sets $? = $false for && / ||)
+            if (cmd0 == "true" && cmd.Words.Length == 1)
+                return "[void]$true";
+            if (cmd0 == "false" && cmd.Words.Length == 1)
+                return "Write-Error '' -ErrorAction SilentlyContinue";
+
             // read [-r] [-p "prompt"] VAR -> $VAR = Read-Host ["prompt"]
             if (cmd0 == "read")
             {
