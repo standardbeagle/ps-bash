@@ -2119,6 +2119,36 @@ public class PsEmitterTests
         Assert.Equal("cmd >$null", result);
     }
 
+    [Fact]
+    public void Transpile_PasteWithProcessSubs()
+    {
+        var result = PsEmitter.Transpile("paste <(echo a) <(echo b)");
+        Assert.Equal("Invoke-BashPaste (Invoke-ProcessSub { echo a }) (Invoke-ProcessSub { echo b })", result);
+    }
+
+    [Fact]
+    public void Transpile_ProcessSubWithSemicolon()
+    {
+        var result = PsEmitter.Transpile("diff <(cmd1; cmd2) file");
+        Assert.Equal("diff (Invoke-ProcessSub { cmd1; cmd2 }) file", result);
+    }
+
+    [Fact]
+    public void Transpile_PasteWithSemicolonProcessSubs()
+    {
+        var result = PsEmitter.Transpile("paste <(echo a; echo c) <(echo b; echo d)");
+        Assert.Equal(
+            "Invoke-BashPaste (Invoke-ProcessSub { echo a; echo c }) (Invoke-ProcessSub { echo b; echo d })",
+            result);
+    }
+
+    [Fact]
+    public void Transpile_PasteAsPipeTarget()
+    {
+        var result = PsEmitter.Transpile("cat file.txt | paste -d, -s");
+        Assert.Equal("cat file.txt | Invoke-BashPaste \"-d,\" -s", result);
+    }
+
     private static CompoundWord MakeWord(string value) =>
         new(ImmutableArray.Create<WordPart>(new WordPart.Literal(value)));
 }
