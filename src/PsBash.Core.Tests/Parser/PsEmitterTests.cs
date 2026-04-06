@@ -860,17 +860,33 @@ public class PsEmitterTests
     }
 
     [Fact]
-    public void Transpile_ExtendedLessThan_EmitsLt()
+    public void Transpile_ExtendedLessThan_EmitsStringCompare()
     {
         var result = PsEmitter.Transpile("[[ $a < $b ]]");
+
+        Assert.Equal("([string]::Compare($env:a, $env:b, [System.StringComparison]::Ordinal) -lt 0)", result);
+    }
+
+    [Fact]
+    public void Transpile_ExtendedGreaterThan_EmitsStringCompare()
+    {
+        var result = PsEmitter.Transpile("[[ $a > $b ]]");
+
+        Assert.Equal("([string]::Compare($env:a, $env:b, [System.StringComparison]::Ordinal) -gt 0)", result);
+    }
+
+    [Fact]
+    public void Transpile_ExtendedNumericLt_StillEmitsLt()
+    {
+        var result = PsEmitter.Transpile("[[ $a -lt $b ]]");
 
         Assert.Equal("($env:a -lt $env:b)", result);
     }
 
     [Fact]
-    public void Transpile_ExtendedGreaterThan_EmitsGt()
+    public void Transpile_ExtendedNumericGt_StillEmitsGt()
     {
-        var result = PsEmitter.Transpile("[[ $a > $b ]]");
+        var result = PsEmitter.Transpile("[[ $a -gt $b ]]");
 
         Assert.Equal("($env:a -gt $env:b)", result);
     }

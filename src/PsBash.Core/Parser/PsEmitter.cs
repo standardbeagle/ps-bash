@@ -672,7 +672,7 @@ public static class PsEmitter
     {
         if (expr.Extended)
             return EmitExtendedTest(expr.Inner);
-        return TranslateTestCondition(expr.Inner);
+        return TranslateTestCondition(expr.Inner, extended: false);
     }
 
     private static string EmitExtendedTest(ImmutableArray<CompoundWord> inner)
@@ -681,7 +681,7 @@ public static class PsEmitter
         var segments = SplitLogical(inner);
 
         if (segments.Count == 1)
-            return TranslateTestCondition(segments[0].Words);
+            return TranslateTestCondition(segments[0].Words, extended: true);
 
         var sb = new StringBuilder();
         for (int i = 0; i < segments.Count; i++)
@@ -692,12 +692,12 @@ public static class PsEmitter
                 sb.Append(segments[i - 1].TrailingOp);
                 sb.Append(' ');
             }
-            sb.Append(TranslateTestCondition(segments[i].Words));
+            sb.Append(TranslateTestCondition(segments[i].Words, extended: true));
         }
         return sb.ToString();
     }
 
-    private static string TranslateTestCondition(ImmutableArray<CompoundWord> words)
+    private static string TranslateTestCondition(ImmutableArray<CompoundWord> words, bool extended)
     {
         if (words.Length >= 2)
         {
@@ -729,6 +729,14 @@ public static class PsEmitter
                 if (HasGlobChars(unquoted))
                     return $"{lhs} -like '{unquoted}'";
                 return $"{lhs} -eq {rhs}";
+            }
+
+            // In [[ ]], < and > are lexicographic string comparisons.
+            // In [ ], they don't appear (bash uses -lt/-gt for numeric).
+            if (extended && op is "<" or ">")
+            {
+                var cmpOp = op == "<" ? "-lt" : "-gt";
+                return $"[string]::Compare({lhs}, {rhs}, [System.StringComparison]::Ordinal) {cmpOp} 0";
             }
 
             var psOp = op switch
