@@ -9,6 +9,12 @@ public sealed class PwshWorker : IAsyncDisposable
     private readonly StreamReader _stdout;
     private int _disposed;
 
+    /// <summary>
+    /// Optional callback that receives each output line. When set, output is
+    /// routed to this callback instead of <see cref="Console.WriteLine(string)"/>.
+    /// </summary>
+    public Action<string>? OutputCallback { get; set; }
+
     private PwshWorker(Process process)
     {
         _process = process;
@@ -187,7 +193,10 @@ public sealed class PwshWorker : IAsyncDisposable
                     var code = line["<<<EXIT:".Length..^">>>".Length];
                     return int.TryParse(code, out var n) ? n : 1;
                 }
-                Console.WriteLine(line);
+                if (OutputCallback is { } cb)
+                    cb(line);
+                else
+                    Console.WriteLine(line);
             }
 
             // Stdout closed — process exited (e.g. via "exit N"). Return its exit code.

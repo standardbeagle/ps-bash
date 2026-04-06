@@ -136,6 +136,61 @@ public class PwshWorkerTests : IAsyncLifetime
     }
 
     [SkippableFact]
+    public async Task ExecuteAsync_OutputCallback_ReceivesOutputLines()
+    {
+        Skip.If(PwshPath is null, "pwsh not available");
+
+        var lines = new List<string>();
+        _worker!.OutputCallback = line => lines.Add(line);
+
+        var exitCode = await _worker.ExecuteAsync("Write-Host 'callback-test'");
+        Assert.Equal(0, exitCode);
+        Assert.Contains("callback-test", lines);
+    }
+
+    [SkippableFact]
+    public async Task ExecuteAsync_OutputCallback_BypassesConsole()
+    {
+        Skip.If(PwshPath is null, "pwsh not available");
+
+        var lines = new List<string>();
+        _worker!.OutputCallback = line => lines.Add(line);
+
+        var consoleOutput = new StringWriter();
+        Console.SetOut(consoleOutput);
+        try
+        {
+            await _worker.ExecuteAsync("Write-Host 'only-callback'");
+            Assert.Contains("only-callback", lines);
+            Assert.DoesNotContain("only-callback", consoleOutput.ToString());
+        }
+        finally
+        {
+            Console.SetOut(new StreamWriter(Console.OpenStandardOutput()) { AutoFlush = true });
+        }
+    }
+
+    [SkippableFact]
+    public async Task ExecuteAsync_NoCallback_UsesConsole()
+    {
+        Skip.If(PwshPath is null, "pwsh not available");
+
+        Assert.Null(_worker!.OutputCallback);
+
+        var consoleOutput = new StringWriter();
+        Console.SetOut(consoleOutput);
+        try
+        {
+            await _worker.ExecuteAsync("Write-Host 'console-test'");
+            Assert.Contains("console-test", consoleOutput.ToString());
+        }
+        finally
+        {
+            Console.SetOut(new StreamWriter(Console.OpenStandardOutput()) { AutoFlush = true });
+        }
+    }
+
+    [SkippableFact]
     public async Task DisposeAsync_ClosesWorkerGracefully()
     {
         Skip.If(PwshPath is null, "pwsh not available");
