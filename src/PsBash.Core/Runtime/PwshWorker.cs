@@ -140,16 +140,25 @@ public sealed class PwshWorker : IAsyncDisposable
                 $command = $lines -join "`n"
                 try {
                     $result = Invoke-Expression $command
+                    $__partialLine = $false
                     if ($null -ne $result) {
                         foreach ($item in @($result)) {
                             if ($item -is [PSCustomObject] -and $item.PSObject.Properties['BashText']) {
-                                $text = $item.BashText -replace "`n$", ''
-                                [Console]::Out.WriteLine($text)
+                                $raw = [string]$item.BashText
+                                if ($raw.EndsWith("`n")) {
+                                    [Console]::Out.WriteLine($raw.Substring(0, $raw.Length - 1))
+                                    $__partialLine = $false
+                                } else {
+                                    [Console]::Out.Write($raw)
+                                    $__partialLine = $true
+                                }
                             } else {
                                 $item | Out-String -Stream | ForEach-Object { [Console]::Out.WriteLine($_) }
+                                $__partialLine = $false
                             }
                         }
                     }
+                    if ($__partialLine) { [Console]::Out.WriteLine() }
                     $exitCode = if ($LASTEXITCODE -ne $null) { $LASTEXITCODE } else { 0 }
                     [Console]::Out.WriteLine("<<<EXIT:$exitCode>>>")
                 } catch {

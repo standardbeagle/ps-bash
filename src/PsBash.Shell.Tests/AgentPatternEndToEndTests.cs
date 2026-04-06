@@ -280,6 +280,19 @@ public class AgentPatternEndToEndTests
         Assert.Contains("3", stdout);
     }
 
+    [SkippableFact]
+    public async Task ForArith_PrintfNoNewline_AccumulatesOnOneLine()
+    {
+        Skip.If(PwshPath is null, "pwsh not available");
+
+        var (exitCode, stdout, _) = await RunShellAsync(
+            "-c", "for ((i=0; i<5; i++)); do printf \"%d \" $i; done; echo");
+
+        Assert.Equal(0, exitCode);
+        var trimmed = stdout.TrimEnd('\n', '\r');
+        Assert.Equal("0 1 2 3 4", trimmed.TrimEnd());
+    }
+
     // ── If/else ──────────────────────────────────────────────────────────────
 
     [SkippableFact]
