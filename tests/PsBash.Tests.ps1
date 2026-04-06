@@ -6456,6 +6456,32 @@ Describe 'Invoke-ProcessSub — Runtime Helper' {
         $lines.Count | Should -BeGreaterOrEqual 2
         Remove-Item $path -Force
     }
+
+    It 'writes exact BashText content without extra newlines' {
+        $path = Invoke-ProcessSub { echo "hello" }
+        $raw = [System.IO.File]::ReadAllText($path)
+        $raw | Should -Be "hello`n"
+        Remove-Item $path -Force
+    }
+
+    It 'works with paste for process substitution use case' {
+        $path1 = Invoke-ProcessSub { echo "hello" }
+        $path2 = Invoke-ProcessSub { echo "world" }
+        $results = @(Invoke-BashPaste $path1 $path2)
+        $results.Count | Should -Be 1
+        $results[0].BashText | Should -Be "hello`tworld"
+        Remove-Item $path1, $path2 -Force
+    }
+
+    It 'handles multi-line process substitution with paste' {
+        $path1 = Invoke-ProcessSub { Invoke-BashEcho '-e' 'a\nb' }
+        $path2 = Invoke-ProcessSub { Invoke-BashEcho '-e' '1\n2' }
+        $results = @(Invoke-BashPaste $path1 $path2)
+        $results.Count | Should -Be 2
+        $results[0].BashText | Should -Be "a`t1"
+        $results[1].BashText | Should -Be "b`t2"
+        Remove-Item $path1, $path2 -Force
+    }
 }
 
 Describe 'Invoke-BashPwd — Physical Flag' {

@@ -29,7 +29,12 @@ function Invoke-ProcessSub {
     [void][System.IO.Directory]::CreateDirectory($subDir)
     $tmp = [System.IO.Path]::Combine($subDir, [System.IO.Path]::GetRandomFileName())
     try {
-        & $Command | Out-File -FilePath $tmp -Encoding utf8NoBOM
+        $output = & $Command
+        $sb = [System.Text.StringBuilder]::new()
+        foreach ($item in $output) {
+            [void]$sb.Append((Get-BashText -InputObject $item))
+        }
+        [System.IO.File]::WriteAllText($tmp, $sb.ToString(), [System.Text.UTF8Encoding]::new($false))
         return $tmp
     }
     catch {
