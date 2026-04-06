@@ -7,9 +7,9 @@ $resolvedModule = if ($ModulePath) { $ModulePath }
                   else { $null }
 
 if ($resolvedModule -and (Test-Path $resolvedModule)) {
-    Import-Module $resolvedModule -ErrorAction Stop
+    Import-Module $resolvedModule -ErrorAction Stop -DisableNameChecking
 } else {
-    Import-Module ps-bash -ErrorAction SilentlyContinue
+    Import-Module ps-bash -ErrorAction SilentlyContinue -DisableNameChecking
 }
 
 # Signal ready

@@ -72,7 +72,7 @@ FormatsToProcess = 'PsBash.Format.ps1xml'
 # Functions to export from this module, for best performance, do not use wildcards and do not delete the entry, use an empty array if there are no functions to export.
 FunctionsToExport = 'Invoke-ProcessSub',
                'Invoke-BashEcho', 'Invoke-BashPrintf', 'Get-BashPlatform',
-               'New-BashObject', 'ConvertFrom-BashArgs', 'Expand-EscapeSequences',
+               'New-BashObject', 'Emit-BashLine', 'ConvertFrom-BashArgs', 'Expand-EscapeSequences',
                'New-FlagDefs', 'Invoke-BashLs', 'Get-BashFileInfo',
                'Format-BashSize', 'Format-BashDate', 'Format-LsLine',
                'Get-LsDisplayName', 'Format-LsGrid',

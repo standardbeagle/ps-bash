@@ -833,7 +833,7 @@ public static class PsEmitter
                 ? $"@\"\n{body}\n\"@"
                 : $"@'\n{body}\n'@";
             string cmdText = EmitSimple(innerCmd);
-            return $"{hereString} | {cmdText}";
+            return $"{hereString} | Emit-BashLine | {cmdText}";
         }
 
         // Stdout-to-stderr redirects (>&2 or 1>&2) — PowerShell reserves 1>&2,

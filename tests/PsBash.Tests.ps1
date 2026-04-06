@@ -69,8 +69,10 @@ Describe 'Invoke-BashEcho' {
     }
 
     It '-e \n outputs newline in text plus trailing newline' {
-        $result = Invoke-BashEcho -e '\n'
-        $result.BashText | Should -Be "`n`n"
+        $results = @(Invoke-BashEcho -e '\n')
+        $results.Count | Should -Be 2
+        $results[0].BashText | Should -Be "`n"
+        $results[1].BashText | Should -Be "`n"
     }
 
     It '-e \\ outputs literal backslash' {
@@ -3480,7 +3482,7 @@ Describe 'Invoke-BashTee — Basic Output' {
     It 'writes multiple lines to file' {
         $outFile = Join-Path $testDir 'multi.txt'
         $results = @(Invoke-BashEcho -e "a`nb`nc" | Invoke-BashTee $outFile)
-        $results.Count | Should -Be 1
+        $results.Count | Should -Be 3
         $content = [System.IO.File]::ReadAllText($outFile)
         $content | Should -Be "a`nb`nc`n"
     }

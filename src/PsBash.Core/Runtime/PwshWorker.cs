@@ -115,7 +115,7 @@ public sealed class PwshWorker : IAsyncDisposable
             $ErrorActionPreference = 'Continue'
             $moduleBytes = [System.Convert]::FromBase64String('{{moduleBase64}}')
             $moduleScript = [System.Text.Encoding]::UTF8.GetString($moduleBytes)
-            New-Module -Name PsBash -ScriptBlock ([scriptblock]::Create($moduleScript)) -Function * -Alias * | Import-Module -Global
+            New-Module -Name PsBash -ScriptBlock ([scriptblock]::Create($moduleScript)) -Function * -Alias * | Import-Module -Global -DisableNameChecking
             [Console]::Out.WriteLine("<<<READY>>>")
             [Console]::Out.Flush()
             $__parentPid = {{parentPid}}
