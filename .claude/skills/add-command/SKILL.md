@@ -24,9 +24,11 @@ Add bash command support for: $ARGUMENTS
        $Arguments = [string[]]$args
        $pipelineInput = @($input)
        # Manual flag parsing loop
-       # Handle pipeline mode (split multi-line BashText)
+       # Handle pipeline mode — pass original objects through (preserve types)
+       # For multi-line edge cases, use defensive split (see .claude/rules/runtime.md)
        # Handle file mode
-       # Output via New-BashObject -BashText
+       # Output text via Emit-BashLine (splits on \n, one object per line)
+       # Output typed objects via New-BashObject (single-line, preserves type)
    }
    ```
 

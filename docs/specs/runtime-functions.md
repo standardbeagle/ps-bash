@@ -35,41 +35,60 @@ that downstream commands consume. Objects have `PSTypeName = 'PsBash.TextOutput'
 
 | Function | Purpose |
 |---|---|
-| `New-BashObject -BashText $s` | Creates a `PSCustomObject` with `BashText`, calls `Set-BashDisplayProperty` |
+| `Emit-BashLine -Text $s` | **Primary output function.** Splits text on `\n` and emits one `BashObject` per line. Matches bash semantics where `\n` is a record boundary. Use for stdout-like text output (printf, echo -e, heredocs). |
+| `New-BashObject -BashText $s` | Creates a single `PSCustomObject` with `BashText`. Does NOT split. Use for typed/structured objects (LsEntry, CatLine, PsEntry) that are inherently single-line. |
 | `Set-BashDisplayProperty $obj` | Adds a `ToString()` ScriptMethod returning `$this.BashText` |
 | `Get-BashText -InputObject $obj` | Extracts the string from any pipeline object: returns `.BashText` if present, otherwise stringifies via `"$obj"` |
+
+### Output Strategy
+
+```
+Source produces text with \n  →  Emit-BashLine  →  one BashObject per line in pipeline
+Source produces typed object  →  New-BashObject  →  one typed object in pipeline
+Consumer receives items      →  pass through original objects (preserves type)
+```
 
 ### Example
 
 ```powershell
-$obj = New-BashObject -BashText "hello world"
-$obj.BashText    # "hello world"
-"$obj"           # "hello world"  (via ToString)
-Get-BashText $obj  # "hello world"
+# Text output — use Emit-BashLine (splits on \n)
+Emit-BashLine -Text "line1`nline2`n"
+# Emits TWO objects: BashText="line1\n" and BashText="line2\n"
+
+# Typed output — use New-BashObject (single object)
+$obj = New-BashObject -BashText "hello world`n"
+# Emits ONE object with BashText="hello world\n"
 ```
 
-## Multi-line BashText Contract
+## Pipeline Object Preservation
 
-A single pipeline item may contain embedded newlines in its `BashText` (e.g. a `cat`
-of a multi-line file emits one object per line, but heredocs or command substitutions
-can produce a single object with `\n` inside).
+Consumer commands (grep, sed, tail, awk, sort, etc.) should **pass original objects
+through** the pipeline, NOT create new BashObjects. This preserves typed properties
+(e.g., `LsEntry.Name`, `CatLine.Content`) through pipe chains like `ls | grep .txt`.
 
-**Contract:** Any command that processes line-by-line MUST split multi-line `BashText`
-into individual records before processing. The standard pattern is:
+Sources are responsible for emitting one object per line using `Emit-BashLine`. This
+matches bash semantics where stdout is a byte stream and `\n` is the record separator.
+The "pipe" (PowerShell pipeline) delivers individual line-objects to consumers.
+
+**Defensive split for edge cases:** If a consumer receives a multi-line BashText item
+(from an external source or legacy code), it should split only that item while passing
+single-line items through unchanged:
 
 ```powershell
 foreach ($item in $pipelineInput) {
     $text = Get-BashText -InputObject $item
-    $text = $text -replace "`n$", ''        # strip trailing newline
-    foreach ($subLine in $text.Split("`n")) {
-        # process $subLine as an individual record
+    if ($text -match "`n" -and $text -ne "`n") {
+        # Multi-line edge case: split into new BashObjects
+        foreach ($subLine in ($text -replace "`n$",'' -split "`n")) {
+            # process $subLine
+        }
+    } else {
+        # Single-line: pass original $item (preserves LsEntry, CatLine, etc.)
     }
 }
 ```
 
-Commands that implement this contract include: `sort`, `head`, `tail`, `wc`, `awk`,
-`cut`, `uniq`, `rev`, `nl`, `tr`, `fold`, `expand`, `unexpand`, and `strings`. Failing
-to split causes incorrect line counts, sorting errors, and truncated output.
+**DO NOT** unconditionally flatten all input into `$allLines` — this destroys typed objects.
 
 ## Command Reference
 
@@ -291,15 +310,16 @@ To add a new `Invoke-Bash*` function:
    $pipelineInput = @($input)
    ```
 
-4. **Respect the multi-line BashText contract**: when processing pipeline input
-   line-by-line, split multi-line items via `$text.Split("`n")` after stripping
-   trailing newlines.
+4. **Preserve pipeline objects**: when processing pipeline input, pass original
+   objects through (preserving typed properties like LsEntry.Name). Use the
+   defensive split pattern for multi-line edge cases (see Pipeline Object Preservation).
 
 5. **Support file mode** if applicable: use `Resolve-BashGlob` on operands, read files
    with BOM-aware UTF-8 decoding, normalize `\r\n` to `\n`.
 
-6. **Emit output** via `New-BashObject` or a typed `PSCustomObject` with `BashText`
-   and a call to `Set-BashDisplayProperty`.
+6. **Emit output** using the right function:
+   - `Emit-BashLine -Text $s` for text output (splits on `\n`, one object per line)
+   - `New-BashObject` for typed objects (LsEntry, CatLine — single-line, preserves type)
 
 7. **Register the alias** at the bottom of the module:
    ```powershell
