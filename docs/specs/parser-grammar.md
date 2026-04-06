@@ -53,7 +53,7 @@ Reserved words are recognized contextually by the parser, not as distinct token 
 
 | Node | Fields | Description |
 |------|--------|-------------|
-| `Command.Simple` | `Words: CompoundWord[]`, `EnvPairs: EnvPair[]`, `Redirects: Redirect[]`, `HereDoc: HereDoc?` | Simple command with optional env prefix and redirects |
+| `Command.Simple` | `Words: CompoundWord[]`, `EnvPairs: EnvPair[]`, `Redirects: Redirect[]`, `HereDocs: HereDoc[]` | Simple command with optional env prefix, redirects, and heredocs |
 | `Command.Pipeline` | `Commands: Command[]`, `Ops: string[]` (`"\|"` or `"\|&"`), `Negated: bool` | Pipeline of commands |
 | `Command.AndOrList` | `Commands: Command[]`, `Ops: string[]` (`"&&"` or `"\|\|"`) | And-or list |
 | `Command.CommandList` | `Commands: Command[]` | Sequential commands separated by `;` or newline |
@@ -318,7 +318,7 @@ Features present in Oils `syntax.asdl` that are **intentionally not implemented*
 | Extended patterns `[[` regex `=~` | `BoolExpr` with typed ops | Inner words stored as `CompoundWord[]`, not typed operators |
 | `trap` / `exec` | special builtins | Parsed as `Command.Simple`, no dedicated node |
 | Oil/YSH-specific syntax (`var`, `const`, `proc`, `func`) | various | Not applicable (bash only) |
-| Here-doc with multiple heredocs per line | `Redir[]` | Only one heredoc per simple command |
+| Here-doc with multiple heredocs per line | `Redir[]` | Supported: `HereDocs` is an array; emitter uses last for stdin |
 
 ---
 

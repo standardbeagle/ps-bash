@@ -1286,10 +1286,10 @@ public class BashParserTests
     {
         var simple = Assert.IsType<Command.Simple>(Parse("cat <<EOF\nline 1\nline 2\nEOF"));
 
-        Assert.NotNull(simple.HereDoc);
-        Assert.Equal("line 1\nline 2", simple.HereDoc.Body);
-        Assert.True(simple.HereDoc.Expand);
-        Assert.False(simple.HereDoc.StripTabs);
+        var hereDoc = Assert.Single(simple.HereDocs);
+        Assert.Equal("line 1\nline 2", hereDoc.Body);
+        Assert.True(hereDoc.Expand);
+        Assert.False(hereDoc.StripTabs);
     }
 
     [Fact]
@@ -1297,9 +1297,9 @@ public class BashParserTests
     {
         var simple = Assert.IsType<Command.Simple>(Parse("cat <<EOF\nhello $NAME\nEOF"));
 
-        Assert.NotNull(simple.HereDoc);
-        Assert.Equal("hello $NAME", simple.HereDoc.Body);
-        Assert.True(simple.HereDoc.Expand);
+        var hereDoc = Assert.Single(simple.HereDocs);
+        Assert.Equal("hello $NAME", hereDoc.Body);
+        Assert.True(hereDoc.Expand);
     }
 
     [Fact]
@@ -1307,9 +1307,9 @@ public class BashParserTests
     {
         var simple = Assert.IsType<Command.Simple>(Parse("cat <<'EOF'\nhello $NAME\nEOF"));
 
-        Assert.NotNull(simple.HereDoc);
-        Assert.Contains("$NAME", simple.HereDoc.Body);
-        Assert.False(simple.HereDoc.Expand);
+        var hereDoc = Assert.Single(simple.HereDocs);
+        Assert.Contains("$NAME", hereDoc.Body);
+        Assert.False(hereDoc.Expand);
     }
 
     [Fact]
@@ -1317,9 +1317,9 @@ public class BashParserTests
     {
         var simple = Assert.IsType<Command.Simple>(Parse("cat <<-EOF\n\tline 1\n\tline 2\nEOF"));
 
-        Assert.NotNull(simple.HereDoc);
-        Assert.Equal("line 1\nline 2", simple.HereDoc.Body);
-        Assert.True(simple.HereDoc.StripTabs);
+        var hereDoc = Assert.Single(simple.HereDocs);
+        Assert.Equal("line 1\nline 2", hereDoc.Body);
+        Assert.True(hereDoc.StripTabs);
     }
 
     [Fact]
@@ -1329,8 +1329,21 @@ public class BashParserTests
 
         var words = GetWordValues(simple);
         Assert.Equal(["grep", "-i", "foo"], words);
-        Assert.NotNull(simple.HereDoc);
-        Assert.Equal("hello foo\nbar", simple.HereDoc.Body);
+        var hereDoc = Assert.Single(simple.HereDocs);
+        Assert.Equal("hello foo\nbar", hereDoc.Body);
+    }
+
+    [Fact]
+    public void Parse_MultipleHeredocs_CollectsAllBodies()
+    {
+        var simple = Assert.IsType<Command.Simple>(
+            Parse("cat <<EOF1 <<EOF2\nfirst\nEOF1\nsecond\nEOF2"));
+
+        Assert.Equal(2, simple.HereDocs.Length);
+        Assert.Equal("first", simple.HereDocs[0].Body);
+        Assert.Equal("second", simple.HereDocs[1].Body);
+        Assert.True(simple.HereDocs[0].Expand);
+        Assert.True(simple.HereDocs[1].Expand);
     }
 
     // ── Case/esac parser tests ──────────────────────────────────────────────

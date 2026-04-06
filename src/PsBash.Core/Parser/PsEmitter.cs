@@ -885,13 +885,15 @@ public static class PsEmitter
     private static string EmitSimple(Command.Simple cmd)
     {
         // Heredoc: emit as @"body"@ | cmd (or @'body'@ for no-expand).
-        if (cmd.HereDoc is not null)
+        if (!cmd.HereDocs.IsDefaultOrEmpty)
         {
+            // When multiple heredocs exist, use the last one for stdin (bash behavior).
+            var hereDoc = cmd.HereDocs[^1];
             var innerCmd = new Command.Simple(cmd.Words, cmd.EnvPairs, cmd.Redirects);
-            string body = cmd.HereDoc.Body;
-            if (cmd.HereDoc.Expand)
+            string body = hereDoc.Body;
+            if (hereDoc.Expand)
                 body = TranslateHereDocVars(body);
-            string hereString = cmd.HereDoc.Expand
+            string hereString = hereDoc.Expand
                 ? $"@\"\n{body}\n\"@"
                 : $"@'\n{body}\n'@";
             string cmdText = EmitSimple(innerCmd);

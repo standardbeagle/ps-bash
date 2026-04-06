@@ -25,4 +25,4 @@ Reference: @docs/specs/parser-grammar.md
 
 - All AST nodes extend `BashNode` and are immutable records
 - `CompoundWord` wraps `ImmutableArray<WordPart>` — never use raw strings for parsed words
-- `Command.Simple` carries optional `HereDoc` — used for both `<<` heredocs and `<<<` here-strings
+- `Command.Simple` carries `HereDocs: ImmutableArray<HereDoc>` — supports multiple `<<` heredocs and `<<<` here-strings; emitter uses the last entry for stdin

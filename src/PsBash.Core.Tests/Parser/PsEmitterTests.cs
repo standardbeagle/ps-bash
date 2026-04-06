@@ -1763,6 +1763,15 @@ public class PsEmitterTests
     }
 
     [Fact]
+    public void Transpile_MultipleHeredocs_UsesLastForStdin()
+    {
+        var result = PsEmitter.Transpile("cat <<EOF1 <<EOF2\nfirst\nEOF1\nsecond\nEOF2");
+
+        Assert.Contains("second", result);
+        Assert.Contains("cat", result);
+    }
+
+    [Fact]
     public void Transpile_AwkWithFieldSepComma_QuotesFlag()
     {
         // Issue 6: awk -F, should quote the flag to prevent PS array interpretation

@@ -16,7 +16,7 @@ public abstract record Command : BashNode
         ImmutableArray<CompoundWord> Words,
         ImmutableArray<EnvPair> EnvPairs,
         ImmutableArray<Redirect> Redirects,
-        HereDoc? HereDoc = null) : Command;
+        ImmutableArray<HereDoc> HereDocs = default) : Command;
 
     /// <summary>
     /// A pipeline of commands connected by <c>|</c> or <c>|&amp;</c>.

@@ -811,10 +811,8 @@ public sealed class BashParser
 
         var words = ImmutableArray.CreateBuilder<CompoundWord>();
         var redirects = ImmutableArray.CreateBuilder<Redirect>();
-        HereDoc? hereDoc = null;
-        string? heredocDelimiter = null;
-        bool heredocExpand = true;
-        bool heredocStripTabs = false;
+        var hereDocs = ImmutableArray.CreateBuilder<HereDoc>();
+        var pendingHeredocs = new List<(string Delimiter, bool Expand, bool StripTabs)>();
 
         while (true)
         {
@@ -844,27 +842,30 @@ public sealed class BashParser
                     expand = raw[0] == '"';
                     raw = raw[1..^1];
                 }
-                hereDoc = new HereDoc(raw, expand, StripTabs: false);
+                hereDocs.Add(new HereDoc(raw, expand, StripTabs: false));
             }
             else if (kind is BashTokenKind.DLess or BashTokenKind.DLessDash)
             {
-                heredocStripTabs = kind == BashTokenKind.DLessDash;
+                bool stripTabs = kind == BashTokenKind.DLessDash;
                 Advance(); // consume << or <<-
                 var delimToken = Advance();
                 string rawDelim = delimToken.Value;
 
+                bool expand;
+                string delimiter;
                 // Quoted delimiter (single or double quotes) suppresses expansion.
                 if ((rawDelim.StartsWith('\'') && rawDelim.EndsWith('\''))
                     || (rawDelim.StartsWith('"') && rawDelim.EndsWith('"')))
                 {
-                    heredocExpand = false;
-                    heredocDelimiter = rawDelim[1..^1];
+                    expand = false;
+                    delimiter = rawDelim[1..^1];
                 }
                 else
                 {
-                    heredocExpand = true;
-                    heredocDelimiter = rawDelim;
+                    expand = true;
+                    delimiter = rawDelim;
                 }
+                pendingHeredocs.Add((delimiter, expand, stripTabs));
             }
             else if (kind == BashTokenKind.IoNumber || IsRedirectOp(kind))
             {
@@ -878,18 +879,18 @@ public sealed class BashParser
 
         // If only assignments and no command words, it's a bare assignment.
         if (assignmentPairs.Count > 0 && words.Count == 0 && redirects.Count == 0
-            && heredocDelimiter is null && hereDoc is null)
+            && pendingHeredocs.Count == 0 && hereDocs.Count == 0)
             return new Command.ShAssignment(assignmentPairs.ToImmutable());
 
-        // Collect heredoc body if a heredoc redirect was found (not for here-strings).
-        if (heredocDelimiter is not null)
-            hereDoc = CollectHereDocBody(heredocDelimiter, heredocExpand, heredocStripTabs);
+        // Collect heredoc bodies in order for all pending heredoc redirects.
+        foreach (var (delimiter, expand, stripTabs) in pendingHeredocs)
+            hereDocs.Add(CollectHereDocBody(delimiter, expand, stripTabs));
 
         return new Command.Simple(
             words.ToImmutable(),
             envPairs.ToImmutable(),
             redirects.ToImmutable(),
-            hereDoc);
+            hereDocs.ToImmutable());
     }
 
     /// <summary>
