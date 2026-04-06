@@ -28,7 +28,8 @@ public sealed class PwshWorker : IAsyncDisposable
         {
             FileName = pwshPath,
             ArgumentList = { "-NoProfile", "-NonInteractive", "-File", scriptPath,
-                             "-ModulePath", modulePath ?? "" },
+                             "-ModulePath", modulePath ?? "",
+                             "-ParentPid", Environment.ProcessId.ToString() },
             RedirectStandardInput = true,
             RedirectStandardOutput = true,
             RedirectStandardError = false,
@@ -56,25 +57,46 @@ public sealed class PwshWorker : IAsyncDisposable
         string pwshCommand,
         CancellationToken ct = default)
     {
-        await _stdin.WriteLineAsync(pwshCommand.AsMemory(), ct);
-        await _stdin.WriteLineAsync("<<<END>>>".AsMemory(), ct);
-        await _stdin.FlushAsync(ct);
+        var timeout = GetTimeout();
+        using var timeoutCts = new CancellationTokenSource(timeout);
+        using var linked = CancellationTokenSource.CreateLinkedTokenSource(ct, timeoutCts.Token);
 
-        string? line;
-        while ((line = await _stdout.ReadLineAsync(ct)) is not null)
+        try
         {
-            if (line.StartsWith("<<<EXIT:", StringComparison.Ordinal)
-                && line.EndsWith(">>>", StringComparison.Ordinal))
-            {
-                var code = line["<<<EXIT:".Length..^">>>".Length];
-                return int.TryParse(code, out var n) ? n : 1;
-            }
-            Console.WriteLine(line);
-        }
+            await _stdin.WriteLineAsync(pwshCommand.AsMemory(), linked.Token);
+            await _stdin.WriteLineAsync("<<<END>>>".AsMemory(), linked.Token);
+            await _stdin.FlushAsync(linked.Token);
 
-        // Stdout closed — process exited (e.g. via "exit N"). Return its exit code.
-        await _process.WaitForExitAsync(ct);
-        return _process.ExitCode;
+            string? line;
+            while ((line = await _stdout.ReadLineAsync(linked.Token)) is not null)
+            {
+                if (line.StartsWith("<<<EXIT:", StringComparison.Ordinal)
+                    && line.EndsWith(">>>", StringComparison.Ordinal))
+                {
+                    var code = line["<<<EXIT:".Length..^">>>".Length];
+                    return int.TryParse(code, out var n) ? n : 1;
+                }
+                Console.WriteLine(line);
+            }
+
+            // Stdout closed — process exited (e.g. via "exit N"). Return its exit code.
+            await _process.WaitForExitAsync(linked.Token);
+            return _process.ExitCode;
+        }
+        catch (OperationCanceledException) when (timeoutCts.IsCancellationRequested)
+        {
+            Console.Error.WriteLine($"ps-bash: command timed out after {timeout.TotalSeconds}s");
+            _process.Kill();
+            return 124;
+        }
+    }
+
+    private static TimeSpan GetTimeout()
+    {
+        var envValue = Environment.GetEnvironmentVariable("PSBASH_TIMEOUT");
+        if (envValue is not null && int.TryParse(envValue, out var seconds) && seconds > 0)
+            return TimeSpan.FromSeconds(seconds);
+        return TimeSpan.FromSeconds(30);
     }
 
     private static async Task<string> ExtractWorkerScriptAsync(CancellationToken ct)

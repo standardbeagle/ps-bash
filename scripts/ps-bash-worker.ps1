@@ -1,5 +1,5 @@
 #Requires -Version 7.0
-param([string]$ModulePath = '')
+param([string]$ModulePath = '', [int]$ParentPid = 0)
 
 # Load ps-bash module: explicit path > PSBASH_MODULE env > system ps-bash
 $resolvedModule = if ($ModulePath) { $ModulePath }
@@ -18,6 +18,15 @@ if ($resolvedModule -and (Test-Path $resolvedModule)) {
 
 # Command loop
 while ($true) {
+    # Parent death detection: if the parent process is gone, self-terminate
+    if ($ParentPid -gt 0) {
+        try {
+            $null = [System.Diagnostics.Process]::GetProcessById($ParentPid)
+        } catch {
+            exit 0
+        }
+    }
+
     $lines = [System.Collections.Generic.List[string]]::new()
 
     while ($true) {
@@ -52,5 +61,13 @@ while ($true) {
         [Console]::Out.WriteLine("<<<EXIT:$exitCode>>>")
     } finally {
         [Console]::Out.Flush()
+    }
+
+    # Memory watchdog: self-terminate if working set exceeds limit
+    $ws = [System.Diagnostics.Process]::GetCurrentProcess().WorkingSet64
+    $maxBytes = if ($env:PSBASH_MAX_MEMORY) { [long]$env:PSBASH_MAX_MEMORY * 1MB } else { 512MB }
+    if ($ws -gt $maxBytes) {
+        [Console]::Error.WriteLine("ps-bash: worker exceeded memory limit ($([math]::Round($ws/1MB))MB > $([math]::Round($maxBytes/1MB))MB)")
+        exit 137
     }
 }
