@@ -1408,7 +1408,7 @@ public class PsEmitterTests
     public void Transpile_BracedRange_EmitsPsRange()
     {
         var result = PsEmitter.Transpile("echo {1..10}");
-        Assert.Equal("echo 1..10", result);
+        Assert.Equal("echo @(1..10)", result);
     }
 
     [Fact]
@@ -2199,14 +2199,14 @@ public class PsEmitterTests
     public void Transpile_BraceRangeDefaultStep_Works()
     {
         var result = PsEmitter.Transpile("echo {1..5}");
-        Assert.Equal("echo 1..5", result);
+        Assert.Equal("echo @(1..5)", result);
     }
 
     [Fact]
     public void Transpile_BraceRangeReverseDefaultStep_Works()
     {
         var result = PsEmitter.Transpile("echo {5..1}");
-        Assert.Equal("echo 5..1", result);
+        Assert.Equal("echo @(5..1)", result);
     }
 
     [Fact]

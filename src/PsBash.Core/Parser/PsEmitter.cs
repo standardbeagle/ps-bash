@@ -1289,7 +1289,7 @@ public static class PsEmitter
                 }
             }
             if (isSequential)
-                return $"{first}..{last}";
+                return $"@({first}..{last})";
         }
 
         // Otherwise emit as array literal.

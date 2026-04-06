@@ -823,11 +823,21 @@ function Invoke-BashCat {
 # --- File Redirect Helper ---
 
 function Invoke-BashRedirect {
-    param(
-        [Parameter(Mandatory)][string]$Path,
-        [switch]$Append
-    )
+    $Arguments = [string[]]$args
     $pipelineInput = @($input)
+
+    $filePath = $null
+    $append = $false
+    $i = 0
+    while ($i -lt $Arguments.Count) {
+        $arg = $Arguments[$i]
+        if ($arg -ceq '-Append') { $append = $true; $i++; continue }
+        if ($arg -ceq '-Path' -and ($i + 1) -lt $Arguments.Count) { $i++; $filePath = $Arguments[$i]; $i++; continue }
+        if ($null -eq $filePath) { $filePath = $arg }
+        $i++
+    }
+
+    if ($null -eq $filePath) { return }
 
     $lines = [System.Collections.Generic.List[string]]::new()
     foreach ($item in $pipelineInput) {
@@ -838,10 +848,10 @@ function Invoke-BashRedirect {
     $content = ($lines -join "`n")
     if ($lines.Count -gt 0) { $content += "`n" }
 
-    if ($Append) {
-        [System.IO.File]::AppendAllText($Path, $content)
+    if ($append) {
+        [System.IO.File]::AppendAllText($filePath, $content)
     } else {
-        [System.IO.File]::WriteAllText($Path, $content)
+        [System.IO.File]::WriteAllText($filePath, $content)
     }
 }
 
@@ -5910,8 +5920,9 @@ function Invoke-BashTee {
         }
     }
 
-    # Write to each file
-    foreach ($filePath in (Resolve-BashGlob -Paths $operands)) {
+    # Write to each file (skip $null which represents /dev/null)
+    $resolvedPaths = $operands | Where-Object { $null -ne $_ -and $_ -ne '' }
+    foreach ($filePath in (Resolve-BashGlob -Paths $resolvedPaths)) {
         $parentDir = Split-Path -Parent $filePath
         if ($parentDir -and -not (Test-Path -LiteralPath $parentDir)) {
             Write-Error -Message "tee: ${filePath}: No such file or directory" -ErrorAction Continue
