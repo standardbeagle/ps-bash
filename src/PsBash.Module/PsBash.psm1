@@ -65,8 +65,14 @@ function New-BashObject {
         [string]$BashText,
 
         [Parameter()]
-        [string]$TypeName = 'PsBash.TextOutput'
+        [string]$TypeName = 'PsBash.TextOutput',
+
+        [switch]$NoTrailingNewline
     )
+
+    if (-not $NoTrailingNewline -and $BashText.Length -gt 0 -and -not $BashText.EndsWith("`n")) {
+        $BashText = "$BashText`n"
+    }
 
     $obj = [PSCustomObject]@{
         PSTypeName = $TypeName
@@ -94,7 +100,7 @@ function Emit-BashLine {
         if ($li -lt $lines.Count - 1 -or $hasTrailingNewline) {
             New-BashObject -BashText "$($lines[$li])`n"
         } else {
-            New-BashObject -BashText $lines[$li]
+            New-BashObject -BashText $lines[$li] -NoTrailingNewline
         }
     }
 }
@@ -777,7 +783,7 @@ function Invoke-BashCat {
             LineNumber = $ln
             Content    = $Content
             FileName   = $FileName
-            BashText   = $text
+            BashText   = "$text`n"
         }
         Set-BashDisplayProperty $obj
     }

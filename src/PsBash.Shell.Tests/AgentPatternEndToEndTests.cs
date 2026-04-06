@@ -394,4 +394,495 @@ public class AgentPatternEndToEndTests
         Assert.Equal(0, exitCode);
         Assert.Contains("count: 42", stdout);
     }
+
+    // ── Brace range expansion (fix: bare 1..5 → @(1..5)) ────────────────────
+
+    [SkippableFact]
+    public async Task BraceRange_DefaultStep_ExpandsSequence()
+    {
+        Skip.If(PwshPath is null, "pwsh not available");
+
+        var (exitCode, stdout, _) = await RunShellAsync(
+            "-c", "echo {1..5}");
+
+        Assert.Equal(0, exitCode);
+        Assert.Equal("1 2 3 4 5", stdout.Trim());
+    }
+
+    [SkippableFact]
+    public async Task BraceRange_ReverseDefaultStep_ExpandsSequence()
+    {
+        Skip.If(PwshPath is null, "pwsh not available");
+
+        var (exitCode, stdout, _) = await RunShellAsync(
+            "-c", "echo {5..1}");
+
+        Assert.Equal(0, exitCode);
+        Assert.Equal("5 4 3 2 1", stdout.Trim());
+    }
+
+    [SkippableFact]
+    public async Task BraceRange_WithStep_ExpandsCorrectly()
+    {
+        Skip.If(PwshPath is null, "pwsh not available");
+
+        var (exitCode, stdout, _) = await RunShellAsync(
+            "-c", "echo {1..10..3}");
+
+        Assert.Equal(0, exitCode);
+        Assert.Equal("1 4 7 10", stdout.Trim());
+    }
+
+    [SkippableFact]
+    public async Task BraceRange_NonDivisibleStep_NoInfiniteLoop()
+    {
+        Skip.If(PwshPath is null, "pwsh not available");
+
+        var (exitCode, stdout, _) = await RunShellAsync(
+            "-c", "echo {1..10..7}");
+
+        Assert.Equal(0, exitCode);
+        Assert.Equal("1 8", stdout.Trim());
+    }
+
+    // ── File redirect (fix: Invoke-BashRedirect pipeline binding) ────────────
+
+    [SkippableFact]
+    public async Task Redirect_EchoToFile_WritesAndReads()
+    {
+        Skip.If(PwshPath is null, "pwsh not available");
+
+        var (exitCode, stdout, _) = await RunShellAsync(
+            "-c", "echo hello > /tmp/psbash-redir-test.txt; cat /tmp/psbash-redir-test.txt; rm /tmp/psbash-redir-test.txt");
+
+        Assert.Equal(0, exitCode);
+        Assert.Equal("hello", stdout.Trim());
+    }
+
+    [SkippableFact]
+    public async Task Redirect_AppendToFile_AppendsCorrectly()
+    {
+        Skip.If(PwshPath is null, "pwsh not available");
+
+        var (exitCode, stdout, _) = await RunShellAsync(
+            "-c", "echo line1 > /tmp/psbash-append-test.txt; echo line2 >> /tmp/psbash-append-test.txt; cat /tmp/psbash-append-test.txt; rm /tmp/psbash-append-test.txt");
+
+        Assert.Equal(0, exitCode);
+        var lines = stdout.Trim().Split('\n', StringSplitOptions.RemoveEmptyEntries)
+            .Select(l => l.Trim()).ToArray();
+        Assert.Equal(2, lines.Length);
+        Assert.Equal("line1", lines[0]);
+        Assert.Equal("line2", lines[1]);
+    }
+
+    [SkippableFact]
+    public async Task Redirect_ToDevNull_NoOutput()
+    {
+        Skip.If(PwshPath is null, "pwsh not available");
+
+        var (exitCode, stdout, _) = await RunShellAsync(
+            "-c", "echo hidden > /dev/null; echo visible");
+
+        Assert.Equal(0, exitCode);
+        Assert.Equal("visible", stdout.Trim());
+    }
+
+    // ── Tee /dev/null (fix: $null as file path) ─────────────────────────────
+
+    [SkippableFact]
+    public async Task Tee_DevNull_PassesThroughWithoutCrash()
+    {
+        Skip.If(PwshPath is null, "pwsh not available");
+
+        var (exitCode, stdout, _) = await RunShellAsync(
+            "-c", "echo tee-test | tee /dev/null");
+
+        Assert.Equal(0, exitCode);
+        Assert.Equal("tee-test", stdout.Trim());
+    }
+
+    [SkippableFact]
+    public async Task Tee_ToFile_WritesAndPassesThrough()
+    {
+        Skip.If(PwshPath is null, "pwsh not available");
+
+        var (exitCode, stdout, _) = await RunShellAsync(
+            "-c", "echo tee-content | tee /tmp/psbash-tee-test.txt; echo ---; cat /tmp/psbash-tee-test.txt; rm /tmp/psbash-tee-test.txt");
+
+        Assert.Equal(0, exitCode);
+        Assert.Contains("tee-content", stdout);
+    }
+
+    // ── Function $1 (fix: $args[0] → $($args[0]) in double quotes) ──────────
+
+    [SkippableFact]
+    public async Task Function_PositionalParam_NoIndexSuffix()
+    {
+        Skip.If(PwshPath is null, "pwsh not available");
+
+        var (exitCode, stdout, _) = await RunShellAsync(
+            "-c", "greet() { echo \"hello $1\"; }; greet world");
+
+        Assert.Equal(0, exitCode);
+        Assert.Equal("hello world", stdout.Trim());
+    }
+
+    [SkippableFact]
+    public async Task Function_MultiplePositionalParams_AllResolve()
+    {
+        Skip.If(PwshPath is null, "pwsh not available");
+
+        var (exitCode, stdout, _) = await RunShellAsync(
+            "-c", "f() { echo \"$1 and $2\"; }; f alpha beta");
+
+        Assert.Equal(0, exitCode);
+        Assert.Equal("alpha and beta", stdout.Trim());
+    }
+
+    // ── While read (fix: trailing newline before split) ──────────────────────
+
+    [SkippableFact]
+    public async Task WhileRead_NoExtraBlankLines()
+    {
+        Skip.If(PwshPath is null, "pwsh not available");
+
+        var (exitCode, stdout, _) = await RunShellAsync(
+            "-c", "echo -e \"a\\nb\\nc\" | while read x; do echo \"[$x]\"; done");
+
+        Assert.Equal(0, exitCode);
+        var lines = stdout.Trim().Split('\n', StringSplitOptions.RemoveEmptyEntries)
+            .Select(l => l.Trim()).ToArray();
+        Assert.Equal(3, lines.Length);
+        Assert.Equal("[a]", lines[0]);
+        Assert.Equal("[b]", lines[1]);
+        Assert.Equal("[c]", lines[2]);
+    }
+
+    // ── Process substitution (fix: Out-File double newlines) ─────────────────
+
+    [SkippableFact]
+    public async Task ProcessSub_PasteNoExtraBlankLines()
+    {
+        Skip.If(PwshPath is null, "pwsh not available");
+
+        var (exitCode, stdout, _) = await RunShellAsync(
+            "-c", "paste <(echo hello) <(echo world)");
+
+        Assert.Equal(0, exitCode);
+        Assert.Equal("hello\tworld", stdout.Trim());
+    }
+
+    [SkippableFact]
+    public async Task ProcessSub_PasteMultiLine_CorrectAlignment()
+    {
+        Skip.If(PwshPath is null, "pwsh not available");
+
+        var (exitCode, stdout, _) = await RunShellAsync(
+            "-c", "paste <(echo -e \"a\\nb\") <(echo -e \"1\\n2\")");
+
+        Assert.Equal(0, exitCode);
+        var lines = stdout.Trim().Split('\n', StringSplitOptions.RemoveEmptyEntries)
+            .Select(l => l.Trim()).ToArray();
+        Assert.Equal(2, lines.Length);
+        Assert.Equal("a\t1", lines[0]);
+        Assert.Equal("b\t2", lines[1]);
+    }
+
+    // ── [[ ]] string comparison (fix: lexicographic vs numeric) ──────────────
+
+    [SkippableFact]
+    public async Task ExtendedTest_StringLessThan_LexicographicOrder()
+    {
+        Skip.If(PwshPath is null, "pwsh not available");
+
+        var (exitCode, stdout, _) = await RunShellAsync(
+            "-c", "if [[ \"apple\" < \"banana\" ]]; then echo correct; else echo wrong; fi");
+
+        Assert.Equal(0, exitCode);
+        Assert.Contains("correct", stdout);
+    }
+
+    // ── Loop iteration cap ───────────────────────────────────────────────────
+
+    [SkippableFact]
+    public async Task WhileTrue_IterCapPreventsInfiniteLoop()
+    {
+        Skip.If(PwshPath is null, "pwsh not available");
+
+        // Set a very low cap so the test completes quickly
+        var psi = new ProcessStartInfo
+        {
+            FileName = "dotnet",
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            RedirectStandardInput = true,
+            UseShellExecute = false,
+        };
+        psi.ArgumentList.Add("run");
+        psi.ArgumentList.Add("--no-build");
+        psi.ArgumentList.Add("--project");
+        psi.ArgumentList.Add(ProjectDir);
+        psi.ArgumentList.Add("--");
+        psi.ArgumentList.Add("-c");
+        psi.ArgumentList.Add("i=0; while true; do i=$((i+1)); done; echo $i");
+        psi.Environment["PSBASH_WORKER"] = WorkerScript;
+        psi.Environment["PSBASH_MAX_ITERATIONS"] = "100";
+
+        var process = Process.Start(psi)
+            ?? throw new InvalidOperationException("Failed to start dotnet run");
+
+        var stdout = await process.StandardOutput.ReadToEndAsync();
+        var stderr = await process.StandardError.ReadToEndAsync();
+        await process.WaitForExitAsync();
+
+        // Should have hit the iteration cap and thrown
+        Assert.Contains("loop iteration limit exceeded", stderr);
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    // FILE LOCKING STRESS TESTS
+    //
+    // These tests target the Invoke-BashRedirect file I/O path which uses
+    // File.WriteAllText/AppendAllText — atomic operations that replaced PS
+    // native > operator to avoid file handle leaks in chained commands.
+    // ═══════════════════════════════════════════════════════════════════════════
+
+    [SkippableFact]
+    public async Task FileLocking_SequentialWritesThenRead_NoCorruption()
+    {
+        Skip.If(PwshPath is null, "pwsh not available");
+
+        // Rapid sequential writes to same file — tests that handles are released between commands
+        var (exitCode, stdout, stderr) = await RunShellAsync(
+            "-c", string.Join("; ",
+                "echo line1 > /tmp/psbash-lock1.txt",
+                "echo line2 > /tmp/psbash-lock1.txt",
+                "echo line3 > /tmp/psbash-lock1.txt",
+                "cat /tmp/psbash-lock1.txt",
+                "rm /tmp/psbash-lock1.txt"));
+
+        Assert.Equal(0, exitCode);
+        // Last write wins — file should only contain line3
+        Assert.Equal("line3", stdout.Trim());
+    }
+
+    [SkippableFact]
+    public async Task FileLocking_RapidAppendsThenRead_AllLinesPresent()
+    {
+        Skip.If(PwshPath is null, "pwsh not available");
+
+        // Rapid sequential appends — tests that each >> releases the handle
+        var (exitCode, stdout, stderr) = await RunShellAsync(
+            "-c", string.Join("; ",
+                "echo line1 > /tmp/psbash-lock2.txt",
+                "echo line2 >> /tmp/psbash-lock2.txt",
+                "echo line3 >> /tmp/psbash-lock2.txt",
+                "echo line4 >> /tmp/psbash-lock2.txt",
+                "echo line5 >> /tmp/psbash-lock2.txt",
+                "wc -l /tmp/psbash-lock2.txt",
+                "rm /tmp/psbash-lock2.txt"));
+
+        Assert.Equal(0, exitCode);
+        Assert.Contains("5", stdout.Trim());
+    }
+
+    [SkippableFact]
+    public async Task FileLocking_WriteThenAppendThenCat_NoHandleLeak()
+    {
+        Skip.If(PwshPath is null, "pwsh not available");
+
+        // Interleave write, append, and read — all three file modes in sequence
+        var (exitCode, stdout, stderr) = await RunShellAsync(
+            "-c", string.Join("; ",
+                "echo first > /tmp/psbash-lock3.txt",
+                "echo second >> /tmp/psbash-lock3.txt",
+                "cat /tmp/psbash-lock3.txt",
+                "echo third > /tmp/psbash-lock3.txt",
+                "echo ---",
+                "cat /tmp/psbash-lock3.txt",
+                "rm /tmp/psbash-lock3.txt"));
+
+        Assert.Equal(0, exitCode);
+        var parts = stdout.Split("---", StringSplitOptions.RemoveEmptyEntries);
+        Assert.Equal(2, parts.Length);
+        // First cat: first + second
+        Assert.Contains("first", parts[0]);
+        Assert.Contains("second", parts[0]);
+        // Second cat: third (overwrite)
+        Assert.Contains("third", parts[1]);
+    }
+
+    [SkippableFact]
+    public async Task FileLocking_PipelineRedirectChain_EachCommandReleasesHandle()
+    {
+        Skip.If(PwshPath is null, "pwsh not available");
+
+        // Pipeline output redirected to file, then another command reads it
+        var (exitCode, stdout, stderr) = await RunShellAsync(
+            "-c", string.Join("; ",
+                "echo -e \"cherry\\napple\\nbanana\" | sort > /tmp/psbash-lock4.txt",
+                "cat /tmp/psbash-lock4.txt",
+                "rm /tmp/psbash-lock4.txt"));
+
+        Assert.Equal(0, exitCode);
+        var lines = stdout.Trim().Split('\n', StringSplitOptions.RemoveEmptyEntries)
+            .Select(l => l.Trim()).ToArray();
+        Assert.Equal(3, lines.Length);
+        Assert.Equal("apple", lines[0]);
+        Assert.Equal("banana", lines[1]);
+        Assert.Equal("cherry", lines[2]);
+    }
+
+    [SkippableFact]
+    public async Task FileLocking_LoopWritesToFile_NoAccumulation()
+    {
+        Skip.If(PwshPath is null, "pwsh not available");
+
+        // For loop writing to file each iteration — tests handle release between loop bodies
+        var (exitCode, stdout, stderr) = await RunShellAsync(
+            "-c", string.Join("; ",
+                "for i in 1 2 3 4 5; do echo $i >> /tmp/psbash-lock5.txt; done",
+                "wc -l /tmp/psbash-lock5.txt",
+                "rm /tmp/psbash-lock5.txt"));
+
+        Assert.Equal(0, exitCode);
+        Assert.Contains("5", stdout.Trim());
+    }
+
+    [SkippableFact]
+    public async Task FileLocking_TeeAndRedirect_BothFilesWritten()
+    {
+        Skip.If(PwshPath is null, "pwsh not available");
+
+        // Tee writes to one file, redirect writes to another — both must complete
+        var (exitCode, stdout, stderr) = await RunShellAsync(
+            "-c", string.Join("; ",
+                "echo -e \"a\\nb\\nc\" | tee /tmp/psbash-lock6a.txt > /tmp/psbash-lock6b.txt",
+                "echo \"tee:\"; cat /tmp/psbash-lock6a.txt",
+                "echo \"redir:\"; cat /tmp/psbash-lock6b.txt",
+                "rm /tmp/psbash-lock6a.txt /tmp/psbash-lock6b.txt"));
+
+        Assert.Equal(0, exitCode);
+        Assert.Contains("tee:", stdout);
+        Assert.Contains("redir:", stdout);
+    }
+
+    [SkippableFact]
+    public async Task FileLocking_WriteReadWriteRead_RapidAlternation()
+    {
+        Skip.If(PwshPath is null, "pwsh not available");
+
+        // Rapid write-read alternation on same file — classic file locking trigger
+        var (exitCode, stdout, stderr) = await RunShellAsync(
+            "-c", string.Join("; ",
+                "echo alpha > /tmp/psbash-lock7.txt",
+                "cat /tmp/psbash-lock7.txt",
+                "echo beta > /tmp/psbash-lock7.txt",
+                "cat /tmp/psbash-lock7.txt",
+                "echo gamma > /tmp/psbash-lock7.txt",
+                "cat /tmp/psbash-lock7.txt",
+                "rm /tmp/psbash-lock7.txt"));
+
+        Assert.Equal(0, exitCode);
+        var lines = stdout.Trim().Split('\n', StringSplitOptions.RemoveEmptyEntries)
+            .Select(l => l.Trim()).ToArray();
+        Assert.Equal(3, lines.Length);
+        Assert.Equal("alpha", lines[0]);
+        Assert.Equal("beta", lines[1]);
+        Assert.Equal("gamma", lines[2]);
+    }
+
+    [SkippableFact]
+    public async Task FileLocking_MultipleFilesInOneCommand_AllWritten()
+    {
+        Skip.If(PwshPath is null, "pwsh not available");
+
+        // Write to multiple different files in quick succession
+        var (exitCode, stdout, stderr) = await RunShellAsync(
+            "-c", string.Join("; ",
+                "echo f1 > /tmp/psbash-mf1.txt",
+                "echo f2 > /tmp/psbash-mf2.txt",
+                "echo f3 > /tmp/psbash-mf3.txt",
+                "cat /tmp/psbash-mf1.txt /tmp/psbash-mf2.txt /tmp/psbash-mf3.txt",
+                "rm /tmp/psbash-mf1.txt /tmp/psbash-mf2.txt /tmp/psbash-mf3.txt"));
+
+        Assert.Equal(0, exitCode);
+        Assert.Contains("f1", stdout);
+        Assert.Contains("f2", stdout);
+        Assert.Contains("f3", stdout);
+    }
+
+    [SkippableFact]
+    public async Task FileLocking_ProcessSubWithRedirect_NoTempFileConflict()
+    {
+        Skip.If(PwshPath is null, "pwsh not available");
+
+        // Process substitution creates temp files — verify no conflicts with redirects
+        var (exitCode, stdout, stderr) = await RunShellAsync(
+            "-c", string.Join("; ",
+                "paste <(echo col1) <(echo col2) > /tmp/psbash-psub-redir.txt",
+                "cat /tmp/psbash-psub-redir.txt",
+                "rm /tmp/psbash-psub-redir.txt"));
+
+        Assert.Equal(0, exitCode);
+        Assert.Contains("col1", stdout);
+        Assert.Contains("col2", stdout);
+    }
+
+    [SkippableFact]
+    public async Task FileLocking_AppendInWhileLoop_AllIterationsWritten()
+    {
+        Skip.If(PwshPath is null, "pwsh not available");
+
+        // For loop appending to file each iteration — tests handle release between loop bodies
+        var (exitCode, stdout, stderr) = await RunShellAsync(
+            "-c", string.Join("; ",
+                "for i in 1 2 3 4 5 6 7 8 9 10; do echo \"line $i\" >> /tmp/psbash-wloop.txt; done",
+                "wc -l /tmp/psbash-wloop.txt",
+                "head -n 1 /tmp/psbash-wloop.txt",
+                "tail -n 1 /tmp/psbash-wloop.txt",
+                "rm /tmp/psbash-wloop.txt"));
+
+        Assert.Equal(0, exitCode);
+        Assert.Contains("10", stdout); // 10 lines
+        Assert.Contains("line 1", stdout); // first line
+        Assert.Contains("line 10", stdout); // last line
+    }
+
+    [SkippableFact]
+    public async Task FileLocking_SedInPlace_FileUpdatedCorrectly()
+    {
+        Skip.If(PwshPath is null, "pwsh not available");
+
+        // sed -i modifies file in place — tests that file handle is properly released
+        var (exitCode, stdout, stderr) = await RunShellAsync(
+            "-c", string.Join("; ",
+                "echo -e \"hello world\\nfoo bar\" > /tmp/psbash-sed.txt",
+                "sed -i 's/world/earth/' /tmp/psbash-sed.txt",
+                "cat /tmp/psbash-sed.txt",
+                "rm /tmp/psbash-sed.txt"));
+
+        Assert.Equal(0, exitCode);
+        Assert.Contains("hello earth", stdout);
+        Assert.Contains("foo bar", stdout);
+    }
+
+    [SkippableFact]
+    public async Task FileLocking_RedirectOverwriteChainOf10_LastValueOnly()
+    {
+        Skip.If(PwshPath is null, "pwsh not available");
+
+        // 10 rapid overwrites to same file — stress test handle release
+        var commands = new List<string>();
+        for (int i = 0; i < 10; i++)
+            commands.Add($"echo {i} > /tmp/psbash-chain.txt");
+        commands.Add("cat /tmp/psbash-chain.txt");
+        commands.Add("rm /tmp/psbash-chain.txt");
+
+        var (exitCode, stdout, stderr) = await RunShellAsync(
+            "-c", string.Join("; ", commands));
+
+        Assert.Equal(0, exitCode);
+        Assert.Equal("9", stdout.Trim());
+    }
 }

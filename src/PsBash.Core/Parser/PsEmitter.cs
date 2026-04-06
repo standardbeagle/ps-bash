@@ -1024,7 +1024,13 @@ public static class PsEmitter
                 && !PsBuiltinAliases.Contains(cmd0)
                 && TryEmitMappedCommand(cmd, out var mapped))
             {
-                return mapped;
+                if (cmd.Redirects.IsEmpty)
+                    return mapped;
+
+                // Append redirects (TryEmitMappedCommand only handles args)
+                var mappedSb = new StringBuilder(mapped);
+                EmitPipeTargetRedirects(cmd, mappedSb);
+                return mappedSb.ToString();
             }
         }
 
@@ -1625,12 +1631,47 @@ public static class PsEmitter
 
             var cmd = pipeline.Commands[i];
             if (i > 0 && cmd is Command.Simple simple && TryEmitMappedCommand(simple, out var mapped))
+            {
                 sb.Append(mapped);
+                // Append any redirects from the pipe target (TryEmitMappedCommand only handles args)
+                EmitPipeTargetRedirects(simple, sb);
+            }
             else
                 sb.Append(Emit(cmd));
         }
 
         return sb.ToString();
+    }
+
+    private static void EmitPipeTargetRedirects(Command.Simple cmd, StringBuilder sb)
+    {
+        if (cmd.Redirects.IsEmpty) return;
+
+        Redirect? fileRedirect = null;
+        foreach (var redirect in cmd.Redirects)
+        {
+            var target = TransformRedirectTarget(EmitWord(redirect.Target));
+            bool isStdoutFile = redirect.Fd == 1
+                && (redirect.Op == ">" || redirect.Op == ">>")
+                && target != "$null";
+
+            if (isStdoutFile && fileRedirect is null)
+                fileRedirect = redirect;
+            else
+            {
+                sb.Append(' ');
+                sb.Append(EmitRedirect(redirect));
+            }
+        }
+
+        if (fileRedirect is not null)
+        {
+            var target = TransformRedirectTarget(EmitWord(fileRedirect.Target));
+            sb.Append(" | Invoke-BashRedirect -Path ");
+            sb.Append(target);
+            if (fileRedirect.Op == ">>")
+                sb.Append(" -Append");
+        }
     }
 
     /// <summary>
