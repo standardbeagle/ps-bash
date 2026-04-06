@@ -1232,25 +1232,32 @@ public static class PsEmitter
         string expr = arith.Expr.Trim();
 
         // Handle increment/decrement inside $((i++)) etc.
-        // Env vars: return the arithmetic value (PS assignments are void in $()).
-        // Post-increment returns old value; pre-increment returns new value.
-        // Loop/PS vars can use native operators.
+        // For env vars, side-effects can't happen inside $(), so emit as a
+        // scriptblock that performs the side-effect and returns the value.
         if (expr.EndsWith("++") || expr.EndsWith("--"))
         {
             string varName = expr[..^2].Trim();
             string varRef = varName.StartsWith('$') ? varName : ArithVarRef(varName);
+            bool isInc = expr.EndsWith("++");
             if (IsEnvVar(varRef))
-                return $"$([int]{varRef})";
+            {
+                // Post-increment: return old value, then increment.
+                // $( $__t = [int]$env:i; $env:i = [string]($__t + 1); $__t )
+                string delta = isInc ? "1" : "-1";
+                return $"$( $__t = [int]{varRef}; {varRef} = [string]($__t + {delta}); $__t )";
+            }
             return $"$({varRef}{expr[^2..]})";
         }
         if (expr.StartsWith("++") || expr.StartsWith("--"))
         {
             string varName = expr[2..].Trim();
             string varRef = varName.StartsWith('$') ? varName : ArithVarRef(varName);
+            bool isInc = expr.StartsWith("++");
             if (IsEnvVar(varRef))
             {
-                string delta = expr.StartsWith("++") ? "1" : "-1";
-                return $"$([int]{varRef} + {delta})";
+                // Pre-increment: increment, then return new value.
+                string delta = isInc ? "1" : "-1";
+                return $"$( {varRef} = [string]([int]{varRef} + {delta}); [int]{varRef} )";
             }
             return $"$({expr[..2]}{varRef})";
         }
