@@ -1436,9 +1436,9 @@ public static class PsEmitter
             return $"{open}{varRef} -replace '^{pattern}','')";
         }
 
-        // Array keys: ${!arr[@]} -> $arr.Keys
+        // Array keys: ${!arr[@]} -> $arr.Keys (or $($arr.Keys) in double quotes)
         if (bvs.Suffix.StartsWith("!"))
-            return $"${bvs.Name}.Keys";
+            return inDoubleQuote ? $"$(${bvs.Name}.Keys)" : $"${bvs.Name}.Keys";
 
         // Replace first: ${VAR/find/replace}
         if (bvs.Suffix.StartsWith("/") && !bvs.Suffix.StartsWith("//"))
