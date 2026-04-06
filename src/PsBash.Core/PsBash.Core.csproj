@@ -5,7 +5,24 @@
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+
+    <!-- NuGet package metadata -->
+    <PackageId>PsBash.Core</PackageId>
+    <Version>0.5.0</Version>
+    <Authors>StandardBeagle</Authors>
+    <Description>Bash-to-PowerShell transpiler library. Parses bash commands into an AST (based on Oils/OSH) and emits equivalent PowerShell. Use as a library in terminal emulators, AI agents, or any .NET app that needs bash compatibility on top of PowerShell.</Description>
+    <PackageTags>bash;powershell;transpiler;parser;shell;terminal</PackageTags>
+    <PackageLicenseExpression>MIT</PackageLicenseExpression>
+    <PackageProjectUrl>https://github.com/standardbeagle/ps-bash</PackageProjectUrl>
+    <RepositoryUrl>https://github.com/standardbeagle/ps-bash</RepositoryUrl>
+    <RepositoryType>git</RepositoryType>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
   </PropertyGroup>
+
+  <ItemGroup>
+    <None Include="README.md" Pack="true" PackagePath="\" />
+  </ItemGroup>
 
   <ItemGroup>
     <EmbeddedResource Include="..\..\scripts\ps-bash-worker.ps1" LogicalName="ps-bash-worker.ps1" />

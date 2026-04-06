@@ -2,11 +2,21 @@ using PsBash.Core.Parser;
 
 namespace PsBash.Core.Transpiler;
 
+/// <summary>
+/// Transpiles bash commands to equivalent PowerShell.
+/// This is the recommended entry point for library consumers.
+/// </summary>
 public static class BashTranspiler
 {
     private static bool IsDebug =>
         Environment.GetEnvironmentVariable("PSBASH_DEBUG") == "1";
 
+    /// <summary>
+    /// Transpile a bash command string to PowerShell.
+    /// </summary>
+    /// <param name="bashCommand">The bash command to transpile.</param>
+    /// <returns>The equivalent PowerShell command string.</returns>
+    /// <exception cref="ParseException">Thrown when the bash input cannot be parsed.</exception>
     public static string Transpile(string bashCommand)
     {
         bool debug = IsDebug;
