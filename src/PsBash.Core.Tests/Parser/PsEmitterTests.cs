@@ -2149,6 +2149,41 @@ public class PsEmitterTests
         Assert.Equal("cat file.txt | Invoke-BashPaste \"-d,\" -s", result);
     }
 
+    [Fact]
+    public void Transpile_BraceRangeNonDivisibleStep_DoesNotOvershoot()
+    {
+        var result = PsEmitter.Transpile("echo {1..10..7}");
+        Assert.Equal("echo @(1,8)", result);
+    }
+
+    [Fact]
+    public void Transpile_BraceRangeNonDivisibleStepReverse_DoesNotOvershoot()
+    {
+        var result = PsEmitter.Transpile("echo {10..1..3}");
+        Assert.Equal("echo @(10,7,4,1)", result);
+    }
+
+    [Fact]
+    public void Transpile_BraceRangeStepDivisible_IncludesEnd()
+    {
+        var result = PsEmitter.Transpile("echo {1..10..3}");
+        Assert.Equal("echo @(1,4,7,10)", result);
+    }
+
+    [Fact]
+    public void Transpile_BraceRangeDefaultStep_Works()
+    {
+        var result = PsEmitter.Transpile("echo {1..5}");
+        Assert.Equal("echo 1..5", result);
+    }
+
+    [Fact]
+    public void Transpile_BraceRangeReverseDefaultStep_Works()
+    {
+        var result = PsEmitter.Transpile("echo {5..1}");
+        Assert.Equal("echo 5..1", result);
+    }
+
     private static CompoundWord MakeWord(string value) =>
         new(ImmutableArray.Create<WordPart>(new WordPart.Literal(value)));
 }

@@ -1195,14 +1195,14 @@ public static class PsEmitter
         var items = new List<string>();
         int step = range.Step != 0 ? Math.Abs(range.Step) * (range.Start <= range.End ? 1 : -1)
                                    : (range.Start <= range.End ? 1 : -1);
-        for (int v = range.Start; ; v += step)
+        for (int v = range.Start;
+             step > 0 ? v <= range.End : v >= range.End;
+             v += step)
         {
             if (range.ZeroPad > 0)
                 items.Add(v.ToString().PadLeft(range.ZeroPad, '0'));
             else
                 items.Add(v.ToString());
-
-            if (v == range.End) break;
         }
         return items;
     }
