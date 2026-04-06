@@ -1361,11 +1361,11 @@ public static class PsEmitter
             string arrayVar = $"${bvs.Name}";
             if (subscript is "@" or "*")
                 return arrayVar; // ${arr[@]} -> $arr (whole array)
-            // Numeric subscript: ${arr[0]} -> $arr[0]
+            // Numeric subscript: ${arr[0]} -> $arr[0] (or $($arr[0]) in double quotes)
             if (int.TryParse(subscript, out _))
-                return $"{arrayVar}[{subscript}]";
+                return inDoubleQuote ? $"$({arrayVar}[{subscript}])" : $"{arrayVar}[{subscript}]";
             // Associative key: ${map[key]} -> $map['key']
-            return $"{arrayVar}['{subscript}']";
+            return inDoubleQuote ? $"$({arrayVar}['{subscript}'])" : $"{arrayVar}['{subscript}']";
         }
 
         // Array length: ${#arr[@]} or ${#arr[*]} -> $arr.Count
@@ -1373,7 +1373,7 @@ public static class PsEmitter
         {
             string subscript = bvs.Suffix[2..^1]; // strip #[ and ]
             if (subscript is "@" or "*")
-                return $"${bvs.Name}.Count";
+                return inDoubleQuote ? $"$(${bvs.Name}.Count)" : $"${bvs.Name}.Count";
         }
 
         string varRef = EmitSimpleVar(bvs.Name);
