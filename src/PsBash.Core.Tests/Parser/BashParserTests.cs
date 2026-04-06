@@ -1446,4 +1446,91 @@ public class BashParserTests
         Assert.IsType<Command.ArithCommand>(list.Commands[0]);
         Assert.IsType<Command.Simple>(list.Commands[1]);
     }
+
+    // ── Additional error reporting tests ────────────────────────────────────
+
+    [Fact]
+    public void Parse_UnclosedSubshell_ThrowsParseExceptionWithPosition()
+    {
+        var ex = Assert.Throws<ParseException>(() => Parse("(echo hello"));
+
+        Assert.Equal(1, ex.Line);
+        Assert.Contains(")", ex.Message);
+        Assert.Equal("ParseSubshell", ex.Rule);
+    }
+
+    [Fact]
+    public void Parse_ForMissingDone_ThrowsParseException()
+    {
+        var ex = Assert.Throws<ParseException>(() => Parse("for x in a b c; do echo $x"));
+
+        Assert.Equal(1, ex.Line);
+        Assert.Contains("done", ex.Message);
+        Assert.NotEmpty(ex.Rule);
+    }
+
+    [Fact]
+    public void Parse_MissingThen_ThrowsParseException()
+    {
+        var ex = Assert.Throws<ParseException>(() => Parse("if true; echo hi; fi"));
+
+        Assert.Equal(1, ex.Line);
+        Assert.Contains("then", ex.Message);
+        Assert.Equal("Expect", ex.Rule);
+    }
+
+    [Fact]
+    public void Parse_ElifMissingFi_ThrowsParseException()
+    {
+        // if/elif without closing fi — the parser should throw at EOF.
+        var input = "if true; then echo a\nelif false; then echo b";
+
+        var ex = Assert.Throws<ParseException>(() => Parse(input));
+
+        Assert.True(ex.Line >= 1);
+        Assert.Contains("fi", ex.Message);
+    }
+
+    [Fact]
+    public void Parse_UnclosedSubshellMultiline_ReportsCorrectLine()
+    {
+        var input = "(\n  echo hello\n  echo world";
+
+        var ex = Assert.Throws<ParseException>(() => Parse(input));
+
+        Assert.True(ex.Line >= 3, $"Expected error on line 3 or later, got line {ex.Line}");
+        Assert.Contains(")", ex.Message);
+    }
+
+    [Fact]
+    public void Parse_CaseMissingCloseParen_ThrowsParseException()
+    {
+        // Pattern without closing ) before body
+        var input = "case $x in\n  a echo yes;;\nesac";
+
+        var ex = Assert.Throws<ParseException>(() => Parse(input));
+
+        Assert.True(ex.Line >= 1);
+        Assert.NotEmpty(ex.Rule);
+    }
+
+    [Fact]
+    public void Parse_MissingDoInWhile_ThrowsParseException()
+    {
+        var ex = Assert.Throws<ParseException>(() => Parse("while true; echo hi; done"));
+
+        Assert.Equal(1, ex.Line);
+        Assert.Contains("do", ex.Message);
+        Assert.Equal("Expect", ex.Rule);
+    }
+
+    [Fact]
+    public void Parse_MissingDoInFor_ThrowsParseException()
+    {
+        var ex = Assert.Throws<ParseException>(() => Parse("for x in a b c; echo $x; done"));
+
+        Assert.Equal(1, ex.Line);
+        Assert.Contains("do", ex.Message);
+        Assert.Equal("Expect", ex.Rule);
+    }
 }
