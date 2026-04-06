@@ -311,18 +311,29 @@ public static class PsEmitter
     {
         string expr = arith.Expr.Trim();
 
-        // Increment/decrement: x++ -> $env:x++, ++x -> ++$env:x
+        // Increment/decrement: env vars need assignment with [int] cast;
+        // loop/PS vars can use native ++ / -- operators.
         if (expr.EndsWith("++") || expr.EndsWith("--"))
         {
-            string varPart = expr[..^2].Trim();
-            if (!varPart.StartsWith('$')) varPart = ArithVarRef(varPart);
-            return varPart + expr[^2..];
+            string varName = expr[..^2].Trim();
+            string varRef = varName.StartsWith('$') ? varName : ArithVarRef(varName);
+            if (IsEnvVar(varRef))
+            {
+                string delta = expr.EndsWith("++") ? "1" : "-1";
+                return $"{varRef} = [int]{varRef} + {delta}";
+            }
+            return varRef + expr[^2..];
         }
         if (expr.StartsWith("++") || expr.StartsWith("--"))
         {
-            string varPart = expr[2..].Trim();
-            if (!varPart.StartsWith('$')) varPart = ArithVarRef(varPart);
-            return expr[..2] + varPart;
+            string varName = expr[2..].Trim();
+            string varRef = varName.StartsWith('$') ? varName : ArithVarRef(varName);
+            if (IsEnvVar(varRef))
+            {
+                string delta = expr.StartsWith("++") ? "1" : "-1";
+                return $"{varRef} = [int]{varRef} + {delta}";
+            }
+            return expr[..2] + varRef;
         }
 
         // Ternary: x > 0 ? 1 : 0 -> if ($x -gt 0) { 1 } else { 0 }
@@ -455,26 +466,32 @@ public static class PsEmitter
         clause = clause.Trim();
         if (clause.Length == 0) return "";
 
-        // Prefix bare variables with $
-        clause = PrefixBareVar(clause);
+        // Check for increment/decrement BEFORE PrefixBareVar to get clean var name
+        if (clause.EndsWith("++") || clause.EndsWith("--"))
+        {
+            string varName = clause[..^2].Trim();
+            string varRef = varName.StartsWith('$') ? varName : ArithVarRef(varName);
+            if (IsEnvVar(varRef))
+            {
+                string delta = clause.EndsWith("++") ? "1" : "-1";
+                return $"{varRef} = [int]{varRef} + {delta}";
+            }
+            return varRef + clause[^2..];
+        }
 
-        // Convert assignment: i=0 -> $env:i = 0
+        // Convert assignment before PrefixBareVar to separate LHS from RHS
         if (isInit && clause.Contains('=') && !clause.Contains("=="))
         {
             int eq = clause.IndexOf('=');
-            string varPart = clause[..eq].Trim();
-            string valPart = clause[(eq + 1)..].Trim();
-            if (!varPart.StartsWith('$')) varPart = ArithVarRef(varPart);
-            return $"{varPart} = {valPart}";
+            string varName = clause[..eq].Trim();
+            string valExpr = clause[(eq + 1)..].Trim();
+            string varRef = varName.StartsWith('$') ? varName : ArithVarRef(varName);
+            string valPart = PrefixBareVar(valExpr);
+            return $"{varRef} = {valPart}";
         }
 
-        // Convert increment/decrement: i++ -> $env:i++
-        if (clause.EndsWith("++") || clause.EndsWith("--"))
-        {
-            string varPart = clause[..^2].Trim();
-            if (!varPart.StartsWith('$')) varPart = ArithVarRef(varPart);
-            return varPart + clause[^2..];
-        }
+        // Prefix bare variables with $
+        clause = PrefixBareVar(clause);
 
         return clause;
     }
@@ -519,6 +536,8 @@ public static class PsEmitter
         return "$env:" + name;
     }
 
+    private static bool IsEnvVar(string varRef) => varRef.StartsWith("$env:");
+
     /// <summary>
     /// Prefix bare variable names in arithmetic expressions with the correct
     /// PowerShell variable form. Loop variables (tracked in <c>_loopVars</c>)
@@ -540,7 +559,7 @@ public static class PsEmitter
                     return "$" + name;
                 if (_loopVars is not null && _loopVars.Contains(name))
                     return "$" + name;
-                return "$env:" + name;
+                return "[int]$env:" + name;
             });
     }
 
@@ -1210,7 +1229,33 @@ public static class PsEmitter
 
     private static string EmitArithSub(WordPart.ArithSub arith)
     {
-        string expr = PrefixBareVar(arith.Expr);
+        string expr = arith.Expr.Trim();
+
+        // Handle increment/decrement inside $((i++)) etc.
+        // Env vars: return the arithmetic value (PS assignments are void in $()).
+        // Post-increment returns old value; pre-increment returns new value.
+        // Loop/PS vars can use native operators.
+        if (expr.EndsWith("++") || expr.EndsWith("--"))
+        {
+            string varName = expr[..^2].Trim();
+            string varRef = varName.StartsWith('$') ? varName : ArithVarRef(varName);
+            if (IsEnvVar(varRef))
+                return $"$([int]{varRef})";
+            return $"$({varRef}{expr[^2..]})";
+        }
+        if (expr.StartsWith("++") || expr.StartsWith("--"))
+        {
+            string varName = expr[2..].Trim();
+            string varRef = varName.StartsWith('$') ? varName : ArithVarRef(varName);
+            if (IsEnvVar(varRef))
+            {
+                string delta = expr.StartsWith("++") ? "1" : "-1";
+                return $"$([int]{varRef} + {delta})";
+            }
+            return $"$({expr[..2]}{varRef})";
+        }
+
+        expr = PrefixBareVar(expr);
         return $"$({expr})";
     }
 
