@@ -1342,7 +1342,7 @@ public static class PsEmitter
             "#" => "$args.Count",
             "0" => "$MyInvocation.MyCommand.Name",
             "$" => "$PID",
-            "!" => "$PID",
+            "!" => "$PID", // bash $! = last background PID; no PS equivalent, $PID is approximate
             "-" => "$PSBoundParameters",
             var d when d.Length == 1 && d[0] is >= '1' and <= '9' => $"$args[{int.Parse(d) - 1}]",
             _ => $"$env:{name}",
@@ -1803,70 +1803,8 @@ public static class PsEmitter
         return null;
     }
 
-    private static string EmitHead(ImmutableArray<CompoundWord> args)
-    {
-        var count = ExtractNumericFlag(args, "-n");
-        return count is not null
-            ? $"Invoke-BashHead -n {count}"
-            : "Invoke-BashHead";
-    }
-
-    private static string EmitTail(ImmutableArray<CompoundWord> args)
-    {
-        var count = ExtractNumericFlag(args, "-n");
-        return count is not null
-            ? $"Invoke-BashTail -n {count}"
-            : "Invoke-BashTail";
-    }
-
-    private static string EmitWc(ImmutableArray<CompoundWord> args)
-    {
-        if (args.Any(a => GetLiteralValue(a) == "-l"))
-            return "Invoke-BashWc -l";
-        return "Invoke-BashWc";
-    }
-
-    private static string EmitSort(ImmutableArray<CompoundWord> args)
-    {
-        var hasReverse = args.Any(a => GetLiteralValue(a) == "-r");
-        return hasReverse ? "Invoke-BashSort -r" : "Invoke-BashSort";
-    }
-
-    private static string EmitCut(ImmutableArray<CompoundWord> args)
-    {
-        string? delim = null;
-        string? field = null;
-
-        for (int i = 0; i < args.Length; i++)
-        {
-            var val = GetLiteralValue(args[i]);
-            if (val is null) continue;
-
-            if (val.StartsWith("-d") && val.Length > 2)
-            {
-                delim = val[2..];
-            }
-            else if (val == "-d" && i + 1 < args.Length)
-            {
-                delim = GetLiteralValue(args[++i]);
-            }
-            else if (val.StartsWith("-f") && val.Length > 2)
-            {
-                field = val[2..];
-            }
-            else if (val == "-f" && i + 1 < args.Length)
-            {
-                field = GetLiteralValue(args[++i]);
-            }
-        }
-
-        var sb = new StringBuilder("Invoke-BashCut");
-        if (delim is not null)
-            sb.Append($" -Delimiter {delim}");
-        if (field is not null)
-            sb.Append($" -Field {field}");
-        return sb.ToString();
-    }
+    // Dead code removed: EmitHead, EmitTail, EmitWc, EmitSort, EmitCut
+    // All pipe commands use EmitPassthrough per the passthrough principle.
 
     private static string EmitPassthrough(string cmdlet, ImmutableArray<CompoundWord> args)
     {
@@ -1890,10 +1828,8 @@ public static class PsEmitter
     {
         // Flags like -F, contain commas which are PowerShell array separators.
         // Flags like -I{} contain braces which PowerShell parses as scriptblocks.
-        // Quote them to prevent misinterpretation. Skip already-quoted args.
+        // Only applies to flag-style args starting with -.
         if (arg.Length < 2 || arg[0] != '-')
-            return false;
-        if (arg[0] == '"' || arg[0] == '\'')
             return false;
         return arg.Contains(',') || arg.Contains('{') || arg.Contains('}');
     }

@@ -92,6 +92,8 @@ public sealed class PwshWorker : IAsyncDisposable
     /// <summary>
     /// Build the combined init script that loads the module in-memory and starts
     /// the command loop. Sent via stdin — no temp files required.
+    /// NOTE: The worker loop below must stay in sync with scripts/ps-bash-worker.ps1
+    /// (used by the legacy -File path and e2e tests).
     /// </summary>
     private static string BuildInitScript()
     {
@@ -250,7 +252,9 @@ public sealed class PwshWorker : IAsyncDisposable
         try
         {
             _stdin.Close();
-            await _process.WaitForExitAsync();
+            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+            try { await _process.WaitForExitAsync(cts.Token); }
+            catch (OperationCanceledException) { _process.Kill(); }
         }
         finally
         {
