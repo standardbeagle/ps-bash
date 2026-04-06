@@ -20,6 +20,27 @@ public static class PsEmitter
     private static HashSet<string>? _loopVars;
 
     /// <summary>
+    /// Tracks nesting depth for generating unique loop iteration counter variable names.
+    /// </summary>
+    [ThreadStatic]
+    private static int _loopDepth;
+
+    private const int DefaultMaxIterations = 100_000;
+
+    private static string IterGuardPrefix(int depth)
+    {
+        var varName = depth == 0 ? "$__psbash_iter" : $"$__psbash_iter{depth}";
+        return $"{varName} = 0; ";
+    }
+
+    private static string IterGuardCheck(int depth)
+    {
+        var varName = depth == 0 ? "$__psbash_iter" : $"$__psbash_iter{depth}";
+        return $"if (++{varName} -gt ($env:PSBASH_MAX_ITERATIONS ?? {DefaultMaxIterations})) " +
+               $"{{ throw \"ps-bash: loop iteration limit exceeded ($(($env:PSBASH_MAX_ITERATIONS ?? {DefaultMaxIterations})))\" }}; ";
+    }
+
+    /// <summary>
     /// Commands that have PowerShell built-in aliases and should NOT be mapped
     /// to Invoke-Bash* when used as standalone (non-piped) commands.
     /// These work fine via PS aliases; only their piped forms need mapping.
@@ -93,33 +114,44 @@ public static class PsEmitter
 
     private static string EmitForIn(Command.ForIn forIn)
     {
-        var sb = new StringBuilder();
-
-        // Empty list means implicit $@ → $args
-        if (forIn.List.IsEmpty)
-        {
-            sb.Append($"foreach (${forIn.Var} in $args) {{ ");
-        }
-        else
-        {
-            sb.Append($"foreach (${forIn.Var} in ");
-            sb.Append(FormatForInList(forIn.List));
-            sb.Append(") { ");
-        }
-
-        var vars = _loopVars ??= new HashSet<string>();
-        bool added = vars.Add(forIn.Var);
+        int depth = _loopDepth++;
         try
         {
-            sb.Append(Emit(forIn.Body));
+            var sb = new StringBuilder();
+            sb.Append(IterGuardPrefix(depth));
+
+            // Empty list means implicit $@ -> $args
+            if (forIn.List.IsEmpty)
+            {
+                sb.Append($"foreach (${forIn.Var} in $args) {{ ");
+            }
+            else
+            {
+                sb.Append($"foreach (${forIn.Var} in ");
+                sb.Append(FormatForInList(forIn.List));
+                sb.Append(") { ");
+            }
+
+            sb.Append(IterGuardCheck(depth));
+
+            var vars = _loopVars ??= new HashSet<string>();
+            bool added = vars.Add(forIn.Var);
+            try
+            {
+                sb.Append(Emit(forIn.Body));
+            }
+            finally
+            {
+                if (added) vars.Remove(forIn.Var);
+            }
+
+            sb.Append(" }");
+            return sb.ToString();
         }
         finally
         {
-            if (added) vars.Remove(forIn.Var);
+            _loopDepth--;
         }
-
-        sb.Append(" }");
-        return sb.ToString();
     }
 
     private static string FormatForInList(ImmutableArray<CompoundWord> list)
@@ -175,53 +207,75 @@ public static class PsEmitter
 
     private static string EmitForArith(Command.ForArith forArith)
     {
-        // Register loop var before emitting header so init/cond/step all use $var
-        string? loopVar = ExtractArithVar(forArith.Init);
-        var vars = _loopVars ??= new HashSet<string>();
-        bool added = loopVar is not null && vars.Add(loopVar);
+        int depth = _loopDepth++;
         try
         {
-            var sb = new StringBuilder("for (");
-            sb.Append(TranslateArithClause(forArith.Init, isInit: true));
-            sb.Append("; ");
-            sb.Append(TranslateArithCondition(forArith.Cond));
-            sb.Append("; ");
-            sb.Append(TranslateArithClause(forArith.Step, isInit: false));
-            sb.Append(") { ");
-            sb.Append(Emit(forArith.Body));
-            sb.Append(" }");
-            return sb.ToString();
+            // Register loop var before emitting header so init/cond/step all use $var
+            string? loopVar = ExtractArithVar(forArith.Init);
+            var vars = _loopVars ??= new HashSet<string>();
+            bool added = loopVar is not null && vars.Add(loopVar);
+            try
+            {
+                var sb = new StringBuilder();
+                sb.Append(IterGuardPrefix(depth));
+                sb.Append("for (");
+                sb.Append(TranslateArithClause(forArith.Init, isInit: true));
+                sb.Append("; ");
+                sb.Append(TranslateArithCondition(forArith.Cond));
+                sb.Append("; ");
+                sb.Append(TranslateArithClause(forArith.Step, isInit: false));
+                sb.Append(") { ");
+                sb.Append(IterGuardCheck(depth));
+                sb.Append(Emit(forArith.Body));
+                sb.Append(" }");
+                return sb.ToString();
         }
         finally
         {
             if (added) vars.Remove(loopVar!);
         }
+        }
+        finally
+        {
+            _loopDepth--;
+        }
     }
 
     private static string EmitWhile(Command.While whileCmd)
     {
-        // Special case: while read VAR -> ForEach-Object pipeline
+        // Special case: while read VAR -> ForEach-Object pipeline (no infinite loop risk)
         if (IsWhileRead(whileCmd.Cond, out var readVar))
             return EmitWhileRead(readVar, whileCmd.Body);
 
-        var sb = new StringBuilder("while (");
-        var condText = EmitWhileCondition(whileCmd.Cond);
-
-        if (whileCmd.IsUntil)
+        int depth = _loopDepth++;
+        try
         {
-            sb.Append("-not (");
-            sb.Append(condText);
-            sb.Append(')');
-        }
-        else
-        {
-            sb.Append(condText);
-        }
+            var sb = new StringBuilder();
+            sb.Append(IterGuardPrefix(depth));
+            sb.Append("while (");
+            var condText = EmitWhileCondition(whileCmd.Cond);
 
-        sb.Append(") { ");
-        sb.Append(Emit(whileCmd.Body));
-        sb.Append(" }");
-        return sb.ToString();
+            if (whileCmd.IsUntil)
+            {
+                sb.Append("-not (");
+                sb.Append(condText);
+                sb.Append(')');
+            }
+            else
+            {
+                sb.Append(condText);
+            }
+
+            sb.Append(") { ");
+            sb.Append(IterGuardCheck(depth));
+            sb.Append(Emit(whileCmd.Body));
+            sb.Append(" }");
+            return sb.ToString();
+        }
+        finally
+        {
+            _loopDepth--;
+        }
     }
 
     private static string EmitCase(Command.Case caseCmd)

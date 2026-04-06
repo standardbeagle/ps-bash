@@ -888,7 +888,7 @@ public class PsEmitterTests
     {
         var result = PsEmitter.Transpile("for x in a b c; do echo $x; done");
 
-        Assert.Equal("foreach ($x in 'a','b','c') { echo $x }", result);
+        Assert.Equal("$__psbash_iter = 0; foreach ($x in 'a','b','c') { if (++$__psbash_iter -gt ($env:PSBASH_MAX_ITERATIONS ?? 100000)) { throw \"ps-bash: loop iteration limit exceeded ($(($env:PSBASH_MAX_ITERATIONS ?? 100000)))\" }; echo $x }", result);
     }
 
     [Fact]
@@ -896,7 +896,7 @@ public class PsEmitterTests
     {
         var result = PsEmitter.Transpile("for i in 1 2 3; do echo $i; done");
 
-        Assert.Equal("foreach ($i in 1,2,3) { echo $i }", result);
+        Assert.Equal("$__psbash_iter = 0; foreach ($i in 1,2,3) { if (++$__psbash_iter -gt ($env:PSBASH_MAX_ITERATIONS ?? 100000)) { throw \"ps-bash: loop iteration limit exceeded ($(($env:PSBASH_MAX_ITERATIONS ?? 100000)))\" }; echo $i }", result);
     }
 
     [Fact]
@@ -904,7 +904,7 @@ public class PsEmitterTests
     {
         var result = PsEmitter.Transpile("for f in *.txt; do cat $f; done");
 
-        Assert.Equal("foreach ($f in (Resolve-Path *.txt)) { cat $f }", result);
+        Assert.Equal("$__psbash_iter = 0; foreach ($f in (Resolve-Path *.txt)) { if (++$__psbash_iter -gt ($env:PSBASH_MAX_ITERATIONS ?? 100000)) { throw \"ps-bash: loop iteration limit exceeded ($(($env:PSBASH_MAX_ITERATIONS ?? 100000)))\" }; cat $f }", result);
     }
 
     [Fact]
@@ -912,7 +912,7 @@ public class PsEmitterTests
     {
         var result = PsEmitter.Transpile("for x; do echo $x; done");
 
-        Assert.Equal("foreach ($x in $args) { echo $x }", result);
+        Assert.Equal("$__psbash_iter = 0; foreach ($x in $args) { if (++$__psbash_iter -gt ($env:PSBASH_MAX_ITERATIONS ?? 100000)) { throw \"ps-bash: loop iteration limit exceeded ($(($env:PSBASH_MAX_ITERATIONS ?? 100000)))\" }; echo $x }", result);
     }
 
     [Fact]
@@ -920,7 +920,7 @@ public class PsEmitterTests
     {
         var result = PsEmitter.Transpile("for ((i=0; i<10; i++)); do echo $i; done");
 
-        Assert.Equal("for ($i = 0; $i -lt 10; $i++) { echo $i }", result);
+        Assert.Equal("$__psbash_iter = 0; for ($i = 0; $i -lt 10; $i++) { if (++$__psbash_iter -gt ($env:PSBASH_MAX_ITERATIONS ?? 100000)) { throw \"ps-bash: loop iteration limit exceeded ($(($env:PSBASH_MAX_ITERATIONS ?? 100000)))\" }; echo $i }", result);
     }
 
     [Fact]
@@ -946,7 +946,7 @@ public class PsEmitterTests
     {
         var result = PsEmitter.Transpile("while true; do echo hi; done");
 
-        Assert.Equal("while ($true) { echo hi }", result);
+        Assert.Equal("$__psbash_iter = 0; while ($true) { if (++$__psbash_iter -gt ($env:PSBASH_MAX_ITERATIONS ?? 100000)) { throw \"ps-bash: loop iteration limit exceeded ($(($env:PSBASH_MAX_ITERATIONS ?? 100000)))\" }; echo hi }", result);
     }
 
     [Fact]
@@ -954,7 +954,7 @@ public class PsEmitterTests
     {
         var result = PsEmitter.Transpile("while cmd; do body; done");
 
-        Assert.Equal("while (cmd) { body }", result);
+        Assert.Equal("$__psbash_iter = 0; while (cmd) { if (++$__psbash_iter -gt ($env:PSBASH_MAX_ITERATIONS ?? 100000)) { throw \"ps-bash: loop iteration limit exceeded ($(($env:PSBASH_MAX_ITERATIONS ?? 100000)))\" }; body }", result);
     }
 
     [Fact]
@@ -962,7 +962,7 @@ public class PsEmitterTests
     {
         var result = PsEmitter.Transpile("until cmd; do body; done");
 
-        Assert.Equal("while (-not (cmd)) { body }", result);
+        Assert.Equal("$__psbash_iter = 0; while (-not (cmd)) { if (++$__psbash_iter -gt ($env:PSBASH_MAX_ITERATIONS ?? 100000)) { throw \"ps-bash: loop iteration limit exceeded ($(($env:PSBASH_MAX_ITERATIONS ?? 100000)))\" }; body }", result);
     }
 
     [Fact]
@@ -989,7 +989,7 @@ public class PsEmitterTests
     {
         var result = PsEmitter.Transpile("while [ -f file ]; do echo yes; done");
 
-        Assert.Equal("while ((Test-Path \"file\" -PathType Leaf)) { echo yes }", result);
+        Assert.Equal("$__psbash_iter = 0; while ((Test-Path \"file\" -PathType Leaf)) { if (++$__psbash_iter -gt ($env:PSBASH_MAX_ITERATIONS ?? 100000)) { throw \"ps-bash: loop iteration limit exceeded ($(($env:PSBASH_MAX_ITERATIONS ?? 100000)))\" }; echo yes }", result);
     }
 
     [Fact]
@@ -997,7 +997,7 @@ public class PsEmitterTests
     {
         var result = PsEmitter.Transpile("until [ -f file ]; do sleep 1; done");
 
-        Assert.Equal("while (-not ((Test-Path \"file\" -PathType Leaf))) { sleep 1 }", result);
+        Assert.Equal("$__psbash_iter = 0; while (-not ((Test-Path \"file\" -PathType Leaf))) { if (++$__psbash_iter -gt ($env:PSBASH_MAX_ITERATIONS ?? 100000)) { throw \"ps-bash: loop iteration limit exceeded ($(($env:PSBASH_MAX_ITERATIONS ?? 100000)))\" }; sleep 1 }", result);
     }
 
     [Fact]
@@ -1005,7 +1005,7 @@ public class PsEmitterTests
     {
         var result = PsEmitter.Transpile("while true; do echo a; echo b; done");
 
-        Assert.Equal("while ($true) { echo a; echo b }", result);
+        Assert.Equal("$__psbash_iter = 0; while ($true) { if (++$__psbash_iter -gt ($env:PSBASH_MAX_ITERATIONS ?? 100000)) { throw \"ps-bash: loop iteration limit exceeded ($(($env:PSBASH_MAX_ITERATIONS ?? 100000)))\" }; echo a; echo b }", result);
     }
 
     [Fact]
@@ -1378,7 +1378,7 @@ public class PsEmitterTests
     public void Transpile_ForInGlobCharClass_EmitsResolvePath()
     {
         var result = PsEmitter.Transpile("for f in [abc]*.txt; do cat $f; done");
-        Assert.Equal("foreach ($f in (Resolve-Path [abc]*.txt)) { cat $f }", result);
+        Assert.Equal("$__psbash_iter = 0; foreach ($f in (Resolve-Path [abc]*.txt)) { if (++$__psbash_iter -gt ($env:PSBASH_MAX_ITERATIONS ?? 100000)) { throw \"ps-bash: loop iteration limit exceeded ($(($env:PSBASH_MAX_ITERATIONS ?? 100000)))\" }; cat $f }", result);
     }
 
     [Fact]
@@ -1487,7 +1487,7 @@ public class PsEmitterTests
     public void Transpile_ArrayIteration_EmitsForEachOverArray()
     {
         var result = PsEmitter.Transpile("for item in ${arr[@]}; do echo $item; done");
-        Assert.Equal("foreach ($item in $arr) { echo $item }", result);
+        Assert.Equal("$__psbash_iter = 0; foreach ($item in $arr) { if (++$__psbash_iter -gt ($env:PSBASH_MAX_ITERATIONS ?? 100000)) { throw \"ps-bash: loop iteration limit exceeded ($(($env:PSBASH_MAX_ITERATIONS ?? 100000)))\" }; echo $item }", result);
     }
 
     [Fact]
@@ -2182,6 +2182,46 @@ public class PsEmitterTests
     {
         var result = PsEmitter.Transpile("echo {5..1}");
         Assert.Equal("echo 5..1", result);
+    }
+
+    [Fact]
+    public void Transpile_WhileTrue_ContainsIterGuard()
+    {
+        var result = PsEmitter.Transpile("while true; do echo hi; done");
+        Assert.Contains("$__psbash_iter = 0;", result);
+        Assert.Contains("++$__psbash_iter", result);
+        Assert.Contains("PSBASH_MAX_ITERATIONS", result);
+        Assert.Contains("loop iteration limit exceeded", result);
+    }
+
+    [Fact]
+    public void Transpile_ForIn_ContainsIterGuard()
+    {
+        var result = PsEmitter.Transpile("for x in a b; do echo $x; done");
+        Assert.Contains("$__psbash_iter = 0;", result);
+        Assert.Contains("++$__psbash_iter", result);
+    }
+
+    [Fact]
+    public void Transpile_ForArith_ContainsIterGuard()
+    {
+        var result = PsEmitter.Transpile("for ((i=0; i<10; i++)); do echo $i; done");
+        Assert.Contains("$__psbash_iter = 0;", result);
+        Assert.Contains("++$__psbash_iter", result);
+    }
+
+    [Fact]
+    public void Transpile_WhileReadLine_NoIterGuard()
+    {
+        var result = PsEmitter.Transpile("while read line; do echo $line; done");
+        Assert.DoesNotContain("$__psbash_iter", result);
+    }
+
+    [Fact]
+    public void Transpile_IterGuard_DefaultIs100000()
+    {
+        var result = PsEmitter.Transpile("while true; do echo hi; done");
+        Assert.Contains("?? 100000)", result);
     }
 
     private static CompoundWord MakeWord(string value) =>
