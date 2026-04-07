@@ -487,6 +487,42 @@ public class AgentPatternEndToEndTests
         Assert.Equal("visible", stdout.Trim());
     }
 
+    [SkippableFact]
+    public async Task Redirect_InputRedirect_CatReadsFile()
+    {
+        Skip.If(PwshPath is null, "pwsh not available");
+
+        var (exitCode, stdout, _) = await RunShellAsync(
+            "-c", "echo hello > /tmp/psbash-input-redir-test.txt; cat < /tmp/psbash-input-redir-test.txt; rm /tmp/psbash-input-redir-test.txt");
+
+        Assert.Equal(0, exitCode);
+        Assert.Equal("hello", stdout.Trim());
+    }
+
+    [SkippableFact]
+    public async Task Array_LengthExpansion_ReturnsCount()
+    {
+        Skip.If(PwshPath is null, "pwsh not available");
+
+        var (exitCode, stdout, _) = await RunShellAsync(
+            "-c", "array=(one two three); echo ${#array[@]}");
+
+        Assert.Equal(0, exitCode);
+        Assert.Equal("3", stdout.Trim());
+    }
+
+    [SkippableFact]
+    public async Task Array_LengthExpansion_InDoubleQuotes()
+    {
+        Skip.If(PwshPath is null, "pwsh not available");
+
+        var (exitCode, stdout, _) = await RunShellAsync(
+            "-c", @"array=(one two three); echo ""count: ${#array[@]}""");
+
+        Assert.Equal(0, exitCode);
+        Assert.Equal("count: 3", stdout.Trim());
+    }
+
     // ── Tee /dev/null (fix: $null as file path) ─────────────────────────────
 
     [SkippableFact]
