@@ -622,73 +622,102 @@ function ConvertTo-PermissionString {
     $sb.ToString()
 }
 
-# --- Platform File Info Adapter ---
+# --- ls Provider Architecture ---
+# Three-tier strategy for Invoke-BashLs:
+#   1. Fast path  — real filesystem paths use System.IO streaming APIs (no Get-ChildItem, no Get-Acl)
+#   2. Custom providers — user-registered handlers for synthetic/virtual paths
+#   3. PS provider fallback — Get-ChildItem for Registry:, Cert:, Variable:, custom PSDrives, etc.
+#
+# Register a custom provider:
+#   Register-BashLsProvider -Name 'MyProvider' -Detect { param($path) $path.StartsWith('myfs:') } -List { param($path,$flags) <yield LsEntry objects> }
 
-function Get-BashFileInfo {
-    [CmdletBinding()]
-    [OutputType([PSCustomObject])]
+$script:BashLsProviders = [System.Collections.Generic.List[hashtable]]::new()
+
+function Register-BashLsProvider {
     param(
-        [Parameter(Mandatory)]
-        [System.IO.FileSystemInfo]$Item
+        [Parameter(Mandatory)][string]$Name,
+        [Parameter(Mandatory)][scriptblock]$Detect,   # ($path) -> $true if this provider handles it
+        [Parameter(Mandatory)][scriptblock]$List       # ($path, $flags) -> LsEntry objects
     )
+    $script:BashLsProviders.Add(@{ Name = $Name; Detect = $Detect; List = $List })
+}
 
-    $isDir = $Item -is [System.IO.DirectoryInfo]
-    $size = if ($isDir) { 4096 } else { $Item.Length }
-    $linkCount = 1
-    $owner = ''
-    $group = ''
-    $permString = 'rwxr-xr-x'
+# Build an LsEntry from a real System.IO.FileSystemInfo — no Get-Acl, no Get-ChildItem.
+function Get-LsEntryFromFsi {
+    [OutputType([PSCustomObject])]
+    param([Parameter(Mandatory)][System.IO.FileSystemInfo]$Item)
 
-    if (-not $IsWindows) {
-        $mode = [int]$Item.UnixFileMode
-        $permString = ConvertTo-PermissionString -Mode $mode
-        $statArgs = if ($IsMacOS) { @('-f', '%l %Su %Sg', $Item.FullName) } else { @('-c', '%h %U %G', $Item.FullName) }
-        $statOutput = & /usr/bin/stat @statArgs 2>$null
-        if ($statOutput) {
-            $parts = $statOutput -split ' ', 3
-            $linkCount = [int]$parts[0]
-            $owner = $parts[1]
-            $group = $parts[2]
-        }
-        if ($isDir) {
-            $size = 4096
-        }
+    $attrs    = $Item.Attributes
+    $isDir    = $Item -is [System.IO.DirectoryInfo]
+    $isLink   = [bool]($attrs -band [System.IO.FileAttributes]::ReparsePoint)
+    $typeChar = if ($isDir) { 'd' } elseif ($isLink) { 'l' } else { '-' }
+
+    if ($IsWindows) {
+        # Derive permissions from attributes — no ACL call (avoids Get-Acl latency and reserved-name failures)
+        $ro    = [bool]($attrs -band [System.IO.FileAttributes]::ReadOnly)
+        $execExts = '.exe','.bat','.cmd','.ps1','.sh','.com'
+        $isExec = $isDir -or ($execExts -contains $Item.Extension.ToLowerInvariant())
+        $r = 'r'; $w = if ($ro) { '-' } else { 'w' }; $x = if ($isExec) { 'x' } else { '-' }
+        $perm = "$typeChar$r$w$x$r-$x$r-$x"
+        $owner = $env:USERNAME; $group = $env:USERNAME
     } else {
-        try {
-            $acl = Get-Acl -LiteralPath $Item.FullName -ErrorAction Stop
-            $owner = ($acl.Owner -split '\\')[-1]
-            $group = ($acl.Group -split '\\')[-1]
-            $userRead = $false; $userWrite = $false; $userExec = $false
-            foreach ($rule in $acl.Access) {
-                $rights = $rule.FileSystemRights
-                if ($rights -band [System.Security.AccessControl.FileSystemRights]::Read) { $userRead = $true }
-                if ($rights -band [System.Security.AccessControl.FileSystemRights]::Write) { $userWrite = $true }
-                if ($rights -band [System.Security.AccessControl.FileSystemRights]::ExecuteFile) { $userExec = $true }
-            }
-            $u = "$(if ($userRead) {'r'} else {'-'})$(if ($userWrite) {'w'} else {'-'})$(if ($userExec) {'x'} else {'-'})"
-            $permString = "$u$u$u"
-        } catch {
-            $permString = if ($isDir) { 'rwxr-xr-x' } else { 'rw-r--r--' }
-            $owner = $env:USERNAME
-            $group = $env:USERNAME
-        }
+        $mode = [int]$Item.UnixFileMode
+        $perm = "$typeChar$(ConvertTo-PermissionString -Mode $mode)"
+        $owner = ''; $group = ''
+        $statArgs = if ($IsMacOS) { @('-f','%Su %Sg',$Item.FullName) } else { @('-c','%U %G',$Item.FullName) }
+        $statOut = & /usr/bin/stat @statArgs 2>$null
+        if ($statOut) { $parts = $statOut -split ' ',2; $owner = $parts[0]; $group = $parts[1] }
     }
-
-    $typeChar = if ($isDir) { 'd' } elseif ($Item.Attributes -band [System.IO.FileAttributes]::ReparsePoint) { 'l' } else { '-' }
 
     [PSCustomObject]@{
         PSTypeName   = 'PsBash.LsEntry'
         Name         = $Item.Name
         FullPath     = $Item.FullName
         IsDirectory  = $isDir
-        SizeBytes    = $size
-        Permissions  = "$typeChar$permString"
-        LinkCount    = $linkCount
+        IsSymlink    = $isLink
+        SizeBytes    = if ($isDir) { 4096L } else { ([System.IO.FileInfo]$Item).Length }
+        Permissions  = $perm
+        LinkCount    = 1
         Owner        = $owner
         Group        = $group
         LastModified = $Item.LastWriteTime
         BashText     = ''
     }
+}
+
+# Build a best-effort LsEntry from any PSItem (Registry key, Cert, custom PSDrive item, etc.)
+function Get-LsEntryFromPsItem {
+    [OutputType([PSCustomObject])]
+    param([Parameter(Mandatory)]$Item)
+
+    $name  = if ($Item.PSChildName) { $Item.PSChildName } elseif ($Item.Name) { $Item.Name } else { "$Item" }
+    $isDir = [bool]$Item.PSIsContainer
+    $size  = if ($Item.PSObject.Properties['Length']) { [long]$Item.Length } else { 0L }
+    $mtime = if ($Item.PSObject.Properties['LastWriteTime']) { $Item.LastWriteTime } else { [datetime]::MinValue }
+    $perm  = if ($isDir) { 'dr-xr-xr-x' } else { '-r--r--r--' }
+
+    [PSCustomObject]@{
+        PSTypeName   = 'PsBash.LsEntry'
+        Name         = $name
+        FullPath     = if ($Item.PSPath) { $Item.PSPath } else { $name }
+        IsDirectory  = $isDir
+        IsSymlink    = $false
+        SizeBytes    = $size
+        Permissions  = $perm
+        LinkCount    = 1
+        Owner        = ''
+        Group        = ''
+        LastModified = $mtime
+        BashText     = ''
+    }
+}
+
+# Kept for backward-compat callers outside of ls (find, stat).
+function Get-BashFileInfo {
+    [CmdletBinding()]
+    [OutputType([PSCustomObject])]
+    param([Parameter(Mandatory)][System.IO.FileSystemInfo]$Item)
+    Get-LsEntryFromFsi -Item $Item
 }
 
 # --- Format ls -l line ---
@@ -825,89 +854,125 @@ function Invoke-BashLs {
 
     $defs = New-FlagDefs -Entries @(
         '-l', 'long listing'
-        '-a', 'show hidden'
+        '-a', 'show hidden (dotfiles + Windows hidden attr)'
         '-h', 'human readable sizes'
         '-R', 'recursive'
         '-S', 'sort by size'
         '-t', 'sort by time'
         '-r', 'reverse sort'
         '-1', 'one per line'
+        '-p', 'append / to directories'
     )
 
-    $parsed = ConvertFrom-BashArgs -Arguments $Arguments -FlagDefs $defs
-
-    $longMode = $parsed.Flags['-l']
-    $showHidden = $parsed.Flags['-a']
-    $humanSizes = $parsed.Flags['-h']
+    $parsed    = ConvertFrom-BashArgs -Arguments $Arguments -FlagDefs $defs
+    $longMode  = $parsed.Flags['-l']
+    $showHidden= $parsed.Flags['-a']
+    $humanSizes= $parsed.Flags['-h']
     $recursive = $parsed.Flags['-R']
-    $sortBySize = $parsed.Flags['-S']
-    $sortByTime = $parsed.Flags['-t']
-    $reverseSort = $parsed.Flags['-r']
-    $onePerLine = $parsed.Flags['-1']
+    $sortBySize= $parsed.Flags['-S']
+    $sortByTime= $parsed.Flags['-t']
+    $reverseSort=$parsed.Flags['-r']
+    $classify  = $parsed.Flags['-p'] -or $longMode  # -l always shows type implicitly via perms; -p adds /
 
-    $targets = if ($parsed.Operands.Count -gt 0) { Resolve-BashGlob -Paths $parsed.Operands } else { @('.') }
+    $targets   = if ($parsed.Operands.Count -gt 0) { Resolve-BashGlob -Paths $parsed.Operands } else { @('.') }
 
-    $allEntries = [System.Collections.Generic.List[PSCustomObject]]::new()
-    $hadError = $false
+    $allEntries= [System.Collections.Generic.List[PSCustomObject]]::new()
+    $hadError  = $false
 
     foreach ($target in $targets) {
-        $item = Get-BashItem -Path $target -Command 'ls'
-        if ($null -eq $item) {
-            $hadError = $true
+
+        # ── Tier 1: custom provider ──────────────────────────────────────────
+        $customProvider = $null
+        foreach ($cp in $script:BashLsProviders) {
+            if (& $cp.Detect $target) { $customProvider = $cp; break }
+        }
+        if ($null -ne $customProvider) {
+            $flags = @{ Long=$longMode; Hidden=$showHidden; Recursive=$recursive }
+            foreach ($e in (& $customProvider.List $target $flags)) { $allEntries.Add($e) }
             continue
         }
 
-        if ($item -is [System.IO.DirectoryInfo]) {
-            $children = if ($recursive) {
-                Get-ChildItem -LiteralPath $target -Force -Recurse -ErrorAction SilentlyContinue
+        # ── Tier 2: real filesystem — System.IO streaming ───────────────────
+        $resolvedPath = $null
+        try { $resolvedPath = [System.IO.Path]::GetFullPath($target) } catch { }
+
+        if ($null -ne $resolvedPath -and [System.IO.Directory]::Exists($resolvedPath)) {
+            try {
+                $dirInfo = [System.IO.DirectoryInfo]::new($resolvedPath)
+                $searchOpt = if ($recursive) {
+                    [System.IO.SearchOption]::AllDirectories
+                } else {
+                    [System.IO.SearchOption]::TopDirectoryOnly
+                }
+                foreach ($fsi in $dirInfo.EnumerateFileSystemInfos('*', $searchOpt)) {
+                    $attrs = $fsi.Attributes
+                    if (-not $showHidden) {
+                        if ($fsi.Name[0] -eq '.') { continue }
+                        if ($IsWindows -and ($attrs -band [System.IO.FileAttributes]::Hidden)) { continue }
+                    }
+                    $allEntries.Add((Get-LsEntryFromFsi -Item $fsi))
+                }
+            } catch {
+                Write-BashError "ls: cannot open directory '$target': $($_.Exception.Message)" -ExitCode 2
+                $hadError = $true
+            }
+            continue
+        }
+
+        if ($null -ne $resolvedPath -and [System.IO.File]::Exists($resolvedPath)) {
+            $allEntries.Add((Get-LsEntryFromFsi -Item ([System.IO.FileInfo]::new($resolvedPath))))
+            continue
+        }
+
+        # ── Tier 3: PS provider fallback (Registry:, Cert:, custom PSDrives) ─
+        $psItem = $null
+        try { $psItem = Get-Item -LiteralPath $target -Force -ErrorAction Stop } catch { }
+
+        if ($null -ne $psItem) {
+            if ($psItem.PSIsContainer) {
+                $children = Get-ChildItem -LiteralPath $target -Force -ErrorAction SilentlyContinue
+                foreach ($child in $children) {
+                    if (-not $showHidden -and $child.Name[0] -eq '.') { continue }
+                    $allEntries.Add((Get-LsEntryFromPsItem -Item $child))
+                }
             } else {
-                Get-ChildItem -LiteralPath $target -Force -ErrorAction SilentlyContinue
+                $allEntries.Add((Get-LsEntryFromPsItem -Item $psItem))
             }
-            foreach ($child in $children) {
-                if (-not $showHidden -and $child.Name.StartsWith('.')) { continue }
-                $entry = Get-BashFileInfo -Item $child
-                $allEntries.Add($entry)
-            }
-        } else {
-            $entry = Get-BashFileInfo -Item $item
-            $allEntries.Add($entry)
+            continue
         }
+
+        Write-BashError "ls: cannot access '$target': No such file or directory" -ExitCode 2
+        $hadError = $true
     }
 
-    if ($sortBySize) {
-        $sorted = $allEntries | Sort-Object -Property SizeBytes -Descending
-        $allEntries = [System.Collections.Generic.List[PSCustomObject]]::new()
-        foreach ($e in $sorted) { $allEntries.Add($e) }
+    # ── Sort ─────────────────────────────────────────────────────────────────
+    # Bash default: case-insensitive alphabetical, dirs and files interleaved
+    $sorted = if ($sortBySize) {
+        $allEntries | Sort-Object -Property SizeBytes -Descending:(-not $reverseSort)
     } elseif ($sortByTime) {
-        $sorted = $allEntries | Sort-Object -Property LastModified -Descending
-        $allEntries = [System.Collections.Generic.List[PSCustomObject]]::new()
-        foreach ($e in $sorted) { $allEntries.Add($e) }
-    }
-
-    if ($reverseSort) {
-        $reversed = [System.Collections.Generic.List[PSCustomObject]]::new()
-        for ($i = $allEntries.Count - 1; $i -ge 0; $i--) {
-            $reversed.Add($allEntries[$i])
-        }
-        $allEntries = $reversed
-    }
-
-    if ($longMode) {
-        foreach ($entry in $allEntries) {
-            $line = Format-LsLine -Entry $entry -HumanReadable:$humanSizes
-            $entry.BashText = "$line`n"
-            Set-BashDisplayProperty $entry
-        }
+        $allEntries | Sort-Object -Property LastModified -Descending:(-not $reverseSort)
     } else {
-        foreach ($entry in $allEntries) {
-            $entry.BashText = "$(Get-LsDisplayName -Entry $entry)`n"
-            Set-BashDisplayProperty $entry
-        }
+        $cmp = [System.StringComparer]::OrdinalIgnoreCase
+        $ordered = [System.Linq.Enumerable]::OrderBy(
+            [System.Collections.Generic.IEnumerable[PSCustomObject]]$allEntries,
+            [System.Func[PSCustomObject,string]]{ param($e) $e.Name },
+            $cmp)
+        if ($reverseSort) { [System.Linq.Enumerable]::Reverse($ordered) } else { $ordered }
     }
 
-    if ($hadError) {
-        $global:LASTEXITCODE = 2
+    # ── Format and emit ───────────────────────────────────────────────────────
+    foreach ($entry in $sorted) {
+        if ($longMode) {
+            $entry.BashText = "$(Format-LsLine -Entry $entry -HumanReadable:$humanSizes)`n"
+        } else {
+            $name = $entry.Name
+            if ($classify -and $entry.IsDirectory) { $name += '/' }
+            $entry.BashText = "$name`n"
+        }
+        Set-BashDisplayProperty $entry
     }
+
+    if ($hadError) { $global:LASTEXITCODE = 2 }
 }
 
 # --- cat Command ---
