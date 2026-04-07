@@ -2,6 +2,36 @@
 
 Set-StrictMode -Version Latest
 
+# --- Error Mode ---
+# Controls how errors are reported:
+#   'Bash'       — errors go to stderr via [Console]::Error, no PS error records,
+#                   $global:LASTEXITCODE set on every failure (default)
+#   'PowerShell' — errors use Write-Error (PS error records with stack traces)
+$script:BashErrorMode = 'Bash'
+
+function Set-BashErrorMode {
+    param([ValidateSet('Bash','PowerShell')][string]$Mode)
+    $script:BashErrorMode = $Mode
+}
+
+function Write-BashError {
+    <#
+    .SYNOPSIS
+        Emit a bash-style error to stderr and set $global:LASTEXITCODE.
+        In PowerShell mode, falls back to Write-Error.
+    #>
+    param(
+        [Parameter(Mandatory)][string]$Message,
+        [int]$ExitCode = 1
+    )
+    $global:LASTEXITCODE = $ExitCode
+    if ($script:BashErrorMode -eq 'Bash') {
+        [Console]::Error.WriteLine($Message)
+    } else {
+        Write-Error -Message $Message -ErrorAction Continue
+    }
+}
+
 # --- Platform Detection ---
 
 function Get-BashPlatform {
@@ -43,6 +73,177 @@ function Invoke-ProcessSub {
     }
 }
 
+# --- Centralized File I/O Helpers ---
+
+function Read-BashFileBytes {
+    <#
+    .SYNOPSIS
+        Read a file as bytes with BOM-aware UTF-8 decoding and CRLF normalization.
+        Returns $null and writes a bash-style error on failure.
+    #>
+    [CmdletBinding()]
+    [OutputType([string])]
+    param(
+        [Parameter(Mandatory)]
+        [string]$Path,
+
+        [Parameter(Mandatory)]
+        [string]$Command
+    )
+
+    try {
+        $bytes = [System.IO.File]::ReadAllBytes($Path)
+    } catch {
+        $normalized = $Path -replace '\\', '/'
+        Write-BashError -Message "${Command}: ${normalized}: $($_.Exception.Message)"
+        return $null
+    }
+
+    $byteOffset = 0
+    if ($bytes.Length -ge 3 -and $bytes[0] -eq 0xEF -and $bytes[1] -eq 0xBB -and $bytes[2] -eq 0xBF) {
+        $byteOffset = 3
+    }
+    $rawText = [System.Text.Encoding]::UTF8.GetString($bytes, $byteOffset, $bytes.Length - $byteOffset)
+    $rawText -replace "`r`n", "`n"
+}
+
+function Read-BashFileLines {
+    <#
+    .SYNOPSIS
+        Read a file into an array of lines (no trailing newlines on each line).
+        Returns $null and writes a bash-style error on failure.
+    #>
+    [CmdletBinding()]
+    [OutputType([string[]])]
+    param(
+        [Parameter(Mandatory)]
+        [string]$Path,
+
+        [Parameter(Mandatory)]
+        [string]$Command
+    )
+
+    $rawText = Read-BashFileBytes -Path $Path -Command $Command
+    if ($null -eq $rawText) { return $null }
+
+    if ($rawText.EndsWith("`n")) {
+        $rawText = $rawText.Substring(0, $rawText.Length - 1)
+    }
+    $rawText.Split("`n")
+}
+
+function Write-BashFileText {
+    <#
+    .SYNOPSIS
+        Write text to a file. Returns $true on success, $false on failure.
+    #>
+    [CmdletBinding()]
+    [OutputType([bool])]
+    param(
+        [Parameter(Mandatory)]
+        [string]$Path,
+
+        [Parameter(Mandatory)]
+        [AllowEmptyString()]
+        [string]$Text,
+
+        [Parameter(Mandatory)]
+        [string]$Command,
+
+        [switch]$Append
+    )
+
+    try {
+        if ($Append) {
+            [System.IO.File]::AppendAllText($Path, $Text)
+        } else {
+            [System.IO.File]::WriteAllText($Path, $Text)
+        }
+        return $true
+    } catch {
+        $normalized = $Path -replace '\\', '/'
+        Write-BashError -Message "${Command}: ${normalized}: $($_.Exception.Message)"
+        return $false
+    }
+}
+
+function Get-BashItem {
+    <#
+    .SYNOPSIS
+        Wrapper around Get-Item -LiteralPath -Force with error handling.
+        Returns $null and writes a bash-style error on failure.
+    #>
+    [CmdletBinding()]
+    [OutputType([System.IO.FileSystemInfo])]
+    param(
+        [Parameter(Mandatory)]
+        [string]$Path,
+
+        [Parameter(Mandatory)]
+        [string]$Command
+    )
+
+    try {
+        Get-Item -LiteralPath $Path -Force -ErrorAction Stop
+    } catch {
+        $normalized = $Path -replace '\\', '/'
+        Write-BashError -Message "${Command}: cannot access '${normalized}': $($_.Exception.Message)"
+        return $null
+    }
+}
+
+function Read-BashFileRaw {
+    <#
+    .SYNOPSIS
+        Read a file as raw bytes. Returns $null and writes a bash-style error on failure.
+    #>
+    [CmdletBinding()]
+    [OutputType([byte[]])]
+    param(
+        [Parameter(Mandatory)]
+        [string]$Path,
+
+        [Parameter(Mandatory)]
+        [string]$Command
+    )
+
+    try {
+        [System.IO.File]::ReadAllBytes($Path)
+    } catch {
+        $normalized = $Path -replace '\\', '/'
+        Write-BashError -Message "${Command}: ${normalized}: $($_.Exception.Message)"
+        return $null
+    }
+}
+
+function Write-BashFileRaw {
+    <#
+    .SYNOPSIS
+        Write raw bytes to a file. Returns $true on success, $false on failure.
+    #>
+    [CmdletBinding()]
+    [OutputType([bool])]
+    param(
+        [Parameter(Mandatory)]
+        [string]$Path,
+
+        [Parameter(Mandatory)]
+        [byte[]]$Data,
+
+        [Parameter(Mandatory)]
+        [string]$Command
+    )
+
+    try {
+        [System.IO.File]::WriteAllBytes($Path, $Data)
+        return $true
+    } catch {
+        $normalized = $Path -replace '\\', '/'
+        Write-BashError -Message "${Command}: ${normalized}: $($_.Exception.Message)"
+        return $false
+    }
+}
+
 # --- BashObject Factory ---
 
 function Set-BashDisplayProperty {
@@ -67,7 +268,9 @@ function New-BashObject {
         [Parameter()]
         [string]$TypeName = 'PsBash.TextOutput',
 
-        [switch]$NoTrailingNewline
+        [switch]$NoTrailingNewline,
+
+        [string]$Command
     )
 
     if (-not $NoTrailingNewline -and $BashText.Length -gt 0 -and -not $BashText.EndsWith("`n")) {
@@ -78,6 +281,9 @@ function New-BashObject {
         PSTypeName = $TypeName
         BashText   = $BashText
     }
+    if ($Command) {
+        $obj | Add-Member -NotePropertyName Command -NotePropertyValue $Command
+    }
     Set-BashDisplayProperty $obj
 }
 
@@ -87,7 +293,7 @@ function Emit-BashLine {
     # Sources (printf, echo -e, heredocs) call this for text output.
     # New-BashObject stays unchanged for typed objects (LsEntry, CatLine, PsEntry).
     # Accepts -Text parameter (direct call) or pipeline input (heredoc piping).
-    param([string]$Text)
+    param([string]$Text, [string]$Command)
     $pipelineInput = @($input)
     if (-not $Text -and $pipelineInput.Count -gt 0) {
         $Text = $pipelineInput -join "`n"
@@ -96,11 +302,12 @@ function Emit-BashLine {
     $hasTrailingNewline = $Text.EndsWith("`n")
     $stripped = if ($hasTrailingNewline) { $Text.Substring(0, $Text.Length - 1) } else { $Text }
     $lines = $stripped -split "`n"
+    $cmdSplat = if ($Command) { @{ Command = $Command } } else { @{} }
     for ($li = 0; $li -lt $lines.Count; $li++) {
         if ($li -lt $lines.Count - 1 -or $hasTrailingNewline) {
-            New-BashObject -BashText "$($lines[$li])`n"
+            New-BashObject -BashText "$($lines[$li])`n" @cmdSplat
         } else {
-            New-BashObject -BashText $lines[$li] -NoTrailingNewline
+            New-BashObject -BashText $lines[$li] -NoTrailingNewline @cmdSplat
         }
     }
 }
@@ -233,6 +440,8 @@ function New-FlagDefs {
 # --- echo Command ---
 
 function Invoke-BashEcho {
+    [OutputType('PsBash.TextOutput')]
+    param()
     $Arguments = [string[]]$args
     if ($Arguments -contains '--help') { return Show-BashHelp 'echo' }
 
@@ -254,17 +463,20 @@ function Invoke-BashEcho {
         $text = $text + "`n"
     }
 
-    Emit-BashLine -Text $text
+    Emit-BashLine -Text $text -Command 'echo'
 }
 
 # --- printf Command ---
 
 function Invoke-BashPrintf {
+    [OutputType('PsBash.TextOutput')]
+    param()
     $Arguments = [string[]]$args
     if ($Arguments -contains '--help') { return Show-BashHelp 'printf' }
 
     if (-not $Arguments -or $Arguments.Count -eq 0) {
-        throw 'printf: usage: printf format [arguments]'
+        Write-BashError -Message 'printf: usage: printf format [arguments]' -ExitCode 2
+        return
     }
 
     $format = $Arguments[0]
@@ -321,7 +533,7 @@ function Invoke-BashPrintf {
 
     $result = $sb.ToString() -replace "`0ESCAPED_PERCENT`0", '%'
 
-    Emit-BashLine -Text $result
+    Emit-BashLine -Text $result -Command 'printf'
 }
 
 # --- Human-readable Size Formatter ---
@@ -437,7 +649,7 @@ function Get-BashFileInfo {
         }
     } else {
         try {
-            $acl = Get-Acl -Path $Item.FullName
+            $acl = Get-Acl -LiteralPath $Item.FullName -ErrorAction Stop
             $owner = ($acl.Owner -split '\\')[-1]
             $group = ($acl.Group -split '\\')[-1]
             $userRead = $false; $userWrite = $false; $userExec = $false
@@ -600,6 +812,8 @@ function Format-LsGrid {
 # --- ls Command ---
 
 function Invoke-BashLs {
+    [OutputType('PsBash.LsEntry')]
+    param()
     $Arguments = [string[]]$args
     if ($Arguments -contains '--help') { return Show-BashHelp 'ls' }
 
@@ -631,19 +845,17 @@ function Invoke-BashLs {
     $hadError = $false
 
     foreach ($target in $targets) {
-        if (-not (Test-Path -LiteralPath $target)) {
-            $msg = "ls: cannot access '$target': No such file or directory"
-            Write-Error -Message $msg -ErrorAction Continue
+        $item = Get-BashItem -Path $target -Command 'ls'
+        if ($null -eq $item) {
             $hadError = $true
             continue
         }
 
-        $item = Get-Item -LiteralPath $target -Force
         if ($item -is [System.IO.DirectoryInfo]) {
             $children = if ($recursive) {
-                Get-ChildItem -LiteralPath $target -Force -Recurse
+                Get-ChildItem -LiteralPath $target -Force -Recurse -ErrorAction SilentlyContinue
             } else {
-                Get-ChildItem -LiteralPath $target -Force
+                Get-ChildItem -LiteralPath $target -Force -ErrorAction SilentlyContinue
             }
             foreach ($child in $children) {
                 if (-not $showHidden -and $child.Name.StartsWith('.')) { continue }
@@ -674,29 +886,11 @@ function Invoke-BashLs {
         $allEntries = $reversed
     }
 
-    $gridMode = -not $longMode -and -not $onePerLine
-
     if ($longMode) {
         foreach ($entry in $allEntries) {
             $line = Format-LsLine -Entry $entry -HumanReadable:$humanSizes
             $entry.BashText = $line
             Set-BashDisplayProperty $entry
-        }
-    } elseif ($gridMode -and $allEntries.Count -gt 0) {
-        $displayNames = [string[]]::new($allEntries.Count)
-        for ($i = 0; $i -lt $allEntries.Count; $i++) {
-            $displayNames[$i] = Get-LsDisplayName -Entry $allEntries[$i]
-        }
-
-        $termWidth = 80
-        try {
-            $w = $Host.UI.RawUI.WindowSize.Width
-            if ($w -gt 0) { $termWidth = $w }
-        } catch { }
-
-        $gridLines = Format-LsGrid -Names $displayNames -TerminalWidth $termWidth
-        foreach ($line in $gridLines) {
-            New-BashObject -BashText $line -TypeName 'PsBash.TextOutput'
         }
     } else {
         foreach ($entry in $allEntries) {
@@ -705,7 +899,7 @@ function Invoke-BashLs {
         }
     }
 
-    if ($hadError -and $allEntries.Count -eq 0) {
+    if ($hadError) {
         $global:LASTEXITCODE = 2
     }
 }
@@ -713,6 +907,8 @@ function Invoke-BashLs {
 # --- cat Command ---
 
 function Invoke-BashCat {
+    [OutputType('PsBash.CatLine')]
+    param()
     $Arguments = [string[]]$args
     $pipelineInput = @($input)
     if ($Arguments -contains '--help') { return Show-BashHelp 'cat' }
@@ -798,29 +994,9 @@ function Invoke-BashCat {
     $fileOperands = @($operands | Where-Object { $_ -ne '-' })
     $resolvedFiles = Resolve-BashGlob -Paths $fileOperands
     foreach ($filePath in $resolvedFiles) {
-        if (-not (Test-Path -LiteralPath $filePath)) {
-            $normalized = $filePath -replace '\\', '/'
-            $msg = "cat: ${normalized}: No such file or directory"
-            Write-Error -Message $msg -ErrorAction Continue
-            $hadError = $true
-            continue
-        }
+        $lines = Read-BashFileLines -Path $filePath -Command 'cat'
+        if ($null -eq $lines) { $hadError = $true; continue }
 
-        $bytes = [System.IO.File]::ReadAllBytes($filePath)
-
-        $byteOffset = 0
-        if ($bytes.Length -ge 3 -and $bytes[0] -eq 0xEF -and $bytes[1] -eq 0xBB -and $bytes[2] -eq 0xBF) {
-            $byteOffset = 3
-        }
-
-        $rawText = [System.Text.Encoding]::UTF8.GetString($bytes, $byteOffset, $bytes.Length - $byteOffset)
-        $rawText = $rawText -replace "`r`n", "`n"
-
-        if ($rawText.EndsWith("`n")) {
-            $rawText = $rawText.Substring(0, $rawText.Length - 1)
-        }
-
-        $lines = $rawText.Split("`n")
         foreach ($line in $lines) {
             & $emitLine $line $filePath
         }
@@ -834,6 +1010,8 @@ function Invoke-BashCat {
 # --- File Redirect Helper ---
 
 function Invoke-BashRedirect {
+    [OutputType('PsBash.TextOutput')]
+    param()
     $Arguments = [string[]]$args
     $pipelineInput = @($input)
 
@@ -887,6 +1065,8 @@ function Get-BashText {
 # --- grep Command ---
 
 function Invoke-BashGrep {
+    [OutputType('PsBash.GrepMatch')]
+    param()
     $Arguments = [string[]]$args
     $pipelineInput = @($input)
     if ($Arguments -contains '--help') { return Show-BashHelp 'grep' }
@@ -968,7 +1148,8 @@ function Invoke-BashGrep {
     }
 
     if ($operands.Count -eq 0) {
-        throw 'grep: usage: grep [options] pattern [file ...]'
+        Write-BashError -Message 'grep: usage: grep [options] pattern [file ...]' -ExitCode 2
+        return
     }
 
     $pattern = $operands[0]
@@ -1048,7 +1229,7 @@ function Invoke-BashGrep {
     } else {
         foreach ($fp in $fileOperands) {
             if (-not (Test-Path -LiteralPath $fp)) {
-                Write-Error -Message "grep: ${fp}: No such file or directory" -ErrorAction Continue
+                Write-BashError -Message "grep: ${fp}: No such file or directory" -ExitCode 2
                 continue
             }
             $filePaths.Add((Resolve-Path -LiteralPath $fp).Path)
@@ -1061,17 +1242,8 @@ function Invoke-BashGrep {
     $totalMatchCount = 0
 
     foreach ($filePath in (Resolve-BashGlob -Paths $filePaths)) {
-        $bytes = [System.IO.File]::ReadAllBytes($filePath)
-        $byteOffset = 0
-        if ($bytes.Length -ge 3 -and $bytes[0] -eq 0xEF -and $bytes[1] -eq 0xBB -and $bytes[2] -eq 0xBF) {
-            $byteOffset = 3
-        }
-        $rawText = [System.Text.Encoding]::UTF8.GetString($bytes, $byteOffset, $bytes.Length - $byteOffset)
-        $rawText = $rawText -replace "`r`n", "`n"
-        if ($rawText.EndsWith("`n")) {
-            $rawText = $rawText.Substring(0, $rawText.Length - 1)
-        }
-        $lines = $rawText.Split("`n")
+        $lines = Read-BashFileLines -Path $filePath -Command 'grep'
+        if ($null -eq $lines) { continue }
 
         $matchIndices = [System.Collections.Generic.List[int]]::new()
         for ($li = 0; $li -lt $lines.Count; $li++) {
@@ -1244,6 +1416,8 @@ function ConvertFrom-MonthName {
 # --- sort Command ---
 
 function Invoke-BashSort {
+    [OutputType('PsBash.TextOutput')]
+    param()
     $Arguments = [string[]]$args
     $pipelineInput = @($input)
     if ($Arguments -contains '--help') { return Show-BashHelp 'sort' }
@@ -1350,21 +1524,9 @@ function Invoke-BashSort {
     }
 
     foreach ($filePath in (Resolve-BashGlob -Paths $operands)) {
-        if (-not (Test-Path -LiteralPath $filePath)) {
-            Write-Error -Message "sort: cannot read: ${filePath}: No such file or directory" -ErrorAction Continue
-            continue
-        }
-        $bytes = [System.IO.File]::ReadAllBytes($filePath)
-        $byteOffset = 0
-        if ($bytes.Length -ge 3 -and $bytes[0] -eq 0xEF -and $bytes[1] -eq 0xBB -and $bytes[2] -eq 0xBF) {
-            $byteOffset = 3
-        }
-        $rawText = [System.Text.Encoding]::UTF8.GetString($bytes, $byteOffset, $bytes.Length - $byteOffset)
-        $rawText = $rawText -replace "`r`n", "`n"
-        if ($rawText.EndsWith("`n")) {
-            $rawText = $rawText.Substring(0, $rawText.Length - 1)
-        }
-        foreach ($line in $rawText.Split("`n")) {
+        $fileLines = Read-BashFileLines -Path $filePath -Command 'sort'
+        if ($null -eq $fileLines) { continue }
+        foreach ($line in $fileLines) {
             $items.Add((New-BashObject -BashText $line))
         }
     }
@@ -1493,6 +1655,8 @@ function Invoke-BashSort {
 # --- head Command ---
 
 function Invoke-BashHead {
+    [OutputType('PsBash.TextOutput')]
+    param()
     $Arguments = [string[]]$args
     $pipelineInput = @($input)
     if ($Arguments -contains '--help') { return Show-BashHelp 'head' }
@@ -1574,23 +1738,9 @@ function Invoke-BashHead {
     # File mode — resolve globs
     $resolvedFiles = Resolve-BashGlob -Paths $operands
     foreach ($filePath in $resolvedFiles) {
-        if (-not (Test-Path -LiteralPath $filePath)) {
-            Write-Error -Message "head: cannot open '$filePath' for reading: No such file or directory" -ErrorAction Continue
-            continue
-        }
+        $lines = Read-BashFileLines -Path $filePath -Command 'head'
+        if ($null -eq $lines) { continue }
 
-        $bytes = [System.IO.File]::ReadAllBytes($filePath)
-        $byteOffset = 0
-        if ($bytes.Length -ge 3 -and $bytes[0] -eq 0xEF -and $bytes[1] -eq 0xBB -and $bytes[2] -eq 0xBF) {
-            $byteOffset = 3
-        }
-        $rawText = [System.Text.Encoding]::UTF8.GetString($bytes, $byteOffset, $bytes.Length - $byteOffset)
-        $rawText = $rawText -replace "`r`n", "`n"
-        if ($rawText.EndsWith("`n")) {
-            $rawText = $rawText.Substring(0, $rawText.Length - 1)
-        }
-
-        $lines = $rawText.Split("`n")
         $lineCount = [System.Math]::Min($count, $lines.Count)
         for ($li = 0; $li -lt $lineCount; $li++) {
             $obj = [PSCustomObject]@{
@@ -1608,6 +1758,8 @@ function Invoke-BashHead {
 # --- tail Command ---
 
 function Invoke-BashTail {
+    [OutputType('PsBash.TextOutput')]
+    param()
     $Arguments = [string[]]$args
     $pipelineInput = @($input)
     if ($Arguments -contains '--help') { return Show-BashHelp 'tail' }
@@ -1712,23 +1864,8 @@ function Invoke-BashTail {
     # File mode — resolve globs
     $resolvedFiles = Resolve-BashGlob -Paths $operands
     foreach ($filePath in $resolvedFiles) {
-        if (-not (Test-Path -LiteralPath $filePath)) {
-            Write-Error -Message "tail: cannot open '$filePath' for reading: No such file or directory" -ErrorAction Continue
-            continue
-        }
-
-        $bytes = [System.IO.File]::ReadAllBytes($filePath)
-        $byteOffset = 0
-        if ($bytes.Length -ge 3 -and $bytes[0] -eq 0xEF -and $bytes[1] -eq 0xBB -and $bytes[2] -eq 0xBF) {
-            $byteOffset = 3
-        }
-        $rawText = [System.Text.Encoding]::UTF8.GetString($bytes, $byteOffset, $bytes.Length - $byteOffset)
-        $rawText = $rawText -replace "`r`n", "`n"
-        if ($rawText.EndsWith("`n")) {
-            $rawText = $rawText.Substring(0, $rawText.Length - 1)
-        }
-
-        $lines = $rawText.Split("`n")
+        $lines = Read-BashFileLines -Path $filePath -Command 'tail'
+        if ($null -eq $lines) { continue }
 
         if ($fromLine) {
             $startIdx = $count - 1
@@ -1752,6 +1889,8 @@ function Invoke-BashTail {
 # --- wc Command ---
 
 function Invoke-BashWc {
+    [OutputType('PsBash.WcResult')]
+    param()
     $Arguments = [string[]]$args
     $pipelineInput = @($input)
     if ($Arguments -contains '--help') { return Show-BashHelp 'wc' }
@@ -1834,7 +1973,7 @@ function Invoke-BashWc {
 
     foreach ($filePath in (Resolve-BashGlob -Paths $operands)) {
         if (-not (Test-Path -LiteralPath $filePath)) {
-            Write-Error -Message "wc: ${filePath}: No such file or directory" -ErrorAction Continue
+            Write-BashError -Message "wc: ${filePath}: No such file or directory"
             continue
         }
 
@@ -1865,6 +2004,8 @@ function Invoke-BashWc {
 # --- find Command ---
 
 function Invoke-BashFind {
+    [OutputType('PsBash.FindEntry')]
+    param()
     $Arguments = [string[]]$args
     if ($Arguments -contains '--help') { return Show-BashHelp 'find' }
 
@@ -1929,19 +2070,19 @@ function Invoke-BashFind {
         $searchPath = $operands[0]
     }
 
-    if (-not (Test-Path -LiteralPath $searchPath)) {
-        Write-Error -Message "find: '$searchPath': No such file or directory" -ErrorAction Continue
+    $rootItem = Get-BashItem -Path $searchPath -Command 'find'
+    if ($null -eq $rootItem) {
+        $global:LASTEXITCODE = 1
         return
     }
 
-    $resolvedRoot = (Resolve-Path -LiteralPath $searchPath).Path
+    $resolvedRoot = $rootItem.FullName
     $rootDepth = ($resolvedRoot.TrimEnd([System.IO.Path]::DirectorySeparatorChar, [System.IO.Path]::AltDirectorySeparatorChar) -split '[\\/]').Count
 
     # Collect all filesystem items recursively
     $allItems = [System.Collections.Generic.List[System.IO.FileSystemInfo]]::new()
 
     # Include the search path itself (find includes the root)
-    $rootItem = Get-Item -LiteralPath $resolvedRoot -Force
     $allItems.Add($rootItem)
 
     if ($rootItem -is [System.IO.DirectoryInfo]) {
@@ -2064,6 +2205,8 @@ function Invoke-BashFind {
 # --- stat Command ---
 
 function Invoke-BashStat {
+    [OutputType('PsBash.StatEntry')]
+    param()
     $Arguments = [string[]]$args
     if ($Arguments -contains '--help') { return Show-BashHelp 'stat' }
 
@@ -2095,22 +2238,18 @@ function Invoke-BashStat {
     }
 
     if ($operands.Count -eq 0) {
-        Write-Error -Message "stat: missing operand" -ErrorAction Continue
-        $global:LASTEXITCODE = 1
+        Write-BashError -Message "stat: missing operand"
         return
     }
 
     $hadError = $false
 
     foreach ($target in $operands) {
-        if (-not (Test-Path -LiteralPath $target)) {
-            $msg = "stat: cannot stat '$target': No such file or directory"
-            Write-Error -Message $msg -ErrorAction Continue
+        $item = Get-BashItem -Path $target -Command 'stat'
+        if ($null -eq $item) {
             $hadError = $true
             continue
         }
-
-        $item = Get-Item -LiteralPath $target -Force
         $fileInfo = Get-BashFileInfo -Item $item
         $isDir = $item -is [System.IO.DirectoryInfo]
         $size = if ($isDir) { 4096 } else { $item.Length }
@@ -2273,6 +2412,8 @@ function Format-StatString {
 # --- cp Command ---
 
 function Invoke-BashCp {
+    [OutputType('PsBash.TextOutput')]
+    param()
     $Arguments = [string[]]$args
     if ($Arguments -contains '--help') { return Show-BashHelp 'cp' }
 
@@ -2292,8 +2433,7 @@ function Invoke-BashCp {
     $force = $parsed.Flags['-f']
 
     if ($parsed.Operands.Count -lt 2) {
-        Write-Error -Message "cp: missing file operand" -ErrorAction Continue
-        $global:LASTEXITCODE = 1
+        Write-BashError -Message "cp: missing file operand"
         return
     }
 
@@ -2303,17 +2443,16 @@ function Invoke-BashCp {
     $hadError = $false
 
     foreach ($src in $sources) {
-        if (-not (Test-Path -LiteralPath $src)) {
-            Write-Error -Message "cp: cannot stat '$src': No such file or directory" -ErrorAction Continue
+        $srcItem = Get-BashItem -Path $src -Command 'cp'
+        if ($null -eq $srcItem) {
             $hadError = $true
             continue
         }
 
-        $srcItem = Get-Item -LiteralPath $src -Force
         $isDir = $srcItem -is [System.IO.DirectoryInfo]
 
         if ($isDir -and -not $recursive) {
-            Write-Error -Message "cp: -r not specified; omitting directory '$src'" -ErrorAction Continue
+            Write-BashError -Message "cp: -r not specified; omitting directory '$src'"
             $hadError = $true
             continue
         }
@@ -2357,6 +2496,8 @@ function Invoke-BashCp {
 # --- mv Command ---
 
 function Invoke-BashMv {
+    [OutputType('PsBash.TextOutput')]
+    param()
     $Arguments = [string[]]$args
     if ($Arguments -contains '--help') { return Show-BashHelp 'mv' }
 
@@ -2372,8 +2513,7 @@ function Invoke-BashMv {
     $noClobber = $parsed.Flags['-n']
 
     if ($parsed.Operands.Count -lt 2) {
-        Write-Error -Message "mv: missing file operand" -ErrorAction Continue
-        $global:LASTEXITCODE = 1
+        Write-BashError -Message "mv: missing file operand"
         return
     }
 
@@ -2383,13 +2523,12 @@ function Invoke-BashMv {
     $hadError = $false
 
     foreach ($src in $sources) {
-        if (-not (Test-Path -LiteralPath $src)) {
-            Write-Error -Message "mv: cannot stat '$src': No such file or directory" -ErrorAction Continue
+        $srcItem = Get-BashItem -Path $src -Command 'mv'
+        if ($null -eq $srcItem) {
             $hadError = $true
             continue
         }
 
-        $srcItem = Get-Item -LiteralPath $src -Force
         $targetPath = $dest
         if ((Test-Path -LiteralPath $dest) -and (Get-Item -LiteralPath $dest -Force) -is [System.IO.DirectoryInfo]) {
             $targetPath = Join-Path $dest $srcItem.Name
@@ -2416,6 +2555,8 @@ function Invoke-BashMv {
 # --- rm Command ---
 
 function Invoke-BashRm {
+    [OutputType('PsBash.TextOutput')]
+    param()
     $Arguments = [string[]]$args
     if ($Arguments -contains '--help') { return Show-BashHelp 'rm' }
 
@@ -2434,8 +2575,7 @@ function Invoke-BashRm {
 
     if ($parsed.Operands.Count -eq 0) {
         if (-not $force) {
-            Write-Error -Message "rm: missing operand" -ErrorAction Continue
-            $global:LASTEXITCODE = 1
+            Write-BashError -Message "rm: missing operand"
         }
         return
     }
@@ -2463,7 +2603,7 @@ function Invoke-BashRm {
             }
             foreach ($root in $roots) {
                 if ($normalized -eq $root) {
-                    Write-Error -Message "rm: refusing to remove '$target': protected path" -ErrorAction Continue
+                    Write-BashError -Message "rm: refusing to remove '$target': protected path"
                     $hadError = $true
                     continue
                 }
@@ -2478,24 +2618,28 @@ function Invoke-BashRm {
 
         if (-not (Test-Path -LiteralPath $target)) {
             if (-not $force) {
-                Write-Error -Message "rm: cannot remove '$target': No such file or directory" -ErrorAction Continue
+                Write-BashError -Message "rm: cannot remove '$target': No such file or directory"
                 $hadError = $true
             }
             continue
         }
 
-        $item = Get-Item -LiteralPath $target -Force
+        $item = Get-BashItem -Path $target -Command 'rm'
+        if ($null -eq $item) {
+            $hadError = $true
+            continue
+        }
         $isDir = $item -is [System.IO.DirectoryInfo]
 
         if ($isDir -and -not $recursive) {
-            Write-Error -Message "rm: cannot remove '$target': Is a directory" -ErrorAction Continue
+            Write-BashError -Message "rm: cannot remove '$target': Is a directory"
             $hadError = $true
             continue
         }
 
         if ($verbose) {
             if ($isDir -and $recursive) {
-                $children = Get-ChildItem -LiteralPath $target -Force -Recurse
+                $children = Get-ChildItem -LiteralPath $target -Force -Recurse -ErrorAction SilentlyContinue
                 foreach ($child in $children) {
                     $relPath = $child.FullName -replace '\\', '/'
                     New-BashObject -BashText "removed '$relPath'`n"
@@ -2516,6 +2660,8 @@ function Invoke-BashRm {
 # --- mkdir Command ---
 
 function Invoke-BashMkdir {
+    [OutputType('PsBash.TextOutput')]
+    param()
     $Arguments = [string[]]$args
     if ($Arguments -contains '--help') { return Show-BashHelp 'mkdir' }
 
@@ -2530,8 +2676,7 @@ function Invoke-BashMkdir {
     $verbose = $parsed.Flags['-v']
 
     if ($parsed.Operands.Count -eq 0) {
-        Write-Error -Message "mkdir: missing operand" -ErrorAction Continue
-        $global:LASTEXITCODE = 1
+        Write-BashError -Message "mkdir: missing operand"
         return
     }
 
@@ -2540,7 +2685,7 @@ function Invoke-BashMkdir {
     foreach ($dir in $parsed.Operands) {
         if (Test-Path -LiteralPath $dir) {
             if (-not $parents) {
-                Write-Error -Message "mkdir: cannot create directory '$dir': File exists" -ErrorAction Continue
+                Write-BashError -Message "mkdir: cannot create directory '$dir': File exists"
                 $hadError = $true
             }
             continue
@@ -2548,7 +2693,7 @@ function Invoke-BashMkdir {
 
         $parentDir = Split-Path $dir -Parent
         if ($parentDir -and -not (Test-Path -LiteralPath $parentDir) -and -not $parents) {
-            Write-Error -Message "mkdir: cannot create directory '$dir': No such file or directory" -ErrorAction Continue
+            Write-BashError -Message "mkdir: cannot create directory '$dir': No such file or directory"
             $hadError = $true
             continue
         }
@@ -2573,6 +2718,8 @@ function Invoke-BashMkdir {
 # --- rmdir Command ---
 
 function Invoke-BashRmdir {
+    [OutputType('PsBash.TextOutput')]
+    param()
     $Arguments = [string[]]$args
     if ($Arguments -contains '--help') { return Show-BashHelp 'rmdir' }
 
@@ -2587,30 +2734,28 @@ function Invoke-BashRmdir {
     $verbose = $parsed.Flags['-v']
 
     if ($parsed.Operands.Count -eq 0) {
-        Write-Error -Message "rmdir: missing operand" -ErrorAction Continue
-        $global:LASTEXITCODE = 1
+        Write-BashError -Message "rmdir: missing operand"
         return
     }
 
     $hadError = $false
 
     foreach ($dir in $parsed.Operands) {
-        if (-not (Test-Path -LiteralPath $dir)) {
-            Write-Error -Message "rmdir: failed to remove '$dir': No such file or directory" -ErrorAction Continue
+        $item = Get-BashItem -Path $dir -Command 'rmdir'
+        if ($null -eq $item) {
             $hadError = $true
             continue
         }
 
-        $item = Get-Item -LiteralPath $dir -Force
         if ($item -isnot [System.IO.DirectoryInfo]) {
-            Write-Error -Message "rmdir: failed to remove '$dir': Not a directory" -ErrorAction Continue
+            Write-BashError -Message "rmdir: failed to remove '$dir': Not a directory"
             $hadError = $true
             continue
         }
 
-        $children = Get-ChildItem -LiteralPath $dir -Force
+        $children = Get-ChildItem -LiteralPath $dir -Force -ErrorAction SilentlyContinue
         if ($children) {
-            Write-Error -Message "rmdir: failed to remove '$dir': Directory not empty" -ErrorAction Continue
+            Write-BashError -Message "rmdir: failed to remove '$dir': Directory not empty"
             $hadError = $true
             continue
         }
@@ -2645,6 +2790,8 @@ function Invoke-BashRmdir {
 # --- touch Command ---
 
 function Invoke-BashTouch {
+    [OutputType('PsBash.TextOutput')]
+    param()
     $Arguments = [string[]]$args
     if ($Arguments -contains '--help') { return Show-BashHelp 'touch' }
 
@@ -2677,8 +2824,7 @@ function Invoke-BashTouch {
     }
 
     if ($operands.Count -eq 0) {
-        Write-Error -Message "touch: missing file operand" -ErrorAction Continue
-        $global:LASTEXITCODE = 1
+        Write-BashError -Message "touch: missing file operand"
         return
     }
 
@@ -2687,26 +2833,26 @@ function Invoke-BashTouch {
         try {
             $timestamp = [System.DateTime]::Parse($dateStr)
         } catch {
-            Write-Error -Message "touch: invalid date format '$dateStr'" -ErrorAction Continue
-            $global:LASTEXITCODE = 1
+            Write-BashError -Message "touch: invalid date format '$dateStr'"
             return
         }
     }
 
     foreach ($file in $operands) {
         if (Test-Path -LiteralPath $file) {
-            $item = Get-Item -LiteralPath $file -Force
+            $item = Get-BashItem -Path $file -Command 'touch'
+            if ($null -eq $item) { continue }
             $item.LastWriteTime = $timestamp
             $item.LastAccessTime = $timestamp
         } else {
             $parentDir = Split-Path $file -Parent
             if ($parentDir -and -not (Test-Path -LiteralPath $parentDir)) {
-                Write-Error -Message "touch: cannot touch '$file': No such file or directory" -ErrorAction Continue
-                $global:LASTEXITCODE = 1
+                Write-BashError -Message "touch: cannot touch '$file': No such file or directory"
                 continue
             }
             New-Item -Path $file -ItemType File -Force | Out-Null
-            $item = Get-Item -LiteralPath $file -Force
+            $item = Get-BashItem -Path $file -Command 'touch'
+            if ($null -eq $item) { continue }
             $item.LastWriteTime = $timestamp
             $item.LastAccessTime = $timestamp
         }
@@ -2716,6 +2862,8 @@ function Invoke-BashTouch {
 # --- ln Command ---
 
 function Invoke-BashLn {
+    [OutputType('PsBash.TextOutput')]
+    param()
     $Arguments = [string[]]$args
     if ($Arguments -contains '--help') { return Show-BashHelp 'ln' }
 
@@ -2732,8 +2880,7 @@ function Invoke-BashLn {
     $verbose = $parsed.Flags['-v']
 
     if ($parsed.Operands.Count -lt 2) {
-        Write-Error -Message "ln: missing file operand" -ErrorAction Continue
-        $global:LASTEXITCODE = 1
+        Write-BashError -Message "ln: missing file operand"
         return
     }
 
@@ -2745,8 +2892,7 @@ function Invoke-BashLn {
     }
 
     if (Test-Path -LiteralPath $linkName) {
-        Write-Error -Message "ln: failed to create $( if ($symbolic) { 'symbolic ' } else { '' })link '$linkName': File exists" -ErrorAction Continue
-        $global:LASTEXITCODE = 1
+        Write-BashError -Message "ln: failed to create $( if ($symbolic) { 'symbolic ' } else { '' })link '$linkName': File exists"
         return
     }
 
@@ -3065,6 +3211,8 @@ function Format-PsCustomLine {
 }
 
 function Invoke-BashPs {
+    [OutputType('PsBash.PsEntry')]
+    param()
     $Arguments = [string[]]$args
     if ($Arguments -contains '--help') { return Show-BashHelp 'ps' }
 
@@ -3280,6 +3428,8 @@ function Invoke-BashPs {
 # --- sed Command ---
 
 function Invoke-BashSed {
+    [OutputType('PsBash.TextOutput')]
+    param()
     $Arguments = [string[]]$args
     $pipelineInput = @($input)
     if ($Arguments -contains '--help') { return Show-BashHelp 'sed' }
@@ -3340,13 +3490,16 @@ function Invoke-BashSed {
     }
 
     if ($expressions.Count -eq 0) {
-        throw 'sed: usage: sed [options] expression [file ...]'
+        Write-BashError -Message 'sed: usage: sed [options] expression [file ...]' -ExitCode 2
+        return
     }
 
     # Parse sed commands from expressions
     $commands = [System.Collections.Generic.List[hashtable]]::new()
     foreach ($expr in $expressions) {
-        $commands.Add((ConvertFrom-SedExpression -Expression $expr -ExtendedRegex $extendedRegex))
+        $parsed = ConvertFrom-SedExpression -Expression $expr -ExtendedRegex $extendedRegex
+        if ($null -eq $parsed) { return }
+        $commands.Add($parsed)
     }
 
     # Apply commands to a single line, return $null to delete
@@ -3405,18 +3558,8 @@ function Invoke-BashSed {
     # --- File mode (including in-place) ---
     if ($operands.Count -gt 0) {
         foreach ($filePath in (Resolve-BashGlob -Paths $operands)) {
-            if (-not (Test-Path -LiteralPath $filePath)) {
-                Write-Error -Message "sed: ${filePath}: No such file or directory" -ErrorAction Continue
-                continue
-            }
-
-            $bytes = [System.IO.File]::ReadAllBytes($filePath)
-            $byteOffset = 0
-            if ($bytes.Length -ge 3 -and $bytes[0] -eq 0xEF -and $bytes[1] -eq 0xBB -and $bytes[2] -eq 0xBF) {
-                $byteOffset = 3
-            }
-            $rawText = [System.Text.Encoding]::UTF8.GetString($bytes, $byteOffset, $bytes.Length - $byteOffset)
-            $rawText = $rawText -replace "`r`n", "`n"
+            $rawText = Read-BashFileBytes -Path $filePath -Command 'sed'
+            if ($null -eq $rawText) { continue }
             $hadTrailingNewline = $rawText.EndsWith("`n")
             if ($hadTrailingNewline) {
                 $rawText = $rawText.Substring(0, $rawText.Length - 1)
@@ -3439,7 +3582,7 @@ function Invoke-BashSed {
             if ($inPlace) {
                 $outText = ($outputLines -join "`n")
                 if ($hadTrailingNewline) { $outText += "`n" }
-                [System.IO.File]::WriteAllText($filePath, $outText, [System.Text.Encoding]::UTF8)
+                if (-not (Write-BashFileText -Path $filePath -Text $outText -Command 'sed')) { return }
             } else {
                 foreach ($outLine in $outputLines) {
                     New-BashObject -BashText "$outLine`n"
@@ -3514,7 +3657,7 @@ function ConvertFrom-SedExpression {
         # /pattern/ address
         $pos++
         $endSlash = $Expression.IndexOf('/', $pos)
-        if ($endSlash -lt 0) { throw "sed: unterminated address regex" }
+        if ($endSlash -lt 0) { Write-BashError -Message 'sed: unterminated address regex' -ExitCode 2; return $null }
         $addr = @{ Type = 'regex'; Pattern = $Expression.Substring($pos, $endSlash - $pos) }
         $pos = $endSlash + 1
 
@@ -3524,7 +3667,7 @@ function ConvertFrom-SedExpression {
             if ($pos -lt $Expression.Length -and $Expression[$pos] -eq '/') {
                 $pos++
                 $endSlash2 = $Expression.IndexOf('/', $pos)
-                if ($endSlash2 -lt 0) { throw "sed: unterminated address regex" }
+                if ($endSlash2 -lt 0) { Write-BashError -Message 'sed: unterminated address regex' -ExitCode 2; return $null }
                 $addr = @{
                     Type         = 'range_regex'
                     StartPattern = $addr.Pattern
@@ -3564,7 +3707,8 @@ function ConvertFrom-SedExpression {
 
     # Parse command
     if ($remaining.Length -eq 0) {
-        throw "sed: missing command"
+        Write-BashError -Message 'sed: missing command' -ExitCode 2
+        return $null
     }
 
     $cmdChar = $remaining[0]
@@ -3596,7 +3740,7 @@ function ConvertFrom-SedExpression {
             }
             $parts.Add($current.ToString())
 
-            if ($parts.Count -lt 2) { throw "sed: bad substitution" }
+            if ($parts.Count -lt 2) { Write-BashError -Message 'sed: bad substitution' -ExitCode 2; return $null }
 
             $searchPattern = $parts[0]
             $replacement = $parts[1]
@@ -3637,11 +3781,11 @@ function ConvertFrom-SedExpression {
         'y' {
             $delim = $remaining[1]
             $parts = $remaining.Substring(2).Split($delim)
-            if ($parts.Count -lt 2) { throw "sed: bad transliteration" }
+            if ($parts.Count -lt 2) { Write-BashError -Message 'sed: bad transliteration' -ExitCode 2; return $null }
             $source = $parts[0]
             $dest = $parts[1]
             if ($source.Length -ne $dest.Length) {
-                throw "sed: y: source and dest must be the same length"
+                Write-BashError -Message 'sed: y: source and dest must be the same length' -ExitCode 2; return $null
             }
             @{
                 Type    = 'y'
@@ -3651,7 +3795,7 @@ function ConvertFrom-SedExpression {
             }
         }
         default {
-            throw "sed: unsupported command '$cmdChar'"
+            Write-BashError -Message "sed: unsupported command '$cmdChar'" -ExitCode 2; return $null
         }
     }
 }
@@ -3721,6 +3865,8 @@ function Test-SedAddress {
 # --- awk Command ---
 
 function Invoke-BashAwk {
+    [OutputType('PsBash.TextOutput')]
+    param()
     $Arguments = [string[]]$args
     $pipelineInput = @($input)
     if ($Arguments -contains '--help') { return Show-BashHelp 'awk' }
@@ -3773,7 +3919,8 @@ function Invoke-BashAwk {
     }
 
     if ($null -eq $programText) {
-        throw 'awk: usage: awk [options] program [file ...]'
+        Write-BashError -Message 'awk: usage: awk [options] program [file ...]' -ExitCode 2
+        return
     }
 
     # Parse program into rules (pattern/action pairs)
@@ -4566,6 +4713,8 @@ function Resolve-AwkStringFunc {
 # --- cut Command ---
 
 function Invoke-BashCut {
+    [OutputType('PsBash.TextOutput')]
+    param()
     $Arguments = [string[]]$args
     $pipelineInput = @($input)
     if ($Arguments -contains '--help') { return Show-BashHelp 'cut' }
@@ -4704,21 +4853,9 @@ function Invoke-BashCut {
         }
     } else {
         foreach ($filePath in (Resolve-BashGlob -Paths $operands)) {
-            if (-not (Test-Path -LiteralPath $filePath)) {
-                Write-Error -Message "cut: ${filePath}: No such file or directory" -ErrorAction Continue
-                continue
-            }
-            $bytes = [System.IO.File]::ReadAllBytes($filePath)
-            $byteOffset = 0
-            if ($bytes.Length -ge 3 -and $bytes[0] -eq 0xEF -and $bytes[1] -eq 0xBB -and $bytes[2] -eq 0xBF) {
-                $byteOffset = 3
-            }
-            $rawText = [System.Text.Encoding]::UTF8.GetString($bytes, $byteOffset, $bytes.Length - $byteOffset)
-            $rawText = $rawText -replace "`r`n", "`n"
-            if ($rawText.EndsWith("`n")) {
-                $rawText = $rawText.Substring(0, $rawText.Length - 1)
-            }
-            foreach ($l in $rawText.Split("`n")) {
+            $fileLines = Read-BashFileLines -Path $filePath -Command 'cut'
+            if ($null -eq $fileLines) { continue }
+            foreach ($l in $fileLines) {
                 $lines.Add($l)
             }
         }
@@ -4733,6 +4870,8 @@ function Invoke-BashCut {
 # --- tr Command ---
 
 function Invoke-BashTr {
+    [OutputType('PsBash.TextOutput')]
+    param()
     $Arguments = [string[]]$args
     $pipelineInput = @($input)
     if ($Arguments -contains '--help') { return Show-BashHelp 'tr' }
@@ -4892,6 +5031,8 @@ function Invoke-BashTr {
 # --- uniq Command ---
 
 function Invoke-BashUniq {
+    [OutputType('PsBash.TextOutput')]
+    param()
     $Arguments = [string[]]$args
     $pipelineInput = @($input)
     if ($Arguments -contains '--help') { return Show-BashHelp 'uniq' }
@@ -4935,21 +5076,9 @@ function Invoke-BashUniq {
         }
     } else {
         foreach ($filePath in (Resolve-BashGlob -Paths $operands)) {
-            if (-not (Test-Path -LiteralPath $filePath)) {
-                Write-Error -Message "uniq: ${filePath}: No such file or directory" -ErrorAction Continue
-                continue
-            }
-            $bytes = [System.IO.File]::ReadAllBytes($filePath)
-            $byteOffset = 0
-            if ($bytes.Length -ge 3 -and $bytes[0] -eq 0xEF -and $bytes[1] -eq 0xBB -and $bytes[2] -eq 0xBF) {
-                $byteOffset = 3
-            }
-            $rawText = [System.Text.Encoding]::UTF8.GetString($bytes, $byteOffset, $bytes.Length - $byteOffset)
-            $rawText = $rawText -replace "`r`n", "`n"
-            if ($rawText.EndsWith("`n")) {
-                $rawText = $rawText.Substring(0, $rawText.Length - 1)
-            }
-            foreach ($l in $rawText.Split("`n")) {
+            $fileLines = Read-BashFileLines -Path $filePath -Command 'uniq'
+            if ($null -eq $fileLines) { continue }
+            foreach ($l in $fileLines) {
                 $lines.Add($l)
             }
         }
@@ -4990,6 +5119,8 @@ function Invoke-BashUniq {
 # --- rev Command ---
 
 function Invoke-BashRev {
+    [OutputType('PsBash.TextOutput')]
+    param()
     $Arguments = [string[]]$args
     $pipelineInput = @($input)
     if ($Arguments -contains '--help') { return Show-BashHelp 'rev' }
@@ -5010,21 +5141,9 @@ function Invoke-BashRev {
         }
     } else {
         foreach ($filePath in (Resolve-BashGlob -Paths $Arguments)) {
-            if (-not (Test-Path -LiteralPath $filePath)) {
-                Write-Error -Message "rev: ${filePath}: No such file or directory" -ErrorAction Continue
-                continue
-            }
-            $bytes = [System.IO.File]::ReadAllBytes($filePath)
-            $byteOffset = 0
-            if ($bytes.Length -ge 3 -and $bytes[0] -eq 0xEF -and $bytes[1] -eq 0xBB -and $bytes[2] -eq 0xBF) {
-                $byteOffset = 3
-            }
-            $rawText = [System.Text.Encoding]::UTF8.GetString($bytes, $byteOffset, $bytes.Length - $byteOffset)
-            $rawText = $rawText -replace "`r`n", "`n"
-            if ($rawText.EndsWith("`n")) {
-                $rawText = $rawText.Substring(0, $rawText.Length - 1)
-            }
-            foreach ($l in $rawText.Split("`n")) {
+            $fileLines = Read-BashFileLines -Path $filePath -Command 'rev'
+            if ($null -eq $fileLines) { continue }
+            foreach ($l in $fileLines) {
                 $lines.Add($l)
             }
         }
@@ -5040,6 +5159,8 @@ function Invoke-BashRev {
 # --- nl Command ---
 
 function Invoke-BashNl {
+    [OutputType('PsBash.TextOutput')]
+    param()
     $Arguments = [string[]]$args
     $pipelineInput = @($input)
     if ($Arguments -contains '--help') { return Show-BashHelp 'nl' }
@@ -5100,21 +5221,9 @@ function Invoke-BashNl {
         }
     } else {
         foreach ($filePath in (Resolve-BashGlob -Paths $operands)) {
-            if (-not (Test-Path -LiteralPath $filePath)) {
-                Write-Error -Message "nl: ${filePath}: No such file or directory" -ErrorAction Continue
-                continue
-            }
-            $bytes = [System.IO.File]::ReadAllBytes($filePath)
-            $byteOffset = 0
-            if ($bytes.Length -ge 3 -and $bytes[0] -eq 0xEF -and $bytes[1] -eq 0xBB -and $bytes[2] -eq 0xBF) {
-                $byteOffset = 3
-            }
-            $rawText = [System.Text.Encoding]::UTF8.GetString($bytes, $byteOffset, $bytes.Length - $byteOffset)
-            $rawText = $rawText -replace "`r`n", "`n"
-            if ($rawText.EndsWith("`n")) {
-                $rawText = $rawText.Substring(0, $rawText.Length - 1)
-            }
-            foreach ($l in $rawText.Split("`n")) {
+            $fileLines = Read-BashFileLines -Path $filePath -Command 'nl'
+            if ($null -eq $fileLines) { continue }
+            foreach ($l in $fileLines) {
                 $lines.Add($l)
             }
         }
@@ -5135,6 +5244,8 @@ function Invoke-BashNl {
 # --- diff Command ---
 
 function Invoke-BashDiff {
+    [OutputType('PsBash.TextOutput')]
+    param()
     $Arguments = [string[]]$args
     $pipelineInput = @($input)
     if ($Arguments -contains '--help') { return Show-BashHelp 'diff' }
@@ -5169,40 +5280,20 @@ function Invoke-BashDiff {
         $i++
     }
 
-    $readFileLines = {
-        param([string]$FilePath)
-        if (-not (Test-Path -LiteralPath $FilePath)) {
-            Write-Error -Message "diff: ${FilePath}: No such file or directory" -ErrorAction Continue
-            return $null
-        }
-        $bytes = [System.IO.File]::ReadAllBytes($FilePath)
-        $byteOffset = 0
-        if ($bytes.Length -ge 3 -and $bytes[0] -eq 0xEF -and $bytes[1] -eq 0xBB -and $bytes[2] -eq 0xBF) {
-            $byteOffset = 3
-        }
-        $rawText = [System.Text.Encoding]::UTF8.GetString($bytes, $byteOffset, $bytes.Length - $byteOffset)
-        $rawText = $rawText -replace "`r`n", "`n"
-        if ($rawText.EndsWith("`n")) {
-            $rawText = $rawText.Substring(0, $rawText.Length - 1)
-        }
-        if ($rawText -eq '') { return @() }
-        return @($rawText.Split("`n"))
-    }
-
     if ($operands.Count -lt 2) {
-        Write-Error -Message 'diff: missing operand' -ErrorAction Continue
+        Write-BashError -Message 'diff: missing operand'
         return
     }
 
     $path1 = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($operands[0])
     $path2 = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($operands[1])
 
-    $result1 = & $readFileLines $path1
-    if ($null -eq $result1) { return }
-    [string[]]$lines1 = @($result1)
-    $result2 = & $readFileLines $path2
-    if ($null -eq $result2) { return }
-    [string[]]$lines2 = @($result2)
+    $fileLines1 = Read-BashFileLines -Path $path1 -Command 'diff'
+    if ($null -eq $fileLines1) { return }
+    [string[]]$lines1 = @($fileLines1)
+    $fileLines2 = Read-BashFileLines -Path $path2 -Command 'diff'
+    if ($null -eq $fileLines2) { return }
+    [string[]]$lines2 = @($fileLines2)
 
     # Compute LCS table for diff
     $n = $lines1.Count
@@ -5374,6 +5465,8 @@ function Invoke-BashDiff {
 # --- comm Command ---
 
 function Invoke-BashComm {
+    [OutputType('PsBash.TextOutput')]
+    param()
     $Arguments = [string[]]$args
     $pipelineInput = @($input)
     if ($Arguments -contains '--help') { return Show-BashHelp 'comm' }
@@ -5416,40 +5509,20 @@ function Invoke-BashComm {
         $i++
     }
 
-    $readFileLines = {
-        param([string]$FilePath)
-        if (-not (Test-Path -LiteralPath $FilePath)) {
-            Write-Error -Message "comm: ${FilePath}: No such file or directory" -ErrorAction Continue
-            return $null
-        }
-        $bytes = [System.IO.File]::ReadAllBytes($FilePath)
-        $byteOffset = 0
-        if ($bytes.Length -ge 3 -and $bytes[0] -eq 0xEF -and $bytes[1] -eq 0xBB -and $bytes[2] -eq 0xBF) {
-            $byteOffset = 3
-        }
-        $rawText = [System.Text.Encoding]::UTF8.GetString($bytes, $byteOffset, $bytes.Length - $byteOffset)
-        $rawText = $rawText -replace "`r`n", "`n"
-        if ($rawText.EndsWith("`n")) {
-            $rawText = $rawText.Substring(0, $rawText.Length - 1)
-        }
-        if ($rawText -eq '') { return @() }
-        return @($rawText.Split("`n"))
-    }
-
     if ($operands.Count -lt 2) {
-        Write-Error -Message 'comm: missing operand' -ErrorAction Continue
+        Write-BashError -Message 'comm: missing operand'
         return
     }
 
     $path1 = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($operands[0])
     $path2 = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($operands[1])
 
-    $result1 = & $readFileLines $path1
-    if ($null -eq $result1) { return }
-    [string[]]$lines1 = @($result1)
-    $result2 = & $readFileLines $path2
-    if ($null -eq $result2) { return }
-    [string[]]$lines2 = @($result2)
+    $fileLines1 = Read-BashFileLines -Path $path1 -Command 'comm'
+    if ($null -eq $fileLines1) { return }
+    [string[]]$lines1 = @($fileLines1)
+    $fileLines2 = Read-BashFileLines -Path $path2 -Command 'comm'
+    if ($null -eq $fileLines2) { return }
+    [string[]]$lines2 = @($fileLines2)
 
     $i1 = 0; $i2 = 0
     while ($i1 -lt $lines1.Count -and $i2 -lt $lines2.Count) {
@@ -5497,6 +5570,8 @@ function Invoke-BashComm {
 # --- column Command ---
 
 function Invoke-BashColumn {
+    [OutputType('PsBash.TextOutput')]
+    param()
     $Arguments = [string[]]$args
     $pipelineInput = @($input)
     if ($Arguments -contains '--help') { return Show-BashHelp 'column' }
@@ -5562,21 +5637,9 @@ function Invoke-BashColumn {
         }
     } else {
         foreach ($filePath in (Resolve-BashGlob -Paths $operands)) {
-            if (-not (Test-Path -LiteralPath $filePath)) {
-                Write-Error -Message "column: ${filePath}: No such file or directory" -ErrorAction Continue
-                continue
-            }
-            $bytes = [System.IO.File]::ReadAllBytes($filePath)
-            $byteOffset = 0
-            if ($bytes.Length -ge 3 -and $bytes[0] -eq 0xEF -and $bytes[1] -eq 0xBB -and $bytes[2] -eq 0xBF) {
-                $byteOffset = 3
-            }
-            $rawText = [System.Text.Encoding]::UTF8.GetString($bytes, $byteOffset, $bytes.Length - $byteOffset)
-            $rawText = $rawText -replace "`r`n", "`n"
-            if ($rawText.EndsWith("`n")) {
-                $rawText = $rawText.Substring(0, $rawText.Length - 1)
-            }
-            foreach ($l in $rawText.Split("`n")) {
+            $fileLines = Read-BashFileLines -Path $filePath -Command 'column'
+            if ($null -eq $fileLines) { continue }
+            foreach ($l in $fileLines) {
                 $lines.Add($l)
             }
         }
@@ -5631,6 +5694,8 @@ function Invoke-BashColumn {
 # --- join Command ---
 
 function Invoke-BashJoin {
+    [OutputType('PsBash.TextOutput')]
+    param()
     $Arguments = [string[]]$args
     $pipelineInput = @($input)
     if ($Arguments -contains '--help') { return Show-BashHelp 'join' }
@@ -5694,40 +5759,20 @@ function Invoke-BashJoin {
         $i++
     }
 
-    $readFileLines = {
-        param([string]$FilePath)
-        if (-not (Test-Path -LiteralPath $FilePath)) {
-            Write-Error -Message "join: ${FilePath}: No such file or directory" -ErrorAction Continue
-            return $null
-        }
-        $bytes = [System.IO.File]::ReadAllBytes($FilePath)
-        $byteOffset = 0
-        if ($bytes.Length -ge 3 -and $bytes[0] -eq 0xEF -and $bytes[1] -eq 0xBB -and $bytes[2] -eq 0xBF) {
-            $byteOffset = 3
-        }
-        $rawText = [System.Text.Encoding]::UTF8.GetString($bytes, $byteOffset, $bytes.Length - $byteOffset)
-        $rawText = $rawText -replace "`r`n", "`n"
-        if ($rawText.EndsWith("`n")) {
-            $rawText = $rawText.Substring(0, $rawText.Length - 1)
-        }
-        if ($rawText -eq '') { return @() }
-        return @($rawText.Split("`n"))
-    }
-
     if ($operands.Count -lt 2) {
-        Write-Error -Message 'join: missing operand' -ErrorAction Continue
+        Write-BashError -Message 'join: missing operand'
         return
     }
 
     $path1 = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($operands[0])
     $path2 = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($operands[1])
 
-    $result1 = & $readFileLines $path1
-    if ($null -eq $result1) { return }
-    [string[]]$lines1 = @($result1)
-    $result2 = & $readFileLines $path2
-    if ($null -eq $result2) { return }
-    [string[]]$lines2 = @($result2)
+    $fileLines1 = Read-BashFileLines -Path $path1 -Command 'join'
+    if ($null -eq $fileLines1) { return }
+    [string[]]$lines1 = @($fileLines1)
+    $fileLines2 = Read-BashFileLines -Path $path2 -Command 'join'
+    if ($null -eq $fileLines2) { return }
+    [string[]]$lines2 = @($fileLines2)
 
     # Build lookup from file2 keyed by join field
     $file2Map = [System.Collections.Generic.Dictionary[string, System.Collections.Generic.List[string[]]]]::new(
@@ -5769,6 +5814,8 @@ function Invoke-BashJoin {
 # --- paste Command ---
 
 function Invoke-BashPaste {
+    [OutputType('PsBash.TextOutput')]
+    param()
     $Arguments = [string[]]$args
     $pipelineInput = @($input)
     if ($Arguments -contains '--help') { return Show-BashHelp 'paste' }
@@ -5819,33 +5866,12 @@ function Invoke-BashPaste {
         $i++
     }
 
-    $readFileLines = {
-        param([string]$FilePath)
-        if (-not (Test-Path -LiteralPath $FilePath)) {
-            Write-Error -Message "paste: ${FilePath}: No such file or directory" -ErrorAction Continue
-            return $null
-        }
-        $bytes = [System.IO.File]::ReadAllBytes($FilePath)
-        $byteOffset = 0
-        if ($bytes.Length -ge 3 -and $bytes[0] -eq 0xEF -and $bytes[1] -eq 0xBB -and $bytes[2] -eq 0xBF) {
-            $byteOffset = 3
-        }
-        $rawText = [System.Text.Encoding]::UTF8.GetString($bytes, $byteOffset, $bytes.Length - $byteOffset)
-        $rawText = $rawText -replace "`r`n", "`n"
-        if ($rawText.EndsWith("`n")) {
-            $rawText = $rawText.Substring(0, $rawText.Length - 1)
-        }
-        if ($rawText -eq '') { return @() }
-        return @($rawText.Split("`n"))
-    }
-
     # Read all files
     $allFiles = [System.Collections.Generic.List[string[]]]::new()
     foreach ($filePath in (Resolve-BashGlob -Paths $operands)) {
-        $fileResult = & $readFileLines $filePath
-        if ($null -eq $fileResult) { return }
-        [string[]]$fileLines = @($fileResult)
-        $allFiles.Add($fileLines)
+        $fileLines = Read-BashFileLines -Path $filePath -Command 'paste'
+        if ($null -eq $fileLines) { return }
+        $allFiles.Add([string[]]@($fileLines))
     }
 
     if ($allFiles.Count -eq 0) { return }
@@ -5879,6 +5905,8 @@ function Invoke-BashPaste {
 # --- tee Command ---
 
 function Invoke-BashTee {
+    [OutputType('PsBash.TextOutput')]
+    param()
     $Arguments = [string[]]$args
     $pipelineInput = @($input)
     if ($Arguments -contains '--help') { return Show-BashHelp 'tee' }
@@ -5936,14 +5964,13 @@ function Invoke-BashTee {
     foreach ($filePath in (Resolve-BashGlob -Paths $resolvedPaths)) {
         $parentDir = Split-Path -Parent $filePath
         if ($parentDir -and -not (Test-Path -LiteralPath $parentDir)) {
-            Write-Error -Message "tee: ${filePath}: No such file or directory" -ErrorAction Continue
+            Write-BashError -Message "tee: ${filePath}: No such file or directory"
             continue
         }
-        if ($append -and (Test-Path -LiteralPath $filePath)) {
-            $existing = [System.IO.File]::ReadAllText($filePath)
-            [System.IO.File]::WriteAllText($filePath, $existing + $textContent)
+        if ($append) {
+            if (-not (Write-BashFileText -Path $filePath -Text $textContent -Command 'tee' -Append)) { continue }
         } else {
-            [System.IO.File]::WriteAllText($filePath, $textContent)
+            if (-not (Write-BashFileText -Path $filePath -Text $textContent -Command 'tee')) { continue }
         }
     }
 
@@ -5956,6 +5983,8 @@ function Invoke-BashTee {
 # --- xargs Command ---
 
 function Invoke-BashXargs {
+    [OutputType('PsBash.TextOutput')]
+    param()
     $Arguments = [string[]]$args
     $pipelineInput = @($input)
     if ($Arguments -contains '--help') { return Show-BashHelp 'xargs' }
@@ -6016,7 +6045,7 @@ function Invoke-BashXargs {
     }
 
     if ($operands.Count -eq 0) {
-        Write-Error -Message "xargs: no command specified" -ErrorAction Continue
+        Write-BashError -Message 'xargs: no command specified'
         return
     }
 
@@ -6571,6 +6600,8 @@ function Resolve-JqStringInterpolation {
 }
 
 function Invoke-BashJq {
+    [OutputType('PsBash.TextOutput')]
+    param()
     $Arguments = [string[]]$args
     $pipelineInput = @($input)
     if ($Arguments -contains '--help') { return Show-BashHelp 'jq' }
@@ -6638,7 +6669,7 @@ function Invoke-BashJq {
         foreach ($file in $files) {
             $resolved = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($file)
             if (-not (Test-Path -LiteralPath $resolved)) {
-                Write-Error "jq: $file`: No such file or directory" -ErrorAction Continue
+                Write-BashError -Message "jq: $file`: No such file or directory" -ExitCode 2
                 return
             }
             $jsonTexts.Add((Get-Content -LiteralPath $resolved -Raw))
@@ -6661,7 +6692,12 @@ function Invoke-BashJq {
     # Parse and process
     $allData = [System.Collections.Generic.List[object]]::new()
     foreach ($jsonText in $jsonTexts) {
-        $parsed = $jsonText | ConvertFrom-Json -AsHashtable -ErrorAction Stop
+        try {
+            $parsed = $jsonText | ConvertFrom-Json -AsHashtable -ErrorAction Stop
+        } catch {
+            Write-BashError -Message "jq: parse error: $($_.Exception.Message)" -ExitCode 5
+            return
+        }
         $allData.Add($parsed)
     }
 
@@ -6683,6 +6719,8 @@ function Invoke-BashJq {
 # --- Date ---
 
 function Invoke-BashDate {
+    [OutputType('PsBash.DateOutput')]
+    param()
     $Arguments = [string[]]$args
     if ($Arguments -contains '--help') { return Show-BashHelp 'date' }
 
@@ -6740,13 +6778,18 @@ function Invoke-BashDate {
     [System.DateTimeOffset]$dto = if ($null -ne $refFile) {
         $resolved = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($refFile)
         if (-not (Test-Path -LiteralPath $resolved)) {
-            Write-Error "date: '$refFile': No such file or directory" -ErrorAction Continue
+            Write-BashError -Message "date: '$refFile': No such file or directory"
             return
         }
         $mtime = (Get-Item -LiteralPath $resolved).LastWriteTime
         [System.DateTimeOffset]::new($mtime)
     } elseif ($null -ne $dateString) {
-        [System.DateTimeOffset]::Parse($dateString, [System.Globalization.CultureInfo]::InvariantCulture)
+        try {
+            [System.DateTimeOffset]::Parse($dateString, [System.Globalization.CultureInfo]::InvariantCulture)
+        } catch {
+            Write-BashError -Message "date: invalid date '$dateString'"
+            return
+        }
     } else {
         [System.DateTimeOffset]::Now
     }
@@ -6846,6 +6889,8 @@ function Convert-DateFormat {
 # --- Seq ---
 
 function Invoke-BashSeq {
+    [OutputType('PsBash.SeqOutput')]
+    param()
     $Arguments = [string[]]$args
     if ($Arguments -contains '--help') { return Show-BashHelp 'seq' }
 
@@ -6964,11 +7009,13 @@ function Invoke-BashSeq {
 # --- Expr ---
 
 function Invoke-BashExpr {
+    [OutputType('PsBash.ExprOutput')]
+    param()
     $Arguments = [string[]]$args
     if ($Arguments -contains '--help') { return Show-BashHelp 'expr' }
 
     if ($Arguments.Count -eq 0) {
-        Write-Error 'expr: missing operand' -ErrorAction Continue
+        Write-BashError -Message 'expr: missing operand' -ExitCode 2
         return
     }
 
@@ -7030,11 +7077,11 @@ function Invoke-BashExpr {
                 '-'  { [string]($l - $r) }
                 '*'  { [string]($l * $r) }
                 '/'  {
-                    if ($r -eq 0) { Write-Error 'expr: division by zero' -ErrorAction Continue; return }
+                    if ($r -eq 0) { Write-BashError -Message 'expr: division by zero' -ExitCode 2; return }
                     [string]([long][System.Math]::Truncate($l / $r))
                 }
                 '%'  {
-                    if ($r -eq 0) { Write-Error 'expr: division by zero' -ErrorAction Continue; return }
+                    if ($r -eq 0) { Write-BashError -Message 'expr: division by zero' -ExitCode 2; return }
                     [string]($l % $r)
                 }
                 '<'  { if ($l -lt $r) { '1' } else { '0' } }
@@ -7044,7 +7091,7 @@ function Invoke-BashExpr {
                 '>=' { if ($l -ge $r) { '1' } else { '0' } }
                 '>'  { if ($l -gt $r) { '1' } else { '0' } }
                 default {
-                    Write-Error "expr: unknown operator '$op'" -ErrorAction Continue
+                    Write-BashError -Message "expr: unknown operator '$op'" -ExitCode 2
                     return
                 }
             }
@@ -7058,7 +7105,7 @@ function Invoke-BashExpr {
                 '>=' { if ($left -ge $right) { '1' } else { '0' } }
                 '>'  { if ($left -gt $right) { '1' } else { '0' } }
                 default {
-                    Write-Error "expr: non-integer argument" -ErrorAction Continue
+                    Write-BashError -Message "expr: non-integer argument" -ExitCode 2
                     return
                 }
             }
@@ -7083,6 +7130,8 @@ function Invoke-BashExpr {
 # --- du Command ---
 
 function Invoke-BashDu {
+    [OutputType('PsBash.DuEntry')]
+    param()
     $Arguments = [string[]]$args
     if ($Arguments -contains '--help') { return Show-BashHelp 'du' }
 
@@ -7134,13 +7183,12 @@ function Invoke-BashDu {
     $grandTotal = [long]0
 
     foreach ($target in $operands) {
-        if (-not (Test-Path -LiteralPath $target)) {
-            Write-Error -Message "du: cannot access '$target': No such file or directory" -ErrorAction Continue
+        $rootItem = Get-BashItem -Path $target -Command 'du'
+        if ($null -eq $rootItem) {
             continue
         }
 
-        $resolvedRoot = (Resolve-Path -LiteralPath $target).Path
-        $rootItem = Get-Item -LiteralPath $resolvedRoot -Force
+        $resolvedRoot = $rootItem.FullName
 
         if ($rootItem -isnot [System.IO.DirectoryInfo]) {
             $sizeBytes = $rootItem.Length
@@ -7295,6 +7343,8 @@ function Invoke-BashDu {
 # --- tree Command ---
 
 function Invoke-BashTree {
+    [OutputType('PsBash.TreeEntry')]
+    param()
     $Arguments = [string[]]$args
     if ($Arguments -contains '--help') { return Show-BashHelp 'tree' }
 
@@ -7351,13 +7401,13 @@ function Invoke-BashTree {
     }
 
     $target = $operands[0]
-    if (-not (Test-Path -LiteralPath $target)) {
-        Write-Error -Message "tree: '$target': No such file or directory" -ErrorAction Continue
+    $rootItem = Get-BashItem -Path $target -Command 'tree'
+    if ($null -eq $rootItem) {
+        $global:LASTEXITCODE = 1
         return
     }
 
-    $resolvedRoot = (Resolve-Path -LiteralPath $target).Path
-    $rootItem = Get-Item -LiteralPath $resolvedRoot -Force
+    $resolvedRoot = $rootItem.FullName
     $rootName = $rootItem.Name
 
     # Root entry
@@ -7471,6 +7521,8 @@ function Invoke-BashTree {
 # --- env / printenv ---
 
 function Invoke-BashEnv {
+    [OutputType('PsBash.EnvEntry')]
+    param()
     $Arguments = [string[]]$args
     if ($Arguments -contains '--help') { return Show-BashHelp 'env' }
 
@@ -7478,7 +7530,7 @@ function Invoke-BashEnv {
         $varName = $Arguments[0]
         $val = [System.Environment]::GetEnvironmentVariable($varName)
         if ($null -eq $val) {
-            Write-Error "env: '$varName': not set" -ErrorAction Continue
+            Write-BashError -Message "env: '$varName': not set"
             return
         }
         $obj = [PSCustomObject]@{
@@ -7506,6 +7558,8 @@ function Invoke-BashEnv {
 # --- basename ---
 
 function Invoke-BashBasename {
+    [OutputType('PsBash.TextOutput')]
+    param()
     $Arguments = [string[]]$args
     if ($Arguments -contains '--help') { return Show-BashHelp 'basename' }
 
@@ -7554,6 +7608,8 @@ function Invoke-BashBasename {
 # --- dirname ---
 
 function Invoke-BashDirname {
+    [OutputType('PsBash.TextOutput')]
+    param()
     $Arguments = [string[]]$args
     if ($Arguments -contains '--help') { return Show-BashHelp 'dirname' }
 
@@ -7581,6 +7637,8 @@ function Invoke-BashDirname {
 # --- pwd ---
 
 function Invoke-BashPwd {
+    [OutputType('PsBash.TextOutput')]
+    param()
     $Arguments = [string[]]$args
     if ($Arguments -contains '--help') { return Show-BashHelp 'pwd' }
 
@@ -7590,7 +7648,12 @@ function Invoke-BashPwd {
     }
 
     $location = if ($physical) {
-        (Resolve-Path -Path (Get-Location).Path).ProviderPath
+        try {
+            (Resolve-Path -Path (Get-Location).Path).ProviderPath
+        } catch {
+            Write-BashError -Message "pwd: error resolving path: $($_.Exception.Message)"
+            return
+        }
     } else {
         (Get-Location).Path
     }
@@ -7602,15 +7665,24 @@ function Invoke-BashPwd {
 # --- hostname ---
 
 function Invoke-BashHostname {
+    [OutputType('PsBash.TextOutput')]
+    param()
     $Arguments = [string[]]$args
     if ($Arguments -contains '--help') { return Show-BashHelp 'hostname' }
-    $name = [System.Net.Dns]::GetHostName()
+    try {
+        $name = [System.Net.Dns]::GetHostName()
+    } catch {
+        Write-BashError -Message "hostname: $($_.Exception.Message)"
+        return
+    }
     New-BashObject -BashText $name -TypeName 'PsBash.TextOutput'
 }
 
 # --- whoami ---
 
 function Invoke-BashWhoami {
+    [OutputType('PsBash.TextOutput')]
+    param()
     $Arguments = [string[]]$args
     if ($Arguments -contains '--help') { return Show-BashHelp 'whoami' }
     $name = [System.Environment]::UserName
@@ -7620,6 +7692,8 @@ function Invoke-BashWhoami {
 # --- fold Command ---
 
 function Invoke-BashFold {
+    [OutputType('PsBash.TextOutput')]
+    param()
     $Arguments = [string[]]$args
     $pipelineInput = @($input)
     if ($Arguments -contains '--help') { return Show-BashHelp 'fold' }
@@ -7661,21 +7735,9 @@ function Invoke-BashFold {
         }
     } else {
         foreach ($filePath in (Resolve-BashGlob -Paths $operands)) {
-            if (-not (Test-Path -LiteralPath $filePath)) {
-                Write-Error -Message "fold: ${filePath}: No such file or directory" -ErrorAction Continue
-                continue
-            }
-            $bytes = [System.IO.File]::ReadAllBytes($filePath)
-            $byteOffset = 0
-            if ($bytes.Length -ge 3 -and $bytes[0] -eq 0xEF -and $bytes[1] -eq 0xBB -and $bytes[2] -eq 0xBF) {
-                $byteOffset = 3
-            }
-            $rawText = [System.Text.Encoding]::UTF8.GetString($bytes, $byteOffset, $bytes.Length - $byteOffset)
-            $rawText = $rawText -replace "`r`n", "`n"
-            if ($rawText.EndsWith("`n")) {
-                $rawText = $rawText.Substring(0, $rawText.Length - 1)
-            }
-            foreach ($l in $rawText.Split("`n")) { $lines.Add($l) }
+            $fileLines = Read-BashFileLines -Path $filePath -Command 'fold'
+            if ($null -eq $fileLines) { continue }
+            foreach ($l in $fileLines) { $lines.Add($l) }
         }
     }
 
@@ -7707,6 +7769,8 @@ function Invoke-BashFold {
 # --- expand Command ---
 
 function Invoke-BashExpand {
+    [OutputType('PsBash.TextOutput')]
+    param()
     $Arguments = [string[]]$args
     $pipelineInput = @($input)
     if ($Arguments -contains '--help') { return Show-BashHelp 'expand' }
@@ -7741,21 +7805,9 @@ function Invoke-BashExpand {
         }
     } else {
         foreach ($filePath in (Resolve-BashGlob -Paths $operands)) {
-            if (-not (Test-Path -LiteralPath $filePath)) {
-                Write-Error -Message "expand: ${filePath}: No such file or directory" -ErrorAction Continue
-                continue
-            }
-            $bytes = [System.IO.File]::ReadAllBytes($filePath)
-            $byteOffset = 0
-            if ($bytes.Length -ge 3 -and $bytes[0] -eq 0xEF -and $bytes[1] -eq 0xBB -and $bytes[2] -eq 0xBF) {
-                $byteOffset = 3
-            }
-            $rawText = [System.Text.Encoding]::UTF8.GetString($bytes, $byteOffset, $bytes.Length - $byteOffset)
-            $rawText = $rawText -replace "`r`n", "`n"
-            if ($rawText.EndsWith("`n")) {
-                $rawText = $rawText.Substring(0, $rawText.Length - 1)
-            }
-            foreach ($l in $rawText.Split("`n")) { $lines.Add($l) }
+            $fileLines = Read-BashFileLines -Path $filePath -Command 'expand'
+            if ($null -eq $fileLines) { continue }
+            foreach ($l in $fileLines) { $lines.Add($l) }
         }
     }
 
@@ -7779,6 +7831,8 @@ function Invoke-BashExpand {
 # --- unexpand Command ---
 
 function Invoke-BashUnexpand {
+    [OutputType('PsBash.TextOutput')]
+    param()
     $Arguments = [string[]]$args
     $pipelineInput = @($input)
     if ($Arguments -contains '--help') { return Show-BashHelp 'unexpand' }
@@ -7820,21 +7874,9 @@ function Invoke-BashUnexpand {
         }
     } else {
         foreach ($filePath in (Resolve-BashGlob -Paths $operands)) {
-            if (-not (Test-Path -LiteralPath $filePath)) {
-                Write-Error -Message "unexpand: ${filePath}: No such file or directory" -ErrorAction Continue
-                continue
-            }
-            $bytes = [System.IO.File]::ReadAllBytes($filePath)
-            $byteOffset = 0
-            if ($bytes.Length -ge 3 -and $bytes[0] -eq 0xEF -and $bytes[1] -eq 0xBB -and $bytes[2] -eq 0xBF) {
-                $byteOffset = 3
-            }
-            $rawText = [System.Text.Encoding]::UTF8.GetString($bytes, $byteOffset, $bytes.Length - $byteOffset)
-            $rawText = $rawText -replace "`r`n", "`n"
-            if ($rawText.EndsWith("`n")) {
-                $rawText = $rawText.Substring(0, $rawText.Length - 1)
-            }
-            foreach ($l in $rawText.Split("`n")) { $lines.Add($l) }
+            $fileLines = Read-BashFileLines -Path $filePath -Command 'unexpand'
+            if ($null -eq $fileLines) { continue }
+            foreach ($l in $fileLines) { $lines.Add($l) }
         }
     }
 
@@ -7879,6 +7921,8 @@ function Invoke-BashUnexpand {
 # --- strings Command ---
 
 function Invoke-BashStrings {
+    [OutputType('PsBash.TextOutput')]
+    param()
     $Arguments = [string[]]$args
     $pipelineInput = @($input)
     if ($Arguments -contains '--help') { return Show-BashHelp 'strings' }
@@ -7907,11 +7951,9 @@ function Invoke-BashStrings {
         $content = $parts -join "`n"
     } else {
         foreach ($filePath in (Resolve-BashGlob -Paths $operands)) {
-            if (-not (Test-Path -LiteralPath $filePath)) {
-                Write-Error -Message "strings: ${filePath}: No such file or directory" -ErrorAction Continue
-                continue
-            }
-            $content += [System.IO.File]::ReadAllText($filePath)
+            $fileText = Read-BashFileBytes -Path $filePath -Command 'strings'
+            if ($null -eq $fileText) { continue }
+            $content += $fileText
         }
     }
 
@@ -7925,6 +7967,8 @@ function Invoke-BashStrings {
 # --- split Command ---
 
 function Invoke-BashSplit {
+    [OutputType('PsBash.TextOutput')]
+    param()
     $Arguments = [string[]]$args
     $pipelineInput = @($input)
     if ($Arguments -contains '--help') { return Show-BashHelp 'split' }
@@ -7975,22 +8019,9 @@ function Invoke-BashSplit {
                 }
             }
         } else {
-            if (-not (Test-Path -LiteralPath $filePath)) {
-                Write-Error -Message "split: cannot open '${filePath}' for reading: No such file or directory" -ErrorAction Continue
-                $global:LASTEXITCODE = 1
-                return
-            }
-            $bytes = [System.IO.File]::ReadAllBytes($filePath)
-            $byteOffset = 0
-            if ($bytes.Length -ge 3 -and $bytes[0] -eq 0xEF -and $bytes[1] -eq 0xBB -and $bytes[2] -eq 0xBF) {
-                $byteOffset = 3
-            }
-            $rawText = [System.Text.Encoding]::UTF8.GetString($bytes, $byteOffset, $bytes.Length - $byteOffset)
-            $rawText = $rawText -replace "`r`n", "`n"
-            if ($rawText.EndsWith("`n")) {
-                $rawText = $rawText.Substring(0, $rawText.Length - 1)
-            }
-            foreach ($l in $rawText.Split("`n")) { $lines.Add($l) }
+            $fileLines = Read-BashFileLines -Path $filePath -Command 'split'
+            if ($null -eq $fileLines) { return }
+            foreach ($l in $fileLines) { $lines.Add($l) }
         }
         if ($operands.Count -ge 2) { $prefix = $operands[1] }
     } elseif ($pipelineInput.Count -gt 0) {
@@ -8003,8 +8034,7 @@ function Invoke-BashSplit {
             }
         }
     } else {
-        Write-Error -Message "split: missing operand" -ErrorAction Continue
-        $global:LASTEXITCODE = 1
+        Write-BashError -Message 'split: missing operand'
         return
     }
 
@@ -8026,7 +8056,7 @@ function Invoke-BashSplit {
         $outName = "${prefix}${suffix}"
         $outPath = if ([System.IO.Path]::IsPathRooted($outName)) { $outName } else { Join-Path $PWD $outName }
         $content = ($chunk -join "`n") + "`n"
-        [System.IO.File]::WriteAllText($outPath, $content)
+        if (-not (Write-BashFileText -Path $outPath -Text $content -Command 'split')) { return }
         $chunkIndex++
     }
 }
@@ -8034,6 +8064,8 @@ function Invoke-BashSplit {
 # --- tac Command ---
 
 function Invoke-BashTac {
+    [OutputType('PsBash.TextOutput')]
+    param()
     $Arguments = [string[]]$args
     $pipelineInput = @($input)
     if ($Arguments -contains '--help') { return Show-BashHelp 'tac' }
@@ -8065,21 +8097,9 @@ function Invoke-BashTac {
         }
     } else {
         foreach ($filePath in (Resolve-BashGlob -Paths $operands)) {
-            if (-not (Test-Path -LiteralPath $filePath)) {
-                Write-Error -Message "tac: ${filePath}: No such file or directory" -ErrorAction Continue
-                continue
-            }
-            $bytes = [System.IO.File]::ReadAllBytes($filePath)
-            $byteOffset = 0
-            if ($bytes.Length -ge 3 -and $bytes[0] -eq 0xEF -and $bytes[1] -eq 0xBB -and $bytes[2] -eq 0xBF) {
-                $byteOffset = 3
-            }
-            $rawText = [System.Text.Encoding]::UTF8.GetString($bytes, $byteOffset, $bytes.Length - $byteOffset)
-            $rawText = $rawText -replace "`r`n", "`n"
-            if ($rawText.EndsWith("`n")) {
-                $rawText = $rawText.Substring(0, $rawText.Length - 1)
-            }
-            foreach ($l in $rawText.Split("`n")) { $lines.Add($l) }
+            $fileLines = Read-BashFileLines -Path $filePath -Command 'tac'
+            if ($null -eq $fileLines) { continue }
+            foreach ($l in $fileLines) { $lines.Add($l) }
         }
     }
 
@@ -8101,6 +8121,8 @@ function Invoke-BashTac {
 # --- base64 Command ---
 
 function Invoke-BashBase64 {
+    [OutputType('PsBash.TextOutput')]
+    param()
     $Arguments = [string[]]$args
     $pipelineInput = @($input)
     if ($Arguments -contains '--help') { return Show-BashHelp 'base64' }
@@ -8129,15 +8151,18 @@ function Invoke-BashBase64 {
 
     if ($operands.Count -gt 0) {
         $filePath = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($operands[0])
-        if (-not (Test-Path -LiteralPath $filePath)) {
-            Write-Error -Message "base64: $($operands[0]): No such file or directory" -ErrorAction Continue
-            $global:LASTEXITCODE = 1
-            return
-        }
         if ($decode) {
-            $rawText = [System.IO.File]::ReadAllText($filePath).Trim()
+            $fileText = Read-BashFileBytes -Path $filePath -Command 'base64'
+            if ($null -eq $fileText) { return }
+            $rawText = $fileText.Trim()
         } else {
-            $rawBytes = [System.IO.File]::ReadAllBytes($filePath)
+            try {
+                $rawBytes = [System.IO.File]::ReadAllBytes($filePath)
+            } catch {
+                $normalized = $filePath -replace '\\', '/'
+                Write-BashError -Message "base64: ${normalized}: $($_.Exception.Message)"
+                return
+            }
         }
     } elseif ($pipelineInput.Count -gt 0) {
         $parts = [System.Collections.Generic.List[string]]::new()
@@ -8244,6 +8269,8 @@ function Invoke-BashChecksum {
 # --- md5sum Command ---
 
 function Invoke-BashMd5sum {
+    [OutputType('PsBash.TextOutput')]
+    param()
     $Arguments = [string[]]$args
     $pipelineInput = @($input)
     if ($Arguments -contains '--help') { return Show-BashHelp 'md5sum' }
@@ -8253,6 +8280,8 @@ function Invoke-BashMd5sum {
 # --- sha1sum Command ---
 
 function Invoke-BashSha1sum {
+    [OutputType('PsBash.TextOutput')]
+    param()
     $Arguments = [string[]]$args
     $pipelineInput = @($input)
     if ($Arguments -contains '--help') { return Show-BashHelp 'sha1sum' }
@@ -8262,6 +8291,8 @@ function Invoke-BashSha1sum {
 # --- sha256sum Command ---
 
 function Invoke-BashSha256sum {
+    [OutputType('PsBash.TextOutput')]
+    param()
     $Arguments = [string[]]$args
     $pipelineInput = @($input)
     if ($Arguments -contains '--help') { return Show-BashHelp 'sha256sum' }
@@ -8271,6 +8302,8 @@ function Invoke-BashSha256sum {
 # --- file Command ---
 
 function Invoke-BashFile {
+    [OutputType('PsBash.TextOutput')]
+    param()
     $Arguments = [string[]]$args
     $pipelineInput = @($input)
     if ($Arguments -contains '--help') { return Show-BashHelp 'file' }
@@ -8294,9 +8327,11 @@ function Invoke-BashFile {
         $operands.Add($arg); $i++
     }
 
+    $hadError = $false
     foreach ($filePath in (Resolve-BashGlob -Paths $operands)) {
         if (-not (Test-Path -LiteralPath $filePath)) {
-            Write-Error -Message "file: cannot open '${filePath}' (No such file or directory)" -ErrorAction Continue
+            Write-BashError -Message "file: cannot open '${filePath}' (No such file or directory)"
+            $hadError = $true
             continue
         }
 
@@ -8366,6 +8401,8 @@ function Invoke-BashFile {
 # --- rg (ripgrep-style search) ---
 
 function Invoke-BashRg {
+    [OutputType('PsBash.RgMatch')]
+    param()
     $Arguments = [string[]]$args
     $pipelineInput = @($input)
     if ($Arguments -contains '--help') { return Show-BashHelp 'rg' }
@@ -8479,7 +8516,8 @@ function Invoke-BashRg {
     }
 
     if ($operands.Count -eq 0) {
-        throw 'rg: usage: rg [options] pattern [path ...]'
+        Write-BashError -Message 'rg: usage: rg [options] pattern [path ...]' -ExitCode 2
+        return
     }
 
     $pattern = $operands[0]
@@ -8546,7 +8584,7 @@ function Invoke-BashRg {
 
     foreach ($target in $searchTargets) {
         if (-not (Test-Path -LiteralPath $target)) {
-            Write-Error -Message "rg: ${target}: No such file or directory" -ErrorAction Continue
+            Write-BashError -Message "rg: ${target}: No such file or directory"
             continue
         }
 
@@ -8574,17 +8612,8 @@ function Invoke-BashRg {
     $totalMatchCount = 0
 
     foreach ($filePath in (Resolve-BashGlob -Paths $filePaths)) {
-        $bytes = [System.IO.File]::ReadAllBytes($filePath)
-        $byteOffset = 0
-        if ($bytes.Length -ge 3 -and $bytes[0] -eq 0xEF -and $bytes[1] -eq 0xBB -and $bytes[2] -eq 0xBF) {
-            $byteOffset = 3
-        }
-        $rawText = [System.Text.Encoding]::UTF8.GetString($bytes, $byteOffset, $bytes.Length - $byteOffset)
-        $rawText = $rawText -replace "`r`n", "`n"
-        if ($rawText.EndsWith("`n")) {
-            $rawText = $rawText.Substring(0, $rawText.Length - 1)
-        }
-        $lines = $rawText.Split("`n")
+        $lines = Read-BashFileLines -Path $filePath -Command 'rg'
+        if ($null -eq $lines) { continue }
 
         $matchIndices = [System.Collections.Generic.List[int]]::new()
         for ($li = 0; $li -lt $lines.Count; $li++) {
@@ -8684,6 +8713,8 @@ function Invoke-BashRg {
 # --- gzip / gunzip / zcat ---
 
 function Invoke-BashGzip {
+    [OutputType('PsBash.TextOutput')]
+    param()
     $Arguments = [string[]]$args
     if ($Arguments -contains '--help') { return Show-BashHelp 'gzip' }
 
@@ -8742,18 +8773,19 @@ function Invoke-BashGzip {
     }
 
     if ($operands.Count -eq 0) {
-        Write-Error -Message 'gzip: missing file operand' -ErrorAction Continue
+        Write-BashError -Message 'gzip: missing file operand'
         return
     }
 
     foreach ($filePath in (Resolve-BashGlob -Paths $operands)) {
         if (-not (Test-Path -LiteralPath $filePath)) {
-            Write-Error -Message "gzip: ${filePath}: No such file or directory" -ErrorAction Continue
+            Write-BashError -Message "gzip: ${filePath}: No such file or directory"
             continue
         }
 
         if ($list) {
-            $compressedBytes = [System.IO.File]::ReadAllBytes($filePath)
+            $compressedBytes = Read-BashFileRaw -Path $filePath -Command 'gzip'
+            if ($null -eq $compressedBytes) { continue }
             $compressedSize = $compressedBytes.Length
             $ms = [System.IO.MemoryStream]::new($compressedBytes)
             try {
@@ -8781,7 +8813,8 @@ function Invoke-BashGzip {
         }
 
         if ($decompress) {
-            $compressedBytes = [System.IO.File]::ReadAllBytes($filePath)
+            $compressedBytes = Read-BashFileRaw -Path $filePath -Command 'gzip'
+            if ($null -eq $compressedBytes) { continue }
             $ms = [System.IO.MemoryStream]::new($compressedBytes)
             $outBytes = $null
             try {
@@ -8797,7 +8830,7 @@ function Invoke-BashGzip {
                 New-BashObject -BashText $text
             } else {
                 $outPath = $filePath -replace '\.gz$', ''
-                [System.IO.File]::WriteAllBytes($outPath, $outBytes)
+                if (-not (Write-BashFileRaw -Path $outPath -Data $outBytes -Command 'gzip')) { continue }
                 if (-not $keep) { Remove-Item -LiteralPath $filePath -Force }
                 if ($verbose) {
                     $ratio = if ($outBytes.Length -gt 0) {
@@ -8807,7 +8840,8 @@ function Invoke-BashGzip {
                 }
             }
         } else {
-            $rawBytes = [System.IO.File]::ReadAllBytes($filePath)
+            $rawBytes = Read-BashFileRaw -Path $filePath -Command 'gzip'
+            if ($null -eq $rawBytes) { continue }
             $ms = [System.IO.MemoryStream]::new()
             try {
                 $compLevel = switch ($level) {
@@ -8827,7 +8861,7 @@ function Invoke-BashGzip {
                 New-BashObject -BashText $b64
             } else {
                 $outPath = "${filePath}.gz"
-                [System.IO.File]::WriteAllBytes($outPath, $compressedBytes)
+                if (-not (Write-BashFileRaw -Path $outPath -Data $compressedBytes -Command 'gzip')) { continue }
                 if (-not $keep) { Remove-Item -LiteralPath $filePath -Force }
                 if ($verbose) {
                     $ratio = if ($rawBytes.Length -gt 0) {
@@ -8843,6 +8877,8 @@ function Invoke-BashGzip {
 # --- tar ---
 
 function Invoke-BashTar {
+    [OutputType('PsBash.TextOutput')]
+    param()
     $Arguments = [string[]]$args
     if ($Arguments -contains '--help') { return Show-BashHelp 'tar' }
 
@@ -8938,13 +8974,13 @@ function Invoke-BashTar {
     }
 
     if (-not $archiveFile) {
-        Write-Error -Message 'tar: you must specify -f archive' -ErrorAction Continue
+        Write-BashError -Message 'tar: you must specify -f archive'
         return
     }
 
     if ($create) {
         if ($operands.Count -eq 0) {
-            Write-Error -Message 'tar: no files to archive' -ErrorAction Continue
+            Write-BashError -Message 'tar: no files to archive'
             return
         }
 
@@ -8954,14 +8990,14 @@ function Invoke-BashTar {
             try {
                 foreach ($source in $operands) {
                     if (-not (Test-Path -LiteralPath $source)) {
-                        Write-Error -Message "tar: ${source}: No such file or directory" -ErrorAction Continue
+                        Write-BashError -Message "tar: ${source}: No such file or directory"
                         continue
                     }
 
                     $resolvedSource = (Resolve-Path -LiteralPath $source).Path
                     if (Test-Path -LiteralPath $resolvedSource -PathType Container) {
                         $baseName = Split-Path $resolvedSource -Leaf
-                        $files = Get-ChildItem -LiteralPath $resolvedSource -Recurse -File
+                        $files = Get-ChildItem -LiteralPath $resolvedSource -Recurse -File -ErrorAction SilentlyContinue
                         foreach ($file in $files) {
                             $relPath = $file.FullName.Substring($resolvedSource.Length).TrimStart([System.IO.Path]::DirectorySeparatorChar, [System.IO.Path]::AltDirectorySeparatorChar)
                             $entryName = "${baseName}/$($relPath -replace '\\', '/')"
@@ -8970,10 +9006,11 @@ function Invoke-BashTar {
                                 if ($file.Name -like $pat) { $skip = $true; break }
                             }
                             if ($skip) { continue }
+                            $fileBytes = Read-BashFileRaw -Path $file.FullName -Command 'tar'
+                            if ($null -eq $fileBytes) { continue }
                             $entry = $zip.CreateEntry($entryName)
                             $entryStream = $entry.Open()
                             try {
-                                $fileBytes = [System.IO.File]::ReadAllBytes($file.FullName)
                                 $entryStream.Write($fileBytes, 0, $fileBytes.Length)
                             } finally {
                                 $entryStream.Dispose()
@@ -8989,10 +9026,11 @@ function Invoke-BashTar {
                             if ($entryName -like $pat) { $skip = $true; break }
                         }
                         if ($skip) { continue }
+                        $fileBytes = Read-BashFileRaw -Path $resolvedSource -Command 'tar'
+                        if ($null -eq $fileBytes) { continue }
                         $entry = $zip.CreateEntry($entryName)
                         $entryStream = $entry.Open()
                         try {
-                            $fileBytes = [System.IO.File]::ReadAllBytes($resolvedSource)
                             $entryStream.Write($fileBytes, 0, $fileBytes.Length)
                         } finally {
                             $entryStream.Dispose()
@@ -9016,20 +9054,16 @@ function Invoke-BashTar {
             try {
                 $gs = [System.IO.Compression.GZipStream]::new($gms, [System.IO.Compression.CompressionLevel]::Optimal, $true)
                 try { $gs.Write($zipBytes, 0, $zipBytes.Length) } finally { $gs.Dispose() }
-                [System.IO.File]::WriteAllBytes($archiveFile, $gms.ToArray())
+                Write-BashFileRaw -Path $archiveFile -Data $gms.ToArray() -Command 'tar' | Out-Null
             } finally {
                 $gms.Dispose()
             }
         } else {
-            [System.IO.File]::WriteAllBytes($archiveFile, $zipBytes)
+            Write-BashFileRaw -Path $archiveFile -Data $zipBytes -Command 'tar' | Out-Null
         }
     } elseif ($listMode) {
-        if (-not (Test-Path -LiteralPath $archiveFile)) {
-            Write-Error -Message "tar: ${archiveFile}: No such file or directory" -ErrorAction Continue
-            return
-        }
-
-        $archiveBytes = [System.IO.File]::ReadAllBytes($archiveFile)
+        $archiveBytes = Read-BashFileRaw -Path $archiveFile -Command 'tar'
+        if ($null -eq $archiveBytes) { return }
         $zipBytes = $archiveBytes
         if ($gzipFilter) {
             $ims = [System.IO.MemoryStream]::new($archiveBytes)
@@ -9064,17 +9098,13 @@ function Invoke-BashTar {
             $zms.Dispose()
         }
     } elseif ($extract) {
-        if (-not (Test-Path -LiteralPath $archiveFile)) {
-            Write-Error -Message "tar: ${archiveFile}: No such file or directory" -ErrorAction Continue
-            return
-        }
+        $archiveBytes = Read-BashFileRaw -Path $archiveFile -Command 'tar'
+        if ($null -eq $archiveBytes) { return }
 
         $targetDir = if ($changeDir) { $changeDir } else { Get-Location | Select-Object -ExpandProperty Path }
         if (-not (Test-Path -LiteralPath $targetDir)) {
             New-Item -Path $targetDir -ItemType Directory -Force | Out-Null
         }
-
-        $archiveBytes = [System.IO.File]::ReadAllBytes($archiveFile)
         $zipBytes = $archiveBytes
         if ($gzipFilter) {
             $ims = [System.IO.MemoryStream]::new($archiveBytes)
@@ -9103,7 +9133,7 @@ function Invoke-BashTar {
                         $buf = [System.IO.MemoryStream]::new()
                         try {
                             $entryStream.CopyTo($buf)
-                            [System.IO.File]::WriteAllBytes($outPath, $buf.ToArray())
+                            Write-BashFileRaw -Path $outPath -Data $buf.ToArray() -Command 'tar' | Out-Null
                         } finally {
                             $buf.Dispose()
                         }
@@ -9121,7 +9151,7 @@ function Invoke-BashTar {
             $zms.Dispose()
         }
     } else {
-        Write-Error -Message 'tar: you must specify one of -c, -x, -t' -ErrorAction Continue
+        Write-BashError -Message 'tar: you must specify one of -c, -x, -t'
     }
 }
 
@@ -9261,6 +9291,8 @@ function ConvertTo-SimpleYaml {
 }
 
 function Invoke-BashYq {
+    [OutputType('PsBash.TextOutput')]
+    param()
     $Arguments = [string[]]$args
     $pipelineInput = @($input)
     if ($Arguments -contains '--help') { return Show-BashHelp 'yq' }
@@ -9303,7 +9335,7 @@ function Invoke-BashYq {
         foreach ($file in $files) {
             $resolved = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($file)
             if (-not (Test-Path -LiteralPath $resolved)) {
-                Write-Error "yq: $file`: No such file or directory" -ErrorAction Continue
+                Write-BashError -Message "yq: $file`: No such file or directory"
                 return
             }
             $yamlTexts.Add((Get-Content -LiteralPath $resolved -Raw))
@@ -9323,7 +9355,12 @@ function Invoke-BashYq {
     if ($yamlTexts.Count -eq 0) { return }
 
     foreach ($yamlText in $yamlTexts) {
-        $parsed = ConvertFrom-SimpleYaml -Text $yamlText
+        try {
+            $parsed = ConvertFrom-SimpleYaml -Text $yamlText
+        } catch {
+            Write-BashError -Message "yq: parse error: $($_.Exception.Message)"
+            return
+        }
         $results = @(Invoke-JqFilter -Data $parsed -Filter $filterExpr)
         foreach ($result in $results) {
             if ($outputFormat -eq 'yaml') {
@@ -9340,6 +9377,8 @@ function Invoke-BashYq {
 # --- xan Command ---
 
 function Invoke-BashXan {
+    [OutputType('PsBash.TextOutput')]
+    param()
     # Normalize args: PowerShell comma operator creates arrays, rejoin them
     $Arguments = [System.Collections.Generic.List[string]]::new()
     foreach ($a in $args) {
@@ -9379,7 +9418,7 @@ function Invoke-BashXan {
     }
 
     if (-not $subcommand) {
-        Write-Error 'xan: missing subcommand (headers, count, select, search, table)' -ErrorAction Continue
+        Write-BashError -Message 'xan: missing subcommand (headers, count, select, search, table)'
         return
     }
 
@@ -9406,7 +9445,7 @@ function Invoke-BashXan {
             if ($subArgs.Count -gt 0) { $fileArg = $subArgs[$subArgs.Count - 1] }
         }
         default {
-            Write-Error "xan: unknown subcommand '$subcommand'" -ErrorAction Continue
+            Write-BashError -Message "xan: unknown subcommand '$subcommand'"
             return
         }
     }
@@ -9414,7 +9453,7 @@ function Invoke-BashXan {
     if ($fileArg) {
         $resolved = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($fileArg)
         if (-not (Test-Path -LiteralPath $resolved)) {
-            Write-Error "xan: $fileArg`: No such file or directory" -ErrorAction Continue
+            Write-BashError -Message "xan: $fileArg`: No such file or directory"
             return
         }
         $csvText = Get-Content -LiteralPath $resolved -Raw
@@ -9429,7 +9468,12 @@ function Invoke-BashXan {
 
     if (-not $csvText -or $csvText -eq '') { return }
 
-    $records = @($csvText | ConvertFrom-Csv -Delimiter $delimiter)
+    try {
+        $records = @($csvText | ConvertFrom-Csv -Delimiter $delimiter)
+    } catch {
+        Write-BashError -Message "xan: parse error: $($_.Exception.Message)"
+        return
+    }
     if ($records.Count -eq 0 -and $csvText.Trim() -ne '') {
         # Header-only: ConvertFrom-Csv returns empty for header-only
         $headerLine = ($csvText -split "`n")[0].Trim()
@@ -9497,11 +9541,13 @@ function Invoke-BashXan {
 # --- sleep ---
 
 function Invoke-BashSleep {
+    [OutputType('PsBash.TextOutput')]
+    param()
     $Arguments = [string[]]$args
     if ($Arguments -contains '--help') { return Show-BashHelp 'sleep' }
 
     if ($Arguments.Count -eq 0) {
-        Write-Error 'sleep: missing operand' -ErrorAction Continue
+        Write-BashError -Message 'sleep: missing operand'
         return
     }
 
@@ -9520,11 +9566,11 @@ function Invoke-BashSleep {
         }
         $val = 0.0
         if (-not [double]::TryParse($numStr, [ref]$val)) {
-            Write-Error "sleep: invalid time interval '$arg'" -ErrorAction Continue
+            Write-BashError -Message "sleep: invalid time interval '$arg'"
             return
         }
         if ($val -lt 0) {
-            Write-Error "sleep: invalid time interval '$arg'" -ErrorAction Continue
+            Write-BashError -Message "sleep: invalid time interval '$arg'"
             return
         }
         $totalSeconds += $val * $multiplier
@@ -9539,11 +9585,13 @@ function Invoke-BashSleep {
 # --- time ---
 
 function Invoke-BashTime {
+    [OutputType('PsBash.TimeOutput')]
+    param()
     $Arguments = [string[]]$args
     if ($Arguments -contains '--help') { return Show-BashHelp 'time' }
 
     if ($Arguments.Count -eq 0) {
-        Write-Error 'time: missing command' -ErrorAction Continue
+        Write-BashError -Message 'time: missing command'
         return
     }
 
@@ -9561,11 +9609,11 @@ function Invoke-BashTime {
         $sw.Stop()
         $errors = @($output | Where-Object { $_ -is [System.Management.Automation.ErrorRecord] })
         $normal = @($output | Where-Object { $_ -isnot [System.Management.Automation.ErrorRecord] })
-        foreach ($e in $errors) { Write-Error $e -ErrorAction Continue }
+        foreach ($e in $errors) { Write-BashError -Message "$e" }
         if ($errors.Count -gt 0) { $exitCode = 1 }
     } catch {
         $sw.Stop()
-        Write-Error $_.Exception.Message -ErrorAction Continue
+        Write-BashError -Message $_.Exception.Message
         $exitCode = 1
         $errors = @($_)
         $normal = @()
@@ -9578,7 +9626,7 @@ function Invoke-BashTime {
     } catch {
         $sw.Stop()
         $exitCode = 1
-        Write-Error $_
+        Write-BashError -Message "$_"
     }
 
     $realTime = $sw.Elapsed
@@ -9598,6 +9646,8 @@ function Invoke-BashTime {
 # --- which ---
 
 function Invoke-BashWhich {
+    [OutputType('PsBash.WhichOutput')]
+    param()
     $Arguments = [string[]]$args
     if ($Arguments -contains '--help') { return Show-BashHelp 'which' }
 
@@ -9609,14 +9659,14 @@ function Invoke-BashWhich {
     }
 
     if ($operands.Count -eq 0) {
-        Write-Error 'which: missing operand' -ErrorAction Continue
+        Write-BashError -Message 'which: missing operand'
         return
     }
 
     foreach ($name in $operands) {
         $cmds = @(Get-Command $name -ErrorAction SilentlyContinue)
         if ($cmds.Count -eq 0) {
-            Write-Error "which: no $name in PATH" -ErrorAction Continue
+            Write-BashError -Message "which: no $name in PATH"
             continue
         }
 
@@ -9645,6 +9695,8 @@ $script:BashUserAliases = [System.Collections.Generic.Dictionary[string,string]]
 )
 
 function Invoke-BashAlias {
+    [OutputType('PsBash.AliasOutput')]
+    param()
     $Arguments = [string[]]$args
     if ($Arguments -contains '--help') { return Show-BashHelp 'alias' }
 
@@ -9674,7 +9726,7 @@ function Invoke-BashAlias {
         }
         foreach ($name in $operands) {
             if (-not $script:BashUserAliases.ContainsKey($name)) {
-                Write-Error "unalias: ${name}: not found" -ErrorAction Continue
+                Write-BashError -Message "unalias: ${name}: not found"
                 continue
             }
             $script:BashUserAliases.Remove($name) | Out-Null
@@ -9709,7 +9761,7 @@ function Invoke-BashAlias {
                 }
                 Set-BashDisplayProperty $obj
             } else {
-                Write-Error "alias: ${arg}: not found"
+                Write-BashError -Message "alias: ${arg}: not found"
             }
         }
     }
@@ -9722,6 +9774,8 @@ $script:BashTrapHandlers = [System.Collections.Generic.Dictionary[string,object]
 )
 
 function Invoke-BashTrap {
+    [OutputType('PsBash.TextOutput')]
+    param()
     $Arguments = [string[]]$args
     if ($Arguments -contains '--help') { return Show-BashHelp 'trap' }
 
@@ -9805,6 +9859,8 @@ function Invoke-BashTrap {
 # --- readlink ---
 
 function Invoke-BashReadlink {
+    [OutputType('PsBash.ReadlinkOutput')]
+    param()
     $Arguments = [string[]]$args
     if ($Arguments -contains '--help') { return Show-BashHelp 'readlink' }
 
@@ -9848,6 +9904,8 @@ function Invoke-BashReadlink {
 # --- mktemp ---
 
 function Invoke-BashMktemp {
+    [OutputType('PsBash.MktempOutput')]
+    param()
     $Arguments = [string[]]$args
     if ($Arguments -contains '--help') { return Show-BashHelp 'mktemp' }
 
@@ -9887,6 +9945,8 @@ function Invoke-BashMktemp {
 # --- type ---
 
 function Invoke-BashType {
+    [OutputType('PsBash.TypeOutput')]
+    param()
     $Arguments = [string[]]$args
     if ($Arguments -contains '--help') { return Show-BashHelp 'type' }
 

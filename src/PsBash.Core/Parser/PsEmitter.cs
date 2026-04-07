@@ -982,12 +982,10 @@ public static class PsEmitter
 
             // set -e / set -o errexit -> $ErrorActionPreference = 'Stop'
             // set -x / set -o xtrace -> Set-PSDebug -Trace 1
+            // set -u / set -o nounset -> Set-StrictMode -Version Latest
             if (cmd0 == "set" && cmd.Words.Length >= 2)
             {
                 var args = cmd.Words.Skip(1).Select(w => GetLiteralValue(w)).ToList();
-                // Handle combined flags like -euo or -eu
-                bool hasE = args.Any(a => a is not null && (a == "-o" && false || a == "errexit" || (a!.StartsWith('-') && a.Contains('e') && !a.StartsWith("--"))));
-                bool hasX = args.Any(a => a is not null && (a == "xtrace" || (a!.StartsWith('-') && a.Contains('x') && !a.StartsWith("--"))));
                 bool longOpt = args.Any(a => a == "-o");
                 if (longOpt)
                 {
@@ -995,16 +993,20 @@ public static class PsEmitter
                     var optVal = args.SkipWhile(a => a != "-o").Skip(1).FirstOrDefault();
                     if (optVal == "errexit") return "$ErrorActionPreference = 'Stop'";
                     if (optVal == "xtrace") return "Set-PSDebug -Trace 1";
+                    if (optVal == "nounset") return "Set-StrictMode -Version Latest";
                 }
                 else
                 {
-                    // set -euo pipefail style — check if any flag contains 'e' or 'x'
+                    // set -euo pipefail style — check if any flag contains 'e', 'x', or 'u'
                     var flags = args.Where(a => a is not null && a.StartsWith('-') && !a.StartsWith("--")).ToList();
                     bool e = flags.Any(f => f!.Contains('e'));
                     bool x = flags.Any(f => f!.Contains('x'));
-                    if (e && x) return "$ErrorActionPreference = 'Stop'; Set-PSDebug -Trace 1";
-                    if (e) return "$ErrorActionPreference = 'Stop'";
-                    if (x) return "Set-PSDebug -Trace 1";
+                    bool u = flags.Any(f => f!.Contains('u'));
+                    var parts = new List<string>();
+                    if (e) parts.Add("$ErrorActionPreference = 'Stop'");
+                    if (u) parts.Add("Set-StrictMode -Version Latest");
+                    if (x) parts.Add("Set-PSDebug -Trace 1");
+                    if (parts.Count > 0) return string.Join("; ", parts);
                 }
             }
 
@@ -1639,6 +1641,9 @@ public static class PsEmitter
             else
                 sb.Append(Emit(cmd));
         }
+
+        if (pipeline.Negated)
+            sb.Append("; $global:LASTEXITCODE = if ($?) { 1 } else { 0 }");
 
         return sb.ToString();
     }

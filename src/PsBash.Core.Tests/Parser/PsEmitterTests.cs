@@ -89,6 +89,26 @@ public class PsEmitterTests
     }
 
     [Fact]
+    public void Transpile_NegatedCommand_EmitsExitCodeNegation()
+    {
+        var result = PsEmitter.Transpile("! grep -q pattern file");
+
+        Assert.Equal(
+            "Invoke-BashGrep -q pattern file; $global:LASTEXITCODE = if ($?) { 1 } else { 0 }",
+            result);
+    }
+
+    [Fact]
+    public void Transpile_NegatedPipeline_EmitsExitCodeNegation()
+    {
+        var result = PsEmitter.Transpile("! cmd1 | cmd2");
+
+        Assert.Equal(
+            "cmd1 | cmd2; $global:LASTEXITCODE = if ($?) { 1 } else { 0 }",
+            result);
+    }
+
+    [Fact]
     public void Transpile_EchoPipeWcL_EmitsMeasureObject()
     {
         var result = PsEmitter.Transpile("echo hello | wc -l");
@@ -1832,12 +1852,12 @@ public class PsEmitterTests
         Assert.Equal("$LINE = Read-Host", result);
     }
 
-    // set -euo pipefail -> $ErrorActionPreference = 'Stop'
+    // set -euo pipefail -> $ErrorActionPreference = 'Stop'; Set-StrictMode -Version Latest
     [Fact]
-    public void Transpile_SetEuoPipefail_EmitsErrorActionStop()
+    public void Transpile_SetEuoPipefail_EmitsErrorActionStopAndStrictMode()
     {
         var result = PsEmitter.Transpile("set -euo pipefail");
-        Assert.Equal("$ErrorActionPreference = 'Stop'", result);
+        Assert.Equal("$ErrorActionPreference = 'Stop'; Set-StrictMode -Version Latest", result);
     }
 
     [Fact]
@@ -1852,6 +1872,27 @@ public class PsEmitterTests
     {
         var result = PsEmitter.Transpile("set -x");
         Assert.Equal("Set-PSDebug -Trace 1", result);
+    }
+
+    [Fact]
+    public void Transpile_SetU_EmitsStrictMode()
+    {
+        var result = PsEmitter.Transpile("set -u");
+        Assert.Equal("Set-StrictMode -Version Latest", result);
+    }
+
+    [Fact]
+    public void Transpile_SetONounset_EmitsStrictMode()
+    {
+        var result = PsEmitter.Transpile("set -o nounset");
+        Assert.Equal("Set-StrictMode -Version Latest", result);
+    }
+
+    [Fact]
+    public void Transpile_SetEU_EmitsErrorActionStopAndStrictMode()
+    {
+        var result = PsEmitter.Transpile("set -eu");
+        Assert.Equal("$ErrorActionPreference = 'Stop'; Set-StrictMode -Version Latest", result);
     }
 
     // source file.sh -> . file.ps1

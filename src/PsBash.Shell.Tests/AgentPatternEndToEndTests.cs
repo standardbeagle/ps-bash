@@ -885,4 +885,187 @@ public class AgentPatternEndToEndTests
         Assert.Equal(0, exitCode);
         Assert.Equal("9", stdout.Trim());
     }
+
+    // ── Pipeline negation ───────────────────────────────────────────────────
+
+    [SkippableFact]
+    public async Task Negation_TrueCommand_ExitCodeIsOne()
+    {
+        Skip.If(PwshPath is null, "pwsh not available");
+
+        var (_, stdout, _) = await RunShellAsync(
+            "-c", "! true; echo $?");
+
+        Assert.Equal("1", stdout.Trim());
+    }
+
+    [SkippableFact]
+    public async Task Negation_FalseCommand_ExitCodeIsZero()
+    {
+        Skip.If(PwshPath is null, "pwsh not available");
+
+        var (_, stdout, _) = await RunShellAsync(
+            "-c", "! false; echo $?");
+
+        Assert.Equal("0", stdout.Trim());
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    // ERROR SCENARIO TESTS
+    //
+    // Verify that commands set correct exit codes on failure and that
+    // control flow operators propagate exit codes correctly.
+    // ═══════════════════════════════════════════════════════════════════════════
+
+    // ── File error exit codes ───────────────────────────────────────────────
+
+    [SkippableFact]
+    public async Task Error_CatNonexistentFile_NonZeroExitCode()
+    {
+        Skip.If(PwshPath is null, "pwsh not available");
+
+        var (_, stdout, _) = await RunShellAsync(
+            "-c", "cat nonexistent_file_abc.txt; echo \"exit:$?\"");
+
+        Assert.Contains("exit:1", stdout);
+    }
+
+    [SkippableFact]
+    public async Task Error_LsNonexistentDir_NonZeroExitCode()
+    {
+        Skip.If(PwshPath is null, "pwsh not available");
+
+        var (_, stdout, _) = await RunShellAsync(
+            "-c", "ls nonexistent_dir_xyz/; echo \"exit:$?\"");
+
+        Assert.DoesNotContain("exit:0", stdout);
+    }
+
+    [SkippableFact]
+    public async Task Error_HeadNonexistentFile_NonZeroExitCode()
+    {
+        Skip.If(PwshPath is null, "pwsh not available");
+
+        var (_, stdout, _) = await RunShellAsync(
+            "-c", "head nonexistent_file_abc.txt; echo \"exit:$?\"");
+
+        Assert.Contains("exit:1", stdout);
+    }
+
+    [SkippableFact]
+    public async Task Error_SortNonexistentFile_NonZeroExitCode()
+    {
+        Skip.If(PwshPath is null, "pwsh not available");
+
+        var (_, stdout, _) = await RunShellAsync(
+            "-c", "sort nonexistent_file_abc.txt; echo \"exit:$?\"");
+
+        Assert.DoesNotContain("exit:0", stdout);
+    }
+
+    [SkippableFact]
+    public async Task Error_CpNonexistentSource_NonZeroExitCode()
+    {
+        Skip.If(PwshPath is null, "pwsh not available");
+
+        var (_, stdout, _) = await RunShellAsync(
+            "-c", "cp nonexistent_src_abc dest; echo \"exit:$?\"");
+
+        Assert.DoesNotContain("exit:0", stdout);
+    }
+
+    // ── Usage error exit codes ──────────────────────────────────────────────
+
+    [SkippableFact]
+    public async Task Error_GrepNoArgs_NonZeroExitCode()
+    {
+        Skip.If(PwshPath is null, "pwsh not available");
+
+        var (_, stdout, _) = await RunShellAsync(
+            "-c", "grep; echo \"exit:$?\"");
+
+        Assert.DoesNotContain("exit:0", stdout);
+    }
+
+    [SkippableFact]
+    public async Task Error_SedNoExpression_NonZeroExitCode()
+    {
+        Skip.If(PwshPath is null, "pwsh not available");
+
+        var (_, stdout, _) = await RunShellAsync(
+            "-c", "sed; echo \"exit:$?\"");
+
+        Assert.DoesNotContain("exit:0", stdout);
+    }
+
+    [SkippableFact]
+    public async Task Error_AwkNoProgram_NonZeroExitCode()
+    {
+        Skip.If(PwshPath is null, "pwsh not available");
+
+        var (_, stdout, _) = await RunShellAsync(
+            "-c", "awk; echo \"exit:$?\"");
+
+        Assert.DoesNotContain("exit:0", stdout);
+    }
+
+    // ── Exit code propagation in control flow ───────────────────────────────
+
+    [SkippableFact]
+    public async Task ControlFlow_FalseAndEcho_OutputsNothing()
+    {
+        Skip.If(PwshPath is null, "pwsh not available");
+
+        var (_, stdout, _) = await RunShellAsync(
+            "-c", "false && echo yes");
+
+        Assert.DoesNotContain("yes", stdout);
+    }
+
+    [SkippableFact]
+    public async Task ControlFlow_TrueOrEcho_OutputsNothing()
+    {
+        Skip.If(PwshPath is null, "pwsh not available");
+
+        var (_, stdout, _) = await RunShellAsync(
+            "-c", "true || echo no");
+
+        Assert.DoesNotContain("no", stdout);
+    }
+
+    [SkippableFact]
+    public async Task ControlFlow_TrueAndEcho_OutputsSuccess()
+    {
+        Skip.If(PwshPath is null, "pwsh not available");
+
+        var (_, stdout, _) = await RunShellAsync(
+            "-c", "true && echo success");
+
+        Assert.Contains("success", stdout);
+    }
+
+    [SkippableFact]
+    public async Task ControlFlow_FalseOrEcho_OutputsFallback()
+    {
+        Skip.If(PwshPath is null, "pwsh not available");
+
+        var (_, stdout, _) = await RunShellAsync(
+            "-c", "false || echo fallback");
+
+        Assert.Contains("fallback", stdout);
+    }
+
+    // ── Stderr content verification ─────────────────────────────────────────
+
+    [SkippableFact]
+    public async Task Error_CatNonexistentFile_StderrHasNoWriteErrorPrefix()
+    {
+        Skip.If(PwshPath is null, "pwsh not available");
+
+        var (_, _, stderr) = await RunShellAsync(
+            "-c", "cat nonexistent_file_abc.txt");
+
+        Assert.DoesNotContain("Write-Error", stderr);
+        Assert.DoesNotContain("FullyQualifiedErrorId", stderr);
+    }
 }

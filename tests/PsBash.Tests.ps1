@@ -6414,10 +6414,10 @@ Describe 'Invoke-BashLs — Grid Output' {
         New-Item -Path (Join-Path $tmpDir 'subdir') -ItemType Directory -Force | Out-Null
     }
 
-    It 'returns TextOutput objects in grid mode (no -l)' {
+    It 'returns LsEntry objects in grid mode (no -l)' {
         $results = @(Invoke-BashLs $tmpDir)
         $results | Should -Not -BeNullOrEmpty
-        $results[0].PSTypeNames | Should -Contain 'PsBash.TextOutput'
+        $results[0].PSTypeNames | Should -Contain 'PsBash.LsEntry'
     }
 
     It 'shows directory names with trailing / in grid' {

@@ -224,6 +224,29 @@ public class BashParserTests
     }
 
     [Fact]
+    public void Parse_NegatedSimpleCommand_ReturnsPipelineWithNegatedTrue()
+    {
+        var result = Parse("! grep -q pattern file");
+
+        var pipeline = Assert.IsType<Command.Pipeline>(result);
+        Assert.True(pipeline.Negated);
+        Assert.Single(pipeline.Commands);
+        var inner = Assert.IsType<Command.Simple>(pipeline.Commands[0]);
+        Assert.Equal(["grep", "-q", "pattern", "file"], GetWordValues(inner));
+    }
+
+    [Fact]
+    public void Parse_NegatedPipeline_ReturnsPipelineWithNegatedTrue()
+    {
+        var result = Parse("! cmd1 | cmd2");
+
+        var pipeline = Assert.IsType<Command.Pipeline>(result);
+        Assert.True(pipeline.Negated);
+        Assert.Equal(2, pipeline.Commands.Length);
+        Assert.Equal(new[] { "|" }, pipeline.Ops.ToArray());
+    }
+
+    [Fact]
     public void Parse_SingleCommand_NoPipe_ReturnsSimple()
     {
         var result = Parse("echo hello");

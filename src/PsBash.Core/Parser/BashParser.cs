@@ -149,9 +149,17 @@ public sealed class BashParser
 
     private Command ParsePipeline()
     {
+        var negated = Peek().Kind == BashTokenKind.Bang;
+        if (negated) Advance();
+
         var first = ParseCompoundOrSimple();
         if (Peek().Kind is not BashTokenKind.Pipe and not BashTokenKind.PipeAmp)
+        {
+            if (negated)
+                return new Command.Pipeline(
+                    [first], ImmutableArray<string>.Empty, Negated: true);
             return first;
+        }
 
         var commands = ImmutableArray.CreateBuilder<Command>();
         var ops = ImmutableArray.CreateBuilder<string>();
@@ -167,7 +175,7 @@ public sealed class BashParser
             commands.Add(ParseCompoundOrSimple());
         }
 
-        return new Command.Pipeline(commands.ToImmutable(), ops.ToImmutable(), Negated: false);
+        return new Command.Pipeline(commands.ToImmutable(), ops.ToImmutable(), Negated: negated);
     }
 
     private Command ParseCompoundOrSimple()

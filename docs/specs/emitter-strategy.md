@@ -194,6 +194,7 @@ recursive `EmitSimple`.
 
 - `set -e` / `set -o errexit` -> `$ErrorActionPreference = 'Stop'`
 - `set -x` / `set -o xtrace` -> `Set-PSDebug -Trace 1`
+- `set -u` / `set -o nounset` -> `Set-StrictMode -Version Latest`
 - Combined flags (e.g., `set -euo pipefail`) are decomposed.
 
 ### `source` / `.`
