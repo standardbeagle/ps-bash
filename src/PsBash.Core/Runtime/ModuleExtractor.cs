@@ -1,3 +1,5 @@
+using System.Security.Cryptography;
+
 namespace PsBash.Core.Runtime;
 
 public static class ModuleExtractor
@@ -22,13 +24,12 @@ public static class ModuleExtractor
         var marker = Path.Combine(dir, ".extracted");
         var psd1Path = Path.Combine(dir, "PsBash.psd1");
 
-        // Invalidate cache if the assembly has been rebuilt since extraction.
-        var asmPath = asm.Location;
-        if (File.Exists(marker) && !string.IsNullOrEmpty(asmPath) && File.Exists(asmPath))
+        // Invalidate cache if embedded resource content has changed.
+        if (File.Exists(marker))
         {
-            var asmTime = File.GetLastWriteTimeUtc(asmPath);
-            var markerTime = File.GetLastWriteTimeUtc(marker);
-            if (asmTime > markerTime)
+            var storedHash = File.ReadAllText(marker).Trim();
+            var currentHash = ComputeEmbeddedHash(asm);
+            if (storedHash != currentHash)
             {
                 try { File.Delete(marker); }
                 catch (IOException) { /* another process may be extracting */ }
@@ -62,8 +63,9 @@ public static class ModuleExtractor
                 stream.CopyTo(dest);
             }
 
-            // Write marker after all files extracted successfully
-            File.WriteAllText(marker, version);
+            // Write content hash as marker after all files extracted successfully
+            var hash = ComputeEmbeddedHash(asm);
+            File.WriteAllText(marker, hash);
         }
         catch (IOException)
         {
@@ -72,6 +74,23 @@ public static class ModuleExtractor
         }
 
         return psd1Path;
+    }
+
+    /// <summary>
+    /// Computes a SHA256 hash over all embedded module resources.
+    /// </summary>
+    private static string ComputeEmbeddedHash(System.Reflection.Assembly asm)
+    {
+        using var sha = SHA256.Create();
+        using var combined = new MemoryStream();
+        foreach (var file in ModuleFiles)
+        {
+            using var stream = asm.GetManifestResourceStream($"PsBash.Module/{file}")!;
+            stream.CopyTo(combined);
+        }
+        combined.Position = 0;
+        var bytes = sha.ComputeHash(combined);
+        return Convert.ToHexString(bytes);
     }
 
     /// <summary>

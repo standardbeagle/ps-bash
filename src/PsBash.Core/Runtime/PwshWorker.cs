@@ -238,12 +238,12 @@ public sealed class PwshWorker : IAsyncDisposable
         Directory.CreateDirectory(dir);
         var dest = Path.Combine(dir, "ps-bash-worker.ps1");
 
-        // Skip extraction if already present and newer than the assembly.
+        // Skip extraction if already present and content matches embedded resource.
         if (File.Exists(dest))
         {
-            var asmPath = asm.Location;
-            if (string.IsNullOrEmpty(asmPath) || !File.Exists(asmPath)
-                || File.GetLastWriteTimeUtc(dest) >= File.GetLastWriteTimeUtc(asmPath))
+            using var embedded = asm.GetManifestResourceStream("ps-bash-worker.ps1")!;
+            using var existing = File.OpenRead(dest);
+            if (embedded.Length == existing.Length && StreamsEqual(embedded, existing))
                 return dest;
         }
 
@@ -261,6 +261,20 @@ public sealed class PwshWorker : IAsyncDisposable
             await Task.Delay(500, ct);
         }
         return dest;
+    }
+
+    private static bool StreamsEqual(Stream a, Stream b)
+    {
+        Span<byte> bufA = stackalloc byte[4096];
+        Span<byte> bufB = stackalloc byte[4096];
+        while (true)
+        {
+            int readA = a.Read(bufA);
+            int readB = b.Read(bufB);
+            if (readA != readB) return false;
+            if (readA == 0) return true;
+            if (!bufA[..readA].SequenceEqual(bufB[..readB])) return false;
+        }
     }
 
     public async ValueTask DisposeAsync()
