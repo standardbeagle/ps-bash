@@ -248,10 +248,16 @@ function Write-BashFileRaw {
 
 function Set-BashDisplayProperty {
     # Configures a PSCustomObject for bash-style display:
+    # - Ensures BashText ends with \n for typed objects (LsEntry, FindEntry, CatLine, etc.)
+    #   so the worker emits each as a complete line. TextOutput objects are exempt because
+    #   New-BashObject's -NoTrailingNewline flag deliberately omits \n for partial-line output
+    #   (e.g., printf "%d " and echo -n).
     # - Adds ToString() returning BashText
-    # - Sets DefaultDisplayProperty to BashText (single-property shortcut)
-    # The ps1xml TableControl view handles multi-object display.
     param([PSCustomObject]$Object)
+    $typeName = if ($Object.PSTypeNames.Count -gt 0) { $Object.PSTypeNames[0] } else { '' }
+    if ($typeName -ne 'PsBash.TextOutput' -and $Object.BashText -and -not $Object.BashText.EndsWith("`n")) {
+        $Object.BashText = "$($Object.BashText)`n"
+    }
     $Object | Add-Member -MemberType ScriptMethod -Name 'ToString' -Value {
         $this.BashText
     } -Force
@@ -889,12 +895,12 @@ function Invoke-BashLs {
     if ($longMode) {
         foreach ($entry in $allEntries) {
             $line = Format-LsLine -Entry $entry -HumanReadable:$humanSizes
-            $entry.BashText = $line
+            $entry.BashText = "$line`n"
             Set-BashDisplayProperty $entry
         }
     } else {
         foreach ($entry in $allEntries) {
-            $entry.BashText = Get-LsDisplayName -Entry $entry
+            $entry.BashText = "$(Get-LsDisplayName -Entry $entry)`n"
             Set-BashDisplayProperty $entry
         }
     }
@@ -2079,7 +2085,7 @@ function Invoke-BashFind {
     $resolvedRoot = $rootItem.FullName
     $rootDepth = ($resolvedRoot.TrimEnd([System.IO.Path]::DirectorySeparatorChar, [System.IO.Path]::AltDirectorySeparatorChar) -split '[\\/]').Count
 
-    # Collect all filesystem items recursively
+    # Collect filesystem items, respecting maxdepth during enumeration to avoid OOM on large trees
     $allItems = [System.Collections.Generic.List[System.IO.FileSystemInfo]]::new()
 
     # Include the search path itself (find includes the root)
@@ -2087,7 +2093,14 @@ function Invoke-BashFind {
 
     if ($rootItem -is [System.IO.DirectoryInfo]) {
         try {
-            $children = Get-ChildItem -LiteralPath $resolvedRoot -Force -Recurse -ErrorAction SilentlyContinue
+            # Use -Depth to cap enumeration at the OS level; avoids loading all of node_modules into memory
+            $gcArgs = @{ LiteralPath = $resolvedRoot; Force = $true; ErrorAction = 'SilentlyContinue' }
+            if ($maxDepth -lt [int]::MaxValue) {
+                $gcArgs['Depth'] = $maxDepth - 1
+            } else {
+                $gcArgs['Recurse'] = $true
+            }
+            $children = Get-ChildItem @gcArgs
             foreach ($child in $children) { $allItems.Add($child) }
         } catch { }
     }
@@ -2196,7 +2209,7 @@ function Invoke-BashFind {
             Owner        = $fileInfo.Owner
             Group        = $fileInfo.Group
             LastModified = $item.LastWriteTime
-            BashText     = $displayPath
+            BashText     = "$displayPath`n"
         }
         Set-BashDisplayProperty $obj
     }
