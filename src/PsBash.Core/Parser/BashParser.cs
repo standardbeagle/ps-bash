@@ -104,16 +104,15 @@ public sealed class BashParser
     {
         var first = ParseAndOr();
 
-        if (Peek().Kind != BashTokenKind.Semi)
+        if (Peek().Kind is not BashTokenKind.Semi and not BashTokenKind.Newline)
             return first;
 
         var commands = ImmutableArray.CreateBuilder<Command>();
         commands.Add(first);
 
-        while (Peek().Kind == BashTokenKind.Semi)
+        while (Peek().Kind is BashTokenKind.Semi or BashTokenKind.Newline)
         {
-            Advance(); // consume ;
-            SkipNewlines();
+            SkipTerminators();
 
             if (Peek().Kind == BashTokenKind.Eof)
                 break;

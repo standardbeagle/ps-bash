@@ -2293,6 +2293,16 @@ public class PsEmitterTests
         Assert.Equal("echo \"script: $($MyInvocation.MyCommand.Name)\"", result);
     }
 
+    [Fact]
+    public void Transpile_NewlineSeparatedCommands_EmitsBoth()
+    {
+        var result = PsEmitter.Transpile("array=(one two three)\necho ${#array[@]}");
+        Assert.NotNull(result);
+        Assert.Contains("@('one','two','three')", result);
+        Assert.Contains("echo", result);
+        Assert.Contains(".Count", result);
+    }
+
     private static CompoundWord MakeWord(string value) =>
         new(ImmutableArray.Create<WordPart>(new WordPart.Literal(value)));
 }
