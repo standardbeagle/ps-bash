@@ -512,4 +512,26 @@ public class BashLexerTests
             (BashTokenKind.DLess, "<<"),
             (BashTokenKind.Word, "EOF"));
     }
+
+    [Fact]
+    public void Tokenize_EmptyBraces_LexesAsWord()
+    {
+        var tokens = Tokenize("find -exec wc {} +");
+        AssertTokens(tokens,
+            (BashTokenKind.Word, "find"),
+            (BashTokenKind.Word, "-exec"),
+            (BashTokenKind.Word, "wc"),
+            (BashTokenKind.Word, "{}"),
+            (BashTokenKind.Word, "+"));
+    }
+
+    [Fact]
+    public void Tokenize_EmptyBracesInXargs_LexesAsWord()
+    {
+        var tokens = Tokenize("xargs -I{} echo");
+        AssertTokens(tokens,
+            (BashTokenKind.Word, "xargs"),
+            (BashTokenKind.Word, "-I{}"),
+            (BashTokenKind.Word, "echo"));
+    }
 }

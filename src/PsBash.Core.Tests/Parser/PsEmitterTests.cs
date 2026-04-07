@@ -2395,6 +2395,21 @@ public class PsEmitterTests
     }
 
     [Fact]
+    public void Transpile_FindExecWithBraces_PreservesBraces()
+    {
+        var result = PsEmitter.Transpile("find src -name '*.cs' -exec wc -l {} +");
+        Assert.Contains("Invoke-BashFind src -name '*.cs' -exec wc -l {} +", result);
+    }
+
+    [Fact]
+    public void Transpile_EchoWithEmptyBraces_PreservesBraces()
+    {
+        var result = PsEmitter.Transpile("echo {} test");
+        Assert.Contains("{}", result);
+        Assert.Contains("test", result);
+    }
+
+    [Fact]
     public void Transpile_EchoEmptyString_PreservesEmptyArg()
     {
         var result = PsEmitter.Transpile("echo \"\"");

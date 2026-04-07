@@ -129,6 +129,14 @@ public static class BashLexer
                 }
             }
 
+            // Empty braces {} — literal word (find -exec, xargs -I{}, etc.)
+            if (c == '{' && pos + 1 < len && input[pos + 1] == '}')
+            {
+                tokens.Add(new BashToken(BashTokenKind.Word, "{}", pos));
+                pos += 2;
+                continue;
+            }
+
             // Brace expansion: {a,b,c} or {1..10} — treat as a word, not LBrace.
             if (c == '{' && IsBraceExpansion(input, pos))
             {
