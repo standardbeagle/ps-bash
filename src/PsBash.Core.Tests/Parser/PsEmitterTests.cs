@@ -208,7 +208,7 @@ public class PsEmitterTests
     {
         var result = PsEmitter.Transpile("export PATH=\"$PATH:/new\"");
 
-        Assert.Equal("$env:PATH = \"$env:PATH:/new\"", result);
+        Assert.Equal("$env:PATH = \"${env:PATH}:/new\"", result);
     }
 
     [Fact]
@@ -2342,6 +2342,49 @@ public class PsEmitterTests
         Assert.Contains("@('one','two','three')", result);
         Assert.Contains("echo", result);
         Assert.Contains(".Count", result);
+    }
+
+    [Fact]
+    public void Transpile_SortWithColonDelimiter_QuotesColonFlag()
+    {
+        var result = PsEmitter.Transpile("echo test | sort -t: -k2");
+        Assert.Contains("Invoke-BashSort \"-t:\"", result);
+    }
+
+    [Fact]
+    public void Transpile_AwkWithColonDelimiter_QuotesColonFlag()
+    {
+        var result = PsEmitter.Transpile("cat file | awk -F: '{print}'");
+        Assert.Contains("Invoke-BashAwk \"-F:\"", result);
+    }
+
+    [Fact]
+    public void Transpile_VarFollowedByColon_EmitsBracedVar()
+    {
+        var result = PsEmitter.Transpile("x=hello; echo \"$x: world\"");
+        Assert.Contains("${env:x}:", result);
+    }
+
+    [Fact]
+    public void Transpile_LoopVarFollowedByColon_EmitsBracedVar()
+    {
+        var result = PsEmitter.Transpile("for dir in a b; do echo \"$dir: done\"; done");
+        Assert.Contains("${dir}:", result);
+    }
+
+    [Fact]
+    public void Transpile_VarNotFollowedByColon_NoBracing()
+    {
+        var result = PsEmitter.Transpile("echo \"$x world\"");
+        Assert.Contains("$env:x", result);
+        Assert.DoesNotContain("${env:x}", result);
+    }
+
+    [Fact]
+    public void Transpile_EchoEmptyString_PreservesEmptyArg()
+    {
+        var result = PsEmitter.Transpile("echo \"\"");
+        Assert.Contains("echo \"\"", result);
     }
 
     private static CompoundWord MakeWord(string value) =>

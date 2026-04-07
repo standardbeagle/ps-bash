@@ -1557,17 +1557,57 @@ public static class PsEmitter
     {
         var sb = new StringBuilder();
         sb.Append('"');
-        foreach (var part in dq.Parts)
+        for (int i = 0; i < dq.Parts.Length; i++)
         {
+            var part = dq.Parts[i];
             if (part is WordPart.BracedVarSub bvs)
                 sb.Append(EmitBracedVar(bvs, inDoubleQuote: true));
             else if (part is WordPart.SimpleVarSub vs)
-                sb.Append(EmitSimpleVar(vs.Name, inDoubleQuote: true));
+            {
+                // Check if next part starts with ':' — PowerShell would misparse as a drive reference.
+                // Use ${name} bracing to prevent this.
+                bool needsBracing = i + 1 < dq.Parts.Length && NextPartStartsWithColon(dq.Parts[i + 1]);
+                if (needsBracing)
+                    sb.Append(EmitSimpleVarBraced(vs.Name));
+                else
+                    sb.Append(EmitSimpleVar(vs.Name, inDoubleQuote: true));
+            }
             else
                 sb.Append(EmitWordPart(part));
         }
         sb.Append('"');
         return sb.ToString();
+    }
+
+    private static bool NextPartStartsWithColon(WordPart part)
+    {
+        if (part is WordPart.Literal lit)
+            return lit.Value.StartsWith(':');
+        if (part is WordPart.EscapedLiteral el)
+            return el.Value == ":";
+        return false;
+    }
+
+    private static string EmitSimpleVarBraced(string name)
+    {
+        // Emit ${name} or ${env:name} with braces to prevent PS drive-reference misparse.
+        if (_loopVars is not null && _loopVars.Contains(name))
+            return $"${{{name}}}";
+
+        return name switch
+        {
+            "null" or "true" or "false" or "HOME" or "LASTEXITCODE" => $"${{{name}}}",
+            "?" => "${LASTEXITCODE}",
+            "@" or "*" => "${args}",
+            "#" => "$($args.Count)",
+            "0" => "$($MyInvocation.MyCommand.Name)",
+            "$" => "${PID}",
+            "!" => "${PID}",
+            "-" => "${PSBoundParameters}",
+            var d when d.Length == 1 && d[0] is >= '1' and <= '9' =>
+                $"$($args[{int.Parse(d) - 1}])",
+            _ => $"${{env:{name}}}",
+        };
     }
 
     private static string EmitCommandList(Command.CommandList list)
@@ -1938,10 +1978,11 @@ public static class PsEmitter
     {
         // Flags like -F, contain commas which are PowerShell array separators.
         // Flags like -I{} contain braces which PowerShell parses as scriptblocks.
+        // Flags like -t: contain colons which PowerShell parses as drive references or named param syntax.
         // Only applies to flag-style args starting with -.
         if (arg.Length < 2 || arg[0] != '-')
             return false;
-        return arg.Contains(',') || arg.Contains('{') || arg.Contains('}');
+        return arg.Contains(',') || arg.Contains('{') || arg.Contains('}') || arg.Contains(':');
     }
 
     private static string? ExtractNumericFlag(ImmutableArray<CompoundWord> args, string flag)

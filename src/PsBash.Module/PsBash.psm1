@@ -382,6 +382,7 @@ function ConvertFrom-BashArgs {
     param(
         [Parameter(Mandatory)]
         [AllowEmptyCollection()]
+        [AllowEmptyString()]
         [string[]]$Arguments,
 
         [Parameter(Mandatory)]
@@ -893,6 +894,7 @@ function Invoke-BashLs {
         '-r', 'reverse sort'
         '-1', 'one per line'
         '-p', 'append / to directories'
+        '-d', 'list directories themselves'
     )
 
     $parsed    = ConvertFrom-BashArgs -Arguments $Arguments -FlagDefs $defs
@@ -903,6 +905,7 @@ function Invoke-BashLs {
     $sortBySize= $parsed.Flags['-S']
     $sortByTime= $parsed.Flags['-t']
     $reverseSort=$parsed.Flags['-r']
+    $dirOnly   = $parsed.Flags['-d']
     $classify  = $parsed.Flags['-p'] -or $longMode  # -l always shows type implicitly via perms; -p adds /
 
     $targets   = if ($parsed.Operands.Count -gt 0) { Resolve-BashGlob -Paths $parsed.Operands } else { @('.') }
@@ -928,24 +931,29 @@ function Invoke-BashLs {
         try { $resolvedPath = [System.IO.Path]::GetFullPath($target) } catch { }
 
         if ($null -ne $resolvedPath -and [System.IO.Directory]::Exists($resolvedPath)) {
-            try {
-                $dirInfo = [System.IO.DirectoryInfo]::new($resolvedPath)
-                $searchOpt = if ($recursive) {
-                    [System.IO.SearchOption]::AllDirectories
-                } else {
-                    [System.IO.SearchOption]::TopDirectoryOnly
-                }
-                foreach ($fsi in $dirInfo.EnumerateFileSystemInfos('*', $searchOpt)) {
-                    $attrs = $fsi.Attributes
-                    if (-not $showHidden) {
-                        if ($fsi.Name[0] -eq '.') { continue }
-                        if ($IsWindows -and ($attrs -band [System.IO.FileAttributes]::Hidden)) { continue }
+            if ($dirOnly) {
+                # -d: list the directory itself, not its contents
+                $allEntries.Add((Get-LsEntryFromFsi -Item ([System.IO.DirectoryInfo]::new($resolvedPath))))
+            } else {
+                try {
+                    $dirInfo = [System.IO.DirectoryInfo]::new($resolvedPath)
+                    $searchOpt = if ($recursive) {
+                        [System.IO.SearchOption]::AllDirectories
+                    } else {
+                        [System.IO.SearchOption]::TopDirectoryOnly
                     }
-                    $allEntries.Add((Get-LsEntryFromFsi -Item $fsi))
+                    foreach ($fsi in $dirInfo.EnumerateFileSystemInfos('*', $searchOpt)) {
+                        $attrs = $fsi.Attributes
+                        if (-not $showHidden) {
+                            if ($fsi.Name[0] -eq '.') { continue }
+                            if ($IsWindows -and ($attrs -band [System.IO.FileAttributes]::Hidden)) { continue }
+                        }
+                        $allEntries.Add((Get-LsEntryFromFsi -Item $fsi))
+                    }
+                } catch {
+                    Write-BashError "ls: cannot open directory '$target': $($_.Exception.Message)" -ExitCode 2
+                    $hadError = $true
                 }
-            } catch {
-                Write-BashError "ls: cannot open directory '$target': $($_.Exception.Message)" -ExitCode 2
-                $hadError = $true
             }
             continue
         }
@@ -960,7 +968,7 @@ function Invoke-BashLs {
         try { $psItem = Get-Item -LiteralPath $target -Force -ErrorAction Stop } catch { }
 
         if ($null -ne $psItem) {
-            if ($psItem.PSIsContainer) {
+            if ($psItem.PSIsContainer -and -not $dirOnly) {
                 $children = Get-ChildItem -LiteralPath $target -Force -ErrorAction SilentlyContinue
                 foreach ($child in $children) {
                     if (-not $showHidden -and $child.Name[0] -eq '.') { continue }

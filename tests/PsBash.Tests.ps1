@@ -6453,6 +6453,38 @@ Describe 'Invoke-BashLs — Grid Output' {
     }
 }
 
+Describe 'Invoke-BashLs - Directory Only Mode' {
+    BeforeAll {
+        $tmpDir = Join-Path ([System.IO.Path]::GetTempPath()) "psbash-lsd-$([guid]::NewGuid().ToString('N').Substring(0,8))"
+        New-Item -Path $tmpDir -ItemType Directory -Force | Out-Null
+        New-Item -Path (Join-Path $tmpDir 'file.txt') -ItemType File -Force | Out-Null
+        New-Item -Path (Join-Path $tmpDir 'subdir') -ItemType Directory -Force | Out-Null
+    }
+    AfterAll {
+        Remove-Item -Recurse -Force $tmpDir -ErrorAction SilentlyContinue
+    }
+
+    It 'ls -d lists directory itself, not contents' {
+        $results = @(Invoke-BashLs '-d' $tmpDir)
+        $results.Count | Should -Be 1
+        $results[0].IsDirectory | Should -Be $true
+    }
+
+    It 'ls -ld shows long format for directory itself' {
+        $results = @(Invoke-BashLs '-ld' $tmpDir)
+        $results.Count | Should -Be 1
+        $results[0].BashText | Should -Match '^d'
+    }
+}
+
+Describe 'Invoke-BashEcho - Empty String' {
+    It 'echo "" outputs a blank line' {
+        $result = @(Invoke-BashEcho '')
+        $result.Count | Should -Be 1
+        $result[0].BashText | Should -Be ''
+    }
+}
+
 Describe 'Invoke-ProcessSub — Runtime Helper' {
     It 'creates temp file with command output' {
         $path = Invoke-ProcessSub { echo "test content" }
