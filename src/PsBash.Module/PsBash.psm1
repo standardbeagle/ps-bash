@@ -6796,7 +6796,7 @@ function Invoke-BashJq {
         $textParts = [System.Text.StringBuilder]::new()
         foreach ($item in $pipelineInput) {
             $text = Get-BashText -InputObject $item
-            $textParts.Append($text) | Out-Null
+            $textParts.Append($text + "`n") | Out-Null
         }
         $combined = $textParts.ToString().Trim()
         if ($combined -ne '') {

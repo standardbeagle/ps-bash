@@ -2373,11 +2373,25 @@ public class PsEmitterTests
     }
 
     [Fact]
-    public void Transpile_VarNotFollowedByColon_NoBracing()
+    public void Transpile_VarNotFollowedByColonOrDot_NoBracing()
     {
         var result = PsEmitter.Transpile("echo \"$x world\"");
         Assert.Contains("$env:x", result);
         Assert.DoesNotContain("${env:x}", result);
+    }
+
+    [Fact]
+    public void Transpile_VarFollowedByDot_EmitsBracedVar()
+    {
+        var result = PsEmitter.Transpile("echo \"$file.txt\"");
+        Assert.Contains("${env:file}.txt", result);
+    }
+
+    [Fact]
+    public void Transpile_LoopVarFollowedByDot_EmitsBracedVar()
+    {
+        var result = PsEmitter.Transpile("for f in a b; do echo \"$f.log\"; done");
+        Assert.Contains("${f}.log", result);
     }
 
     [Fact]

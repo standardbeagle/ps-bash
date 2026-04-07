@@ -1566,7 +1566,7 @@ public static class PsEmitter
             {
                 // Check if next part starts with ':' — PowerShell would misparse as a drive reference.
                 // Use ${name} bracing to prevent this.
-                bool needsBracing = i + 1 < dq.Parts.Length && NextPartStartsWithColon(dq.Parts[i + 1]);
+                bool needsBracing = i + 1 < dq.Parts.Length && NextPartNeedsBracing(dq.Parts[i + 1]);
                 if (needsBracing)
                     sb.Append(EmitSimpleVarBraced(vs.Name));
                 else
@@ -1579,12 +1579,14 @@ public static class PsEmitter
         return sb.ToString();
     }
 
-    private static bool NextPartStartsWithColon(WordPart part)
+    private static bool NextPartNeedsBracing(WordPart part)
     {
+        // ':' → PS drive reference ($env:PATH: misparse)
+        // '.' → PS property access ($file.txt misparse)
         if (part is WordPart.Literal lit)
-            return lit.Value.StartsWith(':');
+            return lit.Value.Length > 0 && (lit.Value[0] == ':' || lit.Value[0] == '.');
         if (part is WordPart.EscapedLiteral el)
-            return el.Value == ":";
+            return el.Value == ":" || el.Value == ".";
         return false;
     }
 
