@@ -463,6 +463,8 @@ function New-FlagDefs {
     [OutputType([System.Collections.Generic.Dictionary[string,string]])]
     param(
         [Parameter(Mandatory)]
+        [AllowEmptyString()]
+        [AllowEmptyCollection()]
         [string[]]$Entries
     )
 
@@ -805,6 +807,8 @@ function Format-LsGrid {
     [OutputType([string[]])]
     param(
         [Parameter(Mandatory)]
+        [AllowEmptyString()]
+        [AllowEmptyCollection()]
         [string[]]$Names,
 
         [Parameter()]
