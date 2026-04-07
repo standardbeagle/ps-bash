@@ -70,7 +70,7 @@ FormatsToProcess = 'PsBash.Format.ps1xml'
 # NestedModules = @()
 
 # Functions to export from this module, for best performance, do not use wildcards and do not delete the entry, use an empty array if there are no functions to export.
-FunctionsToExport = 'Invoke-ProcessSub',
+FunctionsToExport = 'Set-BashErrorMode', 'Invoke-ProcessSub',
                'Invoke-BashEcho', 'Invoke-BashPrintf', 'Get-BashPlatform',
                'New-BashObject', 'Emit-BashLine', 'ConvertFrom-BashArgs', 'Expand-EscapeSequences',
                'New-FlagDefs', 'Invoke-BashLs', 'Get-BashFileInfo',

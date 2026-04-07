@@ -63,6 +63,13 @@ function Invoke-ProcessSub {
         $sb = [System.Text.StringBuilder]::new()
         foreach ($item in $output) {
             [void]$sb.Append((Get-BashText -InputObject $item))
+            # Mirror the worker serializer: add \n unless the object signals partial-line output
+            $isPartial = $null -ne $item.PSObject -and
+                         $null -ne $item.PSObject.Properties['NoTrailingNewline'] -and
+                         [bool]$item.NoTrailingNewline
+            if (-not $isPartial) {
+                [void]$sb.Append("`n")
+            }
         }
         [System.IO.File]::WriteAllText($tmp, $sb.ToString(), [System.Text.UTF8Encoding]::new($false))
         return $tmp
@@ -95,7 +102,14 @@ function Read-BashFileBytes {
         $bytes = [System.IO.File]::ReadAllBytes($Path)
     } catch {
         $normalized = $Path -replace '\\', '/'
-        Write-BashError -Message "${Command}: ${normalized}: $($_.Exception.Message)"
+        $ex = $_.Exception
+        $inner = $ex.InnerException
+        $isNotFound = ($ex -is [System.IO.FileNotFoundException]) -or
+                      ($ex -is [System.IO.DirectoryNotFoundException]) -or
+                      ($inner -is [System.IO.FileNotFoundException]) -or
+                      ($inner -is [System.IO.DirectoryNotFoundException])
+        $msg = if ($isNotFound) { 'No such file or directory' } else { $ex.Message }
+        Write-BashError -Message "${Command}: ${normalized}: ${msg}"
         return $null
     }
 
@@ -129,7 +143,10 @@ function Read-BashFileLines {
     if ($rawText.EndsWith("`n")) {
         $rawText = $rawText.Substring(0, $rawText.Length - 1)
     }
-    $rawText.Split("`n")
+    # Write-Output -NoEnumerate prevents PowerShell from unwrapping a single-element array
+    # to a scalar when the caller assigns the result to a variable. Without this, a file
+    # with one line returns a plain string that lacks .Count under Set-StrictMode.
+    Write-Output -NoEnumerate $rawText.Split("`n")
 }
 
 function Write-BashFileText {
@@ -180,14 +197,26 @@ function Get-BashItem {
         [string]$Path,
 
         [Parameter(Mandatory)]
-        [string]$Command
+        [string]$Command,
+
+        [Parameter()]
+        [string]$Verb = 'cannot access'
     )
 
     try {
         Get-Item -LiteralPath $Path -Force -ErrorAction Stop
     } catch {
         $normalized = $Path -replace '\\', '/'
-        Write-BashError -Message "${Command}: cannot access '${normalized}': $($_.Exception.Message)"
+        $ex = $_.Exception
+        $inner = $ex.InnerException
+        $isNotFound = ($ex -is [System.IO.FileNotFoundException]) -or
+                      ($ex -is [System.IO.DirectoryNotFoundException]) -or
+                      ($inner -is [System.IO.FileNotFoundException]) -or
+                      ($inner -is [System.IO.DirectoryNotFoundException]) -or
+                      ($ex.GetType().Name -eq 'ItemNotFoundException') -or
+                      ($ex.Message -match 'Cannot find path|does not exist|cannot find the path')
+        $msg = if ($isNotFound) { 'No such file or directory' } else { $ex.Message }
+        Write-BashError -Message "${Command}: ${Verb} '${normalized}': ${msg}"
         return $null
     }
 }
@@ -248,15 +277,13 @@ function Write-BashFileRaw {
 
 function Set-BashDisplayProperty {
     # Configures a PSCustomObject for bash-style display:
-    # - Ensures BashText ends with \n for typed objects (LsEntry, FindEntry, CatLine, etc.)
-    #   so the worker emits each as a complete line. TextOutput objects are exempt because
-    #   New-BashObject's -NoTrailingNewline flag deliberately omits \n for partial-line output
-    #   (e.g., printf "%d " and echo -n).
+    # - Normalizes BashText by stripping any trailing \n. The worker serializer owns the
+    #   line-ending concern: it calls Console.Out.WriteLine for every object that does not
+    #   have NoTrailingNewline=$true, so BashText values are stored clean (no trailing \n).
     # - Adds ToString() returning BashText
     param([PSCustomObject]$Object)
-    $typeName = if ($Object.PSTypeNames.Count -gt 0) { $Object.PSTypeNames[0] } else { '' }
-    if ($typeName -ne 'PsBash.TextOutput' -and $Object.BashText -and -not $Object.BashText.EndsWith("`n")) {
-        $Object.BashText = "$($Object.BashText)`n"
+    if ($Object.BashText -and $Object.BashText.EndsWith("`n")) {
+        $Object.BashText = $Object.BashText.Substring(0, $Object.BashText.Length - 1)
     }
     $Object | Add-Member -MemberType ScriptMethod -Name 'ToString' -Value {
         $this.BashText
@@ -279,13 +306,17 @@ function New-BashObject {
         [string]$Command
     )
 
-    if (-not $NoTrailingNewline -and $BashText.Length -gt 0 -and -not $BashText.EndsWith("`n")) {
-        $BashText = "$BashText`n"
+    # Normalize: strip trailing \n — the worker serializer owns line endings
+    if ($BashText.EndsWith("`n")) {
+        $BashText = $BashText.Substring(0, $BashText.Length - 1)
     }
 
     $obj = [PSCustomObject]@{
         PSTypeName = $TypeName
         BashText   = $BashText
+    }
+    if ($NoTrailingNewline) {
+        $obj | Add-Member -NotePropertyName 'NoTrailingNewline' -NotePropertyValue $true
     }
     if ($Command) {
         $obj | Add-Member -NotePropertyName Command -NotePropertyValue $Command
@@ -311,7 +342,7 @@ function Emit-BashLine {
     $cmdSplat = if ($Command) { @{ Command = $Command } } else { @{} }
     for ($li = 0; $li -lt $lines.Count; $li++) {
         if ($li -lt $lines.Count - 1 -or $hasTrailingNewline) {
-            New-BashObject -BashText "$($lines[$li])`n" @cmdSplat
+            New-BashObject -BashText $lines[$li] @cmdSplat
         } else {
             New-BashObject -BashText $lines[$li] -NoTrailingNewline @cmdSplat
         }
@@ -2323,7 +2354,7 @@ function Invoke-BashStat {
     $hadError = $false
 
     foreach ($target in $operands) {
-        $item = Get-BashItem -Path $target -Command 'stat'
+        $item = Get-BashItem -Path $target -Command 'stat' -Verb 'cannot stat'
         if ($null -eq $item) {
             $hadError = $true
             continue
@@ -5090,7 +5121,7 @@ function Invoke-BashTr {
     if ($pipelineInput.Count -gt 0) {
         foreach ($item in $pipelineInput) {
             $text = Get-BashText -InputObject $item
-            [void]$allText.Append($text)
+            [void]$allText.Append($text + "`n")
         }
     }
 
@@ -9422,7 +9453,7 @@ function Invoke-BashYq {
         $textParts = [System.Text.StringBuilder]::new()
         foreach ($item in $pipelineInput) {
             $text = Get-BashText -InputObject $item
-            $textParts.Append($text) | Out-Null
+            $textParts.Append($text + "`n") | Out-Null
         }
         $combined = $textParts.ToString().Trim()
         if ($combined -ne '') {
@@ -9539,7 +9570,7 @@ function Invoke-BashXan {
         $textParts = [System.Text.StringBuilder]::new()
         foreach ($item in $pipelineInput) {
             $text = Get-BashText -InputObject $item
-            $textParts.Append($text) | Out-Null
+            $textParts.Append($text + "`n") | Out-Null
         }
         $csvText = $textParts.ToString().Trim()
     }

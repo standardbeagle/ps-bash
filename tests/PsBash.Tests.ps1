@@ -3,6 +3,9 @@
 BeforeAll {
     $modulePath = Join-Path $PSScriptRoot '..' 'src' 'PsBash.Module' 'PsBash.psd1'
     Import-Module $modulePath -Force
+    # Use PowerShell error mode so Write-BashError emits ErrorRecord objects
+    # that can be captured with 2>&1 and filtered by Where-Object { $_ -is [ErrorRecord] }
+    Set-BashErrorMode 'PowerShell'
 }
 
 Describe 'Module Loading' {
@@ -48,51 +51,55 @@ Describe 'New-BashObject' {
 }
 
 Describe 'Invoke-BashEcho' {
-    It 'outputs BashObject with BashText containing hello plus newline' {
+    It 'outputs BashObject with BashText containing hello (worker adds newline)' {
         $result = Invoke-BashEcho 'hello'
-        $result.BashText | Should -Be "hello`n"
+        $result.BashText | Should -Be 'hello'
+        $result.PSObject.Properties['NoTrailingNewline'] | Should -BeNullOrEmpty
     }
 
-    It 'with no args outputs just a newline' {
+    It 'with no args outputs empty BashText (worker emits blank line)' {
         $result = Invoke-BashEcho
-        $result.BashText | Should -Be "`n"
+        $result.BashText | Should -Be ''
+        $result.PSObject.Properties['NoTrailingNewline'] | Should -BeNullOrEmpty
     }
 
     It '-n outputs without trailing newline' {
         $result = Invoke-BashEcho -n 'hello'
         $result.BashText | Should -Be 'hello'
+        $result.NoTrailingNewline | Should -Be $true
     }
 
     It '-e \t outputs tab character' {
         $result = Invoke-BashEcho -e '\t'
-        $result.BashText | Should -Be "`t`n"
+        $result.BashText | Should -Be "`t"
     }
 
-    It '-e \n outputs newline in text plus trailing newline' {
+    It '-e \n outputs two empty lines' {
         $results = @(Invoke-BashEcho -e '\n')
         $results.Count | Should -Be 2
-        $results[0].BashText | Should -Be "`n"
-        $results[1].BashText | Should -Be "`n"
+        $results[0].BashText | Should -Be ''
+        $results[1].BashText | Should -Be ''
     }
 
     It '-e \\ outputs literal backslash' {
         $result = Invoke-BashEcho -e '\\'
-        $result.BashText | Should -Be "\`n"
+        $result.BashText | Should -Be '\'
     }
 
     It '-E \t outputs literal \t (escapes disabled by default)' {
         $result = Invoke-BashEcho -E '\t'
-        $result.BashText | Should -Be "\t`n"
+        $result.BashText | Should -Be '\t'
     }
 
     It 'multiple words joins them with spaces' {
         $result = Invoke-BashEcho 'hello' 'world'
-        $result.BashText | Should -Be "hello world`n"
+        $result.BashText | Should -Be 'hello world'
     }
 
     It '-ne combines no-newline and escape processing' {
         $result = Invoke-BashEcho -ne 'hello\tworld'
         $result.BashText | Should -Be "hello`tworld"
+        $result.NoTrailingNewline | Should -Be $true
     }
 
     It 'ToString works for string interpolation' {
@@ -107,7 +114,7 @@ Describe 'Invoke-BashEcho' {
 
     It '-- stops flag parsing' {
         $result = Invoke-BashEcho '--' '-n'
-        $result.BashText | Should -Be "-n`n"
+        $result.BashText | Should -Be '-n'
     }
 }
 
@@ -117,8 +124,10 @@ Describe 'Invoke-BashPrintf' {
         $result.BashText | Should -Be 'count 42'
     }
 
-    It 'with no args throws' {
-        { Invoke-BashPrintf } | Should -Throw
+    It 'with no args writes error' {
+        $result = Invoke-BashPrintf 2>&1
+        $errors = @($result | Where-Object { $_ -is [System.Management.Automation.ErrorRecord] })
+        $errors.Count | Should -BeGreaterThan 0
     }
 
     It 'with just a format string and no args' {
@@ -550,7 +559,9 @@ Describe 'Invoke-BashGrep — Standalone' {
     }
 
     It 'throws with no arguments' {
-        { Invoke-BashGrep } | Should -Throw
+        $result = Invoke-BashGrep 2>&1
+        $errors = @($result | Where-Object { $_ -is [System.Management.Automation.ErrorRecord] })
+        $errors.Count | Should -BeGreaterThan 0
     }
 }
 
@@ -1426,7 +1437,7 @@ Describe 'Invoke-BashStat' {
     It 'stat -c %s file.txt returns size only' {
         $result = @(Invoke-BashStat -c '%s' $statFile)
         $result.Count | Should -Be 1
-        $result[0].BashText | Should -Be "11`n"
+        $result[0].BashText | Should -Be '11'
     }
 
     It 'stat -c "%a %n" file.txt returns octal permissions + name' {
@@ -1439,8 +1450,8 @@ Describe 'Invoke-BashStat' {
     It 'stat --printf="%s\n" file.txt returns printf-style with no trailing newline' {
         $result = @(Invoke-BashStat '--printf=%s\n' $statFile)
         $result.Count | Should -Be 1
-        # printf-style: escape sequences processed, no auto-trailing newline
-        $result[0].BashText | Should -Be "11`n"
+        # printf-style: \n in format is processed; BashText is stored clean (no trailing \n)
+        $result[0].BashText | Should -Be '11'
     }
 
     It 'stat --printf="%s" file.txt has no trailing newline' {
@@ -3474,7 +3485,7 @@ Describe 'Invoke-BashTee — Basic Output' {
         $outFile = Join-Path $testDir 'out.txt'
         $results = @(Invoke-BashEcho 'hello' | Invoke-BashTee $outFile)
         $results.Count | Should -Be 1
-        (Get-BashText -InputObject $results[0]) | Should -Be "hello`n"
+        (Get-BashText -InputObject $results[0]) | Should -Be 'hello'
         $content = [System.IO.File]::ReadAllText($outFile)
         $content | Should -Be "hello`n"
     }
@@ -3564,13 +3575,13 @@ Describe 'Invoke-BashXargs — Basic' {
     It 'collects input lines and passes as arguments' {
         $results = @(Invoke-BashEcho -e "a`nb`nc" | Invoke-BashXargs Invoke-BashEcho)
         $results.Count | Should -Be 1
-        (Get-BashText -InputObject $results[0]) | Should -Be "a b c`n"
+        (Get-BashText -InputObject $results[0]) | Should -Be 'a b c'
     }
 
     It 'works with no pipeline input (empty)' {
         $results = @(@() | Invoke-BashXargs Invoke-BashEcho)
         $results.Count | Should -Be 1
-        (Get-BashText -InputObject $results[0]) | Should -Be "`n"
+        (Get-BashText -InputObject $results[0]) | Should -Be ''
     }
 }
 
@@ -3578,8 +3589,8 @@ Describe 'Invoke-BashXargs — Replacement Mode' {
     It 'replaces {} with each input line using -I' {
         $results = @(Invoke-BashEcho -e "a`nb" | Invoke-BashXargs -I '{}' Invoke-BashEcho 'file: {}')
         $results.Count | Should -Be 2
-        (Get-BashText -InputObject $results[0]) | Should -Be "file: a`n"
-        (Get-BashText -InputObject $results[1]) | Should -Be "file: b`n"
+        (Get-BashText -InputObject $results[0]) | Should -Be 'file: a'
+        (Get-BashText -InputObject $results[1]) | Should -Be 'file: b'
     }
 }
 
@@ -3587,15 +3598,15 @@ Describe 'Invoke-BashXargs — Max Args' {
     It 'limits args per invocation with -n' {
         $results = @(Invoke-BashEcho -e "a`nb`nc`nd" | Invoke-BashXargs -n 2 Invoke-BashEcho)
         $results.Count | Should -Be 2
-        (Get-BashText -InputObject $results[0]) | Should -Be "a b`n"
-        (Get-BashText -InputObject $results[1]) | Should -Be "c d`n"
+        (Get-BashText -InputObject $results[0]) | Should -Be 'a b'
+        (Get-BashText -InputObject $results[1]) | Should -Be 'c d'
     }
 
     It 'handles remainder when not evenly divisible' {
         $results = @(Invoke-BashEcho -e "a`nb`nc" | Invoke-BashXargs -n 2 Invoke-BashEcho)
         $results.Count | Should -Be 2
-        (Get-BashText -InputObject $results[0]) | Should -Be "a b`n"
-        (Get-BashText -InputObject $results[1]) | Should -Be "c`n"
+        (Get-BashText -InputObject $results[0]) | Should -Be 'a b'
+        (Get-BashText -InputObject $results[1]) | Should -Be 'c'
     }
 }
 
@@ -5683,8 +5694,10 @@ Describe 'Invoke-BashRg -- File Mode' {
         $errors.Count | Should -BeGreaterThan 0
     }
 
-    It 'throws with no arguments' {
-        { Invoke-BashRg } | Should -Throw
+    It 'writes error with no arguments' {
+        $result = Invoke-BashRg 2>&1
+        $errors = @($result | Where-Object { $_ -is [System.Management.Automation.ErrorRecord] })
+        $errors.Count | Should -BeGreaterThan 0
     }
 
     It 'exports rg alias pointing to Invoke-BashRg' {
@@ -6421,7 +6434,7 @@ Describe 'Invoke-BashLs — Grid Output' {
     }
 
     It 'shows directory names with trailing / in grid' {
-        $results = @(Invoke-BashLs $tmpDir)
+        $results = @(Invoke-BashLs '-p' $tmpDir)
         $text = ($results | ForEach-Object { $_.BashText }) -join "`n"
         $text | Should -Match 'subdir/'
     }

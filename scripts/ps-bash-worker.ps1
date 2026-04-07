@@ -46,12 +46,16 @@ while ($true) {
             foreach ($item in @($result)) {
                 if ($null -ne $item.PSObject -and $null -ne $item.PSObject.Properties['BashText']) {
                     $raw = [string]$item.BashText
-                    if ($raw.EndsWith("`n")) {
-                        [Console]::Out.WriteLine($raw.Substring(0, $raw.Length - 1))
-                        $__partialLine = $false
-                    } else {
-                        [Console]::Out.Write($raw)
+                    # Strip any trailing \n — BashText is stored clean; the serializer owns line endings.
+                    # NoTrailingNewline property signals partial-line output (printf "%d ", echo -n, etc.)
+                    $isPartial = $null -ne $item.PSObject.Properties['NoTrailingNewline'] -and [bool]$item.NoTrailingNewline
+                    $text = if ($raw.EndsWith("`n")) { $raw.Substring(0, $raw.Length - 1) } else { $raw }
+                    if ($isPartial) {
+                        [Console]::Out.Write($text)
                         $__partialLine = $true
+                    } else {
+                        [Console]::Out.WriteLine($text)
+                        $__partialLine = $false
                     }
                 } else {
                     $item | Out-String -Stream | ForEach-Object {
