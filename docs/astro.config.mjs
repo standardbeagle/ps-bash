@@ -52,6 +52,7 @@ export default defineConfig({
           items: [
             { label: 'Object Types', slug: 'reference/object-types' },
             { label: 'Cross-Platform', slug: 'reference/cross-platform' },
+            { label: 'ls Provider Architecture', slug: 'reference/ls-provider-architecture' },
           ],
         },
         {
