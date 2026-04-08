@@ -2131,7 +2131,17 @@ function Invoke-BashFind {
     $sizeExpr = $null
     $mtimeExpr = $null
     $findEmpty = $false
+    $execCmd = $null          # -exec command template
+    $execTerminator = $null   # ';' or '+'
     $operands = [System.Collections.Generic.List[string]]::new()
+
+    # Known unsupported predicates (value-bearing and standalone) for strict mode warnings
+    $unsupportedValuePredicates = @('-iname','-path','-ipath','-regex','-iregex','-newer',
+        '-perm','-user','-group','-printf','-mindepth','-amin','-atime','-cmin','-ctime',
+        '-gid','-uid','-links','-samefile','-wholename','-iwholename','-lname','-ilname')
+    $unsupportedStandalonePredicates = @('-delete','-print','-print0','-prune','-depth',
+        '-follow','-ls','-mount','-xdev','-noleaf','-daystart','-warn','-nowarn',
+        '-not','-or','-o','-and','-a','-true','-false')
 
     $i = 0
     while ($i -lt $Arguments.Count) {
@@ -2173,7 +2183,34 @@ function Invoke-BashFind {
                 $i++
                 continue
             }
+            '-exec' {
+                # Collect -exec args until ';' or '+'
+                $i++
+                $execCmd = [System.Collections.Generic.List[string]]::new()
+                while ($i -lt $Arguments.Count) {
+                    $ea = $Arguments[$i]
+                    if ($ea -eq ';' -or $ea -eq '+') {
+                        $execTerminator = $ea
+                        $i++
+                        break
+                    }
+                    $execCmd.Add($ea)
+                    $i++
+                }
+                continue
+            }
             default {
+                # Check for unsupported predicates
+                if ($unsupportedValuePredicates -contains $arg) {
+                    Write-BashError -Message "find: unsupported predicate '$arg'" -ExitCode 1
+                    $i += 2  # skip the predicate and its value
+                    continue
+                }
+                if ($unsupportedStandalonePredicates -contains $arg) {
+                    Write-BashError -Message "find: unsupported predicate '$arg'" -ExitCode 1
+                    $i++
+                    continue
+                }
                 $operands.Add($arg)
                 $i++
             }
@@ -2242,6 +2279,7 @@ function Invoke-BashFind {
     }
 
     $now = [datetime]::Now
+    $execCollectedPaths = [System.Collections.Generic.List[string]]::new()
 
     foreach ($item in $allItems) {
         $itemPath = $item.FullName
@@ -2305,21 +2343,49 @@ function Invoke-BashFind {
         # Reuse Get-BashFileInfo for metadata
         $fileInfo = Get-BashFileInfo -Item $item
 
-        $obj = [PSCustomObject]@{
-            PSTypeName   = 'PsBash.FindEntry'
-            Path         = $displayPath
-            Name         = $item.Name
-            FullPath     = $itemPath
-            IsDirectory  = $isDir
-            SizeBytes    = $fileInfo.SizeBytes
-            Permissions  = $fileInfo.Permissions
-            LinkCount    = $fileInfo.LinkCount
-            Owner        = $fileInfo.Owner
-            Group        = $fileInfo.Group
-            LastModified = $item.LastWriteTime
-            BashText     = "$displayPath`n"
+        if ($null -ne $execCmd) {
+            if ($execTerminator -eq ';') {
+                # -exec cmd {} \; — run once per file, replacing {} with path
+                $cmdArgs = @($execCmd | ForEach-Object { if ($_ -eq '{}') { $displayPath } else { $_ } })
+                $cmdName = $cmdArgs[0]
+                $cmdRest = if ($cmdArgs.Count -gt 1) { $cmdArgs[1..($cmdArgs.Count - 1)] } else { @() }
+                & $cmdName @cmdRest
+            } else {
+                # -exec cmd {} + — collect paths, run once at end
+                $execCollectedPaths.Add($displayPath)
+            }
+        } else {
+            $obj = [PSCustomObject]@{
+                PSTypeName   = 'PsBash.FindEntry'
+                Path         = $displayPath
+                Name         = $item.Name
+                FullPath     = $itemPath
+                IsDirectory  = $isDir
+                SizeBytes    = $fileInfo.SizeBytes
+                Permissions  = $fileInfo.Permissions
+                LinkCount    = $fileInfo.LinkCount
+                Owner        = $fileInfo.Owner
+                Group        = $fileInfo.Group
+                LastModified = $item.LastWriteTime
+                BashText     = "$displayPath`n"
+            }
+            Set-BashDisplayProperty $obj
         }
-        Set-BashDisplayProperty $obj
+    }
+
+    # -exec cmd {} + — execute once with all collected paths
+    if ($null -ne $execCmd -and $execTerminator -eq '+' -and $execCollectedPaths.Count -gt 0) {
+        $cmdArgs = [System.Collections.Generic.List[string]]::new()
+        foreach ($ea in $execCmd) {
+            if ($ea -eq '{}') {
+                $cmdArgs.AddRange($execCollectedPaths)
+            } else {
+                $cmdArgs.Add($ea)
+            }
+        }
+        $cmdName = $cmdArgs[0]
+        $cmdRest = if ($cmdArgs.Count -gt 1) { $cmdArgs[1..($cmdArgs.Count - 1)] } else { @() }
+        & $cmdName @cmdRest
     }
 }
 

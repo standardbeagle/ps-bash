@@ -1978,6 +1978,9 @@ public static class PsEmitter
 
     private static bool NeedsPassthroughQuoting(string arg)
     {
+        // Bare {} is an empty scriptblock in PowerShell — must be quoted to pass as string.
+        if (arg == "{}")
+            return true;
         // Flags like -F, contain commas which are PowerShell array separators.
         // Flags like -I{} contain braces which PowerShell parses as scriptblocks.
         // Flags like -t: contain colons which PowerShell parses as drive references or named param syntax.

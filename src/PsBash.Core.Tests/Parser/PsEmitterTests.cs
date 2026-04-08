@@ -2398,7 +2398,7 @@ public class PsEmitterTests
     public void Transpile_FindExecWithBraces_PreservesBraces()
     {
         var result = PsEmitter.Transpile("find src -name '*.cs' -exec wc -l {} +");
-        Assert.Contains("Invoke-BashFind src -name '*.cs' -exec wc -l {} +", result);
+        Assert.Contains("Invoke-BashFind src -name '*.cs' -exec wc -l \"{}\" +", result);
     }
 
     [Fact]
