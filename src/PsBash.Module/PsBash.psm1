@@ -6313,6 +6313,12 @@ function Invoke-BashDiff {
     if ($Arguments -contains '--help') { return Show-BashHelp 'diff' }
 
     $unified = $false
+    $context = $false
+    $brief = $false
+    $ignoreAllSpace = $false
+    $ignoreSpaceChange = $false
+    $ignoreBlankLines = $false
+    $ignoreCase = $false
     $operands = [System.Collections.Generic.List[string]]::new()
     $pastDoubleDash = $false
 
@@ -6338,6 +6344,42 @@ function Invoke-BashDiff {
             continue
         }
 
+        if ($arg -ceq '-c') {
+            $context = $true
+            $i++
+            continue
+        }
+
+        if ($arg -ceq '-q' -or $arg -ceq '--brief') {
+            $brief = $true
+            $i++
+            continue
+        }
+
+        if ($arg -ceq '-w' -or $arg -ceq '--ignore-all-space') {
+            $ignoreAllSpace = $true
+            $i++
+            continue
+        }
+
+        if ($arg -ceq '-b' -or $arg -ceq '--ignore-space-change') {
+            $ignoreSpaceChange = $true
+            $i++
+            continue
+        }
+
+        if ($arg -ceq '-B' -or $arg -ceq '--ignore-blank-lines') {
+            $ignoreBlankLines = $true
+            $i++
+            continue
+        }
+
+        if ($arg -ceq '-i' -or $arg -ceq '--ignore-case') {
+            $ignoreCase = $true
+            $i++
+            continue
+        }
+
         $operands.Add($arg)
         $i++
     }
@@ -6357,13 +6399,62 @@ function Invoke-BashDiff {
     if ($null -eq $fileLines2) { return }
     [string[]]$lines2 = @($fileLines2)
 
-    # Compute LCS table for diff
-    $n = $lines1.Count
-    $m = $lines2.Count
+    # Build comparison keys applying whitespace/case/blank-line flags
+    $cmp1 = [string[]]::new($lines1.Count)
+    for ($xi = 0; $xi -lt $lines1.Count; $xi++) {
+        $key = $lines1[$xi]
+        if ($ignoreAllSpace) {
+            $key = $key -replace '\s', ''
+        } elseif ($ignoreSpaceChange) {
+            $key = $key -replace '^\s+', '' -replace '\s+$', '' -replace '\s+', ' '
+        }
+        if ($ignoreCase) { $key = $key.ToLowerInvariant() }
+        $cmp1[$xi] = $key
+    }
+    $cmp2 = [string[]]::new($lines2.Count)
+    for ($yi = 0; $yi -lt $lines2.Count; $yi++) {
+        $key = $lines2[$yi]
+        if ($ignoreAllSpace) {
+            $key = $key -replace '\s', ''
+        } elseif ($ignoreSpaceChange) {
+            $key = $key -replace '^\s+', '' -replace '\s+$', '' -replace '\s+', ' '
+        }
+        if ($ignoreCase) { $key = $key.ToLowerInvariant() }
+        $cmp2[$yi] = $key
+    }
+
+    # When -B is set, build indices skipping blank lines for comparison
+    $idx1 = if ($ignoreBlankLines) {
+        @(
+            for ($xi = 0; $xi -lt $cmp1.Count; $xi++) {
+                if ($cmp1[$xi] -ne '') { $xi }
+            }
+        )
+    } else {
+        @(
+            for ($xi = 0; $xi -lt $cmp1.Count; $xi++) { $xi }
+        )
+    }
+    $idx2 = if ($ignoreBlankLines) {
+        @(
+            for ($yi = 0; $yi -lt $cmp2.Count; $yi++) {
+                if ($cmp2[$yi] -ne '') { $yi }
+            }
+        )
+    } else {
+        @(
+            for ($yi = 0; $yi -lt $cmp2.Count; $yi++) { $yi }
+        )
+    }
+
+    $n = $idx1.Count
+    $m = $idx2.Count
+
+    # Compute LCS table on filtered comparison keys
     $dp = [int[,]]::new($n + 1, $m + 1)
     for ($xi = $n - 1; $xi -ge 0; $xi--) {
         for ($yi = $m - 1; $yi -ge 0; $yi--) {
-            if ($lines1[$xi] -ceq $lines2[$yi]) {
+            if ($cmp1[$idx1[$xi]] -ceq $cmp2[$idx2[$yi]]) {
                 $dp[$xi, $yi] = $dp[($xi + 1), ($yi + 1)] + 1
             } else {
                 $a = $dp[($xi + 1), $yi]
@@ -6373,27 +6464,27 @@ function Invoke-BashDiff {
         }
     }
 
-    # Build edit script
+    # Build edit script using original line indices
     $edits = [System.Collections.Generic.List[object]]::new()
     $xi = 0; $yi = 0
     while ($xi -lt $n -and $yi -lt $m) {
-        if ($lines1[$xi] -ceq $lines2[$yi]) {
-            $edits.Add(@{ Op = '='; Line1 = $xi; Line2 = $yi })
+        if ($cmp1[$idx1[$xi]] -ceq $cmp2[$idx2[$yi]]) {
+            $edits.Add(@{ Op = '='; Line1 = $idx1[$xi]; Line2 = $idx2[$yi] })
             $xi++; $yi++
         } elseif ($dp[($xi + 1), $yi] -ge $dp[$xi, ($yi + 1)]) {
-            $edits.Add(@{ Op = '-'; Line1 = $xi })
+            $edits.Add(@{ Op = '-'; Line1 = $idx1[$xi] })
             $xi++
         } else {
-            $edits.Add(@{ Op = '+'; Line2 = $yi })
+            $edits.Add(@{ Op = '+'; Line2 = $idx2[$yi] })
             $yi++
         }
     }
     while ($xi -lt $n) {
-        $edits.Add(@{ Op = '-'; Line1 = $xi })
+        $edits.Add(@{ Op = '-'; Line1 = $idx1[$xi] })
         $xi++
     }
     while ($yi -lt $m) {
-        $edits.Add(@{ Op = '+'; Line2 = $yi })
+        $edits.Add(@{ Op = '+'; Line2 = $idx2[$yi] })
         $yi++
     }
 
@@ -6404,14 +6495,17 @@ function Invoke-BashDiff {
     }
     if (-not $hasDiff) { return }
 
-    if ($unified) {
-        # Unified format
-        New-BashObject -BashText "--- $($operands[0])"
-        New-BashObject -BashText "+++ $($operands[1])"
+    # Brief mode: just report whether files differ
+    if ($brief) {
+        New-BashObject -BashText "Files $($operands[0]) and $($operands[1]) differ"
+        return
+    }
 
-        # Group edits into hunks
-        $hunkEdits = [System.Collections.Generic.List[object]]::new()
+    # Collect hunks (shared by unified and context formats)
+    # For normal format, hunks are emitted inline without context lines
+    if ($unified -or $context) {
         $contextLines = 3
+        $hunkGroups = [System.Collections.Generic.List[object]]::new()
         $ei = 0
         while ($ei -lt $edits.Count) {
             if ($edits[$ei].Op -ne '=') {
@@ -6435,43 +6529,121 @@ function Invoke-BashDiff {
                         break
                     }
                 }
+                $hunkGroup = [System.Collections.Generic.List[object]]::new()
                 for ($k = $start; $k -lt $end; $k++) {
-                    $hunkEdits.Add($edits[$k])
+                    $hunkGroup.Add($edits[$k])
                 }
+                $hunkGroups.Add($hunkGroup)
                 $ei = $end
             } else {
                 $ei++
             }
         }
 
-        if ($hunkEdits.Count -gt 0) {
-            $l1Start = -1; $l1Count = 0; $l2Start = -1; $l2Count = 0
-            $hunkLines = [System.Collections.Generic.List[string]]::new()
-            foreach ($e in $hunkEdits) {
-                switch ($e.Op) {
-                    '=' {
-                        if ($l1Start -eq -1) { $l1Start = $e.Line1 + 1 }
-                        if ($l2Start -eq -1) { $l2Start = $e.Line2 + 1 }
-                        $l1Count++; $l2Count++
-                        $hunkLines.Add(" $($lines1[$e.Line1])")
-                    }
-                    '-' {
-                        if ($l1Start -eq -1) { $l1Start = $e.Line1 + 1 }
-                        if ($l2Start -eq -1) { $l2Start = $e.Line1 + 1 }
-                        $l1Count++
-                        $hunkLines.Add("-$($lines1[$e.Line1])")
-                    }
-                    '+' {
-                        if ($l1Start -eq -1) { $l1Start = $e.Line2 + 1 }
-                        if ($l2Start -eq -1) { $l2Start = $e.Line2 + 1 }
-                        $l2Count++
-                        $hunkLines.Add("+$($lines2[$e.Line2])")
+        if ($unified) {
+            # Unified format
+            New-BashObject -BashText "--- $($operands[0])"
+            New-BashObject -BashText "+++ $($operands[1])"
+            foreach ($group in $hunkGroups) {
+                $l1Start = -1; $l1Count = 0; $l2Start = -1; $l2Count = 0
+                $hunkLines = [System.Collections.Generic.List[string]]::new()
+                foreach ($e in $group) {
+                    switch ($e.Op) {
+                        '=' {
+                            if ($l1Start -eq -1) { $l1Start = $e.Line1 + 1 }
+                            if ($l2Start -eq -1) { $l2Start = $e.Line2 + 1 }
+                            $l1Count++; $l2Count++
+                            $hunkLines.Add(" $($lines1[$e.Line1])")
+                        }
+                        '-' {
+                            if ($l1Start -eq -1) { $l1Start = $e.Line1 + 1 }
+                            if ($l2Start -eq -1) { $l2Start = $e.Line1 + 1 }
+                            $l1Count++
+                            $hunkLines.Add("-$($lines1[$e.Line1])")
+                        }
+                        '+' {
+                            if ($l1Start -eq -1) { $l1Start = $e.Line2 + 1 }
+                            if ($l2Start -eq -1) { $l2Start = $e.Line2 + 1 }
+                            $l2Count++
+                            $hunkLines.Add("+$($lines2[$e.Line2])")
+                        }
                     }
                 }
+                New-BashObject -BashText "@@ -${l1Start},${l1Count} +${l2Start},${l2Count} @@"
+                foreach ($hl in $hunkLines) {
+                    New-BashObject -BashText $hl
+                }
             }
-            New-BashObject -BashText "@@ -${l1Start},${l1Count} +${l2Start},${l2Count} @@"
-            foreach ($hl in $hunkLines) {
-                New-BashObject -BashText $hl
+        } else {
+            # Context format
+            New-BashObject -BashText "*** $($operands[0])"
+            New-BashObject -BashText "--- $($operands[1])"
+            foreach ($group in $hunkGroups) {
+                $l1Start = -1; $l1End = -1; $l2Start = -1; $l2End = -1
+                foreach ($e in $group) {
+                    switch ($e.Op) {
+                        '=' {
+                            if ($l1Start -eq -1) { $l1Start = $e.Line1 + 1 }
+                            $l1End = $e.Line1 + 1
+                            if ($l2Start -eq -1) { $l2Start = $e.Line2 + 1 }
+                            $l2End = $e.Line2 + 1
+                        }
+                        '-' {
+                            if ($l1Start -eq -1) { $l1Start = $e.Line1 + 1 }
+                            $l1End = $e.Line1 + 1
+                        }
+                        '+' {
+                            if ($l2Start -eq -1) { $l2Start = $e.Line2 + 1 }
+                            $l2End = $e.Line2 + 1
+                        }
+                    }
+                }
+                New-BashObject -BashText "***************"
+                New-BashObject -BashText "*** ${l1Start},${l1End}"
+                # Mark deletes that are paired with inserts as changes (!)
+                $changeLine1 = @{}
+                $gi = 0
+                while ($gi -lt $group.Count) {
+                    if ($group[$gi].Op -eq '-' -and ($gi + 1) -lt $group.Count -and $group[$gi + 1].Op -eq '+') {
+                        $changeLine1[$group[$gi].Line1] = $true
+                    }
+                    $gi++
+                }
+                foreach ($e in $group) {
+                    switch ($e.Op) {
+                        '=' { New-BashObject -BashText "  $($lines1[$e.Line1])" }
+                        '-' {
+                            if ($changeLine1.ContainsKey($e.Line1)) {
+                                New-BashObject -BashText "! $($lines1[$e.Line1])"
+                            } else {
+                                New-BashObject -BashText "- $($lines1[$e.Line1])"
+                            }
+                        }
+                        '+' { <# shown in --- section #> }
+                    }
+                }
+                New-BashObject -BashText "--- ${l2Start},${l2End}"
+                $changeLine2 = @{}
+                $gi = 0
+                while ($gi -lt $group.Count) {
+                    if ($group[$gi].Op -eq '+' -and $gi -gt 0 -and $group[$gi - 1].Op -eq '-') {
+                        $changeLine2[$group[$gi].Line2] = $true
+                    }
+                    $gi++
+                }
+                foreach ($e in $group) {
+                    switch ($e.Op) {
+                        '=' { New-BashObject -BashText "  $($lines2[$e.Line2])" }
+                        '-' { <# shown in *** section #> }
+                        '+' {
+                            if ($changeLine2.ContainsKey($e.Line2)) {
+                                New-BashObject -BashText "! $($lines2[$e.Line2])"
+                            } else {
+                                New-BashObject -BashText "+ $($lines2[$e.Line2])"
+                            }
+                        }
+                    }
+                }
             }
         }
     } else {
@@ -11384,7 +11556,15 @@ $script:BashFlagSpecs = @{
     'tr'       = @( @('-c', 'complement'), @('-C', 'complement'), @('-d', 'delete'), @('-s', 'squeeze'), @('-t', 'truncate SET2') )
     'uniq'     = @( @('-c', 'count'), @('-d', 'duplicates only') )
     'nl'       = @( @('-ba', 'number all lines') )
-    'diff'     = @( @('-u', 'unified format') )
+    'diff'     = @(
+        @('-u', 'unified format'),
+        @('-c', 'context format'),
+        @('-q', 'report only whether files differ'),
+        @('-w', 'ignore all whitespace'),
+        @('-b', 'ignore changes in whitespace amount'),
+        @('-B', 'ignore blank line changes'),
+        @('-i', 'case-insensitive comparison')
+    )
     'comm'     = @( @('-1', 'suppress col 1'), @('-2', 'suppress col 2'), @('-3', 'suppress col 3') )
     'column'   = @( @('-t', 'table mode'), @('-s', 'separator') )
     'join'     = @( @('-t', 'delimiter'), @('-1', 'field from file 1'), @('-2', 'field from file 2') )
