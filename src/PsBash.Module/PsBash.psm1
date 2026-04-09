@@ -1704,10 +1704,68 @@ function Invoke-BashSort {
     $versionSort = $false
     $monthSort = $false
     $checkOnly = $false
-    $keyField = $null
+    $blankIgnore = $false
+    $dictOrder = $false
+    $stableSort = $false
     $delimiter = $null
+    # Each key spec: @{ StartField; StartChar; EndField; EndChar; Numeric; Reverse; BlankIgnore }
+    $keySpecs = [System.Collections.Generic.List[hashtable]]::new()
     $operands = [System.Collections.Generic.List[string]]::new()
     $pastDoubleDash = $false
+
+    # Parse a single key position like "2.3rn" into field, char offset, and flags
+    $parseKeySpecPos = {
+        param([string]$s)
+        $field = 0
+        $charOffset = 0
+        $keyNumeric = $false
+        $keyReverse = $false
+        $keyBlankIgnore = $false
+        if ($s -match '^(\d+)(?:\.(\d+))?([nrRbB]*)?$') {
+            $field = [int]$Matches[1]
+            if ($null -ne $Matches[2] -and $Matches[2] -ne '') {
+                $charOffset = [int]$Matches[2]
+            }
+            if ($null -ne $Matches[3]) {
+                foreach ($c in $Matches[3].ToCharArray()) {
+                    switch ($c) {
+                        'n' { $keyNumeric = $true }
+                        'r' { $keyReverse = $true }
+                        'R' { $keyReverse = $true }
+                        'b' { $keyBlankIgnore = $true }
+                        'B' { $keyBlankIgnore = $true }
+                    }
+                }
+            }
+        }
+        return @{ Field = $field; CharOffset = $charOffset; Numeric = $keyNumeric; Reverse = $keyReverse; BlankIgnore = $keyBlankIgnore }
+    }
+
+    # Parse a full -k spec like "2.3,4.1nr" into start and end positions
+    $parseKeySpec = {
+        param([string]$spec)
+        $parts = $spec -split ',', 2
+        $start = & $parseKeySpecPos $parts[0]
+        $endField = 0; $endChar = 0
+        $endNumeric = $start.Numeric; $endReverse = $start.Reverse; $endBlankIgnore = $start.BlankIgnore
+        if ($parts.Count -ge 2) {
+            $endPos = & $parseKeySpecPos $parts[1]
+            $endField = $endPos.Field
+            $endChar = $endPos.CharOffset
+            if ($endPos.Numeric) { $endNumeric = $true }
+            if ($endPos.Reverse) { $endReverse = $true }
+            if ($endPos.BlankIgnore) { $endBlankIgnore = $true }
+        }
+        return @{
+            StartField    = $start.Field
+            StartChar     = $start.CharOffset
+            EndField      = $endField
+            EndChar       = $endChar
+            Numeric       = $endNumeric
+            Reverse       = $endReverse
+            BlankIgnore   = $endBlankIgnore
+        }
+    }
 
     $i = 0
     while ($i -lt $Arguments.Count) {
@@ -1732,9 +1790,9 @@ function Invoke-BashSort {
             continue
         }
 
-        # -k with joined value (e.g. -k2)
-        if ($arg -cmatch '^-k(\d+.*)$') {
-            $keyField = [int]($Matches[1] -replace '[^0-9].*', '')
+        # -k with joined value (e.g. -k2 or -k2,2 or -k2.3,4.1n)
+        if ($arg -cmatch '^-k(\d[^,\s]*(?:,\d[^,\s]*)?)$') {
+            $keySpecs.Add((& $parseKeySpec $Matches[1]))
             $i++
             continue
         }
@@ -1753,7 +1811,7 @@ function Invoke-BashSort {
         if ($arg -ceq '-k') {
             $i++
             if ($i -lt $Arguments.Count) {
-                $keyField = [int]($Arguments[$i] -replace '[^0-9].*', '')
+                $keySpecs.Add((& $parseKeySpec $Arguments[$i]))
             }
             $i++
             continue
@@ -1770,6 +1828,9 @@ function Invoke-BashSort {
                     'V' { $versionSort = $true }
                     'M' { $monthSort = $true }
                     'c' { $checkOnly = $true }
+                    'b' { $blankIgnore = $true }
+                    'd' { $dictOrder = $true }
+                    's' { $stableSort = $true }
                 }
             }
             $i++
@@ -1804,21 +1865,127 @@ function Invoke-BashSort {
         }
     }
 
-    # Extract sort key from an item
-    $getSortText = {
+    # Extract text for a key spec from an item
+    $extractKeyText = {
+        param($item, $spec)
+        $text = Get-BashText -InputObject $item
+        $text = $text -replace "`n$", ''
+        if ($null -eq $spec) { return $text }
+        $sep = if ($null -ne $delimiter) { [regex]::Escape($delimiter) } else { '\s+' }
+        $parts = $text -split $sep
+        $startIdx = $spec.StartField - 1
+        if ($startIdx -lt 0) { $startIdx = 0 }
+        if ($startIdx -ge $parts.Count) { return '' }
+        # Build the key from start field to end field
+        $endIdx = if ($spec.EndField -gt 0) { $spec.EndField - 1 } else { $parts.Count - 1 }
+        if ($endIdx -ge $parts.Count) { $endIdx = $parts.Count - 1 }
+        $fields = [System.Collections.Generic.List[string]]::new()
+        for ($fi = $startIdx; $fi -le $endIdx; $fi++) {
+            $fieldText = $parts[$fi]
+            # Trim leading chars before StartChar on first field
+            if ($fi -eq $startIdx -and $spec.StartChar -gt 0) {
+                $skip = $spec.StartChar - 1
+                if ($skip -lt $fieldText.Length) {
+                    $fieldText = $fieldText.Substring($skip)
+                } else {
+                    $fieldText = ''
+                }
+            }
+            # Trim after EndChar on last field
+            if ($fi -eq $endIdx -and $spec.EndChar -gt 0) {
+                if ($spec.EndChar -lt $fieldText.Length) {
+                    $fieldText = $fieldText.Substring(0, $spec.EndChar)
+                }
+            }
+            $fields.Add($fieldText)
+        }
+        $key = $fields -join ' '
+        if ($spec.BlankIgnore -or $blankIgnore) {
+            $key = $key -replace '^\s+', ''
+        }
+        return $key
+    }
+
+    # Full-line sort key (no -k specs)
+    $getFullText = {
         param($item)
         $text = Get-BashText -InputObject $item
         $text = $text -replace "`n$", ''
-        if ($null -ne $keyField) {
-            $sep = if ($null -ne $delimiter) { [regex]::Escape($delimiter) } else { '\s+' }
-            $parts = $text -split $sep
-            $idx = $keyField - 1
-            if ($idx -ge 0 -and $idx -lt $parts.Count) {
-                return $parts[$idx]
-            }
-            return ''
-        }
+        if ($blankIgnore) { $text = $text -replace '^\s+', '' }
         return $text
+    }
+
+    # Compare two items returning -1, 0, or 1
+    $compareItems = {
+        param($a, $b)
+        if ($keySpecs.Count -gt 0) {
+            foreach ($spec in $keySpecs) {
+                $aKey = & $extractKeyText $a $spec
+                $bKey = & $extractKeyText $b $spec
+                $aKey = if ($spec.BlankIgnore -or $blankIgnore) { $aKey -replace '^\s+', '' } else { $aKey }
+                $bKey = if ($spec.BlankIgnore -or $blankIgnore) { $bKey -replace '^\s+', '' } else { $bKey }
+                if ($dictOrder) {
+                    $aKey = $aKey -replace '[^a-zA-Z0-9\s]', ''
+                    $bKey = $bKey -replace '[^a-zA-Z0-9\s]', ''
+                }
+                $cmp = 0
+                if ($humanNumeric) {
+                    $aH = ConvertFrom-HumanNumeric -Value $aKey
+                    $bH = ConvertFrom-HumanNumeric -Value $bKey
+                    if ($aH -lt $bH) { $cmp = -1 }
+                    elseif ($aH -gt $bH) { $cmp = 1 }
+                } elseif ($spec.Numeric -or $numeric) {
+                    $aN = 0.0; $bN = 0.0
+                    [void][double]::TryParse($aKey, [ref]$aN)
+                    [void][double]::TryParse($bKey, [ref]$bN)
+                    if ($aN -lt $bN) { $cmp = -1 }
+                    elseif ($aN -gt $bN) { $cmp = 1 }
+                } elseif ($monthSort) {
+                    $aM = ConvertFrom-MonthName -Value $aKey
+                    $bM = ConvertFrom-MonthName -Value $bKey
+                    if ($aM -lt $bM) { $cmp = -1 }
+                    elseif ($aM -gt $bM) { $cmp = 1 }
+                } elseif ($foldCase) {
+                    $cmp = [string]::Compare($aKey, $bKey, [System.StringComparison]::OrdinalIgnoreCase)
+                } else {
+                    $cmp = [string]::Compare($aKey, $bKey, [System.StringComparison]::Ordinal)
+                }
+                if ($spec.Reverse -or $reverse) { $cmp = -$cmp }
+                if ($cmp -ne 0) { return $cmp }
+            }
+            return 0
+        }
+        # No -k specs: use global flags on full line
+        $aText = & $getFullText $a
+        $bText = & $getFullText $b
+        if ($dictOrder) {
+            $aText = $aText -replace '[^a-zA-Z0-9\s]', ''
+            $bText = $bText -replace '[^a-zA-Z0-9\s]', ''
+        }
+        $cmp = 0
+        if ($humanNumeric) {
+            $aH = ConvertFrom-HumanNumeric -Value $aText
+            $bH = ConvertFrom-HumanNumeric -Value $bText
+            if ($aH -lt $bH) { $cmp = -1 }
+            elseif ($aH -gt $bH) { $cmp = 1 }
+        } elseif ($numeric) {
+            $aN = 0.0; $bN = 0.0
+            [void][double]::TryParse($aText, [ref]$aN)
+            [void][double]::TryParse($bText, [ref]$bN)
+            if ($aN -lt $bN) { $cmp = -1 }
+            elseif ($aN -gt $bN) { $cmp = 1 }
+        } elseif ($monthSort) {
+            $aM = ConvertFrom-MonthName -Value $aText
+            $bM = ConvertFrom-MonthName -Value $bText
+            if ($aM -lt $bM) { $cmp = -1 }
+            elseif ($aM -gt $bM) { $cmp = 1 }
+        } elseif ($foldCase) {
+            $cmp = [string]::Compare($aText, $bText, [System.StringComparison]::OrdinalIgnoreCase)
+        } else {
+            $cmp = [string]::Compare($aText, $bText, [System.StringComparison]::Ordinal)
+        }
+        if ($reverse) { $cmp = -$cmp }
+        return $cmp
     }
 
     # Smart path: -h with LsEntry objects uses SizeBytes directly
@@ -1829,9 +1996,7 @@ function Invoke-BashSort {
     # Check-only mode
     if ($checkOnly) {
         for ($idx = 1; $idx -lt $items.Count; $idx++) {
-            $prevText = & $getSortText $items[$idx - 1]
-            $currText = & $getSortText $items[$idx]
-            $cmp = [string]::Compare($prevText, $currText, [System.StringComparison]::Ordinal)
+            $cmp = & $compareItems $items[$idx - 1] $items[$idx]
             if ($cmp -gt 0) {
                 $global:LASTEXITCODE = 1
                 return
@@ -1841,7 +2006,7 @@ function Invoke-BashSort {
         return
     }
 
-    # Build sort key for each item
+    # Build indexed list for stable sort tracking
     $indexed = [System.Collections.Generic.List[object]]::new()
     for ($idx = 0; $idx -lt $items.Count; $idx++) {
         $indexed.Add(@{
@@ -1850,59 +2015,78 @@ function Invoke-BashSort {
         })
     }
 
-    # Sort using a comparison
-    $sorted = $indexed | Sort-Object -Property @{
-        Expression = {
-            $item = $_.Item
-
-            if ($useSizeBytesPath) {
-                return [double]$item.SizeBytes
-            }
-
-            $text = & $getSortText $item
-
-            if ($humanNumeric) {
-                return ConvertFrom-HumanNumeric -Value $text
-            }
-            if ($numeric) {
-                $n = 0.0
-                if ([double]::TryParse($text, [ref]$n)) { return $n }
-                return 0.0
-            }
-            if ($monthSort) {
-                return ConvertFrom-MonthName -Value $text
-            }
-            if ($foldCase) {
-                return $text.ToLower()
-            }
-            return $text
-        }
-    } -Stable
+    # Sort path selection
+    $useCustomSort = $keySpecs.Count -gt 0 -or $dictOrder -or $blankIgnore
+    $sorted = $null
 
     if ($versionSort) {
-        $list = [System.Collections.Generic.List[object]]::new(@($sorted))
+        # Version sort: insertion sort with Compare-Version
+        $list = [System.Collections.Generic.List[object]]::new(@($indexed))
         for ($i2 = 1; $i2 -lt $list.Count; $i2++) {
             $current = $list[$i2]
-            $currentText = (& $getSortText $current.Item) -replace "`n$", ''
+            $currentText = (& $getFullText $current.Item) -replace "`n$", ''
             $j = $i2 - 1
             while ($j -ge 0) {
-                $otherText = (& $getSortText $list[$j].Item) -replace "`n$", ''
-                if ((Compare-Version -Left $otherText -Right $currentText) -le 0) { break }
+                $otherText = (& $getFullText $list[$j].Item) -replace "`n$", ''
+                $vcmp = Compare-Version -Left $otherText -Right $currentText
+                if ($reverse) { $vcmp = -$vcmp }
+                if ($vcmp -le 0) { break }
                 $list[$j + 1] = $list[$j]
                 $j--
             }
             $list[$j + 1] = $current
         }
         $sorted = $list
-    }
-
-    if ($reverse) {
-        $reversed = [System.Collections.Generic.List[object]]::new()
-        $asList = @($sorted)
-        for ($idx = $asList.Count - 1; $idx -ge 0; $idx--) {
-            $reversed.Add($asList[$idx])
+    } elseif ($useCustomSort) {
+        # Custom comparison: insertion sort for multi-key / dict / blank support
+        $list = [System.Collections.Generic.List[object]]::new(@($indexed))
+        for ($i2 = 1; $i2 -lt $list.Count; $i2++) {
+            $current = $list[$i2]
+            $j = $i2 - 1
+            while ($j -ge 0) {
+                $cmp = & $compareItems $list[$j].Item $current.Item
+                if ($cmp -le 0) { break }
+                $list[$j + 1] = $list[$j]
+                $j--
+            }
+            $list[$j + 1] = $current
         }
-        $sorted = $reversed
+        $sorted = $list
+    } else {
+        # Standard path: Sort-Object for simple global flags
+        $sorted = $indexed | Sort-Object -Property @{
+            Expression = {
+                $item = $_.Item
+                if ($useSizeBytesPath) {
+                    return [double]$item.SizeBytes
+                }
+                $text = & $getFullText $item
+                if ($humanNumeric) {
+                    return ConvertFrom-HumanNumeric -Value $text
+                }
+                if ($numeric) {
+                    $n = 0.0
+                    if ([double]::TryParse($text, [ref]$n)) { return $n }
+                    return 0.0
+                }
+                if ($monthSort) {
+                    return ConvertFrom-MonthName -Value $text
+                }
+                if ($foldCase) {
+                    return $text.ToLower()
+                }
+                return $text
+            }
+        } -Stable
+
+        if ($reverse) {
+            $reversed = [System.Collections.Generic.List[object]]::new()
+            $asList = @($sorted)
+            for ($idx = $asList.Count - 1; $idx -ge 0; $idx--) {
+                $reversed.Add($asList[$idx])
+            }
+            $sorted = $reversed
+        }
     }
 
     # Unique: deduplicate by sort text
@@ -1910,7 +2094,7 @@ function Invoke-BashSort {
         $seen = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::Ordinal)
         $deduped = [System.Collections.Generic.List[object]]::new()
         foreach ($entry in $sorted) {
-            $text = & $getSortText $entry.Item
+            $text = & $getFullText $entry.Item
             $key = if ($foldCase) { $text.ToLower() } else { $text }
             if ($seen.Add($key)) {
                 $deduped.Add($entry)
@@ -9907,7 +10091,7 @@ function Invoke-BashTar {
             foreach ($src in $sources) {
                 $resolved = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($src)
                 if (-not (Test-Path $resolved)) {
-                    Write-BashError -Message "tar: $src: Cannot stat: No such file or directory"
+                    Write-BashError -Message "tar: ${src}: Cannot stat: No such file or directory"
                     continue
                 }
                 $item = Get-BashItem $resolved
@@ -9949,7 +10133,7 @@ function Invoke-BashTar {
     }
     elseif ($extract) {
         if (-not (Test-Path $archiveFile)) {
-            Write-BashError -Message "tar: $archiveFile: Cannot open: No such file or directory"
+            Write-BashError -Message "tar: ${archiveFile}: Cannot open: No such file or directory"
             return
         }
         $isGz = $gzipFilter -or $archiveFile -match '\.(tar\.gz|tgz)$'
@@ -9983,7 +10167,7 @@ function Invoke-BashTar {
     }
     elseif ($listMode) {
         if (-not (Test-Path $archiveFile)) {
-            Write-BashError -Message "tar: $archiveFile: Cannot open: No such file or directory"
+            Write-BashError -Message "tar: ${archiveFile}: Cannot open: No such file or directory"
             return
         }
         $isGz = $gzipFilter -or $archiveFile -match '\.(tar\.gz|tgz)$'
