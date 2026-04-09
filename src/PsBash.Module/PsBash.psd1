@@ -12,7 +12,7 @@
 RootModule = 'PsBash.psm1'
 
 # Version number of this module.
-ModuleVersion = '0.6.0'
+ModuleVersion = '0.7.0'
 
 
 # ID used to uniquely identify this module
@@ -165,7 +165,7 @@ PrivateData = @{
         ProjectUri = 'https://github.com/standardbeagle/ps-bash'
 
         # ReleaseNotes of this module
-        ReleaseNotes = 'Initial release: 68 bash commands with typed objects, pipeline bridge, cross-platform support.'
+        ReleaseNotes = 'v0.7.0: tar (System.Formats.Tar), grep -F/-H/-h/-e/-w/-o/-m, tail -f/-c/-s, find -print0/xargs -0, jq //, if-then-else, as $var, .., sed -r/-f/a/i/c/q/N/D/P, sort -b/-d/-s/-k N.M,N.M, tr -c/-t/POSIX classes, uniq -u/-i/-f/-s/-w, diff -q/-w/-b/-B/-i/-c, awk -f/sprintf/match/strftime/systime/delete, interactive shell REPL mode.'
 
     } # End of PSData hashtable
 
