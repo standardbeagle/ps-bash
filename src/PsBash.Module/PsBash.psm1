@@ -1273,6 +1273,24 @@ function Invoke-BashGrep {
             continue
         }
 
+        # Long-form flags
+        if ($arg -eq '--fixed-strings') { $fixedString = $true; $i++; continue }
+        if ($arg -eq '--with-filename') { $forceFileName = $true; $i++; continue }
+        if ($arg -eq '--no-filename') { $suppressFileName = $true; $i++; continue }
+        if ($arg -eq '--word-regexp') { $wholeWord = $true; $i++; continue }
+        if ($arg -eq '--only-matching') { $outputMatchOnly = $true; $i++; continue }
+        if ($arg -eq '--max-count') {
+            $i++
+            if ($i -lt $Arguments.Count) { $maxMatches = [int]$Arguments[$i] }
+            $i++
+            continue
+        }
+        if ($arg -cmatch '^--max-count=(\d+)$') {
+            $maxMatches = [int]$Matches[1]
+            $i++
+            continue
+        }
+
         if ($arg.StartsWith('-') -and $arg.Length -gt 1 -and -not $arg.StartsWith('--')) {
             foreach ($ch in $arg.Substring(1).ToCharArray()) {
                 switch -CaseSensitive ($ch) {
@@ -1375,10 +1393,10 @@ function Invoke-BashGrep {
                                 $subLine
                             }
 
-                            $bashText = $outputText
-                            if ($showLineNumbers) {
-                                $bashText = "${lineNum}:${outputText}"
-                            }
+                            $prefix = ''
+                            if ($forceFileName) { $prefix = "<stdin>:" }
+                            if ($showLineNumbers) { $prefix = "${prefix}${lineNum}:" }
+                            $bashText = "${prefix}${outputText}"
 
                             New-BashObject -BashText $bashText
                         }
@@ -1409,17 +1427,16 @@ function Invoke-BashGrep {
                             $lineText
                         }
 
-                        if ($forceFileName) {
-                            New-BashObject -BashText "<stdin>:$outputText"
-                        } elseif ($showLineNumbers) {
-                            New-BashObject -BashText "${lineNum}:$outputText"
-                        } elseif ($outputMatchOnly -or -not $outputMatchOnly) {
-                            # If -o is set, emit outputText; otherwise preserve original object if possible
-                            if ($outputMatchOnly) {
-                                New-BashObject -BashText $outputText
-                            } else {
-                                $item
-                            }
+                        $prefix = ''
+                        if ($forceFileName) { $prefix = "<stdin>:" }
+                        if ($showLineNumbers) { $prefix = "${prefix}${lineNum}:" }
+
+                        if ($prefix -ne '') {
+                            New-BashObject -BashText "${prefix}${outputText}"
+                        } elseif ($outputMatchOnly) {
+                            New-BashObject -BashText $outputText
+                        } else {
+                            $item
                         }
                     }
                 }
@@ -10494,7 +10511,9 @@ $script:BashFlagSpecs = @{
         @('-i', 'ignore case'),       @('-v', 'invert match'),     @('-n', 'line numbers'),
         @('-c', 'count only'),        @('-r', 'recursive'),        @('-l', 'files with matches'),
         @('-E', 'extended regex'),    @('-A', 'after context'),    @('-B', 'before context'),
-        @('-C', 'context')
+        @('-C', 'context'),           @('-F', 'fixed strings'),    @('-w', 'word regexp'),
+        @('-o', 'only matching'),     @('-H', 'with filename'),    @('-h', 'no filename'),
+        @('-e', 'pattern'),           @('-m', 'max count')
     )
     'rg'       = @(
         @('-i', 'ignore case'),       @('-w', 'word regexp'),      @('-c', 'count matches'),
