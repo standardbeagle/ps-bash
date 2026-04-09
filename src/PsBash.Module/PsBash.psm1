@@ -1936,8 +1936,10 @@ function Invoke-BashSort {
                     elseif ($aH -gt $bH) { $cmp = 1 }
                 } elseif ($spec.Numeric -or $numeric) {
                     $aN = 0.0; $bN = 0.0
-                    [void][double]::TryParse($aKey, [ref]$aN)
-                    [void][double]::TryParse($bKey, [ref]$bN)
+                    $aNstr = if ($aKey -match '^[+-]?\d+(?:\.\d+)?') { $Matches[0] } else { '0' }
+                    $bNstr = if ($bKey -match '^[+-]?\d+(?:\.\d+)?') { $Matches[0] } else { '0' }
+                    [void][double]::TryParse($aNstr, [ref]$aN)
+                    [void][double]::TryParse($bNstr, [ref]$bN)
                     if ($aN -lt $bN) { $cmp = -1 }
                     elseif ($aN -gt $bN) { $cmp = 1 }
                 } elseif ($monthSort) {
@@ -4287,7 +4289,7 @@ function Invoke-BashSed {
                         continue
                     }
 
-                    switch ($cmd.Type) {
+                    switch -CaseSensitive ($cmd.Type) {
                         's' {
                             $regex = $cmd.Regex
                             if ($cmd.Global) {
@@ -4543,7 +4545,7 @@ function ConvertFrom-SedExpression {
 
     $cmdChar = $remaining[0]
 
-    switch ($cmdChar) {
+    switch -CaseSensitive ($cmdChar) {
         's' {
             $delim = $remaining[1]
             $parts = [System.Collections.Generic.List[string]]::new()
@@ -6683,24 +6685,24 @@ function Invoke-BashDiff {
 
     # When -B is set, build indices skipping blank lines for comparison
     $idx1 = if ($ignoreBlankLines) {
-        @(
+        ,@(
             for ($xi = 0; $xi -lt $cmp1.Count; $xi++) {
                 if ($cmp1[$xi] -ne '') { $xi }
             }
         )
     } else {
-        @(
+        ,@(
             for ($xi = 0; $xi -lt $cmp1.Count; $xi++) { $xi }
         )
     }
     $idx2 = if ($ignoreBlankLines) {
-        @(
+        ,@(
             for ($yi = 0; $yi -lt $cmp2.Count; $yi++) {
                 if ($cmp2[$yi] -ne '') { $yi }
             }
         )
     } else {
-        @(
+        ,@(
             for ($yi = 0; $yi -lt $cmp2.Count; $yi++) { $yi }
         )
     }
@@ -10697,7 +10699,7 @@ function Invoke-BashTar {
                     Write-BashError -Message "tar: ${src}: Cannot stat: No such file or directory"
                     continue
                 }
-                $item = Get-BashItem $resolved
+                $item = Get-BashItem -Path $resolved -Command 'tar'
                 if ($item.PSIsContainer) {
                     $root = [System.IO.Path]::GetFileName($resolved)
                     $baseDir = [System.IO.Path]::GetDirectoryName($resolved)
@@ -10705,6 +10707,7 @@ function Invoke-BashTar {
                     $enumOpts.RecurseSubdirectories = $true
                     $children = [System.IO.Directory]::GetFileSystemEntries($resolved, '*', $enumOpts)
                     $writer.WriteEntry($resolved, $root)
+                    if ($verbose) { Write-Output $root }
                     foreach ($child in $children) {
                         $skip = $false
                         foreach ($pat in $excludePatterns) {
@@ -10787,7 +10790,10 @@ function Invoke-BashTar {
                 if ($entry.EntryType -eq 'Directory') {
                     $name = $name.TrimEnd('/') + '/'
                 }
-                Emit-BashLine -Text "$name`n"
+                $leaf = [System.IO.Path]::GetFileName($name.TrimEnd('/'))
+                $obj = New-BashObject -BashText "$name`n"
+                $obj.PSObject.Properties.Add([System.Management.Automation.PSNoteProperty]::new('Name', $leaf))
+                $obj
             }
         } catch {
             Write-BashError -Message "tar: $_" -ExitCode 1
