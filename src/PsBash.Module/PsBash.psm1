@@ -6688,7 +6688,9 @@ function ConvertTo-JqJson {
 }
 
 function Invoke-JqFilter {
-    param([object]$Data, [string]$Filter)
+    param([object]$Data, [string]$Filter, [hashtable]$Variables)
+
+    if ($null -eq $Variables) { $Variables = @{} }
 
     $filter = $Filter.Trim()
     if ($filter -eq '') { return @(, $Data) }
@@ -6697,10 +6699,25 @@ function Invoke-JqFilter {
     [string[]]$pipeSegments = @(Split-JqPipe -Filter $filter)
     if ($pipeSegments.Count -gt 1) {
         $current = @(, $Data)
+        $scope = $Variables
         foreach ($seg in $pipeSegments) {
+            # Handle: expr as $var | next_expr
+            if ($seg -match '^(.+?)\s+as\s+(\$\w+)\s*$') {
+                $bindingExpr = $Matches[1].Trim()
+                $varName = $Matches[2]
+                $bound = @()
+                foreach ($item in $current) {
+                    $bound += @(Invoke-JqFilter -Data $item -Filter $bindingExpr -Variables $scope)
+                }
+                $newScope = @{} + $scope
+                $newScope[$varName] = $bound
+                $current = $current
+                $scope = $newScope
+                continue
+            }
             $next = @()
             foreach ($item in $current) {
-                $next += @(Invoke-JqFilter -Data $item -Filter $seg)
+                $next += @(Invoke-JqFilter -Data $item -Filter $seg -Variables $scope)
             }
             $current = $next
         }
@@ -6712,9 +6729,43 @@ function Invoke-JqFilter {
     if ($commaSegments.Count -gt 1) {
         $results = @()
         foreach ($seg in $commaSegments) {
-            $results += @(Invoke-JqFilter -Data $Data -Filter $seg.Trim())
+            $results += @(Invoke-JqFilter -Data $Data -Filter $seg.Trim() -Variables $Variables)
         }
         return $results
+    }
+
+    # Handle alternative operator: expr // fallback
+    $altIdx = Find-JqTopLevelStr -S $filter -Sub '//'
+    if ($altIdx -ge 0) {
+        $leftExpr = $filter.Substring(0, $altIdx).Trim()
+        $rightExpr = $filter.Substring($altIdx + 2).Trim()
+        $leftResults = @(Invoke-JqFilter -Data $Data -Filter $leftExpr -Variables $Variables)
+        foreach ($val in $leftResults) {
+            if ($null -ne $val -and $val -ne $false) { return @(, $val) }
+        }
+        return @(Invoke-JqFilter -Data $Data -Filter $rightExpr -Variables $Variables)
+    }
+
+    # Handle if-then-elif-else-end
+    if ($filter.StartsWith('if ')) {
+        return @(Invoke-JqIf -Data $Data -Filter $filter -Variables $Variables)
+    }
+
+    # Recursive descent: ..
+    if ($filter -eq '..') {
+        return @(Invoke-JqRecurse -Data $Data)
+    }
+
+    # Variable reference: $varname
+    if ($filter.StartsWith('$') -and $filter -match '^\$\w+$') {
+        if ($Variables.ContainsKey($filter)) {
+            $val = $Variables[$filter]
+            if ($val -is [array] -or $val -is [System.Collections.IList]) {
+                return @($val)
+            }
+            return @(, $val)
+        }
+        return @(, $null)
     }
 
     # Identity
@@ -6723,7 +6774,7 @@ function Invoke-JqFilter {
     # Array construction: [expr]
     if ($filter.StartsWith('[') -and (Get-JqMatchingBracket -S $filter -Open '[' -Close ']' -Start 0) -eq ($filter.Length - 1)) {
         $inner = $filter.Substring(1, $filter.Length - 2)
-        $items = @(Invoke-JqFilter -Data $Data -Filter $inner)
+        $items = @(Invoke-JqFilter -Data $Data -Filter $inner -Variables $Variables)
         return @(, $items)
     }
 
@@ -6742,12 +6793,12 @@ function Invoke-JqFilter {
                 if ($keyPart.StartsWith('"') -and $keyPart.EndsWith('"')) {
                     $keyPart = $keyPart.Substring(1, $keyPart.Length - 2)
                 }
-                $vals = @(Invoke-JqFilter -Data $Data -Filter $valExpr)
+                $vals = @(Invoke-JqFilter -Data $Data -Filter $valExpr -Variables $Variables)
                 $result[$keyPart] = if ($vals.Count -eq 1) { $vals[0] } else { $vals }
             } else {
                 # Shorthand: just a name means {name: .name}
                 $keyPart = $pair.TrimStart('.')
-                $vals = @(Invoke-JqFilter -Data $Data -Filter ".$keyPart")
+                $vals = @(Invoke-JqFilter -Data $Data -Filter ".$keyPart" -Variables $Variables)
                 $result[$keyPart] = if ($vals.Count -eq 1) { $vals[0] } else { $vals }
             }
         }
@@ -6757,7 +6808,7 @@ function Invoke-JqFilter {
     # String literal with interpolation: "...\(expr)..."
     if ($filter.StartsWith('"') -and $filter.EndsWith('"')) {
         $strContent = $filter.Substring(1, $filter.Length - 2)
-        $result = Resolve-JqStringInterpolation -S $strContent -Data $Data
+        $result = Resolve-JqStringInterpolation -S $strContent -Data $Data -Variables $Variables
         return @(, $result)
     }
 
@@ -6821,7 +6872,7 @@ function Invoke-JqFilter {
         $items = @()
         if ($Data -is [array] -or $Data -is [System.Collections.IList]) {
             foreach ($elem in $Data) {
-                $items += @(Invoke-JqFilter -Data $elem -Filter $innerExpr)
+                $items += @(Invoke-JqFilter -Data $elem -Filter $innerExpr -Variables $Variables)
             }
         }
         return @(, $items)
@@ -6830,7 +6881,7 @@ function Invoke-JqFilter {
     # select(expr)
     if ($filter -match '^select\((.+)\)$') {
         $expr = $Matches[1]
-        $result = Invoke-JqSelect -Data $Data -Expr $expr
+        $result = Invoke-JqSelect -Data $Data -Expr $expr -Variables $Variables
         if ($result) { return @(, $Data) }
         return @()
     }
@@ -7042,7 +7093,9 @@ function Resolve-JqDotPath {
 }
 
 function Invoke-JqSelect {
-    param([object]$Data, [string]$Expr)
+    param([object]$Data, [string]$Expr, [hashtable]$Variables)
+
+    if ($null -eq $Variables) { $Variables = @{} }
 
     # Parse comparison: . op value, .field op value
     $ops = @('>=', '<=', '!=', '==', '>', '<')
@@ -7052,8 +7105,8 @@ function Invoke-JqSelect {
             $leftExpr = $Expr.Substring(0, $opIdx).Trim()
             $rightExpr = $Expr.Substring($opIdx + $op.Length).Trim()
 
-            $leftVals = @(Invoke-JqFilter -Data $Data -Filter $leftExpr)
-            $rightVals = @(Invoke-JqFilter -Data $Data -Filter $rightExpr)
+            $leftVals = @(Invoke-JqFilter -Data $Data -Filter $leftExpr -Variables $Variables)
+            $rightVals = @(Invoke-JqFilter -Data $Data -Filter $rightExpr -Variables $Variables)
             $left = if ($leftVals.Count -gt 0) { $leftVals[0] } else { $null }
             $right = if ($rightVals.Count -gt 0) { $rightVals[0] } else { $null }
 
@@ -7069,10 +7122,141 @@ function Invoke-JqSelect {
     }
 
     # Boolean check: just evaluate the expression and check truthiness
-    $vals = @(Invoke-JqFilter -Data $Data -Filter $Expr)
+    $vals = @(Invoke-JqFilter -Data $Data -Filter $Expr -Variables $Variables)
     if ($vals.Count -eq 0) { return $false }
     $val = $vals[0]
     return ($null -ne $val) -and ($val -ne $false)
+}
+
+function Invoke-JqIf {
+    param([object]$Data, [string]$Filter, [hashtable]$Variables)
+
+    # Parse: if COND then BODY [elif COND then BODY]* [else BODY] end
+    $rest = $Filter
+    $results = @()
+
+    while ($rest.StartsWith('if ')) {
+        # Find 'then' at depth 0
+        $thenIdx = Find-JqKeyword -S $rest -Keyword 'then'
+        if ($thenIdx -lt 0) {
+            Write-Error "jq: expected 'then' in if expression" -ErrorAction Continue
+            return @()
+        }
+        $condExpr = $rest.Substring(3, $thenIdx - 3).Trim()
+        $rest = $rest.Substring($thenIdx + 4).Trim()
+
+        # Find next keyword at depth 0: elif, else, end
+        $nextKw = Find-JqBranchKeyword -S $rest
+        $bodyExpr = $rest.Substring(0, $nextKw.Index).Trim()
+        $rest = $rest.Substring($nextKw.Index).Trim()
+
+        # Evaluate condition
+        $condVals = @(Invoke-JqFilter -Data $Data -Filter $condExpr -Variables $Variables)
+        $condTrue = ($condVals.Count -gt 0) -and ($null -ne $condVals[0]) -and ($condVals[0] -ne $false)
+
+        if ($condTrue) {
+            return @(Invoke-JqFilter -Data $Data -Filter $bodyExpr -Variables $Variables)
+        }
+
+        # Skip to next branch
+        if ($nextKw.Keyword -eq 'elif') {
+            $rest = "if $($rest.Substring(4).Trim())"
+            continue
+        } elseif ($nextKw.Keyword -eq 'else') {
+            # Find 'end' at depth 0 after 'else'
+            $endIdx = Find-JqKeyword -S $rest -Keyword 'end'
+            if ($endIdx -lt 0) {
+                Write-Error "jq: expected 'end' in if expression" -ErrorAction Continue
+                return @()
+            }
+            $elseBody = $rest.Substring(4, $endIdx - 4).Trim()
+            return @(Invoke-JqFilter -Data $Data -Filter $elseBody -Variables $Variables)
+        } elseif ($nextKw.Keyword -eq 'end') {
+            # No branch matched, no else -- return nothing
+            return @()
+        }
+    }
+
+    return @()
+}
+
+function Find-JqKeyword {
+    param([string]$S, [string]$Keyword)
+    $depth = 0
+    $inStr = $false
+    for ($i = 0; $i -le ($S.Length - $Keyword.Length); $i++) {
+        $c = $S[$i]
+        if ($inStr) {
+            if ($c -eq '\' -and ($i + 1) -lt $S.Length) { $i++; continue }
+            if ($c -eq '"') { $inStr = $false }
+            continue
+        }
+        if ($c -eq '"') { $inStr = $true; continue }
+        if ($c -eq '(' -or $c -eq '[' -or $c -eq '{') { $depth++ }
+        if ($c -eq ')' -or $c -eq ']' -or $c -eq '}') { $depth-- }
+        if ($depth -eq 0 -and $S.Substring($i, $Keyword.Length) -eq $Keyword) {
+            # Ensure it's a word boundary (not part of a longer word)
+            $beforeOk = ($i -eq 0) -or ($S[$i - 1] -match '[\s\(\[\{,;]')
+            $afterIdx = $i + $Keyword.Length
+            $afterOk = ($afterIdx -ge $S.Length) -or ($S[$afterIdx] -match '[\s\)\]\},;]')
+            if ($beforeOk -and $afterOk) { return $i }
+        }
+    }
+    return -1
+}
+
+function Find-JqBranchKeyword {
+    param([string]$S)
+    $depth = 0
+    $inStr = $false
+    $bestIdx = $S.Length
+    $bestKw = 'end'
+    foreach ($kw in @('elif', 'else', 'end')) {
+        for ($i = 0; $i -le ($S.Length - $kw.Length); $i++) {
+            $c = $S[$i]
+            if ($inStr) {
+                if ($c -eq '\' -and ($i + 1) -lt $S.Length) { $i++; continue }
+                if ($c -eq '"') { $inStr = $false }
+                continue
+            }
+            if ($c -eq '"') { $inStr = $true; continue }
+            if ($c -eq '(' -or $c -eq '[' -or $c -eq '{') { $depth++ }
+            if ($c -eq ')' -or $c -eq ']' -or $c -eq '}') { $depth-- }
+            if ($depth -eq 0 -and $S.Substring($i, $kw.Length) -eq $kw) {
+                $beforeOk = ($i -eq 0) -or ($S[$i - 1] -match '[\s\(\[\{,;]')
+                $afterIdx = $i + $kw.Length
+                $afterOk = ($afterIdx -ge $S.Length) -or ($S[$afterIdx] -match '[\s\)\]\},;]')
+                if ($beforeOk -and $afterOk -and $i -lt $bestIdx) {
+                    $bestIdx = $i
+                    $bestKw = $kw
+                    break
+                }
+            }
+        }
+    }
+    return @{ Index = $bestIdx; Keyword = $bestKw }
+}
+
+function Invoke-JqRecurse {
+    param([object]$Data)
+
+    $results = @(, $Data)
+    if ($Data -is [array] -or $Data -is [System.Collections.IList]) {
+        foreach ($elem in $Data) {
+            $results += @(Invoke-JqRecurse -Data $elem)
+        }
+    } elseif ($Data -is [System.Collections.IDictionary]) {
+        foreach ($val in $Data.Values) {
+            $results += @(Invoke-JqRecurse -Data $val)
+        }
+    } elseif ($Data -is [PSCustomObject]) {
+        foreach ($prop in $Data.PSObject.Properties) {
+            if ($prop.Name -ne 'PSTypeName') {
+                $results += @(Invoke-JqRecurse -Data $prop.Value)
+            }
+        }
+    }
+    return $results
 }
 
 function Find-JqTopLevelStr {
@@ -7097,7 +7281,9 @@ function Find-JqTopLevelStr {
 }
 
 function Resolve-JqStringInterpolation {
-    param([string]$S, [object]$Data)
+    param([string]$S, [object]$Data, [hashtable]$Variables)
+
+    if ($null -eq $Variables) { $Variables = @{} }
     $result = [System.Text.StringBuilder]::new()
     $i = 0
     while ($i -lt $S.Length) {
@@ -7114,7 +7300,7 @@ function Resolve-JqStringInterpolation {
                     if ($depth -gt 0) { $j++ }
                 }
                 $expr = $S.Substring($start, $j - $start)
-                $vals = @(Invoke-JqFilter -Data $Data -Filter $expr)
+                $vals = @(Invoke-JqFilter -Data $Data -Filter $expr -Variables $Variables)
                 $val = if ($vals.Count -gt 0) { $vals[0] } else { '' }
                 $result.Append("$val") | Out-Null
                 $i = $j + 1
