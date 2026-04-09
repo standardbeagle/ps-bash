@@ -3960,6 +3960,7 @@ function Invoke-BashSed {
     $suppressDefault = $false
     $inPlace = $false
     $extendedRegex = $false
+    $scriptFile = $null
     $expressions = [System.Collections.Generic.List[string]]::new()
     $operands = [System.Collections.Generic.List[string]]::new()
     $pastDoubleDash = $false
@@ -3989,12 +3990,32 @@ function Invoke-BashSed {
             continue
         }
 
+        if ($arg -ceq '-f') {
+            $i++
+            if ($i -lt $Arguments.Count) {
+                $scriptFile = $Arguments[$i]
+            }
+            $i++
+            continue
+        }
+
         if ($arg.StartsWith('-') -and $arg.Length -gt 1 -and -not $arg.StartsWith('--')) {
+            $fConsumed = $false
             foreach ($ch in $arg.Substring(1).ToCharArray()) {
                 switch ($ch) {
                     'n' { $suppressDefault = $true }
                     'i' { $inPlace = $true }
                     'E' { $extendedRegex = $true }
+                    'r' { $extendedRegex = $true }
+                    'f' {
+                        if (-not $fConsumed) {
+                            $i++
+                            if ($i -lt $Arguments.Count) {
+                                $scriptFile = $Arguments[$i]
+                                $fConsumed = $true
+                            }
+                        }
+                    }
                 }
             }
             $i++
@@ -4003,6 +4024,23 @@ function Invoke-BashSed {
 
         $operands.Add($arg)
         $i++
+    }
+
+    # Read script file if -f was specified
+    if ($null -ne $scriptFile) {
+        $resolved = Resolve-Path $scriptFile -ErrorAction SilentlyContinue
+        if ($null -eq $resolved) {
+            Write-BashError -Message "sed: can't read $scriptFile" -ExitCode 2
+            return
+        }
+        $scriptText = [System.IO.File]::ReadAllText($resolved.Path)
+        # Each non-empty line in the script file is a separate sed command
+        foreach ($scriptLine in $scriptText -split "`n") {
+            $trimmed = $scriptLine.Trim()
+            if ($trimmed.Length -gt 0) {
+                $expressions.Add($trimmed)
+            }
+        }
     }
 
     # First operand is the expression if no -e was used
@@ -4024,57 +4062,165 @@ function Invoke-BashSed {
         $commands.Add($parsed)
     }
 
-    # Apply commands to a single line, return $null to delete
-    $applyCommands = {
-        param([string]$line, [int]$lineNum, [int]$totalLines, [string[]]$allLines)
+    # Process all lines through sed commands, handling multi-line pattern space
+    # $lines is [string[]], returns [string[]] of output lines
+    $processLines = {
+        param([string[]]$inputLines)
 
-        $currentLine = $line
-        $printed = $false
-        $deleted = $false
+        $outputLines = [System.Collections.Generic.List[string]]::new()
+        $totalLines = $inputLines.Count
+        $li = 0
 
-        foreach ($cmd in $commands) {
-            if ($deleted) { break }
+        while ($li -lt $totalLines) {
+            $patternSpace = $inputLines[$li]
+            $lineNum = $li + 1
+            $deleted = $false
+            $quit = $false
+            $quitExitCode = 0
+            $replaced = $false
 
-            # Check address match
-            if (-not (Test-SedAddress -Cmd $cmd -Line $currentLine -LineNum $lineNum -TotalLines $totalLines -AllLines $allLines)) {
-                continue
-            }
+            $restartCycle = $true
+            while ($restartCycle) {
+                $restartCycle = $false
+                $printedLines = [System.Collections.Generic.List[string]]::new()
+                $appendTexts = [System.Collections.Generic.List[string]]::new()
+                $insertTexts = [System.Collections.Generic.List[string]]::new()
+                $deleted = $false
+                $replaced = $false
 
-            switch ($cmd.Type) {
-                's' {
-                    $regex = $cmd.Regex
-                    if ($cmd.Global) {
-                        $currentLine = $regex.Replace($currentLine, $cmd.Replacement)
+                foreach ($cmd in $commands) {
+                    if ($deleted) { break }
+                    if ($quit -and $cmd.Type -ne 'q') { continue }
+
+                    # For address matching, use the first line of pattern space
+                    $firstLine = if ($patternSpace.Contains("`n")) {
+                        $patternSpace.Substring(0, $patternSpace.IndexOf("`n"))
                     } else {
-                        $currentLine = $regex.Replace($currentLine, $cmd.Replacement, 1)
+                        $patternSpace
                     }
-                }
-                'd' {
-                    $deleted = $true
-                }
-                'p' {
-                    $printed = $true
-                }
-                'y' {
-                    $sb = [System.Text.StringBuilder]::new($currentLine.Length)
-                    foreach ($ch in $currentLine.ToCharArray()) {
-                        $idx = $cmd.Source.IndexOf($ch)
-                        if ($idx -ge 0) {
-                            [void]$sb.Append($cmd.Dest[$idx])
-                        } else {
-                            [void]$sb.Append($ch)
+
+                    if (-not (Test-SedAddress -Cmd $cmd -Line $firstLine -LineNum $lineNum -TotalLines $totalLines -AllLines $inputLines)) {
+                        continue
+                    }
+
+                    switch ($cmd.Type) {
+                        's' {
+                            $regex = $cmd.Regex
+                            if ($cmd.Global) {
+                                $patternSpace = $regex.Replace($patternSpace, $cmd.Replacement)
+                            } else {
+                                $patternSpace = $regex.Replace($patternSpace, $cmd.Replacement, 1)
+                            }
+                        }
+                        'd' {
+                            $deleted = $true
+                        }
+                        'D' {
+                            $nlIdx = $patternSpace.IndexOf("`n")
+                            if ($nlIdx -ge 0) {
+                                $patternSpace = $patternSpace.Substring($nlIdx + 1)
+                            } else {
+                                $deleted = $true
+                                $patternSpace = ''
+                            }
+                            if (-not $deleted -and $patternSpace.Length -gt 0) {
+                                $restartCycle = $true
+                            } elseif ($deleted) {
+                                $restartCycle = $false
+                            }
+                            # Break out of foreach, will check restartCycle below
+                            break
+                        }
+                        'p' {
+                            $printedLines.Add($patternSpace)
+                        }
+                        'P' {
+                            $nlIdx = $patternSpace.IndexOf("`n")
+                            if ($nlIdx -ge 0) {
+                                $printedLines.Add($patternSpace.Substring(0, $nlIdx))
+                            } else {
+                                $printedLines.Add($patternSpace)
+                            }
+                        }
+                        'N' {
+                            $li++
+                            if ($li -lt $totalLines) {
+                                $patternSpace += "`n" + $inputLines[$li]
+                            }
+                        }
+                        'q' {
+                            $quit = $true
+                            $quitExitCode = $cmd.ExitCode
+                        }
+                        'a' {
+                            $appendTexts.Add($cmd.Text)
+                        }
+                        'i' {
+                            $insertTexts.Add($cmd.Text)
+                        }
+                        'c' {
+                            $deleted = $true
+                            $replaced = $true
+                            $appendTexts.Add($cmd.Text)
+                        }
+                        'y' {
+                            $sb = [System.Text.StringBuilder]::new($patternSpace.Length)
+                            foreach ($ch in $patternSpace.ToCharArray()) {
+                                $idx = $cmd.Source.IndexOf($ch)
+                                if ($idx -ge 0) {
+                                    [void]$sb.Append($cmd.Dest[$idx])
+                                } else {
+                                    [void]$sb.Append($ch)
+                                }
+                            }
+                            $patternSpace = $sb.ToString()
                         }
                     }
-                    $currentLine = $sb.ToString()
+
+                    if ($restartCycle) { break }
                 }
+
+                if ($restartCycle) { continue }
+
+                # Emit insert texts (before current line)
+                foreach ($insText in $insertTexts) {
+                    $outputLines.Add($insText)
+                }
+
+                # Emit printed lines (from p/P commands)
+                foreach ($pLine in $printedLines) {
+                    $outputLines.Add($pLine)
+                }
+
+                # Emit default output
+                if (-not $deleted) {
+                    if (-not $suppressDefault) {
+                        # Pattern space may have embedded newlines from N
+                        if ($patternSpace.Contains("`n")) {
+                            foreach ($psLine in $patternSpace.Split("`n")) {
+                                $outputLines.Add($psLine)
+                            }
+                        } else {
+                            $outputLines.Add($patternSpace)
+                        }
+                    }
+                }
+
+                # Emit append texts (after current line)
+                foreach ($appText in $appendTexts) {
+                    $outputLines.Add($appText)
+                }
+            }
+
+            $li++
+
+            if ($quit) {
+                # q prints the current pattern space first (already done above), then stops
+                break
             }
         }
 
-        @{
-            Line    = $currentLine
-            Deleted = $deleted
-            Printed = $printed
-        }
+        $outputLines.ToArray()
     }
 
     # --- File mode (including in-place) ---
@@ -4088,18 +4234,7 @@ function Invoke-BashSed {
             }
             $lines = $rawText.Split("`n")
 
-            $outputLines = [System.Collections.Generic.List[string]]::new()
-            for ($li = 0; $li -lt $lines.Count; $li++) {
-                $result = & $applyCommands $lines[$li] ($li + 1) $lines.Count $lines
-                if (-not $result.Deleted) {
-                    if (-not $suppressDefault) {
-                        $outputLines.Add($result.Line)
-                    }
-                    if ($result.Printed) {
-                        $outputLines.Add($result.Line)
-                    }
-                }
-            }
+            $outputLines = & $processLines $lines
 
             if ($inPlace) {
                 $outText = ($outputLines -join "`n")
@@ -4132,31 +4267,20 @@ function Invoke-BashSed {
         }
     }
 
-    $allTexts = [string[]]$allLines.ToArray()
+    $inputArray = [string[]]$allLines.ToArray()
+    $outputLines = & $processLines $inputArray
 
-    for ($idx = 0; $idx -lt $allTexts.Count; $idx++) {
-        $lineText = $allTexts[$idx]
-        $result = & $applyCommands $lineText ($idx + 1) $allTexts.Count $allTexts
-
-        if ($result.Deleted) { continue }
-
-        $emitLine = {
-            param([string]$Line)
-            $orig = $origItems[$idx]
+    # Emit output preserving original objects where possible
+    for ($oi = 0; $oi -lt $outputLines.Count; $oi++) {
+        if ($oi -lt $origItems.Count) {
+            $orig = $origItems[$oi]
             if ($null -ne $orig -and $null -ne $orig.PSObject -and $null -ne $orig.PSObject.Properties['BashText']) {
-                $orig.BashText = "$Line`n"
+                $orig.BashText = "$($outputLines[$oi])`n"
                 $orig
-            } else {
-                New-BashObject -BashText "$Line`n"
+                continue
             }
         }
-
-        if (-not $suppressDefault) {
-            & $emitLine $result.Line
-        }
-        if ($result.Printed) {
-            & $emitLine $result.Line
-        }
+        New-BashObject -BashText "$($outputLines[$oi])`n"
     }
 }
 
@@ -4294,10 +4418,69 @@ function ConvertFrom-SedExpression {
                 Address = $addr
             }
         }
+        'D' {
+            @{
+                Type    = 'D'
+                Address = $addr
+            }
+        }
         'p' {
             @{
                 Type    = 'p'
                 Address = $addr
+            }
+        }
+        'P' {
+            @{
+                Type    = 'P'
+                Address = $addr
+            }
+        }
+        'N' {
+            @{
+                Type    = 'N'
+                Address = $addr
+            }
+        }
+        'q' {
+            $exitCode = 0
+            if ($remaining.Length -gt 1) {
+                $qArg = $remaining.Substring(1).Trim()
+                if ($qArg.Length -gt 0 -and $qArg -match '^\d+$') {
+                    $exitCode = [int]$qArg
+                }
+            }
+            @{
+                Type     = 'q'
+                Address  = $addr
+                ExitCode = $exitCode
+            }
+        }
+        'a' {
+            $text = if ($remaining.Length -gt 1) { $remaining.Substring(1) } else { '' }
+            $text = $text.TrimStart('\').TrimStart()
+            @{
+                Type    = 'a'
+                Address = $addr
+                Text    = $text
+            }
+        }
+        'i' {
+            $text = if ($remaining.Length -gt 1) { $remaining.Substring(1) } else { '' }
+            $text = $text.TrimStart('\').TrimStart()
+            @{
+                Type    = 'i'
+                Address = $addr
+                Text    = $text
+            }
+        }
+        'c' {
+            $text = if ($remaining.Length -gt 1) { $remaining.Substring(1) } else { '' }
+            $text = $text.TrimStart('\').TrimStart()
+            @{
+                Type    = 'c'
+                Address = $addr
+                Text    = $text
             }
         }
         'y' {
