@@ -4760,11 +4760,12 @@ function Invoke-BashAwk {
     $pipelineInput = @($input)
     if ($Arguments -contains '--help') { return Show-BashHelp 'awk' }
 
-    # Parse flags: -F FS, -v VAR=VAL
+    # Parse flags: -F FS, -v VAR=VAL, -f FILE
     $fieldSep = ' '
     $fieldSepIsDefault = $true
     $variables = @{}
     $programText = $null
+    $programFiles = [System.Collections.Generic.List[string]]::new()
     $i = 0
 
     while ($i -lt $Arguments.Count) {
@@ -4801,10 +4802,32 @@ function Invoke-BashAwk {
             continue
         }
 
+        if ($arg -ceq '-f' -or $arg -ceq '--file') {
+            $i++
+            if ($i -lt $Arguments.Count) {
+                $programFiles.Add($Arguments[$i])
+            }
+            $i++
+            continue
+        }
+
         if ($null -eq $programText) {
             $programText = $arg
         }
         $i++
+    }
+
+    # If -f was used, read program from file
+    if ($programFiles.Count -gt 0) {
+        $fileText = [System.Text.StringBuilder]::new()
+        foreach ($pf in $programFiles) {
+            if (-not (Test-Path $pf)) {
+                Write-BashError -Message "awk: can't open source file ${pf}: No such file or directory" -ExitCode 2
+                return
+            }
+            [void]$fileText.Append((Get-Content -Path $pf -Raw))
+        }
+        $programText = $fileText.ToString()
     }
 
     if ($null -eq $programText) {
@@ -5222,7 +5245,7 @@ function Resolve-AwkExpression {
     }
 
     # Function call: name(args)
-    $funcMatch = [regex]::Match($e, '^(length|substr|tolower|toupper)\s*\((.*)$')
+    $funcMatch = [regex]::Match($e, '^(length|substr|tolower|toupper|sprintf|match|strftime|systime|index|split|rand|srand|sin|cos|atan2|exp|log|sqrt|int)\s*\((.*)$')
     if ($funcMatch.Success) {
         $fName = $funcMatch.Groups[1].Value
         $rest = $funcMatch.Groups[2].Value
@@ -5304,6 +5327,35 @@ function Invoke-AwkAction {
             $Variables[$vName] = $vVal
             if ($vName -eq 'OFS' -or $vName -eq 'FS') {
                 # These are tracked via the variables hashtable
+            }
+            continue
+        }
+
+        # delete array[key] or delete array (clear all)
+        if ($s -match '^delete\s+') {
+            $delTarget = $s.Substring(7).Trim()
+            $delMatch = [regex]::Match($delTarget, '^([A-Za-z_]\w*)\[(.+)\]$')
+            if ($delMatch.Success) {
+                $arrName = $delMatch.Groups[1].Value
+                $keyExpr = $delMatch.Groups[2].Value
+                $key = Resolve-AwkExpression -Expr $keyExpr -Fields $Fields -Variables $Variables
+                $keyStr = "$key"
+                $keysToRemove = @($Variables.Keys | Where-Object { $_ -like "$arrName[*]" })
+                foreach ($k in $keysToRemove) {
+                    $kKey = $k -replace "^$([regex]::Escape($arrName))\[(.+)\]$", '$1'
+                    if ($kKey -eq $keyStr) {
+                        $Variables.Remove($k)
+                    }
+                }
+            } else {
+                $arrName = $delTarget
+                $keysToRemove = @($Variables.Keys | Where-Object { $_ -like "$arrName[*]" })
+                foreach ($k in $keysToRemove) {
+                    $Variables.Remove($k)
+                }
+                if ($Variables.ContainsKey($arrName)) {
+                    $Variables.Remove($arrName)
+                }
             }
             continue
         }
@@ -5410,6 +5462,47 @@ function Invoke-AwkAction {
         # Bare print (no arguments, just "print")
         if ($s -eq 'print') {
             $Output.Add($Fields[0])
+            continue
+        }
+
+        # Bare function call: match(...), srand(), etc.
+        $funcMatch = [regex]::Match($s, '^(gsub|sub|match|srand)\s*\(')
+        if ($funcMatch.Success) {
+            $funcName = $funcMatch.Groups[1].Value
+            $argsStr = $s.Substring($s.IndexOf('(') + 1)
+            $argsStr = $argsStr.Substring(0, $argsStr.LastIndexOf(')'))
+            $fArgs = @(Split-AwkFuncArgs -Text $argsStr)
+            $funcResult = Resolve-AwkStringFunc -FuncName $funcName -FuncArgs $fArgs -Fields $Fields -Variables $Variables
+            # gsub/sub need field re-splitting
+            if ($funcName -eq 'gsub' -or $funcName -eq 'sub') {
+                if ($funcName -eq 'gsub' -and $fArgs.Count -ge 2) {
+                    $regex = $fArgs[0].Trim()
+                    if ($regex.StartsWith('/') -and $regex.EndsWith('/')) { $regex = $regex.Substring(1, $regex.Length - 2) }
+                    $repl = Resolve-AwkExpression -Expr $fArgs[1].Trim() -Fields $Fields -Variables $Variables
+                    $target = if ($fArgs.Count -ge 3) {
+                        $tExpr = $fArgs[2].Trim()
+                        $tVal = Resolve-AwkExpression -Expr $tExpr -Fields $Fields -Variables $Variables
+                        "$tVal"
+                    } else { $Fields[0] }
+                    $newVal = [regex]::Replace($target, $regex, "$repl")
+                    if ($fArgs.Count -lt 3) { $Fields[0] = $newVal }
+                    $newFields = Split-AwkFields -Line $Fields[0] -FieldSep $FieldSep -IsDefault ($FieldSep -eq ' ')
+                    for ($fi = 0; $fi -lt $newFields.Count -and $fi -lt $Fields.Count; $fi++) { $Fields[$fi] = $newFields[$fi] }
+                } elseif ($funcName -eq 'sub' -and $fArgs.Count -ge 2) {
+                    $regex = $fArgs[0].Trim()
+                    if ($regex.StartsWith('/') -and $regex.EndsWith('/')) { $regex = $regex.Substring(1, $regex.Length - 2) }
+                    $repl = Resolve-AwkExpression -Expr $fArgs[1].Trim() -Fields $Fields -Variables $Variables
+                    $target = if ($fArgs.Count -ge 3) {
+                        $tExpr = $fArgs[2].Trim()
+                        $tVal = Resolve-AwkExpression -Expr $tExpr -Fields $Fields -Variables $Variables
+                        "$tVal"
+                    } else { $Fields[0] }
+                    $newVal = [regex]::new($regex).Replace($target, "$repl", 1)
+                    if ($fArgs.Count -lt 3) { $Fields[0] = $newVal }
+                    $newFields = Split-AwkFields -Line $Fields[0] -FieldSep $FieldSep -IsDefault ($FieldSep -eq ' ')
+                    for ($fi = 0; $fi -lt $newFields.Count -and $fi -lt $Fields.Count; $fi++) { $Fields[$fi] = $newFields[$fi] }
+                }
+            }
             continue
         }
     }
@@ -5594,6 +5687,171 @@ function Resolve-AwkStringFunc {
         'toupper' {
             $val = Resolve-AwkExpression -Expr $FuncArgs[0] -Fields $Fields -Variables $Variables
             return "$val".ToUpper()
+        }
+        'sprintf' {
+            if ($FuncArgs.Count -ge 1) {
+                $fmt = Resolve-AwkExpression -Expr $FuncArgs[0] -Fields $Fields -Variables $Variables
+                $fmtStr = "$fmt"
+                $argVals = @()
+                for ($ai = 1; $ai -lt $FuncArgs.Count; $ai++) {
+                    $argVals += Resolve-AwkExpression -Expr $FuncArgs[$ai] -Fields $Fields -Variables $Variables
+                }
+                return Format-AwkPrintf -Format $fmtStr -FormatArgs $argVals
+            }
+            return ''
+        }
+        'match' {
+            if ($FuncArgs.Count -ge 2) {
+                $str = "$(Resolve-AwkExpression -Expr $FuncArgs[0] -Fields $Fields -Variables $Variables)"
+                $regexArg = $FuncArgs[1].Trim()
+                if ($regexArg.StartsWith('/') -and $regexArg.EndsWith('/')) {
+                    $regexArg = $regexArg.Substring(1, $regexArg.Length - 2)
+                }
+                $m = [regex]::Match($str, $regexArg)
+                if ($m.Success) {
+                    $Variables['RSTART'] = $m.Index + 1
+                    $Variables['RLENGTH'] = $m.Length
+                    return $m.Index + 1
+                }
+                $Variables['RSTART'] = 0
+                $Variables['RLENGTH'] = -1
+                return 0
+            }
+            $Variables['RSTART'] = 0
+            $Variables['RLENGTH'] = -1
+            return 0
+        }
+        'strftime' {
+            $fmtVal = if ($FuncArgs.Count -ge 1) {
+                Resolve-AwkExpression -Expr $FuncArgs[0] -Fields $Fields -Variables $Variables
+            } else {
+                '%Y-%m-%d %H:%M:%S'
+            }
+            $timestamp = if ($FuncArgs.Count -ge 2) {
+                Resolve-AwkExpression -Expr $FuncArgs[1] -Fields $Fields -Variables $Variables
+            } else {
+                $null
+            }
+            $epoch = [DateTimeOffset]::UnixEpoch
+            $dt = if ($null -ne $timestamp -and "$timestamp" -ne '') {
+                $ts = 0.0; [void][double]::TryParse("$timestamp", [ref]$ts)
+                $epoch.AddSeconds($ts).DateTime
+            } else {
+                [DateTimeOffset]::UtcNow.DateTime
+            }
+            $fmtStr = "$fmtVal"
+            # Map C/awk strftime specifiers to .NET format strings
+            # Protect %% first to avoid double-replacement
+            $fmtStr = $fmtStr -replace '%%', [char]0x01
+            $fmtStr = $fmtStr -replace '%Y', $dt.ToString('yyyy')
+            $fmtStr = $fmtStr -replace '%m', $dt.ToString('MM')
+            $fmtStr = $fmtStr -replace '%d', $dt.ToString('dd')
+            $fmtStr = $fmtStr -replace '%H', $dt.ToString('HH')
+            $fmtStr = $fmtStr -replace '%M', $dt.ToString('mm')
+            $fmtStr = $fmtStr -replace '%S', $dt.ToString('ss')
+            $fmtStr = $fmtStr -replace '%j', $dt.DayOfYear.ToString('000')
+            $fmtStr = $fmtStr -replace '%w', "$([int]$dt.DayOfWeek)"
+            $fmtStr = $fmtStr -replace '%a', $dt.ToString('ddd')
+            $fmtStr = $fmtStr -replace '%A', $dt.ToString('dddd')
+            $fmtStr = $fmtStr -replace '%b', $dt.ToString('MMM')
+            $fmtStr = $fmtStr -replace '%B', $dt.ToString('MMMM')
+            $fmtStr = $fmtStr -replace '%p', $dt.ToString('tt')
+            $fmtStr = $fmtStr -replace '%I', $dt.ToString('hh')
+            $fmtStr = $fmtStr -replace [char]0x01, '%'
+            return $fmtStr
+        }
+        'systime' {
+            return [int][DateTimeOffset]::UtcNow.ToUnixTimeSeconds()
+        }
+        'index' {
+            if ($FuncArgs.Count -ge 2) {
+                $str = "$(Resolve-AwkExpression -Expr $FuncArgs[0] -Fields $Fields -Variables $Variables)"
+                $substr = "$(Resolve-AwkExpression -Expr $FuncArgs[1] -Fields $Fields -Variables $Variables)"
+                $idx = $str.IndexOf($substr)
+                return if ($idx -ge 0) { $idx + 1 } else { 0 }
+            }
+            return 0
+        }
+        'split' {
+            if ($FuncArgs.Count -ge 2) {
+                $str = "$(Resolve-AwkExpression -Expr $FuncArgs[0] -Fields $Fields -Variables $Variables)"
+                $sepExpr = $FuncArgs[1].Trim()
+                $sep = if ($sepExpr.StartsWith('/') -and $sepExpr.EndsWith('/')) {
+                    $sepExpr.Substring(1, $sepExpr.Length - 2)
+                } else {
+                    "$(Resolve-AwkExpression -Expr $sepExpr -Fields $Fields -Variables $Variables)"
+                }
+                $parts = if ($sep.Length -eq 1 -and $sep -notmatch '[\[\]\(\)\{\}\.\+\*\?\^\$\|]') {
+                    $str.Split([char]$sep[0])
+                } else {
+                    [regex]::Split($str, $sep)
+                }
+                if ($FuncArgs.Count -ge 3) {
+                    $arrName = $FuncArgs[2].Trim()
+                    $arr = @()
+                    for ($ai = 0; $ai -lt $parts.Count; $ai++) {
+                        $arr += "$($parts[$ai])"
+                        $Variables["$arrName[$($ai + 1)]"] = "$($parts[$ai])"
+                    }
+                    $variables[$arrName] = $arr
+                }
+                return $parts.Count
+            }
+            return 0
+        }
+        'int' {
+            $val = Resolve-AwkExpression -Expr $FuncArgs[0] -Fields $Fields -Variables $Variables
+            $num = 0.0; [void][double]::TryParse("$val", [ref]$num)
+            return [int][math]::Truncate($num)
+        }
+        'rand' { return ($script:AwkRand ?? [System.Random]::Shared).NextDouble() }
+        'srand' {
+            if ($FuncArgs.Count -ge 1) {
+                $val = Resolve-AwkExpression -Expr $FuncArgs[0] -Fields $Fields -Variables $Variables
+                $seed = 0; [void][int]::TryParse("$val", [ref]$seed)
+                $script:AwkRand = [System.Random]::new($seed)
+            } else {
+                $script:AwkRand = [System.Random]::new()
+            }
+            return [int][DateTimeOffset]::UtcNow.ToUnixTimeSeconds()
+        }
+        'sin' {
+            $val = Resolve-AwkExpression -Expr $FuncArgs[0] -Fields $Fields -Variables $Variables
+            $num = 0.0; [void][double]::TryParse("$val", [ref]$num)
+            return [math]::Sin($num)
+        }
+        'cos' {
+            $val = Resolve-AwkExpression -Expr $FuncArgs[0] -Fields $Fields -Variables $Variables
+            $num = 0.0; [void][double]::TryParse("$val", [ref]$num)
+            return [math]::Cos($num)
+        }
+        'atan2' {
+            if ($FuncArgs.Count -ge 2) {
+                $y = 0.0; $x = 0.0
+                $yv = Resolve-AwkExpression -Expr $FuncArgs[0] -Fields $Fields -Variables $Variables
+                $xv = Resolve-AwkExpression -Expr $FuncArgs[1] -Fields $Fields -Variables $Variables
+                [void][double]::TryParse("$yv", [ref]$y)
+                [void][double]::TryParse("$xv", [ref]$x)
+                return [math]::Atan2($y, $x)
+            }
+            return 0
+        }
+        'exp' {
+            $val = Resolve-AwkExpression -Expr $FuncArgs[0] -Fields $Fields -Variables $Variables
+            $num = 0.0; [void][double]::TryParse("$val", [ref]$num)
+            return [math]::Exp($num)
+        }
+        'log' {
+            $val = Resolve-AwkExpression -Expr $FuncArgs[0] -Fields $Fields -Variables $Variables
+            $num = 0.0; [void][double]::TryParse("$val", [ref]$num)
+            if ($num -gt 0) { return [math]::Log($num) }
+            return 0
+        }
+        'sqrt' {
+            $val = Resolve-AwkExpression -Expr $FuncArgs[0] -Fields $Fields -Variables $Variables
+            $num = 0.0; [void][double]::TryParse("$val", [ref]$num)
+            if ($num -ge 0) { return [math]::Sqrt($num) }
+            return 0
         }
         default { return '' }
     }
@@ -11551,7 +11809,7 @@ $script:BashFlagSpecs = @{
         @('-o', 'output format')
     )
     'sed'      = @( @('-n', 'suppress default'), @('-i', 'in-place'), @('-E', 'extended regex'), @('-e', 'expression') )
-    'awk'      = @( @('-F', 'field separator'), @('-v', 'variable') )
+    'awk'      = @( @('-F', 'field separator'), @('-v', 'variable'), @('-f', 'program file'), @('--file', 'program file') )
     'cut'      = @( @('-d', 'delimiter'), @('-f', 'fields'), @('-c', 'characters') )
     'tr'       = @( @('-c', 'complement'), @('-C', 'complement'), @('-d', 'delete'), @('-s', 'squeeze'), @('-t', 'truncate SET2') )
     'uniq'     = @( @('-c', 'count'), @('-d', 'duplicates only') )
