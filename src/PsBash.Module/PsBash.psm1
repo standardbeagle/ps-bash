@@ -5998,17 +5998,90 @@ function Invoke-BashUniq {
 
     $countMode = $false
     $duplicatesOnly = $false
+    $uniqueOnly = $false
+    $ignoreCase = $false
+    $skipFields = 0
+    $skipChars = 0
+    $checkChars = 0
     $operands = [System.Collections.Generic.List[string]]::new()
 
     $i = 0
     while ($i -lt $Arguments.Count) {
         $arg = $Arguments[$i]
 
-        if ($arg.StartsWith('-') -and $arg.Length -gt 1) {
+        if ($arg -ceq '--') {
+            $i++
+            while ($i -lt $Arguments.Count) {
+                $operands.Add($Arguments[$i])
+                $i++
+            }
+            break
+        }
+
+        if ($arg -ceq '--ignore-case') {
+            $ignoreCase = $true
+            $i++
+            continue
+        }
+
+        if ($arg -cmatch '^--skip-fields=(\d+)$') {
+            $skipFields = [int]$Matches[1]
+            $i++
+            continue
+        }
+
+        if ($arg -cmatch '^--skip-chars=(\d+)$') {
+            $skipChars = [int]$Matches[1]
+            $i++
+            continue
+        }
+
+        if ($arg -cmatch '^--check-chars=(\d+)$') {
+            $checkChars = [int]$Matches[1]
+            $i++
+            continue
+        }
+
+        if ($arg.StartsWith('-') -and $arg.Length -gt 1 -and $arg -notmatch '^-\d') {
             foreach ($ch in $arg.Substring(1).ToCharArray()) {
                 switch ($ch) {
                     'c' { $countMode = $true }
                     'd' { $duplicatesOnly = $true }
+                    'u' { $uniqueOnly = $true }
+                    'i' { $ignoreCase = $true }
+                    'f' {
+                        $rest = $arg.Substring($arg.IndexOf('f') + 1)
+                        if ($rest -match '^\d+') {
+                            $skipFields = [int]$rest
+                        } else {
+                            $i++
+                            if ($i -lt $Arguments.Count) {
+                                $skipFields = [int]$Arguments[$i]
+                            }
+                        }
+                    }
+                    's' {
+                        $rest = $arg.Substring($arg.IndexOf('s') + 1)
+                        if ($rest -match '^\d+') {
+                            $skipChars = [int]$rest
+                        } else {
+                            $i++
+                            if ($i -lt $Arguments.Count) {
+                                $skipChars = [int]$Arguments[$i]
+                            }
+                        }
+                    }
+                    'w' {
+                        $rest = $arg.Substring($arg.IndexOf('w') + 1)
+                        if ($rest -match '^\d+') {
+                            $checkChars = [int]$rest
+                        } else {
+                            $i++
+                            if ($i -lt $Arguments.Count) {
+                                $checkChars = [int]$Arguments[$i]
+                            }
+                        }
+                    }
                 }
             }
             $i++
@@ -6017,6 +6090,31 @@ function Invoke-BashUniq {
 
         $operands.Add($arg)
         $i++
+    }
+
+    # Build the comparison key from a line
+    function Get-UniqKey([string]$Line) {
+        $key = $Line
+        # Step 1: skip fields (whitespace-delimited)
+        if ($skipFields -gt 0) {
+            $parts = $key -split '\s+', ($skipFields + 1)
+            if ($parts.Count -gt $skipFields) {
+                $key = $parts[$skipFields]
+            } else {
+                $key = ''
+            }
+        }
+        # Step 2: skip characters
+        if ($skipChars -gt 0 -and $key.Length -gt $skipChars) {
+            $key = $key.Substring($skipChars)
+        } elseif ($skipChars -gt 0) {
+            $key = ''
+        }
+        # Step 3: limit characters
+        if ($checkChars -gt 0 -and $key.Length -gt $checkChars) {
+            $key = $key.Substring(0, $checkChars)
+        }
+        return $key
     }
 
     # Collect lines
@@ -6043,19 +6141,23 @@ function Invoke-BashUniq {
         }
     }
 
-    # Group consecutive identical lines
+    # Group consecutive identical lines (using key comparison)
     $groups = [System.Collections.Generic.List[object]]::new()
     $prevLine = $null
+    $prevKey = $null
     $runCount = 0
 
     foreach ($line in $lines) {
-        if ($line -ceq $prevLine) {
+        $key = Get-UniqKey $line
+        $same = if ($ignoreCase) { $key -ieq $prevKey } else { $key -ceq $prevKey }
+        if ($same) {
             $runCount++
         } else {
             if ($null -ne $prevLine) {
                 $groups.Add(@{ Line = $prevLine; Count = $runCount })
             }
             $prevLine = $line
+            $prevKey = $key
             $runCount = 1
         }
     }
@@ -6065,6 +6167,7 @@ function Invoke-BashUniq {
 
     foreach ($group in $groups) {
         if ($duplicatesOnly -and $group.Count -lt 2) { continue }
+        if ($uniqueOnly -and $group.Count -gt 1) { continue }
 
         if ($countMode) {
             $bashText = '{0,7} {1}' -f $group.Count, $group.Line
