@@ -5765,14 +5765,28 @@ function Invoke-BashTr {
     $pipelineInput = @($input)
     if ($Arguments -contains '--help') { return Show-BashHelp 'tr' }
 
-    # Parse flags: -d (delete), -s (squeeze)
+    # Parse flags: -d (delete), -s (squeeze), -c/-C/--complement, -t/--truncate-set1
     $deleteMode = $false
     $squeezeMode = $false
+    $complementMode = $false
+    $truncateMode = $false
     $operands = [System.Collections.Generic.List[string]]::new()
 
     $i = 0
     while ($i -lt $Arguments.Count) {
         $arg = $Arguments[$i]
+
+        if ($arg -ceq '--complement') {
+            $complementMode = $true
+            $i++
+            continue
+        }
+
+        if ($arg -ceq '--truncate-set1') {
+            $truncateMode = $true
+            $i++
+            continue
+        }
 
         if ($arg -ceq '-d') {
             $deleteMode = $true
@@ -5791,6 +5805,9 @@ function Invoke-BashTr {
                 switch ($ch) {
                     'd' { $deleteMode = $true }
                     's' { $squeezeMode = $true }
+                    'c' { $complementMode = $true }
+                    'C' { $complementMode = $true }
+                    't' { $truncateMode = $true }
                 }
             }
             $i++
@@ -5806,8 +5823,30 @@ function Invoke-BashTr {
         $operands[$ei] = Expand-EscapeSequences -Text $operands[$ei]
     }
 
+    # Expand POSIX character classes: [:alpha:], [:digit:], etc.
+    $expandPosixClass = {
+        param([string]$Spec)
+        $posixClasses = @{
+            'alpha' = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ'
+            'digit' = '0123456789'
+            'alnum' = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789'
+            'upper' = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'
+            'lower' = 'abcdefghijklmnopqrstuvwxyz'
+            'space' = " `t`n`r`f`v"
+            'punct' = '!"#$%&''()*+,-./:;<=>?@[\]^_`{|}~'
+        }
+        $result = $Spec
+        foreach ($kv in $posixClasses.GetEnumerator()) {
+            $pattern = "[:$($kv.Key):]"
+            $result = $result.Replace($pattern, $kv.Value)
+        }
+        $result
+    }
+
     $expandClass = {
         param([string]$Spec)
+        # First expand POSIX classes
+        $Spec = & $expandPosixClass $Spec
         $result = [System.Text.StringBuilder]::new()
         $ci = 0
         while ($ci -lt $Spec.Length) {
@@ -5833,8 +5872,13 @@ function Invoke-BashTr {
             $set = & $expandClass $operands[0]
             $sb = [System.Text.StringBuilder]::new()
             foreach ($ch in $Text.ToCharArray()) {
-                if ($set.IndexOf($ch) -lt 0) {
-                    [void]$sb.Append($ch)
+                $inSet = $set.IndexOf($ch) -ge 0
+                if ($complementMode) {
+                    # Complement + delete: keep chars that ARE in set
+                    if ($inSet) { [void]$sb.Append($ch) }
+                } else {
+                    # Normal delete: keep chars NOT in set
+                    if (-not $inSet) { [void]$sb.Append($ch) }
                 }
             }
             return $sb.ToString()
@@ -5847,6 +5891,7 @@ function Invoke-BashTr {
             $prevInSet = $false
             foreach ($ch in $Text.ToCharArray()) {
                 $inSet = $set.IndexOf($ch) -ge 0
+                if ($complementMode) { $inSet = -not $inSet }
                 if ($inSet -and $prevInSet -and $ch -eq $prevChar) {
                     continue
                 }
@@ -5860,6 +5905,31 @@ function Invoke-BashTr {
         if ($operands.Count -ge 2) {
             $set1 = & $expandClass $operands[0]
             $set2 = & $expandClass $operands[1]
+
+            # Truncate SET2 to length of SET1
+            if ($truncateMode -and $set2.Length -gt $set1.Length) {
+                $set2 = $set2.Substring(0, $set1.Length)
+            }
+
+            if ($complementMode) {
+                # Complement: SET1 becomes all 256 chars minus the original SET1
+                $compSb = [System.Text.StringBuilder]::new()
+                $set1Hash = [System.Collections.Generic.HashSet[char]]::new($set1.ToCharArray())
+                for ($c = 0; $c -le 255; $c++) {
+                    $ch = [char]$c
+                    if (-not $set1Hash.Contains($ch)) {
+                        [void]$compSb.Append($ch)
+                    }
+                }
+                $set1 = $compSb.ToString()
+                # Extend SET2 by repeating last char to match complement SET1 length
+                if ($set2.Length -gt 0) {
+                    while ($set2.Length -lt $set1.Length) {
+                        $set2 += $set2[$set2.Length - 1]
+                    }
+                }
+            }
+
             $sb = [System.Text.StringBuilder]::new()
             foreach ($ch in $Text.ToCharArray()) {
                 $idx = $set1.IndexOf($ch)
@@ -11208,7 +11278,7 @@ $script:BashFlagSpecs = @{
     'sed'      = @( @('-n', 'suppress default'), @('-i', 'in-place'), @('-E', 'extended regex'), @('-e', 'expression') )
     'awk'      = @( @('-F', 'field separator'), @('-v', 'variable') )
     'cut'      = @( @('-d', 'delimiter'), @('-f', 'fields'), @('-c', 'characters') )
-    'tr'       = @( @('-d', 'delete'), @('-s', 'squeeze') )
+    'tr'       = @( @('-c', 'complement'), @('-C', 'complement'), @('-d', 'delete'), @('-s', 'squeeze'), @('-t', 'truncate SET2') )
     'uniq'     = @( @('-c', 'count'), @('-d', 'duplicates only') )
     'nl'       = @( @('-ba', 'number all lines') )
     'diff'     = @( @('-u', 'unified format') )
