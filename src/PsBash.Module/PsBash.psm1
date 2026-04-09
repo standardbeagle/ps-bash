@@ -2037,10 +2037,12 @@ function Invoke-BashTail {
     $pipelineInput = @($input)
     if ($Arguments -contains '--help') { return Show-BashHelp 'tail' }
 
-    # Manual arg parsing for value-bearing -n flag and -f flag
+    # Manual arg parsing for value-bearing flags
     $count = 10
+    $byteCount = $null
     $fromLine = $false
-    $followFile = $false     # -f: follow file for new content
+    $followFile = $false     # -f / --follow: follow file for new content
+    $sleepInterval = 1.0     # -s / --sleep-interval: poll interval in seconds
     $operands = [System.Collections.Generic.List[string]]::new()
     $pastDoubleDash = $false
 
@@ -2060,8 +2062,61 @@ function Invoke-BashTail {
             continue
         }
 
-        if ($arg -ceq '-f') {
+        if ($arg -ceq '-f' -or $arg -ceq '--follow') {
             $followFile = $true
+            $i++
+            continue
+        }
+
+        if ($arg -ceq '--sleep-interval') {
+            $i++
+            if ($i -lt $Arguments.Count) {
+                $sleepInterval = [double]$Arguments[$i]
+            }
+            $i++
+            continue
+        }
+
+        if ($arg -cmatch '^-s([\d.]+)$') {
+            $sleepInterval = [double]$Matches[1]
+            $i++
+            continue
+        }
+
+        if ($arg -ceq '-s') {
+            $i++
+            if ($i -lt $Arguments.Count) {
+                $sleepInterval = [double]$Arguments[$i]
+            }
+            $i++
+            continue
+        }
+
+        # -c +N syntax (from byte N onward)
+        if ($arg -cmatch '^-c\+(\d+)$') {
+            $byteCount = [int]$Matches[1]
+            $fromLine = $true
+            $i++
+            continue
+        }
+
+        if ($arg -cmatch '^-c(\d+)$') {
+            $byteCount = [int]$Matches[1]
+            $i++
+            continue
+        }
+
+        if ($arg -ceq '-c' -or $arg -ceq '--bytes') {
+            $i++
+            if ($i -lt $Arguments.Count) {
+                $val = $Arguments[$i]
+                if ($val.StartsWith('+')) {
+                    $byteCount = [int]$val.Substring(1)
+                    $fromLine = $true
+                } else {
+                    $byteCount = [int]$val
+                }
+            }
             $i++
             continue
         }
@@ -2150,11 +2205,26 @@ function Invoke-BashTail {
 
     $filePath = $resolvedFiles[0]
 
+    # -c bytes mode
+    if ($null -ne $byteCount) {
+        $rawText = Read-BashFileBytes -Path $filePath -Command 'tail'
+        if ($null -eq $rawText) { return }
+
+        if ($fromLine) {
+            # -c +N: output starting from byte offset N
+            $startIdx = [System.Math]::Min($byteCount, $rawText.Length)
+            Emit-BashLine -Text $rawText.Substring($startIdx)
+        } else {
+            # -c N: output last N bytes
+            $startIdx = [System.Math]::Max(0, $rawText.Length - $byteCount)
+            Emit-BashLine -Text $rawText.Substring($startIdx)
+        }
+        return
+    }
+
     if ($followFile) {
-        # Follow mode: continuously monitor file for new lines
+        # Follow mode: continuously monitor file for new lines using polling
         try {
-            # Try using Get-Content -Wait (PS 5.0+)
-            $useWait = $true
             $lines = Read-BashFileLines -Path $filePath -Command 'tail'
             if ($null -eq $lines) { $lines = @() }
 
@@ -2169,16 +2239,44 @@ function Invoke-BashTail {
                 Emit-BashLine -Text $lines[$li]
             }
 
+            # Track file length to avoid re-reading entire file each poll
+            $filePos = [System.IO.FileInfo]::new($filePath).Length
+
             # Monitor file for new content
-            $lastLineCount = $lines.Count
             while ($true) {
-                Start-Sleep -Milliseconds 100
-                $currentLines = Read-BashFileLines -Path $filePath -Command 'tail'
-                if ($null -ne $currentLines -and $currentLines.Count -gt $lastLineCount) {
-                    for ($li = $lastLineCount; $li -lt $currentLines.Count; $li++) {
-                        Emit-BashLine -Text $currentLines[$li]
+                Start-Sleep -Seconds $sleepInterval
+                $info = [System.IO.FileInfo]::new($filePath)
+                if ($info.Length -gt $filePos) {
+                    $newContent = $null
+                    try {
+                        $fs = [System.IO.FileStream]::new($filePath, 'Open', 'Read', 'ReadWrite')
+                        try {
+                            $sr = [System.IO.StreamReader]::new($fs)
+                            try {
+                                $null = $fs.Seek($filePos, 'Begin')
+                                $newContent = $sr.ReadToEnd()
+                                $filePos = $fs.Position
+                            } finally {
+                                $sr.Dispose()
+                            }
+                        } finally {
+                            $fs.Dispose()
+                        }
+                    } catch {
+                        continue
                     }
-                    $lastLineCount = $currentLines.Count
+                    if ($null -ne $newContent -and $newContent.Length -gt 0) {
+                        if ($newContent.EndsWith("`n")) {
+                            $newContent = $newContent.Substring(0, $newContent.Length - 1)
+                        }
+                        $newContent = $newContent -replace "`r`n", "`n"
+                        foreach ($line in $newContent.Split("`n")) {
+                            Emit-BashLine -Text $line
+                        }
+                    }
+                } elseif ($info.Length -lt $filePos) {
+                    # File was truncated or rotated — reset position
+                    $filePos = 0
                 }
             }
         } catch {
@@ -10529,7 +10627,7 @@ $script:BashFlagSpecs = @{
         @('-c', 'check sorted')
     )
     'head'     = @( @('-n', 'number of lines') )
-    'tail'     = @( @('-n', 'number of lines') )
+    'tail'     = @( @('-n', 'number of lines'), @('-f', 'follow file for changes'), @('-c', 'output last N bytes'), @('-s', 'poll interval in seconds') )
     'wc'       = @( @('-l', 'line count'), @('-w', 'word count'), @('-c', 'byte count') )
     'find'     = @(
         @('-name', 'name pattern'),   @('-type', 'file type'),     @('-size', 'file size'),
