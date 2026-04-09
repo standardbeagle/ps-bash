@@ -18,7 +18,7 @@ catch (PwshNotFoundException ex)
     return 127;
 }
 
-if (shellArgs.Interactive)
+if (shellArgs.Interactive || (!shellArgs.ReadFromStdin && shellArgs.Command is null))
 {
     return await InteractiveShell.RunAsync(pwshPath);
 }

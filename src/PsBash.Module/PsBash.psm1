@@ -4452,7 +4452,7 @@ function Invoke-BashSed {
     }
 
     $inputArray = [string[]]$allLines.ToArray()
-    $outputLines = & $processLines $inputArray
+    $outputLines = @(& $processLines $inputArray)
 
     # Emit output preserving original objects where possible
     for ($oi = 0; $oi -lt $outputLines.Count; $oi++) {

@@ -1,42 +1,109 @@
-using System.Diagnostics;
+using PsBash.Core.Parser;
+using PsBash.Core.Runtime;
+using PsBash.Core.Transpiler;
 
 namespace PsBash.Shell;
 
 public static class InteractiveShell
 {
+    private const string Prompt = "$ ";
+
     public static async Task<int> RunAsync(string pwshPath)
     {
-        var modulePath = ResolveModulePath();
-        var importCommand = modulePath is not null
-            ? $"Import-Module '{modulePath}'"
-            : "Import-Module ps-bash";
+        Console.CancelKeyPress += OnCancelKeyPress;
 
-        var psi = new ProcessStartInfo
+        var cts = new CancellationTokenSource();
+        var worker = await StartWorkerAsync(pwshPath);
+
+        while (true)
         {
-            FileName = pwshPath,
-            UseShellExecute = false,
-        };
-        psi.ArgumentList.Add("-NoExit");
-        psi.ArgumentList.Add("-Command");
-        psi.ArgumentList.Add(importCommand);
+            cts.Dispose();
+            cts = new CancellationTokenSource();
+            _currentCts = cts;
 
-        var process = Process.Start(psi)
-            ?? throw new InvalidOperationException("Failed to start pwsh interactive session");
+            Console.Write(Prompt);
+            var line = Console.ReadLine();
 
-        await process.WaitForExitAsync();
-        return process.ExitCode;
+            if (line is null)
+            {
+                Console.WriteLine();
+                await DisposeWorkerAsync(worker);
+                return 0;
+            }
+
+            var trimmed = line.Trim();
+            if (trimmed.Length == 0)
+                continue;
+
+            if (IsExitCommand(trimmed, out var exitCode))
+            {
+                await DisposeWorkerAsync(worker);
+                return exitCode;
+            }
+
+            string pwshCommand;
+            try
+            {
+                pwshCommand = BashTranspiler.Transpile(trimmed);
+            }
+            catch (ParseException ex)
+            {
+                Console.Error.WriteLine($"ps-bash: parse error: {ex.Message}");
+                continue;
+            }
+
+            try
+            {
+                await worker.ExecuteAsync(pwshCommand, cts.Token);
+            }
+            catch (OperationCanceledException)
+            {
+                Console.Error.WriteLine("^C");
+                await DisposeWorkerAsync(worker);
+                worker = await StartWorkerAsync(pwshPath);
+            }
+        }
     }
 
-    private static string? ResolveModulePath()
+    private static async Task<PwshWorker> StartWorkerAsync(string pwshPath)
     {
-        var envModule = Environment.GetEnvironmentVariable("PSBASH_MODULE");
-        if (envModule is { Length: > 0 })
-            return envModule;
+        var modulePath = Environment.GetEnvironmentVariable("PSBASH_MODULE")
+            ?? ModuleExtractor.ExtractEmbedded();
 
-        var sxsModule = Path.Combine(AppContext.BaseDirectory, "Modules", "ps-bash");
-        if (Directory.Exists(sxsModule))
-            return sxsModule;
+        return await PwshWorker.StartAsync(
+            pwshPath,
+            workerScriptPath: Environment.GetEnvironmentVariable("PSBASH_WORKER"),
+            modulePath: modulePath);
+    }
 
-        return null;
+    private static async ValueTask DisposeWorkerAsync(PwshWorker worker)
+    {
+        try { await worker.DisposeAsync(); }
+        catch { }
+    }
+
+    private static bool IsExitCommand(string input, out int exitCode)
+    {
+        exitCode = 0;
+        if (input is "logout") return true;
+        if (input == "exit") return true;
+        if (input.StartsWith("exit ", StringComparison.Ordinal))
+        {
+            var arg = input["exit ".Length..].Trim();
+            if (int.TryParse(arg, out var code))
+            {
+                exitCode = code;
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private static CancellationTokenSource? _currentCts;
+
+    private static void OnCancelKeyPress(object? sender, ConsoleCancelEventArgs e)
+    {
+        e.Cancel = true;
+        _currentCts?.Cancel();
     }
 }

@@ -121,14 +121,13 @@ public class ProgramEndToEndTests
     }
 
     [SkippableFact]
-    public async Task NoCommand_ExitsWithError()
+    public async Task NoArgs_EntersInteractiveModeAndExitsCleanly()
     {
         Skip.If(PwshPath is null, "pwsh not available");
 
-        var (exitCode, _, stderr) = await RunShellAsync();
+        var (exitCode, _, _) = await RunShellWithStdinAsync("");
 
-        Assert.NotEqual(0, exitCode);
-        Assert.Contains("no command specified", stderr);
+        Assert.Equal(0, exitCode);
     }
 
     [SkippableFact]
