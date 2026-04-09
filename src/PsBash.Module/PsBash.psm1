@@ -1185,7 +1185,7 @@ function Invoke-BashGrep {
     $pipelineInput = @($input)
     if ($Arguments -contains '--help') { return Show-BashHelp 'grep' }
 
-    # Parse arguments manually because grep has value-bearing flags (-A, -B, -C, -m)
+    # Parse arguments manually because grep has value-bearing flags (-A, -B, -C, -m, -e)
     $ignoreCase = $false
     $invertMatch = $false
     $showLineNumbers = $false
@@ -1193,9 +1193,15 @@ function Invoke-BashGrep {
     $recursive = $false
     $filesOnly = $false
     $extendedRegex = $false
+    $fixedString = $false
+    $wholeWord = $false
+    $outputMatchOnly = $false
+    $forceFileName = $false      # -H: always show filename
+    $suppressFileName = $false   # -h: never show filename
+    $maxMatches = [int]::MaxValue
     $afterContext = 0
     $beforeContext = 0
-    $pattern = $null
+    $patterns = [System.Collections.Generic.List[string]]::new()
     $operands = [System.Collections.Generic.List[string]]::new()
     $pastDoubleDash = $false
 
@@ -1211,6 +1217,16 @@ function Invoke-BashGrep {
 
         if ($arg -eq '--') {
             $pastDoubleDash = $true
+            $i++
+            continue
+        }
+
+        # Handle -e pattern (multiple patterns)
+        if ($arg -ceq '-e') {
+            $i++
+            if ($i -lt $Arguments.Count) {
+                $patterns.Add($Arguments[$i])
+            }
             $i++
             continue
         }
@@ -1241,9 +1257,25 @@ function Invoke-BashGrep {
             continue
         }
 
+        # Handle -m NUM (max matches)
+        if ($arg -cmatch '^-m(\d+)$') {
+            $maxMatches = [int]$Matches[1]
+            $i++
+            continue
+        }
+
+        if ($arg -ceq '-m') {
+            $i++
+            if ($i -lt $Arguments.Count) {
+                $maxMatches = [int]$Arguments[$i]
+            }
+            $i++
+            continue
+        }
+
         if ($arg.StartsWith('-') -and $arg.Length -gt 1 -and -not $arg.StartsWith('--')) {
             foreach ($ch in $arg.Substring(1).ToCharArray()) {
-                switch ($ch) {
+                switch -CaseSensitive ($ch) {
                     'i' { $ignoreCase = $true }
                     'v' { $invertMatch = $true }
                     'n' { $showLineNumbers = $true }
@@ -1251,6 +1283,11 @@ function Invoke-BashGrep {
                     'r' { $recursive = $true }
                     'l' { $filesOnly = $true }
                     'E' { $extendedRegex = $true }
+                    'F' { $fixedString = $true }
+                    'w' { $wholeWord = $true }
+                    'o' { $outputMatchOnly = $true }
+                    'H' { $forceFileName = $true }
+                    'h' { $suppressFileName = $true }
                 }
             }
             $i++
@@ -1261,27 +1298,47 @@ function Invoke-BashGrep {
         $i++
     }
 
-    if ($operands.Count -eq 0) {
+    # Handle pattern collection: -e patterns or first operand
+    if ($patterns.Count -eq 0 -and $operands.Count -gt 0) {
+        $patterns.Add($operands[0])
+    }
+
+    if ($patterns.Count -eq 0) {
         Write-BashError -Message 'grep: usage: grep [options] pattern [file ...]' -ExitCode 2
         return
     }
 
-    $pattern = $operands[0]
-    $fileOperands = @(if ($operands.Count -gt 1) { $operands.GetRange(1, $operands.Count - 1) } else { @() })
+    $fileOperands = @(if ($patterns.Count -lt $operands.Count) {
+        $operands.GetRange(1, $operands.Count - 1)
+    } elseif ($operands.Count -gt 1) {
+        $operands.GetRange(1, $operands.Count - 1)
+    } else {
+        @()
+    })
 
-    # Build regex options
+    # Build regex list from patterns (OR logic for multiple -e patterns)
+    $regexes = [System.Collections.Generic.List[regex]]::new()
     $regexOpts = [System.Text.RegularExpressions.RegexOptions]::None
     if ($ignoreCase) { $regexOpts = $regexOpts -bor [System.Text.RegularExpressions.RegexOptions]::IgnoreCase }
 
-    # For basic regex (non -E), escape special chars except basic ones that grep always supports
-    $regexPattern = if (-not $extendedRegex) {
-        # Basic grep: . * ^ $ [ ] are special; escape (){}|+?
-        $pattern -replace '(?<!\\)\(', '\(' -replace '(?<!\\)\)', '\)' -replace '(?<!\\)\{', '\{' -replace '(?<!\\)\}', '\}' -replace '(?<!\\)\|', '\|' -replace '(?<!\\)\+', '\+' -replace '(?<!\\)\?', '\?'
-    } else {
-        $pattern
-    }
+    foreach ($pat in $patterns) {
+        $regexPattern = if ($fixedString) {
+            # Fixed string: escape all regex metacharacters
+            [regex]::Escape($pat)
+        } elseif (-not $extendedRegex) {
+            # Basic grep: . * ^ $ [ ] are special; escape (){}|+?
+            $pat -replace '(?<!\\)\(', '\(' -replace '(?<!\\)\)', '\)' -replace '(?<!\\)\{', '\{' -replace '(?<!\\)\}', '\}' -replace '(?<!\\)\|', '\|' -replace '(?<!\\)\+', '\+' -replace '(?<!\\)\?', '\?'
+        } else {
+            $pat
+        }
 
-    $regex = [regex]::new($regexPattern, $regexOpts)
+        # Add word boundaries if -w is set
+        if ($wholeWord) {
+            $regexPattern = "\b$regexPattern\b"
+        }
+
+        $regexes.Add([regex]::new($regexPattern, $regexOpts))
+    }
 
     # --- Pipeline mode ---
     if ($fileOperands.Count -eq 0 -and -not $recursive) {
@@ -1289,35 +1346,80 @@ function Invoke-BashGrep {
         $lineNum = 0
 
         foreach ($item in $pipelineInput) {
+            if ($matchCount -ge $maxMatches) { break }
+
             $text = Get-BashText -InputObject $item
             if (($text -replace "`n$", '') -match "`n") {
                 foreach ($subLine in ($text -replace "`n$", '' -split "`n")) {
+                    if ($matchCount -ge $maxMatches) { break }
                     $lineNum++
-                    $isMatch = $regex.IsMatch($subLine)
+
+                    # Check if any regex matches (OR logic for multiple patterns)
+                    $isMatch = $false
+                    $matchObject = $null
+                    foreach ($rx in $regexes) {
+                        if ($rx.IsMatch($subLine)) {
+                            $isMatch = $true
+                            $matchObject = $rx.Match($subLine)
+                            break
+                        }
+                    }
+
                     if ($invertMatch) { $isMatch = -not $isMatch }
                     if ($isMatch) {
                         $matchCount++
                         if (-not $countOnly) {
-                            if ($showLineNumbers) {
-                                New-BashObject -BashText "${lineNum}:$subLine"
+                            $outputText = if ($outputMatchOnly -and $matchObject) {
+                                $matchObject.Value
                             } else {
-                                New-BashObject -BashText $subLine
+                                $subLine
                             }
+
+                            $bashText = $outputText
+                            if ($showLineNumbers) {
+                                $bashText = "${lineNum}:${outputText}"
+                            }
+
+                            New-BashObject -BashText $bashText
                         }
                     }
                 }
             } else {
                 $lineNum++
                 $lineText = $text -replace "`n$", ''
-                $isMatch = $regex.IsMatch($lineText)
+
+                # Check if any regex matches (OR logic for multiple patterns)
+                $isMatch = $false
+                $matchObject = $null
+                foreach ($rx in $regexes) {
+                    if ($rx.IsMatch($lineText)) {
+                        $isMatch = $true
+                        $matchObject = $rx.Match($lineText)
+                        break
+                    }
+                }
+
                 if ($invertMatch) { $isMatch = -not $isMatch }
                 if ($isMatch) {
                     $matchCount++
                     if (-not $countOnly) {
-                        if ($showLineNumbers) {
-                            New-BashObject -BashText "${lineNum}:$lineText"
+                        $outputText = if ($outputMatchOnly -and $matchObject) {
+                            $matchObject.Value
                         } else {
-                            $item
+                            $lineText
+                        }
+
+                        if ($forceFileName) {
+                            New-BashObject -BashText "<stdin>:$outputText"
+                        } elseif ($showLineNumbers) {
+                            New-BashObject -BashText "${lineNum}:$outputText"
+                        } elseif ($outputMatchOnly -or -not $outputMatchOnly) {
+                            # If -o is set, emit outputText; otherwise preserve original object if possible
+                            if ($outputMatchOnly) {
+                                New-BashObject -BashText $outputText
+                            } else {
+                                $item
+                            }
                         }
                     }
                 }
@@ -1350,20 +1452,38 @@ function Invoke-BashGrep {
         }
     }
 
-    $multipleFiles = $filePaths.Count -gt 1 -or $recursive
+    $multipleFiles = $filePaths.Count -gt 1 -or $recursive -or $forceFileName
     $matchedFiles = [System.Collections.Generic.List[string]]::new()
     $perFileCounts = [System.Collections.Generic.Dictionary[string,int]]::new()
     $totalMatchCount = 0
+    $filesProcessed = 0
 
     foreach ($filePath in (Resolve-BashGlob -Paths $filePaths)) {
+        if ($totalMatchCount -ge $maxMatches) { break }
+        $filesProcessed++
+
         $lines = Read-BashFileLines -Path $filePath -Command 'grep'
         if ($null -eq $lines) { continue }
 
         $matchIndices = [System.Collections.Generic.List[int]]::new()
+        $matchObjects = [System.Collections.Generic.Dictionary[int, System.Text.RegularExpressions.Match]]::new()
         for ($li = 0; $li -lt $lines.Count; $li++) {
-            $isMatch = $regex.IsMatch($lines[$li])
+            # Check if any regex matches (OR logic for multiple patterns)
+            $isMatch = $false
+            $matchObj = $null
+            foreach ($rx in $regexes) {
+                if ($rx.IsMatch($lines[$li])) {
+                    $isMatch = $true
+                    $matchObj = $rx.Match($lines[$li])
+                    break
+                }
+            }
+
             if ($invertMatch) { $isMatch = -not $isMatch }
-            if ($isMatch) { $matchIndices.Add($li) }
+            if ($isMatch) {
+                $matchIndices.Add($li)
+                if ($matchObj) { $matchObjects[$li] = $matchObj }
+            }
         }
 
         $fileMatchCount = $matchIndices.Count
@@ -1377,28 +1497,44 @@ function Invoke-BashGrep {
 
         if ($countOnly) { continue }
 
-        # Determine which lines to emit (matches + context)
+        # Determine which lines to emit (matches + context, respecting -m limit)
         $emitLines = [System.Collections.Generic.HashSet[int]]::new()
+        $emitCount = 0
         foreach ($mi in $matchIndices) {
+            if ($emitCount -ge $maxMatches) { break }
+
             $start = [System.Math]::Max(0, $mi - $beforeContext)
             $end = [System.Math]::Min($lines.Count - 1, $mi + $afterContext)
             for ($li = $start; $li -le $end; $li++) {
                 [void]$emitLines.Add($li)
             }
+            $emitCount++
         }
 
         $sortedEmit = $emitLines | Sort-Object
         foreach ($li in $sortedEmit) {
+            if ($totalMatchCount -ge $maxMatches) { break }
+
             $line = $lines[$li]
             $lineNum = $li + 1
             $prefix = ''
-            if ($multipleFiles) { $prefix = "${filePath}:" }
 
-            $bashText = $line
+            # Determine if filename should be shown
+            $showFile = $multipleFiles -and -not $suppressFileName
+
+            if ($outputMatchOnly -and $matchObjects.ContainsKey($li)) {
+                $outputText = $matchObjects[$li].Value
+            } else {
+                $outputText = $line
+            }
+
+            if ($showFile) { $prefix = "${filePath}:" }
+
+            $bashText = $outputText
             if ($showLineNumbers) {
-                $bashText = "${prefix}${lineNum}:${line}"
-            } elseif ($multipleFiles) {
-                $bashText = "${prefix}${line}"
+                $bashText = "${prefix}${lineNum}:${outputText}"
+            } elseif ($showFile) {
+                $bashText = "${prefix}${outputText}"
             }
 
             $obj = [PSCustomObject]@{
@@ -1409,6 +1545,10 @@ function Invoke-BashGrep {
                 BashText   = $bashText
             }
             Set-BashDisplayProperty $obj
+
+            if ($matchIndices -contains $li) {
+                $totalMatchCount = $totalMatchCount   # Update count for context lines
+            }
         }
     }
 
@@ -1422,7 +1562,9 @@ function Invoke-BashGrep {
     if ($countOnly) {
         if ($multipleFiles) {
             foreach ($filePath in (Resolve-BashGlob -Paths $filePaths)) {
-                New-BashObject -BashText "${filePath}:$($perFileCounts[$filePath])"
+                if ($perFileCounts.ContainsKey($filePath)) {
+                    New-BashObject -BashText "${filePath}:$($perFileCounts[$filePath])"
+                }
             }
         } else {
             New-BashObject -BashText "$totalMatchCount"
@@ -1878,9 +2020,10 @@ function Invoke-BashTail {
     $pipelineInput = @($input)
     if ($Arguments -contains '--help') { return Show-BashHelp 'tail' }
 
-    # Manual arg parsing for value-bearing -n flag
+    # Manual arg parsing for value-bearing -n flag and -f flag
     $count = 10
     $fromLine = $false
+    $followFile = $false     # -f: follow file for new content
     $operands = [System.Collections.Generic.List[string]]::new()
     $pastDoubleDash = $false
 
@@ -1896,6 +2039,12 @@ function Invoke-BashTail {
 
         if ($arg -eq '--') {
             $pastDoubleDash = $true
+            $i++
+            continue
+        }
+
+        if ($arg -ceq '-f') {
+            $followFile = $true
             $i++
             continue
         }
@@ -1976,26 +2125,70 @@ function Invoke-BashTail {
     }
 
     # File mode — resolve globs
-    $resolvedFiles = Resolve-BashGlob -Paths $operands
-    foreach ($filePath in $resolvedFiles) {
-        $lines = Read-BashFileLines -Path $filePath -Command 'tail'
-        if ($null -eq $lines) { continue }
+    $resolvedFiles = @(Resolve-BashGlob -Paths $operands)
 
-        if ($fromLine) {
-            $startIdx = $count - 1
-        } else {
-            $startIdx = [System.Math]::Max(0, $lines.Count - $count)
-        }
+    if ($resolvedFiles.Count -eq 0) {
+        return
+    }
 
-        for ($li = $startIdx; $li -lt $lines.Count; $li++) {
-            $obj = [PSCustomObject]@{
-                PSTypeName = 'PsBash.CatLine'
-                LineNumber = $li + 1
-                Content    = $lines[$li]
-                FileName   = $filePath
-                BashText   = $lines[$li]
+    $filePath = $resolvedFiles[0]
+
+    if ($followFile) {
+        # Follow mode: continuously monitor file for new lines
+        try {
+            # Try using Get-Content -Wait (PS 5.0+)
+            $useWait = $true
+            $lines = Read-BashFileLines -Path $filePath -Command 'tail'
+            if ($null -eq $lines) { $lines = @() }
+
+            if ($fromLine) {
+                $lastOutputLine = $count - 1
+            } else {
+                $lastOutputLine = [System.Math]::Max(-1, $lines.Count - $count - 1)
             }
-            Set-BashDisplayProperty $obj
+
+            # Output initial lines
+            for ($li = $lastOutputLine + 1; $li -lt $lines.Count; $li++) {
+                Emit-BashLine -Text $lines[$li]
+            }
+
+            # Monitor file for new content
+            $lastLineCount = $lines.Count
+            while ($true) {
+                Start-Sleep -Milliseconds 100
+                $currentLines = Read-BashFileLines -Path $filePath -Command 'tail'
+                if ($null -ne $currentLines -and $currentLines.Count -gt $lastLineCount) {
+                    for ($li = $lastLineCount; $li -lt $currentLines.Count; $li++) {
+                        Emit-BashLine -Text $currentLines[$li]
+                    }
+                    $lastLineCount = $currentLines.Count
+                }
+            }
+        } catch {
+            Write-BashError -Message "tail: cannot follow file: $_" -ExitCode 1
+        }
+    } else {
+        # Normal mode: output last N lines
+        foreach ($filePath in $resolvedFiles) {
+            $lines = Read-BashFileLines -Path $filePath -Command 'tail'
+            if ($null -eq $lines) { continue }
+
+            if ($fromLine) {
+                $startIdx = $count - 1
+            } else {
+                $startIdx = [System.Math]::Max(0, $lines.Count - $count)
+            }
+
+            for ($li = $startIdx; $li -lt $lines.Count; $li++) {
+                $obj = [PSCustomObject]@{
+                    PSTypeName = 'PsBash.CatLine'
+                    LineNumber = $li + 1
+                    Content    = $lines[$li]
+                    FileName   = $filePath
+                    BashText   = $lines[$li]
+                }
+                Set-BashDisplayProperty $obj
+            }
         }
     }
 }
@@ -2131,6 +2324,7 @@ function Invoke-BashFind {
     $sizeExpr = $null
     $mtimeExpr = $null
     $findEmpty = $false
+    $printNull = $false      # -print0: use null delimiters
     $execCmd = $null          # -exec command template
     $execTerminator = $null   # ';' or '+'
     $operands = [System.Collections.Generic.List[string]]::new()
@@ -2139,7 +2333,7 @@ function Invoke-BashFind {
     $unsupportedValuePredicates = @('-iname','-path','-ipath','-regex','-iregex','-newer',
         '-perm','-user','-group','-printf','-mindepth','-amin','-atime','-cmin','-ctime',
         '-gid','-uid','-links','-samefile','-wholename','-iwholename','-lname','-ilname')
-    $unsupportedStandalonePredicates = @('-delete','-print','-print0','-prune','-depth',
+    $unsupportedStandalonePredicates = @('-delete','-print','-prune','-depth',
         '-follow','-ls','-mount','-xdev','-noleaf','-daystart','-warn','-nowarn',
         '-not','-or','-o','-and','-a','-true','-false')
 
@@ -2180,6 +2374,11 @@ function Invoke-BashFind {
             }
             '-empty' {
                 $findEmpty = $true
+                $i++
+                continue
+            }
+            '-print0' {
+                $printNull = $true
                 $i++
                 continue
             }
@@ -2280,6 +2479,7 @@ function Invoke-BashFind {
 
     $now = [datetime]::Now
     $execCollectedPaths = [System.Collections.Generic.List[string]]::new()
+    $nullDelimitedPaths = [System.Text.StringBuilder]::new()  # For -print0 mode
 
     foreach ($item in $allItems) {
         $itemPath = $item.FullName
@@ -2354,6 +2554,10 @@ function Invoke-BashFind {
                 # -exec cmd {} + — collect paths, run once at end
                 $execCollectedPaths.Add($displayPath)
             }
+        } elseif ($printNull) {
+            # -print0: accumulate paths with null delimiters
+            [void]$nullDelimitedPaths.Append($displayPath)
+            [void]$nullDelimitedPaths.Append("`0")
         } else {
             $obj = [PSCustomObject]@{
                 PSTypeName   = 'PsBash.FindEntry'
@@ -2386,6 +2590,17 @@ function Invoke-BashFind {
         $cmdName = $cmdArgs[0]
         $cmdRest = if ($cmdArgs.Count -gt 1) { $cmdArgs[1..($cmdArgs.Count - 1)] } else { @() }
         & $cmdName @cmdRest
+    }
+
+    # Output null-delimited paths if -print0 was used
+    if ($printNull -and $nullDelimitedPaths.Length -gt 0) {
+        $outputText = $nullDelimitedPaths.ToString()
+        $obj = [PSCustomObject]@{
+            PSTypeName = 'PsBash.TextOutput'
+            BashText = $outputText
+            NoTrailingNewline = $true
+        }
+        Set-BashDisplayProperty $obj
     }
 }
 
@@ -6178,6 +6393,7 @@ function Invoke-BashXargs {
 
     $replaceStr = $null
     $maxArgs = 0
+    $nullDelim = $false       # -0: use null-delimited input
     $operands = [System.Collections.Generic.List[string]]::new()
     $pastDoubleDash = $false
 
@@ -6193,6 +6409,12 @@ function Invoke-BashXargs {
 
         if ($arg -eq '--') {
             $pastDoubleDash = $true
+            $i++
+            continue
+        }
+
+        if ($arg -ceq '-0') {
+            $nullDelim = $true
             $i++
             continue
         }
@@ -6245,17 +6467,28 @@ function Invoke-BashXargs {
         $cmdArgs = @($operands[1..($operands.Count - 1)])
     }
 
-    # Collect input lines
+    # Collect input lines (split by delimiter)
     $inputLines = [System.Collections.Generic.List[string]]::new()
     foreach ($item in $pipelineInput) {
         $text = Get-BashText -InputObject $item
-        if (($text -replace "`n$", '') -match "`n") {
-            foreach ($subLine in ($text -replace "`n$", '' -split "`n")) {
+
+        if ($nullDelim) {
+            # -0: split on null characters
+            $delim = "`0"
+        } else {
+            # Default: split on newlines (bash-style)
+            $delim = "`n"
+        }
+
+        # Remove trailing delimiter if present
+        $text = $text -replace "$([regex]::Escape($delim))$", ''
+
+        if ($text -match $([regex]::Escape($delim))) {
+            foreach ($subLine in ($text -split $([regex]::Escape($delim)))) {
                 if ($subLine -ne '') { $inputLines.Add($subLine) }
             }
         } else {
-            $lineText = $text -replace "`n$", ''
-            if ($lineText -ne '') { $inputLines.Add($lineText) }
+            if ($text -ne '') { $inputLines.Add($text) }
         }
     }
 
@@ -9165,180 +9398,131 @@ function Invoke-BashTar {
         return
     }
 
+    Add-Type -AssemblyName System.Formats.Tar -ErrorAction SilentlyContinue
+
+    # Determine mode
     if ($create) {
-        if ($operands.Count -eq 0) {
-            Write-BashError -Message 'tar: no files to archive'
+        $sources = @($operands)
+        if ($sources.Count -eq 0) {
+            Write-BashError -Message 'tar: no files or directories specified'
             return
         }
-
-        $ms = [System.IO.MemoryStream]::new()
+        $outStream = $null; $tarStream = $null; $writer = $null
         try {
-            $zip = [System.IO.Compression.ZipArchive]::new($ms, [System.IO.Compression.ZipArchiveMode]::Create, $true)
-            try {
-                foreach ($source in $operands) {
-                    if (-not (Test-Path -LiteralPath $source)) {
-                        Write-BashError -Message "tar: ${source}: No such file or directory"
-                        continue
-                    }
+            $outStream = [System.IO.File]::Open($archiveFile, 'Create', 'Write', 'None')
+            $tarStream = if ($gzipFilter) {
+                [System.IO.Compression.GZipStream]::new($outStream, [System.IO.Compression.CompressionMode]::Compress)
+            } else { $outStream }
 
-                    $resolvedSource = (Resolve-Path -LiteralPath $source).Path
-                    if (Test-Path -LiteralPath $resolvedSource -PathType Container) {
-                        $baseName = Split-Path $resolvedSource -Leaf
-                        $files = Get-ChildItem -LiteralPath $resolvedSource -Recurse -File -ErrorAction SilentlyContinue
-                        foreach ($file in $files) {
-                            $relPath = $file.FullName.Substring($resolvedSource.Length).TrimStart([System.IO.Path]::DirectorySeparatorChar, [System.IO.Path]::AltDirectorySeparatorChar)
-                            $entryName = "${baseName}/$($relPath -replace '\\', '/')"
-                            $skip = $false
-                            foreach ($pat in $excludePatterns) {
-                                if ($file.Name -like $pat) { $skip = $true; break }
-                            }
-                            if ($skip) { continue }
-                            $fileBytes = Read-BashFileRaw -Path $file.FullName -Command 'tar'
-                            if ($null -eq $fileBytes) { continue }
-                            $entry = $zip.CreateEntry($entryName)
-                            $entryStream = $entry.Open()
-                            try {
-                                $entryStream.Write($fileBytes, 0, $fileBytes.Length)
-                            } finally {
-                                $entryStream.Dispose()
-                            }
-                            if ($verbose) {
-                                New-BashObject -BashText $entryName
-                            }
-                        }
-                    } else {
-                        $entryName = Split-Path $resolvedSource -Leaf
+            $writer = [System.Formats.Tar.TarWriter]::new($tarStream)
+            foreach ($src in $sources) {
+                $resolved = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($src)
+                if (-not (Test-Path $resolved)) {
+                    Write-BashError -Message "tar: $src: Cannot stat: No such file or directory"
+                    continue
+                }
+                $item = Get-BashItem $resolved
+                if ($item.PSIsContainer) {
+                    $root = [System.IO.Path]::GetFileName($resolved)
+                    $baseDir = [System.IO.Path]::GetDirectoryName($resolved)
+                    $enumOpts = [System.IO.EnumerationOptions]::new()
+                    $enumOpts.RecurseSubdirectories = $true
+                    $children = [System.IO.Directory]::GetFileSystemEntries($resolved, '*', $enumOpts)
+                    $writer.WriteEntry($resolved, $root)
+                    foreach ($child in $children) {
                         $skip = $false
                         foreach ($pat in $excludePatterns) {
-                            if ($entryName -like $pat) { $skip = $true; break }
+                            if ($child -like "*$pat*") { $skip = $true; break }
                         }
                         if ($skip) { continue }
-                        $fileBytes = Read-BashFileRaw -Path $resolvedSource -Command 'tar'
-                        if ($null -eq $fileBytes) { continue }
-                        $entry = $zip.CreateEntry($entryName)
-                        $entryStream = $entry.Open()
-                        try {
-                            $entryStream.Write($fileBytes, 0, $fileBytes.Length)
-                        } finally {
-                            $entryStream.Dispose()
-                        }
-                        if ($verbose) {
-                            New-BashObject -BashText $entryName
-                        }
+                        $relPath = $child.Substring($baseDir.Length + 1).Replace('\', '/')
+                        if ($verbose) { Write-Output $relPath }
+                        $writer.WriteEntry($child, $relPath)
                     }
+                } else {
+                    $skip = $false
+                    foreach ($pat in $excludePatterns) {
+                        if ($resolved -like "*$pat*") { $skip = $true; break }
+                    }
+                    if ($skip) { continue }
+                    $relPath = [System.IO.Path]::GetFileName($resolved)
+                    if ($verbose) { Write-Output $relPath }
+                    $writer.WriteEntry($resolved, $relPath)
                 }
-            } finally {
-                $zip.Dispose()
             }
-
-            $zipBytes = $ms.ToArray()
+        } catch {
+            Write-BashError -Message "tar: $_" -ExitCode 1
         } finally {
-            $ms.Dispose()
+            if ($null -ne $writer) { $writer.Dispose() }
+            if ($null -ne $tarStream -and $gzipFilter) { $tarStream.Dispose() }
+            if ($null -ne $outStream) { $outStream.Dispose() }
         }
-
-        if ($gzipFilter) {
-            $gms = [System.IO.MemoryStream]::new()
-            try {
-                $gs = [System.IO.Compression.GZipStream]::new($gms, [System.IO.Compression.CompressionLevel]::Optimal, $true)
-                try { $gs.Write($zipBytes, 0, $zipBytes.Length) } finally { $gs.Dispose() }
-                Write-BashFileRaw -Path $archiveFile -Data $gms.ToArray() -Command 'tar' | Out-Null
-            } finally {
-                $gms.Dispose()
-            }
-        } else {
-            Write-BashFileRaw -Path $archiveFile -Data $zipBytes -Command 'tar' | Out-Null
+    }
+    elseif ($extract) {
+        if (-not (Test-Path $archiveFile)) {
+            Write-BashError -Message "tar: $archiveFile: Cannot open: No such file or directory"
+            return
         }
-    } elseif ($listMode) {
-        $archiveBytes = Read-BashFileRaw -Path $archiveFile -Command 'tar'
-        if ($null -eq $archiveBytes) { return }
-        $zipBytes = $archiveBytes
-        if ($gzipFilter) {
-            $ims = [System.IO.MemoryStream]::new($archiveBytes)
-            try {
-                $gs = [System.IO.Compression.GZipStream]::new($ims, [System.IO.Compression.CompressionMode]::Decompress)
-                $oms = [System.IO.MemoryStream]::new()
-                try { $gs.CopyTo($oms); $zipBytes = $oms.ToArray() } finally { $gs.Dispose(); $oms.Dispose() }
-            } finally {
-                $ims.Dispose()
-            }
-        }
-
-        $zms = [System.IO.MemoryStream]::new($zipBytes)
+        $isGz = $gzipFilter -or $archiveFile -match '\.(tar\.gz|tgz)$'
+        $destDir = if ($changeDir) { $changeDir } else { $PWD.Path }
+        $inStream = $null; $tarStream = $null; $reader = $null
         try {
-            $zip = [System.IO.Compression.ZipArchive]::new($zms, [System.IO.Compression.ZipArchiveMode]::Read)
-            try {
-                foreach ($entry in $zip.Entries) {
-                    if ($entry.FullName.EndsWith('/')) { continue }
-                    $obj = [PSCustomObject]@{
-                        PSTypeName   = 'PsBash.TarListOutput'
-                        BashText     = $entry.FullName
-                        Name         = $entry.Name
-                        Size         = $entry.Length
-                        ModifiedDate = $entry.LastWriteTime.DateTime
-                    }
-                    Set-BashDisplayProperty $obj
+            $inStream = [System.IO.File]::OpenRead($archiveFile)
+            $tarStream = if ($isGz) {
+                [System.IO.Compression.GZipStream]::new($inStream, [System.IO.Compression.CompressionMode]::Decompress)
+            } else { $inStream }
+
+            $reader = [System.Formats.Tar.TarReader]::new($tarStream)
+            while ($null -ne ($entry = $reader.GetNextEntry($true))) {
+                if ($null -eq $entry.DataStream) { continue }
+                $targetPath = [System.IO.Path]::Join($destDir, $entry.Name.Replace('/', [System.IO.Path]::DirectorySeparatorChar))
+                $dir = [System.IO.Path]::GetDirectoryName($targetPath)
+                if ($dir -and -not [System.IO.Directory]::Exists($dir)) {
+                    [System.IO.Directory]::CreateDirectory($dir) | Out-Null
                 }
-            } finally {
-                $zip.Dispose()
+                if ($verbose) { Write-Output $entry.Name }
+                $fs = [System.IO.File]::Create($targetPath)
+                try { $entry.DataStream.CopyTo($fs) } finally { $fs.Dispose() }
             }
+        } catch {
+            Write-BashError -Message "tar: $_" -ExitCode 1
         } finally {
-            $zms.Dispose()
+            if ($null -ne $reader) { $reader.Dispose() }
+            if ($null -ne $tarStream -and $isGz) { $tarStream.Dispose() }
+            if ($null -ne $inStream) { $inStream.Dispose() }
         }
-    } elseif ($extract) {
-        $archiveBytes = Read-BashFileRaw -Path $archiveFile -Command 'tar'
-        if ($null -eq $archiveBytes) { return }
-
-        $targetDir = if ($changeDir) { $changeDir } else { Get-Location | Select-Object -ExpandProperty Path }
-        if (-not (Test-Path -LiteralPath $targetDir)) {
-            New-Item -Path $targetDir -ItemType Directory -Force | Out-Null
+    }
+    elseif ($listMode) {
+        if (-not (Test-Path $archiveFile)) {
+            Write-BashError -Message "tar: $archiveFile: Cannot open: No such file or directory"
+            return
         }
-        $zipBytes = $archiveBytes
-        if ($gzipFilter) {
-            $ims = [System.IO.MemoryStream]::new($archiveBytes)
-            try {
-                $gs = [System.IO.Compression.GZipStream]::new($ims, [System.IO.Compression.CompressionMode]::Decompress)
-                $oms = [System.IO.MemoryStream]::new()
-                try { $gs.CopyTo($oms); $zipBytes = $oms.ToArray() } finally { $gs.Dispose(); $oms.Dispose() }
-            } finally {
-                $ims.Dispose()
-            }
-        }
-
-        $zms = [System.IO.MemoryStream]::new($zipBytes)
+        $isGz = $gzipFilter -or $archiveFile -match '\.(tar\.gz|tgz)$'
+        $inStream = $null; $tarStream = $null; $reader = $null
         try {
-            $zip = [System.IO.Compression.ZipArchive]::new($zms, [System.IO.Compression.ZipArchiveMode]::Read)
-            try {
-                foreach ($entry in $zip.Entries) {
-                    if ($entry.FullName.EndsWith('/')) { continue }
-                    $outPath = Join-Path $targetDir ($entry.FullName -replace '/', [System.IO.Path]::DirectorySeparatorChar)
-                    $outDir = Split-Path $outPath -Parent
-                    if (-not (Test-Path -LiteralPath $outDir)) {
-                        New-Item -Path $outDir -ItemType Directory -Force | Out-Null
-                    }
-                    $entryStream = $entry.Open()
-                    try {
-                        $buf = [System.IO.MemoryStream]::new()
-                        try {
-                            $entryStream.CopyTo($buf)
-                            Write-BashFileRaw -Path $outPath -Data $buf.ToArray() -Command 'tar' | Out-Null
-                        } finally {
-                            $buf.Dispose()
-                        }
-                    } finally {
-                        $entryStream.Dispose()
-                    }
-                    if ($verbose) {
-                        New-BashObject -BashText $entry.FullName
-                    }
+            $inStream = [System.IO.File]::OpenRead($archiveFile)
+            $tarStream = if ($isGz) {
+                [System.IO.Compression.GZipStream]::new($inStream, [System.IO.Compression.CompressionMode]::Decompress)
+            } else { $inStream }
+
+            $reader = [System.Formats.Tar.TarReader]::new($tarStream)
+            while ($null -ne ($entry = $reader.GetNextEntry($false))) {
+                $name = $entry.Name
+                if ($entry.EntryType -eq 'Directory') {
+                    $name = $name.TrimEnd('/') + '/'
                 }
-            } finally {
-                $zip.Dispose()
+                Emit-BashLine -Text "$name`n"
             }
+        } catch {
+            Write-BashError -Message "tar: $_" -ExitCode 1
         } finally {
-            $zms.Dispose()
+            if ($null -ne $reader) { $reader.Dispose() }
+            if ($null -ne $tarStream -and $isGz) { $tarStream.Dispose() }
+            if ($null -ne $inStream) { $inStream.Dispose() }
         }
-    } else {
-        Write-BashError -Message 'tar: you must specify one of -c, -x, -t'
+    }
+    else {
+        Write-BashError -Message 'tar: you must specify -c, -x, or -t'
     }
 }
 
