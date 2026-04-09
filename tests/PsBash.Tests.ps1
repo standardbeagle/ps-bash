@@ -1395,6 +1395,36 @@ Describe 'Invoke-BashFind' {
         $root = @($results | Where-Object { $_.FullPath -eq (Resolve-Path $findDir).Path })
         $root.Count | Should -Be 1
     }
+
+    It 'find -print0 outputs single object with null-separated paths' {
+        $results = @(Invoke-BashFind $findDir -name '*.txt' -print0)
+        $results.Count | Should -Be 1
+        $results[0].PSObject.TypeNames[0] | Should -Be 'PsBash.TextOutput'
+        $results[0].NoTrailingNewline | Should -Be $true
+        $bashText = $results[0].BashText
+        $bashText | Should -Not -BeNullOrEmpty
+        # Paths should be separated by null chars
+        $paths = $bashText -split "`0"
+        $paths = @($paths | Where-Object { $_ -ne '' })
+        $paths.Count | Should -BeGreaterOrEqual 5
+        # Each path should contain the test dir and use forward slashes
+        foreach ($p in $paths) {
+            $p | Should -Not -Match '\\'
+        }
+    }
+
+    It 'find --print0 (long form) works same as -print0' {
+        $results = @(Invoke-BashFind $findDir -name '*.txt' --print0)
+        $results.Count | Should -Be 1
+        $bashText = $results[0].BashText
+        $paths = @(($bashText -split "`0") | Where-Object { $_ -ne '' })
+        $paths.Count | Should -BeGreaterOrEqual 5
+    }
+
+    It 'find -print0 with no matches outputs nothing' {
+        $results = @(Invoke-BashFind $findDir -name '*.nonexistent' -print0)
+        $results.Count | Should -Be 0
+    }
 }
 
 Describe 'Invoke-BashStat' {
@@ -3643,6 +3673,49 @@ Describe 'Invoke-BashXargs — Alias' {
     It 'xargs alias resolves to Invoke-BashXargs' {
         $alias = Get-Alias -Name xargs -Scope Global
         $alias.Definition | Should -Be 'Invoke-BashXargs'
+    }
+}
+
+Describe 'Invoke-BashXargs — Null-Delimited Input (-0)' {
+    It 'splits input on null characters with -0' {
+        $nullText = "alpha`0beta`0gamma`0"
+        $obj = New-BashObject -BashText $nullText
+        $results = @($obj | Invoke-BashXargs -0 Invoke-BashEcho)
+        $results.Count | Should -Be 1
+        (Get-BashText -InputObject $results[0]) | Should -Be 'alpha beta gamma'
+    }
+
+    It '--null works same as -0' {
+        $nullText = "one`0two`0"
+        $obj = New-BashObject -BashText $nullText
+        $results = @($obj | Invoke-BashXargs --null Invoke-BashEcho)
+        $results.Count | Should -Be 1
+        (Get-BashText -InputObject $results[0]) | Should -Be 'one two'
+    }
+
+    It 'handles filenames with spaces via null-delimited pipeline' {
+        $testDir = Join-Path ([System.IO.Path]::GetTempPath()) "psbash-print0-$([guid]::NewGuid().ToString('N').Substring(0,8))"
+        New-Item -ItemType Directory -Path $testDir -Force | Out-Null
+        try {
+            Set-Content -Path (Join-Path $testDir 'file with spaces.txt') -Value 'content' -NoNewline
+            Set-Content -Path (Join-Path $testDir 'normal.txt') -Value 'other' -NoNewline
+            $results = @(Invoke-BashFind $testDir -name '*.txt' -print0 | Invoke-BashXargs -0 Invoke-BashBasename)
+            $results.Count | Should -Be 2
+            $names = @($results | ForEach-Object { (Get-BashText -InputObject $_).Trim() })
+            $names | Should -Contain 'file with spaces.txt'
+            $names | Should -Contain 'normal.txt'
+        } finally {
+            Remove-Item -Recurse -Force $testDir -ErrorAction SilentlyContinue
+        }
+    }
+
+    It 'works with -I replacement and -0 combined' {
+        $nullText = "alpha`0beta`0"
+        $obj = New-BashObject -BashText $nullText
+        $results = @($obj | Invoke-BashXargs -0 -I '{}' Invoke-BashEcho 'found: {}')
+        $results.Count | Should -Be 2
+        (Get-BashText -InputObject $results[0]) | Should -Be 'found: alpha'
+        (Get-BashText -InputObject $results[1]) | Should -Be 'found: beta'
     }
 }
 

@@ -2497,6 +2497,11 @@ function Invoke-BashFind {
                 $i++
                 continue
             }
+            '--print0' {
+                $printNull = $true
+                $i++
+                continue
+            }
             '-exec' {
                 # Collect -exec args until ';' or '+'
                 $i++
@@ -6528,7 +6533,7 @@ function Invoke-BashXargs {
             continue
         }
 
-        if ($arg -ceq '-0') {
+        if ($arg -ceq '-0' -or $arg -ceq '--null') {
             $nullDelim = $true
             $i++
             continue
@@ -10631,7 +10636,8 @@ $script:BashFlagSpecs = @{
     'wc'       = @( @('-l', 'line count'), @('-w', 'word count'), @('-c', 'byte count') )
     'find'     = @(
         @('-name', 'name pattern'),   @('-type', 'file type'),     @('-size', 'file size'),
-        @('-maxdepth', 'max depth'),  @('-mtime', 'modify time'),  @('-empty', 'empty files')
+        @('-maxdepth', 'max depth'),  @('-mtime', 'modify time'),  @('-empty', 'empty files'),
+        @('-print0', 'null-delimited output'), @('-exec', 'execute command')
     )
     'stat'     = @( @('-c', 'format string'), @('-t', 'terse'), @('--printf', 'printf format') )
     'cp'       = @( @('-r', 'recursive'), @('-v', 'verbose'), @('-n', 'no-clobber'), @('-f', 'force') )
@@ -10658,7 +10664,7 @@ $script:BashFlagSpecs = @{
     'join'     = @( @('-t', 'delimiter'), @('-1', 'field from file 1'), @('-2', 'field from file 2') )
     'paste'    = @( @('-d', 'delimiter'), @('-s', 'serial') )
     'tee'      = @( @('-a', 'append') )
-    'xargs'    = @( @('-I', 'replace string'), @('-n', 'max args') )
+    'xargs'    = @( @('-I', 'replace string'), @('-n', 'max args'), @('-0', 'null-delimited input') )
     'jq'       = @(
         @('-r', 'raw output'),        @('-c', 'compact output'),   @('-S', 'sort keys'),
         @('-s', 'slurp')
