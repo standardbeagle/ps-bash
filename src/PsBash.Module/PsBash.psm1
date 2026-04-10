@@ -392,6 +392,13 @@ function New-BashObject {
         $BashText = $BashText.Substring(0, $BashText.Length - 1)
     }
 
+    # Fast path: plain text output → return string directly.
+    # Avoids PSCustomObject allocation for line-by-line text (the common case).
+    # NoTrailingNewline and non-TextOutput types use the slow path (PSCustomObject).
+    if ($TypeName -eq 'PsBash.TextOutput' -and -not $NoTrailingNewline) {
+        return [string]$BashText
+    }
+
     $obj = [PSCustomObject]@{
         PSTypeName = $TypeName
         BashText   = $BashText
@@ -4655,7 +4662,7 @@ function Invoke-BashSed {
     for ($oi = 0; $oi -lt $outputLines.Count; $oi++) {
         if ($oi -lt $origItems.Count) {
             $orig = $origItems[$oi]
-            if ($null -ne $orig -and $null -ne $orig.PSObject -and $null -ne $orig.PSObject.Properties['BashText']) {
+            if ($null -ne $orig -and $orig -isnot [string] -and $null -ne $orig.PSObject -and $null -ne $orig.PSObject.Properties['BashText']) {
                 $orig.BashText = "$($outputLines[$oi])`n"
                 $orig
                 continue
@@ -10986,8 +10993,11 @@ function Invoke-BashTar {
                     $name = $name.TrimEnd('/') + '/'
                 }
                 $leaf = [System.IO.Path]::GetFileName($name.TrimEnd('/'))
-                $obj = New-BashObject -BashText "$name`n"
-                $obj.PSObject.Properties.Add([System.Management.Automation.PSNoteProperty]::new('Name', $leaf))
+                $obj = [PSCustomObject]@{
+                    PSTypeName = 'PsBash.TarListOutput'
+                    BashText   = $name
+                    Name       = $leaf
+                }
                 $obj
             }
         } catch {

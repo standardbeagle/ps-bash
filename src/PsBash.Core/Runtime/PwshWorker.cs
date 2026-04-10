@@ -143,7 +143,10 @@ public sealed class PwshWorker : IAsyncDisposable
                     $__partialLine = $false
                     if ($null -ne $result) {
                         foreach ($item in @($result)) {
-                            if ($item -is [PSCustomObject] -and $item.PSObject.Properties['BashText']) {
+                            if ($item -is [string]) {
+                                [Console]::Out.WriteLine($item)
+                                $__partialLine = $false
+                            } elseif ($item -is [PSCustomObject] -and $item.PSObject.Properties['BashText']) {
                                 $raw = [string]$item.BashText
                                 if ($raw.EndsWith("`n")) {
                                     [Console]::Out.WriteLine($raw.Substring(0, $raw.Length - 1))

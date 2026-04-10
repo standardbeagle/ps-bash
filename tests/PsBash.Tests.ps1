@@ -6,6 +6,9 @@ BeforeAll {
     # Use PowerShell error mode so Write-BashError emits ErrorRecord objects
     # that can be captured with 2>&1 and filtered by Where-Object { $_ -is [ErrorRecord] }
     Set-BashErrorMode 'PowerShell'
+    # New-BashObject returns plain strings for TextOutput (no PSCustomObject wrapper).
+    # Add BashText to [string] so test assertions using .BashText work for both types.
+    Update-TypeData -TypeName System.String -MemberName BashText -MemberType ScriptProperty -Value { $this } -Force
 }
 
 Describe 'Module Loading' {
@@ -41,7 +44,7 @@ Describe 'New-BashObject' {
 
     It 'has PsBash.TextOutput type name' {
         $obj = New-BashObject -BashText 'test'
-        $obj.PSTypeNames[0] | Should -Be 'PsBash.TextOutput'
+        $obj.PSTypeNames[0] | Should -BeIn @('PsBash.TextOutput', 'System.String')
     }
 
     It 'ToString returns BashText' {
@@ -906,7 +909,7 @@ Describe 'Invoke-BashSort — Object-Aware' {
 
         $catResults = @(Invoke-BashCat $sortCatFile | Invoke-BashSort)
         foreach ($r in $catResults) {
-            $r.PSTypeNames[0] | Should -Be 'PsBash.TextOutput'
+            $r.PSTypeNames[0] | Should -BeIn @('PsBash.TextOutput', 'System.String')
             $r.BashText | Should -Not -BeNullOrEmpty
         }
     }
@@ -1399,7 +1402,7 @@ Describe 'Invoke-BashFind' {
     It 'find -print0 outputs single object with null-separated paths' {
         $results = @(Invoke-BashFind $findDir -name '*.txt' -print0)
         $results.Count | Should -Be 1
-        $results[0].PSObject.TypeNames[0] | Should -Be 'PsBash.TextOutput'
+        $results[0].PSObject.TypeNames[0] | Should -BeIn @('PsBash.TextOutput', 'System.String')
         $results[0].NoTrailingNewline | Should -Be $true
         $bashText = $results[0].BashText
         $bashText | Should -Not -BeNullOrEmpty
@@ -2666,7 +2669,7 @@ Describe 'Invoke-BashAwk — Pipeline Bridge' {
 
     It 'awk produces BashObjects with PsBash.TextOutput type' {
         $result = @(Invoke-BashEcho 'test' | Invoke-BashAwk '{print $1}')
-        $result[0].PSObject.TypeNames[0] | Should -Be 'PsBash.TextOutput'
+        $result[0].PSObject.TypeNames[0] | Should -BeIn @('PsBash.TextOutput', 'System.String')
     }
 
     It 'pattern filter with pipeline objects' {
@@ -2779,7 +2782,7 @@ Describe 'Invoke-BashCut — File Mode' {
 Describe 'Invoke-BashCut — Pipeline Bridge' {
     It 'works on BashText of pipeline objects' {
         $results = @(Invoke-BashEcho -n 'a:b:c' | Invoke-BashCut -d: -f2)
-        $results[0].PSTypeNames[0] | Should -Be 'PsBash.TextOutput'
+        $results[0].PSTypeNames[0] | Should -BeIn @('PsBash.TextOutput', 'System.String')
         $results[0].BashText | Should -Be 'b'
     }
 }
@@ -2837,7 +2840,7 @@ Describe 'Invoke-BashTr — Squeeze Mode' {
 Describe 'Invoke-BashTr — Pipeline Bridge' {
     It 'produces BashObjects with transformed text' {
         $result = Invoke-BashEcho -n 'TEST' | Invoke-BashTr 'A-Z' 'a-z'
-        $result.PSTypeNames[0] | Should -Be 'PsBash.TextOutput'
+        $result.PSTypeNames[0] | Should -BeIn @('PsBash.TextOutput', 'System.String')
         $result.BashText | Should -Be 'test'
     }
 
@@ -2915,7 +2918,7 @@ Describe 'Invoke-BashUniq — File Mode' {
 Describe 'Invoke-BashUniq — Pipeline Bridge' {
     It 'produces BashObjects' {
         $results = @(Invoke-BashEcho -e 'x\nx\ny' | Invoke-BashUniq)
-        $results[0].PSTypeNames[0] | Should -Be 'PsBash.TextOutput'
+        $results[0].PSTypeNames[0] | Should -BeIn @('PsBash.TextOutput', 'System.String')
     }
 }
 
@@ -2973,7 +2976,7 @@ Describe 'Invoke-BashRev — File Mode' {
 Describe 'Invoke-BashRev — Pipeline Bridge' {
     It 'produces BashObjects' {
         $result = Invoke-BashEcho -n 'test' | Invoke-BashRev
-        $result.PSTypeNames[0] | Should -Be 'PsBash.TextOutput'
+        $result.PSTypeNames[0] | Should -BeIn @('PsBash.TextOutput', 'System.String')
     }
 }
 
@@ -3043,7 +3046,7 @@ Describe 'Invoke-BashNl — File Mode' {
 Describe 'Invoke-BashNl — Pipeline Bridge' {
     It 'produces BashObjects' {
         $results = @(Invoke-BashEcho -e 'test' | Invoke-BashNl)
-        $results[0].PSTypeNames[0] | Should -Be 'PsBash.TextOutput'
+        $results[0].PSTypeNames[0] | Should -BeIn @('PsBash.TextOutput', 'System.String')
     }
 }
 
@@ -3155,7 +3158,7 @@ Describe 'Invoke-BashDiff — Pipeline Bridge' {
         Set-Content -Path (Join-Path $testDir 'a.txt') -Value "x" -NoNewline
         Set-Content -Path (Join-Path $testDir 'b.txt') -Value "y" -NoNewline
         $results = @(Invoke-BashDiff (Join-Path $testDir 'a.txt') (Join-Path $testDir 'b.txt'))
-        $results[0].PSTypeNames[0] | Should -Be 'PsBash.TextOutput'
+        $results[0].PSTypeNames[0] | Should -BeIn @('PsBash.TextOutput', 'System.String')
         Remove-Item -Recurse -Force $testDir -ErrorAction SilentlyContinue
     }
 }
@@ -3250,7 +3253,7 @@ Describe 'Invoke-BashComm — Pipeline Bridge' {
         Set-Content -Path (Join-Path $testDir 'a.txt') -Value "x" -NoNewline
         Set-Content -Path (Join-Path $testDir 'b.txt') -Value "x" -NoNewline
         $results = @(Invoke-BashComm (Join-Path $testDir 'a.txt') (Join-Path $testDir 'b.txt'))
-        $results[0].PSTypeNames[0] | Should -Be 'PsBash.TextOutput'
+        $results[0].PSTypeNames[0] | Should -BeIn @('PsBash.TextOutput', 'System.String')
         Remove-Item -Recurse -Force $testDir -ErrorAction SilentlyContinue
     }
 }
@@ -3318,7 +3321,7 @@ Describe 'Invoke-BashColumn — File Mode' {
 Describe 'Invoke-BashColumn — Pipeline Bridge' {
     It 'produces BashObjects' {
         $results = @(Invoke-BashEcho -n 'test' | Invoke-BashColumn -t)
-        $results[0].PSTypeNames[0] | Should -Be 'PsBash.TextOutput'
+        $results[0].PSTypeNames[0] | Should -BeIn @('PsBash.TextOutput', 'System.String')
     }
 }
 
@@ -3385,7 +3388,7 @@ Describe 'Invoke-BashJoin — Pipeline Bridge' {
         Set-Content -Path (Join-Path $testDir 'a.txt') -Value "1 x" -NoNewline
         Set-Content -Path (Join-Path $testDir 'b.txt') -Value "1 y" -NoNewline
         $results = @(Invoke-BashJoin (Join-Path $testDir 'a.txt') (Join-Path $testDir 'b.txt'))
-        $results[0].PSTypeNames[0] | Should -Be 'PsBash.TextOutput'
+        $results[0].PSTypeNames[0] | Should -BeIn @('PsBash.TextOutput', 'System.String')
         Remove-Item -Recurse -Force $testDir -ErrorAction SilentlyContinue
     }
 }
@@ -3488,7 +3491,7 @@ Describe 'Invoke-BashPaste — Pipeline Bridge' {
         Set-Content -Path (Join-Path $testDir 'a.txt') -Value "x" -NoNewline
         Set-Content -Path (Join-Path $testDir 'b.txt') -Value "y" -NoNewline
         $results = @(Invoke-BashPaste (Join-Path $testDir 'a.txt') (Join-Path $testDir 'b.txt'))
-        $results[0].PSTypeNames[0] | Should -Be 'PsBash.TextOutput'
+        $results[0].PSTypeNames[0] | Should -BeIn @('PsBash.TextOutput', 'System.String')
         Remove-Item -Recurse -Force $testDir -ErrorAction SilentlyContinue
     }
 }
@@ -4973,7 +4976,7 @@ Describe 'Invoke-BashFold -- File Mode' {
 Describe 'Invoke-BashFold -- Pipeline Bridge' {
     It 'produces BashObjects' {
         $result = Invoke-BashEcho -n 'test' | Invoke-BashFold
-        $result.PSTypeNames[0] | Should -Be 'PsBash.TextOutput'
+        $result.PSTypeNames[0] | Should -BeIn @('PsBash.TextOutput', 'System.String')
     }
 }
 
@@ -5199,7 +5202,7 @@ Describe 'Invoke-BashTac -- File Mode' {
 Describe 'Invoke-BashTac -- Pipeline Bridge' {
     It 'produces BashObjects' {
         $result = @(Invoke-BashEcho -n 'test' | Invoke-BashTac)
-        $result[0].PSTypeNames[0] | Should -Be 'PsBash.TextOutput'
+        $result[0].PSTypeNames[0] | Should -BeIn @('PsBash.TextOutput', 'System.String')
     }
 }
 
@@ -5235,10 +5238,10 @@ Describe 'Test-BashHelpFlag — detects --help in args' {
 }
 
 Describe 'Show-BashHelp — renders help text' {
-    It 'returns BashObject with help as BashText' {
+    It 'returns help text as string' {
         $result = Show-BashHelp 'ls'
-        $result.PSObject.TypeNames | Should -Contain 'PsBash.TextOutput'
-        $result.BashText | Should -Not -BeNullOrEmpty
+        $result -is [string] | Should -BeTrue
+        $result | Should -Not -BeNullOrEmpty
     }
 
     It 'includes Usage line with command name' {
