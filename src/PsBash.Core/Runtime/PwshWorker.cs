@@ -225,7 +225,7 @@ public sealed class PwshWorker : IAsyncDisposable
         var envValue = Environment.GetEnvironmentVariable("PSBASH_TIMEOUT");
         if (envValue is not null && int.TryParse(envValue, out var seconds) && seconds > 0)
             return TimeSpan.FromSeconds(seconds);
-        return TimeSpan.FromSeconds(30);
+        return TimeSpan.FromSeconds(120);
     }
 
     private static async Task<string> ExtractWorkerScriptAsync(CancellationToken ct)
