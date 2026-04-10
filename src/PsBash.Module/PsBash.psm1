@@ -366,18 +366,13 @@ function Write-BashFileRaw {
 # --- BashObject Factory ---
 
 function Set-BashDisplayProperty {
-    # Configures a PSCustomObject for bash-style display:
-    # - Normalizes BashText by stripping any trailing \n. The worker serializer owns the
-    #   line-ending concern: it calls Console.Out.WriteLine for every object that does not
-    #   have NoTrailingNewline=$true, so BashText values are stored clean (no trailing \n).
-    # - Adds ToString() returning BashText
+    # Normalizes BashText by stripping any trailing \n.
+    # ToString() is now provided at the type level via Update-TypeData (module init),
+    # so per-object ScriptMethod is no longer needed.
     param([PSCustomObject]$Object)
     if ($Object.BashText -and $Object.BashText.EndsWith("`n")) {
         $Object.BashText = $Object.BashText.Substring(0, $Object.BashText.Length - 1)
     }
-    $Object | Add-Member -MemberType ScriptMethod -Name 'ToString' -Value {
-        $this.BashText
-    } -Force
     $Object
 }
 
@@ -411,7 +406,7 @@ function New-BashObject {
     if ($Command) {
         $obj | Add-Member -NotePropertyName Command -NotePropertyValue $Command
     }
-    Set-BashDisplayProperty $obj
+    $obj
 }
 
 function Emit-BashLine {
@@ -12115,3 +12110,17 @@ Set-Alias -Name 'unalias'  -Value 'Invoke-BashAlias'    -Force -Scope Global -Op
 Set-Alias -Name 'readlink' -Value 'Invoke-BashReadlink' -Force -Scope Global -Option AllScope
 Set-Alias -Name 'mktemp'   -Value 'Invoke-BashMktemp'   -Force -Scope Global -Option AllScope
 Set-Alias -Name 'type'     -Value 'Invoke-BashType'     -Force -Scope Global -Option AllScope
+
+# --- Type-level ToString for BashObject types ---
+# Update-TypeData defines ToString() once per type name instead of per-object,
+# eliminating the per-object Add-Member ScriptMethod overhead (~6x faster).
+foreach ($tn in @(
+        'PsBash.TextOutput', 'PsBash.LsEntry', 'PsBash.CatLine', 'PsBash.GrepMatch',
+        'PsBash.WcResult', 'PsBash.FindEntry', 'PsBash.StatEntry', 'PsBash.PsEntry',
+        'PsBash.DateOutput', 'PsBash.SeqOutput', 'PsBash.ExprOutput', 'PsBash.DuEntry',
+        'PsBash.TreeEntry', 'PsBash.EnvEntry', 'PsBash.RgMatch', 'PsBash.GzipListOutput',
+        'PsBash.TarListOutput', 'PsBash.TimeOutput', 'PsBash.WhichOutput', 'PsBash.AliasOutput',
+        'PsBash.TrapOutput', 'PsBash.ReadlinkOutput', 'PsBash.MktempOutput', 'PsBash.TypeOutput'
+    )) {
+    Update-TypeData -TypeName $tn -MemberName ToString -MemberType ScriptMethod -Value { $this.BashText } -Force
+}
