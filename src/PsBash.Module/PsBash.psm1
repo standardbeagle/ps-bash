@@ -1107,6 +1107,7 @@ function Invoke-BashLs {
 
 function Invoke-BashCat {
     [OutputType('PsBash.CatLine')]
+    [OutputType('PsBash.TextOutput')]
     param()
     $Arguments = [string[]]$args
     $pipelineInput = @($input)
@@ -1127,10 +1128,43 @@ function Invoke-BashCat {
     $squeezeBlanks = $parsed.Flags['-s']
     $showEnds      = $parsed.Flags['-E']
     $showTabs      = $parsed.Flags['-T']
+    $hasFlags = $numberAll -or $numberNonBlank -or $squeezeBlanks -or $showEnds -or $showTabs
 
     $operands = $parsed.Operands
     $readStdin = $operands.Count -eq 0 -or $operands -contains '-'
 
+    # Fast path: bare cat with no flags emits lightweight TextOutput objects
+    if (-not $hasFlags) {
+        $hadError = $false
+
+        if ($readStdin -and $pipelineInput.Count -gt 0) {
+            foreach ($item in $pipelineInput) {
+                $text = Get-BashText -InputObject $item
+                if ($text -match "`n" -and $text -ne "`n") {
+                    foreach ($subLine in ($text -replace "`n$", '' -split "`n")) {
+                        New-BashObject -BashText "$subLine`n"
+                    }
+                } else {
+                    $item
+                }
+            }
+        }
+
+        $fileOperands = @($operands | Where-Object { $_ -ne '-' })
+        $resolvedFiles = @(Resolve-BashGlob -Paths $fileOperands)
+        foreach ($filePath in $resolvedFiles) {
+            $content = Read-BashFileBytes -Path $filePath -Command 'cat'
+            if ($null -eq $content) { $hadError = $true; continue }
+            Emit-BashLine -Text $content
+        }
+
+        if ($hadError) {
+            $global:LASTEXITCODE = 1
+        }
+        return
+    }
+
+    # Flagged path: full CatLine objects with line numbering, squeezing, etc.
     $lineNum = 0
     $nonBlankNum = 0
     $lastWasBlank = $false
@@ -2450,27 +2484,52 @@ function Invoke-BashTail {
 
     # Pipeline mode
     if ($operands.Count -eq 0 -and $pipelineInput.Count -gt 0) {
-        $items = [System.Collections.Generic.List[object]]::new()
-        foreach ($item in $pipelineInput) {
-            $text = Get-BashText -InputObject $item
-            if (($text -replace "`n$", '') -match "`n") {
-                foreach ($subLine in ($text -replace "`n$", '' -split "`n")) {
-                    $items.Add((New-BashObject -BashText "$subLine`n"))
-                }
-            } else {
-                $items.Add($item)
-            }
-        }
-
         if ($fromLine) {
-            $startIdx = $count - 1
-            for ($idx = $startIdx; $idx -lt $items.Count; $idx++) {
-                $items[$idx]
+            # +N mode: skip first N-1 items, emit the rest
+            $skip = $count - 1
+            $idx = 0
+            foreach ($item in $pipelineInput) {
+                $text = Get-BashText -InputObject $item
+                if (($text -replace "`n$", '') -match "`n") {
+                    foreach ($subLine in ($text -replace "`n$", '' -split "`n")) {
+                        if ($idx -ge $skip) {
+                            New-BashObject -BashText "$subLine`n"
+                        }
+                        $idx++
+                    }
+                } else {
+                    if ($idx -ge $skip) {
+                        $item
+                    }
+                    $idx++
+                }
             }
         } else {
-            $startIdx = [System.Math]::Max(0, $items.Count - $count)
-            for ($idx = $startIdx; $idx -lt $items.Count; $idx++) {
-                $items[$idx]
+            # -N mode: circular buffer — only keep last N items in memory
+            $buf = [object[]]::new($count)
+            $bufLen = 0
+            $pos = 0
+
+            foreach ($item in $pipelineInput) {
+                $text = Get-BashText -InputObject $item
+                if (($text -replace "`n$", '') -match "`n") {
+                    foreach ($subLine in ($text -replace "`n$", '' -split "`n")) {
+                        $wrapped = New-BashObject -BashText "$subLine`n"
+                        $buf[$pos] = $wrapped
+                        $pos = ($pos + 1) % $count
+                        if ($bufLen -lt $count) { $bufLen++ }
+                    }
+                } else {
+                    $buf[$pos] = $item
+                    $pos = ($pos + 1) % $count
+                    if ($bufLen -lt $count) { $bufLen++ }
+                }
+            }
+
+            # Emit the circular buffer in order (oldest first)
+            $start = if ($bufLen -lt $count) { 0 } else { $pos }
+            for ($i = 0; $i -lt $bufLen; $i++) {
+                $buf[($start + $i) % $count]
             }
         }
         return
@@ -2589,19 +2648,39 @@ function Invoke-BashTail {
                     $reader.Dispose()
                 }
             } else {
-                $lines = Read-BashFileLines -Path $filePath -Command 'tail'
-                if ($null -eq $lines) { continue }
+                # Circular buffer — stream lines, keep only last N in memory
+                $reader = Open-BashFileReader -Path $filePath -Command 'tail'
+                if ($null -eq $reader) { continue }
 
-                $startIdx = [System.Math]::Max(0, $lines.Count - $count)
-                for ($li = $startIdx; $li -lt $lines.Count; $li++) {
-                    $obj = [PSCustomObject]@{
-                        PSTypeName = 'PsBash.CatLine'
-                        LineNumber = $li + 1
-                        Content    = $lines[$li]
-                        FileName   = $filePath
-                        BashText   = $lines[$li]
+                try {
+                    $buf = [string[]]::new($count)
+                    $bufLen = 0
+                    $total = 0
+                    $pos = 0
+
+                    while ($null -ne ($line = $reader.ReadLine())) {
+                        $buf[$pos] = $line
+                        $pos = ($pos + 1) % $count
+                        if ($bufLen -lt $count) { $bufLen++ }
+                        $total++
                     }
-                    Set-BashDisplayProperty $obj
+
+                    # Emit the circular buffer in order (oldest first)
+                    $start = if ($bufLen -lt $count) { 0 } else { $pos }
+                    $lineNumOffset = $total - $bufLen
+                    for ($i = 0; $i -lt $bufLen; $i++) {
+                        $idx = ($start + $i) % $count
+                        $obj = [PSCustomObject]@{
+                            PSTypeName = 'PsBash.CatLine'
+                            LineNumber = $lineNumOffset + $i + 1
+                            Content    = $buf[$idx]
+                            FileName   = $filePath
+                            BashText   = $buf[$idx]
+                        }
+                        Set-BashDisplayProperty $obj
+                    }
+                } finally {
+                    $reader.Dispose()
                 }
             }
         }

@@ -399,17 +399,21 @@ Describe 'Invoke-BashCat' {
     It 'cat file.txt returns one BashObject per line' {
         $results = @(Invoke-BashCat $file1)
         $results.Count | Should -Be 2
-        $results[0].PSTypeNames[0] | Should -Be 'PsBash.CatLine'
-        $results[0].Content | Should -Be 'hello'
-        $results[1].Content | Should -Be 'world'
+        $results[0].BashText | Should -Be 'hello'
+        $results[1].BashText | Should -Be 'world'
     }
 
-    It 'cat file.txt has LineNumber, Content, FileName, BashText' {
+    It 'cat file.txt has BashText per line' {
         $results = @(Invoke-BashCat $file1)
+        $results[0].BashText | Should -Be 'hello'
+        $results[1].BashText | Should -Be 'world'
+    }
+
+    It 'cat -n uses CatLine objects with LineNumber and Content' {
+        $results = @(Invoke-BashCat -n $file1)
+        $results[0].PSTypeNames[0] | Should -Be 'PsBash.CatLine'
         $results[0].LineNumber | Should -Be 1
         $results[0].Content | Should -Be 'hello'
-        $results[0].FileName | Should -Be $file1
-        $results[0].BashText | Should -Be 'hello'
     }
 
     It 'cat -n numbers all lines' {
@@ -461,25 +465,24 @@ Describe 'Invoke-BashCat' {
     It 'cat file1.txt file2.txt concatenates' {
         $results = @(Invoke-BashCat $file1 $file2)
         $results.Count | Should -Be 4
-        $results[0].Content | Should -Be 'hello'
-        $results[1].Content | Should -Be 'world'
-        $results[2].Content | Should -Be 'foo'
-        $results[3].Content | Should -Be 'bar'
-        $results[2].FileName | Should -Be $file2
+        $results[0].BashText | Should -Be 'hello'
+        $results[1].BashText | Should -Be 'world'
+        $results[2].BashText | Should -Be 'foo'
+        $results[3].BashText | Should -Be 'bar'
     }
 
     It 'pipeline input passes through (stdin mode)' {
         $results = @('hello', 'world' | ForEach-Object { New-BashObject -BashText $_ } | Invoke-BashCat)
         $results.Count | Should -Be 2
-        $results[0].Content | Should -Be 'hello'
-        $results[1].Content | Should -Be 'world'
+        $results[0].BashText | Should -Be 'hello'
+        $results[1].BashText | Should -Be 'world'
     }
 
     It 'cat - reads from pipeline' {
         $results = @('alpha', 'beta' | ForEach-Object { New-BashObject -BashText $_ } | Invoke-BashCat '-')
         $results.Count | Should -Be 2
-        $results[0].Content | Should -Be 'alpha'
-        $results[1].Content | Should -Be 'beta'
+        $results[0].BashText | Should -Be 'alpha'
+        $results[1].BashText | Should -Be 'beta'
     }
 
     It 'exports cat alias pointing to Invoke-BashCat' {
@@ -491,15 +494,15 @@ Describe 'Invoke-BashCat' {
         $crlfFile = Join-Path $catDir 'crlf.txt'
         [System.IO.File]::WriteAllText($crlfFile, "line1`r`nline2`r`n", [System.Text.UTF8Encoding]::new($false))
         $results = @(Invoke-BashCat $crlfFile)
-        $results[0].Content | Should -Be 'line1'
-        $results[1].Content | Should -Be 'line2'
+        $results[0].BashText | Should -Be 'line1'
+        $results[1].BashText | Should -Be 'line2'
     }
 
     It 'handles UTF-8 BOM transparently' {
         $bomFile = Join-Path $catDir 'bom.txt'
         [System.IO.File]::WriteAllText($bomFile, "bomtest`n", [System.Text.UTF8Encoding]::new($true))
         $results = @(Invoke-BashCat $bomFile)
-        $results[0].Content | Should -Be 'bomtest'
+        $results[0].BashText | Should -Be 'bomtest'
     }
 
     It 'cat -n with blanks file numbers all lines including blank' {
@@ -703,11 +706,10 @@ Describe 'Invoke-BashGrep — Pipeline Bridge' {
         $results[0].SizeBytes | Should -BeGreaterOrEqual 0
     }
 
-    It 'cat file | grep pattern returns PsBash.CatLine objects' {
+    It 'cat file | grep pattern returns matching objects' {
         $results = @(Invoke-BashCat $bridgeCatFile | Invoke-BashGrep 'beta')
         $results.Count | Should -Be 1
-        $results[0].PSTypeNames[0] | Should -Be 'PsBash.CatLine'
-        $results[0].Content | Should -Be 'beta line'
+        $results[0].BashText | Should -Be 'beta line'
     }
 
     It 'plain string | grep pattern works' {
@@ -886,13 +888,12 @@ Describe 'Invoke-BashSort — Object-Aware' {
         }
     }
 
-    It 'cat file.txt | sort sorts CatLine objects by BashText' {
+    It 'cat file.txt | sort sorts objects by BashText' {
         $results = @(Invoke-BashCat $sortCatFile | Invoke-BashSort)
         $results.Count | Should -Be 3
-        $results[0].PSTypeNames[0] | Should -Be 'PsBash.CatLine'
-        $results[0].Content | Should -Be 'apple'
-        $results[1].Content | Should -Be 'banana'
-        $results[2].Content | Should -Be 'cherry'
+        $results[0].BashText | Should -Be 'apple'
+        $results[1].BashText | Should -Be 'banana'
+        $results[2].BashText | Should -Be 'cherry'
     }
 
     It 'sort preserves original object types in output' {
@@ -905,8 +906,8 @@ Describe 'Invoke-BashSort — Object-Aware' {
 
         $catResults = @(Invoke-BashCat $sortCatFile | Invoke-BashSort)
         foreach ($r in $catResults) {
-            $r.PSTypeNames[0] | Should -Be 'PsBash.CatLine'
-            $r.LineNumber | Should -BeGreaterThan 0
+            $r.PSTypeNames[0] | Should -Be 'PsBash.TextOutput'
+            $r.BashText | Should -Not -BeNullOrEmpty
         }
     }
 }
@@ -932,16 +933,15 @@ Describe 'Invoke-BashHead — Pipeline' {
     It 'cat file.txt | head returns first 10 lines (objects preserved)' {
         $results = @(Invoke-BashCat $headFile | Invoke-BashHead)
         $results.Count | Should -Be 10
-        $results[0].PSTypeNames[0] | Should -Be 'PsBash.CatLine'
-        $results[0].Content | Should -Be 'line1'
-        $results[9].Content | Should -Be 'line10'
+        $results[0].BashText | Should -Be 'line1'
+        $results[9].BashText | Should -Be 'line10'
     }
 
     It 'cat file.txt | head -n 5 returns first 5' {
         $results = @(Invoke-BashCat $headFile | Invoke-BashHead -n 5)
         $results.Count | Should -Be 5
-        $results[0].Content | Should -Be 'line1'
-        $results[4].Content | Should -Be 'line5'
+        $results[0].BashText | Should -Be 'line1'
+        $results[4].BashText | Should -Be 'line5'
     }
 
     It 'head -n 3 file.txt works in file mode' {
@@ -977,21 +977,21 @@ Describe 'Invoke-BashHead — Pipeline' {
     It 'head -5 shorthand returns first 5 lines' {
         $results = @(Invoke-BashCat $headFile | Invoke-BashHead -5)
         $results.Count | Should -Be 5
-        $results[0].Content | Should -Be 'line1'
-        $results[4].Content | Should -Be 'line5'
+        $results[0].BashText | Should -Be 'line1'
+        $results[4].BashText | Should -Be 'line5'
     }
 
     It 'head 3 bare positional returns first 3 lines' {
         $results = @(Invoke-BashCat $headFile | Invoke-BashHead 3)
         $results.Count | Should -Be 3
-        $results[0].Content | Should -Be 'line1'
-        $results[2].Content | Should -Be 'line3'
+        $results[0].BashText | Should -Be 'line1'
+        $results[2].BashText | Should -Be 'line3'
     }
 
     It 'head -n5 joined returns first 5 lines' {
         $results = @(Invoke-BashCat $headFile | Invoke-BashHead -n5)
         $results.Count | Should -Be 5
-        $results[4].Content | Should -Be 'line5'
+        $results[4].BashText | Should -Be 'line5'
     }
 
     It 'head -3 file.txt works in file mode' {
@@ -1087,15 +1087,15 @@ Describe 'Invoke-BashTail — Pipeline' {
     It 'cat file.txt | tail returns last 10 lines' {
         $results = @(Invoke-BashCat $tailFile | Invoke-BashTail)
         $results.Count | Should -Be 10
-        $results[0].Content | Should -Be 'line6'
-        $results[9].Content | Should -Be 'line15'
+        $results[0].BashText | Should -Be 'line6'
+        $results[9].BashText | Should -Be 'line15'
     }
 
     It 'cat file.txt | tail -n 5 returns last 5' {
         $results = @(Invoke-BashCat $tailFile | Invoke-BashTail -n 5)
         $results.Count | Should -Be 5
-        $results[0].Content | Should -Be 'line11'
-        $results[4].Content | Should -Be 'line15'
+        $results[0].BashText | Should -Be 'line11'
+        $results[4].BashText | Should -Be 'line15'
     }
 
     It 'tail -n +3 file.txt returns from line 3 onward' {
@@ -1127,21 +1127,21 @@ Describe 'Invoke-BashTail — Pipeline' {
     It 'tail -n +3 in pipeline mode returns from item 3 onward' {
         $results = @(Invoke-BashCat $tailFile | Invoke-BashTail -n +3)
         $results.Count | Should -Be 13
-        $results[0].Content | Should -Be 'line3'
+        $results[0].BashText | Should -Be 'line3'
     }
 
     It 'tail -5 shorthand returns last 5 lines' {
         $results = @(Invoke-BashCat $tailFile | Invoke-BashTail -5)
         $results.Count | Should -Be 5
-        $results[0].Content | Should -Be 'line11'
-        $results[4].Content | Should -Be 'line15'
+        $results[0].BashText | Should -Be 'line11'
+        $results[4].BashText | Should -Be 'line15'
     }
 
     It 'tail 3 bare positional returns last 3 lines' {
         $results = @(Invoke-BashCat $tailFile | Invoke-BashTail 3)
         $results.Count | Should -Be 3
-        $results[0].Content | Should -Be 'line13'
-        $results[2].Content | Should -Be 'line15'
+        $results[0].BashText | Should -Be 'line13'
+        $results[2].BashText | Should -Be 'line15'
     }
 
     It 'tail -3 file.txt works in file mode' {
@@ -6478,16 +6478,16 @@ Describe 'Invoke-BashCat — Raw String Pipeline Input' {
     It 'handles plain strings piped without BashText property' {
         $results = @('hello', 'world' | Invoke-BashCat)
         $results.Count | Should -Be 2
-        $results[0].Content | Should -Be 'hello'
-        $results[1].Content | Should -Be 'world'
+        "$($results[0])" | Should -Be 'hello'
+        "$($results[1])" | Should -Be 'world'
     }
 
     It 'handles mixed BashObject and string pipeline input' {
         $mixed = @((New-BashObject -BashText 'wrapped'), 'bare string')
         $results = @($mixed | Invoke-BashCat)
         $results.Count | Should -Be 2
-        $results[0].Content | Should -Be 'wrapped'
-        $results[1].Content | Should -Be 'bare string'
+        $results[0].BashText | Should -Be 'wrapped'
+        "$($results[1])" | Should -Be 'bare string'
     }
 }
 
@@ -6631,7 +6631,7 @@ Describe 'Resolve-BashGlob — Relative Path Resolution' {
             # cat uses Resolve-BashGlob internally — if relative path resolution
             # works, cat will find the file even though .NET CWD differs from PS $PWD
             $result = @(Invoke-BashCat 'input.txt')
-            $result[0].Content | Should -Be 'hello'
+            $result[0].BashText | Should -Be 'hello'
         } finally {
             Pop-Location
         }
@@ -6641,7 +6641,7 @@ Describe 'Resolve-BashGlob — Relative Path Resolution' {
         Push-Location $tmpDir
         try {
             $result = @(Invoke-BashCat 'input.txt')
-            $result[0].Content | Should -Be 'hello'
+            $result[0].BashText | Should -Be 'hello'
         } finally {
             Pop-Location
         }
