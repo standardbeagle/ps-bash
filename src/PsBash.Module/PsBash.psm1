@@ -85,7 +85,8 @@ function Invoke-ProcessSub {
 function Read-BashFileBytes {
     <#
     .SYNOPSIS
-        Read a file as bytes with BOM-aware UTF-8 decoding and CRLF normalization.
+        Read a file as text with CRLF normalization.
+        Uses [IO.File]::ReadAllText() which handles BOM detection internally.
         Returns $null and writes a bash-style error on failure.
     #>
     [CmdletBinding()]
@@ -99,7 +100,7 @@ function Read-BashFileBytes {
     )
 
     try {
-        $bytes = [System.IO.File]::ReadAllBytes($Path)
+        $rawText = [System.IO.File]::ReadAllText($Path)
     } catch {
         $normalized = $Path -replace '\\', '/'
         $ex = $_.Exception
@@ -113,11 +114,6 @@ function Read-BashFileBytes {
         return $null
     }
 
-    $byteOffset = 0
-    if ($bytes.Length -ge 3 -and $bytes[0] -eq 0xEF -and $bytes[1] -eq 0xBB -and $bytes[2] -eq 0xBF) {
-        $byteOffset = 3
-    }
-    $rawText = [System.Text.Encoding]::UTF8.GetString($bytes, $byteOffset, $bytes.Length - $byteOffset)
     $rawText -replace "`r`n", "`n"
 }
 
@@ -2778,15 +2774,21 @@ function Invoke-BashWc {
             continue
         }
 
-        $bytes = [System.IO.File]::ReadAllBytes($filePath)
-        $byteOffset = 0
-        if ($bytes.Length -ge 3 -and $bytes[0] -eq 0xEF -and $bytes[1] -eq 0xBB -and $bytes[2] -eq 0xBF) {
-            $byteOffset = 3
-        }
-        $rawText = [System.Text.Encoding]::UTF8.GetString($bytes, $byteOffset, $bytes.Length - $byteOffset)
-        $rawText = $rawText -replace "`r`n", "`n"
+        $rawText = Read-BashFileBytes -Path $filePath -Command 'wc'
+        if ($null -eq $rawText) { continue }
 
-        $fileBytes = $bytes.Length - $byteOffset
+        # Byte count: file size minus BOM (Read-BashFileBytes handles BOM for text)
+        $fileBytes = [System.IO.FileInfo]::new($filePath).Length
+        try {
+            $fs = [System.IO.File]::OpenRead($filePath)
+            $bom = [byte[]]::new(3)
+            if ($fs.Read($bom, 0, 3) -ge 3 -and $bom[0] -eq 0xEF -and $bom[1] -eq 0xBB -and $bom[2] -eq 0xBF) {
+                $fileBytes -= 3
+            }
+            $fs.Dispose()
+        } catch {
+            # If BOM peek fails, use raw file size
+        }
         $lineCount = @($rawText.ToCharArray() | Where-Object { $_ -eq "`n" }).Count
         $wordCount = @($rawText -split '\s+' | Where-Object { $_ -ne '' }).Count
 
