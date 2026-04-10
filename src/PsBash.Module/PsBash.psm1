@@ -1143,9 +1143,9 @@ function Invoke-BashCat {
         if ($readStdin -and $pipelineInput.Count -gt 0) {
             foreach ($item in $pipelineInput) {
                 $text = Get-BashText -InputObject $item
-                if ($text -match "`n" -and $text -ne "`n") {
-                    foreach ($subLine in ($text -replace "`n$", '' -split "`n")) {
-                        New-BashObject -BashText "$subLine`n"
+                if ($text.TrimEnd("`n".ToCharArray()).Contains("`n")) {
+                    foreach ($subLine in ($text.TrimEnd("`n".ToCharArray()) -split "`n")) {
+                        $subLine
                     }
                 } else {
                     $item
@@ -1271,7 +1271,7 @@ function Invoke-BashRedirect {
     $lines = [System.Collections.Generic.List[string]]::new()
     foreach ($item in $pipelineInput) {
         $text = Get-BashText -InputObject $item
-        $text = $text -replace "`n$", ''
+        $text = $text.TrimEnd("`n".ToCharArray())
         $lines.Add($text)
     }
     $content = ($lines -join "`n")
@@ -1296,6 +1296,7 @@ function Get-BashText {
     )
 
     if ($null -eq $InputObject) { return '' }
+    if ($InputObject -is [string]) { return $InputObject }
     if ($null -ne $InputObject.PSObject -and $null -ne $InputObject.PSObject.Properties['BashText']) {
         return [string]$InputObject.BashText
     }
@@ -1493,8 +1494,8 @@ function Invoke-BashGrep {
             if ($matchCount -ge $maxMatches) { break }
 
             $text = Get-BashText -InputObject $item
-            if (($text -replace "`n$", '') -match "`n") {
-                foreach ($subLine in ($text -replace "`n$", '' -split "`n")) {
+            if ($text.TrimEnd("`n".ToCharArray()).Contains("`n")) {
+                foreach ($subLine in ($text.TrimEnd("`n".ToCharArray()) -split "`n")) {
                     if ($matchCount -ge $maxMatches) { break }
                     $lineNum++
 
@@ -1530,7 +1531,7 @@ function Invoke-BashGrep {
                 }
             } else {
                 $lineNum++
-                $lineText = $text -replace "`n$", ''
+                $lineText = $text.TrimEnd("`n".ToCharArray())
 
                 # Check if any regex matches (OR logic for multiple patterns)
                 $isMatch = $false
@@ -1973,9 +1974,9 @@ function Invoke-BashSort {
     if ($pipelineInput.Count -gt 0) {
         foreach ($item in $pipelineInput) {
             $text = Get-BashText -InputObject $item
-            if (($text -replace "`n$", '') -match "`n") {
-                foreach ($subLine in ($text -replace "`n$", '' -split "`n")) {
-                    $items.Add((New-BashObject -BashText "$subLine`n"))
+            if ($text.TrimEnd("`n".ToCharArray()).Contains("`n")) {
+                foreach ($subLine in ($text.TrimEnd("`n".ToCharArray()) -split "`n")) {
+                    $items.Add(($subLine))
                 }
             } else {
                 $items.Add($item)
@@ -1995,7 +1996,7 @@ function Invoke-BashSort {
     $extractKeyText = {
         param($item, $spec)
         $text = Get-BashText -InputObject $item
-        $text = $text -replace "`n$", ''
+        $text = $text.TrimEnd("`n".ToCharArray())
         if ($null -eq $spec) { return $text }
         $sep = if ($null -ne $delimiter) { [regex]::Escape($delimiter) } else { '\s+' }
         $parts = $text -split $sep
@@ -2036,7 +2037,7 @@ function Invoke-BashSort {
     $getFullText = {
         param($item)
         $text = Get-BashText -InputObject $item
-        $text = $text -replace "`n$", ''
+        $text = $text.TrimEnd("`n".ToCharArray())
         if ($blankIgnore) { $text = $text -replace '^\s+', '' }
         return $text
     }
@@ -2181,40 +2182,24 @@ function Invoke-BashSort {
         }
         $sorted = $list
     } else {
-        # Standard path: Sort-Object for simple global flags
-        $sorted = $indexed | Sort-Object -Property @{
-            Expression = {
-                $item = $_.Item
-                if ($useSizeBytesPath) {
-                    return [double]$item.SizeBytes
-                }
-                $text = & $getFullText $item
-                if ($humanNumeric) {
-                    return ConvertFrom-HumanNumeric -Value $text
-                }
-                if ($numeric) {
-                    $n = 0.0
-                    if ([double]::TryParse($text, [ref]$n)) { return $n }
-                    return 0.0
-                }
-                if ($monthSort) {
-                    return ConvertFrom-MonthName -Value $text
-                }
-                if ($foldCase) {
-                    return $text.ToLower()
-                }
-                return $text
+        # Standard path: List.Sort with Comparison delegate — avoids Sort-Object pipeline overhead
+        $list = [System.Collections.Generic.List[object]]::new(@($indexed))
+        $sortComparison = [Comparison[object]]{
+            param($a, $b)
+            $aItem = $a.Item; $bItem = $b.Item
+            if ($useSizeBytesPath) {
+                $cmp = [double]$aItem.SizeBytes - [double]$bItem.SizeBytes
+            } else {
+                $cmp = & $compareItems $aItem $bItem
             }
-        } -Stable
-
-        if ($reverse) {
-            $reversed = [System.Collections.Generic.List[object]]::new()
-            $asList = @($sorted)
-            for ($idx = $asList.Count - 1; $idx -ge 0; $idx--) {
-                $reversed.Add($asList[$idx])
+            if ($cmp -eq 0) {
+                # Stable: preserve original order for equal items
+                return $a.Index - $b.Index
             }
-            $sorted = $reversed
+            return $cmp
         }
+        $list.Sort($sortComparison)
+        $sorted = $list
     }
 
     # Unique: deduplicate by sort text
@@ -2306,10 +2291,10 @@ function Invoke-BashHead {
         foreach ($item in $pipelineInput) {
             if ($emitted -ge $count) { break }
             $text = Get-BashText -InputObject $item
-            if (($text -replace "`n$", '') -match "`n") {
-                foreach ($subLine in ($text -replace "`n$", '' -split "`n")) {
+            if ($text.TrimEnd("`n".ToCharArray()).Contains("`n")) {
+                foreach ($subLine in ($text.TrimEnd("`n".ToCharArray()) -split "`n")) {
                     if ($emitted -ge $count) { break }
-                    New-BashObject -BashText "$subLine`n"
+                    $subLine
                     $emitted++
                 }
             } else {
@@ -2493,10 +2478,10 @@ function Invoke-BashTail {
             $idx = 0
             foreach ($item in $pipelineInput) {
                 $text = Get-BashText -InputObject $item
-                if (($text -replace "`n$", '') -match "`n") {
-                    foreach ($subLine in ($text -replace "`n$", '' -split "`n")) {
+                if ($text.TrimEnd("`n".ToCharArray()).Contains("`n")) {
+                    foreach ($subLine in ($text.TrimEnd("`n".ToCharArray()) -split "`n")) {
                         if ($idx -ge $skip) {
-                            New-BashObject -BashText "$subLine`n"
+                            $subLine
                         }
                         $idx++
                     }
@@ -2515,9 +2500,9 @@ function Invoke-BashTail {
 
             foreach ($item in $pipelineInput) {
                 $text = Get-BashText -InputObject $item
-                if (($text -replace "`n$", '') -match "`n") {
-                    foreach ($subLine in ($text -replace "`n$", '' -split "`n")) {
-                        $wrapped = New-BashObject -BashText "$subLine`n"
+                if ($text.TrimEnd("`n".ToCharArray()).Contains("`n")) {
+                    foreach ($subLine in ($text.TrimEnd("`n".ToCharArray()) -split "`n")) {
+                        $wrapped = $subLine
                         $buf[$pos] = $wrapped
                         $pos = ($pos + 1) % $count
                         if ($bufLen -lt $count) { $bufLen++ }
@@ -2747,20 +2732,20 @@ function Invoke-BashWc {
         $totalWords = 0
         $totalBytes = 0
 
+        $wsChars = [char[]]@(' ', "`t", "`n", "`r")
+        $splitOpts = [System.StringSplitOptions]::RemoveEmptyEntries
         foreach ($item in $pipelineInput) {
             $text = Get-BashText -InputObject $item
-            if (($text -replace "`n$", '') -match "`n") {
-                foreach ($subLine in ($text -replace "`n$", '' -split "`n")) {
+            if ($text.TrimEnd("`n".ToCharArray()).Contains("`n")) {
+                foreach ($subLine in ($text.TrimEnd("`n".ToCharArray()) -split "`n")) {
                     $totalLines++
-                    $lineWords = @($subLine -split '\s+' | Where-Object { $_ -ne '' }).Count
-                    $totalWords += $lineWords
+                    $totalWords += $subLine.Split($wsChars, $splitOpts).Length
                     $totalBytes += [System.Text.Encoding]::UTF8.GetByteCount($subLine) + 1
                 }
             } else {
-                $lineText = $text -replace "`n$", ''
+                $lineText = $text.TrimEnd("`n".ToCharArray())
                 $totalLines++
-                $lineWords = @($lineText -split '\s+' | Where-Object { $_ -ne '' }).Count
-                $totalWords += $lineWords
+                $totalWords += $lineText.Split($wsChars, $splitOpts).Length
                 $totalBytes += [System.Text.Encoding]::UTF8.GetByteCount($lineText) + 1
             }
         }
@@ -2796,8 +2781,10 @@ function Invoke-BashWc {
         } catch {
             # If BOM peek fails, use raw file size
         }
-        $lineCount = @($rawText.ToCharArray() | Where-Object { $_ -eq "`n" }).Count
-        $wordCount = @($rawText -split '\s+' | Where-Object { $_ -ne '' }).Count
+        $lineCount = 0
+        foreach ($c in [char[]]$rawText) { if ($c -eq "`n") { $lineCount++ } }
+        $wsChars = [char[]]@(' ', "`t", "`n", "`r")
+        $wordCount = $rawText.Split($wsChars, [System.StringSplitOptions]::RemoveEmptyEntries).Length
 
         $totalLines += $lineCount
         $totalWords += $wordCount
@@ -4644,13 +4631,13 @@ function Invoke-BashSed {
     $origItems = [System.Collections.Generic.List[object]]::new()
     foreach ($item in $pipelineInput) {
         $text = Get-BashText -InputObject $item
-        if (($text -replace "`n$", '') -match "`n") {
-            foreach ($subLine in ($text -replace "`n$", '' -split "`n")) {
+        if ($text.TrimEnd("`n".ToCharArray()).Contains("`n")) {
+            foreach ($subLine in ($text.TrimEnd("`n".ToCharArray()) -split "`n")) {
                 $allLines.Add($subLine)
                 $origItems.Add($null)
             }
         } else {
-            $allLines.Add(($text -replace "`n$", ''))
+            $allLines.Add(($text.TrimEnd("`n".ToCharArray())))
             $origItems.Add($item)
         }
     }
@@ -5091,12 +5078,12 @@ function Invoke-BashAwk {
     $allLines = [System.Collections.Generic.List[string]]::new()
     foreach ($item in $pipelineInput) {
         $text = Get-BashText -InputObject $item
-        if (($text -replace "`n$", '') -match "`n") {
-            foreach ($subLine in ($text -replace "`n$", '' -split "`n")) {
+        if ($text.TrimEnd("`n".ToCharArray()).Contains("`n")) {
+            foreach ($subLine in ($text.TrimEnd("`n".ToCharArray()) -split "`n")) {
                 $allLines.Add($subLine)
             }
         } else {
-            $allLines.Add(($text -replace "`n$", ''))
+            $allLines.Add(($text.TrimEnd("`n".ToCharArray())))
         }
     }
     for ($idx = 0; $idx -lt $allLines.Count; $idx++) {
@@ -6194,12 +6181,12 @@ function Invoke-BashCut {
     if ($operands.Count -eq 0 -and $pipelineInput.Count -gt 0) {
         foreach ($item in $pipelineInput) {
             $text = Get-BashText -InputObject $item
-            if (($text -replace "`n$", '') -match "`n") {
-                foreach ($subLine in ($text -replace "`n$", '' -split "`n")) {
+            if ($text.TrimEnd("`n".ToCharArray()).Contains("`n")) {
+                foreach ($subLine in ($text.TrimEnd("`n".ToCharArray()) -split "`n")) {
                     $lines.Add($subLine)
                 }
             } else {
-                $lines.Add(($text -replace "`n$", ''))
+                $lines.Add(($text.TrimEnd("`n".ToCharArray())))
             }
         }
     } else {
@@ -6585,12 +6572,12 @@ function Invoke-BashUniq {
     if ($operands.Count -eq 0 -and $pipelineInput.Count -gt 0) {
         foreach ($item in $pipelineInput) {
             $text = Get-BashText -InputObject $item
-            if (($text -replace "`n$", '') -match "`n") {
-                foreach ($subLine in ($text -replace "`n$", '' -split "`n")) {
+            if ($text.TrimEnd("`n".ToCharArray()).Contains("`n")) {
+                foreach ($subLine in ($text.TrimEnd("`n".ToCharArray()) -split "`n")) {
                     $lines.Add($subLine)
                 }
             } else {
-                $lines.Add(($text -replace "`n$", ''))
+                $lines.Add(($text.TrimEnd("`n".ToCharArray())))
             }
         }
     } else {
@@ -6655,12 +6642,12 @@ function Invoke-BashRev {
     if ($Arguments.Count -eq 0 -and $pipelineInput.Count -gt 0) {
         foreach ($item in $pipelineInput) {
             $text = Get-BashText -InputObject $item
-            if (($text -replace "`n$", '') -match "`n") {
-                foreach ($subLine in ($text -replace "`n$", '' -split "`n")) {
+            if ($text.TrimEnd("`n".ToCharArray()).Contains("`n")) {
+                foreach ($subLine in ($text.TrimEnd("`n".ToCharArray()) -split "`n")) {
                     $lines.Add($subLine)
                 }
             } else {
-                $lines.Add(($text -replace "`n$", ''))
+                $lines.Add(($text.TrimEnd("`n".ToCharArray())))
             }
         }
     } else {
@@ -6735,12 +6722,12 @@ function Invoke-BashNl {
     if ($operands.Count -eq 0 -and $pipelineInput.Count -gt 0) {
         foreach ($item in $pipelineInput) {
             $text = Get-BashText -InputObject $item
-            if (($text -replace "`n$", '') -match "`n") {
-                foreach ($subLine in ($text -replace "`n$", '' -split "`n")) {
+            if ($text.TrimEnd("`n".ToCharArray()).Contains("`n")) {
+                foreach ($subLine in ($text.TrimEnd("`n".ToCharArray()) -split "`n")) {
                     $lines.Add($subLine)
                 }
             } else {
-                $lines.Add(($text -replace "`n$", ''))
+                $lines.Add(($text.TrimEnd("`n".ToCharArray())))
             }
         }
     } else {
@@ -7323,12 +7310,12 @@ function Invoke-BashColumn {
     if ($operands.Count -eq 0 -and $pipelineInput.Count -gt 0) {
         foreach ($item in $pipelineInput) {
             $text = Get-BashText -InputObject $item
-            if (($text -replace "`n$", '') -match "`n") {
-                foreach ($subLine in ($text -replace "`n$", '' -split "`n")) {
+            if ($text.TrimEnd("`n".ToCharArray()).Contains("`n")) {
+                foreach ($subLine in ($text.TrimEnd("`n".ToCharArray()) -split "`n")) {
                     $lines.Add($subLine)
                 }
             } else {
-                $lines.Add(($text -replace "`n$", ''))
+                $lines.Add(($text.TrimEnd("`n".ToCharArray())))
             }
         }
     } else {
@@ -9627,10 +9614,10 @@ function Invoke-BashFold {
     if ($operands.Count -eq 0 -and $pipelineInput.Count -gt 0) {
         foreach ($item in $pipelineInput) {
             $text = Get-BashText -InputObject $item
-            if (($text -replace "`n$", '') -match "`n") {
-                foreach ($subLine in ($text -replace "`n$", '' -split "`n")) { $lines.Add($subLine) }
+            if ($text.TrimEnd("`n".ToCharArray()).Contains("`n")) {
+                foreach ($subLine in ($text.TrimEnd("`n".ToCharArray()) -split "`n")) { $lines.Add($subLine) }
             } else {
-                $lines.Add(($text -replace "`n$", ''))
+                $lines.Add(($text.TrimEnd("`n".ToCharArray())))
             }
         }
     } else {
@@ -9697,10 +9684,10 @@ function Invoke-BashExpand {
     if ($operands.Count -eq 0 -and $pipelineInput.Count -gt 0) {
         foreach ($item in $pipelineInput) {
             $text = Get-BashText -InputObject $item
-            if (($text -replace "`n$", '') -match "`n") {
-                foreach ($subLine in ($text -replace "`n$", '' -split "`n")) { $lines.Add($subLine) }
+            if ($text.TrimEnd("`n".ToCharArray()).Contains("`n")) {
+                foreach ($subLine in ($text.TrimEnd("`n".ToCharArray()) -split "`n")) { $lines.Add($subLine) }
             } else {
-                $lines.Add(($text -replace "`n$", ''))
+                $lines.Add(($text.TrimEnd("`n".ToCharArray())))
             }
         }
     } else {
@@ -9766,10 +9753,10 @@ function Invoke-BashUnexpand {
     if ($operands.Count -eq 0 -and $pipelineInput.Count -gt 0) {
         foreach ($item in $pipelineInput) {
             $text = Get-BashText -InputObject $item
-            if (($text -replace "`n$", '') -match "`n") {
-                foreach ($subLine in ($text -replace "`n$", '' -split "`n")) { $lines.Add($subLine) }
+            if ($text.TrimEnd("`n".ToCharArray()).Contains("`n")) {
+                foreach ($subLine in ($text.TrimEnd("`n".ToCharArray()) -split "`n")) { $lines.Add($subLine) }
             } else {
-                $lines.Add(($text -replace "`n$", ''))
+                $lines.Add(($text.TrimEnd("`n".ToCharArray())))
             }
         }
     } else {
@@ -9912,10 +9899,10 @@ function Invoke-BashSplit {
         if ($filePath -eq '-') {
             foreach ($item in $pipelineInput) {
                 $text = Get-BashText -InputObject $item
-                if (($text -replace "`n$", '') -match "`n") {
-                    foreach ($subLine in ($text -replace "`n$", '' -split "`n")) { $lines.Add($subLine) }
+                if ($text.TrimEnd("`n".ToCharArray()).Contains("`n")) {
+                    foreach ($subLine in ($text.TrimEnd("`n".ToCharArray()) -split "`n")) { $lines.Add($subLine) }
                 } else {
-                    $lines.Add(($text -replace "`n$", ''))
+                    $lines.Add(($text.TrimEnd("`n".ToCharArray())))
                 }
             }
         } else {
@@ -9927,10 +9914,10 @@ function Invoke-BashSplit {
     } elseif ($pipelineInput.Count -gt 0) {
         foreach ($item in $pipelineInput) {
             $text = Get-BashText -InputObject $item
-            if (($text -replace "`n$", '') -match "`n") {
-                foreach ($subLine in ($text -replace "`n$", '' -split "`n")) { $lines.Add($subLine) }
+            if ($text.TrimEnd("`n".ToCharArray()).Contains("`n")) {
+                foreach ($subLine in ($text.TrimEnd("`n".ToCharArray()) -split "`n")) { $lines.Add($subLine) }
             } else {
-                $lines.Add(($text -replace "`n$", ''))
+                $lines.Add(($text.TrimEnd("`n".ToCharArray())))
             }
         }
     } else {
@@ -9989,10 +9976,10 @@ function Invoke-BashTac {
     if ($operands.Count -eq 0 -and $pipelineInput.Count -gt 0) {
         foreach ($item in $pipelineInput) {
             $text = Get-BashText -InputObject $item
-            if (($text -replace "`n$", '') -match "`n") {
-                foreach ($subLine in ($text -replace "`n$", '' -split "`n")) { $lines.Add($subLine) }
+            if ($text.TrimEnd("`n".ToCharArray()).Contains("`n")) {
+                foreach ($subLine in ($text.TrimEnd("`n".ToCharArray()) -split "`n")) { $lines.Add($subLine) }
             } else {
-                $lines.Add(($text -replace "`n$", ''))
+                $lines.Add(($text.TrimEnd("`n".ToCharArray())))
             }
         }
     } else {
@@ -10436,8 +10423,8 @@ function Invoke-BashRg {
 
         foreach ($item in $pipelineInput) {
             $text = Get-BashText -InputObject $item
-            if (($text -replace "`n$", '') -match "`n") {
-                foreach ($subLine in ($text -replace "`n$", '' -split "`n")) {
+            if ($text.TrimEnd("`n".ToCharArray()).Contains("`n")) {
+                foreach ($subLine in ($text.TrimEnd("`n".ToCharArray()) -split "`n")) {
                     $isMatch = $regex.IsMatch($subLine)
                     if ($invertMatch) { $isMatch = -not $isMatch }
                     if ($isMatch) {
@@ -10454,7 +10441,7 @@ function Invoke-BashRg {
                     }
                 }
             } else {
-                $lineText = $text -replace "`n$", ''
+                $lineText = $text.TrimEnd("`n".ToCharArray())
                 $isMatch = $regex.IsMatch($lineText)
                 if ($invertMatch) { $isMatch = -not $isMatch }
                 if ($isMatch) {
