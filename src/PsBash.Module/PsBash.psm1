@@ -121,11 +121,96 @@ function Read-BashFileBytes {
     $rawText -replace "`r`n", "`n"
 }
 
+function Open-BashFileReader {
+    <#
+    .SYNOPSIS
+        Open a StreamReader for a file with BOM-aware UTF-8 decoding.
+        Returns $null and writes a bash-style error on failure.
+    #>
+    [CmdletBinding()]
+    [OutputType([System.IO.StreamReader])]
+    param(
+        [Parameter(Mandatory)]
+        [string]$Path,
+
+        [Parameter(Mandatory)]
+        [string]$Command
+    )
+
+    try {
+        $fs = [System.IO.FileStream]::new(
+            $Path,
+            [System.IO.FileMode]::Open,
+            [System.IO.FileAccess]::Read,
+            [System.IO.FileShare]::Read,
+            4096,
+            [System.IO.FileOptions]::SequentialScan
+        )
+    } catch {
+        $normalized = $Path -replace '\\', '/'
+        $ex = $_.Exception
+        $inner = $ex.InnerException
+        $isNotFound = ($ex -is [System.IO.FileNotFoundException]) -or
+                      ($ex -is [System.IO.DirectoryNotFoundException]) -or
+                      ($inner -is [System.IO.FileNotFoundException]) -or
+                      ($inner -is [System.IO.DirectoryNotFoundException])
+        $msg = if ($isNotFound) { 'No such file or directory' } else { $ex.Message }
+        Write-BashError -Message "${Command}: ${normalized}: ${msg}"
+        return $null
+    }
+
+    # Skip UTF-8 BOM if present
+    $bom = [byte[]]::new(3)
+    $read = $fs.Read($bom, 0, 3)
+    $hasBom = ($read -ge 3 -and $bom[0] -eq 0xEF -and $bom[1] -eq 0xBB -and $bom[2] -eq 0xBF)
+    if (-not $hasBom -and $read -gt 0) {
+        $null = $fs.Seek(0, 'Begin')
+    }
+
+    $encoding = [System.Text.UTF8Encoding]::new($false)
+    [System.IO.StreamReader]::new($fs, $encoding)
+}
+
+function Read-BashFileStreaming {
+    <#
+    .SYNOPSIS
+        Stream lines from a file one at a time via the pipeline.
+        No string[] allocation — each line is yielded individually.
+        Caller must handle $null return (file not found).
+    #>
+    [CmdletBinding()]
+    [OutputType([string])]
+    param(
+        [Parameter(Mandatory)]
+        [string]$Path,
+
+        [Parameter(Mandatory)]
+        [string]$Command,
+
+        [int]$MaxLines = 0
+    )
+
+    $reader = Open-BashFileReader -Path $Path -Command $Command
+    if ($null -eq $reader) { return }
+
+    try {
+        $emitted = 0
+        while ($null -ne ($line = $reader.ReadLine())) {
+            $line
+            $emitted++
+            if ($MaxLines -gt 0 -and $emitted -ge $MaxLines) { break }
+        }
+    } finally {
+        $reader.Dispose()
+    }
+}
+
 function Read-BashFileLines {
     <#
     .SYNOPSIS
         Read a file into an array of lines (no trailing newlines on each line).
         Returns $null and writes a bash-style error on failure.
+        Uses streaming internally to avoid triple materialization.
     #>
     [CmdletBinding()]
     [OutputType([string[]])]
@@ -137,16 +222,21 @@ function Read-BashFileLines {
         [string]$Command
     )
 
-    $rawText = Read-BashFileBytes -Path $Path -Command $Command
-    if ($null -eq $rawText) { return $null }
+    $reader = Open-BashFileReader -Path $Path -Command $Command
+    if ($null -eq $reader) { return $null }
 
-    if ($rawText.EndsWith("`n")) {
-        $rawText = $rawText.Substring(0, $rawText.Length - 1)
+    try {
+        $lines = [System.Collections.Generic.List[string]]::new()
+        while ($null -ne ($line = $reader.ReadLine())) {
+            $lines.Add($line)
+        }
+        # Write-Output -NoEnumerate prevents PowerShell from unwrapping a single-element array
+        # to a scalar when the caller assigns the result to a variable. Without this, a file
+        # with one line returns a plain string that lacks .Count under Set-StrictMode.
+        Write-Output -NoEnumerate $lines.ToArray()
+    } finally {
+        $reader.Dispose()
     }
-    # Write-Output -NoEnumerate prevents PowerShell from unwrapping a single-element array
-    # to a scalar when the caller assigns the result to a variable. Without this, a file
-    # with one line returns a plain string that lacks .Count under Set-StrictMode.
-    Write-Output -NoEnumerate $rawText.Split("`n")
 }
 
 function Write-BashFileText {
@@ -1108,11 +1198,15 @@ function Invoke-BashCat {
     $fileOperands = @($operands | Where-Object { $_ -ne '-' })
     $resolvedFiles = Resolve-BashGlob -Paths $fileOperands
     foreach ($filePath in $resolvedFiles) {
-        $lines = Read-BashFileLines -Path $filePath -Command 'cat'
-        if ($null -eq $lines) { $hadError = $true; continue }
+        $reader = Open-BashFileReader -Path $filePath -Command 'cat'
+        if ($null -eq $reader) { $hadError = $true; continue }
 
-        foreach ($line in $lines) {
-            & $emitLine $line $filePath
+        try {
+            while ($null -ne ($line = $reader.ReadLine())) {
+                & $emitLine $line $filePath
+            }
+        } finally {
+            $reader.Dispose()
         }
     }
 
@@ -2194,22 +2288,27 @@ function Invoke-BashHead {
         return
     }
 
-    # File mode — resolve globs
+    # File mode — resolve globs, stream lines with early exit
     $resolvedFiles = Resolve-BashGlob -Paths $operands
     foreach ($filePath in $resolvedFiles) {
-        $lines = Read-BashFileLines -Path $filePath -Command 'head'
-        if ($null -eq $lines) { continue }
+        $reader = Open-BashFileReader -Path $filePath -Command 'head'
+        if ($null -eq $reader) { continue }
 
-        $lineCount = [System.Math]::Min($count, $lines.Count)
-        for ($li = 0; $li -lt $lineCount; $li++) {
-            $obj = [PSCustomObject]@{
-                PSTypeName = 'PsBash.CatLine'
-                LineNumber = $li + 1
-                Content    = $lines[$li]
-                FileName   = $filePath
-                BashText   = $lines[$li]
+        try {
+            $li = 0
+            while ($li -lt $count -and $null -ne ($line = $reader.ReadLine())) {
+                $li++
+                $obj = [PSCustomObject]@{
+                    PSTypeName = 'PsBash.CatLine'
+                    LineNumber = $li
+                    Content    = $line
+                    FileName   = $filePath
+                    BashText   = $line
+                }
+                Set-BashDisplayProperty $obj
             }
-            Set-BashDisplayProperty $obj
+        } finally {
+            $reader.Dispose()
         }
     }
 }
@@ -2471,24 +2570,44 @@ function Invoke-BashTail {
     } else {
         # Normal mode: output last N lines
         foreach ($filePath in $resolvedFiles) {
-            $lines = Read-BashFileLines -Path $filePath -Command 'tail'
-            if ($null -eq $lines) { continue }
-
             if ($fromLine) {
-                $startIdx = $count - 1
-            } else {
-                $startIdx = [System.Math]::Max(0, $lines.Count - $count)
-            }
+                # Stream and skip first N-1 lines without buffering
+                $reader = Open-BashFileReader -Path $filePath -Command 'tail'
+                if ($null -eq $reader) { continue }
 
-            for ($li = $startIdx; $li -lt $lines.Count; $li++) {
-                $obj = [PSCustomObject]@{
-                    PSTypeName = 'PsBash.CatLine'
-                    LineNumber = $li + 1
-                    Content    = $lines[$li]
-                    FileName   = $filePath
-                    BashText   = $lines[$li]
+                try {
+                    $li = 0
+                    while ($null -ne ($line = $reader.ReadLine())) {
+                        $li++
+                        if ($li -ge $count) {
+                            $obj = [PSCustomObject]@{
+                                PSTypeName = 'PsBash.CatLine'
+                                LineNumber = $li
+                                Content    = $line
+                                FileName   = $filePath
+                                BashText   = $line
+                            }
+                            Set-BashDisplayProperty $obj
+                        }
+                    }
+                } finally {
+                    $reader.Dispose()
                 }
-                Set-BashDisplayProperty $obj
+            } else {
+                $lines = Read-BashFileLines -Path $filePath -Command 'tail'
+                if ($null -eq $lines) { continue }
+
+                $startIdx = [System.Math]::Max(0, $lines.Count - $count)
+                for ($li = $startIdx; $li -lt $lines.Count; $li++) {
+                    $obj = [PSCustomObject]@{
+                        PSTypeName = 'PsBash.CatLine'
+                        LineNumber = $li + 1
+                        Content    = $lines[$li]
+                        FileName   = $filePath
+                        BashText   = $lines[$li]
+                    }
+                    Set-BashDisplayProperty $obj
+                }
             }
         }
     }
@@ -4827,7 +4946,7 @@ function Invoke-BashAwk {
                 Write-BashError -Message "awk: can't open source file ${pf}: No such file or directory" -ExitCode 2
                 return
             }
-            [void]$fileText.Append((Get-Content -Path $pf -Raw))
+            [void]$fileText.Append([System.IO.File]::ReadAllText($pf))
         }
         $programText = $fileText.ToString()
     }
@@ -8370,7 +8489,7 @@ function Invoke-BashJq {
                 Write-BashError -Message "jq: $file`: No such file or directory" -ExitCode 2
                 return
             }
-            $jsonTexts.Add((Get-Content -LiteralPath $resolved -Raw))
+            $jsonTexts.Add([System.IO.File]::ReadAllText($resolved))
         }
     } else {
         # Pipeline input
@@ -10991,7 +11110,7 @@ function Invoke-BashYq {
                 Write-BashError -Message "yq: $file`: No such file or directory"
                 return
             }
-            $yamlTexts.Add((Get-Content -LiteralPath $resolved -Raw))
+            $yamlTexts.Add([System.IO.File]::ReadAllText($resolved))
         }
     } else {
         $textParts = [System.Text.StringBuilder]::new()
@@ -11109,7 +11228,7 @@ function Invoke-BashXan {
             Write-BashError -Message "xan: $fileArg`: No such file or directory"
             return
         }
-        $csvText = Get-Content -LiteralPath $resolved -Raw
+        $csvText = [System.IO.File]::ReadAllText($resolved)
     } else {
         $textParts = [System.Text.StringBuilder]::new()
         foreach ($item in $pipelineInput) {
