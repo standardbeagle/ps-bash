@@ -11953,6 +11953,63 @@ function Invoke-BashBash {
     }
 }
 
+# --- Background Process Support ---
+
+$script:BashBgPids = [System.Collections.Generic.List[System.Diagnostics.Process]]::new()
+$global:BashBgLastPid = $null
+
+function Invoke-BashBackground {
+    <#
+    .SYNOPSIS
+        Run a command as a background process (bash & operator).
+    #>
+    param(
+        [Parameter(Mandatory)]
+        [scriptblock]$Command
+    )
+
+    $encodedCmd = [Convert]::ToBase64String(
+        [System.Text.Encoding]::Unicode.GetBytes($Command.ToString())
+    )
+
+    $pwshPath = [System.Diagnostics.Process]::GetCurrentProcess().MainModule.FileName
+
+    $proc = Start-Process -FilePath $pwshPath -ArgumentList '-NoLogo','-NoProfile','-EncodedCommand',$encodedCmd -PassThru -NoNewWindow
+
+    $script:BashBgPids.Add($proc)
+    $global:BashBgLastPid = $proc.Id
+    $global:BashBgLastPid
+}
+
+function Invoke-BashWait {
+    <#
+    .SYNOPSIS
+        Wait for background processes to finish (bash wait command).
+    #>
+    param()
+    $Arguments = [string[]]$args
+    if ($Arguments -contains '--help') { return Show-BashHelp 'wait' }
+
+    if ($Arguments.Count -gt 0) {
+        foreach ($pidArg in $Arguments) {
+            if (-not [int]::TryParse($pidArg, [ref]$null)) { continue }
+            $pid = [int]$pidArg
+            $proc = $script:BashBgPids | Where-Object { $_.Id -eq $pid }
+            if ($proc) {
+                foreach ($p in @($proc)) {
+                    if (-not $p.HasExited) { [void]$p.WaitForExit() }
+                    [void]$script:BashBgPids.Remove($p)
+                }
+            }
+        }
+    } else {
+        foreach ($p in @($script:BashBgPids)) {
+            if (-not $p.HasExited) { [void]$p.WaitForExit() }
+        }
+        $script:BashBgPids.Clear()
+    }
+}
+
 # --- Help Support ---
 
 $script:BashHelpSpecs = @{
@@ -12027,6 +12084,7 @@ $script:BashHelpSpecs = @{
     'mktemp'   = 'Create a temporary file or directory.'
     'type'     = 'Display information about command type.'
     'bash'     = 'Invoke ps-bash transpiler for nested bash execution.'
+    'wait'     = 'Wait for background processes to finish.'
 }
 
 function Test-BashHelpFlag {
@@ -12308,6 +12366,7 @@ Set-Alias -Name 'readlink' -Value 'Invoke-BashReadlink' -Force -Scope Global -Op
 Set-Alias -Name 'mktemp'   -Value 'Invoke-BashMktemp'   -Force -Scope Global -Option AllScope
 Set-Alias -Name 'type'     -Value 'Invoke-BashType'     -Force -Scope Global -Option AllScope
 Set-Alias -Name 'bash'     -Value 'Invoke-BashBash'     -Force -Scope Global -Option AllScope
+Set-Alias -Name 'wait'     -Value 'Invoke-BashWait'     -Force -Scope Global -Option AllScope
 
 # --- Type-level ToString for BashObject types ---
 # Update-TypeData defines ToString() once per type name instead of per-object,

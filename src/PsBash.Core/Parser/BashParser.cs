@@ -104,20 +104,48 @@ public sealed class BashParser
     {
         var first = ParseAndOr();
 
+        // Check for & (background) after the first command.
+        // In bash, & is a command terminator like ; or newline — the next
+        // command can start immediately without a separator.
+        bool firstBg = false;
+        if (Peek().Kind == BashTokenKind.Amp)
+        {
+            Advance(); // consume &
+            firstBg = true;
+        }
+
+        // If no separator follows and the first command is not backgrounded
+        // (or it is backgrounded but there's no next command), return single.
         if (Peek().Kind is not BashTokenKind.Semi and not BashTokenKind.Newline)
-            return first;
+        {
+            if (!firstBg || Peek().Kind == BashTokenKind.Eof)
+                return firstBg ? new Command.Background(first) : first;
+        }
 
         var commands = ImmutableArray.CreateBuilder<Command>();
-        commands.Add(first);
+        commands.Add(firstBg ? new Command.Background(first) : first);
 
-        while (Peek().Kind is BashTokenKind.Semi or BashTokenKind.Newline)
+        while (true)
         {
-            SkipTerminators();
+            bool prevBg = commands[^1] is Command.Background;
+
+            if (Peek().Kind is BashTokenKind.Semi or BashTokenKind.Newline)
+                SkipTerminators();
+            else if (!prevBg)
+                break;
 
             if (Peek().Kind == BashTokenKind.Eof)
                 break;
 
-            commands.Add(ParseAndOr());
+            var cmd = ParseAndOr();
+
+            if (Peek().Kind == BashTokenKind.Amp)
+            {
+                Advance(); // consume &
+                cmd = new Command.Background(cmd);
+            }
+
+            commands.Add(cmd);
         }
 
         if (commands.Count == 1)

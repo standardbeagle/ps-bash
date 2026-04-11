@@ -63,6 +63,7 @@ public static class PsEmitter
         Command.Subshell subshell => EmitSubshell(subshell),
         Command.BraceGroup braceGroup => EmitBraceGroup(braceGroup),
         Command.ShFunction func => EmitFunction(func),
+        Command.Background bg => EmitBackground(bg),
         Command.Simple simple => EmitSimple(simple),
         Command.Pipeline pipeline => EmitPipeline(pipeline),
         Command.AndOrList andOr => EmitAndOrList(andOr),
@@ -381,6 +382,12 @@ public static class PsEmitter
     private static string EmitBraceGroup(Command.BraceGroup braceGroup)
     {
         return Emit(braceGroup.Body);
+    }
+
+    private static string EmitBackground(Command.Background bg)
+    {
+        string inner = Emit(bg.Inner);
+        return $"Invoke-BashBackground {{ {inner} }}";
     }
 
     private static string EmitArithCommand(Command.ArithCommand arith)
@@ -1414,7 +1421,7 @@ public static class PsEmitter
             "#" => inDoubleQuote ? "$($args.Count)" : "$args.Count",
             "0" => inDoubleQuote ? "$($MyInvocation.MyCommand.Name)" : "$MyInvocation.MyCommand.Name",
             "$" => "$PID",
-            "!" => "$PID", // bash $! = last background PID; no PS equivalent, $PID is approximate
+            "!" => "$global:BashBgLastPid",
             "-" => "$PSBoundParameters",
             var d when d.Length == 1 && d[0] is >= '1' and <= '9' =>
                 inDoubleQuote ? $"$($args[{int.Parse(d) - 1}])" : $"$args[{int.Parse(d) - 1}]",
@@ -1604,7 +1611,7 @@ public static class PsEmitter
             "#" => "$($args.Count)",
             "0" => "$($MyInvocation.MyCommand.Name)",
             "$" => "${PID}",
-            "!" => "${PID}",
+            "!" => "${global:BashBgLastPid}",
             "-" => "${PSBoundParameters}",
             var d when d.Length == 1 && d[0] is >= '1' and <= '9' =>
                 $"$($args[{int.Parse(d) - 1}])",
@@ -1951,6 +1958,9 @@ public static class PsEmitter
                 return true;
             case "bash":
                 result = EmitPassthrough("Invoke-BashBash", args);
+                return true;
+            case "wait":
+                result = EmitPassthrough("Invoke-BashWait", args);
                 return true;
             default:
                 return false;

@@ -128,6 +128,13 @@ public abstract record Command : BashNode
     /// Emitted inline (passthrough, same scope).
     /// </summary>
     public sealed record BraceGroup(Command Body) : Command;
+
+    /// <summary>
+    /// A background command: <c>cmd &amp;</c> runs the inner command asynchronously.
+    /// The <c>&amp;</c> operator is consumed in <c>ParseList()</c> and wraps the
+    /// preceding command in this node.
+    /// </summary>
+    public sealed record Background(Command Inner) : Command;
 }
 
 /// <summary>
