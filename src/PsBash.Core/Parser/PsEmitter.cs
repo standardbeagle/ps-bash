@@ -121,10 +121,10 @@ public static class PsEmitter
             var sb = new StringBuilder();
             sb.Append(IterGuardPrefix(depth));
 
-            // Empty list means implicit $@ -> $args
+            // Empty list means implicit $@ -> use BashPositional if set, else $args
             if (forIn.List.IsEmpty)
             {
-                sb.Append($"foreach (${forIn.Var} in $args) {{ ");
+                sb.Append($"foreach (${forIn.Var} in (if ($global:BashPositional) {{ $global:BashPositional }} else {{ $args }})) {{ ");
             }
             else
             {
@@ -415,9 +415,9 @@ public static class PsEmitter
 
     private static string EmitSubshell(Command.Subshell subshell)
     {
-        var sb = new StringBuilder("& { ");
+        var sb = new StringBuilder("try { Push-Location; ");
         sb.Append(Emit(subshell.Body));
-        sb.Append(" }");
+        sb.Append(" } finally { Pop-Location }");
 
         Redirect? fileRedirect = null;
         foreach (var redirect in subshell.Redirects)
@@ -1070,12 +1070,24 @@ public static class PsEmitter
                 return string.IsNullOrEmpty(roResult) ? "[void]$true" : roResult;
             }
 
+            // set -- a b c -> reset positional parameters
             // set -e / set -o errexit -> $ErrorActionPreference = 'Stop'
             // set -x / set -o xtrace -> Set-PSDebug -Trace 1
             // set -u / set -o nounset -> Set-StrictMode -Version Latest
             if (cmd0 == "set" && cmd.Words.Length >= 2)
             {
-                var args = cmd.Words.Skip(1).Select(w => GetLiteralValue(w)).ToList();
+                var literalArgs = cmd.Words.Skip(1).Select(w => GetLiteralValue(w)).ToList();
+                int dashDashIdx = literalArgs.IndexOf("--");
+                if (dashDashIdx >= 0)
+                {
+                    // set -- [args...] — reset positional parameters
+                    var positionalWords = cmd.Words.Skip(1 + dashDashIdx + 1).ToList();
+                    if (positionalWords.Count == 0)
+                        return "$global:BashPositional = @()";
+                    var items = string.Join(", ", positionalWords.Select(w => EmitWord(w)));
+                    return $"$global:BashPositional = @({items})";
+                }
+                var args = literalArgs;
                 bool longOpt = args.Any(a => a == "-o");
                 if (longOpt)
                 {
@@ -1501,14 +1513,14 @@ public static class PsEmitter
             "null" or "true" or "false" or "HOME" or "LASTEXITCODE" or "PWD" => $"${name}",
             "?" => "$LASTEXITCODE",
             "RANDOM" => "$(Get-Random -Maximum 32768)",
-            "@" or "*" => "$args",
-            "#" => inDoubleQuote ? "$($args.Count)" : "$args.Count",
+            "@" or "*" => "$(if ($global:BashPositional) { $global:BashPositional } else { $args })",
+            "#" => "$(if ($global:BashPositional) { $global:BashPositional.Count } else { $args.Count })",
             "0" => inDoubleQuote ? "$($MyInvocation.MyCommand.Name)" : "$MyInvocation.MyCommand.Name",
             "$" => "$PID",
             "!" => "$global:BashBgLastPid",
             "-" => "$PSBoundParameters",
             var d when d.Length == 1 && d[0] is >= '1' and <= '9' =>
-                inDoubleQuote ? $"$($args[{int.Parse(d) - 1}])" : $"$args[{int.Parse(d) - 1}]",
+                $"$(if ($global:BashPositional) {{ $global:BashPositional[{int.Parse(d) - 1}] }} else {{ $args[{int.Parse(d) - 1}] }})",
             _ => $"$env:{name}",
         };
     }
@@ -1691,14 +1703,14 @@ public static class PsEmitter
         {
             "null" or "true" or "false" or "HOME" or "LASTEXITCODE" => $"${{{name}}}",
             "?" => "${LASTEXITCODE}",
-            "@" or "*" => "${args}",
-            "#" => "$($args.Count)",
+            "@" or "*" => "$(if ($global:BashPositional) { $global:BashPositional } else { $args })",
+            "#" => "$(if ($global:BashPositional) { $global:BashPositional.Count } else { $args.Count })",
             "0" => "$($MyInvocation.MyCommand.Name)",
             "$" => "${PID}",
             "!" => "${global:BashBgLastPid}",
             "-" => "${PSBoundParameters}",
             var d when d.Length == 1 && d[0] is >= '1' and <= '9' =>
-                $"$($args[{int.Parse(d) - 1}])",
+                $"$(if ($global:BashPositional) {{ $global:BashPositional[{int.Parse(d) - 1}] }} else {{ $args[{int.Parse(d) - 1}] }})",
             _ => $"${{env:{name}}}",
         };
     }

@@ -500,7 +500,7 @@ public class PsEmitterTests
     {
         var result = PsEmitter.Transpile("echo $@");
 
-        Assert.Equal("echo $args", result);
+        Assert.Equal("echo $(if ($global:BashPositional) { $global:BashPositional } else { $args })", result);
     }
 
     [Fact]
@@ -508,7 +508,7 @@ public class PsEmitterTests
     {
         var result = PsEmitter.Transpile("echo $#");
 
-        Assert.Equal("echo $args.Count", result);
+        Assert.Equal("echo $(if ($global:BashPositional) { $global:BashPositional.Count } else { $args.Count })", result);
     }
 
     [Fact]
@@ -524,7 +524,7 @@ public class PsEmitterTests
     {
         var result = PsEmitter.Transpile("echo $1");
 
-        Assert.Equal("echo $args[0]", result);
+        Assert.Equal("echo $(if ($global:BashPositional) { $global:BashPositional[0] } else { $args[0] })", result);
     }
 
     [Fact]
@@ -532,7 +532,7 @@ public class PsEmitterTests
     {
         var result = PsEmitter.Transpile("echo $9");
 
-        Assert.Equal("echo $args[8]", result);
+        Assert.Equal("echo $(if ($global:BashPositional) { $global:BashPositional[8] } else { $args[8] })", result);
     }
 
     [Fact]
@@ -596,7 +596,7 @@ public class PsEmitterTests
     {
         var result = PsEmitter.Transpile("echo $*");
 
-        Assert.Equal("echo $args", result);
+        Assert.Equal("echo $(if ($global:BashPositional) { $global:BashPositional } else { $args })", result);
     }
 
     [Fact]
@@ -948,7 +948,7 @@ public class PsEmitterTests
     {
         var result = PsEmitter.Transpile("for x; do echo $x; done");
 
-        Assert.Equal("$__psbash_iter = 0; foreach ($x in $args) { if (++$__psbash_iter -gt ($env:PSBASH_MAX_ITERATIONS ?? 100000)) { throw \"ps-bash: loop iteration limit exceeded ($(($env:PSBASH_MAX_ITERATIONS ?? 100000)))\" }; echo $x }", result);
+        Assert.Equal("$__psbash_iter = 0; foreach ($x in (if ($global:BashPositional) { $global:BashPositional } else { $args })) { if (++$__psbash_iter -gt ($env:PSBASH_MAX_ITERATIONS ?? 100000)) { throw \"ps-bash: loop iteration limit exceeded ($(($env:PSBASH_MAX_ITERATIONS ?? 100000)))\" }; echo $x }", result);
     }
 
     [Fact]
@@ -1145,7 +1145,7 @@ public class PsEmitterTests
     {
         var result = PsEmitter.Transpile("(echo hello; echo world)");
 
-        Assert.Equal("& { echo hello; echo world }", result);
+        Assert.Equal("try { Push-Location; echo hello; echo world } finally { Pop-Location }", result);
     }
 
     [Fact]
@@ -1161,7 +1161,7 @@ public class PsEmitterTests
     {
         var result = PsEmitter.Transpile("(echo hello) > out.txt");
 
-        Assert.Equal("& { echo hello } | Invoke-BashRedirect -Path out.txt", result);
+        Assert.Equal("try { Push-Location; echo hello } finally { Pop-Location } | Invoke-BashRedirect -Path out.txt", result);
     }
 
     [Fact]
@@ -1169,7 +1169,39 @@ public class PsEmitterTests
     {
         var result = PsEmitter.Transpile("(echo a; (echo b))");
 
-        Assert.Equal("& { echo a; & { echo b } }", result);
+        Assert.Equal("try { Push-Location; echo a; try { Push-Location; echo b } finally { Pop-Location } } finally { Pop-Location }", result);
+    }
+
+    [Fact]
+    public void Transpile_SubshellCdIsolation_EmitsPushdPopd()
+    {
+        var result = PsEmitter.Transpile("(cd /tmp && pwd) && pwd");
+
+        Assert.Equal("try { Push-Location; cd /tmp && pwd } finally { Pop-Location } && pwd", result);
+    }
+
+    [Fact]
+    public void Transpile_SetDashDash_EmitsBashPositional()
+    {
+        var result = PsEmitter.Transpile("set -- a b c");
+
+        Assert.Equal("$global:BashPositional = @(a, b, c)", result);
+    }
+
+    [Fact]
+    public void Transpile_SetDashDashEmpty_EmitsEmptyPositional()
+    {
+        var result = PsEmitter.Transpile("set --");
+
+        Assert.Equal("$global:BashPositional = @()", result);
+    }
+
+    [Fact]
+    public void Transpile_Background_EmitsInvokeBashBackground()
+    {
+        var result = PsEmitter.Transpile("sleep 0.1 & echo hello");
+
+        Assert.Equal("Invoke-BashBackground { sleep 0.1 }; echo hello", result);
     }
 
     [Fact]
@@ -2304,28 +2336,28 @@ public class PsEmitterTests
     public void Transpile_PositionalVarInDoubleQuotes_EmitsSubexpression()
     {
         var result = PsEmitter.Transpile("echo \"hello $1\"");
-        Assert.Equal("echo \"hello $($args[0])\"", result);
+        Assert.Equal("echo \"hello $(if ($global:BashPositional) { $global:BashPositional[0] } else { $args[0] })\"", result);
     }
 
     [Fact]
     public void Transpile_MultiplePositionalVarsInDoubleQuotes_EmitsSubexpressions()
     {
         var result = PsEmitter.Transpile("echo \"$1 and $2\"");
-        Assert.Equal("echo \"$($args[0]) and $($args[1])\"", result);
+        Assert.Equal("echo \"$(if ($global:BashPositional) { $global:BashPositional[0] } else { $args[0] }) and $(if ($global:BashPositional) { $global:BashPositional[1] } else { $args[1] })\"", result);
     }
 
     [Fact]
     public void Transpile_PositionalVarOutsideQuotes_NoSubexpression()
     {
         var result = PsEmitter.Transpile("echo $1");
-        Assert.Equal("echo $args[0]", result);
+        Assert.Equal("echo $(if ($global:BashPositional) { $global:BashPositional[0] } else { $args[0] })", result);
     }
 
     [Fact]
     public void Transpile_ArgCountInDoubleQuotes_EmitsSubexpression()
     {
         var result = PsEmitter.Transpile("echo \"count: $#\"");
-        Assert.Equal("echo \"count: $($args.Count)\"", result);
+        Assert.Equal("echo \"count: $(if ($global:BashPositional) { $global:BashPositional.Count } else { $args.Count })\"", result);
     }
 
     [Fact]

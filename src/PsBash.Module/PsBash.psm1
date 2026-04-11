@@ -12185,13 +12185,23 @@ function Invoke-BashBackground {
         [scriptblock]$Command
     )
 
+    $pwshPath = [System.Diagnostics.Process]::GetCurrentProcess().MainModule.FileName
     $encodedCmd = [Convert]::ToBase64String(
         [System.Text.Encoding]::Unicode.GetBytes($Command.ToString())
     )
 
-    $pwshPath = [System.Diagnostics.Process]::GetCurrentProcess().MainModule.FileName
+    $psi = [System.Diagnostics.ProcessStartInfo]::new()
+    $psi.FileName = $pwshPath
+    $psi.Arguments = "-NoLogo -NoProfile -EncodedCommand $encodedCmd"
+    $psi.UseShellExecute = $false
+    $psi.RedirectStandardOutput = $true
+    $psi.RedirectStandardError = $true
+    $psi.CreateNoWindow = $true
 
-    $proc = Start-Process -FilePath $pwshPath -ArgumentList '-NoLogo','-NoProfile','-EncodedCommand',$encodedCmd -PassThru -NoNewWindow
+    $proc = [System.Diagnostics.Process]::Start($psi)
+    # Begin async reads to prevent deadlocks if the child writes output
+    [void]$proc.BeginOutputReadLine()
+    [void]$proc.BeginErrorReadLine()
 
     $script:BashBgPids.Add($proc)
     $global:BashBgLastPid = $proc.Id
