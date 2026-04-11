@@ -28,7 +28,7 @@ CompanyName = 'Unknown'
 Copyright = '(c) Andy Brummer. All rights reserved.'
 
 # Description of the functionality provided by this module
-Description = 'Real bash commands for PowerShell with typed objects. 68 commands (ls, grep, sort, awk, sed, jq, find, ps, du, tar, etc.) that accept real bash flags and return structured PowerShell objects while producing identical text output. Pipeline bridge pattern preserves typed objects through grep, sort, head, tail.'
+Description = 'Real bash commands for PowerShell with typed objects. 69 commands (ls, grep, sort, awk, sed, jq, find, ps, du, tar, etc.) that accept real bash flags and return structured PowerShell objects while producing identical text output. Pipeline bridge pattern preserves typed objects through grep, sort, head, tail.'
 
 # Supported PSEditions
 CompatiblePSEditions = 'Core'
@@ -102,7 +102,7 @@ FunctionsToExport = 'Set-BashErrorMode', 'Invoke-ProcessSub',
                'Invoke-BashExpr',
                'Invoke-BashDu', 'Invoke-BashTree',
                'Invoke-BashEnv', 'Invoke-BashBasename', 'Invoke-BashDirname',
-               'Invoke-BashPwd', 'Invoke-BashHostname', 'Invoke-BashWhoami',
+               'Invoke-BashPwd', 'Invoke-BashHostname', 'Invoke-BashWhoami', 'Invoke-BashUname',
                'Invoke-BashFold', 'Invoke-BashExpand', 'Invoke-BashUnexpand',
                'Invoke-BashStrings', 'Invoke-BashSplit', 'Invoke-BashTac',
                'Invoke-BashBase64', 'Invoke-BashMd5sum', 'Invoke-BashSha1sum',
@@ -134,7 +134,7 @@ AliasesToExport = 'echo', 'printf', 'ls', 'cat', 'grep', 'sort', 'head', 'tail',
                'tee', 'xargs', 'jq',
                'date', 'seq', 'expr',
                'du', 'tree',
-               'env', 'printenv', 'basename', 'dirname', 'pwd', 'hostname', 'whoami',
+               'env', 'printenv', 'basename', 'dirname', 'pwd', 'hostname', 'whoami', 'uname',
                'fold', 'expand', 'unexpand', 'strings', 'split', 'tac',
                'base64', 'md5sum', 'sha1sum', 'sha256sum', 'file',
                'rg',

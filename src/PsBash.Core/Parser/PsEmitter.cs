@@ -1931,6 +1931,9 @@ public static class PsEmitter
             case "which":
                 result = EmitPassthrough("Invoke-BashWhich", args);
                 return true;
+            case "uname":
+                result = EmitPassthrough("Invoke-BashUname", args);
+                return true;
             case "alias":
                 result = EmitPassthrough("Invoke-BashAlias", args);
                 return true;

@@ -9576,6 +9576,61 @@ function Invoke-BashWhoami {
     New-BashObject -BashText $name -TypeName 'PsBash.TextOutput'
 }
 
+# --- uname ---
+
+function Invoke-BashUname {
+    [OutputType('PsBash.TextOutput')]
+    param()
+    $Arguments = [string[]]$args
+    if ($Arguments -contains '--help') { return Show-BashHelp 'uname' }
+
+    $flagS = $false
+    $flagN = $false
+    $flagR = $false
+    $flagM = $false
+    $flagA = $false
+
+    foreach ($arg in $Arguments) {
+        if ($arg -cmatch '^-([snrma]+)$') {
+            foreach ($ch in $arg.Substring(1).ToCharArray()) {
+                switch ($ch) {
+                    's' { $flagS = $true }
+                    'n' { $flagN = $true }
+                    'r' { $flagR = $true }
+                    'm' { $flagM = $true }
+                    'a' { $flagA = $true }
+                }
+            }
+        } elseif ($arg -ceq '-s') { $flagS = $true }
+        elseif ($arg -ceq '-n') { $flagN = $true }
+        elseif ($arg -ceq '-r') { $flagR = $true }
+        elseif ($arg -ceq '-m') { $flagM = $true }
+        elseif ($arg -ceq '-a') { $flagA = $true }
+    }
+
+    $osVer = [System.Environment]::OSVersion
+    $ver = $osVer.Version
+    $release = "$($ver.Major).$($ver.Minor).$($ver.Build)"
+    $sysName = "MINGW64_NT-$release"
+    $hostName = [System.Environment]::MachineName.ToLower()
+    $arch = if ([System.Environment]::Is64BitProcess) { 'x86_64' } else { 'i686' }
+
+    if ($flagA) {
+        $text = "$sysName $hostName $release $arch MINGW64"
+    } else {
+        $anyFlag = $flagS -or $flagN -or $flagR -or $flagM
+        if (-not $anyFlag) { $flagS = $true }
+        $parts = @()
+        if ($flagS) { $parts += $sysName }
+        if ($flagN) { $parts += $hostName }
+        if ($flagR) { $parts += $release }
+        if ($flagM) { $parts += $arch }
+        $text = $parts -join ' '
+    }
+
+    New-BashObject -BashText $text -TypeName 'PsBash.TextOutput'
+}
+
 # --- fold Command ---
 
 function Invoke-BashFold {
@@ -11947,6 +12002,7 @@ $script:BashHelpSpecs = @{
     'pwd'      = 'Print name of current/working directory.'
     'hostname' = 'Show the system host name.'
     'whoami'   = 'Print effective userid.'
+    'uname'    = 'Print system information.'
     'fold'     = 'Wrap each input line to fit in specified width.'
     'expand'   = 'Convert tabs to spaces.'
     'unexpand' = 'Convert spaces to tabs.'
@@ -12104,6 +12160,7 @@ $script:BashFlagSpecs = @{
     )
     'basename' = @( @('-s', 'suffix') )
     'pwd'      = @( @('-P', 'physical path') )
+    'uname'    = @( @('-s', 'kernel name'), @('-n', 'hostname'), @('-r', 'release'), @('-m', 'machine'), @('-a', 'all') )
     'fold'     = @( @('-w', 'wrap width'), @('-s', 'break at spaces'), @('-b', 'count bytes') )
     'expand'   = @( @('-t', 'tab width') )
     'unexpand' = @( @('-t', 'tab width'), @('-a', 'convert all spaces') )
@@ -12223,6 +12280,7 @@ Set-Alias -Name 'dirname'  -Value 'Invoke-BashDirname'  -Force -Scope Global -Op
 Set-Alias -Name 'pwd'      -Value 'Invoke-BashPwd'      -Force -Scope Global -Option AllScope
 Set-Alias -Name 'hostname' -Value 'Invoke-BashHostname' -Force -Scope Global -Option AllScope
 Set-Alias -Name 'whoami'   -Value 'Invoke-BashWhoami'   -Force -Scope Global -Option AllScope
+Set-Alias -Name 'uname'    -Value 'Invoke-BashUname'    -Force -Scope Global -Option AllScope
 Set-Alias -Name 'fold'     -Value 'Invoke-BashFold'     -Force -Scope Global -Option AllScope
 Set-Alias -Name 'expand'   -Value 'Invoke-BashExpand'   -Force -Scope Global -Option AllScope
 Set-Alias -Name 'unexpand' -Value 'Invoke-BashUnexpand' -Force -Scope Global -Option AllScope
