@@ -1836,20 +1836,21 @@ public class PsEmitterTests
         Assert.Contains("ForEach-Object", result);
     }
 
-    // read -p "prompt" VAR -> $VAR = Read-Host "prompt"
+    // read -p "prompt" VAR -> Invoke-BashRead -p "prompt" VAR
     [Fact]
-    public void Transpile_ReadWithPrompt_EmitsReadHost()
+    public void Transpile_ReadWithPrompt_EmitsInvokeBashRead()
     {
         var result = PsEmitter.Transpile("read -p \"Enter name: \" NAME");
-        Assert.Contains("$NAME = Read-Host", result);
+        Assert.Contains("Invoke-BashRead", result);
         Assert.Contains("Enter name:", result);
+        Assert.Contains("NAME", result);
     }
 
     [Fact]
-    public void Transpile_ReadNoPrompt_EmitsReadHost()
+    public void Transpile_ReadNoPrompt_EmitsInvokeBashRead()
     {
         var result = PsEmitter.Transpile("read -r LINE");
-        Assert.Equal("$LINE = Read-Host", result);
+        Assert.Equal("Invoke-BashRead -r LINE", result);
     }
 
     // set -euo pipefail -> $ErrorActionPreference = 'Stop'; Set-StrictMode -Version Latest

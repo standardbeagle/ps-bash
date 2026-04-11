@@ -998,12 +998,12 @@ public static class PsEmitter
             return $"Get-Content {EmitWord(inputRedirect.Target)} | {EmitSimple(innerCmd)}";
         }
 
-        // declare -A map -> $map = @{} (associative array / hashtable declaration)
-        // declare -a arr -> $arr = @() (indexed array declaration)
+        // declare/typeset -A map -> $map = @{} (associative array / hashtable declaration)
+        // declare/typeset -a arr -> $arr = @() (indexed array declaration)
         if (cmd.Words.Length >= 2)
         {
             var name = GetLiteralValue(cmd.Words[0]);
-            if (name == "declare")
+            if (name is "declare" or "typeset")
             {
                 bool isAssoc = false;
                 string? varName = null;
@@ -1033,29 +1033,41 @@ public static class PsEmitter
             if (cmd0 == "false" && cmd.Words.Length == 1)
                 return "Write-Error '' -ErrorAction SilentlyContinue";
 
-            // read [-r] [-p "prompt"] VAR -> $VAR = Read-Host ["prompt"]
+            // read [-r] [-p "prompt"] VAR -> Invoke-BashRead [-p "prompt"] VAR
+            // Runtime handles both pipeline and interactive modes.
             if (cmd0 == "read")
+                return EmitPassthrough("Invoke-BashRead", cmd.Words.RemoveAt(0));
+
+            // eval "cmd" -> Invoke-BashEval "cmd"
+            // Re-transpiles and executes the string as bash.
+            if (cmd0 == "eval")
+                return EmitPassthrough("Invoke-BashEval", cmd.Words.RemoveAt(0));
+
+            // readonly VAR=val -> Set-Variable -Name VAR -Value val -Option Constant
+            // readonly VAR     -> Set-Variable -Name VAR -Option Constant
+            if (cmd0 == "readonly")
             {
-                string? prompt = null;
-                string? targetVar = null;
+                var roSb = new StringBuilder();
                 for (int i = 1; i < cmd.Words.Length; i++)
                 {
+                    if (i > 1) roSb.Append("; ");
                     var val = GetLiteralValue(cmd.Words[i]);
-                    if (val == "-p" && i + 1 < cmd.Words.Length)
+                    if (val is null) continue;
+                    if (val.StartsWith('-')) continue; // skip flags like -p, -r
+                    int eq = val.IndexOf('=');
+                    if (eq > 0)
                     {
-                        prompt = EmitWord(cmd.Words[i + 1]);
-                        i++; // skip prompt value
+                        string varName = val[..eq];
+                        string varVal = val[(eq + 1)..];
+                        roSb.Append($"Set-Variable -Name {varName} -Value '{varVal}' -Option Constant");
                     }
-                    else if (val is not null && !val.StartsWith('-'))
-                        targetVar = val;
+                    else
+                    {
+                        roSb.Append($"Set-Variable -Name {val} -Option Constant");
+                    }
                 }
-                if (targetVar is not null)
-                {
-                    string readHostCall = prompt is not null
-                        ? $"Read-Host {prompt}"
-                        : "Read-Host";
-                    return $"${targetVar} = {readHostCall}";
-                }
+                var roResult = roSb.ToString();
+                return string.IsNullOrEmpty(roResult) ? "[void]$true" : roResult;
             }
 
             // set -e / set -o errexit -> $ErrorActionPreference = 'Stop'
@@ -2036,6 +2048,13 @@ public static class PsEmitter
                 return true;
             case "jobs":
                 result = EmitPassthrough("Invoke-BashJobs", args);
+                return true;
+            case "mapfile":
+            case "readarray":
+                result = EmitPassthrough("Invoke-BashMapfile", args);
+                return true;
+            case "eval":
+                result = EmitPassthrough("Invoke-BashEval", args);
                 return true;
             default:
                 return false;

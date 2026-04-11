@@ -11756,6 +11756,223 @@ function Invoke-BashTrap {
     }
 }
 
+# --- eval ---
+
+function Invoke-BashEval {
+    param()
+    $Arguments = [string[]]$args
+    $pipelineInput = @($input)
+
+    # Join all arguments into a single command string (bash eval behavior)
+    $cmdStr = $Arguments -join ' '
+    if ([string]::IsNullOrWhiteSpace($cmdStr)) {
+        if ($pipelineInput.Count -gt 0) {
+            $cmdStr = ($pipelineInput | ForEach-Object { Get-BashText -InputObject $_ }) -join ' '
+        }
+        if ([string]::IsNullOrWhiteSpace($cmdStr)) { return }
+    }
+
+    # Re-invoke ps-bash to transpile and execute the eval'd string
+    $psBashExe = $null
+    if ($__parentPid -and $__parentPid -gt 0) {
+        try {
+            $parent = [System.Diagnostics.Process]::GetProcessById($__parentPid)
+            $psBashExe = $parent.MainModule.FileName
+        } catch {}
+    }
+    if (-not $psBashExe) {
+        $found = Get-Command ps-bash -ErrorAction SilentlyContinue
+        if ($found) { $psBashExe = $found.Source }
+    }
+    if (-not $psBashExe) {
+        $psBashExe = [System.IO.Path]::Combine(
+            [System.IO.Path]::GetDirectoryName([System.Diagnostics.Process]::GetCurrentProcess().MainModule.FileName),
+            'ps-bash'
+        )
+        if ($IsWindows) { $psBashExe += '.exe' }
+        if (-not (Test-Path $psBashExe)) {
+            Write-BashError -Message 'eval: ps-bash executable not found'
+            return
+        }
+    }
+
+    $output = & $psBashExe -c $cmdStr 2>&1
+    $exitCode = $LASTEXITCODE
+    $global:LASTEXITCODE = $exitCode
+
+    $errors = @($output | Where-Object { $_ -is [System.Management.Automation.ErrorRecord] })
+    $normal = @($output | Where-Object { $_ -isnot [System.Management.Automation.ErrorRecord] })
+
+    foreach ($e in $errors) {
+        [Console]::Error.WriteLine("$e")
+    }
+
+    foreach ($item in $normal) {
+        $text = if ($item.PSObject.Properties['BashText']) { $item.BashText } else { "$item" }
+        Emit-BashLine -Text $text
+    }
+}
+
+# --- read ---
+
+function Invoke-BashRead {
+    param()
+    $Arguments = [string[]]$args
+    $pipelineInput = @($input)
+
+    $prompt = $null
+    $promptSet = $false
+    $varNames = [System.Collections.Generic.List[string]]::new()
+
+    $i = 0
+    while ($i -lt $Arguments.Count) {
+        $arg = $Arguments[$i]
+        if ($arg -ceq '-r') {
+            $i++; continue
+        }
+        if ($arg -ceq '-p' -and ($i + 1) -lt $Arguments.Count) {
+            $prompt = $Arguments[$i + 1]
+            $promptSet = $true
+            $i += 2; continue
+        }
+        if ($arg -ceq '-a' -and ($i + 1) -lt $Arguments.Count) {
+            # read -a arr: read into array
+            $varNames.Add($Arguments[$i + 1])
+            $i += 2; continue
+        }
+        $varNames.Add($arg)
+        $i++
+    }
+
+    if ($varNames.Count -eq 0) { return }
+
+    # Determine input source: pipeline or interactive
+    $inputLine = $null
+    if ($pipelineInput.Count -gt 0) {
+        # Collect text from pipeline input
+        $allText = [System.Text.StringBuilder]::new()
+        foreach ($item in $pipelineInput) {
+            $text = Get-BashText -InputObject $item
+            if ($text) { [void]$allText.Append($text) }
+        }
+        $inputLine = $allText.ToString() -replace "`r`n", "`n" -replace "`n$", ''
+    } else {
+        # Interactive: use Read-Host
+        if ($promptSet) {
+            $inputLine = Read-Host $prompt
+        } else {
+            $inputLine = Read-Host
+        }
+    }
+
+    if ($null -eq $inputLine) { return }
+
+    if ($varNames.Count -eq 1) {
+        # Single variable: assign entire line
+        Set-Variable -Name $varNames[0] -Value $inputLine
+    } else {
+        # Multiple variables: split by whitespace
+        $parts = $inputLine -split '\s+'
+        for ($j = 0; $j -lt $varNames.Count; $j++) {
+            if ($j -lt $parts.Count - 1) {
+                Set-Variable -Name $varNames[$j] -Value $parts[$j]
+            } elseif ($j -eq $varNames.Count - 1) {
+                # Last variable gets remaining text
+                $remaining = ($parts[$j..($parts.Count - 1)] -join ' ')
+                Set-Variable -Name $varNames[$j] -Value $remaining
+            } else {
+                Set-Variable -Name $varNames[$j] -Value ''
+            }
+        }
+    }
+}
+
+# --- mapfile / readarray ---
+
+function Invoke-BashMapfile {
+    param()
+    $Arguments = [string[]]$args
+    $pipelineInput = @($input)
+
+    $count = $null
+    $origin = 0
+    $stripTrailing = $false
+    $varName = 'MAPFILE'
+
+    $i = 0
+    while ($i -lt $Arguments.Count) {
+        $arg = $Arguments[$i]
+        if ($arg -ceq '-t') {
+            $stripTrailing = $true
+            $i++; continue
+        }
+        if ($arg -ceq '-n' -and ($i + 1) -lt $Arguments.Count) {
+            $count = [int]$Arguments[$i + 1]
+            $i += 2; continue
+        }
+        if ($arg.StartsWith('-n') -and $arg.Length -gt 2) {
+            $count = [int]$arg.Substring(2)
+            $i++; continue
+        }
+        if ($arg -ceq '-O' -and ($i + 1) -lt $Arguments.Count) {
+            $origin = [int]$Arguments[$i + 1]
+            $i += 2; continue
+        }
+        if ($arg.StartsWith('-O') -and $arg.Length -gt 2) {
+            $origin = [int]$arg.Substring(2)
+            $i++; continue
+        }
+        # -d DELIM: custom delimiter (consumed but currently splits on \n only)
+        if ($arg -ceq '-d' -and ($i + 1) -lt $Arguments.Count) {
+            $i += 2; continue
+        }
+        if ($arg.StartsWith('-d') -and $arg.Length -gt 2) {
+            $i++; continue
+        }
+        # Non-flag argument is the variable name
+        if (-not $arg.StartsWith('-')) {
+            $varName = $arg
+        }
+        $i++
+    }
+
+    # Collect input: pipeline or stdin
+    $lines = [System.Collections.Generic.List[string]]::new()
+
+    if ($pipelineInput.Count -gt 0) {
+        foreach ($item in $pipelineInput) {
+            $text = Get-BashText -InputObject $item
+            if ($text) {
+                foreach ($line in ($text -replace "`r`n", "`n" -split "`n")) {
+                    if ($line -ne '') { $lines.Add($line) }
+                }
+            }
+        }
+    }
+
+    # Apply count limit
+    if ($null -ne $count -and $lines.Count -gt $count) {
+        $lines = $lines.GetRange(0, $count)
+    }
+
+    # Strip trailing delimiter if requested
+    if ($stripTrailing) {
+        for ($j = 0; $j -lt $lines.Count; $j++) {
+            $lines[$j] = $lines[$j].TrimEnd("`n"[0], "`r"[0])
+        }
+    }
+
+    # Build result array with origin offset
+    if ($origin -gt 0) {
+        $result = @(1..$origin | ForEach-Object { '' })
+        $result += @($lines)
+    } else {
+        $result = @($lines)
+    }
+
+    Set-Variable -Name $varName -Value $result
+}
+
 # --- readlink ---
 
 function Invoke-BashReadlink {
@@ -12101,6 +12318,9 @@ $script:BashHelpSpecs = @{
     'which'    = 'Locate a command.'
     'alias'    = 'Define or display aliases.'
     'trap'     = 'Trap signals and other events.'
+    'eval'     = 'Evaluate arguments as a bash command.'
+    'mapfile'  = 'Read lines from standard input into an array variable.'
+    'readarray' = 'Read lines from standard input into an array variable.'
     'readlink' = 'Print resolved symbolic links or canonical file names.'
     'mktemp'   = 'Create a temporary file or directory.'
     'type'     = 'Display information about command type.'
@@ -12274,6 +12494,9 @@ $script:BashFlagSpecs = @{
     'time'     = @( @('COMMAND', 'command to time') )
     'which'    = @( @('-a', 'show all matches') )
     'alias'    = @( @('-p', 'list all aliases'), @('-u', 'unalias mode'), @('-a', 'remove all (with -u)') )
+    'eval'     = @( @('COMMAND', 'command string to evaluate') )
+    'mapfile'  = @( @('-t', 'strip trailing delimiter'), @('-n', 'copy at most N lines'), @('-O', 'start assigning at index N') )
+    'readarray' = @( @('-t', 'strip trailing delimiter'), @('-n', 'copy at most N lines'), @('-O', 'start assigning at index N') )
 }
 
 $script:BashCompleters = @{}

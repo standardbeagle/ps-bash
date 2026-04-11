@@ -18,6 +18,36 @@ $global:LASTEXITCODE = 0
 [Console]::Out.WriteLine("<<<READY>>>")
 [Console]::Out.Flush()
 
+function Invoke-BashExitTraps {
+    try {
+        $mod = if ($resolvedModule -and (Test-Path $resolvedModule)) {
+            Get-Module -Name (Get-Item $resolvedModule).BaseName -ErrorAction SilentlyContinue
+        } else {
+            Get-Module -Name 'PsBash' -ErrorAction SilentlyContinue
+        }
+        if (-not $mod) {
+            # Fallback: find by path match
+            $mod = Get-Module | Where-Object { $_.Path -and $_.Path.Contains('PsBash') } | Select-Object -First 1
+        }
+        if (-not $mod) { return }
+        $handlers = $mod.Invoke({ $script:BashTrapHandlers })
+        if (-not $handlers -or -not ($handlers -is [System.Collections.IDictionary])) { return }
+        $exitAction = $handlers['EXIT']
+        if (-not $exitAction) { return }
+        if ($exitAction -is [System.Management.Automation.PSEventSubscriber]) {
+            Unregister-Event -SubscriptionId $exitAction.SubscriptionId -ErrorAction SilentlyContinue
+            $cmd = $exitAction.Action.Command
+            if ($cmd) { Invoke-Expression $cmd }
+        } elseif ($exitAction -is [string]) {
+            Invoke-Expression $exitAction
+        } elseif ($exitAction -is [scriptblock]) {
+            & $exitAction
+        }
+    } catch {
+        [Console]::Error.WriteLine("trap EXIT: $($_.Exception.Message)")
+    }
+}
+
 # Command loop
 while ($true) {
     # Parent death detection: if the parent process is gone, self-terminate
@@ -25,6 +55,7 @@ while ($true) {
         try {
             $null = [System.Diagnostics.Process]::GetProcessById($ParentPid)
         } catch {
+            Invoke-BashExitTraps
             exit 0
         }
     }
@@ -33,7 +64,10 @@ while ($true) {
 
     while ($true) {
         $line = [Console]::In.ReadLine()
-        if ($null -eq $line) { exit 0 }
+        if ($null -eq $line) {
+            Invoke-BashExitTraps
+            exit 0
+        }
         if ($line -eq '<<<END>>>') { break }
         $lines.Add($line)
     }
@@ -87,6 +121,7 @@ while ($true) {
     $maxBytes = if ($env:PSBASH_MAX_MEMORY) { [long]$env:PSBASH_MAX_MEMORY * 1MB } else { 512MB }
     if ($ws -gt $maxBytes) {
         [Console]::Error.WriteLine("ps-bash: worker exceeded memory limit ($([math]::Round($ws/1MB))MB > $([math]::Round($maxBytes/1MB))MB)")
+        Invoke-BashExitTraps
         exit 137
     }
 }
