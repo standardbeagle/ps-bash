@@ -11838,6 +11838,66 @@ function Invoke-BashType {
     }
 }
 
+function Invoke-BashBash {
+    [OutputType('PsBash.TextOutput')]
+    param()
+    $Arguments = [string[]]$args
+    if ($Arguments -contains '--help') { return Show-BashHelp 'bash' }
+
+    # Resolve the ps-bash executable: prefer the parent process path (exact binary),
+    # fall back to Get-Command ps-bash.
+    $psBashExe = $null
+    if ($__parentPid -and $__parentPid -gt 0) {
+        try {
+            $parent = [System.Diagnostics.Process]::GetProcessById($__parentPid)
+            $psBashExe = $parent.MainModule.FileName
+        } catch {}
+    }
+    if (-not $psBashExe) {
+        $found = Get-Command ps-bash -ErrorAction SilentlyContinue
+        if ($found) { $psBashExe = $found.Source }
+    }
+    if (-not $psBashExe) {
+        # Try the same directory as the current PowerShell executable
+        $psBashExe = [System.IO.Path]::Combine([System.IO.Path]::GetDirectoryName([System.Diagnostics.Process]::GetCurrentProcess().MainModule.FileName), 'ps-bash')
+        if ($IsWindows) { $psBashExe += '.exe' }
+        if (-not (Test-Path $psBashExe)) {
+            Write-BashError -Message 'bash: ps-bash executable not found'
+            return
+        }
+    }
+
+    # Handle --version: print ps-bash version info
+    if ($Arguments -contains '--version') {
+        $version = $null
+        if ($null -ne (Get-Variable MyInvocation -ValueOnly -ErrorAction SilentlyContinue)) {
+            $mod = $MyInvocation.MyCommand.Module
+            if ($mod) { $version = $mod.Version.ToString() }
+        }
+        if (-not $version) { $version = '0.7.1' }
+        $text = "ps-bash, version $version`nBash-to-PowerShell transpiler"
+        Emit-BashLine -Text $text
+        return
+    }
+
+    # Forward all arguments to ps-bash executable
+    $output = & $psBashExe @Arguments 2>&1
+    $exitCode = $LASTEXITCODE
+    $global:LASTEXITCODE = $exitCode
+
+    $errors = @($output | Where-Object { $_ -is [System.Management.Automation.ErrorRecord] })
+    $normal = @($output | Where-Object { $_ -isnot [System.Management.Automation.ErrorRecord] })
+
+    foreach ($e in $errors) {
+        [Console]::Error.WriteLine("$e")
+    }
+
+    foreach ($item in $normal) {
+        $text = if ($item.PSObject.Properties['BashText']) { $item.BashText } else { "$item" }
+        Emit-BashLine -Text $text
+    }
+}
+
 # --- Help Support ---
 
 $script:BashHelpSpecs = @{
@@ -11910,6 +11970,7 @@ $script:BashHelpSpecs = @{
     'readlink' = 'Print resolved symbolic links or canonical file names.'
     'mktemp'   = 'Create a temporary file or directory.'
     'type'     = 'Display information about command type.'
+    'bash'     = 'Invoke ps-bash transpiler for nested bash execution.'
 }
 
 function Test-BashHelpFlag {
@@ -12188,6 +12249,7 @@ Set-Alias -Name 'unalias'  -Value 'Invoke-BashAlias'    -Force -Scope Global -Op
 Set-Alias -Name 'readlink' -Value 'Invoke-BashReadlink' -Force -Scope Global -Option AllScope
 Set-Alias -Name 'mktemp'   -Value 'Invoke-BashMktemp'   -Force -Scope Global -Option AllScope
 Set-Alias -Name 'type'     -Value 'Invoke-BashType'     -Force -Scope Global -Option AllScope
+Set-Alias -Name 'bash'     -Value 'Invoke-BashBash'     -Force -Scope Global -Option AllScope
 
 # --- Type-level ToString for BashObject types ---
 # Update-TypeData defines ToString() once per type name instead of per-object,

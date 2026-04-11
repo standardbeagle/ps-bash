@@ -2416,6 +2416,36 @@ public class PsEmitterTests
         Assert.Contains("echo \"\"", result);
     }
 
+    // --- bash command mapping tests ---
+
+    [Fact]
+    public void Transpile_BashWithDashC_EmitsInvokeBashBash()
+    {
+        var result = PsEmitter.Transpile("bash -c \"echo hello\"");
+        Assert.Equal("Invoke-BashBash -c \"echo hello\"", result);
+    }
+
+    [Fact]
+    public void Transpile_BashScriptFile_EmitsInvokeBashBash()
+    {
+        var result = PsEmitter.Transpile("bash script.sh");
+        Assert.Equal("Invoke-BashBash script.sh", result);
+    }
+
+    [Fact]
+    public void Transpile_BashVersion_EmitsInvokeBashBash()
+    {
+        var result = PsEmitter.Transpile("bash --version");
+        Assert.Equal("Invoke-BashBash --version", result);
+    }
+
+    [Fact]
+    public void Transpile_BashPipeToGrep_EmitsMappedPipeline()
+    {
+        var result = PsEmitter.Transpile("bash -c \"echo hello\" | grep hello");
+        Assert.Equal("Invoke-BashBash -c \"echo hello\" | Invoke-BashGrep hello", result);
+    }
+
     private static CompoundWord MakeWord(string value) =>
         new(ImmutableArray.Create<WordPart>(new WordPart.Literal(value)));
 }

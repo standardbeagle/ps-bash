@@ -43,6 +43,11 @@ public record ShellArgs(
             }
         }
 
+        // Auto-detect piped stdin: if no -c command and stdin is redirected,
+        // read from stdin (matches real bash behavior).
+        if (command is null && !stdin && Console.IsInputRedirected)
+            stdin = true;
+
         return new ShellArgs(command, interactive, login, stdin);
     }
 }

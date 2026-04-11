@@ -1946,6 +1946,9 @@ public static class PsEmitter
             case "type":
                 result = EmitPassthrough("Invoke-BashType", args);
                 return true;
+            case "bash":
+                result = EmitPassthrough("Invoke-BashBash", args);
+                return true;
             default:
                 return false;
         }
