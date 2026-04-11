@@ -12010,6 +12010,27 @@ function Invoke-BashWait {
     }
 }
 
+function Invoke-BashJobs {
+    <#
+    .SYNOPSIS
+        List background processes (bash jobs command).
+    #>
+    param()
+    $Arguments = [string[]]$args
+    if ($Arguments -contains '--help') { return Show-BashHelp 'jobs' }
+
+    if ($script:BashBgPids.Count -eq 0) {
+        return
+    }
+
+    $i = 1
+    foreach ($proc in $script:BashBgPids) {
+        $status = if ($proc.HasExited) { 'Done' } else { 'Running' }
+        New-BashObject -BashText "[$i]`t$status`t$($proc.Id)`t$($proc.ProcessName)`n"
+        $i++
+    }
+}
+
 # --- Help Support ---
 
 $script:BashHelpSpecs = @{
@@ -12085,6 +12106,7 @@ $script:BashHelpSpecs = @{
     'type'     = 'Display information about command type.'
     'bash'     = 'Invoke ps-bash transpiler for nested bash execution.'
     'wait'     = 'Wait for background processes to finish.'
+    'jobs'     = 'List background processes and their status.'
 }
 
 function Test-BashHelpFlag {
@@ -12367,6 +12389,7 @@ Set-Alias -Name 'mktemp'   -Value 'Invoke-BashMktemp'   -Force -Scope Global -Op
 Set-Alias -Name 'type'     -Value 'Invoke-BashType'     -Force -Scope Global -Option AllScope
 Set-Alias -Name 'bash'     -Value 'Invoke-BashBash'     -Force -Scope Global -Option AllScope
 Set-Alias -Name 'wait'     -Value 'Invoke-BashWait'     -Force -Scope Global -Option AllScope
+Set-Alias -Name 'jobs'     -Value 'Invoke-BashJobs'     -Force -Scope Global -Option AllScope
 
 # --- Type-level ToString for BashObject types ---
 # Update-TypeData defines ToString() once per type name instead of per-object,

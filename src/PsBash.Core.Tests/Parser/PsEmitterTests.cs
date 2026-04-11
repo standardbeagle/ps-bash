@@ -1118,7 +1118,7 @@ public class PsEmitterTests
     {
         var result = PsEmitter.Transpile("function add { local result=42; echo $result }");
 
-        Assert.Equal("function add { $result = \"42\"; echo $env:result }", result);
+        Assert.Equal("function add { $result = \"42\"; echo $result }", result);
     }
 
     [Fact]

@@ -12,6 +12,8 @@ if ($resolvedModule -and (Test-Path $resolvedModule)) {
     Import-Module ps-bash -ErrorAction SilentlyContinue -DisableNameChecking
 }
 
+$global:LASTEXITCODE = 0
+
 # Signal ready
 [Console]::Out.WriteLine("<<<READY>>>")
 [Console]::Out.Flush()
@@ -70,10 +72,11 @@ while ($true) {
         }
         if ($__partialLine) { [Console]::Out.WriteLine() }
         $exitCode = if ($LASTEXITCODE -ne $null) { $LASTEXITCODE } else { 0 }
+        $global:LASTEXITCODE = $exitCode
         [Console]::Out.WriteLine("<<<EXIT:$exitCode>>>")
     } catch {
         [Console]::Error.WriteLine($_.Exception.Message)
-        $exitCode = if ($LASTEXITCODE -ne $null) { $LASTEXITCODE } else { 1 }
+        $exitCode = if ($LASTEXITCODE -ge 1) { $LASTEXITCODE } else { 1 }
         [Console]::Out.WriteLine("<<<EXIT:$exitCode>>>")
     } finally {
         [Console]::Out.Flush()

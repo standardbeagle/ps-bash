@@ -119,7 +119,8 @@ FunctionsToExport = 'Set-BashErrorMode', 'Invoke-ProcessSub',
                'Invoke-BashReadlink', 'Invoke-BashMktemp', 'Invoke-BashType',
                'Invoke-BashBash',
                'Invoke-BashRedirect',
-               'Invoke-BashBackground', 'Invoke-BashWait'
+               'Invoke-BashBackground', 'Invoke-BashWait',
+               'Invoke-BashJobs'
 
 # Cmdlets to export from this module, for best performance, do not use wildcards and do not delete the entry, use an empty array if there are no cmdlets to export.
 CmdletsToExport = @()

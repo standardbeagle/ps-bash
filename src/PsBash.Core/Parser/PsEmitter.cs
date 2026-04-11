@@ -334,12 +334,83 @@ public static class PsEmitter
 
     private static string EmitFunction(Command.ShFunction func)
     {
-        var sb = new StringBuilder("function ");
-        sb.Append(func.Name);
-        sb.Append(" { ");
-        sb.Append(Emit(func.Body));
-        sb.Append(" }");
-        return sb.ToString();
+        var localVars = CollectLocalVars(func.Body);
+        var vars = _loopVars ??= new HashSet<string>();
+        var added = new List<string>();
+        foreach (var v in localVars)
+            if (vars.Add(v)) added.Add(v);
+
+        try
+        {
+            var sb = new StringBuilder("function ");
+            sb.Append(func.Name);
+            sb.Append(" { ");
+            sb.Append(Emit(func.Body));
+            sb.Append(" }");
+            return sb.ToString();
+        }
+        finally
+        {
+            foreach (var v in added) vars.Remove(v);
+        }
+    }
+
+    /// <summary>
+    /// Recursively collect variable names declared with 'local' in a command tree.
+    /// </summary>
+    private static List<string> CollectLocalVars(Command cmd)
+    {
+        var result = new List<string>();
+        CollectLocalVars(cmd, result);
+        return result;
+    }
+
+    private static void CollectLocalVars(Command cmd, List<string> result)
+    {
+        switch (cmd)
+        {
+            case Command.ShAssignment assign when assign.IsLocal:
+                foreach (var pair in assign.Pairs)
+                {
+                    int bracketIdx = pair.Name.IndexOf('[');
+                    result.Add(bracketIdx >= 0 ? pair.Name[..bracketIdx] : pair.Name);
+                }
+                break;
+            case Command.CommandList list:
+                foreach (var child in list.Commands) CollectLocalVars(child, result);
+                break;
+            case Command.AndOrList andOr:
+                foreach (var child in andOr.Commands) CollectLocalVars(child, result);
+                break;
+            case Command.Pipeline pipeline:
+                foreach (var child in pipeline.Commands) CollectLocalVars(child, result);
+                break;
+            case Command.If ifCmd:
+                foreach (var arm in ifCmd.Arms) CollectLocalVars(arm.Body, result);
+                if (ifCmd.ElseBody is not null) CollectLocalVars(ifCmd.ElseBody, result);
+                break;
+            case Command.While whileCmd:
+                CollectLocalVars(whileCmd.Body, result);
+                break;
+            case Command.ForIn forIn:
+                CollectLocalVars(forIn.Body, result);
+                break;
+            case Command.ForArith forArith:
+                CollectLocalVars(forArith.Body, result);
+                break;
+            case Command.Case caseCmd:
+                foreach (var arm in caseCmd.Arms) CollectLocalVars(arm.Body, result);
+                break;
+            case Command.BraceGroup bg:
+                CollectLocalVars(bg.Body, result);
+                break;
+            case Command.Subshell sub:
+                CollectLocalVars(sub.Body, result);
+                break;
+            case Command.ShFunction fn:
+                CollectLocalVars(fn.Body, result);
+                break;
+        }
     }
 
     private static string EmitSubshell(Command.Subshell subshell)
@@ -1415,8 +1486,9 @@ public static class PsEmitter
 
         return name switch
         {
-            "null" or "true" or "false" or "HOME" or "LASTEXITCODE" => $"${name}",
+            "null" or "true" or "false" or "HOME" or "LASTEXITCODE" or "PWD" => $"${name}",
             "?" => "$LASTEXITCODE",
+            "RANDOM" => "$(Get-Random -Maximum 32768)",
             "@" or "*" => "$args",
             "#" => inDoubleQuote ? "$($args.Count)" : "$args.Count",
             "0" => inDoubleQuote ? "$($MyInvocation.MyCommand.Name)" : "$MyInvocation.MyCommand.Name",
@@ -1961,6 +2033,9 @@ public static class PsEmitter
                 return true;
             case "wait":
                 result = EmitPassthrough("Invoke-BashWait", args);
+                return true;
+            case "jobs":
+                result = EmitPassthrough("Invoke-BashJobs", args);
                 return true;
             default:
                 return false;
