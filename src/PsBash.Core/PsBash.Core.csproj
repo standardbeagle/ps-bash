@@ -8,7 +8,7 @@
 
     <!-- NuGet package metadata -->
     <PackageId>PsBash.Core</PackageId>
-    <Version>0.7.5</Version>
+    <Version>0.7.6</Version>
     <Authors>StandardBeagle</Authors>
     <Description>Bash-to-PowerShell transpiler library. Parses bash commands into an AST (based on Oils/OSH) and emits equivalent PowerShell. Use as a library in terminal emulators, AI agents, or any .NET app that needs bash compatibility on top of PowerShell.</Description>
     <PackageTags>bash;powershell;transpiler;parser;shell;terminal</PackageTags>

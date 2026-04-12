@@ -18,21 +18,17 @@ catch (PwshNotFoundException ex)
     return 127;
 }
 
-if (shellArgs.Interactive || (!shellArgs.ReadFromStdin && shellArgs.Command is null))
-{
-    return await InteractiveShell.RunAsync(pwshPath);
-}
-
-if (shellArgs.ReadFromStdin)
+// Auto-detect piped stdin: if no command given and stdin is redirected, try reading it.
+if (shellArgs.ReadFromStdin || (!shellArgs.Interactive && shellArgs.Command is null && Console.IsInputRedirected))
 {
     var stdinCommand = await Console.In.ReadToEndAsync();
-    shellArgs = shellArgs with { Command = stdinCommand };
+    if (!string.IsNullOrWhiteSpace(stdinCommand))
+        shellArgs = shellArgs with { Command = stdinCommand };
 }
 
-if (shellArgs.Command is null)
+if (shellArgs.Interactive || shellArgs.Command is null)
 {
-    Console.Error.WriteLine("ps-bash: no command specified");
-    return 1;
+    return await InteractiveShell.RunAsync(pwshPath);
 }
 
 var pwshCommand = BashTranspiler.Transpile(shellArgs.Command);
