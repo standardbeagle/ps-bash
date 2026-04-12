@@ -2231,8 +2231,9 @@ function Invoke-BashHead {
     $pipelineInput = @($input)
     if ($Arguments -contains '--help') { return Show-BashHelp 'head' }
 
-    # Manual arg parsing for value-bearing -n flag
+    # Manual arg parsing for value-bearing -n and -c flags
     $count = 10
+    $byteCount = $null
     $operands = [System.Collections.Generic.List[string]]::new()
     $pastDoubleDash = $false
 
@@ -2267,6 +2268,21 @@ function Invoke-BashHead {
             continue
         }
 
+        if ($arg -cmatch '^-c(\d+)$') {
+            $byteCount = [int]$Matches[1]
+            $i++
+            continue
+        }
+
+        if ($arg -ceq '-c') {
+            $i++
+            if ($i -lt $Arguments.Count) {
+                $byteCount = [int]$Arguments[$i]
+            }
+            $i++
+            continue
+        }
+
         # Legacy -N shorthand (e.g., head -5)
         if ($arg -cmatch '^-(\d+)$') {
             $count = [int]$Matches[1]
@@ -2287,6 +2303,14 @@ function Invoke-BashHead {
 
     # Pipeline mode
     if ($operands.Count -eq 0 -and $pipelineInput.Count -gt 0) {
+        if ($null -ne $byteCount) {
+            # Byte mode: concatenate all input and take first N bytes
+            $allText = ($pipelineInput | ForEach-Object { Get-BashText -InputObject $_ }) -join "`n"
+            $bytes = [System.Text.Encoding]::UTF8.GetBytes($allText)
+            $outBytes = if ($bytes.Length -gt $byteCount) { $bytes[0..($byteCount - 1)] } else { $bytes }
+            [System.Text.Encoding]::UTF8.GetString($outBytes)
+            return
+        }
         $emitted = 0
         foreach ($item in $pipelineInput) {
             if ($emitted -ge $count) { break }
@@ -2305,9 +2329,20 @@ function Invoke-BashHead {
         return
     }
 
-    # File mode — resolve globs, stream lines with early exit
+    # File mode — resolve globs, stream lines/bytes with early exit
     $resolvedFiles = Resolve-BashGlob -Paths $operands
     foreach ($filePath in $resolvedFiles) {
+        if ($null -ne $byteCount) {
+            try {
+                $bytes = [System.IO.File]::ReadAllBytes($filePath)
+                $outBytes = if ($bytes.Length -gt $byteCount) { $bytes[0..($byteCount - 1)] } else { $bytes }
+                [System.Text.Encoding]::UTF8.GetString($outBytes)
+            } catch {
+                Write-BashError -Message "head: cannot read '$filePath': $($_.Exception.Message)"
+            }
+            continue
+        }
+
         $reader = Open-BashFileReader -Path $filePath -Command 'head'
         if ($null -eq $reader) { continue }
 
@@ -3692,9 +3727,12 @@ function Invoke-BashTouch {
     $Arguments = [string[]]$args
     if ($Arguments -contains '--help') { return Show-BashHelp 'touch' }
 
-    # Manual arg parsing for -d which takes a value
+    # Manual arg parsing for flags
     $verbose = $false
     $dateStr = $null
+    $accessOnly = $false
+    $modOnly = $false
+    $noCreate = $false
     $operands = [System.Collections.Generic.List[string]]::new()
 
     $i = 0
@@ -3710,6 +3748,21 @@ function Invoke-BashTouch {
             }
             '-v' {
                 $verbose = $true
+                $i++
+                continue
+            }
+            '-a' {
+                $accessOnly = $true
+                $i++
+                continue
+            }
+            '-m' {
+                $modOnly = $true
+                $i++
+                continue
+            }
+            '-c' {
+                $noCreate = $true
                 $i++
                 continue
             }
@@ -3739,9 +3792,10 @@ function Invoke-BashTouch {
         if (Test-Path -LiteralPath $file) {
             $item = Get-BashItem -Path $file -Command 'touch'
             if ($null -eq $item) { continue }
-            $item.LastWriteTime = $timestamp
-            $item.LastAccessTime = $timestamp
+            if (-not $accessOnly) { $item.LastWriteTime = $timestamp }
+            if (-not $modOnly)    { $item.LastAccessTime = $timestamp }
         } else {
+            if ($noCreate) { continue }
             $parentDir = Split-Path $file -Parent
             if ($parentDir -and -not (Test-Path -LiteralPath $parentDir)) {
                 Write-BashError -Message "touch: cannot touch '$file': No such file or directory"
@@ -3750,8 +3804,8 @@ function Invoke-BashTouch {
             New-Item -Path $file -ItemType File -Force | Out-Null
             $item = Get-BashItem -Path $file -Command 'touch'
             if ($null -eq $item) { continue }
-            $item.LastWriteTime = $timestamp
-            $item.LastAccessTime = $timestamp
+            if (-not $accessOnly) { $item.LastWriteTime = $timestamp }
+            if (-not $modOnly)    { $item.LastAccessTime = $timestamp }
         }
     }
 }
@@ -8739,12 +8793,16 @@ function Convert-DateFormat {
             $spec = $chars[$i + 1]
             switch -CaseSensitive ($spec) {
                 'Y' { $sb.Append($DTO.ToString('yyyy', $ci)) | Out-Null }
+                'y' { $sb.Append($DTO.ToString('yy', $ci))   | Out-Null }
                 'm' { $sb.Append($DTO.ToString('MM', $ci))   | Out-Null }
                 'd' { $sb.Append($DTO.ToString('dd', $ci))   | Out-Null }
                 'H' { $sb.Append($DTO.ToString('HH', $ci))   | Out-Null }
                 'M' { $sb.Append($DTO.ToString('mm', $ci))   | Out-Null }
                 'S' { $sb.Append($DTO.ToString('ss', $ci))   | Out-Null }
                 's' { $sb.Append([string]$DTO.ToUnixTimeSeconds()) | Out-Null }
+                'F' { $sb.Append($DTO.ToString('yyyy-MM-dd', $ci)) | Out-Null }
+                'T' { $sb.Append($DTO.ToString('HH:mm:ss', $ci)) | Out-Null }
+                'w' { $sb.Append([int]$DTO.DayOfWeek) | Out-Null }
                 'A' { $sb.Append($DTO.ToString('dddd', $ci)) | Out-Null }
                 'B' { $sb.Append($DTO.ToString('MMMM', $ci)) | Out-Null }
                 'Z' {
@@ -12171,6 +12229,7 @@ function Invoke-BashBash {
 
 $script:BashBgPids = [System.Collections.Generic.List[System.Diagnostics.Process]]::new()
 $global:BashBgLastPid = $null
+$global:BashStartTime = [DateTime]::UtcNow
 
 function Invoke-BashBackground {
     <#
@@ -12444,6 +12503,12 @@ $script:BashHelpSpecs = @{
     'realpath' = 'Print the resolved path.'
     'command'  = 'Execute a simple command or display information about commands.'
     'source'   = 'Execute commands from a file in the current shell.'
+    'unset'    = 'Remove variable or function names.'
+    'pushd'    = 'Save and change the current directory.'
+    'popd'     = 'Remove entries from the directory stack.'
+    'dirs'     = 'Display the directory stack.'
+    'yes'      = 'Output a string repeatedly until killed.'
+    'tput'     = 'Change terminal characteristics or query the terminfo database.'
 }
 
 function Test-BashHelpFlag {
@@ -12618,6 +12683,12 @@ $script:BashFlagSpecs = @{
     'realpath' = @()
     'command'  = @( @('-v', 'print command name or path') )
     'source'   = @()
+    'unset'    = @( @('-v', 'treat each NAME as a variable'), @('-f', 'treat each NAME as a function') )
+    'pushd'    = @( @('+N', 'rotate stack so Nth dir becomes top') )
+    'popd'     = @( @('+N', 'remove Nth entry from stack') )
+    'dirs'     = @( @('-c', 'clear directory stack'), @('-p', 'print one per line'), @('-v', 'print with line numbers') )
+    'yes'      = @( @('STRING', 'repeated output (default: y)') )
+    'tput'     = @( @('CAPNAME', 'terminal capability name') )
 }
 
 $script:BashCompleters = @{}
@@ -12736,9 +12807,166 @@ Set-Alias -Name 'wait'     -Value 'Invoke-BashWait'     -Force -Scope Global -Op
 Set-Alias -Name 'jobs'     -Value 'Invoke-BashJobs'     -Force -Scope Global -Option AllScope
 Set-Alias -Name 'shift'    -Value 'Invoke-BashShift'    -Force -Scope Global -Option AllScope
 Set-Alias -Name 'realpath' -Value 'Invoke-BashRealpath' -Force -Scope Global -Option AllScope
+# --- unset ---
+
+function Invoke-BashUnset {
+    param()
+    $Arguments = [string[]]$args
+    if ($Arguments -contains '--help') { return Show-BashHelp 'unset' }
+
+    $mode = 'variable'
+    $names = [System.Collections.Generic.List[string]]::new()
+    foreach ($arg in $Arguments) {
+        if ($arg -eq '-f') { $mode = 'function'; continue }
+        if ($arg -eq '-v') { $mode = 'variable'; continue }
+        if ($arg.StartsWith('-')) { continue }
+        $names.Add($arg)
+    }
+
+    foreach ($name in $names) {
+        if ($mode -eq 'variable') {
+            Remove-Variable -Name $name -Scope 1 -ErrorAction SilentlyContinue
+            if (Test-Path "Env:\$name") {
+                Remove-Item -Path "Env:\$name" -Force -ErrorAction SilentlyContinue
+            }
+        } else {
+            Remove-Item -Path "Function:\$name" -Force -ErrorAction SilentlyContinue
+        }
+    }
+}
+
+# --- pushd / popd / dirs ---
+
+function Invoke-BashPushd {
+    param()
+    $Arguments = [string[]]$args
+    if ($Arguments -contains '--help') { return Show-BashHelp 'pushd' }
+
+    # +N rotation
+    if ($Arguments.Count -gt 0 -and $Arguments[0] -cmatch '^\+(\d+)$') {
+        $n = [int]$Matches[1]
+        $stack = @(Get-Location -Stack)
+        if ($n -ge 0 -and $n -lt $stack.Count) {
+            $target = $stack[$n]
+            for ($i = 0; $i -le $n; $i++) { Pop-Location -Stack -ErrorAction SilentlyContinue }
+            Push-Location -Path $target.Path
+        }
+        return
+    }
+
+    $path = if ($Arguments.Count -gt 0) { $Arguments[0] } else { '.' }
+    Push-Location -Path $path
+}
+
+function Invoke-BashPopd {
+    param()
+    $Arguments = [string[]]$args
+    if ($Arguments -contains '--help') { return Show-BashHelp 'popd' }
+
+    if ($Arguments.Count -gt 0 -and $Arguments[0] -cmatch '^\+(\d+)$') {
+        $n = [int]$Matches[1]
+        for ($i = 0; $i -le $n; $i++) { Pop-Location -Stack -ErrorAction SilentlyContinue }
+    } else {
+        Pop-Location
+    }
+}
+
+function Invoke-BashDirs {
+    [OutputType('PsBash.TextOutput')]
+    param()
+    $Arguments = [string[]]$args
+    if ($Arguments -contains '--help') { return Show-BashHelp 'dirs' }
+
+    $clear = $Arguments -contains '-c'
+    if ($clear) {
+        while (Get-Location -Stack -ErrorAction SilentlyContinue) {
+            Pop-Location -Stack -ErrorAction SilentlyContinue
+        }
+        return
+    }
+
+    $onePerLine = $Arguments -contains '-p'
+    $withNumbers = $Arguments -contains '-v'
+    $stack = @(Get-Location -Stack)
+    [array]::Reverse($stack)
+
+    if ($withNumbers) {
+        for ($i = 0; $i -lt $stack.Count; $i++) {
+            Emit-BashLine -Text "$i  $($stack[$i].Path)"
+        }
+    } elseif ($onePerLine) {
+        foreach ($entry in $stack) {
+            Emit-BashLine -Text $entry.Path
+        }
+    } else {
+        $paths = @( (Get-Location).Path ) + ($stack | ForEach-Object { $_.Path })
+        Emit-BashLine -Text ($paths -join ' ')
+    }
+}
+
+# --- yes ---
+
+function Invoke-BashYes {
+    [OutputType('PsBash.TextOutput')]
+    param()
+    $Arguments = [string[]]$args
+    if ($Arguments -contains '--help') { return Show-BashHelp 'yes' }
+
+    $text = if ($Arguments.Count -gt 0) { $Arguments -join ' ' } else { 'y' }
+    while ($true) {
+        New-BashObject -BashText $text -TypeName 'PsBash.TextOutput'
+    }
+}
+
+# --- tput ---
+
+function Invoke-BashTput {
+    [OutputType('PsBash.TextOutput')]
+    param()
+    $Arguments = [string[]]$args
+    if ($Arguments -contains '--help') { return Show-BashHelp 'tput' }
+
+    # Passthrough if native tput is available
+    $native = Get-Command tput -CommandType Application -ErrorAction SilentlyContinue
+    if ($native) {
+        try {
+            $output = & $native.Source @Arguments 2>$null
+            if ($LASTEXITCODE -eq 0) {
+                Emit-BashLine -Text ($output -join [Environment]::NewLine)
+                return
+            }
+        } catch {}
+    }
+
+    # Fallback for common capabilities
+    $cap = $Arguments[0]
+    $result = switch ($cap) {
+        'cols'  { $Host.UI.RawUI.WindowSize.Width }
+        'lines' { $Host.UI.RawUI.WindowSize.Height }
+        'clear' { Clear-Host; '' }
+        'bold'  { "`e[1m" }
+        'sgr0'  { "`e[0m" }
+        'setaf' {
+            $color = [int]$Arguments[1]
+            "`e[38;5;${color}m"
+        }
+        default { '' }
+    }
+
+    if ($result -ne '') {
+        Emit-BashLine -Text $result
+    }
+}
+
 Set-Alias -Name 'command'  -Value 'Invoke-BashCommand'  -Force -Scope Global -Option AllScope
 Set-Alias -Name 'source'   -Value 'Invoke-BashSource'   -Force -Scope Global -Option AllScope
 Set-Alias -Name '.'        -Value 'Invoke-BashSource'   -Force -Scope Global -Option AllScope
+Set-Alias -Name 'unset'    -Value 'Invoke-BashUnset'    -Force -Scope Global -Option AllScope
+Set-Alias -Name 'pushd'    -Value 'Invoke-BashPushd'    -Force -Scope Global -Option AllScope
+Set-Alias -Name 'popd'     -Value 'Invoke-BashPopd'     -Force -Scope Global -Option AllScope
+Set-Alias -Name 'dirs'     -Value 'Invoke-BashDirs'     -Force -Scope Global -Option AllScope
+Set-Alias -Name 'yes'      -Value 'Invoke-BashYes'      -Force -Scope Global -Option AllScope
+Set-Alias -Name 'tput'     -Value 'Invoke-BashTput'     -Force -Scope Global -Option AllScope
 
 # --- Type-level ToString for BashObject types ---
 # Update-TypeData defines ToString() once per type name instead of per-object,

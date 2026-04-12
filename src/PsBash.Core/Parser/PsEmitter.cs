@@ -978,8 +978,18 @@ public static class PsEmitter
 
             sb.Append(varPrefix);
             sb.Append(pair.Name);
-            sb.Append(pair.Op == AssignOp.PlusEqual ? " += " : " = ");
-            sb.Append(EmitAssignmentValue(pair.Value));
+            if (pair.Value is null)
+            {
+                // Bare export/local VAR with no value: ensure variable exists
+                sb.Append(" = ");
+                sb.Append(varPrefix);
+                sb.Append(pair.Name);
+            }
+            else
+            {
+                sb.Append(pair.Op == AssignOp.PlusEqual ? " += " : " = ");
+                sb.Append(EmitAssignmentValue(pair.Value));
+            }
         }
         return sb.ToString();
     }
@@ -1559,6 +1569,8 @@ public static class PsEmitter
             "!" => "$global:BashBgLastPid",
             "-" => "$global:BashFlags",
             "_" => "$global:BashLastArg",
+            "SECONDS" => "$([math]::Floor(([DateTime]::UtcNow - $global:BashStartTime).TotalSeconds))",
+            "PPID" => "(Get-Process -Id $PID -ErrorAction SilentlyContinue).Parent.Id",
             var d when d.Length == 1 && d[0] is >= '1' and <= '9' =>
                 $"$(if ($global:BashPositional) {{ $global:BashPositional[{int.Parse(d) - 1}] }} else {{ $args[{int.Parse(d) - 1}] }})",
             _ => $"$env:{name}",
@@ -2117,6 +2129,24 @@ public static class PsEmitter
                 return true;
             case "command":
                 result = EmitPassthrough("Invoke-BashCommand", args);
+                return true;
+            case "unset":
+                result = EmitPassthrough("Invoke-BashUnset", args);
+                return true;
+            case "pushd":
+                result = EmitPassthrough("Invoke-BashPushd", args);
+                return true;
+            case "popd":
+                result = EmitPassthrough("Invoke-BashPopd", args);
+                return true;
+            case "dirs":
+                result = EmitPassthrough("Invoke-BashDirs", args);
+                return true;
+            case "yes":
+                result = EmitPassthrough("Invoke-BashYes", args);
+                return true;
+            case "tput":
+                result = EmitPassthrough("Invoke-BashTput", args);
                 return true;
             default:
                 return false;

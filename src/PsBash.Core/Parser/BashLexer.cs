@@ -263,8 +263,19 @@ public static class BashLexer
                 break;
 
             // Backslash escape: consume the backslash and the next character.
+            // Line continuation: backslash followed by end-of-line skips both.
             if (c == '\\' && pos + 1 < len)
             {
+                if (input[pos + 1] == '\n')
+                {
+                    pos += 2;
+                    continue;
+                }
+                if (input[pos + 1] == '\r' && pos + 2 < len && input[pos + 2] == '\n')
+                {
+                    pos += 3;
+                    continue;
+                }
                 pos += 2;
                 continue;
             }

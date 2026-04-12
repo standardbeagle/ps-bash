@@ -16,8 +16,8 @@ Key layers:
 1. **PsEmitter** (C#) -- transpiles bash AST nodes into PowerShell expressions.
 2. **PwshWorker** (C#) -- spawns a `pwsh` process, imports the module, and evaluates
    transpiled expressions over stdin/stdout.
-3. **PsBash.psm1** (PowerShell) -- the runtime library providing 66 `Invoke-Bash*`
-   functions (65 commands + 1 internal helper), the BashObject model, escape handling,
+3. **PsBash.psm1** (PowerShell) -- the runtime library providing 75 `Invoke-Bash*`
+   functions (74 commands + 1 internal helper), the BashObject model, escape handling,
    glob expansion, and tab completion.
 
 ## BashObject Model
@@ -101,8 +101,8 @@ foreach ($item in $pipelineInput) {
 | grep | Invoke-BashGrep | `-i`, `-v`, `-n`, `-c`, `-r`, `-l`, `-E`, `-A`, `-B`, `-C` | Manual loop | Yes | Yes |
 | rg | Invoke-BashRg | `-i`, `-w`, `-c`, `-l`, `-n`, `-N`, `-o`, `-v`, `-F`, `-g`, `-A`, `-B`, `-C`, `--hidden` | Manual loop | Yes | Yes |
 | sort | Invoke-BashSort | `-r`, `-n`, `-u`, `-f`, `-k`, `-t`, `-h`, `-V`, `-M`, `-c` | Manual loop | Yes | Yes |
-| head | Invoke-BashHead | `-n` | Manual loop | Yes | Yes |
-| tail | Invoke-BashTail | `-n` | Manual loop | Yes | Yes |
+| head | Invoke-BashHead | `-n`, `-c` | Manual loop | Yes | Yes |
+| tail | Invoke-BashTail | `-n`, `-c`, `-f` | Manual loop | Yes | Yes |
 | wc | Invoke-BashWc | `-l`, `-w`, `-c` | ConvertFrom-BashArgs | Yes | Yes |
 | find | Invoke-BashFind | `-name`, `-type`, `-size`, `-maxdepth`, `-mtime`, `-empty` | Manual loop | No | Yes |
 | stat | Invoke-BashStat | `-c`, `-t`, `--printf` | Manual loop | No | Yes |
@@ -111,7 +111,7 @@ foreach ($item in $pipelineInput) {
 | rm | Invoke-BashRm | `-r`, `-f`, `-v` | ConvertFrom-BashArgs | No | Yes |
 | mkdir | Invoke-BashMkdir | `-p`, `-v` | ConvertFrom-BashArgs | No | Yes |
 | rmdir | Invoke-BashRmdir | `-p`, `-v` | ConvertFrom-BashArgs | No | Yes |
-| touch | Invoke-BashTouch | `-d` | Manual loop | No | Yes |
+| touch | Invoke-BashTouch | `-d`, `-a`, `-m`, `-c` | Manual loop | No | Yes |
 | ln | Invoke-BashLn | `-s`, `-f`, `-v` | Manual loop | No | Yes |
 | ps | Invoke-BashPs | `-e`/`-A`, `-f`, `-u`, `-p`, `--sort`, `-o` | Manual loop | No | No |
 | sed | Invoke-BashSed | `-n`, `-i`, `-E`, `-e` | Manual loop | Yes | Yes |
@@ -159,9 +159,19 @@ foreach ($item in $pipelineInput) {
 | time | Invoke-BashTime | (command) | Positional | No | No |
 | which | Invoke-BashWhich | `-a` | Manual loop | No | No |
 | alias | Invoke-BashAlias | `-p`, `-u`, `-a` | Manual loop | No | No |
+| unset | Invoke-BashUnset | `-v`, `-f` | Manual loop | No | No |
+| pushd | Invoke-BashPushd | `+N` | Manual loop | No | No |
+| popd | Invoke-BashPopd | `+N` | Manual loop | No | No |
+| dirs | Invoke-BashDirs | `-c`, `-p`, `-v` | Manual loop | No | No |
+| yes | Invoke-BashYes | `STRING` | Positional | Yes | No |
+| tput | Invoke-BashTput | `CAPNAME` | Manual loop | No | No |
+| command | Invoke-BashCommand | `-v` | Manual loop | No | No |
+| source | Invoke-BashSource | (none) | Positional | No | Yes |
+| shift | Invoke-BashShift | `N` | Manual loop | No | No |
+| realpath | Invoke-BashRealpath | (none) | Positional | No | No |
 
 Additional aliases: `printenv` -> `Invoke-BashEnv`, `gunzip` -> `Invoke-BashGzip`,
-`zcat` -> `Invoke-BashGzip`.
+`zcat` -> `Invoke-BashGzip`, `.` -> `Invoke-BashSource`.
 
 ## Arg Parsing Pattern
 

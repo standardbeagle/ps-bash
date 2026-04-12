@@ -99,7 +99,7 @@ PS> find . -name '*.log' -mtime +7 | xargs rm -f    # actually works on Windows
 | Object pipeline | Types survive `grep \| sort \| head` | Strings only | Strings only | Strings only | Varies |
 | PowerShell integration | Native -- objects flow into cmdlets | Separate shell | Separate shell | Separate shell | Native |
 | Cross-platform | Win/Lin/Mac | Windows only | Windows only | Windows only | Win/Lin/Mac |
-| Commands | 68 built-in | ~80 (GNU coreutils) | ~200+ (full GNU) | All of Linux | Define your own |
+| Commands | 75 built-in | ~80 (GNU coreutils) | ~200+ (full GNU) | All of Linux | Define your own |
 | jq/awk/sed | Built-in, zero binaries | awk/sed yes, jq no | Yes (install pkg) | Yes (apt install) | Not included |
 | PATH conflicts | None (AllScope aliases) | Shadows PowerShell | Shadows PowerShell | Filesystem boundary | None |
 | Startup overhead | ~100 ms (module load) | New process per call | New process per call | ~1s (cold), ~200ms (warm) | ~100 ms |
@@ -115,7 +115,7 @@ git clone https://github.com/standardbeagle/ps-bash.git
 Import-Module ./ps-bash/src/PsBash.psd1
 ```
 
-68 bash commands work immediately:
+75 bash commands work immediately:
 
 ```powershell
 ls -la                                    # LsEntry objects
@@ -159,18 +159,19 @@ Pipeline commands (`grep`, `sort`, `head`, `tail`, `tee`) match against BashText
 
 | Category | Commands |
 |----------|----------|
-| **Listing** | `ls` `find` `stat` `tree` `du` `pwd` `basename` `dirname` |
+| **Listing** | `ls` `find` `stat` `tree` `du` `pwd` `basename` `dirname` `realpath` `dirs` |
 | **Files** | `cp` `mv` `rm` `mkdir` `rmdir` `touch` `ln` |
 | **Content** | `cat` `head` `tail` `tac` `wc` `nl` `rev` `strings` `fold` `expand` `unexpand` `split` |
 | **Search** | `grep` `rg` |
 | **Text** | `sed` `awk` `cut` `tr` `uniq` `sort` `column` `join` `paste` `comm` `diff` |
-| **Pipeline** | `tee` `xargs` |
+| **Pipeline** | `tee` `xargs` `yes` |
 | **Data** | `jq` `yq` `xan` |
-| **System** | `ps` `env` `date` `hostname` `whoami` `which` `alias` `time` `sleep` |
+| **System** | `ps` `env` `date` `hostname` `whoami` `which` `alias` `time` `sleep` `tput` `pushd` `popd` |
 | **Output** | `echo` `printf` |
 | **Encoding** | `base64` `md5sum` `sha1sum` `sha256sum` `file` |
 | **Archive** | `gzip` `gunzip` `zcat` `tar` |
 | **Math** | `seq` `expr` |
+| **Vars** | `unset` `shift` `command` `source` |
 
 Every command supports `--help` and tab completion for all flags.
 
