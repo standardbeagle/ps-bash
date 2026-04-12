@@ -13,6 +13,23 @@
 Install-Module PsBash
 ```
 
+Or install the standalone `ps-bash` binary (no .NET runtime required):
+
+**Windows (PowerShell)**
+```powershell
+iwr https://raw.githubusercontent.com/standardbeagle/ps-bash/main/install.ps1 | iex
+```
+
+**Linux / macOS (PowerShell)**
+```powershell
+pwsh -Command "iwr https://raw.githubusercontent.com/standardbeagle/ps-bash/main/install.ps1 | iex"
+```
+
+**Linux / macOS (curl + bash)**
+```bash
+curl -fsSL https://raw.githubusercontent.com/standardbeagle/ps-bash/main/install.sh | bash
+```
+
 <picture>
   <source srcset="docs/assets/demo.webp" type="image/webp">
   <img src="docs/assets/demo.gif" alt="ps-bash demo showing typed pipeline objects" width="800">

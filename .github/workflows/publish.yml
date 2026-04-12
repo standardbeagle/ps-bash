@@ -1,4 +1,4 @@
-name: Publish to PSGallery
+name: Publish Release
 
 on:
   release:
@@ -10,6 +10,71 @@ on:
         required: true
 
 jobs:
+  build-binaries:
+    strategy:
+      matrix:
+        include:
+          - os: windows-latest
+            rid: win-x64
+            ext: .exe
+            archive: win-x64
+          - os: ubuntu-latest
+            rid: linux-x64
+            ext: ""
+            archive: linux-x64
+          - os: macos-latest
+            rid: osx-arm64
+            ext: ""
+            archive: osx-arm64
+          - os: macos-13
+            rid: osx-x64
+            ext: ""
+            archive: osx-x64
+      fail-fast: false
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Publish AOT binary
+        run: dotnet publish src/PsBash.Shell -c Release -r ${{ matrix.rid }} --self-contained true /p:PublishAot=true /p:StripSymbols=true -o ./publish
+
+      - name: Package binary
+        shell: pwsh
+        run: |
+          $version = '${{ github.event_name }}' -eq 'release' ? '${{ github.event.release.tag_name }}' : 'v${{ github.event.inputs.version }}'
+          $name = "ps-bash-${version}-${{ matrix.archive }}"
+          $src = "./publish/ps-bash${{ matrix.ext }}"
+          $dst = "./artifacts/${name}.zip"
+          New-Item -ItemType Directory -Force -Path ./artifacts | Out-Null
+          if ($IsWindows) {
+            Compress-Archive -Path $src -DestinationPath $dst -Force
+          } else {
+            zip -j $dst $src
+          }
+
+      - name: Upload release asset
+        if: github.event_name == 'release'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: pwsh
+        run: |
+          $version = '${{ github.event.release.tag_name }}'
+          $archive = '${{ matrix.archive }}'
+          $file = "./artifacts/ps-bash-${version}-${archive}.zip"
+          gh release upload $version $file --clobber
+
+      - name: Upload artifact
+        if: github.event_name != 'release'
+        uses: actions/upload-artifact@v4
+        with:
+          name: ps-bash-${{ matrix.archive }}
+          path: ./artifacts/*.zip
+
   test:
     strategy:
       matrix:
