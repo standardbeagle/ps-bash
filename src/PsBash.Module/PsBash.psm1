@@ -1000,7 +1000,7 @@ function Invoke-BashLs {
     $dirOnly   = $parsed.Flags['-d']
     $classify  = $parsed.Flags['-p'] -or $longMode  # -l always shows type implicitly via perms; -p adds /
 
-    $targets   = if ($parsed.Operands.Count -gt 0) { Resolve-BashGlob -Paths $parsed.Operands } else { @('.') }
+    $targets   = Resolve-BashGlob -Paths $(if ($parsed.Operands.Count -gt 0) { $parsed.Operands } else { @('.') })
 
     $allEntries= [System.Collections.Generic.List[PSCustomObject]]::new()
     $hadError  = $false
@@ -12143,7 +12143,7 @@ function Invoke-BashBash {
             $mod = $MyInvocation.MyCommand.Module
             if ($mod) { $version = $mod.Version.ToString() }
         }
-        if (-not $version) { $version = '0.7.2' }
+        if (-not $version) { $version = '0.7.3' }
         $text = "ps-bash, version $version`nBash-to-PowerShell transpiler"
         Emit-BashLine -Text $text
         return
@@ -12288,7 +12288,7 @@ function Invoke-BashRealpath {
             $resolved = Resolve-Path -Path $path -ErrorAction Stop
             $full = $resolved.Path
         } catch {
-            $full = [System.IO.Path]::GetFullPath($path)
+            $full = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($path)
         }
         Emit-BashLine -Text $full
     }

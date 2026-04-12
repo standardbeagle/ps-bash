@@ -166,11 +166,13 @@ public sealed class PwshWorker : IAsyncDisposable
                     }
                     if ($__partialLine) { [Console]::Out.WriteLine() }
                     $exitCode = if ($LASTEXITCODE -ne $null) { $LASTEXITCODE } else { 0 }
+                    [Environment]::CurrentDirectory = (Get-Location).Path
                     $global:BashExitCode = $exitCode
                     [Console]::Out.WriteLine("<<<EXIT:$exitCode>>>")
                 } catch {
                     [Console]::Error.WriteLine($_.Exception.Message)
                     $exitCode = if ($LASTEXITCODE -ne $null) { $LASTEXITCODE } else { 1 }
+                    [Environment]::CurrentDirectory = (Get-Location).Path
                     $global:BashExitCode = $exitCode
                     [Console]::Out.WriteLine("<<<EXIT:$exitCode>>>")
                 } finally {

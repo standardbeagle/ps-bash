@@ -12,7 +12,7 @@
 RootModule = 'PsBash.psm1'
 
 # Version number of this module.
-ModuleVersion = '0.7.2'
+ModuleVersion = '0.7.3'
 
 
 # ID used to uniquely identify this module
@@ -171,7 +171,7 @@ PrivateData = @{
         ProjectUri = 'https://github.com/standardbeagle/ps-bash'
 
         # ReleaseNotes of this module
-        ReleaseNotes = 'v0.7.2: Fix $? after function return, read from pipe, eval crash, $! duplicate output. Add shift, realpath, command builtins. Fix trap EXIT, source .sh rewrite, grep PATH=, readonly scope, $- and $_ variable mappings.'
+        ReleaseNotes = 'v0.7.3: Fix ls/realpath directory desync after cd by syncing .NET CurrentDirectory with $PWD in PwshWorker and using Resolve-BashGlob for bare targets. v0.7.2: Fix $? after function return, read from pipe, eval crash, $! duplicate output. Add shift, realpath, command builtins. Fix trap EXIT, source .sh rewrite, grep PATH=, readonly scope, $- and $_ variable mappings.'
 
     } # End of PSData hashtable
 
