@@ -1190,6 +1190,8 @@ public static class PsEmitter
         {
             if (i > 0)
                 sb.Append(' ');
+            else if (IsQuotedCommandWord(cmd.Words[0]))
+                sb.Append("& ");
             sb.Append(EmitWord(cmd.Words[i]));
         }
 
@@ -2126,6 +2128,13 @@ public static class PsEmitter
         if (word.Parts.Length == 1 && word.Parts[0] is WordPart.Literal lit)
             return lit.Value;
         return null;
+    }
+
+    private static bool IsQuotedCommandWord(CompoundWord word)
+    {
+        if (word.Parts.Length != 1)
+            return false;
+        return word.Parts[0] is WordPart.SingleQuoted or WordPart.DoubleQuoted;
     }
 
     private static string EmitPassthrough(string cmdlet, ImmutableArray<CompoundWord> args)

@@ -252,6 +252,22 @@ public class PsEmitterTests
     }
 
     [Fact]
+    public void Transpile_DoubleQuotedExecutable_PrefixesWithCallOperator()
+    {
+        var result = PsEmitter.Transpile("\"C:/Users/andyb/.bun/bin/bun.exe\" -e 'console.log(\"hello\")'");
+
+        Assert.Equal("\u0026 \"C:/Users/andyb/.bun/bin/bun.exe\" -e 'console.log(\"hello\")'", result);
+    }
+
+    [Fact]
+    public void Transpile_SingleQuotedExecutable_PrefixesWithCallOperator()
+    {
+        var result = PsEmitter.Transpile("'/usr/local/bin/node' -e 'console.log(1)'");
+
+        Assert.Equal("\u0026 '/usr/local/bin/node' -e 'console.log(1)'", result);
+    }
+
+    [Fact]
     public void Emit_SimpleCommand_MultipleEnvPairs()
     {
         var cmd = new Command.Simple(

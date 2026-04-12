@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Threading.Channels;
 
 namespace PsBash.Core.Runtime;
 
@@ -7,6 +8,8 @@ public sealed class PwshWorker : IAsyncDisposable
     private readonly Process _process;
     private readonly StreamWriter _stdin;
     private readonly StreamReader _stdout;
+    private readonly Channel<string> _outputChannel;
+    private Task? _readerTask;
     private int _disposed;
 
     /// <summary>
@@ -20,6 +23,28 @@ public sealed class PwshWorker : IAsyncDisposable
         _process = process;
         _stdin = process.StandardInput;
         _stdout = process.StandardOutput;
+        _outputChannel = Channel.CreateUnbounded<string>();
+    }
+
+    private void StartReader()
+    {
+        _readerTask = Task.Run(async () =>
+        {
+            try
+            {
+                string? line;
+                while ((line = await _stdout.ReadLineAsync(CancellationToken.None)) is not null)
+                {
+                    await _outputChannel.Writer.WriteAsync(line);
+                }
+            }
+            catch (OperationCanceledException) { }
+            catch (IOException) { }
+            finally
+            {
+                _outputChannel.Writer.TryComplete();
+            }
+        });
     }
 
     public static async Task<PwshWorker> StartAsync(
@@ -92,6 +117,7 @@ public sealed class PwshWorker : IAsyncDisposable
                 $"Worker failed to start. Expected <<<READY>>> but got: {ready}");
         }
 
+        worker.StartReader();
         return worker;
     }
 
@@ -205,23 +231,26 @@ public sealed class PwshWorker : IAsyncDisposable
             await _stdin.WriteLineAsync("<<<END>>>".AsMemory(), linked.Token);
             await _stdin.FlushAsync(linked.Token);
 
-            string? line;
-            while ((line = await _stdout.ReadLineAsync(linked.Token)) is not null)
+            var reader = _outputChannel.Reader;
+            while (await reader.WaitToReadAsync(linked.Token))
             {
-                if (line.StartsWith("<<<EXIT:", StringComparison.Ordinal)
-                    && line.EndsWith(">>>", StringComparison.Ordinal))
+                while (reader.TryRead(out var line))
                 {
-                    var code = line["<<<EXIT:".Length..^">>>".Length];
-                    return int.TryParse(code, out var n) ? n : 1;
+                    if (line.StartsWith("<<<EXIT:", StringComparison.Ordinal)
+                        && line.EndsWith(">>>", StringComparison.Ordinal))
+                    {
+                        var code = line["<<<EXIT:".Length..^">>>".Length];
+                        return int.TryParse(code, out var n) ? n : 1;
+                    }
+                    if (OutputCallback is { } cb)
+                        cb(line);
+                    else
+                        Console.WriteLine(line);
                 }
-                if (OutputCallback is { } cb)
-                    cb(line);
-                else
-                    Console.WriteLine(line);
             }
 
             // Stdout closed — process exited (e.g. via "exit N"). Return its exit code.
-            await _process.WaitForExitAsync(linked.Token);
+            await _process.WaitForExitAsync(CancellationToken.None);
             return _process.ExitCode;
         }
         catch (OperationCanceledException) when (timeoutCts.IsCancellationRequested)
@@ -302,6 +331,12 @@ public sealed class PwshWorker : IAsyncDisposable
         }
         finally
         {
+            _outputChannel.Writer.TryComplete();
+            if (_readerTask is not null)
+            {
+                try { await _readerTask.WaitAsync(TimeSpan.FromSeconds(2)); }
+                catch { /* ignore */ }
+            }
             _process.Dispose();
         }
     }

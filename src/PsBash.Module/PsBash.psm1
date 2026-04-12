@@ -12143,7 +12143,7 @@ function Invoke-BashBash {
             $mod = $MyInvocation.MyCommand.Module
             if ($mod) { $version = $mod.Version.ToString() }
         }
-        if (-not $version) { $version = '0.7.4' }
+        if (-not $version) { $version = '0.7.5' }
         $text = "ps-bash, version $version`nBash-to-PowerShell transpiler"
         Emit-BashLine -Text $text
         return
