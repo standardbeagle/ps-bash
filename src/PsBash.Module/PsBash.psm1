@@ -429,11 +429,7 @@ function Emit-BashLine {
     $lines = $stripped -split "`n"
     $cmdSplat = if ($Command) { @{ Command = $Command } } else { @{} }
     for ($li = 0; $li -lt $lines.Count; $li++) {
-        if ($li -lt $lines.Count - 1 -or $hasTrailingNewline) {
-            New-BashObject -BashText $lines[$li] @cmdSplat
-        } else {
-            New-BashObject -BashText $lines[$li] -NoTrailingNewline @cmdSplat
-        }
+        New-BashObject -BashText $lines[$li] @cmdSplat
     }
 }
 
@@ -661,7 +657,7 @@ function Invoke-BashPrintf {
 
     $result = $sb.ToString() -replace "`0ESCAPED_PERCENT`0", '%'
 
-    Emit-BashLine -Text $result -Command 'printf'
+    New-BashObject -BashText $result -NoTrailingNewline -Command 'printf'
 }
 
 # --- Human-readable Size Formatter ---
@@ -4821,6 +4817,9 @@ function ConvertFrom-SedExpression {
             $replacement = $parts[1]
             $flags = if ($parts.Count -gt 2) { $parts[2] } else { '' }
             $global = $flags.Contains('g')
+
+            $replacement = $replacement -replace '\\(\d)', '$$$1'
+            $replacement = $replacement -replace '\\&', '$$0'
 
             $regexOpts = [System.Text.RegularExpressions.RegexOptions]::None
             if ($flags.Contains('I') -or $flags.Contains('i')) {
@@ -11829,9 +11828,10 @@ function Invoke-BashEval {
 
     # Re-invoke ps-bash to transpile and execute the eval'd string
     $psBashExe = $null
-    if ($global:__parentPid -and $global:__parentPid -gt 0) {
+    $__pid = Get-Variable -Name __parentPid -Scope Global -ValueOnly -ErrorAction SilentlyContinue
+    if ($__pid -and $__pid -gt 0) {
         try {
-            $parent = [System.Diagnostics.Process]::GetProcessById($global:__parentPid)
+            $parent = [System.Diagnostics.Process]::GetProcessById($__pid)
             $psBashExe = $parent.MainModule.FileName
         } catch {}
     }
@@ -12116,6 +12116,67 @@ function Invoke-BashMktemp {
 
 # --- type ---
 
+$script:BashShoptOptions = @{
+    'extglob'            = $false
+    'globstar'           = $true
+    'dotglob'            = $false
+    'nullglob'           = $false
+    'nocaseglob'         = $false
+    'expand_aliases'     = $true
+    'cmdhist'            = $true
+    'histappend'         = $true
+    'checkwinsize'      = $true
+    'progcomp'           = $true
+    'login_shell'        = $false
+    'interactive_comments' = $true
+    'sourcepath'         = $true
+    'hostcomplete'       = $true
+}
+
+function Invoke-BashShopt {
+    param()
+    $Arguments = [string[]]$args
+
+    $setMode = $false
+    $unsetMode = $false
+    $printMode = $false
+    $queryMode = $false
+    $operands = [System.Collections.Generic.List[string]]::new()
+
+    foreach ($arg in $Arguments) {
+        switch ($arg) {
+            '-s' { $setMode = $true }
+            '-u' { $unsetMode = $true }
+            '-p' { $printMode = $true }
+            '-q' { $queryMode = $true }
+            default { $operands.Add($arg) }
+        }
+    }
+
+    if ($printMode -and $operands.Count -eq 0) {
+        foreach ($kv in $script:BashShoptOptions.GetEnumerator() | Sort-Object Key) {
+            $val = if ($kv.Value) { 'on' } else { 'off' }
+            Emit-BashLine -Text "shopt -s $($kv.Name)"
+        }
+        return
+    }
+
+    foreach ($opt in $operands) {
+        if ($setMode) {
+            $script:BashShoptOptions[$opt] = $true
+        } elseif ($unsetMode) {
+            $script:BashShoptOptions[$opt] = $false
+        } else {
+            if ($script:BashShoptOptions.ContainsKey($opt)) {
+                $val = if ($script:BashShoptOptions[$opt]) { 'on' } else { 'off' }
+                Emit-BashLine -Text "$opt $val"
+            } else {
+                Write-BashError -Message "bash: shopt: ${opt}: invalid shell option name"
+            }
+        }
+    }
+}
+
 function Invoke-BashType {
     [OutputType('PsBash.TypeOutput')]
     param()
@@ -12123,9 +12184,13 @@ function Invoke-BashType {
     if ($Arguments -contains '--help') { return Show-BashHelp 'type' }
 
     $typeOnly = $false
+    $showAll = $false
+    $printMode = $false
     $operands = [System.Collections.Generic.List[string]]::new()
     foreach ($arg in $Arguments) {
         if ($arg -ceq '-t') { $typeOnly = $true }
+        elseif ($arg -ceq '-a' -or $arg -ceq '--all') { $showAll = $true }
+        elseif ($arg -ceq '-p') { $printMode = $true }
         else { $operands.Add($arg) }
     }
 
@@ -12139,29 +12204,94 @@ function Invoke-BashType {
                    'alias', 'unalias', 'test', '[', 'true', 'false')
 
     foreach ($name in $operands) {
+        if ($printMode) {
+            $val = Get-Variable -Name $name -Scope Global -ValueOnly -ErrorAction SilentlyContinue
+            $source = 'variable'
+            if ($null -eq $val) {
+                $envVal = [System.Environment]::GetEnvironmentVariable($name)
+                if ($null -ne $envVal) { $val = $envVal; $source = 'environment' }
+            }
+            if ($null -ne $val) {
+                if ($val -is [System.Collections.IDictionary]) {
+                    Emit-BashLine -Text "declare -A $name=$($val | ConvertTo-Json -Compress)"
+                } elseif ($val -is [array] -or $val -is [System.Collections.IList]) {
+                    Emit-BashLine -Text "declare -a $name=$($val | ConvertTo-Json -Compress)"
+                } else {
+                    Emit-BashLine -Text "declare -- $name=`"$val`""
+                }
+            } else {
+                Write-Error "bash: declare: ${name}: not found" -ErrorAction Continue
+            }
+            continue
+        }
+
         $isBuiltin = $builtins -contains $name
         if ($isBuiltin) {
             $kind = 'builtin'
             $text = if ($typeOnly) { $kind } else { "$name is a shell builtin" }
-        } else {
-            $cmd = Get-Command $name -ErrorAction SilentlyContinue
-            if (-not $cmd) {
-                Write-Error "bash: type: ${name}: not found" -ErrorAction Continue
+            if (-not $showAll) {
+                $obj = [PSCustomObject]@{
+                    PSTypeName = 'PsBash.TypeOutput'
+                    Command    = $name
+                    Kind       = $kind
+                    BashText   = $text
+                }
+                Set-BashDisplayProperty $obj
                 continue
             }
-            switch ($cmd.CommandType) {
-                'Alias'    { $kind = 'alias'; $text = if ($typeOnly) { $kind } else { "$name is aliased to ``$($cmd.Definition)''" } }
-                'Function' { $kind = 'function'; $text = if ($typeOnly) { $kind } else { "$name is a function" } }
-                default    { $kind = 'file'; $text = if ($typeOnly) { $kind } else { "$name is $($cmd.Source)" } }
+        }
+
+        $results = [System.Collections.Generic.List[PSObject]]::new()
+        if ($isBuiltin -and $showAll) {
+            $results.Add(([PSCustomObject]@{
+                PSTypeName = 'PsBash.TypeOutput'
+                Command    = $name
+                Kind       = 'builtin'
+                BashText   = if ($typeOnly) { 'builtin' } else { "$name is a shell builtin" }
+            }))
+        }
+
+        $alias = Get-Alias $name -ErrorAction SilentlyContinue
+        if ($alias) {
+            if ($alias.Definition -match '^Invoke-Bash|^Get-Bash|^Set-Bash|^ConvertFrom-') {
+                $results.Add(([PSCustomObject]@{
+                    PSTypeName = 'PsBash.TypeOutput'
+                    Command    = $name
+                    Kind       = 'alias'
+                    BashText   = if ($typeOnly) { 'alias' } else { "$name is aliased to ``$($alias.Definition)''" }
+                }))
             }
         }
-        $obj = [PSCustomObject]@{
-            PSTypeName = 'PsBash.TypeOutput'
-            Command    = $name
-            Kind       = $kind
-            BashText   = $text
+
+        $cmd = Get-Command $name -CommandType Application,Cmdlet,Function -ErrorAction SilentlyContinue
+        if ($cmd -and -not $isBuiltin) {
+            switch ($cmd.CommandType) {
+                'Alias'    { $k = 'alias'; $t = if ($typeOnly) { $k } else { "$name is aliased to ``$($cmd.Definition)''" } }
+                'Function' { $k = 'function'; $t = if ($typeOnly) { $k } else { "$name is a function" } }
+                default    { $k = 'file'; $t = if ($typeOnly) { $k } else { "$name is $($cmd.Source)" } }
+            }
+            $results.Add(([PSCustomObject]@{
+                PSTypeName = 'PsBash.TypeOutput'
+                Command    = $name
+                Kind       = $k
+                BashText   = $t
+            }))
         }
-        Set-BashDisplayProperty $obj
+
+        if ($results.Count -eq 0) {
+            Write-Error "bash: type: ${name}: not found" -ErrorAction Continue
+            continue
+        }
+
+        if (-not $showAll -and -not $isBuiltin) {
+            $r = $results[0]
+            Set-BashDisplayProperty $r
+            continue
+        }
+
+        foreach ($r in $results) {
+            Set-BashDisplayProperty $r
+        }
     }
 }
 
@@ -12174,9 +12304,10 @@ function Invoke-BashBash {
     # Resolve the ps-bash executable: prefer the parent process path (exact binary),
     # fall back to Get-Command ps-bash.
     $psBashExe = $null
-    if ($global:__parentPid -and $global:__parentPid -gt 0) {
+    $__pid = Get-Variable -Name __parentPid -Scope Global -ValueOnly -ErrorAction SilentlyContinue
+    if ($__pid -and $__pid -gt 0) {
         try {
-            $parent = [System.Diagnostics.Process]::GetProcessById($global:__parentPid)
+            $parent = [System.Diagnostics.Process]::GetProcessById($__pid)
             $psBashExe = $parent.MainModule.FileName
         } catch {}
     }
@@ -12230,6 +12361,9 @@ function Invoke-BashBash {
 $script:BashBgPids = [System.Collections.Generic.List[System.Diagnostics.Process]]::new()
 $global:BashBgLastPid = $null
 $global:BashStartTime = [DateTime]::UtcNow
+$__bashVer = if ($MyInvocation.MyCommand.Module) { $MyInvocation.MyCommand.Module.Version } else { [version]'0.8.0' }
+$global:BashVersion = "$($__bashVer.Major).$($__bashVer.Minor).0(1)-release"
+$global:BashVersionInfo = @($__bashVer.Major, $__bashVer.Minor, 0, 1, 'release', "$($__bashVer.Major).$($__bashVer.Minor).0")
 
 function Invoke-BashBackground {
     <#
@@ -12967,6 +13101,7 @@ Set-Alias -Name 'popd'     -Value 'Invoke-BashPopd'     -Force -Scope Global -Op
 Set-Alias -Name 'dirs'     -Value 'Invoke-BashDirs'     -Force -Scope Global -Option AllScope
 Set-Alias -Name 'yes'      -Value 'Invoke-BashYes'      -Force -Scope Global -Option AllScope
 Set-Alias -Name 'tput'     -Value 'Invoke-BashTput'     -Force -Scope Global -Option AllScope
+Set-Alias -Name 'shopt'    -Value 'Invoke-BashShopt'    -Force -Scope Global -Option AllScope
 
 # --- Type-level ToString for BashObject types ---
 # Update-TypeData defines ToString() once per type name instead of per-object,

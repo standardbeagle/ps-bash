@@ -12,7 +12,7 @@
 RootModule = 'PsBash.psm1'
 
 # Version number of this module.
-ModuleVersion = '0.8.0'
+ModuleVersion = '0.8.1'
 
 
 # ID used to uniquely identify this module
@@ -28,7 +28,7 @@ CompanyName = 'Unknown'
 Copyright = '(c) Andy Brummer. All rights reserved.'
 
 # Description of the functionality provided by this module
-Description = 'Real bash commands for PowerShell with typed objects. 75 commands (ls, grep, sort, awk, sed, jq, find, ps, du, tar, etc.) that accept real bash flags and return structured PowerShell objects while producing identical text output. Pipeline bridge pattern preserves typed objects through grep, sort, head, tail.'
+Description = 'Real bash commands for PowerShell with typed objects. 76 commands (ls, grep, sort, awk, sed, jq, find, ps, du, tar, etc.) that accept real bash flags and return structured PowerShell objects while producing identical text output. Pipeline bridge pattern preserves typed objects through grep, sort, head, tail.'
 
 # Supported PSEditions
 CompatiblePSEditions = 'Core'
@@ -124,7 +124,8 @@ FunctionsToExport = 'Set-BashErrorMode', 'Invoke-ProcessSub',
                  'Invoke-BashEval', 'Invoke-BashRead', 'Invoke-BashMapfile',
                 'Invoke-BashShift', 'Invoke-BashRealpath', 'Invoke-BashCommand',
                 'Invoke-BashSource', 'Invoke-BashUnset', 'Invoke-BashPushd',
-                'Invoke-BashPopd', 'Invoke-BashDirs', 'Invoke-BashYes', 'Invoke-BashTput'
+                'Invoke-BashPopd', 'Invoke-BashDirs', 'Invoke-BashYes', 'Invoke-BashTput',
+                'Invoke-BashShopt'
 
 # Cmdlets to export from this module, for best performance, do not use wildcards and do not delete the entry, use an empty array if there are no cmdlets to export.
 CmdletsToExport = @()
@@ -149,7 +150,8 @@ AliasesToExport = 'echo', 'printf', 'ls', 'cat', 'grep', 'sort', 'head', 'tail',
                'sleep', 'time', 'which', 'balias', 'unalias',
                  'readlink', 'mktemp', 'type', 'bash',
                  'wait', 'shift', 'realpath', 'command', 'source',
-                 'unset', 'pushd', 'popd', 'dirs', 'yes', 'tput'
+                 'unset', 'pushd', 'popd', 'dirs', 'yes', 'tput',
+                 'shopt'
 
 # DSC resources to export from this module
 # DscResourcesToExport = @()

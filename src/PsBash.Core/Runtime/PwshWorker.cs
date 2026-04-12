@@ -192,6 +192,9 @@ public sealed class PwshWorker : IAsyncDisposable
             [Console]::Out.WriteLine("<<<READY>>>")
             [Console]::Out.Flush()
             $global:__parentPid = {{parentPid}}
+            $global:__BashErrexit = $false
+            $global:__BashTrapEXIT = $null
+            $global:__BashTrapERR = $null
             $global:BashFlags = ''
             $global:BashExitCode = 0
             while ($true) {
@@ -223,12 +226,16 @@ public sealed class PwshWorker : IAsyncDisposable
                                 $__partialLine = $false
                             } elseif ($item -is [PSCustomObject] -and $item.PSObject.Properties['BashText']) {
                                 $raw = [string]$item.BashText
-                                if ($raw.EndsWith("`n")) {
+                                $isPartial = $null -ne $item.PSObject.Properties['NoTrailingNewline'] -and [bool]$item.NoTrailingNewline
+                                if ($isPartial) {
+                                    [Console]::Out.Write($raw)
+                                    $__partialLine = $true
+                                } elseif ($raw.EndsWith("`n")) {
                                     [Console]::Out.WriteLine($raw.Substring(0, $raw.Length - 1))
                                     $__partialLine = $false
                                 } else {
-                                    [Console]::Out.Write($raw)
-                                    $__partialLine = $true
+                                    [Console]::Out.WriteLine($raw)
+                                    $__partialLine = $false
                                 }
                             } else {
                                 $item | Out-String -Stream | ForEach-Object { [Console]::Out.WriteLine($_) }

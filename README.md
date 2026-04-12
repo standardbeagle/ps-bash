@@ -4,7 +4,7 @@
 
 [![CI](https://github.com/standardbeagle/ps-bash/actions/workflows/ci.yml/badge.svg)](https://github.com/standardbeagle/ps-bash/actions/workflows/ci.yml)
 [![PSGallery](https://img.shields.io/powershellgallery/v/PsBash.svg?label=PSGallery)](https://www.powershellgallery.com/packages/PsBash)
-[![Tests](https://img.shields.io/badge/tests-795%20passing-brightgreen.svg)](#testing)
+[![Tests](https://img.shields.io/badge/tests-857%20passing-brightgreen.svg)](#testing)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 [![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20Linux%20%7C%20macOS-lightgrey.svg)](#cross-platform)
 [![Docs](https://img.shields.io/badge/docs-standardbeagle.github.io%2Fps--bash-blue.svg)](https://standardbeagle.github.io/ps-bash/)
@@ -99,7 +99,7 @@ PS> find . -name '*.log' -mtime +7 | xargs rm -f    # actually works on Windows
 | Object pipeline | Types survive `grep \| sort \| head` | Strings only | Strings only | Strings only | Varies |
 | PowerShell integration | Native -- objects flow into cmdlets | Separate shell | Separate shell | Separate shell | Native |
 | Cross-platform | Win/Lin/Mac | Windows only | Windows only | Windows only | Win/Lin/Mac |
-| Commands | 75 built-in | ~80 (GNU coreutils) | ~200+ (full GNU) | All of Linux | Define your own |
+| Commands | 76 built-in | ~80 (GNU coreutils) | ~200+ (full GNU) | All of Linux | Define your own |
 | jq/awk/sed | Built-in, zero binaries | awk/sed yes, jq no | Yes (install pkg) | Yes (apt install) | Not included |
 | PATH conflicts | None (AllScope aliases) | Shadows PowerShell | Shadows PowerShell | Filesystem boundary | None |
 | Startup overhead | ~100 ms (module load) | New process per call | New process per call | ~1s (cold), ~200ms (warm) | ~100 ms |
@@ -115,7 +115,7 @@ git clone https://github.com/standardbeagle/ps-bash.git
 Import-Module ./ps-bash/src/PsBash.psd1
 ```
 
-75 bash commands work immediately:
+76 bash commands work immediately:
 
 ```powershell
 ls -la                                    # LsEntry objects
@@ -155,7 +155,7 @@ Every PsBash command returns a PSCustomObject with a `.BashText` property. The t
 
 Pipeline commands (`grep`, `sort`, `head`, `tail`, `tee`) match against BashText but pass through the **original typed objects**. This is the pipeline bridge -- the core architectural pattern.
 
-## 68 Commands
+## 76 Commands
 
 | Category | Commands |
 |----------|----------|
@@ -167,11 +167,11 @@ Pipeline commands (`grep`, `sort`, `head`, `tail`, `tee`) match against BashText
 | **Pipeline** | `tee` `xargs` `yes` |
 | **Data** | `jq` `yq` `xan` |
 | **System** | `ps` `env` `date` `hostname` `whoami` `which` `alias` `time` `sleep` `tput` `pushd` `popd` |
+| **Shell** | `shopt` `type` `source` `command` `unset` `shift` |
 | **Output** | `echo` `printf` |
 | **Encoding** | `base64` `md5sum` `sha1sum` `sha256sum` `file` |
 | **Archive** | `gzip` `gunzip` `zcat` `tar` |
 | **Math** | `seq` `expr` |
-| **Vars** | `unset` `shift` `command` `source` |
 
 Every command supports `--help` and tab completion for all flags.
 
@@ -194,7 +194,7 @@ Both sides give you objects. PsBash just lets you type what you already know.
 
 ```powershell
 Invoke-Pester ./tests/PsBash.Tests.ps1
-# 795 tests: 795 passing, 1 skipped (Windows-specific)
+# 857 tests: 561 Core (parser/emitter), 96 Shell (e2e), 200 Module (runtime)
 ```
 
 CI runs on Windows, Linux, and macOS via GitHub Actions.

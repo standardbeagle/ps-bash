@@ -1040,14 +1040,17 @@ public static class PsEmitter
             if (name is "declare" or "typeset")
             {
                 bool isAssoc = false;
+                bool isPrint = false;
                 string? varName = null;
                 foreach (var word in cmd.Words.Skip(1))
                 {
                     var val = GetLiteralValue(word);
                     if (val == "-A") isAssoc = true;
                     else if (val == "-i") { /* integer — handled below */ }
+                    else if (val == "-p" || val == "-f" || val == "-F") isPrint = true;
                     else if (val is not null && !val.StartsWith('-')) varName = val;
                 }
+                if (isPrint) return EmitPassthrough("Invoke-BashType", cmd.Words.Skip(1).ToImmutableArray());
                 if (varName is not null)
                 {
                     if (isAssoc) return "$global:" + varName + " = @{}";
@@ -1571,6 +1574,8 @@ public static class PsEmitter
             "_" => "$global:BashLastArg",
             "SECONDS" => "$([math]::Floor(([DateTime]::UtcNow - $global:BashStartTime).TotalSeconds))",
             "PPID" => "(Get-Process -Id $PID -ErrorAction SilentlyContinue).Parent.Id",
+            "BASH_VERSION" => "$global:BashVersion",
+            "BASH_VERSINFO" => "$global:BashVersionInfo",
             var d when d.Length == 1 && d[0] is >= '1' and <= '9' =>
                 $"$(if ($global:BashPositional) {{ $global:BashPositional[{int.Parse(d) - 1}] }} else {{ $args[{int.Parse(d) - 1}] }})",
             _ => $"$env:{name}",
@@ -1586,7 +1591,12 @@ public static class PsEmitter
         if (bvs.Suffix.StartsWith('[') && bvs.Suffix.EndsWith(']'))
         {
             string subscript = bvs.Suffix[1..^1]; // strip [ and ]
-            string arrayVar = $"${bvs.Name}";
+            // Special bash array vars use their mapped name, not $Name
+            string arrayVar = bvs.Name switch
+            {
+                "BASH_VERSINFO" => "$global:BashVersionInfo",
+                var n => $"${n}"
+            };
             if (subscript is "@" or "*")
                 return arrayVar; // ${arr[@]} -> $arr (whole array)
             // Numeric subscript: ${arr[0]} -> $arr[0] (or $($arr[0]) in double quotes)
@@ -2147,6 +2157,9 @@ public static class PsEmitter
                 return true;
             case "tput":
                 result = EmitPassthrough("Invoke-BashTput", args);
+                return true;
+            case "shopt":
+                result = EmitPassthrough("Invoke-BashShopt", args);
                 return true;
             default:
                 return false;

@@ -14,6 +14,9 @@ if ($resolvedModule -and (Test-Path $resolvedModule)) {
 
 $global:LASTEXITCODE = 0
 $global:__parentPid = $ParentPid
+$global:__BashErrexit = $false
+$global:__BashTrapEXIT = $null
+$global:__BashTrapERR = $null
 
 # Signal ready
 [Console]::Out.WriteLine("<<<READY>>>")

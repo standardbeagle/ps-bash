@@ -16,8 +16,8 @@ Key layers:
 1. **PsEmitter** (C#) -- transpiles bash AST nodes into PowerShell expressions.
 2. **PwshWorker** (C#) -- spawns a `pwsh` process, imports the module, and evaluates
    transpiled expressions over stdin/stdout.
-3. **PsBash.psm1** (PowerShell) -- the runtime library providing 75 `Invoke-Bash*`
-   functions (74 commands + 1 internal helper), the BashObject model, escape handling,
+3. **PsBash.psm1** (PowerShell) -- the runtime library providing 76 `Invoke-Bash*`
+   functions (75 commands + 1 internal helper), the BashObject model, escape handling,
    glob expansion, and tab completion.
 
 ## BashObject Model
@@ -165,6 +165,8 @@ foreach ($item in $pipelineInput) {
 | dirs | Invoke-BashDirs | `-c`, `-p`, `-v` | Manual loop | No | No |
 | yes | Invoke-BashYes | `STRING` | Positional | Yes | No |
 | tput | Invoke-BashTput | `CAPNAME` | Manual loop | No | No |
+| shopt | Invoke-BashShopt | `-s`, `-u`, `-p`, `-q` | Manual loop | No | No |
+| type | Invoke-BashType | `-t`, `-a`, `-p` | Manual loop | No | No |
 | command | Invoke-BashCommand | `-v` | Manual loop | No | No |
 | source | Invoke-BashSource | (none) | Positional | No | Yes |
 | shift | Invoke-BashShift | `N` | Manual loop | No | No |
