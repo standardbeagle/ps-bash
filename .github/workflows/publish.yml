@@ -26,10 +26,6 @@ jobs:
             rid: osx-arm64
             ext: ""
             archive: osx-arm64
-          - os: macos-13
-            rid: osx-x64
-            ext: ""
-            archive: osx-x64
       fail-fast: false
     runs-on: ${{ matrix.os }}
     steps:
@@ -58,12 +54,16 @@ jobs:
           }
 
       - name: Upload release asset
-        if: github.event_name == 'release'
+        if: github.event_name == 'release' || github.event_name == 'workflow_dispatch'
         env:
           GH_TOKEN: ${{ github.token }}
         shell: pwsh
         run: |
-          $version = '${{ github.event.release.tag_name }}'
+          $version = if ('${{ github.event_name }}' -eq 'release') {
+              '${{ github.event.release.tag_name }}'
+          } else {
+              'v${{ github.event.inputs.version }}'
+          }
           $archive = '${{ matrix.archive }}'
           $file = "./artifacts/ps-bash-${version}-${archive}.zip"
           gh release upload $version $file --clobber
