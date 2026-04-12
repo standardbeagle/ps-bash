@@ -12294,6 +12294,29 @@ function Invoke-BashRealpath {
     }
 }
 
+# --- source ---
+
+function Invoke-BashSource {
+    param([Parameter(Mandatory)][string]$Path)
+    $resolved = Resolve-Path -LiteralPath $Path -ErrorAction SilentlyContinue
+    if (-not $resolved) {
+        $resolved = Resolve-Path -LiteralPath "$Path.ps1" -ErrorAction SilentlyContinue
+    }
+    if ($resolved -and ($resolved.Path -match '\.ps1$')) {
+        . $resolved.Path
+    } elseif ($resolved) {
+        $bash = Get-Command bash -ErrorAction SilentlyContinue
+        if ($bash) {
+            & $bash.Source $resolved.Path
+            $global:LASTEXITCODE = $LASTEXITCODE
+        } else {
+            Write-BashError -Message "source: ${Path} is a shell script and bash is not available"
+        }
+    } else {
+        Write-BashError -Message "source: ${Path}: No such file or directory"
+    }
+}
+
 # --- command ---
 
 function Invoke-BashCommand {
@@ -12420,6 +12443,7 @@ $script:BashHelpSpecs = @{
     'shift'    = 'Shift positional parameters.'
     'realpath' = 'Print the resolved path.'
     'command'  = 'Execute a simple command or display information about commands.'
+    'source'   = 'Execute commands from a file in the current shell.'
 }
 
 function Test-BashHelpFlag {
@@ -12593,6 +12617,7 @@ $script:BashFlagSpecs = @{
     'shift'    = @( @('N', 'shift by N positions') )
     'realpath' = @()
     'command'  = @( @('-v', 'print command name or path') )
+    'source'   = @()
 }
 
 $script:BashCompleters = @{}
@@ -12712,6 +12737,8 @@ Set-Alias -Name 'jobs'     -Value 'Invoke-BashJobs'     -Force -Scope Global -Op
 Set-Alias -Name 'shift'    -Value 'Invoke-BashShift'    -Force -Scope Global -Option AllScope
 Set-Alias -Name 'realpath' -Value 'Invoke-BashRealpath' -Force -Scope Global -Option AllScope
 Set-Alias -Name 'command'  -Value 'Invoke-BashCommand'  -Force -Scope Global -Option AllScope
+Set-Alias -Name 'source'   -Value 'Invoke-BashSource'   -Force -Scope Global -Option AllScope
+Set-Alias -Name '.'        -Value 'Invoke-BashSource'   -Force -Scope Global -Option AllScope
 
 # --- Type-level ToString for BashObject types ---
 # Update-TypeData defines ToString() once per type name instead of per-object,

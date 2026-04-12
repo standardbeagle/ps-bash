@@ -13,6 +13,7 @@ if ($resolvedModule -and (Test-Path $resolvedModule)) {
 }
 
 $global:LASTEXITCODE = 0
+$global:__parentPid = $ParentPid
 
 # Signal ready
 [Console]::Out.WriteLine("<<<READY>>>")
@@ -51,9 +52,9 @@ function Invoke-BashExitTraps {
 # Command loop
 while ($true) {
     # Parent death detection: if the parent process is gone, self-terminate
-    if ($ParentPid -gt 0) {
+    if ($global:__parentPid -gt 0) {
         try {
-            $null = [System.Diagnostics.Process]::GetProcessById($ParentPid)
+            $null = [System.Diagnostics.Process]::GetProcessById($global:__parentPid)
         } catch {
             Invoke-BashExitTraps
             exit 0
@@ -73,6 +74,13 @@ while ($true) {
     }
 
     $command = $lines -join "`n"
+
+    # Handle explicit exit so it terminates the worker process
+    if ($command -match '^\s*exit\s+(\d+)\s*$') {
+        exit [int]$matches[1]
+    } elseif ($command -match '^\s*exit\s*$') {
+        exit 0
+    }
 
     try {
         # Agent-internal only: commands come from the transpiler, not user input
@@ -106,11 +114,22 @@ while ($true) {
         }
         if ($__partialLine) { [Console]::Out.WriteLine() }
         $exitCode = if ($LASTEXITCODE -ne $null) { $LASTEXITCODE } else { 0 }
+        if ($global:__BashErrexit -and $exitCode -ne 0) {
+            $global:LASTEXITCODE = $exitCode
+            [Console]::Out.WriteLine("<<<EXIT:$exitCode>>>")
+            exit $exitCode
+        }
         $global:LASTEXITCODE = $exitCode
         [Console]::Out.WriteLine("<<<EXIT:$exitCode>>>")
     } catch {
         [Console]::Error.WriteLine($_.Exception.Message)
         $exitCode = if ($LASTEXITCODE -ge 1) { $LASTEXITCODE } else { 1 }
+        if ($global:__BashErrexit -and $exitCode -ne 0) {
+            $global:LASTEXITCODE = $exitCode
+            [Console]::Out.WriteLine("<<<EXIT:$exitCode>>>")
+            exit $exitCode
+        }
+        $global:LASTEXITCODE = $exitCode
         [Console]::Out.WriteLine("<<<EXIT:$exitCode>>>")
     } finally {
         [Console]::Out.Flush()

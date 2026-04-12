@@ -1,3 +1,4 @@
+using PsBash.Core.Parser;
 using PsBash.Core.Runtime;
 using PsBash.Core.Transpiler;
 using PsBash.Shell;
@@ -31,7 +32,16 @@ if (shellArgs.Interactive || shellArgs.Command is null)
     return await InteractiveShell.RunAsync(pwshPath);
 }
 
-var pwshCommand = BashTranspiler.Transpile(shellArgs.Command);
+string? pwshCommand;
+try
+{
+    pwshCommand = BashTranspiler.Transpile(shellArgs.Command);
+}
+catch (ParseException ex)
+{
+    Console.Error.WriteLine($"ps-bash: parse error: {ex.Message}");
+    return 2;
+}
 
 if (debug)
 {

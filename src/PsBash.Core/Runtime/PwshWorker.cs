@@ -32,10 +32,43 @@ public sealed class PwshWorker : IAsyncDisposable
         {
             try
             {
-                string? line;
-                while ((line = await _stdout.ReadLineAsync(CancellationToken.None)) is not null)
+                var buffer = new char[4096];
+                var line = new System.Text.StringBuilder();
+                bool prevWasCr = false;
+                while (true)
                 {
-                    await _outputChannel.Writer.WriteAsync(line);
+                    int read = await _stdout.ReadAsync(buffer.AsMemory(), CancellationToken.None);
+                    if (read == 0) break;
+
+                    for (int i = 0; i < read; i++)
+                    {
+                        char c = buffer[i];
+                        if (c == '\r')
+                        {
+                            await _outputChannel.Writer.WriteAsync(line.ToString());
+                            line.Clear();
+                            prevWasCr = true;
+                        }
+                        else if (c == '\n')
+                        {
+                            if (!prevWasCr)
+                            {
+                                await _outputChannel.Writer.WriteAsync(line.ToString());
+                                line.Clear();
+                            }
+                            prevWasCr = false;
+                        }
+                        else
+                        {
+                            line.Append(c);
+                            prevWasCr = false;
+                        }
+                    }
+                }
+
+                if (line.Length > 0 || prevWasCr)
+                {
+                    await _outputChannel.Writer.WriteAsync(line.ToString());
                 }
             }
             catch (OperationCanceledException) { }
@@ -65,6 +98,14 @@ public sealed class PwshWorker : IAsyncDisposable
             RedirectStandardError = false,
             UseShellExecute = false,
         };
+
+        // Force CI/non-interactive mode so tools like npm disable progress bars
+        // that overwrite lines with \r, which would otherwise block line-based readers.
+        psi.Environment["CI"] = "true";
+        psi.Environment["NPM_CONFIG_PROGRESS"] = "false";
+        psi.Environment["BUN_NO_UPDATE_CHECK"] = "1";
+        psi.Environment["DOTNET_CLI_TELEMETRY_OPTOUT"] = "1";
+        psi.Environment["POWERSHELL_UPDATECHECK"] = "Off";
 
         if (useStdin)
         {
@@ -166,6 +207,11 @@ public sealed class PwshWorker : IAsyncDisposable
                     $lines.Add($line)
                 }
                 $command = $lines -join "`n"
+                if ($command -match '^\s*exit\s+(\d+)\s*$') {
+                    exit [int]$matches[1]
+                } elseif ($command -match '^\s*exit\s*$') {
+                    exit 0
+                }
                 $exitCode = 0
                 try {
                     $result = Invoke-Expression $command
@@ -193,12 +239,22 @@ public sealed class PwshWorker : IAsyncDisposable
                     if ($__partialLine) { [Console]::Out.WriteLine() }
                     $exitCode = if ($LASTEXITCODE -ne $null) { $LASTEXITCODE } else { 0 }
                     [Environment]::CurrentDirectory = (Get-Location).Path
+                    if ($global:__BashErrexit -and $exitCode -ne 0) {
+                        $global:BashExitCode = $exitCode
+                        [Console]::Out.WriteLine("<<<EXIT:$exitCode>>>")
+                        exit $exitCode
+                    }
                     $global:BashExitCode = $exitCode
                     [Console]::Out.WriteLine("<<<EXIT:$exitCode>>>")
                 } catch {
                     [Console]::Error.WriteLine($_.Exception.Message)
                     $exitCode = if ($LASTEXITCODE -ne $null) { $LASTEXITCODE } else { 1 }
                     [Environment]::CurrentDirectory = (Get-Location).Path
+                    if ($global:__BashErrexit -and $exitCode -ne 0) {
+                        $global:BashExitCode = $exitCode
+                        [Console]::Out.WriteLine("<<<EXIT:$exitCode>>>")
+                        exit $exitCode
+                    }
                     $global:BashExitCode = $exitCode
                     [Console]::Out.WriteLine("<<<EXIT:$exitCode>>>")
                 } finally {

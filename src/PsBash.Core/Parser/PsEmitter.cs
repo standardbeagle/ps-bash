@@ -1130,7 +1130,7 @@ public static class PsEmitter
                     if (longOpt)
                     {
                         var optVal = args.SkipWhile(a => a != "-o").Skip(1).FirstOrDefault();
-                        if (optVal == "errexit") specialResult = "$ErrorActionPreference = 'Stop'";
+                        if (optVal == "errexit") specialResult = "$ErrorActionPreference = 'Stop'; $global:__BashErrexit = $true";
                         else if (optVal == "xtrace") specialResult = "Set-PSDebug -Trace 1";
                         else if (optVal == "nounset") specialResult = "Set-StrictMode -Version Latest";
                     }
@@ -1141,7 +1141,7 @@ public static class PsEmitter
                         bool x = flags.Any(f => f!.Contains('x'));
                         bool u = flags.Any(f => f!.Contains('u'));
                         var parts = new List<string>();
-                        if (e) parts.Add("$ErrorActionPreference = 'Stop'");
+                        if (e) parts.AddRange(new[]{"$ErrorActionPreference = 'Stop'", "$global:__BashErrexit = $true"});
                         if (u) parts.Add("Set-StrictMode -Version Latest");
                         if (x) parts.Add("Set-PSDebug -Trace 1");
                         if (parts.Count > 0) specialResult = string.Join("; ", parts);
@@ -1149,11 +1149,11 @@ public static class PsEmitter
                 }
             }
 
-            // source FILE / . FILE -> . FILE (PS dot-source)
+            // source FILE / . FILE -> Invoke-BashSource FILE
             else if ((cmd0 == "source" || cmd0 == ".") && cmd.Words.Length >= 2)
             {
                 string file = EmitWord(cmd.Words[1]);
-                specialResult = $". {file}";
+                specialResult = $"Invoke-BashSource {file}";
             }
 
             // Standalone mapped commands: rewrite through TryEmitMappedCommand

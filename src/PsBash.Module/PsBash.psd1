@@ -121,8 +121,9 @@ FunctionsToExport = 'Set-BashErrorMode', 'Invoke-ProcessSub',
                'Invoke-BashRedirect',
                'Invoke-BashBackground', 'Invoke-BashWait',
                'Invoke-BashJobs',
-                'Invoke-BashEval', 'Invoke-BashRead', 'Invoke-BashMapfile',
-                'Invoke-BashShift', 'Invoke-BashRealpath', 'Invoke-BashCommand'
+                 'Invoke-BashEval', 'Invoke-BashRead', 'Invoke-BashMapfile',
+                 'Invoke-BashShift', 'Invoke-BashRealpath', 'Invoke-BashCommand',
+                 'Invoke-BashSource'
 
 # Cmdlets to export from this module, for best performance, do not use wildcards and do not delete the entry, use an empty array if there are no cmdlets to export.
 CmdletsToExport = @()
@@ -145,8 +146,8 @@ AliasesToExport = 'echo', 'printf', 'ls', 'cat', 'grep', 'sort', 'head', 'tail',
                'gzip', 'gunzip', 'zcat', 'tar',
                'yq', 'xan',
                'sleep', 'time', 'which', 'balias', 'unalias',
-                'readlink', 'mktemp', 'type', 'bash',
-                'wait', 'shift', 'realpath', 'command'
+                 'readlink', 'mktemp', 'type', 'bash',
+                 'wait', 'shift', 'realpath', 'command', 'source'
 
 # DSC resources to export from this module
 # DscResourcesToExport = @()

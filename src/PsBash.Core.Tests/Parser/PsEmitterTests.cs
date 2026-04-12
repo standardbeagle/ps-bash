@@ -1906,14 +1906,14 @@ public class PsEmitterTests
     public void Transpile_SetEuoPipefail_EmitsErrorActionStopAndStrictMode()
     {
         var result = PsEmitter.Transpile("set -euo pipefail");
-        Assert.Equal("$ErrorActionPreference = 'Stop'; Set-StrictMode -Version Latest", result);
+        Assert.Equal("$ErrorActionPreference = 'Stop'; $global:__BashErrexit = $true; Set-StrictMode -Version Latest", result);
     }
 
     [Fact]
     public void Transpile_SetOErrexit_EmitsErrorActionStop()
     {
         var result = PsEmitter.Transpile("set -o errexit");
-        Assert.Equal("$ErrorActionPreference = 'Stop'", result);
+        Assert.Equal("$ErrorActionPreference = 'Stop'; $global:__BashErrexit = $true", result);
     }
 
     [Fact]
@@ -1941,22 +1941,22 @@ public class PsEmitterTests
     public void Transpile_SetEU_EmitsErrorActionStopAndStrictMode()
     {
         var result = PsEmitter.Transpile("set -eu");
-        Assert.Equal("$ErrorActionPreference = 'Stop'; Set-StrictMode -Version Latest", result);
+        Assert.Equal("$ErrorActionPreference = 'Stop'; $global:__BashErrexit = $true; Set-StrictMode -Version Latest", result);
     }
 
-    // source file.sh -> . file.sh (no rewrite)
+    // source file.sh -> Invoke-BashSource ./lib.sh
     [Fact]
-    public void Transpile_SourceShFile_EmitsDotSource()
+    public void Transpile_SourceShFile_EmitsInvokeBashSource()
     {
         var result = PsEmitter.Transpile("source ./lib.sh");
-        Assert.Equal(". ./lib.sh", result);
+        Assert.Equal("Invoke-BashSource ./lib.sh", result);
     }
 
     [Fact]
-    public void Transpile_DotSourceShFile_EmitsDotSource()
+    public void Transpile_DotSourceShFile_EmitsInvokeBashSource()
     {
         var result = PsEmitter.Transpile(". ./lib.sh");
-        Assert.Equal(". ./lib.sh", result);
+        Assert.Equal("Invoke-BashSource ./lib.sh", result);
     }
 
     // -e file exists test
