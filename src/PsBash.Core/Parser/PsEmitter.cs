@@ -84,6 +84,30 @@ public static class PsEmitter
         return Emit(cmd);
     }
 
+    private static string? TryGetLastArgWord(Command cmd)
+    {
+        Command target = cmd;
+        if (cmd is Command.CommandList list && list.Commands.Length > 0)
+            target = list.Commands[^1];
+        else if (cmd is Command.AndOrList andOr && andOr.Commands.Length > 0)
+            target = andOr.Commands[^1];
+
+        CompoundWord? lastWordObj = null;
+        if (target is Command.Simple simple && simple.Words.Length > 0)
+            lastWordObj = simple.Words[^1];
+        else if (target is Command.Pipeline pipeline && pipeline.Commands.Length > 0 && pipeline.Commands[^1] is Command.Simple lastSimple && lastSimple.Words.Length > 0)
+            lastWordObj = lastSimple.Words[^1];
+
+        if (lastWordObj is null)
+            return null;
+
+        // Only track plain literal words to avoid breaking complex expressions
+        if (lastWordObj.Parts.Length == 1 && lastWordObj.Parts[0] is WordPart.Literal lit)
+            return $"'{lit.Value}'";
+
+        return null;
+    }
+
     private static string EmitIf(Command.If ifCmd)
     {
         var sb = new StringBuilder();
@@ -1016,9 +1040,9 @@ public static class PsEmitter
                 }
                 if (varName is not null)
                 {
-                    if (isAssoc) return $"${varName} = @{{}}";
+                    if (isAssoc) return "$global:" + varName + " = @{}";
                     bool isInt = cmd.Words.Skip(1).Any(w => GetLiteralValue(w) == "-i");
-                    return isInt ? $"[int]${varName} = 0" : $"${varName} = @()";
+                    return isInt ? "[int]$global:" + varName + " = 0" : "$global:" + varName + " = @()";
                 }
             }
         }
@@ -1026,26 +1050,37 @@ public static class PsEmitter
         if (cmd.Words.Length >= 1)
         {
             var cmd0 = GetLiteralValue(cmd.Words[0]);
+            string? specialResult = null;
 
+            // return N -> capture exit code for $?
+            if (cmd0 == "return")
+            {
+                if (cmd.Words.Length >= 2)
+                {
+                    var retCode = EmitWord(cmd.Words[1]);
+                    specialResult = $"$global:LASTEXITCODE = {retCode}; return";
+                }
+                else
+                {
+                    specialResult = "return";
+                }
+            }
             // true -> no-op success; false -> silent failure (sets $? = $false for && / ||)
-            if (cmd0 == "true" && cmd.Words.Length == 1)
-                return "[void]$true";
-            if (cmd0 == "false" && cmd.Words.Length == 1)
-                return "Write-Error '' -ErrorAction SilentlyContinue";
+            else if (cmd0 == "true" && cmd.Words.Length == 1)
+                specialResult = "$global:LASTEXITCODE = 0; [void]$true";
+            else if (cmd0 == "false" && cmd.Words.Length == 1)
+                specialResult = "$global:LASTEXITCODE = 1; Write-Error '' -ErrorAction SilentlyContinue";
 
             // read [-r] [-p "prompt"] VAR -> Invoke-BashRead [-p "prompt"] VAR
-            // Runtime handles both pipeline and interactive modes.
-            if (cmd0 == "read")
-                return EmitPassthrough("Invoke-BashRead", cmd.Words.RemoveAt(0));
+            else if (cmd0 == "read")
+                specialResult = EmitPassthrough("Invoke-BashRead", cmd.Words.RemoveAt(0));
 
             // eval "cmd" -> Invoke-BashEval "cmd"
-            // Re-transpiles and executes the string as bash.
-            if (cmd0 == "eval")
-                return EmitPassthrough("Invoke-BashEval", cmd.Words.RemoveAt(0));
+            else if (cmd0 == "eval")
+                specialResult = EmitPassthrough("Invoke-BashEval", cmd.Words.RemoveAt(0));
 
             // readonly VAR=val -> Set-Variable -Name VAR -Value val -Option Constant
-            // readonly VAR     -> Set-Variable -Name VAR -Option Constant
-            if (cmd0 == "readonly")
+            else if (cmd0 == "readonly")
             {
                 var roSb = new StringBuilder();
                 for (int i = 1; i < cmd.Words.Length; i++)
@@ -1059,83 +1094,85 @@ public static class PsEmitter
                     {
                         string varName = val[..eq];
                         string varVal = val[(eq + 1)..];
-                        roSb.Append($"Set-Variable -Name {varName} -Value '{varVal}' -Option Constant");
+                        roSb.Append($"Set-Variable -Name {varName} -Value '{varVal}' -Option Constant -Scope Global");
                     }
                     else
                     {
-                        roSb.Append($"Set-Variable -Name {val} -Option Constant");
+                        roSb.Append($"Set-Variable -Name {val} -Option Constant -Scope Global");
                     }
                 }
-                var roResult = roSb.ToString();
-                return string.IsNullOrEmpty(roResult) ? "[void]$true" : roResult;
+                specialResult = string.IsNullOrEmpty(roSb.ToString()) ? "[void]$true" : roSb.ToString();
             }
 
             // set -- a b c -> reset positional parameters
             // set -e / set -o errexit -> $ErrorActionPreference = 'Stop'
             // set -x / set -o xtrace -> Set-PSDebug -Trace 1
             // set -u / set -o nounset -> Set-StrictMode -Version Latest
-            if (cmd0 == "set" && cmd.Words.Length >= 2)
+            else if (cmd0 == "set" && cmd.Words.Length >= 2)
             {
                 var literalArgs = cmd.Words.Skip(1).Select(w => GetLiteralValue(w)).ToList();
                 int dashDashIdx = literalArgs.IndexOf("--");
                 if (dashDashIdx >= 0)
                 {
-                    // set -- [args...] — reset positional parameters
                     var positionalWords = cmd.Words.Skip(1 + dashDashIdx + 1).ToList();
                     if (positionalWords.Count == 0)
-                        return "$global:BashPositional = @()";
-                    var items = string.Join(", ", positionalWords.Select(w => EmitWord(w)));
-                    return $"$global:BashPositional = @({items})";
-                }
-                var args = literalArgs;
-                bool longOpt = args.Any(a => a == "-o");
-                if (longOpt)
-                {
-                    // set -o OPTION form
-                    var optVal = args.SkipWhile(a => a != "-o").Skip(1).FirstOrDefault();
-                    if (optVal == "errexit") return "$ErrorActionPreference = 'Stop'";
-                    if (optVal == "xtrace") return "Set-PSDebug -Trace 1";
-                    if (optVal == "nounset") return "Set-StrictMode -Version Latest";
+                        specialResult = "$global:BashPositional = @()";
+                    else
+                    {
+                        var items = string.Join(", ", positionalWords.Select(w => EmitWord(w)));
+                        specialResult = $"$global:BashPositional = @({items})";
+                    }
                 }
                 else
                 {
-                    // set -euo pipefail style — check if any flag contains 'e', 'x', or 'u'
-                    var flags = args.Where(a => a is not null && a.StartsWith('-') && !a.StartsWith("--")).ToList();
-                    bool e = flags.Any(f => f!.Contains('e'));
-                    bool x = flags.Any(f => f!.Contains('x'));
-                    bool u = flags.Any(f => f!.Contains('u'));
-                    var parts = new List<string>();
-                    if (e) parts.Add("$ErrorActionPreference = 'Stop'");
-                    if (u) parts.Add("Set-StrictMode -Version Latest");
-                    if (x) parts.Add("Set-PSDebug -Trace 1");
-                    if (parts.Count > 0) return string.Join("; ", parts);
+                    var args = literalArgs;
+                    bool longOpt = args.Any(a => a == "-o");
+                    if (longOpt)
+                    {
+                        var optVal = args.SkipWhile(a => a != "-o").Skip(1).FirstOrDefault();
+                        if (optVal == "errexit") specialResult = "$ErrorActionPreference = 'Stop'";
+                        else if (optVal == "xtrace") specialResult = "Set-PSDebug -Trace 1";
+                        else if (optVal == "nounset") specialResult = "Set-StrictMode -Version Latest";
+                    }
+                    else
+                    {
+                        var flags = args.Where(a => a is not null && a.StartsWith('-') && !a.StartsWith("--")).ToList();
+                        bool e = flags.Any(f => f!.Contains('e'));
+                        bool x = flags.Any(f => f!.Contains('x'));
+                        bool u = flags.Any(f => f!.Contains('u'));
+                        var parts = new List<string>();
+                        if (e) parts.Add("$ErrorActionPreference = 'Stop'");
+                        if (u) parts.Add("Set-StrictMode -Version Latest");
+                        if (x) parts.Add("Set-PSDebug -Trace 1");
+                        if (parts.Count > 0) specialResult = string.Join("; ", parts);
+                    }
                 }
             }
 
-            // source FILE / . FILE -> . FILE (PS dot-source, .sh -> .ps1)
-            if ((cmd0 == "source" || cmd0 == ".") && cmd.Words.Length >= 2)
+            // source FILE / . FILE -> . FILE (PS dot-source)
+            else if ((cmd0 == "source" || cmd0 == ".") && cmd.Words.Length >= 2)
             {
                 string file = EmitWord(cmd.Words[1]);
-                // Translate .sh extension to .ps1
-                if (file.EndsWith(".sh", StringComparison.OrdinalIgnoreCase))
-                    file = file[..^3] + ".ps1";
-                return $". {file}";
+                specialResult = $". {file}";
             }
 
             // Standalone mapped commands: rewrite through TryEmitMappedCommand
-            // unless the command is a PS builtin alias that works fine as-is.
-            if (cmd0 is not null
+            else if (cmd0 is not null
                 && !PsBuiltinAliases.Contains(cmd0)
                 && TryEmitMappedCommand(cmd, out var mapped))
             {
                 if (cmd.Redirects.IsEmpty)
-                    return mapped;
-
-                // Append redirects (TryEmitMappedCommand only handles args)
-                var mappedSb = new StringBuilder(mapped);
-                EmitPipeTargetRedirects(cmd, mappedSb);
-                return mappedSb.ToString();
+                    specialResult = mapped;
+                else
+                {
+                    var mappedSb = new StringBuilder(mapped);
+                    EmitPipeTargetRedirects(cmd, mappedSb);
+                    specialResult = mappedSb.ToString();
+                }
             }
+
+            if (specialResult is not null)
+                return specialResult;
         }
 
         var sb = new StringBuilder();
@@ -1518,7 +1555,8 @@ public static class PsEmitter
             "0" => inDoubleQuote ? "$($MyInvocation.MyCommand.Name)" : "$MyInvocation.MyCommand.Name",
             "$" => "$PID",
             "!" => "$global:BashBgLastPid",
-            "-" => "$PSBoundParameters",
+            "-" => "$global:BashFlags",
+            "_" => "$global:BashLastArg",
             var d when d.Length == 1 && d[0] is >= '1' and <= '9' =>
                 $"$(if ($global:BashPositional) {{ $global:BashPositional[{int.Parse(d) - 1}] }} else {{ $args[{int.Parse(d) - 1}] }})",
             _ => $"$env:{name}",
@@ -1708,7 +1746,8 @@ public static class PsEmitter
             "0" => "$($MyInvocation.MyCommand.Name)",
             "$" => "${PID}",
             "!" => "${global:BashBgLastPid}",
-            "-" => "${PSBoundParameters}",
+            "-" => "${global:BashFlags}",
+            "_" => "${global:BashLastArg}",
             var d when d.Length == 1 && d[0] is >= '1' and <= '9' =>
                 $"$(if ($global:BashPositional) {{ $global:BashPositional[{int.Parse(d) - 1}] }} else {{ $args[{int.Parse(d) - 1}] }})",
             _ => $"${{env:{name}}}",
@@ -2067,6 +2106,15 @@ public static class PsEmitter
                 return true;
             case "eval":
                 result = EmitPassthrough("Invoke-BashEval", args);
+                return true;
+            case "shift":
+                result = EmitPassthrough("Invoke-BashShift", args);
+                return true;
+            case "realpath":
+                result = EmitPassthrough("Invoke-BashRealpath", args);
+                return true;
+            case "command":
+                result = EmitPassthrough("Invoke-BashCommand", args);
                 return true;
             default:
                 return false;

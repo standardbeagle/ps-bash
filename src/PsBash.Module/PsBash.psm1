@@ -11728,10 +11728,7 @@ function Invoke-BashTrap {
         if ($resetMode -or ($action -eq '')) {
             if ($script:BashTrapHandlers.ContainsKey($signal)) {
                 if ($signal -ceq 'EXIT') {
-                    $existing = $script:BashTrapHandlers[$signal]
-                    if ($existing -is [System.Management.Automation.PSEventSubscriber]) {
-                        Unregister-Event -SubscriptionId $existing.SubscriptionId -ErrorAction SilentlyContinue
-                    }
+                    $global:__BashTrapEXIT = $null
                 }
                 $script:BashTrapHandlers.Remove($signal) | Out-Null
             }
@@ -11741,13 +11738,13 @@ function Invoke-BashTrap {
         switch ($signal) {
             'EXIT' {
                 $sb = [scriptblock]::Create($action)
-                $sub = Register-EngineEvent -SourceIdentifier PowerShell.Exiting -Action $sb
-                $script:BashTrapHandlers['EXIT'] = $sub
+                $global:__BashTrapEXIT = $sb
+                $script:BashTrapHandlers['EXIT'] = $action
             }
             'ERR' {
                 $sb = [scriptblock]::Create($action)
                 $script:BashTrapHandlers['ERR'] = $action
-                Set-Variable -Name __BashTrapERR -Value $sb -Scope Global -Force
+                $global:__BashTrapERR = $sb
             }
             default {
                 $script:BashTrapHandlers[$signal] = $action
@@ -11774,9 +11771,9 @@ function Invoke-BashEval {
 
     # Re-invoke ps-bash to transpile and execute the eval'd string
     $psBashExe = $null
-    if ($__parentPid -and $__parentPid -gt 0) {
+    if ($global:__parentPid -and $global:__parentPid -gt 0) {
         try {
-            $parent = [System.Diagnostics.Process]::GetProcessById($__parentPid)
+            $parent = [System.Diagnostics.Process]::GetProcessById($global:__parentPid)
             $psBashExe = $parent.MainModule.FileName
         } catch {}
     }
@@ -11868,20 +11865,20 @@ function Invoke-BashRead {
     if ($null -eq $inputLine) { return }
 
     if ($varNames.Count -eq 1) {
-        # Single variable: assign entire line
-        Set-Variable -Name $varNames[0] -Value $inputLine
+        # Single variable: assign entire line in the caller's scope
+        Set-Variable -Name $varNames[0] -Value $inputLine -Scope 1
     } else {
         # Multiple variables: split by whitespace
         $parts = $inputLine -split '\s+'
         for ($j = 0; $j -lt $varNames.Count; $j++) {
             if ($j -lt $parts.Count - 1) {
-                Set-Variable -Name $varNames[$j] -Value $parts[$j]
+                Set-Variable -Name $varNames[$j] -Value $parts[$j] -Scope 1
             } elseif ($j -eq $varNames.Count - 1) {
                 # Last variable gets remaining text
                 $remaining = ($parts[$j..($parts.Count - 1)] -join ' ')
-                Set-Variable -Name $varNames[$j] -Value $remaining
+                Set-Variable -Name $varNames[$j] -Value $remaining -Scope 1
             } else {
-                Set-Variable -Name $varNames[$j] -Value ''
+                Set-Variable -Name $varNames[$j] -Value '' -Scope 1
             }
         }
     }
@@ -12119,9 +12116,9 @@ function Invoke-BashBash {
     # Resolve the ps-bash executable: prefer the parent process path (exact binary),
     # fall back to Get-Command ps-bash.
     $psBashExe = $null
-    if ($__parentPid -and $__parentPid -gt 0) {
+    if ($global:__parentPid -and $global:__parentPid -gt 0) {
         try {
-            $parent = [System.Diagnostics.Process]::GetProcessById($__parentPid)
+            $parent = [System.Diagnostics.Process]::GetProcessById($global:__parentPid)
             $psBashExe = $parent.MainModule.FileName
         } catch {}
     }
@@ -12146,7 +12143,7 @@ function Invoke-BashBash {
             $mod = $MyInvocation.MyCommand.Module
             if ($mod) { $version = $mod.Version.ToString() }
         }
-        if (-not $version) { $version = '0.7.1' }
+        if (-not $version) { $version = '0.7.2' }
         $text = "ps-bash, version $version`nBash-to-PowerShell transpiler"
         Emit-BashLine -Text $text
         return
@@ -12205,7 +12202,6 @@ function Invoke-BashBackground {
 
     $script:BashBgPids.Add($proc)
     $global:BashBgLastPid = $proc.Id
-    $global:BashBgLastPid
 }
 
 function Invoke-BashWait {
@@ -12255,6 +12251,90 @@ function Invoke-BashJobs {
         $status = if ($proc.HasExited) { 'Done' } else { 'Running' }
         New-BashObject -BashText "[$i]`t$status`t$($proc.Id)`t$($proc.ProcessName)`n"
         $i++
+    }
+}
+
+# --- shift ---
+
+function Invoke-BashShift {
+    param()
+    $Arguments = [string[]]$args
+    if ($Arguments -contains '--help') { return Show-BashHelp 'shift' }
+    $n = 1
+    if ($Arguments.Count -gt 0) {
+        if (-not [int]::TryParse($Arguments[0], [ref]$n) -or $n -lt 0) {
+            Write-BashError -Message "shift: $($Arguments[0]): numeric argument required"
+            return
+        }
+    }
+    $pos = if ($global:BashPositional) { $global:BashPositional } else { @() }
+    if ($n -gt $pos.Count) {
+        Write-BashError -Message 'shift: cannot shift past end of positional parameters'
+        return
+    }
+    $global:BashPositional = $pos[$n..($pos.Count - 1)]
+}
+
+# --- realpath ---
+
+function Invoke-BashRealpath {
+    [OutputType('PsBash.TextOutput')]
+    param()
+    $Arguments = [string[]]$args
+    if ($Arguments -contains '--help') { return Show-BashHelp 'realpath' }
+    foreach ($path in $Arguments) {
+        if ($path.StartsWith('-')) { continue }
+        try {
+            $resolved = Resolve-Path -Path $path -ErrorAction Stop
+            $full = $resolved.Path
+        } catch {
+            $full = [System.IO.Path]::GetFullPath($path)
+        }
+        Emit-BashLine -Text $full
+    }
+}
+
+# --- command ---
+
+function Invoke-BashCommand {
+    [OutputType('PsBash.TextOutput')]
+    param()
+    $Arguments = [string[]]$args
+    if ($Arguments -contains '--help') { return Show-BashHelp 'command' }
+
+    $flags = @()
+    $operands = [System.Collections.Generic.List[string]]::new()
+    foreach ($arg in $Arguments) {
+        if ($arg.StartsWith('-')) { $flags += $arg }
+        else { $operands.Add($arg) }
+    }
+
+    $verbose = $flags -contains '-v' -or $flags -contains '-V'
+
+    foreach ($name in $operands) {
+        $found = $false
+        $output = $null
+
+        $cmd = Get-Command $name -ErrorAction SilentlyContinue
+        if ($cmd) {
+            $found = $true
+            if ($cmd.CommandType -eq 'Alias') {
+                $output = $cmd.Definition
+            } elseif ($cmd.CommandType -eq 'Function') {
+                $output = $cmd.Name
+            } else {
+                $output = $cmd.Source
+            }
+        }
+
+        if ($found) {
+            if ($verbose) {
+                Emit-BashLine -Text $output
+            }
+        } else {
+            $global:LASTEXITCODE = 1
+            return
+        }
     }
 }
 
@@ -12337,6 +12417,9 @@ $script:BashHelpSpecs = @{
     'bash'     = 'Invoke ps-bash transpiler for nested bash execution.'
     'wait'     = 'Wait for background processes to finish.'
     'jobs'     = 'List background processes and their status.'
+    'shift'    = 'Shift positional parameters.'
+    'realpath' = 'Print the resolved path.'
+    'command'  = 'Execute a simple command or display information about commands.'
 }
 
 function Test-BashHelpFlag {
@@ -12507,6 +12590,9 @@ $script:BashFlagSpecs = @{
     'eval'     = @( @('COMMAND', 'command string to evaluate') )
     'mapfile'  = @( @('-t', 'strip trailing delimiter'), @('-n', 'copy at most N lines'), @('-O', 'start assigning at index N') )
     'readarray' = @( @('-t', 'strip trailing delimiter'), @('-n', 'copy at most N lines'), @('-O', 'start assigning at index N') )
+    'shift'    = @( @('N', 'shift by N positions') )
+    'realpath' = @()
+    'command'  = @( @('-v', 'print command name or path') )
 }
 
 $script:BashCompleters = @{}
@@ -12623,6 +12709,9 @@ Set-Alias -Name 'type'     -Value 'Invoke-BashType'     -Force -Scope Global -Op
 Set-Alias -Name 'bash'     -Value 'Invoke-BashBash'     -Force -Scope Global -Option AllScope
 Set-Alias -Name 'wait'     -Value 'Invoke-BashWait'     -Force -Scope Global -Option AllScope
 Set-Alias -Name 'jobs'     -Value 'Invoke-BashJobs'     -Force -Scope Global -Option AllScope
+Set-Alias -Name 'shift'    -Value 'Invoke-BashShift'    -Force -Scope Global -Option AllScope
+Set-Alias -Name 'realpath' -Value 'Invoke-BashRealpath' -Force -Scope Global -Option AllScope
+Set-Alias -Name 'command'  -Value 'Invoke-BashCommand'  -Force -Scope Global -Option AllScope
 
 # --- Type-level ToString for BashObject types ---
 # Update-TypeData defines ToString() once per type name instead of per-object,

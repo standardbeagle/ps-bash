@@ -863,6 +863,13 @@ public sealed class BashParser
                 var parts = DecomposeWord(token.Value);
                 words.Add(new CompoundWord(parts));
             }
+            else if (kind == BashTokenKind.AssignmentWord)
+            {
+                // After command words have started, treat assignment-like tokens as arguments.
+                var token = Advance();
+                var parts = DecomposeWord(token.Value);
+                words.Add(new CompoundWord(parts));
+            }
             else if (kind == BashTokenKind.TLess)
             {
                 // Here-string: <<< word — the word becomes the body directly.
@@ -1232,8 +1239,8 @@ public sealed class BashParser
     {
         pos++; // skip $
         int start = pos;
-        // Special single-char variables: $? $! $# $$ $@ $* $- $0-$9
-        if (pos < raw.Length && raw[pos] is '?' or '!' or '#' or '$' or '@' or '*' or '-'
+        // Special single-char variables: $? $! $# $$ $_ $@ $* $- $0-$9
+        if (pos < raw.Length && raw[pos] is '?' or '!' or '#' or '$' or '_' or '@' or '*' or '-'
             or (>= '0' and <= '9'))
         {
             parts.Add(new WordPart.SimpleVarSub(raw[pos].ToString()));

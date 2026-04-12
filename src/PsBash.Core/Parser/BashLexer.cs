@@ -370,9 +370,9 @@ public static class BashLexer
                 continue;
             }
 
-            // Special variable: $# $? $! $$ $@ $* $- $0-$9 must not break on the second char.
+            // Special variable: $# $? $! $$ $_ $@ $* $- $0-$9 must not break on the second char.
             if (c == '$' && pos + 1 < len
-                && input[pos + 1] is '#' or '?' or '!' or '$' or '@' or '*' or '-'
+                && input[pos + 1] is '#' or '?' or '!' or '$' or '_' or '@' or '*' or '-'
                     or (>= '0' and <= '9'))
             {
                 pos += 2;

@@ -1562,7 +1562,7 @@ public class PsEmitterTests
     public void Transpile_DeclareAssociativeArray_EmitsHashtable()
     {
         var result = PsEmitter.Transpile("declare -A map");
-        Assert.Equal("$map = @{}", result);
+        Assert.Equal("$global:map = @{}" + "", result);
     }
 
     [Fact]
@@ -1928,19 +1928,19 @@ public class PsEmitterTests
         Assert.Equal("$ErrorActionPreference = 'Stop'; Set-StrictMode -Version Latest", result);
     }
 
-    // source file.sh -> . file.ps1
+    // source file.sh -> . file.sh (no rewrite)
     [Fact]
-    public void Transpile_SourceShFile_EmitsDotSourcePs1()
+    public void Transpile_SourceShFile_EmitsDotSource()
     {
         var result = PsEmitter.Transpile("source ./lib.sh");
-        Assert.Equal(". ./lib.ps1", result);
+        Assert.Equal(". ./lib.sh", result);
     }
 
     [Fact]
-    public void Transpile_DotSourceShFile_EmitsDotSourcePs1()
+    public void Transpile_DotSourceShFile_EmitsDotSource()
     {
         var result = PsEmitter.Transpile(". ./lib.sh");
-        Assert.Equal(". ./lib.ps1", result);
+        Assert.Equal(". ./lib.sh", result);
     }
 
     // -e file exists test
@@ -1952,12 +1952,12 @@ public class PsEmitterTests
         Assert.Contains("file.txt", result);
     }
 
-    // declare -i -> [int]$var = 0
+    // declare -i -> [int]$global:var = 0
     [Fact]
     public void Transpile_DeclareInt_EmitsTypedVar()
     {
         var result = PsEmitter.Transpile("declare -i count");
-        Assert.Equal("[int]$count = 0", result);
+        Assert.Equal("[int]$global:count = 0", result);
     }
 
     // ${str/foo/bar} -> replace first

@@ -12,7 +12,7 @@
 RootModule = 'PsBash.psm1'
 
 # Version number of this module.
-ModuleVersion = '0.7.1'
+ModuleVersion = '0.7.2'
 
 
 # ID used to uniquely identify this module
@@ -121,7 +121,8 @@ FunctionsToExport = 'Set-BashErrorMode', 'Invoke-ProcessSub',
                'Invoke-BashRedirect',
                'Invoke-BashBackground', 'Invoke-BashWait',
                'Invoke-BashJobs',
-               'Invoke-BashEval', 'Invoke-BashRead', 'Invoke-BashMapfile'
+                'Invoke-BashEval', 'Invoke-BashRead', 'Invoke-BashMapfile',
+                'Invoke-BashShift', 'Invoke-BashRealpath', 'Invoke-BashCommand'
 
 # Cmdlets to export from this module, for best performance, do not use wildcards and do not delete the entry, use an empty array if there are no cmdlets to export.
 CmdletsToExport = @()
@@ -144,8 +145,8 @@ AliasesToExport = 'echo', 'printf', 'ls', 'cat', 'grep', 'sort', 'head', 'tail',
                'gzip', 'gunzip', 'zcat', 'tar',
                'yq', 'xan',
                'sleep', 'time', 'which', 'balias', 'unalias',
-               'readlink', 'mktemp', 'type', 'bash',
-               'wait'
+                'readlink', 'mktemp', 'type', 'bash',
+                'wait', 'shift', 'realpath', 'command'
 
 # DSC resources to export from this module
 # DscResourcesToExport = @()
@@ -170,7 +171,7 @@ PrivateData = @{
         ProjectUri = 'https://github.com/standardbeagle/ps-bash'
 
         # ReleaseNotes of this module
-        ReleaseNotes = 'v0.7.0: tar (System.Formats.Tar), grep -F/-H/-h/-e/-w/-o/-m, tail -f/-c/-s, find -print0/xargs -0, jq //, if-then-else, as $var, .., sed -r/-f/a/i/c/q/N/D/P, sort -b/-d/-s/-k N.M,N.M, tr -c/-t/POSIX classes, uniq -u/-i/-f/-s/-w, diff -q/-w/-b/-B/-i/-c, awk -f/sprintf/match/strftime/systime/delete, interactive shell REPL mode.'
+        ReleaseNotes = 'v0.7.2: Fix $? after function return, read from pipe, eval crash, $! duplicate output. Add shift, realpath, command builtins. Fix trap EXIT, source .sh rewrite, grep PATH=, readonly scope, $- and $_ variable mappings.'
 
     } # End of PSData hashtable
 

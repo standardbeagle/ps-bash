@@ -124,10 +124,12 @@ public sealed class PwshWorker : IAsyncDisposable
             New-Module -Name PsBash -ScriptBlock ([scriptblock]::Create($moduleScript)) -Function * -Alias * | Import-Module -Global -DisableNameChecking
             [Console]::Out.WriteLine("<<<READY>>>")
             [Console]::Out.Flush()
-            $__parentPid = {{parentPid}}
+            $global:__parentPid = {{parentPid}}
+            $global:BashFlags = ''
+            $global:BashExitCode = 0
             while ($true) {
-                if ($__parentPid -gt 0) {
-                    try { $null = [System.Diagnostics.Process]::GetProcessById($__parentPid) }
+                if ($global:__parentPid -gt 0) {
+                    try { $null = [System.Diagnostics.Process]::GetProcessById($global:__parentPid) }
                     catch { exit 0 }
                 }
                 $lines = [System.Collections.Generic.List[string]]::new()
@@ -138,6 +140,7 @@ public sealed class PwshWorker : IAsyncDisposable
                     $lines.Add($line)
                 }
                 $command = $lines -join "`n"
+                $exitCode = 0
                 try {
                     $result = Invoke-Expression $command
                     $__partialLine = $false
@@ -163,12 +166,16 @@ public sealed class PwshWorker : IAsyncDisposable
                     }
                     if ($__partialLine) { [Console]::Out.WriteLine() }
                     $exitCode = if ($LASTEXITCODE -ne $null) { $LASTEXITCODE } else { 0 }
+                    $global:BashExitCode = $exitCode
                     [Console]::Out.WriteLine("<<<EXIT:$exitCode>>>")
                 } catch {
                     [Console]::Error.WriteLine($_.Exception.Message)
                     $exitCode = if ($LASTEXITCODE -ne $null) { $LASTEXITCODE } else { 1 }
+                    $global:BashExitCode = $exitCode
                     [Console]::Out.WriteLine("<<<EXIT:$exitCode>>>")
                 } finally {
+                    if ($global:__BashTrapEXIT) { & $global:__BashTrapEXIT }
+                    if ($exitCode -ne 0 -and $global:__BashTrapERR) { & $global:__BashTrapERR }
                     [Console]::Out.Flush()
                 }
                 $ws = [System.Diagnostics.Process]::GetCurrentProcess().WorkingSet64
