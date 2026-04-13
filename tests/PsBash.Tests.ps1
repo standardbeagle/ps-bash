@@ -6405,13 +6405,14 @@ Describe 'Invoke-BashAlias' {
         $results.Count | Should -Be 0
     }
 
-    It 'creates an alias with name=value syntax' {
+    It 'creates an alias with name=value syntax and a dynamic function' {
         Invoke-BashAlias 'foo=bar'
         $result = @(Invoke-BashAlias)
         $result.Count | Should -Be 1
         $result[0].Name | Should -Be 'foo'
         $result[0].Value | Should -Be 'bar'
         $result[0].BashText | Should -Be "alias foo='bar'"
+        Get-Command -Name 'foo' -CommandType Function -ErrorAction SilentlyContinue | Should -Not -BeNullOrEmpty
     }
 
     It 'shows a specific alias' {
@@ -6429,14 +6430,15 @@ Describe 'Invoke-BashAlias' {
         $results.Count | Should -Be 2
     }
 
-    It 'removes an alias with unalias' {
+    It 'removes an alias with unalias and removes the dynamic function' {
         Invoke-BashAlias 'foo=bar'
         Invoke-BashAlias '-u' 'foo'
         $results = @(Invoke-BashAlias)
         $results.Count | Should -Be 0
+        Get-Command -Name 'foo' -CommandType Function -ErrorAction SilentlyContinue | Should -BeNullOrEmpty
     }
 
-    It 'removes all aliases with unalias -a' {
+    It 'removes all aliases with unalias -a and removes all dynamic functions' {
         Invoke-BashAlias 'a=1'
         Invoke-BashAlias 'b=2'
         Invoke-BashAlias '-u' '-a'
@@ -6462,11 +6464,6 @@ Describe 'Invoke-BashAlias -- Help and Alias' {
     It 'returns help with --help' {
         $result = Invoke-BashAlias --help
         $result.BashText | Should -Match 'Usage: alias'
-    }
-
-    It 'exports alias command alias' {
-        $a = Get-Alias -Name 'balias' -Scope Global
-        $a.Definition | Should -Be 'Invoke-BashAlias'
     }
 
     It 'exports unalias command alias' {

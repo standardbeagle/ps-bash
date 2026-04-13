@@ -12,7 +12,7 @@
 RootModule = 'PsBash.psm1'
 
 # Version number of this module.
-ModuleVersion = '0.8.1'
+ModuleVersion = '0.8.2'
 
 
 # ID used to uniquely identify this module
@@ -124,8 +124,10 @@ FunctionsToExport = 'Set-BashErrorMode', 'Invoke-ProcessSub',
                  'Invoke-BashEval', 'Invoke-BashRead', 'Invoke-BashMapfile',
                 'Invoke-BashShift', 'Invoke-BashRealpath', 'Invoke-BashCommand',
                 'Invoke-BashSource', 'Invoke-BashUnset', 'Invoke-BashPushd',
-                'Invoke-BashPopd', 'Invoke-BashDirs', 'Invoke-BashYes', 'Invoke-BashTput',
-                'Invoke-BashShopt'
+                 'Invoke-BashPopd', 'Invoke-BashDirs', 'Invoke-BashYes', 'Invoke-BashTput',
+                 'Invoke-BashShopt',
+                 'Invoke-BashKill', 'Invoke-BashTest', 'Test-BashCondition',
+                 'Invoke-BashLet', 'Invoke-BashId', 'Invoke-BashShuf'
 
 # Cmdlets to export from this module, for best performance, do not use wildcards and do not delete the entry, use an empty array if there are no cmdlets to export.
 CmdletsToExport = @()
@@ -147,11 +149,12 @@ AliasesToExport = 'echo', 'printf', 'ls', 'cat', 'grep', 'sort', 'head', 'tail',
                'rg',
                'gzip', 'gunzip', 'zcat', 'tar',
                'yq', 'xan',
-               'sleep', 'time', 'which', 'balias', 'unalias',
+               'sleep', 'time', 'which', 'unalias',
                  'readlink', 'mktemp', 'type', 'bash',
                  'wait', 'shift', 'realpath', 'command', 'source',
-                 'unset', 'pushd', 'popd', 'dirs', 'yes', 'tput',
-                 'shopt'
+                  'unset', 'pushd', 'popd', 'dirs', 'yes', 'tput',
+                  'shopt',
+                  'kill', 'test', 'let', 'id', 'shuf'
 
 # DSC resources to export from this module
 # DscResourcesToExport = @()
@@ -176,7 +179,7 @@ PrivateData = @{
         ProjectUri = 'https://github.com/standardbeagle/ps-bash'
 
         # ReleaseNotes of this module
-        ReleaseNotes = 'v0.7.6: Fix remaining shell test failures caused by Console.IsInputRedirected auto-detection in ShellArgs.Parse. Move stdin detection to Program.cs with safe empty-stdin fallback to interactive mode. v0.7.5: Fix quoted executable paths with arguments by prefixing with & operator. Fix output loss on command timeout by introducing a background stdout reader in PwshWorker. v0.7.4: Fix ls/realpath directory desync after cd. v0.7.3: various fixes. v0.7.2: Fix $? after function return, read from pipe, eval crash, $! duplicate output. Add shift, realpath, command builtins. Fix trap EXIT, source .sh rewrite, grep PATH=, readonly scope, $- and $_ variable mappings.'
+        ReleaseNotes = 'v0.8.2: Two-tier alias architecture. Module mode: Invoke-BashAlias now creates dynamic PowerShell functions (e.g. alias ll=''ls -la'' creates function ll { ls -la $args }). Shell mode: alias expansion in InteractiveShell before transpilation — full bash syntax supported in alias values. Removed alias from emitter passthrough map. Removed balias alias. v0.7.6: Fix remaining shell test failures caused by Console.IsInputRedirected auto-detection in ShellArgs.Parse. Move stdin detection to Program.cs with safe empty-stdin fallback to interactive mode. v0.7.5: Fix quoted executable paths with arguments by prefixing with & operator. Fix output loss on command timeout by introducing a background stdout reader in PwshWorker. v0.7.4: Fix ls/realpath directory desync after cd. v0.7.3: various fixes. v0.7.2: Fix $? after function return, read from pipe, eval crash, $! duplicate output. Add shift, realpath, command builtins. Fix trap EXIT, source .sh rewrite, grep PATH=, readonly scope, $- and $_ variable mappings.'
 
     } # End of PSData hashtable
 

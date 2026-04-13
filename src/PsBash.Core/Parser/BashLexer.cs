@@ -4,7 +4,7 @@ namespace PsBash.Core.Parser;
 
 /// <summary>
 /// Hand-rolled lexer for bash input. Produces a flat token list from a string.
-/// Context-sensitive aspects (here-docs, alias expansion) are deferred to the parser.
+/// Context-sensitive aspects (here-docs) are deferred to the parser.
 /// </summary>
 public static class BashLexer
 {

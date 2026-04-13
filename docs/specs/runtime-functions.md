@@ -20,6 +20,21 @@ Key layers:
    functions (75 commands + 1 internal helper), the BashObject model, escape handling,
    glob expansion, and tab completion.
 
+### Alias Architecture (Two-Tier)
+
+`alias`/`unalias` have different implementations depending on the execution context:
+
+- **Module mode** (`Import-Module PsBash`): `Invoke-BashAlias` stores alias definitions
+  in `$script:BashUserAliases` and creates dynamic PowerShell functions via
+  `Set-Item -Path "Function:\$name"`. Simple aliases like `alias ll='ls -la'` work
+  because the generated function body (`ls -la $args`) calls the module's own aliases.
+  Complex bash syntax (pipes, redirections) in alias values will not work.
+- **Shell mode** (`ps-bash` interactive): alias management is handled entirely in C#
+  by `InteractiveShell`. The shell maintains an alias dictionary, intercepts
+  `alias`/`unalias` commands before transpilation, and expands the first word of each
+  input line against the dictionary. Full bash syntax in alias values is supported
+  because expansion happens before the transpiler sees the input.
+
 ## BashObject Model
 
 All command output flows through a uniform object model so that pipeline composition

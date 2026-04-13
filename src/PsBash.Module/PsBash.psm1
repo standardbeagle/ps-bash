@@ -627,22 +627,124 @@ function Invoke-BashPrintf {
     $i = 0
     while ($i -lt $format.Length) {
         if ($format[$i] -eq '%' -and ($i + 1) -lt $format.Length) {
-            $spec = $format[$i + 1]
-            switch ($spec) {
+            $j = $i + 1
+            $flags = ''
+            while ($j -lt $format.Length -and $format[$j] -match '^[-+ 0#]$') {
+                $flags += $format[$j]
+                $j++
+            }
+            $width = ''
+            while ($j -lt $format.Length -and $format[$j] -match '^\d$') {
+                $width += $format[$j]
+                $j++
+            }
+            $precision = ''
+            if ($j -lt $format.Length -and $format[$j] -eq '.') {
+                $j++
+                while ($j -lt $format.Length -and $format[$j] -match '^\d$') {
+                    $precision += $format[$j]
+                    $j++
+                }
+            }
+            $spec = if ($j -lt $format.Length) { $format[$j] } else { '' }
+            $fullSpec = $format.Substring($i, $j - $i + 1)
+
+            switch -casesensitive ($spec) {
                 's' {
-                    if ($argIdx -lt $converted.Count) { [void]$sb.Append($converted[$argIdx]) }
+                    if ($argIdx -lt $converted.Count) {
+                        $val = [string]$converted[$argIdx]
+                        if ($width -and $precision) {
+                            $val = $val.PadLeft([int]$width).Substring(0, [math]::Min([int]$precision, $val.Length))
+                        } elseif ($width) {
+                            if ($flags.Contains('-')) { $val = $val.PadRight([int]$width) }
+                            else { $val = $val.PadLeft([int]$width) }
+                        }
+                        [void]$sb.Append($val)
+                    }
                     $argIdx++
-                    $i += 2
+                    $i = $j + 1
                 }
                 'd' {
-                    if ($argIdx -lt $converted.Count) { [void]$sb.Append([int]$converted[$argIdx]) }
+                    if ($argIdx -lt $converted.Count) {
+                        $val = [int]$converted[$argIdx]
+                        if ($width) {
+                            $zeroPad = $flags.Contains('0')
+                            $leftAlign = $flags.Contains('-')
+                            $showPlus = $flags.Contains('+')
+                            $prefix = if ($val -ge 0 -and $showPlus) { '+' } else { '' }
+                            $str = "$prefix$($val.ToString())"
+                            if ($zeroPad -and -not $leftAlign) { $str = $str.PadLeft([int]$width, '0') }
+                            elseif ($leftAlign) { $str = $str.PadRight([int]$width) }
+                            else { $str = $str.PadLeft([int]$width) }
+                            [void]$sb.Append($str)
+                        } else {
+                            [void]$sb.Append($val)
+                        }
+                    }
                     $argIdx++
-                    $i += 2
+                    $i = $j + 1
                 }
                 'f' {
-                    if ($argIdx -lt $converted.Count) { [void]$sb.Append([string]::Format('{0:F6}', [double]$converted[$argIdx])) }
+                    if ($argIdx -lt $converted.Count) {
+                        $prec = if ($precision) { [int]$precision } else { 6 }
+                        [void]$sb.Append([string]::Format("{0,${width}:F${prec}}", [double]$converted[$argIdx]).Trim())
+                    }
                     $argIdx++
-                    $i += 2
+                    $i = $j + 1
+                }
+                'x' {
+                    if ($argIdx -lt $converted.Count) {
+                        $val = [int]$converted[$argIdx]
+                        $str = $val.ToString('x')
+                        if ($flags.Contains('#')) { $str = "0x$str" }
+                        if ($width) { $str = $str.PadLeft([int]$width, '0') }
+                        [void]$sb.Append($str)
+                    }
+                    $argIdx++
+                    $i = $j + 1
+                }
+                'X' {
+                    if ($argIdx -lt $converted.Count) {
+                        $val = [int]$converted[$argIdx]
+                        $str = $val.ToString('X')
+                        if ($flags.Contains('#')) { $str = "0X$str" }
+                        if ($width) { $str = $str.PadLeft([int]$width, '0') }
+                        [void]$sb.Append($str)
+                    }
+                    $argIdx++
+                    $i = $j + 1
+                }
+                'o' {
+                    if ($argIdx -lt $converted.Count) {
+                        $val = [int]$converted[$argIdx]
+                        $str = [Convert]::ToString($val, 8)
+                        if ($flags.Contains('#') -and -not $str.StartsWith('0')) { $str = "0$str" }
+                        if ($width) { $str = $str.PadLeft([int]$width, '0') }
+                        [void]$sb.Append($str)
+                    }
+                    $argIdx++
+                    $i = $j + 1
+                }
+                'c' {
+                    if ($argIdx -lt $converted.Count) {
+                        $v = $converted[$argIdx]
+                        if ($v -is [int] -or $v -is [long]) {
+                            [void]$sb.Append([char][int]$v)
+                        } else {
+                            $s = [string]$v
+                            if ($s.Length -gt 0) { [void]$sb.Append($s[0]) }
+                        }
+                    }
+                    $argIdx++
+                    $i = $j + 1
+                }
+                'b' {
+                    if ($argIdx -lt $converted.Count) {
+                        $expanded = Expand-EscapeSequences -Text ([string]$converted[$argIdx])
+                        [void]$sb.Append($expanded)
+                    }
+                    $argIdx++
+                    $i = $j + 1
                 }
                 default {
                     [void]$sb.Append($format[$i])
@@ -11645,7 +11747,7 @@ function Invoke-BashWhich {
     }
 }
 
-# --- alias / unalias ---
+# --- alias / unalias (module mode: dynamic function creation) ---
 
 $script:BashUserAliases = [System.Collections.Generic.Dictionary[string,string]]::new(
     [System.StringComparer]::Ordinal
@@ -11669,7 +11771,6 @@ function Invoke-BashAlias {
         } elseif ($arg -ceq '-a' -and $unaliasMode) {
             $removeAll = $true
         } elseif ($arg -ceq '-p') {
-            # list mode, same as bare alias
         } else {
             $operands.Add($arg)
         }
@@ -11678,6 +11779,9 @@ function Invoke-BashAlias {
 
     if ($unaliasMode) {
         if ($removeAll) {
+            foreach ($name in @($script:BashUserAliases.Keys)) {
+                Remove-Item "Function:\$name" -ErrorAction SilentlyContinue
+            }
             $script:BashUserAliases.Clear()
             return
         }
@@ -11686,6 +11790,7 @@ function Invoke-BashAlias {
                 Write-BashError -Message "unalias: ${name}: not found"
                 continue
             }
+            Remove-Item "Function:\$name" -ErrorAction SilentlyContinue
             $script:BashUserAliases.Remove($name) | Out-Null
         }
         return
@@ -11706,7 +11811,11 @@ function Invoke-BashAlias {
 
     foreach ($arg in $operands) {
         if ($arg -match '^([^=]+)=(.*)$') {
-            $script:BashUserAliases[$Matches[1]] = $Matches[2]
+            $aliasName = $Matches[1]
+            $aliasValue = $Matches[2]
+            $script:BashUserAliases[$aliasName] = $aliasValue
+            $body = [scriptblock]::Create("$aliasValue `$args")
+            Set-Item -Path "Function:\$aliasName" -Value $body -Force
         } else {
             if ($script:BashUserAliases.ContainsKey($arg)) {
                 $val = $script:BashUserAliases[$arg]
@@ -12931,7 +13040,6 @@ Set-Alias -Name 'xan'      -Value 'Invoke-BashXan'      -Force -Scope Global -Op
 Set-Alias -Name 'sleep'    -Value 'Invoke-BashSleep'    -Force -Scope Global -Option AllScope
 Set-Alias -Name 'time'     -Value 'Invoke-BashTime'     -Force -Scope Global -Option AllScope
 Set-Alias -Name 'which'    -Value 'Invoke-BashWhich'    -Force -Scope Global -Option AllScope
-Set-Alias -Name 'balias'   -Value 'Invoke-BashAlias'    -Force -Scope Global -Option AllScope
 Set-Alias -Name 'unalias'  -Value 'Invoke-BashAlias'    -Force -Scope Global -Option AllScope
 Set-Alias -Name 'readlink' -Value 'Invoke-BashReadlink' -Force -Scope Global -Option AllScope
 Set-Alias -Name 'mktemp'   -Value 'Invoke-BashMktemp'   -Force -Scope Global -Option AllScope
@@ -13092,6 +13200,396 @@ function Invoke-BashTput {
     }
 }
 
+# --- kill ---
+
+function Invoke-BashKill {
+    param()
+    $Arguments = [string[]]$args
+    if ($Arguments -contains '--help') { return Show-BashHelp 'kill' }
+
+    $signals = @{
+        '1'  = 'SIGHUP';  'HUP'  = 'SIGHUP'
+        '2'  = 'SIGINT';  'INT'  = 'SIGINT'
+        '3'  = 'SIGQUIT'; 'QUIT' = 'SIGQUIT'
+        '6'  = 'SIGABRT'; 'ABRT' = 'SIGABRT'
+        '9'  = 'SIGKILL'; 'KILL' = 'SIGKILL'
+        '14' = 'SIGALRM'; 'ALRM' = 'SIGALRM'
+        '15' = 'SIGTERM'; 'TERM' = 'SIGTERM'
+        '18' = 'SIGCONT'; 'CONT' = 'SIGCONT'
+        '19' = 'SIGSTOP'; 'STOP' = 'SIGSTOP'
+        '20' = 'SIGTSTP'; 'TSTP' = 'SIGTSTP'
+        '28' = 'SIGWINCH';'WINCH'= 'SIGWINCH'
+    }
+
+    $signalName = $null
+    $pids = [System.Collections.Generic.List[int]]::new()
+    $listJobs = $false
+
+    $i = 0
+    while ($i -lt $Arguments.Count) {
+        $a = $Arguments[$i]
+        if ($a -eq '-l' -or $a -eq '--list') {
+            $keys = $signals.Keys | Where-Object { $_ -match '^\d+$' } | Sort-Object { [int]$_ }
+            $names = $keys | ForEach-Object { $signals[$_] }
+            Emit-BashLine -Text ($names -join [Environment]::NewLine)
+            return
+        }
+        if ($a -eq '-s' -or $a -eq '--signal') {
+            $i++
+            if ($i -lt $Arguments.Count) {
+                $sigArg = $Arguments[$i]
+                if ($sigArg -match '^SIG') { $signalName = $sigArg }
+                elseif ($signals.ContainsKey($sigArg)) { $signalName = $signals[$sigArg] }
+                else { $signalName = "SIG$sigArg" }
+            }
+            $i++
+            continue
+        }
+        if ($a -match '^-(\d+)$') {
+            $sigNum = $Matches[1]
+            if ($signals.ContainsKey($sigNum)) { $signalName = $signals[$sigNum] }
+            else { $signalName = "SIG$sigNum" }
+            $i++
+            continue
+        }
+        if ($a -match '^--signal=(.+)$') {
+            $sigArg = $Matches[1]
+            if ($sigArg -match '^SIG') { $signalName = $sigArg }
+            elseif ($signals.ContainsKey($sigArg)) { $signalName = $signals[$sigArg] }
+            else { $signalName = "SIG$sigArg" }
+            $i++
+            continue
+        }
+        if ($a -match '^-%?(\d+)$') {
+            $pids.Add([int]$Matches[1])
+            $i++
+            continue
+        }
+        $intVal = 0
+        if ([int]::TryParse($a, [ref]$intVal)) {
+            $pids.Add($intVal)
+        }
+        $i++
+    }
+
+    if ($pids.Count -eq 0) {
+        Write-BashError -Message 'kill: usage: kill [-s sigspec | -n signum | -sigspec] pid | jobspec ... or kill -l [sigspec]' -ExitCode 2
+        return
+    }
+
+    foreach ($pid in $pids) {
+        try {
+            $proc = Get-Process -Id $pid -ErrorAction Stop
+            if ($signalName -eq 'SIGKILL') {
+                Stop-Process -Id $pid -Force
+            } elseif ($signalName -eq 'SIGTERM' -or -not $signalName) {
+                Stop-Process -Id $pid
+            } elseif ($signalName -eq 'SIGINT') {
+                $proc.Kill()
+            } else {
+                Stop-Process -Id $pid
+            }
+        } catch {
+            Write-BashError -Message "kill: ($pid) - No such process" -ExitCode 1
+        }
+    }
+}
+
+# --- test (standalone) ---
+
+function Invoke-BashTest {
+    param()
+    $Arguments = [string[]]$args
+
+    $__testResult = Test-BashCondition @Arguments
+    if ($__testResult) { $global:LASTEXITCODE = 0 } else { $global:LASTEXITCODE = 1 }
+    ,$__testResult
+}
+
+function Test-BashCondition {
+    param()
+    $args_list = [string[]]$args
+    if ($args_list.Count -eq 0) { return $false }
+    if ($args_list.Count -eq 1) { return [bool]$args_list[0] }
+    if ($args_list.Count -eq 2) {
+        $flag = $args_list[0]
+        $val  = $args_list[1]
+        switch ($flag) {
+            '-f'     { return Test-Path $val -PathType Leaf }
+            '-d'     { return Test-Path $val -PathType Container }
+            '-e'     { return Test-Path $val }
+            '-r'     { try { [System.IO.File]::OpenRead($val).Close(); return $true } catch { return $false } }
+            '-w'     { try { [System.IO.File]::OpenWrite($val).Close(); return $true } catch { return $false } }
+            '-x'     { return [bool](Get-Command $val -CommandType Application -ErrorAction SilentlyContinue) }
+            '-s'     { return (Test-Path $val -PathType Leaf) -and ((Get-Item $val).Length -gt 0) }
+            '-L'     { return (Get-Item $val -ErrorAction SilentlyContinue).Attributes -band [System.IO.FileAttributes]::ReparsePoint }
+            '-z'     { return [string]::IsNullOrEmpty($val) }
+            '-n'     { return -not [string]::IsNullOrEmpty($val) }
+            '-eq'    { return ($args_list[0] -eq $args_list[1]) }
+            '-ne'    { return ($args_list[0] -ne $args_list[1]) }
+            '-lt'    { return ($args_list[0] -lt $args_list[1]) }
+            '-le'    { return ($args_list[0] -le $args_list[1]) }
+            '-gt'    { return ($args_list[0] -gt $args_list[1]) }
+            '-ge'    { return ($args_list[0] -ge $args_list[1]) }
+            '!'      { return -not [bool]$val }
+            default  { return [bool]$flag }
+        }
+    }
+    if ($args_list.Count -eq 3) {
+        $lhs = $args_list[0]
+        $op  = $args_list[1]
+        $rhs = $args_list[2]
+        switch ($op) {
+            '='       { return $lhs -eq $rhs }
+            '=='      { return $lhs -eq $rhs }
+            '!='      { return $lhs -ne $rhs }
+            '-eq'     { return [decimal]$lhs -eq [decimal]$rhs }
+            '-ne'     { return [decimal]$lhs -ne [decimal]$rhs }
+            '-lt'     { return [decimal]$lhs -lt [decimal]$rhs }
+            '-le'     { return [decimal]$lhs -le [decimal]$rhs }
+            '-gt'     { return [decimal]$lhs -gt [decimal]$rhs }
+            '-ge'     { return [decimal]$lhs -ge [decimal]$rhs }
+            default   { return $true }
+        }
+    }
+
+    $i = 0
+    $result = $true
+    $currentOp = $null
+    while ($i -lt $args_list.Count) {
+        $tok = $args_list[$i]
+        if ($tok -eq '!') {
+            $i++
+            if ($i -lt $args_list.Count) {
+                $nextResult = Test-BashCondition $args_list[$i]
+                $result = -not $nextResult
+            }
+            $i++
+            continue
+        }
+        if ($tok -eq '-a') {
+            $currentOp = 'and'
+            $i++
+            continue
+        }
+        if ($tok -eq '-o') {
+            $currentOp = 'or'
+            $i++
+            continue
+        }
+        if ($i + 2 -le $args_list.Count) {
+            $check = Test-BashCondition $tok $args_list[$i+1]
+        } else {
+            $check = [bool]$tok
+        }
+        if ($currentOp -eq 'and') { $result = $result -and $check }
+        elseif ($currentOp -eq 'or') { $result = $result -or $check }
+        else { $result = $check }
+        $currentOp = $null
+        $i += 2
+    }
+    return $result
+}
+
+# --- let ---
+
+function Invoke-BashLet {
+    param()
+    $Arguments = [string[]]$args
+    if ($Arguments -contains '--help') { return Show-BashHelp 'let' }
+
+    $anyZero = $false
+    foreach ($expr in $Arguments) {
+        try {
+            $psExpr = $expr
+            $psExpr = $psExpr -replace '\*\*', '^'
+            $psExpr = $psExpr -replace '\b(\w+)\s*\+\+', '+=1'
+            $psExpr = $psExpr -replace '\b(\w+)\s*--', '-=1'
+            $result = Invoke-Expression $psExpr
+            if ($null -ne $result -and [int]$result -eq 0) { $anyZero = $true }
+        } catch {
+            Write-BashError -Message "let: $expr : expression error" -ExitCode 1
+            return
+        }
+    }
+
+    if ($anyZero) { $global:LASTEXITCODE = 1 } else { $global:LASTEXITCODE = 0 }
+}
+
+# --- id ---
+
+function Invoke-BashId {
+    [OutputType('PsBash.TextOutput')]
+    param()
+    $Arguments = [string[]]$args
+    if ($Arguments -contains '--help') { return Show-BashHelp 'id' }
+
+    $showUid   = $false
+    $showGid   = $false
+    $showGroups = $false
+    $showName  = $false
+    $showReal  = $false
+    $userName  = $null
+
+    $i = 0
+    while ($i -lt $Arguments.Count) {
+        $a = $Arguments[$i]
+        switch ($a) {
+            '-u' { $showUid = $true }
+            '-g' { $showGid = $true }
+            '-G' { $showGroups = $true }
+            '-n' { $showName = $true }
+            '-r' { $showReal = $true }
+            default { $userName = $a }
+        }
+        $i++
+    }
+
+    $identity = if ($userName) {
+        [System.Security.Principal.WindowsIdentity]::new($userName)
+    } else {
+        [System.Security.Principal.WindowsIdentity]::GetCurrent()
+    }
+
+    if ($showUid) {
+        if ($showName) {
+            Emit-BashLine -Text $identity.Name.Split('\')[-1]
+        } else {
+            $sid = $identity.User.Value
+            Emit-BashLine -Text $sid
+        }
+        return
+    }
+
+    if ($showGid) {
+        $primaryGroup = $identity.Groups | Select-Object -First 1
+        if ($showName) {
+            try {
+                $grp = $primaryGroup.Translate([System.Security.Principal.NTAccount])
+                Emit-BashLine -Text $grp.Value.Split('\')[-1]
+            } catch {
+                Emit-BashLine -Text $primaryGroup.Value
+            }
+        } else {
+            Emit-BashLine -Text $primaryGroup.Value
+        }
+        return
+    }
+
+    if ($showGroups) {
+        $groupNames = foreach ($g in $identity.Groups) {
+            if ($showName) {
+                try { $g.Translate([System.Security.Principal.NTAccount]).Value.Split('\')[-1] }
+                catch { $g.Value }
+            } else {
+                $g.Value
+            }
+        }
+        Emit-BashLine -Text ($groupNames -join ' ')
+        return
+    }
+
+    $uid = $identity.User.Value
+    $uname = $identity.Name
+    $gid = ($identity.Groups | Select-Object -First 1).Value
+    $groups = ($identity.Groups | ForEach-Object {
+        try { $_.Translate([System.Security.Principal.NTAccount]).Value.Split('\')[-1] }
+        catch { $_.Value }
+    }) -join ','
+    Emit-BashLine -Text "uid=$uid($uname) gid=$gid groups=$groups"
+}
+
+# --- shuf ---
+
+function Invoke-BashShuf {
+    [OutputType('PsBash.TextOutput')]
+    param()
+    $Arguments = [string[]]$args
+    if ($Arguments -contains '--help') { return Show-BashHelp 'shuf' }
+
+    $count = $null
+    $inputFile = $null
+    $echoMode = $false
+    $rangeStart = $null
+    $rangeEnd = $null
+    $items = [System.Collections.Generic.List[string]]::new()
+
+    $i = 0
+    while ($i -lt $Arguments.Count) {
+        $a = $Arguments[$i]
+        switch ($a) {
+            '-n' {
+                $i++
+                $count = [int]$Arguments[$i]
+            }
+            '-e' { $echoMode = $true }
+            '-i' {
+                $i++
+                $rangePart = $Arguments[$i]
+                $dashIdx = $rangePart.IndexOf('-')
+                $rangeStart = [int]$rangePart.Substring(0, $dashIdx)
+                $rangeEnd = [int]$rangePart.Substring($dashIdx + 1)
+            }
+            { $_ -match '^--head-count=(\d+)$' } {
+                $count = [int]$Matches[1]
+            }
+            default {
+                if ($a.StartsWith('-') -and $a -ne '-') {
+                    Write-BashError -Message "shuf: invalid option '$a'" -ExitCode 1
+                    return
+                }
+                if (-not $inputFile -and $a -ne '-') {
+                    $inputFile = $a
+                }
+            }
+        }
+        $i++
+    }
+
+    if ($echoMode) {
+        $items = [System.Collections.Generic.List[string]]::new()
+        $i = 0
+        while ($i -lt $Arguments.Count) {
+            if ($Arguments[$i] -eq '-e') {
+                $i++
+                while ($i -lt $Arguments.Count -and -not $Arguments[$i].StartsWith('-')) {
+                    $items.Add($Arguments[$i])
+                    $i++
+                }
+                continue
+            }
+            $i++
+        }
+    } elseif ($null -ne $rangeStart) {
+        $items = [System.Collections.Generic.List[string]]::new()
+        for ($n = $rangeStart; $n -le $rangeEnd; $n++) {
+            $items.Add([string]$n)
+        }
+    } elseif ($inputFile) {
+        $content = Get-Content -Path $inputFile -ErrorAction SilentlyContinue
+        foreach ($line in $content) { $items.Add($line) }
+    } else {
+        $pipelineInput = @($input)
+        if ($pipelineInput.Count -gt 0) {
+            foreach ($obj in $pipelineInput) {
+                $text = if ($obj.PSObject.Properties['BashText']) { $obj.BashText } else { [string]$obj }
+                $items.Add($text)
+            }
+        }
+    }
+
+    $rng = [System.Random]::new()
+    $shuffled = $items | Sort-Object { $rng.Next() }
+
+    if ($null -ne $count) {
+        $shuffled = $shuffled | Select-Object -First $count
+    }
+
+    foreach ($item in $shuffled) {
+        Emit-BashLine -Text $item
+    }
+}
+
 Set-Alias -Name 'command'  -Value 'Invoke-BashCommand'  -Force -Scope Global -Option AllScope
 Set-Alias -Name 'source'   -Value 'Invoke-BashSource'   -Force -Scope Global -Option AllScope
 Set-Alias -Name '.'        -Value 'Invoke-BashSource'   -Force -Scope Global -Option AllScope
@@ -13102,6 +13600,11 @@ Set-Alias -Name 'dirs'     -Value 'Invoke-BashDirs'     -Force -Scope Global -Op
 Set-Alias -Name 'yes'      -Value 'Invoke-BashYes'      -Force -Scope Global -Option AllScope
 Set-Alias -Name 'tput'     -Value 'Invoke-BashTput'     -Force -Scope Global -Option AllScope
 Set-Alias -Name 'shopt'    -Value 'Invoke-BashShopt'    -Force -Scope Global -Option AllScope
+Set-Alias -Name 'kill'     -Value 'Invoke-BashKill'     -Force -Scope Global -Option AllScope
+Set-Alias -Name 'test'     -Value 'Invoke-BashTest'     -Force -Scope Global -Option AllScope
+Set-Alias -Name 'let'      -Value 'Invoke-BashLet'      -Force -Scope Global -Option AllScope
+Set-Alias -Name 'id'       -Value 'Invoke-BashId'       -Force -Scope Global -Option AllScope
+Set-Alias -Name 'shuf'     -Value 'Invoke-BashShuf'     -Force -Scope Global -Option AllScope
 
 # --- Type-level ToString for BashObject types ---
 # Update-TypeData defines ToString() once per type name instead of per-object,

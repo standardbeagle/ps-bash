@@ -2100,9 +2100,6 @@ public static class PsEmitter
             case "uname":
                 result = EmitPassthrough("Invoke-BashUname", args);
                 return true;
-            case "alias":
-                result = EmitPassthrough("Invoke-BashAlias", args);
-                return true;
             case "trap":
                 result = EmitPassthrough("Invoke-BashTrap", args);
                 return true;
@@ -2160,6 +2157,21 @@ public static class PsEmitter
                 return true;
             case "shopt":
                 result = EmitPassthrough("Invoke-BashShopt", args);
+                return true;
+            case "kill":
+                result = EmitPassthrough("Invoke-BashKill", args);
+                return true;
+            case "test":
+                result = EmitPassthrough("Invoke-BashTest", args);
+                return true;
+            case "let":
+                result = EmitPassthrough("Invoke-BashLet", args);
+                return true;
+            case "id":
+                result = EmitPassthrough("Invoke-BashId", args);
+                return true;
+            case "shuf":
+                result = EmitPassthrough("Invoke-BashShuf", args);
                 return true;
             default:
                 return false;

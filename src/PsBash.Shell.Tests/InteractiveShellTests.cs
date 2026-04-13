@@ -23,8 +23,6 @@ public class InteractiveShellTests
     {
         Skip.If(PwshPath is null, "pwsh not available");
 
-        // Launch ps-bash with -i flag, but pipe in an 'exit 42' command
-        // so the interactive session terminates immediately with a known code.
         var psi = new ProcessStartInfo
         {
             FileName = "dotnet",
@@ -43,7 +41,6 @@ public class InteractiveShellTests
         var process = Process.Start(psi)
             ?? throw new InvalidOperationException("Failed to start dotnet run");
 
-        // Send exit command to the interactive pwsh session via stdin
         await process.StandardInput.WriteLineAsync("exit 42");
         process.StandardInput.Close();
 
@@ -81,5 +78,66 @@ public class InteractiveShellTests
         await process.WaitForExitAsync();
 
         Assert.Equal(0, process.ExitCode);
+    }
+}
+
+public class AliasExpansionTests
+{
+    [Fact]
+    public void ExpandAliases_NoAliases_ReturnsInputUnchanged()
+    {
+        var result = InteractiveShell.ExpandAliases("ls -la");
+        Assert.Equal("ls -la", result);
+    }
+
+    [Fact]
+    public void ExpandAliases_SimpleAlias_ExpandsFirstWord()
+    {
+        // This test relies on the static Aliases dictionary being populated
+        // We can't easily test this in isolation without refactoring,
+        // so we test through ProcessAliasCommand + ExpandAliases
+        InteractiveShell.ProcessAliasCommand("alias ll='ls -la'");
+        var result = InteractiveShell.ExpandAliases("ll /tmp");
+        Assert.Equal("ls -la /tmp", result);
+    }
+
+    [Fact]
+    public void ExpandAliases_UnknownCommand_ReturnsInputUnchanged()
+    {
+        InteractiveShell.ProcessAliasCommand("alias ll='ls -la'");
+        var result = InteractiveShell.ExpandAliases("cat file.txt");
+        Assert.Equal("cat file.txt", result);
+    }
+
+    [Fact]
+    public void ExpandAliases_AliasWithPipe_ExpandsBeforePipe()
+    {
+        InteractiveShell.ProcessAliasCommand("alias lc='ls -la | wc -l'");
+        var result = InteractiveShell.ExpandAliases("lc");
+        Assert.Equal("ls -la | wc -l", result);
+    }
+
+    [Fact]
+    public void ProcessAliasCommand_SetsAlias()
+    {
+        InteractiveShell.ProcessAliasCommand("alias gs='git status'");
+        var result = InteractiveShell.ExpandAliases("gs");
+        Assert.Equal("git status", result);
+    }
+
+    [Fact]
+    public void ProcessAliasCommand_UnaliasRemovesAlias()
+    {
+        InteractiveShell.ProcessAliasCommand("alias temp='echo hi'");
+        InteractiveShell.ProcessAliasCommand("unalias temp");
+        var result = InteractiveShell.ExpandAliases("temp something");
+        Assert.Equal("temp something", result);
+    }
+
+    [Fact]
+    public void ProcessAliasCommand_NotAliasCommand_ReturnsOriginal()
+    {
+        var result = InteractiveShell.ProcessAliasCommand("ls -la");
+        Assert.Equal("ls -la", result);
     }
 }

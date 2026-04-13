@@ -34,10 +34,10 @@ path.
 2. **Standalone commands** -- any `Command.Simple` whose command name is in the
    mapping table and is **not** a PowerShell builtin alias (see Section 2.2).
 
-It inspects the command name and dispatches to `EmitPassthrough`. All 67 mapped
+It inspects the command name and dispatches to `EmitPassthrough`. All 66 mapped
 commands use the same `EmitPassthrough` path with no exceptions.
 
-### 2.1 Mapped Commands (67 total)
+### 2.1 Mapped Commands (66 total)
 
 | Bash command | PowerShell function      |
 |--------------|--------------------------|
@@ -105,7 +105,6 @@ commands use the same `EmitPassthrough` path with no exceptions.
 | `sleep`      | `Invoke-BashSleep`       |
 | `time`       | `Invoke-BashTime`        |
 | `which`      | `Invoke-BashWhich`       |
-| `alias`      | `Invoke-BashAlias`       |
 
 Commands not in this table are emitted via the general `Emit` path (i.e., they
 are not rewritten).
