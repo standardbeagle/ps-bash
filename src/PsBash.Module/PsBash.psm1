@@ -11780,7 +11780,7 @@ function Invoke-BashAlias {
     if ($unaliasMode) {
         if ($removeAll) {
             foreach ($name in @($script:BashUserAliases.Keys)) {
-                Remove-Item "Function:\global:$name" -ErrorAction SilentlyContinue
+                Invoke-Expression "Remove-Item 'Function:\$name' -Force -ErrorAction SilentlyContinue"
             }
             $script:BashUserAliases.Clear()
             return
@@ -11790,7 +11790,7 @@ function Invoke-BashAlias {
                 Write-BashError -Message "unalias: ${name}: not found"
                 continue
             }
-            Remove-Item "Function:\global:$name" -ErrorAction SilentlyContinue
+            Invoke-Expression "Remove-Item 'Function:\$name' -Force -ErrorAction SilentlyContinue"
             $script:BashUserAliases.Remove($name) | Out-Null
         }
         return
@@ -11815,7 +11815,7 @@ function Invoke-BashAlias {
             $aliasValue = $Matches[2]
             $script:BashUserAliases[$aliasName] = $aliasValue
             $body = [scriptblock]::Create("& $aliasValue @args")
-            Set-Item -Path "Function:\global:$aliasName" -Value $body -Force
+            Invoke-Expression "function global:$aliasName { & $aliasValue @args }"
         } else {
             if ($script:BashUserAliases.ContainsKey($arg)) {
                 $val = $script:BashUserAliases[$arg]
