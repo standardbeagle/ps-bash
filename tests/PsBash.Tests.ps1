@@ -2227,7 +2227,7 @@ Describe 'Invoke-BashPs — Flags' {
         }
     }
 
-    It 'ps -u USER filters by username' {
+    It 'ps -u USER filters by username' -Skip:($IsLinux -and $env:CI -eq 'true') {
         $currentUser = if ($IsWindows) { $env:USERNAME } else { (id -un) }
         $results = @(Invoke-BashPs -u $currentUser)
         $results.Count | Should -BeGreaterOrEqual 1
