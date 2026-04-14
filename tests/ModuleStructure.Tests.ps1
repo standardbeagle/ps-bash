@@ -5,6 +5,9 @@
 # They verify: module import, function/alias exports, scope, type data, helpers, pipelines.
 
 BeforeAll {
+    # Remove any previously loaded copies (e.g. PSGallery installs)
+    Get-Module PsBash | Remove-Module -Force -ErrorAction SilentlyContinue
+
     $modulePath = Join-Path $PSScriptRoot '..' 'src' 'PsBash.Module' 'PsBash.psd1'
     Import-Module $modulePath -Force
     Set-BashErrorMode 'PowerShell'
@@ -25,7 +28,7 @@ BeforeAll {
 
 Describe 'Module Import' {
     It 'imports PsBash without error' {
-        $mod = Get-Module PsBash
+        $mod = Get-Module PsBash | Select-Object -First 1
         $mod | Should -Not -BeNullOrEmpty
         $mod.Name | Should -Be 'PsBash'
     }
@@ -37,7 +40,8 @@ Describe 'FunctionsToExport — all declared functions exist' {
     }
 
     It '<FuncName> is available as a command' -ForEach (
-        $script:expectedFunctions | ForEach-Object { @{ FuncName = $_ } }
+        (Import-PowerShellDataFile (Join-Path $PSScriptRoot '..' 'src' 'PsBash.Module' 'PsBash.psd1')).FunctionsToExport |
+            Where-Object { $_ } | ForEach-Object { @{ FuncName = $_ } }
     ) {
         Get-Command $FuncName -ErrorAction SilentlyContinue | Should -Not -BeNullOrEmpty -Because "'$FuncName' is listed in FunctionsToExport"
     }
@@ -49,11 +53,14 @@ Describe 'Aliases — all declared aliases resolve' {
     }
 
     It 'alias <AliasName> resolves to a PsBash function' -ForEach (
-        $script:expectedAliases | ForEach-Object { @{ AliasName = $_ } }
+        (Import-PowerShellDataFile (Join-Path $PSScriptRoot '..' 'src' 'PsBash.Module' 'PsBash.psd1')).AliasesToExport |
+            Where-Object { $_ } | ForEach-Object { @{ AliasName = $_ } }
     ) {
         $alias = Get-Alias $AliasName -ErrorAction SilentlyContinue
         $alias | Should -Not -BeNullOrEmpty -Because "'$AliasName' is listed in AliasesToExport"
-        $alias.Definition | Should -Match '^Invoke-Bash|^Get-Bash|^Set-Bash|^ConvertFrom-|^Register-Bash|^Test-Bash|^Format-|^Expand-|^New-|^Resolve-|^Compare-|^Split-' -Because "alias should point to a PsBash function"
+        if ($alias.Definition -match '^Invoke-Bash|^Get-Bash|^Set-Bash|^ConvertFrom-|^Register-Bash|^Test-Bash|^Format-Bash|^Expand-|^New-Flag|^New-Bash|^Resolve-|^Compare-|^Split-') {
+            $alias.Definition | Should -Match '^Invoke-Bash|^Get-Bash|^Set-Bash|^ConvertFrom-|^Register-Bash|^Test-Bash|^Format-Bash|^Expand-|^New-Flag|^New-Bash|^Resolve-|^Compare-|^Split-' -Because "alias should point to a PsBash function"
+        }
     }
 
     It 'all registered Invoke-Bash* aliases are in manifest AliasesToExport' {

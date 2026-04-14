@@ -7,9 +7,15 @@ namespace PsBash.Shell;
 
 public static class InteractiveShell
 {
-    private const string Prompt = "$ ";
+    private const string ContinuationPrompt = "> ";
 
     private static readonly Dictionary<string, string> Aliases = new(StringComparer.Ordinal);
+
+    private static readonly string[] OpenKeywords = ["if", "for", "while", "until", "case", "do", "{", "(", "function"];
+    private static readonly string[] CloseKeywords = ["fi", "done", "esac", "}", ")"];
+
+    private static string _homeDir = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+    private static string _lastDir = Environment.CurrentDirectory;
 
     public static async Task<int> RunAsync(string pwshPath)
     {
@@ -18,23 +24,23 @@ public static class InteractiveShell
         var cts = new CancellationTokenSource();
         var worker = await StartWorkerAsync(pwshPath);
 
+        await SourceRcFileAsync(worker, cts);
+
         while (true)
         {
             cts.Dispose();
             cts = new CancellationTokenSource();
             _currentCts = cts;
 
-            Console.Write(Prompt);
-            var line = Console.ReadLine();
-
-            if (line is null)
+            var input = ReadInput();
+            if (input is null)
             {
                 Console.WriteLine();
                 await DisposeWorkerAsync(worker);
                 return 0;
             }
 
-            var trimmed = line.Trim();
+            var trimmed = input.Trim();
             if (trimmed.Length == 0)
                 continue;
 
@@ -64,6 +70,7 @@ public static class InteractiveShell
             try
             {
                 await worker.ExecuteAsync(pwshCommand, cts.Token);
+                UpdateCwd(trimmed);
             }
             catch (OperationCanceledException)
             {
@@ -74,16 +81,346 @@ public static class InteractiveShell
         }
     }
 
+    private static void UpdateCwd(string bashInput)
+    {
+        var trimmedInput = bashInput.TrimStart();
+        if (!trimmedInput.StartsWith("cd ") && trimmedInput != "cd" && !trimmedInput.StartsWith("cd\t"))
+            return;
+
+        var arg = trimmedInput[2..].Trim();
+        if (arg.Length == 0 || arg == "~")
+        {
+            _lastDir = _homeDir;
+            return;
+        }
+
+        if (arg == "-")
+            return;
+
+        try
+        {
+            var target = arg.StartsWith("~") ? _homeDir + arg[1..] : arg;
+            if (!Path.IsPathRooted(target))
+                target = Path.GetFullPath(Path.Combine(_lastDir, target));
+
+            if (Directory.Exists(target))
+                _lastDir = target;
+        }
+        catch { }
+    }
+
+    private static string BuildPrompt()
+    {
+        const string Reset = "\x1b[0m";
+        const string Bold = "\x1b[1m";
+        const string Green = "\x1b[32m";
+        const string Cyan = "\x1b[36m";
+        const string Red = "\x1b[31m";
+        const string Magenta = "\x1b[35m";
+        const string Dim = "\x1b[2m";
+
+        var cwd = _lastDir;
+        if (cwd.StartsWith(_homeDir))
+            cwd = "~" + cwd[_homeDir.Length..];
+
+        var sb = new StringBuilder();
+
+        // Username@hostname
+        var user = Environment.UserName;
+        var host = Environment.MachineName.ToLowerInvariant();
+        sb.Append($"{Green}{Bold}{user}@{host}{Reset}");
+
+        sb.Append(':');
+
+        // Working directory
+        sb.Append($"{Cyan}{Bold}{cwd}{Reset}");
+
+        // Git branch
+        var branch = GetGitBranch();
+        if (branch is not null)
+        {
+            var status = GetGitStatus();
+            var branchColor = status ? Green : Red;
+            sb.Append($" {Dim}({Reset}{branchColor}{branch}{Reset}{Dim}){Reset}");
+        }
+
+        sb.Append(' ');
+
+        // Prompt character — # for admin, $ for user
+        var isAdmin = OperatingSystem.IsWindows()
+            && System.Security.Principal.WindowsIdentity.GetCurrent()?.Owner?.IsWellKnown(
+                System.Security.Principal.WellKnownSidType.BuiltinAdministratorsSid) == true;
+        var promptChar = isAdmin ? '#' : '$';
+        sb.Append($"{Magenta}{Bold}{promptChar}{Reset} ");
+
+        return sb.ToString();
+    }
+
+    private static string? GetGitBranch()
+    {
+        try
+        {
+            var dir = _lastDir;
+            while (dir is not null)
+            {
+                if (Directory.Exists(Path.Combine(dir, ".git")))
+                {
+                    var headFile = Path.Combine(dir, ".git", "HEAD");
+                    if (File.Exists(headFile))
+                    {
+                        var head = File.ReadAllText(headFile).Trim();
+                        const string prefix = "ref: refs/heads/";
+                        if (head.StartsWith(prefix))
+                            return head[prefix.Length..];
+                        return head[..Math.Min(7, head.Length)];
+                    }
+                    return null;
+                }
+                var parent = Path.GetDirectoryName(dir);
+                if (parent == dir) break;
+                dir = parent;
+            }
+        }
+        catch { }
+        return null;
+    }
+
+    private static bool GetGitStatus()
+    {
+        try
+        {
+            var dir = _lastDir;
+            while (dir is not null)
+            {
+                var gitDir = Path.Combine(dir, ".git");
+                if (Directory.Exists(gitDir))
+                {
+                    // Check if index exists and has entries different from HEAD
+                    // A simple proxy: check if there are modified files
+                    var headFile = Path.Combine(gitDir, "HEAD");
+                    if (!File.Exists(headFile)) return true;
+                    var head = File.ReadAllText(headFile).Trim();
+                    const string prefix = "ref: refs/heads/";
+                    if (!head.StartsWith(prefix)) return true;
+                    var refPath = Path.Combine(gitDir, head[prefix.Length..]);
+                    if (!File.Exists(refPath)) return false;
+                    return true; // branch exists = clean enough
+                }
+                var parent = Path.GetDirectoryName(dir);
+                if (parent == dir) break;
+                dir = parent;
+            }
+        }
+        catch { }
+        return true;
+    }
+
+    private static string? ReadInput()
+    {
+        Console.Write(BuildPrompt());
+        var line = Console.ReadLine();
+        if (line is null)
+            return null;
+
+        var sb = new StringBuilder(line);
+
+        while (IsIncomplete(sb.ToString()))
+        {
+            Console.Write(ContinuationPrompt);
+            var next = Console.ReadLine();
+            if (next is null)
+                break;
+            sb.Append('\n');
+            sb.Append(next);
+        }
+
+        return sb.ToString();
+    }
+
+    internal static bool IsIncomplete(string input)
+    {
+        int depth = 0;
+        int braceDepth = 0;
+        int parenDepth = 0;
+        bool inSingleQuote = false;
+        bool inDoubleQuote = false;
+
+        var words = new List<string>();
+        int i = 0;
+        while (i < input.Length)
+        {
+            char c = input[i];
+
+            if (inSingleQuote)
+            {
+                if (c == '\'') inSingleQuote = false;
+                i++;
+                continue;
+            }
+
+            if (inDoubleQuote)
+            {
+                if (c == '\\' && i + 1 < input.Length) { i += 2; continue; }
+                if (c == '"') inDoubleQuote = false;
+                i++;
+                continue;
+            }
+
+            if (c == '\'') { inSingleQuote = true; i++; continue; }
+            if (c == '"') { inDoubleQuote = true; i++; continue; }
+            if (c == '\\' && i + 1 < input.Length) { i += 2; continue; }
+
+            if (c == '#')
+            {
+                while (i < input.Length && input[i] != '\n') i++;
+                continue;
+            }
+
+            if (c == '{') { braceDepth++; i++; continue; }
+            if (c == '}') { braceDepth--; i++; continue; }
+            if (c == '(') { parenDepth++; i++; continue; }
+            if (c == ')')
+            {
+                parenDepth--;
+                i++;
+                continue;
+            }
+
+            if (char.IsWhiteSpace(c) || c == ';' || c == '|' || c == '&' || c == '<' || c == '>' || c == '\n')
+            {
+                if (words.Count > 0 && c != '\n')
+                {
+                    ProcessWord(words[^1], ref depth);
+                }
+
+                if (c == '\n' || c == ';')
+                {
+                    words.Clear();
+                }
+                i++;
+                continue;
+            }
+
+            var wordStart = i;
+            while (i < input.Length)
+            {
+                char wc = input[i];
+                if (inSingleQuote) { if (wc == '\'') inSingleQuote = false; i++; continue; }
+                if (inDoubleQuote)
+                {
+                    if (wc == '\\' && i + 1 < input.Length) { i += 2; continue; }
+                    if (wc == '"') inDoubleQuote = false;
+                    i++; continue;
+                }
+                if (wc == '\'' || wc == '"') { if (wc == '\'') inSingleQuote = true; else inDoubleQuote = true; i++; continue; }
+                if (wc == '\\' && i + 1 < input.Length) { i += 2; continue; }
+                if (char.IsWhiteSpace(wc) || wc == ';' || wc == '|' || wc == '&' || wc == '<' || wc == '>' || wc == '{' || wc == '}' || wc == '(' || wc == ')' || wc == '\n')
+                    break;
+                i++;
+            }
+
+            var word = input[wordStart..i];
+            if (word.Length > 0)
+            {
+                ProcessWord(word, ref depth);
+                words.Add(word);
+            }
+        }
+
+        if (inSingleQuote || inDoubleQuote)
+            return true;
+        if (braceDepth > 0)
+            return true;
+        if (parenDepth > 0)
+            return true;
+        if (depth > 0)
+            return true;
+
+        return false;
+    }
+
+    private static void ProcessWord(string word, ref int depth)
+    {
+        if (word is "if" or "for" or "while" or "until" or "case" or "select")
+        {
+            depth++;
+        }
+        else if (word == "do")
+        {
+            // 'do' only opens if we're inside a for/while/until (depth > 0)
+            // In bash: for x in ... do ... done — 'do' doesn't nest, the for already opened
+        }
+        else if (word == "fi" || word == "done" || word == "esac")
+        {
+            depth--;
+        }
+    }
+
+    private static async Task SourceRcFileAsync(PwshWorker worker, CancellationTokenSource cts)
+    {
+        var rcPath = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".psbashrc");
+        if (!File.Exists(rcPath))
+            return;
+
+        string rcContent;
+        try
+        {
+            rcContent = await File.ReadAllTextAsync(rcPath);
+        }
+        catch
+        {
+            return;
+        }
+
+        if (string.IsNullOrWhiteSpace(rcContent))
+            return;
+
+        var filtered = new StringBuilder();
+        foreach (var rawLine in rcContent.Split('\n'))
+        {
+            var line = rawLine.TrimEnd('\r', '\n');
+            var trimmed = line.Trim();
+            if (trimmed.Length == 0 || trimmed.StartsWith('#'))
+                continue;
+
+            var aliasResult = ProcessAliasCommand(trimmed);
+            if (aliasResult.Length == 0)
+                continue;
+
+            aliasResult = ExpandAliases(aliasResult);
+            if (filtered.Length > 0)
+                filtered.Append('\n');
+            filtered.Append(aliasResult);
+        }
+
+        if (filtered.Length == 0)
+            return;
+
+        string pwshCommand;
+        try
+        {
+            pwshCommand = BashTranspiler.Transpile(filtered.ToString());
+        }
+        catch (ParseException)
+        {
+            return;
+        }
+
+        try
+        {
+            await worker.ExecuteAsync(pwshCommand, cts.Token);
+        }
+        catch (OperationCanceledException) { }
+    }
+
     public static string ProcessAliasCommand(string input)
     {
-        // Handle: alias name=value
         var aliasMatch = System.Text.RegularExpressions.Regex.Match(
             input, @"^alias\s+((?:[^=\\ ""']+|\\.|""[^""]*""|'[^']*')+)=((?:[^\\ ""']+|\\.|""[^""]*""|'[^']*')*)\s*$");
         if (aliasMatch.Success)
         {
             var name = aliasMatch.Groups[1].Value.Trim();
             var value = aliasMatch.Groups[2].Value.Trim();
-            // Strip surrounding quotes from value
             if ((value.StartsWith('"') && value.EndsWith('"')) ||
                 (value.StartsWith('\'') && value.EndsWith('\'')))
             {
@@ -93,7 +430,6 @@ public static class InteractiveShell
             return "";
         }
 
-        // Handle: alias (bare — list all)
         if (input == "alias" || System.Text.RegularExpressions.Regex.IsMatch(input, @"^alias\s+-p\s*$"))
         {
             foreach (var kvp in Aliases)
@@ -101,7 +437,6 @@ public static class InteractiveShell
             return "";
         }
 
-        // Handle: alias name (show specific)
         var aliasShowMatch = System.Text.RegularExpressions.Regex.Match(input, @"^alias\s+([^\s=]+)\s*$");
         if (aliasShowMatch.Success)
         {
@@ -113,7 +448,6 @@ public static class InteractiveShell
             return "";
         }
 
-        // Handle: unalias name
         var unaliasMatch = System.Text.RegularExpressions.Regex.Match(input, @"^unalias\s+(.+)\s*$");
         if (unaliasMatch.Success)
         {
@@ -126,11 +460,7 @@ public static class InteractiveShell
             {
                 foreach (var name in names.Split((char[])[' ', '\t'], StringSplitOptions.RemoveEmptyEntries))
                 {
-                    if (Aliases.Remove(name))
-                    {
-                        // removed
-                    }
-                    else
+                    if (!Aliases.Remove(name))
                     {
                         Console.Error.WriteLine($"ps-bash: unalias: {name}: not found");
                     }
@@ -147,17 +477,13 @@ public static class InteractiveShell
         if (Aliases.Count == 0)
             return input;
 
-        // Find the first word (command name) respecting quotes
-        var sb = new StringBuilder();
         int i = 0;
-        // Skip leading whitespace
         while (i < input.Length && char.IsWhiteSpace(input[i]))
             i++;
 
         if (i >= input.Length)
             return input;
 
-        // Read the first word
         int start = i;
         bool quoted = false;
         char quoteChar = '\0';

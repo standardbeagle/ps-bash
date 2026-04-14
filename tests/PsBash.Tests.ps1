@@ -1,6 +1,9 @@
 #Requires -Modules Pester
 
 BeforeAll {
+    # Remove any previously loaded copies (e.g. PSGallery installs)
+    Get-Module PsBash | Remove-Module -Force -ErrorAction SilentlyContinue
+
     $modulePath = Join-Path $PSScriptRoot '..' 'src' 'PsBash.Module' 'PsBash.psd1'
     Import-Module $modulePath -Force
     # Use PowerShell error mode so Write-BashError emits ErrorRecord objects
@@ -13,7 +16,7 @@ BeforeAll {
 
 Describe 'Module Loading' {
     It 'imports PsBash without error' {
-        $mod = Get-Module PsBash
+        $mod = Get-Module PsBash | Select-Object -First 1
         $mod | Should -Not -BeNullOrEmpty
         $mod.Name | Should -Be 'PsBash'
     }
@@ -4791,7 +4794,7 @@ Describe 'Slice 19 — Pipeline Bridge' {
 
 Describe 'Register-BashCompletions — Flag Spec Data' {
     It 'BashFlagSpecs contains ls with expected flags' {
-        $specs = & (Get-Module PsBash) { $script:BashFlagSpecs }
+        $specs = & (Get-Module PsBash | Select-Object -First 1) { $script:BashFlagSpecs }
         $specs | Should -Not -BeNullOrEmpty
         $specs.ContainsKey('ls') | Should -BeTrue
         $lsFlags = $specs['ls']
@@ -4803,7 +4806,7 @@ Describe 'Register-BashCompletions — Flag Spec Data' {
     }
 
     It 'BashFlagSpecs contains grep with short and context flags' {
-        $specs = & (Get-Module PsBash) { $script:BashFlagSpecs }
+        $specs = & (Get-Module PsBash | Select-Object -First 1) { $script:BashFlagSpecs }
         $specs.ContainsKey('grep') | Should -BeTrue
         $grepFlags = $specs['grep']
         ($grepFlags | Where-Object { $_[0] -eq '-i' }) | Should -Not -BeNullOrEmpty
@@ -4813,7 +4816,7 @@ Describe 'Register-BashCompletions — Flag Spec Data' {
     }
 
     It 'BashFlagSpecs contains all expected commands' {
-        $specs = & (Get-Module PsBash) { $script:BashFlagSpecs }
+        $specs = & (Get-Module PsBash | Select-Object -First 1) { $script:BashFlagSpecs }
         $expectedCommands = @(
             'ls', 'cat', 'grep', 'sort', 'head', 'tail', 'wc',
             'find', 'stat', 'cp', 'mv', 'rm', 'mkdir', 'rmdir',
@@ -4830,7 +4833,7 @@ Describe 'Register-BashCompletions — Flag Spec Data' {
 
 Describe 'Register-BashCompletions — Completer Results' {
     It 'ls completer returns flags when word starts with -' {
-        $completer = & (Get-Module PsBash) { $script:BashCompleters['ls'] }
+        $completer = & (Get-Module PsBash | Select-Object -First 1) { $script:BashCompleters['ls'] }
         $completer | Should -Not -BeNullOrEmpty
         $results = @(& $completer '-' $null $null)
         $results | Should -Not -BeNullOrEmpty
@@ -4843,7 +4846,7 @@ Describe 'Register-BashCompletions — Completer Results' {
     }
 
     It 'grep completer returns matching flags for -' {
-        $completer = & (Get-Module PsBash) { $script:BashCompleters['grep'] }
+        $completer = & (Get-Module PsBash | Select-Object -First 1) { $script:BashCompleters['grep'] }
         $results = @(& $completer '-' $null $null)
         $results | Should -Not -BeNullOrEmpty
         $names = $results | ForEach-Object { $_.CompletionText }
@@ -4853,7 +4856,7 @@ Describe 'Register-BashCompletions — Completer Results' {
     }
 
     It 'completions have correct CompletionResultType' {
-        $completer = & (Get-Module PsBash) { $script:BashCompleters['ls'] }
+        $completer = & (Get-Module PsBash | Select-Object -First 1) { $script:BashCompleters['ls'] }
         $results = @(& $completer '-' $null $null)
         foreach ($r in $results) {
             $r | Should -BeOfType [System.Management.Automation.CompletionResult]
@@ -4862,7 +4865,7 @@ Describe 'Register-BashCompletions — Completer Results' {
     }
 
     It 'completions include description tooltip' {
-        $completer = & (Get-Module PsBash) { $script:BashCompleters['ls'] }
+        $completer = & (Get-Module PsBash | Select-Object -First 1) { $script:BashCompleters['ls'] }
         $results = @(& $completer '-l' $null $null)
         $match = $results | Where-Object { $_.CompletionText -eq '-l' }
         $match | Should -Not -BeNullOrEmpty
@@ -4870,13 +4873,13 @@ Describe 'Register-BashCompletions — Completer Results' {
     }
 
     It 'completer returns nothing for non-flag words' {
-        $completer = & (Get-Module PsBash) { $script:BashCompleters['ls'] }
+        $completer = & (Get-Module PsBash | Select-Object -First 1) { $script:BashCompleters['ls'] }
         $results = @(& $completer 'foo' $null $null)
         $results.Count | Should -Be 0
     }
 
     It 'completer filters by prefix' {
-        $completer = & (Get-Module PsBash) { $script:BashCompleters['sort'] }
+        $completer = & (Get-Module PsBash | Select-Object -First 1) { $script:BashCompleters['sort'] }
         $results = @(& $completer '-n' $null $null)
         $results | Should -Not -BeNullOrEmpty
         $names = $results | ForEach-Object { $_.CompletionText }
@@ -4885,21 +4888,21 @@ Describe 'Register-BashCompletions — Completer Results' {
     }
 
     It 'stat completer returns --printf' {
-        $completer = & (Get-Module PsBash) { $script:BashCompleters['stat'] }
+        $completer = & (Get-Module PsBash | Select-Object -First 1) { $script:BashCompleters['stat'] }
         $results = @(& $completer '--' $null $null)
         $names = $results | ForEach-Object { $_.CompletionText }
         $names | Should -Contain '--printf'
     }
 
     It 'tree completer returns --dirsfirst' {
-        $completer = & (Get-Module PsBash) { $script:BashCompleters['tree'] }
+        $completer = & (Get-Module PsBash | Select-Object -First 1) { $script:BashCompleters['tree'] }
         $results = @(& $completer '--' $null $null)
         $names = $results | ForEach-Object { $_.CompletionText }
         $names | Should -Contain '--dirsfirst'
     }
 
     It 'find completer returns -name, -type, -maxdepth' {
-        $completer = & (Get-Module PsBash) { $script:BashCompleters['find'] }
+        $completer = & (Get-Module PsBash | Select-Object -First 1) { $script:BashCompleters['find'] }
         $results = @(& $completer '-' $null $null)
         $names = $results | ForEach-Object { $_.CompletionText }
         $names | Should -Contain '-name'
@@ -5256,7 +5259,7 @@ Describe 'Show-BashHelp — renders help text' {
 
     It 'includes all flags from BashFlagSpecs' {
         $result = Show-BashHelp 'grep'
-        $flagSpecs = & (Get-Module PsBash) { $script:BashFlagSpecs['grep'] }
+        $flagSpecs = & (Get-Module PsBash | Select-Object -First 1) { $script:BashFlagSpecs['grep'] }
         foreach ($entry in $flagSpecs) {
             $flag = $entry[0]
             $result.BashText | Should -Match ([regex]::Escape($flag))

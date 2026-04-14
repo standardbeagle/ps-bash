@@ -429,7 +429,9 @@ function Emit-BashLine {
     $lines = $stripped -split "`n"
     $cmdSplat = if ($Command) { @{ Command = $Command } } else { @{} }
     for ($li = 0; $li -lt $lines.Count; $li++) {
-        New-BashObject -BashText $lines[$li] @cmdSplat
+        $isLast = ($li -eq $lines.Count - 1)
+        $noNl = ($isLast -and -not $hasTrailingNewline)
+        New-BashObject -BashText $lines[$li] @cmdSplat -NoTrailingNewline:$noNl
     }
 }
 
@@ -495,7 +497,13 @@ function ConvertFrom-BashArgs {
             break
         }
 
-        if ($arg.StartsWith('-') -and $arg.Length -gt 1 -and -not $arg.StartsWith('--')) {
+        if ($arg.StartsWith('--') -and $arg.Length -gt 2) {
+            if ($flags.ContainsKey($arg)) {
+                $flags[$arg] = $true
+            } else {
+                $operands.Add($arg)
+            }
+        } elseif ($arg.StartsWith('-') -and $arg.Length -gt 1) {
             foreach ($ch in $arg.Substring(1).ToCharArray()) {
                 $flag = "-$ch"
                 if ($flags.ContainsKey($flag)) {
@@ -1068,6 +1076,24 @@ function Format-LsGrid {
 
 # --- ls Command ---
 
+function Test-IsExecutable {
+    param([Parameter(Mandatory)][PSCustomObject]$Entry)
+    if ($Entry.IsDirectory) { return $false }
+    if ($Entry.IsSymlink) { return $false }
+    if ($IsWindows) {
+        $execExts = '.exe','.bat','.cmd','.ps1','.sh','.com'
+        $ext = if ($Entry.Name.Contains('.')) {
+            $Entry.Name.Substring($Entry.Name.LastIndexOf('.')).ToLowerInvariant()
+        } else { '' }
+        return $execExts -contains $ext
+    }
+    $perm = $Entry.Permissions
+    if ($perm.Length -ge 4 -and $perm[3] -eq 'x') { return $true }
+    if ($perm.Length -ge 7 -and $perm[6] -eq 'x') { return $true }
+    if ($perm.Length -ge 10 -and $perm[9] -eq 'x') { return $true }
+    $false
+}
+
 function Invoke-BashLs {
     [OutputType('PsBash.LsEntry')]
     param()
@@ -1077,6 +1103,7 @@ function Invoke-BashLs {
     $defs = New-FlagDefs -Entries @(
         '-l', 'long listing'
         '-a', 'show hidden (dotfiles + Windows hidden attr)'
+        '-A', 'almost-all (like -a but excludes . and ..)'
         '-h', 'human readable sizes'
         '-R', 'recursive'
         '-S', 'sort by size'
@@ -1085,18 +1112,28 @@ function Invoke-BashLs {
         '-1', 'one per line'
         '-p', 'append / to directories'
         '-d', 'list directories themselves'
+        '-F', 'classify (append */=>@| type indicators)'
+        '--color', 'colorize output'
+        '-i', 'show inode number'
+        '-s', 'show allocated size in blocks'
     )
 
     $parsed    = ConvertFrom-BashArgs -Arguments $Arguments -FlagDefs $defs
-    $longMode  = $parsed.Flags['-l']
-    $showHidden= $parsed.Flags['-a']
-    $humanSizes= $parsed.Flags['-h']
-    $recursive = $parsed.Flags['-R']
-    $sortBySize= $parsed.Flags['-S']
-    $sortByTime= $parsed.Flags['-t']
-    $reverseSort=$parsed.Flags['-r']
-    $dirOnly   = $parsed.Flags['-d']
-    $classify  = $parsed.Flags['-p'] -or $longMode  # -l always shows type implicitly via perms; -p adds /
+    $longMode     = $parsed.Flags['-l']
+    $showHidden   = $parsed.Flags['-a']
+    $almostAll    = $parsed.Flags['-A']
+    $humanSizes   = $parsed.Flags['-h']
+    $recursive    = $parsed.Flags['-R']
+    $sortBySize   = $parsed.Flags['-S']
+    $sortByTime   = $parsed.Flags['-t']
+    $reverseSort  = $parsed.Flags['-r']
+    $dirOnly      = $parsed.Flags['-d']
+    $classify     = $parsed.Flags['-F'] -or $parsed.Flags['-p'] -or $longMode
+    $colorize     = $parsed.Flags['--color']
+    $showInode    = $parsed.Flags['-i']
+    $showBlocks   = $parsed.Flags['-s']
+
+    if ($almostAll) { $showHidden = $true }
 
     $targets   = Resolve-BashGlob -Paths $(if ($parsed.Operands.Count -gt 0) { $parsed.Operands } else { @('.') })
 
@@ -1190,13 +1227,37 @@ function Invoke-BashLs {
     }
 
     # ── Format and emit ───────────────────────────────────────────────────────
+    $Reset  = "`e[0m"
+    $Bold   = "`e[1m"
+    $Blue   = "`e[34m"
+    $Cyan   = "`e[36m"
+    $Green  = "`e[32m"
+    $Red    = "`e[31m"
+
     foreach ($entry in $sorted) {
+        $indicator = ''
+        if ($parsed.Flags['-F']) {
+            if ($entry.IsDirectory) { $indicator = '/' }
+            elseif ($entry.IsSymlink) { $indicator = '@' }
+            elseif (Test-IsExecutable -Entry $entry) { $indicator = '*' }
+        } elseif ($parsed.Flags['-p']) {
+            if ($entry.IsDirectory) { $indicator = '/' }
+        } elseif ($longMode) {
+            # -l implicitly shows type via perms column
+        }
+
         if ($longMode) {
-            $entry.BashText = "$(Format-LsLine -Entry $entry -HumanReadable:$humanSizes)`n"
+            $line = Format-LsLine -Entry $entry -HumanReadable:$humanSizes
+            if ($classify) { $line += $indicator }
+            $entry.BashText = "$line`n"
         } else {
             $name = $entry.Name
-            if ($classify -and $entry.IsDirectory) { $name += '/' }
-            $entry.BashText = "$name`n"
+            if ($colorize) {
+                if ($entry.IsDirectory) { $name = "${Blue}${Bold}${name}${Reset}" }
+                elseif ($entry.IsSymlink) { $name = "${Cyan}${name}${Reset}" }
+                elseif (Test-IsExecutable -Entry $entry) { $name = "${Green}${name}${Reset}" }
+            }
+            $entry.BashText = "${name}${indicator}`n"
         }
         Set-BashDisplayProperty $entry
     }
@@ -3613,7 +3674,18 @@ function Invoke-BashRm {
     $resolvedOperands = Resolve-BashGlob -Paths $parsed.Operands
     $hadError = $false
 
+    $winReservedNames = @('CON','PRN','AUX','NUL','COM1','COM2','COM3','COM4','COM5','COM6','COM7','COM8','COM9','LPT1','LPT2','LPT3','LPT4','LPT5','LPT6','LPT7','LPT8','LPT9')
+
     foreach ($target in $resolvedOperands) {
+        if ($IsWindows) {
+            $leaf = Split-Path -Leaf $target
+            $baseName = if ($leaf.Contains('.')) { $leaf.Substring(0, $leaf.IndexOf('.')) } else { $leaf }
+            if ($winReservedNames -contains $baseName.ToUpperInvariant()) {
+                Write-BashError -Message "rm: cannot remove '$target': Windows reserved device name"
+                $hadError = $true
+                continue
+            }
+        }
         # Safety: refuse to delete root or home directory
         $resolved = $null
         try {
@@ -4161,7 +4233,7 @@ function Get-DotNetProcEntry {
             $ppid = $info.PPID
         }
         if ([string]::IsNullOrEmpty($userName)) {
-            try { $userName = $env:USERNAME } catch {}
+            try { if ($p.SessionId -eq [System.Diagnostics.Process]::GetCurrentProcess().SessionId) { $userName = $env:USERNAME } } catch {}
         }
         if ($p.SessionId -gt 0) { $tty = "con$($p.SessionId)" }
     } elseif ($IsMacOS) {
@@ -12972,6 +13044,14 @@ Register-BashCompletions
 
 # --- Aliases ---
 
+# Remove built-in PowerShell aliases that conflict with our bash commands
+$script:conflictingAliases = @('echo','ls','cat','cp','mv','rm','mkdir','pwd','sort','diff','sleep','test','kill','time','pushd','popd','type')
+foreach ($a in $script:conflictingAliases) {
+    if (Test-Path "Alias:\$a") {
+        Remove-Item "Alias:\$a" -Force -ErrorAction SilentlyContinue
+    }
+}
+
 Set-Alias -Name 'echo'   -Value 'Invoke-BashEcho'   -Force -Scope Global -Option AllScope
 Set-Alias -Name 'printf'  -Value 'Invoke-BashPrintf'  -Force -Scope Global -Option AllScope
 Set-Alias -Name 'ls'      -Value 'Invoke-BashLs'      -Force -Scope Global -Option AllScope
@@ -13592,7 +13672,6 @@ function Invoke-BashShuf {
 
 Set-Alias -Name 'command'  -Value 'Invoke-BashCommand'  -Force -Scope Global -Option AllScope
 Set-Alias -Name 'source'   -Value 'Invoke-BashSource'   -Force -Scope Global -Option AllScope
-Set-Alias -Name '.'        -Value 'Invoke-BashSource'   -Force -Scope Global -Option AllScope
 Set-Alias -Name 'unset'    -Value 'Invoke-BashUnset'    -Force -Scope Global -Option AllScope
 Set-Alias -Name 'pushd'    -Value 'Invoke-BashPushd'    -Force -Scope Global -Option AllScope
 Set-Alias -Name 'popd'     -Value 'Invoke-BashPopd'     -Force -Scope Global -Option AllScope

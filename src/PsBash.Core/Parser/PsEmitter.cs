@@ -45,12 +45,6 @@ public static class PsEmitter
     /// to Invoke-Bash* when used as standalone (non-piped) commands.
     /// These work fine via PS aliases; only their piped forms need mapping.
     /// </summary>
-    private static readonly HashSet<string> PsBuiltinAliases = new(StringComparer.Ordinal)
-    {
-        "echo", "cat", "ls", "cd", "pwd", "mkdir", "cp", "mv", "rm",
-        "sort", "diff", "sleep",
-    };
-
     public static string Emit(Command cmd) => cmd switch
     {
         Command.If ifCmd => EmitIf(ifCmd),
@@ -1171,7 +1165,6 @@ public static class PsEmitter
 
             // Standalone mapped commands: rewrite through TryEmitMappedCommand
             else if (cmd0 is not null
-                && !PsBuiltinAliases.Contains(cmd0)
                 && TryEmitMappedCommand(cmd, out var mapped))
             {
                 if (cmd.Redirects.IsEmpty)
