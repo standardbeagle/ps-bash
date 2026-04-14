@@ -1,0 +1,717 @@
+<?xml version="1.0"?>
+<doc>
+    <assembly>
+        <name>PsBash.Core</name>
+    </assembly>
+    <members>
+        <member name="T:PsBash.Core.Parser.Ast.BashNode">
+            <summary>
+            Base type for all nodes in the bash AST.
+            </summary>
+        </member>
+        <member name="T:PsBash.Core.Parser.Ast.Command">
+            <summary>
+            Base type for all command nodes.
+            Modeled after oils syntax.asdl command variants.
+            </summary>
+        </member>
+        <member name="T:PsBash.Core.Parser.Ast.Command.Simple">
+            <summary>
+            A simple command: words with optional environment pairs and redirects.
+            Modeled after oils command.Simple.
+            </summary>
+        </member>
+        <member name="M:PsBash.Core.Parser.Ast.Command.Simple.#ctor(System.Collections.Immutable.ImmutableArray{PsBash.Core.Parser.Ast.CompoundWord},System.Collections.Immutable.ImmutableArray{PsBash.Core.Parser.Ast.EnvPair},System.Collections.Immutable.ImmutableArray{PsBash.Core.Parser.Ast.Redirect},System.Collections.Immutable.ImmutableArray{PsBash.Core.Parser.Ast.HereDoc})">
+            <summary>
+            A simple command: words with optional environment pairs and redirects.
+            Modeled after oils command.Simple.
+            </summary>
+        </member>
+        <member name="T:PsBash.Core.Parser.Ast.Command.Pipeline">
+            <summary>
+            A pipeline of commands connected by <c>|</c> or <c>|&amp;</c>.
+            Modeled after oils command.Pipeline.
+            </summary>
+        </member>
+        <member name="M:PsBash.Core.Parser.Ast.Command.Pipeline.#ctor(System.Collections.Immutable.ImmutableArray{PsBash.Core.Parser.Ast.Command},System.Collections.Immutable.ImmutableArray{System.String},System.Boolean)">
+            <summary>
+            A pipeline of commands connected by <c>|</c> or <c>|&amp;</c>.
+            Modeled after oils command.Pipeline.
+            </summary>
+        </member>
+        <member name="T:PsBash.Core.Parser.Ast.Command.AndOrList">
+            <summary>
+            Commands joined by <c>&amp;&amp;</c> or <c>||</c>.
+            Modeled after oils command.AndOr.
+            </summary>
+        </member>
+        <member name="M:PsBash.Core.Parser.Ast.Command.AndOrList.#ctor(System.Collections.Immutable.ImmutableArray{PsBash.Core.Parser.Ast.Command},System.Collections.Immutable.ImmutableArray{System.String})">
+            <summary>
+            Commands joined by <c>&amp;&amp;</c> or <c>||</c>.
+            Modeled after oils command.AndOr.
+            </summary>
+        </member>
+        <member name="T:PsBash.Core.Parser.Ast.Command.CommandList">
+            <summary>
+            A list of commands separated by <c>;</c> or newline.
+            Modeled after oils command.CommandList.
+            </summary>
+        </member>
+        <member name="M:PsBash.Core.Parser.Ast.Command.CommandList.#ctor(System.Collections.Immutable.ImmutableArray{PsBash.Core.Parser.Ast.Command})">
+            <summary>
+            A list of commands separated by <c>;</c> or newline.
+            Modeled after oils command.CommandList.
+            </summary>
+        </member>
+        <member name="T:PsBash.Core.Parser.Ast.Command.ShAssignment">
+            <summary>
+            A bare assignment command, e.g. <c>x=1 y=2</c>.
+            Modeled after oils command.ShAssignment.
+            </summary>
+        </member>
+        <member name="M:PsBash.Core.Parser.Ast.Command.ShAssignment.#ctor(System.Collections.Immutable.ImmutableArray{PsBash.Core.Parser.Ast.Assignment},System.Boolean)">
+            <summary>
+            A bare assignment command, e.g. <c>x=1 y=2</c>.
+            Modeled after oils command.ShAssignment.
+            </summary>
+        </member>
+        <member name="T:PsBash.Core.Parser.Ast.Command.If">
+            <summary>
+            An if/elif/else statement.
+            Modeled after oils command.If.
+            </summary>
+        </member>
+        <member name="M:PsBash.Core.Parser.Ast.Command.If.#ctor(System.Collections.Immutable.ImmutableArray{PsBash.Core.Parser.Ast.IfArm},PsBash.Core.Parser.Ast.Command)">
+            <summary>
+            An if/elif/else statement.
+            Modeled after oils command.If.
+            </summary>
+        </member>
+        <member name="T:PsBash.Core.Parser.Ast.Command.BoolExpr">
+            <summary>
+            A test expression: <c>[ ... ]</c> or <c>[[ ... ]]</c>.
+            The inner words are stored without the surrounding brackets.
+            </summary>
+        </member>
+        <member name="M:PsBash.Core.Parser.Ast.Command.BoolExpr.#ctor(System.Collections.Immutable.ImmutableArray{PsBash.Core.Parser.Ast.CompoundWord},System.Boolean)">
+            <summary>
+            A test expression: <c>[ ... ]</c> or <c>[[ ... ]]</c>.
+            The inner words are stored without the surrounding brackets.
+            </summary>
+        </member>
+        <member name="T:PsBash.Core.Parser.Ast.Command.ForIn">
+            <summary>
+            A for-in loop: <c>for x in a b c; do body; done</c>.
+            An empty list means implicit <c>$@</c> (<c>for x; do ...</c>).
+            </summary>
+        </member>
+        <member name="M:PsBash.Core.Parser.Ast.Command.ForIn.#ctor(System.String,System.Collections.Immutable.ImmutableArray{PsBash.Core.Parser.Ast.CompoundWord},PsBash.Core.Parser.Ast.Command)">
+            <summary>
+            A for-in loop: <c>for x in a b c; do body; done</c>.
+            An empty list means implicit <c>$@</c> (<c>for x; do ...</c>).
+            </summary>
+        </member>
+        <member name="T:PsBash.Core.Parser.Ast.Command.ForArith">
+            <summary>
+            A C-style arithmetic for loop: <c>for ((init; cond; step)); do body; done</c>.
+            The three clauses are stored as raw strings.
+            </summary>
+        </member>
+        <member name="M:PsBash.Core.Parser.Ast.Command.ForArith.#ctor(System.String,System.String,System.String,PsBash.Core.Parser.Ast.Command)">
+            <summary>
+            A C-style arithmetic for loop: <c>for ((init; cond; step)); do body; done</c>.
+            The three clauses are stored as raw strings.
+            </summary>
+        </member>
+        <member name="T:PsBash.Core.Parser.Ast.Command.While">
+            <summary>
+            A while or until loop: <c>while cmd; do body; done</c> / <c>until cmd; do body; done</c>.
+            When <paramref name="IsUntil"/> is true, the condition is logically negated.
+            </summary>
+        </member>
+        <member name="M:PsBash.Core.Parser.Ast.Command.While.#ctor(System.Boolean,PsBash.Core.Parser.Ast.Command,PsBash.Core.Parser.Ast.Command)">
+            <summary>
+            A while or until loop: <c>while cmd; do body; done</c> / <c>until cmd; do body; done</c>.
+            When <paramref name="IsUntil"/> is true, the condition is logically negated.
+            </summary>
+        </member>
+        <member name="T:PsBash.Core.Parser.Ast.Command.Case">
+            <summary>
+            A case/esac statement: <c>case expr in pattern) body;; esac</c>.
+            Maps to PowerShell <c>switch</c>.
+            </summary>
+        </member>
+        <member name="M:PsBash.Core.Parser.Ast.Command.Case.#ctor(PsBash.Core.Parser.Ast.CompoundWord,System.Collections.Immutable.ImmutableArray{PsBash.Core.Parser.Ast.CaseArm})">
+            <summary>
+            A case/esac statement: <c>case expr in pattern) body;; esac</c>.
+            Maps to PowerShell <c>switch</c>.
+            </summary>
+        </member>
+        <member name="T:PsBash.Core.Parser.Ast.Command.ArithCommand">
+            <summary>
+            A standalone arithmetic command: <c>(( expr ))</c>.
+            Maps to PowerShell arithmetic expression or comparison.
+            </summary>
+        </member>
+        <member name="M:PsBash.Core.Parser.Ast.Command.ArithCommand.#ctor(System.String)">
+            <summary>
+            A standalone arithmetic command: <c>(( expr ))</c>.
+            Maps to PowerShell arithmetic expression or comparison.
+            </summary>
+        </member>
+        <member name="T:PsBash.Core.Parser.Ast.Command.ShFunction">
+            <summary>
+            A function definition: <c>function name { body }</c> or <c>name() { body }</c>.
+            Maps to PowerShell <c>function name { body }</c>.
+            </summary>
+        </member>
+        <member name="M:PsBash.Core.Parser.Ast.Command.ShFunction.#ctor(System.String,PsBash.Core.Parser.Ast.Command)">
+            <summary>
+            A function definition: <c>function name { body }</c> or <c>name() { body }</c>.
+            Maps to PowerShell <c>function name { body }</c>.
+            </summary>
+        </member>
+        <member name="T:PsBash.Core.Parser.Ast.Command.Subshell">
+            <summary>
+            A subshell: <c>(cmd1; cmd2)</c> runs commands in a child process.
+            Maps to PowerShell <c>&amp; { cmd1; cmd2 }</c>.
+            </summary>
+        </member>
+        <member name="M:PsBash.Core.Parser.Ast.Command.Subshell.#ctor(PsBash.Core.Parser.Ast.Command,System.Collections.Immutable.ImmutableArray{PsBash.Core.Parser.Ast.Redirect})">
+            <summary>
+            A subshell: <c>(cmd1; cmd2)</c> runs commands in a child process.
+            Maps to PowerShell <c>&amp; { cmd1; cmd2 }</c>.
+            </summary>
+        </member>
+        <member name="T:PsBash.Core.Parser.Ast.Command.BraceGroup">
+            <summary>
+            A brace group: <c>{ cmd1; cmd2; }</c> runs commands in the current shell.
+            Emitted inline (passthrough, same scope).
+            </summary>
+        </member>
+        <member name="M:PsBash.Core.Parser.Ast.Command.BraceGroup.#ctor(PsBash.Core.Parser.Ast.Command)">
+            <summary>
+            A brace group: <c>{ cmd1; cmd2; }</c> runs commands in the current shell.
+            Emitted inline (passthrough, same scope).
+            </summary>
+        </member>
+        <member name="T:PsBash.Core.Parser.Ast.Command.Background">
+            <summary>
+            A background command: <c>cmd &amp;</c> runs the inner command asynchronously.
+            The <c>&amp;</c> operator is consumed in <c>ParseList()</c> and wraps the
+            preceding command in this node.
+            </summary>
+        </member>
+        <member name="M:PsBash.Core.Parser.Ast.Command.Background.#ctor(PsBash.Core.Parser.Ast.Command)">
+            <summary>
+            A background command: <c>cmd &amp;</c> runs the inner command asynchronously.
+            The <c>&amp;</c> operator is consumed in <c>ParseList()</c> and wraps the
+            preceding command in this node.
+            </summary>
+        </member>
+        <member name="T:PsBash.Core.Parser.Ast.IfArm">
+            <summary>
+            A single arm of an if/elif chain: condition plus body.
+            </summary>
+        </member>
+        <member name="M:PsBash.Core.Parser.Ast.IfArm.#ctor(PsBash.Core.Parser.Ast.Command,PsBash.Core.Parser.Ast.Command)">
+            <summary>
+            A single arm of an if/elif chain: condition plus body.
+            </summary>
+        </member>
+        <member name="T:PsBash.Core.Parser.Ast.CaseArm">
+            <summary>
+            A single arm of a case/esac statement: one or more patterns and a body.
+            </summary>
+        </member>
+        <member name="M:PsBash.Core.Parser.Ast.CaseArm.#ctor(System.Collections.Immutable.ImmutableArray{System.String},PsBash.Core.Parser.Ast.Command)">
+            <summary>
+            A single arm of a case/esac statement: one or more patterns and a body.
+            </summary>
+        </member>
+        <member name="T:PsBash.Core.Parser.Ast.Redirect">
+            <summary>
+            A redirect operation, e.g. <c>&gt;file</c>, <c>2&gt;&amp;1</c>.
+            Modeled after oils syntax.asdl Redir.
+            </summary>
+        </member>
+        <member name="M:PsBash.Core.Parser.Ast.Redirect.#ctor(System.String,System.Int32,PsBash.Core.Parser.Ast.CompoundWord)">
+            <summary>
+            A redirect operation, e.g. <c>&gt;file</c>, <c>2&gt;&amp;1</c>.
+            Modeled after oils syntax.asdl Redir.
+            </summary>
+        </member>
+        <member name="T:PsBash.Core.Parser.Ast.HereDoc">
+            <summary>
+            A here-document redirect, e.g. <c>&lt;&lt;EOF\ntext\nEOF</c>.
+            <paramref name="Body"/> is the collected text between delimiters.
+            <paramref name="Expand"/> is true when variable expansion should occur (unquoted delimiter).
+            <paramref name="StripTabs"/> is true for <c>&lt;&lt;-</c> (leading tabs stripped from body).
+            </summary>
+        </member>
+        <member name="M:PsBash.Core.Parser.Ast.HereDoc.#ctor(System.String,System.Boolean,System.Boolean)">
+            <summary>
+            A here-document redirect, e.g. <c>&lt;&lt;EOF\ntext\nEOF</c>.
+            <paramref name="Body"/> is the collected text between delimiters.
+            <paramref name="Expand"/> is true when variable expansion should occur (unquoted delimiter).
+            <paramref name="StripTabs"/> is true for <c>&lt;&lt;-</c> (leading tabs stripped from body).
+            </summary>
+        </member>
+        <member name="T:PsBash.Core.Parser.Ast.AssignOp">
+            <summary>
+            Assignment operator: <c>=</c> or <c>+=</c>.
+            </summary>
+        </member>
+        <member name="T:PsBash.Core.Parser.Ast.Assignment">
+            <summary>
+            A variable assignment, e.g. <c>foo=bar</c> or <c>foo+=baz</c>.
+            For array assignments like <c>arr=(a b c)</c>, <see cref="P:PsBash.Core.Parser.Ast.Assignment.ArrayValue"/> is set
+            and <see cref="P:PsBash.Core.Parser.Ast.Assignment.Value"/> is null.
+            Modeled after oils syntax.asdl AssignPair.
+            </summary>
+        </member>
+        <member name="M:PsBash.Core.Parser.Ast.Assignment.#ctor(System.String,PsBash.Core.Parser.Ast.AssignOp,PsBash.Core.Parser.Ast.CompoundWord,PsBash.Core.Parser.Ast.ArrayWord)">
+            <summary>
+            A variable assignment, e.g. <c>foo=bar</c> or <c>foo+=baz</c>.
+            For array assignments like <c>arr=(a b c)</c>, <see cref="P:PsBash.Core.Parser.Ast.Assignment.ArrayValue"/> is set
+            and <see cref="P:PsBash.Core.Parser.Ast.Assignment.Value"/> is null.
+            Modeled after oils syntax.asdl AssignPair.
+            </summary>
+        </member>
+        <member name="T:PsBash.Core.Parser.Ast.EnvPair">
+            <summary>
+            An environment pair for command prefix, e.g. <c>FOO=bar cmd</c>.
+            Modeled after oils syntax.asdl EnvPair.
+            </summary>
+        </member>
+        <member name="M:PsBash.Core.Parser.Ast.EnvPair.#ctor(System.String,PsBash.Core.Parser.Ast.CompoundWord)">
+            <summary>
+            An environment pair for command prefix, e.g. <c>FOO=bar cmd</c>.
+            Modeled after oils syntax.asdl EnvPair.
+            </summary>
+        </member>
+        <member name="T:PsBash.Core.Parser.Ast.WordPart">
+            <summary>
+            Base type for all word parts. A word part is a component of a compound word.
+            Modeled after oils syntax.asdl word_part variants.
+            </summary>
+        </member>
+        <member name="T:PsBash.Core.Parser.Ast.WordPart.Literal">
+            <summary>An unquoted literal string, e.g. <c>hello</c>.</summary>
+        </member>
+        <member name="M:PsBash.Core.Parser.Ast.WordPart.Literal.#ctor(System.String)">
+            <summary>An unquoted literal string, e.g. <c>hello</c>.</summary>
+        </member>
+        <member name="T:PsBash.Core.Parser.Ast.WordPart.EscapedLiteral">
+            <summary>A backslash-escaped character, e.g. <c>\ </c> (escaped space).</summary>
+        </member>
+        <member name="M:PsBash.Core.Parser.Ast.WordPart.EscapedLiteral.#ctor(System.String)">
+            <summary>A backslash-escaped character, e.g. <c>\ </c> (escaped space).</summary>
+        </member>
+        <member name="T:PsBash.Core.Parser.Ast.WordPart.SingleQuoted">
+            <summary>A single-quoted string, e.g. <c>'hello world'</c>.</summary>
+        </member>
+        <member name="M:PsBash.Core.Parser.Ast.WordPart.SingleQuoted.#ctor(System.String)">
+            <summary>A single-quoted string, e.g. <c>'hello world'</c>.</summary>
+        </member>
+        <member name="T:PsBash.Core.Parser.Ast.WordPart.DoubleQuoted">
+            <summary>A double-quoted string containing word parts, e.g. <c>"hello $name"</c>.</summary>
+        </member>
+        <member name="M:PsBash.Core.Parser.Ast.WordPart.DoubleQuoted.#ctor(System.Collections.Immutable.ImmutableArray{PsBash.Core.Parser.Ast.WordPart})">
+            <summary>A double-quoted string containing word parts, e.g. <c>"hello $name"</c>.</summary>
+        </member>
+        <member name="T:PsBash.Core.Parser.Ast.WordPart.SimpleVarSub">
+            <summary>A simple variable substitution, e.g. <c>$foo</c> or <c>$?</c>.</summary>
+        </member>
+        <member name="M:PsBash.Core.Parser.Ast.WordPart.SimpleVarSub.#ctor(System.String)">
+            <summary>A simple variable substitution, e.g. <c>$foo</c> or <c>$?</c>.</summary>
+        </member>
+        <member name="T:PsBash.Core.Parser.Ast.WordPart.BracedVarSub">
+            <summary>A braced variable substitution, e.g. <c>${foo:-default}</c>.</summary>
+        </member>
+        <member name="M:PsBash.Core.Parser.Ast.WordPart.BracedVarSub.#ctor(System.String,System.String)">
+            <summary>A braced variable substitution, e.g. <c>${foo:-default}</c>.</summary>
+        </member>
+        <member name="T:PsBash.Core.Parser.Ast.WordPart.CommandSub">
+            <summary>A command substitution, e.g. <c>$(cmd)</c> or <c>`cmd`</c>.</summary>
+        </member>
+        <member name="M:PsBash.Core.Parser.Ast.WordPart.CommandSub.#ctor(PsBash.Core.Parser.Ast.BashNode)">
+            <summary>A command substitution, e.g. <c>$(cmd)</c> or <c>`cmd`</c>.</summary>
+        </member>
+        <member name="T:PsBash.Core.Parser.Ast.WordPart.ArithSub">
+            <summary>An arithmetic substitution, e.g. <c>$(( x + 1 ))</c>.</summary>
+        </member>
+        <member name="M:PsBash.Core.Parser.Ast.WordPart.ArithSub.#ctor(System.String)">
+            <summary>An arithmetic substitution, e.g. <c>$(( x + 1 ))</c>.</summary>
+        </member>
+        <member name="T:PsBash.Core.Parser.Ast.WordPart.TildeSub">
+            <summary>A tilde substitution, e.g. <c>~</c> or <c>~user</c>.</summary>
+        </member>
+        <member name="M:PsBash.Core.Parser.Ast.WordPart.TildeSub.#ctor(System.String)">
+            <summary>A tilde substitution, e.g. <c>~</c> or <c>~user</c>.</summary>
+        </member>
+        <member name="T:PsBash.Core.Parser.Ast.WordPart.GlobPart">
+            <summary>
+            A glob pattern fragment: <c>*</c>, <c>?</c>, <c>[abc]</c>, or an extglob
+            like <c>+(*.py|*.js)</c>. The <paramref name="Pattern"/> holds the raw text.
+            </summary>
+        </member>
+        <member name="M:PsBash.Core.Parser.Ast.WordPart.GlobPart.#ctor(System.String)">
+            <summary>
+            A glob pattern fragment: <c>*</c>, <c>?</c>, <c>[abc]</c>, or an extglob
+            like <c>+(*.py|*.js)</c>. The <paramref name="Pattern"/> holds the raw text.
+            </summary>
+        </member>
+        <member name="T:PsBash.Core.Parser.Ast.WordPart.BracedTuple">
+            <summary>
+            A brace expansion with comma-separated items, e.g. <c>{a,b,c}</c>.
+            Each item is a string literal.
+            </summary>
+        </member>
+        <member name="M:PsBash.Core.Parser.Ast.WordPart.BracedTuple.#ctor(System.Collections.Immutable.ImmutableArray{System.String})">
+            <summary>
+            A brace expansion with comma-separated items, e.g. <c>{a,b,c}</c>.
+            Each item is a string literal.
+            </summary>
+        </member>
+        <member name="T:PsBash.Core.Parser.Ast.WordPart.BracedRange">
+            <summary>
+            A brace expansion with a numeric range, e.g. <c>{1..10}</c>, <c>{01..05}</c>, or <c>{1..10..2}</c>.
+            When <paramref name="ZeroPad"/> is greater than zero, values are left-padded with zeros.
+            When <paramref name="Step"/> is non-zero, the range increments by that value.
+            </summary>
+        </member>
+        <member name="M:PsBash.Core.Parser.Ast.WordPart.BracedRange.#ctor(System.Int32,System.Int32,System.Int32,System.Int32)">
+            <summary>
+            A brace expansion with a numeric range, e.g. <c>{1..10}</c>, <c>{01..05}</c>, or <c>{1..10..2}</c>.
+            When <paramref name="ZeroPad"/> is greater than zero, values are left-padded with zeros.
+            When <paramref name="Step"/> is non-zero, the range increments by that value.
+            </summary>
+        </member>
+        <member name="T:PsBash.Core.Parser.Ast.WordPart.ProcessSub">
+            <summary>
+            A process substitution, e.g. <c>&lt;(cmd)</c> (input) or <c>&gt;(cmd)</c> (output).
+            The <paramref name="Body"/> is the parsed command inside the substitution.
+            <paramref name="IsInput"/> is true for <c>&lt;(...)</c>, false for <c>&gt;(...)</c>.
+            </summary>
+        </member>
+        <member name="M:PsBash.Core.Parser.Ast.WordPart.ProcessSub.#ctor(PsBash.Core.Parser.Ast.BashNode,System.Boolean)">
+            <summary>
+            A process substitution, e.g. <c>&lt;(cmd)</c> (input) or <c>&gt;(cmd)</c> (output).
+            The <paramref name="Body"/> is the parsed command inside the substitution.
+            <paramref name="IsInput"/> is true for <c>&lt;(...)</c>, false for <c>&gt;(...)</c>.
+            </summary>
+        </member>
+        <member name="T:PsBash.Core.Parser.Ast.CompoundWord">
+            <summary>
+            A compound word made up of one or more word parts.
+            Modeled after oils syntax.asdl CompoundWord.
+            </summary>
+        </member>
+        <member name="M:PsBash.Core.Parser.Ast.CompoundWord.#ctor(System.Collections.Immutable.ImmutableArray{PsBash.Core.Parser.Ast.WordPart})">
+            <summary>
+            A compound word made up of one or more word parts.
+            Modeled after oils syntax.asdl CompoundWord.
+            </summary>
+        </member>
+        <member name="T:PsBash.Core.Parser.Ast.ArrayWord">
+            <summary>
+            An array literal value, e.g. <c>(a b c)</c> in <c>arr=(a b c)</c>.
+            Stored as a list of compound words representing each element.
+            </summary>
+        </member>
+        <member name="M:PsBash.Core.Parser.Ast.ArrayWord.#ctor(System.Collections.Immutable.ImmutableArray{PsBash.Core.Parser.Ast.CompoundWord})">
+            <summary>
+            An array literal value, e.g. <c>(a b c)</c> in <c>arr=(a b c)</c>.
+            Stored as a list of compound words representing each element.
+            </summary>
+        </member>
+        <member name="T:PsBash.Core.Parser.BashLexer">
+            <summary>
+            Hand-rolled lexer for bash input. Produces a flat token list from a string.
+            Context-sensitive aspects (here-docs, alias expansion) are deferred to the parser.
+            </summary>
+        </member>
+        <member name="M:PsBash.Core.Parser.BashLexer.Tokenize(System.String)">
+            <summary>
+            Tokenize the given bash input into a list of tokens.
+            The final token is always <see cref="F:PsBash.Core.Parser.BashTokenKind.Eof"/>.
+            </summary>
+        </member>
+        <member name="M:PsBash.Core.Parser.BashLexer.IsReservedWord(System.String)">
+            <summary>
+            Returns true if the given word is a bash reserved word.
+            </summary>
+        </member>
+        <member name="M:PsBash.Core.Parser.BashLexer.IsBraceExpansion(System.String,System.Int32)">
+            <summary>
+            Returns true if position <paramref name="pos"/> starts a brace expansion pattern:
+            <c>{</c> followed by content containing <c>,</c> or <c>..</c>, ending with <c>}</c>,
+            with no unquoted whitespace inside.
+            </summary>
+        </member>
+        <member name="M:PsBash.Core.Parser.BashLexer.TryReclassifyIoNumber(System.Collections.Generic.List{PsBash.Core.Parser.BashToken},System.Int32)">
+            <summary>
+            If the last token is a Word consisting entirely of digits and we're about to
+            emit a redirect operator, reclassify it as IoNumber.
+            </summary>
+            <summary>
+            Reclassify the last token as an IoNumber if it is a digit-only word
+            immediately adjacent to the redirect operator (no whitespace between).
+            <paramref name="redirectPos"/> is the position of the redirect operator.
+            </summary>
+        </member>
+        <member name="T:PsBash.Core.Parser.ParseException">
+            <summary>
+            Exception thrown when the bash parser encounters unsupported or invalid syntax.
+            Includes source location (line/column) and the parser rule that failed.
+            </summary>
+        </member>
+        <member name="M:PsBash.Core.Parser.ParseException.ComputeLineCol(System.String,System.Int32)">
+            <summary>
+            Compute 1-based line and column from a zero-based character offset in the input.
+            </summary>
+        </member>
+        <member name="T:PsBash.Core.Parser.BashParser">
+            <summary>
+            Hand-rolled recursive descent parser for bash input.
+            Consumes the flat token list produced by <see cref="T:PsBash.Core.Parser.BashLexer"/> and builds an AST.
+            </summary>
+        </member>
+        <member name="M:PsBash.Core.Parser.BashParser.Parse(System.String)">
+            <summary>
+            Parse the given bash input into an AST command node.
+            Returns null if the input is empty or contains only whitespace/comments.
+            </summary>
+        </member>
+        <member name="M:PsBash.Core.Parser.BashParser.ParseCompoundBody(System.String[])">
+            <summary>
+            Parse a sequence of commands until one of the stop words is seen.
+            Returns a single command or a CommandList.
+            </summary>
+        </member>
+        <member name="M:PsBash.Core.Parser.BashParser.SkipTerminators">
+            <summary>
+            Skip semicolons and newlines (used between compound command parts).
+            </summary>
+        </member>
+        <member name="M:PsBash.Core.Parser.BashParser.CollectArithClause">
+            <summary>
+            Collect tokens for one clause of a C-style for loop's arithmetic expression.
+            Stops at Semi (consumes it) or RParen (consumed to close the (( ))).
+            </summary>
+        </member>
+        <member name="M:PsBash.Core.Parser.BashParser.ConsumeCasePattern">
+            <summary>
+            Consume a single case pattern. The pattern may contain glob chars like *.
+            Stops at Pipe or RParen.
+            </summary>
+        </member>
+        <member name="M:PsBash.Core.Parser.BashParser.ParseCaseBody">
+            <summary>
+            Parse commands inside a case arm until ;; or esac is seen.
+            Only skips newlines between commands, not semicolons (to detect ;; delimiter).
+            </summary>
+        </member>
+        <member name="M:PsBash.Core.Parser.BashParser.IsParensFunctionDef">
+            <summary>
+            Check whether the current position starts a <c>name() { ... }</c> function definition.
+            Requires Word LParen RParen ahead without consuming tokens.
+            </summary>
+        </member>
+        <member name="M:PsBash.Core.Parser.BashParser.ParseBraceGroup">
+            <summary>
+            Parse a brace group: <c>{ commands }</c>.
+            Used for function bodies and standalone brace groups.
+            </summary>
+        </member>
+        <member name="M:PsBash.Core.Parser.BashParser.CollectHereDocBody(System.String,System.Boolean,System.Boolean)">
+            <summary>
+            Collect the body lines of a here-document from the token stream.
+            Consumes tokens after the current line's newline until the delimiter
+            is found on its own line.
+            </summary>
+        </member>
+        <member name="M:PsBash.Core.Parser.BashParser.ParseAssignmentWordWithArray">
+            <summary>
+            Parse an assignment word, consuming a trailing array literal <c>(a b c)</c> if present.
+            </summary>
+        </member>
+        <member name="M:PsBash.Core.Parser.BashParser.DecomposeWord(System.String)">
+            <summary>
+            Sub-parse a WORD token's raw text into typed WordPart children.
+            Handles single quotes, double quotes, backslash escapes, $VAR references,
+            and bare literal text.
+            </summary>
+        </member>
+        <member name="M:PsBash.Core.Parser.BashParser.ContainsBracketGlob(System.String,System.Int32)">
+            <summary>
+            Returns true if position <paramref name="pos"/> starts a bracket glob class
+            (i.e. <c>[</c> followed eventually by <c>]</c>).
+            </summary>
+        </member>
+        <member name="M:PsBash.Core.Parser.BashParser.IsBraceExpansionStart(System.String,System.Int32)">
+            <summary>
+            Returns true if position <paramref name="pos"/> starts a brace expansion:
+            <c>{</c> followed by content containing <c>,</c> or <c>..</c>, ending with <c>}</c>.
+            </summary>
+        </member>
+        <member name="T:PsBash.Core.Parser.BashTokenKind">
+            <summary>
+            The kind of a lexical token produced by <see cref="T:PsBash.Core.Parser.BashLexer"/>.
+            </summary>
+        </member>
+        <member name="T:PsBash.Core.Parser.BashToken">
+            <summary>
+            A single lexical token from bash input.
+            </summary>
+            <param name="Kind">The token classification.</param>
+            <param name="Value">The raw text of the token.</param>
+            <param name="Position">The zero-based character offset in the input.</param>
+        </member>
+        <member name="M:PsBash.Core.Parser.BashToken.#ctor(PsBash.Core.Parser.BashTokenKind,System.String,System.Int32)">
+            <summary>
+            A single lexical token from bash input.
+            </summary>
+            <param name="Kind">The token classification.</param>
+            <param name="Value">The raw text of the token.</param>
+            <param name="Position">The zero-based character offset in the input.</param>
+        </member>
+        <member name="P:PsBash.Core.Parser.BashToken.Kind">
+            <summary>The token classification.</summary>
+        </member>
+        <member name="P:PsBash.Core.Parser.BashToken.Value">
+            <summary>The raw text of the token.</summary>
+        </member>
+        <member name="P:PsBash.Core.Parser.BashToken.Position">
+            <summary>The zero-based character offset in the input.</summary>
+        </member>
+        <member name="T:PsBash.Core.Parser.PsEmitter">
+            <summary>
+            Walks parsed AST nodes and emits equivalent PowerShell strings.
+            </summary>
+        </member>
+        <member name="F:PsBash.Core.Parser.PsEmitter._loopVars">
+            <summary>
+            Emit PowerShell for the given command AST node.
+            </summary>
+            <summary>
+            Set of loop variable names currently in scope.
+            Variables declared by for-in or for-arith loops emit as <c>$var</c> rather than <c>$env:var</c>.
+            </summary>
+        </member>
+        <member name="F:PsBash.Core.Parser.PsEmitter._loopDepth">
+            <summary>
+            Tracks nesting depth for generating unique loop iteration counter variable names.
+            </summary>
+        </member>
+        <member name="F:PsBash.Core.Parser.PsEmitter.PsBuiltinAliases">
+            <summary>
+            Commands that have PowerShell built-in aliases and should NOT be mapped
+            to Invoke-Bash* when used as standalone (non-piped) commands.
+            These work fine via PS aliases; only their piped forms need mapping.
+            </summary>
+        </member>
+        <member name="M:PsBash.Core.Parser.PsEmitter.Transpile(System.String)">
+            <summary>
+            Parse bash input and emit equivalent PowerShell.
+            Returns null if the input is empty or whitespace-only.
+            </summary>
+        </member>
+        <member name="M:PsBash.Core.Parser.PsEmitter.CollectLocalVars(PsBash.Core.Parser.Ast.Command)">
+            <summary>
+            Recursively collect variable names declared with 'local' in a command tree.
+            </summary>
+        </member>
+        <member name="M:PsBash.Core.Parser.PsEmitter.ArithVarRef(System.String)">
+            <summary>
+            Return the PowerShell variable reference for a bare name:
+            loop vars and PS builtins get <c>$name</c>, others get <c>$env:name</c>.
+            </summary>
+        </member>
+        <member name="M:PsBash.Core.Parser.PsEmitter.PrefixBareVar(System.String)">
+            <summary>
+            Prefix bare variable names in arithmetic expressions with the correct
+            PowerShell variable form. Loop variables (tracked in <c>_loopVars</c>)
+            become <c>$var</c>; PS builtins keep <c>$var</c>; all other user
+            variables become <c>$env:var</c>.
+            Skips identifiers preceded by <c>$</c> or <c>-</c> (PowerShell operators).
+            </summary>
+        </member>
+        <member name="M:PsBash.Core.Parser.PsEmitter.EmitCondition(PsBash.Core.Parser.Ast.Command)">
+            <summary>
+            Emit a condition expression for use inside <c>if</c>/<c>elif</c>.
+            BoolExpr nodes are unwrapped (no outer parens); plain commands are emitted as-is.
+            </summary>
+        </member>
+        <member name="M:PsBash.Core.Parser.PsEmitter.EmitTestArg(PsBash.Core.Parser.Ast.CompoundWord)">
+            <summary>
+            Emit a word used as a test expression argument, unwrapping outer double quotes
+            so that variable references appear bare (e.g. <c>$HOME</c> not <c>"$HOME"</c>).
+            </summary>
+        </member>
+        <member name="M:PsBash.Core.Parser.PsEmitter.TranslateHereDocVars(System.String)">
+            <summary>
+            Translate bash variable references ($VAR, ${VAR}) in heredoc body text
+            to PowerShell equivalents ($env:VAR).
+            </summary>
+        </member>
+        <member name="M:PsBash.Core.Parser.PsEmitter.EmitAssignmentValue(PsBash.Core.Parser.Ast.CompoundWord)">
+            <summary>
+            Emit a value in assignment context: bare literals get wrapped in double quotes,
+            already-quoted values are emitted as-is.
+            </summary>
+        </member>
+        <member name="M:PsBash.Core.Parser.PsEmitter.TryEmitMappedCommand(PsBash.Core.Parser.Ast.Command.Simple,System.String@)">
+            <summary>
+            Tries to emit a mapped PowerShell equivalent for known bash pipe-target commands.
+            Returns false if the command is not a recognized pipe target.
+            </summary>
+        </member>
+        <member name="M:PsBash.Core.Runtime.ModuleExtractor.ExtractEmbedded">
+            <summary>
+            Extracts the embedded PsBash module to a temp directory and returns the path to PsBash.psd1.
+            Uses a version-stamped directory so concurrent processes don't conflict.
+            Thread-safe: uses a lock file to serialize extraction across processes.
+            </summary>
+        </member>
+        <member name="M:PsBash.Core.Runtime.ModuleExtractor.ComputeEmbeddedHash(System.Reflection.Assembly)">
+            <summary>
+            Computes a SHA256 hash over all embedded module resources.
+            </summary>
+        </member>
+        <member name="M:PsBash.Core.Runtime.ModuleExtractor.WaitForMarker(System.String)">
+            <summary>
+            Wait for another process to finish extraction (up to 10 seconds).
+            </summary>
+        </member>
+        <member name="P:PsBash.Core.Runtime.PwshWorker.OutputCallback">
+            <summary>
+            Optional callback that receives each output line. When set, output is
+            routed to this callback instead of <see cref="M:System.Console.WriteLine(System.String)"/>.
+            </summary>
+        </member>
+        <member name="M:PsBash.Core.Runtime.PwshWorker.BuildInitScript">
+            <summary>
+            Build the combined init script that loads the module in-memory and starts
+            the command loop. Sent via stdin — no temp files required.
+            NOTE: The worker loop below must stay in sync with scripts/ps-bash-worker.ps1
+            (used by the legacy -File path and e2e tests).
+            </summary>
+        </member>
+        <member name="T:PsBash.Core.Transpiler.BashTranspiler">
+            <summary>
+            Transpiles bash commands to equivalent PowerShell.
+            This is the recommended entry point for library consumers.
+            </summary>
+        </member>
+        <member name="M:PsBash.Core.Transpiler.BashTranspiler.Transpile(System.String)">
+            <summary>
+            Transpile a bash command string to PowerShell.
+            </summary>
+            <param name="bashCommand">The bash command to transpile.</param>
+            <returns>The equivalent PowerShell command string.</returns>
+            <exception cref="T:PsBash.Core.Parser.ParseException">Thrown when the bash input cannot be parsed.</exception>
+        </member>
+    </members>
+</doc>

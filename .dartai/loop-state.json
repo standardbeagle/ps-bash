@@ -1,5 +1,5 @@
 {
-  "status": "running",
+  "status": "interrupted",
   "iterations": 3,
   "spawns": 0,
   "started_at": "2026-04-11T19:16:00Z",
@@ -62,5 +62,6 @@
       "fix_task_created": false,
       "fix_task_id": null
     }
-  ]
+  ],
+  "interrupted_at": "2026-04-12T00:31:12.804Z"
 }
