@@ -2114,6 +2114,12 @@ public static class PsEmitter
             case "jobs":
                 result = EmitPassthrough("Invoke-BashJobs", args);
                 return true;
+            case "fg":
+                result = EmitPassthrough("Invoke-BashFg", args);
+                return true;
+            case "bg":
+                result = EmitPassthrough("Invoke-BashBg", args);
+                return true;
             case "mapfile":
             case "readarray":
                 result = EmitPassthrough("Invoke-BashMapfile", args);

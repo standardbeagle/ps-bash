@@ -6670,3 +6670,175 @@ Describe 'Invoke-BashLs — Glob Expansion' {
         $text | Should -Not -Match 'c\.log'
     }
 }
+
+Describe 'Invoke-BashBackground' {
+    It 'launches a background process' {
+        Invoke-BashBackground { Start-Sleep -Seconds 5 }
+        $script:BashBgPids.Count | Should -BeGreaterThan 0
+        $proc = $script:BashBgPids[-1]
+        $proc | Should -Not -BeNullOrEmpty
+        $proc.HasExited | Should -BeFalse
+    }
+
+    AfterAll {
+        foreach ($p in @($script:BashBgPids)) {
+            if (-not $p.HasExited) { $p.Kill() }
+        }
+        $script:BashBgPids.Clear()
+    }
+}
+
+Describe 'Invoke-BashJobs' {
+    BeforeAll {
+        Invoke-BashBackground { Start-Sleep -Seconds 30 }
+        Invoke-BashBackground { Start-Sleep -Seconds 30 }
+    }
+
+    It 'lists background jobs' {
+        $result = @(Invoke-BashJobs)
+        $result.Count | Should -Be 2
+    }
+
+    It 'shows running status' {
+        $result = @(Invoke-BashJobs)
+        $text = ($result | ForEach-Object { $_.BashText }) -join ''
+        $text | Should -Match 'Running'
+    }
+
+    It 'shows job numbers starting at 1' {
+        $result = @(Invoke-BashJobs)
+        $text = ($result | ForEach-Object { $_.BashText }) -join ''
+        $text | Should -Match '\[1\]'
+        $text | Should -Match '\[2\]'
+    }
+
+    It 'returns nothing when no jobs' {
+        foreach ($p in @($script:BashBgPids)) {
+            if (-not $p.HasExited) { $p.Kill() }
+        }
+        $script:BashBgPids.Clear()
+        $result = @(Invoke-BashJobs)
+        $result.Count | Should -Be 0
+    }
+
+    It 'shows Done for exited processes' {
+        Invoke-BashBackground { Write-Output 'quick' }
+        Start-Sleep -Milliseconds 500
+        $result = @(Invoke-BashJobs)
+        $text = ($result | ForEach-Object { $_.BashText }) -join ''
+        $text | Should -Match 'Done'
+        $script:BashBgPids.Clear()
+    }
+
+    It 'returns help with --help' {
+        $result = Invoke-BashJobs --help
+        $result.BashText | Should -Match 'Usage: jobs'
+    }
+}
+
+Describe 'Invoke-BashWait' {
+    It 'waits for a specific PID' {
+        Invoke-BashBackground { Start-Sleep -Milliseconds 100 }
+        $pid = $script:BashBgPids[-1].Id
+        Invoke-BashWait $pid
+        $script:BashBgPids.Count | Should -Be 0
+    }
+
+    It 'waits for all background jobs' {
+        Invoke-BashBackground { Start-Sleep -Milliseconds 100 }
+        Invoke-BashBackground { Start-Sleep -Milliseconds 200 }
+        Invoke-BashWait
+        $script:BashBgPids.Count | Should -Be 0
+    }
+
+    It 'returns help with --help' {
+        $result = Invoke-BashWait --help
+        $result.BashText | Should -Match 'Usage: wait'
+    }
+
+    AfterAll {
+        foreach ($p in @($script:BashBgPids)) {
+            if (-not $p.HasExited) { $p.Kill() }
+        }
+        $script:BashBgPids.Clear()
+    }
+}
+
+Describe 'Invoke-BashFg' {
+    It 'brings a running job to foreground and waits' {
+        Invoke-BashBackground { Start-Sleep -Milliseconds 100 }
+        $elapsed = (Measure-Command { Invoke-BashFg }).TotalSeconds
+        $elapsed | Should -BeLessThan 5
+        $script:BashBgPids.Count | Should -Be 0
+    }
+
+    It 'errors when no current job' {
+        $result = Invoke-BashFg 2>&1
+        $errors = @($result | Where-Object { $_ -is [System.Management.Automation.ErrorRecord] })
+        $errors.Count | Should -BeGreaterThan 0
+    }
+
+    It 'selects job by number' {
+        Invoke-BashBackground { Start-Sleep -Seconds 30 }
+        Invoke-BashBackground { Start-Sleep -Milliseconds 100 }
+        Invoke-BashFg 2
+        $script:BashBgPids.Count | Should -Be 1
+        foreach ($p in @($script:BashBgPids)) {
+            if (-not $p.HasExited) { $p.Kill() }
+        }
+        $script:BashBgPids.Clear()
+    }
+
+    It 'returns help with --help' {
+        $result = Invoke-BashFg --help
+        $result.BashText | Should -Match 'Usage: fg'
+    }
+
+    AfterAll {
+        foreach ($p in @($script:BashBgPids)) {
+            if (-not $p.HasExited) { $p.Kill() }
+        }
+        $script:BashBgPids.Clear()
+    }
+}
+
+Describe 'Invoke-BashBg' {
+    It 'returns help with --help' {
+        $result = Invoke-BashBg --help
+        $result.BashText | Should -Match 'Usage: bg'
+    }
+
+    It 'errors because stopped-job control is not supported' {
+        $result = Invoke-BashBg 2>&1
+        $errors = @($result | Where-Object { $_ -is [System.Management.Automation.ErrorRecord] })
+        $errors.Count | Should -BeGreaterThan 0
+    }
+}
+
+Describe 'Background Jobs — E2E via Transpiler' {
+    It 'sleep 0.1 & sets background process' {
+        $module = Get-Module PsBash | Select-Object -First 1
+        $module.Invoke({ sleep 0.1 & })
+        $script:BashBgPids.Count | Should -BeGreaterThan 0
+        Start-Sleep -Milliseconds 500
+        $script:BashBgPids.Clear()
+    }
+
+    It 'jobs lists background processes' {
+        $module = Get-Module PsBash | Select-Object -First 1
+        $module.Invoke({ sleep 5 & })
+        $result = @(Invoke-BashJobs)
+        $result.Count | Should -BeGreaterThan 0
+        foreach ($p in @($script:BashBgPids)) {
+            if (-not $p.HasExited) { $p.Kill() }
+        }
+        $script:BashBgPids.Clear()
+    }
+
+    AfterAll {
+        foreach ($p in @($script:BashBgPids)) {
+            if (-not $p.HasExited) { $p.Kill() }
+        }
+        $script:BashBgPids.Clear()
+    }
+}

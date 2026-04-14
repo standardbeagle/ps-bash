@@ -12628,6 +12628,64 @@ function Invoke-BashJobs {
     }
 }
 
+function Invoke-BashFg {
+    <#
+    .SYNOPSIS
+        Bring a background job to the foreground (bash fg command).
+    #>
+    param()
+    $Arguments = [string[]]$args
+    if ($Arguments -contains '--help') { return Show-BashHelp 'fg' }
+
+    $target = $null
+    if ($Arguments.Count -gt 0) {
+        $jobNum = $Arguments[0]
+        if ([int]::TryParse($jobNum, [ref]$null)) {
+            $idx = [int]$jobNum - 1
+            if ($idx -ge 0 -and $idx -lt $script:BashBgPids.Count) {
+                $target = @($script:BashBgPids)[$idx]
+            }
+        } else {
+            $pid = $jobNum -replace '^%', ''
+            if ([int]::TryParse($pid, [ref]$null)) {
+                $target = @($script:BashBgPids) | Where-Object { $_.Id -eq [int]$pid } | Select-Object -First 1
+            }
+        }
+    } else {
+        $running = @($script:BashBgPids | Where-Object { -not $_.HasExited })
+        if ($running.Count -gt 0) {
+            $target = $running[-1]
+        }
+    }
+
+    if ($null -eq $target) {
+        Write-BashError -Message 'fg: no current job'
+        return
+    }
+
+    if ($target.HasExited) {
+        Write-Host "[$($target.Id)] Done`t$($target.ProcessName)"
+        [void]$script:BashBgPids.Remove($target)
+        return
+    }
+
+    Write-Host "$($target.ProcessName) (PID $($target.Id))"
+    $target.WaitForExit()
+    [void]$script:BashBgPids.Remove($target)
+}
+
+function Invoke-BashBg {
+    <#
+    .SYNOPSIS
+        Resume a stopped job in the background (bash bg command).
+    #>
+    param()
+    $Arguments = [string[]]$args
+    if ($Arguments -contains '--help') { return Show-BashHelp 'bg' }
+
+    Write-BashError -Message 'bg: job control not supported (processes run asynchronously)'
+}
+
 # --- shift ---
 
 function Invoke-BashShift {
@@ -12814,6 +12872,8 @@ $script:BashHelpSpecs = @{
     'bash'     = 'Invoke ps-bash transpiler for nested bash execution.'
     'wait'     = 'Wait for background processes to finish.'
     'jobs'     = 'List background processes and their status.'
+    'fg'       = 'Bring a background job to the foreground.'
+    'bg'       = 'Resume a stopped job in the background.'
     'shift'    = 'Shift positional parameters.'
     'realpath' = 'Print the resolved path.'
     'command'  = 'Execute a simple command or display information about commands.'
@@ -13128,6 +13188,8 @@ Set-Alias -Name 'type'     -Value 'Invoke-BashType'     -Force -Scope Global -Op
 Set-Alias -Name 'bash'     -Value 'Invoke-BashBash'     -Force -Scope Global -Option AllScope
 Set-Alias -Name 'wait'     -Value 'Invoke-BashWait'     -Force -Scope Global -Option AllScope
 Set-Alias -Name 'jobs'     -Value 'Invoke-BashJobs'     -Force -Scope Global -Option AllScope
+Set-Alias -Name 'fg'       -Value 'Invoke-BashFg'       -Force -Scope Global -Option AllScope
+Set-Alias -Name 'bg'       -Value 'Invoke-BashBg'       -Force -Scope Global -Option AllScope
 Set-Alias -Name 'shift'    -Value 'Invoke-BashShift'    -Force -Scope Global -Option AllScope
 Set-Alias -Name 'realpath' -Value 'Invoke-BashRealpath' -Force -Scope Global -Option AllScope
 # --- unset ---

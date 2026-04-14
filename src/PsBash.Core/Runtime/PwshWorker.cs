@@ -324,6 +324,45 @@ public sealed class PwshWorker : IAsyncDisposable
         }
     }
 
+    public async Task<string> QueryAsync(
+        string pwshExpression,
+        CancellationToken ct = default)
+    {
+        var timeout = TimeSpan.FromSeconds(5);
+        using var timeoutCts = new CancellationTokenSource(timeout);
+        using var linked = CancellationTokenSource.CreateLinkedTokenSource(ct, timeoutCts.Token);
+
+        var lines = new List<string>();
+        var prevCallback = OutputCallback;
+        OutputCallback = line => lines.Add(line);
+
+        try
+        {
+            await _stdin.WriteLineAsync(pwshExpression.AsMemory(), linked.Token);
+            await _stdin.WriteLineAsync("<<<END>>>".AsMemory(), linked.Token);
+            await _stdin.FlushAsync(linked.Token);
+
+            var reader = _outputChannel.Reader;
+            while (await reader.WaitToReadAsync(linked.Token))
+            {
+                while (reader.TryRead(out var line))
+                {
+                    if (line.StartsWith("<<<EXIT:", StringComparison.Ordinal)
+                        && line.EndsWith(">>>", StringComparison.Ordinal))
+                    {
+                        return string.Join("\n", lines);
+                    }
+                }
+            }
+
+            return string.Join("\n", lines);
+        }
+        finally
+        {
+            OutputCallback = prevCallback;
+        }
+    }
+
     private static TimeSpan GetTimeout()
     {
         var envValue = Environment.GetEnvironmentVariable("PSBASH_TIMEOUT");

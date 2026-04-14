@@ -1,32 +1,30 @@
 # PsBash
 
-**Real bash commands. Real PowerShell objects.**
+**Real bash commands on Windows. No WSL, Git Bash, or Cygwin required.**
+
+PsBash transpiles bash to PowerShell — `rm -rf`, `ls -la`, `grep -r`, `sort -k3` all work natively. Every command returns **typed .NET objects** while producing bash-identical text output. Includes a standalone shell binary that AI coding agents (Claude Code, OpenCode, GitHub Copilot) can use as a drop-in bash replacement.
 
 [![CI](https://github.com/standardbeagle/ps-bash/actions/workflows/ci.yml/badge.svg)](https://github.com/standardbeagle/ps-bash/actions/workflows/ci.yml)
 [![PSGallery](https://img.shields.io/powershellgallery/v/PsBash.svg?label=PSGallery)](https://www.powershellgallery.com/packages/PsBash)
 [![Tests](https://img.shields.io/badge/tests-857%20passing-brightgreen.svg)](#testing)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 [![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20Linux%20%7C%20macOS-lightgrey.svg)](#cross-platform)
-[![Docs](https://img.shields.io/badge/docs-standardbeagle.github.io%2Fps--bash-blue.svg)](https://standardbeagle.github.io/ps-bash/)
+
+## Quick Install
+
+**As a PowerShell module:**
 
 ```powershell
 Install-Module PsBash
 ```
 
-Or install the standalone `ps-bash` binary (no .NET runtime required):
+**As a standalone shell binary (no .NET runtime required):**
 
-**Windows (PowerShell)**
 ```powershell
+# Windows
 iwr https://raw.githubusercontent.com/standardbeagle/ps-bash/main/install.ps1 | iex
-```
 
-**Linux / macOS (PowerShell)**
-```powershell
-pwsh -Command "iwr https://raw.githubusercontent.com/standardbeagle/ps-bash/main/install.ps1 | iex"
-```
-
-**Linux / macOS (curl + bash)**
-```bash
+# Linux / macOS
 curl -fsSL https://raw.githubusercontent.com/standardbeagle/ps-bash/main/install.sh | bash
 ```
 
@@ -37,9 +35,9 @@ curl -fsSL https://raw.githubusercontent.com/standardbeagle/ps-bash/main/install
 
 ## Why PsBash?
 
-PowerShell ships aliases for `ls`, `cat`, `sort`, `rm` -- but they're lies. `rm -rf` fails. `ls -la` fails. `sort -k3 -rn` fails. They're `Get-ChildItem`, `Get-Content`, and `Sort-Object` wearing a disguise, rejecting every bash flag you throw at them.
+PowerShell ships aliases for `ls`, `cat`, `sort`, `rm` — but they're lies. `rm -rf` fails. `ls -la` fails. `sort -k3 -rn` fails. They're `Get-ChildItem`, `Get-Content`, and `Sort-Object` wearing a disguise, rejecting every bash flag you throw at them.
 
-PsBash makes the flags work -- and goes further. Every command returns **typed .NET objects** while producing bash-identical text output.
+PsBash makes the flags work — and goes further. Every command returns **typed .NET objects** while producing bash-identical text output.
 
 ### 1. Parse process data without awk
 
@@ -74,7 +72,7 @@ PS> $files.SizeBytes | Measure-Object -Sum | Select -Expand Sum
 234989
 ```
 
-### 3. Built-in jq, awk, sed -- no external binaries
+### 3. Built-in jq, awk, sed — no external binaries
 
 ```powershell
 PS> echo '{"db":"postgres","port":5432}' | jq '.db'
@@ -88,6 +86,90 @@ PS> cat app.log | grep ERROR | awk '{print $1, $3}' | sort | uniq -c | sort -rn 
 PS> find . -name '*.log' -mtime +7 | xargs rm -f    # actually works on Windows
 ```
 
+## Two Modes: Module and Shell
+
+PsBash can be used as a **PowerShell module** or a **standalone shell**. They share the same 76 bash commands and typed object pipeline.
+
+### Module — bash commands inside PowerShell
+
+```powershell
+Install-Module PsBash
+ls -la | grep '.cs' | sort -k5 -h        # typed objects through the pipeline
+$procs = ps aux | sort -k3 -rn | head 5  # .PID, .CPU are real .NET types
+```
+
+Best for: scripts, VS Code terminal, CI/CD, mixing bash with PowerShell cmdlets.
+
+### Shell — standalone bash terminal on Windows
+
+```bash
+# Launch as your shell
+ps-bash
+
+# Inside: bash aliases, .psbashrc, colored prompt, external tools
+ll                           # alias: ls -al
+cd ~/projects && git status  # cd + external git
+claude                       # full interactive AI session
+```
+
+Best for: Windows Terminal, AI coding agents (Claude Code, OpenCode), replacing WSL/Git Bash.
+
+→ **See the full [Shell Guide](docs/shell-guide.md)** for setup, configuration, mixing bash + PowerShell, and limitations.
+
+## AI Coding Agent Setup
+
+Ps-bash works as a drop-in bash replacement for AI coding agents on Windows. Agents invoke `ps-bash -c "command"` and it transpiles bash to PowerShell transparently.
+
+### Quick Setup for Claude Code
+
+```powershell
+# Add to $PROFILE or set before launching claude
+$env:CLAUDE_CODE_SHELL = 'C:\Users\you\.local\bin\ps-bash.exe'
+```
+
+Or in `~/.claude/settings.json`:
+
+```json
+{
+  "env": {
+    "CLAUDE_CODE_SHELL": "C:\\Users\\you\\.local\\bin\\ps-bash.exe"
+  }
+}
+```
+
+### Quick Setup for OpenCode
+
+```powershell
+$env:SHELL = 'C:\Users\you\.local\bin\ps-bash.exe'
+opencode
+```
+
+### Quick Setup for GitHub Copilot (VS Code)
+
+In VS Code `settings.json`:
+
+```json
+{
+  "terminal.integrated.profiles.windows": {
+    "ps-bash": {
+      "path": "C:\\Users\\you\\.local\\bin\\ps-bash.exe"
+    }
+  },
+  "terminal.integrated.defaultProfile.windows": "ps-bash"
+}
+```
+
+### Supported Agents
+
+| Agent | Config Method | Setting |
+|-------|--------------|---------|
+| **Claude Code** | `CLAUDE_CODE_SHELL` env var or `settings.json` | `CLAUDE_CODE_SHELL=C:\path\to\ps-bash.exe` |
+| **OpenCode** | `$SHELL` environment variable | `$env:SHELL = 'C:\path\to\ps-bash.exe'` |
+| **GitHub Copilot** | VS Code terminal profile | `terminal.integrated.defaultProfile.windows` |
+| **Gemini CLI** | Not configurable (hardcoded shell) | Run inside ps-bash interactive shell |
+
+See [docs/agent-setup.md](docs/agent-setup.md) for detailed per-agent configuration, Docker setup, and troubleshooting.
+
 ## Feature Comparison
 
 | | **PsBash** | **Git Bash** | **Cygwin** | **WSL** | **Crescendo** |
@@ -97,63 +179,14 @@ PS> find . -name '*.log' -mtime +7 | xargs rm -f    # actually works on Windows
 | `rm -rf` works | Yes | Yes | Yes | Yes | If you configure it |
 | Typed objects | Always | Never (strings) | Never (strings) | Never (strings) | If configured |
 | Object pipeline | Types survive `grep \| sort \| head` | Strings only | Strings only | Strings only | Varies |
-| PowerShell integration | Native -- objects flow into cmdlets | Separate shell | Separate shell | Separate shell | Native |
+| PowerShell integration | Native — objects flow into cmdlets | Separate shell | Separate shell | Separate shell | Native |
 | Cross-platform | Win/Lin/Mac | Windows only | Windows only | Windows only | Win/Lin/Mac |
 | Commands | 76 built-in | ~80 (GNU coreutils) | ~200+ (full GNU) | All of Linux | Define your own |
 | jq/awk/sed | Built-in, zero binaries | awk/sed yes, jq no | Yes (install pkg) | Yes (apt install) | Not included |
 | PATH conflicts | None (AllScope aliases) | Shadows PowerShell | Shadows PowerShell | Filesystem boundary | None |
 | Startup overhead | ~100 ms (module load) | New process per call | New process per call | ~1s (cold), ~200ms (warm) | ~100 ms |
-
-## Quick Start
-
-```powershell
-# Install from PSGallery
-Install-Module PsBash
-
-# Or clone for development
-git clone https://github.com/standardbeagle/ps-bash.git
-Import-Module ./ps-bash/src/PsBash.psd1
-```
-
-76 bash commands work immediately:
-
-```powershell
-ls -la                                    # LsEntry objects
-ps aux | sort -k3 -rn | head 5           # PsEntry objects, sorted by CPU
-cat README.md | grep 'bash' | wc -l      # WcResult with .Lines, .Words, .Bytes
-find . -name '*.ps1' -type f             # FindEntry objects
-echo '{"a":1}' | jq '.a'                 # built-in JSON processor
-du -sh * | sort -rh | head 10            # DuEntry objects, human-readable sizes
-sed -i 's/foo/bar/g' config.txt          # in-place file editing
-tar -czf backup.tar.gz src/              # compression with .NET streams
-```
-
-### Permanent Setup
-
-```powershell
-# Add to your PowerShell profile
-Add-Content $PROFILE "`nImport-Module PsBash"
-```
-
-## How It Works
-
-Every PsBash command returns a PSCustomObject with a `.BashText` property. The terminal renders BashText (looks like real bash). Your code accesses typed properties.
-
-```
-  ls -la
-    |
-  Invoke-BashLs
-    |
-  [LsEntry] objects
-    .Name         = "README.md"
-    .SizeBytes    = 4521             [int]
-    .Permissions  = "-rw-r--r--"     [string]
-    .Owner        = "beagle"         [string]
-    .LastModified = 2024-04-02...    [DateTime]
-    .BashText     = "-rw-r--r-- 1 beagle wheel  4521 Apr  2 ..."
-```
-
-Pipeline commands (`grep`, `sort`, `head`, `tail`, `tee`) match against BashText but pass through the **original typed objects**. This is the pipeline bridge -- the core architectural pattern.
+| AI agent shell | Yes (`ps-bash -c`) | No | No | No | No |
+| Interactive mode | Yes (aliases, prompt, external tools) | Yes (full bash) | Yes (full bash) | Yes (full Linux) | No |
 
 ## 76 Commands
 
@@ -190,6 +223,34 @@ Every command supports `--help` and tab completion for all flags.
 
 Both sides give you objects. PsBash just lets you type what you already know.
 
+## How It Works
+
+Every PsBash command returns a PSCustomObject with a `.BashText` property. The terminal renders BashText (looks like real bash). Your code accesses typed properties.
+
+```
+  ls -la
+    |
+  Invoke-BashLs
+    |
+  [LsEntry] objects
+    .Name         = "README.md"
+    .SizeBytes    = 4521             [int]
+    .Permissions  = "-rw-r--r--"     [string]
+    .Owner        = "beagle"         [string]
+    .LastModified = 2024-04-02...    [DateTime]
+    .BashText     = "-rw-r--r-- 1 beagle wheel  4521 Apr  2 ..."
+```
+
+Pipeline commands (`grep`, `sort`, `head`, `tail`, `tee`) match against BashText but pass through the **original typed objects**. This is the pipeline bridge — the core architectural pattern.
+
+The standalone `ps-bash` binary adds a transpiler layer:
+
+```
+bash input → BashLexer → BashParser → PsEmitter → PwshWorker → PowerShell
+```
+
+The parser tokenizes and parses bash into an AST modeled on Oils syntax.asdl. The emitter maps bash commands to `Invoke-Bash*` functions, forwarding all arguments unchanged. The runtime PowerShell module handles all flag parsing with full bash-compatible behavior.
+
 ## Testing
 
 ```powershell
@@ -210,30 +271,13 @@ CI runs on Windows, Linux, and macOS via GitHub Actions.
 
 ## Documentation
 
-**[standardbeagle.github.io/ps-bash](https://standardbeagle.github.io/ps-bash/)** -- full command reference, object type specs, pipeline cookbook, cross-platform guide.
+**[standardbeagle.github.io/ps-bash](https://standardbeagle.github.io/ps-bash/)** — full command reference, object type specs, pipeline cookbook, cross-platform guide.
 
-## Shell Binary (ps-bash)
-
-`ps-bash` is also available as a standalone shell binary that AI coding agents can use as a `SHELL=` replacement on Windows. It translates bash commands to PowerShell at invocation time, so agents like Claude Code, opencode, and Gemini CLI can emit standard Unix commands on Windows without Git Bash, Cygwin, or WSL.
-
-**Quick install:**
-
-```bash
-# Download from GitHub Releases
-# https://github.com/standardbeagle/ps-bash/releases
-
-# Set as your shell (Windows)
-$env:SHELL = 'C:\tools\ps-bash\ps-bash.exe'
-
-# Set as your shell (Linux/macOS)
-export SHELL=/usr/local/ps-bash/ps-bash
-```
-
-The binary requires PowerShell 7+ (`pwsh`). A full package that bundles PowerShell is available for containers and air-gapped environments.
-
-**Supported agents:** Claude Code, opencode, Gemini CLI. See [docs/agent-setup.md](docs/agent-setup.md) for per-agent configuration.
-
-**How it works:** The binary accepts `SHELL -c "command"` (the standard agent invocation), transpiles bash syntax to PowerShell, and executes it via a persistent `pwsh` worker process. Exit codes, stdout, and stderr pass through exactly. See [docs/specs/shell-binary.md](docs/specs/shell-binary.md) for the full specification.
+- **[Interactive Shell Guide](docs/shell-guide.md)** — running ps-bash as a shell, .psbashrc config, mixing bash and PowerShell, command routing
+- **[Agent Setup Guide](docs/agent-setup.md)** — configure Claude Code, OpenCode, Copilot, and Gemini CLI to use ps-bash
+- **[Parser Grammar](docs/specs/parser-grammar.md)** — tokens, AST nodes, grammar productions
+- **[Emitter Strategy](docs/specs/emitter-strategy.md)** — passthrough principle, pipe mappings
+- **[Runtime Functions](docs/specs/runtime-functions.md)** — BashObject model, command reference
 
 ## License
 

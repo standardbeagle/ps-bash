@@ -72,10 +72,14 @@ public static class InteractiveShell
             try
             {
                 if (TryRunDirect(trimmed))
+                {
+                    await RunPromptCommandAsync(worker);
                     continue;
+                }
 
                 await worker.ExecuteAsync(pwshCommand, cts.Token);
-                UpdateCwd(trimmed);
+                await SyncWorkerCwdAsync(worker);
+                await RunPromptCommandAsync(worker);
             }
             catch (OperationCanceledException)
             {
@@ -101,7 +105,7 @@ public static class InteractiveShell
         if (ast is not Command.Simple simple)
             return false;
 
-        if (simple.Redirects.Length > 0 || simple.EnvPairs.Length > 0)
+        if (simple.Redirects.Length > 0)
             return false;
 
         if (simple.Words.Length == 0)
@@ -117,9 +121,9 @@ public static class InteractiveShell
         var args = new List<string>();
         for (int i = 1; i < simple.Words.Length; i++)
         {
-            var lit = PsEmitter.GetLiteralValue(simple.Words[i]);
-            if (lit is not null)
-                args.Add(lit);
+            var resolved = ResolveWord(simple.Words[i]);
+            if (resolved is not null)
+                args.AddRange(resolved);
             else
                 return false;
         }
@@ -134,6 +138,16 @@ public static class InteractiveShell
             };
             foreach (var arg in args)
                 psi.ArgumentList.Add(arg);
+
+            foreach (var envPair in simple.EnvPairs)
+            {
+                if (envPair.Value is not null)
+                {
+                    var val = PsEmitter.GetLiteralValue(envPair.Value);
+                    if (val is not null)
+                        psi.Environment[envPair.Name] = val;
+                }
+            }
 
             _suspendCancel = true;
             var proc = Process.Start(psi);
@@ -151,6 +165,77 @@ public static class InteractiveShell
         {
             return false;
         }
+    }
+
+    private static List<string>? ResolveWord(CompoundWord word)
+    {
+        var lit = PsEmitter.GetLiteralValue(word);
+        if (lit is not null)
+        {
+            if (HasGlobChars(lit))
+            {
+                try
+                {
+                    var dir = Directory.Exists(_lastDir) ? _lastDir : ".";
+                    var pattern = Path.IsPathRooted(lit) ? lit : Path.Combine(dir, lit);
+                    var dirPart = Path.GetDirectoryName(pattern) ?? ".";
+                    var filePart = Path.GetFileName(pattern);
+                    var matches = Directory.GetFiles(dirPart, filePart);
+                    if (matches.Length == 0)
+                        return new List<string> { lit };
+                    return matches
+                        .Select(m => Path.GetRelativePath(dir, m))
+                        .ToList();
+                }
+                catch
+                {
+                    return new List<string> { lit };
+                }
+            }
+            return new List<string> { lit };
+        }
+
+        if (word.Parts.Length == 1 && word.Parts[0] is WordPart.SimpleVarSub sv)
+        {
+            var val = Environment.GetEnvironmentVariable(sv.Name);
+            if (val is not null)
+                return new List<string> { val };
+        }
+
+        return null;
+    }
+
+    private static bool HasGlobChars(string value) =>
+        value.Contains('*') || value.Contains('?') || value.Contains('[');
+
+    private static async Task SyncWorkerCwdAsync(PwshWorker worker)
+    {
+        try
+        {
+            var pwd = await worker.QueryAsync("(Get-Location).Path");
+            if (!string.IsNullOrWhiteSpace(pwd) && Directory.Exists(pwd))
+                _lastDir = pwd.Trim();
+        }
+        catch { }
+    }
+
+    private static async Task RunPromptCommandAsync(PwshWorker worker)
+    {
+        try
+        {
+            var cmd = await worker.QueryAsync("if ($env:PROMPT_COMMAND) { $env:PROMPT_COMMAND } else { '' }");
+            if (!string.IsNullOrWhiteSpace(cmd))
+            {
+                cmd = cmd.Trim();
+                try
+                {
+                    var pwshCmd = BashTranspiler.Transpile(cmd);
+                    await worker.ExecuteAsync(pwshCmd, CancellationToken.None);
+                }
+                catch { }
+            }
+        }
+        catch { }
     }
 
     private static void UpdateCwd(string bashInput)
@@ -549,54 +634,109 @@ public static class InteractiveShell
         if (Aliases.Count == 0)
             return input;
 
-        int i = 0;
-        while (i < input.Length && char.IsWhiteSpace(input[i]))
-            i++;
+        var sb = new StringBuilder();
+        int pos = 0;
 
-        if (i >= input.Length)
-            return input;
-
-        int start = i;
-        bool quoted = false;
-        char quoteChar = '\0';
-
-        while (i < input.Length)
+        while (pos < input.Length)
         {
-            char c = input[i];
-            if (quoted)
+            // Skip leading whitespace
+            while (pos < input.Length && char.IsWhiteSpace(input[pos]))
+                sb.Append(input[pos++]);
+
+            if (pos >= input.Length)
+                break;
+
+            // Extract the next word
+            int start = pos;
+            bool quoted = false;
+            char quoteChar = '\0';
+
+            while (pos < input.Length)
             {
-                if (c == quoteChar)
-                    quoted = false;
-                i++;
+                char c = input[pos];
+                if (quoted)
+                {
+                    if (c == quoteChar) quoted = false;
+                    pos++;
+                }
+                else if (c == '"' || c == '\'')
+                {
+                    quoted = true;
+                    quoteChar = c;
+                    pos++;
+                }
+                else if (c == '\\')
+                {
+                    pos += 2;
+                }
+                else if (char.IsWhiteSpace(c) || c == ';' || c == '|' || c == '(' || c == '<' || c == '>')
+                {
+                    break;
+                }
+                else if (c == '&')
+                {
+                    if (pos + 1 < input.Length && input[pos + 1] == '&')
+                        break;
+                    break;
+                }
+                else
+                {
+                    pos++;
+                }
             }
-            else if (c == '"' || c == '\'')
+
+            var word = input[start..pos];
+
+            if (Aliases.TryGetValue(word, out var expansion))
+                sb.Append(expansion);
+            else
+                sb.Append(word);
+
+            // Copy separator until next word
+            while (pos < input.Length)
             {
-                quoted = true;
-                quoteChar = c;
-                i++;
-            }
-            else if (c == '\\')
-            {
-                i += 2;
-            }
-            else if (char.IsWhiteSpace(c) || c == ';' || c == '|' || c == '&' || c == '(' || c == '<' || c == '>')
-            {
+                char c = input[pos];
+                if (c == '&' && pos + 1 < input.Length && input[pos + 1] == '&')
+                {
+                    sb.Append("&&");
+                    pos += 2;
+                    break;
+                }
+                if (c == '|')
+                {
+                    if (pos + 1 < input.Length && input[pos + 1] == '|')
+                    {
+                        sb.Append("||");
+                        pos += 2;
+                        break;
+                    }
+                    sb.Append('|');
+                    pos++;
+                    break;
+                }
+                if (c == ';')
+                {
+                    sb.Append(';');
+                    pos++;
+                    break;
+                }
+                if (c == '(' || c == '<' || c == '>')
+                {
+                    sb.Append(c);
+                    pos++;
+                    break;
+                }
+                if (char.IsWhiteSpace(c))
+                {
+                    sb.Append(c);
+                    pos++;
+                    continue;
+                }
                 break;
             }
-            else
-            {
-                i++;
-            }
         }
 
-        var firstWord = input[start..i];
-
-        if (Aliases.TryGetValue(firstWord, out var expansion))
-        {
-            return expansion + input[i..];
-        }
-
-        return input;
+        return sb.ToString();
     }
 
     private static async Task<PwshWorker> StartWorkerAsync(string pwshPath)

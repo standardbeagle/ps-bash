@@ -2496,6 +2496,41 @@ public class PsEmitterTests
         Assert.Equal("Invoke-BashBash -c \"echo hello\" | Invoke-BashGrep hello", result);
     }
 
+    [Fact]
+    public void Transpile_Jobs_EmitsInvokeBashJobs()
+    {
+        var result = PsEmitter.Transpile("jobs");
+        Assert.Equal("Invoke-BashJobs", result);
+    }
+
+    [Fact]
+    public void Transpile_Wait_NoArgs_EmitsInvokeBashWait()
+    {
+        var result = PsEmitter.Transpile("wait");
+        Assert.Equal("Invoke-BashWait", result);
+    }
+
+    [Fact]
+    public void Transpile_Wait_WithPid_EmitsInvokeBashWaitPid()
+    {
+        var result = PsEmitter.Transpile("wait 1234");
+        Assert.Equal("Invoke-BashWait 1234", result);
+    }
+
+    [Fact]
+    public void Transpile_Wait_MultiplePids()
+    {
+        var result = PsEmitter.Transpile("wait 1234 5678");
+        Assert.Equal("Invoke-BashWait 1234 5678", result);
+    }
+
+    [Fact]
+    public void Transpile_Background_ThenWait()
+    {
+        var result = PsEmitter.Transpile("sleep 1 & wait");
+        Assert.Equal("Invoke-BashBackground { Invoke-BashSleep 1 }; Invoke-BashWait", result);
+    }
+
     private static CompoundWord MakeWord(string value) =>
         new(ImmutableArray.Create<WordPart>(new WordPart.Literal(value)));
 }
