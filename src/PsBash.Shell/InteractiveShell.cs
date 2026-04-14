@@ -1,5 +1,7 @@
+using System.Diagnostics;
 using System.Text;
 using PsBash.Core.Parser;
+using PsBash.Core.Parser.Ast;
 using PsBash.Core.Runtime;
 using PsBash.Core.Transpiler;
 
@@ -69,6 +71,9 @@ public static class InteractiveShell
 
             try
             {
+                if (TryRunDirect(trimmed))
+                    continue;
+
                 await worker.ExecuteAsync(pwshCommand, cts.Token);
                 UpdateCwd(trimmed);
             }
@@ -78,6 +83,73 @@ public static class InteractiveShell
                 await DisposeWorkerAsync(worker);
                 worker = await StartWorkerAsync(pwshPath);
             }
+        }
+    }
+
+    private static bool TryRunDirect(string bashInput)
+    {
+        Command? ast;
+        try
+        {
+            ast = BashParser.Parse(bashInput);
+        }
+        catch
+        {
+            return false;
+        }
+
+        if (ast is not Command.Simple simple)
+            return false;
+
+        if (simple.Redirects.Length > 0 || simple.EnvPairs.Length > 0)
+            return false;
+
+        if (simple.Words.Length == 0)
+            return false;
+
+        var cmdName = PsEmitter.GetLiteralValue(simple.Words[0]);
+        if (cmdName is null)
+            return false;
+
+        if (PsEmitter.IsKnownCommand(cmdName))
+            return false;
+
+        var args = new List<string>();
+        for (int i = 1; i < simple.Words.Length; i++)
+        {
+            var lit = PsEmitter.GetLiteralValue(simple.Words[i]);
+            if (lit is not null)
+                args.Add(lit);
+            else
+                return false;
+        }
+
+        try
+        {
+            var workDir = Directory.Exists(_lastDir) ? _lastDir : null;
+            var psi = new ProcessStartInfo(cmdName)
+            {
+                UseShellExecute = false,
+                WorkingDirectory = workDir,
+            };
+            foreach (var arg in args)
+                psi.ArgumentList.Add(arg);
+
+            _suspendCancel = true;
+            var proc = Process.Start(psi);
+            if (proc is null)
+            {
+                _suspendCancel = false;
+                return false;
+            }
+
+            proc.WaitForExit();
+            _suspendCancel = false;
+            return true;
+        }
+        catch
+        {
+            return false;
         }
     }
 
@@ -562,9 +634,11 @@ public static class InteractiveShell
     }
 
     private static CancellationTokenSource? _currentCts;
+    private static volatile bool _suspendCancel;
 
     private static void OnCancelKeyPress(object? sender, ConsoleCancelEventArgs e)
     {
+        if (_suspendCancel) return;
         e.Cancel = true;
         _currentCts?.Cancel();
     }

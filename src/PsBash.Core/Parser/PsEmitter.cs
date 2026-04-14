@@ -2171,12 +2171,33 @@ public static class PsEmitter
         }
     }
 
-    private static string? GetLiteralValue(CompoundWord word)
+    public static string? GetLiteralValue(CompoundWord word)
     {
         if (word.Parts.Length == 1 && word.Parts[0] is WordPart.Literal lit)
             return lit.Value;
         return null;
     }
+
+    public static bool IsKnownCommand(string name)
+    {
+        if (s_specialBuiltins.Contains(name))
+            return true;
+
+        // Check the mapped command switch — try to match without emitting
+        var tempCmd = new Command.Simple(
+            [new CompoundWord([new WordPart.Literal(name)])],
+            [], []);
+        return TryEmitMappedCommand(tempCmd, out _);
+    }
+
+    private static readonly HashSet<string> s_specialBuiltins =
+    [
+        "cd", "export", "local", "return", "true", "false",
+        "read", "eval", "readonly", "set", "source", ".",
+        "declare", "typeset", "alias", "unalias",
+        "if", "then", "else", "elif", "fi", "for", "while", "until",
+        "do", "done", "case", "esac", "function", "in", "select",
+    ];
 
     private static bool IsQuotedCommandWord(CompoundWord word)
     {
