@@ -20,4 +20,8 @@
     <ProjectReference Include="..\PsBash.Core\PsBash.Core.csproj" />
   </ItemGroup>
 
+  <ItemGroup>
+    <EmbeddedResource Include="Resources\FlagSpecs.json" />
+  </ItemGroup>
+
 </Project>

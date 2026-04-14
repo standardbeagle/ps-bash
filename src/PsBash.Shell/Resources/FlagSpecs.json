@@ -1,0 +1,382 @@
+{
+  "echo": [
+    {"flag": "-n", "desc": "no trailing newline"},
+    {"flag": "-e", "desc": "enable escape sequences"},
+    {"flag": "-E", "desc": "disable escape sequences"}
+  ],
+  "ls": [
+    {"flag": "-l", "desc": "long listing"},
+    {"flag": "-a", "desc": "show hidden"},
+    {"flag": "-h", "desc": "human readable sizes"},
+    {"flag": "-R", "desc": "recursive"},
+    {"flag": "-S", "desc": "sort by size"},
+    {"flag": "-t", "desc": "sort by time"},
+    {"flag": "-r", "desc": "reverse sort"},
+    {"flag": "-1", "desc": "one per line"}
+  ],
+  "cat": [
+    {"flag": "-n", "desc": "number all lines"},
+    {"flag": "-b", "desc": "number non-blank lines"},
+    {"flag": "-s", "desc": "squeeze blank lines"},
+    {"flag": "-E", "desc": "show $ at line end"},
+    {"flag": "-T", "desc": "show ^I for tabs"}
+  ],
+  "grep": [
+    {"flag": "-i", "desc": "ignore case"},
+    {"flag": "-v", "desc": "invert match"},
+    {"flag": "-n", "desc": "line numbers"},
+    {"flag": "-c", "desc": "count only"},
+    {"flag": "-r", "desc": "recursive"},
+    {"flag": "-l", "desc": "files with matches"},
+    {"flag": "-E", "desc": "extended regex"},
+    {"flag": "-A", "desc": "after context"},
+    {"flag": "-B", "desc": "before context"},
+    {"flag": "-C", "desc": "context"},
+    {"flag": "-F", "desc": "fixed strings"},
+    {"flag": "-w", "desc": "word regexp"},
+    {"flag": "-o", "desc": "only matching"},
+    {"flag": "-H", "desc": "with filename"},
+    {"flag": "-h", "desc": "no filename"},
+    {"flag": "-e", "desc": "pattern"},
+    {"flag": "-m", "desc": "max count"}
+  ],
+  "rg": [
+    {"flag": "-i", "desc": "ignore case"},
+    {"flag": "-w", "desc": "word regexp"},
+    {"flag": "-c", "desc": "count matches"},
+    {"flag": "-l", "desc": "files with matches"},
+    {"flag": "-n", "desc": "line numbers"},
+    {"flag": "-N", "desc": "no line numbers"},
+    {"flag": "-o", "desc": "only matching"},
+    {"flag": "-v", "desc": "invert match"},
+    {"flag": "-F", "desc": "fixed strings"},
+    {"flag": "-g", "desc": "glob filter"},
+    {"flag": "-A", "desc": "after context"},
+    {"flag": "-B", "desc": "before context"},
+    {"flag": "-C", "desc": "context"},
+    {"flag": "--hidden", "desc": "include dotfiles"}
+  ],
+  "sort": [
+    {"flag": "-r", "desc": "reverse"},
+    {"flag": "-n", "desc": "numeric sort"},
+    {"flag": "-u", "desc": "unique"},
+    {"flag": "-f", "desc": "fold case"},
+    {"flag": "-k", "desc": "key field"},
+    {"flag": "-t", "desc": "field separator"},
+    {"flag": "-h", "desc": "human numeric"},
+    {"flag": "-V", "desc": "version sort"},
+    {"flag": "-M", "desc": "month sort"},
+    {"flag": "-c", "desc": "check sorted"}
+  ],
+  "head": [
+    {"flag": "-n", "desc": "number of lines"}
+  ],
+  "tail": [
+    {"flag": "-n", "desc": "number of lines"},
+    {"flag": "-f", "desc": "follow file for changes"},
+    {"flag": "-c", "desc": "output last N bytes"},
+    {"flag": "-s", "desc": "poll interval in seconds"}
+  ],
+  "wc": [
+    {"flag": "-l", "desc": "line count"},
+    {"flag": "-w", "desc": "word count"},
+    {"flag": "-c", "desc": "byte count"}
+  ],
+  "find": [
+    {"flag": "-name", "desc": "name pattern"},
+    {"flag": "-type", "desc": "file type"},
+    {"flag": "-size", "desc": "file size"},
+    {"flag": "-maxdepth", "desc": "max depth"},
+    {"flag": "-mtime", "desc": "modify time"},
+    {"flag": "-empty", "desc": "empty files"},
+    {"flag": "-print0", "desc": "null-delimited output"},
+    {"flag": "-exec", "desc": "execute command"}
+  ],
+  "stat": [
+    {"flag": "-c", "desc": "format string"},
+    {"flag": "-t", "desc": "terse"},
+    {"flag": "--printf", "desc": "printf format"}
+  ],
+  "cp": [
+    {"flag": "-r", "desc": "recursive"},
+    {"flag": "-v", "desc": "verbose"},
+    {"flag": "-n", "desc": "no-clobber"},
+    {"flag": "-f", "desc": "force"}
+  ],
+  "mv": [
+    {"flag": "-v", "desc": "verbose"},
+    {"flag": "-n", "desc": "no-clobber"},
+    {"flag": "-f", "desc": "force"}
+  ],
+  "rm": [
+    {"flag": "-r", "desc": "recursive"},
+    {"flag": "-f", "desc": "force"},
+    {"flag": "-v", "desc": "verbose"}
+  ],
+  "mkdir": [
+    {"flag": "-p", "desc": "parents"},
+    {"flag": "-v", "desc": "verbose"}
+  ],
+  "rmdir": [
+    {"flag": "-p", "desc": "parents"},
+    {"flag": "-v", "desc": "verbose"}
+  ],
+  "touch": [
+    {"flag": "-d", "desc": "date string"}
+  ],
+  "ln": [
+    {"flag": "-s", "desc": "symbolic"},
+    {"flag": "-f", "desc": "force"},
+    {"flag": "-v", "desc": "verbose"}
+  ],
+  "ps": [
+    {"flag": "-e", "desc": "all processes"},
+    {"flag": "-A", "desc": "all processes"},
+    {"flag": "-f", "desc": "full format"},
+    {"flag": "-u", "desc": "filter user"},
+    {"flag": "-p", "desc": "filter pid"},
+    {"flag": "--sort", "desc": "sort key"},
+    {"flag": "-o", "desc": "output format"}
+  ],
+  "sed": [
+    {"flag": "-n", "desc": "suppress default"},
+    {"flag": "-i", "desc": "in-place"},
+    {"flag": "-E", "desc": "extended regex"},
+    {"flag": "-e", "desc": "expression"}
+  ],
+  "awk": [
+    {"flag": "-F", "desc": "field separator"},
+    {"flag": "-v", "desc": "variable"},
+    {"flag": "-f", "desc": "program file"},
+    {"flag": "--file", "desc": "program file"}
+  ],
+  "cut": [
+    {"flag": "-d", "desc": "delimiter"},
+    {"flag": "-f", "desc": "fields"},
+    {"flag": "-c", "desc": "characters"}
+  ],
+  "tr": [
+    {"flag": "-c", "desc": "complement"},
+    {"flag": "-C", "desc": "complement"},
+    {"flag": "-d", "desc": "delete"},
+    {"flag": "-s", "desc": "squeeze"},
+    {"flag": "-t", "desc": "truncate SET2"}
+  ],
+  "uniq": [
+    {"flag": "-c", "desc": "count"},
+    {"flag": "-d", "desc": "duplicates only"}
+  ],
+  "nl": [
+    {"flag": "-ba", "desc": "number all lines"}
+  ],
+  "diff": [
+    {"flag": "-u", "desc": "unified format"},
+    {"flag": "-c", "desc": "context format"},
+    {"flag": "-q", "desc": "report only whether files differ"},
+    {"flag": "-w", "desc": "ignore all whitespace"},
+    {"flag": "-b", "desc": "ignore changes in whitespace amount"},
+    {"flag": "-B", "desc": "ignore blank line changes"},
+    {"flag": "-i", "desc": "case-insensitive comparison"}
+  ],
+  "comm": [
+    {"flag": "-1", "desc": "suppress col 1"},
+    {"flag": "-2", "desc": "suppress col 2"},
+    {"flag": "-3", "desc": "suppress col 3"}
+  ],
+  "column": [
+    {"flag": "-t", "desc": "table mode"},
+    {"flag": "-s", "desc": "separator"}
+  ],
+  "join": [
+    {"flag": "-t", "desc": "delimiter"},
+    {"flag": "-1", "desc": "field from file 1"},
+    {"flag": "-2", "desc": "field from file 2"}
+  ],
+  "paste": [
+    {"flag": "-d", "desc": "delimiter"},
+    {"flag": "-s", "desc": "serial"}
+  ],
+  "tee": [
+    {"flag": "-a", "desc": "append"}
+  ],
+  "xargs": [
+    {"flag": "-I", "desc": "replace string"},
+    {"flag": "-n", "desc": "max args"},
+    {"flag": "-0", "desc": "null-delimited input"}
+  ],
+  "jq": [
+    {"flag": "-r", "desc": "raw output"},
+    {"flag": "-c", "desc": "compact output"},
+    {"flag": "-S", "desc": "sort keys"},
+    {"flag": "-s", "desc": "slurp"}
+  ],
+  "date": [
+    {"flag": "-d", "desc": "date string"},
+    {"flag": "-u", "desc": "UTC"},
+    {"flag": "-r", "desc": "reference file"},
+    {"flag": "+FORMAT", "desc": "output format"}
+  ],
+  "seq": [
+    {"flag": "-s", "desc": "separator"},
+    {"flag": "-w", "desc": "equal width"}
+  ],
+  "du": [
+    {"flag": "-h", "desc": "human readable"},
+    {"flag": "-s", "desc": "summarize"},
+    {"flag": "-a", "desc": "all files"},
+    {"flag": "-c", "desc": "show total"},
+    {"flag": "-d", "desc": "max depth"}
+  ],
+  "tree": [
+    {"flag": "-a", "desc": "all files"},
+    {"flag": "-d", "desc": "directories only"},
+    {"flag": "-L", "desc": "max depth"},
+    {"flag": "-I", "desc": "exclude pattern"},
+    {"flag": "--dirsfirst", "desc": "directories first"}
+  ],
+  "basename": [
+    {"flag": "-s", "desc": "suffix"}
+  ],
+  "pwd": [
+    {"flag": "-P", "desc": "physical path"}
+  ],
+  "uname": [
+    {"flag": "-s", "desc": "kernel name"},
+    {"flag": "-n", "desc": "hostname"},
+    {"flag": "-r", "desc": "release"},
+    {"flag": "-m", "desc": "machine"},
+    {"flag": "-a", "desc": "all"}
+  ],
+  "fold": [
+    {"flag": "-w", "desc": "wrap width"},
+    {"flag": "-s", "desc": "break at spaces"},
+    {"flag": "-b", "desc": "count bytes"}
+  ],
+  "expand": [
+    {"flag": "-t", "desc": "tab width"}
+  ],
+  "unexpand": [
+    {"flag": "-t", "desc": "tab width"},
+    {"flag": "-a", "desc": "convert all spaces"}
+  ],
+  "strings": [
+    {"flag": "-n", "desc": "minimum string length"}
+  ],
+  "split": [
+    {"flag": "-l", "desc": "lines per file"},
+    {"flag": "-d", "desc": "numeric suffixes"},
+    {"flag": "-a", "desc": "suffix length"}
+  ],
+  "tac": [
+    {"flag": "-s", "desc": "separator"}
+  ],
+  "base64": [
+    {"flag": "-d", "desc": "decode"},
+    {"flag": "-w", "desc": "wrap at column"}
+  ],
+  "md5sum": [
+    {"flag": "-c", "desc": "check"},
+    {"flag": "-b", "desc": "binary mode"}
+  ],
+  "sha1sum": [
+    {"flag": "-c", "desc": "check"},
+    {"flag": "-b", "desc": "binary mode"}
+  ],
+  "sha256sum": [
+    {"flag": "-c", "desc": "check"},
+    {"flag": "-b", "desc": "binary mode"}
+  ],
+  "file": [
+    {"flag": "-b", "desc": "brief"},
+    {"flag": "-i", "desc": "MIME type"},
+    {"flag": "-L", "desc": "follow symlinks"}
+  ],
+  "gzip": [
+    {"flag": "-d", "desc": "decompress"},
+    {"flag": "-c", "desc": "write to stdout"},
+    {"flag": "-k", "desc": "keep original"},
+    {"flag": "-f", "desc": "force"},
+    {"flag": "-v", "desc": "verbose"},
+    {"flag": "-l", "desc": "list"},
+    {"flag": "-1", "desc": "fastest compression"},
+    {"flag": "-9", "desc": "best compression"}
+  ],
+  "tar": [
+    {"flag": "-c", "desc": "create archive"},
+    {"flag": "-x", "desc": "extract archive"},
+    {"flag": "-t", "desc": "list contents"},
+    {"flag": "-f", "desc": "archive file"},
+    {"flag": "-z", "desc": "gzip filter"},
+    {"flag": "-v", "desc": "verbose"},
+    {"flag": "-C", "desc": "change directory"},
+    {"flag": "--exclude", "desc": "exclude pattern"}
+  ],
+  "yq": [
+    {"flag": "-r", "desc": "raw output"},
+    {"flag": "-o", "desc": "output format (json, yaml)"}
+  ],
+  "xan": [
+    {"flag": "-d", "desc": "delimiter"},
+    {"flag": "headers", "desc": "show column headers"},
+    {"flag": "count", "desc": "count rows"},
+    {"flag": "select", "desc": "select columns"},
+    {"flag": "search", "desc": "search rows"},
+    {"flag": "table", "desc": "pretty table display"}
+  ],
+  "sleep": [
+    {"flag": "NUMBER", "desc": "seconds to sleep (suffix: s/m/h/d)"}
+  ],
+  "time": [
+    {"flag": "COMMAND", "desc": "command to time"}
+  ],
+  "which": [
+    {"flag": "-a", "desc": "show all matches"}
+  ],
+  "alias": [
+    {"flag": "-p", "desc": "list all aliases"},
+    {"flag": "-u", "desc": "unalias mode"},
+    {"flag": "-a", "desc": "remove all (with -u)"}
+  ],
+  "eval": [
+    {"flag": "COMMAND", "desc": "command string to evaluate"}
+  ],
+  "mapfile": [
+    {"flag": "-t", "desc": "strip trailing delimiter"},
+    {"flag": "-n", "desc": "copy at most N lines"},
+    {"flag": "-O", "desc": "start assigning at index N"}
+  ],
+  "readarray": [
+    {"flag": "-t", "desc": "strip trailing delimiter"},
+    {"flag": "-n", "desc": "copy at most N lines"},
+    {"flag": "-O", "desc": "start assigning at index N"}
+  ],
+  "shift": [
+    {"flag": "N", "desc": "shift by N positions"}
+  ],
+  "realpath": [],
+  "command": [
+    {"flag": "-v", "desc": "print command name or path"}
+  ],
+  "source": [],
+  "unset": [
+    {"flag": "-v", "desc": "treat each NAME as a variable"},
+    {"flag": "-f", "desc": "treat each NAME as a function"}
+  ],
+  "pushd": [
+    {"flag": "+N", "desc": "rotate stack so Nth dir becomes top"}
+  ],
+  "popd": [
+    {"flag": "+N", "desc": "remove Nth entry from stack"}
+  ],
+  "dirs": [
+    {"flag": "-c", "desc": "clear directory stack"},
+    {"flag": "-p", "desc": "print one per line"},
+    {"flag": "-v", "desc": "print with line numbers"}
+  ],
+  "yes": [
+    {"flag": "STRING", "desc": "repeated output (default: y)"}
+  ],
+  "tput": [
+    {"flag": "CAPNAME", "desc": "terminal capability name"}
+  ]
+}
