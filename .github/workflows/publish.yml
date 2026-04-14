@@ -9,6 +9,9 @@ on:
         description: 'Version to publish (e.g. 0.1.0)'
         required: true
 
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
 jobs:
   build-binaries:
     strategy:
