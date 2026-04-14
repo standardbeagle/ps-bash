@@ -141,6 +141,15 @@ Example:
 $ git commit<ghost -m "fix parser bug">
 ```
 
+**Behavior:**
+- Gray inline suggestions appear as you type (ANSI dim text)
+- Right arrow or End key accepts the full suggestion
+- Ranking: CWD matches > global matches, then by recency
+- Substring prefix match (not fuzzy) for performance
+- Disabled when tab completion dropdown is active
+
+See [autosuggestions.md](./autosuggestions.md) for complete specification.
+
 #### Sequence Suggestions
 
 When `enable_sequence_suggestions = true`, tab completion adapts to context:

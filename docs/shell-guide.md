@@ -162,6 +162,31 @@ unalias -a                  # remove all
 
 Aliases expand the first word of input before the transpiler sees it. So `ll` becomes `ls -al`, then `ls` is mapped to `Invoke-BashLs`.
 
+### Autosuggestions
+
+As you type, the shell suggests commands from your history in gray (dimmed) text after your cursor:
+
+```
+andyb@pc:~/app $ git comm
+                    it -m "fix parser bug"
+```
+
+Press `Right` or `End` to accept the full suggestion, or keep typing to ignore it.
+
+**Key behaviors:**
+- Suggestions match the **beginning** of history entries (prefix match)
+- Commands from your **current directory** are suggested first
+- Most recent commands are preferred when multiple matches exist
+- Suggestions are **disabled** when the tab completion menu is active
+- Configure via `~/.psbash/config.toml`:
+
+```toml
+[completion]
+autosuggestions = true   # Enable (default) or disable
+```
+
+This is fish shell's most praised feature — it dramatically reduces typing for repeated commands. See [docs/specs/autosuggestions.md](specs/autosuggestions.md) for full details.
+
 ### Environment variables
 
 ```bash
