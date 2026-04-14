@@ -1,67 +1,14 @@
 {
-  "status": "stopped",
-  "iterations": 5,
-  "spawns": 5,
-  "started_at": "2026-04-14T22:41:00Z",
-  "last_iteration_at": "2026-04-14T23:09:00Z",
-  "last_subagent": "task-executor",
-  "loop_task_id": "5x3bxisQFacY",
+  "status": "running",
+  "iterations": 0,
+  "spawns": 0,
+  "started_at": "2026-04-14T23:25:00Z",
+  "last_iteration_at": "2026-04-14T23:25:00Z",
+  "last_subagent": null,
+  "loop_task_id": "96chX1Tw9LGA",
   "dartboard": "Personal/ps-bash",
-  "runner_instance_id": "beagle-ab-3949772",
+  "runner_instance_id": "beagle-ab-3993569",
   "runner_email": "andybrummer@standardbeagle.com",
   "runner_dart_id": "andybrummer@standardbeagle.com",
-  "stopped_at": "2026-04-14T23:12:00Z",
-  "stop_reason": "user_requested",
-  "tasks": [
-    {
-      "task_id": "2gzeHfzLCHZ4",
-      "iteration": 1,
-      "status": "completed",
-      "started_at": "2026-04-14T22:42:00Z",
-      "completed_at": "2026-04-14T22:48:00Z",
-      "phase_completed": "phase-9",
-      "files_changed": 1,
-      "completion_summary": "Created plugin architecture specification"
-    },
-    {
-      "task_id": "quZBw2ft5Is0",
-      "iteration": 2,
-      "status": "completed",
-      "started_at": "2026-04-14T22:49:00Z",
-      "completed_at": "2026-04-14T22:51:00Z",
-      "phase_completed": "phase-9",
-      "files_changed": 1,
-      "completion_summary": "Created config format specification"
-    },
-    {
-      "task_id": "TRZlFYAE2QlH",
-      "iteration": 3,
-      "status": "completed",
-      "started_at": "2026-04-14T22:51:00Z",
-      "completed_at": "2026-04-14T22:55:00Z",
-      "phase_completed": "phase-9",
-      "files_changed": 1,
-      "completion_summary": "Created implementation phases specification"
-    },
-    {
-      "task_id": "BOoVeqP0KfH3",
-      "iteration": 4,
-      "status": "completed",
-      "started_at": "2026-04-14T22:56:00Z",
-      "completed_at": "2026-04-14T23:01:00Z",
-      "phase_completed": "phase-9",
-      "files_changed": 1,
-      "completion_summary": "Created completion providers specification"
-    },
-    {
-      "task_id": "I4ZiOtU8zFd1",
-      "iteration": 5,
-      "status": "completed",
-      "started_at": "2026-04-14T23:01:00Z",
-      "completed_at": "2026-04-14T23:09:00Z",
-      "phase_completed": "phase-9",
-      "files_changed": 3,
-      "completion_summary": "FlagSpecs extraction documentation + implementation"
-    }
-  ]
+  "tasks": []
 }
