@@ -4,7 +4,8 @@ public record ShellArgs(
     string? Command,
     bool Interactive,
     bool Login,
-    bool ReadFromStdin)
+    bool ReadFromStdin,
+    bool NoProfile)
 {
     public static ShellArgs Parse(string[] args)
     {
@@ -12,6 +13,7 @@ public record ShellArgs(
         bool interactive = false;
         bool login = false;
         bool stdin = false;
+        bool noprofile = false;
         bool endOfOptions = false;
 
         for (int i = 0; i < args.Length; i++)
@@ -25,7 +27,6 @@ public record ShellArgs(
                     command = args[++i];
                     break;
                 case "-c":
-                    // -c without argument: leave command null
                     break;
                 case "-i":
                     interactive = true;
@@ -37,12 +38,16 @@ public record ShellArgs(
                 case "-s":
                     stdin = true;
                     break;
+                case "--noprofile":
+                case "--norc":
+                    noprofile = true;
+                    break;
                 case "--":
                     endOfOptions = true;
                     break;
             }
         }
 
-        return new ShellArgs(command, interactive, login, stdin);
+        return new ShellArgs(command, interactive, login, stdin, noprofile);
     }
 }

@@ -352,6 +352,7 @@ public sealed class PwshWorker : IAsyncDisposable
                     {
                         return string.Join("\n", lines);
                     }
+                    lines.Add(line);
                 }
             }
 

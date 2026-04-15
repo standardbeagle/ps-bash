@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Runtime.InteropServices;
 using System.Text;
 using PsBash.Core.Parser;
 using PsBash.Core.Parser.Ast;
@@ -23,9 +24,13 @@ public static class InteractiveShell
     private static string _sessionId = Guid.NewGuid().ToString();
     private static string? _lastCommand;
 
-    public static async Task<int> RunAsync(string pwshPath)
+    public static async Task<int> RunAsync(string pwshPath, bool noProfile = false)
     {
         Console.CancelKeyPress += OnCancelKeyPress;
+        EnsureVirtualTerminalEnabled();
+
+        if (!noProfile)
+            MergeProfilePath(pwshPath);
 
         var cts = new CancellationTokenSource();
         var worker = await StartWorkerAsync(pwshPath);
@@ -95,11 +100,11 @@ public static class InteractiveShell
 
             try
             {
-                if (TryRunDirect(trimmed))
+                if (TryRunDirect(trimmed, out var directExitCode))
                 {
                     stopwatch.Stop();
-                    exitCodeResult = 0; // Direct execution assumes success for now
-                    await RecordCommandAsync(trimmed, exitCodeResult, stopwatch.ElapsedMilliseconds);
+                    exitCodeResult = directExitCode;
+                    await SyncWorkerCwdAsync(worker);
                     await RunPromptCommandAsync(worker);
                     continue;
                 }
@@ -107,7 +112,6 @@ public static class InteractiveShell
                 await worker.ExecuteAsync(pwshCommand, cts.Token);
                 await SyncWorkerCwdAsync(worker);
 
-                // Get exit code from PowerShell
                 try
                 {
                     var exitCodeStr = await worker.QueryAsync("$LASTEXITCODE");
@@ -122,17 +126,14 @@ public static class InteractiveShell
             {
                 Console.Error.WriteLine("^C");
                 stopwatch.Stop();
-                await RecordCommandAsync(trimmed, null, stopwatch.ElapsedMilliseconds);
+                exitCodeResult = null;
                 await DisposeWorkerAsync(worker);
                 worker = await StartWorkerAsync(pwshPath);
             }
             finally
             {
-                if (exitCodeResult.HasValue)
-                {
-                    stopwatch.Stop();
-                    await RecordCommandAsync(trimmed, exitCodeResult.Value, stopwatch.ElapsedMilliseconds);
-                }
+                stopwatch.Stop();
+                await RecordCommandAsync(trimmed, exitCodeResult, stopwatch.ElapsedMilliseconds);
             }
         }
     }
@@ -155,8 +156,9 @@ public static class InteractiveShell
         catch { }
     }
 
-    private static bool TryRunDirect(string bashInput)
+    private static bool TryRunDirect(string bashInput, out int exitCode)
     {
+        exitCode = 0;
         Command? ast;
         try
         {
@@ -196,7 +198,11 @@ public static class InteractiveShell
         try
         {
             var workDir = Directory.Exists(_lastDir) ? _lastDir : null;
-            var psi = new ProcessStartInfo(cmdName)
+            var resolvedCmd = ResolveCommand(cmdName, workDir);
+            if (resolvedCmd is null)
+                return false;
+
+            var psi = new ProcessStartInfo(resolvedCmd)
             {
                 UseShellExecute = false,
                 WorkingDirectory = workDir,
@@ -224,6 +230,8 @@ public static class InteractiveShell
 
             proc.WaitForExit();
             _suspendCancel = false;
+            EnsureVirtualTerminalEnabled();
+            exitCode = proc.ExitCode;
             return true;
         }
         catch
@@ -273,13 +281,101 @@ public static class InteractiveShell
     private static bool HasGlobChars(string value) =>
         value.Contains('*') || value.Contains('?') || value.Contains('[');
 
+    private static void MergeProfilePath(string pwshPath)
+    {
+        try
+        {
+            var psi = new ProcessStartInfo(pwshPath)
+            {
+                UseShellExecute = false,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                CreateNoWindow = true,
+                ArgumentList = { "-NoLogo", "-Command", "Write-Output $env:PATH" },
+            };
+            using var proc = Process.Start(psi);
+            if (proc is null) return;
+            var profilePath = proc.StandardOutput.ReadToEnd().Trim();
+            proc.WaitForExit(5000);
+            if (string.IsNullOrEmpty(profilePath)) return;
+
+            var currentPath = Environment.GetEnvironmentVariable("PATH") ?? "";
+            var currentDirs = new HashSet<string>(
+                currentPath.Split(Path.PathSeparator, StringSplitOptions.RemoveEmptyEntries),
+                OperatingSystem.IsWindows()
+                    ? StringComparer.OrdinalIgnoreCase
+                    : StringComparer.Ordinal);
+
+            var profileDirs = profilePath.Split(Path.PathSeparator, StringSplitOptions.RemoveEmptyEntries);
+            var merged = new StringBuilder(currentPath);
+            foreach (var dir in profileDirs)
+            {
+                if (!currentDirs.Contains(dir))
+                {
+                    merged.Append(Path.PathSeparator);
+                    merged.Append(dir);
+                }
+            }
+            Environment.SetEnvironmentVariable("PATH", merged.ToString());
+        }
+        catch { }
+    }
+
+    internal static string? ResolveCommand(string cmdName, string? workDir)
+    {
+        if (Path.IsPathRooted(cmdName))
+            return File.Exists(cmdName) ? cmdName : null;
+
+        var extensions = OperatingSystem.IsWindows()
+            ? (Environment.GetEnvironmentVariable("PATHEXT")?.Split(';') ?? [".EXE", ".CMD", ".BAT"])
+                .Concat([".PS1"])
+                .DistinctBy(e => e, StringComparer.OrdinalIgnoreCase)
+                .ToArray()
+            : null;
+
+        var pathDirs = (Environment.GetEnvironmentVariable("PATH") ?? "")
+            .Split(Path.PathSeparator, StringSplitOptions.RemoveEmptyEntries);
+
+        var searchDirs = workDir is not null
+            ? [workDir, .. pathDirs]
+            : pathDirs;
+
+        foreach (var dir in searchDirs)
+        {
+            if (extensions is not null)
+            {
+                foreach (var ext in extensions)
+                {
+                    var full = Path.Combine(dir, cmdName + ext);
+                    if (File.Exists(full))
+                        return full;
+                }
+                var exact = Path.Combine(dir, cmdName);
+                if (File.Exists(exact))
+                    return exact;
+            }
+            else
+            {
+                var full = Path.Combine(dir, cmdName);
+                if (File.Exists(full))
+                    return full;
+            }
+        }
+
+        return null;
+    }
+
     private static async Task SyncWorkerCwdAsync(PwshWorker worker)
     {
         try
         {
             var pwd = await worker.QueryAsync("(Get-Location).Path");
-            if (!string.IsNullOrWhiteSpace(pwd) && Directory.Exists(pwd))
-                _lastDir = pwd.Trim();
+            if (!string.IsNullOrWhiteSpace(pwd))
+            {
+                var path = pwd.Trim().Replace('/', '\\');
+                if (Directory.Exists(path))
+                    _lastDir = path;
+            }
         }
         catch { }
     }
@@ -972,10 +1068,34 @@ public static class InteractiveShell
     private static CancellationTokenSource? _currentCts;
     private static volatile bool _suspendCancel;
 
+    [DllImport("kernel32.dll")]
+    private static extern IntPtr GetStdHandle(int nStdHandle);
+
+    [DllImport("kernel32.dll")]
+    private static extern bool GetConsoleMode(IntPtr hConsoleHandle, out uint lpMode);
+
+    [DllImport("kernel32.dll")]
+    private static extern bool SetConsoleMode(IntPtr hConsoleHandle, uint dwMode);
+
+    private const int STD_OUTPUT_HANDLE = -11;
+    private const uint ENABLE_VIRTUAL_TERMINAL_PROCESSING = 0x0004;
+
+    private static void EnsureVirtualTerminalEnabled()
+    {
+        if (!OperatingSystem.IsWindows()) return;
+        try
+        {
+            var handle = GetStdHandle(STD_OUTPUT_HANDLE);
+            if (GetConsoleMode(handle, out uint mode))
+                SetConsoleMode(handle, mode | ENABLE_VIRTUAL_TERMINAL_PROCESSING);
+        }
+        catch { }
+    }
+
     private static void OnCancelKeyPress(object? sender, ConsoleCancelEventArgs e)
     {
-        if (_suspendCancel) return;
         e.Cancel = true;
-        _currentCts?.Cancel();
+        if (!_suspendCancel)
+            _currentCts?.Cancel();
     }
 }

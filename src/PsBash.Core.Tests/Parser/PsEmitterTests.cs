@@ -2218,6 +2218,20 @@ public class PsEmitterTests
     }
 
     [Fact]
+    public void Transpile_InstallCommand_EmitsPassthrough()
+    {
+        var result = PsEmitter.Transpile("install -m 755 ./build/myapp /usr/local/bin/myapp");
+        Assert.Equal("Invoke-BashInstall -m 755 ./build/myapp /usr/local/bin/myapp", result);
+    }
+
+    [Fact]
+    public void Transpile_InstallInPipeline_EmitsPassthrough()
+    {
+        var result = PsEmitter.Transpile("echo myapp | install -t /usr/local/bin");
+        Assert.Contains("Invoke-BashInstall", result);
+    }
+
+    [Fact]
     public void Transpile_WriteAndAppendChain_EmitsBashRedirectPipes()
     {
         var result = PsEmitter.Transpile("echo line1 > /tmp/test.txt && echo append >> /tmp/test.txt");

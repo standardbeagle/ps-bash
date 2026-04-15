@@ -12884,6 +12884,7 @@ $script:BashHelpSpecs = @{
     'dirs'     = 'Display the directory stack.'
     'yes'      = 'Output a string repeatedly until killed.'
     'tput'     = 'Change terminal characteristics or query the terminfo database.'
+    'install'  = 'Copy files and set attributes; handles in-use binaries on Windows.'
 }
 
 function Test-BashHelpFlag {
@@ -13064,6 +13065,7 @@ $script:BashFlagSpecs = @{
     'dirs'     = @( @('-c', 'clear directory stack'), @('-p', 'print one per line'), @('-v', 'print with line numbers') )
     'yes'      = @( @('STRING', 'repeated output (default: y)') )
     'tput'     = @( @('CAPNAME', 'terminal capability name') )
+    'install'  = @( @('-d', 'create directories'), @('-D', 'create leading path components'), @('-m', 'set mode'), @('-v', 'verbose'), @('-s', 'strip'), @('-t', 'target directory'), @('-S', 'swap suffix') )
 }
 
 $script:BashCompleters = @{}
@@ -13733,6 +13735,169 @@ function Invoke-BashShuf {
     }
 }
 
+function Invoke-BashInstall {
+    [OutputType('PsBash.TextOutput')]
+    param()
+    $Arguments = [string[]]$args
+    if ($Arguments -contains '--help') { return Show-BashHelp 'install' }
+
+    $defs = New-FlagDefs -Entries @(
+        '-d', 'create directories'
+        '-D', 'create leading path components'
+        '-m', 'mode'
+        '-o', 'owner'
+        '-g', 'group'
+        '-v', 'verbose'
+        '-s', 'strip'
+        '-t', 'target directory'
+        '-S', 'swap suffix'
+    )
+
+    $parsed = ConvertFrom-BashArgs -Arguments $Arguments -FlagDefs $defs
+
+    $createDirs = $parsed.Flags['-d']
+    $createLeading = $parsed.Flags['-D']
+    $mode = $parsed.Flags['-m']
+    $verbose = $parsed.Flags['-v']
+    $targetDir = $parsed.Flags['-t']
+    $swapSuffix = if ($parsed.Flags['-S']) { $parsed.Flags['-S'] } else { '.old' }
+
+    if ($createDirs) {
+        foreach ($dir in $parsed.Operands) {
+            if (-not (Test-Path -LiteralPath $dir)) {
+                New-Item -Path $dir -ItemType Directory -Force | Out-Null
+                if ($verbose) {
+                    New-BashObject -BashText "install: creating directory '$($dir -replace '\\', '/')'`n"
+                }
+            }
+        }
+        return
+    }
+
+    if ($parsed.Operands.Count -lt 2 -and -not $targetDir) {
+        Write-BashError -Message "install: missing file operand"
+        return
+    }
+
+    if ($targetDir) {
+        $dest = $targetDir
+        $sources = Resolve-BashGlob -Paths $parsed.Operands
+    } else {
+        $dest = $parsed.Operands[$parsed.Operands.Count - 1]
+        $sources = Resolve-BashGlob -Paths $parsed.Operands[0..($parsed.Operands.Count - 2)]
+    }
+
+    if ($createLeading) {
+        $destParent = Split-Path $dest -Parent
+        if ($destParent -and -not (Test-Path -LiteralPath $destParent)) {
+            New-Item -Path $destParent -ItemType Directory -Force | Out-Null
+            if ($verbose) {
+                New-BashObject -BashText "install: creating directory '$($destParent -replace '\\', '/')'`n"
+            }
+        }
+    }
+
+    $hadError = $false
+
+    foreach ($src in $sources) {
+        $srcItem = Get-BashItem -Path $src -Command 'install'
+        if ($null -eq $srcItem) {
+            $hadError = $true
+            continue
+        }
+
+        $targetPath = $dest
+        if ((Test-Path -LiteralPath $dest) -and (Get-Item -LiteralPath $dest -Force) -is [System.IO.DirectoryInfo]) {
+            $targetPath = Join-Path $dest $srcItem.Name
+        }
+
+        $targetDir2 = Split-Path $targetPath -Parent
+        if ($targetDir2 -and -not (Test-Path -LiteralPath $targetDir2)) {
+            New-Item -Path $targetDir2 -ItemType Directory -Force | Out-Null
+        }
+
+        $swapped = $false
+        if (Test-Path -LiteralPath $targetPath) {
+            $oldPath = "$targetPath$swapSuffix"
+            try {
+                if (Test-Path -LiteralPath $oldPath) {
+                    Remove-Item -LiteralPath $oldPath -Force -ErrorAction Stop
+                }
+                Move-Item -LiteralPath $targetPath -Destination $oldPath -Force -ErrorAction Stop
+                $swapped = $true
+                if ($verbose) {
+                    $bashTarget = $targetPath -replace '\\', '/'
+                    $bashOld = $oldPath -replace '\\', '/'
+                    New-BashObject -BashText "install: swapped '$bashTarget' -> '$bashOld'`n"
+                }
+            } catch {
+                try {
+                    Copy-Item -LiteralPath $src -Destination $targetPath -Force -ErrorAction Stop
+                } catch {
+                    Write-BashError -Message "install: cannot install '$src': $($_.Exception.Message)"
+                    $hadError = $true
+                    continue
+                }
+            }
+        }
+
+        try {
+            Copy-Item -LiteralPath $src -Destination $targetPath -Force -ErrorAction Stop
+        } catch {
+            Write-BashError -Message "install: cannot install '$src': $($_.Exception.Message)"
+            $hadError = $true
+            continue
+        }
+
+        if ($swapped) {
+            $oldPath = "$targetPath$swapSuffix"
+            $scheduled = $false
+            if ($IsWindows -or $env:OS -eq 'Windows_NT') {
+                try {
+                    $code = @"
+using System;
+using System.Runtime.InteropServices;
+public class DeferredDelete {
+    [DllImport("kernel32.dll", SetLastError=true)]
+    static extern bool MoveFileEx(string lpExistingFileName, string lpNewFileName, int dwFlags);
+    public static void ScheduleDelete(string path) {
+        const int MOVEFILE_DELAY_UNTIL_REBOOT = 0x4;
+        if (!MoveFileEx(path, null, MOVEFILE_DELAY_UNTIL_REBOOT)) {
+            Marshal.ThrowExceptionForHR(Marshal.GetHRForLastWin32Error());
+        }
+    }
+}
+"@
+                    Add-Type -TypeDefinition $code -ErrorAction SilentlyContinue
+                    [DeferredDelete]::ScheduleDelete((Resolve-Path -LiteralPath $oldPath).Path)
+                    $scheduled = $true
+                } catch {}
+            }
+            if (-not $scheduled) {
+                try {
+                    Remove-Item -LiteralPath $oldPath -Force -ErrorAction SilentlyContinue
+                } catch {
+                    if ($verbose) {
+                        New-BashObject -BashText "install: note: '$($oldPath -replace '\\', '/')' will be deleted when unlocked`n"
+                    }
+                }
+            } elseif ($verbose) {
+                New-BashObject -BashText "install: scheduled deletion of '$($oldPath -replace '\\', '/')' on reboot`n"
+            }
+        }
+
+        if ($verbose) {
+            $bashSrc = $src -replace '\\', '/'
+            $bashDest = $targetPath -replace '\\', '/'
+            New-BashObject -BashText "'$bashSrc' -> '$bashDest'`n"
+        }
+    }
+
+    if ($hadError) {
+        $global:LASTEXITCODE = 1
+    }
+}
+
 Set-Alias -Name 'command'  -Value 'Invoke-BashCommand'  -Force -Scope Global -Option AllScope
 Set-Alias -Name 'source'   -Value 'Invoke-BashSource'   -Force -Scope Global -Option AllScope
 Set-Alias -Name 'unset'    -Value 'Invoke-BashUnset'    -Force -Scope Global -Option AllScope
@@ -13747,6 +13912,7 @@ Set-Alias -Name 'test'     -Value 'Invoke-BashTest'     -Force -Scope Global -Op
 Set-Alias -Name 'let'      -Value 'Invoke-BashLet'      -Force -Scope Global -Option AllScope
 Set-Alias -Name 'id'       -Value 'Invoke-BashId'       -Force -Scope Global -Option AllScope
 Set-Alias -Name 'shuf'     -Value 'Invoke-BashShuf'     -Force -Scope Global -Option AllScope
+Set-Alias -Name 'install'  -Value 'Invoke-BashInstall'  -Force -Scope Global -Option AllScope
 
 # --- Type-level ToString for BashObject types ---
 # Update-TypeData defines ToString() once per type name instead of per-object,

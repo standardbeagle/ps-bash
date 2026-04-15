@@ -141,3 +141,110 @@ public class AliasExpansionTests
         Assert.Equal("ls -la", result);
     }
 }
+
+public class ResolveCommandTests
+{
+    [Fact]
+    public void ResolveCommand_AbsolutePath_ExistingFile_ReturnsPath()
+    {
+        var exe = Environment.GetCommandLineArgs()[0];
+        if (!Path.IsPathRooted(exe)) exe = Path.GetFullPath(exe);
+        var result = InteractiveShell.ResolveCommand(exe, null);
+        Assert.Equal(exe, result);
+    }
+
+    [Fact]
+    public void ResolveCommand_AbsolutePath_Nonexistent_ReturnsNull()
+    {
+        var result = InteractiveShell.ResolveCommand("C:\\nonexistent\\binary.exe", null);
+        Assert.Null(result);
+    }
+
+    [Fact]
+    public void ResolveCommand_KnownSystemCommand_FindsExe()
+    {
+        var result = InteractiveShell.ResolveCommand("cmd", null);
+        Assert.NotNull(result);
+        Assert.True(File.Exists(result));
+        Assert.EndsWith("cmd.exe", result, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void ResolveCommand_KnownSystemCommand_FindsCmdExtension()
+    {
+        var result = InteractiveShell.ResolveCommand("hostname", null);
+        Assert.NotNull(result);
+        Assert.True(File.Exists(result));
+    }
+
+    [Fact]
+    public void ResolveCommand_NonexistentCommand_ReturnsNull()
+    {
+        var result = InteractiveShell.ResolveCommand("definitely_not_a_real_command_xyz", null);
+        Assert.Null(result);
+    }
+
+    [Fact]
+    public void ResolveCommand_ResolvesInWorkingDir()
+    {
+        using var tmp = new TempDir();
+        var scriptPath = Path.Combine(tmp.Path, "test-script.cmd");
+        File.WriteAllText(scriptPath, "@echo hi\n");
+        var result = InteractiveShell.ResolveCommand("test-script", tmp.Path);
+        Assert.NotNull(result);
+        Assert.True(File.Exists(result));
+        Assert.EndsWith("test-script.cmd", result, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void ResolveCommand_WithWorkDir_SearchesWorkDirFirst()
+    {
+        using var tmp = new TempDir();
+        var scriptPath = Path.Combine(tmp.Path, "unique-test-cmd-1234.cmd");
+        File.WriteAllText(scriptPath, "@echo hi\n");
+        var result = InteractiveShell.ResolveCommand("unique-test-cmd-1234", tmp.Path);
+        Assert.NotNull(result);
+        Assert.True(File.Exists(result));
+    }
+
+    [Fact]
+    public void ResolveCommand_CmdFile_FoundOnWindows()
+    {
+        if (!OperatingSystem.IsWindows()) return;
+        using var tmp = new TempDir();
+        var cmdPath = Path.Combine(tmp.Path, "myapp.cmd");
+        File.WriteAllText(cmdPath, "@echo hi\n");
+        var result = InteractiveShell.ResolveCommand("myapp", tmp.Path);
+        Assert.NotNull(result);
+    }
+
+    [Fact]
+    public void ResolveCommand_Ps1File_FoundOnWindows()
+    {
+        if (!OperatingSystem.IsWindows()) return;
+        using var tmp = new TempDir();
+        var ps1Path = Path.Combine(tmp.Path, "myapp.ps1");
+        File.WriteAllText(ps1Path, "Write-Host hi\n");
+        var result = InteractiveShell.ResolveCommand("myapp", tmp.Path);
+        Assert.NotNull(result);
+    }
+
+    [Fact]
+    public void ResolveCommand_PrefersExeOverCmd()
+    {
+        if (!OperatingSystem.IsWindows()) return;
+        using var tmp = new TempDir();
+        File.WriteAllText(Path.Combine(tmp.Path, "myapp.cmd"), "@echo cmd\n");
+        File.WriteAllText(Path.Combine(tmp.Path, "myapp.exe"), "fake");
+        var result = InteractiveShell.ResolveCommand("myapp", tmp.Path);
+        Assert.NotNull(result);
+        Assert.EndsWith(".exe", result, StringComparison.OrdinalIgnoreCase);
+    }
+
+    private class TempDir : IDisposable
+    {
+        public string Path { get; }
+        public TempDir() { Path = System.IO.Path.Combine(System.IO.Path.GetTempPath(), Guid.NewGuid().ToString()); Directory.CreateDirectory(Path); }
+        public void Dispose() { try { Directory.Delete(Path, true); } catch { } }
+    }
+}

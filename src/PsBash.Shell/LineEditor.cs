@@ -197,42 +197,37 @@ internal sealed class LineEditor
             {
                 // ── cursor movement ──────────────────────────────────────────
                 case ConsoleKey.LeftArrow when key.Modifiers == 0:
-                    MoveCursor(-1);
-                    ClearSuggestion();
+                    MoveCursor(-1, prompt);
                     break;
                 case ConsoleKey.RightArrow when key.Modifiers == 0:
-                    // Accept suggestion if available and at end of buffer
                     if (_currentSuggestion is not null && _cursor == _buf.Length)
                     {
                         AcceptSuggestion();
                     }
                     else
                     {
-                        MoveCursor(1);
-                        ClearSuggestion();
+                        MoveCursor(1, prompt);
                     }
                     break;
                 case ConsoleKey.Home:
                 case ConsoleKey.A when key.Modifiers == ConsoleModifiers.Control:
-                    MoveCursorTo(0);
+                    MoveCursorTo(0, prompt);
                     break;
                 case ConsoleKey.End:
                 case ConsoleKey.E when key.Modifiers == ConsoleModifiers.Control:
-                    // Accept suggestion if available before moving to end
                     if (_currentSuggestion is not null)
                     {
                         AcceptSuggestion();
                     }
-                    MoveCursorTo(_buf.Length);
-                    ClearSuggestion();
+                    MoveCursorTo(_buf.Length, prompt);
                     break;
 
                 // Word movement (Alt-B / Alt-F via escape sequences)
                 case ConsoleKey.LeftArrow when key.Modifiers == ConsoleModifiers.Alt:
-                    MoveCursorWordLeft();
+                    MoveCursorWordLeft(prompt);
                     break;
                 case ConsoleKey.RightArrow when key.Modifiers == ConsoleModifiers.Alt:
-                    MoveCursorWordRight();
+                    MoveCursorWordRight(prompt);
                     break;
 
                 // ── history navigation ───────────────────────────────────────
@@ -371,29 +366,12 @@ internal sealed class LineEditor
 
     private void AddToHistory(string line)
     {
-        // Deduplicate: remove previous identical entry
         var last = _history.Count > 0 ? _history[^1] : null;
         if (last == line) return;
 
         _history.Add(line);
         if (_history.Count > MaxHistory)
             _history.RemoveAt(0);
-
-        // Async save to store
-        _ = Task.Run(async () =>
-        {
-            try
-            {
-                await _historyStore.RecordAsync(new HistoryEntry
-                {
-                    Command = line,
-                    Cwd = Environment.CurrentDirectory,
-                    Timestamp = DateTime.UtcNow,
-                    SessionId = Guid.NewGuid().ToString(),
-                });
-            }
-            catch { }
-        });
     }
 
     private static List<string> LoadHistory(string path)
@@ -453,15 +431,13 @@ internal sealed class LineEditor
 
     private void ApplyCompletion(string completion, string prompt)
     {
-        // Replace buffer from base..cursor with base + completion
         var suffix = _buf.ToString(_cursor, _buf.Length - _cursor);
-        var newBuf = _completionBase + completion;
-        // Add trailing space only if there's nothing after cursor
-        if (suffix.Length == 0)
-            newBuf += ' ';
-        SetBuffer(newBuf + suffix);
-        // Place cursor at end of completion (before suffix)
-        _cursor = (_completionBase + completion + (suffix.Length == 0 ? " " : "")).Length;
+        var addSpace = suffix.Length == 0
+            && !completion.EndsWith('/')
+            && !completion.EndsWith(Path.DirectorySeparatorChar);
+        var newBuf = _completionBase + completion + (addSpace ? " " : "") + suffix;
+        SetBuffer(newBuf);
+        _cursor = (_completionBase + completion + (addSpace ? " " : "")).Length;
         Redraw(prompt);
     }
 
@@ -549,26 +525,30 @@ internal sealed class LineEditor
         _cursor += _killRing.Length;
     }
 
-    private void MoveCursor(int delta)
+    private void MoveCursor(int delta, string prompt)
     {
         _cursor = Math.Clamp(_cursor + delta, 0, _buf.Length);
+        Redraw(prompt);
     }
 
-    private void MoveCursorTo(int pos)
+    private void MoveCursorTo(int pos, string prompt)
     {
         _cursor = Math.Clamp(pos, 0, _buf.Length);
+        Redraw(prompt);
     }
 
-    private void MoveCursorWordLeft()
+    private void MoveCursorWordLeft(string prompt)
     {
         while (_cursor > 0 && _buf[_cursor - 1] == ' ') _cursor--;
         while (_cursor > 0 && _buf[_cursor - 1] != ' ') _cursor--;
+        Redraw(prompt);
     }
 
-    private void MoveCursorWordRight()
+    private void MoveCursorWordRight(string prompt)
     {
         while (_cursor < _buf.Length && _buf[_cursor] == ' ') _cursor++;
         while (_cursor < _buf.Length && _buf[_cursor] != ' ') _cursor++;
+        Redraw(prompt);
     }
 
     // ─────────────────────────────────────────────────────────────────────────

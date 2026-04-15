@@ -29,7 +29,7 @@ if (shellArgs.ReadFromStdin || (!shellArgs.Interactive && shellArgs.Command is n
 
 if (shellArgs.Interactive || shellArgs.Command is null)
 {
-    return await InteractiveShell.RunAsync(pwshPath);
+    return await InteractiveShell.RunAsync(pwshPath, shellArgs.NoProfile);
 }
 
 string? pwshCommand;

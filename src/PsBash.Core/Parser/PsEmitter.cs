@@ -2172,6 +2172,9 @@ public static class PsEmitter
             case "shuf":
                 result = EmitPassthrough("Invoke-BashShuf", args);
                 return true;
+            case "install":
+                result = EmitPassthrough("Invoke-BashInstall", args);
+                return true;
             default:
                 return false;
         }
