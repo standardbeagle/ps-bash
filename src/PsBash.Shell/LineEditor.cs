@@ -100,8 +100,14 @@ internal sealed class LineEditor
     /// <summary>
     /// Read a line interactively. Returns null on EOF (Ctrl-D on empty input).
     /// Falls back to Console.ReadLine() when stdin is not a TTY (piped/redirected).
+    /// This is the synchronous version that does not support Ctrl-R (for backward compatibility).
     /// </summary>
-    public string? ReadLine(string prompt)
+    public string? ReadLine(string prompt) => ReadLineAsync(prompt).GetAwaiter().GetResult();
+
+    /// <summary>
+    /// Async version of ReadLine that supports Ctrl-R search.
+    /// </summary>
+    public async Task<string?> ReadLineAsync(string prompt)
     {
         // When stdin is redirected (not a real terminal), fall back to simple ReadLine.
         // This preserves compatibility with tests and piped usage.
@@ -122,6 +128,8 @@ internal sealed class LineEditor
 
         // Initial suggestion for empty prompt (should be null)
         _ = UpdateSuggestionAsync();
+
+        while (true)
 
         while (true)
         {
@@ -160,6 +168,19 @@ internal sealed class LineEditor
                 if (result.Length > 0)
                     AddToHistory(result);
                 return result;
+            }
+
+            // Ctrl-R — reverse-i-search
+            if (key.Key == ConsoleKey.R && key.Modifiers == ConsoleModifiers.Control)
+            {
+                var cmd = await HandleCtrlRAsync(prompt);
+                if (cmd is not null)
+                {
+                    SetBuffer(cmd);
+                    Redraw(prompt);
+                }
+                // After Ctrl-R, redraw to restore normal mode
+                continue;
             }
 
             // Ctrl-C — caller handles SIGINT via CancelKeyPress; we just clear the line
@@ -661,6 +682,26 @@ internal sealed class LineEditor
     private void ClearSuggestion()
     {
         _currentSuggestion = null;
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────────────
+    // Ctrl-R Search
+    // ─────────────────────────────────────────────────────────────────────────────────
+
+    /// <summary>
+    /// Handles Ctrl-R reverse-i-search. Returns the command to insert, or null if cancelled.
+    /// </summary>
+    private async Task<string?> HandleCtrlRAsync(string prompt)
+    {
+        var search = new CtrlRSearch(_historyStore, _cwd, prompt);
+        var (result, command) = await search.RunAsync();
+
+        if (result == CtrlRSearch.Result.Execute && command is not null)
+        {
+            return command;
+        }
+
+        return null;
     }
 }
 

@@ -569,7 +569,9 @@ public static class InteractiveShell
     private static async Task<string?> ReadInputAsync(PwshWorker worker)
     {
         var prompt = await BuildPromptAsync(worker);
-        var line = _lineEditor?.ReadLine(prompt) ?? Console.ReadLine();
+        var line = _lineEditor is not null
+            ? await _lineEditor.ReadLineAsync(prompt)
+            : Console.ReadLine();
         if (line is null)
             return null;
 
