@@ -90,7 +90,7 @@ Reserved words are recognized contextually by the parser, not as distinct token 
 | `WordPart.EscapedLiteral` | `Value: string` | Backslash-escaped character: `\$` -> `$` |
 | `WordPart.SingleQuoted` | `Value: string` | Content inside single quotes (no expansion) |
 | `WordPart.DoubleQuoted` | `Parts: WordPart[]` | Content inside double quotes (with expansion) |
-| `WordPart.SimpleVarSub` | `Name: string` | `$foo`, `$?`, `$!`, `$#`, `$$`, `$@`, `$*`, `$-`, `$0`-`$9` |
+| `WordPart.SimpleVarSub` | `Name: string` | `$foo`, `$?`, `$!`, `$#`, `$$`, `$@`, `$*`, `$-`, `$0`-`$9`, `$SECONDS`, `$PPID`, `$BASH_VERSION` |
 | `WordPart.BracedVarSub` | `Name: string`, `Suffix: string?` | `${foo}`, `${foo:-default}`, `${#arr[@]}`, `${!arr[@]}` |
 | `WordPart.CommandSub` | `Body: BashNode` | `$(cmd)` or `` `cmd` `` -- body is recursively parsed |
 | `WordPart.ArithSub` | `Expr: string` | `$(( x + 1 ))` |
@@ -246,9 +246,36 @@ word_part     -> tilde_sub         (only at word start)
 
 ---
 
-## 4. Lexer Edge Cases
+## 4. Special Bash Variables
 
-### 4.1 IoNumber Adjacency
+The parser recognizes bash special variables and maps them to PowerShell equivalents during emission:
+
+| Bash Variable | PowerShell Emission | Notes |
+|---------------|---------------------|-------|
+| `$?` | `$LASTEXITCODE` | Exit status of last command |
+| `$@` / `$*` | `$(if ($global:BashPositional) { $global:BashPositional } else { $args })` | Positional parameters (with `set --` support) |
+| `$#` | `$(if ($global:BashPositional) { $global:BashPositional.Count } else { $args.Count })` | Number of positional parameters |
+| `$0` | `$MyInvocation.MyCommand.Name` | Script or function name |
+| `$$` / `$!` | `$PID` / `$global:BashBgLastPid` | Current/background process ID |
+| `$-` | `$global:BashFlags` | Shell flags |
+| `$_` | `$global:BashLastArg` | Last argument of previous command |
+| `$RANDOM` | `$(Get-Random -Maximum 32768)` | Random number 0-32767 |
+| `$SECONDS` | `$([math]::Floor(([DateTime]::UtcNow - $global:BashStartTime).TotalSeconds))` | Seconds since shell started |
+| `$PPID` | `(Get-Process -Id $PID -ErrorAction SilentlyContinue).Parent.Id` | Parent process ID |
+| `$BASH_VERSION` | `$global:BashVersion` | Bash version string |
+| `$BASH_VERSINFO` | `$global:BashVersionInfo` | Bash version array |
+| `$HOME` | `$HOME` | Home directory (kept as-is) |
+| `$PWD` | `$PWD` | Current directory (kept as-is) |
+| `$1`-`$9` | `$(if ($global:BashPositional) { $global:BashPositional[N-1] } else { $args[N-1] })` | Positional parameters |
+| Other names | `$env:NAME` | Environment variables |
+
+The `set --` command (`set -- a b c`) resets positional parameters via `$global:BashPositional`, which is checked before falling back to PowerShell's `$args`.
+
+---
+
+## 6. Lexer Edge Cases
+
+### 6.1 IoNumber Adjacency
 
 A digit-only `Word` token is reclassified to `IoNumber` **only** when immediately adjacent to a redirect operator (zero whitespace between the token's end position and the operator's start position).
 
@@ -259,7 +286,7 @@ A digit-only `Word` token is reclassified to `IoNumber` **only** when immediatel
 
 Implementation: `TryReclassifyIoNumber` checks `last.Position + last.Value.Length == redirectPos`.
 
-### 4.2 Here-string vs Heredoc vs Heredoc-Strip
+### 6.2 Here-string vs Heredoc vs Heredoc-Strip
 
 The lexer checks three-character `<<<` before two-character prefixes:
 
@@ -273,7 +300,7 @@ Heredoc delimiter quoting controls expansion:
 - Unquoted `<<EOF` -> `Expand=true` (variables expanded)
 - Quoted `<<'EOF'` or `<<"EOF"` -> `Expand=false` (literal body)
 
-### 4.3 Brace Expansion vs Literal Braces
+### 6.3 Brace Expansion vs Literal Braces
 
 `{` is classified as a brace expansion word (not `LBrace`) when `IsBraceExpansion` detects content with `,` or `..` before the closing `}` with no unquoted whitespace inside:
 
@@ -284,7 +311,7 @@ echo {1..5}    # Word("{1..5}")   -- range expansion
 echo '{a,b}'   # Word("'{a,b}'") -- single-quoted, braces are literal
 ```
 
-### 4.4 Process Substitution vs Redirect
+### 6.4 Process Substitution vs Redirect
 
 `<(` and `>(` are detected **before** the single-character `<`/`>` operator check. The entire `<(...)` or `>(...)` is consumed as a single `Word` token, then decomposed into `WordPart.ProcessSub` during word parsing.
 
@@ -293,7 +320,7 @@ diff <(cmd1) <(cmd2)   # Two Word tokens containing process substitutions
 cmd > file             # Great + Word("file") -- normal redirect
 ```
 
-### 4.5 Double-Quote Backslash Rules
+### 6.5 Double-Quote Backslash Rules
 
 Inside double quotes, backslash is only special before `$`, `` ` ``, `"`, `\`, and newline. Before any other character, the backslash is literal:
 
@@ -304,7 +331,7 @@ echo "price: \$5"      # Literal($) Literal(5) -- backslash escapes $
 
 ---
 
-## 5. Oils ASDL Gap Analysis
+## 7. Oils ASDL Gap Analysis
 
 Features present in Oils `syntax.asdl` that are **intentionally not implemented**:
 
@@ -322,7 +349,7 @@ Features present in Oils `syntax.asdl` that are **intentionally not implemented*
 
 ---
 
-## 6. Adding New Grammar
+## 8. Adding New Grammar
 
 Steps to add a new token or grammar production:
 

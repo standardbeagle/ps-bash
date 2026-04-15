@@ -191,10 +191,12 @@ recursive `EmitSimple`.
 
 ### `set`
 
-- `set -e` / `set -o errexit` -> `$ErrorActionPreference = 'Stop'`
+- `set -e` / `set -o errexit` -> `$ErrorActionPreference = 'Stop'; $global:__BashErrexit = $true`
 - `set -x` / `set -o xtrace` -> `Set-PSDebug -Trace 1`
 - `set -u` / `set -o nounset` -> `Set-StrictMode -Version Latest`
 - Combined flags (e.g., `set -euo pipefail`) are decomposed.
+
+The `$global:__BashErrexit` guard variable prevents strict-mode crashes when checking `$?` in error handlers. When `set -e` is active, PowerShell's `Set-StrictMode -Version Latest` would throw on null property accesses in conditions like `if [ $? -ne 0 ]`. The guard allows the emitter to conditionally suppress strict-mode behavior around exit-code checks.
 
 ### `source` / `.`
 
@@ -284,7 +286,30 @@ Maps bash special variables to PowerShell equivalents:
 
 ---
 
-## 7. Anti-patterns
+## 7. Special Runtime Handling
+
+While the emitter's primary job is to forward arguments to runtime functions, certain commands require special mention due to bash-specific syntax that needs runtime-level translation:
+
+### `sed` Backreferences
+
+The `sed` command uses backreferences in the replacement string (`\1`, `\2`, ..., `\9` and `\&` for the entire match). PowerShell's regex engine uses `$1`, `$2`, ..., `$9` and `$0` instead.
+
+The runtime `Invoke-BashSed` function handles this translation via `ConvertFrom-SedExpression`:
+
+```powershell
+# bash: sed 's/\([a-z]\+\)-\([0-9]\+\)/\2-\1/g' file.txt
+# Runtime converts replacement \2-\1 to $2-$1 before passing to .NET regex
+```
+
+The conversion happens at:
+- `\1` through `\9` -> `$1` through `$9` (capture groups)
+- `\&` -> `$0` (entire match)
+
+This allows sed expressions to work correctly with PowerShell's `[regex]::Replace()` while preserving bash syntax in user scripts.
+
+---
+
+## 8. Anti-patterns
 
 Historical emitter implementations translated bash flags into PowerShell named
 parameters. This caused persistent bugs because the emitter's translation logic
