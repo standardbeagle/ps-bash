@@ -12,13 +12,14 @@ The ps-bash shell uses a multi-provider completion system. When Tab is pressed, 
 
 ### Provider Types
 
-| Provider | Priority | Purpose | Data Source |
-|----------|----------|---------|-------------|
-| `SequenceCompletionProvider` | 1 (highest) | Suggest next command based on prior command patterns | `IHistoryStore` sequence pairs |
-| `HistoryCompletionProvider` | 2 | Fuzzy match against command history | `IHistoryStore` entries |
-| `FlagSpecCompletionProvider` | 3 | Complete command flags (`-`, `--`) | `BashFlagSpecs` from runtime |
-| `CommandCompletionProvider` | 4 | Complete command names | `$PATH` scan + aliases |
-| `PathCompletionProvider` | 5 (lowest) | Complete file/directory paths | `FileSystem` scan |
+| Provider | Name | Kind | Purpose | Data Source |
+|----------|------|------|---------|-------------|
+| `CommandCompletionProvider` | "Commands" | `Command` | Complete command names | `$PATH` scan + aliases |
+| `FlagSpecCompletionProvider` | "Flags" | `Flag` | Complete command flags (`-`, `--`) | `BashFlagSpecs` from runtime |
+| `VariableCompletionProvider` | "Variables" | `Variable` | Complete shell variable names | `Environment` + shell vars |
+| `HistoryCompletionProvider` | "History" | `History` | Suggest commands from history | `IHistoryStore` entries |
+| `PathCompletionProvider` | "Paths" | `File`/`Directory` | Complete file/directory paths | `FileSystem` scan |
+| `SequenceCompletionProvider` | "Suggestions" | `Command` | Suggest next command based on prior patterns | `IHistoryStore` sequence pairs |
 
 ### Interface Definition
 
@@ -26,40 +27,79 @@ The ps-bash shell uses a multi-provider completion system. When Tab is pressed, 
 namespace PsBash.Shell;
 
 /// <summary>
-/// A pluggable tab completion provider.
+/// A pluggable tab completion provider for the interactive shell.
+/// Providers are queried when the user presses Tab, and results are merged
+/// and de-duplicated according to priority rules.
 /// </summary>
 public interface ICompletionProvider
 {
     /// <summary>
-    /// Returns completion candidates for the current line and cursor position.
+    /// Gets the display name of this provider (e.g., "Commands", "Files", "Flags").
+    /// Used for UI display and debugging.
+    /// </summary>
+    string Name { get; }
+
+    /// <summary>
+    /// Returns completion candidates for the current input context.
     /// All providers are consulted; results are merged and de-duplicated.
     /// </summary>
-    /// <param name="line">The full input line.</param>
-    /// <param name="cursor">Cursor position (character offset) within <paramref name="line"/>.</param>
-    /// <param name="context">Shell context: working directory, defined aliases, environment.</param>
+    /// <param name="context">The completion context containing input, cursor position, and shell state.</param>
     /// <returns>Completion candidates. Empty list if no matches.</returns>
-    IReadOnlyList<CompletionItem> Complete(string line, int cursor, CompletionContext context);
+    Task<IReadOnlyList<CompletionItem>> GetCompletionsAsync(CompletionContext context);
 }
 
 /// <summary>
-/// A completion result with display text and optional metadata.
+/// Context information for a completion request. Passed to all providers
+/// to enable context-aware completion suggestions.
 /// </summary>
-public sealed record CompletionItem
-{
-    public required string Text { get; init; }           // The text to insert
-    public string? Description { get; init; }             // Optional description (for display)
-    public string? DisplayText { get; init; }             // Optional alternate display text
-    public CompletionKind Kind { get; init; } = CompletionKind.Text; // Kind for icon/filtering
-}
+/// <param name="Input">The full input line being edited.</param>
+/// <param name="CursorPosition">Cursor position (character offset) within <see cref="Input"/>.</param>
+/// <param name="Cwd">Current working directory for path resolution.</param>
+/// <param name="LastCommand">The last executed command (for sequence-aware providers).</param>
+/// <param name="Aliases">Currently defined shell aliases (for command expansion).</param>
+public sealed record CompletionContext(
+    string Input,
+    int CursorPosition,
+    string Cwd,
+    string? LastCommand,
+    IReadOnlyDictionary<string, string> Aliases
+);
 
+/// <summary>
+/// A completion result with display text, description, and kind.
+/// </summary>
+/// <param name="Text">The text to insert when this completion is selected.</param>
+/// <param name="Description">Optional description for display (e.g., flag help text).</param>
+/// <param name="Kind">The kind of completion (determines icon and sorting priority).</param>
+public sealed record CompletionItem(
+    string Text,
+    string? Description,
+    CompletionKind Kind
+);
+
+/// <summary>
+/// The kind of completion item. Determines sort order priority and UI icon.
+/// Lower enum values have higher priority (e.g., Command > File > Directory).
+/// </summary>
 public enum CompletionKind
 {
-    Text,           // Generic text
-    Command,        // Command name
-    Flag,           // Command flag (-x, --xxx)
-    Path,           // File/directory path
-    History,        // History entry
-    Sequence,       // Sequence-predicted command
+    /// <summary>Command name (highest priority for first-word completion).</summary>
+    Command = 0,
+
+    /// <summary>Command flag (-x, --xxx).</summary>
+    Flag = 1,
+
+    /// <summary>Variable reference ($VAR, ${VAR}).</summary>
+    Variable = 2,
+
+    /// <summary>History entry (previously executed command).</summary>
+    History = 3,
+
+    /// <summary>File path.</summary>
+    File = 4,
+
+    /// <summary>Directory path (lower priority than files in mixed results).</summary>
+    Directory = 5,
 }
 ```
 
@@ -69,9 +109,52 @@ public enum CompletionKind
 
 ## 2. Provider Specifications
 
-### 2.1 FlagSpecCompletionProvider
+### 2.1 CommandCompletionProvider
 
-**Priority:** 3
+**Name:** `"Commands"`
+
+**Kind:** `CompletionKind.Command`
+
+**Purpose:** Complete command names from `$PATH` executables, built-in commands, and user-defined aliases.
+
+**Trigger Condition:** The current token is the first word on the line (before any command arguments).
+
+**Data Sources:**
+
+1. **Aliases:** `context.Aliases` from `CompletionContext`
+2. **Built-ins:** Hardcoded list of bash builtins (see `TabCompleter.KnownCommands`)
+3. **$PATH executables:** `Directory.EnumerateFiles()` for each directory in `$PATH`
+4. **Local executables:** `./script-name` from current working directory
+
+**Behavior:**
+
+1. Check if cursor is at the first word (see `IsFirstWord()` in `TabCompleter`)
+2. Query aliases, built-ins, and $PATH directories
+3. Filter entries that start with the partial token
+4. Return results as `CompletionItem` with `Kind = CompletionKind.Command`
+
+**Examples:**
+
+| Input | Tab Result |
+|-------|------------|
+| `gre` [Tab] | `grep` |
+| `gi` [Tab] | `git` |
+| `ls` (if aliased) [Tab] | `ls` (alias) |
+| `./scr` [Tab] | `./script.ps1`, `./script.sh` |
+
+**Implementation Notes:**
+
+- On Windows, only include executable extensions: `.exe`, `.cmd`, `.bat`, `.ps1`
+- Deduplicate across sources (e.g., `git` in both built-ins and $PATH)
+- The existing `TabCompleter.CompleteCommand()` implements this behavior
+
+---
+
+### 2.2 FlagSpecCompletionProvider
+
+**Name:** `"Flags"`
+
+**Kind:** `CompletionKind.Flag`
 
 **Purpose:** Complete command flags (`-` and `--`) based on `BashFlagSpecs` data from the runtime module.
 
@@ -107,7 +190,7 @@ $script:BashFlagSpecs = @{
 1. Parse the line to identify the command name (first non-assignment word)
 2. Check if the command exists in `BashFlagSpecs`
 3. If the current token starts with `-`, filter matching flags
-4. Return `CompletionItem` with flag text and description
+4. Return `CompletionItem` with `Kind = CompletionKind.Flag` and description from spec
 
 **Examples:**
 
@@ -126,13 +209,50 @@ $script:BashFlagSpecs = @{
 
 ---
 
-### 2.2 PathCompletionProvider
+### 2.3 VariableCompletionProvider
 
-**Priority:** 5 (lowest)
+**Name:** `"Variables"`
+
+**Kind:** `CompletionKind.Variable`
+
+**Purpose:** Complete shell variable references (e.g., `$HOME`, `$USER`, `$PATH`).
+
+**Trigger Condition:** The token being completed starts with `$`.
+
+**Data Source:** `Environment.GetEnvironmentVariables()` plus shell-defined variables.
+
+**Behavior:**
+
+1. Check if current token starts with `$`
+2. Strip the `$` prefix to get the variable name partial
+3. Filter environment variables by prefix match
+4. Return `CompletionItem` with `Kind = CompletionKind.Variable` and the full variable name including `$`
+
+**Examples:**
+
+| Input | Tab Result |
+|-------|------------|
+| `echo $H` [Tab] | `$HOME`, `$HOSTNAME`, `$HISTFILE` |
+| `export $US` [Tab] | `$USER` |
+| `$PAT` [Tab] | `$PATH` |
+
+**Implementation Notes:**
+
+- Include both environment variables and shell-defined variables
+- Case-sensitive on Unix, case-insensitive on Windows
+- The completion text should include the `$` prefix
+
+---
+
+### 2.4 PathCompletionProvider
+
+**Name:** `"Paths"`
+
+**Kind:** `CompletionKind.File` or `CompletionKind.Directory`
 
 **Purpose:** Complete file and directory paths based on the current working directory and relative path prefixes.
 
-**Trigger Condition:** The token being completed does not start with `-` (not a flag) and is not the first word on the line.
+**Trigger Condition:** The token being completed does not start with `$` or `-` and is not the first word on the line.
 
 **Data Source:** `System.IO.Directory.EnumerateFileSystemEntries`
 
@@ -146,7 +266,7 @@ $script:BashFlagSpecs = @{
    - `~/doc` → expand `~` to `$HOME`
 3. Enumerate entries in the resolved directory
 4. Filter entries that match the filename prefix
-5. Append `/` to directory names for visual distinction
+5. Return `CompletionItem` with `Kind = CompletionKind.File` or `CompletionKind.Directory`
 
 **Examples:**
 
@@ -166,48 +286,11 @@ $script:BashFlagSpecs = @{
 
 ---
 
-### 2.3 CommandCompletionProvider
+### 2.5 HistoryCompletionProvider
 
-**Priority:** 4
+**Name:** `"History"`
 
-**Purpose:** Complete command names from `$PATH` executables, built-in commands, and user-defined aliases.
-
-**Trigger Condition:** The current token is the first word on the line (before any command arguments).
-
-**Data Sources:**
-
-1. **Aliases:** `IReadOnlyDictionary<string, string>` from `CompletionContext.Aliases`
-2. **Built-ins:** Hardcoded list of bash builtins (see `TabCompleter.KnownCommands`)
-3. **$PATH executables:** `Directory.EnumerateFiles()` for each directory in `$PATH`
-4. **Local executables:** `./script-name` from current working directory
-
-**Behavior:**
-
-1. Check if cursor is at the first word (see `IsFirstWord()` in `TabCompleter`)
-2. Query aliases, built-ins, and $PATH directories in parallel
-3. Filter entries that start with the partial token
-4. Return sorted results (alphabetical order)
-
-**Examples:**
-
-| Input | Tab Result |
-|-------|------------|
-| `gre` [Tab] | `grep` |
-| `gi` [Tab] | `git` |
-| `ls` (if aliased) [Tab] | `ls` (alias) |
-| `./scr` [Tab] | `./script.ps1`, `./script.sh` |
-
-**Implementation Notes:**
-
-- On Windows, only include executable extensions: `.exe`, `.cmd`, `.bat`, `.ps1`
-- Deduplicate across sources (e.g., `git` in both built-ins and $PATH)
-- The existing `TabCompleter.CompleteCommand()` implements this behavior
-
----
-
-### 2.4 HistoryCompletionProvider
-
-**Priority:** 2
+**Kind:** `CompletionKind.History`
 
 **Purpose:** Suggest commands from command history based on fuzzy prefix matching, ranked by working directory proximity and recency.
 
@@ -228,7 +311,7 @@ Entries are ranked by:
 1. Extract the prefix (current token text)
 2. Query `IHistoryStore.Search(prefix, limit: 100)`
 3. Rank results by (CWD, timestamp)
-4. Return top 10 matches as `CompletionItem`
+4. Return top 10 matches as `CompletionItem` with `Kind = CompletionKind.History`
 
 **Examples:**
 
@@ -246,9 +329,11 @@ Entries are ranked by:
 
 ---
 
-### 2.5 SequenceCompletionProvider
+### 2.6 SequenceCompletionProvider
 
-**Priority:** 1 (highest)
+**Name:** `"Suggestions"`
+
+**Kind:** `CompletionKind.Command`
 
 **Purpose:** Suggest the next command based on command pair sequences from history. After running `docker build`, pressing Tab on an empty line suggests `docker run`.
 
@@ -271,10 +356,10 @@ CREATE INDEX idx_sequences_prev ON sequences(prev_command, count DESC);
 
 **Behavior:**
 
-1. Get the previous command from shell state (last executed)
+1. Get the previous command from `context.LastCommand`
 2. Query `IHistoryStore.GetSequences(prevCommand, limit: 10)`
 3. Filter sequences by current line prefix (if any)
-4. Return top matches ranked by sequence frequency
+4. Return top matches ranked by sequence frequency as `CompletionItem` with `Kind = CompletionKind.Command`
 
 **Examples:**
 
@@ -296,69 +381,75 @@ CREATE INDEX idx_sequences_prev ON sequences(prev_command, count DESC);
 
 ## 3. Merge and De-duplication
 
-### 3.1 Priority Order
+### 3.1 Provider Stacking
 
-Providers are queried in priority order, but all are consulted. The priority determines which result wins when multiple providers return the same text.
-
-**Priority (highest to lowest):**
-
-1. `SequenceCompletionProvider` — Sequence predictions
-2. `HistoryCompletionProvider` — History entries
-3. `FlagSpecCompletionProvider` — Flag names
-4. `CommandCompletionProvider` — Command names
-5. `PathCompletionProvider` — File paths
+All completion providers are queried for every Tab press. Providers do not "exit early" — each provider contributes its candidates, and results are merged together. This enables multiple providers to contribute complementary completions (e.g., flag and file completions can both appear in the same result set).
 
 ### 3.2 De-duplication Rules
 
-When multiple providers return the same `Text`, the higher priority wins:
+When multiple providers return the same `Text`, only one result is kept. The winner is determined by the `CompletionKind` priority (lower enum value wins):
 
-**Example:** If both `CommandCompletionProvider` and `PathCompletionProvider` return `git`, the `CommandCompletionProvider` result wins (priority 4 > 5).
+**Kind Priority (highest to lowest):**
+1. `Command` (0)
+2. `Flag` (1)
+3. `Variable` (2)
+4. `History` (3)
+5. `File` (4)
+6. `Directory` (5)
+
+**Example:** If both a command provider and a file provider return `git`, the `Command` kind wins because `Command = 0 < File = 4`.
 
 **De-duplication Algorithm:**
 
 ```csharp
-public IReadOnlyList<CompletionItem> MergeCompletions(
-    IReadOnlyList<ICompletionProvider> providers,
-    string line,
-    int cursor,
-    CompletionContext context)
+public IReadOnlyList<CompletionItem> MergeAndDeduplicate(
+    IEnumerable<IReadOnlyList<CompletionItem>> providerResults)
 {
-    var all = new List<CompletionItem>();
-    var seen = new Dictionary<string, int>(); // Text -> priority
+    var byText = new Dictionary<string, CompletionItem>(StringComparer.Ordinal);
 
-    foreach (var provider in providers)
+    foreach (var results in providerResults)
     {
-        var priority = GetProviderPriority(provider);
-        var items = provider.Complete(line, cursor, context);
-
-        foreach (var item in items)
+        foreach (var item in results)
         {
-            // If we've seen this text before, keep only the higher priority
-            if (seen.TryGetValue(item.Text, out int existingPriority))
+            // If we've seen this text, keep only the higher-priority kind
+            if (byText.TryGetValue(item.Text, out var existing))
             {
-                if (existingPriority <= priority) continue; // Existing has higher/equal priority
+                if (item.Kind < existing.Kind)
+                    byText[item.Text] = item; // New item has higher priority
+                // else: keep existing (higher or equal priority)
             }
-
-            // Remove lower-priority duplicate
-            if (seen.ContainsKey(item.Text))
+            else
             {
-                all.RemoveAll(i => i.Text == item.Text);
+                byText[item.Text] = item;
             }
-
-            all.Add(item);
-            seen[item.Text] = priority;
         }
     }
 
-    return all;
+    return byText.Values.ToList();
 }
 ```
 
-### 3.3 Exact Text Match
+### 3.3 Sorting
 
-De-duplication is based on **exact text match** of the `Text` property. `DisplayText` and `Description` are ignored for comparison.
+After de-duplication, results are sorted by:
+1. **Primary:** `CompletionKind` (lower values first)
+2. **Secondary:** Alphabetical by `Text`
 
-**Example:** Two providers returning `CompletionItem` with `Text = "main"` but different descriptions are considered duplicates.
+```csharp
+return merged
+    .OrderBy(item => item.Kind)           // Group by kind priority
+    .ThenBy(item => item.Text, StringComparer.Ordinal)
+    .ToList();
+}
+```
+
+This ordering ensures that commands appear before flags, which appear before files, making the completion list predictable and easy to navigate.
+
+### 3.4 Exact Text Match
+
+De-duplication is based on **exact text match** of the `Text` property. `Description` is ignored for comparison.
+
+**Example:** Two providers returning `CompletionItem` with `Text = "main"` but different descriptions are considered duplicates; the one with lower `Kind` value wins.
 
 ---
 
@@ -408,10 +499,11 @@ This is implemented in `LineEditor.HandleTab()`.
 
 | Provider | Status | Notes |
 |----------|--------|-------|
-| `FlagSpecCompletionProvider` | Not implemented | `BashFlagSpecs` exists in runtime; needs C# bridge |
-| `PathCompletionProvider` | Implemented | `TabCompleter.CompletePath()` |
 | `CommandCompletionProvider` | Implemented | `TabCompleter.CompleteCommand()` |
+| `FlagSpecCompletionProvider` | Not implemented | `BashFlagSpecs` exists in runtime; needs C# bridge |
+| `VariableCompletionProvider` | Not implemented | Needs implementation |
 | `HistoryCompletionProvider` | Not implemented | Requires `HistoryStore` with CWD metadata |
+| `PathCompletionProvider` | Implemented | `TabCompleter.CompletePath()` |
 | `SequenceCompletionProvider` | Not implemented | Requires `SequenceStore` |
 
 ### Roadmap
@@ -419,7 +511,8 @@ This is implemented in `LineEditor.HandleTab()`.
 1. **Phase 5** (see `shell-implementation-phases.md`): Implement `FlagSpecCompletionProvider`
 2. **Phase 2**: Implement `HistoryStore` → enables `HistoryCompletionProvider`
 3. **Phase 6**: Implement `SequenceStore` → enables `SequenceCompletionProvider`
-4. **Phase 7**: Refactor to use `ICompletionProvider` interface for all providers
+4. **Phase 7**: Implement `VariableCompletionProvider`
+5. **Phase 8**: Refactor `TabCompleter` to use `ICompletionProvider` interface for all providers
 
 ---
 
@@ -429,10 +522,18 @@ Completion behavior is controlled via `~/.psbash/config.toml` (see `config-forma
 
 ```toml
 [completion]
-enable_sequence_suggestions = true  # Enable SequenceCompletionProvider
-autosuggestions = true              # Enable fish-style inline suggestions
-flag_completion = true              # Enable FlagSpecCompletionProvider
-path_completion = true              # Enable PathCompletionProvider
+# Enable/disable specific providers
+command_completion = true       # Enable CommandCompletionProvider
+flag_completion = true          # Enable FlagSpecCompletionProvider
+variable_completion = true      # Enable VariableCompletionProvider
+history_completion = true       # Enable HistoryCompletionProvider
+path_completion = true          # Enable PathCompletionProvider
+sequence_suggestions = true     # Enable SequenceCompletionProvider
+
+# Global completion settings
+autosuggestions = true           # Enable fish-style inline suggestions
+max_results = 100               # Maximum completions to return per provider
+case_sensitive = false          # Case-sensitive matching (false on Windows by default)
 ```
 
 ---
@@ -442,16 +543,34 @@ path_completion = true              # Enable PathCompletionProvider
 Third-party plugins can provide custom completion providers by implementing `ICompletionProvider`:
 
 ```csharp
+using PsBash.Shell;
+
 public sealed class DockerCompletionProvider : ICompletionProvider
 {
-    public IReadOnlyList<CompletionItem> Complete(
-        string line,
-        int cursor,
-        CompletionContext context)
+    public string Name => "Docker";
+
+    public Task<IReadOnlyList<CompletionItem>> GetCompletionsAsync(CompletionContext context)
     {
+        var results = new List<CompletionItem>();
+
         // After "docker attach ", suggest container names
-        // After "docker run ", suggest image names
-        // ...
+        if (context.Input.StartsWith("docker attach "))
+        {
+            var partial = ExtractPartialToken(context.Input, context.CursorPosition);
+            foreach (var container in ListContainers())
+            {
+                if (container.StartsWith(partial, StringComparison.OrdinalIgnoreCase))
+                {
+                    results.Add(new CompletionItem(
+                        container,
+                        $"Running container: {container}",
+                        CompletionKind.Command
+                    ));
+                }
+            }
+        }
+
+        return Task.FromResult<IReadOnlyList<CompletionItem>>(results);
     }
 }
 ```
