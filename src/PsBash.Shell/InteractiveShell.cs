@@ -18,6 +18,7 @@ public static class InteractiveShell
 
     private static string _homeDir = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
     private static string _lastDir = Environment.CurrentDirectory;
+    private static LineEditor? _lineEditor;
 
     public static async Task<int> RunAsync(string pwshPath)
     {
@@ -25,6 +26,13 @@ public static class InteractiveShell
 
         var cts = new CancellationTokenSource();
         var worker = await StartWorkerAsync(pwshPath);
+
+        // Initialize LineEditor with history path and tab completer
+        var historyPath = Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
+            ".psbash_history");
+        _lineEditor = new LineEditor(historyPath, (line, cursor) =>
+            TabCompleter.Complete(line, cursor, Aliases, _lastDir));
 
         await SourceRcFileAsync(worker, cts);
 
@@ -34,7 +42,7 @@ public static class InteractiveShell
             cts = new CancellationTokenSource();
             _currentCts = cts;
 
-            var input = ReadInput();
+            var input = await ReadInputAsync(worker);
             if (input is null)
             {
                 Console.WriteLine();
@@ -266,7 +274,18 @@ public static class InteractiveShell
         catch { }
     }
 
-    private static string BuildPrompt()
+    private static async Task<string> BuildPromptAsync(PwshWorker worker)
+    {
+        // Check if user has set PS1
+        var ps1 = await GetPS1Async(worker);
+        if (ps1 is not null)
+            return ExpandPS1(ps1);
+
+        // Fall back to built-in prompt
+        return BuildBuiltinPrompt();
+    }
+
+    private static string BuildBuiltinPrompt()
     {
         const string Reset = "\x1b[0m";
         const string Bold = "\x1b[1m";
@@ -310,6 +329,124 @@ public static class InteractiveShell
         var promptChar = isAdmin ? '#' : '$';
         sb.Append($"{Magenta}{Bold}{promptChar}{Reset} ");
 
+        return sb.ToString();
+    }
+
+    private static async Task<string?> GetPS1Async(PwshWorker worker)
+    {
+        try
+        {
+            var result = await worker.QueryAsync("$env:PS1");
+            if (string.IsNullOrWhiteSpace(result))
+                return null;
+            return result.Trim();
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    private static string ExpandPS1(string ps1)
+    {
+        var cwd = _lastDir;
+        if (cwd.StartsWith(_homeDir))
+            cwd = "~" + cwd[_homeDir.Length..];
+
+        var user = Environment.UserName;
+        var host = Environment.MachineName.ToLowerInvariant();
+
+        var isAdmin = OperatingSystem.IsWindows()
+            && System.Security.Principal.WindowsIdentity.GetCurrent()?.Owner?.IsWellKnown(
+                System.Security.Principal.WellKnownSidType.BuiltinAdministratorsSid) == true;
+        var promptChar = isAdmin ? '#' : '$';
+
+        var sb = new StringBuilder();
+        int i = 0;
+        while (i < ps1.Length)
+        {
+            if (ps1[i] == '\\' && i + 1 < ps1.Length)
+            {
+                switch (ps1[i + 1])
+                {
+                    case 'u':
+                        sb.Append(user);
+                        i += 2;
+                        continue;
+                    case 'h':
+                        sb.Append(host);
+                        i += 2;
+                        continue;
+                    case 'w':
+                        sb.Append(cwd);
+                        i += 2;
+                        continue;
+                    case 'W':
+                        // Basename of cwd
+                        sb.Append(Path.GetFileName(cwd));
+                        i += 2;
+                        continue;
+                    case '$':
+                        sb.Append(promptChar);
+                        i += 2;
+                        continue;
+                    case 'd':
+                        // Date in weekday month date format
+                        sb.Append(DateTime.Now.ToString("ddd MMM dd"));
+                        i += 2;
+                        continue;
+                    case 't':
+                        // 24-hour time HH:MM:SS
+                        sb.Append(DateTime.Now.ToString("HH:mm:ss"));
+                        i += 2;
+                        continue;
+                    case 'T':
+                        // 12-hour time HH:MM:SS
+                        sb.Append(DateTime.Now.ToString("hh:mm:ss"));
+                        i += 2;
+                        continue;
+                    case '@':
+                        // 12-hour time with am/pm
+                        sb.Append(DateTime.Now.ToString("hh:mmtt").ToLowerInvariant());
+                        i += 2;
+                        continue;
+                    case 'n':
+                        sb.AppendLine();
+                        i += 2;
+                        continue;
+                    case 's':
+                        sb.Append("ps-bash");
+                        i += 2;
+                        continue;
+                    case 'v':
+                    case 'V':
+                        // Version (not really applicable)
+                        i += 2;
+                        continue;
+                    case '[':
+                        // Begin non-printing chars (for ANSI escape handling)
+                        // Find closing ]
+                        var closeIdx = ps1.IndexOf('\\', i + 2);
+                        if (closeIdx > 0 && closeIdx + 1 < ps1.Length && ps1[closeIdx + 1] == ']')
+                        {
+                            // Skip the content between \[ and \]
+                            i = closeIdx + 2;
+                            continue;
+                        }
+                        goto default;
+                    default:
+                        // Unknown escape, treat as literal
+                        sb.Append(ps1[i]);
+                        i++;
+                        continue;
+                }
+            }
+            else
+            {
+                sb.Append(ps1[i]);
+                i++;
+            }
+        }
         return sb.ToString();
     }
 
@@ -372,10 +509,10 @@ public static class InteractiveShell
         return true;
     }
 
-    private static string? ReadInput()
+    private static async Task<string?> ReadInputAsync(PwshWorker worker)
     {
-        Console.Write(BuildPrompt());
-        var line = Console.ReadLine();
+        var prompt = await BuildPromptAsync(worker);
+        var line = _lineEditor?.ReadLine(prompt) ?? Console.ReadLine();
         if (line is null)
             return null;
 
