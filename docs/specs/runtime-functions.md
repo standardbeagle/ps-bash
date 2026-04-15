@@ -355,3 +355,31 @@ To add a new `Invoke-Bash*` function:
 
 8. **Add help and completion metadata** to `$script:BashHelpSpecs` and
    `$script:BashFlagSpecs`.
+
+## `install` Command
+
+`Invoke-BashInstall` copies files and sets attributes, with special handling for
+in-use binaries on Windows.
+
+### Supported flags
+
+| Flag | Description |
+|------|-------------|
+| `-d` | Create directories |
+| `-D` | Create leading path components |
+| `-m` | Set mode (tracked, not enforced on Windows) |
+| `-v` | Verbose output |
+| `-s` | Strip (no-op on Windows) |
+| `-t` | Target directory |
+| `-S` | Swap suffix (default: `.old`) |
+
+### Windows binary swap
+
+When the destination file already exists and is locked:
+
+1. Move existing file to `{dest}{suffix}`
+2. Copy new file to destination
+3. Schedule deferred deletion of the old file (via `MoveFileEx` with `MOVEFILE_DELAY_UNTIL_REBOOT`)
+
+This reproduces the Unix `install` behavior where a running binary can be replaced
+because the inode remains open; on Windows the equivalent is rename-then-copy.

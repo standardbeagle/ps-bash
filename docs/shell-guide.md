@@ -198,6 +198,41 @@ export PATH="$HOME/.local/bin:$PATH"
 
 - **Transpiled commands**: Cancels execution, prints `^C`, restarts the worker
 - **External tools**: Passes through to the child process — `claude` and `git` handle it themselves
+- **Shell mode**: Pressing `Ctrl+C` never exits the shell; use `exit` or `Ctrl+D` to quit
+
+### External command resolution
+
+The shell resolves external commands using the merged `PATH` from your PowerShell profile, so tools installed via package managers (like `fnm`, `nvm-windows`, or ` scoop`) are available even though the worker starts with `-NoProfile`.
+
+```bash
+opencode                      # resolves opencode.ps1 from fnm PATH
+copilot                       # resolves copilot.exe from WinGet
+claude                        # resolves claude.exe from ~/.local/bin
+```
+
+On Windows, `.cmd`, `.bat`, `.ps1`, and `.exe` extensions are all resolved automatically.
+
+### `--noprofile` / `--norc`
+
+Start the shell without loading your PowerShell profile PATH:
+
+```bash
+ps-bash --noprofile
+ps-bash --norc
+```
+
+This is useful for CI/CD or when you want a clean environment, matching the behavior of `bash --noprofile`.
+
+### `install` command
+
+Copy files with automatic Windows binary swap support:
+
+```bash
+install -m 755 ./build/myapp /usr/local/bin/myapp
+install -t ~/.local/bin ./build/myapp
+```
+
+On Windows, if the destination file is in use, `install` renames the old file (`.old` suffix), copies the new one, and schedules deferred deletion of the old file.
 
 ### Exit
 
@@ -257,14 +292,15 @@ claude                       # full interactive session
 | Prompts | Your PowerShell prompt | `user@host:cwd (branch) $` |
 | Aliases | PowerShell aliases | `alias` builtin + `.psbashrc` |
 | Startup file | `$PROFILE` | `~/.psbashrc` |
-| External tools | Via PowerShell (`& claude`) | Direct console execution |
-| History | PSReadLine (rich) | `Console.ReadLine` (basic) |
-| Tab completion | Full (flags, files) | None yet |
+| External tools | Via PowerShell (`& claude`) | Direct console execution (PATH + PATHEXT) |
+| History | PSReadLine (rich) | SQLite with Ctrl+R fuzzy search |
+| Tab completion | Full (flags, files) | Commands, flags, files, sequences |
 | AI agent use | No | Yes (`SHELL=ps-bash`) |
 | Multi-line | PSReadLine handles it | Built-in `> ` continuation |
 | Variable sharing | Native PS variables | Variables in the worker session |
 | `.psbashrc` | Not sourced | Sourced on startup |
-| `Ctrl+C` | PS handles it | Worker restart / child signal |
+| `Ctrl+C` | PS handles it | Cancels command; never exits shell |
+| `--noprofile` | N/A | `ps-bash --noprofile` |
 
 ## Mixing Bash and PowerShell in the Shell
 
