@@ -15,6 +15,11 @@ internal sealed class LineEditor
     private string _savedInput = "";   // stashed current input while navigating history
     private readonly SemaphoreSlim _historyLock = new(1, 1);
 
+    // ── autosuggestion ────────────────────────────────────────────────────────
+    private readonly Suggester _suggester;
+    private string? _currentSuggestion;  // Suffix to append (null = no suggestion)
+    private readonly string _cwd;  // Current working directory for suggestions
+
     // ── completion ───────────────────────────────────────────────────────────
     private readonly Func<string, int, IReadOnlyList<string>>? _completer;
 
@@ -42,10 +47,13 @@ internal sealed class LineEditor
     /// </summary>
     public LineEditor(
         IHistoryStore historyStore,
-        Func<string, int, IReadOnlyList<string>>? completer = null)
+        Func<string, int, IReadOnlyList<string>>? completer = null,
+        string? cwd = null)
     {
         _historyStore = historyStore;
         _completer = completer;
+        _suggester = new Suggester(historyStore);
+        _cwd = cwd ?? Environment.CurrentDirectory;
         _history = new List<string>();
         _historyIndex = 0;
 
@@ -58,10 +66,13 @@ internal sealed class LineEditor
     /// </summary>
     public LineEditor(
         string historyPath,
-        Func<string, int, IReadOnlyList<string>>? completer = null)
+        Func<string, int, IReadOnlyList<string>>? completer = null,
+        string? cwd = null)
     {
         _historyStore = new LegacyFileHistoryStore(historyPath);
         _completer = completer;
+        _suggester = new Suggester(_historyStore);
+        _cwd = cwd ?? Environment.CurrentDirectory;
         _history = LoadHistory(historyPath);
         _historyIndex = _history.Count;
     }
@@ -105,8 +116,12 @@ internal sealed class LineEditor
         _historyIndex = _history.Count;
         _savedInput = "";
         ClearCompletion();
+        ClearSuggestion();
 
         Console.Write(prompt);
+
+        // Initial suggestion for empty prompt (should be null)
+        _ = UpdateSuggestionAsync();
 
         while (true)
         {
@@ -115,12 +130,14 @@ internal sealed class LineEditor
             // Tab completion
             if (key.Key == ConsoleKey.Tab && key.Modifiers == 0)
             {
+                ClearSuggestion();  // Clear suggestion when tab completes
                 HandleTab(prompt);
                 continue;
             }
 
             // Any non-Tab key clears the completion cycle
             ClearCompletion();
+            ClearSuggestion();  // Clear suggestion on any other key
 
             // Ctrl-D: EOF on empty buffer, otherwise delete-char
             if (key.Key == ConsoleKey.D && key.Modifiers == ConsoleModifiers.Control)
@@ -160,9 +177,19 @@ internal sealed class LineEditor
                 // ── cursor movement ──────────────────────────────────────────
                 case ConsoleKey.LeftArrow when key.Modifiers == 0:
                     MoveCursor(-1);
+                    ClearSuggestion();
                     break;
                 case ConsoleKey.RightArrow when key.Modifiers == 0:
-                    MoveCursor(1);
+                    // Accept suggestion if available and at end of buffer
+                    if (_currentSuggestion is not null && _cursor == _buf.Length)
+                    {
+                        AcceptSuggestion();
+                    }
+                    else
+                    {
+                        MoveCursor(1);
+                        ClearSuggestion();
+                    }
                     break;
                 case ConsoleKey.Home:
                 case ConsoleKey.A when key.Modifiers == ConsoleModifiers.Control:
@@ -170,7 +197,13 @@ internal sealed class LineEditor
                     break;
                 case ConsoleKey.End:
                 case ConsoleKey.E when key.Modifiers == ConsoleModifiers.Control:
+                    // Accept suggestion if available before moving to end
+                    if (_currentSuggestion is not null)
+                    {
+                        AcceptSuggestion();
+                    }
                     MoveCursorTo(_buf.Length);
+                    ClearSuggestion();
                     break;
 
                 // Word movement (Alt-B / Alt-F via escape sequences)
@@ -193,26 +226,32 @@ internal sealed class LineEditor
                 case ConsoleKey.Backspace:
                     DeleteCharBack();
                     Redraw(prompt);
+                    _ = UpdateSuggestionAsync();
                     break;
                 case ConsoleKey.Delete:
                     DeleteCharForward();
                     Redraw(prompt);
+                    _ = UpdateSuggestionAsync();
                     break;
                 case ConsoleKey.K when key.Modifiers == ConsoleModifiers.Control:
                     KillToEnd();
                     Redraw(prompt);
+                    _ = UpdateSuggestionAsync();
                     break;
                 case ConsoleKey.U when key.Modifiers == ConsoleModifiers.Control:
                     KillToStart();
                     Redraw(prompt);
+                    _ = UpdateSuggestionAsync();
                     break;
                 case ConsoleKey.W when key.Modifiers == ConsoleModifiers.Control:
                     KillWordBack();
                     Redraw(prompt);
+                    _ = UpdateSuggestionAsync();
                     break;
                 case ConsoleKey.Y when key.Modifiers == ConsoleModifiers.Control:
                     Yank();
                     Redraw(prompt);
+                    _ = UpdateSuggestionAsync();
                     break;
 
                 // ── misc ─────────────────────────────────────────────────────
@@ -228,6 +267,7 @@ internal sealed class LineEditor
                     {
                         InsertChar(key.KeyChar);
                         Redraw(prompt);
+                        _ = UpdateSuggestionAsync();
                     }
                     // Ignore other control sequences (F-keys, etc.)
                     break;
@@ -294,7 +334,8 @@ internal sealed class LineEditor
         if (_historyIndex <= 0) return;
         _historyIndex--;
         SetBuffer(_history[_historyIndex]);
-        Redraw(prompt);
+        ClearSuggestion();  // No suggestions while navigating history
+        Redraw(prompt, showSuggestion: false);
     }
 
     private void HistoryNext(string prompt)
@@ -303,7 +344,8 @@ internal sealed class LineEditor
         _historyIndex++;
         var text = _historyIndex == _history.Count ? _savedInput : _history[_historyIndex];
         SetBuffer(text);
-        Redraw(prompt);
+        ClearSuggestion();  // No suggestions while navigating history
+        Redraw(prompt, showSuggestion: false);
     }
 
     private void AddToHistory(string line)
@@ -514,6 +556,11 @@ internal sealed class LineEditor
 
     private void Redraw(string prompt)
     {
+        Redraw(prompt, showSuggestion: true);
+    }
+
+    private void Redraw(string prompt, bool showSuggestion)
+    {
         // Strip ANSI from prompt to measure visual length
         var promptVisible = StripAnsi(prompt);
         var text = _buf.ToString();
@@ -522,6 +569,14 @@ internal sealed class LineEditor
         Console.Write(ClearLine);
         Console.Write(prompt);
         Console.Write(text);
+
+        // Append suggestion in dim (gray) if present and requested
+        if (showSuggestion && _currentSuggestion is not null && _currentSuggestion.Length > 0 && _cursor == _buf.Length)
+        {
+            Console.Write("\x1b[2m");      // Dim on
+            Console.Write(_currentSuggestion);
+            Console.Write("\x1b[0m");      // Reset
+        }
 
         // Move cursor back from end to correct position
         var charsAfterCursor = _buf.Length - _cursor;
@@ -563,6 +618,49 @@ internal sealed class LineEditor
         while (i >= 0 && before[i] != ' ' && before[i] != '\t') i--;
         var tokenStart = i + 1;
         return (before[..tokenStart], before[tokenStart..]);
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // Autosuggestion
+    // ─────────────────────────────────────────────────────────────────────────
+
+    private async Task UpdateSuggestionAsync()
+    {
+        var prefix = _buf.ToString();
+        var suffix = await _suggester.SuggestAsync(prefix, _cwd);
+
+        if (suffix is null)
+        {
+            _currentSuggestion = null;
+        }
+        else if (suffix.Length == 0)
+        {
+            // Exact match - no suggestion needed
+            _currentSuggestion = null;
+        }
+        else
+        {
+            _currentSuggestion = suffix;
+        }
+    }
+
+    private void AcceptSuggestion()
+    {
+        if (_currentSuggestion is null || _currentSuggestion.Length == 0)
+            return;
+
+        // Append suggestion to buffer
+        foreach (var c in _currentSuggestion)
+        {
+            _buf.Append(c);
+        }
+        _cursor = _buf.Length;
+        _currentSuggestion = null;
+    }
+
+    private void ClearSuggestion()
+    {
+        _currentSuggestion = null;
     }
 }
 
