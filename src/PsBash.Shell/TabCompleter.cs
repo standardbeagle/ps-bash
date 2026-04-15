@@ -25,8 +25,20 @@ internal static class TabCompleter
 
         if (isFirstWord)
             return CompleteCommand(token, aliases, cwd);
-        else
-            return CompletePath(token, cwd);
+
+        // Check if current token starts with '-' (flag completion)
+        if (token.Length > 0 && token[0] == '-')
+        {
+            var commandName = GetCommandNameAtCursor(line, cursor, aliases);
+            if (commandName is not null)
+            {
+                var flagCompletions = CompleteFlags(commandName, token);
+                if (flagCompletions.Count > 0)
+                    return flagCompletions;
+            }
+        }
+
+        return CompletePath(token, cwd);
     }
 
     // ─────────────────────────────────────────────────────────────────────────
@@ -91,6 +103,95 @@ internal static class TabCompleter
         catch { }
 
         return [.. results];
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // Flag completion (after command name)
+    // ─────────────────────────────────────────────────────────────────────────
+
+    private static IReadOnlyList<string> CompleteFlags(string command, string partial)
+    {
+        var flags = FlagSpecs.GetFlags(command);
+        if (flags is null)
+            return [];
+
+        var results = new List<string>();
+        foreach (var spec in flags)
+        {
+            if (spec.Flag.StartsWith(partial, StringComparison.Ordinal))
+            {
+                // Format: "-l  - long listing" (flag + padding + description)
+                results.Add($"{spec.Flag}  - {spec.Desc}");
+            }
+        }
+        return results;
+    }
+
+    private static string? GetCommandNameAtCursor(
+        string line,
+        int cursor,
+        IReadOnlyDictionary<string, string> aliases)
+    {
+        // Get the text before the cursor
+        var before = cursor <= line.Length ? line[..cursor] : line;
+
+        // Tokenize the line before the cursor and work backwards
+        var tokens = Tokenize(before);
+        if (tokens.Count == 0)
+            return null;
+
+        // Walk backwards from the last token, skipping flags
+        for (int i = tokens.Count - 1; i >= 0; i--)
+        {
+            var token = tokens[i];
+            if (string.IsNullOrEmpty(token))
+                continue;
+
+            // Skip flags (tokens starting with -)
+            if (token[0] == '-')
+                continue;
+
+            // This should be the command name
+            var command = token;
+
+            // Expand aliases
+            if (aliases.TryGetValue(command, out var aliasValue))
+            {
+                // Alias might be a full command like "git status"
+                // Extract just the first word
+                var spaceIdx = aliasValue.IndexOf(' ');
+                command = spaceIdx >= 0 ? aliasValue[..spaceIdx] : aliasValue;
+            }
+
+            return command;
+        }
+
+        return null;
+    }
+
+    private static List<string> Tokenize(string line)
+    {
+        var tokens = new List<string>();
+        var i = 0;
+
+        while (i < line.Length)
+        {
+            // Skip whitespace and separators
+            while (i < line.Length && (char.IsWhiteSpace(line[i]) || line[i] == ';' || line[i] == '|' || line[i] == '&'))
+                i++;
+
+            if (i >= line.Length)
+                break;
+
+            // Find end of token
+            var start = i;
+            while (i < line.Length && !char.IsWhiteSpace(line[i]) && line[i] != ';' && line[i] != '|' && line[i] != '&')
+                i++;
+
+            tokens.Add(line[start..i]);
+        }
+
+        return tokens;
     }
 
     // ─────────────────────────────────────────────────────────────────────────

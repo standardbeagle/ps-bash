@@ -149,4 +149,108 @@ public class TabCompleterTests : IDisposable
         var results = TabCompleter.Complete($"cat {prefix}read", prefix.Length + 4 + "read".Length, _noAliases, _tmpDir);
         Assert.Contains(prefix + "readme.md", results);
     }
+
+    // ─────────────────────────────────────────────────────────────────────────────
+    // Flag completion
+    // ─────────────────────────────────────────────────────────────────────────────
+
+    [Fact]
+    public void CompleteFlags_ls_dash_ReturnsAllFlagsWithDescriptions()
+    {
+        var results = TabCompleter.Complete("ls -", 4, _noAliases, _tmpDir);
+
+        // Should return flags formatted as "-l  - long listing"
+        Assert.Contains("-l  - long listing", results);
+        Assert.Contains("-a  - show hidden", results);
+        Assert.Contains("-h  - human readable sizes", results);
+    }
+
+    [Fact]
+    public void CompleteFlags_ls_dash_l_ReturnsOnlyLongListingFlag()
+    {
+        var results = TabCompleter.Complete("ls -l", 5, _noAliases, _tmpDir);
+
+        // Should return only flags starting with "-l"
+        Assert.Single(results);
+        Assert.Contains("-l  - long listing", results);
+    }
+
+    [Fact]
+    public void CompleteFlags_grep_dash_i_ReturnsIgnoreCaseFlag()
+    {
+        var results = TabCompleter.Complete("grep -i", 7, _noAliases, _tmpDir);
+
+        // Should return "-i  - ignore case"
+        Assert.Contains("-i  - ignore case", results);
+    }
+
+    [Fact]
+    public void CompleteFlags_cat_dash_n_ReturnsNumberLinesFlag()
+    {
+        var results = TabCompleter.Complete("cat -n", 6, _noAliases, _tmpDir);
+
+        // Should return "-n  - number all lines"
+        Assert.Contains("-n  - number all lines", results);
+    }
+
+    [Fact]
+    public void CompleteFlags_AfterCommandWithFlags_ReturnsFlags()
+    {
+        var results = TabCompleter.Complete("ls -l -", 7, _noAliases, _tmpDir);
+
+        // Should complete flags after existing flags
+        Assert.Contains("-a  - show hidden", results);
+    }
+
+    [Fact]
+    public void CompleteFlags_UnknownCommand_ReturnsEmpty()
+    {
+        var results = TabCompleter.Complete("unknowncmd -", 12, _noAliases, _tmpDir);
+
+        // Should return empty for commands without flag specs
+        Assert.Empty(results);
+    }
+
+    [Fact]
+    public void CompleteFlags_CommandNotInFlagSpecs_ReturnsEmpty()
+    {
+        var results = TabCompleter.Complete("somecommand -", 14, _noAliases, _tmpDir);
+
+        // Should return empty when command not in FlagSpecs
+        Assert.Empty(results);
+    }
+
+    [Fact]
+    public void CompleteFlags_WithAlias_ExpandsAlias()
+    {
+        var aliases = new Dictionary<string, string>(StringComparer.Ordinal)
+        {
+            ["ll"] = "ls -l",
+        };
+
+        var results = TabCompleter.Complete("ll -", 4, aliases, _tmpDir);
+
+        // Should expand alias "ll" to "ls" and return ls flags
+        Assert.Contains("-a  - show hidden", results);
+        Assert.Contains("-h  - human readable sizes", results);
+    }
+
+    [Fact]
+    public void CompleteFlags_NonFlagStart_FallsBackToPathCompletion()
+    {
+        File.WriteAllText(Path.Combine(_tmpDir, "file.txt"), "");
+        var results = TabCompleter.Complete("ls file", 7, _noAliases, _tmpDir);
+
+        // When not starting with '-', should do path completion
+        Assert.Contains("file.txt", results);
+    }
+
+    [Fact]
+    public void CompleteFlags_EnvVarPrefix_Works()
+    {
+        var results = TabCompleter.Complete("FOO=bar ls -", 12, _noAliases, _tmpDir);
+
+        // Should handle env var prefix before command
+        Assert.Contains("-l  - long listing", results);
+    }
 }
