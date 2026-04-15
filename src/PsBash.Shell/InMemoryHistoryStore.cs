@@ -42,39 +42,65 @@ internal sealed class InMemoryHistoryStore : IHistoryStore
         if (string.IsNullOrEmpty(lastCommand))
             return Task.FromResult<IReadOnlyList<SequenceSuggestion>>(Array.Empty<SequenceSuggestion>());
 
-        // Build sequences on-the-fly from history for this simple implementation
-        var sequences = new Dictionary<string, (int Count, DateTime LastSeen)>();
+        // Build sequences on-the-fly from history, grouped by command and CWD
+        var groupedSequences = new Dictionary<string, (long totalFreq, long cwdFreq)>(StringComparer.Ordinal);
 
         for (int i = 0; i < _entries.Count - 1; i++)
         {
-            if (_entries[i].Command == lastCommand && _entries[i].Cwd == cwd)
+            if (_entries[i].Command == lastCommand)
             {
                 var nextCmd = _entries[i + 1].Command;
-                if (sequences.TryGetValue(nextCmd, out var existing))
+                var nextCwd = _entries[i + 1].Cwd;
+
+                if (!groupedSequences.TryGetValue(nextCmd, out var scores))
                 {
-                    sequences[nextCmd] = (existing.Count + 1, _entries[i + 1].Timestamp);
+                    var isCwdMatch = nextCwd == cwd;
+                    groupedSequences[nextCmd] = (1, isCwdMatch ? 1L : 0L);
                 }
                 else
                 {
-                    sequences[nextCmd] = (1, _entries[i + 1].Timestamp);
+                    var newTotal = scores.totalFreq + 1;
+                    var newCwdFreq = scores.cwdFreq + (nextCwd == cwd ? 1L : 0L);
+                    groupedSequences[nextCmd] = (newTotal, newCwdFreq);
                 }
             }
         }
 
-        var results = sequences
-            .OrderByDescending(kv => kv.Value.Count)
-            .ThenByDescending(kv => kv.Value.LastSeen)
-            .Take(10)
-            .Select(kv =>
+        var results = new List<SequenceSuggestion>();
+        foreach (var (command, (totalFreq, cwdFreq)) in groupedSequences)
+        {
+            double score;
+            string reason;
+
+            if (cwdFreq > 0)
             {
-                var score = Math.Min(1.0, kv.Value.Count / 10.0);
-                return new SequenceSuggestion
-                {
-                    Command = kv.Key,
-                    Score = score,
-                    Reason = $"Followed '{lastCommand}' {kv.Value.Count} times in this directory",
-                };
-            })
+                // CWD-boosted: give extra weight to sequences that occurred in current directory
+                var boostedFreq = cwdFreq * 2 + (totalFreq - cwdFreq);
+                score = Math.Min(1.0, boostedFreq / 20.0);
+                reason = cwdFreq == totalFreq
+                    ? $"Followed '{lastCommand}' {cwdFreq} times in this directory"
+                    : $"Followed '{lastCommand}' {cwdFreq} times here, {totalFreq} total";
+            }
+            else
+            {
+                // Global-only: score based on overall frequency
+                score = Math.Min(1.0, totalFreq / 20.0);
+                reason = $"Followed '{lastCommand}' {totalFreq} times";
+            }
+
+            results.Add(new SequenceSuggestion
+            {
+                Command = command,
+                Score = score,
+                Reason = reason,
+            });
+        }
+
+        // Sort by score (descending), then by total frequency (descending)
+        results = results
+            .OrderByDescending(r => r.Score)
+            .ThenByDescending(r => r.Reason.Contains("total") ? int.Parse(r.Reason.Split(" ").Last()) : 0)
+            .Take(10)
             .ToList();
 
         return Task.FromResult<IReadOnlyList<SequenceSuggestion>>(results);

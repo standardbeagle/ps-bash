@@ -41,7 +41,7 @@ public static class InteractiveShell
 
         // Initialize LineEditor with history store and tab completer
         _lineEditor = new LineEditor(_historyStore, (line, cursor) =>
-            TabCompleter.Complete(line, cursor, Aliases, _lastDir));
+            TabCompleter.Complete(line, cursor, Aliases, _lastDir, _lastCommand, _historyStore));
 
         await SourceRcFileAsync(worker, cts);
 

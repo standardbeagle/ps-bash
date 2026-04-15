@@ -337,47 +337,80 @@ public sealed class SqliteHistoryStore : IHistoryStore, IDisposable
 
                     using var cmd = _connection!.CreateCommand();
                     cmd.CommandText = """
-                        SELECT next_command, SUM(count) as total_count
-                        FROM (
-                            SELECT
-                                h2.command as next_command,
-                                1 as count
-                            FROM history h1
-                            JOIN history h2 ON h1.id + 1 = h2.id
-                            WHERE h1.command = @prev
-                                AND h2.timestamp > datetime('now', '-30 days')
-                            UNION ALL
-                            SELECT
-                                h2.command as next_command,
-                                COUNT(*) as count
-                            FROM history h1
-                            JOIN history h2 ON h1.id + 1 = h2.id
-                            WHERE h1.command = @prev
-                                AND h2.cwd = @cwd
-                                AND h2.timestamp > datetime('now', '-30 days')
-                            GROUP BY h2.command
-                        )
-                        GROUP BY next_command
-                        ORDER BY total_count DESC
-                        LIMIT 10;
+                        SELECT
+                            h2.command,
+                            h2.cwd,
+                            COUNT(*) as frequency
+                        FROM history h1
+                        JOIN history h2 ON h1.id + 1 = h2.id
+                        WHERE h1.command = @prev
+                            AND h2.timestamp > datetime('now', '-30 days')
+                        GROUP BY h2.command, h2.cwd
+                        ORDER BY frequency DESC
+                        LIMIT 50;
                         """;
                     cmd.Parameters.AddWithValue("@prev", lastCommand);
-                    cmd.Parameters.AddWithValue("@cwd", cwd);
 
-                    var results = new List<SequenceSuggestion>();
+                    var groupedScores = new Dictionary<string, (long totalFreq, long cwdFreq)>(StringComparer.Ordinal);
+                    var cutoffDate = DateTime.UtcNow.AddDays(-30);
+
                     using var reader = cmd.ExecuteReader();
                     while (reader.Read())
                     {
                         var nextCommand = reader.GetString(0);
-                        var count = reader.GetInt64(1);
+                        var nextCwd = reader.GetString(1);
+                        var frequency = reader.GetInt64(2);
+
+                        if (!groupedScores.TryGetValue(nextCommand, out var scores))
+                        {
+                            groupedScores[nextCommand] = (frequency, nextCwd == cwd ? frequency : 0);
+                        }
+                        else
+                        {
+                            var newTotal = scores.totalFreq + frequency;
+                            var newCwdFreq = scores.cwdFreq + (nextCwd == cwd ? frequency : 0);
+                            groupedScores[nextCommand] = (newTotal, newCwdFreq);
+                        }
+                    }
+
+                    var results = new List<SequenceSuggestion>();
+                    foreach (var (command, (totalFreq, cwdFreq)) in groupedScores)
+                    {
+                        double score;
+                        string reason;
+
+                        if (cwdFreq > 0)
+                        {
+                            // CWD-boosted: give extra weight to sequences that occurred in current directory
+                            // Score formula: (cwdFreq * 2.0 + (totalFreq - cwdFreq)) / 20.0
+                            // This doubles the value of CWD-local occurrences
+                            var boostedFreq = cwdFreq * 2 + (totalFreq - cwdFreq);
+                            score = Math.Min(1.0, boostedFreq / 20.0);
+                            reason = cwdFreq == totalFreq
+                                ? $"Followed '{lastCommand}' {cwdFreq} times in this directory"
+                                : $"Followed '{lastCommand}' {cwdFreq} times here, {totalFreq} total";
+                        }
+                        else
+                        {
+                            // Global-only: score based on overall frequency
+                            score = Math.Min(1.0, totalFreq / 20.0);
+                            reason = $"Followed '{lastCommand}' {totalFreq} times";
+                        }
 
                         results.Add(new SequenceSuggestion
                         {
-                            Command = nextCommand,
-                            Score = Math.Min(1.0, count / 10.0),
-                            Reason = $"Followed '{lastCommand}' {count} times",
+                            Command = command,
+                            Score = score,
+                            Reason = reason,
                         });
                     }
+
+                    // Sort by score (descending), then by total frequency (descending)
+                    results = results
+                        .OrderByDescending(r => r.Score)
+                        .ThenByDescending(r => r.Reason.Contains("total") ? int.Parse(r.Reason.Split(" ").Last()) : 0)
+                        .Take(10)
+                        .ToList();
 
                     return (IReadOnlyList<SequenceSuggestion>)results;
                 }

@@ -4,7 +4,7 @@ namespace PsBash.Shell;
 
 /// <summary>
 /// Provides tab completions for the interactive shell.
-/// Handles: file/directory paths, $PATH commands, and aliases.
+/// Handles: file/directory paths, $PATH commands, aliases, and sequence-aware suggestions.
 /// </summary>
 internal static class TabCompleter
 {
@@ -18,13 +18,41 @@ internal static class TabCompleter
         IReadOnlyDictionary<string, string> aliases,
         string cwd)
     {
+        return Complete(line, cursor, aliases, cwd, lastCommand: null, historyStore: null);
+    }
+
+    /// <summary>
+    /// Returns completion candidates for the partial token at <paramref name="cursor"/>
+    /// within <paramref name="line"/>, with optional sequence-aware suggestions.
+    /// </summary>
+    public static IReadOnlyList<string> Complete(
+        string line,
+        int cursor,
+        IReadOnlyDictionary<string, string> aliases,
+        string cwd,
+        string? lastCommand,
+        IHistoryStore? historyStore)
+    {
         var (_, token) = LineEditor.SplitAtWordBoundary(line, cursor);
         var (_, firstToken) = SplitFirstToken(line, cursor);
 
         bool isFirstWord = IsFirstWord(line, cursor);
 
         if (isFirstWord)
+        {
+            // Check for sequence suggestions on empty line or matching prefix
+            if (historyStore is not null && !string.IsNullOrEmpty(lastCommand))
+            {
+                var sequenceSuggestions = CompleteSequence(token, lastCommand, cwd, historyStore);
+                if (sequenceSuggestions.Count > 0)
+                {
+                    // Merge with regular command completions, prioritizing matches
+                    var commandCompletions = CompleteCommand(token, aliases, cwd);
+                    return MergeCompletions(sequenceSuggestions, commandCompletions);
+                }
+            }
             return CompleteCommand(token, aliases, cwd);
+        }
 
         // Check if current token starts with '-' (flag completion)
         if (token.Length > 0 && token[0] == '-')
@@ -39,6 +67,66 @@ internal static class TabCompleter
         }
 
         return CompletePath(token, cwd);
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // Sequence completion (after a known command)
+    // ─────────────────────────────────────────────────────────────────────────
+
+    private static IReadOnlyList<string> CompleteSequence(
+        string token,
+        string lastCommand,
+        string cwd,
+        IHistoryStore historyStore)
+    {
+        // Only suggest on empty input or when we have a partial match
+        // Get suggestions synchronously for tab completion (fire-and-forget if it fails)
+        try
+        {
+            var suggestions = historyStore.GetSequenceSuggestionsAsync(lastCommand, cwd)
+                .GetAwaiter().GetResult();
+
+            if (suggestions.Count == 0)
+                return [];
+
+            // Filter by token prefix if provided
+            var results = new List<string>();
+            foreach (var suggestion in suggestions)
+            {
+                if (string.IsNullOrEmpty(token) ||
+                    suggestion.Command.StartsWith(token, StringComparison.Ordinal))
+                {
+                    results.Add(suggestion.Command);
+                }
+            }
+
+            return results;
+        }
+        catch
+        {
+            // Silently fail - tab completion should never crash the shell
+            return [];
+        }
+    }
+
+    private static IReadOnlyList<string> MergeCompletions(
+        IReadOnlyList<string> sequenceSuggestions,
+        IReadOnlyList<string> commandCompletions)
+    {
+        // Sequence suggestions get priority, followed by regular commands
+        var seen = new HashSet<string>(sequenceSuggestions, StringComparer.Ordinal);
+        var merged = new List<string>(sequenceSuggestions);
+
+        foreach (var cmd in commandCompletions)
+        {
+            if (!seen.Contains(cmd))
+            {
+                merged.Add(cmd);
+                seen.Add(cmd);
+            }
+        }
+
+        return merged;
     }
 
     // ─────────────────────────────────────────────────────────────────────────

@@ -386,6 +386,25 @@ public class InMemoryHistoryStoreTests
         Assert.NotEmpty(results);
         Assert.Contains(results, r => r.Command == "docker test");
     }
+
+    [Fact]
+    public async Task GetSequenceSuggestionsAsync_WithGitSequence_ReturnsPushAfterCommit()
+    {
+        var store = new InMemoryHistoryStore();
+        var cwd = "/home/user/project";
+
+        // Create sequences matching the failing test
+        await store.RecordAsync(new HistoryEntry { Command = "git commit", Cwd = cwd, Timestamp = DateTime.UtcNow, SessionId = "s1" });
+        await store.RecordAsync(new HistoryEntry { Command = "git push", Cwd = cwd, Timestamp = DateTime.UtcNow.AddSeconds(1), SessionId = "s1" });
+        await store.RecordAsync(new HistoryEntry { Command = "git status", Cwd = cwd, Timestamp = DateTime.UtcNow.AddSeconds(2), SessionId = "s1" });
+        await store.RecordAsync(new HistoryEntry { Command = "git commit", Cwd = cwd, Timestamp = DateTime.UtcNow.AddSeconds(3), SessionId = "s1" });
+        await store.RecordAsync(new HistoryEntry { Command = "git push", Cwd = cwd, Timestamp = DateTime.UtcNow.AddSeconds(4), SessionId = "s1" });
+
+        var results = await store.GetSequenceSuggestionsAsync("git commit", cwd);
+
+        Assert.NotEmpty(results);
+        Assert.Contains(results, r => r.Command == "git push");
+    }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
