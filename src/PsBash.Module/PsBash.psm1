@@ -12557,8 +12557,15 @@ function Invoke-BashBackground {
     )
 
     $pwshPath = [System.Diagnostics.Process]::GetCurrentProcess().MainModule.FileName
+
+    # Ensure the child process can resolve Invoke-Bash* commands
+    $modulePath = $MyInvocation.MyCommand.Module.Path
+    if (-not $modulePath) {
+        $modulePath = Join-Path $PSScriptRoot 'PsBash.psd1'
+    }
+    $childScript = "Import-Module '$modulePath' -Force; & { $Command }"
     $encodedCmd = [Convert]::ToBase64String(
-        [System.Text.Encoding]::Unicode.GetBytes($Command.ToString())
+        [System.Text.Encoding]::Unicode.GetBytes($childScript)
     )
 
     $psi = [System.Diagnostics.ProcessStartInfo]::new()

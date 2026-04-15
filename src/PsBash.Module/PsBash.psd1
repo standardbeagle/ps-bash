@@ -12,7 +12,7 @@
 RootModule = 'PsBash.psm1'
 
 # Version number of this module.
-ModuleVersion = '0.8.9'
+ModuleVersion = '0.8.10'
 
 
 # ID used to uniquely identify this module
@@ -181,7 +181,7 @@ PrivateData = @{
         ProjectUri = 'https://github.com/standardbeagle/ps-bash'
 
         # ReleaseNotes of this module
-        ReleaseNotes = 'v0.8.9: Add install alias to module manifest. v0.8.8: Fix Ctrl+C in shell mode, ANSI prompt after git pull, install command, --noprofile flag, PATH command resolution, cursor redraw, history deduplication. v0.8.7: Direct execution for interactive external commands (claude, copilot, etc.). v0.8.6: Skip ps -u USER on non-Windows CI. v0.8.5: Skip ps -u USER on Linux CI. v0.8.4: Add missing Set-Alias for balias. v0.8.3: Remove PsBuiltinAliases, combined flag parsing, ls -F/-A/--color, interactive shell, rm nul guard.'
+        ReleaseNotes = 'v0.8.10: Fix flaky background-job Pester tests and child-process module loading for CI stability. v0.8.9: Add install alias to module manifest. v0.8.8: Fix Ctrl+C in shell mode, ANSI prompt after git pull, install command, --noprofile flag, PATH command resolution, cursor redraw, history deduplication. v0.8.7: Direct execution for interactive external commands (claude, copilot, etc.). v0.8.6: Skip ps -u USER on non-Windows CI. v0.8.5: Skip ps -u USER on Linux CI. v0.8.4: Add missing Set-Alias for balias. v0.8.3: Remove PsBuiltinAliases, combined flag parsing, ls -F/-A/--color, interactive shell, rm nul guard.'
 
     } # End of PSData hashtable
 

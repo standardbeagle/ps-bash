@@ -4,12 +4,15 @@
 # These guard against breakage when splitting the monolithic psm1 into files.
 # They verify: module import, function/alias exports, scope, type data, helpers, pipelines.
 
-BeforeAll {
-    # Remove any previously loaded copies (e.g. PSGallery installs)
+# Remove any previously loaded copies (e.g. PSGallery installs) and import the source module.
+# This runs at discovery time so InModuleScope resolves the correct module.
+while (Get-Module PsBash) {
     Get-Module PsBash | Remove-Module -Force -ErrorAction SilentlyContinue
+}
+$modulePath = Join-Path $PSScriptRoot '..' 'src' 'PsBash.Module' 'PsBash.psd1'
+Import-Module $modulePath -Force
 
-    $modulePath = Join-Path $PSScriptRoot '..' 'src' 'PsBash.Module' 'PsBash.psd1'
-    Import-Module $modulePath -Force
+BeforeAll {
     Set-BashErrorMode 'PowerShell'
 
     # Add BashText to [string] so test assertions using .BashText work for fast-path strings
