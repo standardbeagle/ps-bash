@@ -9,10 +9,11 @@ namespace PsBash.Shell;
 internal sealed class LineEditor
 {
     // ── history ──────────────────────────────────────────────────────────────
-    private readonly List<string> _history;
-    private readonly string _historyPath;
+    private readonly IHistoryStore _historyStore;
+    private readonly List<string> _history;  // In-memory cache for fast navigation
     private int _historyIndex;         // points into _history; _history.Count = current input
     private string _savedInput = "";   // stashed current input while navigating history
+    private readonly SemaphoreSlim _historyLock = new(1, 1);
 
     // ── completion ───────────────────────────────────────────────────────────
     private readonly Func<string, int, IReadOnlyList<string>>? _completer;
@@ -36,14 +37,49 @@ internal sealed class LineEditor
     // ── constants ────────────────────────────────────────────────────────────
     private const int MaxHistory = 5000;
 
+    /// <summary>
+    /// Creates a new LineEditor with a history store for persistent history.
+    /// </summary>
+    public LineEditor(
+        IHistoryStore historyStore,
+        Func<string, int, IReadOnlyList<string>>? completer = null)
+    {
+        _historyStore = historyStore;
+        _completer = completer;
+        _history = new List<string>();
+        _historyIndex = 0;
+
+        // Load history asynchronously in the background
+        _ = LoadHistoryAsync();
+    }
+
+    /// <summary>
+    /// Creates a new LineEditor with legacy file-based history (for backward compatibility).
+    /// </summary>
     public LineEditor(
         string historyPath,
         Func<string, int, IReadOnlyList<string>>? completer = null)
     {
-        _historyPath = historyPath;
+        _historyStore = new LegacyFileHistoryStore(historyPath);
+        _completer = completer;
         _history = LoadHistory(historyPath);
         _historyIndex = _history.Count;
-        _completer = completer;
+    }
+
+    private async Task LoadHistoryAsync()
+    {
+        await _historyLock.WaitAsync();
+        try
+        {
+            var entries = await _historyStore.SearchAsync(new HistoryQuery { Limit = MaxHistory });
+            _history.Clear();
+            _history.AddRange(entries.Select(e => e.Command).Reverse());
+            _historyIndex = _history.Count;
+        }
+        finally
+        {
+            _historyLock.Release();
+        }
     }
 
     // ─────────────────────────────────────────────────────────────────────────
@@ -199,6 +235,53 @@ internal sealed class LineEditor
         }
     }
 
+    /// <summary>
+    /// Records a command execution in the history store with full metadata.
+    /// </summary>
+    public async Task RecordCommandAsync(string command, string cwd, int? exitCode, long? durationMs, string sessionId)
+    {
+        await _historyStore.RecordAsync(new HistoryEntry
+        {
+            Command = command,
+            Cwd = cwd,
+            ExitCode = exitCode,
+            Timestamp = DateTime.UtcNow,
+            DurationMs = durationMs,
+            SessionId = sessionId,
+        });
+
+        // Update in-memory cache
+        await _historyLock.WaitAsync();
+        try
+        {
+            // Deduplicate
+            if (_history.Count > 0 && _history[^1] == command)
+                return;
+
+            _history.Add(command);
+            if (_history.Count > MaxHistory)
+                _history.RemoveAt(0);
+        }
+        finally
+        {
+            _historyLock.Release();
+        }
+    }
+
+    /// <summary>
+    /// Gets the most recent history entries matching a prefix.
+    /// </summary>
+    public async Task<IReadOnlyList<string>> GetRecentAsync(string prefix, int limit = 10)
+    {
+        var results = await _historyStore.SearchAsync(new HistoryQuery
+        {
+            Filter = prefix,
+            Limit = limit,
+        });
+
+        return results.Select(e => e.Command).ToArray();
+    }
+
     // ─────────────────────────────────────────────────────────────────────────
     // History
     // ─────────────────────────────────────────────────────────────────────────
@@ -227,12 +310,27 @@ internal sealed class LineEditor
     {
         // Deduplicate: remove previous identical entry
         var last = _history.Count > 0 ? _history[^1] : null;
-        if (last == line) { SaveHistory(); return; }
+        if (last == line) return;
 
         _history.Add(line);
         if (_history.Count > MaxHistory)
             _history.RemoveAt(0);
-        SaveHistory();
+
+        // Async save to store
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                await _historyStore.RecordAsync(new HistoryEntry
+                {
+                    Command = line,
+                    Cwd = Environment.CurrentDirectory,
+                    Timestamp = DateTime.UtcNow,
+                    SessionId = Guid.NewGuid().ToString(),
+                });
+            }
+            catch { }
+        });
     }
 
     private static List<string> LoadHistory(string path)
@@ -244,18 +342,6 @@ internal sealed class LineEditor
         }
         catch { }
         return [];
-    }
-
-    private void SaveHistory()
-    {
-        try
-        {
-            var dir = Path.GetDirectoryName(_historyPath);
-            if (dir is not null)
-                Directory.CreateDirectory(dir);
-            File.WriteAllLines(_historyPath, _history);
-        }
-        catch { }
     }
 
     // ─────────────────────────────────────────────────────────────────────────
@@ -477,5 +563,106 @@ internal sealed class LineEditor
         while (i >= 0 && before[i] != ' ' && before[i] != '\t') i--;
         var tokenStart = i + 1;
         return (before[..tokenStart], before[tokenStart..]);
+    }
+}
+
+/// <summary>
+/// Legacy file-based history store for backward compatibility with the old LineEditor constructor.
+/// </summary>
+internal sealed class LegacyFileHistoryStore : IHistoryStore
+{
+    private readonly string _historyPath;
+    private readonly List<string> _history = new();
+    private readonly SemaphoreSlim _lock = new(1, 1);
+
+    public LegacyFileHistoryStore(string historyPath)
+    {
+        _historyPath = historyPath;
+        Load();
+    }
+
+    private void Load()
+    {
+        _lock.Wait();
+        try
+        {
+            if (File.Exists(_historyPath))
+                _history.AddRange(File.ReadAllLines(_historyPath).Where(l => l.Length > 0));
+        }
+        finally
+        {
+            _lock.Release();
+        }
+    }
+
+    public Task RecordAsync(HistoryEntry entry)
+    {
+        return Task.Run(() =>
+        {
+            _lock.Wait();
+            try
+            {
+                // Deduplicate
+                if (_history.Count > 0 && _history[^1] == entry.Command)
+                    return;
+
+                _history.Add(entry.Command);
+                if (_history.Count > 5000)
+                    _history.RemoveAt(0);
+
+                Save();
+            }
+            finally
+            {
+                _lock.Release();
+            }
+        });
+    }
+
+    public Task<IReadOnlyList<HistoryEntry>> SearchAsync(HistoryQuery query)
+    {
+        _lock.Wait();
+        try
+        {
+            var queryable = _history.AsEnumerable();
+
+            if (!string.IsNullOrEmpty(query.Filter))
+                queryable = queryable.Where(cmd => cmd.StartsWith(query.Filter, StringComparison.Ordinal));
+
+            var results = queryable
+                .Take(query.Limit)
+                .Select((cmd, idx) => new HistoryEntry
+                {
+                    Command = cmd,
+                    Cwd = "",
+                    Timestamp = DateTime.UtcNow,
+                    SessionId = "",
+                    Id = idx + 1,
+                })
+                .ToList();
+
+            return Task.FromResult<IReadOnlyList<HistoryEntry>>(results);
+        }
+        finally
+        {
+            _lock.Release();
+        }
+    }
+
+    public Task<IReadOnlyList<SequenceSuggestion>> GetSequenceSuggestionsAsync(string? lastCommand, string cwd)
+    {
+        return Task.FromResult<IReadOnlyList<SequenceSuggestion>>(Array.Empty<SequenceSuggestion>());
+    }
+
+    private void Save()
+    {
+        try
+        {
+            var dir = Path.GetDirectoryName(_historyPath);
+            if (dir is not null)
+                Directory.CreateDirectory(dir);
+            File.WriteAllLines(_historyPath, _history);
+        }
+        catch { }
     }
 }

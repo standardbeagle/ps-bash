@@ -1,14 +1,31 @@
 {
   "status": "running",
-  "iterations": 0,
+  "iterations": 1,
   "spawns": 0,
   "started_at": "2026-04-15T06:00:00Z",
-  "last_iteration_at": null,
-  "last_subagent": null,
+  "last_iteration_at": "2026-04-15T00:35:00Z",
+  "last_subagent": "beagle-ab-4035648",
   "loop_task_id": "dwWX7lCJjf3E",
   "dartboard": "Personal/ps-bash",
   "runner_instance_id": "beagle-ab-4105748",
   "runner_email": "andybrummer@standardbeagle.com",
   "runner_dart_id": "andybrummer@standardbeagle.com",
-  "tasks": []
+  "tasks": [
+    {
+      "task_id": "7myJzCRhpzke",
+      "iteration": 1,
+      "status": "completed",
+      "started_at": "2026-04-15T00:10:00Z",
+      "completed_at": "2026-04-15T00:35:00Z",
+      "phase_completed": "phase-9",
+      "failed_phase": null,
+      "files_changed": 10,
+      "tests_added": 20,
+      "plan_adjustments": 0,
+      "completion_summary": "Implemented SQLite-backed history store with IHistoryStore interface, HistoryEntry/HistoryQuery/SequenceSuggestion types, SqliteHistoryStore with WAL mode and legacy migration, InMemoryHistoryStore for testing, wired into LineEditor and InteractiveShell for command recording with metadata (CWD, exit code, duration, session ID).",
+      "failure_reason": null,
+      "fix_task_created": false,
+      "fix_task_id": null
+    }
+  ]
 }

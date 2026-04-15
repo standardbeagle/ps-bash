@@ -19,6 +19,9 @@ public static class InteractiveShell
     private static string _homeDir = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
     private static string _lastDir = Environment.CurrentDirectory;
     private static LineEditor? _lineEditor;
+    private static IHistoryStore? _historyStore;
+    private static string _sessionId = Guid.NewGuid().ToString();
+    private static string? _lastCommand;
 
     public static async Task<int> RunAsync(string pwshPath)
     {
@@ -27,11 +30,17 @@ public static class InteractiveShell
         var cts = new CancellationTokenSource();
         var worker = await StartWorkerAsync(pwshPath);
 
-        // Initialize LineEditor with history path and tab completer
-        var historyPath = Path.Combine(
+        // Initialize history store
+        var psbashDir = Path.Combine(
             Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
-            ".psbash_history");
-        _lineEditor = new LineEditor(historyPath, (line, cursor) =>
+            ".psbash");
+        Directory.CreateDirectory(psbashDir);
+
+        var dbPath = Path.Combine(psbashDir, "history.db");
+        _historyStore = new SqliteHistoryStore(dbPath);
+
+        // Initialize LineEditor with history store and tab completer
+        _lineEditor = new LineEditor(_historyStore, (line, cursor) =>
             TabCompleter.Complete(line, cursor, Aliases, _lastDir));
 
         await SourceRcFileAsync(worker, cts);
@@ -47,6 +56,8 @@ public static class InteractiveShell
             {
                 Console.WriteLine();
                 await DisposeWorkerAsync(worker);
+                if (_historyStore is IDisposable disposable)
+                    disposable.Dispose();
                 return 0;
             }
 
@@ -57,6 +68,8 @@ public static class InteractiveShell
             if (IsExitCommand(trimmed, out var exitCode))
             {
                 await DisposeWorkerAsync(worker);
+                if (_historyStore is IDisposable disposable)
+                    disposable.Dispose();
                 return exitCode;
             }
 
@@ -77,25 +90,69 @@ public static class InteractiveShell
                 continue;
             }
 
+            var stopwatch = Stopwatch.StartNew();
+            int? exitCodeResult = null;
+
             try
             {
                 if (TryRunDirect(trimmed))
                 {
+                    stopwatch.Stop();
+                    exitCodeResult = 0; // Direct execution assumes success for now
+                    await RecordCommandAsync(trimmed, exitCodeResult, stopwatch.ElapsedMilliseconds);
                     await RunPromptCommandAsync(worker);
                     continue;
                 }
 
                 await worker.ExecuteAsync(pwshCommand, cts.Token);
                 await SyncWorkerCwdAsync(worker);
+
+                // Get exit code from PowerShell
+                try
+                {
+                    var exitCodeStr = await worker.QueryAsync("$LASTEXITCODE");
+                    if (int.TryParse(exitCodeStr?.Trim(), out var code))
+                        exitCodeResult = code;
+                }
+                catch { }
+
                 await RunPromptCommandAsync(worker);
             }
             catch (OperationCanceledException)
             {
                 Console.Error.WriteLine("^C");
+                stopwatch.Stop();
+                await RecordCommandAsync(trimmed, null, stopwatch.ElapsedMilliseconds);
                 await DisposeWorkerAsync(worker);
                 worker = await StartWorkerAsync(pwshPath);
             }
+            finally
+            {
+                if (exitCodeResult.HasValue)
+                {
+                    stopwatch.Stop();
+                    await RecordCommandAsync(trimmed, exitCodeResult.Value, stopwatch.ElapsedMilliseconds);
+                }
+            }
         }
+    }
+
+    private static async Task RecordCommandAsync(string command, int? exitCode, long durationMs)
+    {
+        if (_historyStore == null || _lineEditor == null) return;
+
+        try
+        {
+            await _lineEditor.RecordCommandAsync(
+                command,
+                Environment.CurrentDirectory,
+                exitCode,
+                durationMs,
+                _sessionId);
+
+            _lastCommand = command;
+        }
+        catch { }
     }
 
     private static bool TryRunDirect(string bashInput)
