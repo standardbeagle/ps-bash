@@ -381,7 +381,7 @@ internal sealed class LineEditor
             if (File.Exists(path))
                 return [.. File.ReadAllLines(path).Where(l => l.Length > 0)];
         }
-        catch { }
+        catch (Exception) { }
         return [];
     }
 
@@ -782,6 +782,6 @@ internal sealed class LegacyFileHistoryStore : IHistoryStore
                 Directory.CreateDirectory(dir);
             File.WriteAllLines(_historyPath, _history);
         }
-        catch { }
+        catch (Exception ex) { Console.Error.WriteLine($"[ps-bash] warning: failed to save history: {ex.Message}"); }
     }
 }

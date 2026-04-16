@@ -102,9 +102,9 @@ internal static class TabCompleter
 
             return results;
         }
-        catch
+        catch (Exception ex)
         {
-            // Silently fail - tab completion should never crash the shell
+            Console.Error.WriteLine($"[ps-bash] warning: sequence completion failed: {ex.Message}");
             return [];
         }
     }
@@ -175,7 +175,7 @@ internal static class TabCompleter
                     }
                 }
             }
-            catch { /* skip inaccessible dirs */ }
+            catch (Exception) { /* skip inaccessible dirs */ }
         }
 
         // Local executables in cwd
@@ -188,7 +188,7 @@ internal static class TabCompleter
                     results.Add(name);
             }
         }
-        catch { }
+        catch (Exception) { }
 
         return [.. results];
     }
@@ -335,7 +335,7 @@ internal static class TabCompleter
             results.Sort(StringComparer.Ordinal);
             return results;
         }
-        catch
+        catch (Exception)
         {
             return [];
         }

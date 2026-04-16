@@ -312,9 +312,9 @@ public sealed class SqliteHistoryStore : IHistoryStore, IDisposable
                     return (IReadOnlyList<HistoryEntry>)results;
                 }
             }
-            catch
+            catch (Exception ex)
             {
-                // Return empty list on failure — fail silently for queries
+                Console.Error.WriteLine($"[ps-bash] warning: history query failed: {ex.Message}");
                 return Array.Empty<HistoryEntry>();
             }
         });
@@ -415,8 +415,9 @@ public sealed class SqliteHistoryStore : IHistoryStore, IDisposable
                     return (IReadOnlyList<SequenceSuggestion>)results;
                 }
             }
-            catch
+            catch (Exception ex)
             {
+                Console.Error.WriteLine($"[ps-bash] warning: sequence suggestions failed: {ex.Message}");
                 return Array.Empty<SequenceSuggestion>();
             }
         });

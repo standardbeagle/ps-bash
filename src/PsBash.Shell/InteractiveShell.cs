@@ -118,7 +118,7 @@ public static class InteractiveShell
                     if (int.TryParse(exitCodeStr?.Trim(), out var code))
                         exitCodeResult = code;
                 }
-                catch { }
+                catch (Exception ex) { Console.Error.WriteLine($"[ps-bash] warning: failed to read exit code: {ex.Message}"); }
 
                 await RunPromptCommandAsync(worker);
             }
@@ -153,7 +153,7 @@ public static class InteractiveShell
 
             _lastCommand = command;
         }
-        catch { }
+        catch (Exception ex) { Console.Error.WriteLine($"[ps-bash] warning: failed to record history: {ex.Message}"); }
     }
 
     private static bool TryRunDirect(string bashInput, out int exitCode)
@@ -318,7 +318,7 @@ public static class InteractiveShell
             }
             Environment.SetEnvironmentVariable("PATH", merged.ToString());
         }
-        catch { }
+        catch (Exception ex) { Console.Error.WriteLine($"[ps-bash] warning: failed to merge profile PATH: {ex.Message}"); }
     }
 
     internal static string? ResolveCommand(string cmdName, string? workDir)
@@ -377,7 +377,7 @@ public static class InteractiveShell
                     _lastDir = path;
             }
         }
-        catch { }
+        catch (Exception ex) { Console.Error.WriteLine($"[ps-bash] warning: failed to sync cwd: {ex.Message}"); }
     }
 
     private static async Task RunPromptCommandAsync(PwshWorker worker)
@@ -393,10 +393,10 @@ public static class InteractiveShell
                     var pwshCmd = BashTranspiler.Transpile(cmd);
                     await worker.ExecuteAsync(pwshCmd, CancellationToken.None);
                 }
-                catch { }
+                catch (Exception ex) { Console.Error.WriteLine($"[ps-bash] warning: PROMPT_COMMAND failed: {ex.Message}"); }
             }
         }
-        catch { }
+        catch (Exception ex) { Console.Error.WriteLine($"[ps-bash] warning: prompt command failed: {ex.Message}"); }
     }
 
     private static void UpdateCwd(string bashInput)
@@ -424,7 +424,7 @@ public static class InteractiveShell
             if (Directory.Exists(target))
                 _lastDir = target;
         }
-        catch { }
+        catch (Exception ex) { Console.Error.WriteLine($"[ps-bash] warning: failed to update cwd: {ex.Message}"); }
     }
 
     private static async Task<string> BuildPromptAsync(PwshWorker worker)
@@ -628,7 +628,7 @@ public static class InteractiveShell
                 dir = parent;
             }
         }
-        catch { }
+        catch (Exception ex) { Console.Error.WriteLine($"[ps-bash] warning: failed to read git branch: {ex.Message}"); }
         return null;
     }
 
@@ -658,7 +658,7 @@ public static class InteractiveShell
                 dir = parent;
             }
         }
-        catch { }
+        catch (Exception ex) { Console.Error.WriteLine($"[ps-bash] warning: failed to read git status: {ex.Message}"); }
         return true;
     }
 
@@ -1045,7 +1045,7 @@ public static class InteractiveShell
     private static async ValueTask DisposeWorkerAsync(PwshWorker worker)
     {
         try { await worker.DisposeAsync(); }
-        catch { }
+        catch (Exception ex) { Console.Error.WriteLine($"[ps-bash] warning: worker disposal failed: {ex.Message}"); }
     }
 
     private static bool IsExitCommand(string input, out int exitCode)
@@ -1089,7 +1089,7 @@ public static class InteractiveShell
             if (GetConsoleMode(handle, out uint mode))
                 SetConsoleMode(handle, mode | ENABLE_VIRTUAL_TERMINAL_PROCESSING);
         }
-        catch { }
+        catch (Exception ex) { Console.Error.WriteLine($"[ps-bash] warning: failed to enable virtual terminal: {ex.Message}"); }
     }
 
     private static void OnCancelKeyPress(object? sender, ConsoleCancelEventArgs e)
