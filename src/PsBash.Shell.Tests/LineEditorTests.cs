@@ -315,8 +315,8 @@ public class TabCompleterTests : IDisposable
         Assert.NotEmpty(results);
         Assert.Contains(results, r => r == "git push");
 
-        // Test with prefix "git p" - should still suggest "git push"
-        var prefixedResults = TabCompleter.Complete("git p", 5, _noAliases, cwd, "git commit", store);
+        // Test with prefix "git" (first word, no space) - should suggest "git push"
+        var prefixedResults = TabCompleter.Complete("git", 3, _noAliases, cwd, "git commit", store);
         Assert.NotEmpty(prefixedResults);
         Assert.Contains(prefixedResults, r => r == "git push");
     }

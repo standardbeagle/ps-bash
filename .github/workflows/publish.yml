@@ -134,3 +134,27 @@ jobs:
           PSGALLERY_API_KEY: ${{ secrets.PSGALLERY_API_KEY }}
         run: |
           Publish-Module -Path ./PsBash -NuGetApiKey $env:PSGALLERY_API_KEY -Repository PSGallery -Verbose
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Pack and publish to NuGet
+        shell: pwsh
+        env:
+          NUGET_API_KEY: ${{ secrets.NUGET_API_KEY }}
+        run: |
+          $version = if ('${{ github.event_name }}' -eq 'release') {
+              '${{ github.event.release.tag_name }}' -replace '^v', ''
+          } else {
+              '${{ github.event.inputs.version }}'
+          }
+          # Update csproj version to match release
+          $csproj = Get-Content ./src/PsBash.Core/PsBash.Core.csproj -Raw
+          $csproj = $csproj -replace '<Version>.*</Version>', "<Version>$version</Version>"
+          Set-Content ./src/PsBash.Core/PsBash.Core.csproj -Value $csproj
+          Write-Host "PsBash.Core version set to: $version"
+
+          dotnet pack ./src/PsBash.Core/PsBash.Core.csproj -c Release -o ./nuget-out
+          dotnet nuget push ./nuget-out/*.nupkg --api-key $env:NUGET_API_KEY --source https://api.nuget.org/v3/index.json --skip-duplicate

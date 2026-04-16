@@ -35,6 +35,11 @@ Edit `src/PsBash.Module/PsBash.psd1`:
 - Update `ModuleVersion` (e.g. `'0.8.1'` → `'0.8.2'`)
 - Prepend new entry to `ReleaseNotes` (format: `v0.8.2: description. v0.8.1: ...`)
 
+Edit `src/PsBash.Core/PsBash.Core.csproj`:
+- Update `<Version>` to match the module manifest version
+
+Alternatively, run `pwsh scripts/pack-local.ps1` which syncs the csproj version from the manifest and packs into `dist/`.
+
 ### 2. Run all tests
 
 ```bash
@@ -63,6 +68,7 @@ This triggers the **Publish Release** workflow which:
 - Uploads zip archives to the GitHub release
 - Runs Pester tests across all platforms
 - Publishes the module to PSGallery
+- Publishes PsBash.Core NuGet package to nuget.org (requires `NUGET_API_KEY` secret)
 
 ### 5. Verify GitHub Actions
 
