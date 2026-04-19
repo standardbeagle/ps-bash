@@ -4,6 +4,12 @@ using PsBash.Core.Transpiler;
 using PsBash.Shell;
 
 
+// Reliability watchdog: on Windows, attach the current process to a Job Object
+// with KILL_ON_JOB_CLOSE so the pwsh worker (and any other descendants) die
+// atomically with ps-bash itself. This is a no-op on Linux/macOS where the
+// shell's process group + SIGHUP already handles this.
+JobObjectWatchdog.AttachCurrentProcess();
+
 var debug = Environment.GetEnvironmentVariable("PSBASH_DEBUG") == "1";
 
 // Diagnostic: when PSBASH_TRACE=<path> is set, append a line per invocation
@@ -47,6 +53,14 @@ catch (PwshNotFoundException ex)
 if (shellArgs.ReadFromStdin || (!shellArgs.Interactive && shellArgs.Command is null && Console.IsInputRedirected))
 {
     var stdinCommand = await Console.In.ReadToEndAsync();
+    if (string.IsNullOrEmpty(stdinCommand) && Console.IsInputRedirected)
+    {
+        // Parent closed the pipe without sending a command. Exit cleanly
+        // rather than falling through to the interactive shell (which would
+        // hang forever with no tty). Matches bash behavior: `bash < /dev/null`
+        // exits 0 immediately.
+        return 0;
+    }
     if (!string.IsNullOrWhiteSpace(stdinCommand))
         shellArgs = shellArgs with { Command = stdinCommand };
 }
@@ -56,10 +70,24 @@ if (shellArgs.Interactive || shellArgs.Command is null)
     return await InteractiveShell.RunAsync(pwshPath, shellArgs.NoProfile);
 }
 
+// For the -c (non-interactive) path, start a parent-death watcher so we never
+// become an orphan if the launching process (testhost, Claude Code, CI runner)
+// crashes or is force-killed. The Job Object above handles "kill our children
+// when we die"; this handles "kill us when our parent dies."
+var parentPid = JobObjectWatchdog.GetCurrentParentProcessId();
+JobObjectWatchdog.StartParentDeathWatcher(parentPid);
+
+// Parity with interactive shell: expand aliases before transpile. In -c mode
+// Aliases is empty (profile loading only happens in the interactive REPL), so
+// this is a no-op early-return today — but it means every -c invocation
+// follows the same ExpandAliases → Transpile → worker.ExecuteAsync sequence
+// as the interactive loop, so future alias wiring stays unified.
+var bashCommand = InteractiveShell.ExpandAliases(shellArgs.Command);
+
 string? pwshCommand;
 try
 {
-    pwshCommand = BashTranspiler.Transpile(shellArgs.Command);
+    pwshCommand = BashTranspiler.Transpile(bashCommand);
 }
 catch (ParseException ex)
 {
@@ -69,7 +97,7 @@ catch (ParseException ex)
 
 if (debug)
 {
-    Console.Error.WriteLine($"[ps-bash] input:      {shellArgs.Command}");
+    Console.Error.WriteLine($"[ps-bash] input:      {bashCommand}");
     Console.Error.WriteLine($"[ps-bash] transpiled: {pwshCommand}");
     Console.Error.WriteLine($"[ps-bash] pwsh:       {pwshPath}");
 }

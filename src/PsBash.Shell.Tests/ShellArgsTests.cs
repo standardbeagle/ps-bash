@@ -235,6 +235,28 @@ public class ShellArgsTests
         Assert.Equal(cmd, result.Command);
     }
 
+    // Regression: `ps-bash -c "git log --oneline -20"` was reported to fail
+    // with "The term '-l' is not recognized" — i.e. somewhere `--oneline` was
+    // being peeled apart as a short-flag collision (-o / -n / -e / -l / -i / -n / -e).
+    // The Args layer must pass the full quoted command string to the
+    // transpiler intact, even though it contains `--word` tokens whose first
+    // character is also a recognized short flag.
+    [Theory]
+    [InlineData("git log --oneline -20")]
+    [InlineData("git log --list")]
+    [InlineData("git diff --name-only HEAD~1")]
+    [InlineData("grep --include='*.cs' -r foo .")]
+    [InlineData("ls --long --color=auto")]
+    public void Parse_CommandWithLongFlagStartingWithShortFlagLetter_PreservesFullCommand(string cmd)
+    {
+        var result = ShellArgs.Parse(["-c", cmd]);
+
+        Assert.Equal(cmd, result.Command);
+        Assert.False(result.Login);
+        Assert.False(result.Interactive);
+        Assert.False(result.ReadFromStdin);
+    }
+
     [Fact]
     public void Parse_UnixPathsFlag_SetsTrue()
     {

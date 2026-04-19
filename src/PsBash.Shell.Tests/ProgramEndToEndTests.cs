@@ -108,6 +108,27 @@ public class ProgramEndToEndTests
         Assert.Contains("deliberate failure", stderr);
     }
 
+    // Regression: `ps-bash -c "git log --oneline -20"` was reported to fail
+    // with "The term '-l' is not recognized". The command string must be
+    // handed to the transpiler intact — long flags whose first char collides
+    // with a recognized ps-bash short flag (-l / -o / -n / -i / -e) must not
+    // be mistaken for shell-host flags.
+    [SkippableTheory]
+    [InlineData("echo --oneline -20", "--oneline -20")]
+    [InlineData("echo --list --long", "--list --long")]
+    [InlineData("echo --name --include", "--name --include")]
+    public async Task Command_LongFlagStartingWithShortFlagLetter_PassesToTranspilerIntact(
+        string command, string expectedOutput)
+    {
+        Skip.If(PwshPath is null, "pwsh not available");
+
+        var (exitCode, stdout, stderr) = await RunShellAsync("-c", command);
+
+        Assert.Equal(0, exitCode);
+        Assert.Contains(expectedOutput, stdout);
+        Assert.DoesNotContain("is not recognized", stderr);
+    }
+
     [SkippableFact]
     public async Task Stdin_ReadsAndExecutes()
     {
