@@ -25,7 +25,7 @@ public class BashTranspilerTests
         var result = BashTranspiler.Transpile("cmd || true");
         // The `true` operand must be a single PowerShell expression; a script
         // block invocation `& { ... }` is one such expression.
-        Assert.Contains("|| & { $global:LASTEXITCODE = 0; [void]$true }", result);
+        Assert.Contains("|| $($global:LASTEXITCODE = 0; [void]$true)", result);
     }
 
     [Fact]

@@ -1079,14 +1079,16 @@ public static class PsEmitter
                 }
             }
             // true -> no-op success; false -> silent failure (sets $? = $false for && / ||)
-            // Wrapped in & { ... } so the multi-statement body parses as a single
+            // Wrapped in $(...) so the multi-statement body parses as a single
             // expression — required when used as an operand of `||` or `&&`,
             // e.g. `cmd || true` would otherwise emit `cmd || $g:LASTEXITCODE = 0; ...`
-            // and the `||` would only consume `$g:LASTEXITCODE`.
+            // and the `||` would only consume `$g:LASTEXITCODE`. Subexpression
+            // (not script block `& { }`) is required so Write-Error's $?=$false
+            // propagates to the outer pipeline; `& { }` invocation resets $? = $true.
             else if (cmd0 == "true" && cmd.Words.Length == 1)
-                specialResult = "& { $global:LASTEXITCODE = 0; [void]$true }";
+                specialResult = "$($global:LASTEXITCODE = 0; [void]$true)";
             else if (cmd0 == "false" && cmd.Words.Length == 1)
-                specialResult = "& { $global:LASTEXITCODE = 1; Write-Error '' -ErrorAction SilentlyContinue }";
+                specialResult = "$($global:LASTEXITCODE = 1; Write-Error '' -ErrorAction SilentlyContinue)";
 
             // read [-r] [-p "prompt"] VAR -> Invoke-BashRead [-p "prompt"] VAR
             else if (cmd0 == "read")
