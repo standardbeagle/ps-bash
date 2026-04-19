@@ -167,4 +167,59 @@ public class ProgramEndToEndTests
         Assert.True(leaked.Count == 0,
             $"Leaked pwsh worker PIDs after timeout: {string.Join(",", leaked)}");
     }
+
+    // Regression: `ps-bash -c 'echo a; echo b; echo c'` must produce three
+    // distinct output lines, not a single concatenated line like `abc`.
+    // See Dart task FpyEHvFl7EXM.
+    [SkippableFact]
+    public async Task Command_ChainedCommands_EachOutputsOwnLine()
+    {
+        Skip.If(PwshPath is null, "pwsh not available");
+
+        var (exitCode, stdout, _) = await RunShellAsync(
+            "-c", "echo alpha; echo beta; echo gamma");
+
+        Assert.Equal(0, exitCode);
+
+        var lines = stdout
+            .Replace("\r\n", "\n")
+            .Split('\n', StringSplitOptions.RemoveEmptyEntries)
+            .ToList();
+
+        Assert.Contains("alpha", lines);
+        Assert.Contains("beta", lines);
+        Assert.Contains("gamma", lines);
+        Assert.True(lines.Count >= 3,
+            $"Expected >=3 output lines, got {lines.Count}: [{string.Join("|", lines)}]");
+    }
+
+    // Regression: mixed chained commands (echo + pwd + piped ls) must each
+    // produce their own line(s). Original repro from FpyEHvFl7EXM.
+    [SkippableFact]
+    public async Task Command_EchoPwdLsPipeHead_OutputsDistinctLines()
+    {
+        Skip.If(PwshPath is null, "pwsh not available");
+
+        var (exitCode, stdout, _) = await RunShellAsync(
+            "-c", "echo \"bash tool works\"; pwd; echo FINAL_MARKER_XYZ");
+
+        Assert.Equal(0, exitCode);
+
+        var lines = stdout
+            .Replace("\r\n", "\n")
+            .Split('\n', StringSplitOptions.RemoveEmptyEntries)
+            .ToList();
+
+        Assert.Contains(lines, l => l.Contains("bash tool works"));
+        Assert.Contains(lines, l => l.Contains("FINAL_MARKER_XYZ"));
+        // The "bash tool works" line and "FINAL_MARKER_XYZ" line must be on
+        // different lines — that's the core regression. Also expect at least
+        // one line between them for pwd output.
+        var worksIdx = lines.FindIndex(l => l.Contains("bash tool works"));
+        var doneIdx = lines.FindIndex(l => l.Contains("FINAL_MARKER_XYZ"));
+        Assert.True(worksIdx >= 0 && doneIdx > worksIdx,
+            $"'bash tool works' and 'done' must be on separate lines. Got: [{string.Join("|", lines)}]");
+        Assert.True(lines.Count >= 3,
+            $"Expected >=3 output lines, got {lines.Count}: [{string.Join("|", lines)}]");
+    }
 }
