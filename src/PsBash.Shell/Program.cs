@@ -6,7 +6,31 @@ using PsBash.Shell;
 
 var debug = Environment.GetEnvironmentVariable("PSBASH_DEBUG") == "1";
 
+// Diagnostic: when PSBASH_TRACE=<path> is set, append a line per invocation
+// recording argv (and stdin redirect state) so we can see exactly how a parent
+// process — e.g. the Claude Code Bash tool — is invoking us. No behavior change.
+var tracePath = Environment.GetEnvironmentVariable("PSBASH_TRACE");
+if (!string.IsNullOrEmpty(tracePath))
+{
+    try
+    {
+        var quoted = string.Join(' ', args.Select(a =>
+            a.Contains(' ') || a.Contains('"') ? "\"" + a.Replace("\"", "\\\"") + "\"" : a));
+        var line = $"{DateTime.Now:O} pid={Environment.ProcessId} stdinRedir={Console.IsInputRedirected} argc={args.Length} argv=[{quoted}]";
+        File.AppendAllText(tracePath, line + Environment.NewLine);
+    }
+    catch (Exception ex) { Console.Error.WriteLine($"[ps-bash] trace write failed: {ex.Message}"); }
+}
+
 var shellArgs = ShellArgs.Parse(args);
+
+// Path mode: explicit --unix-paths / --windows-paths flag wins; otherwise
+// fall back to PSBASH_UNIX_PATHS env var; otherwise default to Windows-native
+// paths (no MSYS translation). Propagate the resolved choice as an env var
+// so PsEmitter (in PsBash.Core, no direct Shell dependency) can read it.
+bool unixPaths = shellArgs.UnixPaths
+    ?? Environment.GetEnvironmentVariable("PSBASH_UNIX_PATHS") is "1" or "true";
+Environment.SetEnvironmentVariable("PSBASH_UNIX_PATHS", unixPaths ? "1" : "0");
 
 string pwshPath;
 try

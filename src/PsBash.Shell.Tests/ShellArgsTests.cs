@@ -168,6 +168,94 @@ public class ShellArgsTests
         Assert.Equal(a, b);
     }
 
+    // Regression: Claude Code on Windows invokes ps-bash as `-lc "cmd"`.
+    // Prior parser had no `-lc` case, dropped both flags + command, fell into
+    // interactive mode. Captured live via PSBASH_TRACE.
+    [Fact]
+    public void Parse_BundledLoginCommand_ExpandsShortFlags()
+    {
+        var result = ShellArgs.Parse(["-lc", "echo hi"]);
+
+        Assert.True(result.Login);
+        Assert.Equal("echo hi", result.Command);
+    }
+
+    [Fact]
+    public void Parse_BundledCommandLogin_ExpandsShortFlags()
+    {
+        var result = ShellArgs.Parse(["-cl", "echo hi"]);
+
+        Assert.True(result.Login);
+        Assert.Equal("echo hi", result.Command);
+    }
+
+    [Fact]
+    public void Parse_BundledInteractiveCommand_ExpandsShortFlags()
+    {
+        var result = ShellArgs.Parse(["-ic", "echo hi"]);
+
+        Assert.True(result.Interactive);
+        Assert.Equal("echo hi", result.Command);
+    }
+
+    // Regression: Claude Code also invokes ps-bash as `-c -l "cmd"`.
+    // Prior parser greedily took `-l` as the command, then dropped the
+    // real command, then tried to execute `-l` as a PowerShell command,
+    // producing `"The term '-l' is not recognized"`. Captured live.
+    [Fact]
+    public void Parse_CommandThenLogin_SkipsLoginFlagAndTakesRealCommand()
+    {
+        var result = ShellArgs.Parse(["-c", "-l", "echo hi"]);
+
+        Assert.True(result.Login);
+        Assert.Equal("echo hi", result.Command);
+    }
+
+    [Fact]
+    public void Parse_CommandThenMultipleFlags_SkipsAllAndTakesRealCommand()
+    {
+        var result = ShellArgs.Parse(["-c", "-l", "-i", "--noprofile", "echo hi"]);
+
+        Assert.True(result.Login);
+        Assert.True(result.Interactive);
+        Assert.True(result.NoProfile);
+        Assert.Equal("echo hi", result.Command);
+    }
+
+    // Real ps-bash invocation captured from Claude Code's snapshot bootstrap.
+    // The command string starts with `shopt` and contains pipes, redirects,
+    // quotes — must round-trip intact through the -c skip logic.
+    [Fact]
+    public void Parse_ClaudeCodeSnapshotPattern_PreservesFullCommand()
+    {
+        var cmd = "shopt -u extglob 2>/dev/null || true && eval 'git status' < /dev/null && pwd -P >| /tmp/x";
+        var result = ShellArgs.Parse(["-c", "-l", cmd]);
+
+        Assert.True(result.Login);
+        Assert.Equal(cmd, result.Command);
+    }
+
+    [Fact]
+    public void Parse_UnixPathsFlag_SetsTrue()
+    {
+        var result = ShellArgs.Parse(["--unix-paths", "-c", "echo hi"]);
+        Assert.True(result.UnixPaths);
+    }
+
+    [Fact]
+    public void Parse_WindowsPathsFlag_SetsFalse()
+    {
+        var result = ShellArgs.Parse(["--windows-paths", "-c", "echo hi"]);
+        Assert.False(result.UnixPaths);
+    }
+
+    [Fact]
+    public void Parse_NoPathsFlag_LeavesUnixPathsNull()
+    {
+        var result = ShellArgs.Parse(["-c", "echo hi"]);
+        Assert.Null(result.UnixPaths);
+    }
+
     [Fact]
     public void Parse_RecordWithExpression_CreatesModifiedCopy()
     {

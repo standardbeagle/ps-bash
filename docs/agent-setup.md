@@ -23,11 +23,14 @@ ps-bash -c "echo hello"
 
 Claude Code supports a `CLAUDE_CODE_SHELL` environment variable that overrides shell detection. Set it to the full path of `ps-bash.exe`.
 
+You also need `PSBASH_UNIX_PATHS=1` because Claude Code's Bash tool emits MSYS-style paths (e.g. `/c/Users/...` instead of `C:\Users\...`) in its prelude. Without this flag, redirect targets land in the wrong directory.
+
 **Option 1: Environment variable (PowerShell profile)**
 
 ```powershell
 # Add to $PROFILE
 $env:CLAUDE_CODE_SHELL = 'C:\Users\you\.local\bin\ps-bash.exe'
+$env:PSBASH_UNIX_PATHS  = '1'
 ```
 
 **Option 2: Claude Code settings.json**
@@ -36,7 +39,8 @@ $env:CLAUDE_CODE_SHELL = 'C:\Users\you\.local\bin\ps-bash.exe'
 // ~/.claude/settings.json
 {
   "env": {
-    "CLAUDE_CODE_SHELL": "C:\\Users\\you\\.local\\bin\\ps-bash.exe"
+    "CLAUDE_CODE_SHELL": "C:\\Users\\you\\.local\\bin\\ps-bash.exe",
+    "PSBASH_UNIX_PATHS": "1"
   }
 }
 ```
@@ -46,12 +50,29 @@ $env:CLAUDE_CODE_SHELL = 'C:\Users\you\.local\bin\ps-bash.exe'
 ```jsonc
 {
   "env": {
-    "CLAUDE_CODE_SHELL": "C:\\Users\\you\\.local\\bin\\ps-bash.exe"
+    "CLAUDE_CODE_SHELL": "C:\\Users\\you\\.local\\bin\\ps-bash.exe",
+    "PSBASH_UNIX_PATHS": "1"
   }
 }
 ```
 
 Claude Code invokes the shell as `<shell> -c "command"`, which is exactly the ps-bash interface. Once configured, Claude Code will transpile all bash commands through ps-bash.
+
+### Path Mode
+
+ps-bash defaults to **Windows-native paths** — it doesn't rewrite paths that look POSIX-shaped. If you're using a wrapper that emits unix paths (Claude Code, OpenCode, scripts copied from Linux), enable unix-path translation one of two ways:
+
+| Method | Form |
+|---|---|
+| Env var (recommended for wrappers) | `PSBASH_UNIX_PATHS=1` |
+| CLI flag (one-off invocation) | `ps-bash --unix-paths -c "echo > /c/foo.log"` |
+
+The CLI flag overrides the env var. Use `--windows-paths` to force the default off explicitly.
+
+When unix-paths mode is on:
+- `/c/Users/foo` → `C:\Users\foo` (any drive letter; case-folded uppercase)
+- `/dev/null` → `$null` (always, mode-independent)
+- `/tmp/x` → `$env:TEMP\x` (always, mode-independent)
 
 ## OpenCode
 
