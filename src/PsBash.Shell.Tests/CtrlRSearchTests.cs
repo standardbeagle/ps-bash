@@ -185,12 +185,16 @@ public class CtrlRSearchTimeTests
 public class CtrlRSearchHighlightTests
 {
     [Fact]
-    public void HighlightMatch_Substring_WrapsInReverseVideo()
+    public void HighlightMatch_Substring_WrapsInBoldUnderline()
     {
+        // Match highlight uses bold+underline so it composes over the
+        // selection-row reverse-video and any base/syntax style instead of
+        // overriding fg/bg.
         var result = CtrlRSearch.HighlightMatch("docker build", "build");
-        Assert.Contains("\x1b[7m", result); // Reverse video on
+        Assert.Contains("\x1b[1;4m", result); // bold + underline on
         Assert.Contains("build", result);
-        Assert.Contains("\x1b[27m", result); // Reverse video off
+        Assert.Contains("\x1b[22;24m", result); // bold + underline off
+        Assert.DoesNotContain("\x1b[7m", result); // must not use reverse video
     }
 
     [Fact]
@@ -205,7 +209,7 @@ public class CtrlRSearchHighlightTests
     {
         var result = CtrlRSearch.HighlightMatch("docker build docker", "docker");
         // Count occurrences of reverse video on
-        var onCount = CountOccurrences(result, "\x1b[7m");
+        var onCount = CountOccurrences(result, "\x1b[1;4m");
         Assert.Equal(2, onCount);
     }
 

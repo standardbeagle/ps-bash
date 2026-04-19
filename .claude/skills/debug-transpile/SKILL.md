@@ -26,7 +26,7 @@ Debug transpilation issue for: $ARGUMENTS
 
 4. **Test runtime directly**: Load the module in pwsh and test the function:
    ```powershell
-   pwsh -NoProfile -Command "Import-Module ./src/PsBash.Module/PsBash.psd1; your-test-here"
+   pwsh -NoProfile -Command "Import-Module ./src/PsBash.Module/PsBash.psd1 -DisableNameChecking; your-test-here"
    ```
 
 5. **Check for quoting issues**: If PowerShell misinterprets args:

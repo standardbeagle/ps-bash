@@ -22,6 +22,11 @@ public sealed class CtrlRSearch : IDisposable
     private const string ResetAttributes = "\x1b[0m";
     private const string ReverseVideoOn = "\x1b[7m";
     private const string ReverseVideoOff = "\x1b[27m";
+    // Match highlight uses bold + underline so it composes on top of any
+    // existing fg/bg style (e.g. selection-row reverse video, future syntax
+    // colors) instead of replacing the whole span's appearance.
+    private const string MatchHighlightOn = "\x1b[1;4m";
+    private const string MatchHighlightOff = "\x1b[22;24m";
     private const string Cyan = "\x1b[36m";
     private const string Gray = "\x1b[90m";
     private const string Green = "\x1b[32m";
@@ -118,7 +123,19 @@ public sealed class CtrlRSearch : IDisposable
             // Main input loop
             while (true)
             {
-                var key = Console.ReadKey(intercept: true);
+                ConsoleKeyInfo key;
+                try
+                {
+                    key = Console.ReadKey(intercept: true);
+                }
+                catch (InvalidOperationException)
+                {
+                    // Console closed mid-read — exit search cleanly.
+                    return (Result.Cancelled, null);
+                }
+
+                try
+                {
 
                 if (_inEditMode)
                 {
@@ -247,6 +264,18 @@ public sealed class CtrlRSearch : IDisposable
                             Render();
                         }
                         break;
+                }
+                }
+                catch (Exception ex)
+                {
+                    // Bad regex, broken history row, render glitch — recover
+                    // by clearing the query and re-rendering instead of
+                    // bubbling out and crashing the shell.
+                    _query.Clear();
+                    _results.Clear();
+                    _selectedIndex = -1;
+                    Console.Error.WriteLine($"ps-bash: ctrl-r error: {ex.GetType().Name}: {ex.Message}");
+                    try { Render(); } catch { /* render itself failed; next keypress will retry */ }
                 }
             }
         }
@@ -771,9 +800,9 @@ public sealed class CtrlRSearch : IDisposable
             }
 
             // Append highlighted match
-            result.Append(ReverseVideoOn);
+            result.Append(MatchHighlightOn);
             result.Append(command.AsSpan(matchIdx, query.Length));
-            result.Append(ReverseVideoOff);
+            result.Append(MatchHighlightOff);
 
             cmdIdx = matchIdx + query.Length;
         }
@@ -849,10 +878,14 @@ public sealed class CtrlRSearch : IDisposable
 
     private void ExitAlternateScreen()
     {
+        Console.Write(ResetAttributes);
         Console.Write(ShowCursor);
         Console.Write(ExitAltScreen);
         Console.Write(RestoreCursor);
-        Console.Write(ClearLine); // Clear the line where we were
+        // Move to column 0 and clear the line so the LineEditor's Redraw
+        // re-emits the prompt in place rather than landing on a blank row.
+        Console.Write("\r");
+        Console.Write(ClearLine);
     }
 
     private void UpdateTerminalSize()

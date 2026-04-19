@@ -126,14 +126,23 @@ internal sealed class LineEditor
 
         Console.Write(prompt);
 
-        // Initial suggestion for empty prompt (should be null)
-        _ = UpdateSuggestionAsync();
-
-        while (true)
-
         while (true)
         {
-            var key = Console.ReadKey(intercept: true);
+            ConsoleKeyInfo key;
+            try
+            {
+                key = Console.ReadKey(intercept: true);
+            }
+            catch (InvalidOperationException)
+            {
+                // Console handle closed mid-read (terminal disconnect, etc.).
+                // Treat as EOF instead of crashing the shell.
+                Console.WriteLine();
+                return null;
+            }
+
+            try
+            {
 
             // Tab completion
             if (key.Key == ConsoleKey.Tab && key.Modifiers == 0)
@@ -177,9 +186,9 @@ internal sealed class LineEditor
                 if (cmd is not null)
                 {
                     SetBuffer(cmd);
-                    Redraw(prompt);
                 }
-                // After Ctrl-R, redraw to restore normal mode
+                // Always redraw to restore the prompt line, whether or not a result was selected.
+                Redraw(prompt);
                 continue;
             }
 
@@ -241,33 +250,33 @@ internal sealed class LineEditor
                 // ── deletion ─────────────────────────────────────────────────
                 case ConsoleKey.Backspace:
                     DeleteCharBack();
+                    await UpdateSuggestionAsync();
                     Redraw(prompt);
-                    _ = UpdateSuggestionAsync();
                     break;
                 case ConsoleKey.Delete:
                     DeleteCharForward();
+                    await UpdateSuggestionAsync();
                     Redraw(prompt);
-                    _ = UpdateSuggestionAsync();
                     break;
                 case ConsoleKey.K when key.Modifiers == ConsoleModifiers.Control:
                     KillToEnd();
+                    await UpdateSuggestionAsync();
                     Redraw(prompt);
-                    _ = UpdateSuggestionAsync();
                     break;
                 case ConsoleKey.U when key.Modifiers == ConsoleModifiers.Control:
                     KillToStart();
+                    await UpdateSuggestionAsync();
                     Redraw(prompt);
-                    _ = UpdateSuggestionAsync();
                     break;
                 case ConsoleKey.W when key.Modifiers == ConsoleModifiers.Control:
                     KillWordBack();
+                    await UpdateSuggestionAsync();
                     Redraw(prompt);
-                    _ = UpdateSuggestionAsync();
                     break;
                 case ConsoleKey.Y when key.Modifiers == ConsoleModifiers.Control:
                     Yank();
+                    await UpdateSuggestionAsync();
                     Redraw(prompt);
-                    _ = UpdateSuggestionAsync();
                     break;
 
                 // ── misc ─────────────────────────────────────────────────────
@@ -282,11 +291,23 @@ internal sealed class LineEditor
                     if (key.KeyChar != '\0' && !char.IsControl(key.KeyChar))
                     {
                         InsertChar(key.KeyChar);
+                        await UpdateSuggestionAsync();
                         Redraw(prompt);
-                        _ = UpdateSuggestionAsync();
                     }
                     // Ignore other control sequences (F-keys, etc.)
                     break;
+            }
+            }
+            catch (Exception ex)
+            {
+                // Per-keystroke guard: never let a bad completion provider,
+                // history lookup, regex, etc. crash the shell. Reset visible
+                // state to a clean prompt and continue reading.
+                ClearCompletion();
+                ClearSuggestion();
+                Console.WriteLine();
+                Console.Error.WriteLine($"ps-bash: line-editor error: {ex.GetType().Name}: {ex.Message}");
+                Redraw(prompt);
             }
         }
     }
@@ -782,6 +803,6 @@ internal sealed class LegacyFileHistoryStore : IHistoryStore
                 Directory.CreateDirectory(dir);
             File.WriteAllLines(_historyPath, _history);
         }
-        catch (Exception ex) { Console.Error.WriteLine($"[ps-bash] warning: failed to save history: {ex.Message}"); }
+        catch (Exception) { /* routine: legacy file history is best-effort */ }
     }
 }

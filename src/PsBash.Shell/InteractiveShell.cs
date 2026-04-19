@@ -29,9 +29,15 @@ public static class InteractiveShell
         Console.CancelKeyPress += OnCancelKeyPress;
         EnsureVirtualTerminalEnabled();
 
-        if (!noProfile)
-            MergeProfilePath(pwshPath);
+        using var loading = LoadingIndicator.Start("Loading ps-bash");
 
+        if (!noProfile)
+        {
+            loading.Update("Loading PowerShell profile");
+            MergeProfilePath(pwshPath);
+        }
+
+        loading.Update("Starting PowerShell worker");
         var cts = new CancellationTokenSource();
         var worker = await StartWorkerAsync(pwshPath);
 
@@ -48,92 +54,104 @@ public static class InteractiveShell
         _lineEditor = new LineEditor(_historyStore, (line, cursor) =>
             TabCompleter.Complete(line, cursor, Aliases, _lastDir, _lastCommand, _historyStore));
 
+        loading.Update("Sourcing ~/.psbashrc");
         await SourceRcFileAsync(worker, cts);
+
+        loading.Finish();
 
         while (true)
         {
-            cts.Dispose();
-            cts = new CancellationTokenSource();
-            _currentCts = cts;
-
-            var input = await ReadInputAsync(worker);
-            if (input is null)
-            {
-                Console.WriteLine();
-                await DisposeWorkerAsync(worker);
-                if (_historyStore is IDisposable disposable)
-                    disposable.Dispose();
-                return 0;
-            }
-
-            var trimmed = input.Trim();
-            if (trimmed.Length == 0)
-                continue;
-
-            if (IsExitCommand(trimmed, out var exitCode))
-            {
-                await DisposeWorkerAsync(worker);
-                if (_historyStore is IDisposable disposable)
-                    disposable.Dispose();
-                return exitCode;
-            }
-
-            trimmed = ProcessAliasCommand(trimmed);
-            if (trimmed.Length == 0)
-                continue;
-
-            trimmed = ExpandAliases(trimmed);
-
-            string pwshCommand;
             try
             {
-                pwshCommand = BashTranspiler.Transpile(trimmed);
-            }
-            catch (ParseException ex)
-            {
-                Console.Error.WriteLine($"ps-bash: parse error: {ex.Message}");
-                continue;
-            }
+                cts.Dispose();
+                cts = new CancellationTokenSource();
+                _currentCts = cts;
 
-            var stopwatch = Stopwatch.StartNew();
-            int? exitCodeResult = null;
-
-            try
-            {
-                if (TryRunDirect(trimmed, out var directExitCode))
+                var input = await ReadInputAsync(worker);
+                if (input is null)
                 {
-                    stopwatch.Stop();
-                    exitCodeResult = directExitCode;
-                    await SyncWorkerCwdAsync(worker);
-                    await RunPromptCommandAsync(worker);
+                    Console.WriteLine();
+                    await DisposeWorkerAsync(worker);
+                    if (_historyStore is IDisposable disposable)
+                        disposable.Dispose();
+                    return 0;
+                }
+
+                var trimmed = input.Trim();
+                if (trimmed.Length == 0)
+                    continue;
+
+                if (IsExitCommand(trimmed, out var exitCode))
+                {
+                    await DisposeWorkerAsync(worker);
+                    if (_historyStore is IDisposable disposable)
+                        disposable.Dispose();
+                    return exitCode;
+                }
+
+                trimmed = ProcessAliasCommand(trimmed);
+                if (trimmed.Length == 0)
+                    continue;
+
+                trimmed = ExpandAliases(trimmed);
+
+                string pwshCommand;
+                try
+                {
+                    pwshCommand = BashTranspiler.Transpile(trimmed);
+                }
+                catch (ParseException ex)
+                {
+                    Console.Error.WriteLine($"ps-bash: parse error: {ex.Message}");
                     continue;
                 }
 
-                await worker.ExecuteAsync(pwshCommand, cts.Token);
-                await SyncWorkerCwdAsync(worker);
+                var stopwatch = Stopwatch.StartNew();
+                int? exitCodeResult = null;
 
                 try
                 {
-                    var exitCodeStr = await worker.QueryAsync("$LASTEXITCODE");
-                    if (int.TryParse(exitCodeStr?.Trim(), out var code))
-                        exitCodeResult = code;
-                }
-                catch (Exception ex) { Console.Error.WriteLine($"[ps-bash] warning: failed to read exit code: {ex.Message}"); }
+                    if (TryRunDirect(trimmed, out var directExitCode))
+                    {
+                        stopwatch.Stop();
+                        exitCodeResult = directExitCode;
+                        await SyncWorkerCwdAsync(worker);
+                        await RunPromptCommandAsync(worker);
+                        continue;
+                    }
 
-                await RunPromptCommandAsync(worker);
+                    await worker.ExecuteAsync(pwshCommand, cts.Token);
+                    await SyncWorkerCwdAsync(worker);
+
+                    try
+                    {
+                        var exitCodeStr = await worker.QueryAsync("$LASTEXITCODE");
+                        if (int.TryParse(exitCodeStr?.Trim(), out var code))
+                            exitCodeResult = code;
+                    }
+                    catch (Exception) { /* routine: worker busy or query raced; last exit code is best-effort */ }
+
+                    await RunPromptCommandAsync(worker);
+                }
+                catch (OperationCanceledException)
+                {
+                    Console.Error.WriteLine("^C");
+                    stopwatch.Stop();
+                    exitCodeResult = null;
+                    await DisposeWorkerAsync(worker);
+                    worker = await StartWorkerAsync(pwshPath);
+                }
+                finally
+                {
+                    stopwatch.Stop();
+                    await RecordCommandAsync(trimmed, exitCodeResult, stopwatch.ElapsedMilliseconds);
+                }
             }
-            catch (OperationCanceledException)
+            catch (Exception ex)
             {
-                Console.Error.WriteLine("^C");
-                stopwatch.Stop();
-                exitCodeResult = null;
-                await DisposeWorkerAsync(worker);
-                worker = await StartWorkerAsync(pwshPath);
-            }
-            finally
-            {
-                stopwatch.Stop();
-                await RecordCommandAsync(trimmed, exitCodeResult, stopwatch.ElapsedMilliseconds);
+                // Top-level guard: never crash the shell. Log the unexpected
+                // failure to stderr and continue to the next prompt.
+                Console.Error.WriteLine($"ps-bash: internal error: {ex.GetType().Name}: {ex.Message}");
             }
         }
     }
@@ -153,7 +171,7 @@ public static class InteractiveShell
 
             _lastCommand = command;
         }
-        catch (Exception ex) { Console.Error.WriteLine($"[ps-bash] warning: failed to record history: {ex.Message}"); }
+        catch (Exception) { /* routine: history is best-effort, DB may be locked/busy */ }
     }
 
     private static bool TryRunDirect(string bashInput, out int exitCode)
@@ -228,9 +246,10 @@ public static class InteractiveShell
                 return false;
             }
 
-            proc.WaitForExit();
-            _suspendCancel = false;
-            EnsureVirtualTerminalEnabled();
+proc.WaitForExit();
+_suspendCancel = false;
+EnsureVirtualTerminalEnabled();
+EnsureConsoleInputRestored();
             exitCode = proc.ExitCode;
             return true;
         }
@@ -283,6 +302,8 @@ public static class InteractiveShell
 
     private static void MergeProfilePath(string pwshPath)
     {
+        const string begin = "<<<PSBASH_PATH_BEGIN>>>";
+        const string end = "<<<PSBASH_PATH_END>>>";
         try
         {
             var psi = new ProcessStartInfo(pwshPath)
@@ -291,12 +312,32 @@ public static class InteractiveShell
                 RedirectStandardOutput = true,
                 RedirectStandardError = true,
                 CreateNoWindow = true,
-                ArgumentList = { "-NoLogo", "-Command", "Write-Output $env:PATH" },
+                ArgumentList = { "-NoLogo", "-Command",
+                    $"[Console]::Out.WriteLine('{begin}' + $env:PATH + '{end}')" },
             };
             using var proc = Process.Start(psi);
             if (proc is null) return;
-            var profilePath = proc.StandardOutput.ReadToEnd().Trim();
-            proc.WaitForExit(5000);
+            // Read stdout and stderr concurrently to avoid the classic pipe
+            // deadlock where a full stderr buffer blocks the child before
+            // stdout is consumed. No hard timeout — a slow profile is the
+            // user's profile; let it finish. The LoadingIndicator surfaces
+            // elapsed time and offers a bail-out prompt.
+            var stdoutTask = proc.StandardOutput.ReadToEndAsync();
+            var stderrTask = proc.StandardError.ReadToEndAsync();
+            Task.WaitAll(stdoutTask, stderrTask);
+            var stdout = stdoutTask.Result;
+            var stderr = stderrTask.Result;
+            proc.WaitForExit();
+
+            // Surface anything the profile emitted (warnings on stdout OR stderr)
+            // as a clearly-labelled ps-bash message, instead of letting it contaminate PATH.
+            ReportProfileNoise(stdout, begin, end);
+            ReportProfileNoise(stderr, null, null);
+
+            var bi = stdout.IndexOf(begin, StringComparison.Ordinal);
+            var ei = stdout.IndexOf(end, StringComparison.Ordinal);
+            if (bi < 0 || ei <= bi) return;
+            var profilePath = stdout.Substring(bi + begin.Length, ei - bi - begin.Length).Trim();
             if (string.IsNullOrEmpty(profilePath)) return;
 
             var currentPath = Environment.GetEnvironmentVariable("PATH") ?? "";
@@ -319,6 +360,28 @@ public static class InteractiveShell
             Environment.SetEnvironmentVariable("PATH", merged.ToString());
         }
         catch (Exception ex) { Console.Error.WriteLine($"[ps-bash] warning: failed to merge profile PATH: {ex.Message}"); }
+    }
+
+    // Extract anything in `text` that isn't our PATH payload and surface it as a
+    // profile warning, so module-load warnings etc. reach the user clearly rather
+    // than corrupting PATH or being silently dropped.
+    private static void ReportProfileNoise(string? text, string? begin, string? end)
+    {
+        if (string.IsNullOrWhiteSpace(text)) return;
+        string noise = text;
+        if (begin is not null && end is not null)
+        {
+            var bi = noise.IndexOf(begin, StringComparison.Ordinal);
+            var ei = noise.IndexOf(end, StringComparison.Ordinal);
+            if (bi >= 0 && ei > bi)
+                noise = noise.Remove(bi, (ei - bi) + end.Length);
+        }
+        foreach (var rawLine in noise.Split('\n'))
+        {
+            var line = rawLine.TrimEnd('\r').Trim();
+            if (line.Length == 0) continue;
+            Console.Error.WriteLine($"[ps-bash] profile warning: {line}");
+        }
     }
 
     internal static string? ResolveCommand(string cmdName, string? workDir)
@@ -377,7 +440,7 @@ public static class InteractiveShell
                     _lastDir = path;
             }
         }
-        catch (Exception ex) { Console.Error.WriteLine($"[ps-bash] warning: failed to sync cwd: {ex.Message}"); }
+        catch (Exception) { /* routine: cwd may have been removed underneath us */ }
     }
 
     private static async Task RunPromptCommandAsync(PwshWorker worker)
@@ -424,7 +487,7 @@ public static class InteractiveShell
             if (Directory.Exists(target))
                 _lastDir = target;
         }
-        catch (Exception ex) { Console.Error.WriteLine($"[ps-bash] warning: failed to update cwd: {ex.Message}"); }
+        catch (Exception) { /* routine: cd target inaccessible; shell continues */ }
     }
 
     private static async Task<string> BuildPromptAsync(PwshWorker worker)
@@ -628,7 +691,7 @@ public static class InteractiveShell
                 dir = parent;
             }
         }
-        catch (Exception ex) { Console.Error.WriteLine($"[ps-bash] warning: failed to read git branch: {ex.Message}"); }
+        catch (Exception) { /* routine: not a git repo or HEAD unreadable; prompt falls back */ }
         return null;
     }
 
@@ -658,7 +721,7 @@ public static class InteractiveShell
                 dir = parent;
             }
         }
-        catch (Exception ex) { Console.Error.WriteLine($"[ps-bash] warning: failed to read git status: {ex.Message}"); }
+        catch (Exception) { /* routine: git index unreadable; prompt reports clean */ }
         return true;
     }
 
@@ -1045,7 +1108,7 @@ public static class InteractiveShell
     private static async ValueTask DisposeWorkerAsync(PwshWorker worker)
     {
         try { await worker.DisposeAsync(); }
-        catch (Exception ex) { Console.Error.WriteLine($"[ps-bash] warning: worker disposal failed: {ex.Message}"); }
+        catch (Exception) { /* routine: worker may already be dead on shutdown */ }
     }
 
     private static bool IsExitCommand(string input, out int exitCode)
@@ -1077,8 +1140,13 @@ public static class InteractiveShell
     [DllImport("kernel32.dll")]
     private static extern bool SetConsoleMode(IntPtr hConsoleHandle, uint dwMode);
 
+    private const int STD_INPUT_HANDLE = -10;
     private const int STD_OUTPUT_HANDLE = -11;
     private const uint ENABLE_VIRTUAL_TERMINAL_PROCESSING = 0x0004;
+    private const uint ENABLE_PROCESSED_INPUT = 0x0001;
+    private const uint ENABLE_LINE_INPUT = 0x0002;
+    private const uint ENABLE_ECHO_INPUT = 0x0004;
+    private const uint ENABLE_VIRTUAL_TERMINAL_INPUT = 0x0200;
 
     private static void EnsureVirtualTerminalEnabled()
     {
@@ -1090,6 +1158,33 @@ public static class InteractiveShell
                 SetConsoleMode(handle, mode | ENABLE_VIRTUAL_TERMINAL_PROCESSING);
         }
         catch (Exception ex) { Console.Error.WriteLine($"[ps-bash] warning: failed to enable virtual terminal: {ex.Message}"); }
+    }
+
+    // LineEditor reads keys via Console.ReadKey and dispatches on ConsoleKey.UpArrow,
+    // Backspace, etc. Those values are only populated when Windows delivers cooked
+    // key records — i.e., VIRTUAL_TERMINAL_INPUT is OFF. Child processes (e.g. node
+    // CLIs that exit via Ctrl+C without restoring state) commonly leave VT input
+    // enabled, after which arrows arrive as raw ESC sequences the editor can't parse.
+    internal static uint ComputeRestoredInputMode(uint current)
+    {
+        return (current | ENABLE_PROCESSED_INPUT | ENABLE_LINE_INPUT | ENABLE_ECHO_INPUT)
+               & ~ENABLE_VIRTUAL_TERMINAL_INPUT;
+    }
+
+    private static void EnsureConsoleInputRestored()
+    {
+        if (!OperatingSystem.IsWindows()) return;
+        try
+        {
+            var handle = GetStdHandle(STD_INPUT_HANDLE);
+            if (GetConsoleMode(handle, out uint mode))
+            {
+                var desired = ComputeRestoredInputMode(mode);
+                if (mode != desired)
+                    SetConsoleMode(handle, desired);
+            }
+        }
+        catch (Exception ex) { Console.Error.WriteLine($"[ps-bash] warning: failed to restore console input mode: {ex.Message}"); }
     }
 
     private static void OnCancelKeyPress(object? sender, ConsoleCancelEventArgs e)

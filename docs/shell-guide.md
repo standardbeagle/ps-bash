@@ -56,7 +56,7 @@ Get-Content errors.log | grep 'FATAL' | sort | uniq -c
 Install-Module PsBash
 
 # Add to your PowerShell profile for permanent access
-Add-Content $PROFILE "`nImport-Module PsBash"
+Add-Content $PROFILE "`nImport-Module PsBash -DisableNameChecking"
 ```
 
 ## ps-bash Shell
@@ -252,7 +252,7 @@ Use this guide to decide which mode fits your workflow.
 
 ```powershell
 # Your PowerShell profile
-Import-Module PsBash
+Import-Module PsBash -DisableNameChecking
 
 # Now bash commands are just PowerShell functions
 ls -la | Where-Object { $_.SizeBytes -gt 1MB }

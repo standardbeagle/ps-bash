@@ -24,7 +24,7 @@ If you need to install or update PowerShell, see the
 
     ```powershell
     git clone https://github.com/standardbeagle/ps-bash.git
-    Import-Module ./ps-bash/src/PsBash.psd1
+    Import-Module ./ps-bash/src/PsBash.psd1 -DisableNameChecking
     ```
 
     This loads ps-bash for the current session only.
@@ -38,7 +38,7 @@ If you need to install or update PowerShell, see the
         $dest = "$HOME/.local/share/powershell/Modules/PsBash"
         New-Item -ItemType Directory -Path $dest -Force
         Copy-Item -Path ./ps-bash/src/* -Destination $dest -Recurse
-        Import-Module PsBash
+        Import-Module PsBash -DisableNameChecking
         ```
       </TabItem>
       <TabItem label="Windows">
@@ -46,7 +46,7 @@ If you need to install or update PowerShell, see the
         $dest = "$HOME\Documents\PowerShell\Modules\PsBash"
         New-Item -ItemType Directory -Path $dest -Force
         Copy-Item -Path .\ps-bash\src\* -Destination $dest -Recurse
-        Import-Module PsBash
+        Import-Module PsBash -DisableNameChecking
         ```
       </TabItem>
     </Tabs>
@@ -55,7 +55,7 @@ If you need to install or update PowerShell, see the
     Add the import to your PowerShell profile so ps-bash loads every time you open a terminal:
 
     ```powershell
-    Add-Content -Path $PROFILE -Value 'Import-Module PsBash'
+    Add-Content -Path $PROFILE -Value 'Import-Module PsBash -DisableNameChecking'
     ```
 
     Restart your terminal or reload the profile:
@@ -74,7 +74,7 @@ Get-Command ls             # Should show Alias -> Invoke-BashLs
 ls --help                  # Should display flag descriptions
 ```
 
-If `Get-Module` returns nothing, run `Import-Module PsBash` and try again.
+If `Get-Module` returns nothing, run `Import-Module PsBash -DisableNameChecking` and try again.
 
 ## Your first 5 commands
 
@@ -217,14 +217,14 @@ Flags:
 The module is not loaded, or it was loaded after your shell already resolved `ls` as a native alias. Run:
 
 ```powershell
-Import-Module PsBash -Force
+Import-Module PsBash -DisableNameChecking -Force
 ```
 
 If your shell has a built-in `ls` alias, remove it first:
 
 ```powershell
 Remove-Alias ls -Force -ErrorAction SilentlyContinue
-Import-Module PsBash -Force
+Import-Module PsBash -DisableNameChecking -Force
 ```
 
 **"Execution policy error"**
@@ -242,7 +242,7 @@ If another module defines the same alias, remove the conflict and reimport:
 ```powershell
 Remove-Alias ls -Force -ErrorAction SilentlyContinue
 Remove-Alias cat -Force -ErrorAction SilentlyContinue
-Import-Module PsBash -Force
+Import-Module PsBash -DisableNameChecking -Force
 ```
 
 To make this permanent, add the remove-and-import sequence to your `$PROFILE`.

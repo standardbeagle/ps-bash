@@ -102,9 +102,9 @@ internal static class TabCompleter
 
             return results;
         }
-        catch (Exception ex)
+        catch (Exception)
         {
-            Console.Error.WriteLine($"[ps-bash] warning: sequence completion failed: {ex.Message}");
+            // Routine: tab completion is advisory and must never crash the shell.
             return [];
         }
     }
