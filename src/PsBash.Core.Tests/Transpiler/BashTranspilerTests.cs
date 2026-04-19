@@ -11,6 +11,78 @@ public class BashTranspilerTests
         Assert.Equal("Invoke-BashEcho hello", BashTranspiler.Transpile("echo hello"));
     }
 
+    // Regression: Claude Code's Bash-tool prelude wraps every command in
+    // `shopt ... 2>/dev/null || true && eval ... && pwd -P >| /tmp/x`.
+    // Two bugs surfaced live:
+    //   (a) `cmd || true` emitted `cmd || $global:LASTEXITCODE = 0; [void]$true`
+    //       which PowerShell rejects: the `||` only consumes `$global:LASTEXITCODE`
+    //       and `= 0` is leftover junk.
+    //   (b) `>|` (force-clobber redirect) was lexed as `>` then `|`, producing
+    //       `Invoke-BashRedirect -Path |` (empty pipe element).
+    [Fact]
+    public void OrTrue_InAndOrChain_ProducesParseableOperand()
+    {
+        var result = BashTranspiler.Transpile("cmd || true");
+        // The `true` operand must be a single PowerShell expression; a script
+        // block invocation `& { ... }` is one such expression.
+        Assert.Contains("|| & { $global:LASTEXITCODE = 0; [void]$true }", result);
+    }
+
+    [Fact]
+    public void ForceClobberRedirect_TreatedAsPlainStdoutRedirect()
+    {
+        var result = BashTranspiler.Transpile("echo hi >| out.txt");
+        Assert.Equal("Invoke-BashEcho hi | Invoke-BashRedirect -Path out.txt", result);
+    }
+
+    [Fact]
+    public void InputRedirectFromDevNull_DroppedNotEmittedAsGetContentNull()
+    {
+        // `Get-Content $null` throws "Cannot bind argument to parameter 'Path'
+        // because it is null." — so drop the redirect entirely.
+        var result = BashTranspiler.Transpile("eval 'echo hi' < /dev/null");
+        Assert.DoesNotContain("Get-Content $null", result);
+    }
+
+    [Fact]
+    public void MsysDrivePathInRedirectTarget_TranslatedToWindowsPath_WhenUnixPathsOn()
+    {
+        var prior = Environment.GetEnvironmentVariable("PSBASH_UNIX_PATHS");
+        Environment.SetEnvironmentVariable("PSBASH_UNIX_PATHS", "1");
+        try
+        {
+            var result = BashTranspiler.Transpile("echo hi > /c/Users/andyb/foo.log");
+            Assert.Contains("Invoke-BashRedirect -Path C:\\Users\\andyb\\foo.log", result);
+        }
+        finally { Environment.SetEnvironmentVariable("PSBASH_UNIX_PATHS", prior); }
+    }
+
+    [Fact]
+    public void MsysDrivePathInRedirectTarget_PreservedLiteral_WhenUnixPathsOff()
+    {
+        var prior = Environment.GetEnvironmentVariable("PSBASH_UNIX_PATHS");
+        Environment.SetEnvironmentVariable("PSBASH_UNIX_PATHS", "0");
+        try
+        {
+            var result = BashTranspiler.Transpile("echo hi > /c/Users/andyb/foo.log");
+            Assert.Contains("Invoke-BashRedirect -Path /c/Users/andyb/foo.log", result);
+        }
+        finally { Environment.SetEnvironmentVariable("PSBASH_UNIX_PATHS", prior); }
+    }
+
+    [Fact]
+    public void ClaudeCodeBashWrapper_TranspilesWithoutEmptyPipeOrAssignmentJunk()
+    {
+        // Captured live from Claude Code Bash tool argv tracing.
+        var input = "shopt -u extglob 2>/dev/null || true && eval 'echo hi' < /dev/null && pwd -P >| /tmp/cwd";
+        var result = BashTranspiler.Transpile(input);
+        // The two specific failures we observed must not appear:
+        Assert.DoesNotContain("|| $global:LASTEXITCODE = 0;", result);
+        Assert.DoesNotContain("Invoke-BashRedirect -Path |", result);
+        // And the force-clobber must produce a real path arg.
+        Assert.Contains("Invoke-BashRedirect -Path", result);
+    }
+
     [Fact]
     public void DevNullWithEnvVar_TransformsBoth()
     {

@@ -106,6 +106,18 @@ public static class BashLexer
                     continue;
                 }
 
+                // `>|` (force-clobber redirect, bash extension) ignores the
+                // `noclobber` shopt. ps-bash doesn't track noclobber, so this
+                // is semantically identical to `>`. Emit as a plain Great token
+                // with op text ">" so downstream emitters match.
+                if (two == ">|")
+                {
+                    TryReclassifyIoNumber(tokens, pos);
+                    tokens.Add(new BashToken(BashTokenKind.Great, ">", pos));
+                    pos += 2;
+                    continue;
+                }
+
                 BashTokenKind? twoKind = two switch
                 {
                     "&&" => BashTokenKind.AndIf,

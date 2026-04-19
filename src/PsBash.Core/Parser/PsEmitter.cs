@@ -1018,12 +1018,18 @@ public static class PsEmitter
         }
 
         // Input redirects (< file) become "Get-Content file | cmd".
+        // Special case: `< /dev/null` means "no input" — `Get-Content $null`
+        // throws in PowerShell, so just drop the redirect (the command runs
+        // with whatever stdin it would otherwise have).
         var inputRedirect = cmd.Redirects.FirstOrDefault(r => r.Op == "<");
         if (inputRedirect is not null)
         {
             var remaining = cmd.Redirects.Remove(inputRedirect);
             var innerCmd = new Command.Simple(cmd.Words, cmd.EnvPairs, remaining);
-            return $"Get-Content {EmitWord(inputRedirect.Target)} | {EmitSimple(innerCmd)}";
+            var target = TransformRedirectTarget(EmitWord(inputRedirect.Target));
+            if (target == "$null")
+                return EmitSimple(innerCmd);
+            return $"Get-Content {target} | {EmitSimple(innerCmd)}";
         }
 
         // declare/typeset -A map -> $map = @{} (associative array / hashtable declaration)
@@ -1073,10 +1079,14 @@ public static class PsEmitter
                 }
             }
             // true -> no-op success; false -> silent failure (sets $? = $false for && / ||)
+            // Wrapped in & { ... } so the multi-statement body parses as a single
+            // expression — required when used as an operand of `||` or `&&`,
+            // e.g. `cmd || true` would otherwise emit `cmd || $g:LASTEXITCODE = 0; ...`
+            // and the `||` would only consume `$g:LASTEXITCODE`.
             else if (cmd0 == "true" && cmd.Words.Length == 1)
-                specialResult = "$global:LASTEXITCODE = 0; [void]$true";
+                specialResult = "& { $global:LASTEXITCODE = 0; [void]$true }";
             else if (cmd0 == "false" && cmd.Words.Length == 1)
-                specialResult = "$global:LASTEXITCODE = 1; Write-Error '' -ErrorAction SilentlyContinue";
+                specialResult = "& { $global:LASTEXITCODE = 1; Write-Error '' -ErrorAction SilentlyContinue }";
 
             // read [-r] [-p "prompt"] VAR -> Invoke-BashRead [-p "prompt"] VAR
             else if (cmd0 == "read")
@@ -1254,6 +1264,17 @@ public static class PsEmitter
             return "$null";
         if (target.StartsWith("/tmp/"))
             return $"$env:TEMP\\{target[5..]}";
+        // MSYS / git-bash drive-letter paths: `/c/Users/...` -> `C:\Users\...`.
+        // Opt-in via PSBASH_UNIX_PATHS=1 (set by Shell layer from --unix-paths
+        // CLI flag). Off by default so direct ps-bash users don't get surprise
+        // path rewrites; on for wrappers (Claude Code, OpenCode) that emit
+        // unix-shaped paths assuming a POSIX filesystem.
+        if (Environment.GetEnvironmentVariable("PSBASH_UNIX_PATHS") == "1"
+            && target.Length >= 3 && target[0] == '/' && target[2] == '/'
+            && ((target[1] >= 'a' && target[1] <= 'z') || (target[1] >= 'A' && target[1] <= 'Z')))
+        {
+            return $"{char.ToUpperInvariant(target[1])}:\\{target[3..].Replace('/', '\\')}";
+        }
         return target;
     }
 
