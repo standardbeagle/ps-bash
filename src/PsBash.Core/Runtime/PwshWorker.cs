@@ -97,6 +97,11 @@ public sealed class PwshWorker : IAsyncDisposable
             RedirectStandardOutput = true,
             RedirectStandardError = false,
             UseShellExecute = false,
+            // When the parent has no console (e.g. ps-bash spawned by a GUI/Node
+            // process like Claude Code), Windows allocates a fresh console for
+            // the child unless we say otherwise. Suppress that — the worker is
+            // a hidden helper and never needs its own window.
+            CreateNoWindow = true,
         };
 
         // Force CI/non-interactive mode so tools like npm disable progress bars
