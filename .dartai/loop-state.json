@@ -1,9 +1,9 @@
 {
   "status": "running",
-  "iterations": 1,
-  "spawns": 1,
+  "iterations": 2,
+  "spawns": 2,
   "started_at": "2026-04-19T05:10:00Z",
-  "last_iteration_at": "2026-04-19T09:45:00Z",
+  "last_iteration_at": "2026-04-19T10:30:00Z",
   "last_subagent": "beagle-ab2-10412",
   "loop_task_id": "LKtSmwQtpZC6",
   "dartboard": "Personal/ps-bash",
@@ -15,18 +15,13 @@
       "task_id": "2IES2I4LPSNc",
       "iteration": 1,
       "status": "completed",
-      "started_at": "2026-04-19T05:35:00Z",
-      "completed_at": "2026-04-19T09:45:00Z",
-      "phase_completed": "phase-testing",
-      "failed_phase": null,
-      "files_changed": 7,
-      "tests_added": 8,
-      "plan_adjustments": 2,
-      "completion_summary": "Implemented JobObjectWatchdog (Windows Job Object with KILL_ON_JOB_CLOSE + parent-PID poller via NtQueryInformationProcess). Wired in Program.cs entry + -c path. Added stdin-EOF fast-path. Bundled fix for dSIX4qP7DtFG (-c --oneline short-option parity) via InteractiveShell.ExpandAliases. Extended scripts/test.sh cleanup to kill dotnet test driver + ps-bash + worker, trap SIGINT. 3 ProcessLifecycleTests + 5 regression tests all pass.",
-      "failure_reason": null,
-      "fix_task_created": false,
-      "fix_task_id": null,
-      "also_closes": ["dSIX4qP7DtFG", "j19Y46rA74c2"]
+      "completion_summary": "JobObjectWatchdog + stdin-EOF + -c ExpandAliases parity. Also closed dSIX4qP7DtFG and j19Y46rA74c2. Commit ab1f75e."
+    },
+    {
+      "task_id": "YqMcVdyfYKzt",
+      "iteration": 2,
+      "status": "completed",
+      "completion_summary": "ProcessRunHelper extracted; all E2E spawns now use 30s timeout + Kill(entireProcessTree:true) in finally. Added HangingCommand tests in both E2E files — verified pass in 12s, no leaked workers."
     }
   ]
 }

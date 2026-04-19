@@ -22,17 +22,15 @@ public class AgentPatternEndToEndTests
         catch (PwshNotFoundException) { return null; }
     }
 
-    private static async Task<(int ExitCode, string Stdout, string Stderr)> RunShellAsync(
+    private static Task<(int ExitCode, string Stdout, string Stderr)> RunShellAsync(
         params string[] arguments)
+        => RunShellAsync(arguments, timeout: null);
+
+    private static Task<(int ExitCode, string Stdout, string Stderr)> RunShellAsync(
+        string[] arguments,
+        TimeSpan? timeout)
     {
-        var psi = new ProcessStartInfo
-        {
-            FileName = "dotnet",
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
-            RedirectStandardInput = true,
-            UseShellExecute = false,
-        };
+        var psi = new ProcessStartInfo { FileName = "dotnet" };
         psi.ArgumentList.Add("run");
         psi.ArgumentList.Add("--no-build");
         psi.ArgumentList.Add("--project");
@@ -43,14 +41,7 @@ public class AgentPatternEndToEndTests
 
         psi.Environment["PSBASH_WORKER"] = WorkerScript;
 
-        var process = Process.Start(psi)
-            ?? throw new InvalidOperationException("Failed to start dotnet run");
-
-        var stdout = await process.StandardOutput.ReadToEndAsync();
-        var stderr = await process.StandardError.ReadToEndAsync();
-        await process.WaitForExitAsync();
-
-        return (process.ExitCode, stdout, stderr);
+        return ProcessRunHelper.RunAsync(psi, stdinContent: null, timeout: timeout);
     }
 
     // ── Heredoc ──────────────────────────────────────────────────────────────
@@ -646,14 +637,7 @@ public class AgentPatternEndToEndTests
         Skip.If(PwshPath is null, "pwsh not available");
 
         // Set a very low cap so the test completes quickly
-        var psi = new ProcessStartInfo
-        {
-            FileName = "dotnet",
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
-            RedirectStandardInput = true,
-            UseShellExecute = false,
-        };
+        var psi = new ProcessStartInfo { FileName = "dotnet" };
         psi.ArgumentList.Add("run");
         psi.ArgumentList.Add("--no-build");
         psi.ArgumentList.Add("--project");
@@ -664,15 +648,44 @@ public class AgentPatternEndToEndTests
         psi.Environment["PSBASH_WORKER"] = WorkerScript;
         psi.Environment["PSBASH_MAX_ITERATIONS"] = "100";
 
-        var process = Process.Start(psi)
-            ?? throw new InvalidOperationException("Failed to start dotnet run");
-
-        var stdout = await process.StandardOutput.ReadToEndAsync();
-        var stderr = await process.StandardError.ReadToEndAsync();
-        await process.WaitForExitAsync();
+        var (_, _, stderr) = await ProcessRunHelper.RunAsync(psi);
 
         // Should have hit the iteration cap and thrown
         Assert.Contains("loop iteration limit exceeded", stderr);
+    }
+
+    // ── Reliability: hung commands time out + kill entire process tree ───────
+
+    [SkippableFact]
+    public async Task HangingCommand_TimesOutWithin35Seconds_AndKillsProcessTree()
+    {
+        Skip.If(PwshPath is null, "pwsh not available");
+
+        // Capture pre-existing worker PIDs so we can prove none leak after timeout.
+        var preWorkerPids = Process.GetProcessesByName("pwsh")
+            .Select(p => p.Id).ToHashSet();
+
+        var sw = Stopwatch.StartNew();
+        var timeout = TimeSpan.FromSeconds(10);
+        var ex = await Assert.ThrowsAsync<TimeoutException>(async () =>
+        {
+            await RunShellAsync(new[] { "-c", "Start-Sleep 60" }, timeout);
+        });
+        sw.Stop();
+
+        Assert.True(sw.Elapsed < TimeSpan.FromSeconds(20),
+            $"Timeout took too long: {sw.Elapsed.TotalSeconds:F1}s (expected <20s)");
+        Assert.Contains("did not exit within", ex.Message);
+
+        // Give the OS a moment to reap killed children.
+        await Task.Delay(TimeSpan.FromSeconds(2));
+
+        // Verify no new pwsh-worker children leaked from OUR spawn.
+        var postWorkerPids = Process.GetProcessesByName("pwsh")
+            .Select(p => p.Id).ToHashSet();
+        var leaked = postWorkerPids.Except(preWorkerPids).ToList();
+        Assert.True(leaked.Count == 0,
+            $"Leaked pwsh worker PIDs after timeout: {string.Join(",", leaked)}");
     }
 
     // ═══════════════════════════════════════════════════════════════════════════

@@ -21,48 +21,28 @@ public class ProgramEndToEndTests
         catch (PwshNotFoundException) { return null; }
     }
 
-    private static async Task<(int ExitCode, string Stdout, string Stderr)> RunShellAsync(
+    private static Task<(int ExitCode, string Stdout, string Stderr)> RunShellAsync(
         params string[] arguments)
+        => RunShellAsync(arguments, timeout: null);
+
+    private static Task<(int ExitCode, string Stdout, string Stderr)> RunShellAsync(
+        string[] arguments,
+        TimeSpan? timeout)
     {
-        var psi = new ProcessStartInfo
-        {
-            FileName = "dotnet",
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
-            RedirectStandardInput = true,
-            UseShellExecute = false,
-        };
-        psi.ArgumentList.Add("run");
-        psi.ArgumentList.Add("--no-build");
-        psi.ArgumentList.Add("--project");
-        psi.ArgumentList.Add(ProjectDir);
-        psi.ArgumentList.Add("--");
-        foreach (var arg in arguments)
-            psi.ArgumentList.Add(arg);
-
-        psi.Environment["PSBASH_WORKER"] = WorkerScript;
-
-        var process = Process.Start(psi)
-            ?? throw new InvalidOperationException("Failed to start dotnet run");
-
-        var stdout = await process.StandardOutput.ReadToEndAsync();
-        var stderr = await process.StandardError.ReadToEndAsync();
-        await process.WaitForExitAsync();
-
-        return (process.ExitCode, stdout, stderr);
+        var psi = BuildPsi(arguments);
+        return ProcessRunHelper.RunAsync(psi, stdinContent: null, timeout: timeout);
     }
 
-    private static async Task<(int ExitCode, string Stdout, string Stderr)> RunShellWithStdinAsync(
+    private static Task<(int ExitCode, string Stdout, string Stderr)> RunShellWithStdinAsync(
         string stdinContent, params string[] arguments)
     {
-        var psi = new ProcessStartInfo
-        {
-            FileName = "dotnet",
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
-            RedirectStandardInput = true,
-            UseShellExecute = false,
-        };
+        var psi = BuildPsi(arguments);
+        return ProcessRunHelper.RunAsync(psi, stdinContent: stdinContent);
+    }
+
+    private static ProcessStartInfo BuildPsi(string[] arguments)
+    {
+        var psi = new ProcessStartInfo { FileName = "dotnet" };
         psi.ArgumentList.Add("run");
         psi.ArgumentList.Add("--no-build");
         psi.ArgumentList.Add("--project");
@@ -72,18 +52,7 @@ public class ProgramEndToEndTests
             psi.ArgumentList.Add(arg);
 
         psi.Environment["PSBASH_WORKER"] = WorkerScript;
-
-        var process = Process.Start(psi)
-            ?? throw new InvalidOperationException("Failed to start dotnet run");
-
-        await process.StandardInput.WriteAsync(stdinContent);
-        process.StandardInput.Close();
-
-        var stdout = await process.StandardOutput.ReadToEndAsync();
-        var stderr = await process.StandardError.ReadToEndAsync();
-        await process.WaitForExitAsync();
-
-        return (process.ExitCode, stdout, stderr);
+        return psi;
     }
 
     [SkippableFact]
@@ -156,36 +125,46 @@ public class ProgramEndToEndTests
     {
         Skip.If(PwshPath is null, "pwsh not available");
 
-        var psi = new ProcessStartInfo
-        {
-            FileName = "dotnet",
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
-            RedirectStandardInput = true,
-            UseShellExecute = false,
-        };
-        psi.ArgumentList.Add("run");
-        psi.ArgumentList.Add("--no-build");
-        psi.ArgumentList.Add("--project");
-        psi.ArgumentList.Add(ProjectDir);
-        psi.ArgumentList.Add("--");
-        psi.ArgumentList.Add("-c");
-        psi.ArgumentList.Add("Write-Host ok");
-
-        psi.Environment["PSBASH_WORKER"] = WorkerScript;
+        var psi = BuildPsi(new[] { "-c", "Write-Host ok" });
         psi.Environment["PSBASH_DEBUG"] = "1";
 
-        var process = Process.Start(psi)
-            ?? throw new InvalidOperationException("Failed to start dotnet run");
+        var (exitCode, _, stderr) = await ProcessRunHelper.RunAsync(psi);
 
-        var stdout = await process.StandardOutput.ReadToEndAsync();
-        var stderr = await process.StandardError.ReadToEndAsync();
-        await process.WaitForExitAsync();
-
-        Assert.Equal(0, process.ExitCode);
+        Assert.Equal(0, exitCode);
         Assert.Contains("[ps-bash] input:", stderr);
         Assert.Contains("[ps-bash] transpiled:", stderr);
         Assert.Contains("[ps-bash] pwsh:", stderr);
         Assert.Contains("[ps-bash] exit:", stderr);
+    }
+
+    // ── Reliability: hung commands time out + kill entire process tree ───────
+
+    [SkippableFact]
+    public async Task HangingCommand_TimesOutWithin35Seconds_AndKillsProcessTree()
+    {
+        Skip.If(PwshPath is null, "pwsh not available");
+
+        var preWorkerPids = Process.GetProcessesByName("pwsh")
+            .Select(p => p.Id).ToHashSet();
+
+        var sw = Stopwatch.StartNew();
+        var timeout = TimeSpan.FromSeconds(10);
+        var ex = await Assert.ThrowsAsync<TimeoutException>(async () =>
+        {
+            await RunShellAsync(new[] { "-c", "Start-Sleep 60" }, timeout);
+        });
+        sw.Stop();
+
+        Assert.True(sw.Elapsed < TimeSpan.FromSeconds(20),
+            $"Timeout took too long: {sw.Elapsed.TotalSeconds:F1}s");
+        Assert.Contains("did not exit within", ex.Message);
+
+        await Task.Delay(TimeSpan.FromSeconds(2));
+
+        var postWorkerPids = Process.GetProcessesByName("pwsh")
+            .Select(p => p.Id).ToHashSet();
+        var leaked = postWorkerPids.Except(preWorkerPids).ToList();
+        Assert.True(leaked.Count == 0,
+            $"Leaked pwsh worker PIDs after timeout: {string.Join(",", leaked)}");
     }
 }
