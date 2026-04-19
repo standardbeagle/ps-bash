@@ -86,9 +86,12 @@ public class ProcessLifecycleTests
         int ourPid = process.Id;
         try
         {
-            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+            // 10s cap: cold-start includes pwsh JIT, module load from disk, and
+            // the runspace parent-watcher setup (~3s warm, up to ~8s cold). The
+            // test's purpose is "no orphan workers leak," not a perf gate.
+            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
             await process.WaitForExitAsync(cts.Token);
-            Assert.True(process.HasExited, "ps-bash -c 'exit 0' did not exit within 5s");
+            Assert.True(process.HasExited, "ps-bash -c 'exit 0' did not exit within 10s");
             Assert.Equal(0, process.ExitCode);
 
             // Give the OS a moment to reap the pwsh worker that was in our job.
@@ -114,6 +117,82 @@ public class ProcessLifecycleTests
             if (!process.HasExited)
             {
                 try { process.Kill(entireProcessTree: true); } catch { }
+            }
+        }
+    }
+
+    [SkippableFact]
+    public async Task WorkerExits_WhenParentDiesDuringBootstrap()
+    {
+        Skip.IfNot(CanRun, "Windows + built ps-bash.exe required");
+
+        // Regression for Reliability B: the worker's parent-death watcher must
+        // be active BEFORE bootstrap completes. We spawn pwsh-worker directly
+        // with a ParentPid pointing at a short-lived "fake parent". The fake
+        // parent dies ~100ms later. The worker must exit within 1s even though
+        // its stdin (owned by this test process, not the fake parent) stays
+        // open and it could otherwise block forever on ReadLine.
+        var pwshPath = "pwsh.exe";
+
+        // Fake parent: a cmd that sleeps ~100ms then exits.
+        var fakeParentPsi = new ProcessStartInfo
+        {
+            FileName = "cmd.exe",
+            Arguments = "/c \"ping -n 1 -w 100 127.0.0.1 >nul\"",
+            UseShellExecute = false,
+            CreateNoWindow = true,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+        };
+        using var fakeParent = Process.Start(fakeParentPsi)!;
+        int fakeParentPid = fakeParent.Id;
+
+        // Worker: spawn with ParentPid=fakeParentPid. Stdin is redirected but
+        // we never write to it — simulating a worker mid-bootstrap waiting.
+        var workerPsi = new ProcessStartInfo
+        {
+            FileName = pwshPath,
+            UseShellExecute = false,
+            CreateNoWindow = true,
+            RedirectStandardInput = true,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+        };
+        workerPsi.ArgumentList.Add("-NoProfile");
+        workerPsi.ArgumentList.Add("-NonInteractive");
+        workerPsi.ArgumentList.Add("-File");
+        workerPsi.ArgumentList.Add(WorkerScript);
+        workerPsi.ArgumentList.Add("-ParentPid");
+        workerPsi.ArgumentList.Add(fakeParentPid.ToString());
+
+        using var worker = Process.Start(workerPsi)!;
+        try
+        {
+            // Wait for fake parent to die naturally.
+            await fakeParent.WaitForExitAsync();
+
+            // Worker's runspace watcher polls every 200ms; allow generous 3s
+            // to account for pwsh startup on slower machines.
+            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(3));
+            try
+            {
+                await worker.WaitForExitAsync(cts.Token);
+            }
+            catch (OperationCanceledException) { /* asserted below */ }
+
+            Assert.True(
+                worker.HasExited,
+                "pwsh worker did not exit within 3s after its parent died during bootstrap");
+        }
+        finally
+        {
+            if (!worker.HasExited)
+            {
+                try { worker.Kill(entireProcessTree: true); } catch { }
+            }
+            if (!fakeParent.HasExited)
+            {
+                try { fakeParent.Kill(entireProcessTree: true); } catch { }
             }
         }
     }

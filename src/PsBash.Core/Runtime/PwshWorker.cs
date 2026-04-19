@@ -191,6 +191,26 @@ public sealed class PwshWorker : IAsyncDisposable
         // Build the init script: decode module, load in-memory, start worker loop
         return $$"""
             $ErrorActionPreference = 'Continue'
+            # Parent-death watcher: start BEFORE module load so a parent dying during
+            # bootstrap (before <<<READY>>>) still causes us to exit. Runspace avoids
+            # Start-Job serialization overhead.
+            $__parentPid = {{parentPid}}
+            if ($__parentPid -gt 0) {
+                $__watchRs = [runspacefactory]::CreateRunspace()
+                $__watchRs.ApartmentState = 'MTA'
+                $__watchRs.Open()
+                $__watchPs = [powershell]::Create()
+                $__watchPs.Runspace = $__watchRs
+                [void]$__watchPs.AddScript({
+                    param($pp)
+                    while ($true) {
+                        try { $null = [System.Diagnostics.Process]::GetProcessById($pp) }
+                        catch { [Environment]::Exit(0) }
+                        Start-Sleep -Milliseconds 200
+                    }
+                }).AddArgument($__parentPid)
+                [void]$__watchPs.BeginInvoke()
+            }
             $moduleBytes = [System.Convert]::FromBase64String('{{moduleBase64}}')
             $moduleScript = [System.Text.Encoding]::UTF8.GetString($moduleBytes)
             New-Module -Name PsBash -ScriptBlock ([scriptblock]::Create($moduleScript)) -Function * -Alias * | Import-Module -Global -DisableNameChecking

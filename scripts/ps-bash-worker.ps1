@@ -1,6 +1,26 @@
 #Requires -Version 7.0
 param([string]$ModulePath = '', [int]$ParentPid = 0)
 
+# Parent-death watcher: start BEFORE module import so a parent dying during
+# bootstrap (before <<<READY>>>) still causes us to exit. Uses a Runspace
+# (not Start-Job) to avoid serialization overhead.
+if ($ParentPid -gt 0) {
+    $__watchRs = [runspacefactory]::CreateRunspace()
+    $__watchRs.ApartmentState = 'MTA'
+    $__watchRs.Open()
+    $__watchPs = [powershell]::Create()
+    $__watchPs.Runspace = $__watchRs
+    [void]$__watchPs.AddScript({
+        param($parentPid)
+        while ($true) {
+            try { $null = [System.Diagnostics.Process]::GetProcessById($parentPid) }
+            catch { [Environment]::Exit(0) }
+            Start-Sleep -Milliseconds 200
+        }
+    }).AddArgument($ParentPid)
+    [void]$__watchPs.BeginInvoke()
+}
+
 # Load ps-bash module: explicit path > PSBASH_MODULE env > system ps-bash
 $resolvedModule = if ($ModulePath) { $ModulePath }
                   elseif ($env:PSBASH_MODULE) { $env:PSBASH_MODULE }
