@@ -73,6 +73,49 @@ public sealed class BashParser
         return parser.ParseCommand();
     }
 
+    /// <summary>
+    /// Parse the given bash input into a sequence of top-level statements,
+    /// each annotated with the character offset of its first token. Top-level
+    /// statements are the elements of a <see cref="Command.CommandList"/>;
+    /// for a single-command input the result has one entry. Returns an empty
+    /// list for empty/whitespace/comment-only input.
+    /// </summary>
+    /// <remarks>
+    /// Used by <c>BashTranspiler.TranspileWithMap</c> to build the bash↔pwsh
+    /// line map without requiring source-position fields on every AST node.
+    /// </remarks>
+    public static IReadOnlyList<(Command Command, int Position)> ParseTopLevelWithPositions(string input)
+    {
+        var tokens = BashLexer.Tokenize(input);
+        var parser = new BashParser(tokens, input);
+        return parser.ParseTopLevelWithPositionsCore();
+    }
+
+    private List<(Command, int)> ParseTopLevelWithPositionsCore()
+    {
+        var result = new List<(Command, int)>();
+        SkipNewlines();
+        while (Peek().Kind != BashTokenKind.Eof)
+        {
+            int startPos = Peek().Position;
+            var cmd = ParseAndOr();
+
+            bool bg = false;
+            if (Peek().Kind == BashTokenKind.Amp)
+            {
+                Advance();
+                bg = true;
+            }
+
+            result.Add((bg ? new Command.Background(cmd) : cmd, startPos));
+
+            // Skip statement terminators (; and newlines).
+            while (Peek().Kind is BashTokenKind.Semi or BashTokenKind.Newline)
+                Advance();
+        }
+        return result;
+    }
+
     private ParseException MakeError(string message, int position, string rule)
     {
         var (line, col) = ParseException.ComputeLineCol(_input, position);

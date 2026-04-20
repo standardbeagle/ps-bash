@@ -3,6 +3,20 @@ using PsBash.Core.Parser;
 namespace PsBash.Core.Transpiler;
 
 /// <summary>
+/// A single mapping entry from a 1-based PowerShell output line back to the
+/// 1-based bash source line and column where the corresponding statement
+/// begins. Produced by <see cref="BashTranspiler.TranspileWithMap(string)"/>.
+/// </summary>
+public readonly record struct LineMapping(int PwshLine, int BashLine, int BashCol);
+
+/// <summary>
+/// The result of transpiling bash to PowerShell with a line map. The line
+/// map allows runtime errors reported against <see cref="PowerShell"/> line
+/// numbers to be rewritten back to the original bash source location.
+/// </summary>
+public readonly record struct TranspileResult(string PowerShell, IReadOnlyList<LineMapping> LineMap);
+
+/// <summary>
 /// Selects emitter behaviors that depend on the host that will execute the
 /// generated PowerShell.
 /// </summary>
@@ -57,6 +71,64 @@ public static class BashTranspiler
         try
         {
             return PsEmitter.Transpile(bashCommand, context) ?? bashCommand;
+        }
+        catch (ParseException ex)
+        {
+            if (debug) LogParseFailure(bashCommand, ex);
+            throw;
+        }
+    }
+
+    /// <summary>
+    /// Transpile a bash command string to PowerShell, also producing a line
+    /// map from each emitted PowerShell line back to its originating bash
+    /// source location. Uses the <see cref="TranspileContext.Default"/> context.
+    /// </summary>
+    public static TranspileResult TranspileWithMap(string bashCommand)
+        => TranspileWithMap(bashCommand, TranspileContext.Default);
+
+    /// <summary>
+    /// Transpile a bash command string to PowerShell with a line map under
+    /// the given <see cref="TranspileContext"/>.
+    /// </summary>
+    /// <remarks>
+    /// Emits one PowerShell line per top-level bash statement, joined by
+    /// newlines. Each map entry records the 1-based pwsh line number paired
+    /// with the 1-based bash line and column of the statement's first token.
+    /// Comments and blank lines do not produce mappings; they are implicitly
+    /// covered by the next statement's mapping.
+    /// </remarks>
+    public static TranspileResult TranspileWithMap(string bashCommand, TranspileContext context)
+    {
+        bool debug = IsDebug;
+        try
+        {
+            var statements = BashParser.ParseTopLevelWithPositions(bashCommand);
+            if (statements.Count == 0)
+                return new TranspileResult(string.Empty, Array.Empty<LineMapping>());
+
+            var sb = new System.Text.StringBuilder();
+            var map = new List<LineMapping>(statements.Count);
+            int pwshLine = 1;
+
+            for (int i = 0; i < statements.Count; i++)
+            {
+                var (cmd, position) = statements[i];
+                var (bashLine, bashCol) = ParseException.ComputeLineCol(bashCommand, position);
+
+                string emitted = PsEmitter.EmitWithContext(cmd, context);
+
+                if (i > 0)
+                {
+                    sb.Append('\n');
+                    pwshLine++;
+                }
+                sb.Append(emitted);
+
+                map.Add(new LineMapping(pwshLine, bashLine, bashCol));
+            }
+
+            return new TranspileResult(sb.ToString(), map);
         }
         catch (ParseException ex)
         {

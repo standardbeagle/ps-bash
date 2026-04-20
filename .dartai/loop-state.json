@@ -1,9 +1,9 @@
 {
   "status": "running",
-  "iterations": 2,
+  "iterations": 3,
   "spawns": 1,
   "started_at": "2026-04-20T19:23:00Z",
-  "last_iteration_at": "2026-04-20T20:10:00Z",
+  "last_iteration_at": "2026-04-20T20:45:00Z",
   "loop_task_id": "c9lQoRps9tLS",
   "dartboard": "Personal/ps-bash",
   "runner_instance_id": "beagle-ab2-295",
@@ -62,6 +62,22 @@
       "failure_reason": null,
       "fix_task_created": true,
       "fix_task_id": "xsIPF5TNb9jy"
+    },
+    {
+      "task_id": "UtiNyvrXRDr1",
+      "iteration": 3,
+      "status": "completed",
+      "started_at": "2026-04-20T20:10:00Z",
+      "completed_at": "2026-04-20T20:45:00Z",
+      "phase_completed": "phase-9",
+      "failed_phase": null,
+      "files_changed": 4,
+      "tests_added": 9,
+      "plan_adjustments": 1,
+      "completion_summary": "Added public TranspileResult and LineMapping record structs in PsBash.Core.Transpiler, plus BashTranspiler.TranspileWithMap(source[, context]) overloads. Added BashParser.ParseTopLevelWithPositions returning each top-level statement paired with its first-token char offset, and PsEmitter.EmitWithContext for per-statement emission under a shared TranspileContext. TranspileWithMap joins statements with \\n (one pwsh line per top-level bash statement) and emits one LineMapping per statement using ParseException.ComputeLineCol for 1-based bash line/col. Comments and blank lines implicitly covered by the next statement's mapping, per spec. 9 new tests cover single command, multi-line source with comment+blank (acceptance example), semicolon statements sharing a bash line with distinct cols, empty/whitespace-only input, and wrapper equivalence modulo separator. All 602 Core tests pass.",
+      "failure_reason": null,
+      "fix_task_created": false,
+      "fix_task_id": null
     }
   ]
 }

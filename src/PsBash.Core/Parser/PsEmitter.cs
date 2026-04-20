@@ -119,6 +119,25 @@ public static class PsEmitter
         }
     }
 
+    /// <summary>
+    /// Emit PowerShell for a pre-parsed AST under the given
+    /// <see cref="TranspileContext"/>. Used by transpilers that need to
+    /// emit per-statement while sharing a single context.
+    /// </summary>
+    public static string EmitWithContext(Command cmd, TranspileContext context)
+    {
+        var prior = _context;
+        _context = context;
+        try
+        {
+            return Emit(cmd);
+        }
+        finally
+        {
+            _context = prior;
+        }
+    }
+
     private static string? TryGetLastArgWord(Command cmd)
     {
         Command target = cmd;
