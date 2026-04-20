@@ -1,0 +1,9 @@
+{
+  "permissions": {
+    "allow": [
+      "PowerShell(git *)",
+      "Bash(git commit *)",
+      "Bash(rm .git/COMMIT_MSG.txt)"
+    ]
+  }
+}

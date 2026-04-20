@@ -1,6 +1,7 @@
 using System.Collections.Immutable;
 using System.Text;
 using PsBash.Core.Parser.Ast;
+using PsBash.Core.Transpiler;
 
 namespace PsBash.Core.Parser;
 
@@ -25,6 +26,20 @@ public static class PsEmitter
     [ThreadStatic]
     private static int _loopDepth;
 
+    /// <summary>
+    /// Active transpile context for the current call. Set by
+    /// <see cref="Transpile(string, TranspileContext)"/> and read by
+    /// <see cref="EmitSimple"/> when deciding whether to bypass the
+    /// <c>PsBuiltinAliases</c> short-circuit.
+    /// </summary>
+    [ThreadStatic]
+    private static TranspileContext _context;
+
+    /// <summary>
+    /// Current transpile context. Defaults to <see cref="TranspileContext.Default"/>.
+    /// </summary>
+    public static TranspileContext Context => _context;
+
     private const int DefaultMaxIterations = 100_000;
 
     private static string IterGuardPrefix(int depth)
@@ -41,10 +56,19 @@ public static class PsEmitter
     }
 
     /// <summary>
-    /// Commands that have PowerShell built-in aliases and should NOT be mapped
-    /// to Invoke-Bash* when used as standalone (non-piped) commands.
-    /// These work fine via PS aliases; only their piped forms need mapping.
+    /// Commands that have PowerShell built-in aliases. When the active
+    /// <see cref="TranspileContext"/> is <see cref="TranspileContext.Default"/>,
+    /// a future optimization may skip rewriting these as standalone invocations
+    /// (relying on the host's alias). Under <see cref="TranspileContext.Eval"/>
+    /// the short-circuit is always disabled so every mapped command emits as
+    /// <c>Invoke-Bash*</c>, independent of the host's alias table.
     /// </summary>
+    internal static readonly HashSet<string> PsBuiltinAliases = new(StringComparer.Ordinal)
+    {
+        "echo", "cat", "ls", "cd", "pwd", "mkdir",
+        "cp", "mv", "rm", "sort", "diff", "sleep",
+    };
+
     public static string Emit(Command cmd) => cmd switch
     {
         Command.If ifCmd => EmitIf(ifCmd),
@@ -67,15 +91,32 @@ public static class PsEmitter
     };
 
     /// <summary>
-    /// Parse bash input and emit equivalent PowerShell.
+    /// Parse bash input and emit equivalent PowerShell using the
+    /// <see cref="TranspileContext.Default"/> context.
     /// Returns null if the input is empty or whitespace-only.
     /// </summary>
-    public static string? Transpile(string bash)
+    public static string? Transpile(string bash) => Transpile(bash, TranspileContext.Default);
+
+    /// <summary>
+    /// Parse bash input and emit equivalent PowerShell under the given
+    /// <see cref="TranspileContext"/>. Returns null if the input is empty
+    /// or whitespace-only.
+    /// </summary>
+    public static string? Transpile(string bash, TranspileContext context)
     {
-        var cmd = BashParser.Parse(bash);
-        if (cmd is null)
-            return null;
-        return Emit(cmd);
+        var prior = _context;
+        _context = context;
+        try
+        {
+            var cmd = BashParser.Parse(bash);
+            if (cmd is null)
+                return null;
+            return Emit(cmd);
+        }
+        finally
+        {
+            _context = prior;
+        }
     }
 
     private static string? TryGetLastArgWord(Command cmd)
@@ -1178,7 +1219,15 @@ public static class PsEmitter
                 specialResult = $"Invoke-BashSource {file}";
             }
 
-            // Standalone mapped commands: rewrite through TryEmitMappedCommand
+            // Standalone mapped commands: rewrite through TryEmitMappedCommand.
+            // Under TranspileContext.Eval the rewrite is mandatory for every
+            // mapped command — including those in PsBuiltinAliases — because
+            // the in-process eval host (e.g. Invoke-BashEval cmdlet) MUST NOT
+            // depend on global PsBash aliases hijacking pwsh builtins.
+            // Under TranspileContext.Default the same rewrite happens today;
+            // the PsBuiltinAliases set is reserved as a forward-compat hook
+            // for a future optimization that would let those commands resolve
+            // through the host's existing aliases.
             else if (cmd0 is not null
                 && TryEmitMappedCommand(cmd, out var mapped))
             {

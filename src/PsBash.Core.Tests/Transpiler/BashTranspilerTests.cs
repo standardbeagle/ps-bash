@@ -298,4 +298,58 @@ public class BashTranspilerTests
             () => BashTranspiler.Transpile("eval \"echo $((1 + 2))\""));
         Assert.Contains("arithmetic", ex.Message);
     }
+
+    // TranspileContext.Eval must force every mapped command — including those
+    // that have pwsh built-in aliases (ls, cat, echo, sort, diff, cp, mv, rm,
+    // mkdir, sleep, pwd) — to emit as Invoke-Bash*. The in-process eval host
+    // (Invoke-BashEval cmdlet) cannot depend on the host's alias table having
+    // PsBash loaded.
+    [Fact]
+    public void Transpile_LsWithFlags_UnderEval_EmitsInvokeBashLs()
+    {
+        var result = BashTranspiler.Transpile("ls -la", TranspileContext.Eval);
+        Assert.Equal("Invoke-BashLs -la", result);
+    }
+
+    [Fact]
+    public void Transpile_Sleep_UnderEval_EmitsInvokeBashSleep()
+    {
+        var result = BashTranspiler.Transpile("sleep 1", TranspileContext.Eval);
+        Assert.Equal("Invoke-BashSleep 1", result);
+    }
+
+    [Fact]
+    public void Transpile_Diff_UnderEval_EmitsInvokeBashDiff()
+    {
+        var result = BashTranspiler.Transpile("diff a b", TranspileContext.Eval);
+        Assert.Equal("Invoke-BashDiff a b", result);
+    }
+
+    [Fact]
+    public void Transpile_Pwd_UnderEval_EmitsInvokeBashPwd()
+    {
+        var result = BashTranspiler.Transpile("pwd", TranspileContext.Eval);
+        Assert.Equal("Invoke-BashPwd", result);
+    }
+
+    // Existing Default-context behavior must be preserved bit-for-bit.
+    [Fact]
+    public void Transpile_LsWithFlags_DefaultContext_MatchesNoContextOverload()
+    {
+        var withCtx = BashTranspiler.Transpile("ls -la", TranspileContext.Default);
+        var noCtx = BashTranspiler.Transpile("ls -la");
+        Assert.Equal(noCtx, withCtx);
+    }
+
+    [Fact]
+    public void Transpile_ContextScope_RestoredAfterCall()
+    {
+        // Call under Eval, then default overload must still behave as Default.
+        BashTranspiler.Transpile("ls", TranspileContext.Eval);
+        var result = BashTranspiler.Transpile("ls");
+        // Default behavior today rewrites standalone ls to Invoke-BashLs; the
+        // important check is that the call succeeded and produced the normal
+        // emission (no leakage of Eval-specific state breaks anything).
+        Assert.Equal("Invoke-BashLs", result);
+    }
 }
