@@ -11991,18 +11991,6 @@ function Invoke-BashTrap {
     }
 }
 
-# `eval` is resolved at transpile time in PsEmitter.EmitEval — there is no
-# runtime cmdlet. If someone imports this module from a plain pwsh shell and
-# calls `Invoke-BashEval`, they hit this stub instead of a confusing "command
-# not found" error.
-function Invoke-BashEval {
-    [Console]::Error.WriteLine(
-        "ps-bash: Invoke-BashEval is not a runtime cmdlet — ``eval`` is inlined at transpile time. " +
-        "Dynamic ``eval `"`$(cmd)`"`` / ``eval `$var`` is rejected at parse time; " +
-        "inline the command's output statically into your script instead.")
-    $global:LASTEXITCODE = 1
-}
-
 # --- read ---
 
 function Invoke-BashRead {

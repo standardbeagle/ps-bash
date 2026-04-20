@@ -1,7 +1,5 @@
-// Placeholder stub. Real implementation lives in a sibling task.
-// This file exists only so the binary module loads and Get-Command lists the cmdlet.
-using System;
 using System.Management.Automation;
+using PsBash.Core.Transpiler;
 
 namespace PsBash.Cmdlets;
 
@@ -14,9 +12,29 @@ public sealed class InvokeBashEvalCommand : PSCmdlet
     [Parameter(Position = 0, Mandatory = true, ValueFromPipeline = true)]
     public string? Source { get; set; }
 
+    [Parameter]
+    public SwitchParameter PassThru { get; set; }
+
+    [Parameter]
+    public SwitchParameter NoLocalScope { get; set; }
+
     protected override void ProcessRecord()
     {
-        throw new NotImplementedException(
-            "Invoke-BashEval is a scaffold stub. Implementation pending in a sibling task.");
+        if (string.IsNullOrEmpty(Source))
+            return;
+
+        var result = BashTranspiler.TranspileWithMap(Source, TranspileContext.Eval);
+        var sb = ScriptBlock.Create(result.PowerShell);
+        var output = InvokeCommand.InvokeScript(
+            useLocalScope: NoLocalScope.IsPresent,
+            sb,
+            input: null,
+            args: null);
+
+        if (PassThru.IsPresent)
+        {
+            foreach (var o in output)
+                WriteObject(o, enumerateCollection: false);
+        }
     }
 }
