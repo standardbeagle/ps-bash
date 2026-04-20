@@ -6,6 +6,8 @@
 
 RootModule = 'PsBash.Cmdlets.dll'
 
+NestedModules = @('PsBash.psd1')
+
 ModuleVersion = '0.1.0'
 
 GUID = 'b2c3d4e5-f6a7-8901-bcde-f23456789012'
@@ -22,8 +24,12 @@ CompatiblePSEditions = 'Core'
 
 PowerShellVersion = '7.4'
 
-# No script functions exported from this binary module.
-FunctionsToExport = @()
+# Re-export all nested script-module functions so Invoke-BashEval transpiled
+# scriptblocks can resolve commands like Invoke-BashLs in the caller's scope.
+# Aliases remain blocked (AliasesToExport = @()) so host aliases like ls are
+# not hijacked. This is the fallback after proving private nested-module scope
+# binding does not work for ScriptBlock.Create from a binary cmdlet.
+FunctionsToExport = @('*')
 
 # Cmdlets exported. Listed explicitly (no wildcards) for performance.
 CmdletsToExport = @('Invoke-BashEval', 'Invoke-BashSource', 'ConvertTo-PowerShell', 'Test-BashSyntax')

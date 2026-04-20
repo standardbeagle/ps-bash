@@ -27,6 +27,9 @@
 
   <ItemGroup>
     <None Include="PsBash.Cmdlets.psd1" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="..\PsBash.Module\PsBash.psd1" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="..\PsBash.Module\PsBash.psm1" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="..\PsBash.Module\PsBash.Format.ps1xml" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 
 </Project>

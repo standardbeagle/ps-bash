@@ -15,19 +15,11 @@ public class InvokeBashEvalCommandTests
         var pwsh = PowerShell.Create();
         pwsh.Runspace = runspace;
 
-        // Import PsBash script module from source directory.
-        var psbashPsd1 = Path.GetFullPath(Path.Combine(
-            AppContext.BaseDirectory, "..", "..", "..", "..", "..",
-            "src", "PsBash.Module", "PsBash.psd1"));
-        if (File.Exists(psbashPsd1))
-        {
-            pwsh.AddCommand("Import-Module").AddParameter("Name", psbashPsd1).Invoke();
-            pwsh.Commands.Clear();
-        }
-
-        // Import PsBash.Cmdlets binary module from test output directory.
-        var cmdletDll = Path.Combine(AppContext.BaseDirectory, "PsBash.Cmdlets.dll");
-        pwsh.AddCommand("Import-Module").AddParameter("Name", cmdletDll).Invoke();
+        // Import the binary module manifest from the test output directory.
+        // The manifest nests PsBash.psd1 and re-exports its functions globally
+        // (fallback for ScriptBlock.Create not binding to private nested scope).
+        var cmdletPsd1 = Path.Combine(AppContext.BaseDirectory, "PsBash.Cmdlets.psd1");
+        pwsh.AddCommand("Import-Module").AddParameter("Name", cmdletPsd1).Invoke();
         pwsh.Commands.Clear();
 
         return pwsh;
