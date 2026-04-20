@@ -1231,11 +1231,10 @@ public static class PsEmitter
                 }
             }
 
-            // source FILE / . FILE -> Invoke-BashSource FILE
+            // source FILE / . FILE -> Invoke-BashSource FILE @args
             else if ((cmd0 == "source" || cmd0 == ".") && cmd.Words.Length >= 2)
             {
-                string file = EmitWord(cmd.Words[1]);
-                specialResult = $"Invoke-BashSource {file}";
+                specialResult = EmitPassthrough("Invoke-BashSource", cmd.Words.RemoveAt(0));
             }
 
             // Standalone mapped commands: rewrite through TryEmitMappedCommand.

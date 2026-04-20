@@ -1959,6 +1959,13 @@ public class PsEmitterTests
         Assert.Equal("Invoke-BashSource ./lib.sh", result);
     }
 
+    [Fact]
+    public void Transpile_SourceShFileWithArgs_EmitsInvokeBashSourceWithArgs()
+    {
+        var result = PsEmitter.Transpile("source ./setup.sh arg1 arg2");
+        Assert.Equal("Invoke-BashSource ./setup.sh arg1 arg2", result);
+    }
+
     // -e file exists test
     [Fact]
     public void Transpile_FileExistsTest_EmitsTestPath()

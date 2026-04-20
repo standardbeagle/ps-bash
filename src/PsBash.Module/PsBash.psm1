@@ -12675,29 +12675,6 @@ function Invoke-BashRealpath {
     }
 }
 
-# --- source ---
-
-function Invoke-BashSource {
-    param([Parameter(Mandatory)][string]$Path)
-    $resolved = Resolve-Path -LiteralPath $Path -ErrorAction SilentlyContinue
-    if (-not $resolved) {
-        $resolved = Resolve-Path -LiteralPath "$Path.ps1" -ErrorAction SilentlyContinue
-    }
-    if ($resolved -and ($resolved.Path -match '\.ps1$')) {
-        . $resolved.Path
-    } elseif ($resolved) {
-        $bash = Get-Command bash -ErrorAction SilentlyContinue
-        if ($bash) {
-            & $bash.Source $resolved.Path
-            $global:LASTEXITCODE = $LASTEXITCODE
-        } else {
-            Write-BashError -Message "source: ${Path} is a shell script and bash is not available"
-        }
-    } else {
-        Write-BashError -Message "source: ${Path}: No such file or directory"
-    }
-}
-
 # --- command ---
 
 function Invoke-BashCommand {
