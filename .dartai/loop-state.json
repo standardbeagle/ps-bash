@@ -1,5 +1,5 @@
 {
-  "status": "running",
+  "status": "active",
   "iterations": 3,
   "spawns": 1,
   "started_at": "2026-04-20T19:23:00Z",
@@ -9,6 +9,8 @@
   "runner_instance_id": "beagle-ab2-295",
   "runner_email": "andybrummer@standardbeagle.com",
   "runner_dart_id": "andybrummer@standardbeagle.com",
+  "current_task_id": "VGPu1NP5U5kM",
+  "current_iteration": 4,
   "task_queue": [
     "4hOI06bzJNr8",
     "cSmNvuKmBLwo",
@@ -79,5 +81,6 @@
       "fix_task_created": false,
       "fix_task_id": null
     }
-  ]
+  ],
+  "resumed_at": "2026-04-20T15:28:22.736635-05:00"
 }

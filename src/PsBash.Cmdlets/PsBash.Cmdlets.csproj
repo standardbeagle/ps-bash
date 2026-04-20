@@ -1,0 +1,32 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    Binary pwsh module. Targets net8.0 for compatibility with PowerShell 7.4+ JIT host.
+    AOT publishing is intentionally disabled because the cmdlets in this assembly use
+    ScriptBlock.Create + InvokeScript, which are reflection-heavy and not AOT-safe.
+  -->
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <PublishAot>false</PublishAot>
+    <IsPackable>false</IsPackable>
+    <CopyLocalLockFileAssemblies>true</CopyLocalLockFileAssemblies>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\PsBash.Core\PsBash.Core.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="System.Management.Automation" Version="7.4.*">
+      <PrivateAssets>all</PrivateAssets>
+      <ExcludeAssets>runtime</ExcludeAssets>
+    </PackageReference>
+  </ItemGroup>
+
+  <ItemGroup>
+    <None Include="PsBash.Cmdlets.psd1" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
+</Project>
