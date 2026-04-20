@@ -1,9 +1,9 @@
 {
   "status": "running",
-  "iterations": 1,
+  "iterations": 2,
   "spawns": 1,
   "started_at": "2026-04-20T19:23:00Z",
-  "last_iteration_at": "2026-04-20T19:45:00Z",
+  "last_iteration_at": "2026-04-20T20:10:00Z",
   "loop_task_id": "c9lQoRps9tLS",
   "dartboard": "Personal/ps-bash",
   "runner_instance_id": "beagle-ab2-295",
@@ -46,6 +46,22 @@
       "failure_reason": null,
       "fix_task_created": false,
       "fix_task_id": null
+    },
+    {
+      "task_id": "cSmNvuKmBLwo",
+      "iteration": 2,
+      "status": "completed",
+      "started_at": "2026-04-20T19:46:00Z",
+      "completed_at": "2026-04-20T20:10:00Z",
+      "phase_completed": "phase-9",
+      "failed_phase": null,
+      "files_changed": 2,
+      "tests_added": 9,
+      "plan_adjustments": 1,
+      "completion_summary": "Replaced parse-time eval inlining with runtime Invoke-BashEval dispatch in PsEmitter.EmitEval. Each eval arg is emitted via the normal EmitWord path (so $(...)/backquote/$((...))/$VAR become pwsh subexpressions the host expands at runtime), and Invoke-BashEval receives the joined string to re-transpile under TranspileContext.Eval + Invoke-Expression in caller scope. Removed ~70-line ReconstructBashSource helper that previously rejected dynamic forms with ParseException. 17 eval-related BashTranspilerTests pass; fnm fixture test re-transpiles real `fnm env --shell bash` output under TranspileContext.Eval. All 593 Core + 235 Shell tests pass. Commit 6c369d1. Runtime cmdlet body (depth cap + caller-scope Invoke-Expression + fnm E2E) filed as follow-up xsIPF5TNb9jy since it touches psm1/module-packaging/shell files outside this task's listed scope.",
+      "failure_reason": null,
+      "fix_task_created": true,
+      "fix_task_id": "xsIPF5TNb9jy"
     }
   ]
 }
