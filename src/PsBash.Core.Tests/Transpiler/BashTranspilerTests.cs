@@ -1,4 +1,5 @@
 using Xunit;
+using PsBash.Core.Parser;
 using PsBash.Core.Transpiler;
 
 namespace PsBash.Core.Tests.Transpiler;
@@ -204,5 +205,97 @@ public class BashTranspilerTests
     {
         var result = BashTranspiler.Transpile("echo /tmp/test");
         Assert.Contains("$env:TEMP", result);
+    }
+
+    // `eval` is resolved at transpile time — the body is reconstructed from
+    // the arg word parts, re-parsed as bash, and emitted inline. For a simple
+    // single-quoted literal this collapses to exactly what the user would have
+    // written without eval.
+    [Fact]
+    public void Transpile_EvalWithSingleQuotedLiteral_InlinesTranspiledBody()
+    {
+        var result = BashTranspiler.Transpile("eval 'echo hello'");
+        Assert.Equal("Invoke-BashEcho hello", result);
+    }
+
+    [Fact]
+    public void Transpile_EvalWithDoubleQuotedStaticString_InlinesTranspiledBody()
+    {
+        var result = BashTranspiler.Transpile("eval \"echo hello\"");
+        Assert.Equal("Invoke-BashEcho hello", result);
+    }
+
+    // Variable references survive intact: reconstruction keeps `$HOME` as
+    // bash `$HOME`, the re-parse produces SimpleVarSub(HOME), and the normal
+    // emit path turns that into pwsh `$HOME` (bash $HOME is on the
+    // kept-as-is list; $MYVAR → $env:MYVAR). Either way the variable is
+    // referenced by name — not inlined at transpile time.
+    [Fact]
+    public void Transpile_EvalWithVariableReference_PreservesVarThroughReTranspile()
+    {
+        var result = BashTranspiler.Transpile("eval \"export X=$HOME\"");
+        Assert.Contains("$env:X", result);
+        Assert.Contains("$HOME", result);
+    }
+
+    [Fact]
+    public void Transpile_EvalWithUserVariable_MapsToEnvPrefix()
+    {
+        var result = BashTranspiler.Transpile("eval \"export X=$MYVAR\"");
+        Assert.Contains("$env:X", result);
+        Assert.Contains("$env:MYVAR", result);
+    }
+
+    [Fact]
+    public void Transpile_EvalWithBracedVarSub_PreservesVarThroughReTranspile()
+    {
+        var result = BashTranspiler.Transpile("eval 'echo ${USER}'");
+        Assert.Contains("$env:USER", result);
+    }
+
+    // Multiple args: bash's `eval` joins with a single space before evaluating.
+    // Reconstruction mirrors that.
+    [Fact]
+    public void Transpile_EvalWithMultipleArgs_ConcatenatesWithSpaces()
+    {
+        var result = BashTranspiler.Transpile("eval echo hi");
+        Assert.Equal("Invoke-BashEcho hi", result);
+    }
+
+    // A statically-reconstructable eval body can itself contain `eval` — the
+    // recursion bottoms out at the innermost literal and inlines all the way up.
+    [Fact]
+    public void Transpile_NestedEval_FullyInlines()
+    {
+        var result = BashTranspiler.Transpile("eval 'eval \"echo hi\"'");
+        Assert.Equal("Invoke-BashEcho hi", result);
+    }
+
+    // `eval "$(cmd)"` is the hot case that used to hang the rc. The body
+    // isn't known at transpile time, so we reject it with a clear message
+    // telling the user to inline the command's output statically. This is the
+    // regression guard for the .psbashrc hang.
+    [Fact]
+    public void Transpile_EvalWithCommandSubstitution_ThrowsParseException()
+    {
+        var ex = Assert.Throws<ParseException>(
+            () => BashTranspiler.Transpile("eval \"$(fnm env --shell bash)\""));
+        Assert.Contains("command substitution", ex.Message);
+        Assert.Contains("inline", ex.Message);
+    }
+
+    [Fact]
+    public void Transpile_EvalWithBackquoteCommandSub_ThrowsParseException()
+    {
+        Assert.Throws<ParseException>(
+            () => BashTranspiler.Transpile("eval `fnm env --shell bash`"));
+    }
+
+    [Fact]
+    public void Transpile_EvalWithArithmeticExpansion_ThrowsParseException()
+    {
+        var ex = Assert.Throws<ParseException>(
+            () => BashTranspiler.Transpile("eval \"echo $((1 + 2))\""));
+        Assert.Contains("arithmetic", ex.Message);
     }
 }

@@ -39,6 +39,10 @@ public static class InteractiveShell
 
         loading.Update("Starting PowerShell worker");
         var cts = new CancellationTokenSource();
+        // Expose the startup cts so Ctrl+C during the loading phase (worker
+        // start, rc sourcing) cancels the in-flight operation instead of being
+        // silently dropped.
+        _currentCts = cts;
         var worker = await StartWorkerAsync(pwshPath);
 
         // Initialize history store
@@ -918,11 +922,42 @@ EnsureConsoleInputRestored();
             return;
         }
 
-        try
+        var rcTimeoutSecs = 10;
+        var envTimeout = Environment.GetEnvironmentVariable("PSBASH_RC_TIMEOUT");
+        if (int.TryParse(envTimeout, out var parsed) && parsed > 0) rcTimeoutSecs = parsed;
+        else if (envTimeout == "0") rcTimeoutSecs = 0; // 0 = disable timeout
+        var debug = Environment.GetEnvironmentVariable("PSBASH_DEBUG") == "1";
+
+        if (debug)
         {
-            await worker.ExecuteAsync(pwshCommand, cts.Token);
+            Console.Error.WriteLine("[ps-bash] rc bash ----");
+            Console.Error.WriteLine(filtered.ToString());
+            Console.Error.WriteLine("[ps-bash] rc pwsh ----");
+            Console.Error.WriteLine(pwshCommand);
+            Console.Error.WriteLine("[ps-bash] rc end ----");
         }
-        catch (OperationCanceledException) { }
+
+        using var rcCts = CancellationTokenSource.CreateLinkedTokenSource(cts.Token);
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        var execTask = worker.ExecuteAsync(pwshCommand, rcCts.Token);
+        var timeoutTask = Task.Delay(TimeSpan.FromSeconds(rcTimeoutSecs), rcCts.Token);
+        var winner = await Task.WhenAny(execTask, timeoutTask);
+        if (winner == execTask)
+        {
+            try { await execTask; } catch (OperationCanceledException) { }
+            if (debug) Console.Error.WriteLine($"[ps-bash] rc sourced in {sw.ElapsedMilliseconds}ms");
+        }
+        else
+        {
+            rcCts.Cancel();
+            try { execTask.Wait(TimeSpan.FromSeconds(2)); } catch { }
+            Console.Error.WriteLine(
+                $"[ps-bash] warning: ~/.psbashrc exceeded {rcTimeoutSecs}s and was abandoned. " +
+                $"Shell will continue; some rc settings may not have applied. " +
+                $"Set PSBASH_RC_TIMEOUT=<seconds> to extend, or PSBASH_DEBUG=1 to see what was sent.");
+            // Intentionally do not await execTask — if ExecuteAsync ignores
+            // cancellation, we must still return so the prompt can appear.
+        }
     }
 
     public static string ProcessAliasCommand(string input)

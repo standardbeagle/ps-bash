@@ -11991,62 +11991,16 @@ function Invoke-BashTrap {
     }
 }
 
-# --- eval ---
-
+# `eval` is resolved at transpile time in PsEmitter.EmitEval — there is no
+# runtime cmdlet. If someone imports this module from a plain pwsh shell and
+# calls `Invoke-BashEval`, they hit this stub instead of a confusing "command
+# not found" error.
 function Invoke-BashEval {
-    param()
-    $Arguments = [string[]]$args
-    $pipelineInput = @($input)
-
-    # Join all arguments into a single command string (bash eval behavior)
-    $cmdStr = $Arguments -join ' '
-    if ([string]::IsNullOrWhiteSpace($cmdStr)) {
-        if ($pipelineInput.Count -gt 0) {
-            $cmdStr = ($pipelineInput | ForEach-Object { Get-BashText -InputObject $_ }) -join ' '
-        }
-        if ([string]::IsNullOrWhiteSpace($cmdStr)) { return }
-    }
-
-    # Re-invoke ps-bash to transpile and execute the eval'd string
-    $psBashExe = $null
-    $__pid = Get-Variable -Name __parentPid -Scope Global -ValueOnly -ErrorAction SilentlyContinue
-    if ($__pid -and $__pid -gt 0) {
-        try {
-            $parent = [System.Diagnostics.Process]::GetProcessById($__pid)
-            $psBashExe = $parent.MainModule.FileName
-        } catch {}
-    }
-    if (-not $psBashExe) {
-        $found = Get-Command ps-bash -ErrorAction SilentlyContinue
-        if ($found) { $psBashExe = $found.Source }
-    }
-    if (-not $psBashExe) {
-        $psBashExe = [System.IO.Path]::Combine(
-            [System.IO.Path]::GetDirectoryName([System.Diagnostics.Process]::GetCurrentProcess().MainModule.FileName),
-            'ps-bash'
-        )
-        if ($IsWindows) { $psBashExe += '.exe' }
-        if (-not (Test-Path $psBashExe)) {
-            Write-BashError -Message 'eval: ps-bash executable not found'
-            return
-        }
-    }
-
-    $output = & $psBashExe -c $cmdStr 2>&1
-    $exitCode = $LASTEXITCODE
-    $global:LASTEXITCODE = $exitCode
-
-    $errors = @($output | Where-Object { $_ -is [System.Management.Automation.ErrorRecord] })
-    $normal = @($output | Where-Object { $_ -isnot [System.Management.Automation.ErrorRecord] })
-
-    foreach ($e in $errors) {
-        [Console]::Error.WriteLine("$e")
-    }
-
-    foreach ($item in $normal) {
-        $text = if ($item.PSObject.Properties['BashText']) { $item.BashText } else { "$item" }
-        Emit-BashLine -Text $text
-    }
+    [Console]::Error.WriteLine(
+        "ps-bash: Invoke-BashEval is not a runtime cmdlet — ``eval`` is inlined at transpile time. " +
+        "Dynamic ``eval `"`$(cmd)`"`` / ``eval `$var`` is rejected at parse time; " +
+        "inline the command's output statically into your script instead.")
+    $global:LASTEXITCODE = 1
 }
 
 # --- read ---

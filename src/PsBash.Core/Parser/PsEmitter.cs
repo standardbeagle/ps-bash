@@ -1094,9 +1094,12 @@ public static class PsEmitter
             else if (cmd0 == "read")
                 specialResult = EmitPassthrough("Invoke-BashRead", cmd.Words.RemoveAt(0));
 
-            // eval "cmd" -> Invoke-BashEval "cmd"
+            // eval "cmd" -> inline-transpile the reconstructed bash source
+            // of the args at parse time. Command/arith/process substitutions
+            // inside the eval body raise a ParseException; there is no runtime
+            // eval path.
             else if (cmd0 == "eval")
-                specialResult = EmitPassthrough("Invoke-BashEval", cmd.Words.RemoveAt(0));
+                specialResult = EmitEval(cmd.Words.RemoveAt(0));
 
             // readonly VAR=val -> Set-Variable -Name VAR -Value val -Option Constant
             else if (cmd0 == "readonly")
@@ -2148,7 +2151,7 @@ public static class PsEmitter
                 result = EmitPassthrough("Invoke-BashMapfile", args);
                 return true;
             case "eval":
-                result = EmitPassthrough("Invoke-BashEval", args);
+                result = EmitEval(args);
                 return true;
             case "shift":
                 result = EmitPassthrough("Invoke-BashShift", args);
@@ -2236,6 +2239,109 @@ public static class PsEmitter
         if (word.Parts.Length != 1)
             return false;
         return word.Parts[0] is WordPart.SingleQuoted or WordPart.DoubleQuoted;
+    }
+
+    // `eval ARG...` is resolved at parse time by reconstructing the bash
+    // source the args represent and re-transpiling it inline. This avoids a
+    // runtime eval path entirely (no cmdlet, no IPC), at the cost of rejecting
+    // inputs whose eval body is dynamic (command substitution, arithmetic
+    // expansion, process substitution). For static inputs — literals, quoted
+    // literals, variable references — reconstruction is lossless: the
+    // concatenated source re-parses to the same effective AST as if the user
+    // had typed the eval body at top level.
+    private static string EmitEval(ImmutableArray<CompoundWord> args)
+    {
+        if (args.IsEmpty)
+            return string.Empty;
+
+        // Reconstruct the string `eval` itself would see. Shell quoting on the
+        // outer args (SingleQuoted / DoubleQuoted) has already been consumed
+        // by the time bash dispatches to eval — eval operates on the *value*
+        // of the joined words, not on their original source. We mirror that
+        // by emitting quote contents un-wrapped so the re-parse treats word
+        // boundaries and variable refs the same way eval would.
+        var sb = new StringBuilder();
+        for (int i = 0; i < args.Length; i++)
+        {
+            if (i > 0) sb.Append(' ');
+            ReconstructBashSource(args[i].Parts, sb);
+        }
+        var source = sb.ToString();
+        if (string.IsNullOrWhiteSpace(source))
+            return string.Empty;
+
+        return Transpile(source) ?? string.Empty;
+    }
+
+    private static void ReconstructBashSource(ImmutableArray<WordPart> parts, StringBuilder sb)
+    {
+        foreach (var part in parts)
+        {
+            switch (part)
+            {
+                case WordPart.Literal lit:
+                    sb.Append(lit.Value);
+                    break;
+                case WordPart.EscapedLiteral esc:
+                    // In bash, `\X` contributes X to the string value at the
+                    // level that consumed the escape. At eval-time that level
+                    // is already past, so just emit the char.
+                    sb.Append(esc.Value);
+                    break;
+                case WordPart.SingleQuoted sq:
+                    sb.Append(sq.Value);
+                    break;
+                case WordPart.DoubleQuoted dq:
+                    ReconstructBashSource(dq.Parts, sb);
+                    break;
+                case WordPart.SimpleVarSub v:
+                    sb.Append('$').Append(v.Name);
+                    break;
+                case WordPart.BracedVarSub bv:
+                    sb.Append("${").Append(bv.Name);
+                    if (bv.Suffix is not null) sb.Append(bv.Suffix);
+                    sb.Append('}');
+                    break;
+                case WordPart.TildeSub ts:
+                    sb.Append('~');
+                    if (ts.User is not null) sb.Append(ts.User);
+                    break;
+                case WordPart.GlobPart gp:
+                    sb.Append(gp.Pattern);
+                    break;
+                case WordPart.BracedTuple bt:
+                    sb.Append('{');
+                    for (int i = 0; i < bt.Items.Length; i++)
+                    {
+                        if (i > 0) sb.Append(',');
+                        sb.Append(bt.Items[i]);
+                    }
+                    sb.Append('}');
+                    break;
+                case WordPart.BracedRange br:
+                    sb.Append('{').Append(br.Start).Append("..").Append(br.End);
+                    if (br.Step > 0) sb.Append("..").Append(br.Step);
+                    sb.Append('}');
+                    break;
+                case WordPart.CommandSub:
+                    throw new ParseException(
+                        "eval: command substitution $(...) cannot be transpiled at parse time; " +
+                        "inline the command's output statically instead of running it inside eval",
+                        0, 0, "EmitEval");
+                case WordPart.ArithSub:
+                    throw new ParseException(
+                        "eval: arithmetic expansion $((...)) cannot be transpiled at parse time",
+                        0, 0, "EmitEval");
+                case WordPart.ProcessSub:
+                    throw new ParseException(
+                        "eval: process substitution cannot be transpiled at parse time",
+                        0, 0, "EmitEval");
+                default:
+                    throw new ParseException(
+                        $"eval: unsupported word part {part.GetType().Name}",
+                        0, 0, "EmitEval");
+            }
+        }
     }
 
     private static string EmitPassthrough(string cmdlet, ImmutableArray<CompoundWord> args)

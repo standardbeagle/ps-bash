@@ -198,4 +198,5 @@ public class PwshWorkerTests : IAsyncLifetime
         var worker = await PwshWorker.StartAsync(PwshPath!, WorkerScript);
         await worker.DisposeAsync();
     }
+
 }

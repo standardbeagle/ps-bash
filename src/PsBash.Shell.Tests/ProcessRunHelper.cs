@@ -40,16 +40,19 @@ internal static class ProcessRunHelper
 
         try
         {
-            if (stdinContent is not null)
+            // Always close stdin — either after writing the requested content,
+            // or immediately when no content is provided. Leaving stdin open on
+            // a child that happens to read it (e.g. interactive mode triggered
+            // by arg misparsing) causes an indefinite hang rather than a clean
+            // EOF. This EOF guarantee is part of the reliability contract.
+            try
             {
-                try
-                {
+                if (stdinContent is not null)
                     await process.StandardInput.WriteAsync(stdinContent);
-                }
-                finally
-                {
-                    process.StandardInput.Close();
-                }
+            }
+            finally
+            {
+                process.StandardInput.Close();
             }
 
             using var cts = new CancellationTokenSource(effectiveTimeout);

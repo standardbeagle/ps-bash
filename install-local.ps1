@@ -7,17 +7,41 @@ if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 $publishDir = "src/PsBash.Shell/bin/Release/net10.0/win-x64/publish"
 $destDir = "$env:USERPROFILE\.local\bin"
 
-if (Test-Path "$destDir\ps-bash.exe") {
-    Move-Item "$destDir\ps-bash.exe" "$destDir\ps-bash.old.exe" -Force -ErrorAction SilentlyContinue
+# NTFS trick: a locked file cannot be deleted or overwritten, but it CAN be
+# renamed — existing handles keep pointing at the old file by its file record.
+# Rename every ps-bash/PsBash file to .old.<n> so Copy-Item can write the new
+# ones even when a live ps-bash is holding Core.dll / framework DLLs. The
+# .old files get cleaned up on the next deploy where nobody holds them.
+function Move-OutOfTheWay($path) {
+    if (-not (Test-Path $path)) { return }
+    $base = "$path.old"
+    $n = 0
+    while (Test-Path $base) {
+        Remove-Item $base -Force -ErrorAction SilentlyContinue
+        if (-not (Test-Path $base)) { break }
+        $n++
+        $base = "$path.old.$n"
+    }
+    Move-Item $path $base -Force -ErrorAction SilentlyContinue
 }
 
-# Remove old deployment files (keep ps-bash.old.exe)
-Get-ChildItem "$destDir" -Filter "ps-bash.*" | Where-Object {
-    $_.Name -notin @('ps-bash.old.exe')
-} | Remove-Item -Force -ErrorAction SilentlyContinue
-Get-ChildItem "$destDir" -Filter "PsBash.*" | Remove-Item -Force -ErrorAction SilentlyContinue
+if (Test-Path $destDir) {
+    Get-ChildItem $destDir -File -Filter 'ps-bash*' | ForEach-Object {
+        if ($_.Name -like '*.old*') { return }
+        Move-OutOfTheWay $_.FullName
+    }
+    Get-ChildItem $destDir -File -Filter 'PsBash.*' | ForEach-Object {
+        Move-OutOfTheWay $_.FullName
+    }
+    # Framework/dependency DLLs published alongside the host (System.*.dll etc).
+    # If our live shell has them open, the rename still succeeds.
+    Get-ChildItem $destDir -File -Filter '*.dll' | Where-Object {
+        $_.Name -notlike '*.old*'
+    } | ForEach-Object {
+        Move-OutOfTheWay $_.FullName
+    }
+}
 
-# Copy entire publish output
 Copy-Item "$publishDir\*" "$destDir\" -Force -Recurse
 
 Remove-Item "$env:TEMP\ps-bash\module-*" -Recurse -Force -ErrorAction SilentlyContinue
