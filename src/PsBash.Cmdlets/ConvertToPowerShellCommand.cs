@@ -1,6 +1,5 @@
-// Placeholder stub. Real implementation lives in a sibling task.
-using System;
 using System.Management.Automation;
+using PsBash.Core.Transpiler;
 
 namespace PsBash.Cmdlets;
 
@@ -14,9 +13,26 @@ public sealed class ConvertToPowerShellCommand : PSCmdlet
     [Parameter(Position = 0, Mandatory = true, ValueFromPipeline = true)]
     public string? Source { get; set; }
 
+    [Parameter]
+    public SwitchParameter WithMap { get; set; }
+
     protected override void ProcessRecord()
     {
-        throw new NotImplementedException(
-            "ConvertTo-PowerShell is a scaffold stub. Implementation pending in a sibling task.");
+        if (string.IsNullOrEmpty(Source))
+            return;
+
+        if (WithMap.IsPresent)
+        {
+            var result = BashTranspiler.TranspileWithMap(Source, TranspileContext.Eval);
+            var obj = new PSObject();
+            obj.Properties.Add(new PSNoteProperty("PowerShell", result.PowerShell));
+            obj.Properties.Add(new PSNoteProperty("Map", result.LineMap));
+            WriteObject(obj);
+        }
+        else
+        {
+            var result = BashTranspiler.Transpile(Source, TranspileContext.Eval);
+            WriteObject(result);
+        }
     }
 }

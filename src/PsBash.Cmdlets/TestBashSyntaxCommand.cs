@@ -1,6 +1,5 @@
-// Placeholder stub. Real implementation lives in a sibling task.
-using System;
 using System.Management.Automation;
+using PsBash.Core.Parser;
 
 namespace PsBash.Cmdlets;
 
@@ -16,7 +15,29 @@ public sealed class TestBashSyntaxCommand : PSCmdlet
 
     protected override void ProcessRecord()
     {
-        throw new NotImplementedException(
-            "Test-BashSyntax is a scaffold stub. Implementation pending in a sibling task.");
+        if (string.IsNullOrEmpty(Source))
+        {
+            WriteObject(true);
+            return;
+        }
+
+        try
+        {
+            BashParser.ParseTopLevelWithPositions(Source);
+            WriteObject(true);
+        }
+        catch (PsBash.Core.Parser.ParseException ex)
+        {
+            var errorRecord = new ErrorRecord(
+                ex,
+                "BashSyntaxError",
+                ErrorCategory.ParserError,
+                Source)
+            {
+                ErrorDetails = new ErrorDetails(ex.Message)
+            };
+            WriteError(errorRecord);
+            WriteObject(false);
+        }
     }
 }
