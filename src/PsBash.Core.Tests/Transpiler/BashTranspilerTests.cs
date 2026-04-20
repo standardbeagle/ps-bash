@@ -207,96 +207,149 @@ public class BashTranspilerTests
         Assert.Contains("$env:TEMP", result);
     }
 
-    // `eval` is resolved at transpile time — the body is reconstructed from
-    // the arg word parts, re-parsed as bash, and emitted inline. For a simple
-    // single-quoted literal this collapses to exactly what the user would have
-    // written without eval.
+    // `eval` dispatches to a runtime cmdlet that re-transpiles its arg in
+    // TranspileContext.Eval and Invoke-Expressions the result in the caller's
+    // scope. The emitter no longer inlines the body at parse time because it
+    // cannot know the value of `$(…)` substitutions until they actually run.
     [Fact]
-    public void Transpile_EvalWithSingleQuotedLiteral_InlinesTranspiledBody()
+    public void Transpile_EvalWithSingleQuotedLiteral_EmitsRuntimeInvokeBashEval()
     {
+        // Single-quoted bash → pwsh single-quoted literal: the runtime cmdlet
+        // re-parses the contained string as bash.
         var result = BashTranspiler.Transpile("eval 'echo hello'");
-        Assert.Equal("Invoke-BashEcho hello", result);
+        Assert.Equal("Invoke-BashEval 'echo hello'", result);
     }
 
     [Fact]
-    public void Transpile_EvalWithDoubleQuotedStaticString_InlinesTranspiledBody()
+    public void Transpile_EvalWithDoubleQuotedStaticString_EmitsRuntimeInvokeBashEval()
     {
+        // Double-quoted with no expansions: emits a pwsh double-quoted string.
         var result = BashTranspiler.Transpile("eval \"echo hello\"");
-        Assert.Equal("Invoke-BashEcho hello", result);
+        Assert.Equal("Invoke-BashEval \"echo hello\"", result);
     }
 
-    // Variable references survive intact: reconstruction keeps `$HOME` as
-    // bash `$HOME`, the re-parse produces SimpleVarSub(HOME), and the normal
-    // emit path turns that into pwsh `$HOME` (bash $HOME is on the
-    // kept-as-is list; $MYVAR → $env:MYVAR). Either way the variable is
-    // referenced by name — not inlined at transpile time.
+    // Multiple args: bash's `eval` joins arg values with a single space before
+    // re-parsing. The cmdlet does the join at runtime; the emitter just forwards
+    // each arg as a separate pwsh value.
     [Fact]
-    public void Transpile_EvalWithVariableReference_PreservesVarThroughReTranspile()
+    public void Transpile_EvalWithMultipleArgs_ForwardsArgsToCmdlet()
+    {
+        var result = BashTranspiler.Transpile("eval echo hi");
+        Assert.Equal("Invoke-BashEval echo hi", result);
+    }
+
+    // `eval "$(cmd)"` — the canonical fnm/direnv/venv-activation pattern. The
+    // command substitution is emitted as a normal pwsh subexpression so pwsh
+    // expands it at runtime; the resulting string is re-transpiled in
+    // TranspileContext.Eval inside the cmdlet.
+    [Fact]
+    public void Transpile_EvalWithCommandSubstitution_EmitsRuntimeSubexpression()
+    {
+        var result = BashTranspiler.Transpile("eval \"$(fnm env --shell bash)\"");
+        Assert.StartsWith("Invoke-BashEval ", result);
+        // The $(...) inside the eval arg becomes a pwsh subexpression that
+        // calls the mapped cmdlet at runtime. fnm isn't a mapped command so
+        // it stays bare, but the surrounding $(...) shape must be there.
+        Assert.Contains("$(", result);
+        Assert.Contains("--shell", result);
+    }
+
+    [Fact]
+    public void Transpile_EvalWithMappedCommandSubstitution_TranspilesInner()
+    {
+        // printf IS mapped, so the inner $(printf 'x=5') becomes
+        // $(Invoke-BashPrintf 'x=5') — pwsh evaluates that at runtime, hands the
+        // resulting string to Invoke-BashEval, which transpiles it as a bare
+        // assignment (`x=5` → `$env:x = "5"`) and Invoke-Expressions it.
+        var result = BashTranspiler.Transpile("eval \"$(printf 'x=5')\"");
+        Assert.StartsWith("Invoke-BashEval ", result);
+        Assert.Contains("Invoke-BashPrintf", result);
+    }
+
+    [Fact]
+    public void Transpile_EvalWithBackquoteCommandSub_EmitsRuntimeSubexpression()
+    {
+        var result = BashTranspiler.Transpile("eval `fnm env --shell bash`");
+        Assert.StartsWith("Invoke-BashEval ", result);
+        Assert.Contains("$(", result);
+    }
+
+    // Arithmetic expansion in eval: $((1+2)) becomes a pwsh subexpression that
+    // evaluates the arithmetic at runtime and feeds the resulting string to
+    // Invoke-BashEval.
+    [Fact]
+    public void Transpile_EvalWithArithmeticExpansion_EmitsRuntimeSubexpression()
+    {
+        var result = BashTranspiler.Transpile("eval \"echo $((1 + 2))\"");
+        Assert.StartsWith("Invoke-BashEval ", result);
+    }
+
+    // Variable references inside the eval string: the emitter forwards them
+    // to pwsh inside the eval arg string so pwsh interpolates at runtime, and
+    // the cmdlet then re-transpiles the joined string.
+    [Fact]
+    public void Transpile_EvalWithVariableReference_ForwardsToCmdlet()
     {
         var result = BashTranspiler.Transpile("eval \"export X=$HOME\"");
-        Assert.Contains("$env:X", result);
+        Assert.StartsWith("Invoke-BashEval ", result);
+        // $HOME stays as $HOME in the pwsh string (kept-as-is special var).
         Assert.Contains("$HOME", result);
     }
 
     [Fact]
-    public void Transpile_EvalWithUserVariable_MapsToEnvPrefix()
+    public void Transpile_EvalWithUserVariable_ForwardsToCmdlet()
     {
         var result = BashTranspiler.Transpile("eval \"export X=$MYVAR\"");
-        Assert.Contains("$env:X", result);
+        Assert.StartsWith("Invoke-BashEval ", result);
         Assert.Contains("$env:MYVAR", result);
     }
 
     [Fact]
-    public void Transpile_EvalWithBracedVarSub_PreservesVarThroughReTranspile()
+    public void Transpile_EvalWithBracedVarSub_ForwardsToCmdlet()
     {
         var result = BashTranspiler.Transpile("eval 'echo ${USER}'");
-        Assert.Contains("$env:USER", result);
+        Assert.StartsWith("Invoke-BashEval ", result);
+        // Single-quoted: passed as a literal pwsh string (no interpolation).
+        Assert.Contains("'echo ${USER}'", result);
     }
 
-    // Multiple args: bash's `eval` joins with a single space before evaluating.
-    // Reconstruction mirrors that.
+    // Static nested eval: outer `eval` emits a runtime call whose arg is the
+    // inner `eval` source as a string. The runtime cmdlet handles the recursion
+    // (and the depth cap) — the emitter does NOT inline statically.
     [Fact]
-    public void Transpile_EvalWithMultipleArgs_ConcatenatesWithSpaces()
-    {
-        var result = BashTranspiler.Transpile("eval echo hi");
-        Assert.Equal("Invoke-BashEcho hi", result);
-    }
-
-    // A statically-reconstructable eval body can itself contain `eval` — the
-    // recursion bottoms out at the innermost literal and inlines all the way up.
-    [Fact]
-    public void Transpile_NestedEval_FullyInlines()
+    public void Transpile_NestedEval_EmitsOuterRuntimeCall()
     {
         var result = BashTranspiler.Transpile("eval 'eval \"echo hi\"'");
-        Assert.Equal("Invoke-BashEcho hi", result);
+        Assert.Equal("Invoke-BashEval 'eval \"echo hi\"'", result);
     }
 
-    // `eval "$(cmd)"` is the hot case that used to hang the rc. The body
-    // isn't known at transpile time, so we reject it with a clear message
-    // telling the user to inline the command's output statically. This is the
-    // regression guard for the .psbashrc hang.
+    // Bare `eval` with no args is a no-op in bash. We emit the cmdlet name
+    // alone — the cmdlet exits 0 with no work.
     [Fact]
-    public void Transpile_EvalWithCommandSubstitution_ThrowsParseException()
+    public void Transpile_EvalNoArgs_EmitsBareCmdletCall()
     {
-        var ex = Assert.Throws<ParseException>(
-            () => BashTranspiler.Transpile("eval \"$(fnm env --shell bash)\""));
-        Assert.Contains("command substitution", ex.Message);
-        Assert.Contains("inline", ex.Message);
+        var result = BashTranspiler.Transpile("eval");
+        Assert.Equal("Invoke-BashEval", result);
     }
 
+    // Recorded fnm output (`fnm env --shell bash` on Windows). The eval target
+    // contains `export NAME=value` lines and is exactly what activation tools
+    // produce. Verify the OUTER eval call emits the runtime dispatch — the
+    // INNER bash content runs through TranspileContext.Eval at runtime.
     [Fact]
-    public void Transpile_EvalWithBackquoteCommandSub_ThrowsParseException()
+    public void Transpile_EvalWithFnmFixture_EmitsRuntimeCall()
     {
-        Assert.Throws<ParseException>(
-            () => BashTranspiler.Transpile("eval `fnm env --shell bash`"));
-    }
+        // Real fnm env --shell bash output (trimmed to the relevant exports).
+        var fnmBody = "export PATH=\"/c/Users/me/AppData/Local/fnm_multishells/12345_1234567890:$PATH\"\n" +
+                      "export FNM_MULTISHELL_PATH=\"/c/Users/me/AppData/Local/fnm_multishells/12345_1234567890\"\n" +
+                      "export FNM_VERSION_FILE_STRATEGY=\"local\"";
 
-    [Fact]
-    public void Transpile_EvalWithArithmeticExpansion_ThrowsParseException()
-    {
-        var ex = Assert.Throws<ParseException>(
-            () => BashTranspiler.Transpile("eval \"echo $((1 + 2))\""));
-        Assert.Contains("arithmetic", ex.Message);
+        // Verify the fnm body itself transpiles cleanly under TranspileContext.Eval —
+        // this is what the runtime cmdlet will do after pwsh expands $(fnm env …).
+        var transpiled = BashTranspiler.Transpile(fnmBody, TranspileContext.Eval);
+        Assert.Contains("$env:PATH", transpiled);
+        Assert.Contains("$env:FNM_MULTISHELL_PATH", transpiled);
+        Assert.Contains("$env:FNM_VERSION_FILE_STRATEGY", transpiled);
     }
 
     // TranspileContext.Eval must force every mapped command — including those
