@@ -111,4 +111,54 @@ public class InvokeBashEvalCommandTests
         Assert.Equal("a", result[0].ToString());
         Assert.Equal("b", result[1].ToString());
     }
+
+    [Fact]
+    public void ParseError_ThrowsTranspileFailedWithBashLine1()
+    {
+        using var pwsh = CreatePwsh();
+        var result = pwsh.AddScript(@"
+            try {
+                Invoke-BashEval 'if [ ] then'
+            } catch {
+                $_.FullyQualifiedErrorId + '|' + $_.Exception.Message
+            }
+        ").Invoke();
+        Assert.Single(result);
+        var parts = result[0].ToString().Split('|');
+        Assert.StartsWith("PsBash.TranspileFailed", parts[0]);
+        Assert.Contains("bash:1:", parts[1]);
+    }
+
+    [Fact]
+    public void RuntimeError_ThrowsRuntimeFailedWithBashLine2()
+    {
+        using var pwsh = CreatePwsh();
+        var result = pwsh.AddScript(@"
+            try {
+                Invoke-BashEval 'echo ok
+nonexistent'
+            } catch {
+                $_.FullyQualifiedErrorId + '|' + $_.ErrorDetails.Message
+            }
+        ").Invoke();
+        Assert.Single(result);
+        var parts = result[0].ToString().Split('|');
+        Assert.StartsWith("PsBash.RuntimeFailed", parts[0]);
+        Assert.Contains("bash:2:", parts[1]);
+    }
+
+    [Fact]
+    public void TryCatch_ParseException_IsCATCHABLE()
+    {
+        using var pwsh = CreatePwsh();
+        var result = pwsh.AddScript(@"
+            try {
+                Invoke-BashEval 'if [ ] then'
+            } catch [System.Management.Automation.ParseException] {
+                'caught-parse-exception'
+            }
+        ").Invoke();
+        Assert.Single(result);
+        Assert.Equal("caught-parse-exception", result[0].ToString());
+    }
 }
