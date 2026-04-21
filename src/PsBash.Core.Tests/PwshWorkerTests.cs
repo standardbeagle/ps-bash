@@ -199,4 +199,22 @@ public class PwshWorkerTests : IAsyncLifetime
         await worker.DisposeAsync();
     }
 
+    [SkippableFact]
+    public async Task HasExited_AfterKill_ReturnsTrue()
+    {
+        Skip.If(PwshPath is null, "pwsh not available");
+
+        var worker = await PwshWorker.StartAsync(PwshPath!, WorkerScript);
+        Assert.False(worker.HasExited);
+
+        // Kill the underlying process via reflection
+        var processField = worker.GetType().GetField("_process", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!;
+        var process = (System.Diagnostics.Process)processField.GetValue(worker)!;
+        process.Kill();
+        await process.WaitForExitAsync();
+
+        Assert.True(worker.HasExited);
+        await worker.DisposeAsync();
+    }
+
 }

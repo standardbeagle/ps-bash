@@ -1148,7 +1148,14 @@ public static class PsEmitter
             else if (cmd0 == "true" && cmd.Words.Length == 1)
                 specialResult = "$($global:LASTEXITCODE = 0; [void]$true)";
             else if (cmd0 == "false" && cmd.Words.Length == 1)
-                specialResult = "$($global:LASTEXITCODE = 1; Write-Error '' -ErrorAction SilentlyContinue)";
+            {
+                if (_context == TranspileContext.Eval)
+                    // try/catch on (1/0) is the mechanism that flips $? to $false so bash `&&` short-circuits;
+                    // Write-Error can't be used here because it propagates as a terminating error in eval scope.
+                    specialResult = "$($global:LASTEXITCODE = 1; try { [void](1/0) } catch { }; if ($global:__BashErrexit) { throw 'PsBash.FalseErrexit' })";
+                else
+                    specialResult = "$($global:LASTEXITCODE = 1; Write-Error '' -ErrorAction SilentlyContinue)";
+            }
 
             // read [-r] [-p "prompt"] VAR -> Invoke-BashRead [-p "prompt"] VAR
             else if (cmd0 == "read")

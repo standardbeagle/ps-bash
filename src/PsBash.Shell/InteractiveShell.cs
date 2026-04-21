@@ -67,6 +67,7 @@ public static class InteractiveShell
         {
             try
             {
+                worker = await EnsureWorkerAsync(worker, pwshPath);
                 cts.Dispose();
                 cts = new CancellationTokenSource();
                 _currentCts = cts;
@@ -150,6 +151,14 @@ public static class InteractiveShell
                     stopwatch.Stop();
                     await RecordCommandAsync(trimmed, exitCodeResult, stopwatch.ElapsedMilliseconds);
                 }
+            }
+            catch (IOException)
+            {
+                // Worker stdin/stdout pipe closed (process exited/crashed).
+                // Dispose the dead worker and respawn transparently.
+                Console.Error.WriteLine("[ps-bash] worker connection lost; respawning...");
+                try { await DisposeWorkerAsync(worker); } catch { }
+                worker = await StartWorkerAsync(pwshPath);
             }
             catch (Exception ex)
             {
@@ -1138,6 +1147,17 @@ EnsureConsoleInputRestored();
             pwshPath,
             workerScriptPath: Environment.GetEnvironmentVariable("PSBASH_WORKER"),
             modulePath: modulePath);
+    }
+
+    private static async Task<PwshWorker> EnsureWorkerAsync(PwshWorker worker, string pwshPath)
+    {
+        if (worker.HasExited)
+        {
+            try { await worker.DisposeAsync(); } catch { }
+            Console.Error.WriteLine("[ps-bash] worker died; respawning...");
+            return await StartWorkerAsync(pwshPath);
+        }
+        return worker;
     }
 
     private static async ValueTask DisposeWorkerAsync(PwshWorker worker)

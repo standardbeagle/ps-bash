@@ -154,7 +154,16 @@ internal sealed class LineEditor
 
             // Any non-Tab key clears the completion cycle
             ClearCompletion();
-            ClearSuggestion();  // Clear suggestion on any other key
+
+            // Keys that accept the current suggestion must see it before we clear.
+            bool isAcceptSuggestionKey =
+                (key.Key == ConsoleKey.RightArrow && key.Modifiers == 0) ||
+                key.Key == ConsoleKey.End ||
+                (key.Key == ConsoleKey.E && key.Modifiers == ConsoleModifiers.Control);
+            if (!isAcceptSuggestionKey)
+            {
+                ClearSuggestion();  // Clear suggestion on any other key
+            }
 
             // Ctrl-D: EOF on empty buffer, otherwise delete-char
             if (key.Key == ConsoleKey.D && key.Modifiers == ConsoleModifiers.Control)
@@ -593,15 +602,17 @@ internal sealed class LineEditor
         Console.Write(text);
 
         // Append suggestion in dim (gray) if present and requested
+        int suggestionLen = 0;
         if (showSuggestion && _currentSuggestion is not null && _currentSuggestion.Length > 0 && _cursor == _buf.Length)
         {
             Console.Write("\x1b[2m");      // Dim on
             Console.Write(_currentSuggestion);
             Console.Write("\x1b[0m");      // Reset
+            suggestionLen = _currentSuggestion.Length;
         }
 
-        // Move cursor back from end to correct position
-        var charsAfterCursor = _buf.Length - _cursor;
+        // Move cursor back from end of rendered text (buffer + suggestion) to logical cursor position
+        var charsAfterCursor = (_buf.Length - _cursor) + suggestionLen;
         if (charsAfterCursor > 0)
             Console.Write($"\x1b[{charsAfterCursor}D");
     }

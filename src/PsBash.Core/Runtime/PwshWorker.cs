@@ -305,6 +305,8 @@ public sealed class PwshWorker : IAsyncDisposable
             """;
     }
 
+    public bool HasExited => _process.HasExited;
+
     public async Task<int> ExecuteAsync(
         string pwshCommand,
         CancellationToken ct = default)

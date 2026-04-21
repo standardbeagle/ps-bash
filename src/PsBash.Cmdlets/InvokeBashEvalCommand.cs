@@ -34,10 +34,26 @@ public sealed class InvokeBashEvalCommand : PSCmdlet
             return;
         }
 
+        // Wrap transpiled script in try/finally so traps run inside the same pipeline
+        var wrappedScript = $@"
+try {{
+    {result.PowerShell}
+}} finally {{
+    try {{
+        if ($global:__BashTrapEXIT) {{ & $global:__BashTrapEXIT }}
+    }} catch {{ }}
+    if ($global:LASTEXITCODE) {{
+        try {{
+            if ($global:__BashTrapERR) {{ & $global:__BashTrapERR }}
+        }} catch {{ }}
+    }}
+}}
+";
+
         ScriptBlock sb;
         try
         {
-            sb = ScriptBlock.Create(result.PowerShell);
+            sb = ScriptBlock.Create(wrappedScript);
         }
         catch (ParseException ex)
         {
@@ -45,23 +61,79 @@ public sealed class InvokeBashEvalCommand : PSCmdlet
             return;
         }
 
+        // 1. Snapshot caller's LASTEXITCODE before invocation
+        var savedLastExitCode = SessionState.PSVariable.GetValue("LASTEXITCODE");
+
+        // Clear LASTEXITCODE so we can detect whether the script wrote it.
+        SessionState.PSVariable.Set("LASTEXITCODE", null);
+
+        bool caughtRuntimeException = false;
+
         try
         {
-            var output = InvokeCommand.InvokeScript(
-                useLocalScope: NoLocalScope.IsPresent,
-                sb,
-                input: null,
-                args: null);
-
-            if (PassThru.IsPresent)
+            try
             {
-                foreach (var o in output)
-                    WriteObject(o, enumerateCollection: false);
+                var output = InvokeCommand.InvokeScript(
+                    useLocalScope: NoLocalScope.IsPresent,
+                    sb,
+                    input: null,
+                    args: null);
+
+                if (PassThru.IsPresent)
+                {
+                    foreach (var o in output)
+                        WriteObject(o, enumerateCollection: false);
+                }
+            }
+            catch (RuntimeException ex)
+            {
+                // Don't treat the synthetic false+errexit throw as a runtime error;
+                // let finally surface it as PsBash.ErrexitFailure.
+                if (ex.Message == "PsBash.FalseErrexit")
+                {
+                    throw;
+                }
+                caughtRuntimeException = true;
+                ThrowRuntimeError(ex, result.LineMap);
             }
         }
-        catch (RuntimeException ex)
+        finally
         {
-            ThrowRuntimeError(ex, result.LineMap);
+            // 3. Read LASTEXITCODE from scope after script execution
+            var lastExitCodeObj = SessionState.PSVariable.GetValue("LASTEXITCODE");
+            int exitCode = 0;
+            bool wasSet = false;
+
+            if (lastExitCodeObj != null && LanguagePrimitives.TryConvertTo<int>(lastExitCodeObj, out int parsedCode))
+            {
+                exitCode = parsedCode;
+                wasSet = true;
+            }
+
+            // Don't clobber on success paths that set nothing
+            if (wasSet)
+            {
+                SessionState.PSVariable.Set("LASTEXITCODE", exitCode);
+            }
+            else if (savedLastExitCode != null)
+            {
+                SessionState.PSVariable.Set("LASTEXITCODE", savedLastExitCode);
+            }
+
+            // 4. Errexit: throw if enabled and no runtime exception was caught
+            if (exitCode != 0 && !caughtRuntimeException)
+            {
+                var errexitObj = SessionState.PSVariable.GetValue("__BashErrexit");
+                if (errexitObj is true || (errexitObj is bool b && b))
+                {
+                    var errorRecord = new ErrorRecord(
+                        new Exception($"Exit code {exitCode}"),
+                        "PsBash.ErrexitFailure",
+                        ErrorCategory.OperationStopped,
+                        null);
+                    ThrowTerminatingError(errorRecord);
+                }
+            }
         }
     }
 

@@ -161,4 +161,141 @@ nonexistent'
         Assert.Single(result);
         Assert.Equal("caught-parse-exception", result[0].ToString());
     }
+
+    [Fact]
+    public void False_SetsLastExitCodeToOne()
+    {
+        using var pwsh = CreatePwsh();
+        var result = pwsh.AddScript("Invoke-BashEval 'false'; $LASTEXITCODE").Invoke();
+        Assert.Single(result);
+        Assert.Equal("1", result[0].ToString());
+    }
+
+    [Fact]
+    public void False_AndEcho_DoesNotOutput()
+    {
+        using var pwsh = CreatePwsh();
+        var result = pwsh.AddScript("Invoke-BashEval 'false && echo yes' -PassThru").Invoke();
+        Assert.Empty(result);
+    }
+
+    [Fact]
+    public void SetE_False_ThrowsErrexitAndUnreachableNotPrinted()
+    {
+        using var pwsh = CreatePwsh();
+        var result = pwsh.AddScript(@"
+            $output = @()
+            $errorId = ''
+            try {
+                Invoke-BashEval 'set -e; false; echo unreachable' -PassThru | ForEach-Object { $output += $_ }
+            } catch {
+                $errorId = $_.FullyQualifiedErrorId
+            }
+            [PSCustomObject]@{
+                ErrorId = $errorId
+                Output = ($output -join ',')
+            }
+        ").Invoke();
+        Assert.Single(result);
+        var errorId = result[0].Properties["ErrorId"]?.Value?.ToString() ?? "";
+        var output = result[0].Properties["Output"]?.Value?.ToString() ?? "";
+        Assert.Equal("PsBash.ErrexitFailure", errorId.Split(',')[0]);
+        Assert.DoesNotContain("unreachable", output);
+    }
+
+    [Fact]
+    public void TrapExit_RunsOnCompletion()
+    {
+        using var pwsh = CreatePwsh();
+        var result = pwsh.AddScript(
+            "Invoke-BashEval 'trap ''Invoke-BashEcho EXIT'' EXIT; echo body' -PassThru")
+            .Invoke();
+        Assert.Equal(2, result.Count);
+        Assert.Equal("body", result[0].ToString());
+        Assert.Equal("EXIT", result[1].ToString());
+    }
+
+    [Fact]
+    public void TrapErr_RunsOnFailure()
+    {
+        using var pwsh = CreatePwsh();
+        var result = pwsh.AddScript(
+            "Invoke-BashEval 'trap ''Invoke-BashEcho ERR'' ERR; false' -PassThru")
+            .Invoke();
+        Assert.Single(result);
+        Assert.Equal("ERR", result[0].ToString());
+    }
+
+    [Fact]
+    public void LastExitCode_DoesNotClobberOnSuccessPathThatSetsNothing()
+    {
+        using var pwsh = CreatePwsh();
+        var result = pwsh.AddScript(@"
+            $LASTEXITCODE = 42
+            Invoke-BashEval 'echo hello'
+            $LASTEXITCODE
+        ").Invoke();
+        Assert.Single(result);
+        Assert.Equal("42", result[0].ToString());
+    }
+
+    [Fact]
+    public void SetE_EchoHi_CallerLastExitCodePreserved()
+    {
+        using var pwsh = CreatePwsh();
+        var result = pwsh.AddScript(@"
+            $LASTEXITCODE = 1
+            $errorId = ''
+            try {
+                Invoke-BashEval 'set -e; echo hi'
+            } catch {
+                $errorId = $_.FullyQualifiedErrorId
+            }
+            [PSCustomObject]@{
+                ErrorId = $errorId
+                LastExitCode = $LASTEXITCODE
+            }
+        ").Invoke();
+        Assert.Single(result);
+        Assert.Equal("", result[0].Properties["ErrorId"]?.Value?.ToString() ?? "");
+        Assert.Equal("1", result[0].Properties["LastExitCode"]?.Value?.ToString() ?? "");
+    }
+
+    [Fact]
+    public void TrapErr_DoesNotFireOnStaleLastExitCode()
+    {
+        using var pwsh = CreatePwsh();
+        var result = pwsh.AddScript(@"
+            $LASTEXITCODE = 7
+            Invoke-BashEval 'trap ''Invoke-BashEcho TRAPPED'' ERR; echo ok' -PassThru
+        ").Invoke();
+        Assert.Single(result);
+        Assert.Equal("ok", result[0].ToString());
+    }
+
+    [Fact]
+    public void TrapErrAndExit_SetE_False_BothFire()
+    {
+        using var pwsh = CreatePwsh();
+        var result = pwsh.AddScript(@"
+            $global:errFired = $false
+            $global:exitFired = $false
+            $errorId = ''
+            try {
+                Invoke-BashEval 'set -e; trap ''$global:errFired=$true'' ERR; trap ''$global:exitFired=$true'' EXIT; false; echo unreachable'
+            } catch {
+                $errorId = $_.FullyQualifiedErrorId
+            }
+            [PSCustomObject]@{
+                ErrorId = $errorId
+                ErrFired = $global:errFired
+                ExitFired = $global:exitFired
+            }
+        ").Invoke();
+        Assert.Single(result);
+        var errorId = result[0].Properties["ErrorId"]?.Value?.ToString() ?? "";
+        Assert.Equal("PsBash.ErrexitFailure", errorId.Split(',')[0]);
+        Assert.Equal("True", result[0].Properties["ErrFired"]?.Value?.ToString() ?? "");
+        Assert.Equal("True", result[0].Properties["ExitFired"]?.Value?.ToString() ?? "");
+    }
 }
