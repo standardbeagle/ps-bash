@@ -221,6 +221,7 @@ internal sealed class LineEditor
                     if (_currentSuggestion is not null && _cursor == _buf.Length)
                     {
                         AcceptSuggestion();
+                        Redraw(prompt);
                     }
                     else
                     {
