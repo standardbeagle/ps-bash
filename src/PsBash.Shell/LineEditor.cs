@@ -36,6 +36,9 @@ internal sealed class LineEditor
     // ── kill ring ────────────────────────────────────────────────────────────
     private string _killRing = "";
 
+    // ── prompt ───────────────────────────────────────────────────────────────
+    private string _prompt = "";
+
     // ── ANSI sequences ───────────────────────────────────────────────────────
     private const string ClearLine = "\x1b[2K\r";
 
@@ -117,6 +120,7 @@ internal sealed class LineEditor
             return Console.ReadLine();
         }
 
+        _prompt = prompt;
         _buf.Clear();
         _cursor = 0;
         _historyIndex = _history.Count;
@@ -124,7 +128,7 @@ internal sealed class LineEditor
         ClearCompletion();
         ClearSuggestion();
 
-        Console.Write(prompt);
+        Console.Write(_prompt);
 
         while (true)
         {
@@ -148,7 +152,7 @@ internal sealed class LineEditor
             if (key.Key == ConsoleKey.Tab && key.Modifiers == 0)
             {
                 ClearSuggestion();  // Clear suggestion when tab completes
-                HandleTab(prompt);
+                HandleTab();
                 continue;
             }
 
@@ -174,7 +178,6 @@ internal sealed class LineEditor
                     return null;   // EOF
                 }
                 DeleteCharForward();
-                Redraw(prompt);
                 continue;
             }
 
@@ -191,13 +194,13 @@ internal sealed class LineEditor
             // Ctrl-R — reverse-i-search
             if (key.Key == ConsoleKey.R && key.Modifiers == ConsoleModifiers.Control)
             {
-                var cmd = await HandleCtrlRAsync(prompt);
+                var cmd = await HandleCtrlRAsync();
                 if (cmd is not null)
                 {
                     SetBuffer(cmd);
                 }
                 // Always redraw to restore the prompt line, whether or not a result was selected.
-                Redraw(prompt);
+                Redraw();
                 continue;
             }
 
@@ -207,7 +210,7 @@ internal sealed class LineEditor
                 Console.WriteLine("^C");
                 _buf.Clear();
                 _cursor = 0;
-                Console.Write(prompt);
+                Console.Write(_prompt);
                 continue;
             }
 
@@ -215,22 +218,21 @@ internal sealed class LineEditor
             {
                 // ── cursor movement ──────────────────────────────────────────
                 case ConsoleKey.LeftArrow when key.Modifiers == 0:
-                    MoveCursor(-1, prompt);
+                    MoveCursor(-1);
                     break;
                 case ConsoleKey.RightArrow when key.Modifiers == 0:
                     if (_currentSuggestion is not null && _cursor == _buf.Length)
                     {
                         AcceptSuggestion();
-                        Redraw(prompt);
                     }
                     else
                     {
-                        MoveCursor(1, prompt);
+                        MoveCursor(1);
                     }
                     break;
                 case ConsoleKey.Home:
                 case ConsoleKey.A when key.Modifiers == ConsoleModifiers.Control:
-                    MoveCursorTo(0, prompt);
+                    MoveCursorTo(0);
                     break;
                 case ConsoleKey.End:
                 case ConsoleKey.E when key.Modifiers == ConsoleModifiers.Control:
@@ -238,62 +240,62 @@ internal sealed class LineEditor
                     {
                         AcceptSuggestion();
                     }
-                    MoveCursorTo(_buf.Length, prompt);
+                    MoveCursorTo(_buf.Length);
                     break;
 
                 // Word movement (Alt-B / Alt-F via escape sequences)
                 case ConsoleKey.LeftArrow when key.Modifiers == ConsoleModifiers.Alt:
-                    MoveCursorWordLeft(prompt);
+                    MoveCursorWordLeft();
                     break;
                 case ConsoleKey.RightArrow when key.Modifiers == ConsoleModifiers.Alt:
-                    MoveCursorWordRight(prompt);
+                    MoveCursorWordRight();
                     break;
 
                 // ── history navigation ───────────────────────────────────────
                 case ConsoleKey.UpArrow:
-                    HistoryPrev(prompt);
+                    HistoryPrev();
                     break;
                 case ConsoleKey.DownArrow:
-                    HistoryNext(prompt);
+                    HistoryNext();
                     break;
 
                 // ── deletion ─────────────────────────────────────────────────
                 case ConsoleKey.Backspace:
                     DeleteCharBack();
                     await UpdateSuggestionAsync();
-                    Redraw(prompt);
+                    Redraw();
                     break;
                 case ConsoleKey.Delete:
                     DeleteCharForward();
                     await UpdateSuggestionAsync();
-                    Redraw(prompt);
+                    Redraw();
                     break;
                 case ConsoleKey.K when key.Modifiers == ConsoleModifiers.Control:
                     KillToEnd();
                     await UpdateSuggestionAsync();
-                    Redraw(prompt);
+                    Redraw();
                     break;
                 case ConsoleKey.U when key.Modifiers == ConsoleModifiers.Control:
                     KillToStart();
                     await UpdateSuggestionAsync();
-                    Redraw(prompt);
+                    Redraw();
                     break;
                 case ConsoleKey.W when key.Modifiers == ConsoleModifiers.Control:
                     KillWordBack();
                     await UpdateSuggestionAsync();
-                    Redraw(prompt);
+                    Redraw();
                     break;
                 case ConsoleKey.Y when key.Modifiers == ConsoleModifiers.Control:
                     Yank();
                     await UpdateSuggestionAsync();
-                    Redraw(prompt);
+                    Redraw();
                     break;
 
                 // ── misc ─────────────────────────────────────────────────────
                 case ConsoleKey.L when key.Modifiers == ConsoleModifiers.Control:
                     // Clear screen
                     Console.Write("\x1b[H\x1b[2J");
-                    Redraw(prompt);
+                    Redraw();
                     break;
 
                 default:
@@ -302,7 +304,7 @@ internal sealed class LineEditor
                     {
                         InsertChar(key.KeyChar);
                         await UpdateSuggestionAsync();
-                        Redraw(prompt);
+                        Redraw();
                     }
                     // Ignore other control sequences (F-keys, etc.)
                     break;
@@ -317,7 +319,7 @@ internal sealed class LineEditor
                 ClearSuggestion();
                 Console.WriteLine();
                 Console.Error.WriteLine($"ps-bash: line-editor error: {ex.GetType().Name}: {ex.Message}");
-                Redraw(prompt);
+                Redraw();
             }
         }
     }
@@ -373,26 +375,30 @@ internal sealed class LineEditor
     // History
     // ─────────────────────────────────────────────────────────────────────────
 
-    private void HistoryPrev(string prompt)
+    private void HistoryPrev()
     {
         if (_history.Count == 0) return;
         if (_historyIndex == _history.Count)
             _savedInput = _buf.ToString();   // stash current edit
         if (_historyIndex <= 0) return;
         _historyIndex--;
-        SetBuffer(_history[_historyIndex]);
+        _buf.Clear();
+        _buf.Append(_history[_historyIndex]);
+        _cursor = _buf.Length;
         ClearSuggestion();  // No suggestions while navigating history
-        Redraw(prompt, showSuggestion: false);
+        Redraw(showSuggestion: false);
     }
 
-    private void HistoryNext(string prompt)
+    private void HistoryNext()
     {
         if (_historyIndex >= _history.Count) return;
         _historyIndex++;
         var text = _historyIndex == _history.Count ? _savedInput : _history[_historyIndex];
-        SetBuffer(text);
+        _buf.Clear();
+        _buf.Append(text);
+        _cursor = _buf.Length;
         ClearSuggestion();  // No suggestions while navigating history
-        Redraw(prompt, showSuggestion: false);
+        Redraw(showSuggestion: false);
     }
 
     private void AddToHistory(string line)
@@ -420,7 +426,7 @@ internal sealed class LineEditor
     // Tab completion
     // ─────────────────────────────────────────────────────────────────────────
 
-    private void HandleTab(string prompt)
+    private void HandleTab()
     {
         if (_completer is null) return;
 
@@ -442,25 +448,25 @@ internal sealed class LineEditor
             if (_completions.Count == 1)
             {
                 // Unique match: complete immediately
-                ApplyCompletion(_completions[0], prompt);
+                ApplyCompletion(_completions[0]);
                 ClearCompletion();
                 return;
             }
 
             // Multiple matches: show list below, apply first
             ShowCompletionList(_completions);
-            ApplyCompletion(_completions[0], prompt);
+            ApplyCompletion(_completions[0]);
             _completionIndex = 1;
         }
         else
         {
             // Subsequent Tab: cycle through matches
-            ApplyCompletion(_completions[_completionIndex], prompt);
+            ApplyCompletion(_completions[_completionIndex]);
             _completionIndex = (_completionIndex + 1) % _completions.Count;
         }
     }
 
-    private void ApplyCompletion(string completion, string prompt)
+    private void ApplyCompletion(string completion)
     {
         var suffix = _buf.ToString(_cursor, _buf.Length - _cursor);
         var addSpace = suffix.Length == 0
@@ -469,7 +475,7 @@ internal sealed class LineEditor
         var newBuf = _completionBase + completion + (addSpace ? " " : "") + suffix;
         SetBuffer(newBuf);
         _cursor = (_completionBase + completion + (addSpace ? " " : "")).Length;
-        Redraw(prompt);
+        Redraw();
     }
 
     private static void ShowCompletionList(IReadOnlyList<string> completions)
@@ -504,12 +510,14 @@ internal sealed class LineEditor
         _buf.Clear();
         _buf.Append(text);
         _cursor = text.Length;
+        Redraw();
     }
 
     private void InsertChar(char c)
     {
         _buf.Insert(_cursor, c);
         _cursor++;
+        Redraw();
     }
 
     private void DeleteCharBack()
@@ -517,18 +525,21 @@ internal sealed class LineEditor
         if (_cursor <= 0) return;
         _cursor--;
         _buf.Remove(_cursor, 1);
+        Redraw();
     }
 
     private void DeleteCharForward()
     {
         if (_cursor >= _buf.Length) return;
         _buf.Remove(_cursor, 1);
+        Redraw();
     }
 
     private void KillToEnd()
     {
         _killRing = _buf.ToString(_cursor, _buf.Length - _cursor);
         _buf.Remove(_cursor, _buf.Length - _cursor);
+        Redraw();
     }
 
     private void KillToStart()
@@ -536,6 +547,7 @@ internal sealed class LineEditor
         _killRing = _buf.ToString(0, _cursor);
         _buf.Remove(0, _cursor);
         _cursor = 0;
+        Redraw();
     }
 
     private void KillWordBack()
@@ -547,6 +559,7 @@ internal sealed class LineEditor
         while (_cursor > 0 && _buf[_cursor - 1] != ' ') _cursor--;
         _killRing = _buf.ToString(_cursor, end - _cursor);
         _buf.Remove(_cursor, end - _cursor);
+        Redraw();
     }
 
     private void Yank()
@@ -554,52 +567,53 @@ internal sealed class LineEditor
         if (_killRing.Length == 0) return;
         _buf.Insert(_cursor, _killRing);
         _cursor += _killRing.Length;
+        Redraw();
     }
 
-    private void MoveCursor(int delta, string prompt)
+    private void MoveCursor(int delta)
     {
         _cursor = Math.Clamp(_cursor + delta, 0, _buf.Length);
-        Redraw(prompt);
+        Redraw();
     }
 
-    private void MoveCursorTo(int pos, string prompt)
+    private void MoveCursorTo(int pos)
     {
         _cursor = Math.Clamp(pos, 0, _buf.Length);
-        Redraw(prompt);
+        Redraw();
     }
 
-    private void MoveCursorWordLeft(string prompt)
+    private void MoveCursorWordLeft()
     {
         while (_cursor > 0 && _buf[_cursor - 1] == ' ') _cursor--;
         while (_cursor > 0 && _buf[_cursor - 1] != ' ') _cursor--;
-        Redraw(prompt);
+        Redraw();
     }
 
-    private void MoveCursorWordRight(string prompt)
+    private void MoveCursorWordRight()
     {
         while (_cursor < _buf.Length && _buf[_cursor] == ' ') _cursor++;
         while (_cursor < _buf.Length && _buf[_cursor] != ' ') _cursor++;
-        Redraw(prompt);
+        Redraw();
     }
 
     // ─────────────────────────────────────────────────────────────────────────
     // Terminal rendering
     // ─────────────────────────────────────────────────────────────────────────
 
-    private void Redraw(string prompt)
+    private void Redraw()
     {
-        Redraw(prompt, showSuggestion: true);
+        Redraw(showSuggestion: true);
     }
 
-    private void Redraw(string prompt, bool showSuggestion)
+    private void Redraw(bool showSuggestion)
     {
         // Strip ANSI from prompt to measure visual length
-        var promptVisible = StripAnsi(prompt);
+        var promptVisible = StripAnsi(_prompt);
         var text = _buf.ToString();
 
         // Erase current line, reprint prompt + buffer, position cursor
         Console.Write(ClearLine);
-        Console.Write(prompt);
+        Console.Write(_prompt);
         Console.Write(text);
 
         // Append suggestion in dim (gray) if present and requested
@@ -704,9 +718,9 @@ internal sealed class LineEditor
     /// <summary>
     /// Handles Ctrl-R reverse-i-search. Returns the command to insert, or null if cancelled.
     /// </summary>
-    private async Task<string?> HandleCtrlRAsync(string prompt)
+    private async Task<string?> HandleCtrlRAsync()
     {
-        var search = new CtrlRSearch(_historyStore, _cwd, prompt);
+        var search = new CtrlRSearch(_historyStore, _cwd, _prompt);
         var (result, command) = await search.RunAsync();
 
         if (result == CtrlRSearch.Result.Execute && command is not null)
