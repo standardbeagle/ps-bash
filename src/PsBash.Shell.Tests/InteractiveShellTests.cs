@@ -163,10 +163,11 @@ public class ResolveCommandTests
     [Fact]
     public void ResolveCommand_KnownSystemCommand_FindsExe()
     {
-        var result = InteractiveShell.ResolveCommand("cmd", null);
+        // Use a command known to exist on all platforms where tests run.
+        // dotnet is the most reliable because the test runner itself needs it.
+        var result = InteractiveShell.ResolveCommand("dotnet", null);
         Assert.NotNull(result);
         Assert.True(File.Exists(result));
-        Assert.EndsWith("cmd.exe", result, StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]
@@ -188,29 +189,54 @@ public class ResolveCommandTests
     public void ResolveCommand_ResolvesInWorkingDir()
     {
         using var tmp = new TempDir();
-        var scriptPath = Path.Combine(tmp.Path, "test-script.cmd");
-        File.WriteAllText(scriptPath, "@echo hi\n");
-        var result = InteractiveShell.ResolveCommand("test-script", tmp.Path);
-        Assert.NotNull(result);
-        Assert.True(File.Exists(result));
-        Assert.EndsWith("test-script.cmd", result, StringComparison.OrdinalIgnoreCase);
+        // Use extensionless file on Unix, .cmd on Windows for cross-platform coverage
+        if (OperatingSystem.IsWindows())
+        {
+            var scriptPath = Path.Combine(tmp.Path, "test-script.cmd");
+            File.WriteAllText(scriptPath, "@echo hi\n");
+            var result = InteractiveShell.ResolveCommand("test-script", tmp.Path);
+            Assert.NotNull(result);
+            Assert.True(File.Exists(result));
+            Assert.EndsWith("test-script.cmd", result, StringComparison.OrdinalIgnoreCase);
+        }
+        else
+        {
+            var scriptPath = Path.Combine(tmp.Path, "test-script");
+            File.WriteAllText(scriptPath, "#!/bin/sh\necho hi\n");
+            File.SetUnixFileMode(scriptPath, UnixFileMode.UserExecute);
+            var result = InteractiveShell.ResolveCommand("test-script", tmp.Path);
+            Assert.NotNull(result);
+            Assert.True(File.Exists(result));
+        }
     }
 
     [Fact]
     public void ResolveCommand_WithWorkDir_SearchesWorkDirFirst()
     {
         using var tmp = new TempDir();
-        var scriptPath = Path.Combine(tmp.Path, "unique-test-cmd-1234.cmd");
-        File.WriteAllText(scriptPath, "@echo hi\n");
-        var result = InteractiveShell.ResolveCommand("unique-test-cmd-1234", tmp.Path);
-        Assert.NotNull(result);
-        Assert.True(File.Exists(result));
+        if (OperatingSystem.IsWindows())
+        {
+            var scriptPath = Path.Combine(tmp.Path, "unique-test-cmd-1234.cmd");
+            File.WriteAllText(scriptPath, "@echo hi\n");
+            var result = InteractiveShell.ResolveCommand("unique-test-cmd-1234", tmp.Path);
+            Assert.NotNull(result);
+            Assert.True(File.Exists(result));
+        }
+        else
+        {
+            var scriptPath = Path.Combine(tmp.Path, "unique-test-cmd-1234");
+            File.WriteAllText(scriptPath, "#!/bin/sh\necho hi\n");
+            File.SetUnixFileMode(scriptPath, UnixFileMode.UserExecute);
+            var result = InteractiveShell.ResolveCommand("unique-test-cmd-1234", tmp.Path);
+            Assert.NotNull(result);
+            Assert.True(File.Exists(result));
+        }
     }
 
-    [Fact]
+    [SkippableFact]
     public void ResolveCommand_CmdFile_FoundOnWindows()
     {
-        if (!OperatingSystem.IsWindows()) return;
+        Skip.IfNot(OperatingSystem.IsWindows(), "PATHEXT .cmd is Windows-only");
         using var tmp = new TempDir();
         var cmdPath = Path.Combine(tmp.Path, "myapp.cmd");
         File.WriteAllText(cmdPath, "@echo hi\n");
@@ -218,10 +244,10 @@ public class ResolveCommandTests
         Assert.NotNull(result);
     }
 
-    [Fact]
+    [SkippableFact]
     public void ResolveCommand_Ps1File_FoundOnWindows()
     {
-        if (!OperatingSystem.IsWindows()) return;
+        Skip.IfNot(OperatingSystem.IsWindows(), "PATHEXT .ps1 is Windows-only");
         using var tmp = new TempDir();
         var ps1Path = Path.Combine(tmp.Path, "myapp.ps1");
         File.WriteAllText(ps1Path, "Write-Host hi\n");
@@ -229,10 +255,10 @@ public class ResolveCommandTests
         Assert.NotNull(result);
     }
 
-    [Fact]
+    [SkippableFact]
     public void ResolveCommand_PrefersExeOverCmd()
     {
-        if (!OperatingSystem.IsWindows()) return;
+        Skip.IfNot(OperatingSystem.IsWindows(), "PATHEXT priority is Windows-only");
         using var tmp = new TempDir();
         File.WriteAllText(Path.Combine(tmp.Path, "myapp.cmd"), "@echo cmd\n");
         File.WriteAllText(Path.Combine(tmp.Path, "myapp.exe"), "fake");
