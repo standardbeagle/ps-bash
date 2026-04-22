@@ -13,10 +13,10 @@ public class InvokeBashSourceCommandTests
         try
         {
             Environment.SetEnvironmentVariable("PSBASH_SOURCE_TEST_FOO", null);
-            var result = pwsh.AddScript(
-                $"Invoke-BashSource '{tempFile.Replace("'", "''")}'; $env:PSBASH_SOURCE_TEST_FOO")
-                .Invoke();
-            Assert.NotEmpty(result);
+            pwsh.AddScript($"Invoke-BashSource '{tempFile.Replace("'", "''")}'").Invoke();
+            pwsh.Commands.Clear();
+            var result = pwsh.AddScript("$env:PSBASH_SOURCE_TEST_FOO").Invoke();
+            Assert.Single(result);
             Assert.Equal("bar", result[0].ToString());
         }
         finally
@@ -35,10 +35,10 @@ public class InvokeBashSourceCommandTests
         try
         {
             Environment.SetEnvironmentVariable("PSBASH_SOURCE_PS1_TEST", null);
-            var result = pwsh.AddScript(
-                $"Invoke-BashSource '{tempFile.Replace("'", "''")}'; $env:PSBASH_SOURCE_PS1_TEST")
-                .Invoke();
-            Assert.NotEmpty(result);
+            pwsh.AddScript($"Invoke-BashSource '{tempFile.Replace("'", "''")}'").Invoke();
+            pwsh.Commands.Clear();
+            var result = pwsh.AddScript("$env:PSBASH_SOURCE_PS1_TEST").Invoke();
+            Assert.Single(result);
             Assert.Equal("fromps1", result[0].ToString());
         }
         finally
@@ -81,10 +81,10 @@ public class InvokeBashSourceCommandTests
         try
         {
             Environment.SetEnvironmentVariable("PSBASH_SOURCE_BASH_TEST", null);
-            var result = pwsh.AddScript(
-                $"Invoke-BashSource '{tempFile.Replace("'", "''")}'; $env:PSBASH_SOURCE_BASH_TEST")
-                .Invoke();
-            Assert.NotEmpty(result);
+            pwsh.AddScript($"Invoke-BashSource '{tempFile.Replace("'", "''")}'").Invoke();
+            pwsh.Commands.Clear();
+            var result = pwsh.AddScript("$env:PSBASH_SOURCE_BASH_TEST").Invoke();
+            Assert.Single(result);
             Assert.Equal("baz", result[0].ToString());
         }
         finally
