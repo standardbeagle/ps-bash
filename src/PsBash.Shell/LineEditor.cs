@@ -704,6 +704,7 @@ internal sealed class LineEditor
         }
         _cursor = _buf.Length;
         _currentSuggestion = null;
+        Redraw();
     }
 
     private void ClearSuggestion()
