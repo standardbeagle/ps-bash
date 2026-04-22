@@ -12,7 +12,7 @@
 RootModule = 'PsBash.psm1'
 
 # Version number of this module.
-ModuleVersion = '0.8.18'
+ModuleVersion = '0.8.19'
 
 
 # ID used to uniquely identify this module
