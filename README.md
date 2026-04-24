@@ -116,6 +116,29 @@ Best for: Windows Terminal, AI coding agents (Claude Code, OpenCode), replacing 
 
 → **See the full [Shell Guide](docs/shell-guide.md)** for setup, configuration, mixing bash + PowerShell, and limitations.
 
+## Using ps-bash inside PowerShell
+
+Install the binary cmdlet module to get `Invoke-BashEval` and `Invoke-BashSource` for transpiling and evaluating bash directly from PowerShell:
+
+```powershell
+Install-Module PsBash.Cmdlets
+```
+
+`PsBash` is automatically pulled in as a dependency. Quickstart:
+
+```powershell
+# Transpile a bash command to PowerShell
+Invoke-BashEval 'ls -la | grep .ps1'
+
+# Source a bash script into the current PowerShell session
+Invoke-BashSource ./my-script.sh
+
+# Test if a bash command is valid syntax
+Test-BashSyntax 'echo hello | wc -l'
+```
+
+→ See the [Shell Guide](docs/shell-guide.md) for details on dynamic-env tools and advanced usage.
+
 ## AI Coding Agent Setup
 
 Ps-bash works as a drop-in bash replacement for AI coding agents on Windows. Agents invoke `ps-bash -c "command"` and it transpiles bash to PowerShell transparently.

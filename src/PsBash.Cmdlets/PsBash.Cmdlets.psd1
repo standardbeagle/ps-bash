@@ -8,7 +8,7 @@ RootModule = 'PsBash.Cmdlets.dll'
 
 NestedModules = @('PsBash.psd1')
 
-ModuleVersion = '0.1.0'
+ModuleVersion = '0.8.20'
 
 GUID = 'b2c3d4e5-f6a7-8901-bcde-f23456789012'
 
@@ -23,6 +23,9 @@ Description = 'Binary cmdlets for ps-bash: Invoke-BashEval, Invoke-BashSource, C
 CompatiblePSEditions = 'Core'
 
 PowerShellVersion = '7.4'
+
+# Modules that must be imported into the global environment prior to importing this module
+RequiredModules = @(@{ ModuleName = 'PsBash'; ModuleVersion = '0.8.20' })
 
 # Re-export all nested script-module functions so Invoke-BashEval transpiled
 # scriptblocks can resolve commands like Invoke-BashLs in the caller's scope.
@@ -44,6 +47,7 @@ PrivateData = @{
         Tags = @('bash', 'powershell', 'transpiler', 'cmdlets', 'PSEdition_Core')
         LicenseUri = 'https://github.com/standardbeagle/ps-bash/blob/main/LICENSE'
         ProjectUri = 'https://github.com/standardbeagle/ps-bash'
+        ReleaseNotes = 'Published alongside PsBash module. Binary cmdlets: Invoke-BashEval, Invoke-BashSource, ConvertTo-PowerShell, Test-BashSyntax.'
     }
 }
 

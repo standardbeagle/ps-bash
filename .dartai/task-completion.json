@@ -1,0 +1,7 @@
+{
+  "task_id": "goIYymqwaOfO",
+  "status": "completed",
+  "files_changed": 5,
+  "tests_added": 0,
+  "completion_summary": "Hooked PsBash.Cmdlets binary module into the release flow: version sync in pack-local.ps1, dual Publish-Module in publish.yml, RequiredModules dependency in PsBash.Cmdlets.psd1, dotnet test step in CI test matrix, release notes updated in both psd1 files, and README section added for cmdlet usage."
+}

@@ -91,7 +91,7 @@ jobs:
         shell: pwsh
         run: Install-Module -Name Pester -MinimumVersion 5.0 -Force -Scope CurrentUser
 
-      - name: Run Tests
+      - name: Run Pester Tests
         shell: pwsh
         run: |
           $config = New-PesterConfiguration
@@ -99,6 +99,16 @@ jobs:
           $config.Output.Verbosity = 'Detailed'
           $config.Run.Exit = $true
           Invoke-Pester -Configuration $config
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Run PsBash.Cmdlets Tests
+        shell: pwsh
+        run: |
+          dotnet test ./src/PsBash.Cmdlets.Tests/PsBash.Cmdlets.Tests.csproj --configuration Release
 
   publish:
     needs: test
@@ -122,18 +132,35 @@ jobs:
           $data = Import-PowerShellDataFile ./src/PsBash.Module/PsBash.psd1
           Write-Host "Manifest version: $($data.ModuleVersion)"
 
-      - name: Prepare module directory
+          # Sync version to PsBash.Cmdlets.psd1 and update RequiredModules dependency
+          $cmdletsManifest = Get-Content ./src/PsBash.Cmdlets/PsBash.Cmdlets.psd1 -Raw
+          $cmdletsManifest = $cmdletsManifest -replace "ModuleVersion = '[^']*'", "ModuleVersion = '$version'"
+          $cmdletsManifest = $cmdletsManifest -replace "ModuleName = 'PsBash'; ModuleVersion = '[^']*'", "ModuleName = 'PsBash'; ModuleVersion = '$version'"
+          Set-Content ./src/PsBash.Cmdlets/PsBash.Cmdlets.psd1 -Value $cmdletsManifest
+          $cmdletsData = Import-PowerShellDataFile ./src/PsBash.Cmdlets/PsBash.Cmdlets.psd1
+          Write-Host "Cmdlets manifest version: $($cmdletsData.ModuleVersion)"
+
+      - name: Prepare module directories
         shell: pwsh
         run: |
           Copy-Item -Path ./src/PsBash.Module -Destination ./PsBash -Recurse
           Test-ModuleManifest -Path ./PsBash/PsBash.psd1
+          Copy-Item -Path ./src/PsBash.Cmdlets -Destination ./PsBash.Cmdlets -Recurse
+          Test-ModuleManifest -Path ./PsBash.Cmdlets/PsBash.Cmdlets.psd1
 
-      - name: Publish to PSGallery
+      - name: Publish PsBash to PSGallery
         shell: pwsh
         env:
           PSGALLERY_API_KEY: ${{ secrets.PSGALLERY_API_KEY }}
         run: |
           Publish-Module -Path ./PsBash -NuGetApiKey $env:PSGALLERY_API_KEY -Repository PSGallery -Verbose
+
+      - name: Publish PsBash.Cmdlets to PSGallery
+        shell: pwsh
+        env:
+          PSGALLERY_API_KEY: ${{ secrets.PSGALLERY_API_KEY }}
+        run: |
+          Publish-Module -Path ./PsBash.Cmdlets -NuGetApiKey $env:PSGALLERY_API_KEY -Repository PSGallery -Verbose
 
       - name: Setup .NET
         uses: actions/setup-dotnet@v4

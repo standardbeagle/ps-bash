@@ -21,6 +21,17 @@ $manifestData = Import-PowerShellDataFile $manifestPath
 $version = $manifestData.ModuleVersion
 Write-Host "Module version from manifest: $version"
 
+# Sync version into PsBash.Cmdlets.psd1
+$cmdletsManifestPath = Join-Path $root 'src' 'PsBash.Cmdlets' 'PsBash.Cmdlets.psd1'
+$cmdletsManifest = Get-Content $cmdletsManifestPath -Raw
+$updatedCmdlets = $cmdletsManifest -replace "ModuleVersion = '[^']*'", "ModuleVersion = '$version'"
+if ($cmdletsManifest -ne $updatedCmdlets) {
+    Set-Content $cmdletsManifestPath -Value $updatedCmdlets -NoNewline
+    Write-Host "Updated PsBash.Cmdlets.psd1 version to: $version"
+} else {
+    Write-Host "PsBash.Cmdlets.psd1 already at version: $version"
+}
+
 # Sync version into csproj
 $csprojPath = Join-Path $root 'src' 'PsBash.Core' 'PsBash.Core.csproj'
 $csproj = Get-Content $csprojPath -Raw
