@@ -24,6 +24,16 @@ public sealed class InvokeBashSourceCommand : PSCmdlet
 
         string resolvedPath = GetUnresolvedProviderPathFromPSPath(Path);
 
+        if (!System.IO.File.Exists(resolvedPath))
+        {
+            WriteError(new ErrorRecord(
+                new System.IO.FileNotFoundException($"ps-bash: {Path}: No such file or directory"),
+                "FileNotFound",
+                ErrorCategory.ObjectNotFound,
+                Path));
+            return;
+        }
+
         if (System.IO.Path.GetExtension(resolvedPath).Equals(".ps1", StringComparison.OrdinalIgnoreCase))
         {
             var dotSource = ScriptBlock.Create($". '{resolvedPath.Replace("'", "''")}'");

@@ -93,4 +93,28 @@ public class InvokeBashSourceCommandTests
             File.Delete(tempFile);
         }
     }
+
+    [Fact]
+    public void SourceNonExistentPs1File_WritesError()
+    {
+        using var pwsh = PwshTestFixture.Create();
+        pwsh.Streams.Error.Clear();
+        pwsh.AddScript("Invoke-BashSource 'C:/nonexistent/path/missing.ps1'").Invoke();
+        pwsh.Commands.Clear();
+        var errors = pwsh.Streams.Error.ReadAll();
+        Assert.NotEmpty(errors);
+        Assert.Contains(errors, e => e.Exception.Message.Contains("missing.ps1"));
+    }
+
+    [Fact]
+    public void SourceNonExistentShFile_WritesError()
+    {
+        using var pwsh = PwshTestFixture.Create();
+        pwsh.Streams.Error.Clear();
+        pwsh.AddScript("Invoke-BashSource 'C:/nonexistent/path/missing.sh'").Invoke();
+        pwsh.Commands.Clear();
+        var errors = pwsh.Streams.Error.ReadAll();
+        Assert.NotEmpty(errors);
+        Assert.Contains(errors, e => e.Exception.Message.Contains("missing.sh"));
+    }
 }
