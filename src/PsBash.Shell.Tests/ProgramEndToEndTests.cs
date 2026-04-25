@@ -193,6 +193,17 @@ public class ProgramEndToEndTests
             $"Expected >=3 output lines, got {lines.Count}: [{string.Join("|", lines)}]");
     }
 
+    // M3: file-arg mode — nonexistent script exits 2 with specific stderr message.
+    // Does not require pwsh because the missing-file check runs before worker spawn.
+    [Fact]
+    public async Task ScriptFile_DoesNotExist_Exits2WithStderrMessage()
+    {
+        var (exitCode, _, stderr) = await RunShellAsync("nonexistent.sh");
+
+        Assert.Equal(2, exitCode);
+        Assert.Contains("ps-bash: nonexistent.sh: No such file or directory", stderr);
+    }
+
     // Regression: mixed chained commands (echo + pwd + piped ls) must each
     // produce their own line(s). Original repro from FpyEHvFl7EXM.
     [SkippableFact]

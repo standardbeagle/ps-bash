@@ -6,7 +6,9 @@ public record ShellArgs(
     bool Login,
     bool ReadFromStdin,
     bool NoProfile,
-    bool? UnixPaths = null)
+    bool? UnixPaths = null,
+    string? ScriptPath = null,
+    string[] ScriptArgs = null!)
 {
     // Bash-compatible short flags ps-bash recognizes. Used to expand bundled
     // forms like `-lc` and to let `-c` skip past intervening flags when callers
@@ -32,11 +34,20 @@ public record ShellArgs(
         bool noprofile = false;
         bool? unixPaths = null;
         bool endOfOptions = false;
+        string? scriptPath = null;
+        string[] scriptArgs = [];
 
         for (int i = 0; i < expanded.Count; i++)
         {
             if (endOfOptions)
-                break;
+            {
+                // After --, all remaining args are positional
+                if (scriptPath is null)
+                    scriptPath = expanded[i];
+                else
+                    scriptArgs = [..scriptArgs, expanded[i]];
+                continue;
+            }
 
             switch (expanded[i])
             {
@@ -81,10 +92,21 @@ public record ShellArgs(
                 case "--":
                     endOfOptions = true;
                     break;
+                default:
+                    // Non-flag positional argument: first becomes ScriptPath,
+                    // subsequent become ScriptArgs (only when no -c command given)
+                    if (command is null && !expanded[i].StartsWith('-'))
+                    {
+                        if (scriptPath is null)
+                            scriptPath = expanded[i];
+                        else
+                            scriptArgs = [..scriptArgs, expanded[i]];
+                    }
+                    break;
             }
         }
 
-        return new ShellArgs(command, interactive, login, stdin, noprofile, unixPaths);
+        return new ShellArgs(command, interactive, login, stdin, noprofile, unixPaths, scriptPath, scriptArgs);
     }
 
     // Expands `-lc` -> `-l`, `-c`. Single-char flags (`-c`, `-l`) and long

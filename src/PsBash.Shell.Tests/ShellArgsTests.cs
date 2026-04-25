@@ -288,4 +288,65 @@ public class ShellArgsTests
         Assert.Equal("ls", modified.Command);
         Assert.Null(original.Command);
     }
+
+    // ── M3: file-arg (ScriptPath / ScriptArgs) ───────────────────────────────
+
+    [Fact]
+    public void Parse_ScriptPathAndArgs_SetsScriptPathAndScriptArgs()
+    {
+        var result = ShellArgs.Parse(["script.sh", "a", "b"]);
+
+        Assert.Equal("script.sh", result.ScriptPath);
+        Assert.Equal(["a", "b"], result.ScriptArgs);
+        Assert.Null(result.Command);
+    }
+
+    [Fact]
+    public void Parse_LoginFlagBeforeScriptPath_SetsLoginAndScriptPath()
+    {
+        var result = ShellArgs.Parse(["-l", "script.sh", "a"]);
+
+        Assert.True(result.Login);
+        Assert.Equal("script.sh", result.ScriptPath);
+        Assert.Equal(["a"], result.ScriptArgs);
+        Assert.Null(result.Command);
+    }
+
+    [Fact]
+    public void Parse_EndOfOptionsThenScriptPath_SetsScriptPath()
+    {
+        var result = ShellArgs.Parse(["--", "script.sh"]);
+
+        Assert.Equal("script.sh", result.ScriptPath);
+        Assert.Empty(result.ScriptArgs);
+        Assert.Null(result.Command);
+    }
+
+    [Fact]
+    public void Parse_CommandFlagTakesPrecedenceOverScriptPath()
+    {
+        // When -c is given, ScriptPath should not be set from remaining args
+        var result = ShellArgs.Parse(["-c", "echo hi"]);
+
+        Assert.Equal("echo hi", result.Command);
+        Assert.Null(result.ScriptPath);
+    }
+
+    [Fact]
+    public void Parse_NoPositionalArgs_ScriptPathIsNull()
+    {
+        var result = ShellArgs.Parse(["-l"]);
+
+        Assert.Null(result.ScriptPath);
+        Assert.Empty(result.ScriptArgs);
+    }
+
+    [Fact]
+    public void Parse_ScriptPathOnly_NoScriptArgs()
+    {
+        var result = ShellArgs.Parse(["script.sh"]);
+
+        Assert.Equal("script.sh", result.ScriptPath);
+        Assert.Empty(result.ScriptArgs);
+    }
 }

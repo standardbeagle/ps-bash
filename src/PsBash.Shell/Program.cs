@@ -49,6 +49,23 @@ catch (PwshNotFoundException ex)
     return 127;
 }
 
+// M3: file-arg mode — ps-bash script.sh [arg1 arg2 ...]
+// Check before stdin detection: a script path argument takes priority over
+// stdin redirection so `ps-bash script.sh < /dev/null` does not enter stdin mode.
+if (shellArgs.ScriptPath is not null)
+{
+    if (!File.Exists(shellArgs.ScriptPath))
+    {
+        Console.Error.WriteLine($"ps-bash: {shellArgs.ScriptPath}: No such file or directory");
+        return 2;
+    }
+
+    if (shellArgs.ScriptPath.EndsWith(".ps1", StringComparison.OrdinalIgnoreCase))
+        throw new NotImplementedException("ps1 coming in Task C");
+
+    throw new NotImplementedException("sh coming in Task B");
+}
+
 // Auto-detect piped stdin: if no command given and stdin is redirected, try reading it.
 if (shellArgs.ReadFromStdin || (!shellArgs.Interactive && shellArgs.Command is null && Console.IsInputRedirected))
 {
