@@ -1,17 +1,17 @@
 {
   "status": "active",
-  "iterations": 19,
+  "iterations": 20,
   "spawns": 1,
   "started_at": "2026-04-20T19:23:00Z",
-  "last_iteration_at": "2026-04-25T17:00:00Z",
-  "last_subagent": "claude-sonnet-4-6-iter19",
+  "last_iteration_at": "2026-04-25T14:25:00Z",
+  "last_subagent": "claude-sonnet-4-6-iter20",
   "loop_task_id": "c9lQoRps9tLS",
   "dartboard": "Personal/ps-bash",
   "runner_instance_id": "beagle-BEAGLE-AB2-27312",
   "runner_email": "andybrummer@standardbeagle.com",
   "runner_dart_id": "andybrummer@standardbeagle.com",
   "current_task_id": null,
-  "current_iteration": 19,
+  "current_iteration": 20,
   "task_queue": [
     "Htmj5eYmfxov",
     "CVElLXuOefbe",
@@ -20,7 +20,10 @@
     "mbDhGVVrWDzB",
     "EI6NHASXsoeY",
     "nwkX58iEh88o",
-    "WDpnX2gKQUFe"
+    "WDpnX2gKQUFe",
+    "fwPKYGLVI7IN",
+    "FVgSKYOxyB8v",
+    "qj1ys0SZSpuj"
   ],
   "tasks": [
     {
@@ -340,6 +343,22 @@
       "tests_added": 0,
       "plan_adjustments": 0,
       "completion_summary": "Phase 0e: Wired PsBash.Differential.Tests into CI. Added 'Run PsBash.Differential Tests' step to the existing test job in publish.yml using shell:bash with dotnet test + TRX logger. Added 'Upload differential test artifacts' step with if:failure() to upload TestResults/**/*.trx and Goldens/*.received.txt for diff inspection. SkippableFact tests handle bash-unavailable gracefully on all platforms. 32 tests pass locally (1 skip on Windows). No WSL detection needed in YAML.",
+      "failure_reason": null,
+      "fix_task_created": false,
+      "fix_task_id": null
+    },
+    {
+      "task_id": "8B81zqaPVe7x",
+      "iteration": 20,
+      "status": "completed",
+      "started_at": "2026-04-25T14:18:00Z",
+      "completed_at": "2026-04-25T14:25:00Z",
+      "phase_completed": "phase-1",
+      "failed_phase": null,
+      "files_changed": 0,
+      "tests_added": 0,
+      "plan_adjustments": 1,
+      "completion_summary": "Phase 5 scope exceeds single-iteration limit (new project + ModeRunner + 30 tests + CI YAML >> 5 files). Split into 3 subtasks: fwPKYGLVI7IN (Phase 5a: scaffold), FVgSKYOxyB8v (Phase 5b: tests), qj1ys0SZSpuj (Phase 5c: CI matrix). Modes identified: M1 (-c), M2 (stdin), M3 (file), M4 (excluded/PTY), M5 (Invoke-BashEval), M6 (Invoke-BashSource). Subtasks added to task_queue.",
       "failure_reason": null,
       "fix_task_created": false,
       "fix_task_id": null
