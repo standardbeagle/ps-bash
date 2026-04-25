@@ -110,6 +110,24 @@ jobs:
         run: |
           dotnet test ./src/PsBash.Cmdlets.Tests/PsBash.Cmdlets.Tests.csproj --configuration Release
 
+      - name: Run PsBash.Differential Tests
+        shell: bash
+        run: |
+          dotnet test src/PsBash.Differential.Tests/PsBash.Differential.Tests.csproj \
+            --configuration Release \
+            --logger "trx;LogFileName=differential.trx" \
+            --results-directory src/PsBash.Differential.Tests/TestResults
+
+      - name: Upload differential test artifacts
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: differential-test-results-${{ matrix.os }}
+          path: |
+            src/PsBash.Differential.Tests/TestResults/**/*.trx
+            src/PsBash.Differential.Tests/Goldens/*.received.txt
+          if-no-files-found: ignore
+
   publish:
     needs: test
     runs-on: ubuntu-latest
