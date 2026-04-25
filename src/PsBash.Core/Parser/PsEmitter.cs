@@ -1933,11 +1933,39 @@ public static class PsEmitter
             }
 
             var cmd = pipeline.Commands[i];
-            if (i > 0 && cmd is Command.Simple simple && TryEmitMappedCommand(simple, out var mapped))
+            if (i > 0 && cmd is Command.Simple simple)
             {
-                sb.Append(mapped);
-                // Append any redirects from the pipe target (TryEmitMappedCommand only handles args)
-                EmitPipeTargetRedirects(simple, sb);
+                // true/false as pipe targets need a cmdlet form, not a subexpression.
+                // $($global:LASTEXITCODE = 0; [void]$true) cannot be a pipeline segment.
+                var word0 = simple.Words.Length == 1 ? GetLiteralValue(simple.Words[0]) : null;
+                if (simple.Words.Length == 1 && simple.EnvPairs.IsEmpty && simple.Redirects.IsEmpty)
+                {
+                    if (word0 == "true")
+                    {
+                        // Consume all piped input and succeed (exit 0).
+                        // Out-Null is a valid pipeline cmdlet; after the pipeline set LASTEXITCODE=0.
+                        bool isLast = i == pipeline.Commands.Length - 1;
+                        sb.Append(isLast ? "Out-Null; $global:LASTEXITCODE = 0" : "Out-Null");
+                        continue;
+                    }
+                    if (word0 == "false")
+                    {
+                        // Consume all piped input and fail (exit 1).
+                        bool isLast = i == pipeline.Commands.Length - 1;
+                        sb.Append(isLast
+                            ? "Out-Null; $($global:LASTEXITCODE = 1; Write-Error '' -ErrorAction SilentlyContinue)"
+                            : "Out-Null");
+                        continue;
+                    }
+                }
+                if (TryEmitMappedCommand(simple, out var mapped))
+                {
+                    sb.Append(mapped);
+                    // Append any redirects from the pipe target (TryEmitMappedCommand only handles args)
+                    EmitPipeTargetRedirects(simple, sb);
+                }
+                else
+                    sb.Append(Emit(cmd));
             }
             else
                 sb.Append(Emit(cmd));

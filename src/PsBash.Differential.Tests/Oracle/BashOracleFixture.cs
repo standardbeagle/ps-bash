@@ -43,8 +43,11 @@ public sealed class BashOracleFixture
         // and the Shell project builds ps-bash into src/PsBash.Shell/bin/Debug/net10.0/.
         var baseDir = AppContext.BaseDirectory;
 
-        // Navigate from bin/Debug/net10.0 up to the repo root (5 levels)
-        var repoRoot = baseDir;
+        // Navigate from bin/Debug/net10.0 up to the repo root.
+        // TrimEnd the separator first so that a trailing slash does not cause
+        // the first GetDirectoryName call to return the same directory (merely
+        // stripping the trailing slash without moving up a level).
+        var repoRoot = baseDir.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
         for (int i = 0; i < 5; i++)
         {
             var parent = Path.GetDirectoryName(repoRoot);
@@ -52,13 +55,30 @@ public sealed class BashOracleFixture
             repoRoot = parent;
         }
 
-        var candidates = new[]
+        // On non-Windows (Linux/WSL/macOS) prefer the ELF binary over the PE .exe
+        // so that Process.Start can exec it directly.  The .exe variant is returned
+        // first only on Windows where it is the native binary.
+        string[] candidates;
+        if (OperatingSystem.IsWindows())
         {
-            Path.Combine(repoRoot, "src", "PsBash.Shell", "bin", "Debug", "net10.0", "ps-bash.exe"),
-            Path.Combine(repoRoot, "src", "PsBash.Shell", "bin", "Debug", "net10.0", "ps-bash"),
-            Path.Combine(repoRoot, "src", "PsBash.Shell", "bin", "Release", "net10.0", "ps-bash.exe"),
-            Path.Combine(repoRoot, "src", "PsBash.Shell", "bin", "Release", "net10.0", "ps-bash"),
-        };
+            candidates = new[]
+            {
+                Path.Combine(repoRoot, "src", "PsBash.Shell", "bin", "Debug", "net10.0", "ps-bash.exe"),
+                Path.Combine(repoRoot, "src", "PsBash.Shell", "bin", "Debug", "net10.0", "ps-bash"),
+                Path.Combine(repoRoot, "src", "PsBash.Shell", "bin", "Release", "net10.0", "ps-bash.exe"),
+                Path.Combine(repoRoot, "src", "PsBash.Shell", "bin", "Release", "net10.0", "ps-bash"),
+            };
+        }
+        else
+        {
+            candidates = new[]
+            {
+                Path.Combine(repoRoot, "src", "PsBash.Shell", "bin", "Debug", "net10.0", "ps-bash"),
+                Path.Combine(repoRoot, "src", "PsBash.Shell", "bin", "Debug", "net10.0", "ps-bash.exe"),
+                Path.Combine(repoRoot, "src", "PsBash.Shell", "bin", "Release", "net10.0", "ps-bash"),
+                Path.Combine(repoRoot, "src", "PsBash.Shell", "bin", "Release", "net10.0", "ps-bash.exe"),
+            };
+        }
 
         foreach (var candidate in candidates)
         {
