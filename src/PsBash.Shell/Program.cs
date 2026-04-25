@@ -61,7 +61,19 @@ if (shellArgs.ScriptPath is not null)
     }
 
     if (shellArgs.ScriptPath.EndsWith(".ps1", StringComparison.OrdinalIgnoreCase))
-        throw new NotImplementedException("ps1 coming in Task C");
+    {
+        var ps1ModulePath = Environment.GetEnvironmentVariable("PSBASH_MODULE")
+            ?? ModuleExtractor.ExtractEmbedded();
+
+        await using var ps1Worker = await PwshWorker.StartAsync(
+            pwshPath,
+            workerScriptPath: Environment.GetEnvironmentVariable("PSBASH_WORKER"),
+            modulePath: ps1ModulePath);
+
+        var ps1Preamble = BuildPositionalPreamble(shellArgs.ScriptPath, shellArgs.ScriptArgs);
+        var escapedPath = shellArgs.ScriptPath.Replace("'", "''");
+        return await ps1Worker.ExecuteAsync(ps1Preamble + ". '" + escapedPath + "'");
+    }
 
     // .sh execution: read, transpile, build positional preamble, execute.
     var scriptContent = File.ReadAllText(shellArgs.ScriptPath);

@@ -213,6 +213,46 @@ public class ProgramEndToEndTests
         return path;
     }
 
+    private static string WriteTempPs1(string content)
+    {
+        var path = Path.Combine(Path.GetTempPath(), $"ps-bash-test-{Guid.NewGuid():N}.ps1");
+        File.WriteAllText(path, content);
+        return path;
+    }
+
+    // M3: .ps1 file execution ─────────────────────────────────────────────────
+
+    [SkippableFact]
+    public async Task ScriptFile_Ps1_DotSourced()
+    {
+        Skip.If(PwshPath is null, "pwsh not available");
+
+        var script = WriteTempPs1("Write-Host \"hello from ps1\"");
+        try
+        {
+            var (exitCode, stdout, _) = await RunShellAsync(script);
+
+            Assert.Equal(0, exitCode);
+            Assert.Contains("hello from ps1", stdout);
+        }
+        finally { File.Delete(script); }
+    }
+
+    [SkippableFact]
+    public async Task ScriptFile_Ps1_ExitCodePropagates()
+    {
+        Skip.If(PwshPath is null, "pwsh not available");
+
+        var script = WriteTempPs1("exit 42");
+        try
+        {
+            var (exitCode, _, _) = await RunShellAsync(script);
+
+            Assert.Equal(42, exitCode);
+        }
+        finally { File.Delete(script); }
+    }
+
     [SkippableFact]
     public async Task ScriptFile_Sh_ExecutesTranspiled()
     {

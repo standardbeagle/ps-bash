@@ -110,11 +110,9 @@ public sealed class ModeRunner
     }
 
     // -------------------------------------------------------------------------
-    // M3: ps-bash script.sh (file piped as stdin via Process.StandardInput)
-    // ps-bash does not yet support a bare file argument; M3 exercises the
-    // stdin-redirect path: `ps-bash < script.sh`. The script is written to a
-    // temp file and then read back as stdin content so the process sees
-    // Console.IsInputRedirected == true and reads the script from stdin.
+    // M3: ps-bash script.sh (file-arg execution)
+    // Writes the script to a temp .sh file and passes the path as the first
+    // argument to ps-bash. This exercises the real M3 code path in Program.cs.
     // -------------------------------------------------------------------------
     private async Task<ModeResult> RunM3Async(string script, TimeSpan timeout)
     {
@@ -123,10 +121,9 @@ public sealed class ModeRunner
         try
         {
             await File.WriteAllTextAsync(tempFile, script);
-            var scriptContent = await File.ReadAllTextAsync(tempFile);
             var psi = BuildPsi(_psBashPath!);
-            // No arguments — ps-bash detects IsInputRedirected and reads from stdin
-            var result = await SpawnAsync(psi, stdinContent: scriptContent, timeout);
+            psi.ArgumentList.Add(tempFile);
+            var result = await SpawnAsync(psi, stdinContent: null, timeout);
             return new ModeResult(Mode.M3_FileArg, result.Stdout, result.Stderr, result.ExitCode, result.WallMs);
         }
         finally
