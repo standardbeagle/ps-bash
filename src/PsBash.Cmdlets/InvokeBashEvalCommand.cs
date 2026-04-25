@@ -34,17 +34,20 @@ public sealed class InvokeBashEvalCommand : PSCmdlet
             return;
         }
 
-        // Wrap transpiled script in try/finally so traps run inside the same pipeline
+        // Wrap transpiled script in try/finally so traps run inside the same pipeline.
+        // Test-Path on the Variable: provider is strict-mode-safe AND does not write
+        // to $error, so callers running under Set-StrictMode -Version Latest don't
+        // see spurious errors when the trap variables have never been set.
         var wrappedScript = $@"
 try {{
     {result.PowerShell}
 }} finally {{
     try {{
-        if ($global:__BashTrapEXIT) {{ & $global:__BashTrapEXIT }}
+        if ((Test-Path Variable:Global:__BashTrapEXIT) -and $global:__BashTrapEXIT) {{ & $global:__BashTrapEXIT }}
     }} catch {{ }}
     if ($global:LASTEXITCODE) {{
         try {{
-            if ($global:__BashTrapERR) {{ & $global:__BashTrapERR }}
+            if ((Test-Path Variable:Global:__BashTrapERR) -and $global:__BashTrapERR) {{ & $global:__BashTrapERR }}
         }} catch {{ }}
     }}
 }}

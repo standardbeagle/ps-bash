@@ -105,13 +105,24 @@ public static class PwshTestFixture
 
         var baseDir = AppContext.BaseDirectory;
 
-        // 1. Load the script module by dot-sourcing the .psm1 directly.
-        //    This avoids Import-Module trying to resolve Microsoft.PowerShell.Utility
-        //    as a module dependency (which fails in the in-process SDK runspace).
+        // 1. Load the script module by reading the .psm1 contents and running
+        //    them as a script. We can't:
+        //    - Import-Module on the .psd1 manifest (RequiredModules / NestedModules
+        //      cannot be resolved in the in-process SDK runspace).
+        //    - Dot-source `. 'PsBash.psm1'` (Linux PowerShell rejects the .psm1
+        //      extension and tries to exec it).
+        //    - Import-Module on the bare .psm1 (hangs the in-process runspace
+        //      because module-dependency resolution still kicks in for cmdlet
+        //      imports referenced by the script).
+        //    The .psm1 calls `Set-StrictMode -Version Latest` at line 3 which would
+        //    leak into the global scope; we explicitly turn it off again afterward
+        //    so the runtime's `if ($global:__BashTrapEXIT)` guards in
+        //    InvokeBashEvalCommand don't blow up under strict mode.
         var psm1Path = Path.Combine(baseDir, "PsBash.psm1");
         if (File.Exists(psm1Path))
         {
-            pwsh.AddScript($". '{psm1Path}'").Invoke();
+            var psm1Content = File.ReadAllText(psm1Path);
+            pwsh.AddScript(psm1Content).Invoke();
             pwsh.Commands.Clear();
         }
 

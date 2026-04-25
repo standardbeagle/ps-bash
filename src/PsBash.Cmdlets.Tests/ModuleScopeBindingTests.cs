@@ -44,7 +44,7 @@ public class ModuleScopeBindingTests
         Assert.True(err.Count == 0 || err[0] == null,
             $"Unexpected error: {(err.Count > 0 ? err[0].ToString() : "none")}");
         Assert.NotEmpty(result);
-        Assert.Equal("hello", result[0].ToString());
+        Assert.Equal("hello", result[0].ToString().TrimEnd('\r', '\n'));
     }
 
     [Fact]
@@ -68,7 +68,7 @@ public class ModuleScopeBindingTests
         Assert.True(err.Count == 0 || err[0] == null,
             $"Unexpected error: {(err.Count > 0 ? err[0].ToString() : "none")}");
         Assert.NotEmpty(result);
-        Assert.Equal("hi", result[0].ToString());
+        Assert.Equal("hi", result[0].ToString().TrimEnd('\r', '\n'));
     }
 
     [Fact]

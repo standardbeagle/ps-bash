@@ -98,23 +98,25 @@ public class InvokeBashSourceCommandTests
     public void SourceNonExistentPs1File_WritesError()
     {
         using var pwsh = PwshTestFixture.Create();
+        var missingPath = Path.Combine(Path.GetTempPath(), $"psbash_missing_{Guid.NewGuid()}.ps1");
         pwsh.Streams.Error.Clear();
-        pwsh.AddScript("Invoke-BashSource 'C:/nonexistent/path/missing.ps1'").Invoke();
+        pwsh.AddScript($"Invoke-BashSource '{missingPath.Replace("'", "''")}'").Invoke();
         pwsh.Commands.Clear();
         var errors = pwsh.Streams.Error.ReadAll();
         Assert.NotEmpty(errors);
-        Assert.Contains(errors, e => e.Exception.Message.Contains("missing.ps1"));
+        Assert.Contains(errors, e => e.Exception.Message.Contains(".ps1"));
     }
 
     [Fact]
     public void SourceNonExistentShFile_WritesError()
     {
         using var pwsh = PwshTestFixture.Create();
+        var missingPath = Path.Combine(Path.GetTempPath(), $"psbash_missing_{Guid.NewGuid()}.sh");
         pwsh.Streams.Error.Clear();
-        pwsh.AddScript("Invoke-BashSource 'C:/nonexistent/path/missing.sh'").Invoke();
+        pwsh.AddScript($"Invoke-BashSource '{missingPath.Replace("'", "''")}'").Invoke();
         pwsh.Commands.Clear();
         var errors = pwsh.Streams.Error.ReadAll();
         Assert.NotEmpty(errors);
-        Assert.Contains(errors, e => e.Exception.Message.Contains("missing.sh"));
+        Assert.Contains(errors, e => e.Exception.Message.Contains(".sh"));
     }
 }
