@@ -204,6 +204,79 @@ public class ProgramEndToEndTests
         Assert.Contains("ps-bash: nonexistent.sh: No such file or directory", stderr);
     }
 
+    // M3: .sh file execution ─────────────────────────────────────────────────
+
+    private static string WriteTempScript(string content)
+    {
+        var path = Path.Combine(Path.GetTempPath(), $"ps-bash-test-{Guid.NewGuid():N}.sh");
+        File.WriteAllText(path, content);
+        return path;
+    }
+
+    [SkippableFact]
+    public async Task ScriptFile_Sh_ExecutesTranspiled()
+    {
+        Skip.If(PwshPath is null, "pwsh not available");
+
+        var script = WriteTempScript("echo hello");
+        try
+        {
+            var (exitCode, stdout, _) = await RunShellAsync(script);
+
+            Assert.Equal(0, exitCode);
+            Assert.Contains("hello", stdout);
+        }
+        finally { File.Delete(script); }
+    }
+
+    [SkippableFact]
+    public async Task ScriptFile_Sh_PositionalArgs()
+    {
+        Skip.If(PwshPath is null, "pwsh not available");
+
+        var script = WriteTempScript("echo $1 $2");
+        try
+        {
+            var (exitCode, stdout, _) = await RunShellAsync(script, "foo", "bar");
+
+            Assert.Equal(0, exitCode);
+            Assert.Contains("foo", stdout);
+            Assert.Contains("bar", stdout);
+        }
+        finally { File.Delete(script); }
+    }
+
+    [SkippableFact]
+    public async Task ScriptFile_Sh_Shebang_Ignored()
+    {
+        Skip.If(PwshPath is null, "pwsh not available");
+
+        var script = WriteTempScript("#!/bin/bash\necho ok");
+        try
+        {
+            var (exitCode, stdout, _) = await RunShellAsync(script);
+
+            Assert.Equal(0, exitCode);
+            Assert.Contains("ok", stdout);
+        }
+        finally { File.Delete(script); }
+    }
+
+    [SkippableFact]
+    public async Task ScriptFile_Sh_SetE_PropagatesExit()
+    {
+        Skip.If(PwshPath is null, "pwsh not available");
+
+        var script = WriteTempScript("set -e\nfalse");
+        try
+        {
+            var (exitCode, _, _) = await RunShellAsync(script);
+
+            Assert.NotEqual(0, exitCode);
+        }
+        finally { File.Delete(script); }
+    }
+
     // Regression: mixed chained commands (echo + pwd + piped ls) must each
     // produce their own line(s). Original repro from FpyEHvFl7EXM.
     [SkippableFact]

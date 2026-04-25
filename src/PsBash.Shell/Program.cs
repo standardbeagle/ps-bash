@@ -63,7 +63,30 @@ if (shellArgs.ScriptPath is not null)
     if (shellArgs.ScriptPath.EndsWith(".ps1", StringComparison.OrdinalIgnoreCase))
         throw new NotImplementedException("ps1 coming in Task C");
 
-    throw new NotImplementedException("sh coming in Task B");
+    // .sh execution: read, transpile, build positional preamble, execute.
+    var scriptContent = File.ReadAllText(shellArgs.ScriptPath);
+
+    string? pwshScriptCommand;
+    try
+    {
+        pwshScriptCommand = BashTranspiler.Transpile(scriptContent);
+    }
+    catch (ParseException ex)
+    {
+        Console.Error.WriteLine($"ps-bash: parse error: {ex.Message}");
+        return 2;
+    }
+
+    var scriptModulePath = Environment.GetEnvironmentVariable("PSBASH_MODULE")
+        ?? ModuleExtractor.ExtractEmbedded();
+
+    await using var scriptWorker = await PwshWorker.StartAsync(
+        pwshPath,
+        workerScriptPath: Environment.GetEnvironmentVariable("PSBASH_WORKER"),
+        modulePath: scriptModulePath);
+
+    var preamble = BuildPositionalPreamble(shellArgs.ScriptPath, shellArgs.ScriptArgs);
+    return await scriptWorker.ExecuteAsync(preamble + pwshScriptCommand);
 }
 
 // Auto-detect piped stdin: if no command given and stdin is redirected, try reading it.
@@ -135,3 +158,18 @@ if (debug)
 }
 
 return exitCode;
+
+// Builds a PowerShell preamble that sets $global:BashPositional and
+// $global:BashPositional0 so that $1..$9, $@, $#, and $0 resolve
+// correctly inside a transpiled .sh script.
+static string BuildPositionalPreamble(string script0, string[] scriptArgs)
+{
+    static string QuotePs(string s) =>
+        "'" + s.Replace("'", "''") + "'";
+
+    var scriptName = QuotePs(Path.GetFileName(script0));
+    var argList = string.Join(", ", scriptArgs.Select(QuotePs));
+    var arrayLiteral = scriptArgs.Length == 0 ? "@()" : $"@({argList})";
+
+    return $"$global:BashPositional0 = {scriptName}; $global:BashPositional = {arrayLiteral}; ";
+}
