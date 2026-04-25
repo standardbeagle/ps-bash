@@ -5,6 +5,8 @@ paths:
 
 # Testing Conventions
 
+For QA-grade requirements (oracle, coverage bars, failure-surface matrix, mode interaction matrix, platform matrix, determinism, security probes), see @.claude/rules/qa-rubric.md. That file overrides this one on conflict.
+
 ## Running Tests
 
 ALWAYS use `scripts/test.sh` — never bare `dotnet test`. The script cleans up MSBuild server nodes and testhost processes.
