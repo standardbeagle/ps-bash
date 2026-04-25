@@ -80,16 +80,14 @@ public class OracleTests
     }
 
     [SkippableFact]
-    public async Task BashOracleFixture_RunOneAsync_EchoHello_CapturesOutput()
+    public async Task BashOracleFixture_RunBash_EchoHello_CapturesOutput()
     {
-        var fixture = new BashOracleFixture();
-        Skip.If(fixture.BashPath is null, "bash not available");
+        var host = BashLocator.Find();
+        Skip.If(!host.IsAvailable, "oracle: no bash available");
 
-        var result = await BashOracleFixture.RunOneAsync(
-            fixture.BashPath!,
-            "-c",
-            "echo hello",
-            BashOracleFixture.DefaultTimeout);
+        // Use BashLocator.BuildPsi to get correct args for Native/WSL.
+        var psi = BashLocator.BuildPsi(host, "echo hello")!;
+        var result = await BashOracleFixture.RunOnePsiAsync(psi, BashOracleFixture.DefaultTimeout);
 
         Assert.Equal(0, result.ExitCode);
         Assert.Contains("hello", result.Stdout);
@@ -97,18 +95,15 @@ public class OracleTests
     }
 
     [SkippableFact]
-    public async Task BashOracleFixture_RunOneAsync_Timeout_ThrowsOracleTimeoutException()
+    public async Task BashOracleFixture_RunBash_Timeout_ThrowsOracleTimeoutException()
     {
-        var fixture = new BashOracleFixture();
-        Skip.If(fixture.BashPath is null, "bash not available");
+        var host = BashLocator.Find();
+        Skip.If(!host.IsAvailable, "oracle: no bash available");
 
         // Use a 200ms timeout against a script that sleeps 30s
+        var psi = BashLocator.BuildPsi(host, "sleep 30")!;
         var ex = await Assert.ThrowsAsync<OracleTimeoutException>(() =>
-            BashOracleFixture.RunOneAsync(
-                fixture.BashPath!,
-                "-c",
-                "sleep 30",
-                TimeSpan.FromMilliseconds(200)));
+            BashOracleFixture.RunOnePsiAsync(psi, TimeSpan.FromMilliseconds(200)));
 
         Assert.Contains("oracle timeout", ex.Message);
     }
@@ -139,7 +134,7 @@ public class OracleTests
     {
         // Directly construct results that differ and verify the bundle content
         var fixture = new BashOracleFixture();
-        Skip.If(fixture.BashPath is null, "bash not available");
+        Skip.If(!BashLocator.Find().IsAvailable, "oracle: no bash available");
         Skip.If(fixture.PsBashPath is null, "ps-bash binary not found");
 
         // We verify the bundle structure by testing AssertOracle with a deliberately

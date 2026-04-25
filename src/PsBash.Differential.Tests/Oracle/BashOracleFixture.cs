@@ -29,31 +29,11 @@ public sealed class BashOracleFixture
 
     public BashOracleFixture()
     {
-        BashPath = FindBash();
+        var host = BashLocator.Find();
+        // BashPath is used by legacy callers; expose the native path when available.
+        // For WSL, we expose "wsl.exe" so callers that check BashPath != null see it.
+        BashPath = host.IsAvailable ? host.Path : null;
         PsBashPath = FindPsBash();
-    }
-
-    private static string? FindBash()
-    {
-        // Common locations in priority order
-        foreach (var candidate in new[] { "/usr/bin/bash", "/bin/bash", "/usr/local/bin/bash" })
-        {
-            if (File.Exists(candidate))
-                return candidate;
-        }
-
-        // On Windows with Git for Windows / WSL tools on PATH
-        if (OperatingSystem.IsWindows())
-        {
-            foreach (var dir in (Environment.GetEnvironmentVariable("PATH") ?? "").Split(Path.PathSeparator))
-            {
-                var candidate = Path.Combine(dir, "bash.exe");
-                if (File.Exists(candidate))
-                    return candidate;
-            }
-        }
-
-        return null;
     }
 
     private static string? FindPsBash()
@@ -101,13 +81,88 @@ public sealed class BashOracleFixture
         IReadOnlyDictionary<string, string>? env = null)
     {
         var effective = timeout ?? DefaultTimeout;
+        var host = BashLocator.Find();
+        if (!host.IsAvailable)
+            throw new InvalidOperationException("RunBothAsync called but no bash host is available. Check BashLocator.Find() before calling.");
 
-        var bashTask = RunOneAsync(BashPath!, "-c", script, effective, env);
+        // Build the bash PSI using BashLocator so WSL gets the correct -e bash -c args.
+        var bashPsi = BashLocator.BuildPsi(host, script)!;
+        if (env is not null)
+            foreach (var (k, v) in env)
+                bashPsi.Environment[k] = v;
+
+        var bashTask = RunOnePsiAsync(bashPsi, effective);
         var psBashTask = RunOneAsync(PsBashPath!, "-c", script, effective, env,
             extraEnv: new Dictionary<string, string> { ["PSBASH_DEBUG"] = "1" });
 
         await Task.WhenAll(bashTask, psBashTask);
         return (await bashTask, await psBashTask);
+    }
+
+    /// <summary>
+    /// Runs a process from a pre-built <see cref="ProcessStartInfo"/> and captures output.
+    /// Enforces timeout with Kill(entireProcessTree: true) in finally.
+    /// </summary>
+    public static async Task<OracleResult> RunOnePsiAsync(
+        ProcessStartInfo psi,
+        TimeSpan timeout,
+        IReadOnlyDictionary<string, string>? extraEnv = null)
+    {
+        psi.RedirectStandardOutput = true;
+        psi.RedirectStandardError = true;
+        psi.RedirectStandardInput = true;
+        psi.UseShellExecute = false;
+
+        if (extraEnv is not null)
+            foreach (var (k, v) in extraEnv)
+                psi.Environment[k] = v;
+
+        var stopwatch = System.Diagnostics.Stopwatch.StartNew();
+        var process = Process.Start(psi)
+            ?? throw new InvalidOperationException($"Failed to start: {psi.FileName}");
+
+        var stdoutTask = process.StandardOutput.ReadToEndAsync();
+        var stderrTask = process.StandardError.ReadToEndAsync();
+
+        try
+        {
+            process.StandardInput.Close();
+
+            using var cts = new CancellationTokenSource(timeout);
+            try
+            {
+                await process.WaitForExitAsync(cts.Token);
+            }
+            catch (OperationCanceledException)
+            {
+                string partial = string.Empty;
+                try { partial = await stdoutTask.WaitAsync(TimeSpan.FromSeconds(2)); } catch { }
+                string partialErr = string.Empty;
+                try { partialErr = await stderrTask.WaitAsync(TimeSpan.FromSeconds(2)); } catch { }
+
+                throw new OracleTimeoutException(
+                    psi.FileName,
+                    string.Join(" ", psi.ArgumentList),
+                    timeout,
+                    partial,
+                    partialErr);
+            }
+
+            stopwatch.Stop();
+            var stdout = await stdoutTask;
+            var stderr = await stderrTask;
+            return new OracleResult(stdout, stderr, process.ExitCode, stopwatch.ElapsedMilliseconds);
+        }
+        finally
+        {
+            try
+            {
+                if (!process.HasExited)
+                    process.Kill(entireProcessTree: true);
+            }
+            catch { /* already exited */ }
+            process.Dispose();
+        }
     }
 
     /// <summary>
