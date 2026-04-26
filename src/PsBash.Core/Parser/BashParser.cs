@@ -212,6 +212,8 @@ public sealed class BashParser
         {
             var opToken = Advance();
             ops.Add(opToken.Value);
+            // In bash, a newline after && or || is a line continuation.
+            SkipNewlines();
             commands.Add(ParsePipeline());
         }
 
@@ -242,6 +244,10 @@ public sealed class BashParser
             Advance(); // consume | or |&
 
             ops.Add(isPipeAmp ? "|&" : "|");
+
+            // In bash, a newline after | is a line continuation — skip newlines
+            // before reading the next pipeline command.
+            SkipNewlines();
 
             commands.Add(ParseCompoundOrSimple());
         }

@@ -775,7 +775,10 @@ EnsureConsoleInputRestored();
         bool inSingleQuote = false;
         bool inDoubleQuote = false;
 
-        var words = new List<string>();
+        // Track the last non-whitespace character so we can detect trailing
+        // pipe/and-or operators (|, &) that make a statement incomplete.
+        int lastNonWsPos = -1;
+        char lastNonWsChar = '\0';
         int i = 0;
         while (i < input.Length)
         {
@@ -784,21 +787,23 @@ EnsureConsoleInputRestored();
             if (inSingleQuote)
             {
                 if (c == '\'') inSingleQuote = false;
+                lastNonWsPos = i; lastNonWsChar = c;
                 i++;
                 continue;
             }
 
             if (inDoubleQuote)
             {
-                if (c == '\\' && i + 1 < input.Length) { i += 2; continue; }
+                if (c == '\\' && i + 1 < input.Length) { lastNonWsPos = i; lastNonWsChar = c; i += 2; continue; }
                 if (c == '"') inDoubleQuote = false;
+                lastNonWsPos = i; lastNonWsChar = c;
                 i++;
                 continue;
             }
 
-            if (c == '\'') { inSingleQuote = true; i++; continue; }
-            if (c == '"') { inDoubleQuote = true; i++; continue; }
-            if (c == '\\' && i + 1 < input.Length) { i += 2; continue; }
+            if (c == '\'') { inSingleQuote = true; lastNonWsPos = i; lastNonWsChar = c; i++; continue; }
+            if (c == '"') { inDoubleQuote = true; lastNonWsPos = i; lastNonWsChar = c; i++; continue; }
+            if (c == '\\' && i + 1 < input.Length) { lastNonWsPos = i; lastNonWsChar = c; i += 2; continue; }
 
             if (c == '#')
             {
@@ -806,26 +811,23 @@ EnsureConsoleInputRestored();
                 continue;
             }
 
-            if (c == '{') { braceDepth++; i++; continue; }
-            if (c == '}') { braceDepth--; i++; continue; }
-            if (c == '(') { parenDepth++; i++; continue; }
+            if (c == '{') { braceDepth++; lastNonWsPos = i; lastNonWsChar = c; i++; continue; }
+            if (c == '}') { braceDepth--; lastNonWsPos = i; lastNonWsChar = c; i++; continue; }
+            if (c == '(') { parenDepth++; lastNonWsPos = i; lastNonWsChar = c; i++; continue; }
             if (c == ')')
             {
                 parenDepth--;
+                lastNonWsPos = i; lastNonWsChar = c;
                 i++;
                 continue;
             }
 
             if (char.IsWhiteSpace(c) || c == ';' || c == '|' || c == '&' || c == '<' || c == '>' || c == '\n')
             {
-                if (words.Count > 0 && c != '\n')
+                if (!char.IsWhiteSpace(c))
                 {
-                    ProcessWord(words[^1], ref depth);
-                }
-
-                if (c == '\n' || c == ';')
-                {
-                    words.Clear();
+                    lastNonWsPos = i;
+                    lastNonWsChar = c;
                 }
                 i++;
                 continue;
@@ -853,7 +855,8 @@ EnsureConsoleInputRestored();
             if (word.Length > 0)
             {
                 ProcessWord(word, ref depth);
-                words.Add(word);
+                lastNonWsPos = wordStart;
+                lastNonWsChar = word[^1];
             }
         }
 
@@ -865,6 +868,14 @@ EnsureConsoleInputRestored();
             return true;
         if (depth > 0)
             return true;
+
+        // Detect trailing pipe or and-or operator: the last non-whitespace
+        // character is '|' or '&', making the statement incomplete.
+        if (lastNonWsPos >= 0)
+        {
+            if (lastNonWsChar == '|' || lastNonWsChar == '&')
+                return true;
+        }
 
         return false;
     }

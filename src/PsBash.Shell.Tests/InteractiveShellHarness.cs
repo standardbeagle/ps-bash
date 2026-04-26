@@ -337,6 +337,98 @@ internal sealed class InteractiveShellHarness : IAsyncDisposable
     }
 
     /// <summary>
+    /// PS2 continuation prompt string set in Directive 6 env vars.
+    /// </summary>
+    public static readonly string Ps2Value = "> ";
+
+    /// <summary>
+    /// Waits for either the PS1 prompt (<c>PSBASH&gt;</c>) or the PS2 continuation
+    /// prompt (<c>&gt; </c>) to appear on stdout.  Returns <c>true</c> if PS2 was
+    /// seen, <c>false</c> if PS1 was seen.
+    ///
+    /// Used by multi-line continuation tests: send an incomplete line, call
+    /// <see cref="WaitForPS2Async"/> to confirm the shell is buffering, then send the
+    /// rest of the command and call <see cref="WaitForPromptAsync"/> for the final PS1.
+    /// </summary>
+    public async Task<bool> WaitForAnyPromptAsync(TimeSpan? timeout = null)
+    {
+        var effectiveTimeout = timeout ?? DefaultPromptTimeout;
+        var deadline = DateTime.UtcNow + effectiveTimeout;
+
+        var localBuf = new StringBuilder();
+        var charBuf = new char[1];
+        using var cts = new CancellationTokenSource(effectiveTimeout);
+
+        while (true)
+        {
+            int n;
+            try
+            {
+                var readTask = _process.StandardOutput.ReadAsync(charBuf, 0, 1);
+                var completed = await Task.WhenAny(readTask, Task.Delay(effectiveTimeout, cts.Token));
+                if (completed != readTask)
+                {
+                    ThrowTimeout(effectiveTimeout, localBuf.ToString());
+                    return false;
+                }
+                n = await readTask;
+            }
+            catch (OperationCanceledException)
+            {
+                ThrowTimeout(effectiveTimeout, localBuf.ToString());
+                return false;
+            }
+
+            if (n == 0)
+            {
+                ThrowTimeout(effectiveTimeout, localBuf.ToString(), "stdout EOF (process may have exited)");
+                return false;
+            }
+
+            localBuf.Append(charBuf, 0, n);
+
+            // Check for PS1 prompt first (longer, more specific).
+            if (localBuf.Length >= PromptString.Length)
+            {
+                var tail = localBuf.ToString(localBuf.Length - PromptString.Length, PromptString.Length);
+                if (tail == PromptString)
+                {
+                    var content = localBuf.ToString(0, localBuf.Length - PromptString.Length);
+                    lock (_sinceLastPrompt)
+                    {
+                        _sinceLastPrompt.Clear();
+                        _sinceLastPrompt.Append(content);
+                    }
+                    return false; // PS1 seen
+                }
+            }
+
+            // Check for PS2 prompt ("> ").
+            if (localBuf.Length >= Ps2Value.Length)
+            {
+                var tail = localBuf.ToString(localBuf.Length - Ps2Value.Length, Ps2Value.Length);
+                if (tail == Ps2Value)
+                {
+                    // Store content before PS2 marker.
+                    var content = localBuf.ToString(0, localBuf.Length - Ps2Value.Length);
+                    lock (_sinceLastPrompt)
+                    {
+                        _sinceLastPrompt.Clear();
+                        _sinceLastPrompt.Append(content);
+                    }
+                    return true; // PS2 seen
+                }
+            }
+
+            if (DateTime.UtcNow > deadline)
+            {
+                ThrowTimeout(effectiveTimeout, localBuf.ToString());
+                return false;
+            }
+        }
+    }
+
+    /// <summary>
     /// Returns stdout output captured since the last <see cref="WaitForPromptAsync"/> call.
     /// The prompt itself is not included.
     /// </summary>
