@@ -1,5 +1,12 @@
 name: Publish Release
 
+# Trait policy (Directive 5):
+# Every [Fact] that is platform-locked MUST declare:
+#   [Trait("Platform", "Windows")] (or "Linux" / "macOS")
+#   [SkippableFact] with a reason on other platforms
+# Tests that skip without a recognized reason fail the skip-report step.
+# Recognized reasons: see scripts/skip-report.sh ALLOW_LIST.
+
 on:
   release:
     types: [published]
@@ -87,6 +94,15 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Build ps-bash binary
+        shell: bash
+        run: dotnet build src/PsBash.Shell -c Release
+
       - name: Install Pester
         shell: pwsh
         run: Install-Module -Name Pester -MinimumVersion 5.0 -Force -Scope CurrentUser
@@ -100,31 +116,88 @@ jobs:
           $config.Run.Exit = $true
           Invoke-Pester -Configuration $config
 
-      - name: Setup .NET
-        uses: actions/setup-dotnet@v4
-        with:
-          dotnet-version: '10.0.x'
-
-      - name: Run PsBash.Cmdlets Tests
-        shell: pwsh
-        run: |
-          dotnet test ./src/PsBash.Cmdlets.Tests/PsBash.Cmdlets.Tests.csproj --configuration Release
-
-      - name: Run PsBash.Differential Tests
+      # ── PsBash.Core.Tests (parser + emitter unit tests) ──────────────────────
+      - name: Run PsBash.Core.Tests
         shell: bash
         run: |
+          dotnet test src/PsBash.Core.Tests/PsBash.Core.Tests.csproj \
+            --configuration Release \
+            --logger "trx;LogFileName=core.trx" \
+            --results-directory TestResults/core
+
+      - name: Skip report — Core.Tests
+        if: always()
+        shell: bash
+        run: bash scripts/skip-report.sh TestResults/core "Core.Tests (${{ matrix.os }})"
+
+      # ── PsBash.Cmdlets.Tests ─────────────────────────────────────────────────
+      - name: Run PsBash.Cmdlets.Tests
+        shell: bash
+        run: |
+          dotnet test src/PsBash.Cmdlets.Tests/PsBash.Cmdlets.Tests.csproj \
+            --configuration Release \
+            --logger "trx;LogFileName=cmdlets.trx" \
+            --results-directory TestResults/cmdlets
+
+      - name: Skip report — Cmdlets.Tests
+        if: always()
+        shell: bash
+        run: bash scripts/skip-report.sh TestResults/cmdlets "Cmdlets.Tests (${{ matrix.os }})"
+
+      # ── PsBash.Shell.Tests (requires binary built above) ────────────────────
+      - name: Run PsBash.Shell.Tests
+        shell: bash
+        run: |
+          dotnet test src/PsBash.Shell.Tests/PsBash.Shell.Tests.csproj \
+            --configuration Release \
+            --logger "trx;LogFileName=shell.trx" \
+            --results-directory TestResults/shell
+
+      - name: Skip report — Shell.Tests
+        if: always()
+        shell: bash
+        run: bash scripts/skip-report.sh TestResults/shell "Shell.Tests (${{ matrix.os }})"
+
+      # ── PsBash.Differential.Tests ────────────────────────────────────────────
+      # Linux: differential mode (bash oracle available).
+      # macOS: golden mode if bash < 4 (macOS ships bash 3.x due to GPLv3).
+      # Windows: golden mode (no native bash; WSL checked at runtime by BashLocator).
+      - name: Run PsBash.Differential.Tests
+        shell: bash
+        run: |
+          # Determine mode: Linux always runs differential; other platforms use
+          # golden mode unless bash 4+ is natively available.
+          UPDATE_GOLDENS=0
+          if [[ "$RUNNER_OS" == "Linux" ]]; then
+            echo "Platform: Linux — running in differential mode (bash oracle)"
+          else
+            bash_ver=$(bash --version 2>/dev/null | head -1 || true)
+            major=$(echo "$bash_ver" | grep -oP 'version \K[0-9]+' || echo "0")
+            if [[ "$major" -ge 4 ]]; then
+              echo "Platform: $RUNNER_OS — bash $major found, running differential mode"
+            else
+              echo "Platform: $RUNNER_OS — bash < 4 or unavailable, running golden mode (UPDATE_GOLDENS=0)"
+              UPDATE_GOLDENS=0
+            fi
+          fi
+          export UPDATE_GOLDENS
           dotnet test src/PsBash.Differential.Tests/PsBash.Differential.Tests.csproj \
             --configuration Release \
             --logger "trx;LogFileName=differential.trx" \
-            --results-directory src/PsBash.Differential.Tests/TestResults
+            --results-directory TestResults/differential
 
-      - name: Upload differential test artifacts
+      - name: Skip report — Differential.Tests
+        if: always()
+        shell: bash
+        run: bash scripts/skip-report.sh TestResults/differential "Differential.Tests (${{ matrix.os }})"
+
+      - name: Upload test artifacts
         if: failure()
         uses: actions/upload-artifact@v4
         with:
-          name: differential-test-results-${{ matrix.os }}
+          name: test-results-${{ matrix.os }}
           path: |
-            src/PsBash.Differential.Tests/TestResults/**/*.trx
+            TestResults/**/*.trx
             src/PsBash.Differential.Tests/Goldens/*.received.txt
           if-no-files-found: ignore
 
