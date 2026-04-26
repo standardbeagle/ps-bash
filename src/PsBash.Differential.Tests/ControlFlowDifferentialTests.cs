@@ -29,19 +29,54 @@ public class ControlFlowDifferentialTests
     /// Targets the gap where no emitter test covers && inside an if condition.
     /// Failure-surface axis 8: exit code of the compound condition determines branch.
     ///
-    /// KNOWN BUG: ps-bash emits `if (true -and true)` which evaluates `true` as a
-    /// string literal (truthy) rather than running the `true` command, causing the
-    /// wrong branch to be taken. Tracked as PRIORITY GAP #1 in audit doc.
-    /// Golden mode: records current (broken) ps-bash output so the divergence is
-    /// visible; remove golden file and switch to EqualAsync once the bug is fixed.
-    /// Record: UPDATE_GOLDENS=1 ./scripts/test.sh --filter Differential_If_CompoundAndCondition
+    /// Fixed DART-6BxDBlSHAp6A: emitter now converts && / || in if conditions to
+    /// PS -and / -or so the condition is a proper boolean expression.
     /// </summary>
     [SkippableFact]
     public async Task Differential_If_CompoundAndCondition()
     {
-        await AssertOracle.GoldenAsync(
+        await AssertOracle.EqualAsync(
             "if true && true; then echo both; else echo not; fi",
-            "If_CompoundAndCondition",
+            timeout: TimeSpan.FromSeconds(15));
+    }
+
+    /// <summary>
+    /// Compound OR condition: `if cmd1 || cmd2; then` — first failure falls back to second.
+    /// Failure-surface axis 8: first command fails but second succeeds → then branch.
+    /// Fixed as part of DART-6BxDBlSHAp6A.
+    /// </summary>
+    [SkippableFact]
+    public async Task Differential_If_CompoundOrCondition()
+    {
+        await AssertOracle.EqualAsync(
+            "if false || true; then echo yes; else echo no; fi",
+            timeout: TimeSpan.FromSeconds(15));
+    }
+
+    /// <summary>
+    /// AND condition where first command fails — short-circuit must skip second and take else.
+    /// Failure-surface axis 8: exit code propagation through && short-circuit.
+    /// Fixed as part of DART-6BxDBlSHAp6A.
+    /// </summary>
+    [SkippableFact]
+    public async Task Differential_If_CompoundAndConditionFirstFails()
+    {
+        await AssertOracle.EqualAsync(
+            "if false && true; then echo yes; else echo no; fi",
+            timeout: TimeSpan.FromSeconds(15));
+    }
+
+    /// <summary>
+    /// Both sides BoolExpr inside &&: `if [ 1 -eq 1 ] &amp;&amp; [ 2 -eq 2 ]; then`.
+    /// Confirms the fix handles test expressions, not just true/false builtins.
+    /// Failure-surface axis 8: numeric comparison exit codes drive the branch.
+    /// Fixed as part of DART-6BxDBlSHAp6A.
+    /// </summary>
+    [SkippableFact]
+    public async Task Differential_If_CompoundAndConditionBoolExpr()
+    {
+        await AssertOracle.EqualAsync(
+            "if [ 1 -eq 1 ] && [ 2 -eq 2 ]; then echo yes; else echo no; fi",
             timeout: TimeSpan.FromSeconds(15));
     }
 

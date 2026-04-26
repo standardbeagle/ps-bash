@@ -2552,6 +2552,54 @@ public class PsEmitterTests
         Assert.Equal("Invoke-BashBackground { Invoke-BashSleep 1 }; Invoke-BashWait", result);
     }
 
+    // -----------------------------------------------------------------------
+    // if condition: AndOrList (&&  / ||) — DART-6BxDBlSHAp6A
+    // PowerShell's && / || are pipeline chain operators that cannot appear
+    // inside if (...). The emitter must convert them to -and / -or.
+    // -----------------------------------------------------------------------
+
+    [Fact]
+    public void Transpile_If_AndCondition_TrueAndTrue_EmitsAndExpr()
+    {
+        // if true && true; then echo yes; fi
+        // EmitCondition returns "($true -and $true)"; EmitIf wraps in parens again.
+        var result = PsEmitter.Transpile("if true && true; then echo yes; fi");
+        Assert.Equal("if (($true -and $true)) { Invoke-BashEcho yes }", result);
+    }
+
+    [Fact]
+    public void Transpile_If_AndCondition_FalseAndTrue_EmitsAndExpr()
+    {
+        // if false && true; then echo yes; fi
+        var result = PsEmitter.Transpile("if false && true; then echo yes; fi");
+        Assert.Equal("if (($false -and $true)) { Invoke-BashEcho yes }", result);
+    }
+
+    [Fact]
+    public void Transpile_If_OrCondition_FalseOrTrue_EmitsOrExpr()
+    {
+        // if false || true; then echo yes; fi
+        var result = PsEmitter.Transpile("if false || true; then echo yes; fi");
+        Assert.Equal("if (($false -or $true)) { Invoke-BashEcho yes }", result);
+    }
+
+    [Fact]
+    public void Transpile_If_AndCondition_BoolExprAndBoolExpr_EmitsAndWithTestExprs()
+    {
+        // if [ 1 -eq 1 ] && [ 2 -eq 2 ]; then echo yes; fi
+        // Both sides are BoolExpr — no LASTEXITCODE wrapper needed.
+        var result = PsEmitter.Transpile("if [ 1 -eq 1 ] && [ 2 -eq 2 ]; then echo yes; fi");
+        Assert.Equal("if (((1 -eq 1) -and (2 -eq 2))) { Invoke-BashEcho yes }", result);
+    }
+
+    [Fact]
+    public void Transpile_If_AndCondition_WithElse_EmitsCorrectBranches()
+    {
+        // if true && true; then echo yes; else echo no; fi
+        var result = PsEmitter.Transpile("if true && true; then echo yes; else echo no; fi");
+        Assert.Equal("if (($true -and $true)) { Invoke-BashEcho yes } else { Invoke-BashEcho no }", result);
+    }
+
     private static CompoundWord MakeWord(string value) =>
         new(ImmutableArray.Create<WordPart>(new WordPart.Literal(value)));
 }

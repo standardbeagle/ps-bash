@@ -816,7 +816,64 @@ public static class PsEmitter
             if (word is "false") return "$false";
         }
 
+        // AndOrList (cmd1 && cmd2 / cmd1 || cmd2): PowerShell's && / || are pipeline
+        // chain operators and cannot appear inside if (...). Convert to -and / -or so
+        // the condition is a proper PS boolean expression.
+        if (cond is Command.AndOrList andOrCond)
+            return EmitConditionAndOrList(andOrCond);
+
         return Emit(cond);
+    }
+
+    /// <summary>
+    /// Converts a Command to a PowerShell expression that evaluates to a boolean,
+    /// suitable for use inside if/while condition parentheses.
+    /// </summary>
+    private static string EmitConditionAsExpr(Command cmd)
+    {
+        // BoolExpr: already a PS boolean expression
+        if (cmd is Command.BoolExpr boolExpr)
+            return "(" + EmitBoolExprInner(boolExpr) + ")";
+
+        // Bare true/false
+        if (cmd is Command.Simple simple && simple.Words.Length == 1
+            && simple.EnvPairs.IsEmpty && simple.Redirects.IsEmpty)
+        {
+            var word = GetLiteralValue(simple.Words[0]);
+            if (word is "true") return "$true";
+            if (word is "false") return "$false";
+        }
+
+        // Nested AndOrList: recurse
+        if (cmd is Command.AndOrList nested)
+            return EmitConditionAndOrList(nested);
+
+        // General command: run it and evaluate LASTEXITCODE.
+        // Wrap in a subexpression so the command's output does not pollute the
+        // boolean result.  [void] suppresses pipeline objects; the last statement
+        // ($LASTEXITCODE -eq 0) becomes the subexpression value.
+        return $"(& {{ [void]({Emit(cmd)}); $LASTEXITCODE -eq 0 }})";
+    }
+
+    /// <summary>
+    /// Emits a bash AndOrList used as an if/while condition as a PowerShell
+    /// boolean expression using -and / -or instead of the pipeline-chain
+    /// &amp;&amp; / || operators (which cannot appear inside if (...)).
+    /// </summary>
+    private static string EmitConditionAndOrList(Command.AndOrList andOr)
+    {
+        var sb = new StringBuilder("(");
+        for (int i = 0; i < andOr.Commands.Length; i++)
+        {
+            if (i > 0)
+            {
+                var op = andOr.Ops[i - 1];
+                sb.Append(op == "&&" ? " -and " : " -or ");
+            }
+            sb.Append(EmitConditionAsExpr(andOr.Commands[i]));
+        }
+        sb.Append(')');
+        return sb.ToString();
     }
 
     private static string EmitBoolExpr(Command.BoolExpr expr)
