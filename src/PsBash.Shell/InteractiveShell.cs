@@ -45,10 +45,12 @@ public static class InteractiveShell
         _currentCts = cts;
         var worker = await StartWorkerAsync(pwshPath);
 
-        // Initialize history store
-        var psbashDir = Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
-            ".psbash");
+        // Initialize history store. PSBASH_HOME overrides the home directory used to
+        // locate the history DB so that tests can isolate history to a temp directory
+        // without touching the real user profile.
+        var historyHomeDir = Environment.GetEnvironmentVariable("PSBASH_HOME")
+            ?? Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+        var psbashDir = Path.Combine(historyHomeDir, ".psbash");
         Directory.CreateDirectory(psbashDir);
 
         var dbPath = Path.Combine(psbashDir, "history.db");
