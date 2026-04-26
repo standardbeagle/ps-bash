@@ -36,6 +36,9 @@ internal sealed class InteractiveShellHarness : IAsyncDisposable
     private readonly Task _stderrReader;
     private readonly string _tempHome;
     private readonly string _tempHistoryFile;
+    // When false the caller owns the temp home directory and DisposeAsync must
+    // not delete it.
+    private readonly bool _ownsTempHome;
 
     // Prevents multiple disposes racing each other.
     private int _disposed;
@@ -44,12 +47,14 @@ internal sealed class InteractiveShellHarness : IAsyncDisposable
         Process process,
         Task stderrReader,
         string tempHome,
-        string tempHistoryFile)
+        string tempHistoryFile,
+        bool ownsTempHome = true)
     {
         _process = process;
         _stderrReader = stderrReader;
         _tempHome = tempHome;
         _tempHistoryFile = tempHistoryFile;
+        _ownsTempHome = ownsTempHome;
     }
 
     // ── Factory ───────────────────────────────────────────────────────────────
@@ -105,14 +110,26 @@ internal sealed class InteractiveShellHarness : IAsyncDisposable
     /// <param name="workerScript">Optional PSBASH_WORKER override (for dev builds that need the script).</param>
     /// <param name="noProfile">When true, passes --norc so .psbashrc is not sourced.</param>
     /// <param name="startTimeout">How long to wait for the initial prompt.</param>
+    /// <param name="psBashHome">
+    /// Optional pre-created home directory.  When supplied, the harness uses this
+    /// directory as HOME and PSBASH_HOME instead of creating a new temp directory.
+    /// The caller is responsible for creating the directory and populating any rc
+    /// files before calling StartAsync.  The harness will NOT delete this directory
+    /// on dispose — the caller owns the lifecycle.  Use this for profile-loading
+    /// tests that need .psbashrc to exist before the shell starts.
+    /// </param>
     public static async Task<InteractiveShellHarness> StartAsync(
         string psBashPath,
         string? workerScript = null,
         bool noProfile = true,
-        TimeSpan? startTimeout = null)
+        TimeSpan? startTimeout = null,
+        string? psBashHome = null)
     {
-        var tempHome = Path.Combine(Path.GetTempPath(), "ps-bash-harness-" + Guid.NewGuid().ToString("N"));
-        Directory.CreateDirectory(tempHome);
+        var ownsTempHome = psBashHome is null;
+        var tempHome = psBashHome
+            ?? Path.Combine(Path.GetTempPath(), "ps-bash-harness-" + Guid.NewGuid().ToString("N"));
+        if (ownsTempHome)
+            Directory.CreateDirectory(tempHome);
         var tempHistoryFile = Path.Combine(tempHome, "history.db");
 
         var psi = new ProcessStartInfo
@@ -134,6 +151,10 @@ internal sealed class InteractiveShellHarness : IAsyncDisposable
         psi.Environment["PS1"] = Ps1Value;
         psi.Environment["PS2"] = "> ";
         psi.Environment["HOME"] = tempHome;
+        // PSBASH_HOME tells InteractiveShell.SourceRcFileAsync to look for
+        // .psbashrc in the isolated temp directory rather than the real user
+        // profile.  This keeps profile-loading tests hermetic.
+        psi.Environment["PSBASH_HOME"] = tempHome;
         psi.Environment["PSBASH_HISTORY_PATH"] = tempHistoryFile;
 
         // Pass through PATH so pwsh can be found.
@@ -166,7 +187,7 @@ internal sealed class InteractiveShellHarness : IAsyncDisposable
             }
         });
 
-        var harness = new InteractiveShellHarness(process, stderrReader, tempHome, tempHistoryFile);
+        var harness = new InteractiveShellHarness(process, stderrReader, tempHome, tempHistoryFile, ownsTempHome);
         // Inject the shared stderr buffer reference.
         // We share the lock object — reassign here via reflection would be complex;
         // instead transfer the reference by reading during DrainStderr.
@@ -370,7 +391,9 @@ internal sealed class InteractiveShellHarness : IAsyncDisposable
 
         _process.Dispose();
 
-        // Clean up the temp directory.
-        try { Directory.Delete(_tempHome, recursive: true); } catch { }
+        // Clean up the temp directory only when this harness created it.
+        // When psBashHome was supplied by the caller, the caller owns lifecycle.
+        if (_ownsTempHome)
+            try { Directory.Delete(_tempHome, recursive: true); } catch { }
     }
 }

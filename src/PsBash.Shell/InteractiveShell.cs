@@ -58,8 +58,11 @@ public static class InteractiveShell
         _lineEditor = new LineEditor(_historyStore, (line, cursor) =>
             TabCompleter.Complete(line, cursor, Aliases, _lastDir, _lastCommand, _historyStore));
 
-        loading.Update("Sourcing ~/.psbashrc");
-        await SourceRcFileAsync(worker, cts);
+        if (!noProfile)
+        {
+            loading.Update("Sourcing ~/.psbashrc");
+            await SourceRcFileAsync(worker, cts);
+        }
 
         loading.Finish();
 
@@ -883,7 +886,12 @@ EnsureConsoleInputRestored();
 
     private static async Task SourceRcFileAsync(PwshWorker worker, CancellationTokenSource cts)
     {
-        var rcPath = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".psbashrc");
+        // PSBASH_HOME overrides the home directory used to locate .psbashrc.
+        // This is used by tests to isolate the rc file without touching the real
+        // user profile.  In production this env var is unset and the real home is used.
+        var homeDir = Environment.GetEnvironmentVariable("PSBASH_HOME")
+            ?? Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+        var rcPath = Path.Combine(homeDir, ".psbashrc");
         if (!File.Exists(rcPath))
             return;
 
@@ -926,8 +934,9 @@ EnsureConsoleInputRestored();
         {
             pwshCommand = BashTranspiler.Transpile(filtered.ToString());
         }
-        catch (ParseException)
+        catch (ParseException ex)
         {
+            Console.Error.WriteLine($"ps-bash: ~/.psbashrc: syntax error: {ex.Message}");
             return;
         }
 
