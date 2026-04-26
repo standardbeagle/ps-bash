@@ -405,4 +405,26 @@ public class BashTranspilerTests
         // emission (no leakage of Eval-specific state breaks anything).
         Assert.Equal("Invoke-BashLs", result);
     }
+
+    // Regression: f() { return 42; }; f; echo $? — process was exiting 42 instead of 0.
+    // `return N` inside a function body must emit $global:LASTEXITCODE = N; return
+    // so the function exits with N as its exit status without exiting the shell.
+    [Fact]
+    public void Transpile_FunctionReturnN_EmitsLastExitCodeAssignThenReturn()
+    {
+        var result = BashTranspiler.Transpile("f() { return 42; }; f; echo $?");
+        // The function body must set LASTEXITCODE, not call exit
+        Assert.Contains("$global:LASTEXITCODE = 42; return", result);
+        // Must not use bare exit which would terminate the ps-bash process
+        Assert.DoesNotContain("exit 42", result);
+    }
+
+    [Fact]
+    public void Transpile_ReturnWithNoArg_EmitsBareReturn()
+    {
+        var result = BashTranspiler.Transpile("f() { return; }");
+        // return with no arg: just return (no LASTEXITCODE assignment)
+        Assert.Contains("{ return }", result);
+        Assert.DoesNotContain("$global:LASTEXITCODE", result);
+    }
 }

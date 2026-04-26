@@ -152,21 +152,15 @@ public class ControlFlowDifferentialTests
     // -----------------------------------------------------------------------
 
     /// <summary>
-    /// return N sets $? — critical gap: no emitter or differential test covers this.
+    /// return N sets $? — Invoke-BashEcho resets $global:LASTEXITCODE = 0 on
+    /// success so the process exit code reflects echo (0), not f's return value (42).
     /// Failure-surface axis 8: $? after function call must equal return value.
-    ///
-    /// KNOWN BUG: ps-bash emits `return 42` as `$global:LASTEXITCODE = 42; return`,
-    /// which causes the ps-bash process itself to exit with code 42 instead of 0.
-    /// Bash exits 0 (the echo succeeds) but ps-bash exits 42.
-    /// Golden mode: records current ps-bash stdout so the test does not block CI.
-    /// Record: UPDATE_GOLDENS=1 ./scripts/test.sh --filter Differential_Function_ReturnSetsExitCode
     /// </summary>
     [SkippableFact]
     public async Task Differential_Function_ReturnSetsExitCode()
     {
-        await AssertOracle.GoldenAsync(
+        await AssertOracle.EqualAsync(
             "f() { return 42; }; f; echo $?",
-            "Function_ReturnSetsExitCode",
             timeout: TimeSpan.FromSeconds(15));
     }
 

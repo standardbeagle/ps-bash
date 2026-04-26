@@ -596,6 +596,7 @@ function Invoke-BashEcho {
     }
 
     Emit-BashLine -Text $text -Command 'echo'
+    $global:LASTEXITCODE = 0
 }
 
 # --- printf Command ---

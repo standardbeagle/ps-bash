@@ -212,8 +212,10 @@ nonexistent'
     }
 
     [Fact]
-    public void LastExitCode_DoesNotClobberOnSuccessPathThatSetsNothing()
+    public void LastExitCode_ReflectsEchoExitCode_AfterSuccessfulEcho()
     {
+        // bash: echo always exits 0 — Invoke-BashEcho sets $global:LASTEXITCODE = 0.
+        // Invoke-BashEval therefore propagates exitCode = 0 to the caller.
         using var pwsh = PwshTestFixture.Create();
         var result = pwsh.AddScript(@"
             $LASTEXITCODE = 42
@@ -221,12 +223,15 @@ nonexistent'
             $LASTEXITCODE
         ").Invoke();
         Assert.Single(result);
-        Assert.Equal("42", result[0].ToString());
+        Assert.Equal("0", result[0].ToString());
     }
 
     [Fact]
-    public void SetE_EchoHi_CallerLastExitCodePreserved()
+    public void SetE_EchoHi_ExitsSuccessfully_LastExitCodeIsZero()
     {
+        // bash: `set -e; echo hi` exits 0 because echo succeeds.
+        // Invoke-BashEcho sets $global:LASTEXITCODE = 0; errexit never fires.
+        // The caller's LASTEXITCODE is updated to 0 (the script's exit code).
         using var pwsh = PwshTestFixture.Create();
         var result = pwsh.AddScript(@"
             $LASTEXITCODE = 1
@@ -243,7 +248,7 @@ nonexistent'
         ").Invoke();
         Assert.Single(result);
         Assert.Equal("", result[0].Properties["ErrorId"]?.Value?.ToString() ?? "");
-        Assert.Equal("1", result[0].Properties["LastExitCode"]?.Value?.ToString() ?? "");
+        Assert.Equal("0", result[0].Properties["LastExitCode"]?.Value?.ToString() ?? "");
     }
 
     [Fact]
