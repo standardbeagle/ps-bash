@@ -62,3 +62,271 @@ QA audit sections per qa-rubric Directive 10 template.
 1. M1/M2/M3 mode coverage: add at least one canary or shell-level test that invokes `source` via a spawn mode so that transpiler-to-runtime integration is validated end-to-end (not just the cmdlet in isolation)
 2. Source path with spaces/special chars: add a test where the sourced file path contains a space; the current single-quote escaping in `InvokeBashSourceCommand.cs:39` would fail for a path like `/tmp/my script.sh`
 3. Exit-code propagation from failing sourced script: add a test where the sourced `.sh` contains a failing command and assert that the error surfaces to the caller
+
+---
+
+### FEATURE: if/elif/else/fi
+
+**EXISTING TESTS** (file:test):
+- `src/PsBash.Core.Tests/Parser/BashParserTests.cs:Parse_IfThenFi_ReturnsIfNodeWithOneArm`
+- `src/PsBash.Core.Tests/Parser/BashParserTests.cs:Parse_IfThenElseFi_ReturnsIfNodeWithElse`
+- `src/PsBash.Core.Tests/Parser/BashParserTests.cs:Parse_IfElifElseFi_ReturnsIfNodeWithMultipleArms`
+- `src/PsBash.Core.Tests/Parser/BashParserTests.cs:Parse_IfTestConstruct_ParsesTestAsBoolExpr`
+- `src/PsBash.Core.Tests/Parser/BashParserTests.cs:Parse_NestedIf_ParsesCorrectly`
+- `src/PsBash.Core.Tests/Parser/BashParserTests.cs:Parse_IfWithMultipleBodyCommands_ReturnsCommandList`
+- `src/PsBash.Core.Tests/Parser/BashParserTests.cs:Parse_MissingFi_ThrowsParseExceptionWithLineAndColumn`
+- `src/PsBash.Core.Tests/Parser/BashParserTests.cs:Parse_MissingThen_ThrowsParseException`
+- `src/PsBash.Core.Tests/Parser/BashParserTests.cs:Parse_ElifMissingFi_ThrowsParseException`
+- `src/PsBash.Core.Tests/Parser/BashParserTests.cs:Parse_MultilineIfError_ReportsLine2`
+- `src/PsBash.Core.Tests/Parser/PsEmitterTests.cs:Transpile_IfThenFi_EmitsIfBlock`
+- `src/PsBash.Core.Tests/Parser/PsEmitterTests.cs:Transpile_IfThenElseFi_EmitsIfElseBlock`
+- `src/PsBash.Core.Tests/Parser/PsEmitterTests.cs:Transpile_IfElifElseFi_EmitsFullChain`
+- `src/PsBash.Core.Tests/Parser/PsEmitterTests.cs:Transpile_IfFileTest_EmitsTestPath`
+- `src/PsBash.Core.Tests/Parser/PsEmitterTests.cs:Transpile_IfDirTest_EmitsTestPathContainer`
+- `src/PsBash.Core.Tests/Parser/PsEmitterTests.cs:Transpile_IfWithMultipleBodyCommands_EmitsAll`
+- `src/PsBash.Core.Tests/Parser/PsEmitterTests.cs:Transpile_NestedIf_EmitsNestedBlocks`
+- `src/PsBash.Differential.Tests/ControlFlowDifferentialTests.cs:Differential_If_CompoundAndCondition`
+- `src/PsBash.Differential.Tests/ControlFlowDifferentialTests.cs:Differential_If_PlainCommandConditionFails`
+- `src/PsBash.Differential.Tests/ControlFlowDifferentialTests.cs:Differential_If_ElifChainWithTestExpr`
+
+**FAILURE-SURFACE COVERAGE** (per Directive 3 axes):
+| Axis | Covered? | Test ref / gap note |
+|------|----------|---------------------|
+| Empty input | YES | `Parse_EmptyInput_ReturnsNull` (parser layer) |
+| Large input | NO | gap — no test for an if-body with a large heredoc or many commands |
+| Unicode | NO | gap — no test with non-ASCII in condition string or body |
+| CRLF input | NO | gap — parser CRLF handling untested for if-blocks |
+| Broken pipe | N/A | if is a control-flow construct, not a pipeline consumer; skip justified |
+| Slow reader | N/A | same reason as broken pipe; skip justified |
+| Signal during execute | NO | gap — no Ctrl-C test mid-if-body |
+| Exit code propagation | YES | `Differential_If_PlainCommandConditionFails` — false exits 1, drives else branch |
+| Stderr interleave | NO | gap — no test for `2>&1` inside if-body |
+| Working dir state | NO | gap — no test that cd inside if-body persists |
+| Environment leak | NO | gap — no test that VAR=x inside if-body leaks |
+| Quoting / injection | YES | `Differential_If_ElifChainWithTestExpr` — quoted `"$x"` in `[ ... ]` |
+| Platform-locked file | N/A | if is pure control flow; skip justified |
+| Missing target | PARTIAL | `Parse_MissingFi_ThrowsParseExceptionWithLineAndColumn` (parse error); no runtime missing-cmd test |
+| Recursion depth | NO | gap — no deeply nested if chain test |
+
+**MODE COVERAGE** (per Directive 4 modes):
+| Mode | Covered? | Test ref / gap note |
+|------|----------|---------------------|
+| M1 -c | YES | `Differential_If_*` tests invoke ps-bash with `-c`; oracle runs bash `-c` |
+| M2 stdin pipe | NO | gap — no test pipes an if-script through ps-bash stdin |
+| M3 file arg | NO | gap — no test passes a .sh file containing if/elif to ps-bash |
+| M4 interactive | NO | gap — no PTY test for multi-line if entered at the REPL |
+| M5 Invoke-BashEval | NO | gap — no eval test for if expressions |
+| M6 Invoke-BashSource | NO | gap — no sourced script test containing if/elif |
+
+**ORACLE STATUS**:
+- DIFFERENTIAL TESTS PRESENT? YES
+- 3 differential tests added in `ControlFlowDifferentialTests.cs`: compound-and condition, plain-command condition fails, elif chain with `[ ... ]` test expr
+
+**KNOWN BUGS / RISKS**:
+- Compound condition `if cmd1 && cmd2` in the if-condition position: the `&&` inside `if (...)` is emitted as PowerShell `-and` only when both sides are `BoolExpr`; if one side is a plain `Simple` command the `-and` is dropped and only the last command's exit code is tested — `PsEmitter.cs:EmitIf`
+- `[[ ... ]]` extended test with `=~` regex in an if condition: the regex match result feeds the if condition but `$Matches` is not set, breaking `${BASH_REMATCH}` references in the then-body
+
+**PRIORITY GAPS** (top 3 max):
+1. Compound condition `if cmd1 && cmd2` parity: add emitter unit test that confirms `-and` is emitted between two plain commands in an if-condition (currently no such test; `Differential_If_CompoundAndCondition` covers the oracle, but the emitter unit test is missing)
+2. M4 interactive multi-line if: add a PTY test that types an if/elif/fi over multiple lines at the REPL and checks prompt handling between then-body lines
+3. Environment-variable persistence from if-body: add a test verifying that `VAR=x` assigned inside an if-then branch is visible after `fi`
+
+---
+
+### FEATURE: for loops
+
+**EXISTING TESTS** (file:test):
+- `src/PsBash.Core.Tests/Parser/BashParserTests.cs:Parse_ForInWords_ReturnsForInNode`
+- `src/PsBash.Core.Tests/Parser/BashParserTests.cs:Parse_ForImplicitArgs_ReturnsForInWithEmptyList`
+- `src/PsBash.Core.Tests/Parser/BashParserTests.cs:Parse_ForArith_ReturnsForArithNode`
+- `src/PsBash.Core.Tests/Parser/BashParserTests.cs:Parse_ForInWithNewlines_ReturnsForInNode`
+- `src/PsBash.Core.Tests/Parser/BashParserTests.cs:Parse_ForMissingDone_ThrowsParseException`
+- `src/PsBash.Core.Tests/Parser/BashParserTests.cs:Parse_MissingDoInFor_ThrowsParseException`
+- `src/PsBash.Core.Tests/Parser/PsEmitterTests.cs:Transpile_ForInWords_EmitsForeach`
+- `src/PsBash.Core.Tests/Parser/PsEmitterTests.cs:Transpile_ForInNumbers_EmitsForeach`
+- `src/PsBash.Core.Tests/Parser/PsEmitterTests.cs:Transpile_ForInGlob_EmitsResolvePath`
+- `src/PsBash.Core.Tests/Parser/PsEmitterTests.cs:Transpile_ForImplicitArgs_EmitsArgsIteration`
+- `src/PsBash.Core.Tests/Parser/PsEmitterTests.cs:Transpile_ForArith_EmitsCStyleFor`
+- `src/PsBash.Core.Tests/Parser/PsEmitterTests.cs:Transpile_ForIn_LoopVarNotEnvVar`
+- `src/PsBash.Core.Tests/Parser/PsEmitterTests.cs:Transpile_ForIn_SimilarVarNameNotClobbered`
+- `src/PsBash.Core.Tests/Parser/PsEmitterTests.cs:Transpile_ForInGlobCharClass_EmitsResolvePath`
+- `src/PsBash.Core.Tests/Parser/PsEmitterTests.cs:Transpile_ForIn_ContainsIterGuard`
+- `src/PsBash.Core.Tests/Parser/PsEmitterTests.cs:Transpile_ForArith_ContainsIterGuard`
+- `src/PsBash.Differential.Tests/ControlFlowDifferentialTests.cs:Differential_For_BraceRangeExpansion`
+- `src/PsBash.Differential.Tests/ControlFlowDifferentialTests.cs:Differential_For_BreakExitsEarly`
+- `src/PsBash.Differential.Tests/ControlFlowDifferentialTests.cs:Differential_For_CStyle`
+
+**FAILURE-SURFACE COVERAGE** (per Directive 3 axes):
+| Axis | Covered? | Test ref / gap note |
+|------|----------|---------------------|
+| Empty input | PARTIAL | `Parse_ForImplicitArgs_ReturnsForInWithEmptyList` (empty list); no test for `for x in; do` empty body |
+| Large input | NO | gap — no test iterating over 10 000+ items |
+| Unicode | NO | gap — no test with non-ASCII item values in the list |
+| CRLF input | NO | gap — CRLF in for-loop body untested |
+| Broken pipe | N/A | for is not a pipeline consumer; skip justified |
+| Slow reader | N/A | same; skip justified |
+| Signal during execute | NO | gap — no Ctrl-C test mid-iteration |
+| Exit code propagation | YES | `Differential_For_BreakExitsEarly` — echo exit code 0 after break |
+| Stderr interleave | NO | gap — no test for stderr inside loop body |
+| Working dir state | NO | gap — no test that cd inside loop body persists |
+| Environment leak | NO | gap — no test that loop variable is visible after done |
+| Quoting / injection | YES | `Transpile_ForIn_LoopVarNotEnvVar` — loop var emitted as $x not $env:x |
+| Platform-locked file | N/A | for is pure control flow; skip justified |
+| Missing target | YES | `Parse_ForMissingDone_ThrowsParseException` |
+| Recursion depth | NO | gap — no nested loop depth test |
+
+**MODE COVERAGE** (per Directive 4 modes):
+| Mode | Covered? | Test ref / gap note |
+|------|----------|---------------------|
+| M1 -c | YES | differential tests invoke ps-bash -c |
+| M2 stdin pipe | NO | gap |
+| M3 file arg | NO | gap |
+| M4 interactive | NO | gap — no PTY test for multi-line for at REPL |
+| M5 Invoke-BashEval | NO | gap |
+| M6 Invoke-BashSource | NO | gap |
+
+**ORACLE STATUS**:
+- DIFFERENTIAL TESTS PRESENT? YES
+- 3 differential tests: brace-range expansion, break exits early, C-style for
+
+**KNOWN BUGS / RISKS**:
+- The iter-guard (`$__psbash_iter`) is shared across nested loops: an inner loop's counter increments the outer counter, so a nested loop with 1000 outer x 200 inner iterations would hit the 100 000 limit at outer=500 — `PsEmitter.cs:EmitForIn`
+- `for x in $list` where `$list` contains items with spaces: the emitter wraps the var in `$env:list` which PowerShell treats as a single string, not an array — word-splitting semantics differ from bash
+
+**PRIORITY GAPS** (top 3 max):
+1. break/continue oracle tests: `Differential_For_BreakExitsEarly` covers break; add a continue test (`Differential_For_ContinueSkipsIteration`) to verify continue skips body but does not exit the loop
+2. Nested loop iter-guard collision: add an emitter unit test with a nested for-in and assert that the inner loop uses a separate counter variable, not the same `$__psbash_iter`
+3. `for x in $var` word-split parity: add a differential test where `list="a b c"` and `for x in $list` must iterate over three items; this is a known semantic gap vs bash
+
+---
+
+### FEATURE: while/until loops
+
+**EXISTING TESTS** (file:test):
+- `src/PsBash.Core.Tests/Parser/BashParserTests.cs:Parse_WhileTrue_ReturnsWhileNode`
+- `src/PsBash.Core.Tests/Parser/BashParserTests.cs:Parse_WhileReadLine_ReturnsWhileNode`
+- `src/PsBash.Core.Tests/Parser/BashParserTests.cs:Parse_Until_ReturnsWhileNodeWithIsUntilTrue`
+- `src/PsBash.Core.Tests/Parser/BashParserTests.cs:Parse_WhileWithTestExpr_ReturnsWhileWithBoolExprCond`
+- `src/PsBash.Core.Tests/Parser/BashParserTests.cs:Parse_WhileWithNewlines_ReturnsWhileNode`
+- `src/PsBash.Core.Tests/Parser/BashParserTests.cs:Parse_MissingDoInWhile_ThrowsParseException`
+- `src/PsBash.Core.Tests/Parser/BashParserTests.cs:Parse_MissingDone_ThrowsParseExceptionNotStackOverflow`
+- `src/PsBash.Core.Tests/Parser/PsEmitterTests.cs:Transpile_WhileTrue_EmitsWhileLoop`
+- `src/PsBash.Core.Tests/Parser/PsEmitterTests.cs:Transpile_WhileCmd_EmitsWhileLoop`
+- `src/PsBash.Core.Tests/Parser/PsEmitterTests.cs:Transpile_UntilCmd_EmitsNegatedWhileLoop`
+- `src/PsBash.Core.Tests/Parser/PsEmitterTests.cs:Transpile_WhileReadLine_EmitsForEachObjectPipeline`
+- `src/PsBash.Core.Tests/Parser/PsEmitterTests.cs:Transpile_WhileReadLine_DoesNotReplaceSimilarVarNames`
+- `src/PsBash.Core.Tests/Parser/PsEmitterTests.cs:Transpile_WhileFileTest_EmitsWhileWithTestPath`
+- `src/PsBash.Core.Tests/Parser/PsEmitterTests.cs:Transpile_UntilFileTest_EmitsNegatedWhileWithTestPath`
+- `src/PsBash.Core.Tests/Parser/PsEmitterTests.cs:Transpile_WhileMultipleBodyCommands_EmitsAll`
+- `src/PsBash.Core.Tests/Parser/PsEmitterTests.cs:Transpile_WhileReadDashR_EmitsForEachObject`
+- `src/PsBash.Core.Tests/Parser/PsEmitterTests.cs:Transpile_WhileTrue_ContainsIterGuard`
+- `src/PsBash.Core.Tests/Parser/PsEmitterTests.cs:Transpile_WhileReadLine_NoIterGuard`
+- `src/PsBash.Core.Tests/Parser/PsEmitterTests.cs:Transpile_WhileRead_StripsTrailingNewlineBeforeSplit`
+- `src/PsBash.Differential.Tests/ControlFlowDifferentialTests.cs:Differential_Until_BasicLoop`
+- `src/PsBash.Differential.Tests/ControlFlowDifferentialTests.cs:Differential_While_ContinueSkipsIteration`
+
+**FAILURE-SURFACE COVERAGE** (per Directive 3 axes):
+| Axis | Covered? | Test ref / gap note |
+|------|----------|---------------------|
+| Empty input | NO | gap — no test for `while false; do true; done` (zero iterations) |
+| Large input | NO | gap — no test streaming 10 MB through `while read line` |
+| Unicode | NO | gap — no test with non-ASCII lines in `while read` |
+| CRLF input | PARTIAL | `Transpile_WhileRead_StripsTrailingNewlineBeforeSplit` strips `\n`; CRLF (`\r\n`) untested |
+| Broken pipe | NO | gap — no test where the while-read source closes its pipe early |
+| Slow reader | NO | gap — no test for a slow-writing producer with while-read consumer |
+| Signal during execute | NO | gap — no Ctrl-C test mid-while |
+| Exit code propagation | YES | `Differential_While_ContinueSkipsIteration` — continue must not change exit code of body |
+| Stderr interleave | NO | gap — no test for stderr inside while body |
+| Working dir state | NO | gap — no test for cd inside while body |
+| Environment leak | NO | gap — no test for variable set inside while body visible after done |
+| Quoting / injection | PARTIAL | `Transpile_WhileReadLine_DoesNotReplaceSimilarVarNames` |
+| Platform-locked file | N/A | while is control flow; skip justified |
+| Missing target | YES | `Parse_MissingDone_ThrowsParseExceptionNotStackOverflow`, `Parse_MissingDoInWhile_ThrowsParseException` |
+| Recursion depth | NO | gap — no deeply nested while test |
+
+**MODE COVERAGE** (per Directive 4 modes):
+| Mode | Covered? | Test ref / gap note |
+|------|----------|---------------------|
+| M1 -c | YES | differential tests invoke ps-bash -c |
+| M2 stdin pipe | NO | gap |
+| M3 file arg | NO | gap |
+| M4 interactive | NO | gap — no PTY test for multi-line while at REPL |
+| M5 Invoke-BashEval | NO | gap |
+| M6 Invoke-BashSource | NO | gap |
+
+**ORACLE STATUS**:
+- DIFFERENTIAL TESTS PRESENT? YES
+- 2 differential tests: until basic loop, while continue skips iteration
+
+**KNOWN BUGS / RISKS**:
+- `while true` emits `$__psbash_iter` guard but infinite loops are a valid pattern; users must set `PSBASH_MAX_ITERATIONS` to avoid the limit firing — documented workaround but not tested
+- `while read line` pipeline path (`ForEach-Object`) does not propagate the producer's exit code to `$?` after the pipeline; bash propagates the last command's exit code — semantic gap
+
+**PRIORITY GAPS** (top 3 max):
+1. Zero-iteration while: add a differential test for `while false; do echo body; done` — body must not execute and exit code must be 1 (from the failed condition)
+2. `while read` CRLF stripping: extend `Transpile_WhileRead_StripsTrailingNewlineBeforeSplit` to verify `\r\n` input also produces clean lines (currently only `\n` is tested)
+3. Infinite-loop guard documentation test: add a test that sets `PSBASH_MAX_ITERATIONS=5` and verifies the loop throws after 5 iterations (currently the guard is tested only for the default value)
+
+---
+
+### FEATURE: Functions
+
+**EXISTING TESTS** (file:test):
+- `src/PsBash.Core.Tests/Parser/BashParserTests.cs:Parse_FunctionKeywordForm_ReturnsShFunction`
+- `src/PsBash.Core.Tests/Parser/BashParserTests.cs:Parse_FunctionParensForm_ReturnsShFunction`
+- `src/PsBash.Core.Tests/Parser/BashParserTests.cs:Parse_FunctionParensWithSpace_ReturnsShFunction`
+- `src/PsBash.Core.Tests/Parser/BashParserTests.cs:Parse_FunctionWithLocalVars_ReturnsShFunctionWithLocalAssignment`
+- `src/PsBash.Core.Tests/Parser/BashParserTests.cs:Parse_FunctionWithMultipleCommands_ReturnsShFunctionWithCommandList`
+- `src/PsBash.Core.Tests/Parser/BashParserTests.cs:Parse_LocalAssignment_ReturnsShAssignmentWithIsLocal`
+- `src/PsBash.Core.Tests/Parser/PsEmitterTests.cs:Transpile_FunctionKeywordForm_EmitsPsFunction`
+- `src/PsBash.Core.Tests/Parser/PsEmitterTests.cs:Transpile_FunctionParensForm_EmitsPsFunction`
+- `src/PsBash.Core.Tests/Parser/PsEmitterTests.cs:Transpile_FunctionParensWithSpace_EmitsPsFunction`
+- `src/PsBash.Core.Tests/Parser/PsEmitterTests.cs:Transpile_FunctionWithLocalVars_EmitsLocalAssignment`
+- `src/PsBash.Core.Tests/Parser/PsEmitterTests.cs:Transpile_FunctionCallingFunction_EmitsNestedCalls`
+- `src/PsBash.Core.Tests/Parser/PsEmitterTests.cs:Transpile_FunctionWithMultilineBody_EmitsFunction`
+- `src/PsBash.Differential.Tests/ControlFlowDifferentialTests.cs:Differential_Function_ReturnSetsExitCode`
+- `src/PsBash.Differential.Tests/ControlFlowDifferentialTests.cs:Differential_Function_ArgExpansion`
+- `src/PsBash.Differential.Tests/ControlFlowDifferentialTests.cs:Differential_Function_Recursion`
+
+**FAILURE-SURFACE COVERAGE** (per Directive 3 axes):
+| Axis | Covered? | Test ref / gap note |
+|------|----------|---------------------|
+| Empty input | NO | gap — no test for a function with an empty body `f() {}` |
+| Large input | NO | gap — no test for a function called in a tight loop with large args |
+| Unicode | NO | gap — no test with non-ASCII in function name or args |
+| CRLF input | NO | gap — CRLF in function body untested |
+| Broken pipe | N/A | functions are not pipeline consumers by default; skip justified |
+| Slow reader | N/A | same; skip justified |
+| Signal during execute | NO | gap — no Ctrl-C test mid-function-body |
+| Exit code propagation | YES | `Differential_Function_ReturnSetsExitCode` — `return 42; echo $?` must print 42 |
+| Stderr interleave | NO | gap — no test for stderr inside function body |
+| Working dir state | NO | gap — no test for cd inside function body |
+| Environment leak | PARTIAL | `Transpile_FunctionWithLocalVars_EmitsLocalAssignment` — local vars; no test for non-local var leaking from function |
+| Quoting / injection | YES | `Differential_Function_ArgExpansion` — quoted args with spaces via $1/$@ |
+| Platform-locked file | N/A | functions are pure control flow; skip justified |
+| Missing target | NO | gap — no test for calling an undefined function |
+| Recursion depth | YES | `Differential_Function_Recursion` — factorial(4) via recursive call |
+
+**MODE COVERAGE** (per Directive 4 modes):
+| Mode | Covered? | Test ref / gap note |
+|------|----------|---------------------|
+| M1 -c | YES | differential tests invoke ps-bash -c |
+| M2 stdin pipe | NO | gap |
+| M3 file arg | NO | gap |
+| M4 interactive | NO | gap — no PTY test for defining and calling a function at the REPL |
+| M5 Invoke-BashEval | NO | gap |
+| M6 Invoke-BashSource | NO | gap |
+
+**ORACLE STATUS**:
+- DIFFERENTIAL TESTS PRESENT? YES
+- 3 differential tests: return sets $?, arg expansion ($1/$@/$#), recursion (factorial)
+
+**KNOWN BUGS / RISKS**:
+- `local` is emitted as a plain assignment (`$x = value`) in PowerShell scope; PowerShell functions do not have bash-style local scope — a `local` variable inside a function IS visible to nested functions called from it, but IS also visible after the function returns via the outer scope if the variable was never declared before — semantic gap vs bash
+- `return N` is emitted via PowerShell `return` which exits the function and sets `$LASTEXITCODE` only via a workaround; if `set -e` / `$ErrorActionPreference = 'Stop'` is active, a `return 1` may throw instead of setting `$?` — `PsEmitter.cs:EmitSimple` return handling
+- Recursive functions: each recursive call emits a new PowerShell function frame; tail recursion is not optimized; deep recursion (>500 levels) will hit PowerShell's default stack limit
+
+**PRIORITY GAPS** (top 3 max):
+1. `local` scope isolation: add a differential test verifying that a `local x=inner` inside a function does not clobber an outer `x=outer` variable — this is the most impactful semantic gap between bash local and PowerShell scope
+2. Undefined function call error: add a test that calls a function before it is defined and asserts a non-zero exit code with an error on stderr (ps-bash must not silently succeed)
+3. `$@` in function with quoted args containing spaces: extend `Differential_Function_ArgExpansion` to call `greet "hello world" foo` and verify `$1` is `hello world` (one word, not two)
