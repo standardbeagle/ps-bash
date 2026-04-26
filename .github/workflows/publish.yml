@@ -123,7 +123,8 @@ jobs:
           dotnet test src/PsBash.Core.Tests/PsBash.Core.Tests.csproj \
             --configuration Release \
             --logger "trx;LogFileName=core.trx" \
-            --results-directory TestResults/core
+            --results-directory TestResults/core \
+            --collect "XPlat Code Coverage"
 
       - name: Skip report — Core.Tests
         if: always()
@@ -137,7 +138,8 @@ jobs:
           dotnet test src/PsBash.Cmdlets.Tests/PsBash.Cmdlets.Tests.csproj \
             --configuration Release \
             --logger "trx;LogFileName=cmdlets.trx" \
-            --results-directory TestResults/cmdlets
+            --results-directory TestResults/cmdlets \
+            --collect "XPlat Code Coverage"
 
       - name: Skip report — Cmdlets.Tests
         if: always()
@@ -151,7 +153,8 @@ jobs:
           dotnet test src/PsBash.Shell.Tests/PsBash.Shell.Tests.csproj \
             --configuration Release \
             --logger "trx;LogFileName=shell.trx" \
-            --results-directory TestResults/shell
+            --results-directory TestResults/shell \
+            --collect "XPlat Code Coverage"
 
       - name: Skip report — Shell.Tests
         if: always()
@@ -184,12 +187,43 @@ jobs:
           dotnet test src/PsBash.Differential.Tests/PsBash.Differential.Tests.csproj \
             --configuration Release \
             --logger "trx;LogFileName=differential.trx" \
-            --results-directory TestResults/differential
+            --results-directory TestResults/differential \
+            --collect "XPlat Code Coverage"
 
       - name: Skip report — Differential.Tests
         if: always()
         shell: bash
         run: bash scripts/skip-report.sh TestResults/differential "Differential.Tests (${{ matrix.os }})"
+
+      # ── Quarantine report ────────────────────────────────────────────────────
+      - name: Quarantine report
+        if: always()
+        shell: bash
+        run: |
+          echo "=== Quarantined tests ===" >&2
+          count=$(dotnet test \
+            --filter "Quarantined=notEmpty" \
+            --configuration Release \
+            --no-build \
+            --list-tests 2>/dev/null \
+            | grep -c "^\s*" || echo "0")
+          echo "Quarantined test count: ${count}" >&2
+
+      # ── Diff-coverage gate (PRs touching PsBash.Core or PsBash.Module) ──────
+      - name: Diff-coverage gate
+        if: github.event_name == 'pull_request'
+        shell: bash
+        run: |
+          # Collect one representative coverage XML for the gate check.
+          # Coverlet places coverage.cobertura.xml under TestResults/<guid>/
+          xml=$(find TestResults -name "coverage.cobertura.xml" 2>/dev/null | head -1 || true)
+          if [[ -n "$xml" ]]; then
+            bash scripts/diff-coverage.sh "$xml" "origin/${{ github.base_ref }}" || {
+              echo "::warning::Diff-coverage gate failed — see diff-coverage.sh output above"
+            }
+          else
+            echo "::warning::No coverage XML found; skipping diff-coverage gate"
+          fi
 
       - name: Upload test artifacts
         if: failure()
@@ -199,6 +233,14 @@ jobs:
           path: |
             TestResults/**/*.trx
             src/PsBash.Differential.Tests/Goldens/*.received.txt
+          if-no-files-found: ignore
+
+      - name: Upload coverage artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-${{ matrix.os }}
+          path: TestResults/**/coverage.cobertura.xml
           if-no-files-found: ignore
 
   publish:
