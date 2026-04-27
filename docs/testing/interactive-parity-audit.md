@@ -330,3 +330,68 @@ QA audit sections per qa-rubric Directive 10 template.
 1. `local` scope isolation: add a differential test verifying that a `local x=inner` inside a function does not clobber an outer `x=outer` variable — this is the most impactful semantic gap between bash local and PowerShell scope
 2. Undefined function call error: add a test that calls a function before it is defined and asserts a non-zero exit code with an error on stderr (ps-bash must not silently succeed)
 3. `$@` in function with quoted args containing spaces: extend `Differential_Function_ArgExpansion` to call `greet "hello world" foo` and verify `$1` is `hello world` (one word, not two)
+
+---
+
+### FEATURE: case/esac
+
+**EXISTING TESTS** (file:test):
+- `src/PsBash.Core.Tests/Parser/PsEmitterTests.cs:Transpile_SimpleCase_EmitsSwitch`
+- `src/PsBash.Core.Tests/Parser/PsEmitterTests.cs:Transpile_CaseMultiplePatterns_EmitsSeparateClauses`
+- `src/PsBash.Core.Tests/Parser/PsEmitterTests.cs:Transpile_CaseDefaultStar_EmitsDefault`
+- `src/PsBash.Core.Tests/Parser/PsEmitterTests.cs:Transpile_NestedCase_EmitsNestedSwitch`
+- `src/PsBash.Core.Tests/Parser/PsEmitterTests.cs:Transpile_CaseWithGlobPattern_EmitsWildcard`
+- `src/PsBash.Differential.Tests/CaseEsacDifferentialTests.cs:Differential_Case_SimpleMatch`
+- `src/PsBash.Differential.Tests/CaseEsacDifferentialTests.cs:Differential_Case_NoMatch_NoOutput`
+- `src/PsBash.Differential.Tests/CaseEsacDifferentialTests.cs:Differential_Case_WildcardDefault`
+- `src/PsBash.Differential.Tests/CaseEsacDifferentialTests.cs:Differential_Case_AlternatePatterns`
+- `src/PsBash.Differential.Tests/CaseEsacDifferentialTests.cs:Differential_Case_GlobPattern`
+- `src/PsBash.Differential.Tests/CaseEsacDifferentialTests.cs:Differential_Case_VariableSubject`
+- `src/PsBash.Differential.Tests/CaseEsacDifferentialTests.cs:Differential_Case_QuotedSubject`
+- `src/PsBash.Differential.Tests/CaseEsacDifferentialTests.cs:Differential_Case_LeadingParenForm`
+- `src/PsBash.Differential.Tests/CaseEsacDifferentialTests.cs:Differential_Case_ExitCodePropagation`
+- `src/PsBash.Differential.Tests/CaseEsacDifferentialTests.cs:Differential_Case_NoFallthrough_OnlyFirstMatchFires`
+
+**FAILURE-SURFACE COVERAGE** (per Directive 3 axes):
+| Axis | Covered? | Test ref / gap note |
+|------|----------|---------------------|
+| Empty input | PARTIAL | `Differential_Case_NoMatch_NoOutput` — no arms match, output is empty; no test for `case $x in esac` (zero arms) |
+| Large input | NO | gap — no test for a case subject containing a 10 MB string |
+| Unicode | NO | gap — no test with non-ASCII in case subject or pattern |
+| CRLF input | NO | gap — CRLF in case body untested |
+| Broken pipe | N/A | case is not a pipeline consumer; skip justified |
+| Slow reader | N/A | case is not a pipeline consumer; skip justified |
+| Signal during execute | NO | gap — no Ctrl-C test mid-case-body |
+| Exit code propagation | YES | `Differential_Case_ExitCodePropagation` — last body command exit code propagates via $? |
+| Stderr interleave | NO | gap — no test for stderr inside a case arm body |
+| Working dir state | NO | gap — no test for cd inside a case arm body |
+| Environment leak | NO | gap — no test that a variable set inside a case arm body is visible after esac |
+| Quoting / injection | YES | `Differential_Case_QuotedSubject` — double-quoted $x as subject; `Differential_Case_VariableSubject` — bare $x expansion |
+| Platform-locked file | N/A | case is pure control flow; skip justified |
+| Missing target | PARTIAL | `Parse_MissingFi`-equivalent: no test for missing `esac`; parser does throw on malformed case |
+| Recursion depth | NO | gap — no test for a case nested 5+ levels deep |
+
+**MODE COVERAGE** (per Directive 4 modes):
+| Mode | Covered? | Test ref / gap note |
+|------|----------|---------------------|
+| M1 -c | YES | all differential tests invoke ps-bash -c |
+| M2 stdin pipe | NO | gap |
+| M3 file arg | NO | gap |
+| M4 interactive | NO | gap — no PTY test for multi-line case at REPL |
+| M5 Invoke-BashEval | NO | gap |
+| M6 Invoke-BashSource | NO | gap |
+
+**ORACLE STATUS**:
+- DIFFERENTIAL TESTS PRESENT? YES
+- 10 differential tests in `CaseEsacDifferentialTests.cs`: simple match, no match, wildcard default, alternate patterns, glob pattern, variable subject, quoted subject, leading-paren form, exit code propagation, no-fallthrough
+
+**KNOWN BUGS / RISKS**:
+- Bare literal case subject (`case hello in`) was emitted as `switch (hello)` — PowerShell treated `hello` as a command name rather than a string, producing a non-zero exit code and no output. Fixed in this audit task (DART-swq8znLUb1BN) via `EmitCaseExpr` helper in `PsEmitter.cs:EmitCase`.
+- `;&` (fallthrough) and `;;&` (continue-matching) terminators are NOT parsed — `BashParser.cs:ParseCaseArm` only consumes `;;`; a script using `;&` hangs ps-bash because the parser's state machine never advances past the `;&` token.
+- Pattern matching is case-sensitive in both bash and ps-bash (PowerShell `switch` is case-insensitive by default; ps-bash uses `-Exact` mode implicitly via single-quoted patterns, but `-Wildcard` mode inherits PowerShell case-insensitivity — potential mismatch for glob patterns on case-sensitive filesystems).
+- Variable patterns (`case $x in $y)`) are not supported: patterns are collected as raw strings at parse time; `$y` would appear as a literal string in the pattern, not expand the variable — `BashParser.cs:ConsumeCasePattern`.
+
+**PRIORITY GAPS** (top 3 max):
+1. `;&` fallthrough support: the parser hangs on `;&` — the token is not consumed, looping forever; fix requires adding `SemiAmp` token kind to the lexer, updating `ParseCaseArm` to detect it, and emitting a `; fallthrough` or explicit next-arm invocation in `EmitCase`
+2. PowerShell `-Wildcard` case sensitivity: add a differential test with a mixed-case subject like `case FILE.TXT in *.txt) echo hit ;; esac` — bash matches (glob is case-sensitive on Linux), PowerShell `-Wildcard` matches case-insensitively on Windows; the test will reveal the platform divergence
+3. Variable pattern expansion: add a parser test that verifies `case $x in $y)` produces a `CaseArm` whose pattern is the literal string `$y`, then add a differential test to document the known semantic gap vs bash

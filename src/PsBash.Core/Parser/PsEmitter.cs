@@ -377,7 +377,7 @@ public static class PsEmitter
         if (useWildcard)
             sb.Append(" -Wildcard");
         sb.Append(" (");
-        sb.Append(EmitWord(caseCmd.Expr));
+        sb.Append(EmitCaseExpr(caseCmd.Expr));
         sb.Append(") { ");
 
         for (int i = 0; i < caseCmd.Arms.Length; i++)
@@ -408,6 +408,27 @@ public static class PsEmitter
 
         sb.Append(" }");
         return sb.ToString();
+    }
+
+    /// <summary>
+    /// Emits the subject expression of a case/esac for use inside <c>switch (...)</c>.
+    /// In bash a bare word in the case subject is a string literal, but PowerShell
+    /// would treat an unquoted bare word as a command invocation.  This method wraps
+    /// pure-literal subjects in single quotes so that <c>case hello in</c> becomes
+    /// <c>switch ('hello')</c> rather than the broken <c>switch (hello)</c>.
+    ///
+    /// Expressions that are already PowerShell values — variable refs ($env:x),
+    /// string literals starting with <c>"</c> or <c>'</c>, subexpressions starting
+    /// with <c>(</c> or <c>$</c> — are forwarded unchanged.
+    /// </summary>
+    private static string EmitCaseExpr(CompoundWord expr)
+    {
+        var emitted = EmitWord(expr);
+        // Already a PowerShell expression: variable, quoted string, subexpression.
+        if (emitted.Length > 0 && (emitted[0] == '$' || emitted[0] == '"' || emitted[0] == '\'' || emitted[0] == '('))
+            return emitted;
+        // Bare literal — wrap in single quotes so PowerShell treats it as a string.
+        return $"'{emitted}'";
     }
 
     private static string EmitFunction(Command.ShFunction func)
