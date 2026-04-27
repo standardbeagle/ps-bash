@@ -5,12 +5,24 @@ namespace PsBash.Cmdlets;
 
 /// <summary>
 /// Transpiles a bash string and evaluates the resulting PowerShell in the caller's scope.
+/// Bash eval joins all args with spaces before re-parsing; this cmdlet replicates that.
+/// A nesting-depth guard ($global:__BashEvalDepth, max 5) prevents infinite recursion.
 /// </summary>
 [Cmdlet(VerbsLifecycle.Invoke, "BashEval")]
 public sealed class InvokeBashEvalCommand : PSCmdlet
 {
-    [Parameter(Position = 0, Mandatory = true, ValueFromPipeline = true)]
+    /// <summary>
+    /// The first argument (or single pipeline value).  Additional positional
+    /// arguments are collected via <see cref="RemainingArgs"/> so that
+    /// <c>eval "x=1" "y=2"</c> (which the emitter renders as two separate words)
+    /// is joined with a space before transpilation, matching bash semantics.
+    /// </summary>
+    [Parameter(Position = 0, ValueFromPipeline = true)]
     public string? Source { get; set; }
+
+    /// <summary>Extra positional args after the first; joined to <see cref="Source"/> with a space.</summary>
+    [Parameter(ValueFromRemainingArguments = true)]
+    public string[]? RemainingArgs { get; set; }
 
     [Parameter]
     public SwitchParameter PassThru { get; set; }
@@ -18,15 +30,54 @@ public sealed class InvokeBashEvalCommand : PSCmdlet
     [Parameter]
     public SwitchParameter NoLocalScope { get; set; }
 
+    private const int MaxEvalDepth = 5;
+
     protected override void ProcessRecord()
     {
-        if (string.IsNullOrEmpty(Source))
+        // Join all args with spaces, matching bash eval semantics.
+        var source = Source ?? string.Empty;
+        if (RemainingArgs is { Length: > 0 })
+            source = source + " " + string.Join(" ", RemainingArgs);
+
+        if (string.IsNullOrWhiteSpace(source))
             return;
 
+        // Nesting-depth guard: prevent runaway recursive eval.
+        var depthObj = SessionState.PSVariable.GetValue("__BashEvalDepth");
+        int depth = 0;
+        if (depthObj != null && LanguagePrimitives.TryConvertTo<int>(depthObj, out int d))
+            depth = d;
+
+        if (depth >= MaxEvalDepth)
+        {
+            var errorRecord = new ErrorRecord(
+                new InvalidOperationException(
+                    $"eval: nesting depth limit ({MaxEvalDepth}) exceeded; " +
+                    "possible infinite recursion"),
+                "PsBash.EvalDepthExceeded",
+                ErrorCategory.LimitsExceeded,
+                source);
+            ThrowTerminatingError(errorRecord);
+            return;
+        }
+
+        SessionState.PSVariable.Set("__BashEvalDepth", depth + 1);
+        try
+        {
+            ProcessSource(source);
+        }
+        finally
+        {
+            SessionState.PSVariable.Set("__BashEvalDepth", depth);
+        }
+    }
+
+    private void ProcessSource(string source)
+    {
         TranspileResult result;
         try
         {
-            result = BashTranspiler.TranspileWithMap(Source, TranspileContext.Eval);
+            result = BashTranspiler.TranspileWithMap(source, TranspileContext.Eval);
         }
         catch (PsBash.Core.Parser.ParseException ex)
         {

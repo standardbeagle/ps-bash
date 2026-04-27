@@ -290,4 +290,57 @@ nonexistent'
         Assert.Equal("True", result[0].Properties["ErrFired"]?.Value?.ToString() ?? "");
         Assert.Equal("True", result[0].Properties["ExitFired"]?.Value?.ToString() ?? "");
     }
+
+    [Fact]
+    public void MultiplePositionalArgs_JoinedWithSpace_ExecutedAsOneCommand()
+    {
+        // Bash eval spec: args are joined with spaces then evaluated as shell source.
+        // The emitter renders `eval echo hello` as `Invoke-BashEval echo hello`,
+        // passing two separate positional args. The cmdlet must join them so that
+        // the transpiled source is "echo hello" not two separate statements.
+        using var pwsh = PwshTestFixture.Create();
+        var result = pwsh.AddScript("Invoke-BashEval 'echo' 'hello' -PassThru").Invoke();
+        Assert.Single(result);
+        Assert.Equal("hello", result[0].ToString().TrimEnd('\r', '\n'));
+    }
+
+    [Fact]
+    public void DepthGuard_ExceedsMaxDepth_ThrowsEvalDepthExceeded()
+    {
+        // The nesting-depth guard must fire at depth 6 (0-based: depths 0..4 succeed,
+        // depth 5 is the limit, so depth >= 5 is rejected).
+        // We test by manually pre-setting __BashEvalDepth to 5 and calling eval once.
+        using var pwsh = PwshTestFixture.Create();
+        var result = pwsh.AddScript(@"
+            $global:__BashEvalDepth = 5
+            try {
+                Invoke-BashEval 'echo should-not-run'
+            } catch {
+                $_.FullyQualifiedErrorId
+            } finally {
+                Remove-Variable -Name __BashEvalDepth -Scope Global -ErrorAction SilentlyContinue
+            }
+        ").Invoke();
+        Assert.Single(result);
+        Assert.Equal("PsBash.EvalDepthExceeded", result[0].ToString().Split(',')[0]);
+    }
+
+    [Fact]
+    public void DepthGuard_DepthRestoredAfterSuccessfulEval()
+    {
+        // After eval returns normally, __BashEvalDepth must be restored to its
+        // pre-eval value (not left incremented) so subsequent evals at the same
+        // call site do not accumulate and falsely trigger the depth limit.
+        using var pwsh = PwshTestFixture.Create();
+        var result = pwsh.AddScript(@"
+            Remove-Variable -Name __BashEvalDepth -Scope Global -ErrorAction SilentlyContinue
+            Invoke-BashEval 'echo ok1'
+            Invoke-BashEval 'echo ok2'
+            $global:__BashEvalDepth
+        ").Invoke();
+        // Two evals succeeded; __BashEvalDepth must be back to 0 (or unset).
+        var depthStr = result[result.Count - 1]?.ToString() ?? "0";
+        Assert.True(depthStr == "0" || depthStr == "",
+            $"Expected depth 0 after eval, got: {depthStr}");
+    }
 }
