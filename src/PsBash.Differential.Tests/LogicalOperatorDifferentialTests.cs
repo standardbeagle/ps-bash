@@ -117,21 +117,16 @@ public class LogicalOperatorDifferentialTests
     /// <summary>
     /// ! negation on a failing command: `! false &amp;&amp; echo yes`.
     /// ! false inverts exit code to 0; &amp;&amp; echo yes fires.
+    /// Fixed: EmitAndOrList wraps negated pipelines in a scriptblock using the
+    /// BoolExpr-in-chain pattern (Write-Error sets $?=false on negation failure)
+    /// so PS pipeline-chain operators can observe the correct success/failure state.
     /// Failure-surface axis 8: negated exit code must drive the && arm.
-    ///
-    /// KNOWN BUG: `! cmd` in an AndOrList chain causes a PowerShell syntax error.
-    /// The emitter appends `; $global:LASTEXITCODE = if ($?) { 1 } else { 0 }`
-    /// to the negated command, which makes the `&&` appear after `;` — an
-    /// expression context where PS pipeline-chain operators are not allowed.
-    /// Golden file captures the current (broken) ps-bash output for regression tracking.
     /// </summary>
     [SkippableFact]
     public async Task Differential_Not_NegatesFalseAndChainsAnd()
     {
-        // GoldenAsync: known bug — ps-bash produces a PS syntax error instead of "yes".
-        await AssertOracle.GoldenAsync(
+        await AssertOracle.EqualAsync(
             "! false && echo yes",
-            "Not_NegatesFalseAndChainsAnd",
             timeout: TimeSpan.FromSeconds(15));
     }
 

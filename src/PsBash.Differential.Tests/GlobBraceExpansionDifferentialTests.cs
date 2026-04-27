@@ -185,21 +185,15 @@ public class GlobBraceExpansionDifferentialTests
     // -----------------------------------------------------------------------
 
     /// <summary>
-    /// Documents the known gap: letter brace ranges ({a..e}) are not expanded.
-    /// ps-bash emits the literal string "a..e" instead of "a b c d e".
-    /// Frozen as a golden so a regression does not silently change the output.
-    /// To fix: extend ParseBraceExpansion to handle char.TryParse and emit
-    /// a BracedRange with char Start/End, or expand inline as a string tuple.
+    /// Letter brace ranges ({a..e}) now expand correctly.
+    /// Parser: ParseBraceExpansion handles single-char alphabetic ranges and
+    /// expands them inline as a BracedTuple (e.g. {a..e} → ["a","b","c","d","e"]).
     /// </summary>
     [SkippableFact]
     public async Task Differential_BraceRange_LetterRange_KnownGap()
     {
-        // Golden mode: bash unavailability does not skip; captures ps-bash output.
-        // ps-bash currently emits the literal "a..e" not "a b c d e".
-        // UPDATE_GOLDENS=1 to re-record if/when fixed.
-        await AssertOracle.GoldenAsync(
+        await AssertOracle.EqualAsync(
             "echo {a..e}",
-            "BraceRange_LetterRange",
             timeout: TimeSpan.FromSeconds(15));
     }
 
@@ -216,21 +210,15 @@ public class GlobBraceExpansionDifferentialTests
     // -----------------------------------------------------------------------
 
     /// <summary>
-    /// Documents the known gap: nested brace expansion is not supported.
-    /// ps-bash naively splits on all commas including those inside nested
-    /// brace groups, producing incorrect output.
-    /// Frozen as a golden so a regression does not silently change the output.
-    /// To fix: replace Split(',') with a depth-aware comma splitter that
-    /// recurses into nested braces.
+    /// Nested brace expansion ({a,b{1,2},c}) now works correctly.
+    /// Parser: ParseBraceExpansion uses a depth-aware comma splitter and
+    /// ExpandNestedBraces to recursively expand sub-braces within each item.
     /// </summary>
     [SkippableFact]
     public async Task Differential_BraceTuple_NestedBraces_KnownGap()
     {
-        // Golden mode: captures current (broken) ps-bash output for regression
-        // detection. Fix requires depth-aware comma splitting in ParseBraceExpansion.
-        await AssertOracle.GoldenAsync(
+        await AssertOracle.EqualAsync(
             "echo {a,b{1,2},c}",
-            "BraceTuple_NestedBraces",
             timeout: TimeSpan.FromSeconds(15));
     }
 

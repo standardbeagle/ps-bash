@@ -849,6 +849,16 @@ public static class PsEmitter
         if (cond is Command.AndOrList andOrCond)
             return EmitConditionAndOrList(andOrCond);
 
+        // Negated pipeline (! cmd): the general EmitPipeline emits a semicolon-separated
+        // statement which is invalid inside if (...). Wrap in a scriptblock so the
+        // negated exit-code check is a proper boolean expression.
+        // $global:LASTEXITCODE -ne 0 means the original command failed → negation succeeds.
+        if (cond is Command.Pipeline { Negated: true } negPipeline)
+        {
+            var unnegated = negPipeline with { Negated = false };
+            return $"(& {{ {EmitPipeline(unnegated)}; $global:LASTEXITCODE -ne 0 }})";
+        }
+
         return Emit(cond);
     }
 
@@ -932,7 +942,11 @@ public static class PsEmitter
                 sb.Append(segments[i - 1].TrailingOp);
                 sb.Append(' ');
             }
+            // Wrap each segment in parens so that -and / -or are not parsed
+            // as additional flags to the preceding cmdlet (e.g. Test-Path).
+            sb.Append('(');
             sb.Append(TranslateTestCondition(segments[i].Words, extended: true));
+            sb.Append(')');
         }
         return sb.ToString();
     }
@@ -1171,6 +1185,9 @@ public static class PsEmitter
             var hereDoc = cmd.HereDocs[^1];
             var innerCmd = new Command.Simple(cmd.Words, cmd.EnvPairs, cmd.Redirects);
             string body = hereDoc.Body;
+            // <<- operator: strip leading tabs from each line of the heredoc body.
+            if (hereDoc.StripTabs)
+                body = StripLeadingTabs(body);
             if (hereDoc.Expand)
                 body = TranslateHereDocVars(body);
             string hereString = hereDoc.Expand
@@ -1348,7 +1365,17 @@ public static class PsEmitter
                         specialResult = "$global:BashPositional = @()";
                     else
                     {
-                        var items = string.Join(", ", positionalWords.Select(w => EmitWord(w)));
+                        // Quote each element so that bare literals like `a`, `b`, `c`
+                        // are treated as strings, not variable/command references in PS.
+                        var items = string.Join(", ", positionalWords.Select(w =>
+                        {
+                            var emitted = EmitWord(w);
+                            // Already quoted (starts with ' or "), a variable ($), subexpr ((), or array (@): pass through.
+                            if (emitted.Length > 0 && emitted[0] is '\'' or '"' or '$' or '(' or '@')
+                                return emitted;
+                            // Bare literal — wrap in single quotes.
+                            return "'" + emitted.Replace("'", "''") + "'";
+                        }));
                         specialResult = $"$global:BashPositional = @({items})";
                     }
                 }
@@ -1412,13 +1439,23 @@ public static class PsEmitter
 
         var sb = new StringBuilder();
 
-        foreach (var envPair in cmd.EnvPairs)
+        // Env-var prefix: VAR=value cmd — set VAR only for the duration of cmd,
+        // then restore to its previous value to prevent leaking into the shell.
+        if (!cmd.EnvPairs.IsEmpty)
         {
-            sb.Append("$env:");
-            sb.Append(envPair.Name);
-            sb.Append(" = ");
-            sb.Append(EmitAssignmentValue(envPair.Value));
-            sb.Append("; ");
+            // Save original values, then open try block.
+            foreach (var envPair in cmd.EnvPairs)
+                sb.Append($"$__saved_{envPair.Name} = $env:{envPair.Name}; ");
+            sb.Append("try { ");
+            // Set the env vars inside the try.
+            foreach (var envPair in cmd.EnvPairs)
+            {
+                sb.Append("$env:");
+                sb.Append(envPair.Name);
+                sb.Append(" = ");
+                sb.Append(EmitAssignmentValue(envPair.Value));
+                sb.Append("; ");
+            }
         }
 
         for (var i = 0; i < cmd.Words.Length; i++)
@@ -1461,6 +1498,15 @@ public static class PsEmitter
                 sb.Append(" -Append");
         }
 
+        // Close the try/finally for env-var prefix save/restore.
+        if (!cmd.EnvPairs.IsEmpty)
+        {
+            sb.Append(" } finally { ");
+            foreach (var envPair in cmd.EnvPairs)
+                sb.Append($"$env:{envPair.Name} = $__saved_{envPair.Name}; ");
+            sb.Append('}');
+        }
+
         return sb.ToString();
     }
 
@@ -1495,6 +1541,19 @@ public static class PsEmitter
             return $"{char.ToUpperInvariant(target[1])}:\\{target[3..].Replace('/', '\\')}";
         }
         return target;
+    }
+
+    /// <summary>
+    /// Strips leading tab characters from each line of a heredoc body.
+    /// Used for the <c>&lt;&lt;-</c> (DLessDash) operator which strips leading tabs
+    /// from both the delimiter line and the body lines.
+    /// </summary>
+    private static string StripLeadingTabs(string body)
+    {
+        var lines = body.Split('\n');
+        for (int i = 0; i < lines.Length; i++)
+            lines[i] = lines[i].TrimStart('\t');
+        return string.Join('\n', lines);
     }
 
     /// <summary>
@@ -1940,11 +1999,15 @@ public static class PsEmitter
             return inDoubleQuote ? $"$(${bvs.Name}.Keys)" : $"${bvs.Name}.Keys";
 
         // Replace first: ${VAR/find/replace}
+        // PS -replace is always global; use the instance Regex.Replace(input, replacement, count)
+        // overload (count=1) for first-only replacement. The static overload's 4th arg is
+        // RegexOptions, not count, so we cast the escaped pattern string to [regex] to get
+        // an instance on which we call .Replace(input, replacement, count).
         if (bvs.Suffix.StartsWith("/") && !bvs.Suffix.StartsWith("//"))
         {
             var parts = bvs.Suffix[1..].Split('/', 2);
             string find = parts[0], replace = parts.Length > 1 ? parts[1] : "";
-            return $"{open}{varRef} -replace [regex]::Escape('{find}'),'{replace}')";
+            return $"{open}([regex][regex]::Escape('{find}')).Replace({varRef}, '{replace}', 1))";
         }
 
         // Replace all: ${VAR//find/replace}
@@ -1997,6 +2060,13 @@ public static class PsEmitter
                     sb.Append(EmitSimpleVarBraced(vs.Name));
                 else
                     sb.Append(EmitSimpleVar(vs.Name, inDoubleQuote: true));
+            }
+            else if (part is WordPart.Literal lit)
+            {
+                // Inside double quotes, bash's \$ produces a literal '$' (parsed as Literal("$")
+                // by the parser). In a PS double-quoted string a bare '$' starts a variable
+                // reference — escape it with a backtick to emit it literally.
+                sb.Append(lit.Value.Replace("$", "`$"));
             }
             else
                 sb.Append(EmitWordPart(part));
@@ -2064,18 +2134,38 @@ public static class PsEmitter
             }
 
             var cmd = andOr.Commands[i];
-            // Wrap BoolExpr and ShAssignment in [void](...) when used in && / || chains
-            // so PowerShell doesn't output the boolean result or assignment value.
-            if (cmd is Command.BoolExpr)
+            // BoolExpr in && / || chains: set $LASTEXITCODE based on the boolean result
+            // so that PS pipeline chain operators (&& / ||) can observe the exit code.
+            // Without this, the boolean result from (Test-Path ...) is truthy for PS &&/||
+            // regardless of value; we need to explicitly fail when the test is false.
+            if (cmd is Command.BoolExpr boolExprInChain)
             {
-                sb.Append("[void]");
-                sb.Append(Emit(cmd));
+                var boolText = Emit(boolExprInChain);
+                sb.Append($"$(if ({boolText}) {{ $global:LASTEXITCODE = 0 }} else {{ $global:LASTEXITCODE = 1; Write-Error '' -ErrorAction SilentlyContinue }})");
             }
             else if (cmd is Command.ShAssignment)
             {
                 sb.Append("[void](");
                 sb.Append(Emit(cmd));
                 sb.Append(')');
+            }
+            else if (cmd is Command.Pipeline { Negated: true } negPipelineInChain)
+            {
+                // Negated pipeline in && / || chain: mirror the BoolExpr-in-chain pattern.
+                // PS pipeline-chain operators (&&/||) check $?, not $LASTEXITCODE.
+                // Use Write-Error to set $?=false when negation yields failure so the
+                // chain operators can observe the right success/failure state.
+                var unnegated = negPipelineInChain with { Negated = false };
+                sb.Append($"$(if ((& {{ {EmitPipeline(unnegated)}; $global:LASTEXITCODE -ne 0 }})) {{ $global:LASTEXITCODE = 0 }} else {{ $global:LASTEXITCODE = 1; Write-Error '' -ErrorAction SilentlyContinue }})");
+            }
+            else if (cmd is Command.Pipeline pipeline)
+            {
+                // Pipeline in && / || chain: bridge $LASTEXITCODE to $? so PS chain
+                // operators (&&/||) observe runtime exit codes (e.g. grep -q).
+                // Wrap the pipeline in a subexpression that sets $? via Write-Error
+                // when $LASTEXITCODE is non-zero after the pipeline completes.
+                var pipelineText = EmitPipeline(pipeline);
+                sb.Append($"$(& {{ {pipelineText}; if ($global:LASTEXITCODE -ne 0) {{ Write-Error '' -ErrorAction SilentlyContinue }} }})");
             }
             else
             {
@@ -2136,7 +2226,14 @@ public static class PsEmitter
                     sb.Append(Emit(cmd));
             }
             else
-                sb.Append(Emit(cmd));
+            {
+                // Non-Simple commands (Subshell, BraceGroup, etc.) as pipeline stages
+                // need & { ... } wrapping so PowerShell accepts them as pipeline segments.
+                if (i > 0 && cmd is Command.Subshell or Command.BraceGroup)
+                    sb.Append($"& {{ {Emit(cmd)} }}");
+                else
+                    sb.Append(Emit(cmd));
+            }
         }
 
         if (pipeline.Negated)

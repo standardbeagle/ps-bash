@@ -162,15 +162,15 @@ public class TestExpressionDifferentialTests
 
     /// <summary>
     /// ! before a simple command (pipeline negation): ! false must succeed.
-    /// Known bug: negation suffix emits '; $LASTEXITCODE = ...' which breaks PS &&/||.
+    /// Fixed: EmitCondition now wraps negated pipelines in a scriptblock so the
+    /// $LASTEXITCODE-ne-0 check is a proper boolean expression for if (...).
     /// Axis 8: pipeline Negated=true flips exit code.
     /// </summary>
     [SkippableFact]
     public async Task Differential_Negation_PipelineNegated_False()
     {
-        await AssertOracle.GoldenAsync(
+        await AssertOracle.EqualAsync(
             "if ! false; then echo yes; else echo no; fi",
-            "Differential_Negation_PipelineNegated_False",
             timeout: TimeSpan.FromSeconds(15));
     }
 
@@ -192,16 +192,16 @@ public class TestExpressionDifferentialTests
     }
 
     /// <summary>
-    /// [[ -f /nonexistent && -d /tmp ]] — compound: file-missing AND dir-exists.
-    /// Known bug: && inside [[ ]] not properly handled by emitter's SplitLogical path.
+    /// [[ -f /nonexistent && -d /tmp ]] — compound: file-missing AND dir-exists = false.
+    /// Fixed: EmitExtendedTest now wraps each sub-expression in parens so that -and/-or
+    /// are not parsed as additional flags to the preceding cmdlet (e.g. Test-Path).
     /// Axis 8: exit code from compound && inside [[ ]].
     /// </summary>
     [SkippableFact]
     public async Task Differential_DoubleBracket_LogicalAnd_FalseAndTrue_IsFalse()
     {
-        await AssertOracle.GoldenAsync(
+        await AssertOracle.EqualAsync(
             "if [[ -f /nonexistent && -d /tmp ]]; then echo yes; else echo no; fi",
-            "Differential_DoubleBracket_LogicalAnd_FalseAndTrue_IsFalse",
             timeout: TimeSpan.FromSeconds(15));
     }
 

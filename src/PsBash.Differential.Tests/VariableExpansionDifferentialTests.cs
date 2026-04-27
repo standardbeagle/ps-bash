@@ -219,19 +219,29 @@ public class VariableExpansionDifferentialTests
     // -----------------------------------------------------------------------
 
     /// <summary>
-    /// ${var/pat/rep} — replace first occurrence.
-    /// KNOWN BUG: emitter generates `($env:x -replace [regex]::Escape('l'),'L')` but
-    /// PowerShell -replace always replaces ALL occurrences (global by default), so
-    /// "hello" → "heLLo" not "heLlo". bash ${x/l/L} replaces only the first.
-    /// Using GoldenAsync to document current (broken) output.
+    /// ${var/pat/rep} — replace first occurrence only.
+    /// Fix: emitter now uses ([regex][regex]::Escape(pat)).Replace(var, rep, 1)
+    /// which calls the instance Replace(input, replacement, count) overload so
+    /// only the first match is replaced.
     /// </summary>
     [SkippableFact]
     public async Task Differential_SubstituteFirst()
     {
-        // Directive 1 exception: known emitter bug — PS -replace is always global; no first-only mode
-        await AssertOracle.GoldenAsync(
+        await AssertOracle.EqualAsync(
             "x=hello; echo ${x/l/L}",
-            "VarExpansion_SubstituteFirst",
+            timeout: TimeSpan.FromSeconds(15));
+    }
+
+    /// <summary>
+    /// ${var/pat/rep} — verify only the FIRST occurrence is replaced when there
+    /// are multiple matches. Axis 12: substitution correctness with repeated chars.
+    /// bash: x="aabbcc"; echo "${x/a/X}" → "Xabbcc" (only first 'a' replaced).
+    /// </summary>
+    [SkippableFact]
+    public async Task Differential_SubstituteFirst_MultipleMatchReplacesOnce()
+    {
+        await AssertOracle.EqualAsync(
+            "x=\"aabbcc\"; echo \"${x/a/X}\"",
             timeout: TimeSpan.FromSeconds(15));
     }
 
