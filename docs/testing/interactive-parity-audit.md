@@ -774,3 +774,87 @@ QA audit sections per qa-rubric Directive 10 template.
 1. Add differential test for `<<-EOF` strip-tabs heredoc: verify leading tabs are removed from body before `cat` receives it (`Differential_Redirect_Heredoc_StripTabs`)
 2. Add differential test for `&>file` combined redirect: bash allows `&>file` as shorthand for `>file 2>&1`; ps-bash currently treats `&` as background operator — this is a parsing gap (no IoNumber/GreatAnd token for `&>`)
 3. Add emitter-level test `Transpile_EchoRedirectStdoutFile_EmitsInvokeBashRedirect` to cover `EmitRedirect` path for `>file` at the transpile layer (currently only tested end-to-end via differential)
+
+---
+
+### FEATURE: Pipes (| and |&)
+
+**EXISTING TESTS** (file:test):
+- `src/PsBash.Core.Tests/Parser/BashParserTests.cs:Parse_SimplePipeline_ReturnsPipelineNode`
+- `src/PsBash.Core.Tests/Parser/BashParserTests.cs:Parse_ThreeCommandPipeline_ReturnsThreeChildren`
+- `src/PsBash.Core.Tests/Parser/BashParserTests.cs:Parse_PipeAmpersand_RecognizedAsStderrPipe`
+- `src/PsBash.Core.Tests/Parser/BashParserTests.cs:Parse_NegatedSimpleCommand_ReturnsPipelineWithNegatedTrue`
+- `src/PsBash.Core.Tests/Parser/BashParserTests.cs:Parse_NegatedPipeline_ReturnsPipelineWithNegatedTrue`
+- `src/PsBash.Core.Tests/Parser/BashParserTests.cs:Parse_PipelineWithAndOr_PipelineBindsTighter`
+- `src/PsBash.Core.Tests/Parser/PsEmitterTests.cs:Transpile_LsPipeGrep_EmitsMappedPipeline`
+- `src/PsBash.Core.Tests/Parser/PsEmitterTests.cs:Transpile_CatPipeHeadPipeSort_EmitsMultiStagePipeline`
+- `src/PsBash.Core.Tests/Parser/PsEmitterTests.cs:Transpile_PipeAmpersand_EmitsStderrMerge`
+- `src/PsBash.Core.Tests/Parser/PsEmitterTests.cs:Transpile_NegatedPipeline_EmitsExitCodeNegation`
+- `src/PsBash.Core.Tests/Parser/PsEmitterTests.cs:Transpile_EchoPipeWcL_EmitsMeasureObject`
+- `src/PsBash.Core.Tests/Parser/PsEmitterTests.cs:Transpile_PipeToRev_EmitsInvokeBashRev`
+- `src/PsBash.Core.Tests/Parser/PsEmitterTests.cs:Transpile_PipeToJqWithFilter_EmitsInvokeBashJq`
+- `src/PsBash.Core.Tests/Parser/PsEmitterTests.cs:Transpile_PipeToNlWithFlags_EmitsInvokeBashNl`
+- `src/PsBash.Core.Tests/Parser/PsEmitterTests.cs:Transpile_PipeToColumnWithFlag_EmitsInvokeBashColumn`
+- `src/PsBash.Core.Tests/Parser/PsEmitterTests.cs:Transpile_PipeToTee_EmitsInvokeBashTee`
+- `src/PsBash.Core.Tests/Parser/PsEmitterTests.cs:Transpile_AwkInPipelineWithFlagAndCommaExpression_NotBraceExpanded`
+- `src/PsBash.Core.Tests/Parser/PsEmitterTests.cs:Transpile_PasteAsPipeTarget`
+- `src/PsBash.Core.Tests/Parser/PsEmitterTests.cs:Transpile_BashPipeToGrep_EmitsMappedPipeline`
+- `src/PsBash.Differential.Tests/SeedDifferentialTests.cs:Differential_Pipes_TwoStage`
+- `src/PsBash.Differential.Tests/SeedDifferentialTests.cs:Differential_ExitCodePropagation_PipefailOff`
+- `src/PsBash.Differential.Tests/PipeDifferentialTests.cs:Differential_Pipe_TwoStage_EchoWcW`
+- `src/PsBash.Differential.Tests/PipeDifferentialTests.cs:Differential_Pipe_ThreeStage_PrintfGrepWcL`
+- `src/PsBash.Differential.Tests/PipeDifferentialTests.cs:Differential_Pipe_WithArgs_PrintfSort`
+- `src/PsBash.Differential.Tests/PipeDifferentialTests.cs:Differential_PipeAmp_StderrMergedToStdout`
+- `src/PsBash.Differential.Tests/PipeDifferentialTests.cs:Differential_Pipe_InCondition_GrepQMatches`
+- `src/PsBash.Differential.Tests/PipeDifferentialTests.cs:Differential_Pipe_InCondition_GrepQNoMatch`
+- `src/PsBash.Differential.Tests/PipeDifferentialTests.cs:Differential_Pipe_ExitCode_LastCmdWins_PipefailOff`
+- `src/PsBash.Differential.Tests/PipeDifferentialTests.cs:Differential_Pipe_ExitCode_PipefailOn_FirstFailurePropagates`
+- `src/PsBash.Differential.Tests/PipeDifferentialTests.cs:Differential_Pipe_BrokenPipe_HeadClosesEarly`
+- `src/PsBash.Differential.Tests/PipeDifferentialTests.cs:Differential_Pipe_ObjectPreservation_GrepThenSort`
+- `src/PsBash.Differential.Tests/PipeDifferentialTests.cs:Differential_Pipe_FourStage_SortHeadTr`
+- `src/PsBash.Differential.Tests/PipeDifferentialTests.cs:Differential_Pipe_FeedWhileLoop`
+
+**FAILURE-SURFACE COVERAGE** (per Directive 3 axes):
+| Axis | Covered? | Test ref / gap note |
+|------|----------|---------------------|
+| Empty input | PARTIAL | `Differential_Pipe_ThreeStage_PrintfGrepWcL` — grep on non-matching input produces empty output; no dedicated empty-producer test |
+| Large input | NO | gap — no test streams >= 10 MB through a pipeline |
+| Unicode | NO | gap — no test with non-ASCII or emoji in piped text |
+| CRLF input | NO | gap — no test feeding CRLF-terminated lines through a pipeline |
+| Broken pipe | YES (skip) | `Differential_Pipe_BrokenPipe_HeadClosesEarly` — test present but permanently skipped on Windows (known SIGPIPE hang); see MEMORY.md |
+| Slow reader | NO | gap — no test with a blocking consumer; unbounded buffering risk untested |
+| Signal during execute | NO | gap — no Ctrl-C test mid-pipeline |
+| Exit code propagation | YES | `Differential_Pipe_ExitCode_LastCmdWins_PipefailOff`, `Differential_Pipe_ExitCode_PipefailOn_FirstFailurePropagates` (golden documenting known gap) |
+| Stderr interleave | YES (golden) | `Differential_PipeAmp_StderrMergedToStdout` — golden captures |& behavior; wording differs between bash and ps-bash |
+| Working dir state | NO | gap — no test verifying cd inside a pipeline stage persists |
+| Environment leak | NO | gap — no test for `VAR=x cmd | next` env isolation |
+| Quoting / injection | YES | `Differential_Pipe_WithArgs_PrintfSort`, `Differential_Pipe_ObjectPreservation_GrepThenSort` — spaces in piped text, no word-splitting |
+| Platform-locked file | N/A | pipeline is not a file operation; skip justified |
+| Missing target | PARTIAL | `Differential_PipeAmp_StderrMergedToStdout` — `ls /nonexistent` tests error path via |&; no test for missing pipe-target command |
+| Recursion depth | N/A | pipelines are flat sequences; skip justified |
+
+**MODE COVERAGE** (per Directive 4 modes):
+| Mode | Covered? | Test ref / gap note |
+|------|----------|---------------------|
+| M1 -c | YES | all `Differential_Pipe_*` tests invoke ps-bash with `-c`; oracle runs bash `-c` |
+| M2 stdin pipe | NO | gap — no test pipes a pipe-containing script through ps-bash stdin |
+| M3 file arg | NO | gap — no test passes a .sh file with pipeline commands to ps-bash |
+| M4 interactive | NO | gap — no PTY test for pipeline at the REPL |
+| M5 Invoke-BashEval | NO | gap — no eval test for pipe expressions |
+| M6 Invoke-BashSource | NO | gap — no sourced script test containing pipeline commands |
+
+**ORACLE STATUS**:
+- DIFFERENTIAL TESTS PRESENT? YES
+- 11 differential tests in `PipeDifferentialTests.cs`: 8 EqualAsync (clean parity), 2 GoldenAsync (known bugs: grep -q exit code propagation and grep -q output suppression), 1 GoldenAsync (|& wording differs), 1 skipped (broken pipe hangs on Windows)
+
+**KNOWN BUGS / RISKS**:
+- `grep -q` exit code not propagated through PowerShell pipeline chain: `cmd | grep -q pat && arm` fires the wrong arm because `$LASTEXITCODE` is not reliably set after a pipeline segment ends — `PipeDifferentialTests.cs:Differential_Pipe_InCondition_GrepQNoMatch` (golden)
+- `grep -q` still emits pipeline objects even in quiet mode: BashObjects from the upstream `echo` pass through `Invoke-BashGrep -q` and appear on stdout, leaking to the terminal — `PipeDifferentialTests.cs:Differential_Pipe_InCondition_GrepQMatches` (golden)
+- Broken pipe hangs forever on Windows: `yes | head -n 3` never terminates because Windows has no SIGPIPE. The `yes` producer is not killed when `head` closes stdin. See MEMORY.md "Windows process death" — `PipeDifferentialTests.cs:Differential_Pipe_BrokenPipe_HeadClosesEarly` (skipped)
+- `set -o pipefail` standalone does not implement PIPESTATUS tracking: `false | true; echo $?` with pipefail on still prints 0 instead of 1 because ps-bash maps pipefail only as part of `set -euo pipefail` and does not track per-stage exit codes — `PipeDifferentialTests.cs:Differential_Pipe_ExitCode_PipefailOn_FirstFailurePropagates` (golden)
+- `|&` wording differs: stderr from `ls /nonexistent` on ps-bash uses PowerShell error message format rather than the Unix `ls: cannot access` format; bytes differ even though the merge path works — `PipeDifferentialTests.cs:Differential_PipeAmp_StderrMergedToStdout` (golden)
+
+**PRIORITY GAPS** (top 3 max):
+1. Fix `grep -q` exit code propagation in pipeline chains: `Invoke-BashGrep` must set `$global:LASTEXITCODE` based on whether any line matched, not rely on the implicit PowerShell `$?` after a pipeline segment. This breaks `cmd | grep -q pat && arm` patterns used extensively in scripts.
+2. Fix broken-pipe termination on Windows: implement a Job Object or parent-PID poller to kill the producer process when the consumer closes its stdin, so `yes | head -n 3` and similar patterns terminate. See MEMORY.md "Windows process death" and "Process spawn contract".
+3. Implement PIPESTATUS tracking: record each pipeline stage's exit code in `$global:BashPipeStatus` and use the rightmost non-zero code when `set -o pipefail` is active. Currently `false | true` always reports 0 with pipefail on.
