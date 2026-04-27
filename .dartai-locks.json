@@ -1,24 +1,3 @@
 {
-  "claims": {
-    "ckLNYBBiqRC0": {
-      "runner_instance_id": "beagle-ab2-11916",
-      "runner_email": "andybrummer@standardbeagle.com",
-      "claimed_at": "2026-04-27T00:10:00Z"
-    },
-    "2wxWlHHXpW1z": {
-      "runner_instance_id": "beagle-ab2-11916",
-      "runner_email": "andybrummer@standardbeagle.com",
-      "claimed_at": "2026-04-27T00:10:00Z"
-    },
-    "swq8znLUb1BN": {
-      "runner_instance_id": "beagle-ab2-11916",
-      "runner_email": "andybrummer@standardbeagle.com",
-      "claimed_at": "2026-04-27T00:10:00Z"
-    },
-    "vkK36GNQw9L5": {
-      "runner_instance_id": "beagle-ab2-11916",
-      "runner_email": "andybrummer@standardbeagle.com",
-      "claimed_at": "2026-04-27T00:10:00Z"
-    }
-  }
+  "claims": {}
 }
