@@ -223,15 +223,26 @@ public class VariableExpansionDifferentialTests
     /// KNOWN BUG: emitter generates `($env:x -replace [regex]::Escape('l'),'L')` but
     /// PowerShell -replace always replaces ALL occurrences (global by default), so
     /// "hello" → "heLLo" not "heLlo". bash ${x/l/L} replaces only the first.
-    /// Using GoldenAsync to document current (broken) output.
+    /// Fix: now uses ([regex]::Escape(pat)).Replace(str, rep, 1) instance overload
+    /// so only one occurrence is replaced.
     /// </summary>
     [SkippableFact]
     public async Task Differential_SubstituteFirst()
     {
-        // Directive 1 exception: known emitter bug — PS -replace is always global; no first-only mode
-        await AssertOracle.GoldenAsync(
+        await AssertOracle.EqualAsync(
             "x=hello; echo ${x/l/L}",
-            "VarExpansion_SubstituteFirst",
+            timeout: TimeSpan.FromSeconds(15));
+    }
+
+    /// <summary>
+    /// ${var/pat/rep} with multiple matches — only the first must be replaced.
+    /// Axis 12: injection — ensures replace-first respects count=1.
+    /// </summary>
+    [SkippableFact]
+    public async Task Differential_SubstituteFirst_MultipleMatchReplacesOnce()
+    {
+        await AssertOracle.EqualAsync(
+            "x=\"aabbcc\"; echo \"${x/a/X}\"",
             timeout: TimeSpan.FromSeconds(15));
     }
 
@@ -340,15 +351,15 @@ public class VariableExpansionDifferentialTests
 
     /// <summary>
     /// $@ expands all positional parameters as separate words.
-    /// KNOWN BUG: `set -- a b c` transpiles to `$global:BashPositional = @(a, b, c)`
-    /// which lacks quotes around string literals — PS interprets `a`, `b`, `c` as
-    /// variable references / command names. Should be `@('a', 'b', 'c')`.
-    /// Exit code 1 from PS parse error. Using GoldenAsync to document current state.
+    /// set -- now correctly quotes string literals in @('a', 'b', 'c').
+    /// Residual bug: "$@" inside double-quotes collapses the array to a single
+    /// space-joined string instead of individual words per bash semantics.
+    /// Using GoldenAsync to document current (partially fixed) output.
     /// </summary>
     [SkippableFact]
     public async Task Differential_SpecialVar_At_PositionalParams()
     {
-        // Directive 1 exception: known `set --` emitter bug — string args not quoted in @(...)
+        // Directive 1 exception: residual "$@" expansion collapses array to one string.
         await AssertOracle.GoldenAsync(
             "set -- a b c; for x in \"$@\"; do echo $x; done",
             "VarExpansion_At_PositionalParams",
@@ -356,33 +367,42 @@ public class VariableExpansionDifferentialTests
     }
 
     /// <summary>
-    /// $# counts positional parameters.
-    /// KNOWN BUG: same `set --` quoting issue as Differential_SpecialVar_At_PositionalParams.
-    /// `$global:BashPositional = @(a, b, c)` fails at PS parse time.
-    /// Using GoldenAsync to document current (broken) output.
+    /// $# counts positional parameters after set --.
+    /// Fix: set -- now correctly quotes literals so @('a','b','c') is valid PS.
     /// </summary>
     [SkippableFact]
     public async Task Differential_SpecialVar_Hash_Count()
     {
-        // Directive 1 exception: known `set --` emitter bug
-        await AssertOracle.GoldenAsync(
+        await AssertOracle.EqualAsync(
             "set -- a b c; echo $#",
-            "VarExpansion_Hash_Count",
             timeout: TimeSpan.FromSeconds(15));
     }
 
     /// <summary>
     /// $1..$3 expand individual positional parameters.
-    /// KNOWN BUG: same `set --` quoting issue — string values unquoted in @(...).
-    /// Using GoldenAsync to document current state.
+    /// set -- now correctly quotes literals. Residual issue: echo output may be
+    /// joined on one line due to output buffering; use GoldenAsync.
     /// </summary>
     [SkippableFact]
     public async Task Differential_SpecialVar_Positional_1to3()
     {
-        // Directive 1 exception: known `set --` emitter bug
+        // Directive 1 exception: per-line echo output may be joined; use GoldenAsync.
         await AssertOracle.GoldenAsync(
             "set -- alpha beta gamma; echo $1; echo $2; echo $3",
             "VarExpansion_Positional_1to3",
+            timeout: TimeSpan.FromSeconds(15));
+    }
+
+    /// <summary>
+    /// set -- with simple string args sets $1, $2 accessible individually.
+    /// Fix: set -- quotes string literals in @(...) so they parse as PS strings.
+    /// Axis 8: positional params accessible via $1, $2 after set --.
+    /// </summary>
+    [SkippableFact]
+    public async Task Differential_SetDashDash_SimpleArgs_PositionalAccessible()
+    {
+        await AssertOracle.EqualAsync(
+            "set -- hello world; echo \"$1 $2\"",
             timeout: TimeSpan.FromSeconds(15));
     }
 

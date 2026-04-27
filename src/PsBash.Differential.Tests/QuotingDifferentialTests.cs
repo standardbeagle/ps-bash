@@ -126,19 +126,14 @@ public class QuotingDifferentialTests
     /// <summary>
     /// Backslash before $ inside double quotes suppresses expansion.
     /// bash: echo "price: \$5" outputs literal 'price: $5'.
-    /// KNOWN BUG: ps-bash emitter treats \$ inside double-quoted string as an
-    /// EscapedLiteral for the dollar, but the emitter then drops the literal "$5"
-    /// from the output — "price:" is emitted without the dollar amount.
-    /// Using GoldenAsync to document current (broken) output.
+    /// Fix: Literal("$") parts inside double-quoted strings are now emitted as `$
+    /// (backtick-dollar) so PowerShell treats the dollar as a literal character.
     /// </summary>
     [SkippableFact]
     public async Task Differential_Backslash_EscapesDollarInDoubleQuotes()
     {
-        // Directive 1 exception: known emitter bug — \$ inside double-quoted string
-        // is not correctly emitted; "$5" is dropped from the output.
-        await AssertOracle.GoldenAsync(
+        await AssertOracle.EqualAsync(
             "echo \"price: \\$5\"",
-            "Quoting_Backslash_EscapesDollar",
             timeout: TimeSpan.FromSeconds(15));
     }
 

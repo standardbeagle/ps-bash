@@ -254,15 +254,15 @@ public class TestExpressionDifferentialTests
 
     /// <summary>
     /// Standalone [ -f /nonexistent ] drives || fallback.
-    /// Known bug: standalone BoolExpr exit-code propagation to || chain is incorrect.
     /// Axis 8: false BoolExpr exit code triggers || right arm.
+    /// Bug 7 fixed: BoolExpr in &&/|| chains now propagates exit code via
+    /// $global:LASTEXITCODE instead of being silently discarded by [void].
     /// </summary>
     [SkippableFact]
     public async Task Differential_Standalone_FileTest_OrChain_NonexistentFallsBack()
     {
-        await AssertOracle.GoldenAsync(
+        await AssertOracle.EqualAsync(
             "[ -f /nonexistent/file ] || echo no",
-            "Differential_Standalone_FileTest_OrChain_NonexistentFallsBack",
             timeout: TimeSpan.FromSeconds(15));
     }
 }
