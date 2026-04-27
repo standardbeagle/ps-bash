@@ -103,19 +103,12 @@ public class PipeDifferentialTests
     /// Pipeline in if condition: `echo "hello" | grep -q hello &amp;&amp; echo yes || echo no`.
     /// grep -q exits 0 (match), so the &amp;&amp; arm fires and "yes" is output.
     /// Failure-surface axis 8: pipeline exit code in condition must drive the then-branch.
-    ///
-    /// KNOWN BUG: Invoke-BashGrep -q passes BashObjects through the pipeline even when
-    /// -q (quiet) mode should suppress all output. On Windows, grep is implemented as a
-    /// PowerShell function that still emits pipeline objects. The echo "hello" text appears
-    /// in ps-bash output but not in bash. GoldenAsync captures the current broken behavior.
     /// </summary>
     [SkippableFact]
     public async Task Differential_Pipe_InCondition_GrepQMatches()
     {
-        // GoldenAsync: known bug — grep -q leaks echo output; bash outputs "yes" only.
-        await AssertOracle.GoldenAsync(
+        await AssertOracle.EqualAsync(
             "echo \"hello\" | grep -q hello && echo yes || echo no",
-            "Pipe_InCondition_GrepQMatches",
             timeout: TimeSpan.FromSeconds(15));
     }
 
@@ -123,19 +116,12 @@ public class PipeDifferentialTests
     /// Pipeline in if condition (no match): `echo "world" | grep -q hello &amp;&amp; echo yes || echo no`.
     /// grep -q exits 1 (no match), so the || arm fires and "no" is output.
     /// Failure-surface axis 8: pipeline non-zero exit code must suppress the then-branch.
-    ///
-    /// KNOWN BUG: Invoke-BashGrep -q does not propagate LASTEXITCODE=1 through the
-    /// PowerShell pipeline chain. The &amp;&amp; chain operator sees the previous command's
-    /// success status so the then-branch fires incorrectly. bash outputs "no"; ps-bash
-    /// outputs "yes". GoldenAsync captures the current broken behavior.
     /// </summary>
     [SkippableFact]
     public async Task Differential_Pipe_InCondition_GrepQNoMatch()
     {
-        // GoldenAsync: known bug — grep -q exit code not propagated; bash outputs "no".
-        await AssertOracle.GoldenAsync(
+        await AssertOracle.EqualAsync(
             "echo \"world\" | grep -q hello && echo yes || echo no",
-            "Pipe_InCondition_GrepQNoMatch",
             timeout: TimeSpan.FromSeconds(15));
     }
 

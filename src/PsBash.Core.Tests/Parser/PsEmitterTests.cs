@@ -32,7 +32,7 @@ public class PsEmitterTests
 
         var result = PsEmitter.Emit(cmd);
 
-        Assert.Equal("$env:FOO = \"bar\"; cmd", result);
+        Assert.Equal("$__saved_FOO = $env:FOO; try { $env:FOO = \"bar\"; cmd } finally { $env:FOO = $__saved_FOO; }", result);
     }
 
     [Fact]
@@ -45,7 +45,7 @@ public class PsEmitterTests
 
         var result = PsEmitter.Emit(cmd);
 
-        Assert.Equal("$env:FOO = \"\"; cmd", result);
+        Assert.Equal("$__saved_FOO = $env:FOO; try { $env:FOO = \"\"; cmd } finally { $env:FOO = $__saved_FOO; }", result);
     }
 
     [Fact]
@@ -192,7 +192,7 @@ public class PsEmitterTests
     {
         var result = PsEmitter.Transpile("FOO=bar baz");
 
-        Assert.Equal("$env:FOO = \"bar\"; baz", result);
+        Assert.Equal("$__saved_FOO = $env:FOO; try { $env:FOO = \"bar\"; baz } finally { $env:FOO = $__saved_FOO; }", result);
     }
 
     [Fact]
@@ -200,7 +200,7 @@ public class PsEmitterTests
     {
         var result = PsEmitter.Transpile("FOO=1 BAR=2 cmd");
 
-        Assert.Equal("$env:FOO = \"1\"; $env:BAR = \"2\"; cmd", result);
+        Assert.Equal("$__saved_FOO = $env:FOO; $__saved_BAR = $env:BAR; try { $env:FOO = \"1\"; $env:BAR = \"2\"; cmd } finally { $env:FOO = $__saved_FOO; $env:BAR = $__saved_BAR; }", result);
     }
 
     [Fact]
@@ -279,7 +279,7 @@ public class PsEmitterTests
 
         var result = PsEmitter.Emit(cmd);
 
-        Assert.Equal("$env:FOO = \"bar\"; $env:BAZ = \"qux\"; cmd", result);
+        Assert.Equal("$__saved_FOO = $env:FOO; $__saved_BAZ = $env:BAZ; try { $env:FOO = \"bar\"; $env:BAZ = \"qux\"; cmd } finally { $env:FOO = $__saved_FOO; $env:BAZ = $__saved_BAZ; }", result);
     }
 
     [Fact]
@@ -812,7 +812,7 @@ public class PsEmitterTests
     {
         var result = PsEmitter.Transpile("[ -f file ] && echo yes");
 
-        Assert.Equal("[void](Test-Path \"file\" -PathType Leaf) && Invoke-BashEcho yes", result);
+        Assert.Equal("$(if ((Test-Path \"file\" -PathType Leaf)) { $global:LASTEXITCODE = 0 } else { $global:LASTEXITCODE = 1; Write-Error '' -ErrorAction SilentlyContinue }) && Invoke-BashEcho yes", result);
     }
 
     [Fact]
@@ -876,7 +876,7 @@ public class PsEmitterTests
     {
         var result = PsEmitter.Transpile("[[ -f file && -d dir ]]");
 
-        Assert.Equal("(Test-Path \"file\" -PathType Leaf -and Test-Path \"dir\" -PathType Container)", result);
+        Assert.Equal("((Test-Path \"file\" -PathType Leaf) -and (Test-Path \"dir\" -PathType Container))", result);
     }
 
     [Fact]
@@ -884,7 +884,7 @@ public class PsEmitterTests
     {
         var result = PsEmitter.Transpile("[[ $a == \"x\" || $b == \"y\" ]]");
 
-        Assert.Equal("($env:a -eq \"x\" -or $env:b -eq \"y\")", result);
+        Assert.Equal("(($env:a -eq \"x\") -or ($env:b -eq \"y\"))", result);
     }
 
     [Fact]
@@ -932,7 +932,7 @@ public class PsEmitterTests
     {
         var result = PsEmitter.Transpile("[ -f file ] || echo no");
 
-        Assert.Equal("[void](Test-Path \"file\" -PathType Leaf) || Invoke-BashEcho no", result);
+        Assert.Equal("$(if ((Test-Path \"file\" -PathType Leaf)) { $global:LASTEXITCODE = 0 } else { $global:LASTEXITCODE = 1; Write-Error '' -ErrorAction SilentlyContinue }) || Invoke-BashEcho no", result);
     }
 
     [Fact]
@@ -1220,7 +1220,7 @@ public class PsEmitterTests
     {
         var result = PsEmitter.Transpile("set -- a b c");
 
-        Assert.Equal("$global:BashPositional = @(a, b, c)", result);
+        Assert.Equal("$global:BashPositional = @('a', 'b', 'c')", result);
     }
 
     [Fact]
@@ -2007,7 +2007,8 @@ public class PsEmitterTests
     public void Transpile_ParamReplaceFirst_EmitsRegexReplace()
     {
         var result = PsEmitter.Transpile("echo ${str/foo/bar}");
-        Assert.Contains("-replace", result);
+        // Uses instance overload ([regex]pattern).Replace(str, rep, count=1) for first-only replacement
+        Assert.Contains("[regex]", result);
         Assert.Contains("foo", result);
         Assert.Contains("bar", result);
     }

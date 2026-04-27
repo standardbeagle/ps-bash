@@ -109,7 +109,7 @@ public class BashTranspilerTests
     public void FileTestWithVar_TransformsBoth()
     {
         var result = BashTranspiler.Transpile("[ -f /etc/config ] && echo $MSG");
-        Assert.Equal("[void](Test-Path \"/etc/config\" -PathType Leaf) && Invoke-BashEcho $env:MSG", result);
+        Assert.Equal("$(if ((Test-Path \"/etc/config\" -PathType Leaf)) { $global:LASTEXITCODE = 0 } else { $global:LASTEXITCODE = 1; Write-Error '' -ErrorAction SilentlyContinue }) && Invoke-BashEcho $env:MSG", result);
     }
 
     [Fact]
@@ -169,21 +169,21 @@ public class BashTranspilerTests
     public void FileTestEmptyVar_TransformsCorrectly()
     {
         var result = BashTranspiler.Transpile("[ -z \"$HOME\" ] && echo empty");
-        Assert.Equal("[void]([string]::IsNullOrEmpty($HOME)) && Invoke-BashEcho empty", result);
+        Assert.Equal("$(if (([string]::IsNullOrEmpty($HOME))) { $global:LASTEXITCODE = 0 } else { $global:LASTEXITCODE = 1; Write-Error '' -ErrorAction SilentlyContinue }) && Invoke-BashEcho empty", result);
     }
 
     [Fact]
     public void FileTestWithAnd_WrapsInVoid()
     {
         var result = BashTranspiler.Transpile("[ -f ./README.md ] && echo \"exists\"");
-        Assert.Equal("[void](Test-Path \"./README.md\" -PathType Leaf) && Invoke-BashEcho \"exists\"", result);
+        Assert.Equal("$(if ((Test-Path \"./README.md\" -PathType Leaf)) { $global:LASTEXITCODE = 0 } else { $global:LASTEXITCODE = 1; Write-Error '' -ErrorAction SilentlyContinue }) && Invoke-BashEcho \"exists\"", result);
     }
 
     [Fact]
     public void DirTestWithAnd_WrapsInVoid()
     {
         var result = BashTranspiler.Transpile("[ -d ./src ] && echo \"is dir\"");
-        Assert.Equal("[void](Test-Path \"./src\" -PathType Container) && Invoke-BashEcho \"is dir\"", result);
+        Assert.Equal("$(if ((Test-Path \"./src\" -PathType Container)) { $global:LASTEXITCODE = 0 } else { $global:LASTEXITCODE = 1; Write-Error '' -ErrorAction SilentlyContinue }) && Invoke-BashEcho \"is dir\"", result);
     }
 
     [Fact]
@@ -197,7 +197,7 @@ public class BashTranspilerTests
     public void FileTestWithOr_WrapsInVoid()
     {
         var result = BashTranspiler.Transpile("[ -f missing ] || echo \"not found\"");
-        Assert.Equal("[void](Test-Path \"missing\" -PathType Leaf) || Invoke-BashEcho \"not found\"", result);
+        Assert.Equal("$(if ((Test-Path \"missing\" -PathType Leaf)) { $global:LASTEXITCODE = 0 } else { $global:LASTEXITCODE = 1; Write-Error '' -ErrorAction SilentlyContinue }) || Invoke-BashEcho \"not found\"", result);
     }
 
     [Fact]

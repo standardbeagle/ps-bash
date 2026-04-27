@@ -597,6 +597,7 @@ function Invoke-BashEcho {
 
     Emit-BashLine -Text $text -Command 'echo'
     $global:LASTEXITCODE = 0
+    $global:BashLastArg = if ($parsed.Operands.Count -gt 0) { $parsed.Operands[-1] } else { '' }
 }
 
 # --- printf Command ---
@@ -1477,6 +1478,7 @@ function Invoke-BashGrep {
     $invertMatch = $false
     $showLineNumbers = $false
     $countOnly = $false
+    $quietMode = $false          # -q: suppress output, exit 0 if match, 1 if no match
     $recursive = $false
     $filesOnly = $false
     $extendedRegex = $false
@@ -1566,6 +1568,7 @@ function Invoke-BashGrep {
         if ($arg -eq '--no-filename') { $suppressFileName = $true; $i++; continue }
         if ($arg -eq '--word-regexp') { $wholeWord = $true; $i++; continue }
         if ($arg -eq '--only-matching') { $outputMatchOnly = $true; $i++; continue }
+        if ($arg -eq '--quiet' -or $arg -eq '--silent') { $quietMode = $true; $i++; continue }
         if ($arg -eq '--max-count') {
             $i++
             if ($i -lt $Arguments.Count) { $maxMatches = [int]$Arguments[$i] }
@@ -1585,6 +1588,7 @@ function Invoke-BashGrep {
                     'v' { $invertMatch = $true }
                     'n' { $showLineNumbers = $true }
                     'c' { $countOnly = $true }
+                    'q' { $quietMode = $true }
                     'r' { $recursive = $true }
                     'l' { $filesOnly = $true }
                     'E' { $extendedRegex = $true }
@@ -1673,6 +1677,10 @@ function Invoke-BashGrep {
                     if ($invertMatch) { $isMatch = -not $isMatch }
                     if ($isMatch) {
                         $matchCount++
+                        if ($quietMode) {
+                            $global:LASTEXITCODE = 0
+                            return
+                        }
                         if (-not $countOnly) {
                             $outputText = if ($outputMatchOnly -and $matchObject) {
                                 $matchObject.Value
@@ -1707,6 +1715,10 @@ function Invoke-BashGrep {
                 if ($invertMatch) { $isMatch = -not $isMatch }
                 if ($isMatch) {
                     $matchCount++
+                    if ($quietMode) {
+                        $global:LASTEXITCODE = 0
+                        return
+                    }
                     if (-not $countOnly) {
                         $outputText = if ($outputMatchOnly -and $matchObject) {
                             $matchObject.Value
@@ -1728,6 +1740,13 @@ function Invoke-BashGrep {
                     }
                 }
             }
+        }
+
+        if ($quietMode) {
+            # No match found: set LASTEXITCODE and signal failure via $? for && / || chains
+            $global:LASTEXITCODE = 1
+            Write-Error '' -ErrorAction SilentlyContinue
+            return
         }
 
         if ($countOnly) {
@@ -1794,6 +1813,11 @@ function Invoke-BashGrep {
         $totalMatchCount += $fileMatchCount
         $perFileCounts[$filePath] = $fileMatchCount
 
+        if ($quietMode -and $fileMatchCount -gt 0) {
+            $global:LASTEXITCODE = 0
+            return
+        }
+
         if ($filesOnly) {
             if ($fileMatchCount -gt 0) { $matchedFiles.Add($filePath) }
             continue
@@ -1854,6 +1878,13 @@ function Invoke-BashGrep {
                 $totalMatchCount = $totalMatchCount   # Update count for context lines
             }
         }
+    }
+
+    if ($quietMode) {
+        # No match found in any file: set LASTEXITCODE and signal failure via $? for && / || chains
+        $global:LASTEXITCODE = 1
+        Write-Error '' -ErrorAction SilentlyContinue
+        return
     }
 
     if ($filesOnly) {
@@ -12488,6 +12519,9 @@ $global:BashStartTime = [DateTime]::UtcNow
 $__bashVer = if ($MyInvocation.MyCommand.Module) { $MyInvocation.MyCommand.Module.Version } else { [version]'0.8.0' }
 $global:BashVersion = "$($__bashVer.Major).$($__bashVer.Minor).0(1)-release"
 $global:BashVersionInfo = @($__bashVer.Major, $__bashVer.Minor, 0, 1, 'release', "$($__bashVer.Major).$($__bashVer.Minor).0")
+# bash default shell flags: h (hash commands), B (brace expansion enabled)
+$global:BashFlags = 'hB'
+$global:BashLastArg = ''
 
 function Invoke-BashBackground {
     <#
@@ -12520,7 +12554,9 @@ function Invoke-BashBackground {
     $psi.CreateNoWindow = $true
 
     $proc = [System.Diagnostics.Process]::Start($psi)
-    # Begin async reads to prevent deadlocks if the child writes output
+    # Forward child stdout/stderr to the parent terminal (matches bash & behavior)
+    $proc.OutputDataReceived += { param($s, $e); if ($null -ne $e.Data) { [Console]::WriteLine($e.Data) } }
+    $proc.ErrorDataReceived  += { param($s, $e); if ($null -ne $e.Data) { [Console]::Error.WriteLine($e.Data) } }
     [void]$proc.BeginOutputReadLine()
     [void]$proc.BeginErrorReadLine()
 
