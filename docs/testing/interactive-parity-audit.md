@@ -711,3 +711,66 @@ QA audit sections per qa-rubric Directive 10 template.
 1. Fix `EmitSubshell` so a subshell used as a pipeline stage emits `& { ... }` instead of `try { Push-Location } finally { Pop-Location }` — blocks any pipeline ending in `(...)` and any `pipe | (cmd sub)` pattern
 2. Add differential test for `$(false); echo $?` to assert that inner command's exit code does not leak into the outer `$?` (explicit Axis 8 verification at runtime level, not just transpile)
 3. Add large-output test: `x=$(seq 1 100000); echo "${#x}"` — verifies command sub captures large output without truncation or buffer overflow through the PowerShell subexpression path
+
+---
+
+### FEATURE: Redirections (>, >>, <, 2>&1, heredoc, herestring)
+
+**EXISTING TESTS** (file:test):
+- `src/PsBash.Core.Tests/Parser/BashLexerTests.cs:Tokenize_RedirectToFile_ReturnsWordsAndRedirect` — Great token for `>`
+- `src/PsBash.Core.Tests/Parser/BashLexerTests.cs:Tokenize_DGreat_ReturnsAppendRedirect` — DGreat token for `>>`
+- `src/PsBash.Core.Tests/Parser/BashLexerTests.cs:Tokenize_DLess_ReturnsHereDocOperator` — DLess token for `<<`
+- `src/PsBash.Core.Tests/Parser/BashLexerTests.cs:Tokenize_DLessDash_ReturnsStripTabsHereDoc` — DLessDash for `<<-`
+- `src/PsBash.Core.Tests/Parser/BashLexerTests.cs:Tokenize_LessAnd_ReturnsDupInputRedirect` — LessAnd for `<&`
+- `src/PsBash.Core.Tests/Parser/BashLexerTests.cs:Tokenize_GreatAnd_ReturnsDupOutputRedirect` — GreatAnd for `>&`
+- `src/PsBash.Core.Tests/Parser/BashLexerTests.cs:Tokenize_IoNumber_BeforeGreat` — IoNumber reclassification for `2>`
+- `src/PsBash.Core.Tests/Parser/BashLexerTests.cs:Tokenize_IoNumber_BeforeLess` — IoNumber reclassification for `0<`
+- `src/PsBash.Core.Tests/Parser/BashLexerTests.cs:Tokenize_IoNumber_BeforeGreatAnd` — IoNumber reclassification for `2>&`
+- `src/PsBash.Core.Tests/Parser/BashLexerTests.cs:Tokenize_DigitWord_NotBeforeRedirect_StaysWord` — digit without adjacent redirect stays Word
+- `src/PsBash.Core.Tests/Parser/PsEmitterTests.cs:Transpile_PipeAmpersand_EmitsStderrMerge` — `|&` emits as `2>&1 |`
+
+**FAILURE-SURFACE COVERAGE** (per Directive 3 axes):
+| Axis | Covered? | Test ref / gap note |
+|------|----------|---------------------|
+| Empty input | PARTIAL | `/dev/null` discard tested via `Differential_Redirect_DevNull_DiscardsOutput`; no test for `< /dev/null` no-input path in `EmitSimple` |
+| Large input | NO | gap — no test streams >10 MB through a redirect; `Invoke-BashRedirect` and `Get-Content` file mode untested at scale |
+| Unicode | NO | gap — no test redirects or reads a file containing BOM, non-ASCII, or emoji |
+| CRLF input | NO | gap — no test verifies heredoc body with CRLF is handled correctly |
+| Broken pipe | NO | gap — no test for reader closing early when stdout is redirected to a file that fills |
+| Slow reader | N/A | file redirect is not a streaming consumer; skip justified |
+| Signal during execute | NO | gap — no test for Ctrl-C mid-redirect |
+| Exit code propagation | PARTIAL | `Differential_Redirect_Stderr_DevNull_SuppressesError` checks `$?` after `2>/dev/null`; no test for `>>` failing due to permission denied |
+| Stderr interleave | YES | `Differential_Redirect_StderrToStdout_PipedToCat` tests `>&2 2>&1 \| cat`; `Transpile_PipeAmpersand_EmitsStderrMerge` tests `\|&` |
+| Working dir state | NO | gap — no test verifies redirect target path is resolved against current `$PWD` after `cd` |
+| Environment leak | N/A | redirect does not create new env vars; skip justified |
+| Quoting / injection | PARTIAL | variable target tested via `Differential_Redirect_VariableTarget_WritesCorrectFile`; no test for target containing spaces or semicolons |
+| Platform-locked file | NO | gap — Windows: no test for redirect to a file locked by another process |
+| Missing target | YES | `Differential_Redirect_Stderr_DevNull_SuppressesError` uses a non-existent command; `EmitSimple` `< /dev/null` drops the redirect (documented) |
+| Recursion depth | N/A | redirect is not recursive; skip justified |
+
+**MODE COVERAGE** (per Directive 4 modes):
+| Mode | Covered? | Test ref / gap note |
+|------|----------|---------------------|
+| M1 -c | YES | all `Differential_Redirect_*` EqualAsync tests exercise `-c` mode via `BashOracleFixture` |
+| M2 stdin pipe | NO | gap — no test pipes a script with redirections through ps-bash stdin |
+| M3 file arg | NO | gap — no test runs a `.sh` file containing redirections passed as arg to ps-bash |
+| M4 interactive | NO | gap — no PTY test for `echo hello > /tmp/x` at interactive REPL |
+| M5 Invoke-BashEval | NO | gap — no test evaluates a redirect expression via `Invoke-BashEval` |
+| M6 Invoke-BashSource | NO | gap — no test sources a script that uses redirections |
+
+**ORACLE STATUS**:
+- DIFFERENTIAL TESTS PRESENT? YES
+- 11 live-diff (EqualAsync) + 1 golden (GoldenAsync) = 12 differential cases in `RedirectionDifferentialTests.cs`
+- GoldenAsync used for: expanding heredoc `cat <<EOF\nhello $USER\nEOF` — $USER is machine-specific (Directive 1 exception: non-deterministic output)
+
+**KNOWN BUGS / RISKS**:
+- `EmitSimple` stderrRedirect handling for `>&2` / `1>&2`: uses `ForEach-Object { [Console]::Error.WriteLine($_) }` — this drops the original `BashText` typed object; pipeline object preservation is broken for this path
+- Brace group redirect `{ ...; } > file` uses `EmitSubshell` Invoke-BashRedirect path, but `EmitBraceGroup` returns the body without redirect support; in `EmitSimple` a `BraceGroup` falls through to the general path where `Redirect?` file redirect handling applies — need to verify via differential test
+- `2 >file` (digit with space before `>`) must be treated as arg "2" + stdout redirect, not fd 2 redirect; the IoNumber adjacency check in `BashLexer.TryReclassifyIoNumber` handles this but it is only tested at the lexer level, not via an emitter or differential test
+- `<<-EOF` (strip-tabs heredoc) — `DLessDash` token is lexed correctly but no emitter or differential test verifies that leading tabs are stripped from the heredoc body before emission
+- `&>file` and `&>>file` (bash-specific combined stdout+stderr redirect): not handled in `EmitRedirect`; these are parsed as `&` (background) + `>file` rather than as combined redirects — known gap
+
+**PRIORITY GAPS** (top 3 max):
+1. Add differential test for `<<-EOF` strip-tabs heredoc: verify leading tabs are removed from body before `cat` receives it (`Differential_Redirect_Heredoc_StripTabs`)
+2. Add differential test for `&>file` combined redirect: bash allows `&>file` as shorthand for `>file 2>&1`; ps-bash currently treats `&` as background operator — this is a parsing gap (no IoNumber/GreatAnd token for `&>`)
+3. Add emitter-level test `Transpile_EchoRedirectStdoutFile_EmitsInvokeBashRedirect` to cover `EmitRedirect` path for `>file` at the transpile layer (currently only tested end-to-end via differential)
