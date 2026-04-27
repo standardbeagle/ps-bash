@@ -13825,6 +13825,82 @@ public class DeferredDelete {
     }
 }
 
+# --- Prompt Hook Integration ---
+
+# Initialized at module load; tracks last known working directory for chpwd detection.
+$global:__BashLastCwd = (Get-Location).Path
+
+# Error log for hook exceptions; grows unbounded unless cleared by user.
+# Unconditionally initialize to ensure it's always a List (idempotent on re-import).
+$global:BashHookErrors = [System.Collections.Generic.List[object]]::new()
+
+# Sentinel flag: true while the ps-bash prompt wrapper is installed.
+$script:__BashHookPromptEnabled = $false
+
+function Enable-BashHookPrompt {
+    <#
+    .SYNOPSIS
+        Installs the ps-bash prompt wrapper that fires chpwd and prompt hooks.
+    .DESCRIPTION
+        Captures the current 'prompt' function, then installs a wrapper that:
+          1. Detects directory changes and calls HookRegistry.FirePrompt.
+          2. Delegates to the original prompt, preserving its output byte-for-byte.
+        Idempotent: a second call is a no-op.
+    #>
+    if ($script:__BashHookPromptEnabled) {
+        return
+    }
+
+    # Capture original prompt function (may be $null if none is defined).
+    $existing = Get-Item -Path Function:\prompt -ErrorAction SilentlyContinue
+    $script:__BashOriginalPrompt = if ($null -ne $existing) { $existing.ScriptBlock } else { $null }
+
+    # Install the wrapper as the global 'prompt' function.
+    Set-Item -Path Function:\global:prompt -Value {
+        $currentPath = (Get-Location).Path
+        $oldPath = $script:__BashLastCwd
+
+        # Delegate to HookRegistry.FirePrompt (fires chpwd + prompt hooks).
+        [PsBash.Cmdlets.HookRegistry]::Instance.FirePrompt(
+            $ExecutionContext.SessionState,
+            $oldPath,
+            $currentPath)
+
+        $script:__BashLastCwd = $currentPath
+
+        # Delegate to original prompt and return its output.
+        if ($null -ne $script:__BashOriginalPrompt) {
+            & $script:__BashOriginalPrompt
+        } else {
+            "PS $($currentPath)> "
+        }
+    }
+
+    $script:__BashHookPromptEnabled = $true
+}
+
+function Disable-BashHookPrompt {
+    <#
+    .SYNOPSIS
+        Removes the ps-bash prompt wrapper and restores the original prompt.
+    .DESCRIPTION
+        Restores the prompt function that was captured by Enable-BashHookPrompt.
+        If no original prompt was captured, removes the prompt function entirely.
+        Idempotent: calling when not enabled is a no-op.
+    #>
+    if (-not $script:__BashHookPromptEnabled) {
+        return
+    }
+
+    if ($null -ne $script:__BashOriginalPrompt) {
+        Set-Item -Path Function:\global:prompt -Value $script:__BashOriginalPrompt
+    } else {
+        Remove-Item -Path Function:\global:prompt -ErrorAction SilentlyContinue
+    }
+
+    $script:__BashHookPromptEnabled = $false
+}
+
 Set-Alias -Name 'command'  -Value 'Invoke-BashCommand'  -Force -Scope Global -Option AllScope
 Set-Alias -Name 'source'   -Value 'Invoke-BashSource'   -Force -Scope Global -Option AllScope
 Set-Alias -Name 'unset'    -Value 'Invoke-BashUnset'    -Force -Scope Global -Option AllScope

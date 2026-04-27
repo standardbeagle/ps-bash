@@ -18,5 +18,7 @@ public sealed class RegisterBashChpwdHookCommand : PSCmdlet
     protected override void ProcessRecord()
     {
         HookRegistry.Instance.Register(HookKind.ChpwdHook, Name, ScriptBlock);
+        // Auto-enable the prompt wrapper on first hook registration so chpwd hooks fire.
+        SessionState.InvokeCommand.InvokeScript("Enable-BashHookPrompt");
     }
 }

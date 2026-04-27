@@ -127,7 +127,8 @@ FunctionsToExport = 'Set-BashErrorMode', 'Invoke-ProcessSub',
                  'Invoke-BashPopd', 'Invoke-BashDirs', 'Invoke-BashYes', 'Invoke-BashTput',
                  'Invoke-BashShopt',
                  'Invoke-BashKill', 'Invoke-BashTest', 'Test-BashCondition',
-                 'Invoke-BashLet', 'Invoke-BashId', 'Invoke-BashShuf'
+                 'Invoke-BashLet', 'Invoke-BashId', 'Invoke-BashShuf',
+                 'Enable-BashHookPrompt', 'Disable-BashHookPrompt'
 
 # Cmdlets to export from this module, for best performance, do not use wildcards and do not delete the entry, use an empty array if there are no cmdlets to export.
 CmdletsToExport = @()

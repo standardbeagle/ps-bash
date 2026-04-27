@@ -18,5 +18,7 @@ public sealed class RegisterBashPromptHookCommand : PSCmdlet
     protected override void ProcessRecord()
     {
         HookRegistry.Instance.Register(HookKind.PromptHook, Name, ScriptBlock);
+        // Auto-enable the prompt wrapper on first hook registration so prompt hooks fire.
+        SessionState.InvokeCommand.InvokeScript("Enable-BashHookPrompt");
     }
 }
