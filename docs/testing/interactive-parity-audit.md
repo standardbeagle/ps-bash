@@ -858,3 +858,113 @@ QA audit sections per qa-rubric Directive 10 template.
 1. Fix `grep -q` exit code propagation in pipeline chains: `Invoke-BashGrep` must set `$global:LASTEXITCODE` based on whether any line matched, not rely on the implicit PowerShell `$?` after a pipeline segment. This breaks `cmd | grep -q pat && arm` patterns used extensively in scripts.
 2. Fix broken-pipe termination on Windows: implement a Job Object or parent-PID poller to kill the producer process when the consumer closes its stdin, so `yes | head -n 3` and similar patterns terminate. See MEMORY.md "Windows process death" and "Process spawn contract".
 3. Implement PIPESTATUS tracking: record each pipeline stage's exit code in `$global:BashPipeStatus` and use the rightmost non-zero code when `set -o pipefail` is active. Currently `false | true` always reports 0 with pipefail on.
+
+---
+
+
+
+**EXISTING TESTS** ( file:test ) :
+- `src/PsBash.Core.Tests/Parser/PsEmitterTests.cs:Transpile_BracedVar_EmitsEnvVar`
+- `src/PsBash.Core.Tests/Parser/PsEmitterTests.cs:Transpile_BracedVarWithDefault_EmitsNullCoalescing`
+- `src/PsBash.Core.Tests/Parser/PsEmitterTests.cs:Transpile_SpecialVarQuestionMark_EmitsLastExitCode`
+- `src/PsBash.Core.Tests/Parser/PsEmitterTests.cs:Transpile_BracedVarLength_EmitsLength`
+- `src/PsBash.Core.Tests/Parser/PsEmitterTests.cs:Transpile_SpecialVarAt_EmitsArgs`
+- `src/PsBash.Core.Tests/Parser/PsEmitterTests.cs:Transpile_SpecialVarHash_EmitsArgsCount`
+- `src/PsBash.Core.Tests/Parser/PsEmitterTests.cs:Transpile_SpecialVarDollarDollar_EmitsPid`
+- `src/PsBash.Core.Tests/Parser/PsEmitterTests.cs:Transpile_PositionalVar1_EmitsArgsIndex`
+- `src/PsBash.Core.Tests/Parser/PsEmitterTests.cs:Transpile_PositionalVar9_EmitsArgsIndex`
+- `src/PsBash.Core.Tests/Parser/PsEmitterTests.cs:Transpile_SpecialVar0_EmitsMyCommand`
+- `src/PsBash.Core.Tests/Parser/PsEmitterTests.cs:Transpile_BracedVarAssignDefault_EmitsNullCoalescingAssign`
+- `src/PsBash.Core.Tests/Parser/PsEmitterTests.cs:Transpile_BracedVarAlternative_EmitsConditional`
+- `src/PsBash.Core.Tests/Parser/PsEmitterTests.cs:Transpile_BracedVarError_EmitsThrow`
+- `src/PsBash.Core.Tests/Parser/PsEmitterTests.cs:Transpile_BracedVarSuffixRemoval_EmitsReplace`
+- `src/PsBash.Core.Tests/Parser/PsEmitterTests.cs:Transpile_BracedVarPrefixRemoval_EmitsReplace`
+- `src/PsBash.Core.Tests/Parser/PsEmitterTests.cs:Transpile_BracedVarInsideDoubleQuotes_EmitsEnvVar`
+- `src/PsBash.Core.Tests/Parser/PsEmitterTests.cs:Transpile_SpecialVarStar_EmitsArgs`
+- `src/PsBash.Core.Tests/Parser/PsEmitterTests.cs:Transpile_BracedVarHomePsBuiltin_EmitsHomeDirect`
+- `src/PsBash.Core.Tests/Parser/PsEmitterTests.cs:Transpile_BracedVarInsideDoubleQuotes_EmitsDollarEnv`
+- `src/PsBash.Core.Tests/Parser/PsEmitterTests.cs:Transpile_BracedVarDefaultInsideDoubleQuotes_EmitsSubexpression`
+- `src/PsBash.Core.Tests/Parser/PsEmitterTests.cs:Transpile_BracedVarSuffixRemovalInsideDoubleQuotes_EmitsSubexpression`
+- `src/PsBash.Core.Tests/Parser/PsEmitterTests.cs:Transpile_BracedVarLengthInsideDoubleQuotes_EmitsSubexpression`
+- `src/PsBash.Core.Tests/Parser/PsEmitterTests.cs:Transpile_BracedVarPrefixRemovalInsideDoubleQuotes_EmitsSubexpression`
+- `src/PsBash.Core.Tests/Parser/PsEmitterTests.cs:Transpile_BracedVarAlternativeInsideDoubleQuotes_EmitsSubexpression`
+- `src/PsBash.Core.Tests/Parser/PsEmitterTests.cs:Transpile_SimpleBracedVarInsideDoubleQuotes_NoSubexpression`
+- `src/PsBash.Differential.Tests/VariableExpansionDifferentialTests.cs:Differential_BasicVar_Expands`
+- `src/PsBash.Differential.Tests/VariableExpansionDifferentialTests.cs:Differential_BracedVar_Expands`
+- `src/PsBash.Differential.Tests/VariableExpansionDifferentialTests.cs:Differential_UndefinedVar_ExpandsEmpty`
+- `src/PsBash.Differential.Tests/VariableExpansionDifferentialTests.cs:Differential_DefaultOperator_UnsetVar`
+- `src/PsBash.Differential.Tests/VariableExpansionDifferentialTests.cs:Differential_DefaultOperator_SetVar_ReturnsVar`
+- `src/PsBash.Differential.Tests/VariableExpansionDifferentialTests.cs:Differential_AssignDefault_UnsetVar_AssignsAndReturns`
+- `src/PsBash.Differential.Tests/VariableExpansionDifferentialTests.cs:Differential_AlternativeOperator_SetVar`
+- `src/PsBash.Differential.Tests/VariableExpansionDifferentialTests.cs:Differential_AlternativeOperator_UnsetVar`
+- `src/PsBash.Differential.Tests/VariableExpansionDifferentialTests.cs:Differential_Substring_OffsetAndLength`
+- `src/PsBash.Differential.Tests/VariableExpansionDifferentialTests.cs:Differential_Substring_OffsetOnly`
+- `src/PsBash.Differential.Tests/VariableExpansionDifferentialTests.cs:Differential_SuffixRemove_Shortest`
+- `src/PsBash.Differential.Tests/VariableExpansionDifferentialTests.cs:Differential_SuffixRemove_Longest` ( golden -- known bug )
+- `src/PsBash.Differential.Tests/VariableExpansionDifferentialTests.cs:Differential_PrefixRemove_Shortest`
+- `src/PsBash.Differential.Tests/VariableExpansionDifferentialTests.cs:Differential_PrefixRemove_Longest` ( golden -- known bug )
+- `src/PsBash.Differential.Tests/VariableExpansionDifferentialTests.cs:Differential_SubstituteFirst` ( golden -- known bug )
+- `src/PsBash.Differential.Tests/VariableExpansionDifferentialTests.cs:Differential_SubstituteAll`
+- `src/PsBash.Differential.Tests/VariableExpansionDifferentialTests.cs:Differential_CaseUpperAll`
+- `src/PsBash.Differential.Tests/VariableExpansionDifferentialTests.cs:Differential_CaseLowerAll`
+- `src/PsBash.Differential.Tests/VariableExpansionDifferentialTests.cs:Differential_CaseUpperFirst`
+- `src/PsBash.Differential.Tests/VariableExpansionDifferentialTests.cs:Differential_CaseLowerFirst`
+- `src/PsBash.Differential.Tests/VariableExpansionDifferentialTests.cs:Differential_Length_StringVar`
+- `src/PsBash.Differential.Tests/VariableExpansionDifferentialTests.cs:Differential_SpecialVar_ExitCode_True`
+- `src/PsBash.Differential.Tests/VariableExpansionDifferentialTests.cs:Differential_SpecialVar_ExitCode_False`
+- `src/PsBash.Differential.Tests/VariableExpansionDifferentialTests.cs:Differential_SpecialVar_At_PositionalParams` ( golden -- known bug )
+- `src/PsBash.Differential.Tests/VariableExpansionDifferentialTests.cs:Differential_SpecialVar_Hash_Count` ( golden -- known bug )
+- `src/PsBash.Differential.Tests/VariableExpansionDifferentialTests.cs:Differential_SpecialVar_Positional_1to3` ( golden -- known bug )
+- `src/PsBash.Differential.Tests/VariableExpansionDifferentialTests.cs:Differential_SpecialVar_Pid_IsNonEmptyInteger` ( golden -- PID differs per process )
+- `src/PsBash.Differential.Tests/VariableExpansionDifferentialTests.cs:Differential_QuotedAt_PreservesSpacesInArgs` ( golden -- known bug )
+- `src/PsBash.Differential.Tests/VariableExpansionDifferentialTests.cs:Differential_QuotedVar_SpacesPreserved`
+- `src/PsBash.Differential.Tests/VariableExpansionDifferentialTests.cs:Differential_Injection_VarContainsDollarParen_NoExec`
+- `src/PsBash.Differential.Tests/VariableExpansionDifferentialTests.cs:Differential_Injection_VarContainsSemicolon_NoSplit`
+
+**FAILURE-SURFACE COVERAGE** ( per Directive 3 axes ) :
+| Axis | Covered? | Test ref / gap note |
+| ------ | ---------- | --------------------- |
+| Empty input | PARTIAL | `Differential_UndefinedVar_ExpandsEmpty` -- unset var ; no test for `x=""; echo ${x:-default}` |
+| Large input | NO | gap -- no test streams large value through `${#var}` or substitution |
+| Unicode | NO | gap -- `${x^^}` on unicode: PS `.ToUpper()` and bash `^^` differ for non-ASCII ; untested |
+| CRLF input | NO | gap -- no test for variable containing `\r\n` through substitution |
+| Broken pipe | N/A | variable expansion is not a pipeline source ; skip justified |
+| Slow reader | N/A | not a pipeline consumer ; skip justified |
+| Signal during execute | NO | gap -- no test for Ctrl-C during `set --` + loop |
+| Exit code propagation | YES | `Differential_SpecialVar_ExitCode_True`, `Differential_SpecialVar_ExitCode_False` |
+| Stderr interleave | NO | gap -- no test for `${VAR:?msg}` writing error to stderr |
+| Working dir state | N/A | variable expansion does not depend on cwd ; skip justified |
+| Environment leak | YES | `Differential_UndefinedVar_ExpandsEmpty` -- uses unique env name to avoid cross-test contamination |
+| Quoting / injection | YES | `Differential_Injection_VarContainsDollarParen_NoExec`, `Differential_Injection_VarContainsSemicolon_NoSplit`, `Differential_QuotedVar_SpacesPreserved` |
+| Platform-locked file | N/A | no file operations ; skip justified |
+| Missing target | YES | `Differential_DefaultOperator_UnsetVar`, `Differential_AlternativeOperator_UnsetVar` -- undefined var |
+| Recursion depth | NO | gap -- no test for nested command substitution inside `${}` ( e.g. `${$(echo x):-default}` ) |
+
+**MODE COVERAGE** ( per Directive 4 modes ) :
+| Mode | Covered? | Test ref / gap note |
+| ------ | ---------- | --------------------- |
+| M1 -c | YES | all differential tests use `ps-bash -c "script"` via `BashOracleFixture.RunOneAsync` |
+| M2 stdin pipe | NO | gap -- no test pipes a script containing `${}` via stdin |
+| M3 file arg | NO | gap -- no test passes a `.sh` file containing variable expansion |
+| M4 interactive | NO | gap -- no PTY test for interactive variable expansion at REPL |
+| M5 Invoke-BashEval | NO | gap -- no test evaluates `${}` forms via `Invoke-BashEval` cmdlet |
+| M6 Invoke-BashSource | NO | gap -- no test sources a `.sh` file that uses `${}` operators |
+
+**ORACLE STATUS**:
+- DIFFERENTIAL TESTS PRESENT? YES
+- 32 differential tests: 25 use EqualAsync ( live bash diff ) , 7 use GoldenAsync ( known bugs documented )
+
+**KNOWN BUGS / RISKS**:
+- `${var%%pat}` with wildcard ( e.g. `%%.*` ) : emits `($env:x -replace  ' .*$ ' , '  ' )` -- regex `.*$` greedily matches entire string, not just suffix. `PsEmitter.cs:EmitBracedVar` ~line 1864.
+- `${var##pat}` with wildcard ( e.g. `##*.` ) : emits `($env:x -replace  ' ^*. ' , '  ' )` -- `*.` is invalid regex ( unescaped `*` ) . No glob-to-regex translation. `PsEmitter.cs:EmitBracedVar` ~line 1876.
+- `${var/pat/rep}` first-occurrence: PS `-replace` is always global ; bash `${x/l/L}` replaces only first match. Produces "heLLo" instead of "heLlo". `PsEmitter.cs:EmitBracedVar` ~line 1892.
+- `set -- a b c`: emits `$global:BashPositional = @(a, b, c)` -- bare words unquoted ; PS parse error ( exit 1 ) . Should be `@( ' a ' ,  ' b ' ,  ' c ' )`. Breaks `$#`, `$@`, `$1..$9`, `"$@"` split. `PsEmitter.cs` set-handling in `EmitSimple`.
+- `$_` ( last argument ) : maps to `$global:BashLastArg` but nothing in the runtime sets this global -- always null.
+- `$-` ( shell flags ) : maps to `$global:BashFlags` but the module does not maintain this global -- always null.
+- `set -u` ( nounset ) : accessing undefined var throws in ps-bash with different error message than bash ' s `unbound variable` -- stderr and exit code may differ.
+- Negative substring offset `${var: -3}` (space before `-` required in bash): emitter offset parsing accepts `-` digit but negative `.Substring()` throws in .NET -- untested.
+
+**PRIORITY GAPS** (top 3 max):
+1. Fix `set -- args` emitter: quote string literal values in the emitted `@( ' a ' , ' b ' , ' c ' )` array. Single root cause that breaks four test categories ($#, $@, $1..$9, "$@" splitting).
+2. Fix `${var/pat/rep}` first-occurrence: use `[regex]::Replace(str, pattern, replacement, 1)` to limit to one replacement.
+3. Fix glob-wildcard in `##`/`%%` pattern removal: translate bash glob pattern to .NET regex before emitting `-replace` (`*` -> `.*`, `?` -> `.`, literal `.` -> `\.`).
