@@ -474,3 +474,100 @@ QA audit sections per qa-rubric Directive 10 template.
 1. Fix `! cmd` in AndOrList chains: `EmitPipeline` negation appends `; $global:LASTEXITCODE = …` making `&&`/`||` syntactically invalid. The fix is to emit the negation as part of the AndOrList arm rather than appending to the command string — e.g. wrap in `& { false; if ($?) { $global:LASTEXITCODE = 1 } else { $global:LASTEXITCODE = 0 } }`.
 2. `$?` / `$LASTEXITCODE` after `!` pipeline: `EmitSimpleVar` emits `$LASTEXITCODE` without `$global:` prefix when the var appears in the same statement; the negation writes to `$global:LASTEXITCODE` but the subsequent `echo $?` reads from PS's local `$LASTEXITCODE` which is still the raw value — fix by consistently using `$global:LASTEXITCODE` throughout.
 3. `cd /tmp && pwd` working-dir persistence: add a differential test verifying that the left arm of `&&` can change directory and the right arm sees the new `$PWD` — this exercises whether ps-bash's pwsh worker correctly propagates `cd` across a chain boundary.
+
+---
+
+### FEATURE: Glob + Brace Expansion
+
+**EXISTING TESTS** (file:test):
+- `src/PsBash.Core.Tests/Parser/BashLexerTests.cs:Tokenize_Braces_ReturnsBraceTokens`
+- `src/PsBash.Core.Tests/Parser/BashLexerTests.cs:Tokenize_EmptyBraces_LexesAsWord`
+- `src/PsBash.Core.Tests/Parser/BashLexerTests.cs:Tokenize_EmptyBracesInXargs_LexesAsWord`
+- `src/PsBash.Core.Tests/Parser/BashParserTests.cs:Parse_GlobStar_ProducesGlobPart`
+- `src/PsBash.Core.Tests/Parser/BashParserTests.cs:Parse_GlobCharClass_ProducesGlobPart`
+- `src/PsBash.Core.Tests/Parser/BashParserTests.cs:Parse_ExtGlob_ProducesGlobPart`
+- `src/PsBash.Core.Tests/Parser/PsEmitterTests.cs:Transpile_BracedTuple_EmitsArray`
+- `src/PsBash.Core.Tests/Parser/PsEmitterTests.cs:Transpile_BracedRange_EmitsPsRange`
+- `src/PsBash.Core.Tests/Parser/PsEmitterTests.cs:Transpile_BracedRangeLeadingZeros_EmitsZeroPaddedArray`
+- `src/PsBash.Core.Tests/Parser/PsEmitterTests.cs:Transpile_BracedTupleWithPrefixSuffix_EmitsExpandedArray`
+- `src/PsBash.Core.Tests/Parser/PsEmitterTests.cs:Transpile_BracedRangeWithPrefix_EmitsExpandedArray`
+- `src/PsBash.Core.Tests/Parser/PsEmitterTests.cs:Transpile_BraceRangeLeadingZero_EmitsStringArray`
+- `src/PsBash.Core.Tests/Parser/PsEmitterTests.cs:Transpile_BraceRangeNoLeadingZero_EmitsRangeOperator`
+- `src/PsBash.Core.Tests/Parser/PsEmitterTests.cs:Transpile_BraceRangeWithStep_ExpandsCorrectly`
+- `src/PsBash.Core.Tests/Parser/PsEmitterTests.cs:Transpile_BraceRangeDefaultStep_Works`
+- `src/PsBash.Core.Tests/Parser/PsEmitterTests.cs:Transpile_BraceRangeReverseDefaultStep_Works`
+- `src/PsBash.Core.Tests/Parser/PsEmitterTests.cs:Transpile_BraceRangeStepDivisible_IncludesEnd`
+- `src/PsBash.Core.Tests/Parser/PsEmitterTests.cs:Transpile_BraceRangeNonDivisibleStep_DoesNotOvershoot`
+- `src/PsBash.Core.Tests/Parser/PsEmitterTests.cs:Transpile_BraceRangeNonDivisibleStepReverse_DoesNotOvershoot`
+- `src/PsBash.Core.Tests/Parser/PsEmitterTests.cs:Transpile_GlobStar_PassesThrough`
+- `src/PsBash.Core.Tests/Parser/PsEmitterTests.cs:Transpile_GlobQuestionMark_PassesThrough`
+- `src/PsBash.Core.Tests/Parser/PsEmitterTests.cs:Transpile_GlobCharClass_PassesThrough`
+- `src/PsBash.Core.Tests/Parser/PsEmitterTests.cs:Transpile_GlobMixedWithLiteral_PassesThrough`
+- `src/PsBash.Core.Tests/Parser/PsEmitterTests.cs:Transpile_GlobStandalone_PassesThrough`
+- `src/PsBash.Core.Tests/Parser/PsEmitterTests.cs:Transpile_GlobPrefix_PassesThrough`
+- `src/PsBash.Core.Tests/Parser/PsEmitterTests.cs:Transpile_GlobSuffix_PassesThrough`
+- `src/PsBash.Core.Tests/Parser/PsEmitterTests.cs:Transpile_ExtGlob_PassesThrough`
+- `src/PsBash.Core.Tests/Parser/PsEmitterTests.cs:Transpile_ExtendedGlob_EmitsLike`
+- `src/PsBash.Core.Tests/Parser/PsEmitterTests.cs:Transpile_AwkWithCommaInsideBraces_NotBraceExpanded`
+- `src/PsBash.Core.Tests/Parser/PsEmitterTests.cs:Transpile_AwkInPipelineWithFlagAndCommaExpression_NotBraceExpanded`
+- `src/PsBash.Core.Tests/Parser/PsEmitterTests.cs:Transpile_AwkWithMultipleFields_NotBraceExpanded`
+- `src/PsBash.Core.Tests/Parser/PsEmitterTests.cs:Transpile_ForInGlob_EmitsResolvePath`
+- `src/PsBash.Core.Tests/Parser/PsEmitterTests.cs:Transpile_ForInGlobCharClass_EmitsResolvePath`
+- `src/PsBash.Core.Tests/Parser/PsEmitterTests.cs:Transpile_XargsWithBraces_QuotesBracesToPreventScriptBlockParsing`
+- `src/PsBash.Differential.Tests/GlobBraceExpansionDifferentialTests.cs:Differential_BraceTuple_ExpandsToWords`
+- `src/PsBash.Differential.Tests/GlobBraceExpansionDifferentialTests.cs:Differential_BraceRange_IntegerSequence`
+- `src/PsBash.Differential.Tests/GlobBraceExpansionDifferentialTests.cs:Differential_BraceRange_ZeroPadded`
+- `src/PsBash.Differential.Tests/GlobBraceExpansionDifferentialTests.cs:Differential_BraceRange_WithStep`
+- `src/PsBash.Differential.Tests/GlobBraceExpansionDifferentialTests.cs:Differential_BraceTuple_WithPrefixAndSuffix`
+- `src/PsBash.Differential.Tests/GlobBraceExpansionDifferentialTests.cs:Differential_BraceTuple_InsideDoubleQuotes_NoExpansion`
+- `src/PsBash.Differential.Tests/GlobBraceExpansionDifferentialTests.cs:Differential_BraceTuple_TrailingComma_EmptyItem`
+- `src/PsBash.Differential.Tests/GlobBraceExpansionDifferentialTests.cs:Differential_BraceRange_LetterRange_KnownGap` (golden)
+- `src/PsBash.Differential.Tests/GlobBraceExpansionDifferentialTests.cs:Differential_BraceTuple_NestedBraces_KnownGap` (golden)
+- `src/PsBash.Differential.Tests/GlobBraceExpansionDifferentialTests.cs:Differential_Glob_NoMatchPassthrough`
+- `src/PsBash.Differential.Tests/GlobBraceExpansionDifferentialTests.cs:Differential_Glob_NegatedCharClass_NoMatch_Passthrough`
+- `src/PsBash.Differential.Tests/GlobBraceExpansionDifferentialTests.cs:Differential_BraceRange_Descending`
+
+**FAILURE-SURFACE COVERAGE** (per Directive 3 axes):
+| Axis | Covered? | Test ref / gap note |
+|------|----------|---------------------|
+| Empty input | YES | `Transpile_BracedTuple_EmitsArray` — empty string item via trailing comma `{a,}` |
+| Large input | NO | gap — no test streams a large number of brace-expanded items through a pipeline |
+| Unicode | PARTIAL | `Differential_BraceRange_LetterRange_KnownGap` documents non-ASCII range; non-ASCII in brace items untested |
+| CRLF input | N/A | brace expansion is a word-transform, not a line-reader; skip justified |
+| Broken pipe | N/A | brace expansion produces arguments, not a pipeline consumer; skip justified |
+| Slow reader | N/A | brace expansion is pure word transformation, no I/O; skip justified |
+| Signal during execute | N/A | brace expansion completes before any exec; skip justified |
+| Exit code propagation | YES | `Differential_BraceRange_IntegerSequence` — echo exits 0; any mis-expansion would produce wrong output not wrong exit code |
+| Stderr interleave | N/A | brace expansion is a word transform; produces no stderr of its own; skip justified |
+| Working dir state | N/A | brace expansion does not interact with cwd; skip justified |
+| Environment leak | YES | `Differential_BraceTuple_InsideDoubleQuotes_NoExpansion` — quoting in DQ context must not leak brace expansion |
+| Quoting / injection | YES | `Differential_BraceTuple_InsideDoubleQuotes_NoExpansion` — `"{a,b}"` must emit `{a,b}` literal; `Transpile_AwkWithCommaInsideBraces_NotBraceExpanded` — awk `{print $1}` must not brace-expand |
+| Platform-locked file | N/A | brace expansion has no file I/O; skip justified |
+| Missing target | YES | `Differential_Glob_NoMatchPassthrough` — glob with no match returns literal (nullglob off) |
+| Recursion depth | YES | `Differential_BraceTuple_NestedBraces_KnownGap` — nested `{a,b{1,2},c}` documents recursion gap; golden records current behavior |
+
+**MODE COVERAGE** (per Directive 4 modes):
+| Mode | Covered? | Test ref / gap note |
+|------|----------|---------------------|
+| M1 -c | YES | all differential tests invoke ps-bash -c |
+| M2 stdin pipe | NO | gap — no test pipes `echo "echo {a,b,c}"` through ps-bash stdin |
+| M3 file arg | NO | gap — no test passes a script file containing brace expansions |
+| M4 interactive | NO | gap — no PTY test for brace expansion at the REPL prompt |
+| M5 Invoke-BashEval | NO | gap — no test evaluates a brace expansion via `Invoke-BashEval` |
+| M6 Invoke-BashSource | NO | gap — no test sources a script file containing brace expansions |
+
+**ORACLE STATUS**:
+- DIFFERENTIAL TESTS PRESENT? YES
+- 10 live-diff (EqualAsync) + 2 golden (GoldenAsync) = 12 differential cases
+- GoldenAsync used for: letter range (`{a..e}`) and nested braces (`{a,b{1,2},c}`) — both are known bugs per Directive 1 exception: bash has no equivalent correct output from ps-bash
+
+**KNOWN BUGS / RISKS**:
+- Letter range `{a..e}` not implemented: `ParseBraceExpansion` in `BashParser.cs:1772` only calls `int.TryParse`; non-integer ranges fall through to comma-split producing literal text `a..e` — `BraceRange_LetterRange.golden.txt` records current output
+- Nested brace expansion `{a,b{1,2},c}` broken: `ParseBraceExpansion` in `BashParser.cs:1788` uses `inner.Split(',')` without depth-awareness; commas inside nested braces are split at the wrong level, producing `a,c} b{1,c} 2,c}` — `BraceTuple_NestedBraces.golden.txt` records current output
+- Glob expansion at runtime (`*`, `?`, `[abc]`) is delegated to `Resolve-BashGlob` in `PsBash.psm1`; extglob patterns (`+(*.py)`) are passed through by the emitter (`GlobPart.Pattern`) but `Resolve-BashGlob` does not implement extglob matching — untested runtime behavior
+- `{a}` (single-item, no comma, no `..`) is treated as a literal brace group by `IsBraceExpansion` (correctly returns false); emitted as the literal string `{a}` by the emitter — matches bash behavior; covered implicitly by the lexer treating `{` as `LBrace` only when `IsBraceExpansion` returns false
+
+**PRIORITY GAPS** (top 3 max):
+1. Letter range support: extend `ParseBraceExpansion` in `BashParser.cs` to handle `char.TryParse` for single-character range operands and emit a `BracedRange` variant with char arithmetic (`(char)((int)'a' + i)`) — unblocks `{a..z}`, `{A..Z}`, `{a..e}` cases
+2. Nested brace expansion: replace `inner.Split(',')` in `ParseBraceExpansion` with a depth-aware comma splitter that only splits at brace-depth 0 — required for `{a,b{1,2},c}` and similar patterns common in shell scripts
+3. Extglob runtime coverage: add differential tests for `+(pattern)`, `*(pattern)`, `?(pattern)` against a real directory in a temp folder so `Resolve-BashGlob` is exercised; currently only the emitter passthrough is tested
