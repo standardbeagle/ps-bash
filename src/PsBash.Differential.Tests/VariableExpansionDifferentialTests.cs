@@ -171,18 +171,14 @@ public class VariableExpansionDifferentialTests
 
     /// <summary>
     /// ${var%%pat} — remove longest suffix match.
-    /// KNOWN BUG: emitter generates `($env:x -replace '.*$','')` which uses regex
-    /// greedy matching. In PS regex `.*$` matches the whole string when applied left-to-right,
-    /// not glob-style suffix removal. Bash `%%.*` on "a.b.c" → "a"; ps-bash → "".
-    /// Tracked as parity gap in audit doc. Using GoldenAsync to document current output.
+    /// Fixed: GlobToRegex now translates `*` → `.*` and `.` → `\.` so that
+    /// `%%.*` becomes regex `\..*` (greedy), giving "a" from "a.b.c".
     /// </summary>
     [SkippableFact]
     public async Task Differential_SuffixRemove_Longest()
     {
-        // Directive 1 exception: known emitter bug — GoldenAsync documents current (broken) state
-        await AssertOracle.GoldenAsync(
+        await AssertOracle.EqualAsync(
             "x=a.b.c; echo ${x%%.*}",
-            "VarExpansion_SuffixRemove_Longest",
             timeout: TimeSpan.FromSeconds(15));
     }
 
@@ -199,18 +195,14 @@ public class VariableExpansionDifferentialTests
 
     /// <summary>
     /// ${var##pat} — remove longest prefix match.
-    /// KNOWN BUG: emitter generates `($env:x -replace '^*.','')` which is invalid regex.
-    /// Bash glob wildcard `*.` in `##` is not translated to regex correctly.
-    /// "a.b.c" → bash: "c", ps-bash: error or wrong result.
-    /// Using GoldenAsync to document current output.
+    /// Fixed: GlobToRegex now translates `*` → `.*` and `.` → `\.` so that
+    /// `##*.` becomes regex `.*\.` (greedy), giving "c" from "a.b.c".
     /// </summary>
     [SkippableFact]
     public async Task Differential_PrefixRemove_Longest()
     {
-        // Directive 1 exception: known emitter bug — GoldenAsync documents current (broken) state
-        await AssertOracle.GoldenAsync(
+        await AssertOracle.EqualAsync(
             "x=a.b.c; echo ${x##*.}",
-            "VarExpansion_PrefixRemove_Longest",
             timeout: TimeSpan.FromSeconds(15));
     }
 

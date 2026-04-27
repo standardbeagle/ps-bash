@@ -93,8 +93,10 @@ public class PsEmitterTests
     {
         var result = PsEmitter.Transpile("! grep -q pattern file");
 
+        // Negation checks $global:LASTEXITCODE (bash exit code) not PowerShell's $?.
+        // This ensures grep's no-match (exit 1) is correctly negated to 0.
         Assert.Equal(
-            "Invoke-BashGrep -q pattern file; $global:LASTEXITCODE = if ($?) { 1 } else { 0 }",
+            "Invoke-BashGrep -q pattern file; $global:LASTEXITCODE = if ($global:LASTEXITCODE -eq 0) { 1 } else { 0 }",
             result);
     }
 
@@ -103,8 +105,9 @@ public class PsEmitterTests
     {
         var result = PsEmitter.Transpile("! cmd1 | cmd2");
 
+        // Negation checks $global:LASTEXITCODE (bash exit code) not PowerShell's $?.
         Assert.Equal(
-            "cmd1 | cmd2; $global:LASTEXITCODE = if ($?) { 1 } else { 0 }",
+            "cmd1 | cmd2; $global:LASTEXITCODE = if ($global:LASTEXITCODE -eq 0) { 1 } else { 0 }",
             result);
     }
 
@@ -498,9 +501,10 @@ public class PsEmitterTests
     [Fact]
     public void Transpile_SpecialVarQuestionMark_EmitsLastExitCode()
     {
+        // $? emits $global:LASTEXITCODE so negated-pipeline results are visible across scopes.
         var result = PsEmitter.Transpile("echo $?");
 
-        Assert.Equal("Invoke-BashEcho $LASTEXITCODE", result);
+        Assert.Equal("Invoke-BashEcho $global:LASTEXITCODE", result);
     }
 
     [Fact]
@@ -2149,8 +2153,9 @@ public class PsEmitterTests
     [Fact]
     public void Transpile_BracedVarSuffixRemovalInsideDoubleQuotes_EmitsSubexpression()
     {
+        // GlobToRegex translates glob * to regex .* so l* becomes l.* (greedy longest suffix).
         var result = PsEmitter.Transpile("echo \"${FOO%%l*}\"");
-        Assert.Equal("Invoke-BashEcho \"$($env:FOO -replace 'l*$','')\"", result);
+        Assert.Equal("Invoke-BashEcho \"$($env:FOO -replace 'l.*$','')\"", result);
     }
 
     [Fact]
@@ -2163,8 +2168,9 @@ public class PsEmitterTests
     [Fact]
     public void Transpile_BracedVarPrefixRemovalInsideDoubleQuotes_EmitsSubexpression()
     {
+        // GlobToRegex translates glob * to regex .* so */ becomes .* + / = .*/ (greedy longest prefix).
         var result = PsEmitter.Transpile("echo \"${PATH##*/}\"");
-        Assert.Equal("Invoke-BashEcho \"$($env:PATH -replace '^*/','')\"", result);
+        Assert.Equal("Invoke-BashEcho \"$($env:PATH -replace '^.*/','')\"", result);
     }
 
     [Fact]

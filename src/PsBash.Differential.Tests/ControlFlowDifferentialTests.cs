@@ -228,4 +228,57 @@ public class ControlFlowDifferentialTests
             "fact() { if [ $1 -le 1 ]; then echo 1; return; fi; prev=$(fact $(($1-1))); echo $(($1*prev)); }; fact 4",
             timeout: TimeSpan.FromSeconds(15));
     }
+
+    // -----------------------------------------------------------------------
+    // continue inside for loop
+    // -----------------------------------------------------------------------
+
+    /// <summary>
+    /// continue inside for-in skips the current iteration body.
+    /// `for i in 1 2 3 4 5; do if [ $i -eq 3 ]; then continue; fi; echo $i; done`
+    /// must output 1, 2, 4, 5 (3 is skipped).
+    /// Failure-surface axis 8: loop exit code must be 0 after successful iterations.
+    /// </summary>
+    [SkippableFact]
+    public async Task Differential_For_ContinueSkipsIteration()
+    {
+        await AssertOracle.EqualAsync(
+            "for i in 1 2 3 4 5; do if [ $i -eq 3 ]; then continue; fi; echo $i; done",
+            timeout: TimeSpan.FromSeconds(15));
+    }
+
+    // -----------------------------------------------------------------------
+    // while false — zero iterations
+    // -----------------------------------------------------------------------
+
+    /// <summary>
+    /// `while false; do echo body; done; echo $?` — condition fails immediately,
+    /// body never runs, exit code is 1 (from false).
+    /// Failure-surface axis 8: zero-iteration loop exit code propagation.
+    /// </summary>
+    [SkippableFact]
+    public async Task Differential_While_FalseCondition_ZeroIterations()
+    {
+        await AssertOracle.EqualAsync(
+            "while false; do echo body; done; echo $?",
+            timeout: TimeSpan.FromSeconds(15));
+    }
+
+    // -----------------------------------------------------------------------
+    // local scope isolation
+    // -----------------------------------------------------------------------
+
+    /// <summary>
+    /// `local x=inner` inside a function must not clobber the outer `x`.
+    /// `x=outer; f() { local x=inner; echo $x; }; f; echo $x`
+    /// must output "inner" then "outer".
+    /// Failure-surface axis 11: local variable must not leak into the calling scope.
+    /// </summary>
+    [SkippableFact]
+    public async Task Differential_Function_LocalScopeIsolation()
+    {
+        await AssertOracle.EqualAsync(
+            "x=outer; f() { local x=inner; echo $x; }; f; echo $x",
+            timeout: TimeSpan.FromSeconds(15));
+    }
 }

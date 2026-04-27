@@ -1749,6 +1749,14 @@ function Invoke-BashGrep {
             return
         }
 
+        # Non-quiet pipeline mode: set exit code based on whether any match was found.
+        # grep exits 1 when no lines match, 0 when at least one matches.
+        if ($matchCount -eq 0) {
+            $global:LASTEXITCODE = 1
+        } else {
+            $global:LASTEXITCODE = 0
+        }
+
         if ($countOnly) {
             New-BashObject -BashText "$matchCount"
         }
@@ -1885,6 +1893,14 @@ function Invoke-BashGrep {
         $global:LASTEXITCODE = 1
         Write-Error '' -ErrorAction SilentlyContinue
         return
+    }
+
+    # Non-quiet file mode: set exit code based on whether any match was found.
+    # grep exits 1 when no lines match, 0 when at least one matches.
+    if ($totalMatchCount -eq 0) {
+        $global:LASTEXITCODE = 1
+    } else {
+        $global:LASTEXITCODE = 0
     }
 
     if ($filesOnly) {

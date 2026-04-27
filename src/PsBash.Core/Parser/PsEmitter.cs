@@ -953,6 +953,13 @@ public static class PsEmitter
 
     private static string TranslateTestCondition(ImmutableArray<CompoundWord> words, bool extended)
     {
+        // Handle leading ! negation: [ ! -f x ] → !(Test-Path ...)
+        if (words.Length >= 1 && GetLiteralValue(words[0]) == "!")
+        {
+            var inner = words.RemoveAt(0);
+            return $"!({TranslateTestCondition(inner, extended)})";
+        }
+
         if (words.Length >= 2)
         {
             var flag = GetLiteralValue(words[0]);
@@ -1882,7 +1889,7 @@ public static class PsEmitter
         return name switch
         {
             "null" or "true" or "false" or "HOME" or "LASTEXITCODE" or "PWD" => $"${name}",
-            "?" => "$LASTEXITCODE",
+            "?" => "$global:LASTEXITCODE",
             "RANDOM" => "$(Get-Random -Maximum 32768)",
             "@" or "*" => "$(if ($global:BashPositional) { $global:BashPositional } else { $args })",
             "#" => "$(if ($global:BashPositional) { $global:BashPositional.Count } else { $args.Count })",
@@ -1970,26 +1977,29 @@ public static class PsEmitter
         }
 
         // Remove suffix: ${VAR%%pattern} or ${VAR%pattern}
+        // Bash globs use * and ? which are not valid regex without translation.
+        // %%pat: longest suffix match (greedy). %pat: shortest suffix match (lazy).
         if (bvs.Suffix.StartsWith("%%"))
         {
-            string pattern = bvs.Suffix[2..];
+            string pattern = GlobToRegex(bvs.Suffix[2..], lazy: false);
             return $"{open}{varRef} -replace '{pattern}$','')";
         }
         if (bvs.Suffix.StartsWith("%"))
         {
-            string pattern = bvs.Suffix[1..];
+            string pattern = GlobToRegex(bvs.Suffix[1..], lazy: true);
             return $"{open}{varRef} -replace '{pattern}$','')";
         }
 
         // Remove prefix: ${VAR##pattern} or ${VAR#pattern}
+        // ##pat: longest prefix match (greedy). #pat: shortest prefix match (lazy).
         if (bvs.Suffix.StartsWith("##"))
         {
-            string pattern = bvs.Suffix[2..];
+            string pattern = GlobToRegex(bvs.Suffix[2..], lazy: false);
             return $"{open}{varRef} -replace '^{pattern}','')";
         }
         if (bvs.Suffix.StartsWith("#"))
         {
-            string pattern = bvs.Suffix[1..];
+            string pattern = GlobToRegex(bvs.Suffix[1..], lazy: true);
             return $"{open}{varRef} -replace '^{pattern}','')";
         }
 
@@ -2093,7 +2103,7 @@ public static class PsEmitter
         return name switch
         {
             "null" or "true" or "false" or "HOME" or "LASTEXITCODE" => $"${{{name}}}",
-            "?" => "${LASTEXITCODE}",
+            "?" => "${global:LASTEXITCODE}",
             "@" or "*" => "$(if ($global:BashPositional) { $global:BashPositional } else { $args })",
             "#" => "$(if ($global:BashPositional) { $global:BashPositional.Count } else { $args.Count })",
             "0" => "$($MyInvocation.MyCommand.Name)",
@@ -2239,7 +2249,11 @@ public static class PsEmitter
         }
 
         if (pipeline.Negated)
-            sb.Append("; $global:LASTEXITCODE = if ($?) { 1 } else { 0 }");
+            // Negate the bash exit code stored in $global:LASTEXITCODE.
+            // Using $global:LASTEXITCODE (not PowerShell's $?) ensures we check the bash
+            // exit code set by the runtime (e.g. Invoke-BashGrep sets it to 1 on no-match)
+            // rather than PowerShell's own cmdlet-success flag.
+            sb.Append("; $global:LASTEXITCODE = if ($global:LASTEXITCODE -eq 0) { 1 } else { 0 }");
 
         return sb.ToString();
     }
@@ -2768,5 +2782,72 @@ public static class PsEmitter
                 return val[flag.Length..];
         }
         return null;
+    }
+
+    /// <summary>
+    /// Translates a bash glob pattern to a .NET regex pattern suitable for use in
+    /// PowerShell's <c>-replace</c> operator.
+    /// <para>
+    /// Bash glob special characters:
+    /// <list type="bullet">
+    ///   <item><c>*</c> → <c>.*</c> (greedy) or <c>.*?</c> (lazy)</item>
+    ///   <item><c>?</c> → <c>.</c></item>
+    ///   <item><c>[...]</c> → passed through unchanged (already valid regex)</item>
+    ///   <item>All other regex metacharacters are escaped.</item>
+    /// </list>
+    /// </para>
+    /// </summary>
+    /// <param name="glob">Bash glob pattern (e.g. <c>.*</c>, <c>*.c</c>, <c>?x</c>).</param>
+    /// <param name="lazy">
+    /// When <c>true</c>, <c>*</c> translates to <c>.*?</c> (lazy/shortest match).
+    /// When <c>false</c>, <c>*</c> translates to <c>.*</c> (greedy/longest match).
+    /// </param>
+    private static string GlobToRegex(string glob, bool lazy)
+    {
+        var sb = new StringBuilder(glob.Length * 2);
+        int i = 0;
+        while (i < glob.Length)
+        {
+            char c = glob[i];
+            if (c == '*')
+            {
+                sb.Append(lazy ? ".*?" : ".*");
+                i++;
+            }
+            else if (c == '?')
+            {
+                sb.Append('.');
+                i++;
+            }
+            else if (c == '[')
+            {
+                // Pass character class through unchanged — already valid regex syntax.
+                int close = glob.IndexOf(']', i + 1);
+                if (close >= 0)
+                {
+                    sb.Append(glob, i, close - i + 1);
+                    i = close + 1;
+                }
+                else
+                {
+                    // Unclosed bracket — escape the [ and continue.
+                    sb.Append("\\[");
+                    i++;
+                }
+            }
+            else if ("\\^$.|+(){}".IndexOf(c) >= 0)
+            {
+                // Regex metacharacter — escape it.
+                sb.Append('\\');
+                sb.Append(c);
+                i++;
+            }
+            else
+            {
+                sb.Append(c);
+                i++;
+            }
+        }
+        return sb.ToString();
     }
 }

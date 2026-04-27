@@ -254,4 +254,25 @@ public class RedirectionDifferentialTests
             "tmpf=\"/tmp/psbash_brace_$$\"; { echo line1; echo line2; } > \"$tmpf\"; cat \"$tmpf\"; rm -f \"$tmpf\"",
             timeout: TimeSpan.FromSeconds(15));
     }
+
+    // -----------------------------------------------------------------------
+    // Test 13: <<- heredoc strips leading tabs
+    //
+    // Failure surface: Axis 12 (heredoc body content), EmitSimple heredoc StripTabs path.
+    // Verifies: <<- strips leading tabs from each heredoc line before piping to cat.
+    // -----------------------------------------------------------------------
+
+    /// <summary>
+    /// <<- heredoc strips leading tabs from each line of the body.
+    /// bash: cat &lt;&lt;-EOF with tab-indented body lines must output the lines without tabs.
+    /// Covers: BashParser HereDoc.StripTabs=true, EmitSimple StripLeadingTabs.
+    /// Failure-surface axis 12: heredoc body quoting and tab-stripping.
+    /// </summary>
+    [SkippableFact]
+    public async Task Differential_Redirect_Heredoc_StripTabs()
+    {
+        await AssertOracle.EqualAsync(
+            "cat <<-EOF\n\thello\n\tworld\nEOF",
+            timeout: TimeSpan.FromSeconds(15));
+    }
 }

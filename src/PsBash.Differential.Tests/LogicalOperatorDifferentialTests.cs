@@ -139,18 +139,15 @@ public class LogicalOperatorDifferentialTests
     /// echo x | grep y exits 1 (no match); ! inverts to 0; echo $? must print 0.
     /// Failure-surface axis 8: negation of a pipeline exit code.
     ///
-    /// KNOWN BUG: ps-bash emits $LASTEXITCODE (without $global: prefix) in the echo
-    /// expression, so the variable resolves as 1 (the raw grep exit code) rather than
-    /// the negated 0. bash outputs "0"; ps-bash outputs "1".
-    /// Golden file captures the current (broken) ps-bash output for regression tracking.
+    /// Fixed: EmitSimpleVar now emits $global:LASTEXITCODE for $? so that echo reads
+    /// the negated value set by the pipeline negation suffix rather than a stale
+    /// local-scope $LASTEXITCODE from the previous pipeline stage.
     /// </summary>
     [SkippableFact]
     public async Task Differential_Not_NegatesPipelineExitCode()
     {
-        // GoldenAsync: known bug — ps-bash prints 1 instead of 0 after negated pipeline.
-        await AssertOracle.GoldenAsync(
+        await AssertOracle.EqualAsync(
             "! echo x | grep y; echo $?",
-            "Not_NegatesPipelineExitCode",
             timeout: TimeSpan.FromSeconds(15));
     }
 
@@ -232,6 +229,24 @@ public class LogicalOperatorDifferentialTests
     {
         await AssertOracle.EqualAsync(
             "true && false || echo recovered",
+            timeout: TimeSpan.FromSeconds(15));
+    }
+
+    // -----------------------------------------------------------------------
+    // cd inside && chain preserves working directory
+    // -----------------------------------------------------------------------
+
+    /// <summary>
+    /// `cd` inside an &amp;&amp; chain must change the working directory for subsequent commands.
+    /// Uses the current directory so the test is portable across platforms.
+    /// `dir=$(pwd); cd ..; cd "$dir" &amp;&amp; echo back` must print "back".
+    /// Failure-surface axis 10: working-dir state persists through && chain.
+    /// </summary>
+    [SkippableFact]
+    public async Task Differential_AndOr_CdInChain_ChangesWorkingDir()
+    {
+        await AssertOracle.EqualAsync(
+            "dir=$(pwd); cd ..; cd \"$dir\" && echo back",
             timeout: TimeSpan.FromSeconds(15));
     }
 }

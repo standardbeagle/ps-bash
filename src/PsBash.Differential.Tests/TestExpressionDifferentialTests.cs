@@ -147,16 +147,16 @@ public class TestExpressionDifferentialTests
 
     /// <summary>
     /// Negation of a file test: [ ! -f /nonexistent ] must be true.
-    /// Known bug: emitter emits invalid PS for ! inside [ ].
+    /// Fixed: TranslateTestCondition now strips a leading literal "!" word and
+    /// wraps the rest in !(…), so [ ! -f x ] emits !(Test-Path "x" -PathType Leaf).
     /// Axis 8: exit code after ! negation.
     /// Axis 14: missing file is the test subject.
     /// </summary>
     [SkippableFact]
     public async Task Differential_Negation_BracketNot_FileTest()
     {
-        await AssertOracle.GoldenAsync(
+        await AssertOracle.EqualAsync(
             "if [ ! -f /nonexistent/file ]; then echo yes; else echo no; fi",
-            "Differential_Negation_BracketNot_FileTest",
             timeout: TimeSpan.FromSeconds(15));
     }
 

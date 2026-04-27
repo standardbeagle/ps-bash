@@ -277,4 +277,24 @@ public class CommandSubstitutionDifferentialTests
             "x=$(true); echo \"[$x]\"",
             timeout: TimeSpan.FromSeconds(15));
     }
+
+    // -----------------------------------------------------------------------
+    // 11. Exit code from $(false) propagates through assignment to $?
+    //
+    // Failure-surface: Axis 8 (exit code propagation through command substitution).
+    // In bash, `x=$(cmd)` propagates cmd's exit code to $?.
+    // -----------------------------------------------------------------------
+
+    /// <summary>
+    /// `x=$(false); echo $?` must print 1 — the exit code of false inside
+    /// the command substitution must propagate through the assignment to $?.
+    /// Failure-surface axis 8: exit code through $(…) assignment.
+    /// </summary>
+    [SkippableFact]
+    public async Task Differential_CommandSub_ExitCodeFromFalse_PropagatesViaAssignment()
+    {
+        await AssertOracle.EqualAsync(
+            "x=$(false); echo $?",
+            timeout: TimeSpan.FromSeconds(15));
+    }
 }
