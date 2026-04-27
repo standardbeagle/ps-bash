@@ -571,3 +571,60 @@ QA audit sections per qa-rubric Directive 10 template.
 1. Letter range support: extend `ParseBraceExpansion` in `BashParser.cs` to handle `char.TryParse` for single-character range operands and emit a `BracedRange` variant with char arithmetic (`(char)((int)'a' + i)`) — unblocks `{a..z}`, `{A..Z}`, `{a..e}` cases
 2. Nested brace expansion: replace `inner.Split(',')` in `ParseBraceExpansion` with a depth-aware comma splitter that only splits at brace-depth 0 — required for `{a,b{1,2},c}` and similar patterns common in shell scripts
 3. Extglob runtime coverage: add differential tests for `+(pattern)`, `*(pattern)`, `?(pattern)` against a real directory in a temp folder so `Resolve-BashGlob` is exercised; currently only the emitter passthrough is tested
+
+---
+
+### FEATURE: test expressions ([ ] and [[ ]])
+
+**EXISTING TESTS** (file:test):
+- `src/PsBash.Core.Tests/Parser/PsEmitterTests.cs:Transpile_BoolExpr_FileTest_EmitsTestPath`
+- `src/PsBash.Core.Tests/Parser/PsEmitterTests.cs:Transpile_BoolExpr_StringEq_EmitsDashEq`
+- `src/PsBash.Core.Tests/Parser/PsEmitterTests.cs:Transpile_BoolExpr_IntComparison_EmitsIntOperator`
+- `src/PsBash.Core.Tests/Parser/PsEmitterTests.cs:Transpile_DoubleBracket_Regex_EmitsDashMatch`
+- `src/PsBash.Differential.Tests/TestExpressionDifferentialTests.cs` — 17 new differential tests
+
+**FAILURE-SURFACE COVERAGE** (per Directive 3 axes):
+| Axis | Covered? | Test ref / gap note |
+|------|----------|---------------------|
+| Empty input | YES | `Differential_StringTest_ZeroLength_EmptyIsTrue` (`[ -z "" ]`) |
+| Large input | NO | gap — not applicable for boolean expressions |
+| Unicode | NO | gap — `[[ "héllo" =~ hé ]]` not tested |
+| CRLF | NO | gap |
+| Broken pipe | NO | not applicable |
+| Slow reader | NO | not applicable |
+| Signal during execute | NO | not applicable |
+| Exit code propagation | YES | `Differential_IntTest_GtTrue`, `Differential_FileTest_NonexistentFile_IsFalse` |
+| STDERR interleave | NO | gap |
+| Working dir state | NO | not applicable |
+| Environment leak | YES | `Differential_QuotedUndefinedVar_ZeroLengthTest_IsTrue` (unset var) |
+| Quoting / injection | YES | `Differential_QuotedUndefinedVar_ZeroLengthTest_IsTrue` (axis 12) |
+| Platform-locked file | NO | not applicable |
+| Missing target | YES | `Differential_FileTest_NonexistentFile_IsFalse`, `Differential_Negation_BracketNot_FileTest` |
+| Recursion depth | NO | not applicable |
+
+**MODE COVERAGE** (per Directive 4 modes):
+| Mode | Covered? | Test ref / gap note |
+|------|----------|---------------------|
+| M1 -c | YES | all EqualAsync tests use `-c` mode |
+| M2 stdin | NO | gap |
+| M3 file | NO | gap |
+| M4 interactive | NO | gap |
+| M5 Invoke-BashEval | NO | gap |
+| M6 Invoke-BashSource | NO | gap |
+
+**ORACLE STATUS**:
+- DIFFERENTIAL TESTS PRESENT? YES
+- 13 live-diff (EqualAsync) + 4 golden (GoldenAsync) = 17 differential cases
+- GoldenAsync used for: `[ ! -f ... ]`, `! false`, `[[ -f x && -d y ]]`, standalone `[ ] || echo` — all are known bugs per Directive 1 exception
+
+**KNOWN BUGS / RISKS**:
+- `EmitTestArg` was not quoting string literals in `[string]::IsNullOrEmpty(x)` — fixed in this audit (single-quoted now); `$`-prefixed args still passed bare (correct for variables)
+- `[ ! -f x ]` — `!` inside `[ ]` is parsed as inner word; emitter's negation suffix emits `;` before `&&` in containing pipeline chain, causing PS syntax error — `Differential_Negation_BracketNot_FileTest.golden.txt`
+- `! false` in if-condition — negation suffix uses `; $LASTEXITCODE = if ($?) { 1 } else { 0 }` but the `;` breaks PS pipeline-chain context — `Differential_Negation_PipelineNegated_False.golden.txt`
+- `[[ -f x && -d y ]]` — `&&` inside `[[ ]]` not properly short-circuit evaluated by `SplitLogical` emitter path — `Differential_DoubleBracket_LogicalAnd_FalseAndTrue_IsFalse.golden.txt`
+- Standalone `[ -f x ] || cmd` — BoolExpr exit-code propagation to `||` chain incorrect — `Differential_Standalone_FileTest_OrChain_NonexistentFallsBack.golden.txt`
+
+**PRIORITY GAPS** (top 3 max):
+1. Fix `!` negation in if-conditions and pipeline chains: the negation suffix must not insert `;` before `&&`/`||` operators (see `EmitPipeline` negation path in `PsEmitter.cs`)
+2. Fix `[[ expr && expr ]]` compound: `SplitLogical` must handle `&&`/`||` inside double-bracket, treating them as logical short-circuit rather than passing them as literal words
+3. Fix standalone `BoolExpr` exit-code propagation into `&&`/`||` chains: the `[void](...)` wrapper discards the bool result; need to emit `if (Test-Path ...) { }; $LASTEXITCODE = if ($?) { 0 } else { 1 }` pattern

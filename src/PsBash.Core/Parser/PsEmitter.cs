@@ -1001,6 +1001,7 @@ public static class PsEmitter
     /// <summary>
     /// Emit a word used as a test expression argument, unwrapping outer double quotes
     /// so that variable references appear bare (e.g. <c>$HOME</c> not <c>"$HOME"</c>).
+    /// String literals must be single-quoted so PowerShell doesn't treat them as commands.
     /// </summary>
     private static string EmitTestArg(CompoundWord word)
     {
@@ -1009,7 +1010,12 @@ public static class PsEmitter
             var sb = new StringBuilder();
             foreach (var part in dq.Parts)
                 sb.Append(EmitWordPart(part));
-            return sb.ToString();
+            var inner = sb.ToString();
+            // Variable references (start with $) are valid PS expressions as-is.
+            // Bare literals must be quoted or PowerShell treats them as commands.
+            if (inner.Length == 0 || inner[0] != '$')
+                return "'" + inner.Replace("'", "''") + "'";
+            return inner;
         }
         return EmitWord(word);
     }
