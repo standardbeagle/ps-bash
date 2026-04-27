@@ -395,3 +395,82 @@ QA audit sections per qa-rubric Directive 10 template.
 1. `;&` fallthrough support: the parser hangs on `;&` — the token is not consumed, looping forever; fix requires adding `SemiAmp` token kind to the lexer, updating `ParseCaseArm` to detect it, and emitting a `; fallthrough` or explicit next-arm invocation in `EmitCase`
 2. PowerShell `-Wildcard` case sensitivity: add a differential test with a mixed-case subject like `case FILE.TXT in *.txt) echo hit ;; esac` — bash matches (glob is case-sensitive on Linux), PowerShell `-Wildcard` matches case-insensitively on Windows; the test will reveal the platform divergence
 3. Variable pattern expansion: add a parser test that verifies `case $x in $y)` produces a `CaseArm` whose pattern is the literal string `$y`, then add a differential test to document the known semantic gap vs bash
+
+---
+
+### FEATURE: Logical operators (&amp;&amp;, ||, !)
+
+**EXISTING TESTS** (file:test):
+- `src/PsBash.Core.Tests/Parser/PsEmitterTests.cs:Emit_AndOrList_EmitsPassthrough`
+- `src/PsBash.Core.Tests/Parser/PsEmitterTests.cs:Emit_AndOrList_OrIf_EmitsPassthrough`
+- `src/PsBash.Core.Tests/Parser/PsEmitterTests.cs:Transpile_ThreeCommandAndOrList_CorrectPrecedence`
+- `src/PsBash.Core.Tests/Parser/PsEmitterTests.cs:Transpile_TestOrEcho_Passthrough`
+- `src/PsBash.Core.Tests/Parser/PsEmitterTests.cs:Transpile_NegatedCommand_EmitsExitCodeNegation`
+- `src/PsBash.Core.Tests/Parser/PsEmitterTests.cs:Transpile_NegatedPipeline_EmitsExitCodeNegation`
+- `src/PsBash.Core.Tests/Parser/PsEmitterTests.cs:Transpile_If_AndCondition_TrueAndTrue_EmitsAndExpr`
+- `src/PsBash.Core.Tests/Parser/PsEmitterTests.cs:Transpile_If_AndCondition_FalseAndTrue_EmitsAndExpr`
+- `src/PsBash.Core.Tests/Parser/PsEmitterTests.cs:Transpile_If_OrCondition_FalseOrTrue_EmitsOrExpr`
+- `src/PsBash.Core.Tests/Parser/PsEmitterTests.cs:Transpile_If_AndCondition_BoolExprAndBoolExpr_EmitsAndWithTestExprs`
+- `src/PsBash.Core.Tests/Parser/PsEmitterTests.cs:Transpile_If_AndCondition_WithElse_EmitsCorrectBranches`
+- `src/PsBash.Differential.Tests/ControlFlowDifferentialTests.cs:Differential_If_CompoundAndCondition`
+- `src/PsBash.Differential.Tests/ControlFlowDifferentialTests.cs:Differential_If_CompoundOrCondition`
+- `src/PsBash.Differential.Tests/ControlFlowDifferentialTests.cs:Differential_If_CompoundAndConditionFirstFails`
+- `src/PsBash.Differential.Tests/ControlFlowDifferentialTests.cs:Differential_If_CompoundAndConditionBoolExpr`
+- `src/PsBash.Differential.Tests/LogicalOperatorDifferentialTests.cs:Differential_AndOr_BasicAnd_BothSucceed`
+- `src/PsBash.Differential.Tests/LogicalOperatorDifferentialTests.cs:Differential_AndOr_And_ShortCircuitOnFailure`
+- `src/PsBash.Differential.Tests/LogicalOperatorDifferentialTests.cs:Differential_AndOr_BasicOr_FallbackOnFailure`
+- `src/PsBash.Differential.Tests/LogicalOperatorDifferentialTests.cs:Differential_AndOr_Or_ShortCircuitOnSuccess`
+- `src/PsBash.Differential.Tests/LogicalOperatorDifferentialTests.cs:Differential_AndOr_MixedChain_LeftAssociative`
+- `src/PsBash.Differential.Tests/LogicalOperatorDifferentialTests.cs:Differential_AndOr_MixedChain_FirstArmSucceeds`
+- `src/PsBash.Differential.Tests/LogicalOperatorDifferentialTests.cs:Differential_Not_NegatesFalseAndChainsAnd` (Golden — known bug)
+- `src/PsBash.Differential.Tests/LogicalOperatorDifferentialTests.cs:Differential_Not_NegatesPipelineExitCode` (Golden — known bug)
+- `src/PsBash.Differential.Tests/LogicalOperatorDifferentialTests.cs:Differential_AndOr_ExitCodeAfterSuccessfulChain`
+- `src/PsBash.Differential.Tests/LogicalOperatorDifferentialTests.cs:Differential_AndOr_ExitCodeAfterFailedLastArm`
+- `src/PsBash.Differential.Tests/LogicalOperatorDifferentialTests.cs:Differential_AndOr_SetE_FalseOrTrueSurvives`
+- `src/PsBash.Differential.Tests/LogicalOperatorDifferentialTests.cs:Differential_AndOr_TestExprAndBraceGroup`
+- `src/PsBash.Differential.Tests/LogicalOperatorDifferentialTests.cs:Differential_AndOr_ThreeCommandChain_Recovers`
+
+**FAILURE-SURFACE COVERAGE** (per Directive 3 axes):
+| Axis | Covered? | Test ref / gap note |
+|------|----------|---------------------|
+| Empty input | N/A | &&/|| require two operands; empty-operand is a parse error, justified skip |
+| Large input | NO | gap — no test streaming large input through a `grep … && wc -l` chain |
+| Unicode | NO | gap — no test with non-ASCII words on either side of && / || |
+| CRLF input | NO | gap — no test where a heredoc or file containing CRLF is the left side of && |
+| Broken pipe | NO | gap — no test where the left side of && is a pipeline with a broken-pipe exit |
+| Slow reader | N/A | &&/|| are sequence operators, not pipeline stages; skip justified |
+| Signal during execute | NO | gap — no Ctrl-C test mid-chain |
+| Exit code propagation | YES | `Differential_AndOr_ExitCodeAfterSuccessfulChain`, `Differential_AndOr_ExitCodeAfterFailedLastArm` |
+| Stderr interleave | NO | gap — no test for stderr from left arm of && polluting right arm |
+| Working dir state | NO | gap — no test for `cd /tmp && pwd` verifying cd persisted |
+| Environment leak | NO | gap — no test for `VAR=x cmd && echo $VAR` checking var is not leaked |
+| Quoting / injection | NO | gap — no test with a space-containing arg on the right side of && |
+| Platform-locked file | N/A | &&/|| are pure control flow; skip justified |
+| Missing target | PARTIAL | `Differential_AndOr_And_ShortCircuitOnFailure` (false as stand-in for missing cmd); no test for actual missing command |
+| Recursion depth | N/A | &&/|| chains are linear; skip justified |
+
+**MODE COVERAGE** (per Directive 4 modes):
+| Mode | Covered? | Test ref / gap note |
+|------|----------|---------------------|
+| M1 -c | YES | all differential tests invoke ps-bash -c |
+| M2 stdin pipe | NO | gap |
+| M3 file arg | NO | gap |
+| M4 interactive | NO | gap — no PTY test for a multi-arm chain at the REPL |
+| M5 Invoke-BashEval | NO | gap |
+| M6 Invoke-BashSource | NO | gap |
+
+**ORACLE STATUS**:
+- DIFFERENTIAL TESTS PRESENT? YES
+- 13 differential tests: 11 live EqualAsync, 2 GoldenAsync (known bugs)
+- If-condition &&/|| covered by ControlFlowDifferentialTests (4 tests); standalone covered here
+
+**KNOWN BUGS / RISKS**:
+- `! cmd && cmd2` emitter bug: `! cmd` emits `cmd; $global:LASTEXITCODE = if ($?) { 1 } else { 0 }` which inserts a `;` before `&&`; PowerShell pipeline-chain operators (`&&`/`||`) cannot follow `;` in an expression context — results in PS syntax error. Bug captured in `Differential_Not_NegatesFalseAndChainsAnd` golden — `PsEmitter.cs:EmitPipeline` around line 2064.
+- `! pipeline; echo $?` LASTEXITCODE misread: the emitter uses `$LASTEXITCODE` (unqualified) in the subsequent echo, which resolves to the raw pipeline exit code rather than the negated value stored in `$global:LASTEXITCODE`. Bug captured in `Differential_Not_NegatesPipelineExitCode` golden — `PsEmitter.cs:EmitSimpleVar` / `EmitPipeline` negation path.
+- `BoolExpr` and `ShAssignment` in chains are wrapped in `[void](...)` to suppress PS output — `PsEmitter.cs:EmitAndOrList` lines 1991-2001. This is correct for output suppression but means the exit code must come from `$global:LASTEXITCODE` after the void call. If PS's `&&` operator sees a `[void]` expression that throws, the right arm may or may not run depending on error action preference — not tested.
+- `set -e` + `||` interaction: the emitter translates `set -e` to `$ErrorActionPreference = 'Stop'`. PowerShell's `&&`/`||` are pipeline chain operators that operate on `$?`, not on thrown exceptions; a failing command under Stop mode throws before `||` can suppress it. `Differential_AndOr_SetE_FalseOrTrueSurvives` passes today but via bash builtin `false` (not `$ErrorActionPreference`) — real external commands may behave differently.
+
+**PRIORITY GAPS** (top 3 max):
+1. Fix `! cmd` in AndOrList chains: `EmitPipeline` negation appends `; $global:LASTEXITCODE = …` making `&&`/`||` syntactically invalid. The fix is to emit the negation as part of the AndOrList arm rather than appending to the command string — e.g. wrap in `& { false; if ($?) { $global:LASTEXITCODE = 1 } else { $global:LASTEXITCODE = 0 } }`.
+2. `$?` / `$LASTEXITCODE` after `!` pipeline: `EmitSimpleVar` emits `$LASTEXITCODE` without `$global:` prefix when the var appears in the same statement; the negation writes to `$global:LASTEXITCODE` but the subsequent `echo $?` reads from PS's local `$LASTEXITCODE` which is still the raw value — fix by consistently using `$global:LASTEXITCODE` throughout.
+3. `cd /tmp && pwd` working-dir persistence: add a differential test verifying that the left arm of `&&` can change directory and the right arm sees the new `$PWD` — this exercises whether ps-bash's pwsh worker correctly propagates `cd` across a chain boundary.
