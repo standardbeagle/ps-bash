@@ -968,3 +968,68 @@ QA audit sections per qa-rubric Directive 10 template.
 1. Fix `set -- args` emitter: quote string literal values in the emitted `@( ' a ' , ' b ' , ' c ' )` array. Single root cause that breaks four test categories ($#, $@, $1..$9, "$@" splitting).
 2. Fix `${var/pat/rep}` first-occurrence: use `[regex]::Replace(str, pattern, replacement, 1)` to limit to one replacement.
 3. Fix glob-wildcard in `##`/`%%` pattern removal: translate bash glob pattern to .NET regex before emitting `-replace` (`*` -> `.*`, `?` -> `.`, literal `.` -> `\.`).
+
+---
+
+### FEATURE: Background jobs (&, wait, wait $!, jobs, kill)
+
+**EXISTING TESTS** (file:test):
+- `src/PsBash.Core.Tests/Parser/BashLexerTests.cs:Tokenize_Ampersand_ReturnsAmpToken`
+- `src/PsBash.Core.Tests/Parser/PsEmitterTests.cs:Transpile_PipeAmpersand_EmitsStderrMerge`
+- `src/PsBash.Differential.Tests/BackgroundJobDifferentialTests.cs:Differential_Background_TrueAndWait_ExitsZero`
+- `src/PsBash.Differential.Tests/BackgroundJobDifferentialTests.cs:Differential_Background_LastPidIsNonEmpty`
+- `src/PsBash.Differential.Tests/BackgroundJobDifferentialTests.cs:Differential_Background_WaitAll_ReturnsAfterCompletion`
+- `src/PsBash.Differential.Tests/BackgroundJobDifferentialTests.cs:Differential_Wait_NoJobs_ExitsZero`
+- `src/PsBash.Differential.Tests/BackgroundJobDifferentialTests.cs:Differential_Background_WaitLastPid_Continues`
+- `src/PsBash.Differential.Tests/BackgroundJobDifferentialTests.cs:Differential_Jobs_NoProcesses_EmitsNothing`
+- `src/PsBash.Differential.Tests/BackgroundJobDifferentialTests.cs:Differential_Kill_ListSignals_Golden` (golden)
+- `src/PsBash.Differential.Tests/BackgroundJobDifferentialTests.cs:Differential_Background_QuotedArg_Golden` (golden)
+
+**FAILURE-SURFACE COVERAGE** (per Directive 3 axes):
+| Axis | Covered? | Test ref / gap note |
+|------|----------|---------------------|
+| Empty input | YES | `Differential_Wait_NoJobs_ExitsZero` — wait with no jobs exits cleanly |
+| Large input | NO | gap — no test for a background job producing large stdout |
+| Unicode | NO | gap — no test for backgrounded command with non-ASCII output |
+| CRLF input | N/A | background job spawns child process; CRLF normalization not applicable at this layer |
+| Broken pipe | NO | gap — no test where a backgrounded command's stdout pipe breaks |
+| Slow reader | N/A | background stdout is swallowed by async reads in Invoke-BashBackground; not applicable |
+| Signal during execute | NO | gap — no test for kill -TERM on a background PID; SIGHUP not deliverable on Windows (MEMORY.md) |
+| Exit code propagation | YES | `Differential_Background_TrueAndWait_ExitsZero` — wait exit code is 0 after job succeeds |
+| Stderr interleave | NO | gap — no test for 2>&1 from a background job |
+| Working dir state | NO | gap — no test that cd inside a background job does not affect the foreground shell |
+| Environment leak | NO | gap — no test that env mutations in a background job are isolated |
+| Quoting / injection | YES | `Differential_Background_QuotedArg_Golden` — args with spaces survive & emission |
+| Platform-locked file | N/A | background jobs do not lock files; skip justified |
+| Missing target | YES | `Differential_Jobs_NoProcesses_EmitsNothing` — jobs with empty list; `kill -l` lists signals |
+| Recursion depth | NO | gap — no test for nested background jobs (cmd & within a background job) |
+
+**MODE COVERAGE** (per Directive 4 modes):
+| Mode | Covered? | Test ref / gap note |
+|------|----------|---------------------|
+| M1 -c | YES | EqualAsync tests use ps-bash -c; golden tests use RunOneAsync -c |
+| M2 stdin pipe | NO | gap — no test pipes a script with & through ps-bash stdin |
+| M3 file arg | NO | gap — no test passes a .sh file with background jobs to ps-bash |
+| M4 interactive | NO | gap — no PTY test for backgrounding at the REPL (fg/bg/jobs at interactive prompt) |
+| M5 Invoke-BashEval | NO | gap — no test evaluates a & command via Invoke-BashEval cmdlet |
+| M6 Invoke-BashSource | NO | gap — no test sources a script that backgrounds a command |
+
+**ORACLE STATUS**:
+- DIFFERENTIAL TESTS PRESENT? YES
+- 8 differential tests added in `BackgroundJobDifferentialTests.cs`
+- 6 use EqualAsync (skip on Windows without WSL bash oracle; live bash diff on Linux/macOS CI)
+- 2 use GoldenAsync (frozen output for platform-independent validation):
+  - `Differential_Kill_ListSignals_Golden`: kill -l signal list differs between bash and ps-bash; golden freezes ps-bash output
+  - `Differential_Background_QuotedArg_Golden`: background job stdout is not forwarded to parent by Invoke-BashBackground architecture; golden freezes foreground-only output
+
+**KNOWN BUGS / RISKS**:
+- Background job stdout/stderr is not forwarded to the foreground shell: `Invoke-BashBackground` spawns a child pwsh process with `BeginOutputReadLine`/`BeginErrorReadLine` to prevent deadlocks, but no event handler forwards child output to the parent's stdout — `PsBash.psm1:12524-12525`. Makes `cmd & ; wait` output-silent in ps-bash vs bash.
+- `$!` in bash is the background job PID; ps-bash emits `$global:BashBgLastPid` which is set correctly after `Invoke-BashBackground`, but `wait $!` emits `Invoke-BashWait $global:BashBgLastPid` — the `$!` is expanded at transpile-time to a PS expression, not at runtime after the job is registered. This means `pid=$!; wait $pid` may work but `wait $!` inline may reference stale state — `PsEmitter.cs:EmitSimpleVar ~line 1782`.
+- `jobs` output format differs from bash: ps-bash emits `[N]\tStatus\tPID\tProcessName`; bash emits `[N]+ Running/Done cmd`. Format mismatch would fail EqualAsync if job list is non-empty.
+- `kill -l` signal list in ps-bash is hardcoded in `Invoke-BashKill`; does not match the platform's actual signal table (e.g., macOS has SIGUSR1=30, Linux has SIGUSR1=10).
+- `fg`, `bg` builtins are stub implementations in Invoke-BashFg/Invoke-BashBg; job control signal delivery (SIGCONT, SIGSTOP) is not implemented on Windows.
+
+**PRIORITY GAPS** (top 3 max):
+1. Background job stdout forwarding: wire an `OutputDataReceived` event handler in `Invoke-BashBackground` to forward child stdout lines to the foreground shell's stdout stream, matching bash semantics where background job output appears in the terminal.
+2. `wait $!` inline parity: verify that `wait $!` correctly waits for the PID stored in `$global:BashBgLastPid` at runtime (not transpile-time). Add an EqualAsync test `wait $!; echo after` to cover the round-trip.
+3. `jobs` format: either normalize `Invoke-BashJobs` output to match bash format `[N]+ Running/Done cmd`, or document the format difference and add a GoldenAsync test for non-empty job list so format regressions are caught.
