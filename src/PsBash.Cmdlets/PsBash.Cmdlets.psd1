@@ -35,7 +35,17 @@ RequiredModules = @(@{ ModuleName = 'PsBash'; ModuleVersion = '0.8.20' })
 FunctionsToExport = @('*')
 
 # Cmdlets exported. Listed explicitly (no wildcards) for performance.
-CmdletsToExport = @('Invoke-BashEval', 'Invoke-BashSource', 'ConvertTo-PowerShell', 'Test-BashSyntax')
+CmdletsToExport = @(
+    'Invoke-BashEval',
+    'Invoke-BashSource',
+    'ConvertTo-PowerShell',
+    'Test-BashSyntax',
+    'Register-BashChpwdHook',
+    'Register-BashPromptHook',
+    'Unregister-BashChpwdHook',
+    'Unregister-BashPromptHook',
+    'Get-BashHook'
+)
 
 VariablesToExport = @()
 
