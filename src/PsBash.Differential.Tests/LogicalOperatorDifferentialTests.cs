@@ -128,10 +128,9 @@ public class LogicalOperatorDifferentialTests
     [SkippableFact]
     public async Task Differential_Not_NegatesFalseAndChainsAnd()
     {
-        // GoldenAsync: known bug — ps-bash produces a PS syntax error instead of "yes".
-        await AssertOracle.GoldenAsync(
+        // Fixed: EmitAndOrList wraps negated pipelines using the BoolExpr-in-chain pattern.
+        await AssertOracle.EqualAsync(
             "! false && echo yes",
-            "Not_NegatesFalseAndChainsAnd",
             timeout: TimeSpan.FromSeconds(15));
     }
 

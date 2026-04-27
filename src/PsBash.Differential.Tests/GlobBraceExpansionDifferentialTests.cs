@@ -194,12 +194,9 @@ public class GlobBraceExpansionDifferentialTests
     [SkippableFact]
     public async Task Differential_BraceRange_LetterRange_KnownGap()
     {
-        // Golden mode: bash unavailability does not skip; captures ps-bash output.
-        // ps-bash currently emits the literal "a..e" not "a b c d e".
-        // UPDATE_GOLDENS=1 to re-record if/when fixed.
-        await AssertOracle.GoldenAsync(
+        // Fixed: ParseBraceExpansion now handles single-char alphabetic ranges.
+        await AssertOracle.EqualAsync(
             "echo {a..e}",
-            "BraceRange_LetterRange",
             timeout: TimeSpan.FromSeconds(15));
     }
 
@@ -226,11 +223,9 @@ public class GlobBraceExpansionDifferentialTests
     [SkippableFact]
     public async Task Differential_BraceTuple_NestedBraces_KnownGap()
     {
-        // Golden mode: captures current (broken) ps-bash output for regression
-        // detection. Fix requires depth-aware comma splitting in ParseBraceExpansion.
-        await AssertOracle.GoldenAsync(
+        // Fixed: ParseBraceExpansion uses depth-aware splitting and ExpandNestedBraces.
+        await AssertOracle.EqualAsync(
             "echo {a,b{1,2},c}",
-            "BraceTuple_NestedBraces",
             timeout: TimeSpan.FromSeconds(15));
     }
 

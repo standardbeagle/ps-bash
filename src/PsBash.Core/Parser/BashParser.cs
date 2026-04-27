@@ -1741,10 +1741,19 @@ public sealed class BashParser
         pos++; // skip {
         int len = raw.Length;
 
-        // Find closing brace
+        // Find closing brace at depth 0 (depth-aware to handle nested braces).
         int closePos = pos;
-        while (closePos < len && raw[closePos] != '}')
+        int braceDepth = 0;
+        while (closePos < len)
+        {
+            if (raw[closePos] == '{') braceDepth++;
+            else if (raw[closePos] == '}')
+            {
+                if (braceDepth == 0) break;
+                braceDepth--;
+            }
             closePos++;
+        }
 
         string inner = raw[pos..closePos];
 
@@ -1752,9 +1761,9 @@ public sealed class BashParser
         if (closePos < len)
             closePos++;
 
-        // Check for range pattern: N..M or N..M..S
+        // Check for range pattern: N..M or N..M..S (only when no top-level commas).
         int dotDot = inner.IndexOf("..", StringComparison.Ordinal);
-        if (dotDot >= 0 && !inner.Contains(','))
+        if (dotDot >= 0 && !HasTopLevelComma(inner))
         {
             string startStr = inner[..dotDot];
             string rest = inner[(dotDot + 2)..];
@@ -1782,13 +1791,151 @@ public sealed class BashParser
                 parts.Add(new WordPart.BracedRange(startVal, endVal, zeroPad, stepVal));
                 return closePos;
             }
+
+            // Letter range: {a..e} or {A..Z} — expand inline as a BracedTuple.
+            if (startStr.Length == 1 && endStr.Length == 1
+                && char.IsLetter(startStr[0]) && char.IsLetter(endStr[0]))
+            {
+                char cStart = startStr[0], cEnd = endStr[0];
+                int vStart = cStart, vEnd = cEnd;
+                int step = vStart <= vEnd ? 1 : -1;
+                var letterItems = ImmutableArray.CreateBuilder<string>();
+                for (int v = vStart; step > 0 ? v <= vEnd : v >= vEnd; v += step)
+                    letterItems.Add(((char)v).ToString());
+                parts.Add(new WordPart.BracedTuple(letterItems.ToImmutable()));
+                return closePos;
+            }
         }
 
-        // Comma-separated tuple: split on commas
-        string[] items = inner.Split(',');
-        parts.Add(new WordPart.BracedTuple(
-            ImmutableArray.Create(items)));
+        // Comma-separated tuple: split on top-level commas only (depth-aware),
+        // then recursively expand any nested brace items (e.g. b{1,2} -> b1, b2).
+        var rawItems = SplitTopLevelCommas(inner);
+        var expandedItems = new List<string>();
+        foreach (var item in rawItems)
+            expandedItems.AddRange(ExpandNestedBraces(item));
+        parts.Add(new WordPart.BracedTuple(ImmutableArray.CreateRange(expandedItems)));
         return closePos;
+    }
+
+    /// <summary>
+    /// Returns true when <paramref name="s"/> contains at least one comma at brace-depth 0.
+    /// Used to determine whether a brace body might be a comma-list rather than a range.
+    /// </summary>
+    private static bool HasTopLevelComma(string s)
+    {
+        int depth = 0;
+        foreach (char c in s)
+        {
+            if (c == '{') depth++;
+            else if (c == '}') depth--;
+            else if (c == ',' && depth == 0) return true;
+        }
+        return false;
+    }
+
+    /// <summary>
+    /// Splits <paramref name="s"/> on commas at brace-depth 0 only.
+    /// Commas inside nested brace groups are not treated as separators.
+    /// </summary>
+    private static List<string> SplitTopLevelCommas(string s)
+    {
+        var result = new List<string>();
+        int depth = 0, start = 0;
+        for (int i = 0; i < s.Length; i++)
+        {
+            if (s[i] == '{') depth++;
+            else if (s[i] == '}') depth--;
+            else if (s[i] == ',' && depth == 0)
+            {
+                result.Add(s.Substring(start, i - start));
+                start = i + 1;
+            }
+        }
+        result.Add(s.Substring(start));
+        return result;
+    }
+
+    /// <summary>
+    /// Recursively expands nested brace expansions within a single item string.
+    /// For example, "b{1,2}" becomes ["b1", "b2"] and "a" stays ["a"].
+    /// </summary>
+    private static List<string> ExpandNestedBraces(string item)
+    {
+        // Find the first brace expansion start within the item.
+        int braceStart = -1;
+        for (int i = 0; i < item.Length; i++)
+        {
+            if (item[i] == '{' && IsBraceExpansionStart(item, i))
+            {
+                braceStart = i;
+                break;
+            }
+        }
+        if (braceStart < 0)
+            return new List<string> { item };
+
+        // Find the matching closing brace at depth 0.
+        int depth = 0, braceEnd = braceStart + 1;
+        while (braceEnd < item.Length)
+        {
+            if (item[braceEnd] == '{') depth++;
+            else if (item[braceEnd] == '}')
+            {
+                if (depth == 0) break;
+                depth--;
+            }
+            braceEnd++;
+        }
+
+        string prefix = item[..braceStart];
+        string braceContent = item[(braceStart + 1)..braceEnd];
+        string suffix = braceEnd < item.Length ? item[(braceEnd + 1)..] : "";
+
+        var expansions = ExpandBraceContent(braceContent);
+        var result = new List<string>();
+        foreach (var exp in expansions)
+            result.AddRange(ExpandNestedBraces(prefix + exp + suffix));
+        return result;
+    }
+
+    /// <summary>
+    /// Expands the inner content of a brace (without surrounding braces) into its items.
+    /// Handles numeric ranges, letter ranges, and comma-separated tuples (including nested).
+    /// </summary>
+    private static List<string> ExpandBraceContent(string inner)
+    {
+        int dotDot = inner.IndexOf("..", StringComparison.Ordinal);
+        if (dotDot >= 0 && !HasTopLevelComma(inner))
+        {
+            string startStr = inner[..dotDot];
+            string rest = inner[(dotDot + 2)..];
+            string endStr = rest;
+            int dotDot2 = rest.IndexOf("..", StringComparison.Ordinal);
+            if (dotDot2 >= 0) endStr = rest[..dotDot2];
+
+            if (int.TryParse(startStr, out int startVal) && int.TryParse(endStr, out int endVal))
+            {
+                int step = startVal <= endVal ? 1 : -1;
+                var nums = new List<string>();
+                for (int v = startVal; step > 0 ? v <= endVal : v >= endVal; v += step)
+                    nums.Add(v.ToString());
+                return nums;
+            }
+            if (startStr.Length == 1 && endStr.Length == 1
+                && char.IsLetter(startStr[0]) && char.IsLetter(endStr[0]))
+            {
+                int s = startStr[0], e = endStr[0], step = s <= e ? 1 : -1;
+                var letters = new List<string>();
+                for (int v = s; step > 0 ? v <= e : v >= e; v += step)
+                    letters.Add(((char)v).ToString());
+                return letters;
+            }
+        }
+        var rawItems = SplitTopLevelCommas(inner);
+        var result = new List<string>();
+        foreach (var item in rawItems)
+            result.AddRange(ExpandNestedBraces(item));
+        return result;
     }
 
     private static bool IsVarStart(char c) =>

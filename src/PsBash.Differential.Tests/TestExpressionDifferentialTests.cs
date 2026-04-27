@@ -168,9 +168,9 @@ public class TestExpressionDifferentialTests
     [SkippableFact]
     public async Task Differential_Negation_PipelineNegated_False()
     {
-        await AssertOracle.GoldenAsync(
+        // Fixed: EmitCondition wraps negated pipelines in a scriptblock.
+        await AssertOracle.EqualAsync(
             "if ! false; then echo yes; else echo no; fi",
-            "Differential_Negation_PipelineNegated_False",
             timeout: TimeSpan.FromSeconds(15));
     }
 
@@ -199,9 +199,9 @@ public class TestExpressionDifferentialTests
     [SkippableFact]
     public async Task Differential_DoubleBracket_LogicalAnd_FalseAndTrue_IsFalse()
     {
-        await AssertOracle.GoldenAsync(
+        // Fixed: EmitExtendedTest wraps each sub-expression in parens.
+        await AssertOracle.EqualAsync(
             "if [[ -f /nonexistent && -d /tmp ]]; then echo yes; else echo no; fi",
-            "Differential_DoubleBracket_LogicalAnd_FalseAndTrue_IsFalse",
             timeout: TimeSpan.FromSeconds(15));
     }
 

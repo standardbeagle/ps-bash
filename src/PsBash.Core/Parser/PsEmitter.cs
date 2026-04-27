@@ -2147,14 +2147,28 @@ public static class PsEmitter
                 sb.Append(Emit(cmd));
                 sb.Append(')');
             }
+            else if (cmd is Command.Pipeline { Negated: true } negPipelineInChain)
+            {
+                // Negated pipeline (! cmd) in && / || chain: mirror the BoolExpr-in-chain
+                // pattern. PS pipeline-chain operators check $?, not $LASTEXITCODE.
+                // Use Write-Error to set $?=false when negation yields failure so the
+                // chain operators observe the correct success/failure state.
+                var unnegated = negPipelineInChain with { Negated = false };
+                sb.Append($"$(if ((& {{ {EmitPipeline(unnegated)}; $global:LASTEXITCODE -ne 0 }})) {{ $global:LASTEXITCODE = 0 }} else {{ $global:LASTEXITCODE = 1; Write-Error '' -ErrorAction SilentlyContinue }})");
+            }
             else if (cmd is Command.Pipeline pipeline)
             {
                 // Pipeline in && / || chain: bridge $LASTEXITCODE to $? so PS chain
                 // operators (&&/||) observe runtime exit codes (e.g. grep -q).
-                // Wrap the pipeline in a scriptblock that sets $? via Write-Error
-                // when $LASTEXITCODE is non-zero after the pipeline completes.
+                //
+                // Pattern: run the pipeline as a plain statement, then use
+                //   $(if ($global:LASTEXITCODE -ne 0) { Write-Error '' })
+                // as the actual chain-operator LHS. PowerShell's $(if ...) correctly
+                // propagates $?=false to the && / || operator when the else-branch
+                // calls Write-Error. A $(& { ... }) wrapper does NOT propagate $?.
                 var pipelineText = EmitPipeline(pipeline);
-                sb.Append($"$(& {{ {pipelineText}; if ($global:LASTEXITCODE -ne 0) {{ Write-Error '' -ErrorAction SilentlyContinue }} }})");
+                sb.Append(pipelineText);
+                sb.Append("; $(if ($global:LASTEXITCODE -ne 0) { Write-Error '' -ErrorAction SilentlyContinue })");
             }
             else
             {
