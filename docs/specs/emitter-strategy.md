@@ -330,3 +330,48 @@ forward everything to the runtime function, and let the runtime handle it.**
 The passthrough pattern (`EmitPassthrough`) was introduced to enforce this
 discipline. Adding a new mapped command requires only a switch case and a single
 `EmitPassthrough` call -- no flag parsing logic in the emitter.
+
+---
+
+## 9. Hooks
+
+The emitter translates certain bash constructs that affect prompt and directory-change
+behavior into ps-bash hook registrations rather than direct PowerShell equivalents.
+
+### 9.1 PROMPT_COMMAND
+
+A bash assignment `PROMPT_COMMAND="cmd"` is emitted as:
+
+```powershell
+Register-BashPromptHook -Name 'main' -ScriptBlock { cmd }
+```
+
+Subsequent `PROMPT_COMMAND+="other"` appends produce additional hooks with
+auto-generated names (`'main_2'`, `'main_3'`, etc.) to preserve additive semantics.
+
+### 9.2 set -e / set -x / set -u
+
+These are handled inside `EmitSimple` (Section 4) and are not hook-related, but they
+interact with hook execution:
+
+- `set -e` installs `$global:__BashErrexit = $true`. Hook scriptblocks are invoked
+  outside the errexit guard; exceptions are caught by the hook runner (see Section 5.5
+  of `on-cd-hooks.md`).
+- `set -x` (`Set-PSDebug -Trace 1`) traces PowerShell statements, including hook
+  invocations, to the debug stream.
+
+### 9.3 trap ERR
+
+`trap '...' ERR` is emitted as `$global:__BashTrapERR = { ... }` and fired by
+`InvokeBashEvalCommand` when a command returns non-zero. It is **not** managed by the
+hook registry and does not interact with `Register-BashPromptHook` or
+`Register-BashChpwdHook`.
+
+### 9.4 trap DEBUG
+
+`trap '...' DEBUG` has no emitter translation. The emitter emits a comment noting the
+gap and does not register a ps-bash hook. See `on-cd-hooks.md` Section 15.1 for the
+rationale.
+
+For full hook semantics, firing model, coexistence with PSReadLine/oh-my-posh/Starship,
+and known gaps, see [`on-cd-hooks.md`](./on-cd-hooks.md).

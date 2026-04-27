@@ -577,6 +577,237 @@ Implementation is complete when:
 
 ---
 
+## 13. Semantic Differences vs Bash
+
+### 13.1 Firing Granularity
+
+| Mechanism | bash | ps-bash |
+|-----------|------|---------|
+| `trap '...' DEBUG` | Fires before **every simple command** — once per statement inside a loop, once per command in a pipeline, once per subshell expansion | No equivalent. The closest approximation, PSReadLine `CommandValidationHandler`, fires once per submitted input line, not per statement. |
+| `PROMPT_COMMAND` | Fires once before the prompt is drawn, after the previous command completes | `PromptHook` fires once per prompt tick, matching bash exactly. |
+| `chpwd` (zsh) | Fires immediately after `cd`/`pushd`/`popd` returns | `ChpwdHook` fires at the next prompt tick when `$PWD` differs from the recorded last path. |
+
+The critical difference is the **per-command DEBUG trap**. In bash, `trap '...' DEBUG`
+gives hooks access to `$BASH_COMMAND` (the text of the about-to-run command) and the
+exit status of the previous command (`$?`) before it is overwritten. ps-bash has no
+equivalent because:
+
+1. The transpiler produces PowerShell, not bash; there is no bash-level "command about
+   to execute" event visible to the shell.
+2. PowerShell exposes no pre-execution hook that fires inside a running script (only
+   before interactive line submission via PSReadLine).
+
+### 13.2 Per-Command State Unavailability
+
+The following bash variables available inside a `trap '...' DEBUG` handler are
+**unavailable** in ps-bash hooks:
+
+| Bash variable | Why unavailable in ps-bash |
+|---------------|---------------------------|
+| `$BASH_COMMAND` | No pre-command event; see Section 15.1 |
+| `$?` before current command | `PromptHook` fires after the prompt draws; `$LASTEXITCODE` reflects the last interactive command's exit code, which may be overwritten by hook setup code |
+| `$BASH_LINENO`, `$LINENO` | Source line tracking is not preserved through transpilation |
+
+### 13.3 Tools That Work Correctly
+
+Despite the DEBUG trap gap, the following cwd-change tools work correctly with
+ps-bash hooks because they only need a **per-prompt** trigger and read `$PWD`
+themselves:
+
+| Tool | Pattern used | Works with ps-bash |
+|------|-------------|-------------------|
+| fnm | PROMPT_COMMAND + internal PWD check | Yes — `ChpwdHook` or `PromptHook` |
+| direnv | PROMPT_COMMAND + internal PWD check | Yes — `ChpwdHook` with `direnv export pwsh` |
+| nodenv / rbenv | PROMPT_COMMAND (rehash only) | Yes — `PromptHook` |
+| pyenv-virtualenv | PROMPT_COMMAND | Yes — `PromptHook` |
+| zoxide | PROMPT_COMMAND (default mode) | Yes — `PromptHook` |
+| starship (prompt render) | PROMPT_COMMAND | Yes — `PromptHook` |
+
+Tools requiring the DEBUG trap for preexec timing (e.g., starship's command-duration
+measurement) cannot be fully supported. Starship's prompt render works; only the
+elapsed-time display will show zero or be absent.
+
+---
+
+## 14. Coexistence with Other Prompt Customization Tools
+
+### 14.1 Wrapping Strategy
+
+ps-bash's `Invoke-BashPrompt` function must coexist with PSReadLine, oh-my-posh,
+Starship, and any user-defined `prompt` function. The wrapping strategy is:
+
+1. On module import, ps-bash reads the existing `prompt` function (if any) into
+   `$global:__BashOriginalPrompt`.
+2. `Invoke-BashPrompt` is installed as the new `prompt` function.
+3. `Invoke-BashPrompt` runs all registered hooks, then calls
+   `$global:__BashOriginalPrompt` (if it was non-null) and returns its output.
+
+This ensures:
+- Tools already installed in `prompt` (oh-my-posh, Starship via `Invoke-Starship-PreCommand`)
+  continue to run.
+- ps-bash hooks run **before** the original prompt renders.
+- Unloading the module restores `$global:__BashOriginalPrompt` as the active `prompt`.
+
+### 14.2 oh-my-posh
+
+oh-my-posh installs itself via:
+```powershell
+oh-my-posh init pwsh --config ~/.config/ohmyposh.json | Invoke-Expression
+```
+This redefines the `prompt` function. If oh-my-posh initializes **before** ps-bash
+imports, ps-bash wraps the oh-my-posh prompt. If oh-my-posh initializes **after**,
+it overwrites ps-bash's `prompt` and hooks will not fire.
+
+Recommended `$PROFILE` order:
+```powershell
+Import-Module PsBash               # installs Invoke-BashPrompt as prompt
+oh-my-posh init pwsh | Invoke-Expression  # wraps it again (fine, ps-bash hooks already wired)
+Register-BashChpwdHook ...         # hooks work regardless of which prompt function is active
+```
+
+If oh-my-posh initializes first and ps-bash second, ps-bash's wrapping captures
+oh-my-posh's prompt function, so both work correctly.
+
+### 14.3 Starship
+
+Starship installs `Invoke-Starship-PreCommand` as a hook into PSReadLine via
+`CommandValidationHandler`. ps-bash does not touch PSReadLine's
+`CommandValidationHandler`, so Starship's preexec handler coexists without conflict.
+
+Starship's prompt render function is invoked from the `prompt` function; ps-bash's
+wrapping strategy (Section 14.1) ensures it continues to run.
+
+### 14.4 User-Defined Prompt Function
+
+If the user has already defined a custom `prompt` function in their `$PROFILE` before
+importing ps-bash, the wrap strategy preserves it. The user's prompt function runs
+after ps-bash hooks complete.
+
+If the user defines `prompt` **after** importing ps-bash (overwriting
+`Invoke-BashPrompt`), hooks will no longer fire. The fix is to call
+`Register-BashPromptHook` with hook code that the user would otherwise put inside
+`prompt`, so that ps-bash manages the hook lifecycle instead.
+
+---
+
+## 15. Known Gaps
+
+### 15.1 `$BASH_COMMAND` Unavailable Inside Hooks
+
+`$BASH_COMMAND` holds the text of the command about to execute, set by bash before
+each DEBUG trap fires. There is no ps-bash equivalent because the transpiler
+produces PowerShell and there is no pre-statement event in the PowerShell runtime.
+
+Impact: tools that use `$BASH_COMMAND` inside `trap '...' DEBUG` to display
+what command is running (e.g., some shell prompts, `bash-preexec`) cannot be
+ported directly. Use `$LASTEXITCODE` and `$global:BashHookErrors` for post-hoc
+diagnostics instead.
+
+### 15.2 No Way to Abort a Command Pre-Execution
+
+In bash, returning 1 from a DEBUG trap causes the command to be skipped:
+
+```bash
+trap 'if [[ $BASH_COMMAND == "rm -rf /*" ]]; then return 1; fi' DEBUG
+```
+
+ps-bash has no equivalent. `PromptHook` and `ChpwdHook` run after the previous
+command has completed; they cannot prevent the next command from executing.
+
+### 15.3 `trap '...' ERR` Out of Scope for Hooks
+
+`trap '...' ERR` fires in bash when a command returns a non-zero exit status
+(similar to `set -e` but scriptable). This is handled separately by the
+`InvokeBashEvalCommand` cmdlet via `$global:__BashTrapERR`, not by the hook
+registry. Do not register ERR-equivalent logic via `Register-BashPromptHook`;
+use the eval cmdlet's trap mechanism instead.
+
+See also: Section 6.3 (`trap '...' DEBUG` mapping) and
+[`emitter-strategy.md`](./emitter-strategy.md) for how `set -e` and `set -x` are
+emitted.
+
+---
+
+## 16. Unregistration Lifecycle
+
+### 16.1 Hooks Live Until Explicit Unregistration or Module Unload
+
+Hooks registered via `Register-BashChpwdHook` or `Register-BashPromptHook` persist
+until one of:
+
+1. `Unregister-BashChpwdHook -Name x` / `Unregister-BashPromptHook -Name x` is called
+   explicitly.
+2. The `PsBash.Cmdlets` module is removed (`Remove-Module PsBash.Cmdlets`).
+3. The PowerShell process exits.
+
+There is **no automatic garbage collection** of hooks. A hook registered by a script
+that exits continues to fire on every prompt tick. A hook registered by a tool's init
+script that later calls `deactivate` must explicitly call `Unregister-BashChpwdHook`
+in its deactivation path.
+
+### 16.2 Module Unload Cleanup
+
+When `Remove-Module PsBash.Cmdlets` executes:
+- The `HookRegistry` instance is released.
+- The module's `OnRemove` handler restores `$global:__BashOriginalPrompt` as the
+  active `prompt` function (if one was captured during import).
+- `$global:BashHookErrors` and `$global:__BashLastCwd` are left in place (not
+  cleared) to allow post-unload inspection.
+
+### 16.3 No Per-Session Scope
+
+Hooks are stored in the `HookRegistry` singleton, which is module-scope (not
+runspace-scope or session-scope). If two runspaces in the same process import
+`PsBash.Cmdlets`, they share the same registry. This is intentional: it matches
+the process-global nature of `$env:` mutations that hooks typically perform.
+
+---
+
+## 17. Error Handling Details
+
+Section 5.5 defines the error-catch policy. This section provides additional
+guidance on inspecting and clearing the error log.
+
+### 17.1 Error Record Structure
+
+Each entry in `$global:BashHookErrors` is a `PSCustomObject` with:
+
+| Property | Type | Description |
+|----------|------|-------------|
+| `Kind` | `HookKind` | `ChpwdHook` or `PromptHook` |
+| `Name` | `string` | Name of the hook that threw |
+| `Timestamp` | `DateTime` | UTC time when the exception was caught |
+| `Exception` | `Exception` | The raw exception object |
+| `ErrorRecord` | `ErrorRecord` | The PowerShell error record (if available) |
+
+### 17.2 Inspection Commands
+
+```powershell
+# View all hook errors since last clear
+$global:BashHookErrors | Format-List
+
+# View errors from a specific hook
+$global:BashHookErrors | Where-Object Name -eq 'direnv' | Format-List
+
+# View the most recent error's exception message
+$global:BashHookErrors[-1].Exception.Message
+
+# View the full stack trace of the most recent error
+$global:BashHookErrors[-1].Exception | Format-List *
+
+# Clear the error log
+$global:BashHookErrors.Clear()
+```
+
+### 17.3 Distinguishing Hook Errors from Shell Errors
+
+`$global:BashHookErrors` is separate from PowerShell's `$Error` automatic variable.
+Hook exceptions are not added to `$Error` by default. If you need hook errors to
+appear in `$Error` for external tooling, add a `Write-Error` call inside the hook's
+catch block in a wrapper script.
+
+---
+
 ## 13. References
 
 - Related specs:
@@ -584,3 +815,5 @@ Implementation is complete when:
   - [`plugin-architecture.md`](./plugin-architecture.md) — module session state patterns
   - [`cwd-awareness.md`](./cwd-awareness.md) — CWD change detection in history
   - [`config-format.md`](./config-format.md) — shell configuration schema
+  - [`emitter-strategy.md`](./emitter-strategy.md) — how `set -e`, `set -x`, and trap ERR are emitted
+  - [`../research/on-cd-patterns/README.md`](../research/on-cd-patterns/README.md) — tool-specific hook patterns
