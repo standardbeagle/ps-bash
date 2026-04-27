@@ -1033,3 +1033,83 @@ QA audit sections per qa-rubric Directive 10 template.
 1. Background job stdout forwarding: wire an `OutputDataReceived` event handler in `Invoke-BashBackground` to forward child stdout lines to the foreground shell's stdout stream, matching bash semantics where background job output appears in the terminal.
 2. `wait $!` inline parity: verify that `wait $!` correctly waits for the PID stored in `$global:BashBgLastPid` at runtime (not transpile-time). Add an EqualAsync test `wait $!; echo after` to cover the round-trip.
 3. `jobs` format: either normalize `Invoke-BashJobs` output to match bash format `[N]+ Running/Done cmd`, or document the format difference and add a GoldenAsync test for non-empty job list so format regressions are caught.
+
+---
+
+
+
+**EXISTING TESTS** ( file:test ) :
+- `src/PsBash.Differential.Tests/SeedDifferentialTests.cs:Differential_SimpleEcho_QuotingPreserved` ù single-quoted string with space preserved as one word
+- `src/PsBash.Differential.Tests/SeedDifferentialTests.cs:Differential_VariableExpansion_BraceForms` ù ${x:-default} and ${#x} inside double quotes
+- `src/PsBash.Differential.Tests/VariableExpansionDifferentialTests.cs:Differential_Injection_VarContainsDollarParen_NoExec` ù $(...) in single-quoted var not executed
+- `src/PsBash.Differential.Tests/VariableExpansionDifferentialTests.cs:Differential_Injection_VarContainsSemicolon_NoSplit` ù ; in var not interpreted as command separator
+- `src/PsBash.Differential.Tests/VariableExpansionDifferentialTests.cs:Differential_QuotedVar_SpacesPreserved` ù double-quoted var with spaces stays one word
+- `src/PsBash.Differential.Tests/QuotingDifferentialTests.cs:Differential_SingleQuote_SpacePreserved`
+- `src/PsBash.Differential.Tests/QuotingDifferentialTests.cs:Differential_SingleQuote_NoDollarExpansion`
+- `src/PsBash.Differential.Tests/QuotingDifferentialTests.cs:Differential_SingleQuote_NoBacktickExpansion`
+- `src/PsBash.Differential.Tests/QuotingDifferentialTests.cs:Differential_SingleQuote_EmptyString`
+- `src/PsBash.Differential.Tests/QuotingDifferentialTests.cs:Differential_DoubleQuote_VarExpansionNoSplit`
+- `src/PsBash.Differential.Tests/QuotingDifferentialTests.cs:Differential_DoubleQuote_MultipleVarRefs`
+- `src/PsBash.Differential.Tests/QuotingDifferentialTests.cs:Differential_UnquotedVar_WordSplitsOnSpaces`
+- `src/PsBash.Differential.Tests/QuotingDifferentialTests.cs:Differential_Backslash_EscapesDollarInDoubleQuotes` ( GoldenAsync ù known bug )
+- `src/PsBash.Differential.Tests/QuotingDifferentialTests.cs:Differential_Backslash_NonSpecialCharIsLiteral`
+- `src/PsBash.Differential.Tests/QuotingDifferentialTests.cs:Differential_Backslash_OutsideQuotes_Literal`
+- `src/PsBash.Differential.Tests/QuotingDifferentialTests.cs:Differential_AnsiCQuote_Newline` ( GoldenAsync ù $ ' ... ' not implemented )
+- `src/PsBash.Differential.Tests/QuotingDifferentialTests.cs:Differential_AnsiCQuote_Tab` ( GoldenAsync ù $ ' ... ' not implemented )
+- `src/PsBash.Differential.Tests/QuotingDifferentialTests.cs:Differential_EmptyVar_UnquotedIsOmitted` ( GoldenAsync ù known bug: empty arg not elided )
+- `src/PsBash.Differential.Tests/QuotingDifferentialTests.cs:Differential_EmptyVar_QuotedIsEmptyArg`
+- `src/PsBash.Differential.Tests/QuotingDifferentialTests.cs:Differential_EnvPrefix_DoesNotLeakToShell` ( GoldenAsync ù known env-leak bug )
+- `src/PsBash.Differential.Tests/QuotingDifferentialTests.cs:Differential_AdjacentQuotes_SingleThenDouble` ( GoldenAsync ù known adjacent-quoting bug )
+- `src/PsBash.Differential.Tests/QuotingDifferentialTests.cs:Differential_AdjacentQuotes_UnquotedAndDoubleQuoted`
+
+**FAILURE-SURFACE COVERAGE** ( per Directive 3 axes ) :
+| Axis | Covered? | Test ref / gap note |
+| ------ | ---------- | --------------------- |
+| Empty input | YES | `Differential_SingleQuote_EmptyString`, `Differential_EmptyVar_QuotedIsEmptyArg` |
+| Large input | NO | gap ù no test for a large single-quoted string streamed through a pipe |
+| Unicode | NO | gap ù no test for unicode chars inside single or double quotes |
+| CRLF input | NO | gap ù no test for CRLF line endings in a heredoc or quoted string |
+| Broken pipe | N/A | quoting is at word level, not a pipeline consumer ; skip justified |
+| Slow reader | N/A | quoting is not a streaming operation ; skip justified |
+| Signal during execute | NO | gap ù no Ctrl-C mid-command with complex quoting |
+| Exit code propagation | PARTIAL | `Differential_DoubleQuote_VarExpansionNoSplit` verifies output ; no direct exit-code test for quoting |
+| Stderr interleave | NO | gap ù no test for stderr output inside a quoted argument |
+| Working dir state | N/A | quoting is argument-level ; not affected by working directory |
+| Environment leak | YES | `Differential_EnvPrefix_DoesNotLeakToShell` ù documents known leak bug via GoldenAsync ( Axis 11 ) |
+| Quoting / injection | YES | `Differential_SingleQuote_NoDollarExpansion`, `Differential_SingleQuote_NoBacktickExpansion`, `Differential_Backslash_EscapesDollarInDoubleQuotes` ( Axis 12 ) |
+| Platform-locked file | N/A | quoting is argument construction ; no file locking involved |
+| Missing target | NO | gap ù no test for quoting a missing command name or path |
+| Recursion depth | NO | gap ù no test for deeply nested command substitution inside quoted strings |
+
+**MODE COVERAGE** ( per Directive 4 modes ) :
+| Mode | Covered? | Test ref / gap note |
+| ------ | ---------- | --------------------- |
+| M1 -c | YES | all EqualAsync/GoldenAsync tests use `-c` mode via `BashOracleFixture` |
+| M2 stdin pipe | NO | gap ù no test pipes a script containing complex quoting through ps-bash stdin |
+| M3 file arg | NO | gap ù no test passes a .sh file with adjacent quoting to ps-bash |
+| M4 interactive | NO | gap ù no PTY test for quoting at the REPL prompt |
+| M5 Invoke-BashEval | NO | gap ù no eval test exercises quoting rules |
+| M6 Invoke-BashSource | NO | gap ù no sourced script test exercises quoting boundary cases |
+
+**ORACLE STATUS**:
+- DIFFERENTIAL TESTS PRESENT? YES
+- 17 new differential tests in `src/PsBash.Differential.Tests/QuotingDifferentialTests.cs`
+- 13 use EqualAsync ( skip on Windows without WSL bash oracle ; live bash diff on Linux/macOS CI )
+- 4 use GoldenAsync ( frozen output for bugs and unimplemented features ) :
+- `Quoting_Backslash_EscapesDollar.golden.txt`: \$ in double quotes emits wrong output
+- `Quoting_EmptyVar_UnquotedIsOmitted.golden.txt`: empty unquoted var not elided from word list
+- `Quoting_EnvPrefix_LeakBug.golden.txt`: VAR=x cmd leaks VAR into the shell process env
+- `Quoting_AdjacentQuotes_SingleThenDouble.golden.txt`: adjacent quoted parts emitted as separate args
+
+**KNOWN BUGS / RISKS**:
+- `\$` inside double-quoted string: emitter drops the literal dollar sign and any following text ( `PsEmitter.cs:EmitDoubleQuoted` ) ; "price: \$5" emits "price:" ù `Quoting_Backslash_EscapesDollar.golden.txt`
+- Unquoted empty variable is not elided: `x=; echo $x` passes an empty-string argument to echo instead of omitting the word entirely ( `PsEmitter.cs:EmitSimpleVar` / PowerShell `$env:x` evaluates to `$null` ) ; word-splitting elision not implemented
+- Adjacent quoting styles ( ` ' hello ' "world"` ) emit as two separate args instead of a single concatenated word ; the emitter treats each quoted span as an independent argument ( `PsEmitter.cs:EmitSimple` / `EmitWord` ) ; "hello world" emitted instead of "helloworld"
+- `VAR=value cmd` env-var prefix leaks into shell: `$env:NAME = "value"` is emitted unconditionally before the command, persisting the value in the PS process env after the command completes ( `PsEmitter.cs:EmitSimple` env-pair handling ) ; no subprocess scoping
+- `$ ' ... ' ` ANSI-C quoting not recognised: the lexer/parser does not handle `$ ' ... ' ` tokens ; they are emitted as literal text. `$ ' \n ' ` outputs `$ ' ` + backslash + `n` + ` ' ` instead of a newline
+
+**PRIORITY GAPS** ( top 3 max ) :
+1. Adjacent quoting concatenation: fix `EmitSimple`/`EmitWord` to join adjacent `SingleQuoted`, `DoubleQuoted`, and `Literal` parts of the same word token without inserting a space or treating them as separate arguments. Most bash scripts rely on this for path construction ( e.g., `prefix_"$var"_suffix` ) .
+2. Env-var prefix scoping: fix `EmitSimple` env-pair handling to scope `VAR=value` to the child process rather than setting `$env:VAR` unconditionally. Use a `try`/`finally` wrapper that saves and restores `$env:VAR`, or spawn the command with explicit environment overrides via `Start-Process -Environment`.
+3. `$ ' ... ' ` ANSI-C quoting support: add lexer recognition of `$ ' ... ' ` tokens and emitter translation of the most common escape sequences ( `\n`, `\t`, `\r`, `\\`, `\ ' ` ) . This is widely used in bash for newline insertion ( `IFS=$ ' \n ' ` ) and printf-like formatting.
+AUDIT_EOF
