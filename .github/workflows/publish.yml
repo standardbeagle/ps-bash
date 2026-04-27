@@ -131,6 +131,16 @@ jobs:
         shell: bash
         run: bash scripts/skip-report.sh TestResults/core "Core.Tests (${{ matrix.os }})"
 
+      # ── Install optional tools for OnCd integration tests ───────────────────
+      # fnm: Node version manager used by fnm --use-on-cd tests.
+      # Only installed on ubuntu-latest; tests skip gracefully on other platforms.
+      - name: Install fnm (ubuntu-latest)
+        if: matrix.os == 'ubuntu-latest'
+        shell: bash
+        run: |
+          curl -fsSL https://fnm.vercel.app/install | bash -s -- --install-dir "$HOME/.fnm" --skip-shell
+          echo "$HOME/.fnm" >> "$GITHUB_PATH"
+
       # ── PsBash.Cmdlets.Tests ─────────────────────────────────────────────────
       - name: Run PsBash.Cmdlets.Tests
         shell: bash
