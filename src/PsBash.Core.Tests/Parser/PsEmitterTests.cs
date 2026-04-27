@@ -2619,6 +2619,142 @@ public class PsEmitterTests
         Assert.Equal("if (($true -and $true)) { Invoke-BashEcho yes } else { Invoke-BashEcho no }", result);
     }
 
+    // -----------------------------------------------------------------------
+    // trap 'CMD' DEBUG -> Register-BashChpwdHook
+    // -----------------------------------------------------------------------
+
+    [Fact]
+    public void Transpile_TrapDebug_SingleQuotedCmd_EmitsRegisterBashChpwdHook()
+    {
+        // trap 'do_something' DEBUG
+        // rawCmd = "do_something", hash = d66c2688
+        // transpiledCmd = "do_something" (unknown cmd passes through as-is)
+        var result = PsEmitter.Transpile("trap 'do_something' DEBUG");
+
+        const string warnGuard =
+            "if (-not $global:__BashHookDebugTrapWarned) { " +
+            "$global:__BashHookDebugTrapWarned = $true; " +
+            "Write-Warning 'ps-bash: trap DEBUG mapped to Register-BashChpwdHook (fires on directory change, not every command)' }";
+        Assert.NotNull(result);
+        Assert.Contains("Register-BashChpwdHook -Name 'd66c2688'", result);
+        Assert.Contains(warnGuard, result);
+        Assert.Contains("Invoke-Expression", result);
+    }
+
+    [Fact]
+    public void Transpile_TrapDebug_EmitsFirstUseWarningGuard()
+    {
+        // The emitted code must include the $global:__BashHookDebugTrapWarned guard.
+        var result = PsEmitter.Transpile("trap 'fnm use' DEBUG");
+
+        Assert.NotNull(result);
+        Assert.Contains("$global:__BashHookDebugTrapWarned", result);
+        // hook name derived from "fnm use" = d0104599
+        Assert.Contains("Register-BashChpwdHook -Name 'd0104599'", result);
+    }
+
+    [Fact]
+    public void Transpile_TrapDashDebug_EmitsUnregisterBashChpwdHook()
+    {
+        // trap - DEBUG  ->  Unregister-BashChpwdHook -Name '<hash of "-">'
+        // hash("-") = 336d5ebc
+        var result = PsEmitter.Transpile("trap - DEBUG");
+
+        Assert.Equal("Unregister-BashChpwdHook -Name '336d5ebc'", result);
+    }
+
+    [Fact]
+    public void Transpile_TrapOtherSignal_PassesThroughToInvokeBashTrap()
+    {
+        // trap 'cleanup' EXIT  ->  Invoke-BashTrap 'cleanup' EXIT  (not a hook)
+        var result = PsEmitter.Transpile("trap 'cleanup' EXIT");
+
+        Assert.NotNull(result);
+        Assert.Contains("Invoke-BashTrap", result);
+        Assert.DoesNotContain("Register-BashChpwdHook", result);
+    }
+
+    [Fact]
+    public void Transpile_TrapDebug_TranspilesBodyCmd()
+    {
+        // trap 'update_terminal_title' DEBUG
+        // rawCmd = "update_terminal_title", hash = b680c740
+        var result = PsEmitter.Transpile("trap 'update_terminal_title' DEBUG");
+
+        Assert.NotNull(result);
+        Assert.Contains("Register-BashChpwdHook -Name 'b680c740'", result);
+        Assert.Contains("ScriptBlock", result);
+    }
+
+    // -----------------------------------------------------------------------
+    // PROMPT_COMMAND='CMD' -> Register-BashPromptHook
+    // -----------------------------------------------------------------------
+
+    [Fact]
+    public void Transpile_PromptCommandSingleQuoted_EmitsRegisterBashPromptHook()
+    {
+        // PROMPT_COMMAND='do_something'
+        var result = PsEmitter.Transpile("PROMPT_COMMAND='do_something'");
+
+        Assert.NotNull(result);
+        Assert.Contains("Register-BashPromptHook -Name 'prompt-command'", result);
+        Assert.Contains("ScriptBlock", result);
+        Assert.Contains("Invoke-Expression", result);
+    }
+
+    [Fact]
+    public void Transpile_PromptCommandDoubleQuoted_EmitsRegisterBashPromptHook()
+    {
+        // PROMPT_COMMAND="do_something"
+        var result = PsEmitter.Transpile("PROMPT_COMMAND=\"do_something\"");
+
+        Assert.NotNull(result);
+        Assert.Contains("Register-BashPromptHook -Name 'prompt-command'", result);
+        Assert.Contains("Invoke-Expression", result);
+    }
+
+    [Fact]
+    public void Transpile_UnsetPromptCommand_EmitsUnregisterBashPromptHook()
+    {
+        // unset PROMPT_COMMAND
+        var result = PsEmitter.Transpile("unset PROMPT_COMMAND");
+
+        Assert.Equal("Unregister-BashPromptHook -Name 'prompt-command'", result);
+    }
+
+    [Fact]
+    public void Transpile_UnsetOtherVar_PassesThroughToInvokeBashUnset()
+    {
+        // unset FOO  ->  Invoke-BashUnset FOO  (not a hook)
+        var result = PsEmitter.Transpile("unset FOO");
+
+        Assert.NotNull(result);
+        Assert.Contains("Invoke-BashUnset", result);
+        Assert.DoesNotContain("Unregister-BashPromptHook", result);
+    }
+
+    [Fact]
+    public void Transpile_PromptCommandWithComplexValue_EmitsEnvVarFallback()
+    {
+        // PROMPT_COMMAND="$(some_cmd)" — complex value with command substitution
+        // Cannot statically transpile; falls back to env var assignment
+        var result = PsEmitter.Transpile("PROMPT_COMMAND=\"$(some_cmd)\"");
+
+        Assert.NotNull(result);
+        Assert.Contains("$env:PROMPT_COMMAND", result);
+        Assert.DoesNotContain("Register-BashPromptHook", result);
+    }
+
+    [Fact]
+    public void ShortHash_KnownInput_ReturnsExpected8HexChars()
+    {
+        // Regression guard: hash must be stable across builds.
+        Assert.Equal("d66c2688", PsEmitter.ShortHash("do_something"));
+        Assert.Equal("336d5ebc", PsEmitter.ShortHash("-"));
+        Assert.Equal("b680c740", PsEmitter.ShortHash("update_terminal_title"));
+        Assert.Equal("d0104599", PsEmitter.ShortHash("fnm use"));
+    }
+
     private static CompoundWord MakeWord(string value) =>
         new(ImmutableArray.Create<WordPart>(new WordPart.Literal(value)));
 }

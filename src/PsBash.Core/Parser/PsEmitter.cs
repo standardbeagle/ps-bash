@@ -1,4 +1,5 @@
 using System.Collections.Immutable;
+using System.Security.Cryptography;
 using System.Text;
 using PsBash.Core.Parser.Ast;
 using PsBash.Core.Transpiler;
@@ -1070,6 +1071,30 @@ public static class PsEmitter
                 sb.Append("; ");
 
             var pair = cmd.Pairs[i];
+
+            // PROMPT_COMMAND='CMD' or PROMPT_COMMAND="CMD" ->
+            //   Register-BashPromptHook -Name 'prompt-command' -ScriptBlock { Invoke-Expression 'CMD_transpiled' }
+            // Only intercept plain (non-local, non-append) assignments with a value.
+            if (!cmd.IsLocal && pair.Name == "PROMPT_COMMAND"
+                && pair.Op == AssignOp.Equal && pair.Value is not null && pair.ArrayValue is null)
+            {
+                var rawCmd = ExtractSingleQuotedOrLiteralValue(pair.Value);
+                if (rawCmd is not null)
+                {
+                    var transpiledCmd = Transpile(rawCmd) ?? rawCmd;
+                    var scriptBody = transpiledCmd.Replace("'", "''");
+                    sb.Append($"Register-BashPromptHook -Name 'prompt-command' -ScriptBlock {{ Invoke-Expression '{scriptBody}' }}");
+                }
+                else
+                {
+                    // Value is complex (variable refs, command subs) — emit as env var assignment;
+                    // the hook registry call requires a static command string.
+                    sb.Append("$env:PROMPT_COMMAND = ");
+                    sb.Append(EmitAssignmentValue(pair.Value));
+                }
+                continue;
+            }
+
             string varPrefix = cmd.IsLocal ? "$" : "$env:";
 
             // Array assignment: arr=(a b c) -> $arr = @('a','b','c')
@@ -1213,6 +1238,32 @@ public static class PsEmitter
         {
             var cmd0 = GetLiteralValue(cmd.Words[0]);
             string? specialResult = null;
+
+            // unset PROMPT_COMMAND -> Unregister-BashPromptHook -Name 'prompt-command'
+            // Checked early (outside the else-if chain) so that `unset OTHER_VAR` still
+            // falls through to TryEmitMappedCommand -> Invoke-BashUnset.
+            if (cmd0 == "unset" && cmd.Words.Length >= 2
+                && GetLiteralValue(cmd.Words[1]) == "PROMPT_COMMAND")
+            {
+                return "Unregister-BashPromptHook -Name 'prompt-command'";
+            }
+
+            // trap 'CMD' DEBUG  -> Register-BashChpwdHook with first-use warning
+            // trap - DEBUG      -> Unregister-BashChpwdHook for the previously registered hook
+            // Checked early (outside the else-if chain) so that `trap 'CMD' EXIT` and
+            // other non-DEBUG signals still fall through to TryEmitMappedCommand -> Invoke-BashTrap.
+            if (cmd0 == "trap" && cmd.Words.Length >= 3
+                && GetLiteralValue(cmd.Words[^1]) == "DEBUG")
+            {
+                var trapArgs = cmd.Words.Skip(1).Take(cmd.Words.Length - 2).ToList();
+                var rawCmd = string.Join(" ", trapArgs.Select(w =>
+                    ExtractSingleQuotedOrLiteralValue(w) ?? EmitWord(w)));
+                var firstArg = GetLiteralValue(cmd.Words[1]);
+                if (firstArg == "-")
+                    return EmitTrapDebugUnregister(rawCmd);
+                var transpiledCmd = Transpile(rawCmd) ?? rawCmd;
+                return EmitTrapDebugRegister(rawCmd, transpiledCmd);
+            }
 
             // return N -> capture exit code for $?
             if (cmd0 == "return")
@@ -2430,6 +2481,69 @@ public static class PsEmitter
         if (word.Parts.Length == 1 && word.Parts[0] is WordPart.Literal lit)
             return lit.Value;
         return null;
+    }
+
+    /// <summary>
+    /// Extracts the raw command text from a <see cref="CompoundWord"/> when the word is a
+    /// plain single-quoted string, a plain double-quoted string containing only literals,
+    /// or a bare literal — i.e., when no variable expansion or command substitution is present.
+    /// Returns <c>null</c> for complex words (variable refs, command subs, etc.).
+    /// </summary>
+    private static string? ExtractSingleQuotedOrLiteralValue(CompoundWord word)
+    {
+        if (word.Parts.Length == 1)
+        {
+            return word.Parts[0] switch
+            {
+                WordPart.Literal lit => lit.Value,
+                WordPart.SingleQuoted sq => sq.Value,
+                WordPart.DoubleQuoted dq when dq.Parts.All(p => p is WordPart.Literal) =>
+                    string.Concat(dq.Parts.Cast<WordPart.Literal>().Select(p => p.Value)),
+                _ => null,
+            };
+        }
+        // Multi-part plain literals (e.g. adjacent literal tokens): collapse to single string.
+        if (word.Parts.All(p => p is WordPart.Literal))
+            return string.Concat(word.Parts.Cast<WordPart.Literal>().Select(p => p.Value));
+        return null;
+    }
+
+    /// <summary>
+    /// Returns the first 8 hex characters of the MD5 hash of <paramref name="text"/>.
+    /// Used to produce stable short names for hook registrations derived from command strings.
+    /// </summary>
+    public static string ShortHash(string text)
+    {
+        var bytes = MD5.HashData(Encoding.UTF8.GetBytes(text));
+        return Convert.ToHexString(bytes)[..8].ToLowerInvariant();
+    }
+
+    /// <summary>
+    /// Emits a <c>Register-BashChpwdHook</c> call for a <c>trap 'CMD' DEBUG</c> statement.
+    /// Includes a first-use warning emitted once per process via <c>$global:__BashHookDebugTrapWarned</c>.
+    /// </summary>
+    private static string EmitTrapDebugRegister(string rawCmd, string transpiledCmd)
+    {
+        var hookName = ShortHash(rawCmd);
+        // Single-quote the transpiled command inside the scriptblock using backtick escaping.
+        // Use double-quoted string for the scriptblock body so we can interpolate safely.
+        var warnLine =
+            "if (-not $global:__BashHookDebugTrapWarned) { " +
+            "$global:__BashHookDebugTrapWarned = $true; " +
+            "Write-Warning 'ps-bash: trap DEBUG mapped to Register-BashChpwdHook (fires on directory change, not every command)' }";
+        var scriptBody = transpiledCmd.Replace("'", "''");
+        return
+            $"{warnLine}; " +
+            $"Register-BashChpwdHook -Name '{hookName}' -ScriptBlock {{ Invoke-Expression '{scriptBody}' }}";
+    }
+
+    /// <summary>
+    /// Emits an <c>Unregister-BashChpwdHook</c> call for a <c>trap - DEBUG</c> statement.
+    /// </summary>
+    private static string EmitTrapDebugUnregister(string rawCmd)
+    {
+        var hookName = ShortHash(rawCmd);
+        return $"Unregister-BashChpwdHook -Name '{hookName}'";
     }
 
     public static bool IsKnownCommand(string name)
