@@ -628,3 +628,86 @@ QA audit sections per qa-rubric Directive 10 template.
 1. Fix `!` negation in if-conditions and pipeline chains: the negation suffix must not insert `;` before `&&`/`||` operators (see `EmitPipeline` negation path in `PsEmitter.cs`)
 2. Fix `[[ expr && expr ]]` compound: `SplitLogical` must handle `&&`/`||` inside double-bracket, treating them as logical short-circuit rather than passing them as literal words
 3. Fix standalone `BoolExpr` exit-code propagation into `&&`/`||` chains: the `[void](...)` wrapper discards the bool result; need to emit `if (Test-Path ...) { }; $LASTEXITCODE = if ($?) { 0 } else { 1 }` pattern
+
+---
+
+### FEATURE: Command substitution ($(cmd), backtick, $((arith)), process substitution)
+
+**EXISTING TESTS** (file:test):
+- `src/PsBash.Core.Tests/Parser/PsEmitterTests.cs:Transpile_CommandSub_SimpleCommand_Passthrough` (line 627)
+- `src/PsBash.Core.Tests/Parser/PsEmitterTests.cs:Transpile_CommandSub_InnerPipeline_TranspilesInnerCommands` (line 635)
+- `src/PsBash.Core.Tests/Parser/PsEmitterTests.cs:Transpile_BacktickCommandSub_NormalizedToDollarParen` (line 643)
+- `src/PsBash.Core.Tests/Parser/PsEmitterTests.cs:Transpile_AssignmentWithCommandSub_EmitsEnvAssignment` (line 651)
+- `src/PsBash.Core.Tests/Parser/PsEmitterTests.cs:Transpile_NestedCommandSub_EmitsCorrectNesting` (line 659)
+- `src/PsBash.Core.Tests/Parser/PsEmitterTests.cs:Transpile_ArithSub_BasicAddition` (line 1243)
+- `src/PsBash.Core.Tests/Parser/PsEmitterTests.cs:Transpile_ArithSub_LiteralAddition` (line 1250)
+- `src/PsBash.Core.Tests/Parser/PsEmitterTests.cs:Transpile_ArithSub_Multiplication` (line 1257)
+- `src/PsBash.Core.Tests/Parser/PsEmitterTests.cs:Transpile_ArithSub_InAssignment` (line 1341)
+- `src/PsBash.Core.Tests/Parser/PsEmitterTests.cs:Transpile_ArithSub_Power` (line 1348)
+- `src/PsBash.Core.Tests/Parser/PsEmitterTests.cs:Transpile_ArithSub_Modulo` (line 1355)
+- `src/PsBash.Core.Tests/Parser/PsEmitterTests.cs:Transpile_ArithSub_NestedInString` (line 1362)
+- `src/PsBash.Core.Tests/Parser/PsEmitterTests.cs:Transpile_DiffWithTwoInputProcessSubs` (line 1523)
+- `src/PsBash.Core.Tests/Parser/PsEmitterTests.cs:Transpile_OutputProcessSub` (line 1530)
+- `src/PsBash.Core.Tests/Parser/PsEmitterTests.cs:Transpile_NestedProcessSub` (line 1537)
+- `src/PsBash.Core.Tests/Parser/PsEmitterTests.cs:Transpile_ProcessSubWithPipe` (line 1546)
+- `src/PsBash.Core.Tests/Parser/PsEmitterTests.cs:Transpile_GrepWithProcessSub` (line 1553)
+- `src/PsBash.Core.Tests/Parser/PsEmitterTests.cs:Transpile_PasteWithProcessSubs` (line 2278)
+- `src/PsBash.Core.Tests/Parser/PsEmitterTests.cs:Transpile_ProcessSubWithSemicolon` (line 2285)
+- `src/PsBash.Core.Tests/Parser/PsEmitterTests.cs:Transpile_PasteWithSemicolonProcessSubs` (line 2292)
+- `src/PsBash.Differential.Tests/SeedDifferentialTests.cs:Differential_CommandSubstitution_NestedQuoting` (golden; line 96)
+- `src/PsBash.Differential.Tests/CommandSubstitutionDifferentialTests.cs:Differential_CommandSub_BasicEcho_ExpandsAtRuntime`
+- `src/PsBash.Differential.Tests/CommandSubstitutionDifferentialTests.cs:Differential_CommandSub_TrailingNewlineStripped`
+- `src/PsBash.Differential.Tests/CommandSubstitutionDifferentialTests.cs:Differential_CommandSub_NestedThreeLevels`
+- `src/PsBash.Differential.Tests/CommandSubstitutionDifferentialTests.cs:Differential_CommandSub_PipelineInside`
+- `src/PsBash.Differential.Tests/CommandSubstitutionDifferentialTests.cs:Differential_CommandSub_BacktickForm_SameAsParenForm`
+- `src/PsBash.Differential.Tests/CommandSubstitutionDifferentialTests.cs:Differential_ArithSub_LiteralAddition_ProducesInteger`
+- `src/PsBash.Differential.Tests/CommandSubstitutionDifferentialTests.cs:Differential_ArithSub_VsCommandSubSubshell_BothProduceResult`
+- `src/PsBash.Differential.Tests/CommandSubstitutionDifferentialTests.cs:Differential_CommandSub_InsideDoubleQuotes_NoWordSplit`
+- `src/PsBash.Differential.Tests/CommandSubstitutionDifferentialTests.cs:Differential_ProcessSub_DiffTwoSources_ProducesDiff` (golden)
+- `src/PsBash.Differential.Tests/CommandSubstitutionDifferentialTests.cs:Differential_CommandSub_EmptyOutput_YieldsEmptyString`
+
+**FAILURE-SURFACE COVERAGE** (per Directive 3 axes):
+| Axis | Covered? | Test ref / gap note |
+|------|----------|---------------------|
+| Empty input | YES | `Differential_CommandSub_EmptyOutput_YieldsEmptyString` — $(true) yields empty |
+| Large input | NO | gap — no test of $(...) capturing >10 MB of output |
+| Unicode | NO | gap — no test of command sub on command that emits unicode/emoji |
+| CRLF input | NO | gap — no test of command sub output with \r\n line endings |
+| Broken pipe | NO | gap — not applicable directly; command sub captures output fully |
+| Slow reader | NO | gap — not applicable; command sub buffers output before assignment |
+| Signal during execute | NO | gap — Ctrl-C inside $(...) not tested |
+| Exit code propagation | YES | `Differential_ArithSub_VsCommandSubSubshell_BothProduceResult` (Axis 8): command sub does not propagate inner exit code to outer $?; outer command's exit code prevails |
+| Stderr interleave | NO | gap — no test of $(...) capturing both stdout and stderr via 2>&1 inside the substitution |
+| Working dir state | NO | gap |
+| Environment leak | NO | gap — no test that VAR=x $(cmd) does not leak VAR to outer scope |
+| Quoting / injection | YES | `Differential_CommandSub_InsideDoubleQuotes_NoWordSplit` (Axis 12): double-quoted $(...) suppresses word-splitting |
+| Platform-locked file | NO | not applicable |
+| Missing target | YES | `Differential_CommandSub_EmptyOutput_YieldsEmptyString`: $(true) has no output; ProcessSub golden verifies diff handles missing-like path |
+| Recursion depth | YES | `Differential_CommandSub_NestedThreeLevels` (Axis 15): three-level $(echo $(echo deep)) |
+
+**MODE COVERAGE** (per Directive 4 modes):
+| Mode | Covered? | Test ref / gap note |
+|------|----------|---------------------|
+| M1 -c | YES | all EqualAsync/GoldenAsync tests use ps-bash -c mode |
+| M2 stdin | NO | gap |
+| M3 file | NO | gap |
+| M4 interactive | NO | gap |
+| M5 Invoke-BashEval | NO | gap — command sub inside Invoke-BashEval not tested |
+| M6 Invoke-BashSource | NO | gap |
+
+**ORACLE STATUS**:
+- DIFFERENTIAL TESTS PRESENT? YES
+- 9 live-diff (EqualAsync) + 2 golden (GoldenAsync) = 11 differential cases in `CommandSubstitutionDifferentialTests.cs`
+- Plus 1 golden in `SeedDifferentialTests.cs` = 12 differential cases total for this feature
+- GoldenAsync used for: `ProcessSub_DiffTwoSources` (temp-file paths vary per run) and `CommandSubstitution_NestedQuoting` (date output changes yearly)
+
+**KNOWN BUGS / RISKS**:
+- Subshell at end of a pipeline (`cmd | (...)`) emits `try { Push-Location ... } finally { Pop-Location }` as a pipeline stage, which PowerShell rejects because `try` is not a pipeline-compatible expression — `EmitSubshell` in `PsEmitter.cs`; the subshell must be wrapped in `& { ... }` to be a valid pipeline stage
+- `$( (1+2) )` (CommandSub containing subshell arithmetic) hits the same subshell-in-pipeline emission bug; the test works because `$( echo $((1+2)) )` avoids the broken subshell path
+- Exit code of inner command in `$(...)` is silently discarded by PowerShell's subexpression; bash has the same behavior so the semantics are correct, but no explicit test asserts that `$(false); echo $?` reports `0` rather than `1`
+- Process substitution `>(cmd)` (output direction) — emitter maps it to `Invoke-ProcessSub` with a temp file, but the consumer command must read from that file after the process sub command finishes; potential race if the consumer reads before ps-bash finishes writing
+
+**PRIORITY GAPS** (top 3 max):
+1. Fix `EmitSubshell` so a subshell used as a pipeline stage emits `& { ... }` instead of `try { Push-Location } finally { Pop-Location }` — blocks any pipeline ending in `(...)` and any `pipe | (cmd sub)` pattern
+2. Add differential test for `$(false); echo $?` to assert that inner command's exit code does not leak into the outer `$?` (explicit Axis 8 verification at runtime level, not just transpile)
+3. Add large-output test: `x=$(seq 1 100000); echo "${#x}"` — verifies command sub captures large output without truncation or buffer overflow through the PowerShell subexpression path
