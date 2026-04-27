@@ -1105,12 +1105,17 @@ public class PsEmitterTests
             result);
     }
 
+    // Helper constant for the save/restore preamble and epilogue added around every
+    // function body so that recursive calls each see their own positional args.
+    private const string FnPre = "$__bp = $global:BashPositional; $global:BashPositional = @() + $args; try { ";
+    private const string FnPost = " } finally { $global:BashPositional = $__bp }";
+
     [Fact]
     public void Transpile_FunctionKeywordForm_EmitsPsFunction()
     {
         var result = PsEmitter.Transpile("function greet { Invoke-BashEcho hello }");
 
-        Assert.Equal("function greet { Invoke-BashEcho hello }", result);
+        Assert.Equal($"function greet {{ {FnPre}Invoke-BashEcho hello{FnPost} }}", result);
     }
 
     [Fact]
@@ -1118,7 +1123,7 @@ public class PsEmitterTests
     {
         var result = PsEmitter.Transpile("greet() { echo hello }");
 
-        Assert.Equal("function greet { Invoke-BashEcho hello }", result);
+        Assert.Equal($"function greet {{ {FnPre}Invoke-BashEcho hello{FnPost} }}", result);
     }
 
     [Fact]
@@ -1126,7 +1131,7 @@ public class PsEmitterTests
     {
         var result = PsEmitter.Transpile("greet () { echo hello }");
 
-        Assert.Equal("function greet { Invoke-BashEcho hello }", result);
+        Assert.Equal($"function greet {{ {FnPre}Invoke-BashEcho hello{FnPost} }}", result);
     }
 
     [Fact]
@@ -1134,7 +1139,7 @@ public class PsEmitterTests
     {
         var result = PsEmitter.Transpile("function add { local result=42; echo $result }");
 
-        Assert.Equal("function add { $result = \"42\"; Invoke-BashEcho $result }", result);
+        Assert.Equal($"function add {{ {FnPre}$result = \"42\"; Invoke-BashEcho $result{FnPost} }}", result);
     }
 
     [Fact]
@@ -1144,7 +1149,7 @@ public class PsEmitterTests
             "function greet { Invoke-BashEcho hello }; function main { greet }");
 
         Assert.Equal(
-            "function greet { Invoke-BashEcho hello }; function main { greet }",
+            $"function greet {{ {FnPre}Invoke-BashEcho hello{FnPost} }}; function main {{ {FnPre}greet{FnPost} }}",
             result);
     }
 
@@ -1153,7 +1158,21 @@ public class PsEmitterTests
     {
         var result = PsEmitter.Transpile("function setup {\n  echo start\n  echo end\n}");
 
-        Assert.Equal("function setup { Invoke-BashEcho start; Invoke-BashEcho end }", result);
+        Assert.Equal($"function setup {{ {FnPre}Invoke-BashEcho start; Invoke-BashEcho end{FnPost} }}", result);
+    }
+
+    /// <summary>
+    /// DART-ccPtGZB92fur: recursive function must save/restore $global:BashPositional
+    /// so inner frames see their own args, not the outer frame's.
+    /// The function body must wrap with: save -> set from $args -> try{body}finally{restore}.
+    /// </summary>
+    [Fact]
+    public void Transpile_Function_SavesAndRestoresBashPositionalAroundBody()
+    {
+        var result = PsEmitter.Transpile("f() { echo $1; }");
+
+        var expected = $"function f {{ {FnPre}Invoke-BashEcho $(if ($global:BashPositional) {{ $global:BashPositional[0] }} else {{ $args[0] }}){FnPost} }}";
+        Assert.Equal(expected, result);
     }
 
     [Fact]

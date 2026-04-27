@@ -420,11 +420,16 @@ public static class PsEmitter
 
         try
         {
+            var body = Emit(func.Body);
+            // Wrap the function body with save/restore of $global:BashPositional so
+            // that recursive calls each see their own positional args ($1, $2, $@, $#)
+            // rather than the top-level caller's args. Without this, a recursive call
+            // overwrites the global and the outer frame sees the inner frame's values.
             var sb = new StringBuilder("function ");
             sb.Append(func.Name);
-            sb.Append(" { ");
-            sb.Append(Emit(func.Body));
-            sb.Append(" }");
+            sb.Append(" { $__bp = $global:BashPositional; $global:BashPositional = @() + $args; try { ");
+            sb.Append(body);
+            sb.Append(" } finally { $global:BashPositional = $__bp } }");
             return sb.ToString();
         }
         finally
@@ -1701,7 +1706,35 @@ public static class PsEmitter
         }
 
         expr = PrefixBareVar(expr);
+        expr = ExpandArithPositionalRefs(expr);
         return $"$({expr})";
+    }
+
+    /// <summary>
+    /// In arithmetic expressions, <c>$1</c>-<c>$9</c> are bash positional parameters.
+    /// PowerShell's <c>$1</c> is not a positional param; replace with the BashPositional
+    /// array access so recursive function calls see the right value.
+    /// After <see cref="EmitFunction"/> wraps bodies with the BashPositional save/restore,
+    /// <c>$global:BashPositional</c> is always set inside function bodies; we emit a null-coalesce
+    /// using the <c>??</c> operator to fall back to <c>$args</c> at script level.
+    /// </summary>
+    private static string ExpandArithPositionalRefs(string expr)
+    {
+        return System.Text.RegularExpressions.Regex.Replace(
+            expr,
+            @"\$([1-9])",
+            m =>
+            {
+                int idx = int.Parse(m.Groups[1].Value) - 1;
+                // $global:BashPositional is always set inside function bodies
+                // (EmitFunction wraps with save/restore). At script-top-level,
+                // positional params come from $args. Use the same pattern as
+                // EmitSimpleVar but as an integer cast so arithmetic can proceed.
+                // PowerShell 7+: $null[N] = $null, [int]$null = 0.
+                // $(if ...) captures the if-statement output — valid in $() subexpressions.
+                // Cast to [int] so the value participates correctly in integer arithmetic.
+                return $"([int]$(if ($global:BashPositional) {{ $global:BashPositional[{idx}] }} else {{ $args[{idx}] }}))";
+            });
     }
 
     private static string EmitSimpleVar(string name, bool inDoubleQuote = false)

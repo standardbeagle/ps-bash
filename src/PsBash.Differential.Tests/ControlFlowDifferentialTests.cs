@@ -216,19 +216,16 @@ public class ControlFlowDifferentialTests
     /// Targets the gap: no recursion test anywhere in the suite.
     /// Failure-surface axis 15: recursion depth must terminate correctly.
     ///
-    /// KNOWN BUG: ps-bash emits `$1` inside function bodies as
-    /// `$global:BashPositional[0]` which reads the top-level positional params,
-    /// not the function's own args. Recursive calls do not rebind BashPositional,
-    /// so inner frames read the original call's args, producing wrong results.
-    /// Golden mode: records current (broken) ps-bash output for regression tracking.
-    /// Record: UPDATE_GOLDENS=1 ./scripts/test.sh --filter Differential_Function_Recursion
+    /// Fixed DART-ccPtGZB92fur: EmitFunction now saves/restores $global:BashPositional
+    /// around the function body so each recursive frame sees its own positional args.
+    /// Also fixed $N (e.g. $1) inside arithmetic substitutions $((...)) to use
+    /// the BashPositional array instead of PowerShell's null $1 variable.
     /// </summary>
     [SkippableFact]
     public async Task Differential_Function_Recursion()
     {
-        await AssertOracle.GoldenAsync(
+        await AssertOracle.EqualAsync(
             "fact() { if [ $1 -le 1 ]; then echo 1; return; fi; prev=$(fact $(($1-1))); echo $(($1*prev)); }; fact 4",
-            "Function_Recursion",
             timeout: TimeSpan.FromSeconds(15));
     }
 }
