@@ -1,0 +1,2 @@
+# Binary test fixtures — never apply CRLF conversion
+*.bin binary
