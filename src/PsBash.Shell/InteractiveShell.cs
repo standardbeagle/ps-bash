@@ -589,10 +589,12 @@ EnsureConsoleInputRestored();
     }
 
     private static string ExpandPS1(string ps1)
+        => ExpandPS1(ps1, _lastDir, _homeDir);
+
+    internal static string ExpandPS1(string ps1, string cwd, string home)
     {
-        var cwd = _lastDir;
-        if (cwd.StartsWith(_homeDir))
-            cwd = "~" + cwd[_homeDir.Length..];
+        if (cwd.StartsWith(home))
+            cwd = "~" + cwd[home.Length..];
 
         var user = Environment.UserName;
         var host = Environment.MachineName.ToLowerInvariant();
@@ -665,12 +667,10 @@ EnsureConsoleInputRestored();
                         i += 2;
                         continue;
                     case '[':
-                        // Begin non-printing chars (for ANSI escape handling)
-                        // Find closing ]
-                        var closeIdx = ps1.IndexOf('\\', i + 2);
-                        if (closeIdx > 0 && closeIdx + 1 < ps1.Length && ps1[closeIdx + 1] == ']')
+                        // Skip \[...\] non-printing marker block (ANSI escapes in bash PS1)
+                        var closeIdx = ps1.IndexOf(@"\]", i + 2, StringComparison.Ordinal);
+                        if (closeIdx >= 0)
                         {
-                            // Skip the content between \[ and \]
                             i = closeIdx + 2;
                             continue;
                         }

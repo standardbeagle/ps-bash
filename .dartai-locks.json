@@ -1,14 +1,14 @@
 {
   "claims": {
     "wRnISqoLacks": {
-      "runner_instance_id": "beagle-ab2-main",
+      "runner_instance_id": "beagle-ab2-8080",
       "runner_email": "andybrummer@standardbeagle.com",
-      "claimed_at": "2026-04-28T21:47:00Z",
-      "agent_id": "beagle-ab2-main",
-      "parent_loop_id": "cJ1te6AEJK42",
-      "purpose": "Ralph Wiggum loop iteration 62 - Prompt rendering PS1 PROMPT_COMMAND",
+      "claimed_at": "2026-04-29T05:30:00Z",
+      "agent_id": "beagle-ab2-8080",
+      "parent_loop_id": "ZWOeKvV8VdlE",
+      "purpose": "Complete prompt rendering task - ExpandPS1 overload + integration tests",
       "source_event": {
-        "loop_id": "cJ1te6AEJK42",
+        "loop_id": "ZWOeKvV8VdlE",
         "task_id": "wRnISqoLacks",
         "conversation_id": null
       }
