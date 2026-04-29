@@ -8,6 +8,7 @@ namespace PsBash.Host.Tests.Runtime;
 /// Oracle note (Directive 1): SdkWorker behavior is ps-bash-specific (no bash
 /// oracle available in-process); hand-written asserts justified per exception list.
 /// </summary>
+[Collection("SdkHost")]
 public class SdkWorkerTests : IAsyncLifetime
 {
     private SdkWorker? _worker;

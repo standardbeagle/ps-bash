@@ -65,9 +65,25 @@ public sealed class SdkWorker : IWorker
         }
     }
 
+    // Used by Connection to pass the callback directly (thread-safe — bypasses the shared property).
+    internal async Task<int> ExecuteWithOutputAsync(string command, Action<string>? output, CancellationToken ct = default)
+    {
+        ObjectDisposedException.ThrowIf(_disposed != 0, this);
+        await _lock.WaitAsync(ct);
+        try
+        {
+            return await Task.Run(() => RunCommand(command, output), ct);
+        }
+        finally
+        {
+            _lock.Release();
+        }
+    }
+
     private int RunCommand(string command, Action<string>? output)
     {
         _ps.Commands.Clear();
+        _ps.Streams.Error.Clear();
         _ps.AddScript(command);
 
         var results = _ps.Invoke();
@@ -85,6 +101,7 @@ public sealed class SdkWorker : IWorker
     private string RunCommandCollect(string expression)
     {
         _ps.Commands.Clear();
+        _ps.Streams.Error.Clear();
         _ps.AddScript(expression);
 
         var results = _ps.Invoke();

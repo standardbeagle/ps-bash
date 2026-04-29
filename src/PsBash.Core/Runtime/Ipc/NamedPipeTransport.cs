@@ -106,7 +106,8 @@ public sealed class NamedPipeTransport : IIpcTransport
         // transport runs in tests on non-Windows hosts.
         return new NamedPipeServerStream(
             _pipeName, PipeDirection.InOut, MaxInstances,
-            PipeTransmissionMode.Byte, PipeOptions.Asynchronous);
+            PipeTransmissionMode.Byte, PipeOptions.Asynchronous,
+            inBufferSize: 65536, outBufferSize: 65536);
     }
 
     [SupportedOSPlatform("windows")]
@@ -121,14 +122,17 @@ public sealed class NamedPipeTransport : IIpcTransport
             PipeAccessRights.FullControl,
             AccessControlType.Allow));
 
+        // Explicit 64 KB buffers: CreateNamedPipe with size 0 may mean "no kernel
+        // buffer" on some Windows builds, causing WriteAsync to block until the
+        // peer reads every byte. Explicit sizes decouple writer from reader.
         return NamedPipeServerStreamAcl.Create(
             pipeName: _pipeName,
             direction: PipeDirection.InOut,
             maxNumberOfServerInstances: MaxInstances,
             transmissionMode: PipeTransmissionMode.Byte,
             options: PipeOptions.Asynchronous,
-            inBufferSize: 0,
-            outBufferSize: 0,
+            inBufferSize: 65536,
+            outBufferSize: 65536,
             pipeSecurity: security);
     }
 
