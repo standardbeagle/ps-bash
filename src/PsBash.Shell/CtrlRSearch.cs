@@ -903,6 +903,107 @@ public sealed class CtrlRSearch : IDisposable
     }
 
     // ─────────────────────────────────────────────────────────────────────────────────
+    // Internal Test API
+    // ─────────────────────────────────────────────────────────────────────────────────
+
+    /// <summary>
+    /// For tests: runs the search loop against a queue of pre-recorded keystrokes
+    /// without touching the real console. Render() calls are suppressed.
+    /// Returns the same (Result, Command?) tuple as RunAsync().
+    /// </summary>
+    internal async Task<(Result Result, string? Command)> SimulateAsync(
+        Queue<ConsoleKeyInfo> keys)
+    {
+        // Seed results before processing any keys (mirrors what RunAsync does)
+        await UpdateResultsAsync();
+
+        while (keys.Count > 0)
+        {
+            var key = keys.Dequeue();
+
+            if (_inEditMode)
+            {
+                var editResult = HandleEditModeKey(key);
+                if (editResult.HasValue)
+                    return editResult.Value;
+                continue;
+            }
+
+            switch (key.Key)
+            {
+                case ConsoleKey.Escape:
+                    return (Result.Cancelled, null);
+
+                case ConsoleKey.Enter:
+                    if (_results.Count > 0 && _selectedIndex >= 0 && _selectedIndex < _results.Count)
+                        return (Result.Execute, _results[_selectedIndex].Entry.Command);
+                    break;
+
+                case ConsoleKey.Tab:
+                    if (_results.Count > 0 && _selectedIndex >= 0 && _selectedIndex < _results.Count)
+                        EnterEditMode();
+                    break;
+
+                case ConsoleKey.R when key.Modifiers == ConsoleModifiers.Control:
+                    if (_results.Count > 0)
+                        _selectedIndex = (_selectedIndex + 1) % _results.Count;
+                    break;
+
+                case ConsoleKey.S when key.Modifiers == ConsoleModifiers.Control:
+                    if (_results.Count > 0)
+                        _selectedIndex = (_selectedIndex - 1 + _results.Count) % _results.Count;
+                    break;
+
+                case ConsoleKey.G when key.Modifiers == ConsoleModifiers.Control:
+                    _cwdFilterEnabled = !_cwdFilterEnabled;
+                    await UpdateResultsAsync();
+                    _selectedIndex = _results.Count > 0 ? 0 : -1;
+                    break;
+
+                case ConsoleKey.Backspace:
+                    if (_query.Length > 0)
+                    {
+                        _query.Remove(_query.Length - 1, 1);
+                        await UpdateResultsAsync();
+                    }
+                    break;
+
+                case ConsoleKey.C when key.Modifiers == ConsoleModifiers.Control:
+                    return (Result.Cancelled, null);
+
+                default:
+                    if (key.KeyChar != '\0' && !char.IsControl(key.KeyChar))
+                    {
+                        _query.Append(key.KeyChar);
+                        await UpdateResultsAsync();
+                    }
+                    break;
+            }
+        }
+
+        // Keys exhausted without an explicit return — return current selection
+        return (Result.Cancelled, null);
+    }
+
+    /// <summary>For tests: number of results currently in the result list.</summary>
+    internal int ResultCount => _results.Count;
+
+    /// <summary>For tests: selected index (-1 if no results).</summary>
+    internal int SelectedIndex => _selectedIndex;
+
+    /// <summary>For tests: the currently selected command, or null.</summary>
+    internal string? SelectedCommand =>
+        _selectedIndex >= 0 && _selectedIndex < _results.Count
+            ? _results[_selectedIndex].Entry.Command
+            : null;
+
+    /// <summary>For tests: current query string.</summary>
+    internal string CurrentQuery => _query.ToString();
+
+    /// <summary>For tests: whether the CWD filter is enabled.</summary>
+    internal bool CwdFilterEnabled => _cwdFilterEnabled;
+
+    // ─────────────────────────────────────────────────────────────────────────────────
     // IDisposable
     // ─────────────────────────────────────────────────────────────────────────────────
 

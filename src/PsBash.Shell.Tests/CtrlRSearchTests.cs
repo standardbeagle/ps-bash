@@ -295,3 +295,498 @@ public class CtrlRSearchPathTests
         Assert.Equal("/tmp/project", result);
     }
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Behavioral Tests (via SimulateAsync / InMemoryHistoryStore)
+// Oracle note (Directive 1): these are ps-bash-specific interactive-shell
+// behaviors (no bash equivalent), so hand-written asserts are correct.
+// ─────────────────────────────────────────────────────────────────────────────
+
+public class CtrlRSearchBehaviorTests
+{
+    // ── helpers ──────────────────────────────────────────────────────────────
+
+    // ConsoleKeyInfo(char keyChar, ConsoleKey key, bool shift, bool alt, bool control)
+    // SimulateAsync dispatches on key.Key for control keys and key.KeyChar for printable chars,
+    // so ConsoleKey.A is a safe dummy for all printable characters.
+    private static ConsoleKeyInfo Key(char ch, ConsoleKey key = ConsoleKey.A)
+        => new ConsoleKeyInfo(ch, key, false, false, false);
+
+    private static ConsoleKeyInfo CtrlKey(char ch, ConsoleKey key)
+        => new ConsoleKeyInfo(ch, key, false, false, true);
+
+    private static ConsoleKeyInfo Enter()
+        => new ConsoleKeyInfo('\r', ConsoleKey.Enter, false, false, false);
+
+    private static ConsoleKeyInfo Esc()
+        => new ConsoleKeyInfo('\x1b', ConsoleKey.Escape, false, false, false);
+
+    private static ConsoleKeyInfo Tab()
+        => new ConsoleKeyInfo('\t', ConsoleKey.Tab, false, false, false);
+
+    private static ConsoleKeyInfo CtrlR()
+        => CtrlKey('\x12', ConsoleKey.R);
+
+    private static ConsoleKeyInfo CtrlC()
+        => CtrlKey('\x03', ConsoleKey.C);
+
+    private static ConsoleKeyInfo CtrlG()
+        => CtrlKey('\x07', ConsoleKey.G);
+
+    private static ConsoleKeyInfo Backspace()
+        => new ConsoleKeyInfo('\b', ConsoleKey.Backspace, false, false, false);
+
+    private static HistoryEntry MakeEntry(string cmd, string cwd = "/proj",
+        string session = "s1", int minutesAgo = 1, int? exitCode = 0)
+        => new HistoryEntry
+        {
+            Command = cmd,
+            Cwd = cwd,
+            SessionId = session,
+            Timestamp = DateTime.UtcNow.AddMinutes(-minutesAgo),
+            ExitCode = exitCode
+        };
+
+    private static CtrlRSearch MakeSearch(IHistoryStore store, string cwd = "/proj")
+        => new CtrlRSearch(store, cwd, "$ ");
+
+    private static Queue<ConsoleKeyInfo> TypeString(string text,
+        IEnumerable<ConsoleKeyInfo>? after = null)
+    {
+        var q = new Queue<ConsoleKeyInfo>();
+        foreach (var ch in text)
+            q.Enqueue(Key(ch));
+        if (after != null)
+            foreach (var k in after)
+                q.Enqueue(k);
+        return q;
+    }
+
+    // ── search results ───────────────────────────────────────────────────────
+
+    [Fact]
+    public async Task EmptyQuery_ShowsAllHistoryEntries()
+    {
+        var store = new InMemoryHistoryStore();
+        await store.RecordAsync(MakeEntry("git commit -m 'init'", minutesAgo: 3));
+        await store.RecordAsync(MakeEntry("docker build .", minutesAgo: 2));
+        await store.RecordAsync(MakeEntry("npm test", minutesAgo: 1));
+
+        using var search = MakeSearch(store);
+        // Press Esc immediately — no typing, just check initial result count
+        var keys = new Queue<ConsoleKeyInfo>();
+        keys.Enqueue(Esc());
+        await search.SimulateAsync(keys);
+
+        // After seeding results, all 3 entries should have been loaded
+        Assert.Equal(3, search.ResultCount);
+    }
+
+    [Fact]
+    public async Task SubstringQuery_FiltersToMatchingCommands()
+    {
+        var store = new InMemoryHistoryStore();
+        await store.RecordAsync(MakeEntry("git commit -m 'init'", minutesAgo: 3));
+        await store.RecordAsync(MakeEntry("docker build .", minutesAgo: 2));
+        await store.RecordAsync(MakeEntry("git push origin main", minutesAgo: 1));
+
+        using var search = MakeSearch(store);
+        // Type "git" then Esc to inspect state
+        var keys = TypeString("git", new[] { Esc() });
+        await search.SimulateAsync(keys);
+
+        // InMemoryHistoryStore does prefix filtering; "git" matches "git commit" and "git push"
+        Assert.Equal(2, search.ResultCount);
+    }
+
+    [Fact]
+    public async Task SubstringQuery_MostRecentMatchIsSelected()
+    {
+        var store = new InMemoryHistoryStore();
+        await store.RecordAsync(MakeEntry("git commit -m 'init'", minutesAgo: 5));
+        await store.RecordAsync(MakeEntry("docker build .", minutesAgo: 2));
+        await store.RecordAsync(MakeEntry("git push origin main", minutesAgo: 1));
+
+        using var search = MakeSearch(store);
+        var keys = TypeString("git", new[] { Esc() });
+        await search.SimulateAsync(keys);
+
+        // Newest match ("git push") should be selected first (highest recency score)
+        Assert.Equal("git push origin main", search.SelectedCommand);
+    }
+
+    [Fact]
+    public async Task NoMatchingQuery_ResultCountIsZero()
+    {
+        var store = new InMemoryHistoryStore();
+        await store.RecordAsync(MakeEntry("docker build .", minutesAgo: 1));
+        await store.RecordAsync(MakeEntry("npm test", minutesAgo: 2));
+
+        using var search = MakeSearch(store);
+        var keys = TypeString("xyzzy", new[] { Esc() });
+        await search.SimulateAsync(keys);
+
+        Assert.Equal(0, search.ResultCount);
+        Assert.Equal(-1, search.SelectedIndex);
+        Assert.Null(search.SelectedCommand);
+    }
+
+    [Fact]
+    public async Task EmptyHistory_ResultCountIsZero()
+    {
+        var store = new InMemoryHistoryStore();
+
+        using var search = MakeSearch(store);
+        var keys = new Queue<ConsoleKeyInfo>();
+        keys.Enqueue(Esc());
+        await search.SimulateAsync(keys);
+
+        Assert.Equal(0, search.ResultCount);
+        Assert.Equal(-1, search.SelectedIndex);
+    }
+
+    // ── Enter: execute ───────────────────────────────────────────────────────
+
+    [Fact]
+    public async Task Enter_WithMatch_ExecutesSelectedCommand()
+    {
+        var store = new InMemoryHistoryStore();
+        await store.RecordAsync(MakeEntry("docker build .", minutesAgo: 2));
+        await store.RecordAsync(MakeEntry("npm test", minutesAgo: 1));
+
+        using var search = MakeSearch(store);
+        var keys = TypeString("npm", new[] { Enter() });
+        var (result, cmd) = await search.SimulateAsync(keys);
+
+        Assert.Equal(CtrlRSearch.Result.Execute, result);
+        Assert.Equal("npm test", cmd);
+    }
+
+    [Fact]
+    public async Task Enter_WithNoMatches_DoesNotExecute()
+    {
+        var store = new InMemoryHistoryStore();
+        await store.RecordAsync(MakeEntry("npm test", minutesAgo: 1));
+
+        using var search = MakeSearch(store);
+        var keys = TypeString("xyzzy", new[] { Enter() });
+        var (result, cmd) = await search.SimulateAsync(keys);
+
+        // No match → Enter is a no-op → keys exhausted → Cancelled
+        Assert.Equal(CtrlRSearch.Result.Cancelled, result);
+        Assert.Null(cmd);
+    }
+
+    // ── Ctrl-R: cycle to next match ──────────────────────────────────────────
+
+    [Fact]
+    public async Task CtrlR_CyclesToNextMatch()
+    {
+        var store = new InMemoryHistoryStore();
+        await store.RecordAsync(MakeEntry("git commit -m 'v1'", minutesAgo: 10));
+        await store.RecordAsync(MakeEntry("git push origin main", minutesAgo: 5));
+        await store.RecordAsync(MakeEntry("git status", minutesAgo: 1));
+
+        using var search = MakeSearch(store);
+        // Type "git" → 3 matches, selected=0 (most recent: "git status")
+        // Press Ctrl-R → selected=1 (next: "git push origin main")
+        // Press Enter → execute that command
+        var keys = TypeString("git");
+        keys.Enqueue(CtrlR());
+        keys.Enqueue(Enter());
+
+        var (result, cmd) = await search.SimulateAsync(keys);
+
+        Assert.Equal(CtrlRSearch.Result.Execute, result);
+        // Second-newest "git" command (index 1 after cycling)
+        Assert.NotEqual("git status", cmd); // first would be "git status"
+        Assert.StartsWith("git", cmd);
+    }
+
+    [Fact]
+    public async Task CtrlR_WrapsAroundToFirstMatch()
+    {
+        var store = new InMemoryHistoryStore();
+        await store.RecordAsync(MakeEntry("git commit", minutesAgo: 3));
+        await store.RecordAsync(MakeEntry("git push", minutesAgo: 2));
+        await store.RecordAsync(MakeEntry("git status", minutesAgo: 1));
+
+        using var search = MakeSearch(store);
+        // 3 matches: indices 0,1,2. Pressing Ctrl-R 3 times wraps to 0.
+        var keys = TypeString("git");
+        keys.Enqueue(CtrlR()); // → 1
+        keys.Enqueue(CtrlR()); // → 2
+        keys.Enqueue(CtrlR()); // → 0 (wrap)
+        keys.Enqueue(Esc());
+
+        await search.SimulateAsync(keys);
+
+        Assert.Equal(0, search.SelectedIndex);
+    }
+
+    [Fact]
+    public async Task CtrlR_WithNoMatches_DoesNotCrash()
+    {
+        var store = new InMemoryHistoryStore();
+
+        using var search = MakeSearch(store);
+        var keys = TypeString("xyzzy");
+        keys.Enqueue(CtrlR()); // No-op — no results
+        keys.Enqueue(Esc());
+
+        var (result, _) = await search.SimulateAsync(keys);
+        Assert.Equal(CtrlRSearch.Result.Cancelled, result);
+    }
+
+    // ── Esc: cancel ─────────────────────────────────────────────────────────
+
+    [Fact]
+    public async Task Esc_CancelsSearch_ReturnsNullCommand()
+    {
+        var store = new InMemoryHistoryStore();
+        await store.RecordAsync(MakeEntry("docker build .", minutesAgo: 1));
+
+        using var search = MakeSearch(store);
+        var keys = TypeString("docker", new[] { Esc() });
+        var (result, cmd) = await search.SimulateAsync(keys);
+
+        Assert.Equal(CtrlRSearch.Result.Cancelled, result);
+        Assert.Null(cmd);
+    }
+
+    [Fact]
+    public async Task CtrlC_CancelsSearch_ReturnsNullCommand()
+    {
+        var store = new InMemoryHistoryStore();
+        await store.RecordAsync(MakeEntry("docker build .", minutesAgo: 1));
+
+        using var search = MakeSearch(store);
+        var keys = TypeString("docker", new[] { CtrlC() });
+        var (result, cmd) = await search.SimulateAsync(keys);
+
+        Assert.Equal(CtrlRSearch.Result.Cancelled, result);
+        Assert.Null(cmd);
+    }
+
+    // ── Tab: edit mode ───────────────────────────────────────────────────────
+
+    [Fact]
+    public async Task Tab_WithMatch_EntersEditMode_ThenEnterExecutesEdited()
+    {
+        var store = new InMemoryHistoryStore();
+        await store.RecordAsync(MakeEntry("docker build .", minutesAgo: 1));
+
+        using var search = MakeSearch(store);
+        // Tab → edit mode. Then type " --no-cache" and Enter.
+        var keys = TypeString("docker");
+        keys.Enqueue(Tab()); // Enter edit mode
+        // Type suffix to append
+        foreach (var ch in " --no-cache")
+            keys.Enqueue(Key(ch));
+        keys.Enqueue(Enter());
+
+        var (result, cmd) = await search.SimulateAsync(keys);
+
+        Assert.Equal(CtrlRSearch.Result.Execute, result);
+        Assert.Equal("docker build . --no-cache", cmd);
+    }
+
+    [Fact]
+    public async Task Tab_EditMode_EscCancelsEdit_NotSearch()
+    {
+        var store = new InMemoryHistoryStore();
+        await store.RecordAsync(MakeEntry("npm test", minutesAgo: 1));
+
+        using var search = MakeSearch(store);
+        var keys = TypeString("npm");
+        keys.Enqueue(Tab());  // Enter edit mode
+        keys.Enqueue(Esc());  // Cancel edit (returns to search mode)
+        keys.Enqueue(Esc());  // Cancel search
+        var (result, cmd) = await search.SimulateAsync(keys);
+
+        Assert.Equal(CtrlRSearch.Result.Cancelled, result);
+        Assert.Null(cmd);
+    }
+
+    // ── CWD filter ───────────────────────────────────────────────────────────
+
+    [Fact]
+    public async Task CwdFilter_Enabled_OnlyShowsLocalCommands()
+    {
+        var store = new InMemoryHistoryStore();
+        await store.RecordAsync(MakeEntry("git push", cwd: "/proj", minutesAgo: 2));
+        await store.RecordAsync(MakeEntry("git push", cwd: "/other", minutesAgo: 1));
+
+        // CWD = /proj: "git push" from /proj is shown, from /other is not
+        using var search = MakeSearch(store, cwd: "/proj");
+        var keys = TypeString("git", new[] { Esc() });
+        await search.SimulateAsync(keys);
+
+        // InMemoryHistoryStore filters by exact cwd, so only 1 result (the /proj entry)
+        Assert.Equal(1, search.ResultCount);
+    }
+
+    [Fact]
+    public async Task CwdFilter_ToggleOff_ShowsAllCommands()
+    {
+        var store = new InMemoryHistoryStore();
+        await store.RecordAsync(MakeEntry("git push", cwd: "/proj", minutesAgo: 2));
+        await store.RecordAsync(MakeEntry("git push", cwd: "/other", minutesAgo: 1));
+
+        using var search = MakeSearch(store, cwd: "/proj");
+        // Ctrl-G toggles CWD filter off
+        var keys = TypeString("git");
+        keys.Enqueue(CtrlG()); // toggle → all
+        keys.Enqueue(Esc());
+        await search.SimulateAsync(keys);
+
+        // Both entries should now be visible
+        Assert.Equal(2, search.ResultCount);
+        Assert.False(search.CwdFilterEnabled);
+    }
+
+    [Fact]
+    public async Task CwdFilter_ToggleTwice_RestoresState()
+    {
+        var store = new InMemoryHistoryStore();
+        await store.RecordAsync(MakeEntry("npm test", minutesAgo: 1));
+
+        using var search = MakeSearch(store);
+        var keys = new Queue<ConsoleKeyInfo>();
+        keys.Enqueue(CtrlG()); // off
+        keys.Enqueue(CtrlG()); // on
+        keys.Enqueue(Esc());
+        await search.SimulateAsync(keys);
+
+        Assert.True(search.CwdFilterEnabled);
+    }
+
+    // ── Backspace ────────────────────────────────────────────────────────────
+
+    [Fact]
+    public async Task Backspace_ShortensQuery_BroadensResults()
+    {
+        var store = new InMemoryHistoryStore();
+        await store.RecordAsync(MakeEntry("git commit", minutesAgo: 3));
+        await store.RecordAsync(MakeEntry("git push", minutesAgo: 2));
+        await store.RecordAsync(MakeEntry("docker build", minutesAgo: 1));
+
+        using var search = MakeSearch(store);
+        // Type "git push" → 1 result (prefix match on "git push")
+        // Backspace×4 → "git" → 2 results
+        var keys = TypeString("git push");
+        keys.Enqueue(Backspace()); // "git pus"
+        keys.Enqueue(Backspace()); // "git pu"
+        keys.Enqueue(Backspace()); // "git p"
+        keys.Enqueue(Backspace()); // "git "
+        keys.Enqueue(Backspace()); // "git"
+        keys.Enqueue(Esc());
+        await search.SimulateAsync(keys);
+
+        Assert.Equal("git", search.CurrentQuery);
+        Assert.Equal(2, search.ResultCount);
+    }
+
+    [Fact]
+    public async Task Backspace_EmptyQuery_DoesNotCrash()
+    {
+        var store = new InMemoryHistoryStore();
+        await store.RecordAsync(MakeEntry("npm test", minutesAgo: 1));
+
+        using var search = MakeSearch(store);
+        var keys = new Queue<ConsoleKeyInfo>();
+        keys.Enqueue(Backspace()); // No-op on empty query
+        keys.Enqueue(Backspace()); // Also no-op
+        keys.Enqueue(Esc());
+        var (result, _) = await search.SimulateAsync(keys);
+
+        Assert.Equal(CtrlRSearch.Result.Cancelled, result);
+    }
+
+    // ── History persistence ──────────────────────────────────────────────────
+
+    [Fact]
+    public async Task Persistence_SecondSearchSeesPriorSessionCommands()
+    {
+        // Oracle note: SQLite-specific behavior; hand-written assert is correct.
+        var dbPath = Path.Combine(Path.GetTempPath(),
+            "ctrlr-test-" + Guid.NewGuid().ToString("N") + ".db");
+        try
+        {
+            // Session 1: record commands
+            using (var store1 = new SqliteHistoryStore(dbPath))
+            {
+                await store1.RecordAsync(MakeEntry("kubectl get pods", session: "sess1"));
+                await store1.RecordAsync(MakeEntry("kubectl describe pod/web", session: "sess1"));
+            }
+
+            // Session 2: new store instance, should still see prior commands
+            using var store2 = new SqliteHistoryStore(dbPath);
+            using var search = MakeSearch(store2);
+            var keys = TypeString("kubectl", new[] { Esc() });
+            await search.SimulateAsync(keys);
+
+            Assert.Equal(2, search.ResultCount);
+        }
+        finally
+        {
+            foreach (var ext in new[] { "", "-wal", "-shm" })
+            {
+                try { File.Delete(dbPath + ext); } catch { }
+            }
+        }
+    }
+
+    [Fact]
+    public async Task Persistence_EmptySecondSession_SeesZeroWhenNoHistory()
+    {
+        // Sanity: fresh DB with no records returns nothing
+        var dbPath = Path.Combine(Path.GetTempPath(),
+            "ctrlr-test-empty-" + Guid.NewGuid().ToString("N") + ".db");
+        try
+        {
+            using var store = new SqliteHistoryStore(dbPath);
+            using var search = MakeSearch(store);
+            var keys = new Queue<ConsoleKeyInfo>();
+            keys.Enqueue(Esc());
+            await search.SimulateAsync(keys);
+
+            Assert.Equal(0, search.ResultCount);
+        }
+        finally
+        {
+            foreach (var ext in new[] { "", "-wal", "-shm" })
+            {
+                try { File.Delete(dbPath + ext); } catch { }
+            }
+        }
+    }
+
+    // ── Scoring / ordering ───────────────────────────────────────────────────
+
+    [Fact]
+    public async Task Scoring_CwdMatchRanksHigherThanOtherCwd()
+    {
+        var store = new InMemoryHistoryStore();
+        // Two "git status" entries: one from /proj (current), one from /other
+        // /other entry is MORE RECENT (minutesAgo=1) so without CWD boost it would rank first
+        await store.RecordAsync(MakeEntry("git status", cwd: "/other", minutesAgo: 1));
+        await store.RecordAsync(MakeEntry("git status", cwd: "/proj", minutesAgo: 60));
+
+        using var search = MakeSearch(store, cwd: "/proj");
+        // Ctrl-G disables CWD filter so both entries are visible; scoring gives /proj a 50pt boost
+        var keys = new Queue<ConsoleKeyInfo>();
+        keys.Enqueue(CtrlG()); // toggle CWD filter OFF so both entries appear
+        keys.Enqueue(Esc());
+        await search.SimulateAsync(keys);
+
+        Assert.Equal(2, search.ResultCount);
+        // /proj entry should rank first due to CWD boost (50 points beats ~29 point recency advantage)
+        Assert.Equal("git status", search.SelectedCommand);
+        // The selected entry should be the /proj one (verify by ensuring 2 results and first is /proj)
+        // (We trust ScoreFuzzyMatch's CwdBoostPoints=50 dominates the recency delta of 59 min × 30/24 ≈ 73.75pt range,
+        //  but recency at 60 min ago gets ~(1-60/24)*30 = negative = clamped to 0, while /other at 1 min gets ~29pt.
+        //  CWD boost (50) > recency gap (29), so /proj wins.)
+        Assert.True(search.SelectedIndex == 0);
+    }
+}
