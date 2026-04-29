@@ -1,17 +1,3 @@
 {
-  "claims": {
-    "wRnISqoLacks": {
-      "runner_instance_id": "beagle-ab2-8080",
-      "runner_email": "andybrummer@standardbeagle.com",
-      "claimed_at": "2026-04-29T05:30:00Z",
-      "agent_id": "beagle-ab2-8080",
-      "parent_loop_id": "ZWOeKvV8VdlE",
-      "purpose": "Complete prompt rendering task - ExpandPS1 overload + integration tests",
-      "source_event": {
-        "loop_id": "ZWOeKvV8VdlE",
-        "task_id": "wRnISqoLacks",
-        "conversation_id": null
-      }
-    }
-  }
+  "claims": {}
 }
