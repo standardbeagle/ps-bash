@@ -3,7 +3,7 @@ using System.Threading.Channels;
 
 namespace PsBash.Core.Runtime;
 
-public sealed class PwshWorker : IAsyncDisposable
+public sealed class PwshWorker : IWorker
 {
     private readonly Process _process;
     private readonly StreamWriter _stdin;
@@ -311,6 +311,7 @@ public sealed class PwshWorker : IAsyncDisposable
         string pwshCommand,
         CancellationToken ct = default)
     {
+        ObjectDisposedException.ThrowIf(_disposed != 0, this);
         var timeout = GetTimeout();
         using var timeoutCts = new CancellationTokenSource(timeout);
         using var linked = CancellationTokenSource.CreateLinkedTokenSource(ct, timeoutCts.Token);
@@ -355,6 +356,7 @@ public sealed class PwshWorker : IAsyncDisposable
         string pwshExpression,
         CancellationToken ct = default)
     {
+        ObjectDisposedException.ThrowIf(_disposed != 0, this);
         var timeout = TimeSpan.FromSeconds(5);
         using var timeoutCts = new CancellationTokenSource(timeout);
         using var linked = CancellationTokenSource.CreateLinkedTokenSource(ct, timeoutCts.Token);

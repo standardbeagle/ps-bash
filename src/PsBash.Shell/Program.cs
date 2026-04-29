@@ -49,6 +49,20 @@ catch (PwshNotFoundException ex)
     return 127;
 }
 
+// Factory delegate that produces a fresh IWorker. Centralizing creation here
+// (rather than calling PwshWorker.StartAsync directly at every site) is the
+// architecture seam from migration task T01: future workers (e.g. an
+// in-process runspace impl) plug in by swapping this factory.
+Func<Task<IWorker>> workerFactory = async () =>
+{
+    var modulePath = Environment.GetEnvironmentVariable("PSBASH_MODULE")
+        ?? ModuleExtractor.ExtractEmbedded();
+    return await PwshWorker.StartAsync(
+        pwshPath,
+        workerScriptPath: Environment.GetEnvironmentVariable("PSBASH_WORKER"),
+        modulePath: modulePath);
+};
+
 // M3: file-arg mode — ps-bash script.sh [arg1 arg2 ...]
 // Check before stdin detection: a script path argument takes priority over
 // stdin redirection so `ps-bash script.sh < /dev/null` does not enter stdin mode.
@@ -62,13 +76,7 @@ if (shellArgs.ScriptPath is not null)
 
     if (shellArgs.ScriptPath.EndsWith(".ps1", StringComparison.OrdinalIgnoreCase))
     {
-        var ps1ModulePath = Environment.GetEnvironmentVariable("PSBASH_MODULE")
-            ?? ModuleExtractor.ExtractEmbedded();
-
-        await using var ps1Worker = await PwshWorker.StartAsync(
-            pwshPath,
-            workerScriptPath: Environment.GetEnvironmentVariable("PSBASH_WORKER"),
-            modulePath: ps1ModulePath);
+        await using IWorker ps1Worker = await workerFactory();
 
         var ps1Preamble = BuildPositionalPreamble(shellArgs.ScriptPath, shellArgs.ScriptArgs);
         var escapedPath = shellArgs.ScriptPath.Replace("'", "''");
@@ -89,13 +97,7 @@ if (shellArgs.ScriptPath is not null)
         return 2;
     }
 
-    var scriptModulePath = Environment.GetEnvironmentVariable("PSBASH_MODULE")
-        ?? ModuleExtractor.ExtractEmbedded();
-
-    await using var scriptWorker = await PwshWorker.StartAsync(
-        pwshPath,
-        workerScriptPath: Environment.GetEnvironmentVariable("PSBASH_WORKER"),
-        modulePath: scriptModulePath);
+    await using IWorker scriptWorker = await workerFactory();
 
     var preamble = BuildPositionalPreamble(shellArgs.ScriptPath, shellArgs.ScriptArgs);
     return await scriptWorker.ExecuteAsync(preamble + pwshScriptCommand);
@@ -154,13 +156,7 @@ if (debug)
     Console.Error.WriteLine($"[ps-bash] pwsh:       {pwshPath}");
 }
 
-var modulePath = Environment.GetEnvironmentVariable("PSBASH_MODULE")
-    ?? ModuleExtractor.ExtractEmbedded();
-
-await using var worker = await PwshWorker.StartAsync(
-    pwshPath,
-    workerScriptPath: Environment.GetEnvironmentVariable("PSBASH_WORKER"),
-    modulePath: modulePath);
+await using IWorker worker = await workerFactory();
 
 var exitCode = await worker.ExecuteAsync(pwshCommand);
 

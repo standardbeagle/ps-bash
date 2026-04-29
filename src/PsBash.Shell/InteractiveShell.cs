@@ -453,7 +453,7 @@ EnsureConsoleInputRestored();
         return null;
     }
 
-    private static async Task SyncWorkerCwdAsync(PwshWorker worker)
+    private static async Task SyncWorkerCwdAsync(IWorker worker)
     {
         try
         {
@@ -468,7 +468,7 @@ EnsureConsoleInputRestored();
         catch (Exception) { /* routine: cwd may have been removed underneath us */ }
     }
 
-    private static async Task RunPromptCommandAsync(PwshWorker worker)
+    private static async Task RunPromptCommandAsync(IWorker worker)
     {
         try
         {
@@ -515,7 +515,7 @@ EnsureConsoleInputRestored();
         catch (Exception) { /* routine: cd target inaccessible; shell continues */ }
     }
 
-    private static async Task<string> BuildPromptAsync(PwshWorker worker)
+    private static async Task<string> BuildPromptAsync(IWorker worker)
     {
         // Check if user has set PS1
         var ps1 = await GetPS1Async(worker);
@@ -573,7 +573,7 @@ EnsureConsoleInputRestored();
         return sb.ToString();
     }
 
-    private static async Task<string?> GetPS1Async(PwshWorker worker)
+    private static async Task<string?> GetPS1Async(IWorker worker)
     {
         try
         {
@@ -750,7 +750,7 @@ EnsureConsoleInputRestored();
         return true;
     }
 
-    private static async Task<string?> ReadInputAsync(PwshWorker worker)
+    private static async Task<string?> ReadInputAsync(IWorker worker)
     {
         var prompt = await BuildPromptAsync(worker);
         var line = _lineEditor is not null
@@ -904,7 +904,7 @@ EnsureConsoleInputRestored();
         }
     }
 
-    private static async Task SourceRcFileAsync(PwshWorker worker, CancellationTokenSource cts)
+    private static async Task SourceRcFileAsync(IWorker worker, CancellationTokenSource cts)
     {
         // PSBASH_HOME overrides the home directory used to locate .psbashrc.
         // This is used by tests to isolate the rc file without touching the real
@@ -1167,7 +1167,7 @@ EnsureConsoleInputRestored();
         return sb.ToString();
     }
 
-    private static async Task<PwshWorker> StartWorkerAsync(string pwshPath)
+    private static async Task<IWorker> StartWorkerAsync(string pwshPath)
     {
         var modulePath = Environment.GetEnvironmentVariable("PSBASH_MODULE")
             ?? ModuleExtractor.ExtractEmbedded();
@@ -1178,7 +1178,7 @@ EnsureConsoleInputRestored();
             modulePath: modulePath);
     }
 
-    private static async Task<PwshWorker> EnsureWorkerAsync(PwshWorker worker, string pwshPath)
+    private static async Task<IWorker> EnsureWorkerAsync(IWorker worker, string pwshPath)
     {
         if (worker.HasExited)
         {
@@ -1189,7 +1189,7 @@ EnsureConsoleInputRestored();
         return worker;
     }
 
-    private static async ValueTask DisposeWorkerAsync(PwshWorker worker)
+    private static async ValueTask DisposeWorkerAsync(IWorker worker)
     {
         try { await worker.DisposeAsync(); }
         catch (Exception) { /* routine: worker may already be dead on shutdown */ }
