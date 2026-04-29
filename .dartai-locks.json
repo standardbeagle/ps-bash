@@ -1,15 +1,15 @@
 {
   "claims": {
-    "0SirRcY7bYYk": {
+    "j0hzkc4TJGyE": {
       "runner_instance_id": "beagle-ab2-44416",
       "runner_email": "andybrummer@standardbeagle.com",
-      "claimed_at": "2026-04-29T20:50:00Z",
+      "claimed_at": "2026-04-29T21:20:00Z",
       "agent_id": "beagle-ab2-44416",
       "parent_loop_id": "dqdK4HkyW4X4",
-      "purpose": "T06: IpcWorker — launcher-side client (AOT-safe)",
+      "purpose": "T07: Launcher dispatch — connect, spawn, fallback",
       "source_event": {
         "loop_id": "dqdK4HkyW4X4",
-        "task_id": "0SirRcY7bYYk",
+        "task_id": "j0hzkc4TJGyE",
         "conversation_id": null
       }
     },
