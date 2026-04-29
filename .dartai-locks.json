@@ -1,18 +1,5 @@
 {
   "claims": {
-    "RWF17PoToCEp": {
-      "runner_instance_id": "beagle-ab2-44416",
-      "runner_email": "andybrummer@standardbeagle.com",
-      "claimed_at": "2026-04-29T20:17:00Z",
-      "agent_id": "beagle-ab2-44416",
-      "parent_loop_id": "dqdK4HkyW4X4",
-      "purpose": "T04: Wire protocol — mode header + sentinel framing reused",
-      "source_event": {
-        "loop_id": "dqdK4HkyW4X4",
-        "task_id": "RWF17PoToCEp",
-        "conversation_id": null
-      }
-    },
     "j4AyslpyiWs7": {
       "runner_instance_id": "beagle-ab2-main",
       "runner_email": "andybrummer@standardbeagle.com",

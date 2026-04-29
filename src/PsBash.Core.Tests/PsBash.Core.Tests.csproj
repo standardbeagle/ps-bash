@@ -26,4 +26,8 @@
     <ProjectReference Include="..\PsBash.Core\PsBash.Core.csproj" />
   </ItemGroup>
 
+  <ItemGroup>
+    <None Include="fixtures\**\*" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
 </Project>

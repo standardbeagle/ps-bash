@@ -117,12 +117,24 @@ public sealed class HostLockFile
         var entry = Read();
         try
         {
+            // Use a short internal probe timeout so a non-responding endpoint is
+            // detected quickly without blocking the caller for the full CT duration.
+            // Linked to ct so an explicit caller cancellation still propagates.
+            using var probeCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            probeCts.CancelAfter(TimeSpan.FromMilliseconds(500));
+
             await using var probe = entry.Scheme == "unix"
                 ? (IIpcTransport)new UnixSocketTransport(entry.Endpoint)
                 : new NamedPipeTransport(entry.Endpoint);
-            using var stream = await probe.ConnectAsync(ct);
+            using var stream = await probe.ConnectAsync(probeCts.Token);
             // Connection accepted — host is alive. Leave the file in place.
             return entry;
+        }
+        catch (OperationCanceledException) when (!ct.IsCancellationRequested)
+        {
+            // Probe timed out (500 ms) — no host responding on the endpoint.
+            Delete();
+            throw new SocketException((int)SocketError.TimedOut);
         }
         catch (SocketException)
         {

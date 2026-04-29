@@ -1,0 +1,3 @@
+MODE:Command
+echo hello
+<<<END>>>
