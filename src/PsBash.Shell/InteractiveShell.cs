@@ -218,6 +218,13 @@ public static class InteractiveShell
         if (cmdName is null)
             return false;
 
+        if (cmdName is "cls" or "clear" or "reset")
+        {
+            Console.Clear();
+            exitCode = 0;
+            return true;
+        }
+
         if (PsEmitter.IsKnownCommand(cmdName))
             return false;
 
