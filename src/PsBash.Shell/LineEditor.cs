@@ -442,8 +442,9 @@ internal sealed class LineEditor
                 return;
             }
 
-            // Determine base (text before the token) and token
-            (_completionBase, _completionToken) = SplitAtWordBoundary(_buf.ToString(), _cursor);
+            // Determine base (text before the token) and token — use quote-aware split
+            // so that completing inside a quoted string ("my fi → "my file") works.
+            (_completionBase, _completionToken) = TabCompleter.SplitAtWordBoundaryQuoteAware(_buf.ToString(), _cursor);
 
             if (_completions.Count == 1)
             {
@@ -472,9 +473,26 @@ internal sealed class LineEditor
         var addSpace = suffix.Length == 0
             && !completion.EndsWith('/')
             && !completion.EndsWith(Path.DirectorySeparatorChar);
-        var newBuf = _completionBase + completion + (addSpace ? " " : "") + suffix;
+
+        // If the completion base ends with an open double-quote, we are completing
+        // inside a quoted argument. Wrap the completion in quotes so spaces in the
+        // path are handled correctly.
+        var isInsideQuote = _completionBase.Length > 0 && _completionBase[^1] == '"';
+        string insertedCompletion;
+        if (isInsideQuote && completion.Contains(' '))
+        {
+            // Close the quote after the completion, no trailing space (shell adds it).
+            insertedCompletion = completion + "\"";
+            addSpace = false;
+        }
+        else
+        {
+            insertedCompletion = completion;
+        }
+
+        var newBuf = _completionBase + insertedCompletion + (addSpace ? " " : "") + suffix;
         SetBuffer(newBuf);
-        _cursor = (_completionBase + completion + (addSpace ? " " : "")).Length;
+        _cursor = (_completionBase + insertedCompletion + (addSpace ? " " : "")).Length;
         Redraw();
     }
 

@@ -33,10 +33,18 @@ internal static class TabCompleter
         string? lastCommand,
         IHistoryStore? historyStore)
     {
-        var (_, token) = LineEditor.SplitAtWordBoundary(line, cursor);
+        var (_, token) = SplitAtWordBoundaryQuoteAware(line, cursor);
         var (_, firstToken) = SplitFirstToken(line, cursor);
 
         bool isFirstWord = IsFirstWord(line, cursor);
+
+        // Special case: token starts with "$(" — inside a command substitution.
+        // Strip the "$(" and treat the rest as a command-name prefix.
+        if (token.StartsWith("$(", StringComparison.Ordinal))
+        {
+            var innerToken = token[2..];
+            return CompleteCommand(innerToken, aliases, cwd);
+        }
 
         if (isFirstWord)
         {
@@ -54,8 +62,12 @@ internal static class TabCompleter
             return CompleteCommand(token, aliases, cwd);
         }
 
+        // Check if cursor is immediately after a redirect operator (>, <, >>)
+        // In that case, do path completion regardless of token content.
+        bool afterRedirect = IsAfterRedirectOp(line, cursor);
+
         // Check if current token starts with '-' (flag completion)
-        if (token.Length > 0 && token[0] == '-')
+        if (!afterRedirect && token.Length > 0 && token[0] == '-')
         {
             var commandName = GetCommandNameAtCursor(line, cursor, aliases);
             if (commandName is not null)
@@ -362,35 +374,161 @@ internal static class TabCompleter
     {
         var before = cursor <= line.Length ? line[..cursor] : line;
         // Check if there's any non-whitespace before the current token
-        var (_, token) = LineEditor.SplitAtWordBoundary(line, cursor);
-        var beforeToken = before[..^token.Length];
-        // Trim separators: spaces, semicolons, pipes, &
+        var (_, token) = SplitAtWordBoundaryQuoteAware(line, cursor);
+        var beforeToken = before.Length >= token.Length
+            ? before[..^token.Length]
+            : before;
+        // Trim leading whitespace
         var trimmed = beforeToken.TrimStart();
-        // Skip any leading env var assignments (FOO=bar cmd)
+
+        // Walk through the text before the current token. Any command separator
+        // (|, ||, &&, ;, &, or $( ) resets the "is first word" context.
         var i = 0;
+        bool isFirst = true;
         while (i < trimmed.Length)
         {
             // Skip whitespace
             while (i < trimmed.Length && trimmed[i] == ' ') i++;
-            // Check if this word is a FOO=bar assignment
-            var wordEnd = i;
-            while (wordEnd < trimmed.Length
-                   && trimmed[wordEnd] != ' '
-                   && trimmed[wordEnd] != ';'
-                   && trimmed[wordEnd] != '|'
-                   && trimmed[wordEnd] != '&') wordEnd++;
+            if (i >= trimmed.Length) break;
 
-            if (wordEnd == i) break;
-            var word = trimmed[i..wordEnd];
-            if (word.Contains('='))
+            // Check for two-character operators first: ||, &&, $(
+            if (i + 1 < trimmed.Length)
             {
-                i = wordEnd;
+                var two = trimmed.Substring(i, 2);
+                if (two is "||" or "&&")
+                {
+                    i += 2;
+                    isFirst = true;
+                    continue;
+                }
+                if (two == "$(")
+                {
+                    i += 2;
+                    isFirst = true;
+                    continue;
+                }
+            }
+
+            // Single-character separators that start a new command: | ; &
+            if (trimmed[i] is '|' or ';' or '&')
+            {
+                i++;
+                isFirst = true;
                 continue;
             }
-            // Non-assignment word found — we are NOT the first command word
-            return false;
+
+            // Redirect operators > < >> — consume them and their target (path arg), reset isFirst=false
+            if (trimmed[i] is '>' or '<')
+            {
+                // Skip the operator (and optional second char for >>)
+                i++;
+                if (i < trimmed.Length && trimmed[i] == '>') i++;
+                // Skip whitespace
+                while (i < trimmed.Length && trimmed[i] == ' ') i++;
+                // Skip the redirect target word
+                while (i < trimmed.Length && trimmed[i] != ' ' && trimmed[i] != ';' && trimmed[i] != '|') i++;
+                // After a redirect target, we're still in the same command context
+                continue;
+            }
+
+            // Collect a word
+            var wordStart = i;
+            while (i < trimmed.Length
+                   && trimmed[i] != ' '
+                   && trimmed[i] != ';'
+                   && trimmed[i] != '|'
+                   && trimmed[i] != '&'
+                   && trimmed[i] != '>'
+                   && trimmed[i] != '<') i++;
+
+            if (i == wordStart) { i++; continue; }
+            var word = trimmed[wordStart..i];
+
+            if (isFirst && word.Contains('='))
+            {
+                // env-var assignment prefix: still first-word context for command
+                continue;
+            }
+
+            // A real command word was found — subsequent words are args
+            isFirst = false;
         }
-        return true;
+
+        return isFirst;
+    }
+
+    /// <summary>
+    /// Returns true when the cursor is positioned right after a redirect operator
+    /// (&gt;, &lt;, &gt;&gt;) and optional whitespace — meaning the current token
+    /// is a redirect target and should always use path completion.
+    /// </summary>
+    private static bool IsAfterRedirectOp(string line, int cursor)
+    {
+        var before = cursor <= line.Length ? line[..cursor] : line;
+        var (_, token) = SplitAtWordBoundaryQuoteAware(line, cursor);
+        var beforeToken = before.Length >= token.Length
+            ? before[..^token.Length].TrimEnd()
+            : before.TrimEnd();
+
+        if (beforeToken.Length == 0) return false;
+
+        // Check if beforeToken ends with > or < (possibly preceded by another >)
+        var last = beforeToken[^1];
+        if (last is '>' or '<') return true;
+        if (last == '>' && beforeToken.Length >= 2 && beforeToken[^2] == '>') return true;
+
+        return false;
+    }
+
+    /// <summary>
+    /// Split at word boundary, respecting quotes. For a quoted token like
+    /// <c>cat "my fi</c>, the token is <c>my fi</c> (inside the open quote),
+    /// and the base is <c>cat "</c>.
+    /// </summary>
+    internal static (string Base, string Token) SplitAtWordBoundaryQuoteAware(string line, int cursor)
+    {
+        var before = cursor <= line.Length ? line[..cursor] : line;
+
+        // Scan forward to identify last unquoted whitespace boundary.
+        // Track open quotes so spaces inside quotes don't act as separators.
+        int tokenStart = 0;
+        bool sq = false, dq = false;
+        for (int j = 0; j < before.Length; j++)
+        {
+            char c = before[j];
+            if (sq)
+            {
+                if (c == '\'') sq = false;
+                continue;
+            }
+            if (dq)
+            {
+                if (c == '\\' && j + 1 < before.Length) { j++; continue; }
+                if (c == '"') dq = false;
+                continue;
+            }
+            if (c == '\'') { sq = true; continue; }
+            if (c == '"') { dq = true; continue; }
+            if (c == ' ' || c == '\t')
+            {
+                tokenStart = j + 1;
+            }
+        }
+
+        // The raw token includes the opening quote if present.
+        var rawToken = before[tokenStart..];
+
+        // If the token starts with a quote character, include that quote in the
+        // base (so completion restoration rebuilds the quoted form correctly) and
+        // return only the bare content as the token that path-completion works on.
+        if (rawToken.Length > 0 && rawToken[0] is '"' or '\'')
+        {
+            // base = everything up to and including the open quote
+            // token = bare content after the open quote
+            return (before[..(tokenStart + 1)], rawToken[1..]);
+        }
+
+        return (before[..tokenStart], rawToken);
     }
 
     private static (string Line, string FirstToken) SplitFirstToken(string line, int cursor)

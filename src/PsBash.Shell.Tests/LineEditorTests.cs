@@ -397,3 +397,218 @@ public class TabCompleterTests : IDisposable
         Assert.True(results.Count > 1);
     }
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// TabCompleter — context-aware completions (Directive 3 failure axes)
+// ─────────────────────────────────────────────────────────────────────────────
+
+public class TabCompleterContextTests : IDisposable
+{
+    private readonly string _tmpDir;
+    private readonly Dictionary<string, string> _noAliases = new(StringComparer.Ordinal);
+
+    public TabCompleterContextTests()
+    {
+        _tmpDir = Path.Combine(Path.GetTempPath(), "psbash-tabctx-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(_tmpDir);
+    }
+
+    public void Dispose()
+    {
+        try { Directory.Delete(_tmpDir, recursive: true); } catch { }
+    }
+
+    // ── Case 8: Completion inside quotes — spaces handled ────────────────────
+
+    [Fact]
+    public void QuoteAware_Split_InsideDoubleQuote_TokenStripsOpenQuote()
+    {
+        // "cat "my fi" — cursor at 10 (after "fi")
+        var line = "cat \"my fi";
+        var (b, t) = TabCompleter.SplitAtWordBoundaryQuoteAware(line, line.Length);
+        // Base should include the open quote, token should be the bare path part
+        Assert.Equal("cat \"", b);
+        Assert.Equal("my fi", t);
+    }
+
+    [Fact]
+    public void QuoteAware_Split_NoQuote_BehavesLikeRegularSplit()
+    {
+        var line = "cat myfi";
+        var (b, t) = TabCompleter.SplitAtWordBoundaryQuoteAware(line, line.Length);
+        Assert.Equal("cat ", b);
+        Assert.Equal("myfi", t);
+    }
+
+    [Fact]
+    public void CompletePath_InsideDoubleQuote_CompletesPathWithSpace()
+    {
+        // Create a file whose name contains a space
+        var fileName = "my file.txt";
+        File.WriteAllText(Path.Combine(_tmpDir, fileName), "");
+
+        // Simulate: cat "my fi  (cursor at end, inside open double quote)
+        var line = $"cat \"my f";
+        var results = TabCompleter.Complete(line, line.Length, _noAliases, _tmpDir);
+
+        // Should find "my file.txt" as a candidate
+        Assert.Contains(fileName, results);
+    }
+
+    [Fact]
+    public void CompletePath_FilesWithoutSpaces_WorksNormally()
+    {
+        File.WriteAllText(Path.Combine(_tmpDir, "normal.txt"), "");
+
+        var results = TabCompleter.Complete("cat norm", 8, _noAliases, _tmpDir);
+        Assert.Contains("normal.txt", results);
+    }
+
+    // ── Case 9: Context-aware after | ────────────────────────────────────────
+
+    [Fact]
+    public void CompleteCommand_AfterPipe_IsFirstWordContext()
+    {
+        // "ls | ec" — after the pipe, "ec" should trigger command completion
+        var results = TabCompleter.Complete("ls | ec", 7, _noAliases, _tmpDir);
+        // Should suggest "echo" as a command (not path completion)
+        Assert.Contains("echo", results);
+    }
+
+    [Fact]
+    public void CompleteCommand_AfterPipe_EmptyToken_ReturnsCommands()
+    {
+        // "ls | " — cursor right after the pipe+space, empty token
+        var results = TabCompleter.Complete("ls | ", 5, _noAliases, _tmpDir);
+        Assert.Contains("echo", results);
+        Assert.Contains("grep", results);
+    }
+
+    [Fact]
+    public void CompleteCommand_AfterPipePipe_IsFirstWordContext()
+    {
+        // "cmd1 || ec" — after ||, "ec" is a command name
+        var results = TabCompleter.Complete("cmd1 || ec", 10, _noAliases, _tmpDir);
+        Assert.Contains("echo", results);
+    }
+
+    [Fact]
+    public void CompleteCommand_AfterAndAnd_IsFirstWordContext()
+    {
+        // "cmd1 && ec" — after &&, "ec" is a command name
+        var results = TabCompleter.Complete("cmd1 && ec", 10, _noAliases, _tmpDir);
+        Assert.Contains("echo", results);
+    }
+
+    [Fact]
+    public void CompleteCommand_AfterSemicolon_IsFirstWordContext()
+    {
+        // "cmd1; ec" — after ;, "ec" is a command name
+        var results = TabCompleter.Complete("cmd1; ec", 8, _noAliases, _tmpDir);
+        Assert.Contains("echo", results);
+    }
+
+    // ── Case 9: Context-aware after > and < ──────────────────────────────────
+
+    [Fact]
+    public void CompletePath_AfterRedirectOut_IsPathCompletion()
+    {
+        File.WriteAllText(Path.Combine(_tmpDir, "output.log"), "");
+        // "cmd > outp" — cursor at end, should path-complete "output.log"
+        var line = $"cmd > outp";
+        var results = TabCompleter.Complete(line, line.Length, _noAliases, _tmpDir);
+        Assert.Contains("output.log", results);
+    }
+
+    [Fact]
+    public void CompletePath_AfterRedirectIn_IsPathCompletion()
+    {
+        File.WriteAllText(Path.Combine(_tmpDir, "input.txt"), "");
+        // "cat < inpu" — should path-complete "input.txt"
+        var line = "cat < inpu";
+        var results = TabCompleter.Complete(line, line.Length, _noAliases, _tmpDir);
+        Assert.Contains("input.txt", results);
+    }
+
+    [Fact]
+    public void CompletePath_AfterRedirectAppend_IsPathCompletion()
+    {
+        File.WriteAllText(Path.Combine(_tmpDir, "append.log"), "");
+        // "echo hello >> appen" — should path-complete "append.log"
+        var line = "echo hello >> appen";
+        var results = TabCompleter.Complete(line, line.Length, _noAliases, _tmpDir);
+        Assert.Contains("append.log", results);
+    }
+
+    // ── Case 9: Context-aware after $( ───────────────────────────────────────
+
+    [Fact]
+    public void CompleteCommand_AfterCommandSub_IsFirstWordContext()
+    {
+        // "echo $(ec" — inside $(), "ec" should trigger command completion
+        var results = TabCompleter.Complete("echo $(ec", 9, _noAliases, _tmpDir);
+        Assert.Contains("echo", results);
+    }
+
+    // ── SplitAtWordBoundaryQuoteAware — edge cases ────────────────────────────
+
+    [Fact]
+    public void QuoteAware_Split_EmptyLine_BothEmpty()
+    {
+        var (b, t) = TabCompleter.SplitAtWordBoundaryQuoteAware("", 0);
+        Assert.Equal("", b);
+        Assert.Equal("", t);
+    }
+
+    [Fact]
+    public void QuoteAware_Split_SpaceAfterWord_EmptyToken()
+    {
+        var (b, t) = TabCompleter.SplitAtWordBoundaryQuoteAware("ls ", 3);
+        Assert.Equal("ls ", b);
+        Assert.Equal("", t);
+    }
+
+    [Fact]
+    public void QuoteAware_Split_QuotedWordWithSpaces_TokenHasNoBoundaryAtSpace()
+    {
+        // cat "my path/to — the space inside the quote shouldn't split
+        var line = "cat \"my path/to";
+        var (b, t) = TabCompleter.SplitAtWordBoundaryQuoteAware(line, line.Length);
+        Assert.Equal("cat \"", b);
+        Assert.Equal("my path/to", t);
+    }
+
+    // ── Negative / failure axes (Directive 7) ────────────────────────────────
+
+    [Fact]
+    public void CompleteCommand_EmptyInput_DoesNotThrow()
+    {
+        var ex = Record.Exception(() => TabCompleter.Complete("", 0, _noAliases, _tmpDir));
+        Assert.Null(ex);
+    }
+
+    [Fact]
+    public void CompletePath_NonexistentCwd_ReturnsEmpty()
+    {
+        var results = TabCompleter.Complete("cat f", 5, _noAliases, "/nonexistent/path/xyz");
+        // Should not throw; returns empty for missing directory
+        Assert.Empty(results);
+    }
+
+    [Fact]
+    public void CompletePath_CursorBeyondLine_DoesNotThrow()
+    {
+        // cursor > line.Length
+        var ex = Record.Exception(() => TabCompleter.Complete("cat f", 100, _noAliases, _tmpDir));
+        Assert.Null(ex);
+    }
+
+    [Fact]
+    public void CompleteFlags_NegativeFlag_DoesNotReturnPathsForKnownCommands()
+    {
+        // "ls -" with a known command should return flags, not paths
+        var results = TabCompleter.Complete("ls -", 4, _noAliases, _tmpDir);
+        // All results should be flags (start with -)
+        Assert.All(results, r => Assert.StartsWith("-", r));
+    }
+}
