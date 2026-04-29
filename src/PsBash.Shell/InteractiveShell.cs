@@ -1169,13 +1169,11 @@ EnsureConsoleInputRestored();
 
     private static async Task<IWorker> StartWorkerAsync(string pwshPath)
     {
-        var modulePath = Environment.GetEnvironmentVariable("PSBASH_MODULE")
-            ?? ModuleExtractor.ExtractEmbedded();
-
-        return await PwshWorker.StartAsync(
-            pwshPath,
-            workerScriptPath: Environment.GetEnvironmentVariable("PSBASH_WORKER"),
-            modulePath: modulePath);
+        // Interactive mode (M4) routes through WorkerFactory but pins to
+        // PwshWorker via forcePwsh:true. The host-backed interactive bridge is
+        // T08a/T08b — until that lands, REPL state (history sync, prompt
+        // command, cwd tracking) lives in the in-process worker.
+        return await WorkerFactory.CreateAsync(pwshPath, forcePwsh: true);
     }
 
     private static async Task<IWorker> EnsureWorkerAsync(IWorker worker, string pwshPath)

@@ -51,17 +51,12 @@ catch (PwshNotFoundException ex)
 
 // Factory delegate that produces a fresh IWorker. Centralizing creation here
 // (rather than calling PwshWorker.StartAsync directly at every site) is the
-// architecture seam from migration task T01: future workers (e.g. an
-// in-process runspace impl) plug in by swapping this factory.
+// architecture seam from migration task T01: T07 routes -c, stdin, and script
+// modes through WorkerFactory so out-of-process IpcWorker and in-process
+// PwshWorker can be swapped without per-site changes. Interactive mode (M4)
+// stays on PwshWorker until T08a/T08b lands the interactive handoff bridge.
 Func<Task<IWorker>> workerFactory = async () =>
-{
-    var modulePath = Environment.GetEnvironmentVariable("PSBASH_MODULE")
-        ?? ModuleExtractor.ExtractEmbedded();
-    return await PwshWorker.StartAsync(
-        pwshPath,
-        workerScriptPath: Environment.GetEnvironmentVariable("PSBASH_WORKER"),
-        modulePath: modulePath);
-};
+    await WorkerFactory.CreateAsync(pwshPath).ConfigureAwait(false);
 
 // M3: file-arg mode — ps-bash script.sh [arg1 arg2 ...]
 // Check before stdin detection: a script path argument takes priority over
