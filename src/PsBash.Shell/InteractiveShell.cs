@@ -588,11 +588,18 @@ EnsureConsoleInputRestored();
         }
     }
 
-    private static string ExpandPS1(string ps1)
+    internal static string ExpandPS1(string ps1)
+        => ExpandPS1(ps1, _lastDir, _homeDir);
+
+    /// <summary>
+    /// Expands PS1 escape sequences using the supplied cwd and homeDir values.
+    /// The overload without those parameters is the runtime entry point (uses static state).
+    /// This overload is for unit testing.
+    /// </summary>
+    internal static string ExpandPS1(string ps1, string cwd, string homeDir)
     {
-        var cwd = _lastDir;
-        if (cwd.StartsWith(_homeDir))
-            cwd = "~" + cwd[_homeDir.Length..];
+        if (cwd.StartsWith(homeDir))
+            cwd = "~" + cwd[homeDir.Length..];
 
         var user = Environment.UserName;
         var host = Environment.MachineName.ToLowerInvariant();
@@ -665,12 +672,12 @@ EnsureConsoleInputRestored();
                         i += 2;
                         continue;
                     case '[':
-                        // Begin non-printing chars (for ANSI escape handling)
-                        // Find closing ]
-                        var closeIdx = ps1.IndexOf('\\', i + 2);
-                        if (closeIdx > 0 && closeIdx + 1 < ps1.Length && ps1[closeIdx + 1] == ']')
+                        // Begin non-printing chars (for ANSI escape handling) \[ ... \]
+                        // Search for the two-character sequence \] to close the span.
+                        var closeIdx = ps1.IndexOf(@"\]", i + 2, StringComparison.Ordinal);
+                        if (closeIdx >= 0)
                         {
-                            // Skip the content between \[ and \]
+                            // Skip the \[ marker plus all content up to and including \]
                             i = closeIdx + 2;
                             continue;
                         }
