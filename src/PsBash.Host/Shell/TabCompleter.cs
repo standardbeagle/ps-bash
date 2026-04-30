@@ -1,6 +1,6 @@
 using PsBash.Core.Parser;
 
-namespace PsBash.Shell;
+namespace PsBash.Host.Shell;
 
 /// <summary>
 /// Provides tab completions for the interactive shell.

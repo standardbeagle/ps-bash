@@ -2,7 +2,7 @@ using System.Net.Sockets;
 using System.Runtime.InteropServices;
 using PsBash.Core.Runtime;
 using PsBash.Core.Runtime.Ipc;
-using PsBash.Shell;
+using PsBash.Host;
 using Xunit;
 
 namespace PsBash.Shell.Tests;

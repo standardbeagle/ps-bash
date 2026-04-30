@@ -1,4 +1,4 @@
-namespace PsBash.Shell;
+namespace PsBash.Host.Shell;
 
 /// <summary>
 /// A command suggestion based on sequence pattern analysis.

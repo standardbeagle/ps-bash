@@ -1,4 +1,4 @@
-namespace PsBash.Shell;
+namespace PsBash.Host.Shell;
 
 /// <summary>
 /// Fish-style autosuggestion provider using history prefix search.

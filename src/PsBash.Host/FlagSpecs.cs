@@ -2,7 +2,7 @@ using System.Reflection;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 
-namespace PsBash.Shell;
+namespace PsBash.Host;
 
 /// <summary>
 /// Provides command flag specifications for tab completion.
@@ -28,7 +28,7 @@ public static class FlagSpecs
     private static Dictionary<string, FlagSpec[]> Load()
     {
         var assembly = Assembly.GetExecutingAssembly();
-        var resourceName = "PsBash.Shell.Resources.FlagSpecs.json";
+        var resourceName = "PsBash.Host.Resources.FlagSpecs.json";
 
         using var stream = assembly.GetManifestResourceStream(resourceName);
         if (stream is null)

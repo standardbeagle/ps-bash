@@ -1,5 +1,5 @@
 using Xunit;
-using PsBash.Shell;
+using PsBash.Host.Shell;
 
 namespace PsBash.Shell.Tests;
 

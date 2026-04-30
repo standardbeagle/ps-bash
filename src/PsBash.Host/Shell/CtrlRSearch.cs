@@ -1,7 +1,7 @@
 using System.Text;
 using System.Runtime.InteropServices;
 
-namespace PsBash.Shell;
+namespace PsBash.Host.Shell;
 
 /// <summary>
 /// Full-screen Ctrl-R reverse-i-search UI with fuzzy matching and metadata display.

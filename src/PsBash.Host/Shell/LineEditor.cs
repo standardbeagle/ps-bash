@@ -1,6 +1,6 @@
 using System.Text;
 
-namespace PsBash.Shell;
+namespace PsBash.Host.Shell;
 
 /// <summary>
 /// VT100 line editor: emacs keybindings, persistent history, tab completion.

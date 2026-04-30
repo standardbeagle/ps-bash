@@ -1,7 +1,7 @@
 using System.Diagnostics;
 using PsBash.Core.Runtime;
 using PsBash.Core.Transpiler;
-using PsBash.Shell;
+using PsBash.Host.Shell;
 using Xunit;
 
 namespace PsBash.Escalation.Tests;

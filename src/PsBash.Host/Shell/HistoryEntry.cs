@@ -1,4 +1,4 @@
-namespace PsBash.Shell;
+namespace PsBash.Host.Shell;
 
 /// <summary>
 /// A single command execution record with full metadata.

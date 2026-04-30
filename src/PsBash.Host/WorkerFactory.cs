@@ -2,7 +2,7 @@ using System.Runtime.InteropServices;
 using PsBash.Core.Runtime;
 using PsBash.Core.Runtime.Ipc;
 
-namespace PsBash.Shell;
+namespace PsBash.Host;
 
 /// <summary>
 /// Centralized <see cref="IWorker"/> selection for the launcher (T07). Decides

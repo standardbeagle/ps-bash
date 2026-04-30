@@ -1,4 +1,4 @@
-namespace PsBash.Shell;
+namespace PsBash.Host.Shell;
 
 /// <summary>
 /// A pluggable command history store with async I/O support.

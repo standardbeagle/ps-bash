@@ -6,7 +6,7 @@ using PsBash.Core.Parser.Ast;
 using PsBash.Core.Runtime;
 using PsBash.Core.Transpiler;
 
-namespace PsBash.Shell;
+namespace PsBash.Host.Shell;
 
 public static class InteractiveShell
 {

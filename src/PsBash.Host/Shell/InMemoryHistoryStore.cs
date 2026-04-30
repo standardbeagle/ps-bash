@@ -1,4 +1,4 @@
-namespace PsBash.Shell;
+namespace PsBash.Host.Shell;
 
 /// <summary>
 /// In-memory history store for testing. Not thread-safe for concurrent writes.

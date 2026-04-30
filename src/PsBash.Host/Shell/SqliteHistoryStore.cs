@@ -1,6 +1,6 @@
 using Microsoft.Data.Sqlite;
 
-namespace PsBash.Shell;
+namespace PsBash.Host.Shell;
 
 /// <summary>
 /// SQLite-backed history store with WAL journaling and automatic schema management.

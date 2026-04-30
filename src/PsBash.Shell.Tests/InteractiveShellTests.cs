@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using PsBash.Core.Runtime;
+using PsBash.Host.Shell;
 using Xunit;
 
 namespace PsBash.Shell.Tests;

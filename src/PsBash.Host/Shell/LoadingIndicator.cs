@@ -1,6 +1,6 @@
 using System.Diagnostics;
 
-namespace PsBash.Shell;
+namespace PsBash.Host.Shell;
 
 // Immediate, reassuring status output during shell startup. Writes to stderr so
 // it never pollutes a piped stdout. Shows:

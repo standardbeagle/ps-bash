@@ -1,6 +1,8 @@
 using PsBash.Core.Parser;
 using PsBash.Core.Runtime;
 using PsBash.Core.Transpiler;
+using PsBash.Host;
+using PsBash.Host.Shell;
 using PsBash.Shell;
 
 
