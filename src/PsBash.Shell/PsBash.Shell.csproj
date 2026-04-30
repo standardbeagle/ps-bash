@@ -21,5 +21,25 @@
     <ProjectReference Include="..\PsBash.Host\PsBash.Host.csproj" />
   </ItemGroup>
 
+  <!-- Copy Host's full output (DLLs + platform runtimes) so ps-bash-host
+       can load its NuGet assemblies when launched from this output directory. -->
+  <Target Name="CopyHostRuntimeAssets" AfterTargets="Build">
+    <PropertyGroup>
+      <_HostOutDir>$(MSBuildThisFileDirectory)..\PsBash.Host\bin\$(Configuration)\$(TargetFramework)\</_HostOutDir>
+    </PropertyGroup>
+    <ItemGroup>
+      <!-- Top-level DLLs (Newtonsoft.Json, PS cmdlets, etc.) -->
+      <_HostDlls Include="$(_HostOutDir)*.dll"
+                 Exclude="$(_HostOutDir)ps-bash-host.dll;$(_HostOutDir)PsBash.*.dll" />
+      <!-- Platform-specific runtime assets -->
+      <_HostRuntimeFiles Include="$(_HostOutDir)runtimes\**\*" />
+    </ItemGroup>
+    <Copy SourceFiles="@(_HostDlls)"
+          DestinationFolder="$(OutDir)"
+          SkipUnchangedFiles="true" />
+    <Copy SourceFiles="@(_HostRuntimeFiles)"
+          DestinationFiles="@(_HostRuntimeFiles->'$(OutDir)runtimes\%(RecursiveDir)%(Filename)%(Extension)')"
+          SkipUnchangedFiles="true" />
+  </Target>
 
 </Project>

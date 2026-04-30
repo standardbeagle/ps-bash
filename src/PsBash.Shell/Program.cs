@@ -118,6 +118,26 @@ if (shellArgs.ReadFromStdin || (!shellArgs.Interactive && shellArgs.Command is n
 
 if (shellArgs.Interactive || shellArgs.Command is null)
 {
+    // Prefer delegating the tty to the host process so Console.Clear /
+    // Console.WindowWidth / VT processing work against the real terminal.
+    var hostBinary = WorkerFactory.ResolveHostBinary();
+    if (hostBinary is not null && File.Exists(hostBinary))
+    {
+        var psi = new System.Diagnostics.ProcessStartInfo(hostBinary)
+        {
+            UseShellExecute = false,
+            // No stdio redirection — host inherits the real tty.
+        };
+        psi.ArgumentList.Add("--interactive");
+        psi.ArgumentList.Add($"--launcher-pid={Environment.ProcessId}");
+        if (shellArgs.NoProfile) psi.ArgumentList.Add("--no-profile");
+
+        using var hostProc = System.Diagnostics.Process.Start(psi)!;
+        await hostProc.WaitForExitAsync();
+        return hostProc.ExitCode;
+    }
+
+    // Fallback: host binary not found — run REPL in-process (legacy path).
     return await InteractiveShell.RunAsync(pwshPath, shellArgs.NoProfile);
 }
 

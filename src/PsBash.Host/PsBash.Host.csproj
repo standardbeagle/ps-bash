@@ -17,9 +17,8 @@
     <ProjectReference Include="..\PsBash.Core\PsBash.Core.csproj" />
   </ItemGroup>
   <ItemGroup>
-    <PackageReference Include="System.Management.Automation" Version="7.4.*">
+    <PackageReference Include="Microsoft.PowerShell.SDK" Version="7.4.*">
       <PrivateAssets>all</PrivateAssets>
-      <ExcludeAssets>runtime</ExcludeAssets>
     </PackageReference>
     <PackageReference Include="Microsoft.Data.Sqlite" Version="9.*" />
   </ItemGroup>

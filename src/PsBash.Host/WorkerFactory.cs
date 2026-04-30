@@ -83,7 +83,7 @@ public static class WorkerFactory
     /// asked for a path that doesn't exist" from "no host installed"), or the
     /// side-by-side host binary when it exists, or null otherwise.
     /// </summary>
-    internal static string? ResolveHostBinary()
+    public static string? ResolveHostBinary()
     {
         var overridePath = Environment.GetEnvironmentVariable("PSBASH_HOST");
         if (!string.IsNullOrEmpty(overridePath)) return overridePath;

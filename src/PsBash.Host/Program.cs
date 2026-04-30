@@ -1,6 +1,7 @@
 using PsBash.Core.Runtime.Ipc;
 using PsBash.Host.Runtime;
 using PsBash.Host.Server;
+using PsBash.Host.Shell;
 
 namespace PsBash.Host;
 
@@ -8,6 +9,20 @@ internal sealed class Program
 {
     static async Task<int> Main(string[] args)
     {
+        // Interactive mode: host owns the tty; run the REPL directly.
+        if (args.Contains("--interactive"))
+        {
+            var noProfile = args.Contains("--no-profile");
+            int? iLauncherPid = GetArgInt(args, "--launcher-pid");
+
+            using var iCts = new CancellationTokenSource();
+            Console.CancelKeyPress += (_, e) => { e.Cancel = true; iCts.Cancel(); };
+            using var iDeathWatcher = ParentDeathWatcher.TryCreate(iLauncherPid, iCts);
+
+            await using var interactiveWorker = SdkWorker.Create();
+            return await InteractiveShell.RunAsync(interactiveWorker, noProfile);
+        }
+
         var sessionId = GetArg(args, "--session-id") ?? Environment.GetEnvironmentVariable("PSBASH_SESSION_ID") ?? "default";
 
         using var cts = new CancellationTokenSource();

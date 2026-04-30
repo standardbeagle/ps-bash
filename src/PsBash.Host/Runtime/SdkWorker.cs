@@ -98,6 +98,18 @@ public sealed class SdkWorker : IWorker
         {
             return 130; // Convention: pipeline stopped (analogous to SIGINT exit code)
         }
+        catch (System.Management.Automation.ParseException ex)
+        {
+            Console.Error.WriteLine($"ps-bash: parse error: {ex.Message}");
+            _ps.Commands.Clear();
+            return 1;
+        }
+        catch (System.Management.Automation.RuntimeException ex)
+        {
+            Console.Error.WriteLine($"ps-bash: {ex.Message}");
+            _ps.Commands.Clear();
+            return 1;
+        }
 
         foreach (var r in results)
         {

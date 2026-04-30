@@ -24,26 +24,45 @@ public static class InteractiveShell
     private static string _sessionId = Guid.NewGuid().ToString();
     private static string? _lastCommand;
 
-    public static async Task<int> RunAsync(string pwshPath, bool noProfile = false)
+    /// <summary>
+    /// Run the interactive REPL using an externally-provided worker (host mode).
+    /// The caller owns the worker lifetime; this method will not dispose or
+    /// respawn it. Ctrl+C cancels the in-flight PS pipeline (via SdkWorker.Stop)
+    /// but keeps the worker alive for the next prompt.
+    /// </summary>
+    public static Task<int> RunAsync(IWorker worker, bool noProfile = false)
+        => RunCoreAsync(pwshPath: null, externalWorker: worker, noProfile: noProfile);
+
+    /// <summary>Run the interactive REPL, creating and managing a PwshWorker internally.</summary>
+    public static Task<int> RunAsync(string pwshPath, bool noProfile = false)
+        => RunCoreAsync(pwshPath: pwshPath, externalWorker: null, noProfile: noProfile);
+
+    private static async Task<int> RunCoreAsync(string? pwshPath, IWorker? externalWorker, bool noProfile)
     {
         Console.CancelKeyPress += OnCancelKeyPress;
         EnsureVirtualTerminalEnabled();
 
         using var loading = LoadingIndicator.Start("Loading ps-bash");
 
-        if (!noProfile)
+        if (!noProfile && pwshPath is not null)
         {
             loading.Update("Loading PowerShell profile");
             MergeProfilePath(pwshPath);
         }
 
-        loading.Update("Starting PowerShell worker");
         var cts = new CancellationTokenSource();
-        // Expose the startup cts so Ctrl+C during the loading phase (worker
-        // start, rc sourcing) cancels the in-flight operation instead of being
-        // silently dropped.
         _currentCts = cts;
-        var worker = await StartWorkerAsync(pwshPath);
+
+        IWorker worker;
+        if (externalWorker is not null)
+        {
+            worker = externalWorker;
+        }
+        else
+        {
+            loading.Update("Starting PowerShell worker");
+            worker = await StartWorkerAsync(pwshPath!);
+        }
 
         // Initialize history store. PSBASH_HOME overrides the home directory used to
         // locate the history DB so that tests can isolate history to a temp directory
@@ -72,7 +91,7 @@ public static class InteractiveShell
         {
             try
             {
-                worker = await EnsureWorkerAsync(worker, pwshPath);
+                worker = await EnsureWorkerAsync(worker, pwshPath, externalWorker is not null);
                 cts.Dispose();
                 cts = new CancellationTokenSource();
                 _currentCts = cts;
@@ -81,7 +100,7 @@ public static class InteractiveShell
                 if (input is null)
                 {
                     Console.WriteLine();
-                    await DisposeWorkerAsync(worker);
+                    if (externalWorker is null) await DisposeWorkerAsync(worker);
                     if (_historyStore is IDisposable disposable)
                         disposable.Dispose();
                     return 0;
@@ -93,7 +112,7 @@ public static class InteractiveShell
 
                 if (IsExitCommand(trimmed, out var exitCode))
                 {
-                    await DisposeWorkerAsync(worker);
+                    if (externalWorker is null) await DisposeWorkerAsync(worker);
                     if (_historyStore is IDisposable disposable)
                         disposable.Dispose();
                     return exitCode;
@@ -148,8 +167,13 @@ public static class InteractiveShell
                     Console.Error.WriteLine("^C");
                     stopwatch.Stop();
                     exitCodeResult = null;
-                    await DisposeWorkerAsync(worker);
-                    worker = await StartWorkerAsync(pwshPath);
+                    if (externalWorker is null)
+                    {
+                        // PwshWorker: process is wedged after cancellation; dispose and respawn.
+                        await DisposeWorkerAsync(worker);
+                        worker = await StartWorkerAsync(pwshPath!);
+                    }
+                    // SdkWorker: _ps.Stop() already fired via ct.Register; runspace still alive.
                 }
                 finally
                 {
@@ -159,11 +183,17 @@ public static class InteractiveShell
             }
             catch (IOException)
             {
-                // Worker stdin/stdout pipe closed (process exited/crashed).
-                // Dispose the dead worker and respawn transparently.
+                if (externalWorker is not null)
+                {
+                    // In-host mode: we don't own the worker; surface the error and exit.
+                    Console.Error.WriteLine("[ps-bash] worker connection lost; exiting.");
+                    if (_historyStore is IDisposable d) d.Dispose();
+                    return 1;
+                }
+                // PwshWorker: process pipe closed; dispose and respawn transparently.
                 Console.Error.WriteLine("[ps-bash] worker connection lost; respawning...");
                 try { await DisposeWorkerAsync(worker); } catch { }
-                worker = await StartWorkerAsync(pwshPath);
+                worker = await StartWorkerAsync(pwshPath!);
             }
             catch (Exception ex)
             {
@@ -1176,10 +1206,12 @@ EnsureConsoleInputRestored();
         return await WorkerFactory.CreateAsync(pwshPath, forcePwsh: true);
     }
 
-    private static async Task<IWorker> EnsureWorkerAsync(IWorker worker, string pwshPath)
+    private static async Task<IWorker> EnsureWorkerAsync(IWorker worker, string? pwshPath, bool externalWorker = false)
     {
         if (worker.HasExited)
         {
+            if (externalWorker || pwshPath is null)
+                throw new IOException("external worker exited unexpectedly");
             try { await worker.DisposeAsync(); } catch { }
             Console.Error.WriteLine("[ps-bash] worker died; respawning...");
             return await StartWorkerAsync(pwshPath);
