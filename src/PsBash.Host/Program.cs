@@ -17,8 +17,14 @@ internal sealed class Program
 
         IIpcTransport transport = CreateTransport(sessionId, args);
 
+        var idleTimeout = IdleShutdown.DefaultTimeout;
+        using var idle = new IdleShutdown(cts, idleTimeout);
+
+        int? launcherPid = GetArgInt(args, "--launcher-pid");
+        using var deathWatcher = ParentDeathWatcher.TryCreate(launcherPid, cts);
+
         var lockFile = HostLockFile.ForSession(sessionId);
-        await using var server = new HostServer(transport, worker);
+        await using var server = new HostServer(transport, worker, idle);
 
         try
         {
@@ -59,5 +65,11 @@ internal sealed class Program
         for (int i = 0; i < args.Length - 1; i++)
             if (args[i] == name) return args[i + 1];
         return null;
+    }
+
+    private static int? GetArgInt(string[] args, string name)
+    {
+        var val = GetArg(args, name);
+        return int.TryParse(val, out var n) ? n : null;
     }
 }

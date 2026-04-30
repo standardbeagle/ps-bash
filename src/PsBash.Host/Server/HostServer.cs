@@ -13,13 +13,15 @@ public sealed class HostServer : IAsyncDisposable
 {
     private readonly IIpcTransport _transport;
     private readonly SdkWorker _worker;
+    private readonly IdleShutdown? _idle;
     private readonly TaskCompletionSource _ready = new(TaskCreationOptions.RunContinuationsAsynchronously);
     private int _disposed;
 
-    public HostServer(IIpcTransport transport, SdkWorker worker)
+    public HostServer(IIpcTransport transport, SdkWorker worker, IdleShutdown? idle = null)
     {
         _transport = transport;
         _worker = worker;
+        _idle = idle;
     }
 
     /// <summary>Completes once <see cref="RunAsync"/> has called ListenAsync and is ready to accept.</summary>
@@ -53,6 +55,7 @@ public sealed class HostServer : IAsyncDisposable
 
     private async Task HandleConnectionAsync(Stream stream, CancellationToken ct)
     {
+        _idle?.ConnectionStarted();
         try
         {
             await using (stream)
@@ -64,6 +67,10 @@ public sealed class HostServer : IAsyncDisposable
         catch (Exception ex)
         {
             Log($"connection error: {ex.Message}");
+        }
+        finally
+        {
+            _idle?.ConnectionEnded();
         }
     }
 

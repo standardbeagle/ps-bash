@@ -72,6 +72,9 @@ public sealed class SdkWorker : IWorker
         await _lock.WaitAsync(ct);
         try
         {
+            // When ct fires mid-command (e.g. parent-death watcher), stop the PS
+            // pipeline so Invoke() returns instead of blocking indefinitely.
+            using var stopReg = ct.Register(() => _ps.Stop());
             return await Task.Run(() => RunCommand(command, output), ct);
         }
         finally
@@ -86,7 +89,15 @@ public sealed class SdkWorker : IWorker
         _ps.Streams.Error.Clear();
         _ps.AddScript(command);
 
-        var results = _ps.Invoke();
+        System.Collections.ObjectModel.Collection<System.Management.Automation.PSObject> results;
+        try
+        {
+            results = _ps.Invoke();
+        }
+        catch (System.Management.Automation.PipelineStoppedException)
+        {
+            return 130; // Convention: pipeline stopped (analogous to SIGINT exit code)
+        }
 
         foreach (var r in results)
         {
@@ -95,6 +106,8 @@ public sealed class SdkWorker : IWorker
             else Console.WriteLine(line);
         }
 
+        if (_ps.InvocationStateInfo.State == System.Management.Automation.PSInvocationState.Stopped)
+            return 130;
         return _ps.HadErrors ? 1 : 0;
     }
 
