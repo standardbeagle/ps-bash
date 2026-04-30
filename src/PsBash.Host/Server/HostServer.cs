@@ -8,19 +8,25 @@ namespace PsBash.Host.Server;
 /// Accept loop that owns an <see cref="IIpcTransport"/> and dispatches each
 /// incoming connection to a <see cref="Connection"/>. Exceptions at the
 /// connection boundary are swallowed so the host stays alive after bad requests.
+///
+/// Accepts a <c>Task&lt;SdkWorker&gt;</c> so the transport can start listening
+/// and write its lock file before the runspace finishes initializing. Connections
+/// that arrive while the runspace is still warming up are held at the worker's
+/// internal semaphore until the first <see cref="IWorker.ExecuteAsync"/> call
+/// can proceed.
 /// </summary>
 public sealed class HostServer : IAsyncDisposable
 {
     private readonly IIpcTransport _transport;
-    private readonly SdkWorker _worker;
+    private readonly Task<SdkWorker> _workerTask;
     private readonly IdleShutdown? _idle;
     private readonly TaskCompletionSource _ready = new(TaskCreationOptions.RunContinuationsAsynchronously);
     private int _disposed;
 
-    public HostServer(IIpcTransport transport, SdkWorker worker, IdleShutdown? idle = null)
+    public HostServer(IIpcTransport transport, Task<SdkWorker> workerTask, IdleShutdown? idle = null)
     {
         _transport = transport;
-        _worker = worker;
+        _workerTask = workerTask;
         _idle = idle;
     }
 
@@ -60,7 +66,10 @@ public sealed class HostServer : IAsyncDisposable
         {
             await using (stream)
             {
-                var conn = new Connection(stream, _worker);
+                // Await worker init before handling — callers connected early while
+                // the runspace was still loading will unblock here.
+                var worker = await _workerTask.ConfigureAwait(false);
+                var conn = new Connection(stream, worker);
                 await conn.HandleAsync(ct);
             }
         }

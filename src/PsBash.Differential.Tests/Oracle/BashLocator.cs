@@ -53,28 +53,21 @@ public sealed record BashHost(
 /// </summary>
 public static class BashLocator
 {
-    private static BashHost? _cached;
-    private static readonly object _lock = new();
+    // Started eagerly on class load so WSL has maximum warm-up time before
+    // the first test calls Find(). All callers share this single probe task.
+    private static Task<BashHost> _probeTask = Task.Run(Probe);
 
     /// <summary>
     /// Returns the best available bash host, probing once and caching the result.
     /// Thread-safe.
     /// </summary>
-    public static BashHost Find()
-    {
-        if (_cached is not null) return _cached;
-        lock (_lock)
-        {
-            _cached ??= Probe();
-            return _cached;
-        }
-    }
+    public static BashHost Find() => _probeTask.GetAwaiter().GetResult();
 
     /// <summary>
     /// Resets the cached result. Intended for tests that need to re-probe
     /// after modifying environment variables.
     /// </summary>
-    internal static void ResetCache() => _cached = null;
+    internal static void ResetCache() => _probeTask = Task.Run(Probe);
 
     private static BashHost Probe()
     {
@@ -97,14 +90,42 @@ public static class BashLocator
         }
 
         // 3. wsl.exe -e bash (Windows only)
+        // Check existence synchronously (instant), then fire a background warmup
+        // so WSL is already initialized before the first oracle test runs.
         if (OperatingSystem.IsWindows())
         {
-            var (version, locale) = QueryWslBash();
-            if (!string.IsNullOrEmpty(version))
-                return new BashHost(BashHostKind.Wsl, "wsl.exe", version, locale);
+            var wslExe = FindOnPath("wsl.exe") ?? @"C:\Windows\System32\wsl.exe";
+            if (File.Exists(wslExe))
+            {
+                // Warmup: boot WSL VM without blocking Find(). Tests pay cold-start
+                // only if they start before the warmup completes (~5-8s on first run).
+                _ = Task.Run(() => WarmupWsl(wslExe));
+                return new BashHost(BashHostKind.Wsl, "wsl.exe", "wsl", string.Empty);
+            }
         }
 
         return BashHost.None;
+    }
+
+    private static void WarmupWsl(string wslExe)
+    {
+        try
+        {
+            var psi = new ProcessStartInfo
+            {
+                FileName = wslExe,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                UseShellExecute = false,
+            };
+            psi.ArgumentList.Add("-e");
+            psi.ArgumentList.Add("bash");
+            psi.ArgumentList.Add("-c");
+            psi.ArgumentList.Add("exit 0");
+            using var proc = Process.Start(psi);
+            proc?.WaitForExit(15000);
+        }
+        catch { }
     }
 
     private static string? FindOnPath(string executable)
@@ -161,68 +182,6 @@ public static class BashLocator
                 var locale = lines.Length > 1 ? lines[1].Trim('\r').Trim() : string.Empty;
 
                 // Bash version strings start with digits; reject if empty or clearly wrong.
-                if (string.IsNullOrEmpty(version) || !char.IsDigit(version[0]))
-                    return (string.Empty, string.Empty);
-
-                return (version, locale);
-            }
-            finally
-            {
-                try { if (!proc.HasExited) proc.Kill(entireProcessTree: true); } catch { }
-            }
-        }
-        catch
-        {
-            return (string.Empty, string.Empty);
-        }
-    }
-
-    /// <summary>
-    /// Probes WSL bash via <c>wsl.exe -e bash -c 'echo $BASH_VERSION; echo ${LANG:-}'</c>.
-    /// </summary>
-    private static (string Version, string Locale) QueryWslBash()
-    {
-        var wslExe = FindOnPath("wsl.exe");
-        if (wslExe is null)
-        {
-            // Try default location
-            wslExe = @"C:\Windows\System32\wsl.exe";
-            if (!File.Exists(wslExe)) return (string.Empty, string.Empty);
-        }
-
-        try
-        {
-            var psi = new ProcessStartInfo
-            {
-                FileName = wslExe,
-                RedirectStandardOutput = true,
-                RedirectStandardError = true,
-                UseShellExecute = false,
-            };
-            psi.ArgumentList.Add("-e");
-            psi.ArgumentList.Add("bash");
-            psi.ArgumentList.Add("-c");
-            psi.ArgumentList.Add("echo $BASH_VERSION; echo ${LANG:-}");
-
-            using var proc = Process.Start(psi);
-            if (proc is null) return (string.Empty, string.Empty);
-
-            try
-            {
-                var stdoutTask = proc.StandardOutput.ReadToEndAsync();
-                proc.StandardError.BaseStream.CopyToAsync(Stream.Null);
-
-                if (!proc.WaitForExit(8000)) // WSL startup is slower
-                {
-                    try { proc.Kill(entireProcessTree: true); } catch { }
-                    return (string.Empty, string.Empty);
-                }
-
-                var output = stdoutTask.GetAwaiter().GetResult();
-                var lines = output.Split('\n', StringSplitOptions.None);
-                var version = lines.Length > 0 ? lines[0].Trim('\r').Trim() : string.Empty;
-                var locale = lines.Length > 1 ? lines[1].Trim('\r').Trim() : string.Empty;
-
                 if (string.IsNullOrEmpty(version) || !char.IsDigit(version[0]))
                     return (string.Empty, string.Empty);
 

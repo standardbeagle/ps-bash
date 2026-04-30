@@ -1,30 +1,12 @@
 {
   "claims": {
-    "j0hzkc4TJGyE": {
-      "runner_instance_id": "beagle-ab2-44416",
-      "runner_email": "andybrummer@standardbeagle.com",
-      "claimed_at": "2026-04-29T21:20:00Z",
-      "agent_id": "beagle-ab2-44416",
-      "parent_loop_id": "dqdK4HkyW4X4",
-      "purpose": "T07: Launcher dispatch — connect, spawn, fallback",
-      "source_event": {
-        "loop_id": "dqdK4HkyW4X4",
-        "task_id": "j0hzkc4TJGyE",
-        "conversation_id": null
-      }
-    },
-    "j4AyslpyiWs7": {
+    "QefrvLcpDU54": {
       "runner_instance_id": "beagle-ab2-main",
       "runner_email": "andybrummer@standardbeagle.com",
-      "claimed_at": "2026-04-29T06:30:00Z",
+      "claimed_at": "2026-04-29T23:00:00Z",
       "agent_id": "beagle-ab2-main",
       "parent_loop_id": "ZWOeKvV8VdlE",
-      "purpose": "T02: PsBash.Host project skeleton + SdkWorker",
-      "source_event": {
-        "loop_id": "ZWOeKvV8VdlE",
-        "task_id": "j4AyslpyiWs7",
-        "conversation_id": null
-      }
+      "purpose": "T05a: Host server accept loop + per-connection dispatcher"
     }
   }
 }

@@ -42,7 +42,6 @@ public class BashLocatorTests
     [Fact]
     public void BashLocator_Find_ReturnsCachedResultOnSecondCall()
     {
-        BashLocator.ResetCache();
         var first = BashLocator.Find();
         var second = BashLocator.Find();
         // Must be the same object (cached)
@@ -52,7 +51,6 @@ public class BashLocatorTests
     [Fact]
     public void BashLocator_Find_ReturnsValidHost()
     {
-        BashLocator.ResetCache();
         var host = BashLocator.Find();
 
         // Kind must be one of the enum values
@@ -73,7 +71,6 @@ public class BashLocatorTests
     public void BashLocator_Find_OnWindowsWithBashOnPath_ReturnsNativeOrWsl()
     {
         Skip.IfNot(OperatingSystem.IsWindows(), "Windows only");
-        BashLocator.ResetCache();
         var host = BashLocator.Find();
 
         // On this Windows dev machine, git-bash or WSL should provide bash.
@@ -90,7 +87,6 @@ public class BashLocatorTests
     public void BashLocator_Find_OnLinuxOrMac_ReturnsNative()
     {
         Skip.If(OperatingSystem.IsWindows(), "Non-Windows only");
-        BashLocator.ResetCache();
         var host = BashLocator.Find();
 
         // bash should always be available on Linux/Mac CI
@@ -145,7 +141,6 @@ public class BashLocatorTests
     [SkippableFact]
     public async Task BashLocator_Find_CanRunEchoHello()
     {
-        BashLocator.ResetCache();
         var host = BashLocator.Find();
         Skip.If(!host.IsAvailable, "oracle: no bash available");
 

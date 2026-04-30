@@ -26,4 +26,8 @@
     <ProjectReference Include="..\PsBash.Core\PsBash.Core.csproj" />
   </ItemGroup>
 
+  <ItemGroup>
+    <None Update="xunit.runner.json" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
 </Project>

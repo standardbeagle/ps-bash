@@ -13,7 +13,12 @@ namespace PsBash.Differential.Tests.Oracle;
 /// </summary>
 public sealed class BashOracleFixture
 {
-    public static readonly TimeSpan DefaultTimeout = TimeSpan.FromSeconds(5);
+    public static readonly TimeSpan DefaultTimeout = TimeSpan.FromSeconds(20);
+
+    // Limits concurrent bash (WSL) invocations so the WSL VM stays responsive
+    // under parallel test execution. Permit count of 2 allows meaningful
+    // parallelism while avoiding WSL overload (which causes timeouts > 5 s).
+    private static readonly SemaphoreSlim _bashConcurrency = new(2, 2);
 
     /// <summary>
     /// Path to the bash binary. Resolved once at construction.
@@ -105,18 +110,33 @@ public sealed class BashOracleFixture
         if (!host.IsAvailable)
             throw new InvalidOperationException("RunBothAsync called but no bash host is available. Check BashLocator.Find() before calling.");
 
-        // Build the bash PSI using BashLocator so WSL gets the correct -e bash -c args.
-        var bashPsi = BashLocator.BuildPsi(host, script)!;
-        if (env is not null)
-            foreach (var (k, v) in env)
-                bashPsi.Environment[k] = v;
+        // Throttle concurrent bash invocations to prevent WSL VM overload.
+        await _bashConcurrency.WaitAsync().ConfigureAwait(false);
+        try
+        {
+            // Build the bash PSI using BashLocator so WSL gets the correct -e bash -c args.
+            var bashPsi = BashLocator.BuildPsi(host, script)!;
+            if (env is not null)
+                foreach (var (k, v) in env)
+                    bashPsi.Environment[k] = v;
 
-        var bashTask = RunOnePsiAsync(bashPsi, effective);
-        var psBashTask = RunOneAsync(PsBashPath!, "-c", script, effective, env,
-            extraEnv: new Dictionary<string, string> { ["PSBASH_DEBUG"] = "1" });
+            var bashTask = RunOnePsiAsync(bashPsi, effective);
+            var psBashTask = RunOneAsync(PsBashPath!, "-c", script, effective, env,
+                extraEnv: new Dictionary<string, string>
+                {
+                    ["PSBASH_DEBUG"] = "1",
+                    // Skip host discovery: tests run -c one-shots; no persistent host is running,
+                    // and waiting for the 5 s spawn timeout per test inflates suite time ~5× .
+                    ["PSBASH_DISABLE_HOST"] = "1",
+                });
 
-        await Task.WhenAll(bashTask, psBashTask);
-        return (await bashTask, await psBashTask);
+            await Task.WhenAll(bashTask, psBashTask).ConfigureAwait(false);
+            return (await bashTask, await psBashTask);
+        }
+        finally
+        {
+            _bashConcurrency.Release();
+        }
     }
 
     /// <summary>

@@ -68,7 +68,12 @@ public static class WorkerFactory
         {
             var sessionId = ResolveSessionId();
             var lockFile = HostLockFile.ForSession(sessionId);
-            return await IpcWorker.StartAsync(lockFile, hostBinary, ct: ct).ConfigureAwait(false);
+            // spawnIfMissing: false — one-shot -c clients connect to an already-running
+            // host but never spawn one. Spawning takes >5 s (SDK runspace init) which
+            // is longer than the PwshWorker fallback startup, so there is no benefit.
+            // Interactive mode (forcePwsh: true) starts the host via --interactive flag
+            // which writes the lock file after transport is ready.
+            return await IpcWorker.StartAsync(lockFile, hostBinary, spawnIfMissing: false, ct: ct).ConfigureAwait(false);
         }
         catch (HostUnavailableException ex)
         {
@@ -101,11 +106,16 @@ public static class WorkerFactory
 
     private static async Task<IWorker> StartPwshAsync(string pwshPath)
     {
+        var workerScript = Environment.GetEnvironmentVariable("PSBASH_WORKER");
+        // Use the file-based path (psm1 cached on disk) — faster than the stdin
+        // base64 path because it avoids ~1s of base64 decode + in-memory parse.
+        // The worker script now also injects Assembly.LoadFrom(-CoreAsmPath) so
+        // BashTranspiler is available for Invoke-ProcessSubSource in both paths.
         var modulePath = Environment.GetEnvironmentVariable("PSBASH_MODULE")
             ?? ModuleExtractor.ExtractEmbedded();
         return await PwshWorker.StartAsync(
             pwshPath,
-            workerScriptPath: Environment.GetEnvironmentVariable("PSBASH_WORKER"),
+            workerScriptPath: workerScript,
             modulePath: modulePath).ConfigureAwait(false);
     }
 

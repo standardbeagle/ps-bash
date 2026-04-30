@@ -1413,9 +1413,21 @@ public static class PsEmitter
             }
 
             // source FILE / . FILE -> Invoke-BashSource FILE @args
+            // source <(cmd) / . <(cmd) -> Invoke-ProcessSubSource { transpiled_cmd }
+            // The process-substitution form captures the producer's stdout as bash text,
+            // transpiles it, and executes the result in the caller's scope (source semantics).
             else if ((cmd0 == "source" || cmd0 == ".") && cmd.Words.Length >= 2)
             {
-                specialResult = EmitPassthrough("Invoke-BashSource", cmd.Words.RemoveAt(0));
+                var fileArg = cmd.Words[1];
+                if (fileArg.Parts.Length == 1 && fileArg.Parts[0] is WordPart.ProcessSub procSub)
+                {
+                    string inner = Emit((Command)procSub.Body);
+                    specialResult = $"Invoke-ProcessSubSource {{ {inner} }}";
+                }
+                else
+                {
+                    specialResult = EmitPassthrough("Invoke-BashSource", cmd.Words.RemoveAt(0));
+                }
             }
 
             // Standalone mapped commands: rewrite through TryEmitMappedCommand.

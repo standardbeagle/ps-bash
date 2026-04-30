@@ -71,24 +71,24 @@ public sealed class IpcWorker : IWorker
 
     /// <summary>
     /// Resolve the host endpoint and ensure a host is reachable. Reads the
-    /// lock file (purging it if stale) and spawns <c>ps-bash-host</c> on
-    /// cache miss. Throws <see cref="HostUnavailableException"/> if the host
-    /// binary is missing or the spawn fails to advertise a lock file within
-    /// the startup timeout.
+    /// lock file (purging it if stale) and — when <paramref name="spawnIfMissing"/>
+    /// is true — spawns <c>ps-bash-host</c> on cache miss. Throws
+    /// <see cref="HostUnavailableException"/> if no host is reachable.
     /// </summary>
-    /// <param name="lockFile">Discovery lock file (typically built from
-    /// <see cref="HostLockFile.ForSession(string, string?)"/>).</param>
-    /// <param name="hostBinaryPath">Absolute path to <c>ps-bash-host</c> (or
-    /// <c>ps-bash-host.exe</c>) used when a spawn is needed.</param>
+    /// <param name="lockFile">Discovery lock file.</param>
+    /// <param name="hostBinaryPath">Absolute path to <c>ps-bash-host</c>.</param>
+    /// <param name="spawnIfMissing">When true, spawn the host if no lock file
+    /// exists. When false (the default for one-shot <c>-c</c> clients), fail
+    /// immediately if no running host is found — avoids the multi-second spawn
+    /// wait for commands that would not benefit from the host staying alive.</param>
     /// <param name="startupTimeout">How long to poll for the lock file after
-    /// spawning. Default 5 s. Honors <c>PSBASH_TIMEOUT</c> env var when
-    /// caller passes <see langword="null"/>.</param>
-    /// <param name="startupPollInterval">Interval between lock-file existence
-    /// checks. Default 50 ms.</param>
+    /// spawning. Default 5 s. Honors <c>PSBASH_TIMEOUT</c> env var.</param>
+    /// <param name="startupPollInterval">Interval between lock-file checks. Default 50 ms.</param>
     /// <param name="ct">Cancellation token.</param>
     public static async Task<IpcWorker> StartAsync(
         HostLockFile lockFile,
         string hostBinaryPath,
+        bool spawnIfMissing = false,
         TimeSpan? startupTimeout = null,
         TimeSpan? startupPollInterval = null,
         CancellationToken ct = default)
@@ -99,11 +99,11 @@ public sealed class IpcWorker : IWorker
         var timeout = startupTimeout ?? GetStartupTimeout();
         var poll = startupPollInterval ?? TimeSpan.FromMilliseconds(50);
         var worker = new IpcWorker(lockFile, hostBinaryPath, timeout, poll);
-        worker._entry = await worker.ResolveOrSpawnAsync(ct).ConfigureAwait(false);
+        worker._entry = await worker.ResolveOrSpawnAsync(spawnIfMissing, ct).ConfigureAwait(false);
         return worker;
     }
 
-    private async Task<HostLockEntry> ResolveOrSpawnAsync(CancellationToken ct)
+    private async Task<HostLockEntry> ResolveOrSpawnAsync(bool spawnIfMissing, CancellationToken ct)
     {
         // 1) Try the existing lock file. ReadOrPurgeAsync probes the endpoint
         //    and deletes the file if no listener answers within 500 ms. A
@@ -112,9 +112,17 @@ public sealed class IpcWorker : IWorker
         {
             return await _lockFile.ReadOrPurgeAsync(ct).ConfigureAwait(false);
         }
-        catch (FileNotFoundException) { /* no host advertised — spawn one */ }
-        catch (SocketException) { /* stale lock purged — spawn one */ }
-        catch (IOException) { /* lock file vanished mid-read — spawn one */ }
+        catch (FileNotFoundException) { /* no host advertised */ }
+        catch (SocketException) { /* stale lock purged */ }
+        catch (IOException) { /* lock file vanished mid-read */ }
+
+        // 2) If caller does not want to spawn (one-shot -c mode), fail fast.
+        //    Spawning costs >5 s and the one-shot caller would not benefit from
+        //    a persistent host that outlives the invocation.
+        if (!spawnIfMissing)
+            throw new HostUnavailableException(
+                "no running ps-bash-host found (lock file absent). " +
+                "Start ps-bash interactively to warm the host, or set PSBASH_DISABLE_HOST=1.");
 
         // 2) Spawn the host binary. Verify the binary exists first so the
         //    HostUnavailableException carries the right cause.

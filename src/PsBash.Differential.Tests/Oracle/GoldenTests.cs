@@ -10,7 +10,12 @@ namespace PsBash.Differential.Tests.Oracle;
 ///   UPDATE_GOLDENS=1 ./scripts/test.sh src/PsBash.Differential.Tests --filter Golden
 ///   ./scripts/test.sh src/PsBash.Differential.Tests --filter Golden
 /// </summary>
+/// <remarks>
+/// Sequential collection: these tests mutate the process-global UPDATE_GOLDENS
+/// environment variable and must not run in parallel with each other.
+/// </remarks>
 [Trait("Category", "Golden")]
+[Collection("GoldenTests-Sequential")]
 public class GoldenTests
 {
     // ── AssertOracle.GoldenAsync round-trip ───────────────────────────────────

@@ -1,5 +1,5 @@
 #Requires -Version 7.0
-param([string]$ModulePath = '', [int]$ParentPid = 0)
+param([string]$ModulePath = '', [int]$ParentPid = 0, [string]$CoreAsmPath = '')
 
 # Parent-death watcher: start BEFORE module import so a parent dying during
 # bootstrap (before <<<READY>>>) still causes us to exit. Uses a Runspace
@@ -21,6 +21,11 @@ if ($ParentPid -gt 0) {
     [void]$__watchPs.BeginInvoke()
 }
 
+# Inject PsBash.Core assembly so Invoke-ProcessSubSource can call BashTranspiler.
+if ($CoreAsmPath -and (Test-Path $CoreAsmPath)) {
+    try { [void][System.Reflection.Assembly]::LoadFrom($CoreAsmPath) } catch {}
+}
+
 # Load ps-bash module: explicit path > PSBASH_MODULE env > system ps-bash
 $resolvedModule = if ($ModulePath) { $ModulePath }
                   elseif ($env:PSBASH_MODULE) { $env:PSBASH_MODULE }
@@ -37,6 +42,9 @@ $global:__parentPid = $ParentPid
 $global:__BashErrexit = $false
 $global:__BashTrapEXIT = $null
 $global:__BashTrapERR = $null
+$global:BashFlags = ''
+$global:BashExitCode = 0
+$global:BashPositional = $null
 
 # Signal ready
 [Console]::Out.WriteLine("<<<READY>>>")

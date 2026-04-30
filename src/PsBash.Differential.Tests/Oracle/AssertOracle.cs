@@ -152,7 +152,8 @@ public static class AssertOracle
             Fixture.PsBashPath!,
             "-c",
             script,
-            timeout ?? BashOracleFixture.DefaultTimeout);
+            timeout ?? BashOracleFixture.DefaultTimeout,
+            extraEnv: new Dictionary<string, string> { ["PSBASH_DISABLE_HOST"] = "1" });
 
         var canonicalized = Canonicalizer.Canonicalize(
             StripDebugLines(psBashResult.Stdout));

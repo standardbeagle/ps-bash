@@ -129,6 +129,7 @@ public sealed class PwshWorker : IWorker
         else
         {
             var scriptPath = workerScriptPath ?? await ExtractWorkerScriptAsync(ct);
+            var coreAsmPath = typeof(PwshWorker).Assembly.Location ?? "";
             psi.ArgumentList.Add("-NoProfile");
             psi.ArgumentList.Add("-NonInteractive");
             psi.ArgumentList.Add("-File");
@@ -137,6 +138,13 @@ public sealed class PwshWorker : IWorker
             psi.ArgumentList.Add(modulePath ?? "");
             psi.ArgumentList.Add("-ParentPid");
             psi.ArgumentList.Add(Environment.ProcessId.ToString());
+            // Inject PsBash.Core assembly path so the worker script can load BashTranspiler
+            // for Invoke-ProcessSubSource — matches what the stdin init script already does.
+            if (!string.IsNullOrEmpty(coreAsmPath))
+            {
+                psi.ArgumentList.Add("-CoreAsmPath");
+                psi.ArgumentList.Add(coreAsmPath);
+            }
         }
 
         var process = Process.Start(psi)
@@ -188,6 +196,12 @@ public sealed class PwshWorker : IWorker
 
         var parentPid = Environment.ProcessId;
 
+        // Inject the PsBash.Core assembly path so the worker's pwsh subprocess can
+        // load [PsBash.Core.Transpiler.BashTranspiler] for Invoke-ProcessSubSource.
+        // This is a no-op in AOT single-file builds (Location is empty there) and
+        // in the SdkWorker (where PsBash.Core is already in the AppDomain).
+        var coreAsmPath = asm.Location?.Replace("'", "''") ?? "";
+
         // Build the init script: decode module, load in-memory, start worker loop
         return $$"""
             $ErrorActionPreference = 'Continue'
@@ -211,6 +225,9 @@ public sealed class PwshWorker : IWorker
                 }).AddArgument($__parentPid)
                 [void]$__watchPs.BeginInvoke()
             }
+            if ('{{coreAsmPath}}' -ne '') {
+                try { [void][System.Reflection.Assembly]::LoadFrom('{{coreAsmPath}}') } catch {}
+            }
             $moduleBytes = [System.Convert]::FromBase64String('{{moduleBase64}}')
             $moduleScript = [System.Text.Encoding]::UTF8.GetString($moduleBytes)
             New-Module -Name PsBash -ScriptBlock ([scriptblock]::Create($moduleScript)) -Function * -Alias * | Import-Module -Global -DisableNameChecking
@@ -222,6 +239,7 @@ public sealed class PwshWorker : IWorker
             $global:__BashTrapERR = $null
             $global:BashFlags = ''
             $global:BashExitCode = 0
+            $global:BashPositional = $null
             while ($true) {
                 if ($global:__parentPid -gt 0) {
                     try { $null = [System.Diagnostics.Process]::GetProcessById($global:__parentPid) }

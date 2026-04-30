@@ -28,7 +28,10 @@ internal sealed class Program
         using var cts = new CancellationTokenSource();
         Console.CancelKeyPress += (_, e) => { e.Cancel = true; cts.Cancel(); };
 
-        await using var worker = SdkWorker.Create();
+        // Start runspace init on a background thread — this is the slow part (~2-8 s).
+        // The transport starts listening and writes the lock file while the runspace
+        // warms up, so clients can connect immediately and queue work.
+        var workerTask = Task.Run(SdkWorker.Create);
 
         IIpcTransport transport = CreateTransport(sessionId, args);
 
@@ -39,11 +42,14 @@ internal sealed class Program
         using var deathWatcher = ParentDeathWatcher.TryCreate(launcherPid, cts);
 
         var lockFile = HostLockFile.ForSession(sessionId);
-        await using var server = new HostServer(transport, worker, idle);
+        await using var server = new HostServer(transport, workerTask, idle);
 
         try
         {
             var serverTask = server.RunAsync(cts.Token);
+            // Lock file written as soon as transport is listening — well before the
+            // runspace is ready. Clients that connect early are held at the worker
+            // semaphore inside HandleConnectionAsync.
             await server.WhenListening;
             lockFile.Write(transport, Environment.ProcessId);
             await serverTask;
@@ -51,6 +57,8 @@ internal sealed class Program
         finally
         {
             lockFile.Delete();
+            // Ensure background runspace init is awaited so exceptions surface cleanly.
+            try { var w = await workerTask; await w.DisposeAsync(); } catch { }
         }
 
         return 0;

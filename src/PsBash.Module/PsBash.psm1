@@ -2,6 +2,13 @@
 
 Set-StrictMode -Version Latest
 
+# Global state initialized here so strict-mode code can access these variables
+# before any bash function runs. Positional params are cleared by `set --` and
+# saved/restored by every emitted bash function that references $1..$9 / $@.
+if (-not (Get-Variable -Name BashPositional -Scope global -ErrorAction SilentlyContinue)) {
+    $global:BashPositional = $null
+}
+
 # --- Error Mode ---
 # Controls how errors are reported:
 #   'Bash'       — errors go to stderr via [Console]::Error, no PS error records,
@@ -78,6 +85,75 @@ function Invoke-ProcessSub {
         Remove-Item -Path $tmp -Force -ErrorAction SilentlyContinue
         throw
     }
+}
+
+# Source-capture variant: runs the producer scriptblock, collects its output
+# as bash text, transpiles it to PowerShell via BashTranspiler, and executes
+# the result in the caller's scope (source semantics). Used by the emitter for
+# 'source <(cmd)'.  Requires [PsBash.Core.Transpiler.BashTranspiler] to be
+# available in the AppDomain (true when running inside ps-bash-host or when
+# PsBash.Core.dll has been loaded via Add-Type by the worker init script).
+function Invoke-ProcessSubSource {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)]
+        [scriptblock]$Command
+    )
+    $output = & $Command
+    $sb = [System.Text.StringBuilder]::new()
+    foreach ($item in $output) {
+        [void]$sb.Append((Get-BashText -InputObject $item).TrimEnd("`r`n"))
+        [void]$sb.Append("`n")
+    }
+    $bashContent = $sb.ToString()
+    if ([string]::IsNullOrWhiteSpace($bashContent)) { return }
+    try {
+        $psCode = [PsBash.Core.Transpiler.BashTranspiler]::Transpile(
+            $bashContent,
+            [PsBash.Core.Transpiler.TranspileContext]::Eval)
+    } catch {
+        [Console]::Error.WriteLine("ps-bash: source <(...): transpile error: $_")
+        $global:LASTEXITCODE = 1
+        return
+    }
+    if (-not $psCode) { return }
+    # Promote function definitions to global scope so they persist after this
+    # function returns (bash source semantics: defined names survive in caller scope).
+    $psCode = $psCode -replace '\bfunction\s+(\w+)\b', 'function global:$1'
+    # Execute the transpiled PowerShell in the global scope so env vars and
+    # functions are visible to subsequent commands in the worker loop.
+    $PSCmdlet.InvokeCommand.InvokeScript($false, [scriptblock]::Create($psCode), $null, $null)
+}
+
+# String-capture variant: runs the producer scriptblock and returns its
+# combined bash text output as a single string. Useful for consumers that
+# need the raw bash text (e.g. eval <(...)).
+function Invoke-ProcessSubString {
+    [CmdletBinding()]
+    [OutputType([string])]
+    param(
+        [Parameter(Mandatory)]
+        [scriptblock]$Command
+    )
+    $output = & $Command
+    $sb = [System.Text.StringBuilder]::new()
+    foreach ($item in $output) {
+        [void]$sb.Append((Get-BashText -InputObject $item).TrimEnd("`r`n"))
+        [void]$sb.Append("`n")
+    }
+    return $sb.ToString().TrimEnd("`n")
+}
+
+# Pipeline-object variant: runs the producer scriptblock and yields its
+# output objects directly into the pipeline. Useful when the consumer is
+# a ps-bash mapped command that accepts pipeline objects (e.g. sort, uniq).
+function Invoke-ProcessSubPipeline {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)]
+        [scriptblock]$Command
+    )
+    & $Command
 }
 
 # --- Centralized File I/O Helpers ---
@@ -12532,7 +12608,7 @@ function Invoke-BashBash {
 $script:BashBgPids = [System.Collections.Generic.List[System.Diagnostics.Process]]::new()
 $global:BashBgLastPid = $null
 $global:BashStartTime = [DateTime]::UtcNow
-$__bashVer = if ($MyInvocation.MyCommand.Module) { $MyInvocation.MyCommand.Module.Version } else { [version]'0.8.0' }
+$__bashVer = try { $MyInvocation.MyCommand.Module?.Version ?? [version]'0.8.0' } catch { [version]'0.8.0' }
 $global:BashVersion = "$($__bashVer.Major).$($__bashVer.Minor).0(1)-release"
 $global:BashVersionInfo = @($__bashVer.Major, $__bashVer.Minor, 0, 1, 'release', "$($__bashVer.Major).$($__bashVer.Minor).0")
 # bash default shell flags: h (hash commands), B (brace expansion enabled)
