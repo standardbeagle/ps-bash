@@ -9,6 +9,16 @@ namespace PsBash.Host.Server;
 /// </summary>
 internal sealed class Connection
 {
+    // Prepended to every command to reset globals that accumulate across
+    // invocations on the shared runspace.  'set -e' emits __BashErrexit = true;
+    // positional params are set by BuildPositionalPreamble — both must be cleared
+    // between invocations so state from one -c call does not affect the next.
+    private const string PerInvocationReset =
+        "$global:__BashErrexit = $false; " +
+        "$ErrorActionPreference = 'Continue'; " +
+        "$global:BashPositional = $null; " +
+        "$global:BashPositional0 = $null; ";
+
     private readonly Stream _stream;
     private readonly SdkWorker _worker;
 
@@ -50,6 +60,11 @@ internal sealed class Connection
             await HostProtocol.WriteExitAsync(_stream, 0, ct);
             return;
         }
+
+        // Reset per-invocation state so globals set by one -c or script run
+        // (e.g. set -e → $global:__BashErrexit, positional params) do not
+        // leak into the next invocation on the shared SdkWorker runspace.
+        command = PerInvocationReset + command;
 
         void WriteOutput(string line)
         {

@@ -98,6 +98,14 @@ public sealed class SdkWorker : IWorker
         {
             return 130; // Convention: pipeline stopped (analogous to SIGINT exit code)
         }
+        catch (System.Management.Automation.ExitException ex)
+        {
+            // ExitException inherits RuntimeException — must be caught first to
+            // return the actual exit code instead of the generic error path (1).
+            // Argument is the object passed to 'exit'; default to 0 if null/non-int.
+            _ps.Commands.Clear();
+            return ex.Argument is int code ? code : 0;
+        }
         catch (System.Management.Automation.ParseException ex)
         {
             Console.Error.WriteLine($"ps-bash: parse error: {ex.Message}");
