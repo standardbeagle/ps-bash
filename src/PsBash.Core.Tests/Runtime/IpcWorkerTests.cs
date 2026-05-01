@@ -89,7 +89,7 @@ public class IpcWorkerTests
         try
         {
             await using var worker = await IpcWorker.StartAsync(
-                lockFile, "/nonexistent/ps-bash-host", TimeSpan.FromSeconds(2));
+                lockFile, "/nonexistent/ps-bash-host", startupTimeout: TimeSpan.FromSeconds(2));
 
             var outerLines = new List<string>();
             worker.OutputCallback = line => outerLines.Add(line);
@@ -175,7 +175,7 @@ public class IpcWorkerTests
         IpcWorker worker;
         try
         {
-            worker = await IpcWorker.StartAsync(lockFile, "/nonexistent", TimeSpan.FromSeconds(2));
+            worker = await IpcWorker.StartAsync(lockFile, "/nonexistent", startupTimeout: TimeSpan.FromSeconds(2));
         }
         finally
         {
@@ -205,7 +205,7 @@ public class IpcWorkerTests
         try
         {
             await using var worker = await IpcWorker.StartAsync(
-                lockFile, "/nonexistent", TimeSpan.FromSeconds(2));
+                lockFile, "/nonexistent", startupTimeout: TimeSpan.FromSeconds(2));
 
             var lines = new List<string>();
             worker.OutputCallback = line => lines.Add(line);
