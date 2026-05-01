@@ -25,7 +25,7 @@ public sealed class HostServerTests : IAsyncLifetime
         _worker = SdkWorker.Create();
         _pipeName = $"psbash-test-{Guid.NewGuid():N}";
         _serverTransport = new NamedPipeTransport(_pipeName);
-        _server = new HostServer(_serverTransport, _worker);
+        _server = new HostServer(_serverTransport, Task.FromResult(_worker));
         _cts = new CancellationTokenSource();
         _serverTask = _server.RunAsync(_cts.Token);
         await _server.WhenListening;

@@ -23,9 +23,12 @@ public sealed class SdkWorker : IWorker
 
     public bool HasExited => _disposed != 0;
 
+    private readonly ExitTrackingHost _host;
+
     private SdkWorker(SdkRunspace runspace)
     {
         _sdkRunspace = runspace;
+        _host = runspace.Host;
         _ps = PowerShell.Create();
         _ps.Runspace = runspace.Runspace;
     }
@@ -85,6 +88,7 @@ public sealed class SdkWorker : IWorker
 
     private int RunCommand(string command, Action<string>? output)
     {
+        _host.Reset();
         _ps.Commands.Clear();
         _ps.Streams.Error.Clear();
         _ps.AddScript(command);
@@ -100,11 +104,9 @@ public sealed class SdkWorker : IWorker
         }
         catch (System.Management.Automation.ExitException ex)
         {
-            // ExitException inherits RuntimeException — must be caught first to
-            // return the actual exit code instead of the generic error path (1).
-            // Argument is the object passed to 'exit'; default to 0 if null/non-int.
+            // Defensive: ExitException may be thrown in some PS SDK configurations.
             _ps.Commands.Clear();
-            return ex.Argument is int code ? code : 0;
+            return UnwrapExitCode(ex.Argument);
         }
         catch (System.Management.Automation.ParseException ex)
         {
@@ -119,6 +121,13 @@ public sealed class SdkWorker : IWorker
             return 1;
         }
 
+        // exit N calls PSHost.SetShouldExit(N) — check before processing output.
+        if (_host.ShouldExit)
+        {
+            _ps.Commands.Clear();
+            return _host.ExitCode;
+        }
+
         foreach (var r in results)
         {
             var line = r?.ToString() ?? "";
@@ -128,7 +137,24 @@ public sealed class SdkWorker : IWorker
 
         if (_ps.InvocationStateInfo.State == System.Management.Automation.PSInvocationState.Stopped)
             return 130;
-        return _ps.HadErrors ? 1 : 0;
+
+        // Mirror ps-bash-worker.ps1: use $LASTEXITCODE, not HadErrors.
+        // HadErrors fires on Write-Error even with -ErrorAction SilentlyContinue;
+        // $LASTEXITCODE only changes when an external command or explicit `exit N` runs.
+        var lec = _ps.Runspace.SessionStateProxy.GetVariable("LASTEXITCODE");
+        if (lec is System.Management.Automation.PSObject lecPso) lec = lecPso.BaseObject;
+        if (lec is int exitInt) return exitInt;
+        if (lec is long exitLong) return (int)exitLong;
+        return 0;
+    }
+
+    private static int UnwrapExitCode(object? arg)
+    {
+        if (arg is System.Management.Automation.PSObject pso) arg = pso.BaseObject;
+        if (arg is int code) return code;
+        if (arg is long l) return (int)l;
+        if (arg != null && int.TryParse(arg.ToString(), out int n)) return n;
+        return 0;
     }
 
     private string RunCommandCollect(string expression)

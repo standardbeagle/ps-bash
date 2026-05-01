@@ -107,4 +107,12 @@ public class SdkWorkerTests : IAsyncLifetime
         Assert.Same(callerCallback, _worker.OutputCallback);
         Assert.Contains("query-result", result);
     }
+
+    // Diagnostic: exit 7 must return exit code 7
+    [Fact]
+    public async Task ExecuteAsync_Exit7_ReturnsExitCode7()
+    {
+        var exitCode = await _worker!.ExecuteAsync("exit 7");
+        Assert.Equal(7, exitCode);
+    }
 }

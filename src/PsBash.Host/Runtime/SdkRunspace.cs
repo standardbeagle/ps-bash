@@ -18,10 +18,13 @@ internal sealed class SdkRunspace : IAsyncDisposable
     // Test seam: tracks how many times the module was initialized.
     internal static int ModuleLoadCount;
 
-    private SdkRunspace(Runspace runspace)
+    private SdkRunspace(Runspace runspace, ExitTrackingHost host)
     {
         _runspace = runspace;
+        Host = host;
     }
+
+    public ExitTrackingHost Host { get; }
 
     public static SdkRunspace Create()
     {
@@ -45,7 +48,8 @@ internal sealed class SdkRunspace : IAsyncDisposable
         // them in the ISS so they're immediately available without hitting the module loader.
         RegisterSdkCmdlets(iss);
 
-        var runspace = RunspaceFactory.CreateRunspace(iss);
+        var host = new ExitTrackingHost();
+        var runspace = RunspaceFactory.CreateRunspace(host, iss);
         runspace.Open();
 
         using var ps = PowerShell.Create();
@@ -60,7 +64,7 @@ internal sealed class SdkRunspace : IAsyncDisposable
         }
 
         Interlocked.Increment(ref ModuleLoadCount);
-        return new SdkRunspace(runspace);
+        return new SdkRunspace(runspace, host);
     }
 
     public Runspace Runspace => _runspace;
