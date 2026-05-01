@@ -1,3 +1,17 @@
 {
-  "claims": {}
+  "claims": {
+    "318QZbxGO2mA": {
+      "runner_instance_id": "beagle-ab2-15380",
+      "runner_email": "andybrummer@standardbeagle.com",
+      "claimed_at": "2026-05-01T17:30:00Z",
+      "agent_id": "beagle-ab2-15380",
+      "parent_loop_id": "dqdK4HkyW4X4",
+      "purpose": "Loop iteration 68: replace raw EXIT sentinel IPC framing",
+      "source_event": {
+        "loop_id": "dqdK4HkyW4X4",
+        "task_id": "318QZbxGO2mA",
+        "conversation_id": null
+      }
+    }
+  }
 }
