@@ -144,9 +144,13 @@ function Invoke-ProcessSubString {
     return $sb.ToString().TrimEnd("`n")
 }
 
+# placeholder — activated by T10c when emitter routes mapped-command consumers here
 # Pipeline-object variant: runs the producer scriptblock and yields its
 # output objects directly into the pipeline. Useful when the consumer is
 # a ps-bash mapped command that accepts pipeline objects (e.g. sort, uniq).
+# Currently unused by EmitProcessSub (which always emits Invoke-ProcessSub for
+# the temp-file path). T10c will teach the emitter to route mapped-command
+# consumers through this function so typed pipeline objects survive the seam.
 function Invoke-ProcessSubPipeline {
     [CmdletBinding()]
     param(

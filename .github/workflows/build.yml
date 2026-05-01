@@ -37,6 +37,12 @@ jobs:
       - name: Build
         run: dotnet build --no-restore -c Release
 
+      # Catch host compilation failures on PRs. The solution-wide build above
+      # already covers PsBash.Host transitively, but an explicit step makes the
+      # failure obvious in the PR check log when host code regresses.
+      - name: Build PsBash.Host
+        run: dotnet build src/PsBash.Host --no-restore -c Release
+
       - name: Unit tests
         run: dotnet test --no-build -c Release --filter "Category!=Integration"
 

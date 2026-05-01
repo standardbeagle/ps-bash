@@ -46,21 +46,35 @@ jobs:
         with:
           dotnet-version: '10.0.x'
 
-      - name: Publish AOT binary
-        run: dotnet publish src/PsBash.Shell -c Release -r ${{ matrix.rid }} --self-contained true /p:PublishAot=true /p:StripSymbols=true -o ./publish
+      - name: Publish AOT launcher binary
+        run: dotnet publish src/PsBash.Shell -c Release -r ${{ matrix.rid }} --self-contained true /p:PublishAot=true /p:StripSymbols=true -o ./publish/launcher
+
+      # Host is non-AOT — Microsoft.PowerShell.SDK is not AOT-compatible.
+      # Self-contained so the SDK runtime assets ship inside the host folder.
+      - name: Publish ps-bash-host binary
+        run: dotnet publish src/PsBash.Host -c Release -r ${{ matrix.rid }} --self-contained true -o ./publish/host
 
       - name: Package binary
         shell: pwsh
         run: |
           $version = '${{ github.event_name }}' -eq 'release' ? '${{ github.event.release.tag_name }}' : 'v${{ github.event.inputs.version }}'
           $name = "ps-bash-${version}-${{ matrix.archive }}"
-          $src = "./publish/ps-bash${{ matrix.ext }}"
+          $stage = "./publish/stage"
           $dst = "./artifacts/${name}.zip"
           New-Item -ItemType Directory -Force -Path ./artifacts | Out-Null
+          New-Item -ItemType Directory -Force -Path $stage | Out-Null
+          # Stage launcher (single AOT exe) at archive root.
+          Copy-Item "./publish/launcher/ps-bash${{ matrix.ext }}" $stage -Force
+          # Stage host binary + its runtime assets (SMA, runtimes/, deps.json, ...)
+          # alongside the launcher so the launcher can spawn ps-bash-host from the
+          # same directory at runtime.
+          Copy-Item -Path "./publish/host/*" -Destination $stage -Recurse -Force
           if ($IsWindows) {
-            Compress-Archive -Path $src -DestinationPath $dst -Force
+            Compress-Archive -Path "$stage/*" -DestinationPath $dst -Force
           } else {
-            zip -j $dst $src
+            $absDst = (Resolve-Path ./artifacts).Path + "/${name}.zip"
+            Push-Location $stage
+            try { zip -r $absDst . } finally { Pop-Location }
           }
 
       - name: Upload release asset
@@ -102,6 +116,12 @@ jobs:
       - name: Build ps-bash binary
         shell: bash
         run: dotnet build src/PsBash.Shell -c Release
+
+      # Build the host so tests that exercise the IPC path (Host.Tests,
+      # Differential.Tests via AssertOracle) have ps-bash-host available.
+      - name: Build ps-bash-host binary
+        shell: bash
+        run: dotnet build src/PsBash.Host -c Release
 
       - name: Install Pester
         shell: pwsh

@@ -1819,6 +1819,7 @@ public static class PsEmitter
         _ => throw new NotSupportedException($"Unknown word part type: {part.GetType().Name}"),
     };
 
+    // TODO T10b: when inside ps-bash-host, route through ProcessSubBridge for streaming; T10c: mapped-command consumers use Invoke-ProcessSubPipeline
     private static string EmitProcessSub(WordPart.ProcessSub ps)
     {
         string inner = Emit((Command)ps.Body);

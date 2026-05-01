@@ -5,6 +5,22 @@
 # Coverage: set PSBASH_COVERAGE=1 to collect XPlat Code Coverage.
 # Coverlet places output under coverage/raw/<guid>/coverage.cobertura.xml.
 # If reportgenerator is installed, an HTML report is generated in coverage/report/.
+#
+# Two-binary host environment variables (consumed by the differential test
+# AssertOracle, the launcher, and runtime worker resolution):
+#
+#   PSBASH_DISABLE_HOST=1
+#       Bypass the ps-bash-host IPC path and run the legacy in-process
+#       PwshWorker. AssertOracle in the differential suite already sets this
+#       so golden parity is measured against the in-process runtime, not the
+#       host daemon. Set explicitly when reproducing legacy behavior.
+#
+#   PSBASH_HOST=/path/to/ps-bash-host
+#       Override the host binary the launcher resolves. Useful when testing
+#       a freshly-built host against an installed launcher, or when running
+#       the differential suite against a non-default host build (e.g. a
+#       debug publish in another worktree). Default resolution looks beside
+#       the launcher executable.
 
 set -euo pipefail
 
