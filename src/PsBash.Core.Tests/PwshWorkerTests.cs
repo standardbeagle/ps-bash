@@ -217,4 +217,98 @@ public class PwshWorkerTests : IAsyncLifetime
         await worker.DisposeAsync();
     }
 
+    /// <summary>
+    /// Regression: when DisposeAsync times out waiting for a stuck worker, the
+    /// kill must take the entire process tree — not just the pwsh parent.
+    /// A bare <c>_process.Kill()</c> orphans grandchildren; on Windows those
+    /// orphans can hold file locks on src/PsBash.Shell/bin/Debug/ps-bash.exe
+    /// and block the next build (the production leak that motivated this
+    /// regression test).
+    /// </summary>
+    [SkippableFact]
+    public async Task DisposeAsync_KillsEntireProcessTree_WhenWorkerIsStuck()
+    {
+        Skip.If(PwshPath is null, "pwsh not available");
+
+        var worker = await PwshWorker.StartAsync(PwshPath!, WorkerScript);
+
+        // Spawn a long-lived grandchild from the worker. Use Start-Process so
+        // the grandchild is a real OS child of pwsh, not an inline scriptblock
+        // that disappears with the parent. The PID is echoed back so we can
+        // observe the grandchild after Dispose.
+        var lines = new List<string>();
+        worker.OutputCallback = line => { lock (lines) lines.Add(line); };
+
+        var spawnExpr =
+            "$p = Start-Process -FilePath '" + PwshPath!.Replace("'", "''") + "' " +
+            "-ArgumentList '-NoProfile','-NonInteractive','-Command','Start-Sleep -Seconds 60' " +
+            "-PassThru -WindowStyle Hidden; " +
+            "Write-Host \"GRANDCHILD_PID=$($p.Id)\"";
+        var exit = await worker.ExecuteAsync(spawnExpr);
+        Assert.Equal(0, exit);
+
+        int? grandchildPid = null;
+        foreach (var l in lines)
+        {
+            const string marker = "GRANDCHILD_PID=";
+            var idx = l.IndexOf(marker, StringComparison.Ordinal);
+            if (idx >= 0 && int.TryParse(l.AsSpan(idx + marker.Length).Trim(), out var pid))
+            {
+                grandchildPid = pid;
+                break;
+            }
+        }
+        Assert.NotNull(grandchildPid);
+
+        // Confirm the grandchild is actually running before the kill.
+        using (var live = System.Diagnostics.Process.GetProcessById(grandchildPid!.Value))
+        {
+            Assert.False(live.HasExited, "grandchild was not running before dispose");
+        }
+
+        // Make the worker stuck so DisposeAsync hits its 5 s timeout and falls
+        // through to the kill path. Drop in a busy loop that ignores stdin EOF.
+        // We do not await the Execute — we do not want to wait for it.
+        _ = Task.Run(async () =>
+        {
+            try { await worker.ExecuteAsync("while ($true) { Start-Sleep -Milliseconds 100 }"); }
+            catch { }
+        });
+        await Task.Delay(500); // let the busy loop start
+
+        // Dispose: with the bug, pwsh dies but the grandchild keeps running.
+        // With the fix (Kill(entireProcessTree:true)), the grandchild dies too.
+        await worker.DisposeAsync();
+
+        // Give the OS up to 3 s to reap the grandchild after the kill.
+        var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(3);
+        bool exited = false;
+        while (DateTime.UtcNow < deadline)
+        {
+            try
+            {
+                using var leftover = System.Diagnostics.Process.GetProcessById(grandchildPid.Value);
+                if (leftover.HasExited) { exited = true; break; }
+            }
+            catch (ArgumentException) { exited = true; break; }
+            await Task.Delay(100);
+        }
+
+        if (!exited)
+        {
+            // Best-effort kill so we do not leak from the test itself if the
+            // assertion is about to fail.
+            try
+            {
+                using var leftover = System.Diagnostics.Process.GetProcessById(grandchildPid.Value);
+                if (!leftover.HasExited) leftover.Kill(entireProcessTree: true);
+            }
+            catch { }
+        }
+
+        Assert.True(exited,
+            $"PwshWorker.DisposeAsync did not kill grandchild pid {grandchildPid} — " +
+            "process tree leak. See task EvRRfm53eveg.");
+    }
+
 }

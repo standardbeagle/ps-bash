@@ -1,15 +1,23 @@
 {
-  "status": "running",
-  "iterations": 66,
-  "spawns": 0,
-  "started_at": "2026-04-29T19:33:00Z",
-  "last_iteration_at": "2026-05-01T00:00:00Z",
-  "last_subagent": "task-executor",
-  "loop_task_id": "dqdK4HkyW4X4",
-  "dartboard": "Personal/ps-bash",
-  "runner_instance_id": "beagle-ab2-15380",
-  "agent_id": "beagle-ab2-15380",
-  "runner_email": "andybrummer@standardbeagle.com",
-  "runner_dart_id": "andybrummer@standardbeagle.com",
-  "tasks": []
+"iterations": 67,
+"last_iteration_at": "2026-05-01T20:30:00Z",
+"last_subagent": "task-executor",
+"tasks": [
+{
+"task_id": "EvRRfm53eveg",
+"iteration": 67,
+"status": "completed",
+"phase_completed": "phase-9",
+"failed_phase": null,
+"files_changed": 3,
+"tests_added": 1,
+"plan_adjustments": 0,
+"completion_summary": "Fixed Windows test process leak by upgrading PwshWorker.Kill() to entireProcessTree=true at all 3 sites, replacing pkill (no-op on Windows) with taskkill in scripts/test.sh, and adding DisposeAsync_KillsEntireProcessTree_WhenWorkerIsStuck regression test.",
+"failure_reason": null,
+"fix_task_created": false,
+"fix_task_id": null
 }
+]
+}
+EOF
+echo "wrote loop-state.json"

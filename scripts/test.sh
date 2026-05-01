@@ -25,17 +25,36 @@
 set -euo pipefail
 
 cleanup() {
-    # Graceful shutdown first
+    # Graceful shutdown first.
     dotnet build-server shutdown 2>/dev/null || true
-    # Kill all MSBuild node-reuse workers (includes orphans from prior runs)
-    pkill -f "MSBuild.dll.*nodeReuse:true" 2>/dev/null || true
-    pkill -f "testhost" 2>/dev/null || true
-    pkill -f "vstest"   2>/dev/null || true
-    # Kill any stray dotnet test drivers, ps-bash shells, and pwsh workers
-    # spawned by this run (or leftover from a prior aborted run).
-    pkill -f 'dotnet.*\btest\b' 2>/dev/null || true
-    pkill -f 'ps-bash\.exe'     2>/dev/null || true
-    pkill -f ps-bash-worker     2>/dev/null || true
+
+    # On Windows, `pkill` is not available (Git Bash does not ship it), so the
+    # previous cleanup silently no-op'd on Windows. That left ps-bash.exe and
+    # ps-bash-host.exe children running from src/PsBash.Shell/bin/Debug after
+    # a test run; subsequent `dotnet build` invocations then failed copying
+    # ps-bash.exe because the binary was locked. Use taskkill.exe with exact
+    # image-name matching so we never touch unrelated user processes (e.g.
+    # an interactive `pwsh` session would NOT be matched here).
+    if command -v taskkill.exe >/dev/null 2>&1; then
+        # Test-spawned ps-bash binaries that can lock build outputs.
+        taskkill.exe //F //IM ps-bash-host.exe //T 2>/dev/null || true
+        taskkill.exe //F //IM ps-bash.exe      //T 2>/dev/null || true
+        # Test infrastructure that may hold ps-bash children alive via Job
+        # Object inheritance.
+        taskkill.exe //F //IM testhost.exe        //T 2>/dev/null || true
+        taskkill.exe //F //IM vstest.console.exe  //T 2>/dev/null || true
+    elif command -v pkill >/dev/null 2>&1; then
+        # POSIX path: pkill -f matches the full command line. Patterns are
+        # anchored to the on-disk binary path so a similarly-named binary in
+        # the user's PATH (or an interactive pwsh) is left alone.
+        pkill -f "MSBuild\.dll.*nodeReuse:true" 2>/dev/null || true
+        pkill -f "testhost"                     2>/dev/null || true
+        pkill -f "vstest"                       2>/dev/null || true
+        pkill -f 'dotnet.*\btest\b'             2>/dev/null || true
+        pkill -f '/ps-bash($|[[:space:]])'      2>/dev/null || true
+        pkill -f '/ps-bash-host($|[[:space:]])' 2>/dev/null || true
+        pkill -f 'ps-bash-worker'               2>/dev/null || true
+    fi
 }
 
 trap cleanup EXIT

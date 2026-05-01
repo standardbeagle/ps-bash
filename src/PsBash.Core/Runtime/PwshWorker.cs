@@ -165,7 +165,10 @@ public sealed class PwshWorker : IWorker
         var ready = await worker._stdout.ReadLineAsync(ct);
         if (ready != "<<<READY>>>")
         {
-            process.Kill();
+            // Process spawn contract: kill the whole tree on bootstrap failure
+            // so any pwsh child (or further-down ps-bash subprocess) cannot
+            // outlive us and lock build outputs on Windows.
+            try { if (!process.HasExited) process.Kill(entireProcessTree: true); } catch { }
             process.Dispose();
             throw new InvalidOperationException(
                 $"Worker failed to start. Expected <<<READY>>> but got: {ready}");
@@ -365,7 +368,10 @@ public sealed class PwshWorker : IWorker
         catch (OperationCanceledException) when (timeoutCts.IsCancellationRequested)
         {
             Console.Error.WriteLine($"ps-bash: command timed out after {timeout.TotalSeconds}s");
-            _process.Kill();
+            // Process spawn contract: timeout-kill must take the entire tree —
+            // pwsh may have spawned ps-bash.exe via process substitution, and
+            // those children would otherwise hold file locks on Windows.
+            try { if (!_process.HasExited) _process.Kill(entireProcessTree: true); } catch { }
             return 124;
         }
     }
@@ -477,7 +483,15 @@ public sealed class PwshWorker : IWorker
             _stdin.Close();
             using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
             try { await _process.WaitForExitAsync(cts.Token); }
-            catch (OperationCanceledException) { _process.Kill(); }
+            catch (OperationCanceledException)
+            {
+                // Process spawn contract: a pwsh worker that ignored the EOF
+                // shutdown signal may have spawned ps-bash.exe children of its
+                // own (e.g. via `source <(cmd)` process substitution). Kill the
+                // whole tree so leaked grandchildren cannot lock the build
+                // output (the `ps-bash.exe` lock observed in production).
+                try { if (!_process.HasExited) _process.Kill(entireProcessTree: true); } catch { }
+            }
         }
         finally
         {
