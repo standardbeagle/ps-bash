@@ -50,8 +50,12 @@ jobs:
         continue-on-error: true
         run: dotnet test --no-build -c Release --filter "Category=Integration"
 
-      - name: Publish AOT
+      - name: Publish AOT launcher
         run: dotnet publish src/PsBash.Shell -r ${{ matrix.rid }} --self-contained true -p:PublishAot=true -c Release -o dist/${{ matrix.rid }}
+
+      # Host is non-AOT — publish self-contained so all SDK runtime assets are present.
+      - name: Publish ps-bash-host
+        run: dotnet publish src/PsBash.Host -r ${{ matrix.rid }} --self-contained true -c Release -o dist/host/${{ matrix.rid }}
 
       - name: Package slim
         shell: pwsh

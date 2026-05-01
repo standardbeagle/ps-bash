@@ -1,10 +1,12 @@
 <#
 .SYNOPSIS
-    Assembles the full distribution package (slim + bundled pwsh).
+    Assembles the full distribution package.
 .DESCRIPTION
-    Creates the full distribution containing everything in the slim package
-    plus a bundled PowerShell 7 directory. The bundled pwsh directory is
-    created as a placeholder with instructions for CI population.
+    In the two-binary architecture (ps-bash launcher + ps-bash-host SDK daemon),
+    the host binary ships its own self-contained PowerShell SDK runtime, so a
+    separately bundled pwsh is no longer needed. The full package is identical
+    to the slim package; this script exists for backward-compatibility with CI
+    artifact naming conventions.
 .PARAMETER RID
     Runtime identifier (e.g., win-x64, linux-x64, osx-arm64).
 .PARAMETER OutputDir
@@ -31,7 +33,7 @@ if (-not $OutputDir) {
 
 $packageDir = Join-Path $OutputDir 'full' $RID
 
-# Build the slim package first into a temp location, then copy
+# Build the slim package first (which now includes ps-bash-host + SDK runtime assets).
 $slimDir = Join-Path $OutputDir 'slim' $RID
 $slimScript = Join-Path $PSScriptRoot 'package-slim.ps1'
 
@@ -47,52 +49,8 @@ if (Test-Path $packageDir) {
 }
 New-Item -ItemType Directory -Path $packageDir -Force | Out-Null
 
-# Copy slim contents into full package
-Copy-Item (Join-Path $slimDir '*') $packageDir -Recurse
-
-# Create pwsh placeholder directory
-$pwshDir = Join-Path $packageDir 'pwsh'
-New-Item -ItemType Directory -Path $pwshDir -Force | Out-Null
-
-# Map RID to PowerShell download archive name
-$pwshArchive = switch ($RID) {
-    'win-x64'   { 'PowerShell-<VERSION>-win-x64.zip' }
-    'linux-x64' { 'PowerShell-<VERSION>-linux-x64.tar.gz' }
-    'osx-arm64' { 'PowerShell-<VERSION>-osx-arm64.tar.gz' }
-}
-
-@"
-# Bundled PowerShell 7
-
-This directory should contain a self-contained PowerShell 7 installation.
-The ps-bash binary looks for pwsh in this directory when system pwsh is
-not available (PwshLocator priority 4: side-by-side bundled).
-
-## Populating in CI
-
-Download the PowerShell release for this platform from GitHub releases
-and extract it here:
-
-    https://github.com/PowerShell/PowerShell/releases
-
-Expected archive: $pwshArchive
-
-Example CI step (GitHub Actions):
-
-    - name: Bundle pwsh
-      shell: bash
-      run: |
-        PWSH_VERSION="7.5.1"
-        curl -sL "https://github.com/PowerShell/PowerShell/releases/download/v`${PWSH_VERSION}/$pwshArchive" -o pwsh-archive
-        mkdir -p dist/full/$RID/pwsh
-        # For .zip: unzip pwsh-archive -d dist/full/$RID/pwsh
-        # For .tar.gz: tar xzf pwsh-archive -C dist/full/$RID/pwsh
-
-After extraction, this directory should contain:
-- pwsh (or pwsh.exe on Windows)
-- All supporting libraries and assemblies
-"@ | Set-Content (Join-Path $pwshDir 'README.md')
+# Full = slim: host ships the SDK runtime, no separate pwsh bundle needed.
+Copy-Item -Path (Join-Path $slimDir '*') -Destination $packageDir -Recurse
 
 Write-Host "Full package assembled: $packageDir"
-Write-Host "  Slim contents copied"
-Write-Host "  pwsh/ placeholder created with population instructions"
+Write-Host "  (identical to slim — ps-bash-host ships its own SDK runtime)"

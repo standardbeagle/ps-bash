@@ -28,15 +28,22 @@ if (-not $OutputDir) {
     $OutputDir = Join-Path $repoRoot 'dist'
 }
 
-$publishDir = Join-Path $repoRoot 'dist' $RID
-$packageDir = Join-Path $OutputDir 'slim' $RID
+$launcherPublishDir = Join-Path $repoRoot 'dist' $RID
+$hostPublishDir     = Join-Path $repoRoot 'dist' 'host' $RID
+$packageDir         = Join-Path $OutputDir 'slim' $RID
 
-# Determine binary name per platform
-$binary = if ($RID -like 'win-*') { 'ps-bash.exe' } else { 'ps-bash' }
+# Determine binary names per platform
+$launcherBinary = if ($RID -like 'win-*') { 'ps-bash.exe' } else { 'ps-bash' }
+$hostBinary     = if ($RID -like 'win-*') { 'ps-bash-host.exe' } else { 'ps-bash-host' }
 
-$binaryPath = Join-Path $publishDir $binary
-if (-not (Test-Path $binaryPath)) {
-    throw "AOT binary not found at $binaryPath. Run 'dotnet publish' first."
+$launcherPath = Join-Path $launcherPublishDir $launcherBinary
+if (-not (Test-Path $launcherPath)) {
+    throw "AOT launcher not found at $launcherPath. Run 'dotnet publish src/PsBash.Shell' first."
+}
+
+$hostPath = Join-Path $hostPublishDir $hostBinary
+if (-not (Test-Path $hostPath)) {
+    throw "Host binary not found at $hostPath. Run 'dotnet publish src/PsBash.Host' first."
 }
 
 # Clean and create output directory (idempotent)
@@ -45,10 +52,14 @@ if (Test-Path $packageDir) {
 }
 New-Item -ItemType Directory -Path $packageDir -Force | Out-Null
 
-# Copy AOT binary
-Copy-Item $binaryPath $packageDir
+# Copy AOT launcher (single self-contained exe, no side files needed)
+Copy-Item $launcherPath $packageDir
 
-# Copy worker script
+# Copy host + all its self-contained runtime assets (SMA DLLs, runtimes/, deps.json, ...)
+# so the launcher can find ps-bash-host alongside itself at runtime.
+Copy-Item -Path (Join-Path $hostPublishDir '*') -Destination $packageDir -Recurse -Force
+
+# Copy worker script (fallback for PSBASH_DISABLE_HOST or host-unavailable path)
 $workerSrc = Join-Path $repoRoot 'scripts' 'ps-bash-worker.ps1'
 if (-not (Test-Path $workerSrc)) {
     throw "Worker script not found at $workerSrc."
@@ -65,6 +76,7 @@ New-Item -ItemType Directory -Path $moduleDest -Force | Out-Null
 Copy-Item (Join-Path $moduleSrc '*') $moduleDest -Recurse
 
 Write-Host "Slim package assembled: $packageDir"
-Write-Host "  Binary:  $binary"
-Write-Host "  Worker:  ps-bash-worker.ps1"
-Write-Host "  Module:  Modules/ps-bash/"
+Write-Host "  Launcher:  $launcherBinary"
+Write-Host "  Host:      $hostBinary (+ runtime assets)"
+Write-Host "  Worker:    ps-bash-worker.ps1"
+Write-Host "  Module:    Modules/ps-bash/"
