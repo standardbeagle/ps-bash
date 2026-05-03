@@ -148,13 +148,20 @@ public static class HostProtocol
     /// Serialize a single response line. Caller is responsible for emitting one
     /// call per output line, then a final <see cref="WriteExitAsync"/>.
     /// </summary>
+    /// <remarks>
+    /// Response data lines are base64-encoded so arbitrary command output
+    /// (including bytes that look like the EXIT sentinel, embedded newlines,
+    /// or control characters) is safe on the wire. Base64's alphabet
+    /// (<c>[A-Za-z0-9+/=]</c>) cannot collide with the <c>&lt;&lt;&lt;EXIT:</c>
+    /// prefix, so the response reader can unambiguously distinguish data
+    /// lines from the exit sentinel.
+    /// </remarks>
     public static async Task WriteResponseLineAsync(Stream stream, string line, CancellationToken ct = default)
     {
         ArgumentNullException.ThrowIfNull(stream);
         ArgumentNullException.ThrowIfNull(line);
-        if (line.StartsWith(ExitPrefix, StringComparison.Ordinal))
-            throw new InvalidOperationException("Response line must not start with EXIT sentinel — use WriteExitAsync.");
-        var bytes = Utf8NoBom.GetBytes(line + "\n");
+        var encoded = Convert.ToBase64String(Utf8NoBom.GetBytes(line));
+        var bytes = Utf8NoBom.GetBytes(encoded + "\n");
         await stream.WriteAsync(bytes, ct).ConfigureAwait(false);
     }
 
@@ -193,7 +200,20 @@ public static class HostProtocol
                 var code = line[ExitPrefix.Length..^ExitSuffix.Length];
                 return int.TryParse(code, out var n) ? n : 1;
             }
-            onLine(line);
+            // Data lines are base64-encoded by WriteResponseLineAsync; decode
+            // before delivering to the caller. Tolerate undecodable lines
+            // (e.g. legacy/raw senders) by passing through verbatim — keeps
+            // the reader robust against partial-rollouts.
+            string decoded;
+            try
+            {
+                decoded = Utf8NoBom.GetString(Convert.FromBase64String(line));
+            }
+            catch (FormatException)
+            {
+                decoded = line;
+            }
+            onLine(decoded);
         }
     }
 

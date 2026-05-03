@@ -129,7 +129,7 @@ public sealed class PwshWorker : IWorker
         else
         {
             var scriptPath = workerScriptPath ?? await ExtractWorkerScriptAsync(ct);
-            var coreAsmPath = typeof(PwshWorker).Assembly.Location ?? "";
+            var coreAsmPath = ResolveCoreAsmPath();
             psi.ArgumentList.Add("-NoProfile");
             psi.ArgumentList.Add("-NonInteractive");
             psi.ArgumentList.Add("-File");
@@ -178,6 +178,17 @@ public sealed class PwshWorker : IWorker
         return worker;
     }
 
+    /// In AOT single-file builds Assembly.Location is empty; fall back to looking
+    /// for PsBash.Core.dll beside the executable so Invoke-ProcessSubSource can
+    /// load BashTranspiler in the spawned pwsh worker.
+    private static string ResolveCoreAsmPath()
+    {
+        var loc = typeof(PwshWorker).Assembly.Location;
+        if (!string.IsNullOrEmpty(loc)) return loc;
+        var candidate = Path.Combine(AppContext.BaseDirectory, "PsBash.Core.dll");
+        return File.Exists(candidate) ? candidate : "";
+    }
+
     /// <summary>
     /// Build the combined init script that loads the module in-memory and starts
     /// the command loop. Sent via stdin — no temp files required.
@@ -201,9 +212,9 @@ public sealed class PwshWorker : IWorker
 
         // Inject the PsBash.Core assembly path so the worker's pwsh subprocess can
         // load [PsBash.Core.Transpiler.BashTranspiler] for Invoke-ProcessSubSource.
-        // This is a no-op in AOT single-file builds (Location is empty there) and
-        // in the SdkWorker (where PsBash.Core is already in the AppDomain).
-        var coreAsmPath = asm.Location?.Replace("'", "''") ?? "";
+        // In the SdkWorker PsBash.Core is already in the AppDomain; in AOT builds
+        // Assembly.Location is empty so ResolveCoreAsmPath falls back to BaseDirectory.
+        var coreAsmPath = ResolveCoreAsmPath().Replace("'", "''");
 
         // Build the init script: decode module, load in-memory, start worker loop
         return $$"""

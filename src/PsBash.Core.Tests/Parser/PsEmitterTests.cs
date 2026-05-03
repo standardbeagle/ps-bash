@@ -215,6 +215,17 @@ public class PsEmitterTests
     }
 
     [Fact]
+    public void Transpile_ExportPathAdjacentDoubleQuotedSegments_ProducesSingleOuterQuote()
+    {
+        // export PATH="C:\\prefix":"$PATH"  — two DoubleQuoted parts joined by a Literal(":")
+        // Bug: EmitWord emitted "prefix":"$env:PATH", then EmitAssignmentValue wrapped it in
+        // another "...", producing ""prefix":"$env:PATH"" — invalid PowerShell.
+        var result = PsEmitter.Transpile("export PATH=\"/a/b\":\"$PATH\"");
+
+        Assert.Equal("$env:PATH = \"/a/b:$env:PATH\"", result);
+    }
+
+    [Fact]
     public void Transpile_EchoHello_ReturnsPassthrough()
     {
         var result = PsEmitter.Transpile("echo hello");

@@ -1644,8 +1644,25 @@ public static class PsEmitter
         if (value.Parts.Length == 1 && value.Parts[0] is WordPart.SingleQuoted)
             return EmitWordPart(value.Parts[0]);
 
-        // Otherwise wrap the emitted content in double quotes.
-        return $"\"{EmitWord(value)}\"";
+        // Multi-part value: flatten into one PS double-quoted string.
+        // EmitWord wraps each DoubleQuoted part in its own "...", which produces
+        // ""segment1":"segment2"" when combined — invalid PowerShell.
+        // Instead open one outer double-quote and inline the content of each part.
+        var sb = new StringBuilder();
+        sb.Append('"');
+        foreach (var part in value.Parts)
+        {
+            if (part is WordPart.DoubleQuoted dq)
+                AppendDoubleQuotedInner(sb, dq.Parts);
+            else if (part is WordPart.SingleQuoted sq)
+                sb.Append(sq.Value.Replace("`", "``").Replace("$", "`$").Replace("\"", "`\""));
+            else if (part is WordPart.Literal lit)
+                sb.Append(lit.Value.Replace("$", "`$").Replace("\"", "`\""));
+            else
+                sb.Append(EmitWordPart(part));
+        }
+        sb.Append('"');
+        return sb.ToString();
     }
 
     private static string EmitWord(CompoundWord word)
@@ -2063,20 +2080,18 @@ public static class PsEmitter
         return varRef;
     }
 
-    private static string EmitDoubleQuoted(WordPart.DoubleQuoted dq)
+    private static void AppendDoubleQuotedInner(StringBuilder sb, ImmutableArray<WordPart> parts)
     {
-        var sb = new StringBuilder();
-        sb.Append('"');
-        for (int i = 0; i < dq.Parts.Length; i++)
+        for (int i = 0; i < parts.Length; i++)
         {
-            var part = dq.Parts[i];
+            var part = parts[i];
             if (part is WordPart.BracedVarSub bvs)
                 sb.Append(EmitBracedVar(bvs, inDoubleQuote: true));
             else if (part is WordPart.SimpleVarSub vs)
             {
                 // Check if next part starts with ':' — PowerShell would misparse as a drive reference.
                 // Use ${name} bracing to prevent this.
-                bool needsBracing = i + 1 < dq.Parts.Length && NextPartNeedsBracing(dq.Parts[i + 1]);
+                bool needsBracing = i + 1 < parts.Length && NextPartNeedsBracing(parts[i + 1]);
                 if (needsBracing)
                     sb.Append(EmitSimpleVarBraced(vs.Name));
                 else
@@ -2092,6 +2107,13 @@ public static class PsEmitter
             else
                 sb.Append(EmitWordPart(part));
         }
+    }
+
+    private static string EmitDoubleQuoted(WordPart.DoubleQuoted dq)
+    {
+        var sb = new StringBuilder();
+        sb.Append('"');
+        AppendDoubleQuotedInner(sb, dq.Parts);
         sb.Append('"');
         return sb.ToString();
     }

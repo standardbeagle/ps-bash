@@ -194,11 +194,75 @@ public class HostProtocolTests
     }
 
     [Fact]
-    public async Task WriteResponseLine_RejectsExitSentinel()
+    public async Task WriteResponseLine_AcceptsExitSentinelLiteral_AndRoundTrips()
     {
+        // Regression: response framing must NOT reject output that happens to
+        // look like the EXIT sentinel. Real shell commands (e.g.
+        // `echo '<<<EXIT:0>>>'`) emit that text verbatim; the prior raw-line
+        // framing aborted the connection. Base64 framing makes data and exit
+        // sentinels unambiguous on the wire.
+        var payload = "<<<EXIT:0>>>";
         await using var ms = new MemoryStream();
-        await Assert.ThrowsAsync<InvalidOperationException>(
-            () => HostProtocol.WriteResponseLineAsync(ms, "<<<EXIT:0>>>"));
+        await HostProtocol.WriteResponseLineAsync(ms, payload);
+        await HostProtocol.WriteExitAsync(ms, 0);
+
+        ms.Position = 0;
+        var lines = new List<string>();
+        var code = await HostProtocol.ReadResponseAsync(ms, lines.Add);
+
+        Assert.Equal(0, code);
+        Assert.Single(lines);
+        Assert.Equal(payload, lines[0]);
+    }
+
+    [Fact]
+    public async Task WriteResponseLine_AcceptsArbitraryBytes_RoundTrips()
+    {
+        // Adversarial payloads: embedded newlines, CR, NUL, unicode, EXIT-shaped
+        // content interleaved. All must survive the wire intact and exit sentinel
+        // must still be recognised at the boundary.
+        var payloads = new[]
+        {
+            "",                                        // empty line
+            "plain ASCII",
+            "<<<EXIT:42>>>",                           // looks like sentinel
+            "<<<EXIT:not-a-number>>>",
+            "embedded\nnewline",                       // newline inside one logical line
+            "carriage\rreturn",
+            "tab\there",
+            "unicode: 日本語 🦀",
+            "nul-\0-byte",
+            "<<<EXIT:0>>>\nfollowed by junk\n<<<EXIT:1>>>",
+        };
+
+        await using var ms = new MemoryStream();
+        foreach (var p in payloads)
+            await HostProtocol.WriteResponseLineAsync(ms, p);
+        await HostProtocol.WriteExitAsync(ms, 7);
+
+        ms.Position = 0;
+        var collected = new List<string>();
+        var code = await HostProtocol.ReadResponseAsync(ms, collected.Add);
+
+        Assert.Equal(7, code);
+        Assert.Equal(payloads, collected);
+    }
+
+    [Fact]
+    public async Task WriteResponseLine_EncodesAsBase64_DoesNotEmitRawPayload()
+    {
+        // Wire-format check: the raw EXIT sentinel string must NOT appear
+        // anywhere in the data-frame bytes, even when the payload contains it.
+        // This is the framing invariant that protects ReadResponseAsync.
+        var payload = "<<<EXIT:0>>>";
+        await using var ms = new MemoryStream();
+        await HostProtocol.WriteResponseLineAsync(ms, payload);
+        var wire = Utf8NoBom.GetString(ms.ToArray());
+
+        Assert.DoesNotContain(HostProtocol.ExitPrefix, wire);
+        // And the line must be a valid base64 payload (no <, >, : in the alphabet).
+        var trimmed = wire.TrimEnd('\n');
+        Assert.Matches("^[A-Za-z0-9+/=]+$", trimmed);
     }
 
     [Fact]
