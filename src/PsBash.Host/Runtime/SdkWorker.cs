@@ -93,10 +93,20 @@ public sealed class SdkWorker : IWorker
         _ps.Streams.Error.Clear();
         _ps.AddScript(command);
 
-        System.Collections.ObjectModel.Collection<System.Management.Automation.PSObject> results;
+        // Stream output via DataAdded so results are delivered as they arrive rather
+        // than buffering the entire Collection<PSObject> in RAM first.
+        var outputCollection = new System.Management.Automation.PSDataCollection<System.Management.Automation.PSObject>();
+        outputCollection.DataAdded += (sender, e) =>
+        {
+            var col = (System.Management.Automation.PSDataCollection<System.Management.Automation.PSObject>)sender!;
+            var line = col[e.Index]?.ToString() ?? "";
+            if (output is not null) output(line);
+            else Console.WriteLine(line);
+        };
+
         try
         {
-            results = _ps.Invoke();
+            _ps.Invoke(null, outputCollection);
         }
         catch (System.Management.Automation.PipelineStoppedException)
         {
@@ -126,13 +136,6 @@ public sealed class SdkWorker : IWorker
         {
             _ps.Commands.Clear();
             return _host.ExitCode;
-        }
-
-        foreach (var r in results)
-        {
-            var line = r?.ToString() ?? "";
-            if (output is not null) output(line);
-            else Console.WriteLine(line);
         }
 
         if (_ps.InvocationStateInfo.State == System.Management.Automation.PSInvocationState.Stopped)

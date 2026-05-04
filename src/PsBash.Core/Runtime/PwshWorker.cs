@@ -239,6 +239,24 @@ public sealed class PwshWorker : IWorker
                 }).AddArgument($__parentPid)
                 [void]$__watchPs.BeginInvoke()
             }
+            $__maxBytes = if ($env:PSBASH_MAX_MEMORY) { [long]$env:PSBASH_MAX_MEMORY * 1MB } else { 512MB }
+            $__memWatchRs = [runspacefactory]::CreateRunspace()
+            $__memWatchRs.ApartmentState = 'MTA'
+            $__memWatchRs.Open()
+            $__memWatchPs = [powershell]::Create()
+            $__memWatchPs.Runspace = $__memWatchRs
+            [void]$__memWatchPs.AddScript({
+                param($maxBytes)
+                while ($true) {
+                    Start-Sleep -Seconds 5
+                    $ws = [System.Diagnostics.Process]::GetCurrentProcess().WorkingSet64
+                    if ($ws -gt $maxBytes) {
+                        [Console]::Error.WriteLine("ps-bash: worker exceeded memory limit ($([math]::Round($ws/1MB))MB)")
+                        [Environment]::Exit(137)
+                    }
+                }
+            }).AddArgument($__maxBytes)
+            [void]$__memWatchPs.BeginInvoke()
             if ('{{coreAsmPath}}' -ne '') {
                 try { [void][System.Reflection.Assembly]::LoadFrom('{{coreAsmPath}}') } catch {}
             }
@@ -325,12 +343,6 @@ public sealed class PwshWorker : IWorker
                     if ($global:__BashTrapEXIT) { & $global:__BashTrapEXIT }
                     if ($exitCode -ne 0 -and $global:__BashTrapERR) { & $global:__BashTrapERR }
                     [Console]::Out.Flush()
-                }
-                $ws = [System.Diagnostics.Process]::GetCurrentProcess().WorkingSet64
-                $maxBytes = if ($env:PSBASH_MAX_MEMORY) { [long]$env:PSBASH_MAX_MEMORY * 1MB } else { 512MB }
-                if ($ws -gt $maxBytes) {
-                    [Console]::Error.WriteLine("ps-bash: worker exceeded memory limit ($([math]::Round($ws/1MB))MB)")
-                    exit 137
                 }
             }
 
