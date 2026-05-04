@@ -21,6 +21,29 @@ if ($ParentPid -gt 0) {
     [void]$__watchPs.BeginInvoke()
 }
 
+# Background memory watcher: polls every 5s so the limit fires during long-running
+# commands, not only between them (the post-command check below covers the inter-command gap).
+$__maxBytes = if ($env:PSBASH_MAX_MEMORY) { [long]$env:PSBASH_MAX_MEMORY * 1MB } else { 512MB }
+$__memWatchRs = [runspacefactory]::CreateRunspace()
+$__memWatchRs.ApartmentState = 'MTA'
+$__memWatchRs.Open()
+$__memWatchPs = [powershell]::Create()
+$__memWatchPs.Runspace = $__memWatchRs
+[void]$__memWatchPs.AddScript({
+    param($maxBytes)
+    while ($true) {
+        Start-Sleep -Seconds 5
+        try {
+            $ws = [System.Diagnostics.Process]::GetCurrentProcess().WorkingSet64
+            if ($ws -gt $maxBytes) {
+                [Console]::Error.WriteLine("ps-bash: worker exceeded memory limit ($([math]::Round($ws/1MB))MB)")
+                [Environment]::Exit(137)
+            }
+        } catch { }
+    }
+}).AddArgument($__maxBytes)
+[void]$__memWatchPs.BeginInvoke()
+
 # Inject PsBash.Core assembly so Invoke-ProcessSubSource can call BashTranspiler.
 if ($CoreAsmPath -and (Test-Path $CoreAsmPath)) {
     try { [void][System.Reflection.Assembly]::LoadFrom($CoreAsmPath) } catch {}

@@ -100,8 +100,17 @@ public sealed class SdkWorker : IWorker
         {
             var col = (System.Management.Automation.PSDataCollection<System.Management.Automation.PSObject>)sender!;
             var line = col[e.Index]?.ToString() ?? "";
-            if (output is not null) output(line);
-            else Console.WriteLine(line);
+            try
+            {
+                if (output is not null) output(line);
+                else Console.WriteLine(line);
+            }
+            catch
+            {
+                // Output callback failed (e.g. IPC stream closed). Stop the pipeline
+                // rather than letting DataAdded fire repeatedly into a broken sink.
+                _ps.Stop();
+            }
         };
 
         try
@@ -160,14 +169,30 @@ public sealed class SdkWorker : IWorker
         return 0;
     }
 
+    private const int MaxQueryBytes = 4 * 1024 * 1024; // 4 MB — QueryAsync is for small internal expressions
+
     private string RunCommandCollect(string expression)
     {
         _ps.Commands.Clear();
         _ps.Streams.Error.Clear();
         _ps.AddScript(expression);
 
-        var results = _ps.Invoke();
-        return string.Join("\n", results.Select(r => r?.ToString() ?? ""));
+        var parts = new System.Text.StringBuilder();
+        var outputCollection = new System.Management.Automation.PSDataCollection<System.Management.Automation.PSObject>();
+        outputCollection.DataAdded += (sender, e) =>
+        {
+            var col = (System.Management.Automation.PSDataCollection<System.Management.Automation.PSObject>)sender!;
+            var line = col[e.Index]?.ToString() ?? "";
+            if (parts.Length + line.Length > MaxQueryBytes)
+            {
+                _ps.Stop();
+                return;
+            }
+            if (parts.Length > 0) parts.Append('\n');
+            parts.Append(line);
+        };
+        _ps.Invoke(null, outputCollection);
+        return parts.ToString();
     }
 
     public ValueTask DisposeAsync()

@@ -62,6 +62,12 @@ public sealed class PwshWorker : IWorker
                         {
                             line.Append(c);
                             prevWasCr = false;
+                            // Flush at 1 MB to prevent runaway growth on lines with no CRLF
+                            if (line.Length >= 1024 * 1024)
+                            {
+                                await _outputChannel.Writer.WriteAsync(line.ToString());
+                                line.Clear();
+                            }
                         }
                     }
                 }
@@ -249,11 +255,13 @@ public sealed class PwshWorker : IWorker
                 param($maxBytes)
                 while ($true) {
                     Start-Sleep -Seconds 5
-                    $ws = [System.Diagnostics.Process]::GetCurrentProcess().WorkingSet64
-                    if ($ws -gt $maxBytes) {
-                        [Console]::Error.WriteLine("ps-bash: worker exceeded memory limit ($([math]::Round($ws/1MB))MB)")
-                        [Environment]::Exit(137)
-                    }
+                    try {
+                        $ws = [System.Diagnostics.Process]::GetCurrentProcess().WorkingSet64
+                        if ($ws -gt $maxBytes) {
+                            [Console]::Error.WriteLine("ps-bash: worker exceeded memory limit ($([math]::Round($ws/1MB))MB)")
+                            [Environment]::Exit(137)
+                        }
+                    } catch { }
                 }
             }).AddArgument($__maxBytes)
             [void]$__memWatchPs.BeginInvoke()

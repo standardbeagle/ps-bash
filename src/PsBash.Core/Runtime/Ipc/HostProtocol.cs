@@ -247,6 +247,7 @@ public static class HostProtocol
     /// </summary>
     private sealed class StreamLineReader
     {
+        private const int MaxLineBytes = 1 * 1024 * 1024; // 1 MB — guards against malformed/malicious frames
         private readonly Stream _stream;
         private readonly byte[] _one = new byte[1];
 
@@ -267,6 +268,8 @@ public static class HostProtocol
                     return Utf8NoBom.GetString(buf.ToArray());
                 }
                 buf.Add(b);
+                if (buf.Count > MaxLineBytes)
+                    throw new IOException($"IPC line exceeded {MaxLineBytes / 1024} KB limit — possible malformed frame");
             }
         }
     }

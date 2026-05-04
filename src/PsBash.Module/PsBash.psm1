@@ -8221,21 +8221,21 @@ function Invoke-JqFilter {
             if ($seg -match '^(.+?)\s+as\s+(\$\w+)\s*$') {
                 $bindingExpr = $Matches[1].Trim()
                 $varName = $Matches[2]
-                $bound = @()
+                $bound = [System.Collections.Generic.List[object]]::new()
                 foreach ($item in $current) {
-                    $bound += @(Invoke-JqFilter -Data $item -Filter $bindingExpr -Variables $scope)
+                    $bound.AddRange(@(Invoke-JqFilter -Data $item -Filter $bindingExpr -Variables $scope))
                 }
                 $newScope = @{} + $scope
-                $newScope[$varName] = $bound
+                $newScope[$varName] = $bound.ToArray()
                 $current = $current
                 $scope = $newScope
                 continue
             }
-            $next = @()
+            $next = [System.Collections.Generic.List[object]]::new()
             foreach ($item in $current) {
-                $next += @(Invoke-JqFilter -Data $item -Filter $seg -Variables $scope)
+                $next.AddRange(@(Invoke-JqFilter -Data $item -Filter $seg -Variables $scope))
             }
-            $current = $next
+            $current = $next.ToArray()
         }
         return $current
     }
@@ -8243,11 +8243,11 @@ function Invoke-JqFilter {
     # Handle comma (multiple outputs) at top level
     [string[]]$commaSegments = @(Split-JqComma -Filter $filter)
     if ($commaSegments.Count -gt 1) {
-        $results = @()
+        $results = [System.Collections.Generic.List[object]]::new()
         foreach ($seg in $commaSegments) {
-            $results += @(Invoke-JqFilter -Data $Data -Filter $seg.Trim() -Variables $Variables)
+            $results.AddRange(@(Invoke-JqFilter -Data $Data -Filter $seg.Trim() -Variables $Variables))
         }
-        return $results
+        return $results.ToArray()
     }
 
     # Handle alternative operator: expr // fallback
@@ -8545,17 +8545,17 @@ function Resolve-JqDotPath {
             $inner = $Path.Substring($pos + 1, $closeIdx - $pos - 1).Trim()
             $pos = $closeIdx + 1
 
-            $next = @()
+            $next = [System.Collections.Generic.List[object]]::new()
             if ($inner -eq '') {
                 # .[] iterate
                 foreach ($item in $current) {
                     if ($item -is [array] -or $item -is [System.Collections.IList]) {
-                        foreach ($elem in $item) { $next += @(, $elem) }
+                        foreach ($elem in $item) { $next.Add($elem) }
                     } elseif ($item -is [System.Collections.IDictionary]) {
-                        foreach ($val in $item.Values) { $next += @(, $val) }
+                        foreach ($val in $item.Values) { $next.Add($val) }
                     } elseif ($item -is [PSCustomObject]) {
                         foreach ($prop in $item.PSObject.Properties) {
-                            if ($prop.Name -ne 'PSTypeName') { $next += @(, $prop.Value) }
+                            if ($prop.Name -ne 'PSTypeName') { $next.Add($prop.Value) }
                         }
                     }
                 }
@@ -8566,14 +8566,14 @@ function Resolve-JqDotPath {
                     if ($item -is [array] -or $item -is [System.Collections.IList]) {
                         if ($idx -lt 0) { $idx = $item.Count + $idx }
                         if ($idx -ge 0 -and $idx -lt $item.Count) {
-                            $next += @(, $item[$idx])
+                            $next.Add($item[$idx])
                         } else {
-                            $next += @(, $null)
+                            $next.Add($null)
                         }
                     }
                 }
             }
-            $current = $next
+            $current = $next.ToArray()
             continue
         }
 
@@ -8591,7 +8591,7 @@ function Resolve-JqDotPath {
         $fieldName = $Path.Substring($nameStart, $pos - $nameStart)
         if ($fieldName -eq '') { continue }
 
-        $next = @()
+        $next = [System.Collections.Generic.List[object]]::new()
         foreach ($item in $current) {
             $val = $null
             if ($item -is [System.Collections.IDictionary]) {
@@ -8600,9 +8600,9 @@ function Resolve-JqDotPath {
                 $prop = $item.PSObject.Properties[$fieldName]
                 if ($null -ne $prop) { $val = $prop.Value }
             }
-            $next += @(, $val)
+            $next.Add($val)
         }
-        $current = $next
+        $current = $next.ToArray()
     }
 
     return $current
@@ -8756,23 +8756,24 @@ function Find-JqBranchKeyword {
 function Invoke-JqRecurse {
     param([object]$Data)
 
-    $results = @(, $Data)
+    $results = [System.Collections.Generic.List[object]]::new()
+    $results.Add($Data)
     if ($Data -is [array] -or $Data -is [System.Collections.IList]) {
         foreach ($elem in $Data) {
-            $results += @(Invoke-JqRecurse -Data $elem)
+            $results.AddRange(@(Invoke-JqRecurse -Data $elem))
         }
     } elseif ($Data -is [System.Collections.IDictionary]) {
         foreach ($val in $Data.Values) {
-            $results += @(Invoke-JqRecurse -Data $val)
+            $results.AddRange(@(Invoke-JqRecurse -Data $val))
         }
     } elseif ($Data -is [PSCustomObject]) {
         foreach ($prop in $Data.PSObject.Properties) {
             if ($prop.Name -ne 'PSTypeName') {
-                $results += @(Invoke-JqRecurse -Data $prop.Value)
+                $results.AddRange(@(Invoke-JqRecurse -Data $prop.Value))
             }
         }
     }
-    return $results
+    return $results.ToArray()
 }
 
 function Find-JqTopLevelStr {

@@ -52,6 +52,9 @@ public sealed class HostServer : IAsyncDisposable
             catch (Exception ex)
             {
                 Log($"accept error: {ex.Message}");
+                // Small delay prevents a tight busy-loop if AcceptAsync keeps failing
+                // (e.g., transport in a persistently broken state).
+                try { await Task.Delay(10, ct); } catch (OperationCanceledException) { break; }
                 continue;
             }
 
