@@ -40,25 +40,11 @@ bool unixPaths = shellArgs.UnixPaths
     ?? Environment.GetEnvironmentVariable("PSBASH_UNIX_PATHS") is "1" or "true";
 Environment.SetEnvironmentVariable("PSBASH_UNIX_PATHS", unixPaths ? "1" : "0");
 
-string pwshPath;
-try
-{
-    pwshPath = PwshLocator.Locate();
-}
-catch (PwshNotFoundException ex)
-{
-    Console.Error.WriteLine(ex.Message);
-    return 127;
-}
-
-// Factory delegate that produces a fresh IWorker. Centralizing creation here
-// (rather than calling PwshWorker.StartAsync directly at every site) is the
-// architecture seam from migration task T01: T07 routes -c, stdin, and script
-// modes through WorkerFactory so out-of-process IpcWorker and in-process
-// PwshWorker can be swapped without per-site changes. Interactive mode (M4)
-// stays on PwshWorker until T08a/T08b lands the interactive handoff bridge.
+// All execution goes through ps-bash-host over IPC. There is no in-process
+// pwsh fallback: if the host binary is missing or fails to start, the
+// invocation exits non-zero with the underlying error.
 Func<Task<IWorker>> workerFactory = async () =>
-    await WorkerFactory.CreateAsync(pwshPath).ConfigureAwait(false);
+    await WorkerFactory.CreateAsync().ConfigureAwait(false);
 
 // M3: file-arg mode — ps-bash script.sh [arg1 arg2 ...]
 // Check before stdin detection: a script path argument takes priority over
@@ -118,27 +104,29 @@ if (shellArgs.ReadFromStdin || (!shellArgs.Interactive && shellArgs.Command is n
 
 if (shellArgs.Interactive || shellArgs.Command is null)
 {
-    // Prefer delegating the tty to the host process so Console.Clear /
-    // Console.WindowWidth / VT processing work against the real terminal.
+    // Interactive mode: spawn ps-bash-host --interactive so the host inherits
+    // the real tty (Console.Clear / WindowWidth / VT all work against the
+    // terminal). No fallback: if the host binary is missing, exit non-zero.
     var hostBinary = WorkerFactory.ResolveHostBinary();
-    if (hostBinary is not null && File.Exists(hostBinary))
+    if (hostBinary is null)
     {
-        var psi = new System.Diagnostics.ProcessStartInfo(hostBinary)
-        {
-            UseShellExecute = false,
-            // No stdio redirection — host inherits the real tty.
-        };
-        psi.ArgumentList.Add("--interactive");
-        psi.ArgumentList.Add($"--launcher-pid={Environment.ProcessId}");
-        if (shellArgs.NoProfile) psi.ArgumentList.Add("--no-profile");
-
-        using var hostProc = System.Diagnostics.Process.Start(psi)!;
-        await hostProc.WaitForExitAsync();
-        return hostProc.ExitCode;
+        Console.Error.WriteLine(
+            "ps-bash: ps-bash-host binary not found. Set PSBASH_HOST=<path> or install alongside ps-bash.");
+        return 127;
     }
 
-    // Fallback: host binary not found — run REPL in-process (legacy path).
-    return await InteractiveShell.RunAsync(pwshPath, shellArgs.NoProfile);
+    var psi = new System.Diagnostics.ProcessStartInfo(hostBinary)
+    {
+        UseShellExecute = false,
+        // No stdio redirection — host inherits the real tty.
+    };
+    psi.ArgumentList.Add("--interactive");
+    psi.ArgumentList.Add($"--launcher-pid={Environment.ProcessId}");
+    if (shellArgs.NoProfile) psi.ArgumentList.Add("--no-profile");
+
+    using var hostProc = System.Diagnostics.Process.Start(psi)!;
+    await hostProc.WaitForExitAsync();
+    return hostProc.ExitCode;
 }
 
 // For the -c (non-interactive) path, start a parent-death watcher so we never
@@ -170,7 +158,6 @@ if (debug)
 {
     Console.Error.WriteLine($"[ps-bash] input:      {bashCommand}");
     Console.Error.WriteLine($"[ps-bash] transpiled: {pwshCommand}");
-    Console.Error.WriteLine($"[ps-bash] pwsh:       {pwshPath}");
 }
 
 await using IWorker worker = await workerFactory();

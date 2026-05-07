@@ -53,12 +53,46 @@ public sealed class HostServerTests : IAsyncLifetime
         }
     }
 
+    private async Task<(string output, int exitCode)> SendHealthAsync(string pipeName, CancellationToken ct = default)
+    {
+        var clientTransport = new NamedPipeTransport(pipeName);
+        await using (clientTransport)
+        {
+            using var stream = await clientTransport.ConnectAsync(ct);
+            await HostProtocol.WriteRequestAsync(stream, new Mode.Health(), ct);
+            var lines = new List<string>();
+            var exitCode = await HostProtocol.ReadResponseAsync(stream, line => lines.Add(line), ct);
+            return (string.Join("\n", lines), exitCode);
+        }
+    }
+
     [Fact]
     public async Task SingleConnection_InvokeBashEcho_ReturnsOutputAndExit0()
     {
         var (output, exitCode) = await SendCommandAsync("Invoke-BashEcho 'hello'");
         Assert.Equal(0, exitCode);
         Assert.Contains("hello", output);
+    }
+
+    [Fact]
+    public async Task HealthConnection_DoesNotWaitForWorkerInitialization()
+    {
+        var pipeName = $"psbash-health-{Guid.NewGuid():N}";
+        var workerTcs = new TaskCompletionSource<SdkWorker>(TaskCreationOptions.RunContinuationsAsynchronously);
+        await using var transport = new NamedPipeTransport(pipeName);
+        await using var server = new HostServer(transport, workerTcs.Task);
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+
+        var serverTask = server.RunAsync(cts.Token);
+        await server.WhenListening.WaitAsync(cts.Token);
+
+        var (output, exitCode) = await SendHealthAsync(pipeName, cts.Token);
+
+        cts.Cancel();
+        try { await serverTask.WaitAsync(TimeSpan.FromSeconds(3)); } catch { }
+
+        Assert.Equal(HostProtocol.HealthStartingExitCode, exitCode);
+        Assert.Equal(HostProtocol.HealthStartingPayload, output);
     }
 
     [Fact]

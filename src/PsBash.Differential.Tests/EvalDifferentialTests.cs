@@ -145,4 +145,98 @@ public class EvalDifferentialTests
             "eval \"eval 'echo nested'\"",
             timeout: TimeSpan.FromSeconds(30));
     }
+
+    // -----------------------------------------------------------------------
+    // Performance regression: eval $(cmd-with-multiline-output) must complete
+    // within 2 seconds.
+    //
+    // Regression context: `ps-bash -c "eval $(fnm env --shell bash)"` was
+    // observed to hang from the user prompt. fnm prints multiple
+    // `export FOO="..."` lines; bash unquoted command substitution field-splits
+    // them and eval re-joins with spaces, producing one long export-chain.
+    // ps-bash must produce output within a tight deadline; a hang here is the
+    // shipstop signal.
+    //
+    // The 2 s budget intentionally undercuts BashOracleFixture's 20 s default
+    // so a hang surfaces as a fast OracleTimeoutException rather than a long
+    // CI stall. Each test passes timeout: TimeSpan.FromSeconds(2) explicitly.
+    // -----------------------------------------------------------------------
+
+    /// <summary>
+    /// Reproduces the user-facing hang: <c>eval $(printf 'export A=1\nexport B=2\n')</c>.
+    /// Multi-line command-sub output, no surrounding quotes, then eval.
+    /// Must finish within 2 s; otherwise the test fails (oracle timeout).
+    /// </summary>
+    [SkippableFact]
+    public async Task Differential_Eval_CmdSubMultilineExports_CompletesUnder2s()
+    {
+        // Axis 6 (slow reader / unbounded buffer) + Axis 15 (eval recursion).
+        await AssertOracle.EqualAsync(
+            "eval $(printf 'export A=1\\nexport B=2\\n'); echo $A $B",
+            timeout: TimeSpan.FromSeconds(2));
+    }
+
+    /// <summary>
+    /// Quoted form: <c>eval "$(printf ...)"</c>. Newlines in the cmd-sub output
+    /// are preserved as command separators, so eval re-parses two distinct
+    /// export statements. Must finish within 2 s.
+    /// </summary>
+    [SkippableFact]
+    public async Task Differential_Eval_QuotedCmdSubMultiline_CompletesUnder2s()
+    {
+        await AssertOracle.EqualAsync(
+            "eval \"$(printf 'export A=1\\nexport B=2\\n')\"; echo $A $B",
+            timeout: TimeSpan.FromSeconds(2));
+    }
+
+    /// <summary>
+    /// fnm-shaped payload: each line is <c>export NAME="value"</c> with embedded
+    /// double quotes and a backslash-bearing path-like value, plus a
+    /// <c>:"$PATH"</c> tail that references an existing variable. Stresses the
+    /// quoting/expansion path that the original user report exercised. Must
+    /// finish within 2 s.
+    /// </summary>
+    [SkippableFact]
+    public async Task Differential_Eval_FnmShapedPayload_CompletesUnder2s()
+    {
+        // Single-quoted heredoc-equivalent: the printf format is a literal so
+        // the embedded $PATH is expanded by the *eval'd* string, not the outer
+        // shell. Mirrors fnm's output where $PATH is intended for the eval'd
+        // line.
+        const string script = """
+            export PATH=/usr/bin
+            eval $(printf 'export FNM_MULTISHELL_PATH="/tmp/fnm_msh"\nexport PATH="/tmp/fnm_msh":"$PATH"\n')
+            echo $FNM_MULTISHELL_PATH
+            echo $PATH
+            """;
+        await AssertOracle.EqualAsync(script, timeout: TimeSpan.FromSeconds(2));
+    }
+
+    /// <summary>
+    /// In-process wall-time probe: spawn ps-bash directly (no bash oracle),
+    /// run the user's reported pattern, and assert wall time &lt; 2000 ms.
+    /// Goldens the stdout so the test runs even on platforms without bash.
+    /// Records the raw elapsed milliseconds in the failure message so a
+    /// regression that doubles eval latency is visible without re-running.
+    /// </summary>
+    [SkippableFact]
+    public async Task PsBash_Eval_CmdSubMultiline_WallTimeUnder2000ms()
+    {
+        var fixture = new BashOracleFixture();
+        Skip.If(fixture.PsBashPath is null, "ps-bash binary not built");
+
+        const string script = "eval $(printf 'export A=1\\nexport B=2\\n'); echo $A $B";
+
+        var result = await BashOracleFixture.RunOneAsync(
+            fixture.PsBashPath!,
+            "-c",
+            script,
+            TimeSpan.FromSeconds(5),  // generous outer timeout — assertion is on WallMs
+            extraEnv: new Dictionary<string, string> { ["PSBASH_DISABLE_HOST"] = "1" });
+
+        Assert.True(
+            result.WallMs < 2000,
+            $"eval $(...) wall time {result.WallMs} ms exceeds 2000 ms budget. " +
+            $"stdout: {result.Stdout}\nstderr: {result.Stderr}\nexit: {result.ExitCode}");
+    }
 }

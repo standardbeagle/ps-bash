@@ -44,4 +44,10 @@ public abstract record Mode
     /// no body; the host's REPL takes over once dispatched (T05a).
     /// </summary>
     public sealed record Interactive() : Mode;
+
+    /// <summary>
+    /// Lightweight launcher-to-host health probe. A healthy host responds before
+    /// touching the PowerShell worker so stale or wedged workers are not reused.
+    /// </summary>
+    public sealed record Health() : Mode;
 }

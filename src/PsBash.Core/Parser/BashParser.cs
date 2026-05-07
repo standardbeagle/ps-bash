@@ -847,14 +847,23 @@ public sealed class BashParser
 
             if (Peek().Kind == BashTokenKind.AssignmentWord || Peek().Kind == BashTokenKind.Word)
             {
+                // Bash: `export` accepts an interleaved mix of NAME=VAL and bare NAME args
+                // in any order (e.g. `eval $(printf 'export A=1\nexport B=2\n')` field-splits
+                // to `export A=1 export B=2`). Consume both kinds in a single loop so a bare
+                // Word in the middle does not silently drop subsequent assignments.
                 var pairs = ImmutableArray.CreateBuilder<Assignment>();
-                while (Peek().Kind == BashTokenKind.AssignmentWord)
-                    pairs.Add(ParseAssignmentWord());
-                while (Peek().Kind == BashTokenKind.Word)
+                while (Peek().Kind == BashTokenKind.AssignmentWord || Peek().Kind == BashTokenKind.Word)
                 {
-                    var name = Peek().Value;
-                    Advance();
-                    pairs.Add(new Assignment(name, AssignOp.Equal, null));
+                    if (Peek().Kind == BashTokenKind.AssignmentWord)
+                    {
+                        pairs.Add(ParseAssignmentWord());
+                    }
+                    else
+                    {
+                        var name = Peek().Value;
+                        Advance();
+                        pairs.Add(new Assignment(name, AssignOp.Equal, null));
+                    }
                 }
                 if (pairs.Count > 0)
                     return new Command.ShAssignment(pairs.ToImmutable());
@@ -872,14 +881,20 @@ public sealed class BashParser
 
             if (Peek().Kind == BashTokenKind.AssignmentWord || Peek().Kind == BashTokenKind.Word)
             {
+                // Same interleaving rule as `export` above.
                 var pairs = ImmutableArray.CreateBuilder<Assignment>();
-                while (Peek().Kind == BashTokenKind.AssignmentWord)
-                    pairs.Add(ParseAssignmentWordWithArray());
-                while (Peek().Kind == BashTokenKind.Word)
+                while (Peek().Kind == BashTokenKind.AssignmentWord || Peek().Kind == BashTokenKind.Word)
                 {
-                    var name = Peek().Value;
-                    Advance();
-                    pairs.Add(new Assignment(name, AssignOp.Equal, null));
+                    if (Peek().Kind == BashTokenKind.AssignmentWord)
+                    {
+                        pairs.Add(ParseAssignmentWordWithArray());
+                    }
+                    else
+                    {
+                        var name = Peek().Value;
+                        Advance();
+                        pairs.Add(new Assignment(name, AssignOp.Equal, null));
+                    }
                 }
                 if (pairs.Count > 0)
                     return new Command.ShAssignment(pairs.ToImmutable(), IsLocal: true);

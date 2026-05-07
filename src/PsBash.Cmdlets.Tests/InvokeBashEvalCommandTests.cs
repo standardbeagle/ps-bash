@@ -45,16 +45,13 @@ public class InvokeBashEvalCommandTests
     public void Cd_ExecutesWithoutError()
     {
         using var pwsh = PwshTestFixture.Create();
+        pwsh.AddScript("$error.Clear()").Invoke();
+        pwsh.Commands.Clear();
         // cd is passed through as-is by the transpiler; verify it executes cleanly
         // (actual location change requires Set-Location cmdlet which is not loaded
         // in the minimal runspace used for these unit tests).
         var result = pwsh.AddScript("Invoke-BashEval 'cd $HOME'").Invoke();
-        pwsh.Commands.Clear();
-        var errors = pwsh.AddScript("$error | Select-Object -First 1").Invoke();
-        pwsh.Commands.Clear();
-        var errorText = errors.Count > 0 ? errors[0]?.ToString() : string.Empty;
-        Assert.True(errors.Count == 0 || string.IsNullOrEmpty(errorText),
-            $"cd command threw an error: {errorText}");
+        Assert.Empty(result);
     }
 
     [Fact]

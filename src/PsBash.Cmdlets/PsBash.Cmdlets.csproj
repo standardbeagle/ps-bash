@@ -1,18 +1,29 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
   <!--
-    Binary pwsh module. Targets net8.0 for compatibility with PowerShell 7.4+ JIT host.
+    Binary pwsh module. Multi-targets net8.0 (PowerShell 7.4 JIT host) and
+    net10.0 (ps-bash-host's SDK runspace). Single-targeting net8.0 caused the
+    in-process ps-bash-host (net10.0) to load the cmdlets DLL alongside its
+    own net10.0 PsBash.Core, dragging in a second net8.0 PsBash.Core into the
+    process — type identity divergence then wedged Import-Module on the host's
+    SDK runspace. Multi-targeting lets the assembly resolver pick the matching
+    TFM when the host imports the cmdlets module.
     AOT publishing is intentionally disabled because the cmdlets in this assembly use
     ScriptBlock.Create + InvokeScript, which are reflection-heavy and not AOT-safe.
   -->
   <PropertyGroup>
-    <TargetFramework>net8.0</TargetFramework>
+    <TargetFrameworks>net8.0;net10.0</TargetFrameworks>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <PublishAot>false</PublishAot>
     <IsPackable>false</IsPackable>
     <CopyLocalLockFileAssemblies>true</CopyLocalLockFileAssemblies>
+    <EnableExperimentalBashEval Condition="'$(EnableExperimentalBashEval)' == ''">false</EnableExperimentalBashEval>
   </PropertyGroup>
+
+  <ItemGroup Condition="'$(EnableExperimentalBashEval)' != 'true'">
+    <Compile Remove="InvokeBashEvalCommand.cs" />
+  </ItemGroup>
 
   <ItemGroup>
     <ProjectReference Include="..\PsBash.Core\PsBash.Core.csproj" />
@@ -26,7 +37,13 @@
   </ItemGroup>
 
   <ItemGroup>
-    <None Include="PsBash.Cmdlets.psd1" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="PsBash.Cmdlets.psd1" CopyToOutputDirectory="Always"
+          Condition="'$(EnableExperimentalBashEval)' != 'true'" />
+    <None Include="PsBash.Cmdlets.Experimental.psd1"
+          Link="PsBash.Cmdlets.psd1"
+          TargetPath="PsBash.Cmdlets.psd1"
+          CopyToOutputDirectory="Always"
+          Condition="'$(EnableExperimentalBashEval)' == 'true'" />
     <None Include="..\PsBash.Module\PsBash.psd1" CopyToOutputDirectory="PreserveNewest" />
     <None Include="..\PsBash.Module\PsBash.psm1" CopyToOutputDirectory="PreserveNewest" />
     <None Include="..\PsBash.Module\PsBash.Format.ps1xml" CopyToOutputDirectory="PreserveNewest" />

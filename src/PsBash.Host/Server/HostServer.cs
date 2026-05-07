@@ -69,10 +69,7 @@ public sealed class HostServer : IAsyncDisposable
         {
             await using (stream)
             {
-                // Await worker init before handling — callers connected early while
-                // the runspace was still loading will unblock here.
-                var worker = await _workerTask.ConfigureAwait(false);
-                var conn = new Connection(stream, worker);
+                var conn = new Connection(stream, _workerTask);
                 await conn.HandleAsync(ct);
             }
         }

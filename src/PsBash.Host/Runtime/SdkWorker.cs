@@ -169,30 +169,21 @@ public sealed class SdkWorker : IWorker
         return 0;
     }
 
-    private const int MaxQueryBytes = 4 * 1024 * 1024; // 4 MB — QueryAsync is for small internal expressions
-
     private string RunCommandCollect(string expression)
     {
         _ps.Commands.Clear();
         _ps.Streams.Error.Clear();
         _ps.AddScript(expression);
 
-        var parts = new System.Text.StringBuilder();
-        var outputCollection = new System.Management.Automation.PSDataCollection<System.Management.Automation.PSObject>();
-        outputCollection.DataAdded += (sender, e) =>
+        try
         {
-            var col = (System.Management.Automation.PSDataCollection<System.Management.Automation.PSObject>)sender!;
-            var line = col[e.Index]?.ToString() ?? "";
-            if (parts.Length + line.Length > MaxQueryBytes)
-            {
-                _ps.Stop();
-                return;
-            }
-            if (parts.Length > 0) parts.Append('\n');
-            parts.Append(line);
-        };
-        _ps.Invoke(null, outputCollection);
-        return parts.ToString();
+            var results = _ps.Invoke();
+            return string.Join('\n', results.Select(r => r?.ToString() ?? ""));
+        }
+        catch (System.Management.Automation.PipelineStoppedException)
+        {
+            return "";
+        }
     }
 
     public ValueTask DisposeAsync()

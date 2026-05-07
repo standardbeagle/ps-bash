@@ -20,12 +20,12 @@ internal sealed class Connection
         "$global:BashPositional0 = $null; ";
 
     private readonly Stream _stream;
-    private readonly SdkWorker _worker;
+    private readonly Task<SdkWorker> _workerTask;
 
-    internal Connection(Stream stream, SdkWorker worker)
+    internal Connection(Stream stream, Task<SdkWorker> workerTask)
     {
         _stream = stream;
-        _worker = worker;
+        _workerTask = workerTask;
     }
 
     internal async Task HandleAsync(CancellationToken ct)
@@ -48,12 +48,33 @@ internal sealed class Connection
 
         string? command = mode switch
         {
+            Mode.Health => null,
             Mode.Command c => c.Body,
             Mode.Stdin s => s.Body,
             Mode.Script sc => sc.Body,
             Mode.Interactive => null,
             _ => null
         };
+
+        if (mode is Mode.Health)
+        {
+            if (_workerTask.IsCompletedSuccessfully)
+            {
+                await HostProtocol.WriteResponseLineAsync(_stream, HostProtocol.HealthPayload, ct);
+                await HostProtocol.WriteExitAsync(_stream, 0, ct);
+            }
+            else if (_workerTask.IsFaulted || _workerTask.IsCanceled)
+            {
+                await HostProtocol.WriteResponseLineAsync(_stream, "ps-bash-host worker failed", ct);
+                await HostProtocol.WriteExitAsync(_stream, 1, ct);
+            }
+            else
+            {
+                await HostProtocol.WriteResponseLineAsync(_stream, HostProtocol.HealthStartingPayload, ct);
+                await HostProtocol.WriteExitAsync(_stream, HostProtocol.HealthStartingExitCode, ct);
+            }
+            return;
+        }
 
         if (command == null)
         {
@@ -74,7 +95,8 @@ internal sealed class Connection
             HostProtocol.WriteResponseLineAsync(_stream, trimmed, ct).GetAwaiter().GetResult();
         }
 
-        var exitCode = await _worker.ExecuteWithOutputAsync(command, WriteOutput, ct);
+        var worker = await _workerTask.ConfigureAwait(false);
+        var exitCode = await worker.ExecuteWithOutputAsync(command, WriteOutput, ct);
         await HostProtocol.WriteExitAsync(_stream, exitCode, ct);
     }
 }

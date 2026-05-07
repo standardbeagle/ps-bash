@@ -9,7 +9,8 @@ internal sealed class Program
 {
     static async Task<int> Main(string[] args)
     {
-        // Interactive mode: host owns the tty; run the REPL directly.
+        // Interactive mode: host owns the tty; run the REPL directly. The
+        // launcher (ps-bash with no -c) spawns us in this mode and waits.
         if (args.Contains("--interactive"))
         {
             var noProfile = args.Contains("--no-profile");
@@ -23,17 +24,15 @@ internal sealed class Program
             return await InteractiveShell.RunAsync(interactiveWorker, noProfile);
         }
 
-        var sessionId = GetArg(args, "--session-id") ?? Environment.GetEnvironmentVariable("PSBASH_SESSION_ID") ?? "default";
-
         using var cts = new CancellationTokenSource();
         Console.CancelKeyPress += (_, e) => { e.Cancel = true; cts.Cancel(); };
 
         // Start runspace init on a background thread — this is the slow part (~2-8 s).
-        // The transport starts listening and writes the lock file while the runspace
-        // warms up, so clients can connect immediately and queue work.
+        // The transport starts listening while the runspace warms up so clients
+        // can connect immediately and queue work.
         var workerTask = Task.Run(SdkWorker.Create);
 
-        IIpcTransport transport = CreateTransport(sessionId, args);
+        IIpcTransport transport = CreateTransport(args);
 
         var idleTimeout = IdleShutdown.DefaultTimeout;
         using var idle = new IdleShutdown(cts, idleTimeout);
@@ -41,46 +40,33 @@ internal sealed class Program
         int? launcherPid = GetArgInt(args, "--launcher-pid");
         using var deathWatcher = ParentDeathWatcher.TryCreate(launcherPid, cts);
 
-        var lockFile = HostLockFile.ForSession(sessionId);
         await using var server = new HostServer(transport, workerTask, idle);
 
         try
         {
             var serverTask = server.RunAsync(cts.Token);
-            // Lock file written as soon as transport is listening — well before the
-            // runspace is ready. Clients that connect early are held at the worker
-            // semaphore inside HandleConnectionAsync.
             await server.WhenListening;
-            lockFile.Write(transport, Environment.ProcessId);
             await serverTask;
         }
         finally
         {
-            lockFile.Delete();
-            // Ensure background runspace init is awaited so exceptions surface cleanly.
             try { var w = await workerTask; await w.DisposeAsync(); } catch { }
         }
 
         return 0;
     }
 
-    private static IIpcTransport CreateTransport(string sessionId, string[] args)
+    private static IIpcTransport CreateTransport(string[] args)
     {
+        // Explicit overrides (used by tests) take precedence.
         var socketPath = GetArg(args, "--socket");
         if (socketPath != null) return new UnixSocketTransport(socketPath);
 
         var pipeName = GetArg(args, "--pipe");
         if (pipeName != null) return new NamedPipeTransport(pipeName);
 
-        // Default: prefer Unix sockets, fall back to named pipes on Windows
-        if (!OperatingSystem.IsWindows())
-        {
-            var sockDir = Path.Combine(Path.GetTempPath(), "ps-bash");
-            Directory.CreateDirectory(sockDir);
-            return new UnixSocketTransport(Path.Combine(sockDir, $"host-{sessionId}.sock"));
-        }
-
-        return new NamedPipeTransport($"psbash-{sessionId}");
+        // Default: the canonical per-user endpoint shared with launcher clients.
+        return IpcTransportFactory.CreateDefault();
     }
 
     private static string? GetArg(string[] args, string name)

@@ -100,6 +100,20 @@ public class HostProtocolTests
     }
 
     [Fact]
+    public async Task RoundTrip_Health_HeaderAndEndOnly()
+    {
+        await using var ms = new MemoryStream();
+        await HostProtocol.WriteRequestAsync(ms, new Mode.Health());
+        var bytes = ms.ToArray();
+
+        Assert.Equal(Utf8NoBom.GetBytes("MODE:Health\n<<<END>>>\n"), bytes);
+
+        ms.Position = 0;
+        var decoded = await HostProtocol.ReadRequestAsync(ms);
+        Assert.IsType<Mode.Health>(decoded);
+    }
+
+    [Fact]
     public async Task ReadRequest_TruncatedBeforeEnd_ThrowsIOException()
     {
         // Write a request, then truncate before the END sentinel.

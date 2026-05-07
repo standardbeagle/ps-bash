@@ -90,6 +90,7 @@ public sealed class InvokeBashEvalCommand : PSCmdlet
         // to $error, so callers running under Set-StrictMode -Version Latest don't
         // see spurious errors when the trap variables have never been set.
         var wrappedScript = $@"
+if (-not (Test-Path Variable:Global:BashPositional)) {{ $global:BashPositional = @() }}
 try {{
     {result.PowerShell}
 }} finally {{
@@ -118,6 +119,9 @@ try {{
         // 1. Snapshot caller's LASTEXITCODE before invocation
         var savedLastExitCode = SessionState.PSVariable.GetValue("LASTEXITCODE");
 
+        if (SessionState.PSVariable.GetValue("global:BashPositional") is null)
+            SessionState.PSVariable.Set("global:BashPositional", Array.Empty<string>());
+
         // Clear LASTEXITCODE so we can detect whether the script wrote it.
         SessionState.PSVariable.Set("LASTEXITCODE", null);
 
@@ -127,11 +131,11 @@ try {{
         {
             try
             {
-                var output = InvokeCommand.InvokeScript(
-                    useLocalScope: NoLocalScope.IsPresent,
-                    sb,
-                    input: null,
-                    args: null);
+                // Invoke in the caller's scope by default so eval-defined
+                // functions and variables remain visible after the cmdlet
+                // returns. -NoLocalScope preserves the historical isolated
+                // behavior used by existing callers/tests.
+                var output = InvokeCommand.InvokeScript(NoLocalScope.IsPresent, sb, null, Array.Empty<object>());
 
                 if (PassThru.IsPresent)
                 {

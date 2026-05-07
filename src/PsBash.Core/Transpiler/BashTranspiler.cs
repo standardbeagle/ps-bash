@@ -31,10 +31,10 @@ public enum TranspileContext
     Default = 0,
 
     /// <summary>
-    /// In-process eval (e.g. <c>Invoke-BashEval</c> cmdlet): the host pwsh
-    /// is the user's real session and MUST NOT have its builtins hijacked.
-    /// Disables the <c>PsBuiltinAliases</c> short-circuit so every mapped
-    /// command emits as an explicit <c>Invoke-Bash*</c> call.
+    /// Runtime eval context: the generated PowerShell runs inside a live
+    /// session and MUST NOT depend on aliases hijacking built-in PowerShell
+    /// names. Disables the <c>PsBuiltinAliases</c> short-circuit so every
+    /// mapped command emits as an explicit <c>Invoke-Bash*</c> call.
     /// </summary>
     Eval = 1,
 }

@@ -303,12 +303,47 @@ jobs:
           $cmdletsData = Import-PowerShellDataFile ./src/PsBash.Cmdlets/PsBash.Cmdlets.psd1
           Write-Host "Cmdlets manifest version: $($cmdletsData.ModuleVersion)"
 
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      # Build the PsBash.Cmdlets binary so the published PSGallery package
+      # contains an actual PsBash.Cmdlets.dll. Previously only source files
+      # (.cs/.csproj/.psd1) were copied into the staged module directory,
+      # which meant `Install-Module PsBash.Cmdlets` produced an unusable
+      # module — RootModule pointed at a DLL that did not exist. Symptom:
+      # `eval $(...)` (the runtime cmdlet path) hung the host on command
+      # discovery for 120 s before the IPC client gave up.
+      - name: Build PsBash.Cmdlets binary
+        shell: pwsh
+        run: |
+          dotnet build ./src/PsBash.Cmdlets/PsBash.Cmdlets.csproj -c Release
+          if ($LASTEXITCODE -ne 0) { throw "PsBash.Cmdlets build failed" }
+
       - name: Prepare module directories
         shell: pwsh
         run: |
           Copy-Item -Path ./src/PsBash.Module -Destination ./PsBash -Recurse
           Test-ModuleManifest -Path ./PsBash/PsBash.psd1
-          Copy-Item -Path ./src/PsBash.Cmdlets -Destination ./PsBash.Cmdlets -Recurse
+
+          # Stage PsBash.Cmdlets: start from the manifest only, then add the
+          # built DLL plus its dependencies (PsBash.Core.dll, etc.) from the
+          # build output. Source .cs/.csproj files are excluded so the
+          # PSGallery package contains only what the runtime needs.
+          New-Item -ItemType Directory -Path ./PsBash.Cmdlets -Force | Out-Null
+          Copy-Item ./src/PsBash.Cmdlets/PsBash.Cmdlets.psd1 -Destination ./PsBash.Cmdlets/
+
+          $cmdletsBin = Get-ChildItem -Path ./src/PsBash.Cmdlets/bin/Release -Directory |
+              Sort-Object Name -Descending | Select-Object -First 1
+          if (-not $cmdletsBin) { throw "PsBash.Cmdlets build output not found under bin/Release/" }
+          Copy-Item -Path (Join-Path $cmdletsBin.FullName 'PsBash.Cmdlets.dll') `
+                    -Destination ./PsBash.Cmdlets/ -Force
+          Copy-Item -Path (Join-Path $cmdletsBin.FullName 'PsBash.Core.dll') `
+                    -Destination ./PsBash.Cmdlets/ -Force
+          Write-Host "Staged ./PsBash.Cmdlets contents:"
+          Get-ChildItem ./PsBash.Cmdlets | Format-Table Name, Length
+
           Test-ModuleManifest -Path ./PsBash.Cmdlets/PsBash.Cmdlets.psd1
 
       - name: Publish PsBash to PSGallery
@@ -324,11 +359,6 @@ jobs:
           PSGALLERY_API_KEY: ${{ secrets.PSGALLERY_API_KEY }}
         run: |
           Publish-Module -Path ./PsBash.Cmdlets -NuGetApiKey $env:PSGALLERY_API_KEY -Repository PSGallery -Verbose
-
-      - name: Setup .NET
-        uses: actions/setup-dotnet@v4
-        with:
-          dotnet-version: '10.0.x'
 
       - name: Pack and publish to NuGet
         shell: pwsh

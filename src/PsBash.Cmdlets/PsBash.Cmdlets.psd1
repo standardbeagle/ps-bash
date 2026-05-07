@@ -8,7 +8,7 @@ RootModule = 'PsBash.Cmdlets.dll'
 
 NestedModules = @('PsBash.psd1')
 
-ModuleVersion = '0.9.1'
+ModuleVersion = '0.9.4'
 
 GUID = 'b2c3d4e5-f6a7-8901-bcde-f23456789012'
 
@@ -18,25 +18,23 @@ CompanyName = 'StandardBeagle'
 
 Copyright = '(c) Andy Brummer. All rights reserved.'
 
-Description = 'Binary cmdlets for ps-bash: Invoke-BashEval, Invoke-BashSource, ConvertTo-PowerShell, Test-BashSyntax. JIT-only (PowerShell 7.4+); does not register host aliases.'
+Description = 'Binary cmdlets for ps-bash: Invoke-BashSource, ConvertTo-PowerShell, Test-BashSyntax. JIT-only (PowerShell 7.4+); does not register host aliases.'
 
 CompatiblePSEditions = 'Core'
 
 PowerShellVersion = '7.4'
 
 # Modules that must be imported into the global environment prior to importing this module
-RequiredModules = @(@{ ModuleName = 'PsBash'; ModuleVersion = '0.9.1' })
+RequiredModules = @(@{ ModuleName = 'PsBash'; ModuleVersion = '0.9.4' })
 
-# Re-export all nested script-module functions so Invoke-BashEval transpiled
-# scriptblocks can resolve commands like Invoke-BashLs in the caller's scope.
-# Aliases remain blocked (AliasesToExport = @()) so host aliases like ls are
-# not hijacked. This is the fallback after proving private nested-module scope
-# binding does not work for ScriptBlock.Create from a binary cmdlet.
+# Re-export all nested script-module functions so binary cmdlets that execute
+# transpiled scriptblocks can resolve commands like Invoke-BashLs in the
+# caller's scope. Aliases remain blocked (AliasesToExport = @()) so host
+# aliases like ls are not hijacked.
 FunctionsToExport = @('*')
 
 # Cmdlets exported. Listed explicitly (no wildcards) for performance.
 CmdletsToExport = @(
-    'Invoke-BashEval',
     'Invoke-BashSource',
     'ConvertTo-PowerShell',
     'Test-BashSyntax',
@@ -57,7 +55,7 @@ PrivateData = @{
         Tags = @('bash', 'powershell', 'transpiler', 'cmdlets', 'PSEdition_Core')
         LicenseUri = 'https://github.com/standardbeagle/ps-bash/blob/main/LICENSE'
         ProjectUri = 'https://github.com/standardbeagle/ps-bash'
-        ReleaseNotes = 'Published alongside PsBash module. Binary cmdlets: Invoke-BashEval, Invoke-BashSource, ConvertTo-PowerShell, Test-BashSyntax.'
+        ReleaseNotes = 'Published alongside PsBash module. Binary cmdlets: Invoke-BashSource, ConvertTo-PowerShell, Test-BashSyntax.'
     }
 }
 

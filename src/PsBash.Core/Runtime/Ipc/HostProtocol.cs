@@ -1,4 +1,5 @@
 using System.Text;
+using System.Reflection;
 
 namespace PsBash.Core.Runtime.Ipc;
 
@@ -18,6 +19,8 @@ namespace PsBash.Core.Runtime.Ipc;
 /// </remarks>
 public static class HostProtocol
 {
+    public const int ProtocolVersion = 2;
+    public const int HealthStartingExitCode = 75;
     public const string EndSentinel = "<<<END>>>";
     public const string ExitPrefix = "<<<EXIT:";
     public const string ExitSuffix = ">>>";
@@ -27,6 +30,11 @@ public static class HostProtocol
     public const string BodyHeaderPrefix = "BODY:";
 
     private static readonly UTF8Encoding Utf8NoBom = new(encoderShouldEmitUTF8Identifier: false);
+
+    public static string HealthPayload { get; } =
+        $"ps-bash-host protocol={ProtocolVersion} build={GetBuildIdentity()}";
+    public static string HealthStartingPayload { get; } =
+        $"ps-bash-host protocol={ProtocolVersion} status=starting build={GetBuildIdentity()}";
 
     /// <summary>
     /// Serialize a <see cref="Mode"/> request to <paramref name="stream"/>. The
@@ -60,6 +68,9 @@ public static class HostProtocol
                 break;
             case Mode.Interactive:
                 sb.Append(ModeHeaderPrefix).Append("Interactive").Append('\n');
+                break;
+            case Mode.Health:
+                sb.Append(ModeHeaderPrefix).Append("Health").Append('\n');
                 break;
             default:
                 throw new InvalidOperationException($"Unknown mode: {mode.GetType().Name}");
@@ -102,6 +113,14 @@ public static class HostProtocol
                     if (next != EndSentinel)
                         throw new IOException($"Expected END sentinel after Interactive header, got: {next}");
                     return new Mode.Interactive();
+                }
+            case "Health":
+                {
+                    var next = await reader.ReadLineAsync(ct).ConfigureAwait(false)
+                        ?? throw new IOException("Request stream closed before END sentinel (Health)");
+                    if (next != EndSentinel)
+                        throw new IOException($"Expected END sentinel after Health header, got: {next}");
+                    return new Mode.Health();
                 }
             default:
                 throw new IOException($"Unknown MODE kind: {kind}");
@@ -222,6 +241,14 @@ public static class HostProtocol
 
     private static string DecodeBase64(string s)
         => Utf8NoBom.GetString(Convert.FromBase64String(s));
+
+    private static string GetBuildIdentity()
+    {
+        var asm = typeof(HostProtocol).Assembly;
+        return asm.GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion
+            ?? asm.GetName().Version?.ToString()
+            ?? "unknown";
+    }
 
     private static string EncodeArgv(IReadOnlyList<string> argv)
     {

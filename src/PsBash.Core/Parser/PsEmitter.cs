@@ -2722,36 +2722,21 @@ public static class PsEmitter
         return word.Parts[0] is WordPart.SingleQuoted or WordPart.DoubleQuoted;
     }
 
-    // `eval ARG...` is resolved at parse time by reconstructing the bash
-    // source the args represent and re-transpiling it inline. This avoids a
-    // runtime eval path entirely (no cmdlet, no IPC), at the cost of rejecting
-    // inputs whose eval body is dynamic (command substitution, arithmetic
-    // expansion, process substitution). For static inputs — literals, quoted
-    // literals, variable references — reconstruction is lossless: the
-    // concatenated source re-parses to the same effective AST as if the user
-    // had typed the eval body at top level.
     /// <summary>
-    /// Emit a runtime call to <c>Invoke-BashEval</c> for <c>eval ARG…</c>.
+    /// Emit PowerShell for <c>eval ARG...</c>.
     /// </summary>
     /// <remarks>
     /// <para>
-    /// Bash <c>eval</c> joins its args with spaces and re-parses the result as
-    /// shell source. The emitter cannot know the resulting string at parse time
-    /// when the args contain command substitutions (<c>$(…)</c>), arithmetic
-    /// expansion, or process substitution — those expand only at runtime.
+    /// Static eval bodies are reconstructed, joined, and transpiled at parse
+    /// time. Dynamic bodies are emitted as an inline runtime block that
+    /// evaluates argument expressions, calls
+    /// <c>BashTranspiler.Transpile(..., TranspileContext.Eval)</c>, and runs
+    /// the result with <c>Invoke-Expression</c>.
     /// </para>
     /// <para>
-    /// We therefore emit a runtime dispatch: each arg is emitted as a normal
-    /// pwsh expression (so <c>$(…)</c> already turns into pwsh
-    /// <c>$(Invoke-Bash…)</c> via <see cref="EmitWord"/>), and the cmdlet joins
-    /// the arg values with spaces, calls
-    /// <c>BashTranspiler.Transpile(joined, TranspileContext.Eval)</c>, and runs
-    /// the result via <c>Invoke-Expression</c> in the caller's scope.
-    /// </para>
-    /// <para>
-    /// The runtime cmdlet is responsible for nesting-depth bookkeeping
-    /// (<c>$global:__BashEvalDepth</c>, capped at 5) to guard against
-    /// pathological recursion.
+    /// The runtime block intentionally avoids <c>Invoke-BashEval</c>; invoking
+    /// a script block from inside that cmdlet wedges the SDK host pipeline on
+    /// inputs like <c>eval "$(printf 'x=5')"</c>.
     /// </para>
     /// <para>
     /// Empty <c>eval</c> with no args is a no-op (bash exits 0).
@@ -2760,13 +2745,113 @@ public static class PsEmitter
     private static string EmitEval(ImmutableArray<CompoundWord> args)
     {
         if (args.IsEmpty)
-            return "Invoke-BashEval";
+            return "$global:LASTEXITCODE = 0";
 
-        var sb = new StringBuilder("Invoke-BashEval");
+        // Inline-transpile static eval bodies at parse time. This avoids
+        // runtime eval entirely for the common case where the eval
+        // body is a literal string or a sequence of literal/quoted args (e.g.
+        // `eval "export A=1"`, or `ps-bash -c "eval $(fnm env --shell bash)"`
+        // where PowerShell already substituted the cmdsub before ps-bash saw
+        // it).
+        //
+        // Reconstruction restores enough of the original bash quoting that the
+        // joined string re-parses to the same effective tokens. If any arg
+        // contains a runtime expansion (variable, command sub, arithmetic,
+        // process sub, glob, brace expansion) we cannot resolve it at parse
+        // time and emit the inline runtime block below.
+        var staticParts = new List<string>(args.Length);
+        bool allStatic = true;
         foreach (var arg in args)
         {
-            sb.Append(' ');
-            sb.Append(EmitWord(arg));
+            var s = TryReconstructBashSource(arg);
+            if (s is null) { allStatic = false; break; }
+            staticParts.Add(s);
+        }
+
+        if (allStatic)
+        {
+            var joined = string.Join(' ', staticParts);
+            try
+            {
+                var inner = Transpile(joined, TranspileContext.Eval);
+                if (inner is not null)
+                    return inner;
+            }
+            catch (ParseException)
+            {
+                // Eval body was parseable as bash tokens at the outer level
+                // but malformed when treated as a complete bash script — fall
+                // through to the runtime block, which produces a runtime error
+                // mirroring bash's own behavior.
+            }
+        }
+
+        var emittedArgs = string.Join(", ", args.Select(EmitWord));
+        return
+            "$__psbash_eval_src = @(" + emittedArgs + ") -join ' '; " +
+            "if (-not [string]::IsNullOrWhiteSpace($__psbash_eval_src)) { " +
+            "$__psbash_eval_depth = [int]($global:__BashEvalDepth ?? 0); " +
+            "if ($__psbash_eval_depth -ge 5) { throw 'eval: nesting depth limit (5) exceeded; possible infinite recursion' }; " +
+            "$global:__BashEvalDepth = $__psbash_eval_depth + 1; " +
+            "try { " +
+            "$__psbash_eval_pwsh = [PsBash.Core.Transpiler.BashTranspiler]::Transpile($__psbash_eval_src, [PsBash.Core.Transpiler.TranspileContext]::Eval); " +
+            "Invoke-Expression $__psbash_eval_pwsh " +
+            "} finally { $global:__BashEvalDepth = $__psbash_eval_depth } " +
+            "}";
+    }
+
+    /// <summary>
+    /// Recover the post-quote-removal string value of a <see cref="CompoundWord"/>
+    /// composed only of literal and quoted parts. Returns <c>null</c> when any
+    /// part requires runtime expansion (variable, command sub, arithmetic,
+    /// process sub, glob, brace expansion).
+    /// </summary>
+    /// <remarks>
+    /// Mirrors bash's argument processing: by the time <c>eval</c> sees its
+    /// args, quotes have already been stripped, so <c>eval "export A=1"</c>
+    /// and <c>eval 'export A=1'</c> both produce the eval body
+    /// <c>export A=1</c> (no quotes). The recovered string is then re-parsed
+    /// as a bash source line.
+    /// </remarks>
+    private static string? TryReconstructBashSource(CompoundWord word)
+    {
+        var sb = new StringBuilder();
+        foreach (var part in word.Parts)
+        {
+            switch (part)
+            {
+                case WordPart.Literal lit:
+                    sb.Append(lit.Value);
+                    break;
+                case WordPart.EscapedLiteral esc:
+                    sb.Append(esc.Value);
+                    break;
+                case WordPart.SingleQuoted sq:
+                    sb.Append(sq.Value);
+                    break;
+                case WordPart.DoubleQuoted dq:
+                    foreach (var inner in dq.Parts)
+                    {
+                        switch (inner)
+                        {
+                            case WordPart.Literal il:
+                                sb.Append(il.Value);
+                                break;
+                            case WordPart.EscapedLiteral ie:
+                                sb.Append(ie.Value);
+                                break;
+                            default:
+                                // Variable/command/arithmetic substitution
+                                // inside double quotes — defer to runtime.
+                                return null;
+                        }
+                    }
+                    break;
+                default:
+                    // Variable/command/arithmetic/process subs, globs, and
+                    // brace expansions — defer to runtime.
+                    return null;
+            }
         }
         return sb.ToString();
     }

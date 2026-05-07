@@ -55,6 +55,37 @@ internal sealed class SdkRunspace : IAsyncDisposable
         using var ps = PowerShell.Create();
         ps.Runspace = runspace;
 
+        // Pre-load PsBash.Cmdlets.dll from the installed PsBash module so
+        // Invoke-BashSource and hook cmdlets are available without triggering the slow
+        // $PSModulePath auto-loading scan. Get-Module -ListAvailable by name is a fast
+        // directory lookup. Silent no-op when PsBash is not installed (test environment).
+        //
+        // Known gap: PsBash.Cmdlets ships as its own PSGallery module, but the
+        // workflow change in publish.yml now bundles `PsBash.Cmdlets.dll` inside the
+        // staged `PsBash.Cmdlets` PSGallery package alongside its psd1. The host
+        // probe below currently looks in the `PsBash` module dir only — the legacy
+        // bundled layout — so users on the new PSGallery layout still need the dll
+        // copied beside `PsBash.psd1` for the cmdlet path to work. Static-eval
+        // inlining in PsEmitter.EmitEval covers the cases where PowerShell expanded
+        // `$()` before ps-bash saw the input (the user-reported scenario).
+        //
+        // Attempting to add a second probe for `PsBash.Cmdlets -ListAvailable` here
+        // surfaced a host-startup deadlock on Windows pwsh 7.x SDK that wedged even
+        // simple `echo hi` invocations. Left for a future change with deeper
+        // investigation; documented here so the gap is not silently rediscovered.
+        ps.AddScript(@"
+$__m = Get-Module PsBash -ListAvailable -ErrorAction SilentlyContinue |
+    Sort-Object Version -Descending | Select-Object -First 1
+if ($__m) {
+    $__dll = Join-Path (Split-Path $__m.Path) 'PsBash.Cmdlets.dll'
+    if (Test-Path $__dll) {
+        Import-Module $__dll -Force -ErrorAction SilentlyContinue -DisableNameChecking
+    }
+}
+Remove-Variable -Name __m, __dll -ErrorAction SilentlyContinue
+").Invoke();
+        ps.Commands.Clear();
+
         var psm1Path = Path.Combine(Path.GetDirectoryName(modulePath)!, "PsBash.psm1");
         if (File.Exists(psm1Path))
         {
@@ -81,7 +112,8 @@ internal sealed class SdkRunspace : IAsyncDisposable
         foreach (var assembly in AppDomain.CurrentDomain.GetAssemblies())
         {
             var asmName = assembly.GetName().Name ?? "";
-            if (!asmName.StartsWith("Microsoft.PowerShell") && asmName != "System.Management.Automation")
+            if (!asmName.StartsWith("Microsoft.PowerShell") &&
+                asmName != "System.Management.Automation")
                 continue;
 
             Type[] types;
