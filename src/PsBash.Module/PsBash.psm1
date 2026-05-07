@@ -12630,6 +12630,22 @@ function Invoke-BashBackground {
         [scriptblock]$Command
     )
 
+    if (-not ('PsBash.BackgroundOutputForwarder' -as [type])) {
+        Add-Type -TypeDefinition @'
+namespace PsBash {
+    public static class BackgroundOutputForwarder {
+        public static void WriteOutput(object sender, System.Diagnostics.DataReceivedEventArgs e) {
+            if (e.Data != null) { System.Console.WriteLine(e.Data); }
+        }
+
+        public static void WriteError(object sender, System.Diagnostics.DataReceivedEventArgs e) {
+            if (e.Data != null) { System.Console.Error.WriteLine(e.Data); }
+        }
+    }
+}
+'@
+    }
+
     $pwshPath = [System.Diagnostics.Process]::GetCurrentProcess().MainModule.FileName
 
     # Ensure the child process can resolve Invoke-Bash* commands
@@ -12637,23 +12653,22 @@ function Invoke-BashBackground {
     if (-not $modulePath) {
         $modulePath = Join-Path $PSScriptRoot 'PsBash.psd1'
     }
-    $childScript = "Import-Module '$modulePath' -Force; & { $Command }"
+    $childScript = "`$WarningPreference = 'SilentlyContinue'; Import-Module '$modulePath' -Force -WarningAction SilentlyContinue; & { $Command }"
     $encodedCmd = [Convert]::ToBase64String(
         [System.Text.Encoding]::Unicode.GetBytes($childScript)
     )
 
     $psi = [System.Diagnostics.ProcessStartInfo]::new()
     $psi.FileName = $pwshPath
-    $psi.Arguments = "-NoLogo -NoProfile -EncodedCommand $encodedCmd"
+    $psi.Arguments = "-NoLogo -NoProfile -NonInteractive -EncodedCommand $encodedCmd"
     $psi.UseShellExecute = $false
     $psi.RedirectStandardOutput = $true
     $psi.RedirectStandardError = $true
     $psi.CreateNoWindow = $true
 
     $proc = [System.Diagnostics.Process]::Start($psi)
-    # Forward child stdout/stderr to the parent terminal (matches bash & behavior)
-    $proc.OutputDataReceived += { param($s, $e); if ($null -ne $e.Data) { [Console]::WriteLine($e.Data) } }
-    $proc.ErrorDataReceived  += { param($s, $e); if ($null -ne $e.Data) { [Console]::Error.WriteLine($e.Data) } }
+    $proc.add_OutputDataReceived([System.Diagnostics.DataReceivedEventHandler][PsBash.BackgroundOutputForwarder]::WriteOutput)
+    $proc.add_ErrorDataReceived([System.Diagnostics.DataReceivedEventHandler][PsBash.BackgroundOutputForwarder]::WriteError)
     [void]$proc.BeginOutputReadLine()
     [void]$proc.BeginErrorReadLine()
 
