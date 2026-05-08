@@ -109,11 +109,31 @@ if (Test-Path $launcherBinary) {
     Write-Warning "Expected $launcherBinary not found after publish."
 }
 
-# Copy host binary AND its runtime dependencies (System.Management.Automation,
-# runtimes/, deps.json, ...) — the host won't start without them.
+# Copy host binary AND its runtime dependencies — the host won't start without them.
+# Two-step merge:
+#  1. Publish output (dist/host/): .NET runtime DLLs (coreclr, hostfxr, etc.), host exe/dll.
+#  2. Intermediate win-x64 build output: PowerShell SDK DLLs (System.Management.Automation,
+#     Microsoft.PowerShell.*, etc.) that dotnet publish omits because the csproj marks the
+#     SDK package with PrivateAssets=all (to keep SMA out of the AOT launcher's compile graph).
+#     CopyLocalLockFileAssemblies=true in PsBash.Host.csproj ensures they land here.
 if (Test-Path $hostStage) {
     Copy-Item -Path (Join-Path $hostStage '*') -Destination $binDir -Recurse -Force
-    Write-Host "Copied host runtime assets into: $binDir/"
+    Write-Host "Copied host publish assets (runtime DLLs) into: $binDir/"
 } else {
     Write-Warning "Host stage $hostStage not found."
+}
+
+$hostIntermediateDir = Join-Path $root 'src' 'PsBash.Host' 'bin' 'Release' 'net10.0' $rid
+if (Test-Path $hostIntermediateDir) {
+    $copied = 0
+    Get-ChildItem -Path $hostIntermediateDir -Filter '*.dll' -File | ForEach-Object {
+        $dest = Join-Path $binDir $_.Name
+        if (-not (Test-Path $dest)) {
+            Copy-Item $_.FullName $dest -Force
+            $copied++
+        }
+    }
+    Write-Host "Copied $copied PowerShell SDK DLLs from intermediate build output."
+} else {
+    Write-Warning "Host intermediate dir $hostIntermediateDir not found — PS SDK DLLs may be missing."
 }

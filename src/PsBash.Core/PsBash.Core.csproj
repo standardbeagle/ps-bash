@@ -8,7 +8,7 @@
 
     <!-- NuGet package metadata -->
     <PackageId>PsBash.Core</PackageId>
-    <Version>0.9.1</Version>
+    <Version>0.9.2</Version>
     <Authors>StandardBeagle</Authors>
     <Description>Bash-to-PowerShell transpiler library. Parses bash commands into an AST (based on Oils/OSH) and emits equivalent PowerShell. Use as a library in terminal emulators, AI agents, or any .NET app that needs bash compatibility on top of PowerShell.</Description>
     <PackageTags>bash;powershell;transpiler;parser;shell;terminal</PackageTags>
@@ -30,6 +30,19 @@
     <EmbeddedResource Include="..\PsBash.Module\PsBash.psd1" LogicalName="PsBash.Module/PsBash.psd1" />
     <EmbeddedResource Include="..\PsBash.Module\PsBash.psm1" LogicalName="PsBash.Module/PsBash.psm1" />
     <EmbeddedResource Include="..\PsBash.Module\PsBash.Format.ps1xml" LogicalName="PsBash.Module/PsBash.Format.ps1xml" />
+    <EmbeddedResource Include="..\PsBash.Module\Commands\00-Infrastructure.ps1" LogicalName="PsBash.Module/Commands/00-Infrastructure.ps1" />
+    <EmbeddedResource Include="..\PsBash.Module\Commands\01-Output.ps1" LogicalName="PsBash.Module/Commands/01-Output.ps1" />
+    <EmbeddedResource Include="..\PsBash.Module\Commands\02-Grep.ps1" LogicalName="PsBash.Module/Commands/02-Grep.ps1" />
+    <EmbeddedResource Include="..\PsBash.Module\Commands\03-Sort.ps1" LogicalName="PsBash.Module/Commands/03-Sort.ps1" />
+    <EmbeddedResource Include="..\PsBash.Module\Commands\04-HeadTailWc.ps1" LogicalName="PsBash.Module/Commands/04-HeadTailWc.ps1" />
+    <EmbeddedResource Include="..\PsBash.Module\Commands\05-FileSystem.ps1" LogicalName="PsBash.Module/Commands/05-FileSystem.ps1" />
+    <EmbeddedResource Include="..\PsBash.Module\Commands\06-SedAwk.ps1" LogicalName="PsBash.Module/Commands/06-SedAwk.ps1" />
+    <EmbeddedResource Include="..\PsBash.Module\Commands\07-TextProcessing.ps1" LogicalName="PsBash.Module/Commands/07-TextProcessing.ps1" />
+    <EmbeddedResource Include="..\PsBash.Module\Commands\08-DataTools.ps1" LogicalName="PsBash.Module/Commands/08-DataTools.ps1" />
+    <EmbeddedResource Include="..\PsBash.Module\Commands\09-SystemUtils.ps1" LogicalName="PsBash.Module/Commands/09-SystemUtils.ps1" />
+    <EmbeddedResource Include="..\PsBash.Module\Commands\10-SearchArchive.ps1" LogicalName="PsBash.Module/Commands/10-SearchArchive.ps1" />
+    <EmbeddedResource Include="..\PsBash.Module\Commands\11-ShellBuiltins.ps1" LogicalName="PsBash.Module/Commands/11-ShellBuiltins.ps1" />
+    <EmbeddedResource Include="..\PsBash.Module\Commands\12-Interactive.ps1" LogicalName="PsBash.Module/Commands/12-Interactive.ps1" />
   </ItemGroup>
 
   <ItemGroup>

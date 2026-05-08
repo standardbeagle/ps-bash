@@ -18,7 +18,7 @@ internal sealed class LineEditor
     // ── autosuggestion ────────────────────────────────────────────────────────
     private readonly Suggester _suggester;
     private string? _currentSuggestion;  // Suffix to append (null = no suggestion)
-    private readonly string _cwd;  // Current working directory for suggestions
+    private string _cwd;  // Current working directory for suggestions
 
     // ── completion ───────────────────────────────────────────────────────────
     private readonly Func<string, int, IReadOnlyList<string>>? _completer;
@@ -105,12 +105,12 @@ internal sealed class LineEditor
     /// Falls back to Console.ReadLine() when stdin is not a TTY (piped/redirected).
     /// This is the synchronous version that does not support Ctrl-R (for backward compatibility).
     /// </summary>
-    public string? ReadLine(string prompt) => ReadLineAsync(prompt).GetAwaiter().GetResult();
+    public string? ReadLine(string prompt, string? cwd = null) => ReadLineAsync(prompt, cwd).GetAwaiter().GetResult();
 
     /// <summary>
     /// Async version of ReadLine that supports Ctrl-R search.
     /// </summary>
-    public async Task<string?> ReadLineAsync(string prompt)
+    public async Task<string?> ReadLineAsync(string prompt, string? cwd = null)
     {
         // When stdin is redirected (not a real terminal), fall back to simple ReadLine.
         // This preserves compatibility with tests and piped usage.
@@ -120,6 +120,7 @@ internal sealed class LineEditor
             return Console.ReadLine();
         }
 
+        if (cwd is not null) _cwd = cwd;
         _prompt = prompt;
         _buf.Clear();
         _cursor = 0;

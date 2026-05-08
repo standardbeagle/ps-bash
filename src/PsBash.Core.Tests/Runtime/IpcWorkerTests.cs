@@ -1,5 +1,4 @@
 using System.Net.Sockets;
-using System.Runtime.InteropServices;
 using PsBash.Core.Runtime;
 using PsBash.Core.Runtime.Ipc;
 using Xunit;
@@ -22,10 +21,6 @@ public class IpcWorkerTests
 
     private static IIpcTransport CreatePlatformTransport()
     {
-        if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
-        {
-            return new NamedPipeTransport("psbash-test-" + Guid.NewGuid().ToString("N").Substring(0, 8));
-        }
         var dir = Path.Combine(Path.GetTempPath(), "ps-bash");
         Directory.CreateDirectory(dir);
         return new UnixSocketTransport(Path.Combine(dir, "test-" + Guid.NewGuid().ToString("N").Substring(0, 8) + ".sock"));
@@ -118,9 +113,10 @@ public class IpcWorkerTests
         try
         {
             // Write a lock file pointing at a transport with no listener.
-            IIpcTransport stale = RuntimeInformation.IsOSPlatform(OSPlatform.Windows)
-                ? new NamedPipeTransport("psbash-stale-" + Guid.NewGuid().ToString("N").Substring(0, 8))
-                : new UnixSocketTransport(Path.Combine(Path.GetTempPath(), "ps-bash", "stale-" + Guid.NewGuid().ToString("N").Substring(0, 8) + ".sock"));
+            var dir = Path.Combine(Path.GetTempPath(), "ps-bash");
+            Directory.CreateDirectory(dir);
+            IIpcTransport stale = new UnixSocketTransport(
+                Path.Combine(dir, "stale-" + Guid.NewGuid().ToString("N").Substring(0, 8) + ".sock"));
             lockFile.Write(stale, pid: 999_999);
             Assert.True(File.Exists(lockFile.Path));
 

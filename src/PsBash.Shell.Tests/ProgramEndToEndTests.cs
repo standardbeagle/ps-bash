@@ -8,12 +8,6 @@ namespace PsBash.Shell.Tests;
 public class ProgramEndToEndTests
 {
     private static readonly string? PwshPath = FindPwsh();
-    private static readonly string ProjectDir = Path.GetFullPath(
-        Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "..",
-            "src", "PsBash.Shell"));
-    private static readonly string WorkerScript = Path.GetFullPath(
-        Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "..",
-            "scripts", "ps-bash-worker.ps1"));
 
     private static string? FindPwsh()
     {
@@ -42,17 +36,7 @@ public class ProgramEndToEndTests
 
     private static ProcessStartInfo BuildPsi(string[] arguments)
     {
-        var psi = new ProcessStartInfo { FileName = "dotnet" };
-        psi.ArgumentList.Add("run");
-        psi.ArgumentList.Add("--no-build");
-        psi.ArgumentList.Add("--project");
-        psi.ArgumentList.Add(ProjectDir);
-        psi.ArgumentList.Add("--");
-        foreach (var arg in arguments)
-            psi.ArgumentList.Add(arg);
-
-        psi.Environment["PSBASH_WORKER"] = WorkerScript;
-        return psi;
+        return ProcessRunHelper.BuildPsBashPsi(arguments);
     }
 
     [SkippableFact]
@@ -64,6 +48,17 @@ public class ProgramEndToEndTests
 
         Assert.Equal(0, exitCode);
         Assert.Contains("hello", stdout);
+    }
+
+    [Fact]
+    public async Task Help_PrintsUsageAndExitsZero()
+    {
+        var (exitCode, stdout, stderr) = await RunShellAsync("--help");
+
+        Assert.Equal(0, exitCode);
+        Assert.Contains("Usage: ps-bash", stdout);
+        Assert.Contains("-c <command>", stdout);
+        Assert.DoesNotContain("Loading ps-bash", stderr);
     }
 
     [SkippableFact]
@@ -140,7 +135,7 @@ public class ProgramEndToEndTests
     // ── Reliability: hung commands time out + kill entire process tree ───────
 
     [SkippableFact]
-    public async Task HangingCommand_TimesOutWithin35Seconds_AndKillsProcessTree()
+    public async Task HangingCommand_TimesOutQuickly_AndKillsProcessTree()
     {
         Skip.If(PwshPath is null, "pwsh not available");
 
@@ -148,22 +143,29 @@ public class ProgramEndToEndTests
             .Select(p => p.Id).ToHashSet();
 
         var sw = Stopwatch.StartNew();
-        var timeout = TimeSpan.FromSeconds(10);
+        var timeout = TimeSpan.FromSeconds(1);
         var ex = await Assert.ThrowsAsync<TimeoutException>(async () =>
         {
-            await RunShellAsync(new[] { "-c", "Start-Sleep 60" }, timeout);
+            await RunShellAsync(new[] { "-c", "Start-Sleep 30" }, timeout);
         });
         sw.Stop();
 
-        Assert.True(sw.Elapsed < TimeSpan.FromSeconds(20),
+        Assert.True(sw.Elapsed < TimeSpan.FromSeconds(8),
             $"Timeout took too long: {sw.Elapsed.TotalSeconds:F1}s");
         Assert.Contains("did not exit within", ex.Message);
 
-        await Task.Delay(TimeSpan.FromSeconds(2));
+        List<int> leaked;
+        var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(2);
+        do
+        {
+            var postWorkerPids = Process.GetProcessesByName("pwsh")
+                .Select(p => p.Id).ToHashSet();
+            leaked = postWorkerPids.Except(preWorkerPids).ToList();
+            if (leaked.Count == 0)
+                break;
+            await Task.Delay(TimeSpan.FromMilliseconds(50));
+        } while (DateTime.UtcNow < deadline);
 
-        var postWorkerPids = Process.GetProcessesByName("pwsh")
-            .Select(p => p.Id).ToHashSet();
-        var leaked = postWorkerPids.Except(preWorkerPids).ToList();
         Assert.True(leaked.Count == 0,
             $"Leaked pwsh worker PIDs after timeout: {string.Join(",", leaked)}");
     }
@@ -345,5 +347,64 @@ public class ProgramEndToEndTests
             $"'bash tool works' and 'done' must be on separate lines. Got: [{string.Join("|", lines)}]");
         Assert.True(lines.Count >= 3,
             $"Expected >=3 output lines, got {lines.Count}: [{string.Join("|", lines)}]");
+    }
+
+    // ── Regression: ls output must not be raw PSCustomObject dumps ────────────
+
+    /// <summary>
+    /// Regression for SdkWorker bug: when running through the host-backed path,
+    /// SdkWorker.RunCommand called PSObject.ToString() which returns
+    /// "@{Name=...; BashText=...}" for PsBash.LsEntry objects.
+    ///
+    /// In -c mode the shell falls back to PwshWorker (no host running in CI),
+    /// which handles BashText correctly. This test guards against regression on
+    /// the PwshWorker path and serves as an oracle for the expected output shape.
+    /// </summary>
+    [SkippableFact]
+    public async Task Command_Ls_OutputsFilenameNotRawObjectHash()
+    {
+        Skip.If(PwshPath is null, "pwsh not available");
+
+        var dir = Directory.CreateTempSubdirectory("psbash-ls-e2e-");
+        try
+        {
+            File.WriteAllText(Path.Combine(dir.FullName, "unique_sample.txt"), "data");
+            var dirPath = dir.FullName.Replace('\\', '/');
+
+            var (exitCode, stdout, _) = await RunShellAsync("-c", $"ls '{dirPath}'");
+
+            Assert.Equal(0, exitCode);
+            Assert.DoesNotContain("@{", stdout);
+            Assert.Contains("unique_sample.txt", stdout);
+        }
+        finally { dir.Delete(recursive: true); }
+    }
+
+    [SkippableFact]
+    public async Task Command_LsLong_OutputsPermissionsColumnNotRawObjectHash()
+    {
+        Skip.If(PwshPath is null, "pwsh not available");
+
+        var dir = Directory.CreateTempSubdirectory("psbash-ls-long-e2e-");
+        try
+        {
+            File.WriteAllText(Path.Combine(dir.FullName, "file.txt"), "hello");
+            var dirPath = dir.FullName.Replace('\\', '/');
+
+            var (exitCode, stdout, _) = await RunShellAsync("-c", $"ls -l '{dirPath}'");
+
+            Assert.Equal(0, exitCode);
+            Assert.DoesNotContain("@{", stdout);
+            // Long listing: at least one output line starts with a Unix permissions character
+            var outputLines = stdout
+                .Replace("\r\n", "\n")
+                .Split('\n', StringSplitOptions.RemoveEmptyEntries);
+            Assert.Contains(outputLines, l =>
+            {
+                var t = l.TrimStart();
+                return t.Length > 0 && (t[0] == '-' || t[0] == 'd' || t[0] == 'l');
+            });
+        }
+        finally { dir.Delete(recursive: true); }
     }
 }

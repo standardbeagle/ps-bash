@@ -355,10 +355,18 @@ internal static class TabCompleter
 
     private static string ResolveDir(string path, string cwd)
     {
-        if (path.StartsWith("~/") || path == "~")
+        // Normalize to use the OS separator before tilde check, so that
+        // Path.GetDirectoryName("~/work/be") → "~/work" or "~\work" (Windows)
+        // both expand correctly.
+        var normalized = path.Replace('/', Path.DirectorySeparatorChar);
+        if (normalized.StartsWith("~" + Path.DirectorySeparatorChar) || normalized == "~")
         {
             var home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
-            path = home + path[1..];
+            path = home + normalized[1..];
+        }
+        else
+        {
+            path = normalized;
         }
 
         return Path.IsPathRooted(path)

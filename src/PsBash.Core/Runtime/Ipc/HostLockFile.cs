@@ -123,9 +123,7 @@ public sealed class HostLockFile
             using var probeCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
             probeCts.CancelAfter(TimeSpan.FromMilliseconds(500));
 
-            await using var probe = entry.Scheme == "unix"
-                ? (IIpcTransport)new UnixSocketTransport(entry.Endpoint)
-                : new NamedPipeTransport(entry.Endpoint);
+            await using var probe = IpcTransportFactory.OpenFromEntry(entry);
             using var stream = await probe.ConnectAsync(probeCts.Token);
             // Connection accepted — host is alive. Leave the file in place.
             return entry;

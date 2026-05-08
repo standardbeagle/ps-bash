@@ -7,8 +7,8 @@ namespace PsBash.Core.Runtime.Ipc;
 /// concurrent read+write for the wire protocol layer (T04).
 /// </summary>
 /// <remarks>
-/// Implementations: <see cref="UnixSocketTransport"/> (POSIX),
-/// <see cref="NamedPipeTransport"/> (Windows fallback).
+/// Implementations: <see cref="UnixSocketTransport"/> (default, all platforms),
+/// <see cref="NamedPipeTransport"/> (only when --pipe is explicitly requested).
 /// </remarks>
 public interface IIpcTransport : IAsyncDisposable
 {

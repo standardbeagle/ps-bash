@@ -20,14 +20,41 @@ internal static class ProcessRunHelper
         Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "..",
             "scripts", "ps-bash-worker.ps1"));
 
+    private static string FindPsBashBinary()
+    {
+        var preferExe = OperatingSystem.IsWindows();
+        var dir = new DirectoryInfo(AppContext.BaseDirectory);
+        while (dir is not null)
+        {
+            var binDir = Path.Combine(dir.FullName, "src", "PsBash.Shell", "bin");
+            if (Directory.Exists(binDir))
+            {
+                string? fallback = null;
+                foreach (var exe in Directory.EnumerateFiles(binDir, "ps-bash*", SearchOption.AllDirectories))
+                {
+                    var name = Path.GetFileName(exe);
+                    var isExe = string.Equals(name, "ps-bash.exe", StringComparison.OrdinalIgnoreCase);
+                    var isNoExt = string.Equals(name, "ps-bash", StringComparison.OrdinalIgnoreCase);
+                    if (!isExe && !isNoExt)
+                        continue;
+
+                    if (preferExe && isExe)
+                        return exe;
+                    if (!preferExe && isNoExt)
+                        return exe;
+                    fallback ??= exe;
+                }
+                if (fallback is not null)
+                    return fallback;
+            }
+            dir = dir.Parent;
+        }
+        throw new InvalidOperationException("ps-bash binary not found -- build PsBash.Shell first");
+    }
+
     public static ProcessStartInfo BuildPsi(string[] arguments)
     {
-        var psi = new ProcessStartInfo { FileName = "dotnet" };
-        psi.ArgumentList.Add("run");
-        psi.ArgumentList.Add("--no-build");
-        psi.ArgumentList.Add("--project");
-        psi.ArgumentList.Add(ProjectDir);
-        psi.ArgumentList.Add("--");
+        var psi = new ProcessStartInfo { FileName = FindPsBashBinary() };
         foreach (var arg in arguments)
             psi.ArgumentList.Add(arg);
 

@@ -415,13 +415,15 @@ public sealed class CtrlRSearch : IDisposable
         // Compute frequencies for this result set
         _commandFrequencies = ComputeFrequencies(candidates);
 
-        // Score and sort
+        // Score, sort, and deduplicate by command text (keep best-scored entry per unique command)
+        var seen = new HashSet<string>(StringComparer.Ordinal);
         _results = candidates
             .Select(e => new ScoredEntry(
                 e,
                 ScoreFuzzyMatch(e, queryText, _currentCwd)))
             .OrderByDescending(x => x.Score)
             .ThenByDescending(x => x.Entry.Timestamp)
+            .Where(x => seen.Add(x.Entry.Command))
             .ToList();
 
         _selectedIndex = _results.Count > 0 ? 0 : -1;
@@ -620,9 +622,10 @@ public sealed class CtrlRSearch : IDisposable
             Console.Write(ResetAttributes);
         }
 
-        // Right-align match count
+        // Right-align match count (subtract 1 so the last char lands at col width-2,
+        // not width-1 which triggers an implicit wrap in Windows Console)
         var countText = _results.Count.ToString() + " matching";
-        var countPos = _terminalWidth - countText.Length;
+        var countPos = _terminalWidth - countText.Length - 1;
         if (countPos > queryText.Length + 30)
         {
             Console.SetCursorPosition(countPos, Console.CursorTop);
@@ -676,8 +679,13 @@ public sealed class CtrlRSearch : IDisposable
 
     private void RenderResultLine(HistoryEntry entry, string query)
     {
-        var maxWidth = _terminalWidth - 50; // Reserve space for metadata
-        if (maxWidth < 20) maxWidth = 20;
+        // Proportional column widths. Fixed post-command metadata (excl. CWD):
+        //   padGap(2) + time(8) + sep(2) + exit-worst(16) + sep(2) + id-max(8) + sep(2) = 40
+        // CWD gets ~25% of what's left, clamped to [15, 35].
+        // maxWidth + 2 + cwdWidth + 38 == _terminalWidth exactly at worst case.
+        const int fixedMeta = 40;
+        var cwdWidth = Math.Clamp((_terminalWidth - fixedMeta) / 4, 15, 35);
+        var maxWidth = Math.Max(20, _terminalWidth - fixedMeta - cwdWidth);
 
         var command = entry.Command;
         var displayedCmd = TruncateCommand(command, maxWidth, query);
@@ -690,10 +698,9 @@ public sealed class CtrlRSearch : IDisposable
         if (padLen > 0)
             Console.Write(new string(' ', padLen));
 
-        // CWD (shortened)
+        // CWD (proportional width, snaps to path separator to avoid mid-folder cut)
         Console.Write(Cyan);
-        var shortCwd = ShortenCwd(entry.Cwd, _homeDir);
-        Console.Write(shortCwd.Length > 15 ? shortCwd.Substring(shortCwd.Length - 15) : shortCwd.PadLeft(15));
+        Console.Write(TruncatePath(entry.Cwd, cwdWidth, _homeDir));
         Console.Write(ResetAttributes);
         Console.Write("  ");
 
@@ -842,6 +849,26 @@ public sealed class CtrlRSearch : IDisposable
         // Match is too far right, truncate left side
         var startIdx = Math.Max(0, matchEnd - maxWidth + 3);
         return "..." + command.Substring(startIdx, Math.Min(maxWidth - 3, command.Length - startIdx));
+    }
+
+    /// <summary>
+    /// Truncates a path to fit within <paramref name="width"/> characters, right-aligned.
+    /// Snaps to a path separator boundary to avoid displaying a partial folder name.
+    /// Always returns exactly <paramref name="width"/> characters.
+    /// </summary>
+    public static string TruncatePath(string path, int width, string homeDir)
+    {
+        var s = ShortenCwd(path, homeDir);
+        if (s.Length <= width)
+            return s.PadLeft(width);
+
+        // Find first separator at or after the cut point so we don't show a partial folder name.
+        var cutPos = s.Length - width;
+        var sepPos = s.IndexOfAny(new[] { '/', '\\' }, cutPos);
+        // sepPos > cutPos: land on clean boundary, tail is shorter than width → PadLeft pads it.
+        // sepPos == cutPos or not found: take exactly width chars → PadLeft is a no-op.
+        var tail = sepPos > cutPos ? s.Substring(sepPos) : s.Substring(cutPos);
+        return tail.PadLeft(width);
     }
 
     /// <summary>

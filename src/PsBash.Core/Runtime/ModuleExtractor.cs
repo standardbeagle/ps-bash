@@ -4,17 +4,14 @@ namespace PsBash.Core.Runtime;
 
 public static class ModuleExtractor
 {
-    private static readonly string[] ModuleFiles =
-    [
-        "PsBash.psd1",
-        "PsBash.psm1",
-        "PsBash.Format.ps1xml",
-    ];
+    private const string ModulePrefix = "PsBash.Module/";
 
     /// <summary>
     /// Extracts the embedded PsBash module to a temp directory and returns the path to PsBash.psd1.
     /// Uses a version-stamped directory so concurrent processes don't conflict.
     /// Thread-safe: uses a lock file to serialize extraction across processes.
+    /// Auto-discovers all embedded resources under the PsBash.Module/ prefix so new
+    /// submodule files only need a csproj EmbeddedResource entry — no code changes here.
     /// </summary>
     public static string ExtractEmbedded()
     {
@@ -54,10 +51,13 @@ public static class ModuleExtractor
             if (File.Exists(marker))
                 return psd1Path;
 
-            foreach (var file in ModuleFiles)
+            foreach (var resourceName in GetModuleResourceNames(asm))
             {
-                var destPath = Path.Combine(dir, file);
-                using var stream = asm.GetManifestResourceStream($"PsBash.Module/{file}")!;
+                var relativePath = resourceName.Substring(ModulePrefix.Length)
+                    .Replace('/', Path.DirectorySeparatorChar);
+                var destPath = Path.Combine(dir, relativePath);
+                Directory.CreateDirectory(Path.GetDirectoryName(destPath)!);
+                using var stream = asm.GetManifestResourceStream(resourceName)!;
                 using var dest = new FileStream(
                     destPath, FileMode.Create, FileAccess.Write, FileShare.Read);
                 stream.CopyTo(dest);
@@ -76,6 +76,11 @@ public static class ModuleExtractor
         return psd1Path;
     }
 
+    private static IEnumerable<string> GetModuleResourceNames(System.Reflection.Assembly asm) =>
+        asm.GetManifestResourceNames()
+           .Where(n => n.StartsWith(ModulePrefix, StringComparison.Ordinal))
+           .OrderBy(n => n, StringComparer.Ordinal);
+
     /// <summary>
     /// Computes a SHA256 hash over all embedded module resources.
     /// </summary>
@@ -83,9 +88,9 @@ public static class ModuleExtractor
     {
         using var sha = SHA256.Create();
         using var combined = new MemoryStream();
-        foreach (var file in ModuleFiles)
+        foreach (var resourceName in GetModuleResourceNames(asm))
         {
-            using var stream = asm.GetManifestResourceStream($"PsBash.Module/{file}")!;
+            using var stream = asm.GetManifestResourceStream(resourceName)!;
             stream.CopyTo(combined);
         }
         combined.Position = 0;

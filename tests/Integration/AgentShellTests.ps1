@@ -10,8 +10,8 @@
     a SHELL: via -c "command", with exit code propagation, stdout/stderr
     capture, and bash-to-pwsh transpilation.
 
-    Tests use `dotnet run --project` to invoke PsBash.Shell, falling back
-    gracefully if the project or pwsh is unavailable.
+    Tests build PsBash.Shell once and invoke the produced ps-bash binary,
+    falling back gracefully if the project or pwsh is unavailable.
 #>
 
 BeforeAll {
@@ -22,6 +22,7 @@ BeforeAll {
     $script:HasProject = Test-Path (Join-Path $script:ShellProject 'PsBash.Shell.csproj')
     $script:HasWorker = Test-Path $script:WorkerScript
     $script:HasPwsh = $null -ne (Get-Command pwsh -ErrorAction SilentlyContinue)
+    $script:PsBashPath = $null
 
     function Invoke-PsBashShell {
         param(
@@ -31,13 +32,12 @@ BeforeAll {
             [int]$TimeoutSeconds = 30
         )
 
+        if (-not $script:PsBashPath) {
+            throw 'ps-bash binary not found'
+        }
+
         $psi = [System.Diagnostics.ProcessStartInfo]::new()
-        $psi.FileName = 'dotnet'
-        $psi.ArgumentList.Add('run')
-        $psi.ArgumentList.Add('--no-build')
-        $psi.ArgumentList.Add('--project')
-        $psi.ArgumentList.Add($script:ShellProject)
-        $psi.ArgumentList.Add('--')
+        $psi.FileName = $script:PsBashPath
         foreach ($arg in $Arguments) {
             $psi.ArgumentList.Add($arg)
         }
@@ -48,6 +48,7 @@ BeforeAll {
         $psi.UseShellExecute = $false
 
         $psi.Environment['PSBASH_WORKER'] = $script:WorkerScript
+        $psi.Environment['PSBASH_DISABLE_HOST'] = '1'
 
         foreach ($key in $ExtraEnv.Keys) {
             $psi.Environment[$key] = $ExtraEnv[$key]
@@ -55,27 +56,47 @@ BeforeAll {
 
         $process = [System.Diagnostics.Process]::Start($psi)
         if ($null -eq $process) {
-            throw 'Failed to start dotnet run'
+            throw 'Failed to start ps-bash'
         }
 
-        if ($StdinContent) {
-            $process.StandardInput.Write($StdinContent)
-        }
-        $process.StandardInput.Close()
+        $stdoutTask = $process.StandardOutput.ReadToEndAsync()
+        $stderrTask = $process.StandardError.ReadToEndAsync()
 
-        $stdout = $process.StandardOutput.ReadToEnd()
-        $stderr = $process.StandardError.ReadToEnd()
-        $exited = $process.WaitForExit($TimeoutSeconds * 1000)
+        try {
+            if ($StdinContent) {
+                $process.StandardInput.Write($StdinContent)
+            }
+            $process.StandardInput.Close()
 
-        if (-not $exited) {
-            $process.Kill($true)
-            throw "Process timed out after ${TimeoutSeconds}s"
-        }
+            $exited = $process.WaitForExit($TimeoutSeconds * 1000)
 
-        [PSCustomObject]@{
-            ExitCode = $process.ExitCode
-            Stdout   = $stdout
-            Stderr   = $stderr
+            if (-not $exited) {
+                try {
+                    if (-not $process.HasExited) {
+                        $process.Kill($true)
+                    }
+                } catch { }
+
+                $stdout = if ($stdoutTask.Wait(5000)) { $stdoutTask.Result } else { '' }
+                $stderr = if ($stderrTask.Wait(5000)) { $stderrTask.Result } else { '' }
+                throw "Process timed out after ${TimeoutSeconds}s`n--- partial stdout ---`n$stdout`n--- partial stderr ---`n$stderr"
+            }
+
+            $stdout = $stdoutTask.Result
+            $stderr = $stderrTask.Result
+
+            [PSCustomObject]@{
+                ExitCode = $process.ExitCode
+                Stdout   = $stdout
+                Stderr   = $stderr
+            }
+        } finally {
+            try {
+                if (-not $process.HasExited) {
+                    $process.Kill($true)
+                }
+            } catch { }
+            $process.Dispose()
         }
     }
 
@@ -83,12 +104,19 @@ BeforeAll {
         if (-not $script:HasProject) { Set-ItResult -Skipped -Because 'PsBash.Shell project not found' }
         if (-not $script:HasPwsh) { Set-ItResult -Skipped -Because 'pwsh not available' }
         if (-not $script:BuildSucceeded) { Set-ItResult -Skipped -Because 'PsBash.Shell build failed' }
+        if (-not $script:PsBashPath) { Set-ItResult -Skipped -Because 'ps-bash binary not found' }
     }
 
     # Build once before all tests
     if ($script:HasProject) {
         & dotnet build $script:ShellProject --nologo -v q 2>&1 | Out-Null
         $script:BuildSucceeded = ($LASTEXITCODE -eq 0)
+        if ($script:BuildSucceeded) {
+            $binaryName = if ($IsWindows) { 'ps-bash.exe' } else { 'ps-bash' }
+            $script:PsBashPath = Get-ChildItem -Path (Join-Path $script:ShellProject 'bin') -Recurse -File -Filter $binaryName -ErrorAction SilentlyContinue |
+                Sort-Object LastWriteTimeUtc -Descending |
+                Select-Object -First 1 -ExpandProperty FullName
+        }
     } else {
         $script:BuildSucceeded = $false
     }
@@ -151,11 +179,10 @@ Describe 'Exit Code Propagation' {
         $result.ExitCode | Should -Be 1
     }
 
-    It 'returns non-zero for no command specified' {
+    It 'exits cleanly on stdin EOF with no command specified' {
         Skip-UnlessReady
         $result = Invoke-PsBashShell -Arguments @()
-        $result.ExitCode | Should -Not -Be 0
-        $result.Stderr | Should -Match 'no command specified'
+        $result.ExitCode | Should -Be 0
     }
 }
 
@@ -219,7 +246,7 @@ Describe 'Agent SHELL Contract' {
 
     It 'stderr passthrough works for agent error capture' {
         Skip-UnlessReady
-        $result = Invoke-PsBashShell -Arguments @('-c', '[Console]::Error.WriteLine("agent-error"); Write-Host ok')
+        $result = Invoke-PsBashShell -Arguments @('-c', 'echo agent-error >&2; echo ok')
         $result.ExitCode | Should -Be 0
         $result.Stderr | Should -Match 'agent-error'
         $result.Stdout | Should -Match 'ok'

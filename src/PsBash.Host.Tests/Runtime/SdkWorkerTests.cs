@@ -56,6 +56,41 @@ public class SdkWorkerTests : IAsyncLifetime
         Assert.Contains(Path.GetFileName(tempDir), pwd, StringComparison.OrdinalIgnoreCase);
     }
 
+    [Fact]
+    public async Task ExecuteAsync_SetLocationThenInvokeBashLs_UsesCurrentLocation()
+    {
+        var dir = Directory.CreateTempSubdirectory("psbash-sdkworker-cwd-ls-");
+        try
+        {
+            File.WriteAllText(Path.Combine(dir.FullName, "cwd-marker.txt"), "content");
+            var lines = new List<string>();
+            _worker!.OutputCallback = lines.Add;
+
+            await _worker.ExecuteAsync($"Set-Location '{dir.FullName.Replace("'", "''")}'");
+            await _worker.ExecuteAsync("Invoke-BashLs");
+
+            Assert.Contains(lines, l => l.Contains("cwd-marker.txt"));
+        }
+        finally { dir.Delete(recursive: true); }
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_CdThenInvokeBashLsInSameCommand_UsesChangedLocation()
+    {
+        var dir = Directory.CreateTempSubdirectory("psbash-sdkworker-cd-ls-");
+        try
+        {
+            File.WriteAllText(Path.Combine(dir.FullName, "same-command-marker.txt"), "content");
+            var lines = new List<string>();
+            _worker!.OutputCallback = lines.Add;
+
+            await _worker.ExecuteAsync($"cd '{dir.FullName.Replace("'", "''")}' && Invoke-BashLs");
+
+            Assert.Contains(lines, l => l.Contains("same-command-marker.txt"));
+        }
+        finally { dir.Delete(recursive: true); }
+    }
+
     // AC3: Module init counter incremented exactly once across N calls
     [Fact]
     public async Task SdkRunspace_ModuleLoadedExactlyOnce_AcrossMultipleCalls()
@@ -102,7 +137,7 @@ public class SdkWorkerTests : IAsyncLifetime
         Action<string> callerCallback = l => callerLines.Add(l);
         _worker!.OutputCallback = callerCallback;
 
-        var result = await _worker.QueryAsync("Write-Output 'query-result'");
+        var result = await _worker.QueryAsync("'query-result'");
 
         Assert.Same(callerCallback, _worker.OutputCallback);
         Assert.Contains("query-result", result);
@@ -114,5 +149,134 @@ public class SdkWorkerTests : IAsyncLifetime
     {
         var exitCode = await _worker!.ExecuteAsync("exit 7");
         Assert.Equal(7, exitCode);
+    }
+
+    // ── Regression: ls / Invoke-BashLs output format ─────────────────────────
+
+    /// <summary>
+    /// Regression: SdkWorker.RunCommand was calling PSObject.ToString() on pipeline
+    /// output, which returns "@{Name=...; BashText=...}" for PSCustomObject types like
+    /// PsBash.LsEntry instead of the BashText value. Fix: extract BashText explicitly.
+    /// </summary>
+    [Fact]
+    public async Task ExecuteAsync_InvokeBashLs_OutputsBashTextNotRawObjectFormat()
+    {
+        var dir = Directory.CreateTempSubdirectory("psbash-sdkworker-ls-");
+        try
+        {
+            File.WriteAllText(Path.Combine(dir.FullName, "testfile.txt"), "content");
+            var lines = new List<string>();
+            _worker!.OutputCallback = lines.Add;
+
+            await _worker.ExecuteAsync($"Invoke-BashLs '{dir.FullName.Replace("'", "''")}'");
+
+            // No line should be a raw PSCustomObject hash dump
+            Assert.DoesNotContain(lines, l => l.TrimStart().StartsWith("@{"));
+            // At least one line must contain the filename
+            Assert.Contains(lines, l => l.Contains("testfile.txt"));
+        }
+        finally { dir.Delete(recursive: true); }
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_InvokeBashLsLongFormat_OutputsPermissionsColumn()
+    {
+        var dir = Directory.CreateTempSubdirectory("psbash-sdkworker-lsl-");
+        try
+        {
+            File.WriteAllText(Path.Combine(dir.FullName, "readme.txt"), "hello");
+            var lines = new List<string>();
+            _worker!.OutputCallback = lines.Add;
+
+            await _worker.ExecuteAsync($"Invoke-BashLs -l '{dir.FullName.Replace("'", "''")}'");
+
+            // No raw object dump
+            Assert.DoesNotContain(lines, l => l.TrimStart().StartsWith("@{"));
+            // Long listing: at least one line starts with a Unix permissions character
+            Assert.Contains(lines, l =>
+            {
+                var t = l.TrimStart();
+                return t.Length > 0 && (t[0] == '-' || t[0] == 'd' || t[0] == 'l');
+            });
+        }
+        finally { dir.Delete(recursive: true); }
+    }
+
+    /// <summary>
+    /// Verifies that the ls alias (which maps to Invoke-BashLs) also produces
+    /// clean output through the SdkWorker — not raw "@{...}" PSCustomObject dumps.
+    /// </summary>
+    [Fact]
+    public async Task ExecuteAsync_LsAlias_OutputsCleanLines()
+    {
+        var dir = Directory.CreateTempSubdirectory("psbash-sdkworker-ls-alias-");
+        try
+        {
+            File.WriteAllText(Path.Combine(dir.FullName, "check.txt"), "ok");
+            var lines = new List<string>();
+            _worker!.OutputCallback = lines.Add;
+
+            // ls is aliased to Invoke-BashLs in the PsBash module
+            await _worker.ExecuteAsync($"ls '{dir.FullName.Replace("'", "''")}'");
+
+            Assert.DoesNotContain(lines, l => l.TrimStart().StartsWith("@{"));
+            Assert.Contains(lines, l => l.Contains("check.txt"));
+        }
+        finally { dir.Delete(recursive: true); }
+    }
+
+    // ── Regression: native PS cmdlet output via Out-String -Stream ───────────
+
+    /// <summary>
+    /// Regression: native PS cmdlets that return typed PSCustomObjects (like New-Object /
+    /// [pscustomobject]) must not produce "@{...}" dumps. SdkWorker defers non-BashText
+    /// typed objects to Out-String -Stream after Invoke() — mirroring the pwsh worker's
+    /// fallback path.
+    /// Oracle note (Directive 1): behavior is ps-bash-specific (SDK/pwsh parity gap,
+    /// no bash equivalent for formatting engine output).
+    /// </summary>
+    [Fact]
+    public async Task ExecuteAsync_NativePSCustomObject_OutputsFormattedNotAtBraceDump()
+    {
+        var lines = new List<string>();
+        _worker!.OutputCallback = lines.Add;
+
+        // Emit a typed PSCustomObject directly — this is what Select-Object and
+        // many native cmdlets return. BaseObject is PSCustomObject (not string).
+        var exitCode = await _worker.ExecuteAsync("[pscustomobject]@{Name='test123'; Value=42}");
+
+        Assert.Equal(0, exitCode);
+        // Must not produce raw hash dump
+        Assert.DoesNotContain(lines, l => l.TrimStart().StartsWith("@{"));
+        // Out-String -Stream formats as a table with column headers
+        Assert.Contains(lines, l => l.Contains("Name", StringComparison.OrdinalIgnoreCase));
+        Assert.Contains(lines, l => l.Contains("test123"));
+    }
+
+    /// <summary>
+    /// Regression: PSCustomObject arrays (common return value from many PS cmdlets) must not
+    /// produce "@{...}" dumps. SdkWorker's property-enumeration fallback emits
+    /// "Property : Value" lines (Format-List style) for each PSCustomObject.
+    /// Oracle note (Directive 1): ps-bash-specific (PowerShell pipeline object formatting).
+    /// </summary>
+    [Fact]
+    public async Task ExecuteAsync_MultipleNativePSCustomObjects_OutputsFormattedNotAtBraceDump()
+    {
+        var lines = new List<string>();
+        _worker!.OutputCallback = lines.Add;
+
+        // Emit multiple PSCustomObjects in a pipeline — [pscustomobject] is SMA-native
+        // and does not require Select-Object / Microsoft.PowerShell.Utility module.
+        var exitCode = await _worker.ExecuteAsync(
+            "@([pscustomobject]@{Num=1},[pscustomobject]@{Num=2},[pscustomobject]@{Num=3})");
+
+        Assert.Equal(0, exitCode);
+        // Must not produce raw hash dumps
+        Assert.DoesNotContain(lines, l => l.TrimStart().StartsWith("@{"));
+        // Property-enumeration fallback emits "Num : 1" etc.
+        Assert.Contains(lines, l => l.Contains("Num", StringComparison.OrdinalIgnoreCase));
+        Assert.Contains(lines, l => l.Contains("1"));
+        Assert.Contains(lines, l => l.Contains("2"));
+        Assert.Contains(lines, l => l.Contains("3"));
     }
 }

@@ -1,3 +1,4 @@
+using System.Diagnostics.CodeAnalysis;
 using System.Management.Automation;
 using System.Management.Automation.Runspaces;
 using System.Reflection;
@@ -46,6 +47,7 @@ internal sealed class SdkRunspace : IAsyncDisposable
         // in SMA 7.x — causing TypeLoadException on first use of Write-Output, Get-Location, etc.
         // Fix: enumerate cmdlets from the in-process SMA 7.x assemblies and pre-register
         // them in the ISS so they're immediately available without hitting the module loader.
+        LoadKnownPowerShellCommandAssemblies();
         RegisterSdkCmdlets(iss);
 
         var host = new ExitTrackingHost();
@@ -55,6 +57,22 @@ internal sealed class SdkRunspace : IAsyncDisposable
         using var ps = PowerShell.Create();
         ps.Runspace = runspace;
 
+        ps.AddScript("""
+            function global:Set-Location {
+                param([Parameter(Position=0)][string]$Path)
+                $ExecutionContext.SessionState.Path.SetLocation($Path)
+                [Environment]::CurrentDirectory = $ExecutionContext.SessionState.Path.CurrentFileSystemLocation.ProviderPath
+            }
+            function global:Get-Location {
+                $ExecutionContext.SessionState.Path.CurrentLocation
+            }
+            function global:cd {
+                param([Parameter(Position=0)][string]$Path)
+                Set-Location $Path
+            }
+            """).Invoke();
+        ps.Commands.Clear();
+
         var psm1Path = Path.Combine(Path.GetDirectoryName(modulePath)!, "PsBash.psm1");
         if (File.Exists(psm1Path))
         {
@@ -62,6 +80,21 @@ internal sealed class SdkRunspace : IAsyncDisposable
             ps.AddScript(psm1Content).Invoke();
             ps.Commands.Clear();
         }
+
+        // Mirror ps-bash-worker.ps1 startup: initialise all bash global state that
+        // transpiled scripts reference before any command runs.  Without this the
+        // globals are $null under Set-StrictMode -Version Latest and commands like
+        // set -e, trap ERR, $#, $@, and shift silently malfunction.
+        ps.AddScript("""
+            $global:LASTEXITCODE = 0
+            $global:__BashErrexit = $false
+            $global:__BashTrapEXIT = $null
+            $global:__BashTrapERR = $null
+            $global:BashFlags = ''
+            $global:BashExitCode = 0
+            $global:BashPositional = $null
+            """).Invoke();
+        ps.Commands.Clear();
 
         Interlocked.Increment(ref ModuleLoadCount);
         return new SdkRunspace(runspace, host);
@@ -76,12 +109,31 @@ internal sealed class SdkRunspace : IAsyncDisposable
         return ValueTask.CompletedTask;
     }
 
+    // GetTypes() is RequiresUnreferencedCode; suppressed because RegisterSdkCmdlets
+    // only runs inside the non-AOT host process, never in the AOT launcher.
+    [UnconditionalSuppressMessage("ReflectionAnalysis", "IL2026")]
+    private static void LoadKnownPowerShellCommandAssemblies()
+    {
+        foreach (var name in new[]
+        {
+            "Microsoft.PowerShell.Commands.Management",
+            "Microsoft.PowerShell.Commands.Utility",
+        })
+        {
+            try { Assembly.Load(name); }
+            catch { }
+        }
+    }
+
+    [UnconditionalSuppressMessage("ReflectionAnalysis", "IL2026")]
     private static void RegisterSdkCmdlets(InitialSessionState iss)
     {
         foreach (var assembly in AppDomain.CurrentDomain.GetAssemblies())
         {
             var asmName = assembly.GetName().Name ?? "";
-            if (!asmName.StartsWith("Microsoft.PowerShell") && asmName != "System.Management.Automation")
+            if (!asmName.StartsWith("Microsoft.PowerShell") &&
+                asmName != "System.Management.Automation" &&
+                asmName != "PsBash.Cmdlets")
                 continue;
 
             Type[] types;

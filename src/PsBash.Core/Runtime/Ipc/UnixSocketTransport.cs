@@ -4,9 +4,8 @@ using System.Runtime.InteropServices;
 namespace PsBash.Core.Runtime.Ipc;
 
 /// <summary>
-/// AF_UNIX socket transport. Used on POSIX platforms (Linux/macOS) and
-/// also on Windows 10 1803+ where AF_UNIX is supported, but the launcher's
-/// fallback decision (T03) prefers the named-pipe transport on Windows.
+/// AF_UNIX socket transport. Default transport on all platforms (Linux, macOS,
+/// and Windows 10 1803+ where AF_UNIX is natively supported).
 /// </summary>
 public sealed class UnixSocketTransport : IIpcTransport
 {

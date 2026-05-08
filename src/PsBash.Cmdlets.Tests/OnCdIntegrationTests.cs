@@ -58,7 +58,15 @@ public class OnCdIntegrationTests : IDisposable
                 CreateNoWindow = true,
             };
             proc.Start();
-            proc.WaitForExit(5_000);
+            var stdoutTask = proc.StandardOutput.ReadToEndAsync();
+            var stderrTask = proc.StandardError.ReadToEndAsync();
+            if (!proc.WaitForExit(5_000))
+            {
+                try { proc.Kill(entireProcessTree: true); } catch { }
+                return null;
+            }
+            _ = stdoutTask.GetAwaiter().GetResult();
+            _ = stderrTask.GetAwaiter().GetResult();
             return proc.ExitCode == 0 ? tool : null;
         }
         catch
@@ -442,7 +450,15 @@ public class OnCdIntegrationTests : IDisposable
                 CreateNoWindow = true,
             };
             proc.Start();
-            proc.WaitForExit(5_000);
+            var stdoutTask = proc.StandardOutput.ReadToEndAsync();
+            var stderrTask = proc.StandardError.ReadToEndAsync();
+            if (!proc.WaitForExit(5_000))
+            {
+                try { proc.Kill(entireProcessTree: true); } catch { }
+                return false;
+            }
+            _ = stdoutTask.GetAwaiter().GetResult();
+            _ = stderrTask.GetAwaiter().GetResult();
             return proc.ExitCode == 0;
         }
         catch

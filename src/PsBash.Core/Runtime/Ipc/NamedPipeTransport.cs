@@ -67,24 +67,40 @@ public sealed class NamedPipeTransport : IIpcTransport
     public async Task<Stream> ConnectAsync(CancellationToken ct = default)
     {
         ThrowIfDisposed();
-        var client = new NamedPipeClientStream(
-            serverName: ".",
-            pipeName: _pipeName,
-            direction: PipeDirection.InOut,
-            options: PipeOptions.Asynchronous,
-            impersonationLevel: TokenImpersonationLevel.None,
-            inheritability: HandleInheritability.None);
-        try
+        // Retry on ERROR_PIPE_BUSY (231): all server instances occupied by in-flight
+        // commands. This is transient — instances free up as commands complete.
+        const int maxRetries = 20;
+        const int retryDelayMs = 100;
+        for (int attempt = 0; ; attempt++)
         {
-            await client.ConnectAsync(ct);
-            return client;
-        }
-        catch
-        {
-            client.Dispose();
-            throw;
+            var client = new NamedPipeClientStream(
+                serverName: ".",
+                pipeName: _pipeName,
+                direction: PipeDirection.InOut,
+                options: PipeOptions.Asynchronous,
+                impersonationLevel: TokenImpersonationLevel.None,
+                inheritability: HandleInheritability.None);
+            try
+            {
+                await client.ConnectAsync(ct);
+                return client;
+            }
+            catch (IOException ex) when (attempt < maxRetries && IsPipeBusy(ex))
+            {
+                client.Dispose();
+                await Task.Delay(retryDelayMs, ct);
+            }
+            catch
+            {
+                client.Dispose();
+                throw;
+            }
         }
     }
+
+    private static bool IsPipeBusy(IOException ex)
+        => ex.HResult == unchecked((int)0x800700E7) // ERROR_PIPE_BUSY
+        || (ex.Message?.Contains("pipe instances are busy", StringComparison.OrdinalIgnoreCase) ?? false);
 
     public ValueTask DisposeAsync()
     {

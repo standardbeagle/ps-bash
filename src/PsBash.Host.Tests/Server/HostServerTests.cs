@@ -14,17 +14,19 @@ namespace PsBash.Host.Tests.Server;
 public sealed class HostServerTests : IAsyncLifetime
 {
     private SdkWorker _worker = null!;
-    private NamedPipeTransport _serverTransport = null!;
+    private UnixSocketTransport _serverTransport = null!;
     private HostServer _server = null!;
     private CancellationTokenSource _cts = null!;
     private Task _serverTask = null!;
-    private string _pipeName = null!;
+    private string _socketPath = null!;
 
     public async Task InitializeAsync()
     {
         _worker = SdkWorker.Create();
-        _pipeName = $"psbash-test-{Guid.NewGuid():N}";
-        _serverTransport = new NamedPipeTransport(_pipeName);
+        var dir = Path.Combine(Path.GetTempPath(), "ps-bash");
+        Directory.CreateDirectory(dir);
+        _socketPath = Path.Combine(dir, $"test-{Guid.NewGuid():N}.sock");
+        _serverTransport = new UnixSocketTransport(_socketPath);
         _server = new HostServer(_serverTransport, Task.FromResult(_worker));
         _cts = new CancellationTokenSource();
         _serverTask = _server.RunAsync(_cts.Token);
@@ -42,7 +44,7 @@ public sealed class HostServerTests : IAsyncLifetime
 
     private async Task<(string output, int exitCode)> SendCommandAsync(string command, CancellationToken ct = default)
     {
-        var clientTransport = new NamedPipeTransport(_pipeName);
+        var clientTransport = new UnixSocketTransport(_socketPath);
         await using (clientTransport)
         {
             using var stream = await clientTransport.ConnectAsync(ct);
@@ -82,21 +84,16 @@ public sealed class HostServerTests : IAsyncLifetime
 
         // Send bytes that don't start with "MODE:" — server catches the IOException,
         // makes a best-effort write of EXIT:2, and closes the connection.
-        // We don't read the server's error response: on Windows named pipes,
-        // FlushFileBuffers (called by WriteExitAsync) only returns after the
-        // client reads, so waiting here creates a deadlock if the client-read
-        // hasn't started. Close the connection immediately and verify the server
-        // accepts the next valid connection (the real requirement).
-        var garbledTransport = new NamedPipeTransport(_pipeName);
+        // We don't read the server's error response: just close the connection
+        // immediately and verify the server accepts the next valid connection.
+        var garbledTransport = new UnixSocketTransport(_socketPath);
         await using (garbledTransport)
         {
             using var stream = await garbledTransport.ConnectAsync(cts.Token);
             var garbage = System.Text.Encoding.UTF8.GetBytes("NOT_A_VALID_HEADER\n<<<END>>>\n");
             await stream.WriteAsync(garbage, cts.Token);
-            // No FlushAsync: on Windows named pipes, FlushFileBuffers blocks until the
-            // server reads ALL pending data. The server stops after the first bad line,
-            // so flushing here would deadlock. Dispose sends remaining buffer and signals
-            // EOF; the server's IOException handler catches it and moves on.
+            // No FlushAsync: dispose sends remaining buffer and signals EOF;
+            // the server's IOException handler catches it and moves on.
         }
 
         // Server must still be alive — accept a valid connection.

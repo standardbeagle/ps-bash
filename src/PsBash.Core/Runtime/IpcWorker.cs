@@ -105,34 +105,55 @@ public sealed class IpcWorker : IWorker
 
     private async Task<HostLockEntry> ResolveOrSpawnAsync(bool spawnIfMissing, CancellationToken ct)
     {
-        // 1) Try the existing lock file. ReadOrPurgeAsync probes the endpoint
-        //    and deletes the file if no listener answers within 500 ms. A
-        //    successful read means a live host is listening.
-        try
+        const int maxRetries = 3;
+        int attempt = 0;
+        Exception? lastRecoverable = null;
+        while (true)
         {
-            return await _lockFile.ReadOrPurgeAsync(ct).ConfigureAwait(false);
+            attempt++;
+            try
+            {
+                // 1) Try the existing lock file. ReadOrPurgeAsync probes the endpoint
+                //    and deletes the file if no listener answers within 500 ms. A
+                //    successful read means a live host is listening.
+                return await _lockFile.ReadOrPurgeAsync(ct).ConfigureAwait(false);
+            }
+            catch (FileNotFoundException ex) { lastRecoverable = ex; }
+            catch (SocketException ex) { lastRecoverable = ex; }
+            catch (IOException ex) { lastRecoverable = ex; }
+
+            // 2) If caller does not want to spawn (one-shot -c mode), fail fast.
+            if (!spawnIfMissing)
+                throw new HostUnavailableException(
+                    "No running ps-bash-host found (lock file absent). " +
+                    "Start ps-bash interactively to warm the host.", lastRecoverable);
+
+            // 3) Spawn the host binary. Verify the binary exists first so the
+            //    HostUnavailableException carries the right cause.
+            if (!File.Exists(_hostBinaryPath))
+            {
+                throw new HostUnavailableException(
+                    $"ps-bash-host binary not found at '{_hostBinaryPath}'. Cannot spawn host.");
+            }
+
+            try
+            {
+                return await SpawnAndPollAsync(ct).ConfigureAwait(false);
+            }
+            catch (HostUnavailableException ex)
+            {
+                lastRecoverable = ex;
+                if (attempt >= maxRetries)
+                {
+                    throw new HostUnavailableException(
+                        $"Failed to start or connect to ps-bash-host after {maxRetries} attempts. " +
+                        "This may be due to file locks, permission issues, or interference from a local rebuild/deploy. " +
+                        "Try restarting ps-bash or your shell. See inner exception for details.", ex);
+                }
+                // Only retry for recoverable errors (host exited early, lock file not written, etc.)
+                await Task.Delay(300 * attempt, ct).ConfigureAwait(false); // Exponential backoff
+            }
         }
-        catch (FileNotFoundException) { /* no host advertised */ }
-        catch (SocketException) { /* stale lock purged */ }
-        catch (IOException) { /* lock file vanished mid-read */ }
-
-        // 2) If caller does not want to spawn (one-shot -c mode), fail fast.
-        //    Spawning costs >5 s and the one-shot caller would not benefit from
-        //    a persistent host that outlives the invocation.
-        if (!spawnIfMissing)
-            throw new HostUnavailableException(
-                "no running ps-bash-host found (lock file absent). " +
-                "Start ps-bash interactively to warm the host, or set PSBASH_DISABLE_HOST=1.");
-
-        // 2) Spawn the host binary. Verify the binary exists first so the
-        //    HostUnavailableException carries the right cause.
-        if (!File.Exists(_hostBinaryPath))
-        {
-            throw new HostUnavailableException(
-                $"ps-bash-host binary not found at '{_hostBinaryPath}'. Cannot spawn host.");
-        }
-
-        return await SpawnAndPollAsync(ct).ConfigureAwait(false);
     }
 
     private async Task<HostLockEntry> SpawnAndPollAsync(CancellationToken ct)
@@ -148,6 +169,9 @@ public sealed class IpcWorker : IWorker
         };
         // Pass the parent pid so the host can install its own death-watcher.
         psi.Environment["PSBASH_HOST_PARENT_PID"] = Environment.ProcessId.ToString();
+        // Session ID must match what this IpcWorker is polling for so the host
+        // writes its lock file at exactly the path we are watching.
+        psi.Environment["PSBASH_SESSION_ID"] = ExtractSessionId(_lockFile.Path);
 
         Process? proc = null;
         bool spawnSucceeded = false;
@@ -281,13 +305,8 @@ public sealed class IpcWorker : IWorker
         }
     }
 
-    private static IIpcTransport OpenTransport(HostLockEntry entry) => entry.Scheme switch
-    {
-        "unix" => new UnixSocketTransport(entry.Endpoint),
-        "pipe" => new NamedPipeTransport(entry.Endpoint),
-        _ => throw new InvalidOperationException(
-            $"Unknown lock-file scheme '{entry.Scheme}'."),
-    };
+    private static IIpcTransport OpenTransport(HostLockEntry entry) =>
+        IpcTransportFactory.OpenFromEntry(entry);
 
     private static TimeSpan GetStartupTimeout()
     {
@@ -318,6 +337,15 @@ public sealed class IpcWorker : IWorker
         => RuntimeInformation.IsOSPlatform(OSPlatform.Windows)
             ? "ps-bash-host.exe"
             : "ps-bash-host";
+
+    // Lock file name format: host-{user}-{sessionId}.lock
+    // Parse out sessionId so SpawnAndPollAsync can tell the host which path to use.
+    private static string ExtractSessionId(string lockFilePath)
+    {
+        var name = Path.GetFileNameWithoutExtension(lockFilePath); // host-{user}-{sessionId}
+        var lastDash = name.LastIndexOf('-');
+        return lastDash >= 0 ? name.Substring(lastDash + 1) : name;
+    }
 
     /// <inheritdoc />
     public ValueTask DisposeAsync()

@@ -233,11 +233,11 @@ public class TransportTests
         var lockFile = HostLockFile.ForSession("stale-" + Guid.NewGuid().ToString("N").Substring(0, 6));
         try
         {
-            // Use a transport scheme appropriate to platform so ConnectAsync
-            // raises the expected exception type.
-            IIpcTransport fake = RuntimeInformation.IsOSPlatform(OSPlatform.Windows)
-                ? new FakeTransport("pipe", "psbash-nonexistent-" + Guid.NewGuid().ToString("N").Substring(0, 8))
-                : new FakeTransport("unix", Path.Combine(Path.GetTempPath(), "ps-bash", "nonexistent-" + Guid.NewGuid().ToString("N").Substring(0, 8) + ".sock"));
+            // AF_UNIX is the default on all platforms. A path with no listener
+            // will produce SocketException, which triggers stale-lock purge.
+            var sockPath = Path.Combine(Path.GetTempPath(), "ps-bash",
+                "nonexistent-" + Guid.NewGuid().ToString("N").Substring(0, 8) + ".sock");
+            IIpcTransport fake = new FakeTransport("unix", sockPath);
             lockFile.Write(fake, pid: 12345);
             Assert.True(File.Exists(lockFile.Path));
 

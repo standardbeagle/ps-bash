@@ -8,17 +8,75 @@ using PsBash.Core.Transpiler;
 
 namespace PsBash.Host.Shell;
 
+internal sealed class ShellCwd
+{
+    private static StringComparison PathComparison =>
+        OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
+
+    public ShellCwd(string current, string home)
+    {
+        Current = Normalize(current);
+        Home = Normalize(home);
+    }
+
+    public string Current { get; private set; }
+    public string Home { get; }
+    public string DisplayPath => Abbreviate(Current);
+
+    public Task ApplyToWorkerAsync(IWorker worker, CancellationToken ct)
+    {
+        var escaped = Current.Replace("'", "''");
+        return worker.ExecuteAsync($"Set-Location '{escaped}'", ct);
+    }
+
+    public bool TryUpdateFromWorkerPath(string rawPath, out bool changed)
+    {
+        changed = false;
+        if (string.IsNullOrWhiteSpace(rawPath))
+            return false;
+
+        var path = Normalize(rawPath);
+        if (!Directory.Exists(path))
+            return false;
+
+        changed = !string.Equals(path, Current, PathComparison);
+        Current = path;
+        return true;
+    }
+
+    private string Abbreviate(string path)
+    {
+        if (path.StartsWith(Home, PathComparison)
+            && (path.Length == Home.Length || IsSeparator(path[Home.Length])))
+        {
+            return "~" + path[Home.Length..];
+        }
+
+        return path;
+    }
+
+    private static string Normalize(string path)
+    {
+        var normalized = path.Trim();
+        if (OperatingSystem.IsWindows())
+            normalized = normalized.Replace('/', '\\');
+
+        try { return Path.GetFullPath(normalized); }
+        catch { return normalized; }
+    }
+
+    private static bool IsSeparator(char c)
+        => c == Path.DirectorySeparatorChar || c == Path.AltDirectorySeparatorChar;
+}
+
 public static class InteractiveShell
 {
     private const string ContinuationPrompt = "> ";
 
     private static readonly Dictionary<string, string> Aliases = new(StringComparer.Ordinal);
-
-    private static readonly string[] OpenKeywords = ["if", "for", "while", "until", "case", "do", "{", "(", "function"];
-    private static readonly string[] CloseKeywords = ["fi", "done", "esac", "}", ")"];
-
-    private static string _homeDir = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
-    private static string _lastDir = Environment.CurrentDirectory;
+    private static readonly ShellCwd Cwd = new(
+        Environment.CurrentDirectory,
+        Environment.GetFolderPath(Environment.SpecialFolder.UserProfile));
     private static LineEditor? _lineEditor;
     private static IHistoryStore? _historyStore;
     private static string _sessionId = Guid.NewGuid().ToString();
@@ -31,38 +89,17 @@ public static class InteractiveShell
     /// but keeps the worker alive for the next prompt.
     /// </summary>
     public static Task<int> RunAsync(IWorker worker, bool noProfile = false)
-        => RunCoreAsync(pwshPath: null, externalWorker: worker, noProfile: noProfile);
+        => RunCoreAsync(worker, noProfile);
 
-    /// <summary>Run the interactive REPL, creating and managing a PwshWorker internally.</summary>
-    public static Task<int> RunAsync(string pwshPath, bool noProfile = false)
-        => RunCoreAsync(pwshPath: pwshPath, externalWorker: null, noProfile: noProfile);
-
-    private static async Task<int> RunCoreAsync(string? pwshPath, IWorker? externalWorker, bool noProfile)
+    private static async Task<int> RunCoreAsync(IWorker worker, bool noProfile)
     {
         Console.CancelKeyPress += OnCancelKeyPress;
         EnsureVirtualTerminalEnabled();
 
         using var loading = LoadingIndicator.Start("Loading ps-bash");
 
-        if (!noProfile && pwshPath is not null)
-        {
-            loading.Update("Loading PowerShell profile");
-            MergeProfilePath(pwshPath);
-        }
-
         var cts = new CancellationTokenSource();
         _currentCts = cts;
-
-        IWorker worker;
-        if (externalWorker is not null)
-        {
-            worker = externalWorker;
-        }
-        else
-        {
-            loading.Update("Starting PowerShell worker");
-            worker = await StartWorkerAsync(pwshPath!);
-        }
 
         // Initialize history store. PSBASH_HOME overrides the home directory used to
         // locate the history DB so that tests can isolate history to a temp directory
@@ -77,12 +114,22 @@ public static class InteractiveShell
 
         // Initialize LineEditor with history store and tab completer
         _lineEditor = new LineEditor(_historyStore, (line, cursor) =>
-            TabCompleter.Complete(line, cursor, Aliases, _lastDir, _lastCommand, _historyStore));
+            TabCompleter.Complete(line, cursor, Aliases, Cwd.Current, _lastCommand, _historyStore));
 
-        if (!noProfile)
+        try
         {
-            loading.Update("Sourcing ~/.psbashrc");
-            await SourceRcFileAsync(worker, cts);
+            await Cwd.ApplyToWorkerAsync(worker, cts.Token);
+
+            if (!noProfile)
+            {
+                loading.Update("Sourcing ~/.psbashrc");
+                await SourceRcFileAsync(worker, cts);
+            }
+        }
+        catch (OperationCanceledException) { /* shell shutdown before REPL started */ }
+        catch (Exception ex)
+        {
+            Console.Error.WriteLine($"[ps-bash] warning: startup error: {ex.Message}");
         }
 
         loading.Finish();
@@ -91,7 +138,7 @@ public static class InteractiveShell
         {
             try
             {
-                worker = await EnsureWorkerAsync(worker, pwshPath, externalWorker is not null);
+                EnsureWorkerAlive(worker);
                 cts.Dispose();
                 cts = new CancellationTokenSource();
                 _currentCts = cts;
@@ -100,7 +147,6 @@ public static class InteractiveShell
                 if (input is null)
                 {
                     Console.WriteLine();
-                    if (externalWorker is null) await DisposeWorkerAsync(worker);
                     if (_historyStore is IDisposable disposable)
                         disposable.Dispose();
                     return 0;
@@ -112,7 +158,6 @@ public static class InteractiveShell
 
                 if (IsExitCommand(trimmed, out var exitCode))
                 {
-                    if (externalWorker is null) await DisposeWorkerAsync(worker);
                     if (_historyStore is IDisposable disposable)
                         disposable.Dispose();
                     return exitCode;
@@ -149,6 +194,7 @@ public static class InteractiveShell
                         continue;
                     }
 
+                    await Cwd.ApplyToWorkerAsync(worker, cts.Token);
                     await worker.ExecuteAsync(pwshCommand, cts.Token);
                     await SyncWorkerCwdAsync(worker);
 
@@ -167,12 +213,6 @@ public static class InteractiveShell
                     Console.Error.WriteLine("^C");
                     stopwatch.Stop();
                     exitCodeResult = null;
-                    if (externalWorker is null)
-                    {
-                        // PwshWorker: process is wedged after cancellation; dispose and respawn.
-                        await DisposeWorkerAsync(worker);
-                        worker = await StartWorkerAsync(pwshPath!);
-                    }
                     // SdkWorker: _ps.Stop() already fired via ct.Register; runspace still alive.
                 }
                 finally
@@ -183,17 +223,9 @@ public static class InteractiveShell
             }
             catch (IOException)
             {
-                if (externalWorker is not null)
-                {
-                    // In-host mode: we don't own the worker; surface the error and exit.
-                    Console.Error.WriteLine("[ps-bash] worker connection lost; exiting.");
-                    if (_historyStore is IDisposable d) d.Dispose();
-                    return 1;
-                }
-                // PwshWorker: process pipe closed; dispose and respawn transparently.
-                Console.Error.WriteLine("[ps-bash] worker connection lost; respawning...");
-                try { await DisposeWorkerAsync(worker); } catch { }
-                worker = await StartWorkerAsync(pwshPath!);
+                Console.Error.WriteLine("[ps-bash] worker connection lost; exiting.");
+                if (_historyStore is IDisposable d) d.Dispose();
+                return 1;
             }
             catch (Exception ex)
             {
@@ -212,7 +244,7 @@ public static class InteractiveShell
         {
             await _lineEditor.RecordCommandAsync(
                 command,
-                Environment.CurrentDirectory,
+                Cwd.Current,
                 exitCode,
                 durationMs,
                 _sessionId);
@@ -270,7 +302,7 @@ public static class InteractiveShell
 
         try
         {
-            var workDir = Directory.Exists(_lastDir) ? _lastDir : null;
+            var workDir = Directory.Exists(Cwd.Current) ? Cwd.Current : null;
             var resolvedCmd = ResolveCommand(cmdName, workDir);
             if (resolvedCmd is null)
                 return false;
@@ -323,7 +355,7 @@ EnsureConsoleInputRestored();
             {
                 try
                 {
-                    var dir = Directory.Exists(_lastDir) ? _lastDir : ".";
+                    var dir = Directory.Exists(Cwd.Current) ? Cwd.Current : ".";
                     var pattern = Path.IsPathRooted(lit) ? lit : Path.Combine(dir, lit);
                     var dirPart = Path.GetDirectoryName(pattern) ?? ".";
                     var filePart = Path.GetFileName(pattern);
@@ -355,89 +387,6 @@ EnsureConsoleInputRestored();
     private static bool HasGlobChars(string value) =>
         value.Contains('*') || value.Contains('?') || value.Contains('[');
 
-    private static void MergeProfilePath(string pwshPath)
-    {
-        const string begin = "<<<PSBASH_PATH_BEGIN>>>";
-        const string end = "<<<PSBASH_PATH_END>>>";
-        try
-        {
-            var psi = new ProcessStartInfo(pwshPath)
-            {
-                UseShellExecute = false,
-                RedirectStandardOutput = true,
-                RedirectStandardError = true,
-                CreateNoWindow = true,
-                ArgumentList = { "-NoLogo", "-Command",
-                    $"[Console]::Out.WriteLine('{begin}' + $env:PATH + '{end}')" },
-            };
-            using var proc = Process.Start(psi);
-            if (proc is null) return;
-            // Read stdout and stderr concurrently to avoid the classic pipe
-            // deadlock where a full stderr buffer blocks the child before
-            // stdout is consumed. No hard timeout — a slow profile is the
-            // user's profile; let it finish. The LoadingIndicator surfaces
-            // elapsed time and offers a bail-out prompt.
-            var stdoutTask = proc.StandardOutput.ReadToEndAsync();
-            var stderrTask = proc.StandardError.ReadToEndAsync();
-            Task.WaitAll(stdoutTask, stderrTask);
-            var stdout = stdoutTask.Result;
-            var stderr = stderrTask.Result;
-            proc.WaitForExit();
-
-            // Surface anything the profile emitted (warnings on stdout OR stderr)
-            // as a clearly-labelled ps-bash message, instead of letting it contaminate PATH.
-            ReportProfileNoise(stdout, begin, end);
-            ReportProfileNoise(stderr, null, null);
-
-            var bi = stdout.IndexOf(begin, StringComparison.Ordinal);
-            var ei = stdout.IndexOf(end, StringComparison.Ordinal);
-            if (bi < 0 || ei <= bi) return;
-            var profilePath = stdout.Substring(bi + begin.Length, ei - bi - begin.Length).Trim();
-            if (string.IsNullOrEmpty(profilePath)) return;
-
-            var currentPath = Environment.GetEnvironmentVariable("PATH") ?? "";
-            var currentDirs = new HashSet<string>(
-                currentPath.Split(Path.PathSeparator, StringSplitOptions.RemoveEmptyEntries),
-                OperatingSystem.IsWindows()
-                    ? StringComparer.OrdinalIgnoreCase
-                    : StringComparer.Ordinal);
-
-            var profileDirs = profilePath.Split(Path.PathSeparator, StringSplitOptions.RemoveEmptyEntries);
-            var merged = new StringBuilder(currentPath);
-            foreach (var dir in profileDirs)
-            {
-                if (!currentDirs.Contains(dir))
-                {
-                    merged.Append(Path.PathSeparator);
-                    merged.Append(dir);
-                }
-            }
-            Environment.SetEnvironmentVariable("PATH", merged.ToString());
-        }
-        catch (Exception ex) { Console.Error.WriteLine($"[ps-bash] warning: failed to merge profile PATH: {ex.Message}"); }
-    }
-
-    // Extract anything in `text` that isn't our PATH payload and surface it as a
-    // profile warning, so module-load warnings etc. reach the user clearly rather
-    // than corrupting PATH or being silently dropped.
-    private static void ReportProfileNoise(string? text, string? begin, string? end)
-    {
-        if (string.IsNullOrWhiteSpace(text)) return;
-        string noise = text;
-        if (begin is not null && end is not null)
-        {
-            var bi = noise.IndexOf(begin, StringComparison.Ordinal);
-            var ei = noise.IndexOf(end, StringComparison.Ordinal);
-            if (bi >= 0 && ei > bi)
-                noise = noise.Remove(bi, (ei - bi) + end.Length);
-        }
-        foreach (var rawLine in noise.Split('\n'))
-        {
-            var line = rawLine.TrimEnd('\r').Trim();
-            if (line.Length == 0) continue;
-            Console.Error.WriteLine($"[ps-bash] profile warning: {line}");
-        }
-    }
 
     internal static string? ResolveCommand(string cmdName, string? workDir)
     {
@@ -490,9 +439,11 @@ EnsureConsoleInputRestored();
             var pwd = await worker.QueryAsync("(Get-Location).Path");
             if (!string.IsNullOrWhiteSpace(pwd))
             {
-                var path = pwd.Trim().Replace('/', '\\');
-                if (Directory.Exists(path))
-                    _lastDir = path;
+                if (Cwd.TryUpdateFromWorkerPath(pwd.Trim(), out var changed) && changed)
+                {
+                    try { await worker.ExecuteAsync("Invoke-BashChpwdHooks", CancellationToken.None); }
+                    catch { }
+                }
             }
         }
         catch (Exception) { /* routine: cwd may have been removed underneath us */ }
@@ -502,7 +453,12 @@ EnsureConsoleInputRestored();
     {
         try
         {
-            var cmd = await worker.QueryAsync("if ($env:PROMPT_COMMAND) { $env:PROMPT_COMMAND } else { '' }");
+            // Single roundtrip: fire registered prompt hooks (Register-BashPromptHook path) and
+            // return any $env:PROMPT_COMMAND value set for complex assignments the emitter couldn't
+            // statically transpile.  Collapsing into one QueryAsync keeps per-command latency
+            // identical to the pre-hooks baseline.
+            var cmd = await worker.QueryAsync(
+                "Invoke-BashPromptHooks; if ($env:PROMPT_COMMAND) { $env:PROMPT_COMMAND } else { '' }");
             if (!string.IsNullOrWhiteSpace(cmd))
             {
                 cmd = cmd.Trim();
@@ -514,35 +470,7 @@ EnsureConsoleInputRestored();
                 catch (Exception ex) { Console.Error.WriteLine($"[ps-bash] warning: PROMPT_COMMAND failed: {ex.Message}"); }
             }
         }
-        catch (Exception ex) { Console.Error.WriteLine($"[ps-bash] warning: prompt command failed: {ex.Message}"); }
-    }
-
-    private static void UpdateCwd(string bashInput)
-    {
-        var trimmedInput = bashInput.TrimStart();
-        if (!trimmedInput.StartsWith("cd ") && trimmedInput != "cd" && !trimmedInput.StartsWith("cd\t"))
-            return;
-
-        var arg = trimmedInput[2..].Trim();
-        if (arg.Length == 0 || arg == "~")
-        {
-            _lastDir = _homeDir;
-            return;
-        }
-
-        if (arg == "-")
-            return;
-
-        try
-        {
-            var target = arg.StartsWith("~") ? _homeDir + arg[1..] : arg;
-            if (!Path.IsPathRooted(target))
-                target = Path.GetFullPath(Path.Combine(_lastDir, target));
-
-            if (Directory.Exists(target))
-                _lastDir = target;
-        }
-        catch (Exception) { /* routine: cd target inaccessible; shell continues */ }
+        catch (Exception ex) { Console.Error.WriteLine($"[ps-bash] warning: PROMPT_COMMAND query failed: {ex.Message}"); }
     }
 
     private static async Task<string> BuildPromptAsync(IWorker worker)
@@ -566,9 +494,7 @@ EnsureConsoleInputRestored();
         const string Magenta = "\x1b[35m";
         const string Dim = "\x1b[2m";
 
-        var cwd = _lastDir;
-        if (cwd.StartsWith(_homeDir))
-            cwd = "~" + cwd[_homeDir.Length..];
+        var cwd = Cwd.DisplayPath;
 
         var sb = new StringBuilder();
 
@@ -619,11 +545,12 @@ EnsureConsoleInputRestored();
     }
 
     private static string ExpandPS1(string ps1)
-        => ExpandPS1(ps1, _lastDir, _homeDir);
+        => ExpandPS1(ps1, Cwd.Current, Cwd.Home);
 
     internal static string ExpandPS1(string ps1, string cwd, string home)
     {
-        if (cwd.StartsWith(home))
+        if (cwd.StartsWith(home, StringComparison.OrdinalIgnoreCase)
+            && (cwd.Length == home.Length || cwd[home.Length] == Path.DirectorySeparatorChar))
             cwd = "~" + cwd[home.Length..];
 
         var user = Environment.UserName;
@@ -725,7 +652,7 @@ EnsureConsoleInputRestored();
     {
         try
         {
-            var dir = _lastDir;
+            var dir = Cwd.Current;
             while (dir is not null)
             {
                 if (Directory.Exists(Path.Combine(dir, ".git")))
@@ -754,7 +681,7 @@ EnsureConsoleInputRestored();
     {
         try
         {
-            var dir = _lastDir;
+            var dir = Cwd.Current;
             while (dir is not null)
             {
                 var gitDir = Path.Combine(dir, ".git");
@@ -784,7 +711,7 @@ EnsureConsoleInputRestored();
     {
         var prompt = await BuildPromptAsync(worker);
         var line = _lineEditor is not null
-            ? await _lineEditor.ReadLineAsync(prompt)
+            ? await _lineEditor.ReadLineAsync(prompt, Cwd.Current)
             : Console.ReadLine();
         if (line is null)
             return null;
@@ -990,10 +917,6 @@ EnsureConsoleInputRestored();
             return;
         }
 
-        var rcTimeoutSecs = 10;
-        var envTimeout = Environment.GetEnvironmentVariable("PSBASH_RC_TIMEOUT");
-        if (int.TryParse(envTimeout, out var parsed) && parsed > 0) rcTimeoutSecs = parsed;
-        else if (envTimeout == "0") rcTimeoutSecs = 0; // 0 = disable timeout
         var debug = Environment.GetEnvironmentVariable("PSBASH_DEBUG") == "1";
 
         if (debug)
@@ -1005,27 +928,11 @@ EnsureConsoleInputRestored();
             Console.Error.WriteLine("[ps-bash] rc end ----");
         }
 
-        using var rcCts = CancellationTokenSource.CreateLinkedTokenSource(cts.Token);
-        var sw = System.Diagnostics.Stopwatch.StartNew();
-        var execTask = worker.ExecuteAsync(pwshCommand, rcCts.Token);
-        var timeoutTask = Task.Delay(TimeSpan.FromSeconds(rcTimeoutSecs), rcCts.Token);
-        var winner = await Task.WhenAny(execTask, timeoutTask);
-        if (winner == execTask)
+        try
         {
-            try { await execTask; } catch (OperationCanceledException) { }
-            if (debug) Console.Error.WriteLine($"[ps-bash] rc sourced in {sw.ElapsedMilliseconds}ms");
+            await worker.ExecuteAsync(pwshCommand, cts.Token);
         }
-        else
-        {
-            rcCts.Cancel();
-            try { execTask.Wait(TimeSpan.FromSeconds(2)); } catch { }
-            Console.Error.WriteLine(
-                $"[ps-bash] warning: ~/.psbashrc exceeded {rcTimeoutSecs}s and was abandoned. " +
-                $"Shell will continue; some rc settings may not have applied. " +
-                $"Set PSBASH_RC_TIMEOUT=<seconds> to extend, or PSBASH_DEBUG=1 to see what was sent.");
-            // Intentionally do not await execTask — if ExecuteAsync ignores
-            // cancellation, we must still return so the prompt can appear.
-        }
+        catch (Exception) { }
     }
 
     public static string ProcessAliasCommand(string input)
@@ -1197,26 +1104,10 @@ EnsureConsoleInputRestored();
         return sb.ToString();
     }
 
-    private static async Task<IWorker> StartWorkerAsync(string pwshPath)
-    {
-        // Interactive mode (M4) routes through WorkerFactory but pins to
-        // PwshWorker via forcePwsh:true. The host-backed interactive bridge is
-        // T08a/T08b — until that lands, REPL state (history sync, prompt
-        // command, cwd tracking) lives in the in-process worker.
-        return await WorkerFactory.CreateAsync(pwshPath, forcePwsh: true);
-    }
-
-    private static async Task<IWorker> EnsureWorkerAsync(IWorker worker, string? pwshPath, bool externalWorker = false)
+    private static void EnsureWorkerAlive(IWorker worker)
     {
         if (worker.HasExited)
-        {
-            if (externalWorker || pwshPath is null)
-                throw new IOException("external worker exited unexpectedly");
-            try { await worker.DisposeAsync(); } catch { }
-            Console.Error.WriteLine("[ps-bash] worker died; respawning...");
-            return await StartWorkerAsync(pwshPath);
-        }
-        return worker;
+            throw new IOException("worker exited unexpectedly");
     }
 
     private static async ValueTask DisposeWorkerAsync(IWorker worker)

@@ -6,6 +6,11 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <IsPackable>false</IsPackable>
     <IsTestProject>true</IsTestProject>
+    <!-- Suppress NU1903 for System.Security.Cryptography.Xml pulled in transitively by
+         Microsoft.PowerShell.SDK 7.4.6. No published version is currently free of these
+         advisories; this is a test-only project and does not use XML signing paths.
+         Advisory URLs: GHSA-37gx-xxp4-5rgx, GHSA-w3x6-4m5h-cxqf -->
+    <NoWarn>$(NoWarn);NU1903</NoWarn>
   </PropertyGroup>
 
   <ItemGroup>

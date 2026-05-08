@@ -32,6 +32,39 @@ if (!string.IsNullOrEmpty(tracePath))
 
 var shellArgs = ShellArgs.Parse(args);
 
+if (args is ["--help"] or ["-h"])
+{
+    Console.WriteLine("""
+        Usage: ps-bash [options] [script [args]]
+
+        Options:
+          -c <command>       Execute command string
+          -i                 Interactive shell
+          -l, --login        Login shell compatibility flag
+          -s                 Read command from stdin
+          --noprofile        Do not load profiles
+          --norc             Alias for --noprofile
+          --unix-paths       Emit Unix-style paths in transpiled commands
+          --windows-paths    Emit Windows-style paths in transpiled commands
+          -v, --version      Print version
+          -h, --help         Print this help
+        """);
+    return 0;
+}
+
+if (args is ["--version"] or ["-v"])
+{
+    var version = typeof(BashTranspiler).Assembly
+        .GetCustomAttributes(typeof(System.Reflection.AssemblyInformationalVersionAttribute), inherit: false)
+        .OfType<System.Reflection.AssemblyInformationalVersionAttribute>()
+        .FirstOrDefault()
+        ?.InformationalVersion
+        ?? typeof(BashTranspiler).Assembly.GetName().Version?.ToString()
+        ?? "unknown";
+    Console.WriteLine(version);
+    return 0;
+}
+
 // Path mode: explicit --unix-paths / --windows-paths flag wins; otherwise
 // fall back to PSBASH_UNIX_PATHS env var; otherwise default to Windows-native
 // paths (no MSYS translation). Propagate the resolved choice as an env var
@@ -40,25 +73,8 @@ bool unixPaths = shellArgs.UnixPaths
     ?? Environment.GetEnvironmentVariable("PSBASH_UNIX_PATHS") is "1" or "true";
 Environment.SetEnvironmentVariable("PSBASH_UNIX_PATHS", unixPaths ? "1" : "0");
 
-string pwshPath;
-try
-{
-    pwshPath = PwshLocator.Locate();
-}
-catch (PwshNotFoundException ex)
-{
-    Console.Error.WriteLine(ex.Message);
-    return 127;
-}
-
-// Factory delegate that produces a fresh IWorker. Centralizing creation here
-// (rather than calling PwshWorker.StartAsync directly at every site) is the
-// architecture seam from migration task T01: T07 routes -c, stdin, and script
-// modes through WorkerFactory so out-of-process IpcWorker and in-process
-// PwshWorker can be swapped without per-site changes. Interactive mode (M4)
-// stays on PwshWorker until T08a/T08b lands the interactive handoff bridge.
 Func<Task<IWorker>> workerFactory = async () =>
-    await WorkerFactory.CreateAsync(pwshPath).ConfigureAwait(false);
+    await WorkerFactory.CreateAsync().ConfigureAwait(false);
 
 // M3: file-arg mode — ps-bash script.sh [arg1 arg2 ...]
 // Check before stdin detection: a script path argument takes priority over
@@ -73,11 +89,15 @@ if (shellArgs.ScriptPath is not null)
 
     if (shellArgs.ScriptPath.EndsWith(".ps1", StringComparison.OrdinalIgnoreCase))
     {
-        await using IWorker ps1Worker = await workerFactory();
-
-        var ps1Preamble = BuildPositionalPreamble(shellArgs.ScriptPath, shellArgs.ScriptArgs);
-        var escapedPath = shellArgs.ScriptPath.Replace("'", "''");
-        return await ps1Worker.ExecuteAsync(ps1Preamble + ". '" + escapedPath + "'");
+        IWorker ps1Worker;
+        try { ps1Worker = await workerFactory(); }
+        catch (HostUnavailableException ex) { Console.Error.WriteLine($"ps-bash: {ex.Message}"); return 1; }
+        await using (ps1Worker)
+        {
+            var ps1Preamble = BuildPositionalPreamble(shellArgs.ScriptPath, shellArgs.ScriptArgs);
+            var escapedPath = shellArgs.ScriptPath.Replace("'", "''");
+            return await ps1Worker.ExecuteAsync(ps1Preamble + ". '" + escapedPath + "'");
+        }
     }
 
     // .sh execution: read, transpile, build positional preamble, execute.
@@ -94,10 +114,14 @@ if (shellArgs.ScriptPath is not null)
         return 2;
     }
 
-    await using IWorker scriptWorker = await workerFactory();
-
-    var preamble = BuildPositionalPreamble(shellArgs.ScriptPath, shellArgs.ScriptArgs);
-    return await scriptWorker.ExecuteAsync(preamble + pwshScriptCommand);
+    IWorker scriptWorker;
+    try { scriptWorker = await workerFactory(); }
+    catch (HostUnavailableException ex) { Console.Error.WriteLine($"ps-bash: {ex.Message}"); return 1; }
+    await using (scriptWorker)
+    {
+        var preamble = BuildPositionalPreamble(shellArgs.ScriptPath, shellArgs.ScriptArgs);
+        return await scriptWorker.ExecuteAsync(preamble + pwshScriptCommand);
+    }
 }
 
 // Auto-detect piped stdin: if no command given and stdin is redirected, try reading it.
@@ -123,13 +147,21 @@ if (shellArgs.Interactive || shellArgs.Command is null)
     var hostBinary = WorkerFactory.ResolveHostBinary();
     if (hostBinary is not null && File.Exists(hostBinary))
     {
+        // Use launcher PID as session ID — matches WorkerFactory.ResolveSessionId() so
+        // child -c invocations inherit PSBASH_SESSION_ID and connect to this server.
+        var sessionId = Environment.ProcessId.ToString();
+        Environment.SetEnvironmentVariable("PSBASH_SESSION_ID", sessionId);
+
         var psi = new System.Diagnostics.ProcessStartInfo(hostBinary)
         {
             UseShellExecute = false,
             // No stdio redirection — host inherits the real tty.
         };
         psi.ArgumentList.Add("--interactive");
-        psi.ArgumentList.Add($"--launcher-pid={Environment.ProcessId}");
+        psi.ArgumentList.Add("--session-id");
+        psi.ArgumentList.Add(sessionId);
+        psi.ArgumentList.Add("--launcher-pid");
+        psi.ArgumentList.Add(Environment.ProcessId.ToString());
         if (shellArgs.NoProfile) psi.ArgumentList.Add("--no-profile");
 
         using var hostProc = System.Diagnostics.Process.Start(psi)!;
@@ -137,8 +169,8 @@ if (shellArgs.Interactive || shellArgs.Command is null)
         return hostProc.ExitCode;
     }
 
-    // Fallback: host binary not found — run REPL in-process (legacy path).
-    return await InteractiveShell.RunAsync(pwshPath, shellArgs.NoProfile);
+    Console.Error.WriteLine("ps-bash: ps-bash-host binary not found. Cannot run interactively.");
+    return 127;
 }
 
 // For the -c (non-interactive) path, start a parent-death watcher so we never
@@ -170,19 +202,31 @@ if (debug)
 {
     Console.Error.WriteLine($"[ps-bash] input:      {bashCommand}");
     Console.Error.WriteLine($"[ps-bash] transpiled: {pwshCommand}");
-    Console.Error.WriteLine($"[ps-bash] pwsh:       {pwshPath}");
+    Console.Error.WriteLine($"[ps-bash] host:       {WorkerFactory.ResolveHostBinary()}");
 }
 
-await using IWorker worker = await workerFactory();
-
-var exitCode = await worker.ExecuteAsync(pwshCommand);
-
-if (debug)
+IWorker worker;
+try
 {
-    Console.Error.WriteLine($"[ps-bash] exit:       {exitCode}");
+    worker = await workerFactory();
+}
+catch (HostUnavailableException ex)
+{
+    Console.Error.WriteLine($"ps-bash: {ex.Message}");
+    return 1;
 }
 
-return exitCode;
+await using (worker)
+{
+    var exitCode = await worker.ExecuteAsync(pwshCommand);
+
+    if (debug)
+    {
+        Console.Error.WriteLine($"[ps-bash] exit:       {exitCode}");
+    }
+
+    return exitCode;
+}
 
 // Builds a PowerShell preamble that sets $global:BashPositional and
 // $global:BashPositional0 so that $1..$9, $@, $#, and $0 resolve
