@@ -27,7 +27,7 @@ public sealed class ParentDeathWatcherTests
         using var proc = StartShortLivedProcess();
         var pid = proc.Id;
         proc.Kill();
-        proc.WaitForExit();
+        Assert.True(proc.WaitForExit(5_000), "Killed process should exit promptly");
 
         using var cts = new CancellationTokenSource();
         using var watcher = ParentDeathWatcher.TryCreate(pid, cts, TimeSpan.FromMilliseconds(20));
@@ -53,7 +53,7 @@ public sealed class ParentDeathWatcherTests
         finally
         {
             proc.Kill();
-            proc.WaitForExit();
+            Assert.True(proc.WaitForExit(5_000), "Killed process should exit promptly");
         }
     }
 
@@ -66,7 +66,7 @@ public sealed class ParentDeathWatcherTests
         using var watcher = ParentDeathWatcher.TryCreate(proc.Id, cts, TimeSpan.FromMilliseconds(20));
 
         proc.Kill();
-        proc.WaitForExit();
+        Assert.True(proc.WaitForExit(5_000), "Killed process should exit promptly");
 
         var fired = cts.Token.WaitHandle.WaitOne(TimeSpan.FromSeconds(5));
         Assert.True(fired, "Watcher should detect process death and cancel the CTS");

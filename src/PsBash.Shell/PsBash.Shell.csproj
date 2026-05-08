@@ -10,6 +10,11 @@
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
     <StripSymbols>true</StripSymbols>
     <AssemblyName>ps-bash</AssemblyName>
+    <!-- IL2104/IL3053: aggregate trim/AOT analysis warnings from third-party assemblies
+         (System.Management.Automation, ApplicationInsights, Newtonsoft.Json, etc.) that
+         are analyzed by ILC because Host references them, but are not called from the
+         AOT launcher and are trimmed away at publish time. -->
+    <IlcSuppressWarnings>IL2104;IL3053</IlcSuppressWarnings>
   </PropertyGroup>
 
   <ItemGroup>

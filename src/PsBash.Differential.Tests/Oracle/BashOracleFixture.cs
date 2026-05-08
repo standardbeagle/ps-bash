@@ -176,8 +176,15 @@ public sealed class BashOracleFixture
             catch (OperationCanceledException)
             {
                 string partial = string.Empty;
-                try { partial = await stdoutTask.WaitAsync(TimeSpan.FromSeconds(2)); } catch { }
                 string partialErr = string.Empty;
+                try
+                {
+                    if (!process.HasExited)
+                        process.Kill(entireProcessTree: true);
+                }
+                catch { /* already exited */ }
+
+                try { partial = await stdoutTask.WaitAsync(TimeSpan.FromSeconds(2)); } catch { }
                 try { partialErr = await stderrTask.WaitAsync(TimeSpan.FromSeconds(2)); } catch { }
 
                 throw new OracleTimeoutException(
@@ -254,10 +261,16 @@ public sealed class BashOracleFixture
             }
             catch (OperationCanceledException)
             {
-                // Collect partial output before killing
                 string partial = string.Empty;
-                try { partial = await stdoutTask.WaitAsync(TimeSpan.FromSeconds(2)); } catch { }
                 string partialErr = string.Empty;
+                try
+                {
+                    if (!process.HasExited)
+                        process.Kill(entireProcessTree: true);
+                }
+                catch { /* already exited */ }
+
+                try { partial = await stdoutTask.WaitAsync(TimeSpan.FromSeconds(2)); } catch { }
                 try { partialErr = await stderrTask.WaitAsync(TimeSpan.FromSeconds(2)); } catch { }
 
                 throw new OracleTimeoutException(

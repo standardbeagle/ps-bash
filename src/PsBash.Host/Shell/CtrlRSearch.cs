@@ -415,13 +415,15 @@ public sealed class CtrlRSearch : IDisposable
         // Compute frequencies for this result set
         _commandFrequencies = ComputeFrequencies(candidates);
 
-        // Score and sort
+        // Score, sort, and deduplicate by command text (keep best-scored entry per unique command)
+        var seen = new HashSet<string>(StringComparer.Ordinal);
         _results = candidates
             .Select(e => new ScoredEntry(
                 e,
                 ScoreFuzzyMatch(e, queryText, _currentCwd)))
             .OrderByDescending(x => x.Score)
             .ThenByDescending(x => x.Entry.Timestamp)
+            .Where(x => seen.Add(x.Entry.Command))
             .ToList();
 
         _selectedIndex = _results.Count > 0 ? 0 : -1;
@@ -620,9 +622,10 @@ public sealed class CtrlRSearch : IDisposable
             Console.Write(ResetAttributes);
         }
 
-        // Right-align match count
+        // Right-align match count (subtract 1 so the last char lands at col width-2,
+        // not width-1 which triggers an implicit wrap in Windows Console)
         var countText = _results.Count.ToString() + " matching";
-        var countPos = _terminalWidth - countText.Length;
+        var countPos = _terminalWidth - countText.Length - 1;
         if (countPos > queryText.Length + 30)
         {
             Console.SetCursorPosition(countPos, Console.CursorTop);
@@ -676,7 +679,7 @@ public sealed class CtrlRSearch : IDisposable
 
     private void RenderResultLine(HistoryEntry entry, string query)
     {
-        var maxWidth = _terminalWidth - 50; // Reserve space for metadata
+        var maxWidth = _terminalWidth - 55; // Reserve space for metadata (worst-case "Exit -2147483648" = 16 chars)
         if (maxWidth < 20) maxWidth = 20;
 
         var command = entry.Command;

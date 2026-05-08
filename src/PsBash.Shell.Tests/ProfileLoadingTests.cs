@@ -186,6 +186,34 @@ public class ProfileLoadingTests
         }
     }
 
+    [SkippableFact]
+    public async Task RcFile_SourceProcessSub_NestedPsBashDoesNotWarnAboutMissingHost()
+    {
+        Skip.IfNot(CanRun, "ps-bash binary not found");
+
+        var tempHome = CreateTempHome();
+        try
+        {
+            var psBash = BashSingleQuote(PsBashPath!);
+            await File.WriteAllTextAsync(
+                Path.Combine(tempHome, ".psbashrc"),
+                $"source <(PSBASH_HOST={psBash} {psBash} -c 'echo export PROC_SUB_RC=ok')\n");
+
+            await using var harness = await StartWithHomeAsync(tempHome, noProfile: false);
+
+            await harness.SendLineAsync("echo $PROC_SUB_RC");
+            await harness.WaitForPromptAsync();
+
+            var output = NormalizeOutput(harness.ReadSinceLastPrompt());
+            Assert.Contains("ok", output);
+            Assert.DoesNotContain("host unavailable", harness.Stderr, StringComparison.Ordinal);
+        }
+        finally
+        {
+            DeleteTempHome(tempHome);
+        }
+    }
+
     // ── Helpers ──────────────────────────────────────────────────────────────
 
     private static string CreateTempHome()
@@ -202,6 +230,9 @@ public class ProfileLoadingTests
 
     private static string NormalizeOutput(string raw)
         => raw.Replace("\r\n", "\n").Trim();
+
+    private static string BashSingleQuote(string value)
+        => "'" + value.Replace("'", "'\\''") + "'";
 
     private Task<InteractiveShellHarness> StartWithHomeAsync(string tempHome, bool noProfile)
         => InteractiveShellHarness.StartAsync(

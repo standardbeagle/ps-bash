@@ -32,6 +32,39 @@ if (!string.IsNullOrEmpty(tracePath))
 
 var shellArgs = ShellArgs.Parse(args);
 
+if (args is ["--help"] or ["-h"])
+{
+    Console.WriteLine("""
+        Usage: ps-bash [options] [script [args]]
+
+        Options:
+          -c <command>       Execute command string
+          -i                 Interactive shell
+          -l, --login        Login shell compatibility flag
+          -s                 Read command from stdin
+          --noprofile        Do not load profiles
+          --norc             Alias for --noprofile
+          --unix-paths       Emit Unix-style paths in transpiled commands
+          --windows-paths    Emit Windows-style paths in transpiled commands
+          -v, --version      Print version
+          -h, --help         Print this help
+        """);
+    return 0;
+}
+
+if (args is ["--version"] or ["-v"])
+{
+    var version = typeof(BashTranspiler).Assembly
+        .GetCustomAttributes(typeof(System.Reflection.AssemblyInformationalVersionAttribute), inherit: false)
+        .OfType<System.Reflection.AssemblyInformationalVersionAttribute>()
+        .FirstOrDefault()
+        ?.InformationalVersion
+        ?? typeof(BashTranspiler).Assembly.GetName().Version?.ToString()
+        ?? "unknown";
+    Console.WriteLine(version);
+    return 0;
+}
+
 // Path mode: explicit --unix-paths / --windows-paths flag wins; otherwise
 // fall back to PSBASH_UNIX_PATHS env var; otherwise default to Windows-native
 // paths (no MSYS translation). Propagate the resolved choice as an env var

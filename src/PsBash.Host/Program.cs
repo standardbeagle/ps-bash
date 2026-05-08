@@ -9,6 +9,8 @@ internal sealed class Program
 {
     static async Task<int> Main(string[] args)
     {
+        RegisterSideBySideAssemblyResolver();
+
         // Interactive mode: host owns the tty; run the REPL directly.
         if (args.Contains("--interactive"))
         {
@@ -94,5 +96,14 @@ internal sealed class Program
     {
         var val = GetArg(args, name);
         return int.TryParse(val, out var n) ? n : null;
+    }
+
+    private static void RegisterSideBySideAssemblyResolver()
+    {
+        System.Runtime.Loader.AssemblyLoadContext.Default.Resolving += (context, assemblyName) =>
+        {
+            var candidate = Path.Combine(AppContext.BaseDirectory, assemblyName.Name + ".dll");
+            return File.Exists(candidate) ? context.LoadFromAssemblyPath(candidate) : null;
+        };
     }
 }

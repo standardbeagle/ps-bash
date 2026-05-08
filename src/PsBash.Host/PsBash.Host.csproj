@@ -25,4 +25,18 @@
   <ItemGroup>
     <EmbeddedResource Include="Resources\FlagSpecs.json" />
   </ItemGroup>
+
+  <!-- dotnet publish omits Microsoft.PowerShell.SDK runtime assemblies for this
+       net10 host, even though CopyLocalLockFileAssemblies puts them in the RID
+       build output. Copy them into the publish directory so ps-bash-host can
+       resolve System.Management.Automation and the Microsoft.PowerShell.* DLLs
+       from its side-by-side install layout. -->
+  <Target Name="CopyPowerShellSdkAssembliesToPublishDirectory" AfterTargets="Publish">
+    <ItemGroup>
+      <_PowerShellSdkPublishAssemblies Include="$(OutputPath)*.dll" />
+    </ItemGroup>
+    <Copy SourceFiles="@(_PowerShellSdkPublishAssemblies)"
+          DestinationFolder="$(PublishDir)"
+          SkipUnchangedFiles="true" />
+  </Target>
 </Project>

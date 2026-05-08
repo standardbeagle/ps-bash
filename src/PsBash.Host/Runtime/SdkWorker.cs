@@ -1,4 +1,5 @@
 using System.Management.Automation;
+using System.Text.RegularExpressions;
 using PsBash.Core.Runtime;
 
 namespace PsBash.Host.Runtime;
@@ -46,6 +47,9 @@ public sealed class SdkWorker : IWorker
         await _lock.WaitAsync(ct);
         try
         {
+            if (TrySetLocation(command, out var setLocationExitCode))
+                return setLocationExitCode;
+
             return await Task.Run(() => RunCommand(command, callback), ct);
         }
         finally
@@ -60,6 +64,9 @@ public sealed class SdkWorker : IWorker
         await _lock.WaitAsync(ct);
         try
         {
+            if (IsCurrentLocationQuery(expression))
+                return _ps.Runspace.SessionStateProxy.Path.CurrentFileSystemLocation?.ProviderPath ?? "";
+
             return await Task.Run(() => RunCommandCollect(expression), ct);
         }
         finally
@@ -96,10 +103,59 @@ public sealed class SdkWorker : IWorker
         // Stream output via DataAdded so results are delivered as they arrive rather
         // than buffering the entire Collection<PSObject> in RAM first.
         var outputCollection = new System.Management.Automation.PSDataCollection<System.Management.Automation.PSObject>();
+        // Partial-line buffer: accumulates NoTrailingNewline fragments (echo -n, printf "%d " x)
+        // until a full line arrives, matching the pwsh worker loop's Console.Out.Write / WriteLine split.
+        var partialBuffer = new System.Text.StringBuilder();
+        // Non-BashText typed PSObjects (FileInfo, DirectoryInfo, PSCustomObject, etc.) are
+        // collected during Invoke() and formatted after it returns (property-enumeration for
+        // PSCustomObject, BaseObject.ToString() for others). Cannot format during DataAdded
+        // because the runspace is occupied by Invoke().
+        var deferredObjects = new System.Collections.Generic.List<System.Management.Automation.PSObject>();
         outputCollection.DataAdded += (sender, e) =>
         {
             var col = (System.Management.Automation.PSDataCollection<System.Management.Automation.PSObject>)sender!;
-            var line = col[e.Index]?.ToString() ?? "";
+            var pso = col[e.Index];
+            // Three output cases:
+            // 1. BashText property present: PsBash typed object (LsEntry, CatLine, etc.) — extract BashText.
+            // 2. BaseObject is string: New-BashObject fast-path (echo, printf, Write-Output).
+            // 3. Other typed PSObject (FileInfo, PSCustomObject): defer to property-enumeration fallback.
+            // PSObject.ToString() returns "@{...}" for PSCustomObjects from C# — does NOT invoke
+            // the PS ScriptMethod override — so we must never call it for path 1 or 3.
+            var bashTextProp = pso?.Properties["BashText"];
+            string? lineText = null;
+            bool isPartial = false;
+
+            if (bashTextProp != null)
+            {
+                // Slow-path BashObject (NoTrailingNewline or non-TextOutput typed objects).
+                lineText = (bashTextProp.Value?.ToString() ?? "").TrimEnd('\r', '\n');
+                var noNlProp = pso!.Properties["NoTrailingNewline"];
+                isPartial = noNlProp?.Value is bool b && b;
+            }
+            else if (pso?.BaseObject is string s)
+            {
+                // Fast-path: New-BashObject returns [string] for plain text output.
+                // This covers Invoke-BashEcho, Invoke-BashPrintf, and any Write-Output.
+                lineText = s.TrimEnd('\r', '\n');
+            }
+            else if (pso != null)
+            {
+                // Non-BashText typed PSObject (FileInfo, PSCustomObject, etc.): defer to
+                // property-enumeration fallback after Invoke() completes.
+                deferredObjects.Add(pso);
+                return;
+            }
+
+            if (lineText is null) return;
+
+            if (isPartial)
+            {
+                partialBuffer.Append(lineText);
+                return;
+            }
+
+            var line = partialBuffer.Length > 0 ? partialBuffer.Append(lineText).ToString() : lineText;
+            partialBuffer.Clear();
             try
             {
                 if (output is not null) output(line);
@@ -140,6 +196,42 @@ public sealed class SdkWorker : IWorker
             return 1;
         }
 
+        // Flush non-BashText typed PSObjects (PSCustomObject, FileInfo, etc.) collected during
+        // Invoke(). Out-String is unavailable in the SDK context (module manifest not on path),
+        // so use property-enumeration: PSCustomObject → "Name : Value" per property (Format-List
+        // style); all other typed objects → BaseObject.ToString() (full path for FileInfo, etc.).
+        foreach (var pso in deferredObjects)
+        {
+            if (pso?.BaseObject is System.Management.Automation.PSCustomObject)
+            {
+                foreach (var prop in pso.Properties)
+                {
+                    try
+                    {
+                        var propLine = $"{prop.Name} : {prop.Value}";
+                        if (output is not null) output(propLine);
+                        else Console.WriteLine(propLine);
+                    }
+                    catch { break; }
+                }
+            }
+            else
+            {
+                var text = pso?.BaseObject?.ToString() ?? pso?.ToString() ?? "";
+                if (string.IsNullOrEmpty(text)) continue;
+                try { if (output is not null) output(text); else Console.WriteLine(text); }
+                catch { break; }
+            }
+        }
+
+        // Flush any trailing partial-line fragment (e.g. printf with no final newline).
+        if (partialBuffer.Length > 0)
+        {
+            var remaining = partialBuffer.ToString();
+            try { if (output is not null) output(remaining); else Console.WriteLine(remaining); }
+            catch { }
+        }
+
         // exit N calls PSHost.SetShouldExit(N) — check before processing output.
         if (_host.ShouldExit)
         {
@@ -150,6 +242,8 @@ public sealed class SdkWorker : IWorker
         if (_ps.InvocationStateInfo.State == System.Management.Automation.PSInvocationState.Stopped)
             return 130;
 
+        SyncDotNetCurrentDirectory();
+
         // Mirror ps-bash-worker.ps1: use $LASTEXITCODE, not HadErrors.
         // HadErrors fires on Write-Error even with -ErrorAction SilentlyContinue;
         // $LASTEXITCODE only changes when an external command or explicit `exit N` runs.
@@ -159,6 +253,46 @@ public sealed class SdkWorker : IWorker
         if (lec is long exitLong) return (int)exitLong;
         return 0;
     }
+
+    private void SyncDotNetCurrentDirectory()
+    {
+        var path = _ps.Runspace.SessionStateProxy.Path.CurrentFileSystemLocation?.ProviderPath;
+        if (!string.IsNullOrEmpty(path))
+            Environment.CurrentDirectory = path;
+    }
+
+    private bool TrySetLocation(string command, out int exitCode)
+    {
+        exitCode = 0;
+        var match = Regex.Match(
+            command.Trim(),
+            @"^Set-Location(?:\s+-Path)?\s+(?:'((?:''|[^'])*)'|""([^""]*)""|(.+))$",
+            RegexOptions.CultureInvariant);
+        if (!match.Success)
+            return false;
+
+        var path = match.Groups[1].Success
+            ? match.Groups[1].Value.Replace("''", "'")
+            : match.Groups[2].Success
+                ? match.Groups[2].Value
+                : match.Groups[3].Value.Trim();
+
+        try
+        {
+            _ps.Runspace.SessionStateProxy.Path.SetLocation(path);
+            SyncDotNetCurrentDirectory();
+            return true;
+        }
+        catch (Exception ex)
+        {
+            Console.Error.WriteLine($"ps-bash: {ex.Message}");
+            exitCode = 1;
+            return true;
+        }
+    }
+
+    private static bool IsCurrentLocationQuery(string expression)
+        => expression.Trim() is "(Get-Location).Path" or "Get-Location" or "$PWD";
 
     private static int UnwrapExitCode(object? arg)
     {
@@ -182,7 +316,13 @@ public sealed class SdkWorker : IWorker
         outputCollection.DataAdded += (sender, e) =>
         {
             var col = (System.Management.Automation.PSDataCollection<System.Management.Automation.PSObject>)sender!;
-            var line = col[e.Index]?.ToString() ?? "";
+            var pso = col[e.Index];
+            var bashTextProp = pso?.Properties["BashText"];
+            string line;
+            if (bashTextProp != null)
+                line = (bashTextProp.Value?.ToString() ?? "").TrimEnd('\r', '\n');
+            else
+                line = pso?.ToString() ?? "";
             if (parts.Length + line.Length > MaxQueryBytes)
             {
                 _ps.Stop();

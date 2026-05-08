@@ -184,13 +184,12 @@ public sealed class PwshWorker : IWorker
         return worker;
     }
 
-    /// In AOT single-file builds Assembly.Location is empty; fall back to looking
-    /// for PsBash.Core.dll beside the executable so Invoke-ProcessSubSource can
-    /// load BashTranspiler in the spawned pwsh worker.
+    /// Returns the path to PsBash.Core.dll beside the executable so
+    /// Invoke-ProcessSubSource can load BashTranspiler in the spawned pwsh worker.
+    /// Assembly.Location is always empty in AOT/single-file builds; AppContext.BaseDirectory
+    /// is the correct probe path in all deployment modes.
     private static string ResolveCoreAsmPath()
     {
-        var loc = typeof(PwshWorker).Assembly.Location;
-        if (!string.IsNullOrEmpty(loc)) return loc;
         var candidate = Path.Combine(AppContext.BaseDirectory, "PsBash.Core.dll");
         return File.Exists(candidate) ? candidate : "";
     }

@@ -3,11 +3,11 @@ using System.Diagnostics;
 namespace PsBash.Shell.Tests;
 
 /// <summary>
-/// Helpers for spawning `dotnet run` / `ps-bash` child processes in integration tests.
+/// Helpers for spawning `ps-bash` child processes in integration tests.
 ///
 /// CRITICAL RELIABILITY CONTRACT:
 /// Every test that spawns an external process MUST use these helpers (or replicate
-/// their pattern) so that a hung command NEVER orphans the dotnet-run → ps-bash → pwsh
+/// their pattern) so that a hung command NEVER orphans the ps-bash → pwsh
 /// process tree for hours. See Reliability C (Dart task YqMcVdyfYKzt).
 ///
 /// Contract:
@@ -19,6 +19,34 @@ namespace PsBash.Shell.Tests;
 internal static class ProcessRunHelper
 {
     public static readonly TimeSpan DefaultTimeout = TimeSpan.FromSeconds(30);
+    public static readonly string WorkerScript = Path.GetFullPath(
+        Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "..",
+            "scripts", "ps-bash-worker.ps1"));
+
+    public static ProcessStartInfo BuildPsBashPsi(
+        IEnumerable<string> arguments,
+        IDictionary<string, string?>? envOverrides = null)
+    {
+        var psBashPath = InteractiveShellHarness.FindPsBashBinary()
+            ?? throw new InvalidOperationException("ps-bash binary not found -- build PsBash.Shell first");
+
+        var psi = new ProcessStartInfo { FileName = psBashPath };
+        foreach (var arg in arguments)
+            psi.ArgumentList.Add(arg);
+
+        psi.Environment["PSBASH_WORKER"] = WorkerScript;
+        if (envOverrides is not null)
+        {
+            foreach (var (key, value) in envOverrides)
+            {
+                if (value is null)
+                    psi.Environment.Remove(key);
+                else
+                    psi.Environment[key] = value;
+            }
+        }
+        return psi;
+    }
 
     public static async Task<(int ExitCode, string Stdout, string Stderr)> RunAsync(
         ProcessStartInfo psi,

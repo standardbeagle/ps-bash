@@ -15,12 +15,6 @@ namespace PsBash.Shell.Tests;
 public class ProgramFallbackTests
 {
     private static readonly string? PwshPath = FindPwsh();
-    private static readonly string ProjectDir = Path.GetFullPath(
-        Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "..",
-            "src", "PsBash.Shell"));
-    private static readonly string WorkerScript = Path.GetFullPath(
-        Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "..",
-            "scripts", "ps-bash-worker.ps1"));
 
     private static string? FindPwsh()
     {
@@ -30,22 +24,19 @@ public class ProgramFallbackTests
 
     private static ProcessStartInfo BuildPsi(string[] arguments, IDictionary<string, string?>? envOverrides = null)
     {
-        var psi = new ProcessStartInfo { FileName = "dotnet" };
-        psi.ArgumentList.Add("run");
-        psi.ArgumentList.Add("--no-build");
-        psi.ArgumentList.Add("--project");
-        psi.ArgumentList.Add(ProjectDir);
-        psi.ArgumentList.Add("--");
-        foreach (var arg in arguments) psi.ArgumentList.Add(arg);
-
-        psi.Environment["PSBASH_WORKER"] = WorkerScript;
+        var psi = ProcessRunHelper.BuildPsBashPsi(arguments);
         // Default off so tests that don't set it can't accidentally pick up
         // a side-by-side host binary from a prior build.
         psi.Environment["PSBASH_DISABLE_HOST"] = "1";
         if (envOverrides is not null)
         {
             foreach (var kv in envOverrides)
-                psi.Environment[kv.Key] = kv.Value;
+            {
+                if (kv.Value is null)
+                    psi.Environment.Remove(kv.Key);
+                else
+                    psi.Environment[kv.Key] = kv.Value;
+            }
         }
         return psi;
     }

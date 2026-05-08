@@ -8,7 +8,7 @@ RootModule = 'PsBash.Cmdlets.dll'
 
 NestedModules = @('PsBash.psd1')
 
-ModuleVersion = '0.9.1'
+ModuleVersion = '0.9.2'
 
 GUID = 'b2c3d4e5-f6a7-8901-bcde-f23456789012'
 
@@ -25,7 +25,7 @@ CompatiblePSEditions = 'Core'
 PowerShellVersion = '7.4'
 
 # Modules that must be imported into the global environment prior to importing this module
-RequiredModules = @(@{ ModuleName = 'PsBash'; ModuleVersion = '0.9.1' })
+RequiredModules = @(@{ ModuleName = 'PsBash'; ModuleVersion = '0.9.2' })
 
 # Re-export all nested script-module functions so Invoke-BashEval transpiled
 # scriptblocks can resolve commands like Invoke-BashLs in the caller's scope.
