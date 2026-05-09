@@ -2420,6 +2420,9 @@ public static class PsEmitter
             case "ps":
                 result = EmitPassthrough("Invoke-BashPs", args);
                 return true;
+            case "browse":
+                result = EmitPassthrough("Invoke-BashBrowse", args);
+                return true;
             case "rev":
                 result = EmitPassthrough("Invoke-BashRev", args);
                 return true;

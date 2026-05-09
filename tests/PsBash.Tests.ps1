@@ -160,6 +160,80 @@ Describe 'Invoke-BashPrintf' {
     }
 }
 
+Describe 'Invoke-BashBrowse' {
+    It 'lists pipeline objects with original object references' {
+        $inputObjects = @(
+            [PSCustomObject]@{ PSTypeName = 'Example.Item'; Name = 'alpha'; Value = 1 },
+            [PSCustomObject]@{ PSTypeName = 'Example.Item'; Name = 'beta'; Value = 2 }
+        )
+
+        $rows = @($inputObjects | Invoke-BashBrowse -List)
+
+        $rows.Count | Should -Be 2
+        $rows[0].PSTypeNames[0] | Should -Be 'PsBash.BrowseRow'
+        $rows[0].Index | Should -Be 0
+        $rows[0].Display | Should -Match 'Name=alpha'
+        $rows[0].OriginalObject.Name | Should -Be 'alpha'
+    }
+
+    It 'resolves adapters for file-like objects' {
+        $file = New-Item -Path (Join-Path $TestDrive 'browse.txt') -ItemType File
+
+        $adapter = Resolve-BrowseAdapter -InputObject $file
+
+        $adapter.Name | Should -Be 'file'
+        @($adapter.Actions | Select-Object -ExpandProperty Name) | Should -Contain 'inspect'
+        @($adapter.Actions | Where-Object Name -eq 'delete').Destructive | Should -BeTrue
+    }
+
+    It 'binds current and selected items for exec mode' {
+        $objects = @(
+            [PSCustomObject]@{ Name = 'alpha' },
+            [PSCustomObject]@{ Name = 'beta' },
+            [PSCustomObject]@{ Name = 'gamma' }
+        )
+
+        $binding = New-BrowseBinding -Objects $objects -CurrentIndex 1 -SelectedIndex @(0, 2)
+
+        $binding.Current.Name | Should -Be 'beta'
+        @($binding.Items).Count | Should -Be 2
+        @($binding.Items | Select-Object -ExpandProperty Name) | Should -Be @('alpha', 'gamma')
+    }
+
+    It 'runs safe exec commands with current and selected bindings' {
+        $objects = @(
+            [PSCustomObject]@{ Name = 'alpha' },
+            [PSCustomObject]@{ Name = 'beta' }
+        )
+
+        $result = @($objects | Invoke-BashBrowse -Select 1 -Exec '${1}.Name + ":" + $items.Count')
+
+        $result.Count | Should -Be 1
+        $result[0] | Should -Be 'beta:1'
+    }
+
+    It 'gates destructive exec commands until forced' {
+        $objects = @([PSCustomObject]@{ Name = 'alpha'; FullName = 'C:\tmp\alpha.txt' })
+
+        $preview = $objects | Invoke-BashBrowse -Exec 'Remove-Item -LiteralPath ${1}.FullName'
+
+        $preview.PSTypeNames[0] | Should -Be 'PsBash.BrowseSafetyGate'
+        $preview.RequiresConfirmation | Should -BeTrue
+        $preview.Kind | Should -Be 'exec'
+        $preview.Targets | Should -Contain 'C:\tmp\alpha.txt'
+    }
+
+    It 'gates destructive built-in actions until forced' {
+        $file = New-Item -Path (Join-Path $TestDrive 'delete-me.txt') -ItemType File
+
+        $preview = $file | Invoke-BashBrowse -Action delete
+
+        $preview.PSTypeNames[0] | Should -Be 'PsBash.BrowseSafetyGate'
+        $preview.Kind | Should -Be 'action:delete'
+        Test-Path -LiteralPath $file.FullName | Should -BeTrue
+    }
+}
+
 Describe 'ConvertFrom-BashArgs' {
     It 'parses combined short flags' {
         $defs = New-FlagDefs -Entries @('-n', 'n flag', '-e', 'e flag')

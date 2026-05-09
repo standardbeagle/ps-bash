@@ -13973,6 +13973,400 @@ public class DeferredDelete {
     }
 }
 
+# --- Object Browse Workbench ---
+
+function New-BrowseAction {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][string]$Name,
+        [Parameter(Mandatory)][string]$Description,
+        [Parameter(Mandatory)][scriptblock]$Script,
+        [switch]$Destructive
+    )
+
+    [PSCustomObject]@{
+        PSTypeName   = 'PsBash.BrowseAction'
+        Name         = $Name
+        Description  = $Description
+        Destructive  = [bool]$Destructive
+        Script       = $Script
+    }
+}
+
+function New-BrowseAdapter {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][string]$Name,
+        [Parameter(Mandatory)][string[]]$TypeNames,
+        [string[]]$DisplayProperties = @(),
+        [Parameter(Mandatory)][object[]]$Actions
+    )
+
+    [PSCustomObject]@{
+        PSTypeName         = 'PsBash.BrowseAdapter'
+        Name               = $Name
+        TypeNames          = $TypeNames
+        DisplayProperties  = $DisplayProperties
+        Actions            = $Actions
+    }
+}
+
+function Initialize-BrowseAdapters {
+    $existing = Get-Variable -Name BrowseAdapters -Scope Script -ErrorAction SilentlyContinue
+    if ($existing -and $existing.Value) { return }
+
+    $inspect = New-BrowseAction -Name 'inspect' -Description 'Show object properties' -Script {
+        param($Current, [object[]]$Items)
+        foreach ($item in $Items) {
+            $item | Select-Object -Property *
+        }
+    }
+
+    $fileDelete = New-BrowseAction -Name 'delete' -Description 'Remove selected files or directories' -Destructive -Script {
+        param($Current, [object[]]$Items)
+        foreach ($item in $Items) {
+            $path = Get-BrowseTargetText -InputObject $item
+            Remove-Item -LiteralPath $path -Force
+        }
+    }
+
+    $stopProcess = New-BrowseAction -Name 'stop' -Description 'Stop selected processes' -Destructive -Script {
+        param($Current, [object[]]$Items)
+        foreach ($item in $Items) {
+            if ($item.PSObject.Properties['Id']) {
+                Stop-Process -Id $item.Id
+            } elseif ($item.PSObject.Properties['PID']) {
+                Stop-Process -Id $item.PID
+            } else {
+                Stop-Process -InputObject $item
+            }
+        }
+    }
+
+    $script:BrowseAdapters = @(
+        (New-BrowseAdapter -Name 'file' -TypeNames @(
+            'System.IO.FileInfo', 'System.IO.DirectoryInfo', 'PsBash.LsEntry', 'PsBash.FindEntry'
+        ) -DisplayProperties @('Mode', 'Name', 'Length', 'SizeBytes', 'LastWriteTime', 'FullName', 'Path') -Actions @($inspect, $fileDelete)),
+        (New-BrowseAdapter -Name 'process' -TypeNames @(
+            'System.Diagnostics.Process', 'PsBash.PsEntry'
+        ) -DisplayProperties @('ProcessName', 'Name', 'Id', 'PID', 'CPU', 'WS', 'Path') -Actions @($inspect, $stopProcess)),
+        (New-BrowseAdapter -Name 'default' -TypeNames @('*') -DisplayProperties @() -Actions @($inspect))
+    )
+}
+
+function Resolve-BrowseAdapter {
+    [CmdletBinding()]
+    param([Parameter(ValueFromPipeline, Mandatory)][object]$InputObject)
+
+    process {
+        Initialize-BrowseAdapters
+        $typeNames = @($InputObject.PSTypeNames)
+        $dotNetType = $InputObject.GetType().FullName
+
+        foreach ($adapter in $script:BrowseAdapters) {
+            foreach ($pattern in $adapter.TypeNames) {
+                if ($pattern -eq '*') { continue }
+                if ($typeNames -contains $pattern -or $dotNetType -eq $pattern -or $dotNetType -like $pattern) {
+                    return $adapter
+                }
+            }
+        }
+
+        $script:BrowseAdapters | Where-Object Name -eq 'default' | Select-Object -First 1
+    }
+}
+
+function Get-BrowseDisplayProperties {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][object]$InputObject,
+        [object]$Adapter
+    )
+
+    if (-not $Adapter) {
+        $Adapter = Resolve-BrowseAdapter -InputObject $InputObject
+    }
+
+    $props = @($Adapter.DisplayProperties | Where-Object { $InputObject.PSObject.Properties[$_] })
+    if ($props.Count -gt 0) { return $props }
+
+    $standardMembers = $InputObject.PSObject.Members['PSStandardMembers']
+    if ($standardMembers -and $standardMembers.Members['DefaultDisplayPropertySet']) {
+        $defaultDisplay = $standardMembers.Members['DefaultDisplayPropertySet'].ReferencedPropertyNames
+        if ($defaultDisplay -and $defaultDisplay.Count -gt 0) {
+            return @($defaultDisplay | Where-Object { $InputObject.PSObject.Properties[$_] })
+        }
+    }
+
+    @($InputObject.PSObject.Properties |
+        Where-Object { $_.MemberType -in @('NoteProperty', 'Property', 'AliasProperty') } |
+        Select-Object -First 6 -ExpandProperty Name)
+}
+
+function Get-BrowseTargetText {
+    [CmdletBinding()]
+    param([Parameter(Mandatory)][object]$InputObject)
+
+    foreach ($name in @('FullName', 'Path', 'Name', 'ProcessName', 'Id', 'PID', 'BashText')) {
+        $prop = $InputObject.PSObject.Properties[$name]
+        if ($prop -and $null -ne $prop.Value -and "$($prop.Value)" -ne '') {
+            return "$($prop.Value)"
+        }
+    }
+
+    "$InputObject"
+}
+
+function New-BrowseBinding {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][object[]]$Objects,
+        [int]$CurrentIndex = 0,
+        [int[]]$SelectedIndex = @()
+    )
+
+    if ($Objects.Count -eq 0) {
+        return [PSCustomObject]@{
+            PSTypeName = 'PsBash.BrowseBinding'
+            Current    = $null
+            Items      = @()
+            Indexes    = @()
+        }
+    }
+
+    if ($CurrentIndex -lt 0 -or $CurrentIndex -ge $Objects.Count) {
+        throw "browse: current index $CurrentIndex is outside 0..$($Objects.Count - 1)"
+    }
+
+    $indexes = if ($SelectedIndex.Count -gt 0) {
+        @($SelectedIndex | Sort-Object -Unique)
+    } else {
+        @($CurrentIndex)
+    }
+
+    foreach ($idx in $indexes) {
+        if ($idx -lt 0 -or $idx -ge $Objects.Count) {
+            throw "browse: selected index $idx is outside 0..$($Objects.Count - 1)"
+        }
+    }
+
+    [PSCustomObject]@{
+        PSTypeName = 'PsBash.BrowseBinding'
+        Current    = $Objects[$CurrentIndex]
+        Items      = @($indexes | ForEach-Object { $Objects[$_] })
+        Indexes    = $indexes
+    }
+}
+
+function Test-BrowseCommandRequiresConfirmation {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][string]$Command,
+        [object[]]$Items = @()
+    )
+
+    $destructive = '(?i)(^|[\s|;&])(?:rm|del|erase|rmdir|remove-item|stop-process|restart-service|stop-service|set-service|kill|invoke-bashrm|invoke-bashkill)\b'
+    if ($Command -match $destructive) { return $true }
+    if ($Items.Count -gt 1 -and $Command -match '(?i)\b(?:remove|stop|restart|delete|kill)\b') { return $true }
+    return $false
+}
+
+function New-BrowseSafetyPreview {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][string]$Kind,
+        [Parameter(Mandatory)][string]$Command,
+        [Parameter(Mandatory)][object[]]$Items
+    )
+
+    [PSCustomObject]@{
+        PSTypeName            = 'PsBash.BrowseSafetyGate'
+        RequiresConfirmation  = $true
+        Kind                  = $Kind
+        Command               = $Command
+        Targets               = @($Items | ForEach-Object { Get-BrowseTargetText -InputObject $_ })
+        Message               = "browse: $Kind requires -Force"
+    }
+}
+
+function Invoke-BrowseCommand {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][string]$Command,
+        [object]$Current,
+        [object[]]$Items = @(),
+        [switch]$Force
+    )
+
+    $boundItems = if ($Items.Count -gt 0) { @($Items) } elseif ($null -ne $Current) { @($Current) } else { @() }
+    if ((Test-BrowseCommandRequiresConfirmation -Command $Command -Items $boundItems) -and -not $Force) {
+        return New-BrowseSafetyPreview -Kind 'exec' -Command $Command -Items $boundItems
+    }
+
+    & {
+        param($BrowseCommand, $BrowseCurrent, [object[]]$BrowseItems)
+        Set-Variable -Name '1' -Value $BrowseCurrent -Scope Local
+        Set-Variable -Name '_' -Value $BrowseCurrent -Scope Local
+        Set-Variable -Name 'items' -Value $BrowseItems -Scope Local
+        Set-Variable -Name '__browse_current' -Value $BrowseCurrent -Scope Local
+        Set-Variable -Name '__browse_items' -Value $BrowseItems -Scope Local
+        Invoke-Expression $BrowseCommand
+    } $Command $Current $boundItems
+}
+
+function ConvertTo-BrowseRow {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][object]$InputObject,
+        [Parameter(Mandatory)][int]$Index,
+        [int[]]$SelectedIndex = @()
+    )
+
+    $adapter = Resolve-BrowseAdapter -InputObject $InputObject
+    $props = @(Get-BrowseDisplayProperties -InputObject $InputObject -Adapter $adapter)
+    $values = [ordered]@{}
+    foreach ($prop in $props) {
+        $values[$prop] = $InputObject.PSObject.Properties[$prop].Value
+    }
+
+    [PSCustomObject]@{
+        PSTypeName       = 'PsBash.BrowseRow'
+        Index            = $Index
+        Selected         = $SelectedIndex -contains $Index
+        Adapter          = $adapter.Name
+        TypeName         = $InputObject.PSTypeNames[0]
+        Display          = ($values.GetEnumerator() | ForEach-Object { "$($_.Key)=$($_.Value)" }) -join '  '
+        Properties       = $values
+        OriginalObject   = $InputObject
+    }
+}
+
+function Invoke-BrowseAction {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][string]$Name,
+        [Parameter(Mandatory)][object]$Current,
+        [Parameter(Mandatory)][object[]]$Items,
+        [switch]$Force
+    )
+
+    $adapter = Resolve-BrowseAdapter -InputObject $Current
+    $action = @($adapter.Actions | Where-Object Name -eq $Name | Select-Object -First 1)
+    if ($action.Count -eq 0) {
+        throw "browse: action '$Name' is not available for adapter '$($adapter.Name)'"
+    }
+
+    if ($action[0].Destructive -and -not $Force) {
+        return New-BrowseSafetyPreview -Kind "action:$Name" -Command $Name -Items $Items
+    }
+
+    & $action[0].Script $Current $Items
+}
+
+function Invoke-BrowseInteractive {
+    [CmdletBinding()]
+    param([Parameter(Mandatory)][object[]]$Objects)
+
+    $current = 0
+    $selected = New-Object 'System.Collections.Generic.HashSet[int]'
+
+    while ($true) {
+        Clear-Host
+        Write-Host "browse: $($Objects.Count) object(s). Commands: n/p, s, i, a <name>, e <command>, q"
+        @(0..([Math]::Min($Objects.Count - 1, 14))) | ForEach-Object {
+            $row = ConvertTo-BrowseRow -InputObject $Objects[$_] -Index $_ -SelectedIndex @($selected)
+            $cursor = if ($_ -eq $current) { '>' } else { ' ' }
+            $mark = if ($row.Selected) { '*' } else { ' ' }
+            Write-Host ("{0}{1} {2,3} {3}" -f $cursor, $mark, $row.Index, $row.Display)
+        }
+
+        $line = Read-Host 'browse'
+        if ($line -eq 'q') { return }
+        if ($line -eq 'n') { $current = [Math]::Min($current + 1, $Objects.Count - 1); continue }
+        if ($line -eq 'p') { $current = [Math]::Max($current - 1, 0); continue }
+        if ($line -eq 's') {
+            if ($selected.Contains($current)) { [void]$selected.Remove($current) } else { [void]$selected.Add($current) }
+            continue
+        }
+        if ($line -eq 'i') {
+            $binding = New-BrowseBinding -Objects $Objects -CurrentIndex $current -SelectedIndex @($selected)
+            Invoke-BrowseAction -Name 'inspect' -Current $binding.Current -Items $binding.Items | Format-List | Out-Host
+            Read-Host 'enter to continue' | Out-Null
+            continue
+        }
+        if ($line -match '^a\s+(.+)$') {
+            $binding = New-BrowseBinding -Objects $Objects -CurrentIndex $current -SelectedIndex @($selected)
+            Invoke-BrowseAction -Name $Matches[1] -Current $binding.Current -Items $binding.Items | Out-Host
+            Read-Host 'enter to continue' | Out-Null
+            continue
+        }
+        if ($line -match '^e\s+(.+)$') {
+            $binding = New-BrowseBinding -Objects $Objects -CurrentIndex $current -SelectedIndex @($selected)
+            Invoke-BrowseCommand -Command $Matches[1] -Current $binding.Current -Items $binding.Items | Out-Host
+            Read-Host 'enter to continue' | Out-Null
+        }
+    }
+}
+
+function Invoke-BashBrowse {
+    [CmdletBinding()]
+    param(
+        [Parameter(ValueFromPipeline)]
+        [object]$InputObject,
+
+        [int]$Inspect = -1,
+        [int[]]$Select = @(),
+        [string]$Action,
+        [string]$Exec,
+        [switch]$List,
+        [switch]$PassThru,
+        [switch]$Force
+    )
+
+    begin {
+        $objects = [System.Collections.Generic.List[object]]::new()
+    }
+
+    process {
+        if ($null -ne $InputObject) {
+            $objects.Add($InputObject)
+        }
+    }
+
+    end {
+        if ($objects.Count -eq 0) { return }
+
+        $currentIndex = if ($Select.Count -gt 0) { $Select[0] } else { 0 }
+        $binding = New-BrowseBinding -Objects @($objects) -CurrentIndex $currentIndex -SelectedIndex $Select
+
+        if ($PassThru) {
+            return $binding.Items
+        }
+
+        if ($Inspect -ge 0) {
+            $inspectBinding = New-BrowseBinding -Objects @($objects) -CurrentIndex $Inspect -SelectedIndex @($Inspect)
+            return Invoke-BrowseAction -Name 'inspect' -Current $inspectBinding.Current -Items $inspectBinding.Items
+        }
+
+        if ($Action) {
+            return Invoke-BrowseAction -Name $Action -Current $binding.Current -Items $binding.Items -Force:$Force
+        }
+
+        if ($Exec) {
+            return Invoke-BrowseCommand -Command $Exec -Current $binding.Current -Items $binding.Items -Force:$Force
+        }
+
+        $isInputRedirected = [Console]::IsInputRedirected
+        if (-not $List -and -not $isInputRedirected) {
+            return Invoke-BrowseInteractive -Objects @($objects)
+        }
+
+        for ($i = 0; $i -lt $objects.Count; $i++) {
+            ConvertTo-BrowseRow -InputObject $objects[$i] -Index $i -SelectedIndex $Select
+        }
+    }
+}
+
 # --- Prompt Hook Integration ---
 
 # Initialized at module load; tracks last known working directory for chpwd detection.
@@ -14064,6 +14458,7 @@ Set-Alias -Name 'let'      -Value 'Invoke-BashLet'      -Force -Scope Global -Op
 Set-Alias -Name 'id'       -Value 'Invoke-BashId'       -Force -Scope Global -Option AllScope
 Set-Alias -Name 'shuf'     -Value 'Invoke-BashShuf'     -Force -Scope Global -Option AllScope
 Set-Alias -Name 'install'  -Value 'Invoke-BashInstall'  -Force -Scope Global -Option AllScope
+Set-Alias -Name 'browse'   -Value 'Invoke-BashBrowse'   -Force -Scope Global -Option AllScope
 
 # --- Type-level ToString for BashObject types ---
 # Update-TypeData defines ToString() once per type name instead of per-object,

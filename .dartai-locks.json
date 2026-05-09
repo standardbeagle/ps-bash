@@ -1,18 +1,5 @@
 {
   "claims": {
-    "9lMkJyYyMgP2": {
-      "runner_instance_id": "beagle-ab2-33220",
-      "runner_email": "andybrummer@standardbeagle.com",
-      "claimed_at": "2026-05-09T15:53:35Z",
-      "agent_id": "beagle-ab2-33220",
-      "parent_loop_id": "eZWUCAe8RNXp",
-      "purpose": "Loop iteration 1: Build browse object workbench TUI for ps-bash",
-      "source_event": {
-        "loop_id": "eZWUCAe8RNXp",
-        "task_id": "9lMkJyYyMgP2",
-        "conversation_id": null
-      }
-    },
     "318QZbxGO2mA": {
       "runner_instance_id": "beagle-ab2-15380",
       "runner_email": "andybrummer@standardbeagle.com",

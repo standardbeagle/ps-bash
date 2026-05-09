@@ -120,6 +120,14 @@ public class PsEmitterTests
     }
 
     [Fact]
+    public void Transpile_PsPipeBrowse_EmitsBrowseMappedCommand()
+    {
+        var result = PsEmitter.Transpile("ps | browse");
+
+        Assert.Equal("Invoke-BashPs | Invoke-BashBrowse", result);
+    }
+
+    [Fact]
     public void Emit_AndOrList_EmitsPassthrough()
     {
         var andOr = new Command.AndOrList(
