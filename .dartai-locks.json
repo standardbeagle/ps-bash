@@ -1,5 +1,18 @@
 {
   "claims": {
+    "avXSsvm4AR5w": {
+      "runner_instance_id": "beagle-ab2-33220",
+      "runner_email": "andybrummer@standardbeagle.com",
+      "claimed_at": "2026-05-09T17:30:00Z",
+      "agent_id": "beagle-ab2-33220",
+      "parent_loop_id": "eZWUCAe8RNXp",
+      "purpose": "Loop iteration 6: Add graceful host shutdown/upgrade protocol path",
+      "source_event": {
+        "loop_id": "eZWUCAe8RNXp",
+        "task_id": "avXSsvm4AR5w",
+        "conversation_id": null
+      }
+    },
     "318QZbxGO2mA": {
       "runner_instance_id": "beagle-ab2-15380",
       "runner_email": "andybrummer@standardbeagle.com",
