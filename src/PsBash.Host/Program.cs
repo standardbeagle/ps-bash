@@ -67,15 +67,21 @@ internal sealed class Program
 
     private static IIpcTransport CreateTransport(string[] args)
     {
-        // Explicit overrides (used by tests) take precedence.
+        // Scheme-specific overrides (used by tests) take precedence and bypass
+        // the factory entirely so they cannot be shadowed by env vars.
         var socketPath = GetArg(args, "--socket");
         if (socketPath != null) return new UnixSocketTransport(socketPath);
 
         var pipeName = GetArg(args, "--pipe");
         if (pipeName != null) return new NamedPipeTransport(pipeName);
 
-        // Default: the canonical per-user endpoint shared with launcher clients.
-        return IpcTransportFactory.CreateDefault();
+        // --ipc-endpoint <scheme:endpoint> is the public/agent-facing override:
+        // tests, WSL bash drivers, or anyone who needs an isolated host can
+        // pass it on both the host and the launcher (via PSBASH_IPC_ENDPOINT)
+        // to bind the same address. Falls through to the canonical endpoint
+        // when absent.
+        var ipcEndpoint = GetArg(args, "--ipc-endpoint");
+        return IpcTransportFactory.CreateDefault(ipcEndpoint);
     }
 
     private static string? GetArg(string[] args, string name)
