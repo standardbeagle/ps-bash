@@ -20,20 +20,6 @@ public class ProfileLoadingTests
 {
     private static readonly string? PsBashPath = InteractiveShellHarness.FindPsBashBinary();
 
-    private static string? FindWorkerScript()
-    {
-        var dir = new DirectoryInfo(AppContext.BaseDirectory);
-        while (dir is not null)
-        {
-            var candidate = Path.Combine(dir.FullName, "scripts", "ps-bash-worker.ps1");
-            if (File.Exists(candidate))
-                return candidate;
-            dir = dir.Parent;
-        }
-        return null;
-    }
-
-    private static readonly string? WorkerScript = FindWorkerScript();
 
     private bool CanRun => PsBashPath is not null;
 
@@ -206,7 +192,6 @@ public class ProfileLoadingTests
     private Task<InteractiveShellHarness> StartWithHomeAsync(string tempHome, bool noProfile)
         => InteractiveShellHarness.StartAsync(
             PsBashPath!,
-            workerScript: WorkerScript,
             noProfile: noProfile,
             psBashHome: tempHome);
 }

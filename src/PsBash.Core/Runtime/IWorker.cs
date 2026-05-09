@@ -2,14 +2,12 @@ namespace PsBash.Core.Runtime;
 
 /// <summary>
 /// Narrow worker boundary that decouples the launcher from any specific worker
-/// process implementation. Concrete implementations (e.g.
-/// <see cref="PwshWorker"/>) own the underlying transport (stdin/stdout pipes,
-/// in-process runspace, etc.) and translate the contract below into that
-/// transport.
+/// process implementation. Concrete implementations own the underlying
+/// transport (IPC pipes, in-process runspace, etc.) and translate the contract
+/// below into that transport.
 /// </summary>
 /// <remarks>
-/// This is a pure-refactor seam (architecture-migration task T01). Behavior
-/// matches the existing <see cref="PwshWorker"/> surface verbatim:
+/// Implementations must satisfy this behavior:
 /// <list type="bullet">
 ///   <item><description><see cref="ExecuteAsync"/> runs a command and returns its exit code, routing line output through <see cref="OutputCallback"/> when set.</description></item>
 ///   <item><description><see cref="QueryAsync"/> runs a command and returns captured stdout as a string, transparently saving and restoring <see cref="OutputCallback"/> for the caller.</description></item>

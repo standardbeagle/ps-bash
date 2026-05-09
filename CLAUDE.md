@@ -3,7 +3,7 @@
 ## Architecture
 
 ```
-bash input → BashLexer → BashParser → PsEmitter → PwshWorker → Invoke-Bash* runtime
+bash input → BashLexer → BashParser → PsEmitter → IpcWorker → ps-bash-host/SdkWorker → Invoke-Bash* runtime
 ```
 
 - **Lexer/Parser**: tokenizes and parses bash into an AST modeled on Oils syntax.asdl

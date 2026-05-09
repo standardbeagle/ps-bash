@@ -1,5 +1,4 @@
 using System.Diagnostics;
-using PsBash.Core.Runtime;
 using Xunit;
 
 namespace PsBash.Escalation.Tests;
@@ -14,13 +13,6 @@ namespace PsBash.Escalation.Tests;
 [Trait("Category", "Regression")]
 public class KnownBadRegressionTests
 {
-    private static readonly string? PwshPath = FindPwsh();
-
-    private static string? FindPwsh()
-    {
-        try { return PwshLocator.Locate(); }
-        catch (PwshNotFoundException) { return null; }
-    }
 
     // ── 1. LASTEXITCODE not polluted between commands ─────────────────────────
 
@@ -38,7 +30,6 @@ public class KnownBadRegressionTests
     [SkippableFact]
     public async Task Regression_LastExitcodeNotPollutedBetweenCommands()
     {
-        Skip.If(PwshPath is null, "pwsh not available");
 
         // false sets exit 1; true resets to 0; echo $? must not show stale 1.
         var (exitCode, stdout, _) = await ProcessRunHelper.RunAsync(
@@ -68,7 +59,6 @@ public class KnownBadRegressionTests
     [SkippableFact]
     public async Task Regression_ErrTrapDoesNotFireOnZeroExit()
     {
-        Skip.If(PwshPath is null, "pwsh not available");
 
         var (exitCode, stdout, _) = await ProcessRunHelper.RunAsync(
             new[] { "-c", "set -e; true; echo ok" });
@@ -90,7 +80,6 @@ public class KnownBadRegressionTests
     [SkippableFact]
     public async Task Regression_ProcessSpawnWithTimeout()
     {
-        Skip.If(PwshPath is null, "pwsh not available");
 
         var timeout = TimeSpan.FromSeconds(2);
         var sw = Stopwatch.StartNew();

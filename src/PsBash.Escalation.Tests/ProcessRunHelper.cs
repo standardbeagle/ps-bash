@@ -16,10 +16,6 @@ internal static class ProcessRunHelper
         Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "..",
             "src", "PsBash.Shell"));
 
-    private static readonly string WorkerScript = Path.GetFullPath(
-        Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "..",
-            "scripts", "ps-bash-worker.ps1"));
-
     public static ProcessStartInfo BuildPsi(string[] arguments)
     {
         var psi = new ProcessStartInfo { FileName = "dotnet" };
@@ -31,7 +27,6 @@ internal static class ProcessRunHelper
         foreach (var arg in arguments)
             psi.ArgumentList.Add(arg);
 
-        psi.Environment["PSBASH_WORKER"] = WorkerScript;
         return psi;
     }
 

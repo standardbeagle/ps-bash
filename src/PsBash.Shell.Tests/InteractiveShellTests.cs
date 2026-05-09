@@ -1,5 +1,4 @@
 using System.Diagnostics;
-using PsBash.Core.Runtime;
 using PsBash.Host.Shell;
 using Xunit;
 
@@ -8,22 +7,13 @@ namespace PsBash.Shell.Tests;
 [Trait("Category", "Integration")]
 public class InteractiveShellTests
 {
-    private static readonly string? PwshPath = FindPwsh();
     private static readonly string ProjectDir = Path.GetFullPath(
         Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "..",
             "src", "PsBash.Shell"));
 
-    private static string? FindPwsh()
-    {
-        try { return PwshLocator.Locate(); }
-        catch (PwshNotFoundException) { return null; }
-    }
-
     [SkippableFact]
-    public async Task InteractiveMode_LaunchesPwshAndPassesThroughExitCode()
+    public async Task InteractiveMode_LaunchesHostAndPassesThroughExitCode()
     {
-        Skip.If(PwshPath is null, "pwsh not available");
-
         var psi = new ProcessStartInfo
         {
             FileName = "dotnet",
@@ -53,8 +43,6 @@ public class InteractiveShellTests
     [SkippableFact]
     public async Task InteractiveMode_DoesNotRequireCommand()
     {
-        Skip.If(PwshPath is null, "pwsh not available");
-
         var psi = new ProcessStartInfo
         {
             FileName = "dotnet",

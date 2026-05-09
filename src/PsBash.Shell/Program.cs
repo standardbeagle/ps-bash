@@ -7,7 +7,7 @@ using PsBash.Shell;
 
 
 // Reliability watchdog: on Windows, attach the current process to a Job Object
-// with KILL_ON_JOB_CLOSE so the pwsh worker (and any other descendants) die
+// with KILL_ON_JOB_CLOSE so the SDK host (and any other descendants) die
 // atomically with ps-bash itself. This is a no-op on Linux/macOS where the
 // shell's process group + SIGHUP already handles this.
 JobObjectWatchdog.AttachCurrentProcess();

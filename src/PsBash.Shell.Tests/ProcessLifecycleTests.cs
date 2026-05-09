@@ -17,10 +17,6 @@ public class ProcessLifecycleTests
         Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "..",
             "src", "PsBash.Shell", "bin", "Debug", "net10.0", "ps-bash.exe"));
 
-    private static readonly string WorkerScript = Path.GetFullPath(
-        Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "..",
-            "scripts", "ps-bash-worker.ps1"));
-
     private static bool CanRun => OperatingSystem.IsWindows() && File.Exists(PsBashExe);
 
     [SkippableFact]
@@ -39,8 +35,6 @@ public class ProcessLifecycleTests
             UseShellExecute = false,
             CreateNoWindow = true,
         };
-        psi.Environment["PSBASH_WORKER"] = WorkerScript;
-
         using var process = Process.Start(psi)!;
         try
         {
@@ -69,8 +63,8 @@ public class ProcessLifecycleTests
         Skip.IfNot(CanRun, "Windows + built ps-bash.exe required");
 
         // Acceptance: `ps-bash -c "exit 0"` must exit within a couple seconds
-        // and leave no orphaned pwsh worker whose command-line references our
-        // ps-bash PID. The Job Object ensures the pwsh worker dies with us.
+        // and leave no orphaned host process whose command-line references our
+        // ps-bash PID. The Job Object ensures the host dies with us.
         var psi = new ProcessStartInfo
         {
             FileName = PsBashExe,
@@ -80,8 +74,6 @@ public class ProcessLifecycleTests
             UseShellExecute = false,
             CreateNoWindow = true,
         };
-        psi.Environment["PSBASH_WORKER"] = WorkerScript;
-
         using var process = Process.Start(psi)!;
         int ourPid = process.Id;
         try
@@ -94,14 +86,14 @@ public class ProcessLifecycleTests
             Assert.True(process.HasExited, "ps-bash -c 'exit 0' did not exit within 10s");
             Assert.Equal(0, process.ExitCode);
 
-            // Give the OS a moment to reap the pwsh worker that was in our job.
+            // Give the OS a moment to reap the host process that was in our job.
             await Task.Delay(500);
 
-            // Ensure no pwsh worker remains whose parent was our (now-dead) ps-bash.
-            // We check by enumerating pwsh processes and verifying their parent PID
+            // Ensure no host process remains whose parent was our (now-dead) ps-bash.
+            // We check by enumerating host processes and verifying their parent PID
             // is not our ps-bash (which is dead; by definition no live process can
             // have our PID as a live parent).
-            foreach (var p in Process.GetProcessesByName("pwsh"))
+            foreach (var p in Process.GetProcessesByName("ps-bash-host"))
             {
                 try
                 {
@@ -117,82 +109,6 @@ public class ProcessLifecycleTests
             if (!process.HasExited)
             {
                 try { process.Kill(entireProcessTree: true); } catch { }
-            }
-        }
-    }
-
-    [SkippableFact]
-    public async Task WorkerExits_WhenParentDiesDuringBootstrap()
-    {
-        Skip.IfNot(CanRun, "Windows + built ps-bash.exe required");
-
-        // Regression for Reliability B: the worker's parent-death watcher must
-        // be active BEFORE bootstrap completes. We spawn pwsh-worker directly
-        // with a ParentPid pointing at a short-lived "fake parent". The fake
-        // parent dies ~100ms later. The worker must exit within 1s even though
-        // its stdin (owned by this test process, not the fake parent) stays
-        // open and it could otherwise block forever on ReadLine.
-        var pwshPath = "pwsh.exe";
-
-        // Fake parent: a cmd that sleeps ~100ms then exits.
-        var fakeParentPsi = new ProcessStartInfo
-        {
-            FileName = "cmd.exe",
-            Arguments = "/c \"ping -n 1 -w 100 127.0.0.1 >nul\"",
-            UseShellExecute = false,
-            CreateNoWindow = true,
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
-        };
-        using var fakeParent = Process.Start(fakeParentPsi)!;
-        int fakeParentPid = fakeParent.Id;
-
-        // Worker: spawn with ParentPid=fakeParentPid. Stdin is redirected but
-        // we never write to it — simulating a worker mid-bootstrap waiting.
-        var workerPsi = new ProcessStartInfo
-        {
-            FileName = pwshPath,
-            UseShellExecute = false,
-            CreateNoWindow = true,
-            RedirectStandardInput = true,
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
-        };
-        workerPsi.ArgumentList.Add("-NoProfile");
-        workerPsi.ArgumentList.Add("-NonInteractive");
-        workerPsi.ArgumentList.Add("-File");
-        workerPsi.ArgumentList.Add(WorkerScript);
-        workerPsi.ArgumentList.Add("-ParentPid");
-        workerPsi.ArgumentList.Add(fakeParentPid.ToString());
-
-        using var worker = Process.Start(workerPsi)!;
-        try
-        {
-            // Wait for fake parent to die naturally.
-            await fakeParent.WaitForExitAsync();
-
-            // Worker's runspace watcher polls every 200ms; allow generous 3s
-            // to account for pwsh startup on slower machines.
-            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(3));
-            try
-            {
-                await worker.WaitForExitAsync(cts.Token);
-            }
-            catch (OperationCanceledException) { /* asserted below */ }
-
-            Assert.True(
-                worker.HasExited,
-                "pwsh worker did not exit within 3s after its parent died during bootstrap");
-        }
-        finally
-        {
-            if (!worker.HasExited)
-            {
-                try { worker.Kill(entireProcessTree: true); } catch { }
-            }
-            if (!fakeParent.HasExited)
-            {
-                try { fakeParent.Kill(entireProcessTree: true); } catch { }
             }
         }
     }
@@ -217,8 +133,6 @@ public class ProcessLifecycleTests
             UseShellExecute = false,
             CreateNoWindow = true,
         };
-        psi.Environment["PSBASH_WORKER"] = WorkerScript;
-
         using var parent = Process.Start(psi)!;
         int? psBashPid = null;
         try

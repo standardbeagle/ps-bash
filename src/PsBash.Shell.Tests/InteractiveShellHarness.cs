@@ -1,7 +1,6 @@
 using System.Diagnostics;
 using System.Text;
 using System.Text.RegularExpressions;
-using PsBash.Core.Runtime;
 using Xunit;
 
 namespace PsBash.Shell.Tests;
@@ -107,7 +106,6 @@ internal sealed class InteractiveShellHarness : IAsyncDisposable
     /// Creates and starts a harness. Waits for the first prompt before returning.
     /// </summary>
     /// <param name="psBashPath">Path to the ps-bash binary (from <see cref="FindPsBashBinary"/>).</param>
-    /// <param name="workerScript">Optional PSBASH_WORKER override (for dev builds that need the script).</param>
     /// <param name="noProfile">When true, passes --norc so .psbashrc is not sourced.</param>
     /// <param name="startTimeout">How long to wait for the initial prompt.</param>
     /// <param name="psBashHome">
@@ -120,7 +118,6 @@ internal sealed class InteractiveShellHarness : IAsyncDisposable
     /// </param>
     public static async Task<InteractiveShellHarness> StartAsync(
         string psBashPath,
-        string? workerScript = null,
         bool noProfile = true,
         TimeSpan? startTimeout = null,
         string? psBashHome = null)
@@ -157,13 +154,9 @@ internal sealed class InteractiveShellHarness : IAsyncDisposable
         psi.Environment["PSBASH_HOME"] = tempHome;
         psi.Environment["PSBASH_HISTORY_PATH"] = tempHistoryFile;
 
-        // Pass through PATH so pwsh can be found.
+        // Pass through PATH for commands launched by the shell.
         if (Environment.GetEnvironmentVariable("PATH") is { } path)
             psi.Environment["PATH"] = path;
-
-        // Allow the test to point at the dev worker script.
-        if (workerScript is not null)
-            psi.Environment["PSBASH_WORKER"] = workerScript;
 
         // Always pass -i (interactive) so the REPL starts even with stdin redirected.
         psi.ArgumentList.Add("-i");

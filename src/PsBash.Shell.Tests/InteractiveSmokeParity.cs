@@ -1,4 +1,3 @@
-using PsBash.Core.Runtime;
 using Xunit;
 
 namespace PsBash.Shell.Tests;
@@ -15,36 +14,13 @@ namespace PsBash.Shell.Tests;
 public class InteractiveSmokeParity
 {
     private static readonly string? PsBashPath = InteractiveShellHarness.FindPsBashBinary();
-    private static readonly string? PwshPath = FindPwsh();
 
-    private static string? FindPwsh()
-    {
-        try { return PwshLocator.Locate(); }
-        catch (PwshNotFoundException) { return null; }
-    }
-
-    private static string? FindWorkerScript()
-    {
-        var dir = new DirectoryInfo(AppContext.BaseDirectory);
-        while (dir is not null)
-        {
-            var candidate = Path.Combine(dir.FullName, "scripts", "ps-bash-worker.ps1");
-            if (File.Exists(candidate))
-                return candidate;
-            dir = dir.Parent;
-        }
-        return null;
-    }
-
-    private static readonly string? WorkerScript = FindWorkerScript();
-
-    private bool CanRun => PsBashPath is not null && PwshPath is not null;
+    private bool CanRun => PsBashPath is not null;
 
     private async Task<InteractiveShellHarness> StartAsync()
     {
         return await InteractiveShellHarness.StartAsync(
             PsBashPath!,
-            workerScript: WorkerScript,
             noProfile: true);
     }
 
@@ -64,7 +40,7 @@ public class InteractiveSmokeParity
     [SkippableFact]
     public async Task Interactive_EchoQuotedVar_ExpandsUser()
     {
-        Skip.IfNot(CanRun, "ps-bash binary or pwsh not found");
+        Skip.IfNot(CanRun, "ps-bash binary not found");
 
         // On Windows, USER is typically unset; seed it from USERNAME so the
         // harness child process inherits a non-empty value via env inheritance.

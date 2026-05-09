@@ -1,4 +1,3 @@
-using PsBash.Core.Runtime;
 using Xunit;
 
 namespace PsBash.Escalation.Tests;
@@ -15,13 +14,6 @@ namespace PsBash.Escalation.Tests;
 [Trait("Category", "Scale")]
 public class ScaleTests
 {
-    private static readonly string? PwshPath = FindPwsh();
-
-    private static string? FindPwsh()
-    {
-        try { return PwshLocator.Locate(); }
-        catch (PwshNotFoundException) { return null; }
-    }
 
     // ── 1. Brace expansion — 1000 elements ────────────────────────────────────
 
@@ -37,7 +29,6 @@ public class ScaleTests
     [SkippableFact]
     public async Task Scale_BraceExpansion_1000Elements()
     {
-        Skip.If(PwshPath is null, "pwsh not available");
 
         var (exitCode, stdout, stderr) = await ProcessRunHelper.RunAsync(
             new[] { "-c", "echo {1..1000}" },
@@ -79,7 +70,6 @@ public class ScaleTests
     [SkippableFact]
     public async Task Scale_LargeSeqPipe_WcBytes()
     {
-        Skip.If(PwshPath is null, "pwsh not available");
 
         var (exitCode, stdout, stderr) = await ProcessRunHelper.RunAsync(
             new[] { "-c", "seq 1 10000 | wc -c" },
@@ -117,7 +107,6 @@ public class ScaleTests
     [SkippableFact]
     public async Task Scale_10kLines_Sed()
     {
-        Skip.If(PwshPath is null, "pwsh not available");
 
         var (exitCode, stdout, stderr) = await ProcessRunHelper.RunAsync(
             new[] { "-c", "seq 1 10000 | sed 's/^/line: /'" },
@@ -155,7 +144,6 @@ public class ScaleTests
     [SkippableFact]
     public async Task Scale_LargePipe_WcCount()
     {
-        Skip.If(PwshPath is null, "pwsh not available");
 
         var (exitCode, stdout, stderr) = await ProcessRunHelper.RunAsync(
             new[] { "-c", "seq 1 10000 | sed 's/$/ /' | wc -l" },

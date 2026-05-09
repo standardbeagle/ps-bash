@@ -5,7 +5,7 @@ namespace PsBash.Core.Runtime;
 /// <c>ps-bash-host</c> and cannot spawn a new one. Distinct from generic
 /// <see cref="InvalidOperationException"/> so the soft-fallback decision logic
 /// in T07 (launcher) can pattern-match this exception type and decide whether
-/// to fall back to the in-process <see cref="PwshWorker"/>.
+/// to report host startup/connectivity failures.
 /// </summary>
 /// <remarks>
 /// Thrown for these specific situations (T06 scope):

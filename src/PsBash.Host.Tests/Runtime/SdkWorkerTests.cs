@@ -40,6 +40,31 @@ public class SdkWorkerTests : IAsyncLifetime
         Assert.Contains(lines, l => l.Contains("hello"));
     }
 
+    [Fact]
+    public async Task ExecuteAsync_InvokeBashLsLong_EmitsBashTextNotPsObjectSerialization()
+    {
+        var tempDir = Path.Combine(Path.GetTempPath(), $"psbash-ls-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(tempDir);
+        File.WriteAllText(Path.Combine(tempDir, "sample.txt"), "content");
+
+        var lines = new List<string>();
+        _worker!.OutputCallback = lines.Add;
+
+        try
+        {
+            var psPath = tempDir.Replace("'", "''");
+            var exitCode = await _worker.ExecuteAsync($"Set-Location '{psPath}'; Invoke-BashLs -la");
+
+            Assert.Equal(0, exitCode);
+            Assert.Contains(lines, l => l.Contains("sample.txt", StringComparison.Ordinal));
+            Assert.DoesNotContain(lines, l => l.StartsWith("@{", StringComparison.Ordinal));
+        }
+        finally
+        {
+            Directory.Delete(tempDir, recursive: true);
+        }
+    }
+
     // AC2: cd /tmp then pwd across two ExecuteAsync calls reports /tmp (or C:\Temp on Windows)
     [Fact]
     public async Task ExecuteAsync_CdThenPwd_CrossCallStatePreserved()
@@ -106,6 +131,25 @@ public class SdkWorkerTests : IAsyncLifetime
 
         Assert.Same(callerCallback, _worker.OutputCallback);
         Assert.Contains("query-result", result);
+    }
+
+    [Fact]
+    public async Task QueryAsync_AfterDispose_ThrowsObjectDisposedException()
+    {
+        await _worker!.DisposeAsync();
+        await Assert.ThrowsAsync<ObjectDisposedException>(
+            async () => await _worker.QueryAsync("'unreachable'"));
+        _worker = null;
+    }
+
+    [Fact]
+    public async Task QueryAsync_RestoresNullCallbackForCallerWhoNeverSetOne()
+    {
+        Assert.Null(_worker!.OutputCallback);
+
+        await _worker.QueryAsync("'probe'");
+
+        Assert.Null(_worker.OutputCallback);
     }
 
     // Diagnostic: exit 7 must return exit code 7

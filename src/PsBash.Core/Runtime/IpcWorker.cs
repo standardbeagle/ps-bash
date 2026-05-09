@@ -15,7 +15,7 @@ namespace PsBash.Core.Runtime;
 /// connect to the canonical endpoint. If the connect fails, the host binary
 /// is spawned and connect is retried until the socket accepts or the timeout
 /// elapses. There is no lock file, no session id, and no fallback to an
-/// in-process pwsh worker — failure to reach the host throws
+/// SDK host worker — failure to reach the host throws
 /// <see cref="HostUnavailableException"/>.</para>
 /// </remarks>
 public sealed class IpcWorker : IWorker

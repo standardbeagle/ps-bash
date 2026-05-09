@@ -1,5 +1,4 @@
 using System.Diagnostics;
-using PsBash.Core.Runtime;
 using Xunit;
 
 namespace PsBash.Shell.Tests;
@@ -15,37 +14,13 @@ namespace PsBash.Shell.Tests;
 public class InteractiveShellHarnessTests
 {
     private static readonly string? PsBashPath = InteractiveShellHarness.FindPsBashBinary();
-    private static readonly string? PwshPath = FindPwsh();
 
-    private static string? FindPwsh()
-    {
-        try { return PwshLocator.Locate(); }
-        catch (PwshNotFoundException) { return null; }
-    }
-
-    // Resolve the dev worker script the same way ProgramEndToEndTests does.
-    private static string? FindWorkerScript()
-    {
-        var dir = new DirectoryInfo(AppContext.BaseDirectory);
-        while (dir is not null)
-        {
-            var candidate = Path.Combine(dir.FullName, "scripts", "ps-bash-worker.ps1");
-            if (File.Exists(candidate))
-                return candidate;
-            dir = dir.Parent;
-        }
-        return null;
-    }
-
-    private static readonly string? WorkerScript = FindWorkerScript();
-
-    private bool CanRun => PsBashPath is not null && PwshPath is not null;
+    private bool CanRun => PsBashPath is not null;
 
     private async Task<InteractiveShellHarness> StartAsync()
     {
         return await InteractiveShellHarness.StartAsync(
             PsBashPath!,
-            workerScript: WorkerScript,
             noProfile: true);
     }
 
@@ -54,7 +29,7 @@ public class InteractiveShellHarnessTests
     [SkippableFact]
     public async Task Harness_StartsAndShowsPrompt()
     {
-        Skip.IfNot(CanRun, "ps-bash binary or pwsh not found");
+        Skip.IfNot(CanRun, "ps-bash binary not found");
 
         await using var harness = await StartAsync();
 
@@ -70,7 +45,7 @@ public class InteractiveShellHarnessTests
     [SkippableFact]
     public async Task Harness_SendLine_EchoReplies()
     {
-        Skip.IfNot(CanRun, "ps-bash binary or pwsh not found");
+        Skip.IfNot(CanRun, "ps-bash binary not found");
 
         await using var harness = await StartAsync();
 
@@ -89,7 +64,7 @@ public class InteractiveShellHarnessTests
     [SkippableFact]
     public async Task Harness_SendLine_ExitCode()
     {
-        Skip.IfNot(CanRun, "ps-bash binary or pwsh not found");
+        Skip.IfNot(CanRun, "ps-bash binary not found");
 
         await using var harness = await StartAsync();
 
@@ -129,7 +104,7 @@ public class InteractiveShellHarnessTests
     [SkippableFact]
     public async Task Harness_IsolatesHome()
     {
-        Skip.IfNot(CanRun, "ps-bash binary or pwsh not found");
+        Skip.IfNot(CanRun, "ps-bash binary not found");
 
         await using var harness = await StartAsync();
 
@@ -168,14 +143,14 @@ public class InteractiveShellHarnessTests
     [SkippableFact]
     public async Task Harness_SetsAllDirective6EnvVars()
     {
-        Skip.IfNot(CanRun, "ps-bash binary or pwsh not found");
+        Skip.IfNot(CanRun, "ps-bash binary not found");
 
         await using var harness = await StartAsync();
 
         // Use printenv so we read the raw env var values, not PowerShell
         // automatic variables (e.g. $HOME, $TERM) which may override env values.
         // Note: PS1 is consumed by InteractiveShell.GetPS1Async and passed to
-        // ExpandPS1; it is not re-exported to the pwsh worker environment, so
+        // ExpandPS1; it is not re-exported to the host environment, so
         // we verify it indirectly via the prompt string instead.
         var checks = new[]
         {

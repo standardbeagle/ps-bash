@@ -1,5 +1,4 @@
 using System.Diagnostics;
-using PsBash.Core.Runtime;
 using PsBash.Core.Transpiler;
 using PsBash.Host.Shell;
 using Xunit;
@@ -14,15 +13,6 @@ namespace PsBash.Escalation.Tests;
 [Trait("Category", "Escalation")]
 public class FaultInjectionTests
 {
-    // ps-bash binary location detection — same pattern as ProgramEndToEndTests.
-    // We use PwshLocator so the Skip reason is consistent with the rest of the suite.
-    private static readonly string? PwshPath = FindPwsh();
-
-    private static string? FindPwsh()
-    {
-        try { return PwshLocator.Locate(); }
-        catch (PwshNotFoundException) { return null; }
-    }
 
     // ── 1. Missing command ────────────────────────────────────────────────────
 
@@ -33,7 +23,6 @@ public class FaultInjectionTests
     [SkippableFact]
     public async Task MissingCommand_Exits127()
     {
-        Skip.If(PwshPath is null, "pwsh not available");
 
         var (exitCode, _, stderr) = await ProcessRunHelper.RunAsync(
             new[] { "-c", "nonexistent_command_xyz_abc" });
@@ -55,7 +44,6 @@ public class FaultInjectionTests
     [SkippableFact]
     public async Task MissingSourceTarget_ReturnsError()
     {
-        Skip.If(PwshPath is null, "pwsh not available");
 
         var path = Path.Combine(Path.GetTempPath(), $"nonexistent_xyz_{Guid.NewGuid():N}.sh");
 
@@ -77,7 +65,6 @@ public class FaultInjectionTests
     [SkippableFact]
     public async Task MissingRedirectTarget_ReturnsError()
     {
-        Skip.If(PwshPath is null, "pwsh not available");
 
         var path = Path.Combine(Path.GetTempPath(), $"nonexistent_input_xyz_{Guid.NewGuid():N}.txt");
 
@@ -158,7 +145,6 @@ public class FaultInjectionTests
     [SkippableFact]
     public async Task StdinClosedMidRead_ExitsCleanly()
     {
-        Skip.If(PwshPath is null, "pwsh not available");
 
         var timeout = TimeSpan.FromSeconds(5);
 
@@ -186,7 +172,6 @@ public class FaultInjectionTests
     [SkippableFact]
     public async Task EmptyPipeline_ExitsZero()
     {
-        Skip.If(PwshPath is null, "pwsh not available");
 
         // A comment-only script has no statements; exit code must be 0.
         var (exitCode, _, stderr) = await ProcessRunHelper.RunAsync(
@@ -207,7 +192,6 @@ public class FaultInjectionTests
     [SkippableFact]
     public async Task LargeArgumentList_Handled()
     {
-        Skip.If(PwshPath is null, "pwsh not available");
 
         // Build "echo x x x ... x" with 500 repetitions of "x".
         var args = string.Join(" ", Enumerable.Repeat("x", 500));

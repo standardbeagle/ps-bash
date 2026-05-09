@@ -8,7 +8,7 @@
 
     <!-- NuGet package metadata -->
     <PackageId>PsBash.Core</PackageId>
-    <Version>0.9.4</Version>
+    <Version>0.9.5</Version>
     <Authors>StandardBeagle</Authors>
     <Description>Bash-to-PowerShell transpiler library. Parses bash commands into an AST (based on Oils/OSH) and emits equivalent PowerShell. Use as a library in terminal emulators, AI agents, or any .NET app that needs bash compatibility on top of PowerShell.</Description>
     <PackageTags>bash;powershell;transpiler;parser;shell;terminal</PackageTags>
@@ -26,7 +26,6 @@
   </ItemGroup>
 
   <ItemGroup>
-    <EmbeddedResource Include="..\..\scripts\ps-bash-worker.ps1" LogicalName="ps-bash-worker.ps1" />
     <EmbeddedResource Include="..\PsBash.Module\PsBash.psd1" LogicalName="PsBash.Module/PsBash.psd1" />
     <EmbeddedResource Include="..\PsBash.Module\PsBash.psm1" LogicalName="PsBash.Module/PsBash.psm1" />
     <EmbeddedResource Include="..\PsBash.Module\PsBash.Format.ps1xml" LogicalName="PsBash.Module/PsBash.Format.ps1xml" />

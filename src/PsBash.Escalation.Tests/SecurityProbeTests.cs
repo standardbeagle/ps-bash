@@ -1,4 +1,3 @@
-using PsBash.Core.Runtime;
 using PsBash.Core.Transpiler;
 using Xunit;
 
@@ -22,13 +21,6 @@ namespace PsBash.Escalation.Tests;
 [Trait("Category", "Security")]
 public class SecurityProbeTests
 {
-    private static readonly string? PwshPath = FindPwsh();
-
-    private static string? FindPwsh()
-    {
-        try { return PwshLocator.Locate(); }
-        catch (PwshNotFoundException) { return null; }
-    }
 
     private static string NewCanaryPath() =>
         Path.Combine(Path.GetTempPath(), $"psbash_canary_{Guid.NewGuid():N}");
@@ -67,7 +59,6 @@ public class SecurityProbeTests
     [SkippableFact]
     public async Task Security_VarWithSemicolon_NoInjection()
     {
-        Skip.If(PwshPath is null, "pwsh not available");
 
         var canary = NewCanaryPath();
         var payload = $"; New-Item \"{canary}\" -ItemType File";
@@ -108,7 +99,6 @@ public class SecurityProbeTests
     [SkippableFact]
     public async Task Security_VarWithCommandSub_NoInjection()
     {
-        Skip.If(PwshPath is null, "pwsh not available");
 
         var canary = NewCanaryPath();
         // Use single-quoted assignment so bash lexer treats $(...) as literal.
@@ -148,7 +138,6 @@ public class SecurityProbeTests
     [SkippableFact]
     public async Task Security_VarWithPSScriptblock_NoInjection()
     {
-        Skip.If(PwshPath is null, "pwsh not available");
 
         var canary = NewCanaryPath();
         var payload = $"${{ New-Item \"{canary}\" -ItemType File }}";

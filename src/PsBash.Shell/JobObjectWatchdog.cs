@@ -5,7 +5,7 @@ namespace PsBash.Shell;
 
 /// <summary>
 /// Windows Job Object watchdog. When ps-bash attaches itself to a kill-on-close Job
-/// Object, the OS guarantees that every descendant process (e.g., the pwsh worker)
+/// Object, the OS guarantees that every descendant process (e.g., the SDK host)
 /// dies if ps-bash dies. Combined with a parent-PID poller, this gives us
 /// Erlang-style "die when the parent dies" behavior on Windows without relying on
 /// stdin-EOF detection alone.

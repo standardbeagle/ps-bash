@@ -9,7 +9,7 @@ namespace PsBash.Core.Runtime.Ipc;
 /// by mode-specific body lines and a final <c>&lt;&lt;&lt;END&gt;&gt;&gt;</c>
 /// terminator. The host writes zero or more output lines then a single
 /// <c>&lt;&lt;&lt;EXIT:N&gt;&gt;&gt;</c> sentinel. Sentinels are reused byte-for-byte
-/// from <see cref="PwshWorker"/> so the in-process and cross-process workers
+/// from the worker contract so in-process and cross-process workers
 /// share one framing contract.
 /// Cancellation in phase-1 is signalled by closing the connection (no message).
 /// </remarks>

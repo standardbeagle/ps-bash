@@ -1,4 +1,3 @@
-using PsBash.Core.Runtime;
 using Xunit;
 
 namespace PsBash.Shell.Tests;
@@ -19,36 +18,12 @@ public class MultiLineContinuationTests
 {
     private static readonly string? PsBashPath = InteractiveShellHarness.FindPsBashBinary();
 
-    private static string? FindPwsh()
-    {
-        try { return PwshLocator.Locate(); }
-        catch (PwshNotFoundException) { return null; }
-    }
-
-    private static readonly string? PwshPath = FindPwsh();
-
-    private static string? FindWorkerScript()
-    {
-        var dir = new DirectoryInfo(AppContext.BaseDirectory);
-        while (dir is not null)
-        {
-            var candidate = Path.Combine(dir.FullName, "scripts", "ps-bash-worker.ps1");
-            if (File.Exists(candidate))
-                return candidate;
-            dir = dir.Parent;
-        }
-        return null;
-    }
-
-    private static readonly string? WorkerScript = FindWorkerScript();
-
-    private bool CanRun => PsBashPath is not null && PwshPath is not null;
+    private bool CanRun => PsBashPath is not null;
 
     private async Task<InteractiveShellHarness> StartAsync()
     {
         return await InteractiveShellHarness.StartAsync(
             PsBashPath!,
-            workerScript: WorkerScript,
             noProfile: true);
     }
 
@@ -62,7 +37,7 @@ public class MultiLineContinuationTests
     [SkippableFact]
     public async Task MultiLine_TrailingPipe_ShowsPS2ThenExecutes()
     {
-        Skip.IfNot(CanRun, "ps-bash binary or pwsh not found");
+        Skip.IfNot(CanRun, "ps-bash binary not found");
 
         await using var harness = await StartAsync();
 
@@ -96,7 +71,7 @@ public class MultiLineContinuationTests
     [SkippableFact]
     public async Task MultiLine_TrailingAndAnd_ShowsPS2ThenExecutes()
     {
-        Skip.IfNot(CanRun, "ps-bash binary or pwsh not found");
+        Skip.IfNot(CanRun, "ps-bash binary not found");
 
         await using var harness = await StartAsync();
 
@@ -124,7 +99,7 @@ public class MultiLineContinuationTests
     [SkippableFact]
     public async Task MultiLine_UnclosedIf_BuffersUntilFi()
     {
-        Skip.IfNot(CanRun, "ps-bash binary or pwsh not found");
+        Skip.IfNot(CanRun, "ps-bash binary not found");
 
         await using var harness = await StartAsync();
 
@@ -159,7 +134,7 @@ public class MultiLineContinuationTests
     [SkippableFact]
     public async Task MultiLine_UnclosedBraceGroup_BuffersUntilClose()
     {
-        Skip.IfNot(CanRun, "ps-bash binary or pwsh not found");
+        Skip.IfNot(CanRun, "ps-bash binary not found");
 
         await using var harness = await StartAsync();
 
@@ -188,7 +163,7 @@ public class MultiLineContinuationTests
     [SkippableFact]
     public async Task MultiLine_PS2PromptVisible_AfterIncompleteInput()
     {
-        Skip.IfNot(CanRun, "ps-bash binary or pwsh not found");
+        Skip.IfNot(CanRun, "ps-bash binary not found");
 
         await using var harness = await StartAsync();
 

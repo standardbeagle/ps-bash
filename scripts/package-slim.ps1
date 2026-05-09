@@ -2,8 +2,8 @@
 .SYNOPSIS
     Assembles the slim distribution package from build artifacts.
 .DESCRIPTION
-    Creates the slim distribution containing the AOT binary, worker script,
-    and PowerShell module. Requires PowerShell 7+ on the target system.
+    Creates the slim distribution containing the AOT launcher, SDK host,
+    and PowerShell module.
 .PARAMETER RID
     Runtime identifier (e.g., win-x64, linux-x64, osx-arm64).
 .PARAMETER OutputDir
@@ -59,13 +59,6 @@ Copy-Item $launcherPath $packageDir
 # so the launcher can find ps-bash-host alongside itself at runtime.
 Copy-Item -Path (Join-Path $hostPublishDir '*') -Destination $packageDir -Recurse -Force
 
-# Copy worker script (fallback for PSBASH_DISABLE_HOST or host-unavailable path)
-$workerSrc = Join-Path $repoRoot 'scripts' 'ps-bash-worker.ps1'
-if (-not (Test-Path $workerSrc)) {
-    throw "Worker script not found at $workerSrc."
-}
-Copy-Item $workerSrc $packageDir
-
 # Copy PowerShell module
 $moduleSrc = Join-Path $repoRoot 'src' 'PsBash.Module'
 if (-not (Test-Path $moduleSrc)) {
@@ -78,5 +71,4 @@ Copy-Item (Join-Path $moduleSrc '*') $moduleDest -Recurse
 Write-Host "Slim package assembled: $packageDir"
 Write-Host "  Launcher:  $launcherBinary"
 Write-Host "  Host:      $hostBinary (+ runtime assets)"
-Write-Host "  Worker:    ps-bash-worker.ps1"
 Write-Host "  Module:    Modules/ps-bash/"

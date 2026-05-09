@@ -5,7 +5,7 @@ namespace PsBash.Core.Runtime.Ipc;
 
 /// <summary>
 /// Wire-protocol framing for the ps-bash host/launcher IPC channel. Reuses
-/// <see cref="PwshWorker"/>'s sentinel format byte-for-byte: <c>&lt;&lt;&lt;END&gt;&gt;&gt;</c>
+/// the worker sentinel format byte-for-byte: <c>&lt;&lt;&lt;END&gt;&gt;&gt;</c>
 /// terminates a request body and <c>&lt;&lt;&lt;EXIT:N&gt;&gt;&gt;</c> terminates a
 /// response stream. A single new <c>MODE:&lt;kind&gt;</c> header line precedes
 /// each request so the dispatcher (T05a) can route Command/Stdin/Script/Interactive

@@ -9,7 +9,7 @@ RootModule = 'PsBash.Cmdlets.dll'
 
 NestedModules = @('PsBash.psd1')
 
-ModuleVersion = '0.9.4'
+ModuleVersion = '0.9.5'
 
 GUID = 'b2c3d4e5-f6a7-8901-bcde-f23456789012'
 
@@ -25,7 +25,7 @@ CompatiblePSEditions = 'Core'
 
 PowerShellVersion = '7.4'
 
-RequiredModules = @(@{ ModuleName = 'PsBash'; ModuleVersion = '0.9.4' })
+RequiredModules = @(@{ ModuleName = 'PsBash'; ModuleVersion = '0.9.5' })
 
 FunctionsToExport = @('*')
 

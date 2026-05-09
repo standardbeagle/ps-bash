@@ -1,6 +1,5 @@
 using System.Diagnostics;
 using System.Linq;
-using PsBash.Core.Runtime;
 using Xunit;
 
 namespace PsBash.Shell.Tests;
@@ -8,19 +7,10 @@ namespace PsBash.Shell.Tests;
 [Trait("Category", "Integration")]
 public class AgentPatternEndToEndTests
 {
-    private static readonly string? PwshPath = FindPwsh();
     private static readonly string ProjectDir = Path.GetFullPath(
         Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "..",
             "src", "PsBash.Shell"));
-    private static readonly string WorkerScript = Path.GetFullPath(
-        Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "..",
-            "scripts", "ps-bash-worker.ps1"));
 
-    private static string? FindPwsh()
-    {
-        try { return PwshLocator.Locate(); }
-        catch (PwshNotFoundException) { return null; }
-    }
 
     private static Task<(int ExitCode, string Stdout, string Stderr)> RunShellAsync(
         params string[] arguments)
@@ -39,7 +29,6 @@ public class AgentPatternEndToEndTests
         foreach (var arg in arguments)
             psi.ArgumentList.Add(arg);
 
-        psi.Environment["PSBASH_WORKER"] = WorkerScript;
 
         return ProcessRunHelper.RunAsync(psi, stdinContent: null, timeout: timeout);
     }
@@ -49,7 +38,6 @@ public class AgentPatternEndToEndTests
     [SkippableFact]
     public async Task Heredoc_CatMultipleLines_OutputsAllLines()
     {
-        Skip.If(PwshPath is null, "pwsh not available");
 
         var (exitCode, stdout, _) = await RunShellAsync(
             "-c", "cat <<EOF\nline one\nline two\nline three\nEOF");
@@ -63,7 +51,6 @@ public class AgentPatternEndToEndTests
     [SkippableFact]
     public async Task Heredoc_QuotedDelimiter_NoVariableExpansion()
     {
-        Skip.If(PwshPath is null, "pwsh not available");
 
         var (exitCode, stdout, _) = await RunShellAsync(
             "-c", "cat <<'EOF'\n$HOME should be literal\nEOF");
@@ -77,7 +64,6 @@ public class AgentPatternEndToEndTests
     [SkippableFact]
     public async Task HereString_EchoViaGrepFilter_MatchesLine()
     {
-        Skip.If(PwshPath is null, "pwsh not available");
 
         var (exitCode, stdout, _) = await RunShellAsync(
             "-c", "grep foo <<EOF\nfoo bar\nbaz qux\nEOF");
@@ -92,7 +78,6 @@ public class AgentPatternEndToEndTests
     [SkippableFact]
     public async Task Pipe_AwkPrintField_ExtractsColumn()
     {
-        Skip.If(PwshPath is null, "pwsh not available");
 
         var (exitCode, stdout, _) = await RunShellAsync(
             "-c", "echo 'hello world' | awk '{print $1}'");
@@ -105,7 +90,6 @@ public class AgentPatternEndToEndTests
     [SkippableFact]
     public async Task Pipe_AwkWithFieldSep_SplitsOnComma()
     {
-        Skip.If(PwshPath is null, "pwsh not available");
 
         var (exitCode, stdout, _) = await RunShellAsync(
             "-c", "echo 'a,b,c' | awk -F, '{print $2}'");
@@ -119,7 +103,6 @@ public class AgentPatternEndToEndTests
     [SkippableFact]
     public async Task Pipe_HeadLimitsOutput_FirstTwoLines()
     {
-        Skip.If(PwshPath is null, "pwsh not available");
 
         var (exitCode, stdout, _) = await RunShellAsync(
             "-c", "printf 'a\\nb\\nc\\nd\\n' | head -n 2");
@@ -132,7 +115,6 @@ public class AgentPatternEndToEndTests
     [SkippableFact]
     public async Task Pipe_WcCountsLines()
     {
-        Skip.If(PwshPath is null, "pwsh not available");
 
         var (exitCode, stdout, _) = await RunShellAsync(
             "-c", "printf 'one\\ntwo\\nthree\\n' | wc -l");
@@ -144,7 +126,6 @@ public class AgentPatternEndToEndTests
     [SkippableFact]
     public async Task Pipe_CutExtractsField()
     {
-        Skip.If(PwshPath is null, "pwsh not available");
 
         var (exitCode, stdout, _) = await RunShellAsync(
             "-c", "echo 'a:b:c' | cut -d: -f2");
@@ -156,7 +137,6 @@ public class AgentPatternEndToEndTests
     [SkippableFact]
     public async Task Pipe_TrTranslatesCharacters()
     {
-        Skip.If(PwshPath is null, "pwsh not available");
 
         var (exitCode, stdout, _) = await RunShellAsync(
             "-c", "echo 'hello' | tr 'a-z' 'A-Z'");
@@ -170,7 +150,6 @@ public class AgentPatternEndToEndTests
     [SkippableFact]
     public async Task Pipe_SedSubstitution_ReplacesText()
     {
-        Skip.If(PwshPath is null, "pwsh not available");
 
         var (exitCode, stdout, _) = await RunShellAsync(
             "-c", "echo 'hello world' | sed 's/world/earth/'");
@@ -184,7 +163,6 @@ public class AgentPatternEndToEndTests
     [SkippableFact]
     public async Task Pipe_GrepFiltersLines()
     {
-        Skip.If(PwshPath is null, "pwsh not available");
 
         var (exitCode, stdout, _) = await RunShellAsync(
             "-c", "printf 'apple\\nbanana\\napricot\\n' | grep ap");
@@ -200,7 +178,6 @@ public class AgentPatternEndToEndTests
     [SkippableFact]
     public async Task Pipeline_MultiStage_GrepSortHead()
     {
-        Skip.If(PwshPath is null, "pwsh not available");
 
         var (exitCode, stdout, _) = await RunShellAsync(
             "-c", "printf 'cherry\\napple\\nbanana\\napricot\\n' | grep ap | sort | head -n 1");
@@ -214,7 +191,6 @@ public class AgentPatternEndToEndTests
     [SkippableFact]
     public async Task VarExpansion_DoubleQuotedEchoEnvVar()
     {
-        Skip.If(PwshPath is null, "pwsh not available");
 
         var (exitCode, stdout, _) = await RunShellAsync(
             "-c", "X=hello; echo \"value is $X\"");
@@ -228,7 +204,6 @@ public class AgentPatternEndToEndTests
     [SkippableFact]
     public async Task BraceExpansion_TupleExpandsToMultiple()
     {
-        Skip.If(PwshPath is null, "pwsh not available");
 
         var (exitCode, stdout, _) = await RunShellAsync(
             "-c", "echo {a,b,c}");
@@ -244,7 +219,6 @@ public class AgentPatternEndToEndTests
     [SkippableFact]
     public async Task ForLoop_IteratesOverWords()
     {
-        Skip.If(PwshPath is null, "pwsh not available");
 
         var (exitCode, stdout, _) = await RunShellAsync(
             "-c", "for x in alpha beta gamma; do echo $x; done");
@@ -260,7 +234,6 @@ public class AgentPatternEndToEndTests
     [SkippableFact]
     public async Task ForArith_CountsToThree()
     {
-        Skip.If(PwshPath is null, "pwsh not available");
 
         var (exitCode, stdout, _) = await RunShellAsync(
             "-c", "for ((i=1; i<=3; i++)); do echo $i; done");
@@ -274,7 +247,6 @@ public class AgentPatternEndToEndTests
     [SkippableFact]
     public async Task ForArith_PrintfNoNewline_AccumulatesOnOneLine()
     {
-        Skip.If(PwshPath is null, "pwsh not available");
 
         var (exitCode, stdout, _) = await RunShellAsync(
             "-c", "for ((i=0; i<5; i++)); do printf \"%d \" $i; done; echo");
@@ -289,7 +261,6 @@ public class AgentPatternEndToEndTests
     [SkippableFact]
     public async Task IfElse_TrueBranch_OutputsYes()
     {
-        Skip.If(PwshPath is null, "pwsh not available");
 
         var (exitCode, stdout, _) = await RunShellAsync(
             "-c", "if [[ 1 -eq 1 ]]; then echo yes; else echo no; fi");
@@ -304,7 +275,6 @@ public class AgentPatternEndToEndTests
     [SkippableFact]
     public async Task Case_MatchesPattern_OutputsCorrectBranch()
     {
-        Skip.If(PwshPath is null, "pwsh not available");
 
         var (exitCode, stdout, _) = await RunShellAsync(
             "-c", "X=banana; case $X in apple) echo fruit1;; banana) echo fruit2;; *) echo other;; esac");
@@ -320,7 +290,6 @@ public class AgentPatternEndToEndTests
     [SkippableFact]
     public async Task Pipe_XargsEcho_ConcatenatesInputOnOneLine()
     {
-        Skip.If(PwshPath is null, "pwsh not available");
 
         var (exitCode, stdout, _) = await RunShellAsync(
             "-c", "printf 'one\\ntwo\\nthree\\n' | xargs echo");
@@ -332,7 +301,6 @@ public class AgentPatternEndToEndTests
     [SkippableFact]
     public async Task Pipe_XargsN1Echo_OutputsSeparateLines()
     {
-        Skip.If(PwshPath is null, "pwsh not available");
 
         var (exitCode, stdout, _) = await RunShellAsync(
             "-c", "printf 'a\\nb\\nc\\n' | xargs -n 1 echo");
@@ -351,7 +319,6 @@ public class AgentPatternEndToEndTests
     [SkippableFact]
     public async Task Trap_ExitHandler_DoesNotCrash()
     {
-        Skip.If(PwshPath is null, "pwsh not available");
 
         var (exitCode, stdout, stderr) = await RunShellAsync(
             "-c", "trap 'echo cleanup' EXIT; echo hello");
@@ -363,7 +330,6 @@ public class AgentPatternEndToEndTests
     [SkippableFact]
     public async Task Trap_EmptyIntSignal_DoesNotCrash()
     {
-        Skip.If(PwshPath is null, "pwsh not available");
 
         var (exitCode, stdout, _) = await RunShellAsync(
             "-c", "trap '' INT; echo ok");
@@ -377,7 +343,6 @@ public class AgentPatternEndToEndTests
     [SkippableFact]
     public async Task CommandSubstitution_InEcho_InlinesResult()
     {
-        Skip.If(PwshPath is null, "pwsh not available");
 
         var (exitCode, stdout, _) = await RunShellAsync(
             "-c", "echo \"count: $(echo 42)\"");
@@ -391,7 +356,6 @@ public class AgentPatternEndToEndTests
     [SkippableFact]
     public async Task BraceRange_DefaultStep_ExpandsSequence()
     {
-        Skip.If(PwshPath is null, "pwsh not available");
 
         var (exitCode, stdout, _) = await RunShellAsync(
             "-c", "echo {1..5}");
@@ -403,7 +367,6 @@ public class AgentPatternEndToEndTests
     [SkippableFact]
     public async Task BraceRange_ReverseDefaultStep_ExpandsSequence()
     {
-        Skip.If(PwshPath is null, "pwsh not available");
 
         var (exitCode, stdout, _) = await RunShellAsync(
             "-c", "echo {5..1}");
@@ -415,7 +378,6 @@ public class AgentPatternEndToEndTests
     [SkippableFact]
     public async Task BraceRange_WithStep_ExpandsCorrectly()
     {
-        Skip.If(PwshPath is null, "pwsh not available");
 
         var (exitCode, stdout, _) = await RunShellAsync(
             "-c", "echo {1..10..3}");
@@ -427,7 +389,6 @@ public class AgentPatternEndToEndTests
     [SkippableFact]
     public async Task BraceRange_NonDivisibleStep_NoInfiniteLoop()
     {
-        Skip.If(PwshPath is null, "pwsh not available");
 
         var (exitCode, stdout, _) = await RunShellAsync(
             "-c", "echo {1..10..7}");
@@ -441,7 +402,6 @@ public class AgentPatternEndToEndTests
     [SkippableFact]
     public async Task Redirect_EchoToFile_WritesAndReads()
     {
-        Skip.If(PwshPath is null, "pwsh not available");
 
         var (exitCode, stdout, _) = await RunShellAsync(
             "-c", "echo hello > /tmp/psbash-redir-test.txt; cat /tmp/psbash-redir-test.txt; rm /tmp/psbash-redir-test.txt");
@@ -453,7 +413,6 @@ public class AgentPatternEndToEndTests
     [SkippableFact]
     public async Task Redirect_AppendToFile_AppendsCorrectly()
     {
-        Skip.If(PwshPath is null, "pwsh not available");
 
         var (exitCode, stdout, _) = await RunShellAsync(
             "-c", "echo line1 > /tmp/psbash-append-test.txt; echo line2 >> /tmp/psbash-append-test.txt; cat /tmp/psbash-append-test.txt; rm /tmp/psbash-append-test.txt");
@@ -469,7 +428,6 @@ public class AgentPatternEndToEndTests
     [SkippableFact]
     public async Task Redirect_ToDevNull_NoOutput()
     {
-        Skip.If(PwshPath is null, "pwsh not available");
 
         var (exitCode, stdout, _) = await RunShellAsync(
             "-c", "echo hidden > /dev/null; echo visible");
@@ -481,7 +439,6 @@ public class AgentPatternEndToEndTests
     [SkippableFact]
     public async Task Redirect_InputRedirect_CatReadsFile()
     {
-        Skip.If(PwshPath is null, "pwsh not available");
 
         var (exitCode, stdout, _) = await RunShellAsync(
             "-c", "echo hello > /tmp/psbash-input-redir-test.txt; cat < /tmp/psbash-input-redir-test.txt; rm /tmp/psbash-input-redir-test.txt");
@@ -493,7 +450,6 @@ public class AgentPatternEndToEndTests
     [SkippableFact]
     public async Task Array_LengthExpansion_ReturnsCount()
     {
-        Skip.If(PwshPath is null, "pwsh not available");
 
         var (exitCode, stdout, _) = await RunShellAsync(
             "-c", "array=(one two three); echo ${#array[@]}");
@@ -505,7 +461,6 @@ public class AgentPatternEndToEndTests
     [SkippableFact]
     public async Task Array_LengthExpansion_InDoubleQuotes()
     {
-        Skip.If(PwshPath is null, "pwsh not available");
 
         var (exitCode, stdout, _) = await RunShellAsync(
             "-c", @"array=(one two three); echo ""count: ${#array[@]}""");
@@ -519,7 +474,6 @@ public class AgentPatternEndToEndTests
     [SkippableFact]
     public async Task Tee_DevNull_PassesThroughWithoutCrash()
     {
-        Skip.If(PwshPath is null, "pwsh not available");
 
         var (exitCode, stdout, _) = await RunShellAsync(
             "-c", "echo tee-test | tee /dev/null");
@@ -531,7 +485,6 @@ public class AgentPatternEndToEndTests
     [SkippableFact]
     public async Task Tee_ToFile_WritesAndPassesThrough()
     {
-        Skip.If(PwshPath is null, "pwsh not available");
 
         var (exitCode, stdout, _) = await RunShellAsync(
             "-c", "echo tee-content | tee /tmp/psbash-tee-test.txt; echo ---; cat /tmp/psbash-tee-test.txt; rm /tmp/psbash-tee-test.txt");
@@ -545,7 +498,6 @@ public class AgentPatternEndToEndTests
     [SkippableFact]
     public async Task Function_PositionalParam_NoIndexSuffix()
     {
-        Skip.If(PwshPath is null, "pwsh not available");
 
         var (exitCode, stdout, _) = await RunShellAsync(
             "-c", "greet() { echo \"hello $1\"; }; greet world");
@@ -557,7 +509,6 @@ public class AgentPatternEndToEndTests
     [SkippableFact]
     public async Task Function_MultiplePositionalParams_AllResolve()
     {
-        Skip.If(PwshPath is null, "pwsh not available");
 
         var (exitCode, stdout, _) = await RunShellAsync(
             "-c", "f() { echo \"$1 and $2\"; }; f alpha beta");
@@ -571,7 +522,6 @@ public class AgentPatternEndToEndTests
     [SkippableFact]
     public async Task WhileRead_NoExtraBlankLines()
     {
-        Skip.If(PwshPath is null, "pwsh not available");
 
         var (exitCode, stdout, _) = await RunShellAsync(
             "-c", "echo -e \"a\\nb\\nc\" | while read x; do echo \"[$x]\"; done");
@@ -590,7 +540,6 @@ public class AgentPatternEndToEndTests
     [SkippableFact]
     public async Task ProcessSub_PasteNoExtraBlankLines()
     {
-        Skip.If(PwshPath is null, "pwsh not available");
 
         var (exitCode, stdout, _) = await RunShellAsync(
             "-c", "paste <(echo hello) <(echo world)");
@@ -602,7 +551,6 @@ public class AgentPatternEndToEndTests
     [SkippableFact]
     public async Task ProcessSub_PasteMultiLine_CorrectAlignment()
     {
-        Skip.If(PwshPath is null, "pwsh not available");
 
         var (exitCode, stdout, _) = await RunShellAsync(
             "-c", "paste <(echo -e \"a\\nb\") <(echo -e \"1\\n2\")");
@@ -620,7 +568,6 @@ public class AgentPatternEndToEndTests
     [SkippableFact]
     public async Task ExtendedTest_StringLessThan_LexicographicOrder()
     {
-        Skip.If(PwshPath is null, "pwsh not available");
 
         var (exitCode, stdout, _) = await RunShellAsync(
             "-c", "if [[ \"apple\" < \"banana\" ]]; then echo correct; else echo wrong; fi");
@@ -634,7 +581,6 @@ public class AgentPatternEndToEndTests
     [SkippableFact]
     public async Task WhileTrue_IterCapPreventsInfiniteLoop()
     {
-        Skip.If(PwshPath is null, "pwsh not available");
 
         // Set a very low cap so the test completes quickly
         var psi = new ProcessStartInfo { FileName = "dotnet" };
@@ -645,7 +591,6 @@ public class AgentPatternEndToEndTests
         psi.ArgumentList.Add("--");
         psi.ArgumentList.Add("-c");
         psi.ArgumentList.Add("i=0; while true; do i=$((i+1)); done; echo $i");
-        psi.Environment["PSBASH_WORKER"] = WorkerScript;
         psi.Environment["PSBASH_MAX_ITERATIONS"] = "100";
 
         var (_, _, stderr) = await ProcessRunHelper.RunAsync(psi);
@@ -659,7 +604,6 @@ public class AgentPatternEndToEndTests
     [SkippableFact]
     public async Task HangingCommand_TimesOutWithin35Seconds_AndKillsProcessTree()
     {
-        Skip.If(PwshPath is null, "pwsh not available");
 
         // Capture pre-existing worker PIDs so we can prove none leak after timeout.
         var preWorkerPids = Process.GetProcessesByName("pwsh")
@@ -685,7 +629,7 @@ public class AgentPatternEndToEndTests
             .Select(p => p.Id).ToHashSet();
         var leaked = postWorkerPids.Except(preWorkerPids).ToList();
         Assert.True(leaked.Count == 0,
-            $"Leaked pwsh worker PIDs after timeout: {string.Join(",", leaked)}");
+            $"Leaked SDK host PIDs after timeout: {string.Join(",", leaked)}");
     }
 
     // ═══════════════════════════════════════════════════════════════════════════
@@ -699,7 +643,6 @@ public class AgentPatternEndToEndTests
     [SkippableFact]
     public async Task FileLocking_SequentialWritesThenRead_NoCorruption()
     {
-        Skip.If(PwshPath is null, "pwsh not available");
 
         // Rapid sequential writes to same file — tests that handles are released between commands
         var (exitCode, stdout, stderr) = await RunShellAsync(
@@ -718,7 +661,6 @@ public class AgentPatternEndToEndTests
     [SkippableFact]
     public async Task FileLocking_RapidAppendsThenRead_AllLinesPresent()
     {
-        Skip.If(PwshPath is null, "pwsh not available");
 
         // Rapid sequential appends — tests that each >> releases the handle
         var (exitCode, stdout, stderr) = await RunShellAsync(
@@ -738,7 +680,6 @@ public class AgentPatternEndToEndTests
     [SkippableFact]
     public async Task FileLocking_WriteThenAppendThenCat_NoHandleLeak()
     {
-        Skip.If(PwshPath is null, "pwsh not available");
 
         // Interleave write, append, and read — all three file modes in sequence
         var (exitCode, stdout, stderr) = await RunShellAsync(
@@ -764,7 +705,6 @@ public class AgentPatternEndToEndTests
     [SkippableFact]
     public async Task FileLocking_PipelineRedirectChain_EachCommandReleasesHandle()
     {
-        Skip.If(PwshPath is null, "pwsh not available");
 
         // Pipeline output redirected to file, then another command reads it
         var (exitCode, stdout, stderr) = await RunShellAsync(
@@ -785,7 +725,6 @@ public class AgentPatternEndToEndTests
     [SkippableFact]
     public async Task FileLocking_LoopWritesToFile_NoAccumulation()
     {
-        Skip.If(PwshPath is null, "pwsh not available");
 
         // For loop writing to file each iteration — tests handle release between loop bodies
         var (exitCode, stdout, stderr) = await RunShellAsync(
@@ -801,7 +740,6 @@ public class AgentPatternEndToEndTests
     [SkippableFact]
     public async Task FileLocking_TeeAndRedirect_BothFilesWritten()
     {
-        Skip.If(PwshPath is null, "pwsh not available");
 
         // Tee writes to one file, redirect writes to another — both must complete
         var (exitCode, stdout, stderr) = await RunShellAsync(
@@ -819,7 +757,6 @@ public class AgentPatternEndToEndTests
     [SkippableFact]
     public async Task FileLocking_WriteReadWriteRead_RapidAlternation()
     {
-        Skip.If(PwshPath is null, "pwsh not available");
 
         // Rapid write-read alternation on same file — classic file locking trigger
         var (exitCode, stdout, stderr) = await RunShellAsync(
@@ -844,7 +781,6 @@ public class AgentPatternEndToEndTests
     [SkippableFact]
     public async Task FileLocking_MultipleFilesInOneCommand_AllWritten()
     {
-        Skip.If(PwshPath is null, "pwsh not available");
 
         // Write to multiple different files in quick succession
         var (exitCode, stdout, stderr) = await RunShellAsync(
@@ -864,7 +800,6 @@ public class AgentPatternEndToEndTests
     [SkippableFact]
     public async Task FileLocking_ProcessSubWithRedirect_NoTempFileConflict()
     {
-        Skip.If(PwshPath is null, "pwsh not available");
 
         // Process substitution creates temp files — verify no conflicts with redirects
         var (exitCode, stdout, stderr) = await RunShellAsync(
@@ -881,7 +816,6 @@ public class AgentPatternEndToEndTests
     [SkippableFact]
     public async Task FileLocking_AppendInWhileLoop_AllIterationsWritten()
     {
-        Skip.If(PwshPath is null, "pwsh not available");
 
         // For loop appending to file each iteration — tests handle release between loop bodies
         var (exitCode, stdout, stderr) = await RunShellAsync(
@@ -901,7 +835,6 @@ public class AgentPatternEndToEndTests
     [SkippableFact]
     public async Task FileLocking_SedInPlace_FileUpdatedCorrectly()
     {
-        Skip.If(PwshPath is null, "pwsh not available");
 
         // sed -i modifies file in place — tests that file handle is properly released
         var (exitCode, stdout, stderr) = await RunShellAsync(
@@ -919,7 +852,6 @@ public class AgentPatternEndToEndTests
     [SkippableFact]
     public async Task FileLocking_RedirectOverwriteChainOf10_LastValueOnly()
     {
-        Skip.If(PwshPath is null, "pwsh not available");
 
         // 10 rapid overwrites to same file — stress test handle release
         var commands = new List<string>();
@@ -940,7 +872,6 @@ public class AgentPatternEndToEndTests
     [SkippableFact]
     public async Task Negation_TrueCommand_ExitCodeIsOne()
     {
-        Skip.If(PwshPath is null, "pwsh not available");
 
         var (_, stdout, _) = await RunShellAsync(
             "-c", "! true; echo $?");
@@ -951,7 +882,6 @@ public class AgentPatternEndToEndTests
     [SkippableFact]
     public async Task Negation_FalseCommand_ExitCodeIsZero()
     {
-        Skip.If(PwshPath is null, "pwsh not available");
 
         var (_, stdout, _) = await RunShellAsync(
             "-c", "! false; echo $?");
@@ -971,7 +901,6 @@ public class AgentPatternEndToEndTests
     [SkippableFact]
     public async Task Error_CatNonexistentFile_NonZeroExitCode()
     {
-        Skip.If(PwshPath is null, "pwsh not available");
 
         var (_, stdout, _) = await RunShellAsync(
             "-c", "cat nonexistent_file_abc.txt; echo \"exit:$?\"");
@@ -982,7 +911,6 @@ public class AgentPatternEndToEndTests
     [SkippableFact]
     public async Task Error_LsNonexistentDir_NonZeroExitCode()
     {
-        Skip.If(PwshPath is null, "pwsh not available");
 
         var (_, stdout, _) = await RunShellAsync(
             "-c", "ls nonexistent_dir_xyz/; echo \"exit:$?\"");
@@ -993,7 +921,6 @@ public class AgentPatternEndToEndTests
     [SkippableFact]
     public async Task Error_HeadNonexistentFile_NonZeroExitCode()
     {
-        Skip.If(PwshPath is null, "pwsh not available");
 
         var (_, stdout, _) = await RunShellAsync(
             "-c", "head nonexistent_file_abc.txt; echo \"exit:$?\"");
@@ -1004,7 +931,6 @@ public class AgentPatternEndToEndTests
     [SkippableFact]
     public async Task Error_SortNonexistentFile_NonZeroExitCode()
     {
-        Skip.If(PwshPath is null, "pwsh not available");
 
         var (_, stdout, _) = await RunShellAsync(
             "-c", "sort nonexistent_file_abc.txt; echo \"exit:$?\"");
@@ -1015,7 +941,6 @@ public class AgentPatternEndToEndTests
     [SkippableFact]
     public async Task Error_CpNonexistentSource_NonZeroExitCode()
     {
-        Skip.If(PwshPath is null, "pwsh not available");
 
         var (_, stdout, _) = await RunShellAsync(
             "-c", "cp nonexistent_src_abc dest; echo \"exit:$?\"");
@@ -1028,7 +953,6 @@ public class AgentPatternEndToEndTests
     [SkippableFact]
     public async Task Error_GrepNoArgs_NonZeroExitCode()
     {
-        Skip.If(PwshPath is null, "pwsh not available");
 
         var (_, stdout, _) = await RunShellAsync(
             "-c", "grep; echo \"exit:$?\"");
@@ -1039,7 +963,6 @@ public class AgentPatternEndToEndTests
     [SkippableFact]
     public async Task Error_SedNoExpression_NonZeroExitCode()
     {
-        Skip.If(PwshPath is null, "pwsh not available");
 
         var (_, stdout, _) = await RunShellAsync(
             "-c", "sed; echo \"exit:$?\"");
@@ -1050,7 +973,6 @@ public class AgentPatternEndToEndTests
     [SkippableFact]
     public async Task Error_AwkNoProgram_NonZeroExitCode()
     {
-        Skip.If(PwshPath is null, "pwsh not available");
 
         var (_, stdout, _) = await RunShellAsync(
             "-c", "awk; echo \"exit:$?\"");
@@ -1063,7 +985,6 @@ public class AgentPatternEndToEndTests
     [SkippableFact]
     public async Task ControlFlow_FalseAndEcho_OutputsNothing()
     {
-        Skip.If(PwshPath is null, "pwsh not available");
 
         var (_, stdout, _) = await RunShellAsync(
             "-c", "false && echo yes");
@@ -1074,7 +995,6 @@ public class AgentPatternEndToEndTests
     [SkippableFact]
     public async Task ControlFlow_TrueOrEcho_OutputsNothing()
     {
-        Skip.If(PwshPath is null, "pwsh not available");
 
         var (_, stdout, _) = await RunShellAsync(
             "-c", "true || echo no");
@@ -1085,7 +1005,6 @@ public class AgentPatternEndToEndTests
     [SkippableFact]
     public async Task ControlFlow_TrueAndEcho_OutputsSuccess()
     {
-        Skip.If(PwshPath is null, "pwsh not available");
 
         var (_, stdout, _) = await RunShellAsync(
             "-c", "true && echo success");
@@ -1096,7 +1015,6 @@ public class AgentPatternEndToEndTests
     [SkippableFact]
     public async Task ControlFlow_FalseOrEcho_OutputsFallback()
     {
-        Skip.If(PwshPath is null, "pwsh not available");
 
         var (_, stdout, _) = await RunShellAsync(
             "-c", "false || echo fallback");
@@ -1109,7 +1027,6 @@ public class AgentPatternEndToEndTests
     [SkippableFact]
     public async Task Error_CatNonexistentFile_StderrHasNoWriteErrorPrefix()
     {
-        Skip.If(PwshPath is null, "pwsh not available");
 
         var (_, _, stderr) = await RunShellAsync(
             "-c", "cat nonexistent_file_abc.txt");

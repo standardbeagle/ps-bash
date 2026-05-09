@@ -9,7 +9,7 @@ namespace PsBash.Host.Server;
 /// </summary>
 /// <remarks>
 /// Uses polling because Windows has no SIGHUP / POSIX process-death signal.
-/// 200 ms poll interval matches the existing PwshWorker pattern for parent-death
+/// 200 ms poll interval matches the host parent-death
 /// detection.
 /// </remarks>
 public sealed class ParentDeathWatcher : IDisposable

@@ -1,5 +1,4 @@
 using System.Diagnostics;
-using PsBash.Core.Runtime;
 using Xunit;
 
 namespace PsBash.Shell.Tests;
@@ -7,19 +6,10 @@ namespace PsBash.Shell.Tests;
 [Trait("Category", "Integration")]
 public class ProgramEndToEndTests
 {
-    private static readonly string? PwshPath = FindPwsh();
     private static readonly string ProjectDir = Path.GetFullPath(
         Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "..",
             "src", "PsBash.Shell"));
-    private static readonly string WorkerScript = Path.GetFullPath(
-        Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "..",
-            "scripts", "ps-bash-worker.ps1"));
 
-    private static string? FindPwsh()
-    {
-        try { return PwshLocator.Locate(); }
-        catch (PwshNotFoundException) { return null; }
-    }
 
     private static Task<(int ExitCode, string Stdout, string Stderr)> RunShellAsync(
         params string[] arguments)
@@ -51,14 +41,12 @@ public class ProgramEndToEndTests
         foreach (var arg in arguments)
             psi.ArgumentList.Add(arg);
 
-        psi.Environment["PSBASH_WORKER"] = WorkerScript;
         return psi;
     }
 
     [SkippableFact]
     public async Task Command_WriteHostHello_OutputsHelloAndExitsZero()
     {
-        Skip.If(PwshPath is null, "pwsh not available");
 
         var (exitCode, stdout, _) = await RunShellAsync("-c", "Write-Host hello");
 
@@ -69,7 +57,6 @@ public class ProgramEndToEndTests
     [SkippableFact]
     public async Task Command_ThrowError_PropagatesExitCodeAndStderr()
     {
-        Skip.If(PwshPath is null, "pwsh not available");
 
         var (exitCode, _, stderr) = await RunShellAsync("-c", "throw 'deliberate failure'");
 
@@ -89,7 +76,6 @@ public class ProgramEndToEndTests
     public async Task Command_LongFlagStartingWithShortFlagLetter_PassesToTranspilerIntact(
         string command, string expectedOutput)
     {
-        Skip.If(PwshPath is null, "pwsh not available");
 
         var (exitCode, stdout, stderr) = await RunShellAsync("-c", command);
 
@@ -101,7 +87,6 @@ public class ProgramEndToEndTests
     [SkippableFact]
     public async Task Stdin_ReadsAndExecutes()
     {
-        Skip.If(PwshPath is null, "pwsh not available");
 
         var (exitCode, stdout, _) = await RunShellWithStdinAsync(
             "Write-Host 'from stdin'", "-s");
@@ -113,7 +98,6 @@ public class ProgramEndToEndTests
     [SkippableFact]
     public async Task NoArgs_EntersInteractiveModeAndExitsCleanly()
     {
-        Skip.If(PwshPath is null, "pwsh not available");
 
         var (exitCode, _, _) = await RunShellWithStdinAsync("");
 
@@ -123,7 +107,6 @@ public class ProgramEndToEndTests
     [SkippableFact]
     public async Task Debug_WritesToStderr()
     {
-        Skip.If(PwshPath is null, "pwsh not available");
 
         var psi = BuildPsi(new[] { "-c", "Write-Host ok" });
         psi.Environment["PSBASH_DEBUG"] = "1";
@@ -142,7 +125,6 @@ public class ProgramEndToEndTests
     [SkippableFact]
     public async Task HangingCommand_TimesOutWithin35Seconds_AndKillsProcessTree()
     {
-        Skip.If(PwshPath is null, "pwsh not available");
 
         var preWorkerPids = Process.GetProcessesByName("pwsh")
             .Select(p => p.Id).ToHashSet();
@@ -165,7 +147,7 @@ public class ProgramEndToEndTests
             .Select(p => p.Id).ToHashSet();
         var leaked = postWorkerPids.Except(preWorkerPids).ToList();
         Assert.True(leaked.Count == 0,
-            $"Leaked pwsh worker PIDs after timeout: {string.Join(",", leaked)}");
+            $"Leaked SDK host PIDs after timeout: {string.Join(",", leaked)}");
     }
 
     // Regression: `ps-bash -c 'echo a; echo b; echo c'` must produce three
@@ -174,7 +156,6 @@ public class ProgramEndToEndTests
     [SkippableFact]
     public async Task Command_ChainedCommands_EachOutputsOwnLine()
     {
-        Skip.If(PwshPath is null, "pwsh not available");
 
         var (exitCode, stdout, _) = await RunShellAsync(
             "-c", "echo alpha; echo beta; echo gamma");
@@ -225,7 +206,6 @@ public class ProgramEndToEndTests
     [SkippableFact]
     public async Task ScriptFile_Ps1_DotSourced()
     {
-        Skip.If(PwshPath is null, "pwsh not available");
 
         var script = WriteTempPs1("Write-Host \"hello from ps1\"");
         try
@@ -241,7 +221,6 @@ public class ProgramEndToEndTests
     [SkippableFact]
     public async Task ScriptFile_Ps1_ExitCodePropagates()
     {
-        Skip.If(PwshPath is null, "pwsh not available");
 
         var script = WriteTempPs1("exit 42");
         try
@@ -256,7 +235,6 @@ public class ProgramEndToEndTests
     [SkippableFact]
     public async Task ScriptFile_Sh_ExecutesTranspiled()
     {
-        Skip.If(PwshPath is null, "pwsh not available");
 
         var script = WriteTempScript("echo hello");
         try
@@ -272,7 +250,6 @@ public class ProgramEndToEndTests
     [SkippableFact]
     public async Task ScriptFile_Sh_PositionalArgs()
     {
-        Skip.If(PwshPath is null, "pwsh not available");
 
         var script = WriteTempScript("echo $1 $2");
         try
@@ -289,7 +266,6 @@ public class ProgramEndToEndTests
     [SkippableFact]
     public async Task ScriptFile_Sh_Shebang_Ignored()
     {
-        Skip.If(PwshPath is null, "pwsh not available");
 
         var script = WriteTempScript("#!/bin/bash\necho ok");
         try
@@ -305,7 +281,6 @@ public class ProgramEndToEndTests
     [SkippableFact]
     public async Task ScriptFile_Sh_SetE_PropagatesExit()
     {
-        Skip.If(PwshPath is null, "pwsh not available");
 
         var script = WriteTempScript("set -e\nfalse");
         try
@@ -322,7 +297,6 @@ public class ProgramEndToEndTests
     [SkippableFact]
     public async Task Command_EchoPwdLsPipeHead_OutputsDistinctLines()
     {
-        Skip.If(PwshPath is null, "pwsh not available");
 
         var (exitCode, stdout, _) = await RunShellAsync(
             "-c", "echo \"bash tool works\"; pwd; echo FINAL_MARKER_XYZ");

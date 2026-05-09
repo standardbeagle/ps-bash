@@ -10,8 +10,8 @@ ps-bash is distributed in two flavors:
 ### Slim
 
 ```
-ps-bash[.exe]           # AOT native binary
-ps-bash-worker.ps1      # persistent worker script
+ps-bash[.exe]           # AOT native launcher
+ps-bash-host[.exe]      # SDK host process
 Modules/
   ps-bash/              # PowerShell module (cmdlets)
 ```
@@ -20,7 +20,7 @@ Modules/
 
 ```
 ps-bash[.exe]
-ps-bash-worker.ps1
+ps-bash-host[.exe]
 Modules/
   ps-bash/
 pwsh/                   # bundled PowerShell 7
@@ -118,7 +118,7 @@ export SHELL=/usr/local/bin/ps-bash
 Use the full package when PowerShell 7 is not available on the target system,
 such as minimal Docker images, air-gapped environments, or Windows containers.
 
-The bundled `pwsh/` directory is detected automatically by the binary's
-side-by-side locator (priority 4 in the pwsh resolution chain).
+The bundled `pwsh/` directory is used by the SDK host's packaged PowerShell
+runtime.
 
 No additional configuration is needed -- just extract and run.

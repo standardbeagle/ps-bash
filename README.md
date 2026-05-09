@@ -269,7 +269,7 @@ Pipeline commands (`grep`, `sort`, `head`, `tail`, `tee`) match against BashText
 The standalone `ps-bash` binary adds a transpiler layer:
 
 ```
-bash input → BashLexer → BashParser → PsEmitter → PwshWorker → PowerShell
+bash input → BashLexer → BashParser → PsEmitter → IpcWorker → ps-bash-host/SdkWorker → PowerShell SDK
 ```
 
 The parser tokenizes and parses bash into an AST modeled on Oils syntax.asdl. The emitter maps bash commands to `Invoke-Bash*` functions, forwarding all arguments unchanged. The runtime PowerShell module handles all flag parsing with full bash-compatible behavior.

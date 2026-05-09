@@ -11,17 +11,14 @@
     capture, and bash-to-pwsh transpilation.
 
     Tests use `dotnet run --project` to invoke PsBash.Shell, falling back
-    gracefully if the project or pwsh is unavailable.
+    gracefully if the project is unavailable.
 #>
 
 BeforeAll {
     $script:RepoRoot = Resolve-Path (Join-Path $PSScriptRoot '..' '..')
     $script:ShellProject = Join-Path $script:RepoRoot 'src' 'PsBash.Shell'
-    $script:WorkerScript = Join-Path $script:RepoRoot 'scripts' 'ps-bash-worker.ps1'
 
     $script:HasProject = Test-Path (Join-Path $script:ShellProject 'PsBash.Shell.csproj')
-    $script:HasWorker = Test-Path $script:WorkerScript
-    $script:HasPwsh = $null -ne (Get-Command pwsh -ErrorAction SilentlyContinue)
 
     function Invoke-PsBashShell {
         param(
@@ -46,8 +43,6 @@ BeforeAll {
         $psi.RedirectStandardError = $true
         $psi.RedirectStandardInput = $true
         $psi.UseShellExecute = $false
-
-        $psi.Environment['PSBASH_WORKER'] = $script:WorkerScript
 
         foreach ($key in $ExtraEnv.Keys) {
             $psi.Environment[$key] = $ExtraEnv[$key]
@@ -81,7 +76,6 @@ BeforeAll {
 
     function Skip-UnlessReady {
         if (-not $script:HasProject) { Set-ItResult -Skipped -Because 'PsBash.Shell project not found' }
-        if (-not $script:HasPwsh) { Set-ItResult -Skipped -Because 'pwsh not available' }
         if (-not $script:BuildSucceeded) { Set-ItResult -Skipped -Because 'PsBash.Shell build failed' }
     }
 
@@ -97,14 +91,6 @@ BeforeAll {
 Describe 'Prerequisites' {
     It 'has PsBash.Shell project' {
         $script:HasProject | Should -BeTrue
-    }
-
-    It 'has ps-bash-worker.ps1 script' {
-        $script:HasWorker | Should -BeTrue
-    }
-
-    It 'has pwsh available' {
-        $script:HasPwsh | Should -BeTrue
     }
 
     It 'builds PsBash.Shell successfully' {

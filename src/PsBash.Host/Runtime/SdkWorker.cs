@@ -99,7 +99,7 @@ public sealed class SdkWorker : IWorker
         outputCollection.DataAdded += (sender, e) =>
         {
             var col = (System.Management.Automation.PSDataCollection<System.Management.Automation.PSObject>)sender!;
-            var line = col[e.Index]?.ToString() ?? "";
+            var line = GetOutputText(col[e.Index]);
             try
             {
                 if (output is not null) output(line);
@@ -150,7 +150,7 @@ public sealed class SdkWorker : IWorker
         if (_ps.InvocationStateInfo.State == System.Management.Automation.PSInvocationState.Stopped)
             return 130;
 
-        // Mirror ps-bash-worker.ps1: use $LASTEXITCODE, not HadErrors.
+        // Match shell launcher semantics: use $LASTEXITCODE, not HadErrors.
         // HadErrors fires on Write-Error even with -ErrorAction SilentlyContinue;
         // $LASTEXITCODE only changes when an external command or explicit `exit N` runs.
         var lec = _ps.Runspace.SessionStateProxy.GetVariable("LASTEXITCODE");
@@ -158,6 +158,18 @@ public sealed class SdkWorker : IWorker
         if (lec is int exitInt) return exitInt;
         if (lec is long exitLong) return (int)exitLong;
         return 0;
+    }
+
+    private static string GetOutputText(PSObject? item)
+    {
+        if (item is null)
+            return "";
+
+        var bashText = item.Properties["BashText"]?.Value;
+        if (bashText is not null)
+            return bashText.ToString() ?? "";
+
+        return item.BaseObject is string s ? s : item.ToString();
     }
 
     private static int UnwrapExitCode(object? arg)
