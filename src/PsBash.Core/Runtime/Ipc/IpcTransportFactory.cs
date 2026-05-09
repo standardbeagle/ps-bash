@@ -5,8 +5,9 @@ namespace PsBash.Core.Runtime.Ipc;
 /// <summary>
 /// Resolves the canonical ps-bash-host endpoint. One socket per OS user —
 /// interactive REPL and one-shot <c>-c</c> invocations connect to the same
-/// listener. No session ids, no lock files: presence is detected by attempting
-/// to connect.
+/// listener. Session ids do not participate in endpoint naming; lifecycle
+/// metadata and ownership rules are specified in
+/// <c>docs/specs/host-lifecycle-contract.md</c>.
 /// </summary>
 public static class IpcTransportFactory
 {
@@ -49,8 +50,9 @@ public static class IpcTransportFactory
 
     /// <summary>
     /// Retire the current endpoint so a replacement host can bind the canonical
-    /// address. On AF_UNIX this unlinks the socket path; named pipes have no
-    /// filesystem endpoint to remove.
+    /// address. This is endpoint cleanup only, not process cleanup. On AF_UNIX
+    /// this unlinks the socket path; Windows named pipes are kernel namespace
+    /// objects with no filesystem endpoint to remove.
     /// </summary>
     public static void RetireEndpoint(string scheme, string endpoint)
     {

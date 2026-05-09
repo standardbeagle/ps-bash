@@ -1,10 +1,10 @@
 {
   "status": "running",
-  "iterations": 4,
-  "spawns": 4,
+  "iterations": 5,
+  "spawns": 5,
   "started_at": "2026-05-09T15:53:30Z",
-  "last_iteration_at": "2026-05-09T16:57:10Z",
-  "last_subagent": "019e0d9c-73b6-7ed0-a8bd-bd5ce224ecc2",
+  "last_iteration_at": "2026-05-09T17:04:18Z",
+  "last_subagent": "019e0dad-7626-7dc3-91a3-37c403ace797",
   "loop_task_id": "eZWUCAe8RNXp",
   "dartboard": "Personal/ps-bash",
   "runner_instance_id": "beagle-ab2-33220",
@@ -79,6 +79,12 @@
       "task_id": "xEj7rmJeYCXH",
       "iteration": 4,
       "iteration_task_id": "O01wJMi82NSN",
+      "timestamp": "2026-05-09T12:01:49-05:00",
+      "source_event": {
+        "loop_id": "eZWUCAe8RNXp",
+        "task_id": "xEj7rmJeYCXH",
+        "conversation_id": null
+      },
       "status": "completed",
       "files_changed": [
         "src/PsBash.Host/Program.cs",
@@ -88,6 +94,25 @@
         "Launcher PID fallback tests for PSBASH_HOST_PARENT_PID, argument precedence, and invalid environment values"
       ],
       "completion_summary": "Completed non-interactive host parent-death watcher wiring by making the host use PSBASH_HOST_PARENT_PID as a fallback when --launcher-pid is absent while preserving explicit argument precedence.",
+      "failure_reason": null
+    },
+    {
+      "task_id": "vANgkPJ1Hv6f",
+      "iteration": 5,
+      "iteration_task_id": "x24dgDNF83sT",
+      "timestamp": "2026-05-09T17:04:18Z",
+      "source_event": {
+        "loop_id": "eZWUCAe8RNXp",
+        "task_id": "vANgkPJ1Hv6f",
+        "conversation_id": null
+      },
+      "status": "completed",
+      "files_changed": [
+        "docs/specs/host-lifecycle-contract.md",
+        "src/PsBash.Core/Runtime/Ipc/IpcTransportFactory.cs"
+      ],
+      "tests_added": [],
+      "completion_summary": "Documented the host lifecycle metadata record, validation states, concurrency lock behavior, endpoint-versus-process cleanup distinction, Windows named-pipe constraints, and interaction with the canonical per-user endpoint. Updated IpcTransportFactory comments to point at the contract and clarify endpoint-only cleanup.",
       "failure_reason": null
     }
   ]
