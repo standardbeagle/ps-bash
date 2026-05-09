@@ -21,11 +21,13 @@ internal sealed class Connection
 
     private readonly Stream _stream;
     private readonly Task<SdkWorker> _workerTask;
+    private readonly HostServer? _server;
 
-    internal Connection(Stream stream, Task<SdkWorker> workerTask)
+    internal Connection(Stream stream, Task<SdkWorker> workerTask, HostServer? server = null)
     {
         _stream = stream;
         _workerTask = workerTask;
+        _server = server;
     }
 
     internal async Task HandleAsync(CancellationToken ct)
@@ -55,6 +57,19 @@ internal sealed class Connection
             Mode.Interactive => null,
             _ => null
         };
+
+        if (mode is Mode.Shutdown sd)
+        {
+            await HostProtocol.WriteResponseLineAsync(_stream, HostProtocol.ShutdownAcceptedPayload, ct);
+            await HostProtocol.WriteExitAsync(_stream, 0, ct);
+            // Fire-and-forget the server-side drain so the response is delivered
+            // even if the host's accept loop tears down immediately. The
+            // server's RequestShutdownAsync excludes this connection because
+            // ConnectionEnded fires when HandleAsync returns.
+            if (_server is not null)
+                _ = Task.Run(() => _server.RequestShutdownAsync(sd.DeadlineMs));
+            return;
+        }
 
         if (mode is Mode.Health)
         {

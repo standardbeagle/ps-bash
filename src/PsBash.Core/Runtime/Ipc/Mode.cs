@@ -50,4 +50,27 @@ public abstract record Mode
     /// touching the PowerShell worker so stale or wedged workers are not reused.
     /// </summary>
     public sealed record Health() : Mode;
+
+    /// <summary>
+    /// Request graceful shutdown. The host stops accepting new connections,
+    /// waits up to <paramref name="DeadlineMs"/> milliseconds for in-flight
+    /// requests to drain, then exits. A compatible launcher uses this when
+    /// health reveals a protocol/build mismatch or obsolete host metadata so
+    /// the running host retires before a replacement is spawned.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <c>DeadlineMs</c> bounds the drain wait. Zero or negative means "no
+    /// drain wait" — in-flight requests are abandoned at the deadline, but the
+    /// shutdown is still acknowledged. The default deadline is
+    /// <see cref="HostProtocol.DefaultShutdownDeadlineMs"/>.
+    /// </para>
+    /// <para>
+    /// The host responds to the shutdown request itself with
+    /// <see cref="HostProtocol.ShutdownAcceptedPayload"/> and exit 0 before
+    /// closing the accept loop, so the requesting client always sees an
+    /// acknowledgement.
+    /// </para>
+    /// </remarks>
+    public sealed record Shutdown(int DeadlineMs) : Mode;
 }

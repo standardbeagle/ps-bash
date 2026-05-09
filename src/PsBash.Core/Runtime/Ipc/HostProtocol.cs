@@ -28,6 +28,22 @@ public static class HostProtocol
     public const string PathHeaderPrefix = "PATH:";
     public const string ArgvHeaderPrefix = "ARGV:";
     public const string BodyHeaderPrefix = "BODY:";
+    public const string DeadlineHeaderPrefix = "DEADLINE:";
+
+    /// <summary>
+    /// Default drain deadline for graceful shutdown when the launcher does not
+    /// supply an explicit value. Five seconds is long enough for short-running
+    /// commands to finish and short enough that an obsolete host does not
+    /// block a replacement for an unbounded time.
+    /// </summary>
+    public const int DefaultShutdownDeadlineMs = 5_000;
+
+    /// <summary>
+    /// Response body line written before exit when a host accepts a graceful
+    /// shutdown request. Allows the launcher to confirm the request reached a
+    /// shutdown-aware host (older hosts respond with a protocol error).
+    /// </summary>
+    public const string ShutdownAcceptedPayload = "ps-bash-host shutdown=accepted";
 
     private static readonly UTF8Encoding Utf8NoBom = new(encoderShouldEmitUTF8Identifier: false);
 
@@ -71,6 +87,10 @@ public static class HostProtocol
                 break;
             case Mode.Health:
                 sb.Append(ModeHeaderPrefix).Append("Health").Append('\n');
+                break;
+            case Mode.Shutdown sd:
+                sb.Append(ModeHeaderPrefix).Append("Shutdown").Append('\n');
+                sb.Append(DeadlineHeaderPrefix).Append(sd.DeadlineMs.ToString(System.Globalization.CultureInfo.InvariantCulture)).Append('\n');
                 break;
             default:
                 throw new InvalidOperationException($"Unknown mode: {mode.GetType().Name}");
@@ -122,6 +142,8 @@ public static class HostProtocol
                         throw new IOException($"Expected END sentinel after Health header, got: {next}");
                     return new Mode.Health();
                 }
+            case "Shutdown":
+                return await ReadShutdownAsync(reader, ct).ConfigureAwait(false);
             default:
                 throw new IOException($"Unknown MODE kind: {kind}");
         }
@@ -138,6 +160,31 @@ public static class HostProtocol
             lines.Add(line);
         }
         return string.Join('\n', lines);
+    }
+
+    private static async Task<Mode.Shutdown> ReadShutdownAsync(StreamLineReader reader, CancellationToken ct)
+    {
+        int? deadlineMs = null;
+        while (true)
+        {
+            var line = await reader.ReadLineAsync(ct).ConfigureAwait(false)
+                ?? throw new IOException("Request stream closed before END sentinel (Shutdown)");
+            if (line == EndSentinel) break;
+            if (line.StartsWith(DeadlineHeaderPrefix, StringComparison.Ordinal))
+            {
+                var raw = line[DeadlineHeaderPrefix.Length..];
+                if (!int.TryParse(raw, System.Globalization.NumberStyles.Integer, System.Globalization.CultureInfo.InvariantCulture, out var n))
+                    throw new IOException($"Invalid {DeadlineHeaderPrefix} value: {raw}");
+                deadlineMs = n;
+            }
+            else
+            {
+                throw new IOException($"Unexpected line in Shutdown frame: {line}");
+            }
+        }
+        if (deadlineMs is null)
+            throw new IOException("Shutdown frame missing DEADLINE field");
+        return new Mode.Shutdown(deadlineMs.Value);
     }
 
     private static async Task<Mode.Script> ReadScriptAsync(StreamLineReader reader, CancellationToken ct)

@@ -64,9 +64,22 @@ public sealed class IpcWorker : IWorker
     private async Task EnsureHostReachableAsync(CancellationToken ct)
     {
         // 1) Probe the canonical socket. If a compatible host answers the health
-        // handshake, reuse it.
-        if (await WaitForHealthyAsync(ct).ConfigureAwait(false))
-            return;
+        // handshake, reuse it. If the host answers but is obsolete (protocol
+        // or build mismatch), ask it to retire gracefully before we replace.
+        var initial = await CheckHealthAsync(TimeSpan.FromMilliseconds(750), ct).ConfigureAwait(false);
+        if (initial == HostHealthState.Healthy) return;
+        if (initial == HostHealthState.Starting)
+        {
+            if (await WaitForHealthyAsync(ct).ConfigureAwait(false)) return;
+        }
+
+        if (initial == HostHealthState.Obsolete)
+        {
+            // The current host responded — give it a chance to drain and exit
+            // cleanly before we touch the endpoint or spawn a replacement. Bound
+            // the wait so an unresponsive host cannot block startup forever.
+            await TryRequestGracefulShutdownAsync(GetShutdownDeadline(), ct).ConfigureAwait(false);
+        }
 
         // 2) A socket may exist but belong to a stale, incompatible, or wedged
         // host. Unlink it before starting a replacement so the new host can bind.
@@ -80,6 +93,47 @@ public sealed class IpcWorker : IWorker
 
         await SpawnAndWaitAsync(ct).ConfigureAwait(false);
     }
+
+    /// <summary>
+    /// Send a <see cref="Mode.Shutdown"/> request to the current host and wait
+    /// up to <paramref name="deadline"/> for it to acknowledge and stop
+    /// listening. Best-effort — any failure (timeout, connection refused,
+    /// protocol error from an older host that does not understand the
+    /// frame) is swallowed: the caller already plans to retire the endpoint
+    /// and spawn a replacement.
+    /// </summary>
+    private async Task TryRequestGracefulShutdownAsync(TimeSpan deadline, CancellationToken ct)
+    {
+        try
+        {
+            using var sdCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            sdCts.CancelAfter(deadline);
+            await using var transport = NewTransport();
+            using var stream = await transport.ConnectAsync(sdCts.Token).ConfigureAwait(false);
+            var deadlineMs = (int)Math.Min(deadline.TotalMilliseconds, int.MaxValue);
+            await HostProtocol.WriteRequestAsync(stream, new Mode.Shutdown(deadlineMs), sdCts.Token).ConfigureAwait(false);
+            await HostProtocol.ReadResponseAsync(stream, _ => { }, sdCts.Token).ConfigureAwait(false);
+        }
+        catch (SocketException) { /* host already gone */ }
+        catch (IOException) { /* old host or wedged — fall through to endpoint cleanup */ }
+        catch (OperationCanceledException) when (!ct.IsCancellationRequested) { /* deadline */ }
+
+        // Wait briefly for the listener to actually disappear so the spawn
+        // step has a chance to bind. Bounded by the same deadline so a wedged
+        // host cannot stall the launcher indefinitely.
+        var waitDeadline = DateTime.UtcNow + deadline;
+        while (DateTime.UtcNow < waitDeadline)
+        {
+            ct.ThrowIfCancellationRequested();
+            var state = await CheckHealthAsync(TimeSpan.FromMilliseconds(150), ct).ConfigureAwait(false);
+            if (state == HostHealthState.Unhealthy) return;
+            try { await Task.Delay(_startupPollInterval, ct).ConfigureAwait(false); }
+            catch (OperationCanceledException) { throw; }
+        }
+    }
+
+    private static TimeSpan GetShutdownDeadline()
+        => TimeSpan.FromMilliseconds(HostProtocol.DefaultShutdownDeadlineMs);
 
     private async Task<bool> WaitForHealthyAsync(CancellationToken ct)
     {
@@ -120,6 +174,12 @@ public sealed class IpcWorker : IWorker
                 && lines.Count == 1
                 && lines[0] == HostProtocol.HealthStartingPayload)
                 return HostHealthState.Starting;
+            // The host answered the health frame but the payload doesn't match
+            // this build's expected payload — protocol or build identity has
+            // drifted. Treat as obsolete so the caller can request graceful
+            // shutdown rather than silently retiring the endpoint.
+            if (lines.Count == 1 && lines[0].StartsWith("ps-bash-host", StringComparison.Ordinal))
+                return HostHealthState.Obsolete;
             return HostHealthState.Unhealthy;
         }
         catch (SocketException) { return HostHealthState.Unhealthy; }
@@ -280,5 +340,7 @@ public sealed class IpcWorker : IWorker
         Unhealthy,
         Starting,
         Healthy,
+        /// <summary>Host answered but with an incompatible protocol/build payload.</summary>
+        Obsolete,
     }
 }

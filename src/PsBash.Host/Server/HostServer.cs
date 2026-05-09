@@ -21,6 +21,10 @@ public sealed class HostServer : IAsyncDisposable
     private readonly Task<SdkWorker> _workerTask;
     private readonly IdleShutdown? _idle;
     private readonly TaskCompletionSource _ready = new(TaskCreationOptions.RunContinuationsAsynchronously);
+    private readonly CancellationTokenSource _acceptStop = new();
+    private readonly object _gate = new();
+    private int _inFlight;
+    private TaskCompletionSource? _drained;
     private int _disposed;
 
     public HostServer(IIpcTransport transport, Task<SdkWorker> workerTask, IdleShutdown? idle = null)
@@ -33,17 +37,22 @@ public sealed class HostServer : IAsyncDisposable
     /// <summary>Completes once <see cref="RunAsync"/> has called ListenAsync and is ready to accept.</summary>
     public Task WhenListening => _ready.Task;
 
+    /// <summary>True once <see cref="RequestShutdownAsync"/> has been called.</summary>
+    public bool ShutdownRequested => _acceptStop.IsCancellationRequested;
+
     public async Task RunAsync(CancellationToken ct = default)
     {
         await _transport.ListenAsync(ct);
         _ready.TrySetResult();
 
-        while (!ct.IsCancellationRequested)
+        using var linked = CancellationTokenSource.CreateLinkedTokenSource(ct, _acceptStop.Token);
+
+        while (!linked.IsCancellationRequested)
         {
             Stream stream;
             try
             {
-                stream = await _transport.AcceptAsync(ct);
+                stream = await _transport.AcceptAsync(linked.Token);
             }
             catch (OperationCanceledException)
             {
@@ -54,7 +63,7 @@ public sealed class HostServer : IAsyncDisposable
                 Log($"accept error: {ex.Message}");
                 // Small delay prevents a tight busy-loop if AcceptAsync keeps failing
                 // (e.g., transport in a persistently broken state).
-                try { await Task.Delay(10, ct); } catch (OperationCanceledException) { break; }
+                try { await Task.Delay(10, linked.Token); } catch (OperationCanceledException) { break; }
                 continue;
             }
 
@@ -64,12 +73,13 @@ public sealed class HostServer : IAsyncDisposable
 
     private async Task HandleConnectionAsync(Stream stream, CancellationToken ct)
     {
+        ConnectionStarted();
         _idle?.ConnectionStarted();
         try
         {
             await using (stream)
             {
-                var conn = new Connection(stream, _workerTask);
+                var conn = new Connection(stream, _workerTask, this);
                 await conn.HandleAsync(ct);
             }
         }
@@ -80,13 +90,69 @@ public sealed class HostServer : IAsyncDisposable
         finally
         {
             _idle?.ConnectionEnded();
+            ConnectionEnded();
         }
+    }
+
+    private void ConnectionStarted()
+    {
+        lock (_gate) _inFlight++;
+    }
+
+    private void ConnectionEnded()
+    {
+        lock (_gate)
+        {
+            _inFlight--;
+            if (_inFlight <= 0 && _drained is { } d)
+                d.TrySetResult();
+        }
+    }
+
+    /// <summary>
+    /// Stop accepting new connections, then wait for in-flight requests to
+    /// finish or for <paramref name="deadlineMs"/> milliseconds to elapse,
+    /// whichever comes first. Always returns a completed task; the caller
+    /// inspects <see cref="ShutdownRequested"/> or awaits <see cref="RunAsync"/>
+    /// to confirm the accept loop exited.
+    /// </summary>
+    /// <remarks>
+    /// Idempotent — second and later calls are no-ops with respect to the
+    /// accept-stop signal but still observe the drain wait. The transport
+    /// remains owned by the host process and is disposed by
+    /// <see cref="DisposeAsync"/>; on Windows named pipes there is no
+    /// kernel-namespace endpoint to unlink, but the disposal closes the
+    /// listening pipe handle so a replacement host can bind the same name.
+    /// </remarks>
+    public async Task RequestShutdownAsync(int deadlineMs)
+    {
+        try { _acceptStop.Cancel(); } catch (ObjectDisposedException) { }
+
+        Task drainTask;
+        lock (_gate)
+        {
+            if (_inFlight <= 0) return;
+            _drained ??= new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            drainTask = _drained.Task;
+        }
+
+        if (deadlineMs <= 0) return;
+
+        var completed = await Task.WhenAny(drainTask, Task.Delay(deadlineMs)).ConfigureAwait(false);
+        // Ignore deadline result: caller bounds the wait, it's not a failure
+        // if drain didn't finish in time. The accept loop has already stopped;
+        // the host process exits on its own CTS.
+        _ = completed;
     }
 
     public async ValueTask DisposeAsync()
     {
         if (Interlocked.Exchange(ref _disposed, 1) == 0)
+        {
+            try { _acceptStop.Cancel(); } catch { }
+            try { _acceptStop.Dispose(); } catch { }
             await _transport.DisposeAsync();
+        }
     }
 
     private static void Log(string message)
