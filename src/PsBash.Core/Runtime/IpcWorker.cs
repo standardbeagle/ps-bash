@@ -73,6 +73,16 @@ public sealed class IpcWorker : IWorker
             if (await WaitForHealthyAsync(ct).ConfigureAwait(false)) return;
         }
 
+        // 2) Classify what cleanup we are allowed to do BEFORE touching anything.
+        // The metadata sidecar is the ownership proof; without it, only the
+        // endpoint artifact may be unlinked, never a process. Per
+        // docs/specs/host-lifecycle-contract.md.
+        var metadata = HostMetadata.TryRead(_scheme, _endpoint);
+        var decision = HostOwnership.Classify(metadata, Environment.UserName, out var unsafeReason);
+        if (decision == HostOwnership.CleanupDecision.UnsafeToTouch)
+            throw new HostUnavailableException(
+                $"Cannot replace ps-bash-host at {_scheme}:{_endpoint} — {unsafeReason}.");
+
         if (initial == HostHealthState.Obsolete)
         {
             // The current host responded — give it a chance to drain and exit
@@ -81,17 +91,77 @@ public sealed class IpcWorker : IWorker
             await TryRequestGracefulShutdownAsync(GetShutdownDeadline(), ct).ConfigureAwait(false);
         }
 
-        // 2) A socket may exist but belong to a stale, incompatible, or wedged
-        // host. Unlink it before starting a replacement so the new host can bind.
-        IpcTransportFactory.RetireEndpoint(_scheme, _endpoint);
+        // 3) Re-probe after graceful attempt. If a process is still answering
+        // and we have ownership, escalate to kill. If a process is still
+        // answering and we do NOT have ownership, refuse cleanup so we never
+        // leave a recycled-PID footgun for the next launcher run.
+        var post = await CheckHealthAsync(TimeSpan.FromMilliseconds(250), ct).ConfigureAwait(false);
+        if (post != HostHealthState.Unhealthy)
+        {
+            if (decision == HostOwnership.CleanupDecision.SafeProcessShutdown && metadata is not null)
+            {
+                TryKillRecordedHost(metadata);
+            }
+            else
+            {
+                // initial wasn't Healthy (we'd have returned); host is alive but
+                // not gracefully retiring and we cannot prove ownership. Surface
+                // rather than risk a wrong-process kill.
+                throw new HostUnavailableException(
+                    $"ps-bash-host at {_scheme}:{_endpoint} is alive but did not shut down gracefully " +
+                    $"and has no ownership proof to authorize a process kill.");
+            }
+        }
 
-        // 3) No healthy host running — spawn one. Verify the binary first so the
+        // 4) Endpoint and sidecar artifacts may now be cleaned. Unix unlinks the
+        // socket file; Windows named pipes have no kernel-namespace file to
+        // remove (the pipe disappears when the previous server's handle closed).
+        // The sidecar is removed in either case so the next launcher does not
+        // see ghost ownership info.
+        IpcTransportFactory.RetireEndpoint(_scheme, _endpoint);
+        HostMetadata.Remove(_scheme, _endpoint);
+
+        // 5) No healthy host running — spawn one. Verify the binary first so the
         //    exception names the actual problem.
         if (!File.Exists(_hostBinaryPath))
             throw new HostUnavailableException(
                 $"ps-bash-host binary not found at '{_hostBinaryPath}'. Cannot start host.");
 
         await SpawnAndWaitAsync(ct).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Best-effort termination of a host process whose ownership has already
+    /// been classified as <see cref="HostOwnership.CleanupDecision.SafeProcessShutdown"/>.
+    /// Re-verifies pid liveness and executable match immediately before kill so
+    /// a PID reused between classification and termination cannot be hit.
+    /// </summary>
+    private static void TryKillRecordedHost(HostMetadata metadata)
+    {
+        var (alive, exe) = HostOwnership.ProbeProcess(metadata.Pid);
+        if (!alive) return;
+        if (!string.IsNullOrEmpty(exe) &&
+            !string.Equals(
+                Path.GetFullPath(exe),
+                Path.GetFullPath(metadata.ExecutablePath),
+                StringComparison.OrdinalIgnoreCase))
+        {
+            // PID was reused between Classify and now — abandon kill silently;
+            // the next iteration's Classify will surface UnsafeToTouch.
+            return;
+        }
+
+        try
+        {
+            using var proc = Process.GetProcessById(metadata.Pid);
+            proc.Kill(entireProcessTree: true);
+            // Bounded wait so a wedged kernel handle doesn't stall startup; the
+            // outer loop times out via _startupTimeout regardless.
+            try { proc.WaitForExit(2_000); } catch { }
+        }
+        catch (ArgumentException) { /* exited between probe and kill */ }
+        catch (InvalidOperationException) { /* same */ }
+        catch (System.ComponentModel.Win32Exception) { /* permission denied; surfaces as still-listening on next loop */ }
     }
 
     /// <summary>

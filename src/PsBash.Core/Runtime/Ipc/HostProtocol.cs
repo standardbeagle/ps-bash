@@ -289,7 +289,17 @@ public static class HostProtocol
     private static string DecodeBase64(string s)
         => Utf8NoBom.GetString(Convert.FromBase64String(s));
 
-    private static string GetBuildIdentity()
+    /// <summary>
+    /// Build-identity string the host advertises in its health payload and
+    /// writes into its metadata sidecar. Stable for the lifetime of the
+    /// assembly; lets clients detect protocol-compatible-but-build-drifted
+    /// hosts as Obsolete.
+    /// </summary>
+    public static string BuildIdentity { get; } = ResolveBuildIdentity();
+
+    private static string GetBuildIdentity() => BuildIdentity;
+
+    private static string ResolveBuildIdentity()
     {
         var asm = typeof(HostProtocol).Assembly;
         return asm.GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion

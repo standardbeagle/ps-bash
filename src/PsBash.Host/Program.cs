@@ -41,7 +41,7 @@ internal sealed class Program
         // can connect immediately and queue work.
         var workerTask = Task.Run(SdkWorker.Create);
 
-        IIpcTransport transport = CreateTransport(args);
+        var (transport, scheme, endpoint) = CreateTransport(args);
 
         var idleTimeout = IdleShutdown.DefaultTimeout;
         using var idle = new IdleShutdown(cts, idleTimeout);
@@ -55,7 +55,12 @@ internal sealed class Program
         {
             var serverTask = server.RunAsync(cts.Token);
             await server.WhenListening;
-            await serverTask;
+            // Sidecar must be written AFTER bind succeeds — otherwise a launcher
+            // racing with us would read metadata for a process that hasn't yet
+            // claimed the endpoint. Per docs/specs/host-lifecycle-contract.md.
+            WriteHostMetadata(scheme, endpoint);
+            try { await serverTask; }
+            finally { HostMetadata.Remove(scheme, endpoint); }
         }
         finally
         {
@@ -65,15 +70,29 @@ internal sealed class Program
         return 0;
     }
 
-    private static IIpcTransport CreateTransport(string[] args)
+    private static void WriteHostMetadata(string scheme, string endpoint)
+    {
+        var meta = new HostMetadata(
+            Pid: Environment.ProcessId,
+            ExecutablePath: Environment.ProcessPath ?? "<unknown>",
+            ProtocolVersion: HostProtocol.ProtocolVersion,
+            BuildIdentity: HostProtocol.BuildIdentity,
+            TransportScheme: scheme,
+            Endpoint: endpoint,
+            StartedAt: DateTimeOffset.UtcNow,
+            Owner: Environment.UserName);
+        meta.Write(scheme, endpoint);
+    }
+
+    private static (IIpcTransport Transport, string Scheme, string Endpoint) CreateTransport(string[] args)
     {
         // Scheme-specific overrides (used by tests) take precedence and bypass
         // the factory entirely so they cannot be shadowed by env vars.
         var socketPath = GetArg(args, "--socket");
-        if (socketPath != null) return new UnixSocketTransport(socketPath);
+        if (socketPath != null) return (new UnixSocketTransport(socketPath), "unix", socketPath);
 
         var pipeName = GetArg(args, "--pipe");
-        if (pipeName != null) return new NamedPipeTransport(pipeName);
+        if (pipeName != null) return (new NamedPipeTransport(pipeName), "pipe", pipeName);
 
         // --ipc-endpoint <scheme:endpoint> is the public/agent-facing override:
         // tests, WSL bash drivers, or anyone who needs an isolated host can
@@ -81,7 +100,8 @@ internal sealed class Program
         // to bind the same address. Falls through to the canonical endpoint
         // when absent.
         var ipcEndpoint = GetArg(args, "--ipc-endpoint");
-        return IpcTransportFactory.CreateDefault(ipcEndpoint);
+        var (scheme, endpoint) = IpcTransportFactory.ResolveEndpoint(ipcEndpoint);
+        return (IpcTransportFactory.CreateDefault(ipcEndpoint), scheme, endpoint);
     }
 
     private static string? GetArg(string[] args, string name)
