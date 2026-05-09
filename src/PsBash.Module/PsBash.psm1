@@ -8018,6 +8018,100 @@ function Invoke-BashTee {
     }
 }
 
+function Invoke-BashLess {
+    [OutputType('PsBash.TextOutput')]
+    param()
+
+    $Arguments = [string[]]$args
+    $pipelineInput = @($input)
+    if ($Arguments -contains '--help') {
+        New-BashObject -BashText "usage: less [FILE...]`nMVP keys are provided by native less when ps-bash owns an interactive terminal. Non-interactive contexts pass text through."
+        return
+    }
+
+    $hasPipelineInput = $pipelineInput.Count -gt 0
+    $isInteractive = $env:PSBASH_INTERACTIVE -eq '1' -and
+        -not [Console]::IsInputRedirected -and
+        -not [Console]::IsOutputRedirected
+
+    if (-not $isInteractive) {
+        if ($hasPipelineInput) {
+            foreach ($item in $pipelineInput) {
+                New-BashObject -BashText (Get-BashText -InputObject $item) -TypeName 'PsBash.TextOutput'
+            }
+            $global:LASTEXITCODE = 0
+            return
+        }
+
+        foreach ($path in $Arguments) {
+            if ($path.StartsWith('-')) { continue }
+            if (-not (Test-Path -LiteralPath $path -PathType Leaf)) {
+                Write-BashError "less: ${path}: No such file or directory" 1
+                return
+            }
+            Get-Content -LiteralPath $path | ForEach-Object {
+                New-BashObject -BashText "$_" -TypeName 'PsBash.TextOutput'
+            }
+        }
+        $global:LASTEXITCODE = 0
+        return
+    }
+
+    $less = Get-Command less -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
+    if ($null -eq $less) {
+        Write-BashError 'less: native less executable not found; install less or run in a non-interactive context to pass text through' 127
+        return
+    }
+
+    $tempFile = $null
+    try {
+        $pagerArgs = [System.Collections.Generic.List[string]]::new()
+        foreach ($arg in $Arguments) {
+            $pagerArgs.Add($arg)
+        }
+
+        if ($hasPipelineInput) {
+            $tempFile = [System.IO.Path]::Combine(
+                [System.IO.Path]::GetTempPath(),
+                "ps-bash-less-$([System.Guid]::NewGuid().ToString('N')).txt")
+
+            $sb = [System.Text.StringBuilder]::new()
+            foreach ($item in $pipelineInput) {
+                $text = Get-BashText -InputObject $item
+                [void]$sb.Append($text)
+                $isPartial = $null -ne $item.PSObject -and
+                    $null -ne $item.PSObject.Properties['NoTrailingNewline'] -and
+                    [bool]$item.NoTrailingNewline
+                if (-not $isPartial -and -not $text.EndsWith("`n")) {
+                    [void]$sb.Append("`n")
+                }
+            }
+            [System.IO.File]::WriteAllText($tempFile, $sb.ToString(), [System.Text.UTF8Encoding]::new($false))
+            $pagerArgs.Insert(0, $tempFile)
+        }
+
+        $psi = [System.Diagnostics.ProcessStartInfo]::new($less.Source)
+        $psi.UseShellExecute = $false
+        $psi.WorkingDirectory = (Get-Location).Path
+        foreach ($arg in $pagerArgs) {
+            [void]$psi.ArgumentList.Add($arg)
+        }
+
+        $proc = [System.Diagnostics.Process]::Start($psi)
+        if ($null -eq $proc) {
+            Write-BashError 'less: failed to start native less executable' 126
+            return
+        }
+        $proc.WaitForExit()
+        $global:LASTEXITCODE = $proc.ExitCode
+    }
+    finally {
+        if ($null -ne $tempFile) {
+            Remove-Item -LiteralPath $tempFile -Force -ErrorAction SilentlyContinue
+        }
+    }
+}
+
 # --- xargs Command ---
 
 function Invoke-BashXargs {
@@ -14459,6 +14553,7 @@ Set-Alias -Name 'id'       -Value 'Invoke-BashId'       -Force -Scope Global -Op
 Set-Alias -Name 'shuf'     -Value 'Invoke-BashShuf'     -Force -Scope Global -Option AllScope
 Set-Alias -Name 'install'  -Value 'Invoke-BashInstall'  -Force -Scope Global -Option AllScope
 Set-Alias -Name 'browse'   -Value 'Invoke-BashBrowse'   -Force -Scope Global -Option AllScope
+Set-Alias -Name 'less'     -Value 'Invoke-BashLess'     -Force -Scope Global -Option AllScope
 
 # --- Type-level ToString for BashObject types ---
 # Update-TypeData defines ToString() once per type name instead of per-object,

@@ -1,6 +1,6 @@
 # Using ps-bash
 
-Ps-bash has two modes: the **PsBash module** and the **ps-bash shell**. They share the same 76 bash commands and typed object pipeline, but serve different use cases.
+Ps-bash has two modes: the **PsBash module** and the **ps-bash shell**. They share the same 77 bash commands and typed object pipeline, but serve different use cases.
 
 ## PsBash Module
 
@@ -87,6 +87,12 @@ Input
 **Transpiled commands** go through `BashParser → PsEmitter → PwshWorker`. They run inside the persistent PowerShell session, so variables and working directory persist between commands.
 
 **External tools** bypass the worker entirely. They get the real console — stdin, stdout, Ctrl+C, ANSI colors, raw mode, alternate screen buffer. This is why `claude`, `copilot`, and `git` work interactively.
+
+### Interactive pager
+
+`less` is handled as shell-adjacent pager functionality. In a real `ps-bash` interactive session, `less file` and `producer | less` delegate to native `less` when it is available on `PATH`; pipeline input is spooled to a temporary file and removed after the pager exits. Native `less` provides the MVP pager behavior: arrow keys, PgUp/PgDn, `/` search, resize handling, and `q` to quit.
+
+In non-interactive contexts such as `ps-bash -c "printf 'x\n' | less"` or IPC-captured execution, `less` does not wait for terminal input. Piped input is passed through, and file operands are printed to stdout. If an interactive terminal is attached but native `less` is missing, ps-bash reports a clear error instead of attempting partial emulation.
 
 ### Setup
 

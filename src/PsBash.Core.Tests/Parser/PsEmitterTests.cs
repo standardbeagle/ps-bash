@@ -128,6 +128,22 @@ public class PsEmitterTests
     }
 
     [Fact]
+    public void Transpile_CatPipeLess_EmitsShellPagerCommand()
+    {
+        var result = PsEmitter.Transpile("cat file | less");
+
+        Assert.Equal("Invoke-BashCat file | Invoke-BashLess", result);
+    }
+
+    [Fact]
+    public void Transpile_LessFile_EmitsShellPagerCommand()
+    {
+        var result = PsEmitter.Transpile("less file");
+
+        Assert.Equal("Invoke-BashLess file", result);
+    }
+
+    [Fact]
     public void Emit_AndOrList_EmitsPassthrough()
     {
         var andOr = new Command.AndOrList(

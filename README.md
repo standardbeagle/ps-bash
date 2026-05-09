@@ -88,7 +88,7 @@ PS> find . -name '*.log' -mtime +7 | xargs rm -f    # actually works on Windows
 
 ## Two Modes: Module and Shell
 
-PsBash can be used as a **PowerShell module** or a **standalone shell**. They share the same 76 bash commands and typed object pipeline.
+PsBash can be used as a **PowerShell module** or a **standalone shell**. They share the same 77 bash commands and typed object pipeline.
 
 ### Module — bash commands inside PowerShell
 
@@ -204,20 +204,20 @@ See [docs/agent-setup.md](docs/agent-setup.md) for detailed per-agent configurat
 | Object pipeline | Types survive `grep \| sort \| head` | Strings only | Strings only | Strings only | Varies |
 | PowerShell integration | Native — objects flow into cmdlets | Separate shell | Separate shell | Separate shell | Native |
 | Cross-platform | Win/Lin/Mac | Windows only | Windows only | Windows only | Win/Lin/Mac |
-| Commands | 76 built-in | ~80 (GNU coreutils) | ~200+ (full GNU) | All of Linux | Define your own |
+| Commands | 77 built-in | ~80 (GNU coreutils) | ~200+ (full GNU) | All of Linux | Define your own |
 | jq/awk/sed | Built-in, zero binaries | awk/sed yes, jq no | Yes (install pkg) | Yes (apt install) | Not included |
 | PATH conflicts | None (AllScope aliases) | Shadows PowerShell | Shadows PowerShell | Filesystem boundary | None |
 | Startup overhead | ~100 ms (module load) | New process per call | New process per call | ~1s (cold), ~200ms (warm) | ~100 ms |
 | AI agent shell | Yes (`ps-bash -c`) | No | No | No | No |
 | Interactive mode | Yes (aliases, prompt, external tools) | Yes (full bash) | Yes (full bash) | Yes (full Linux) | No |
 
-## 76 Commands
+## 77 Commands
 
 | Category | Commands |
 |----------|----------|
 | **Listing** | `ls` `find` `stat` `tree` `du` `pwd` `basename` `dirname` `realpath` `dirs` |
 | **Files** | `cp` `mv` `rm` `mkdir` `rmdir` `touch` `ln` |
-| **Content** | `cat` `head` `tail` `tac` `wc` `nl` `rev` `strings` `fold` `expand` `unexpand` `split` |
+| **Content** | `cat` `head` `tail` `less` `tac` `wc` `nl` `rev` `strings` `fold` `expand` `unexpand` `split` |
 | **Search** | `grep` `rg` |
 | **Text** | `sed` `awk` `cut` `tr` `uniq` `sort` `column` `join` `paste` `comm` `diff` |
 | **Pipeline** | `tee` `xargs` `yes` |

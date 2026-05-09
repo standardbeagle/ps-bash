@@ -174,6 +174,41 @@ public class ProgramEndToEndTests
             $"Expected >=3 output lines, got {lines.Count}: [{string.Join("|", lines)}]");
     }
 
+    [SkippableFact]
+    public async Task Command_PipeToLess_NonInteractivePassesThroughWithoutHanging()
+    {
+
+        var (exitCode, stdout, stderr) = await RunShellAsync(
+            new[] { "-c", "printf 'x\\n' | less" },
+            TimeSpan.FromSeconds(10));
+
+        Assert.Equal(0, exitCode);
+        Assert.Contains("x", stdout);
+        Assert.DoesNotContain("native less executable not found", stderr);
+    }
+
+    [SkippableFact]
+    public async Task Command_LessFile_NonInteractivePrintsFileWithoutHanging()
+    {
+
+        var path = Path.Combine(Path.GetTempPath(), $"ps-bash-less-{Guid.NewGuid():N}.txt");
+        await File.WriteAllTextAsync(path, "from file\n");
+        try
+        {
+            var escaped = path.Replace("\\", "/");
+            var (exitCode, stdout, _) = await RunShellAsync(
+                new[] { "-c", $"less '{escaped}'" },
+                TimeSpan.FromSeconds(10));
+
+            Assert.Equal(0, exitCode);
+            Assert.Contains("from file", stdout);
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
     // M3: file-arg mode — nonexistent script exits 2 with specific stderr message.
     // Does not require pwsh because the missing-file check runs before worker spawn.
     [Fact]

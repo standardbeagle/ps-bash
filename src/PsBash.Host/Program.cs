@@ -16,12 +16,21 @@ internal sealed class Program
             var noProfile = args.Contains("--no-profile");
             int? iLauncherPid = GetArgInt(args, "--launcher-pid");
 
+            var priorInteractive = Environment.GetEnvironmentVariable("PSBASH_INTERACTIVE");
+            Environment.SetEnvironmentVariable("PSBASH_INTERACTIVE", "1");
             using var iCts = new CancellationTokenSource();
             Console.CancelKeyPress += (_, e) => { e.Cancel = true; iCts.Cancel(); };
             using var iDeathWatcher = ParentDeathWatcher.TryCreate(iLauncherPid, iCts);
 
-            await using var interactiveWorker = SdkWorker.Create();
-            return await InteractiveShell.RunAsync(interactiveWorker, noProfile);
+            try
+            {
+                await using var interactiveWorker = SdkWorker.Create();
+                return await InteractiveShell.RunAsync(interactiveWorker, noProfile);
+            }
+            finally
+            {
+                Environment.SetEnvironmentVariable("PSBASH_INTERACTIVE", priorInteractive);
+            }
         }
 
         using var cts = new CancellationTokenSource();
