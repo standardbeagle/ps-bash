@@ -1,18 +1,5 @@
 {
   "claims": {
-    "EhB587tyIvP2": {
-      "runner_instance_id": "beagle-ab2-33220",
-      "runner_email": "andybrummer@standardbeagle.com",
-      "claimed_at": "2026-05-09T16:39:05Z",
-      "agent_id": "beagle-ab2-33220",
-      "parent_loop_id": "eZWUCAe8RNXp",
-      "purpose": "Loop iteration 4: Add lifecycle scale and fault-injection tests",
-      "source_event": {
-        "loop_id": "eZWUCAe8RNXp",
-        "task_id": "EhB587tyIvP2",
-        "conversation_id": null
-      }
-    },
     "318QZbxGO2mA": {
       "runner_instance_id": "beagle-ab2-15380",
       "runner_email": "andybrummer@standardbeagle.com",
