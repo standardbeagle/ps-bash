@@ -144,6 +144,22 @@ public class PsEmitterTests
     }
 
     [Fact]
+    public void Transpile_CatPipeMore_EmitsModulePagerCommand()
+    {
+        var result = PsEmitter.Transpile("cat file | more");
+
+        Assert.Equal("Invoke-BashCat file | Invoke-BashMore", result);
+    }
+
+    [Fact]
+    public void Transpile_MoreFile_EmitsModulePagerCommand()
+    {
+        var result = PsEmitter.Transpile("more file");
+
+        Assert.Equal("Invoke-BashMore file", result);
+    }
+
+    [Fact]
     public void Emit_AndOrList_EmitsPassthrough()
     {
         var andOr = new Command.AndOrList(

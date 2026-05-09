@@ -209,6 +209,39 @@ public class ProgramEndToEndTests
         }
     }
 
+    [SkippableFact]
+    public async Task Command_PipeToMore_NonInteractivePassesThroughWithoutHanging()
+    {
+        var (exitCode, stdout, _) = await RunShellAsync(
+            new[] { "-c", "printf 'one\\ntwo\\n' | more" },
+            TimeSpan.FromSeconds(10));
+
+        Assert.Equal(0, exitCode);
+        Assert.Contains("one", stdout);
+        Assert.Contains("two", stdout);
+    }
+
+    [SkippableFact]
+    public async Task Command_MoreFile_NonInteractivePrintsFileWithoutHanging()
+    {
+        var path = Path.Combine(Path.GetTempPath(), $"ps-bash-more-{Guid.NewGuid():N}.txt");
+        await File.WriteAllTextAsync(path, "from more file\n");
+        try
+        {
+            var escaped = path.Replace("\\", "/");
+            var (exitCode, stdout, _) = await RunShellAsync(
+                new[] { "-c", $"more '{escaped}'" },
+                TimeSpan.FromSeconds(10));
+
+            Assert.Equal(0, exitCode);
+            Assert.Contains("from more file", stdout);
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
     // M3: file-arg mode — nonexistent script exits 2 with specific stderr message.
     // Does not require pwsh because the missing-file check runs before worker spawn.
     [Fact]

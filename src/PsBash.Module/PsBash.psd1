@@ -130,6 +130,7 @@ FunctionsToExport = 'Set-BashErrorMode', 'Invoke-ProcessSub', 'Invoke-ProcessSub
                  'Invoke-BashLet', 'Invoke-BashId', 'Invoke-BashShuf',
                  'Invoke-BashBrowse', 'Resolve-BrowseAdapter', 'New-BrowseBinding',
                  'Invoke-BrowseCommand', 'Test-BrowseCommandRequiresConfirmation',
+                 'Invoke-BashMore',
                  'Enable-BashHookPrompt', 'Disable-BashHookPrompt'
 
 # Cmdlets to export from this module, for best performance, do not use wildcards and do not delete the entry, use an empty array if there are no cmdlets to export.
@@ -159,7 +160,7 @@ AliasesToExport = 'echo', 'printf', 'ls', 'cat', 'grep', 'sort', 'head', 'tail',
                 'pushd', 'popd', 'dirs',
                 'yes', 'tput', 'shopt',
                 'kill', 'test', 'let', 'id', 'shuf', 'balias',
-                'install', 'browse'
+                'install', 'browse', 'more'
 
 # DSC resources to export from this module
 # DscResourcesToExport = @()

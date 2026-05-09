@@ -2381,6 +2381,9 @@ public static class PsEmitter
             case "less":
                 result = EmitPassthrough("Invoke-BashLess", args);
                 return true;
+            case "more":
+                result = EmitPassthrough("Invoke-BashMore", args);
+                return true;
             case "echo":
                 result = EmitPassthrough("Invoke-BashEcho", args);
                 return true;

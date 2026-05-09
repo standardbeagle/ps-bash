@@ -6728,6 +6728,57 @@ Describe 'Resolve-BashGlob — Relative Path Resolution' {
     }
 }
 
+Describe 'Invoke-BashMore' {
+    BeforeAll {
+        $moreFile = Join-Path $TestDrive 'more-input.txt'
+        Set-Content -Path $moreFile -Value @('alpha', 'beta', 'gamma')
+    }
+
+    It 'exports more alias pointing to Invoke-BashMore' {
+        $alias = Get-Alias -Name more -Scope Global
+        $alias.Definition | Should -Be 'Invoke-BashMore'
+    }
+
+    It 'passes pipeline text through in non-interactive mode' {
+        $previousInteractive = $env:PSBASH_INTERACTIVE
+        $env:PSBASH_INTERACTIVE = $null
+        try {
+            $results = @(Invoke-BashPrintf "one`ntwo`n" | Invoke-BashMore)
+            $results.Count | Should -Be 2
+            $results[0].BashText | Should -Be 'one'
+            $results[1].BashText | Should -Be 'two'
+            $global:LASTEXITCODE | Should -Be 0
+        } finally {
+            $env:PSBASH_INTERACTIVE = $previousInteractive
+        }
+    }
+
+    It 'passes cat pipeline objects through in non-interactive mode' {
+        $results = @(Invoke-BashCat $moreFile | Invoke-BashMore)
+        $results.Count | Should -Be 3
+        $results[0].BashText | Should -Be 'alpha'
+        $results[1].BashText | Should -Be 'beta'
+        $results[2].BashText | Should -Be 'gamma'
+    }
+
+    It 'reads file operands in non-interactive mode' {
+        $results = @(Invoke-BashMore $moreFile)
+        $results.Count | Should -Be 3
+        $results[0].BashText | Should -Be 'alpha'
+        $results[2].BashText | Should -Be 'gamma'
+    }
+
+    It 'emits bash-style error and non-zero exit for missing files' {
+        $global:LASTEXITCODE = 0
+        $missing = Join-Path $TestDrive 'missing-more.txt'
+        $results = @(Invoke-BashMore $missing 2>&1)
+        $errors = @($results | Where-Object { $_ -is [System.Management.Automation.ErrorRecord] })
+        $errors.Count | Should -Be 1
+        $errors[0].ToString() | Should -Match 'more:.*No such file or directory'
+        $global:LASTEXITCODE | Should -Be 1
+    }
+}
+
 Describe 'Invoke-BashLs — Glob Expansion' {
     BeforeAll {
         $tmpDir = Join-Path $TestDrive 'ls-glob'

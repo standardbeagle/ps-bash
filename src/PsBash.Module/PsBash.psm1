@@ -8112,6 +8112,104 @@ function Invoke-BashLess {
     }
 }
 
+function Invoke-BashMore {
+    [OutputType('PsBash.TextOutput')]
+    param()
+
+    $Arguments = [string[]]$args
+    $pipelineInput = @($input)
+    if ($Arguments -contains '--help') {
+        New-BashObject -BashText "usage: more [FILE...]`nDisplay text one screen at a time. Keys: space next page, enter next line, q quit."
+        return
+    }
+
+    $lines = [System.Collections.Generic.List[string]]::new()
+    $hadError = $false
+
+    $appendText = {
+        param(
+            [AllowEmptyString()]
+            [string]$Text,
+            [bool]$NoTrailingNewline
+        )
+
+        $normalized = $Text -replace "`r`n", "`n"
+        if ($normalized.Length -eq 0) {
+            if (-not $NoTrailingNewline) { $lines.Add('') }
+            return
+        }
+
+        $parts = [System.Text.RegularExpressions.Regex]::Split($normalized, "`n")
+        $limit = $parts.Count
+        if (-not $NoTrailingNewline -and $normalized.EndsWith("`n")) {
+            $limit--
+        }
+
+        for ($i = 0; $i -lt $limit; $i++) {
+            $lines.Add($parts[$i])
+        }
+    }
+
+    if ($pipelineInput.Count -gt 0) {
+        foreach ($item in $pipelineInput) {
+            $isPartial = $null -ne $item.PSObject -and
+                $null -ne $item.PSObject.Properties['NoTrailingNewline'] -and
+                [bool]$item.NoTrailingNewline
+            & $appendText (Get-BashText -InputObject $item) $isPartial
+        }
+    }
+
+    $fileOperands = @($Arguments | Where-Object { $_ -ne '-' -and -not $_.StartsWith('-') })
+    foreach ($filePath in (Resolve-BashGlob -Paths $fileOperands)) {
+        $content = Read-BashFileBytes -Path $filePath -Command 'more'
+        if ($null -eq $content) { $hadError = $true; continue }
+        & $appendText $content $false
+    }
+
+    if ($hadError) {
+        $global:LASTEXITCODE = 1
+        if ($lines.Count -eq 0) { return }
+    }
+
+    $isInteractive = $env:PSBASH_INTERACTIVE -eq '1' -and
+        -not [Console]::IsInputRedirected -and
+        -not [Console]::IsOutputRedirected
+
+    if (-not $isInteractive) {
+        foreach ($line in $lines) {
+            New-BashObject -BashText $line -TypeName 'PsBash.TextOutput'
+        }
+        if (-not $hadError) { $global:LASTEXITCODE = 0 }
+        return
+    }
+
+    $height = [Math]::Max(1, [Console]::WindowHeight - 1)
+    $index = 0
+    $pageSize = $height
+    while ($index -lt $lines.Count) {
+        $target = [Math]::Min($index + $pageSize, $lines.Count)
+        while ($index -lt $target) {
+            [Console]::Out.WriteLine($lines[$index])
+            $index++
+        }
+
+        if ($index -ge $lines.Count) { break }
+
+        [Console]::Out.Write('--More--')
+        $key = [Console]::ReadKey($true)
+        [Console]::Out.Write("`r        `r")
+
+        if ($key.KeyChar -eq 'q' -or $key.Key -eq [ConsoleKey]::Q) { break }
+        if ($key.Key -eq [ConsoleKey]::Enter) {
+            $pageSize = 1
+        } else {
+            $pageSize = $height
+        }
+    }
+
+    if (-not $hadError) { $global:LASTEXITCODE = 0 }
+}
+
 # --- xargs Command ---
 
 function Invoke-BashXargs {
@@ -14554,6 +14652,7 @@ Set-Alias -Name 'shuf'     -Value 'Invoke-BashShuf'     -Force -Scope Global -Op
 Set-Alias -Name 'install'  -Value 'Invoke-BashInstall'  -Force -Scope Global -Option AllScope
 Set-Alias -Name 'browse'   -Value 'Invoke-BashBrowse'   -Force -Scope Global -Option AllScope
 Set-Alias -Name 'less'     -Value 'Invoke-BashLess'     -Force -Scope Global -Option AllScope
+Set-Alias -Name 'more'     -Value 'Invoke-BashMore'     -Force -Scope Global -Option AllScope
 
 # --- Type-level ToString for BashObject types ---
 # Update-TypeData defines ToString() once per type name instead of per-object,
