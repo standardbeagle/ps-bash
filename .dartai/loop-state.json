@@ -1,10 +1,10 @@
 {
   "status": "running",
-  "iterations": 3,
-  "spawns": 3,
+  "iterations": 4,
+  "spawns": 4,
   "started_at": "2026-05-09T15:53:30Z",
-  "last_iteration_at": "2026-05-09T16:37:20Z",
-  "last_subagent": "019e0d91-7261-7802-957d-06eac5c98843",
+  "last_iteration_at": "2026-05-09T16:57:10Z",
+  "last_subagent": "019e0d9c-73b6-7ed0-a8bd-bd5ce224ecc2",
   "loop_task_id": "eZWUCAe8RNXp",
   "dartboard": "Personal/ps-bash",
   "runner_instance_id": "beagle-ab2-33220",
@@ -73,6 +73,21 @@
         "ProgramEndToEndTests non-interactive `printf 'one\\ntwo\\n' | more` and `more file` pass-through without hanging"
       ],
       "completion_summary": "Implemented `more` as a modest module pager with non-interactive pass-through, file operand support through existing file helpers, bash-style missing-file errors, global alias registration, and transpiler mapping for shell use.",
+      "failure_reason": null
+    },
+    {
+      "task_id": "xEj7rmJeYCXH",
+      "iteration": 4,
+      "iteration_task_id": "O01wJMi82NSN",
+      "status": "completed",
+      "files_changed": [
+        "src/PsBash.Host/Program.cs",
+        "src/PsBash.Host.Tests/Server/LauncherPidContractTests.cs"
+      ],
+      "tests_added": [
+        "Launcher PID fallback tests for PSBASH_HOST_PARENT_PID, argument precedence, and invalid environment values"
+      ],
+      "completion_summary": "Completed non-interactive host parent-death watcher wiring by making the host use PSBASH_HOST_PARENT_PID as a fallback when --launcher-pid is absent while preserving explicit argument precedence.",
       "failure_reason": null
     }
   ]

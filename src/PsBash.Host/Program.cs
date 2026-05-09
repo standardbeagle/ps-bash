@@ -46,7 +46,7 @@ internal sealed class Program
         var idleTimeout = IdleShutdown.DefaultTimeout;
         using var idle = new IdleShutdown(cts, idleTimeout);
 
-        int? launcherPid = GetArgInt(args, "--launcher-pid");
+        int? launcherPid = GetNonInteractiveLauncherPid(args);
         using var deathWatcher = ParentDeathWatcher.TryCreate(launcherPid, cts);
 
         await using var server = new HostServer(transport, workerTask, idle);
@@ -89,5 +89,14 @@ internal sealed class Program
     {
         var val = GetArg(args, name);
         return int.TryParse(val, out var n) ? n : null;
+    }
+
+    internal static int? GetNonInteractiveLauncherPid(string[] args)
+    {
+        var launcherPid = GetArgInt(args, "--launcher-pid");
+        if (launcherPid is not null) return launcherPid;
+
+        var envValue = Environment.GetEnvironmentVariable("PSBASH_HOST_PARENT_PID");
+        return int.TryParse(envValue, out var envPid) ? envPid : null;
     }
 }
