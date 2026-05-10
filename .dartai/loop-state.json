@@ -1,10 +1,10 @@
 {
   "status": "running",
-  "iterations": 8,
-  "spawns": 7,
+  "iterations": 9,
+  "spawns": 8,
   "started_at": "2026-05-09T15:53:30Z",
-  "last_iteration_at": "2026-05-09T20:30:00Z",
-  "last_subagent": "iteration-8-self",
+  "last_iteration_at": "2026-05-10T00:30:00Z",
+  "last_subagent": "iteration-9-self",
   "loop_task_id": "eZWUCAe8RNXp",
   "dartboard": "Personal/ps-bash",
   "runner_instance_id": "beagle-ab2-33220",
@@ -181,6 +181,38 @@
       ],
       "plan_adjustments": 2,
       "completion_summary": "Fix Get-PnpDevice pipeline output rendering by routing native PSObjects through a hand-rolled C# table formatter at the SDK worker level, with BashText fast-path streaming preserved.",
+      "failure_reason": null,
+      "fix_task_created": false
+    },
+    {
+      "task_id": "EhB587tyIvP2",
+      "iteration": 9,
+      "iteration_task_id": null,
+      "timestamp": "2026-05-10T00:30:00Z",
+      "source_event": {
+        "loop_id": "eZWUCAe8RNXp",
+        "conversation_id": null,
+        "task_id": "EhB587tyIvP2"
+      },
+      "status": "completed",
+      "phase_completed": "phase-9",
+      "failed_phase": null,
+      "files_changed": [
+        "src/PsBash.Host.Tests/Server/LifecycleScaleAndFaultTests.cs",
+        ".dartai/loop-state.json",
+        ".dartai-locks.json"
+      ],
+      "tests_added": [
+        "ReuseHealthyCurrentBuildHost_StartAsync_DoesNotSpawn",
+        "StaleEndpointWithDeadPid_ClassifiesAsSafeArtifactCleanup",
+        "StaleNamedPipeMetadata_RemovedWithoutTouchingPipeNamespace",
+        "WedgedHost_NeverRepliesHealth_StartAsyncFailsBounded",
+        "ObsoleteBuildHost_ForeignOwner_LauncherRefusesCleanup",
+        "ConcurrentClients_RaceForHealthyHost_ExactlyOneServes",
+        "IdleShutdown_NoConnections_HostExitsAfterIdleSecs"
+      ],
+      "plan_adjustments": 1,
+      "completion_summary": "Added 7 lifecycle scale and fault-injection tests in src/PsBash.Host.Tests/Server/LifecycleScaleAndFaultTests.cs covering all acceptance scenarios: concurrent client race for healthy host, reuse of in-process healthy host (no spawn), foreign-owner sidecar refusal (UnsafeToTouch safety gate), stale endpoint with dead PID (SafeArtifactCleanup + RetireEndpoint + Remove), Windows named-pipe metadata cleanup without pipe-namespace touch, wedged host bounded startup timeout (no infinite hang), and idle shutdown via real ps-bash-host.exe spawn with PSBASH_HOST_IDLE_SECS=1. All tests use isolated PSBASH_IPC_ENDPOINT, CI-safe deadlines, finally-block process and endpoint cleanup. All 7 pass; full host test suite (44 tests) green; no process leaks. Plan adjustment: original task scoped 7 cases — kept all 7 by combining unit-level launcher coverage (Classify/CheckHealth contract) with binary-spawn coverage for idle.",
       "failure_reason": null,
       "fix_task_created": false
     }
