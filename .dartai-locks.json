@@ -1,17 +1,3 @@
 {
-  "claims": {
-    "fufLAAyEZytJ": {
-      "runner_instance_id": "beagle-ab2-claude",
-      "runner_email": "andybrummer@standardbeagle.com",
-      "claimed_at": "2026-05-10T04:10:00Z",
-      "agent_id": "beagle-ab2-claude",
-      "parent_loop_id": "eZWUCAe8RNXp",
-      "purpose": "Loop iteration 12: IPC session identity consistency",
-      "source_event": {
-        "loop_id": "eZWUCAe8RNXp",
-        "task_id": "fufLAAyEZytJ",
-        "conversation_id": null
-      }
-    }
-  }
+  "claims": {}
 }
