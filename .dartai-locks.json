@@ -1,15 +1,15 @@
 {
   "claims": {
-    "318QZbxGO2mA": {
-      "runner_instance_id": "beagle-ab2-15380",
+    "rxVUtqDvjnwW": {
+      "runner_instance_id": "beagle-ab2-claude",
       "runner_email": "andybrummer@standardbeagle.com",
-      "claimed_at": "2026-05-01T17:30:00Z",
-      "agent_id": "beagle-ab2-15380",
-      "parent_loop_id": "dqdK4HkyW4X4",
-      "purpose": "Loop iteration 68: replace raw EXIT sentinel IPC framing",
+      "claimed_at": "2026-05-09T19:25:00Z",
+      "agent_id": "beagle-ab2-claude",
+      "parent_loop_id": "eZWUCAe8RNXp",
+      "purpose": "Loop iteration 7: Ctrl+R history records expanded alias instead of original alias name",
       "source_event": {
-        "loop_id": "dqdK4HkyW4X4",
-        "task_id": "318QZbxGO2mA",
+        "loop_id": "eZWUCAe8RNXp",
+        "task_id": "rxVUtqDvjnwW",
         "conversation_id": null
       }
     }
