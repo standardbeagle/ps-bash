@@ -1,10 +1,10 @@
 {
   "status": "running",
-  "iterations": 10,
-  "spawns": 9,
+  "iterations": 11,
+  "spawns": 10,
   "started_at": "2026-05-09T15:53:30Z",
-  "last_iteration_at": "2026-05-10T03:30:00Z",
-  "last_subagent": "iteration-10-self",
+  "last_iteration_at": "2026-05-10T04:00:00Z",
+  "last_subagent": "iteration-11-resume",
   "loop_task_id": "eZWUCAe8RNXp",
   "dartboard": "Personal/ps-bash",
   "runner_instance_id": "beagle-ab2-33220",
@@ -234,6 +234,33 @@
       "plan_adjustments": 0,
       "completion_summary": null,
       "failure_reason": "Task is stale — its premise contradicts the current architecture. Task acceptance asks to plumb session id through `IpcWorker.StartAsync(..., spawnIfMissing: true)` and `SpawnAndPollAsync()` so a host derived from `--session-id`/`PSBASH_SESSION_ID` reports a matching lock-file. None of those concepts exist in HEAD: (1) `IpcWorker.StartAsync` has no `spawnIfMissing` parameter — it always spawns when no host answers, see src/PsBash.Core/Runtime/IpcWorker.cs:48-62; (2) there is no `SpawnAndPollAsync` — the spawn helper is `SpawnAndWaitAsync` and it polls the socket health endpoint, not a lock file, see IpcWorker.cs:261-314; (3) the host derives its endpoint from `--socket`/`--pipe`/`--ipc-endpoint` or `PSBASH_IPC_ENDPOINT`, not `--session-id`/`PSBASH_SESSION_ID`, see src/PsBash.Host/Program.cs:87-105; (4) `IpcTransportFactory` documents the contract explicitly: 'Session ids do not participate in endpoint naming; lifecycle metadata and ownership rules are specified in docs/specs/host-lifecycle-contract.md' (IpcTransportFactory.cs:7-10). Endpoint coordination already works via PSBASH_IPC_ENDPOINT (commit e36a581) and lifecycle ownership via the metadata sidecar (commit baf6e20). The relevant integration tests this task asked for were also already shipped by iteration 9 (commit de1e96e, EhB587tyIvP2) — LifecycleScaleAndFaultTests covers spawn-or-reuse, ownership refusal, wedged-host bounded timeout, idle shutdown via real binary spawn. Implementing this task as written would re-introduce the session-id/lock-file design that the team deliberately removed. Surfacing as Blocked per karpathy 'push back' and eagle-eye 'no scope creep / no re-introducing removed patterns'. No code changed; nothing committed. Recommend: close as obsolete or rewrite acceptance against the socket-direct + metadata-sidecar architecture (e.g. 'verify PSBASH_IPC_ENDPOINT propagates from launcher env into spawned host via inherited environment').",
+      "fix_task_created": false
+    },
+    {
+      "task_id": "Zjvk1UwhQiHG",
+      "iteration": 11,
+      "iteration_task_id": null,
+      "timestamp": "2026-05-10T04:00:00Z",
+      "source_event": {
+        "loop_id": "eZWUCAe8RNXp",
+        "conversation_id": null,
+        "task_id": "Zjvk1UwhQiHG"
+      },
+      "status": "completed",
+      "phase_completed": "phase-9",
+      "failed_phase": null,
+      "files_changed": [
+        "src/PsBash.Host/Program.cs",
+        "src/PsBash.Host.Tests/Server/LauncherPidContractTests.cs"
+      ],
+      "tests_added": [
+        "NonInteractiveLauncherPid_AcceptsEqualsFormFromActualLauncherContract",
+        "NonInteractiveLauncherPid_EqualsFormOverridesEnvironmentFallback",
+        "NonInteractiveLauncherPid_InvalidEqualsFormReturnsNull"
+      ],
+      "plan_adjustments": 0,
+      "completion_summary": "Fixed host argument parsing to accept the single-token equals form (--launcher-pid=<pid>) emitted by the actual launcher in addition to the two-token form. The previous implementation only accepted the two-token form, silently disarming the parent-death watcher in production. Updated GetArg in Program.cs to handle both forms; added 3 regression tests in LauncherPidContractTests covering equals-form acceptance, equals-form precedence over PSBASH_HOST_PARENT_PID env fallback, and invalid equals-form rejection. Targeted test filter (LauncherPidContractTests, 6 tests) all green. PSBASH_HOST_PARENT_PID env fallback (shipped iter 4 per xEj7rmJeYCXH) still verified.",
+      "failure_reason": null,
       "fix_task_created": false
     }
   ]

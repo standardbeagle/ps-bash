@@ -104,10 +104,19 @@ internal sealed class Program
         return (IpcTransportFactory.CreateDefault(ipcEndpoint), scheme, endpoint);
     }
 
+    // Accepts both `--name value` (two-token) and `--name=value` (single-token,
+    // equals form). The actual launcher (src/PsBash.Shell/Program.cs) emits the
+    // equals form for --launcher-pid, so the two-token-only variant silently
+    // disarmed the parent-death watcher in production. See task Zjvk1UwhQiHG.
     private static string? GetArg(string[] args, string name)
     {
-        for (int i = 0; i < args.Length - 1; i++)
-            if (args[i] == name) return args[i + 1];
+        var prefix = name + "=";
+        for (int i = 0; i < args.Length; i++)
+        {
+            if (args[i] == name && i + 1 < args.Length) return args[i + 1];
+            if (args[i].StartsWith(prefix, StringComparison.Ordinal))
+                return args[i].Substring(prefix.Length);
+        }
         return null;
     }
 
