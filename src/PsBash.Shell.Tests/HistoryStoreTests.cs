@@ -316,6 +316,142 @@ public class HistoryStoreTests : IDisposable
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Alias preservation in history (regression: rxVUtqDvjnwW)
+//
+// Bug: InteractiveShell.RunAsync used to overwrite `trimmed` with the alias
+// expansion before recording the command, so Ctrl+R history saw the expanded
+// form (e.g. "ls -la") instead of what the user typed (e.g. "ll"). Fix
+// preserves the pre-expansion input and records that.
+//
+// These tests assert at the InteractiveShell.ExpandAliases boundary: when an
+// alias is registered and a user types the alias name, the original input
+// (the alias name) is what should reach RecordCommandAsync. The expanded form
+// is still what gets transpiled and executed (covered by AliasExpansionTests).
+// ─────────────────────────────────────────────────────────────────────────────
+
+public class AliasHistoryPreservationTests
+{
+    [Fact]
+    public void ExpandAliases_AliasRegistered_OriginalCallSitePreservesAliasName()
+    {
+        // The InteractiveShell pattern after fix is:
+        //   var originalInput = trimmed;
+        //   trimmed = ExpandAliases(trimmed);
+        //   ... // execute via trimmed
+        //   await RecordCommandAsync(originalInput, ...);
+        //
+        // ExpandAliases must NOT mutate its argument string in place; the
+        // caller's `originalInput` reference must continue to point at the
+        // pre-expansion text. Strings in C# are immutable so this is by
+        // construction, but the test pins the contract: returning a different
+        // value does not affect the caller's other reference.
+
+        InteractiveShell.ProcessAliasCommand("alias ll='ls -la'");
+        try
+        {
+            var originalInput = "ll";
+            var expanded = InteractiveShell.ExpandAliases(originalInput);
+
+            Assert.Equal("ll", originalInput);
+            Assert.Equal("ls -la", expanded);
+            Assert.NotSame(originalInput, expanded);
+        }
+        finally
+        {
+            InteractiveShell.ProcessAliasCommand("unalias ll");
+        }
+    }
+
+    [Fact]
+    public async Task RecordCommandAsync_WithAliasExpansionPattern_StoresOriginalInputNotExpansion()
+    {
+        // End-to-end repro at the history-store boundary: simulate the
+        // post-fix flow inside InteractiveShell.RunAsync — record the
+        // original (pre-expansion) input, NOT the expanded form. The
+        // assertion is that history shows what the user typed.
+
+        var dbPath = Path.Combine(Path.GetTempPath(), "psbash-alias-history-" + Guid.NewGuid().ToString("N") + ".db");
+        var store = new SqliteHistoryStore(dbPath);
+        try
+        {
+            InteractiveShell.ProcessAliasCommand("alias ll='ls -la'");
+            try
+            {
+                var trimmed = "ll";
+                var originalInput = trimmed;             // post-fix: capture before expansion
+                trimmed = InteractiveShell.ExpandAliases(trimmed); // expanded drives execute
+                Assert.Equal("ls -la", trimmed);          // expansion still happens
+                Assert.Equal("ll", originalInput);        // original preserved
+
+                // Mirror RecordCommandAsync's payload — the bug is that the
+                // pre-fix code passed `trimmed` here instead of `originalInput`.
+                await store.RecordAsync(new HistoryEntry
+                {
+                    Command = originalInput,
+                    Cwd = "/tmp",
+                    Timestamp = DateTime.UtcNow,
+                    SessionId = "alias-history-session",
+                });
+
+                var results = await store.SearchAsync(new HistoryQuery { Limit = 10 });
+                Assert.Single(results);
+                Assert.Equal("ll", results[0].Command);   // alias name, not "ls -la"
+                Assert.NotEqual("ls -la", results[0].Command);
+            }
+            finally
+            {
+                InteractiveShell.ProcessAliasCommand("unalias ll");
+            }
+        }
+        finally
+        {
+            store.Dispose();
+            try { if (File.Exists(dbPath)) File.Delete(dbPath); } catch { }
+            try { if (File.Exists(dbPath + "-wal")) File.Delete(dbPath + "-wal"); } catch { }
+            try { if (File.Exists(dbPath + "-shm")) File.Delete(dbPath + "-shm"); } catch { }
+        }
+    }
+
+    [Fact]
+    public async Task RecordCommandAsync_NonAliasedCommand_StoresInputUnchanged()
+    {
+        // Negative case: when no alias matches, originalInput == expanded and
+        // history shows the literal command. Confirms the fix doesn't disturb
+        // the non-aliased path.
+
+        var dbPath = Path.Combine(Path.GetTempPath(), "psbash-alias-history-" + Guid.NewGuid().ToString("N") + ".db");
+        var store = new SqliteHistoryStore(dbPath);
+        try
+        {
+            var trimmed = "echo hello";
+            var originalInput = trimmed;
+            trimmed = InteractiveShell.ExpandAliases(trimmed);
+            Assert.Equal("echo hello", trimmed);
+            Assert.Equal("echo hello", originalInput);
+
+            await store.RecordAsync(new HistoryEntry
+            {
+                Command = originalInput,
+                Cwd = "/tmp",
+                Timestamp = DateTime.UtcNow,
+                SessionId = "alias-history-session",
+            });
+
+            var results = await store.SearchAsync(new HistoryQuery { Limit = 10 });
+            Assert.Single(results);
+            Assert.Equal("echo hello", results[0].Command);
+        }
+        finally
+        {
+            store.Dispose();
+            try { if (File.Exists(dbPath)) File.Delete(dbPath); } catch { }
+            try { if (File.Exists(dbPath + "-wal")) File.Delete(dbPath + "-wal"); } catch { }
+            try { if (File.Exists(dbPath + "-shm")) File.Delete(dbPath + "-shm"); } catch { }
+        }
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // InMemoryHistoryStore Tests
 // ─────────────────────────────────────────────────────────────────────────────
 

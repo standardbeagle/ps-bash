@@ -102,6 +102,11 @@ public static class InteractiveShell
                 if (trimmed.Length == 0)
                     continue;
 
+                // Preserve the pre-expansion input for history (Ctrl+R) and
+                // suggester keying so the user sees what they typed (the alias
+                // name) rather than the expansion. The expanded form still
+                // drives transpile + execute below.
+                var originalInput = trimmed;
                 trimmed = ExpandAliases(trimmed);
 
                 string pwshCommand;
@@ -152,7 +157,7 @@ public static class InteractiveShell
                 finally
                 {
                     stopwatch.Stop();
-                    await RecordCommandAsync(trimmed, exitCodeResult, stopwatch.ElapsedMilliseconds);
+                    await RecordCommandAsync(originalInput, exitCodeResult, stopwatch.ElapsedMilliseconds);
                 }
             }
             catch (IOException)
