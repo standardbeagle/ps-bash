@@ -1,3 +1,17 @@
 {
-  "claims": {}
+  "claims": {
+    "7mxWC3dHky3U": {
+      "runner_instance_id": "beagle-ab2-claude",
+      "runner_email": "andybrummer@standardbeagle.com",
+      "claimed_at": "2026-05-10T05:30:00Z",
+      "agent_id": "beagle-ab2-claude",
+      "parent_loop_id": "eZWUCAe8RNXp",
+      "purpose": "Loop iteration 15: T10b pipeline-object classifier",
+      "source_event": {
+        "loop_id": "eZWUCAe8RNXp",
+        "task_id": "7mxWC3dHky3U",
+        "conversation_id": null
+      }
+    }
+  }
 }
