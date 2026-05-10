@@ -1,17 +1,8 @@
 name: Canary Tests
 
 # Per qa-rubric Directive 8: canary suite catches mode-only regressions on
-# every PR, in under 60s per mode per platform. T11 (architecture migration)
-# extends this to two transports — the in-process IPC host (IpcWorker) and
-# the legacy subprocess pwsh (PwshWorker fallback). Each platform job runs
-# the canary suite twice, once per transport, so a regression in either path
-# trips CI before merge.
-#
-# Transport selection happens in WorkerFactory.CreateAsync via env:
-#   transport=ipc        → default (no env override; ps-bash-host is built
-#                          alongside the launcher and gets resolved).
-#   transport=subprocess → PSBASH_DISABLE_HOST=1 (factory short-circuits
-#                          past IpcWorker into PwshWorker).
+# every PR, in under 60s per platform. Each platform job builds both binaries
+# and runs the canary suite against the host-backed launcher path.
 
 on:
   push:
@@ -27,10 +18,9 @@ jobs:
     strategy:
       matrix:
         os: [ubuntu-latest, windows-latest, macos-latest]
-        transport: [ipc, subprocess]
       fail-fast: false
     runs-on: ${{ matrix.os }}
-    name: canary (${{ matrix.os }}, ${{ matrix.transport }})
+    name: canary (${{ matrix.os }})
     steps:
       - uses: actions/checkout@v4
 
@@ -43,30 +33,23 @@ jobs:
         shell: bash
         run: dotnet build src/PsBash.Shell -c Release
 
-      # Build the host so the IPC transport has a binary to spawn. The
-      # subprocess matrix leg also benefits: even with PSBASH_DISABLE_HOST=1,
-      # any test that resolves the host path independently (e.g. for a sanity
-      # check) won't fail with a missing binary.
+      # Build the host so the launcher has a binary to spawn.
       - name: Build ps-bash-host binary
         shell: bash
         run: dotnet build src/PsBash.Host -c Release
 
-      - name: Run canary tests (${{ matrix.transport }})
+      - name: Run canary tests
         shell: bash
-        env:
-          # Subprocess leg disables host discovery in WorkerFactory; ipc leg
-          # leaves the env unset so the factory prefers in-process IPC.
-          PSBASH_DISABLE_HOST: ${{ matrix.transport == 'subprocess' && '1' || '' }}
         run: |
           dotnet test src/PsBash.Canary.Tests \
             --configuration Release \
-            --logger "trx;LogFileName=canary-${{ matrix.transport }}.trx" \
+            --logger "trx;LogFileName=canary.trx" \
             --results-directory TestResults
 
       - name: Upload canary test artifacts
         if: failure()
         uses: actions/upload-artifact@v4
         with:
-          name: canary-test-results-${{ matrix.os }}-${{ matrix.transport }}
+          name: canary-test-results-${{ matrix.os }}
           path: TestResults/**/*.trx
           if-no-files-found: ignore

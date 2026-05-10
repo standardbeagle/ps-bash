@@ -9,17 +9,9 @@ namespace PsBash.Differential.Tests;
 public class ProcessSubstitutionDifferentialTests
 {
     [SkippableFact]
-    public async Task Differential_ProcessSub_DiffSeqIdentical_WorksWithPwshWorker()
+    public async Task Differential_ProcessSub_DiffSeqIdentical_MatchesBash()
     {
         await AssertOracle.EqualAsync(
-            "diff <(seq 1 10) <(seq 1 10)",
-            timeout: TimeSpan.FromSeconds(20));
-    }
-
-    [SkippableFact]
-    public async Task Differential_ProcessSub_DiffSeqIdentical_WorksWithIpcWorker()
-    {
-        await AssertOracle.EqualWithHostAsync(
             "diff <(seq 1 10) <(seq 1 10)",
             timeout: TimeSpan.FromSeconds(20));
     }

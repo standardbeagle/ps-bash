@@ -202,7 +202,7 @@ $script:BashFlagSpecs = @{
 
 **Implementation Notes:**
 
-- Must query the `PwshWorker` to access `BashFlagSpecs` from the PowerShell runtime
+- Must query the host-backed worker to access `BashFlagSpecs` from the PowerShell runtime
 - Cache the specs per worker session to avoid repeated queries
 - Handle both short flags (`-x`) and long flags (`--xxx`)
 - For flags with values (e.g., `--color=always`), the value completion is handled separately

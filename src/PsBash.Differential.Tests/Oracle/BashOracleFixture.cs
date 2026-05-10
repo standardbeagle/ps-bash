@@ -125,9 +125,7 @@ public sealed class BashOracleFixture
                 extraEnv: new Dictionary<string, string>
                 {
                     ["PSBASH_DEBUG"] = "1",
-                    // Skip host discovery: tests run -c one-shots; no persistent host is running,
-                    // and waiting for the 5 s spawn timeout per test inflates suite time ~5× .
-                    ["PSBASH_DISABLE_HOST"] = "1",
+                    ["PSBASH_TIMEOUT"] = "15",
                 });
 
             await Task.WhenAll(bashTask, psBashTask).ConfigureAwait(false);

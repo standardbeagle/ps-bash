@@ -84,7 +84,7 @@ Input
       ───→ Process.Start() directly on the console
 ```
 
-**Transpiled commands** go through `BashParser → PsEmitter → PwshWorker`. They run inside the persistent PowerShell session, so variables and working directory persist between commands.
+**Transpiled commands** go through `BashParser -> PsEmitter -> IpcWorker -> ps-bash-host`. They run inside the persistent PowerShell runspace, so variables and working directory persist between commands.
 
 **External tools** bypass the worker entirely. They get the real console — stdin, stdout, Ctrl+C, ANSI colors, raw mode, alternate screen buffer. This is why `claude`, `copilot`, and `git` work interactively.
 

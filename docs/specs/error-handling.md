@@ -5,7 +5,7 @@ matches real bash behavior, and where PowerShell semantics intentionally diverge
 
 Source files:
 - `src/PsBash.Module/PsBash.psm1` -- runtime error functions and file I/O helpers
-- `src/PsBash.Core/Runtime/PwshWorker.cs` -- exit code protocol between worker and host
+- `src/PsBash.Core/Runtime/Ipc/HostProtocol.cs` -- exit code protocol between worker and host
 - `src/PsBash.Core/Parser/PsEmitter.cs` -- `set -e`/`-u`/`-x` translation
 
 ---
@@ -139,7 +139,7 @@ Exit codes flow from the runtime through the worker to the C# host:
 Invoke-Bash* sets $global:LASTEXITCODE = N
   → worker eval loop reads $LASTEXITCODE after each command
   → worker writes "<<<EXIT:N>>>" to stdout
-  → PwshWorker.cs parses the marker and returns the exit code
+  → the host protocol parser reads the marker and returns the exit code
 ```
 
 The worker script (`ps-bash-worker.ps1`) wraps each eval in try/catch:
@@ -156,8 +156,8 @@ try {
 }
 ```
 
-On the C# side, `PwshWorker` reads stdout lines and detects the `<<<EXIT:N>>>`
-marker to extract the exit code:
+On the C# side, the worker protocol reader detects the `<<<EXIT:N>>>` marker
+to extract the exit code:
 
 ```csharp
 if (line.StartsWith("<<<EXIT:", StringComparison.Ordinal)

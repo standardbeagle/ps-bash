@@ -36,9 +36,9 @@ This document provides a high-level overview of the ps-bash interactive shell ar
 │                               │ PowerShell script                                 │
 │                               ▼                                                   │
 │  ┌─────────────────────────────────────────────────────────────────────────────┐   │
-│  │                           PwshWorker                                         │   │
+│  │                           Host Worker                                        │   │
 │  │  ┌──────────────────────────────────────────────────────────────────────┐  │   │
-│  │  │  pwsh process (stdin/stdout IPC)                                       │  │   │
+│  │  │  ps-bash-host process (IPC protocol)                                  │  │   │
 │  │  │                                                                        │  │   │
 │  │  │  Embedded: PsBash.psm1 runtime module                                  │  │   │
 │  │  │    ├── 76 Invoke-Bash* functions                                      │  │   │
@@ -82,7 +82,7 @@ This document provides a high-level overview of the ps-bash interactive shell ar
 | **BashLexer** | Tokenizes bash input into `BashToken[]` | `Tokenize()` |
 | **BashParser** | Builds AST from tokens (Oils-style) | `Parse()` → `Command` |
 | **PsEmitter** | Transpiles AST to PowerShell script | `Emit(Command)` → string |
-| **PwshWorker** | Manages pwsh process, executes transpiled scripts, IPC | `ExecuteAsync()`, `QueryAsync()` |
+| **IpcWorker** | Manages host process communication and executes transpiled scripts | `ExecuteAsync()`, `QueryAsync()` |
 | **PluginLoader** | Discovers and loads plugin DLLs | `LoadPlugins(config, pluginDir)` |
 | **ShellConfig** | Configuration for plugins and features | `HistoryStores`, `CompletionProviders`, flags |
 
@@ -190,10 +190,10 @@ InteractiveShell.RunAsync()
     │         └── PsEmitter.Emit(AST) → PowerShell script
     │
     ▼
-PwshWorker.ExecuteAsync(powershellScript)
+IpcWorker.ExecuteAsync(powershellScript)
     │
-    ├──► Write to pwsh stdin
-    ├──► Read output from pwsh stdout
+    ├──► Send request to ps-bash-host
+    ├──► Read response from the host protocol
     └──► Return exit code
     │
     ▼
@@ -212,10 +212,10 @@ ps-bash process starts
     ▼
 InteractiveShell.RunAsync()
     │
-    ├──► PwshWorker.StartAsync()
-    │     ├── Extract embedded PsBash.psm1 to temp
-    │     ├── Spawn pwsh process with worker script
-    │     └── Establish stdin/stdout IPC
+    ├──► IpcWorker.StartAsync()
+    │     ├── Resolve ps-bash-host beside the launcher
+    │     ├── Spawn the host process
+    │     └── Establish IPC with the host server
     │
     ├──► SourceRcFileAsync() → ~/.psbashrc transpiled and executed
     │
@@ -342,7 +342,8 @@ src/PsBash.Core/Transpiler/
 └── BashTranspiler.cs        # Public API: Parse/Transpile
 
 src/PsBash.Core/Runtime/
-├── PwshWorker.cs            # pwsh process management
+├── IpcWorker.cs             # Host process client
+├── Ipc/                     # Host protocol types
 └── ModuleExtractor.cs       # Embedded resource extraction
 
 src/PsBash.Module/

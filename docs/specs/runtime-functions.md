@@ -5,17 +5,17 @@ Unix command emulation for the ps-bash transpiler.
 
 ## Architecture
 
-The psm1 module is loaded into a `pwsh` worker process managed by `PwshWorker`. Bash
-commands transpiled by `PsEmitter` into PowerShell are evaluated via `Invoke-Expression`
-inside this worker. The module provides `Invoke-Bash*` functions that emulate Unix
-commands, and registers global aliases (e.g. `ls` -> `Invoke-BashLs`) so transpiled code
-reads naturally.
+The psm1 module is loaded into the `ps-bash-host` runspace managed by `SdkWorker`.
+Bash commands transpiled by `PsEmitter` into PowerShell are evaluated via
+`Invoke-Expression` inside this worker. The module provides `Invoke-Bash*`
+functions that emulate Unix commands, and registers global aliases (e.g. `ls` ->
+`Invoke-BashLs`) so transpiled code reads naturally.
 
 Key layers:
 
 1. **PsEmitter** (C#) -- transpiles bash AST nodes into PowerShell expressions.
-2. **PwshWorker** (C#) -- spawns a `pwsh` process, imports the module, and evaluates
-   transpiled expressions over stdin/stdout.
+2. **SdkWorker** (C#) -- owns the PowerShell runspace, imports the module, and
+   evaluates transpiled expressions on behalf of the host server.
 3. **PsBash.psm1** (PowerShell) -- the runtime library providing 76 `Invoke-Bash*`
    functions (75 commands + 1 internal helper), the BashObject model, escape handling,
    glob expansion, and tab completion.
@@ -304,14 +304,12 @@ directory. A `.extracted` marker file signals that extraction completed successf
 Cache invalidation: if the assembly file's `LastWriteTimeUtc` is newer than the
 marker's timestamp, the marker is deleted and files are re-extracted on next access.
 
-### PwshWorker
+### Host Worker
 
-Path: `ps-bash/module-{version}/ps-bash-worker.ps1`
+Path: `ps-bash/module-{version}/`
 
-Uses the same version-stamped directory as `ModuleExtractor`. The worker script is
-extracted from an embedded resource. Timestamp-based invalidation compares the script
-file's `LastWriteTimeUtc` against the assembly's; if the assembly is newer, the script
-is re-extracted.
+Uses the same version-stamped directory as `ModuleExtractor`. The host process
+loads the extracted module into its runspace before executing transpiled scripts.
 
 ### Invoke-ProcessSub
 

@@ -40,9 +40,9 @@ bool unixPaths = shellArgs.UnixPaths
     ?? Environment.GetEnvironmentVariable("PSBASH_UNIX_PATHS") is "1" or "true";
 Environment.SetEnvironmentVariable("PSBASH_UNIX_PATHS", unixPaths ? "1" : "0");
 
-// All execution goes through ps-bash-host over IPC. There is no in-process
-// pwsh fallback: if the host binary is missing or fails to start, the
-// invocation exits non-zero with the underlying error.
+// All execution goes through ps-bash-host over IPC. If the host binary is
+// missing or fails to start, the invocation exits non-zero with the underlying
+// error.
 Func<Task<IWorker>> workerFactory = async () =>
     await WorkerFactory.CreateAsync().ConfigureAwait(false);
 

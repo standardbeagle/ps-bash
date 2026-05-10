@@ -11,8 +11,7 @@ public static class WorkerFactory
 {
     /// <summary>
     /// Connect to (or spawn) <c>ps-bash-host</c> and return a worker that
-    /// proxies commands to it. The worker is the only execution path — there
-    /// is no in-process pwsh fallback.
+    /// proxies commands to it. The worker is the only execution path.
     /// </summary>
     public static async Task<IWorker> CreateAsync(CancellationToken ct = default)
     {
