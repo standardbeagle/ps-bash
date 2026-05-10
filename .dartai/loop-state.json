@@ -1,10 +1,10 @@
 {
   "status": "running",
-  "iterations": 12,
-  "spawns": 11,
+  "iterations": 13,
+  "spawns": 12,
   "started_at": "2026-05-09T15:53:30Z",
-  "last_iteration_at": "2026-05-10T04:15:00Z",
-  "last_subagent": "iteration-12-task-executor",
+  "last_iteration_at": "2026-05-10T04:50:00Z",
+  "last_subagent": "iteration-13-task-executor",
   "loop_task_id": "eZWUCAe8RNXp",
   "dartboard": "Personal/ps-bash",
   "runner_instance_id": "beagle-ab2-33220",
@@ -280,6 +280,31 @@
       "tests_added": [],
       "plan_adjustments": 0,
       "completion_summary": "Cancelled per scope_guidance branch (a). Task references obsolete session-id IPC model. Verified WorkerFactory.cs has no ResolveSessionId() (only CreateAsync + ResolveHostBinary). IpcTransportFactory.cs:7-10 states 'Session ids do not participate in endpoint naming.' Architecture is now socket-direct via PSBASH_IPC_ENDPOINT (commit e36a581) + metadata sidecar (commit baf6e20). Same finding as iter 10 (i6FV5cuZAnfb). No code changes; Dart status set to Cancelled.",
+      "failure_reason": null,
+      "fix_task_created": false
+    },
+    {
+      "task_id": "faEVA4GJU2bS",
+      "iteration": 13,
+      "iteration_task_id": null,
+      "timestamp": "2026-05-10T04:50:00Z",
+      "source_event": {
+        "loop_id": "eZWUCAe8RNXp",
+        "conversation_id": null,
+        "task_id": "faEVA4GJU2bS"
+      },
+      "status": "completed",
+      "phase_completed": "phase-9",
+      "failed_phase": null,
+      "files_changed": [
+        ".github/workflows/build.yml",
+        ".github/workflows/canary.yml",
+        ".github/workflows/publish.yml",
+        "scripts/test.sh"
+      ],
+      "tests_added": [],
+      "plan_adjustments": 0,
+      "completion_summary": "T11 build/publish/CI hardening for the two-binary release. AOT publish of PsBash.Shell in build.yml + publish.yml gated by /warnaserror so any trimming/reflection regression fails the build (host stays non-AOT — Microsoft.PowerShell.SDK is not AOT-compatible). canary.yml matrix expanded with transport=[ipc, subprocess] across Win/Linux/macOS so every PR exercises both the in-process IPC host (default) and the legacy PwshWorker fallback (PSBASH_DISABLE_HOST=1); ps-bash-host built before canary so the IPC leg has a binary to spawn. scripts/test.sh documents PSBASH_DISABLE_HOST alongside existing PSBASH_HOST override. scripts/pack-local.ps1 already bundles ps-bash + ps-bash-host side-by-side into dist/bin/ — verified, no change needed. Local sanity: `bash -n scripts/test.sh` OK, all three workflow YAMLs parse clean. Deferred to actual CI workflow run on push: AOT publish on all three RIDs with zero warnings, canary green on all 6 (os, transport) combinations, release zip extract+run without pwsh installed. Resumed iter 13 from prior in-flight executor that terminated mid-AOT-publish; finalized + committed as fc9ceb1.",
       "failure_reason": null,
       "fix_task_created": false
     }
