@@ -1,3 +1,17 @@
 {
-  "claims": {}
+  "claims": {
+    "BsgwTbCEPoQO": {
+      "runner_instance_id": "beagle-ab2-claude",
+      "runner_email": "andybrummer@standardbeagle.com",
+      "claimed_at": "2026-05-10T05:00:00Z",
+      "agent_id": "beagle-ab2-claude",
+      "parent_loop_id": "eZWUCAe8RNXp",
+      "purpose": "Loop iteration 14: T10 process substitution 3-path classifier",
+      "source_event": {
+        "loop_id": "eZWUCAe8RNXp",
+        "task_id": "BsgwTbCEPoQO",
+        "conversation_id": null
+      }
+    }
+  }
 }
