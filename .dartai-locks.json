@@ -1,3 +1,17 @@
 {
-  "claims": {}
+  "claims": {
+    "cWSm4Q3quw63": {
+      "runner_instance_id": "beagle-ab2-claude",
+      "runner_email": "andybrummer@standardbeagle.com",
+      "claimed_at": "2026-05-09T19:55:00Z",
+      "agent_id": "beagle-ab2-claude",
+      "parent_loop_id": "eZWUCAe8RNXp",
+      "purpose": "Loop iteration 8: Fix Get-PnpDevice pipeline output rendering",
+      "source_event": {
+        "loop_id": "eZWUCAe8RNXp",
+        "task_id": "cWSm4Q3quw63",
+        "conversation_id": null
+      }
+    }
+  }
 }
