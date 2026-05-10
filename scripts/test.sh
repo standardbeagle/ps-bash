@@ -6,7 +6,7 @@
 # Coverlet places output under coverage/raw/<guid>/coverage.cobertura.xml.
 # If reportgenerator is installed, an HTML report is generated in coverage/report/.
 #
-# Two-binary host environment variable:
+# Two-binary host environment variables:
 #
 #   PSBASH_HOST=/path/to/ps-bash-host
 #       Override the host binary the launcher resolves. Useful when testing
@@ -14,6 +14,17 @@
 #       the differential suite against a non-default host build (e.g. a
 #       debug publish in another worktree). Default resolution looks beside
 #       the launcher executable.
+#
+#   PSBASH_DISABLE_HOST=1
+#       Force the launcher onto the legacy subprocess `pwsh` transport
+#       (PwshWorker). Equivalent to running the suite as if no ps-bash-host
+#       binary were installed. Use to validate the fallback path or to bypass
+#       a wedged host while debugging. Default (unset / 0) lets WorkerFactory
+#       prefer the in-process IPC transport when ps-bash-host is reachable.
+#
+# Pass either via the caller's environment, e.g.
+#   PSBASH_DISABLE_HOST=1 ./scripts/test.sh --filter Canary
+#   PSBASH_HOST=$PWD/dist/bin/ps-bash-host ./scripts/test.sh
 
 set -euo pipefail
 

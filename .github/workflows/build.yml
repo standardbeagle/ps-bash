@@ -50,8 +50,11 @@ jobs:
         continue-on-error: true
         run: dotnet test --no-build -c Release --filter "Category=Integration"
 
+      # /warnaserror gates AOT regressions on PRs (matches publish.yml). Any
+      # new trimming/reflection warning fails the build instead of leaking
+      # to the next release.
       - name: Publish AOT launcher
-        run: dotnet publish src/PsBash.Shell -r ${{ matrix.rid }} --self-contained true -p:PublishAot=true -c Release -o dist/${{ matrix.rid }}
+        run: dotnet publish src/PsBash.Shell -r ${{ matrix.rid }} --self-contained true -p:PublishAot=true /warnaserror -c Release -o dist/${{ matrix.rid }}
 
       # Host is non-AOT — publish self-contained so all SDK runtime assets are present.
       - name: Publish ps-bash-host

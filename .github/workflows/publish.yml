@@ -46,8 +46,14 @@ jobs:
         with:
           dotnet-version: '10.0.x'
 
+      # AOT publish is gated by /warnaserror per T11 acceptance: any AOT
+      # warning (trimming, reflection, generic ILC fallback) must fail the
+      # release build, not slip through as a runtime breakage on a customer
+      # platform. The launcher is the only AOT-published binary; the host is
+      # non-AOT (Microsoft.PowerShell.SDK is not AOT-compatible) and is
+      # published self-contained without warnaserror.
       - name: Publish AOT launcher binary
-        run: dotnet publish src/PsBash.Shell -c Release -r ${{ matrix.rid }} --self-contained true /p:PublishAot=true /p:StripSymbols=true -o ./publish/launcher
+        run: dotnet publish src/PsBash.Shell -c Release -r ${{ matrix.rid }} --self-contained true /p:PublishAot=true /p:StripSymbols=true /warnaserror -o ./publish/launcher
 
       # Host is non-AOT — Microsoft.PowerShell.SDK is not AOT-compatible.
       # Self-contained so the SDK runtime assets ship inside the host folder.
