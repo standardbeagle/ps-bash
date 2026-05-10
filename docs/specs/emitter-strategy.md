@@ -290,6 +290,32 @@ Maps bash special variables to PowerShell equivalents:
 
 While the emitter's primary job is to forward arguments to runtime functions, certain commands require special mention due to bash-specific syntax that needs runtime-level translation:
 
+### Process Substitution Classifier
+
+The default `<(...)` and `>(...)` path emits `Invoke-ProcessSub`, which captures
+producer output into an ephemeral temp file and passes that file path to the
+consumer. This remains the safe fallback for seekable or multi-file consumers.
+
+Some mapped commands can treat a single file operand exactly like stdin. For
+those consumers, the emitter routes one pure process-substitution operand through
+`Invoke-ProcessSubPipeline` so producer objects flow directly into the mapped
+runtime command instead of being serialized to a temp file.
+
+| Consumer cmdlet | Route for one `<(...)` operand | Reason |
+|-----------------|--------------------------------|--------|
+| `Invoke-BashHead` | `Invoke-ProcessSubPipeline` | stdin-substitutable stream consumer |
+| `Invoke-BashTail` | `Invoke-ProcessSubPipeline` | stdin-substitutable stream consumer |
+| `Invoke-BashSort` | `Invoke-ProcessSubPipeline` | stdin-substitutable stream consumer |
+| `Invoke-BashUniq` | `Invoke-ProcessSubPipeline` | stdin-substitutable stream consumer |
+| `Invoke-BashWc` | `Invoke-ProcessSubPipeline` | stdin-substitutable stream consumer |
+| `Invoke-BashDiff` | `Invoke-ProcessSub` | multi-argument, seekable file consumer |
+| `Invoke-BashGrep` with `-f <(...)` | `Invoke-ProcessSub` | process substitution is a pattern file, not stdin |
+| All other mapped commands | `Invoke-ProcessSub` | fallback until explicitly classified |
+
+The pipeline-object route is intentionally narrow: it requires exactly one pure
+process-substitution word for a classified consumer. Multiple process
+substitutions stay on the temp-file path.
+
 ### `sed` Backreferences
 
 The `sed` command uses backreferences in the replacement string (`\1`, `\2`, ..., `\9` and `\&` for the entire match). PowerShell's regex engine uses `$1`, `$2`, ..., `$9` and `$0` instead.

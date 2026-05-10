@@ -1839,9 +1839,9 @@ public static class PsEmitter
     // T10 status (parent BsgwTbCEPoQO):
     //   step 1+2 (string-capture): DONE — see EmitSimple `source/.` branch
     //                              that emits Invoke-ProcessSubSource directly.
-    //   step 3+4 (pipeline-object): TODO T10b (Dart 7mxWC3dHky3U) — when consumer
-    //                               IsKnownCommand and stdin-substitutable, route
-    //                               here to (Invoke-ProcessSubPipeline { ... }).
+    //   step 3+4 (pipeline-object): DONE — EmitPassthrough classifies a single
+    //                               stdin-substitutable mapped-command operand as
+    //                               (Invoke-ProcessSubPipeline { ... }).
     //   step 5+6 (bridge):          TODO T10c (Dart JCt5JMwdSPjV) — when running
     //                               in-host with external consumer, route to
     //                               Invoke-ProcessSubBridge over an anonymous pipe.
@@ -1852,6 +1852,12 @@ public static class PsEmitter
     {
         string inner = Emit((Command)ps.Body);
         return $"(Invoke-ProcessSub {{ {inner} }})";
+    }
+
+    private static string EmitProcessSubPipeline(WordPart.ProcessSub ps)
+    {
+        string inner = Emit((Command)ps.Body);
+        return $"(Invoke-ProcessSubPipeline {{ {inner} }})";
     }
 
     private static string EmitArithSub(WordPart.ArithSub arith)
@@ -2882,10 +2888,13 @@ public static class PsEmitter
             return cmdlet;
 
         var sb = new StringBuilder(cmdlet);
-        foreach (var arg in args)
+        var pipelineProcessSubIndex = GetPipelineProcessSubArgIndex(cmdlet, args);
+        for (int i = 0; i < args.Length; i++)
         {
             sb.Append(' ');
-            var emitted = EmitWord(arg);
+            var emitted = i == pipelineProcessSubIndex
+                ? EmitProcessSubPipeline((WordPart.ProcessSub)args[i].Parts[0])
+                : EmitWord(args[i]);
             if (NeedsPassthroughQuoting(emitted))
                 sb.Append('"').Append(emitted).Append('"');
             else
@@ -2893,6 +2902,35 @@ public static class PsEmitter
         }
         return sb.ToString();
     }
+
+    private static int GetPipelineProcessSubArgIndex(string cmdlet, ImmutableArray<CompoundWord> args)
+    {
+        if (!IsStdinSubstitutableProcessSubConsumer(cmdlet))
+            return -1;
+
+        int processSubIndex = -1;
+        for (int i = 0; i < args.Length; i++)
+        {
+            if (IsPureProcessSubWord(args[i]))
+            {
+                if (processSubIndex >= 0)
+                    return -1;
+                processSubIndex = i;
+            }
+        }
+
+        return processSubIndex;
+    }
+
+    private static bool IsPureProcessSubWord(CompoundWord word) =>
+        word.Parts.Length == 1 && word.Parts[0] is WordPart.ProcessSub;
+
+    private static bool IsStdinSubstitutableProcessSubConsumer(string cmdlet) => cmdlet is
+        "Invoke-BashHead" or
+        "Invoke-BashTail" or
+        "Invoke-BashSort" or
+        "Invoke-BashUniq" or
+        "Invoke-BashWc";
 
     private static bool NeedsPassthroughQuoting(string arg)
     {

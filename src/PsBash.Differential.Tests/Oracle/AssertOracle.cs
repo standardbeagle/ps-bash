@@ -115,6 +115,56 @@ public static class AssertOracle
     }
 
     /// <summary>
+    /// Runs the differential assertion without forcing PSBASH_DISABLE_HOST, so
+    /// ps-bash exercises its default host-backed worker path.
+    /// </summary>
+    public static async Task EqualWithHostAsync(
+        string script,
+        TimeSpan? timeout = null)
+    {
+        var host = BashLocator.Find();
+        Skip.If(!host.IsAvailable, "oracle: no bash available");
+        Skip.If(Fixture.PsBashPath is null, "ps-bash binary not found -- build PsBash.Shell first");
+
+        var effective = timeout ?? BashOracleFixture.DefaultTimeout;
+        var bashPsi = BashLocator.BuildPsi(host, script)!;
+        var bashResult = await BashOracleFixture.RunOnePsiAsync(bashPsi, effective);
+        var psBashResult = await BashOracleFixture.RunOneAsync(
+            Fixture.PsBashPath!,
+            "-c",
+            script,
+            effective,
+            extraEnv: new Dictionary<string, string>
+            {
+                ["PSBASH_DEBUG"] = "1",
+            });
+
+        var bashStdout = Canonicalizer.Canonicalize(bashResult.Stdout);
+        var psBashStdout = Canonicalizer.Canonicalize(psBashResult.Stdout);
+        var bashStderr = Canonicalizer.Canonicalize(bashResult.Stderr);
+        var transpiledPs = ExtractTranspiled(psBashResult.Stderr);
+        var psBashStderr = Canonicalizer.Canonicalize(
+            StripDebugLines(psBashResult.Stderr));
+
+        bool stdoutMatch = bashStdout == psBashStdout;
+        bool stderrMatch = bashStderr == psBashStderr;
+        bool exitMatch = bashResult.ExitCode == psBashResult.ExitCode;
+
+        if (stdoutMatch && stderrMatch && exitMatch)
+            return;
+
+        throw new XunitException(BuildDiffBundle(
+            script,
+            bashResult,
+            psBashResult,
+            bashStdout,
+            psBashStdout,
+            bashStderr,
+            psBashStderr,
+            transpiledPs));
+    }
+
+    /// <summary>
     /// Compares ps-bash output against a golden file stored in
     /// <c>src/PsBash.Differential.Tests/Goldens/{testName}.golden.txt</c>.
     ///

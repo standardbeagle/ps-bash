@@ -1582,6 +1582,27 @@ public class PsEmitterTests
     }
 
     [Fact]
+    public void Transpile_DiffWithSeqProcessSubs_StaysOnTempFilePath()
+    {
+        var result = PsEmitter.Transpile("diff <(seq 1 10) <(seq 1 10)");
+        Assert.Equal("Invoke-BashDiff (Invoke-ProcessSub { Invoke-BashSeq 1 10 }) (Invoke-ProcessSub { Invoke-BashSeq 1 10 })", result);
+    }
+
+    [Fact]
+    public void Transpile_SortWithInputProcessSub_RoutesToPipelineObjectPath()
+    {
+        var result = PsEmitter.Transpile("sort -u <(cat foo)");
+        Assert.Equal("Invoke-BashSort -u (Invoke-ProcessSubPipeline { Invoke-BashCat foo })", result);
+    }
+
+    [Fact]
+    public void Transpile_WcWithInputProcessSub_RoutesToPipelineObjectPath()
+    {
+        var result = PsEmitter.Transpile("wc -l <(seq 1 100)");
+        Assert.Equal("Invoke-BashWc -l (Invoke-ProcessSubPipeline { Invoke-BashSeq 1 100 })", result);
+    }
+
+    [Fact]
     public void Transpile_OutputProcessSub()
     {
         var result = PsEmitter.Transpile("cmd >(tee log.txt)");
@@ -1593,7 +1614,7 @@ public class PsEmitterTests
     {
         var result = PsEmitter.Transpile("diff <(sort <(cat file1)) <(sort file2)");
         Assert.Equal(
-            "Invoke-BashDiff (Invoke-ProcessSub { Invoke-BashSort (Invoke-ProcessSub { Invoke-BashCat file1 }) }) (Invoke-ProcessSub { Invoke-BashSort file2 })",
+            "Invoke-BashDiff (Invoke-ProcessSub { Invoke-BashSort (Invoke-ProcessSubPipeline { Invoke-BashCat file1 }) }) (Invoke-ProcessSub { Invoke-BashSort file2 })",
             result);
     }
 
