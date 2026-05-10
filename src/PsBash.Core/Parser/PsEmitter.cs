@@ -1836,7 +1836,18 @@ public static class PsEmitter
         _ => throw new NotSupportedException($"Unknown word part type: {part.GetType().Name}"),
     };
 
-    // TODO T10b: when inside ps-bash-host, route through ProcessSubBridge for streaming; T10c: mapped-command consumers use Invoke-ProcessSubPipeline
+    // T10 status (parent BsgwTbCEPoQO):
+    //   step 1+2 (string-capture): DONE — see EmitSimple `source/.` branch
+    //                              that emits Invoke-ProcessSubSource directly.
+    //   step 3+4 (pipeline-object): TODO T10b (Dart 7mxWC3dHky3U) — when consumer
+    //                               IsKnownCommand and stdin-substitutable, route
+    //                               here to (Invoke-ProcessSubPipeline { ... }).
+    //   step 5+6 (bridge):          TODO T10c (Dart JCt5JMwdSPjV) — when running
+    //                               in-host with external consumer, route to
+    //                               Invoke-ProcessSubBridge over an anonymous pipe.
+    //   step 7 (trace metric):      TODO T10d (Dart FdSkEJ2esQKT).
+    // Default classifier today: temp-file path via Invoke-ProcessSub. Safe fallback
+    // forever (per parent T10 not_included: "Removing legacy temp-file path entirely").
     private static string EmitProcessSub(WordPart.ProcessSub ps)
     {
         string inner = Emit((Command)ps.Body);

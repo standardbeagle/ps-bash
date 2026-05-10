@@ -1,10 +1,10 @@
 {
   "status": "running",
-  "iterations": 13,
-  "spawns": 12,
+  "iterations": 14,
+  "spawns": 13,
   "started_at": "2026-05-09T15:53:30Z",
-  "last_iteration_at": "2026-05-10T04:50:00Z",
-  "last_subagent": "iteration-13-task-executor",
+  "last_iteration_at": "2026-05-10T05:30:00Z",
+  "last_subagent": "iteration-14-task-executor",
   "loop_task_id": "eZWUCAe8RNXp",
   "dartboard": "Personal/ps-bash",
   "runner_instance_id": "beagle-ab2-33220",
@@ -307,6 +307,36 @@
       "completion_summary": "T11 build/publish/CI hardening for the two-binary release. AOT publish of PsBash.Shell in build.yml + publish.yml gated by /warnaserror so any trimming/reflection regression fails the build (host stays non-AOT — Microsoft.PowerShell.SDK is not AOT-compatible). canary.yml matrix expanded with transport=[ipc, subprocess] across Win/Linux/macOS so every PR exercises both the in-process IPC host (default) and the legacy PwshWorker fallback (PSBASH_DISABLE_HOST=1); ps-bash-host built before canary so the IPC leg has a binary to spawn. scripts/test.sh documents PSBASH_DISABLE_HOST alongside existing PSBASH_HOST override. scripts/pack-local.ps1 already bundles ps-bash + ps-bash-host side-by-side into dist/bin/ — verified, no change needed. Local sanity: `bash -n scripts/test.sh` OK, all three workflow YAMLs parse clean. Deferred to actual CI workflow run on push: AOT publish on all three RIDs with zero warnings, canary green on all 6 (os, transport) combinations, release zip extract+run without pwsh installed. Resumed iter 13 from prior in-flight executor that terminated mid-AOT-publish; finalized + committed as fc9ceb1.",
       "failure_reason": null,
       "fix_task_created": false
+    },
+    {
+      "task_id": "BsgwTbCEPoQO",
+      "iteration": 14,
+      "iteration_task_id": null,
+      "timestamp": "2026-05-10T05:30:00Z",
+      "source_event": {
+        "loop_id": "eZWUCAe8RNXp",
+        "conversation_id": null,
+        "task_id": "BsgwTbCEPoQO"
+      },
+      "status": "split",
+      "phase_completed": "phase-9",
+      "failed_phase": null,
+      "files_changed": [
+        "src/PsBash.Core/Runtime/Ipc/HostMetadata.cs",
+        "src/PsBash.Core/Parser/PsEmitter.cs",
+        "src/PsBash.Core.Tests/Parser/PsEmitterTests.cs"
+      ],
+      "tests_added": [
+        "Transpile_SourceWithProcessSub_RoutesToStringCapturePath",
+        "Transpile_DotWithProcessSub_RoutesToStringCapturePath",
+        "Transpile_SourceWithProcessSubMultiCommand_PreservesProducerPipeline",
+        "Transpile_SourceWithLiteralFile_StaysOnPassthroughPath"
+      ],
+      "plan_adjustments": 2,
+      "completion_summary": "T10 step 1+2 (string-capture path) landed as narrowest slice per scope_guidance branch (a). DISCOVERED P0 regression while running differential tests: PublishAot=true + reflection-based JsonSerializer.Deserialize<HostMetadata> in HostMetadata.cs:79 crashed ps-bash.exe on first run with 'Reflection-based serialization has been disabled'; introduced by baf6e20 (sidecar metadata) + pre-existing PublishAot, only surfaced now because no prior iter ran differential tests. FIXED via JsonSerializerContext source generator (HostMetadataJsonContext, ~12 LOC). Locked T10 step 1+2 with 4 deterministic PsEmitterTests covering source <(...) / . <(...) routing to Invoke-ProcessSubSource, multi-command producer transpile, and source-with-literal-file negative case. Updated EmitProcessSub TODO comment with T10b/c/d Dart task IDs. SPLIT remaining T10 work: T10b (7mxWC3dHky3U) pipeline-object path (steps 3+4), T10c (JCt5JMwdSPjV) ProcessSubBridge real-pipe path (steps 5+6), T10d (FdSkEJ2esQKT) PSBASH_TRACE classification metric (step 7); T10d blocked by T10b+T10c. All unit tests green: Core 664/665 (1 skip), Host 47/47, ProcessSub-specific 13/13. Differential tests not run as full sweep due to pre-existing xunit-parallelism flake on per-user IPC host (orthogonal to T10). Original T10 stays Doing pending T10b/c/d.",
+      "failure_reason": null,
+      "fix_task_created": false,
+      "split_into": ["7mxWC3dHky3U", "JCt5JMwdSPjV", "FdSkEJ2esQKT"]
     }
   ]
 }

@@ -1611,6 +1611,51 @@ public class PsEmitterTests
         Assert.Equal("Invoke-BashGrep -f (Invoke-ProcessSub { Invoke-BashCat patterns.txt }) data.txt", result);
     }
 
+    // --- T10 step 1+2: string-capture classifier for source/dot <(...) ---
+    //
+    // These tests lock in that the emitter classifies `source <(producer)` and
+    // `. <(producer)` as the string-capture path (Invoke-ProcessSubSource), NOT
+    // the temp-file path (Invoke-ProcessSub). Source-style consumers need the
+    // producer's bash text captured + transpiled + executed in caller scope —
+    // a temp-file path would only give them a file path back, which `source`
+    // would treat as a script filename. See psm1 Invoke-ProcessSubSource.
+
+    [Fact]
+    public void Transpile_SourceWithProcessSub_RoutesToStringCapturePath()
+    {
+        var result = PsEmitter.Transpile("source <(echo 'PSBASH_T10_VAR=hello')");
+        Assert.Equal("Invoke-ProcessSubSource { Invoke-BashEcho 'PSBASH_T10_VAR=hello' }", result);
+    }
+
+    [Fact]
+    public void Transpile_DotWithProcessSub_RoutesToStringCapturePath()
+    {
+        // bash's `.` is a synonym for `source` and must classify identically.
+        var result = PsEmitter.Transpile(". <(echo 'A=1')");
+        Assert.Equal("Invoke-ProcessSubSource { Invoke-BashEcho 'A=1' }", result);
+    }
+
+    [Fact]
+    public void Transpile_SourceWithProcessSubMultiCommand_PreservesProducerPipeline()
+    {
+        // The producer can be any pipeline; classifier must transpile it as a
+        // nested command and wrap the whole thing in Invoke-ProcessSubSource.
+        var result = PsEmitter.Transpile("source <(cat config.env | grep -v '^#')");
+        Assert.Equal(
+            "Invoke-ProcessSubSource { Invoke-BashCat config.env | Invoke-BashGrep -v '^#' }",
+            result);
+    }
+
+    [Fact]
+    public void Transpile_SourceWithLiteralFile_StaysOnPassthroughPath()
+    {
+        // Negative case: source with a real filename must NOT route through
+        // the string-capture path — it goes through Invoke-BashSource as a
+        // normal file argument. This guards against the classifier overreaching.
+        var result = PsEmitter.Transpile("source script.sh");
+        Assert.Equal("Invoke-BashSource script.sh", result);
+    }
+
     // --- Array and associative array tests ---
 
     [Fact]

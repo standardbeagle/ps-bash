@@ -97,9 +97,25 @@ public sealed record HostMetadata(
         catch (UnauthorizedAccessException) { /* same */ }
     }
 
-    private static readonly JsonSerializerOptions SerializerOptions = new()
+    private static readonly JsonSerializerOptions SerializerOptions = new(HostMetadataJsonContext.Default.Options)
     {
         WriteIndented = true,
-        DefaultIgnoreCondition = JsonIgnoreCondition.Never,
     };
+}
+
+/// <summary>
+/// Source-generated <see cref="JsonSerializerContext"/> for <see cref="HostMetadata"/>.
+/// Required because <c>PsBash.Shell</c> is published with <c>PublishAot=true</c>,
+/// which sets <c>JsonSerializerIsReflectionEnabledByDefault=false</c>. Without a
+/// source-generated context, <c>JsonSerializer.Deserialize&lt;HostMetadata&gt;</c>
+/// throws <c>InvalidOperationException: Reflection-based serialization has been disabled</c>
+/// at every host-metadata read — which crashes <c>ps-bash.exe</c> on first run
+/// and breaks every differential test that spawns the launcher.
+/// </summary>
+[JsonSourceGenerationOptions(
+    DefaultIgnoreCondition = JsonIgnoreCondition.Never,
+    PropertyNameCaseInsensitive = false)]
+[JsonSerializable(typeof(HostMetadata))]
+internal partial class HostMetadataJsonContext : JsonSerializerContext
+{
 }
