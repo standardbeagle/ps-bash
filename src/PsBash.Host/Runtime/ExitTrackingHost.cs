@@ -24,6 +24,12 @@ internal sealed class ExitTrackingHost : PSHost
     public override string Name => "PsBash";
     public override Version Version => new(1, 0);
     public override PSHostUserInterface UI => _ui;
+
+    /// <summary>
+    /// Concrete-typed accessor used by SdkWorker to wire the formatter
+    /// forwarder. Distinct name avoids hiding the base PSHost.UI property.
+    /// </summary>
+    public ExitTrackingHostUI HostUI => _ui;
     public override CultureInfo CurrentCulture => CultureInfo.InvariantCulture;
     public override CultureInfo CurrentUICulture => CultureInfo.InvariantCulture;
 
@@ -36,14 +42,58 @@ internal sealed class ExitTrackingHost : PSHost
 
 internal sealed class ExitTrackingHostUI : PSHostUserInterface
 {
+    // Forwarder set by SdkWorker per-invocation so PowerShell's Out-Default
+    // (which renders unhandled pipeline objects via the formatter and writes
+    // the resulting text to host UI) reaches the same output sink as the
+    // BashText/string streaming path. When null, Write/WriteLine are silent —
+    // matching the historical no-op behavior so callers that don't opt in
+    // don't suddenly leak formatter output to stdout.
+    private Action<string>? _writeForwarder;
+
+    public void SetWriteLineForwarder(Action<string>? forwarder)
+    {
+        _writeForwarder = forwarder;
+    }
+
     public override PSHostRawUserInterface? RawUI => null;
 
     public override string ReadLine() => throw new NotSupportedException();
     public override System.Security.SecureString ReadLineAsSecureString() => throw new NotSupportedException();
 
-    public override void Write(string value) { }
-    public override void Write(ConsoleColor foregroundColor, ConsoleColor backgroundColor, string value) { }
-    public override void WriteLine(string value) { }
+    // PowerShell's formatter calls Write for partial-line output (e.g. when
+    // rendering wide tables or applying ANSI color sequences before the line
+    // terminator) and WriteLine for the line break. Buffer Write calls so a
+    // single visual line surfaces to the forwarder as one callback rather than
+    // a stream of fragments.
+    private readonly System.Text.StringBuilder _lineBuffer = new();
+
+    public override void Write(string value)
+    {
+        // Without a forwarder the buffer would grow unbounded across the
+        // shared runspace's lifetime; drop fragments to match the historical
+        // silent-host behavior outside an active SdkWorker invocation.
+        if (_writeForwarder is null) return;
+        if (string.IsNullOrEmpty(value)) return;
+        _lineBuffer.Append(value);
+    }
+
+    public override void Write(ConsoleColor foregroundColor, ConsoleColor backgroundColor, string value)
+        => Write(value);
+
+    public override void WriteLine(string value)
+    {
+        if (_writeForwarder is null)
+        {
+            _lineBuffer.Clear();
+            return;
+        }
+        var line = _lineBuffer.Length > 0
+            ? _lineBuffer.ToString() + (value ?? string.Empty)
+            : (value ?? string.Empty);
+        _lineBuffer.Clear();
+        _writeForwarder(line);
+    }
+
     public override void WriteDebugLine(string message) { }
     public override void WriteErrorLine(string value) => Console.Error.WriteLine(value);
     public override void WriteProgress(long sourceId, ProgressRecord record) { }

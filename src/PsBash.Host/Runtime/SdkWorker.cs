@@ -93,13 +93,21 @@ public sealed class SdkWorker : IWorker
         _ps.Streams.Error.Clear();
         _ps.AddScript(command);
 
-        // Stream output via DataAdded so results are delivered as they arrive rather
-        // than buffering the entire Collection<PSObject> in RAM first.
-        var outputCollection = new System.Management.Automation.PSDataCollection<System.Management.Automation.PSObject>();
-        outputCollection.DataAdded += (sender, e) =>
+        // Forward formatted Out-Default lines to the same callback the output
+        // stream uses. PowerShell routes pipeline output that doesn't carry a
+        // BashText property — i.e. native cmdlet PSObjects from
+        // `Get-PnpDevice | Select FriendlyName, Status` and similar — through
+        // Out-Default, which renders objects via the formatter and writes the
+        // resulting strings to PSHostUserInterface.Write/WriteLine. Without a
+        // forwarder, ExitTrackingHostUI was a no-op and these lines silently
+        // vanished, so the user saw nothing where native pwsh would have shown
+        // a formatted table. The unified callback below preserves the existing
+        // BashText/string streaming path (still routed via DataAdded → callback
+        // below) and adds formatter output to the same sink. The host UI's
+        // forwarder is cleared in the finally block to avoid leaking state
+        // across invocations of the shared runspace.
+        Action<string> deliver = line =>
         {
-            var col = (System.Management.Automation.PSDataCollection<System.Management.Automation.PSObject>)sender!;
-            var line = GetOutputText(col[e.Index]);
             try
             {
                 if (output is not null) output(line);
@@ -108,56 +116,117 @@ public sealed class SdkWorker : IWorker
             catch
             {
                 // Output callback failed (e.g. IPC stream closed). Stop the pipeline
-                // rather than letting DataAdded fire repeatedly into a broken sink.
+                // rather than letting subsequent calls fire into a broken sink.
                 _ps.Stop();
+            }
+        };
+        _host.HostUI.SetWriteLineForwarder(deliver);
+
+        // Stream output via DataAdded so results are delivered as they arrive rather
+        // than buffering the entire Collection<PSObject> in RAM first.
+        var outputCollection = new System.Management.Automation.PSDataCollection<System.Management.Automation.PSObject>();
+        // Streaming policy: text-stream items (BashText fast-path strings,
+        // typed BashObject CustomControls) deliver immediately as they arrive;
+        // raw PSObjects (e.g. native cmdlet output, [PSCustomObject]@{...})
+        // are buffered and formatted as a batch at the end of invocation. The
+        // batch is flushed when (a) a text item arrives — preserving relative
+        // order between formatted blocks and surrounding text; (b) the
+        // pipeline ends. Formatting per-item would lose column-width context
+        // (the formatter needs to see all rows before computing widths).
+        var formatBuffer = new List<PSObject>();
+        void FlushFormatBuffer()
+        {
+            if (formatBuffer.Count == 0) return;
+            try
+            {
+                foreach (var fline in PSObjectFormatter.FormatAsTable(formatBuffer))
+                    deliver(fline);
+            }
+            catch (Exception ex)
+            {
+                // Defensive: a formatter exception must not blow up the
+                // worker. Log and continue with raw ToString fallback so the
+                // user still sees something rather than silent loss.
+                Console.Error.WriteLine($"ps-bash: formatter error: {ex.Message}");
+                foreach (var raw in formatBuffer)
+                    deliver(raw?.ToString() ?? "");
+            }
+            formatBuffer.Clear();
+        }
+
+        outputCollection.DataAdded += (sender, e) =>
+        {
+            var col = (System.Management.Automation.PSDataCollection<System.Management.Automation.PSObject>)sender!;
+            var item = col[e.Index];
+            if (IsTextStreamItem(item))
+            {
+                FlushFormatBuffer();
+                var line = GetOutputText(item);
+                deliver(line);
+            }
+            else
+            {
+                formatBuffer.Add(item!);
             }
         };
 
         try
         {
-            _ps.Invoke(null, outputCollection);
-        }
-        catch (System.Management.Automation.PipelineStoppedException)
-        {
-            return 130; // Convention: pipeline stopped (analogous to SIGINT exit code)
-        }
-        catch (System.Management.Automation.ExitException ex)
-        {
-            // Defensive: ExitException may be thrown in some PS SDK configurations.
-            _ps.Commands.Clear();
-            return UnwrapExitCode(ex.Argument);
-        }
-        catch (System.Management.Automation.ParseException ex)
-        {
-            Console.Error.WriteLine($"ps-bash: parse error: {ex.Message}");
-            _ps.Commands.Clear();
-            return 1;
-        }
-        catch (System.Management.Automation.RuntimeException ex)
-        {
-            Console.Error.WriteLine($"ps-bash: {ex.Message}");
-            _ps.Commands.Clear();
-            return 1;
-        }
+            try
+            {
+                _ps.Invoke(null, outputCollection);
+            }
+            catch (System.Management.Automation.PipelineStoppedException)
+            {
+                return 130; // Convention: pipeline stopped (analogous to SIGINT exit code)
+            }
+            catch (System.Management.Automation.ExitException ex)
+            {
+                // Defensive: ExitException may be thrown in some PS SDK configurations.
+                _ps.Commands.Clear();
+                return UnwrapExitCode(ex.Argument);
+            }
+            catch (System.Management.Automation.ParseException ex)
+            {
+                Console.Error.WriteLine($"ps-bash: parse error: {ex.Message}");
+                _ps.Commands.Clear();
+                return 1;
+            }
+            catch (System.Management.Automation.RuntimeException ex)
+            {
+                Console.Error.WriteLine($"ps-bash: {ex.Message}");
+                _ps.Commands.Clear();
+                return 1;
+            }
 
-        // exit N calls PSHost.SetShouldExit(N) — check before processing output.
-        if (_host.ShouldExit)
-        {
-            _ps.Commands.Clear();
-            return _host.ExitCode;
+            // Drain any raw PSObjects buffered for batched formatting.
+            FlushFormatBuffer();
+
+            // exit N calls PSHost.SetShouldExit(N) — check before processing output.
+            if (_host.ShouldExit)
+            {
+                _ps.Commands.Clear();
+                return _host.ExitCode;
+            }
+
+            if (_ps.InvocationStateInfo.State == System.Management.Automation.PSInvocationState.Stopped)
+                return 130;
+
+            // Match shell launcher semantics: use $LASTEXITCODE, not HadErrors.
+            // HadErrors fires on Write-Error even with -ErrorAction SilentlyContinue;
+            // $LASTEXITCODE only changes when an external command or explicit `exit N` runs.
+            var lec = _ps.Runspace.SessionStateProxy.GetVariable("LASTEXITCODE");
+            if (lec is System.Management.Automation.PSObject lecPso) lec = lecPso.BaseObject;
+            if (lec is int exitInt) return exitInt;
+            if (lec is long exitLong) return (int)exitLong;
+            return 0;
         }
-
-        if (_ps.InvocationStateInfo.State == System.Management.Automation.PSInvocationState.Stopped)
-            return 130;
-
-        // Match shell launcher semantics: use $LASTEXITCODE, not HadErrors.
-        // HadErrors fires on Write-Error even with -ErrorAction SilentlyContinue;
-        // $LASTEXITCODE only changes when an external command or explicit `exit N` runs.
-        var lec = _ps.Runspace.SessionStateProxy.GetVariable("LASTEXITCODE");
-        if (lec is System.Management.Automation.PSObject lecPso) lec = lecPso.BaseObject;
-        if (lec is int exitInt) return exitInt;
-        if (lec is long exitLong) return (int)exitLong;
-        return 0;
+        finally
+        {
+            // Detach the forwarder so a stray Out-Default call from another
+            // worker invocation can't leak into a previous caller's output sink.
+            _host.HostUI.SetWriteLineForwarder(null);
+        }
     }
 
     private static string GetOutputText(PSObject? item)
@@ -170,6 +239,22 @@ public sealed class SdkWorker : IWorker
             return bashText.ToString() ?? "";
 
         return item.BaseObject is string s ? s : item.ToString();
+    }
+
+    /// <summary>
+    /// True for items that should bypass the formatter and stream directly.
+    /// Plain strings (the New-BashObject fast path) and BashText-bearing
+    /// PSCustomObjects (the slow path with PsBash.Format.ps1xml CustomControl)
+    /// are already in render-ready form. Everything else — native cmdlet
+    /// output, bare [PSCustomObject]@{...} from a script — needs the
+    /// table-formatter pass to gain column layout.
+    /// </summary>
+    private static bool IsTextStreamItem(PSObject? item)
+    {
+        if (item is null) return true;
+        if (item.BaseObject is string) return true;
+        if (item.Properties["BashText"] is not null) return true;
+        return false;
     }
 
     private static int UnwrapExitCode(object? arg)
@@ -185,6 +270,10 @@ public sealed class SdkWorker : IWorker
     {
         _ps.Commands.Clear();
         _ps.Streams.Error.Clear();
+        // QueryAsync's primary use is ad-hoc value reads (e.g. `(Get-Location).Path`)
+        // where the caller wants the .NET object's stringified form, not a formatter
+        // table. Keep the simple ToString path here; the formatter wrapping is only
+        // needed on ExecuteAsync where output is meant to render as it would in pwsh.
         _ps.AddScript(expression);
 
         try

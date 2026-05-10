@@ -159,4 +159,95 @@ public class SdkWorkerTests : IAsyncLifetime
         var exitCode = await _worker!.ExecuteAsync("exit 7");
         Assert.Equal(7, exitCode);
     }
+
+    // Native PSObject pipeline rendering: Select-Object on a custom object
+    // must produce a formatted table (header + separator + columns), matching
+    // how native pwsh + Out-Default would render it. Regression for the
+    // Get-PnpDevice repro on Windows: typed PSObjects fall through to the
+    // formatter, not item.ToString() which would emit @{Name=...; Status=...}.
+    // Oracle note (Directive 1): asserts on PowerShell formatter output, which
+    // is platform-stable byte-for-byte across pwsh 7.x SDK on all OSes — using
+    // a synthesized PSCustomObject (not Get-PnpDevice) keeps the test
+    // cross-platform per Directive 5; the underlying rendering path is the
+    // same one Get-PnpDevice flows through.
+    [Fact]
+    public async Task ExecuteAsync_NativePSObjectPipeline_RendersFormattedTable()
+    {
+        var lines = new List<string>();
+        _worker!.OutputCallback = lines.Add;
+
+        // Synthesize the same shape as `Get-PnpDevice | Where | Select Name,Status`:
+        // PSCustomObjects with two named properties. Bare `[PSCustomObject]@{}`
+        // is built-in to System.Management.Automation, no module-loader path,
+        // so this works in test environments that don't have
+        // Microsoft.PowerShell.Utility on PSModulePath. On Windows real
+        // ps-bash these are exactly the shape Get-PnpDevice | Select emits.
+        var script = @"
+            [PSCustomObject]@{ FriendlyName = 'Intel USB 3.10'; Status = 'OK' }
+            [PSCustomObject]@{ FriendlyName = 'USB Root Hub';   Status = 'OK' }
+        ";
+
+        var exitCode = await _worker.ExecuteAsync(script);
+        Assert.Equal(0, exitCode);
+        Assert.NotEmpty(lines);
+
+        var joined = string.Join("\n", lines);
+
+        // Hashtable-style ToString() means the formatter was bypassed — that's the bug.
+        Assert.DoesNotContain("@{FriendlyName=", joined);
+
+        // Header row must be present.
+        Assert.Contains("FriendlyName", joined);
+        Assert.Contains("Status", joined);
+
+        // Separator line under the header (PowerShell formatter signature).
+        Assert.Contains(lines, l => l.Contains("------------") && l.Contains("------"));
+
+        // Both data rows must be rendered as formatted columns, not @{...}.
+        Assert.Contains(lines, l => l.Contains("Intel USB 3.10") && l.Contains("OK"));
+        Assert.Contains(lines, l => l.Contains("USB Root Hub") && l.Contains("OK"));
+    }
+
+    // BashText-bearing objects must continue to stream as plain text and must
+    // NOT be re-rendered through the formatter (which would add headers like
+    // "BashText" and a separator). This is the regression bar for the existing
+    // Invoke-Bash* pipeline path while we add native-PSObject formatting.
+    [Fact]
+    public async Task ExecuteAsync_BashTextObjects_StreamWithoutFormatterHeader()
+    {
+        var lines = new List<string>();
+        _worker!.OutputCallback = lines.Add;
+
+        var exitCode = await _worker.ExecuteAsync("Invoke-BashEcho 'one'; Invoke-BashEcho 'two'");
+        Assert.Equal(0, exitCode);
+
+        var joined = string.Join("\n", lines);
+        Assert.Contains("one", joined);
+        Assert.Contains("two", joined);
+
+        // No formatter table for plain text/BashText output.
+        Assert.DoesNotContain("BashText", joined);
+        Assert.DoesNotContain(lines, l => l.TrimStart().StartsWith("--------"));
+    }
+
+    // Mixed stream: a BashText emitter followed by native PSObjects must keep
+    // the BashText line raw and render the native objects as a table afterwards.
+    [Fact]
+    public async Task ExecuteAsync_MixedBashTextAndPSObjects_BothRenderCorrectly()
+    {
+        var lines = new List<string>();
+        _worker!.OutputCallback = lines.Add;
+
+        var script = @"
+            Invoke-BashEcho 'before-table'
+            [PSCustomObject]@{ Col1 = 'a'; Col2 = 'b' }
+        ";
+        var exitCode = await _worker.ExecuteAsync(script);
+        Assert.Equal(0, exitCode);
+
+        Assert.Contains(lines, l => l.Contains("before-table"));
+        Assert.Contains(lines, l => l.Contains("Col1") && l.Contains("Col2"));
+        Assert.Contains(lines, l => l.Contains(" a ") || (l.Contains("a") && l.Contains("b")));
+        Assert.DoesNotContain(lines, l => l.StartsWith("@{"));
+    }
 }
