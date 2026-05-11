@@ -1842,12 +1842,14 @@ public static class PsEmitter
     //   step 3+4 (pipeline-object): DONE — EmitPassthrough classifies a single
     //                               stdin-substitutable mapped-command operand as
     //                               (Invoke-ProcessSubPipeline { ... }).
-    //   step 5+6 (bridge):          TODO T10c (Dart JCt5JMwdSPjV) — when running
-    //                               in-host with external consumer, route to
-    //                               Invoke-ProcessSubBridge over an anonymous pipe.
-    //   step 7 (trace metric):      TODO T10d (Dart FdSkEJ2esQKT).
-    // Default classifier today: temp-file path via Invoke-ProcessSub. Safe fallback
-    // forever (per parent T10 not_included: "Removing legacy temp-file path entirely").
+    //   step 5+6 (bridge):          DEFERRED — do not route external consumers
+    //                               through a fake pipe filename. Unknown,
+    //                               seekable, and multi-file consumers stay on
+    //                               the temp-file path until a real stream-path
+    //                               design is added.
+    //   step 7 (trace metric):      DEFERRED until a real bridge branch exists.
+    // Default classifier today: temp-file path via Invoke-ProcessSub. This is the
+    // correctness-first fallback for unknown external, seekable, and multi-file consumers.
     private static string EmitProcessSub(WordPart.ProcessSub ps)
     {
         string inner = Emit((Command)ps.Body);

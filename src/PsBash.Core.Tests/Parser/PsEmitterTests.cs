@@ -1596,10 +1596,59 @@ public class PsEmitterTests
     }
 
     [Fact]
+    public void Transpile_HeadWithInputProcessSub_RoutesToPipelineObjectPath()
+    {
+        var result = PsEmitter.Transpile("head -n 1 <(seq 1 10)");
+        Assert.Equal("Invoke-BashHead -n 1 (Invoke-ProcessSubPipeline { Invoke-BashSeq 1 10 })", result);
+    }
+
+    [Fact]
+    public void Transpile_TailWithInputProcessSub_RoutesToPipelineObjectPath()
+    {
+        var result = PsEmitter.Transpile("tail -n 1 <(seq 1 10)");
+        Assert.Equal("Invoke-BashTail -n 1 (Invoke-ProcessSubPipeline { Invoke-BashSeq 1 10 })", result);
+    }
+
+    [Fact]
+    public void Transpile_UniqWithInputProcessSub_RoutesToPipelineObjectPath()
+    {
+        var result = PsEmitter.Transpile("uniq <(seq 1 3)");
+        Assert.Equal("Invoke-BashUniq (Invoke-ProcessSubPipeline { Invoke-BashSeq 1 3 })", result);
+    }
+
+    [Fact]
     public void Transpile_WcWithInputProcessSub_RoutesToPipelineObjectPath()
     {
         var result = PsEmitter.Transpile("wc -l <(seq 1 100)");
         Assert.Equal("Invoke-BashWc -l (Invoke-ProcessSubPipeline { Invoke-BashSeq 1 100 })", result);
+    }
+
+    [Fact]
+    public void Transpile_SortWithTwoProcessSubs_StaysOnTempFilePath()
+    {
+        var result = PsEmitter.Transpile("sort <(seq 1 3) <(seq 4 6)");
+        Assert.Equal("Invoke-BashSort (Invoke-ProcessSub { Invoke-BashSeq 1 3 }) (Invoke-ProcessSub { Invoke-BashSeq 4 6 })", result);
+    }
+
+    [Fact]
+    public void Transpile_CommWithProcessSubs_StaysOnTempFilePath()
+    {
+        var result = PsEmitter.Transpile("comm <(sort left) <(sort right)");
+        Assert.Equal("Invoke-BashComm (Invoke-ProcessSub { Invoke-BashSort left }) (Invoke-ProcessSub { Invoke-BashSort right })", result);
+    }
+
+    [Fact]
+    public void Transpile_CmpWithProcessSubs_StaysOnTempFilePath()
+    {
+        var result = PsEmitter.Transpile("cmp <(sort left) <(sort right)");
+        Assert.Equal("cmp (Invoke-ProcessSub { Invoke-BashSort left }) (Invoke-ProcessSub { Invoke-BashSort right })", result);
+    }
+
+    [Fact]
+    public void Transpile_UnknownExternalWithProcessSub_StaysOnTempFilePath()
+    {
+        var result = PsEmitter.Transpile("external-tool <(seq 1 3)");
+        Assert.Equal("external-tool (Invoke-ProcessSub { Invoke-BashSeq 1 3 })", result);
     }
 
     [Fact]

@@ -316,6 +316,25 @@ The pipeline-object route is intentionally narrow: it requires exactly one pure
 process-substitution word for a classified consumer. Multiple process
 substitutions stay on the temp-file path.
 
+Current support is intentionally 80/20:
+
+- Tier 1 is the default temp-file route. Unknown external commands, commands that
+  need multiple file operands, and commands that may require seekable input stay
+  on `Invoke-ProcessSub`. This is usually correct, but it is not streaming.
+- Tier 2 is the pipeline-object route for known mapped commands where a single
+  `<(...)` operand is equivalent to stdin. Today that allowlist is `head`,
+  `tail`, `sort`, `uniq`, and `wc`.
+- `diff`, `comm`, `cmp`, `grep -f <(...)`, and similar file-oriented consumers
+  stay on the temp-file route. Their operands are file paths or pattern files,
+  not generic stdin streams.
+- General external command streaming is deferred. The emitter must not guess that
+  `external <(producer)` can become `producer | external` or `external -`; that
+  requires an explicit allowlist and parity tests.
+- A real stream-path bridge is deferred. There is no fake anonymous-pipe filename
+  path. Windows would need a named-pipe path that the target process can open;
+  POSIX would need FIFO or inherited-fd semantics. Both need cleanup, early-exit,
+  and platform-specific tests before becoming a supported route.
+
 ### `sed` Backreferences
 
 The `sed` command uses backreferences in the replacement string (`\1`, `\2`, ..., `\9` and `\&` for the entire match). PowerShell's regex engine uses `$1`, `$2`, ..., `$9` and `$0` instead.
