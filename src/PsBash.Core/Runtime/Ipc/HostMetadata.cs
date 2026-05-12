@@ -57,7 +57,7 @@ public sealed record HostMetadata(
         if (!string.IsNullOrEmpty(dir)) Directory.CreateDirectory(dir);
 
         var tmp = path + ".tmp";
-        File.WriteAllText(tmp, JsonSerializer.Serialize(this, SerializerOptions));
+        File.WriteAllText(tmp, JsonSerializer.Serialize(this, HostMetadataJsonContext.Default.HostMetadata));
         try { File.Move(tmp, path, overwrite: true); }
         catch { try { File.Delete(tmp); } catch { } throw; }
     }
@@ -76,7 +76,7 @@ public sealed record HostMetadata(
         try
         {
             var json = File.ReadAllText(path);
-            return JsonSerializer.Deserialize<HostMetadata>(json, SerializerOptions);
+            return JsonSerializer.Deserialize(json, HostMetadataJsonContext.Default.HostMetadata);
         }
         catch (JsonException) { return null; }
         catch (IOException) { return null; }

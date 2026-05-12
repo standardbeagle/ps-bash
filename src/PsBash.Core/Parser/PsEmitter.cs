@@ -1321,6 +1321,9 @@ public static class PsEmitter
                     specialResult = "$($global:LASTEXITCODE = 1; Write-Error '' -ErrorAction SilentlyContinue)";
             }
 
+            else if (cmd0 == "cd")
+                specialResult = EmitCd(cmd.Words.RemoveAt(0));
+
             // read [-r] [-p "prompt"] VAR -> Invoke-BashRead [-p "prompt"] VAR
             else if (cmd0 == "read")
                 specialResult = EmitPassthrough("Invoke-BashRead", cmd.Words.RemoveAt(0));
@@ -2234,6 +2237,14 @@ public static class PsEmitter
                 sb.Append(pipelineText);
                 sb.Append("; $(if ($global:LASTEXITCODE -ne 0) { Write-Error '' -ErrorAction SilentlyContinue })");
             }
+            else if (cmd is Command.Simple simple)
+            {
+                // Some simple-command rewrites, notably cd, emit PowerShell statements
+                // such as assignments plus if/else blocks. Pipeline-chain operators
+                // require a pipeline operand, so wrap only those statement rewrites.
+                var simpleText = EmitSimple(simple);
+                sb.Append(NeedsChainOperandSubexpression(simpleText) ? $"$({simpleText})" : simpleText);
+            }
             else
             {
                 sb.Append(Emit(cmd));
@@ -2241,6 +2252,14 @@ public static class PsEmitter
         }
 
         return sb.ToString();
+    }
+
+    private static bool NeedsChainOperandSubexpression(string emitted)
+    {
+        if (emitted.StartsWith("$(", StringComparison.Ordinal))
+            return false;
+
+        return emitted.Contains(';') || emitted.StartsWith("if ", StringComparison.Ordinal);
     }
 
     private static string EmitPipeline(Command.Pipeline pipeline)
@@ -2342,6 +2361,47 @@ public static class PsEmitter
                 sb.Append(" -Append");
         }
     }
+
+    private static string EmitCd(ImmutableArray<CompoundWord> args)
+    {
+        string targetExpr;
+        if (args.IsEmpty)
+        {
+            targetExpr = "$HOME";
+        }
+        else if (GetLiteralValue(args[0]) is { } literal)
+        {
+            if (literal == "~")
+                targetExpr = "$HOME";
+            else if (literal.StartsWith("~/") || literal.StartsWith("~\\"))
+                targetExpr = "$HOME + " + QuotePsString("\\" + literal[2..]);
+            else
+                targetExpr = QuotePsString(literal);
+        }
+        else
+        {
+            var emitted = EmitWord(args[0]);
+            if (emitted.StartsWith("$HOME\\", StringComparison.Ordinal) ||
+                emitted.StartsWith("$HOME/", StringComparison.Ordinal))
+                targetExpr = "$HOME + " + QuotePsString("\\" + emitted["$HOME\\".Length..]);
+            else
+                targetExpr = emitted;
+        }
+
+        return
+            "$__psbash_cd_target = " + targetExpr + "; " +
+            "$__psbash_cd_resolved = [System.IO.Path]::GetFullPath([string]$__psbash_cd_target, [System.Environment]::CurrentDirectory); " +
+            "if ([System.IO.Directory]::Exists($__psbash_cd_resolved)) { " +
+            "$global:__PsBashCwd = $__psbash_cd_resolved; " +
+            "[System.Environment]::CurrentDirectory = $__psbash_cd_resolved; " +
+            "$env:PWD = $__psbash_cd_resolved; " +
+            "Set-Location -LiteralPath $__psbash_cd_resolved -ErrorAction SilentlyContinue; " +
+            "$global:LASTEXITCODE = 0 " +
+            "} else { Write-Error -Message (\"cd: \" + $__psbash_cd_target + \": No such file or directory\") -ErrorAction Continue; $global:LASTEXITCODE = 1 }";
+    }
+
+    private static string QuotePsString(string value)
+        => "'" + value.Replace("'", "''") + "'";
 
     /// <summary>
     /// Tries to emit a mapped PowerShell equivalent for known bash pipe-target commands.
@@ -2816,9 +2876,12 @@ public static class PsEmitter
 
         var emittedArgs = string.Join(", ", args.Select(EmitWord));
         return
+            // Use Get-Variable -ErrorAction SilentlyContinue so the depth probe is
+            // safe under Set-StrictMode -Version Latest (set -u). Plain $global:X
+            // throws on first read when the variable has never been initialized.
             "$__psbash_eval_src = @(" + emittedArgs + ") -join ' '; " +
             "if (-not [string]::IsNullOrWhiteSpace($__psbash_eval_src)) { " +
-            "$__psbash_eval_depth = [int]($global:__BashEvalDepth ?? 0); " +
+            "$__psbash_eval_depth = [int](Get-Variable -Name '__BashEvalDepth' -Scope Global -ValueOnly -ErrorAction SilentlyContinue); " +
             "if ($__psbash_eval_depth -ge 5) { throw 'eval: nesting depth limit (5) exceeded; possible infinite recursion' }; " +
             "$global:__BashEvalDepth = $__psbash_eval_depth + 1; " +
             "try { " +

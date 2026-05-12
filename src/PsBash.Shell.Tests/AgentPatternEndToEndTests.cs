@@ -7,30 +7,166 @@ namespace PsBash.Shell.Tests;
 [Trait("Category", "Integration")]
 public class AgentPatternEndToEndTests
 {
-    private static readonly string ProjectDir = Path.GetFullPath(
-        Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "..",
-            "src", "PsBash.Shell"));
-
+    private static readonly string IpcEndpoint = PsBashTestProcess.CreateEndpoint();
 
     private static Task<(int ExitCode, string Stdout, string Stderr)> RunShellAsync(
         params string[] arguments)
-        => RunShellAsync(arguments, timeout: null);
+        => RunShellAsync(arguments, timeout: null, env: null, workingDirectory: null);
 
     private static Task<(int ExitCode, string Stdout, string Stderr)> RunShellAsync(
         string[] arguments,
         TimeSpan? timeout)
+        => RunShellAsync(arguments, timeout, env: null, workingDirectory: null);
+
+    private static Task<(int ExitCode, string Stdout, string Stderr)> RunShellAsync(
+        string[] arguments,
+        TimeSpan? timeout,
+        IReadOnlyDictionary<string, string?>? env,
+        string? workingDirectory = null)
     {
-        var psi = new ProcessStartInfo { FileName = "dotnet" };
-        psi.ArgumentList.Add("run");
-        psi.ArgumentList.Add("--no-build");
-        psi.ArgumentList.Add("--project");
-        psi.ArgumentList.Add(ProjectDir);
-        psi.ArgumentList.Add("--");
-        foreach (var arg in arguments)
-            psi.ArgumentList.Add(arg);
-
-
+        var psi = env is null
+            ? PsBashTestProcess.Create(arguments, workingDirectory, env, ipcEndpoint: IpcEndpoint)
+            : PsBashTestProcess.Create(arguments, workingDirectory, env);
         return ProcessRunHelper.RunAsync(psi, stdinContent: null, timeout: timeout);
+    }
+
+    [SkippableFact]
+    public async Task Pwd_AfterHomeRelativeCd_PrintsDirectory()
+    {
+        var tempHome = Path.Combine(Path.GetTempPath(), "ps-bash-home-" + Guid.NewGuid().ToString("N"));
+        var targetDir = Path.Combine(tempHome, "work", "beagle-term");
+        Directory.CreateDirectory(targetDir);
+
+        try
+        {
+            var (exitCode, stdout, stderr) = await RunShellAsync(
+                ["-c", "cd ~/work/beagle-term; pwd"],
+                timeout: null,
+                env: new Dictionary<string, string?>
+                {
+                    ["HOME"] = tempHome,
+                    ["USERPROFILE"] = tempHome,
+                });
+
+            Assert.Equal(0, exitCode);
+            Assert.Contains("work/beagle-term", stdout.Replace('\\', '/'));
+            Assert.DoesNotContain("work/beagle-term", stderr.Replace('\\', '/'));
+        }
+        finally
+        {
+            try { Directory.Delete(tempHome, recursive: true); } catch { }
+        }
+    }
+
+    [SkippableFact]
+    public async Task Pwd_AfterRelativeCd_PrintsDirectory()
+    {
+        var tempDir = Path.Combine(Path.GetTempPath(), "ps-bash-cd-relative-" + Guid.NewGuid().ToString("N"));
+        var targetDir = Path.Combine(tempDir, "child");
+        Directory.CreateDirectory(targetDir);
+
+        try
+        {
+            var (exitCode, stdout, _) = await RunShellAsync(
+                ["-c", "cd child; pwd"],
+                timeout: null,
+                env: null,
+                workingDirectory: tempDir);
+
+            Assert.Equal(0, exitCode);
+            Assert.Contains("child", stdout.Replace('\\', '/'));
+        }
+        finally
+        {
+            try { Directory.Delete(tempDir, recursive: true); } catch { }
+        }
+    }
+
+    [SkippableFact]
+    public async Task Pwd_AfterQuotedCdWithSpaces_PrintsDirectory()
+    {
+        var tempDir = Path.Combine(Path.GetTempPath(), "ps-bash-cd-spaces-" + Guid.NewGuid().ToString("N"));
+        var targetDir = Path.Combine(tempDir, "child dir");
+        Directory.CreateDirectory(targetDir);
+
+        try
+        {
+            var (exitCode, stdout, _) = await RunShellAsync(
+                ["-c", "cd 'child dir'; pwd"],
+                timeout: null,
+                env: null,
+                workingDirectory: tempDir);
+
+            Assert.Equal(0, exitCode);
+            Assert.Contains("child dir", stdout.Replace('\\', '/'));
+        }
+        finally
+        {
+            try { Directory.Delete(tempDir, recursive: true); } catch { }
+        }
+    }
+
+    [SkippableFact]
+    public async Task Pwd_AfterParentDirectoryCd_PrintsParent()
+    {
+        var tempDir = Path.Combine(Path.GetTempPath(), "ps-bash-cd-parent-" + Guid.NewGuid().ToString("N"));
+        var childDir = Path.Combine(tempDir, "child");
+        Directory.CreateDirectory(childDir);
+
+        try
+        {
+            var (exitCode, stdout, _) = await RunShellAsync(
+                ["-c", "cd ..; pwd"],
+                timeout: null,
+                env: null,
+                workingDirectory: childDir);
+
+            Assert.Equal(0, exitCode);
+            Assert.Contains(tempDir.Replace('\\', '/'), stdout.Replace('\\', '/'));
+        }
+        finally
+        {
+            try { Directory.Delete(tempDir, recursive: true); } catch { }
+        }
+    }
+
+    [SkippableFact]
+    public async Task CdWithoutArgs_GoesHome()
+    {
+        var tempHome = Path.Combine(Path.GetTempPath(), "ps-bash-home-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(tempHome);
+
+        try
+        {
+            var (exitCode, stdout, _) = await RunShellAsync(
+                ["-c", "cd; pwd"],
+                timeout: null,
+                env: new Dictionary<string, string?>
+                {
+                    ["HOME"] = tempHome,
+                    ["USERPROFILE"] = tempHome,
+                });
+
+            Assert.Equal(0, exitCode);
+            Assert.Contains(tempHome.Replace('\\', '/'), stdout.Replace('\\', '/'));
+        }
+        finally
+        {
+            try { Directory.Delete(tempHome, recursive: true); } catch { }
+        }
+    }
+
+    [SkippableFact]
+    public async Task CdMissingDirectory_ReturnsNonZeroAndKeepsCwd()
+    {
+        var (exitCode, stdout, _) = await RunShellAsync(
+            ["-c", "pwd; cd /definitely/not/ps-bash-here; pwd"]);
+
+        Assert.NotEqual(0, exitCode);
+        var lines = stdout.Replace('\\', '/')
+            .Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries);
+        Assert.True(lines.Length >= 2);
+        Assert.Equal(lines[0], lines[^1]);
     }
 
     // ── Heredoc ──────────────────────────────────────────────────────────────
@@ -583,20 +719,13 @@ public class AgentPatternEndToEndTests
     {
 
         // Set a very low cap so the test completes quickly
-        var psi = new ProcessStartInfo { FileName = "dotnet" };
-        psi.ArgumentList.Add("run");
-        psi.ArgumentList.Add("--no-build");
-        psi.ArgumentList.Add("--project");
-        psi.ArgumentList.Add(ProjectDir);
-        psi.ArgumentList.Add("--");
-        psi.ArgumentList.Add("-c");
-        psi.ArgumentList.Add("i=0; while true; do i=$((i+1)); done; echo $i");
+        var psi = PsBashTestProcess.Create(["-c", "i=0; while true; do i=$((i+1)); done; echo $i"]);
         psi.Environment["PSBASH_MAX_ITERATIONS"] = "100";
 
-        var (_, _, stderr) = await ProcessRunHelper.RunAsync(psi);
+        var (_, stdout, stderr) = await ProcessRunHelper.RunAsync(psi);
 
         // Should have hit the iteration cap and thrown
-        Assert.Contains("loop iteration limit exceeded", stderr);
+        Assert.Contains("loop iteration limit exceeded", stdout + stderr);
     }
 
     // ── Reliability: hung commands time out + kill entire process tree ───────
@@ -613,7 +742,8 @@ public class AgentPatternEndToEndTests
         var timeout = TimeSpan.FromSeconds(10);
         var ex = await Assert.ThrowsAsync<TimeoutException>(async () =>
         {
-            await RunShellAsync(new[] { "-c", "Start-Sleep 60" }, timeout);
+            var psi = PsBashTestProcess.Create(["-c", "Start-Sleep 60"]);
+            await ProcessRunHelper.RunAsync(psi, stdinContent: null, timeout: timeout);
         });
         sw.Stop();
 

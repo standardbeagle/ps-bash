@@ -210,7 +210,8 @@ public class PromptRenderingIntegrationTests
     private Task<InteractiveShellHarness> StartAsync()
         => InteractiveShellHarness.StartAsync(
             PsBashPath!,
-            noProfile: true);
+            noProfile: true,
+            startTimeout: TimeSpan.FromSeconds(15));
 
     private static string Normalize(string raw)
         => raw.Replace("\r\n", "\n").Trim();
@@ -315,6 +316,106 @@ public class PromptRenderingIntegrationTests
         finally
         {
             try { Directory.Delete(tempDir); } catch { }
+        }
+    }
+
+    [SkippableFact]
+    public async Task Interactive_GetCommand_OutputDoesNotTripFormatterRunspaceErrors()
+    {
+        Skip.If(PsBashPath is null, "ps-bash binary not found");
+
+        await using var harness = await StartAsync();
+
+        await harness.SendLineAsync("get-command ls");
+        await harness.WaitForPromptAsync(TimeSpan.FromSeconds(8));
+
+        var output = Normalize(harness.ReadSinceLastPrompt());
+        Assert.Contains("ls", output);
+        Assert.DoesNotContain("formatter error", harness.Stderr, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("There is no Runspace available", harness.Stderr, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [SkippableFact]
+    public async Task Interactive_Pwd_PrintsCurrentDirectory()
+    {
+        Skip.If(PsBashPath is null, "ps-bash binary not found");
+
+        var tempDir = Path.Combine(Path.GetTempPath(), "ps-bash-pwd-test-" + Guid.NewGuid().ToString("N")[..8]);
+        Directory.CreateDirectory(tempDir);
+        try
+        {
+            await using var harness = await StartAsync();
+
+            var cdPath = tempDir.Replace('\\', '/');
+            await harness.SendLineAsync($"cd {cdPath}");
+            await harness.WaitForPromptAsync(TimeSpan.FromSeconds(8));
+
+            await harness.SendLineAsync("pwd");
+            await harness.WaitForPromptAsync(TimeSpan.FromSeconds(8));
+
+            var output = Normalize(harness.ReadSinceLastPrompt());
+            Assert.Contains(Path.GetFileName(tempDir), output);
+        }
+        finally
+        {
+            try { Directory.Delete(tempDir); } catch { }
+        }
+    }
+
+    [SkippableFact]
+    public async Task Interactive_CdHomeRelativeThenPwd_PrintsNewDirectory()
+    {
+        Skip.If(PsBashPath is null, "ps-bash binary not found");
+
+        await using var harness = await StartAsync();
+
+        var targetDir = Path.Combine(harness.TempHome, "work", "beagle-term");
+        Directory.CreateDirectory(targetDir);
+
+        await harness.SendLineAsync("cd ~/work/beagle-term");
+        await harness.WaitForPromptAsync(TimeSpan.FromSeconds(8));
+
+        await harness.SendLineAsync("pwd");
+        await harness.WaitForPromptAsync(TimeSpan.FromSeconds(8));
+
+        var output = Normalize(harness.ReadSinceLastPrompt());
+        Assert.Contains("work/beagle-term", output.Replace('\\', '/'));
+    }
+
+    [SkippableFact]
+    public async Task Interactive_AbsoluteExternalCommand_PrintsOutput()
+    {
+        Skip.If(PsBashPath is null, "ps-bash binary not found");
+
+        var tempDir = Path.Combine(Path.GetTempPath(), "ps-bash-external-test-" + Guid.NewGuid().ToString("N")[..8]);
+        Directory.CreateDirectory(tempDir);
+        var scriptPath = OperatingSystem.IsWindows()
+            ? Path.Combine(tempDir, "print-cwd.cmd")
+            : Path.Combine(tempDir, "print-cwd");
+        try
+        {
+            if (OperatingSystem.IsWindows())
+            {
+                await File.WriteAllTextAsync(scriptPath, "@echo external-ok\r\n");
+            }
+            else
+            {
+                await File.WriteAllTextAsync(scriptPath, "#!/bin/sh\necho external-ok\n");
+                File.SetUnixFileMode(scriptPath, UnixFileMode.UserExecute);
+            }
+
+            await using var harness = await StartAsync();
+
+            var commandPath = scriptPath.Replace('\\', '/');
+            await harness.SendLineAsync(commandPath);
+            await harness.WaitForPromptAsync(TimeSpan.FromSeconds(8));
+
+            var output = Normalize(harness.ReadSinceLastPrompt());
+            Assert.Contains("external-ok", output);
+        }
+        finally
+        {
+            try { Directory.Delete(tempDir, recursive: true); } catch { }
         }
     }
 

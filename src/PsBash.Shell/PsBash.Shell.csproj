@@ -18,27 +18,49 @@
 
   <ItemGroup>
     <ProjectReference Include="..\PsBash.Core\PsBash.Core.csproj" />
-    <ProjectReference Include="..\PsBash.Host\PsBash.Host.csproj" />
+    <ProjectReference Include="..\PsBash.Host\PsBash.Host.csproj"
+                      ReferenceOutputAssembly="false"
+                      PrivateAssets="all" />
   </ItemGroup>
 
+  <Target Name="PublishHostSidecar" AfterTargets="Publish" Condition="'$(PublishDir)' != ''">
+    <PropertyGroup>
+      <_HostRuntimeOutDir>$(MSBuildThisFileDirectory)..\PsBash.Host\bin\$(Configuration)\$(TargetFramework)\$(RuntimeIdentifier)\</_HostRuntimeOutDir>
+    </PropertyGroup>
+    <MSBuild Projects="..\PsBash.Host\PsBash.Host.csproj"
+             Targets="Build"
+             Properties="Configuration=$(Configuration);TargetFramework=$(TargetFramework);RuntimeIdentifier=$(RuntimeIdentifier);SelfContained=true;PublishAot=false" />
+    <ItemGroup>
+      <_PublishedHostFiles Include="$(_HostRuntimeOutDir)**\*"
+                           Exclude="$(_HostRuntimeOutDir)publish\**\*" />
+    </ItemGroup>
+    <Copy SourceFiles="@(_PublishedHostFiles)"
+          DestinationFiles="@(_PublishedHostFiles->'$(PublishDir)%(RecursiveDir)%(Filename)%(Extension)')"
+          SkipUnchangedFiles="true" />
+  </Target>
+
   <!-- Copy Host's full output (DLLs + platform runtimes) so ps-bash-host
-       can load its NuGet assemblies when launched from this output directory. -->
+       can load its managed entrypoint and NuGet assemblies when launched
+       from this output directory or from the Shell publish directory. -->
   <Target Name="CopyHostRuntimeAssets" AfterTargets="Build">
     <PropertyGroup>
       <_HostOutDir>$(MSBuildThisFileDirectory)..\PsBash.Host\bin\$(Configuration)\$(TargetFramework)\</_HostOutDir>
+      <_HostDestinationDir Condition="'$(PublishDir)' != ''">$(PublishDir)</_HostDestinationDir>
+      <_HostDestinationDir Condition="'$(_HostDestinationDir)' == ''">$(OutDir)</_HostDestinationDir>
     </PropertyGroup>
     <ItemGroup>
-      <!-- Top-level DLLs (Newtonsoft.Json, PS cmdlets, etc.) -->
-      <_HostDlls Include="$(_HostOutDir)*.dll"
-                 Exclude="$(_HostOutDir)ps-bash-host.dll;$(_HostOutDir)PsBash.*.dll" />
+      <!-- Host apphost support files and top-level DLLs (Newtonsoft.Json, PS cmdlets, etc.). -->
+      <_HostFiles Include="$(_HostOutDir)ps-bash-host.*" />
+      <_HostFiles Include="$(_HostOutDir)*.dll"
+                  Exclude="$(_HostOutDir)PsBash.*.dll" />
       <!-- Platform-specific runtime assets -->
       <_HostRuntimeFiles Include="$(_HostOutDir)runtimes\**\*" />
     </ItemGroup>
-    <Copy SourceFiles="@(_HostDlls)"
-          DestinationFolder="$(OutDir)"
+    <Copy SourceFiles="@(_HostFiles)"
+          DestinationFolder="$(_HostDestinationDir)"
           SkipUnchangedFiles="true" />
     <Copy SourceFiles="@(_HostRuntimeFiles)"
-          DestinationFiles="@(_HostRuntimeFiles->'$(OutDir)runtimes\%(RecursiveDir)%(Filename)%(Extension)')"
+          DestinationFiles="@(_HostRuntimeFiles->'$(_HostDestinationDir)runtimes\%(RecursiveDir)%(Filename)%(Extension)')"
           SkipUnchangedFiles="true" />
   </Target>
 

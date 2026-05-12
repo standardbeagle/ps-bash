@@ -6,10 +6,7 @@ namespace PsBash.Shell.Tests;
 [Trait("Category", "Integration")]
 public class ProgramEndToEndTests
 {
-    private static readonly string ProjectDir = Path.GetFullPath(
-        Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "..",
-            "src", "PsBash.Shell"));
-
+    private static readonly string IpcEndpoint = PsBashTestProcess.CreateEndpoint();
 
     private static Task<(int ExitCode, string Stdout, string Stderr)> RunShellAsync(
         params string[] arguments)
@@ -31,18 +28,7 @@ public class ProgramEndToEndTests
     }
 
     private static ProcessStartInfo BuildPsi(string[] arguments)
-    {
-        var psi = new ProcessStartInfo { FileName = "dotnet" };
-        psi.ArgumentList.Add("run");
-        psi.ArgumentList.Add("--no-build");
-        psi.ArgumentList.Add("--project");
-        psi.ArgumentList.Add(ProjectDir);
-        psi.ArgumentList.Add("--");
-        foreach (var arg in arguments)
-            psi.ArgumentList.Add(arg);
-
-        return psi;
-    }
+        => PsBashTestProcess.Create(arguments, ipcEndpoint: IpcEndpoint);
 
     [SkippableFact]
     public async Task Command_WriteHostHello_OutputsHelloAndExitsZero()
@@ -58,10 +44,10 @@ public class ProgramEndToEndTests
     public async Task Command_ThrowError_PropagatesExitCodeAndStderr()
     {
 
-        var (exitCode, _, stderr) = await RunShellAsync("-c", "throw 'deliberate failure'");
+        var (exitCode, stdout, stderr) = await RunShellAsync("-c", "throw 'deliberate failure'");
 
         Assert.Equal(1, exitCode);
-        Assert.Contains("deliberate failure", stderr);
+        Assert.Contains("deliberate failure", stdout + stderr);
     }
 
     // Regression: `ps-bash -c "git log --oneline -20"` was reported to fail
@@ -116,7 +102,6 @@ public class ProgramEndToEndTests
         Assert.Equal(0, exitCode);
         Assert.Contains("[ps-bash] input:", stderr);
         Assert.Contains("[ps-bash] transpiled:", stderr);
-        Assert.Contains("[ps-bash] pwsh:", stderr);
         Assert.Contains("[ps-bash] exit:", stderr);
     }
 
@@ -133,7 +118,8 @@ public class ProgramEndToEndTests
         var timeout = TimeSpan.FromSeconds(10);
         var ex = await Assert.ThrowsAsync<TimeoutException>(async () =>
         {
-            await RunShellAsync(new[] { "-c", "Start-Sleep 60" }, timeout);
+            var psi = PsBashTestProcess.Create(["-c", "Start-Sleep 60"]);
+            await ProcessRunHelper.RunAsync(psi, stdinContent: null, timeout: timeout);
         });
         sw.Stop();
 

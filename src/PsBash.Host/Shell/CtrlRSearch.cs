@@ -54,6 +54,7 @@ public sealed class CtrlRSearch : IDisposable
     private int _editCursor = 0;
     private string? _editBuffer = null;
     private bool _disposed = false;
+    private bool _inAlternateScreen = false;
     private int _terminalWidth = 80;
     private int _terminalHeight = 24;
 
@@ -873,11 +874,22 @@ public sealed class CtrlRSearch : IDisposable
         Console.Write(SaveCursor);
         Console.Write(EnterAltScreen);
         Console.Write(HideCursor);
+        _inAlternateScreen = true;
         UpdateTerminalSize();
     }
 
     private void ExitAlternateScreen()
     {
+        // Idempotent: every early-return path (Esc / Enter / Ctrl-C / Tab→edit
+        // result) calls this explicitly, and the surrounding try/finally calls
+        // it again on the way out. A second invocation would write a stale
+        // RestoreCursor (\x1b[u) after the alt-screen had already been left,
+        // jumping the cursor to where SaveCursor was anchored and then clearing
+        // the wrong row — the LineEditor's next Redraw lands offset, which
+        // looks like overlapping overlay state during typing.
+        if (!_inAlternateScreen) return;
+        _inAlternateScreen = false;
+
         Console.Write(ResetAttributes);
         Console.Write(ShowCursor);
         Console.Write(ExitAltScreen);

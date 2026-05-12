@@ -67,7 +67,17 @@ public sealed class IpcWorker : IWorker
         // handshake, reuse it. If the host answers but is obsolete (protocol
         // or build mismatch), ask it to retire gracefully before we replace.
         var initial = await CheckHealthAsync(TimeSpan.FromMilliseconds(750), ct).ConfigureAwait(false);
-        if (initial == HostHealthState.Healthy) return;
+        if (initial == HostHealthState.Healthy)
+        {
+            var healthyMetadata = HostMetadata.TryRead(_scheme, _endpoint);
+            if (HostOwnership.MetadataMatchesLauncher(
+                    healthyMetadata,
+                    _hostBinaryPath,
+                    HostProtocol.BuildIdentity))
+                return;
+
+            initial = HostHealthState.Obsolete;
+        }
         if (initial == HostHealthState.Starting)
         {
             if (await WaitForHealthyAsync(ct).ConfigureAwait(false)) return;
@@ -263,14 +273,14 @@ public sealed class IpcWorker : IWorker
         var psi = new ProcessStartInfo
         {
             FileName = _hostBinaryPath,
-            UseShellExecute = false,
+            UseShellExecute = true,
             CreateNoWindow = true,
+            WindowStyle = ProcessWindowStyle.Hidden,
             RedirectStandardInput = false,
             RedirectStandardOutput = false,
             RedirectStandardError = false,
         };
-        psi.Environment["PSBASH_HOST_PARENT_PID"] = Environment.ProcessId.ToString();
-
+        psi.ArgumentList.Add($"--ipc-endpoint={_scheme}:{_endpoint}");
         Process? proc = null;
         bool spawnSucceeded = false;
         try
@@ -365,7 +375,7 @@ public sealed class IpcWorker : IWorker
                 line =>
                 {
                     if (OutputCallback is { } cb) cb(line);
-                    else Console.WriteLine(line);
+                    else Console.Write(line);
                 },
                 linked.Token).ConfigureAwait(false);
         }
@@ -383,7 +393,7 @@ public sealed class IpcWorker : IWorker
         var envValue = Environment.GetEnvironmentVariable("PSBASH_TIMEOUT");
         if (envValue is not null && int.TryParse(envValue, out var seconds) && seconds > 0)
             return TimeSpan.FromSeconds(seconds);
-        return TimeSpan.FromSeconds(5);
+        return TimeSpan.FromSeconds(20);
     }
 
     private static TimeSpan GetCallTimeout()

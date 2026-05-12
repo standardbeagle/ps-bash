@@ -478,7 +478,10 @@ public class PsEmitterTests
     {
         var result = PsEmitter.Transpile("mkdir dir && cd dir");
 
-        Assert.Equal("Invoke-BashMkdir dir && cd dir", result);
+        Assert.StartsWith("Invoke-BashMkdir dir && $($__psbash_cd_target = 'dir'", result);
+        Assert.Contains("$global:__PsBashCwd = $__psbash_cd_resolved", result);
+        Assert.Contains("[System.Environment]::CurrentDirectory = $__psbash_cd_resolved", result);
+        Assert.Contains("$env:PWD = $__psbash_cd_resolved", result);
     }
 
     [Fact]
@@ -763,7 +766,17 @@ public class PsEmitterTests
     {
         var result = PsEmitter.Transpile("cd ~");
 
-        Assert.Equal("cd $HOME", result);
+        Assert.StartsWith("$__psbash_cd_target = $HOME", result);
+        Assert.Contains("Set-Location -LiteralPath $__psbash_cd_resolved -ErrorAction SilentlyContinue", result);
+    }
+
+    [Fact]
+    public void Transpile_CdInAndChain_WrapsStatementOperand()
+    {
+        var result = PsEmitter.Transpile("cd C:/Temp && echo ok");
+
+        Assert.StartsWith("$($__psbash_cd_target = 'C:/Temp'", result);
+        Assert.Contains(") && Invoke-BashEcho ok", result);
     }
 
     [Fact]
@@ -1267,7 +1280,8 @@ public class PsEmitterTests
     {
         var result = PsEmitter.Transpile("(cd /tmp && pwd) && pwd");
 
-        Assert.Equal("try { Push-Location; cd /tmp && Invoke-BashPwd } finally { Pop-Location } && Invoke-BashPwd", result);
+        Assert.StartsWith("try { Push-Location; $($__psbash_cd_target = '/tmp'", result);
+        Assert.Contains("&& Invoke-BashPwd } finally { Pop-Location } && Invoke-BashPwd", result);
     }
 
     [Fact]

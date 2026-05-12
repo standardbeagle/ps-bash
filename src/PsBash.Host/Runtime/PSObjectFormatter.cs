@@ -75,7 +75,15 @@ internal static class PSObjectFormatter
             var row = new string[columns.Count];
             for (int c = 0; c < columns.Count; c++)
             {
-                var val = item?.Properties[columns[c]]?.Value;
+                object? val;
+                try
+                {
+                    val = item?.Properties[columns[c]]?.Value;
+                }
+                catch
+                {
+                    val = null;
+                }
                 row[c] = FormatValue(val);
             }
             rows.Add(row);

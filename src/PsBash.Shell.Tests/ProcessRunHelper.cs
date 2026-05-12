@@ -3,11 +3,11 @@ using System.Diagnostics;
 namespace PsBash.Shell.Tests;
 
 /// <summary>
-/// Helpers for spawning `dotnet run` / `ps-bash` child processes in integration tests.
+/// Helpers for spawning `ps-bash` child processes in integration tests.
 ///
 /// CRITICAL RELIABILITY CONTRACT:
 /// Every test that spawns an external process MUST use these helpers (or replicate
-/// their pattern) so that a hung command NEVER orphans the dotnet-run → ps-bash → pwsh
+/// their pattern) so that a hung command NEVER orphans the ps-bash process tree
 /// process tree for hours. See Reliability C (Dart task YqMcVdyfYKzt).
 ///
 /// Contract:
@@ -29,6 +29,8 @@ internal static class ProcessRunHelper
         psi.RedirectStandardError = true;
         psi.RedirectStandardInput = true;
         psi.UseShellExecute = false;
+        psi.CreateNoWindow = true;
+        psi.WindowStyle = ProcessWindowStyle.Hidden;
 
         var effectiveTimeout = timeout ?? DefaultTimeout;
         var process = Process.Start(psi)

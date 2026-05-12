@@ -113,4 +113,41 @@ public class HostOwnershipTests
         // classifier handles that branch separately.
         Assert.True(exe is null || File.Exists(exe), "running exe path must be readable when present");
     }
+
+    [Fact]
+    public void MetadataMatchesLauncher_NullMetadata_AllowsLegacyHealthyHost()
+    {
+        Assert.True(HostOwnership.MetadataMatchesLauncher(null, "host.exe", HostProtocol.BuildIdentity));
+    }
+
+    [Fact]
+    public void MetadataMatchesLauncher_SameBuildDifferentExecutable_ReturnsFalse()
+    {
+        var currentHost = OperatingSystem.IsWindows()
+            ? @"C:\Users\andyb\.local\bin\ps-bash-host.exe"
+            : "/home/andyb/.local/bin/ps-bash-host";
+        var oldHost = currentHost + ".old";
+        var meta = Meta(pid: 123, exe: oldHost, owner: Environment.UserName) with
+        {
+            ProtocolVersion = HostProtocol.ProtocolVersion,
+            BuildIdentity = HostProtocol.BuildIdentity,
+        };
+
+        Assert.False(HostOwnership.MetadataMatchesLauncher(meta, currentHost, HostProtocol.BuildIdentity));
+    }
+
+    [Fact]
+    public void MetadataMatchesLauncher_SameExecutableAndBuild_ReturnsTrue()
+    {
+        var currentHost = OperatingSystem.IsWindows()
+            ? @"C:\Users\andyb\.local\bin\ps-bash-host.exe"
+            : "/home/andyb/.local/bin/ps-bash-host";
+        var meta = Meta(pid: 123, exe: currentHost, owner: Environment.UserName) with
+        {
+            ProtocolVersion = HostProtocol.ProtocolVersion,
+            BuildIdentity = HostProtocol.BuildIdentity,
+        };
+
+        Assert.True(HostOwnership.MetadataMatchesLauncher(meta, currentHost, HostProtocol.BuildIdentity));
+    }
 }

@@ -86,6 +86,24 @@ public static class HostOwnership
     }
 
     /// <summary>
+    /// Verify that a responding host sidecar describes the same host binary and
+    /// build the launcher is about to use. A health payload can match across a
+    /// local reinstall from the same commit, while the old host process is still
+    /// running from a renamed .old executable; the executable path closes that
+    /// gap.
+    /// </summary>
+    public static bool MetadataMatchesLauncher(
+        HostMetadata? metadata,
+        string expectedExecutablePath,
+        string expectedBuildIdentity)
+    {
+        if (metadata is null) return true;
+        if (metadata.ProtocolVersion != HostProtocol.ProtocolVersion) return false;
+        if (!string.Equals(metadata.BuildIdentity, expectedBuildIdentity, StringComparison.Ordinal)) return false;
+        return ExecutablesMatch(metadata.ExecutablePath, expectedExecutablePath);
+    }
+
+    /// <summary>
     /// Probe whether <paramref name="pid"/> resolves to a live process and,
     /// if so, the path of its main module. Returns <c>(false, null)</c> when
     /// the process is dead, the PID is unknown, or platform restrictions

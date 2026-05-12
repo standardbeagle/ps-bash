@@ -7,30 +7,19 @@ namespace PsBash.Shell.Tests;
 [Trait("Category", "Integration")]
 public class InteractiveShellTests
 {
-    private static readonly string ProjectDir = Path.GetFullPath(
-        Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "..",
-            "src", "PsBash.Shell"));
-
     [SkippableFact]
     public async Task InteractiveMode_LaunchesHostAndPassesThroughExitCode()
     {
-        var psi = new ProcessStartInfo
-        {
-            FileName = "dotnet",
-            RedirectStandardInput = true,
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
-            UseShellExecute = false,
-        };
-        psi.ArgumentList.Add("run");
-        psi.ArgumentList.Add("--no-build");
-        psi.ArgumentList.Add("--project");
-        psi.ArgumentList.Add(ProjectDir);
-        psi.ArgumentList.Add("--");
-        psi.ArgumentList.Add("-i");
+        var psi = PsBashTestProcess.Create(["-i"]);
+        psi.RedirectStandardInput = true;
+        psi.RedirectStandardOutput = true;
+        psi.RedirectStandardError = true;
+        psi.UseShellExecute = false;
+        psi.CreateNoWindow = true;
+        psi.WindowStyle = ProcessWindowStyle.Hidden;
 
         var process = Process.Start(psi)
-            ?? throw new InvalidOperationException("Failed to start dotnet run");
+            ?? throw new InvalidOperationException("Failed to start ps-bash");
 
         await process.StandardInput.WriteLineAsync("exit 42");
         process.StandardInput.Close();
@@ -43,23 +32,16 @@ public class InteractiveShellTests
     [SkippableFact]
     public async Task InteractiveMode_DoesNotRequireCommand()
     {
-        var psi = new ProcessStartInfo
-        {
-            FileName = "dotnet",
-            RedirectStandardInput = true,
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
-            UseShellExecute = false,
-        };
-        psi.ArgumentList.Add("run");
-        psi.ArgumentList.Add("--no-build");
-        psi.ArgumentList.Add("--project");
-        psi.ArgumentList.Add(ProjectDir);
-        psi.ArgumentList.Add("--");
-        psi.ArgumentList.Add("-i");
+        var psi = PsBashTestProcess.Create(["-i"]);
+        psi.RedirectStandardInput = true;
+        psi.RedirectStandardOutput = true;
+        psi.RedirectStandardError = true;
+        psi.UseShellExecute = false;
+        psi.CreateNoWindow = true;
+        psi.WindowStyle = ProcessWindowStyle.Hidden;
 
         var process = Process.Start(psi)
-            ?? throw new InvalidOperationException("Failed to start dotnet run");
+            ?? throw new InvalidOperationException("Failed to start ps-bash");
 
         await process.StandardInput.WriteLineAsync("exit 0");
         process.StandardInput.Close();

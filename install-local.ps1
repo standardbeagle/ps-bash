@@ -1,3 +1,6 @@
+dotnet clean src/PsBash.Core -c Release
+if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
 dotnet publish src/PsBash.Shell -c Release -r win-x64 -p:PublishAot=false --self-contained
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
@@ -6,6 +9,15 @@ if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
 $publishDir = "src/PsBash.Shell/bin/Release/net10.0/win-x64/publish"
 $destDir = "$env:USERPROFILE\.local\bin"
+$managementClient = Join-Path $publishDir "ps-bash.exe"
+
+if (Test-Path $managementClient) {
+    Write-Host "Requesting running ps-bash host shutdown..." -ForegroundColor DarkGray
+    & $managementClient host shutdown --deadline-ms 5000
+    if ($LASTEXITCODE -ne 0) {
+        Write-Warning "ps-bash host shutdown returned exit code $LASTEXITCODE; continuing with file replacement."
+    }
+}
 
 # NTFS trick: a locked file cannot be deleted or overwritten, but it CAN be
 # renamed — existing handles keep pointing at the old file by its file record.

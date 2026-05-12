@@ -16,6 +16,7 @@ internal sealed class Connection
     private const string PerInvocationReset =
         "$global:__BashErrexit = $false; " +
         "$ErrorActionPreference = 'Continue'; " +
+        "$global:LASTEXITCODE = 0; " +
         "$global:BashPositional = $null; " +
         "$global:BashPositional0 = $null; ";
 
@@ -104,10 +105,7 @@ internal sealed class Connection
 
         void WriteOutput(string line)
         {
-            // Trim trailing newlines: PS BashObjects include a trailing \n in BashText.
-            // WriteResponseLineAsync adds its own \n, so we must strip to avoid double-newlines.
-            var trimmed = line.TrimEnd('\n', '\r');
-            HostProtocol.WriteResponseLineAsync(_stream, trimmed, ct).GetAwaiter().GetResult();
+            HostProtocol.WriteResponseLineAsync(_stream, line, ct).GetAwaiter().GetResult();
         }
 
         var worker = await _workerTask.ConfigureAwait(false);

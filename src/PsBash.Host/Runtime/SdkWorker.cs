@@ -1,4 +1,5 @@
 using System.Management.Automation;
+using System.Management.Automation.Runspaces;
 using PsBash.Core.Runtime;
 
 namespace PsBash.Host.Runtime;
@@ -46,7 +47,7 @@ public sealed class SdkWorker : IWorker
         await _lock.WaitAsync(ct);
         try
         {
-            return await Task.Run(() => RunCommand(command, callback), ct);
+            return await Task.Run(() => WithDefaultRunspace(() => RunCommand(command, callback)), ct);
         }
         finally
         {
@@ -60,7 +61,7 @@ public sealed class SdkWorker : IWorker
         await _lock.WaitAsync(ct);
         try
         {
-            return await Task.Run(() => RunCommandCollect(expression), ct);
+            return await Task.Run(() => WithDefaultRunspace(() => RunCommandCollect(expression)), ct);
         }
         finally
         {
@@ -78,11 +79,25 @@ public sealed class SdkWorker : IWorker
             // When ct fires mid-command (e.g. parent-death watcher), stop the PS
             // pipeline so Invoke() returns instead of blocking indefinitely.
             using var stopReg = ct.Register(() => _ps.Stop());
-            return await Task.Run(() => RunCommand(command, output), ct);
+            return await Task.Run(() => WithDefaultRunspace(() => RunCommand(command, output)), ct);
         }
         finally
         {
             _lock.Release();
+        }
+    }
+
+    private T WithDefaultRunspace<T>(Func<T> action)
+    {
+        var prior = Runspace.DefaultRunspace;
+        Runspace.DefaultRunspace = _sdkRunspace.Runspace;
+        try
+        {
+            return action();
+        }
+        finally
+        {
+            Runspace.DefaultRunspace = prior;
         }
     }
 
@@ -106,12 +121,17 @@ public sealed class SdkWorker : IWorker
         // below) and adds formatter output to the same sink. The host UI's
         // forwarder is cleared in the finally block to avoid leaking state
         // across invocations of the shared runspace.
+        // Convention: `line` always carries its own trailing newline.
+        // GetOutputText appends one for BashText/string items; FlushFormatBufferCore
+        // appends one to each formatter row. Use Console.Write here (not WriteLine)
+        // so we don't double-newline BashText output — the visible symptom was
+        // `ls` rendering a blank line between every entry.
         Action<string> deliver = line =>
         {
             try
             {
                 if (output is not null) output(line);
-                else Console.WriteLine(line);
+                else Console.Write(line);
             }
             catch
             {
@@ -134,13 +154,16 @@ public sealed class SdkWorker : IWorker
         // pipeline ends. Formatting per-item would lose column-width context
         // (the formatter needs to see all rows before computing widths).
         var formatBuffer = new List<PSObject>();
-        void FlushFormatBuffer()
+        var outputLock = new object();
+        var processedOutputCount = 0;
+
+        void FlushFormatBufferCore()
         {
             if (formatBuffer.Count == 0) return;
             try
             {
                 foreach (var fline in PSObjectFormatter.FormatAsTable(formatBuffer))
-                    deliver(fline);
+                    deliver(fline + Environment.NewLine);
             }
             catch (Exception ex)
             {
@@ -149,24 +172,41 @@ public sealed class SdkWorker : IWorker
                 // user still sees something rather than silent loss.
                 Console.Error.WriteLine($"ps-bash: formatter error: {ex.Message}");
                 foreach (var raw in formatBuffer)
-                    deliver(raw?.ToString() ?? "");
+                    deliver((raw?.ToString() ?? "") + Environment.NewLine);
             }
             formatBuffer.Clear();
         }
 
-        outputCollection.DataAdded += (sender, e) =>
+        void ProcessItemCore(PSObject? item)
         {
-            var col = (System.Management.Automation.PSDataCollection<System.Management.Automation.PSObject>)sender!;
-            var item = col[e.Index];
             if (IsTextStreamItem(item))
             {
-                FlushFormatBuffer();
+                FlushFormatBufferCore();
                 var line = GetOutputText(item);
                 deliver(line);
             }
             else
             {
                 formatBuffer.Add(item!);
+            }
+        }
+
+        void DrainOutputCollectionCore(System.Management.Automation.PSDataCollection<System.Management.Automation.PSObject> col)
+        {
+            while (processedOutputCount < col.Count)
+            {
+                var item = col[processedOutputCount];
+                processedOutputCount++;
+                ProcessItemCore(item);
+            }
+        }
+
+        outputCollection.DataAdded += (sender, e) =>
+        {
+            var col = (System.Management.Automation.PSDataCollection<System.Management.Automation.PSObject>)sender!;
+            lock (outputLock)
+            {
+                DrainOutputCollectionCore(col);
             }
         };
 
@@ -189,18 +229,31 @@ public sealed class SdkWorker : IWorker
             catch (System.Management.Automation.ParseException ex)
             {
                 Console.Error.WriteLine($"ps-bash: parse error: {ex.Message}");
+                deliver($"ps-bash: parse error: {ex.Message}{Environment.NewLine}");
                 _ps.Commands.Clear();
                 return 1;
             }
             catch (System.Management.Automation.RuntimeException ex)
             {
                 Console.Error.WriteLine($"ps-bash: {ex.Message}");
+                deliver($"ps-bash: {ex.Message}{Environment.NewLine}");
                 _ps.Commands.Clear();
                 return 1;
             }
 
-            // Drain any raw PSObjects buffered for batched formatting.
-            FlushFormatBuffer();
+            // DataAdded can lag the synchronous Invoke() return for the final
+            // item. Drain the collection by count before the exit sentinel so
+            // single-output commands like `pwd` cannot disappear.
+            lock (outputLock)
+            {
+                DrainOutputCollectionCore(outputCollection);
+                FlushFormatBufferCore();
+            }
+
+            foreach (var error in _ps.Streams.Error)
+            {
+                Console.Error.WriteLine(error.ToString());
+            }
 
             // exit N calls PSHost.SetShouldExit(N) — check before processing output.
             if (_host.ShouldExit)
@@ -236,9 +289,13 @@ public sealed class SdkWorker : IWorker
 
         var bashText = item.Properties["BashText"]?.Value;
         if (bashText is not null)
-            return bashText.ToString() ?? "";
+        {
+            var text = bashText.ToString() ?? "";
+            var noTrailingNewline = item.Properties["NoTrailingNewline"]?.Value is true;
+            return noTrailingNewline ? text : text + Environment.NewLine;
+        }
 
-        return item.BaseObject is string s ? s : item.ToString();
+        return item.BaseObject is string s ? s + Environment.NewLine : item.ToString() + Environment.NewLine;
     }
 
     /// <summary>

@@ -10086,7 +10086,13 @@ function Invoke-BashPwd {
         if ($arg -ceq '-P') { $physical = $true }
     }
 
-    $location = if ($physical) {
+    $location = if (-not $physical -and $env:PWD) {
+        $env:PWD
+    } elseif (-not $physical -and $global:__PsBashCwd) {
+        $global:__PsBashCwd
+    } elseif (-not $physical -and [System.Environment]::CurrentDirectory) {
+        [System.Environment]::CurrentDirectory
+    } elseif ($physical) {
         try {
             (Resolve-Path -Path (Get-Location).Path).ProviderPath
         } catch {
@@ -10096,9 +10102,10 @@ function Invoke-BashPwd {
     } else {
         (Get-Location).Path
     }
+    if (-not $location) { $location = [System.Environment]::CurrentDirectory }
 
     $location = $location -replace '\\', '/'
-    New-BashObject -BashText $location -TypeName 'PsBash.TextOutput'
+    Emit-BashLine -Text ($location + "`n") -Command 'pwd'
 }
 
 # --- hostname ---
@@ -13424,6 +13431,7 @@ Set-Alias -Name 'env'      -Value 'Invoke-BashEnv'      -Force -Scope Global -Op
 Set-Alias -Name 'printenv' -Value 'Invoke-BashEnv'      -Force -Scope Global -Option AllScope
 Set-Alias -Name 'basename' -Value 'Invoke-BashBasename' -Force -Scope Global -Option AllScope
 Set-Alias -Name 'dirname'  -Value 'Invoke-BashDirname'  -Force -Scope Global -Option AllScope
+Set-Alias -Name 'cd'       -Value 'Set-Location'        -Force -Scope Global -Option AllScope
 Set-Alias -Name 'pwd'      -Value 'Invoke-BashPwd'      -Force -Scope Global -Option AllScope
 Set-Alias -Name 'hostname' -Value 'Invoke-BashHostname' -Force -Scope Global -Option AllScope
 Set-Alias -Name 'whoami'   -Value 'Invoke-BashWhoami'   -Force -Scope Global -Option AllScope

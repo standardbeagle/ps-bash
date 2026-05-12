@@ -1,8 +1,6 @@
 using PsBash.Core.Parser;
 using PsBash.Core.Runtime;
 using PsBash.Core.Transpiler;
-using PsBash.Host;
-using PsBash.Host.Shell;
 using PsBash.Shell;
 
 
@@ -30,6 +28,11 @@ if (!string.IsNullOrEmpty(tracePath))
     catch (Exception ex) { Console.Error.WriteLine($"[ps-bash] trace write failed: {ex.Message}"); }
 }
 
+if (HostCommands.IsHostCommand(args))
+{
+    return await HostCommands.RunAsync(args);
+}
+
 var shellArgs = ShellArgs.Parse(args);
 
 // Path mode: explicit --unix-paths / --windows-paths flag wins; otherwise
@@ -44,7 +47,13 @@ Environment.SetEnvironmentVariable("PSBASH_UNIX_PATHS", unixPaths ? "1" : "0");
 // missing or fails to start, the invocation exits non-zero with the underlying
 // error.
 Func<Task<IWorker>> workerFactory = async () =>
-    await WorkerFactory.CreateAsync().ConfigureAwait(false);
+{
+    var hostBinary = ResolveHostBinary()
+        ?? throw new HostUnavailableException(
+            "ps-bash-host binary not found. Set PSBASH_HOST=<path> or install alongside ps-bash.");
+
+    return await IpcWorker.StartAsync(hostBinary).ConfigureAwait(false);
+};
 
 // M3: file-arg mode — ps-bash script.sh [arg1 arg2 ...]
 // Check before stdin detection: a script path argument takes priority over
@@ -63,7 +72,7 @@ if (shellArgs.ScriptPath is not null)
 
         var ps1Preamble = BuildPositionalPreamble(shellArgs.ScriptPath, shellArgs.ScriptArgs);
         var escapedPath = shellArgs.ScriptPath.Replace("'", "''");
-        return await ps1Worker.ExecuteAsync(ps1Preamble + ". '" + escapedPath + "'");
+        return await ps1Worker.ExecuteAsync(BuildInvocationCwdPreamble() + ps1Preamble + ". '" + escapedPath + "'");
     }
 
     // .sh execution: read, transpile, build positional preamble, execute.
@@ -83,7 +92,7 @@ if (shellArgs.ScriptPath is not null)
     await using IWorker scriptWorker = await workerFactory();
 
     var preamble = BuildPositionalPreamble(shellArgs.ScriptPath, shellArgs.ScriptArgs);
-    return await scriptWorker.ExecuteAsync(preamble + pwshScriptCommand);
+    return await scriptWorker.ExecuteAsync(BuildInvocationCwdPreamble() + preamble + pwshScriptCommand);
 }
 
 // Auto-detect piped stdin: if no command given and stdin is redirected, try reading it.
@@ -107,7 +116,7 @@ if (shellArgs.Interactive || shellArgs.Command is null)
     // Interactive mode: spawn ps-bash-host --interactive so the host inherits
     // the real tty (Console.Clear / WindowWidth / VT all work against the
     // terminal). No fallback: if the host binary is missing, exit non-zero.
-    var hostBinary = WorkerFactory.ResolveHostBinary();
+    var hostBinary = ResolveHostBinary();
     if (hostBinary is null)
     {
         Console.Error.WriteLine(
@@ -141,7 +150,7 @@ JobObjectWatchdog.StartParentDeathWatcher(parentPid);
 // this is a no-op early-return today — but it means every -c invocation
 // follows the same ExpandAliases → Transpile → worker.ExecuteAsync sequence
 // as the interactive loop, so future alias wiring stays unified.
-var bashCommand = InteractiveShell.ExpandAliases(shellArgs.Command);
+var bashCommand = shellArgs.Command;
 
 string? pwshCommand;
 try
@@ -162,7 +171,7 @@ if (debug)
 
 await using IWorker worker = await workerFactory();
 
-var exitCode = await worker.ExecuteAsync(pwshCommand);
+var exitCode = await worker.ExecuteAsync(BuildInvocationCwdPreamble() + pwshCommand);
 
 if (debug)
 {
@@ -184,4 +193,23 @@ static string BuildPositionalPreamble(string script0, string[] scriptArgs)
     var arrayLiteral = scriptArgs.Length == 0 ? "@()" : $"@({argList})";
 
     return $"$global:BashPositional0 = {scriptName}; $global:BashPositional = {arrayLiteral}; ";
+}
+
+static string BuildInvocationCwdPreamble()
+{
+    var cwd = Environment.CurrentDirectory.Replace("'", "''");
+    return
+        "$__psbash_invocation_cwd = '" + cwd + "'; " +
+        "[System.Environment]::CurrentDirectory = $__psbash_invocation_cwd; " +
+        "$env:PWD = $__psbash_invocation_cwd; " +
+        "Set-Location -LiteralPath $__psbash_invocation_cwd -ErrorAction SilentlyContinue; ";
+}
+
+static string? ResolveHostBinary()
+{
+    var overridePath = Environment.GetEnvironmentVariable("PSBASH_HOST");
+    if (!string.IsNullOrEmpty(overridePath)) return overridePath;
+
+    var sxs = Path.Combine(AppContext.BaseDirectory, IpcWorker.GetHostBinaryName());
+    return File.Exists(sxs) ? sxs : null;
 }

@@ -51,6 +51,15 @@ internal sealed class SdkRunspace : IAsyncDisposable
         var host = new ExitTrackingHost();
         var runspace = RunspaceFactory.CreateRunspace(host, iss);
         runspace.Open();
+        try
+        {
+            runspace.SessionStateProxy.Path.SetLocation(Environment.CurrentDirectory);
+        }
+        catch
+        {
+            // Some constrained SDK hosts may not have a FileSystem provider yet.
+            // In that case, module commands fall back to .NET's current directory.
+        }
 
         using var ps = PowerShell.Create();
         ps.Runspace = runspace;

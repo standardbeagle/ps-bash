@@ -178,6 +178,8 @@ internal sealed class LineEditor
                     return null;   // EOF
                 }
                 DeleteCharForward();
+                await UpdateSuggestionAsync();
+                Redraw();
                 continue;
             }
 
@@ -531,11 +533,13 @@ internal sealed class LineEditor
         Redraw();
     }
 
+    // Buffer mutators do NOT redraw — the keystroke handler in ReadLineAsync
+    // calls UpdateSuggestionAsync then Redraw() once after, eliminating the
+    // stale-suggestion flicker that came from drawing twice per keystroke.
     private void InsertChar(char c)
     {
         _buf.Insert(_cursor, c);
         _cursor++;
-        Redraw();
     }
 
     private void DeleteCharBack()
@@ -543,21 +547,18 @@ internal sealed class LineEditor
         if (_cursor <= 0) return;
         _cursor--;
         _buf.Remove(_cursor, 1);
-        Redraw();
     }
 
     private void DeleteCharForward()
     {
         if (_cursor >= _buf.Length) return;
         _buf.Remove(_cursor, 1);
-        Redraw();
     }
 
     private void KillToEnd()
     {
         _killRing = _buf.ToString(_cursor, _buf.Length - _cursor);
         _buf.Remove(_cursor, _buf.Length - _cursor);
-        Redraw();
     }
 
     private void KillToStart()
@@ -565,7 +566,6 @@ internal sealed class LineEditor
         _killRing = _buf.ToString(0, _cursor);
         _buf.Remove(0, _cursor);
         _cursor = 0;
-        Redraw();
     }
 
     private void KillWordBack()
@@ -577,7 +577,6 @@ internal sealed class LineEditor
         while (_cursor > 0 && _buf[_cursor - 1] != ' ') _cursor--;
         _killRing = _buf.ToString(_cursor, end - _cursor);
         _buf.Remove(_cursor, end - _cursor);
-        Redraw();
     }
 
     private void Yank()
@@ -585,7 +584,6 @@ internal sealed class LineEditor
         if (_killRing.Length == 0) return;
         _buf.Insert(_cursor, _killRing);
         _cursor += _killRing.Length;
-        Redraw();
     }
 
     private void MoveCursor(int delta)

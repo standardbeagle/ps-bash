@@ -27,7 +27,8 @@ internal sealed class InteractiveShellHarness : IAsyncDisposable
     public static readonly string PromptString = "PSBASH>";
     private static readonly Regex PromptRegex = new(Regex.Escape(PromptString), RegexOptions.Compiled);
 
-    public static readonly TimeSpan DefaultPromptTimeout = TimeSpan.FromSeconds(5);
+    public static readonly TimeSpan DefaultPromptTimeout = TimeSpan.FromSeconds(8);
+    public static readonly TimeSpan DefaultStartTimeout = TimeSpan.FromSeconds(15);
 
     private readonly Process _process;
     private readonly StringBuilder _sinceLastPrompt = new();
@@ -77,6 +78,17 @@ internal sealed class InteractiveShellHarness : IAsyncDisposable
             if (Directory.Exists(binDir))
             {
                 string? fallback = null;
+                string? configFallback = null;
+                var currentConfig = AppContext.BaseDirectory.Contains(
+                    $"{Path.DirectorySeparatorChar}Release{Path.DirectorySeparatorChar}",
+                    StringComparison.OrdinalIgnoreCase)
+                    ? "Release"
+                    : AppContext.BaseDirectory.Contains(
+                        $"{Path.DirectorySeparatorChar}Debug{Path.DirectorySeparatorChar}",
+                        StringComparison.OrdinalIgnoreCase)
+                        ? "Debug"
+                        : null;
+
                 foreach (var exe in Directory.EnumerateFiles(binDir, "ps-bash*", SearchOption.AllDirectories))
                 {
                     var name = Path.GetFileName(exe);
@@ -86,14 +98,24 @@ internal sealed class InteractiveShellHarness : IAsyncDisposable
                     if (!isExe && !isNoExt)
                         continue;
 
-                    if (preferExe && isExe)
+                    var matchesConfig = currentConfig is not null
+                        && exe.Contains(
+                            $"{Path.DirectorySeparatorChar}{currentConfig}{Path.DirectorySeparatorChar}",
+                            StringComparison.OrdinalIgnoreCase);
+
+                    if (matchesConfig && preferExe && isExe)
                         return exe;
-                    if (!preferExe && isNoExt)
+                    if (matchesConfig && !preferExe && isNoExt)
                         return exe;
+
+                    if (matchesConfig)
+                        configFallback ??= exe;
 
                     // Keep as fallback if we don't find the preferred form.
                     fallback ??= exe;
                 }
+                if (configFallback is not null)
+                    return configFallback;
                 if (fallback is not null)
                     return fallback;
             }
@@ -189,7 +211,7 @@ internal sealed class InteractiveShellHarness : IAsyncDisposable
         // Wait for the initial prompt so callers know the shell is ready.
         try
         {
-            await harness.WaitForPromptAsync(startTimeout ?? DefaultPromptTimeout);
+            await harness.WaitForPromptAsync(startTimeout ?? DefaultStartTimeout);
         }
         catch
         {

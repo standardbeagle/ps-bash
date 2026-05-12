@@ -7,6 +7,7 @@
     <PublishAot>false</PublishAot>
     <AssemblyName>ps-bash-host</AssemblyName>
     <CopyLocalLockFileAssemblies>true</CopyLocalLockFileAssemblies>
+    <NoWarn>$(NoWarn);IL2026</NoWarn>
   </PropertyGroup>
   <ItemGroup>
     <InternalsVisibleTo Include="PsBash.Host.Tests" />

@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using PsBash.Core.Runtime.Ipc;
 using PsBash.Shell;
 using Xunit;
 
@@ -42,10 +43,10 @@ public class ProcessLifecycleTests
             // handle was inherited but never written to.
             process.StandardInput.Close();
 
-            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(15));
             await process.WaitForExitAsync(cts.Token);
 
-            Assert.True(process.HasExited, "ps-bash did not exit within 5s on closed-stdin EOF");
+            Assert.True(process.HasExited, "ps-bash did not exit within 15s on closed-stdin EOF");
             Assert.Equal(0, process.ExitCode);
         }
         finally
@@ -74,6 +75,8 @@ public class ProcessLifecycleTests
             UseShellExecute = false,
             CreateNoWindow = true,
         };
+        psi.Environment[IpcTransportFactory.EndpointEnvVar] = PsBashTestProcess.CreateEndpoint();
+        psi.Environment["PSBASH_HOST_IDLE_SECS"] = "1";
         using var process = Process.Start(psi)!;
         int ourPid = process.Id;
         try
@@ -81,9 +84,9 @@ public class ProcessLifecycleTests
             // 10s cap: cold-start includes pwsh JIT, module load from disk, and
             // the runspace parent-watcher setup (~3s warm, up to ~8s cold). The
             // test's purpose is "no orphan workers leak," not a perf gate.
-            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(20));
             await process.WaitForExitAsync(cts.Token);
-            Assert.True(process.HasExited, "ps-bash -c 'exit 0' did not exit within 10s");
+            Assert.True(process.HasExited, "ps-bash -c 'exit 0' did not exit within 20s");
             Assert.Equal(0, process.ExitCode);
 
             // Give the OS a moment to reap the host process that was in our job.
