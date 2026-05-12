@@ -1,15 +1,15 @@
 {
   "claims": {
-    "7mxWC3dHky3U": {
-      "runner_instance_id": "beagle-ab2-claude",
+    "4V0QRPY3bk4N": {
+      "runner_instance_id": "DESKTOP-NPIOPS6-7606",
       "runner_email": "andybrummer@standardbeagle.com",
-      "claimed_at": "2026-05-10T05:30:00Z",
-      "agent_id": "beagle-ab2-claude",
-      "parent_loop_id": "eZWUCAe8RNXp",
-      "purpose": "Loop iteration 15: T10b pipeline-object classifier",
+      "claimed_at": "2026-05-12T20:33:00Z",
+      "agent_id": "DESKTOP-NPIOPS6-7606",
+      "parent_loop_id": "AEACP6UqDUBr",
+      "purpose": "Loop iteration 1: PTY-0 AOT-on-.NET-10 spike",
       "source_event": {
-        "loop_id": "eZWUCAe8RNXp",
-        "task_id": "7mxWC3dHky3U",
+        "loop_id": "AEACP6UqDUBr",
+        "task_id": "4V0QRPY3bk4N",
         "conversation_id": null
       }
     }
