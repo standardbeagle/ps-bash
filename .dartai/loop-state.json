@@ -1,9 +1,9 @@
 {
   "status": "running",
-  "iterations": 1,
-  "spawns": 1,
+  "iterations": 2,
+  "spawns": 2,
   "started_at": "2026-05-12T20:33:00Z",
-  "last_iteration_at": "2026-05-12T21:40:00Z",
+  "last_iteration_at": "2026-05-12T21:53:00Z",
   "last_subagent": "task-executor",
   "loop_task_id": "AEACP6UqDUBr",
   "dartboard": "Personal/ps-bash",
@@ -29,6 +29,30 @@
       "fix_task_id": null,
       "branch": "pty-aot-probe",
       "spike_note": "docs/spikes/aot-on-net10.md"
+    },
+    {
+      "task_id": "3yCGvMsplPDu",
+      "iteration": 2,
+      "status": "completed",
+      "started_at": "2026-05-12T21:42:00Z",
+      "completed_at": "2026-05-12T21:53:00Z",
+      "phase_completed": "phase-9",
+      "failed_phase": null,
+      "files_changed": 5,
+      "tests_added": 8,
+      "plan_adjustments": 2,
+      "completion_summary": "PTY-1 cross-platform PTY allocation: IPty interface + ConPtyAdapter (Windows, build 17763+) + UnixPtyAdapter (POSIX posix_openpt path). 5 PASS / 3 SKIP on Linux side; Windows tests run on CI via actions/setup-dotnet@v4. Round-trip proven via slave-fd write -> master-fd read on POSIX. AOT publish for launcher still green. No emitter changes.",
+      "failure_reason": null,
+      "fix_task_created": false,
+      "fix_task_id": null,
+      "files": [
+        "src/PsBash.Shell/Pty/IPty.cs",
+        "src/PsBash.Shell/Pty/UnixPtyAdapter.cs",
+        "src/PsBash.Shell/Pty/ConPtyAdapter.cs",
+        "src/PsBash.Shell.Tests/Pty/PtyAllocationTests.cs",
+        "docs/specs/pty.md"
+      ],
+      "notes": "130 pre-existing failures in PsBash.Shell.Tests verified to predate PTY-1 (baseline confirmed by removing Pty/ directory — identical 130 failures). Environment-specific (.NET 10 RC2 SDK abort signals on WSL2). NOT a PTY-1 regression. Escalation candidate as separate environment-stability task. Plan adjustments: (1) Resize-during-AllocateAsync error path refactored to single ownership boundary (slaveFd tracked, no double-close on master), (2) ConPtyAdapter unused SafeHandle field removed during self-review."
     }
   ]
 }
