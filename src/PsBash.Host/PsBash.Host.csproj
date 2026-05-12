@@ -4,10 +4,11 @@
     <TargetFramework>net10.0</TargetFramework>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
-    <PublishAot>false</PublishAot>
+    <PublishAot>true</PublishAot>
+    <InvariantGlobalization>true</InvariantGlobalization>
     <AssemblyName>ps-bash-host</AssemblyName>
     <CopyLocalLockFileAssemblies>true</CopyLocalLockFileAssemblies>
-    <NoWarn>$(NoWarn);IL2026</NoWarn>
+    <!-- IL2026 NoWarn intentionally removed for AOT probe to capture all warnings -->
   </PropertyGroup>
   <ItemGroup>
     <InternalsVisibleTo Include="PsBash.Host.Tests" />

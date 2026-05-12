@@ -1,0 +1,19 @@
+=== AOT Probe Smoke Tests — linux-x64 ===
+Binary: src/PsBash.Host/bin/Release/net10.0/linux-x64/publish/ps-bash-host
+Binary size: 1206480 bytes
+
+Test 1: Invoke-BashEcho hi
+Test 2: 1..3 | Invoke-BashSort
+Test 3: scriptblock 1..3 | %{ $_ * 2 }
+
+All three tests produced identical output (verbatim):
+----------------------------------------
+Unhandled exception. System.IO.FileNotFoundException: Could not find file 'System.Management.Automation'.
+File name: 'System.Management.Automation'
+   at Internal.Runtime.TypeLoaderExceptionHelper.CreateFileNotFoundException(ExceptionStringID, String) + 0x4a
+   at PsBash.Host.Program.<Main>d__0.MoveNext() + 0x12
+   at System.Runtime.CompilerServices.AsyncMethodBuilderCore.Start[TStateMachine](TStateMachine&) + 0x57
+   at PsBash.Host.Program.Main(String[]) + 0x68
+   at PsBash.Host.Program.<Main>(String[] args) + 0xd
+----------------------------------------
+exit code: 134 (SIGABRT — runtime aborted before any command parsing)

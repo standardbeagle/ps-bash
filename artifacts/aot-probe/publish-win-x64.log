@@ -1,0 +1,7 @@
+  Determining projects to restore...
+  All projects are up-to-date for restore.
+C:\Users\andyb\AppData\Local\Microsoft\dotnet\sdk\10.0.100-rc.2.25502.107\Sdks\Microsoft.NET.Sdk\targets\Microsoft.NET.RuntimeIdentifierInference.targets(351,5): message NETSDK1057: You are using a preview version of .NET. See: https://aka.ms/dotnet-support-policy [\\wsl.localhost\Ubuntu\home\beagle\work\core\ps-bash\src\PsBash.Host\PsBash.Host.csproj]
+  PsBash.Core -> \\wsl.localhost\Ubuntu\home\beagle\work\core\ps-bash\src\PsBash.Core\bin\Release\net10.0\PsBash.Core.dll
+\\wsl.localhost\Ubuntu\home\beagle\work\core\ps-bash\src\PsBash.Host\Runtime\SdkRunspace.cs(129,27): warning IL2026: Using member 'System.Reflection.Assembly.GetTypes()' which has 'RequiresUnreferencedCodeAttribute' can break functionality when trimming application code. Types might be removed. [\\wsl.localhost\Ubuntu\home\beagle\work\core\ps-bash\src\PsBash.Host\PsBash.Host.csproj]
+  PsBash.Host -> \\wsl.localhost\Ubuntu\home\beagle\work\core\ps-bash\src\PsBash.Host\bin\Release\net10.0\win-x64\ps-bash-host.dll
+C:\Users\andyb\.nuget\packages\microsoft.dotnet.ilcompiler\10.0.0-rc.2.25502.107\build\Microsoft.NETCore.Native.Windows.targets(142,5): error : Platform linker not found. Ensure you have all the required prerequisites documented at https://aka.ms/nativeaot-prerequisites, in particular the Desktop Development for C++ workload in Visual Studio. For ARM64 development also install C++ ARM64 build tools. [\\wsl.localhost\Ubuntu\home\beagle\work\core\ps-bash\src\PsBash.Host\PsBash.Host.csproj]

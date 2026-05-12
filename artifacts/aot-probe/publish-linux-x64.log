@@ -1,0 +1,11 @@
+  Determining projects to restore...
+  Restored /home/beagle/work/core/ps-bash/src/PsBash.Core/PsBash.Core.csproj (in 444 ms).
+  Restored /home/beagle/work/core/ps-bash/src/PsBash.Host/PsBash.Host.csproj (in 530 ms).
+/home/beagle/.dotnet/sdk/10.0.100-rc.2.25502.107/Sdks/Microsoft.NET.Sdk/targets/Microsoft.NET.RuntimeIdentifierInference.targets(351,5): message NETSDK1057: You are using a preview version of .NET. See: https://aka.ms/dotnet-support-policy [/home/beagle/work/core/ps-bash/src/PsBash.Host/PsBash.Host.csproj]
+/home/beagle/.dotnet/sdk/10.0.100-rc.2.25502.107/Sdks/Microsoft.NET.Sdk/targets/Microsoft.NET.RuntimeIdentifierInference.targets(351,5): message NETSDK1057: You are using a preview version of .NET. See: https://aka.ms/dotnet-support-policy [/home/beagle/work/core/ps-bash/src/PsBash.Core/PsBash.Core.csproj::TargetFramework=net10.0]
+  PsBash.Core -> /home/beagle/work/core/ps-bash/src/PsBash.Core/bin/Release/net10.0/PsBash.Core.dll
+/home/beagle/work/core/ps-bash/src/PsBash.Host/Runtime/SdkRunspace.cs(129,27): warning IL2026: Using member 'System.Reflection.Assembly.GetTypes()' which has 'RequiresUnreferencedCodeAttribute' can break functionality when trimming application code. Types might be removed. [/home/beagle/work/core/ps-bash/src/PsBash.Host/PsBash.Host.csproj]
+  PsBash.Host -> /home/beagle/work/core/ps-bash/src/PsBash.Host/bin/Release/net10.0/linux-x64/ps-bash-host.dll
+  Generating native code
+  ILC: Method '[ps-bash-host]PsBash.Host.Program+<Main>d__0.MoveNext()' will always throw because: Failed to load assembly 'System.Management.Automation'
+  PsBash.Host -> /home/beagle/work/core/ps-bash/src/PsBash.Host/bin/Release/net10.0/linux-x64/publish/
