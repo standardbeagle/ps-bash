@@ -1,17 +1,3 @@
 {
-  "claims": {
-    "YWAqeWioyuyW": {
-      "runner_instance_id": "DESKTOP-NPIOPS6-7606",
-      "runner_email": "andybrummer@standardbeagle.com",
-      "claimed_at": "2026-05-12T22:00:00Z",
-      "agent_id": "DESKTOP-NPIOPS6-7606",
-      "parent_loop_id": "AEACP6UqDUBr",
-      "purpose": "Loop iteration 3: PTY-2 spawn host with PTY slave inherited as stdio",
-      "source_event": {
-        "loop_id": "AEACP6UqDUBr",
-        "task_id": "YWAqeWioyuyW",
-        "conversation_id": null
-      }
-    }
-  }
+  "claims": {}
 }

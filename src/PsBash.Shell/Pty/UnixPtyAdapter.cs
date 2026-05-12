@@ -26,13 +26,15 @@ internal sealed partial class UnixPtyAdapter : IPty
 {
     private readonly FileStream _masterStream;
     private readonly int _masterFd;
+    private readonly string _slaveName;
     private int _slaveFd;
     private bool _disposed;
 
-    private UnixPtyAdapter(int masterFd, int slaveFd, FileStream masterStream)
+    private UnixPtyAdapter(int masterFd, int slaveFd, string slaveName, FileStream masterStream)
     {
         _masterFd = masterFd;
         _slaveFd = slaveFd;
+        _slaveName = slaveName;
         _masterStream = masterStream;
     }
 
@@ -40,6 +42,7 @@ internal sealed partial class UnixPtyAdapter : IPty
     public Stream Output => _masterStream;
     public IntPtr SlaveHandle => IntPtr.Zero;
     public int SlaveFileDescriptor => _slaveFd;
+    public string? SlaveName => _slaveName;
 
     public static ValueTask<IPty> AllocateAsync(short cols, short rows)
     {
@@ -111,7 +114,7 @@ internal sealed partial class UnixPtyAdapter : IPty
             // to the adapter, so the outer catch can clean up safely.
             SetWinsize(masterFd, cols, rows);
 
-            return ValueTask.FromResult<IPty>(new UnixPtyAdapter(masterFd, slaveFd, masterStream));
+            return ValueTask.FromResult<IPty>(new UnixPtyAdapter(masterFd, slaveFd, slaveName, masterStream));
         }
         catch
         {

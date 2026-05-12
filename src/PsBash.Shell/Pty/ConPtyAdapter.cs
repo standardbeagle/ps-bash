@@ -45,6 +45,7 @@ internal sealed partial class ConPtyAdapter : IPty
     public Stream Output => _output;
     public IntPtr SlaveHandle => _hpc;
     public int SlaveFileDescriptor => -1;
+    public string? SlaveName => null;
 
     public static ValueTask<IPty> AllocateAsync(short cols, short rows)
     {

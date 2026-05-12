@@ -1,9 +1,9 @@
 {
   "status": "running",
-  "iterations": 2,
-  "spawns": 2,
+  "iterations": 3,
+  "spawns": 3,
   "started_at": "2026-05-12T20:33:00Z",
-  "last_iteration_at": "2026-05-12T21:53:00Z",
+  "last_iteration_at": "2026-05-12T22:50:00Z",
   "last_subagent": "task-executor",
   "loop_task_id": "AEACP6UqDUBr",
   "dartboard": "Personal/ps-bash",
@@ -53,6 +53,38 @@
         "docs/specs/pty.md"
       ],
       "notes": "130 pre-existing failures in PsBash.Shell.Tests verified to predate PTY-1 (baseline confirmed by removing Pty/ directory — identical 130 failures). Environment-specific (.NET 10 RC2 SDK abort signals on WSL2). NOT a PTY-1 regression. Escalation candidate as separate environment-stability task. Plan adjustments: (1) Resize-during-AllocateAsync error path refactored to single ownership boundary (slaveFd tracked, no double-close on master), (2) ConPtyAdapter unused SafeHandle field removed during self-review."
+    },
+    {
+      "task_id": "YWAqeWioyuyW",
+      "iteration": 3,
+      "status": "completed",
+      "started_at": "2026-05-12T22:30:00Z",
+      "completed_at": "2026-05-12T22:50:00Z",
+      "phase_completed": "phase-9",
+      "failed_phase": null,
+      "files_changed": 7,
+      "tests_added": 6,
+      "plan_adjustments": 1,
+      "completion_summary": "PTY-2 host-under-PTY spawn: cross-platform PtySpawner (POSIX posix_spawn+SETSID+file-actions; Windows STARTUPINFOEX+PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE_HANDLE via kernel32 P/Invoke) + launcher RunHostUnderPtyAsync (gated on PSBASH_PTY=1 opt-in until PTY-3) + host --pty-probe mode. PTY tests: 10 PASS / 4 SKIP on Linux (Windows leg runs in CI). AOT publish for launcher still green. IpcWorker pipe IPC path for -c/script-mode preserved untouched.",
+      "failure_reason": null,
+      "fix_task_created": false,
+      "fix_task_id": null,
+      "resumed": true,
+      "resumed_at": "2026-05-12T22:30:00Z",
+      "files": [
+        "src/PsBash.Shell/Pty/IPty.cs",
+        "src/PsBash.Shell/Pty/UnixPtyAdapter.cs",
+        "src/PsBash.Shell/Pty/ConPtyAdapter.cs",
+        "src/PsBash.Shell/Pty/PtySpawner.cs",
+        "src/PsBash.Shell/Pty/PosixPtySpawner.cs",
+        "src/PsBash.Shell/Pty/WindowsPtySpawner.cs",
+        "src/PsBash.Shell/Program.cs",
+        "src/PsBash.Host/Program.cs",
+        "src/PsBash.Shell.Tests/Pty/PtySpawnTests.cs"
+      ],
+      "notes": "Prior session (interrupted 2026-05-12T22:29:23Z) had drafted PtySpawner.cs + PosixPtySpawner.cs + WindowsPtySpawner.cs + PtySpawnTests.cs (~1018 LOC untracked) referencing a nonexistent IPty.SlaveName. Resume: (1) added SlaveName to IPty interface + UnixPtyAdapter (stores ptsname output) + ConPtyAdapter (returns null), (2) wired host's --pty-probe mode in PsBash.Host/Program.cs (writes PSBASH-PTY-PROBE: marker), (3) added RunHostUnderPtyAsync in PsBash.Shell/Program.cs inside the interactive branch (PtyAllocator → PtySpawner.Spawn → bidirectional stream pump), (4) added 2 QA-rubric negative tests (Directive 7) for arg-validation and ENOENT propagation. PTY-3 still owes raw-mode stdin / SIGWINCH forwarding / Ctrl-C signal injection. 130 SIGABRT failures in PsBash.Shell.Tests are the pre-existing baseline (per resume directive) — verified zero new failures attributable to PTY-2. Plan adjustment: gated the PTY interactive path behind PSBASH_PTY=1 env var so legacy inherited-stdio path remains default until PTY-3 lands."
     }
-  ]
+  ],
+  "interrupted_at": null,
+  "resumed_at": "2026-05-12T22:30:00Z"
 }

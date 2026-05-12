@@ -65,6 +65,18 @@ internal interface IPty : IAsyncDisposable
     int SlaveFileDescriptor { get; }
 
     /// <summary>
+    /// POSIX slave device path (e.g. <c>/dev/pts/3</c> on Linux,
+    /// <c>/dev/ttysNNN</c> on macOS). The <see cref="PtySpawner"/> POSIX path
+    /// uses this to <c>open()</c> the slave inside the child process (after
+    /// <c>posix_spawn</c> has made the child a session leader), so the slave
+    /// becomes the child's controlling terminal without needing the launcher
+    /// to hold an open slave fd.
+    ///
+    /// <para>Windows: <c>null</c>; use <see cref="SlaveHandle"/> (HPCON) instead.</para>
+    /// </summary>
+    string? SlaveName { get; }
+
+    /// <summary>
     /// Resize the PTY's window dimensions. Safe to call concurrently with
     /// I/O on <see cref="Input"/> / <see cref="Output"/>. After
     /// <see cref="IAsyncDisposable.DisposeAsync"/>, calls become a no-op.

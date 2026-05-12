@@ -2,6 +2,7 @@ using PsBash.Core.Parser;
 using PsBash.Core.Runtime;
 using PsBash.Core.Transpiler;
 using PsBash.Shell;
+using PsBash.Shell.Pty;
 
 
 // Reliability watchdog: on Windows, attach the current process to a Job Object
@@ -124,6 +125,19 @@ if (shellArgs.Interactive || shellArgs.Command is null)
         return 127;
     }
 
+    // PTY-2 path: when PSBASH_PTY=1 (opt-in until PTY-3 mode-switching lands),
+    // allocate a real pseudo-terminal in the launcher and attach its slave to
+    // the host as stdin/stdout/stderr via PtySpawner. The launcher then pumps
+    // bytes between its own stdio and the PTY master.  This is the path
+    // exercised by PtySpawnTests and is gated on the env var so the legacy
+    // inherited-stdio path remains the default until PTY-3 wires up
+    // mode-switching, signal forwarding, and full Windows raw-mode handling.
+    var ptyOptIn = Environment.GetEnvironmentVariable("PSBASH_PTY") is "1" or "true";
+    if (ptyOptIn)
+    {
+        return await RunHostUnderPtyAsync(hostBinary, shellArgs);
+    }
+
     var psi = new System.Diagnostics.ProcessStartInfo(hostBinary)
     {
         UseShellExecute = false,
@@ -212,4 +226,83 @@ static string? ResolveHostBinary()
 
     var sxs = Path.Combine(AppContext.BaseDirectory, IpcWorker.GetHostBinaryName());
     return File.Exists(sxs) ? sxs : null;
+}
+
+// PTY-2: spawn ps-bash-host under a pseudo-terminal allocated by the launcher,
+// then pump bytes between the launcher's stdio and the PTY master until the
+// host exits. The host receives PSBASH_PTY_ATTACHED=1 in its environment so it
+// can branch on "real terminal vs redirected pipe" later (PTY-3).
+//
+// Window size: best-effort from Console; fall back to 80x24 if the launcher's
+// stdio is itself redirected (e.g. running under a parent that doesn't have a
+// terminal). Resize forwarding (SIGWINCH on POSIX, console-resize events on
+// Windows) is intentionally out of scope here and belongs to PTY-3.
+static async Task<int> RunHostUnderPtyAsync(string hostBinary, ShellArgs shellArgs)
+{
+    short cols = 80, rows = 24;
+    try
+    {
+        // Console.WindowWidth/Height throw if there's no console (redirected).
+        if (!Console.IsOutputRedirected)
+        {
+            int w = Console.WindowWidth, h = Console.WindowHeight;
+            if (w > 0 && w <= short.MaxValue) cols = (short)w;
+            if (h > 0 && h <= short.MaxValue) rows = (short)h;
+        }
+    }
+    catch { /* fall back to defaults */ }
+
+    await using var pty = await PtyAllocator.AllocateAsync(cols, rows);
+
+    var hostArgs = new List<string> { "--interactive", $"--launcher-pid={Environment.ProcessId}" };
+    if (shellArgs.NoProfile) hostArgs.Add("--no-profile");
+
+    var env = new Dictionary<string, string>(StringComparer.Ordinal)
+    {
+        ["PSBASH_PTY_ATTACHED"] = "1",
+    };
+
+    await using var spawner = PtySpawner.Spawn(hostBinary, hostArgs, pty, env);
+
+    // Bidirectional pump. We do NOT put the launcher's stdin in raw mode here —
+    // that, plus SIGWINCH forwarding and Ctrl-C signal injection, is PTY-3's
+    // responsibility. For PTY-2 acceptance (a host runspace that sees a real
+    // terminal) plain stream-to-stream copy is sufficient.
+    using var pumpCts = new CancellationTokenSource();
+    var stdinTask = Task.Run(async () =>
+    {
+        try
+        {
+            await using var launcherStdin = Console.OpenStandardInput();
+            await launcherStdin.CopyToAsync(pty.Input, pumpCts.Token).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) { /* host exited first */ }
+        catch (IOException) { /* pipe closed */ }
+    });
+    var stdoutTask = Task.Run(async () =>
+    {
+        try
+        {
+            await using var launcherStdout = Console.OpenStandardOutput();
+            await pty.Output.CopyToAsync(launcherStdout, pumpCts.Token).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) { /* host exited first */ }
+        catch (IOException) { /* pipe closed */ }
+    });
+
+    int exitCode;
+    try
+    {
+        exitCode = await spawner.WaitForExitAsync(CancellationToken.None).ConfigureAwait(false);
+    }
+    finally
+    {
+        // Stop the pumps after the child exits. We don't await stdinTask
+        // because the launcher's stdin may block on a read forever; cancel
+        // signals it and CopyToAsync will return on its own.
+        pumpCts.Cancel();
+        try { await stdoutTask.ConfigureAwait(false); } catch { /* swallow */ }
+    }
+
+    return exitCode;
 }

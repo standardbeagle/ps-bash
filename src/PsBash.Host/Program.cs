@@ -9,6 +9,24 @@ internal sealed class Program
 {
     static async Task<int> Main(string[] args)
     {
+        // PTY-2 probe mode: spawned by PtySpawnTests to verify the host's
+        // System.Console is wired to a real terminal when invoked through
+        // PtySpawner. Writes a single marker line to stdout and exits 0.
+        // No runspace, no IPC — just enough to assert IsInputRedirected /
+        // IsOutputRedirected and observe the PSBASH_PTY_ATTACHED hand-off
+        // env var. Intentionally runs BEFORE --interactive handling so a
+        // misconfigured CI environment cannot accidentally enter the REPL.
+        if (args.Contains("--pty-probe"))
+        {
+            var inRedir = Console.IsInputRedirected;
+            var outRedir = Console.IsOutputRedirected;
+            var ptyEnv = Environment.GetEnvironmentVariable("PSBASH_PTY_ATTACHED") ?? "<unset>";
+            Console.Out.WriteLine(
+                $"PSBASH-PTY-PROBE: IsInputRedirected={inRedir} IsOutputRedirected={outRedir} PSBASH_PTY_ATTACHED={ptyEnv}");
+            Console.Out.Flush();
+            return 0;
+        }
+
         // Interactive mode: host owns the tty; run the REPL directly. The
         // launcher (ps-bash with no -c) spawns us in this mode and waits.
         if (args.Contains("--interactive"))
