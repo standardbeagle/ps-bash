@@ -97,6 +97,81 @@ internal sealed class SdkRunspace : IAsyncDisposable
             ps.Commands.Clear();
         }
 
+        // Out-GridView spawns a WPF UI thread that, on a stripped SMA 7.x SDK
+        // runspace without a matching WindowsBase, throws TypeLoadException for
+        // 'MS.Internal.SecurityCriticalDataForSet`1'. That throw lands on a
+        // non-pipeline thread with no handler and tears down the host process
+        // (exit 0xe0434352). Shadow the in-process cmdlet with a function that
+        // delegates to a separate pwsh.exe child — a UI crash there exits the
+        // child only; the host stays up. PSSerializer is used directly (vs
+        // Export-Clixml) because Microsoft.PowerShell.Utility is not always
+        // loaded at runspace startup on the SDK.
+        ps.AddScript(@"
+function global:Out-GridView {
+    [CmdletBinding()]
+    param(
+        [Parameter(ValueFromPipeline=$true)]$InputObject,
+        [string]$Title,
+        [string]$OutputMode,
+        [switch]$PassThru,
+        [switch]$Wait
+    )
+    begin { $__ogvItems = [System.Collections.Generic.List[object]]::new() }
+    process { if ($null -ne $InputObject) { [void]$__ogvItems.Add($InputObject) } }
+    end {
+        $pwshPath = $null
+        $sep = [System.IO.Path]::PathSeparator
+        foreach ($p in ($env:PATH -split $sep)) {
+            if ([string]::IsNullOrWhiteSpace($p)) { continue }
+            foreach ($exe in @('pwsh.exe','pwsh')) {
+                $cand = [System.IO.Path]::Combine($p, $exe)
+                if ([System.IO.File]::Exists($cand)) { $pwshPath = $cand; break }
+            }
+            if ($pwshPath) { break }
+        }
+        if (-not $pwshPath) {
+            [Console]::Error.WriteLine('Out-GridView shim: pwsh executable not found on PATH; cannot delegate to child process.')
+            $global:LASTEXITCODE = 1
+            return
+        }
+        $tmpDir = [System.IO.Path]::Combine([System.IO.Path]::GetTempPath(), 'ps-bash', 'ogv')
+        [void][System.IO.Directory]::CreateDirectory($tmpDir)
+        $tmp = [System.IO.Path]::Combine($tmpDir, ([guid]::NewGuid().ToString('N') + '.clixml'))
+        try {
+            $clixml = [System.Management.Automation.PSSerializer]::Serialize($__ogvItems.ToArray(), 3)
+            [System.IO.File]::WriteAllText($tmp, $clixml)
+            $tmpEsc = $tmp -replace ""'"", ""''""
+            $childCmd = ""`$d = Import-Clixml -LiteralPath '$tmpEsc'; `$d | Out-GridView""
+            if ($Title)      { $childCmd += "" -Title '"" + ($Title -replace ""'"",""''"") + ""'"" }
+            if ($OutputMode) { $childCmd += "" -OutputMode '"" + ($OutputMode -replace ""'"",""''"") + ""'"" }
+            if ($PassThru)   { $childCmd += ' -PassThru' }
+            if ($Wait)       { $childCmd += ' -Wait' }
+            if ($env:PSBASH_OGV_DRY_RUN) {
+                [Console]::Error.WriteLine(""Out-GridView shim: dry-run, would spawn `""$pwshPath`"" with $($__ogvItems.Count) item(s); clixml at $tmp"")
+                $global:LASTEXITCODE = 0
+                return
+            }
+            $psi = [System.Diagnostics.ProcessStartInfo]::new()
+            $psi.FileName = $pwshPath
+            $psi.UseShellExecute = $false
+            [void]$psi.ArgumentList.Add('-NoProfile')
+            [void]$psi.ArgumentList.Add('-NonInteractive')
+            [void]$psi.ArgumentList.Add('-Sta')
+            [void]$psi.ArgumentList.Add('-Command')
+            [void]$psi.ArgumentList.Add($childCmd)
+            $proc = [System.Diagnostics.Process]::Start($psi)
+            $proc.WaitForExit()
+            $global:LASTEXITCODE = $proc.ExitCode
+        }
+        finally {
+            try { if ([System.IO.File]::Exists($tmp)) { [System.IO.File]::Delete($tmp) } } catch {}
+        }
+    }
+}
+Set-Alias -Name ogv -Value Out-GridView -Scope Global -Force
+").Invoke();
+        ps.Commands.Clear();
+
         Interlocked.Increment(ref ModuleLoadCount);
         return new SdkRunspace(runspace, host);
     }

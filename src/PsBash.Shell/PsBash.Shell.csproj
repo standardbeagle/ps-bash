@@ -73,4 +73,24 @@
           SkipUnchangedFiles="true" />
   </Target>
 
+  <!--
+    After PublishHostSidecar copies the host's runtimes/ tree into our publish output,
+    flatten the PowerShell SDK built-in modules from runtimes/<rid-group>/lib/net8.0/Modules
+    to a $PSHOME-relative Modules/ folder. See PsBash.Host.csproj for the full rationale.
+  -->
+  <Target Name="FlattenPSModulesAfterPublish" AfterTargets="Publish" Condition="'$(PublishDir)' != '' and '$(RuntimeIdentifier)' != ''">
+    <PropertyGroup>
+      <_ModulesRidGroup Condition="$(RuntimeIdentifier.StartsWith('win'))">win</_ModulesRidGroup>
+      <_ModulesRidGroup Condition="'$(_ModulesRidGroup)' == ''">unix</_ModulesRidGroup>
+      <_ModulesSourceDir>$(PublishDir)runtimes\$(_ModulesRidGroup)\lib\net8.0\Modules\</_ModulesSourceDir>
+    </PropertyGroup>
+    <ItemGroup>
+      <_PSModuleFiles Include="$(_ModulesSourceDir)**\*" />
+    </ItemGroup>
+    <Copy SourceFiles="@(_PSModuleFiles)"
+          DestinationFiles="@(_PSModuleFiles->'$(PublishDir)Modules\%(RecursiveDir)%(Filename)%(Extension)')"
+          SkipUnchangedFiles="true"
+          Condition="'@(_PSModuleFiles)' != ''" />
+  </Target>
+
 </Project>

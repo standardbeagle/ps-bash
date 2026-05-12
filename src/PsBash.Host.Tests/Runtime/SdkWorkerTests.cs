@@ -27,6 +27,86 @@ public class SdkWorkerTests : IAsyncLifetime
         }
     }
 
+    // Out-GridView on the SDK runspace lacks WPF/WindowsBase types and its
+    // background UI thread crashes the entire host (exit 0xe0434352). The
+    // shim in SdkRunspace replaces it with a function that errors cleanly.
+    // Dry-run seam: PSBASH_OGV_DRY_RUN=1 makes the shim serialize input and
+    // report what it WOULD have spawned, without actually launching pwsh's
+    // GridView. Proves the in-process path can't reach the WPF UI thread that
+    // historically crashed the host (exit 0xe0434352).
+    [Fact]
+    public async Task ExecuteAsync_OutGridView_DelegatesToChildProcessWithoutCrashingHost()
+    {
+        var origErr = Console.Error;
+        var errBuf = new StringWriter();
+        Console.SetError(errBuf);
+        try
+        {
+            await _worker!.ExecuteAsync("$env:PSBASH_OGV_DRY_RUN = '1'; 1..3 | Out-GridView; $env:PSBASH_OGV_DRY_RUN = $null");
+        }
+        finally
+        {
+            Console.SetError(origErr);
+        }
+
+        var err = errBuf.ToString();
+        Assert.Contains("Out-GridView shim: dry-run", err, StringComparison.Ordinal);
+        Assert.Contains("3 item(s)", err, StringComparison.Ordinal);
+
+        // Host still serves a follow-up command — the prior call did not tear down the runspace.
+        var lines = new List<string>();
+        _worker.OutputCallback = lines.Add;
+        var follow = await _worker.ExecuteAsync("Invoke-BashEcho alive");
+        Assert.Equal(0, follow);
+        Assert.Contains(lines, l => l.Contains("alive", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_OgvAlias_RoutesToShim()
+    {
+        var origErr = Console.Error;
+        var errBuf = new StringWriter();
+        Console.SetError(errBuf);
+        try
+        {
+            await _worker!.ExecuteAsync("$env:PSBASH_OGV_DRY_RUN = '1'; 1..5 | ogv; $env:PSBASH_OGV_DRY_RUN = $null");
+        }
+        finally
+        {
+            Console.SetError(origErr);
+        }
+
+        var err = errBuf.ToString();
+        Assert.Contains("Out-GridView shim: dry-run", err, StringComparison.Ordinal);
+        Assert.Contains("5 item(s)", err, StringComparison.Ordinal);
+    }
+
+    // When pwsh isn't reachable, the shim must error cleanly rather than fall
+    // through to the in-process cmdlet (which would crash the host on Windows).
+    [Fact]
+    public async Task ExecuteAsync_OutGridView_NoPwshOnPath_ErrorsCleanly()
+    {
+        var origErr = Console.Error;
+        var errBuf = new StringWriter();
+        Console.SetError(errBuf);
+        try
+        {
+            await _worker!.ExecuteAsync("$__p = $env:PATH; $env:PATH = ''; try { 1..3 | Out-GridView } finally { $env:PATH = $__p }");
+        }
+        finally
+        {
+            Console.SetError(origErr);
+        }
+
+        Assert.Contains("pwsh executable not found", errBuf.ToString(), StringComparison.Ordinal);
+
+        var lines = new List<string>();
+        _worker.OutputCallback = lines.Add;
+        var follow = await _worker.ExecuteAsync("Invoke-BashEcho alive");
+        Assert.Equal(0, follow);
+        Assert.Contains(lines, l => l.Contains("alive", StringComparison.Ordinal));
+    }
+
     // AC1: Invoke-BashEcho hello emits "hello", exit 0
     [Fact]
     public async Task ExecuteAsync_InvokeBashEchoHello_EmitsHelloExitZero()

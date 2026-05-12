@@ -47,4 +47,27 @@
     <EmbeddedResource Include="Resources\SdkRunspaceSetup.ps1"
                       LogicalName="PsBash.Host/SdkRunspaceSetup.ps1" />
   </ItemGroup>
+
+  <!--
+    Microsoft.PowerShell.SDK ships its built-in modules (Microsoft.PowerShell.Utility,
+    Microsoft.PowerShell.Management, etc.) under runtimes/<rid-group>/lib/net8.0/Modules
+    in the publish output. PowerShell-as-a-host resolves $PSHOME to the directory
+    containing System.Management.Automation.dll (the publish root) and only auto-
+    loads built-in modules from $PSHOME/Modules. Without this flattening step,
+    Get-Variable / Invoke-Expression / Test-Path fail to load on first use.
+  -->
+  <Target Name="FlattenPSModulesAfterPublish" AfterTargets="Publish" Condition="'$(PublishDir)' != '' and '$(RuntimeIdentifier)' != ''">
+    <PropertyGroup>
+      <_ModulesRidGroup Condition="$(RuntimeIdentifier.StartsWith('win'))">win</_ModulesRidGroup>
+      <_ModulesRidGroup Condition="'$(_ModulesRidGroup)' == ''">unix</_ModulesRidGroup>
+      <_ModulesSourceDir>$(PublishDir)runtimes\$(_ModulesRidGroup)\lib\net8.0\Modules\</_ModulesSourceDir>
+    </PropertyGroup>
+    <ItemGroup>
+      <_PSModuleFiles Include="$(_ModulesSourceDir)**\*" />
+    </ItemGroup>
+    <Copy SourceFiles="@(_PSModuleFiles)"
+          DestinationFiles="@(_PSModuleFiles->'$(PublishDir)Modules\%(RecursiveDir)%(Filename)%(Extension)')"
+          SkipUnchangedFiles="true"
+          Condition="'@(_PSModuleFiles)' != ''" />
+  </Target>
 </Project>

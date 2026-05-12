@@ -4818,6 +4818,164 @@ Describe 'Invoke-BashPwd — Alias' {
     }
 }
 
+# ── Invoke-BashCd ───────────────────────────────────────────────────────
+
+Describe 'Invoke-BashCd — Basic' {
+    BeforeEach {
+        $testDir = Join-Path ([System.IO.Path]::GetTempPath()) "psbash-cd-$([guid]::NewGuid().ToString('N').Substring(0,8))"
+        New-Item -ItemType Directory -Path $testDir -Force | Out-Null
+        $script:cdOriginalDir = (Get-Location).Path
+        $script:cdOriginalOldPwd = $global:OLDPWD
+    }
+    AfterEach {
+        Set-Location -LiteralPath $script:cdOriginalDir
+        $global:OLDPWD = $script:cdOriginalOldPwd
+        if (Test-Path $testDir) { Remove-Item -Recurse -Force $testDir }
+    }
+
+    It 'cd <dir> changes to that directory' {
+        Invoke-BashCd $testDir
+        (Get-Location).Path | Should -Be $testDir
+    }
+
+    It 'cd <dir> sets $env:PWD' {
+        Invoke-BashCd $testDir
+        $env:PWD | Should -Be $testDir
+    }
+
+    It 'cd <dir> sets $global:__PsBashCwd' {
+        Invoke-BashCd $testDir
+        $global:__PsBashCwd | Should -Be $testDir
+    }
+
+    It 'cd <dir> sets $LASTEXITCODE=0 on success' {
+        Invoke-BashCd $testDir
+        $LASTEXITCODE | Should -Be 0
+    }
+
+    It 'cd with no args goes to $HOME' {
+        Invoke-BashCd
+        (Get-Location).Path | Should -Be $HOME
+    }
+}
+
+Describe 'Invoke-BashCd — Error Behavior (bash-style)' {
+    BeforeEach {
+        $script:cdOriginalDir = (Get-Location).Path
+    }
+    AfterEach {
+        Set-Location -LiteralPath $script:cdOriginalDir
+    }
+
+    It 'cd nonexistent emits bash-style error to stderr' {
+        $result = Invoke-BashCd 'this-directory-does-not-exist-xyz' 2>&1
+        $errors = @($result | Where-Object { $_ -is [System.Management.Automation.ErrorRecord] })
+        $errors | Should -Not -BeNullOrEmpty
+        $errors[0].ToString() | Should -BeLike 'cd: this-directory-does-not-exist-xyz: No such file or directory*'
+    }
+
+    It 'cd nonexistent sets $LASTEXITCODE=1' {
+        Invoke-BashCd 'this-directory-does-not-exist-xyz' 2>&1 | Out-Null
+        $LASTEXITCODE | Should -Be 1
+    }
+
+    It 'cd nonexistent does NOT throw a PowerShell terminating error' {
+        # Set-Location with a missing path produces a non-terminating PS error;
+        # Invoke-BashCd should catch that path entirely and emit a bash-style message.
+        { Invoke-BashCd 'this-directory-does-not-exist-xyz' 2>&1 | Out-Null } | Should -Not -Throw
+    }
+
+    It 'cd nonexistent does NOT change the current directory' {
+        $before = (Get-Location).Path
+        Invoke-BashCd 'this-directory-does-not-exist-xyz' 2>&1 | Out-Null
+        (Get-Location).Path | Should -Be $before
+    }
+
+    It 'cd with too many args reports bash-style error' {
+        $result = Invoke-BashCd 'a' 'b' 'c' 2>&1
+        $errors = @($result | Where-Object { $_ -is [System.Management.Automation.ErrorRecord] })
+        $errors | Should -Not -BeNullOrEmpty
+        $errors[0].ToString() | Should -BeLike 'cd: too many arguments*'
+    }
+}
+
+Describe 'Invoke-BashCd — OLDPWD and cd -' {
+    BeforeEach {
+        $testDirA = Join-Path ([System.IO.Path]::GetTempPath()) "psbash-cd-a-$([guid]::NewGuid().ToString('N').Substring(0,8))"
+        $testDirB = Join-Path ([System.IO.Path]::GetTempPath()) "psbash-cd-b-$([guid]::NewGuid().ToString('N').Substring(0,8))"
+        New-Item -ItemType Directory -Path $testDirA -Force | Out-Null
+        New-Item -ItemType Directory -Path $testDirB -Force | Out-Null
+        $script:cdOriginalDir = (Get-Location).Path
+        $script:cdOriginalOldPwd = $global:OLDPWD
+        $global:OLDPWD = $null
+    }
+    AfterEach {
+        Set-Location -LiteralPath $script:cdOriginalDir
+        $global:OLDPWD = $script:cdOriginalOldPwd
+        if (Test-Path $testDirA) { Remove-Item -Recurse -Force $testDirA }
+        if (Test-Path $testDirB) { Remove-Item -Recurse -Force $testDirB }
+    }
+
+    It 'cd <dir> sets $global:OLDPWD to previous directory' {
+        Invoke-BashCd $testDirA
+        $oldPwd = $global:OLDPWD
+        Invoke-BashCd $testDirB
+        $global:OLDPWD | Should -Be $testDirA
+        $oldPwd | Should -Not -Be $testDirA  # was the original dir before first cd
+    }
+
+    It 'cd - swaps back to OLDPWD' {
+        Invoke-BashCd $testDirA
+        Invoke-BashCd $testDirB
+        Invoke-BashCd '-'
+        (Get-Location).Path | Should -Be $testDirA
+    }
+
+    It 'cd - prints the resolved target (bash semantics)' {
+        Invoke-BashCd $testDirA
+        Invoke-BashCd $testDirB
+        $result = Invoke-BashCd '-'
+        $text = ($result | ForEach-Object { $_.BashText }) -join ''
+        $text | Should -BeLike "*$(($testDirA -replace '\\', '/'))*"
+    }
+
+    It 'cd - with no OLDPWD reports bash-style error' {
+        $global:OLDPWD = $null
+        $result = Invoke-BashCd '-' 2>&1
+        $errors = @($result | Where-Object { $_ -is [System.Management.Automation.ErrorRecord] })
+        $errors | Should -Not -BeNullOrEmpty
+        $errors[0].ToString() | Should -BeLike 'cd: OLDPWD not set*'
+    }
+
+    It 'cd - with no OLDPWD does not change directory' {
+        $global:OLDPWD = $null
+        $before = (Get-Location).Path
+        Invoke-BashCd '-' 2>&1 | Out-Null
+        (Get-Location).Path | Should -Be $before
+    }
+}
+
+Describe 'Invoke-BashCd — Tilde Expansion' {
+    BeforeEach {
+        $script:cdOriginalDir = (Get-Location).Path
+    }
+    AfterEach {
+        Set-Location -LiteralPath $script:cdOriginalDir
+    }
+
+    It 'cd ~ goes to $HOME' {
+        Invoke-BashCd '~'
+        (Get-Location).Path | Should -Be $HOME
+    }
+}
+
+Describe 'Invoke-BashCd — Alias' {
+    It 'cd alias resolves to Invoke-BashCd (not Set-Location)' {
+        $alias = Get-Alias -Name cd -Scope Global
+        $alias.Definition | Should -Be 'Invoke-BashCd'
+    }
+}
+
 # ── Invoke-BashHostname ─────────────────────────────────────────────────
 
 Describe 'Invoke-BashHostname — Basic' {

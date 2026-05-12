@@ -2365,6 +2365,7 @@ public static class PsEmitter
     private static string EmitCd(ImmutableArray<CompoundWord> args)
     {
         string targetExpr;
+        bool printAfter = false;
         if (args.IsEmpty)
         {
             targetExpr = "$HOME";
@@ -2375,6 +2376,11 @@ public static class PsEmitter
                 targetExpr = "$HOME";
             else if (literal.StartsWith("~/") || literal.StartsWith("~\\"))
                 targetExpr = "$HOME + " + QuotePsString("\\" + literal[2..]);
+            else if (literal == "-")
+            {
+                targetExpr = "$global:OLDPWD";
+                printAfter = true;
+            }
             else
                 targetExpr = QuotePsString(literal);
         }
@@ -2388,16 +2394,29 @@ public static class PsEmitter
                 targetExpr = emitted;
         }
 
-        return
+        var trailingPrint = printAfter
+            ? "Emit-BashLine -Text (($__psbash_cd_resolved -replace '\\\\', '/') + \"`n\") -Command 'cd'; "
+            : "";
+
+        var body =
             "$__psbash_cd_target = " + targetExpr + "; " +
             "$__psbash_cd_resolved = [System.IO.Path]::GetFullPath([string]$__psbash_cd_target, [System.Environment]::CurrentDirectory); " +
             "if ([System.IO.Directory]::Exists($__psbash_cd_resolved)) { " +
+            "$global:OLDPWD = if ($env:PWD) { $env:PWD } else { (Get-Location).Path }; " +
             "$global:__PsBashCwd = $__psbash_cd_resolved; " +
             "[System.Environment]::CurrentDirectory = $__psbash_cd_resolved; " +
             "$env:PWD = $__psbash_cd_resolved; " +
             "Set-Location -LiteralPath $__psbash_cd_resolved -ErrorAction SilentlyContinue; " +
+            trailingPrint +
             "$global:LASTEXITCODE = 0 " +
-            "} else { Write-Error -Message (\"cd: \" + $__psbash_cd_target + \": No such file or directory\") -ErrorAction Continue; $global:LASTEXITCODE = 1 }";
+            "} else { Write-BashError -Message (\"cd: \" + $__psbash_cd_target + \": No such file or directory\") -ExitCode 1 }";
+
+        if (printAfter)
+        {
+            // cd - needs OLDPWD check; wrap body in an if/else guard
+            return "if (-not $global:OLDPWD) { Write-BashError -Message 'cd: OLDPWD not set' -ExitCode 1 } else { " + body + " }";
+        }
+        return body;
     }
 
     private static string QuotePsString(string value)

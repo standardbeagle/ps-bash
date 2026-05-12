@@ -10142,6 +10142,79 @@ function Invoke-BashPwd {
     New-BashObject -BashText $location -TypeName 'PsBash.PwdLine' -Command 'pwd'
 }
 
+# --- cd ---
+
+function Invoke-BashCd {
+    param()
+    $Arguments = [string[]]$args
+    if ($Arguments -contains '--help') { return Show-BashHelp 'cd' }
+
+    $physical = $false
+    $operands = [System.Collections.Generic.List[string]]::new()
+    foreach ($arg in $Arguments) {
+        if ($arg -ceq '-P' -or $arg -ceq '-L') { if ($arg -ceq '-P') { $physical = $true }; continue }
+        if ($arg -ceq '--') { continue }
+        $operands.Add($arg)
+    }
+
+    if ($operands.Count -gt 1) {
+        Write-BashError -Message "cd: too many arguments"
+        return
+    }
+
+    $currentPwd = if ($env:PWD) { $env:PWD } else { (Get-Location).Path }
+
+    if ($operands.Count -eq 0) {
+        if (-not $HOME) { Write-BashError -Message "cd: HOME not set"; return }
+        $target = $HOME
+        $printAfter = $false
+    } elseif ($operands[0] -eq '-') {
+        if (-not $global:OLDPWD) { Write-BashError -Message "cd: OLDPWD not set"; return }
+        $target = $global:OLDPWD
+        $printAfter = $true
+    } else {
+        $raw = $operands[0]
+        if ($raw -eq '~') {
+            $target = $HOME
+        } elseif ($raw.StartsWith('~/') -or $raw.StartsWith('~\')) {
+            $target = Join-Path $HOME $raw.Substring(2)
+        } else {
+            $target = $raw
+        }
+        $printAfter = $false
+    }
+
+    try {
+        $resolved = [System.IO.Path]::GetFullPath([string]$target, [System.Environment]::CurrentDirectory)
+    } catch {
+        Write-BashError -Message "cd: $($target): $($_.Exception.Message)"
+        return
+    }
+
+    if (-not [System.IO.Directory]::Exists($resolved)) {
+        Write-BashError -Message "cd: $($target): No such file or directory"
+        return
+    }
+
+    if ($physical) {
+        try { $resolved = (Resolve-Path -LiteralPath $resolved).ProviderPath } catch { }
+    }
+
+    $global:OLDPWD = $currentPwd
+    $global:__PsBashCwd = $resolved
+    [System.Environment]::CurrentDirectory = $resolved
+    $env:PWD = $resolved
+    try { Set-Location -LiteralPath $resolved -ErrorAction Stop } catch {
+        Write-BashError -Message "cd: $($target): $($_.Exception.Message)"
+        return
+    }
+    $global:LASTEXITCODE = 0
+
+    if ($printAfter) {
+        Emit-BashLine -Text (($resolved -replace '\\', '/') + "`n") -Command 'cd'
+    }
+}
+
 # --- hostname ---
 
 function Invoke-BashHostname {
@@ -13465,7 +13538,7 @@ Set-Alias -Name 'env'      -Value 'Invoke-BashEnv'      -Force -Scope Global -Op
 Set-Alias -Name 'printenv' -Value 'Invoke-BashEnv'      -Force -Scope Global -Option AllScope
 Set-Alias -Name 'basename' -Value 'Invoke-BashBasename' -Force -Scope Global -Option AllScope
 Set-Alias -Name 'dirname'  -Value 'Invoke-BashDirname'  -Force -Scope Global -Option AllScope
-Set-Alias -Name 'cd'       -Value 'Set-Location'        -Force -Scope Global -Option AllScope
+Set-Alias -Name 'cd'       -Value 'Invoke-BashCd'       -Force -Scope Global -Option AllScope
 Set-Alias -Name 'pwd'      -Value 'Invoke-BashPwd'      -Force -Scope Global -Option AllScope
 Set-Alias -Name 'hostname' -Value 'Invoke-BashHostname' -Force -Scope Global -Option AllScope
 Set-Alias -Name 'whoami'   -Value 'Invoke-BashWhoami'   -Force -Scope Global -Option AllScope
