@@ -1,9 +1,9 @@
 {
   "status": "running",
-  "iterations": 3,
-  "spawns": 3,
+  "iterations": 4,
+  "spawns": 4,
   "started_at": "2026-05-12T20:33:00Z",
-  "last_iteration_at": "2026-05-12T22:50:00Z",
+  "last_iteration_at": "2026-05-12T23:50:00Z",
   "last_subagent": "task-executor",
   "loop_task_id": "AEACP6UqDUBr",
   "dartboard": "Personal/ps-bash",
@@ -83,6 +83,30 @@
         "src/PsBash.Shell.Tests/Pty/PtySpawnTests.cs"
       ],
       "notes": "Prior session (interrupted 2026-05-12T22:29:23Z) had drafted PtySpawner.cs + PosixPtySpawner.cs + WindowsPtySpawner.cs + PtySpawnTests.cs (~1018 LOC untracked) referencing a nonexistent IPty.SlaveName. Resume: (1) added SlaveName to IPty interface + UnixPtyAdapter (stores ptsname output) + ConPtyAdapter (returns null), (2) wired host's --pty-probe mode in PsBash.Host/Program.cs (writes PSBASH-PTY-PROBE: marker), (3) added RunHostUnderPtyAsync in PsBash.Shell/Program.cs inside the interactive branch (PtyAllocator → PtySpawner.Spawn → bidirectional stream pump), (4) added 2 QA-rubric negative tests (Directive 7) for arg-validation and ENOENT propagation. PTY-3 still owes raw-mode stdin / SIGWINCH forwarding / Ctrl-C signal injection. 130 SIGABRT failures in PsBash.Shell.Tests are the pre-existing baseline (per resume directive) — verified zero new failures attributable to PTY-2. Plan adjustment: gated the PTY interactive path behind PSBASH_PTY=1 env var so legacy inherited-stdio path remains default until PTY-3 lands."
+    },
+    {
+      "task_id": "BhewFRJjyq9J",
+      "iteration": 4,
+      "status": "completed",
+      "started_at": "2026-05-12T23:00:00Z",
+      "completed_at": "2026-05-12T23:50:00Z",
+      "phase_completed": "phase-9",
+      "failed_phase": null,
+      "files_changed": 5,
+      "tests_added": 8,
+      "plan_adjustments": 3,
+      "completion_summary": "PTY-3 launcher tty mode switching: TerminalMode save/raw/restore scope (POSIX tcgetattr+cfmakeraw+tcsetattr; Windows GetConsoleMode+SetConsoleMode toggling LINE/ECHO/PROCESSED_INPUT off + VT_INPUT/VT_PROCESSING/DISABLE_NEWLINE_AUTO_RETURN on) wired into RunHostUnderPtyAsync around the bidirectional pump. ProcessExit+UnhandledException guard restores terminal on launcher crash. Pre-Win10-1809 fallback: PlatformNotSupportedException caught at PSBASH_PTY opt-in, falls back to inherited-stdio with stderr warning. 8 new tests: 6 PASS / 2 SKIP-Windows on Linux. Diff vs PTY-2 baseline: Failed 130->130 (zero new), Passed 234->240 (+6), Skipped 10->12 (+2). AOT publish for launcher still green (verified runtime via /tmp publish + -c smoke).",
+      "failure_reason": null,
+      "fix_task_created": false,
+      "fix_task_id": null,
+      "files": [
+        "src/PsBash.Shell/Pty/TerminalMode.cs",
+        "src/PsBash.Shell/Program.cs",
+        "src/PsBash.Shell.Tests/Pty/TerminalModeTests.cs",
+        "src/PsBash.Shell.Tests/PsBash.Shell.Tests.csproj",
+        "docs/specs/pty.md"
+      ],
+      "notes": "Plan adjustments: (1) Spec said 'Mode state machine in InteractiveShell' but InteractiveShell lives in host and owns the line editor; the mode toggle that PTY-3 needs is the launcher's stdio mode (raw while host is running). Implemented around the launcher's PTY pump, documented in docs/specs/pty.md §7.7. (2) Added UnhandledException hook alongside ProcessExit to cover the crash-recovery scenario the spec called out explicitly. (3) Deferred items documented: SIGWINCH forwarding (genuine follow-on); Ctrl-C signal injection (not needed — PTY slave is host's controlling tty, kernel routes via line discipline). Test invocation: ./scripts/test.sh --filter \"FullyQualifiedName~TerminalModeTests\" — 6 PASS / 2 SKIP-Windows. Tests csproj gained AllowUnsafeBlocks=true for stackalloc+fixed in termios probe. Source-text regression tests guard Launcher_RunHostUnderPtyAsync wrapping and PlatformNotSupported fallback (Directive 13: known-bad memory). 130 pre-existing SIGABRT failures in PsBash.Shell.Tests confirmed unchanged via baseline diff."
     }
   ],
   "interrupted_at": null,

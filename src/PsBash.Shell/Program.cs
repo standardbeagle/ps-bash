@@ -125,17 +125,32 @@ if (shellArgs.Interactive || shellArgs.Command is null)
         return 127;
     }
 
-    // PTY-2 path: when PSBASH_PTY=1 (opt-in until PTY-3 mode-switching lands),
-    // allocate a real pseudo-terminal in the launcher and attach its slave to
-    // the host as stdin/stdout/stderr via PtySpawner. The launcher then pumps
-    // bytes between its own stdio and the PTY master.  This is the path
-    // exercised by PtySpawnTests and is gated on the env var so the legacy
-    // inherited-stdio path remains the default until PTY-3 wires up
-    // mode-switching, signal forwarding, and full Windows raw-mode handling.
+    // PTY-2 / PTY-3 path: when PSBASH_PTY=1 (still opt-in), allocate a real
+    // pseudo-terminal in the launcher and attach its slave to the host as
+    // stdin/stdout/stderr via PtySpawner. The launcher then pumps bytes
+    // between its own stdio (in raw mode, per PTY-3) and the PTY master.
+    // Gated on the env var so the legacy inherited-stdio path remains the
+    // default; pre-Win10-1809 platforms fall back automatically via the
+    // PlatformNotSupportedException catch below. Signal forwarding
+    // (SIGWINCH, Ctrl-C explicit injection) is intentionally deferred.
     var ptyOptIn = Environment.GetEnvironmentVariable("PSBASH_PTY") is "1" or "true";
     if (ptyOptIn)
     {
-        return await RunHostUnderPtyAsync(hostBinary, shellArgs);
+        try
+        {
+            return await RunHostUnderPtyAsync(hostBinary, shellArgs);
+        }
+        catch (PlatformNotSupportedException ex)
+        {
+            // PTY-3 Windows-legacy fallback: ConPtyAdapter throws
+            // PlatformNotSupportedException on pre-Win10-1809 (build < 17763),
+            // and PtyAllocator throws it on unrecognized platforms. Fall back
+            // to the legacy inherited-stdio path with a warning so the user
+            // can still run the shell, just without TUI passthrough.
+            Console.Error.WriteLine(
+                $"ps-bash: PSBASH_PTY=1 requested but the platform does not support a pseudo-terminal ({ex.Message}). " +
+                "Falling back to inherited-stdio mode (TUI apps will be line-buffered).");
+        }
     }
 
     var psi = new System.Diagnostics.ProcessStartInfo(hostBinary)
@@ -264,10 +279,19 @@ static async Task<int> RunHostUnderPtyAsync(string hostBinary, ShellArgs shellAr
 
     await using var spawner = PtySpawner.Spawn(hostBinary, hostArgs, pty, env);
 
-    // Bidirectional pump. We do NOT put the launcher's stdin in raw mode here —
-    // that, plus SIGWINCH forwarding and Ctrl-C signal injection, is PTY-3's
-    // responsibility. For PTY-2 acceptance (a host runspace that sees a real
-    // terminal) plain stream-to-stream copy is sufficient.
+    // PTY-3: switch the launcher's own stdin to raw mode before starting
+    // the bidirectional pump. Without this, the kernel line-buffers each
+    // keystroke until Enter, and TUI apps (vim, less, fzf) never see the
+    // keys as they arrive. The scope is disposed in the outer finally so
+    // a crashed pump still restores the user's terminal state.
+    //
+    // SIGWINCH forwarding and Ctrl-C signal injection are intentionally
+    // deferred — they belong to a follow-on issue and live outside the
+    // mode-switching surface. (Ctrl-C is currently handled by the host's
+    // own Console.CancelKeyPress because the PTY slave inherits the
+    // signal-controlling terminal.)
+    using var modeScope = TerminalMode.EnterRawIfTty();
+
     using var pumpCts = new CancellationTokenSource();
     var stdinTask = Task.Run(async () =>
     {
