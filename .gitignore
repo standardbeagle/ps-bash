@@ -1,9 +1,9 @@
 bin/
 obj/
 dist/
+artifacts/
 *.user
 *.suo
 .vs/
 **/TestResults/
 *.dmp
-dist/
