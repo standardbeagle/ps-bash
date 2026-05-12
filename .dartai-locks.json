@@ -1,15 +1,15 @@
 {
   "claims": {
-    "BhewFRJjyq9J": {
+    "MkOiQv2csxgh": {
       "runner_instance_id": "DESKTOP-NPIOPS6-7606",
       "runner_email": "andybrummer@standardbeagle.com",
-      "claimed_at": "2026-05-12T22:55:00Z",
+      "claimed_at": "2026-05-12T23:15:00Z",
       "agent_id": "DESKTOP-NPIOPS6-7606",
       "parent_loop_id": "AEACP6UqDUBr",
-      "purpose": "Loop iteration 4: PTY-3 launcher tty mode switching (cooked <-> raw passthrough)",
+      "purpose": "Loop iteration 5: PTY-4 decouple host stdout/stderr from IPC framing in interactive mode",
       "source_event": {
         "loop_id": "AEACP6UqDUBr",
-        "task_id": "BhewFRJjyq9J",
+        "task_id": "MkOiQv2csxgh",
         "conversation_id": null
       }
     }
