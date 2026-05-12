@@ -1,3 +1,17 @@
 {
-  "claims": {}
+  "claims": {
+    "BhewFRJjyq9J": {
+      "runner_instance_id": "DESKTOP-NPIOPS6-7606",
+      "runner_email": "andybrummer@standardbeagle.com",
+      "claimed_at": "2026-05-12T22:55:00Z",
+      "agent_id": "DESKTOP-NPIOPS6-7606",
+      "parent_loop_id": "AEACP6UqDUBr",
+      "purpose": "Loop iteration 4: PTY-3 launcher tty mode switching (cooked <-> raw passthrough)",
+      "source_event": {
+        "loop_id": "AEACP6UqDUBr",
+        "task_id": "BhewFRJjyq9J",
+        "conversation_id": null
+      }
+    }
+  }
 }
