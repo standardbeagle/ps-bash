@@ -1,6 +1,53 @@
 namespace PsBash.Core.Runtime.Ipc;
 
 /// <summary>
+/// Session-mode discriminator carried on every request that runs a command
+/// (<see cref="Mode.Command"/>, <see cref="Mode.Stdin"/>, <see cref="Mode.Script"/>).
+/// PTY-4 boundary: in <see cref="Framed"/>, the host serializes command output
+/// through the IPC channel one base64-encoded line at a time and the launcher
+/// re-emits the bytes; in <see cref="Interactive"/>, command output bytes go
+/// straight from the host runspace to <c>System.Console.Out</c> — which the
+/// PTY-2 spawn wired to the PTY slave — and the IPC channel carries only
+/// protocol/lifecycle events (exit code, <c>prompt-ready</c>, future tab-completion
+/// queries). This preserves raw TUI byte fidelity (escape sequences, cursor
+/// movement) and lifts the IPC line-framing throughput bottleneck.
+/// </summary>
+/// <remarks>
+/// <para>
+/// Wire format: <c>SESSION:Framed</c> or <c>SESSION:Interactive</c>, immediately
+/// after the <c>MODE:</c> header line. The header is OPTIONAL; missing means
+/// <see cref="Framed"/> (back-compat with pre-PTY-4 launchers).
+/// </para>
+/// <para>
+/// <see cref="Interactive"/> mode is meaningful only when the host runspace has
+/// a real terminal on its stdio — i.e. when spawned via <c>PtySpawner</c> with
+/// <c>PSBASH_PTY_ATTACHED=1</c>. If a launcher requests <see cref="Interactive"/>
+/// on a host whose stdio is redirected (the legacy non-PTY path), command
+/// output will be silently swallowed by the redirected pipe; the launcher is
+/// responsible for not requesting <see cref="Interactive"/> in that case.
+/// </para>
+/// </remarks>
+public enum SessionMode
+{
+    /// <summary>
+    /// Default. Host streams command output to the launcher via base64-encoded
+    /// IPC response lines, terminated by <c>&lt;&lt;&lt;EXIT:N&gt;&gt;&gt;</c>.
+    /// Used by <c>-c</c>, stdin pipe, and script-file invocations.
+    /// </summary>
+    Framed = 0,
+
+    /// <summary>
+    /// Command output bypasses IPC framing and writes directly to the host's
+    /// <c>System.Console.Out</c> (the PTY slave). The IPC response stream
+    /// carries only the <c>&lt;&lt;&lt;EXIT:N&gt;&gt;&gt;</c> sentinel and a
+    /// trailing <c>&lt;&lt;&lt;PROMPT-READY&gt;&gt;&gt;</c> lifecycle frame
+    /// signalling the launcher may re-take terminal control (restore line-editor
+    /// state, repaint prompt).
+    /// </summary>
+    Interactive = 1,
+}
+
+/// <summary>
 /// Discriminated union of host-protocol request modes.
 /// </summary>
 /// <remarks>
@@ -21,13 +68,17 @@ public abstract record Mode
     /// One-shot bash command string evaluated against the host's shared session.
     /// Equivalent to <c>ps-bash -c "..."</c>.
     /// </summary>
-    public sealed record Command(string Body) : Mode;
+    /// <param name="Body">Bash command string.</param>
+    /// <param name="Session">Session mode (<see cref="SessionMode.Framed"/> by default).</param>
+    public sealed record Command(string Body, SessionMode Session = SessionMode.Framed) : Mode;
 
     /// <summary>
     /// Bash script body read from launcher's stdin, evaluated as a sequence of
     /// commands. Equivalent to <c>echo "..." | ps-bash</c>.
     /// </summary>
-    public sealed record Stdin(string Body) : Mode;
+    /// <param name="Body">Bash script body.</param>
+    /// <param name="Session">Session mode (<see cref="SessionMode.Framed"/> by default).</param>
+    public sealed record Stdin(string Body, SessionMode Session = SessionMode.Framed) : Mode;
 
     /// <summary>
     /// Script-file invocation. <paramref name="Path"/> is the absolute script
@@ -37,7 +88,11 @@ public abstract record Mode
     /// contents. Path and argv elements may contain newlines and quote
     /// characters — they are encoded base64 on the wire.
     /// </summary>
-    public sealed record Script(string Path, IReadOnlyList<string> Argv, string Body) : Mode;
+    /// <param name="Path">Absolute script path.</param>
+    /// <param name="Argv">Positional argument vector.</param>
+    /// <param name="Body">Full script contents.</param>
+    /// <param name="Session">Session mode (<see cref="SessionMode.Framed"/> by default).</param>
+    public sealed record Script(string Path, IReadOnlyList<string> Argv, string Body, SessionMode Session = SessionMode.Framed) : Mode;
 
     /// <summary>
     /// Begin an interactive REPL session. Phase-1 sends header + END only with

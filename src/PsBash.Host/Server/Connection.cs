@@ -59,6 +59,17 @@ internal sealed class Connection
             _ => null
         };
 
+        // PTY-4: pull the session-mode discriminant off whichever variant we're
+        // handling. Only Command/Stdin/Script carry a SessionMode; Health and
+        // Interactive (the legacy "begin REPL" handshake) always run framed.
+        var sessionMode = mode switch
+        {
+            Mode.Command c => c.Session,
+            Mode.Stdin s => s.Session,
+            Mode.Script sc => sc.Session,
+            _ => SessionMode.Framed,
+        };
+
         if (mode is Mode.Shutdown sd)
         {
             await HostProtocol.WriteResponseLineAsync(_stream, HostProtocol.ShutdownAcceptedPayload, ct);
@@ -108,8 +119,38 @@ internal sealed class Connection
             HostProtocol.WriteResponseLineAsync(_stream, line, ct).GetAwaiter().GetResult();
         }
 
+        // PTY-4: in interactive mode the host runspace's Console.Out is the PTY
+        // slave (PtySpawner wired stdio inheritance). Bypass the IPC writer so
+        // command output bytes flow straight from Out-Default / Write-Host /
+        // BashText emitters to the terminal — preserving raw TUI byte fidelity
+        // (escape sequences, cursor moves) and removing the IPC line-framing
+        // throughput bottleneck. The IPC channel then carries only protocol
+        // events: the EXIT sentinel and the trailing PROMPT-READY lifecycle
+        // signal.
+        //
+        // Output sink contract per mode (see SdkWorker.RunCommand for the
+        // forwarder wiring):
+        //   Framed       → output != null → IPC WriteOutput, no console writes
+        //   Interactive  → output == null → SdkWorker falls back to Console.Write
+        //                                    (and ExitTrackingHostUI's forwarder
+        //                                    is also wired to Console.Write so
+        //                                    Out-Default formatter rows land in
+        //                                    the same byte stream)
+        Action<string>? outputSink = sessionMode == SessionMode.Interactive
+            ? null
+            : WriteOutput;
+
         var worker = await _workerTask.ConfigureAwait(false);
-        var exitCode = await worker.ExecuteWithOutputAsync(command, WriteOutput, ct);
+        var exitCode = await worker.ExecuteWithOutputAsync(command, outputSink, ct);
         await HostProtocol.WriteExitAsync(_stream, exitCode, ct);
+
+        if (sessionMode == SessionMode.Interactive)
+        {
+            // Lifecycle cue: the host is idle and the launcher may re-take
+            // terminal control (restore line-editor cursor, repaint prompt).
+            // Skipped in framed mode for back-compat — pre-PTY-4 launchers
+            // would treat the unexpected line as a malformed response frame.
+            await HostProtocol.WritePromptReadyAsync(_stream, ct);
+        }
     }
 }

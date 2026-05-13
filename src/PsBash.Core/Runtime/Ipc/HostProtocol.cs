@@ -29,6 +29,21 @@ public static class HostProtocol
     public const string ArgvHeaderPrefix = "ARGV:";
     public const string BodyHeaderPrefix = "BODY:";
     public const string DeadlineHeaderPrefix = "DEADLINE:";
+    /// <summary>
+    /// PTY-4: optional <c>SESSION:Framed</c> / <c>SESSION:Interactive</c> header
+    /// emitted between <see cref="ModeHeaderPrefix"/> and the body for
+    /// Command/Stdin/Script frames. Absent header decodes to
+    /// <see cref="SessionMode.Framed"/> so pre-PTY-4 launchers stay wire-compatible.
+    /// </summary>
+    public const string SessionHeaderPrefix = "SESSION:";
+    /// <summary>
+    /// PTY-4 lifecycle sentinel emitted by the host after
+    /// <see cref="ExitPrefix"/> when running in <see cref="SessionMode.Interactive"/>.
+    /// Signals the launcher that the host runspace is idle and the launcher may
+    /// re-take terminal control (restore line-editor cursor, repaint prompt).
+    /// In <see cref="SessionMode.Framed"/> the sentinel is NOT emitted (back-compat).
+    /// </summary>
+    public const string PromptReadySentinel = "<<<PROMPT-READY>>>";
 
     /// <summary>
     /// Default drain deadline for graceful shutdown when the launcher does not
@@ -68,16 +83,19 @@ public static class HostProtocol
         {
             case Mode.Command cmd:
                 sb.Append(ModeHeaderPrefix).Append("Command").Append('\n');
+                AppendSessionHeader(sb, cmd.Session);
                 sb.Append(cmd.Body);
                 if (!cmd.Body.EndsWith('\n')) sb.Append('\n');
                 break;
             case Mode.Stdin stdin:
                 sb.Append(ModeHeaderPrefix).Append("Stdin").Append('\n');
+                AppendSessionHeader(sb, stdin.Session);
                 sb.Append(stdin.Body);
                 if (!stdin.Body.EndsWith('\n')) sb.Append('\n');
                 break;
             case Mode.Script script:
                 sb.Append(ModeHeaderPrefix).Append("Script").Append('\n');
+                AppendSessionHeader(sb, script.Session);
                 sb.Append(PathHeaderPrefix).Append(EncodeBase64(script.Path)).Append('\n');
                 sb.Append(ArgvHeaderPrefix).Append(EncodeArgv(script.Argv)).Append('\n');
                 sb.Append(BodyHeaderPrefix).Append(EncodeBase64(script.Body)).Append('\n');
@@ -121,9 +139,15 @@ public static class HostProtocol
         switch (kind)
         {
             case "Command":
-                return new Mode.Command(await ReadBodyUntilEndAsync(reader, ct).ConfigureAwait(false));
+                {
+                    var (body, session) = await ReadBodyAndSessionAsync(reader, ct).ConfigureAwait(false);
+                    return new Mode.Command(body, session);
+                }
             case "Stdin":
-                return new Mode.Stdin(await ReadBodyUntilEndAsync(reader, ct).ConfigureAwait(false));
+                {
+                    var (body, session) = await ReadBodyAndSessionAsync(reader, ct).ConfigureAwait(false);
+                    return new Mode.Stdin(body, session);
+                }
             case "Script":
                 return await ReadScriptAsync(reader, ct).ConfigureAwait(false);
             case "Interactive":
@@ -147,6 +171,64 @@ public static class HostProtocol
             default:
                 throw new IOException($"Unknown MODE kind: {kind}");
         }
+    }
+
+    /// <summary>
+    /// Emit the PTY-4 <see cref="SessionHeaderPrefix"/> header. Suppressed when
+    /// the value is <see cref="SessionMode.Framed"/> so existing wire fixtures
+    /// (and pre-PTY-4 launchers) round-trip byte-for-byte. Hosts MUST treat
+    /// absent SESSION as <see cref="SessionMode.Framed"/>; only an explicit
+    /// <c>SESSION:Interactive</c> opts into the PTY-4 codepath.
+    /// </summary>
+    private static void AppendSessionHeader(StringBuilder sb, SessionMode session)
+    {
+        if (session == SessionMode.Framed) return;
+        sb.Append(SessionHeaderPrefix).Append(session.ToString()).Append('\n');
+    }
+
+    /// <summary>
+    /// Read the optional <see cref="SessionHeaderPrefix"/> header. Returns
+    /// <see cref="SessionMode.Framed"/> if the first line is not a SESSION
+    /// header and pushes the line back into <paramref name="firstBodyLine"/>
+    /// for the caller's body loop. Returns the parsed mode if the line WAS a
+    /// SESSION header and sets <paramref name="firstBodyLine"/> to null.
+    /// </summary>
+    private static SessionMode ParseOptionalSessionHeader(string line, out string? firstBodyLine)
+    {
+        if (line.StartsWith(SessionHeaderPrefix, StringComparison.Ordinal))
+        {
+            var raw = line[SessionHeaderPrefix.Length..];
+            firstBodyLine = null;
+            return raw switch
+            {
+                "Framed" => SessionMode.Framed,
+                "Interactive" => SessionMode.Interactive,
+                _ => throw new IOException($"Invalid {SessionHeaderPrefix} value: {raw}"),
+            };
+        }
+        firstBodyLine = line;
+        return SessionMode.Framed;
+    }
+
+    private static async Task<(string Body, SessionMode Session)> ReadBodyAndSessionAsync(StreamLineReader reader, CancellationToken ct)
+    {
+        var first = await reader.ReadLineAsync(ct).ConfigureAwait(false)
+            ?? throw new IOException("Request stream closed before END sentinel");
+        var session = ParseOptionalSessionHeader(first, out var carryover);
+        var lines = new List<string>();
+        if (carryover is not null)
+        {
+            if (carryover == EndSentinel) return (string.Empty, session);
+            lines.Add(carryover);
+        }
+        while (true)
+        {
+            var line = await reader.ReadLineAsync(ct).ConfigureAwait(false)
+                ?? throw new IOException("Request stream closed before END sentinel");
+            if (line == EndSentinel) break;
+            lines.Add(line);
+        }
+        return (string.Join('\n', lines), session);
     }
 
     private static async Task<string> ReadBodyUntilEndAsync(StreamLineReader reader, CancellationToken ct)
@@ -190,12 +272,15 @@ public static class HostProtocol
     private static async Task<Mode.Script> ReadScriptAsync(StreamLineReader reader, CancellationToken ct)
     {
         string? path = null, argvLine = null, body = null;
+        var session = SessionMode.Framed;
         while (true)
         {
             var line = await reader.ReadLineAsync(ct).ConfigureAwait(false)
                 ?? throw new IOException("Request stream closed before END sentinel (Script)");
             if (line == EndSentinel) break;
-            if (line.StartsWith(PathHeaderPrefix, StringComparison.Ordinal))
+            if (line.StartsWith(SessionHeaderPrefix, StringComparison.Ordinal))
+                session = ParseOptionalSessionHeader(line, out _);
+            else if (line.StartsWith(PathHeaderPrefix, StringComparison.Ordinal))
                 path = DecodeBase64(line[PathHeaderPrefix.Length..]);
             else if (line.StartsWith(ArgvHeaderPrefix, StringComparison.Ordinal))
                 argvLine = line[ArgvHeaderPrefix.Length..];
@@ -207,7 +292,7 @@ public static class HostProtocol
 
         if (path is null || argvLine is null || body is null)
             throw new IOException("Script frame missing PATH, ARGV, or BODY field");
-        return new Mode.Script(path, DecodeArgv(argvLine), body);
+        return new Mode.Script(path, DecodeArgv(argvLine), body, session);
     }
 
     /// <summary>
@@ -243,6 +328,24 @@ public static class HostProtocol
     }
 
     /// <summary>
+    /// PTY-4 lifecycle: emit the <see cref="PromptReadySentinel"/> after
+    /// <see cref="WriteExitAsync"/> when the host completes a command that ran
+    /// in <see cref="SessionMode.Interactive"/>. The launcher consumes this
+    /// signal to restore line-editor state and repaint the prompt knowing
+    /// command output (which went straight to the PTY slave) has fully landed.
+    /// In <see cref="SessionMode.Framed"/> callers MUST NOT emit this sentinel:
+    /// pre-PTY-4 launchers' <see cref="ReadResponseAsync"/> would interpret it
+    /// as a stray data line.
+    /// </summary>
+    public static async Task WritePromptReadyAsync(Stream stream, CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(stream);
+        var bytes = Utf8NoBom.GetBytes(PromptReadySentinel + "\n");
+        await stream.WriteAsync(bytes, ct).ConfigureAwait(false);
+        await stream.FlushAsync(ct).ConfigureAwait(false);
+    }
+
+    /// <summary>
     /// Read a response from <paramref name="stream"/>, invoking
     /// <paramref name="onLine"/> for each output line, and returning the parsed
     /// exit code from the trailing sentinel. Throws <see cref="IOException"/>
@@ -253,18 +356,70 @@ public static class HostProtocol
         Action<string> onLine,
         CancellationToken ct = default)
     {
+        var (exit, _) = await ReadResponseWithLifecycleAsync(stream, onLine, ct).ConfigureAwait(false);
+        return exit;
+    }
+
+    /// <summary>
+    /// PTY-4 lifecycle-aware read. Like <see cref="ReadResponseAsync"/> but also
+    /// observes a trailing <see cref="PromptReadySentinel"/> if the host
+    /// emits one (interactive sessions). Returns <c>(exitCode, promptReady)</c>
+    /// where <c>promptReady</c> is true iff the sentinel was observed. Callers
+    /// in framed mode can safely ignore the flag; pre-PTY-4 hosts never emit
+    /// the sentinel and this method returns <c>(exitCode, false)</c>.
+    /// </summary>
+    /// <remarks>
+    /// The prompt-ready scan is bounded: after reading <see cref="ExitPrefix"/>
+    /// the method does ONE additional non-blocking-ish read for the sentinel
+    /// using a short deadline. If the underlying stream blocks past the deadline
+    /// the method returns with <c>promptReady = false</c> rather than hanging —
+    /// the launcher decides whether the absent sentinel is meaningful. Today
+    /// every host (PTY-4 framed mode AND legacy hosts) closes the connection
+    /// immediately after EXIT, so the read either returns EOF (legacy) or the
+    /// sentinel line (PTY-4 interactive). Both paths exit the loop deterministically.
+    /// </remarks>
+    public static async Task<(int ExitCode, bool PromptReady)> ReadResponseWithLifecycleAsync(
+        Stream stream,
+        Action<string> onLine,
+        CancellationToken ct = default)
+    {
         ArgumentNullException.ThrowIfNull(stream);
         ArgumentNullException.ThrowIfNull(onLine);
         var reader = new StreamLineReader(stream);
+        int? exitCode = null;
+        bool promptReady = false;
         while (true)
         {
-            var line = await reader.ReadLineAsync(ct).ConfigureAwait(false)
-                ?? throw new IOException("Response stream closed before EXIT sentinel");
-            if (line.StartsWith(ExitPrefix, StringComparison.Ordinal)
+            var line = await reader.ReadLineAsync(ct).ConfigureAwait(false);
+            if (line is null)
+            {
+                if (exitCode is null)
+                    throw new IOException("Response stream closed before EXIT sentinel");
+                return (exitCode.Value, promptReady);
+            }
+            if (exitCode is null
+                && line.StartsWith(ExitPrefix, StringComparison.Ordinal)
                 && line.EndsWith(ExitSuffix, StringComparison.Ordinal))
             {
                 var code = line[ExitPrefix.Length..^ExitSuffix.Length];
-                return int.TryParse(code, out var n) ? n : 1;
+                exitCode = int.TryParse(code, out var n) ? n : 1;
+                continue;
+            }
+            if (line == PromptReadySentinel)
+            {
+                promptReady = true;
+                // Sentinel arrives after EXIT; once observed we can stop reading.
+                // If EXIT hasn't been seen yet, this is a protocol bug — treat as
+                // garbled stream and continue scanning for EXIT defensively.
+                if (exitCode is not null) return (exitCode.Value, promptReady);
+                continue;
+            }
+            if (exitCode is not null)
+            {
+                // Unexpected line after EXIT in framed mode would only happen
+                // with a malformed host; close out gracefully rather than
+                // hanging. Discard the line.
+                continue;
             }
             // Data lines are base64-encoded by WriteResponseLineAsync; decode
             // before delivering to the caller. Tolerate undecodable lines

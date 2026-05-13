@@ -298,4 +298,214 @@ public class HostProtocolTests
         var text = Utf8NoBom.GetString(ms.ToArray());
         Assert.Equal("MODE:Command\necho hello\n<<<END>>>\n", text);
     }
+
+    // -- PTY-4 ----------------------------------------------------------------
+
+    /// <summary>
+    /// PTY-4 default: Command without an explicit SessionMode must decode to
+    /// <see cref="SessionMode.Framed"/>. Back-compat: pre-PTY-4 launcher fixtures
+    /// (which never emit a SESSION header) keep working.
+    /// </summary>
+    [Fact]
+    public async Task RoundTrip_Command_DefaultSessionMode_IsFramed()
+    {
+        await using var ms = new MemoryStream();
+        await HostProtocol.WriteRequestAsync(ms, new Mode.Command("echo hi"));
+        ms.Position = 0;
+        var decoded = await HostProtocol.ReadRequestAsync(ms);
+
+        var cmd = Assert.IsType<Mode.Command>(decoded);
+        Assert.Equal(SessionMode.Framed, cmd.Session);
+    }
+
+    /// <summary>
+    /// PTY-4 back-compat: when SessionMode is Framed, no SESSION header is
+    /// emitted on the wire. Existing wire fixture (protocol-request-c.bin) must
+    /// continue to byte-match; the unrelated wire-format check above already
+    /// guards that. Here we double-check the absence of "SESSION:" in the bytes.
+    /// </summary>
+    [Fact]
+    public async Task WriteRequest_FramedCommand_DoesNotEmitSessionHeader()
+    {
+        await using var ms = new MemoryStream();
+        await HostProtocol.WriteRequestAsync(ms, new Mode.Command("echo hi", SessionMode.Framed));
+        var wire = Utf8NoBom.GetString(ms.ToArray());
+
+        Assert.DoesNotContain(HostProtocol.SessionHeaderPrefix, wire);
+        Assert.Equal("MODE:Command\necho hi\n<<<END>>>\n", wire);
+    }
+
+    /// <summary>
+    /// PTY-4 explicit interactive: when SessionMode=Interactive the wire frame
+    /// MUST carry <c>SESSION:Interactive\n</c> immediately after the MODE line.
+    /// </summary>
+    [Fact]
+    public async Task WriteRequest_InteractiveCommand_EmitsSessionHeader()
+    {
+        await using var ms = new MemoryStream();
+        await HostProtocol.WriteRequestAsync(ms, new Mode.Command("vim", SessionMode.Interactive));
+        var wire = Utf8NoBom.GetString(ms.ToArray());
+
+        Assert.Equal("MODE:Command\nSESSION:Interactive\nvim\n<<<END>>>\n", wire);
+    }
+
+    [Fact]
+    public async Task RoundTrip_Command_InteractiveSessionMode_Preserved()
+    {
+        await using var ms = new MemoryStream();
+        await HostProtocol.WriteRequestAsync(ms, new Mode.Command("htop", SessionMode.Interactive));
+        ms.Position = 0;
+        var decoded = await HostProtocol.ReadRequestAsync(ms);
+
+        var cmd = Assert.IsType<Mode.Command>(decoded);
+        Assert.Equal("htop", cmd.Body);
+        Assert.Equal(SessionMode.Interactive, cmd.Session);
+    }
+
+    [Fact]
+    public async Task RoundTrip_Stdin_InteractiveSessionMode_Preserved()
+    {
+        await using var ms = new MemoryStream();
+        await HostProtocol.WriteRequestAsync(ms, new Mode.Stdin("read x\necho $x", SessionMode.Interactive));
+        ms.Position = 0;
+        var decoded = await HostProtocol.ReadRequestAsync(ms);
+
+        var stdin = Assert.IsType<Mode.Stdin>(decoded);
+        Assert.Equal("read x\necho $x", stdin.Body);
+        Assert.Equal(SessionMode.Interactive, stdin.Session);
+    }
+
+    [Fact]
+    public async Task RoundTrip_Script_InteractiveSessionMode_Preserved()
+    {
+        var path = "/tmp/tui.sh";
+        var argv = new[] { "arg1", "arg2" };
+        var body = "#!/usr/bin/env bash\nvim\n";
+        await using var ms = new MemoryStream();
+        await HostProtocol.WriteRequestAsync(ms, new Mode.Script(path, argv, body, SessionMode.Interactive));
+        ms.Position = 0;
+        var decoded = await HostProtocol.ReadRequestAsync(ms);
+
+        var script = Assert.IsType<Mode.Script>(decoded);
+        Assert.Equal(SessionMode.Interactive, script.Session);
+        Assert.Equal(path, script.Path);
+        Assert.Equal(argv, script.Argv);
+        Assert.Equal(body, script.Body);
+    }
+
+    /// <summary>
+    /// PTY-4 wire forward-compat: a legacy host that did not understand SESSION
+    /// would have rejected the unknown line. A PTY-4 host MUST accept any valid
+    /// header and ignore unknown SESSION values would be an error path — but
+    /// known values "Framed" and "Interactive" round-trip cleanly.
+    /// </summary>
+    [Fact]
+    public async Task ReadRequest_RejectsUnknownSessionValue()
+    {
+        var bytes = Utf8NoBom.GetBytes("MODE:Command\nSESSION:Garbage\necho hi\n<<<END>>>\n");
+        await using var src = new MemoryStream(bytes);
+        await Assert.ThrowsAsync<IOException>(() => HostProtocol.ReadRequestAsync(src));
+    }
+
+    /// <summary>
+    /// QA rubric Directive 7 (negative): a pre-PTY-4 host reading a SESSION
+    /// header is impossible (pre-PTY-4 hosts threw on unknown lines), but the
+    /// inverse — a PTY-4 host reading a frame without SESSION — must default
+    /// to Framed and continue normally. This is the wire-compat test.
+    /// </summary>
+    [Fact]
+    public async Task ReadRequest_LegacyWireFormat_NoSessionHeader_DefaultsToFramed()
+    {
+        // Exact pre-PTY-4 wire format: MODE then body then END, no SESSION line.
+        var legacyWire = "MODE:Command\necho legacy\n<<<END>>>\n";
+        var bytes = Utf8NoBom.GetBytes(legacyWire);
+        await using var src = new MemoryStream(bytes);
+        var decoded = await HostProtocol.ReadRequestAsync(src);
+
+        var cmd = Assert.IsType<Mode.Command>(decoded);
+        Assert.Equal("echo legacy", cmd.Body);
+        Assert.Equal(SessionMode.Framed, cmd.Session);
+    }
+
+    /// <summary>
+    /// PTY-4 prompt-ready sentinel: in framed mode the host MUST NOT emit one
+    /// (pre-PTY-4 launchers would treat it as data). Reader's lifecycle-aware
+    /// API reports promptReady=false when only EXIT is present.
+    /// </summary>
+    [Fact]
+    public async Task ReadResponseWithLifecycle_FramedResponse_PromptReadyFalse()
+    {
+        await using var ms = new MemoryStream();
+        await HostProtocol.WriteResponseLineAsync(ms, "output");
+        await HostProtocol.WriteExitAsync(ms, 0);
+        ms.Position = 0;
+
+        var lines = new List<string>();
+        var (exit, ready) = await HostProtocol.ReadResponseWithLifecycleAsync(ms, lines.Add);
+
+        Assert.Equal(0, exit);
+        Assert.False(ready);
+        Assert.Equal(new[] { "output" }, lines);
+    }
+
+    /// <summary>
+    /// PTY-4 prompt-ready sentinel: the lifecycle frame is emitted AFTER EXIT,
+    /// and the launcher's lifecycle-aware reader returns promptReady=true.
+    /// </summary>
+    [Fact]
+    public async Task ReadResponseWithLifecycle_InteractiveResponse_PromptReadyTrue()
+    {
+        await using var ms = new MemoryStream();
+        // Interactive mode: no data lines on the IPC (they went to PTY slave).
+        await HostProtocol.WriteExitAsync(ms, 0);
+        await HostProtocol.WritePromptReadyAsync(ms);
+        ms.Position = 0;
+
+        var lines = new List<string>();
+        var (exit, ready) = await HostProtocol.ReadResponseWithLifecycleAsync(ms, lines.Add);
+
+        Assert.Equal(0, exit);
+        Assert.True(ready);
+        Assert.Empty(lines);
+    }
+
+    /// <summary>
+    /// PTY-4 prompt-ready exact wire format: <c>&lt;&lt;&lt;PROMPT-READY&gt;&gt;&gt;\n</c>.
+    /// Pinning the bytes so a future refactor that changes the sentinel breaks
+    /// loudly rather than silently (launchers would then ignore the lifecycle cue).
+    /// </summary>
+    [Fact]
+    public async Task WritePromptReady_EmitsExpectedWireBytes()
+    {
+        await using var ms = new MemoryStream();
+        await HostProtocol.WritePromptReadyAsync(ms);
+        var wire = Utf8NoBom.GetString(ms.ToArray());
+        Assert.Equal("<<<PROMPT-READY>>>\n", wire);
+        Assert.Equal("<<<PROMPT-READY>>>", HostProtocol.PromptReadySentinel);
+    }
+
+    /// <summary>
+    /// PTY-4 back-compat: the existing <see cref="HostProtocol.ReadResponseAsync"/>
+    /// (used by every pre-PTY-4 caller) must remain wire-compatible with a
+    /// host that emits PROMPT-READY. It SHOULD ignore the sentinel rather
+    /// than throw or surface it as a data line.
+    /// </summary>
+    [Fact]
+    public async Task ReadResponseAsync_TolerantOfPromptReadySentinel()
+    {
+        await using var ms = new MemoryStream();
+        await HostProtocol.WriteResponseLineAsync(ms, "hello");
+        await HostProtocol.WriteExitAsync(ms, 0);
+        await HostProtocol.WritePromptReadyAsync(ms);
+        ms.Position = 0;
+
+        var lines = new List<string>();
+        var exit = await HostProtocol.ReadResponseAsync(ms, lines.Add);
+
+        Assert.Equal(0, exit);
+        // The lifecycle sentinel must NOT show up as a fake "data" line —
+        // base64-decoding "<<<PROMPT-READY>>>" yields garbage; the legacy
+        // reader's FormatException catch-block would otherwise surface it.
+        Assert.Equal(new[] { "hello" }, lines);
+    }
 }

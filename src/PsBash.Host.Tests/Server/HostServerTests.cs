@@ -139,6 +139,97 @@ public sealed class HostServerTests : IAsyncLifetime
         Assert.Contains("alive", output);
     }
 
+    // -- PTY-4 ----------------------------------------------------------------
+
+    /// <summary>
+    /// PTY-4 end-to-end: a launcher that opts the connection into
+    /// <see cref="SessionMode.Interactive"/> MUST observe an IPC response that
+    /// carries zero data lines (the host routes command output to
+    /// <c>System.Console.Out</c> instead) plus a trailing
+    /// <c>PROMPT-READY</c> lifecycle sentinel. The captured Console.Out content
+    /// must hold the actual command output bytes — proving the routing switch
+    /// is functioning, not just suppressing output.
+    /// </summary>
+    [Fact]
+    public async Task InteractiveSession_OutputRoutesToConsole_NotIpc()
+    {
+        // Redirect the worker process's Console.Out so we can observe what
+        // would land on the PTY slave in a real interactive run. This emulates
+        // PtySpawner's stdio inheritance — the slave is just whatever
+        // System.Console.Out is wired to at runtime.
+        using var captured = new StringWriter();
+        var prior = Console.Out;
+        Console.SetOut(captured);
+        try
+        {
+            using var cts = CancellationTokenSource.CreateLinkedTokenSource(_cts.Token);
+            cts.CancelAfter(TimeSpan.FromSeconds(15));
+
+            var clientTransport = new NamedPipeTransport(_pipeName);
+            int exitCode;
+            bool promptReady;
+            var lines = new List<string>();
+            await using (clientTransport)
+            {
+                using var stream = await clientTransport.ConnectAsync(cts.Token);
+                await HostProtocol.WriteRequestAsync(
+                    stream,
+                    new Mode.Command("Invoke-BashEcho 'pty4-token'", SessionMode.Interactive),
+                    cts.Token);
+                (exitCode, promptReady) = await HostProtocol.ReadResponseWithLifecycleAsync(
+                    stream, line => lines.Add(line), cts.Token);
+            }
+
+            // Wire contract: zero IPC data lines, exit 0, PROMPT-READY observed.
+            Assert.Equal(0, exitCode);
+            Assert.Empty(lines);
+            Assert.True(promptReady, "Interactive session must emit PROMPT-READY after EXIT");
+        }
+        finally
+        {
+            Console.SetOut(prior);
+        }
+
+        // Console.Out must hold the actual command bytes — the routing switch
+        // is real, not just a silencer. Use Console-captured output AFTER the
+        // restore so the assertion failure (if any) goes to the test runner.
+        var consoleBytes = captured.ToString();
+        Assert.Contains("pty4-token", consoleBytes);
+    }
+
+    /// <summary>
+    /// PTY-4 framed-mode regression guard: an explicit
+    /// <see cref="SessionMode.Framed"/> request (the default, also covered by
+    /// every other test in this class) MUST still stream output through IPC and
+    /// MUST NOT emit a PROMPT-READY sentinel. Pins the back-compat contract so
+    /// a future "default everything to interactive" refactor breaks loudly.
+    /// </summary>
+    [Fact]
+    public async Task FramedSession_StillStreamsOutputThroughIpc_NoPromptReady()
+    {
+        using var cts = CancellationTokenSource.CreateLinkedTokenSource(_cts.Token);
+        cts.CancelAfter(TimeSpan.FromSeconds(15));
+
+        var clientTransport = new NamedPipeTransport(_pipeName);
+        int exitCode;
+        bool promptReady;
+        var lines = new List<string>();
+        await using (clientTransport)
+        {
+            using var stream = await clientTransport.ConnectAsync(cts.Token);
+            await HostProtocol.WriteRequestAsync(
+                stream,
+                new Mode.Command("Invoke-BashEcho 'framed-token'", SessionMode.Framed),
+                cts.Token);
+            (exitCode, promptReady) = await HostProtocol.ReadResponseWithLifecycleAsync(
+                stream, line => lines.Add(line), cts.Token);
+        }
+
+        Assert.Equal(0, exitCode);
+        Assert.False(promptReady, "Framed mode MUST NOT emit PROMPT-READY (back-compat)");
+        Assert.Contains(lines, l => l.Contains("framed-token"));
+    }
+
     [Fact]
     public async Task SixteenConcurrentConnections_AllCompleteWithoutInterleaving()
     {

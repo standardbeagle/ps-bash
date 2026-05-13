@@ -1,9 +1,9 @@
 {
   "status": "running",
-  "iterations": 4,
-  "spawns": 4,
+  "iterations": 5,
+  "spawns": 5,
   "started_at": "2026-05-12T20:33:00Z",
-  "last_iteration_at": "2026-05-12T23:50:00Z",
+  "last_iteration_at": "2026-05-12T17:30:00Z",
   "last_subagent": "task-executor",
   "loop_task_id": "AEACP6UqDUBr",
   "dartboard": "Personal/ps-bash",
@@ -107,6 +107,32 @@
         "docs/specs/pty.md"
       ],
       "notes": "Plan adjustments: (1) Spec said 'Mode state machine in InteractiveShell' but InteractiveShell lives in host and owns the line editor; the mode toggle that PTY-3 needs is the launcher's stdio mode (raw while host is running). Implemented around the launcher's PTY pump, documented in docs/specs/pty.md §7.7. (2) Added UnhandledException hook alongside ProcessExit to cover the crash-recovery scenario the spec called out explicitly. (3) Deferred items documented: SIGWINCH forwarding (genuine follow-on); Ctrl-C signal injection (not needed — PTY slave is host's controlling tty, kernel routes via line discipline). Test invocation: ./scripts/test.sh --filter \"FullyQualifiedName~TerminalModeTests\" — 6 PASS / 2 SKIP-Windows. Tests csproj gained AllowUnsafeBlocks=true for stackalloc+fixed in termios probe. Source-text regression tests guard Launcher_RunHostUnderPtyAsync wrapping and PlatformNotSupported fallback (Directive 13: known-bad memory). 130 pre-existing SIGABRT failures in PsBash.Shell.Tests confirmed unchanged via baseline diff."
+    },
+    {
+      "task_id": "MkOiQv2csxgh",
+      "iteration": 5,
+      "status": "completed",
+      "started_at": "2026-05-12T16:30:00Z",
+      "completed_at": "2026-05-12T17:30:00Z",
+      "phase_completed": "phase-9",
+      "failed_phase": null,
+      "files_changed": 5,
+      "tests_added": 14,
+      "plan_adjustments": 2,
+      "completion_summary": "PTY-4 decouple host stdout/stderr from IPC framing in interactive mode: SessionMode enum {Framed=0, Interactive=1} added to Mode.Command/Stdin/Script; HostProtocol gained optional SESSION:Interactive header (absent header decodes to Framed for byte-perfect back-compat); PromptReadySentinel <<<PROMPT-READY>>> + WritePromptReadyAsync + ReadResponseWithLifecycleAsync lifecycle-aware reader. Connection.HandleAsync routes outputSink=null when SessionMode==Interactive — SdkWorker's deliver lambda falls back to Console.Write (PTY slave), and ExitTrackingHostUI's forwarder uses the same lambda so Out-Default/Write-Host format-buffer rows also land on Console.Out. Single bytes destination per mode (spec Risk section addressed).",
+      "failure_reason": null,
+      "fix_task_created": false,
+      "fix_task_id": null,
+      "resumed": true,
+      "resumed_at": "2026-05-12T16:30:00Z",
+      "files": [
+        "src/PsBash.Core/Runtime/Ipc/Mode.cs",
+        "src/PsBash.Core/Runtime/Ipc/HostProtocol.cs",
+        "src/PsBash.Host/Server/Connection.cs",
+        "src/PsBash.Core.Tests/Runtime/Ipc/HostProtocolTests.cs",
+        "src/PsBash.Host.Tests/Server/HostServerTests.cs"
+      ],
+      "notes": "Resume from prior subagent that died on internal API error mid-phase:implementing. Prior session had drafted Mode.cs SessionMode enum, HostProtocol AppendSessionHeader/ReadBodyAndSessionAsync, Connection sessionMode switch + outputSink routing, and 12 new HostProtocolTests covering wire format, round-trip, PROMPT-READY lifecycle, legacy back-compat. Resume work: (1) Validated all 4 modified files were complete (Script frame correctly handles SESSION header in ReadScriptAsync). (2) Added 2 host-side integration tests — InteractiveSession_OutputRoutesToConsole_NotIpc proves IPC data lines=0, exit=0, promptReady=true, and Console.Out captures 'pty4-token' bytes (routing switch is functional, not just silenced); FramedSession_StillStreamsOutputThroughIpc_NoPromptReady pins back-compat. Verification (this turn): HostProtocolTests 32/32 PASS (180ms); HostServerTests 7/7 PASS (12s including new PTY-4 tests); PsBash.Core.Tests 690/690 PASS; PsBash.Host.Tests 45/48 PASS (3 SdkWorker failures are pre-existing baseline, confirmed via git stash diff vs bc5d65e — InvokeBashLsLong, CdThenPwd, QueryAsync_PreservesCallerOutputCallback; all 3 fail identically without PTY-4 changes); ps-bash.sln build succeeds (0 errors). Plan adjustments: (1) Resume directive #7 (RunHostUnderPtyAsync requests SessionMode.Interactive) — deferred: RunHostUnderPtyAsync spawns --interactive REPL under PTY and pumps bytes directly without speaking IPC, and IpcWorker doesn't spawn under PTY today. Wire/Connection/SdkWorker contract for SessionMode.Interactive is fully in place and proven by new integration tests; future task wires it at the four `new Mode.Command(...)` / `new Mode.Stdin(...)` construction sites in IpcWorker.cs when IpcWorker starts spawning hosts under PTY. (2) PsBash.Shell.Tests baseline ~130 SIGABRT failures not re-run per resume directive (environment-specific WSL2/.NET 10 RC2). QA rubric Directive 1 (oracle-first) — PTY-4 is byte-protocol layer below shell semantics, no bash oracle exists; differential tests rely on wire-format and round-trip in HostProtocolTests. QA Directive 7 (negative tests) — covered by ReadRequest_RejectsUnknownSessionValue + ReadRequest_LegacyWireFormat_NoSessionHeader_DefaultsToFramed."
     }
   ],
   "interrupted_at": null,
