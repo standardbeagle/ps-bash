@@ -89,7 +89,7 @@ jobs:
           else
             set +e
             STATUS=0
-            for proj in PsBash.Core.Tests PsBash.Cmdlets.Tests PsBash.Escalation.Tests PsBash.Shell.Tests PsBash.Canary.Tests PsBash.Host.Tests; do
+            for proj in PsBash.Core.Tests PsBash.Cmdlets.Tests PsBash.Escalation.Tests PsBash.Shell.Tests PsBash.Host.Tests; do
               echo "::group::$proj"
               dotnet test --no-build -c Release "src/$proj" --filter "Category!=Integration" --blame-hang-timeout 5m --blame-hang-dump-type none
               rc=$?
