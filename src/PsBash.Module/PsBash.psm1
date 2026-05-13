@@ -10086,17 +10086,17 @@ function Invoke-BashPwd {
         if ($arg -ceq '-P') { $physical = $true }
     }
 
-    # Resolve location with Get-Variable -ErrorAction SilentlyContinue around
-    # $global:__PsBashCwd so StrictMode -Version Latest (Pester default) does
-    # not throw on the variable lookup when it has never been initialised.
+    # Resolve location. (Get-Location).Path is authoritative for the shell's
+    # cwd in PowerShell — it tracks Set-Location / Push-Location across
+    # platforms. $env:PWD is unreliable on macOS where PowerShell does not
+    # sync the env var after Push-Location, so the Pester runner ends up with
+    # $env:PWD="/" even though Get-Location is the workspace. Reach for it
+    # only when an explicit override is present via $global:__PsBashCwd
+    # (StrictMode-safe Get-Variable lookup).
     $location = $null
     if (-not $physical) {
-        if ($env:PWD) {
-            $location = $env:PWD
-        } else {
-            $cwdVar = Get-Variable -Name '__PsBashCwd' -Scope Global -ErrorAction SilentlyContinue
-            if ($cwdVar -and $cwdVar.Value) { $location = [string]$cwdVar.Value }
-        }
+        $cwdVar = Get-Variable -Name '__PsBashCwd' -Scope Global -ErrorAction SilentlyContinue
+        if ($cwdVar -and $cwdVar.Value) { $location = [string]$cwdVar.Value }
     } elseif ($physical) {
         try {
             $location = (Resolve-Path -Path (Get-Location).Path).ProviderPath
