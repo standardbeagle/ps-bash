@@ -42,7 +42,7 @@ public sealed class CanaryFeatureTests
     /// echo basic output: spawn modes must print "hello"; all modes must exit 0.
     /// ps-bash-specific assertion: no bash oracle available for all modes.
     /// </summary>
-    [Fact]
+    [SkippableFact]
     public async Task Echo_Basic_AllModes()
     {
         var results = await _runner.RunAllAsync("echo hello");
@@ -59,7 +59,7 @@ public sealed class CanaryFeatureTests
     /// echo -n: spawn mode output must contain "hello"; all modes exit 0.
     /// ps-bash-specific: Invoke-BashEcho -n behavior tested on spawn modes.
     /// </summary>
-    [Fact]
+    [SkippableFact]
     public async Task Echo_NFlag_AllModes()
     {
         var results = await _runner.RunAllAsync("echo -n hello");
@@ -80,7 +80,7 @@ public sealed class CanaryFeatureTests
     /// exit 0: spawn mode exit code must be 0.
     /// M5/M6 skipped — in-process modes do not expose subprocess exit codes.
     /// </summary>
-    [Fact]
+    [SkippableFact]
     public async Task ExitCode_Zero_SpawnModes()
     {
         var results = await _runner.RunAllAsync("exit 0");
@@ -96,7 +96,7 @@ public sealed class CanaryFeatureTests
     /// exit 1: spawn mode exit code must be 1.
     /// M5/M6 skipped — in-process cmdlet exit semantics differ under sourcing/eval.
     /// </summary>
-    [Fact]
+    [SkippableFact]
     public async Task ExitCode_One_SpawnModes()
     {
         var results = await _runner.RunAllAsync("exit 1");
@@ -116,7 +116,7 @@ public sealed class CanaryFeatureTests
     /// Variable assignment then expansion: x=hello; echo $x must print "hello"
     /// on spawn modes; all modes exit 0.
     /// </summary>
-    [Fact]
+    [SkippableFact]
     public async Task Variable_AssignThenExpand_AllModes()
     {
         var results = await _runner.RunAllAsync("x=hello; echo $x");
@@ -133,7 +133,7 @@ public sealed class CanaryFeatureTests
     /// Variable with spaces in value via double-quotes must preserve the spaces
     /// in spawn mode output.
     /// </summary>
-    [Fact]
+    [SkippableFact]
     public async Task Variable_QuotedValueWithSpaces_AllModes()
     {
         var results = await _runner.RunAllAsync("x=\"hello world\"; echo $x");
@@ -154,7 +154,7 @@ public sealed class CanaryFeatureTests
     /// Two-stage pipe: echo hello | grep hello must print "hello" on spawn modes;
     /// all modes exit 0.
     /// </summary>
-    [Fact]
+    [SkippableFact]
     public async Task Pipe_EchoToGrep_AllModes()
     {
         var results = await _runner.RunAllAsync("echo hello | grep hello");
@@ -173,7 +173,7 @@ public sealed class CanaryFeatureTests
     /// grep's non-match exit code (1) may not propagate from the last pipe segment.
     /// ps-bash-specific: pipeline exit code propagation is a known behavioral delta.
     /// </summary>
-    [Fact]
+    [SkippableFact]
     public async Task Pipe_GrepNoMatch_EmptyOutput_SpawnModes()
     {
         var results = await _runner.RunAllAsync("echo hello | grep world");
@@ -193,7 +193,7 @@ public sealed class CanaryFeatureTests
     /// <summary>
     /// If true branch: condition succeeds, "yes" printed on spawn modes; all exit 0.
     /// </summary>
-    [Fact]
+    [SkippableFact]
     public async Task If_TrueBranch_PrintsYes_AllModes()
     {
         var results = await _runner.RunAllAsync("if true; then echo yes; else echo no; fi");
@@ -212,7 +212,7 @@ public sealed class CanaryFeatureTests
     /// <summary>
     /// If false branch: condition fails, "no" printed on spawn modes; all exit 0.
     /// </summary>
-    [Fact]
+    [SkippableFact]
     public async Task If_FalseBranch_PrintsNo_AllModes()
     {
         var results = await _runner.RunAllAsync("if false; then echo yes; else echo no; fi");
@@ -235,7 +235,7 @@ public sealed class CanaryFeatureTests
     /// <summary>
     /// For loop over a b c: all three items printed on spawn modes; all exit 0.
     /// </summary>
-    [Fact]
+    [SkippableFact]
     public async Task ForLoop_ThreeItems_AllPrinted_AllModes()
     {
         var results = await _runner.RunAllAsync("for i in a b c; do echo $i; done");
@@ -255,7 +255,7 @@ public sealed class CanaryFeatureTests
     /// <summary>
     /// For loop with empty expansion list: body never runs, exits 0, no output.
     /// </summary>
-    [Fact]
+    [SkippableFact]
     public async Task ForLoop_EmptyList_NoOutput_AllModes()
     {
         var results = await _runner.RunAllAsync("items=\"\"; for i in $items; do echo $i; done");
@@ -275,7 +275,7 @@ public sealed class CanaryFeatureTests
     /// <summary>
     /// While false: condition immediately false, body never runs, all modes exit 0.
     /// </summary>
-    [Fact]
+    [SkippableFact]
     public async Task WhileLoop_ImmediatelyFalse_ExitsZero_AllModes()
     {
         var results = await _runner.RunAllAsync("while false; do echo never; done");
@@ -291,7 +291,7 @@ public sealed class CanaryFeatureTests
     /// <summary>
     /// While loop counting 1 to 3: spawn modes print 1, 2, 3; all exit 0.
     /// </summary>
-    [Fact]
+    [SkippableFact]
     public async Task WhileLoop_CounterTo3_AllModes()
     {
         var script = "i=1; while [ $i -le 3 ]; do echo $i; i=$((i+1)); done";
@@ -316,7 +316,7 @@ public sealed class CanaryFeatureTests
     /// <summary>
     /// Function definition then call: f() { echo hi; }; f prints "hi" on spawn modes.
     /// </summary>
-    [Fact]
+    [SkippableFact]
     public async Task Function_DefineAndCall_AllModes()
     {
         var results = await _runner.RunAllAsync("f() { echo hi; }; f");
@@ -335,7 +335,7 @@ public sealed class CanaryFeatureTests
     /// M5/M6 skipped for ExitCode — $1 in function body may trigger strict mode
     /// when no positional args are available in the in-process runspace.
     /// </summary>
-    [Fact]
+    [SkippableFact]
     public async Task Function_WithArgument_AllModes()
     {
         var results = await _runner.RunAllAsync("greet() { echo \"hello $1\"; }; greet world");
@@ -359,7 +359,7 @@ public sealed class CanaryFeatureTests
     /// <summary>
     /// Command substitution: x=$(echo hi); echo $x prints "hi" on spawn modes.
     /// </summary>
-    [Fact]
+    [SkippableFact]
     public async Task CommandSub_AssignAndExpand_AllModes()
     {
         var results = await _runner.RunAllAsync("x=$(echo hi); echo $x");
@@ -375,7 +375,7 @@ public sealed class CanaryFeatureTests
     /// <summary>
     /// Nested command substitution: echo $(echo $(echo deep)) prints "deep" on spawn modes.
     /// </summary>
-    [Fact]
+    [SkippableFact]
     public async Task CommandSub_Nested_AllModes()
     {
         var results = await _runner.RunAllAsync("echo $(echo $(echo deep))");
@@ -395,7 +395,7 @@ public sealed class CanaryFeatureTests
     /// <summary>
     /// Arithmetic expansion: echo $((2+3)) prints "5" on spawn modes; all exit 0.
     /// </summary>
-    [Fact]
+    [SkippableFact]
     public async Task Arithmetic_Addition_AllModes()
     {
         var results = await _runner.RunAllAsync("echo $((2+3))");
@@ -411,7 +411,7 @@ public sealed class CanaryFeatureTests
     /// <summary>
     /// Arithmetic with variable: x=10; echo $((x * 3)) prints "30" on spawn modes.
     /// </summary>
-    [Fact]
+    [SkippableFact]
     public async Task Arithmetic_WithVariable_AllModes()
     {
         var results = await _runner.RunAllAsync("x=10; echo $((x * 3))");
@@ -431,7 +431,7 @@ public sealed class CanaryFeatureTests
     /// <summary>
     /// Stderr redirect: echo err >&2 — spawn mode stdout must be empty, all exit 0.
     /// </summary>
-    [Fact]
+    [SkippableFact]
     public async Task StderrRedirect_StdoutEmpty_AllModes()
     {
         var results = await _runner.RunAllAsync("echo err >&2");
@@ -448,7 +448,7 @@ public sealed class CanaryFeatureTests
     /// Stderr redirect: spawn mode stderr must contain the redirected message.
     /// M5/M6 skipped — in-process stderr routing differs from subprocess streams.
     /// </summary>
-    [Fact]
+    [SkippableFact]
     public async Task StderrRedirect_StderrContainsMessage_SpawnModes()
     {
         var results = await _runner.RunAllAsync("echo err >&2");
@@ -468,7 +468,7 @@ public sealed class CanaryFeatureTests
     /// <summary>
     /// stdin pipe through cat: echo hello | cat prints "hello" on spawn modes; all exit 0.
     /// </summary>
-    [Fact]
+    [SkippableFact]
     public async Task StdinPipe_Cat_PassesThrough_AllModes()
     {
         var results = await _runner.RunAllAsync("echo hello | cat");
@@ -485,7 +485,7 @@ public sealed class CanaryFeatureTests
     /// Multi-line pipe through cat: printf with newlines piped to cat preserves all lines
     /// in spawn modes.
     /// </summary>
-    [Fact]
+    [SkippableFact]
     public async Task StdinPipe_Cat_MultiLine_AllModes()
     {
         var results = await _runner.RunAllAsync("printf 'line1\\nline2\\nline3\\n' | cat");
@@ -510,7 +510,7 @@ public sealed class CanaryFeatureTests
     /// set -e; false: with errexit, spawn modes must exit non-zero.
     /// M5/M6 skipped — in-process cmdlet exit code semantics differ.
     /// </summary>
-    [Fact]
+    [SkippableFact]
     public async Task SetE_False_ExitsNonZero_SpawnModes()
     {
         var results = await _runner.RunAllAsync("set -e; false");
@@ -526,7 +526,7 @@ public sealed class CanaryFeatureTests
     /// set -e; true: with errexit, a succeeding command exits 0 in spawn modes.
     /// M5/M6 skipped.
     /// </summary>
-    [Fact]
+    [SkippableFact]
     public async Task SetE_True_ExitsZero_SpawnModes()
     {
         var results = await _runner.RunAllAsync("set -e; true");
@@ -545,7 +545,7 @@ public sealed class CanaryFeatureTests
     /// <summary>
     /// export FOO=bar; echo $FOO prints "bar" on spawn modes; all exit 0.
     /// </summary>
-    [Fact]
+    [SkippableFact]
     public async Task EnvVar_Export_ExpandsCorrectly_AllModes()
     {
         var results = await _runner.RunAllAsync("export FOO=bar; echo $FOO");
@@ -562,7 +562,7 @@ public sealed class CanaryFeatureTests
     /// Exported var visible in command substitution: echo $(echo $GREETING) prints "hello"
     /// on spawn modes.
     /// </summary>
-    [Fact]
+    [SkippableFact]
     public async Task EnvVar_ExportedToSubcommand_AllModes()
     {
         var results = await _runner.RunAllAsync("export GREETING=hello; echo $(echo $GREETING)");
@@ -582,7 +582,7 @@ public sealed class CanaryFeatureTests
     /// <summary>
     /// Here-string: cat &lt;&lt;&lt; hello prints "hello" on spawn modes; all exit 0.
     /// </summary>
-    [Fact]
+    [SkippableFact]
     public async Task HereString_Basic_AllModes()
     {
         var results = await _runner.RunAllAsync("cat <<< hello");
@@ -599,7 +599,7 @@ public sealed class CanaryFeatureTests
     /// Here-string with variable expansion: cat &lt;&lt;&lt; "hello $NAME" expands NAME
     /// and prints "hello world" on spawn modes.
     /// </summary>
-    [Fact]
+    [SkippableFact]
     public async Task HereString_WithVariableExpansion_AllModes()
     {
         var results = await _runner.RunAllAsync("NAME=world; cat <<< \"hello $NAME\"");

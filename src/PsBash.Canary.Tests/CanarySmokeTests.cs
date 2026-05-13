@@ -18,7 +18,7 @@ public sealed class CanarySmokeTests
     // Smoke: echo hello — verifies basic execution in all available modes.
     // -------------------------------------------------------------------------
 
-    [Fact]
+    [SkippableFact]
     public async Task EchoHello_M1_ReturnsExitZero()
     {
         var result = await RunSingleMode(Mode.M1_CFlag, "echo hello");
@@ -27,7 +27,7 @@ public sealed class CanarySmokeTests
         Assert.Contains("hello", result.Stdout);
     }
 
-    [Fact]
+    [SkippableFact]
     public async Task EchoHello_M2_ReturnsExitZero()
     {
         var result = await RunSingleMode(Mode.M2_StdinPipe, "echo hello");
@@ -36,7 +36,7 @@ public sealed class CanarySmokeTests
         Assert.Contains("hello", result.Stdout);
     }
 
-    [Fact]
+    [SkippableFact]
     public async Task EchoHello_M3_ReturnsExitZero()
     {
         var result = await RunSingleMode(Mode.M3_FileArg, "echo hello");
@@ -45,7 +45,7 @@ public sealed class CanarySmokeTests
         Assert.Contains("hello", result.Stdout);
     }
 
-    [Fact]
+    [SkippableFact]
     public async Task EchoHello_M5_ReturnsExitZero()
     {
         var result = await RunSingleMode(Mode.M5_InvokeEval, "echo hello");
@@ -53,7 +53,7 @@ public sealed class CanarySmokeTests
         Assert.Equal(0, result.ExitCode);
     }
 
-    [Fact]
+    [SkippableFact]
     public async Task EchoHello_M6_ReturnsExitZero()
     {
         var result = await RunSingleMode(Mode.M6_InvokeSource, "echo hello");
@@ -65,7 +65,7 @@ public sealed class CanarySmokeTests
     // At minimum M1 must be available for the smoke test to constitute a real check.
     // -------------------------------------------------------------------------
 
-    [Fact]
+    [SkippableFact]
     public void ModeRunner_FindsPsBashBinaryOrSkips()
     {
         // This test documents binary availability; it never fails — it skips if absent.
