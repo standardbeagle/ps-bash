@@ -1,17 +1,3 @@
 {
-  "claims": {
-    "jpZLsDxNs8yd": {
-      "runner_instance_id": "DESKTOP-NPIOPS6-7606",
-      "runner_email": "andybrummer@standardbeagle.com",
-      "claimed_at": "2026-05-12T23:55:00Z",
-      "agent_id": "DESKTOP-NPIOPS6-7606",
-      "parent_loop_id": "AEACP6UqDUBr",
-      "purpose": "Loop iteration 6: PTY-5 signal forwarding (SIGINT/SIGWINCH/Ctrl-C/Ctrl-Z) launcher<->host",
-      "source_event": {
-        "loop_id": "AEACP6UqDUBr",
-        "task_id": "jpZLsDxNs8yd",
-        "conversation_id": null
-      }
-    }
-  }
+  "claims": {}
 }
