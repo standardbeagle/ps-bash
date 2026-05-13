@@ -22,7 +22,10 @@ internal sealed class Program
     private static extern int close(int fd);
     [System.Runtime.InteropServices.DllImport("libc", SetLastError = true, EntryPoint = "readlink")]
     private static extern long readlink(string path, byte[] buf, ulong bufsiz);
+    [System.Runtime.InteropServices.DllImport("libc", SetLastError = true, EntryPoint = "fcntl")]
+    private static extern int fcntl(int fd, int cmd);
     private const int O_RDWR = 2;
+    private const int F_GETFD = 1;
 
     private static string? ReadFdTarget(int fd)
     {
@@ -30,6 +33,25 @@ internal sealed class Program
         var n = readlink($"/proc/self/fd/{fd}", buf, (ulong)buf.Length);
         if (n <= 0) return null;
         return System.Text.Encoding.UTF8.GetString(buf, 0, (int)n);
+    }
+
+    private static bool IsFdPipe(int fd)
+    {
+        // /proc/self/fd readlink returns "pipe:[N]" for pipes (Linux). macOS
+        // /dev/fd readlink returns the actual path; pipes appear as
+        // "/dev/fd/N" or similar. fstat would be cleanest but our libc
+        // P/Invoke surface is already wide enough — match on the Linux
+        // form and fall back to "any non-path target" on macOS via the
+        // anon_inode hint that .NET runtime fds tend to expose.
+        var target = ReadFdTarget(fd);
+        if (target is null) return false;
+        if (target.StartsWith("pipe:", StringComparison.Ordinal)) return true;
+        if (target.StartsWith("anon_inode:[eventfd]", StringComparison.Ordinal)) return false;
+        if (target.StartsWith("anon_inode:[eventpoll]", StringComparison.Ordinal)) return false;
+        if (target.StartsWith("anon_inode:", StringComparison.Ordinal)) return false;
+        if (target.StartsWith("socket:", StringComparison.Ordinal)) return false;
+        if (target.StartsWith("/", StringComparison.Ordinal)) return false;
+        return false;
     }
 
     private static void DetachInheritedStdioIfRequested()
@@ -58,14 +80,27 @@ internal sealed class Program
             // files, or sockets (event pipe, debugger pipe, telemetry).
             try
             {
-                foreach (var entry in System.IO.Directory.EnumerateFileSystemEntries("/proc/self/fd"))
+                if (System.IO.Directory.Exists("/proc/self/fd"))
                 {
-                    var name = System.IO.Path.GetFileName(entry);
-                    if (!int.TryParse(name, out var fd)) continue;
-                    if (fd < 3) continue;
-                    var target = ReadFdTarget(fd);
-                    if (target is not null && target.StartsWith("pipe:", StringComparison.Ordinal))
+                    foreach (var entry in System.IO.Directory.EnumerateFileSystemEntries("/proc/self/fd"))
+                    {
+                        var name = System.IO.Path.GetFileName(entry);
+                        if (!int.TryParse(name, out var fd)) continue;
+                        if (fd < 3) continue;
+                        if (IsFdPipe(fd))
+                            close(fd);
+                    }
+                }
+                else
+                {
+                    // macOS / FreeBSD have no /proc; close pipe-like fds in
+                    // [3, 256) by querying each one. F_GETFD on an unopen
+                    // fd returns -1 with errno=EBADF so we skip closed slots.
+                    for (int fd = 3; fd < 256; fd++)
+                    {
+                        if (fcntl(fd, F_GETFD) < 0) continue;
                         close(fd);
+                    }
                 }
             }
             catch { /* best effort */ }

@@ -270,15 +270,18 @@ public sealed class IpcWorker : IWorker
 
     private async Task SpawnAndWaitAsync(CancellationToken ct)
     {
+        var isWindows = System.Runtime.InteropServices.RuntimeInformation.IsOSPlatform(
+            System.Runtime.InteropServices.OSPlatform.Windows);
+
         var psi = new ProcessStartInfo
         {
             FileName = _hostBinaryPath,
-            // UseShellExecute=false (was true) so we can set Environment for
-            // PSBASH_HOST_DETACH. On Linux/macOS the daemon would otherwise
-            // inherit the launcher's stdout/stderr file descriptors, keep
-            // them open after the launcher exits, and prevent any pipe
-            // reader (test harnesses, shell pipelines) from ever seeing EOF.
-            UseShellExecute = false,
+            // On POSIX (Linux/macOS) flip UseShellExecute off so we can set
+            // PSBASH_HOST_DETACH=1 via psi.Environment. On Windows keep
+            // UseShellExecute=true — the legacy daemon-detach behaviour
+            // relies on the shell-execute spawn path to break the pipe
+            // inheritance from the launcher.
+            UseShellExecute = isWindows,
             CreateNoWindow = true,
             WindowStyle = ProcessWindowStyle.Hidden,
             RedirectStandardInput = false,
@@ -286,11 +289,11 @@ public sealed class IpcWorker : IWorker
             RedirectStandardError = false,
         };
         psi.ArgumentList.Add($"--ipc-endpoint={_scheme}:{_endpoint}");
-        // Signal the host to dup2 /dev/null over the inherited stdio fds at
-        // startup so it can never write into the launcher's pipes. Skipped
-        // on Windows (different inheritance semantics; daemons run hidden).
-        if (!System.Runtime.InteropServices.RuntimeInformation.IsOSPlatform(
-                System.Runtime.InteropServices.OSPlatform.Windows))
+        // POSIX-only: signal the host to dup2 /dev/null over the inherited
+        // stdio fds at startup so the daemon can never write into the
+        // launcher's pipes. Windows uses shell-execute spawn which already
+        // detaches the daemon's stdio from the launcher.
+        if (!isWindows)
         {
             psi.Environment["PSBASH_HOST_DETACH"] = "1";
         }
