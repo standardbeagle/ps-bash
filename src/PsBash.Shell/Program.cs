@@ -194,8 +194,18 @@ catch (ParseException ex)
 
 if (debug)
 {
-    Console.Error.WriteLine($"[ps-bash] input:      {bashCommand}");
-    Console.Error.WriteLine($"[ps-bash] transpiled: {pwshCommand}");
+    // Tag EVERY line of multi-line debug output so AssertOracle's
+    // StripDebugLines (which filters by leading "[ps-bash] ") removes
+    // all of it. A bare WriteLine of a multi-line transpiled
+    // PowerShell script (heredoc-shaped @"..."@ bodies, etc.) would
+    // leak the body lines onto stderr as untagged content, and the
+    // differential test would flag them as a mismatch.
+    static string Tag(string label, string value) =>
+        value.Contains('\n')
+            ? "[ps-bash] " + label + value.Replace("\n", "\n[ps-bash] ")
+            : "[ps-bash] " + label + value;
+    Console.Error.WriteLine(Tag("input:      ", bashCommand));
+    Console.Error.WriteLine(Tag("transpiled: ", pwshCommand));
 }
 
 await using IWorker worker = await workerFactory();

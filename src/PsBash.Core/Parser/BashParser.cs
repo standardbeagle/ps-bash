@@ -1065,7 +1065,14 @@ public sealed class BashParser
                 Advance();
         }
 
-        string body = string.Join("\n", bodyLines);
+        // bash: each body line (including the final one) is terminated by a
+        // newline. Join with \n and append a final \n so the emitted
+        // here-string round-trips through cat / read with byte parity.
+        // Empty heredocs ("cat <<EOF\nEOF") still yield "" because there
+        // are no body lines; only non-empty bodies get the trailing \n.
+        string body = bodyLines.Count == 0
+            ? string.Empty
+            : string.Join("\n", bodyLines) + "\n";
         return new HereDoc(body, expand, stripTabs);
     }
 
