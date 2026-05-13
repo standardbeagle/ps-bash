@@ -1,15 +1,15 @@
 {
   "claims": {
-    "MkOiQv2csxgh": {
+    "jpZLsDxNs8yd": {
       "runner_instance_id": "DESKTOP-NPIOPS6-7606",
       "runner_email": "andybrummer@standardbeagle.com",
-      "claimed_at": "2026-05-12T23:15:00Z",
+      "claimed_at": "2026-05-12T23:55:00Z",
       "agent_id": "DESKTOP-NPIOPS6-7606",
       "parent_loop_id": "AEACP6UqDUBr",
-      "purpose": "Loop iteration 5: PTY-4 decouple host stdout/stderr from IPC framing in interactive mode",
+      "purpose": "Loop iteration 6: PTY-5 signal forwarding (SIGINT/SIGWINCH/Ctrl-C/Ctrl-Z) launcher<->host",
       "source_event": {
         "loop_id": "AEACP6UqDUBr",
-        "task_id": "MkOiQv2csxgh",
+        "task_id": "jpZLsDxNs8yd",
         "conversation_id": null
       }
     }
