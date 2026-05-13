@@ -305,27 +305,32 @@ internal static partial class TerminalModeProbe
     //     ...
     //   };
     //
-    // tcflag_t = unsigned int (4 bytes) on Linux. c_lflag is therefore
-    // at offset 12 (3 * 4).
-    //
-    // ICANON = 0x00000002 (Linux); ECHO = 0x00000008 (Linux).
-    private const int CLflagOffsetLinux = 12;
-    // macOS layout differs (c_iflag/c_oflag/c_cflag/c_lflag are 4 bytes
-    // each but c_lflag bit values match); we don't run this probe on macOS
-    // by default — Posix tests run on the WSL2 Linux side per qa-rubric.
-    private const uint ICANON = 0x00000002;
-    private const uint ECHO = 0x00000008;
+    // tcflag_t = unsigned int (4 bytes). c_iflag, c_oflag, c_cflag, c_lflag
+    // are first four fields on both Linux and macOS, so c_lflag is at
+    // offset 12 (3 * 4) on both platforms. NCCS / c_ispeed / c_ospeed
+    // differ but live after c_lflag and don't affect this offset.
+    private const int CLflagOffset = 12;
+    // ICANON and ECHO bit values differ across platforms:
+    //   Linux glibc: ICANON=0x02, ECHO=0x08
+    //   macOS:       ICANON=0x100, ECHO=0x08
+    private static readonly uint ICANON =
+        RuntimeInformation.IsOSPlatform(OSPlatform.OSX) ? 0x00000100u : 0x00000002u;
+    private static readonly uint ECHO = 0x00000008;
+
+    private static bool IsPosix =>
+        RuntimeInformation.IsOSPlatform(OSPlatform.Linux)
+        || RuntimeInformation.IsOSPlatform(OSPlatform.OSX);
 
     public static bool IsCanonical(int fd)
     {
-        if (!RuntimeInformation.IsOSPlatform(OSPlatform.Linux)) return true; // probe disabled
+        if (!IsPosix) return true; // probe disabled on Windows
         Span<byte> buf = stackalloc byte[TermiosBufSize];
         unsafe
         {
             fixed (byte* p = buf)
             {
                 if (NativeMethods.tcgetattr(fd, (IntPtr)p) != 0) return true;
-                uint lflag = ReadUInt32(buf, CLflagOffsetLinux);
+                uint lflag = ReadUInt32(buf, CLflagOffset);
                 return (lflag & ICANON) != 0;
             }
         }
@@ -333,14 +338,14 @@ internal static partial class TerminalModeProbe
 
     public static bool HasEcho(int fd)
     {
-        if (!RuntimeInformation.IsOSPlatform(OSPlatform.Linux)) return true;
+        if (!IsPosix) return true;
         Span<byte> buf = stackalloc byte[TermiosBufSize];
         unsafe
         {
             fixed (byte* p = buf)
             {
                 if (NativeMethods.tcgetattr(fd, (IntPtr)p) != 0) return true;
-                uint lflag = ReadUInt32(buf, CLflagOffsetLinux);
+                uint lflag = ReadUInt32(buf, CLflagOffset);
                 return (lflag & ECHO) != 0;
             }
         }
