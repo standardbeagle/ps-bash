@@ -962,6 +962,14 @@ public sealed class BashParser
                     expand = raw[0] == '"';
                     raw = raw[1..^1];
                 }
+                // bash: a here-string supplies the word PLUS a trailing
+                // newline to the command's stdin. `cat <<< "hello"` prints
+                // "hello\n", not "hello". The emitter wraps the body in a
+                // here-string @"..."@ which itself swallows the @-line
+                // newlines, so we have to encode the trailing newline by
+                // appending it to the body value here.
+                if (!raw.EndsWith('\n'))
+                    raw += "\n";
                 hereDocs.Add(new HereDoc(raw, expand, StripTabs: false));
             }
             else if (kind is BashTokenKind.DLess or BashTokenKind.DLessDash)
