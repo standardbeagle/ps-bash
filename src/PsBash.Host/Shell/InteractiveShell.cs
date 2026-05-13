@@ -511,7 +511,19 @@ EnsureConsoleInputRestored();
     internal static string ExpandPS1(string ps1, string cwd, string home)
     {
         if (cwd.StartsWith(home))
+        {
             cwd = "~" + cwd[home.Length..];
+            // Normalise the home-prefixed suffix to the platform separator.
+            // Bash on POSIX renders \w as ~/foo/bar, never ~\foo\bar — the
+            // shell stores _lastDir using PowerShell's separator (which on
+            // POSIX is '/' but unit tests deliberately feed Windows-style
+            // fixtures cross-platform to validate this normalisation). Only
+            // touch the home-prefixed case so non-home paths
+            // (BackslashW_CwdNotUnderHome_ReturnsFullPath) round-trip
+            // untouched.
+            if (Path.DirectorySeparatorChar != '\\')
+                cwd = cwd.Replace('\\', Path.DirectorySeparatorChar);
+        }
 
         var user = Environment.UserName;
         var host = Environment.MachineName.ToLowerInvariant();

@@ -250,9 +250,18 @@ public sealed class SdkWorker : IWorker
                 FlushFormatBufferCore();
             }
 
+            // Map PowerShell terminating errors that mirror bash exit codes:
+            //   - CommandNotFoundException → 127 (bash command-not-found)
+            // We do this BEFORE Console.Error so the error still surfaces.
+            bool sawCommandNotFound = false;
             foreach (var error in _ps.Streams.Error)
             {
                 Console.Error.WriteLine(error.ToString());
+                if (error.CategoryInfo?.Reason == "CommandNotFoundException"
+                    || error.Exception is System.Management.Automation.CommandNotFoundException)
+                {
+                    sawCommandNotFound = true;
+                }
             }
 
             // exit N calls PSHost.SetShouldExit(N) — check before processing output.
@@ -270,9 +279,20 @@ public sealed class SdkWorker : IWorker
             // $LASTEXITCODE only changes when an external command or explicit `exit N` runs.
             var lec = _ps.Runspace.SessionStateProxy.GetVariable("LASTEXITCODE");
             if (lec is System.Management.Automation.PSObject lecPso) lec = lecPso.BaseObject;
-            if (lec is int exitInt) return exitInt;
-            if (lec is long exitLong) return (int)exitLong;
-            return 0;
+            int finalExit = lec switch
+            {
+                int i => i,
+                long l => (int)l,
+                _ => 0,
+            };
+            // bash: `nonexistent_command` → exit 127. PowerShell's
+            // CommandNotFoundException does not set $LASTEXITCODE on its own
+            // (it's a terminating .NET exception, not an external-process exit
+            // code). Surface a 127 only when no real exit code was set, so a
+            // user `exit 5` after a typo still propagates 5.
+            if (sawCommandNotFound && finalExit == 0)
+                finalExit = 127;
+            return finalExit;
         }
         finally
         {

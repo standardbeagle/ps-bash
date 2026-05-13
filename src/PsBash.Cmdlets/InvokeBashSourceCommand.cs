@@ -31,6 +31,12 @@ public sealed class InvokeBashSourceCommand : PSCmdlet
                 "FileNotFound",
                 ErrorCategory.ObjectNotFound,
                 Path));
+            // bash: source /nonexistent => exit 1. WriteError emits the
+            // diagnostic but doesn't set $LASTEXITCODE on its own, so the
+            // launcher process would still return 0 to the caller. Push a
+            // non-zero exit code into the global so the outer eval picks
+            // it up.
+            SessionState.PSVariable.Set("global:LASTEXITCODE", 1);
             return;
         }
 
