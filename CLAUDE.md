@@ -27,6 +27,32 @@ It shuts down MSBuild server nodes and testhost processes on exit.
 
 Do NOT use bare `dotnet test ...` — it leaks MSBuild worker nodes and testhost processes.
 
+## CI Push Discipline
+
+Every push to `main` and every PR fires three workflows (Build, CI Pester, Canary)
+across a 3-OS matrix — up to **9 jobs per push**. Multiply by N commits per task
+and CI minutes evaporate fast. Rules:
+
+1. **Batch commits.** Don't push after every tiny edit. Group related changes into
+   one commit before pushing.
+2. **Bookkeeping-only commits are auto-skipped** via `paths-ignore` in
+   `.github/workflows/{build,ci,canary}.yml`. Paths that DO NOT trigger CI:
+   - `.dartai/**`, `.dartai-locks.json` (loop state, claims)
+   - `docs/spikes/**`, `docs/solutions/**`
+   - `**/*.md` (READMEs, changelogs, plans)
+
+   Use `[skip ci]` in the commit message ONLY if you also touch a code path and
+   know the change is genuinely doc-only (e.g. inline doc comment edits inside a
+   .cs file). Default: trust `paths-ignore` and don't add `[skip ci]`.
+3. **Concurrency cancels superseded runs** — pushing a new commit cancels the
+   in-progress run for the same ref. Don't push hot loops of fixup commits.
+4. **Loop driver commit pattern** (claim → work → release): the claim and release
+   commits touch only `.dartai-locks.json` and are filtered out automatically. Only
+   the work commit (which touches actual code) triggers CI. Keep it that way — do
+   not add other paths to claim/release commits.
+
+If you're unsure whether a change needs CI, ask before pushing.
+
 ## Release Process
 
 ### 1. Bump version and update notes

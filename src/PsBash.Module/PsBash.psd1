@@ -160,7 +160,7 @@ AliasesToExport = 'echo', 'printf', 'ls', 'cat', 'grep', 'sort', 'head', 'tail',
                 'pushd', 'popd', 'dirs',
                 'yes', 'tput', 'shopt',
                 'kill', 'test', 'let', 'id', 'shuf', 'balias',
-                'install', 'browse', 'more'
+                'install', 'browse', 'more', 'less'
 
 # DSC resources to export from this module
 # DscResourcesToExport = @()

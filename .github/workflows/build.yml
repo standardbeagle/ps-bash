@@ -3,8 +3,26 @@ name: Build
 on:
   push:
     branches: [main]
+    paths-ignore:
+      - '.dartai/**'
+      - '.dartai-locks.json'
+      - 'docs/spikes/**'
+      - 'docs/solutions/**'
+      - '**/*.md'
   pull_request:
     branches: [main]
+    paths-ignore:
+      - '.dartai/**'
+      - '.dartai-locks.json'
+      - 'docs/spikes/**'
+      - 'docs/solutions/**'
+      - '**/*.md'
+
+# Cancel earlier runs on the same ref/PR when new commits arrive.
+# Avoids wasting CI minutes on superseded loop bookkeeping commits.
+concurrency:
+  group: build-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   build:

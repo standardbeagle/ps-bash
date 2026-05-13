@@ -10105,7 +10105,10 @@ function Invoke-BashPwd {
     if (-not $location) { $location = [System.Environment]::CurrentDirectory }
 
     $location = $location -replace '\\', '/'
-    Emit-BashLine -Text ($location + "`n") -Command 'pwd'
+    # Emit a typed PsBash.PwdLine so consumers (and tests) get a PSCustomObject
+    # with a .BashText property; bypasses the Emit-BashLine fast-path which
+    # returns a bare [string] for default PsBash.TextOutput.
+    New-BashObject -BashText $location -TypeName 'PsBash.PwdLine' -Command 'pwd'
 }
 
 # --- hostname ---

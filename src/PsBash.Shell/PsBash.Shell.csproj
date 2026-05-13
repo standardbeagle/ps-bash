@@ -39,14 +39,18 @@
           SkipUnchangedFiles="true" />
   </Target>
 
-  <!-- Copy Host's full output (DLLs + platform runtimes) so ps-bash-host
-       can load its managed entrypoint and NuGet assemblies when launched
-       from this output directory or from the Shell publish directory. -->
+  <!-- Copy Host's full output (DLLs + platform runtimes) into the Shell's
+       OutDir so ps-bash-host can load its managed entrypoint and NuGet
+       assemblies when launched from this build output. The publish path
+       is handled by PublishHostSidecar (AfterTargets="Publish"), which
+       copies the RID-flavored Host build into PublishDir. We avoid
+       $(PublishDir) here because MSBuild assigns it a default value
+       during a plain `dotnet build`, which caused this target to drop
+       the Host DLLs into bin/.../publish/ instead of OutDir. -->
   <Target Name="CopyHostRuntimeAssets" AfterTargets="Build">
     <PropertyGroup>
       <_HostOutDir>$(MSBuildThisFileDirectory)..\PsBash.Host\bin\$(Configuration)\$(TargetFramework)\</_HostOutDir>
-      <_HostDestinationDir Condition="'$(PublishDir)' != ''">$(PublishDir)</_HostDestinationDir>
-      <_HostDestinationDir Condition="'$(_HostDestinationDir)' == ''">$(OutDir)</_HostDestinationDir>
+      <_HostDestinationDir>$(OutDir)</_HostDestinationDir>
     </PropertyGroup>
     <ItemGroup>
       <!-- Host apphost support files and top-level DLLs (Newtonsoft.Json, PS cmdlets, etc.). -->

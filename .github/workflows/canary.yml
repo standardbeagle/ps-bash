@@ -7,8 +7,26 @@ name: Canary Tests
 on:
   push:
     branches: [main]
+    paths-ignore:
+      - '.dartai/**'
+      - '.dartai-locks.json'
+      - 'docs/spikes/**'
+      - 'docs/solutions/**'
+      - '**/*.md'
   pull_request:
+    branches: [main]
+    paths-ignore:
+      - '.dartai/**'
+      - '.dartai-locks.json'
+      - 'docs/spikes/**'
+      - 'docs/solutions/**'
+      - '**/*.md'
   workflow_dispatch:
+
+# Cancel earlier runs on the same ref/PR when new commits arrive.
+concurrency:
+  group: canary-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
