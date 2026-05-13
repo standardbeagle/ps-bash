@@ -10086,23 +10086,31 @@ function Invoke-BashPwd {
         if ($arg -ceq '-P') { $physical = $true }
     }
 
-    $location = if (-not $physical -and $env:PWD) {
-        $env:PWD
-    } elseif (-not $physical -and $global:__PsBashCwd) {
-        $global:__PsBashCwd
-    } elseif (-not $physical -and [System.Environment]::CurrentDirectory) {
-        [System.Environment]::CurrentDirectory
+    # Resolve location with Get-Variable -ErrorAction SilentlyContinue around
+    # $global:__PsBashCwd so StrictMode -Version Latest (Pester default) does
+    # not throw on the variable lookup when it has never been initialised.
+    $location = $null
+    if (-not $physical) {
+        if ($env:PWD) {
+            $location = $env:PWD
+        } else {
+            $cwdVar = Get-Variable -Name '__PsBashCwd' -Scope Global -ErrorAction SilentlyContinue
+            if ($cwdVar -and $cwdVar.Value) { $location = [string]$cwdVar.Value }
+        }
     } elseif ($physical) {
         try {
-            (Resolve-Path -Path (Get-Location).Path).ProviderPath
+            $location = (Resolve-Path -Path (Get-Location).Path).ProviderPath
         } catch {
             Write-BashError -Message "pwd: error resolving path: $($_.Exception.Message)"
             return
         }
-    } else {
-        (Get-Location).Path
     }
-    if (-not $location) { $location = [System.Environment]::CurrentDirectory }
+    # Final fallback: PowerShell's Get-Location, which respects Push-Location /
+    # test-fixture pushd in Pester. Use this rather than
+    # [System.Environment]::CurrentDirectory because the latter is the .NET
+    # process CWD, which is not updated by PowerShell's Set-Location and
+    # collapses to "/" on macOS in some Pester runners.
+    if (-not $location) { $location = (Get-Location).Path }
 
     $location = $location -replace '\\', '/'
     # Emit a typed PsBash.PwdLine so consumers (and tests) get a PSCustomObject
