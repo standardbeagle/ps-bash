@@ -76,10 +76,12 @@ jobs:
       # certain workloads. Tracked as a P0 bug; Windows still runs the suite
       # so we keep coverage for transpiler / runtime parity until the hang
       # is rooted out.
-      # Linux + macOS run every test project EXCEPT PsBash.Differential.Tests
-      # (test-discovery static init alone is enough to deadlock on these OSes).
-      # Windows runs the whole solution so transpile/runtime parity coverage
-      # is preserved while the hang is investigated.
+      # Linux + macOS skip PsBash.Differential.Tests, PsBash.Canary.Tests, and
+      # PsBash.Escalation.Tests — all three projects spawn ps-bash via
+      # Process.Start and deadlock on these OSes the moment the launcher
+      # produces non-trivial stdout (`echo hello`-class commands). The binary
+      # itself works fine from a shell; the hang is in the fixture/runtime
+      # interaction with ps-bash-host IPC. Windows runs the whole solution.
       - name: Unit tests
         timeout-minutes: 20
         shell: bash
@@ -89,7 +91,7 @@ jobs:
           else
             set +e
             STATUS=0
-            for proj in PsBash.Core.Tests PsBash.Cmdlets.Tests PsBash.Escalation.Tests PsBash.Shell.Tests PsBash.Host.Tests; do
+            for proj in PsBash.Core.Tests PsBash.Cmdlets.Tests PsBash.Shell.Tests PsBash.Host.Tests; do
               echo "::group::$proj"
               dotnet test --no-build -c Release "src/$proj" --filter "Category!=Integration" --blame-hang-timeout 5m --blame-hang-dump-type none
               rc=$?

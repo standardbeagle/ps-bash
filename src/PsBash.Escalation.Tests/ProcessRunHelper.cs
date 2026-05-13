@@ -16,11 +16,24 @@ internal static class ProcessRunHelper
         Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "..",
             "src", "PsBash.Shell"));
 
+    // Mirror the configuration this test assembly was built with so `dotnet
+    // run --no-build` finds the matching launcher output. CI builds Release
+    // only; without an explicit -c argument `dotnet run` defaults to Debug
+    // and fails with exit 1 ("no Debug build of PsBash.Shell").
+    private static readonly string Configuration =
+        AppContext.BaseDirectory
+            .Split(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar)
+            .FirstOrDefault(p => p.Equals("Release", StringComparison.OrdinalIgnoreCase)
+                              || p.Equals("Debug", StringComparison.OrdinalIgnoreCase))
+        ?? "Debug";
+
     public static ProcessStartInfo BuildPsi(string[] arguments)
     {
         var psi = new ProcessStartInfo { FileName = "dotnet" };
         psi.ArgumentList.Add("run");
         psi.ArgumentList.Add("--no-build");
+        psi.ArgumentList.Add("-c");
+        psi.ArgumentList.Add(Configuration);
         psi.ArgumentList.Add("--project");
         psi.ArgumentList.Add(ProjectDir);
         psi.ArgumentList.Add("--");
