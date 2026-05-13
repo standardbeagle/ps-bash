@@ -7,8 +7,75 @@ namespace PsBash.Host;
 
 internal sealed class Program
 {
+    // POSIX dup2 / open imports for detaching inherited stdio. When the host
+    // is spawned as a daemon by the launcher (PSBASH_HOST_DETACH=1), the
+    // launcher's stdout/stderr file descriptors are inherited by this
+    // process. The launcher then exits but the daemon keeps the inherited
+    // write ends open, so any caller of the launcher that read its output
+    // via a pipe never sees EOF — the read hangs forever. Replace fd 0/1/2
+    // with /dev/null before any code path can write to them.
+    [System.Runtime.InteropServices.DllImport("libc", SetLastError = true)]
+    private static extern int open(string pathname, int flags);
+    [System.Runtime.InteropServices.DllImport("libc", SetLastError = true)]
+    private static extern int dup2(int oldfd, int newfd);
+    [System.Runtime.InteropServices.DllImport("libc", SetLastError = true)]
+    private static extern int close(int fd);
+    [System.Runtime.InteropServices.DllImport("libc", SetLastError = true, EntryPoint = "readlink")]
+    private static extern long readlink(string path, byte[] buf, ulong bufsiz);
+    private const int O_RDWR = 2;
+
+    private static string? ReadFdTarget(int fd)
+    {
+        var buf = new byte[256];
+        var n = readlink($"/proc/self/fd/{fd}", buf, (ulong)buf.Length);
+        if (n <= 0) return null;
+        return System.Text.Encoding.UTF8.GetString(buf, 0, (int)n);
+    }
+
+    private static void DetachInheritedStdioIfRequested()
+    {
+        if (OperatingSystem.IsWindows()) return;
+        if (Environment.GetEnvironmentVariable("PSBASH_HOST_DETACH") != "1") return;
+        try
+        {
+            var nullFd = open("/dev/null", O_RDWR);
+            if (nullFd < 0) return;
+            dup2(nullFd, 0);
+            dup2(nullFd, 1);
+            dup2(nullFd, 2);
+            if (nullFd > 2) close(nullFd);
+
+            // Close inherited pipe fds at 3+. .NET's Process.Start +
+            // Console subsystem in the launcher leaks duplicates of the
+            // launcher's stdout/stderr pipes into fds 3+ of this host
+            // process (verified via /proc/<host>/fd while a test hung).
+            // Without closing them, the daemon keeps the test runner's
+            // pipe write ends open after the launcher exits and the
+            // test's ReadToEndAsync never sees EOF.
+            //
+            // Only close fds that resolve to "pipe:[...]" so we don't
+            // touch .NET runtime fds that resolve to /memfd:, regular
+            // files, or sockets (event pipe, debugger pipe, telemetry).
+            try
+            {
+                foreach (var entry in System.IO.Directory.EnumerateFileSystemEntries("/proc/self/fd"))
+                {
+                    var name = System.IO.Path.GetFileName(entry);
+                    if (!int.TryParse(name, out var fd)) continue;
+                    if (fd < 3) continue;
+                    var target = ReadFdTarget(fd);
+                    if (target is not null && target.StartsWith("pipe:", StringComparison.Ordinal))
+                        close(fd);
+                }
+            }
+            catch { /* best effort */ }
+        }
+        catch { /* best effort — daemon stdio detach */ }
+    }
+
     static async Task<int> Main(string[] args)
     {
+        DetachInheritedStdioIfRequested();
         // PTY-2 probe mode: spawned by PtySpawnTests to verify the host's
         // System.Console is wired to a real terminal when invoked through
         // PtySpawner. Writes a single marker line to stdout and exits 0.

@@ -273,7 +273,12 @@ public sealed class IpcWorker : IWorker
         var psi = new ProcessStartInfo
         {
             FileName = _hostBinaryPath,
-            UseShellExecute = true,
+            // UseShellExecute=false (was true) so we can set Environment for
+            // PSBASH_HOST_DETACH. On Linux/macOS the daemon would otherwise
+            // inherit the launcher's stdout/stderr file descriptors, keep
+            // them open after the launcher exits, and prevent any pipe
+            // reader (test harnesses, shell pipelines) from ever seeing EOF.
+            UseShellExecute = false,
             CreateNoWindow = true,
             WindowStyle = ProcessWindowStyle.Hidden,
             RedirectStandardInput = false,
@@ -281,6 +286,14 @@ public sealed class IpcWorker : IWorker
             RedirectStandardError = false,
         };
         psi.ArgumentList.Add($"--ipc-endpoint={_scheme}:{_endpoint}");
+        // Signal the host to dup2 /dev/null over the inherited stdio fds at
+        // startup so it can never write into the launcher's pipes. Skipped
+        // on Windows (different inheritance semantics; daemons run hidden).
+        if (!System.Runtime.InteropServices.RuntimeInformation.IsOSPlatform(
+                System.Runtime.InteropServices.OSPlatform.Windows))
+        {
+            psi.Environment["PSBASH_HOST_DETACH"] = "1";
+        }
         Process? proc = null;
         bool spawnSucceeded = false;
         try
