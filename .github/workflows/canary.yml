@@ -58,11 +58,14 @@ jobs:
 
       - name: Run canary tests
         shell: bash
+        timeout-minutes: 10
         run: |
           dotnet test src/PsBash.Canary.Tests \
             --configuration Release \
             --logger "trx;LogFileName=canary.trx" \
-            --results-directory TestResults
+            --results-directory TestResults \
+            --blame-hang-timeout 3m \
+            --blame-hang-dump-type none
 
       - name: Upload canary test artifacts
         if: failure()

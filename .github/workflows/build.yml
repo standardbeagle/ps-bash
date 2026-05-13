@@ -61,12 +61,18 @@ jobs:
       - name: Build PsBash.Host
         run: dotnet build src/PsBash.Host --no-restore -c Release
 
+      # --blame-hang-timeout kills the test runner after a hung test (5m) and
+      # dumps the offender — surfaces hangs as a real failure instead of
+      # silently consuming the 6h job timeout. timeout-minutes is a backstop
+      # in case --blame-hang-timeout itself misbehaves.
       - name: Unit tests
-        run: dotnet test --no-build -c Release --filter "Category!=Integration"
+        timeout-minutes: 20
+        run: dotnet test --no-build -c Release --filter "Category!=Integration" --blame-hang-timeout 5m --blame-hang-dump-type none
 
       - name: Integration tests
+        timeout-minutes: 20
         continue-on-error: true
-        run: dotnet test --no-build -c Release --filter "Category=Integration"
+        run: dotnet test --no-build -c Release --filter "Category=Integration" --blame-hang-timeout 5m --blame-hang-dump-type none
 
       # /warnaserror gates AOT regressions on PRs (matches publish.yml). Any
       # new trimming/reflection warning fails the build instead of leaking
