@@ -33,7 +33,7 @@ public class BackgroundJobDifferentialTests
     public async Task Differential_Background_TrueAndWait_ExitsZero()
     {
         await AssertOracle.EqualAsync(
-            "true &; wait; echo done",
+            "true & wait; echo done",
             timeout: TimeSpan.FromSeconds(30));
     }
 
@@ -47,7 +47,7 @@ public class BackgroundJobDifferentialTests
     public async Task Differential_Background_LastPidIsNonEmpty()
     {
         await AssertOracle.EqualAsync(
-            "sleep 0 &; pid=$!; if [ -n \"$pid\" ]; then echo got_pid; else echo no_pid; fi; wait",
+            "sleep 0 & pid=$!; if [ -n \"$pid\" ]; then echo got_pid; else echo no_pid; fi; wait",
             timeout: TimeSpan.FromSeconds(30));
     }
 
@@ -60,7 +60,7 @@ public class BackgroundJobDifferentialTests
     public async Task Differential_Background_WaitAll_ReturnsAfterCompletion()
     {
         await AssertOracle.EqualAsync(
-            "sleep 0 &; sleep 0 &; wait; echo all_done",
+            "sleep 0 & sleep 0 & wait; echo all_done",
             timeout: TimeSpan.FromSeconds(30));
     }
 
@@ -87,7 +87,7 @@ public class BackgroundJobDifferentialTests
     public async Task Differential_Background_WaitLastPid_Continues()
     {
         await AssertOracle.EqualAsync(
-            "sleep 0 &; wait $!; echo after_wait",
+            "sleep 0 & wait $!; echo after_wait",
             timeout: TimeSpan.FromSeconds(30));
     }
 
@@ -136,7 +136,7 @@ public class BackgroundJobDifferentialTests
     public async Task Differential_Background_QuotedArg_Golden()
     {
         await AssertOracle.GoldenAsync(
-            "sleep 0 &; wait; echo quoting_ok",
+            "sleep 0 & wait; echo quoting_ok",
             "Differential_Background_QuotedArg",
             timeout: TimeSpan.FromSeconds(30));
     }

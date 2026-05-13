@@ -933,8 +933,16 @@ public sealed class BashParser
 
             if (kind == BashTokenKind.Word)
             {
-                // Stop at reserved words that delimit compound commands.
-                if (IsCompoundDelimiter(Peek().Value))
+                // Stop at reserved words that delimit compound commands —
+                // but ONLY when they appear in the position bash itself
+                // treats as a keyword. Per bash man: reserved words are
+                // recognized only as the first word of a simple command,
+                // OR following another reserved word (e.g. `do ... done`).
+                // Inside `echo done`, `done` is just an argument; without
+                // this guard the parser would drop the argument and emit
+                // `Invoke-BashEcho` with no operand, which silently hangs
+                // because Invoke-BashEcho reads stdin when no args.
+                if (words.Count == 0 && IsCompoundDelimiter(Peek().Value))
                     break;
 
                 var token = Advance();
