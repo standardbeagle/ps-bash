@@ -1,9 +1,9 @@
 {
   "status": "paused",
-  "iterations": 16,
+  "iterations": 17,
   "spawns": 11,
   "started_at": "2026-05-12T20:33:00Z",
-  "last_iteration_at": "2026-05-14T19:30:00Z",
+  "last_iteration_at": "2026-05-14T18:05:00Z",
   "last_subagent": "task-executor",
   "loop_task_id": "AEACP6UqDUBr",
   "dartboard": "Personal/ps-bash",
@@ -583,6 +583,27 @@
         "docs/specs/runtime-functions.md"
       ],
       "notes": "Coherent partial per task's explicit per-command-decision allowance. AUDIT: sed = clean migration (pure string/regex, helper web already C#-ported by Phase 1c/1d) -> MIGRATED. awk = ~950-line/12-function AWK interpreter, task names it the prime stay-psm1 candidate -> DOCUMENTED stays-psm1 permanently, sub-scope closed. jq = ~800-line JSON-query interpreter, worth migrating but too large for this pass -> FOLLOW-ON D6d8LpBU1bUz. find = -exec arbitrary-command invoke + Get-BashFileInfo psm1 web -> FOLLOW-ON leJJfV58WCGF. Plan adjustments: (1) common-param audit -- sed's -i collides with -InformationAction (task spec missed it), -e/-E case-collision is genuine: -e declared as value-bearing string[] param, -i + -r as explicit SwitchParameters, -E recovered via bundled-flag loop; (2) repeated -e (sed -e A -e B) cannot bind to a single PS parameter -- documented binder limitation, the one residual M1/M2/M3 transpiler-path gap; (3) backreference test switched to -r/ERE because the psm1 oracle's BRE \\( handling does not promote to a .NET group (faithful port preserves that). 41 parity tests vs psm1 oracle all green; full Cmdlets.Tests 252 pass. Differential + Shell failures (ProcessSub/Background/Pipefail/Tee/Redirect/SedInPlace) verified pre-existing via stash+baseline-diff on clean main -- fail IDENTICALLY without my changes; documented WSL2-flaky baseline, CI 3-OS authoritative. Emitter Core.Tests 354 green (sed passthrough unchanged). REFACTOR-2 parent DoIYh3RVWpCI confirmed Done (cascade-closed)."
+    },
+    {
+      "task_id": "YVzx6dZO0sy4",
+      "iteration": 1,
+      "status": "completed",
+      "started_at": "2026-05-14T13:00:00Z",
+      "completed_at": "2026-05-14T18:05:00Z",
+      "phase_completed": "phase-9",
+      "failed_phase": null,
+      "files_changed": 2,
+      "tests_added": 4,
+      "plan_adjustments": 1,
+      "completion_summary": "RC-5: extracted inherited-stdio fd-detach into new InheritedFdDetach.cs; replaced macOS brute-force [3,256) close loop with fstat+S_ISFIFO pipe detection (Darwin fstat$INODE64 + Linux fstat P/Invoke, [StructLayout] structs). Linux /proc readlink path byte-identical behaviour preserved. 4/4 new InheritedFdDetachTests pass on Linux (fstat core logic Linux-exercisable via AnonymousPipeServerStream). Host.Tests 17F baseline-diffed identical on clean main -- pre-existing WSL2-flaky, not regressions. macOS end-to-end SIGABRT check is CI-3-OS-matrix-gated.",
+      "failure_reason": null,
+      "fix_task_created": false,
+      "fix_task_id": null,
+      "files": [
+        "src/PsBash.Host/InheritedFdDetach.cs",
+        "src/PsBash.Host/Program.cs",
+        "src/PsBash.Host.Tests/Server/InheritedFdDetachTests.cs"
+      ]
     }
   ],
   "interrupted_at": null,

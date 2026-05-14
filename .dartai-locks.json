@@ -1,17 +1,3 @@
 {
-  "claims": {
-    "YVzx6dZO0sy4": {
-      "runner_instance_id": "DESKTOP-NPIOPS6-7606",
-      "runner_email": "andybrummer@standardbeagle.com",
-      "claimed_at": "2026-05-14T13:00:00Z",
-      "agent_id": "DESKTOP-NPIOPS6-7606",
-      "parent_loop_id": "bLl2v3g7PoAY",
-      "purpose": "Phase C1: RC-5 macOS fd-walk precision - fstat-based pipe detection",
-      "source_event": {
-        "loop_id": "bLl2v3g7PoAY",
-        "task_id": "YVzx6dZO0sy4",
-        "conversation_id": null
-      }
-    }
-  }
+  "claims": {}
 }
