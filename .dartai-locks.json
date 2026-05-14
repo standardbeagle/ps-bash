@@ -1,3 +1,17 @@
 {
-  "claims": {}
+  "claims": {
+    "MjqPco7X45k4": {
+      "runner_instance_id": "DESKTOP-NPIOPS6-7606",
+      "runner_email": "andybrummer@standardbeagle.com",
+      "claimed_at": "2026-05-14T08:00:00Z",
+      "agent_id": "DESKTOP-NPIOPS6-7606",
+      "parent_loop_id": "IaiAaDTVqJY6",
+      "purpose": "Phase B2: REFACTOR-2 Phase 1b - migrate 8 leaf fns to binary cmdlets",
+      "source_event": {
+        "loop_id": "IaiAaDTVqJY6",
+        "task_id": "MjqPco7X45k4",
+        "conversation_id": null
+      }
+    }
+  }
 }
