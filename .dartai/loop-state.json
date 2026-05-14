@@ -3,7 +3,7 @@
   "iterations": 7,
   "spawns": 7,
   "started_at": "2026-05-12T20:33:00Z",
-  "last_iteration_at": "2026-05-14T04:39:40Z",
+  "last_iteration_at": "2026-05-14T05:10:00Z",
   "last_subagent": "task-executor",
   "loop_task_id": "AEACP6UqDUBr",
   "dartboard": "Personal/ps-bash",
@@ -174,6 +174,24 @@
       "fix_task_created": false,
       "fix_task_id": null,
       "verifier_evidence": "Core.Tests 690/691 pass (emitter set -u/-euo StrictMode tests green). Cmdlets.Tests 40 pass incl. 2 new ModulePartialLoadTests guards. Differential/Shell/Canary/Escalation/Host baselines identical clean-tree vs with-changes (this Linux dev box has a documented flaky baseline across process-spawn suites per v0.9.7 release notes); every differing flaky test passes in isolation; MissingSourceTarget_ReturnsError fails in isolation on clean tree too (pre-existing). Zero deterministic regressions."
+    },
+    {
+      "task_id": "hQzX7gAha41K",
+      "iteration": 3,
+      "status": "failed",
+      "started_at": "2026-05-14T04:50:00Z",
+      "completed_at": "2026-05-14T05:10:00Z",
+      "phase_completed": "phase-1",
+      "failed_phase": "phase-1-understanding",
+      "files_changed": 0,
+      "tests_added": 0,
+      "plan_adjustments": 0,
+      "completion_summary": null,
+      "failure_reason": "Architectural blocker: task requires PsBash.Core to embed PsBash.Cmdlets.dll as an embedded resource, but PsBash.Cmdlets has a compile-time ProjectReference to PsBash.Core (uses PsBash.Core.Transpiler/Parser types). EmbeddedResource items resolve at the embedder build; for Core to embed Cmdlets.dll, Cmdlets must build before Core, but Cmdlets builds after Core. Strict build-ordering contradiction with no clean workaround. Re-entrant <MSBuild> call, two-pass build, and committing a prebuilt binary are all rejected by eagle-eyed discipline; the deadlock history (reverted commits f18bedd, 6f264eb) is in this exact code path. Correct fix is project-graph restructuring (new leaf project downstream of both Core+Cmdlets to own ModuleExtractor+embedding, OR split Core transpiler into a PsBash.Transpiler project both depend on) which exceeds the 5-file context-sized limit and contradicts the task as written (embed in PsBash.Core, ModuleExtractor extracts).",
+      "fix_task_created": false,
+      "fix_task_id": null,
+      "blocker_class": "task-split-required",
+      "files": []
     }
   ],
   "interrupted_at": null,
