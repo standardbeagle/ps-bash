@@ -781,6 +781,29 @@
         "task_id": "I06R3Wy9KjPz",
         "conversation_id": null
       }
+    },
+    {
+      "task_id": "YProS9toFGWE",
+      "iteration": 5,
+      "status": "completed",
+      "started_at": "2026-05-14T22:30:00Z",
+      "completed_at": "2026-05-14T22:35:00Z",
+      "phase_completed": "phase-9",
+      "failed_phase": null,
+      "files_changed": 2,
+      "tests_added": 8,
+      "plan_adjustments": 2,
+      "completion_summary": "PTY-9: PtyTuiParityTests — 5 deterministic-green TUI e2e tests (vim edit+save+exit, vim repaint-on-resize, less page+quit+no-garbage, htop launch+quit, clear/Clear-Host escape) + 3 Skip-with-reason cases (fzf piped-stdin, bash read, [Console]::ReadKey) each tracked by a follow-on task. Added PtyHarness.ReadRawOutput() + WaitForRegexAsync(raw:) so escape-sequence assertions can match un-stripped bytes.",
+      "failure_reason": null,
+      "fix_task_created": true,
+      "fix_task_id": "6bh3OxFUJ1qc",
+      "verification": "./scripts/test.sh src/PsBash.Shell.Tests --filter PtyTuiParityTests => Passed 5, Skipped 3, Failed 0, 3x repeated runs all green. PtyHarnessTests (PTY-8) => Passed 7, zero regressions. Full Pty namespace => Passed 84, Skipped 11, zero failures.",
+      "notes": "Plan adjustment 1: 3 of 8 task cases (fzf, Read-Host/bash read, [Console]::ReadKey) are not deterministically drivable through ps-bash today — Skip-with-reason per Directive 2 (flaky worse than skipped) + 3 follow-on tasks filed (6bh3OxFUJ1qc bash-read bug, zQIS9hpJ4BMx fzf+ReadKey, XPzbiEBoB5bA tmux+mouse out-of-scope). Plan adjustment 2: PtyHarness.ReadOutput strips ANSI escapes, so escape-sequence assertions (\\e[2J, \\e[?1049h, vim resize repaint) needed a raw accessor — added ReadRawOutput() + WaitForRegexAsync(raw:) bool param (existing callers unaffected).",
+      "source_event": {
+        "loop_id": "a7ldZJBuAZNY",
+        "task_id": "YProS9toFGWE",
+        "conversation_id": null
+      }
     }
   ],
   "interrupted_at": null,

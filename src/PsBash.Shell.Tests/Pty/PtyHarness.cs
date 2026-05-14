@@ -240,14 +240,36 @@ internal sealed partial class PtyHarness : IAsyncDisposable
     }
 
     /// <summary>
+    /// Returns the decoded transcript captured so far with CR bytes stripped but
+    /// ANSI/VT escape sequences <b>kept</b>. PTY-9 TUI parity tests assert on the
+    /// raw control bytes a terminal app emits — alt-screen enter/exit
+    /// (<c>ESC[?1049h</c> / <c>l</c>), erase-display (<c>ESC[2J</c>),
+    /// cursor-position repaints (<c>ESC[row;colH</c>) — which <see cref="ReadOutput"/>
+    /// strips away. Snapshots the buffer under lock; safe to call while the reader
+    /// runs.
+    /// </summary>
+    public string ReadRawOutput()
+    {
+        lock (_transcriptLock)
+            return _transcript.ToString();
+    }
+
+    /// <summary>
     /// Reads PTY output until the transcript matches <paramref name="pattern"/> or
     /// the <paramref name="timeout"/> deadline fires. Returns the transcript up to
     /// and including the match. On timeout throws with a full diagnostic dump
     /// (transcript, env, cwd, exit code) per Directive 6 + Directive 9.
     /// </summary>
+    /// <param name="pattern">Regex matched against the transcript.</param>
+    /// <param name="timeout">Deadline; <see cref="DefaultTimeout"/> when null.</param>
+    /// <param name="raw">When <c>true</c>, match against the transcript with ANSI
+    /// escape sequences <b>kept</b> (see <see cref="ReadRawOutput"/>) — required
+    /// for asserting on raw terminal control bytes. When <c>false</c> (default),
+    /// match against the ANSI-stripped transcript.</param>
     /// <remarks>No <c>Thread.Sleep</c> / <c>Task.Delay</c>: the wait awaits the
     /// background reader signalling new data, bounded by the deadline.</remarks>
-    public async Task<string> WaitForRegexAsync(string pattern, TimeSpan? timeout = null)
+    public async Task<string> WaitForRegexAsync(
+        string pattern, TimeSpan? timeout = null, bool raw = false)
     {
         ArgumentException.ThrowIfNullOrEmpty(pattern);
         var effective = timeout ?? DefaultTimeout;
@@ -260,7 +282,9 @@ internal sealed partial class PtyHarness : IAsyncDisposable
             TaskCompletionSource dataSignal;
             lock (_transcriptLock)
             {
-                snapshot = AnsiEscape.Replace(_transcript.ToString(), "");
+                snapshot = raw
+                    ? _transcript.ToString()
+                    : AnsiEscape.Replace(_transcript.ToString(), "");
                 if (regex.IsMatch(snapshot))
                     return snapshot;
                 // Register for the next reader notification while holding the
