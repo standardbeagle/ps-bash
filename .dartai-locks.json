@@ -1,3 +1,17 @@
 {
-  "claims": {}
+  "claims": {
+    "Es1T4bdIqODl": {
+      "runner_instance_id": "DESKTOP-NPIOPS6-7606",
+      "runner_email": "andybrummer@standardbeagle.com",
+      "claimed_at": "2026-05-14T19:00:00Z",
+      "agent_id": "DESKTOP-NPIOPS6-7606",
+      "parent_loop_id": "a7ldZJBuAZNY",
+      "purpose": "Phase E2: PTY-6 fg/bg handoff protocol - prompt-ready/busy/host-exiting events",
+      "source_event": {
+        "loop_id": "a7ldZJBuAZNY",
+        "task_id": "Es1T4bdIqODl",
+        "conversation_id": null
+      }
+    }
+  }
 }
