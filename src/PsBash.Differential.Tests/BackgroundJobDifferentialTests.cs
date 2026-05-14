@@ -91,6 +91,33 @@ public class BackgroundJobDifferentialTests
             timeout: TimeSpan.FromSeconds(30));
     }
 
+    /// <summary>
+    /// RC-2 regression: a background job spawned inside a command substitution
+    /// must not hang. `$( ... &)` runs the &amp; in the subshell context; the
+    /// command sub itself completes once the foreground portion finishes.
+    /// Failure-surface axis 15: recursion — &amp; nested inside command sub.
+    /// </summary>
+    [SkippableFact]
+    public async Task Differential_Background_InCommandSub_DoesNotHang()
+    {
+        await AssertOracle.EqualAsync(
+            "x=$(sleep 0 & echo sub_done); echo $x",
+            timeout: TimeSpan.FromSeconds(30));
+    }
+
+    /// <summary>
+    /// RC-2 regression: three background jobs then a single `wait` must all
+    /// drain without hanging — exercises the runspace pool's multi-job path.
+    /// Failure-surface axis 8: exit-code propagation across multiple bg jobs.
+    /// </summary>
+    [SkippableFact]
+    public async Task Differential_Background_ThreeJobsWaitAll_ExitsZero()
+    {
+        await AssertOracle.EqualAsync(
+            "sleep 0 & sleep 0 & sleep 0 & wait; echo three_done",
+            timeout: TimeSpan.FromSeconds(30));
+    }
+
     // -----------------------------------------------------------------------
     // jobs — list background processes
     // -----------------------------------------------------------------------

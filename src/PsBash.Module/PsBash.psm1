@@ -11066,8 +11066,69 @@ function Invoke-BashBash {
 
 # --- Background Process Support ---
 
-$script:BashBgPids = [System.Collections.Generic.List[System.Diagnostics.Process]]::new()
+# RC-2: background jobs run in-process against a shared RunspacePool of isolated
+# runspaces — no pwsh cold start per `&`. Each entry in $script:BashBgJobs is a
+# job record: @{ Id; PowerShell; AsyncResult; Done }. $! ($global:BashBgLastPid)
+# is a synthetic monotonically-increasing id keyed to the [powershell] instance,
+# NOT a real OS pid (documented: bash uses an OS pid; in-process runspaces have
+# no separate pid, so a synthetic id is used and is sufficient for `wait $!`).
+$script:BashBgJobs = [System.Collections.Generic.List[object]]::new()
+$script:BashBgNextId = 1000
+$script:BashBgPool = $null
 $global:BashBgLastPid = $null
+# The psm1 is loaded into the host runspace by running its content as a script
+# (SdkRunspace.cs: AddScript(psm1Content)), so $PSCommandPath / $PSScriptRoot are
+# empty inside it. To make Invoke-Bash* functions available in pooled background
+# runspaces, locate the extracted module on disk: ModuleExtractor writes it to
+# {temp}/ps-bash/module-{version}/PsBash.psm1.
+$script:BashBgModulePath = $null
+try {
+    $psbDir = Join-Path ([System.IO.Path]::GetTempPath()) 'ps-bash'
+    if (Test-Path $psbDir) {
+        $candidate = Get-ChildItem -Path $psbDir -Filter 'PsBash.psm1' -Recurse -ErrorAction SilentlyContinue |
+            Sort-Object LastWriteTimeUtc -Descending | Select-Object -First 1
+        if ($candidate) { $script:BashBgModulePath = $candidate.FullName }
+    }
+} catch { }
+
+function Get-BashBgRunspacePool {
+    if ($null -eq $script:BashBgPool) {
+        $iss = [System.Management.Automation.Runspaces.InitialSessionState]::CreateDefault()
+        if ($script:BashBgModulePath -and (Test-Path $script:BashBgModulePath)) {
+            $iss.ImportPSModule(@($script:BashBgModulePath))
+        }
+        $pool = [RunspaceFactory]::CreateRunspacePool(1, 8, $iss, $Host)
+        $pool.Open()
+        $script:BashBgPool = $pool
+    }
+    return $script:BashBgPool
+}
+
+function Complete-BashBgJob {
+    <#
+    .SYNOPSIS
+        Drain a completed background job's output streams and dispose it.
+        stdout -> Emit-BashLine; stderr -> Write-BashHostStderr (REFACTOR-4 IPC channel).
+    #>
+    param([Parameter(Mandatory)]$Job)
+    if ($Job.Done) { return }
+    $ps = $Job.PowerShell
+    try {
+        $out = $ps.EndInvoke($Job.AsyncResult)
+        foreach ($item in $out) {
+            $text = if ($null -ne $item -and $item.PSObject.Properties['BashText']) { $item.BashText } else { "$item" }
+            if ($text) { Emit-BashLine -Text $text }
+        }
+        foreach ($err in $ps.Streams.Error) {
+            Write-BashHostStderr ("$err")
+        }
+    } catch {
+        Write-BashHostStderr ("$_")
+    } finally {
+        $ps.Dispose()
+        $Job.Done = $true
+    }
+}
 $global:BashStartTime = [DateTime]::UtcNow
 $__bashVer = try { $MyInvocation.MyCommand.Module?.Version ?? [version]'0.8.0' } catch { [version]'0.8.0' }
 $global:BashVersion = "$($__bashVer.Major).$($__bashVer.Minor).0(1)-release"
@@ -11086,50 +11147,27 @@ function Invoke-BashBackground {
         [scriptblock]$Command
     )
 
-    if (-not ('PsBash.BackgroundOutputForwarder' -as [type])) {
-        Add-Type -TypeDefinition @'
-namespace PsBash {
-    public static class BackgroundOutputForwarder {
-        public static void WriteOutput(object sender, System.Diagnostics.DataReceivedEventArgs e) {
-            if (e.Data != null) { System.Console.WriteLine(e.Data); }
-        }
+    # RC-2: run the background command as a PowerShell pipeline against a pooled,
+    # isolated runspace instead of spawning a fresh pwsh process. This eliminates
+    # the ~1-3s pwsh cold start per `&` and the WaitForExit hang in `wait`.
+    $pool = Get-BashBgRunspacePool
+    $ps = [powershell]::Create()
+    $ps.RunspacePool = $pool
+    [void]$ps.AddScript($Command.ToString())
 
-        public static void WriteError(object sender, System.Diagnostics.DataReceivedEventArgs e) {
-            if (e.Data != null) { System.Console.Error.WriteLine(e.Data); }
-        }
+    $async = $ps.BeginInvoke()
+
+    $synthId = $script:BashBgNextId
+    $script:BashBgNextId++
+
+    $job = [pscustomobject]@{
+        Id          = $synthId
+        PowerShell  = $ps
+        AsyncResult = $async
+        Done        = $false
     }
-}
-'@
-    }
-
-    $pwshPath = [System.Diagnostics.Process]::GetCurrentProcess().MainModule.FileName
-
-    # Ensure the child process can resolve Invoke-Bash* commands
-    $modulePath = $MyInvocation.MyCommand.Module.Path
-    if (-not $modulePath) {
-        $modulePath = Join-Path $PSScriptRoot 'PsBash.psd1'
-    }
-    $childScript = "`$WarningPreference = 'SilentlyContinue'; Import-Module '$modulePath' -Force -WarningAction SilentlyContinue; & { $Command }"
-    $encodedCmd = [Convert]::ToBase64String(
-        [System.Text.Encoding]::Unicode.GetBytes($childScript)
-    )
-
-    $psi = [System.Diagnostics.ProcessStartInfo]::new()
-    $psi.FileName = $pwshPath
-    $psi.Arguments = "-NoLogo -NoProfile -NonInteractive -EncodedCommand $encodedCmd"
-    $psi.UseShellExecute = $false
-    $psi.RedirectStandardOutput = $true
-    $psi.RedirectStandardError = $true
-    $psi.CreateNoWindow = $true
-
-    $proc = [System.Diagnostics.Process]::Start($psi)
-    $proc.add_OutputDataReceived([System.Diagnostics.DataReceivedEventHandler][PsBash.BackgroundOutputForwarder]::WriteOutput)
-    $proc.add_ErrorDataReceived([System.Diagnostics.DataReceivedEventHandler][PsBash.BackgroundOutputForwarder]::WriteError)
-    [void]$proc.BeginOutputReadLine()
-    [void]$proc.BeginErrorReadLine()
-
-    $script:BashBgPids.Add($proc)
-    $global:BashBgLastPid = $proc.Id
+    $script:BashBgJobs.Add($job)
+    $global:BashBgLastPid = $synthId
 }
 
 function Invoke-BashWait {
@@ -11142,22 +11180,24 @@ function Invoke-BashWait {
     if ($Arguments -contains '--help') { return Show-BashHelp 'wait' }
 
     if ($Arguments.Count -gt 0) {
+        # wait $! / wait <id>: wait for specific synthetic background-job ids.
         foreach ($pidArg in $Arguments) {
             if (-not [int]::TryParse($pidArg, [ref]$null)) { continue }
-            $pid = [int]$pidArg
-            $proc = $script:BashBgPids | Where-Object { $_.Id -eq $pid }
-            if ($proc) {
-                foreach ($p in @($proc)) {
-                    if (-not $p.HasExited) { [void]$p.WaitForExit() }
-                    [void]$script:BashBgPids.Remove($p)
-                }
+            $wantId = [int]$pidArg
+            $job = $script:BashBgJobs | Where-Object { $_.Id -eq $wantId } | Select-Object -First 1
+            if ($job) {
+                [void]$job.AsyncResult.AsyncWaitHandle.WaitOne()
+                Complete-BashBgJob -Job $job
+                [void]$script:BashBgJobs.Remove($job)
             }
         }
     } else {
-        foreach ($p in @($script:BashBgPids)) {
-            if (-not $p.HasExited) { [void]$p.WaitForExit() }
+        # wait (no arg): wait for all pending background jobs.
+        foreach ($job in @($script:BashBgJobs)) {
+            [void]$job.AsyncResult.AsyncWaitHandle.WaitOne()
+            Complete-BashBgJob -Job $job
         }
-        $script:BashBgPids.Clear()
+        $script:BashBgJobs.Clear()
     }
 }
 
@@ -11170,14 +11210,14 @@ function Invoke-BashJobs {
     $Arguments = [string[]]$args
     if ($Arguments -contains '--help') { return Show-BashHelp 'jobs' }
 
-    if ($script:BashBgPids.Count -eq 0) {
+    if ($script:BashBgJobs.Count -eq 0) {
         return
     }
 
     $i = 1
-    foreach ($proc in $script:BashBgPids) {
-        $status = if ($proc.HasExited) { 'Done' } else { 'Running' }
-        New-BashObject -BashText "[$i]`t$status`t$($proc.Id)`t$($proc.ProcessName)`n"
+    foreach ($job in $script:BashBgJobs) {
+        $status = if ($job.AsyncResult.IsCompleted) { 'Done' } else { 'Running' }
+        New-BashObject -BashText "[$i]`t$status`t$($job.Id)`tbash-bg`n"
         $i++
     }
 }
@@ -11196,17 +11236,17 @@ function Invoke-BashFg {
         $jobNum = $Arguments[0]
         if ([int]::TryParse($jobNum, [ref]$null)) {
             $idx = [int]$jobNum - 1
-            if ($idx -ge 0 -and $idx -lt $script:BashBgPids.Count) {
-                $target = @($script:BashBgPids)[$idx]
+            if ($idx -ge 0 -and $idx -lt $script:BashBgJobs.Count) {
+                $target = @($script:BashBgJobs)[$idx]
             }
         } else {
-            $pid = $jobNum -replace '^%', ''
-            if ([int]::TryParse($pid, [ref]$null)) {
-                $target = @($script:BashBgPids) | Where-Object { $_.Id -eq [int]$pid } | Select-Object -First 1
+            $wantId = $jobNum -replace '^%', ''
+            if ([int]::TryParse($wantId, [ref]$null)) {
+                $target = @($script:BashBgJobs) | Where-Object { $_.Id -eq [int]$wantId } | Select-Object -First 1
             }
         }
     } else {
-        $running = @($script:BashBgPids | Where-Object { -not $_.HasExited })
+        $running = @($script:BashBgJobs | Where-Object { -not $_.AsyncResult.IsCompleted })
         if ($running.Count -gt 0) {
             $target = $running[-1]
         }
@@ -11217,15 +11257,17 @@ function Invoke-BashFg {
         return
     }
 
-    if ($target.HasExited) {
-        Write-Host "[$($target.Id)] Done`t$($target.ProcessName)"
-        [void]$script:BashBgPids.Remove($target)
+    if ($target.AsyncResult.IsCompleted) {
+        Write-Host "[$($target.Id)] Done`tbash-bg"
+        Complete-BashBgJob -Job $target
+        [void]$script:BashBgJobs.Remove($target)
         return
     }
 
-    Write-Host "$($target.ProcessName) (PID $($target.Id))"
-    $target.WaitForExit()
-    [void]$script:BashBgPids.Remove($target)
+    Write-Host "bash-bg (id $($target.Id))"
+    [void]$target.AsyncResult.AsyncWaitHandle.WaitOne()
+    Complete-BashBgJob -Job $target
+    [void]$script:BashBgJobs.Remove($target)
 }
 
 function Invoke-BashBg {

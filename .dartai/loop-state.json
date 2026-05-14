@@ -1,9 +1,9 @@
 {
   "status": "paused",
-  "iterations": 17,
+  "iterations": 18,
   "spawns": 11,
   "started_at": "2026-05-12T20:33:00Z",
-  "last_iteration_at": "2026-05-14T18:05:00Z",
+  "last_iteration_at": "2026-05-14T19:30:00Z",
   "last_subagent": "task-executor",
   "loop_task_id": "AEACP6UqDUBr",
   "dartboard": "Personal/ps-bash",
@@ -603,6 +603,27 @@
         "src/PsBash.Host/InheritedFdDetach.cs",
         "src/PsBash.Host/Program.cs",
         "src/PsBash.Host.Tests/Server/InheritedFdDetachTests.cs"
+      ]
+    },
+    {
+      "task_id": "ki3HRN90Sb2p",
+      "iteration": 2,
+      "status": "completed",
+      "started_at": "2026-05-14T19:00:00Z",
+      "completed_at": "2026-05-14T19:30:00Z",
+      "phase_completed": "phase-9",
+      "failed_phase": null,
+      "files_changed": 2,
+      "tests_added": 3,
+      "plan_adjustments": 1,
+      "completion_summary": "RC-2: replaced Invoke-BashBackground's Process.Start(pwsh) -EncodedCommand model with an in-process [powershell]::Create() running against a shared RunspacePool of isolated runspaces (1-8). Eliminates the ~1-3s pwsh cold start per & and the WaitForExit hang in wait. $! is now a synthetic monotonic id keyed to the [powershell] instance (documented; not an OS pid). wait/wait $! poll IAsyncResult.AsyncWaitHandle; Complete-BashBgJob drains stdout->Emit-BashLine and stderr->Write-BashHostStderr (REFACTOR-4 IPC channel). Retired PsBash.BackgroundOutputForwarder Add-Type. Migrated Invoke-BashJobs/Fg off the old Process list. 10/10 BackgroundJobDifferentialTests pass (8 orig + 2 new regression: cmd-sub bg, 3-job wait), Canary SetE_True_ExitsZero_SpawnModes passes. Regenerated Differential_Background_QuotedArg golden (was empty - old behavior swallowed bg output). 9 unrelated differential failures baseline-diffed IDENTICAL on clean main (WSL2-flaky process-spawn baseline, CI 3-OS authoritative).",
+      "failure_reason": null,
+      "fix_task_created": false,
+      "fix_task_id": null,
+      "files": [
+        "src/PsBash.Module/PsBash.psm1",
+        "src/PsBash.Differential.Tests/BackgroundJobDifferentialTests.cs",
+        "src/PsBash.Differential.Tests/Goldens/Differential_Background_QuotedArg.golden.txt"
       ]
     }
   ],
