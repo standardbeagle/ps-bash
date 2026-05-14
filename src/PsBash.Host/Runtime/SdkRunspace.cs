@@ -61,41 +61,35 @@ internal sealed class SdkRunspace : IAsyncDisposable
             // In that case, module commands fall back to .NET's current directory.
         }
 
+        // Extract SdkRunspaceSetup.ps1 next to PsBash.psm1 so the Cmdlets.dll
+        // probe runs from a real .ps1 file rather than a C# string. The
+        // previous embedded-string pattern caused multiple escaping-bug
+        // regressions (see REFACTOR-1 task description) — keep PowerShell
+        // logic in .ps1 files where it can be parsed at build time.
+        var moduleDir = Path.GetDirectoryName(modulePath)!;
+        var setupScriptPath = RunspaceSetupExtractor.Extract(moduleDir);
+
+        // Pass parameters via session-state variables (no string interpolation
+        // through C# / quoted PowerShell). $PsBashCmdletsDllPath is currently
+        // optional ($null in the SDK host); the script falls back to its
+        // Get-Module probe. $PsBashRunspaceSetupPath is consumed by the
+        // AddScript dot-source below.
+        runspace.SessionStateProxy.SetVariable(
+            "PsBashRunspaceSetupPath", setupScriptPath);
+        runspace.SessionStateProxy.SetVariable(
+            "PsBashCmdletsDllPath", null);
+
         using var ps = PowerShell.Create();
         ps.Runspace = runspace;
 
-        // Pre-load PsBash.Cmdlets.dll from the installed PsBash module so
-        // Invoke-BashSource and hook cmdlets are available without triggering the slow
-        // $PSModulePath auto-loading scan. Get-Module -ListAvailable by name is a fast
-        // directory lookup. Silent no-op when PsBash is not installed (test environment).
-        //
-        // Known gap: PsBash.Cmdlets ships as its own PSGallery module, but the
-        // workflow change in publish.yml now bundles `PsBash.Cmdlets.dll` inside the
-        // staged `PsBash.Cmdlets` PSGallery package alongside its psd1. The host
-        // probe below currently looks in the `PsBash` module dir only — the legacy
-        // bundled layout — so users on the new PSGallery layout still need the dll
-        // copied beside `PsBash.psd1` for the cmdlet path to work. Static-eval
-        // inlining in PsEmitter.EmitEval covers the cases where PowerShell expanded
-        // `$()` before ps-bash saw the input (the user-reported scenario).
-        //
-        // Attempting to add a second probe for `PsBash.Cmdlets -ListAvailable` here
-        // surfaced a host-startup deadlock on Windows pwsh 7.x SDK that wedged even
-        // simple `echo hi` invocations. Left for a future change with deeper
-        // investigation; documented here so the gap is not silently rediscovered.
-        ps.AddScript(@"
-$__m = Get-Module PsBash -ListAvailable -ErrorAction SilentlyContinue |
-    Sort-Object Version -Descending | Select-Object -First 1
-if ($__m) {
-    $__dll = Join-Path (Split-Path $__m.Path) 'PsBash.Cmdlets.dll'
-    if (Test-Path $__dll) {
-        Import-Module $__dll -Force -ErrorAction SilentlyContinue -DisableNameChecking
-    }
-}
-Remove-Variable -Name __m, __dll -ErrorAction SilentlyContinue
-").Invoke();
+        // Dot-source the setup script. No string interpolation; the path lives
+        // in a session-state variable, so the original "C# verbatim string ->
+        // PowerShell single-quote -> Path.Replace single-quote-to-double-quote"
+        // escaping chain is gone.
+        ps.AddScript(". $PsBashRunspaceSetupPath").Invoke();
         ps.Commands.Clear();
 
-        var psm1Path = Path.Combine(Path.GetDirectoryName(modulePath)!, "PsBash.psm1");
+        var psm1Path = Path.Combine(moduleDir, "PsBash.psm1");
         if (File.Exists(psm1Path))
         {
             var psm1Content = File.ReadAllText(psm1Path);

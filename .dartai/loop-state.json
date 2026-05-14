@@ -1,9 +1,9 @@
 {
   "status": "paused",
-  "iterations": 5,
-  "spawns": 5,
+  "iterations": 6,
+  "spawns": 6,
   "started_at": "2026-05-12T20:33:00Z",
-  "last_iteration_at": "2026-05-12T17:30:00Z",
+  "last_iteration_at": "2026-05-13T20:55:00Z",
   "last_subagent": "task-executor",
   "loop_task_id": "AEACP6UqDUBr",
   "dartboard": "Personal/ps-bash",
@@ -133,6 +133,30 @@
         "src/PsBash.Host.Tests/Server/HostServerTests.cs"
       ],
       "notes": "Resume from prior subagent that died on internal API error mid-phase:implementing. Prior session had drafted Mode.cs SessionMode enum, HostProtocol AppendSessionHeader/ReadBodyAndSessionAsync, Connection sessionMode switch + outputSink routing, and 12 new HostProtocolTests covering wire format, round-trip, PROMPT-READY lifecycle, legacy back-compat. Resume work: (1) Validated all 4 modified files were complete (Script frame correctly handles SESSION header in ReadScriptAsync). (2) Added 2 host-side integration tests — InteractiveSession_OutputRoutesToConsole_NotIpc proves IPC data lines=0, exit=0, promptReady=true, and Console.Out captures 'pty4-token' bytes (routing switch is functional, not just silenced); FramedSession_StillStreamsOutputThroughIpc_NoPromptReady pins back-compat. Verification (this turn): HostProtocolTests 32/32 PASS (180ms); HostServerTests 7/7 PASS (12s including new PTY-4 tests); PsBash.Core.Tests 690/690 PASS; PsBash.Host.Tests 45/48 PASS (3 SdkWorker failures are pre-existing baseline, confirmed via git stash diff vs bc5d65e — InvokeBashLsLong, CdThenPwd, QueryAsync_PreservesCallerOutputCallback; all 3 fail identically without PTY-4 changes); ps-bash.sln build succeeds (0 errors). Plan adjustments: (1) Resume directive #7 (RunHostUnderPtyAsync requests SessionMode.Interactive) — deferred: RunHostUnderPtyAsync spawns --interactive REPL under PTY and pumps bytes directly without speaking IPC, and IpcWorker doesn't spawn under PTY today. Wire/Connection/SdkWorker contract for SessionMode.Interactive is fully in place and proven by new integration tests; future task wires it at the four `new Mode.Command(...)` / `new Mode.Stdin(...)` construction sites in IpcWorker.cs when IpcWorker starts spawning hosts under PTY. (2) PsBash.Shell.Tests baseline ~130 SIGABRT failures not re-run per resume directive (environment-specific WSL2/.NET 10 RC2). QA rubric Directive 1 (oracle-first) — PTY-4 is byte-protocol layer below shell semantics, no bash oracle exists; differential tests rely on wire-format and round-trip in HostProtocolTests. QA Directive 7 (negative tests) — covered by ReadRequest_RejectsUnknownSessionValue + ReadRequest_LegacyWireFormat_NoSessionHeader_DefaultsToFramed."
+    },
+    {
+      "task_id": "ODVeJZ6IWUvU",
+      "iteration": 1,
+      "status": "completed",
+      "started_at": "2026-05-13T20:25:00Z",
+      "completed_at": "2026-05-13T20:55:00Z",
+      "phase_completed": "phase-9",
+      "failed_phase": null,
+      "files_changed": 5,
+      "tests_added": 4,
+      "plan_adjustments": 1,
+      "completion_summary": "REFACTOR-1: Extracted the SdkRunspace.Create embedded PowerShell probe string into Resources/SdkRunspaceSetup.ps1 (embedded resource in PsBash.Host). New RunspaceSetupExtractor extracts it into the ps-bash/module-{version} dir alongside psd1/psm1/Format.ps1xml with assembly-timestamp cache invalidation. SdkRunspace.Create now sets parameters via SessionStateProxy.SetVariable and dot-sources the file with ps.AddScript(\". $PsBashRunspaceSetupPath\") — eliminating the C#-verbatim -> PowerShell-single-quote -> Path.Replace escaping chain that caused the RC-3 and apostrophe-psd1 regressions. Build-time syntax-check test SdkRunspaceSetupScriptTests uses System.Management.Automation.Language.Parser.ParseInput so embedded-script syntax errors fail the build.",
+      "failure_reason": null,
+      "fix_task_created": false,
+      "fix_task_id": null,
+      "files": [
+        "src/PsBash.Host/Resources/SdkRunspaceSetup.ps1",
+        "src/PsBash.Host/Runtime/RunspaceSetupExtractor.cs",
+        "src/PsBash.Host/Runtime/SdkRunspace.cs",
+        "src/PsBash.Host/PsBash.Host.csproj",
+        "src/PsBash.Host.Tests/Runtime/SdkRunspaceSetupScriptTests.cs"
+      ],
+      "notes": "Plan adjustment (1): The task description envisioned the .ps1 also dot-sourcing PsBash.psm1 with the Cmdlets path + module dir as parameters. Initial implementation dot-sourced psm1 from inside the setup .ps1, but PowerShell dot-source-of-dot-source semantics dropped the psm1 functions into the setup script's local scope — 15 SdkWorker tests failed with exit 127 (Invoke-Bash* not found). Corrected scope: the setup .ps1 now handles only the PsBash.Cmdlets.dll probe (which is the actual C#-string that caused the escaping-bug history); SdkRunspace.Create keeps the existing separate ps.AddScript(psm1Content) call that already reads psm1 from a file (not a C# string literal — never an escaping-bug surface). The .ps1 also gained an optional $PsBashCmdletsDllPath session-state override for a future explicit-path fast path. Verification (this turn): Host.Tests baseline (git stash, no changes) = 44 passed / 4 failed; Host.Tests with changes = 48 passed / SAME 4 failed (GracefulShutdownTests.ShutdownWithInflightRequest_DrainsBeforeExiting, SdkWorkerTests.QueryAsync_PreservesCallerOutputCallback, SdkWorkerTests.ExecuteAsync_CdThenPwd_CrossCallStatePreserved, SdkWorkerTests.ExecuteAsync_InvokeBashLsLong_EmitsBashTextNotPsObjectSerialization) — identical failing set, zero regressions, +4 new passing (the syntax-check tests). The 4 failures are pre-existing on main (CI Build workflow Unit-tests job already red, run 25837584492). dotnet build PsBash.Host + PsBash.Host.Tests: 0 warnings / 0 errors. dotnet format --verify-no-changes: clean. SdkRunspaceSetupScriptTests: 4/4 PASS (76ms). Full-suite baseline diff was attempted but test.sh timed out on the e2e Differential/Shell process-spawn projects (exit 124) in this WSL2 environment — those projects do not exercise SdkRunspace and their failures are environment-flaky, so verification was scoped to PsBash.Host.Tests, the only project that loads SdkRunspace."
     }
   ],
   "interrupted_at": null,
