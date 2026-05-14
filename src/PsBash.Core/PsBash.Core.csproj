@@ -32,7 +32,7 @@
   </ItemGroup>
 
   <ItemGroup>
-    <PackageReference Include="Parlot" Version="1.5.7" />
+    <ProjectReference Include="..\PsBash.Transpiler\PsBash.Transpiler.csproj" />
   </ItemGroup>
 
 </Project>

@@ -4,10 +4,13 @@
     Binary pwsh module. Multi-targets net8.0 (PowerShell 7.4 JIT host) and
     net10.0 (ps-bash-host's SDK runspace). Single-targeting net8.0 caused the
     in-process ps-bash-host (net10.0) to load the cmdlets DLL alongside its
-    own net10.0 PsBash.Core, dragging in a second net8.0 PsBash.Core into the
+    own net10.0 PsBash.Transpiler, dragging in a second net8.0 copy into the
     process — type identity divergence then wedged Import-Module on the host's
     SDK runspace. Multi-targeting lets the assembly resolver pick the matching
     TFM when the host imports the cmdlets module.
+    This project references PsBash.Transpiler (not PsBash.Core): the parser +
+    transpiler surface is a leaf project both Core and Cmdlets depend on, which
+    breaks the Core<->Cmdlets cycle and lets Core embed PsBash.Cmdlets.dll.
     AOT publishing is intentionally disabled because the cmdlets in this assembly use
     ScriptBlock.Create + InvokeScript, which are reflection-heavy and not AOT-safe.
   -->
@@ -26,7 +29,7 @@
   </ItemGroup>
 
   <ItemGroup>
-    <ProjectReference Include="..\PsBash.Core\PsBash.Core.csproj" />
+    <ProjectReference Include="..\PsBash.Transpiler\PsBash.Transpiler.csproj" />
   </ItemGroup>
 
   <ItemGroup>

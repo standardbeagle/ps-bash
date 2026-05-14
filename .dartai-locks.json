@@ -1,17 +1,3 @@
 {
-  "claims": {
-    "Fh2WgjOx46dJ": {
-      "runner_instance_id": "DESKTOP-NPIOPS6-7606",
-      "runner_email": "andybrummer@standardbeagle.com",
-      "claimed_at": "2026-05-13T22:30:00Z",
-      "agent_id": "DESKTOP-NPIOPS6-7606",
-      "parent_loop_id": "dqjNTUoPZjCa",
-      "purpose": "REFACTOR-5a prep: extract PsBash.Transpiler project to break Core-Cmdlets cycle",
-      "source_event": {
-        "loop_id": "dqjNTUoPZjCa",
-        "task_id": "Fh2WgjOx46dJ",
-        "conversation_id": null
-      }
-    }
-  }
+  "claims": {}
 }

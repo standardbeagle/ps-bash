@@ -1,0 +1,21 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    Leaf project owning the bash parser + transpiler surface. Both PsBash.Core
+    and PsBash.Cmdlets depend on this project; it depends on nothing in the
+    repo. Splitting it out of PsBash.Core breaks the Core<->Cmdlets reference
+    cycle so PsBash.Core can take a ProjectReference to PsBash.Cmdlets.
+    Namespaces stay PsBash.Core.Parser / PsBash.Core.Transpiler (assembly name
+    is independent of namespace) to keep this a zero-churn move for consumers.
+  -->
+  <PropertyGroup>
+    <TargetFrameworks>net8.0;net10.0</TargetFrameworks>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Parlot" Version="1.5.7" />
+  </ItemGroup>
+
+</Project>

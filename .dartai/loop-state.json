@@ -192,6 +192,34 @@
       "fix_task_id": null,
       "blocker_class": "task-split-required",
       "files": []
+    },
+    {
+      "task_id": "Fh2WgjOx46dJ",
+      "iteration": 4,
+      "status": "failed",
+      "started_at": "2026-05-13T22:30:00Z",
+      "completed_at": "2026-05-14T00:10:00Z",
+      "phase_completed": "phase-4",
+      "failed_phase": "phase-5-testing",
+      "files_changed": 12,
+      "tests_added": 0,
+      "plan_adjustments": 0,
+      "completion_summary": null,
+      "failure_reason": "Project-graph move is structurally correct and complete (new PsBash.Transpiler leaf project; git mv'd Parser/+Transpiler/ 9 files as pure renames keeping PsBash.Core.* namespaces for zero using-churn; Core.csproj and Cmdlets.csproj reference Transpiler; added to sln; ps-bash.sln builds 0 errors; dependency graph verified acyclic via dotnet list reference; Cmdlets no longer references Core). BUT it introduces a deterministic runtime type-resolution regression: EvalDifferentialTests fails 3 tests (Differential_Eval_CmdSubMultilineExports_CompletesUnder2s, Differential_Eval_FnmShapedPayload_CompletesUnder2s, Differential_Eval_QuotedCmdSubMultiline_CompletesUnder2s). Root cause: PsEmitter.EmitEval (PsEmitter.cs:2888) emits a runtime PowerShell string [PsBash.Core.Transpiler.BashTranspiler]::Transpile(...) executed via Invoke-Expression in the ps-bash-host SDK runspace; PowerShell's [Type] literal resolver only finds types in already-loaded runspace assemblies. Before the move BashTranspiler was in PsBash.Core.dll which ps-bash-host.dll references and loads at startup; after the move it is in PsBash.Transpiler.dll which is declared in ps-bash-host.deps.json and physically present but not eagerly loaded, so the type silently fails to resolve and eval produces empty output. Verified by clean-HEAD baseline-diff: clean Debug binary outputs '1 2', changed Debug binary outputs empty, reproduced 4x; clean-HEAD isolation 9/9 pass, changed-tree isolation 3/9 fail. Acceptance criterion 'all existing tests green via ./scripts/test.sh' is NOT met.",
+      "fix_task_created": false,
+      "fix_task_id": null,
+      "blocker_class": "runtime-type-resolution",
+      "cut_line_adjustment_needed": "Project split is sound; needs a companion host-runtime fix so the SDK runspace can resolve PsBash.Core.Transpiler.BashTranspiler by name. Options (least-invasive first): (1) Add-Type/LoadFrom of PsBash.Transpiler.dll in src/PsBash.Host/Resources/SdkRunspaceSetup.ps1 alongside the Cmdlets.dll import (CAUTION: this file has documented host-startup-deadlock history, lines 26-29, reverted commits f18bedd/6f264eb); (2) emit an assembly-qualified type name in PsEmitter.EmitEval's runtime string; (3) eager-load PsBash.Transpiler.dll in SdkRunspace.Create. This step touches deadlock-sensitive PsBash.Host code beyond the task's 'mechanical move, no behavior change' scope and 5-file limit. Planner decision: widen Fh2WgjOx46dJ to include the host-runspace fix, OR create a REFACTOR-5a-2 follow-on gated before REFACTOR-5.",
+      "verifier_evidence": "dotnet build ps-bash.sln: 0 errors (4 pre-existing NU1903 warnings only). dotnet list reference: PsBash.Transpiler=(no refs), PsBash.Core->PsBash.Transpiler, PsBash.Cmdlets->PsBash.Transpiler -- acyclic, Cmdlets no longer references Core. Core.Tests 690 passed/0 failed/1 skipped. Cmdlets.Tests 40 passed/0 failed/3 skipped. Differential.Tests deterministic regression: EvalDifferentialTests 3 fail (isolation, reproduced 2x); clean-HEAD baseline same suite 9/9 pass. Direct binary repro: clean-HEAD Debug ps-bash 'eval \"$(printf ...)\"' -> '1 2'; changed-tree Debug ps-bash same input -> empty.",
+      "changes_left_uncommitted": true,
+      "files": [
+        "ps-bash.sln",
+        "src/PsBash.Transpiler/PsBash.Transpiler.csproj",
+        "src/PsBash.Core/PsBash.Core.csproj",
+        "src/PsBash.Cmdlets/PsBash.Cmdlets.csproj",
+        "src/PsBash.Transpiler/Parser/ (8 files moved from src/PsBash.Core/Parser/)",
+        "src/PsBash.Transpiler/Transpiler/BashTranspiler.cs (moved from src/PsBash.Core/Transpiler/)"
+      ]
     }
   ],
   "interrupted_at": null,
