@@ -1,9 +1,9 @@
 {
   "status": "paused",
-  "iterations": 21,
+  "iterations": 22,
   "spawns": 12,
   "started_at": "2026-05-12T20:33:00Z",
-  "last_iteration_at": "2026-05-14T22:30:00+00:00",
+  "last_iteration_at": "2026-05-14T23:10:00+00:00",
   "last_subagent": "DESKTOP-NPIOPS6-7606",
   "loop_task_id": "AEACP6UqDUBr",
   "dartboard": "Personal/ps-bash",
@@ -760,6 +760,27 @@
       ],
       "verification": "./scripts/test.sh --filter TerminalModeTests => Passed 10, Skipped 2 (Windows-only). Full PTY suite (TerminalMode+SignalForwarder+HandoffStateMachine+PtySpawn+PtyAllocation) => Passed 43, Skipped 7, zero failures. Full PsBash.Shell.Tests baseline-diff => 19 failures, all AgentPatternEndToEndTests/PromptRenderingIntegrationTests = documented WSL2 /tmp->$env:TEMP baseline, zero PTY failures. AOT publish linux-x64 (--self-contained /p:PublishAot=true /warnaserror, exact CI invocation) => EXIT 0, zero trim/IL warnings.",
       "notes": "Plan adjustment 1: task asked to document the restore-ordering contract 'in process_spawn_contract memory'. No MEMORY.md content and no docs/solutions/ directory exist in this repo - documented the contract in docs/specs/pty.md section 9.3 instead (stated the choice in the doc and Dart comment). Manual-vs-automated split: the 'kill -9 host while vim runs' test is genuinely manual; automated proxy tests assert (a) ESC c byte sequence, (b) EmergencyRestoreAll no-op with no scope, (c) on a real PTY slave fd EmergencyRestoreAll restores ICANON/ECHO and following Dispose is idempotent no-op, (d) source-text regression that RunHostUnderPtyAsync calls EmergencyRestoreAll gated on non-zero exit. host-exiting IPC-sentinel trigger: HandoffStateMachine (PTY-6) already maps it to RestoreTerminal but the framed interactive IPC channel that delivers the sentinel is still deferred (per PTY-6 notes) - the host-process-died detection (non-zero exit) is the landed crash-detection path for the current raw byte-pump."
+    },
+    {
+      "task_id": "I06R3Wy9KjPz",
+      "iteration": 4,
+      "status": "completed",
+      "started_at": "2026-05-14T21:00:00Z",
+      "completed_at": "2026-05-14T23:10:00Z",
+      "phase_completed": "phase-9",
+      "failed_phase": null,
+      "files_changed": 2,
+      "tests_added": 7,
+      "plan_adjustments": 3,
+      "completion_summary": "PTY-8: added PtyHarness cross-platform expect-style test fixture (WriteKeys/ReadOutput/WaitForRegex/Resize/SendSignal) + 7 acceptance tests. Smoke test deterministic-green on POSIX across repeated runs; Windows ConPTY compiles, CI-gated.",
+      "failure_reason": null,
+      "fix_task_created": false,
+      "fix_task_id": null,
+      "source_event": {
+        "loop_id": "a7ldZJBuAZNY",
+        "task_id": "I06R3Wy9KjPz",
+        "conversation_id": null
+      }
     }
   ],
   "interrupted_at": null,

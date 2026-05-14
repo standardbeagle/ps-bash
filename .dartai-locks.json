@@ -1,17 +1,3 @@
 {
-  "claims": {
-    "I06R3Wy9KjPz": {
-      "runner_instance_id": "DESKTOP-NPIOPS6-7606",
-      "runner_email": "andybrummer@standardbeagle.com",
-      "claimed_at": "2026-05-14T21:00:00Z",
-      "agent_id": "DESKTOP-NPIOPS6-7606",
-      "parent_loop_id": "a7ldZJBuAZNY",
-      "purpose": "Phase E4: PTY-8 cross-platform expect-style PtyHarness test fixture",
-      "source_event": {
-        "loop_id": "a7ldZJBuAZNY",
-        "task_id": "I06R3Wy9KjPz",
-        "conversation_id": null
-      }
-    }
-  }
+  "claims": {}
 }
