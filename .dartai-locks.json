@@ -1,17 +1,3 @@
 {
-  "claims": {
-    "0Gx9HutvWmEC": {
-      "runner_instance_id": "DESKTOP-NPIOPS6-7606",
-      "runner_email": "andybrummer@standardbeagle.com",
-      "claimed_at": "2026-05-14T17:00:00Z",
-      "agent_id": "DESKTOP-NPIOPS6-7606",
-      "parent_loop_id": "3pKEGagZEIQL",
-      "purpose": "Phase D2: RC-9 eval Fnm-payload perf - design decision + fix",
-      "source_event": {
-        "loop_id": "3pKEGagZEIQL",
-        "task_id": "0Gx9HutvWmEC",
-        "conversation_id": null
-      }
-    }
-  }
+  "claims": {}
 }
