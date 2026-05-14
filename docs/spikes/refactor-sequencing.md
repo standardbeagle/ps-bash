@@ -260,3 +260,63 @@ touched.
 3. Resume Wave 5 in corrected order: REFACTOR-2 Phase 2 (`i1Apd5OwULMQ`) → Phase
    1b (`MjqPco7X45k4`) → Phase 3 (`IAZZ5TsCj9kH`).
 4. Wave 6 (RC-8, RC-9) remains gated on Wave 5 completion.
+
+---
+
+## 6. Replan as of 2026-05-14 (post-loop)
+
+Loop `dqjNTUoPZjCa` closed. This section replans the **17 remaining To-do tasks**
+into execution phases. Supersedes the Wave 5/6 ordering above where they differ.
+
+### Phase A — Cheap closures (no code) — DONE
+
+| Task | Action | Result |
+|------|--------|--------|
+| RC-1 `0RhwDuwTPmUu` | Close superseded | Done — REFACTOR-4 subsumed the stderr-IPC channel. |
+| RC-3a `zsbBywo8pNb7` | Verify guard, close | Done — `ModulePartialLoadTests` green (2/2) on `main`; REFACTOR-6 removed the file-scope StrictMode that caused the partial load. Permanent CI guard now in place. |
+
+### Phase B — Finish Wave 5 (REFACTOR-2 chain, strict order)
+
+1. **REFACTOR-2 Phase 2** `i1Apd5OwULMQ` — extract psm1 arg-helpers
+   (`ConvertFrom-BashArgs`, `Emit-BashLine`, `New-FlagDefs`) to binary cmdlets.
+   Pair with **RC-7** `uYqZrG1n7UWX` (emitter unquoted-empty-var elision) — the
+   emitter is already being touched in this phase.
+2. **REFACTOR-2 Phase 1b** `MjqPco7X45k4` — remaining 8 leaf functions
+   (echo/printf/cat/ls/head/tail/wc/pwd). Blocked on B1.
+3. **REFACTOR-2 Phase 3** `IAZZ5TsCj9kH` — non-leaf / pipeline-consumer functions.
+4. **HostWorkerFixture follow-on** — `Host.Tests` in-process `SdkWorker` harness,
+   split off from REFACTOR-3. File as a Dart task before scheduling.
+
+### Phase C — Independent RC fixes (parallel-safe)
+
+| Task | Scope | Note |
+|------|-------|------|
+| RC-5 `YVzx6dZO0sy4` | macOS fd-walk may close .NET runtime fds | host code, self-contained |
+| RC-2 `ki3HRN90Sb2p` | bg-job hangs — `Invoke-BashBackground` spawns full pwsh child | runtime, self-contained |
+| RC-6 `bPajrz2XY4zJ` | golden file regen on canonical env | run **after** RC-7/emitter settles — needs a clean baseline |
+
+### Phase D — Wave 6 Differential sweep (gated on B + C)
+
+1. RC-6 golden regen → clean baseline.
+2. RC-8 `7q2c4RafF5qb` — Windows Differential 97-fail triage.
+3. RC-9 `0Gx9HutvWmEC` — Eval Fnm payload decision.
+
+### Phase E — PTY epic (separate track, parent `INvNldqseYdz`)
+
+Sequential: PTY-5 signal forwarding → PTY-6 fg/bg handoff → PTY-7 crash recovery →
+PTY-8 test harness → PTY-9 TUI parity (needs PTY-8) → PTY-11 revive
+BrowseInteractive → PTY-12 arch doc.
+
+**PTY-10 `Xin0M76kAytE` conflict:** "drop daemon-reuse for interactive sessions"
+contradicts REFACTOR-7, which *kept* the daemon for interactive mode by design.
+Re-grill PTY-10 against REFACTOR-7's landed lifetime model before scheduling.
+
+### Standalone
+
+`E84SFIVCE6zL` (stale ps-bash-host processes on Windows) — likely shrunk by
+REFACTOR-7 (per-invocation hosts self-clean on client disconnect). Re-evaluate
+scope; may be near-closeable.
+
+### Critical path
+
+`A → B(1→2→3→4) → C → D`. Phase E runs in parallel; PTY-10 blocked on reconcile.
