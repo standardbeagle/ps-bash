@@ -1,30 +1,3 @@
 {
-  "claims": {
-    "i1Apd5OwULMQ": {
-      "runner_instance_id": "DESKTOP-NPIOPS6-7606",
-      "runner_email": "andybrummer@standardbeagle.com",
-      "claimed_at": "2026-05-14T06:40:00Z",
-      "agent_id": "DESKTOP-NPIOPS6-7606",
-      "parent_loop_id": "IaiAaDTVqJY6",
-      "purpose": "Phase B1: REFACTOR-2 Phase 2 - extract psm1 arg-helpers to C#",
-      "source_event": {
-        "loop_id": "IaiAaDTVqJY6",
-        "task_id": "i1Apd5OwULMQ",
-        "conversation_id": null
-      }
-    },
-    "uYqZrG1n7UWX": {
-      "runner_instance_id": "DESKTOP-NPIOPS6-7606",
-      "runner_email": "andybrummer@standardbeagle.com",
-      "claimed_at": "2026-05-14T06:40:00Z",
-      "agent_id": "DESKTOP-NPIOPS6-7606",
-      "parent_loop_id": "IaiAaDTVqJY6",
-      "purpose": "Phase B1: RC-7 emitter unquoted-empty-var elision (paired with Phase 2)",
-      "source_event": {
-        "loop_id": "IaiAaDTVqJY6",
-        "task_id": "uYqZrG1n7UWX",
-        "conversation_id": null
-      }
-    }
-  }
+  "claims": {}
 }

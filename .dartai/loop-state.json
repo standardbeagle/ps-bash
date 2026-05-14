@@ -1,9 +1,9 @@
 {
   "status": "paused",
-  "iterations": 12,
-  "spawns": 10,
+  "iterations": 13,
+  "spawns": 11,
   "started_at": "2026-05-12T20:33:00Z",
-  "last_iteration_at": "2026-05-14T08:40:00Z",
+  "last_iteration_at": "2026-05-14T09:35:00Z",
   "last_subagent": "task-executor",
   "loop_task_id": "AEACP6UqDUBr",
   "dartboard": "Personal/ps-bash",
@@ -411,6 +411,56 @@
         "docs/spikes/refactor-sequencing.md",
         ".dartai-locks.json"
       ]
+    },
+    {
+      "task_id": "i1Apd5OwULMQ",
+      "iteration": 1,
+      "status": "completed",
+      "started_at": "2026-05-14T06:40:00Z",
+      "completed_at": "2026-05-14T09:35:00Z",
+      "phase_completed": "phase-9",
+      "failed_phase": null,
+      "files_changed": 4,
+      "tests_added": 30,
+      "plan_adjustments": 1,
+      "completion_summary": "REFACTOR-2 Phase 2: extracted 6 AOT-safe psm1 helpers into PsBash.Cmdlets.BashRuntime (NewBashObject, EmitBashLines, GetBashText, NewFlagDefs, ConvertFromBashArgs, ExpandEscapeSequences + NormalizeBashText/FormatBashError). psm1 New-BashObject/Emit-BashLine/Set-BashDisplayProperty/Get-BashText/ConvertFrom-BashArgs/New-FlagDefs/Expand-EscapeSequences are now thin delegating wrappers. Write-BashError + Resolve-BashGlob kept pure psm1 (need runspace/script scope a static helper cannot reach) - filed as the documented carve-out. 30 new BashRuntimeTests + Cmdlets.Tests 110/110 + Differential parity green.",
+      "failure_reason": null,
+      "fix_task_created": false,
+      "fix_task_id": null,
+      "parent_loop_id": "IaiAaDTVqJY6",
+      "branch": "main",
+      "files": [
+        "src/PsBash.Cmdlets/BashRuntime.cs",
+        "src/PsBash.Module/PsBash.psm1",
+        "src/PsBash.Cmdlets.Tests/BashRuntimeTests.cs",
+        "docs/specs/runtime-functions.md"
+      ],
+      "plan_adjustment_note": "Landed the coherent AOT-pure subset (6 helpers Phase 1b needs) per dispatch guidance; Write-BashError + Resolve-BashGlob deferred as they require runspace/SessionState scope - documented carve-on in runtime-functions.md, not a separate fix task (it is an intentional scope boundary, follow-on belongs to Phase 1b's cmdlet migration)."
+    },
+    {
+      "task_id": "uYqZrG1n7UWX",
+      "iteration": 1,
+      "status": "completed",
+      "started_at": "2026-05-14T06:40:00Z",
+      "completed_at": "2026-05-14T09:35:00Z",
+      "phase_completed": "phase-9",
+      "failed_phase": null,
+      "files_changed": 4,
+      "tests_added": 6,
+      "plan_adjustments": 1,
+      "completion_summary": "RC-7: PsEmitter now word-splits + elides unquoted ordinary-variable command operands. A pure unquoted $var/${var} operand is hoisted to a temp var holding @(if empty {@()} else {@($v -split '\\s+')}) and PowerShell-splatted (@var), wrapped in & {} so the temp never leaks into a pipeline. Applied to both EmitSimple general path and EmitPassthrough mapped path via IsPureUnquotedVarWord/EmitCommandWithSplatArgs. Special params ($@/$#/$1..) and quoted \"$x\" unaffected. 3 RED Differential tests (EmptyVar_UnquotedIsOmitted converted Golden->Equal, UnquotedVar_WordSplitsOnSpaces, EmptyVar_QuotedIsEmptyArg) now GREEN + 6 emitter unit tests.",
+      "failure_reason": null,
+      "fix_task_created": false,
+      "fix_task_id": null,
+      "parent_loop_id": "IaiAaDTVqJY6",
+      "branch": "main",
+      "files": [
+        "src/PsBash.Transpiler/Parser/PsEmitter.cs",
+        "src/PsBash.Core.Tests/Parser/PsEmitterTests.cs",
+        "src/PsBash.Differential.Tests/QuotingDifferentialTests.cs",
+        "docs/specs/emitter-strategy.md"
+      ],
+      "plan_adjustment_note": "Task spec proposed a bare $(if...) subexpression; discovered via SDK probe that $(...) yielding nothing still injects a spurious $null arg - corrected to true @-splat with @()-wrapped if (assigning bare if{@()} collapses empty branch to $null). Baseline-diff: 5 deterministic Differential failures (Redirect_IoNumber, AndOr_CdInChain, Redirect_Stderr_DevNull, Background_WaitLastPid, Redirect_Heredoc_Expanding) fail identically on clean tree - pre-existing WSL2 process-spawn flaky baseline, zero regressions attributable to RC-7."
     }
   ],
   "interrupted_at": null,

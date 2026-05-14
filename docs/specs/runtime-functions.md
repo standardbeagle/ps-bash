@@ -55,6 +55,22 @@ that downstream commands consume. Objects have `PSTypeName = 'PsBash.TextOutput'
 | `Set-BashDisplayProperty $obj` | Adds a `ToString()` ScriptMethod returning `$this.BashText` |
 | `Get-BashText -InputObject $obj` | Extracts the string from any pipeline object: returns `.BashText` if present, otherwise stringifies via `"$obj"` |
 
+### Shared C# Helpers (REFACTOR-2 Phase 2)
+
+The arg-parsing and BashObject helpers every leaf `Invoke-Bash*` function
+depends on are implemented as AOT-safe static methods on
+`PsBash.Cmdlets.BashRuntime` (`src/PsBash.Cmdlets/BashRuntime.cs`). A migrated
+binary cmdlet calls them directly with no C#→PowerShell callback. The psm1
+functions `New-BashObject`, `Emit-BashLine`, `Set-BashDisplayProperty`,
+`Get-BashText`, `ConvertFrom-BashArgs`, `New-FlagDefs`, and
+`Expand-EscapeSequences` are now thin wrappers that delegate to
+`BashRuntime`, so the script-callable surface is unchanged and the
+differential suite proves the C# implementations against the live runtime.
+`Write-BashError` and `Resolve-BashGlob` remain pure psm1 functions: both need
+runspace/script scope (`$script:BashErrorMode`, the PowerShell path provider)
+that a plain static helper cannot reach — only `BashRuntime.FormatBashError`
+(the runspace-free message-formatting piece) is shared.
+
 ### Output Strategy
 
 ```

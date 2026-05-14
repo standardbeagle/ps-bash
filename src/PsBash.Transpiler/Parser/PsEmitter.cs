@@ -1484,13 +1484,33 @@ public static class PsEmitter
             }
         }
 
-        for (var i = 0; i < cmd.Words.Length; i++)
+        // RC-7: an unquoted ordinary variable argument is word-split and
+        // elided-when-empty. The command word itself (index 0) is never split —
+        // it must resolve to a name — so only operands (index >= 1) are scanned.
+        var commandArgs = cmd.Words.Length > 1
+            ? cmd.Words.RemoveAt(0)
+            : ImmutableArray<CompoundWord>.Empty;
+        if (HasUnquotedVarSplatArg(commandArgs))
         {
-            if (i > 0)
-                sb.Append(' ');
-            else if (IsQuotedCommandWord(cmd.Words[0]))
-                sb.Append("& ");
-            sb.Append(EmitWord(cmd.Words[i]));
+            // Hoist each unquoted-variable operand to a temp var and splat it.
+            // The command word keeps its existing emission (incl. the `& `
+            // call-operator prefix for a quoted command word).
+            string leading = IsQuotedCommandWord(cmd.Words[0]) ? "& " : "";
+            sb.Append(EmitCommandWithSplatArgs(
+                leading + EmitWord(cmd.Words[0]),
+                commandArgs,
+                argIndex => EmitWord(commandArgs[argIndex])));
+        }
+        else
+        {
+            for (var i = 0; i < cmd.Words.Length; i++)
+            {
+                if (i > 0)
+                    sb.Append(' ');
+                else if (IsQuotedCommandWord(cmd.Words[0]))
+                    sb.Append("& ");
+                sb.Append(EmitWord(cmd.Words[i]));
+            }
         }
 
         // Separate stdout file redirects from other redirects.
@@ -1962,6 +1982,176 @@ public static class PsEmitter
                 $"$(if ($global:BashPositional) {{ $global:BashPositional[{int.Parse(d) - 1}] }} else {{ $args[{int.Parse(d) - 1}] }})",
             _ => $"$env:{name}",
         };
+    }
+
+    // -- RC-7: unquoted variable word-splitting -------------------------------
+    //
+    // bash: an unquoted parameter expansion ($x, not "$x") is subject to word
+    // splitting on IFS, and an empty result contributes NO word at all. ps-bash
+    // previously emitted the bare variable reference as a single argument, so
+    // `x=; echo start $x end` produced `start  end` (two spaces — a spurious
+    // empty argument) instead of bash's `start end`.
+    //
+    // Fix: when a command-argument word is a pure unquoted ordinary variable,
+    // emit a splitting expression instead of the bare reference:
+    //   (if ([string]::IsNullOrEmpty($env:x)) { @() } else { @($env:x -split '\s+') })
+    // PowerShell splats an array argument's elements as separate arguments and
+    // drops an empty array entirely, reproducing bash word-splitting + elision.
+    // This is intentionally scoped to ordinary variables ($env:NAME and loop
+    // vars). Special parameters ($@, $*, $#, $1..$9, $?) keep their existing
+    // dedicated expansions, and quoted "$x" is unaffected (it is a DoubleQuoted
+    // part, not a bare SimpleVarSub).
+
+    /// <summary>
+    /// True when <paramref name="word"/> is a single bare (unquoted) ordinary
+    /// variable reference eligible for RC-7 word-splitting: a lone
+    /// <see cref="WordPart.SimpleVarSub"/>, or a suffix-less
+    /// <see cref="WordPart.BracedVarSub"/>, whose name is an ordinary variable
+    /// (not a bash special parameter).
+    /// </summary>
+    private static bool IsPureUnquotedVarWord(CompoundWord word)
+    {
+        if (word.Parts.Length != 1)
+            return false;
+
+        string name = word.Parts[0] switch
+        {
+            WordPart.SimpleVarSub vs => vs.Name,
+            WordPart.BracedVarSub bvs when bvs.Suffix is null => bvs.Name,
+            _ => null!,
+        };
+
+        return name is not null && IsOrdinaryVarName(name);
+    }
+
+    /// <summary>
+    /// True when <paramref name="name"/> is an ordinary shell variable (env var
+    /// or tracked loop variable) — i.e. not a bash special parameter such as
+    /// <c>?</c>, <c>@</c>, <c>*</c>, <c>#</c>, <c>$</c>, <c>!</c>, <c>-</c>,
+    /// <c>_</c>, a positional digit, or one of the recognized magic names.
+    /// These special parameters have their own dedicated expansions in
+    /// <see cref="EmitSimpleVar"/> and must not be word-split.
+    /// </summary>
+    private static bool IsOrdinaryVarName(string name)
+    {
+        if (name.Length == 0)
+            return false;
+
+        if (_loopVars is not null && _loopVars.Contains(name))
+            return true;
+
+        switch (name)
+        {
+            case "?" or "@" or "*" or "#" or "$" or "!" or "-" or "_":
+            case "RANDOM" or "SECONDS" or "PPID":
+            case "BASH_VERSION" or "BASH_VERSINFO":
+                return false;
+        }
+
+        // Single-digit positional parameters ($0..$9).
+        if (name.Length == 1 && name[0] is >= '0' and <= '9')
+            return false;
+
+        return true;
+    }
+
+    /// <summary>
+    /// Emits the RC-7 word-splitting array expression for a pure unquoted
+    /// ordinary variable word: an empty array when the variable is null/empty
+    /// (so the word is elided), the IFS-whitespace-split element array
+    /// otherwise. This value is assigned to a temp variable and then PowerShell-
+    /// splatted (<c>@var</c>) into the command — see
+    /// <see cref="EmitCommandWithSplatArgs"/>. True <c>@</c> splatting is
+    /// required: a bare <c>$(...)</c> subexpression that yields nothing still
+    /// contributes a <c>$null</c> argument, which the command would see as a
+    /// spurious empty operand.
+    /// </summary>
+    private static string EmitUnquotedVarSplitArray(CompoundWord word)
+    {
+        string varRef = word.Parts[0] switch
+        {
+            WordPart.SimpleVarSub vs => EmitSimpleVar(vs.Name),
+            WordPart.BracedVarSub bvs => EmitSimpleVar(bvs.Name),
+            _ => throw new InvalidOperationException(
+                "EmitUnquotedVarSplitArray requires a pure unquoted variable " +
+                "word; guard with IsPureUnquotedVarWord."),
+        };
+
+        // The whole if-expression is wrapped in @(...): assigning a bare
+        // `if (...) { @() }` to a variable collapses the empty branch to $null
+        // (the statement produces nothing), and splatting $null injects one
+        // spurious empty argument. @(...) forces an array context so the empty
+        // branch stays an empty array and @-splatting it contributes nothing.
+        return $"@(if ([string]::IsNullOrEmpty({varRef})) {{ @() }} " +
+               $"else {{ @({varRef} -split '\\s+') }})";
+    }
+
+    /// <summary>
+    /// True when any operand in <paramref name="args"/> (optionally skipping the
+    /// pipeline-process-sub operand at <paramref name="skipIndex"/>) is a pure
+    /// unquoted ordinary variable that needs RC-7 word-splitting.
+    /// </summary>
+    private static bool HasUnquotedVarSplatArg(
+        ImmutableArray<CompoundWord> args, int skipIndex = -1)
+    {
+        for (int i = 0; i < args.Length; i++)
+        {
+            if (i != skipIndex && IsPureUnquotedVarWord(args[i]))
+                return true;
+        }
+        return false;
+    }
+
+    /// <summary>
+    /// Builds a command invocation that PowerShell-splats its RC-7 unquoted
+    /// variable operands. Each such operand is hoisted to a temp variable
+    /// (<c>$__bashsplatN</c>) holding the word-split array, then referenced as
+    /// <c>@__bashsplatN</c> so PowerShell expands its elements as separate
+    /// arguments — and contributes nothing for an empty array. The whole thing
+    /// is wrapped in <c>&amp; { ... }</c> so it stays a single pipeline-safe
+    /// command element (the temp assignments never leak into a surrounding
+    /// pipeline or and-or list).
+    /// <para>
+    /// <paramref name="leadingTokens"/> are emitted verbatim before the command
+    /// name (e.g. the <c>&amp; </c> call-operator prefix for a quoted command
+    /// word). <paramref name="emitPlainArg"/> renders a non-splat operand at a
+    /// given index (callers differ: passthrough applies quoting, the general
+    /// path may emit a process-sub pipeline).
+    /// </para>
+    /// </summary>
+    private static string EmitCommandWithSplatArgs(
+        string commandName,
+        ImmutableArray<CompoundWord> args,
+        Func<int, string> emitPlainArg,
+        string leadingTokens = "",
+        string trailingTokens = "")
+    {
+        var prelude = new StringBuilder();
+        var call = new StringBuilder();
+        call.Append(leadingTokens);
+        call.Append(commandName);
+
+        int splatCounter = 0;
+        for (int i = 0; i < args.Length; i++)
+        {
+            call.Append(' ');
+            if (IsPureUnquotedVarWord(args[i]))
+            {
+                string tempVar = $"$__bashsplat{splatCounter++}";
+                prelude.Append(tempVar)
+                       .Append(" = ")
+                       .Append(EmitUnquotedVarSplitArray(args[i]))
+                       .Append("; ");
+                call.Append('@').Append(tempVar.AsSpan(1));
+            }
+            else
+            {
+                call.Append(emitPlainArg(i));
+            }
+        }
+        call.Append(trailingTokens);
+
+        return $"& {{ {prelude}{call} }}";
     }
 
     private static string EmitBracedVar(WordPart.BracedVarSub bvs, bool inDoubleQuote = false)
@@ -2965,18 +3155,33 @@ public static class PsEmitter
         if (args.IsEmpty)
             return cmdlet;
 
-        var sb = new StringBuilder(cmdlet);
         var pipelineProcessSubIndex = GetPipelineProcessSubArgIndex(cmdlet, args);
-        for (int i = 0; i < args.Length; i++)
+
+        // Renders operand i as a plain (non-splat) argument: the pipeline
+        // process-sub operand goes through EmitProcessSubPipeline, everything
+        // else through EmitWord with passthrough quoting applied.
+        string EmitPlainArg(int i)
         {
-            sb.Append(' ');
             var emitted = i == pipelineProcessSubIndex
                 ? EmitProcessSubPipeline((WordPart.ProcessSub)args[i].Parts[0])
                 : EmitWord(args[i]);
-            if (NeedsPassthroughQuoting(emitted))
-                sb.Append('"').Append(emitted).Append('"');
-            else
-                sb.Append(emitted);
+            return NeedsPassthroughQuoting(emitted)
+                ? $"\"{emitted}\""
+                : emitted;
+        }
+
+        // RC-7: when any operand is a pure unquoted ordinary variable, hoist it
+        // to a temp variable and PowerShell-splat it so word-splitting and
+        // empty-word elision match bash. The pipeline process-sub operand is
+        // never a pure variable word, so it is unaffected.
+        if (HasUnquotedVarSplatArg(args, pipelineProcessSubIndex))
+            return EmitCommandWithSplatArgs(cmdlet, args, EmitPlainArg);
+
+        var sb = new StringBuilder(cmdlet);
+        for (int i = 0; i < args.Length; i++)
+        {
+            sb.Append(' ');
+            sb.Append(EmitPlainArg(i));
         }
         return sb.ToString();
     }

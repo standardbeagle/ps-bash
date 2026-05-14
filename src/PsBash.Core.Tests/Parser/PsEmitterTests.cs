@@ -2946,6 +2946,73 @@ public class PsEmitterTests
         Assert.Equal("d0104599", PsEmitter.ShortHash("fnm use"));
     }
 
+    // ---- RC-7: unquoted variable word-splitting ----------------------------
+
+    [Fact]
+    public void Transpile_UnquotedVarArg_EmitsSplatWithWordSplit()
+    {
+        // bash: an unquoted $x operand is word-split on IFS and elided when
+        // empty. The emitter hoists it to a temp var holding the split array
+        // and PowerShell-splats it.
+        var result = PsEmitter.Transpile("echo a $x b");
+
+        Assert.Contains("$__bashsplat0 = @(if ([string]::IsNullOrEmpty($env:x))",
+            result);
+        Assert.Contains("@($env:x -split '\\s+')", result);
+        Assert.Contains("@__bashsplat0", result);
+        // Wrapped in & { } so the temp assignment never leaks into a pipeline.
+        Assert.Contains("& {", result);
+    }
+
+    [Fact]
+    public void Transpile_QuotedVarArg_NotSplat()
+    {
+        // "$x" (quoted) keeps the existing single-argument expansion — only
+        // bare unquoted $x triggers word-splitting.
+        var result = PsEmitter.Transpile("echo \"$x\"");
+
+        Assert.DoesNotContain("__bashsplat", result);
+    }
+
+    [Fact]
+    public void Transpile_CommandWordIsVar_NotSplat()
+    {
+        // The command word itself must resolve to a name; it is never splat.
+        var result = PsEmitter.Transpile("$cmd arg");
+
+        Assert.DoesNotContain("__bashsplat", result);
+    }
+
+    [Fact]
+    public void Transpile_SpecialParamArg_NotSplatByRc7()
+    {
+        // $@ has its own dedicated expansion and must not be routed through the
+        // RC-7 word-split splat.
+        var result = PsEmitter.Transpile("echo $@");
+
+        Assert.DoesNotContain("__bashsplat", result);
+    }
+
+    [Fact]
+    public void Transpile_MappedCommandUnquotedVarArg_EmitsSplat()
+    {
+        // The passthrough path (mapped Invoke-Bash* cmdlets) also routes a pure
+        // unquoted variable operand through the splat.
+        var result = PsEmitter.Transpile("grep $pattern file.txt");
+
+        Assert.Contains("__bashsplat0", result);
+        Assert.Contains("@__bashsplat0", result);
+    }
+
+    [Fact]
+    public void Transpile_MultipleUnquotedVarArgs_DistinctTempVars()
+    {
+        var result = PsEmitter.Transpile("echo $a $b");
+
+        Assert.Contains("$__bashsplat0", result);
+        Assert.Contains("$__bashsplat1", result);
+    }
+
     private static CompoundWord MakeWord(string value) =>
         new(ImmutableArray.Create<WordPart>(new WordPart.Literal(value)));
 }

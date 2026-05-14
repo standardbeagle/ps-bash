@@ -212,6 +212,31 @@ If a command has leading environment variable assignments
 Words are emitted in order via `EmitWord`, redirects appended via
 `EmitRedirect`.
 
+### Unquoted variable word-splitting (RC-7)
+
+In bash, an **unquoted** parameter expansion (`$x`, not `"$x"`) undergoes word
+splitting on IFS, and an empty result contributes **no word at all**:
+`x=; echo start $x end` prints `start end` (one space), not `start  end`.
+
+When a command **operand** (never the command word itself) is a pure unquoted
+ordinary variable -- a lone `WordPart.SimpleVarSub`, or a suffix-less
+`WordPart.BracedVarSub`, whose name is an ordinary variable rather than a bash
+special parameter (`$@`, `$*`, `$#`, `$?`, `$1`..`$9`, etc., which keep their
+own dedicated expansions) -- the emitter hoists it to a temp variable holding
+the word-split array and PowerShell-splats it:
+
+```powershell
+& { $__bashsplat0 = @(if ([string]::IsNullOrEmpty($env:x)) { @() }
+                      else { @($env:x -split '\s+') }); cmd a @__bashsplat0 b }
+```
+
+The `& { ... }` wrapper keeps the temp assignment from leaking into a
+surrounding pipeline or and-or list. The `@(...)` around the `if` is required:
+assigning a bare `if (...) { @() }` collapses the empty branch to `$null`, and
+splatting `$null` injects one spurious empty argument. This applies to both the
+general fallback path (`EmitSimple`) and the mapped passthrough path
+(`EmitPassthrough`), via `IsPureUnquotedVarWord` / `EmitCommandWithSplatArgs`.
+
 ---
 
 ## 5. `EmitPipeline`

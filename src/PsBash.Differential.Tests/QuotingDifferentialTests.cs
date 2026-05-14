@@ -206,19 +206,16 @@ public class QuotingDifferentialTests
     /// Unquoted empty variable contributes no word (the argument is omitted).
     /// Axis 1: empty input variant.
     /// bash: x=; echo start $x end → "start end" (one space, $x omitted).
-    /// KNOWN BUG: ps-bash emits "start  end" (two spaces) because it passes an
-    /// empty-string argument instead of omitting the word. The emitter maps $x to
-    /// $env:x which evaluates to $null/empty in PS but is still passed as an arg.
-    /// Using GoldenAsync to document current output.
+    /// RC-7 fix: the emitter now routes a pure unquoted ordinary variable
+    /// argument through a word-splitting splat that yields @() when the
+    /// variable is empty, so PowerShell contributes no argument for $x.
+    /// Oracle-first (Directive 1): diffs ps-bash bytes against real bash.
     /// </summary>
     [SkippableFact]
     public async Task Differential_EmptyVar_UnquotedIsOmitted()
     {
-        // Directive 1 exception: known emitter gap — unquoted empty var is not omitted;
-        // ps-bash passes empty string through as an argument instead of eliding the word.
-        await AssertOracle.GoldenAsync(
+        await AssertOracle.EqualAsync(
             "x=; echo start $x end",
-            "Quoting_EmptyVar_UnquotedIsOmitted",
             timeout: TimeSpan.FromSeconds(15));
     }
 

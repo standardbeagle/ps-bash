@@ -476,14 +476,21 @@ function Set-BashDisplayProperty {
     # Normalizes BashText by stripping any trailing \n.
     # ToString() is now provided at the type level via Update-TypeData (module init),
     # so per-object ScriptMethod is no longer needed.
+    # REFACTOR-2 Phase 2: trailing-\n normalization delegates to the shared C#
+    # helper [PsBash.Cmdlets.BashRuntime]::NormalizeBashText.
     param([PSCustomObject]$Object)
-    if ($Object.BashText -and $Object.BashText.EndsWith("`n")) {
-        $Object.BashText = $Object.BashText.Substring(0, $Object.BashText.Length - 1)
+    if ($Object.BashText) {
+        $Object.BashText = [PsBash.Cmdlets.BashRuntime]::NormalizeBashText($Object.BashText)
     }
     $Object
 }
 
 function New-BashObject {
+    # REFACTOR-2 Phase 2: thin wrapper delegating to the shared AOT-safe C#
+    # helper [PsBash.Cmdlets.BashRuntime]::NewBashObject. The helper reproduces
+    # the exact contract: TextOutput fast path returns a plain string; the
+    # typed / NoTrailingNewline path returns a PSObject with PSTypeName +
+    # BashText (+ optional NoTrailingNewline / Command note properties).
     [CmdletBinding()]
     param(
         [Parameter(Mandatory)]
@@ -498,29 +505,8 @@ function New-BashObject {
         [string]$Command
     )
 
-    # Normalize: strip trailing \n — the worker serializer owns line endings
-    if ($BashText.EndsWith("`n")) {
-        $BashText = $BashText.Substring(0, $BashText.Length - 1)
-    }
-
-    # Fast path: plain text output → return string directly.
-    # Avoids PSCustomObject allocation for line-by-line text (the common case).
-    # NoTrailingNewline and non-TextOutput types use the slow path (PSCustomObject).
-    if ($TypeName -eq 'PsBash.TextOutput' -and -not $NoTrailingNewline) {
-        return [string]$BashText
-    }
-
-    $obj = [PSCustomObject]@{
-        PSTypeName = $TypeName
-        BashText   = $BashText
-    }
-    if ($NoTrailingNewline) {
-        $obj | Add-Member -NotePropertyName 'NoTrailingNewline' -NotePropertyValue $true
-    }
-    if ($Command) {
-        $obj | Add-Member -NotePropertyName Command -NotePropertyValue $Command
-    }
-    $obj
+    [PsBash.Cmdlets.BashRuntime]::NewBashObject(
+        $BashText, $TypeName, [bool]$NoTrailingNewline, $Command)
 }
 
 function Emit-BashLine {
@@ -529,20 +515,16 @@ function Emit-BashLine {
     # Sources (printf, echo -e, heredocs) call this for text output.
     # New-BashObject stays unchanged for typed objects (LsEntry, CatLine, PsEntry).
     # Accepts -Text parameter (direct call) or pipeline input (heredoc piping).
+    # REFACTOR-2 Phase 2: line-splitting delegates to the shared C# helper
+    # [PsBash.Cmdlets.BashRuntime]::EmitBashLines.
     param([string]$Text, [string]$Command)
     $pipelineInput = @($input)
     if (-not $Text -and $pipelineInput.Count -gt 0) {
         $Text = $pipelineInput -join "`n"
     }
     if (-not $Text) { return }
-    $hasTrailingNewline = $Text.EndsWith("`n")
-    $stripped = if ($hasTrailingNewline) { $Text.Substring(0, $Text.Length - 1) } else { $Text }
-    $lines = $stripped -split "`n"
-    $cmdSplat = if ($Command) { @{ Command = $Command } } else { @{} }
-    for ($li = 0; $li -lt $lines.Count; $li++) {
-        $isLast = ($li -eq $lines.Count - 1)
-        $noNl = ($isLast -and -not $hasTrailingNewline)
-        New-BashObject -BashText $lines[$li] @cmdSplat -NoTrailingNewline:$noNl
+    foreach ($obj in [PsBash.Cmdlets.BashRuntime]::EmitBashLines($Text, $Command)) {
+        $obj
     }
 }
 
@@ -574,6 +556,13 @@ function Resolve-BashGlob {
 # --- Arg Parser ---
 
 function ConvertFrom-BashArgs {
+    # REFACTOR-2 Phase 2: thin wrapper delegating to the shared AOT-safe C#
+    # helper [PsBash.Cmdlets.BashRuntime]::ConvertFromBashArgs. The helper
+    # reproduces the exact contract: -- ends flags, recognized long flags,
+    # bundled short flags, an unrecognized bundle char turns the whole token
+    # into an operand. The return shape is the same @{ Flags; Operands }
+    # hashtable callers already destructure (Flags is an ordinal
+    # Dictionary[string,bool]; Operands is a List[string]).
     [CmdletBinding()]
     [OutputType([hashtable])]
     param(
@@ -586,64 +575,20 @@ function ConvertFrom-BashArgs {
         [System.Collections.IDictionary]$FlagDefs
     )
 
-    # Function-scoped strict mode (REFACTOR-6): catches typos in caller flag
-    # tables and uninitialized locals in this parser without leaking strict
-    # semantics into the rest of the module.
-    Set-StrictMode -Version Latest
-
-    $flags = [System.Collections.Generic.Dictionary[string,bool]]::new(
-        [System.StringComparer]::Ordinal
-    )
-    $operands = [System.Collections.Generic.List[string]]::new()
-
-    foreach ($key in $FlagDefs.Keys) {
-        $flags[$key] = $false
-    }
-
-    $i = 0
-    while ($i -lt $Arguments.Count) {
-        $arg = $Arguments[$i]
-
-        if ($arg -eq '--') {
-            $i++
-            while ($i -lt $Arguments.Count) {
-                $operands.Add($Arguments[$i])
-                $i++
-            }
-            break
-        }
-
-        if ($arg.StartsWith('--') -and $arg.Length -gt 2) {
-            if ($flags.ContainsKey($arg)) {
-                $flags[$arg] = $true
-            } else {
-                $operands.Add($arg)
-            }
-        } elseif ($arg.StartsWith('-') -and $arg.Length -gt 1) {
-            foreach ($ch in $arg.Substring(1).ToCharArray()) {
-                $flag = "-$ch"
-                if ($flags.ContainsKey($flag)) {
-                    $flags[$flag] = $true
-                } else {
-                    $operands.Add($arg)
-                    break
-                }
-            }
-        } else {
-            $operands.Add($arg)
-        }
-        $i++
-    }
-
+    $parsed = [PsBash.Cmdlets.BashRuntime]::ConvertFromBashArgs($Arguments, $FlagDefs)
     @{
-        Flags    = $flags
-        Operands = $operands
+        Flags    = $parsed.Flags
+        Operands = $parsed.Operands
     }
 }
 
 # --- Escape Sequence Processing ---
 
 function Expand-EscapeSequences {
+    # REFACTOR-2 Phase 2: thin wrapper delegating to the shared AOT-safe C#
+    # helper [PsBash.Cmdlets.BashRuntime]::ExpandEscapeSequences. The helper
+    # reproduces the exact sentinel-based two-pass scheme (\\ -> NUL sentinel
+    # -> expand \n\t\r\a\b\f\v -> restore sentinel to literal backslash).
     [CmdletBinding()]
     [OutputType([string])]
     param(
@@ -652,21 +597,16 @@ function Expand-EscapeSequences {
         [string]$Text
     )
 
-    $Text = $Text -replace '\\\\', "`0ESCAPED_BACKSLASH`0"
-    $Text = $Text -replace '\\n', "`n"
-    $Text = $Text -replace '\\t', "`t"
-    $Text = $Text -replace '\\r', "`r"
-    $Text = $Text -replace '\\a', "`a"
-    $Text = $Text -replace '\\b', "`b"
-    $Text = $Text -replace '\\f', "`f"
-    $Text = $Text -replace '\\v', "`v"
-    $Text = $Text -replace "`0ESCAPED_BACKSLASH`0", '\'
-    $Text
+    [PsBash.Cmdlets.BashRuntime]::ExpandEscapeSequences($Text)
 }
 
 # --- Case-sensitive flag dictionary helper ---
 
 function New-FlagDefs {
+    # REFACTOR-2 Phase 2: thin wrapper delegating to the shared AOT-safe C#
+    # helper [PsBash.Cmdlets.BashRuntime]::NewFlagDefs, which builds the same
+    # ordinal Dictionary[string,string] from a flat flag/description entry list
+    # and throws on an odd-length list.
     [CmdletBinding()]
     [OutputType([System.Collections.Generic.Dictionary[string,string]])]
     param(
@@ -676,17 +616,7 @@ function New-FlagDefs {
         [string[]]$Entries
     )
 
-    # Function-scoped strict mode (REFACTOR-6): catches malformed flag-def
-    # entry lists (odd element count, uninitialized locals) at the source.
-    Set-StrictMode -Version Latest
-
-    $dict = [System.Collections.Generic.Dictionary[string,string]]::new(
-        [System.StringComparer]::Ordinal
-    )
-    for ($i = 0; $i -lt $Entries.Count; $i += 2) {
-        $dict[$Entries[$i]] = $Entries[$i + 1]
-    }
-    $dict
+    [PsBash.Cmdlets.BashRuntime]::NewFlagDefs($Entries)
 }
 
 # --- echo Command ---
@@ -1568,6 +1498,10 @@ function Invoke-BashRedirect {
 # --- BashText Extraction Helper ---
 
 function Get-BashText {
+    # REFACTOR-2 Phase 2: thin wrapper delegating to the shared AOT-safe C#
+    # helper [PsBash.Cmdlets.BashRuntime]::GetBashText: null -> '', string ->
+    # itself, an object exposing a BashText property -> that value, otherwise
+    # the object's ToString().
     [CmdletBinding()]
     [OutputType([string])]
     param(
@@ -1576,12 +1510,7 @@ function Get-BashText {
         $InputObject
     )
 
-    if ($null -eq $InputObject) { return '' }
-    if ($InputObject -is [string]) { return $InputObject }
-    if ($null -ne $InputObject.PSObject -and $null -ne $InputObject.PSObject.Properties['BashText']) {
-        return [string]$InputObject.BashText
-    }
-    return "$InputObject"
+    [PsBash.Cmdlets.BashRuntime]::GetBashText($InputObject)
 }
 
 # --- grep Command ---

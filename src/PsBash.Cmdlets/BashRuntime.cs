@@ -1,0 +1,284 @@
+using System.Management.Automation;
+using System.Text;
+
+namespace PsBash.Cmdlets;
+
+/// <summary>
+/// Shared AOT-safe runtime helpers extracted from <c>PsBash.psm1</c>
+/// (REFACTOR-2 Phase 2). Every leaf <c>Invoke-Bash*</c> function depends on
+/// this small surface; hosting it as C# static methods lets the migrated
+/// binary cmdlets call it directly, with NO C#-&gt;PowerShell callback.
+///
+/// Parity oracle: the original psm1 helper functions. The psm1 versions are
+/// kept as thin wrappers that delegate here (see PsBash.psm1) so the script
+/// surface is unchanged for callers and the differential test suite proves
+/// these implementations against the live runtime.
+///
+/// AOT safety: no <see cref="ScriptBlock"/> construction, no
+/// <c>Invoke-Expression</c>, no reflection on hot paths. The only PowerShell
+/// type touched is <see cref="PSObject"/> for the <see cref="GetBashText"/>
+/// duck-typed property probe, which is reflection-free.
+/// </summary>
+public static class BashRuntime
+{
+    /// <summary>
+    /// Strips a single trailing <c>\n</c> from BashText, matching the psm1
+    /// <c>New-BashObject</c> / <c>Set-BashDisplayProperty</c> normalization
+    /// (the worker serializer owns line endings).
+    /// </summary>
+    public static string NormalizeBashText(string text)
+    {
+        if (text.Length > 0 && text[^1] == '\n')
+        {
+            return text.Substring(0, text.Length - 1);
+        }
+        return text;
+    }
+
+    /// <summary>
+    /// Builds a BashObject, reproducing the psm1 <c>New-BashObject</c> contract:
+    /// <list type="bullet">
+    /// <item>Fast path — default <c>PsBash.TextOutput</c> type with no
+    /// <paramref name="noTrailingNewline"/> returns a bare <see cref="string"/>
+    /// (avoids the PSObject allocation for the common line-by-line case).</item>
+    /// <item>Slow path — a typed object or a no-trailing-newline marker returns
+    /// a <see cref="PSObject"/> carrying <c>PSTypeName</c>, <c>BashText</c>, and
+    /// optional <c>NoTrailingNewline</c> / <c>Command</c> note properties.</item>
+    /// </list>
+    /// Always normalizes a trailing <c>\n</c> off BashText first.
+    /// </summary>
+    public static object NewBashObject(
+        string bashText,
+        string typeName = "PsBash.TextOutput",
+        bool noTrailingNewline = false,
+        string? command = null)
+    {
+        bashText = NormalizeBashText(bashText);
+
+        if (typeName == "PsBash.TextOutput" && !noTrailingNewline)
+        {
+            return bashText;
+        }
+
+        var obj = new PSObject();
+        obj.TypeNames.Insert(0, typeName);
+        obj.Properties.Add(new PSNoteProperty("BashText", bashText));
+        if (noTrailingNewline)
+        {
+            obj.Properties.Add(new PSNoteProperty("NoTrailingNewline", true));
+        }
+        if (command != null)
+        {
+            obj.Properties.Add(new PSNoteProperty("Command", command));
+        }
+        return obj;
+    }
+
+    /// <summary>
+    /// Splits <paramref name="text"/> on <c>\n</c> and returns one BashObject
+    /// per line, matching the psm1 <c>Emit-BashLine</c> contract: bash stdout is
+    /// a byte stream and <c>\n</c> is a record boundary. The final line is
+    /// marked <c>NoTrailingNewline</c> when the source text had no trailing
+    /// newline. Empty input yields an empty sequence.
+    /// </summary>
+    public static IEnumerable<object> EmitBashLines(string? text, string? command = null)
+    {
+        if (string.IsNullOrEmpty(text))
+        {
+            yield break;
+        }
+
+        bool hasTrailingNewline = text![^1] == '\n';
+        string stripped = hasTrailingNewline
+            ? text.Substring(0, text.Length - 1)
+            : text;
+        string[] lines = stripped.Split('\n');
+
+        for (int i = 0; i < lines.Length; i++)
+        {
+            bool isLast = i == lines.Length - 1;
+            bool noNl = isLast && !hasTrailingNewline;
+            yield return NewBashObject(lines[i], "PsBash.TextOutput", noNl, command);
+        }
+    }
+
+    /// <summary>
+    /// Extracts the string payload of any pipeline object, matching the psm1
+    /// <c>Get-BashText</c>: <c>null</c> -&gt; empty, <see cref="string"/> -&gt;
+    /// itself, an object exposing a <c>BashText</c> property -&gt; that value,
+    /// otherwise the object's <c>ToString()</c>.
+    /// </summary>
+    public static string GetBashText(object? inputObject)
+    {
+        if (inputObject is null)
+        {
+            return string.Empty;
+        }
+        if (inputObject is string s)
+        {
+            return s;
+        }
+
+        var pso = inputObject as PSObject ?? PSObject.AsPSObject(inputObject);
+        var prop = pso.Properties["BashText"];
+        if (prop != null)
+        {
+            return prop.Value?.ToString() ?? string.Empty;
+        }
+
+        return inputObject.ToString() ?? string.Empty;
+    }
+
+    /// <summary>
+    /// Builds a case-sensitive (ordinal) flag-definition dictionary from a flat
+    /// <c>flag, description, flag, description, ...</c> entry list, matching the
+    /// psm1 <c>New-FlagDefs</c>. Throws on an odd-length entry list, surfacing a
+    /// malformed caller flag table at the source.
+    /// </summary>
+    public static Dictionary<string, string> NewFlagDefs(string[] entries)
+    {
+        if (entries.Length % 2 != 0)
+        {
+            throw new ArgumentException(
+                "New-FlagDefs entry list must have an even element count " +
+                "(flag, description pairs).",
+                nameof(entries));
+        }
+
+        var dict = new Dictionary<string, string>(StringComparer.Ordinal);
+        for (int i = 0; i < entries.Length; i += 2)
+        {
+            dict[entries[i]] = entries[i + 1];
+        }
+        return dict;
+    }
+
+    /// <summary>
+    /// Result of <see cref="ConvertFromBashArgs"/>: parsed boolean
+    /// <see cref="Flags"/> (ordinal-keyed) and the collected non-flag
+    /// <see cref="Operands"/>.
+    /// </summary>
+    public sealed class BashArgs
+    {
+        public Dictionary<string, bool> Flags { get; }
+        public List<string> Operands { get; }
+
+        public BashArgs(Dictionary<string, bool> flags, List<string> operands)
+        {
+            Flags = flags;
+            Operands = operands;
+        }
+    }
+
+    /// <summary>
+    /// Boolean flag parser, matching the psm1 <c>ConvertFrom-BashArgs</c>:
+    /// handles <c>--</c> (end of flags), recognized long flags
+    /// (<c>--word</c>), and bundled short flags (<c>-ab</c>). An unrecognized
+    /// bundle char makes the whole token an operand and stops scanning that
+    /// token, exactly as the psm1 version does. Every key in
+    /// <paramref name="flagDefs"/> is initialized to <c>false</c>.
+    /// </summary>
+    public static BashArgs ConvertFromBashArgs(
+        IEnumerable<string> arguments,
+        IDictionary<string, string> flagDefs)
+    {
+        var flags = new Dictionary<string, bool>(StringComparer.Ordinal);
+        var operands = new List<string>();
+
+        foreach (var key in flagDefs.Keys)
+        {
+            flags[key] = false;
+        }
+
+        var args = arguments as IList<string> ?? new List<string>(arguments);
+        int i = 0;
+        while (i < args.Count)
+        {
+            var arg = args[i];
+
+            if (arg == "--")
+            {
+                i++;
+                while (i < args.Count)
+                {
+                    operands.Add(args[i]);
+                    i++;
+                }
+                break;
+            }
+
+            if (arg.StartsWith("--", StringComparison.Ordinal) && arg.Length > 2)
+            {
+                if (flags.ContainsKey(arg))
+                {
+                    flags[arg] = true;
+                }
+                else
+                {
+                    operands.Add(arg);
+                }
+            }
+            else if (arg.StartsWith("-", StringComparison.Ordinal) && arg.Length > 1)
+            {
+                foreach (char ch in arg.Substring(1))
+                {
+                    var flag = "-" + ch;
+                    if (flags.ContainsKey(flag))
+                    {
+                        flags[flag] = true;
+                    }
+                    else
+                    {
+                        operands.Add(arg);
+                        break;
+                    }
+                }
+            }
+            else
+            {
+                operands.Add(arg);
+            }
+            i++;
+        }
+
+        return new BashArgs(flags, operands);
+    }
+
+    private const string EscapedBackslashSentinel = "\0ESCAPED_BACKSLASH\0";
+
+    /// <summary>
+    /// Converts C-style escape sequences in a string literal, matching the psm1
+    /// <c>Expand-EscapeSequences</c>: a sentinel-based two-pass scheme protects
+    /// <c>\\</c> so it becomes a literal backslash rather than seeding a later
+    /// expansion (<c>\\n</c> -&gt; literal <c>\n</c>, not a newline). Used by
+    /// <c>echo -e</c>, <c>printf</c>, and <c>tr</c>.
+    /// </summary>
+    public static string ExpandEscapeSequences(string text)
+    {
+        text = text.Replace("\\\\", EscapedBackslashSentinel);
+        text = text.Replace("\\n", "\n");
+        text = text.Replace("\\t", "\t");
+        text = text.Replace("\\r", "\r");
+        text = text.Replace("\\a", "\a");
+        text = text.Replace("\\b", "\b");
+        text = text.Replace("\\f", "\f");
+        text = text.Replace("\\v", "\v");
+        text = text.Replace(EscapedBackslashSentinel, "\\");
+        return text;
+    }
+
+    /// <summary>
+    /// Emits a bash-style error: sets <c>$global:LASTEXITCODE</c> and writes the
+    /// message to the appropriate sink. Because the error sink is a script-scoped
+    /// concern (the psm1 <c>$script:BashErrorMode</c> switch between the host
+    /// IPC stderr frame and <c>Write-Error</c>), the psm1 <c>Write-BashError</c>
+    /// wrapper stays the public entry point; this method only owns the pieces a
+    /// binary cmdlet can do without script scope. A migrated cmdlet calls
+    /// <see cref="FormatBashError"/> for the message text and sets the exit code
+    /// via the runspace variable itself.
+    /// </summary>
+    public static string FormatBashError(string command, string message)
+    {
+        return $"{command}: {message}";
+    }
+}
