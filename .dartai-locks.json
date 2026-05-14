@@ -1,3 +1,17 @@
 {
-  "claims": {}
+  "claims": {
+    "Xin0M76kAytE": {
+      "runner_instance_id": "DESKTOP-NPIOPS6-7606",
+      "runner_email": "andybrummer@standardbeagle.com",
+      "claimed_at": "2026-05-15T01:30:00Z",
+      "agent_id": "DESKTOP-NPIOPS6-7606",
+      "parent_loop_id": "a7ldZJBuAZNY",
+      "purpose": "Phase E8: PTY-10 reconcile vs REFACTOR-7 + correct interactive host lifetime",
+      "source_event": {
+        "loop_id": "a7ldZJBuAZNY",
+        "task_id": "Xin0M76kAytE",
+        "conversation_id": null
+      }
+    }
+  }
 }
