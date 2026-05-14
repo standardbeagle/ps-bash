@@ -27,8 +27,12 @@ internal static class RunspaceSetupExtractor
         var destPath = Path.Combine(moduleDir, FileName);
 
         var asm = typeof(RunspaceSetupExtractor).Assembly;
-        var asmTimestamp = File.Exists(asm.Location)
-            ? File.GetLastWriteTimeUtc(asm.Location)
+        // Assembly.Location is empty for single-file/AOT apps (IL3000). Use the
+        // running executable's path instead — it changes whenever the binary is
+        // rebuilt, which is the staleness signal this cache wants.
+        var hostPath = Environment.ProcessPath;
+        var asmTimestamp = !string.IsNullOrEmpty(hostPath) && File.Exists(hostPath)
+            ? File.GetLastWriteTimeUtc(hostPath)
             : DateTime.UtcNow;
 
         // Skip if already extracted and not stale (assembly is older than dest).

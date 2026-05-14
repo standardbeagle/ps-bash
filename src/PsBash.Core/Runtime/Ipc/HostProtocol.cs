@@ -403,7 +403,7 @@ public static class HostProtocol
     /// signal to restore line-editor state and repaint the prompt knowing
     /// command output (which went straight to the PTY slave) has fully landed.
     /// In <see cref="SessionMode.Framed"/> callers MUST NOT emit this sentinel:
-    /// pre-PTY-4 launchers' <see cref="ReadResponseAsync"/> would interpret it
+    /// pre-PTY-4 launchers' <see cref="ReadResponseAsync(System.IO.Stream, System.Action{string}, System.Threading.CancellationToken)"/> would interpret it
     /// as a stray data line.
     /// </summary>
     public static async Task WritePromptReadyAsync(Stream stream, CancellationToken ct = default)
@@ -446,7 +446,7 @@ public static class HostProtocol
     }
 
     /// <summary>
-    /// PTY-4 lifecycle-aware read. Like <see cref="ReadResponseAsync"/> but also
+    /// PTY-4 lifecycle-aware read. Like <see cref="ReadResponseAsync(System.IO.Stream, System.Action{string}, System.Threading.CancellationToken)"/> but also
     /// observes a trailing <see cref="PromptReadySentinel"/> if the host
     /// emits one (interactive sessions). Returns <c>(exitCode, promptReady)</c>
     /// where <c>promptReady</c> is true iff the sentinel was observed. Callers

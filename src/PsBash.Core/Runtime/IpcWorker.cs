@@ -24,7 +24,7 @@ public enum Lifetime
 
     /// <summary>
     /// Long-lived shared daemon on the canonical per-user endpoint
-    /// (<see cref="IpcTransportFactory.ResolveEndpoint()"/>). The worker connects
+    /// (<see cref="IpcTransportFactory.ResolveEndpoint(string)"/>). The worker connects
     /// to an existing healthy host if one answers, otherwise spawns one and
     /// leaves it running for subsequent launchers. The worker does NOT kill the
     /// host on dispose. This is the legacy daemon-reuse path; it still pays for

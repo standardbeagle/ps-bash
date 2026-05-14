@@ -67,7 +67,7 @@ public static class IpcTransportFactory
     /// REFACTOR-7: a <see cref="IpcWorker"/> running with
     /// <c>Lifetime.PerInvocation</c> spawns a private host on this endpoint
     /// instead of the shared per-user daemon socket
-    /// (<see cref="ResolveEndpoint()"/>). Because the endpoint name carries the
+    /// (<see cref="ResolveEndpoint(string)"/>). Because the endpoint name carries the
     /// launcher PID plus a random suffix, two concurrent launchers never collide
     /// and there is no obsolete-host / ownership classification to perform — the
     /// socket either does not exist (spawn fresh) or is the one this launcher
