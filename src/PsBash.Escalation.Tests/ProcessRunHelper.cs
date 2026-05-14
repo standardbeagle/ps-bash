@@ -12,14 +12,13 @@ internal static class ProcessRunHelper
 {
     public static readonly TimeSpan DefaultTimeout = TimeSpan.FromSeconds(30);
 
-    private static readonly string ProjectDir = Path.GetFullPath(
+    private static readonly string ShellProjectDir = Path.GetFullPath(
         Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "..",
             "src", "PsBash.Shell"));
 
-    // Mirror the configuration this test assembly was built with so `dotnet
-    // run --no-build` finds the matching launcher output. CI builds Release
-    // only; without an explicit -c argument `dotnet run` defaults to Debug
-    // and fails with exit 1 ("no Debug build of PsBash.Shell").
+    // Mirror the configuration this test assembly was built with so we find
+    // the matching launcher output. CI builds Release only; in dev local both
+    // configs may exist.
     private static readonly string Configuration =
         AppContext.BaseDirectory
             .Split(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar)
@@ -27,16 +26,36 @@ internal static class ProcessRunHelper
                               || p.Equals("Debug", StringComparison.OrdinalIgnoreCase))
         ?? "Debug";
 
+    // Resolve the ps-bash launcher binary path directly so each test spawn
+    // skips the 2-5s of `dotnet run --no-build` host startup. The legacy path
+    // wrapped every -c invocation in a fresh dotnet host, which intermittently
+    // overflowed the 30s test timeout on CI even for trivial scripts.
+    // Probe order: $Configuration/$TFM/ps-bash, then the alternate config as
+    // a fallback so local dev runs that have only Debug or only Release built
+    // both work without a rebuild.
+    private static readonly string LauncherPath = ResolveLauncherPath();
+
+    private static string ResolveLauncherPath()
+    {
+        var binName = OperatingSystem.IsWindows() ? "ps-bash.exe" : "ps-bash";
+        foreach (var config in new[] { Configuration, Configuration == "Release" ? "Debug" : "Release" })
+        {
+            var configDir = Path.Combine(ShellProjectDir, "bin", config);
+            if (!Directory.Exists(configDir)) continue;
+            foreach (var tfmDir in Directory.EnumerateDirectories(configDir))
+            {
+                var candidate = Path.Combine(tfmDir, binName);
+                if (File.Exists(candidate)) return candidate;
+            }
+        }
+        throw new InvalidOperationException(
+            $"ps-bash launcher not found under {Path.Combine(ShellProjectDir, "bin")}. " +
+            "Build PsBash.Shell before running escalation tests.");
+    }
+
     public static ProcessStartInfo BuildPsi(string[] arguments)
     {
-        var psi = new ProcessStartInfo { FileName = "dotnet" };
-        psi.ArgumentList.Add("run");
-        psi.ArgumentList.Add("--no-build");
-        psi.ArgumentList.Add("-c");
-        psi.ArgumentList.Add(Configuration);
-        psi.ArgumentList.Add("--project");
-        psi.ArgumentList.Add(ProjectDir);
-        psi.ArgumentList.Add("--");
+        var psi = new ProcessStartInfo { FileName = LauncherPath };
         foreach (var arg in arguments)
             psi.ArgumentList.Add(arg);
 
