@@ -700,7 +700,24 @@ public static class PsEmitter
 
     private static string EmitWhileRead(string varName, Command body)
     {
-        var bodyText = Emit(body);
+        // The `read` variable is the loop binding for this construct: register
+        // it as a loop var so the body emits it bare ($line, not $env:line) and
+        // RC-7 word-splitting does not splat it (a `read` var holds a single
+        // bound line, exactly like a for-loop variable). The bare $VAR is then
+        // string-replaced to $_ below.
+        var vars = _loopVars ??= new HashSet<string>();
+        bool added = vars.Add(varName);
+
+        string bodyText;
+        try
+        {
+            bodyText = Emit(body);
+        }
+        finally
+        {
+            if (added)
+                vars.Remove(varName);
+        }
         // Replace $env:VAR with $_ (exact match, not prefix of longer name)
         // Note: $_ in Regex.Replace is a special substitution; use $$ to produce literal $.
         bodyText = System.Text.RegularExpressions.Regex.Replace(
@@ -2025,34 +2042,36 @@ public static class PsEmitter
     }
 
     /// <summary>
-    /// True when <paramref name="name"/> is an ordinary shell variable (env var
-    /// or tracked loop variable) — i.e. not a bash special parameter such as
-    /// <c>?</c>, <c>@</c>, <c>*</c>, <c>#</c>, <c>$</c>, <c>!</c>, <c>-</c>,
-    /// <c>_</c>, a positional digit, or one of the recognized magic names.
-    /// These special parameters have their own dedicated expansions in
-    /// <see cref="EmitSimpleVar"/> and must not be word-split.
+    /// True when <paramref name="name"/> is a genuine <c>$env:</c>-backed
+    /// ordinary shell variable — i.e. <see cref="EmitSimpleVar"/> renders it as
+    /// <c>$env:NAME</c>. This deliberately EXCLUDES:
+    /// <list type="bullet">
+    ///   <item>tracked loop variables (a <c>for</c>/<c>while</c> binding holds a
+    ///   single already-bound value and the emitter emits it bare as
+    ///   <c>$i</c> — splatting it would both break that contract and is
+    ///   semantically a single value);</item>
+    ///   <item>bash special parameters (<c>?</c>, <c>@</c>, <c>*</c>, <c>#</c>,
+    ///   <c>$</c>, <c>!</c>, <c>-</c>, <c>_</c>, positional digits, and the
+    ///   recognized magic names) which have dedicated expansions;</item>
+    ///   <item>PowerShell-builtin-backed names (<c>HOME</c>, <c>null</c>,
+    ///   <c>true</c>, <c>false</c>, <c>PWD</c>, <c>LASTEXITCODE</c>) which the
+    ///   emitter keeps as bare <c>$NAME</c> references.</item>
+    /// </list>
+    /// Only a true <c>$env:</c>-backed variable can be word-split by RC-7: that
+    /// is the case the differential oracle
+    /// (<c>Differential_UnquotedVar_WordSplitsOnSpaces</c>,
+    /// <c>Differential_EmptyVar_UnquotedIsOmitted</c>) proves against real bash.
     /// </summary>
     private static bool IsOrdinaryVarName(string name)
     {
         if (name.Length == 0)
             return false;
 
-        if (_loopVars is not null && _loopVars.Contains(name))
-            return true;
-
-        switch (name)
-        {
-            case "?" or "@" or "*" or "#" or "$" or "!" or "-" or "_":
-            case "RANDOM" or "SECONDS" or "PPID":
-            case "BASH_VERSION" or "BASH_VERSINFO":
-                return false;
-        }
-
-        // Single-digit positional parameters ($0..$9).
-        if (name.Length == 1 && name[0] is >= '0' and <= '9')
-            return false;
-
-        return true;
+        // The single source of truth: a name is RC-7-splat-eligible iff
+        // EmitSimpleVar would render it as `$env:NAME`. Loop vars, special
+        // params, positional digits, and PS-builtin-backed names all take a
+        // different branch in EmitSimpleVar and must not be word-split.
+        return EmitSimpleVar(name).StartsWith("$env:", StringComparison.Ordinal);
     }
 
     /// <summary>

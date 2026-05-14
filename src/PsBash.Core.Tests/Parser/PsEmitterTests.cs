@@ -531,17 +531,32 @@ public class PsEmitterTests
     [Fact]
     public void Transpile_EchoFoo_EmitsEnvVar()
     {
+        // RC-7: a bare unquoted ordinary ($env:-backed) variable operand is
+        // word-split and elided-when-empty via a splat temp. This matches real
+        // bash — see Differential_UnquotedVar_WordSplitsOnSpaces and
+        // Differential_EmptyVar_UnquotedIsOmitted, the oracle for this shape.
         var result = PsEmitter.Transpile("echo $FOO");
 
-        Assert.Equal("Invoke-BashEcho $env:FOO", result);
+        Assert.Equal(
+            "& { $__bashsplat0 = @(if ([string]::IsNullOrEmpty($env:FOO)) " +
+            "{ @() } else { @($env:FOO -split '\\s+') }); " +
+            "Invoke-BashEcho @__bashsplat0 }",
+            result);
     }
 
     [Fact]
     public void Transpile_BracedVar_EmitsEnvVar()
     {
+        // RC-7: a suffix-less braced ordinary variable is an unquoted variable
+        // operand — word-split + elide-when-empty splat, same as $FOO. Oracle:
+        // Differential_UnquotedVar_WordSplitsOnSpaces.
         var result = PsEmitter.Transpile("echo ${PATH}");
 
-        Assert.Equal("Invoke-BashEcho $env:PATH", result);
+        Assert.Equal(
+            "& { $__bashsplat0 = @(if ([string]::IsNullOrEmpty($env:PATH)) " +
+            "{ @() } else { @($env:PATH -split '\\s+') }); " +
+            "Invoke-BashEcho @__bashsplat0 }",
+            result);
     }
 
     [Fact]
@@ -1055,10 +1070,14 @@ public class PsEmitterTests
     [Fact]
     public void Transpile_ForIn_SimilarVarNameNotClobbered()
     {
+        // $idx is an ordinary env var, $i is the loop binding. The loop-var
+        // substitution must not clobber $idx. With RC-7, $idx (env-backed) is
+        // routed through the word-split splat while $i (loop var) stays bare.
         var result = PsEmitter.Transpile("for i in 1 2; do echo $idx $i; done");
 
         Assert.Contains("$env:idx", result);
-        Assert.Contains("Invoke-BashEcho $env:idx $i", result);
+        Assert.Contains("Invoke-BashEcho @__bashsplat0 $i", result);
+        Assert.DoesNotContain("$env:i ", result);
     }
 
     [Fact]
@@ -1888,8 +1907,17 @@ public class PsEmitterTests
     [Fact]
     public void Transpile_ExportWithAndChain_WrapsInVoid()
     {
+        // The export assignment keeps its [void](...) wrap; the `echo $FOO`
+        // operand goes through the RC-7 word-split splat (bare unquoted env
+        // var). The splat command is wrapped in $(& { ... }) so it stays a
+        // single and-or-list element.
         var result = PsEmitter.Transpile("export FOO=bar && echo $FOO");
-        Assert.Equal("[void]($env:FOO = \"bar\") && Invoke-BashEcho $env:FOO", result);
+        Assert.Equal(
+            "[void]($env:FOO = \"bar\") && $(& { $__bashsplat0 = " +
+            "@(if ([string]::IsNullOrEmpty($env:FOO)) { @() } " +
+            "else { @($env:FOO -split '\\s+') }); " +
+            "Invoke-BashEcho @__bashsplat0 })",
+            result);
     }
 
     [Fact]

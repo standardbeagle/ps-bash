@@ -3,7 +3,7 @@
   "iterations": 15,
   "spawns": 11,
   "started_at": "2026-05-12T20:33:00Z",
-  "last_iteration_at": "2026-05-14T17:45:00Z",
+  "last_iteration_at": "2026-05-14T18:30:00Z",
   "last_subagent": "task-executor",
   "loop_task_id": "AEACP6UqDUBr",
   "dartboard": "Personal/ps-bash",
@@ -533,6 +533,29 @@
         "docs/specs/runtime-functions.md"
       ],
       "notes": "Plan adjustment: the common-parameter audit in the task spec said ls's flags 'don't obviously collide' -- WRONG, exactly the Phase 1c lesson. Parity tests caught three collisions: -a/-A prefix-match the cmdlet's own -Arguments parameter, -d collides with -Debug, -p collides with -ProgressAction/-PipelineVariable. Fixed by declaring A/D/P as explicit SwitchParameters with bundled-flag recovery (one switch binds both -a and -A since PS param names are case-insensitive; behaviorally complete because System.IO never enumerates ./..). Pre-existing failures NOT from this change, verified via stash+revert baseline: 20 PsBash.Core.Tests (emitter splat-emission), 6 PsBash.Host.Tests SdkWorker, 1 Differential pipefail -- all fail identically on clean main, in-flight emitter refactor from another task."
+    },
+    {
+      "task_id": "mk8Agrzg3AHN",
+      "iteration": 5,
+      "status": "completed",
+      "started_at": "2026-05-14T18:00:00Z",
+      "completed_at": "2026-05-14T18:30:00Z",
+      "phase_completed": "phase-9",
+      "failed_phase": null,
+      "files_changed": 3,
+      "tests_added": 0,
+      "plan_adjustments": 1,
+      "completion_summary": "RC-7-fix: narrowed RC-7 splat emission. IsOrdinaryVarName now delegates to EmitSimpleVar (splat-eligible iff it renders $env:NAME) so loop vars, PS-builtin-backed names ($HOME/$null) and local vars are excluded. EmitWhileRead registers the read var as a loop var so it emits bare and is excluded from splat. 16 regressed Core.Tests emitter tests + 4 BashTranspilerTests integration regressions fixed; 4 emitter + 4 transpiler test expectations updated for genuine $env:-backed vars (category-b, oracle-justified). RC-7 6 emitter tests + 3 Differential RC-7 oracle tests stay green.",
+      "failure_reason": null,
+      "fix_task_created": false,
+      "fix_task_id": null,
+      "loop_task_id": "IaiAaDTVqJY6",
+      "files": [
+        "src/PsBash.Transpiler/Parser/PsEmitter.cs",
+        "src/PsBash.Core.Tests/Parser/PsEmitterTests.cs",
+        "src/PsBash.Core.Tests/Transpiler/BashTranspilerTests.cs"
+      ],
+      "notes": "Plan adjustment: task hypothesis expected only loop-var exclusion (category a). Found 8 of 20 failures are category-b: genuine $env:-backed bare unquoted var operands (echo $FOO etc.) where the new splat IS correct bash word-splitting -- proven by Differential_UnquotedVar_WordSplitsOnSpaces / Differential_EmptyVar_UnquotedIsOmitted oracle tests. Updated those test expectations rather than narrowing the splat away from them. Also found 4 additional regressions in BashTranspilerTests (integration layer) not enumerated in the task spec."
     }
   ],
   "interrupted_at": null,

@@ -87,8 +87,15 @@ public class BashTranspilerTests
     [Fact]
     public void DevNullWithEnvVar_TransformsBoth()
     {
+        // RC-7: bare unquoted $FOO operand → word-split splat (oracle:
+        // Differential_UnquotedVar_WordSplitsOnSpaces). The 2>$null redirect
+        // is appended after the splat command wrapper.
         var result = BashTranspiler.Transpile("echo $FOO 2> /dev/null");
-        Assert.Equal("Invoke-BashEcho $env:FOO 2>$null", result);
+        Assert.Equal(
+            "& { $__bashsplat0 = @(if ([string]::IsNullOrEmpty($env:FOO)) " +
+            "{ @() } else { @($env:FOO -split '\\s+') }); " +
+            "Invoke-BashEcho @__bashsplat0 } 2>$null",
+            result);
     }
 
     [Fact]
@@ -108,8 +115,10 @@ public class BashTranspilerTests
     [Fact]
     public void FileTestWithVar_TransformsBoth()
     {
+        // RC-7: the `echo $MSG` operand is a bare unquoted env var → word-split
+        // splat, wrapped in $(& { ... }) as a single and-or-list element.
         var result = BashTranspiler.Transpile("[ -f /etc/config ] && echo $MSG");
-        Assert.Equal("$(if ((Test-Path \"/etc/config\" -PathType Leaf)) { $global:LASTEXITCODE = 0 } else { $global:LASTEXITCODE = 1; Write-Error '' -ErrorAction SilentlyContinue }) && Invoke-BashEcho $env:MSG", result);
+        Assert.Equal("$(if ((Test-Path \"/etc/config\" -PathType Leaf)) { $global:LASTEXITCODE = 0 } else { $global:LASTEXITCODE = 1; Write-Error '' -ErrorAction SilentlyContinue }) && $(& { $__bashsplat0 = @(if ([string]::IsNullOrEmpty($env:MSG)) { @() } else { @($env:MSG -split '\\s+') }); Invoke-BashEcho @__bashsplat0 })", result);
     }
 
     [Fact]
@@ -189,8 +198,15 @@ public class BashTranspilerTests
     [Fact]
     public void ExportWithAnd_WrapsInVoid()
     {
+        // RC-7: `echo $FOO` operand → word-split splat, wrapped in $(& { ... })
+        // as a single and-or-list element after the [void] export assignment.
         var result = BashTranspiler.Transpile("export FOO=\"bar\" && echo $FOO");
-        Assert.Equal("[void]($env:FOO = \"bar\") && Invoke-BashEcho $env:FOO", result);
+        Assert.Equal(
+            "[void]($env:FOO = \"bar\") && $(& { $__bashsplat0 = " +
+            "@(if ([string]::IsNullOrEmpty($env:FOO)) { @() } " +
+            "else { @($env:FOO -split '\\s+') }); " +
+            "Invoke-BashEcho @__bashsplat0 })",
+            result);
     }
 
     [Fact]
@@ -321,7 +337,13 @@ public class BashTranspilerTests
         // reference. The variable expansion is therefore deferred to pwsh
         // runtime, not to a runtime eval cmdlet.
         var result = BashTranspiler.Transpile("eval 'echo ${USER}'");
-        Assert.Equal("Invoke-BashEcho $env:USER", result);
+        // RC-7: the inlined `echo ${USER}` has a bare unquoted env-var operand
+        // → word-split splat (oracle: Differential_UnquotedVar_WordSplitsOnSpaces).
+        Assert.Equal(
+            "& { $__bashsplat0 = @(if ([string]::IsNullOrEmpty($env:USER)) " +
+            "{ @() } else { @($env:USER -split '\\s+') }); " +
+            "Invoke-BashEcho @__bashsplat0 }",
+            result);
     }
 
     // Static nested eval: the outer body is fully static, so reconstruction
