@@ -114,10 +114,10 @@ public static class PwshTestFixture
         //    - Import-Module on the bare .psm1 (hangs the in-process runspace
         //      because module-dependency resolution still kicks in for cmdlet
         //      imports referenced by the script).
-        //    The .psm1 calls `Set-StrictMode -Version Latest` at line 3 which would
-        //    leak into the global scope; we explicitly turn it off again afterward
-        //    so the runtime's `if ($global:__BashTrapEXIT)` guards in
-        //    InvokeBashEvalCommand don't blow up under strict mode.
+        //    The .psm1 no longer sets `Set-StrictMode -Version Latest` at file
+        //    scope (REFACTOR-6); strict mode is opted into per-function only.
+        //    Running the psm1 body as a script therefore does not leak strict
+        //    semantics into the global scope.
         var psm1Path = Path.Combine(baseDir, "PsBash.psm1");
         if (File.Exists(psm1Path))
         {

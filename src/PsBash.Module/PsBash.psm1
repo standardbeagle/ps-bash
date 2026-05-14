@@ -1,8 +1,22 @@
 #Requires -Version 7.0
 
-Set-StrictMode -Version Latest
+# NOTE: StrictMode is intentionally NOT set at file scope (REFACTOR-6).
+# File-scope `Set-StrictMode -Version Latest` is hazardous in a ~98-function
+# library module:
+#   1. Forward-reference traps fire at first CALL, not at definition
+#      (cf. the Invoke-BashPwd $global:__PsBashCwd crash, commit 3378227).
+#   2. A StrictMode trip during a function-body parse can silently abort the
+#      rest of the parse pass, leaving later functions unregistered — the
+#      leading hypothesis for the RC-3a partial-load gap.
+#   3. Many runtime helpers legitimately index possibly-missing dictionary
+#      keys or past-end array slots; under strict mode those throw.
+# Instead, StrictMode is opted into per-function only where it catches real
+# defects — currently the arg-parsing helpers ConvertFrom-BashArgs and
+# New-FlagDefs, where strict mode catches typos in flag-definition tables.
+# The ModulePartialLoadTests CI guard asserts the full advertised surface
+# (FunctionsToExport / AliasesToExport) is Get-Command-resolvable.
 
-# Global state initialized here so strict-mode code can access these variables
+# Global state initialized here so bash functions can access these variables
 # before any bash function runs. Positional params are cleared by `set --` and
 # saved/restored by every emitted bash function that references $1..$9 / $@.
 if (-not (Get-Variable -Name BashPositional -Scope global -ErrorAction SilentlyContinue)) {
@@ -555,6 +569,11 @@ function ConvertFrom-BashArgs {
         [System.Collections.IDictionary]$FlagDefs
     )
 
+    # Function-scoped strict mode (REFACTOR-6): catches typos in caller flag
+    # tables and uninitialized locals in this parser without leaking strict
+    # semantics into the rest of the module.
+    Set-StrictMode -Version Latest
+
     $flags = [System.Collections.Generic.Dictionary[string,bool]]::new(
         [System.StringComparer]::Ordinal
     )
@@ -639,6 +658,10 @@ function New-FlagDefs {
         [AllowEmptyCollection()]
         [string[]]$Entries
     )
+
+    # Function-scoped strict mode (REFACTOR-6): catches malformed flag-def
+    # entry lists (odd element count, uninitialized locals) at the source.
+    Set-StrictMode -Version Latest
 
     $dict = [System.Collections.Generic.Dictionary[string,string]]::new(
         [System.StringComparer]::Ordinal

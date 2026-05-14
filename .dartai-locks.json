@@ -1,17 +1,3 @@
 {
-  "claims": {
-    "HSd7a1lT8PZC": {
-      "runner_instance_id": "DESKTOP-NPIOPS6-7606",
-      "runner_email": "andybrummer@standardbeagle.com",
-      "claimed_at": "2026-05-13T21:15:00Z",
-      "agent_id": "DESKTOP-NPIOPS6-7606",
-      "parent_loop_id": "dqjNTUoPZjCa",
-      "purpose": "REFACTOR-6 Wave 1b: psm1 Set-StrictMode per-function scope",
-      "source_event": {
-        "loop_id": "dqjNTUoPZjCa",
-        "task_id": "HSd7a1lT8PZC",
-        "conversation_id": null
-      }
-    }
-  }
+  "claims": {}
 }

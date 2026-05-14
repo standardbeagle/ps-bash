@@ -1,9 +1,9 @@
 {
   "status": "paused",
-  "iterations": 6,
-  "spawns": 6,
+  "iterations": 7,
+  "spawns": 7,
   "started_at": "2026-05-12T20:33:00Z",
-  "last_iteration_at": "2026-05-13T20:55:00Z",
+  "last_iteration_at": "2026-05-14T04:39:40Z",
   "last_subagent": "task-executor",
   "loop_task_id": "AEACP6UqDUBr",
   "dartboard": "Personal/ps-bash",
@@ -23,7 +23,7 @@
       "files_changed": 5,
       "tests_added": 0,
       "plan_adjustments": 1,
-      "completion_summary": "PTY-0 spike confirmed PowerShell SDK still blocks AOT on .NET 10 — recommendation: keep launcher/host split. Probe done on pty-aot-probe branch (not merged).",
+      "completion_summary": "PTY-0 spike confirmed PowerShell SDK still blocks AOT on .NET 10 \u2014 recommendation: keep launcher/host split. Probe done on pty-aot-probe branch (not merged).",
       "failure_reason": null,
       "fix_task_created": false,
       "fix_task_id": null,
@@ -52,7 +52,7 @@
         "src/PsBash.Shell.Tests/Pty/PtyAllocationTests.cs",
         "docs/specs/pty.md"
       ],
-      "notes": "130 pre-existing failures in PsBash.Shell.Tests verified to predate PTY-1 (baseline confirmed by removing Pty/ directory — identical 130 failures). Environment-specific (.NET 10 RC2 SDK abort signals on WSL2). NOT a PTY-1 regression. Escalation candidate as separate environment-stability task. Plan adjustments: (1) Resize-during-AllocateAsync error path refactored to single ownership boundary (slaveFd tracked, no double-close on master), (2) ConPtyAdapter unused SafeHandle field removed during self-review."
+      "notes": "130 pre-existing failures in PsBash.Shell.Tests verified to predate PTY-1 (baseline confirmed by removing Pty/ directory \u2014 identical 130 failures). Environment-specific (.NET 10 RC2 SDK abort signals on WSL2). NOT a PTY-1 regression. Escalation candidate as separate environment-stability task. Plan adjustments: (1) Resize-during-AllocateAsync error path refactored to single ownership boundary (slaveFd tracked, no double-close on master), (2) ConPtyAdapter unused SafeHandle field removed during self-review."
     },
     {
       "task_id": "YWAqeWioyuyW",
@@ -82,7 +82,7 @@
         "src/PsBash.Host/Program.cs",
         "src/PsBash.Shell.Tests/Pty/PtySpawnTests.cs"
       ],
-      "notes": "Prior session (interrupted 2026-05-12T22:29:23Z) had drafted PtySpawner.cs + PosixPtySpawner.cs + WindowsPtySpawner.cs + PtySpawnTests.cs (~1018 LOC untracked) referencing a nonexistent IPty.SlaveName. Resume: (1) added SlaveName to IPty interface + UnixPtyAdapter (stores ptsname output) + ConPtyAdapter (returns null), (2) wired host's --pty-probe mode in PsBash.Host/Program.cs (writes PSBASH-PTY-PROBE: marker), (3) added RunHostUnderPtyAsync in PsBash.Shell/Program.cs inside the interactive branch (PtyAllocator → PtySpawner.Spawn → bidirectional stream pump), (4) added 2 QA-rubric negative tests (Directive 7) for arg-validation and ENOENT propagation. PTY-3 still owes raw-mode stdin / SIGWINCH forwarding / Ctrl-C signal injection. 130 SIGABRT failures in PsBash.Shell.Tests are the pre-existing baseline (per resume directive) — verified zero new failures attributable to PTY-2. Plan adjustment: gated the PTY interactive path behind PSBASH_PTY=1 env var so legacy inherited-stdio path remains default until PTY-3 lands."
+      "notes": "Prior session (interrupted 2026-05-12T22:29:23Z) had drafted PtySpawner.cs + PosixPtySpawner.cs + WindowsPtySpawner.cs + PtySpawnTests.cs (~1018 LOC untracked) referencing a nonexistent IPty.SlaveName. Resume: (1) added SlaveName to IPty interface + UnixPtyAdapter (stores ptsname output) + ConPtyAdapter (returns null), (2) wired host's --pty-probe mode in PsBash.Host/Program.cs (writes PSBASH-PTY-PROBE: marker), (3) added RunHostUnderPtyAsync in PsBash.Shell/Program.cs inside the interactive branch (PtyAllocator \u2192 PtySpawner.Spawn \u2192 bidirectional stream pump), (4) added 2 QA-rubric negative tests (Directive 7) for arg-validation and ENOENT propagation. PTY-3 still owes raw-mode stdin / SIGWINCH forwarding / Ctrl-C signal injection. 130 SIGABRT failures in PsBash.Shell.Tests are the pre-existing baseline (per resume directive) \u2014 verified zero new failures attributable to PTY-2. Plan adjustment: gated the PTY interactive path behind PSBASH_PTY=1 env var so legacy inherited-stdio path remains default until PTY-3 lands."
     },
     {
       "task_id": "BhewFRJjyq9J",
@@ -106,7 +106,7 @@
         "src/PsBash.Shell.Tests/PsBash.Shell.Tests.csproj",
         "docs/specs/pty.md"
       ],
-      "notes": "Plan adjustments: (1) Spec said 'Mode state machine in InteractiveShell' but InteractiveShell lives in host and owns the line editor; the mode toggle that PTY-3 needs is the launcher's stdio mode (raw while host is running). Implemented around the launcher's PTY pump, documented in docs/specs/pty.md §7.7. (2) Added UnhandledException hook alongside ProcessExit to cover the crash-recovery scenario the spec called out explicitly. (3) Deferred items documented: SIGWINCH forwarding (genuine follow-on); Ctrl-C signal injection (not needed — PTY slave is host's controlling tty, kernel routes via line discipline). Test invocation: ./scripts/test.sh --filter \"FullyQualifiedName~TerminalModeTests\" — 6 PASS / 2 SKIP-Windows. Tests csproj gained AllowUnsafeBlocks=true for stackalloc+fixed in termios probe. Source-text regression tests guard Launcher_RunHostUnderPtyAsync wrapping and PlatformNotSupported fallback (Directive 13: known-bad memory). 130 pre-existing SIGABRT failures in PsBash.Shell.Tests confirmed unchanged via baseline diff."
+      "notes": "Plan adjustments: (1) Spec said 'Mode state machine in InteractiveShell' but InteractiveShell lives in host and owns the line editor; the mode toggle that PTY-3 needs is the launcher's stdio mode (raw while host is running). Implemented around the launcher's PTY pump, documented in docs/specs/pty.md \u00a77.7. (2) Added UnhandledException hook alongside ProcessExit to cover the crash-recovery scenario the spec called out explicitly. (3) Deferred items documented: SIGWINCH forwarding (genuine follow-on); Ctrl-C signal injection (not needed \u2014 PTY slave is host's controlling tty, kernel routes via line discipline). Test invocation: ./scripts/test.sh --filter \"FullyQualifiedName~TerminalModeTests\" \u2014 6 PASS / 2 SKIP-Windows. Tests csproj gained AllowUnsafeBlocks=true for stackalloc+fixed in termios probe. Source-text regression tests guard Launcher_RunHostUnderPtyAsync wrapping and PlatformNotSupported fallback (Directive 13: known-bad memory). 130 pre-existing SIGABRT failures in PsBash.Shell.Tests confirmed unchanged via baseline diff."
     },
     {
       "task_id": "MkOiQv2csxgh",
@@ -119,7 +119,7 @@
       "files_changed": 5,
       "tests_added": 14,
       "plan_adjustments": 2,
-      "completion_summary": "PTY-4 decouple host stdout/stderr from IPC framing in interactive mode: SessionMode enum {Framed=0, Interactive=1} added to Mode.Command/Stdin/Script; HostProtocol gained optional SESSION:Interactive header (absent header decodes to Framed for byte-perfect back-compat); PromptReadySentinel <<<PROMPT-READY>>> + WritePromptReadyAsync + ReadResponseWithLifecycleAsync lifecycle-aware reader. Connection.HandleAsync routes outputSink=null when SessionMode==Interactive — SdkWorker's deliver lambda falls back to Console.Write (PTY slave), and ExitTrackingHostUI's forwarder uses the same lambda so Out-Default/Write-Host format-buffer rows also land on Console.Out. Single bytes destination per mode (spec Risk section addressed).",
+      "completion_summary": "PTY-4 decouple host stdout/stderr from IPC framing in interactive mode: SessionMode enum {Framed=0, Interactive=1} added to Mode.Command/Stdin/Script; HostProtocol gained optional SESSION:Interactive header (absent header decodes to Framed for byte-perfect back-compat); PromptReadySentinel <<<PROMPT-READY>>> + WritePromptReadyAsync + ReadResponseWithLifecycleAsync lifecycle-aware reader. Connection.HandleAsync routes outputSink=null when SessionMode==Interactive \u2014 SdkWorker's deliver lambda falls back to Console.Write (PTY slave), and ExitTrackingHostUI's forwarder uses the same lambda so Out-Default/Write-Host format-buffer rows also land on Console.Out. Single bytes destination per mode (spec Risk section addressed).",
       "failure_reason": null,
       "fix_task_created": false,
       "fix_task_id": null,
@@ -132,7 +132,7 @@
         "src/PsBash.Core.Tests/Runtime/Ipc/HostProtocolTests.cs",
         "src/PsBash.Host.Tests/Server/HostServerTests.cs"
       ],
-      "notes": "Resume from prior subagent that died on internal API error mid-phase:implementing. Prior session had drafted Mode.cs SessionMode enum, HostProtocol AppendSessionHeader/ReadBodyAndSessionAsync, Connection sessionMode switch + outputSink routing, and 12 new HostProtocolTests covering wire format, round-trip, PROMPT-READY lifecycle, legacy back-compat. Resume work: (1) Validated all 4 modified files were complete (Script frame correctly handles SESSION header in ReadScriptAsync). (2) Added 2 host-side integration tests — InteractiveSession_OutputRoutesToConsole_NotIpc proves IPC data lines=0, exit=0, promptReady=true, and Console.Out captures 'pty4-token' bytes (routing switch is functional, not just silenced); FramedSession_StillStreamsOutputThroughIpc_NoPromptReady pins back-compat. Verification (this turn): HostProtocolTests 32/32 PASS (180ms); HostServerTests 7/7 PASS (12s including new PTY-4 tests); PsBash.Core.Tests 690/690 PASS; PsBash.Host.Tests 45/48 PASS (3 SdkWorker failures are pre-existing baseline, confirmed via git stash diff vs bc5d65e — InvokeBashLsLong, CdThenPwd, QueryAsync_PreservesCallerOutputCallback; all 3 fail identically without PTY-4 changes); ps-bash.sln build succeeds (0 errors). Plan adjustments: (1) Resume directive #7 (RunHostUnderPtyAsync requests SessionMode.Interactive) — deferred: RunHostUnderPtyAsync spawns --interactive REPL under PTY and pumps bytes directly without speaking IPC, and IpcWorker doesn't spawn under PTY today. Wire/Connection/SdkWorker contract for SessionMode.Interactive is fully in place and proven by new integration tests; future task wires it at the four `new Mode.Command(...)` / `new Mode.Stdin(...)` construction sites in IpcWorker.cs when IpcWorker starts spawning hosts under PTY. (2) PsBash.Shell.Tests baseline ~130 SIGABRT failures not re-run per resume directive (environment-specific WSL2/.NET 10 RC2). QA rubric Directive 1 (oracle-first) — PTY-4 is byte-protocol layer below shell semantics, no bash oracle exists; differential tests rely on wire-format and round-trip in HostProtocolTests. QA Directive 7 (negative tests) — covered by ReadRequest_RejectsUnknownSessionValue + ReadRequest_LegacyWireFormat_NoSessionHeader_DefaultsToFramed."
+      "notes": "Resume from prior subagent that died on internal API error mid-phase:implementing. Prior session had drafted Mode.cs SessionMode enum, HostProtocol AppendSessionHeader/ReadBodyAndSessionAsync, Connection sessionMode switch + outputSink routing, and 12 new HostProtocolTests covering wire format, round-trip, PROMPT-READY lifecycle, legacy back-compat. Resume work: (1) Validated all 4 modified files were complete (Script frame correctly handles SESSION header in ReadScriptAsync). (2) Added 2 host-side integration tests \u2014 InteractiveSession_OutputRoutesToConsole_NotIpc proves IPC data lines=0, exit=0, promptReady=true, and Console.Out captures 'pty4-token' bytes (routing switch is functional, not just silenced); FramedSession_StillStreamsOutputThroughIpc_NoPromptReady pins back-compat. Verification (this turn): HostProtocolTests 32/32 PASS (180ms); HostServerTests 7/7 PASS (12s including new PTY-4 tests); PsBash.Core.Tests 690/690 PASS; PsBash.Host.Tests 45/48 PASS (3 SdkWorker failures are pre-existing baseline, confirmed via git stash diff vs bc5d65e \u2014 InvokeBashLsLong, CdThenPwd, QueryAsync_PreservesCallerOutputCallback; all 3 fail identically without PTY-4 changes); ps-bash.sln build succeeds (0 errors). Plan adjustments: (1) Resume directive #7 (RunHostUnderPtyAsync requests SessionMode.Interactive) \u2014 deferred: RunHostUnderPtyAsync spawns --interactive REPL under PTY and pumps bytes directly without speaking IPC, and IpcWorker doesn't spawn under PTY today. Wire/Connection/SdkWorker contract for SessionMode.Interactive is fully in place and proven by new integration tests; future task wires it at the four `new Mode.Command(...)` / `new Mode.Stdin(...)` construction sites in IpcWorker.cs when IpcWorker starts spawning hosts under PTY. (2) PsBash.Shell.Tests baseline ~130 SIGABRT failures not re-run per resume directive (environment-specific WSL2/.NET 10 RC2). QA rubric Directive 1 (oracle-first) \u2014 PTY-4 is byte-protocol layer below shell semantics, no bash oracle exists; differential tests rely on wire-format and round-trip in HostProtocolTests. QA Directive 7 (negative tests) \u2014 covered by ReadRequest_RejectsUnknownSessionValue + ReadRequest_LegacyWireFormat_NoSessionHeader_DefaultsToFramed."
     },
     {
       "task_id": "ODVeJZ6IWUvU",
@@ -145,7 +145,7 @@
       "files_changed": 5,
       "tests_added": 4,
       "plan_adjustments": 1,
-      "completion_summary": "REFACTOR-1: Extracted the SdkRunspace.Create embedded PowerShell probe string into Resources/SdkRunspaceSetup.ps1 (embedded resource in PsBash.Host). New RunspaceSetupExtractor extracts it into the ps-bash/module-{version} dir alongside psd1/psm1/Format.ps1xml with assembly-timestamp cache invalidation. SdkRunspace.Create now sets parameters via SessionStateProxy.SetVariable and dot-sources the file with ps.AddScript(\". $PsBashRunspaceSetupPath\") — eliminating the C#-verbatim -> PowerShell-single-quote -> Path.Replace escaping chain that caused the RC-3 and apostrophe-psd1 regressions. Build-time syntax-check test SdkRunspaceSetupScriptTests uses System.Management.Automation.Language.Parser.ParseInput so embedded-script syntax errors fail the build.",
+      "completion_summary": "REFACTOR-1: Extracted the SdkRunspace.Create embedded PowerShell probe string into Resources/SdkRunspaceSetup.ps1 (embedded resource in PsBash.Host). New RunspaceSetupExtractor extracts it into the ps-bash/module-{version} dir alongside psd1/psm1/Format.ps1xml with assembly-timestamp cache invalidation. SdkRunspace.Create now sets parameters via SessionStateProxy.SetVariable and dot-sources the file with ps.AddScript(\". $PsBashRunspaceSetupPath\") \u2014 eliminating the C#-verbatim -> PowerShell-single-quote -> Path.Replace escaping chain that caused the RC-3 and apostrophe-psd1 regressions. Build-time syntax-check test SdkRunspaceSetupScriptTests uses System.Management.Automation.Language.Parser.ParseInput so embedded-script syntax errors fail the build.",
       "failure_reason": null,
       "fix_task_created": false,
       "fix_task_id": null,
@@ -156,7 +156,24 @@
         "src/PsBash.Host/PsBash.Host.csproj",
         "src/PsBash.Host.Tests/Runtime/SdkRunspaceSetupScriptTests.cs"
       ],
-      "notes": "Plan adjustment (1): The task description envisioned the .ps1 also dot-sourcing PsBash.psm1 with the Cmdlets path + module dir as parameters. Initial implementation dot-sourced psm1 from inside the setup .ps1, but PowerShell dot-source-of-dot-source semantics dropped the psm1 functions into the setup script's local scope — 15 SdkWorker tests failed with exit 127 (Invoke-Bash* not found). Corrected scope: the setup .ps1 now handles only the PsBash.Cmdlets.dll probe (which is the actual C#-string that caused the escaping-bug history); SdkRunspace.Create keeps the existing separate ps.AddScript(psm1Content) call that already reads psm1 from a file (not a C# string literal — never an escaping-bug surface). The .ps1 also gained an optional $PsBashCmdletsDllPath session-state override for a future explicit-path fast path. Verification (this turn): Host.Tests baseline (git stash, no changes) = 44 passed / 4 failed; Host.Tests with changes = 48 passed / SAME 4 failed (GracefulShutdownTests.ShutdownWithInflightRequest_DrainsBeforeExiting, SdkWorkerTests.QueryAsync_PreservesCallerOutputCallback, SdkWorkerTests.ExecuteAsync_CdThenPwd_CrossCallStatePreserved, SdkWorkerTests.ExecuteAsync_InvokeBashLsLong_EmitsBashTextNotPsObjectSerialization) — identical failing set, zero regressions, +4 new passing (the syntax-check tests). The 4 failures are pre-existing on main (CI Build workflow Unit-tests job already red, run 25837584492). dotnet build PsBash.Host + PsBash.Host.Tests: 0 warnings / 0 errors. dotnet format --verify-no-changes: clean. SdkRunspaceSetupScriptTests: 4/4 PASS (76ms). Full-suite baseline diff was attempted but test.sh timed out on the e2e Differential/Shell process-spawn projects (exit 124) in this WSL2 environment — those projects do not exercise SdkRunspace and their failures are environment-flaky, so verification was scoped to PsBash.Host.Tests, the only project that loads SdkRunspace."
+      "notes": "Plan adjustment (1): The task description envisioned the .ps1 also dot-sourcing PsBash.psm1 with the Cmdlets path + module dir as parameters. Initial implementation dot-sourced psm1 from inside the setup .ps1, but PowerShell dot-source-of-dot-source semantics dropped the psm1 functions into the setup script's local scope \u2014 15 SdkWorker tests failed with exit 127 (Invoke-Bash* not found). Corrected scope: the setup .ps1 now handles only the PsBash.Cmdlets.dll probe (which is the actual C#-string that caused the escaping-bug history); SdkRunspace.Create keeps the existing separate ps.AddScript(psm1Content) call that already reads psm1 from a file (not a C# string literal \u2014 never an escaping-bug surface). The .ps1 also gained an optional $PsBashCmdletsDllPath session-state override for a future explicit-path fast path. Verification (this turn): Host.Tests baseline (git stash, no changes) = 44 passed / 4 failed; Host.Tests with changes = 48 passed / SAME 4 failed (GracefulShutdownTests.ShutdownWithInflightRequest_DrainsBeforeExiting, SdkWorkerTests.QueryAsync_PreservesCallerOutputCallback, SdkWorkerTests.ExecuteAsync_CdThenPwd_CrossCallStatePreserved, SdkWorkerTests.ExecuteAsync_InvokeBashLsLong_EmitsBashTextNotPsObjectSerialization) \u2014 identical failing set, zero regressions, +4 new passing (the syntax-check tests). The 4 failures are pre-existing on main (CI Build workflow Unit-tests job already red, run 25837584492). dotnet build PsBash.Host + PsBash.Host.Tests: 0 warnings / 0 errors. dotnet format --verify-no-changes: clean. SdkRunspaceSetupScriptTests: 4/4 PASS (76ms). Full-suite baseline diff was attempted but test.sh timed out on the e2e Differential/Shell process-spawn projects (exit 124) in this WSL2 environment \u2014 those projects do not exercise SdkRunspace and their failures are environment-flaky, so verification was scoped to PsBash.Host.Tests, the only project that loads SdkRunspace."
+    },
+    {
+      "task_id": "HSd7a1lT8PZC",
+      "iteration": 7,
+      "status": "completed",
+      "started_at": "2026-05-13T21:15:00Z",
+      "completed_at": "2026-05-14T04:39:40Z",
+      "phase_completed": "final-validation",
+      "failed_phase": null,
+      "files_changed": 3,
+      "tests_added": 2,
+      "plan_adjustments": 0,
+      "completion_summary": "REFACTOR-6: removed file-scope Set-StrictMode from PsBash.psm1; scoped it per-function to ConvertFrom-BashArgs and New-FlagDefs; added ModulePartialLoadTests CI guard asserting every FunctionsToExport/AliasesToExport name is Get-Command-resolvable.",
+      "failure_reason": null,
+      "fix_task_created": false,
+      "fix_task_id": null,
+      "verifier_evidence": "Core.Tests 690/691 pass (emitter set -u/-euo StrictMode tests green). Cmdlets.Tests 40 pass incl. 2 new ModulePartialLoadTests guards. Differential/Shell/Canary/Escalation/Host baselines identical clean-tree vs with-changes (this Linux dev box has a documented flaky baseline across process-spawn suites per v0.9.7 release notes); every differing flaky test passes in isolation; MissingSourceTarget_ReturnsError fails in isolation on clean tree too (pre-existing). Zero deterministic regressions."
     }
   ],
   "interrupted_at": null,
