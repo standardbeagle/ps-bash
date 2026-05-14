@@ -1,9 +1,9 @@
 {
   "status": "paused",
-  "iterations": 11,
+  "iterations": 12,
   "spawns": 10,
   "started_at": "2026-05-12T20:33:00Z",
-  "last_iteration_at": "2026-05-14T11:00:00Z",
+  "last_iteration_at": "2026-05-14T08:02:45Z",
   "last_subagent": "task-executor",
   "loop_task_id": "AEACP6UqDUBr",
   "dartboard": "Personal/ps-bash",
@@ -357,6 +357,38 @@
       ],
       "notes": "Per-suite baseline-diff (clean-tree vs post-refactor), all 4 suites IDENTICAL: Escalation 21P/0F/0S==21P/0F/0S; Canary 11P/0F/25S==11P/0F/25S; Differential 207P/13F/2S==207P/13F/2S (same 13 known-flaky tests, WSL2 .NET10-RC env baseline); Host.Tests 53P/4F/1S==53P/4F/1S (untouched). Zero new failures. Plan adjustments: (1) HostWorkerFixture deferred to follow-on instead of forcing it into the dependency-free shared assembly; (2) KnownBadRegressionTests.Regression_ProcessSpawnWithTimeout assertion updated TimeoutException->SpawnTimeoutException (Assert.Throws needs exact type; SpawnTimeoutException derives from TimeoutException so the contract is identical).",
       "follow_on": "HostWorkerFixture for PsBash.Host.Tests SdkWorker dedup \u2014 recommend new task under loop dqjNTUoPZjCa."
+    },
+    {
+      "task_id": "DoIYh3RVWpCI",
+      "iteration": 10,
+      "status": "completed",
+      "started_at": "2026-05-14T07:00:00Z",
+      "completed_at": "2026-05-14T08:02:45Z",
+      "phase_completed": "phase-9",
+      "failed_phase": null,
+      "files_changed": 7,
+      "tests_added": 33,
+      "plan_adjustments": 1,
+      "completion_summary": "REFACTOR-2 Phase 1 coherent subset: migrated Invoke-BashBasename + Invoke-BashDirname from psm1 to AOT-safe binary C# cmdlets (PsBash.Cmdlets). psm1 functions removed (cmdlet shadowing), Set-Alias lines retained, FunctionsToExport/CmdletsToExport updated. 33 new parity tests; Differential.Tests + Host.Tests baseline-diffed = zero new failures. Deferred remaining 8 Phase-1 functions: they depend on Phase-2 arg-helpers, so migrating them now would force a fragile C#->PS->C# callback that advances none of the 3 goals. Filed Phase 1b/2/3 follow-ons.",
+      "failure_reason": null,
+      "fix_task_created": true,
+      "fix_task_id": "MjqPco7X45k4",
+      "follow_on_task_ids": [
+        "MjqPco7X45k4",
+        "i1Apd5OwULMQ",
+        "IAZZ5TsCj9kH"
+      ],
+      "parent_task_status": "Doing",
+      "branch": "main",
+      "files": [
+        "src/PsBash.Cmdlets/InvokeBashBasenameCommand.cs",
+        "src/PsBash.Cmdlets/InvokeBashDirnameCommand.cs",
+        "src/PsBash.Cmdlets.Tests/InvokeBashBasenameDirnameCommandTests.cs",
+        "src/PsBash.Cmdlets/PsBash.Cmdlets.psd1",
+        "src/PsBash.Cmdlets/PsBash.Cmdlets.Experimental.psd1",
+        "src/PsBash.Module/PsBash.psm1",
+        "src/PsBash.Module/PsBash.psd1"
+      ]
     }
   ],
   "interrupted_at": null,

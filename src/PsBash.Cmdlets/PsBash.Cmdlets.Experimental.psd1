@@ -38,7 +38,10 @@ CmdletsToExport = @(
     'Register-BashPromptHook',
     'Unregister-BashChpwdHook',
     'Unregister-BashPromptHook',
-    'Get-BashHook'
+    'Get-BashHook',
+    # REFACTOR-2 Phase 1: leaf Invoke-Bash* functions migrated from PsBash.psm1.
+    'Invoke-BashBasename',
+    'Invoke-BashDirname'
 )
 
 VariablesToExport = @()

@@ -10035,83 +10035,20 @@ function Invoke-BashEnv {
 }
 
 # --- basename ---
-
-function Invoke-BashBasename {
-    [OutputType('PsBash.TextOutput')]
-    param()
-    $Arguments = [string[]]$args
-    if ($Arguments -contains '--help') { return Show-BashHelp 'basename' }
-
-    $suffix = $null
-    $operands = [System.Collections.Generic.List[string]]::new()
-
-    $i = 0
-    while ($i -lt $Arguments.Count) {
-        $arg = $Arguments[$i]
-
-        if ($arg -ceq '-s' -or $arg -ceq '--suffix') {
-            $i++
-            if ($i -lt $Arguments.Count) { $suffix = $Arguments[$i] }
-            $i++
-            continue
-        }
-
-        if ($arg -cmatch '^--suffix=(.+)$') {
-            $suffix = $Matches[1]
-            $i++
-            continue
-        }
-
-        $operands.Add($arg)
-        $i++
-    }
-
-    foreach ($path in $operands) {
-        $normalized = $path -replace '\\', '/'
-        $normalized = $normalized.TrimEnd('/')
-        if ($normalized -eq '') { $normalized = '/' }
-
-        $slashIdx = $normalized.LastIndexOf('/')
-        $name = if ($slashIdx -ge 0) { $normalized.Substring($slashIdx + 1) } else { $normalized }
-        if ($name -eq '') { $name = '/' }
-
-        if ($null -ne $suffix -and $name.Length -gt $suffix.Length -and $name.EndsWith($suffix)) {
-            $name = $name.Substring(0, $name.Length - $suffix.Length)
-        }
-
-        $obj = New-BashObject -BashText $name -TypeName 'PsBash.TextOutput'
-        $obj
-    }
-}
+#
+# Invoke-BashBasename MIGRATED to a binary cmdlet (REFACTOR-2 Phase 1).
+# See src/PsBash.Cmdlets/InvokeBashBasenameCommand.cs. The psm1 function
+# definition is intentionally removed: a script function would shadow the
+# cmdlet of the same name (PowerShell function precedence > cmdlet). The
+# `Set-Alias basename -> Invoke-BashBasename` line below still resolves
+# because Import-Module of PsBash.Cmdlets.dll registers the cmdlet.
 
 # --- dirname ---
-
-function Invoke-BashDirname {
-    [OutputType('PsBash.TextOutput')]
-    param()
-    $Arguments = [string[]]$args
-    if ($Arguments -contains '--help') { return Show-BashHelp 'dirname' }
-
-    foreach ($path in $Arguments) {
-        $normalized = $path -replace '\\', '/'
-        $normalized = $normalized.TrimEnd('/')
-        if ($normalized -eq '') {
-            $dir = '/'
-        } else {
-            $slashIdx = $normalized.LastIndexOf('/')
-            if ($slashIdx -lt 0) {
-                $dir = '.'
-            } elseif ($slashIdx -eq 0) {
-                $dir = '/'
-            } else {
-                $dir = $normalized.Substring(0, $slashIdx)
-            }
-        }
-
-        $obj = New-BashObject -BashText $dir -TypeName 'PsBash.TextOutput'
-        $obj
-    }
-}
+#
+# Invoke-BashDirname MIGRATED to a binary cmdlet (REFACTOR-2 Phase 1).
+# See src/PsBash.Cmdlets/InvokeBashDirnameCommand.cs. Same shadowing rationale
+# as basename above; the `Set-Alias dirname -> Invoke-BashDirname` line still
+# resolves via the cmdlet registration.
 
 # --- pwd ---
 

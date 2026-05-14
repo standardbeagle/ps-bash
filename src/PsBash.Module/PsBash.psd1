@@ -101,7 +101,10 @@ FunctionsToExport = 'Set-BashErrorMode', 'Invoke-ProcessSub', 'Invoke-ProcessSub
                'Invoke-BashSeq',
                'Invoke-BashExpr',
                'Invoke-BashDu', 'Invoke-BashTree',
-               'Invoke-BashEnv', 'Invoke-BashBasename', 'Invoke-BashDirname',
+               'Invoke-BashEnv',
+               # Invoke-BashBasename / Invoke-BashDirname migrated to binary
+               # cmdlets in PsBash.Cmdlets.dll (REFACTOR-2 Phase 1) — no longer
+               # psm1 functions, so they are not exported here.
                'Invoke-BashPwd', 'Invoke-BashHostname', 'Invoke-BashWhoami', 'Invoke-BashUname',
                'Invoke-BashFold', 'Invoke-BashExpand', 'Invoke-BashUnexpand',
                'Invoke-BashStrings', 'Invoke-BashSplit', 'Invoke-BashTac',
