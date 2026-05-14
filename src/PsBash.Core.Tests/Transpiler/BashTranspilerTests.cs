@@ -248,7 +248,7 @@ public class BashTranspilerTests
     public void Transpile_EvalWithCommandSubstitution_EmitsRuntimeSubexpression()
     {
         var result = BashTranspiler.Transpile("eval \"$(fnm env --shell bash)\"");
-        Assert.Contains("BashTranspiler]::Transpile", result);
+        Assert.Contains("BashTranspiler, PsBash.Transpiler]::Transpile", result);
         Assert.Contains("Invoke-Expression", result);
         // The $(...) inside the eval arg becomes a pwsh subexpression that
         // calls the mapped cmdlet at runtime. fnm isn't a mapped command so
@@ -265,7 +265,7 @@ public class BashTranspilerTests
         // the inline eval block transpiles it as a bare assignment
         // (`x=5` → `$env:x = "5"`) and Invoke-Expressions it.
         var result = BashTranspiler.Transpile("eval \"$(printf 'x=5')\"");
-        Assert.Contains("BashTranspiler]::Transpile", result);
+        Assert.Contains("BashTranspiler, PsBash.Transpiler]::Transpile", result);
         Assert.Contains("Invoke-Expression", result);
         Assert.Contains("Invoke-BashPrintf", result);
     }
@@ -274,7 +274,7 @@ public class BashTranspilerTests
     public void Transpile_EvalWithBackquoteCommandSub_EmitsRuntimeSubexpression()
     {
         var result = BashTranspiler.Transpile("eval `fnm env --shell bash`");
-        Assert.Contains("BashTranspiler]::Transpile", result);
+        Assert.Contains("BashTranspiler, PsBash.Transpiler]::Transpile", result);
         Assert.Contains("Invoke-Expression", result);
         Assert.Contains("$(", result);
     }
@@ -286,7 +286,7 @@ public class BashTranspilerTests
     public void Transpile_EvalWithArithmeticExpansion_EmitsRuntimeSubexpression()
     {
         var result = BashTranspiler.Transpile("eval \"echo $((1 + 2))\"");
-        Assert.Contains("BashTranspiler]::Transpile", result);
+        Assert.Contains("BashTranspiler, PsBash.Transpiler]::Transpile", result);
         Assert.Contains("Invoke-Expression", result);
     }
 
@@ -297,7 +297,7 @@ public class BashTranspilerTests
     public void Transpile_EvalWithVariableReference_ForwardsToRuntimeEval()
     {
         var result = BashTranspiler.Transpile("eval \"export X=$HOME\"");
-        Assert.Contains("BashTranspiler]::Transpile", result);
+        Assert.Contains("BashTranspiler, PsBash.Transpiler]::Transpile", result);
         Assert.Contains("Invoke-Expression", result);
         // $HOME stays as $HOME in the pwsh string (kept-as-is special var).
         Assert.Contains("$HOME", result);
@@ -307,7 +307,7 @@ public class BashTranspilerTests
     public void Transpile_EvalWithUserVariable_ForwardsToRuntimeEval()
     {
         var result = BashTranspiler.Transpile("eval \"export X=$MYVAR\"");
-        Assert.Contains("BashTranspiler]::Transpile", result);
+        Assert.Contains("BashTranspiler, PsBash.Transpiler]::Transpile", result);
         Assert.Contains("Invoke-Expression", result);
         Assert.Contains("$env:MYVAR", result);
     }

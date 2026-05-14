@@ -1,9 +1,9 @@
 {
   "status": "paused",
-  "iterations": 7,
-  "spawns": 7,
+  "iterations": 8,
+  "spawns": 8,
   "started_at": "2026-05-12T20:33:00Z",
-  "last_iteration_at": "2026-05-14T05:10:00Z",
+  "last_iteration_at": "2026-05-14T06:05:00Z",
   "last_subagent": "task-executor",
   "loop_task_id": "AEACP6UqDUBr",
   "dartboard": "Personal/ps-bash",
@@ -219,6 +219,28 @@
         "src/PsBash.Cmdlets/PsBash.Cmdlets.csproj",
         "src/PsBash.Transpiler/Parser/ (8 files moved from src/PsBash.Core/Parser/)",
         "src/PsBash.Transpiler/Transpiler/BashTranspiler.cs (moved from src/PsBash.Core/Transpiler/)"
+      ]
+    },
+    {
+      "task_id": "0cx2VPwufzIJ",
+      "iteration": 8,
+      "status": "completed",
+      "started_at": "2026-05-14T05:20:00Z",
+      "completed_at": "2026-05-14T06:05:00Z",
+      "phase_completed": "final-validation",
+      "failed_phase": null,
+      "files_changed": 2,
+      "tests_added": 0,
+      "plan_adjustments": 1,
+      "completion_summary": "REFACTOR-5a-2: fixed the 1f23039 eval regression by emitting assembly-qualified type names in PsEmitter.EmitEval ([PsBash.Core.Transpiler.BashTranspiler, PsBash.Transpiler] and [...TranspileContext, PsBash.Transpiler]). PowerShell's [Type] literal resolver loads the named assembly on demand when the name is assembly-qualified, so the runtime eval string resolves BashTranspiler inside the ps-bash-host SDK runspace without eager-loading. Updated 6 BashTranspilerTests assertions to match the new emitted substring. Did NOT touch the deadlock-sensitive SdkRunspaceSetup.ps1.",
+      "failure_reason": null,
+      "fix_task_created": false,
+      "fix_task_id": null,
+      "plan_adjustment_note": "Plan adjustment: prior executor (Fh2WgjOx46dJ) recommended Option 3 (eager-load in SdkRunspace.Create). Implemented and verified Option 3 via a typeof() reference-touch first; the type resolved in-process but the authoritative fresh-spawn EvalDifferentialTests still failed 3/9 — a typeof() AppDomain load is not sufficient for the runspace's [Type] resolver. Switched to Option 2 (assembly-qualified type name in PsEmitter, self-contained, no host changes), which the task brief also rated low-risk. Option 2 makes EvalDifferentialTests 9/9 green.",
+      "verifier_evidence": "EvalDifferentialTests 9/9 PASS (the 3 named regressions Differential_Eval_CmdSubMultilineExports_CompletesUnder2s, Differential_Eval_QuotedCmdSubMultiline_CompletesUnder2s, Differential_Eval_FnmShapedPayload_CompletesUnder2s all green). ps-bash.sln builds 0 errors (4 pre-existing NU1903 warnings only). Baseline-diff full Differential.Tests: unmodified main = 21 failed/199 passed; with fix = 19 failed/201 passed (2 fewer = the eval fixes, zero new failures; the ~19-21 BackgroundJob/Redirection/ControlFlow/Quoting failures are the documented WSL2 flaky process-spawn baseline). Core.Tests 690/0/1 (matches 1f23039 baseline). BashTranspilerTests 45/45 (6 updated assertions green). PtySpawnTests 5/0/1.",
+      "files": [
+        "src/PsBash.Transpiler/Parser/PsEmitter.cs",
+        "src/PsBash.Core.Tests/Transpiler/BashTranspilerTests.cs"
       ]
     }
   ],

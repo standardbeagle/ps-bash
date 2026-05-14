@@ -2885,7 +2885,16 @@ public static class PsEmitter
             "if ($__psbash_eval_depth -ge 5) { throw 'eval: nesting depth limit (5) exceeded; possible infinite recursion' }; " +
             "$global:__BashEvalDepth = $__psbash_eval_depth + 1; " +
             "try { " +
-            "$__psbash_eval_pwsh = [PsBash.Core.Transpiler.BashTranspiler]::Transpile($__psbash_eval_src, [PsBash.Core.Transpiler.TranspileContext]::Eval); " +
+            // Assembly-qualified type names: BashTranspiler/TranspileContext live
+            // in PsBash.Transpiler.dll (assembly name differs from the namespace
+            // since REFACTOR-5a's project split, commit 1f23039). This runtime
+            // string is evaluated via Invoke-Expression inside the ps-bash-host
+            // SDK runspace. PowerShell's [Type] literal resolver only finds types
+            // in already-loaded runspace assemblies UNLESS the name is
+            // assembly-qualified — given the assembly name it loads the assembly
+            // on demand. A bare [PsBash.Core.Transpiler.BashTranspiler] silently
+            // failed to resolve there, so eval emitted empty output.
+            "$__psbash_eval_pwsh = [PsBash.Core.Transpiler.BashTranspiler, PsBash.Transpiler]::Transpile($__psbash_eval_src, [PsBash.Core.Transpiler.TranspileContext, PsBash.Transpiler]::Eval); " +
             "Invoke-Expression $__psbash_eval_pwsh " +
             "} finally { $global:__BashEvalDepth = $__psbash_eval_depth } " +
             "}";
