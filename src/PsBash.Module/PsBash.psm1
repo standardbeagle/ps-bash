@@ -12762,47 +12762,140 @@ function Invoke-BrowseAction {
     & $action[0].Script $Current $Items
 }
 
+# PTY-11: full-screen browse workbench driven by single-key navigation.
+#
+# Reads keys with [Console]::ReadKey($true) (no Enter, no echo) and repaints
+# only the cells that change (cursor mark + selection mark) using ANSI cursor
+# movement instead of a per-keystroke Clear-Host — the per-keystroke full redraw
+# was the original "ll | browse never-ending scroll" bug.
 function Invoke-BrowseInteractive {
     [CmdletBinding()]
     param([Parameter(Mandatory)][object[]]$Objects)
 
+    # EOF / non-PTY misroute guard: an interactive workbench needs a real
+    # terminal for single-key input. When stdin is a pipe or file (browse
+    # misrouted onto a non-tty) ReadKey cannot block — bail with a clear error
+    # instead of spinning. Invoke-BashBrowse already gates on this; the guard
+    # here is defense-in-depth for any other caller of Invoke-BrowseInteractive.
+    if ([Console]::IsInputRedirected) {
+        Write-Error "browse: interactive workbench requires a terminal (stdin is redirected). Use 'browse --list' for non-interactive output."
+        return
+    }
+
     $current = 0
     $selected = New-Object 'System.Collections.Generic.HashSet[int]'
+    $maxRows = [Math]::Min($Objects.Count - 1, 14)
+
+    # ESC[<row>;<col>H is 1-based. The header occupies terminal row 1, so list
+    # item with 0-based index $i lives on terminal row ($i + 2).
+    $rowOf = { param($i) $i + 2 }
+
+    # Render one list row's text (without the leading cursor/mark cells).
+    $rowText = {
+        param($i)
+        $row = ConvertTo-BrowseRow -InputObject $Objects[$i] -Index $i -SelectedIndex @($selected)
+        "{0,3} {1}" -f $row.Index, $row.Display
+    }
+
+    # Repaint just the two leading cells (cursor '>' + selection mark '*') for
+    # one row, leaving the rest of the line untouched. ESC[<r>;1H homes the
+    # cursor to column 1 of that row.
+    $paintCell = {
+        param($i)
+        $cursor = if ($i -eq $current) { '>' } else { ' ' }
+        $mark   = if ($selected.Contains($i)) { '*' } else { ' ' }
+        [Console]::Write(("`e[{0};1H{1}{2}" -f (& $rowOf $i), $cursor, $mark))
+    }
+
+    # Full-screen draw: clear, header, every list row. Used on entry, on resize,
+    # and after an action whose output scrolled the screen.
+    $drawAll = {
+        [Console]::Write("`e[2J`e[H")
+        [Console]::Write("browse: $($Objects.Count) object(s). Commands: n/p move, s select, i inspect, a action, e exec, q quit")
+        for ($i = 0; $i -le $maxRows; $i++) {
+            $cursor = if ($i -eq $current) { '>' } else { ' ' }
+            $mark   = if ($selected.Contains($i)) { '*' } else { ' ' }
+            [Console]::Write(("`e[{0};1H{1}{2} {3}" -f (& $rowOf $i), $cursor, $mark, (& $rowText $i)))
+        }
+        # Park the cursor below the list so action output appends cleanly.
+        [Console]::Write(("`e[{0};1H" -f (& $rowOf ($maxRows + 1))))
+    }
+
+    & $drawAll
+    $lastWidth  = [Console]::WindowWidth
+    $lastHeight = [Console]::WindowHeight
 
     while ($true) {
-        Clear-Host
-        Write-Host "browse: $($Objects.Count) object(s). Commands: n/p, s, i, a <name>, e <command>, q"
-        @(0..([Math]::Min($Objects.Count - 1, 14))) | ForEach-Object {
-            $row = ConvertTo-BrowseRow -InputObject $Objects[$_] -Index $_ -SelectedIndex @($selected)
-            $cursor = if ($_ -eq $current) { '>' } else { ' ' }
-            $mark = if ($row.Selected) { '*' } else { ' ' }
-            Write-Host ("{0}{1} {2,3} {3}" -f $cursor, $mark, $row.Index, $row.Display)
+        # SIGWINCH handling: the launcher forwards the resize to the host's PTY
+        # (PTY-5 SignalForwarder), which updates Console's window metrics. Browse
+        # observes the change by polling them each loop and repaints its layout.
+        if ([Console]::WindowWidth -ne $lastWidth -or [Console]::WindowHeight -ne $lastHeight) {
+            $lastWidth  = [Console]::WindowWidth
+            $lastHeight = [Console]::WindowHeight
+            & $drawAll
         }
 
-        $line = Read-Host 'browse'
-        if ($line -eq 'q') { return }
-        if ($line -eq 'n') { $current = [Math]::Min($current + 1, $Objects.Count - 1); continue }
-        if ($line -eq 'p') { $current = [Math]::Max($current - 1, 0); continue }
-        if ($line -eq 's') {
-            if ($selected.Contains($current)) { [void]$selected.Remove($current) } else { [void]$selected.Add($current) }
-            continue
-        }
-        if ($line -eq 'i') {
-            $binding = New-BrowseBinding -Objects $Objects -CurrentIndex $current -SelectedIndex @($selected)
-            Invoke-BrowseAction -Name 'inspect' -Current $binding.Current -Items $binding.Items | Format-List | Out-Host
-            Read-Host 'enter to continue' | Out-Null
-            continue
-        }
-        if ($line -match '^a\s+(.+)$') {
-            $binding = New-BrowseBinding -Objects $Objects -CurrentIndex $current -SelectedIndex @($selected)
-            Invoke-BrowseAction -Name $Matches[1] -Current $binding.Current -Items $binding.Items | Out-Host
-            Read-Host 'enter to continue' | Out-Null
-            continue
-        }
-        if ($line -match '^e\s+(.+)$') {
-            $binding = New-BrowseBinding -Objects $Objects -CurrentIndex $current -SelectedIndex @($selected)
-            Invoke-BrowseCommand -Command $Matches[1] -Current $binding.Current -Items $binding.Items | Out-Host
-            Read-Host 'enter to continue' | Out-Null
+        $key = [Console]::ReadKey($true)
+        $ch = $key.KeyChar
+
+        # Arrow keys map onto n/p navigation.
+        if ($key.Key -eq [ConsoleKey]::DownArrow) { $ch = 'n' }
+        elseif ($key.Key -eq [ConsoleKey]::UpArrow) { $ch = 'p' }
+
+        switch -CaseSensitive ($ch) {
+            'q' { [Console]::Write(("`e[{0};1H" -f (& $rowOf ($maxRows + 1)))); return }
+            'n' {
+                if ($current -lt $maxRows) {
+                    $prev = $current
+                    $current++
+                    & $paintCell $prev
+                    & $paintCell $current
+                }
+            }
+            'p' {
+                if ($current -gt 0) {
+                    $prev = $current
+                    $current--
+                    & $paintCell $prev
+                    & $paintCell $current
+                }
+            }
+            's' {
+                if ($selected.Contains($current)) { [void]$selected.Remove($current) }
+                else { [void]$selected.Add($current) }
+                & $paintCell $current
+            }
+            'i' {
+                $binding = New-BrowseBinding -Objects $Objects -CurrentIndex $current -SelectedIndex @($selected)
+                [Console]::Write(("`e[{0};1H" -f (& $rowOf ($maxRows + 1))))
+                Invoke-BrowseAction -Name 'inspect' -Current $binding.Current -Items $binding.Items | Format-List | Out-Host
+                Write-Host 'press any key to continue'
+                [void][Console]::ReadKey($true)
+                & $drawAll
+            }
+            'a' {
+                [Console]::Write(("`e[{0};1H" -f (& $rowOf ($maxRows + 1))))
+                $name = Read-Host 'action name'
+                if ($name) {
+                    $binding = New-BrowseBinding -Objects $Objects -CurrentIndex $current -SelectedIndex @($selected)
+                    Invoke-BrowseAction -Name $name -Current $binding.Current -Items $binding.Items | Out-Host
+                    Write-Host 'press any key to continue'
+                    [void][Console]::ReadKey($true)
+                }
+                & $drawAll
+            }
+            'e' {
+                [Console]::Write(("`e[{0};1H" -f (& $rowOf ($maxRows + 1))))
+                $cmd = Read-Host 'exec command'
+                if ($cmd) {
+                    $binding = New-BrowseBinding -Objects $Objects -CurrentIndex $current -SelectedIndex @($selected)
+                    Invoke-BrowseCommand -Command $cmd -Current $binding.Current -Items $binding.Items | Out-Host
+                    Write-Host 'press any key to continue'
+                    [void][Console]::ReadKey($true)
+                }
+                & $drawAll
+            }
+            default { } # ignore unmapped keys
         }
     }
 }
