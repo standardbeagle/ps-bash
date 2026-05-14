@@ -96,7 +96,9 @@ FunctionsToExport = 'Set-BashErrorMode', 'Invoke-ProcessSub', 'Invoke-ProcessSub
                'Invoke-BashLn',
                'Invoke-BashPs', 'Get-LinuxProcEntry', 'Get-DotNetProcEntry',
                'Format-PsAuxLine', 'Format-PsCustomLine',
-               'Invoke-BashSed', 'ConvertFrom-SedExpression', 'Test-SedAddress',
+               # Invoke-BashSed (+ ConvertFrom-SedExpression / Test-SedAddress)
+               # migrated to a binary cmdlet in PsBash.Cmdlets.dll
+               # (REFACTOR-2 Phase 3) — no longer psm1 functions.
                'Invoke-BashAwk', 'ConvertFrom-AwkProgram', 'Split-AwkFields',
                'Test-AwkPattern', 'Resolve-AwkExpression', 'Invoke-AwkAction',
                'Format-AwkPrintf', 'Resolve-AwkStringFunc',

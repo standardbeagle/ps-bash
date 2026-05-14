@@ -52,7 +52,9 @@ CmdletsToExport = @(
     # REFACTOR-2 Phase 1d: ls migrated from PsBash.psm1 — the final leaf of
     # REFACTOR-2 Phase 1. Tier 1 / Tier 3 provider paths stay in psm1 behind
     # Get-BashLsProviderEntries; the cmdlet owns Tier 2 + sort + format.
-    'Invoke-BashLs'
+    'Invoke-BashLs',
+    # REFACTOR-2 Phase 3: sed migrated from PsBash.psm1.
+    'Invoke-BashSed'
 )
 
 VariablesToExport = @()

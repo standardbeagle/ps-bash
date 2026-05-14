@@ -71,7 +71,7 @@ runspace/script scope (`$script:BashErrorMode`, the PowerShell path provider)
 that a plain static helper cannot reach — only `BashRuntime.FormatBashError`
 (the runspace-free message-formatting piece) is shared.
 
-### Migrated Binary Cmdlets (REFACTOR-2 Phase 1 / 1b / 1c / 1d)
+### Migrated Binary Cmdlets (REFACTOR-2 Phase 1 / 1b / 1c / 1d / 3)
 
 Some leaf `Invoke-Bash*` commands are no longer psm1 functions — they are
 binary cmdlets in `PsBash.Cmdlets.dll`. The psm1 still carries their
@@ -91,6 +91,7 @@ before the psm1 `Set-Alias` lines execute.
 | head     | `InvokeBashHeadCommand`     | 1c | File + pipeline dual mode; value-flag parsing (`-n N` / `-nN` / legacy `-N` / bare positional, `-c N` / `-cN`). File mode emits typed `PsBash.CatLine`. No colliding flags — `-n` / `-c` scanned out of `Arguments` |
 | tail     | `InvokeBashTailCommand`     | 1c | File + pipeline dual mode; value-flag parsing including `-n +N` / `-c +N` from-line/byte forms, `-f` follow, `-s SECS`. `-f` follow polls the file via `FileInfo` (`Thread.Sleep`), honoring `PSCmdlet.Stopping`. File mode emits typed `PsBash.CatLine`. No colliding flags |
 | ls       | `InvokeBashLsCommand`       | 1d | Directory + file target surface; emits typed `PsBash.LsEntry`. Reimplements the pure helper web in C# (`Get-LsEntryFromFsi`, `ConvertTo-PermissionString`, `Format-BashSize`, `Format-BashDate`, `Format-LsLine`, `Test-IsExecutable`). Owns Tier 2 — the real-filesystem hot path (`System.IO` streaming, `-R` via `SearchOption.AllDirectories`) — plus the uniform sort + format pass. Tier 1 (custom `$script:BashLsProviders`) and Tier 3 (PS-provider fallback: Registry:, Cert:, custom PSDrives) stay in psm1 behind the `Get-BashLsProviderEntries` shim, called via string-bodied `InvokeScript` for any non-filesystem target. **Three colliding flags** are declared as explicit `SwitchParameter`s: `-a` / `-A` prefix-match the cmdlet's own `-Arguments` parameter (one switch binds both — names are case-insensitive — and `.`/`..` are never enumerated so `-A` ≡ `-a` on the filesystem path); `-d` prefix-collides with `-Debug`; `-p` with `-ProgressAction` / `-PipelineVariable`. The rest (`-l -h -R -S -t -r -1 -F -i -s`, `--color`) stay in `Arguments`; bundled forms like `-la` are recovered post-parse. `Resolve-BashGlob`'s glob slice is reimplemented in C# via `SessionState.Path`. The final leaf of REFACTOR-2 Phase 1 |
+| sed      | `InvokeBashSedCommand`      | 3 | File + pipeline dual mode stream editor. Reimplements `ConvertFrom-SedExpression` (address-prefix + command parsing for `s d D p P N q a i c y`, BRE→.NET metachar escaping, `\1`-`\9`/`\&` → `$1`-`$9`/`$0` backreference translation) and `Test-SedAddress` (line / range / regex / regex-range addresses) in C#, plus the pattern-space cycle engine (multi-line `N`/`D`, restart-cycle, `q` early-quit). File mode supports `-i` in-place rewrite (preserving the source trailing newline) and `-f` script files; pipeline mode preserves original typed objects on a 1:1 line mapping. **Two colliding flags** are declared as explicit `SwitchParameter`s: `-i` prefix-collides with `-InformationAction` / `-InformationVariable`; the value-bearing `-e` (script expression) prefix-collides with `-ErrorAction` / `-ErrorVariable` and is declared as an explicit `string[]` `Expression` parameter (aliased `e`). Because PowerShell parameter names are case-insensitive, `-E` (extended regex) cannot be a distinct parameter from `-e`; the extended-regex bit is recovered independently — `-r` is an explicit `SwitchParameter` (no colliding prefix), and bundled short-flag forms (`-nE`, `-rn`) are recovered from `Arguments` post-parse. `-n` / `-f` have no colliding prefix and stay in `Arguments`. **Known binder limitation:** a *repeated* `-e` flag (`sed -e A -e B`) cannot bind to the single `Expression` parameter — PowerShell's binder rejects it as "specified more than once"; pass multiple expressions as a comma-separated array, use `-f` for a multi-command script, or use a `;`-free single expression. The M1/M2/M3 transpiler path that emits `Invoke-BashSed -e A -e B` from bash `sed -e A -e B` is the one residual gap; the common single-`-e` and operand-expression forms are unaffected |
 
 `echo` was **not** migrated: its `-e` / `-n` / `-E` short flags prefix-collide
 with PowerShell common parameters (`-e` is ambiguous with `-ErrorAction` /
@@ -115,6 +116,48 @@ and `stat`) stay in psm1; the cmdlet reaches Tier 1 / Tier 3 through the
 `Get-BashLsProviderEntries` shim. `Format-LsGrid` / `Get-LsDisplayName` were
 already display-layer dead code (the `PsBash.LsEntry` ps1xml view renders
 `BashText` directly) and were left untouched in psm1.
+
+`sed` was migrated in REFACTOR-2 Phase 3. Its custom parser
+(`ConvertFrom-SedExpression`) and address matcher (`Test-SedAddress`) are pure
+string/regex transforms with a small psm1-helper surface (`Resolve-BashGlob`,
+`Read-BashFileBytes`, `Write-BashFileText`, `Write-BashError`, `Show-BashHelp`),
+all already reimplemented in C# by the Phase 1c/1d cmdlets — a clean
+cost/benefit, so it migrated.
+
+#### REFACTOR-2 Phase 3 — awk / jq / find decisions
+
+Phase 3 was explicitly split-friendly (each command "likely warrants its own
+task"). After a per-command cost/benefit audit, the Phase 3 outcome is **sed
+migrated**, with the rest decided as follows:
+
+- **`awk` stays a psm1 function — permanently.** `Invoke-BashAwk` is the entry
+  point to a near-complete AWK language interpreter: ~950+ lines across twelve
+  psm1 functions (`ConvertFrom-AwkProgram`, `Split-AwkFields`, `Read-AwkBlock`,
+  `Test-AwkPattern`, `Resolve-AwkExpression`, `Expand-AwkString`,
+  `Invoke-AwkAction`, `Split-AwkStatements`, `Split-AwkFuncArgs`,
+  `Format-AwkPrintf`, `Resolve-AwkStringFunc`). It is a recursive-descent
+  expression evaluator with its own variable scope, field model, string-function
+  library, and `printf` engine. The original Phase 3 task text names awk as the
+  prime "may stay in psm1 indefinitely" candidate. Reimplementing an interpreter
+  of this size in C# is a multi-week effort whose only payoff is cold-start /
+  AOT cost — the migration cost vastly outweighs the benefit, and a port would
+  be a large new bug surface against a psm1 oracle that already passes its
+  differential cases. **Decision: awk's sub-scope is closed; it remains a psm1
+  function.**
+- **`jq` is deferred to a follow-on task.** `Invoke-BashJq` + `Invoke-JqFilter`
+  + sixteen `*-Jq*` helpers + `ConvertTo-JqJson` form a ~800-line custom JSON
+  query-language interpreter (pipe/comma splitting, dot-path resolution,
+  `select`/`if`/recurse, string interpolation). Unlike awk it is plausibly worth
+  migrating eventually, but it is far too large for a single coherent pass
+  alongside sed. A follow-on task is filed under the REFACTOR-2 Phase 3 parent.
+- **`find` is deferred to a follow-on task.** `Invoke-BashFind` is only ~300
+  lines, but its `-exec` predicate invokes arbitrary external commands
+  (`& $cmdName @cmdRest`) — a binary cmdlet would have to route that through
+  `InvokeCommand` with care — and it leans on the `Get-BashItem` /
+  `Get-BashFileInfo` (owner/group/permissions) psm1 helper web that is not yet
+  reimplemented in C#. It is a clean migration candidate but warrants its own
+  task rather than being rushed into the sed pass. A follow-on task is filed
+  under the REFACTOR-2 Phase 3 parent.
 
 ### Output Strategy
 

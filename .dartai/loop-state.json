@@ -1,9 +1,9 @@
 {
   "status": "paused",
-  "iterations": 15,
+  "iterations": 16,
   "spawns": 11,
   "started_at": "2026-05-12T20:33:00Z",
-  "last_iteration_at": "2026-05-14T18:30:00Z",
+  "last_iteration_at": "2026-05-14T19:30:00Z",
   "last_subagent": "task-executor",
   "loop_task_id": "AEACP6UqDUBr",
   "dartboard": "Personal/ps-bash",
@@ -556,6 +556,33 @@
         "src/PsBash.Core.Tests/Transpiler/BashTranspilerTests.cs"
       ],
       "notes": "Plan adjustment: task hypothesis expected only loop-var exclusion (category a). Found 8 of 20 failures are category-b: genuine $env:-backed bare unquoted var operands (echo $FOO etc.) where the new splat IS correct bash word-splitting -- proven by Differential_UnquotedVar_WordSplitsOnSpaces / Differential_EmptyVar_UnquotedIsOmitted oracle tests. Updated those test expectations rather than narrowing the splat away from them. Also found 4 additional regressions in BashTranspilerTests (integration layer) not enumerated in the task spec."
+    },
+    {
+      "task_id": "IAZZ5TsCj9kH",
+      "iteration": 6,
+      "status": "completed",
+      "started_at": "2026-05-14T12:00:00Z",
+      "completed_at": "2026-05-14T19:30:00Z",
+      "phase_completed": "phase-9",
+      "failed_phase": null,
+      "files_changed": 7,
+      "tests_added": 41,
+      "plan_adjustments": 3,
+      "completion_summary": "REFACTOR-2 Phase 3: migrated sed to a binary cmdlet (InvokeBashSedCommand.cs); documented awk stays-psm1 permanently; filed follow-on tasks for jq and find.",
+      "failure_reason": null,
+      "fix_task_created": false,
+      "fix_task_id": null,
+      "loop_task_id": "IaiAaDTVqJY6",
+      "files": [
+        "src/PsBash.Cmdlets/InvokeBashSedCommand.cs",
+        "src/PsBash.Cmdlets.Tests/InvokeBashSedCommandTests.cs",
+        "src/PsBash.Module/PsBash.psm1",
+        "src/PsBash.Module/PsBash.psd1",
+        "src/PsBash.Cmdlets/PsBash.Cmdlets.psd1",
+        "src/PsBash.Cmdlets/PsBash.Cmdlets.Experimental.psd1",
+        "docs/specs/runtime-functions.md"
+      ],
+      "notes": "Coherent partial per task's explicit per-command-decision allowance. AUDIT: sed = clean migration (pure string/regex, helper web already C#-ported by Phase 1c/1d) -> MIGRATED. awk = ~950-line/12-function AWK interpreter, task names it the prime stay-psm1 candidate -> DOCUMENTED stays-psm1 permanently, sub-scope closed. jq = ~800-line JSON-query interpreter, worth migrating but too large for this pass -> FOLLOW-ON D6d8LpBU1bUz. find = -exec arbitrary-command invoke + Get-BashFileInfo psm1 web -> FOLLOW-ON leJJfV58WCGF. Plan adjustments: (1) common-param audit -- sed's -i collides with -InformationAction (task spec missed it), -e/-E case-collision is genuine: -e declared as value-bearing string[] param, -i + -r as explicit SwitchParameters, -E recovered via bundled-flag loop; (2) repeated -e (sed -e A -e B) cannot bind to a single PS parameter -- documented binder limitation, the one residual M1/M2/M3 transpiler-path gap; (3) backreference test switched to -r/ERE because the psm1 oracle's BRE \\( handling does not promote to a .NET group (faithful port preserves that). 41 parity tests vs psm1 oracle all green; full Cmdlets.Tests 252 pass. Differential + Shell failures (ProcessSub/Background/Pipefail/Tee/Redirect/SedInPlace) verified pre-existing via stash+baseline-diff on clean main -- fail IDENTICALLY without my changes; documented WSL2-flaky baseline, CI 3-OS authoritative. Emitter Core.Tests 354 green (sed passthrough unchanged). REFACTOR-2 parent DoIYh3RVWpCI confirmed Done (cascade-closed)."
     }
   ],
   "interrupted_at": null,
