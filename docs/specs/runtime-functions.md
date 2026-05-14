@@ -71,7 +71,7 @@ runspace/script scope (`$script:BashErrorMode`, the PowerShell path provider)
 that a plain static helper cannot reach — only `BashRuntime.FormatBashError`
 (the runspace-free message-formatting piece) is shared.
 
-### Migrated Binary Cmdlets (REFACTOR-2 Phase 1 / 1b)
+### Migrated Binary Cmdlets (REFACTOR-2 Phase 1 / 1b / 1c)
 
 Some leaf `Invoke-Bash*` commands are no longer psm1 functions — they are
 binary cmdlets in `PsBash.Cmdlets.dll`. The psm1 still carries their
@@ -86,14 +86,27 @@ before the psm1 `Set-Alias` lines execute.
 | dirname  | `InvokeBashDirnameCommand`  | 1 | Pure string transform |
 | printf   | `InvokeBashPrintfCommand`   | 1b | Format engine; `--help` / usage-error delegate to psm1 `Show-BashHelp` / `Write-BashError` via string-bodied `InvokeScript` |
 | pwd      | `InvokeBashPwdCommand`      | 1b | Reads `$global:__PsBashCwd` + current location via `SessionState`; `-P` is declared as an explicit `SwitchParameter` because the bare token `-P` prefix-collides with the `-ProgressAction` common parameter |
+| wc       | `InvokeBashWcCommand`       | 1c | File + pipeline dual mode; typed `PsBash.WcResult`. `-w` is a declared `SwitchParameter` (prefix-collides with `-WarningAction` / `-WarningVariable`); `-l` / `-c` stay in `Arguments`. Bundled forms like `-lw` are recovered post-parse. `Resolve-BashGlob`'s glob slice is reimplemented in C# via `SessionState.Path` |
+| cat      | `InvokeBashCatCommand`      | 1c | File + pipeline dual mode; fast path emits `PsBash.TextOutput`, flagged path emits typed `PsBash.CatLine`. `-E` is a declared `SwitchParameter` (prefix-collides with `-ErrorAction` / `-ErrorVariable`); `-n` / `-b` / `-s` / `-T` stay in `Arguments`. Bundled forms like `-nE` are recovered post-parse. A read error sets `$global:LASTEXITCODE = 1` |
+| head     | `InvokeBashHeadCommand`     | 1c | File + pipeline dual mode; value-flag parsing (`-n N` / `-nN` / legacy `-N` / bare positional, `-c N` / `-cN`). File mode emits typed `PsBash.CatLine`. No colliding flags — `-n` / `-c` scanned out of `Arguments` |
+| tail     | `InvokeBashTailCommand`     | 1c | File + pipeline dual mode; value-flag parsing including `-n +N` / `-c +N` from-line/byte forms, `-f` follow, `-s SECS`. `-f` follow polls the file via `FileInfo` (`Thread.Sleep`), honoring `PSCmdlet.Stopping`. File mode emits typed `PsBash.CatLine`. No colliding flags |
 
 `echo` was **not** migrated: its `-e` / `-n` / `-E` short flags prefix-collide
 with PowerShell common parameters (`-e` is ambiguous with `-ErrorAction` /
-`-ErrorVariable`) under `PSCmdlet` parameter binding. The psm1 `param()` form
-takes no common parameters, so `$args` receives the flags literally — `echo`
-therefore stays a psm1 function. `cat`, `ls`, `head`, `tail`, `wc` are also
-not yet migrated: they depend on `Resolve-BashGlob` + `Open-BashFileReader` +
-typed `CatLine` / `LsEntry` emission, which is a larger follow-on.
+`-ErrorVariable`) under `PSCmdlet` parameter binding. Unlike `cat -E` /
+`wc -w` — where a single colliding flag is salvageable by declaring it as an
+explicit `SwitchParameter` (an exact param-name match beats a common-parameter
+prefix match) — `echo` has *two* colliding flags (`-e` and `-E`) plus `-e`
+still races `-ErrorAction` in abbreviation scenarios, so it is not cleanly
+salvageable. The psm1 `param()` form takes no common parameters, so `$args`
+receives the flags literally — `echo` therefore stays a psm1 function
+permanently (rationale comment block at the `Invoke-BashEcho` definition).
+
+`ls` is **not yet migrated** (REFACTOR-2 Phase 1c deferred it as a follow-on):
+it is the hardest of the deferred set — typed `LsEntry` objects, `-R`
+recursion, and grid formatting (`Format-LsGrid` / `Format-LsLine` /
+`Get-BashFileInfo` / `Get-LsDisplayName` / `ConvertTo-PermissionString`), a
+larger helper web than the cat/head/tail/wc subset.
 
 ### Output Strategy
 
@@ -152,13 +165,13 @@ foreach ($item in $pipelineInput) {
 | echo | Invoke-BashEcho | `-n`, `-e`, `-E` | ConvertFrom-BashArgs | No | No |
 | printf | Invoke-BashPrintf | (format + args) | Positional | No | No |
 | ls | Invoke-BashLs | `-l`, `-a`, `-h`, `-R`, `-S`, `-t`, `-r`, `-1` | ConvertFrom-BashArgs | No | Yes |
-| cat | Invoke-BashCat | `-n`, `-b`, `-s`, `-E`, `-T` | ConvertFrom-BashArgs | Yes | Yes |
+| cat | Invoke-BashCat | `-n`, `-b`, `-s`, `-E`, `-T` | Binary cmdlet (`-E` is a declared SwitchParameter; rest via ConvertFromBashArgs) | Yes | Yes |
 | grep | Invoke-BashGrep | `-i`, `-v`, `-n`, `-c`, `-r`, `-l`, `-E`, `-A`, `-B`, `-C` | Manual loop | Yes | Yes |
 | rg | Invoke-BashRg | `-i`, `-w`, `-c`, `-l`, `-n`, `-N`, `-o`, `-v`, `-F`, `-g`, `-A`, `-B`, `-C`, `--hidden` | Manual loop | Yes | Yes |
 | sort | Invoke-BashSort | `-r`, `-n`, `-u`, `-f`, `-k`, `-t`, `-h`, `-V`, `-M`, `-c` | Manual loop | Yes | Yes |
-| head | Invoke-BashHead | `-n`, `-c` | Manual loop | Yes | Yes |
-| tail | Invoke-BashTail | `-n`, `-c`, `-f` | Manual loop | Yes | Yes |
-| wc | Invoke-BashWc | `-l`, `-w`, `-c` | ConvertFrom-BashArgs | Yes | Yes |
+| head | Invoke-BashHead | `-n`, `-c` | Binary cmdlet (manual value-flag scan) | Yes | Yes |
+| tail | Invoke-BashTail | `-n`, `-c`, `-f`, `-s` | Binary cmdlet (manual value-flag scan) | Yes | Yes |
+| wc | Invoke-BashWc | `-l`, `-w`, `-c` | Binary cmdlet (`-w` is a declared SwitchParameter; rest via ConvertFromBashArgs) | Yes | Yes |
 | find | Invoke-BashFind | `-name`, `-type`, `-size`, `-maxdepth`, `-mtime`, `-empty` | Manual loop | No | Yes |
 | stat | Invoke-BashStat | `-c`, `-t`, `--printf` | Manual loop | No | Yes |
 | cp | Invoke-BashCp | `-r`, `-v`, `-n`, `-f` | ConvertFrom-BashArgs | No | Yes |

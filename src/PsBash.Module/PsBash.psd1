@@ -80,10 +80,12 @@ FunctionsToExport = 'Set-BashErrorMode', 'Invoke-ProcessSub', 'Invoke-ProcessSub
                'New-FlagDefs', 'Invoke-BashLs', 'Get-BashFileInfo',
                'Format-BashSize', 'Format-BashDate', 'Format-LsLine',
                'Get-LsDisplayName', 'Format-LsGrid',
-               'ConvertTo-PermissionString', 'Invoke-BashCat', 'Get-BashText',
+               'ConvertTo-PermissionString', 'Get-BashText',
                'Invoke-BashGrep', 'Invoke-BashSort', 'ConvertFrom-HumanNumeric',
                'Compare-Version', 'ConvertFrom-MonthName',
-               'Invoke-BashHead', 'Invoke-BashTail', 'Invoke-BashWc',
+               # Invoke-BashCat / Invoke-BashHead / Invoke-BashTail /
+               # Invoke-BashWc migrated to binary cmdlets in PsBash.Cmdlets.dll
+               # (REFACTOR-2 Phase 1c) — no longer psm1 functions.
                'Invoke-BashFind',
                'Invoke-BashStat', 'Format-StatString',
                'Invoke-BashCp', 'Invoke-BashMv', 'Invoke-BashRm',

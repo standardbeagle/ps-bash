@@ -1,9 +1,9 @@
 {
   "status": "paused",
-  "iterations": 13,
+  "iterations": 14,
   "spawns": 11,
   "started_at": "2026-05-12T20:33:00Z",
-  "last_iteration_at": "2026-05-14T09:35:00Z",
+  "last_iteration_at": "2026-05-14T16:30:00Z",
   "last_subagent": "task-executor",
   "loop_task_id": "AEACP6UqDUBr",
   "dartboard": "Personal/ps-bash",
@@ -490,6 +490,22 @@
         "docs/specs/runtime-functions.md"
       ],
       "plan_adjustment_note": "Dispatch targeted 8 functions (echo printf cat ls head tail wc pwd); migrated the coherent clean subset of 2 (printf, pwd) per the dispatch's explicit 'coherent subset + follow-on is acceptable' guidance. echo CANNOT migrate to a PSCmdlet: its -e/-n/-E short flags prefix-collide with PowerShell common parameters (-e is ambiguous with -ErrorAction/-ErrorVariable), so it stays a psm1 param() function which takes no common params. pwd's -P similarly prefix-collides with -ProgressAction - solved by declaring -P as an explicit SwitchParameter (exact match beats common-param prefix match). cat/ls/head/tail/wc deferred: they depend on Resolve-BashGlob + Open-BashFileReader + typed CatLine/LsEntry emission which Phase 2 left in psm1 - a larger follow-on. MjqPco7X45k4 left Doing; follow-on for echo-rationale + cat/ls/head/tail/wc should be filed by the loop driver."
+    },
+    {
+      "task_id": "wBtANzihoYGJ",
+      "iteration": 3,
+      "status": "completed",
+      "started_at": "2026-05-14T15:30:00Z",
+      "completed_at": "2026-05-14T16:30:00Z",
+      "phase_completed": "phase-9",
+      "failed_phase": null,
+      "files_changed": 11,
+      "tests_added": 43,
+      "plan_adjustments": 2,
+      "completion_summary": "REFACTOR-2 Phase 1c: migrated coherent subset cat/head/tail/wc to binary cmdlets; ls deferred to follow-on cB7ppi6blbWv. Found and fixed common-parameter collisions (wc -w / cat -E) the task spec mis-claimed as safe \u2014 declared as explicit SwitchParameters with bundled-flag recovery. 43 parity tests + ModulePartialLoadTests green.",
+      "failure_reason": null,
+      "fix_task_created": true,
+      "fix_task_id": "cB7ppi6blbWv"
     }
   ],
   "interrupted_at": null,

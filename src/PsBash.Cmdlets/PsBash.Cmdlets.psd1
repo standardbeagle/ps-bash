@@ -50,7 +50,12 @@ CmdletsToExport = @(
     'Invoke-BashBasename',
     'Invoke-BashDirname',
     'Invoke-BashPrintf',
-    'Invoke-BashPwd'
+    'Invoke-BashPwd',
+    # REFACTOR-2 Phase 1c: cat / head / tail / wc migrated from PsBash.psm1.
+    'Invoke-BashCat',
+    'Invoke-BashHead',
+    'Invoke-BashTail',
+    'Invoke-BashWc'
 )
 
 VariablesToExport = @()
