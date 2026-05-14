@@ -620,6 +620,14 @@ function New-FlagDefs {
 }
 
 # --- echo Command ---
+# REFACTOR-2 Phase 1b note: Invoke-BashEcho was NOT migrated to a binary
+# cmdlet. echo's bash flags -e / -n / -E prefix-match PowerShell common
+# parameters (-ErrorAction etc.) under PSCmdlet parameter binding — `-e`
+# binds ambiguously and never reaches a ValueFromRemainingArguments param.
+# The psm1 `param()` form (no [CmdletBinding()]) takes no common parameters,
+# so $args receives -e/-n/-E literally. echo therefore stays a psm1 function.
+# (Invoke-BashPrintf and Invoke-BashPwd, which have no colliding short flags,
+# WERE migrated — see PsBash.Cmdlets/InvokeBashPrintfCommand.cs / InvokeBashPwdCommand.cs.)
 
 function Invoke-BashEcho {
     [OutputType('PsBash.TextOutput')]
@@ -651,176 +659,9 @@ function Invoke-BashEcho {
 }
 
 # --- printf Command ---
-
-function Invoke-BashPrintf {
-    [OutputType('PsBash.TextOutput')]
-    param()
-    $Arguments = [string[]]$args
-    if ($Arguments -contains '--help') { return Show-BashHelp 'printf' }
-
-    if (-not $Arguments -or $Arguments.Count -eq 0) {
-        Write-BashError -Message 'printf: usage: printf format [arguments]' -ExitCode 2
-        return
-    }
-
-    $format = $Arguments[0]
-    $args_list = if ($Arguments.Count -gt 1) { $Arguments[1..($Arguments.Count - 1)] } else { @() }
-
-    $converted = [System.Collections.Generic.List[object]]::new()
-    foreach ($a in $args_list) {
-        $intVal = 0
-        $doubleVal = 0.0
-        if ([int]::TryParse($a, [ref]$intVal)) {
-            $converted.Add($intVal)
-        } elseif ([double]::TryParse($a, [ref]$doubleVal)) {
-            $converted.Add($doubleVal)
-        } else {
-            $converted.Add($a)
-        }
-    }
-
-    $format = $format -replace '%%', "`0ESCAPED_PERCENT`0"
-    $format = Expand-EscapeSequences -Text $format
-
-    $sb = [System.Text.StringBuilder]::new()
-    $argIdx = 0
-    $i = 0
-    while ($i -lt $format.Length) {
-        if ($format[$i] -eq '%' -and ($i + 1) -lt $format.Length) {
-            $j = $i + 1
-            $flags = ''
-            while ($j -lt $format.Length -and $format[$j] -match '^[-+ 0#]$') {
-                $flags += $format[$j]
-                $j++
-            }
-            $width = ''
-            while ($j -lt $format.Length -and $format[$j] -match '^\d$') {
-                $width += $format[$j]
-                $j++
-            }
-            $precision = ''
-            if ($j -lt $format.Length -and $format[$j] -eq '.') {
-                $j++
-                while ($j -lt $format.Length -and $format[$j] -match '^\d$') {
-                    $precision += $format[$j]
-                    $j++
-                }
-            }
-            $spec = if ($j -lt $format.Length) { $format[$j] } else { '' }
-            $fullSpec = $format.Substring($i, $j - $i + 1)
-
-            switch -casesensitive ($spec) {
-                's' {
-                    if ($argIdx -lt $converted.Count) {
-                        $val = [string]$converted[$argIdx]
-                        if ($width -and $precision) {
-                            $val = $val.PadLeft([int]$width).Substring(0, [math]::Min([int]$precision, $val.Length))
-                        } elseif ($width) {
-                            if ($flags.Contains('-')) { $val = $val.PadRight([int]$width) }
-                            else { $val = $val.PadLeft([int]$width) }
-                        }
-                        [void]$sb.Append($val)
-                    }
-                    $argIdx++
-                    $i = $j + 1
-                }
-                'd' {
-                    if ($argIdx -lt $converted.Count) {
-                        $val = [int]$converted[$argIdx]
-                        if ($width) {
-                            $zeroPad = $flags.Contains('0')
-                            $leftAlign = $flags.Contains('-')
-                            $showPlus = $flags.Contains('+')
-                            $prefix = if ($val -ge 0 -and $showPlus) { '+' } else { '' }
-                            $str = "$prefix$($val.ToString())"
-                            if ($zeroPad -and -not $leftAlign) { $str = $str.PadLeft([int]$width, '0') }
-                            elseif ($leftAlign) { $str = $str.PadRight([int]$width) }
-                            else { $str = $str.PadLeft([int]$width) }
-                            [void]$sb.Append($str)
-                        } else {
-                            [void]$sb.Append($val)
-                        }
-                    }
-                    $argIdx++
-                    $i = $j + 1
-                }
-                'f' {
-                    if ($argIdx -lt $converted.Count) {
-                        $prec = if ($precision) { [int]$precision } else { 6 }
-                        [void]$sb.Append([string]::Format("{0,${width}:F${prec}}", [double]$converted[$argIdx]).Trim())
-                    }
-                    $argIdx++
-                    $i = $j + 1
-                }
-                'x' {
-                    if ($argIdx -lt $converted.Count) {
-                        $val = [int]$converted[$argIdx]
-                        $str = $val.ToString('x')
-                        if ($flags.Contains('#')) { $str = "0x$str" }
-                        if ($width) { $str = $str.PadLeft([int]$width, '0') }
-                        [void]$sb.Append($str)
-                    }
-                    $argIdx++
-                    $i = $j + 1
-                }
-                'X' {
-                    if ($argIdx -lt $converted.Count) {
-                        $val = [int]$converted[$argIdx]
-                        $str = $val.ToString('X')
-                        if ($flags.Contains('#')) { $str = "0X$str" }
-                        if ($width) { $str = $str.PadLeft([int]$width, '0') }
-                        [void]$sb.Append($str)
-                    }
-                    $argIdx++
-                    $i = $j + 1
-                }
-                'o' {
-                    if ($argIdx -lt $converted.Count) {
-                        $val = [int]$converted[$argIdx]
-                        $str = [Convert]::ToString($val, 8)
-                        if ($flags.Contains('#') -and -not $str.StartsWith('0')) { $str = "0$str" }
-                        if ($width) { $str = $str.PadLeft([int]$width, '0') }
-                        [void]$sb.Append($str)
-                    }
-                    $argIdx++
-                    $i = $j + 1
-                }
-                'c' {
-                    if ($argIdx -lt $converted.Count) {
-                        $v = $converted[$argIdx]
-                        if ($v -is [int] -or $v -is [long]) {
-                            [void]$sb.Append([char][int]$v)
-                        } else {
-                            $s = [string]$v
-                            if ($s.Length -gt 0) { [void]$sb.Append($s[0]) }
-                        }
-                    }
-                    $argIdx++
-                    $i = $j + 1
-                }
-                'b' {
-                    if ($argIdx -lt $converted.Count) {
-                        $expanded = Expand-EscapeSequences -Text ([string]$converted[$argIdx])
-                        [void]$sb.Append($expanded)
-                    }
-                    $argIdx++
-                    $i = $j + 1
-                }
-                default {
-                    [void]$sb.Append($format[$i])
-                    $i++
-                }
-            }
-        } else {
-            [void]$sb.Append($format[$i])
-            $i++
-        }
-    }
-
-    $result = $sb.ToString() -replace "`0ESCAPED_PERCENT`0", '%'
-
-    New-BashObject -BashText $result -NoTrailingNewline -Command 'printf'
-}
+# REFACTOR-2 Phase 1b: Invoke-BashPrintf migrated to a binary cmdlet
+# (PsBash.Cmdlets/InvokeBashPrintfCommand.cs). The psm1 no longer defines it;
+# the `Set-Alias printf -> Invoke-BashPrintf` line below resolves to the cmdlet.
 
 # --- Human-readable Size Formatter ---
 
@@ -9980,50 +9821,11 @@ function Invoke-BashEnv {
 # resolves via the cmdlet registration.
 
 # --- pwd ---
+# REFACTOR-2 Phase 1b: Invoke-BashPwd migrated to a binary cmdlet
+# (PsBash.Cmdlets/InvokeBashPwdCommand.cs). The psm1 no longer defines it;
+# the `Set-Alias pwd -> Invoke-BashPwd` line below resolves to the cmdlet.
 
-function Invoke-BashPwd {
-    [OutputType('PsBash.TextOutput')]
-    param()
-    $Arguments = [string[]]$args
-    if ($Arguments -contains '--help') { return Show-BashHelp 'pwd' }
 
-    $physical = $false
-    foreach ($arg in $Arguments) {
-        if ($arg -ceq '-P') { $physical = $true }
-    }
-
-    # Resolve location. (Get-Location).Path is authoritative for the shell's
-    # cwd in PowerShell — it tracks Set-Location / Push-Location across
-    # platforms. $env:PWD is unreliable on macOS where PowerShell does not
-    # sync the env var after Push-Location, so the Pester runner ends up with
-    # $env:PWD="/" even though Get-Location is the workspace. Reach for it
-    # only when an explicit override is present via $global:__PsBashCwd
-    # (StrictMode-safe Get-Variable lookup).
-    $location = $null
-    if (-not $physical) {
-        $cwdVar = Get-Variable -Name '__PsBashCwd' -Scope Global -ErrorAction SilentlyContinue
-        if ($cwdVar -and $cwdVar.Value) { $location = [string]$cwdVar.Value }
-    } elseif ($physical) {
-        try {
-            $location = (Resolve-Path -Path (Get-Location).Path).ProviderPath
-        } catch {
-            Write-BashError -Message "pwd: error resolving path: $($_.Exception.Message)"
-            return
-        }
-    }
-    # Final fallback: PowerShell's Get-Location, which respects Push-Location /
-    # test-fixture pushd in Pester. Use this rather than
-    # [System.Environment]::CurrentDirectory because the latter is the .NET
-    # process CWD, which is not updated by PowerShell's Set-Location and
-    # collapses to "/" on macOS in some Pester runners.
-    if (-not $location) { $location = (Get-Location).Path }
-
-    $location = $location -replace '\\', '/'
-    # Emit a typed PsBash.PwdLine so consumers (and tests) get a PSCustomObject
-    # with a .BashText property; bypasses the Emit-BashLine fast-path which
-    # returns a bare [string] for default PsBash.TextOutput.
-    New-BashObject -BashText $location -TypeName 'PsBash.PwdLine' -Command 'pwd'
-}
 
 # --- hostname ---
 

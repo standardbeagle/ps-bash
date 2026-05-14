@@ -71,7 +71,11 @@ FormatsToProcess = 'PsBash.Format.ps1xml'
 
 # Functions to export from this module, for best performance, do not use wildcards and do not delete the entry, use an empty array if there are no functions to export.
 FunctionsToExport = 'Set-BashErrorMode', 'Invoke-ProcessSub', 'Invoke-ProcessSubSource', 'Invoke-ProcessSubString', 'Invoke-ProcessSubPipeline',
-               'Invoke-BashEcho', 'Invoke-BashPrintf', 'Get-BashPlatform',
+               # Invoke-BashPrintf migrated to a binary cmdlet in
+               # PsBash.Cmdlets.dll (REFACTOR-2 Phase 1b) — no longer a psm1
+               # function. Invoke-BashEcho stays a psm1 function: its -e/-n/-E
+               # short flags prefix-collide with PSCmdlet common parameters.
+               'Invoke-BashEcho', 'Get-BashPlatform',
                'New-BashObject', 'Emit-BashLine', 'ConvertFrom-BashArgs', 'Expand-EscapeSequences',
                'New-FlagDefs', 'Invoke-BashLs', 'Get-BashFileInfo',
                'Format-BashSize', 'Format-BashDate', 'Format-LsLine',
@@ -102,10 +106,11 @@ FunctionsToExport = 'Set-BashErrorMode', 'Invoke-ProcessSub', 'Invoke-ProcessSub
                'Invoke-BashExpr',
                'Invoke-BashDu', 'Invoke-BashTree',
                'Invoke-BashEnv',
-               # Invoke-BashBasename / Invoke-BashDirname migrated to binary
-               # cmdlets in PsBash.Cmdlets.dll (REFACTOR-2 Phase 1) — no longer
-               # psm1 functions, so they are not exported here.
-               'Invoke-BashPwd', 'Invoke-BashHostname', 'Invoke-BashWhoami', 'Invoke-BashUname',
+               # Invoke-BashBasename / Invoke-BashDirname (REFACTOR-2 Phase 1)
+               # and Invoke-BashPwd (REFACTOR-2 Phase 1b) migrated to binary
+               # cmdlets in PsBash.Cmdlets.dll — no longer psm1 functions, so
+               # they are not exported here.
+               'Invoke-BashHostname', 'Invoke-BashWhoami', 'Invoke-BashUname',
                'Invoke-BashFold', 'Invoke-BashExpand', 'Invoke-BashUnexpand',
                'Invoke-BashStrings', 'Invoke-BashSplit', 'Invoke-BashTac',
                'Invoke-BashBase64', 'Invoke-BashMd5sum', 'Invoke-BashSha1sum',

@@ -71,6 +71,30 @@ runspace/script scope (`$script:BashErrorMode`, the PowerShell path provider)
 that a plain static helper cannot reach — only `BashRuntime.FormatBashError`
 (the runspace-free message-formatting piece) is shared.
 
+### Migrated Binary Cmdlets (REFACTOR-2 Phase 1 / 1b)
+
+Some leaf `Invoke-Bash*` commands are no longer psm1 functions — they are
+binary cmdlets in `PsBash.Cmdlets.dll`. The psm1 still carries their
+`Set-Alias` lines, which resolve to the cmdlet (a script function would
+otherwise shadow a same-named cmdlet). The host load order imports
+`PsBash.Cmdlets.dll` before the psm1 runs as a script, so the cmdlets exist
+before the psm1 `Set-Alias` lines execute.
+
+| Command | Cmdlet class | Phase | Notes |
+|---|---|---|---|
+| basename | `InvokeBashBasenameCommand` | 1 | Pure string transform |
+| dirname  | `InvokeBashDirnameCommand`  | 1 | Pure string transform |
+| printf   | `InvokeBashPrintfCommand`   | 1b | Format engine; `--help` / usage-error delegate to psm1 `Show-BashHelp` / `Write-BashError` via string-bodied `InvokeScript` |
+| pwd      | `InvokeBashPwdCommand`      | 1b | Reads `$global:__PsBashCwd` + current location via `SessionState`; `-P` is declared as an explicit `SwitchParameter` because the bare token `-P` prefix-collides with the `-ProgressAction` common parameter |
+
+`echo` was **not** migrated: its `-e` / `-n` / `-E` short flags prefix-collide
+with PowerShell common parameters (`-e` is ambiguous with `-ErrorAction` /
+`-ErrorVariable`) under `PSCmdlet` parameter binding. The psm1 `param()` form
+takes no common parameters, so `$args` receives the flags literally — `echo`
+therefore stays a psm1 function. `cat`, `ls`, `head`, `tail`, `wc` are also
+not yet migrated: they depend on `Resolve-BashGlob` + `Open-BashFileReader` +
+typed `CatLine` / `LsEntry` emission, which is a larger follow-on.
+
 ### Output Strategy
 
 ```
@@ -168,7 +192,7 @@ foreach ($item in $pipelineInput) {
 | env | Invoke-BashEnv | (none) | Positional | No | No |
 | basename | Invoke-BashBasename | `-s` | Manual loop | No | No |
 | dirname | Invoke-BashDirname | (none) | Positional | No | No |
-| pwd | Invoke-BashPwd | `-P` | ConvertFrom-BashArgs | No | No |
+| pwd | Invoke-BashPwd | `-P` | Binary cmdlet (`-P` is a declared SwitchParameter) | No | No |
 | hostname | Invoke-BashHostname | (none) | None | No | No |
 | whoami | Invoke-BashWhoami | (none) | None | No | No |
 | fold | Invoke-BashFold | `-w`, `-s`, `-b` | Manual loop | Yes | Yes |

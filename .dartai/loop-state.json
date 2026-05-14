@@ -461,6 +461,35 @@
         "docs/specs/emitter-strategy.md"
       ],
       "plan_adjustment_note": "Task spec proposed a bare $(if...) subexpression; discovered via SDK probe that $(...) yielding nothing still injects a spurious $null arg - corrected to true @-splat with @()-wrapped if (assigning bare if{@()} collapses empty branch to $null). Baseline-diff: 5 deterministic Differential failures (Redirect_IoNumber, AndOr_CdInChain, Redirect_Stderr_DevNull, Background_WaitLastPid, Redirect_Heredoc_Expanding) fail identically on clean tree - pre-existing WSL2 process-spawn flaky baseline, zero regressions attributable to RC-7."
+    },
+    {
+      "task_id": "MjqPco7X45k4",
+      "iteration": 2,
+      "status": "completed",
+      "started_at": "2026-05-14T09:40:00Z",
+      "completed_at": "2026-05-14T10:55:00Z",
+      "phase_completed": "phase-9",
+      "failed_phase": null,
+      "files_changed": 8,
+      "tests_added": 33,
+      "plan_adjustments": 1,
+      "completion_summary": "REFACTOR-2 Phase 1b: migrated printf + pwd from psm1 script functions to binary cmdlets (InvokeBashPrintfCommand.cs, InvokeBashPwdCommand.cs) on top of the BashRuntime helpers. echo NOT migrated and cat/ls/head/tail/wc deferred - documented coherent-subset rationale, follow-on needed. 33 new parity tests in PsBash.Cmdlets.Tests all green incl ModulePartialLoadTests. Differential baseline-diff: 13 failures with changes vs 14 on clean tree, all in the known-flaky process-spawn category, zero printf/pwd/echo regressions. Canary 11/11 green.",
+      "failure_reason": null,
+      "fix_task_created": false,
+      "fix_task_id": null,
+      "parent_loop_id": "IaiAaDTVqJY6",
+      "branch": "main",
+      "files": [
+        "src/PsBash.Cmdlets/InvokeBashPrintfCommand.cs",
+        "src/PsBash.Cmdlets/InvokeBashPwdCommand.cs",
+        "src/PsBash.Cmdlets.Tests/InvokeBashPrintfPwdCommandTests.cs",
+        "src/PsBash.Module/PsBash.psm1",
+        "src/PsBash.Module/PsBash.psd1",
+        "src/PsBash.Cmdlets/PsBash.Cmdlets.psd1",
+        "src/PsBash.Cmdlets/PsBash.Cmdlets.Experimental.psd1",
+        "docs/specs/runtime-functions.md"
+      ],
+      "plan_adjustment_note": "Dispatch targeted 8 functions (echo printf cat ls head tail wc pwd); migrated the coherent clean subset of 2 (printf, pwd) per the dispatch's explicit 'coherent subset + follow-on is acceptable' guidance. echo CANNOT migrate to a PSCmdlet: its -e/-n/-E short flags prefix-collide with PowerShell common parameters (-e is ambiguous with -ErrorAction/-ErrorVariable), so it stays a psm1 param() function which takes no common params. pwd's -P similarly prefix-collides with -ProgressAction - solved by declaring -P as an explicit SwitchParameter (exact match beats common-param prefix match). cat/ls/head/tail/wc deferred: they depend on Resolve-BashGlob + Open-BashFileReader + typed CatLine/LsEntry emission which Phase 2 left in psm1 - a larger follow-on. MjqPco7X45k4 left Doing; follow-on for echo-rationale + cat/ls/head/tail/wc should be filed by the loop driver."
     }
   ],
   "interrupted_at": null,
