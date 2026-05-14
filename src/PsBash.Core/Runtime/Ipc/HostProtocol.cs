@@ -63,6 +63,37 @@ public static class HostProtocol
     public const string PromptReadySentinel = "<<<PROMPT-READY>>>";
 
     /// <summary>
+    /// PTY-5 lifecycle sentinel: the launcher emits this on the interactive
+    /// response stream after it has forwarded a terminal signal (Ctrl-C /
+    /// SIGINT, Ctrl-Z / SIGTSTP) to the host's foreground process group. It is
+    /// informational — it lets a launcher-side prompt renderer know the host
+    /// was interrupted so it can reset its own prompt state (e.g. drop a
+    /// half-typed line, repaint a fresh prompt) without having to infer the
+    /// interruption from the host's exit code.
+    ///
+    /// <para>The signal name follows the sentinel as a bare token, e.g.
+    /// <c>&lt;&lt;&lt;SIGNAL-DELIVERED:SIGINT&gt;&gt;&gt;</c>. In the PTY raw
+    /// byte-pump path (<c>RunHostUnderPtyAsync</c>) the launcher and host share
+    /// no framed IPC channel, so the launcher tracks delivered signals via
+    /// <c>SignalForwarder</c> directly; this constant is the canonical wire
+    /// token for launchers that <i>do</i> run a framed interactive channel.</para>
+    /// </summary>
+    public const string SignalDeliveredPrefix = "<<<SIGNAL-DELIVERED:";
+
+    /// <summary>Suffix paired with <see cref="SignalDeliveredPrefix"/>.</summary>
+    public const string SignalDeliveredSuffix = ">>>";
+
+    /// <summary>
+    /// Format a <see cref="SignalDeliveredPrefix"/> frame for the given signal
+    /// name (e.g. <c>SIGINT</c>, <c>SIGTSTP</c>).
+    /// </summary>
+    public static string FormatSignalDelivered(string signalName)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(signalName);
+        return SignalDeliveredPrefix + signalName + SignalDeliveredSuffix;
+    }
+
+    /// <summary>
     /// REFACTOR-4: prefix marking a response data line as a <see cref="StreamTag.Stderr"/>
     /// frame. The colon is outside the base64 alphabet (<c>[A-Za-z0-9+/=]</c>), so a
     /// <see cref="StreamTag.Stdout"/> frame — a bare base64 line — can never begin with

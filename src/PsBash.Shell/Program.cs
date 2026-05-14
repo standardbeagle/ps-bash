@@ -266,8 +266,9 @@ static string? ResolveHostBinary()
 //
 // Window size: best-effort from Console; fall back to 80x24 if the launcher's
 // stdio is itself redirected (e.g. running under a parent that doesn't have a
-// terminal). Resize forwarding (SIGWINCH on POSIX, console-resize events on
-// Windows) is intentionally out of scope here and belongs to PTY-3.
+// terminal). PTY-5 wires ongoing resize forwarding (SIGWINCH on POSIX,
+// console-resize polling on Windows) plus Ctrl-C / Ctrl-Z signal forwarding
+// via SignalForwarder, installed alongside the raw-mode scope below.
 static async Task<int> RunHostUnderPtyAsync(string hostBinary, ShellArgs shellArgs)
 {
     short cols = 80, rows = 24;
@@ -301,12 +302,21 @@ static async Task<int> RunHostUnderPtyAsync(string hostBinary, ShellArgs shellAr
     // keys as they arrive. The scope is disposed in the outer finally so
     // a crashed pump still restores the user's terminal state.
     //
-    // SIGWINCH forwarding and Ctrl-C signal injection are intentionally
-    // deferred — they belong to a follow-on issue and live outside the
-    // mode-switching surface. (Ctrl-C is currently handled by the host's
-    // own Console.CancelKeyPress because the PTY slave inherits the
-    // signal-controlling terminal.)
     using var modeScope = TerminalMode.EnterRawIfTty();
+
+    // PTY-5: forward terminal signals from the launcher (the process actually
+    // attached to the user's tty) to the host's foreground process group.
+    // Without this, in raw passthrough mode Ctrl-C is dead, Ctrl-Z cannot
+    // suspend the running job, and a window resize never reaches vim/htop.
+    // Paired with modeScope: installed inside the same raw-mode region and
+    // disposed in the outer finally so a crashed pump still restores the
+    // user's default signal handlers. modeScope.IsActive doubles as the
+    // "launcher stdin is a real tty" probe — a pipe-driven launcher has no
+    // terminal signals to forward.
+    using var signalForwarder = SignalForwarder.Install(
+        hostPid: spawner.Pid,
+        pty: pty,
+        isLauncherStdinTty: modeScope.IsActive);
 
     using var pumpCts = new CancellationTokenSource();
     var stdinTask = Task.Run(async () =>

@@ -685,6 +685,34 @@
       "failure_reason": null,
       "fix_task_created": false,
       "fix_task_id": null
+    },
+    {
+      "task_id": "jpZLsDxNs8yd",
+      "iteration": 1,
+      "status": "completed",
+      "started_at": "2026-05-14T18:00:00Z",
+      "completed_at": "2026-05-14T21:50:00Z",
+      "phase_completed": "phase-9",
+      "failed_phase": null,
+      "files_changed": 4,
+      "tests_added": 7,
+      "plan_adjustments": 2,
+      "completion_summary": "PTY-5: launcher<->host terminal-signal forwarding. New src/PsBash.Shell/Pty/SignalForwarder.cs (POSIX SIGINT via PosixSignalRegistration + ctx.Cancel, SIGTSTP/SIGWINCH via raw signal() P/Invoke -> killpg(hostPgid)/TIOCGWINSZ->IPty.Resize; Windows SetConsoleCtrlHandler suppress + 150ms WindowWidth/Height resize poll -> ResizePseudoConsole). Wired into RunHostUnderPtyAsync paired with TerminalMode raw-mode scope, disposed in outer finally. HostProtocol.SignalDeliveredPrefix wire token added. 7 POSIX tests pass 6x deterministic-green (Windows leg SkippableFact, CI-gated). docs/specs/pty.md section 8 added incl. Ctrl-C vs Ctrl-Break matrix. AOT launcher publish verified clean (zero SignalForwarder IL warnings).",
+      "failure_reason": null,
+      "fix_task_created": false,
+      "fix_task_id": null,
+      "plan_adjustment_notes": [
+        "Test target groups: setpgid-after-exec races (errno surfaced); switched to `setsid sh -c 'echo $$; exec ...'` which deterministically reports the session-leader pid.",
+        "SIGTSTP to a SETSID host is an orphaned process group - POSIX discards default-disposition stop signals for orphaned groups. Test asserts signal DELIVERY (via a trap-handling child) not the stopped (T) state; documented in pty.md section 8.2. This is correct production behavior, not a bug."
+      ],
+      "verification": "./scripts/test.sh src/PsBash.Shell.Tests --filter SignalForwarderTests => Passed 7, Skipped 1 (6x consecutive). Full PsBash.Shell.Tests baseline-diff: 19 failures identical to clean-main set, all FileLocking/Redirect/Interactive/Pwd WSL2-SIGABRT baseline, zero PTY/signal failures. Core IPC/HostProtocol: Passed 75. AOT publish linux-x64 succeeded, ps-bash binary produced, zero SignalForwarder trim/IL warnings.",
+      "files": [
+        "src/PsBash.Shell/Pty/SignalForwarder.cs",
+        "src/PsBash.Shell/Program.cs",
+        "src/PsBash.Core/Runtime/Ipc/HostProtocol.cs",
+        "src/PsBash.Shell.Tests/Pty/SignalForwarderTests.cs",
+        "docs/specs/pty.md"
+      ]
     }
   ],
   "interrupted_at": null,

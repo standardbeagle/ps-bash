@@ -297,12 +297,14 @@ translation introduces flicker on cursor moves.
 ### 7.7 What PTY-3 does *not* do
 
 - **SIGWINCH forwarding**: launcher does not propagate window-resize
-  events to the host PTY. Deferred to a follow-on issue.
-- **Ctrl-C signal injection**: relies on the host's own
-  `Console.CancelKeyPress` handler — works because the PTY slave is
-  the host's controlling terminal and the kernel routes Ctrl-C there
-  directly via the line discipline. PTY-3 does not need its own
-  signal pump.
+  events to the host PTY. **Done in PTY-5** (§8) — `SignalForwarder`
+  installs a `SIGWINCH` handler that re-pushes the launcher tty's
+  winsize onto the PTY master.
+- **Ctrl-C signal injection**: PTY-3 relied on the host's own
+  `Console.CancelKeyPress` handler. **PTY-5 (§8) adds explicit
+  launcher-side forwarding** for the raw passthrough case where the
+  launcher — not the host — is the process attached to the user's real
+  tty.
 - **Mode state machine in the host's `InteractiveShell`**: the line
   editor lives in the host, not the launcher. The host already toggles
   console-mode in its own startup path; PTY-3's launcher-side raw mode
@@ -317,3 +319,110 @@ translation introduces flicker on cursor moves.
 POSIX tests run; Windows tests skip with reason on Linux. The
 Windows leg runs on the CI matrix via `actions/setup-dotnet@v4` on
 `windows-latest`.
+
+---
+
+## 8. PTY-5 — Launcher↔Host Signal Forwarding
+
+Owned by `src/PsBash.Shell/Pty/SignalForwarder.cs`; wired into
+`RunHostUnderPtyAsync` in `src/PsBash.Shell/Program.cs` alongside the
+PTY-3 raw-mode scope. Tests: `src/PsBash.Shell.Tests/Pty/SignalForwarderTests.cs`.
+
+### 8.1 Why the launcher must forward
+
+In raw passthrough mode the **launcher** is the process attached to the
+user's real tty. The kernel delivers terminal signals — `SIGINT`
+(Ctrl-C), `SIGTSTP` (Ctrl-Z), `SIGWINCH` (resize) — to whoever owns the
+controlling terminal, i.e. the launcher. The host runs under a *separate*
+PTY (PTY-2) and never sees the user's keystrokes as signals. Without
+explicit forwarding, Ctrl-C is dead inside ps-bash and a window resize is
+silent (vim/htop never repaint).
+
+### 8.2 POSIX
+
+`SignalForwarder.Install` installs three handlers for the lifetime of the
+raw-mode host child:
+
+| Signal | Managed API | Action |
+|--------|-------------|--------|
+| `SIGINT` | `PosixSignalRegistration` (covers `SIGINT`); `ctx.Cancel = true` | `killpg(hostPgid, SIGINT)` — re-deliver to the host's foreground process group. Launcher is *not* terminated. |
+| `SIGTSTP` | raw `signal()` P/Invoke (`PosixSignal` does not enumerate `SIGTSTP`) | `killpg(hostPgid, SIGTSTP)`. Launcher is *not* stopped — a stopped launcher freezes byte pumping forever. |
+| `SIGWINCH` | raw `signal()` P/Invoke | `ioctl(TIOCGWINSZ)` on the launcher tty → `IPty.Resize` (`ioctl(TIOCSWINSZ)`) on the PTY master. The kernel then sends `SIGWINCH` to the host through the slave. |
+
+`hostPgid` = the host pid. PTY-2 spawns the host with
+`POSIX_SPAWN_SETSID`, so it is a session/process-group leader and its
+pgid equals its pid; `killpg(hostPid, …)` therefore targets the whole
+foreground job.
+
+**Orphaned-process-group caveat.** Because the host is its own session
+leader, its process group is *orphaned* by POSIX definition (no member
+has a parent in a different group of the same session). POSIX §2.4.3
+specifies that a stop signal (`SIGTSTP`/`SIGTTIN`/`SIGTTOU`) whose action
+is the **default** is *discarded* for an orphaned group. So Ctrl-Z only
+actually suspends the host if the host installs its own `SIGTSTP`
+handler (which makes the action non-default, so it is delivered rather
+than discarded). The launcher's job is strictly to **deliver** the
+signal; what the host does with it is the host's concern. The
+`Posix_RaisingSigtstp_*` test reflects this — it asserts *delivery* (via
+a `trap`-handling child), not the stopped (`T`) state.
+
+### 8.3 Windows — Ctrl-C vs Ctrl-Break matrix
+
+ConPTY changes the model: it **auto-translates** a console Ctrl-C into a
+`CTRL_C_EVENT` delivered to the attached host process, which surfaces
+there as `Console.CancelKeyPress`. The launcher does **not** re-inject
+anything. The launcher's only job is to install a `SetConsoleCtrlHandler`
+that **suppresses its own default terminate-on-Ctrl-C** so the launcher
+process survives to keep pumping bytes. For resize, Windows has no
+`SIGWINCH`; a 150 ms background poll watches `Console.WindowWidth/Height`
+and calls `IPty.Resize` (ConPTY `ResizePseudoConsole`).
+
+| Console event | Crosses ConPTY boundary to host? | Launcher handler returns | Effect |
+|---------------|----------------------------------|--------------------------|--------|
+| `CTRL_C_EVENT` | Yes — ConPTY delivers it to the host as `CTRL_C_EVENT` → host `Console.CancelKeyPress`. | `TRUE` (handled — suppress launcher's own terminate). | Host cancels the running pipeline; launcher survives and keeps pumping. |
+| `CTRL_BREAK_EVENT` | Yes — and on some console hosts Ctrl-Break is the *only* control event that crosses cleanly, so it is treated as a first-class cancel path. | `TRUE` (handled — suppress launcher terminate). | Same as Ctrl-C: host sees the event, launcher survives. |
+| `CTRL_CLOSE_EVENT` | N/A — the console window is closing. | `FALSE` (unhandled — let the system tear the launcher down). | Launcher and host both exit; no suppression. |
+| `CTRL_LOGOFF_EVENT` / `CTRL_SHUTDOWN_EVENT` | N/A — session ending. | `FALSE` (unhandled). | Normal system-driven teardown. |
+
+**Recommendation:** prefer `CTRL_C_EVENT` for interactive cancel; rely on
+`CTRL_BREAK_EVENT` as the fallback on console hosts where Ctrl-C does not
+propagate. The launcher suppresses its default terminate for *both* so
+neither kills the launcher mid-pump.
+
+### 8.4 `signal-delivered` IPC token
+
+`HostProtocol.SignalDeliveredPrefix` (`<<<SIGNAL-DELIVERED:NAME>>>`) is
+the canonical wire token for a launcher that runs a framed interactive
+channel and wants to tell a prompt renderer "the host was just
+interrupted, reset prompt state". In the PTY raw byte-pump path
+(`RunHostUnderPtyAsync`) the launcher and host share no framed IPC
+channel, so the launcher instead tracks delivered signals directly via
+`SignalForwarder.SigintDeliveredCount` / `SigtstpDeliveredCount` /
+`WinchForwardedCount`. The constant is defined now so a future framed
+interactive launcher extends the existing protocol coherently rather
+than inventing a parallel channel.
+
+### 8.5 Lifecycle & AOT
+
+`SignalForwarder` is a save-set-restore `IDisposable`, installed inside
+the same `using` region as the PTY-3 raw-mode scope and disposed in the
+outer `finally` so a crashed pump still removes the handlers and the
+user's parent shell regains normal Ctrl-C behaviour. A non-tty launcher
+stdin yields an inactive scope (`Install` returns `Inactive`) that
+installs nothing. The launcher publishes `PublishAot=true`: `SIGINT` uses
+the managed `PosixSignalRegistration`, the raw `signal()` /
+`SetConsoleCtrlHandler` P/Invokes use statically-known delegate types
+(no runtime codegen), so the whole path is AOT-safe.
+
+### 8.6 Test invocation
+
+```bash
+./scripts/test.sh --filter "FullyQualifiedName~SignalForwarderTests"
+```
+
+POSIX tests run on Linux/WSL2 — they spawn a real session-leader child,
+install a forwarder targeting that pgid, raise the signal in-process, and
+assert the child group received it (the `SIGINT` handler sets
+`ctx.Cancel=true` so the test host is not killed). The Windows Ctrl-C /
+`ResizePseudoConsole` runtime verification is CI-gated; the Windows-tagged
+test asserts the headless install/dispose contract.
