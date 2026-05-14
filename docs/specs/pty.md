@@ -426,3 +426,96 @@ assert the child group received it (the `SIGINT` handler sets
 `ctx.Cancel=true` so the test host is not killed). The Windows Ctrl-C /
 `ResizePseudoConsole` runtime verification is CI-gated; the Windows-tagged
 test asserts the headless install/dispose contract.
+
+## 9. PTY-7 — Crash Recovery & Terminal-Mode Restoration
+
+If the launcher goes down while it is in raw passthrough mode — host
+crash, `kill -9` of the host, SIGHUP, Ctrl-C, an unhandled exception —
+the user's terminal must not be left with no echo, raw input, and a
+TUI-corrupted screen. The launcher must restore the terminal on *every*
+exit path.
+
+### 9.1 What PTY-3/5/6 already covered
+
+- **termios / console-mode save+raw+restore** — `TerminalMode` (PTY-3).
+- **`AppDomain.ProcessExit` + `UnhandledException` restore** — PTY-3's
+  `ProcessExitGuard` already hooked both.
+- **Idempotent restore** — each `TerminalMode.Scope` uses an
+  `Interlocked.Exchange` guard, so a normal `using` dispose and a crash
+  hook can both run safely; whichever runs first wins.
+- **SIGINT / SIGTSTP / SIGWINCH forwarding** — `SignalForwarder` (PTY-5),
+  itself an idempotent save-set-restore scope.
+- **`host-exiting` → `RestoreTerminal` action** — `HandoffStateMachine`
+  (PTY-6) maps the IPC sentinel to a terminal-mode action (the framed
+  interactive channel that *delivers* the sentinel is still deferred).
+
+### 9.2 What PTY-7 added
+
+- **SIGHUP restore (POSIX)** — `ProcessExitGuard` now registers a
+  `PosixSignalRegistration.Create(PosixSignal.SIGHUP, …)` handler. On
+  SIGHUP it restores the terminal, then leaves `ctx.Cancel` false so the
+  default disposition terminates the launcher. AOT-safe (PTY-5 already
+  relies on `PosixSignalRegistration` for SIGINT).
+- **`Console.CancelKeyPress` restore** — Ctrl-C / Ctrl-Break delivered to
+  the launcher itself now routes through the guard. The handler does
+  **not** set `Cancel=true` — the launcher still terminates, it just
+  hands back a sane tty first.
+- **Host-crash / socket-EOF detection** — `RunHostUnderPtyAsync` calls
+  `TerminalMode.EmergencyRestoreAll()` when the host exits with a
+  non-zero exit code (crash, or a signal death surfaced as 128+N). A
+  clean exit (`exitCode == 0`) takes the normal `using` dispose path.
+- **Emergency-restore escape sequence** — on every *abnormal* path the
+  restore also writes `TerminalMode.EmergencyResetSequence` (`ESC c`,
+  the VT100 RIS full reset — the byte-level `tput reset`) to stdout
+  *after* the termios restore. A `kill -9`'d TUI never ran its own
+  teardown, so the alternate screen buffer / hidden cursor / scroll
+  region survive a termios restore; RIS clears them so the parent shell
+  redraws clean. It is **emergency-path only** — a clean transition back
+  to cooked mode must not emit it, or every command return would flicker.
+
+### 9.3 Restore-ordering contract
+
+**Terminal-mode restore MUST run before the launcher process exits, on
+every path:**
+
+| Path | Hook | Emits reset escape? |
+|------|------|---------------------|
+| Clean host exit (`exitCode == 0`) | `using modeScope` dispose | No |
+| Host crash / non-zero exit | `EmergencyRestoreAll()` then `using` dispose (no-op) | Yes |
+| `AppDomain.ProcessExit` | `ProcessExitGuard` | Yes |
+| `AppDomain.UnhandledException` | `ProcessExitGuard` | Yes |
+| `Console.CancelKeyPress` (Ctrl-C/Break) | `ProcessExitGuard` | Yes |
+| SIGHUP (POSIX) | `ProcessExitGuard` via `PosixSignalRegistration` | Yes |
+| SIGINT / SIGTSTP | `SignalForwarder` forwards to host; launcher keeps running | n/a |
+
+Within an emergency restore the order is **termios/console-mode restore
+first, reset escape sequence second** — the escape bytes must go out on a
+stdout that is already back in a sane mode.
+
+`Environment.FailFast` is the one path that bypasses `ProcessExit` and
+all managed hooks. **The launcher must not call `FailFast` while a
+raw-mode scope is live** — if a future change needs a fail-fast path it
+must call `TerminalMode.EmergencyRestoreAll()` immediately before
+`FailFast`. (This is the `process_spawn_contract` rule the PTY-7 task
+asked to record; there is no `MEMORY.md` / `docs/solutions/` convention
+in this repo yet, so it is documented here in the PTY spec instead.)
+
+### 9.4 Manual vs automated test split
+
+- **Manual** (not CI-automatable): `kill -9` the host process while
+  `vim` is running under an interactive `ps-bash`, then confirm the
+  launcher's tty has echo + line discipline back and the screen is
+  redrawn clean.
+- **Automated proxy**: `TerminalModeTests` asserts (a) the emergency
+  reset sequence is exactly `ESC c`, (b) `EmergencyRestoreAll` with no
+  active scope is a safe no-op, (c) on a real PTY slave fd
+  `EmergencyRestoreAll` restores ICANON/ECHO and a following `Dispose`
+  is an idempotent no-op, and (d) a source-text regression that
+  `RunHostUnderPtyAsync` calls `EmergencyRestoreAll` gated on a non-zero
+  exit code.
+
+### 9.5 Test invocation
+
+```bash
+./scripts/test.sh --filter "FullyQualifiedName~TerminalModeTests"
+```

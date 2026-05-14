@@ -354,5 +354,23 @@ static async Task<int> RunHostUnderPtyAsync(string hostBinary, ShellArgs shellAr
         try { await stdoutTask.ConfigureAwait(false); } catch { /* swallow */ }
     }
 
+    // PTY-7: crash recovery. If the host exited abnormally — a non-zero exit
+    // code, or a signal death surfaced as 128+N (POSIX) — it almost certainly
+    // did NOT run its own terminal teardown (a `kill -9` while vim is running
+    // leaves the alternate screen buffer active, cursor hidden, scroll region
+    // set). The `using modeScope` below will still restore termios / console
+    // mode, but that alone does not undo the terminal-side screen corruption.
+    // EmergencyRestoreAll restores the tty AND emits the reset escape sequence
+    // so the user's parent shell redraws clean. It is idempotent: the
+    // subsequent `using` dispose of modeScope finds the scope already
+    // restored and is a no-op.
+    //
+    // A clean exit (exitCode == 0) takes the normal `using` dispose path with
+    // no escape sequence — a full reset there would flicker the screen.
+    if (exitCode != 0)
+    {
+        TerminalMode.EmergencyRestoreAll();
+    }
+
     return exitCode;
 }

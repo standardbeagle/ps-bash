@@ -736,6 +736,30 @@
         "src/PsBash.Shell.Tests/Pty/HandoffStateMachineTests.cs"
       ],
       "notes": "Plan adjustment 1: task text says 'InteractiveShell consumes the event' but PTY-3 placed the terminal-mode toggle (TerminalMode) in the LAUNCHER around the PTY pump, not InteractiveShell (which runs in the host and has no access to the launcher's tty). prompt-ready exists precisely so the launcher can leave raw mode. HandoffStateMachine is therefore launcher-side (PsBash.Shell), matching PTY-3's landed shape. Plan adjustment 2: 'busy' emission wiring and 'host-exiting' emission wiring into a live host-exit path are deferred-with-note: the current PTY interactive path is a raw byte-pump with NO framed IPC channel (per SignalForwarder's own comment re PTY-5's SignalDeliveredPrefix), so there is no IPC stream to emit lifecycle events onto in that path. PTY-6 lands the protocol surface (constants + write helpers + version bump) and the launcher-side consumer (HandoffStateMachine) as the deterministic, testable deliverable - same pattern PTY-5 used for SignalDeliveredPrefix (wire token defined, emission deferred to a launcher that runs a framed interactive channel). Baseline note: 11 AgentPatternEndToEndTests/PromptRenderingIntegrationTests failures in PsBash.Shell.Tests are a PRE-EXISTING WSL2 baseline (confirmed by clean `git stash -u` baseline - 3/3 sampled tests fail identically on clean main; root cause is the emitter's /tmp->$env:TEMP path transform with non-canonicalized env, unrelated to PTY-6). Zero new failures introduced."
+    },
+    {
+      "task_id": "RHhn5Mfhw2Kq",
+      "iteration": 3,
+      "status": "completed",
+      "started_at": "2026-05-14T22:35:00Z",
+      "completed_at": "2026-05-14T23:30:00Z",
+      "phase_completed": "phase-9",
+      "failed_phase": null,
+      "files_changed": 3,
+      "tests_added": 4,
+      "plan_adjustments": 1,
+      "completion_summary": "PTY-7 crash recovery & terminal-mode restoration. Gap-fill on PTY-3/5/6. Already-covered (verified, untouched): termios/console save+raw+restore, AppDomain.ProcessExit + UnhandledException hooks, idempotent Interlocked.Exchange restore guard, SIGINT/SIGTSTP/SIGWINCH forwarding. Newly added: (1) SIGHUP restore on POSIX via PosixSignalRegistration in ProcessExitGuard; (2) Console.CancelKeyPress restore hook (does not set Cancel - launcher still exits, just hands back sane tty); (3) host-crash/socket-EOF detection - RunHostUnderPtyAsync calls TerminalMode.EmergencyRestoreAll() on non-zero host exit; (4) emergency-restore escape sequence ESC c (VT100 RIS, byte-level tput reset) emitted on all abnormal paths AFTER termios restore, emergency-path-only so clean exit does not flicker; (5) consolidated all crash paths through ProcessExitGuard.EmergencyDisposeAll, restore idempotent and safe to call twice. Restore-ordering contract documented in docs/specs/pty.md section 9 (no MEMORY.md/docs/solutions convention exists in repo - chose pty.md).",
+      "failure_reason": null,
+      "fix_task_created": false,
+      "fix_task_id": null,
+      "files": [
+        "src/PsBash.Shell/Pty/TerminalMode.cs",
+        "src/PsBash.Shell/Program.cs",
+        "src/PsBash.Shell.Tests/Pty/TerminalModeTests.cs",
+        "docs/specs/pty.md"
+      ],
+      "verification": "./scripts/test.sh --filter TerminalModeTests => Passed 10, Skipped 2 (Windows-only). Full PTY suite (TerminalMode+SignalForwarder+HandoffStateMachine+PtySpawn+PtyAllocation) => Passed 43, Skipped 7, zero failures. Full PsBash.Shell.Tests baseline-diff => 19 failures, all AgentPatternEndToEndTests/PromptRenderingIntegrationTests = documented WSL2 /tmp->$env:TEMP baseline, zero PTY failures. AOT publish linux-x64 (--self-contained /p:PublishAot=true /warnaserror, exact CI invocation) => EXIT 0, zero trim/IL warnings.",
+      "notes": "Plan adjustment 1: task asked to document the restore-ordering contract 'in process_spawn_contract memory'. No MEMORY.md content and no docs/solutions/ directory exist in this repo - documented the contract in docs/specs/pty.md section 9.3 instead (stated the choice in the doc and Dart comment). Manual-vs-automated split: the 'kill -9 host while vim runs' test is genuinely manual; automated proxy tests assert (a) ESC c byte sequence, (b) EmergencyRestoreAll no-op with no scope, (c) on a real PTY slave fd EmergencyRestoreAll restores ICANON/ECHO and following Dispose is idempotent no-op, (d) source-text regression that RunHostUnderPtyAsync calls EmergencyRestoreAll gated on non-zero exit. host-exiting IPC-sentinel trigger: HandoffStateMachine (PTY-6) already maps it to RestoreTerminal but the framed interactive IPC channel that delivers the sentinel is still deferred (per PTY-6 notes) - the host-process-died detection (non-zero exit) is the landed crash-detection path for the current raw byte-pump."
     }
   ],
   "interrupted_at": null,

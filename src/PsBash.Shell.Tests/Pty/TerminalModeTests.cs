@@ -212,6 +212,110 @@ public class TerminalModeTests
     }
 
     // ------------------------------------------------------------------
+    // PTY-7: crash recovery + emergency-restore escape sequence.
+    // ------------------------------------------------------------------
+
+    /// <summary>
+    /// PTY-7: the emergency reset sequence must be the VT100 full reset
+    /// <c>ESC c</c> (RIS). This is the byte-level <c>tput reset</c> the
+    /// launcher emits after termios restore on an abnormal exit so a
+    /// TUI-corrupted screen (alternate buffer, hidden cursor) redraws clean.
+    /// </summary>
+    [Fact]
+    public void EmergencyResetSequence_IsVt100FullReset()
+    {
+        Assert.Equal(new byte[] { 0x1b, (byte)'c' }, TerminalMode.EmergencyResetSequence);
+    }
+
+    /// <summary>
+    /// PTY-7: <see cref="TerminalMode.EmergencyRestoreAll"/> with no active
+    /// raw-mode scope is a pure no-op and must not throw. The launcher calls
+    /// it unconditionally on abnormal host exit; when the launcher's stdin was
+    /// never a tty (pipe-driven / test host) there is nothing to restore.
+    /// QA rubric Directive 7 (negative path).
+    /// </summary>
+    [Fact]
+    public void EmergencyRestoreAll_NoActiveScope_IsNoOp()
+    {
+        // No scope registered — must not throw, must not emit anything.
+        TerminalMode.EmergencyRestoreAll();
+    }
+
+    /// <summary>
+    /// PTY-7: emergency restore of a live POSIX scope restores termios just
+    /// like a clean dispose, and is idempotent — a subsequent normal
+    /// <c>Dispose</c> (the <c>using</c> in the launcher's pump method) finds
+    /// the scope already restored and is a safe no-op. This is the core
+    /// crash-recovery invariant: restore must run before the launcher exits,
+    /// on every path, and must be safe to call twice.
+    /// </summary>
+    [SkippableFact]
+    [Trait("Platform", "Posix")]
+    public async Task Posix_EmergencyRestoreAll_RestoresTermios_AndIsIdempotent()
+    {
+        Skip.If(RuntimeInformation.IsOSPlatform(OSPlatform.Windows), "POSIX-only");
+
+        await using var pty = await PtyAllocator.AllocateAsync(cols: 80, rows: 24);
+        int slaveFd = pty.SlaveFileDescriptor;
+
+        var scope = TerminalMode.EnterRawForFd(slaveFd);
+        Assert.True(scope.IsActive);
+        Assert.False(TerminalModeProbe.IsCanonical(slaveFd), "raw mode should clear ICANON");
+
+        // Emergency restore (the host-crash path) must restore termios.
+        TerminalMode.EmergencyRestoreAll();
+        Assert.True(TerminalModeProbe.IsCanonical(slaveFd),
+            "EmergencyRestoreAll must restore ICANON just like a clean dispose");
+        Assert.True(TerminalModeProbe.HasEcho(slaveFd),
+            "EmergencyRestoreAll must restore ECHO");
+
+        // Idempotent: the launcher's `using` dispose runs after the emergency
+        // restore and must be a safe no-op, not a double-restore or throw.
+        scope.Dispose();
+        scope.Dispose();
+    }
+
+    /// <summary>
+    /// PTY-7 launcher integration regression: <c>RunHostUnderPtyAsync</c> must
+    /// call <c>TerminalMode.EmergencyRestoreAll()</c> on an abnormal host exit
+    /// (non-zero exit code = crash / signal death). If a refactor drops this,
+    /// a <c>kill -9</c> of the host leaves the user's terminal corrupted —
+    /// the exact "ps-bash ate my shell" failure PTY-7 exists to prevent.
+    /// Source-text check (Directive 13: known-bad memory).
+    /// </summary>
+    [Fact]
+    public void Launcher_RunHostUnderPtyAsync_EmergencyRestoresOnAbnormalHostExit()
+    {
+        var src = ReadProgramSource();
+
+        int methodSig = src.IndexOf("static async Task<int> RunHostUnderPtyAsync", StringComparison.Ordinal);
+        Assert.True(methodSig > 0, "RunHostUnderPtyAsync method signature missing");
+
+        // Match the actual call site, not a mention in a comment.
+        int emergencyIdx = src.IndexOf("TerminalMode.EmergencyRestoreAll(", methodSig, StringComparison.Ordinal);
+        Assert.True(emergencyIdx > 0,
+            "RunHostUnderPtyAsync must call TerminalMode.EmergencyRestoreAll() on abnormal host exit");
+
+        // It must be guarded by an exit-code check — a clean exit takes the
+        // normal `using` dispose path with no reset escape sequence.
+        int guardIdx = src.IndexOf("if (exitCode != 0)", methodSig, StringComparison.Ordinal);
+        Assert.True(guardIdx > 0 && guardIdx < emergencyIdx,
+            "Emergency restore must be gated on a non-zero (crash) exit code, not run on clean exit");
+    }
+
+    private static string ReadProgramSource()
+    {
+        var asmDir = Path.GetDirectoryName(typeof(TerminalMode).Assembly.Location)!;
+        var dir = new DirectoryInfo(asmDir);
+        while (dir is not null && dir.Name != "src" && dir.Parent is not null)
+            dir = dir.Parent;
+        Assert.NotNull(dir);
+        var programPath = Path.Combine(dir!.FullName, "PsBash.Shell", "Program.cs");
+        Assert.True(File.Exists(programPath), $"Could not find {programPath}");
+        return File.ReadAllText(programPath);
+    }
+
+    // ------------------------------------------------------------------
     // Launcher integration — assert that Program.cs wires TerminalMode in
     // around RunHostUnderPtyAsync. Source-text check; cheap and reliable.
     // ------------------------------------------------------------------

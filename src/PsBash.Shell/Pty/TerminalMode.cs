@@ -3,6 +3,10 @@ using System.Runtime.Versioning;
 
 namespace PsBash.Shell.Pty;
 
+// PTY-7 note: System.Runtime.InteropServices.PosixSignalRegistration is used
+// for the SIGHUP restore hook. It is AOT-safe (the launcher publishes
+// PublishAot=true) — PTY-5's SignalForwarder already relies on it for SIGINT.
+
 /// <summary>
 /// PTY-3: launcher-side tty mode toggle.
 ///
@@ -55,6 +59,44 @@ internal static partial class TerminalMode
         // scope without complaining.
         return EnterRawForFd(0);
     }
+
+    /// <summary>
+    /// PTY-7: emergency-restore escape sequence. Written to the launcher's
+    /// stdout <i>only on an abnormal exit</i> (host crash / socket EOF,
+    /// SIGHUP, Ctrl-C teardown, unhandled exception, ProcessExit) after the
+    /// termios / console-mode restore has run.
+    ///
+    /// <para><c>ESC c</c> (<c>\x1bc</c>) is the VT100 "full reset" (RIS —
+    /// Reset to Initial State). When a TUI host (vim, htop) is killed with
+    /// <c>kill -9</c> it never gets to emit its own teardown sequence, so the
+    /// terminal can be left with the alternate screen buffer active, a hidden
+    /// cursor, or a non-default scrolling region — none of which a termios
+    /// restore fixes (those are terminal-side state, not kernel tty state).
+    /// RIS clears all of it so the user's parent shell redraws clean. This is
+    /// the byte-level equivalent of <c>tput reset</c>.</para>
+    ///
+    /// <para>It is <b>emergency-path only</b>: a clean transition back to
+    /// cooked mode (the host exited normally, prompt-ready handoff) must NOT
+    /// emit it — a full reset on every command return would flicker the
+    /// screen and wipe scrollback.</para>
+    /// </summary>
+    public static readonly byte[] EmergencyResetSequence = { 0x1b, (byte)'c' };
+
+    /// <summary>
+    /// PTY-7: restore every live raw-mode scope <i>and</i> emit the
+    /// <see cref="EmergencyResetSequence"/> to stdout. Called from the
+    /// launcher's pump loop when it detects the host process died or the IPC
+    /// socket EOF'd while the launcher was still in raw mode — the host never
+    /// got to run its own teardown, so the launcher must restore the tty and
+    /// redraw clean on the host's behalf.
+    ///
+    /// <para>Idempotent and safe to call from any thread or twice: each
+    /// underlying <see cref="Scope"/> uses an <c>Interlocked.Exchange</c>
+    /// guard, so a later normal dispose (or the ProcessExit hook) is a no-op.
+    /// If no scope is active this is a pure no-op — no escape sequence is
+    /// emitted, because there was no raw mode to corrupt the screen.</para>
+    /// </summary>
+    public static void EmergencyRestoreAll() => ProcessExitGuard.EmergencyDisposeAll();
 
     /// <summary>
     /// POSIX-only entry point used by tests and by
@@ -189,7 +231,27 @@ internal static partial class TerminalMode
 
         public bool IsActive => _restorer is not null;
 
-        public void Dispose()
+        /// <summary>
+        /// Clean restore: the host exited normally / a prompt-ready handoff
+        /// brought the launcher back to cooked mode. Restores termios /
+        /// console mode only — <b>no</b> emergency reset escape sequence,
+        /// because a clean exit didn't leave the terminal's screen state
+        /// corrupted and a full reset would flicker.
+        /// </summary>
+        public void Dispose() => DisposeCore(emergency: false);
+
+        /// <summary>
+        /// PTY-7 emergency restore: the launcher is tearing down on an
+        /// abnormal path (host crash / socket EOF, SIGHUP, Ctrl-C, unhandled
+        /// exception, ProcessExit). Restores termios / console mode AND emits
+        /// <see cref="EmergencyResetSequence"/> so a TUI-corrupted screen
+        /// redraws clean. Shares the same <c>Interlocked.Exchange</c> guard as
+        /// <see cref="Dispose"/>, so whichever path runs first wins and the
+        /// other is a no-op — restore is idempotent and safe to call twice.
+        /// </summary>
+        internal void DisposeEmergency() => DisposeCore(emergency: true);
+
+        private void DisposeCore(bool emergency)
         {
             // Interlocked so the ProcessExit hook + a normal dispose can
             // both run safely.
@@ -197,6 +259,28 @@ internal static partial class TerminalMode
             if (r is null) return;
             try { r.Restore(); }
             catch { /* best-effort */ }
+            if (emergency)
+            {
+                // Restore the kernel tty state FIRST (above), THEN redraw the
+                // terminal-side screen state. Ordering matters: the reset
+                // sequence must go out on a stdout that is back in a sane
+                // mode. Best-effort — a redirected / closed stdout just drops
+                // the bytes, which is the correct fallback.
+                //
+                // The stream is NOT disposed: Console.OpenStandardOutput()
+                // hands back a stream over the process's real stdout handle,
+                // and disposing it here (on a crash path that may run
+                // concurrently with the launcher's own final flushes) could
+                // close that handle out from under other writers. Flush, then
+                // let it go — process teardown reclaims it.
+                try
+                {
+                    var stdout = Console.OpenStandardOutput();
+                    stdout.Write(EmergencyResetSequence, 0, EmergencyResetSequence.Length);
+                    stdout.Flush();
+                }
+                catch { /* best-effort: terminal redraw is a bonus, not load-bearing */ }
+            }
             ProcessExitGuard.Unregister(this);
         }
     }
@@ -253,24 +337,75 @@ internal static partial class TerminalMode
     }
 
     /// <summary>
-    /// AppDomain.ProcessExit hook that restores any scope still alive at
-    /// process termination. Without this, a launcher crash mid-host leaves
+    /// Crash / abnormal-exit guard that restores any scope still alive when
+    /// the launcher goes down on a path that would otherwise skip the normal
+    /// <c>using</c> dispose. Without this, a launcher crash mid-host leaves
     /// the user's terminal in raw mode and they have to <c>stty sane</c>
     /// to recover.
+    ///
+    /// <para>PTY-7 widened the hook set. The covered abnormal-exit paths:</para>
+    /// <list type="bullet">
+    ///   <item><description><see cref="AppDomain.ProcessExit"/> — normal
+    ///     <c>Environment.Exit</c> / runtime shutdown. PTY-3.</description></item>
+    ///   <item><description><see cref="AppDomain.UnhandledException"/> — an
+    ///     unhandled managed exception on any thread. PTY-3.</description></item>
+    ///   <item><description><see cref="Console.CancelKeyPress"/> — Ctrl-C /
+    ///     Ctrl-Break delivered to the launcher itself. PTY-7. The handler
+    ///     restores the terminal but does <b>not</b> set
+    ///     <c>Cancel=true</c>: the launcher should still terminate, it just
+    ///     must hand back a sane tty on the way out.</description></item>
+    ///   <item><description><c>SIGHUP</c> on POSIX — the controlling terminal
+    ///     went away (parent shell closed, ssh session dropped). PTY-7. The
+    ///     handler restores then lets the default disposition terminate the
+    ///     launcher.</description></item>
+    /// </list>
+    ///
+    /// <para><b>Ordering contract:</b> on every one of these paths the
+    /// terminal-mode restore runs <i>before</i> the launcher process is gone.
+    /// <c>Environment.FailFast</c> is the one path that bypasses
+    /// <c>ProcessExit</c> — see the <c>process_spawn_contract</c> memory: the
+    /// launcher must not call <c>FailFast</c> while a raw-mode scope is live.
+    /// All hook paths route through <see cref="EmergencyDisposeAll"/> so the
+    /// emergency reset escape sequence is emitted (the host crashed without
+    /// running its own teardown).</para>
     /// </summary>
     private static class ProcessExitGuard
     {
         private static readonly object _gate = new();
         private static readonly HashSet<Scope> _live = new();
         private static int _hooked;
+        private static IDisposable? _sighupRegistration;
 
         public static void Register(Scope s)
         {
             lock (_gate) _live.Add(s);
             if (System.Threading.Interlocked.Exchange(ref _hooked, 1) == 0)
             {
-                AppDomain.CurrentDomain.ProcessExit += (_, _) => DisposeAll();
-                AppDomain.CurrentDomain.UnhandledException += (_, _) => DisposeAll();
+                AppDomain.CurrentDomain.ProcessExit += (_, _) => EmergencyDisposeAll();
+                AppDomain.CurrentDomain.UnhandledException += (_, _) => EmergencyDisposeAll();
+
+                // PTY-7: Ctrl-C / Ctrl-Break to the launcher itself. Do NOT
+                // set ctx.Cancel — let the launcher terminate, but restore the
+                // tty first so the parent shell is sane.
+                Console.CancelKeyPress += (_, _) => EmergencyDisposeAll();
+
+                // PTY-7: SIGHUP on POSIX (controlling terminal went away).
+                // PosixSignalRegistration enumerates SIGHUP and is AOT-safe.
+                // Restore the terminal, then let the registration's default
+                // behaviour (ctx.Cancel stays false) terminate the launcher.
+                if (!OperatingSystem.IsWindows())
+                {
+                    try
+                    {
+                        _sighupRegistration = PosixSignalRegistration.Create(
+                            PosixSignal.SIGHUP, _ => EmergencyDisposeAll());
+                    }
+                    catch
+                    {
+                        // Platform without SIGHUP support — degrade silently.
+                        // ProcessExit still covers the common teardown path.
+                    }
+                }
             }
         }
 
@@ -279,17 +414,26 @@ internal static partial class TerminalMode
             lock (_gate) _live.Remove(s);
         }
 
-        private static void DisposeAll()
+        /// <summary>
+        /// Emergency restore: termios / console-mode restore on every live
+        /// scope <b>plus</b> the reset escape sequence. Used by every crash /
+        /// abnormal-exit hook and by <see cref="EmergencyRestoreAll"/>.
+        /// </summary>
+        public static void EmergencyDisposeAll()
         {
-            Scope[] snapshot;
+            foreach (var s in Snapshot())
+            {
+                try { s.DisposeEmergency(); } catch { /* best effort */ }
+            }
+        }
+
+        private static Scope[] Snapshot()
+        {
             lock (_gate)
             {
-                snapshot = new Scope[_live.Count];
+                var snapshot = new Scope[_live.Count];
                 _live.CopyTo(snapshot);
-            }
-            foreach (var s in snapshot)
-            {
-                try { s.Dispose(); } catch { /* best effort */ }
+                return snapshot;
             }
         }
     }
