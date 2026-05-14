@@ -252,15 +252,31 @@ public sealed class SdkWorker : IWorker
 
             // Map PowerShell terminating errors that mirror bash exit codes:
             //   - CommandNotFoundException → 127 (bash command-not-found)
-            // We do this BEFORE Console.Error so the error still surfaces.
-            bool sawCommandNotFound = false;
-            foreach (var error in _ps.Streams.Error)
+            // Detection rules — narrow to avoid catching framework-internal
+            // CommandNotFound exceptions from module auto-loading, try/catch
+            // probes, completion lookups, etc:
+            //   1) The pipeline must have surfaced errors at all
+            //      (_ps.HadErrors). Internally-swallowed CommandNotFound
+            //      records still hit Streams.Error but don't flip HadErrors.
+            //   2) The LAST record in Streams.Error must be the
+            //      CommandNotFoundException, so a script that throws then
+            //      recovers + writes a different error still returns the
+            //      script's chosen exit code (or 0).
+            // We still write every error to Console.Error so diagnostics
+            // surface even when the script exits 0.
+            bool sawCommandNotFoundAsLastError = false;
+            var errors = _ps.Streams.Error;
+            for (int i = 0; i < errors.Count; i++)
             {
-                Console.Error.WriteLine(error.ToString());
-                if (error.CategoryInfo?.Reason == "CommandNotFoundException"
-                    || error.Exception is System.Management.Automation.CommandNotFoundException)
+                Console.Error.WriteLine(errors[i].ToString());
+            }
+            if (_ps.HadErrors && errors.Count > 0)
+            {
+                var last = errors[errors.Count - 1];
+                if (last.CategoryInfo?.Reason == "CommandNotFoundException"
+                    || last.Exception is System.Management.Automation.CommandNotFoundException)
                 {
-                    sawCommandNotFound = true;
+                    sawCommandNotFoundAsLastError = true;
                 }
             }
 
@@ -290,7 +306,7 @@ public sealed class SdkWorker : IWorker
             // (it's a terminating .NET exception, not an external-process exit
             // code). Surface a 127 only when no real exit code was set, so a
             // user `exit 5` after a typo still propagates 5.
-            if (sawCommandNotFound && finalExit == 0)
+            if (sawCommandNotFoundAsLastError && finalExit == 0)
                 finalExit = 127;
             return finalExit;
         }
