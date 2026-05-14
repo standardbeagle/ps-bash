@@ -1,17 +1,3 @@
 {
-  "claims": {
-    "bPajrz2XY4zJ": {
-      "runner_instance_id": "DESKTOP-NPIOPS6-7606",
-      "runner_email": "andybrummer@standardbeagle.com",
-      "claimed_at": "2026-05-14T15:00:00Z",
-      "agent_id": "DESKTOP-NPIOPS6-7606",
-      "parent_loop_id": "bLl2v3g7PoAY",
-      "purpose": "Phase C3: RC-6 canonical-env golden regen + BashOracleFixture env whitelist",
-      "source_event": {
-        "loop_id": "bLl2v3g7PoAY",
-        "task_id": "bPajrz2XY4zJ",
-        "conversation_id": null
-      }
-    }
-  }
+  "claims": {}
 }

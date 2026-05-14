@@ -1,4 +1,5 @@
 using PsBash.Core.Transpiler;
+using PsBash.Testing;
 using Xunit;
 using Xunit.Sdk;
 
@@ -148,15 +149,39 @@ public static class AssertOracle
             "1",
             StringComparison.Ordinal);
 
-        var psBashResult = await BashOracleFixture.RunOneAsync(
-            Fixture.PsBashPath!,
-            "-c",
-            script,
-            timeout ?? BashOracleFixture.DefaultTimeout,
-            extraEnv: new Dictionary<string, string>
-            {
-                ["PSBASH_TIMEOUT"] = "15",
-            });
+        // QA rubric Directive 6: golden output must be machine-independent.
+        // Spawn ps-bash under a canonical environment — the inherited block is
+        // cleared and only the CanonicalEnv whitelist is applied — so env-derived
+        // values ($USER, $HOME, locale) are byte-stable across dev boxes and CI
+        // runners. HOME is isolated to a per-test temp directory.
+        //
+        // The directory name is kept SHORT and placed directly under the system
+        // temp root: TMPDIR points here, and the ps-bash host derives its Unix
+        // domain socket path as "{TMPDIR}/ps-bash/host-pi-{pid}-{guid}.sock".
+        // A UDS path is capped at 108 chars on Linux — a long nested home dir
+        // (e.g. "/tmp/ps-bash/golden-home-{32hex}") blows that limit and the
+        // host fails to bind. An 8-hex suffix leaves ample headroom.
+        var canonicalHome = Path.Combine(
+            Path.GetTempPath(), $"psb-g{Guid.NewGuid():N}".Substring(0, 13));
+        Directory.CreateDirectory(canonicalHome);
+        OracleResult psBashResult;
+        try
+        {
+            var canonicalEnv = CanonicalEnv.ForPsBash(canonicalHome);
+            canonicalEnv["PSBASH_TIMEOUT"] = "15";
+
+            psBashResult = await BashOracleFixture.RunOneAsync(
+                Fixture.PsBashPath!,
+                "-c",
+                script,
+                timeout ?? BashOracleFixture.DefaultTimeout,
+                env: canonicalEnv,
+                canonicalizeEnv: true);
+        }
+        finally
+        {
+            try { Directory.Delete(canonicalHome, recursive: true); } catch { /* best-effort */ }
+        }
 
         var canonicalized = Canonicalizer.Canonicalize(
             StripDebugLines(psBashResult.Stdout));
@@ -190,6 +215,10 @@ public static class AssertOracle
             sb.AppendLine(expected);
             sb.AppendLine("--- Actual (ps-bash) ---");
             sb.AppendLine(canonicalized);
+            sb.AppendLine();
+            sb.AppendLine($"--- ps-bash exit code: {psBashResult.ExitCode} ---");
+            sb.AppendLine("--- ps-bash stderr ---");
+            sb.AppendLine(psBashResult.Stderr);
             sb.AppendLine();
             sb.AppendLine("--- Diff ---");
             sb.AppendLine(ComputeLineDiff(expected, canonicalized));

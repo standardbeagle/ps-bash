@@ -1,9 +1,9 @@
 {
   "status": "paused",
-  "iterations": 18,
-  "spawns": 11,
+  "iterations": 19,
+  "spawns": 12,
   "started_at": "2026-05-12T20:33:00Z",
-  "last_iteration_at": "2026-05-14T19:30:00Z",
+  "last_iteration_at": "2026-05-14T20:15:00Z",
   "last_subagent": "task-executor",
   "loop_task_id": "AEACP6UqDUBr",
   "dartboard": "Personal/ps-bash",
@@ -624,6 +624,34 @@
         "src/PsBash.Module/PsBash.psm1",
         "src/PsBash.Differential.Tests/BackgroundJobDifferentialTests.cs",
         "src/PsBash.Differential.Tests/Goldens/Differential_Background_QuotedArg.golden.txt"
+      ]
+    },
+    {
+      "task_id": "bPajrz2XY4zJ",
+      "iteration": 3,
+      "status": "completed",
+      "started_at": "2026-05-14T19:35:00Z",
+      "completed_at": "2026-05-14T20:15:00Z",
+      "phase_completed": "phase-9",
+      "failed_phase": null,
+      "files_changed": 5,
+      "tests_added": 0,
+      "plan_adjustments": 1,
+      "completion_summary": "RC-6: canonical-env golden fixture. New PsBash.Testing.CanonicalEnv (ForBash/ForPsBash whitelist: PATH/HOME/USER=psbash-test/LANG=C.UTF-8/TERM/TMPDIR; ps-bash side also preserves DOTNET_ROOT). Wired through ProcessSpawn.canonicalizeEnv -> BashOracleFixture.RunOneAsync/RunOnePsiAsync -> AssertOracle.GoldenAsync. Per-test HOME kept short (UDS 108-char limit). Regenerated 2 goldens: Redirect_Heredoc_Expanding_VarSubstitution empty->\"hello psbash-test\" (matches bash oracle), Pipe_ExitCode_PipefailOn empty->\"0\" (known-bug freeze, pipefail fix out of scope). Named golden tests deterministic-green 3x. qa-rubric Directive 6 updated.",
+      "failure_reason": null,
+      "fix_task_created": false,
+      "fix_task_id": null,
+      "plan_adjustment_notes": [
+        "Pipe_ExitCode_PipefailOn is a documented known-bug freeze (audit da4e007), not env contamination; regenerated to honest canonical value 0 rather than baking a new wrong value or fixing pipefail out-of-scope. Quoting_EmptyVar_UnquotedIsOmitted golden referenced in spec does not exist - nothing to regenerate."
+      ],
+      "files": [
+        "src/PsBash.Testing/CanonicalEnv.cs",
+        "src/PsBash.Differential.Tests/Oracle/ProcessSpawn.cs (already had canonicalizeEnv)",
+        "src/PsBash.Differential.Tests/Oracle/BashOracleFixture.cs",
+        "src/PsBash.Differential.Tests/Oracle/AssertOracle.cs",
+        ".claude/rules/qa-rubric.md",
+        "src/PsBash.Differential.Tests/Goldens/Redirect_Heredoc_Expanding_VarSubstitution.golden.txt",
+        "src/PsBash.Differential.Tests/Goldens/Pipe_ExitCode_PipefailOn.golden.txt"
       ]
     }
   ],

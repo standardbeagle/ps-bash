@@ -100,14 +100,22 @@ public sealed class BashOracleFixture
     /// Delegates the spawn loop to <see cref="ProcessSpawn"/>; a timeout surfaces
     /// as <see cref="OracleTimeoutException"/>.
     /// </summary>
+    /// <param name="canonicalizeEnv">
+    /// When true, the inherited environment is cleared before <paramref name="extraEnv"/>
+    /// is applied — used by golden tests so frozen output is machine-independent
+    /// (QA rubric Directive 6). Callers pass a <see cref="CanonicalEnv"/> whitelist
+    /// as <paramref name="extraEnv"/>.
+    /// </param>
     public static async Task<OracleResult> RunOnePsiAsync(
         ProcessStartInfo psi,
         TimeSpan timeout,
-        IReadOnlyDictionary<string, string>? extraEnv = null)
+        IReadOnlyDictionary<string, string>? extraEnv = null,
+        bool canonicalizeEnv = false)
     {
         try
         {
-            var result = await ProcessSpawn.RunAsync(psi, timeout, stdinContent: null, env: extraEnv);
+            var result = await ProcessSpawn.RunAsync(
+                psi, timeout, stdinContent: null, env: extraEnv, canonicalizeEnv: canonicalizeEnv);
             return new OracleResult(result.Stdout, result.Stderr, result.ExitCode, result.WallMs);
         }
         catch (SpawnTimeoutException ex)
@@ -122,13 +130,20 @@ public sealed class BashOracleFixture
     /// Delegates the spawn loop to <see cref="ProcessSpawn"/>; a timeout surfaces
     /// as <see cref="OracleTimeoutException"/>.
     /// </summary>
+    /// <param name="canonicalizeEnv">
+    /// When true, the inherited environment is cleared before <paramref name="env"/>
+    /// / <paramref name="extraEnv"/> are applied — used by golden tests so frozen
+    /// output is machine-independent (QA rubric Directive 6). Callers pass a
+    /// <see cref="CanonicalEnv"/> whitelist as <paramref name="env"/>.
+    /// </param>
     internal static async Task<OracleResult> RunOneAsync(
         string executable,
         string firstArg,
         string script,
         TimeSpan timeout,
         IReadOnlyDictionary<string, string>? env = null,
-        IReadOnlyDictionary<string, string>? extraEnv = null)
+        IReadOnlyDictionary<string, string>? extraEnv = null,
+        bool canonicalizeEnv = false)
     {
         // Layer env then extraEnv (extraEnv wins) into a single map, matching
         // the historical two-pass apply order.
@@ -145,7 +160,8 @@ public sealed class BashOracleFixture
         try
         {
             var result = await ProcessSpawn.RunAsync(
-                executable, new[] { firstArg, script }, timeout, stdinContent: null, env: merged);
+                executable, new[] { firstArg, script }, timeout, stdinContent: null,
+                env: merged, canonicalizeEnv: canonicalizeEnv);
             return new OracleResult(result.Stdout, result.Stderr, result.ExitCode, result.WallMs);
         }
         catch (SpawnTimeoutException ex)

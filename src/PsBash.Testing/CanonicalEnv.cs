@@ -1,0 +1,125 @@
+namespace PsBash.Testing;
+
+/// <summary>
+/// Builds the canonical, reproducible environment block for golden/oracle
+/// process spawns (QA rubric Directive 6: "FIX TERM. FIX LANG. ISOLATE HOME").
+///
+/// Why this exists: golden files freeze ps-bash output for later byte-comparison.
+/// If the spawned interpreter inherits the developer's (or the CI runner's)
+/// shell environment, env-derived values — <c>$USER</c>, <c>$HOME</c>,
+/// <c>$LANG</c>, locale-sensitive formatting — leak into the frozen output.
+/// A golden recorded on a dev box then fails on a CI runner with a different
+/// <c>$USER</c>. The fix is to spawn under a known, fixed whitelist so the
+/// output is the same on every machine.
+///
+/// Two variants:
+///   <see cref="ForBash"/>    — pure canonical whitelist, for the real-bash side.
+///   <see cref="ForPsBash"/>  — canonical whitelist PLUS the .NET runtime
+///                              discovery vars the framework-dependent ps-bash
+///                              launcher/host needs to start at all.
+///
+/// Both are meant to be passed to <see cref="ProcessSpawn.RunAsync"/> with
+/// <c>canonicalizeEnv: true</c>, which clears the inherited block before
+/// applying these.
+/// </summary>
+public static class CanonicalEnv
+{
+    /// <summary>Fixed username so <c>$USER</c> is byte-stable across machines.</summary>
+    public const string CanonicalUser = "psbash-test";
+
+    /// <summary>Fixed locale so locale-sensitive formatting is byte-stable.</summary>
+    public const string CanonicalLang = "C.UTF-8";
+
+    /// <summary>Fixed terminal type (Directive 6).</summary>
+    public const string CanonicalTerm = "xterm-256color";
+
+    /// <summary>
+    /// Minimal PATH for the bash side — the standard POSIX system directories.
+    /// bash itself and the coreutils it shells out to live here.
+    /// </summary>
+    private static readonly string MinimalPosixPath =
+        string.Join(System.IO.Path.PathSeparator, new[]
+        {
+            "/usr/local/sbin", "/usr/local/bin", "/usr/sbin",
+            "/usr/bin", "/sbin", "/bin",
+        });
+
+    /// <summary>
+    /// The pure canonical whitelist for the real-bash side of the oracle.
+    /// <paramref name="homeDir"/> is isolated to a per-test temp directory so
+    /// no real dotfiles or history leak in.
+    /// </summary>
+    public static Dictionary<string, string> ForBash(string homeDir)
+    {
+        if (string.IsNullOrEmpty(homeDir))
+            throw new ArgumentException("homeDir must be a non-empty path.", nameof(homeDir));
+
+        return new Dictionary<string, string>
+        {
+            ["PATH"] = MinimalPosixPath,
+            ["HOME"] = homeDir,
+            ["USER"] = CanonicalUser,
+            ["LOGNAME"] = CanonicalUser,
+            ["LANG"] = CanonicalLang,
+            ["LC_ALL"] = CanonicalLang,
+            ["TERM"] = CanonicalTerm,
+            ["TMPDIR"] = homeDir,
+            ["TEMP"] = homeDir,
+            ["TMP"] = homeDir,
+        };
+    }
+
+    /// <summary>
+    /// The canonical whitelist for the ps-bash side. Starts from
+    /// <see cref="ForBash"/> then overlays the variables the
+    /// framework-dependent ps-bash launcher and its spawned host need to
+    /// locate the .NET runtime — clearing the inherited block wholesale (per
+    /// the task risk note) would otherwise leave the apphost unable to start.
+    ///
+    /// What ps-bash itself reads from the environment (audited via
+    /// <c>grep PSBASH_</c> across Launcher/Host/Core): <c>PSBASH_HOST</c>,
+    /// <c>PSBASH_HOST_DETACH</c>, <c>PSBASH_TIMEOUT</c>, <c>PSBASH_DEBUG</c>,
+    /// <c>PSBASH_HOME</c>, <c>PSBASH_IPC_ENDPOINT</c>, etc. None of those are
+    /// preserved here: the launcher sets <c>PSBASH_HOST_DETACH</c> on the host
+    /// itself, derives its IPC endpoint internally, and resolves its host
+    /// binary by path — so a cleared block plus this overlay is exactly the
+    /// "clean PSI env + selective overlay" the risk note calls for. Callers
+    /// that need <c>PSBASH_TIMEOUT</c> / <c>PSBASH_DEBUG</c> layer those on top
+    /// via the spawn's <c>env</c> parameter.
+    /// </summary>
+    public static Dictionary<string, string> ForPsBash(string homeDir)
+    {
+        var env = ForBash(homeDir);
+
+        // The ps-bash launcher is a framework-dependent apphost: it must find
+        // the shared .NET runtime. DOTNET_ROOT (and the dotnet dir on PATH) is
+        // how a non-default install location is discovered. Preserve whatever
+        // the test host is using so the launcher starts under the canonical
+        // block too.
+        var dotnetRoot = Environment.GetEnvironmentVariable("DOTNET_ROOT");
+        if (!string.IsNullOrEmpty(dotnetRoot))
+        {
+            env["DOTNET_ROOT"] = dotnetRoot;
+            if (Directory.Exists(dotnetRoot))
+                env["PATH"] = dotnetRoot + System.IO.Path.PathSeparator + env["PATH"];
+        }
+        else
+        {
+            // No DOTNET_ROOT set — fall back to the dotnet on the inherited
+            // PATH so a default-location install is still reachable.
+            var dotnetExe = OperatingSystem.IsWindows() ? "dotnet.exe" : "dotnet";
+            var inheritedPath = Environment.GetEnvironmentVariable("PATH") ?? string.Empty;
+            foreach (var dir in inheritedPath.Split(System.IO.Path.PathSeparator))
+            {
+                if (string.IsNullOrEmpty(dir)) continue;
+                if (File.Exists(System.IO.Path.Combine(dir, dotnetExe)))
+                {
+                    env["PATH"] = dir + System.IO.Path.PathSeparator + env["PATH"];
+                    break;
+                }
+            }
+        }
+
+        return env;
+    }
+}
