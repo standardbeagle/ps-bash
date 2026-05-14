@@ -123,6 +123,7 @@ public sealed class LifecycleScaleAndFaultTests
             await using var ipc = await IpcWorker.StartAsync(
                 bogusBinary,
                 startupTimeout: TimeSpan.FromSeconds(5),
+                lifetime: Lifetime.Daemon,
                 ct: startCts.Token);
 
             // If we got here, healthy host was reused (no spawn attempt).
@@ -295,6 +296,7 @@ public sealed class LifecycleScaleAndFaultTests
                     bogusBinary,
                     startupTimeout: TimeSpan.FromSeconds(2),
                     startupPollInterval: TimeSpan.FromMilliseconds(50),
+                    lifetime: Lifetime.Daemon,
                     ct: startCts.Token);
             });
             sw.Stop();
@@ -395,6 +397,7 @@ public sealed class LifecycleScaleAndFaultTests
                 await using var ipc = await IpcWorker.StartAsync(
                     bogusBinary,
                     startupTimeout: TimeSpan.FromSeconds(2),
+                    lifetime: Lifetime.Daemon,
                     ct: startCts.Token);
             });
             // The exception message must surface the ownership-mismatch reason
@@ -452,6 +455,7 @@ public sealed class LifecycleScaleAndFaultTests
                 .Select(i => IpcWorker.StartAsync(
                     bogusBinary,
                     startupTimeout: TimeSpan.FromSeconds(10),
+                    lifetime: Lifetime.Daemon,
                     ct: startCts.Token))
                 .ToArray();
             var workers = await Task.WhenAll(startTasks);
@@ -547,5 +551,142 @@ public sealed class LifecycleScaleAndFaultTests
             }
             CleanupEndpoint(scheme, endpoint);
         }
+    }
+
+    // ─── REFACTOR-7: PerInvocation host lifetime ────────────────────────────
+
+    /// <summary>
+    /// Returns true if a process with <paramref name="pid"/> is currently alive.
+    /// Mirrors ParentDeathWatcher.IsAlive — GetProcessById throws ArgumentException
+    /// for a dead/unknown pid.
+    /// </summary>
+    private static bool IsProcessAlive(int pid)
+    {
+        try
+        {
+            using var p = Process.GetProcessById(pid);
+            return !p.HasExited;
+        }
+        catch (ArgumentException) { return false; }
+        catch (InvalidOperationException) { return false; }
+    }
+
+    /// <summary>
+    /// REFACTOR-7 acceptance: a <see cref="Lifetime.PerInvocation"/> worker
+    /// spawns a private <c>ps-bash-host</c> and kills it on dispose — the host
+    /// never outlives its single client. We start the worker, ask the host for
+    /// its own PID (<c>$PID</c> on the host runspace), confirm the process is
+    /// alive while the worker is open, dispose the worker, then confirm the
+    /// process is gone within a CI-safe budget.
+    ///
+    /// Oracle note (Directive 1): no bash oracle — ps-bash IPC host lifetime is
+    /// outside the bash compatibility surface and is exercised against the
+    /// .NET-side wire contract directly.
+    /// </summary>
+    [SkippableFact]
+    public async Task PerInvocation_DisposeWorker_KillsPrivateHost()
+    {
+        var hostBinary = TryLocateHostBinary();
+        Skip.If(hostBinary is null, "ps-bash-host binary not found — build src/PsBash.Host first");
+
+        using var startCts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+        int hostPid;
+
+        var worker = await IpcWorker.StartAsync(
+            hostBinary!,
+            startupTimeout: TimeSpan.FromSeconds(20),
+            lifetime: Lifetime.PerInvocation,
+            ct: startCts.Token);
+        try
+        {
+            // $PID on the host runspace is the ps-bash-host process id.
+            var pidText = await worker.QueryAsync("$PID", startCts.Token);
+            Assert.True(int.TryParse(pidText.Trim(), out hostPid),
+                $"expected a numeric host PID from $PID, got: '{pidText}'");
+            Assert.True(IsProcessAlive(hostPid),
+                $"private host PID {hostPid} must be alive while the worker is open");
+        }
+        finally
+        {
+            await worker.DisposeAsync();
+        }
+
+        // DisposeAsync kills the host tree. Poll briefly for the process to go
+        // away — Kill is synchronous but OS process teardown is not instant.
+        var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(10);
+        while (DateTime.UtcNow < deadline && IsProcessAlive(hostPid))
+            await Task.Delay(100);
+
+        Assert.False(IsProcessAlive(hostPid),
+            $"PerInvocation host PID {hostPid} must be killed when the worker is disposed");
+    }
+
+    /// <summary>
+    /// REFACTOR-7 acceptance: two concurrent <see cref="Lifetime.PerInvocation"/>
+    /// workers each get their OWN private host on a process-local endpoint — they
+    /// do NOT share the per-user daemon socket. Proven by asking each host for
+    /// its <c>$PID</c>: distinct PIDs ⇒ distinct host processes ⇒ no shared
+    /// daemon. Each host also gets a clean session by construction, which is the
+    /// state-isolation property the refactor buys.
+    /// </summary>
+    [SkippableFact]
+    public async Task PerInvocation_TwoWorkers_GetDistinctPrivateHosts()
+    {
+        var hostBinary = TryLocateHostBinary();
+        Skip.If(hostBinary is null, "ps-bash-host binary not found — build src/PsBash.Host first");
+
+        using var startCts = new CancellationTokenSource(TimeSpan.FromSeconds(40));
+
+        var workerA = await IpcWorker.StartAsync(
+            hostBinary!, startupTimeout: TimeSpan.FromSeconds(20),
+            lifetime: Lifetime.PerInvocation, ct: startCts.Token);
+        var workerB = await IpcWorker.StartAsync(
+            hostBinary!, startupTimeout: TimeSpan.FromSeconds(20),
+            lifetime: Lifetime.PerInvocation, ct: startCts.Token);
+        try
+        {
+            var pidA = (await workerA.QueryAsync("$PID", startCts.Token)).Trim();
+            var pidB = (await workerB.QueryAsync("$PID", startCts.Token)).Trim();
+
+            Assert.True(int.TryParse(pidA, out _), $"worker A host PID not numeric: '{pidA}'");
+            Assert.True(int.TryParse(pidB, out _), $"worker B host PID not numeric: '{pidB}'");
+            Assert.NotEqual(pidA, pidB);
+        }
+        finally
+        {
+            await workerA.DisposeAsync();
+            await workerB.DisposeAsync();
+        }
+    }
+
+    /// <summary>
+    /// REFACTOR-7 acceptance: <see cref="IpcTransportFactory.ResolvePerInvocationEndpoint"/>
+    /// returns a process-local endpoint that is NOT the shared per-user daemon
+    /// endpoint (<see cref="IpcTransportFactory.ResolveEndpoint()"/>), and two
+    /// calls never collide. This is the unit-level proof that a PerInvocation
+    /// host binds a private socket — no real spawn needed.
+    /// </summary>
+    [Fact]
+    public void ResolvePerInvocationEndpoint_IsPrivate_AndUnique()
+    {
+        var (sharedScheme, sharedEndpoint) = IpcTransportFactory.ResolveEndpoint();
+
+        var (s1, e1) = IpcTransportFactory.ResolvePerInvocationEndpoint();
+        var (s2, e2) = IpcTransportFactory.ResolvePerInvocationEndpoint();
+
+        // Same scheme as the shared endpoint (unix on POSIX, pipe on legacy Win)
+        // but a DIFFERENT endpoint name — never the canonical daemon socket.
+        Assert.Equal(sharedScheme, s1);
+        Assert.Equal(sharedScheme, s2);
+        Assert.NotEqual(sharedEndpoint, e1);
+        Assert.NotEqual(sharedEndpoint, e2);
+
+        // Two per-invocation endpoints never collide.
+        Assert.NotEqual(e1, e2);
+
+        // The per-invocation name carries the launcher PID so concurrent
+        // launchers are disambiguated even before the random suffix.
+        Assert.Contains(Environment.ProcessId.ToString(), e1);
+        Assert.Contains(Environment.ProcessId.ToString(), e2);
     }
 }

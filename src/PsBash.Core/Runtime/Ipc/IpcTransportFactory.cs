@@ -63,6 +63,34 @@ public static class IpcTransportFactory
     }
 
     /// <summary>
+    /// Resolve a process-local endpoint unique to a single launcher invocation.
+    /// REFACTOR-7: a <see cref="IpcWorker"/> running with
+    /// <c>Lifetime.PerInvocation</c> spawns a private host on this endpoint
+    /// instead of the shared per-user daemon socket
+    /// (<see cref="ResolveEndpoint()"/>). Because the endpoint name carries the
+    /// launcher PID plus a random suffix, two concurrent launchers never collide
+    /// and there is no obsolete-host / ownership classification to perform — the
+    /// socket either does not exist (spawn fresh) or is the one this launcher
+    /// just spawned.
+    /// </summary>
+    /// <remarks>
+    /// On POSIX the endpoint is a socket file under <c>{TEMP}/ps-bash/</c>;
+    /// on pre-1803 Windows it is a named pipe. Either way the launcher owns the
+    /// host process and unlinks the socket artifact when it disposes.
+    /// </remarks>
+    public static (string Scheme, string Endpoint) ResolvePerInvocationEndpoint()
+    {
+        var unique = $"{Environment.ProcessId}-{Guid.NewGuid():N}";
+        if (IsUnixSocketSupported())
+        {
+            var sockDir = Path.Combine(Path.GetTempPath(), "ps-bash");
+            Directory.CreateDirectory(sockDir);
+            return ("unix", Path.Combine(sockDir, $"host-pi-{unique}.sock"));
+        }
+        return ("pipe", $"psbash-host-pi-{unique}");
+    }
+
+    /// <summary>
     /// Build a fresh transport instance bound to the resolved endpoint. Each
     /// call returns a new object — transports are typically single-use.
     /// </summary>

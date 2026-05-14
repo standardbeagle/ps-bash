@@ -44,16 +44,22 @@ bool unixPaths = shellArgs.UnixPaths
     ?? Environment.GetEnvironmentVariable("PSBASH_UNIX_PATHS") is "1" or "true";
 Environment.SetEnvironmentVariable("PSBASH_UNIX_PATHS", unixPaths ? "1" : "0");
 
-// All execution goes through ps-bash-host over IPC. If the host binary is
-// missing or fails to start, the invocation exits non-zero with the underlying
-// error.
+// All non-interactive execution (-c, stdin pipe, script file) goes through
+// ps-bash-host over IPC. REFACTOR-7: each invocation gets its own private host
+// (Lifetime.PerInvocation) — spawned on a process-local socket and killed when
+// the worker is disposed — so the host never outlives its single client. This
+// contains the pipe-inheritance hazard within the launcher's lifetime and gives
+// every -c/script run a clean PowerShell session by construction. Interactive
+// mode does not use this factory: it spawns ps-bash-host --interactive directly
+// so the host inherits the real tty. If the host binary is missing or fails to
+// start, the invocation exits non-zero with the underlying error.
 Func<Task<IWorker>> workerFactory = async () =>
 {
     var hostBinary = ResolveHostBinary()
         ?? throw new HostUnavailableException(
             "ps-bash-host binary not found. Set PSBASH_HOST=<path> or install alongside ps-bash.");
 
-    return await IpcWorker.StartAsync(hostBinary).ConfigureAwait(false);
+    return await IpcWorker.StartAsync(hostBinary, lifetime: Lifetime.PerInvocation).ConfigureAwait(false);
 };
 
 // M3: file-arg mode — ps-bash script.sh [arg1 arg2 ...]

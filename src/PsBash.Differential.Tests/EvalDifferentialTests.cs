@@ -148,45 +148,58 @@ public class EvalDifferentialTests
 
     // -----------------------------------------------------------------------
     // Performance regression: eval $(cmd-with-multiline-output) must complete
-    // within 2 seconds.
+    // within a bounded budget — a hang here is the shipstop signal.
     //
     // Regression context: `ps-bash -c "eval $(fnm env --shell bash)"` was
     // observed to hang from the user prompt. fnm prints multiple
     // `export FOO="..."` lines; bash unquoted command substitution field-splits
     // them and eval re-joins with spaces, producing one long export-chain.
-    // ps-bash must produce output within a tight deadline; a hang here is the
-    // shipstop signal.
+    // ps-bash must produce output within a bounded deadline.
     //
-    // The 2 s budget intentionally undercuts BashOracleFixture's 20 s default
-    // so a hang surfaces as a fast OracleTimeoutException rather than a long
-    // CI stall. Each test passes timeout: TimeSpan.FromSeconds(2) explicitly.
+    // BUDGET — REFACTOR-7 plan adjustment: these tests originally used a 2 s
+    // budget, valid when every `-c` invocation reused a warm shared daemon
+    // (eval itself completes in well under 2 s). REFACTOR-7 made non-interactive
+    // modes spawn a private host PER invocation — each `-c` now pays the host
+    // spawn + PowerShell runspace cold-start cost (single-digit seconds, more
+    // under parallel test load). A 2 s budget would conflate that accepted
+    // cold-start cost with a genuine eval hang and flake. The budget is raised
+    // to 15 s, matching the cold-start-aware companion probe
+    // PsBash_Eval_CmdSubMultiline_WallTimeUnder15000ms below. Hang detection is
+    // preserved: a real eval hang runs unbounded and trips the 15 s oracle
+    // timeout (and the 20 s BashOracleFixture default) long before CI stalls.
     // -----------------------------------------------------------------------
+
+    /// <summary>Bounded hang-detection budget for the eval cmd-sub regression
+    /// tests below. See the section comment for why this is 15 s post-REFACTOR-7
+    /// rather than the original 2 s.</summary>
+    private static readonly TimeSpan EvalHangBudget = TimeSpan.FromSeconds(15);
 
     /// <summary>
     /// Reproduces the user-facing hang: <c>eval $(printf 'export A=1\nexport B=2\n')</c>.
     /// Multi-line command-sub output, no surrounding quotes, then eval.
-    /// Must finish within 2 s; otherwise the test fails (oracle timeout).
+    /// Must finish within <see cref="EvalHangBudget"/>; otherwise the test fails
+    /// (oracle timeout) — a hang here is the shipstop signal.
     /// </summary>
     [SkippableFact]
-    public async Task Differential_Eval_CmdSubMultilineExports_CompletesUnder2s()
+    public async Task Differential_Eval_CmdSubMultilineExports_DoesNotHang()
     {
         // Axis 6 (slow reader / unbounded buffer) + Axis 15 (eval recursion).
         await AssertOracle.EqualAsync(
             "eval $(printf 'export A=1\\nexport B=2\\n'); echo $A $B",
-            timeout: TimeSpan.FromSeconds(2));
+            timeout: EvalHangBudget);
     }
 
     /// <summary>
     /// Quoted form: <c>eval "$(printf ...)"</c>. Newlines in the cmd-sub output
     /// are preserved as command separators, so eval re-parses two distinct
-    /// export statements. Must finish within 2 s.
+    /// export statements. Must finish within <see cref="EvalHangBudget"/>.
     /// </summary>
     [SkippableFact]
-    public async Task Differential_Eval_QuotedCmdSubMultiline_CompletesUnder2s()
+    public async Task Differential_Eval_QuotedCmdSubMultiline_DoesNotHang()
     {
         await AssertOracle.EqualAsync(
             "eval \"$(printf 'export A=1\\nexport B=2\\n')\"; echo $A $B",
-            timeout: TimeSpan.FromSeconds(2));
+            timeout: EvalHangBudget);
     }
 
     /// <summary>
@@ -194,10 +207,10 @@ public class EvalDifferentialTests
     /// double quotes and a backslash-bearing path-like value, plus a
     /// <c>:"$PATH"</c> tail that references an existing variable. Stresses the
     /// quoting/expansion path that the original user report exercised. Must
-    /// finish within 2 s.
+    /// finish within <see cref="EvalHangBudget"/>.
     /// </summary>
     [SkippableFact]
-    public async Task Differential_Eval_FnmShapedPayload_CompletesUnder2s()
+    public async Task Differential_Eval_FnmShapedPayload_DoesNotHang()
     {
         // Single-quoted heredoc-equivalent: the printf format is a literal so
         // the embedded $PATH is expanded by the *eval'd* string, not the outer
@@ -209,7 +222,7 @@ public class EvalDifferentialTests
             echo $FNM_MULTISHELL_PATH
             echo $PATH
             """;
-        await AssertOracle.EqualAsync(script, timeout: TimeSpan.FromSeconds(2));
+        await AssertOracle.EqualAsync(script, timeout: EvalHangBudget);
     }
 
     /// <summary>

@@ -1,9 +1,9 @@
 {
   "status": "paused",
-  "iterations": 9,
+  "iterations": 10,
   "spawns": 9,
   "started_at": "2026-05-12T20:33:00Z",
-  "last_iteration_at": "2026-05-14T08:30:00Z",
+  "last_iteration_at": "2026-05-14T10:30:00Z",
   "last_subagent": "task-executor",
   "loop_task_id": "AEACP6UqDUBr",
   "dartboard": "Personal/ps-bash",
@@ -236,7 +236,7 @@
       "failure_reason": null,
       "fix_task_created": false,
       "fix_task_id": null,
-      "plan_adjustment_note": "Plan adjustment: prior executor (Fh2WgjOx46dJ) recommended Option 3 (eager-load in SdkRunspace.Create). Implemented and verified Option 3 via a typeof() reference-touch first; the type resolved in-process but the authoritative fresh-spawn EvalDifferentialTests still failed 3/9 — a typeof() AppDomain load is not sufficient for the runspace's [Type] resolver. Switched to Option 2 (assembly-qualified type name in PsEmitter, self-contained, no host changes), which the task brief also rated low-risk. Option 2 makes EvalDifferentialTests 9/9 green.",
+      "plan_adjustment_note": "Plan adjustment: prior executor (Fh2WgjOx46dJ) recommended Option 3 (eager-load in SdkRunspace.Create). Implemented and verified Option 3 via a typeof() reference-touch first; the type resolved in-process but the authoritative fresh-spawn EvalDifferentialTests still failed 3/9 \u2014 a typeof() AppDomain load is not sufficient for the runspace's [Type] resolver. Switched to Option 2 (assembly-qualified type name in PsEmitter, self-contained, no host changes), which the task brief also rated low-risk. Option 2 makes EvalDifferentialTests 9/9 green.",
       "verifier_evidence": "EvalDifferentialTests 9/9 PASS (the 3 named regressions Differential_Eval_CmdSubMultilineExports_CompletesUnder2s, Differential_Eval_QuotedCmdSubMultiline_CompletesUnder2s, Differential_Eval_FnmShapedPayload_CompletesUnder2s all green). ps-bash.sln builds 0 errors (4 pre-existing NU1903 warnings only). Baseline-diff full Differential.Tests: unmodified main = 21 failed/199 passed; with fix = 19 failed/201 passed (2 fewer = the eval fixes, zero new failures; the ~19-21 BackgroundJob/Redirection/ControlFlow/Quoting failures are the documented WSL2 flaky process-spawn baseline). Core.Tests 690/0/1 (matches 1f23039 baseline). BashTranspilerTests 45/45 (6 updated assertions green). PtySpawnTests 5/0/1.",
       "files": [
         "src/PsBash.Transpiler/Parser/PsEmitter.cs",
@@ -258,8 +258,8 @@
       "failure_reason": null,
       "fix_task_created": false,
       "fix_task_id": null,
-      "plan_adjustment_note": "Plan adjustment: EmbedCmdletsDll target initially hooked BeforeTargets=\"GenerateResource;CoreCompile\" per the obvious choice, but the SDK splits and names the EmbeddedResource list earlier than that, so the dynamically-added item never reached the assembly (verified: grep of Core.dll showed no cmdlets resource). Moved the target to BeforeTargets=\"PrepareResourceNames\" — resource then embeds correctly in both TFMs on a clean build.",
-      "verifier_evidence": "Clean full ps-bash.sln rebuild: 0 errors (4 pre-existing NU1903 warnings only). dotnet list reference confirms acyclic graph (Core->Transpiler+Cmdlets, Cmdlets->Transpiler, Transpiler=leaf). grep of built Core.dll: PsBash.Module/cmdlets/net10.0/PsBash.Cmdlets.dll embedded in net10 build, net8.0 variant in net8 build. New ModuleExtractorTests 5/5 PASS (extracts a valid PsBash.Cmdlets managed assembly beside the psd1; stale-3-file-marker self-heal proven by manually corrupting .extracted then re-running). SdkRunspaceSetupScriptTests 4/4 PASS. Core.Tests 695/696 (1 skip, no failures). Cmdlets.Tests 40/43 (3 skip). Host.Tests baseline-diff: clean-tree (git stash) = 4 failed/48 passed, with-changes = SAME 4 failed/48 passed (GracefulShutdownTests.ShutdownWithInflightRequest_DrainsBeforeExiting + 3 SdkWorkerTests, exit 127) — identical failing set, zero new failures; these are the documented WSL2 flaky process-spawn baseline, CI 3-OS matrix authoritative.",
+      "plan_adjustment_note": "Plan adjustment: EmbedCmdletsDll target initially hooked BeforeTargets=\"GenerateResource;CoreCompile\" per the obvious choice, but the SDK splits and names the EmbeddedResource list earlier than that, so the dynamically-added item never reached the assembly (verified: grep of Core.dll showed no cmdlets resource). Moved the target to BeforeTargets=\"PrepareResourceNames\" \u2014 resource then embeds correctly in both TFMs on a clean build.",
+      "verifier_evidence": "Clean full ps-bash.sln rebuild: 0 errors (4 pre-existing NU1903 warnings only). dotnet list reference confirms acyclic graph (Core->Transpiler+Cmdlets, Cmdlets->Transpiler, Transpiler=leaf). grep of built Core.dll: PsBash.Module/cmdlets/net10.0/PsBash.Cmdlets.dll embedded in net10 build, net8.0 variant in net8 build. New ModuleExtractorTests 5/5 PASS (extracts a valid PsBash.Cmdlets managed assembly beside the psd1; stale-3-file-marker self-heal proven by manually corrupting .extracted then re-running). SdkRunspaceSetupScriptTests 4/4 PASS. Core.Tests 695/696 (1 skip, no failures). Cmdlets.Tests 40/43 (3 skip). Host.Tests baseline-diff: clean-tree (git stash) = 4 failed/48 passed, with-changes = SAME 4 failed/48 passed (GracefulShutdownTests.ShutdownWithInflightRequest_DrainsBeforeExiting + 3 SdkWorkerTests, exit 127) \u2014 identical failing set, zero new failures; these are the documented WSL2 flaky process-spawn baseline, CI 3-OS matrix authoritative.",
       "files": [
         "src/PsBash.Core/PsBash.Core.csproj",
         "src/PsBash.Core/Runtime/ModuleExtractor.cs",
@@ -284,7 +284,7 @@
       "failure_reason": null,
       "fix_task_created": false,
       "fix_task_id": null,
-      "plan_adjustment_note": "Plan adjustment: the task description proposed STDOUT/STDERR/PROMPT/TRACE discriminators. PROMPT is already covered by the existing PTY-4 <<<PROMPT-READY>>> sentinel and TRACE (set -x) has no acceptance criterion and no current host code path emitting it — added only STDOUT+STDERR per the acceptance criteria (eagle-eyed scope discipline: no speculative TRACE channel). For the host stderr sink, chose $Host.UI.WriteErrorLine wiring (ExitTrackingHostUI forwarder, parallel to the existing SetWriteLineForwarder) over a SessionState delegate global — it reuses PowerShell's native stderr surface and the established forwarder pattern, zero new escaping surface.",
+      "plan_adjustment_note": "Plan adjustment: the task description proposed STDOUT/STDERR/PROMPT/TRACE discriminators. PROMPT is already covered by the existing PTY-4 <<<PROMPT-READY>>> sentinel and TRACE (set -x) has no acceptance criterion and no current host code path emitting it \u2014 added only STDOUT+STDERR per the acceptance criteria (eagle-eyed scope discipline: no speculative TRACE channel). For the host stderr sink, chose $Host.UI.WriteErrorLine wiring (ExitTrackingHostUI forwarder, parallel to the existing SetWriteLineForwarder) over a SessionState delegate global \u2014 it reuses PowerShell's native stderr surface and the established forwarder pattern, zero new escaping surface.",
       "verifier_evidence": "Core.Tests 700/701 pass (1 skip, 0 fail) incl. 5 new HostProtocol REFACTOR-4 tests (stderr prefix, tag-routed round-trip, sentinel-looking payload, legacy-overload back-compat, legacy-untagged-frame decode) + 2 updated emitter tests. HostServerTests 9/9 pass incl. 2 new integration tests (FramedSession_HostStderr_RoutesToStderrStream_NotStdout = the RC-1 regression proof; FramedSession_StdoutAndStderr_BothSurviveOnSeparateStreams). Cmdlets.Tests 40/43 (3 skip, 0 fail). ps-bash.sln builds 0 errors. dotnet format clean on all 8 changed C# files (1 pre-existing format-debt region in PsEmitter.cs:2893-2900 left untouched, unrelated to the line-1204 edit). Process-spawn suites verified via baseline-diff (clean-tree vs with-changes): Host.Tests full = identical 4 documented WSL2-baseline failures both trees; Differential.Tests = clean 19 failed / with-changes 17 failed (count decreased, non-deterministic flaky set, both stderr-redirect differential tests fail on clean tree too); Escalation.Tests = 5 stable failures identical both trees + 1 flake (Security_VarWithSemicolon_NoInjection) confirmed passing in isolation on both trees. Zero deterministic regressions. CI 3-OS matrix authoritative per task brief.",
       "subsumes": "RC-1 (0RhwDuwTPmUu) can now be closed as superseded",
       "files": [
@@ -298,6 +298,33 @@
         "src/PsBash.Core.Tests/Runtime/Ipc/HostProtocolTests.cs",
         "src/PsBash.Core.Tests/Parser/PsEmitterTests.cs",
         "src/PsBash.Host.Tests/Server/HostServerTests.cs"
+      ]
+    },
+    {
+      "task_id": "g5vzfVkq68J5",
+      "iteration": 8,
+      "status": "completed",
+      "started_at": "2026-05-14T09:00:00Z",
+      "completed_at": "2026-05-14T10:30:00Z",
+      "phase_completed": "final-validation",
+      "failed_phase": null,
+      "files_changed": 7,
+      "tests_added": 4,
+      "plan_adjustments": 1,
+      "completion_summary": "REFACTOR-7: non-interactive modes (-c/stdin/script) now spawn a private per-launcher ps-bash-host instead of reusing the shared per-user daemon. IpcWorker gained a Lifetime enum {PerInvocation, Daemon}; StartAsync defaults to PerInvocation, which mints a process-local endpoint (host-pi-<pid>-<guid>.sock, never the shared host-$USER.sock), spawns a host bound to it with --launcher-pid, owns the Process handle, and kills the host tree + unlinks the socket on DisposeAsync. The host therefore never outlives its single client, containing the pipe-inheritance hazard within the launcher's lifetime and giving every -c run a clean PowerShell session by construction. The Daemon lifetime preserves the full legacy path (canonical endpoint, ownership classification, obsolete-host handshake); HostCommands.RestartAsync and the 5 Daemon-path lifecycle tests use it explicitly. Interactive mode is untouched (it spawns ps-bash-host --interactive directly, inheriting the real tty). The cc8bf88 dup2-detach (PSBASH_HOST_DETACH=1) is kept for both lifetimes with an explanatory comment \u2014 still load-bearing for Daemon, harmless for PerInvocation, not deleted per 'only remove where genuinely dead'.",
+      "failure_reason": null,
+      "fix_task_created": false,
+      "fix_task_id": null,
+      "plan_adjustment_note": "EvalDifferentialTests three *_CompletesUnder2s tests used a 2s oracle-timeout budget as a hang-detector \u2014 valid only under the warm-daemon architecture where eval completes in well under 2s. PerInvocation makes every -c pay host-spawn + PowerShell runspace cold-start (single-digit seconds, more under parallel load), so a 2s budget conflates the task's explicitly-accepted cold-start cost with a genuine eval hang and flakes. Widened the budget to 15s (shared EvalHangBudget field), matching the existing cold-start-aware companion probe PsBash_Eval_CmdSubMultiline_WallTimeUnder15000ms; renamed *_CompletesUnder2s -> *_DoesNotHang; rewrote the section comment. Hang detection is preserved \u2014 a real eval hang runs unbounded and trips 15s well before the 20s BashOracleFixture default. The BashOracleFixture SemaphoreSlim(2) was assessed and LEFT IN PLACE: it throttles bash/WSL invocations to avoid WSL-VM overload, NOT ps-bash daemon-state contention, so it is orthogonal to what REFACTOR-7 fixes and removing it risks WSL overload \u2014 noted as a non-blocking follow-on.",
+      "verifier_evidence": "Build: ps-bash.sln 0 errors. dotnet format --verify-no-changes clean on all 7 changed files. Core.Tests 700/701 pass (1 skip, 0 fail). Host.Tests with-changes 4 fail / 53 pass / 1 skip \u2014 baseline-diff vs clean tree: IDENTICAL 4 failures on clean tree (GracefulShutdownTests.ShutdownWithInflightRequest_DrainsBeforeExiting + SdkWorkerTests.{QueryAsync_PreservesCallerOutputCallback, ExecuteAsync_CdThenPwd_CrossCallStatePreserved, ExecuteAsync_InvokeBashLsLong_EmitsBashTextNotPsObjectSerialization}), none touched by this change \u2014 zero regressions. 4 new REFACTOR-7 tests all PASS: PerInvocation_DisposeWorker_KillsPrivateHost (spawns real host, reads $PID, disposes, confirms process dead), PerInvocation_TwoWorkers_GetDistinctPrivateHosts (distinct host PIDs prove no shared daemon socket), ResolvePerInvocationEndpoint_IsPrivate_AndUnique, plus 4 Daemon-path lifecycle tests updated to pass lifetime: Lifetime.Daemon and still green. Differential.Tests baseline-diff: clean tree 21 failed / 199 passed (incl. multiple 15s oracle-timeouts on trivial scripts \u2014 known WSL2 process-spawn flake); with-changes 13 failed / 207 passed \u2014 every with-changes failure is a STRICT SUBSET of the clean-tree 21 (zero new failure names; BackgroundJob/ProcessSub/Redirection flaky set), and the EvalDifferential 2s-budget flakes were eliminated by the plan adjustment (EvalDifferentialTests 9/9 green in isolation with changes). Process-spawn rigor: no new hangs or oracle timeouts introduced by the change \u2014 the only oracle timeouts observed were on the CLEAN tree. CI 3-OS matrix authoritative per task brief.",
+      "files": [
+        "src/PsBash.Core/Runtime/IpcWorker.cs",
+        "src/PsBash.Core/Runtime/Ipc/IpcTransportFactory.cs",
+        "src/PsBash.Shell/Program.cs",
+        "src/PsBash.Shell/HostCommands.cs",
+        "src/PsBash.Host/WorkerFactory.cs",
+        "src/PsBash.Host.Tests/Server/LifecycleScaleAndFaultTests.cs",
+        "src/PsBash.Differential.Tests/EvalDifferentialTests.cs"
       ]
     }
   ],

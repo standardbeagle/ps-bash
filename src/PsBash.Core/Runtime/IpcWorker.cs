@@ -6,16 +6,51 @@ using PsBash.Core.Runtime.Ipc;
 namespace PsBash.Core.Runtime;
 
 /// <summary>
+/// Host process lifetime model for an <see cref="IpcWorker"/>. REFACTOR-7.
+/// </summary>
+public enum Lifetime
+{
+    /// <summary>
+    /// One private <c>ps-bash-host</c> per launcher invocation. The worker spawns
+    /// a fresh host on a process-local endpoint (see
+    /// <see cref="IpcTransportFactory.ResolvePerInvocationEndpoint"/>), owns the
+    /// <see cref="System.Diagnostics.Process"/> handle, and kills the host tree
+    /// when it is disposed. The host therefore never outlives its single client,
+    /// which contains the pipe-inheritance hazard within the launcher's lifetime
+    /// and gives every invocation a clean PowerShell session by construction.
+    /// Default for the non-interactive modes (<c>-c</c>, stdin pipe, script file).
+    /// </summary>
+    PerInvocation,
+
+    /// <summary>
+    /// Long-lived shared daemon on the canonical per-user endpoint
+    /// (<see cref="IpcTransportFactory.ResolveEndpoint()"/>). The worker connects
+    /// to an existing healthy host if one answers, otherwise spawns one and
+    /// leaves it running for subsequent launchers. The worker does NOT kill the
+    /// host on dispose. This is the legacy daemon-reuse path; it still pays for
+    /// the cross-launcher state-isolation guardrails and the dup2-detach hang fix.
+    /// </summary>
+    Daemon,
+}
+
+/// <summary>
 /// AOT-safe launcher-side <see cref="IWorker"/> that proxies command execution
 /// to an out-of-process <c>ps-bash-host</c> over a duplex IPC transport
 /// (Unix socket on POSIX, named pipe on Windows).
 /// </summary>
 /// <remarks>
-/// <para>Discovery is socket-direct: <see cref="StartAsync"/> attempts to
-/// connect to the canonical endpoint. If the connect fails, the host binary
-/// is spawned and connect is retried until the socket accepts or the timeout
-/// elapses. There is no lock file, no session id, and no fallback to an
-/// SDK host worker — failure to reach the host throws
+/// <para>Two host lifetimes are supported (REFACTOR-7), selected via the
+/// <see cref="Lifetime"/> argument to <see cref="StartAsync"/>:</para>
+/// <para><see cref="Lifetime.PerInvocation"/> (default): the worker spawns a
+/// private host on a process-local endpoint, owns the process handle, and kills
+/// the host tree on <see cref="DisposeAsync"/>. There is no daemon discovery,
+/// no ownership classification, and no obsolete-host handshake — the endpoint
+/// is private to this launcher.</para>
+/// <para><see cref="Lifetime.Daemon"/>: discovery is socket-direct against the
+/// canonical per-user endpoint. If the connect fails, the host binary is spawned
+/// and connect is retried until the socket accepts or the timeout elapses. The
+/// host is left running for the next launcher. There is no lock file, no session
+/// id, and no fallback to an SDK host worker — failure to reach the host throws
 /// <see cref="HostUnavailableException"/>.</para>
 /// </remarks>
 public sealed class IpcWorker : IWorker
@@ -25,40 +60,73 @@ public sealed class IpcWorker : IWorker
     private readonly string _hostBinaryPath;
     private readonly TimeSpan _startupTimeout;
     private readonly TimeSpan _startupPollInterval;
+    private readonly Lifetime _lifetime;
+    // PerInvocation only: the private host process this worker owns and kills on
+    // dispose. Null for Daemon lifetime (the shared host outlives this worker).
+    private Process? _ownedHost;
     private int _disposed;
 
     public Action<string>? OutputCallback { get; set; }
 
     public bool HasExited => _disposed != 0;
 
-    private IpcWorker(string scheme, string endpoint, string hostBinaryPath, TimeSpan timeout, TimeSpan poll)
+    private IpcWorker(string scheme, string endpoint, string hostBinaryPath, TimeSpan timeout, TimeSpan poll, Lifetime lifetime)
     {
         _scheme = scheme;
         _endpoint = endpoint;
         _hostBinaryPath = hostBinaryPath;
         _startupTimeout = timeout;
         _startupPollInterval = poll;
+        _lifetime = lifetime;
     }
 
     /// <summary>
-    /// Connect to the running host, spawning <c>ps-bash-host</c> if no listener
-    /// answers. Throws <see cref="HostUnavailableException"/> if the binary is
-    /// missing or fails to come up within the startup timeout.
+    /// Start a worker against <c>ps-bash-host</c>. With
+    /// <see cref="Lifetime.PerInvocation"/> (default) a fresh private host is
+    /// spawned on a process-local endpoint and owned by the returned worker;
+    /// with <see cref="Lifetime.Daemon"/> the worker connects to the canonical
+    /// per-user daemon, spawning one only if no healthy host answers. Throws
+    /// <see cref="HostUnavailableException"/> if the binary is missing or fails
+    /// to come up within the startup timeout.
     /// </summary>
     public static async Task<IpcWorker> StartAsync(
         string hostBinaryPath,
         TimeSpan? startupTimeout = null,
         TimeSpan? startupPollInterval = null,
+        Lifetime lifetime = Lifetime.PerInvocation,
         CancellationToken ct = default)
     {
         ArgumentNullException.ThrowIfNull(hostBinaryPath);
 
-        var (scheme, endpoint) = IpcTransportFactory.ResolveEndpoint();
+        var (scheme, endpoint) = lifetime == Lifetime.PerInvocation
+            ? IpcTransportFactory.ResolvePerInvocationEndpoint()
+            : IpcTransportFactory.ResolveEndpoint();
         var timeout = startupTimeout ?? GetStartupTimeout();
         var poll = startupPollInterval ?? TimeSpan.FromMilliseconds(50);
-        var worker = new IpcWorker(scheme, endpoint, hostBinaryPath, timeout, poll);
-        await worker.EnsureHostReachableAsync(ct).ConfigureAwait(false);
+        var worker = new IpcWorker(scheme, endpoint, hostBinaryPath, timeout, poll, lifetime);
+        if (lifetime == Lifetime.PerInvocation)
+            await worker.SpawnPrivateHostAsync(ct).ConfigureAwait(false);
+        else
+            await worker.EnsureHostReachableAsync(ct).ConfigureAwait(false);
         return worker;
+    }
+
+    /// <summary>
+    /// REFACTOR-7 PerInvocation path. The endpoint is process-local and was
+    /// just minted by <see cref="IpcTransportFactory.ResolvePerInvocationEndpoint"/>,
+    /// so no listener can already be answering it — there is nothing to discover,
+    /// no ownership to classify, and no obsolete host to retire. Verify the
+    /// binary, spawn it bound to the private endpoint, and wait for it to accept.
+    /// The worker keeps the <see cref="Process"/> handle and kills the tree on
+    /// <see cref="DisposeAsync"/> so the host never outlives this launcher.
+    /// </summary>
+    private async Task SpawnPrivateHostAsync(CancellationToken ct)
+    {
+        if (!File.Exists(_hostBinaryPath))
+            throw new HostUnavailableException(
+                $"ps-bash-host binary not found at '{_hostBinaryPath}'. Cannot start host.");
+
+        await SpawnAndWaitAsync(ct).ConfigureAwait(false);
     }
 
     private async Task EnsureHostReachableAsync(CancellationToken ct)
@@ -289,10 +357,26 @@ public sealed class IpcWorker : IWorker
             RedirectStandardError = false,
         };
         psi.ArgumentList.Add($"--ipc-endpoint={_scheme}:{_endpoint}");
+        // REFACTOR-7: a PerInvocation host is private to this launcher — pass
+        // our PID so the host's ParentDeathWatcher self-terminates if the
+        // launcher is force-killed before DisposeAsync can run. The Daemon path
+        // intentionally does NOT pass a launcher PID: a shared daemon must
+        // outlive any single launcher.
+        if (_lifetime == Lifetime.PerInvocation)
+            psi.ArgumentList.Add($"--launcher-pid={Environment.ProcessId}");
         // POSIX-only: signal the host to dup2 /dev/null over the inherited
-        // stdio fds at startup so the daemon can never write into the
-        // launcher's pipes. Windows uses shell-execute spawn which already
-        // detaches the daemon's stdio from the launcher.
+        // stdio fds at startup so it can never write into the launcher's pipes.
+        // Windows uses shell-execute spawn which already detaches the host's
+        // stdio from the launcher.
+        //
+        // REFACTOR-7 note on cc8bf88: this dup2-detach is the daemon-era hang
+        // fix. PerInvocation already contains the pipe-inheritance hazard within
+        // the launcher's lifetime (single client, single connection, host killed
+        // on dispose), so the detach is not strictly load-bearing for that path
+        // — but it is harmless there and still REQUIRED for the Daemon path,
+        // where the host outlives the launcher. Kept for both lifetimes per the
+        // task's "only remove it where genuinely dead" guidance; deleting it
+        // would regress Daemon.
         if (!isWindows)
         {
             psi.Environment["PSBASH_HOST_DETACH"] = "1";
@@ -318,6 +402,12 @@ public sealed class IpcWorker : IWorker
                     == HostHealthState.Healthy)
                 {
                     spawnSucceeded = true;
+                    // PerInvocation owns the host process for the lifetime of
+                    // the worker — keep the handle so DisposeAsync can kill the
+                    // tree. Daemon leaves the host running for the next launcher
+                    // and must NOT retain (or later kill) the handle.
+                    if (_lifetime == Lifetime.PerInvocation)
+                        _ownedHost = proc;
                     return;
                 }
 
@@ -334,8 +424,17 @@ public sealed class IpcWorker : IWorker
             {
                 try { if (!proc.HasExited) proc.Kill(entireProcessTree: true); }
                 catch { /* best effort */ }
+                proc.Dispose();
             }
-            proc?.Dispose();
+            else if (_lifetime != Lifetime.PerInvocation)
+            {
+                // Daemon: we do not retain the handle; dispose it now. The host
+                // process keeps running — disposing a Process handle does not
+                // terminate the process.
+                proc?.Dispose();
+            }
+            // PerInvocation + spawnSucceeded: _ownedHost now holds the live
+            // handle; DisposeAsync disposes it. Do NOT dispose here.
         }
     }
 
@@ -438,6 +537,26 @@ public sealed class IpcWorker : IWorker
     public ValueTask DisposeAsync()
     {
         if (Interlocked.Exchange(ref _disposed, 1) != 0) return ValueTask.CompletedTask;
+
+        // REFACTOR-7: PerInvocation owns its private host — kill the tree so the
+        // host never outlives this launcher, then unlink the process-local
+        // socket artifact. Daemon retains nothing here: the shared host stays up
+        // for the next launcher and its endpoint is the canonical per-user one.
+        if (_lifetime == Lifetime.PerInvocation && _ownedHost is { } host)
+        {
+            try { if (!host.HasExited) host.Kill(entireProcessTree: true); }
+            catch { /* already exited / race — best effort */ }
+            try { host.Dispose(); }
+            catch { /* best effort */ }
+            _ownedHost = null;
+
+            // The host's metadata sidecar and (on POSIX) the socket file are
+            // process-local artifacts of a host we just killed — remove them so
+            // {TEMP}/ps-bash does not accumulate dead per-invocation sockets.
+            try { IpcTransportFactory.RetireEndpoint(_scheme, _endpoint); } catch { }
+            try { HostMetadata.Remove(_scheme, _endpoint); } catch { }
+        }
+
         return ValueTask.CompletedTask;
     }
 
