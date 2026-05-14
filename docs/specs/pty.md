@@ -1,4 +1,13 @@
-# PTY Allocation Specification (PTY-1)
+# PTY Architecture Specification
+
+> **Naming note (PTY-12):** this file *is* the PTY architecture document.
+> `docs/specs/pty-architecture.md` is **not** a separate file — PTY-1..11 all
+> landed and each extended this spec in place (§7 PTY-3, §8 PTY-5, §9 PTY-7).
+> Rather than fork a near-duplicate, PTY-12 consolidates the as-built system
+> into the unified **§10 Architecture Overview** below. Sections 1–9 remain the
+> per-component reference; §10 is the cross-cutting picture (data flow, state
+> machines, IPC protocol, lifecycle, signals, min-OS matrix, fallbacks,
+> decision record). Any reference to "pty-architecture.md" means this file.
 
 The launcher allocates a pseudo-terminal before spawning the host in interactive
 mode. This document specifies the cross-platform PTY contract owned by
@@ -519,3 +528,314 @@ in this repo yet, so it is documented here in the PTY spec instead.)
 ```bash
 ./scripts/test.sh --filter "FullyQualifiedName~TerminalModeTests"
 ```
+
+---
+
+## 10. Architecture Overview (PTY-12)
+
+This section is the cross-cutting, as-built picture of the PTY subsystem after
+PTY-1..11 landed. It does not re-derive the per-component detail in §§1–9; it
+ties them together: the launcher↔host↔PTY data flow, the mode state machine,
+the IPC event protocol, the daemon-vs-interactive lifecycle, the signal
+forwarding table, the minimum-OS matrix, and the fallbacks for when a PTY is
+unavailable or unwanted.
+
+### 10.1 Why a launcher/host split exists at all
+
+ps-bash ships as **two** processes: a small AOT-compiled launcher (`ps-bash`)
+and a PowerShell-SDK host (`ps-bash-host`).
+
+- **The launcher is Native-AOT.** It must start fast and have no managed-JIT
+  warmup. The VT100 line editor, FlagSpecs, and IPC client are all written to
+  be AOT-safe (no `DynamicMethod`, no reflection-emit) — see
+  [`design-decisions.md`](./design-decisions.md) §"AOT-compatible" and
+  §"FlagSpecs in C#".
+- **The host hosts the PowerShell SDK.** `Microsoft.PowerShell.SDK` pulls in
+  assemblies that cannot be AOT-published on .NET 10 (the PTY-0 spike confirmed
+  this — recorded in `.dartai/loop-state.json` for task `4V0QRPY3bk4N`; the
+  probe lives on the unmerged `pty-aot-probe` branch). So the SDK runs in a
+  separate JIT process and the launcher talks to it over IPC.
+
+The split is therefore **not optional** — it is forced by the AOT-vs-SDK
+constraint. PTY-12's decision record (§10.8) captures *why we kept it* even
+after REFACTOR-7, so future maintainers do not relitigate it.
+
+### 10.2 Data flow: launcher ↔ host ↔ PTY
+
+Two wiring topologies exist. Which one is used depends on mode (see §10.5).
+
+**(a) PTY raw-passthrough topology** — interactive, `PSBASH_PTY=1`, launcher
+stdin is a real tty:
+
+```
+        user's real terminal
+                │  (raw mode — TerminalMode.EnterRawIfTty, §7)
+                ▼
+   ┌─────────────────────────┐        allocates          ┌──────────────┐
+   │   ps-bash (launcher)    │ ───────────────────────▶   │  PTY pair    │
+   │   AOT, owns the tty     │   PtyAllocator (§1,§2)     │ master/slave │
+   │                         │                            └──────┬───────┘
+   │  byte pump (CopyToAsync)│◀── pty.Output ── master           │ slave
+   │  byte pump (CopyToAsync)│ ── pty.Input ──▶ master           │ attached as
+   │                         │                                   │ stdin/out/err
+   │  SignalForwarder (§8) ──┼── SIGINT/TSTP/WINCH ──▶ host pgid  ▼
+   └─────────────────────────┘                          ┌──────────────┐
+                                                         │ ps-bash-host │
+                                                         │ PowerShell   │
+                                                         │ SDK, JIT     │
+                                                         └──────────────┘
+```
+
+The launcher is the process attached to the user's tty. It allocates the PTY,
+spawns the host with the **slave** as stdio (`PtySpawner`, §6/PTY-2), puts its
+own stdin in raw mode, and runs two `Stream.CopyToAsync` byte pumps between its
+stdio and the PTY **master**. No translation, no record assembly — see §7.6.
+
+**(b) Framed-IPC topology** — non-interactive (`-c`, stdin pipe, script file),
+*and* the non-tty interactive fallback:
+
+```
+   ┌─────────────────────────┐                       ┌──────────────┐
+   │   ps-bash (launcher)    │ ── framed request ──▶ │ ps-bash-host │
+   │   AOT                   │   (HostProtocol, §10.4)│ PowerShell   │
+   │   IpcWorker             │ ◀─ framed response ──  │ SDK          │
+   └─────────────────────────┘   Unix socket / pipe  └──────────────┘
+```
+
+No PTY is allocated. The launcher and host exchange length-framed messages over
+a Unix domain socket (POSIX) or named pipe (Windows) — `IpcWorker` +
+`HostProtocol` in `src/PsBash.Core/Runtime/`. This is the legacy path and the
+universal fallback.
+
+### 10.3 Mode state machine
+
+Two distinct state machines operate at different layers; do not conflate them.
+
+**(a) Launcher-side raw/cooked terminal mode** — `TerminalMode` (§7), driven by
+the `HandoffStateMachine` (`src/PsBash.Shell/Pty/HandoffStateMachine.cs`,
+PTY-6). The machine consumes IPC sentinels from the host and emits a terminal
+action:
+
+```
+        ┌───────────────┐   <<<PROMPT-READY>>>   ┌──────────────┐
+        │  HostRunning  │ ─────────────────────▶ │ PromptReady  │
+        │ (host owns tty│   action: LeaveRawMode │ (launcher    │
+        │  — raw mode)  │ ◀───────────────────── │  owns prompt)│
+        └───────┬───────┘     <<<BUSY>>>         └──────┬───────┘
+                │             action: EnterRawMode      │
+                │                                       │
+                │  <<<HOST-EXITING>>>   ┌─────────────┐ │ <<<HOST-EXITING>>>
+                └─────────────────────▶ │ HostExiting │◀┘
+                  action: RestoreTerminal│ (terminal)  │
+                                         └─────────────┘
+```
+
+`HostExiting` is terminal: once reached, further sentinels are ignored. Note
+that the **framed interactive channel** that would *deliver* these sentinels in
+the PTY raw-pump path is still deferred (see §8.4) — in raw-passthrough today the
+launcher tracks signal delivery directly via `SignalForwarder` counters. The
+state machine is implemented and tested so a future framed interactive launcher
+plugs in coherently.
+
+**(b) PTY raw vs cooked termios/console-mode** — `TerminalMode.EnterRawIfTty()`
+(§7.2 POSIX termios, §7.3 Windows console mode). This is a save→set-raw→restore
+scope, not a multi-state machine: `Active` (raw, restorable) or `Inactive`
+(stdin was not a tty — no-op). Crash-safety and restore-ordering across every
+exit path is the §9 contract (PTY-7).
+
+### 10.4 IPC event protocol
+
+The launcher↔host wire protocol is defined in
+`src/PsBash.Core/Runtime/Ipc/HostProtocol.cs`. It is line-oriented UTF-8 (no
+BOM). A request frame carries headers then a body then `<<<END>>>`:
+
+| Wire token | Direction | Meaning |
+|------------|-----------|---------|
+| `MODE:Command` / `Stdin` / `Script` / `Interactive` | launcher → host | request kind (`ModeHeaderPrefix`) |
+| `SESSION:Framed` / `SESSION:Interactive` | launcher → host | PTY-4 session-mode header; **absent ⇒ `Framed`** (pre-PTY-4 wire-compat) |
+| `PATH:` / `ARGV:` / `BODY:` / `DEADLINE:` | launcher → host | request headers |
+| `<<<END>>>` | both | end-of-frame sentinel |
+| `<<<EXIT:n>>>` | host → launcher | command exit code (`ExitPrefix`) |
+| `STDERR:` | host → launcher | stderr line prefix |
+| `<<<PROMPT-READY>>>` | host → launcher | PTY-4: host is at a prompt, launcher may take the tty. **Interactive mode only.** |
+| `<<<BUSY>>>` | host → launcher | PTY-6: host started running a command, launcher should re-enter raw mode. **Interactive mode only.** |
+| `<<<HOST-EXITING>>>` | host → launcher | PTY-6: host is about to exit; launcher restores the terminal. Emitted **before** the host closes its stream. **Interactive mode only.** |
+| `<<<SIGNAL-DELIVERED:NAME>>>` | host → launcher | PTY-5: host acknowledges a forwarded signal (`SignalDeliveredPrefix` + `Suffix`). Canonical token for a future framed interactive channel; unused in today's raw-pump path. |
+
+**Session-mode gating.** `PromptReady` / `Busy` / `HostExiting` /
+`SignalDelivered` are emitted **only** under `SESSION:Interactive`. Under
+`SESSION:Framed` (the default, and what every non-interactive launcher uses)
+the host MUST NOT emit them — this keeps pre-PTY-4 launchers wire-compatible.
+See `SessionMode` in `src/PsBash.Core/Runtime/Ipc/Mode.cs`.
+
+### 10.5 Daemon-vs-interactive lifecycle
+
+REFACTOR-7 (commit `701502e`) split host lifetime into two models, selected via
+the `Lifetime` enum passed to `IpcWorker.StartAsync`
+(`src/PsBash.Core/Runtime/IpcWorker.cs`):
+
+| `Lifetime` | Used by | Host lifetime | Endpoint | Worker kills host on dispose? |
+|------------|---------|---------------|----------|-------------------------------|
+| `PerInvocation` (default) | non-interactive: `-c`, stdin pipe, script file | one private host per launcher invocation | process-local (`ResolvePerInvocationEndpoint`) | **Yes** — owns the `Process` handle, kills the tree |
+| `Daemon` | interactive REPL | long-lived shared host, reused across launchers | canonical per-user (`ResolveEndpoint`) | **No** — left running for the next launcher |
+
+The rationale: a `PerInvocation` host never outlives its single client, so the
+pipe-inheritance hazard is contained within the launcher's lifetime and every
+`-c`/script run gets a clean PowerShell session by construction. The `Daemon`
+host pays the cost of cross-launcher state-isolation guardrails (and the
+dup2-detach hang fix) in exchange for not re-spawning the SDK on every
+interactive launch.
+
+The host-reuse decision for the `Daemon` path (when is a running host
+*reusable* vs *stale* vs *unsafe to touch*) is a separate design contract —
+see [`host-lifecycle-contract.md`](./host-lifecycle-contract.md).
+
+The PTY raw-passthrough path (§10.2a) is orthogonal to `Lifetime`: it spawns
+the host directly via `PtySpawner` with the PTY slave as stdio, not through
+`IpcWorker`. The `Lifetime` enum governs the **framed-IPC** topology.
+
+### 10.6 Signal forwarding table
+
+In raw-passthrough mode the launcher owns the user's tty and must forward
+terminal signals to the host (which runs under a separate PTY and never sees the
+keystrokes as signals). Full detail in §8; summary:
+
+| Signal / event | POSIX action | Windows action |
+|----------------|--------------|----------------|
+| `SIGINT` (Ctrl-C) | `killpg(hostPgid, SIGINT)` via `PosixSignalRegistration`; launcher not terminated | ConPTY auto-delivers `CTRL_C_EVENT` to host; launcher installs `SetConsoleCtrlHandler` returning `TRUE` to suppress its own terminate |
+| `SIGTSTP` (Ctrl-Z) | `killpg(hostPgid, SIGTSTP)` via raw `signal()`; launcher not stopped (a stopped launcher freezes the pumps) | n/a |
+| Ctrl-Break | n/a | `CTRL_BREAK_EVENT` crosses ConPTY to host; launcher returns `TRUE` (first-class cancel fallback where Ctrl-C does not propagate) |
+| `SIGWINCH` (resize) | `ioctl(TIOCGWINSZ)` on launcher tty → `IPty.Resize` (`TIOCSWINSZ`) on the master | no `SIGWINCH`; 150 ms poll of `Console.WindowWidth/Height` → `IPty.Resize` (ConPTY `ResizePseudoConsole`) |
+| `SIGHUP` (POSIX) | `ProcessExitGuard` restores the terminal, then default disposition terminates the launcher (PTY-7, §9.2) | n/a |
+| `CTRL_CLOSE` / `LOGOFF` / `SHUTDOWN` | n/a | handler returns `FALSE` — let the system tear both processes down |
+
+Owned by `src/PsBash.Shell/Pty/SignalForwarder.cs`; a non-tty launcher stdin
+yields an inactive forwarder that installs nothing.
+
+### 10.7 Minimum-OS matrix and fallbacks
+
+**Min-OS matrix** (full detail in §2):
+
+| Platform | Adapter | Native API | Minimum |
+|----------|---------|------------|---------|
+| Windows | `ConPtyAdapter` | `CreatePseudoConsole` (kernel32) | **Windows 10 1809 / build 17763** |
+| Linux | `UnixPtyAdapter` | `posix_openpt` + unix98 PTY API (libc) | any glibc/musl with the unix98 PTY API |
+| macOS | `UnixPtyAdapter` | same | 10.13+ |
+| FreeBSD | `UnixPtyAdapter` | same | any |
+
+There are **three** distinct fallback paths. They are independent — each has its
+own trigger and its own behavior:
+
+**(a) Pre-Win10-1809 fallback** (ConPTY unavailable). `ConPtyAdapter.AllocateAsync`
+checks `Environment.OSVersion.Version.Build` and throws
+`PlatformNotSupportedException` on build < 17763, rather than P/Invoking into a
+partially-implemented `CreatePseudoConsole`. `PtyAllocator` also throws it on
+unrecognized platforms. `Program.cs` catches it around the
+`RunHostUnderPtyAsync` call, writes a stderr warning, and falls through to the
+legacy inherited-stdio path:
+
+```text
+ps-bash: PSBASH_PTY=1 requested but the platform does not support a
+pseudo-terminal (...). Falling back to inherited-stdio mode (TUI apps
+will be line-buffered).
+```
+
+This is **as-built** — see §7.5. The user still gets a working shell, just
+without TUI passthrough; interactive TUI cmdlets degrade to line-buffered rather
+than crashing.
+
+**(b) Non-tty fallback** (launcher's own stdin is redirected — PTY-12). When the
+launcher itself is started with redirected stdin — CI log capture, a GUI process
+spawning `ps-bash` with a pipe, `ps-bash < /dev/null` — there are no keystrokes
+to pump and no terminal signals to forward, so allocating a PTY is pointless and
+can wedge a non-interactive parent expecting plain pipe semantics. The decision
+is made **before** any allocation, by the pure function
+`PtyLaunchPolicy.ShouldUsePty(ptyOptIn, launcherStdinRedirected)` in
+`src/PsBash.Shell/Pty/PtyLaunchPolicy.cs`:
+
+```
+ShouldUsePty = ptyOptIn && !launcherStdinRedirected
+```
+
+`Program.cs` calls it with `Console.IsInputRedirected`. When it returns false,
+the launcher skips `RunHostUnderPtyAsync` entirely and falls through to the
+legacy inherited-stdio path — i.e. it behaves exactly like the current
+pipe-based interactive harness. Unlike fallback (a), this path never attempts
+allocation and never throws; it is a pre-flight decision. Tested by
+`PtyLaunchPolicyTests` (`src/PsBash.Shell.Tests/Pty/PtyLaunchPolicyTests.cs`).
+
+**(c) Opt-in gate** (`PSBASH_PTY` unset). The PTY path is still opt-in: with
+`PSBASH_PTY` unset, `ptyOptIn` is false and `ShouldUsePty` returns false on
+every platform. The legacy inherited-stdio interactive path remains the default.
+
+Summary of which path runs for an interactive launch:
+
+| `PSBASH_PTY` | launcher stdin | platform | path taken |
+|--------------|----------------|----------|------------|
+| unset | any | any | legacy inherited-stdio (opt-in gate) |
+| `1` | redirected | any | legacy inherited-stdio (non-tty fallback, no allocation) |
+| `1` | real tty | Win < 1809 / unknown | legacy inherited-stdio (caught `PlatformNotSupportedException` + warning) |
+| `1` | real tty | Win ≥ 1809 / POSIX | PTY raw-passthrough (`RunHostUnderPtyAsync`) |
+
+### 10.8 Decision record — why we kept the launcher/host split
+
+**Context.** REFACTOR-7 reworked host lifetime (`PerInvocation` vs `Daemon`,
+§10.5). During that work the question "could we collapse the launcher and host
+into one process?" was on the table. The answer was no, and this record
+captures why so it is not relitigated.
+
+**Decision.** Keep the two-process launcher/host split. Keep `Daemon` lifetime
+for the interactive REPL and `PerInvocation` for non-interactive modes.
+
+**Forces.**
+
+- *AOT vs PowerShell SDK (the hard constraint).* The launcher must be
+  Native-AOT for startup latency and a dependency-free single binary. The
+  PowerShell SDK cannot be AOT-published on .NET 10 — the PTY-0 spike confirmed
+  this (loop task `4V0QRPY3bk4N`; probe on the unmerged `pty-aot-probe`
+  branch). A single-process design would force the whole shell to be
+  JIT/SDK-hosted, losing AOT startup — or force dropping the PowerShell SDK,
+  losing the entire runtime. Neither is acceptable. The split is **structurally
+  required**, not a stylistic choice. See
+  [`design-decisions.md`](./design-decisions.md) §"AOT-compatible".
+- *State isolation.* `PerInvocation` hosts give every `-c`/script run a clean
+  PowerShell session by construction — no leaked variables, modules, or
+  `$PWD` between invocations. Collapsing into one process would require
+  re-implementing that isolation in-process.
+- *Crash containment.* A host crash (SDK bug, runaway script) takes down the
+  host process, not the launcher. The launcher restores the terminal (§9) and
+  exits cleanly. One process means a runtime crash corrupts the user's tty
+  directly.
+- *Daemon reuse trade-off.* `Daemon` lifetime pays for cross-launcher
+  state-isolation guardrails and the dup2-detach hang fix, in exchange for not
+  paying SDK startup on every interactive launch. For the interactive REPL —
+  one long-lived session — that trade favors reuse. For non-interactive modes —
+  many short invocations that must each be clean — it does not, hence
+  `PerInvocation` there.
+
+**Consequences accepted.** Two binaries to ship and version together; an IPC
+protocol to maintain (`HostProtocol`, §10.4); a host-lifecycle ownership
+contract (`host-lifecycle-contract.md`); and the PTY plumbing in this document
+to bridge the launcher's tty to the host's stdio. These costs are the price of
+keeping both AOT startup and the full PowerShell runtime.
+
+### 10.9 Related specifications
+
+- [`host-lifecycle-contract.md`](./host-lifecycle-contract.md) — how a launcher
+  decides whether a running `Daemon` host is reusable, stale, obsolete, or
+  unsafe to touch. The `Lifetime.Daemon` half of §10.5.
+- [`browse.md`](./browse.md) — the `browse` object workbench. `browse` opens an
+  interactive line-mode workbench when stdin is a terminal and emits row objects
+  when redirected; PTY-11 revived `Invoke-BrowseInteractive` as a single-key
+  workbench. The tty-vs-redirected branch in `browse` mirrors the non-tty
+  fallback logic in §10.7(b).
+- [`design-decisions.md`](./design-decisions.md) — the AOT-compatible launcher
+  rationale and the FlagSpecs-in-C# decision underpinning §10.1 and §10.8.
+- [`architecture-overview.md`](./architecture-overview.md) — the launcher
+  startup sequence and the AOT-shell↔PowerShell-runtime interface table.
+
+> The PTY-0 AOT spike (`aot-on-net10.md`) referenced by the loop history was
+> never committed to `docs/spikes/` — its findings live in
+> `.dartai/loop-state.json` (task `4V0QRPY3bk4N`) and on the unmerged
+> `pty-aot-probe` branch. §10.1 and §10.8 above carry the load-bearing
+> conclusion (SDK blocks AOT on .NET 10 ⇒ keep the split).

@@ -139,8 +139,15 @@ if (shellArgs.Interactive || shellArgs.Command is null)
     // default; pre-Win10-1809 platforms fall back automatically via the
     // PlatformNotSupportedException catch below. Signal forwarding
     // (SIGWINCH, Ctrl-C explicit injection) is intentionally deferred.
+    //
+    // PTY-12 non-tty fallback: if the launcher's own stdin is redirected
+    // (CI log capture, a GUI process piping into ps-bash, `ps-bash < /dev/null`)
+    // there are no keystrokes to pump and no terminal signals to forward, so
+    // PtyLaunchPolicy declines the PTY path even when PSBASH_PTY=1 is set. The
+    // launcher then behaves exactly like the legacy pipe-based interactive
+    // harness below.
     var ptyOptIn = Environment.GetEnvironmentVariable("PSBASH_PTY") is "1" or "true";
-    if (ptyOptIn)
+    if (PtyLaunchPolicy.ShouldUsePty(ptyOptIn, Console.IsInputRedirected))
     {
         try
         {
