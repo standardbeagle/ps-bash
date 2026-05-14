@@ -1,9 +1,9 @@
 {
   "status": "paused",
-  "iterations": 10,
-  "spawns": 9,
+  "iterations": 11,
+  "spawns": 10,
   "started_at": "2026-05-12T20:33:00Z",
-  "last_iteration_at": "2026-05-14T10:30:00Z",
+  "last_iteration_at": "2026-05-14T11:00:00Z",
   "last_subagent": "task-executor",
   "loop_task_id": "AEACP6UqDUBr",
   "dartboard": "Personal/ps-bash",
@@ -326,6 +326,37 @@
         "src/PsBash.Host.Tests/Server/LifecycleScaleAndFaultTests.cs",
         "src/PsBash.Differential.Tests/EvalDifferentialTests.cs"
       ]
+    },
+    {
+      "task_id": "H8nhR08AT3Ws",
+      "iteration": 9,
+      "status": "completed",
+      "started_at": "2026-05-14T05:30:00Z",
+      "completed_at": "2026-05-14T11:00:00Z",
+      "phase_completed": "phase-9",
+      "failed_phase": null,
+      "files_changed": 11,
+      "tests_added": 0,
+      "plan_adjustments": 2,
+      "completion_summary": "REFACTOR-3: created PsBash.Testing shared assembly (ProcessSpawn primitive + PsBashRunner builder API WithConfig/WithTimeout/WithEnv/WithMode + PsBashLocator + SpawnResult/SpawnTimeoutException). Migrated 3 external-process spawn suites (Escalation, Canary, Differential) to consume it; bespoke helpers reduced to thin per-suite config shims. Host.Tests HostWorkerFixture split to a follow-on (in-process SdkWorker is a different shape, single consumer, low duplication, dependency-free shared assembly cannot reference Host).",
+      "failure_reason": null,
+      "fix_task_created": false,
+      "fix_task_id": null,
+      "files": [
+        "src/PsBash.Testing/PsBash.Testing.csproj",
+        "src/PsBash.Testing/ProcessSpawn.cs",
+        "src/PsBash.Testing/PsBashRunner.cs",
+        "src/PsBash.Testing/PsBashLocator.cs",
+        "src/PsBash.Testing/PsBashMode.cs",
+        "src/PsBash.Testing/SpawnResult.cs",
+        "src/PsBash.Testing/SpawnTimeoutException.cs",
+        "src/PsBash.Escalation.Tests/ProcessRunHelper.cs",
+        "src/PsBash.Canary.Tests/ModeRunner.cs",
+        "src/PsBash.Differential.Tests/Oracle/BashOracleFixture.cs",
+        "src/PsBash.Escalation.Tests/KnownBadRegressionTests.cs"
+      ],
+      "notes": "Per-suite baseline-diff (clean-tree vs post-refactor), all 4 suites IDENTICAL: Escalation 21P/0F/0S==21P/0F/0S; Canary 11P/0F/25S==11P/0F/25S; Differential 207P/13F/2S==207P/13F/2S (same 13 known-flaky tests, WSL2 .NET10-RC env baseline); Host.Tests 53P/4F/1S==53P/4F/1S (untouched). Zero new failures. Plan adjustments: (1) HostWorkerFixture deferred to follow-on instead of forcing it into the dependency-free shared assembly; (2) KnownBadRegressionTests.Regression_ProcessSpawnWithTimeout assertion updated TimeoutException->SpawnTimeoutException (Assert.Throws needs exact type; SpawnTimeoutException derives from TimeoutException so the contract is identical).",
+      "follow_on": "HostWorkerFixture for PsBash.Host.Tests SdkWorker dedup \u2014 recommend new task under loop dqjNTUoPZjCa."
     }
   ],
   "interrupted_at": null,

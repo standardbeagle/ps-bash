@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using PsBash.Testing;
 
 namespace PsBash.Differential.Tests.Oracle;
 
@@ -6,10 +7,21 @@ namespace PsBash.Differential.Tests.Oracle;
 /// Runs a bash script through both <c>bash -c</c> and <c>ps-bash -c</c>,
 /// capturing stdout, stderr, exit code, and wall time for each.
 ///
-/// RELIABILITY CONTRACT (process_spawn_contract memory note):
-///   Every spawn uses a configurable timeout (default 5 s).
-///   On timeout → Kill(entireProcessTree: true) in finally, then throw.
-///   The Kill is in a finally block so it fires even when the await is cancelled.
+/// REFACTOR-3: the Process.Start + pipe-drain + timeout + kill-tree loop is no
+/// longer hand-rolled here — both the bash side and the ps-bash side delegate
+/// to the shared <see cref="ProcessSpawn"/> primitive in PsBash.Testing. What
+/// stays Differential-specific:
+///   - bash host resolution via <see cref="BashLocator"/> (Native vs WSL args);
+///   - the <see cref="SemaphoreSlim"/>(2) WSL-VM throttle (assessed in
+///     REFACTOR-7 as VM-overload throttling, not daemon contention — kept);
+///   - the ps-bash extra env (PSBASH_DEBUG=1, PSBASH_TIMEOUT=15);
+///   - <see cref="OracleResult"/> / <see cref="OracleTimeoutException"/> domain
+///     naming. OracleTimeoutException is now a thin subclass of
+///     <see cref="SpawnTimeoutException"/>.
+///
+/// RELIABILITY CONTRACT (process_spawn_contract memory note): every spawn uses
+/// a configurable timeout and Kill(entireProcessTree: true) in finally — now
+/// enforced once, in PsBash.Testing.ProcessSpawn.
 /// </summary>
 public sealed class BashOracleFixture
 {
@@ -38,60 +50,9 @@ public sealed class BashOracleFixture
         // BashPath is used by legacy callers; expose the native path when available.
         // For WSL, we expose "wsl.exe" so callers that check BashPath != null see it.
         BashPath = host.IsAvailable ? host.Path : null;
-        PsBashPath = FindPsBash();
-    }
-
-    private static string? FindPsBash()
-    {
-        // Locate the ps-bash binary relative to the test assembly output directory.
-        // The Differential.Tests project is in src/PsBash.Differential.Tests/,
-        // and the Shell project builds ps-bash into src/PsBash.Shell/bin/Debug/net10.0/.
-        var baseDir = AppContext.BaseDirectory;
-
-        // Navigate from bin/Debug/net10.0 up to the repo root.
-        // TrimEnd the separator first so that a trailing slash does not cause
-        // the first GetDirectoryName call to return the same directory (merely
-        // stripping the trailing slash without moving up a level).
-        var repoRoot = baseDir.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
-        for (int i = 0; i < 5; i++)
-        {
-            var parent = Path.GetDirectoryName(repoRoot);
-            if (parent is null) break;
-            repoRoot = parent;
-        }
-
-        // On non-Windows (Linux/WSL/macOS) prefer the ELF binary over the PE .exe
-        // so that Process.Start can exec it directly.  The .exe variant is returned
-        // first only on Windows where it is the native binary.
-        string[] candidates;
-        if (OperatingSystem.IsWindows())
-        {
-            candidates = new[]
-            {
-                Path.Combine(repoRoot, "src", "PsBash.Shell", "bin", "Debug", "net10.0", "ps-bash.exe"),
-                Path.Combine(repoRoot, "src", "PsBash.Shell", "bin", "Debug", "net10.0", "ps-bash"),
-                Path.Combine(repoRoot, "src", "PsBash.Shell", "bin", "Release", "net10.0", "ps-bash.exe"),
-                Path.Combine(repoRoot, "src", "PsBash.Shell", "bin", "Release", "net10.0", "ps-bash"),
-            };
-        }
-        else
-        {
-            candidates = new[]
-            {
-                Path.Combine(repoRoot, "src", "PsBash.Shell", "bin", "Debug", "net10.0", "ps-bash"),
-                Path.Combine(repoRoot, "src", "PsBash.Shell", "bin", "Debug", "net10.0", "ps-bash.exe"),
-                Path.Combine(repoRoot, "src", "PsBash.Shell", "bin", "Release", "net10.0", "ps-bash"),
-                Path.Combine(repoRoot, "src", "PsBash.Shell", "bin", "Release", "net10.0", "ps-bash.exe"),
-            };
-        }
-
-        foreach (var candidate in candidates)
-        {
-            if (File.Exists(candidate))
-                return candidate;
-        }
-
-        return null;
+        // Unified launcher resolution (REFACTOR-3) — replaces the bespoke
+        // FindPsBash copy that previously lived here.
+        PsBashPath = PsBashLocator.Resolve();
     }
 
     /// <summary>
@@ -116,11 +77,8 @@ public sealed class BashOracleFixture
         {
             // Build the bash PSI using BashLocator so WSL gets the correct -e bash -c args.
             var bashPsi = BashLocator.BuildPsi(host, script)!;
-            if (env is not null)
-                foreach (var (k, v) in env)
-                    bashPsi.Environment[k] = v;
 
-            var bashTask = RunOnePsiAsync(bashPsi, effective);
+            var bashTask = RunOnePsiAsync(bashPsi, effective, extraEnv: env);
             var psBashTask = RunOneAsync(PsBashPath!, "-c", script, effective, env,
                 extraEnv: new Dictionary<string, string>
                 {
@@ -139,73 +97,30 @@ public sealed class BashOracleFixture
 
     /// <summary>
     /// Runs a process from a pre-built <see cref="ProcessStartInfo"/> and captures output.
-    /// Enforces timeout with Kill(entireProcessTree: true) in finally.
+    /// Delegates the spawn loop to <see cref="ProcessSpawn"/>; a timeout surfaces
+    /// as <see cref="OracleTimeoutException"/>.
     /// </summary>
     public static async Task<OracleResult> RunOnePsiAsync(
         ProcessStartInfo psi,
         TimeSpan timeout,
         IReadOnlyDictionary<string, string>? extraEnv = null)
     {
-        psi.RedirectStandardOutput = true;
-        psi.RedirectStandardError = true;
-        psi.RedirectStandardInput = true;
-        psi.UseShellExecute = false;
-
-        if (extraEnv is not null)
-            foreach (var (k, v) in extraEnv)
-                psi.Environment[k] = v;
-
-        var stopwatch = System.Diagnostics.Stopwatch.StartNew();
-        var process = Process.Start(psi)
-            ?? throw new InvalidOperationException($"Failed to start: {psi.FileName}");
-
-        var stdoutTask = process.StandardOutput.ReadToEndAsync();
-        var stderrTask = process.StandardError.ReadToEndAsync();
-
         try
         {
-            process.StandardInput.Close();
-
-            using var cts = new CancellationTokenSource(timeout);
-            try
-            {
-                await process.WaitForExitAsync(cts.Token);
-            }
-            catch (OperationCanceledException)
-            {
-                string partial = string.Empty;
-                try { partial = await stdoutTask.WaitAsync(TimeSpan.FromSeconds(2)); } catch { }
-                string partialErr = string.Empty;
-                try { partialErr = await stderrTask.WaitAsync(TimeSpan.FromSeconds(2)); } catch { }
-
-                throw new OracleTimeoutException(
-                    psi.FileName,
-                    string.Join(" ", psi.ArgumentList),
-                    timeout,
-                    partial,
-                    partialErr);
-            }
-
-            stopwatch.Stop();
-            var stdout = await stdoutTask;
-            var stderr = await stderrTask;
-            return new OracleResult(stdout, stderr, process.ExitCode, stopwatch.ElapsedMilliseconds);
+            var result = await ProcessSpawn.RunAsync(psi, timeout, stdinContent: null, env: extraEnv);
+            return new OracleResult(result.Stdout, result.Stderr, result.ExitCode, result.WallMs);
         }
-        finally
+        catch (SpawnTimeoutException ex)
         {
-            try
-            {
-                if (!process.HasExited)
-                    process.Kill(entireProcessTree: true);
-            }
-            catch { /* already exited */ }
-            process.Dispose();
+            throw new OracleTimeoutException(
+                ex.Executable, ex.Arguments, ex.Timeout, ex.PartialStdout, ex.PartialStderr);
         }
     }
 
     /// <summary>
     /// Runs a single interpreter with <c>-c script</c> and captures all output.
-    /// Enforces timeout with Kill(entireProcessTree: true) in finally.
+    /// Delegates the spawn loop to <see cref="ProcessSpawn"/>; a timeout surfaces
+    /// as <see cref="OracleTimeoutException"/>.
     /// </summary>
     internal static async Task<OracleResult> RunOneAsync(
         string executable,
@@ -215,71 +130,28 @@ public sealed class BashOracleFixture
         IReadOnlyDictionary<string, string>? env = null,
         IReadOnlyDictionary<string, string>? extraEnv = null)
     {
-        var psi = new ProcessStartInfo
+        // Layer env then extraEnv (extraEnv wins) into a single map, matching
+        // the historical two-pass apply order.
+        Dictionary<string, string>? merged = null;
+        if (env is not null || extraEnv is not null)
         {
-            FileName = executable,
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
-            RedirectStandardInput = true,
-            UseShellExecute = false,
-        };
-        psi.ArgumentList.Add(firstArg);
-        psi.ArgumentList.Add(script);
-
-        if (env is not null)
-            foreach (var (k, v) in env)
-                psi.Environment[k] = v;
-
-        if (extraEnv is not null)
-            foreach (var (k, v) in extraEnv)
-                psi.Environment[k] = v;
-
-        var stopwatch = Stopwatch.StartNew();
-        var process = Process.Start(psi)
-            ?? throw new InvalidOperationException($"Failed to start: {executable}");
-
-        var stdoutTask = process.StandardOutput.ReadToEndAsync();
-        var stderrTask = process.StandardError.ReadToEndAsync();
+            merged = new Dictionary<string, string>();
+            if (env is not null)
+                foreach (var (k, v) in env) merged[k] = v;
+            if (extraEnv is not null)
+                foreach (var (k, v) in extraEnv) merged[k] = v;
+        }
 
         try
         {
-            process.StandardInput.Close();
-
-            using var cts = new CancellationTokenSource(timeout);
-            try
-            {
-                await process.WaitForExitAsync(cts.Token);
-            }
-            catch (OperationCanceledException)
-            {
-                // Collect partial output before killing
-                string partial = string.Empty;
-                try { partial = await stdoutTask.WaitAsync(TimeSpan.FromSeconds(2)); } catch { }
-                string partialErr = string.Empty;
-                try { partialErr = await stderrTask.WaitAsync(TimeSpan.FromSeconds(2)); } catch { }
-
-                throw new OracleTimeoutException(
-                    executable,
-                    script,
-                    timeout,
-                    partial,
-                    partialErr);
-            }
-
-            stopwatch.Stop();
-            var stdout = await stdoutTask;
-            var stderr = await stderrTask;
-            return new OracleResult(stdout, stderr, process.ExitCode, stopwatch.ElapsedMilliseconds);
+            var result = await ProcessSpawn.RunAsync(
+                executable, new[] { firstArg, script }, timeout, stdinContent: null, env: merged);
+            return new OracleResult(result.Stdout, result.Stderr, result.ExitCode, result.WallMs);
         }
-        finally
+        catch (SpawnTimeoutException ex)
         {
-            try
-            {
-                if (!process.HasExited)
-                    process.Kill(entireProcessTree: true);
-            }
-            catch { /* already exited */ }
-            process.Dispose();
+            throw new OracleTimeoutException(
+                ex.Executable, script, ex.Timeout, ex.PartialStdout, ex.PartialStderr);
         }
     }
 }
@@ -287,14 +159,16 @@ public sealed class BashOracleFixture
 /// <summary>
 /// Thrown when a spawned interpreter does not exit within the oracle timeout.
 /// The message contains "oracle timeout" so test output is unambiguous.
+///
+/// REFACTOR-3: now a thin subclass of <see cref="SpawnTimeoutException"/> — it
+/// keeps the Differential-specific message prefix and the
+/// <see cref="Script"/> alias property while inheriting the partial-output
+/// capture contract.
 /// </summary>
-public sealed class OracleTimeoutException : Exception
+public sealed class OracleTimeoutException : SpawnTimeoutException
 {
-    public string Executable { get; }
-    public string Script { get; }
-    public TimeSpan Timeout { get; }
-    public string PartialStdout { get; }
-    public string PartialStderr { get; }
+    /// <summary>The script (or argument string) that timed out.</summary>
+    public string Script => Arguments;
 
     public OracleTimeoutException(
         string executable,
@@ -302,20 +176,13 @@ public sealed class OracleTimeoutException : Exception
         TimeSpan timeout,
         string partialStdout,
         string partialStderr)
-        : base(BuildMessage(executable, script, timeout, partialStdout, partialStderr))
+        : base(executable, script, timeout, partialStdout, partialStderr)
     {
-        Executable = executable;
-        Script = script;
-        Timeout = timeout;
-        PartialStdout = partialStdout;
-        PartialStderr = partialStderr;
     }
 
-    private static string BuildMessage(
-        string executable, string script, TimeSpan timeout,
-        string partialStdout, string partialStderr)
-        => $"oracle timeout: {Path.GetFileName(executable)} did not exit within " +
-           $"{timeout.TotalSeconds:F0}s running script: {script}\n" +
-           $"--- partial stdout ---\n{partialStdout}\n" +
-           $"--- partial stderr ---\n{partialStderr}";
+    public override string Message =>
+        $"oracle timeout: {Path.GetFileName(Executable)} did not exit within " +
+        $"{Timeout.TotalSeconds:F0}s running script: {Arguments}\n" +
+        $"--- partial stdout ---\n{PartialStdout}\n" +
+        $"--- partial stderr ---\n{PartialStderr}";
 }

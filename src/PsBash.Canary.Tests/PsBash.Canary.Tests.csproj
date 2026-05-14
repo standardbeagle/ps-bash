@@ -26,6 +26,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\PsBash.Cmdlets\PsBash.Cmdlets.csproj" />
+    <ProjectReference Include="..\PsBash.Testing\PsBash.Testing.csproj" />
   </ItemGroup>
 
   <ItemGroup>

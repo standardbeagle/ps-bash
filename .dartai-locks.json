@@ -1,17 +1,3 @@
 {
-  "claims": {
-    "H8nhR08AT3Ws": {
-      "runner_instance_id": "DESKTOP-NPIOPS6-7606",
-      "runner_email": "andybrummer@standardbeagle.com",
-      "claimed_at": "2026-05-14T05:30:00Z",
-      "agent_id": "DESKTOP-NPIOPS6-7606",
-      "parent_loop_id": "dqjNTUoPZjCa",
-      "purpose": "REFACTOR-3 Wave 4b: unify test process-spawn helpers into PsBash.Testing",
-      "source_event": {
-        "loop_id": "dqjNTUoPZjCa",
-        "task_id": "H8nhR08AT3Ws",
-        "conversation_id": null
-      }
-    }
-  }
+  "claims": {}
 }

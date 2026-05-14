@@ -1,20 +1,22 @@
 using System.Diagnostics;
-using System.Management.Automation;
-using System.Management.Automation.Runspaces;
+using PsBash.Testing;
 
 namespace PsBash.Canary.Tests;
 
 /// <summary>
 /// Mode identifiers for the QA rubric Directive 4 mode interaction matrix.
 /// M4 (interactive TTY) is intentionally excluded — too flaky for CI.
+///
+/// Aliased onto the shared <see cref="PsBashMode"/> so the canary suite and
+/// the unified runner agree on mode numbering.
 /// </summary>
 public enum Mode
 {
-    M1_CFlag = 1,       // ps-bash -c script
-    M2_StdinPipe = 2,   // echo script | ps-bash
-    M3_FileArg = 3,     // ps-bash script.sh
-    M5_InvokeEval = 5,  // Invoke-BashEval cmdlet (in-process)
-    M6_InvokeSource = 6 // Invoke-BashSource cmdlet (in-process, .sh file)
+    M1_CFlag = (int)PsBashMode.M1_CFlag,        // ps-bash -c script
+    M2_StdinPipe = (int)PsBashMode.M2_StdinPipe, // echo script | ps-bash
+    M3_FileArg = (int)PsBashMode.M3_FileArg,     // ps-bash script.sh
+    M5_InvokeEval = (int)PsBashMode.M5_InvokeEval,  // Invoke-BashEval cmdlet (in-process)
+    M6_InvokeSource = (int)PsBashMode.M6_InvokeSource // Invoke-BashSource cmdlet (in-process, .sh file)
 }
 
 /// <summary>
@@ -30,20 +32,30 @@ public sealed record ModeResult(
 /// <summary>
 /// Dispatches a bash script across all active modes (M1, M2, M3, M5, M6).
 ///
+/// REFACTOR-3: the external-process modes (M1/M2/M3) now delegate to the
+/// shared <see cref="PsBashRunner"/> / <see cref="ProcessSpawn"/> helpers, so
+/// the Process.Start + pipe-drain + timeout + kill-tree loop is no longer
+/// duplicated here. The 60 s canary timeout is expressed as a builder call.
+/// The in-process cmdlet modes (M5/M6) stay local — they are a different
+/// shape (no Process.Start) and run through <see cref="CanaryPwshFixture"/>.
+///
 /// PROCESS SPAWN CONTRACT (process_spawn_contract memory note):
-///   Every spawn uses a 60 s hard cap timeout.
+///   Every external spawn uses a 60 s hard cap timeout.
 ///   On timeout: Kill(entireProcessTree: true) in finally, then fail.
 ///   The Kill fires even if the await is cancelled.
+///   (Contract is now enforced once, in PsBash.Testing.ProcessSpawn.)
 /// </summary>
 public sealed class ModeRunner
 {
     public static readonly TimeSpan DefaultTimeout = TimeSpan.FromSeconds(60);
 
+    private readonly PsBashRunner _baseRunner;
     private readonly string? _psBashPath;
 
     public ModeRunner()
     {
-        _psBashPath = FindPsBash();
+        _baseRunner = PsBashRunner.Create().WithTimeout(DefaultTimeout);
+        _psBashPath = _baseRunner.TryResolveBinary();
     }
 
     /// <summary>
@@ -59,16 +71,16 @@ public sealed class ModeRunner
         string script,
         TimeSpan? timeout = null)
     {
-        var effective = timeout ?? DefaultTimeout;
+        var runner = timeout is { } t ? _baseRunner.WithTimeout(t) : _baseRunner;
         var results = new List<ModeResult>();
 
         var tasks = new List<Task<ModeResult>>();
 
         if (_psBashPath != null)
         {
-            tasks.Add(RunM1Async(script, effective));
-            tasks.Add(RunM2Async(script, effective));
-            tasks.Add(RunM3Async(script, effective));
+            tasks.Add(RunSpawnModeAsync(runner, Mode.M1_CFlag, PsBashMode.M1_CFlag, script));
+            tasks.Add(RunSpawnModeAsync(runner, Mode.M2_StdinPipe, PsBashMode.M2_StdinPipe, script));
+            tasks.Add(RunSpawnModeAsync(runner, Mode.M3_FileArg, PsBashMode.M3_FileArg, script));
         }
         else
         {
@@ -77,8 +89,8 @@ public sealed class ModeRunner
             results.Add(new ModeResult(Mode.M3_FileArg, "", "ps-bash binary not found", -999, 0));
         }
 
-        tasks.Add(RunM5Async(script, effective));
-        tasks.Add(RunM6Async(script, effective));
+        tasks.Add(RunM5Async(script));
+        tasks.Add(RunM6Async(script));
 
         var completed = await Task.WhenAll(tasks);
         results.AddRange(completed);
@@ -87,55 +99,19 @@ public sealed class ModeRunner
     }
 
     // -------------------------------------------------------------------------
-    // M1: ps-bash -c script
+    // M1/M2/M3: external-process modes — delegate to the shared PsBashRunner.
     // -------------------------------------------------------------------------
-    private async Task<ModeResult> RunM1Async(string script, TimeSpan timeout)
+    private static async Task<ModeResult> RunSpawnModeAsync(
+        PsBashRunner runner, Mode mode, PsBashMode psBashMode, string script)
     {
-        var psi = BuildPsi(_psBashPath!);
-        psi.ArgumentList.Add("-c");
-        psi.ArgumentList.Add(script);
-        var result = await SpawnAsync(psi, stdinContent: null, timeout);
-        return new ModeResult(Mode.M1_CFlag, result.Stdout, result.Stderr, result.ExitCode, result.WallMs);
-    }
-
-    // -------------------------------------------------------------------------
-    // M2: echo script | ps-bash
-    // -------------------------------------------------------------------------
-    private async Task<ModeResult> RunM2Async(string script, TimeSpan timeout)
-    {
-        var psi = BuildPsi(_psBashPath!);
-        // No arguments — reads from stdin
-        var result = await SpawnAsync(psi, stdinContent: script, timeout);
-        return new ModeResult(Mode.M2_StdinPipe, result.Stdout, result.Stderr, result.ExitCode, result.WallMs);
-    }
-
-    // -------------------------------------------------------------------------
-    // M3: ps-bash script.sh (file-arg execution)
-    // Writes the script to a temp .sh file and passes the path as the first
-    // argument to ps-bash. This exercises the real M3 code path in Program.cs.
-    // -------------------------------------------------------------------------
-    private async Task<ModeResult> RunM3Async(string script, TimeSpan timeout)
-    {
-        var tempFile = Path.Combine(Path.GetTempPath(), "ps-bash", $"canary-m3-{Guid.NewGuid()}.sh");
-        Directory.CreateDirectory(Path.GetDirectoryName(tempFile)!);
-        try
-        {
-            await File.WriteAllTextAsync(tempFile, script);
-            var psi = BuildPsi(_psBashPath!);
-            psi.ArgumentList.Add(tempFile);
-            var result = await SpawnAsync(psi, stdinContent: null, timeout);
-            return new ModeResult(Mode.M3_FileArg, result.Stdout, result.Stderr, result.ExitCode, result.WallMs);
-        }
-        finally
-        {
-            try { File.Delete(tempFile); } catch { }
-        }
+        var result = await runner.WithMode(psBashMode).RunScriptAsync(script);
+        return new ModeResult(mode, result.Stdout, result.Stderr, result.ExitCode, result.WallMs);
     }
 
     // -------------------------------------------------------------------------
     // M5: Invoke-BashEval cmdlet (in-process PowerShell SDK)
     // -------------------------------------------------------------------------
-    private async Task<ModeResult> RunM5Async(string script, TimeSpan timeout)
+    private static async Task<ModeResult> RunM5Async(string script)
     {
         return await Task.Run(() =>
         {
@@ -176,7 +152,7 @@ public sealed class ModeRunner
     // -------------------------------------------------------------------------
     // M6: Invoke-BashSource cmdlet (in-process, reads from .sh file)
     // -------------------------------------------------------------------------
-    private async Task<ModeResult> RunM6Async(string script, TimeSpan timeout)
+    private static async Task<ModeResult> RunM6Async(string script)
     {
         var tempFile = Path.Combine(Path.GetTempPath(), "ps-bash", $"canary-m6-{Guid.NewGuid()}.sh");
         Directory.CreateDirectory(Path.GetDirectoryName(tempFile)!);
@@ -220,117 +196,5 @@ public sealed class ModeRunner
         {
             try { File.Delete(tempFile); } catch { }
         }
-    }
-
-    // -------------------------------------------------------------------------
-    // Internal helpers
-    // -------------------------------------------------------------------------
-
-    private static ProcessStartInfo BuildPsi(string executable)
-    {
-        return new ProcessStartInfo
-        {
-            FileName = executable,
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
-            RedirectStandardInput = true,
-            UseShellExecute = false,
-        };
-    }
-
-    private static async Task<(string Stdout, string Stderr, int ExitCode, long WallMs)> SpawnAsync(
-        ProcessStartInfo psi,
-        string? stdinContent,
-        TimeSpan timeout)
-    {
-        var sw = Stopwatch.StartNew();
-        var process = Process.Start(psi)
-            ?? throw new InvalidOperationException($"Failed to start process: {psi.FileName}");
-
-        var stdoutTask = process.StandardOutput.ReadToEndAsync();
-        var stderrTask = process.StandardError.ReadToEndAsync();
-
-        try
-        {
-            if (stdinContent != null)
-            {
-                await process.StandardInput.WriteAsync(stdinContent);
-            }
-            process.StandardInput.Close();
-
-            using var cts = new CancellationTokenSource(timeout);
-            try
-            {
-                await process.WaitForExitAsync(cts.Token);
-            }
-            catch (OperationCanceledException)
-            {
-                throw new TimeoutException(
-                    $"Process {Path.GetFileName(psi.FileName)} did not exit within {timeout.TotalSeconds:F0}s");
-            }
-
-            sw.Stop();
-            var stdout = await stdoutTask;
-            var stderr = await stderrTask;
-            return (stdout, stderr, process.ExitCode, sw.ElapsedMilliseconds);
-        }
-        finally
-        {
-            try
-            {
-                if (!process.HasExited)
-                    process.Kill(entireProcessTree: true);
-            }
-            catch { /* already exited */ }
-            process.Dispose();
-        }
-    }
-
-    /// <summary>
-    /// Locates the ps-bash binary in the Debug or Release build output.
-    /// Mirrors BashOracleFixture.FindPsBash() — do not reference that project directly.
-    /// </summary>
-    private static string? FindPsBash()
-    {
-        var baseDir = AppContext.BaseDirectory;
-
-        // Navigate up from bin/Debug/net10.0 to the repo root (5 levels up).
-        var repoRoot = baseDir.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
-        for (int i = 0; i < 5; i++)
-        {
-            var parent = Path.GetDirectoryName(repoRoot);
-            if (parent is null) break;
-            repoRoot = parent;
-        }
-
-        string[] candidates;
-        if (OperatingSystem.IsWindows())
-        {
-            candidates = new[]
-            {
-                Path.Combine(repoRoot, "src", "PsBash.Shell", "bin", "Debug", "net10.0", "ps-bash.exe"),
-                Path.Combine(repoRoot, "src", "PsBash.Shell", "bin", "Debug", "net10.0", "ps-bash"),
-                Path.Combine(repoRoot, "src", "PsBash.Shell", "bin", "Release", "net10.0", "ps-bash.exe"),
-                Path.Combine(repoRoot, "src", "PsBash.Shell", "bin", "Release", "net10.0", "ps-bash"),
-            };
-        }
-        else
-        {
-            candidates = new[]
-            {
-                Path.Combine(repoRoot, "src", "PsBash.Shell", "bin", "Debug", "net10.0", "ps-bash"),
-                Path.Combine(repoRoot, "src", "PsBash.Shell", "bin", "Debug", "net10.0", "ps-bash.exe"),
-                Path.Combine(repoRoot, "src", "PsBash.Shell", "bin", "Release", "net10.0", "ps-bash"),
-                Path.Combine(repoRoot, "src", "PsBash.Shell", "bin", "Release", "net10.0", "ps-bash.exe"),
-            };
-        }
-
-        foreach (var candidate in candidates)
-        {
-            if (File.Exists(candidate))
-                return candidate;
-        }
-
-        return null;
     }
 }

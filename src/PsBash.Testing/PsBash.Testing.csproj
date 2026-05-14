@@ -1,0 +1,32 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    Shared test-spawn helper assembly (REFACTOR-3).
+
+    Consolidates the process-spawn boilerplate that previously lived as
+    near-duplicate copies in PsBash.Escalation.Tests/ProcessRunHelper.cs,
+    PsBash.Canary.Tests/ModeRunner.cs, and
+    PsBash.Differential.Tests/Oracle/BashOracleFixture.cs.
+
+    A spawn-reliability fix (timeout, kill-tree, pipe-drain order, env
+    canonicalisation, binary resolution) now lands once here and applies to
+    every consuming suite — O(1) instead of O(N).
+
+    DEPENDENCY-LIGHT BY DESIGN: the spawn primitive only needs System.*, so
+    this assembly takes no repo ProjectReferences. That keeps it consumable by
+    Escalation.Tests (refs Core+Shell+Host), Canary.Tests (refs Cmdlets), and
+    Differential.Tests (refs Core) without forcing a common heavy dependency.
+
+    The in-process SdkWorker path (Host.Tests) is intentionally NOT here: it is
+    a different shape (in-process runspace, not Process.Start) and has a single
+    consumer. Its dedup helper, HostWorkerFixture, lives in PsBash.Host.Tests
+    next to PsBash.Host where SdkWorker is defined.
+  -->
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <IsPackable>false</IsPackable>
+  </PropertyGroup>
+
+</Project>

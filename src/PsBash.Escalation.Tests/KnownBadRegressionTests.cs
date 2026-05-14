@@ -72,9 +72,11 @@ public class KnownBadRegressionTests
     /// <summary>
     /// Known-bad: process spawn without timeout + kill-tree causes lockup.
     /// Spawn a long sleep (60 s), apply a 2 s timeout, assert the process tree
-    /// is killed within ~4 s and a TimeoutException is raised.
+    /// is killed within ~4 s and a timeout exception is raised.
     ///
-    /// This test verifies ProcessRunHelper's own reliability contract — if this
+    /// This test verifies the shared spawn reliability contract (REFACTOR-3:
+    /// now enforced once in PsBash.Testing.ProcessSpawn, surfaced via
+    /// SpawnTimeoutException which derives from TimeoutException) — if this
     /// test itself hangs, the contract is broken.
     /// </summary>
     [SkippableFact]
@@ -84,7 +86,7 @@ public class KnownBadRegressionTests
         var timeout = TimeSpan.FromSeconds(2);
         var sw = Stopwatch.StartNew();
 
-        var ex = await Assert.ThrowsAsync<TimeoutException>(async () =>
+        var ex = await Assert.ThrowsAsync<PsBash.Testing.SpawnTimeoutException>(async () =>
         {
             await ProcessRunHelper.RunAsync(
                 new[] { "-c", "Start-Sleep 60" },

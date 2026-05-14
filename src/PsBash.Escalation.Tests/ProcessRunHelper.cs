@@ -1,152 +1,46 @@
-using System.Diagnostics;
+using PsBash.Testing;
 
 namespace PsBash.Escalation.Tests;
 
 /// <summary>
-/// Helpers for spawning ps-bash child processes in escalation/fault-injection tests.
+/// Thin per-suite shim over the shared <see cref="PsBashRunner"/> /
+/// <see cref="ProcessSpawn"/> helpers (REFACTOR-3).
 ///
-/// RELIABILITY CONTRACT: every spawn uses a timeout + Kill(entireProcessTree: true)
-/// in finally so a hung command never orphans the process tree.
+/// The escalation/fault-injection suite hard-fails on a missing launcher
+/// binary (build PsBash.Shell first) and uses a 30 s default timeout. Those
+/// two suite-specific choices are the only thing left here — the actual
+/// Process.Start + pipe-drain + timeout + kill-tree loop now lives once in
+/// PsBash.Testing and a reliability fix lands O(1) across every suite.
+///
+/// RELIABILITY CONTRACT: inherited verbatim from <see cref="ProcessSpawn"/> —
+/// every spawn uses a timeout + Kill(entireProcessTree: true) in finally so a
+/// hung command never orphans the process tree.
 /// </summary>
 internal static class ProcessRunHelper
 {
     public static readonly TimeSpan DefaultTimeout = TimeSpan.FromSeconds(30);
 
-    private static readonly string ShellProjectDir = Path.GetFullPath(
-        Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "..",
-            "src", "PsBash.Shell"));
+    // Hard-fail on a missing binary: the escalation suite treats an unbuilt
+    // launcher as a setup error, not a skip.
+    private static readonly string LauncherPath =
+        PsBashLocator.ResolveRequired();
 
-    // Mirror the configuration this test assembly was built with so we find
-    // the matching launcher output. CI builds Release only; in dev local both
-    // configs may exist.
-    private static readonly string Configuration =
-        AppContext.BaseDirectory
-            .Split(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar)
-            .FirstOrDefault(p => p.Equals("Release", StringComparison.OrdinalIgnoreCase)
-                              || p.Equals("Debug", StringComparison.OrdinalIgnoreCase))
-        ?? "Debug";
-
-    // Resolve the ps-bash launcher binary path directly so each test spawn
-    // skips the 2-5s of `dotnet run --no-build` host startup. The legacy path
-    // wrapped every -c invocation in a fresh dotnet host, which intermittently
-    // overflowed the 30s test timeout on CI even for trivial scripts.
-    // Probe order: $Configuration/$TFM/ps-bash, then the alternate config as
-    // a fallback so local dev runs that have only Debug or only Release built
-    // both work without a rebuild.
-    private static readonly string LauncherPath = ResolveLauncherPath();
-
-    private static string ResolveLauncherPath()
-    {
-        var binName = OperatingSystem.IsWindows() ? "ps-bash.exe" : "ps-bash";
-        foreach (var config in new[] { Configuration, Configuration == "Release" ? "Debug" : "Release" })
-        {
-            var configDir = Path.Combine(ShellProjectDir, "bin", config);
-            if (!Directory.Exists(configDir)) continue;
-            foreach (var tfmDir in Directory.EnumerateDirectories(configDir))
-            {
-                var candidate = Path.Combine(tfmDir, binName);
-                if (File.Exists(candidate)) return candidate;
-            }
-        }
-        throw new InvalidOperationException(
-            $"ps-bash launcher not found under {Path.Combine(ShellProjectDir, "bin")}. " +
-            "Build PsBash.Shell before running escalation tests.");
-    }
-
-    public static ProcessStartInfo BuildPsi(string[] arguments)
-    {
-        var psi = new ProcessStartInfo { FileName = LauncherPath };
-        foreach (var arg in arguments)
-            psi.ArgumentList.Add(arg);
-
-        return psi;
-    }
-
-    public static Task<(int ExitCode, string Stdout, string Stderr)> RunAsync(
+    public static async Task<(int ExitCode, string Stdout, string Stderr)> RunAsync(
         string[] arguments,
         TimeSpan? timeout = null)
     {
-        var psi = BuildPsi(arguments);
-        return RunAsync(psi, stdinContent: null, timeout: timeout);
+        var result = await ProcessSpawn.RunAsync(
+            LauncherPath, arguments, timeout ?? DefaultTimeout);
+        return (result.ExitCode, result.Stdout, result.Stderr);
     }
 
-    public static Task<(int ExitCode, string Stdout, string Stderr)> RunWithStdinAsync(
+    public static async Task<(int ExitCode, string Stdout, string Stderr)> RunWithStdinAsync(
         string stdinContent,
         string[] arguments,
         TimeSpan? timeout = null)
     {
-        var psi = BuildPsi(arguments);
-        return RunAsync(psi, stdinContent: stdinContent, timeout: timeout);
-    }
-
-    public static async Task<(int ExitCode, string Stdout, string Stderr)> RunAsync(
-        ProcessStartInfo psi,
-        string? stdinContent = null,
-        TimeSpan? timeout = null)
-    {
-        psi.RedirectStandardOutput = true;
-        psi.RedirectStandardError = true;
-        psi.RedirectStandardInput = true;
-        psi.UseShellExecute = false;
-
-        var effectiveTimeout = timeout ?? DefaultTimeout;
-        var process = Process.Start(psi)
-            ?? throw new InvalidOperationException("Failed to start process");
-
-        var stdoutTask = process.StandardOutput.ReadToEndAsync();
-        var stderrTask = process.StandardError.ReadToEndAsync();
-
-        try
-        {
-            try
-            {
-                if (stdinContent is not null)
-                    await process.StandardInput.WriteAsync(stdinContent);
-            }
-            finally
-            {
-                process.StandardInput.Close();
-            }
-
-            using var cts = new CancellationTokenSource(effectiveTimeout);
-            try
-            {
-                await process.WaitForExitAsync(cts.Token);
-            }
-            catch (OperationCanceledException)
-            {
-                string partialStdout = string.Empty;
-                string partialStderr = string.Empty;
-                try
-                {
-                    if (!process.HasExited)
-                        process.Kill(entireProcessTree: true);
-                }
-                catch { /* already exited or access denied */ }
-
-                try { partialStdout = await stdoutTask.WaitAsync(TimeSpan.FromSeconds(5)); } catch { }
-                try { partialStderr = await stderrTask.WaitAsync(TimeSpan.FromSeconds(5)); } catch { }
-
-                throw new TimeoutException(
-                    $"Process did not exit within {effectiveTimeout.TotalSeconds:F0}s; " +
-                    $"entire process tree was killed.\n" +
-                    $"--- partial stdout ---\n{partialStdout}\n" +
-                    $"--- partial stderr ---\n{partialStderr}");
-            }
-
-            var stdout = await stdoutTask;
-            var stderr = await stderrTask;
-            return (process.ExitCode, stdout, stderr);
-        }
-        finally
-        {
-            try
-            {
-                if (!process.HasExited)
-                    process.Kill(entireProcessTree: true);
-            }
-            catch { /* already exited */ }
-            process.Dispose();
-        }
+        var result = await ProcessSpawn.RunAsync(
+            LauncherPath, arguments, timeout ?? DefaultTimeout, stdinContent: stdinContent);
+        return (result.ExitCode, result.Stdout, result.Stderr);
     }
 }
