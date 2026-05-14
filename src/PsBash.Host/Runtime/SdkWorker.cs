@@ -47,7 +47,7 @@ public sealed class SdkWorker : IWorker
         await _lock.WaitAsync(ct);
         try
         {
-            return await Task.Run(() => WithDefaultRunspace(() => RunCommand(command, callback)), ct);
+            return await Task.Run(() => WithDefaultRunspace(() => RunCommand(command, callback, null)), ct);
         }
         finally
         {
@@ -69,8 +69,16 @@ public sealed class SdkWorker : IWorker
         }
     }
 
-    // Used by Connection to pass the callback directly (thread-safe — bypasses the shared property).
-    internal async Task<int> ExecuteWithOutputAsync(string command, Action<string>? output, CancellationToken ct = default)
+    // Used by Connection to pass the callbacks directly (thread-safe — bypasses the shared property).
+    // REFACTOR-4: <paramref name="errorOutput"/> is the host's stderr sink; when
+    // non-null, every host stderr write (PowerShell error records, parse/runtime
+    // exceptions, the emitter's `cmd >&2` rewrite via $Host.UI.WriteErrorLine)
+    // routes there instead of the host's detached fd 2.
+    internal async Task<int> ExecuteWithOutputAsync(
+        string command,
+        Action<string>? output,
+        Action<string>? errorOutput,
+        CancellationToken ct = default)
     {
         ObjectDisposedException.ThrowIf(_disposed != 0, this);
         await _lock.WaitAsync(ct);
@@ -79,7 +87,7 @@ public sealed class SdkWorker : IWorker
             // When ct fires mid-command (e.g. parent-death watcher), stop the PS
             // pipeline so Invoke() returns instead of blocking indefinitely.
             using var stopReg = ct.Register(() => _ps.Stop());
-            return await Task.Run(() => WithDefaultRunspace(() => RunCommand(command, output)), ct);
+            return await Task.Run(() => WithDefaultRunspace(() => RunCommand(command, output, errorOutput)), ct);
         }
         finally
         {
@@ -101,7 +109,7 @@ public sealed class SdkWorker : IWorker
         }
     }
 
-    private int RunCommand(string command, Action<string>? output)
+    private int RunCommand(string command, Action<string>? output, Action<string>? errorOutput)
     {
         _host.Reset();
         _ps.Commands.Clear();
@@ -142,6 +150,30 @@ public sealed class SdkWorker : IWorker
         };
         _host.HostUI.SetWriteLineForwarder(deliver);
 
+        // REFACTOR-4: stderr sink. Every host stderr write — PowerShell error
+        // records, parse/runtime exception text, and the emitter's `cmd >&2`
+        // rewrite (which lands here via $Host.UI.WriteErrorLine →
+        // ExitTrackingHostUI.WriteErrorLine → the forwarder set below) — routes
+        // through this single sink. When errorOutput is null (the in-process
+        // IWorker.ExecuteAsync path) we keep the historical Console.Error
+        // fallback. Convention: errorOutput receives a line WITHOUT a trailing
+        // newline; the IPC frame writer adds the record boundary.
+        Action<string> deliverError = line =>
+        {
+            try
+            {
+                if (errorOutput is not null) errorOutput(line);
+                else Console.Error.WriteLine(line);
+            }
+            catch
+            {
+                // Stderr sink failed (e.g. IPC stream closed). Stop the pipeline
+                // rather than firing into a broken sink on every subsequent line.
+                _ps.Stop();
+            }
+        };
+        _host.HostUI.SetWriteErrorLineForwarder(errorOutput is not null ? deliverError : null);
+
         // Stream output via DataAdded so results are delivered as they arrive rather
         // than buffering the entire Collection<PSObject> in RAM first.
         var outputCollection = new System.Management.Automation.PSDataCollection<System.Management.Automation.PSObject>();
@@ -170,7 +202,7 @@ public sealed class SdkWorker : IWorker
                 // Defensive: a formatter exception must not blow up the
                 // worker. Log and continue with raw ToString fallback so the
                 // user still sees something rather than silent loss.
-                Console.Error.WriteLine($"ps-bash: formatter error: {ex.Message}");
+                deliverError($"ps-bash: formatter error: {ex.Message}");
                 foreach (var raw in formatBuffer)
                     deliver((raw?.ToString() ?? "") + Environment.NewLine);
             }
@@ -228,15 +260,13 @@ public sealed class SdkWorker : IWorker
             }
             catch (System.Management.Automation.ParseException ex)
             {
-                Console.Error.WriteLine($"ps-bash: parse error: {ex.Message}");
-                deliver($"ps-bash: parse error: {ex.Message}{Environment.NewLine}");
+                deliverError($"ps-bash: parse error: {ex.Message}");
                 _ps.Commands.Clear();
                 return 1;
             }
             catch (System.Management.Automation.RuntimeException ex)
             {
-                Console.Error.WriteLine($"ps-bash: {ex.Message}");
-                deliver($"ps-bash: {ex.Message}{Environment.NewLine}");
+                deliverError($"ps-bash: {ex.Message}");
                 _ps.Commands.Clear();
                 return 1;
             }
@@ -268,7 +298,7 @@ public sealed class SdkWorker : IWorker
             var errors = _ps.Streams.Error;
             for (int i = 0; i < errors.Count; i++)
             {
-                Console.Error.WriteLine(errors[i].ToString());
+                deliverError(errors[i].ToString());
             }
             if (_ps.HadErrors && errors.Count > 0)
             {
@@ -312,9 +342,11 @@ public sealed class SdkWorker : IWorker
         }
         finally
         {
-            // Detach the forwarder so a stray Out-Default call from another
-            // worker invocation can't leak into a previous caller's output sink.
+            // Detach the forwarders so a stray Out-Default / WriteErrorLine call
+            // from another worker invocation can't leak into a previous caller's
+            // output sink.
             _host.HostUI.SetWriteLineForwarder(null);
+            _host.HostUI.SetWriteErrorLineForwarder(null);
         }
     }
 

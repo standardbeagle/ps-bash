@@ -1204,15 +1204,19 @@ public static class PsEmitter
             return $"{hereString} | Emit-BashLine | {cmdText}";
         }
 
-        // Stdout-to-stderr redirects (>&2 or 1>&2) — PowerShell reserves 1>&2,
-        // so pipe through [Console]::Error.WriteLine instead.
+        // Stdout-to-stderr redirects (>&2 or 1>&2). REFACTOR-4: route through
+        // Write-BashHostStderr, which writes into the host's STDERR-tagged IPC
+        // frame, instead of [Console]::Error.WriteLine. The host's inherited
+        // fd 2 is detached to /dev/null (commit cc8bf88's hang fix), so a direct
+        // [Console]::Error write would be silently lost — all host output must
+        // travel the single IPC channel the launcher drains.
         var stderrRedirect = cmd.Redirects.FirstOrDefault(r =>
             r.Op == ">&" && r.Fd == 1 && GetLiteralValue(r.Target) == "2");
         if (stderrRedirect is not null)
         {
             var remaining = cmd.Redirects.Remove(stderrRedirect);
             var innerCmd = new Command.Simple(cmd.Words, cmd.EnvPairs, remaining);
-            return $"{EmitSimple(innerCmd)} | ForEach-Object {{ [Console]::Error.WriteLine($_) }}";
+            return $"{EmitSimple(innerCmd)} | ForEach-Object {{ Write-BashHostStderr $_ }}";
         }
 
         // Input redirects (< file) become "Get-Content file | cmd".

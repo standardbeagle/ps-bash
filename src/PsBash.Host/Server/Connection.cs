@@ -116,7 +116,17 @@ internal sealed class Connection
 
         void WriteOutput(string line)
         {
-            HostProtocol.WriteResponseLineAsync(_stream, line, ct).GetAwaiter().GetResult();
+            HostProtocol.WriteResponseLineAsync(_stream, line, StreamTag.Stdout, ct).GetAwaiter().GetResult();
+        }
+
+        // REFACTOR-4: stderr sink. Host stderr writes (error records, parse/
+        // runtime exception text, the emitter's `cmd >&2` rewrite) are framed
+        // as STDERR-tagged IPC lines so the launcher can route them to its own
+        // Console.Error. SdkWorker delivers each line without a trailing
+        // newline; WriteResponseLineAsync base64-encodes it as one frame.
+        void WriteError(string line)
+        {
+            HostProtocol.WriteResponseLineAsync(_stream, line, StreamTag.Stderr, ct).GetAwaiter().GetResult();
         }
 
         // PTY-4: in interactive mode the host runspace's Console.Out is the PTY
@@ -140,8 +150,16 @@ internal sealed class Connection
             ? null
             : WriteOutput;
 
+        // REFACTOR-4: in framed mode the stderr sink is a STDERR-tagged IPC
+        // frame writer; in interactive mode (PTY) stderr — like stdout — goes
+        // straight to the host's Console (the PTY slave), so pass null and let
+        // SdkWorker fall back to Console.Error.
+        Action<string>? errorSink = sessionMode == SessionMode.Interactive
+            ? null
+            : WriteError;
+
         var worker = await _workerTask.ConfigureAwait(false);
-        var exitCode = await worker.ExecuteWithOutputAsync(command, outputSink, ct);
+        var exitCode = await worker.ExecuteWithOutputAsync(command, outputSink, errorSink, ct);
         await HostProtocol.WriteExitAsync(_stream, exitCode, ct);
 
         if (sessionMode == SessionMode.Interactive)

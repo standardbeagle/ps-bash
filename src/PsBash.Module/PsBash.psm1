@@ -35,6 +35,23 @@ function Set-BashErrorMode {
     $script:BashErrorMode = $Mode
 }
 
+function Write-BashHostStderr {
+    <#
+    .SYNOPSIS
+        Emit a line to the host's stderr stream.
+    .DESCRIPTION
+        REFACTOR-4: all host -> launcher output travels the single IPC channel
+        the launcher drains. The host's inherited fd 2 is detached to /dev/null
+        (commit cc8bf88's hang fix), so a direct [Console]::Error.WriteLine is
+        silently lost. $Host.UI.WriteErrorLine is wired by the host's SdkWorker
+        to a STDERR-tagged IPC frame; the launcher routes that frame to its own
+        Console.Error. This is the runtime target the emitter rewrites `cmd >&2`
+        to, and the sink Write-BashError uses in Bash error mode.
+    #>
+    param([string]$Message)
+    $Host.UI.WriteErrorLine($Message)
+}
+
 function Write-BashError {
     <#
     .SYNOPSIS
@@ -47,7 +64,7 @@ function Write-BashError {
     )
     $global:LASTEXITCODE = $ExitCode
     if ($script:BashErrorMode -eq 'Bash') {
-        [Console]::Error.WriteLine($Message)
+        Write-BashHostStderr $Message
     } else {
         Write-Error -Message $Message -ErrorAction Continue
     }

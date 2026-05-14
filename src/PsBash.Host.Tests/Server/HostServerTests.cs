@@ -230,6 +230,78 @@ public sealed class HostServerTests : IAsyncLifetime
         Assert.Contains(lines, l => l.Contains("framed-token"));
     }
 
+    // -- REFACTOR-4 -----------------------------------------------------------
+
+    /// <summary>
+    /// Send a framed command and split the response by stream tag.
+    /// </summary>
+    private async Task<(List<string> Stdout, List<string> Stderr, int ExitCode)> SendCommandWithStreamsAsync(
+        string command, CancellationToken ct = default)
+    {
+        var clientTransport = new NamedPipeTransport(_pipeName);
+        await using (clientTransport)
+        {
+            using var stream = await clientTransport.ConnectAsync(ct);
+            await HostProtocol.WriteRequestAsync(stream, new Mode.Command(command), ct);
+            var stdout = new List<string>();
+            var stderr = new List<string>();
+            var exitCode = await HostProtocol.ReadResponseAsync(
+                stream,
+                (line, tag) =>
+                {
+                    if (tag == StreamTag.Stderr) stderr.Add(line);
+                    else stdout.Add(line);
+                },
+                ct);
+            return (stdout, stderr, exitCode);
+        }
+    }
+
+    /// <summary>
+    /// RC-1 regression — the core of REFACTOR-4. A command whose transpiled
+    /// form writes to the host stderr stream (this is exactly what the emitter
+    /// produces for <c>echo err &gt;&amp;2</c>) MUST surface on the launcher's
+    /// STDERR-tagged IPC frames and MUST NOT leak into the stdout stream.
+    /// Before REFACTOR-4 the host wrote to its detached fd 2 and the line was
+    /// lost entirely.
+    /// </summary>
+    [Fact]
+    public async Task FramedSession_HostStderr_RoutesToStderrStream_NotStdout()
+    {
+        using var cts = CancellationTokenSource.CreateLinkedTokenSource(_cts.Token);
+        cts.CancelAfter(TimeSpan.FromSeconds(15));
+
+        var (stdout, stderr, exitCode) = await SendCommandWithStreamsAsync(
+            "Invoke-BashEcho 'rc1-token' | ForEach-Object { Write-BashHostStderr $_ }",
+            cts.Token);
+
+        Assert.Equal(0, exitCode);
+        Assert.Contains(stderr, l => l.Contains("rc1-token"));
+        Assert.DoesNotContain(stdout, l => l.Contains("rc1-token"));
+    }
+
+    /// <summary>
+    /// REFACTOR-4: stdout and stderr from the same command both travel the one
+    /// IPC channel but stay on their own tagged frames — no interleaving, no
+    /// loss, exit code intact.
+    /// </summary>
+    [Fact]
+    public async Task FramedSession_StdoutAndStderr_BothSurviveOnSeparateStreams()
+    {
+        using var cts = CancellationTokenSource.CreateLinkedTokenSource(_cts.Token);
+        cts.CancelAfter(TimeSpan.FromSeconds(15));
+
+        var (stdout, stderr, exitCode) = await SendCommandWithStreamsAsync(
+            "Invoke-BashEcho 'on-stdout'; Write-BashHostStderr 'on-stderr'",
+            cts.Token);
+
+        Assert.Equal(0, exitCode);
+        Assert.Contains(stdout, l => l.Contains("on-stdout"));
+        Assert.DoesNotContain(stdout, l => l.Contains("on-stderr"));
+        Assert.Contains(stderr, l => l.Contains("on-stderr"));
+        Assert.DoesNotContain(stderr, l => l.Contains("on-stdout"));
+    }
+
     [Fact]
     public async Task SixteenConcurrentConnections_AllCompleteWithoutInterleaving()
     {

@@ -50,9 +50,23 @@ internal sealed class ExitTrackingHostUI : PSHostUserInterface
     // don't suddenly leak formatter output to stdout.
     private Action<string>? _writeForwarder;
 
+    // REFACTOR-4: forwarder for the host's stderr stream. SdkWorker wires this
+    // per-invocation so PowerShell's WriteErrorLine (and the emitter's
+    // `cmd >&2` rewrite, which calls $Host.UI.WriteErrorLine) reaches a
+    // STDERR-tagged IPC frame instead of the host's detached fd 2. When null,
+    // WriteErrorLine falls back to Console.Error.WriteLine — preserving the
+    // pre-REFACTOR-4 behavior for callers outside an active SdkWorker
+    // invocation.
+    private Action<string>? _writeErrorForwarder;
+
     public void SetWriteLineForwarder(Action<string>? forwarder)
     {
         _writeForwarder = forwarder;
+    }
+
+    public void SetWriteErrorLineForwarder(Action<string>? forwarder)
+    {
+        _writeErrorForwarder = forwarder;
     }
 
     public override PSHostRawUserInterface? RawUI => null;
@@ -95,7 +109,19 @@ internal sealed class ExitTrackingHostUI : PSHostUserInterface
     }
 
     public override void WriteDebugLine(string message) { }
-    public override void WriteErrorLine(string value) => Console.Error.WriteLine(value);
+
+    public override void WriteErrorLine(string value)
+    {
+        // REFACTOR-4: route through the per-invocation stderr forwarder when
+        // SdkWorker has wired one (→ STDERR-tagged IPC frame). Outside an
+        // active invocation the forwarder is null and we keep the historical
+        // Console.Error.WriteLine fallback.
+        var forwarder = _writeErrorForwarder;
+        if (forwarder is not null)
+            forwarder(value);
+        else
+            Console.Error.WriteLine(value);
+    }
     public override void WriteProgress(long sourceId, ProgressRecord record) { }
     public override void WriteVerboseLine(string message) { }
     public override void WriteWarningLine(string message) { }

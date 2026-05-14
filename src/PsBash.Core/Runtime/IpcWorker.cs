@@ -386,10 +386,20 @@ public sealed class IpcWorker : IWorker
         await using (stream)
         {
             await HostProtocol.WriteRequestAsync(stream, mode, linked.Token).ConfigureAwait(false);
+            // REFACTOR-4: route each response frame by its stream tag. STDOUT
+            // frames go to OutputCallback (or Console.Out when no callback is
+            // set); STDERR frames always go to Console.Error — they are never
+            // folded into OutputCallback so QueryAsync's collected result and
+            // the launcher's stdout stay free of diagnostic text.
             return await HostProtocol.ReadResponseAsync(
                 stream,
-                line =>
+                (line, tag) =>
                 {
+                    if (tag == StreamTag.Stderr)
+                    {
+                        Console.Error.Write(line.EndsWith('\n') ? line : line + "\n");
+                        return;
+                    }
                     if (OutputCallback is { } cb) cb(line);
                     else Console.Write(line);
                 },

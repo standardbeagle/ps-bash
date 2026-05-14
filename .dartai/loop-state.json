@@ -1,9 +1,9 @@
 {
   "status": "paused",
-  "iterations": 8,
-  "spawns": 8,
+  "iterations": 9,
+  "spawns": 9,
   "started_at": "2026-05-12T20:33:00Z",
-  "last_iteration_at": "2026-05-14T06:05:00Z",
+  "last_iteration_at": "2026-05-14T08:30:00Z",
   "last_subagent": "task-executor",
   "loop_task_id": "AEACP6UqDUBr",
   "dartboard": "Personal/ps-bash",
@@ -267,6 +267,37 @@
         "src/PsBash.Host/Resources/SdkRunspaceSetup.ps1",
         "src/PsBash.Host/Runtime/SdkRunspace.cs",
         "src/PsBash.Core.Tests/Runtime/ModuleExtractorTests.cs"
+      ]
+    },
+    {
+      "task_id": "dLoSV6zSQcAn",
+      "iteration": 7,
+      "status": "completed",
+      "started_at": "2026-05-14T07:30:00Z",
+      "completed_at": "2026-05-14T08:30:00Z",
+      "phase_completed": "final-validation",
+      "failed_phase": null,
+      "files_changed": 9,
+      "tests_added": 7,
+      "plan_adjustments": 1,
+      "completion_summary": "REFACTOR-4: all host->launcher output flows through one IPC channel with a stream discriminator (subsumes RC-1). HostProtocol gained a StreamTag enum {Stdout=0,Stderr=1} + STDERR: wire prefix (colon outside base64 alphabet => Stdout frames stay wire-identical to pre-REFACTOR-4 for back-compat); WriteResponseLineAsync + ReadResponse(WithLifecycle)Async got tag-aware overloads, legacy Action<string> overloads collapse both streams onto one delegate. PsEmitter rewrites `cmd >&2` to `Write-BashHostStderr $_` instead of [Console]::Error.WriteLine; new psm1 Write-BashHostStderr routes through $Host.UI.WriteErrorLine, and Write-BashError uses it in Bash mode. ExitTrackingHostUI gained SetWriteErrorLineForwarder; SdkWorker.RunCommand takes an errorOutput sink, wires the forwarder, and routes its own Console.Error.WriteLine calls (parse/runtime errors, error records, formatter error) through it. Connection passes a STDERR-tagged frame writer in framed mode (null in Interactive/PTY mode, consistent with stdout). IpcWorker.ReadResponse routes STDERR frames to Console.Error, STDOUT to OutputCallback/Console.Out. cc8bf88 fd-detach hang fix preserved untouched.",
+      "failure_reason": null,
+      "fix_task_created": false,
+      "fix_task_id": null,
+      "plan_adjustment_note": "Plan adjustment: the task description proposed STDOUT/STDERR/PROMPT/TRACE discriminators. PROMPT is already covered by the existing PTY-4 <<<PROMPT-READY>>> sentinel and TRACE (set -x) has no acceptance criterion and no current host code path emitting it — added only STDOUT+STDERR per the acceptance criteria (eagle-eyed scope discipline: no speculative TRACE channel). For the host stderr sink, chose $Host.UI.WriteErrorLine wiring (ExitTrackingHostUI forwarder, parallel to the existing SetWriteLineForwarder) over a SessionState delegate global — it reuses PowerShell's native stderr surface and the established forwarder pattern, zero new escaping surface.",
+      "verifier_evidence": "Core.Tests 700/701 pass (1 skip, 0 fail) incl. 5 new HostProtocol REFACTOR-4 tests (stderr prefix, tag-routed round-trip, sentinel-looking payload, legacy-overload back-compat, legacy-untagged-frame decode) + 2 updated emitter tests. HostServerTests 9/9 pass incl. 2 new integration tests (FramedSession_HostStderr_RoutesToStderrStream_NotStdout = the RC-1 regression proof; FramedSession_StdoutAndStderr_BothSurviveOnSeparateStreams). Cmdlets.Tests 40/43 (3 skip, 0 fail). ps-bash.sln builds 0 errors. dotnet format clean on all 8 changed C# files (1 pre-existing format-debt region in PsEmitter.cs:2893-2900 left untouched, unrelated to the line-1204 edit). Process-spawn suites verified via baseline-diff (clean-tree vs with-changes): Host.Tests full = identical 4 documented WSL2-baseline failures both trees; Differential.Tests = clean 19 failed / with-changes 17 failed (count decreased, non-deterministic flaky set, both stderr-redirect differential tests fail on clean tree too); Escalation.Tests = 5 stable failures identical both trees + 1 flake (Security_VarWithSemicolon_NoInjection) confirmed passing in isolation on both trees. Zero deterministic regressions. CI 3-OS matrix authoritative per task brief.",
+      "subsumes": "RC-1 (0RhwDuwTPmUu) can now be closed as superseded",
+      "files": [
+        "src/PsBash.Core/Runtime/Ipc/HostProtocol.cs",
+        "src/PsBash.Core/Runtime/IpcWorker.cs",
+        "src/PsBash.Host/Runtime/SdkWorker.cs",
+        "src/PsBash.Host/Runtime/ExitTrackingHost.cs",
+        "src/PsBash.Host/Server/Connection.cs",
+        "src/PsBash.Transpiler/Parser/PsEmitter.cs",
+        "src/PsBash.Module/PsBash.psm1",
+        "src/PsBash.Core.Tests/Runtime/Ipc/HostProtocolTests.cs",
+        "src/PsBash.Core.Tests/Parser/PsEmitterTests.cs",
+        "src/PsBash.Host.Tests/Server/HostServerTests.cs"
       ]
     }
   ],

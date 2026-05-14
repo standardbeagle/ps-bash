@@ -1941,18 +1941,22 @@ public class PsEmitterTests
         Assert.Equal("cmd 2>err.log", result);
     }
 
+    // REFACTOR-4: `cmd >&2` rewrites to Write-BashHostStderr, NOT
+    // [Console]::Error.WriteLine. The host's inherited fd 2 is detached to
+    // /dev/null (commit cc8bf88's hang fix); Write-BashHostStderr routes
+    // through $Host.UI.WriteErrorLine into a STDERR-tagged IPC frame.
     [Fact]
-    public void Transpile_StdoutToStderr_EmitsConsoleErrorPipe()
+    public void Transpile_StdoutToStderr_EmitsHostStderrPipe()
     {
         var result = PsEmitter.Transpile("echo hello >&2");
-        Assert.Equal("Invoke-BashEcho hello | ForEach-Object { [Console]::Error.WriteLine($_) }", result);
+        Assert.Equal("Invoke-BashEcho hello | ForEach-Object { Write-BashHostStderr $_ }", result);
     }
 
     [Fact]
-    public void Transpile_ExplicitFd1ToStderr_EmitsConsoleErrorPipe()
+    public void Transpile_ExplicitFd1ToStderr_EmitsHostStderrPipe()
     {
         var result = PsEmitter.Transpile("echo hello 1>&2");
-        Assert.Equal("Invoke-BashEcho hello | ForEach-Object { [Console]::Error.WriteLine($_) }", result);
+        Assert.Equal("Invoke-BashEcho hello | ForEach-Object { Write-BashHostStderr $_ }", result);
     }
 
     // Backslash escapes inside double quotes

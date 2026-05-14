@@ -1,17 +1,3 @@
 {
-  "claims": {
-    "dLoSV6zSQcAn": {
-      "runner_instance_id": "DESKTOP-NPIOPS6-7606",
-      "runner_email": "andybrummer@standardbeagle.com",
-      "claimed_at": "2026-05-14T02:30:00Z",
-      "agent_id": "DESKTOP-NPIOPS6-7606",
-      "parent_loop_id": "dqjNTUoPZjCa",
-      "purpose": "REFACTOR-4 Wave 3: all host->launcher output via explicit IPC (subsumes RC-1)",
-      "source_event": {
-        "loop_id": "dqjNTUoPZjCa",
-        "task_id": "dLoSV6zSQcAn",
-        "conversation_id": null
-      }
-    }
-  }
+  "claims": {}
 }

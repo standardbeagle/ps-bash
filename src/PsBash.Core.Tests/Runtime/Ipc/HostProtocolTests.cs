@@ -508,4 +508,144 @@ public class HostProtocolTests
         // reader's FormatException catch-block would otherwise surface it.
         Assert.Equal(new[] { "hello" }, lines);
     }
+
+    // -----------------------------------------------------------------------
+    // REFACTOR-4: stream-tagged response frames. The RC-1 regression — host
+    // stderr silently lost because it travelled the host's detached fd 2
+    // instead of the IPC channel — is closed by tagging every response data
+    // line with its source stream and routing by tag on the launcher side.
+    // -----------------------------------------------------------------------
+
+    /// <summary>
+    /// A STDERR-tagged frame is emitted with the <c>STDERR:</c> prefix; a
+    /// STDOUT frame stays a bare base64 line (wire-identical to pre-REFACTOR-4).
+    /// </summary>
+    [Fact]
+    public async Task WriteResponseLine_StderrTag_EmitsStderrPrefix()
+    {
+        await using var ms = new MemoryStream();
+        await HostProtocol.WriteResponseLineAsync(ms, "boom", StreamTag.Stderr);
+        await HostProtocol.WriteResponseLineAsync(ms, "fine", StreamTag.Stdout);
+
+        var wire = Utf8NoBom.GetString(ms.ToArray());
+        var wireLines = wire.Split('\n', StringSplitOptions.RemoveEmptyEntries);
+        Assert.Equal(2, wireLines.Length);
+        Assert.StartsWith("STDERR:", wireLines[0]);
+        Assert.DoesNotContain(":", wireLines[1]); // bare base64, no prefix
+        Assert.Equal("STDERR:", HostProtocol.StderrPrefix);
+    }
+
+    /// <summary>
+    /// RC-1 regression: a stderr line survives a full WriteResponseLine →
+    /// ReadResponseAsync round-trip and arrives tagged <see cref="StreamTag.Stderr"/>,
+    /// while a stdout line on the same stream arrives tagged
+    /// <see cref="StreamTag.Stdout"/>. Routing by this tag is what lets the
+    /// launcher deliver stderr to its Console.Error.
+    /// </summary>
+    [Fact]
+    public async Task ReadResponse_StreamTagged_RoutesStderrAndStdoutSeparately()
+    {
+        await using var ms = new MemoryStream();
+        await HostProtocol.WriteResponseLineAsync(ms, "out-1", StreamTag.Stdout);
+        await HostProtocol.WriteResponseLineAsync(ms, "err-1", StreamTag.Stderr);
+        await HostProtocol.WriteResponseLineAsync(ms, "out-2", StreamTag.Stdout);
+        await HostProtocol.WriteExitAsync(ms, 0);
+        ms.Position = 0;
+
+        var stdout = new List<string>();
+        var stderr = new List<string>();
+        var exit = await HostProtocol.ReadResponseAsync(
+            ms,
+            (line, tag) =>
+            {
+                if (tag == StreamTag.Stderr) stderr.Add(line);
+                else stdout.Add(line);
+            });
+
+        Assert.Equal(0, exit);
+        Assert.Equal(new[] { "out-1", "out-2" }, stdout);
+        Assert.Equal(new[] { "err-1" }, stderr);
+    }
+
+    /// <summary>
+    /// A stderr payload containing characters that look like protocol
+    /// sentinels (<c>&lt;&lt;&lt;EXIT:0&gt;&gt;&gt;</c>, colons, newlines) still
+    /// round-trips intact — the base64 body insulates the wire from the
+    /// payload, the STDERR prefix only wraps it.
+    /// </summary>
+    [Fact]
+    public async Task ReadResponse_StderrPayloadLooksLikeSentinel_RoundTripsIntact()
+    {
+        await using var ms = new MemoryStream();
+        var nasty = "<<<EXIT:0>>>\nSTDERR:not-a-prefix: still data";
+        await HostProtocol.WriteResponseLineAsync(ms, nasty, StreamTag.Stderr);
+        await HostProtocol.WriteExitAsync(ms, 3);
+        ms.Position = 0;
+
+        var stdout = new List<string>();
+        var stderr = new List<string>();
+        var exit = await HostProtocol.ReadResponseAsync(
+            ms,
+            (line, tag) =>
+            {
+                if (tag == StreamTag.Stderr) stderr.Add(line);
+                else stdout.Add(line);
+            });
+
+        Assert.Equal(3, exit);
+        Assert.Empty(stdout);
+        Assert.Equal(new[] { nasty }, stderr);
+    }
+
+    /// <summary>
+    /// Back-compat: the legacy <see cref="HostProtocol.ReadResponseAsync(System.IO.Stream, System.Action{string}, System.Threading.CancellationToken)"/>
+    /// overload (Action&lt;string&gt;, no tag) still surfaces BOTH streams — it
+    /// collapses stdout and stderr onto the one delegate rather than dropping
+    /// stderr. Pre-REFACTOR-4 callers (health/shutdown probes) keep working.
+    /// </summary>
+    [Fact]
+    public async Task ReadResponse_LegacyOverload_StillSurfacesStderrLines()
+    {
+        await using var ms = new MemoryStream();
+        await HostProtocol.WriteResponseLineAsync(ms, "out", StreamTag.Stdout);
+        await HostProtocol.WriteResponseLineAsync(ms, "err", StreamTag.Stderr);
+        await HostProtocol.WriteExitAsync(ms, 0);
+        ms.Position = 0;
+
+        var lines = new List<string>();
+        var exit = await HostProtocol.ReadResponseAsync(ms, lines.Add);
+
+        Assert.Equal(0, exit);
+        Assert.Equal(new[] { "out", "err" }, lines);
+    }
+
+    /// <summary>
+    /// Back-compat: a pre-REFACTOR-4 host emits only bare (untagged) base64
+    /// data lines. The tag-aware reader must decode every one of them as
+    /// <see cref="StreamTag.Stdout"/> — never mis-classify a legacy line.
+    /// </summary>
+    [Fact]
+    public async Task ReadResponse_LegacyUntaggedFrames_AllDecodeAsStdout()
+    {
+        await using var ms = new MemoryStream();
+        // Pre-REFACTOR-4 wire form: the default overload, bare base64 lines.
+        await HostProtocol.WriteResponseLineAsync(ms, "legacy-1");
+        await HostProtocol.WriteResponseLineAsync(ms, "legacy-2");
+        await HostProtocol.WriteExitAsync(ms, 0);
+        ms.Position = 0;
+
+        var stdout = new List<string>();
+        var stderr = new List<string>();
+        var exit = await HostProtocol.ReadResponseAsync(
+            ms,
+            (line, tag) =>
+            {
+                if (tag == StreamTag.Stderr) stderr.Add(line);
+                else stdout.Add(line);
+            });
+
+        Assert.Equal(0, exit);
+        Assert.Equal(new[] { "legacy-1", "legacy-2" }, stdout);
+        Assert.Empty(stderr);
+    }
 }

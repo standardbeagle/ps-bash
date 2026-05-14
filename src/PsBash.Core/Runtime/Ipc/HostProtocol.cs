@@ -4,6 +4,23 @@ using System.Reflection;
 namespace PsBash.Core.Runtime.Ipc;
 
 /// <summary>
+/// Stream discriminator for host → launcher response data lines. REFACTOR-4:
+/// every host output stream flows through the IPC channel — the launcher routes
+/// each frame to the matching launcher stream by this tag. <see cref="Stdout"/>
+/// frames are wire-identical to the pre-REFACTOR-4 untagged data line so older
+/// readers and existing fixtures round-trip byte-for-byte; <see cref="Stderr"/>
+/// frames carry an explicit <c>STDERR:</c> prefix.
+/// </summary>
+public enum StreamTag
+{
+    /// <summary>Default. Wire form: bare base64 data line (back-compat with pre-REFACTOR-4).</summary>
+    Stdout = 0,
+
+    /// <summary>Wire form: <c>STDERR:</c> + base64 data line. Routed to the launcher's Console.Error.</summary>
+    Stderr = 1,
+}
+
+/// <summary>
 /// Wire-protocol framing for the ps-bash host/launcher IPC channel. Reuses
 /// the worker sentinel format byte-for-byte: <c>&lt;&lt;&lt;END&gt;&gt;&gt;</c>
 /// terminates a request body and <c>&lt;&lt;&lt;EXIT:N&gt;&gt;&gt;</c> terminates a
@@ -44,6 +61,15 @@ public static class HostProtocol
     /// In <see cref="SessionMode.Framed"/> the sentinel is NOT emitted (back-compat).
     /// </summary>
     public const string PromptReadySentinel = "<<<PROMPT-READY>>>";
+
+    /// <summary>
+    /// REFACTOR-4: prefix marking a response data line as a <see cref="StreamTag.Stderr"/>
+    /// frame. The colon is outside the base64 alphabet (<c>[A-Za-z0-9+/=]</c>), so a
+    /// <see cref="StreamTag.Stdout"/> frame — a bare base64 line — can never begin with
+    /// this prefix. A line without the prefix decodes to <see cref="StreamTag.Stdout"/>,
+    /// keeping the wire format back-compatible with pre-REFACTOR-4 launchers.
+    /// </summary>
+    public const string StderrPrefix = "STDERR:";
 
     /// <summary>
     /// Default drain deadline for graceful shutdown when the launcher does not
@@ -307,12 +333,24 @@ public static class HostProtocol
     /// prefix, so the response reader can unambiguously distinguish data
     /// lines from the exit sentinel.
     /// </remarks>
-    public static async Task WriteResponseLineAsync(Stream stream, string line, CancellationToken ct = default)
+    public static Task WriteResponseLineAsync(Stream stream, string line, CancellationToken ct = default)
+        => WriteResponseLineAsync(stream, line, StreamTag.Stdout, ct);
+
+    /// <summary>
+    /// REFACTOR-4: serialize a single response data line tagged with the host
+    /// stream it came from. <see cref="StreamTag.Stdout"/> emits the bare
+    /// base64 line (wire-identical to the pre-REFACTOR-4 format);
+    /// <see cref="StreamTag.Stderr"/> emits <see cref="StderrPrefix"/> + the
+    /// base64 line. The launcher's response reader routes each frame to the
+    /// matching launcher stream by inspecting the prefix.
+    /// </summary>
+    public static async Task WriteResponseLineAsync(Stream stream, string line, StreamTag tag, CancellationToken ct = default)
     {
         ArgumentNullException.ThrowIfNull(stream);
         ArgumentNullException.ThrowIfNull(line);
         var encoded = Convert.ToBase64String(Utf8NoBom.GetBytes(line));
-        var bytes = Utf8NoBom.GetBytes(encoded + "\n");
+        var framed = tag == StreamTag.Stderr ? StderrPrefix + encoded : encoded;
+        var bytes = Utf8NoBom.GetBytes(framed + "\n");
         await stream.WriteAsync(bytes, ct).ConfigureAwait(false);
     }
 
@@ -361,6 +399,22 @@ public static class HostProtocol
     }
 
     /// <summary>
+    /// REFACTOR-4: tag-aware read. Like <see cref="ReadResponseAsync(Stream, Action{string}, CancellationToken)"/>
+    /// but <paramref name="onLine"/> receives each data line together with the
+    /// <see cref="StreamTag"/> it was framed with, so the launcher can route
+    /// <see cref="StreamTag.Stdout"/> to Console.Out and
+    /// <see cref="StreamTag.Stderr"/> to Console.Error.
+    /// </summary>
+    public static async Task<int> ReadResponseAsync(
+        Stream stream,
+        Action<string, StreamTag> onLine,
+        CancellationToken ct = default)
+    {
+        var (exit, _) = await ReadResponseWithLifecycleAsync(stream, onLine, ct).ConfigureAwait(false);
+        return exit;
+    }
+
+    /// <summary>
     /// PTY-4 lifecycle-aware read. Like <see cref="ReadResponseAsync"/> but also
     /// observes a trailing <see cref="PromptReadySentinel"/> if the host
     /// emits one (interactive sessions). Returns <c>(exitCode, promptReady)</c>
@@ -378,9 +432,27 @@ public static class HostProtocol
     /// immediately after EXIT, so the read either returns EOF (legacy) or the
     /// sentinel line (PTY-4 interactive). Both paths exit the loop deterministically.
     /// </remarks>
-    public static async Task<(int ExitCode, bool PromptReady)> ReadResponseWithLifecycleAsync(
+    public static Task<(int ExitCode, bool PromptReady)> ReadResponseWithLifecycleAsync(
         Stream stream,
         Action<string> onLine,
+        CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(onLine);
+        // Back-compat callers ignore the stream tag — collapse both streams onto
+        // the single delegate. Stdout and stderr both still surface; only the
+        // routing distinction is dropped.
+        return ReadResponseWithLifecycleAsync(stream, (line, _) => onLine(line), ct);
+    }
+
+    /// <summary>
+    /// REFACTOR-4: tag-aware lifecycle read. As
+    /// <see cref="ReadResponseWithLifecycleAsync(Stream, Action{string}, CancellationToken)"/>
+    /// but each data line is delivered with the <see cref="StreamTag"/> it was
+    /// framed with so the caller can route stdout and stderr independently.
+    /// </summary>
+    public static async Task<(int ExitCode, bool PromptReady)> ReadResponseWithLifecycleAsync(
+        Stream stream,
+        Action<string, StreamTag> onLine,
         CancellationToken ct = default)
     {
         ArgumentNullException.ThrowIfNull(stream);
@@ -421,6 +493,16 @@ public static class HostProtocol
                 // hanging. Discard the line.
                 continue;
             }
+            // REFACTOR-4: a data line carrying the StderrPrefix is a stderr
+            // frame; the colon in the prefix is outside the base64 alphabet so
+            // this can never collide with a bare base64 stdout line.
+            var tag = StreamTag.Stdout;
+            var payload = line;
+            if (line.StartsWith(StderrPrefix, StringComparison.Ordinal))
+            {
+                tag = StreamTag.Stderr;
+                payload = line[StderrPrefix.Length..];
+            }
             // Data lines are base64-encoded by WriteResponseLineAsync; decode
             // before delivering to the caller. Tolerate undecodable lines
             // (e.g. legacy/raw senders) by passing through verbatim — keeps
@@ -428,13 +510,13 @@ public static class HostProtocol
             string decoded;
             try
             {
-                decoded = Utf8NoBom.GetString(Convert.FromBase64String(line));
+                decoded = Utf8NoBom.GetString(Convert.FromBase64String(payload));
             }
             catch (FormatException)
             {
-                decoded = line;
+                decoded = payload;
             }
-            onLine(decoded);
+            onLine(decoded, tag);
         }
     }
 
