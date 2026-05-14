@@ -5,6 +5,19 @@ namespace PsBash.Host.Server;
 /// idle period (no in-flight connections). Thread-safe: ConnectionStarted and
 /// ConnectionEnded may be called from concurrent tasks.
 /// </summary>
+/// <remarks>
+/// <para>PTY-10: this idle timer governs the <b>framed-IPC</b> host only —
+/// the host that <c>IpcWorker</c> talks to over a Unix socket / named pipe,
+/// where <see cref="ConnectionStarted"/> / <see cref="ConnectionEnded"/> bracket
+/// each request. An <b>interactive</b> host (spawned <c>--interactive</c> under
+/// a PTY by <c>Program.RunHostUnderPtyAsync</c>) does not honor this timeout the
+/// same way: it has no framed IPC connections to count, it is bound to exactly
+/// one launcher's PTY, and it exits when that launcher disconnects — the PTY
+/// master closes (stdin EOF) and <c>ParentDeathWatcher</c> (armed via
+/// <c>--launcher-pid</c>) terminates it if the launcher dies abruptly. An
+/// interactive host is therefore never a shared, idle-reaped daemon; its
+/// lifetime is its single session.</para>
+/// </remarks>
 public sealed class IdleShutdown : IDisposable
 {
     public static readonly TimeSpan DefaultTimeout = TimeSpan.FromSeconds(

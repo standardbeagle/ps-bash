@@ -1,7 +1,7 @@
 {
   "status": "paused",
-  "iterations": 23,
-  "spawns": 13,
+  "iterations": 24,
+  "spawns": 14,
   "started_at": "2026-05-12T20:33:00Z",
   "last_iteration_at": "2026-05-15T01:30:00+00:00",
   "last_subagent": "DESKTOP-NPIOPS6-7606",
@@ -848,6 +848,29 @@
         "src/PsBash.Shell/Pty/PtyLaunchPolicy.cs",
         "src/PsBash.Shell/Program.cs",
         "src/PsBash.Shell.Tests/Pty/PtyLaunchPolicyTests.cs"
+      ]
+    },
+    {
+      "task_id": "Xin0M76kAytE",
+      "iteration": 8,
+      "status": "completed",
+      "started_at": "2026-05-15T01:30:00Z",
+      "completed_at": "2026-05-15T02:15:00Z",
+      "phase_completed": "phase-9",
+      "failed_phase": null,
+      "files_changed": 5,
+      "tests_added": 2,
+      "plan_adjustments": 0,
+      "completion_summary": "PTY-10 reconcile decision (c): no real code conflict with REFACTOR-7. Phase-0 investigation proved the interactive REPL NEVER selects Lifetime.Daemon — Program.cs interactive branch (RunHostUnderPtyAsync + legacy fallback) spawns ps-bash-host --interactive --launcher-pid directly via PtySpawner/Process.Start, never touching IpcWorker. Lifetime.Daemon's only caller is `ps-bash host restart` (HostCommands.cs). PTY-10's keystroke-cross-talk concern is already structurally impossible (PTY-2 direct-spawn). REFACTOR-7-era docs claiming 'Daemon for interactive REPL' were aspirational/misleading and never wired. Implemented gaps: 2 deterministic regression tests (TwoInteractiveSpawns_GetDistinctHostPids, InteractiveLaunchPath_NeverSelectsDaemonLifetime), IdleShutdown note (interactive hosts exit on launcher-disconnect, not idle-reaped), corrected pty.md §10.5/§10.8 + IpcWorker.cs Daemon enum doc, documented the scope/contract in host-lifecycle-contract.md. AOT launcher publish green with /warnaserror. Completes the PTY epic (Phase E).",
+      "failure_reason": null,
+      "fix_task_created": false,
+      "fix_task_id": null,
+      "files": [
+        "docs/specs/host-lifecycle-contract.md",
+        "docs/specs/pty.md",
+        "src/PsBash.Core/Runtime/IpcWorker.cs",
+        "src/PsBash.Host/Server/IdleShutdown.cs",
+        "src/PsBash.Shell.Tests/Pty/PtySpawnTests.cs"
       ]
     }
   ],

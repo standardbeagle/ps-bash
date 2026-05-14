@@ -27,8 +27,20 @@ public enum Lifetime
     /// (<see cref="IpcTransportFactory.ResolveEndpoint(string)"/>). The worker connects
     /// to an existing healthy host if one answers, otherwise spawns one and
     /// leaves it running for subsequent launchers. The worker does NOT kill the
-    /// host on dispose. This is the legacy daemon-reuse path; it still pays for
+    /// host on dispose. This is the shared-socket daemon-reuse path; it pays for
     /// the cross-launcher state-isolation guardrails and the dup2-detach hang fix.
+    /// <para>PTY-10 — who actually uses this: the <b>only</b> caller is
+    /// <c>ps-bash host restart</c> (<c>HostCommands.cs</c>), the explicit
+    /// daemon-management subcommand. It is <b>not</b> used by the interactive
+    /// REPL. The interactive launcher path (<c>Program.RunHostUnderPtyAsync</c>
+    /// and the legacy inherited-stdio fallback in <c>Program.cs</c>) spawns its
+    /// host <i>directly</i> — <c>PtySpawner</c> / <c>Process.Start</c> with
+    /// <c>--interactive --launcher-pid</c> — and never reaches
+    /// <see cref="IpcWorker"/> at all. An interactive host is PTY-bound and must
+    /// not be shared across launchers (keystroke cross-talk); a fresh host per
+    /// session is guaranteed because the interactive path bypasses this
+    /// discovery branch entirely. See <c>docs/specs/host-lifecycle-contract.md</c>
+    /// and <c>docs/specs/pty.md</c> §10.5.</para>
     /// </summary>
     Daemon,
 }

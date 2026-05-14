@@ -13,6 +13,48 @@ implementation lands.
 - Distinguish endpoint cleanup from process cleanup.
 - Treat Windows named pipes as kernel objects, not filesystem paths.
 
+## Scope: this contract governs the shared `Daemon` host only
+
+This contract covers the **shared, reusable** `ps-bash-host` — the one reached
+through `IpcWorker.StartAsync` with `Lifetime.Daemon` on the canonical per-user
+endpoint. As of PTY-10 the only caller of that path is the `ps-bash host
+restart` subcommand (`src/PsBash.Shell/HostCommands.cs`).
+
+Two host populations are explicitly **out of scope**:
+
+- **`Lifetime.PerInvocation` hosts** (the default for `-c`, stdin pipe, and
+  script-file modes). Each is private to one launcher invocation on a
+  process-local endpoint, is owned by that launcher's `IpcWorker`, and is killed
+  on `DisposeAsync`. There is no discovery, no sidecar ownership classification,
+  and no reuse — so none of the Reusable/Obsolete/Stale/Unsafe machinery below
+  applies.
+- **Interactive hosts.** The interactive REPL (`ps-bash -i`, and the bare REPL)
+  does **not** go through `IpcWorker` at all. `Program.RunHostUnderPtyAsync`
+  (and the legacy inherited-stdio fallback in `Program.cs`) spawns
+  `ps-bash-host --interactive --launcher-pid=<pid>` **directly** via
+  `PtySpawner` / `Process.Start`. An interactive host therefore:
+
+  - is **never discovered** — it binds no canonical endpoint and the launcher
+    never probes one before spawning;
+  - **publishes no reuse sidecar** — there is no `HostMetadata` record another
+    launcher could read to attach to it;
+  - is **bound to exactly one launcher and one PTY** — it is fresh per session
+    and exits when that launcher disconnects (PTY master EOF; or
+    `ParentDeathWatcher`, armed via `--launcher-pid`, if the launcher dies
+    abruptly).
+
+  This is deliberate: an interactive host is PTY-bound, so sharing one across
+  launchers would route one terminal's keystrokes into another's. A fresh host
+  per interactive session is guaranteed *structurally* — the interactive path
+  bypasses the discovery/reuse machinery entirely rather than relying on a
+  runtime guard. The interactive host also does not honor the host's idle
+  timeout the way a `Daemon` host does (see `IdleShutdown` remarks in
+  `src/PsBash.Host/Server/IdleShutdown.cs`): its lifetime is its single session,
+  not an idle-reaped daemon's. Regression-pinned by
+  `PtySpawnTests.TwoInteractiveSpawns_GetDistinctHostPids` and
+  `PtySpawnTests.InteractiveLaunchPath_NeverSelectsDaemonLifetime`. See also
+  `docs/specs/pty.md` §10.5.
+
 ## Metadata Record
 
 Each host owns a JSON metadata record beside the endpoint identity:

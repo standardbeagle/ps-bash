@@ -677,14 +677,27 @@ the `Lifetime` enum passed to `IpcWorker.StartAsync`
 | `Lifetime` | Used by | Host lifetime | Endpoint | Worker kills host on dispose? |
 |------------|---------|---------------|----------|-------------------------------|
 | `PerInvocation` (default) | non-interactive: `-c`, stdin pipe, script file | one private host per launcher invocation | process-local (`ResolvePerInvocationEndpoint`) | **Yes** — owns the `Process` handle, kills the tree |
-| `Daemon` | interactive REPL | long-lived shared host, reused across launchers | canonical per-user (`ResolveEndpoint`) | **No** — left running for the next launcher |
+| `Daemon` | **`ps-bash host restart` only** (`HostCommands.cs`) — the explicit daemon-management subcommand | long-lived shared host, reused across launchers | canonical per-user (`ResolveEndpoint`) | **No** — left running for the next launcher |
 
 The rationale: a `PerInvocation` host never outlives its single client, so the
 pipe-inheritance hazard is contained within the launcher's lifetime and every
-`-c`/script run gets a clean PowerShell session by construction. The `Daemon`
-host pays the cost of cross-launcher state-isolation guardrails (and the
-dup2-detach hang fix) in exchange for not re-spawning the SDK on every
-interactive launch.
+`-c`/script run gets a clean PowerShell session by construction.
+
+> **PTY-10 correction.** Earlier REFACTOR-7-era prose described `Daemon` as the
+> lifetime "for the interactive REPL". That mapping was never wired: **no
+> interactive launcher path selects `Lifetime.Daemon`.** The interactive REPL —
+> both the PTY raw-passthrough path (`Program.RunHostUnderPtyAsync`, §10.2a) and
+> the legacy inherited-stdio fallback (`Program.cs`) — spawns its host
+> **directly** via `PtySpawner` / `Process.Start` with
+> `--interactive --launcher-pid`, and never touches `IpcWorker` at all. The only
+> caller of `Lifetime.Daemon` is `ps-bash host restart`. This matters because an
+> interactive host is PTY-bound: if two launchers shared one interactive host,
+> one terminal's keystrokes would land in the other. A fresh host per
+> interactive session is therefore guaranteed *by construction* — the
+> interactive path bypasses shared-socket discovery entirely; it is not a
+> runtime check that could regress silently. Regression-pinned by
+> `PtySpawnTests.TwoInteractiveSpawns_GetDistinctHostPids` and
+> `PtySpawnTests.InteractiveLaunchPath_NeverSelectsDaemonLifetime`.
 
 The host-reuse decision for the `Daemon` path (when is a running host
 *reusable* vs *stale* vs *unsafe to touch*) is a separate design contract —
@@ -692,7 +705,8 @@ see [`host-lifecycle-contract.md`](./host-lifecycle-contract.md).
 
 The PTY raw-passthrough path (§10.2a) is orthogonal to `Lifetime`: it spawns
 the host directly via `PtySpawner` with the PTY slave as stdio, not through
-`IpcWorker`. The `Lifetime` enum governs the **framed-IPC** topology.
+`IpcWorker`. The `Lifetime` enum governs the **framed-IPC** topology, and within
+that topology only the `host restart` subcommand uses `Daemon`.
 
 ### 10.6 Signal forwarding table
 
@@ -784,8 +798,11 @@ Summary of which path runs for an interactive launch:
 into one process?" was on the table. The answer was no, and this record
 captures why so it is not relitigated.
 
-**Decision.** Keep the two-process launcher/host split. Keep `Daemon` lifetime
-for the interactive REPL and `PerInvocation` for non-interactive modes.
+**Decision.** Keep the two-process launcher/host split. Keep `PerInvocation`
+lifetime for non-interactive modes; keep `Daemon` lifetime available for the
+`ps-bash host restart` subcommand. (See the PTY-10 correction in §10.5: the
+interactive REPL does **not** use `Daemon` — it spawns its host directly and
+gets a fresh host per session.)
 
 **Forces.**
 
@@ -808,10 +825,12 @@ for the interactive REPL and `PerInvocation` for non-interactive modes.
   directly.
 - *Daemon reuse trade-off.* `Daemon` lifetime pays for cross-launcher
   state-isolation guardrails and the dup2-detach hang fix, in exchange for not
-  paying SDK startup on every interactive launch. For the interactive REPL —
-  one long-lived session — that trade favors reuse. For non-interactive modes —
-  many short invocations that must each be clean — it does not, hence
-  `PerInvocation` there.
+  paying SDK startup on every connect. It is used by `ps-bash host restart` to
+  leave a long-lived host on the canonical endpoint. For non-interactive modes
+  — many short invocations that must each be clean — daemon reuse does not pay
+  off, hence `PerInvocation` there. The interactive REPL does not use either
+  `IpcWorker` lifetime: it spawns its host directly under a PTY and gets a
+  fresh, single-session host (PTY-10; see §10.5).
 
 **Consequences accepted.** Two binaries to ship and version together; an IPC
 protocol to maintain (`HostProtocol`, §10.4); a host-lifecycle ownership

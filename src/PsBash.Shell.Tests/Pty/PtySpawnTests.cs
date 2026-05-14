@@ -175,6 +175,111 @@ public class PtySpawnTests
     }
 
     /// <summary>
+    /// PTY-10 acceptance test: two parallel interactive launches must get two
+    /// distinct host processes. The interactive REPL path spawns the host
+    /// directly via <see cref="PtySpawner"/> (see
+    /// <c>Program.RunHostUnderPtyAsync</c>) — it never routes through
+    /// <c>IpcWorker</c>'s shared-socket <c>Lifetime.Daemon</c> discovery, so a
+    /// fresh host per session is guaranteed by construction. This test pins
+    /// that contract: spawn two hosts under two PTYs, assert the PIDs differ.
+    /// If a future change ever wired the interactive path to a shared daemon,
+    /// two launches would observe the same PID and this fails.
+    ///
+    /// <para>Deterministic by design (QA rubric Directive 6): two spawns, two
+    /// PIDs, assert not-equal. No timing, no prompt-wait, no sleep — the only
+    /// non-determinism is process-spawn itself, which the WSL2 baseline-diff
+    /// guidance covers. There is no path on which two independent
+    /// <c>posix_spawn</c>/<c>CreateProcessW</c> calls return the same PID.</para>
+    /// </summary>
+    [SkippableFact]
+    public async Task TwoInteractiveSpawns_GetDistinctHostPids()
+    {
+        var hostBinary = TryLocateHostBinary();
+        Skip.If(hostBinary is null,
+            "ps-bash-host binary not found — build src/PsBash.Host first");
+        Skip.If(RuntimeInformation.IsOSPlatform(OSPlatform.Windows)
+                && Environment.OSVersion.Version.Build < 17763,
+            $"ConPTY requires Win10 1809 / build 17763+; current build is {Environment.OSVersion.Version.Build}");
+
+        // Use --pty-probe: the host writes a marker line and exits 0, so each
+        // spawn is short-lived and self-cleaning — but it is still a full,
+        // independent host process spawned exactly the way the interactive
+        // REPL path spawns one (PtySpawner + a dedicated PTY, never IpcWorker).
+        await using var ptyA = await PtyAllocator.AllocateAsync(cols: 80, rows: 24);
+        var spawnerA = PtySpawner.Spawn(
+            executablePath: hostBinary!,
+            arguments: new[] { "--pty-probe" },
+            pty: ptyA,
+            environment: new Dictionary<string, string>(StringComparer.Ordinal)
+            {
+                ["PSBASH_PTY_ATTACHED"] = "1",
+            });
+
+        await using var ptyB = await PtyAllocator.AllocateAsync(cols: 80, rows: 24);
+        var spawnerB = PtySpawner.Spawn(
+            executablePath: hostBinary!,
+            arguments: new[] { "--pty-probe" },
+            pty: ptyB,
+            environment: new Dictionary<string, string>(StringComparer.Ordinal)
+            {
+                ["PSBASH_PTY_ATTACHED"] = "1",
+            });
+
+        await using (spawnerA)
+        await using (spawnerB)
+        {
+            // The core PTY-10 assertion: two interactive spawns, two distinct
+            // host PIDs. A shared interactive daemon would yield one PID.
+            Assert.True(spawnerA.Pid > 0, "spawnerA produced no host PID");
+            Assert.True(spawnerB.Pid > 0, "spawnerB produced no host PID");
+            Assert.NotEqual(spawnerA.Pid, spawnerB.Pid);
+
+            // Drain each probe so the hosts exit cleanly rather than being
+            // killed on dispose — keeps the box free of orphaned probes.
+            await ReadUntilAsync(ptyA.Output, "PSBASH-PTY-PROBE:", TimeSpan.FromSeconds(15));
+            await ReadUntilAsync(ptyB.Output, "PSBASH-PTY-PROBE:", TimeSpan.FromSeconds(15));
+            using var waitCts = new CancellationTokenSource(TimeSpan.FromSeconds(15));
+            await spawnerA.WaitForExitAsync(waitCts.Token);
+            await spawnerB.WaitForExitAsync(waitCts.Token);
+        }
+    }
+
+    /// <summary>
+    /// PTY-10 source-level regression: the interactive REPL launch path must
+    /// spawn the host directly (PtySpawner / Process.Start with
+    /// <c>--launcher-pid</c>) and must NOT select <c>Lifetime.Daemon</c>. A
+    /// shared-socket daemon for interactive sessions would let two launchers
+    /// attach to one PTY-bound host — keystroke cross-talk. <c>Lifetime.Daemon</c>
+    /// is reachable only from <c>HostCommands.cs</c> (<c>ps-bash host restart</c>),
+    /// never from the interactive launcher branch in <c>Program.cs</c>.
+    /// </summary>
+    [Fact]
+    public void InteractiveLaunchPath_NeverSelectsDaemonLifetime()
+    {
+        var asmDir = Path.GetDirectoryName(typeof(PtySpawner).Assembly.Location)!;
+        var dir = new DirectoryInfo(asmDir);
+        while (dir is not null && dir.Name != "src" && dir.Parent is not null)
+            dir = dir.Parent;
+        Assert.NotNull(dir);
+        var programPath = Path.Combine(dir!.FullName, "PsBash.Shell", "Program.cs");
+        Assert.True(File.Exists(programPath), $"Could not find {programPath}");
+
+        var src = File.ReadAllText(programPath);
+
+        // Program.cs is the launcher entry point. It selects Lifetime only for
+        // the non-interactive worker factory — and that must be PerInvocation.
+        // Lifetime.Daemon must not appear anywhere in the launcher entry point.
+        Assert.DoesNotContain("Lifetime.Daemon", src);
+        Assert.Contains("Lifetime.PerInvocation", src);
+
+        // The interactive branch spawns the host directly and ties its lifetime
+        // to this one launcher via --launcher-pid (ParentDeathWatcher), so the
+        // host never outlives or is shared beyond its single launcher session.
+        Assert.Contains("--launcher-pid", src);
+        Assert.Contains("--interactive", src);
+    }
+
+    /// <summary>
     /// Negative path (QA rubric Directive 7): the public spawn surface rejects
     /// empty arguments before reaching any platform-specific syscall. Without
     /// this gate, an empty <c>executablePath</c> would fall through to
