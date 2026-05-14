@@ -1,17 +1,3 @@
 {
-  "claims": {
-    "FA4eeJEiCJQk": {
-      "runner_instance_id": "DESKTOP-NPIOPS6-7606",
-      "runner_email": "andybrummer@standardbeagle.com",
-      "claimed_at": "2026-05-14T08:15:00Z",
-      "agent_id": "DESKTOP-NPIOPS6-7606",
-      "parent_loop_id": "dqjNTUoPZjCa",
-      "purpose": "META: refactor sequencing graph + risk gates, updated with actual loop outcomes",
-      "source_event": {
-        "loop_id": "dqjNTUoPZjCa",
-        "task_id": "FA4eeJEiCJQk",
-        "conversation_id": null
-      }
-    }
-  }
+  "claims": {}
 }
