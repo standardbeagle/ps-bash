@@ -1,42 +1,55 @@
 # Known Issues
 
-## `eval "$(cmd)"` is rejected at parse time
+## `eval "$(cmd)"` — runtime eval (resolved)
 
-**Status:** by design as of v0.8.14.
+**Status:** supported as of REFACTOR-5a-2. Supersedes the v0.8.14
+parse-time-rejection design.
 
-**Symptom:** transpiling `eval "$(any-command)"`, `eval \`cmd\``, or `eval $((expr))`
-raises a `ParseException` with a message ending in
-"inline the command's output statically instead of running it inside eval".
+**History:** v0.8.14 resolved `eval` entirely at parse time in
+`PsEmitter.EmitEval` and *rejected* dynamic eval bodies — `eval "$(cmd)"`,
+`eval \`cmd\``, `eval $((expr))`, `eval <(cmd)` — with a `ParseException`,
+because the transpiler could not reach a body computed at runtime. The
+rationale was avoiding a nested-ps-bash-subprocess hang.
 
-**Why it's this way:** `eval` is resolved at **parse time** in `PsEmitter.EmitEval`.
-The arg's `CompoundWord` parts are walked and the bash source the args
-represent is reconstructed, then fed back through `BashTranspiler.Transpile`
-inline. For static bodies (literals, quoted literals, variable references)
-this is lossless — the reconstructed source re-parses to the same effective
-AST as if the user had typed the eval body at top level.
+**Current behavior:** `EmitEval` still folds **static** eval bodies (literals,
+quoted literals) inline at parse time via `TryReconstructBashSource` — lossless
+and zero-runtime-cost. But when any arg requires runtime expansion (command
+sub, arithmetic, process sub, variable, glob, brace expansion) the emitter now
+emits an **in-process runtime eval block** instead of rejecting:
 
-Command substitution (`$(cmd)` / backquotes), arithmetic expansion (`$((...))`),
-and process substitution (`<(...)` / `>(...)` ) all compute the eval body at
-*runtime*, which the transpiler cannot reach. These raise `ParseException`
-instead of silently hanging or producing broken pwsh.
-
-**Workaround:** replace `eval "$(cmd)"` with the literal output of `cmd`.
-For `fnm`:
-
-```bash
-# Regenerate this block when the active node version changes:
-#   fnm env --shell bash
-# then paste the lines here, replacing the `eval` line.
-export PATH="…/fnm_multishells/…":"$PATH"
-export FNM_MULTISHELL_PATH="…"
-export FNM_DIR="…"
-# …and so on.
+```powershell
+$__psbash_eval_src = @(<args>) -join ' '
+# depth-guarded (limit 5), then:
+$__psbash_eval_pwsh = [PsBash.Core.Transpiler.BashTranspiler, PsBash.Transpiler]::Transpile(
+    $__psbash_eval_src, [PsBash.Core.Transpiler.TranspileContext, PsBash.Transpiler]::Eval)
+Invoke-Expression $__psbash_eval_pwsh
 ```
 
-Same pattern works for `direnv hook bash`, `ssh-agent -s`, `dircolors`, and
-any other `eval "$(tool shell-init)"` idiom — one-time paste, no runtime eval.
+The eval body is re-transpiled **in-process** by `BashTranspiler` inside the
+ps-bash-host SDK runspace and run via `Invoke-Expression`. No nested ps-bash
+subprocess is spawned, so the v0.8.14 hang risk does not return. A depth probe
+(`$global:__BashEvalDepth`, limit 5) guards against runaway `eval`-of-`eval`
+recursion.
 
-**Regression guards:** `Transpile_EvalWithCommandSubstitution_ThrowsParseException`,
-`Transpile_EvalWithBackquoteCommandSub_ThrowsParseException`, and
-`Transpile_EvalWithArithmeticExpansion_ThrowsParseException` in
-`BashTranspilerTests`.
+`fnm env --shell bash`, `direnv hook bash`, `ssh-agent -s`, and `dircolors`
+shell-init idioms work directly — no manual inlining required.
+
+**Perf:** the fnm-shaped payload (`eval $(printf 'export ...\n...')`) runs well
+under the 15 s hang-detection budget — sub-second in local runs. The 15 s
+budget on the eval differential tests is a *hang* oracle, not a perf target:
+REFACTOR-7 made non-interactive modes spawn a private host per invocation, so
+each `-c` pays a single-digit-second host cold-start cost that a 2 s budget
+would conflate with a genuine eval hang.
+
+**Regression guards** (in `BashTranspilerTests`):
+- `Transpile_EvalWithCommandSubstitution_EmitsRuntimeSubexpression`
+- `Transpile_EvalWithMappedCommandSubstitution_TranspilesInner`
+- `Transpile_EvalWithBackquoteCommandSub_EmitsRuntimeSubexpression`
+- `Transpile_EvalWithArithmeticExpansion_EmitsRuntimeSubexpression`
+- `Transpile_EvalWithVariableReference_ForwardsToRuntimeEval`
+
+Differential (bash-oracle) guards in `EvalDifferentialTests`:
+- `Differential_Eval_CmdSubMultilineExports_DoesNotHang`
+- `Differential_Eval_QuotedCmdSubMultiline_DoesNotHang`
+- `Differential_Eval_FnmShapedPayload_DoesNotHang`
+- `PsBash_Eval_CmdSubMultiline_WallTimeUnder15000ms`
