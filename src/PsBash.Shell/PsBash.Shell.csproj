@@ -57,6 +57,11 @@
       <_HostFiles Include="$(_HostOutDir)ps-bash-host.*" />
       <_HostFiles Include="$(_HostOutDir)*.dll"
                   Exclude="$(_HostOutDir)PsBash.*.dll" />
+      <!-- PsBash.Cmdlets.dll ships with the host so SdkRunspace.Create can
+           Import-Module it without depending on an installed PSGallery module
+           (RC-3). The PsBash.*.dll exclude above otherwise filters it out. -->
+      <_HostFiles Include="$(_HostOutDir)PsBash.Cmdlets.dll"
+                  Condition="Exists('$(_HostOutDir)PsBash.Cmdlets.dll')" />
       <!-- Platform-specific runtime assets -->
       <_HostRuntimeFiles Include="$(_HostOutDir)runtimes\**\*" />
     </ItemGroup>

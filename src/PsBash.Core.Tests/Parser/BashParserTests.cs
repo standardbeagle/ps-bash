@@ -1310,7 +1310,8 @@ public class BashParserTests
         var simple = Assert.IsType<Command.Simple>(Parse("cat <<EOF\nline 1\nline 2\nEOF"));
 
         var hereDoc = Assert.Single(simple.HereDocs);
-        Assert.Equal("line 1\nline 2", hereDoc.Body);
+        // bash heredoc body terminates the last line with a newline.
+        Assert.Equal("line 1\nline 2\n", hereDoc.Body);
         Assert.True(hereDoc.Expand);
         Assert.False(hereDoc.StripTabs);
     }
@@ -1321,7 +1322,7 @@ public class BashParserTests
         var simple = Assert.IsType<Command.Simple>(Parse("cat <<EOF\nhello $NAME\nEOF"));
 
         var hereDoc = Assert.Single(simple.HereDocs);
-        Assert.Equal("hello $NAME", hereDoc.Body);
+        Assert.Equal("hello $NAME\n", hereDoc.Body);
         Assert.True(hereDoc.Expand);
     }
 
@@ -1341,7 +1342,7 @@ public class BashParserTests
         var simple = Assert.IsType<Command.Simple>(Parse("cat <<-EOF\n\tline 1\n\tline 2\nEOF"));
 
         var hereDoc = Assert.Single(simple.HereDocs);
-        Assert.Equal("line 1\nline 2", hereDoc.Body);
+        Assert.Equal("line 1\nline 2\n", hereDoc.Body);
         Assert.True(hereDoc.StripTabs);
     }
 
@@ -1353,7 +1354,7 @@ public class BashParserTests
         var words = GetWordValues(simple);
         Assert.Equal(["grep", "-i", "foo"], words);
         var hereDoc = Assert.Single(simple.HereDocs);
-        Assert.Equal("hello foo\nbar", hereDoc.Body);
+        Assert.Equal("hello foo\nbar\n", hereDoc.Body);
     }
 
     [Fact]
@@ -1363,8 +1364,8 @@ public class BashParserTests
             Parse("cat <<EOF1 <<EOF2\nfirst\nEOF1\nsecond\nEOF2"));
 
         Assert.Equal(2, simple.HereDocs.Length);
-        Assert.Equal("first", simple.HereDocs[0].Body);
-        Assert.Equal("second", simple.HereDocs[1].Body);
+        Assert.Equal("first\n", simple.HereDocs[0].Body);
+        Assert.Equal("second\n", simple.HereDocs[1].Body);
         Assert.True(simple.HereDocs[0].Expand);
         Assert.True(simple.HereDocs[1].Expand);
     }
