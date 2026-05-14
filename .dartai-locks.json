@@ -1,3 +1,17 @@
 {
-  "claims": {}
+  "claims": {
+    "ki3HRN90Sb2p": {
+      "runner_instance_id": "DESKTOP-NPIOPS6-7606",
+      "runner_email": "andybrummer@standardbeagle.com",
+      "claimed_at": "2026-05-14T14:00:00Z",
+      "agent_id": "DESKTOP-NPIOPS6-7606",
+      "parent_loop_id": "bLl2v3g7PoAY",
+      "purpose": "Phase C2: RC-2 bg job hangs - runspace-pool model instead of pwsh-spawn",
+      "source_event": {
+        "loop_id": "bLl2v3g7PoAY",
+        "task_id": "ki3HRN90Sb2p",
+        "conversation_id": null
+      }
+    }
+  }
 }
