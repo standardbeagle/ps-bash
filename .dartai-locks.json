@@ -1,3 +1,17 @@
 {
-  "claims": {}
+  "claims": {
+    "jpZLsDxNs8yd": {
+      "runner_instance_id": "DESKTOP-NPIOPS6-7606",
+      "runner_email": "andybrummer@standardbeagle.com",
+      "claimed_at": "2026-05-14T18:00:00Z",
+      "agent_id": "DESKTOP-NPIOPS6-7606",
+      "parent_loop_id": "a7ldZJBuAZNY",
+      "purpose": "Phase E1: PTY-5 signal forwarding launcher<->host",
+      "source_event": {
+        "loop_id": "a7ldZJBuAZNY",
+        "task_id": "jpZLsDxNs8yd",
+        "conversation_id": null
+      }
+    }
+  }
 }
