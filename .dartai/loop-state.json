@@ -1,9 +1,9 @@
 {
   "status": "paused",
-  "iterations": 14,
+  "iterations": 15,
   "spawns": 11,
   "started_at": "2026-05-12T20:33:00Z",
-  "last_iteration_at": "2026-05-14T16:30:00Z",
+  "last_iteration_at": "2026-05-14T17:45:00Z",
   "last_subagent": "task-executor",
   "loop_task_id": "AEACP6UqDUBr",
   "dartboard": "Personal/ps-bash",
@@ -506,6 +506,33 @@
       "failure_reason": null,
       "fix_task_created": true,
       "fix_task_id": "cB7ppi6blbWv"
+    },
+    {
+      "task_id": "cB7ppi6blbWv",
+      "iteration": 4,
+      "status": "completed",
+      "started_at": "2026-05-14T17:00:00Z",
+      "completed_at": "2026-05-14T17:45:00Z",
+      "phase_completed": "phase-9",
+      "failed_phase": null,
+      "files_changed": 7,
+      "tests_added": 22,
+      "plan_adjustments": 1,
+      "completion_summary": "REFACTOR-2 Phase 1d: migrated ls to a binary cmdlet (InvokeBashLsCommand.cs) -- the final leaf of REFACTOR-2 Phase 1. Reimplemented the pure helper web (Get-LsEntryFromFsi/ConvertTo-PermissionString/Format-BashSize/Format-BashDate/Format-LsLine/Test-IsExecutable) in C#; Tier 2 (real-filesystem hot path) owned by the cmdlet; Tier 1/Tier 3 (custom $script:BashLsProviders + PS-provider fallback) stay in psm1 behind the new Get-BashLsProviderEntries shim. psm1 Invoke-BashLs + Test-IsExecutable deleted, CRLF preserved. 22 parity tests added, all green; ModulePartialLoadTests guards the updated export lists.",
+      "failure_reason": null,
+      "fix_task_created": false,
+      "fix_task_id": null,
+      "loop_task_id": "IaiAaDTVqJY6",
+      "files": [
+        "src/PsBash.Cmdlets/InvokeBashLsCommand.cs",
+        "src/PsBash.Cmdlets.Tests/InvokeBashLsCommandTests.cs",
+        "src/PsBash.Module/PsBash.psm1",
+        "src/PsBash.Module/PsBash.psd1",
+        "src/PsBash.Cmdlets/PsBash.Cmdlets.psd1",
+        "src/PsBash.Cmdlets/PsBash.Cmdlets.Experimental.psd1",
+        "docs/specs/runtime-functions.md"
+      ],
+      "notes": "Plan adjustment: the common-parameter audit in the task spec said ls's flags 'don't obviously collide' -- WRONG, exactly the Phase 1c lesson. Parity tests caught three collisions: -a/-A prefix-match the cmdlet's own -Arguments parameter, -d collides with -Debug, -p collides with -ProgressAction/-PipelineVariable. Fixed by declaring A/D/P as explicit SwitchParameters with bundled-flag recovery (one switch binds both -a and -A since PS param names are case-insensitive; behaviorally complete because System.IO never enumerates ./..). Pre-existing failures NOT from this change, verified via stash+revert baseline: 20 PsBash.Core.Tests (emitter splat-emission), 6 PsBash.Host.Tests SdkWorker, 1 Differential pipefail -- all fail identically on clean main, in-flight emitter refactor from another task."
     }
   ],
   "interrupted_at": null,

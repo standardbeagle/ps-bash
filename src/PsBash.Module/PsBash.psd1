@@ -77,7 +77,10 @@ FunctionsToExport = 'Set-BashErrorMode', 'Invoke-ProcessSub', 'Invoke-ProcessSub
                # short flags prefix-collide with PSCmdlet common parameters.
                'Invoke-BashEcho', 'Get-BashPlatform',
                'New-BashObject', 'Emit-BashLine', 'ConvertFrom-BashArgs', 'Expand-EscapeSequences',
-               'New-FlagDefs', 'Invoke-BashLs', 'Get-BashFileInfo',
+               # Invoke-BashLs migrated to a binary cmdlet in PsBash.Cmdlets.dll
+               # (REFACTOR-2 Phase 1d) — no longer a psm1 function. Its Tier 1 /
+               # Tier 3 provider paths stay in psm1 behind Get-BashLsProviderEntries.
+               'New-FlagDefs', 'Get-BashLsProviderEntries', 'Get-BashFileInfo',
                'Format-BashSize', 'Format-BashDate', 'Format-LsLine',
                'Get-LsDisplayName', 'Format-LsGrid',
                'ConvertTo-PermissionString', 'Get-BashText',

@@ -55,7 +55,11 @@ CmdletsToExport = @(
     'Invoke-BashCat',
     'Invoke-BashHead',
     'Invoke-BashTail',
-    'Invoke-BashWc'
+    'Invoke-BashWc',
+    # REFACTOR-2 Phase 1d: ls migrated from PsBash.psm1 — the final leaf of
+    # REFACTOR-2 Phase 1. Tier 1 / Tier 3 provider paths stay in psm1 behind
+    # Get-BashLsProviderEntries; the cmdlet owns Tier 2 + sort + format.
+    'Invoke-BashLs'
 )
 
 VariablesToExport = @()

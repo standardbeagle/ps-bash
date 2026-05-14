@@ -71,7 +71,7 @@ runspace/script scope (`$script:BashErrorMode`, the PowerShell path provider)
 that a plain static helper cannot reach — only `BashRuntime.FormatBashError`
 (the runspace-free message-formatting piece) is shared.
 
-### Migrated Binary Cmdlets (REFACTOR-2 Phase 1 / 1b / 1c)
+### Migrated Binary Cmdlets (REFACTOR-2 Phase 1 / 1b / 1c / 1d)
 
 Some leaf `Invoke-Bash*` commands are no longer psm1 functions — they are
 binary cmdlets in `PsBash.Cmdlets.dll`. The psm1 still carries their
@@ -90,6 +90,7 @@ before the psm1 `Set-Alias` lines execute.
 | cat      | `InvokeBashCatCommand`      | 1c | File + pipeline dual mode; fast path emits `PsBash.TextOutput`, flagged path emits typed `PsBash.CatLine`. `-E` is a declared `SwitchParameter` (prefix-collides with `-ErrorAction` / `-ErrorVariable`); `-n` / `-b` / `-s` / `-T` stay in `Arguments`. Bundled forms like `-nE` are recovered post-parse. A read error sets `$global:LASTEXITCODE = 1` |
 | head     | `InvokeBashHeadCommand`     | 1c | File + pipeline dual mode; value-flag parsing (`-n N` / `-nN` / legacy `-N` / bare positional, `-c N` / `-cN`). File mode emits typed `PsBash.CatLine`. No colliding flags — `-n` / `-c` scanned out of `Arguments` |
 | tail     | `InvokeBashTailCommand`     | 1c | File + pipeline dual mode; value-flag parsing including `-n +N` / `-c +N` from-line/byte forms, `-f` follow, `-s SECS`. `-f` follow polls the file via `FileInfo` (`Thread.Sleep`), honoring `PSCmdlet.Stopping`. File mode emits typed `PsBash.CatLine`. No colliding flags |
+| ls       | `InvokeBashLsCommand`       | 1d | Directory + file target surface; emits typed `PsBash.LsEntry`. Reimplements the pure helper web in C# (`Get-LsEntryFromFsi`, `ConvertTo-PermissionString`, `Format-BashSize`, `Format-BashDate`, `Format-LsLine`, `Test-IsExecutable`). Owns Tier 2 — the real-filesystem hot path (`System.IO` streaming, `-R` via `SearchOption.AllDirectories`) — plus the uniform sort + format pass. Tier 1 (custom `$script:BashLsProviders`) and Tier 3 (PS-provider fallback: Registry:, Cert:, custom PSDrives) stay in psm1 behind the `Get-BashLsProviderEntries` shim, called via string-bodied `InvokeScript` for any non-filesystem target. **Three colliding flags** are declared as explicit `SwitchParameter`s: `-a` / `-A` prefix-match the cmdlet's own `-Arguments` parameter (one switch binds both — names are case-insensitive — and `.`/`..` are never enumerated so `-A` ≡ `-a` on the filesystem path); `-d` prefix-collides with `-Debug`; `-p` with `-ProgressAction` / `-PipelineVariable`. The rest (`-l -h -R -S -t -r -1 -F -i -s`, `--color`) stay in `Arguments`; bundled forms like `-la` are recovered post-parse. `Resolve-BashGlob`'s glob slice is reimplemented in C# via `SessionState.Path`. The final leaf of REFACTOR-2 Phase 1 |
 
 `echo` was **not** migrated: its `-e` / `-n` / `-E` short flags prefix-collide
 with PowerShell common parameters (`-e` is ambiguous with `-ErrorAction` /
@@ -102,11 +103,18 @@ salvageable. The psm1 `param()` form takes no common parameters, so `$args`
 receives the flags literally — `echo` therefore stays a psm1 function
 permanently (rationale comment block at the `Invoke-BashEcho` definition).
 
-`ls` is **not yet migrated** (REFACTOR-2 Phase 1c deferred it as a follow-on):
-it is the hardest of the deferred set — typed `LsEntry` objects, `-R`
-recursion, and grid formatting (`Format-LsGrid` / `Format-LsLine` /
-`Get-BashFileInfo` / `Get-LsDisplayName` / `ConvertTo-PermissionString`), a
-larger helper web than the cat/head/tail/wc subset.
+`ls` was migrated in REFACTOR-2 Phase 1d (the final leaf of Phase 1). It was
+the hardest of the deferred set — typed `LsEntry` objects, `-R` recursion, and
+a large helper web. The pure helpers (`Get-LsEntryFromFsi`,
+`ConvertTo-PermissionString`, `Format-BashSize`, `Format-BashDate`,
+`Format-LsLine`, `Test-IsExecutable`) are reimplemented in C# inside
+`InvokeBashLsCommand`. The provider-tier helpers that touch module-scoped psm1
+state (`Register-BashLsProvider` / `$script:BashLsProviders` /
+`Get-LsEntryFromPsItem`, plus `Get-BashFileInfo` which is still used by `find`
+and `stat`) stay in psm1; the cmdlet reaches Tier 1 / Tier 3 through the
+`Get-BashLsProviderEntries` shim. `Format-LsGrid` / `Get-LsDisplayName` were
+already display-layer dead code (the `PsBash.LsEntry` ps1xml view renders
+`BashText` directly) and were left untouched in psm1.
 
 ### Output Strategy
 
@@ -164,7 +172,7 @@ foreach ($item in $pipelineInput) {
 |---|---|---|---|---|---|
 | echo | Invoke-BashEcho | `-n`, `-e`, `-E` | ConvertFrom-BashArgs | No | No |
 | printf | Invoke-BashPrintf | (format + args) | Positional | No | No |
-| ls | Invoke-BashLs | `-l`, `-a`, `-h`, `-R`, `-S`, `-t`, `-r`, `-1` | ConvertFrom-BashArgs | No | Yes |
+| ls | Invoke-BashLs | `-l`, `-a`, `-A`, `-h`, `-R`, `-S`, `-t`, `-r`, `-1`, `-p`, `-d`, `-F`, `--color`, `-i`, `-s` | Binary cmdlet (`-a`/`-A`, `-d`, `-p` are declared SwitchParameters; rest via ConvertFromBashArgs; bundles recovered post-parse) | No | Yes |
 | cat | Invoke-BashCat | `-n`, `-b`, `-s`, `-E`, `-T` | Binary cmdlet (`-E` is a declared SwitchParameter; rest via ConvertFromBashArgs) | Yes | Yes |
 | grep | Invoke-BashGrep | `-i`, `-v`, `-n`, `-c`, `-r`, `-l`, `-E`, `-A`, `-B`, `-C` | Manual loop | Yes | Yes |
 | rg | Invoke-BashRg | `-i`, `-w`, `-c`, `-l`, `-n`, `-N`, `-o`, `-v`, `-F`, `-g`, `-A`, `-B`, `-C`, `--hidden` | Manual loop | Yes | Yes |

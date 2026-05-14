@@ -744,10 +744,16 @@ function ConvertTo-PermissionString {
 }
 
 # --- ls Provider Architecture ---
-# Three-tier strategy for Invoke-BashLs:
-#   1. Fast path  — real filesystem paths use System.IO streaming APIs (no Get-ChildItem, no Get-Acl)
-#   2. Custom providers — user-registered handlers for synthetic/virtual paths
-#   3. PS provider fallback — Get-ChildItem for Registry:, Cert:, Variable:, custom PSDrives, etc.
+# ls is a binary cmdlet as of REFACTOR-2 Phase 1d (InvokeBashLsCommand.cs).
+# It owns Tier 2 -- the real-filesystem hot path (System.IO streaming, no
+# Get-ChildItem / Get-Acl) -- entirely in C#. Tiers 1 and 3 stay here in psm1
+# because both touch module-scoped state the cmdlet cannot reach:
+#   Tier 1. Custom providers -- user-registered handlers for synthetic paths
+#           ($script:BashLsProviders, registered via Register-BashLsProvider).
+#   Tier 3. PS provider fallback -- Get-ChildItem for Registry:, Cert:,
+#           Variable:, custom PSDrives, etc.
+# The cmdlet calls the Get-BashLsProviderEntries shim below for any target
+# that is not a real filesystem directory or file.
 #
 # Register a custom provider:
 #   Register-BashLsProvider -Name 'MyProvider' -Detect { param($path) $path.StartsWith('myfs:') } -List { param($path,$flags) <yield LsEntry objects> }
@@ -969,193 +975,66 @@ function Format-LsGrid {
 
 # --- ls Command ---
 
-function Test-IsExecutable {
-    param([Parameter(Mandatory)][PSCustomObject]$Entry)
-    if ($Entry.IsDirectory) { return $false }
-    if ($Entry.IsSymlink) { return $false }
-    if ($IsWindows) {
-        $execExts = '.exe','.bat','.cmd','.ps1','.sh','.com'
-        $ext = if ($Entry.Name.Contains('.')) {
-            $Entry.Name.Substring($Entry.Name.LastIndexOf('.')).ToLowerInvariant()
-        } else { '' }
-        return $execExts -contains $ext
-    }
-    $perm = $Entry.Permissions
-    if ($perm.Length -ge 4 -and $perm[3] -eq 'x') { return $true }
-    if ($perm.Length -ge 7 -and $perm[6] -eq 'x') { return $true }
-    if ($perm.Length -ge 10 -and $perm[9] -eq 'x') { return $true }
-    $false
-}
+# Invoke-BashLs migrated to a binary cmdlet in PsBash.Cmdlets.dll
+# (REFACTOR-2 Phase 1d -- InvokeBashLsCommand.cs). It is the final leaf of
+# REFACTOR-2 Phase 1. The psm1 no longer defines Invoke-BashLs or its ls-only
+# helper Test-IsExecutable; the cmdlet reimplements the pure helper web
+# (Get-LsEntryFromFsi / ConvertTo-PermissionString / Format-BashSize /
+# Format-BashDate / Format-LsLine / Test-IsExecutable) in C# and owns Tier 2
+# (the real-filesystem hot path) plus the uniform sort + format pass. The
+# Set-Alias 'ls' line below resolves to the cmdlet. ls's short flags
+# (-l -a -A -h -R -S -t -r -1 -p -d -F -i -s) do not prefix-collide with any
+# PowerShell common parameter, so no explicit SwitchParameter was needed.
+#
+# Tier 1 (custom $script:BashLsProviders) and Tier 3 (PS-provider fallback:
+# Registry:, Cert:, custom PSDrives) reference module-scoped psm1 state a
+# binary cmdlet cannot reach, so they stay here behind the Get-BashLsProviderEntries
+# shim, which the cmdlet calls for any target that is not a real filesystem
+# directory or file. The shim returns raw, unsorted, unformatted PsBash.LsEntry
+# objects; the cmdlet sorts and formats every tier uniformly.
 
-function Invoke-BashLs {
+function Get-BashLsProviderEntries {
+    # Tier 1 + Tier 3 of the ls strategy, kept in psm1 because both reference
+    # module-scoped state ($script:BashLsProviders) or PS-provider cmdlets.
+    # Emits raw PsBash.LsEntry objects (BashText left empty -- the binary
+    # cmdlet formats them). On a target that resolves to nothing anywhere,
+    # emits a bash-style error via Write-BashError -ExitCode 2 and yields
+    # nothing, exactly as the original Invoke-BashLs did.
     [OutputType('PsBash.LsEntry')]
-    param()
-    $Arguments = [string[]]$args
-    if ($Arguments -contains '--help') { return Show-BashHelp 'ls' }
-
-    $defs = New-FlagDefs -Entries @(
-        '-l', 'long listing'
-        '-a', 'show hidden (dotfiles + Windows hidden attr)'
-        '-A', 'almost-all (like -a but excludes . and ..)'
-        '-h', 'human readable sizes'
-        '-R', 'recursive'
-        '-S', 'sort by size'
-        '-t', 'sort by time'
-        '-r', 'reverse sort'
-        '-1', 'one per line'
-        '-p', 'append / to directories'
-        '-d', 'list directories themselves'
-        '-F', 'classify (append */=>@| type indicators)'
-        '--color', 'colorize output'
-        '-i', 'show inode number'
-        '-s', 'show allocated size in blocks'
+    param(
+        [Parameter(Mandatory)][string]$Target,
+        [switch]$ShowHidden,
+        [switch]$Recursive,
+        [switch]$DirOnly
     )
 
-    $parsed    = ConvertFrom-BashArgs -Arguments $Arguments -FlagDefs $defs
-    $longMode     = $parsed.Flags['-l']
-    $showHidden   = $parsed.Flags['-a']
-    $almostAll    = $parsed.Flags['-A']
-    $humanSizes   = $parsed.Flags['-h']
-    $recursive    = $parsed.Flags['-R']
-    $sortBySize   = $parsed.Flags['-S']
-    $sortByTime   = $parsed.Flags['-t']
-    $reverseSort  = $parsed.Flags['-r']
-    $dirOnly      = $parsed.Flags['-d']
-    $classify     = $parsed.Flags['-F'] -or $parsed.Flags['-p'] -or $longMode
-    $colorize     = $parsed.Flags['--color']
-    $showInode    = $parsed.Flags['-i']
-    $showBlocks   = $parsed.Flags['-s']
-
-    if ($almostAll) { $showHidden = $true }
-
-    $targets   = Resolve-BashGlob -Paths $(if ($parsed.Operands.Count -gt 0) { $parsed.Operands } else { @('.') })
-
-    $allEntries= [System.Collections.Generic.List[PSCustomObject]]::new()
-    $hadError  = $false
-
-    foreach ($target in $targets) {
-
-        # ── Tier 1: custom provider ──────────────────────────────────────────
-        $customProvider = $null
-        foreach ($cp in $script:BashLsProviders) {
-            if (& $cp.Detect $target) { $customProvider = $cp; break }
+    # Tier 1: custom provider.
+    foreach ($cp in $script:BashLsProviders) {
+        if (& $cp.Detect $Target) {
+            $flags = @{ Long = $false; Hidden = [bool]$ShowHidden; Recursive = [bool]$Recursive }
+            foreach ($e in (& $cp.List $Target $flags)) { $e }
+            return
         }
-        if ($null -ne $customProvider) {
-            $flags = @{ Long=$longMode; Hidden=$showHidden; Recursive=$recursive }
-            foreach ($e in (& $customProvider.List $target $flags)) { $allEntries.Add($e) }
-            continue
-        }
-
-        # ── Tier 2: real filesystem — System.IO streaming ───────────────────
-        $resolvedPath = $null
-        try { $resolvedPath = [System.IO.Path]::GetFullPath($target) } catch { }
-
-        if ($null -ne $resolvedPath -and [System.IO.Directory]::Exists($resolvedPath)) {
-            if ($dirOnly) {
-                # -d: list the directory itself, not its contents
-                $allEntries.Add((Get-LsEntryFromFsi -Item ([System.IO.DirectoryInfo]::new($resolvedPath))))
-            } else {
-                try {
-                    $dirInfo = [System.IO.DirectoryInfo]::new($resolvedPath)
-                    $searchOpt = if ($recursive) {
-                        [System.IO.SearchOption]::AllDirectories
-                    } else {
-                        [System.IO.SearchOption]::TopDirectoryOnly
-                    }
-                    foreach ($fsi in $dirInfo.EnumerateFileSystemInfos('*', $searchOpt)) {
-                        $attrs = $fsi.Attributes
-                        if (-not $showHidden) {
-                            if ($fsi.Name[0] -eq '.') { continue }
-                            if ($IsWindows -and ($attrs -band [System.IO.FileAttributes]::Hidden)) { continue }
-                        }
-                        $allEntries.Add((Get-LsEntryFromFsi -Item $fsi))
-                    }
-                } catch {
-                    Write-BashError "ls: cannot open directory '$target': $($_.Exception.Message)" -ExitCode 2
-                    $hadError = $true
-                }
-            }
-            continue
-        }
-
-        if ($null -ne $resolvedPath -and [System.IO.File]::Exists($resolvedPath)) {
-            $allEntries.Add((Get-LsEntryFromFsi -Item ([System.IO.FileInfo]::new($resolvedPath))))
-            continue
-        }
-
-        # ── Tier 3: PS provider fallback (Registry:, Cert:, custom PSDrives) ─
-        $psItem = $null
-        try { $psItem = Get-Item -LiteralPath $target -Force -ErrorAction Stop } catch { }
-
-        if ($null -ne $psItem) {
-            if ($psItem.PSIsContainer -and -not $dirOnly) {
-                $children = Get-ChildItem -LiteralPath $target -Force -ErrorAction SilentlyContinue
-                foreach ($child in $children) {
-                    if (-not $showHidden -and $child.Name[0] -eq '.') { continue }
-                    $allEntries.Add((Get-LsEntryFromPsItem -Item $child))
-                }
-            } else {
-                $allEntries.Add((Get-LsEntryFromPsItem -Item $psItem))
-            }
-            continue
-        }
-
-        Write-BashError "ls: cannot access '$target': No such file or directory" -ExitCode 2
-        $hadError = $true
     }
 
-    # ── Sort ─────────────────────────────────────────────────────────────────
-    # Bash default: case-insensitive alphabetical, dirs and files interleaved
-    $sorted = if ($sortBySize) {
-        $allEntries | Sort-Object -Property SizeBytes -Descending:(-not $reverseSort)
-    } elseif ($sortByTime) {
-        $allEntries | Sort-Object -Property LastModified -Descending:(-not $reverseSort)
-    } else {
-        $cmp = [System.StringComparer]::OrdinalIgnoreCase
-        $ordered = [System.Linq.Enumerable]::OrderBy(
-            [System.Collections.Generic.IEnumerable[PSCustomObject]]$allEntries,
-            [System.Func[PSCustomObject,string]]{ param($e) $e.Name },
-            $cmp)
-        if ($reverseSort) { [System.Linq.Enumerable]::Reverse($ordered) } else { $ordered }
-    }
+    # Tier 3: PS provider fallback (Registry:, Cert:, custom PSDrives).
+    $psItem = $null
+    try { $psItem = Get-Item -LiteralPath $Target -Force -ErrorAction Stop } catch { }
 
-    # ── Format and emit ───────────────────────────────────────────────────────
-    $Reset  = "`e[0m"
-    $Bold   = "`e[1m"
-    $Blue   = "`e[34m"
-    $Cyan   = "`e[36m"
-    $Green  = "`e[32m"
-    $Red    = "`e[31m"
-
-    foreach ($entry in $sorted) {
-        $indicator = ''
-        if ($parsed.Flags['-F']) {
-            if ($entry.IsDirectory) { $indicator = '/' }
-            elseif ($entry.IsSymlink) { $indicator = '@' }
-            elseif (Test-IsExecutable -Entry $entry) { $indicator = '*' }
-        } elseif ($parsed.Flags['-p']) {
-            if ($entry.IsDirectory) { $indicator = '/' }
-        } elseif ($longMode) {
-            # -l implicitly shows type via perms column
-        }
-
-        if ($longMode) {
-            $line = Format-LsLine -Entry $entry -HumanReadable:$humanSizes
-            if ($classify) { $line += $indicator }
-            $entry.BashText = "$line`n"
+    if ($null -ne $psItem) {
+        if ($psItem.PSIsContainer -and -not $DirOnly) {
+            $children = Get-ChildItem -LiteralPath $Target -Force -ErrorAction SilentlyContinue
+            foreach ($child in $children) {
+                if (-not $ShowHidden -and $child.Name[0] -eq '.') { continue }
+                Get-LsEntryFromPsItem -Item $child
+            }
         } else {
-            $name = $entry.Name
-            if ($colorize) {
-                if ($entry.IsDirectory) { $name = "${Blue}${Bold}${name}${Reset}" }
-                elseif ($entry.IsSymlink) { $name = "${Cyan}${name}${Reset}" }
-                elseif (Test-IsExecutable -Entry $entry) { $name = "${Green}${name}${Reset}" }
-            }
-            $entry.BashText = "${name}${indicator}`n"
+            Get-LsEntryFromPsItem -Item $psItem
         }
-        Set-BashDisplayProperty $entry
+        return
     }
 
-    if ($hadError) { $global:LASTEXITCODE = 2 }
+    Write-BashError "ls: cannot access '$Target': No such file or directory" -ExitCode 2
 }
 
 # --- cat Command ---
