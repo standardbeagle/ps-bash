@@ -12,8 +12,99 @@ public static class ModuleExtractor
     ];
 
     /// <summary>
+    /// File name of the binary cmdlets module extracted alongside the psm1.
+    /// </summary>
+    public const string CmdletsDllFileName = "PsBash.Cmdlets.dll";
+
+    /// <summary>
+    /// Logical resource-name prefix for the embedded per-TFM Cmdlets DLLs.
+    /// The full name is <c>{prefix}{tfm}/PsBash.Cmdlets.dll</c> — e.g.
+    /// <c>PsBash.Module/cmdlets/net10.0/PsBash.Cmdlets.dll</c>.
+    /// </summary>
+    private const string CmdletsResourcePrefix = "PsBash.Module/cmdlets/";
+
+    /// <summary>
+    /// Returns the absolute path to the extracted TFM-matching PsBash.Cmdlets.dll
+    /// for the module version embedded in this assembly. Does NOT trigger
+    /// extraction — call <see cref="ExtractEmbedded"/> first. The path is
+    /// deterministic so callers can hand it to PowerShell as a known import
+    /// target with no probing.
+    /// </summary>
+    public static string GetCmdletsDllPath()
+    {
+        var asm = typeof(ModuleExtractor).Assembly;
+        var version = asm.GetName().Version?.ToString() ?? "0.0.0";
+        var dir = Path.Combine(Path.GetTempPath(), "ps-bash", $"module-{version}");
+        return Path.Combine(dir, CmdletsDllFileName);
+    }
+
+    /// <summary>
+    /// Resolves the manifest-resource name of the Cmdlets DLL that matches the
+    /// running framework. Prefers an exact TFM match (e.g. net10.0), falling
+    /// back to the highest available embedded variant when the exact moniker
+    /// is not embedded. Returns null when no Cmdlets DLL is embedded at all.
+    /// </summary>
+    private static string? ResolveCmdletsResourceName(System.Reflection.Assembly asm)
+    {
+        var cmdletsResources = asm.GetManifestResourceNames()
+            .Where(n => n.StartsWith(CmdletsResourcePrefix, StringComparison.Ordinal) &&
+                        n.EndsWith("/" + CmdletsDllFileName, StringComparison.Ordinal))
+            .ToArray();
+
+        if (cmdletsResources.Length == 0)
+            return null;
+
+        var runningTfm = GetRunningTfm();
+        var exact = cmdletsResources.FirstOrDefault(n =>
+            string.Equals(TfmOf(n), runningTfm, StringComparison.OrdinalIgnoreCase));
+        if (exact != null)
+            return exact;
+
+        // No exact match: pick the highest netN.0 variant available.
+        return cmdletsResources
+            .OrderByDescending(n => ParseNetMajor(TfmOf(n)))
+            .First();
+    }
+
+    /// <summary>Extracts the TFM segment from a Cmdlets resource name.</summary>
+    private static string TfmOf(string resourceName)
+    {
+        // "PsBash.Module/cmdlets/net10.0/PsBash.Cmdlets.dll" -> "net10.0"
+        var inner = resourceName.Substring(CmdletsResourcePrefix.Length);
+        var slash = inner.IndexOf('/');
+        return slash < 0 ? inner : inner.Substring(0, slash);
+    }
+
+    /// <summary>Parses the major version out of a "netN.0" moniker; 0 if unrecognized.</summary>
+    private static int ParseNetMajor(string tfm)
+    {
+        if (!tfm.StartsWith("net", StringComparison.OrdinalIgnoreCase))
+            return 0;
+        var rest = tfm.Substring(3);
+        var dot = rest.IndexOf('.');
+        if (dot > 0)
+            rest = rest.Substring(0, dot);
+        return int.TryParse(rest, out var major) ? major : 0;
+    }
+
+    /// <summary>
+    /// Detects the running framework moniker (e.g. "net10.0", "net8.0") from
+    /// <see cref="Environment.Version"/>. ps-bash only ships netN.0 TFMs, so
+    /// the moniker is always "net{Major}.0".
+    /// </summary>
+    private static string GetRunningTfm()
+    {
+        // Environment.Version on .NET 5+ reports the runtime version
+        // (e.g. 10.0.0). RuntimeInformation.FrameworkDescription would also
+        // work but needs string parsing; Environment.Version is structured.
+        return $"net{Environment.Version.Major}.0";
+    }
+
+    /// <summary>
     /// Extracts the embedded PsBash module to a temp directory and returns the path to PsBash.psd1.
-    /// Uses a version-stamped directory so concurrent processes don't conflict.
+    /// Also extracts the TFM-matching PsBash.Cmdlets.dll alongside it (see
+    /// <see cref="GetCmdletsDllPath"/>). Uses a version-stamped directory so
+    /// concurrent processes don't conflict.
     /// Thread-safe: uses a lock file to serialize extraction across processes.
     /// </summary>
     public static string ExtractEmbedded()
@@ -63,6 +154,19 @@ public static class ModuleExtractor
                 stream.CopyTo(dest);
             }
 
+            // Extract the TFM-matching PsBash.Cmdlets.dll alongside the psm1 so
+            // the host runspace imports it from a deterministic path with no
+            // probing (see GetCmdletsDllPath).
+            var cmdletsResource = ResolveCmdletsResourceName(asm);
+            if (cmdletsResource != null)
+            {
+                var cmdletsDest = Path.Combine(dir, CmdletsDllFileName);
+                using var cmdletsStream = asm.GetManifestResourceStream(cmdletsResource)!;
+                using var cmdletsDestStream = new FileStream(
+                    cmdletsDest, FileMode.Create, FileAccess.Write, FileShare.Read);
+                cmdletsStream.CopyTo(cmdletsDestStream);
+            }
+
             // Write content hash as marker after all files extracted successfully
             var hash = ComputeEmbeddedHash(asm);
             File.WriteAllText(marker, hash);
@@ -77,7 +181,9 @@ public static class ModuleExtractor
     }
 
     /// <summary>
-    /// Computes a SHA256 hash over all embedded module resources.
+    /// Computes a SHA256 hash over all embedded module resources, including the
+    /// TFM-matching Cmdlets DLL. Including the DLL means a rebuilt cmdlets
+    /// assembly invalidates the extracted-module cache.
     /// </summary>
     private static string ComputeEmbeddedHash(System.Reflection.Assembly asm)
     {
@@ -88,6 +194,14 @@ public static class ModuleExtractor
             using var stream = asm.GetManifestResourceStream($"PsBash.Module/{file}")!;
             stream.CopyTo(combined);
         }
+
+        var cmdletsResource = ResolveCmdletsResourceName(asm);
+        if (cmdletsResource != null)
+        {
+            using var cmdletsStream = asm.GetManifestResourceStream(cmdletsResource)!;
+            cmdletsStream.CopyTo(combined);
+        }
+
         combined.Position = 0;
         var bytes = sha.ComputeHash(combined);
         return Convert.ToHexString(bytes);

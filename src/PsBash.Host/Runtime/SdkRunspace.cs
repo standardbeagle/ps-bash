@@ -62,22 +62,29 @@ internal sealed class SdkRunspace : IAsyncDisposable
         }
 
         // Extract SdkRunspaceSetup.ps1 next to PsBash.psm1 so the Cmdlets.dll
-        // probe runs from a real .ps1 file rather than a C# string. The
+        // import runs from a real .ps1 file rather than a C# string. The
         // previous embedded-string pattern caused multiple escaping-bug
         // regressions (see REFACTOR-1 task description) — keep PowerShell
         // logic in .ps1 files where it can be parsed at build time.
         var moduleDir = Path.GetDirectoryName(modulePath)!;
         var setupScriptPath = RunspaceSetupExtractor.Extract(moduleDir);
 
+        // Canonical module-load path (REFACTOR-5): PsBash.Cmdlets.dll is
+        // embedded in PsBash.Core and extracted by ModuleExtractor alongside
+        // the psm1. Hand the setup script that one deterministic path — no
+        // Get-Module -ListAvailable probe, no beside-host-binary probe. Those
+        // probe paths had a host-startup deadlock history (commits f18bedd,
+        // 6f264eb); a known-path Import-Module has no such surface.
+        var cmdletsDllPath = ModuleExtractor.GetCmdletsDllPath();
+
         // Pass parameters via session-state variables (no string interpolation
-        // through C# / quoted PowerShell). $PsBashCmdletsDllPath is currently
-        // optional ($null in the SDK host); the script falls back to its
-        // Get-Module probe. $PsBashRunspaceSetupPath is consumed by the
-        // AddScript dot-source below.
+        // through C# / quoted PowerShell). $PsBashRunspaceSetupPath is consumed
+        // by the AddScript dot-source below; $PsBashCmdletsDllPath is the
+        // canonical extracted Cmdlets.dll path the setup script imports.
         runspace.SessionStateProxy.SetVariable(
             "PsBashRunspaceSetupPath", setupScriptPath);
         runspace.SessionStateProxy.SetVariable(
-            "PsBashCmdletsDllPath", null);
+            "PsBashCmdletsDllPath", cmdletsDllPath);
 
         using var ps = PowerShell.Create();
         ps.Runspace = runspace;

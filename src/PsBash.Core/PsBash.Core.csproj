@@ -33,6 +33,46 @@
 
   <ItemGroup>
     <ProjectReference Include="..\PsBash.Transpiler\PsBash.Transpiler.csproj" />
+    <!-- Build PsBash.Cmdlets before Core so EmbedCmdletsDll can pick up its
+         per-TFM build output. ReferenceOutputAssembly=false: Core does NOT
+         link the cmdlets at compile time — it embeds the DLLs as manifest
+         resources and ModuleExtractor extracts the TFM-matching one at
+         runtime. Both projects multi-target net8.0;net10.0, so the matching
+         TFM is built. The dependency graph stays acyclic
+         (Core->Cmdlets->Transpiler, Core->Transpiler). -->
+    <ProjectReference Include="..\PsBash.Cmdlets\PsBash.Cmdlets.csproj"
+                      ReferenceOutputAssembly="false"
+                      Private="false" />
   </ItemGroup>
+
+  <!--
+    Embed the TFM-matching PsBash.Cmdlets.dll as a manifest resource named
+    "PsBash.Module/cmdlets/{tfm}/PsBash.Cmdlets.dll". Core multi-targets
+    net8.0;net10.0 and so does PsBash.Cmdlets; the ProjectReference above
+    builds the matching TFM, so each Core TFM build embeds exactly one
+    cmdlets variant. ModuleExtractor resolves the embedded resource by the
+    running framework moniker at runtime.
+
+    Runs BeforeTargets="PrepareResourceNames" so the EmbeddedResource item is
+    registered before the SDK splits and names the resource list (adding it
+    later, e.g. before CoreCompile, is too late — the resource never makes it
+    into the assembly). DependsOnTargets ResolveProjectReferences guarantees
+    the cmdlets ProjectReference has been built and its DLL exists on disk.
+  -->
+  <Target Name="EmbedCmdletsDll"
+          BeforeTargets="PrepareResourceNames"
+          DependsOnTargets="ResolveProjectReferences">
+    <PropertyGroup>
+      <_PsBashCmdletsDll>$(MSBuildThisFileDirectory)..\PsBash.Cmdlets\bin\$(Configuration)\$(TargetFramework)\PsBash.Cmdlets.dll</_PsBashCmdletsDll>
+    </PropertyGroup>
+    <Error Condition="!Exists('$(_PsBashCmdletsDll)')"
+           Text="PsBash.Cmdlets.dll not found at $(_PsBashCmdletsDll). The Core-&gt;Cmdlets ProjectReference should have built it for TFM $(TargetFramework). Check PsBash.Cmdlets.csproj TargetFrameworks." />
+    <ItemGroup>
+      <EmbeddedResource Include="$(_PsBashCmdletsDll)"
+                        LogicalName="PsBash.Module/cmdlets/$(TargetFramework)/PsBash.Cmdlets.dll"
+                        Type="Non-Resx"
+                        WithCulture="false" />
+    </ItemGroup>
+  </Target>
 
 </Project>

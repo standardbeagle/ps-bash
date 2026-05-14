@@ -242,6 +242,32 @@
         "src/PsBash.Transpiler/Parser/PsEmitter.cs",
         "src/PsBash.Core.Tests/Transpiler/BashTranspilerTests.cs"
       ]
+    },
+    {
+      "task_id": "hQzX7gAha41K",
+      "iteration": 6,
+      "status": "completed",
+      "started_at": "2026-05-14T06:20:00Z",
+      "completed_at": "2026-05-14T07:10:00Z",
+      "phase_completed": "final-validation",
+      "failed_phase": null,
+      "files_changed": 5,
+      "tests_added": 5,
+      "plan_adjustments": 1,
+      "completion_summary": "REFACTOR-5 (retry, unblocked by 1f23039+09cf8a3): canonicalized the module load path. PsBash.Core now takes a ProjectReference to PsBash.Cmdlets (graph acyclic: Core->{Transpiler,Cmdlets}, Cmdlets->Transpiler) and the EmbedCmdletsDll MSBuild target embeds the TFM-matching PsBash.Cmdlets.dll as manifest resource PsBash.Module/cmdlets/{tfm}/PsBash.Cmdlets.dll (one per net8.0+net10.0). ModuleExtractor extracts the running-TFM variant alongside psd1/psm1/Format.ps1xml; the cache marker hash now covers the DLL so an old 3-file build self-heals. SdkRunspace.Create hands SdkRunspaceSetup.ps1 the deterministic ModuleExtractor.GetCmdletsDllPath() path; the Get-Module -ListAvailable probe and the beside-host-binary Content copy are both removed.",
+      "failure_reason": null,
+      "fix_task_created": false,
+      "fix_task_id": null,
+      "plan_adjustment_note": "Plan adjustment: EmbedCmdletsDll target initially hooked BeforeTargets=\"GenerateResource;CoreCompile\" per the obvious choice, but the SDK splits and names the EmbeddedResource list earlier than that, so the dynamically-added item never reached the assembly (verified: grep of Core.dll showed no cmdlets resource). Moved the target to BeforeTargets=\"PrepareResourceNames\" — resource then embeds correctly in both TFMs on a clean build.",
+      "verifier_evidence": "Clean full ps-bash.sln rebuild: 0 errors (4 pre-existing NU1903 warnings only). dotnet list reference confirms acyclic graph (Core->Transpiler+Cmdlets, Cmdlets->Transpiler, Transpiler=leaf). grep of built Core.dll: PsBash.Module/cmdlets/net10.0/PsBash.Cmdlets.dll embedded in net10 build, net8.0 variant in net8 build. New ModuleExtractorTests 5/5 PASS (extracts a valid PsBash.Cmdlets managed assembly beside the psd1; stale-3-file-marker self-heal proven by manually corrupting .extracted then re-running). SdkRunspaceSetupScriptTests 4/4 PASS. Core.Tests 695/696 (1 skip, no failures). Cmdlets.Tests 40/43 (3 skip). Host.Tests baseline-diff: clean-tree (git stash) = 4 failed/48 passed, with-changes = SAME 4 failed/48 passed (GracefulShutdownTests.ShutdownWithInflightRequest_DrainsBeforeExiting + 3 SdkWorkerTests, exit 127) — identical failing set, zero new failures; these are the documented WSL2 flaky process-spawn baseline, CI 3-OS matrix authoritative.",
+      "files": [
+        "src/PsBash.Core/PsBash.Core.csproj",
+        "src/PsBash.Core/Runtime/ModuleExtractor.cs",
+        "src/PsBash.Host/PsBash.Host.csproj",
+        "src/PsBash.Host/Resources/SdkRunspaceSetup.ps1",
+        "src/PsBash.Host/Runtime/SdkRunspace.cs",
+        "src/PsBash.Core.Tests/Runtime/ModuleExtractorTests.cs"
+      ]
     }
   ],
   "interrupted_at": null,
