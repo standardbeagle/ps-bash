@@ -1,3 +1,17 @@
 {
-  "claims": {}
+  "claims": {
+    "ODVeJZ6IWUvU": {
+      "runner_instance_id": "DESKTOP-NPIOPS6-7606",
+      "runner_email": "andybrummer@standardbeagle.com",
+      "claimed_at": "2026-05-13T20:25:00Z",
+      "agent_id": "DESKTOP-NPIOPS6-7606",
+      "parent_loop_id": "dqjNTUoPZjCa",
+      "purpose": "REFACTOR-1 Wave 1a: SDK runspace setup as embedded .ps1",
+      "source_event": {
+        "loop_id": "dqjNTUoPZjCa",
+        "task_id": "ODVeJZ6IWUvU",
+        "conversation_id": null
+      }
+    }
+  }
 }
