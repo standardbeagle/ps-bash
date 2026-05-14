@@ -1,3 +1,17 @@
 {
-  "claims": {}
+  "claims": {
+    "0cx2VPwufzIJ": {
+      "runner_instance_id": "DESKTOP-NPIOPS6-7606",
+      "runner_email": "andybrummer@standardbeagle.com",
+      "claimed_at": "2026-05-14T00:15:00Z",
+      "agent_id": "DESKTOP-NPIOPS6-7606",
+      "parent_loop_id": "dqjNTUoPZjCa",
+      "purpose": "REFACTOR-5a-2 fix: host runspace BashTranspiler type resolution (main is red)",
+      "source_event": {
+        "loop_id": "dqjNTUoPZjCa",
+        "task_id": "0cx2VPwufzIJ",
+        "conversation_id": null
+      }
+    }
+  }
 }
