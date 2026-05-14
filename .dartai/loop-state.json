@@ -1,9 +1,9 @@
 {
   "status": "paused",
-  "iterations": 19,
+  "iterations": 20,
   "spawns": 12,
   "started_at": "2026-05-12T20:33:00Z",
-  "last_iteration_at": "2026-05-14T20:15:00Z",
+  "last_iteration_at": "2026-05-14T20:30:00Z",
   "last_subagent": "task-executor",
   "loop_task_id": "AEACP6UqDUBr",
   "dartboard": "Personal/ps-bash",
@@ -653,6 +653,23 @@
         "src/PsBash.Differential.Tests/Goldens/Redirect_Heredoc_Expanding_VarSubstitution.golden.txt",
         "src/PsBash.Differential.Tests/Goldens/Pipe_ExitCode_PipefailOn.golden.txt"
       ]
+    },
+    {
+      "task_id": "7q2c4RafF5qb",
+      "iteration": 1,
+      "status": "completed",
+      "started_at": "2026-05-14T20:15:00Z",
+      "completed_at": "2026-05-14T20:30:00Z",
+      "phase_completed": "triage",
+      "failed_phase": null,
+      "files_changed": 0,
+      "tests_added": 0,
+      "plan_adjustments": 1,
+      "completion_summary": "RC-8 triage: ran Linux Differential as cross-OS proxy (no Windows runner), 7 deterministic failures in 4 families. Filed RC-8a/b/c/d subtasks (bmNomMHKlsan, qY4bsPtXVmf6, EZJDr655FXi8, QJrolEoCCzt1). Heredoc/>&2 families resolved by REFACTOR-4.",
+      "failure_reason": null,
+      "fix_task_created": true,
+      "fix_task_id": "bmNomMHKlsan,qY4bsPtXVmf6,EZJDr655FXi8,QJrolEoCCzt1",
+      "plan_adjustment_note": "Linux Differential substituted for Windows suite (no runner available); cross-OS family proxy per task strategy."
     }
   ],
   "interrupted_at": null,
