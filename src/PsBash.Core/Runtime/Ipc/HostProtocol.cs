@@ -36,7 +36,18 @@ public enum StreamTag
 /// </remarks>
 public static class HostProtocol
 {
-    public const int ProtocolVersion = 2;
+    /// <summary>
+    /// IPC protocol version. PTY-6 minor bump 2 → 3: adds the
+    /// <see cref="BusySentinel"/> and <see cref="HostExitingSentinel"/>
+    /// foreground/background-handoff lifecycle events. The bump is
+    /// backward-compatible — both events are emitted ONLY in
+    /// <see cref="SessionMode.Interactive"/>, exactly like PTY-4's
+    /// <see cref="PromptReadySentinel"/> and PTY-4's <c>SESSION:</c> header. A
+    /// pre-PTY-6 launcher running framed mode never sees them; a pre-PTY-6
+    /// host simply never emits them and the launcher's handoff state machine
+    /// stays in its initial state. No request-frame wire format changed.
+    /// </summary>
+    public const int ProtocolVersion = 3;
     public const int HealthStartingExitCode = 75;
     public const string EndSentinel = "<<<END>>>";
     public const string ExitPrefix = "<<<EXIT:";
@@ -91,6 +102,64 @@ public static class HostProtocol
     {
         ArgumentException.ThrowIfNullOrEmpty(signalName);
         return SignalDeliveredPrefix + signalName + SignalDeliveredSuffix;
+    }
+
+    /// <summary>
+    /// PTY-6 lifecycle sentinel: emitted by the host on the interactive
+    /// response stream when a command it is running is taking long enough that
+    /// the launcher should reflect a "busy" status (e.g. dim the prompt, show a
+    /// spinner). It is OPTIONAL — a host that never emits it is fully
+    /// conformant, and the launcher's handoff state machine treats its absence
+    /// as "assume busy from the moment the execute request was sent until
+    /// <see cref="PromptReadySentinel"/> arrives". Emitted only in
+    /// <see cref="SessionMode.Interactive"/>; in <see cref="SessionMode.Framed"/>
+    /// callers MUST NOT emit it (a pre-PTY-6 launcher would treat it as a stray
+    /// data line). Follows PTY-5's <c>&lt;&lt;&lt;EVENT&gt;&gt;&gt;</c> wire-token
+    /// convention.
+    /// </summary>
+    public const string BusySentinel = "<<<BUSY>>>";
+
+    /// <summary>
+    /// PTY-6 lifecycle sentinel: emitted by the host immediately before the
+    /// host process exits, so the launcher can restore terminal modes
+    /// (<c>TerminalMode</c>) and tear down signal forwarding
+    /// (<c>SignalForwarder</c>) BEFORE the host's stdio closes and the PTY
+    /// master goes away. The ordering the launcher relies on is:
+    /// <c>host-exiting</c> → launcher restores modes / detaches signals →
+    /// host process actually exits. Emitted only in
+    /// <see cref="SessionMode.Interactive"/>; framed-mode callers MUST NOT emit
+    /// it. A launcher that never sees it still restores terminal state in its
+    /// <c>finally</c> block — the sentinel only makes the restore happen a few
+    /// milliseconds earlier and deterministically rather than racing the
+    /// process exit.
+    /// </summary>
+    public const string HostExitingSentinel = "<<<HOST-EXITING>>>";
+
+    /// <summary>
+    /// Write the optional PTY-6 <see cref="BusySentinel"/> to the interactive
+    /// response stream and flush. Callers MUST only invoke this in
+    /// <see cref="SessionMode.Interactive"/>.
+    /// </summary>
+    public static async Task WriteBusyAsync(Stream stream, CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(stream);
+        var bytes = Utf8NoBom.GetBytes(BusySentinel + "\n");
+        await stream.WriteAsync(bytes, ct).ConfigureAwait(false);
+        await stream.FlushAsync(ct).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Write the PTY-6 <see cref="HostExitingSentinel"/> to the interactive
+    /// response stream and flush. Callers MUST only invoke this in
+    /// <see cref="SessionMode.Interactive"/>, and MUST do so before the host
+    /// process exits so the launcher can restore terminal state in time.
+    /// </summary>
+    public static async Task WriteHostExitingAsync(Stream stream, CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(stream);
+        var bytes = Utf8NoBom.GetBytes(HostExitingSentinel + "\n");
+        await stream.WriteAsync(bytes, ct).ConfigureAwait(false);
+        await stream.FlushAsync(ct).ConfigureAwait(false);
     }
 
     /// <summary>

@@ -648,4 +648,68 @@ public class HostProtocolTests
         Assert.Equal(new[] { "legacy-1", "legacy-2" }, stdout);
         Assert.Empty(stderr);
     }
+
+    // -- PTY-6 ----------------------------------------------------------------
+    // Foreground/background handoff lifecycle events: busy + host-exiting.
+    // These follow PTY-5's <<<EVENT>>> wire-token convention and are emitted
+    // ONLY in SessionMode.Interactive (back-compat: a framed-mode launcher
+    // never sees them).
+
+    /// <summary>
+    /// PTY-6 minor protocol bump: version 2 → 3. The bump is what advertises
+    /// the new busy / host-exiting lifecycle events to a peer; it must be
+    /// reflected in the health payload so a launcher can detect a PTY-6-capable
+    /// host.
+    /// </summary>
+    [Fact]
+    public void ProtocolVersion_BumpedToThreeForPty6()
+    {
+        Assert.Equal(3, HostProtocol.ProtocolVersion);
+        Assert.Contains("protocol=3", HostProtocol.HealthPayload);
+    }
+
+    /// <summary>
+    /// PTY-6 busy sentinel exact wire format: <c>&lt;&lt;&lt;BUSY&gt;&gt;&gt;\n</c>.
+    /// Pinned so a future refactor that changes the token breaks loudly.
+    /// </summary>
+    [Fact]
+    public async Task WriteBusy_EmitsExpectedWireBytes()
+    {
+        await using var ms = new MemoryStream();
+        await HostProtocol.WriteBusyAsync(ms);
+        var wire = Utf8NoBom.GetString(ms.ToArray());
+        Assert.Equal("<<<BUSY>>>\n", wire);
+        Assert.Equal("<<<BUSY>>>", HostProtocol.BusySentinel);
+    }
+
+    /// <summary>
+    /// PTY-6 host-exiting sentinel exact wire format:
+    /// <c>&lt;&lt;&lt;HOST-EXITING&gt;&gt;&gt;\n</c>. Pinned for the same reason.
+    /// </summary>
+    [Fact]
+    public async Task WriteHostExiting_EmitsExpectedWireBytes()
+    {
+        await using var ms = new MemoryStream();
+        await HostProtocol.WriteHostExitingAsync(ms);
+        var wire = Utf8NoBom.GetString(ms.ToArray());
+        Assert.Equal("<<<HOST-EXITING>>>\n", wire);
+        Assert.Equal("<<<HOST-EXITING>>>", HostProtocol.HostExitingSentinel);
+    }
+
+    /// <summary>
+    /// The PTY-6 sentinels follow PTY-5's <c>&lt;&lt;&lt;EVENT&gt;&gt;&gt;</c>
+    /// convention and, like the EXIT sentinel, contain characters
+    /// (<c>&lt;</c>, <c>&gt;</c>, <c>-</c>) outside the base64 alphabet — so a
+    /// real base64 data frame can never be mistaken for one of them.
+    /// </summary>
+    [Fact]
+    public void Pty6Sentinels_AreOutsideBase64Alphabet()
+    {
+        foreach (var sentinel in new[] { HostProtocol.BusySentinel, HostProtocol.HostExitingSentinel })
+        {
+            Assert.DoesNotMatch("^[A-Za-z0-9+/=]+$", sentinel);
+            Assert.StartsWith("<<<", sentinel);
+            Assert.EndsWith(">>>", sentinel);
+        }
+    }
 }

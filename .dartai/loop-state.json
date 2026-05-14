@@ -1,9 +1,9 @@
 {
   "status": "paused",
-  "iterations": 20,
+  "iterations": 21,
   "spawns": 12,
   "started_at": "2026-05-12T20:33:00Z",
-  "last_iteration_at": "2026-05-14T19:03:50.733148+00:00",
+  "last_iteration_at": "2026-05-14T22:30:00+00:00",
   "last_subagent": "DESKTOP-NPIOPS6-7606",
   "loop_task_id": "AEACP6UqDUBr",
   "dartboard": "Personal/ps-bash",
@@ -713,6 +713,29 @@
         "src/PsBash.Shell.Tests/Pty/SignalForwarderTests.cs",
         "docs/specs/pty.md"
       ]
+    },
+    {
+      "task_id": "Es1T4bdIqODl",
+      "iteration": 2,
+      "status": "completed",
+      "started_at": "2026-05-14T19:00:00Z",
+      "completed_at": "2026-05-14T22:30:00Z",
+      "phase_completed": "phase-9",
+      "failed_phase": null,
+      "files_changed": 4,
+      "tests_added": 21,
+      "plan_adjustments": 2,
+      "completion_summary": "PTY-6 foreground/background handoff protocol. HostProtocol gained BusySentinel (<<<BUSY>>>) + HostExitingSentinel (<<<HOST-EXITING>>>) + WriteBusyAsync/WriteHostExitingAsync, minor protocol bump 2->3 (back-compat: events emitted only in SessionMode.Interactive, exactly like PTY-4's PROMPT-READY). New launcher-side HandoffStateMachine: pure, unit-testable 3-state machine (HostRunning/PromptReady/HostExiting) consuming busy/prompt-ready/host-exiting events; level-triggered so duplicate prompt-ready is idempotent (no-op), host-exiting terminal. 16 HandoffStateMachine tests + 5 HostProtocol PTY-6 tests, all green; 62 Core.Tests protocol+metadata tests green (version bump did not break HostOwnership/HostMetadata); launcher AOT publish green with /warnaserror.",
+      "failure_reason": null,
+      "fix_task_created": false,
+      "fix_task_id": null,
+      "files": [
+        "src/PsBash.Core/Runtime/Ipc/HostProtocol.cs",
+        "src/PsBash.Core.Tests/Runtime/Ipc/HostProtocolTests.cs",
+        "src/PsBash.Shell/Pty/HandoffStateMachine.cs",
+        "src/PsBash.Shell.Tests/Pty/HandoffStateMachineTests.cs"
+      ],
+      "notes": "Plan adjustment 1: task text says 'InteractiveShell consumes the event' but PTY-3 placed the terminal-mode toggle (TerminalMode) in the LAUNCHER around the PTY pump, not InteractiveShell (which runs in the host and has no access to the launcher's tty). prompt-ready exists precisely so the launcher can leave raw mode. HandoffStateMachine is therefore launcher-side (PsBash.Shell), matching PTY-3's landed shape. Plan adjustment 2: 'busy' emission wiring and 'host-exiting' emission wiring into a live host-exit path are deferred-with-note: the current PTY interactive path is a raw byte-pump with NO framed IPC channel (per SignalForwarder's own comment re PTY-5's SignalDeliveredPrefix), so there is no IPC stream to emit lifecycle events onto in that path. PTY-6 lands the protocol surface (constants + write helpers + version bump) and the launcher-side consumer (HandoffStateMachine) as the deterministic, testable deliverable - same pattern PTY-5 used for SignalDeliveredPrefix (wire token defined, emission deferred to a launcher that runs a framed interactive channel). Baseline note: 11 AgentPatternEndToEndTests/PromptRenderingIntegrationTests failures in PsBash.Shell.Tests are a PRE-EXISTING WSL2 baseline (confirmed by clean `git stash -u` baseline - 3/3 sampled tests fail identically on clean main; root cause is the emitter's /tmp->$env:TEMP path transform with non-canonicalized env, unrelated to PTY-6). Zero new failures introduced."
     }
   ],
   "interrupted_at": null,
