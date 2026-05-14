@@ -82,16 +82,29 @@ internal sealed class SdkRunspace : IAsyncDisposable
         // surfaced a host-startup deadlock on Windows pwsh 7.x SDK that wedged even
         // simple `echo hi` invocations. Left for a future change with deeper
         // investigation; documented here so the gap is not silently rediscovered.
-        ps.AddScript(@"
-$__m = Get-Module PsBash -ListAvailable -ErrorAction SilentlyContinue |
-    Sort-Object Version -Descending | Select-Object -First 1
-if ($__m) {
-    $__dll = Join-Path (Split-Path $__m.Path) 'PsBash.Cmdlets.dll'
-    if (Test-Path $__dll) {
-        Import-Module $__dll -Force -ErrorAction SilentlyContinue -DisableNameChecking
-    }
-}
-Remove-Variable -Name __m, __dll -ErrorAction SilentlyContinue
+        // First try the binary shipped beside ps-bash-host (post RC-3:
+        // Host.csproj copies PsBash.Cmdlets.dll into its OutDir). This works
+        // in CI and dev without `Install-Module PsBash` ever running. Fall
+        // back to the installed-PSGallery path so end users on the published
+        // module continue to load the cmdlets from their installed location.
+        var hostDir = Path.GetDirectoryName(typeof(SdkRunspace).Assembly.Location)
+            ?? AppContext.BaseDirectory;
+        var localCmdlets = Path.Combine(hostDir, "PsBash.Cmdlets.dll");
+        var localCmdletsLiteral = localCmdlets.Replace("'", "''");
+        ps.AddScript($@"
+if (Test-Path '{localCmdletsLiteral}') {{
+    Import-Module '{localCmdletsLiteral}' -Force -ErrorAction SilentlyContinue -DisableNameChecking
+}} else {{
+    $__m = Get-Module PsBash -ListAvailable -ErrorAction SilentlyContinue |
+        Sort-Object Version -Descending | Select-Object -First 1
+    if ($__m) {{
+        $__dll = Join-Path (Split-Path $__m.Path) 'PsBash.Cmdlets.dll'
+        if (Test-Path $__dll) {{
+            Import-Module $__dll -Force -ErrorAction SilentlyContinue -DisableNameChecking
+        }}
+    }}
+    Remove-Variable -Name __m, __dll -ErrorAction SilentlyContinue
+}}
 ").Invoke();
         ps.Commands.Clear();
 

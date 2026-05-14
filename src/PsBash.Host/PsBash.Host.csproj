@@ -16,6 +16,25 @@
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="..\PsBash.Core\PsBash.Core.csproj" />
+    <!-- Build the Cmdlets project before Host so the file copy below sees it.
+         ReferenceOutputAssembly=false because Host doesn't link the cmdlets
+         at compile time; it loads them at runtime via Import-Module. -->
+    <ProjectReference Include="..\PsBash.Cmdlets\PsBash.Cmdlets.csproj"
+                      ReferenceOutputAssembly="false"
+                      Private="false" />
+  </ItemGroup>
+
+  <!-- Stage PsBash.Cmdlets.dll (net10.0) into the Host output AND mark it as
+       Content so it flows into downstream test projects' bin folders via
+       transitive ProjectReference. The host's SdkRunspace.Create probes for
+       this file beside its own assembly and Import-Module's it directly so
+       no installed PsBash module is required (in CI or in Host.Tests). -->
+  <ItemGroup>
+    <Content Include="..\PsBash.Cmdlets\bin\$(Configuration)\net10.0\PsBash.Cmdlets.dll"
+             Link="PsBash.Cmdlets.dll"
+             CopyToOutputDirectory="PreserveNewest"
+             Visible="false"
+             Condition="Exists('..\PsBash.Cmdlets\bin\$(Configuration)\net10.0\PsBash.Cmdlets.dll')" />
   </ItemGroup>
   <ItemGroup>
     <PackageReference Include="Microsoft.PowerShell.SDK" Version="7.4.*">
