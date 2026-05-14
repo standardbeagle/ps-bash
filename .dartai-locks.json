@@ -1,3 +1,17 @@
 {
-  "claims": {}
+  "claims": {
+    "DoIYh3RVWpCI": {
+      "runner_instance_id": "DESKTOP-NPIOPS6-7606",
+      "runner_email": "andybrummer@standardbeagle.com",
+      "claimed_at": "2026-05-14T07:00:00Z",
+      "agent_id": "DESKTOP-NPIOPS6-7606",
+      "parent_loop_id": "dqjNTUoPZjCa",
+      "purpose": "REFACTOR-2 Wave 5: migrate Invoke-Bash* from psm1 to PsBash.Cmdlets binary (Phase 1)",
+      "source_event": {
+        "loop_id": "dqjNTUoPZjCa",
+        "task_id": "DoIYh3RVWpCI",
+        "conversation_id": null
+      }
+    }
+  }
 }
