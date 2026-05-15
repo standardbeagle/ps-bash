@@ -332,7 +332,7 @@ runtime command instead of being serialized to a temp file.
 | `Invoke-BashTail` | `Invoke-ProcessSubPipeline` | stdin-substitutable stream consumer |
 | `Invoke-BashSort` | `Invoke-ProcessSubPipeline` | stdin-substitutable stream consumer |
 | `Invoke-BashUniq` | `Invoke-ProcessSubPipeline` | stdin-substitutable stream consumer |
-| `Invoke-BashWc` | `Invoke-ProcessSubPipeline` | stdin-substitutable stream consumer |
+| `Invoke-BashWc` | `Invoke-ProcessSub` | output format depends on filename presence — not truly stdin-substitutable (RC-8b) |
 | `Invoke-BashDiff` | `Invoke-ProcessSub` | multi-argument, seekable file consumer |
 | `Invoke-BashGrep` with `-f <(...)` | `Invoke-ProcessSub` | process substitution is a pattern file, not stdin |
 | All other mapped commands | `Invoke-ProcessSub` | fallback until explicitly classified |
@@ -348,7 +348,12 @@ Current support is intentionally 80/20:
   on `Invoke-ProcessSub`. This is usually correct, but it is not streaming.
 - Tier 2 is the pipeline-object route for known mapped commands where a single
   `<(...)` operand is equivalent to stdin. Today that allowlist is `head`,
-  `tail`, `sort`, `uniq`, and `wc`.
+  `tail`, `sort`, and `uniq`. `wc` was removed from this allowlist in RC-8b
+  because `wc`'s output format echoes the operand filename when invoked with a
+  file argument (`100 /dev/fd/63`) but emits count-only output for stdin
+  (`100`). The two shapes are not byte-equivalent, so routing `wc` through the
+  pipeline route would silently change its output relative to bash. `wc` stays
+  on the Tier-1 temp-file route so a filename is present.
 - `diff`, `comm`, `cmp`, `grep -f <(...)`, and similar file-oriented consumers
   stay on the temp-file route. Their operands are file paths or pattern files,
   not generic stdin streams.

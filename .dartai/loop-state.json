@@ -920,6 +920,23 @@
       "failure_reason": null,
       "fix_task_created": false,
       "fix_task_id": null
+    },
+    {
+      "task_id": "qY4bsPtXVmf6",
+      "iteration": 28,
+      "status": "completed",
+      "started_at": "2026-05-15T06:00:00Z",
+      "completed_at": "2026-05-15T07:00:00Z",
+      "phase_completed": "phase-9",
+      "failed_phase": null,
+      "files_changed": 3,
+      "tests_added": 0,
+      "plan_adjustments": 0,
+      "completion_summary": "RC-8b: reclassified wc OFF the Tier-2 process-sub pipeline allowlist back to Tier-1 temp-file route (Option C). wc output format depends on file-vs-stdin mode (file echoes filename, stdin does not), so stdin-substitutable assumption fails. Canonicalizer collapses bash /dev/fd/N and ps-bash temp-file proc-sub paths to <PROC_SUB> so byte-diff is stable. Verified ProcessSub_TempFile_WcSingleLargeInput GREEN; all 11 ProcessSub tests pass; all 222 differential tests pass; full ./scripts/test.sh exit 0. Resumed prior truncated executor a51efbdf6e74cf1d3.",
+      "failure_reason": null,
+      "fix_task_created": false,
+      "fix_task_id": null,
+      "resumed": true
     }
   ],
   "interrupted_at": null,

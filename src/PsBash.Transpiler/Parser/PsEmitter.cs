@@ -3240,8 +3240,15 @@ public static class PsEmitter
         "Invoke-BashHead" or
         "Invoke-BashTail" or
         "Invoke-BashSort" or
-        "Invoke-BashUniq" or
-        "Invoke-BashWc";
+        "Invoke-BashUniq";
+        // RC-8b: Invoke-BashWc intentionally NOT on this allowlist. wc's
+        // output format depends on whether input came from a named file
+        // (echoes the filename: "100 file.txt") versus stdin (count only:
+        // "100"). The "stdin-substitutable" assumption that justifies the
+        // Tier-2 pipeline-object route does not hold for wc — routing it
+        // through the pipeline would silently change its output shape
+        // relative to bash's "<count> /dev/fd/N". Keep wc on the Tier-1
+        // temp-file route so a filename is present (even if path differs).
 
     private static bool NeedsPassthroughQuoting(string arg)
     {
