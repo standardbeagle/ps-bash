@@ -148,6 +148,49 @@ internal static class JobObjectWatchdog
         catch { return 0; }
     }
 
+    /// <summary>
+    /// Cross-platform parent-PID lookup by PID. Returns 0 if unavailable.
+    /// Used by <c>ps-bash host gc</c> to identify orphaned ps-bash-host
+    /// processes whose launcher is dead.
+    /// </summary>
+    /// <remarks>
+    /// Windows: <see cref="NtQueryInformationProcess"/> on the process handle.
+    /// Linux: parse field 4 of <c>/proc/{pid}/stat</c>. The exe name (field 2)
+    ///   is wrapped in parentheses and may itself contain spaces and parens,
+    ///   so we locate the LAST closing paren and split after that.
+    /// macOS: not implemented (returns 0). The macOS gc path falls back to a
+    ///   conservative "no orphans found" answer; users can <c>kill</c> manually.
+    /// </remarks>
+    public static int GetParentProcessIdByPid(int pid)
+    {
+        if (pid <= 0) return 0;
+        if (OperatingSystem.IsWindows())
+        {
+            try
+            {
+                using var p = Process.GetProcessById(pid);
+                return GetParentProcessId(p.Handle);
+            }
+            catch { return 0; }
+        }
+        if (OperatingSystem.IsLinux())
+        {
+            try
+            {
+                var statText = File.ReadAllText($"/proc/{pid}/stat");
+                int lastParen = statText.LastIndexOf(')');
+                if (lastParen < 0 || lastParen + 2 >= statText.Length) return 0;
+                // After ")" comes: " S ppid ..." (state then ppid)
+                var rest = statText[(lastParen + 2)..];
+                var fields = rest.Split(' ');
+                if (fields.Length < 2) return 0;
+                return int.TryParse(fields[1], out var ppid) ? ppid : 0;
+            }
+            catch { return 0; }
+        }
+        return 0;
+    }
+
     // ------------------------- P/Invoke -------------------------
 
     private const uint JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE = 0x2000;

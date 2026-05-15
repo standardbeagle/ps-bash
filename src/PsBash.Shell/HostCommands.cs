@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Net.Sockets;
 using PsBash.Core.Runtime;
 using PsBash.Core.Runtime.Ipc;
@@ -22,6 +23,7 @@ internal static class HostCommands
             "status" => await StatusAsync(ct).ConfigureAwait(false),
             "shutdown" => await ShutdownAsync(ParseDeadline(args.AsSpan(2)), waitForExit: true, ct).ConfigureAwait(false),
             "restart" => await RestartAsync(ParseDeadline(args.AsSpan(2)), ct).ConfigureAwait(false),
+            "gc" => GcOrphans(ParseGcFlags(args.AsSpan(2))),
             "-h" or "--help" or "help" => Help(),
             _ => Unknown(args[1]),
         };
@@ -83,6 +85,99 @@ internal static class HostCommands
         HostMetadata.Remove(scheme, endpoint);
         IpcTransportFactory.RetireEndpoint(scheme, endpoint);
         return 0;
+    }
+
+    /// <summary>
+    /// Enumerates running ps-bash-host processes and kills those whose parent
+    /// launcher process is dead. Belt-and-suspenders cleanup for cases where
+    /// (a) the launcher crashed before its <see cref="IpcWorker"/> DisposeAsync
+    /// ran AND the host's ParentDeathWatcher poll has not yet fired, or
+    /// (b) the Windows Job Object KillOnJobClose did not propagate
+    /// (e.g. host was started outside a launcher's job).
+    ///
+    /// With <c>--force</c>, kills ALL ps-bash-host processes regardless of
+    /// parent liveness. Without flags, only orphans (dead parent) are killed.
+    /// </summary>
+    /// <remarks>
+    /// We identify orphan-vs-live by the host's OS-recorded parent PID, not by
+    /// parsing <c>--launcher-pid</c> from argv. The launcher spawn path makes
+    /// the launcher the host's direct parent, so the OS PPID is authoritative
+    /// and avoids per-platform command-line parsing.
+    /// </remarks>
+    internal static int GcOrphans(GcFlags flags)
+    {
+        int killed = 0;
+        int kept = 0;
+        int errors = 0;
+        foreach (var p in Process.GetProcessesByName("ps-bash-host"))
+        {
+            try
+            {
+                int ppid = JobObjectWatchdog.GetParentProcessIdByPid(p.Id);
+                bool parentAlive = ppid > 0 && ProcessExists(ppid);
+                bool shouldKill = flags.Force || !parentAlive;
+
+                if (flags.DryRun)
+                {
+                    var verdict = shouldKill ? "would-kill" : "live";
+                    Console.WriteLine($"{verdict}: ps-bash-host pid={p.Id} ppid={ppid}");
+                    if (shouldKill) killed++; else kept++;
+                    continue;
+                }
+
+                if (shouldKill)
+                {
+                    try { p.Kill(entireProcessTree: true); killed++; }
+                    catch (Exception ex)
+                    {
+                        Console.Error.WriteLine($"gc: failed to kill pid {p.Id}: {ex.Message}");
+                        errors++;
+                    }
+                }
+                else
+                {
+                    kept++;
+                }
+            }
+            catch (Exception ex)
+            {
+                Console.Error.WriteLine($"gc: error inspecting pid {p.Id}: {ex.Message}");
+                errors++;
+            }
+            finally { p.Dispose(); }
+        }
+        var action = flags.DryRun ? "would-kill" : "killed";
+        Console.WriteLine($"gc: {action}={killed} kept={kept} errors={errors}");
+        return errors == 0 ? 0 : 1;
+    }
+
+    private static bool ProcessExists(int pid)
+    {
+        if (pid <= 0) return false;
+        try
+        {
+            using var p = Process.GetProcessById(pid);
+            return !p.HasExited;
+        }
+        catch (ArgumentException) { return false; }
+        catch (InvalidOperationException) { return false; }
+    }
+
+    internal readonly record struct GcFlags(bool Force, bool DryRun);
+
+    private static GcFlags ParseGcFlags(ReadOnlySpan<string> args)
+    {
+        bool force = false;
+        bool dryRun = false;
+        for (int i = 0; i < args.Length; i++)
+        {
+            switch (args[i])
+            {
+                case "--force": case "-f": force = true; break;
+                case "--dry-run": case "-n": dryRun = true; break;
+            }
+        }
+        return new GcFlags(force, dryRun);
     }
 
     private static async Task<int> RestartAsync(int deadlineMs, CancellationToken ct)
@@ -196,6 +291,7 @@ internal static class HostCommands
         Console.Error.WriteLine("usage: ps-bash host status");
         Console.Error.WriteLine("       ps-bash host shutdown [--deadline-ms N]");
         Console.Error.WriteLine("       ps-bash host restart [--deadline-ms N]");
+        Console.Error.WriteLine("       ps-bash host gc [--force] [--dry-run]");
     }
 
     private static string? ResolveHostBinary()

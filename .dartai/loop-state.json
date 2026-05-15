@@ -1,10 +1,10 @@
 {
   "status": "paused",
-  "iterations": 8,
+  "iterations": 10,
   "spawns": 14,
   "started_at": "2026-05-12T20:33:00Z",
-  "last_iteration_at": "2026-05-15T08:52:17Z",
-  "last_subagent": "dartai-task-executor",
+  "last_iteration_at": "2026-05-15T14:00:00Z",
+  "last_subagent": "task-executor",
   "loop_task_id": "AEACP6UqDUBr",
   "dartboard": "Personal/ps-bash",
   "runner_instance_id": "DESKTOP-NPIOPS6-7606",
@@ -1027,6 +1027,24 @@
       "fix_task_id": null,
       "branch": "main",
       "notes": "Plan adjustment: rejected the CollectionDefinition('HostWorker') option after first attempt caused SdkRunspace.ModuleLoadCount race vs the existing [Collection('SdkHost')] Server tests running in a parallel collection. Final design instantiates the fixture as a per-class IAsyncLifetime field, keeping SdkWorkerTests inside the existing SdkHost collection."
+    },
+    {
+      "task_id": "E84SFIVCE6zL",
+      "iteration": 10,
+      "status": "completed",
+      "started_at": "2026-05-15T13:00:00Z",
+      "completed_at": "2026-05-15T14:00:00Z",
+      "phase_completed": "phase-9",
+      "failed_phase": null,
+      "files_changed": 3,
+      "tests_added": 2,
+      "plan_adjustments": 0,
+      "completion_summary": "Stale ps-bash-host cleanup: continued prior agent work. JobObjectWatchdog gained cross-platform GetParentProcessIdByPid (Windows NtQueryInformationProcess + Linux /proc/{pid}/stat). HostCommands gained ps-bash host gc [--force] [--dry-run] subcommand that enumerates ps-bash-host processes and kills orphans (parent launcher dead). CanaryHostGcTests added: OrphanHost_ParentDeathWatcher_SelfTerminatesWithin10s + HostGc_DryRun_ExitsZeroWithSummary. Both pass on Linux. AOT publish clean. Windows Job Object KillOnJobClose path was already in place from REFACTOR-2IES2I4LPSNc; this iteration filled the gc admin subcommand + canary regression test (qa-rubric Directive 8/13).",
+      "failure_reason": null,
+      "fix_task_created": false,
+      "fix_task_id": null,
+      "branch": "main",
+      "notes": "Re-assessment: REFACTOR-7 (per-invocation host + Process.Kill on Dispose) and the earlier Job Object watchdog (2IES2I4LPSNc) had already landed the host-side defenses. Remaining gaps were the cross-platform PPID lookup, the ps-bash host gc admin subcommand, and the canary regression test. Linux-verified: Canary gc dry-run + parent-death-watcher. Windows-CI-gated: Job Object KillOnJobClose behavioral verification."
     }
   ],
   "interrupted_at": null,
