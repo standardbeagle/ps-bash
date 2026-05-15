@@ -1,17 +1,3 @@
 {
-  "claims": {
-    "EZJDr655FXi8": {
-      "runner_instance_id": "DESKTOP-NPIOPS6-7606",
-      "runner_email": "andybrummer@standardbeagle.com",
-      "claimed_at": "2026-05-15T03:00:00Z",
-      "agent_id": "DESKTOP-NPIOPS6-7606",
-      "parent_loop_id": "PA7u9PKOwWCY",
-      "purpose": "Phase F1: RC-8c unknown-cmd exit 127 + 2>$null stderr suppression",
-      "source_event": {
-        "loop_id": "PA7u9PKOwWCY",
-        "task_id": "EZJDr655FXi8",
-        "conversation_id": null
-      }
-    }
-  }
+  "claims": {}
 }

@@ -27,3 +27,37 @@
 if ($PsBashCmdletsDllPath -and (Test-Path $PsBashCmdletsDllPath)) {
     Import-Module $PsBashCmdletsDllPath -Force -ErrorAction SilentlyContinue -DisableNameChecking
 }
+
+# RC-8c: bash-style unknown-command handling.
+#
+# Bash semantics:
+#   - Unknown command → exit code 127.
+#   - stderr message "bash: <name>: command not found" — suppressible by `2>/dev/null`.
+#   - Shell continues to next statement (unless `set -e`).
+#
+# PowerShell default: CommandNotFoundException is a terminating .NET exception that
+# does NOT set $LASTEXITCODE, and the resulting ErrorRecord is written at a scope
+# that the transpiled `2>$null` on a simple command does not suppress.
+#
+# Fix: install a CommandNotFoundAction handler at the runspace level. When PS fails
+# to resolve a command, we substitute a scriptblock that:
+#   1. Writes a bash-formatted error to the (redirectable) error stream via Write-Error.
+#   2. Sets $global:LASTEXITCODE = 127 so `$?` and subsequent `echo $?` see 127.
+# The substitute runs in place of the missing command, so `2>$null` on the simple
+# command still applies to the Write-Error output — `2>/dev/null` correctly silences it.
+$ExecutionContext.InvokeCommand.CommandNotFoundAction = {
+    param($CommandName, $EventArgs)
+    # Skip if another handler already supplied a substitute.
+    if ($EventArgs.StopSearch) { return }
+    # Skip empty / null names (e.g. lookup probes from completion).
+    if ([string]::IsNullOrEmpty($CommandName)) { return }
+    # Capture the name into the scriptblock closure so the substitute knows
+    # which command was missing.
+    $name = $CommandName
+    $EventArgs.CommandScriptBlock = {
+        $msg = "bash: ${name}: command not found"
+        Write-Error -Message $msg -Category ObjectNotFound -TargetObject $name
+        $global:LASTEXITCODE = 127
+    }.GetNewClosure()
+    $EventArgs.StopSearch = $true
+}.GetNewClosure()
