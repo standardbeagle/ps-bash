@@ -1,17 +1,3 @@
 {
-  "claims": {
-    "bmNomMHKlsan": {
-      "runner_instance_id": "DESKTOP-NPIOPS6-7606",
-      "runner_email": "andybrummer@standardbeagle.com",
-      "claimed_at": "2026-05-15T04:00:00Z",
-      "agent_id": "DESKTOP-NPIOPS6-7606",
-      "parent_loop_id": "PA7u9PKOwWCY",
-      "purpose": "Phase F2: RC-8a source <(...) scope persistence - env/func defs must survive",
-      "source_event": {
-        "loop_id": "PA7u9PKOwWCY",
-        "task_id": "bmNomMHKlsan",
-        "conversation_id": null
-      }
-    }
-  }
+  "claims": {}
 }

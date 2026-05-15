@@ -70,7 +70,7 @@ FormatsToProcess = 'PsBash.Format.ps1xml'
 # NestedModules = @()
 
 # Functions to export from this module, for best performance, do not use wildcards and do not delete the entry, use an empty array if there are no functions to export.
-FunctionsToExport = 'Set-BashErrorMode', 'Invoke-ProcessSub', 'Invoke-ProcessSubSource', 'Invoke-ProcessSubString', 'Invoke-ProcessSubPipeline',
+FunctionsToExport = 'Set-BashErrorMode', 'Invoke-ProcessSub', 'Invoke-ProcessSubString', 'Invoke-ProcessSubPipeline',
                # Invoke-BashPrintf migrated to a binary cmdlet in
                # PsBash.Cmdlets.dll (REFACTOR-2 Phase 1b) — no longer a psm1
                # function. Invoke-BashEcho stays a psm1 function: its -e/-n/-E

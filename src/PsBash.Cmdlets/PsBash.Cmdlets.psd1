@@ -62,7 +62,12 @@ CmdletsToExport = @(
     'Invoke-BashLs',
     # REFACTOR-2 Phase 3: sed migrated from PsBash.psm1 (with its
     # ConvertFrom-SedExpression / Test-SedAddress helpers reimplemented in C#).
-    'Invoke-BashSed'
+    'Invoke-BashSed',
+    # RC-8a: Invoke-ProcessSubSource migrated from PsBash.psm1. The psm1
+    # function introduced a script function scope, so source <(...) env vars
+    # and function defs were discarded on return. The cmdlet has no script
+    # scope, so InvokeScript(useNewScope:false) targets the eval pipeline.
+    'Invoke-ProcessSubSource'
 )
 
 VariablesToExport = @()

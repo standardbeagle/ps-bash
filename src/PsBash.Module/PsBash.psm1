@@ -118,43 +118,13 @@ function Invoke-ProcessSub {
     }
 }
 
-# Source-capture variant: runs the producer scriptblock, collects its output
-# as bash text, transpiles it to PowerShell via BashTranspiler, and executes
-# the result in the caller's scope (source semantics). Used by the emitter for
-# 'source <(cmd)'.  Requires [PsBash.Core.Transpiler.BashTranspiler] to be
-# available in the AppDomain (true when running inside ps-bash-host or when
-# PsBash.Core.dll has been loaded via Add-Type by the worker init script).
-function Invoke-ProcessSubSource {
-    [CmdletBinding()]
-    param(
-        [Parameter(Mandatory)]
-        [scriptblock]$Command
-    )
-    $output = & $Command
-    $sb = [System.Text.StringBuilder]::new()
-    foreach ($item in $output) {
-        [void]$sb.Append((Get-BashText -InputObject $item).TrimEnd("`r`n"))
-        [void]$sb.Append("`n")
-    }
-    $bashContent = $sb.ToString()
-    if ([string]::IsNullOrWhiteSpace($bashContent)) { return }
-    try {
-        $psCode = [PsBash.Core.Transpiler.BashTranspiler]::Transpile(
-            $bashContent,
-            [PsBash.Core.Transpiler.TranspileContext]::Eval)
-    } catch {
-        [Console]::Error.WriteLine("ps-bash: source <(...): transpile error: $_")
-        $global:LASTEXITCODE = 1
-        return
-    }
-    if (-not $psCode) { return }
-    # Promote function definitions to global scope so they persist after this
-    # function returns (bash source semantics: defined names survive in caller scope).
-    $psCode = $psCode -replace '\bfunction\s+(\w+)\b', 'function global:$1'
-    # Execute the transpiled PowerShell in the global scope so env vars and
-    # functions are visible to subsequent commands in the worker loop.
-    $PSCmdlet.InvokeCommand.InvokeScript($false, [scriptblock]::Create($psCode), $null, $null)
-}
+# RC-8a: Invoke-ProcessSubSource was migrated from this psm1 to a binary
+# cmdlet in PsBash.Cmdlets (InvokeProcessSubSourceCommand.cs). As a psm1
+# function it introduced a script function scope, so source <(...) env vars
+# and function defs landed in the function/module scope and were discarded
+# on return. Cmdlets do not push a script scope frame, so
+# InvokeCommand.InvokeScript(useNewScope:false) from the cmdlet targets the
+# eval pipeline's scope — exactly where bash 'source' wants the names to land.
 
 # String-capture variant: runs the producer scriptblock and returns its
 # combined bash text output as a single string. Useful for consumers that

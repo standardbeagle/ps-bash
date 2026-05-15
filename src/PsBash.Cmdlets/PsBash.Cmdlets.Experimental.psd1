@@ -54,7 +54,10 @@ CmdletsToExport = @(
     # Get-BashLsProviderEntries; the cmdlet owns Tier 2 + sort + format.
     'Invoke-BashLs',
     # REFACTOR-2 Phase 3: sed migrated from PsBash.psm1.
-    'Invoke-BashSed'
+    'Invoke-BashSed',
+    # RC-8a: Invoke-ProcessSubSource migrated from PsBash.psm1 to fix
+    # source <(...) scope persistence — see InvokeProcessSubSourceCommand.cs.
+    'Invoke-ProcessSubSource'
 )
 
 VariablesToExport = @()
