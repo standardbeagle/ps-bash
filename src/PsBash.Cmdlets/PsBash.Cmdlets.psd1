@@ -63,6 +63,10 @@ CmdletsToExport = @(
     # REFACTOR-2 Phase 3: sed migrated from PsBash.psm1 (with its
     # ConvertFrom-SedExpression / Test-SedAddress helpers reimplemented in C#).
     'Invoke-BashSed',
+    # REFACTOR-2 Phase F6: jq migrated from PsBash.psm1 (the *-Jq* helper
+    # web reimplemented in C# inside JqEngine; ConvertTo-JqJson +
+    # Invoke-JqFilter remain as psm1 shims for the still-psm1 Invoke-BashYq).
+    'Invoke-BashJq',
     # RC-8a: Invoke-ProcessSubSource migrated from PsBash.psm1. The psm1
     # function introduced a script function scope, so source <(...) env vars
     # and function defs were discarded on return. The cmdlet has no script

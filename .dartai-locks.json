@@ -1,17 +1,3 @@
 {
-  "claims": {
-    "D6d8LpBU1bUz": {
-      "runner_instance_id": "DESKTOP-NPIOPS6-7606",
-      "runner_email": "andybrummer@standardbeagle.com",
-      "claimed_at": "2026-05-15T09:00:00Z",
-      "agent_id": "DESKTOP-NPIOPS6-7606",
-      "parent_loop_id": "PA7u9PKOwWCY",
-      "purpose": "Phase F6: migrate Invoke-BashJq to binary cmdlet (REFACTOR-2 Phase 3 follow-on)",
-      "source_event": {
-        "loop_id": "PA7u9PKOwWCY",
-        "task_id": "D6d8LpBU1bUz",
-        "conversation_id": null
-      }
-    }
-  }
+  "claims": {}
 }

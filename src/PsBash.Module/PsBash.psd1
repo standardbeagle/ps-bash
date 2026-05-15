@@ -107,7 +107,12 @@ FunctionsToExport = 'Set-BashErrorMode', 'Invoke-ProcessSub', 'Invoke-ProcessSub
                'Invoke-BashDiff', 'Invoke-BashComm', 'Invoke-BashColumn',
                'Invoke-BashJoin', 'Invoke-BashPaste',
                'Invoke-BashTee', 'Invoke-BashXargs',
-               'Invoke-BashJq', 'ConvertTo-JqJson', 'Invoke-JqFilter',
+               # Invoke-BashJq (REFACTOR-2 Phase F6) migrated to a binary
+               # cmdlet in PsBash.Cmdlets.dll — no longer a psm1 function.
+               # ConvertTo-JqJson + Invoke-JqFilter remain in psm1 as the
+               # filter engine used by the still-psm1 Invoke-BashYq; their
+               # removal is filed as a follow-on (paired with a yq migration).
+               'ConvertTo-JqJson', 'Invoke-JqFilter',
                'Invoke-BashDate', 'Convert-DateFormat',
                'Invoke-BashSeq',
                'Invoke-BashExpr',
