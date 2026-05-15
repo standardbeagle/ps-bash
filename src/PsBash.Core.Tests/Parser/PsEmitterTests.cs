@@ -701,7 +701,10 @@ public class PsEmitterTests
     {
         var result = PsEmitter.Transpile("echo $(whoami)");
 
-        Assert.Equal("Invoke-BashEcho $(Invoke-BashWhoami)", result);
+        // RC-8d: command-substitution emit wraps inner output in
+        // `| ForEach-Object { Get-BashText $_ }` so the captured value is the
+        // bash-text payload, never a typed BashObject's default ToString().
+        Assert.Equal("Invoke-BashEcho $(Invoke-BashWhoami | ForEach-Object { Get-BashText $_ })", result);
     }
 
     [Fact]
@@ -709,7 +712,7 @@ public class PsEmitterTests
     {
         var result = PsEmitter.Transpile("echo $(ls | grep foo)");
 
-        Assert.Equal("Invoke-BashEcho $(Invoke-BashLs | Invoke-BashGrep foo)", result);
+        Assert.Equal("Invoke-BashEcho $(Invoke-BashLs | Invoke-BashGrep foo | ForEach-Object { Get-BashText $_ })", result);
     }
 
     [Fact]
@@ -717,7 +720,7 @@ public class PsEmitterTests
     {
         var result = PsEmitter.Transpile("echo `date`");
 
-        Assert.Equal("Invoke-BashEcho $(Invoke-BashDate)", result);
+        Assert.Equal("Invoke-BashEcho $(Invoke-BashDate | ForEach-Object { Get-BashText $_ })", result);
     }
 
     [Fact]
@@ -725,7 +728,7 @@ public class PsEmitterTests
     {
         var result = PsEmitter.Transpile("VAR=$(cat file)");
 
-        Assert.Equal("$env:VAR = \"$(Invoke-BashCat file)\"", result);
+        Assert.Equal("$env:VAR = \"$(Invoke-BashCat file | ForEach-Object { Get-BashText $_ })\"", result);
     }
 
     [Fact]
@@ -733,7 +736,22 @@ public class PsEmitterTests
     {
         var result = PsEmitter.Transpile("echo $(echo $(whoami))");
 
-        Assert.Equal("Invoke-BashEcho $(Invoke-BashEcho $(Invoke-BashWhoami))", result);
+        Assert.Equal("Invoke-BashEcho $(Invoke-BashEcho $(Invoke-BashWhoami | ForEach-Object { Get-BashText $_ }) | ForEach-Object { Get-BashText $_ })", result);
+    }
+
+    /// <summary>
+    /// RC-8d regression: `dir=$(pwd)` must capture the bash-text path string,
+    /// not the typed PwdLine BashObject's default hashtable ToString. The
+    /// emitter wraps user command-substitutions in
+    /// `| ForEach-Object { Get-BashText $_ }` so PowerShell's string
+    /// interpolation receives a plain string instead of `@{BashText=...; Command=pwd}`.
+    /// </summary>
+    [Fact]
+    public void Transpile_AssignmentWithPwdCommandSub_ExtractsBashText_RC8d()
+    {
+        var result = PsEmitter.Transpile("dir=$(pwd)");
+
+        Assert.Equal("$env:dir = \"$(Invoke-BashPwd | ForEach-Object { Get-BashText $_ })\"", result);
     }
 
     [Fact]

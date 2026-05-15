@@ -1870,7 +1870,16 @@ public static class PsEmitter
         WordPart.DoubleQuoted dq => EmitDoubleQuoted(dq),
         WordPart.SimpleVarSub vs => EmitSimpleVar(vs.Name),
         WordPart.BracedVarSub bvs => EmitBracedVar(bvs),
-        WordPart.CommandSub cs => $"$({Emit((Command)cs.Body)})",
+        // RC-8d: wrap user command-substitution output so the captured value is
+        // always the bash text payload, never a typed BashObject's default
+        // hashtable-style ToString(). Without this, `dir=$(pwd)` captures
+        // `@{BashText=/path; Command=pwd}` because PowerShell's string
+        // interpolation calls PSObject.ToString() on the typed PwdLine object,
+        // not its .BashText property. ForEach-Object on an empty pipeline
+        // produces nothing (preserving empty-capture semantics), and a
+        // multi-element pipeline is space-joined by $OFS when interpolated in
+        // a double-quoted context — matching bash IFS default-field-splitting.
+        WordPart.CommandSub cs => $"$({Emit((Command)cs.Body)} | ForEach-Object {{ Get-BashText $_ }})",
         WordPart.ArithSub arith => EmitArithSub(arith),
         WordPart.TildeSub ts => ts.User is null ? "$HOME" : $"~{ts.User}",
         WordPart.GlobPart gp => gp.Pattern,
