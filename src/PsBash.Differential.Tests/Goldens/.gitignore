@@ -1,0 +1,6 @@
+# Runtime-generated golden test artifacts (GUID-suffixed names from
+# GoldenTests.cs). These are dump output from `GoldenAsync_RoundTrip_*` and
+# `GoldenAsync_Mismatch_*` tests, not fixture data. Each run produces new
+# GUIDs; leaving them tracked accretes debris (53 files removed 2026-05-15).
+GoldenMismatch_*.golden.txt
+GoldenRoundTrip_*.golden.txt
