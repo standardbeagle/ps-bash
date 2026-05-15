@@ -1668,10 +1668,13 @@ public class PsEmitterTests
     }
 
     [Fact]
-    public void Transpile_WcWithInputProcessSub_RoutesToPipelineObjectPath()
+    public void Transpile_WcWithInputProcessSub_StaysOnTempFilePath()
     {
+        // RC-8b: wc reclassified off Tier-2 pipeline allowlist back to Tier-1 temp-file.
+        // wc's output format depends on file-vs-stdin mode (file echoes filename, stdin doesn't),
+        // so the stdin-substitutable assumption doesn't hold for wc.
         var result = PsEmitter.Transpile("wc -l <(seq 1 100)");
-        Assert.Equal("Invoke-BashWc -l (Invoke-ProcessSubPipeline { Invoke-BashSeq 1 100 })", result);
+        Assert.Equal("Invoke-BashWc -l (Invoke-ProcessSub { Invoke-BashSeq 1 100 })", result);
     }
 
     [Fact]
