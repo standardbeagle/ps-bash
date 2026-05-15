@@ -1,9 +1,9 @@
 {
   "status": "paused",
-  "iterations": 27,
+  "iterations": 28,
   "spawns": 14,
   "started_at": "2026-05-12T20:33:00Z",
-  "last_iteration_at": "2026-05-15T05:30:00Z",
+  "last_iteration_at": "2026-05-15T05:50:00Z",
   "last_subagent": "DESKTOP-NPIOPS6-7606",
   "loop_task_id": "AEACP6UqDUBr",
   "dartboard": "Personal/ps-bash",
@@ -937,6 +937,27 @@
       "fix_task_created": false,
       "fix_task_id": null,
       "resumed": true
+    },
+    {
+      "task_id": "6bh3OxFUJ1qc",
+      "iteration": 5,
+      "status": "completed",
+      "started_at": "2026-05-15T05:30:00Z",
+      "completed_at": "2026-05-15T05:50:00Z",
+      "phase_completed": "phase-9",
+      "failed_phase": null,
+      "files_changed": 3,
+      "tests_added": 1,
+      "plan_adjustments": 0,
+      "completion_summary": "PTY-9 follow-on: bash read under PTY now blocks. Invoke-BashRead rewritten on [Console]::ReadKey (Read-Host unusable because ExitTrackingHost.ReadLine throws); value also written to env: so subsequent statements see it (emitter renders $var as $env:var). Un-skipped ReadHost_TypedValueReachesVariable test, 5/5 green deterministically.",
+      "failure_reason": null,
+      "fix_task_created": false,
+      "fix_task_id": null,
+      "files": [
+        "src/PsBash.Module/PsBash.psm1",
+        "src/PsBash.Shell.Tests/Pty/PtyTuiParityTests.cs",
+        "docs/specs/emitter-strategy.md"
+      ]
     }
   ],
   "interrupted_at": null,

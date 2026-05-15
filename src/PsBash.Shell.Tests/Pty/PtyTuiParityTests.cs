@@ -22,11 +22,11 @@ namespace PsBash.Shell.Tests.Pty;
 ///     exits immediately under ps-bash's pipe handling (the alt-screen is entered
 ///     and torn down in the same frame, no selection is written). A flaky test is
 ///     worse than a skipped one (Directive 2) — Skip + follow-on.</description></item>
-///   <item><description><b>Read-Host / bash <c>read</c></b>: bash <c>read VAR</c>
-///     transpiles to <c>Read-Host</c>, but under an interactive PTY it does not
-///     block for stdin — it returns immediately and the variable stays empty.
-///     That is a ps-bash interactive-mode bug, not a test-harness issue —
-///     Skip + follow-on bug task.</description></item>
+///   <item><description><b>Read-Host / bash <c>read</c></b>: covered as a real,
+///     deterministic-green test — <c>Invoke-BashRead</c> reads from
+///     <c>[Console]::In.ReadLine()</c> under the interactive PTY so a typed
+///     value reaches the host runspace variable. (Was previously skipped as a
+///     PTY-9 follow-on bug; fixed in this task.)</description></item>
 ///   <item><description><b><c>[Console]::ReadKey()</c></b>: raw PowerShell does
 ///     not transpile through the bash front-end (ps-bash is a bash shell), so
 ///     there is no in-band way to run a <c>ReadKey</c> probe script today —
@@ -295,28 +295,48 @@ public class PtyTuiParityTests
         await Task.CompletedTask;
     }
 
-    // ── Read-Host / bash read — skipped, follow-on filed ──────────────────────
+    // ── Read-Host / bash read ─────────────────────────────────────────────────
 
     /// <summary>
-    /// <c>Read-Host</c>: a script that reads a value from the terminal; the value
-    /// typed through the harness should land in the host runspace's variable.
-    /// bash's native equivalent is <c>read VAR</c>.
+    /// bash <c>read VAR</c>: under an interactive PTY, <c>read VAR</c> must block
+    /// for a line of stdin and assign the typed value to <c>$VAR</c>. The proof
+    /// is a subsequent <c>echo "GOT:$name"</c> that surfaces the typed value on
+    /// the launcher's terminal — the marker can only render if <c>read</c>
+    /// actually captured the typed line.
     ///
-    /// <para><b>Skipped — ps-bash interactive-mode bug.</b> bash <c>read VAR</c>
-    /// transpiles to <c>Read-Host</c>, but under an interactive PTY it does not
-    /// block for stdin: <c>read</c> returns immediately and the variable stays
-    /// empty. That is a ps-bash bug in the interactive raw-input path, not a
-    /// test-harness gap — tracked as a follow-on bug task.</para>
+    /// <para>This is the ps-bash-native equivalent of PowerShell's
+    /// <c>Read-Host</c>. The fix path was emit-side: <c>Invoke-BashRead</c> reads
+    /// from <c>[Console]::In.ReadLine()</c> (PTY slave fd) rather than
+    /// <c>Read-Host</c>, whose host UI throws <c>NotSupportedException</c> under
+    /// the interactive PTY host runspace. PTY-11's <c>[Console]::ReadKey($true)</c>
+    /// path is the same Console-direct-access pattern.</para>
     /// </summary>
     [SkippableFact]
     [Trait("Platform", "Posix")]
     public async Task ReadHost_TypedValueReachesVariable()
     {
-        Skip.If(true,
-            "bash `read VAR` does not block for stdin under an interactive PTY — it " +
-            "returns immediately and the variable stays empty (ps-bash interactive " +
-            "raw-input bug). Tracked as a follow-on bug task.");
-        await Task.CompletedTask;
+        Skip.If(RuntimeInformation.IsOSPlatform(OSPlatform.Windows),
+            "POSIX-only — Windows ConPTY runtime verification is CI-gated");
+
+        var psBash = PtyHarness.FindPsBashBinary();
+        Skip.If(psBash is null, "ps-bash launcher binary not found — build src/PsBash.Shell first");
+
+        await using var harness = await PtyHarness.StartAsync(psBash!);
+
+        // Drive: `read name`, then type `Andy<Enter>`, then `echo "GOT:$name"`.
+        // The `read` line itself produces no observable prompt — wait for the
+        // prompt to return AFTER the `read` completes by injecting the typed
+        // value back-to-back with the read invocation, then look for the
+        // GOT:Andy marker on the post-read line.
+        await harness.WriteKeysAsync("read name\n");
+        // Send the value as the next line — Console.In.ReadLine() consumes it.
+        await harness.WriteKeysAsync("Andy\n");
+        // Wait for the prompt to return (read has unblocked).
+        await harness.WaitForRegexAsync(PtyHarness.PromptPattern, TuiTimeout);
+
+        // Now echo the captured variable. The transcript must contain GOT:Andy.
+        await harness.WriteKeysAsync("echo \"GOT:$name\"\n");
+        await harness.WaitForRegexAsync(@"GOT:Andy", TuiTimeout);
     }
 
     // ── [Console]::ReadKey() — skipped, follow-on filed ───────────────────────

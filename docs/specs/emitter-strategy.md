@@ -186,8 +186,14 @@ recursive `EmitSimple`.
 
 ### `read`
 
-- `read [-r] [-p "prompt"] VAR` -> `$VAR = Read-Host ["prompt"]`
-- Flags other than `-p` are ignored; the last non-flag word is the variable.
+- `read [-r] [-p "prompt"] VAR` -> `Invoke-BashRead [-p "prompt"] VAR` (the
+  runtime cmdlet sets `$VAR` in the caller's scope via `Set-Variable -Scope 1`).
+- Flags `-r`, `-p PROMPT`, and `-a ARR` are recognized by the runtime; other
+  flags are currently ignored.
+- Under an interactive PTY, `Invoke-BashRead` reads from
+  `[Console]::In.ReadLine()` so it blocks on the PTY slave fd. `Read-Host` is
+  not usable in the interactive PTY host runspace because
+  `ExitTrackingHost.ReadLine()` throws `NotSupportedException`.
 
 ### `set`
 

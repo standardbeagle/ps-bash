@@ -10590,12 +10590,59 @@ function Invoke-BashRead {
         }
         $inputLine = $allText.ToString() -replace "`r`n", "`n" -replace "`n$", ''
     } else {
-        # Interactive: use Read-Host
+        # Interactive: read from the process's stdin via [Console]::ReadKey.
+        # Under an interactive PTY, ps-bash-host's PSHost.UI.ReadLine() throws
+        # NotSupportedException (see ExitTrackingHost), so Read-Host cannot
+        # block for input. [Console]::In.ReadLine() also does not work because
+        # the PTY slave is in raw mode (the launcher's raw stdin passes bytes
+        # through verbatim), so there is no line-buffered TextReader stream
+        # for ReadLine to wait on. PTY-11 validated that [Console]::ReadKey
+        # ($true) reads bytes directly from the PTY slave fd — assemble a line
+        # ourselves: collect printable keys until Enter, echo each character
+        # so the user sees what they type, handle Backspace and Ctrl-C.
         if ($promptSet) {
-            $inputLine = Read-Host $prompt
-        } else {
-            $inputLine = Read-Host
+            [Console]::Out.Write("${prompt}: ")
+            [Console]::Out.Flush()
         }
+        $sb = [System.Text.StringBuilder]::new()
+        while ($true) {
+            try {
+                $key = [Console]::ReadKey($true)
+            } catch [InvalidOperationException] {
+                # Console handle closed mid-read (terminal disconnect) — treat as EOF.
+                return
+            }
+            if ($key.Key -eq [ConsoleKey]::Enter) {
+                # Echo CRLF so the cursor lands on a fresh line, matching the
+                # terminal-cooked-mode newline behavior users expect.
+                [Console]::Out.Write("`r`n")
+                [Console]::Out.Flush()
+                break
+            }
+            if ($key.Key -eq [ConsoleKey]::Backspace) {
+                if ($sb.Length -gt 0) {
+                    [void]$sb.Remove($sb.Length - 1, 1)
+                    # Erase the previous glyph: backspace, space, backspace.
+                    [Console]::Out.Write("`b `b")
+                    [Console]::Out.Flush()
+                }
+                continue
+            }
+            # Ctrl-C: abort read with empty result (matches bash `read` EOF).
+            if ($key.Key -eq [ConsoleKey]::C -and
+                ($key.Modifiers -band [ConsoleModifiers]::Control)) {
+                [Console]::Out.Write("`r`n")
+                [Console]::Out.Flush()
+                return
+            }
+            $ch = $key.KeyChar
+            if ($ch -and [int]$ch -ge 32) {
+                [void]$sb.Append($ch)
+                [Console]::Out.Write($ch)
+                [Console]::Out.Flush()
+            }
+        }
+        $inputLine = $sb.ToString()
     }
 
     if ($null -eq $inputLine) { return }
@@ -10603,18 +10650,29 @@ function Invoke-BashRead {
     if ($varNames.Count -eq 1) {
         # Single variable: assign entire line in the caller's scope
         Set-Variable -Name $varNames[0] -Value $inputLine -Scope 1
+        Set-Variable -Name $varNames[0] -Value $inputLine -Scope Global
+        # bash `read` sets a shell variable visible to subsequent statements.
+        # The emitter renders $VAR as $env:VAR, so the value must land in the
+        # process environment block to be visible after Invoke-BashRead returns.
+        Set-Item -Path "Env:$($varNames[0])" -Value $inputLine
     } else {
         # Multiple variables: split by whitespace
         $parts = $inputLine -split '\s+'
         for ($j = 0; $j -lt $varNames.Count; $j++) {
             if ($j -lt $parts.Count - 1) {
                 Set-Variable -Name $varNames[$j] -Value $parts[$j] -Scope 1
+                Set-Variable -Name $varNames[$j] -Value $parts[$j] -Scope Global
+                Set-Item -Path "Env:$($varNames[$j])" -Value $parts[$j]
             } elseif ($j -eq $varNames.Count - 1) {
                 # Last variable gets remaining text
                 $remaining = ($parts[$j..($parts.Count - 1)] -join ' ')
                 Set-Variable -Name $varNames[$j] -Value $remaining -Scope 1
+                Set-Variable -Name $varNames[$j] -Value $remaining -Scope Global
+                Set-Item -Path "Env:$($varNames[$j])" -Value $remaining
             } else {
                 Set-Variable -Name $varNames[$j] -Value '' -Scope 1
+                Set-Variable -Name $varNames[$j] -Value '' -Scope Global
+                Set-Item -Path "Env:$($varNames[$j])" -Value ''
             }
         }
     }
