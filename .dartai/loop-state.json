@@ -1,9 +1,9 @@
 {
   "status": "paused",
-  "iterations": 7,
+  "iterations": 8,
   "spawns": 14,
   "started_at": "2026-05-12T20:33:00Z",
-  "last_iteration_at": "2026-05-15T11:30:00Z",
+  "last_iteration_at": "2026-05-15T08:52:17Z",
   "last_subagent": "dartai-task-executor",
   "loop_task_id": "AEACP6UqDUBr",
   "dartboard": "Personal/ps-bash",
@@ -1009,6 +1009,24 @@
         "src/PsBash.Module/PsBash.psm1",
         "docs/specs/runtime-functions.md"
       ]
+    },
+    {
+      "task_id": "AG4lPLcaJSzN",
+      "iteration": 8,
+      "status": "completed",
+      "started_at": "2026-05-15T11:30:00Z",
+      "completed_at": "2026-05-15T08:52:17Z",
+      "phase_completed": "phase-9",
+      "failed_phase": null,
+      "files_changed": 2,
+      "tests_added": 0,
+      "plan_adjustments": 1,
+      "completion_summary": "HostWorkerFixture added under src/PsBash.Host.Tests/; SdkWorkerTests migrated off ad-hoc IAsyncLifetime onto the fixture (CreateWorker + ExecuteCapturedAsync helpers). Baseline-diff identical 17/44 failures both branches.",
+      "failure_reason": null,
+      "fix_task_created": false,
+      "fix_task_id": null,
+      "branch": "main",
+      "notes": "Plan adjustment: rejected the CollectionDefinition('HostWorker') option after first attempt caused SdkRunspace.ModuleLoadCount race vs the existing [Collection('SdkHost')] Server tests running in a parallel collection. Final design instantiates the fixture as a per-class IAsyncLifetime field, keeping SdkWorkerTests inside the existing SdkHost collection."
     }
   ],
   "interrupted_at": null,
