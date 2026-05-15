@@ -195,14 +195,27 @@ JobObjectWatchdog.StartParentDeathWatcher(parentPid);
 var bashCommand = shellArgs.Command;
 
 string? pwshCommand;
-try
+if (shellArgs.RawPowerShell)
 {
-    pwshCommand = BashTranspiler.Transpile(bashCommand);
+    // PTY-9 follow-on: `--ps` passthrough — forward the command body to the
+    // host runspace as-is, bypassing the bash transpiler. This is the
+    // in-band entry point for raw PowerShell probe scripts (e.g.
+    // `[Console]::ReadKey($true)`) that have no bash equivalent. Parse
+    // errors surface from the host runspace, same as any other PowerShell
+    // invocation.
+    pwshCommand = bashCommand;
 }
-catch (ParseException ex)
+else
 {
-    Console.Error.WriteLine($"ps-bash: parse error: {ex.Message}");
-    return 2;
+    try
+    {
+        pwshCommand = BashTranspiler.Transpile(bashCommand);
+    }
+    catch (ParseException ex)
+    {
+        Console.Error.WriteLine($"ps-bash: parse error: {ex.Message}");
+        return 2;
+    }
 }
 
 if (debug)

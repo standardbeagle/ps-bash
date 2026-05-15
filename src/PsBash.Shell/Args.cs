@@ -8,7 +8,8 @@ public record ShellArgs(
     bool NoProfile,
     bool? UnixPaths = null,
     string? ScriptPath = null,
-    string[] ScriptArgs = null!)
+    string[] ScriptArgs = null!,
+    bool RawPowerShell = false)
 {
     // Bash-compatible short flags ps-bash recognizes. Used to expand bundled
     // forms like `-lc` and to let `-c` skip past intervening flags when callers
@@ -33,6 +34,7 @@ public record ShellArgs(
         bool stdin = false;
         bool noprofile = false;
         bool? unixPaths = null;
+        bool rawPs = false;
         bool endOfOptions = false;
         string? scriptPath = null;
         string[] scriptArgs = [];
@@ -89,6 +91,17 @@ public record ShellArgs(
                 case "--windows-paths":
                     unixPaths = false;
                     break;
+                // PTY-9 follow-on: raw PowerShell passthrough. When set, the
+                // -c argument / stdin / script body is forwarded to the host
+                // runspace WITHOUT bash transpilation. Enables driving raw
+                // PowerShell probe scripts ([Console]::ReadKey, etc.) through
+                // the same launcher → PTY → host pipeline as bash code, so
+                // tests can exercise PTY behaviors that the bash front-end
+                // does not expose. Long form only; no short alias.
+                case "--ps":
+                case "--raw-ps":
+                    rawPs = true;
+                    break;
                 case "--":
                     endOfOptions = true;
                     break;
@@ -106,7 +119,7 @@ public record ShellArgs(
             }
         }
 
-        return new ShellArgs(command, interactive, login, stdin, noprofile, unixPaths, scriptPath, scriptArgs);
+        return new ShellArgs(command, interactive, login, stdin, noprofile, unixPaths, scriptPath, scriptArgs, rawPs);
     }
 
     // Expands `-lc` -> `-l`, `-c`. Single-char flags (`-c`, `-l`) and long

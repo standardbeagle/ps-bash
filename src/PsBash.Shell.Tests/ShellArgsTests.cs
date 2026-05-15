@@ -349,4 +349,34 @@ public class ShellArgsTests
         Assert.Equal("script.sh", result.ScriptPath);
         Assert.Empty(result.ScriptArgs);
     }
+
+    // PTY-9 follow-on: `--ps` / `--raw-ps` flag — bypasses bash transpile and
+    // forwards the command body to the host runspace as raw PowerShell. The
+    // in-band entry point for tests that need to drive raw PS probes
+    // ([Console]::ReadKey, etc.) under the same launcher pipeline as bash.
+    [Fact]
+    public void Parse_RawPsFlag_SetsRawPowerShell()
+    {
+        var result = ShellArgs.Parse(["--ps", "-c", "echo 'raw'"]);
+
+        Assert.True(result.RawPowerShell);
+        Assert.Equal("echo 'raw'", result.Command);
+    }
+
+    [Fact]
+    public void Parse_RawPsLongAlias_SetsRawPowerShell()
+    {
+        var result = ShellArgs.Parse(["--raw-ps", "-c", "$PSVersionTable"]);
+
+        Assert.True(result.RawPowerShell);
+        Assert.Equal("$PSVersionTable", result.Command);
+    }
+
+    [Fact]
+    public void Parse_NoRawPsFlag_DefaultsFalse()
+    {
+        var result = ShellArgs.Parse(["-c", "echo hi"]);
+
+        Assert.False(result.RawPowerShell);
+    }
 }

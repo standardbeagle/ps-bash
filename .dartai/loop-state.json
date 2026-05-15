@@ -1,9 +1,9 @@
 {
   "status": "paused",
-  "iterations": 10,
-  "spawns": 14,
+  "iterations": 11,
+  "spawns": 15,
   "started_at": "2026-05-12T20:33:00Z",
-  "last_iteration_at": "2026-05-15T14:00:00Z",
+  "last_iteration_at": "2026-05-15T15:30:00Z",
   "last_subagent": "task-executor",
   "loop_task_id": "AEACP6UqDUBr",
   "dartboard": "Personal/ps-bash",
@@ -1045,6 +1045,24 @@
       "fix_task_id": null,
       "branch": "main",
       "notes": "Re-assessment: REFACTOR-7 (per-invocation host + Process.Kill on Dispose) and the earlier Job Object watchdog (2IES2I4LPSNc) had already landed the host-side defenses. Remaining gaps were the cross-platform PPID lookup, the ps-bash host gc admin subcommand, and the canary regression test. Linux-verified: Canary gc dry-run + parent-death-watcher. Windows-CI-gated: Job Object KillOnJobClose behavioral verification."
+    },
+    {
+      "task_id": "zQIS9hpJ4BMx",
+      "iteration": 11,
+      "status": "completed",
+      "started_at": "2026-05-15T14:00:00Z",
+      "completed_at": "2026-05-15T15:30:00Z",
+      "phase_completed": "phase-9",
+      "failed_phase": null,
+      "files_changed": 4,
+      "tests_added": 4,
+      "plan_adjustments": 1,
+      "completion_summary": "PTY-9 follow-on (1 of 2 landed): ConsoleReadKey_RawKeyCodesAreDelivered un-skipped and passing. Approach: dot-source a raw-PS .ps1 probe via source $HOME/<probe>.ps1 inside the interactive PTY shell — Invoke-BashSource routes .ps1 straight into the host runspace, so [Console]::ReadKey($true) runs against the live PTY slave. Drives UpArrow / DownArrow / Ctrl-A and asserts each key's PROBE: line. Also added --ps / --raw-ps launcher passthrough flag (ShellArgs.RawPowerShell + Program.cs guard) as a general-purpose in-band raw-PS entry point with 3 unit tests; not strictly required by the test we landed but documented as the PS-passthrough entry point the task asked for. fzf case stays Skip-ed with a re-diagnosed reason: root cause is NOT PTY routing but the BashObject→native-command stringification seam (Out-Default formats Invoke-BashPrintf's PSCustomObject output as a table header + columns, destroying the candidate list before fzf sees it). Fix is producer-side (every Invoke-Bash* emits string on success channel) or emitter-side (inject | %{ $_.BashText } before native commands in pipelines), both wider than this PTY-9 follow-on. Targeted tests: 4/4 pass. Full Shell.Tests: 402 pass, 19 fail (documented AgentPattern/PromptRendering baseline flake, unchanged by this task — confirmed via baseline-diff on main).",
+      "failure_reason": null,
+      "fix_task_created": true,
+      "fix_task_id": "PTY-9-fzf-follow-on (filed in Dart completion comment)",
+      "branch": "main",
+      "notes": "Plan adjustment: re-diagnosed fzf root cause mid-investigation. Task spec hypothesized fzf needed /dev/tty access while reading piped candidates. Repro showed fzf actually receives PowerShell's default Out-Default table-rendering of Invoke-BashPrintf's BashObject output (literal header row 'BashText NoTrailingNewline Command') as its stdin, not the candidates. PTY plumbing is correct (vim/less/Console.ReadKey all work raw). Documented in the Skip reason + Dart comment + follow-on task spec."
     }
   ],
   "interrupted_at": null,

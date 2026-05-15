@@ -277,21 +277,36 @@ public class PtyTuiParityTests
     /// <c>fzf</c>: pipe a candidate list, type a filter, accept with Enter, and
     /// assert the selection reaches the pipeline consumer.
     ///
-    /// <para><b>Skipped — not deterministic through ps-bash today.</b> When the
-    /// candidate list is piped in (<c>printf … | fzf &gt; out</c>), fzf under
-    /// ps-bash's pipe handling enters and tears down its alt screen in the same
-    /// frame and never writes a selection — the output file is never created.
-    /// A flaky test is worse than a skipped one (Directive 2), so this is parked
-    /// behind a follow-on task rather than committed as a flaky real-TUI test.</para>
+    /// <para><b>Skipped — root cause is the BashObject stringification seam,
+    /// not the PTY transport.</b> ps-bash <c>Invoke-Bash*</c> producers
+    /// (<c>printf</c>, <c>echo</c>, …) emit typed <c>BashObject</c> PSCustomObjects
+    /// — when PowerShell pipes those to a NATIVE command like <c>fzf</c>, it
+    /// uses Out-Default table-formatting (header row "BashText NoTrailingNewline
+    /// Command" + columns), NOT the <c>BashText</c> string. So fzf reads the
+    /// formatted-table header as a candidate, not the intended <c>a\nb\nc</c>
+    /// payload, and the alt-screen flash + missing selection follows from
+    /// there. PTY routing is already correct (raw passthrough works for vim /
+    /// less / Console.ReadKey).</para>
+    ///
+    /// <para>Tracked as a follow-on task (PTY-9-fzf-follow-on): the fix is the
+    /// BashObject-to-native-command stringification path, NOT a PTY change.
+    /// Requires either (a) emitter-level: detect a native command on the RHS
+    /// of a pipe and inject <c>| ForEach-Object { $_.BashText }</c>, or (b)
+    /// runtime-level: change every <c>Invoke-Bash*</c> producer to emit plain
+    /// strings on the success channel (breaks typed-pipeline composition). Both
+    /// are wider than this task's PTY-9 follow-on scope.</para>
     /// </summary>
     [SkippableFact]
     [Trait("Platform", "Posix")]
     public async Task Fzf_PipeFilterAndAccept_CapturesSelection()
     {
         Skip.If(true,
-            "fzf exits immediately under ps-bash's piped-stdin handling (alt-screen " +
-            "enter/exit in one frame, no selection written) — not deterministic-" +
-            "drivable today. Tracked as a follow-on task.");
+            "BashObject stringification seam: Invoke-Bash* producers emit " +
+            "PSCustomObjects whose Out-Default representation is a formatted " +
+            "table (header row + columns), not the BashText payload. Native " +
+            "commands like fzf read the formatted table as their stdin and the " +
+            "candidate list is destroyed before fzf ever opens /dev/tty. Fix " +
+            "is producer-side, not PTY-side. Tracked as a follow-on task.");
         await Task.CompletedTask;
     }
 
@@ -343,22 +358,68 @@ public class PtyTuiParityTests
 
     /// <summary>
     /// <c>[Console]::ReadKey()</c>: raw key codes (arrow keys, Ctrl-A) delivered
-    /// through the PTY should reach a script that reads them.
+    /// through the PTY reach a raw-PowerShell probe script. The probe is
+    /// dot-sourced via <c>source</c> (which routes a <c>.ps1</c> path through
+    /// <c>Invoke-BashSource</c> straight into the host runspace, bypassing the
+    /// bash transpiler — the in-band PS-passthrough entry point), the test
+    /// writes an arrow-key sequence and a Ctrl-A, and asserts the probe printed
+    /// the key codes back through the PTY.
     ///
-    /// <para><b>Skipped — no in-band entry point today.</b> ps-bash is a bash
-    /// shell; raw PowerShell (<c>[Console]::ReadKey()</c>) does not transpile
-    /// through the bash front-end, so there is no way to run a ReadKey probe
-    /// script through ps-bash. Exercising this needs a PowerShell-passthrough
-    /// entry point — tracked as a follow-on task.</para>
+    /// <para><b>Why this is drivable now (vs the PTY-9 skip).</b> The probe is
+    /// raw PowerShell, dot-sourced into the host's live PTY-slave-attached
+    /// runspace — the same runspace context that PTY-11's
+    /// <c>Invoke-BrowseInteractive</c> uses successfully. The bash front-end
+    /// would have mangled the <c>[Console]::ReadKey($true)</c> syntax; routing
+    /// through <c>source</c> + <c>.ps1</c> skips transpile entirely.</para>
     /// </summary>
     [SkippableFact]
     [Trait("Platform", "Posix")]
     public async Task ConsoleReadKey_RawKeyCodesAreDelivered()
     {
-        Skip.If(true,
-            "raw PowerShell ([Console]::ReadKey()) does not transpile through " +
-            "ps-bash's bash front-end — no in-band way to run a ReadKey probe " +
-            "script today. Tracked as a follow-on task (needs a PS-passthrough entry point).");
-        await Task.CompletedTask;
+        Skip.If(RuntimeInformation.IsOSPlatform(OSPlatform.Windows),
+            "POSIX-only — Windows ConPTY runtime verification is CI-gated");
+
+        var psBash = PtyHarness.FindPsBashBinary();
+        Skip.If(psBash is null, "ps-bash launcher binary not found — build src/PsBash.Shell first");
+
+        await using var harness = await PtyHarness.StartAsync(psBash!);
+
+        // Write a tiny PS probe that reads three keys and prints the codes on
+        // each. Lives under the harness's isolated $HOME so the bash path
+        // transform (/tmp/ → $env:TEMP\) does not mangle the operand.
+        var probePath = Path.Combine(harness.TempHome, "readkey-probe.ps1");
+        await File.WriteAllTextAsync(probePath,
+            "for ($i = 0; $i -lt 3; $i++) {\n" +
+            "    $k = [Console]::ReadKey($true)\n" +
+            "    $kc = [int]$k.KeyChar\n" +
+            "    [Console]::Out.WriteLine(\"PROBE:i=$i Key=$($k.Key) KeyChar=$kc Mods=$($k.Modifiers)\")\n" +
+            "    [Console]::Out.Flush()\n" +
+            "}\n" +
+            "[Console]::Out.WriteLine(\"PROBE:done\")\n");
+
+        // Source the probe inside the interactive shell — Invoke-BashSource
+        // dot-sources a .ps1 raw into the host runspace, so [Console]::ReadKey
+        // runs against the live PTY slave (PTY-11 verified this path works).
+        await harness.WriteKeysAsync($"source $HOME/readkey-probe.ps1\n");
+
+        // Drive three keys: UpArrow (ESC[A), DownArrow (ESC[B), and Ctrl-A
+        // (raw byte 0x01). ReadKey on POSIX uses VT-sequence parsing for the
+        // arrow keys — the ESC-prefixed CSI sequence resolves to
+        // ConsoleKey.UpArrow / ConsoleKey.DownArrow.
+        await harness.WriteKeysAsync("\x1b[A");
+        await harness.WaitForRegexAsync(@"PROBE:i=0 Key=UpArrow ", TuiTimeout);
+
+        await harness.WriteKeysAsync("\x1b[B");
+        await harness.WaitForRegexAsync(@"PROBE:i=1 Key=DownArrow ", TuiTimeout);
+
+        // Ctrl-A: KeyChar=1, Modifiers=Control. The probe stringifies the
+        // Modifiers enum, so "Control" must appear.
+        await harness.WriteKeysAsync("\x01");
+        await harness.WaitForRegexAsync(@"PROBE:i=2 .* KeyChar=1 Mods=Control", TuiTimeout);
+
+        // Probe completed and returned to the prompt — proof the loop exited
+        // cleanly, not hung on a fourth ReadKey.
+        await harness.WaitForRegexAsync(@"PROBE:done", TuiTimeout);
+        await harness.WaitForRegexAsync(PtyHarness.PromptPattern, TuiTimeout);
     }
 }
