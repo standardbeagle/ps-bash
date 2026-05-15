@@ -55,6 +55,8 @@ CmdletsToExport = @(
     'Invoke-BashLs',
     # REFACTOR-2 Phase 3: sed migrated from PsBash.psm1.
     'Invoke-BashSed',
+    # REFACTOR-2 Phase 3 follow-on: find migrated from PsBash.psm1.
+    'Invoke-BashFind',
     # REFACTOR-2 Phase F6: jq migrated from PsBash.psm1.
     'Invoke-BashJq',
     # RC-8a: Invoke-ProcessSubSource migrated from PsBash.psm1 to fix

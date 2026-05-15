@@ -1,9 +1,9 @@
 {
   "status": "paused",
-  "iterations": 29,
+  "iterations": 7,
   "spawns": 14,
   "started_at": "2026-05-12T20:33:00Z",
-  "last_iteration_at": "2026-05-15T08:00:00Z",
+  "last_iteration_at": "2026-05-15T11:30:00Z",
   "last_subagent": "dartai-task-executor",
   "loop_task_id": "AEACP6UqDUBr",
   "dartboard": "Personal/ps-bash",
@@ -982,6 +982,31 @@
         "src/PsBash.Module/PsBash.psd1",
         "src/PsBash.Module/PsBash.psm1",
         "src/PsBash.Cmdlets.Tests/InvokeBashJqCommandTests.cs",
+        "docs/specs/runtime-functions.md"
+      ]
+    },
+    {
+      "task_id": "leJJfV58WCGF",
+      "iteration": 7,
+      "status": "completed",
+      "started_at": "2026-05-15T10:30:00Z",
+      "completed_at": "2026-05-15T11:30:00Z",
+      "phase_completed": "phase-9",
+      "failed_phase": null,
+      "files_changed": 6,
+      "tests_added": 26,
+      "plan_adjustments": 0,
+      "completion_summary": "REFACTOR-2 Phase 3 follow-on: migrated Invoke-BashFind from psm1 to binary cmdlet (InvokeBashFindCommand.cs). All predicates supported (-name -type -size -maxdepth -mtime -empty -print0 -exec). -exec dispatches via InvokeCommand.InvokeScript with parameterless body + $args splat (no user-input concat into body; Directive 12 safe). Get-BashFileInfo slice duplicated in C# (BuildFileInfo); psm1 Get-BashFileInfo kept (Invoke-BashStat still depends on it). 26 parity tests pass; ModulePartialLoadTests green; full Cmdlets.Tests suite (312 pass) + Core.Tests (711 pass) + Differential.Tests (222 pass).",
+      "failure_reason": null,
+      "fix_task_created": false,
+      "fix_task_id": null,
+      "files": [
+        "src/PsBash.Cmdlets/InvokeBashFindCommand.cs",
+        "src/PsBash.Cmdlets.Tests/InvokeBashFindCommandTests.cs",
+        "src/PsBash.Cmdlets/PsBash.Cmdlets.psd1",
+        "src/PsBash.Cmdlets/PsBash.Cmdlets.Experimental.psd1",
+        "src/PsBash.Module/PsBash.psd1",
+        "src/PsBash.Module/PsBash.psm1",
         "docs/specs/runtime-functions.md"
       ]
     }

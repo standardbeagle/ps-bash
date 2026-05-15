@@ -63,6 +63,13 @@ CmdletsToExport = @(
     # REFACTOR-2 Phase 3: sed migrated from PsBash.psm1 (with its
     # ConvertFrom-SedExpression / Test-SedAddress helpers reimplemented in C#).
     'Invoke-BashSed',
+    # REFACTOR-2 Phase 3 follow-on: find migrated from PsBash.psm1. The
+    # Get-BashFileInfo slice the cmdlet needs is duplicated in C# (psm1's
+    # Get-BashFileInfo stays — Invoke-BashStat still depends on it).
+    # -exec dispatches via InvokeCommand.InvokeScript with a parameterized
+    # script body and $args splat — no string concatenation of user input
+    # into the script body (Directive 12).
+    'Invoke-BashFind',
     # REFACTOR-2 Phase F6: jq migrated from PsBash.psm1 (the *-Jq* helper
     # web reimplemented in C# inside JqEngine; ConvertTo-JqJson +
     # Invoke-JqFilter remain as psm1 shims for the still-psm1 Invoke-BashYq).

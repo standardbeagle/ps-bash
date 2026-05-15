@@ -89,7 +89,11 @@ FunctionsToExport = 'Set-BashErrorMode', 'Invoke-ProcessSub', 'Invoke-ProcessSub
                # Invoke-BashCat / Invoke-BashHead / Invoke-BashTail /
                # Invoke-BashWc migrated to binary cmdlets in PsBash.Cmdlets.dll
                # (REFACTOR-2 Phase 1c) — no longer psm1 functions.
-               'Invoke-BashFind',
+               # Invoke-BashFind migrated to a binary cmdlet in PsBash.Cmdlets.dll
+               # (REFACTOR-2 Phase 3 follow-on) — no longer a psm1 function.
+               # Get-BashFileInfo stays in psm1 because Invoke-BashStat (still a
+               # psm1 function) depends on it; the find cmdlet duplicates the
+               # relevant slice in C# (BuildFileInfo).
                'Invoke-BashStat', 'Format-StatString',
                'Invoke-BashCp', 'Invoke-BashMv', 'Invoke-BashRm',
                'Invoke-BashMkdir', 'Invoke-BashRmdir', 'Invoke-BashTouch',
