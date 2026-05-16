@@ -75,6 +75,24 @@ if [[ "$coverage_enabled" == "1" ]]; then
     echo "test.sh: coverage collection enabled (XPlat Code Coverage)" >&2
 fi
 
+# Build the whole solution explicitly BEFORE `dotnet test`. Rationale:
+# `dotnet test` on a solution dispatches one vstest worker per project in
+# parallel and only guarantees each project's *own* build is done before
+# its tests start, not that downstream binaries the tests load at runtime
+# (ps-bash.exe, ps-bash-host.exe) are fully linked. PsBash.Differential.Tests
+# discovers ps-bash via PsBashLocator at fixture init; if PsBash.Shell hasn't
+# finished linking by then, BashOracleFixture.PsBashPath is null and ~200
+# tests Skip with "ps-bash binary not found". An explicit `dotnet build`
+# first closes the race. We deliberately do NOT pass --no-build to the
+# subsequent `dotnet test` — that flag suppresses test-project post-build
+# steps that several suites depend on, regressing previously-green Host /
+# Escalation / Shell. The redundant build is cheap (incremental no-ops).
+echo "test.sh: pre-build solution to avoid fixture/build race..." >&2
+if ! dotnet build ps-bash.sln -nologo; then
+    echo "test.sh: pre-build failed — skipping test dispatch." >&2
+    exit 1
+fi
+
 test_exit=0
 
 if [[ "$timeout_secs" == "0" ]] || ! command -v timeout >/dev/null 2>&1; then
