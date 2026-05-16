@@ -356,26 +356,33 @@ public sealed class IpcWorker : IWorker
         var psi = new ProcessStartInfo
         {
             FileName = _hostBinaryPath,
-            // On POSIX (Linux/macOS) flip UseShellExecute off so we can set
-            // PSBASH_HOST_DETACH=1 via psi.Environment. On Windows keep
-            // UseShellExecute=true — the legacy daemon-detach behaviour
-            // relies on the shell-execute spawn path to break the pipe
-            // inheritance from the launcher.
+            // UseShellExecute=false uniformly so we can set per-process env
+            // vars (PSBASH_HOST_DETACH=1 on POSIX) and so we never go through
+            // ShellExecuteEx, which requires Shell COM / STA and fails with
+            // Win32 error 126 when ps-bash.exe is spawned by vstest (whose
+            // testhost runs tests on MTA threads).
             //
-            // 2026-05-16: a prior attempt to set UseShellExecute=false on
-            // Windows fixed Win32 error 126 in vstest (which runs tests on
-            // MTA threads where ShellExecuteEx fails), but the host then
-            // inherited vstest's redirected stdio handles and hung without
-            // accepting connections within startup timeout. A real fix
-            // needs explicit Win32-level handle severing on Windows (the
-            // equivalent of POSIX_HOST_DETACH's dup2(/dev/null) over the
-            // inherited fds) before this flag can flip. Until then, stay
-            // on ShellExecute on Windows — the Win32-126 hits only the test
-            // runner (interactive shells use STA and work fine).
-            UseShellExecute = isWindows,
+            // RedirectStandardInput=true: the host's stdin is given a fresh
+            // pipe from the launcher rather than being left inherited from
+            // the launcher's own stdin. We close the parent side immediately
+            // after spawn (see below), so the host sees an EOF-closed stdin.
+            // Without this, a launcher that was itself spawned by a test
+            // runner with redirected stdio (vstest's testhost) would pass
+            // vstest's stdin handle straight through to the host, and the
+            // host would block trying to read it — surfacing as
+            // HostUnavailableException("did not accept connections within
+            // startup timeout"). The Windows equivalent of POSIX's
+            // PSBASH_HOST_DETACH dup2(/dev/null) replacement.
+            //
+            // We deliberately do NOT redirect stdout/stderr: the host is
+            // largely silent, and unredirected stdout/stderr inherit the
+            // launcher's handles (which on Windows under CreateProcess with
+            // bInheritHandles=false means the host starts with detached/NUL
+            // handles, not the launcher's pipe).
+            UseShellExecute = false,
             CreateNoWindow = true,
             WindowStyle = ProcessWindowStyle.Hidden,
-            RedirectStandardInput = false,
+            RedirectStandardInput = true,
             RedirectStandardOutput = false,
             RedirectStandardError = false,
         };
@@ -389,8 +396,10 @@ public sealed class IpcWorker : IWorker
             psi.ArgumentList.Add($"--launcher-pid={Environment.ProcessId}");
         // POSIX-only: signal the host to dup2 /dev/null over the inherited
         // stdio fds at startup so it can never write into the launcher's pipes.
-        // Windows uses shell-execute spawn which already detaches the host's
-        // stdio from the launcher.
+        // Windows handles the same hazard via RedirectStandardInput=true above
+        // plus proc.StandardInput.Close() right after Process.Start: the host
+        // sees a closed stdin instead of the launcher's inherited handle, and
+        // CreateProcess with bInheritHandles=false keeps stdout/stderr detached.
         //
         // REFACTOR-7 note on cc8bf88: this dup2-detach is the daemon-era hang
         // fix. PerInvocation already contains the pipe-inheritance hazard within
@@ -411,6 +420,15 @@ public sealed class IpcWorker : IWorker
             proc = Process.Start(psi)
                 ?? throw new HostUnavailableException(
                     $"Process.Start returned null for '{_hostBinaryPath}'.");
+
+            // Close our end of the redirected stdin pipe. The host now sees
+            // an EOF-closed stdin instead of whatever stdin the launcher
+            // inherited (e.g. vstest's redirected pipe). Without this the
+            // host would block on a read of vstest's stream that never
+            // produces data — the failure mode that broke the prior
+            // UseShellExecute=false attempt.
+            try { proc.StandardInput.Close(); }
+            catch { /* harmless — already closed if host exited fast */ }
 
             var deadline = DateTime.UtcNow + _startupTimeout;
             while (DateTime.UtcNow < deadline)
