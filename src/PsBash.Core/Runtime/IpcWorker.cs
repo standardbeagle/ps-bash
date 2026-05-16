@@ -356,20 +356,23 @@ public sealed class IpcWorker : IWorker
         var psi = new ProcessStartInfo
         {
             FileName = _hostBinaryPath,
-            // UseShellExecute=false on every platform. The original Windows
-            // path used UseShellExecute=true to break pipe inheritance via
-            // ShellExecuteEx, but that route requires Shell COM / STA
-            // initialization — when ps-bash.exe is spawned by vstest (which
-            // runs tests on MTA threads), the ShellExecuteEx call fails with
-            // Win32 error 126 ("specified module could not be found") on
-            // every host spawn, producing 15+ Differential failures per run.
-            // CreateProcess (UseShellExecute=false) does not need Shell COM
-            // and works from any apartment. Since all stdio is left
-            // unredirected below, .NET creates the child with
-            // bInheritHandles=false, so pipe inheritance from the launcher
-            // is naturally severed without the ShellExecute detour — the
-            // legacy detach behaviour is preserved.
-            UseShellExecute = false,
+            // On POSIX (Linux/macOS) flip UseShellExecute off so we can set
+            // PSBASH_HOST_DETACH=1 via psi.Environment. On Windows keep
+            // UseShellExecute=true — the legacy daemon-detach behaviour
+            // relies on the shell-execute spawn path to break the pipe
+            // inheritance from the launcher.
+            //
+            // 2026-05-16: a prior attempt to set UseShellExecute=false on
+            // Windows fixed Win32 error 126 in vstest (which runs tests on
+            // MTA threads where ShellExecuteEx fails), but the host then
+            // inherited vstest's redirected stdio handles and hung without
+            // accepting connections within startup timeout. A real fix
+            // needs explicit Win32-level handle severing on Windows (the
+            // equivalent of POSIX_HOST_DETACH's dup2(/dev/null) over the
+            // inherited fds) before this flag can flip. Until then, stay
+            // on ShellExecute on Windows — the Win32-126 hits only the test
+            // runner (interactive shells use STA and work fine).
+            UseShellExecute = isWindows,
             CreateNoWindow = true,
             WindowStyle = ProcessWindowStyle.Hidden,
             RedirectStandardInput = false,
