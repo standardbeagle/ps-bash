@@ -7931,30 +7931,9 @@ function Invoke-BashEnv {
 
 # --- hostname ---
 
-function Invoke-BashHostname {
-    [OutputType('PsBash.TextOutput')]
-    param()
-    $Arguments = [string[]]$args
-    if ($Arguments -contains '--help') { return Show-BashHelp 'hostname' }
-    try {
-        $name = [System.Net.Dns]::GetHostName()
-    } catch {
-        Write-BashError -Message "hostname: $($_.Exception.Message)"
-        return
-    }
-    New-BashObject -BashText $name -TypeName 'PsBash.TextOutput'
-}
-
-# --- whoami ---
-
-function Invoke-BashWhoami {
-    [OutputType('PsBash.TextOutput')]
-    param()
-    $Arguments = [string[]]$args
-    if ($Arguments -contains '--help') { return Show-BashHelp 'whoami' }
-    $name = [System.Environment]::UserName
-    New-BashObject -BashText $name -TypeName 'PsBash.TextOutput'
-}
+# Invoke-BashHostname / Invoke-BashWhoami migrated to binary cmdlets
+# (REFACTOR-2): see InvokeBashHostnameCommand.cs / InvokeBashWhoamiCommand.cs in
+# PsBash.Cmdlets. The Set-Alias lines below resolve to those cmdlets.
 
 # --- uname ---
 
