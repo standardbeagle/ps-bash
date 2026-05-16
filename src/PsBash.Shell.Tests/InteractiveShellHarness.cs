@@ -175,6 +175,15 @@ internal sealed class InteractiveShellHarness : IAsyncDisposable
         // profile.  This keeps profile-loading tests hermetic.
         psi.Environment["PSBASH_HOME"] = tempHome;
         psi.Environment["PSBASH_HISTORY_PATH"] = tempHistoryFile;
+        // Pin unix-paths off — when PSBASH_UNIX_PATHS=1 is inherited from the
+        // test runner's shell (Git Bash on Windows commonly sets it), ps-bash
+        // translates the Windows-style HOME we just set into a POSIX path
+        // (`C:\Users\...\Temp\foo` -> `/tmp/foo`), breaking the
+        // `reportedHome.StartsWith(Path.GetTempPath())` assertion in
+        // Harness_IsolatesHome. Directive 6 requires deterministic env;
+        // tests that specifically want unix-paths translation can override
+        // this var after StartAsync.
+        psi.Environment["PSBASH_UNIX_PATHS"] = "0";
 
         // Pass through PATH for commands launched by the shell.
         if (Environment.GetEnvironmentVariable("PATH") is { } path)
