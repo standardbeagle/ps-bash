@@ -356,12 +356,20 @@ public sealed class IpcWorker : IWorker
         var psi = new ProcessStartInfo
         {
             FileName = _hostBinaryPath,
-            // On POSIX (Linux/macOS) flip UseShellExecute off so we can set
-            // PSBASH_HOST_DETACH=1 via psi.Environment. On Windows keep
-            // UseShellExecute=true — the legacy daemon-detach behaviour
-            // relies on the shell-execute spawn path to break the pipe
-            // inheritance from the launcher.
-            UseShellExecute = isWindows,
+            // UseShellExecute=false on every platform. The original Windows
+            // path used UseShellExecute=true to break pipe inheritance via
+            // ShellExecuteEx, but that route requires Shell COM / STA
+            // initialization — when ps-bash.exe is spawned by vstest (which
+            // runs tests on MTA threads), the ShellExecuteEx call fails with
+            // Win32 error 126 ("specified module could not be found") on
+            // every host spawn, producing 15+ Differential failures per run.
+            // CreateProcess (UseShellExecute=false) does not need Shell COM
+            // and works from any apartment. Since all stdio is left
+            // unredirected below, .NET creates the child with
+            // bInheritHandles=false, so pipe inheritance from the launcher
+            // is naturally severed without the ShellExecute detour — the
+            // legacy detach behaviour is preserved.
+            UseShellExecute = false,
             CreateNoWindow = true,
             WindowStyle = ProcessWindowStyle.Hidden,
             RedirectStandardInput = false,

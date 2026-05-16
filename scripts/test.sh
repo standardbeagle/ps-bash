@@ -75,30 +75,13 @@ if [[ "$coverage_enabled" == "1" ]]; then
     echo "test.sh: coverage collection enabled (XPlat Code Coverage)" >&2
 fi
 
-# Build the whole solution explicitly BEFORE any `dotnet test` invocation,
-# then pass `--no-build` to the test driver. Rationale: `dotnet test` on a
-# solution dispatches one vstest worker per project in parallel and only
-# guarantees each project's *own* build is done before its tests start, not
-# that downstream binaries the tests depend on at runtime (ps-bash.exe,
-# ps-bash-host.exe) are fully linked. On a slow box we'd see Differential
-# tests spawn ps-bash.exe ~20s into the run while ps-bash-host's DLL deps
-# were still mid-link, producing Win32 error 126 ("specified module could
-# not be found") in ~15 Differential tests. Building everything first
-# closes that race. The exit-on-build-failure short-circuits any test run
-# that wouldn't have valid binaries anyway.
-echo "test.sh: building solution before test dispatch..." >&2
-if ! dotnet build ps-bash.sln -nologo; then
-    echo "test.sh: build failed — skipping test dispatch." >&2
-    exit 1
-fi
-
 test_exit=0
 
 if [[ "$timeout_secs" == "0" ]] || ! command -v timeout >/dev/null 2>&1; then
-    dotnet test --no-build "$@" "${coverage_args[@]+"${coverage_args[@]}"}" || test_exit=$?
+    dotnet test "$@" "${coverage_args[@]+"${coverage_args[@]}"}" || test_exit=$?
 else
     # -k 10: if SIGTERM doesn't stop it in 10s, SIGKILL.
-    timeout -k 10 "$timeout_secs" dotnet test --no-build "$@" "${coverage_args[@]+"${coverage_args[@]}"}" || test_exit=$?
+    timeout -k 10 "$timeout_secs" dotnet test "$@" "${coverage_args[@]+"${coverage_args[@]}"}" || test_exit=$?
     if [[ $test_exit -eq 124 ]]; then
         echo "test.sh: dotnet test exceeded PSBASH_TEST_TIMEOUT=${timeout_secs}s — killed." >&2
         exit 124
