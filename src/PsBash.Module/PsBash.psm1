@@ -10507,43 +10507,8 @@ function Invoke-BashDirs {
 
 # --- tput ---
 
-function Invoke-BashTput {
-    [OutputType('PsBash.TextOutput')]
-    param()
-    $Arguments = [string[]]$args
-    if ($Arguments -contains '--help') { return Show-BashHelp 'tput' }
-
-    # Passthrough if native tput is available
-    $native = Get-Command tput -CommandType Application -ErrorAction SilentlyContinue
-    if ($native) {
-        try {
-            $output = & $native.Source @Arguments 2>$null
-            if ($LASTEXITCODE -eq 0) {
-                Emit-BashLine -Text ($output -join [Environment]::NewLine)
-                return
-            }
-        } catch {}
-    }
-
-    # Fallback for common capabilities
-    $cap = $Arguments[0]
-    $result = switch ($cap) {
-        'cols'  { $Host.UI.RawUI.WindowSize.Width }
-        'lines' { $Host.UI.RawUI.WindowSize.Height }
-        'clear' { Clear-Host; '' }
-        'bold'  { "`e[1m" }
-        'sgr0'  { "`e[0m" }
-        'setaf' {
-            $color = [int]$Arguments[1]
-            "`e[38;5;${color}m"
-        }
-        default { '' }
-    }
-
-    if ($result -ne '') {
-        Emit-BashLine -Text $result
-    }
-}
+# Invoke-BashTput migrated to binary cmdlet (REFACTOR-2 follow-on):
+# see InvokeBashTputCommand.cs in PsBash.Cmdlets.
 
 # --- kill ---
 
