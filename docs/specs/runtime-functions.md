@@ -358,7 +358,7 @@ foreach ($item in $pipelineInput) {
 | tput | Invoke-BashTput | `CAPNAME` | Manual loop | No | No |
 | shopt | Invoke-BashShopt | `-s`, `-u`, `-p`, `-q` | Manual loop | No | No |
 | type | Invoke-BashType | `-t`, `-a`, `-p` | Binary cmdlet (`-a` and `-p` are declared SwitchParameters `A` / `P`; `-t` stays in `Arguments`) | No | No |
-| command | Invoke-BashCommand | `-v` | Manual loop | No | No |
+| command | Invoke-BashCommand | `-v`, `-V`, `-p` | Binary cmdlet (`-v` declared as `SwitchParameter V` — `-V` collapses onto same switch under case-insensitive binder, matching the oracle which treated them identically; `-p` declared as `SwitchParameter P` — accepted but ignored, oracle parity) | No | No |
 | source | Invoke-BashSource | (none) | Positional | No | Yes |
 | shift | Invoke-BashShift | `N` | Manual loop | No | No |
 | realpath | Invoke-BashRealpath | (none) | Positional | No | No |
@@ -917,7 +917,7 @@ foreach ($item in $pipelineInput) {
 | tput | Invoke-BashTput | `CAPNAME` | Manual loop | No | No |
 | shopt | Invoke-BashShopt | `-s`, `-u`, `-p`, `-q` | Manual loop | No | No |
 | type | Invoke-BashType | `-t`, `-a`, `-p` | Binary cmdlet (`-a` and `-p` are declared SwitchParameters `A` / `P`; `-t` stays in `Arguments`) | No | No |
-| command | Invoke-BashCommand | `-v` | Manual loop | No | No |
+| command | Invoke-BashCommand | `-v`, `-V`, `-p` | Binary cmdlet (`-v` declared as `SwitchParameter V` — `-V` collapses onto same switch under case-insensitive binder, matching the oracle which treated them identically; `-p` declared as `SwitchParameter P` — accepted but ignored, oracle parity) | No | No |
 | source | Invoke-BashSource | (none) | Positional | No | Yes |
 | shift | Invoke-BashShift | `N` | Manual loop | No | No |
 | realpath | Invoke-BashRealpath | (none) | Positional | No | No |

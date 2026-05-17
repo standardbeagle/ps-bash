@@ -4078,47 +4078,9 @@ function Invoke-BashShift {
 
 # --- command ---
 
-function Invoke-BashCommand {
-    [OutputType('PsBash.TextOutput')]
-    param()
-    $Arguments = [string[]]$args
-    if ($Arguments -contains '--help') { return Show-BashHelp 'command' }
-
-    $flags = @()
-    $operands = [System.Collections.Generic.List[string]]::new()
-    foreach ($arg in $Arguments) {
-        if ($arg.StartsWith('-')) { $flags += $arg }
-        else { $operands.Add($arg) }
-    }
-
-    $verbose = $flags -contains '-v' -or $flags -contains '-V'
-
-    foreach ($name in $operands) {
-        $found = $false
-        $output = $null
-
-        $cmd = Get-Command $name -ErrorAction SilentlyContinue
-        if ($cmd) {
-            $found = $true
-            if ($cmd.CommandType -eq 'Alias') {
-                $output = $cmd.Definition
-            } elseif ($cmd.CommandType -eq 'Function') {
-                $output = $cmd.Name
-            } else {
-                $output = $cmd.Source
-            }
-        }
-
-        if ($found) {
-            if ($verbose) {
-                Emit-BashLine -Text $output
-            }
-        } else {
-            $global:LASTEXITCODE = 1
-            return
-        }
-    }
-}
+# Invoke-BashCommand: migrated to binary cmdlet
+# (InvokeBashCommandCommand in PsBash.Cmdlets.dll) in REFACTOR-2 follow-on.
+# The 'command' Set-Alias below resolves to the cmdlet.
 
 # --- Help Support ---
 
