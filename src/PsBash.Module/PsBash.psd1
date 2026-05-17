@@ -84,7 +84,9 @@ FunctionsToExport = 'Set-BashErrorMode', 'Invoke-ProcessSub', 'Invoke-ProcessSub
                'Format-BashSize', 'Format-BashDate', 'Format-LsLine',
                'Get-LsDisplayName', 'Format-LsGrid',
                'ConvertTo-PermissionString', 'Get-BashText',
-               'Invoke-BashGrep', 'Invoke-BashSort', 'ConvertFrom-HumanNumeric',
+               # Invoke-BashGrep migrated to a binary cmdlet in PsBash.Cmdlets.dll
+               # (REFACTOR-2 Phase 4 follow-on) — no longer a psm1 function.
+               'Invoke-BashSort', 'ConvertFrom-HumanNumeric',
                'Compare-Version', 'ConvertFrom-MonthName',
                # Invoke-BashCat / Invoke-BashHead / Invoke-BashTail /
                # Invoke-BashWc migrated to binary cmdlets in PsBash.Cmdlets.dll
