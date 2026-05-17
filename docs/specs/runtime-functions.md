@@ -329,7 +329,7 @@ foreach ($item in $pipelineInput) {
 | gzip | Invoke-BashGzip | `-d`, `-c`, `-k`, `-f`, `-v`, `-l`, `-1`..`-9` | Binary cmdlet (`-d`/`-c`/`-v`/`-f` declared as SwitchParameters `D`/`C`/`V`/`F`; `-k`/`-l`/`-1`..`-9` stay in `Arguments`) | Yes | Yes |
 | tar | Invoke-BashTar | `-c`, `-x`, `-t`, `-f`, `-z`, `-v`, `-C`, `--exclude` | Manual loop | No | Yes |
 | yq | Invoke-BashYq | `-r`, `-o` | Manual loop | Yes | Yes |
-| xan | Invoke-BashXan | `-d`, subcommands: `headers`, `count`, `select`, `search`, `table` | Manual loop | Yes | Yes |
+| xan | Invoke-BashXan | `-d`, subcommands: `headers`, `count`, `select`, `search`, `table` | Binary cmdlet (`-d` is a declared value-bearing parameter `D`; subcommand keyword stays in `Arguments`) | Yes | Yes |
 | sleep | Invoke-BashSleep | (duration) | Positional | No | No |
 | time | Invoke-BashTime | (command) | Positional | No | No |
 | which | Invoke-BashWhich | `-a` | Manual loop | No | No |
@@ -868,7 +868,7 @@ foreach ($item in $pipelineInput) {
 | gzip | Invoke-BashGzip | `-d`, `-c`, `-k`, `-f`, `-v`, `-l`, `-1`..`-9` | Binary cmdlet (`-d`/`-c`/`-v`/`-f` declared as SwitchParameters `D`/`C`/`V`/`F`; `-k`/`-l`/`-1`..`-9` stay in `Arguments`) | Yes | Yes |
 | tar | Invoke-BashTar | `-c`, `-x`, `-t`, `-f`, `-z`, `-v`, `-C`, `--exclude` | Manual loop | No | Yes |
 | yq | Invoke-BashYq | `-r`, `-o` | Manual loop | Yes | Yes |
-| xan | Invoke-BashXan | `-d`, subcommands: `headers`, `count`, `select`, `search`, `table` | Manual loop | Yes | Yes |
+| xan | Invoke-BashXan | `-d`, subcommands: `headers`, `count`, `select`, `search`, `table` | Binary cmdlet (`-d` is a declared value-bearing parameter `D`; subcommand keyword stays in `Arguments`) | Yes | Yes |
 | sleep | Invoke-BashSleep | (duration) | Positional | No | No |
 | time | Invoke-BashTime | (command) | Positional | No | No |
 | which | Invoke-BashWhich | `-a` | Manual loop | No | No |
