@@ -5281,64 +5281,11 @@ function Invoke-BrowseInteractive {
     }
 }
 
-function Invoke-BashBrowse {
-    [CmdletBinding()]
-    param(
-        [Parameter(ValueFromPipeline)]
-        [object]$InputObject,
-
-        [int]$Inspect = -1,
-        [int[]]$Select = @(),
-        [string]$Action,
-        [string]$Exec,
-        [switch]$List,
-        [switch]$PassThru,
-        [switch]$Force
-    )
-
-    begin {
-        $objects = [System.Collections.Generic.List[object]]::new()
-    }
-
-    process {
-        if ($null -ne $InputObject) {
-            $objects.Add($InputObject)
-        }
-    }
-
-    end {
-        if ($objects.Count -eq 0) { return }
-
-        $currentIndex = if ($Select.Count -gt 0) { $Select[0] } else { 0 }
-        $binding = New-BrowseBinding -Objects @($objects) -CurrentIndex $currentIndex -SelectedIndex $Select
-
-        if ($PassThru) {
-            return $binding.Items
-        }
-
-        if ($Inspect -ge 0) {
-            $inspectBinding = New-BrowseBinding -Objects @($objects) -CurrentIndex $Inspect -SelectedIndex @($Inspect)
-            return Invoke-BrowseAction -Name 'inspect' -Current $inspectBinding.Current -Items $inspectBinding.Items
-        }
-
-        if ($Action) {
-            return Invoke-BrowseAction -Name $Action -Current $binding.Current -Items $binding.Items -Force:$Force
-        }
-
-        if ($Exec) {
-            return Invoke-BrowseCommand -Command $Exec -Current $binding.Current -Items $binding.Items -Force:$Force
-        }
-
-        $isInputRedirected = [Console]::IsInputRedirected
-        if (-not $List -and -not $isInputRedirected) {
-            return Invoke-BrowseInteractive -Objects @($objects)
-        }
-
-        for ($i = 0; $i -lt $objects.Count; $i++) {
-            ConvertTo-BrowseRow -InputObject $objects[$i] -Index $i -SelectedIndex $Select
-        }
-    }
-}
+# Invoke-BashBrowse is now a binary cmdlet — PsBash.Cmdlets.InvokeBashBrowseCommand.
+# The Set-Alias 'browse' line below resolves to the cmdlet; the supporting psm1
+# helpers (New-BrowseBinding / ConvertTo-BrowseRow / Invoke-BrowseAction /
+# Invoke-BrowseCommand / Invoke-BrowseInteractive plus the *-BrowseAdapter web)
+# remain in this module and the cmdlet calls them via parameter-bound InvokeScript.
 
 # --- Prompt Hook Integration ---
 
