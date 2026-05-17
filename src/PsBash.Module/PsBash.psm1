@@ -7370,59 +7370,7 @@ function Invoke-BashEnv {
 # PsBash.Cmdlets. The Set-Alias lines below resolve to those cmdlets.
 
 # --- uname ---
-
-function Invoke-BashUname {
-    [OutputType('PsBash.TextOutput')]
-    param()
-    $Arguments = [string[]]$args
-    if ($Arguments -contains '--help') { return Show-BashHelp 'uname' }
-
-    $flagS = $false
-    $flagN = $false
-    $flagR = $false
-    $flagM = $false
-    $flagA = $false
-
-    foreach ($arg in $Arguments) {
-        if ($arg -cmatch '^-([snrma]+)$') {
-            foreach ($ch in $arg.Substring(1).ToCharArray()) {
-                switch ($ch) {
-                    's' { $flagS = $true }
-                    'n' { $flagN = $true }
-                    'r' { $flagR = $true }
-                    'm' { $flagM = $true }
-                    'a' { $flagA = $true }
-                }
-            }
-        } elseif ($arg -ceq '-s') { $flagS = $true }
-        elseif ($arg -ceq '-n') { $flagN = $true }
-        elseif ($arg -ceq '-r') { $flagR = $true }
-        elseif ($arg -ceq '-m') { $flagM = $true }
-        elseif ($arg -ceq '-a') { $flagA = $true }
-    }
-
-    $osVer = [System.Environment]::OSVersion
-    $ver = $osVer.Version
-    $release = "$($ver.Major).$($ver.Minor).$($ver.Build)"
-    $sysName = "MINGW64_NT-$release"
-    $hostName = [System.Environment]::MachineName.ToLower()
-    $arch = if ([System.Environment]::Is64BitProcess) { 'x86_64' } else { 'i686' }
-
-    if ($flagA) {
-        $text = "$sysName $hostName $release $arch MINGW64"
-    } else {
-        $anyFlag = $flagS -or $flagN -or $flagR -or $flagM
-        if (-not $anyFlag) { $flagS = $true }
-        $parts = @()
-        if ($flagS) { $parts += $sysName }
-        if ($flagN) { $parts += $hostName }
-        if ($flagR) { $parts += $release }
-        if ($flagM) { $parts += $arch }
-        $text = $parts -join ' '
-    }
-
-    New-BashObject -BashText $text -TypeName 'PsBash.TextOutput'
-}
+# Migrated to binary cmdlet — see src/PsBash.Cmdlets/InvokeBashUnameCommand.cs (REFACTOR-2).
 
 # --- fold Command ---
 
