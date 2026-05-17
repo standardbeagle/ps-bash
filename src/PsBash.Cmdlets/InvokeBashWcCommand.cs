@@ -323,6 +323,6 @@ public sealed class InvokeBashWcCommand : PSCmdlet
 
     private void WriteBashError(string message)
     {
-        FileSystemHelpers.WriteBashError(this, message);
+        InvokeCommand.InvokeScript("param($m) Write-BashError -Message $m", message);
     }
 }

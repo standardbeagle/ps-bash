@@ -214,6 +214,7 @@ public sealed class InvokeBashJqCommand : PSCmdlet
 
     private void EmitError(string message)
     {
-        FileSystemHelpers.WriteBashError(this, message);
+        InvokeCommand.InvokeScript(
+            "param($m) Write-BashError -Message $m", message);
     }
 }

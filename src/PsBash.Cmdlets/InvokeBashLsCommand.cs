@@ -696,8 +696,10 @@ public sealed class InvokeBashLsCommand : PSCmdlet
 
     private void WriteBashError(string message, int exitCode)
     {
-        FileSystemHelpers.WriteBashError(this, message);
-        FileSystemHelpers.SetLastExitCode(this, exitCode);
+        InvokeCommand.InvokeScript(
+            "param($m,$c) Write-BashError -Message $m -ExitCode $c",
+            message,
+            exitCode);
     }
 
     // --- Typed-property accessors for the PsBash.LsEntry PSObject ---

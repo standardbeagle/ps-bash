@@ -597,7 +597,8 @@ public sealed class InvokeBashFindCommand : PSCmdlet
 
     private void EmitError(string message, int exitCode)
     {
-        FileSystemHelpers.WriteBashError(this, message);
-        FileSystemHelpers.SetLastExitCode(this, exitCode);
+        InvokeCommand.InvokeScript(
+            "param($m,$x) Write-BashError -Message $m -ExitCode $x",
+            message, exitCode);
     }
 }

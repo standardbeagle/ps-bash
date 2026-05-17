@@ -279,6 +279,7 @@ public sealed class InvokeBashDateCommand : PSCmdlet
 
     private void WriteBashError(string message)
     {
-        FileSystemHelpers.WriteBashError(this, message);
+        InvokeCommand.InvokeScript(
+            "param($m) Write-BashError -Message $m", message);
     }
 }

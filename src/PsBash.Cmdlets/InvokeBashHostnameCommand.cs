@@ -49,7 +49,9 @@ public sealed class InvokeBashHostnameCommand : PSCmdlet
         }
         catch (Exception ex)
         {
-            FileSystemHelpers.WriteBashError(this, $"hostname: {ex.Message}");
+            InvokeCommand.InvokeScript(
+                "param($m) Write-BashError -Message $m",
+                $"hostname: {ex.Message}");
             return;
         }
 

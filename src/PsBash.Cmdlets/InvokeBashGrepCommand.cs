@@ -303,8 +303,9 @@ public sealed class InvokeBashGrepCommand : PSCmdlet
 
         if (patterns.Count == 0)
         {
-            FileSystemHelpers.WriteBashError(this, "grep: usage: grep [options] pattern [file ...]");
-        FileSystemHelpers.SetLastExitCode(this, 2);
+            InvokeCommand.InvokeScript(
+                "param($m,$c) Write-BashError -Message $m -ExitCode $c",
+                "grep: usage: grep [options] pattern [file ...]", 2);
             return;
         }
 
@@ -347,8 +348,9 @@ public sealed class InvokeBashGrepCommand : PSCmdlet
             }
             catch (ArgumentException ex)
             {
-                FileSystemHelpers.WriteBashError(this, $"grep: invalid regular expression: {ex.Message}");
-        FileSystemHelpers.SetLastExitCode(this, 2);
+                InvokeCommand.InvokeScript(
+                    "param($m,$c) Write-BashError -Message $m -ExitCode $c",
+                    $"grep: invalid regular expression: {ex.Message}", 2);
                 return;
             }
         }
@@ -529,8 +531,9 @@ public sealed class InvokeBashGrepCommand : PSCmdlet
                 if (!any)
                 {
                     string normalized = raw.Replace('\\', '/');
-                    FileSystemHelpers.WriteBashError(this, $"grep: {normalized}: No such file or directory");
-        FileSystemHelpers.SetLastExitCode(this, 2);
+                    InvokeCommand.InvokeScript(
+                        "param($m,$c) Write-BashError -Message $m -ExitCode $c",
+                        $"grep: {normalized}: No such file or directory", 2);
                 }
             }
         }
@@ -724,8 +727,9 @@ public sealed class InvokeBashGrepCommand : PSCmdlet
                 || ex.InnerException is FileNotFoundException or DirectoryNotFoundException;
             string msg = notFound ? "No such file or directory" : ex.Message;
             string normalized = path.Replace('\\', '/');
-            FileSystemHelpers.WriteBashError(this, $"grep: {normalized}: {msg}");
-        FileSystemHelpers.SetLastExitCode(this, 2);
+            InvokeCommand.InvokeScript(
+                "param($m,$c) Write-BashError -Message $m -ExitCode $c",
+                $"grep: {normalized}: {msg}", 2);
             return null;
         }
     }
