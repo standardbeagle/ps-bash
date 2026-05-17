@@ -240,7 +240,7 @@ public sealed class InvokeBashExprCommand : PSCmdlet
     /// </summary>
     private void WriteBashErrorWithExitCode(string message, int exitCode)
     {
-        InvokeCommand.InvokeScript(
-            "param($m,$c) Write-BashError -Message $m -ExitCode $c", message, exitCode);
+        FileSystemHelpers.WriteBashError(this, message);
+        FileSystemHelpers.SetLastExitCode(this, exitCode);
     }
 }

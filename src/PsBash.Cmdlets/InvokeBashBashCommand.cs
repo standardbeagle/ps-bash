@@ -102,12 +102,7 @@ public sealed class InvokeBashBashCommand : PSCmdlet
         string? psBashExe = ResolvePsBashExecutable();
         if (string.IsNullOrEmpty(psBashExe))
         {
-            foreach (var line in InvokeCommand.InvokeScript(
-                         "param($m) Write-BashError -Message $m",
-                         "bash: ps-bash executable not found"))
-            {
-                WriteObject(line);
-            }
+            FileSystemHelpers.WriteBashError(this, "bash: ps-bash executable not found");
             return;
         }
 
@@ -135,12 +130,7 @@ public sealed class InvokeBashBashCommand : PSCmdlet
             using var proc = Process.Start(psi);
             if (proc == null)
             {
-                foreach (var line in InvokeCommand.InvokeScript(
-                             "param($m) Write-BashError -Message $m",
-                             "bash: failed to start ps-bash"))
-                {
-                    WriteObject(line);
-                }
+                FileSystemHelpers.WriteBashError(this, "bash: failed to start ps-bash");
                 return;
             }
             // Close stdin immediately so a no-args / REPL-mode child sees EOF
@@ -157,12 +147,7 @@ public sealed class InvokeBashBashCommand : PSCmdlet
         }
         catch (Exception ex)
         {
-            foreach (var line in InvokeCommand.InvokeScript(
-                         "param($m) Write-BashError -Message $m",
-                         "bash: " + ex.Message))
-            {
-                WriteObject(line);
-            }
+            FileSystemHelpers.WriteBashError(this, "bash: " + ex.Message);
             SessionState.PSVariable.Set("global:LASTEXITCODE", 1);
             return;
         }

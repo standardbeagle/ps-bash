@@ -53,16 +53,35 @@ internal static class FileSystemHelpers
     }
 
     /// <summary>
-    /// Emit a bash-style error via the psm1 <c>Write-BashError</c> function.
-    /// The error-mode switch (<c>$script:BashErrorMode</c>) lives in psm1
-    /// scope, so we go through <see cref="PSCmdlet.InvokeCommand"/>'s
-    /// parameter-bound script body — no <see cref="ScriptBlock"/> construction,
-    /// AOT-safe.
+    /// Emit a bash-style error. Always writes an <see cref="ErrorRecord"/>
+    /// via <see cref="PSCmdlet.WriteError"/> so callers using
+    /// <c>cmd 2&gt;&amp;1 | Where {$_ -is [ErrorRecord]}</c> see it (Pester
+    /// tests rely on this — routing only through <c>InvokeCommand.InvokeScript</c>
+    /// buries the inner <c>Write-Error</c> in a sub-pipeline). Also invokes
+    /// the psm1 <c>Write-BashError</c> helper so bash-mode stderr formatting
+    /// (the production host launcher's path) continues to fire. Sets
+    /// <c>$global:LASTEXITCODE = 1</c>.
     /// </summary>
     public static void WriteBashError(PSCmdlet cmdlet, string message)
     {
-        cmdlet.InvokeCommand.InvokeScript(
-            "param($m) Write-BashError -Message $m", message);
+        SetLastExitCode(cmdlet, 1);
+
+        // Visible ErrorRecord into the cmdlet's own error stream.
+        cmdlet.WriteError(new ErrorRecord(
+            new System.IO.IOException(message),
+            "BashError",
+            ErrorCategory.NotSpecified,
+            null));
+
+        // Bash-mode stderr formatting via the psm1 helper. In PowerShell
+        // mode the inner Write-Error lands in the sub-pipeline (benign —
+        // the cmdlet.WriteError above carries the visible copy).
+        try
+        {
+            cmdlet.InvokeCommand.InvokeScript(
+                "param($m) Write-BashError -Message $m", message);
+        }
+        catch { /* ignore — ErrorRecord above already carried the message */ }
     }
 
     /// <summary>

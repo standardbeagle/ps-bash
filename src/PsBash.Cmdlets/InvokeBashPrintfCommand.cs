@@ -58,9 +58,8 @@ public sealed class InvokeBashPrintfCommand : PSCmdlet
 
         if (args.Length == 0)
         {
-            InvokeCommand.InvokeScript(
-                "param($m) Write-BashError -Message $m -ExitCode 2",
-                "printf: usage: printf format [arguments]");
+            FileSystemHelpers.WriteBashError(this, "printf: usage: printf format [arguments]");
+            FileSystemHelpers.SetLastExitCode(this, 2);
             return;
         }
 

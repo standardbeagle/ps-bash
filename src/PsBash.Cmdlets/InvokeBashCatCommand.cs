@@ -320,8 +320,7 @@ public sealed class InvokeBashCatCommand : PSCmdlet
         bool notFound = ex is FileNotFoundException or DirectoryNotFoundException
             || ex.InnerException is FileNotFoundException or DirectoryNotFoundException;
         string msg = notFound ? "No such file or directory" : ex.Message;
-        InvokeCommand.InvokeScript(
-            "param($m) Write-BashError -Message $m", $"{command}: {normalized}: {msg}");
+        FileSystemHelpers.WriteBashError(this, $"{command}: {normalized}: {msg}");
     }
 
     /// <summary>

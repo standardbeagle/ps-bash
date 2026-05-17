@@ -70,101 +70,108 @@ FormatsToProcess = 'PsBash.Format.ps1xml'
 # NestedModules = @()
 
 # Functions to export from this module, for best performance, do not use wildcards and do not delete the entry, use an empty array if there are no functions to export.
-FunctionsToExport = 'Set-BashErrorMode', 'Write-BashError', 'Resolve-BashGlob',
-               'Invoke-ProcessSub', 'Invoke-ProcessSubString', 'Invoke-ProcessSubPipeline',
-               # Invoke-BashPrintf migrated to a binary cmdlet in
-               # PsBash.Cmdlets.dll (REFACTOR-2 Phase 1b) — no longer a psm1
-               # function. Invoke-BashEcho stays a psm1 function: its -e/-n/-E
-               # short flags prefix-collide with PSCmdlet common parameters.
-               'Invoke-BashEcho', 'Get-BashPlatform',
-               'New-BashObject', 'Emit-BashLine', 'ConvertFrom-BashArgs', 'Expand-EscapeSequences',
-               # Invoke-BashLs migrated to a binary cmdlet in PsBash.Cmdlets.dll
-               # (REFACTOR-2 Phase 1d) — no longer a psm1 function. Its Tier 1 /
-               # Tier 3 provider paths stay in psm1 behind Get-BashLsProviderEntries.
-               'New-FlagDefs', 'Get-BashLsProviderEntries', 'Get-BashFileInfo',
-               'Format-BashSize', 'Format-BashDate', 'Format-LsLine',
-               'Get-LsDisplayName', 'Format-LsGrid',
-               'ConvertTo-PermissionString', 'Get-BashText',
-               # Invoke-BashGrep migrated to a binary cmdlet in PsBash.Cmdlets.dll
-               # (REFACTOR-2 Phase 4 follow-on) — no longer a psm1 function.
-               'Invoke-BashSort', 'ConvertFrom-HumanNumeric',
-               'Compare-Version', 'ConvertFrom-MonthName',
-               # Invoke-BashCat / Invoke-BashHead / Invoke-BashTail /
-               # Invoke-BashWc migrated to binary cmdlets in PsBash.Cmdlets.dll
-               # (REFACTOR-2 Phase 1c) — no longer psm1 functions.
-               # Invoke-BashFind migrated to a binary cmdlet in PsBash.Cmdlets.dll
-               # (REFACTOR-2 Phase 3 follow-on) — no longer a psm1 function.
-               # Get-BashFileInfo stays in psm1 because Invoke-BashStat (still a
-               # psm1 function) depends on it; the find cmdlet duplicates the
-               # relevant slice in C# (BuildFileInfo).
-               'Invoke-BashStat',
-               'Invoke-BashCp', 'Invoke-BashMv', 'Invoke-BashRm',
-               'Invoke-BashMkdir', 'Invoke-BashRmdir', 'Invoke-BashTouch',
-               'Invoke-BashLn',
-               'Invoke-BashPs', 'Get-LinuxProcEntry', 'Get-DotNetProcEntry',
-               'Format-PsAuxLine', 'Format-PsCustomLine',
-               # Invoke-BashSed (+ ConvertFrom-SedExpression / Test-SedAddress)
-               # migrated to a binary cmdlet in PsBash.Cmdlets.dll
-               # (REFACTOR-2 Phase 3) — no longer psm1 functions.
-               'Invoke-BashAwk', 'ConvertFrom-AwkProgram', 'Split-AwkFields',
-               'Test-AwkPattern', 'Resolve-AwkExpression', 'Invoke-AwkAction',
-               'Format-AwkPrintf', 'Resolve-AwkStringFunc',
-               'Invoke-BashCut', 'Invoke-BashTr', 'Invoke-BashUniq',
-               'Invoke-BashRev', 'Invoke-BashNl',
-               'Invoke-BashDiff', 'Invoke-BashComm', 'Invoke-BashColumn',
-               'Invoke-BashJoin', 'Invoke-BashPaste',
-               'Invoke-BashTee', 'Invoke-BashXargs',
-               # Invoke-BashJq (REFACTOR-2 Phase F6) migrated to a binary
-               # cmdlet in PsBash.Cmdlets.dll — no longer a psm1 function.
-               # ConvertTo-JqJson + Invoke-JqFilter remain in psm1 as the
-               # filter engine used by the still-psm1 Invoke-BashYq; their
-               # removal is filed as a follow-on (paired with a yq migration).
-               'ConvertTo-JqJson', 'Invoke-JqFilter',
-               'Invoke-BashDate',
-               'Invoke-BashSeq',
-               'Invoke-BashExpr',
-               'Invoke-BashDu', 'Invoke-BashTree',
-               'Invoke-BashEnv',
-               # Invoke-BashBasename / Invoke-BashDirname (REFACTOR-2 Phase 1)
-               # and Invoke-BashPwd (REFACTOR-2 Phase 1b) migrated to binary
-               # cmdlets in PsBash.Cmdlets.dll — no longer psm1 functions, so
-               # they are not exported here.
-               'Invoke-BashHostname', 'Invoke-BashWhoami', 'Invoke-BashUname',
-               'Invoke-BashFold', 'Invoke-BashExpand', 'Invoke-BashUnexpand',
-               'Invoke-BashStrings', 'Invoke-BashSplit', 'Invoke-BashTac',
-               'Invoke-BashBase64', 'Invoke-BashMd5sum', 'Invoke-BashSha1sum',
-               'Invoke-BashSha256sum', 'Invoke-BashFile',
-               'Invoke-BashRg',
-               'Invoke-BashGzip', 'Invoke-BashTar',
-               'Invoke-BashYq', 'ConvertFrom-SimpleYaml', 'ConvertFrom-YamlValue',
-               'ConvertTo-SimpleYaml',
-               'Invoke-BashXan',
-               'Register-BashCompletions',
-               'Test-BashHelpFlag', 'Show-BashHelp',
-               'Invoke-BashSleep', 'Invoke-BashTime', 'Invoke-BashWhich',
-               'Invoke-BashAlias', 'Invoke-BashTrap',
-               'Invoke-BashReadlink', 'Invoke-BashMktemp', 'Invoke-BashType',
-               'Invoke-BashBash',
-               'Invoke-BashRedirect',
-                'Invoke-BashBackground', 'Invoke-BashWait',
-                'Invoke-BashJobs', 'Invoke-BashFg', 'Invoke-BashBg',
-                 'Invoke-BashMapfile',
-                'Invoke-BashShift', 'Invoke-BashRealpath', 'Invoke-BashCommand',
-                'Invoke-BashUnset', 'Invoke-BashPushd',
-                 'Invoke-BashPopd', 'Invoke-BashDirs', 'Invoke-BashYes', 'Invoke-BashTput',
-                 'Invoke-BashShopt',
-                 'Invoke-BashKill', 'Invoke-BashTest', 'Test-BashCondition',
-                 'Invoke-BashLet', 'Invoke-BashId', 'Invoke-BashShuf',
-                 # Invoke-BashBrowse + Invoke-BashMore are binary cmdlets in
-                 # PsBash.Cmdlets.dll (REFACTOR-2 rounds 13 / 11). Resolvable
-                 # via Get-Command after the psm1 dll-probe completes, so they
-                 # are intentionally NOT listed in FunctionsToExport — that key
-                 # only declares psm1 functions.
-                 'Resolve-BrowseAdapter', 'New-BrowseBinding',
-                 'Invoke-BrowseCommand', 'Test-BrowseCommandRequiresConfirmation',
-                 'ConvertTo-BrowseRow', 'Invoke-BrowseAction', 'Invoke-BrowseInteractive',
-                 'Get-BashItem',
-                 'Enable-BashHookPrompt', 'Disable-BashHookPrompt'
+FunctionsToExport = @(
+    'Compare-Version',
+    'Complete-BashBgJob',
+    'ConvertFrom-AwkProgram',
+    'ConvertFrom-BashArgs',
+    'ConvertFrom-HumanNumeric',
+    'ConvertFrom-MonthName',
+    'ConvertFrom-SimpleYaml',
+    'ConvertFrom-YamlValue',
+    'ConvertTo-BrowseRow',
+    'ConvertTo-JqJson',
+    'ConvertTo-PermissionString',
+    'ConvertTo-SimpleYaml',
+    'Disable-BashHookPrompt',
+    'Emit-BashLine',
+    'Enable-BashHookPrompt',
+    'Expand-AwkString',
+    'Expand-EscapeSequences',
+    'Find-JqBranchKeyword',
+    'Find-JqKeyword',
+    'Find-JqTopLevelChar',
+    'Find-JqTopLevelStr',
+    'Format-AwkPrintf',
+    'Format-BashDate',
+    'Format-BashSize',
+    'Format-LsGrid',
+    'Format-LsLine',
+    'Format-PsAuxLine',
+    'Format-PsCustomLine',
+    'Get-BashBgRunspacePool',
+    'Get-BashFileInfo',
+    'Get-BashItem',
+    'Get-BashLsProviderEntries',
+    'Get-BashPlatform',
+    'Get-BashText',
+    'Get-BrowseDisplayProperties',
+    'Get-BrowseTargetText',
+    'Get-DotNetProcEntry',
+    'Get-JqMatchingBracket',
+    'Get-LinuxProcEntry',
+    'Get-LsDisplayName',
+    'Get-LsEntryFromFsi',
+    'Get-LsEntryFromPsItem',
+    'Initialize-BrowseAdapters',
+    'Invoke-AwkAction',
+    'Invoke-BashAwk',
+    'Invoke-BashBackground',
+    'Invoke-BashBg',
+    'Invoke-BashEcho',
+    'Invoke-BashFg',
+    'Invoke-BashJobs',
+    'Invoke-BashKill',
+    'Invoke-BashRedirect',
+    'Invoke-BashWait',
+    'Invoke-BrowseAction',
+    'Invoke-BrowseCommand',
+    'Invoke-BrowseInteractive',
+    'Invoke-JqFilter',
+    'Invoke-JqIf',
+    'Invoke-JqRecurse',
+    'Invoke-JqSelect',
+    'Invoke-ProcessSub',
+    'Invoke-ProcessSubPipeline',
+    'Invoke-ProcessSubString',
+    'New-BashObject',
+    'New-BrowseAction',
+    'New-BrowseAdapter',
+    'New-BrowseBinding',
+    'New-BrowseSafetyPreview',
+    'New-FlagDefs',
+    'Open-BashFileReader',
+    'Read-AwkBlock',
+    'Read-BashFileBytes',
+    'Read-BashFileLines',
+    'Read-BashFileRaw',
+    'Read-BashFileStreaming',
+    'Register-BashCompletions',
+    'Register-BashLsProvider',
+    'Resolve-AwkExpression',
+    'Resolve-AwkStringFunc',
+    'Resolve-BashGlob',
+    'Resolve-BrowseAdapter',
+    'Resolve-JqDotPath',
+    'Resolve-JqStringInterpolation',
+    'Set-BashDisplayProperty',
+    'Set-BashErrorMode',
+    'Show-BashHelp',
+    'Split-AwkFields',
+    'Split-AwkFuncArgs',
+    'Split-AwkStatements',
+    'Split-JqComma',
+    'Split-JqPipe',
+    'Test-AwkPattern',
+    'Test-BashCondition',
+    'Test-BashHelpFlag',
+    'Test-BrowseCommandRequiresConfirmation',
+    'Write-BashError',
+    'Write-BashFileRaw',
+    'Write-BashFileText',
+    'Write-BashHostStderr'
+)
+
 
 # Cmdlets to export from this module, for best performance, do not use wildcards and do not delete the entry, use an empty array if there are no cmdlets to export.
 CmdletsToExport = @()

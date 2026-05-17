@@ -200,7 +200,6 @@ foreach ($result in $results) {
 
     private void EmitError(string message)
     {
-        InvokeCommand.InvokeScript(
-            "param($m) Write-BashError -Message $m", message);
+        FileSystemHelpers.WriteBashError(this, message);
     }
 }

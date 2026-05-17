@@ -60,9 +60,7 @@ internal static class ChecksumEngine
                 {
                     if (!File.Exists(filePath))
                     {
-                        cmdlet.InvokeCommand.InvokeScript(
-                            "param($m) Write-BashError -Message $m",
-                            $"{commandName}: {filePath}: No such file or directory");
+                        FileSystemHelpers.WriteBashError(cmdlet, $"{commandName}: {filePath}: No such file or directory");
                         continue;
                     }
 
@@ -73,9 +71,7 @@ internal static class ChecksumEngine
                     }
                     catch (Exception ex)
                     {
-                        cmdlet.InvokeCommand.InvokeScript(
-                            "param($m) Write-BashError -Message $m",
-                            $"{commandName}: {filePath}: {ex.Message}");
+                        FileSystemHelpers.WriteBashError(cmdlet, $"{commandName}: {filePath}: {ex.Message}");
                         continue;
                     }
 
