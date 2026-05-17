@@ -96,7 +96,7 @@ FunctionsToExport = 'Set-BashErrorMode', 'Invoke-ProcessSub', 'Invoke-ProcessSub
                # Get-BashFileInfo stays in psm1 because Invoke-BashStat (still a
                # psm1 function) depends on it; the find cmdlet duplicates the
                # relevant slice in C# (BuildFileInfo).
-               'Invoke-BashStat', 'Format-StatString',
+               'Invoke-BashStat',
                'Invoke-BashCp', 'Invoke-BashMv', 'Invoke-BashRm',
                'Invoke-BashMkdir', 'Invoke-BashRmdir', 'Invoke-BashTouch',
                'Invoke-BashLn',
@@ -119,7 +119,7 @@ FunctionsToExport = 'Set-BashErrorMode', 'Invoke-ProcessSub', 'Invoke-ProcessSub
                # filter engine used by the still-psm1 Invoke-BashYq; their
                # removal is filed as a follow-on (paired with a yq migration).
                'ConvertTo-JqJson', 'Invoke-JqFilter',
-               'Invoke-BashDate', 'Convert-DateFormat',
+               'Invoke-BashDate',
                'Invoke-BashSeq',
                'Invoke-BashExpr',
                'Invoke-BashDu', 'Invoke-BashTree',
@@ -154,9 +154,13 @@ FunctionsToExport = 'Set-BashErrorMode', 'Invoke-ProcessSub', 'Invoke-ProcessSub
                  'Invoke-BashShopt',
                  'Invoke-BashKill', 'Invoke-BashTest', 'Test-BashCondition',
                  'Invoke-BashLet', 'Invoke-BashId', 'Invoke-BashShuf',
-                 'Invoke-BashBrowse', 'Resolve-BrowseAdapter', 'New-BrowseBinding',
+                 # Invoke-BashBrowse + Invoke-BashMore are binary cmdlets in
+                 # PsBash.Cmdlets.dll (REFACTOR-2 rounds 13 / 11). Resolvable
+                 # via Get-Command after the psm1 dll-probe completes, so they
+                 # are intentionally NOT listed in FunctionsToExport — that key
+                 # only declares psm1 functions.
+                 'Resolve-BrowseAdapter', 'New-BrowseBinding',
                  'Invoke-BrowseCommand', 'Test-BrowseCommandRequiresConfirmation',
-                 'Invoke-BashMore',
                  'Enable-BashHookPrompt', 'Disable-BashHookPrompt'
 
 # Cmdlets to export from this module, for best performance, do not use wildcards and do not delete the entry, use an empty array if there are no cmdlets to export.
