@@ -6,6 +6,10 @@ Designed for execution by a fresh subagent with no prior session context. Each m
 
 Companion: [`docs/refactor-2-roadmap.md`](./refactor-2-roadmap.md) — the queue of remaining functions with sizing and tier.
 
+## Working directory rule (mandatory)
+
+**Before any read or write, run `git rev-parse --show-toplevel` and treat that output as the ONLY root for every file path in this migration.** Your subagent is launched inside an isolated git worktree; the orchestrator's main checkout is a *different* directory and is OFF LIMITS. If you find yourself typing or copying an absolute path that does not start with the worktree root, you've already gone wrong — pause and re-derive the path from `show-toplevel`. The 2026-05-16 validation run lost ~30 minutes of integration time to subagents that wrote to the main checkout first and recovered later; one of those recoveries leaked state into a sibling subagent's worktree, producing a duplicate doc row that required manual conflict resolution at integration. Don't repeat that.
+
 ## Prompt template
 
 Paste verbatim into a subagent's prompt. Replace `<FUNCTION>` and `<COMMAND-NAME>` with the chosen entry from the roadmap's Tier 1 list.
