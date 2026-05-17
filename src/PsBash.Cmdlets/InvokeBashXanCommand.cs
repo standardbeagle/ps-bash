@@ -87,9 +87,11 @@ public sealed class InvokeBashXanCommand : PSCmdlet
 
     protected override void EndProcessing()
     {
-        // Flatten the loosely-typed Arguments into a string[] (handling
-        // nested arrays from PowerShell's array-literal parsing of
-        // comma-separated tokens like 'name,city').
+        // Flatten the loosely-typed Arguments into a string[]. PowerShell
+        // parses bash-style comma-lists like `xan select name,city` into a
+        // nested array — preserve the user's intent by re-joining nested
+        // arrays with commas so the cmdlet sees a single "name,city" token,
+        // matching the bash convention.
         var flat = new List<string>();
         if (Arguments != null)
         {
@@ -97,7 +99,9 @@ public sealed class InvokeBashXanCommand : PSCmdlet
             {
                 if (item is System.Collections.IEnumerable e && item is not string)
                 {
-                    foreach (var sub in e) flat.Add(sub?.ToString() ?? string.Empty);
+                    var parts = new List<string>();
+                    foreach (var sub in e) parts.Add(sub?.ToString() ?? string.Empty);
+                    flat.Add(string.Join(",", parts));
                 }
                 else
                 {

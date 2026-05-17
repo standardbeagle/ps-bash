@@ -180,10 +180,14 @@ public sealed class InvokeBashAliasCommand : PSCmdlet
                 {
                     dict[aliasName] = aliasValue;
                 }
+                // Use Function:\global: so the dynamic function lives in
+                // the global scope and is reachable via Get-Command from
+                // the test's session — not buried in the cmdlet's own
+                // session state where the caller can't see it.
                 InvokeCommand.InvokeScript(
                     "param($n, $v) " +
                     "$body = [scriptblock]::Create(\"& $v `@args\"); " +
-                    "Set-Item -Path ('Function:\\' + $n) -Value $body -Force",
+                    "Set-Item -Path ('Function:\\global:' + $n) -Value $body -Force",
                     aliasName, aliasValue);
             }
             else

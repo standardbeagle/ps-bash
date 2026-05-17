@@ -318,8 +318,12 @@ public sealed class InvokeBashSortCommand : PSCmdlet
             int cmp2 = 0;
             if (gHuman)
             {
-                double aH = ConvertFromHumanNumeric(aText);
-                double bH = ConvertFromHumanNumeric(bText);
+                // Prefer the typed SizeBytes property when present (LsEntry
+                // objects from ls -lh): the full ls line doesn't parse as a
+                // bare human-readable number, so falling back to text-only
+                // comparison would mis-sort the pipeline by leading char.
+                double aH = ExtractSizeBytes(a) ?? ConvertFromHumanNumeric(aText);
+                double bH = ExtractSizeBytes(b) ?? ConvertFromHumanNumeric(bText);
                 cmp2 = aH < bH ? -1 : (aH > bH ? 1 : 0);
             }
             else if (gNumeric)
@@ -547,6 +551,26 @@ public sealed class InvokeBashSortCommand : PSCmdlet
             }
         }
         return (field, charOffset, numeric, reverse, blankIgnore);
+    }
+
+    /// <summary>
+    /// Extracts a SizeBytes-typed property from a pipeline object (LsEntry
+    /// from ls -lh has SizeBytes:long). Returns null when the object lacks
+    /// such a property so the caller falls back to text-based parsing.
+    /// </summary>
+    private static double? ExtractSizeBytes(object item)
+    {
+        PSObject? pso = item as PSObject ?? (item != null ? PSObject.AsPSObject(item) : null);
+        var prop = pso?.Properties["SizeBytes"];
+        if (prop?.Value == null) return null;
+        try
+        {
+            return Convert.ToDouble(prop.Value, CultureInfo.InvariantCulture);
+        }
+        catch
+        {
+            return null;
+        }
     }
 
     private static double ConvertFromHumanNumeric(string value)

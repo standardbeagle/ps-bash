@@ -107,6 +107,34 @@ public sealed class InvokeBashTarCommand : PSCmdlet
         var excludePatterns = new List<string>();
         var operands = new List<string>();
 
+        // Distinguish `-c` (create) from `-C DIR` (chdir): PowerShell's
+        // case-insensitive binder collapses them onto the same `C` switch
+        // parameter, so `tar -xf ARCHIVE -C OUTDIR` ends up with C.IsPresent
+        // (set spuriously) and no chdir. Scan MyInvocation.Line for the
+        // uppercase '-C <DIR>' form and recover the chdir target. When the
+        // raw line has -C (uppercase) but no -c (lowercase), also clear
+        // the create flag since the binder set it under false pretenses.
+        var rawLine = MyInvocation?.Line ?? string.Empty;
+        if (!string.IsNullOrEmpty(rawLine))
+        {
+            var cMatch = System.Text.RegularExpressions.Regex.Match(
+                rawLine,
+                @"(?<![A-Za-z0-9])-C\s+(?:'([^']*)'|""([^""]*)""|([^\s]+))");
+            if (cMatch.Success)
+            {
+                changeDir = cMatch.Groups[1].Success ? cMatch.Groups[1].Value
+                          : cMatch.Groups[2].Success ? cMatch.Groups[2].Value
+                          : cMatch.Groups[3].Value;
+                // Did the user write -c (lowercase) anywhere else?
+                bool sawLowerC = System.Text.RegularExpressions.Regex.IsMatch(
+                    rawLine, @"(?<![A-Za-z0-9])-c(?![A-Za-z0-9])");
+                if (!sawLowerC)
+                {
+                    create = false;
+                }
+            }
+        }
+
         int i = 0;
         while (i < args.Length)
         {
