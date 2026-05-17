@@ -147,7 +147,7 @@ FunctionsToExport = 'Set-BashErrorMode', 'Invoke-ProcessSub', 'Invoke-ProcessSub
                'Invoke-BashRedirect',
                 'Invoke-BashBackground', 'Invoke-BashWait',
                 'Invoke-BashJobs', 'Invoke-BashFg', 'Invoke-BashBg',
-                 'Invoke-BashRead', 'Invoke-BashMapfile',
+                 'Invoke-BashMapfile',
                 'Invoke-BashShift', 'Invoke-BashRealpath', 'Invoke-BashCommand',
                 'Invoke-BashUnset', 'Invoke-BashPushd',
                  'Invoke-BashPopd', 'Invoke-BashDirs', 'Invoke-BashYes', 'Invoke-BashTput',

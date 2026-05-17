@@ -78,7 +78,13 @@ CmdletsToExport = @(
     # function introduced a script function scope, so source <(...) env vars
     # and function defs were discarded on return. The cmdlet has no script
     # scope, so InvokeScript(useNewScope:false) targets the eval pipeline.
-    'Invoke-ProcessSubSource'
+    'Invoke-ProcessSubSource',
+    # REFACTOR-2 follow-on: read migrated from PsBash.psm1. Pipeline-or-stdin
+    # read into one or more variables in the caller's scope plus the process
+    # environment block (so subsequent $env:NAME expansions in transpiled bash
+    # see the value). -p / -a declared as explicit string parameters to
+    # bypass common-parameter prefix collisions.
+    'Invoke-BashRead'
 )
 
 VariablesToExport = @()
