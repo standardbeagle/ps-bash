@@ -4855,14 +4855,8 @@ function Invoke-BashKill {
 
 # --- test (standalone) ---
 
-function Invoke-BashTest {
-    param()
-    $Arguments = [string[]]$args
-
-    $__testResult = Test-BashCondition @Arguments
-    if ($__testResult) { $global:LASTEXITCODE = 0 } else { $global:LASTEXITCODE = 1 }
-    ,$__testResult
-}
+# Invoke-BashTest is a binary cmdlet (PsBash.Cmdlets.InvokeBashTestCommand) since REFACTOR-2 follow-on.
+# Test-BashCondition stays here as a script helper for any out-of-tree caller.
 
 function Test-BashCondition {
     param()
@@ -5560,6 +5554,7 @@ Set-Alias -Name 'tput'     -Value 'Invoke-BashTput'     -Force -Scope Global -Op
 Set-Alias -Name 'shopt'    -Value 'Invoke-BashShopt'    -Force -Scope Global -Option AllScope
 Set-Alias -Name 'kill'     -Value 'Invoke-BashKill'     -Force -Scope Global -Option AllScope
 Set-Alias -Name 'test'     -Value 'Invoke-BashTest'     -Force -Scope Global -Option AllScope
+Set-Alias -Name '['        -Value 'Invoke-BashTest'     -Force -Scope Global -Option AllScope
 Set-Alias -Name 'let'      -Value 'Invoke-BashLet'      -Force -Scope Global -Option AllScope
 Set-Alias -Name 'id'       -Value 'Invoke-BashId'       -Force -Scope Global -Option AllScope
 Set-Alias -Name 'shuf'     -Value 'Invoke-BashShuf'     -Force -Scope Global -Option AllScope

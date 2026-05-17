@@ -365,6 +365,7 @@ foreach ($item in $pipelineInput) {
 | mapfile / readarray | Invoke-BashMapfile | `-n`, `-O`, `-s`, `-t`, `-d` | Binary cmdlet (`-O` declared as `int? O`, `-d` declared as `string? D`; `-n` / `-s` / `-t` stay in `Arguments`) | Yes | No |
 | less | Invoke-BashLess | `-N`, `-i`, `-S` | Binary cmdlet (`-i` declared as `SwitchParameter I`; `-N` / `-S` declared as `SwitchParameter`s for clean binder routing; rest stay in `Arguments`. Non-interactive: pass-through; interactive: shells out to native `less` via `Process` with operands bound through `ProcessStartInfo.ArgumentList`) | Yes | Yes |
 | more | Invoke-BashMore | `-N`, `+NUM` | Binary cmdlet (`-N` declared as `SwitchParameter N`; `+NUM` positional stays in `Arguments`. Non-interactive: emits all input lines as `PsBash.TextOutput`; the oracle's interactive paging loop is not exercised in SDK runspaces) | Yes | Yes |
+| test / `[` | Invoke-BashTest | `-e -f -d -r -w -x -s -L -h -z -n`, `= != -eq -ne -lt -le -gt -ge`, `! -a -o` | Binary cmdlet (colliding bare flags `-e` / `-d` / `-w` / `-a` / `-o` declared as `SwitchParameter`s `E` / `D` / `W` / `A` / `O` and re-injected into the operand list post-parse; rest stay in `Arguments`) | No | No |
 
 Additional aliases: `printenv` -> `Invoke-BashEnv`, `gunzip` -> `Invoke-BashGzip`,
 `zcat` -> `Invoke-BashGzip`, `.` -> `Invoke-BashSource`.
@@ -920,6 +921,7 @@ foreach ($item in $pipelineInput) {
 | mapfile / readarray | Invoke-BashMapfile | `-n`, `-O`, `-s`, `-t`, `-d` | Binary cmdlet (`-O` declared as `int? O`, `-d` declared as `string? D`; `-n` / `-s` / `-t` stay in `Arguments`) | Yes | No |
 | less | Invoke-BashLess | `-N`, `-i`, `-S` | Binary cmdlet (`-i` declared as `SwitchParameter I`; `-N` / `-S` declared as `SwitchParameter`s for clean binder routing; rest stay in `Arguments`. Non-interactive: pass-through; interactive: shells out to native `less` via `Process` with operands bound through `ProcessStartInfo.ArgumentList`) | Yes | Yes |
 | more | Invoke-BashMore | `-N`, `+NUM` | Binary cmdlet (`-N` declared as `SwitchParameter N`; `+NUM` positional stays in `Arguments`. Non-interactive: emits all input lines as `PsBash.TextOutput`; the oracle's interactive paging loop is not exercised in SDK runspaces) | Yes | Yes |
+| test / `[` | Invoke-BashTest | `-e -f -d -r -w -x -s -L -h -z -n`, `= != -eq -ne -lt -le -gt -ge`, `! -a -o` | Binary cmdlet (colliding bare flags `-e` / `-d` / `-w` / `-a` / `-o` declared as `SwitchParameter`s `E` / `D` / `W` / `A` / `O` and re-injected into the operand list post-parse; rest stay in `Arguments`) | No | No |
 
 Additional aliases: `printenv` -> `Invoke-BashEnv`, `gunzip` -> `Invoke-BashGzip`,
 `zcat` -> `Invoke-BashGzip`, `.` -> `Invoke-BashSource`.
