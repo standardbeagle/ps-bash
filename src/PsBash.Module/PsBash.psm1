@@ -9013,64 +9013,7 @@ function Invoke-BashXan {
 # Invoke-Bashsleep migrated to binary cmdlet (REFACTOR-2): see InvokeBash*Command.cs in PsBash.Cmdlets.
 
 
-function Invoke-BashTime {
-    [OutputType('PsBash.TimeOutput')]
-    param()
-    $Arguments = [string[]]$args
-    if ($Arguments -contains '--help') { return Show-BashHelp 'time' }
-
-    if ($Arguments.Count -eq 0) {
-        Write-BashError -Message 'time: missing command'
-        return
-    }
-
-    $cmd = $Arguments[0]
-    $cmdArgs = @()
-    if ($Arguments.Count -gt 1) {
-        $cmdArgs = $Arguments[1..($Arguments.Count - 1)]
-    }
-
-    $sw = [System.Diagnostics.Stopwatch]::StartNew()
-    $exitCode = 0
-    $outputText = ''
-    try {
-        $output = @(& $cmd @cmdArgs 2>&1)
-        $sw.Stop()
-        $errors = @($output | Where-Object { $_ -is [System.Management.Automation.ErrorRecord] })
-        $normal = @($output | Where-Object { $_ -isnot [System.Management.Automation.ErrorRecord] })
-        foreach ($e in $errors) { Write-BashError -Message "$e" }
-        if ($errors.Count -gt 0) { $exitCode = 1 }
-    } catch {
-        $sw.Stop()
-        Write-BashError -Message $_.Exception.Message
-        $exitCode = 1
-        $errors = @($_)
-        $normal = @()
-    }
-    try {
-        $textParts = @(foreach ($item in $normal) {
-            if ($item.PSObject.Properties['BashText']) { $item.BashText } else { "$item" }
-        })
-        $outputText = $textParts -join "`n"
-    } catch {
-        $sw.Stop()
-        $exitCode = 1
-        Write-BashError -Message "$_"
-    }
-
-    $realTime = $sw.Elapsed
-    $formatted = 'real    {0:N3}s' -f $realTime.TotalSeconds
-    [Console]::Error.WriteLine($formatted)
-
-    $obj = [PSCustomObject]@{
-        PSTypeName = 'PsBash.TimeOutput'
-        RealTime   = $realTime
-        Command    = $cmd
-        ExitCode   = $exitCode
-        BashText   = $outputText
-    }
-    Set-BashDisplayProperty $obj
-}
+# Invoke-BashTime migrated to binary cmdlet (REFACTOR-2): see InvokeBashTimeCommand.cs in PsBash.Cmdlets.
 
 # Invoke-Bashwhich migrated to binary cmdlet (REFACTOR-2): see InvokeBash*Command.cs in PsBash.Cmdlets.
 
