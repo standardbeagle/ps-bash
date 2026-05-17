@@ -34,6 +34,19 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: Build PsBash.Cmdlets binary module
+        shell: pwsh
+        run: |
+          # The psm1 probes well-known relative paths for PsBash.Cmdlets.dll
+          # so Import-Module PsBash can load the binary cmdlets that many
+          # Invoke-Bash* names now resolve to (REFACTOR-2 migrations).
+          dotnet build src/PsBash.Cmdlets/PsBash.Cmdlets.csproj -c Debug --framework net8.0 -nologo
+
       - name: Install Pester
         shell: pwsh
         run: |

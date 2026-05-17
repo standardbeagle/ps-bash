@@ -16,6 +16,23 @@
 # The ModulePartialLoadTests CI guard asserts the full advertised surface
 # (FunctionsToExport / AliasesToExport) is Get-Command-resolvable.
 
+# Probe for the companion PsBash.Cmdlets binary module. Many aliases now
+# resolve to cmdlets in PsBash.Cmdlets.dll (REFACTOR-2 migrations). When this
+# psm1 is loaded directly (e.g. CI Pester via Import-Module PsBash.psd1),
+# the host-side load path that normally imports the dll is not in play, so
+# we probe a few well-known relative locations. Silent no-op when absent —
+# the host always supplies the dll via its own canonical extraction path.
+$script:__psbashCmdletsDll = @(
+    (Join-Path $PSScriptRoot 'PsBash.Cmdlets.dll')
+    (Join-Path $PSScriptRoot '..' 'PsBash.Cmdlets' 'bin' 'Debug' 'net8.0' 'PsBash.Cmdlets.dll')
+    (Join-Path $PSScriptRoot '..' 'PsBash.Cmdlets' 'bin' 'Release' 'net8.0' 'PsBash.Cmdlets.dll')
+    (Join-Path $PSScriptRoot '..' 'PsBash.Cmdlets' 'bin' 'Debug' 'net10.0' 'PsBash.Cmdlets.dll')
+    (Join-Path $PSScriptRoot '..' 'PsBash.Cmdlets' 'bin' 'Release' 'net10.0' 'PsBash.Cmdlets.dll')
+) | Where-Object { Test-Path -LiteralPath $_ } | Select-Object -First 1
+if ($script:__psbashCmdletsDll) {
+    Import-Module $script:__psbashCmdletsDll -ErrorAction SilentlyContinue
+}
+
 # Global state initialized here so bash functions can access these variables
 # before any bash function runs. Positional params are cleared by `set --` and
 # saved/restored by every emitted bash function that references $1..$9 / $@.
