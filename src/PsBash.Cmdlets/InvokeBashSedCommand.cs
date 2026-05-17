@@ -132,6 +132,32 @@ public sealed class InvokeBashSedCommand : PSCmdlet
             expressions.AddRange(Expression);
         }
 
+        // Workaround for `sed -e A -e B`: PowerShell's binder rejects
+        // repeated -e because Expression is a single array parameter
+        // ("specified more than once"). If MyInvocation.Line shows
+        // multiple `-e <value>` occurrences, reparse them ourselves and
+        // replace the binder's view of Expression.
+        var rawLine = MyInvocation?.Line ?? string.Empty;
+        if (!string.IsNullOrEmpty(rawLine))
+        {
+            // Match `-e` followed by either a quoted or whitespace-delimited
+            // value. Handles single/double quotes and bare tokens.
+            var eMatches = System.Text.RegularExpressions.Regex.Matches(
+                rawLine,
+                @"(?<![A-Za-z0-9])-e\s+(?:'([^']*)'|""([^""]*)""|([^\s]+))");
+            if (eMatches.Count >= 2)
+            {
+                expressions.Clear();
+                foreach (System.Text.RegularExpressions.Match m in eMatches)
+                {
+                    var v = m.Groups[1].Success ? m.Groups[1].Value
+                          : m.Groups[2].Success ? m.Groups[2].Value
+                          : m.Groups[3].Value;
+                    expressions.Add(v);
+                }
+            }
+        }
+
         // Parse the residual Arguments. -e / -E never appear here (bound by the
         // Expression parameter); -n / -i / -f / -r / bundled short flags do.
         bool pastDoubleDash = false;

@@ -170,17 +170,19 @@ public sealed class InvokeBashStatCommand : PSCmdlet
 
             var entry = BuildStatEntry(item);
 
-            // Format output per oracle dispatch order.
+            // Format output per oracle dispatch order. BashText is stored
+            // normalized (no trailing newline); the display layer adds it
+            // back when needed.
             if (printfString != null)
             {
                 string text = FormatStatString(entry, printfString);
                 text = BashRuntime.ExpandEscapeSequences(text);
-                entry.BashText = text;
+                entry.BashText = BashRuntime.NormalizeBashText(text);
             }
             else if (formatString != null)
             {
                 string text = FormatStatString(entry, formatString);
-                entry.BashText = text + "\n";
+                entry.BashText = BashRuntime.NormalizeBashText(text);
             }
             else if (terseMode)
             {

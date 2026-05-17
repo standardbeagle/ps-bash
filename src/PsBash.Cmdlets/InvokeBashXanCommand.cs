@@ -55,8 +55,13 @@ namespace PsBash.Cmdlets;
 [OutputType(typeof(PSObject))]
 public sealed class InvokeBashXanCommand : PSCmdlet
 {
+    // object[] (not string[]) because PowerShell parses bash-style
+    // comma-lists like `xan select name,city` into nested arrays. With a
+    // string[] declaration the binder errors on the nested array; with
+    // object[] we accept it and flatten each element to its ToString()
+    // below.
     [Parameter(ValueFromRemainingArguments = true)]
-    public string[]? Arguments { get; set; }
+    public object[]? Arguments { get; set; }
 
     /// <summary>
     /// The bash <c>-d DELIM</c> (CSV delimiter) value flag. The bare token
@@ -82,7 +87,25 @@ public sealed class InvokeBashXanCommand : PSCmdlet
 
     protected override void EndProcessing()
     {
-        var args = Arguments ?? Array.Empty<string>();
+        // Flatten the loosely-typed Arguments into a string[] (handling
+        // nested arrays from PowerShell's array-literal parsing of
+        // comma-separated tokens like 'name,city').
+        var flat = new List<string>();
+        if (Arguments != null)
+        {
+            foreach (var item in Arguments)
+            {
+                if (item is System.Collections.IEnumerable e && item is not string)
+                {
+                    foreach (var sub in e) flat.Add(sub?.ToString() ?? string.Empty);
+                }
+                else
+                {
+                    flat.Add(item?.ToString() ?? string.Empty);
+                }
+            }
+        }
+        var args = flat.ToArray();
 
         if (Array.IndexOf(args, "--help") >= 0)
         {
