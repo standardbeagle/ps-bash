@@ -2281,150 +2281,8 @@ function Format-StatString {
 # Invoke-BashCp / Mv / Rm / Mkdir / Rmdir migrated to binary cmdlets (REFACTOR-2):
 # see InvokeBashCp/Mv/Rm/Mkdir/RmdirCommand.cs and FileSystemHelpers.cs in PsBash.Cmdlets.
 
-# --- touch Command ---
+# Invoke-Bashtouch+ln migrated to binary cmdlet (REFACTOR-2): see InvokeBash*Command.cs in PsBash.Cmdlets.
 
-function Invoke-BashTouch {
-    [OutputType('PsBash.TextOutput')]
-    param()
-    $Arguments = [string[]]$args
-    if ($Arguments -contains '--help') { return Show-BashHelp 'touch' }
-
-    # Manual arg parsing for flags
-    $verbose = $false
-    $dateStr = $null
-    $accessOnly = $false
-    $modOnly = $false
-    $noCreate = $false
-    $operands = [System.Collections.Generic.List[string]]::new()
-
-    $i = 0
-    while ($i -lt $Arguments.Count) {
-        $arg = $Arguments[$i]
-
-        switch ($arg) {
-            '-d' {
-                $i++
-                if ($i -lt $Arguments.Count) { $dateStr = $Arguments[$i] }
-                $i++
-                continue
-            }
-            '-v' {
-                $verbose = $true
-                $i++
-                continue
-            }
-            '-a' {
-                $accessOnly = $true
-                $i++
-                continue
-            }
-            '-m' {
-                $modOnly = $true
-                $i++
-                continue
-            }
-            '-c' {
-                $noCreate = $true
-                $i++
-                continue
-            }
-            default {
-                $operands.Add($arg)
-                $i++
-            }
-        }
-    }
-
-    if ($operands.Count -eq 0) {
-        Write-BashError -Message "touch: missing file operand"
-        return
-    }
-
-    $timestamp = [System.DateTime]::Now
-    if ($null -ne $dateStr) {
-        try {
-            $timestamp = [System.DateTime]::Parse($dateStr)
-        } catch {
-            Write-BashError -Message "touch: invalid date format '$dateStr'"
-            return
-        }
-    }
-
-    foreach ($file in $operands) {
-        if (Test-Path -LiteralPath $file) {
-            $item = Get-BashItem -Path $file -Command 'touch'
-            if ($null -eq $item) { continue }
-            if (-not $accessOnly) { $item.LastWriteTime = $timestamp }
-            if (-not $modOnly)    { $item.LastAccessTime = $timestamp }
-        } else {
-            if ($noCreate) { continue }
-            $parentDir = Split-Path $file -Parent
-            if ($parentDir -and -not (Test-Path -LiteralPath $parentDir)) {
-                Write-BashError -Message "touch: cannot touch '$file': No such file or directory"
-                continue
-            }
-            New-Item -Path $file -ItemType File -Force | Out-Null
-            $item = Get-BashItem -Path $file -Command 'touch'
-            if ($null -eq $item) { continue }
-            if (-not $accessOnly) { $item.LastWriteTime = $timestamp }
-            if (-not $modOnly)    { $item.LastAccessTime = $timestamp }
-        }
-    }
-}
-
-# --- ln Command ---
-
-function Invoke-BashLn {
-    [OutputType('PsBash.TextOutput')]
-    param()
-    $Arguments = [string[]]$args
-    if ($Arguments -contains '--help') { return Show-BashHelp 'ln' }
-
-    $defs = New-FlagDefs -Entries @(
-        '-s', 'symbolic'
-        '-f', 'force'
-        '-v', 'verbose'
-    )
-
-    $parsed = ConvertFrom-BashArgs -Arguments $Arguments -FlagDefs $defs
-
-    $symbolic = $parsed.Flags['-s']
-    $force = $parsed.Flags['-f']
-    $verbose = $parsed.Flags['-v']
-
-    if ($parsed.Operands.Count -lt 2) {
-        Write-BashError -Message "ln: missing file operand"
-        return
-    }
-
-    $target = $parsed.Operands[0]
-    $linkName = $parsed.Operands[1]
-
-    if ($force -and (Test-Path -LiteralPath $linkName)) {
-        Remove-Item -LiteralPath $linkName -Force
-    }
-
-    if (Test-Path -LiteralPath $linkName) {
-        Write-BashError -Message "ln: failed to create $( if ($symbolic) { 'symbolic ' } else { '' })link '$linkName': File exists"
-        return
-    }
-
-    if ($symbolic) {
-        New-Item -ItemType SymbolicLink -Path $linkName -Target $target -Force | Out-Null
-    } else {
-        New-Item -ItemType HardLink -Path $linkName -Target $target -Force | Out-Null
-    }
-
-    if ($verbose) {
-        $bashLink = $linkName -replace '\\', '/'
-        $bashTarget = $target -replace '\\', '/'
-        if ($symbolic) {
-            New-BashObject -BashText "'$bashLink' -> '$bashTarget'`n"
-        } else {
-            New-BashObject -BashText "'$bashLink' => '$bashTarget'`n"
-        }
-    }
-}
 
 # --- ps Command ---
 
@@ -9316,51 +9174,8 @@ function Invoke-BashXan {
     }
 }
 
-# --- sleep ---
+# Invoke-Bashsleep migrated to binary cmdlet (REFACTOR-2): see InvokeBash*Command.cs in PsBash.Cmdlets.
 
-function Invoke-BashSleep {
-    [OutputType('PsBash.TextOutput')]
-    param()
-    $Arguments = [string[]]$args
-    if ($Arguments -contains '--help') { return Show-BashHelp 'sleep' }
-
-    if ($Arguments.Count -eq 0) {
-        Write-BashError -Message 'sleep: missing operand'
-        return
-    }
-
-    $totalSeconds = 0.0
-    foreach ($arg in $Arguments) {
-        $multiplier = 1.0
-        $numStr = $arg
-        if ($arg -match '^([\d.]+)([smhd])$') {
-            $numStr = $Matches[1]
-            switch ($Matches[2]) {
-                's' { $multiplier = 1.0 }
-                'm' { $multiplier = 60.0 }
-                'h' { $multiplier = 3600.0 }
-                'd' { $multiplier = 86400.0 }
-            }
-        }
-        $val = 0.0
-        if (-not [double]::TryParse($numStr, [ref]$val)) {
-            Write-BashError -Message "sleep: invalid time interval '$arg'"
-            return
-        }
-        if ($val -lt 0) {
-            Write-BashError -Message "sleep: invalid time interval '$arg'"
-            return
-        }
-        $totalSeconds += $val * $multiplier
-    }
-
-    if ($totalSeconds -gt 0) {
-        $ms = [int]([Math]::Ceiling($totalSeconds * 1000))
-        Start-Sleep -Milliseconds $ms
-    }
-}
-
-# --- time ---
 
 function Invoke-BashTime {
     [OutputType('PsBash.TimeOutput')]
@@ -9421,50 +9236,8 @@ function Invoke-BashTime {
     Set-BashDisplayProperty $obj
 }
 
-# --- which ---
+# Invoke-Bashwhich migrated to binary cmdlet (REFACTOR-2): see InvokeBash*Command.cs in PsBash.Cmdlets.
 
-function Invoke-BashWhich {
-    [OutputType('PsBash.WhichOutput')]
-    param()
-    $Arguments = [string[]]$args
-    if ($Arguments -contains '--help') { return Show-BashHelp 'which' }
-
-    $showAll = $false
-    $operands = [System.Collections.Generic.List[string]]::new()
-    foreach ($arg in $Arguments) {
-        if ($arg -ceq '-a') { $showAll = $true }
-        else { $operands.Add($arg) }
-    }
-
-    if ($operands.Count -eq 0) {
-        Write-BashError -Message 'which: missing operand'
-        return
-    }
-
-    foreach ($name in $operands) {
-        $cmds = @(Get-Command $name -ErrorAction SilentlyContinue)
-        if ($cmds.Count -eq 0) {
-            Write-BashError -Message "which: no $name in PATH"
-            continue
-        }
-
-        $toShow = if ($showAll) { $cmds } else { @($cmds[0]) }
-        foreach ($c in $toShow) {
-            $path = if ($c.Source) { $c.Source }
-                    elseif ($c.Definition) { $c.Definition }
-                    else { $name }
-            $type = $c.CommandType.ToString().ToLower()
-            $obj = [PSCustomObject]@{
-                PSTypeName = 'PsBash.WhichOutput'
-                Command    = $name
-                Path       = $path
-                Type       = $type
-                BashText   = $path
-            }
-            Set-BashDisplayProperty $obj
-        }
-    }
-}
 
 # --- alias / unalias (module mode: dynamic function creation) ---
 
