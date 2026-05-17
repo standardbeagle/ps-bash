@@ -7024,90 +7024,7 @@ function Invoke-BashRead {
 }
 
 # --- mapfile / readarray ---
-
-function Invoke-BashMapfile {
-    param()
-    $Arguments = [string[]]$args
-    $pipelineInput = @($input)
-
-    $count = $null
-    $origin = 0
-    $stripTrailing = $false
-    $varName = 'MAPFILE'
-
-    $i = 0
-    while ($i -lt $Arguments.Count) {
-        $arg = $Arguments[$i]
-        if ($arg -ceq '-t') {
-            $stripTrailing = $true
-            $i++; continue
-        }
-        if ($arg -ceq '-n' -and ($i + 1) -lt $Arguments.Count) {
-            $count = [int]$Arguments[$i + 1]
-            $i += 2; continue
-        }
-        if ($arg.StartsWith('-n') -and $arg.Length -gt 2) {
-            $count = [int]$arg.Substring(2)
-            $i++; continue
-        }
-        if ($arg -ceq '-O' -and ($i + 1) -lt $Arguments.Count) {
-            $origin = [int]$Arguments[$i + 1]
-            $i += 2; continue
-        }
-        if ($arg.StartsWith('-O') -and $arg.Length -gt 2) {
-            $origin = [int]$arg.Substring(2)
-            $i++; continue
-        }
-        # -d DELIM: custom delimiter (consumed but currently splits on \n only)
-        if ($arg -ceq '-d' -and ($i + 1) -lt $Arguments.Count) {
-            $i += 2; continue
-        }
-        if ($arg.StartsWith('-d') -and $arg.Length -gt 2) {
-            $i++; continue
-        }
-        # Non-flag argument is the variable name
-        if (-not $arg.StartsWith('-')) {
-            $varName = $arg
-        }
-        $i++
-    }
-
-    # Collect input: pipeline or stdin
-    $lines = [System.Collections.Generic.List[string]]::new()
-
-    if ($pipelineInput.Count -gt 0) {
-        foreach ($item in $pipelineInput) {
-            $text = Get-BashText -InputObject $item
-            if ($text) {
-                foreach ($line in ($text -replace "`r`n", "`n" -split "`n")) {
-                    if ($line -ne '') { $lines.Add($line) }
-                }
-            }
-        }
-    }
-
-    # Apply count limit
-    if ($null -ne $count -and $lines.Count -gt $count) {
-        $lines = $lines.GetRange(0, $count)
-    }
-
-    # Strip trailing delimiter if requested
-    if ($stripTrailing) {
-        for ($j = 0; $j -lt $lines.Count; $j++) {
-            $lines[$j] = $lines[$j].TrimEnd("`n"[0], "`r"[0])
-        }
-    }
-
-    # Build result array with origin offset
-    if ($origin -gt 0) {
-        $result = @(1..$origin | ForEach-Object { '' })
-        $result += @($lines)
-    } else {
-        $result = @($lines)
-    }
-
-    Set-Variable -Name $varName -Value $result
-}
+# Migrated to binary cmdlet: src/PsBash.Cmdlets/InvokeBashMapfileCommand.cs (REFACTOR-2 follow-on).
 
 # --- readlink ---
 # Migrated to PsBash.Cmdlets/InvokeBashReadlinkCommand.cs (REFACTOR-2).
@@ -7989,6 +7906,8 @@ Set-Alias -Name 'fg'       -Value 'Invoke-BashFg'       -Force -Scope Global -Op
 Set-Alias -Name 'bg'       -Value 'Invoke-BashBg'       -Force -Scope Global -Option AllScope
 Set-Alias -Name 'shift'    -Value 'Invoke-BashShift'    -Force -Scope Global -Option AllScope
 Set-Alias -Name 'realpath' -Value 'Invoke-BashRealpath' -Force -Scope Global -Option AllScope
+Set-Alias -Name 'mapfile'  -Value 'Invoke-BashMapfile'  -Force -Scope Global -Option AllScope
+Set-Alias -Name 'readarray' -Value 'Invoke-BashMapfile' -Force -Scope Global -Option AllScope
 # --- unset ---
 
 function Invoke-BashUnset {
