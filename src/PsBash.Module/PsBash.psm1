@@ -7691,51 +7691,7 @@ function Invoke-BashUnexpand {
     }
 }
 
-# --- strings Command ---
-
-function Invoke-BashStrings {
-    [OutputType('PsBash.TextOutput')]
-    param()
-    $Arguments = [string[]]$args
-    $pipelineInput = @($input)
-    if ($Arguments -contains '--help') { return Show-BashHelp 'strings' }
-
-    $minLength = 4
-    $operands = [System.Collections.Generic.List[string]]::new()
-
-    $i = 0
-    while ($i -lt $Arguments.Count) {
-        $arg = $Arguments[$i]
-        if ($arg -eq '-n' -and ($i + 1) -lt $Arguments.Count) {
-            $minLength = [int]$Arguments[$i + 1]; $i += 2; continue
-        }
-        if ($arg -match '^--bytes=(.+)$') {
-            $minLength = [int]$Matches[1]; $i++; continue
-        }
-        $operands.Add($arg); $i++
-    }
-
-    $content = ''
-    if ($operands.Count -eq 0 -and $pipelineInput.Count -gt 0) {
-        $parts = [System.Collections.Generic.List[string]]::new()
-        foreach ($item in $pipelineInput) {
-            $parts.Add((Get-BashText -InputObject $item))
-        }
-        $content = $parts -join "`n"
-    } else {
-        foreach ($filePath in (Resolve-BashGlob -Paths $operands)) {
-            $fileText = Read-BashFileBytes -Path $filePath -Command 'strings'
-            if ($null -eq $fileText) { continue }
-            $content += $fileText
-        }
-    }
-
-    $pattern = "[\x20-\x7E]{$minLength,}"
-    $matches = [regex]::Matches($content, $pattern)
-    foreach ($m in $matches) {
-        New-BashObject -BashText $m.Value
-    }
-}
+# Invoke-BashStrings migrated to binary cmdlet: src/PsBash.Cmdlets/InvokeBashStringsCommand.cs
 
 # --- split Command ---
 
