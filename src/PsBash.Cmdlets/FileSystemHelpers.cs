@@ -53,32 +53,43 @@ internal static class FileSystemHelpers
     }
 
     /// <summary>
-    /// Emit a bash-style error. Always writes an <see cref="ErrorRecord"/>
-    /// via <see cref="PSCmdlet.WriteError"/> so callers using
-    /// <c>cmd 2&gt;&amp;1 | Where {$_ -is [ErrorRecord]}</c> see it. Routing
-    /// only through <c>InvokeCommand.InvokeScript</c> buries the inner
-    /// <c>Write-Error</c> inside the sub-pipeline and the outer 2&gt;&amp;1
-    /// redirect finds nothing — Pester tests rely on the ErrorRecord. Also
-    /// invokes the psm1 <c>Write-BashError</c> helper so bash-mode stderr
-    /// formatting (production host launcher path) continues to fire. Sets
-    /// <c>$global:LASTEXITCODE = 1</c>.
+    /// Emit a bash-style error visible to the caller via <c>2&gt;&amp;1</c>
+    /// pipeline merge — including under Pester where
+    /// <c>$ErrorActionPreference = Stop</c> would otherwise convert a plain
+    /// <see cref="PSCmdlet.WriteError"/> into a terminating error mid-test.
+    /// <para>
+    /// Strategy: invoke the psm1 <c>Write-BashError</c> through
+    /// <see cref="PSCmdlet.InvokeCommand"/> with an inner <c>2&gt;&amp;1</c>
+    /// redirect so the resulting <see cref="ErrorRecord"/> lands in the
+    /// script's success stream as a captured object. We then re-emit it via
+    /// <see cref="PSCmdlet.WriteObject(object)"/> into the outer cmdlet's
+    /// success stream. Callers using <c>cmd 2&gt;&amp;1 | Where {$_ -is [ErrorRecord]}</c>
+    /// find the record without triggering the caller's
+    /// <c>$ErrorActionPreference</c> escalation. Bash-mode formatting
+    /// (production host launcher) is still handled by the psm1 helper.
+    /// </para>
+    /// <para>Sets <c>$global:LASTEXITCODE = 1</c>.</para>
     /// </summary>
     public static void WriteBashError(PSCmdlet cmdlet, string message)
     {
         SetLastExitCode(cmdlet, 1);
 
-        cmdlet.WriteError(new ErrorRecord(
-            new System.IO.IOException(message),
-            "BashError",
-            ErrorCategory.NotSpecified,
-            null));
+        // Invoke the psm1 helper with an inner 2>&1 redirect so any
+        // ErrorRecord it emits ends up in the script's success stream.
+        var emitted = cmdlet.InvokeCommand.InvokeScript(
+            "param($m) Write-BashError -Message $m 2>&1", message);
 
-        try
+        foreach (var item in emitted)
         {
-            cmdlet.InvokeCommand.InvokeScript(
-                "param($m) Write-BashError -Message $m", message);
+            if (item == null) continue;
+            // Surface ErrorRecord-typed items to the outer cmdlet's pipeline
+            // via WriteObject — benign w.r.t. $ErrorActionPreference.
+            var baseObj = (item is PSObject po) ? po.BaseObject : item;
+            if (baseObj is ErrorRecord er)
+            {
+                cmdlet.WriteObject(er);
+            }
         }
-        catch { /* benign — ErrorRecord above already carried the message */ }
     }
 
     /// <summary>
