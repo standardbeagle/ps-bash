@@ -10906,22 +10906,8 @@ function Invoke-BashShift {
 
 # --- realpath ---
 
-function Invoke-BashRealpath {
-    [OutputType('PsBash.TextOutput')]
-    param()
-    $Arguments = [string[]]$args
-    if ($Arguments -contains '--help') { return Show-BashHelp 'realpath' }
-    foreach ($path in $Arguments) {
-        if ($path.StartsWith('-')) { continue }
-        try {
-            $resolved = Resolve-Path -Path $path -ErrorAction Stop
-            $full = $resolved.Path
-        } catch {
-            $full = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($path)
-        }
-        Emit-BashLine -Text $full
-    }
-}
+# Invoke-BashRealpath migrated to binary cmdlet (REFACTOR-2):
+# see InvokeBashRealpathCommand.cs in PsBash.Cmdlets.
 
 # --- command ---
 
