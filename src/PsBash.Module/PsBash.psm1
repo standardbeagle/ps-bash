@@ -3956,66 +3956,8 @@ function Invoke-BashRead {
 # --- shopt ---
 # Migrated to binary cmdlet: src/PsBash.Cmdlets/InvokeBashShoptCommand.cs (REFACTOR-2 follow-on).
 
-function Invoke-BashBash {
-    [OutputType('PsBash.TextOutput')]
-    param()
-    $Arguments = [string[]]$args
-    if ($Arguments -contains '--help') { return Show-BashHelp 'bash' }
-
-    # Resolve the ps-bash executable: prefer the parent process path (exact binary),
-    # fall back to Get-Command ps-bash.
-    $psBashExe = $null
-    $__pid = Get-Variable -Name __parentPid -Scope Global -ValueOnly -ErrorAction SilentlyContinue
-    if ($__pid -and $__pid -gt 0) {
-        try {
-            $parent = [System.Diagnostics.Process]::GetProcessById($__pid)
-            $psBashExe = $parent.MainModule.FileName
-        } catch {}
-    }
-    if (-not $psBashExe) {
-        $found = Get-Command ps-bash -ErrorAction SilentlyContinue
-        if ($found) { $psBashExe = $found.Source }
-    }
-    if (-not $psBashExe) {
-        # Try the same directory as the current PowerShell executable
-        $psBashExe = [System.IO.Path]::Combine([System.IO.Path]::GetDirectoryName([System.Diagnostics.Process]::GetCurrentProcess().MainModule.FileName), 'ps-bash')
-        if ($IsWindows) { $psBashExe += '.exe' }
-        if (-not (Test-Path $psBashExe)) {
-            Write-BashError -Message 'bash: ps-bash executable not found'
-            return
-        }
-    }
-
-    # Handle --version: print ps-bash version info
-    if ($Arguments -contains '--version') {
-        $version = $null
-        if ($null -ne (Get-Variable MyInvocation -ValueOnly -ErrorAction SilentlyContinue)) {
-            $mod = $MyInvocation.MyCommand.Module
-            if ($mod) { $version = $mod.Version.ToString() }
-        }
-        if (-not $version) { $version = '0.7.6' }
-        $text = "ps-bash, version $version`nBash-to-PowerShell transpiler"
-        Emit-BashLine -Text $text
-        return
-    }
-
-    # Forward all arguments to ps-bash executable
-    $output = & $psBashExe @Arguments 2>&1
-    $exitCode = $LASTEXITCODE
-    $global:LASTEXITCODE = $exitCode
-
-    $errors = @($output | Where-Object { $_ -is [System.Management.Automation.ErrorRecord] })
-    $normal = @($output | Where-Object { $_ -isnot [System.Management.Automation.ErrorRecord] })
-
-    foreach ($e in $errors) {
-        [Console]::Error.WriteLine("$e")
-    }
-
-    foreach ($item in $normal) {
-        $text = if ($item.PSObject.Properties['BashText']) { $item.BashText } else { "$item" }
-        Emit-BashLine -Text $text
-    }
-}
+# Invoke-BashBash migrated to binary cmdlet PsBash.Cmdlets.InvokeBashBashCommand (REFACTOR-2 follow-on).
+# The Set-Alias 'bash' -> 'Invoke-BashBash' line below resolves to the cmdlet.
 
 # --- Background Process Support ---
 
