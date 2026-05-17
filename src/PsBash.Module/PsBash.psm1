@@ -7420,66 +7420,7 @@ function Invoke-BashFold {
 }
 
 # --- expand Command ---
-
-function Invoke-BashExpand {
-    [OutputType('PsBash.TextOutput')]
-    param()
-    $Arguments = [string[]]$args
-    $pipelineInput = @($input)
-    if ($Arguments -contains '--help') { return Show-BashHelp 'expand' }
-
-    $tabWidth = 8
-    $operands = [System.Collections.Generic.List[string]]::new()
-
-    $i = 0
-    while ($i -lt $Arguments.Count) {
-        $arg = $Arguments[$i]
-        if ($arg -cmatch '^-t(\d+)$') {
-            $tabWidth = [int]$Matches[1]; $i++; continue
-        }
-        if ($arg -eq '-t' -and ($i + 1) -lt $Arguments.Count) {
-            $tabWidth = [int]$Arguments[$i + 1]; $i += 2; continue
-        }
-        if ($arg -match '^--tabs=(.+)$') {
-            $tabWidth = [int]$Matches[1]; $i++; continue
-        }
-        $operands.Add($arg); $i++
-    }
-
-    $lines = [System.Collections.Generic.List[string]]::new()
-    if ($operands.Count -eq 0 -and $pipelineInput.Count -gt 0) {
-        foreach ($item in $pipelineInput) {
-            $text = Get-BashText -InputObject $item
-            if ($text.TrimEnd("`n".ToCharArray()).Contains("`n")) {
-                foreach ($subLine in ($text.TrimEnd("`n".ToCharArray()) -split "`n")) { $lines.Add($subLine) }
-            } else {
-                $lines.Add(($text.TrimEnd("`n".ToCharArray())))
-            }
-        }
-    } else {
-        foreach ($filePath in (Resolve-BashGlob -Paths $operands)) {
-            $fileLines = Read-BashFileLines -Path $filePath -Command 'expand'
-            if ($null -eq $fileLines) { continue }
-            foreach ($l in $fileLines) { $lines.Add($l) }
-        }
-    }
-
-    foreach ($line in $lines) {
-        $sb = [System.Text.StringBuilder]::new()
-        $col = 0
-        foreach ($ch in $line.ToCharArray()) {
-            if ($ch -eq "`t") {
-                $spaces = $tabWidth - ($col % $tabWidth)
-                [void]$sb.Append(' ', $spaces)
-                $col += $spaces
-            } else {
-                [void]$sb.Append($ch)
-                $col++
-            }
-        }
-        New-BashObject -BashText $sb.ToString()
-    }
-}
+# Migrated to binary cmdlet: src/PsBash.Cmdlets/InvokeBashExpandCommand.cs (REFACTOR-2 follow-on).
 
 # Invoke-BashUnexpand migrated to binary cmdlet: src/PsBash.Cmdlets/InvokeBashUnexpandCommand.cs
 
