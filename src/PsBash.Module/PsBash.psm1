@@ -9548,49 +9548,7 @@ function Invoke-BashMapfile {
 }
 
 # --- readlink ---
-
-function Invoke-BashReadlink {
-    [OutputType('PsBash.ReadlinkOutput')]
-    param()
-    $Arguments = [string[]]$args
-    if ($Arguments -contains '--help') { return Show-BashHelp 'readlink' }
-
-    $canonicalize = $false
-    $operands = [System.Collections.Generic.List[string]]::new()
-    foreach ($arg in $Arguments) {
-        if ($arg -ceq '-f') { $canonicalize = $true }
-        else { $operands.Add($arg) }
-    }
-
-    if ($operands.Count -eq 0) {
-        Write-Error 'readlink: missing operand' -ErrorAction Continue
-        return
-    }
-
-    foreach ($path in $operands) {
-        if ($canonicalize) {
-            $resolved = (Resolve-Path -Path $path -ErrorAction SilentlyContinue)
-            if (-not $resolved) {
-                Write-Error "readlink: ${path}: No such file or directory" -ErrorAction Continue
-                continue
-            }
-            $text = $resolved.Path
-        } else {
-            $item = Get-Item -Path $path -ErrorAction SilentlyContinue
-            if (-not $item) {
-                Write-Error "readlink: ${path}: No such file or directory" -ErrorAction Continue
-                continue
-            }
-            $text = if ($item.Target) { $item.Target } else { $item.FullName }
-        }
-        $obj = [PSCustomObject]@{
-            PSTypeName = 'PsBash.ReadlinkOutput'
-            Path       = $text
-            BashText   = $text
-        }
-        Set-BashDisplayProperty $obj
-    }
-}
+# Migrated to PsBash.Cmdlets/InvokeBashReadlinkCommand.cs (REFACTOR-2).
 
 # --- mktemp ---
 
