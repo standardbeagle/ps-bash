@@ -9469,45 +9469,7 @@ function Invoke-BashMapfile {
 # Migrated to PsBash.Cmdlets/InvokeBashReadlinkCommand.cs (REFACTOR-2).
 
 # --- mktemp ---
-
-function Invoke-BashMktemp {
-    [OutputType('PsBash.MktempOutput')]
-    param()
-    $Arguments = [string[]]$args
-    if ($Arguments -contains '--help') { return Show-BashHelp 'mktemp' }
-
-    $makeDir = $false
-    $template = $null
-    foreach ($arg in $Arguments) {
-        if ($arg -ceq '-d') { $makeDir = $true }
-        else { $template = $arg }
-    }
-
-    $subDir = [System.IO.Path]::Combine([System.IO.Path]::GetTempPath(), 'ps-bash', 'proc-sub')
-    [void][System.IO.Directory]::CreateDirectory($subDir)
-
-    $name = [System.IO.Path]::GetRandomFileName()
-    if ($template) {
-        $prefix = $template -replace 'X+$', ''
-        $prefix = [System.IO.Path]::GetFileName($prefix)
-        $name = $prefix + [System.IO.Path]::GetRandomFileName()
-    }
-
-    $fullPath = [System.IO.Path]::Combine($subDir, $name)
-
-    if ($makeDir) {
-        [void][System.IO.Directory]::CreateDirectory($fullPath)
-    } else {
-        [void][System.IO.File]::WriteAllText($fullPath, '')
-    }
-
-    $obj = [PSCustomObject]@{
-        PSTypeName = 'PsBash.MktempOutput'
-        Path       = $fullPath
-        BashText   = $fullPath
-    }
-    Set-BashDisplayProperty $obj
-}
+# Migrated to binary cmdlet: src/PsBash.Cmdlets/InvokeBashMktempCommand.cs (REFACTOR-2 follow-on).
 
 # --- type ---
 
