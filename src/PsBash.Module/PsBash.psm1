@@ -4052,24 +4052,7 @@ function Invoke-BashBg {
 
 # --- shift ---
 
-function Invoke-BashShift {
-    param()
-    $Arguments = [string[]]$args
-    if ($Arguments -contains '--help') { return Show-BashHelp 'shift' }
-    $n = 1
-    if ($Arguments.Count -gt 0) {
-        if (-not [int]::TryParse($Arguments[0], [ref]$n) -or $n -lt 0) {
-            Write-BashError -Message "shift: $($Arguments[0]): numeric argument required"
-            return
-        }
-    }
-    $pos = if ($global:BashPositional) { $global:BashPositional } else { @() }
-    if ($n -gt $pos.Count) {
-        Write-BashError -Message 'shift: cannot shift past end of positional parameters'
-        return
-    }
-    $global:BashPositional = $pos[$n..($pos.Count - 1)]
-}
+# Invoke-BashShift migrated to InvokeBashShiftCommand.cs (REFACTOR-2 follow-on, vars batch).
 
 # --- realpath ---
 
@@ -4488,31 +4471,7 @@ Set-Alias -Name 'mapfile'  -Value 'Invoke-BashMapfile'  -Force -Scope Global -Op
 Set-Alias -Name 'readarray' -Value 'Invoke-BashMapfile' -Force -Scope Global -Option AllScope
 # --- unset ---
 
-function Invoke-BashUnset {
-    param()
-    $Arguments = [string[]]$args
-    if ($Arguments -contains '--help') { return Show-BashHelp 'unset' }
-
-    $mode = 'variable'
-    $names = [System.Collections.Generic.List[string]]::new()
-    foreach ($arg in $Arguments) {
-        if ($arg -eq '-f') { $mode = 'function'; continue }
-        if ($arg -eq '-v') { $mode = 'variable'; continue }
-        if ($arg.StartsWith('-')) { continue }
-        $names.Add($arg)
-    }
-
-    foreach ($name in $names) {
-        if ($mode -eq 'variable') {
-            Remove-Variable -Name $name -Scope 1 -ErrorAction SilentlyContinue
-            if (Test-Path "Env:\$name") {
-                Remove-Item -Path "Env:\$name" -Force -ErrorAction SilentlyContinue
-            }
-        } else {
-            Remove-Item -Path "Function:\$name" -Force -ErrorAction SilentlyContinue
-        }
-    }
-}
+# Invoke-BashUnset migrated to InvokeBashUnsetCommand.cs (REFACTOR-2 follow-on, vars batch).
 
 # --- pushd / popd / dirs ---
 
@@ -4780,28 +4739,7 @@ function Test-BashCondition {
 
 # --- let ---
 
-function Invoke-BashLet {
-    param()
-    $Arguments = [string[]]$args
-    if ($Arguments -contains '--help') { return Show-BashHelp 'let' }
-
-    $anyZero = $false
-    foreach ($expr in $Arguments) {
-        try {
-            $psExpr = $expr
-            $psExpr = $psExpr -replace '\*\*', '^'
-            $psExpr = $psExpr -replace '\b(\w+)\s*\+\+', '+=1'
-            $psExpr = $psExpr -replace '\b(\w+)\s*--', '-=1'
-            $result = Invoke-Expression $psExpr
-            if ($null -ne $result -and [int]$result -eq 0) { $anyZero = $true }
-        } catch {
-            Write-BashError -Message "let: $expr : expression error" -ExitCode 1
-            return
-        }
-    }
-
-    if ($anyZero) { $global:LASTEXITCODE = 1 } else { $global:LASTEXITCODE = 0 }
-}
+# Invoke-BashLet migrated to InvokeBashLetCommand.cs (REFACTOR-2 follow-on, vars batch).
 
 # --- id ---
 # Migrated to InvokeBashIdCommand.cs (REFACTOR-2 Phase 4-follow-on). The
