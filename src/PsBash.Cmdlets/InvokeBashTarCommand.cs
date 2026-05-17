@@ -1,0 +1,432 @@
+using System.Formats.Tar;
+using System.IO.Compression;
+using System.Management.Automation;
+
+namespace PsBash.Cmdlets;
+
+/// <summary>
+/// Binary cmdlet replacement for the psm1 <c>Invoke-BashTar</c> function
+/// (REFACTOR-2 follow-on). Reproduces GNU/BSD <c>tar</c> across the
+/// oracle's three modes byte-for-byte: <c>-c</c> create, <c>-x</c>
+/// extract, and <c>-t</c> list, with optional <c>-z</c> gzip-compression
+/// filter (also auto-detected from a <c>.tar.gz</c> / <c>.tgz</c> suffix on
+/// extract/list per oracle), <c>-v</c> verbose name-per-line emission,
+/// <c>-f FILE</c> archive path, <c>--directory=DIR</c> chdir-before-op,
+/// and <c>--exclude=PATTERN</c> wildcard exclusion (per psm1 oracle: a
+/// substring-match against the full path of each candidate entry).
+///
+/// Archive engine: <see cref="TarFile"/> is not used — the oracle drove the
+/// lower-level <see cref="TarReader"/> / <see cref="TarWriter"/> pair to
+/// keep streaming + exclude filtering exact, so we keep the same surface
+/// here.
+///
+/// Flag binding (case-collision table):
+/// <list type="bullet">
+/// <item><c>-c</c> (create) prefix-collides with <c>-Confirm</c>: declared
+/// as <see cref="SwitchParameter"/> literally named <c>C</c>. Because
+/// PowerShell parameter binding is case-insensitive, <c>-C</c> (the bash
+/// change-dir flag) also case-folds to this switch — it is therefore NOT
+/// possible to express bash's bare <c>-C DIR</c> form on the cmdlet
+/// binder. The long form <c>--directory=DIR</c> (and the separate
+/// <c>--directory DIR</c>) ARE supported via the manual <c>Arguments</c>
+/// scan. See the "Known gap" comment block below.</item>
+/// <item><c>-v</c> (verbose) prefix-collides with <c>-Verbose</c>:
+/// declared as <see cref="SwitchParameter"/> <c>V</c>.</item>
+/// <item><c>-f FILE</c> (archive) is value-bearing; no PowerShell
+/// common-parameter prefix collision but declared as <c>string? F</c>
+/// for clean binder routing and to support the standard separated form
+/// (<c>-f FILE</c>). The joined form (<c>-fFILE</c>) and bundled form
+/// (e.g. <c>-cvf FILE</c>) are recovered from <see cref="Arguments"/> by
+/// the manual scan, exactly matching the oracle's per-char dispatch.</item>
+/// <item><c>-x</c>, <c>-t</c>, <c>-z</c> have no PowerShell common-parameter
+/// prefix collision and stay in <see cref="Arguments"/>.</item>
+/// </list>
+///
+/// <para><b>Known gap (-C DIR case collision):</b> Because the PowerShell
+/// cmdlet binder is case-insensitive, the bash <c>-C DIR</c> change-directory
+/// flag cannot be routed as a separate cmdlet parameter without colliding
+/// with the <c>-c</c> create switch. Callers must use <c>--directory=DIR</c>
+/// (or <c>--directory DIR</c>) instead. The psm1 oracle distinguished via
+/// case-sensitive <c>-ceq</c> comparison, which the binder cannot
+/// reproduce. This is the one residual flag-shape gap introduced by the
+/// migration; the long form provides full coverage of the underlying
+/// behavior.</para>
+///
+/// AOT safety: no <see cref="ScriptBlock"/> construction; <c>--help</c>
+/// delegates to psm1 <c>Show-BashHelp</c> via parameter-bound
+/// <see cref="CommandInvocationIntrinsics.InvokeScript(string, object[])"/>.
+/// File-read / -write failures route through
+/// <see cref="FileSystemHelpers.WriteBashError"/>.
+/// </summary>
+[Cmdlet(VerbsLifecycle.Invoke, "BashTar")]
+[OutputType(typeof(string))]
+public sealed class InvokeBashTarCommand : PSCmdlet
+{
+    [Parameter(ValueFromRemainingArguments = true)]
+    public string[]? Arguments { get; set; }
+
+    /// <summary>The bash <c>-c</c> (create) switch — explicit because the
+    /// bare token <c>-c</c> prefix-collides with <c>-Confirm</c>. Case-insensitive
+    /// binder means <c>-C</c> (the bash change-dir flag) also binds to this
+    /// switch — see the cmdlet docstring for the known-gap workaround.</summary>
+    [Parameter]
+    public SwitchParameter C { get; set; }
+
+    /// <summary>The bash <c>-v</c> (verbose) switch — explicit because the
+    /// bare token <c>-v</c> prefix-collides with <c>-Verbose</c>.</summary>
+    [Parameter]
+    public SwitchParameter V { get; set; }
+
+    /// <summary>The bash <c>-f FILE</c> archive path. No common-parameter
+    /// prefix collision but declared for clean separated-form binding;
+    /// joined / bundled forms are recovered from <see cref="Arguments"/>.</summary>
+    [Parameter]
+    public string? F { get; set; }
+
+    protected override void EndProcessing()
+    {
+        var args = Arguments ?? Array.Empty<string>();
+
+        if (Array.IndexOf(args, "--help") >= 0)
+        {
+            foreach (var line in InvokeCommand.InvokeScript(
+                         "param($n) Show-BashHelp $n", "tar"))
+            {
+                WriteObject(line);
+            }
+            return;
+        }
+
+        bool create = C.IsPresent;
+        bool extract = false;
+        bool listMode = false;
+        bool gzipFilter = false;
+        bool verbose = V.IsPresent;
+        string? archiveFile = F;
+        string? changeDir = null;
+        var excludePatterns = new List<string>();
+        var operands = new List<string>();
+
+        int i = 0;
+        while (i < args.Length)
+        {
+            string a = args[i];
+
+            if (a == "--") { i++; while (i < args.Length) { operands.Add(args[i]); i++; } break; }
+            if (a == "--create") { create = true; i++; continue; }
+            if (a == "--extract" || a == "--get") { extract = true; i++; continue; }
+            if (a == "--list") { listMode = true; i++; continue; }
+            if (a == "--gzip" || a == "--gunzip") { gzipFilter = true; i++; continue; }
+            if (a == "--verbose") { verbose = true; i++; continue; }
+
+            if (a == "--file")
+            {
+                i++;
+                if (i < args.Length) { archiveFile = args[i]; }
+                i++;
+                continue;
+            }
+            if (a.StartsWith("--file=", StringComparison.Ordinal))
+            {
+                archiveFile = a.Substring("--file=".Length);
+                i++;
+                continue;
+            }
+            if (a == "--directory")
+            {
+                i++;
+                if (i < args.Length) { changeDir = args[i]; }
+                i++;
+                continue;
+            }
+            if (a.StartsWith("--directory=", StringComparison.Ordinal))
+            {
+                changeDir = a.Substring("--directory=".Length);
+                i++;
+                continue;
+            }
+            if (a.StartsWith("--exclude=", StringComparison.Ordinal))
+            {
+                excludePatterns.Add(a.Substring("--exclude=".Length));
+                i++;
+                continue;
+            }
+            if (a == "--exclude")
+            {
+                i++;
+                if (i < args.Length) { excludePatterns.Add(args[i]); }
+                i++;
+                continue;
+            }
+
+            // Bundled / joined short flags (oracle: `arg.Substring(1).ToCharArray()`
+            // loop). `f` and `C` are value-bearing and consume the rest of the
+            // token or the next argument; everything else is a boolean switch.
+            if (a.Length > 1 && a[0] == '-' && !a.StartsWith("--", StringComparison.Ordinal))
+            {
+                string body = a.Substring(1);
+                int j = 0;
+                while (j < body.Length)
+                {
+                    char ch = body[j];
+                    if (ch == 'c') { create = true; }
+                    else if (ch == 'x') { extract = true; }
+                    else if (ch == 't') { listMode = true; }
+                    else if (ch == 'z') { gzipFilter = true; }
+                    else if (ch == 'v') { verbose = true; }
+                    else if (ch == 'p') { /* preserve perms — ignored, oracle parity */ }
+                    else if (ch == 'f')
+                    {
+                        string rest = body.Substring(j + 1);
+                        if (rest.Length > 0) { archiveFile = rest; }
+                        else
+                        {
+                            i++;
+                            if (i < args.Length) { archiveFile = args[i]; }
+                        }
+                        break;
+                    }
+                    else if (ch == 'C')
+                    {
+                        // Bash -C DIR / -CDIR change-dir. Note: a bare `-C`
+                        // arriving here means the PSCmdlet binder did NOT
+                        // consume it as the create switch (e.g. because it
+                        // was bundled into a multi-char short flag like
+                        // `-xC`). Standalone `-C` and `-c` are
+                        // case-insensitively equivalent under the binder and
+                        // are both captured by the `C` SwitchParameter
+                        // declaration; callers must use --directory=DIR for
+                        // change-dir. See cmdlet docstring.
+                        string rest = body.Substring(j + 1);
+                        if (rest.Length > 0) { changeDir = rest; }
+                        else
+                        {
+                            i++;
+                            if (i < args.Length) { changeDir = args[i]; }
+                        }
+                        break;
+                    }
+                    j++;
+                }
+                i++;
+                continue;
+            }
+
+            operands.Add(a);
+            i++;
+        }
+
+        if (!string.IsNullOrEmpty(archiveFile))
+        {
+            archiveFile = SessionState.Path.GetUnresolvedProviderPathFromPSPath(archiveFile);
+        }
+        if (!string.IsNullOrEmpty(changeDir))
+        {
+            changeDir = SessionState.Path.GetUnresolvedProviderPathFromPSPath(changeDir);
+        }
+
+        if (string.IsNullOrEmpty(archiveFile))
+        {
+            FileSystemHelpers.WriteBashError(this, "tar: you must specify -f archive");
+            return;
+        }
+
+        if (create)
+        {
+            DoCreate(archiveFile!, operands, gzipFilter, verbose, excludePatterns);
+        }
+        else if (extract)
+        {
+            DoExtract(archiveFile!, gzipFilter, verbose, changeDir);
+        }
+        else if (listMode)
+        {
+            DoList(archiveFile!, gzipFilter);
+        }
+        else
+        {
+            FileSystemHelpers.WriteBashError(this, "tar: you must specify -c, -x, or -t");
+        }
+    }
+
+    private void DoCreate(string archiveFile, List<string> sources, bool gzipFilter, bool verbose, List<string> excludePatterns)
+    {
+        if (sources.Count == 0)
+        {
+            FileSystemHelpers.WriteBashError(this, "tar: no files or directories specified");
+            return;
+        }
+
+        FileStream? outStream = null;
+        Stream? tarStream = null;
+        TarWriter? writer = null;
+        try
+        {
+            outStream = File.Open(archiveFile, FileMode.Create, FileAccess.Write, FileShare.None);
+            tarStream = gzipFilter
+                ? (Stream)new GZipStream(outStream, CompressionMode.Compress)
+                : outStream;
+            writer = new TarWriter(tarStream);
+
+            foreach (string src in sources)
+            {
+                string resolved = SessionState.Path.GetUnresolvedProviderPathFromPSPath(src);
+                if (!File.Exists(resolved) && !Directory.Exists(resolved))
+                {
+                    FileSystemHelpers.WriteBashError(this, $"tar: {src}: Cannot stat: No such file or directory");
+                    continue;
+                }
+
+                if (Directory.Exists(resolved))
+                {
+                    string root = Path.GetFileName(resolved);
+                    string? baseDir = Path.GetDirectoryName(resolved);
+                    if (baseDir == null) { baseDir = string.Empty; }
+                    var enumOpts = new EnumerationOptions { RecurseSubdirectories = true };
+                    string[] children = Directory.GetFileSystemEntries(resolved, "*", enumOpts);
+                    writer.WriteEntry(resolved, root);
+                    if (verbose) { WriteObject(BashRuntime.NewBashObject(root)); }
+                    foreach (string child in children)
+                    {
+                        bool skip = false;
+                        foreach (string pat in excludePatterns)
+                        {
+                            if (child.Contains(pat, StringComparison.Ordinal)) { skip = true; break; }
+                        }
+                        if (skip) { continue; }
+                        string relPath = child.Substring(baseDir.Length + 1).Replace('\\', '/');
+                        if (verbose) { WriteObject(BashRuntime.NewBashObject(relPath)); }
+                        writer.WriteEntry(child, relPath);
+                    }
+                }
+                else
+                {
+                    bool skip = false;
+                    foreach (string pat in excludePatterns)
+                    {
+                        if (resolved.Contains(pat, StringComparison.Ordinal)) { skip = true; break; }
+                    }
+                    if (skip) { continue; }
+                    string relPath = Path.GetFileName(resolved);
+                    if (verbose) { WriteObject(BashRuntime.NewBashObject(relPath)); }
+                    writer.WriteEntry(resolved, relPath);
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            FileSystemHelpers.WriteBashError(this, $"tar: {ex.Message}");
+            FileSystemHelpers.SetLastExitCode(this, 1);
+        }
+        finally
+        {
+            writer?.Dispose();
+            if (gzipFilter) { tarStream?.Dispose(); }
+            outStream?.Dispose();
+        }
+    }
+
+    private void DoExtract(string archiveFile, bool gzipFilter, bool verbose, string? changeDir)
+    {
+        if (!File.Exists(archiveFile))
+        {
+            FileSystemHelpers.WriteBashError(this, $"tar: {archiveFile}: Cannot open: No such file or directory");
+            return;
+        }
+        bool isGz = gzipFilter
+            || archiveFile.EndsWith(".tar.gz", StringComparison.OrdinalIgnoreCase)
+            || archiveFile.EndsWith(".tgz", StringComparison.OrdinalIgnoreCase);
+        string destDir = !string.IsNullOrEmpty(changeDir)
+            ? changeDir!
+            : SessionState.Path.CurrentLocation.ProviderPath;
+
+        FileStream? inStream = null;
+        Stream? tarStream = null;
+        TarReader? reader = null;
+        try
+        {
+            inStream = File.OpenRead(archiveFile);
+            tarStream = isGz
+                ? (Stream)new GZipStream(inStream, CompressionMode.Decompress)
+                : inStream;
+            reader = new TarReader(tarStream);
+
+            TarEntry? entry;
+            while ((entry = reader.GetNextEntry(copyData: true)) != null)
+            {
+                if (entry.DataStream == null) { continue; }
+                string targetPath = Path.Join(destDir, entry.Name.Replace('/', Path.DirectorySeparatorChar));
+                string? dir = Path.GetDirectoryName(targetPath);
+                if (!string.IsNullOrEmpty(dir) && !Directory.Exists(dir))
+                {
+                    Directory.CreateDirectory(dir);
+                }
+                if (verbose) { WriteObject(BashRuntime.NewBashObject(entry.Name)); }
+                using var fs = File.Create(targetPath);
+                entry.DataStream.CopyTo(fs);
+            }
+        }
+        catch (Exception ex)
+        {
+            FileSystemHelpers.WriteBashError(this, $"tar: {ex.Message}");
+            FileSystemHelpers.SetLastExitCode(this, 1);
+        }
+        finally
+        {
+            reader?.Dispose();
+            if (isGz) { tarStream?.Dispose(); }
+            inStream?.Dispose();
+        }
+    }
+
+    private void DoList(string archiveFile, bool gzipFilter)
+    {
+        if (!File.Exists(archiveFile))
+        {
+            FileSystemHelpers.WriteBashError(this, $"tar: {archiveFile}: Cannot open: No such file or directory");
+            return;
+        }
+        bool isGz = gzipFilter
+            || archiveFile.EndsWith(".tar.gz", StringComparison.OrdinalIgnoreCase)
+            || archiveFile.EndsWith(".tgz", StringComparison.OrdinalIgnoreCase);
+
+        FileStream? inStream = null;
+        Stream? tarStream = null;
+        TarReader? reader = null;
+        try
+        {
+            inStream = File.OpenRead(archiveFile);
+            tarStream = isGz
+                ? (Stream)new GZipStream(inStream, CompressionMode.Decompress)
+                : inStream;
+            reader = new TarReader(tarStream);
+
+            TarEntry? entry;
+            while ((entry = reader.GetNextEntry(copyData: false)) != null)
+            {
+                string name = entry.Name;
+                if (entry.EntryType == TarEntryType.Directory)
+                {
+                    name = name.TrimEnd('/') + "/";
+                }
+                string leaf = Path.GetFileName(name.TrimEnd('/'));
+                var obj = new PSObject();
+                obj.TypeNames.Insert(0, "PsBash.TarListOutput");
+                obj.Properties.Add(new PSNoteProperty("BashText", name));
+                obj.Properties.Add(new PSNoteProperty("Name", leaf));
+                WriteObject(obj);
+            }
+        }
+        catch (Exception ex)
+        {
+            FileSystemHelpers.WriteBashError(this, $"tar: {ex.Message}");
+            FileSystemHelpers.SetLastExitCode(this, 1);
+        }
+        finally
+        {
+            reader?.Dispose();
+            if (isGz) { tarStream?.Dispose(); }
+            inStream?.Dispose();
+        }
+    }
+}
