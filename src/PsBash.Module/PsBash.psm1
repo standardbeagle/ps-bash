@@ -4481,45 +4481,7 @@ function Invoke-BashUniq {
     }
 }
 
-# --- rev Command ---
-
-function Invoke-BashRev {
-    [OutputType('PsBash.TextOutput')]
-    param()
-    $Arguments = [string[]]$args
-    $pipelineInput = @($input)
-    if ($Arguments -contains '--help') { return Show-BashHelp 'rev' }
-
-    # Collect lines
-    $lines = [System.Collections.Generic.List[string]]::new()
-
-    if ($Arguments.Count -eq 0 -and $pipelineInput.Count -gt 0) {
-        foreach ($item in $pipelineInput) {
-            $text = Get-BashText -InputObject $item
-            if ($text.TrimEnd("`n".ToCharArray()).Contains("`n")) {
-                foreach ($subLine in ($text.TrimEnd("`n".ToCharArray()) -split "`n")) {
-                    $lines.Add($subLine)
-                }
-            } else {
-                $lines.Add(($text.TrimEnd("`n".ToCharArray())))
-            }
-        }
-    } else {
-        foreach ($filePath in (Resolve-BashGlob -Paths $Arguments)) {
-            $fileLines = Read-BashFileLines -Path $filePath -Command 'rev'
-            if ($null -eq $fileLines) { continue }
-            foreach ($l in $fileLines) {
-                $lines.Add($l)
-            }
-        }
-    }
-
-    foreach ($line in $lines) {
-        $chars = $line.ToCharArray()
-        [System.Array]::Reverse($chars)
-        New-BashObject -BashText ([string]::new($chars))
-    }
-}
+# --- rev Command --- migrated to InvokeBashRevCommand.cs (REFACTOR-2 follow-on)
 
 # --- nl Command ---
 
