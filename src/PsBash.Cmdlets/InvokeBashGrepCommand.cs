@@ -145,6 +145,19 @@ public sealed class InvokeBashGrepCommand : PSCmdlet
         var operands = new List<string>();
         bool pastDoubleDash = false;
 
+        // PowerShell's binder is case-insensitive, so the bash conventions
+        // `-e PATTERN` (multi-pattern) and `-E` (extended-regex flag) both
+        // bind to the same `E` parameter. Detect the uppercase form in the
+        // raw command line and switch on extended-regex mode. The pattern
+        // value is already in `patterns` from the E binding above.
+        var rawLine = MyInvocation?.Line ?? string.Empty;
+        if (!string.IsNullOrEmpty(rawLine)
+            && System.Text.RegularExpressions.Regex.IsMatch(
+                rawLine, @"(?<![A-Za-z0-9])-E(?![a-zA-Z0-9])"))
+        {
+            extendedRegex = true;
+        }
+
         int i = 0;
         while (i < args.Length)
         {
