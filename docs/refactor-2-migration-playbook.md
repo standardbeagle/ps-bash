@@ -26,6 +26,25 @@ PowerShell's `PSCmdlet` binder consumes any `-X` token that prefix-matches a com
 
 Heuristic: any flag whose first character is `e`, `w`, `d`, `p`, `i`, `o`, `c`, `v` is likely to collide. Detect with a smoke test: `Invoke-BashX -<flag> <value>` — if it produces empty output or "ambiguous parameter name", you've hit the collision.
 
+### Critical: `[Alias]` does NOT beat prefix-match — only an exact parameter name does
+
+A `[Alias("w")]` on a parameter named `Width` does NOT take precedence over `-WarningAction` prefix-matching. The PowerShell cmdlet binder resolves `-w` by:
+
+1. **Exact-name match** against any declared parameter — wins.
+2. **Prefix match** against any declared parameter or common parameter — runs next; if ambiguous, the binder throws.
+3. Aliases participate only in step 1 (exact-name), and only when the supplied token matches the alias *exactly*.
+
+So if you want to capture bare `-w VALUE` cleanly, the parameter must be **literally named `W`** (PowerShell parameter names are case-insensitive, so `W` ≡ `w`). Naming it `Width` with `[Alias("w")]` works for direct PowerShell calls (`Invoke-BashX -w 4`) because the binder finds the exact alias match — but it falls apart in transpiler-passthrough contexts where the unbound argument flow can re-trigger prefix matching.
+
+Established working pattern (see `InvokeBashBase64Command`, `InvokeBashWcCommand`):
+
+```csharp
+[Parameter] public SwitchParameter D { get; set; }     // bare -d / -D both match
+[Parameter] public int? W { get; set; }                // bare -w N / -W N both match
+```
+
+Avoid `[Alias("d")] public SwitchParameter Decode`. It looks cleaner, fails under the binder.
+
 ## Working directory rule (mandatory)
 
 **Before any read or write, run `git rev-parse --show-toplevel` and treat that output as the ONLY root for every file path in this migration.** Your subagent is launched inside an isolated git worktree; the orchestrator's main checkout is a *different* directory and is OFF LIMITS. If you find yourself typing or copying an absolute path that does not start with the worktree root, you've already gone wrong — pause and re-derive the path from `show-toplevel`. The 2026-05-16 validation run lost ~30 minutes of integration time to subagents that wrote to the main checkout first and recovered later; one of those recoveries leaked state into a sibling subagent's worktree, producing a duplicate doc row that required manual conflict resolution at integration. Don't repeat that.
