@@ -265,10 +265,14 @@ public sealed class InvokeBashLsCommand : PSCmdlet
             // Get-Item / Get-ChildItem path; it returns raw LsEntry objects (or
             // nothing, having already emitted the bash-style "cannot access"
             // error and set $global:LASTEXITCODE = 2).
+            // Run the psm1 shim with an inner 2>&1 so any Write-BashError
+            // ErrorRecord lands in the script's success stream rather than
+            // being buried in the sub-pipeline (invisible to the cmdlet's
+            // own callers and 2>&1 redirects).
             var shimResults = InvokeCommand.InvokeScript(
                 "param($t,$hidden,$rec,$d) " +
                 "Get-BashLsProviderEntries -Target $t -ShowHidden:$hidden " +
-                "-Recursive:$rec -DirOnly:$d",
+                "-Recursive:$rec -DirOnly:$d 2>&1",
                 target,
                 showHidden,
                 recursive,
@@ -279,6 +283,15 @@ public sealed class InvokeBashLsCommand : PSCmdlet
             {
                 if (item == null)
                 {
+                    continue;
+                }
+                // Inner ErrorRecord (from psm1 Write-BashError) — re-emit via
+                // the EAP-override-safe WriteBashError so the outer cmdlet's
+                // error stream carries it.
+                var baseObj = (item is PSObject po2) ? po2.BaseObject : item;
+                if (baseObj is ErrorRecord innerEr)
+                {
+                    FileSystemHelpers.WriteBashError(this, innerEr.ToString());
                     continue;
                 }
                 anyFromShim = true;
