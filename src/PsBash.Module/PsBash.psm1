@@ -7671,61 +7671,7 @@ function Invoke-BashSplit {
 }
 
 # --- tac Command ---
-
-function Invoke-BashTac {
-    [OutputType('PsBash.TextOutput')]
-    param()
-    $Arguments = [string[]]$args
-    $pipelineInput = @($input)
-    if ($Arguments -contains '--help') { return Show-BashHelp 'tac' }
-
-    $separator = $null
-    $operands = [System.Collections.Generic.List[string]]::new()
-
-    $i = 0
-    while ($i -lt $Arguments.Count) {
-        $arg = $Arguments[$i]
-        if ($arg -eq '-s' -and ($i + 1) -lt $Arguments.Count) {
-            $separator = $Arguments[$i + 1]; $i += 2; continue
-        }
-        if ($arg -match '^--separator=(.+)$') {
-            $separator = $Matches[1]; $i++; continue
-        }
-        $operands.Add($arg); $i++
-    }
-
-    $lines = [System.Collections.Generic.List[string]]::new()
-    if ($operands.Count -eq 0 -and $pipelineInput.Count -gt 0) {
-        foreach ($item in $pipelineInput) {
-            $text = Get-BashText -InputObject $item
-            if ($text.TrimEnd("`n".ToCharArray()).Contains("`n")) {
-                foreach ($subLine in ($text.TrimEnd("`n".ToCharArray()) -split "`n")) { $lines.Add($subLine) }
-            } else {
-                $lines.Add(($text.TrimEnd("`n".ToCharArray())))
-            }
-        }
-    } else {
-        foreach ($filePath in (Resolve-BashGlob -Paths $operands)) {
-            $fileLines = Read-BashFileLines -Path $filePath -Command 'tac'
-            if ($null -eq $fileLines) { continue }
-            foreach ($l in $fileLines) { $lines.Add($l) }
-        }
-    }
-
-    if ($separator) {
-        $all = $lines -join "`n"
-        $chunks = $all.Split($separator)
-        [System.Array]::Reverse($chunks)
-        foreach ($chunk in $chunks) {
-            New-BashObject -BashText $chunk
-        }
-    } else {
-        $lines.Reverse()
-        foreach ($line in $lines) {
-            New-BashObject -BashText $line
-        }
-    }
-}
+# Migrated to binary cmdlet: src/PsBash.Cmdlets/InvokeBashTacCommand.cs (REFACTOR-2 follow-on)
 
 # --- base64 Command ---
 
