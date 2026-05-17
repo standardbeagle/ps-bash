@@ -30,7 +30,10 @@ $script:__psbashCmdletsDll = @(
     (Join-Path $PSScriptRoot '..' 'PsBash.Cmdlets' 'bin' 'Release' 'net10.0' 'PsBash.Cmdlets.dll')
 ) | Where-Object { Test-Path -LiteralPath $_ } | Select-Object -First 1
 if ($script:__psbashCmdletsDll) {
-    Import-Module $script:__psbashCmdletsDll -ErrorAction SilentlyContinue
+    # -Global so the binary cmdlets are reachable via Get-Command after
+    # Import-Module PsBash from any scope (Pester's psd1-import path is
+    # the canonical failure mode this guards against).
+    Import-Module $script:__psbashCmdletsDll -Global -ErrorAction SilentlyContinue
 }
 
 # Global state initialized here so bash functions can access these variables

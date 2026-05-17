@@ -46,6 +46,14 @@ jobs:
           # so Import-Module PsBash can load the binary cmdlets that many
           # Invoke-Bash* names now resolve to (REFACTOR-2 migrations).
           dotnet build src/PsBash.Cmdlets/PsBash.Cmdlets.csproj -c Debug --framework net8.0 -nologo
+          # Copy the built dll next to PsBash.psd1 so the first probe path
+          # (sibling of the manifest) succeeds without depending on bin/ layout.
+          $dll = Get-ChildItem -Path src/PsBash.Cmdlets/bin -Filter PsBash.Cmdlets.dll -Recurse -ErrorAction SilentlyContinue |
+                 Where-Object { $_.FullName -match 'net8\.0' } |
+                 Select-Object -First 1
+          if (-not $dll) { throw "PsBash.Cmdlets.dll not found under src/PsBash.Cmdlets/bin after build" }
+          Copy-Item $dll.FullName src/PsBash.Module/PsBash.Cmdlets.dll -Force
+          Write-Host "Staged $($dll.FullName) -> src/PsBash.Module/PsBash.Cmdlets.dll"
 
       - name: Install Pester
         shell: pwsh
