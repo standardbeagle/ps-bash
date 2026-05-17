@@ -129,8 +129,32 @@ public sealed class InvokeBashCutCommand : PSCmdlet
             return;
         }
 
-        // Default delimiter is a tab (oracle).
+        // Default delimiter is a tab (oracle). PowerShell's colon-syntax
+        // (-Param:Value) treats `-d:` as "param -d with value...", consuming
+        // the NEXT token as the value. So `-d: -f2` ends up binding
+        // D="-f2", and `-d: -f1,3` errors on the array conversion. To honor
+        // the bash convention (`-d:` means delimiter is colon), detect the
+        // joined literal in MyInvocation.Line and override.
         string delimiter = D ?? "\t";
+        var rawLine = MyInvocation?.Line ?? string.Empty;
+        if (!string.IsNullOrEmpty(rawLine))
+        {
+            var m = System.Text.RegularExpressions.Regex.Match(
+                rawLine, @"(?<![A-Za-z0-9])-d(\S)(?!\w)");
+            if (m.Success)
+            {
+                delimiter = m.Groups[1].Value;
+                // The PowerShell binder may have consumed the NEXT token as
+                // D's value (e.g. -d: -f2 → D="-f2"). Re-inject that token
+                // into Arguments so the manual scan picks up the -f.
+                if (D != null && D.StartsWith("-"))
+                {
+                    var newArgs = new List<string>(args.Length + 1) { D };
+                    newArgs.AddRange(args);
+                    args = newArgs.ToArray();
+                }
+            }
+        }
         string fieldSpec = string.Empty;
         string charSpec = C ?? string.Empty;
         var operands = new List<string>();

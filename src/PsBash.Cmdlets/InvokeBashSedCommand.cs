@@ -328,10 +328,18 @@ public sealed class InvokeBashSedCommand : PSCmdlet
             if (oi < origItems.Count && origItems[oi] is PSObject orig
                 && orig.Properties["BashText"] != null)
             {
-                orig.Properties["BashText"].Value =
-                    BashRuntime.NormalizeBashText(pipeOutput[oi] + "\n");
-                WriteObject(orig);
-                continue;
+                try
+                {
+                    orig.Properties["BashText"].Value =
+                        BashRuntime.NormalizeBashText(pipeOutput[oi] + "\n");
+                    WriteObject(orig);
+                    continue;
+                }
+                catch (System.Management.Automation.SetValueException)
+                {
+                    // Read-only BashText (e.g. ScriptProperty on bare string).
+                    // Fall through to emit a fresh BashObject.
+                }
             }
             WriteObject(BashRuntime.NewBashObject(pipeOutput[oi] + "\n"));
         }
