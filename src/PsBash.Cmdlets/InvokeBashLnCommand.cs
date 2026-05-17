@@ -1,3 +1,4 @@
+using System.Linq;
 using System.Management.Automation;
 
 namespace PsBash.Cmdlets;
@@ -64,7 +65,23 @@ public sealed class InvokeBashLnCommand : PSCmdlet
                 case "-s": symbolic = true; break;
                 case "-f": force = true; break;
                 case "-v": verbose = true; break;
-                default: operands.Add(arg); break;
+                default:
+                    // Bundled short flags: -sf, -sv, -fv, -svf, etc.
+                    if (arg.Length > 2 && arg[0] == '-'
+                        && arg.Substring(1).All(c => c == 's' || c == 'f' || c == 'v'))
+                    {
+                        foreach (var c in arg.Substring(1))
+                        {
+                            if (c == 's') symbolic = true;
+                            else if (c == 'f') force = true;
+                            else if (c == 'v') verbose = true;
+                        }
+                    }
+                    else
+                    {
+                        operands.Add(arg);
+                    }
+                    break;
             }
         }
 

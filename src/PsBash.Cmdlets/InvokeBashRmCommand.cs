@@ -155,27 +155,43 @@ public sealed class InvokeBashRmCommand : PSCmdlet
             {
                 var normalized = resolvedFull.TrimEnd(
                     Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
-                var protectedRoots = new List<string>
-                {
-                    Path.GetPathRoot(resolvedFull)?.TrimEnd(
-                        Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar) ?? "",
-                };
-                if (!string.IsNullOrEmpty(homeDir))
-                {
-                    protectedRoots.Add(homeDir.TrimEnd(
-                        Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar));
-                }
+                var pathRoot = Path.GetPathRoot(resolvedFull) ?? string.Empty;
+                var normalizedRoot = pathRoot.TrimEnd(
+                    Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+
                 bool isProtected = false;
-                foreach (var root in protectedRoots)
+
+                // Filesystem root: on POSIX `Path.GetPathRoot("/")` returns
+                // "/" which trims to "" — both the path and root are empty
+                // after trimming. Catch this case explicitly so the protected
+                // guard fires for "/" (not just for a non-empty Windows
+                // drive root like "C:").
+                if (string.IsNullOrEmpty(normalized) && !string.IsNullOrEmpty(pathRoot))
                 {
-                    if (!string.IsNullOrEmpty(root) &&
-                        string.Equals(normalized, root, StringComparison.OrdinalIgnoreCase))
+                    FileSystemHelpers.WriteBashError(this,
+                        $"rm: refusing to remove '{target}': protected path");
+                    hadError = true;
+                    isProtected = true;
+                }
+                else if (!string.IsNullOrEmpty(normalizedRoot) &&
+                         string.Equals(normalized, normalizedRoot, StringComparison.OrdinalIgnoreCase))
+                {
+                    FileSystemHelpers.WriteBashError(this,
+                        $"rm: refusing to remove '{target}': protected path");
+                    hadError = true;
+                    isProtected = true;
+                }
+                else if (!string.IsNullOrEmpty(homeDir))
+                {
+                    var normalizedHome = homeDir.TrimEnd(
+                        Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+                    if (!string.IsNullOrEmpty(normalizedHome) &&
+                        string.Equals(normalized, normalizedHome, StringComparison.OrdinalIgnoreCase))
                     {
                         FileSystemHelpers.WriteBashError(this,
                             $"rm: refusing to remove '{target}': protected path");
                         hadError = true;
                         isProtected = true;
-                        break;
                     }
                 }
                 if (isProtected) continue;

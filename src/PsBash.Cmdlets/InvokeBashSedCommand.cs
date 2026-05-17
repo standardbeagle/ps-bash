@@ -156,6 +156,16 @@ public sealed class InvokeBashSedCommand : PSCmdlet
                     expressions.Add(v);
                 }
             }
+
+            // PowerShell's case-insensitive binder treats `-E` as `-e`, so
+            // `sed -E PATTERN` ends up binding Expression=PATTERN and never
+            // sets extended-regex mode. Detect literal uppercase `-E` in the
+            // raw line and switch on extended-regex.
+            if (System.Text.RegularExpressions.Regex.IsMatch(
+                    rawLine, @"(?<![A-Za-z0-9])-E(?![a-zA-Z0-9])"))
+            {
+                extendedRegex = true;
+            }
         }
 
         // Parse the residual Arguments. -e / -E never appear here (bound by the
