@@ -197,10 +197,12 @@ public sealed class InvokeBashFindCommand : PSCmdlet
         }
 
         // Resolve root via Get-BashItem (psm1 oracle's error-message format,
-        // including the bash "No such file or directory" mapping). This is a
-        // psm1 shim call; the cmdlet does not duplicate that error mapping.
+        // including the bash "No such file or directory" mapping). Wrap with
+        // inner 2>&1 so any Write-BashError ErrorRecord lands in the script's
+        // success stream rather than buried in the sub-pipeline (otherwise
+        // invisible to the cmdlet's caller's 2>&1 redirect).
         var rootResult = InvokeCommand.InvokeScript(
-            "param($p) Get-BashItem -Path $p -Command 'find'", searchPath);
+            "param($p) Get-BashItem -Path $p -Command 'find' 2>&1", searchPath);
         System.IO.FileSystemInfo? rootItem = null;
         foreach (var r in rootResult)
         {
@@ -208,6 +210,10 @@ public sealed class InvokeBashFindCommand : PSCmdlet
             {
                 rootItem = fsi;
                 break;
+            }
+            if (r?.BaseObject is ErrorRecord innerEr)
+            {
+                FileSystemHelpers.WriteBashError(this, innerEr.ToString());
             }
         }
         if (rootItem == null)

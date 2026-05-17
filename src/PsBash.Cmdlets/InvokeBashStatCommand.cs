@@ -143,9 +143,11 @@ public sealed class InvokeBashStatCommand : PSCmdlet
         {
             // Route resolution through psm1 Get-BashItem to preserve the
             // bash-style "stat: cannot stat 'PATH': No such file or directory"
-            // error format (and the script-scope $BashErrorMode behavior).
+            // error format. Wrap with inner 2>&1 so any Write-BashError
+            // ErrorRecord surfaces in the script's success stream and we
+            // can re-emit it via the cmdlet's own error stream.
             var itemResult = InvokeCommand.InvokeScript(
-                "param($p) Get-BashItem -Path $p -Command 'stat' -Verb 'cannot stat'",
+                "param($p) Get-BashItem -Path $p -Command 'stat' -Verb 'cannot stat' 2>&1",
                 target);
             System.IO.FileSystemInfo? item = null;
             foreach (var r in itemResult)
@@ -154,6 +156,10 @@ public sealed class InvokeBashStatCommand : PSCmdlet
                 {
                     item = fsi;
                     break;
+                }
+                if (r?.BaseObject is ErrorRecord innerEr)
+                {
+                    FileSystemHelpers.WriteBashError(this, innerEr.ToString());
                 }
             }
             if (item == null)
