@@ -6100,89 +6100,15 @@ function ConvertTo-SimpleYaml {
     $sb.ToString()
 }
 
-function Invoke-BashYq {
-    [OutputType('PsBash.TextOutput')]
-    param()
-    $Arguments = [string[]]$args
-    $pipelineInput = @($input)
-    if ($Arguments -contains '--help') { return Show-BashHelp 'yq' }
-
-    $rawOutput = $false
-    $outputFormat = 'json'
-    $filterExpr = '.'
-    $filterSet = $false
-    $files = [System.Collections.Generic.List[string]]::new()
-
-    $i = 0
-    while ($i -lt $Arguments.Count) {
-        $arg = $Arguments[$i]
-
-        if ($arg -ceq '-r' -or $arg -ceq '--raw-output') {
-            $rawOutput = $true
-            $i++
-            continue
-        }
-        if ($arg -ceq '-o' -or $arg -ceq '--output-format') {
-            $i++
-            if ($i -lt $Arguments.Count) { $outputFormat = $Arguments[$i] }
-            $i++
-            continue
-        }
-
-        if (-not $filterSet) {
-            $filterExpr = $arg
-            $filterSet = $true
-        } else {
-            $files.Add($arg)
-        }
-        $i++
-    }
-
-    # Collect YAML input
-    $yamlTexts = [System.Collections.Generic.List[string]]::new()
-
-    if ($files.Count -gt 0) {
-        foreach ($file in $files) {
-            $resolved = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($file)
-            if (-not (Test-Path -LiteralPath $resolved)) {
-                Write-BashError -Message "yq: $file`: No such file or directory"
-                return
-            }
-            $yamlTexts.Add([System.IO.File]::ReadAllText($resolved))
-        }
-    } else {
-        $textParts = [System.Text.StringBuilder]::new()
-        foreach ($item in $pipelineInput) {
-            $text = Get-BashText -InputObject $item
-            $textParts.Append($text + "`n") | Out-Null
-        }
-        $combined = $textParts.ToString().Trim()
-        if ($combined -ne '') {
-            $yamlTexts.Add($combined)
-        }
-    }
-
-    if ($yamlTexts.Count -eq 0) { return }
-
-    foreach ($yamlText in $yamlTexts) {
-        try {
-            $parsed = ConvertFrom-SimpleYaml -Text $yamlText
-        } catch {
-            Write-BashError -Message "yq: parse error: $($_.Exception.Message)"
-            return
-        }
-        $results = @(Invoke-JqFilter -Data $parsed -Filter $filterExpr)
-        foreach ($result in $results) {
-            if ($outputFormat -eq 'yaml') {
-                $text = ConvertTo-SimpleYaml -Data $result
-                New-BashObject -BashText $text
-            } else {
-                $text = ConvertTo-JqJson -Value $result -Compact $false -SortKeys $false -RawOutput $rawOutput
-                New-BashObject -BashText $text
-            }
-        }
-    }
-}
+# Invoke-BashYq migrated to binary cmdlet (REFACTOR-2 follow-on):
+# see src/PsBash.Cmdlets/InvokeBashYqCommand.cs. The psm1 helpers
+# ConvertFrom-SimpleYaml / ConvertFrom-YamlValue / ConvertTo-SimpleYaml
+# and the jq helpers Invoke-JqFilter / ConvertTo-JqJson remain here
+# because the cmdlet delegates to them via parameter-bound InvokeScript
+# (no .NET YAML lib in stdlib; the C# JqEngine operates on a
+# System.Text.Json graph, not the OrderedDictionary graph that
+# ConvertFrom-SimpleYaml produces). Set-Alias 'yq' at the bottom of
+# this file resolves to the binary cmdlet.
 
 # --- xan Command ---
 
