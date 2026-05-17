@@ -162,6 +162,8 @@ FunctionsToExport = 'Set-BashErrorMode', 'Write-BashError', 'Resolve-BashGlob',
                  # only declares psm1 functions.
                  'Resolve-BrowseAdapter', 'New-BrowseBinding',
                  'Invoke-BrowseCommand', 'Test-BrowseCommandRequiresConfirmation',
+                 'ConvertTo-BrowseRow', 'Invoke-BrowseAction', 'Invoke-BrowseInteractive',
+                 'Get-BashItem',
                  'Enable-BashHookPrompt', 'Disable-BashHookPrompt'
 
 # Cmdlets to export from this module, for best performance, do not use wildcards and do not delete the entry, use an empty array if there are no cmdlets to export.
@@ -191,7 +193,8 @@ AliasesToExport = 'echo', 'printf', 'ls', 'cat', 'grep', 'sort', 'head', 'tail',
                 'pushd', 'popd', 'dirs',
                 'yes', 'tput', 'shopt',
                 'kill', 'test', 'let', 'id', 'shuf', 'balias',
-                'install', 'browse', 'more', 'less'
+                'install', 'browse', 'more', 'less',
+                'trap', 'alias', 'mapfile', 'readarray'
 
 # DSC resources to export from this module
 # DscResourcesToExport = @()

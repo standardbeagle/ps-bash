@@ -5097,7 +5097,10 @@ Set-Alias -Name 'tput'     -Value 'Invoke-BashTput'     -Force -Scope Global -Op
 Set-Alias -Name 'shopt'    -Value 'Invoke-BashShopt'    -Force -Scope Global -Option AllScope
 Set-Alias -Name 'kill'     -Value 'Invoke-BashKill'     -Force -Scope Global -Option AllScope
 Set-Alias -Name 'test'     -Value 'Invoke-BashTest'     -Force -Scope Global -Option AllScope
-Set-Alias -Name '['        -Value 'Invoke-BashTest'     -Force -Scope Global -Option AllScope
+# Note: bash `[` is intentionally NOT a PowerShell alias — Get-Alias treats
+# '[' as a wildcard pattern, which breaks Pester's per-alias resolution check.
+# The transpiler emits Invoke-BashTest directly for `[` form, so the alias
+# is not load-bearing for transpiled-script execution.
 Set-Alias -Name 'let'      -Value 'Invoke-BashLet'      -Force -Scope Global -Option AllScope
 Set-Alias -Name 'id'       -Value 'Invoke-BashId'       -Force -Scope Global -Option AllScope
 Set-Alias -Name 'shuf'     -Value 'Invoke-BashShuf'     -Force -Scope Global -Option AllScope
