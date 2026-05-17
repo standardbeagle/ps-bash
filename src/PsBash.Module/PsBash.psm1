@@ -3659,175 +3659,35 @@ function ConvertTo-SimpleYaml {
 
 # --- alias / unalias (module mode: dynamic function creation) ---
 
-$script:BashUserAliases = [System.Collections.Generic.Dictionary[string,string]]::new(
-    [System.StringComparer]::Ordinal
-)
-
-function Invoke-BashAlias {
-    [OutputType('PsBash.AliasOutput')]
-    param()
-    $Arguments = [string[]]$args
-    if ($Arguments -contains '--help') { return Show-BashHelp 'alias' }
-
-    $unaliasMode = $false
-    $removeAll = $false
-    $operands = [System.Collections.Generic.List[string]]::new()
-
-    $i = 0
-    while ($i -lt $Arguments.Count) {
-        $arg = $Arguments[$i]
-        if ($arg -ceq '-u') {
-            $unaliasMode = $true
-        } elseif ($arg -ceq '-a' -and $unaliasMode) {
-            $removeAll = $true
-        } elseif ($arg -ceq '-p') {
-        } else {
-            $operands.Add($arg)
-        }
-        $i++
-    }
-
-    if ($unaliasMode) {
-        if ($removeAll) {
-            foreach ($name in @($script:BashUserAliases.Keys)) {
-                Invoke-Expression "Remove-Item 'Function:\$name' -Force -ErrorAction SilentlyContinue"
-            }
-            $script:BashUserAliases.Clear()
-            return
-        }
-        foreach ($name in $operands) {
-            if (-not $script:BashUserAliases.ContainsKey($name)) {
-                Write-BashError -Message "unalias: ${name}: not found"
-                continue
-            }
-            Invoke-Expression "Remove-Item 'Function:\$name' -Force -ErrorAction SilentlyContinue"
-            $script:BashUserAliases.Remove($name) | Out-Null
-        }
-        return
-    }
-
-    if ($operands.Count -eq 0) {
-        foreach ($kvp in $script:BashUserAliases.GetEnumerator()) {
-            $obj = [PSCustomObject]@{
-                PSTypeName = 'PsBash.AliasOutput'
-                Name       = $kvp.Key
-                Value      = $kvp.Value
-                BashText   = "alias $($kvp.Key)='$($kvp.Value)'"
-            }
-            Set-BashDisplayProperty $obj
-        }
-        return
-    }
-
-    foreach ($arg in $operands) {
-        if ($arg -match '^([^=]+)=(.*)$') {
-            $aliasName = $Matches[1]
-            $aliasValue = $Matches[2]
-            $script:BashUserAliases[$aliasName] = $aliasValue
-            $body = [scriptblock]::Create("& $aliasValue @args")
-            Invoke-Expression "function global:$aliasName { & $aliasValue @args }"
-        } else {
-            if ($script:BashUserAliases.ContainsKey($arg)) {
-                $val = $script:BashUserAliases[$arg]
-                $obj = [PSCustomObject]@{
-                    PSTypeName = 'PsBash.AliasOutput'
-                    Name       = $arg
-                    Value      = $val
-                    BashText   = "alias $arg='$val'"
-                }
-                Set-BashDisplayProperty $obj
-            } else {
-                Write-BashError -Message "alias: ${arg}: not found"
-            }
-        }
-    }
+# BashUserAliases: ownership stays in psm1 module scope but declared at the
+# global scope so the migrated InvokeBashAliasCommand binary cmdlet — running
+# in a separate binary-module session state — can read/mutate it via
+# parameter-bound InvokeScript without scope qualifier collisions.
+if (-not $global:BashUserAliases) {
+    $global:BashUserAliases = [System.Collections.Generic.Dictionary[string,string]]::new(
+        [System.StringComparer]::Ordinal
+    )
 }
+$script:BashUserAliases = $global:BashUserAliases
+
+# Invoke-BashAlias migrated to binary cmdlet: src/PsBash.Cmdlets/InvokeBashAliasCommand.cs (REFACTOR-2 follow-on, alias/trap batch).
+# The $script:BashUserAliases dictionary above stays in psm1 module scope — the cmdlet reads/mutates it via parameter-bound InvokeScript.
 
 # --- trap ---
 
-$script:BashTrapHandlers = [System.Collections.Generic.Dictionary[string,object]]::new(
-    [System.StringComparer]::OrdinalIgnoreCase
-)
-
-function Invoke-BashTrap {
-    [OutputType('PsBash.TextOutput')]
-    param()
-    $Arguments = [string[]]$args
-    if ($Arguments -contains '--help') { return Show-BashHelp 'trap' }
-
-    if ($Arguments.Count -eq 0) {
-        foreach ($kvp in $script:BashTrapHandlers.GetEnumerator()) {
-            $obj = [PSCustomObject]@{
-                PSTypeName = 'PsBash.TrapOutput'
-                Signal     = $kvp.Key
-                Action     = $kvp.Value
-                BashText   = "trap -- '$($kvp.Value)' $($kvp.Key)"
-            }
-            Set-BashDisplayProperty $obj
-        }
-        return
-    }
-
-    if ($Arguments.Count -eq 1 -and $Arguments[0] -ceq '-l') {
-        $signals = @('EXIT', 'ERR', 'INT', 'TERM', 'HUP', 'QUIT', 'PIPE', 'ALRM', 'USR1', 'USR2')
-        $obj = [PSCustomObject]@{
-            PSTypeName = 'PsBash.TrapOutput'
-            Signal     = $null
-            Action     = $null
-            BashText   = ($signals -join ' ')
-        }
-        Set-BashDisplayProperty $obj
-        return
-    }
-
-    $action = $null
-    $signals = [System.Collections.Generic.List[string]]::new()
-    $resetMode = $false
-
-    if ($Arguments[0] -ceq '-' -or $Arguments[0] -ceq '--') {
-        $resetMode = $true
-        for ($i = 1; $i -lt $Arguments.Count; $i++) {
-            $signals.Add($Arguments[$i].ToUpper())
-        }
-    } else {
-        $action = $Arguments[0]
-        for ($i = 1; $i -lt $Arguments.Count; $i++) {
-            $signals.Add($Arguments[$i].ToUpper())
-        }
-    }
-
-    if ($signals.Count -eq 0) {
-        $signals.Add('EXIT')
-    }
-
-    foreach ($signal in $signals) {
-        if ($resetMode -or ($action -eq '')) {
-            if ($script:BashTrapHandlers.ContainsKey($signal)) {
-                if ($signal -ceq 'EXIT') {
-                    $global:__BashTrapEXIT = $null
-                }
-                $script:BashTrapHandlers.Remove($signal) | Out-Null
-            }
-            continue
-        }
-
-        switch ($signal) {
-            'EXIT' {
-                $sb = [scriptblock]::Create($action)
-                $global:__BashTrapEXIT = $sb
-                $script:BashTrapHandlers['EXIT'] = $action
-            }
-            'ERR' {
-                $sb = [scriptblock]::Create($action)
-                $script:BashTrapHandlers['ERR'] = $action
-                $global:__BashTrapERR = $sb
-            }
-            default {
-                $script:BashTrapHandlers[$signal] = $action
-            }
-        }
-    }
+# BashTrapHandlers: same shape as BashUserAliases above — declared at global
+# scope so the migrated InvokeBashTrapCommand binary cmdlet can read/mutate it
+# via parameter-bound InvokeScript.
+if (-not $global:BashTrapHandlers) {
+    $global:BashTrapHandlers = [System.Collections.Generic.Dictionary[string,object]]::new(
+        [System.StringComparer]::OrdinalIgnoreCase
+    )
 }
+$script:BashTrapHandlers = $global:BashTrapHandlers
+
+# Invoke-BashTrap migrated to binary cmdlet: src/PsBash.Cmdlets/InvokeBashTrapCommand.cs (REFACTOR-2 follow-on, alias/trap batch).
+# The $script:BashTrapHandlers dictionary above stays in psm1 module scope — the cmdlet reads/mutates it via parameter-bound InvokeScript;
+# $global:__BashTrapERR / $global:__BashTrapEXIT are set in the same scripts so the eval pipeline observes them.
 
 # --- read ---
 
@@ -4475,8 +4335,10 @@ Set-Alias -Name 'xan'      -Value 'Invoke-BashXan'      -Force -Scope Global -Op
 Set-Alias -Name 'sleep'    -Value 'Invoke-BashSleep'    -Force -Scope Global -Option AllScope
 Set-Alias -Name 'time'     -Value 'Invoke-BashTime'     -Force -Scope Global -Option AllScope
 Set-Alias -Name 'which'    -Value 'Invoke-BashWhich'    -Force -Scope Global -Option AllScope
+Set-Alias -Name 'alias'    -Value 'Invoke-BashAlias'    -Force -Scope Global -Option AllScope
 Set-Alias -Name 'unalias'  -Value 'Invoke-BashAlias'    -Force -Scope Global -Option AllScope
 Set-Alias -Name 'balias'   -Value 'Invoke-BashAlias'    -Force -Scope Global -Option AllScope
+Set-Alias -Name 'trap'     -Value 'Invoke-BashTrap'     -Force -Scope Global -Option AllScope
 Set-Alias -Name 'readlink' -Value 'Invoke-BashReadlink' -Force -Scope Global -Option AllScope
 Set-Alias -Name 'mktemp'   -Value 'Invoke-BashMktemp'   -Force -Scope Global -Option AllScope
 Set-Alias -Name 'type'     -Value 'Invoke-BashType'     -Force -Scope Global -Option AllScope

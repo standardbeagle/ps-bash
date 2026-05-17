@@ -352,7 +352,8 @@ foreach ($item in $pipelineInput) {
 | sleep | Invoke-BashSleep | (duration) | Positional | No | No |
 | time | Invoke-BashTime | (command) | Positional | No | No |
 | which | Invoke-BashWhich | `-a` | Manual loop | No | No |
-| alias | Invoke-BashAlias | `-p`, `-u`, `-a` | Manual loop | No | No |
+| alias | Invoke-BashAlias | `-p`, `-u`, `-a` | Binary cmdlet (`-p` / `-a` declared as `SwitchParameter`s `P` / `A`; `-u` stays in `Arguments`; psm1-scoped `$script:BashUserAliases` accessed via parameter-bound `InvokeScript`) | No | No |
+| trap | Invoke-BashTrap | `-p`, `-l` | Binary cmdlet (`-p` declared as `SwitchParameter P`; `-l` stays in `Arguments`; psm1-scoped `$script:BashTrapHandlers` accessed via parameter-bound `InvokeScript`; ERR/EXIT also publish `$global:__BashTrapERR` / `$global:__BashTrapEXIT` scriptblocks) | No | No |
 | unset | Invoke-BashUnset | `-v`, `-f` | Manual loop | No | No |
 | pushd | Invoke-BashPushd | `+N` | Binary cmdlet (no declared switches; shares PowerShell's built-in location stack via `Push-Location` / `Pop-Location -Stack`) | No | No |
 | popd | Invoke-BashPopd | `+N` | Binary cmdlet (no declared switches; shares PowerShell's built-in location stack) | No | No |
@@ -914,7 +915,8 @@ foreach ($item in $pipelineInput) {
 | sleep | Invoke-BashSleep | (duration) | Positional | No | No |
 | time | Invoke-BashTime | (command) | Positional | No | No |
 | which | Invoke-BashWhich | `-a` | Manual loop | No | No |
-| alias | Invoke-BashAlias | `-p`, `-u`, `-a` | Manual loop | No | No |
+| alias | Invoke-BashAlias | `-p`, `-u`, `-a` | Binary cmdlet (`-p` / `-a` declared as `SwitchParameter`s `P` / `A`; `-u` stays in `Arguments`; psm1-scoped `$script:BashUserAliases` accessed via parameter-bound `InvokeScript`) | No | No |
+| trap | Invoke-BashTrap | `-p`, `-l` | Binary cmdlet (`-p` declared as `SwitchParameter P`; `-l` stays in `Arguments`; psm1-scoped `$script:BashTrapHandlers` accessed via parameter-bound `InvokeScript`; ERR/EXIT also publish `$global:__BashTrapERR` / `$global:__BashTrapEXIT` scriptblocks) | No | No |
 | unset | Invoke-BashUnset | `-v`, `-f` | Manual loop | No | No |
 | pushd | Invoke-BashPushd | `+N` | Binary cmdlet (no declared switches; shares PowerShell's built-in location stack via `Push-Location` / `Pop-Location -Stack`) | No | No |
 | popd | Invoke-BashPopd | `+N` | Binary cmdlet (no declared switches; shares PowerShell's built-in location stack) | No | No |
