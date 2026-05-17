@@ -11468,17 +11468,8 @@ function Invoke-BashDirs {
 
 # --- yes ---
 
-function Invoke-BashYes {
-    [OutputType('PsBash.TextOutput')]
-    param()
-    $Arguments = [string[]]$args
-    if ($Arguments -contains '--help') { return Show-BashHelp 'yes' }
-
-    $text = if ($Arguments.Count -gt 0) { $Arguments -join ' ' } else { 'y' }
-    while ($true) {
-        New-BashObject -BashText $text -TypeName 'PsBash.TextOutput'
-    }
-}
+# Invoke-BashYes migrated to binary cmdlet (REFACTOR-2):
+# see InvokeBashYesCommand.cs in PsBash.Cmdlets.
 
 # --- tput ---
 
