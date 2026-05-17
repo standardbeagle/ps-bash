@@ -8015,66 +8015,8 @@ function Invoke-BashMapfile {
 
 # --- type ---
 
-$script:BashShoptOptions = @{
-    'extglob'            = $false
-    'globstar'           = $true
-    'dotglob'            = $false
-    'nullglob'           = $false
-    'nocaseglob'         = $false
-    'expand_aliases'     = $true
-    'cmdhist'            = $true
-    'histappend'         = $true
-    'checkwinsize'      = $true
-    'progcomp'           = $true
-    'login_shell'        = $false
-    'interactive_comments' = $true
-    'sourcepath'         = $true
-    'hostcomplete'       = $true
-}
-
-function Invoke-BashShopt {
-    param()
-    $Arguments = [string[]]$args
-
-    $setMode = $false
-    $unsetMode = $false
-    $printMode = $false
-    $queryMode = $false
-    $operands = [System.Collections.Generic.List[string]]::new()
-
-    foreach ($arg in $Arguments) {
-        switch ($arg) {
-            '-s' { $setMode = $true }
-            '-u' { $unsetMode = $true }
-            '-p' { $printMode = $true }
-            '-q' { $queryMode = $true }
-            default { $operands.Add($arg) }
-        }
-    }
-
-    if ($printMode -and $operands.Count -eq 0) {
-        foreach ($kv in $script:BashShoptOptions.GetEnumerator() | Sort-Object Key) {
-            $val = if ($kv.Value) { 'on' } else { 'off' }
-            Emit-BashLine -Text "shopt -s $($kv.Name)"
-        }
-        return
-    }
-
-    foreach ($opt in $operands) {
-        if ($setMode) {
-            $script:BashShoptOptions[$opt] = $true
-        } elseif ($unsetMode) {
-            $script:BashShoptOptions[$opt] = $false
-        } else {
-            if ($script:BashShoptOptions.ContainsKey($opt)) {
-                $val = if ($script:BashShoptOptions[$opt]) { 'on' } else { 'off' }
-                Emit-BashLine -Text "$opt $val"
-            } else {
-                Write-BashError -Message "bash: shopt: ${opt}: invalid shell option name"
-            }
-        }
-    }
-}
+# --- shopt ---
+# Migrated to binary cmdlet: src/PsBash.Cmdlets/InvokeBashShoptCommand.cs (REFACTOR-2 follow-on).
 
 function Invoke-BashType {
     [OutputType('PsBash.TypeOutput')]
