@@ -6,6 +6,26 @@ Designed for execution by a fresh subagent with no prior session context. Each m
 
 Companion: [`docs/refactor-2-roadmap.md`](./refactor-2-roadmap.md) — the queue of remaining functions with sizing and tier.
 
+## Known prefix-collision flags
+
+PowerShell's `PSCmdlet` binder consumes any `-X` token that prefix-matches a common parameter unless `X` is declared as a named parameter on the cmdlet. Confirmed collisions from prior migrations:
+
+| Bash flag | Collides with | Resolution |
+|---|---|---|
+| `-e` | `-ErrorAction` / `-ErrorVariable` | declare `SwitchParameter e` (or value-bearing if `-e` takes a value, as `sed`) |
+| `-E` | same as `-e` (PowerShell parameter names are case-insensitive) | combine with `-e` resolution; if both differ semantically, only one is salvageable (echo's blocker) |
+| `-v` | `-Verbose` | declare `SwitchParameter v` |
+| `-d` | `-Debug` | declare `SwitchParameter d` |
+| `-w` | `-WarningAction` / `-WarningVariable` | for value-bearing `-w N`, declare `string? Width` with `Alias("w")` (see `InvokeBashFoldCommand`); for switch, declare `SwitchParameter w` |
+| `-p` | `-PipelineVariable` / `-ProgressAction` | declare `SwitchParameter p` |
+| `-P` | same as `-p` (case-insensitive) | combine |
+| `-i` | `-InformationAction` / `-InformationVariable` | declare `SwitchParameter i` |
+| `-a` | the cmdlet's own `-Arguments` parameter (since most cmdlets declare `Arguments`) | declare `SwitchParameter a` |
+| `-c` | `-Confirm` | declare `SwitchParameter c` |
+| `-o` | `-OutVariable` / `-OutBuffer` | declare `SwitchParameter o` |
+
+Heuristic: any flag whose first character is `e`, `w`, `d`, `p`, `i`, `o`, `c`, `v` is likely to collide. Detect with a smoke test: `Invoke-BashX -<flag> <value>` — if it produces empty output or "ambiguous parameter name", you've hit the collision.
+
 ## Working directory rule (mandatory)
 
 **Before any read or write, run `git rev-parse --show-toplevel` and treat that output as the ONLY root for every file path in this migration.** Your subagent is launched inside an isolated git worktree; the orchestrator's main checkout is a *different* directory and is OFF LIMITS. If you find yourself typing or copying an absolute path that does not start with the worktree root, you've already gone wrong — pause and re-derive the path from `show-toplevel`. The 2026-05-16 validation run lost ~30 minutes of integration time to subagents that wrote to the main checkout first and recovered later; one of those recoveries leaked state into a sibling subagent's worktree, producing a duplicate doc row that required manual conflict resolution at integration. Don't repeat that.
