@@ -4475,72 +4475,13 @@ Set-Alias -Name 'readarray' -Value 'Invoke-BashMapfile' -Force -Scope Global -Op
 
 # --- pushd / popd / dirs ---
 
-function Invoke-BashPushd {
-    param()
-    $Arguments = [string[]]$args
-    if ($Arguments -contains '--help') { return Show-BashHelp 'pushd' }
-
-    # +N rotation
-    if ($Arguments.Count -gt 0 -and $Arguments[0] -cmatch '^\+(\d+)$') {
-        $n = [int]$Matches[1]
-        $stack = @(Get-Location -Stack)
-        if ($n -ge 0 -and $n -lt $stack.Count) {
-            $target = $stack[$n]
-            for ($i = 0; $i -le $n; $i++) { Pop-Location -Stack -ErrorAction SilentlyContinue }
-            Push-Location -Path $target.Path
-        }
-        return
-    }
-
-    $path = if ($Arguments.Count -gt 0) { $Arguments[0] } else { '.' }
-    Push-Location -Path $path
-}
-
-function Invoke-BashPopd {
-    param()
-    $Arguments = [string[]]$args
-    if ($Arguments -contains '--help') { return Show-BashHelp 'popd' }
-
-    if ($Arguments.Count -gt 0 -and $Arguments[0] -cmatch '^\+(\d+)$') {
-        $n = [int]$Matches[1]
-        for ($i = 0; $i -le $n; $i++) { Pop-Location -Stack -ErrorAction SilentlyContinue }
-    } else {
-        Pop-Location
-    }
-}
-
-function Invoke-BashDirs {
-    [OutputType('PsBash.TextOutput')]
-    param()
-    $Arguments = [string[]]$args
-    if ($Arguments -contains '--help') { return Show-BashHelp 'dirs' }
-
-    $clear = $Arguments -contains '-c'
-    if ($clear) {
-        while (Get-Location -Stack -ErrorAction SilentlyContinue) {
-            Pop-Location -Stack -ErrorAction SilentlyContinue
-        }
-        return
-    }
-
-    $onePerLine = $Arguments -contains '-p'
-    $withNumbers = $Arguments -contains '-v'
-    $stack = @(Get-Location -Stack)
-    [array]::Reverse($stack)
-
-    if ($withNumbers) {
-        for ($i = 0; $i -lt $stack.Count; $i++) {
-            Emit-BashLine -Text "$i  $($stack[$i].Path)"
-        }
-    } elseif ($onePerLine) {
-        foreach ($entry in $stack) {
-            Emit-BashLine -Text $entry.Path
-        }
-    } else {
-        $paths = @( (Get-Location).Path ) + ($stack | ForEach-Object { $_.Path })
-        Emit-BashLine -Text ($paths -join ' ')
-    }
-}
+# Invoke-BashPushd / Invoke-BashPopd / Invoke-BashDirs migrated to binary cmdlets
+# (REFACTOR-2 dir-stack batch): see InvokeBashPushdCommand.cs / InvokeBashPopdCommand.cs
+# / InvokeBashDirsCommand.cs in PsBash.Cmdlets. The location stack itself remains
+# PowerShell's built-in default stack (the one Push-Location / Pop-Location -Stack /
+# Get-Location -Stack manage), exactly as the oracle used it — no $global:BashDirStack
+# array is introduced. The Set-Alias lines for pushd / popd / dirs near the bottom of
+# this module resolve to the cmdlets.
 
 # --- yes ---
 
