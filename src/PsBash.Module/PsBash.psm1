@@ -7304,41 +7304,11 @@ function Invoke-BashTree {
 }
 
 # --- env / printenv ---
-
-function Invoke-BashEnv {
-    [OutputType('PsBash.EnvEntry')]
-    param()
-    $Arguments = [string[]]$args
-    if ($Arguments -contains '--help') { return Show-BashHelp 'env' }
-
-    if ($Arguments.Count -gt 0) {
-        $varName = $Arguments[0]
-        $val = [System.Environment]::GetEnvironmentVariable($varName)
-        if ($null -eq $val) {
-            Write-BashError -Message "env: '$varName': not set"
-            return
-        }
-        $obj = [PSCustomObject]@{
-            PSTypeName = 'PsBash.EnvEntry'
-            Name       = $varName
-            Value      = $val
-            BashText   = "$varName=$val"
-        }
-        return (Set-BashDisplayProperty $obj)
-    }
-
-    $entries = [System.Environment]::GetEnvironmentVariables()
-    foreach ($key in ($entries.Keys | Sort-Object)) {
-        $val = $entries[$key]
-        $obj = [PSCustomObject]@{
-            PSTypeName = 'PsBash.EnvEntry'
-            Name       = [string]$key
-            Value      = [string]$val
-            BashText   = "$key=$val"
-        }
-        Set-BashDisplayProperty $obj
-    }
-}
+#
+# Invoke-BashEnv MIGRATED to a binary cmdlet (REFACTOR-2 follow-on).
+# See src/PsBash.Cmdlets/InvokeBashEnvCommand.cs. The `Set-Alias env`
+# and `Set-Alias printenv` lines below still resolve because
+# PsBash.Cmdlets.dll registers the cmdlet before this module runs.
 
 # --- basename ---
 #
