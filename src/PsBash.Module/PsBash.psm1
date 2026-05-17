@@ -7342,82 +7342,8 @@ function Invoke-BashTree {
 # --- uname ---
 # Migrated to binary cmdlet — see src/PsBash.Cmdlets/InvokeBashUnameCommand.cs (REFACTOR-2).
 
-# --- fold Command ---
-
-function Invoke-BashFold {
-    [OutputType('PsBash.TextOutput')]
-    param()
-    $Arguments = [string[]]$args
-    $pipelineInput = @($input)
-    if ($Arguments -contains '--help') { return Show-BashHelp 'fold' }
-
-    $width = 80
-    $breakSpaces = $false
-    $operands = [System.Collections.Generic.List[string]]::new()
-
-    $i = 0
-    while ($i -lt $Arguments.Count) {
-        $arg = $Arguments[$i]
-        if ($arg -cmatch '^-w(\d+)$') {
-            $width = [int]$Matches[1]; $i++; continue
-        }
-        if ($arg -eq '-w' -and ($i + 1) -lt $Arguments.Count) {
-            $width = [int]$Arguments[$i + 1]; $i += 2; continue
-        }
-        if ($arg -match '^--width=(.+)$') {
-            $width = [int]$Matches[1]; $i++; continue
-        }
-        if ($arg -ceq '-s' -or $arg -eq '--spaces') {
-            $breakSpaces = $true; $i++; continue
-        }
-        if ($arg -ceq '-b' -or $arg -eq '--bytes') {
-            $i++; continue  # bytes mode is default for ASCII
-        }
-        $operands.Add($arg); $i++
-    }
-
-    $lines = [System.Collections.Generic.List[string]]::new()
-    if ($operands.Count -eq 0 -and $pipelineInput.Count -gt 0) {
-        foreach ($item in $pipelineInput) {
-            $text = Get-BashText -InputObject $item
-            if ($text.TrimEnd("`n".ToCharArray()).Contains("`n")) {
-                foreach ($subLine in ($text.TrimEnd("`n".ToCharArray()) -split "`n")) { $lines.Add($subLine) }
-            } else {
-                $lines.Add(($text.TrimEnd("`n".ToCharArray())))
-            }
-        }
-    } else {
-        foreach ($filePath in (Resolve-BashGlob -Paths $operands)) {
-            $fileLines = Read-BashFileLines -Path $filePath -Command 'fold'
-            if ($null -eq $fileLines) { continue }
-            foreach ($l in $fileLines) { $lines.Add($l) }
-        }
-    }
-
-    foreach ($line in $lines) {
-        if ($line.Length -le $width) {
-            New-BashObject -BashText $line
-            continue
-        }
-        $pos = 0
-        while ($pos -lt $line.Length) {
-            $remaining = $line.Length - $pos
-            if ($remaining -le $width) {
-                New-BashObject -BashText $line.Substring($pos)
-                break
-            }
-            $chunkEnd = $pos + $width
-            if ($breakSpaces) {
-                $spaceIdx = $line.LastIndexOf(' ', $chunkEnd - 1, $width)
-                if ($spaceIdx -gt $pos) {
-                    $chunkEnd = $spaceIdx + 1
-                }
-            }
-            New-BashObject -BashText $line.Substring($pos, $chunkEnd - $pos)
-            $pos = $chunkEnd
-        }
-    }
-}
+# --- fold ---
+# Migrated to binary cmdlet — see src/PsBash.Cmdlets/InvokeBashFoldCommand.cs (REFACTOR-2).
 
 # --- expand Command ---
 # Migrated to binary cmdlet: src/PsBash.Cmdlets/InvokeBashExpandCommand.cs (REFACTOR-2 follow-on).
