@@ -99,9 +99,7 @@ public sealed class InvokeBashPwdCommand : PSCmdlet
             }
             catch (Exception ex)
             {
-                InvokeCommand.InvokeScript(
-                    "param($m) Write-BashError -Message $m",
-                    $"pwd: error resolving path: {ex.Message}");
+                FileSystemHelpers.WriteBashError(this, $"pwd: error resolving path: {ex.Message}");
                 return;
             }
         }

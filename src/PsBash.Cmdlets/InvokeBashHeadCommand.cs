@@ -206,9 +206,7 @@ public sealed class InvokeBashHeadCommand : PSCmdlet
                 }
                 catch (Exception ex)
                 {
-                    InvokeCommand.InvokeScript(
-                        "param($m) Write-BashError -Message $m",
-                        $"head: cannot read '{filePath}': {ex.Message}");
+                    FileSystemHelpers.WriteBashError(this, $"head: cannot read '{filePath}': {ex.Message}");
                 }
                 continue;
             }
@@ -271,8 +269,7 @@ public sealed class InvokeBashHeadCommand : PSCmdlet
             bool notFound = ex is FileNotFoundException or DirectoryNotFoundException
                 || ex.InnerException is FileNotFoundException or DirectoryNotFoundException;
             string msg = notFound ? "No such file or directory" : ex.Message;
-            InvokeCommand.InvokeScript(
-                "param($m) Write-BashError -Message $m", $"{command}: {normalized}: {msg}");
+            FileSystemHelpers.WriteBashError(this, $"{command}: {normalized}: {msg}");
             return null;
         }
 

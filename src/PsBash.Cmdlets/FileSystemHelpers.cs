@@ -53,16 +53,32 @@ internal static class FileSystemHelpers
     }
 
     /// <summary>
-    /// Emit a bash-style error via the psm1 <c>Write-BashError</c> function.
-    /// The error-mode switch (<c>$script:BashErrorMode</c>) lives in psm1
-    /// scope, so we go through <see cref="PSCmdlet.InvokeCommand"/>'s
-    /// parameter-bound script body — no <see cref="ScriptBlock"/> construction,
-    /// AOT-safe.
+    /// Emit a bash-style error. Always writes an <see cref="ErrorRecord"/>
+    /// via <see cref="PSCmdlet.WriteError"/> so callers using
+    /// <c>cmd 2&gt;&amp;1 | Where {$_ -is [ErrorRecord]}</c> see it. Routing
+    /// only through <c>InvokeCommand.InvokeScript</c> buries the inner
+    /// <c>Write-Error</c> inside the sub-pipeline and the outer 2&gt;&amp;1
+    /// redirect finds nothing — Pester tests rely on the ErrorRecord. Also
+    /// invokes the psm1 <c>Write-BashError</c> helper so bash-mode stderr
+    /// formatting (production host launcher path) continues to fire. Sets
+    /// <c>$global:LASTEXITCODE = 1</c>.
     /// </summary>
     public static void WriteBashError(PSCmdlet cmdlet, string message)
     {
-        cmdlet.InvokeCommand.InvokeScript(
-            "param($m) Write-BashError -Message $m", message);
+        SetLastExitCode(cmdlet, 1);
+
+        cmdlet.WriteError(new ErrorRecord(
+            new System.IO.IOException(message),
+            "BashError",
+            ErrorCategory.NotSpecified,
+            null));
+
+        try
+        {
+            cmdlet.InvokeCommand.InvokeScript(
+                "param($m) Write-BashError -Message $m", message);
+        }
+        catch { /* benign — ErrorRecord above already carried the message */ }
     }
 
     /// <summary>
