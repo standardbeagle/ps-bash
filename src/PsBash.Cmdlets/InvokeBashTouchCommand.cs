@@ -47,6 +47,13 @@ public sealed class InvokeBashTouchCommand : PSCmdlet
     [Parameter] public SwitchParameter c { get; set; }
     [Parameter] public SwitchParameter v { get; set; }
 
+    // -d prefix-collides with -Debug. Declared as value-bearing string so
+    // 'touch -d "2024-01-01" file' binds the date correctly. (Without this
+    // declaration, -Debug consumes the bare -d as a switch and the date
+    // string lands in Arguments as a bare positional, indistinguishable
+    // from a file operand.)
+    [Parameter] public string? D { get; set; }
+
     [Parameter(ValueFromRemainingArguments = true)]
     public string[]? Arguments { get; set; }
 
@@ -72,7 +79,7 @@ public sealed class InvokeBashTouchCommand : PSCmdlet
         _ = v;
 
         bool modOnly = false;
-        string? dateStr = null;
+        string? dateStr = D;
         var operands = new List<string>();
 
         int i = 0;

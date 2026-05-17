@@ -1,3 +1,4 @@
+using System.Linq;
 using System.Management.Automation;
 using System.Runtime.InteropServices;
 
@@ -75,7 +76,24 @@ public sealed class InvokeBashRmCommand : PSCmdlet
                 case "-r": case "-R": recursive = true; break;
                 case "-f": force = true; break;
                 case "-v": verbose = true; break;
-                default: operands.Add(a); break;
+                default:
+                    // Bundled short flags: -rf, -fr, -rvf, etc. Each char
+                    // maps to one of r/R/f/v. Anything else is an operand.
+                    if (a.Length > 2 && a[0] == '-'
+                        && a.Skip(1).All(ch => ch == 'r' || ch == 'R' || ch == 'f' || ch == 'v'))
+                    {
+                        foreach (var ch in a.Skip(1))
+                        {
+                            if (ch == 'r' || ch == 'R') recursive = true;
+                            else if (ch == 'f') force = true;
+                            else if (ch == 'v') verbose = true;
+                        }
+                    }
+                    else
+                    {
+                        operands.Add(a);
+                    }
+                    break;
             }
         }
 
