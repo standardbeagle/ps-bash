@@ -5468,87 +5468,8 @@ function Invoke-BashLet {
 }
 
 # --- id ---
-
-function Invoke-BashId {
-    [OutputType('PsBash.TextOutput')]
-    param()
-    $Arguments = [string[]]$args
-    if ($Arguments -contains '--help') { return Show-BashHelp 'id' }
-
-    $showUid   = $false
-    $showGid   = $false
-    $showGroups = $false
-    $showName  = $false
-    $showReal  = $false
-    $userName  = $null
-
-    $i = 0
-    while ($i -lt $Arguments.Count) {
-        $a = $Arguments[$i]
-        switch ($a) {
-            '-u' { $showUid = $true }
-            '-g' { $showGid = $true }
-            '-G' { $showGroups = $true }
-            '-n' { $showName = $true }
-            '-r' { $showReal = $true }
-            default { $userName = $a }
-        }
-        $i++
-    }
-
-    $identity = if ($userName) {
-        [System.Security.Principal.WindowsIdentity]::new($userName)
-    } else {
-        [System.Security.Principal.WindowsIdentity]::GetCurrent()
-    }
-
-    if ($showUid) {
-        if ($showName) {
-            Emit-BashLine -Text $identity.Name.Split('\')[-1]
-        } else {
-            $sid = $identity.User.Value
-            Emit-BashLine -Text $sid
-        }
-        return
-    }
-
-    if ($showGid) {
-        $primaryGroup = $identity.Groups | Select-Object -First 1
-        if ($showName) {
-            try {
-                $grp = $primaryGroup.Translate([System.Security.Principal.NTAccount])
-                Emit-BashLine -Text $grp.Value.Split('\')[-1]
-            } catch {
-                Emit-BashLine -Text $primaryGroup.Value
-            }
-        } else {
-            Emit-BashLine -Text $primaryGroup.Value
-        }
-        return
-    }
-
-    if ($showGroups) {
-        $groupNames = foreach ($g in $identity.Groups) {
-            if ($showName) {
-                try { $g.Translate([System.Security.Principal.NTAccount]).Value.Split('\')[-1] }
-                catch { $g.Value }
-            } else {
-                $g.Value
-            }
-        }
-        Emit-BashLine -Text ($groupNames -join ' ')
-        return
-    }
-
-    $uid = $identity.User.Value
-    $uname = $identity.Name
-    $gid = ($identity.Groups | Select-Object -First 1).Value
-    $groups = ($identity.Groups | ForEach-Object {
-        try { $_.Translate([System.Security.Principal.NTAccount]).Value.Split('\')[-1] }
-        catch { $_.Value }
-    }) -join ','
-    Emit-BashLine -Text "uid=$uid($uname) gid=$gid groups=$groups"
-}
+# Migrated to InvokeBashIdCommand.cs (REFACTOR-2 Phase 4-follow-on). The
+# Set-Alias 'id' below resolves to the binary cmdlet.
 
 # --- shuf ---
 # Migrated to InvokeBashShufCommand.cs (REFACTOR-2 follow-on). The
