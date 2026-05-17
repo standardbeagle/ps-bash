@@ -53,43 +53,77 @@ internal static class FileSystemHelpers
     }
 
     /// <summary>
-    /// Emit a bash-style error visible to the caller via <c>2&gt;&amp;1</c>
-    /// pipeline merge — including under Pester where
-    /// <c>$ErrorActionPreference = Stop</c> would otherwise convert a plain
-    /// <see cref="PSCmdlet.WriteError"/> into a terminating error mid-test.
+    /// Emit a bash-style error to the cmdlet's error stream so that callers
+    /// using <c>2&gt;$null</c> can suppress it, <c>2&gt;&amp;1</c> can merge
+    /// it into the pipeline, and bash-mode production code prints to host
+    /// stderr. Sets <c>$global:LASTEXITCODE = 1</c>.
     /// <para>
-    /// Strategy: invoke the psm1 <c>Write-BashError</c> through
-    /// <see cref="PSCmdlet.InvokeCommand"/> with an inner <c>2&gt;&amp;1</c>
-    /// redirect so the resulting <see cref="ErrorRecord"/> lands in the
-    /// script's success stream as a captured object. We then re-emit it via
-    /// <see cref="PSCmdlet.WriteObject(object)"/> into the outer cmdlet's
-    /// success stream. Callers using <c>cmd 2&gt;&amp;1 | Where {$_ -is [ErrorRecord]}</c>
-    /// find the record without triggering the caller's
-    /// <c>$ErrorActionPreference</c> escalation. Bash-mode formatting
-    /// (production host launcher) is still handled by the psm1 helper.
+    /// Pester sets <c>$ErrorActionPreference = Stop</c> inside <c>It</c>
+    /// blocks. The PowerShell runtime translates a non-terminating
+    /// <see cref="PSCmdlet.WriteError"/> into a terminating
+    /// <see cref="System.Management.Automation.PipelineStoppedException"/>
+    /// AFTER the record has already been deposited into the cmdlet's
+    /// error stream. We catch and swallow that exception so the cmdlet
+    /// continues running; the ErrorRecord remains in the stream and is
+    /// captured by the outer <c>2&gt;&amp;1</c> or filtered by
+    /// <c>2&gt;$null</c>. This matches bash's "errors don't terminate the
+    /// script unless <c>set -e</c>" semantics — which the transpiler models
+    /// elsewhere through explicit <c>$global:__BashErrexit</c> flow.
     /// </para>
-    /// <para>Sets <c>$global:LASTEXITCODE = 1</c>.</para>
     /// </summary>
     public static void WriteBashError(PSCmdlet cmdlet, string message)
     {
         SetLastExitCode(cmdlet, 1);
 
-        // Invoke the psm1 helper with an inner 2>&1 redirect so any
-        // ErrorRecord it emits ends up in the script's success stream.
-        var emitted = cmdlet.InvokeCommand.InvokeScript(
-            "param($m) Write-BashError -Message $m 2>&1", message);
+        var record = new ErrorRecord(
+            new System.IO.IOException(message),
+            "BashError",
+            ErrorCategory.NotSpecified,
+            null);
 
-        foreach (var item in emitted)
+        // Temporarily override $ErrorActionPreference to Continue so the
+        // runtime treats WriteError as non-terminating regardless of what
+        // the caller (Pester sets Stop inside It blocks) had configured.
+        // The ErrorRecord still lands in the cmdlet's error stream — the
+        // override only affects whether the pipeline terminates. Restore
+        // the prior preference in a finally so we don't leak our setting
+        // beyond the call. Bash's contract is non-terminating; the
+        // transpiler models set -e explicitly via $global:__BashErrexit.
+        object? prevEap = null;
+        bool restoreEap = false;
+        try
         {
-            if (item == null) continue;
-            // Surface ErrorRecord-typed items to the outer cmdlet's pipeline
-            // via WriteObject — benign w.r.t. $ErrorActionPreference.
-            var baseObj = (item is PSObject po) ? po.BaseObject : item;
-            if (baseObj is ErrorRecord er)
+            prevEap = cmdlet.SessionState.PSVariable.GetValue("ErrorActionPreference");
+            cmdlet.SessionState.PSVariable.Set("ErrorActionPreference", "Continue");
+            restoreEap = true;
+        }
+        catch { /* ignore — write below will still try */ }
+
+        try
+        {
+            cmdlet.WriteError(record);
+        }
+        catch
+        {
+            // Defensive — should not throw with EAP=Continue, but if any
+            // host swaps the runtime semantics we keep going.
+        }
+        finally
+        {
+            if (restoreEap)
             {
-                cmdlet.WriteObject(er);
+                try { cmdlet.SessionState.PSVariable.Set("ErrorActionPreference", prevEap); }
+                catch { /* ignore */ }
             }
         }
+
+        // Bash-mode formatting for the production host launcher path.
+        try
+        {
+            cmdlet.InvokeCommand.InvokeScript(
+                "param($m) Write-BashError -Message $m", message);
+        }
+        catch { /* benign — already emitted via WriteError */ }
     }
 
     /// <summary>
