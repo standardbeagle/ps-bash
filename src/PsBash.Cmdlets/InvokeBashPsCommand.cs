@@ -229,11 +229,21 @@ public sealed class InvokeBashPsCommand : PSCmdlet
                 procs = Array.Empty<Process>();
             }
 
-            // Windows batch metadata
+            // Windows batch metadata. GetOwner() on each Win32_Process is the
+            // slow part (per-process WMI RPC roundtrip — 5s+ for ~200 procs).
+            // Skip the owner lookup unless the requested format actually
+            // needs a user column: `aux`, `-f` (full), or a custom -o spec
+            // mentioning user/ruser/euser.
             Dictionary<int, (string CommandLine, string User, int PPID)>? winLookup = null;
             if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows) && procs.Length > 0)
             {
-                winLookup = BuildWindowsCimLookup();
+                bool needUser = bsdAux || fullFormat ||
+                    (customFormat != null &&
+                     (customFormat.Contains("user", StringComparison.OrdinalIgnoreCase) ||
+                      customFormat.Contains("ruser", StringComparison.OrdinalIgnoreCase) ||
+                      customFormat.Contains("euser", StringComparison.OrdinalIgnoreCase))) ||
+                    filterUser != null;
+                winLookup = BuildWindowsCimLookup(needUser);
             }
             // macOS batch metadata
             Dictionary<int, (string User, int PPID, string TTY)>? macLookup = null;
@@ -545,15 +555,20 @@ public sealed class InvokeBashPsCommand : PSCmdlet
         catch { }
     }
 
-    private Dictionary<int, (string CommandLine, string User, int PPID)>? BuildWindowsCimLookup()
+    private Dictionary<int, (string CommandLine, string User, int PPID)>? BuildWindowsCimLookup(bool needUser)
     {
         var dict = new Dictionary<int, (string, string, int)>();
         try
         {
-            // Use Get-CimInstance through InvokeScript; AOT-safe (no ScriptBlock construction).
+            // GetOwner() is a per-process WMI RPC roundtrip — orders of
+            // magnitude slower than the rest of the query. Only ask for it
+            // when the caller's format actually needs a user column.
+            string ownerExpr = needUser
+                ? "$u=''; try { $u = $_.GetOwner().User } catch {}; "
+                : "$u=''; ";
             var results = InvokeCommand.InvokeScript(
                 "Get-CimInstance Win32_Process -ErrorAction SilentlyContinue | " +
-                "ForEach-Object { $u=''; try { $u = $_.GetOwner().User } catch {}; " +
+                "ForEach-Object { " + ownerExpr +
                 "[PSCustomObject]@{ ProcessId=[int]$_.ProcessId; CommandLine=$_.CommandLine; " +
                 "User=$u; PPID=$(if ($_.ParentProcessId) { [int]$_.ParentProcessId } else { 0 }) } }");
             foreach (var r in results)
