@@ -78,6 +78,7 @@ internal sealed class SdkRunspace : IAsyncDisposable
         // a single file open). The setup script remains responsible for the
         // CommandNotFoundAction handler, but no longer does Import-Module.
         var cmdletsDll = ModuleExtractor.GetCmdletsDllPath();
+        bool issPreRegistered = false;
         if (File.Exists(cmdletsDll))
         {
             try
@@ -89,6 +90,7 @@ internal sealed class SdkRunspace : IAsyncDisposable
                 {
                     types = ex.Types.Where(t => t != null).ToArray()!;
                 }
+                int registered = 0;
                 foreach (var type in types)
                 {
                     if (type?.IsAbstract != false) continue;
@@ -97,7 +99,9 @@ internal sealed class SdkRunspace : IAsyncDisposable
                     if (attr == null) continue;
                     iss.Commands.Add(new SessionStateCmdletEntry(
                         $"{attr.VerbName}-{attr.NounName}", type, null));
+                    registered++;
                 }
+                issPreRegistered = registered > 0;
             }
             catch
             {
@@ -120,43 +124,42 @@ internal sealed class SdkRunspace : IAsyncDisposable
             // In that case, module commands fall back to .NET's current directory.
         }
 
-        // Extract SdkRunspaceSetup.ps1 next to PsBash.psm1 so the Cmdlets.dll
-        // import runs from a real .ps1 file rather than a C# string. The
-        // previous embedded-string pattern caused multiple escaping-bug
-        // regressions (see REFACTOR-1 task description) — keep PowerShell
-        // logic in .ps1 files where it can be parsed at build time.
-        var moduleDir = Path.GetDirectoryName(modulePath)!;
-        var setupScriptPath = RunspaceSetupExtractor.Extract(moduleDir);
+        // Pull the setup script content directly from the embedded resource
+        // instead of extract-to-disk + dot-source-from-disk. The previous
+        // path paid ~600 ms on every cold start for file I/O + path
+        // resolution + dot-source overhead even after the Import-Module body
+        // became a gated no-op (host startup #9). The setup script content is
+        // small (~30 effective lines: CommandNotFoundAction handler + gated
+        // Import-Module fallback) and embedding it as an AddScript string
+        // skips both filesystem operations and dot-source semantics. The
+        // disk-extracted copy still serves the syntax-check unit test path.
+        var setupScriptContent = RunspaceSetupExtractor.ReadEmbedded();
 
         // Canonical module-load path (REFACTOR-5): PsBash.Cmdlets.dll is
         // embedded in PsBash.Core and extracted by ModuleExtractor alongside
-        // the psm1. Hand the setup script that one deterministic path — no
-        // Get-Module -ListAvailable probe, no beside-host-binary probe. Those
-        // probe paths had a host-startup deadlock history (commits f18bedd,
-        // 6f264eb); a known-path Import-Module has no such surface.
+        // the psm1. The cmdlets are pre-registered in ISS above; the setup
+        // script's Import-Module is gated on Get-Command not seeing them, so
+        // this variable is only consulted on the fallback path.
         var cmdletsDllPath = ModuleExtractor.GetCmdletsDllPath();
 
-        // Pass parameters via session-state variables (no string interpolation
-        // through C# / quoted PowerShell). $PsBashRunspaceSetupPath is consumed
-        // by the AddScript dot-source below; $PsBashCmdletsDllPath is the
-        // canonical extracted Cmdlets.dll path the setup script imports.
-        runspace.SessionStateProxy.SetVariable(
-            "PsBashRunspaceSetupPath", setupScriptPath);
         runspace.SessionStateProxy.SetVariable(
             "PsBashCmdletsDllPath", cmdletsDllPath);
+        // Tell the setup script whether ISS pre-reg has already brought in
+        // the binary cmdlets. When true, the script can skip both the
+        // Get-Command probe (~300 ms cold-runspace JIT cost) and the
+        // Import-Module fallback. False keeps the existing probe-and-import
+        // behaviour for SDK callers who skipped ISS pre-reg.
+        runspace.SessionStateProxy.SetVariable(
+            "PsBashCmdletsAlreadyLoaded", issPreRegistered);
 
         using var ps = PowerShell.Create();
         ps.Runspace = runspace;
 
-        // Dot-source the setup script. No string interpolation; the path lives
-        // in a session-state variable, so the original "C# verbatim string ->
-        // PowerShell single-quote -> Path.Replace single-quote-to-double-quote"
-        // escaping chain is gone.
-        ps.AddScript(". $PsBashRunspaceSetupPath").Invoke();
+        ps.AddScript(setupScriptContent).Invoke();
         ps.Commands.Clear();
         Trace("setup-script-invoked");
 
-        var psm1Path = Path.Combine(moduleDir, "PsBash.psm1");
+        var psm1Path = Path.Combine(Path.GetDirectoryName(modulePath)!, "PsBash.psm1");
         if (File.Exists(psm1Path))
         {
             var psm1Content = File.ReadAllText(psm1Path);

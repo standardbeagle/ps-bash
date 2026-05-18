@@ -24,12 +24,15 @@
 #
 # Outputs: none (the Cmdlets module is imported into the runspace).
 
-# Cmdlets DLL is now pre-registered in the InitialSessionState by
-# SdkRunspace.Create (host startup #9: skipped Import-Module to shave ~300 ms
-# from cold start). The probe stays as a fallback for callers that bypass
-# the C# ISS path — e.g. a third-party SDK runspace that dot-sources this
-# script directly without configuring its ISS.
-if ($PsBashCmdletsDllPath -and (Test-Path $PsBashCmdletsDllPath) -and
+# Cmdlets DLL is normally pre-registered in the InitialSessionState by
+# SdkRunspace.Create — when that succeeded the C# side sets
+# $PsBashCmdletsAlreadyLoaded = $true and the entire probe+import block
+# below is skipped (host startup #9: saves ~300 ms cold-runspace JIT cost
+# for the first Get-Command call plus the Import-Module body).
+# The fallback path stays for callers that bypass ISS pre-reg — e.g. a
+# third-party SDK runspace that dot-sources this script directly.
+if (-not $PsBashCmdletsAlreadyLoaded -and
+    $PsBashCmdletsDllPath -and (Test-Path $PsBashCmdletsDllPath) -and
     -not (Get-Command Invoke-BashBasename -CommandType Cmdlet -ErrorAction SilentlyContinue)) {
     Import-Module $PsBashCmdletsDllPath -Force -ErrorAction SilentlyContinue -DisableNameChecking
 }
