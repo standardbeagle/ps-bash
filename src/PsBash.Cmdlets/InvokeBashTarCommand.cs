@@ -97,7 +97,11 @@ public sealed class InvokeBashTarCommand : PSCmdlet
             return;
         }
 
-        bool create = C.IsPresent;
+        // Defer the create flag — we'll decide AFTER the args loop whether
+        // C.IsPresent meant -c (create) or -C DIR (chdir). The case-
+        // insensitive PowerShell binder collapses them onto the same switch.
+        bool cBoundByBinder = C.IsPresent;
+        bool create = false;
         bool extract = false;
         bool listMode = false;
         bool gzipFilter = false;
@@ -106,34 +110,7 @@ public sealed class InvokeBashTarCommand : PSCmdlet
         string? changeDir = null;
         var excludePatterns = new List<string>();
         var operands = new List<string>();
-
-        // Distinguish `-c` (create) from `-C DIR` (chdir): PowerShell's
-        // case-insensitive binder collapses them onto the same `C` switch
-        // parameter, so `tar -xf ARCHIVE -C OUTDIR` ends up with C.IsPresent
-        // (set spuriously) and no chdir. Scan MyInvocation.Line for the
-        // uppercase '-C <DIR>' form and recover the chdir target. When the
-        // raw line has -C (uppercase) but no -c (lowercase), also clear
-        // the create flag since the binder set it under false pretenses.
-        var rawLine = MyInvocation?.Line ?? string.Empty;
-        if (!string.IsNullOrEmpty(rawLine))
-        {
-            var cMatch = System.Text.RegularExpressions.Regex.Match(
-                rawLine,
-                @"(?<![A-Za-z0-9])-C\s+(?:'([^']*)'|""([^""]*)""|([^\s]+))");
-            if (cMatch.Success)
-            {
-                changeDir = cMatch.Groups[1].Success ? cMatch.Groups[1].Value
-                          : cMatch.Groups[2].Success ? cMatch.Groups[2].Value
-                          : cMatch.Groups[3].Value;
-                // Did the user write -c (lowercase) anywhere else?
-                bool sawLowerC = System.Text.RegularExpressions.Regex.IsMatch(
-                    rawLine, @"(?<![A-Za-z0-9])-c(?![A-Za-z0-9])");
-                if (!sawLowerC)
-                {
-                    create = false;
-                }
-            }
-        }
+        bool sawExplicitCreate = false;
 
         int i = 0;
         while (i < args.Length)
@@ -141,7 +118,7 @@ public sealed class InvokeBashTarCommand : PSCmdlet
             string a = args[i];
 
             if (a == "--") { i++; while (i < args.Length) { operands.Add(args[i]); i++; } break; }
-            if (a == "--create") { create = true; i++; continue; }
+            if (a == "--create") { create = true; sawExplicitCreate = true; i++; continue; }
             if (a == "--extract" || a == "--get") { extract = true; i++; continue; }
             if (a == "--list") { listMode = true; i++; continue; }
             if (a == "--gzip" || a == "--gunzip") { gzipFilter = true; i++; continue; }
@@ -197,7 +174,7 @@ public sealed class InvokeBashTarCommand : PSCmdlet
                 while (j < body.Length)
                 {
                     char ch = body[j];
-                    if (ch == 'c') { create = true; }
+                    if (ch == 'c') { create = true; sawExplicitCreate = true; }
                     else if (ch == 'x') { extract = true; }
                     else if (ch == 't') { listMode = true; }
                     else if (ch == 'z') { gzipFilter = true; }
@@ -251,6 +228,34 @@ public sealed class InvokeBashTarCommand : PSCmdlet
         if (!string.IsNullOrEmpty(changeDir))
         {
             changeDir = SessionState.Path.GetUnresolvedProviderPathFromPSPath(changeDir);
+        }
+
+        // Resolve the cBoundByBinder ambiguity: the PowerShell binder caught
+        // either -c (create) or -C (chdir). If we already saw an explicit
+        // lowercase -c in the args loop (--create or bundled), create is set
+        // correctly. Otherwise the binder fired for an uppercase -C; treat
+        // the FIRST positional in operands (typed by the user after -C) as
+        // the chdir target. This heuristic relies on -C taking exactly one
+        // positional value — matches GNU tar's surface.
+        if (cBoundByBinder && !sawExplicitCreate)
+        {
+            if (string.IsNullOrEmpty(changeDir) && operands.Count > 0)
+            {
+                changeDir = operands[0];
+                operands.RemoveAt(0);
+                try
+                {
+                    changeDir = SessionState.Path.GetUnresolvedProviderPathFromPSPath(changeDir);
+                }
+                catch { /* fall through with the raw token */ }
+            }
+        }
+        else if (cBoundByBinder && sawExplicitCreate)
+        {
+            // Both -c and -C might be present. The bundled-flag handler
+            // already set create; keep it. changeDir, if any, was already
+            // captured via --directory= forms.
+            create = true;
         }
 
         if (string.IsNullOrEmpty(archiveFile))
