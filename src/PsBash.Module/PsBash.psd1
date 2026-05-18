@@ -123,6 +123,9 @@ FunctionsToExport = @(
     'Invoke-BashJobs',
     'Invoke-BashKill',
     'Invoke-BashRedirect',
+    # Wrapper: normalizes 'sed -e A -e B' to '-e @(A,B)' so the underlying
+    # binary cmdlet's array Expression parameter accepts repeated -e.
+    'Invoke-BashSed',
     'Invoke-BashWait',
     'Invoke-BrowseAction',
     'Invoke-BrowseCommand',
