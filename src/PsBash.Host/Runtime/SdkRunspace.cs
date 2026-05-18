@@ -71,6 +71,41 @@ internal sealed class SdkRunspace : IAsyncDisposable
         RegisterSdkCmdlets(iss);
         Trace("iss-cmdlets-registered");
 
+        // Pre-register PsBash.Cmdlets via ISS to skip the Import-Module path
+        // entirely. Import-Module of a binary DLL ran 1.8-5.7 s under parallel
+        // load (host startup #9); ISS pre-registration is essentially free
+        // because the assembly is already in the AppDomain (or LoadFrom is
+        // a single file open). The setup script remains responsible for the
+        // CommandNotFoundAction handler, but no longer does Import-Module.
+        var cmdletsDll = ModuleExtractor.GetCmdletsDllPath();
+        if (File.Exists(cmdletsDll))
+        {
+            try
+            {
+                var asm = System.Reflection.Assembly.LoadFrom(cmdletsDll);
+                Type[] types;
+                try { types = asm.GetTypes(); }
+                catch (ReflectionTypeLoadException ex)
+                {
+                    types = ex.Types.Where(t => t != null).ToArray()!;
+                }
+                foreach (var type in types)
+                {
+                    if (type?.IsAbstract != false) continue;
+                    if (!typeof(Cmdlet).IsAssignableFrom(type)) continue;
+                    var attr = type.GetCustomAttribute<CmdletAttribute>();
+                    if (attr == null) continue;
+                    iss.Commands.Add(new SessionStateCmdletEntry(
+                        $"{attr.VerbName}-{attr.NounName}", type, null));
+                }
+            }
+            catch
+            {
+                // Fall back to the script-side Import-Module probe in psm1.
+            }
+        }
+        Trace("iss-psbash-cmdlets-registered");
+
         var host = new ExitTrackingHost();
         var runspace = RunspaceFactory.CreateRunspace(host, iss);
         runspace.Open();

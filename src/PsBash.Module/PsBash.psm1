@@ -22,18 +22,26 @@
 # the host-side load path that normally imports the dll is not in play, so
 # we probe a few well-known relative locations. Silent no-op when absent —
 # the host always supplies the dll via its own canonical extraction path.
-$script:__psbashCmdletsDll = @(
-    (Join-Path $PSScriptRoot 'PsBash.Cmdlets.dll')
-    (Join-Path $PSScriptRoot '..' 'PsBash.Cmdlets' 'bin' 'Debug' 'net8.0' 'PsBash.Cmdlets.dll')
-    (Join-Path $PSScriptRoot '..' 'PsBash.Cmdlets' 'bin' 'Release' 'net8.0' 'PsBash.Cmdlets.dll')
-    (Join-Path $PSScriptRoot '..' 'PsBash.Cmdlets' 'bin' 'Debug' 'net10.0' 'PsBash.Cmdlets.dll')
-    (Join-Path $PSScriptRoot '..' 'PsBash.Cmdlets' 'bin' 'Release' 'net10.0' 'PsBash.Cmdlets.dll')
-) | Where-Object { Test-Path -LiteralPath $_ } | Select-Object -First 1
-if ($script:__psbashCmdletsDll) {
-    # -Global so the binary cmdlets are reachable via Get-Command after
-    # Import-Module PsBash from any scope (Pester's psd1-import path is
-    # the canonical failure mode this guards against).
-    Import-Module $script:__psbashCmdletsDll -Global -ErrorAction SilentlyContinue
+# Skip the Import-Module probe when the host has already ISS-registered the
+# PsBash.Cmdlets cmdlets (SdkRunspace.Create path). Probing by name is fast
+# (single Get-Command lookup) and saves the ~300 ms Import-Module of a
+# 1.5 MB binary module on every host cold start (#9). The probe path stays
+# for Pester / standalone `Import-Module PsBash.psd1` callers that have not
+# pre-registered.
+if (-not (Get-Command Invoke-BashBasename -CommandType Cmdlet -ErrorAction SilentlyContinue)) {
+    $script:__psbashCmdletsDll = @(
+        (Join-Path $PSScriptRoot 'PsBash.Cmdlets.dll')
+        (Join-Path $PSScriptRoot '..' 'PsBash.Cmdlets' 'bin' 'Debug' 'net8.0' 'PsBash.Cmdlets.dll')
+        (Join-Path $PSScriptRoot '..' 'PsBash.Cmdlets' 'bin' 'Release' 'net8.0' 'PsBash.Cmdlets.dll')
+        (Join-Path $PSScriptRoot '..' 'PsBash.Cmdlets' 'bin' 'Debug' 'net10.0' 'PsBash.Cmdlets.dll')
+        (Join-Path $PSScriptRoot '..' 'PsBash.Cmdlets' 'bin' 'Release' 'net10.0' 'PsBash.Cmdlets.dll')
+    ) | Where-Object { Test-Path -LiteralPath $_ } | Select-Object -First 1
+    if ($script:__psbashCmdletsDll) {
+        # -Global so the binary cmdlets are reachable via Get-Command after
+        # Import-Module PsBash from any scope (Pester's psd1-import path is
+        # the canonical failure mode this guards against).
+        Import-Module $script:__psbashCmdletsDll -Global -ErrorAction SilentlyContinue
+    }
 }
 
 # Global state initialized here so bash functions can access these variables
