@@ -28,7 +28,29 @@ internal sealed class SdkRunspace : IAsyncDisposable
 
     public static SdkRunspace Create()
     {
+        // Per-phase instrumentation. Enabled with PSBASH_TRACE_STARTUP=1.
+        // Writes "[ps-bash-host trace] <phase> +<ms>ms cum=<ms>ms pid=<pid>"
+        // to stderr. Used to diagnose host-startup time under parallel test
+        // load (task #9). Stderr is unredirected by the launcher's spawn
+        // path, so these lines reach the testhost-attached console without
+        // colliding with the IPC stream.
+        var trace = Environment.GetEnvironmentVariable("PSBASH_TRACE_STARTUP") == "1";
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        long last = 0;
+        int pid = Environment.ProcessId;
+        void Trace(string phase)
+        {
+            if (!trace) return;
+            var now = sw.ElapsedMilliseconds;
+            var delta = now - last;
+            last = now;
+            Console.Error.WriteLine(
+                $"[ps-bash-host trace] {phase} +{delta}ms cum={now}ms pid={pid}");
+        }
+        Trace("startup-begin");
+
         var modulePath = ModuleExtractor.ExtractEmbedded();
+        Trace("module-extracted");
 
         // Match the pattern used by PwshTestFixture / CanaryPwshFixture:
         // open with a bare CreateDefault2() (no ImportPSModule on ISS), then
@@ -47,10 +69,12 @@ internal sealed class SdkRunspace : IAsyncDisposable
         // Fix: enumerate cmdlets from the in-process SMA 7.x assemblies and pre-register
         // them in the ISS so they're immediately available without hitting the module loader.
         RegisterSdkCmdlets(iss);
+        Trace("iss-cmdlets-registered");
 
         var host = new ExitTrackingHost();
         var runspace = RunspaceFactory.CreateRunspace(host, iss);
         runspace.Open();
+        Trace("runspace-opened");
         try
         {
             runspace.SessionStateProxy.Path.SetLocation(Environment.CurrentDirectory);
@@ -95,16 +119,20 @@ internal sealed class SdkRunspace : IAsyncDisposable
         // escaping chain is gone.
         ps.AddScript(". $PsBashRunspaceSetupPath").Invoke();
         ps.Commands.Clear();
+        Trace("setup-script-invoked");
 
         var psm1Path = Path.Combine(moduleDir, "PsBash.psm1");
         if (File.Exists(psm1Path))
         {
             var psm1Content = File.ReadAllText(psm1Path);
+            Trace("psm1-read");
             ps.AddScript(psm1Content).Invoke();
             ps.Commands.Clear();
+            Trace("psm1-invoked");
         }
 
         Interlocked.Increment(ref ModuleLoadCount);
+        Trace("startup-complete");
         return new SdkRunspace(runspace, host);
     }
 

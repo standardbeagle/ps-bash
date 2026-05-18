@@ -4909,6 +4909,14 @@ Describe 'Register-BashCompletions — Flag Spec Data' {
 }
 
 Describe 'Register-BashCompletions — Completer Results' {
+    BeforeAll {
+        # The psm1 only auto-runs Register-BashCompletions when
+        # $env:PSBASH_INTERACTIVE -eq '1' (skipped on the non-interactive
+        # host path to shave ~1.5 s off cold start). Pester runs under the
+        # SDK runspace where that env var is unset, so the completers
+        # would otherwise be empty here. Invoke explicitly.
+        & (Get-Module PsBash | Select-Object -First 1) { Register-BashCompletions }
+    }
     It 'ls completer returns flags when word starts with -' {
         $completer = & (Get-Module PsBash | Select-Object -First 1) { $script:BashCompleters['ls'] }
         $completer | Should -Not -BeNullOrEmpty

@@ -4274,7 +4274,18 @@ function Register-BashCompletions {
     }
 }
 
-Register-BashCompletions
+# Tab-completion registration is meaningless on a non-interactive host (the
+# transpiled IPC path never prompts the user for completions) but costs ~1.5 s
+# of psm1-load time — one Register-ArgumentCompleter call per command in
+# $script:BashFlagSpecs. The interactive REPL (PsBash.Shell / InteractiveShell)
+# sets PSBASH_INTERACTIVE=1 before starting the host, and Import-Module PsBash
+# from a user pwsh prompt is also interactive — gate on both signals so the
+# REPL and ad-hoc interactive sessions still get completions, but the
+# per-invocation host (Lifetime.PerInvocation, the load-bearing case for
+# host-startup #9) skips the registration entirely.
+if ($env:PSBASH_INTERACTIVE -eq '1') {
+    Register-BashCompletions
+}
 
 # --- Aliases ---
 
