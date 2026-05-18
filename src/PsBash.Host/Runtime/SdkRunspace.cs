@@ -185,6 +185,68 @@ internal sealed class SdkRunspace : IAsyncDisposable
 
     private static void RegisterSdkCmdlets(InitialSessionState iss)
     {
+        // PowerShell SDK cmdlet assemblies (Microsoft.PowerShell.Commands.*)
+        // are NOT deployed to the host bin folder — Microsoft.PowerShell.SDK
+        // has PrivateAssets="all" in PsBash.Host.csproj, which keeps them out
+        // of the deps closure. The first user command (e.g. Write-Output) in
+        // our in-process SDK runspace would then trigger SMA's module loader
+        // walking $PSModulePath, finding the Windows PowerShell 5 manifest,
+        // and throwing TypeLoadException on PSSnapIn (a type removed in SMA
+        // 7.x). To avoid that, force the SDK to load Microsoft.PowerShell.
+        // Commands.* into the AppDomain by spinning up a throwaway default
+        // PowerShell instance and asking it to resolve Write-Output — that
+        // routes through SMA's first-time init which knows where to find
+        // the Utility assembly in the SDK runtime store. Once loaded, the
+        // AppDomain.GetAssemblies() walk below picks up every cmdlet from
+        // Utility/Management/Security and registers them in our custom ISS,
+        // so the user-facing runspace never has to invoke the broken module
+        // auto-loader path. Discovered when SdkWorkerTests.QueryAsync_*
+        // started seeing "command was found in module 'Microsoft.PowerShell.
+        // Utility' but the module could not be loaded".
+        // The PowerShell SDK cmdlet implementation assemblies
+        // (Microsoft.PowerShell.Commands.Utility, .Management, .Security)
+        // ship under runtimes/{rid}/lib/{tfm}/ in the package layout but
+        // `Assembly.Load(name)` doesn't probe that path — only the top-level
+        // bin folder. The in-process SDK runspace then falls back to SMA's
+        // module loader, which walks $PSModulePath, finds the Windows
+        // PowerShell 5 manifest, and throws TypeLoadException on PSSnapIn
+        // (removed in SMA 7.x). Discovered when SdkWorkerTests.QueryAsync_*
+        // started seeing "command was found in module 'Microsoft.PowerShell.
+        // Utility' but the module could not be loaded".
+        //
+        // Find the SMA assembly's location (always loaded), use it as a
+        // hop-off point to the sibling Microsoft.PowerShell.Commands.* dlls
+        // in the same runtime store, and Assembly.LoadFrom them explicitly.
+        // After that the AppDomain.GetAssemblies() walk below picks up every
+        // cmdlet in those assemblies and adds it to ISS, so the runspace
+        // never has to invoke the broken module auto-loader.
+        try
+        {
+            var smaPath = typeof(System.Management.Automation.PSObject).Assembly.Location;
+            if (!string.IsNullOrEmpty(smaPath))
+            {
+                var sdkRuntimeDir = Path.GetDirectoryName(smaPath);
+                if (sdkRuntimeDir != null)
+                {
+                    foreach (var fileName in new[]
+                    {
+                        "Microsoft.PowerShell.Commands.Utility.dll",
+                        "Microsoft.PowerShell.Commands.Management.dll",
+                        "Microsoft.PowerShell.Security.dll",
+                    })
+                    {
+                        var asmPath = Path.Combine(sdkRuntimeDir, fileName);
+                        if (File.Exists(asmPath))
+                        {
+                            try { System.Reflection.Assembly.LoadFrom(asmPath); }
+                            catch { /* assembly load failure — fall through to ISS-only path */ }
+                        }
+                    }
+                }
+            }
+        }
+        catch { /* best-effort: SMA location unavailable in some hosts */ }
+
         foreach (var assembly in AppDomain.CurrentDomain.GetAssemblies())
         {
             var asmName = assembly.GetName().Name ?? "";

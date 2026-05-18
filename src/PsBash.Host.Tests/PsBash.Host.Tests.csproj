@@ -26,7 +26,12 @@
     <!-- Bring the PS SDK runtime DLLs into the test bin output so SdkWorker
          can construct an in-process runspace. The Host csproj excludes runtime
          (it's expected to be supplied by a pwsh host); tests run under
-         vstest/dotnet test, which has no pwsh, so we include it here. -->
-    <PackageReference Include="System.Management.Automation" Version="7.4.*" />
+         vstest/dotnet test, which has no pwsh, so we include it here.
+         Switched from bare System.Management.Automation to the full SDK so the
+         runtime closure includes Microsoft.PowerShell.Commands.Utility et al.
+         SdkRunspace.RegisterSdkCmdlets loads those by path from
+         runtimes/{rid}/lib/{tfm}/ to avoid the broken PSSnapIn auto-load
+         that triggers on first use of Write-Output in 7.4. -->
+    <PackageReference Include="Microsoft.PowerShell.SDK" Version="7.4.*" />
   </ItemGroup>
 </Project>
