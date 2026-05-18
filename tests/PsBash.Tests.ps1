@@ -1550,7 +1550,10 @@ Describe 'Invoke-BashStat' {
     It 'stat -c %s file.txt returns size only' {
         $result = @(Invoke-BashStat -c '%s' $statFile)
         $result.Count | Should -Be 1
-        $result[0].BashText | Should -Be '11'
+        # `-c FORMAT` BashText carries a trailing newline (mirrors GNU stat output);
+        # strip before comparing the value. The sibling test on the next line uses
+        # the same .TrimEnd pattern.
+        $result[0].BashText.TrimEnd("`n") | Should -Be '11'
     }
 
     It 'stat -c "%a %n" file.txt returns octal permissions + name' {
