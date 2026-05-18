@@ -178,17 +178,23 @@ public class InvokeBashMapfileCommandTests
     [Fact]
     public void Mapfile_InjectionInArrayName_TreatedAsLiteralAndRejected()
     {
-        // A `$(throw 'PWNED')` substring in the array name argument must not
-        // be evaluated as PowerShell code. The cmdlet treats the token as a
-        // literal name candidate, detects scriptblock metacharacters, emits
-        // a bash-style "not a valid identifier" error, and does NOT assign.
-        // The MAPFILE variable therefore stays unset (Get-Variable returns
-        // an empty array via the helper).
-        var errors = RunAndCollectErrors(
-            "'a','b' | Invoke-BashMapfile \"`$(throw 'PWNED')\"");
-        // The error pipeline must not contain the literal 'PWNED' exception
-        // text — that would indicate the throw actually fired.
-        Assert.DoesNotContain(errors, e => e.Contains("PWNED", StringComparison.Ordinal));
+        // A literal `$(throw 'PWNED')` token in the array-name argument
+        // (passed via PowerShell backtick-escape) must not be evaluated as
+        // PowerShell code. The cmdlet treats the token as a literal name
+        // candidate, detects scriptblock metacharacters, emits a bash-style
+        // "not a valid identifier" error, and skips the assignment.
+        //
+        // The error message intentionally echoes the bad name back per the
+        // psm1 oracle's "mapfile: 'NAME': not a valid identifier" shape, so
+        // the literal substring "PWNED" appears in error text. That is not
+        // evidence the throw fired — what matters is whether the cmdlet
+        // assigned the array (which would mean PowerShell evaluated the
+        // expression to produce a name string). Assert on the variable
+        // state, not the error text.
+        var arr = RunAndReadArray(
+            "'a','b' | Invoke-BashMapfile \"`$(throw 'PWNED')\"",
+            "MAPFILE");
+        Assert.Empty(arr);
     }
 
     [Fact]

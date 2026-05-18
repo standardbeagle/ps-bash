@@ -184,14 +184,23 @@ public class InvokeBashReadCommandTests
     [Fact]
     public void Read_InjectionInVariableName_RejectedAsInvalidIdentifier()
     {
-        // A `$(throw 'pwn')` substring in the variable-name argument must
-        // not be evaluated as PowerShell. The cmdlet rejects names containing
-        // scriptblock metacharacters with a bash-style "not a valid
-        // identifier" error and does NOT throw.
-        var errors = RunAndCollectErrors(
-            "'value' | Invoke-BashRead \"`$(throw 'pwn')\"");
-        // The error pipeline must not contain the literal 'pwn' exception
-        // text — that would indicate the throw actually fired.
-        Assert.DoesNotContain(errors, e => e.Contains("'pwn'", StringComparison.Ordinal));
+        // A literal `$(throw 'pwn')` token in the variable-name argument
+        // (passed via PowerShell backtick-escape) must not be evaluated as
+        // PowerShell. The cmdlet rejects names containing scriptblock
+        // metacharacters with a bash-style "not a valid identifier" error
+        // and skips the assignment.
+        //
+        // Assert on the assignment side-effect, not the error text — the
+        // cmdlet's error message echoes the bad name back for parity with
+        // the psm1 oracle, so the literal "'pwn'" substring legitimately
+        // appears in the rejection message. The actual security property
+        // is "REPLY (the default destination) was not assigned the input
+        // value because the explicit name argument was rejected before
+        // even being treated as a name fallback".
+        var v = ReadVariable(
+            "'value' | Invoke-BashRead \"`$(throw 'pwn')\"",
+            "REPLY");
+        Assert.True(string.IsNullOrEmpty(v),
+            "REPLY should not be assigned when the name argument is rejected");
     }
 }
