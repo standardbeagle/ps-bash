@@ -181,8 +181,16 @@ public sealed class InvokeBashStatCommand : PSCmdlet
             }
             else if (formatString != null)
             {
+                // `-c FORMAT` contract (psm1 oracle + class XML doc): the
+                // emitted text ends with a newline, mirroring what GNU stat
+                // would print. The unit tests assert this exact shape via
+                // the `BashText` property.
                 string text = FormatStatString(entry, formatString);
-                entry.BashText = BashRuntime.NormalizeBashText(text);
+                if (text.Length == 0 || text[^1] != '\n')
+                {
+                    text += "\n";
+                }
+                entry.BashText = text;
             }
             else if (terseMode)
             {
