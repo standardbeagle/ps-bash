@@ -1,4 +1,5 @@
 using System.Management.Automation;
+using System.Reflection;
 using System.Text;
 
 namespace PsBash.Cmdlets;
@@ -47,17 +48,109 @@ public sealed class InvokeBashHeadCommand : PSCmdlet
     public PSObject? InputObject { get; set; }
 
     private readonly List<PSObject> _pipeline = new();
+    // Streaming state for line-mode pipeline: parse flags lazily on first
+    // record so an infinite upstream (e.g. `yes`) doesn't block on EndProcessing.
+    private bool _flagsParsed;
+    private int _lineCount = 10;
+    private int? _byteCount;
+    private int _emitted;
+    private bool _streamingLineMode;
+    private bool _suppress; // --help or arg-only path; do not stream
+
+    private void ParseFlagsOnce()
+    {
+        if (_flagsParsed) return;
+        _flagsParsed = true;
+        ParseArgs(Arguments ?? Array.Empty<string>(),
+            out _lineCount, out _byteCount, out var operands, out var help);
+        // We stream the pipeline only when:
+        //   - no --help (which goes through EndProcessing)
+        //   - no file operands (file mode runs in EndProcessing)
+        //   - line mode (byte mode needs to join everything first)
+        _streamingLineMode = !help && operands.Count == 0 && _byteCount == null;
+        if (help || operands.Count > 0) _suppress = true;
+    }
 
     protected override void ProcessRecord()
     {
-        if (InputObject != null)
+        if (InputObject == null) return;
+
+        ParseFlagsOnce();
+
+        if (_streamingLineMode)
+        {
+            if (_emitted >= _lineCount)
+            {
+                StopUpstream();
+                return;
+            }
+            string text = BashRuntime.GetBashText(InputObject);
+            string trimmed = text.TrimEnd('\n');
+            if (trimmed.Contains('\n'))
+            {
+                foreach (var subLine in trimmed.Split('\n'))
+                {
+                    if (_emitted >= _lineCount) break;
+                    WriteObject(subLine);
+                    _emitted++;
+                }
+            }
+            else
+            {
+                WriteObject(InputObject);
+                _emitted++;
+            }
+            if (_emitted >= _lineCount)
+            {
+                StopUpstream();
+            }
+            return;
+        }
+
+        // Non-streaming paths (byte mode pipeline, file mode) still need
+        // the full input buffered; EndProcessing handles them.
+        if (!_suppress)
         {
             _pipeline.Add(InputObject);
         }
     }
 
+    /// <summary>
+    /// Stops the upstream pipeline once we have emitted enough lines.
+    /// PowerShell's internal <c>StopUpstreamCommandsException</c> is the same
+    /// mechanism <c>Select-Object -First N</c> uses; it is internal, so we
+    /// reach it via reflection. Falls back to a benign return on failure
+    /// (the cmdlet still produces correct output; only early-stop is missed).
+    /// </summary>
+    private void StopUpstream()
+    {
+        var t = typeof(PSObject).Assembly.GetType(
+            "System.Management.Automation.StopUpstreamCommandsException");
+        if (t == null) return;
+        var ctor = t.GetConstructors(
+            BindingFlags.Instance | BindingFlags.NonPublic | BindingFlags.Public)
+            .FirstOrDefault();
+        if (ctor == null) return;
+        Exception ex;
+        try
+        {
+            ex = (Exception)ctor.Invoke(new object[] { this });
+        }
+        catch
+        {
+            return;
+        }
+        throw ex;
+    }
+
     protected override void EndProcessing()
     {
+        // If ProcessRecord streamed the line-mode pipeline already, we're done.
+        if (_flagsParsed && _streamingLineMode)
+        {
+            return;
+        }
+
         var args = Arguments ?? Array.Empty<string>();
 
         if (Array.IndexOf(args, "--help") >= 0)
@@ -70,87 +163,8 @@ public sealed class InvokeBashHeadCommand : PSCmdlet
             return;
         }
 
-        int count = 10;
-        int? byteCount = null;
-        var operands = new List<string>();
-        bool pastDoubleDash = false;
-
-        int i = 0;
-        while (i < args.Length)
-        {
-            var arg = args[i];
-
-            if (pastDoubleDash)
-            {
-                operands.Add(arg);
-                i++;
-                continue;
-            }
-
-            if (arg == "--")
-            {
-                pastDoubleDash = true;
-                i++;
-                continue;
-            }
-
-            if (arg.Length > 2 && arg.StartsWith("-n", StringComparison.Ordinal)
-                && IsAllDigits(arg.Substring(2)))
-            {
-                count = int.Parse(arg.Substring(2));
-                i++;
-                continue;
-            }
-
-            if (arg == "-n")
-            {
-                i++;
-                if (i < args.Length && int.TryParse(args[i], out int n))
-                {
-                    count = n;
-                }
-                i++;
-                continue;
-            }
-
-            if (arg.Length > 2 && arg.StartsWith("-c", StringComparison.Ordinal)
-                && IsAllDigits(arg.Substring(2)))
-            {
-                byteCount = int.Parse(arg.Substring(2));
-                i++;
-                continue;
-            }
-
-            if (arg == "-c")
-            {
-                i++;
-                if (i < args.Length && int.TryParse(args[i], out int c))
-                {
-                    byteCount = c;
-                }
-                i++;
-                continue;
-            }
-
-            // Legacy -N shorthand (e.g. head -5).
-            if (arg.Length > 1 && arg[0] == '-' && IsAllDigits(arg.Substring(1)))
-            {
-                count = int.Parse(arg.Substring(1));
-                i++;
-                continue;
-            }
-
-            // Bare leading positional number (e.g. head 5).
-            if (operands.Count == 0 && arg.Length > 0 && IsAllDigits(arg))
-            {
-                count = int.Parse(arg);
-                i++;
-                continue;
-            }
-
-            operands.Add(arg);
-            i++;
-        }
+        ParseArgs(args, out int count, out int? byteCount,
+            out var operands, out _);
 
         // Pipeline mode
         if (operands.Count == 0 && _pipeline.Count > 0)
@@ -235,6 +249,100 @@ public sealed class InvokeBashHeadCommand : PSCmdlet
             {
                 reader.Dispose();
             }
+        }
+    }
+
+    private static void ParseArgs(string[] args, out int count, out int? byteCount,
+        out List<string> operands, out bool help)
+    {
+        count = 10;
+        byteCount = null;
+        operands = new List<string>();
+        help = false;
+        bool pastDoubleDash = false;
+
+        int i = 0;
+        while (i < args.Length)
+        {
+            var arg = args[i];
+
+            if (pastDoubleDash)
+            {
+                operands.Add(arg);
+                i++;
+                continue;
+            }
+
+            if (arg == "--help")
+            {
+                help = true;
+                i++;
+                continue;
+            }
+
+            if (arg == "--")
+            {
+                pastDoubleDash = true;
+                i++;
+                continue;
+            }
+
+            if (arg.Length > 2 && arg.StartsWith("-n", StringComparison.Ordinal)
+                && IsAllDigits(arg.Substring(2)))
+            {
+                count = int.Parse(arg.Substring(2));
+                i++;
+                continue;
+            }
+
+            if (arg == "-n")
+            {
+                i++;
+                if (i < args.Length && int.TryParse(args[i], out int n))
+                {
+                    count = n;
+                }
+                i++;
+                continue;
+            }
+
+            if (arg.Length > 2 && arg.StartsWith("-c", StringComparison.Ordinal)
+                && IsAllDigits(arg.Substring(2)))
+            {
+                byteCount = int.Parse(arg.Substring(2));
+                i++;
+                continue;
+            }
+
+            if (arg == "-c")
+            {
+                i++;
+                if (i < args.Length && int.TryParse(args[i], out int c))
+                {
+                    byteCount = c;
+                }
+                i++;
+                continue;
+            }
+
+            // Legacy -N shorthand (e.g. head -5).
+            if (arg.Length > 1 && arg[0] == '-' && IsAllDigits(arg.Substring(1)))
+            {
+                count = int.Parse(arg.Substring(1));
+                i++;
+                continue;
+            }
+
+            // Bare leading positional number (e.g. head 5).
+            if (operands.Count == 0 && arg.Length > 0 && IsAllDigits(arg))
+            {
+                count = int.Parse(arg);
+                i++;
+                continue;
+            }
+
+            operands.Add(arg);
+            i++;
         }
     }
 
