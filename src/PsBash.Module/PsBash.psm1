@@ -3721,6 +3721,13 @@ $script:BashTrapHandlers = $global:BashTrapHandlers
 # NOT a real OS pid (documented: bash uses an OS pid; in-process runspaces have
 # no separate pid, so a synthetic id is used and is sufficient for `wait $!`).
 $script:BashBgJobs = [System.Collections.Generic.List[object]]::new()
+# Alias view of $script:BashBgJobs sharing the SAME underlying List instance.
+# Tests reference $script:BashBgPids and expect items to expose HasExited and
+# Kill(). The job records produced by Invoke-BashBackground carry both via
+# ScriptProperty (HasExited proxies $job.Done) and ScriptMethod (Kill calls
+# $job.PowerShell.Stop()). Sharing one List means Add/Clear/index from
+# either name affects both views — no double-bookkeeping.
+$script:BashBgPids = $script:BashBgJobs
 $script:BashBgNextId = 1000
 $script:BashBgPool = $null
 $global:BashBgLastPid = $null
@@ -3814,6 +3821,19 @@ function Invoke-BashBackground {
         AsyncResult = $async
         Done        = $false
     }
+    # HasExited / Kill() shape so tests asserting against $script:BashBgPids
+    # (the alias for $script:BashBgJobs) see Process-like surface. HasExited
+    # reflects $job.Done and also flips true once the AsyncResult completes
+    # so a polling test does not have to call Complete-BashBgJob first.
+    $job | Add-Member -MemberType ScriptProperty -Name 'HasExited' -Value {
+        if ($this.Done) { return $true }
+        if ($null -ne $this.AsyncResult -and $this.AsyncResult.IsCompleted) { return $true }
+        return $false
+    } -Force
+    $job | Add-Member -MemberType ScriptMethod -Name 'Kill' -Value {
+        try { $this.PowerShell.Stop() } catch { }
+        $this.Done = $true
+    } -Force
     $script:BashBgJobs.Add($job)
     $global:BashBgLastPid = $synthId
 }
