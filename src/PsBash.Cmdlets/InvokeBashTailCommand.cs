@@ -45,6 +45,13 @@ namespace PsBash.Cmdlets;
 [OutputType(typeof(string))]
 public sealed class InvokeBashTailCommand : PSCmdlet
 {
+    // -c VALUE prefix-collides with -Confirm under PowerShell's
+    // case-insensitive binder; without an explicit declaration the bare
+    // -c gets eaten by -Confirm and the value lands as a positional
+    // (treated as a file operand). Declared as a value-bearing string
+    // parameter so 'tail -c 30 file' binds correctly.
+    [Parameter] public string? C { get; set; }
+
     [Parameter(ValueFromRemainingArguments = true)]
     public string[]? Arguments { get; set; }
 
@@ -82,6 +89,24 @@ public sealed class InvokeBashTailCommand : PSCmdlet
         double sleepInterval = 1.0;
         var operands = new List<string>();
         bool pastDoubleDash = false;
+
+        // Honour the explicit -C value parameter (collision fix for -c
+        // vs -Confirm). Accepts the same +N / N forms the inline scan
+        // below handles.
+        if (!string.IsNullOrEmpty(C))
+        {
+            var cVal = C!;
+            if (cVal.StartsWith("+", StringComparison.Ordinal)
+                && int.TryParse(cVal.Substring(1), out int cp))
+            {
+                byteCount = cp;
+                fromLine = true;
+            }
+            else if (int.TryParse(cVal, out int cn))
+            {
+                byteCount = cn;
+            }
+        }
 
         int i = 0;
         while (i < args.Length)
