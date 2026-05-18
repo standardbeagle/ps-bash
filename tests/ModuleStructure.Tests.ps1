@@ -59,7 +59,11 @@ Describe 'Aliases — all declared aliases resolve' {
         (Import-PowerShellDataFile (Join-Path $PSScriptRoot '..' 'src' 'PsBash.Module' 'PsBash.psd1')).AliasesToExport |
             Where-Object { $_ } | ForEach-Object { @{ AliasName = $_ } }
     ) {
-        $alias = Get-Alias $AliasName -ErrorAction SilentlyContinue
+        # Get-Alias's -Name is wildcard-based and chokes on '[' as an unclosed
+        # character class. Read from the Alias: provider with -LiteralPath
+        # instead — that's the documented escape hatch for wildcard-looking
+        # alias names.
+        $alias = Get-Item -LiteralPath "Alias:\$AliasName" -ErrorAction SilentlyContinue
         $alias | Should -Not -BeNullOrEmpty -Because "'$AliasName' is listed in AliasesToExport"
         if ($alias.Definition -match '^Invoke-Bash|^Get-Bash|^Set-Bash|^ConvertFrom-|^Register-Bash|^Test-Bash|^Format-Bash|^Expand-|^New-Flag|^New-Bash|^Resolve-|^Compare-|^Split-') {
             $alias.Definition | Should -Match '^Invoke-Bash|^Get-Bash|^Set-Bash|^ConvertFrom-|^Register-Bash|^Test-Bash|^Format-Bash|^Expand-|^New-Flag|^New-Bash|^Resolve-|^Compare-|^Split-' -Because "alias should point to a PsBash function"

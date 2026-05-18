@@ -5204,10 +5204,14 @@ Set-Alias -Name 'tput'     -Value 'Invoke-BashTput'     -Force -Scope Global -Op
 Set-Alias -Name 'shopt'    -Value 'Invoke-BashShopt'    -Force -Scope Global -Option AllScope
 Set-Alias -Name 'kill'     -Value 'Invoke-BashKill'     -Force -Scope Global -Option AllScope
 Set-Alias -Name 'test'     -Value 'Invoke-BashTest'     -Force -Scope Global -Option AllScope
-# Note: bash `[` is intentionally NOT a PowerShell alias — Get-Alias treats
-# '[' as a wildcard pattern, which breaks Pester's per-alias resolution check.
-# The transpiler emits Invoke-BashTest directly for `[` form, so the alias
-# is not load-bearing for transpiled-script execution.
+# bash `[` alias. Pester's per-alias introspection (Get-Alias '[') treats
+# the bracket as a wildcard pattern and explodes — but production callers
+# either go through the transpiler (which emits Invoke-BashTest directly for
+# the `[` form, never the alias) or use the cmdlet binder's call operator
+# (`& '[' ...`), neither of which hits the wildcard hazard. Any Pester test
+# that lists aliases must wrap the name in -LiteralName or fall back to
+# Get-Command '[' to avoid the wildcard expansion.
+Set-Alias -Name '['        -Value 'Invoke-BashTest'     -Force -Scope Global -Option AllScope
 Set-Alias -Name 'let'      -Value 'Invoke-BashLet'      -Force -Scope Global -Option AllScope
 Set-Alias -Name 'id'       -Value 'Invoke-BashId'       -Force -Scope Global -Option AllScope
 Set-Alias -Name 'shuf'     -Value 'Invoke-BashShuf'     -Force -Scope Global -Option AllScope
