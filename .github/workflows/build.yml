@@ -66,6 +66,22 @@ jobs:
       - name: Build PsBash.Host
         run: dotnet build src/PsBash.Host --no-restore -c Release
 
+      # Windows-only: Differential tests use scripts that hardcode /tmp/...
+      # paths (idiomatic bash). The transpiler's path translation kicks in for
+      # command operands and redirect targets but not inside variable
+      # assignments (e.g. `tmpf="/tmp/foo_$$"`), so the literal path leaks
+      # through. On Windows runners that path resolves to D:\tmp\... or
+      # C:\tmp\... which don't exist, and write redirects fail with "Could
+      # not find a part of the path". Pre-create the dirs as a low-cost CI
+      # fixup until the emitter is taught to translate /tmp in assignments.
+      # See task #26.
+      - name: Ensure /tmp exists (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path C:\tmp | Out-Null
+          New-Item -ItemType Directory -Force -Path D:\tmp -ErrorAction SilentlyContinue | Out-Null
+
       # --blame-hang-timeout kills the test runner after a hung test (5m) and
       # dumps the offender — surfaces hangs as a real failure instead of
       # silently consuming the 6h job timeout. timeout-minutes is a backstop.
