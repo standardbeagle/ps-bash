@@ -168,7 +168,15 @@ public static class AssertOracle
         try
         {
             var canonicalEnv = CanonicalEnv.ForPsBash(canonicalHome);
-            canonicalEnv["PSBASH_TIMEOUT"] = "15";
+            // Cold-start budget. Local Windows boots a fresh host in ~2.4s
+            // (#9 perf work), Linux ~2.0s, but CI runners on cold disk +
+            // parallel test load have measured 15-25s for the same code
+            // path. 45s leaves headroom; the wall-clock test runtime is
+            // still bounded by the outer xUnit timeout. Env override lets
+            // local runs keep the tighter budget if they want faster
+            // failure on a genuine hang.
+            canonicalEnv["PSBASH_TIMEOUT"] =
+                Environment.GetEnvironmentVariable("PSBASH_GOLDEN_TIMEOUT") ?? "45";
 
             psBashResult = await BashOracleFixture.RunOneAsync(
                 Fixture.PsBashPath!,
