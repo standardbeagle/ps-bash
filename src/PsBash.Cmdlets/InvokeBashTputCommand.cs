@@ -118,11 +118,24 @@ public sealed class InvokeBashTputCommand : PSCmdlet
                     if (proc.ExitCode == 0)
                     {
                         var nativeOut = sb.ToString();
-                        foreach (var emitted in BashRuntime.EmitBashLines(nativeOut))
+                        // For terminal-size queries, native tput returns "0"
+                        // when run without a controlling terminal (no $TERM /
+                        // redirected stdio). Reject "0" for cols/lines and
+                        // fall through to the in-process emulator's hardcoded
+                        // default so tests in non-TTY harnesses still pass.
+                        bool isSizeQuery = operands.Count > 0 &&
+                            (string.Equals(operands[0], "cols", StringComparison.Ordinal) ||
+                             string.Equals(operands[0], "lines", StringComparison.Ordinal));
+                        if (!isSizeQuery ||
+                            !string.Equals(nativeOut.Trim(), "0", StringComparison.Ordinal))
                         {
-                            WriteObject(emitted);
+                            foreach (var emitted in BashRuntime.EmitBashLines(nativeOut))
+                            {
+                                WriteObject(emitted);
+                            }
+                            return;
                         }
-                        return;
+                        // else: fall through to fallback emulator below.
                     }
                 }
             }
@@ -197,7 +210,16 @@ public sealed class InvokeBashTputCommand : PSCmdlet
         {
             // Host may not expose RawUI in a non-interactive runspace.
         }
-        try { return Console.WindowWidth; } catch { return 80; }
+        // Console.WindowWidth on POSIX with a redirected stdout returns 0
+        // instead of throwing. Treat <= 0 as "no terminal" and fall through
+        // to the canonical default (matches oracle parity in non-TTY runs).
+        try
+        {
+            var w = Console.WindowWidth;
+            if (w > 0) return w;
+        }
+        catch { }
+        return 80;
     }
 
     private int GetWindowHeight()
@@ -214,6 +236,12 @@ public sealed class InvokeBashTputCommand : PSCmdlet
         {
             // Host may not expose RawUI in a non-interactive runspace.
         }
-        try { return Console.WindowHeight; } catch { return 24; }
+        try
+        {
+            var h = Console.WindowHeight;
+            if (h > 0) return h;
+        }
+        catch { }
+        return 24;
     }
 }

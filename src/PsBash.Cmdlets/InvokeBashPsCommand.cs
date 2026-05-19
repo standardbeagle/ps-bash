@@ -133,6 +133,24 @@ public sealed class InvokeBashPsCommand : PSCmdlet
                 fullFormat = true;
                 continue;
             }
+            // Bundled short-flag forms (-ef / -Af / -fe / -fA) — decoded
+            // per-char into the booleans above. Bash `ps -ef` is the
+            // canonical full-process listing form; without this the bundled
+            // tokens leak through the binder (E/A are declared SwitchParams
+            // so the bare `-ef` does not prefix-match) and the operand scan
+            // falls through to the default no-flag filter, which drops every
+            // entry on the GitHub Actions Linux runner because every pid
+            // either belongs to a different user or has TTY="?".
+            if (arg.Length >= 2 && arg[0] == '-' && arg[1] != '-' &&
+                arg.All(c => c == '-' || c == 'e' || c == 'A' || c == 'f'))
+            {
+                foreach (var ch in arg.Substring(1))
+                {
+                    if (ch == 'e' || ch == 'A') showAll = true;
+                    else if (ch == 'f') fullFormat = true;
+                }
+                continue;
+            }
             if (string.Equals(arg, "-u", StringComparison.Ordinal) && i + 1 < args.Length)
             {
                 filterUser = args[++i];
