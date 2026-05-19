@@ -17,14 +17,18 @@ namespace PsBash.Cmdlets.Tests;
 /// missing target (no command → error), quoting/injection (Directive 12 —
 /// substitution value containing <c>$()</c>).
 /// </summary>
-public class InvokeBashXargsCommandTests
+public class InvokeBashXargsCommandTests : IClassFixture<SharedPwshFixture>
 {
-    private static (Collection<PSObject> Result, IList<ErrorRecord> Errors) Run(string script)
-    {
-        using var pwsh = PwshTestFixture.Create();
-        pwsh.AddScript("$error.Clear()").Invoke();
-        pwsh.Commands.Clear();
+    private readonly SharedPwshFixture _fixture;
 
+    public InvokeBashXargsCommandTests(SharedPwshFixture fixture)
+    {
+        _fixture = fixture;
+    }
+
+    private (Collection<PSObject> Result, IList<ErrorRecord> Errors) Run(string script)
+    {
+        var pwsh = _fixture.AcquireFresh();
         var result = pwsh.AddScript(script).Invoke();
         pwsh.Commands.Clear();
 

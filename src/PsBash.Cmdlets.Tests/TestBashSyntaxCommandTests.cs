@@ -2,13 +2,21 @@ using Xunit;
 
 namespace PsBash.Cmdlets.Tests;
 
-public class TestBashSyntaxCommandTests
+public class TestBashSyntaxCommandTests : IClassFixture<SharedPwshFixture>
 {
+    private readonly SharedPwshFixture _fixture;
+
+    public TestBashSyntaxCommandTests(SharedPwshFixture fixture)
+    {
+        _fixture = fixture;
+    }
+
     [Fact]
     public void ValidSyntax_ReturnsTrue()
     {
-        using var pwsh = PwshTestFixture.Create();
+        var pwsh = _fixture.AcquireFresh();
         var result = pwsh.AddScript("Test-BashSyntax 'if [ $x = 1 ]; then echo hi; fi'").Invoke();
+        pwsh.Commands.Clear();
         Assert.Single(result);
         Assert.Equal(true, result[0].BaseObject);
     }
@@ -16,7 +24,7 @@ public class TestBashSyntaxCommandTests
     [Fact]
     public void InvalidSyntax_ReturnsFalseAndWritesError()
     {
-        using var pwsh = PwshTestFixture.Create();
+        var pwsh = _fixture.AcquireFresh();
         var result = pwsh.AddScript("Test-BashSyntax 'if [ $x = 1 ] then'").Invoke();
         pwsh.Commands.Clear();
 

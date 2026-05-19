@@ -18,12 +18,14 @@ namespace PsBash.Cmdlets.Tests;
 /// metacharacters must be treated as a literal jq filter, not executed
 /// at the PS layer.
 /// </summary>
-public class InvokeBashYqCommandTests : IDisposable
+public class InvokeBashYqCommandTests : IClassFixture<SharedPwshFixture>, IDisposable
 {
+    private readonly SharedPwshFixture _fixture;
     private readonly string _tmpDir;
 
-    public InvokeBashYqCommandTests()
+    public InvokeBashYqCommandTests(SharedPwshFixture fixture)
     {
+        _fixture = fixture;
         _tmpDir = Path.Combine(
             Path.GetTempPath(), "psbash-yq-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(_tmpDir);
@@ -42,15 +44,15 @@ public class InvokeBashYqCommandTests : IDisposable
         return path;
     }
 
-    private static System.Collections.ObjectModel.Collection<PSObject> Run(string script)
+    private System.Collections.ObjectModel.Collection<PSObject> Run(string script)
     {
-        using var pwsh = PwshTestFixture.Create();
+        var pwsh = _fixture.AcquireFresh();
         var result = pwsh.AddScript(script).Invoke();
         pwsh.Commands.Clear();
         return result;
     }
 
-    private static string[] RunText(string script)
+    private string[] RunText(string script)
     {
         return Run(script)
             .Select(o =>

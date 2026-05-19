@@ -11,50 +11,55 @@ namespace PsBash.Cmdlets.Tests;
 /// Missing names silently ignored. <c>-v</c> prefix-collides with
 /// <c>-Verbose</c> — covered by the explicit <c>SwitchParameter V</c> binding.
 /// </summary>
-public class InvokeBashUnsetCommandTests
+public class InvokeBashUnsetCommandTests : IClassFixture<SharedPwshFixture>
 {
-    private static string? RunAndReadVar(string script, string varName)
+    private readonly SharedPwshFixture _fixture;
+
+    public InvokeBashUnsetCommandTests(SharedPwshFixture fixture)
     {
-        using var pwsh = PwshTestFixture.Create();
-        pwsh.AddScript("$error.Clear()").Invoke();
-        pwsh.Commands.Clear();
+        _fixture = fixture;
+    }
+
+    private string? RunAndReadVar(string script, string varName)
+    {
+        var pwsh = _fixture.AcquireFresh();
         pwsh.AddScript(script).Invoke();
         pwsh.Commands.Clear();
         var result = pwsh.AddScript(
             $"$v = Get-Variable -Name '{varName}' -ValueOnly -ErrorAction SilentlyContinue; " +
             "if ($null -eq $v) { 'NULL' } else { [string]$v }").Invoke();
+        pwsh.Commands.Clear();
         return result.FirstOrDefault()?.ToString();
     }
 
-    private static string? RunAndReadEnv(string script, string envName)
+    private string? RunAndReadEnv(string script, string envName)
     {
-        using var pwsh = PwshTestFixture.Create();
-        pwsh.AddScript("$error.Clear()").Invoke();
-        pwsh.Commands.Clear();
+        var pwsh = _fixture.AcquireFresh();
         pwsh.AddScript(script).Invoke();
         pwsh.Commands.Clear();
         var result = pwsh.AddScript(
             $"if (Test-Path 'Env:\\{envName}') {{ (Get-Item 'Env:\\{envName}').Value }} else {{ 'NULL' }}").Invoke();
+        pwsh.Commands.Clear();
         return result.FirstOrDefault()?.ToString();
     }
 
-    private static bool RunAndCheckFunctionExists(string script, string funcName)
+    private bool RunAndCheckFunctionExists(string script, string funcName)
     {
-        using var pwsh = PwshTestFixture.Create();
-        pwsh.AddScript("$error.Clear()").Invoke();
-        pwsh.Commands.Clear();
+        var pwsh = _fixture.AcquireFresh();
         pwsh.AddScript(script).Invoke();
         pwsh.Commands.Clear();
         var result = pwsh.AddScript(
             $"[bool](Test-Path 'Function:\\{funcName}')").Invoke();
+        pwsh.Commands.Clear();
         var first = result.FirstOrDefault();
         return first != null && (bool)first.BaseObject;
     }
 
-    private static string[] RunLines(string script)
+    private string[] RunLines(string script)
     {
-        using var pwsh = PwshTestFixture.Create();
+        var pwsh = _fixture.AcquireFresh();
         var result = pwsh.AddScript(script).Invoke();
+        pwsh.Commands.Clear();
         return result.Select(o => o?.ToString() ?? "").ToArray();
     }
 

@@ -22,14 +22,18 @@ namespace PsBash.Cmdlets.Tests;
 /// that long predates this migration (the psm1 oracle's <c>yes | head</c>
 /// hangs the same way), and outside the scope of this commit.
 /// </summary>
-public class InvokeBashYesCommandTests
+public class InvokeBashYesCommandTests : IClassFixture<SharedPwshFixture>
 {
-    private static string[] RunLines(string script)
-    {
-        using var pwsh = PwshTestFixture.Create();
-        pwsh.AddScript("$error.Clear()").Invoke();
-        pwsh.Commands.Clear();
+    private readonly SharedPwshFixture _fixture;
 
+    public InvokeBashYesCommandTests(SharedPwshFixture fixture)
+    {
+        _fixture = fixture;
+    }
+
+    private string[] RunLines(string script)
+    {
+        var pwsh = _fixture.AcquireFresh();
         var result = pwsh.AddScript(script).Invoke();
         pwsh.Commands.Clear();
 
