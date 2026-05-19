@@ -89,65 +89,106 @@ public static class CanonicalEnv
     /// </summary>
     public static Dictionary<string, string> ForPsBash(string homeDir)
     {
-        var env = ForBash(homeDir);
+        if (string.IsNullOrEmpty(homeDir))
+            throw new ArgumentException("homeDir must be a non-empty path.", nameof(homeDir));
 
-        // The ps-bash launcher is a framework-dependent apphost: it must find
-        // the shared .NET runtime. DOTNET_ROOT (and the dotnet dir on PATH) is
-        // how a non-default install location is discovered. Preserve whatever
-        // the test host is using so the launcher starts under the canonical
-        // block too.
-        // Windows: PowerShell / .NET runtime requires a handful of system
-        // environment variables that are normally guaranteed by the OS but
-        // get stripped by canonicalizeEnv. Without them, the host process
-        // (ps-bash-host, which boots a PowerShell runspace) fails to
-        // initialize core assemblies and never reaches the accept-connection
-        // state — observed as a 10s HostUnavailableException on Windows CI.
-        // Preserve the inherited values; they are machine-stable enough
-        // (e.g. C:\Windows) not to leak meaningful state into goldens.
-        if (OperatingSystem.IsWindows())
+        // Strategy: preserve inherited env + override the leakage-surface vars.
+        //
+        // The original design cleared the inherited block and rebuilt from a
+        // whitelist. That worked for the bash side (a leaf process with a
+        // small env footprint) but failed for the ps-bash side: .NET +
+        // PowerShell SDK needed ~30 Windows-specific vars (PATHEXT,
+        // PSModulePath, ProgramFiles*, PROCESSOR_*, etc.) and the whitelist
+        // kept growing as dev boxes and CI runners turned out to have
+        // different env shapes. Diverging "CI vs local" passes was the cost
+        // — see commits 85c9b5e and e38ac83 which kept enumerating more vars.
+        //
+        // The corrected design (this method): start from the inherited block,
+        // then explicitly OVERRIDE the identity/locale vars that would
+        // otherwise leak the host machine's identity into recorded goldens.
+        // Every var the runtime needs flows through automatically; every var
+        // that surfaces in test output (`echo $USER`, `printenv HOME`,
+        // locale-sensitive `printf`) gets a canonical value. Plus we strip
+        // CI-runner-identity vars (GITHUB_*, RUNNER_*) that wouldn't be
+        // present locally so CI parity holds in both directions.
+        //
+        // ForBash (the real-bash leaf process) keeps the strict whitelist —
+        // bash has no .NET runtime to satisfy and its env footprint is small.
+        var env = new Dictionary<string, string>(
+            OperatingSystem.IsWindows()
+                ? StringComparer.OrdinalIgnoreCase
+                : StringComparer.Ordinal);
+        foreach (System.Collections.DictionaryEntry kv in Environment.GetEnvironmentVariables())
         {
-            foreach (var name in new[]
-            {
-                // OS-supplied identity / install location vars — required for
-                // kernel32.dll / mscoree loader paths, %TEMP%-style expansion,
-                // and basic Win32 API surface.
-                "SystemRoot", "windir", "SystemDrive", "ComSpec", "OS",
-                "PATHEXT", "NUMBER_OF_PROCESSORS",
-                "PROCESSOR_ARCHITECTURE", "PROCESSOR_IDENTIFIER",
-                "PROCESSOR_LEVEL", "PROCESSOR_REVISION",
-                // User-profile vars — PowerShell module discovery + module
-                // cache, .NET runtime config probing.
-                "USERPROFILE", "APPDATA", "LOCALAPPDATA", "USERNAME",
-                "HOMEDRIVE", "HOMEPATH", "COMPUTERNAME",
-                "ProgramData", "ProgramFiles", "ProgramFiles(x86)",
-                "ProgramW6432", "CommonProgramFiles", "CommonProgramFiles(x86)",
-                "CommonProgramW6432", "PUBLIC", "ALLUSERSPROFILE",
-                // PowerShell-specific.
-                "PSModulePath", "POWERSHELL_DISTRIBUTION_CHANNEL",
-                "POWERSHELL_TELEMETRY_OPTOUT", "POWERSHELL_UPDATECHECK",
-                "PSExecutionPolicyPreference",
-                // .NET / build telemetry.
-                "DOTNET_NOLOGO", "DOTNET_CLI_TELEMETRY_OPTOUT",
-                "DOTNET_SYSTEM_GLOBALIZATION_INVARIANT",
-                "DOTNET_ROLL_FORWARD",
-            })
-            {
-                var v = Environment.GetEnvironmentVariable(name);
-                if (!string.IsNullOrEmpty(v)) env[name] = v;
-            }
+            var k = kv.Key?.ToString();
+            var v = kv.Value?.ToString();
+            if (k != null && v != null) env[k] = v;
         }
 
+        // Canonical overrides — values that show up in golden output.
+        env["USER"] = CanonicalUser;
+        env["LOGNAME"] = CanonicalUser;
+        env["USERNAME"] = CanonicalUser; // Windows analogue.
+        env["LANG"] = CanonicalLang;
+        env["LC_ALL"] = CanonicalLang;
+        env["TERM"] = CanonicalTerm;
+        env["HOME"] = homeDir;
+        env["USERPROFILE"] = homeDir; // Windows analogue — PS module discovery roots at the test home.
+        env["TMPDIR"] = homeDir;
+        env["TEMP"] = homeDir;
+        env["TMP"] = homeDir;
+
+        // Strip identity / CI vars that would otherwise differ between local
+        // and CI, polluting golden output via `env` or `printenv` calls or
+        // shifting test behavior conditionally on CI presence.
+        foreach (var name in new[]
+        {
+            "COMPUTERNAME", "HOSTNAME", "HOMEPATH", "HOMEDRIVE",
+            "GITHUB_ACTIONS", "GITHUB_REPOSITORY", "GITHUB_SHA", "GITHUB_REF",
+            "GITHUB_WORKFLOW", "GITHUB_RUN_ID", "GITHUB_RUN_NUMBER", "GITHUB_ACTOR",
+            "GITHUB_EVENT_NAME", "GITHUB_TOKEN", "GITHUB_WORKSPACE",
+            "GITHUB_HEAD_REF", "GITHUB_BASE_REF", "GITHUB_PATH", "GITHUB_ENV",
+            "RUNNER_OS", "RUNNER_TEMP", "RUNNER_WORKSPACE", "RUNNER_TOOL_CACHE",
+            "RUNNER_ARCH", "RUNNER_NAME", "RUNNER_DEBUG",
+            "CI", "CONTINUOUS_INTEGRATION", "AGENT_TOOLSDIRECTORY",
+            // ps-bash test-infra vars that would leak per-test paths.
+            "PSBASH_DEBUG", "PSBASH_IPC_ENDPOINT", "PSBASH_TEST_START_TIMEOUT_SEC",
+            "PSBASH_HOST", "PSBASH_HOST_DETACH", "PSBASH_TRACE_STARTUP",
+            "PSBASH_HISTORY_PATH", "PSBASH_HOME",
+        })
+        {
+            env.Remove(name);
+        }
+
+        // Replace PATH with the minimal POSIX + system dirs the runtime needs.
+        // The inherited PATH includes machine-specific directories (VS install,
+        // runner tool caches, NuGet global tools) that would surface in
+        // `echo $PATH` goldens and cause non-deterministic tool resolution
+        // (e.g. picking up an unrelated `node` from the runner image).
+        var minimalPath = MinimalPosixPath;
         var dotnetRoot = Environment.GetEnvironmentVariable("DOTNET_ROOT");
-        if (!string.IsNullOrEmpty(dotnetRoot))
+        if (!string.IsNullOrEmpty(dotnetRoot) && Directory.Exists(dotnetRoot))
         {
             env["DOTNET_ROOT"] = dotnetRoot;
-            if (Directory.Exists(dotnetRoot))
-                env["PATH"] = dotnetRoot + System.IO.Path.PathSeparator + env["PATH"];
+            minimalPath = dotnetRoot + System.IO.Path.PathSeparator + minimalPath;
+        }
+        if (OperatingSystem.IsWindows())
+        {
+            // System32 is required for kernel32.dll / Win32 API surface.
+            var systemRoot = env.TryGetValue("SystemRoot", out var sr) ? sr : "C:\\Windows";
+            var winPath = string.Join(System.IO.Path.PathSeparator, new[]
+            {
+                System.IO.Path.Combine(systemRoot, "System32"),
+                systemRoot,
+                System.IO.Path.Combine(systemRoot, "System32", "Wbem"),
+                System.IO.Path.Combine(systemRoot, "System32", "WindowsPowerShell", "v1.0"),
+            });
+            minimalPath = winPath + System.IO.Path.PathSeparator + minimalPath;
         }
         else
         {
-            // No DOTNET_ROOT set — fall back to the dotnet on the inherited
-            // PATH so a default-location install is still reachable.
+            // No DOTNET_ROOT — try to find dotnet on the inherited PATH and
+            // prepend its directory so the canonical PATH still resolves it.
             var dotnetExe = OperatingSystem.IsWindows() ? "dotnet.exe" : "dotnet";
             var inheritedPath = Environment.GetEnvironmentVariable("PATH") ?? string.Empty;
             foreach (var dir in inheritedPath.Split(System.IO.Path.PathSeparator))
@@ -155,11 +196,12 @@ public static class CanonicalEnv
                 if (string.IsNullOrEmpty(dir)) continue;
                 if (File.Exists(System.IO.Path.Combine(dir, dotnetExe)))
                 {
-                    env["PATH"] = dir + System.IO.Path.PathSeparator + env["PATH"];
+                    minimalPath = dir + System.IO.Path.PathSeparator + minimalPath;
                     break;
                 }
             }
         }
+        env["PATH"] = minimalPath;
 
         return env;
     }
