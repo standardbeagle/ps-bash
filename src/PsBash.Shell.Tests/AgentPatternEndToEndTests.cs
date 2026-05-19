@@ -751,13 +751,19 @@ public class AgentPatternEndToEndTests
             $"Timeout took too long: {sw.Elapsed.TotalSeconds:F1}s (expected <20s)");
         Assert.Contains("did not exit within", ex.Message);
 
-        // Give the OS a moment to reap killed children.
-        await Task.Delay(TimeSpan.FromSeconds(2));
-
-        // Verify no new pwsh-worker children leaked from OUR spawn.
-        var postWorkerPids = Process.GetProcessesByName("pwsh")
-            .Select(p => p.Id).ToHashSet();
-        var leaked = postWorkerPids.Except(preWorkerPids).ToList();
+        // Poll until killed children are reaped, bounded by a deadline.
+        // Replaces a 2s Task.Delay — usually completes in <100 ms on
+        // Linux, occasionally up to 500 ms on Windows under load.
+        var reapDeadline = DateTime.UtcNow + TimeSpan.FromSeconds(3);
+        List<int> leaked;
+        while (true)
+        {
+            var postWorkerPids = Process.GetProcessesByName("pwsh")
+                .Select(p => p.Id).ToHashSet();
+            leaked = postWorkerPids.Except(preWorkerPids).ToList();
+            if (leaked.Count == 0 || DateTime.UtcNow >= reapDeadline) break;
+            await Task.Delay(50);
+        }
         Assert.True(leaked.Count == 0,
             $"Leaked SDK host PIDs after timeout: {string.Join(",", leaked)}");
     }

@@ -89,13 +89,28 @@ public class ProcessLifecycleTests
             Assert.True(process.HasExited, "ps-bash -c 'exit 0' did not exit within 20s");
             Assert.Equal(0, process.ExitCode);
 
-            // Give the OS a moment to reap the host process that was in our job.
-            await Task.Delay(500);
+            // Poll until no host process remains whose parent was our
+            // (now-dead) ps-bash. Replaces a 500ms Task.Delay — usually
+            // completes in <50 ms once the launcher exits.
+            var reapDeadline = DateTime.UtcNow + TimeSpan.FromSeconds(2);
+            while (true)
+            {
+                var orphan = false;
+                foreach (var p in Process.GetProcessesByName("ps-bash-host"))
+                {
+                    try
+                    {
+                        var pp = JobObjectWatchdog.GetParentProcessId(p.Handle);
+                        if (pp == ourPid) orphan = true;
+                    }
+                    catch { /* process may have exited during enumeration */ }
+                    finally { p.Dispose(); }
+                }
+                if (!orphan || DateTime.UtcNow >= reapDeadline) break;
+                await Task.Delay(50);
+            }
 
-            // Ensure no host process remains whose parent was our (now-dead) ps-bash.
-            // We check by enumerating host processes and verifying their parent PID
-            // is not our ps-bash (which is dead; by definition no live process can
-            // have our PID as a live parent).
+            // Final assertion: no orphan whose parent is ours.
             foreach (var p in Process.GetProcessesByName("ps-bash-host"))
             {
                 try

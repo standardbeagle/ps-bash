@@ -127,11 +127,18 @@ public class ProgramEndToEndTests
             $"Timeout took too long: {sw.Elapsed.TotalSeconds:F1}s");
         Assert.Contains("did not exit within", ex.Message);
 
-        await Task.Delay(TimeSpan.FromSeconds(2));
-
-        var postWorkerPids = Process.GetProcessesByName("pwsh")
-            .Select(p => p.Id).ToHashSet();
-        var leaked = postWorkerPids.Except(preWorkerPids).ToList();
+        // Poll for child reap, bounded by a deadline. Replaces a 2s
+        // Task.Delay — usually completes in <100 ms.
+        var reapDeadline = DateTime.UtcNow + TimeSpan.FromSeconds(3);
+        List<int> leaked;
+        while (true)
+        {
+            var postWorkerPids = Process.GetProcessesByName("pwsh")
+                .Select(p => p.Id).ToHashSet();
+            leaked = postWorkerPids.Except(preWorkerPids).ToList();
+            if (leaked.Count == 0 || DateTime.UtcNow >= reapDeadline) break;
+            await Task.Delay(50);
+        }
         Assert.True(leaked.Count == 0,
             $"Leaked SDK host PIDs after timeout: {string.Join(",", leaked)}");
     }
