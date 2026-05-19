@@ -72,11 +72,22 @@ internal static class InheritedFdDetach
         public long st_qspare1;
     }
 
-    // macOS exports the modern stat under the $INODE64 symbol variant for
-    // 64-bit targets. Without the entry-point alias the call binds to the
-    // legacy 32-bit-ino stat and the struct layout is wrong.
+    // macOS x86_64 exports the modern stat under the $INODE64 symbol variant
+    // (the legacy `fstat` is the 32-bit-ino stat with a different struct
+    // layout). On arm64 there is no $INODE64 alias — the only `fstat` symbol
+    // is the 64-bit-ino one. Bind both and dispatch at runtime by arch.
     [DllImport("libc", SetLastError = true, EntryPoint = "fstat$INODE64")]
-    private static extern int fstat_darwin(int fd, out DarwinStat buf);
+    private static extern int fstat_darwin_x64(int fd, out DarwinStat buf);
+
+    [DllImport("libc", SetLastError = true, EntryPoint = "fstat")]
+    private static extern int fstat_darwin_arm64(int fd, out DarwinStat buf);
+
+    private static int fstat_darwin(int fd, out DarwinStat buf)
+    {
+        if (RuntimeInformation.ProcessArchitecture == Architecture.Arm64)
+            return fstat_darwin_arm64(fd, out buf);
+        return fstat_darwin_x64(fd, out buf);
+    }
 
     // ---- Linux struct stat --------------------------------------------
     //

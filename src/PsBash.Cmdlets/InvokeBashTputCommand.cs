@@ -69,19 +69,33 @@ public sealed class InvokeBashTputCommand : PSCmdlet
 
         // Native passthrough — resolve the on-disk tput. The script body
         // is fixed; no user input flows into PS source.
+        //
+        // On Windows we skip native passthrough entirely. A Windows host that
+        // has `tput` on PATH almost certainly picked it up from Git for
+        // Windows / msys2, which runs against an ncurses terminfo database and
+        // emits sequences that differ from the in-process emulator's
+        // hard-coded ANSI bytes (e.g. `sgr0` -> `\x1B(B\x1B[m` rather than
+        // `\x1B[0m`, `setaf N` -> 16-color form rather than the 256-color
+        // form). Tests assert the emulator's exact bytes. The native passthrough
+        // adds little value on Windows (the emulator covers every capability
+        // the psm1 oracle ever supported), so disabling it on Windows is the
+        // simplest fix that preserves Linux/macOS behavior unchanged.
         string? nativeSource = null;
-        try
+        if (!OperatingSystem.IsWindows())
         {
-            var probe = InvokeCommand.InvokeScript(
-                "Get-Command tput -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1");
-            if (probe.Count > 0 && probe[0] != null)
+            try
             {
-                nativeSource = probe[0].Properties["Source"]?.Value as string;
+                var probe = InvokeCommand.InvokeScript(
+                    "Get-Command tput -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1");
+                if (probe.Count > 0 && probe[0] != null)
+                {
+                    nativeSource = probe[0].Properties["Source"]?.Value as string;
+                }
             }
-        }
-        catch
-        {
-            // Get-Command failure → fall through to the in-process emulator.
+            catch
+            {
+                // Get-Command failure → fall through to the in-process emulator.
+            }
         }
 
         if (!string.IsNullOrEmpty(nativeSource))

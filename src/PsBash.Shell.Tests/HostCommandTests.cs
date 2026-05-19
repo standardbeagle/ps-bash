@@ -16,10 +16,24 @@ public sealed class HostCommandTests
         var endpoint = $"pipe:psbash-abrupt-{Guid.NewGuid():N}".Substring(0, "pipe:psbash-abrupt-".Length + 8);
         await using var transport = IpcTransportFactory.CreateDefault(endpoint);
         await transport.ListenAsync();
+
+        // Pass a cancellation token to AcceptAsync / ReadRequestAsync so the
+        // server task can be aborted cleanly. Under Windows CI load the
+        // client's 750ms connect timeout (HostCommands.SendControlRequestAsync)
+        // can fire before the server task has even called WaitForConnectionAsync,
+        // leaving the server stuck waiting for a client that already gave up.
+        // Cancelling at test end unwinds that state deterministically so the
+        // final WaitAsync never times out.
+        using var serverCts = new CancellationTokenSource();
         var serverTask = Task.Run(async () =>
         {
-            await using var stream = await transport.AcceptAsync();
-            _ = await HostProtocol.ReadRequestAsync(stream);
+            try
+            {
+                await using var stream = await transport.AcceptAsync(serverCts.Token);
+                _ = await HostProtocol.ReadRequestAsync(stream, serverCts.Token);
+            }
+            catch (OperationCanceledException) { /* expected when client aborts before/after connect */ }
+            catch (IOException) { /* expected: client closed without sending a full request */ }
         });
 
         var (exitCode, lines) = await HostCommands.SendControlRequestAsync(
@@ -29,6 +43,7 @@ public sealed class HostCommandTests
 
         Assert.Null(exitCode);
         Assert.Empty(lines);
+        serverCts.Cancel();
         await serverTask.WaitAsync(TimeSpan.FromSeconds(5));
     }
 }
