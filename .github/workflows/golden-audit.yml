@@ -1,0 +1,89 @@
+name: Golden Audit (nightly)
+
+# Detects frozen-in bugs in Differential goldens.
+#
+# Each GoldenAsync test compares ps-bash output against a recorded byte
+# stream in src/PsBash.Differential.Tests/Goldens/*.golden.txt. The
+# recording was captured against some past version of bash + ps-bash; if
+# either side drifts (bash security update, ps-bash bugfix, distro
+# version) the golden silently locks in the old answer and the test
+# keeps passing.
+#
+# This workflow regenerates every golden against today's bash (Linux
+# runner — the closest thing to the macOS / Ubuntu user's environment)
+# via UPDATE_GOLDENS=1, then diffs against the committed copies. Any
+# drift = artifact upload + soft failure. A human triages whether the
+# drift is a bash upgrade (rerecord) or a ps-bash regression (fix code).
+#
+# Runs nightly on schedule; also dispatchable on demand.
+
+on:
+  schedule:
+    # 06:00 UTC daily — outside business hours for all US TZs.
+    - cron: '0 6 * * *'
+  workflow_dispatch:
+
+concurrency:
+  group: golden-audit
+  cancel-in-progress: false
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Restore + build
+        run: |
+          dotnet restore
+          dotnet build src/PsBash.Differential.Tests -c Release --no-restore
+
+      - name: Capture goldens baseline
+        run: |
+          mkdir -p /tmp/goldens-baseline
+          cp -r src/PsBash.Differential.Tests/Goldens/. /tmp/goldens-baseline/
+
+      # UPDATE_GOLDENS=1 makes every GoldenAsync call rewrite the file
+      # from current ps-bash output. The test still passes (the new
+      # golden equals the new output), but the file changes on disk.
+      - name: Regenerate goldens
+        env:
+          UPDATE_GOLDENS: '1'
+        run: |
+          ./scripts/test.sh src/PsBash.Differential.Tests --filter "FullyQualifiedName~Golden" || true
+
+      - name: Diff regenerated vs committed
+        id: diff
+        run: |
+          diff -ruN /tmp/goldens-baseline src/PsBash.Differential.Tests/Goldens > /tmp/golden-drift.diff || true
+          if [ -s /tmp/golden-drift.diff ]; then
+            echo "drift=yes" >> "$GITHUB_OUTPUT"
+            echo "Golden drift detected — see artifact."
+            head -200 /tmp/golden-drift.diff
+          else
+            echo "drift=no" >> "$GITHUB_OUTPUT"
+            echo "No drift."
+          fi
+
+      - uses: actions/upload-artifact@v4
+        if: steps.diff.outputs.drift == 'yes'
+        with:
+          name: golden-drift-${{ github.run_id }}
+          path: |
+            /tmp/golden-drift.diff
+            src/PsBash.Differential.Tests/Goldens/
+          retention-days: 30
+
+      # Soft failure — drift is informational, not a merge blocker.
+      # A human reads the artifact and decides: bash upgraded (rerecord)
+      # vs ps-bash regression (file a task, fix code).
+      - name: Report drift status
+        run: |
+          if [ "${{ steps.diff.outputs.drift }}" == "yes" ]; then
+            echo "::warning::Golden drift detected. Review artifact golden-drift-${{ github.run_id }}."
+            exit 1
+          fi
