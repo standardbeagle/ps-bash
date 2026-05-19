@@ -96,6 +96,29 @@ public static class CanonicalEnv
         // how a non-default install location is discovered. Preserve whatever
         // the test host is using so the launcher starts under the canonical
         // block too.
+        // Windows: PowerShell / .NET runtime requires a handful of system
+        // environment variables that are normally guaranteed by the OS but
+        // get stripped by canonicalizeEnv. Without them, the host process
+        // (ps-bash-host, which boots a PowerShell runspace) fails to
+        // initialize core assemblies and never reaches the accept-connection
+        // state — observed as a 10s HostUnavailableException on Windows CI.
+        // Preserve the inherited values; they are machine-stable enough
+        // (e.g. C:\Windows) not to leak meaningful state into goldens.
+        if (OperatingSystem.IsWindows())
+        {
+            foreach (var name in new[]
+            {
+                "SystemRoot", "windir", "SystemDrive", "ComSpec", "OS",
+                "USERPROFILE", "APPDATA", "LOCALAPPDATA",
+                "ProgramData", "ProgramFiles", "ProgramFiles(x86)",
+                "PATHEXT", "NUMBER_OF_PROCESSORS", "PROCESSOR_ARCHITECTURE",
+            })
+            {
+                var v = Environment.GetEnvironmentVariable(name);
+                if (!string.IsNullOrEmpty(v)) env[name] = v;
+            }
+        }
+
         var dotnetRoot = Environment.GetEnvironmentVariable("DOTNET_ROOT");
         if (!string.IsNullOrEmpty(dotnetRoot))
         {
