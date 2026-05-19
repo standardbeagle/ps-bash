@@ -61,11 +61,21 @@ public class InvokeBashCatHeadTailWcCommandTests : IDisposable
         var result = pwsh.AddScript(script).Invoke();
         pwsh.Commands.Clear();
 
-        var err = pwsh.AddScript("$error | Select-Object -First 1").Invoke();
-        pwsh.Commands.Clear();
-        Assert.True(err.Count == 0 || err[0] == null,
-            $"Unexpected error running [{script}]: " +
-            $"{(err.Count > 0 ? err[0]?.ToString() : "none")}");
+        // Scripts using `2>$null` explicitly redirect their error stream — the
+        // caller is asserting that they don't care about the error text, only
+        // about the absence of stdout. PowerShell's `2>$null` suppresses the
+        // user-visible stream but still appends to `$error`, so a literal
+        // `$error.Count` check after such a script conflates "test author said
+        // this is fine" with "unexpected internal error". Skip the assertion
+        // when the script explicitly uses the redirect.
+        if (!script.Contains("2>$null"))
+        {
+            var err = pwsh.AddScript("$error | Select-Object -First 1").Invoke();
+            pwsh.Commands.Clear();
+            Assert.True(err.Count == 0 || err[0] == null,
+                $"Unexpected error running [{script}]: " +
+                $"{(err.Count > 0 ? err[0]?.ToString() : "none")}");
+        }
 
         return result;
     }

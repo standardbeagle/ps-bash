@@ -82,8 +82,11 @@ public class ModulePartialLoadTests
         var missing = new List<string>();
         foreach (var name in aliases)
         {
+            // Use the Alias: provider with -LiteralPath so wildcard-looking
+            // alias names (notably '[') don't get interpreted as glob patterns
+            // by Get-Command -Name's default wildcard match.
             pwsh.AddScript(
-                "param($n) Get-Command -Name $n -CommandType Alias -ErrorAction SilentlyContinue")
+                "param($n) Get-Item -LiteralPath ('Alias:\\' + $n) -ErrorAction SilentlyContinue")
                 .AddArgument(name);
             var found = pwsh.Invoke();
             pwsh.Commands.Clear();
