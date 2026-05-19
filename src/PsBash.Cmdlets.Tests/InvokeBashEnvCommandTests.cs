@@ -15,25 +15,30 @@ namespace PsBash.Cmdlets.Tests;
 /// target (Directive 3 axis 14), quoting/injection (Directive 12),
 /// alias resolution. Streaming / file-content / signal axes do not apply:
 /// env reads in-process env vars, no I/O, no pipeline input.
+///
+/// Reference conversion for the SharedPwshFixture migration — see
+/// MIGRATION RECIPE in PwshTestFixture.cs.
 /// </summary>
-public class InvokeBashEnvCommandTests
+public class InvokeBashEnvCommandTests : IClassFixture<SharedPwshFixture>
 {
-    private static System.Collections.ObjectModel.Collection<System.Management.Automation.PSObject> RunRaw(string script)
-    {
-        using var pwsh = PwshTestFixture.Create();
-        // psm1 default BashErrorMode is 'Bash' which routes errors to the IPC
-        // stderr stream (invisible to in-process tests). Switch to PowerShell
-        // mode so Write-BashError goes through Write-Error and is visible.
-        pwsh.AddScript("Set-BashErrorMode -Mode PowerShell").Invoke();
-        pwsh.Commands.Clear();
-        pwsh.AddScript("$error.Clear()").Invoke();
-        pwsh.Commands.Clear();
+    private readonly SharedPwshFixture _fixture;
 
+    public InvokeBashEnvCommandTests(SharedPwshFixture fixture)
+    {
+        _fixture = fixture;
+    }
+
+    private System.Collections.ObjectModel.Collection<System.Management.Automation.PSObject> RunRaw(string script)
+    {
+        var pwsh = _fixture.AcquireFresh();
+        // AcquireFresh() already sets BashErrorMode -> PowerShell and clears
+        // $error, so we can go straight to the user script.
         var result = pwsh.AddScript(script).Invoke();
+        pwsh.Commands.Clear();
         return result;
     }
 
-    private static string[] RunLines(string script)
+    private string[] RunLines(string script)
     {
         return RunRaw(script).Select(o => o?.ToString() ?? "").ToArray();
     }
