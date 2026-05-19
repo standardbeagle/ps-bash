@@ -19,9 +19,15 @@ namespace PsBash.Cmdlets.Tests;
 /// quoting/injection (Directive 12). Pipeline / large-input / streaming
 /// axes do not apply: mktemp produces a single name and exits.
 /// </summary>
-public class InvokeBashMktempCommandTests : IDisposable
+public class InvokeBashMktempCommandTests : IDisposable, IClassFixture<SharedPwshFixture>
 {
     private readonly List<string> _createdPaths = new();
+    private readonly SharedPwshFixture _fixture;
+
+    public InvokeBashMktempCommandTests(SharedPwshFixture fixture)
+    {
+        _fixture = fixture;
+    }
 
     public void Dispose()
     {
@@ -38,10 +44,7 @@ public class InvokeBashMktempCommandTests : IDisposable
 
     private string[] RunLines(string script)
     {
-        using var pwsh = PwshTestFixture.Create();
-        pwsh.AddScript("$error.Clear()").Invoke();
-        pwsh.Commands.Clear();
-
+        var pwsh = _fixture.AcquireFresh();
         var result = pwsh.AddScript(script).Invoke();
         pwsh.Commands.Clear();
 
@@ -153,7 +156,7 @@ public class InvokeBashMktempCommandTests : IDisposable
         // The PSObject's typename must be 'PsBash.MktempOutput' so any
         // ps1xml view or downstream consumer depending on the type marker
         // keeps working. Probe via PSTypeNames.
-        using var pwsh = PwshTestFixture.Create();
+        var pwsh = _fixture.AcquireFresh();
         var result = pwsh.AddScript(
             "(Invoke-BashMktemp).PSTypeNames -join ','").Invoke();
         Assert.Single(result);

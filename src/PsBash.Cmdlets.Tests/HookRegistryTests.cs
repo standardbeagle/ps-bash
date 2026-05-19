@@ -9,8 +9,15 @@ namespace PsBash.Cmdlets.Tests;
 /// NOTE: HookRegistry.Instance is a process-global singleton. Tests that mutate
 /// it must clean up after themselves to avoid order-dependent failures.
 /// </summary>
-public class HookRegistryTests : IDisposable
+public class HookRegistryTests : IClassFixture<SharedPwshFixture>, IDisposable
 {
+    private readonly SharedPwshFixture _fixture;
+
+    public HookRegistryTests(SharedPwshFixture fixture)
+    {
+        _fixture = fixture;
+    }
+
     // Unique name prefix to isolate per-test hooks from any pre-existing hooks.
     private readonly string _prefix = $"test-{Guid.NewGuid():N}";
     private readonly List<(HookKind kind, string name)> _registered = new();
@@ -134,7 +141,7 @@ public class HookRegistryTests : IDisposable
     [Fact]
     public void FirePrompt_SamePath_ChpwdDoesNotFire_PromptDoesFire()
     {
-        using var pwsh = PwshTestFixture.Create();
+        var pwsh = _fixture.AcquireFresh();
 
         var chpwdName = N("fire-same-chpwd");
         var promptName = N("fire-same-prompt");
@@ -177,7 +184,7 @@ public class HookRegistryTests : IDisposable
     [Fact]
     public void FirePrompt_DifferentPath_BothKindsFire()
     {
-        using var pwsh = PwshTestFixture.Create();
+        var pwsh = _fixture.AcquireFresh();
 
         var chpwdName = N("fire-diff-chpwd");
         var promptName = N("fire-diff-prompt");
@@ -215,7 +222,7 @@ public class HookRegistryTests : IDisposable
     [Fact]
     public void FirePrompt_ChpwdHook_ReceivesOldAndNewPath()
     {
-        using var pwsh = PwshTestFixture.Create();
+        var pwsh = _fixture.AcquireFresh();
 
         var chpwdName = N("args-chpwd");
 
@@ -258,7 +265,7 @@ public class HookRegistryTests : IDisposable
     [Fact]
     public void FirePrompt_ThrowingChpwdHook_NextHookStillFires()
     {
-        using var pwsh = PwshTestFixture.Create();
+        var pwsh = _fixture.AcquireFresh();
 
         var firstName = N("throw-first");
         var secondName = N("throw-second");
@@ -302,7 +309,7 @@ public class HookRegistryTests : IDisposable
     [Fact]
     public void RegisterCmdlet_AndGetBashHook_ListsIt()
     {
-        using var pwsh = PwshTestFixture.Create();
+        var pwsh = _fixture.AcquireFresh();
         var hookName = N("cmdlet-get");
 
         pwsh.AddScript($"Register-BashChpwdHook -Name '{hookName}' -ScriptBlock {{ 'noop' }}").Invoke();
@@ -326,7 +333,7 @@ public class HookRegistryTests : IDisposable
     [Fact]
     public void UnregisterCmdlet_RemovesHook()
     {
-        using var pwsh = PwshTestFixture.Create();
+        var pwsh = _fixture.AcquireFresh();
         var hookName = N("cmdlet-unregister");
 
         pwsh.AddScript($"Register-BashChpwdHook -Name '{hookName}' -ScriptBlock {{ 'noop' }}").Invoke();
@@ -343,7 +350,7 @@ public class HookRegistryTests : IDisposable
     [Fact]
     public void GetBashHook_KindFilter_ReturnsOnlyThatKind()
     {
-        using var pwsh = PwshTestFixture.Create();
+        var pwsh = _fixture.AcquireFresh();
         var chpwdName = N("filter-chpwd");
         var promptName = N("filter-prompt");
 

@@ -27,12 +27,14 @@ namespace PsBash.Cmdlets.Tests;
 /// tests also prove the function-shadowing removal worked and the psm1
 /// Set-Alias 'find' line still resolves to the cmdlet.
 /// </summary>
-public class InvokeBashFindCommandTests : IDisposable
+public class InvokeBashFindCommandTests : IDisposable, IClassFixture<SharedPwshFixture>
 {
     private readonly string _tmpDir;
+    private readonly SharedPwshFixture _fixture;
 
-    public InvokeBashFindCommandTests()
+    public InvokeBashFindCommandTests(SharedPwshFixture fixture)
     {
+        _fixture = fixture;
         _tmpDir = Path.Combine(
             Path.GetTempPath(), "psbash-find-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(_tmpDir);
@@ -60,19 +62,17 @@ public class InvokeBashFindCommandTests : IDisposable
         return path;
     }
 
-    private static System.Collections.ObjectModel.Collection<PSObject> Run(string script)
+    private System.Collections.ObjectModel.Collection<PSObject> Run(string script)
     {
-        using var pwsh = PwshTestFixture.Create();
-        pwsh.AddScript("$error.Clear()").Invoke();
-        pwsh.Commands.Clear();
+        var pwsh = _fixture.AcquireFresh();
         var result = pwsh.AddScript(script).Invoke();
         pwsh.Commands.Clear();
         return result;
     }
 
-    private static System.Collections.ObjectModel.Collection<PSObject> RunAllowError(string script)
+    private System.Collections.ObjectModel.Collection<PSObject> RunAllowError(string script)
     {
-        using var pwsh = PwshTestFixture.Create();
+        var pwsh = _fixture.AcquireFresh();
         var result = pwsh.AddScript(script).Invoke();
         pwsh.Commands.Clear();
         return result;

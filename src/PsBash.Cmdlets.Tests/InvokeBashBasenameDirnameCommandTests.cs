@@ -21,13 +21,18 @@ namespace PsBash.Cmdlets.Tests;
 /// tests also prove the function-shadowing removal worked and the psm1
 /// `Set-Alias basename/dirname` lines still resolve to the cmdlet.
 /// </summary>
-public class InvokeBashBasenameDirnameCommandTests
+public class InvokeBashBasenameDirnameCommandTests : IClassFixture<SharedPwshFixture>
 {
-    private static string[] RunLines(string script)
+    private readonly SharedPwshFixture _fixture;
+
+    public InvokeBashBasenameDirnameCommandTests(SharedPwshFixture fixture)
     {
-        using var pwsh = PwshTestFixture.Create();
-        pwsh.AddScript("$error.Clear()").Invoke();
-        pwsh.Commands.Clear();
+        _fixture = fixture;
+    }
+
+    private string[] RunLines(string script)
+    {
+        var pwsh = _fixture.AcquireFresh();
 
         var result = pwsh.AddScript(script).Invoke();
         pwsh.Commands.Clear();

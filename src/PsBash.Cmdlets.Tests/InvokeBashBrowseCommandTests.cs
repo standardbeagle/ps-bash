@@ -22,11 +22,18 @@ namespace PsBash.Cmdlets.Tests;
 /// $(throw 'pwn') must flow through ConvertTo-BrowseRow as data and
 /// never reach a script-block evaluator.
 /// </summary>
-public class InvokeBashBrowseCommandTests
+public class InvokeBashBrowseCommandTests : IClassFixture<SharedPwshFixture>
 {
-    private static System.Collections.ObjectModel.Collection<PSObject> Run(string script)
+    private readonly SharedPwshFixture _fixture;
+
+    public InvokeBashBrowseCommandTests(SharedPwshFixture fixture)
     {
-        using var pwsh = PwshTestFixture.Create();
+        _fixture = fixture;
+    }
+
+    private System.Collections.ObjectModel.Collection<PSObject> Run(string script)
+    {
+        var pwsh = _fixture.AcquireFresh();
         var result = pwsh.AddScript(script).Invoke();
         pwsh.Commands.Clear();
         return result;

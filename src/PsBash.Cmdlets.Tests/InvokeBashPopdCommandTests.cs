@@ -6,8 +6,15 @@ namespace PsBash.Cmdlets.Tests;
 /// Behavioral-parity tests for the REFACTOR-2 dir-stack-batch migration of
 /// Invoke-BashPopd from PsBash.psm1 to a binary cmdlet.
 /// </summary>
-public class InvokeBashPopdCommandTests
+public class InvokeBashPopdCommandTests : IClassFixture<SharedPwshFixture>
 {
+    private readonly SharedPwshFixture _fixture;
+
+    public InvokeBashPopdCommandTests(SharedPwshFixture fixture)
+    {
+        _fixture = fixture;
+    }
+
     private static System.Collections.ObjectModel.Collection<System.Management.Automation.PSObject> RunRaw(
         System.Management.Automation.PowerShell pwsh, string script)
     {
@@ -20,12 +27,9 @@ public class InvokeBashPopdCommandTests
         return RunRaw(pwsh, script).Select(o => o?.ToString() ?? "").ToArray();
     }
 
-    private static System.Management.Automation.PowerShell NewPwsh()
+    private System.Management.Automation.PowerShell NewPwsh()
     {
-        var pwsh = PwshTestFixture.Create();
-        pwsh.AddScript("Set-BashErrorMode -Mode PowerShell").Invoke();
-        pwsh.Commands.Clear();
-        return pwsh;
+        return _fixture.AcquireFresh();
     }
 
     [Fact]
@@ -40,7 +44,7 @@ public class InvokeBashPopdCommandTests
         // unwind, so we assert only the chdir side of the contract here.
         // The stack count is independently checked in the dirs tests via
         // `-c` clear and inside-cmdlet reads.
-        using var pwsh = NewPwsh();
+        var pwsh = NewPwsh();
         var tmp = Path.GetTempPath().TrimEnd(Path.DirectorySeparatorChar);
         var subdir = Path.Combine(tmp, "psbash-popd-1-" + Guid.NewGuid().ToString("N").Substring(0, 8));
         Directory.CreateDirectory(subdir);
@@ -64,7 +68,7 @@ public class InvokeBashPopdCommandTests
         // Oracle: Pop-Location on empty stack writes a non-terminating
         // PowerShell error; the cmdlet catches RuntimeException and routes
         // via Write-BashError. The pwsh.Invoke() must not throw.
-        using var pwsh = NewPwsh();
+        var pwsh = NewPwsh();
         var ex = Record.Exception(() => RunLines(pwsh, "Invoke-BashPopd"));
         Assert.Null(ex);
     }
@@ -77,7 +81,7 @@ public class InvokeBashPopdCommandTests
         // that survives the in-process SDK isolation: a `+N` token matches
         // the regex, parses cleanly, and the InvokeScript body executes
         // without throwing.
-        using var pwsh = NewPwsh();
+        var pwsh = NewPwsh();
         var tmp = Path.GetTempPath().TrimEnd(Path.DirectorySeparatorChar);
         var d1 = Path.Combine(tmp, "psbash-popd-2a-" + Guid.NewGuid().ToString("N").Substring(0, 8));
         var d2 = Path.Combine(tmp, "psbash-popd-2b-" + Guid.NewGuid().ToString("N").Substring(0, 8));
@@ -101,7 +105,7 @@ public class InvokeBashPopdCommandTests
     [Fact]
     public void Popd_ViaAlias_Works()
     {
-        using var pwsh = NewPwsh();
+        var pwsh = NewPwsh();
         var tmp = Path.GetTempPath().TrimEnd(Path.DirectorySeparatorChar);
         var subdir = Path.Combine(tmp, "psbash-popd-alias-" + Guid.NewGuid().ToString("N").Substring(0, 8));
         Directory.CreateDirectory(subdir);
@@ -122,7 +126,7 @@ public class InvokeBashPopdCommandTests
     [Fact]
     public void Popd_HelpFlag_EmitsUsage()
     {
-        using var pwsh = NewPwsh();
+        var pwsh = NewPwsh();
         var lines = RunLines(pwsh, "Invoke-BashPopd --help");
         Assert.NotEmpty(lines);
         Assert.Contains(lines, l => l.Contains("popd", StringComparison.OrdinalIgnoreCase));
@@ -133,7 +137,7 @@ public class InvokeBashPopdCommandTests
     {
         // Pop-Location -Stack with -ErrorAction SilentlyContinue eats the
         // error per oracle parity.
-        using var pwsh = NewPwsh();
+        var pwsh = NewPwsh();
         var ex = Record.Exception(() => RunLines(pwsh, "Invoke-BashPopd +0"));
         Assert.Null(ex);
     }
@@ -142,7 +146,7 @@ public class InvokeBashPopdCommandTests
     public void Popd_AfterMultiplePushdsThenSinglePopd_RestoresOnlyOne()
     {
         // popd (no +N) pops exactly one entry — the top of the stack.
-        using var pwsh = NewPwsh();
+        var pwsh = NewPwsh();
         var tmp = Path.GetTempPath().TrimEnd(Path.DirectorySeparatorChar);
         var d1 = Path.Combine(tmp, "psbash-popd-3a-" + Guid.NewGuid().ToString("N").Substring(0, 8));
         var d2 = Path.Combine(tmp, "psbash-popd-3b-" + Guid.NewGuid().ToString("N").Substring(0, 8));
@@ -174,7 +178,7 @@ public class InvokeBashPopdCommandTests
         // therefore falls through to the default pop-one branch — no
         // PowerShell re-parsing of the payload. pwsh.Invoke() returns
         // without an exception bearing "pwn".
-        using var pwsh = NewPwsh();
+        var pwsh = NewPwsh();
         var ex = Record.Exception(() => RunLines(pwsh, "Invoke-BashPopd '+0$(throw \"pwn\")'"));
         Assert.Null(ex);
     }

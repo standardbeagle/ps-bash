@@ -17,12 +17,14 @@ namespace PsBash.Cmdlets.Tests;
 /// mode, pipeline input ignored, <c>--help</c>, alias resolution, and a
 /// quoting/injection probe per Directive 12.
 /// </summary>
-public class InvokeBashPasteCommandTests : IDisposable
+public class InvokeBashPasteCommandTests : IDisposable, IClassFixture<SharedPwshFixture>
 {
     private readonly string _tmpDir;
+    private readonly SharedPwshFixture _fixture;
 
-    public InvokeBashPasteCommandTests()
+    public InvokeBashPasteCommandTests(SharedPwshFixture fixture)
     {
+        _fixture = fixture;
         _tmpDir = Path.Combine(
             Path.GetTempPath(),
             $"psb-paste-{Guid.NewGuid():N}".Substring(0, 24));
@@ -34,12 +36,9 @@ public class InvokeBashPasteCommandTests : IDisposable
         try { Directory.Delete(_tmpDir, recursive: true); } catch { /* best-effort */ }
     }
 
-    private static string[] RunLines(string script)
+    private string[] RunLines(string script)
     {
-        using var pwsh = PwshTestFixture.Create();
-        pwsh.AddScript("$error.Clear()").Invoke();
-        pwsh.Commands.Clear();
-
+        var pwsh = _fixture.AcquireFresh();
         var result = pwsh.AddScript(script).Invoke();
         pwsh.Commands.Clear();
         return result.Select(o =>
@@ -139,7 +138,7 @@ public class InvokeBashPasteCommandTests : IDisposable
     [Fact]
     public void Paste_MissingFile_NoOutput_NoThrow()
     {
-        using var pwsh = PwshTestFixture.Create();
+        var pwsh = _fixture.AcquireFresh();
         pwsh.AddScript("$ErrorActionPreference='Continue'").Invoke();
         pwsh.Commands.Clear();
         var missing = Path.Combine(_tmpDir, "nope.txt");
@@ -186,7 +185,7 @@ public class InvokeBashPasteCommandTests : IDisposable
         // SessionState.Path's resolver means a name like "; $(throw 'pwn')"
         // is just a missing file — no script side effect.
         var probe = "; $(throw 'INJECTED'); echo pwned";
-        using var pwsh = PwshTestFixture.Create();
+        var pwsh = _fixture.AcquireFresh();
         pwsh.AddScript("$ErrorActionPreference='Continue'").Invoke();
         pwsh.Commands.Clear();
         var result = pwsh.AddScript(

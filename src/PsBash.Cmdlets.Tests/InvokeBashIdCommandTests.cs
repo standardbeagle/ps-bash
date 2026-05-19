@@ -18,14 +18,18 @@ namespace PsBash.Cmdlets.Tests;
 /// The injection-probe (Directive 12) test verifies an adversarial positional
 /// operand is never re-parsed as PowerShell.
 /// </summary>
-public class InvokeBashIdCommandTests
+public class InvokeBashIdCommandTests : IClassFixture<SharedPwshFixture>
 {
-    private static string[] RunLines(string script)
-    {
-        using var pwsh = PwshTestFixture.Create();
-        pwsh.AddScript("$error.Clear()").Invoke();
-        pwsh.Commands.Clear();
+    private readonly SharedPwshFixture _fixture;
 
+    public InvokeBashIdCommandTests(SharedPwshFixture fixture)
+    {
+        _fixture = fixture;
+    }
+
+    private string[] RunLines(string script)
+    {
+        var pwsh = _fixture.AcquireFresh();
         var result = pwsh.AddScript(script).Invoke();
         pwsh.Commands.Clear();
 

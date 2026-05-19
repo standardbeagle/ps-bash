@@ -27,12 +27,14 @@ namespace PsBash.Cmdlets.Tests;
 /// tests also prove the function-shadowing removal worked and the psm1
 /// Set-Alias cat/head/tail/wc lines still resolve to the cmdlets.
 /// </summary>
-public class InvokeBashCatHeadTailWcCommandTests : IDisposable
+public class InvokeBashCatHeadTailWcCommandTests : IClassFixture<SharedPwshFixture>, IDisposable
 {
+    private readonly SharedPwshFixture _fixture;
     private readonly string _tmpDir;
 
-    public InvokeBashCatHeadTailWcCommandTests()
+    public InvokeBashCatHeadTailWcCommandTests(SharedPwshFixture fixture)
     {
+        _fixture = fixture;
         _tmpDir = Path.Combine(
             Path.GetTempPath(), "psbash-1c-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(_tmpDir);
@@ -52,11 +54,9 @@ public class InvokeBashCatHeadTailWcCommandTests : IDisposable
     }
 
     /// <summary>Runs a script, asserts no error record was generated.</summary>
-    private static System.Collections.ObjectModel.Collection<PSObject> Run(string script)
+    private System.Collections.ObjectModel.Collection<PSObject> Run(string script)
     {
-        using var pwsh = PwshTestFixture.Create();
-        pwsh.AddScript("$error.Clear()").Invoke();
-        pwsh.Commands.Clear();
+        var pwsh = _fixture.AcquireFresh();
 
         var result = pwsh.AddScript(script).Invoke();
         pwsh.Commands.Clear();
@@ -81,7 +81,7 @@ public class InvokeBashCatHeadTailWcCommandTests : IDisposable
     }
 
     /// <summary>Extracts the BashText payload of each emitted object.</summary>
-    private static string[] RunBashText(string script)
+    private string[] RunBashText(string script)
     {
         return Run(script)
             .Select(o =>

@@ -16,12 +16,14 @@ namespace PsBash.Cmdlets.Tests;
 /// gzipped round-trip, <c>-t</c> list, <c>-v</c> verbose, alias resolution,
 /// <c>--help</c>, and a quoting/injection probe per Directive 12.
 /// </summary>
-public class InvokeBashTarCommandTests : IDisposable
+public class InvokeBashTarCommandTests : IDisposable, IClassFixture<SharedPwshFixture>
 {
+    private readonly SharedPwshFixture _fixture;
     private readonly string _tmpDir;
 
-    public InvokeBashTarCommandTests()
+    public InvokeBashTarCommandTests(SharedPwshFixture fixture)
     {
+        _fixture = fixture;
         _tmpDir = Path.Combine(
             Path.GetTempPath(),
             $"psb-tar-{Guid.NewGuid():N}".Substring(0, 22));
@@ -33,11 +35,9 @@ public class InvokeBashTarCommandTests : IDisposable
         try { Directory.Delete(_tmpDir, recursive: true); } catch { /* best-effort */ }
     }
 
-    private static string[] RunLines(string script)
+    private string[] RunLines(string script)
     {
-        using var pwsh = PwshTestFixture.Create();
-        pwsh.AddScript("$error.Clear()").Invoke();
-        pwsh.Commands.Clear();
+        var pwsh = _fixture.AcquireFresh();
         var result = pwsh.AddScript(script).Invoke();
         pwsh.Commands.Clear();
         return result.Select(o =>
@@ -47,11 +47,9 @@ public class InvokeBashTarCommandTests : IDisposable
         }).ToArray();
     }
 
-    private static System.Collections.ObjectModel.Collection<System.Management.Automation.PSObject> RunObjects(string script)
+    private System.Collections.ObjectModel.Collection<System.Management.Automation.PSObject> RunObjects(string script)
     {
-        using var pwsh = PwshTestFixture.Create();
-        pwsh.AddScript("$error.Clear()").Invoke();
-        pwsh.Commands.Clear();
+        var pwsh = _fixture.AcquireFresh();
         var result = pwsh.AddScript(script).Invoke();
         pwsh.Commands.Clear();
         return result;

@@ -25,12 +25,14 @@ namespace PsBash.Cmdlets.Tests;
 /// then imports PsBash.Cmdlets.dll — so these tests also prove the function
 /// removal worked and the psm1 Set-Alias 'jq' line resolves to the cmdlet.
 /// </summary>
-public class InvokeBashJqCommandTests : IDisposable
+public class InvokeBashJqCommandTests : IDisposable, IClassFixture<SharedPwshFixture>
 {
     private readonly string _tmpDir;
+    private readonly SharedPwshFixture _fixture;
 
-    public InvokeBashJqCommandTests()
+    public InvokeBashJqCommandTests(SharedPwshFixture fixture)
     {
+        _fixture = fixture;
         _tmpDir = Path.Combine(
             Path.GetTempPath(), "psbash-jq-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(_tmpDir);
@@ -49,12 +51,9 @@ public class InvokeBashJqCommandTests : IDisposable
         return path;
     }
 
-    private static System.Collections.ObjectModel.Collection<PSObject> Run(string script)
+    private System.Collections.ObjectModel.Collection<PSObject> Run(string script)
     {
-        using var pwsh = PwshTestFixture.Create();
-        pwsh.AddScript("$error.Clear()").Invoke();
-        pwsh.Commands.Clear();
-
+        var pwsh = _fixture.AcquireFresh();
         var result = pwsh.AddScript(script).Invoke();
         pwsh.Commands.Clear();
 
@@ -66,15 +65,15 @@ public class InvokeBashJqCommandTests : IDisposable
         return result;
     }
 
-    private static System.Collections.ObjectModel.Collection<PSObject> RunAllowError(string script)
+    private System.Collections.ObjectModel.Collection<PSObject> RunAllowError(string script)
     {
-        using var pwsh = PwshTestFixture.Create();
+        var pwsh = _fixture.AcquireFresh();
         var result = pwsh.AddScript(script).Invoke();
         pwsh.Commands.Clear();
         return result;
     }
 
-    private static string[] RunText(string script)
+    private string[] RunText(string script)
     {
         return Run(script)
             .Select(o =>

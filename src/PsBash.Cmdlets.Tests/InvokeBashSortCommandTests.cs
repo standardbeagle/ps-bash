@@ -14,12 +14,14 @@ namespace PsBash.Cmdlets.Tests;
 /// value-flags (-k / -t), check-mode exit code, multi-file, and an injection
 /// probe per Directive 12 with <c>$(throw 'pwn')</c> as the -k value.
 /// </summary>
-public class InvokeBashSortCommandTests : IDisposable
+public class InvokeBashSortCommandTests : IDisposable, IClassFixture<SharedPwshFixture>
 {
+    private readonly SharedPwshFixture _fixture;
     private readonly string _tmpDir;
 
-    public InvokeBashSortCommandTests()
+    public InvokeBashSortCommandTests(SharedPwshFixture fixture)
     {
+        _fixture = fixture;
         _tmpDir = Path.Combine(
             Path.GetTempPath(),
             $"psb-sort-{Guid.NewGuid():N}".Substring(0, 22));
@@ -31,12 +33,9 @@ public class InvokeBashSortCommandTests : IDisposable
         try { Directory.Delete(_tmpDir, recursive: true); } catch { /* best-effort */ }
     }
 
-    private static string[] RunLines(string script)
+    private string[] RunLines(string script)
     {
-        using var pwsh = PwshTestFixture.Create();
-        pwsh.AddScript("$error.Clear()").Invoke();
-        pwsh.Commands.Clear();
-
+        var pwsh = _fixture.AcquireFresh();
         var result = pwsh.AddScript(script).Invoke();
         pwsh.Commands.Clear();
         return result.Select(o =>

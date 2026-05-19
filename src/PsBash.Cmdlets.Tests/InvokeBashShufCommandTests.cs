@@ -19,12 +19,14 @@ namespace PsBash.Cmdlets.Tests;
 /// silent skip (oracle uses <c>-ErrorAction SilentlyContinue</c>),
 /// <c>--help</c>, alias resolution, and a Directive-12 injection probe.
 /// </summary>
-public class InvokeBashShufCommandTests : IDisposable
+public class InvokeBashShufCommandTests : IDisposable, IClassFixture<SharedPwshFixture>
 {
+    private readonly SharedPwshFixture _fixture;
     private readonly string _tmpDir;
 
-    public InvokeBashShufCommandTests()
+    public InvokeBashShufCommandTests(SharedPwshFixture fixture)
     {
+        _fixture = fixture;
         _tmpDir = Path.Combine(
             Path.GetTempPath(),
             $"psb-shuf-{Guid.NewGuid():N}".Substring(0, 22));
@@ -36,12 +38,9 @@ public class InvokeBashShufCommandTests : IDisposable
         try { Directory.Delete(_tmpDir, recursive: true); } catch { /* best-effort */ }
     }
 
-    private static string[] RunLines(string script)
+    private string[] RunLines(string script)
     {
-        using var pwsh = PwshTestFixture.Create();
-        pwsh.AddScript("$error.Clear()").Invoke();
-        pwsh.Commands.Clear();
-
+        var pwsh = _fixture.AcquireFresh();
         var result = pwsh.AddScript(script).Invoke();
         pwsh.Commands.Clear();
         return result.Select(o =>
@@ -151,7 +150,7 @@ public class InvokeBashShufCommandTests : IDisposable
     {
         // Oracle: `Get-Content -ErrorAction SilentlyContinue` — missing
         // file produces no items, no error, no output.
-        using var pwsh = PwshTestFixture.Create();
+        var pwsh = _fixture.AcquireFresh();
         pwsh.AddScript("$ErrorActionPreference='Continue'").Invoke();
         pwsh.Commands.Clear();
         var missing = Path.Combine(_tmpDir, "does-not-exist.txt").Replace("'", "''");

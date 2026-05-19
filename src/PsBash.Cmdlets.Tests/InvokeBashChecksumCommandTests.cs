@@ -18,14 +18,16 @@ namespace PsBash.Cmdlets.Tests;
 /// file content, large input (10 KB), missing file (error continuation),
 /// multi-file glob, quoting/injection (Directive 12).
 /// </summary>
-public class InvokeBashChecksumCommandTests : IDisposable
+public class InvokeBashChecksumCommandTests : IClassFixture<SharedPwshFixture>, IDisposable
 {
+    private readonly SharedPwshFixture _fixture;
     private readonly string _tmpDir;
     private readonly string _testFile;
     private readonly byte[] _testBytes;
 
-    public InvokeBashChecksumCommandTests()
+    public InvokeBashChecksumCommandTests(SharedPwshFixture fixture)
     {
+        _fixture = fixture;
         _tmpDir = Path.Combine(Path.GetTempPath(), $"psb-checksum-{Guid.NewGuid():N}".Substring(0, 25));
         Directory.CreateDirectory(_tmpDir);
         _testFile = Path.Combine(_tmpDir, "data.txt");
@@ -38,11 +40,9 @@ public class InvokeBashChecksumCommandTests : IDisposable
         try { Directory.Delete(_tmpDir, recursive: true); } catch { /* best-effort */ }
     }
 
-    private static string[] RunLines(string script)
+    private string[] RunLines(string script)
     {
-        using var pwsh = PwshTestFixture.Create();
-        pwsh.AddScript("$error.Clear()").Invoke();
-        pwsh.Commands.Clear();
+        var pwsh = _fixture.AcquireFresh();
 
         var result = pwsh.AddScript(script).Invoke();
         pwsh.Commands.Clear();

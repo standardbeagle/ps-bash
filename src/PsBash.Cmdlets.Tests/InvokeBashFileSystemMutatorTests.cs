@@ -20,12 +20,14 @@ namespace PsBash.Cmdlets.Tests;
 /// format, exit-code propagation, and a quoting/injection probe on every
 /// path that touches user-controlled tokens.
 /// </summary>
-public class InvokeBashFileSystemMutatorTests : IDisposable
+public class InvokeBashFileSystemMutatorTests : IDisposable, IClassFixture<SharedPwshFixture>
 {
     private readonly string _tmpRoot;
+    private readonly SharedPwshFixture _fixture;
 
-    public InvokeBashFileSystemMutatorTests()
+    public InvokeBashFileSystemMutatorTests(SharedPwshFixture fixture)
     {
+        _fixture = fixture;
         _tmpRoot = Path.Combine(Path.GetTempPath(), $"psb-fsmut-{Guid.NewGuid():N}".Substring(0, 22));
         Directory.CreateDirectory(_tmpRoot);
     }
@@ -35,12 +37,9 @@ public class InvokeBashFileSystemMutatorTests : IDisposable
         try { Directory.Delete(_tmpRoot, recursive: true); } catch { /* best-effort */ }
     }
 
-    private static string[] Run(string script)
+    private string[] Run(string script)
     {
-        using var pwsh = PwshTestFixture.Create();
-        pwsh.AddScript("$error.Clear()").Invoke();
-        pwsh.Commands.Clear();
-
+        var pwsh = _fixture.AcquireFresh();
         var result = pwsh.AddScript(script).Invoke();
         pwsh.Commands.Clear();
         return result.Select(o => o?.ToString() ?? "").ToArray();

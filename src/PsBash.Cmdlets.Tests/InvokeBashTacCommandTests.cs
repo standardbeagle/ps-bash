@@ -16,12 +16,14 @@ namespace PsBash.Cmdlets.Tests;
 /// error continuation, custom separator (<c>-s</c> and <c>--separator=</c>),
 /// <c>--help</c>, and a quoting/injection probe per Directive 12.
 /// </summary>
-public class InvokeBashTacCommandTests : IDisposable
+public class InvokeBashTacCommandTests : IDisposable, IClassFixture<SharedPwshFixture>
 {
+    private readonly SharedPwshFixture _fixture;
     private readonly string _tmpDir;
 
-    public InvokeBashTacCommandTests()
+    public InvokeBashTacCommandTests(SharedPwshFixture fixture)
     {
+        _fixture = fixture;
         _tmpDir = Path.Combine(
             Path.GetTempPath(),
             $"psb-tac-{Guid.NewGuid():N}".Substring(0, 22));
@@ -33,12 +35,9 @@ public class InvokeBashTacCommandTests : IDisposable
         try { Directory.Delete(_tmpDir, recursive: true); } catch { /* best-effort */ }
     }
 
-    private static string[] RunLines(string script)
+    private string[] RunLines(string script)
     {
-        using var pwsh = PwshTestFixture.Create();
-        pwsh.AddScript("$error.Clear()").Invoke();
-        pwsh.Commands.Clear();
-
+        var pwsh = _fixture.AcquireFresh();
         var result = pwsh.AddScript(script).Invoke();
         pwsh.Commands.Clear();
         return result.Select(o =>
@@ -127,7 +126,7 @@ public class InvokeBashTacCommandTests : IDisposable
     [Fact]
     public void Tac_FileMode_MissingFile_DoesNotThrow_NoOutput()
     {
-        using var pwsh = PwshTestFixture.Create();
+        var pwsh = _fixture.AcquireFresh();
         pwsh.AddScript("$ErrorActionPreference='Continue'").Invoke();
         pwsh.Commands.Clear();
         var missing = Path.Combine(_tmpDir, "does-not-exist.txt").Replace("'", "''");

@@ -28,12 +28,14 @@ namespace PsBash.Cmdlets.Tests;
 /// tests also prove the function-shadowing removal worked and the psm1
 /// Set-Alias 'ls' line still resolves to the cmdlet.
 /// </summary>
-public class InvokeBashLsCommandTests : IDisposable
+public class InvokeBashLsCommandTests : IDisposable, IClassFixture<SharedPwshFixture>
 {
     private readonly string _tmpDir;
+    private readonly SharedPwshFixture _fixture;
 
-    public InvokeBashLsCommandTests()
+    public InvokeBashLsCommandTests(SharedPwshFixture fixture)
     {
+        _fixture = fixture;
         _tmpDir = Path.Combine(
             Path.GetTempPath(), "psbash-1d-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(_tmpDir);
@@ -63,12 +65,9 @@ public class InvokeBashLsCommandTests : IDisposable
     private static string Q(string path) => path.Replace("'", "''");
 
     /// <summary>Runs a script, asserts no error record was generated.</summary>
-    private static System.Collections.ObjectModel.Collection<PSObject> Run(string script)
+    private System.Collections.ObjectModel.Collection<PSObject> Run(string script)
     {
-        using var pwsh = PwshTestFixture.Create();
-        pwsh.AddScript("$error.Clear()").Invoke();
-        pwsh.Commands.Clear();
-
+        var pwsh = _fixture.AcquireFresh();
         var result = pwsh.AddScript(script).Invoke();
         pwsh.Commands.Clear();
 
@@ -82,7 +81,7 @@ public class InvokeBashLsCommandTests : IDisposable
     }
 
     /// <summary>Extracts the BashText payload of each emitted object.</summary>
-    private static string[] RunBashText(string script)
+    private string[] RunBashText(string script)
     {
         return Run(script)
             .Select(o =>
@@ -98,7 +97,7 @@ public class InvokeBashLsCommandTests : IDisposable
     [Fact]
     public void Ls_ResolvesToBinaryCmdlet_NotScriptFunction()
     {
-        using var pwsh = PwshTestFixture.Create();
+        var pwsh = _fixture.AcquireFresh();
         var result = pwsh
             .AddScript("(Get-Command Invoke-BashLs).CommandType.ToString()")
             .Invoke();
@@ -111,7 +110,7 @@ public class InvokeBashLsCommandTests : IDisposable
     [Fact]
     public void LsAlias_StillResolvesToInvokeBashLs()
     {
-        using var pwsh = PwshTestFixture.Create();
+        var pwsh = _fixture.AcquireFresh();
         var result = pwsh
             .AddScript("(Get-Command ls -CommandType Alias).Definition")
             .Invoke();
@@ -322,7 +321,7 @@ public class InvokeBashLsCommandTests : IDisposable
     public void Ls_MissingTarget_SetsExitCode2AndEmitsError()
     {
         var missing = Path.Combine(_tmpDir, "does-not-exist-xyz");
-        using var pwsh = PwshTestFixture.Create();
+        var pwsh = _fixture.AcquireFresh();
 
         pwsh.AddScript(
             $"$global:LASTEXITCODE = 0; " +

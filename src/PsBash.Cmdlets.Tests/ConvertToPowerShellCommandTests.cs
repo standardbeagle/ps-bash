@@ -3,12 +3,19 @@ using Xunit;
 
 namespace PsBash.Cmdlets.Tests;
 
-public class ConvertToPowerShellCommandTests
+public class ConvertToPowerShellCommandTests : IClassFixture<SharedPwshFixture>
 {
+    private readonly SharedPwshFixture _fixture;
+
+    public ConvertToPowerShellCommandTests(SharedPwshFixture fixture)
+    {
+        _fixture = fixture;
+    }
+
     [Fact]
     public void PipelineInput_ReturnsTranspiledString()
     {
-        using var pwsh = PwshTestFixture.Create();
+        var pwsh = _fixture.AcquireFresh();
         var result = pwsh.AddScript("'ls -la | grep .txt' | ConvertTo-PowerShell").Invoke();
         Assert.Single(result);
         Assert.Equal("Invoke-BashLs -la | Invoke-BashGrep .txt", result[0].ToString());
@@ -17,7 +24,7 @@ public class ConvertToPowerShellCommandTests
     [Fact]
     public void WithMap_ReturnsObjectWithPowerShellAndMap()
     {
-        using var pwsh = PwshTestFixture.Create();
+        var pwsh = _fixture.AcquireFresh();
         var result = pwsh.AddScript("ConvertTo-PowerShell 'echo hello' -WithMap").Invoke();
         Assert.Single(result);
         var obj = result[0];

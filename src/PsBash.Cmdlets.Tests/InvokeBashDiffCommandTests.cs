@@ -14,12 +14,14 @@ namespace PsBash.Cmdlets.Tests;
 /// missing-operand error, missing-file error, unicode, CRLF input, alias
 /// resolution, <c>--help</c>, plus a quoting/injection probe per Directive 12.
 /// </summary>
-public class InvokeBashDiffCommandTests : IDisposable
+public class InvokeBashDiffCommandTests : IClassFixture<SharedPwshFixture>, IDisposable
 {
+    private readonly SharedPwshFixture _fixture;
     private readonly string _tmpDir;
 
-    public InvokeBashDiffCommandTests()
+    public InvokeBashDiffCommandTests(SharedPwshFixture fixture)
     {
+        _fixture = fixture;
         _tmpDir = Path.Combine(
             Path.GetTempPath(),
             $"psb-diff-{Guid.NewGuid():N}".Substring(0, 23));
@@ -31,11 +33,9 @@ public class InvokeBashDiffCommandTests : IDisposable
         try { Directory.Delete(_tmpDir, recursive: true); } catch { /* best-effort */ }
     }
 
-    private static string[] RunLines(string script)
+    private string[] RunLines(string script)
     {
-        using var pwsh = PwshTestFixture.Create();
-        pwsh.AddScript("$error.Clear()").Invoke();
-        pwsh.Commands.Clear();
+        var pwsh = _fixture.AcquireFresh();
 
         var result = pwsh.AddScript(script).Invoke();
         pwsh.Commands.Clear();
@@ -46,11 +46,9 @@ public class InvokeBashDiffCommandTests : IDisposable
         }).ToArray();
     }
 
-    private static int RunExitCode(string script)
+    private int RunExitCode(string script)
     {
-        using var pwsh = PwshTestFixture.Create();
-        pwsh.AddScript("$global:LASTEXITCODE = 0").Invoke();
-        pwsh.Commands.Clear();
+        var pwsh = _fixture.AcquireFresh();
         pwsh.AddScript(script + " | Out-Null").Invoke();
         pwsh.Commands.Clear();
         var r = pwsh.AddScript("$global:LASTEXITCODE").Invoke();

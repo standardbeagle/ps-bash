@@ -14,12 +14,14 @@ namespace PsBash.Cmdlets.Tests;
 /// <c>-w 0</c> no-wrap, <c>-w N</c> narrow wrap, <c>-d</c> decode round-trip,
 /// and a quoting/injection probe per Directive 12.
 /// </summary>
-public class InvokeBashBase64CommandTests : IDisposable
+public class InvokeBashBase64CommandTests : IClassFixture<SharedPwshFixture>, IDisposable
 {
+    private readonly SharedPwshFixture _fixture;
     private readonly string _tmpDir;
 
-    public InvokeBashBase64CommandTests()
+    public InvokeBashBase64CommandTests(SharedPwshFixture fixture)
     {
+        _fixture = fixture;
         _tmpDir = Path.Combine(
             Path.GetTempPath(),
             $"psb-b64-{Guid.NewGuid():N}".Substring(0, 22));
@@ -31,12 +33,9 @@ public class InvokeBashBase64CommandTests : IDisposable
         try { Directory.Delete(_tmpDir, recursive: true); } catch { /* best-effort */ }
     }
 
-    private static string[] RunLines(string script)
+    private string[] RunLines(string script)
     {
-        using var pwsh = PwshTestFixture.Create();
-        pwsh.AddScript("$error.Clear()").Invoke();
-        pwsh.Commands.Clear();
-
+        var pwsh = _fixture.AcquireFresh();
         var result = pwsh.AddScript(script).Invoke();
         pwsh.Commands.Clear();
         return result.Select(o =>

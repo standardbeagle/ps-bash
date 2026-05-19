@@ -19,12 +19,14 @@ namespace PsBash.Cmdlets.Tests;
 /// continuation), <c>--help</c>, alias resolution, and a quoting / injection
 /// probe (Directive 12).
 /// </summary>
-public class InvokeBashStringsCommandTests : IDisposable
+public class InvokeBashStringsCommandTests : IDisposable, IClassFixture<SharedPwshFixture>
 {
+    private readonly SharedPwshFixture _fixture;
     private readonly string _tmpDir;
 
-    public InvokeBashStringsCommandTests()
+    public InvokeBashStringsCommandTests(SharedPwshFixture fixture)
     {
+        _fixture = fixture;
         _tmpDir = Path.Combine(
             Path.GetTempPath(),
             $"psb-strings-{Guid.NewGuid():N}".Substring(0, 25));
@@ -36,12 +38,9 @@ public class InvokeBashStringsCommandTests : IDisposable
         try { Directory.Delete(_tmpDir, recursive: true); } catch { /* best-effort */ }
     }
 
-    private static string[] RunLines(string script)
+    private string[] RunLines(string script)
     {
-        using var pwsh = PwshTestFixture.Create();
-        pwsh.AddScript("$error.Clear()").Invoke();
-        pwsh.Commands.Clear();
-
+        var pwsh = _fixture.AcquireFresh();
         var result = pwsh.AddScript(script).Invoke();
         pwsh.Commands.Clear();
         return result.Select(o =>

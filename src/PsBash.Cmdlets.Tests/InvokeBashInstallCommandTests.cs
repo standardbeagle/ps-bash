@@ -15,12 +15,14 @@ namespace PsBash.Cmdlets.Tests;
 /// target-dir, verbose-output format, and a quoting/injection probe
 /// (Directive 12) on the path that touches user-controlled tokens.
 /// </summary>
-public class InvokeBashInstallCommandTests : IDisposable
+public class InvokeBashInstallCommandTests : IDisposable, IClassFixture<SharedPwshFixture>
 {
     private readonly string _tmpRoot;
+    private readonly SharedPwshFixture _fixture;
 
-    public InvokeBashInstallCommandTests()
+    public InvokeBashInstallCommandTests(SharedPwshFixture fixture)
     {
+        _fixture = fixture;
         _tmpRoot = Path.Combine(Path.GetTempPath(), $"psb-inst-{Guid.NewGuid():N}".Substring(0, 22));
         Directory.CreateDirectory(_tmpRoot);
     }
@@ -30,12 +32,9 @@ public class InvokeBashInstallCommandTests : IDisposable
         try { Directory.Delete(_tmpRoot, recursive: true); } catch { /* best-effort */ }
     }
 
-    private static string[] Run(string script)
+    private string[] Run(string script)
     {
-        using var pwsh = PwshTestFixture.Create();
-        pwsh.AddScript("$error.Clear()").Invoke();
-        pwsh.Commands.Clear();
-
+        var pwsh = _fixture.AcquireFresh();
         var result = pwsh.AddScript(script).Invoke();
         pwsh.Commands.Clear();
         return result.Select(o => o?.ToString() ?? "").ToArray();

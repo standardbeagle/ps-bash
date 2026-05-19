@@ -18,12 +18,14 @@ namespace PsBash.Cmdlets.Tests;
 /// <c>--help</c>, alias resolution, and an injection probe per
 /// Directive 12.
 /// </summary>
-public class InvokeBashCutCommandTests : IDisposable
+public class InvokeBashCutCommandTests : IClassFixture<SharedPwshFixture>, IDisposable
 {
+    private readonly SharedPwshFixture _fixture;
     private readonly string _tmpDir;
 
-    public InvokeBashCutCommandTests()
+    public InvokeBashCutCommandTests(SharedPwshFixture fixture)
     {
+        _fixture = fixture;
         _tmpDir = Path.Combine(
             Path.GetTempPath(),
             $"psb-cut-{Guid.NewGuid():N}".Substring(0, 22));
@@ -35,11 +37,9 @@ public class InvokeBashCutCommandTests : IDisposable
         try { Directory.Delete(_tmpDir, recursive: true); } catch { /* best-effort */ }
     }
 
-    private static string[] RunLines(string script)
+    private string[] RunLines(string script)
     {
-        using var pwsh = PwshTestFixture.Create();
-        pwsh.AddScript("$error.Clear()").Invoke();
-        pwsh.Commands.Clear();
+        var pwsh = _fixture.AcquireFresh();
 
         var result = pwsh.AddScript(script).Invoke();
         pwsh.Commands.Clear();

@@ -17,12 +17,14 @@ namespace PsBash.Cmdlets.Tests;
 /// <c>--help</c>, alias resolution, and a Directive-12 injection probe on the
 /// prefix operand.
 /// </summary>
-public class InvokeBashSplitCommandTests : IDisposable
+public class InvokeBashSplitCommandTests : IDisposable, IClassFixture<SharedPwshFixture>
 {
+    private readonly SharedPwshFixture _fixture;
     private readonly string _tmpDir;
 
-    public InvokeBashSplitCommandTests()
+    public InvokeBashSplitCommandTests(SharedPwshFixture fixture)
     {
+        _fixture = fixture;
         _tmpDir = Path.Combine(
             Path.GetTempPath(),
             $"psb-split-{Guid.NewGuid():N}".Substring(0, 23));
@@ -36,9 +38,7 @@ public class InvokeBashSplitCommandTests : IDisposable
 
     private string[] RunInDir(string script)
     {
-        using var pwsh = PwshTestFixture.Create();
-        pwsh.AddScript("$error.Clear()").Invoke();
-        pwsh.Commands.Clear();
+        var pwsh = _fixture.AcquireFresh();
         var wrapped = $"Set-Location -LiteralPath '{Esc(_tmpDir)}'; {script}";
         var result = pwsh.AddScript(wrapped).Invoke();
         pwsh.Commands.Clear();

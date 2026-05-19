@@ -20,12 +20,14 @@ namespace PsBash.Cmdlets.Tests;
 ///   (test: FormatString_Injection_PreservedAsLiteral).
 /// Negative cases (Directive 7): MissingOperand, MissingFile, both verified.
 /// </summary>
-public class InvokeBashStatCommandTests : IDisposable
+public class InvokeBashStatCommandTests : IDisposable, IClassFixture<SharedPwshFixture>
 {
+    private readonly SharedPwshFixture _fixture;
     private readonly string _tmpDir;
 
-    public InvokeBashStatCommandTests()
+    public InvokeBashStatCommandTests(SharedPwshFixture fixture)
     {
+        _fixture = fixture;
         _tmpDir = Path.Combine(
             Path.GetTempPath(), "psbash-stat-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(_tmpDir);
@@ -46,19 +48,17 @@ public class InvokeBashStatCommandTests : IDisposable
         return path;
     }
 
-    private static System.Collections.ObjectModel.Collection<PSObject> Run(string script)
+    private System.Collections.ObjectModel.Collection<PSObject> Run(string script)
     {
-        using var pwsh = PwshTestFixture.Create();
-        pwsh.AddScript("$error.Clear()").Invoke();
-        pwsh.Commands.Clear();
+        var pwsh = _fixture.AcquireFresh();
         var result = pwsh.AddScript(script).Invoke();
         pwsh.Commands.Clear();
         return result;
     }
 
-    private static System.Collections.ObjectModel.Collection<PSObject> RunAllowError(string script)
+    private System.Collections.ObjectModel.Collection<PSObject> RunAllowError(string script)
     {
-        using var pwsh = PwshTestFixture.Create();
+        var pwsh = _fixture.AcquireFresh();
         var result = pwsh.AddScript(script).Invoke();
         pwsh.Commands.Clear();
         return result;

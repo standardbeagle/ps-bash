@@ -16,12 +16,14 @@ namespace PsBash.Cmdlets.Tests;
 /// <c>-c</c> stdout, <c>-k</c> keep, <c>-l</c> list, <c>-9</c> and <c>-1</c>
 /// level selection, and a quoting/injection probe per Directive 12.
 /// </summary>
-public class InvokeBashGzipCommandTests : IDisposable
+public class InvokeBashGzipCommandTests : IDisposable, IClassFixture<SharedPwshFixture>
 {
     private readonly string _tmpDir;
+    private readonly SharedPwshFixture _fixture;
 
-    public InvokeBashGzipCommandTests()
+    public InvokeBashGzipCommandTests(SharedPwshFixture fixture)
     {
+        _fixture = fixture;
         _tmpDir = Path.Combine(
             Path.GetTempPath(),
             $"psb-gz-{Guid.NewGuid():N}".Substring(0, 22));
@@ -33,11 +35,9 @@ public class InvokeBashGzipCommandTests : IDisposable
         try { Directory.Delete(_tmpDir, recursive: true); } catch { /* best-effort */ }
     }
 
-    private static string[] RunLines(string script)
+    private string[] RunLines(string script)
     {
-        using var pwsh = PwshTestFixture.Create();
-        pwsh.AddScript("$error.Clear()").Invoke();
-        pwsh.Commands.Clear();
+        var pwsh = _fixture.AcquireFresh();
         var result = pwsh.AddScript(script).Invoke();
         pwsh.Commands.Clear();
         return result.Select(o =>
@@ -47,11 +47,9 @@ public class InvokeBashGzipCommandTests : IDisposable
         }).ToArray();
     }
 
-    private static System.Collections.ObjectModel.Collection<System.Management.Automation.PSObject> RunObjects(string script)
+    private System.Collections.ObjectModel.Collection<System.Management.Automation.PSObject> RunObjects(string script)
     {
-        using var pwsh = PwshTestFixture.Create();
-        pwsh.AddScript("$error.Clear()").Invoke();
-        pwsh.Commands.Clear();
+        var pwsh = _fixture.AcquireFresh();
         var result = pwsh.AddScript(script).Invoke();
         pwsh.Commands.Clear();
         return result;
@@ -235,7 +233,7 @@ public class InvokeBashGzipCommandTests : IDisposable
     [Fact]
     public void Gzip_MissingFile_EmitsErrorContinues_NoOutput()
     {
-        using var pwsh = PwshTestFixture.Create();
+        var pwsh = _fixture.AcquireFresh();
         pwsh.AddScript("$ErrorActionPreference='Continue'").Invoke();
         pwsh.Commands.Clear();
         string missing = Path.Combine(_tmpDir, "no-such.txt").Replace("'", "''");
@@ -252,7 +250,7 @@ public class InvokeBashGzipCommandTests : IDisposable
         // it through SessionState.Path -> File.Exists -> no-such-file branch
         // (which writes to the error stream, suppressed via 2>$null) without
         // ever re-parsing the operand as PowerShell. The throw never fires.
-        using var pwsh = PwshTestFixture.Create();
+        var pwsh = _fixture.AcquireFresh();
         pwsh.AddScript("$ErrorActionPreference='Continue'").Invoke();
         pwsh.Commands.Clear();
         string probe = "$(throw 'pwn').gz";

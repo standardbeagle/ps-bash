@@ -12,13 +12,18 @@ namespace PsBash.Cmdlets.Tests;
 /// <c>-r</c> reference file, missing-reference error, alias resolution,
 /// <c>--help</c>, and the Directive-12 injection probe.
 /// </summary>
-public class InvokeBashDateCommandTests
+public class InvokeBashDateCommandTests : IClassFixture<SharedPwshFixture>
 {
-    private static string[] RunLines(string script)
+    private readonly SharedPwshFixture _fixture;
+
+    public InvokeBashDateCommandTests(SharedPwshFixture fixture)
     {
-        using var pwsh = PwshTestFixture.Create();
-        pwsh.AddScript("$error.Clear()").Invoke();
-        pwsh.Commands.Clear();
+        _fixture = fixture;
+    }
+
+    private string[] RunLines(string script)
+    {
+        var pwsh = _fixture.AcquireFresh();
 
         var result = pwsh.AddScript(script).Invoke();
         pwsh.Commands.Clear();
@@ -29,7 +34,7 @@ public class InvokeBashDateCommandTests
     [Fact]
     public void Date_NoArgs_EmitsTypedOutput()
     {
-        using var pwsh = PwshTestFixture.Create();
+        var pwsh = _fixture.AcquireFresh();
         var result = pwsh.AddScript("(Invoke-BashDate).PSTypeNames -join ','").Invoke();
         Assert.Single(result);
         var types = result[0]?.ToString() ?? "";

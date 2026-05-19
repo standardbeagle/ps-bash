@@ -17,12 +17,14 @@ namespace PsBash.Cmdlets.Tests;
 /// target (axis 14), alias, <c>--help</c>, and an injection probe per
 /// Directive 12.
 /// </summary>
-public class InvokeBashGrepCommandTests : IDisposable
+public class InvokeBashGrepCommandTests : IDisposable, IClassFixture<SharedPwshFixture>
 {
     private readonly string _tmpDir;
+    private readonly SharedPwshFixture _fixture;
 
-    public InvokeBashGrepCommandTests()
+    public InvokeBashGrepCommandTests(SharedPwshFixture fixture)
     {
+        _fixture = fixture;
         _tmpDir = Path.Combine(
             Path.GetTempPath(),
             $"psb-grep-{Guid.NewGuid():N}".Substring(0, 22));
@@ -34,12 +36,9 @@ public class InvokeBashGrepCommandTests : IDisposable
         try { Directory.Delete(_tmpDir, recursive: true); } catch { /* best-effort */ }
     }
 
-    private static string[] RunLines(string script)
+    private string[] RunLines(string script)
     {
-        using var pwsh = PwshTestFixture.Create();
-        pwsh.AddScript("$error.Clear()").Invoke();
-        pwsh.Commands.Clear();
-
+        var pwsh = _fixture.AcquireFresh();
         var result = pwsh.AddScript(script).Invoke();
         pwsh.Commands.Clear();
         return result.Select(o =>
@@ -238,7 +237,7 @@ public class InvokeBashGrepCommandTests : IDisposable
     [Fact]
     public void Grep_FileMode_MissingFile_EmitsError_NoOutput()
     {
-        using var pwsh = PwshTestFixture.Create();
+        var pwsh = _fixture.AcquireFresh();
         pwsh.AddScript("$ErrorActionPreference='Continue'").Invoke();
         pwsh.Commands.Clear();
         var missing = Q(Path.Combine(_tmpDir, "nope.txt"));

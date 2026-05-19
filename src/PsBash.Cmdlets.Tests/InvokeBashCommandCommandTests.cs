@@ -17,22 +17,22 @@ namespace PsBash.Cmdlets.Tests;
 /// quoting / injection (axis 12). Streaming / signal axes do not apply —
 /// command is in-process metadata lookup, no pipeline.
 /// </summary>
-public class InvokeBashCommandCommandTests
+public class InvokeBashCommandCommandTests : IClassFixture<SharedPwshFixture>
 {
-    private static System.Collections.ObjectModel.Collection<System.Management.Automation.PSObject> RunRaw(string script)
-    {
-        using var pwsh = PwshTestFixture.Create();
-        pwsh.AddScript("Set-BashErrorMode -Mode PowerShell").Invoke();
-        pwsh.Commands.Clear();
-        pwsh.AddScript("$error.Clear()").Invoke();
-        pwsh.Commands.Clear();
-        pwsh.AddScript("$global:LASTEXITCODE = 0").Invoke();
-        pwsh.Commands.Clear();
+    private readonly SharedPwshFixture _fixture;
 
+    public InvokeBashCommandCommandTests(SharedPwshFixture fixture)
+    {
+        _fixture = fixture;
+    }
+
+    private System.Collections.ObjectModel.Collection<System.Management.Automation.PSObject> RunRaw(string script)
+    {
+        var pwsh = _fixture.AcquireFresh();
         return pwsh.AddScript(script).Invoke();
     }
 
-    private static string[] RunLines(string script)
+    private string[] RunLines(string script)
     {
         return RunRaw(script)
             .Select(o =>
@@ -44,21 +44,9 @@ public class InvokeBashCommandCommandTests
             .ToArray();
     }
 
-    private static int GetLastExitCode()
+    private (string[] lines, int exitCode) RunAndCaptureExit(string script)
     {
-        using var pwsh = PwshTestFixture.Create();
-        var result = pwsh.AddScript("$global:LASTEXITCODE").Invoke();
-        if (result.Count == 0 || result[0]?.BaseObject is not int code) return 0;
-        return code;
-    }
-
-    private static (string[] lines, int exitCode) RunAndCaptureExit(string script)
-    {
-        using var pwsh = PwshTestFixture.Create();
-        pwsh.AddScript("Set-BashErrorMode -Mode PowerShell").Invoke();
-        pwsh.Commands.Clear();
-        pwsh.AddScript("$global:LASTEXITCODE = 0").Invoke();
-        pwsh.Commands.Clear();
+        var pwsh = _fixture.AcquireFresh();
 
         var results = pwsh.AddScript(script).Invoke();
         pwsh.Commands.Clear();

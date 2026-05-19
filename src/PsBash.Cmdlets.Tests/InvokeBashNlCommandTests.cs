@@ -14,12 +14,14 @@ namespace PsBash.Cmdlets.Tests;
 /// CRLF, file mode, pipeline mode, missing file, alias resolution,
 /// <c>--help</c>, and an injection probe per Directive 12.
 /// </summary>
-public class InvokeBashNlCommandTests : IDisposable
+public class InvokeBashNlCommandTests : IDisposable, IClassFixture<SharedPwshFixture>
 {
     private readonly string _tmpDir;
+    private readonly SharedPwshFixture _fixture;
 
-    public InvokeBashNlCommandTests()
+    public InvokeBashNlCommandTests(SharedPwshFixture fixture)
     {
+        _fixture = fixture;
         _tmpDir = Path.Combine(
             Path.GetTempPath(),
             $"psb-nl-{Guid.NewGuid():N}".Substring(0, 22));
@@ -31,12 +33,9 @@ public class InvokeBashNlCommandTests : IDisposable
         try { Directory.Delete(_tmpDir, recursive: true); } catch { /* best-effort */ }
     }
 
-    private static string[] RunLines(string script)
+    private string[] RunLines(string script)
     {
-        using var pwsh = PwshTestFixture.Create();
-        pwsh.AddScript("$error.Clear()").Invoke();
-        pwsh.Commands.Clear();
-
+        var pwsh = _fixture.AcquireFresh();
         var result = pwsh.AddScript(script).Invoke();
         pwsh.Commands.Clear();
         return result.Select(o =>
@@ -146,7 +145,7 @@ public class InvokeBashNlCommandTests : IDisposable
     [Fact]
     public void Nl_FileMode_MissingFile_DoesNotThrow_NoOutput()
     {
-        using var pwsh = PwshTestFixture.Create();
+        var pwsh = _fixture.AcquireFresh();
         pwsh.AddScript("$ErrorActionPreference='Continue'").Invoke();
         pwsh.Commands.Clear();
         var missing = Path.Combine(_tmpDir, "does-not-exist.txt").Replace("'", "''");

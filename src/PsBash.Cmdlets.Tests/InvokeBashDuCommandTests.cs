@@ -16,12 +16,14 @@ namespace PsBash.Cmdlets.Tests;
 /// <c>-c</c> grand-total, <c>-d N</c> depth limit, multi-operand, alias,
 /// <c>--help</c>, and a Directive-12 injection probe on the operand.
 /// </summary>
-public class InvokeBashDuCommandTests : IDisposable
+public class InvokeBashDuCommandTests : IClassFixture<SharedPwshFixture>, IDisposable
 {
+    private readonly SharedPwshFixture _fixture;
     private readonly string _tmpDir;
 
-    public InvokeBashDuCommandTests()
+    public InvokeBashDuCommandTests(SharedPwshFixture fixture)
     {
+        _fixture = fixture;
         _tmpDir = Path.Combine(
             Path.GetTempPath(),
             $"psb-du-{Guid.NewGuid():N}".Substring(0, 20));
@@ -35,9 +37,7 @@ public class InvokeBashDuCommandTests : IDisposable
 
     private System.Management.Automation.PSObject[] Run(string script)
     {
-        using var pwsh = PwshTestFixture.Create();
-        pwsh.AddScript("$error.Clear()").Invoke();
-        pwsh.Commands.Clear();
+        var pwsh = _fixture.AcquireFresh();
         var wrapped = $"Set-Location -LiteralPath '{Esc(_tmpDir)}'; {script}";
         var result = pwsh.AddScript(wrapped).Invoke();
         pwsh.Commands.Clear();

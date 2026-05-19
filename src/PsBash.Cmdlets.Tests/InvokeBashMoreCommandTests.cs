@@ -16,13 +16,18 @@ namespace PsBash.Cmdlets.Tests;
 /// pipeline mode passthrough, missing-file error continuation, alias
 /// resolution. Directive 12: injection probe on the file operand.
 /// </summary>
-public class InvokeBashMoreCommandTests
+public class InvokeBashMoreCommandTests : IClassFixture<SharedPwshFixture>
 {
-    private static string[] RunLines(string script)
+    private readonly SharedPwshFixture _fixture;
+
+    public InvokeBashMoreCommandTests(SharedPwshFixture fixture)
     {
-        using var pwsh = PwshTestFixture.Create();
-        pwsh.AddScript("$error.Clear()").Invoke();
-        pwsh.Commands.Clear();
+        _fixture = fixture;
+    }
+
+    private string[] RunLines(string script)
+    {
+        var pwsh = _fixture.AcquireFresh();
         var result = pwsh.AddScript(script).Invoke();
         pwsh.Commands.Clear();
         return result.Select(o => o?.ToString() ?? "").ToArray();

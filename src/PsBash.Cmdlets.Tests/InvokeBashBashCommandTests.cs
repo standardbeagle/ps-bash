@@ -24,13 +24,18 @@ namespace PsBash.Cmdlets.Tests;
 /// in PATH or alongside the test runtime (a CI environment that ships only
 /// the cmdlet bits and no ps-bash native binary).
 /// </summary>
-public class InvokeBashBashCommandTests
+public class InvokeBashBashCommandTests : IClassFixture<SharedPwshFixture>
 {
-    private static (string[] stdout, string? errorMessage, int? lastExitCode) Run(string script)
+    private readonly SharedPwshFixture _fixture;
+
+    public InvokeBashBashCommandTests(SharedPwshFixture fixture)
     {
-        using var pwsh = PwshTestFixture.Create();
-        pwsh.AddScript("$error.Clear(); $global:LASTEXITCODE = $null").Invoke();
-        pwsh.Commands.Clear();
+        _fixture = fixture;
+    }
+
+    private (string[] stdout, string? errorMessage, int? lastExitCode) Run(string script)
+    {
+        var pwsh = _fixture.AcquireFresh();
 
         var result = pwsh.AddScript(script).Invoke();
         pwsh.Commands.Clear();

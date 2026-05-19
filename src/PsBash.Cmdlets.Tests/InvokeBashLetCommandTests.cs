@@ -11,13 +11,18 @@ namespace PsBash.Cmdlets.Tests;
 /// security surface is strictly tighter than the oracle's. Exit code
 /// 0 / 1 contract is preserved byte-for-byte.
 /// </summary>
-public class InvokeBashLetCommandTests
+public class InvokeBashLetCommandTests : IClassFixture<SharedPwshFixture>
 {
-    private static long? RunAndReadIntVar(string script, string varName)
+    private readonly SharedPwshFixture _fixture;
+
+    public InvokeBashLetCommandTests(SharedPwshFixture fixture)
     {
-        using var pwsh = PwshTestFixture.Create();
-        pwsh.AddScript("$error.Clear()").Invoke();
-        pwsh.Commands.Clear();
+        _fixture = fixture;
+    }
+
+    private long? RunAndReadIntVar(string script, string varName)
+    {
+        var pwsh = _fixture.AcquireFresh();
         pwsh.AddScript(script).Invoke();
         pwsh.Commands.Clear();
         var result = pwsh.AddScript(
@@ -28,10 +33,10 @@ public class InvokeBashLetCommandTests
         return Convert.ToInt64(first.BaseObject);
     }
 
-    private static int RunAndReadLastExitCode(string script)
+    private int RunAndReadLastExitCode(string script)
     {
-        using var pwsh = PwshTestFixture.Create();
-        pwsh.AddScript("$error.Clear(); $global:LASTEXITCODE = 0").Invoke();
+        var pwsh = _fixture.AcquireFresh();
+        pwsh.AddScript("$global:LASTEXITCODE = 0").Invoke();
         pwsh.Commands.Clear();
         pwsh.AddScript(script).Invoke();
         pwsh.Commands.Clear();
@@ -41,9 +46,9 @@ public class InvokeBashLetCommandTests
         return Convert.ToInt32(first.BaseObject);
     }
 
-    private static string[] RunLines(string script)
+    private string[] RunLines(string script)
     {
-        using var pwsh = PwshTestFixture.Create();
+        var pwsh = _fixture.AcquireFresh();
         var result = pwsh.AddScript(script).Invoke();
         return result.Select(o => o?.ToString() ?? "").ToArray();
     }

@@ -23,19 +23,24 @@ namespace PsBash.Cmdlets.Tests;
 /// resolution, and Directive 12 injection (<c>;</c>-bearing operand stays a
 /// literal string).
 /// </summary>
-public class InvokeBashExprCommandTests
+public class InvokeBashExprCommandTests : IClassFixture<SharedPwshFixture>
 {
-    private static Collection<PSObject> RunRaw(string script)
+    private readonly SharedPwshFixture _fixture;
+
+    public InvokeBashExprCommandTests(SharedPwshFixture fixture)
     {
-        using var pwsh = PwshTestFixture.Create();
-        pwsh.AddScript("$error.Clear()").Invoke();
-        pwsh.Commands.Clear();
+        _fixture = fixture;
+    }
+
+    private Collection<PSObject> RunRaw(string script)
+    {
+        var pwsh = _fixture.AcquireFresh();
         var result = pwsh.AddScript(script).Invoke();
         pwsh.Commands.Clear();
         return result;
     }
 
-    private static string RunBashText(string script)
+    private string RunBashText(string script)
     {
         var r = RunRaw(script);
         Assert.NotEmpty(r);
@@ -196,8 +201,8 @@ public class InvokeBashExprCommandTests
     [Fact]
     public void Expr_NoArgs_SetsLastExitCodeTwo()
     {
-        using var pwsh = PwshTestFixture.Create();
-        pwsh.AddScript("$error.Clear(); $global:LASTEXITCODE = 0").Invoke();
+        var pwsh = _fixture.AcquireFresh();
+        pwsh.AddScript("$global:LASTEXITCODE = 0").Invoke();
         pwsh.Commands.Clear();
         pwsh.AddScript("Invoke-BashExpr 2>$null").Invoke();
         pwsh.Commands.Clear();
@@ -208,8 +213,8 @@ public class InvokeBashExprCommandTests
     [Fact]
     public void Expr_DivisionByZero_SetsLastExitCodeTwoAndNoOutput()
     {
-        using var pwsh = PwshTestFixture.Create();
-        pwsh.AddScript("$error.Clear(); $global:LASTEXITCODE = 0").Invoke();
+        var pwsh = _fixture.AcquireFresh();
+        pwsh.AddScript("$global:LASTEXITCODE = 0").Invoke();
         pwsh.Commands.Clear();
         var r = pwsh.AddScript("Invoke-BashExpr 5 / 0 2>$null").Invoke();
         pwsh.Commands.Clear();
@@ -221,8 +226,8 @@ public class InvokeBashExprCommandTests
     [Fact]
     public void Expr_UnknownOperator_SetsLastExitCodeTwo()
     {
-        using var pwsh = PwshTestFixture.Create();
-        pwsh.AddScript("$error.Clear(); $global:LASTEXITCODE = 0").Invoke();
+        var pwsh = _fixture.AcquireFresh();
+        pwsh.AddScript("$global:LASTEXITCODE = 0").Invoke();
         pwsh.Commands.Clear();
         var r = pwsh.AddScript("Invoke-BashExpr 2 '@' 3 2>$null").Invoke();
         pwsh.Commands.Clear();

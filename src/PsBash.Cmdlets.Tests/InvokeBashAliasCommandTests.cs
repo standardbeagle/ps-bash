@@ -16,23 +16,26 @@ namespace PsBash.Cmdlets.Tests;
 /// scriptblock chars), alias resolution. Streaming / file-content / signal
 /// axes do not apply: alias is in-process state, no I/O.
 /// </summary>
-public class InvokeBashAliasCommandTests
+public class InvokeBashAliasCommandTests : IClassFixture<SharedPwshFixture>
 {
-    private static System.Collections.ObjectModel.Collection<System.Management.Automation.PSObject> RunRaw(string script)
+    private readonly SharedPwshFixture _fixture;
+
+    public InvokeBashAliasCommandTests(SharedPwshFixture fixture)
     {
-        using var pwsh = PwshTestFixture.Create();
+        _fixture = fixture;
+    }
+
+    private System.Collections.ObjectModel.Collection<System.Management.Automation.PSObject> RunRaw(string script)
+    {
+        var pwsh = _fixture.AcquireFresh();
         // Reset alias state so tests don't leak. The psm1-owned dictionary is
         // the only state; clear it via the unalias -u -a path.
         pwsh.AddScript("Invoke-BashAlias -u -a").Invoke();
         pwsh.Commands.Clear();
-        pwsh.AddScript("Set-BashErrorMode -Mode PowerShell").Invoke();
-        pwsh.Commands.Clear();
-        pwsh.AddScript("$error.Clear()").Invoke();
-        pwsh.Commands.Clear();
         return pwsh.AddScript(script).Invoke();
     }
 
-    private static string[] RunLines(string script)
+    private string[] RunLines(string script)
     {
         return RunRaw(script).Select(o => o?.ToString() ?? "").ToArray();
     }

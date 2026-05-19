@@ -17,12 +17,14 @@ namespace PsBash.Cmdlets.Tests;
 /// mode, multi-line pipeline split, <c>--help</c>, alias resolution, and a
 /// Directive-12 injection probe.
 /// </summary>
-public class InvokeBashFoldCommandTests : IDisposable
+public class InvokeBashFoldCommandTests : IDisposable, IClassFixture<SharedPwshFixture>
 {
     private readonly string _tmpDir;
+    private readonly SharedPwshFixture _fixture;
 
-    public InvokeBashFoldCommandTests()
+    public InvokeBashFoldCommandTests(SharedPwshFixture fixture)
     {
+        _fixture = fixture;
         _tmpDir = Path.Combine(
             Path.GetTempPath(),
             $"psb-fold-{Guid.NewGuid():N}".Substring(0, 23));
@@ -34,12 +36,9 @@ public class InvokeBashFoldCommandTests : IDisposable
         try { Directory.Delete(_tmpDir, recursive: true); } catch { /* best-effort */ }
     }
 
-    private static string[] RunLines(string script)
+    private string[] RunLines(string script)
     {
-        using var pwsh = PwshTestFixture.Create();
-        pwsh.AddScript("$error.Clear()").Invoke();
-        pwsh.Commands.Clear();
-
+        var pwsh = _fixture.AcquireFresh();
         var result = pwsh.AddScript(script).Invoke();
         pwsh.Commands.Clear();
         return result.Select(o =>
@@ -141,7 +140,7 @@ public class InvokeBashFoldCommandTests : IDisposable
     [Fact]
     public void Fold_FileMode_MissingFile_DoesNotThrow_NoOutput()
     {
-        using var pwsh = PwshTestFixture.Create();
+        var pwsh = _fixture.AcquireFresh();
         pwsh.AddScript("$ErrorActionPreference='Continue'").Invoke();
         pwsh.Commands.Clear();
         var missing = Path.Combine(_tmpDir, "does-not-exist.txt")

@@ -2,12 +2,19 @@ using Xunit;
 
 namespace PsBash.Cmdlets.Tests;
 
-public class InvokeBashEvalCommandTests
+public class InvokeBashEvalCommandTests : IClassFixture<SharedPwshFixture>
 {
+    private readonly SharedPwshFixture _fixture;
+
+    public InvokeBashEvalCommandTests(SharedPwshFixture fixture)
+    {
+        _fixture = fixture;
+    }
+
     [Fact]
     public void EchoVar_WithPassThru_ReturnsOutput()
     {
-        using var pwsh = PwshTestFixture.Create();
+        var pwsh = _fixture.AcquireFresh();
         var result = pwsh.AddScript("Invoke-BashEval 'x=5; echo $x' -PassThru").Invoke();
         Assert.NotEmpty(result);
         Assert.Equal("5", result[0].ToString().TrimEnd('\r', '\n'));
@@ -16,7 +23,7 @@ public class InvokeBashEvalCommandTests
     [Fact]
     public void EchoVar_WithoutPassThru_DiscardsOutput()
     {
-        using var pwsh = PwshTestFixture.Create();
+        var pwsh = _fixture.AcquireFresh();
         var result = pwsh.AddScript("Invoke-BashEval 'x=5; echo $x'").Invoke();
         Assert.Empty(result);
     }
@@ -24,7 +31,7 @@ public class InvokeBashEvalCommandTests
     [Fact]
     public void ExportVar_SetsEnvVarInCallerScope()
     {
-        using var pwsh = PwshTestFixture.Create();
+        var pwsh = _fixture.AcquireFresh();
         var prior = Environment.GetEnvironmentVariable("PSBASH_EVAL_TEST_FOO");
         try
         {
@@ -44,9 +51,7 @@ public class InvokeBashEvalCommandTests
     [Fact]
     public void Cd_ExecutesWithoutError()
     {
-        using var pwsh = PwshTestFixture.Create();
-        pwsh.AddScript("$error.Clear()").Invoke();
-        pwsh.Commands.Clear();
+        var pwsh = _fixture.AcquireFresh();
         // cd is passed through as-is by the transpiler; verify it executes cleanly
         // (actual location change requires Set-Location cmdlet which is not loaded
         // in the minimal runspace used for these unit tests).
@@ -57,7 +62,7 @@ public class InvokeBashEvalCommandTests
     [Fact]
     public void FunctionDef_DefinesFunctionInCallerScope()
     {
-        using var pwsh = PwshTestFixture.Create();
+        var pwsh = _fixture.AcquireFresh();
         var result = pwsh.AddScript(
             "Invoke-BashEval 'greet() { echo hi; }'; greet")
             .Invoke();
@@ -68,7 +73,7 @@ public class InvokeBashEvalCommandTests
     [Fact]
     public void NoLocalScope_IsolatesFunctionScope()
     {
-        using var pwsh = PwshTestFixture.Create();
+        var pwsh = _fixture.AcquireFresh();
         var result = pwsh.AddScript(
             "Invoke-BashEval 'function psbash_isolated_func { 42 }' -NoLocalScope; " +
             "Get-Command psbash_isolated_func -ErrorAction SilentlyContinue")
@@ -79,7 +84,7 @@ public class InvokeBashEvalCommandTests
     [Fact]
     public void PipelineInput_EvaluatesEachRecord()
     {
-        using var pwsh = PwshTestFixture.Create();
+        var pwsh = _fixture.AcquireFresh();
         var result = pwsh.AddScript(
             "@('echo a', 'echo b') | Invoke-BashEval -PassThru")
             .Invoke();
@@ -91,7 +96,7 @@ public class InvokeBashEvalCommandTests
     [Fact]
     public void ParseError_ThrowsTranspileFailedWithBashLine1()
     {
-        using var pwsh = PwshTestFixture.Create();
+        var pwsh = _fixture.AcquireFresh();
         var result = pwsh.AddScript(@"
             try {
                 Invoke-BashEval 'if [ ] then'
@@ -108,7 +113,7 @@ public class InvokeBashEvalCommandTests
     [Fact]
     public void RuntimeError_ThrowsRuntimeFailedWithBashLine2()
     {
-        using var pwsh = PwshTestFixture.Create();
+        var pwsh = _fixture.AcquireFresh();
         var result = pwsh.AddScript(@"
             try {
                 Invoke-BashEval 'echo ok
@@ -126,7 +131,7 @@ nonexistent'
     [Fact]
     public void TryCatch_ParseException_IsCATCHABLE()
     {
-        using var pwsh = PwshTestFixture.Create();
+        var pwsh = _fixture.AcquireFresh();
         var result = pwsh.AddScript(@"
             try {
                 Invoke-BashEval 'if [ ] then'
@@ -141,7 +146,7 @@ nonexistent'
     [Fact]
     public void False_SetsLastExitCodeToOne()
     {
-        using var pwsh = PwshTestFixture.Create();
+        var pwsh = _fixture.AcquireFresh();
         var result = pwsh.AddScript("Invoke-BashEval 'false'; $LASTEXITCODE").Invoke();
         Assert.Single(result);
         Assert.Equal("1", result[0].ToString());
@@ -150,7 +155,7 @@ nonexistent'
     [Fact]
     public void False_AndEcho_DoesNotOutput()
     {
-        using var pwsh = PwshTestFixture.Create();
+        var pwsh = _fixture.AcquireFresh();
         var result = pwsh.AddScript("Invoke-BashEval 'false && echo yes' -PassThru").Invoke();
         Assert.Empty(result);
     }
@@ -158,7 +163,7 @@ nonexistent'
     [Fact]
     public void SetE_False_ThrowsErrexitAndUnreachableNotPrinted()
     {
-        using var pwsh = PwshTestFixture.Create();
+        var pwsh = _fixture.AcquireFresh();
         var result = pwsh.AddScript(@"
             $output = @()
             $errorId = ''
@@ -182,7 +187,7 @@ nonexistent'
     [Fact]
     public void TrapExit_RunsOnCompletion()
     {
-        using var pwsh = PwshTestFixture.Create();
+        var pwsh = _fixture.AcquireFresh();
         var result = pwsh.AddScript(
             "Invoke-BashEval 'trap ''Invoke-BashEcho EXIT'' EXIT; echo body' -PassThru")
             .Invoke();
@@ -198,7 +203,7 @@ nonexistent'
         // effect via a $global variable instead of capturing pipeline output —
         // pipeline output emitted from inside a finally-block trap doesn't always
         // reach the caller's PassThru collection in the in-process SDK runspace.
-        using var pwsh = PwshTestFixture.Create();
+        var pwsh = _fixture.AcquireFresh();
         var result = pwsh.AddScript(@"
             $global:errFired = $false
             Invoke-BashEval 'trap ''$global:errFired=$true'' ERR; false'
@@ -213,7 +218,7 @@ nonexistent'
     {
         // bash: echo always exits 0 — Invoke-BashEcho sets $global:LASTEXITCODE = 0.
         // Invoke-BashEval therefore propagates exitCode = 0 to the caller.
-        using var pwsh = PwshTestFixture.Create();
+        var pwsh = _fixture.AcquireFresh();
         var result = pwsh.AddScript(@"
             $LASTEXITCODE = 42
             Invoke-BashEval 'echo hello'
@@ -229,7 +234,7 @@ nonexistent'
         // bash: `set -e; echo hi` exits 0 because echo succeeds.
         // Invoke-BashEcho sets $global:LASTEXITCODE = 0; errexit never fires.
         // The caller's LASTEXITCODE is updated to 0 (the script's exit code).
-        using var pwsh = PwshTestFixture.Create();
+        var pwsh = _fixture.AcquireFresh();
         var result = pwsh.AddScript(@"
             $LASTEXITCODE = 1
             $errorId = ''
@@ -251,7 +256,7 @@ nonexistent'
     [Fact]
     public void TrapErr_DoesNotFireOnStaleLastExitCode()
     {
-        using var pwsh = PwshTestFixture.Create();
+        var pwsh = _fixture.AcquireFresh();
         var result = pwsh.AddScript(@"
             $LASTEXITCODE = 7
             Invoke-BashEval 'trap ''Invoke-BashEcho TRAPPED'' ERR; echo ok' -PassThru
@@ -263,7 +268,7 @@ nonexistent'
     [Fact]
     public void TrapErrAndExit_SetE_False_BothFire()
     {
-        using var pwsh = PwshTestFixture.Create();
+        var pwsh = _fixture.AcquireFresh();
         var result = pwsh.AddScript(@"
             $global:errFired = $false
             $global:exitFired = $false
@@ -295,7 +300,7 @@ nonexistent'
         // The emitter renders `eval echo hello` as `Invoke-BashEval echo hello`,
         // passing two separate positional args. The cmdlet must join them so that
         // the transpiled source is "echo hello" not two separate statements.
-        using var pwsh = PwshTestFixture.Create();
+        var pwsh = _fixture.AcquireFresh();
         var result = pwsh.AddScript("Invoke-BashEval 'echo' 'hello' -PassThru").Invoke();
         Assert.Single(result);
         Assert.Equal("hello", result[0].ToString().TrimEnd('\r', '\n'));
@@ -307,7 +312,7 @@ nonexistent'
         // The nesting-depth guard must fire at depth 6 (0-based: depths 0..4 succeed,
         // depth 5 is the limit, so depth >= 5 is rejected).
         // We test by manually pre-setting __BashEvalDepth to 5 and calling eval once.
-        using var pwsh = PwshTestFixture.Create();
+        var pwsh = _fixture.AcquireFresh();
         var result = pwsh.AddScript(@"
             $global:__BashEvalDepth = 5
             try {
@@ -328,7 +333,7 @@ nonexistent'
         // After eval returns normally, __BashEvalDepth must be restored to its
         // pre-eval value (not left incremented) so subsequent evals at the same
         // call site do not accumulate and falsely trigger the depth limit.
-        using var pwsh = PwshTestFixture.Create();
+        var pwsh = _fixture.AcquireFresh();
         var result = pwsh.AddScript(@"
             Remove-Variable -Name __BashEvalDepth -Scope Global -ErrorAction SilentlyContinue
             Invoke-BashEval 'echo ok1'

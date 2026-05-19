@@ -6,8 +6,15 @@ namespace PsBash.Cmdlets.Tests;
 /// Behavioral-parity tests for the REFACTOR-2 dir-stack-batch migration of
 /// Invoke-BashDirs from PsBash.psm1 to a binary cmdlet.
 /// </summary>
-public class InvokeBashDirsCommandTests
+public class InvokeBashDirsCommandTests : IClassFixture<SharedPwshFixture>
 {
+    private readonly SharedPwshFixture _fixture;
+
+    public InvokeBashDirsCommandTests(SharedPwshFixture fixture)
+    {
+        _fixture = fixture;
+    }
+
     private static System.Collections.ObjectModel.Collection<System.Management.Automation.PSObject> RunRaw(
         System.Management.Automation.PowerShell pwsh, string script)
     {
@@ -20,12 +27,9 @@ public class InvokeBashDirsCommandTests
         return RunRaw(pwsh, script).Select(o => o?.ToString() ?? "").ToArray();
     }
 
-    private static System.Management.Automation.PowerShell NewPwsh()
+    private System.Management.Automation.PowerShell NewPwsh()
     {
-        var pwsh = PwshTestFixture.Create();
-        pwsh.AddScript("Set-BashErrorMode -Mode PowerShell").Invoke();
-        pwsh.Commands.Clear();
-        return pwsh;
+        return _fixture.AcquireFresh();
     }
 
     [Fact]
@@ -33,7 +37,7 @@ public class InvokeBashDirsCommandTests
     {
         // Oracle: with no stack, default mode emits a single line with the
         // current location.
-        using var pwsh = NewPwsh();
+        var pwsh = NewPwsh();
         var tmp = Path.GetTempPath().TrimEnd(Path.DirectorySeparatorChar);
         RunLines(pwsh, $"Set-Location '{tmp}'");
         var lines = RunLines(pwsh, "Invoke-BashDirs");
@@ -45,7 +49,7 @@ public class InvokeBashDirsCommandTests
     public void Dirs_NoArgs_AfterPushd_EmitsCurrentAndStackJoined()
     {
         // Oracle: default mode emits current + (reversed stack) joined by space.
-        using var pwsh = NewPwsh();
+        var pwsh = NewPwsh();
         var tmp = Path.GetTempPath().TrimEnd(Path.DirectorySeparatorChar);
         var subdir = Path.Combine(tmp, "psbash-dirs-1-" + Guid.NewGuid().ToString("N").Substring(0, 8));
         Directory.CreateDirectory(subdir);
@@ -69,7 +73,7 @@ public class InvokeBashDirsCommandTests
     {
         // Oracle: -v emits one line per stack entry, prefixed with index +
         // two spaces. Stack is presented bottom-first after reversal.
-        using var pwsh = NewPwsh();
+        var pwsh = NewPwsh();
         var tmp = Path.GetTempPath().TrimEnd(Path.DirectorySeparatorChar);
         var d1 = Path.Combine(tmp, "psbash-dirs-v1-" + Guid.NewGuid().ToString("N").Substring(0, 8));
         var d2 = Path.Combine(tmp, "psbash-dirs-v2-" + Guid.NewGuid().ToString("N").Substring(0, 8));
@@ -99,7 +103,7 @@ public class InvokeBashDirsCommandTests
     public void Dirs_PFlag_EmitsOnePerLine()
     {
         // Oracle: -p emits one line per stack entry (no numbers).
-        using var pwsh = NewPwsh();
+        var pwsh = NewPwsh();
         var tmp = Path.GetTempPath().TrimEnd(Path.DirectorySeparatorChar);
         var d1 = Path.Combine(tmp, "psbash-dirs-p1-" + Guid.NewGuid().ToString("N").Substring(0, 8));
         Directory.CreateDirectory(d1);
@@ -127,7 +131,7 @@ public class InvokeBashDirsCommandTests
         // contract: the -c branch executes, emits no output, and does not
         // throw. Stack-clear behavior is independently exercised by the
         // production path under a real ps-bash runtime.
-        using var pwsh = NewPwsh();
+        var pwsh = NewPwsh();
         var tmp = Path.GetTempPath().TrimEnd(Path.DirectorySeparatorChar);
         var d1 = Path.Combine(tmp, "psbash-dirs-c1-" + Guid.NewGuid().ToString("N").Substring(0, 8));
         Directory.CreateDirectory(d1);
@@ -148,7 +152,7 @@ public class InvokeBashDirsCommandTests
     public void Dirs_CFlag_EmitsNoOutput()
     {
         // Oracle: -c clears and returns nothing.
-        using var pwsh = NewPwsh();
+        var pwsh = NewPwsh();
         var lines = RunLines(pwsh, "Invoke-BashDirs -c");
         Assert.Empty(lines);
     }
@@ -156,7 +160,7 @@ public class InvokeBashDirsCommandTests
     [Fact]
     public void Dirs_ViaAlias_Works()
     {
-        using var pwsh = NewPwsh();
+        var pwsh = NewPwsh();
         var tmp = Path.GetTempPath().TrimEnd(Path.DirectorySeparatorChar);
         RunLines(pwsh, $"Set-Location '{tmp}'");
         var lines = RunLines(pwsh, "dirs");
@@ -167,7 +171,7 @@ public class InvokeBashDirsCommandTests
     [Fact]
     public void Dirs_HelpFlag_EmitsUsage()
     {
-        using var pwsh = NewPwsh();
+        var pwsh = NewPwsh();
         var lines = RunLines(pwsh, "Invoke-BashDirs --help");
         Assert.NotEmpty(lines);
         Assert.Contains(lines, l => l.Contains("dirs", StringComparison.OrdinalIgnoreCase));
@@ -181,7 +185,7 @@ public class InvokeBashDirsCommandTests
         // the declared SwitchParameter P regresses, this test will see the
         // current-location-joined default branch instead of the per-entry
         // emission (or an "ambiguous parameter name" exception).
-        using var pwsh = NewPwsh();
+        var pwsh = NewPwsh();
         var tmp = Path.GetTempPath().TrimEnd(Path.DirectorySeparatorChar);
         RunLines(pwsh, $"Set-Location '{tmp}'");
         // With empty stack, -p emits zero lines (no stack entries).
@@ -193,7 +197,7 @@ public class InvokeBashDirsCommandTests
     public void Dirs_VFlag_RegressionGuard_ExactNameBinder()
     {
         // Same regression guard for -v vs -Verbose.
-        using var pwsh = NewPwsh();
+        var pwsh = NewPwsh();
         var tmp = Path.GetTempPath().TrimEnd(Path.DirectorySeparatorChar);
         RunLines(pwsh, $"Set-Location '{tmp}'");
         // Empty stack means -v emits zero lines.
@@ -208,7 +212,7 @@ public class InvokeBashDirsCommandTests
         // arriving via Arguments must not be re-parsed. The cmdlet's
         // Arguments catch-all simply stores it as a literal string; no
         // operand-driven branch reads it, so pwsh.Invoke() returns normally.
-        using var pwsh = NewPwsh();
+        var pwsh = NewPwsh();
         var ex = Record.Exception(() =>
             RunLines(pwsh, "Invoke-BashDirs '$(throw \"pwn\")'"));
         Assert.Null(ex);
