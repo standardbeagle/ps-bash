@@ -233,14 +233,26 @@ public sealed class InvokeBashTarCommand : PSCmdlet
         // Resolve the cBoundByBinder ambiguity: the PowerShell binder caught
         // either -c (create) or -C (chdir). If we already saw an explicit
         // lowercase -c in the args loop (--create or bundled), create is set
-        // correctly. Otherwise the binder fired for an uppercase -C; treat
-        // the FIRST positional in operands (typed by the user after -C) as
-        // the chdir target. This heuristic relies on -C taking exactly one
-        // positional value — matches GNU tar's surface.
+        // correctly. Otherwise the binder fired for either bare -c (the far
+        // more common case — separated form `-c -f ARCHIVE SRC`) or for a
+        // bare uppercase -C DIR. We disambiguate by looking at the other
+        // action flags: if NO other action verb (-x / -t) is set, the binder
+        // must have caught -c (create), since -C DIR alone is meaningless
+        // without an action. Only when an action verb IS already set do we
+        // treat cBoundByBinder as the chdir flag and consume the first
+        // operand as the directory target.
         if (cBoundByBinder && !sawExplicitCreate)
         {
-            if (string.IsNullOrEmpty(changeDir) && operands.Count > 0)
+            if (!extract && !listMode)
             {
+                // No other action verb — binder caught the create flag.
+                create = true;
+            }
+            else if (string.IsNullOrEmpty(changeDir) && operands.Count > 0)
+            {
+                // Action verb already set; binder caught -C DIR. Pull the
+                // chdir target from the first operand position. Matches
+                // GNU tar's surface for `-C DIR` taking one value.
                 changeDir = operands[0];
                 operands.RemoveAt(0);
                 try
