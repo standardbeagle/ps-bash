@@ -46,6 +46,7 @@ namespace PsBash.Cmdlets.Tests;
 ///   - $global:BashBgLastPid / $global:BashLastArg -> $null
 ///   - Variable: scope user-defined vars beyond the psm1 baseline
 ///   - Current location -> back to original PWD captured at fixture start
+///   - Location stack -> drained (pushd/popd/dirs share the runspace's default stack)
 ///   - $error.Clear()
 ///   - BashErrorMode -> 'PowerShell' (so Write-Error surfaces to in-process tests)
 ///
@@ -293,6 +294,14 @@ Get-Variable -Scope Global -ErrorAction SilentlyContinue | ForEach-Object {{
     }}
 }}
 Set-Location -LiteralPath '{pwdEscaped}' -ErrorAction SilentlyContinue
+# Drain the default location stack so pushd/popd/dirs tests don't bleed
+# state across the shared runspace. Bounded loop guards against infinite
+# spin if Get-Location ever lies about a non-empty stack.
+$stackGuard = 0
+while ((Get-Location -Stack).Count -gt 0 -and $stackGuard -lt 64) {{
+    Pop-Location -ErrorAction SilentlyContinue
+    $stackGuard++
+}}
 $error.Clear()
 try {{ Set-BashErrorMode -Mode PowerShell -ErrorAction SilentlyContinue }} catch {{ }}
 ";
