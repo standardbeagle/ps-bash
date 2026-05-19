@@ -22,14 +22,18 @@ namespace PsBash.Cmdlets.Tests;
 /// also prove the function-shadowing removal worked and the psm1
 /// <c>Set-Alias uname</c> line still resolves to the cmdlet.
 /// </summary>
-public class InvokeBashUnameCommandTests
+public class InvokeBashUnameCommandTests : IClassFixture<SharedPwshFixture>
 {
-    private static string[] RunLines(string script)
-    {
-        using var pwsh = PwshTestFixture.Create();
-        pwsh.AddScript("$error.Clear()").Invoke();
-        pwsh.Commands.Clear();
+    private readonly SharedPwshFixture _fixture;
 
+    public InvokeBashUnameCommandTests(SharedPwshFixture fixture)
+    {
+        _fixture = fixture;
+    }
+
+    private string[] RunLines(string script)
+    {
+        var pwsh = _fixture.AcquireFresh();
         var result = pwsh.AddScript(script).Invoke();
         pwsh.Commands.Clear();
 

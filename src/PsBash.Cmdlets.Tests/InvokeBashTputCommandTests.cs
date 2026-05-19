@@ -22,14 +22,18 @@ namespace PsBash.Cmdlets.Tests;
 /// Directive 12: injection probe asserts a <c>$()</c>-laden operand cannot
 /// trigger PS evaluation.
 /// </summary>
-public class InvokeBashTputCommandTests
+public class InvokeBashTputCommandTests : IClassFixture<SharedPwshFixture>
 {
-    private static string[] RunLines(string script)
-    {
-        using var pwsh = PwshTestFixture.Create();
-        pwsh.AddScript("$error.Clear()").Invoke();
-        pwsh.Commands.Clear();
+    private readonly SharedPwshFixture _fixture;
 
+    public InvokeBashTputCommandTests(SharedPwshFixture fixture)
+    {
+        _fixture = fixture;
+    }
+
+    private string[] RunLines(string script)
+    {
+        var pwsh = _fixture.AcquireFresh();
         var result = pwsh.AddScript(script).Invoke();
         pwsh.Commands.Clear();
 

@@ -20,14 +20,18 @@ namespace PsBash.Cmdlets.Tests;
 /// apply — time wraps another command and inherits whatever the wrapped
 /// command does.
 /// </summary>
-public class InvokeBashTimeCommandTests
+public class InvokeBashTimeCommandTests : IClassFixture<SharedPwshFixture>
 {
-    private static (Collection<PSObject> Result, IList<ErrorRecord> Errors) Run(string script)
-    {
-        using var pwsh = PwshTestFixture.Create();
-        pwsh.AddScript("$error.Clear()").Invoke();
-        pwsh.Commands.Clear();
+    private readonly SharedPwshFixture _fixture;
 
+    public InvokeBashTimeCommandTests(SharedPwshFixture fixture)
+    {
+        _fixture = fixture;
+    }
+
+    private (Collection<PSObject> Result, IList<ErrorRecord> Errors) Run(string script)
+    {
+        var pwsh = _fixture.AcquireFresh();
         var result = pwsh.AddScript(script).Invoke();
         pwsh.Commands.Clear();
 

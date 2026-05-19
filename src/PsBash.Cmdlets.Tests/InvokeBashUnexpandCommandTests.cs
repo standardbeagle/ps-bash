@@ -16,12 +16,14 @@ namespace PsBash.Cmdlets.Tests;
 /// continuation, <c>--help</c>, partial-run preservation, and an
 /// injection probe per Directive 12.
 /// </summary>
-public class InvokeBashUnexpandCommandTests : IDisposable
+public class InvokeBashUnexpandCommandTests : IClassFixture<SharedPwshFixture>, IDisposable
 {
+    private readonly SharedPwshFixture _fixture;
     private readonly string _tmpDir;
 
-    public InvokeBashUnexpandCommandTests()
+    public InvokeBashUnexpandCommandTests(SharedPwshFixture fixture)
     {
+        _fixture = fixture;
         _tmpDir = Path.Combine(
             Path.GetTempPath(),
             $"psb-unexp-{Guid.NewGuid():N}".Substring(0, 22));
@@ -33,12 +35,9 @@ public class InvokeBashUnexpandCommandTests : IDisposable
         try { Directory.Delete(_tmpDir, recursive: true); } catch { /* best-effort */ }
     }
 
-    private static string[] RunLines(string script)
+    private string[] RunLines(string script)
     {
-        using var pwsh = PwshTestFixture.Create();
-        pwsh.AddScript("$error.Clear()").Invoke();
-        pwsh.Commands.Clear();
-
+        var pwsh = _fixture.AcquireFresh();
         var result = pwsh.AddScript(script).Invoke();
         pwsh.Commands.Clear();
         return result.Select(o =>
@@ -172,7 +171,7 @@ public class InvokeBashUnexpandCommandTests : IDisposable
         // Per the psm1 oracle: a missing file emits a bash-style error via
         // Write-BashError and continues. Verify cmdlet doesn't throw and the
         // output stream is empty.
-        using var pwsh = PwshTestFixture.Create();
+        var pwsh = _fixture.AcquireFresh();
         pwsh.AddScript("$ErrorActionPreference='Continue'").Invoke();
         pwsh.Commands.Clear();
         var missing = Path.Combine(_tmpDir, "nope.txt").Replace("'", "''");

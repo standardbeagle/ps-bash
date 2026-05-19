@@ -17,14 +17,18 @@ namespace PsBash.Cmdlets.Tests;
 /// canonical translation / delete / squeeze / char-class / range
 /// scenarios from the task spec.
 /// </summary>
-public class InvokeBashTrCommandTests
+public class InvokeBashTrCommandTests : IClassFixture<SharedPwshFixture>
 {
-    private static string[] RunLines(string script)
-    {
-        using var pwsh = PwshTestFixture.Create();
-        pwsh.AddScript("$error.Clear()").Invoke();
-        pwsh.Commands.Clear();
+    private readonly SharedPwshFixture _fixture;
 
+    public InvokeBashTrCommandTests(SharedPwshFixture fixture)
+    {
+        _fixture = fixture;
+    }
+
+    private string[] RunLines(string script)
+    {
+        var pwsh = _fixture.AcquireFresh();
         var result = pwsh.AddScript(script).Invoke();
         pwsh.Commands.Clear();
         return result.Select(o =>

@@ -19,12 +19,19 @@ namespace PsBash.Cmdlets.Tests;
 /// drops it before evaluating. Directive 12 injection probe ensures that
 /// adversarial operand strings stay literal and never re-parse as PowerShell.
 /// </summary>
-public class InvokeBashTestCommandTests
+public class InvokeBashTestCommandTests : IClassFixture<SharedPwshFixture>
 {
-    private static (bool? value, int exit, string[] errors) Run(string script)
+    private readonly SharedPwshFixture _fixture;
+
+    public InvokeBashTestCommandTests(SharedPwshFixture fixture)
     {
-        using var pwsh = PwshTestFixture.Create();
-        pwsh.AddScript("$global:LASTEXITCODE = 0; $error.Clear()").Invoke();
+        _fixture = fixture;
+    }
+
+    private (bool? value, int exit, string[] errors) Run(string script)
+    {
+        var pwsh = _fixture.AcquireFresh();
+        pwsh.AddScript("$global:LASTEXITCODE = 0").Invoke();
         pwsh.Commands.Clear();
 
         var result = pwsh.AddScript(script).Invoke();
@@ -231,8 +238,9 @@ public class InvokeBashTestCommandTests
     [Fact]
     public void Help_EmitsUsage()
     {
-        using var pwsh = PwshTestFixture.Create();
+        var pwsh = _fixture.AcquireFresh();
         var result = pwsh.AddScript("Invoke-BashTest --help").Invoke();
+        pwsh.Commands.Clear();
         var lines = result.Select(o => o?.ToString() ?? "").ToArray();
         Assert.NotEmpty(lines);
     }

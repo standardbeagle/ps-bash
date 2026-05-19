@@ -18,12 +18,14 @@ namespace PsBash.Cmdlets.Tests;
 /// sort, summary count, alias resolution, <c>--help</c>, and a
 /// Directive-12 injection probe on the <c>-I</c> pattern operand.
 /// </summary>
-public class InvokeBashTreeCommandTests : IDisposable
+public class InvokeBashTreeCommandTests : IClassFixture<SharedPwshFixture>, IDisposable
 {
+    private readonly SharedPwshFixture _fixture;
     private readonly string _tmpDir;
 
-    public InvokeBashTreeCommandTests()
+    public InvokeBashTreeCommandTests(SharedPwshFixture fixture)
     {
+        _fixture = fixture;
         _tmpDir = Path.Combine(
             Path.GetTempPath(),
             $"psb-tree-{Guid.NewGuid():N}".Substring(0, 22));
@@ -39,9 +41,7 @@ public class InvokeBashTreeCommandTests : IDisposable
 
     private string[] Run(string script)
     {
-        using var pwsh = PwshTestFixture.Create();
-        pwsh.AddScript("$error.Clear()").Invoke();
-        pwsh.Commands.Clear();
+        var pwsh = _fixture.AcquireFresh();
         var result = pwsh.AddScript(script).Invoke();
         pwsh.Commands.Clear();
         return result.Select(o =>
@@ -220,9 +220,10 @@ public class InvokeBashTreeCommandTests : IDisposable
     [Fact]
     public void Tree_Root_EmitsTypedTreeEntryWithBashText()
     {
-        using var pwsh = PwshTestFixture.Create();
+        var pwsh = _fixture.AcquireFresh();
         var result = pwsh.AddScript(
             $"Invoke-BashTree '{Esc(_tmpDir)}'").Invoke();
+        pwsh.Commands.Clear();
         Assert.NotEmpty(result);
         var first = result[0];
         Assert.NotNull(first);

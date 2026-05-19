@@ -14,20 +14,24 @@ namespace PsBash.Cmdlets.Tests;
 /// axis 14), quoting / injection (Directive 12), alias resolution. Streaming /
 /// file-content / signal axes do not apply: type is in-process metadata.
 /// </summary>
-public class InvokeBashTypeCommandTests
+public class InvokeBashTypeCommandTests : IClassFixture<SharedPwshFixture>
 {
-    private static System.Collections.ObjectModel.Collection<System.Management.Automation.PSObject> RunRaw(string script)
-    {
-        using var pwsh = PwshTestFixture.Create();
-        pwsh.AddScript("Set-BashErrorMode -Mode PowerShell").Invoke();
-        pwsh.Commands.Clear();
-        pwsh.AddScript("$error.Clear()").Invoke();
-        pwsh.Commands.Clear();
+    private readonly SharedPwshFixture _fixture;
 
-        return pwsh.AddScript(script).Invoke();
+    public InvokeBashTypeCommandTests(SharedPwshFixture fixture)
+    {
+        _fixture = fixture;
     }
 
-    private static string[] RunLines(string script)
+    private System.Collections.ObjectModel.Collection<System.Management.Automation.PSObject> RunRaw(string script)
+    {
+        var pwsh = _fixture.AcquireFresh();
+        var result = pwsh.AddScript(script).Invoke();
+        pwsh.Commands.Clear();
+        return result;
+    }
+
+    private string[] RunLines(string script)
     {
         return RunRaw(script)
             .Select(o =>

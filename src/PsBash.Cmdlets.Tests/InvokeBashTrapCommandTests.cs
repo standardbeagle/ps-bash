@@ -16,22 +16,26 @@ namespace PsBash.Cmdlets.Tests;
 /// 7 — by definition the feature), quoting/injection (Directive 12 — action
 /// containing scriptblock chars), and alias resolution.
 /// </summary>
-public class InvokeBashTrapCommandTests
+public class InvokeBashTrapCommandTests : IClassFixture<SharedPwshFixture>
 {
-    private static System.Collections.ObjectModel.Collection<System.Management.Automation.PSObject> RunRaw(string script)
+    private readonly SharedPwshFixture _fixture;
+
+    public InvokeBashTrapCommandTests(SharedPwshFixture fixture)
     {
-        using var pwsh = PwshTestFixture.Create();
-        // Reset trap state so tests don't leak.
-        pwsh.AddScript("$global:BashTrapHandlers.Clear(); $global:__BashTrapERR = $null; $global:__BashTrapEXIT = $null").Invoke();
-        pwsh.Commands.Clear();
-        pwsh.AddScript("Set-BashErrorMode -Mode PowerShell").Invoke();
-        pwsh.Commands.Clear();
-        pwsh.AddScript("$error.Clear()").Invoke();
-        pwsh.Commands.Clear();
-        return pwsh.AddScript(script).Invoke();
+        _fixture = fixture;
     }
 
-    private static string[] RunLines(string script)
+    private System.Collections.ObjectModel.Collection<System.Management.Automation.PSObject> RunRaw(string script)
+    {
+        var pwsh = _fixture.AcquireFresh();
+        pwsh.AddScript("$global:BashTrapHandlers.Clear(); $global:__BashTrapERR = $null; $global:__BashTrapEXIT = $null").Invoke();
+        pwsh.Commands.Clear();
+        var result = pwsh.AddScript(script).Invoke();
+        pwsh.Commands.Clear();
+        return result;
+    }
+
+    private string[] RunLines(string script)
     {
         return RunRaw(script).Select(o => o?.ToString() ?? "").ToArray();
     }
@@ -135,8 +139,9 @@ public class InvokeBashTrapCommandTests
         // Get-Command -CommandType Alias trap resolves to Invoke-BashTrap.
         // (Bash code routed through ps-bash transpiles `trap` to
         // `Invoke-BashTrap` directly, bypassing the parser keyword path.)
-        using var pwsh = PwshTestFixture.Create();
+        var pwsh = _fixture.AcquireFresh();
         var r = pwsh.AddScript("(Get-Alias trap -ErrorAction SilentlyContinue).Definition").Invoke();
+        pwsh.Commands.Clear();
         Assert.Single(r);
         Assert.Equal("Invoke-BashTrap", r[0]?.BaseObject?.ToString());
     }

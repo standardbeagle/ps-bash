@@ -17,12 +17,14 @@ namespace PsBash.Cmdlets.Tests;
 /// continuation, value-flags, case-insensitive, mixed dupes, and an
 /// injection probe per Directive 12.
 /// </summary>
-public class InvokeBashUniqCommandTests : IDisposable
+public class InvokeBashUniqCommandTests : IClassFixture<SharedPwshFixture>, IDisposable
 {
+    private readonly SharedPwshFixture _fixture;
     private readonly string _tmpDir;
 
-    public InvokeBashUniqCommandTests()
+    public InvokeBashUniqCommandTests(SharedPwshFixture fixture)
     {
+        _fixture = fixture;
         _tmpDir = Path.Combine(
             Path.GetTempPath(),
             $"psb-uniq-{Guid.NewGuid():N}".Substring(0, 22));
@@ -34,12 +36,9 @@ public class InvokeBashUniqCommandTests : IDisposable
         try { Directory.Delete(_tmpDir, recursive: true); } catch { /* best-effort */ }
     }
 
-    private static string[] RunLines(string script)
+    private string[] RunLines(string script)
     {
-        using var pwsh = PwshTestFixture.Create();
-        pwsh.AddScript("$error.Clear()").Invoke();
-        pwsh.Commands.Clear();
-
+        var pwsh = _fixture.AcquireFresh();
         var result = pwsh.AddScript(script).Invoke();
         pwsh.Commands.Clear();
         return result.Select(o =>
@@ -160,7 +159,7 @@ public class InvokeBashUniqCommandTests : IDisposable
     [Fact]
     public void Uniq_FileMode_MissingFile_DoesNotThrow_NoOutput()
     {
-        using var pwsh = PwshTestFixture.Create();
+        var pwsh = _fixture.AcquireFresh();
         pwsh.AddScript("$ErrorActionPreference='Continue'").Invoke();
         pwsh.Commands.Clear();
         var missing = Path.Combine(_tmpDir, "does-not-exist.txt").Replace("'", "''");
