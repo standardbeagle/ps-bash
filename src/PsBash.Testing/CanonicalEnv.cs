@@ -106,45 +106,34 @@ public static class CanonicalEnv
         // (e.g. C:\Windows) not to leak meaningful state into goldens.
         if (OperatingSystem.IsWindows())
         {
-            // Named-allowlist for the OS-supplied surface that PowerShell +
-            // .NET runtime + Win32 API need to start a process at all.
             foreach (var name in new[]
             {
+                // OS-supplied identity / install location vars — required for
+                // kernel32.dll / mscoree loader paths, %TEMP%-style expansion,
+                // and basic Win32 API surface.
                 "SystemRoot", "windir", "SystemDrive", "ComSpec", "OS",
                 "PATHEXT", "NUMBER_OF_PROCESSORS",
                 "PROCESSOR_ARCHITECTURE", "PROCESSOR_IDENTIFIER",
                 "PROCESSOR_LEVEL", "PROCESSOR_REVISION",
+                // User-profile vars — PowerShell module discovery + module
+                // cache, .NET runtime config probing.
                 "USERPROFILE", "APPDATA", "LOCALAPPDATA", "USERNAME",
                 "HOMEDRIVE", "HOMEPATH", "COMPUTERNAME",
                 "ProgramData", "ProgramFiles", "ProgramFiles(x86)",
                 "ProgramW6432", "CommonProgramFiles", "CommonProgramFiles(x86)",
                 "CommonProgramW6432", "PUBLIC", "ALLUSERSPROFILE",
+                // PowerShell-specific.
                 "PSModulePath", "POWERSHELL_DISTRIBUTION_CHANNEL",
                 "POWERSHELL_TELEMETRY_OPTOUT", "POWERSHELL_UPDATECHECK",
                 "PSExecutionPolicyPreference",
+                // .NET / build telemetry.
+                "DOTNET_NOLOGO", "DOTNET_CLI_TELEMETRY_OPTOUT",
+                "DOTNET_SYSTEM_GLOBALIZATION_INVARIANT",
+                "DOTNET_ROLL_FORWARD",
             })
             {
                 var v = Environment.GetEnvironmentVariable(name);
                 if (!string.IsNullOrEmpty(v)) env[name] = v;
-            }
-
-            // Prefix-allowlist for every DOTNET_*. CI runners set ~10 such
-            // vars (DOTNET_INSTALL_DIR, DOTNET_MULTILEVEL_LOOKUP, DOTNET_
-            // ROLL_FORWARD, DOTNET_TieredCompilation, etc.) that the apphost
-            // and JIT consult on startup. Enumerating each by name is the
-            // whack-a-mole pattern we want to avoid; a prefix sweep gets all
-            // current and future vars in this family. The leakage surface is
-            // low (these don't surface in user-facing test output).
-            foreach (System.Collections.DictionaryEntry kv in Environment.GetEnvironmentVariables())
-            {
-                var k = kv.Key?.ToString();
-                if (k == null) continue;
-                if (k.StartsWith("DOTNET_", StringComparison.OrdinalIgnoreCase)
-                    || k.StartsWith("NUGET_", StringComparison.OrdinalIgnoreCase))
-                {
-                    var v = kv.Value?.ToString();
-                    if (!string.IsNullOrEmpty(v)) env[k] = v;
-                }
             }
         }
 
