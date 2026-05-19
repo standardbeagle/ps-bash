@@ -1,0 +1,107 @@
+name: Single Test (manual)
+
+# Fast-iteration workflow for CI triage.
+#
+# Methodology context (#24): the full Build matrix runs 9 jobs and takes ~20m.
+# When investigating a specific failing test, that loop is too slow. This
+# workflow accepts a filter expression and an optional single-OS target so an
+# investigator can re-run one test per platform in ~3-5m.
+#
+# Usage:
+#   gh workflow run single-test.yml \
+#     -f filter="FullyQualifiedName~Differential_Pipe_ExitCode" \
+#     -f platform="linux"
+#
+#   gh workflow run single-test.yml \
+#     -f filter="FullyQualifiedName~InvokeBashTputCommandTests" \
+#     -f platform="all"
+#
+# Filter syntax is dotnet test --filter. Quoting note from Directive 13:
+# unquoted `|` becomes a shell pipe and hangs the runner — pass filters
+# verbatim, no shell pipes.
+
+on:
+  workflow_dispatch:
+    inputs:
+      filter:
+        description: 'dotnet test --filter expression (e.g. FullyQualifiedName~MyTest)'
+        required: true
+        type: string
+      platform:
+        description: 'Platform to run on'
+        required: true
+        default: 'linux'
+        type: choice
+        options:
+          - all
+          - windows
+          - linux
+          - macos
+      project:
+        description: 'Optional: limit to one test project (e.g. src/PsBash.Differential.Tests). Empty = all projects.'
+        required: false
+        type: string
+        default: ''
+
+concurrency:
+  group: single-test-${{ github.workflow }}-${{ github.run_id }}
+  cancel-in-progress: false
+
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            rid: win-x64
+            label: windows
+          - os: ubuntu-latest
+            rid: linux-x64
+            label: linux
+          - os: macos-latest
+            rid: osx-arm64
+            label: macos
+        # Filter the matrix at job-level via `if` below — `include` with
+        # conditional expressions is not supported.
+
+    runs-on: ${{ matrix.os }}
+    if: ${{ inputs.platform == 'all' || inputs.platform == matrix.label }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Restore
+        run: dotnet restore
+
+      - name: Build
+        run: dotnet build --no-restore -c Release
+
+      # --blame-hang-timeout 2m is tighter than the main Build workflow's 5m;
+      # single-test runs target one failure at a time, so a hang is itself
+      # diagnostic and the runner should bail fast.
+      - name: Run filtered test
+        timeout-minutes: 10
+        run: |
+          dotnet test ${{ inputs.project }} --no-build -c Release \
+            --filter "${{ inputs.filter }}" \
+            --blame-hang-timeout 2m \
+            --blame-hang-dump-type none \
+            --logger "console;verbosity=detailed"
+        shell: bash
+
+      # Upload TestResults/ on failure so the investigator can see hang dumps
+      # and trx files — Directive 9 (observability on failure).
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: single-test-results-${{ matrix.label }}-${{ github.run_id }}
+          path: |
+            **/TestResults/**
+            **/*.trx
+          retention-days: 7
+          if-no-files-found: ignore
