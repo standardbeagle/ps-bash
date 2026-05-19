@@ -18,13 +18,15 @@ namespace PsBash.Cmdlets.Tests;
 /// injection probe (Directive 12). Pipeline / large-input / signal axes do
 /// not apply: readlink has no streaming surface.
 /// </summary>
-public class InvokeBashReadlinkCommandTests : IDisposable
+public class InvokeBashReadlinkCommandTests : IDisposable, IClassFixture<SharedPwshFixture>
 {
+    private readonly SharedPwshFixture _fixture;
     private readonly string _tmpDir;
     private readonly string _regularFile;
 
-    public InvokeBashReadlinkCommandTests()
+    public InvokeBashReadlinkCommandTests(SharedPwshFixture fixture)
     {
+        _fixture = fixture;
         _tmpDir = Path.Combine(Path.GetTempPath(), $"psb-readlink-{Guid.NewGuid():N}".Substring(0, 25));
         Directory.CreateDirectory(_tmpDir);
         _regularFile = Path.Combine(_tmpDir, "regular.txt");
@@ -36,15 +38,9 @@ public class InvokeBashReadlinkCommandTests : IDisposable
         try { Directory.Delete(_tmpDir, recursive: true); } catch { /* best-effort */ }
     }
 
-    /// <summary>
-    /// Invokes the script and returns BashText for each emitted typed object.
-    /// Errors are silently swallowed — readlink emits Write-Error continuation
-    /// errors and continues, so error records are expected on the negative
-    /// paths.
-    /// </summary>
-    private static string[] RunBashText(string script)
+    private string[] RunBashText(string script)
     {
-        using var pwsh = PwshTestFixture.Create();
+        var pwsh = _fixture.AcquireFresh();
         var result = pwsh.AddScript(script).Invoke();
         pwsh.Commands.Clear();
 
@@ -178,7 +174,7 @@ public class InvokeBashReadlinkCommandTests : IDisposable
     [Fact]
     public void Readlink_HelpFlag_EmitsUsage()
     {
-        using var pwsh = PwshTestFixture.Create();
+        var pwsh = _fixture.AcquireFresh();
         var result = pwsh.AddScript("Invoke-BashReadlink --help").Invoke();
         var lines = result.Select(o => o?.ToString() ?? "").ToArray();
         Assert.NotEmpty(lines);

@@ -8,8 +8,15 @@ namespace PsBash.Cmdlets.Tests;
 /// a fresh fixture/runspace, so the location stack starts empty — push then
 /// inspect via Get-Location -Stack within the same runspace.
 /// </summary>
-public class InvokeBashPushdCommandTests
+public class InvokeBashPushdCommandTests : IClassFixture<SharedPwshFixture>
 {
+    private readonly SharedPwshFixture _fixture;
+
+    public InvokeBashPushdCommandTests(SharedPwshFixture fixture)
+    {
+        _fixture = fixture;
+    }
+
     private static System.Collections.ObjectModel.Collection<System.Management.Automation.PSObject> RunRaw(
         System.Management.Automation.PowerShell pwsh, string script)
     {
@@ -22,10 +29,11 @@ public class InvokeBashPushdCommandTests
         return RunRaw(pwsh, script).Select(o => o?.ToString() ?? "").ToArray();
     }
 
-    private static System.Management.Automation.PowerShell NewPwsh()
+    private System.Management.Automation.PowerShell NewPwsh()
     {
-        var pwsh = PwshTestFixture.Create();
-        pwsh.AddScript("Set-BashErrorMode -Mode PowerShell").Invoke();
+        var pwsh = _fixture.AcquireFresh();
+        // Clear any inherited location stack so push-tests start from 0.
+        pwsh.AddScript("while (Get-Location -Stack) { Pop-Location -Stack }").Invoke();
         pwsh.Commands.Clear();
         return pwsh;
     }
@@ -34,7 +42,7 @@ public class InvokeBashPushdCommandTests
     public void Pushd_NoArgs_PushesCurrentAndStaysAtCurrent()
     {
         // Oracle: `pushd` with no operand pushes current and chdirs to '.'.
-        using var pwsh = NewPwsh();
+        var pwsh = NewPwsh();
         var tmp = Path.GetTempPath();
         RunLines(pwsh, $"Set-Location '{tmp}'");
         RunLines(pwsh, "Invoke-BashPushd");
@@ -46,7 +54,7 @@ public class InvokeBashPushdCommandTests
     [Fact]
     public void Pushd_WithPath_PushesAndChdirsToPath()
     {
-        using var pwsh = NewPwsh();
+        var pwsh = NewPwsh();
         var tmp = Path.GetTempPath().TrimEnd(Path.DirectorySeparatorChar);
         var subdir = Path.Combine(tmp, "psbash-pushd-test-" + Guid.NewGuid().ToString("N").Substring(0, 8));
         Directory.CreateDirectory(subdir);
@@ -76,7 +84,7 @@ public class InvokeBashPushdCommandTests
         // `^\+(\d+)$` regex (not the default path-operand branch), parses
         // to an integer cleanly, and the InvokeScript body executes without
         // throwing — which is what this test asserts.
-        using var pwsh = NewPwsh();
+        var pwsh = NewPwsh();
         var tmp = Path.GetTempPath().TrimEnd(Path.DirectorySeparatorChar);
         var d1 = Path.Combine(tmp, "psbash-pushd-1-" + Guid.NewGuid().ToString("N").Substring(0, 8));
         var d2 = Path.Combine(tmp, "psbash-pushd-2-" + Guid.NewGuid().ToString("N").Substring(0, 8));
@@ -101,7 +109,7 @@ public class InvokeBashPushdCommandTests
     public void Pushd_ViaAlias_Works()
     {
         // The `pushd` alias (declared in psm1) must resolve to the cmdlet.
-        using var pwsh = NewPwsh();
+        var pwsh = NewPwsh();
         var tmp = Path.GetTempPath();
         RunLines(pwsh, $"Set-Location '{tmp}'");
         RunLines(pwsh, "pushd");
@@ -112,7 +120,7 @@ public class InvokeBashPushdCommandTests
     [Fact]
     public void Pushd_HelpFlag_EmitsUsage()
     {
-        using var pwsh = NewPwsh();
+        var pwsh = NewPwsh();
         var lines = RunLines(pwsh, "Invoke-BashPushd --help");
         Assert.NotEmpty(lines);
         Assert.Contains(lines, l => l.Contains("pushd", StringComparison.OrdinalIgnoreCase));
@@ -124,7 +132,7 @@ public class InvokeBashPushdCommandTests
         // Oracle behavior: an unresolvable path bubbles up a PS error; the
         // cmdlet captures it via try/catch and routes through Write-BashError.
         // The pwsh.Invoke() call must not surface a terminating exception.
-        using var pwsh = NewPwsh();
+        var pwsh = NewPwsh();
         var tmp = Path.GetTempPath();
         RunLines(pwsh, $"Set-Location '{tmp}'");
         var ex = Record.Exception(() => RunLines(pwsh, "Invoke-BashPushd '/no/such/directory/psbash'"));
@@ -136,7 +144,7 @@ public class InvokeBashPushdCommandTests
     {
         // Pair test: prove pushd + popd interact correctly through the
         // shared stack — same fixture, observe round-trip identity.
-        using var pwsh = NewPwsh();
+        var pwsh = NewPwsh();
         var tmp = Path.GetTempPath().TrimEnd(Path.DirectorySeparatorChar);
         var subdir = Path.Combine(tmp, "psbash-pushpop-" + Guid.NewGuid().ToString("N").Substring(0, 8));
         Directory.CreateDirectory(subdir);
@@ -163,7 +171,7 @@ public class InvokeBashPushdCommandTests
         // path is fed to Push-Location -Path; a non-existent path emits an
         // error but pwsh.Invoke() returns normally (no exception bearing
         // "pwn"). Negative-assertion is the security probe.
-        using var pwsh = NewPwsh();
+        var pwsh = NewPwsh();
         var tmp = Path.GetTempPath();
         RunLines(pwsh, $"Set-Location '{tmp}'");
         var ex = Record.Exception(() =>

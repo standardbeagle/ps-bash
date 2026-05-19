@@ -17,19 +17,24 @@ namespace PsBash.Cmdlets.Tests;
 /// injection probe through -p. Pipeline / file / large / CRLF / unicode axes
 /// do not apply — ps has no pipeline input and no file operands.
 /// </summary>
-public class InvokeBashPsCommandTests
+public class InvokeBashPsCommandTests : IClassFixture<SharedPwshFixture>
 {
-    private static System.Collections.ObjectModel.Collection<PSObject> RunRaw(string script)
+    private readonly SharedPwshFixture _fixture;
+
+    public InvokeBashPsCommandTests(SharedPwshFixture fixture)
     {
-        using var pwsh = PwshTestFixture.Create();
-        pwsh.AddScript("$error.Clear()").Invoke();
-        pwsh.Commands.Clear();
+        _fixture = fixture;
+    }
+
+    private System.Collections.ObjectModel.Collection<PSObject> RunRaw(string script)
+    {
+        var pwsh = _fixture.AcquireFresh();
         var r = pwsh.AddScript(script).Invoke();
         pwsh.Commands.Clear();
         return r;
     }
 
-    private static string[] RunLines(string script)
+    private string[] RunLines(string script)
     {
         return RunRaw(script).Select(o => o?.ToString() ?? "").ToArray();
     }

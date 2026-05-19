@@ -17,25 +17,27 @@ namespace PsBash.Cmdlets.Tests;
 /// Streaming / file-content / signal axes do not apply: shopt is in-process
 /// state, no I/O, no pipeline input.
 /// </summary>
-public class InvokeBashShoptCommandTests
+public class InvokeBashShoptCommandTests : IClassFixture<SharedPwshFixture>
 {
-    private static System.Collections.ObjectModel.Collection<System.Management.Automation.PSObject> RunRaw(string script)
+    private readonly SharedPwshFixture _fixture;
+
+    public InvokeBashShoptCommandTests(SharedPwshFixture fixture)
+    {
+        _fixture = fixture;
+    }
+
+    private System.Collections.ObjectModel.Collection<System.Management.Automation.PSObject> RunRaw(string script)
     {
         // Reset the cmdlet's static option table to oracle defaults so each
         // test sees the same initial state (the cmdlet legitimately persists
         // mutations across calls; tests must not rely on each other).
         InvokeBashShoptCommand.ResetForTests();
 
-        using var pwsh = PwshTestFixture.Create();
-        pwsh.AddScript("Set-BashErrorMode -Mode PowerShell").Invoke();
-        pwsh.Commands.Clear();
-        pwsh.AddScript("$error.Clear()").Invoke();
-        pwsh.Commands.Clear();
-
+        var pwsh = _fixture.AcquireFresh();
         return pwsh.AddScript(script).Invoke();
     }
 
-    private static string[] RunLines(string script)
+    private string[] RunLines(string script)
     {
         return RunRaw(script).Select(o => o?.ToString() ?? "").ToArray();
     }

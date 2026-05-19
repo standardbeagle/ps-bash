@@ -15,12 +15,14 @@ namespace PsBash.Cmdlets.Tests;
 /// resolution, missing-file error continuation, multi-line pipeline split,
 /// <c>--help</c>, and a quoting/injection probe per Directive 12.
 /// </summary>
-public class InvokeBashRevCommandTests : IDisposable
+public class InvokeBashRevCommandTests : IDisposable, IClassFixture<SharedPwshFixture>
 {
+    private readonly SharedPwshFixture _fixture;
     private readonly string _tmpDir;
 
-    public InvokeBashRevCommandTests()
+    public InvokeBashRevCommandTests(SharedPwshFixture fixture)
     {
+        _fixture = fixture;
         _tmpDir = Path.Combine(
             Path.GetTempPath(),
             $"psb-rev-{Guid.NewGuid():N}".Substring(0, 22));
@@ -32,12 +34,9 @@ public class InvokeBashRevCommandTests : IDisposable
         try { Directory.Delete(_tmpDir, recursive: true); } catch { /* best-effort */ }
     }
 
-    private static string[] RunLines(string script)
+    private string[] RunLines(string script)
     {
-        using var pwsh = PwshTestFixture.Create();
-        pwsh.AddScript("$error.Clear()").Invoke();
-        pwsh.Commands.Clear();
-
+        var pwsh = _fixture.AcquireFresh();
         var result = pwsh.AddScript(script).Invoke();
         pwsh.Commands.Clear();
         return result.Select(o =>
@@ -120,7 +119,7 @@ public class InvokeBashRevCommandTests : IDisposable
         // Per the psm1 oracle: a missing file emits a bash-style error via
         // Write-BashError and continues. We verify the cmdlet does not throw
         // and produces no output for the missing file.
-        using var pwsh = PwshTestFixture.Create();
+        var pwsh = _fixture.AcquireFresh();
         pwsh.AddScript("$ErrorActionPreference='Continue'").Invoke();
         pwsh.Commands.Clear();
         var missing = Path.Combine(_tmpDir, "does-not-exist.txt").Replace("'", "''");

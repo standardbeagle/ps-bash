@@ -12,17 +12,20 @@ namespace PsBash.Cmdlets.Tests;
 /// decimal step, alias resolution, <c>--help</c>, and the Directive-12
 /// injection probe.
 /// </summary>
-public class InvokeBashSeqCommandTests
+public class InvokeBashSeqCommandTests : IClassFixture<SharedPwshFixture>
 {
-    private static string[] RunLines(string script)
-    {
-        using var pwsh = PwshTestFixture.Create();
-        pwsh.AddScript("$error.Clear()").Invoke();
-        pwsh.Commands.Clear();
+    private readonly SharedPwshFixture _fixture;
 
+    public InvokeBashSeqCommandTests(SharedPwshFixture fixture)
+    {
+        _fixture = fixture;
+    }
+
+    private string[] RunLines(string script)
+    {
+        var pwsh = _fixture.AcquireFresh();
         var result = pwsh.AddScript(script).Invoke();
         pwsh.Commands.Clear();
-
         return result.Select(o => o?.ToString() ?? "").ToArray();
     }
 
@@ -102,7 +105,7 @@ public class InvokeBashSeqCommandTests
     [Fact]
     public void Seq_TypedOutputCarriesPsBashSeqOutput()
     {
-        using var pwsh = PwshTestFixture.Create();
+        var pwsh = _fixture.AcquireFresh();
         var result = pwsh.AddScript(
             "(Invoke-BashSeq 3)[0].PSTypeNames -join ','").Invoke();
         Assert.Single(result);
@@ -113,7 +116,7 @@ public class InvokeBashSeqCommandTests
     [Fact]
     public void Seq_TypedOutput_ExposesValueAndIndex()
     {
-        using var pwsh = PwshTestFixture.Create();
+        var pwsh = _fixture.AcquireFresh();
         var result = pwsh.AddScript(
             "(Invoke-BashSeq 3) | ForEach-Object { \"$($_.Index):$($_.Value)\" }").Invoke();
         Assert.Equal(3, result.Count);

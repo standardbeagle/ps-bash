@@ -10,26 +10,33 @@ namespace PsBash.Cmdlets.Tests;
 /// argument (default 1), non-integer / negative argument error, shift-past-end
 /// error, no stdout output.
 /// </summary>
-public class InvokeBashShiftCommandTests
+public class InvokeBashShiftCommandTests : IClassFixture<SharedPwshFixture>
 {
-    private static object[]? RunAndReadPositional(string script)
+    private readonly SharedPwshFixture _fixture;
+
+    public InvokeBashShiftCommandTests(SharedPwshFixture fixture)
     {
-        using var pwsh = PwshTestFixture.Create();
-        pwsh.AddScript("$error.Clear()").Invoke();
-        pwsh.Commands.Clear();
+        _fixture = fixture;
+    }
+
+    private object[]? RunAndReadPositional(string script)
+    {
+        var pwsh = _fixture.AcquireFresh();
         pwsh.AddScript(script).Invoke();
         pwsh.Commands.Clear();
         var result = pwsh.AddScript(
             "$v = $global:BashPositional; " +
             "if ($null -eq $v) { return } " +
             "$arr = @($v); for ($k=0; $k -lt $arr.Count; $k++) { Write-Output $arr[$k] }").Invoke();
+        pwsh.Commands.Clear();
         return result.Select(o => (object?)o?.ToString()).ToArray()!;
     }
 
-    private static string[] RunLines(string script)
+    private string[] RunLines(string script)
     {
-        using var pwsh = PwshTestFixture.Create();
+        var pwsh = _fixture.AcquireFresh();
         var result = pwsh.AddScript(script).Invoke();
+        pwsh.Commands.Clear();
         return result.Select(o => o?.ToString() ?? "").ToArray();
     }
 

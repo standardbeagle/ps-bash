@@ -32,12 +32,14 @@ namespace PsBash.Cmdlets.Tests;
 /// tests also prove the function-shadowing removal worked and the psm1
 /// Set-Alias 'sed' line still resolves to the cmdlet.
 /// </summary>
-public class InvokeBashSedCommandTests : IDisposable
+public class InvokeBashSedCommandTests : IDisposable, IClassFixture<SharedPwshFixture>
 {
+    private readonly SharedPwshFixture _fixture;
     private readonly string _tmpDir;
 
-    public InvokeBashSedCommandTests()
+    public InvokeBashSedCommandTests(SharedPwshFixture fixture)
     {
+        _fixture = fixture;
         _tmpDir = Path.Combine(
             Path.GetTempPath(), "psbash-sed-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(_tmpDir);
@@ -56,13 +58,9 @@ public class InvokeBashSedCommandTests : IDisposable
         return path;
     }
 
-    /// <summary>Runs a script, asserts no error record was generated.</summary>
-    private static System.Collections.ObjectModel.Collection<PSObject> Run(string script)
+    private System.Collections.ObjectModel.Collection<PSObject> Run(string script)
     {
-        using var pwsh = PwshTestFixture.Create();
-        pwsh.AddScript("$error.Clear()").Invoke();
-        pwsh.Commands.Clear();
-
+        var pwsh = _fixture.AcquireFresh();
         var result = pwsh.AddScript(script).Invoke();
         pwsh.Commands.Clear();
 
@@ -75,24 +73,16 @@ public class InvokeBashSedCommandTests : IDisposable
         return result;
     }
 
-    /// <summary>Runs a script without asserting the error stream is clean.</summary>
-    private static System.Collections.ObjectModel.Collection<PSObject> RunAllowError(
+    private System.Collections.ObjectModel.Collection<PSObject> RunAllowError(
         string script)
     {
-        using var pwsh = PwshTestFixture.Create();
+        var pwsh = _fixture.AcquireFresh();
         var result = pwsh.AddScript(script).Invoke();
         pwsh.Commands.Clear();
         return result;
     }
 
-    /// <summary>
-    /// Extracts the text payload of each emitted object. Invoke-BashSed emits
-    /// bare strings ("line") via BashRuntime.NewBashObject's TextOutput fast
-    /// path, so the object's own ToString() is the payload; the BashText
-    /// property branch covers the pipeline-passthrough case where an original
-    /// typed object was re-emitted.
-    /// </summary>
-    private static string[] RunText(string script)
+    private string[] RunText(string script)
     {
         return Run(script)
             .Select(o =>

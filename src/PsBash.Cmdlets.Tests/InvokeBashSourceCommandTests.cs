@@ -2,12 +2,19 @@ using Xunit;
 
 namespace PsBash.Cmdlets.Tests;
 
-public class InvokeBashSourceCommandTests
+public class InvokeBashSourceCommandTests : IClassFixture<SharedPwshFixture>
 {
+    private readonly SharedPwshFixture _fixture;
+
+    public InvokeBashSourceCommandTests(SharedPwshFixture fixture)
+    {
+        _fixture = fixture;
+    }
+
     [Fact]
     public void SourceEnvFile_SetsEnvVarInCallerScope()
     {
-        using var pwsh = PwshTestFixture.Create();
+        var pwsh = _fixture.AcquireFresh();
         var tempFile = Path.Combine(Path.GetTempPath(), $"psbash_source_test_{Guid.NewGuid()}.env");
         File.WriteAllText(tempFile, "export PSBASH_SOURCE_TEST_FOO=bar");
         try
@@ -29,7 +36,7 @@ public class InvokeBashSourceCommandTests
     [Fact]
     public void SourcePs1File_DotSourcesNatively()
     {
-        using var pwsh = PwshTestFixture.Create();
+        var pwsh = _fixture.AcquireFresh();
         var tempFile = Path.Combine(Path.GetTempPath(), $"psbash_source_test_{Guid.NewGuid()}.ps1");
         File.WriteAllText(tempFile, "$env:PSBASH_SOURCE_PS1_TEST = 'fromps1'");
         try
@@ -51,7 +58,7 @@ public class InvokeBashSourceCommandTests
     [Fact]
     public void SourceWithArguments_SetsPositionalParams()
     {
-        using var pwsh = PwshTestFixture.Create();
+        var pwsh = _fixture.AcquireFresh();
         var tempFile = Path.Combine(Path.GetTempPath(), $"psbash_source_test_{Guid.NewGuid()}.sh");
         File.WriteAllText(tempFile, "export PSBASH_SOURCE_ARG_TEST=$1");
         try
@@ -75,7 +82,7 @@ public class InvokeBashSourceCommandTests
     [Fact]
     public void SourceBashScript_TranspilesAndEvals()
     {
-        using var pwsh = PwshTestFixture.Create();
+        var pwsh = _fixture.AcquireFresh();
         var tempFile = Path.Combine(Path.GetTempPath(), $"psbash_source_test_{Guid.NewGuid()}.sh");
         File.WriteAllText(tempFile, "export PSBASH_SOURCE_BASH_TEST=baz");
         try
@@ -97,7 +104,7 @@ public class InvokeBashSourceCommandTests
     [Fact]
     public void SourceNonExistentPs1File_WritesError()
     {
-        using var pwsh = PwshTestFixture.Create();
+        var pwsh = _fixture.AcquireFresh();
         var missingPath = Path.Combine(Path.GetTempPath(), $"psbash_missing_{Guid.NewGuid()}.ps1");
         pwsh.Streams.Error.Clear();
         pwsh.AddScript($"Invoke-BashSource '{missingPath.Replace("'", "''")}'").Invoke();
@@ -110,7 +117,7 @@ public class InvokeBashSourceCommandTests
     [Fact]
     public void SourceNonExistentShFile_WritesError()
     {
-        using var pwsh = PwshTestFixture.Create();
+        var pwsh = _fixture.AcquireFresh();
         var missingPath = Path.Combine(Path.GetTempPath(), $"psbash_missing_{Guid.NewGuid()}.sh");
         pwsh.Streams.Error.Clear();
         pwsh.AddScript($"Invoke-BashSource '{missingPath.Replace("'", "''")}'").Invoke();
@@ -126,7 +133,7 @@ public class InvokeBashSourceCommandTests
         // Arrange: write a .sh file in a temp directory and source it via a relative path.
         // Verify: env var set by the sourced script is visible in caller scope.
         // ps-bash-specific: GetUnresolvedProviderPathFromPSPath resolves relative to PS $PWD.
-        using var pwsh = PwshTestFixture.Create();
+        var pwsh = _fixture.AcquireFresh();
         var tempDir = Path.Combine(Path.GetTempPath(), $"psbash_rel_{Guid.NewGuid()}");
         Directory.CreateDirectory(tempDir);
         var scriptName = "rel_source_test.sh";
@@ -158,7 +165,7 @@ public class InvokeBashSourceCommandTests
         // Arrange: script uses $1 and $2 (via $global:BashPositional) to build a string.
         // Verify: both positional params are available when multiple args are passed.
         // ps-bash-specific: BashPositional array is the mechanism; no bash subprocess.
-        using var pwsh = PwshTestFixture.Create();
+        var pwsh = _fixture.AcquireFresh();
         var tempFile = Path.Combine(Path.GetTempPath(), $"psbash_source_multiarg_{Guid.NewGuid()}.sh");
         // Script exports FIRST=$1 and SECOND=$2 so caller can inspect both.
         File.WriteAllText(tempFile, "export PSBASH_MULTIARG_FIRST=$1\nexport PSBASH_MULTIARG_SECOND=$2");
@@ -192,7 +199,7 @@ public class InvokeBashSourceCommandTests
         // Arrange: script A sources script B; script B exports an env var.
         // Verify: the env var exported by B is visible in the outer (caller) scope.
         // ps-bash-specific: tests that recursive Invoke-BashSource shares the runspace scope.
-        using var pwsh = PwshTestFixture.Create();
+        var pwsh = _fixture.AcquireFresh();
         var tempDir = Path.GetTempPath();
         var scriptBName = $"psbash_nested_b_{Guid.NewGuid()}.sh";
         var scriptAName = $"psbash_nested_a_{Guid.NewGuid()}.sh";

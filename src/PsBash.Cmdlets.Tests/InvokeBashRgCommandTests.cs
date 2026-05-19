@@ -24,12 +24,14 @@ namespace PsBash.Cmdlets.Tests;
 /// file, CRLF, missing target (axis 14), alias, <c>--help</c>, and an
 /// injection probe per Directive 12.
 /// </summary>
-public class InvokeBashRgCommandTests : IDisposable
+public class InvokeBashRgCommandTests : IDisposable, IClassFixture<SharedPwshFixture>
 {
+    private readonly SharedPwshFixture _fixture;
     private readonly string _tmpDir;
 
-    public InvokeBashRgCommandTests()
+    public InvokeBashRgCommandTests(SharedPwshFixture fixture)
     {
+        _fixture = fixture;
         _tmpDir = Path.Combine(
             Path.GetTempPath(),
             $"psb-rg-{Guid.NewGuid():N}".Substring(0, 20));
@@ -41,12 +43,9 @@ public class InvokeBashRgCommandTests : IDisposable
         try { Directory.Delete(_tmpDir, recursive: true); } catch { /* best-effort */ }
     }
 
-    private static string[] RunLines(string script)
+    private string[] RunLines(string script)
     {
-        using var pwsh = PwshTestFixture.Create();
-        pwsh.AddScript("$error.Clear()").Invoke();
-        pwsh.Commands.Clear();
-
+        var pwsh = _fixture.AcquireFresh();
         var result = pwsh.AddScript(script).Invoke();
         pwsh.Commands.Clear();
         return result.Select(o =>
@@ -177,7 +176,7 @@ public class InvokeBashRgCommandTests : IDisposable
     [Fact]
     public void Rg_FileMode_MissingFile_EmitsError_NoOutput()
     {
-        using var pwsh = PwshTestFixture.Create();
+        var pwsh = _fixture.AcquireFresh();
         pwsh.AddScript("$ErrorActionPreference='Continue'").Invoke();
         pwsh.Commands.Clear();
         var missing = Q(Path.Combine(_tmpDir, "nope.txt"));

@@ -12,57 +12,56 @@ namespace PsBash.Cmdlets.Tests;
 /// array, -n max-chars, -r raw (no-op for parity), Directive 12
 /// identifier-name rejection.
 /// </summary>
-public class InvokeBashReadCommandTests
+public class InvokeBashReadCommandTests : IClassFixture<SharedPwshFixture>
 {
-    /// <summary>
-    /// Run a script and read the named variable's value as a string.
-    /// </summary>
-    private static string ReadVariable(string script, string varName)
+    private readonly SharedPwshFixture _fixture;
+
+    public InvokeBashReadCommandTests(SharedPwshFixture fixture)
     {
-        using var pwsh = PwshTestFixture.Create();
-        pwsh.AddScript("$error.Clear()").Invoke();
-        pwsh.Commands.Clear();
+        _fixture = fixture;
+    }
+
+    private string ReadVariable(string script, string varName)
+    {
+        var pwsh = _fixture.AcquireFresh();
         pwsh.AddScript(script).Invoke();
         pwsh.Commands.Clear();
         var result = pwsh.AddScript(
             $"$v = Get-Variable -Name '{varName}' -ValueOnly -ErrorAction SilentlyContinue; " +
             "if ($null -eq $v) { return } " +
             "Write-Output ($v -as [string])").Invoke();
+        pwsh.Commands.Clear();
         return result.Count > 0 ? result[0]?.ToString() ?? "" : "";
     }
 
-    /// <summary>
-    /// Read a named variable, returning string[] when it is an array.
-    /// </summary>
-    private static string[] ReadArrayVariable(string script, string varName)
+    private string[] ReadArrayVariable(string script, string varName)
     {
-        using var pwsh = PwshTestFixture.Create();
-        pwsh.AddScript("$error.Clear()").Invoke();
-        pwsh.Commands.Clear();
+        var pwsh = _fixture.AcquireFresh();
         pwsh.AddScript(script).Invoke();
         pwsh.Commands.Clear();
         var result = pwsh.AddScript(
             $"$v = Get-Variable -Name '{varName}' -ValueOnly -ErrorAction SilentlyContinue; " +
             "if ($null -eq $v) { return } " +
             "$arr = @($v); for ($k=0; $k -lt $arr.Count; $k++) { Write-Output $arr[$k] }").Invoke();
+        pwsh.Commands.Clear();
         return result.Select(o => o?.ToString() ?? "").ToArray();
     }
 
-    private static string[] RunAndCollectErrors(string script)
+    private string[] RunAndCollectErrors(string script)
     {
-        using var pwsh = PwshTestFixture.Create();
-        pwsh.AddScript("$error.Clear()").Invoke();
-        pwsh.Commands.Clear();
+        var pwsh = _fixture.AcquireFresh();
         pwsh.AddScript(script).Invoke();
         pwsh.Commands.Clear();
         var errs = pwsh.AddScript("$error | ForEach-Object { $_.ToString() }").Invoke();
+        pwsh.Commands.Clear();
         return errs.Select(o => o?.ToString() ?? "").ToArray();
     }
 
-    private static string[] RunLines(string script)
+    private string[] RunLines(string script)
     {
-        using var pwsh = PwshTestFixture.Create();
+        var pwsh = _fixture.AcquireFresh();
         var result = pwsh.AddScript(script).Invoke();
+        pwsh.Commands.Clear();
         return result.Select(o => o?.ToString() ?? "").ToArray();
     }
 
@@ -133,7 +132,7 @@ public class InvokeBashReadCommandTests
     public void Read_MultiVariable_SplitsWithLastGettingRemainder()
     {
         // a b c d into two vars: first gets "a", second gets "b c d".
-        using var pwsh = PwshTestFixture.Create();
+        var pwsh = _fixture.AcquireFresh();
         pwsh.AddScript("'a b c d' | Invoke-BashRead v1 v2").Invoke();
         pwsh.Commands.Clear();
         var v1 = pwsh.AddScript("$v1").Invoke();

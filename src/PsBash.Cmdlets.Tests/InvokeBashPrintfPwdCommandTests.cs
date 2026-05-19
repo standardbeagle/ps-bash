@@ -27,14 +27,18 @@ namespace PsBash.Cmdlets.Tests;
 /// also prove the function-shadowing removal worked and the psm1
 /// `Set-Alias printf/pwd` lines still resolve to the cmdlets.
 /// </summary>
-public class InvokeBashPrintfPwdCommandTests
+public class InvokeBashPrintfPwdCommandTests : IClassFixture<SharedPwshFixture>
 {
-    private static string[] RunLines(string script)
-    {
-        using var pwsh = PwshTestFixture.Create();
-        pwsh.AddScript("$error.Clear()").Invoke();
-        pwsh.Commands.Clear();
+    private readonly SharedPwshFixture _fixture;
 
+    public InvokeBashPrintfPwdCommandTests(SharedPwshFixture fixture)
+    {
+        _fixture = fixture;
+    }
+
+    private string[] RunLines(string script)
+    {
+        var pwsh = _fixture.AcquireFresh();
         var result = pwsh.AddScript(script).Invoke();
         pwsh.Commands.Clear();
 
@@ -46,17 +50,9 @@ public class InvokeBashPrintfPwdCommandTests
         return result.Select(o => o?.ToString() ?? "").ToArray();
     }
 
-    /// <summary>
-    /// Extracts the BashText property from each emitted pipeline object — used
-    /// for typed objects (printf's NoTrailingNewline TextOutput, pwd's
-    /// PsBash.PwdLine) whose ToString() may differ from the raw payload.
-    /// </summary>
-    private static string[] RunBashText(string script)
+    private string[] RunBashText(string script)
     {
-        using var pwsh = PwshTestFixture.Create();
-        pwsh.AddScript("$error.Clear()").Invoke();
-        pwsh.Commands.Clear();
-
+        var pwsh = _fixture.AcquireFresh();
         var result = pwsh.AddScript(script).Invoke();
         pwsh.Commands.Clear();
 
@@ -215,7 +211,7 @@ public class InvokeBashPrintfPwdCommandTests
         // Write-BashError, which sets $global:LASTEXITCODE = 2. The exit code
         // is the observable, runspace-visible contract (the stderr sink is a
         // script-scoped concern owned by Write-BashError).
-        using var pwsh = PwshTestFixture.Create();
+        var pwsh = _fixture.AcquireFresh();
         pwsh.AddScript("$global:LASTEXITCODE = 0").Invoke();
         pwsh.Commands.Clear();
         pwsh.AddScript("Invoke-BashPrintf 2>$null").Invoke();
@@ -259,7 +255,7 @@ public class InvokeBashPrintfPwdCommandTests
     [Fact]
     public void Printf_EmitsNoTrailingNewlineTextOutputObject()
     {
-        using var pwsh = PwshTestFixture.Create();
+        var pwsh = _fixture.AcquireFresh();
         var result = pwsh.AddScript("Invoke-BashPrintf 'x'").Invoke();
         Assert.Single(result);
         Assert.Contains("PsBash.TextOutput", result[0]!.TypeNames);
@@ -340,7 +336,7 @@ public class InvokeBashPrintfPwdCommandTests
     [Fact]
     public void Pwd_EmitsTypedPwdLineObject()
     {
-        using var pwsh = PwshTestFixture.Create();
+        var pwsh = _fixture.AcquireFresh();
         var result = pwsh.AddScript(
             "Set-Location ([System.IO.Path]::GetTempPath()); Invoke-BashPwd").Invoke();
         Assert.Single(result);
