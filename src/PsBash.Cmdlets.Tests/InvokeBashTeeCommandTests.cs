@@ -17,12 +17,14 @@ namespace PsBash.Cmdlets.Tests;
 /// resolution, and a Directive-12 injection probe via a filename containing
 /// PowerShell scriptblock chars.
 /// </summary>
-public class InvokeBashTeeCommandTests : IDisposable
+public class InvokeBashTeeCommandTests : IClassFixture<SharedPwshFixture>, IDisposable
 {
+    private readonly SharedPwshFixture _fixture;
     private readonly string _tmpDir;
 
-    public InvokeBashTeeCommandTests()
+    public InvokeBashTeeCommandTests(SharedPwshFixture fixture)
     {
+        _fixture = fixture;
         _tmpDir = Path.Combine(
             Path.GetTempPath(),
             $"psb-tee-{Guid.NewGuid():N}".Substring(0, 22));
@@ -34,12 +36,9 @@ public class InvokeBashTeeCommandTests : IDisposable
         try { Directory.Delete(_tmpDir, recursive: true); } catch { /* best-effort */ }
     }
 
-    private static string[] RunLines(string script)
+    private string[] RunLines(string script)
     {
-        using var pwsh = PwshTestFixture.Create();
-        pwsh.AddScript("$error.Clear()").Invoke();
-        pwsh.Commands.Clear();
-
+        var pwsh = _fixture.AcquireFresh();
         var result = pwsh.AddScript(script).Invoke();
         pwsh.Commands.Clear();
         return result.Select(o =>
@@ -101,9 +100,7 @@ public class InvokeBashTeeCommandTests : IDisposable
         string target = Path.Combine(_tmpDir, "out.txt");
         // Compose with Measure-Object — proves objects flow downstream after
         // the file write (the "tee" of the name).
-        using var pwsh = PwshTestFixture.Create();
-        pwsh.AddScript("$error.Clear()").Invoke();
-        pwsh.Commands.Clear();
+        var pwsh = _fixture.AcquireFresh();
         var result = pwsh.AddScript(
             $"('a','b','c','d') | Invoke-BashTee '{Q(target)}' | Measure-Object")
             .Invoke();
@@ -134,7 +131,7 @@ public class InvokeBashTeeCommandTests : IDisposable
     {
         // Oracle: parent-dir Test-Path fails → Write-BashError + continue.
         string target = Path.Combine(_tmpDir, "no-such-dir", "out.txt");
-        using var pwsh = PwshTestFixture.Create();
+        var pwsh = _fixture.AcquireFresh();
         pwsh.AddScript("$ErrorActionPreference='Continue'").Invoke();
         pwsh.Commands.Clear();
         var result = pwsh.AddScript(
@@ -155,9 +152,7 @@ public class InvokeBashTeeCommandTests : IDisposable
         // shape), the oracle concatenates directly without re-joining. Two
         // items "a\n" + "b\n" should produce "a\nb\n", not "a\n\nb\n\n".
         string target = Path.Combine(_tmpDir, "out.txt");
-        using var pwsh = PwshTestFixture.Create();
-        pwsh.AddScript("$error.Clear()").Invoke();
-        pwsh.Commands.Clear();
+        var pwsh = _fixture.AcquireFresh();
         pwsh.AddScript(
             $@"
 $a = [PSCustomObject]@{{ BashText = ""a`n"" }}
@@ -209,7 +204,7 @@ $b = [PSCustomObject]@{{ BashText = ""b`n"" }}
         // not the worktree root.
         string injection = Path.Combine(
             _tmpDir, "$(throw 'INJECTED')", "out.txt");
-        using var pwsh = PwshTestFixture.Create();
+        var pwsh = _fixture.AcquireFresh();
         pwsh.AddScript("$ErrorActionPreference='Continue'").Invoke();
         pwsh.Commands.Clear();
         var result = pwsh.AddScript(
