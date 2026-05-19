@@ -28,7 +28,18 @@ internal sealed class InteractiveShellHarness : IAsyncDisposable
     private static readonly Regex PromptRegex = new(Regex.Escape(PromptString), RegexOptions.Compiled);
 
     public static readonly TimeSpan DefaultPromptTimeout = TimeSpan.FromSeconds(8);
-    public static readonly TimeSpan DefaultStartTimeout = TimeSpan.FromSeconds(15);
+    // Cold-start: spawn ps-bash, locate + spawn the host child, open the IPC
+    // socket, extract the embedded PowerShell module, import it, and emit the
+    // first PS1. Under parallel test load on slow Linux CI runners (multiple
+    // shell-spawning tests racing for CPU + disk) this can exceed 15 s. Allow
+    // an env override (PSBASH_TEST_START_TIMEOUT_SEC) so a slow CI lane can
+    // dial it up without recompiling.
+    public static readonly TimeSpan DefaultStartTimeout = TimeSpan.FromSeconds(
+        int.TryParse(
+            Environment.GetEnvironmentVariable("PSBASH_TEST_START_TIMEOUT_SEC"),
+            out var startTimeoutSec) && startTimeoutSec > 0
+            ? startTimeoutSec
+            : 30);
 
     private readonly Process _process;
     private readonly StringBuilder _sinceLastPrompt = new();

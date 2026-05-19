@@ -13,7 +13,18 @@ namespace PsBash.Shell.Tests;
 /// Oracle note (Directive 1): behavior is ps-bash-specific (SQLite history persistence)
 /// so hand-written asserts are correct per the exception list.
 /// Platform note (Directive 5): tests skip when the ps-bash binary is not found.
+///
+/// Parallelism (Directive 6 determinism): each test spawns one or two full
+/// ps-bash sessions. Running these five tests in parallel against the other
+/// shell-spawning tests in this assembly starves cold-start on slow Linux CI
+/// runners and the harness's 30 s start timeout fires before the first prompt
+/// arrives. The collection serializes the file's tests so the cold-start
+/// contention only competes with the rest of the assembly, not with itself.
 /// </summary>
+[CollectionDefinition("HistoryPersistence", DisableParallelization = true)]
+public sealed class HistoryPersistenceCollection;
+
+[Collection("HistoryPersistence")]
 public class HistoryPersistenceTests
 {
     // ── helpers ───────────────────────────────────────────────────────────────
