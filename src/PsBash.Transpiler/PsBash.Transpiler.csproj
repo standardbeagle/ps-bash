@@ -27,9 +27,14 @@
     <PackageProjectUrl>https://github.com/standardbeagle/ps-bash</PackageProjectUrl>
     <RepositoryUrl>https://github.com/standardbeagle/ps-bash</RepositoryUrl>
     <RepositoryType>git</RepositoryType>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
     <GenerateDocumentationFile>true</GenerateDocumentationFile>
     <NoWarn>CS1591</NoWarn>
   </PropertyGroup>
+
+  <ItemGroup>
+    <None Include="README.md" Pack="true" PackagePath="\" />
+  </ItemGroup>
 
   <ItemGroup>
     <PackageReference Include="Parlot" Version="1.5.7" />
