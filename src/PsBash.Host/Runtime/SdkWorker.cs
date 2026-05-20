@@ -189,9 +189,56 @@ public sealed class SdkWorker : IWorker
         var outputLock = new object();
         var processedOutputCount = 0;
 
+        // Render the buffered non-bash PSObjects with PowerShell's own formatting
+        // engine (Out-String -Stream) so native cmdlet output gets its registered
+        // format.ps1xml views and list/table heuristic — e.g. Test-NetConnection's
+        // compact view — exactly like a normal console. Out-String needs the
+        // runspace, which is only free at end-of-pipeline; during a mid-stream
+        // flush (text interleaved with objects) the runspace is busy, so this
+        // returns false and we fall back to the hand-rolled PSObjectFormatter.
+        bool TryFormatViaRunspace(List<PSObject> buffer)
+        {
+            var rs = _ps.Runspace;
+            if (rs is null ||
+                rs.RunspaceAvailability != System.Management.Automation.Runspaces.RunspaceAvailability.Available)
+                return false;
+            try
+            {
+                int width = 200;
+                try
+                {
+                    var w = _host.UI?.RawUI?.BufferSize.Width ?? 0;
+                    if (w > 20) width = w;
+                }
+                catch { /* non-interactive host: keep the 200 default */ }
+
+                using var fmt = System.Management.Automation.PowerShell.Create();
+                fmt.Runspace = rs;
+                fmt.AddCommand("Out-String")
+                   .AddParameter("Stream", true)
+                   .AddParameter("Width", width);
+                var results = fmt.Invoke(buffer);
+                if (fmt.HadErrors) return false;
+                foreach (var r in results)
+                    deliver((r?.ToString() ?? "") + Environment.NewLine);
+                return true;
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
         void FlushFormatBufferCore()
         {
             if (formatBuffer.Count == 0) return;
+
+            if (TryFormatViaRunspace(formatBuffer))
+            {
+                formatBuffer.Clear();
+                return;
+            }
+
             try
             {
                 foreach (var fline in PSObjectFormatter.FormatAsTable(formatBuffer))

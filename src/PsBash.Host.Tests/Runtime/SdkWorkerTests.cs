@@ -220,6 +220,29 @@ public class SdkWorkerTests : IAsyncLifetime
         Assert.DoesNotContain(run.Lines, l => l.TrimStart().StartsWith("--------"));
     }
 
+    // A many-property object must render through PowerShell's REAL formatter
+    // (Out-String), which picks Format-List (one "Name : Value" line per
+    // property) for >4 properties — not the hand-rolled fallback's single wide
+    // all-columns table row. This is the regression bar for native cmdlet output
+    // like `Test-NetConnection` rendering with its registered view + line breaks
+    // (the `tnc` formatting bug). Distinguishes the real formatter from fallback.
+    [Fact]
+    public async Task ExecuteAsync_ManyPropertyObject_RendersAsListViaRealFormatter()
+    {
+        var script = "[PSCustomObject]@{ Alpha='a'; Bravo='b'; Charlie='c'; Delta='d'; Echo='e'; Foxtrot='f' }";
+        var run = await _fixture.ExecuteCapturedAsync(script);
+        Assert.Equal(0, run.ExitCode);
+
+        var joined = string.Join("\n", run.Lines);
+        Assert.DoesNotContain("@{Alpha=", joined);
+
+        // List view: each property on its own line as "Name : Value" — proves the
+        // real formatter ran (the fallback emits one wide table row) and that the
+        // line breaks survived (the WriteLine newline fix).
+        Assert.Contains(run.Lines, l => l.TrimStart().StartsWith("Alpha") && l.Contains(": a"));
+        Assert.Contains(run.Lines, l => l.TrimStart().StartsWith("Foxtrot") && l.Contains(": f"));
+    }
+
     // Mixed stream: a BashText emitter followed by native PSObjects must keep
     // the BashText line raw and render the native objects as a table afterwards.
     [Fact]

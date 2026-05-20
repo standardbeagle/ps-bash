@@ -105,7 +105,12 @@ internal sealed class ExitTrackingHostUI : PSHostUserInterface
             ? _lineBuffer.ToString() + (value ?? string.Empty)
             : (value ?? string.Empty);
         _lineBuffer.Clear();
-        _writeForwarder(line);
+        // WriteLine is a line terminator. SdkWorker's delivery convention is that
+        // each forwarded chunk carries its own trailing newline (the sink writes
+        // it raw via Console.Write / the output callback, not WriteLine). Without
+        // appending the newline here, multi-line formatter / Out-Default output
+        // collapses onto a single line (e.g. `tnc ... | Out-Default`).
+        _writeForwarder(line + Environment.NewLine);
     }
 
     public override void WriteDebugLine(string message) { }
