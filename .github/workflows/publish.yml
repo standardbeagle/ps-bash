@@ -343,10 +343,15 @@ jobs:
           $cmdletsBin = Get-ChildItem -Path ./src/PsBash.Cmdlets/bin/Release -Directory |
               Sort-Object Name -Descending | Select-Object -First 1
           if (-not $cmdletsBin) { throw "PsBash.Cmdlets build output not found under bin/Release/" }
-          Copy-Item -Path (Join-Path $cmdletsBin.FullName 'PsBash.Cmdlets.dll') `
-                    -Destination ./PsBash.Cmdlets/ -Force
-          Copy-Item -Path (Join-Path $cmdletsBin.FullName 'PsBash.Core.dll') `
-                    -Destination ./PsBash.Cmdlets/ -Force
+          # Stage the full runtime dependency chain. PsBash.Cmdlets.dll ->
+          # PsBash.Core.dll -> PsBash.Transpiler.dll -> Parlot.dll; omitting any
+          # of these leaves transpiler-using cmdlets (eval, bash) unable to load
+          # their dependencies at runtime.
+          foreach ($dll in @('PsBash.Cmdlets.dll', 'PsBash.Core.dll', 'PsBash.Transpiler.dll', 'Parlot.dll')) {
+            $src = Join-Path $cmdletsBin.FullName $dll
+            if (-not (Test-Path $src)) { throw "Expected runtime dependency $dll not found at $src" }
+            Copy-Item -Path $src -Destination ./PsBash.Cmdlets/ -Force
+          }
           Write-Host "Staged ./PsBash.Cmdlets contents:"
           Get-ChildItem ./PsBash.Cmdlets | Format-Table Name, Length
 
@@ -376,11 +381,21 @@ jobs:
           } else {
               '${{ github.event.inputs.version }}'
           }
-          # Update csproj version to match release
-          $csproj = Get-Content ./src/PsBash.Core/PsBash.Core.csproj -Raw
-          $csproj = $csproj -replace '<Version>.*</Version>', "<Version>$version</Version>"
-          Set-Content ./src/PsBash.Core/PsBash.Core.csproj -Value $csproj
-          Write-Host "PsBash.Core version set to: $version"
+          # Sync BOTH package versions to the release. PsBash.Core takes a
+          # ProjectReference to PsBash.Transpiler, so Core's nupkg declares a
+          # dependency on PsBash.Transpiler at this version — both MUST be packed
+          # and pushed together or consumers hit NU1101 on restore.
+          foreach ($proj in @(
+              './src/PsBash.Transpiler/PsBash.Transpiler.csproj',
+              './src/PsBash.Core/PsBash.Core.csproj')) {
+            $csproj = Get-Content $proj -Raw
+            $csproj = $csproj -replace '<Version>.*</Version>', "<Version>$version</Version>"
+            Set-Content $proj -Value $csproj
+            Write-Host "$proj version set to: $version"
+          }
 
+          # Pack Transpiler first so Core's dependency resolves to the freshly
+          # versioned package; the push glob then uploads both.
+          dotnet pack ./src/PsBash.Transpiler/PsBash.Transpiler.csproj -c Release -o ./nuget-out
           dotnet pack ./src/PsBash.Core/PsBash.Core.csproj -c Release -o ./nuget-out
           dotnet nuget push ./nuget-out/*.nupkg --api-key $env:NUGET_API_KEY --source https://api.nuget.org/v3/index.json --skip-duplicate

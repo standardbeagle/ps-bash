@@ -48,10 +48,32 @@ if ($csproj -ne $updated) {
     Write-Host "PsBash.Core.csproj already at version: $version"
 }
 
+# Sync version into PsBash.Transpiler.csproj. PsBash.Core takes a
+# ProjectReference to PsBash.Transpiler, so Core's nupkg depends on
+# PsBash.Transpiler at this version; both must be packed into the local feed or
+# a consumer's restore fails NU1101.
+$transpilerCsprojPath = Join-Path $root 'src' 'PsBash.Transpiler' 'PsBash.Transpiler.csproj'
+$transpilerCsproj = Get-Content $transpilerCsprojPath -Raw
+$transpilerUpdated = $transpilerCsproj -replace '<Version>[^<]*</Version>', "<Version>$version</Version>"
+if ($transpilerCsproj -ne $transpilerUpdated) {
+    Set-Content $transpilerCsprojPath -Value $transpilerUpdated -NoNewline
+    Write-Host "Updated PsBash.Transpiler.csproj version to: $version"
+} else {
+    Write-Host "PsBash.Transpiler.csproj already at version: $version"
+}
+
 # Pack into dist/
 $distDir = Join-Path $root 'dist'
 if (-not (Test-Path $distDir)) {
     New-Item -ItemType Directory -Path $distDir -Force | Out-Null
+}
+
+# Pack PsBash.Transpiler first so PsBash.Core's dependency resolves against the
+# freshly versioned package in the feed.
+dotnet pack $transpilerCsprojPath -c Release -o $distDir
+if ($LASTEXITCODE -ne 0) {
+    Write-Error "dotnet pack PsBash.Transpiler failed"
+    exit 1
 }
 
 dotnet pack $csprojPath -c Release -o $distDir

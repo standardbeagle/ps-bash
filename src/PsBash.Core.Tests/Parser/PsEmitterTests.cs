@@ -1088,6 +1088,44 @@ public class PsEmitterTests
         Assert.DoesNotContain("$env:i", result);
     }
 
+    // ANSI-C quoting ($'...') — transpile-level coverage. The differential
+    // unicode roundtrip is quarantined (host non-UTF-8 stdout, Dart z0GXccJmhX2H),
+    // so the \u expansion is asserted here where there is no console-encoding
+    // dependency.
+    [Fact]
+    public void Transpile_AnsiCUnicodeEscape_ExpandsToLiteralChar()
+    {
+        var result = PsEmitter.Transpile("echo $'caf\\u00e9'");
+
+        Assert.Equal("Invoke-BashEcho 'café'", result);
+    }
+
+    [Fact]
+    public void Transpile_AnsiCHexEscape_ExpandsToLiteralChar()
+    {
+        var result = PsEmitter.Transpile("echo $'\\x41\\x42'");
+
+        Assert.Equal("Invoke-BashEcho 'AB'", result);
+    }
+
+    [Fact]
+    public void Transpile_AnsiCInjection_StaysSingleQuotedLiteral()
+    {
+        // Directive 12: a command-sub-looking payload inside $'...' must emit as a
+        // single-quoted PS literal, never as an executable subexpression.
+        var result = PsEmitter.Transpile("echo $'$(echo PWN)'");
+
+        Assert.Equal("Invoke-BashEcho '$(echo PWN)'", result);
+    }
+
+    [Fact]
+    public void Transpile_AdjacentSingleThenDouble_FlattensToOneArg()
+    {
+        var result = PsEmitter.Transpile("echo 'hello'\"world\"");
+
+        Assert.Equal("Invoke-BashEcho \"helloworld\"", result);
+    }
+
     [Fact]
     public void Transpile_ForIn_SimilarVarNameNotClobbered()
     {
