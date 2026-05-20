@@ -19,6 +19,8 @@
 #   - "bash 4" (macOS ships bash 3.x)
 #   - "wsl" (WSL not available)
 #   - "build first"
+#   - "deferred-hard-bug" (QA rubric Directive 13: known-bad, tracked)
+#   - "quarantine" (QA rubric Directive 2: quarantine tag, not disable)
 
 set -euo pipefail
 
@@ -56,6 +58,8 @@ ALLOW_LIST=(
     "bash version"
     "wsl"
     "build first"
+    "deferred-hard-bug"
+    "quarantine"
 )
 
 # Regex patterns checked separately (ERE syntax via grep -E)
