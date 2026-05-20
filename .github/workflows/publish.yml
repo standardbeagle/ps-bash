@@ -113,9 +113,10 @@ jobs:
       # blocking steps (Pester + Core.Tests + Cmdlets.Tests) to report.
       fail-fast: false
     runs-on: ${{ matrix.os }}
-    # Safety net: a hanging test step (process-spawn fixtures have hung ~1h40m on
-    # CI) must not stall the gate. Non-blocking steps also carry --blame-hang-timeout.
-    timeout-minutes: 25
+    # Backstop only. Each non-blocking suite carries its own step-level
+    # timeout-minutes so a slow/hung one is killed without cancelling the whole
+    # leg (a job-level timeout cancels every step, even the already-passed gate).
+    timeout-minutes: 40
     steps:
       - uses: actions/checkout@v4
 
@@ -197,6 +198,7 @@ jobs:
       # surface is still integration-tested by the (blocking) Pester suite.
       - name: Run PsBash.Cmdlets.Tests
         continue-on-error: true
+        timeout-minutes: 10
         shell: bash
         run: |
           dotnet test src/PsBash.Cmdlets.Tests/PsBash.Cmdlets.Tests.csproj \
@@ -218,6 +220,7 @@ jobs:
       # CI. They still run and upload artifacts for visibility.
       - name: Run PsBash.Shell.Tests
         continue-on-error: true
+        timeout-minutes: 8
         shell: bash
         run: |
           dotnet test src/PsBash.Shell.Tests/PsBash.Shell.Tests.csproj \
@@ -244,6 +247,7 @@ jobs:
       # Pester + Core.Tests, which are deterministic on CI.
       - name: Run PsBash.Differential.Tests
         continue-on-error: true
+        timeout-minutes: 12
         shell: bash
         run: |
           # Determine mode: Linux always runs differential; other platforms use
