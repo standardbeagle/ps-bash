@@ -1,5 +1,30 @@
 # Known Issues
 
+## Architecture differences (not bugs — won't fix)
+
+These diverge from bash because of the PowerShell pipeline model, not missing
+effort. A bash pipe is N OS processes, each with an exit status the shell
+`waitpid`s into `PIPESTATUS`. A PowerShell pipeline is one cooperative object
+stream with a single `$LASTEXITCODE` and record-interleaved stages — there is no
+per-stage process status to collect, and "stage N's exit code" is not
+well-defined mid-stream. The following three are one knot:
+
+- **`set -o pipefail` / `$PIPESTATUS`** — standalone `set -o pipefail` maps only
+  to `$ErrorActionPreference='Stop'`; per-stage exit codes are not tracked.
+  `false | true; echo $?` prints `0` (last-command-wins), not `1`.
+- **Broken pipe / SIGPIPE** — `cmd | head -1` does not deliver SIGPIPE to the
+  producer; exit-141 semantics do not exist. Mapped cmdlets get partial
+  early-stop via `StopUpstreamCommandsException` (from `-First N`), but that is
+  not SIGPIPE.
+- **The trade-off** — the only route to true `PIPESTATUS` is to stop emitting
+  bash pipes as PowerShell pipelines (run each stage as a separately-captured
+  invocation), which kills streaming and breaks broken-pipe behavior. PsBash
+  keeps streaming; these stay won't-fix.
+
+Public-facing summary: `docs/src/content/docs/comparison.mdx` ("When Bash Wins").
+Current behavior is frozen by skipped goldens in
+`src/PsBash.Differential.Tests/PipeDifferentialTests.cs`.
+
 ## `eval "$(cmd)"` — runtime eval (resolved)
 
 **Status:** supported as of REFACTOR-5a-2. Supersedes the v0.8.14

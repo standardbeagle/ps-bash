@@ -167,38 +167,99 @@ public class QuotingDifferentialTests
     // -----------------------------------------------------------------------
 
     /// <summary>
-    /// $'\n' inside ANSI-C quoting must produce a literal newline.
-    /// KNOWN BUG: ps-bash emitter does not recognise the $'...' quoting form;
-    /// it emits the literal text $'\n' instead of a newline character.
-    /// Using GoldenAsync to document current (broken) ps-bash output.
+    /// $'\n' ANSI-C quoting produces a literal newline. Implemented via the
+    /// lexer $'...' scan, parser WordPart.AnsiCQuoted, and emitter
+    /// ExpandAnsiCEscapes (escapes folded to literal chars at transpile time).
     /// </summary>
     [SkippableFact]
     public async Task Differential_AnsiCQuote_Newline()
     {
-        Skip.If(true, "deferred-hard-bug: $'...' ANSI-C quoting not implemented. " +
-                      "See ~/.claude/memory/deferred_hard_bugs.md.");
-        // Directive 1 exception: known emitter gap — $'...' ANSI-C quoting not implemented;
-        // ps-bash treats $'\n' as a literal dollar-single-quote sequence.
-        await AssertOracle.GoldenAsync(
+        await AssertOracle.EqualAsync(
             "echo $'hello\\nworld'",
-            "Quoting_AnsiC_Newline",
+            timeout: TimeSpan.FromSeconds(15));
+    }
+
+    /// <summary>$'\t' produces a literal tab.</summary>
+    [SkippableFact]
+    public async Task Differential_AnsiCQuote_Tab()
+    {
+        await AssertOracle.EqualAsync(
+            "echo $'col1\\tcol2'",
+            timeout: TimeSpan.FromSeconds(15));
+    }
+
+    /// <summary>Hex escapes: $'\x41\x42' → AB.</summary>
+    [SkippableFact]
+    public async Task Differential_AnsiCQuote_Hex()
+    {
+        await AssertOracle.EqualAsync(
+            "echo $'\\x41\\x42'",
+            timeout: TimeSpan.FromSeconds(15));
+    }
+
+    /// <summary>Octal escapes: $'\101\102' → AB.</summary>
+    [SkippableFact]
+    public async Task Differential_AnsiCQuote_Octal()
+    {
+        await AssertOracle.EqualAsync(
+            "echo $'\\101\\102'",
+            timeout: TimeSpan.FromSeconds(15));
+    }
+
+    /// <summary>Unicode escape (Axis 3): $'café' → café.</summary>
+    [SkippableFact]
+    public async Task Differential_AnsiCQuote_Unicode()
+    {
+        await AssertOracle.EqualAsync(
+            "echo $'caf\\u00e9'",
+            timeout: TimeSpan.FromSeconds(15));
+    }
+
+    /// <summary>Escaped single quote inside $'...': $'it\'s' → it's.</summary>
+    [SkippableFact]
+    public async Task Differential_AnsiCQuote_EscapedQuote()
+    {
+        await AssertOracle.EqualAsync(
+            "echo $'it\\'s here'",
+            timeout: TimeSpan.FromSeconds(15));
+    }
+
+    /// <summary>Unrecognized escape keeps backslash + char (bash behavior): $'a\zb' → a\zb.</summary>
+    [SkippableFact]
+    public async Task Differential_AnsiCQuote_UnknownEscapeKept()
+    {
+        await AssertOracle.EqualAsync(
+            "echo $'a\\zb'",
+            timeout: TimeSpan.FromSeconds(15));
+    }
+
+    /// <summary>ANSI-C quote adjacent to a literal suffix joins into one word: pre$'\t'post.</summary>
+    [SkippableFact]
+    public async Task Differential_AnsiCQuote_AdjacentToLiteral()
+    {
+        await AssertOracle.EqualAsync(
+            "echo pre$'\\t'post",
+            timeout: TimeSpan.FromSeconds(15));
+    }
+
+    /// <summary>ANSI-C quote leading (self-delimiting) with a literal suffix: $'\t'post → one word.</summary>
+    [SkippableFact]
+    public async Task Differential_AnsiCQuote_LeadingThenLiteral()
+    {
+        await AssertOracle.EqualAsync(
+            "echo $'X\\tY'post",
             timeout: TimeSpan.FromSeconds(15));
     }
 
     /// <summary>
-    /// $'\t' inside ANSI-C quoting must produce a literal tab.
-    /// KNOWN BUG: same ANSI-C quoting gap as Differential_AnsiCQuote_Newline.
-    /// Using GoldenAsync to document current ps-bash output.
+    /// Injection (Directive 12): a command-substitution-looking payload inside
+    /// $'...' is data, not code. bash: echo $'$(echo PWN)' → $(echo PWN) literal.
     /// </summary>
     [SkippableFact]
-    public async Task Differential_AnsiCQuote_Tab()
+    public async Task Differential_AnsiCQuote_InjectionStaysData()
     {
-        Skip.If(true, "deferred-hard-bug: $'...' ANSI-C quoting not implemented. " +
-                      "See ~/.claude/memory/deferred_hard_bugs.md.");
-        // Directive 1 exception: known emitter gap — $'...' not implemented
-        await AssertOracle.GoldenAsync(
-            "echo $'col1\\tcol2'",
-            "Quoting_AnsiC_Tab",
+        await AssertOracle.EqualAsync(
+            "echo $'$(echo PWN)'",
             timeout: TimeSpan.FromSeconds(15));
     }
 
@@ -242,23 +303,44 @@ public class QuotingDifferentialTests
     // -----------------------------------------------------------------------
 
     /// <summary>
-    /// VAR=value cmd must set VAR in the child environment for that command only.
-    /// After the command finishes, VAR must NOT be visible in the current shell.
-    /// Axis 11: environment leak.
-    /// bash: PSBASH_ENVPFX_TEST=yes printenv PSBASH_ENVPFX_TEST; echo ${PSBASH_ENVPFX_TEST:-gone}
-    /// Expected output: "yes\ngone\n"
-    /// KNOWN BUG: ps-bash emits the env-var assignment as `$env:PSBASH_ENVPFX_TEST = "yes"`
-    /// before running printenv, so the var leaks into the ps-bash process environment and
-    /// persists after the command. The second echo then prints "yes" instead of "gone".
-    /// Additionally, `printenv VAR` outputs "PSBASH_ENVPFX_TEST=yes" instead of just "yes".
-    /// Using GoldenAsync to document current (broken) output.
+    /// VAR=value cmd sets VAR only for that command; it must NOT leak into the
+    /// shell afterward (Axis 11). bash: FOO=bar echo hi; echo "after:[$FOO]"
+    /// → "hi\nafter:[]\n". The emitter wraps the env-pair assignment in a
+    /// try/finally that saves and restores $env:FOO, so the value does not
+    /// persist past the command.
     /// </summary>
     [SkippableFact]
     public async Task Differential_EnvPrefix_DoesNotLeakToShell()
     {
-        // Directive 1 exception: known emitter bug — env-var prefix leaks into the shell
-        // process via $env:NAME assignment; ps-bash does not scope the assignment to the
-        // child process only. This is a significant Axis 11 (environment leak) violation.
+        await AssertOracle.EqualAsync(
+            "FOO=bar echo hi; echo \"after:[$FOO]\"",
+            timeout: TimeSpan.FromSeconds(15));
+    }
+
+    /// <summary>
+    /// Env-prefix with a pre-existing value restores the ORIGINAL value, not
+    /// unset. bash: FOO=orig; FOO=temp echo hi; echo "[$FOO]" → "hi\n[orig]\n".
+    /// </summary>
+    [SkippableFact]
+    public async Task Differential_EnvPrefix_RestoresPriorValue()
+    {
+        await AssertOracle.EqualAsync(
+            "FOO=orig; FOO=temp echo hi; echo \"[$FOO]\"",
+            timeout: TimeSpan.FromSeconds(15));
+    }
+
+    /// <summary>
+    /// Documents the residual `printenv VAR` shape difference (separate from the
+    /// env-leak above, which is fixed): the env cmdlet's one-name form emits
+    /// "NAME=value" where bash `printenv VAR` emits just "value". The second
+    /// line ("gone") confirms there is NO leak. Frozen via GoldenAsync until the
+    /// printenv one-name form is fixed.
+    /// </summary>
+    [SkippableFact]
+    public async Task Differential_Printenv_OneNameShape_KnownGap()
+    {
+        // Directive 1 exception: known cmdlet shape gap — printenv VAR prints
+        // "NAME=value" instead of "value". Tracked separately; not an env leak.
         await AssertOracle.GoldenAsync(
             "unset PSBASH_ENVPFX_TEST; PSBASH_ENVPFX_TEST=yes printenv PSBASH_ENVPFX_TEST; echo ${PSBASH_ENVPFX_TEST:-gone}",
             "Quoting_EnvPrefix_LeakBug",
@@ -270,24 +352,68 @@ public class QuotingDifferentialTests
     // -----------------------------------------------------------------------
 
     /// <summary>
-    /// Adjacent single-quoted and double-quoted parts must join without a space.
-    /// bash: echo 'hello'"world" → "helloworld"
-    /// KNOWN BUG: ps-bash emits adjacent quoted parts as separate arguments with a
-    /// space between them, so echo receives two words: "hello" and "world" → "hello world".
-    /// The emitter does not concatenate adjacent word parts that belong to the same word.
-    /// Using GoldenAsync to document current (broken) output.
+    /// Adjacent single-quoted then double-quoted parts join into one word.
+    /// bash: echo 'hello'"world" → "helloworld".
+    /// Fixed by the EmitWord adjacency-flatten path (NeedsAdjacencyFlatten):
+    /// a word whose first part is a self-delimiting token is emitted as one PS
+    /// double-quoted string instead of split arguments.
     /// </summary>
     [SkippableFact]
     public async Task Differential_AdjacentQuotes_SingleThenDouble()
     {
-        Skip.If(true, "deferred-hard-bug: adjacent-quote merging. Emitter splits " +
-                      "adjacent quoted parts into separate arguments. " +
-                      "See ~/.claude/memory/deferred_hard_bugs.md.");
-        // Directive 1 exception: known emitter bug — adjacent single+double quoted parts
-        // in the same word are emitted as two separate arguments instead of concatenated.
-        await AssertOracle.GoldenAsync(
+        await AssertOracle.EqualAsync(
             "echo 'hello'\"world\"",
-            "Quoting_AdjacentQuotes_SingleThenDouble",
+            timeout: TimeSpan.FromSeconds(15));
+    }
+
+    /// <summary>Double-quoted then single-quoted parts join: echo "hello"'world' → helloworld.</summary>
+    [SkippableFact]
+    public async Task Differential_AdjacentQuotes_DoubleThenSingle()
+    {
+        await AssertOracle.EqualAsync(
+            "echo \"hello\"'world'",
+            timeout: TimeSpan.FromSeconds(15));
+    }
+
+    /// <summary>Two adjacent single-quoted parts join: echo 'a''b' → ab (NOT a'b).</summary>
+    [SkippableFact]
+    public async Task Differential_AdjacentQuotes_SingleThenSingle()
+    {
+        await AssertOracle.EqualAsync(
+            "echo 'a''b'",
+            timeout: TimeSpan.FromSeconds(15));
+    }
+
+    /// <summary>Two adjacent double-quoted parts join: echo "a""b" → ab.</summary>
+    [SkippableFact]
+    public async Task Differential_AdjacentQuotes_DoubleThenDouble()
+    {
+        await AssertOracle.EqualAsync(
+            "echo \"a\"\"b\"",
+            timeout: TimeSpan.FromSeconds(15));
+    }
+
+    /// <summary>
+    /// Quoted-first word with an expanding part still joins: x set, echo "$x"'lit' → value+lit.
+    /// </summary>
+    [SkippableFact]
+    public async Task Differential_AdjacentQuotes_DoubleVarThenSingle()
+    {
+        await AssertOracle.EqualAsync(
+            "x=mid; echo \"$x\"'-tail'",
+            timeout: TimeSpan.FromSeconds(15));
+    }
+
+    /// <summary>
+    /// Injection (Directive 12): a leading single-quoted part adjacent to a double-quoted
+    /// expansion of a var carrying `;`/`$(...)` must concatenate as data, not execute.
+    /// bash: x='$(echo PWN);rm'; echo 'lit'"$x" → lit$(echo PWN);rm (literal).
+    /// </summary>
+    [SkippableFact]
+    public async Task Differential_AdjacentQuotes_InjectionStaysData()
+    {
+        await AssertOracle.EqualAsync(
+            "x='$(echo PWN);rm'; echo 'lit'\"$x\"",
             timeout: TimeSpan.FromSeconds(15));
     }
 

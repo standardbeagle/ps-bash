@@ -1228,6 +1228,10 @@ public sealed class BashParser
             {
                 pos = ParseCommandSub(raw, pos, parts);
             }
+            else if (c == '$' && pos + 1 < len && raw[pos + 1] == '\'')
+            {
+                pos = ParseAnsiCQuoted(raw, pos, parts);
+            }
             else if (c == '$' && pos + 1 < len && raw[pos + 1] == '{')
             {
                 pos = ParseBracedVar(raw, pos, parts);
@@ -1268,6 +1272,27 @@ public sealed class BashParser
         while (pos < raw.Length && raw[pos] != '\'')
             pos++;
         parts.Add(new WordPart.SingleQuoted(raw[start..pos]));
+        if (pos < raw.Length)
+            pos++; // skip closing '
+        return pos;
+    }
+
+    /// <summary>
+    /// Parse an ANSI-C quoted string <c>$'...'</c>. The raw inner text (with
+    /// backslash escapes still intact) is captured; the closing quote is the first
+    /// unescaped <c>'</c>. Escape expansion happens in the emitter.
+    /// </summary>
+    private static int ParseAnsiCQuoted(string raw, int pos, ImmutableArray<WordPart>.Builder parts)
+    {
+        pos += 2; // skip $'
+        int start = pos;
+        while (pos < raw.Length && raw[pos] != '\'')
+        {
+            if (raw[pos] == '\\' && pos + 1 < raw.Length)
+                pos++; // keep the escaped char as part of the inner text
+            pos++;
+        }
+        parts.Add(new WordPart.AnsiCQuoted(raw[start..pos]));
         if (pos < raw.Length)
             pos++; // skip closing '
         return pos;
@@ -1631,7 +1656,7 @@ public sealed class BashParser
             char c = raw[pos];
             if (c is '\'' or '"' or '\\' or '`')
                 break;
-            if (c == '$' && pos + 1 < len && (IsVarStart(raw[pos + 1]) || raw[pos + 1] == '{' || raw[pos + 1] == '('))
+            if (c == '$' && pos + 1 < len && (IsVarStart(raw[pos + 1]) || raw[pos + 1] == '{' || raw[pos + 1] == '(' || raw[pos + 1] == '\''))
                 break;
             // Stop before glob characters so they get parsed separately.
             if (c is '*' or '?')

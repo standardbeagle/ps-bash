@@ -203,7 +203,7 @@ public static class PsEmitter
             // Empty list means implicit $@ -> use BashPositional if set, else $args
             if (forIn.List.IsEmpty)
             {
-                sb.Append($"foreach (${forIn.Var} in (if ($global:BashPositional) {{ $global:BashPositional }} else {{ $args }})) {{ ");
+                sb.Append($"foreach (${forIn.Var} in $(if ($global:BashPositional) {{ $global:BashPositional }} else {{ $args }})) {{ ");
             }
             else
             {
@@ -234,10 +234,38 @@ public static class PsEmitter
         }
     }
 
+    /// <summary>
+    /// True when a word expands to one element per positional parameter in a
+    /// for-in list: bare <c>$@</c> / <c>$*</c> (both word-split) and quoted
+    /// <c>"$@"</c> (each positional preserved). Quoted <c>"$*"</c> is excluded —
+    /// it joins all positionals into a single word (IFS first char), so it must
+    /// fall through to the normal stringified emission and iterate once.
+    /// </summary>
+    private static bool IsPositionalAllWord(CompoundWord w)
+    {
+        if (w.Parts.Length != 1)
+            return false;
+        return w.Parts[0] switch
+        {
+            WordPart.SimpleVarSub sv => sv.Name is "@" or "*",
+            WordPart.DoubleQuoted dq when dq.Parts.Length == 1
+                && dq.Parts[0] is WordPart.SimpleVarSub dsv => dsv.Name is "@",
+            _ => false,
+        };
+    }
+
     private static string FormatForInList(ImmutableArray<CompoundWord> list)
     {
         if (list.Length == 1)
         {
+            // `for x in "$@"` (or $@ / "$*" / $*) iterates once per positional
+            // parameter, preserving spaces within each. EmitWord would render
+            // "$@" as a double-quoted string that $OFS-joins the array into a
+            // single space-separated word, so the loop would run once over the
+            // whole join. Emit the positional array directly instead.
+            if (IsPositionalAllWord(list[0]))
+                return "$(if ($global:BashPositional) { $global:BashPositional } else { $args })";
+
             var single = EmitWord(list[0]);
             if (HasGlobChars(single))
                 return $"(Resolve-Path {single})";
@@ -1692,21 +1720,7 @@ public static class PsEmitter
         // EmitWord wraps each DoubleQuoted part in its own "...", which produces
         // ""segment1":"segment2"" when combined — invalid PowerShell.
         // Instead open one outer double-quote and inline the content of each part.
-        var sb = new StringBuilder();
-        sb.Append('"');
-        foreach (var part in value.Parts)
-        {
-            if (part is WordPart.DoubleQuoted dq)
-                AppendDoubleQuotedInner(sb, dq.Parts);
-            else if (part is WordPart.SingleQuoted sq)
-                sb.Append(sq.Value.Replace("`", "``").Replace("$", "`$").Replace("\"", "`\""));
-            else if (part is WordPart.Literal lit)
-                sb.Append(lit.Value.Replace("$", "`$").Replace("\"", "`\""));
-            else
-                sb.Append(EmitWordPart(part));
-        }
-        sb.Append('"');
-        return sb.ToString();
+        return FlattenPartsToDoubleQuotedString(value.Parts);
     }
 
     private static string EmitWord(CompoundWord word)
@@ -1717,6 +1731,19 @@ public static class PsEmitter
 
         if (word.Parts.Length == 1)
             return TransformWordPath(EmitWordPart(word.Parts[0]));
+
+        // Adjacent-quote concatenation. When a word's FIRST part is a
+        // self-delimiting token ('...', "...", or $(...)), PowerShell tokenizes a
+        // following part as a SEPARATE argument: `echo 'a'"b"` -> two args
+        // (`a`, `b`), and `echo 'a''b'` collapses to the single string `a'b`.
+        // bash treats the whole word as one concatenated argument. Flatten the
+        // word into a single PS double-quoted string so it is exactly one
+        // argument with bash-correct concatenation (single-quoted parts stay
+        // literal via `$/backtick escaping; double-quoted parts and $(...) still
+        // expand). A bareword/$var first part already absorbs following parts
+        // (`pre"mid"suf`, `$x"a"`), so those keep their cheaper emission.
+        if (NeedsAdjacencyFlatten(word.Parts))
+            return TransformWordPath(FlattenPartsToDoubleQuotedString(word.Parts));
 
         var sb = new StringBuilder();
         for (int i = 0; i < word.Parts.Length; i++)
@@ -1729,6 +1756,57 @@ public static class PsEmitter
                 sb.Append('\\');
         }
         return TransformWordPath(sb.ToString());
+    }
+
+    /// <summary>
+    /// True when a multi-part word's leading part is a self-delimiting PowerShell
+    /// token ('...', "...", or $(...)) so naive part concatenation would split
+    /// into multiple arguments or corrupt content. Words containing glob,
+    /// process-substitution, tilde, or brace parts are excluded — they require
+    /// their own emission and do not lead with a self-delimiting quote in
+    /// practice.
+    /// </summary>
+    private static bool NeedsAdjacencyFlatten(ImmutableArray<WordPart> parts)
+    {
+        if (parts.Length < 2)
+            return false;
+        if (parts[0] is not (WordPart.SingleQuoted or WordPart.DoubleQuoted
+                          or WordPart.AnsiCQuoted or WordPart.CommandSub))
+            return false;
+        foreach (var p in parts)
+        {
+            if (p is WordPart.GlobPart or WordPart.ProcessSub or WordPart.TildeSub
+                  or WordPart.BracedTuple or WordPart.BracedRange)
+                return false;
+        }
+        return true;
+    }
+
+    /// <summary>
+    /// Flatten a word's parts into one PowerShell double-quoted string. Mirrors
+    /// the multi-part branch of <see cref="EmitAssignmentValue"/>: single-quoted
+    /// and literal content is escaped so `$` / backtick / `"` stay literal, while
+    /// double-quoted parts and command substitutions keep their expansion.
+    /// </summary>
+    private static string FlattenPartsToDoubleQuotedString(ImmutableArray<WordPart> parts)
+    {
+        var sb = new StringBuilder();
+        sb.Append('"');
+        foreach (var part in parts)
+        {
+            if (part is WordPart.DoubleQuoted dq)
+                AppendDoubleQuotedInner(sb, dq.Parts);
+            else if (part is WordPart.SingleQuoted sq)
+                sb.Append(sq.Value.Replace("`", "``").Replace("$", "`$").Replace("\"", "`\""));
+            else if (part is WordPart.AnsiCQuoted aq)
+                sb.Append(ExpandAnsiCEscapes(aq.Value).Replace("`", "``").Replace("$", "`$").Replace("\"", "`\""));
+            else if (part is WordPart.Literal lit)
+                sb.Append(lit.Value.Replace("$", "`$").Replace("\"", "`\""));
+            else
+                sb.Append(EmitWordPart(part));
+        }
+        sb.Append('"');
+        return sb.ToString();
     }
 
     private static bool HasBraceExpansion(ImmutableArray<WordPart> parts)
@@ -1867,6 +1945,7 @@ public static class PsEmitter
         WordPart.Literal lit => lit.Value,
         WordPart.EscapedLiteral el => $"`{el.Value}",
         WordPart.SingleQuoted sq => $"'{sq.Value}'",
+        WordPart.AnsiCQuoted aq => EmitAnsiCQuoted(aq),
         WordPart.DoubleQuoted dq => EmitDoubleQuoted(dq),
         WordPart.SimpleVarSub vs => EmitSimpleVar(vs.Name),
         WordPart.BracedVarSub bvs => EmitBracedVar(bvs),
@@ -1888,6 +1967,126 @@ public static class PsEmitter
         WordPart.ProcessSub ps => EmitProcessSub(ps),
         _ => throw new NotSupportedException($"Unknown word part type: {part.GetType().Name}"),
     };
+
+    /// <summary>
+    /// Emit an ANSI-C quoted string ($'...'). The C-style escapes are expanded at
+    /// transpile time into the literal characters, then emitted as a PowerShell
+    /// single-quoted literal so no PowerShell expansion can occur on the result
+    /// (Directive 12: a payload like $'$(rm)' becomes the literal text, never code).
+    /// </summary>
+    private static string EmitAnsiCQuoted(WordPart.AnsiCQuoted aq)
+        => "'" + ExpandAnsiCEscapes(aq.Value).Replace("'", "''") + "'";
+
+    /// <summary>
+    /// Expand bash ANSI-C ($'...') escape sequences into their literal characters.
+    /// Supports \a \b \e \E \f \n \r \t \v \\ \' \" \?, octal \nnn (1-3 digits),
+    /// hex \xHH (1-2), unicode \uHHHH (1-4) / \UHHHHHHHH (1-8), and control \cX.
+    /// An unrecognized escape keeps the backslash and the following character,
+    /// matching bash.
+    /// </summary>
+    private static string ExpandAnsiCEscapes(string s)
+    {
+        var sb = new StringBuilder(s.Length);
+        int i = 0;
+        while (i < s.Length)
+        {
+            char c = s[i];
+            if (c != '\\' || i + 1 >= s.Length)
+            {
+                sb.Append(c);
+                i++;
+                continue;
+            }
+
+            char n = s[i + 1];
+            switch (n)
+            {
+                case 'a': sb.Append('\a'); i += 2; break;
+                case 'b': sb.Append('\b'); i += 2; break;
+                case 'e': case 'E': sb.Append('\x1b'); i += 2; break;
+                case 'f': sb.Append('\f'); i += 2; break;
+                case 'n': sb.Append('\n'); i += 2; break;
+                case 'r': sb.Append('\r'); i += 2; break;
+                case 't': sb.Append('\t'); i += 2; break;
+                case 'v': sb.Append('\v'); i += 2; break;
+                case '\\': sb.Append('\\'); i += 2; break;
+                case '\'': sb.Append('\''); i += 2; break;
+                case '"': sb.Append('"'); i += 2; break;
+                case '?': sb.Append('?'); i += 2; break;
+
+                case 'x':
+                {
+                    int j = i + 2, val = 0, cnt = 0;
+                    while (j < s.Length && cnt < 2 && Uri.IsHexDigit(s[j]))
+                    {
+                        val = val * 16 + HexValue(s[j]);
+                        j++; cnt++;
+                    }
+                    if (cnt == 0) { sb.Append('\\').Append('x'); i += 2; }
+                    else { sb.Append((char)val); i = j; }
+                    break;
+                }
+
+                case 'u':
+                case 'U':
+                {
+                    int maxDigits = n == 'u' ? 4 : 8;
+                    int j = i + 2; long val = 0; int cnt = 0;
+                    while (j < s.Length && cnt < maxDigits && Uri.IsHexDigit(s[j]))
+                    {
+                        val = val * 16 + HexValue(s[j]);
+                        j++; cnt++;
+                    }
+                    if (cnt == 0) { sb.Append('\\').Append(n); i += 2; }
+                    else
+                    {
+                        if (val <= 0x10FFFF && !(val >= 0xD800 && val <= 0xDFFF))
+                            sb.Append(char.ConvertFromUtf32((int)val));
+                        else
+                            sb.Append((char)(val & 0xFFFF));
+                        i = j;
+                    }
+                    break;
+                }
+
+                case 'c':
+                {
+                    if (i + 2 < s.Length)
+                    {
+                        char x = s[i + 2];
+                        sb.Append((char)(char.ToUpperInvariant(x) ^ 0x40));
+                        i += 3;
+                    }
+                    else { sb.Append('\\').Append('c'); i += 2; }
+                    break;
+                }
+
+                case >= '0' and <= '7':
+                {
+                    int j = i + 1, val = 0, cnt = 0;
+                    while (j < s.Length && cnt < 3 && s[j] is >= '0' and <= '7')
+                    {
+                        val = val * 8 + (s[j] - '0');
+                        j++; cnt++;
+                    }
+                    sb.Append((char)(val & 0xFF));
+                    i = j;
+                    break;
+                }
+
+                default:
+                    sb.Append('\\').Append(n);
+                    i += 2;
+                    break;
+            }
+        }
+        return sb.ToString();
+    }
+
+    private static int HexValue(char c)
+        => c is >= '0' and <= '9' ? c - '0'
+         : c is >= 'a' and <= 'f' ? c - 'a' + 10
+         : c - 'A' + 10;
 
     // T10 status (parent BsgwTbCEPoQO):
     //   step 1+2 (string-capture): DONE — see EmitSimple `source/.` branch

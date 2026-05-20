@@ -56,6 +56,7 @@ The commands are identical. The difference is what comes out of the pipeline.
 - **Shell scripting** -- bash scripts, conditionals, loops, and functions are a complete programming language. PsBash provides commands, not a shell.
 - **Process substitution** -- `diff <(cmd1) <(cmd2)` has no PsBash equivalent.
 - **Heredocs** -- `cat <<EOF` style multi-line strings are a bash feature, not a command.
+- **Per-stage pipeline exit codes** -- `set -o pipefail`, `$PIPESTATUS`, and `SIGPIPE`/exit-141 on early reader close are bash-shell semantics that do not map to a PowerShell pipeline. This is an **architecture difference, not a bug**: a bash pipe is N OS processes whose individual exit statuses the shell collects, while a PowerShell pipeline is a single cooperative object stream with one `$LASTEXITCODE` and record-interleaved stages. Recovering `$PIPESTATUS` would require running each stage as a separately-captured invocation, which sacrifices streaming. PsBash keeps streaming; pipeline exit status is last-command-wins.
 - **Full POSIX compliance** -- PsBash reimplements common commands, not the full POSIX specification.
 - **System administration on Linux** -- bash is the native shell. PsBash adds a layer.
 

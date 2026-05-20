@@ -17,6 +17,13 @@ public abstract record WordPart : BashNode
     /// <summary>A single-quoted string, e.g. <c>'hello world'</c>.</summary>
     public sealed record SingleQuoted(string Value) : WordPart;
 
+    /// <summary>
+    /// An ANSI-C quoted string, e.g. <c>$'\n'</c> or <c>$'\x41'</c>. <paramref name="Value"/>
+    /// holds the raw inner text (between <c>$'</c> and the closing <c>'</c>); the C-style
+    /// escape sequences are expanded by the emitter, not at parse time.
+    /// </summary>
+    public sealed record AnsiCQuoted(string Value) : WordPart;
+
     /// <summary>A double-quoted string containing word parts, e.g. <c>"hello $name"</c>.</summary>
     public sealed record DoubleQuoted(ImmutableArray<WordPart> Parts) : WordPart;
 
