@@ -7,3 +7,8 @@ artifacts/
 .vs/
 **/TestResults/
 *.dmp
+
+# Binary-module DLLs staged transiently into the script module dir by
+# test-local.ps1 / CI Pester staging — never source. The module ships
+# .psd1/.psm1/.ps1xml only; the cmdlets DLL lives in PsBash.Cmdlets.
+src/PsBash.Module/*.dll
