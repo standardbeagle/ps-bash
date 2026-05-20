@@ -206,7 +206,7 @@ AliasesToExport = 'echo', 'printf', 'ls', 'cat', 'grep', 'sort', 'head', 'tail',
                 'shift', 'realpath', 'command', 'source', 'unset',
                 'pushd', 'popd', 'dirs',
                 'yes', 'tput', 'shopt',
-                'kill', 'test', '[', 'let', 'id', 'shuf', 'balias',
+                'kill', 'test', '`[', 'let', 'id', 'shuf', 'balias',
                 'install', 'browse', 'more', 'less',
                 'trap', 'alias', 'mapfile', 'readarray'
 
