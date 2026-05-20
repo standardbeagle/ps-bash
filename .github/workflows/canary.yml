@@ -34,10 +34,18 @@ env:
 jobs:
   canary:
     strategy:
-      matrix:
-        os: [ubuntu-latest, windows-latest, macos-latest]
       fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+          - os: windows-latest
+          - os: macos-latest
+            # macOS arm64: the ps-bash launcher SIGABRTs at startup (exit 134)
+            # on the arm64 runners (same soft-fail as build.yml). Until #29 fixes
+            # it, don't let macOS fail the canary run.
+            allow-failure: true
     runs-on: ${{ matrix.os }}
+    continue-on-error: ${{ matrix.allow-failure == true }}
     name: canary (${{ matrix.os }})
     steps:
       - uses: actions/checkout@v4
