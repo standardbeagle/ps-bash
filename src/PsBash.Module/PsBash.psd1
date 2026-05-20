@@ -206,7 +206,12 @@ AliasesToExport = 'echo', 'printf', 'ls', 'cat', 'grep', 'sort', 'head', 'tail',
                 'shift', 'realpath', 'command', 'source', 'unset',
                 'pushd', 'popd', 'dirs',
                 'yes', 'tput', 'shopt',
-                'kill', 'test', '`[', 'let', 'id', 'shuf', 'balias',
+                # NB: the '[' alias (the bash `test` builtin) is intentionally NOT
+                # listed here. A bare '[' is an invalid wildcard pattern that breaks
+                # Test-ModuleManifest and Publish-Module ("wildcard character pattern
+                # is not valid: ["). The psm1 registers '[' via a global AllScope
+                # Set-Alias on import, so the command is still available to users.
+                'kill', 'test', 'let', 'id', 'shuf', 'balias',
                 'install', 'browse', 'more', 'less',
                 'trap', 'alias', 'mapfile', 'readarray'
 

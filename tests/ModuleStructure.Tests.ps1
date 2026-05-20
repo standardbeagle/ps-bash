@@ -74,6 +74,11 @@ Describe 'Aliases — all declared aliases resolve' {
         $bashAliases = @(Get-Alias | Where-Object { $_.Definition -like 'Invoke-Bash*' -or $_.Definition -like 'Get-Bash*' } | Select-Object -ExpandProperty Name)
         $bashAliases.Count | Should -BeGreaterOrEqual 60
         foreach ($name in $bashAliases) {
+            # '[' (the bash `test` builtin) cannot be a manifest AliasesToExport
+            # entry — a bare '[' is an invalid wildcard that breaks
+            # Test-ModuleManifest / Publish-Module. It is registered via a global
+            # AllScope Set-Alias in the psm1 instead, so it is exempt here.
+            if ($name -eq '[') { continue }
             $script:expectedAliases | Should -Contain $name -Because "alias '$name' is registered by the module"
         }
     }
