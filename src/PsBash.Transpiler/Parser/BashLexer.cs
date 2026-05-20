@@ -393,6 +393,24 @@ public static class BashLexer
                 continue;
             }
 
+            // ANSI-C quoting $'...': consume through the closing quote, respecting
+            // backslash escapes (so $'it\'s' does not terminate at the escaped quote).
+            // Must be handled here so the whole $'...' stays in one word token and a
+            // \' inside is not mistaken for the terminator by the bare single-quote scan.
+            if (c == '$' && pos + 1 < len && input[pos + 1] == '\'')
+            {
+                pos += 2; // skip $'
+                while (pos < len && input[pos] != '\'')
+                {
+                    if (input[pos] == '\\' && pos + 1 < len)
+                        pos++; // skip the escaped character
+                    pos++;
+                }
+                if (pos < len)
+                    pos++; // skip closing '
+                continue;
+            }
+
             // Special variable: $# $? $! $$ $_ $@ $* $- $0-$9 must not break on the second char.
             if (c == '$' && pos + 1 < len
                 && input[pos + 1] is '#' or '?' or '!' or '$' or '_' or '@' or '*' or '-'

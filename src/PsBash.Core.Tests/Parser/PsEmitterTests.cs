@@ -1065,7 +1065,10 @@ public class PsEmitterTests
     {
         var result = PsEmitter.Transpile("for x; do echo $x; done");
 
-        Assert.Equal("$__psbash_iter = 0; foreach ($x in (if ($global:BashPositional) { $global:BashPositional } else { $args })) { if (++$__psbash_iter -gt ($env:PSBASH_MAX_ITERATIONS ?? 100000)) { throw \"ps-bash: loop iteration limit exceeded ($(($env:PSBASH_MAX_ITERATIONS ?? 100000)))\" }; Invoke-BashEcho $x }", result);
+        // $(if ...) subexpression — a bare (if ...) is parsed by PowerShell as an
+        // invocation of a command named "if" and fails at runtime; the subexpression
+        // operator is required for the implicit-$@ iteration to actually run.
+        Assert.Equal("$__psbash_iter = 0; foreach ($x in $(if ($global:BashPositional) { $global:BashPositional } else { $args })) { if (++$__psbash_iter -gt ($env:PSBASH_MAX_ITERATIONS ?? 100000)) { throw \"ps-bash: loop iteration limit exceeded ($(($env:PSBASH_MAX_ITERATIONS ?? 100000)))\" }; Invoke-BashEcho $x }", result);
     }
 
     [Fact]
@@ -1083,6 +1086,44 @@ public class PsEmitterTests
 
         Assert.Contains("$i", result);
         Assert.DoesNotContain("$env:i", result);
+    }
+
+    // ANSI-C quoting ($'...') — transpile-level coverage. The differential
+    // unicode roundtrip is quarantined (host non-UTF-8 stdout, Dart z0GXccJmhX2H),
+    // so the \u expansion is asserted here where there is no console-encoding
+    // dependency.
+    [Fact]
+    public void Transpile_AnsiCUnicodeEscape_ExpandsToLiteralChar()
+    {
+        var result = PsEmitter.Transpile("echo $'caf\\u00e9'");
+
+        Assert.Equal("Invoke-BashEcho 'café'", result);
+    }
+
+    [Fact]
+    public void Transpile_AnsiCHexEscape_ExpandsToLiteralChar()
+    {
+        var result = PsEmitter.Transpile("echo $'\\x41\\x42'");
+
+        Assert.Equal("Invoke-BashEcho 'AB'", result);
+    }
+
+    [Fact]
+    public void Transpile_AnsiCInjection_StaysSingleQuotedLiteral()
+    {
+        // Directive 12: a command-sub-looking payload inside $'...' must emit as a
+        // single-quoted PS literal, never as an executable subexpression.
+        var result = PsEmitter.Transpile("echo $'$(echo PWN)'");
+
+        Assert.Equal("Invoke-BashEcho '$(echo PWN)'", result);
+    }
+
+    [Fact]
+    public void Transpile_AdjacentSingleThenDouble_FlattensToOneArg()
+    {
+        var result = PsEmitter.Transpile("echo 'hello'\"world\"");
+
+        Assert.Equal("Invoke-BashEcho \"helloworld\"", result);
     }
 
     [Fact]

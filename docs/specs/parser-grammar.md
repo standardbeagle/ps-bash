@@ -89,6 +89,7 @@ Reserved words are recognized contextually by the parser, not as distinct token 
 | `WordPart.Literal` | `Value: string` | Unquoted literal text |
 | `WordPart.EscapedLiteral` | `Value: string` | Backslash-escaped character: `\$` -> `$` |
 | `WordPart.SingleQuoted` | `Value: string` | Content inside single quotes (no expansion) |
+| `WordPart.AnsiCQuoted` | `Value: string` | `$'...'` ANSI-C quoting; raw inner text, C-escapes (`\n`, `\t`, `\xHH`, `\nnn`, `\uHHHH`, `\cX`) expanded by the emitter |
 | `WordPart.DoubleQuoted` | `Parts: WordPart[]` | Content inside double quotes (with expansion) |
 | `WordPart.SimpleVarSub` | `Name: string` | `$foo`, `$?`, `$!`, `$#`, `$$`, `$@`, `$*`, `$-`, `$0`-`$9`, `$SECONDS`, `$PPID`, `$BASH_VERSION` |
 | `WordPart.BracedVarSub` | `Name: string`, `Suffix: string?` | `${foo}`, `${foo:-default}`, `${#arr[@]}`, `${!arr[@]}` |
@@ -232,6 +233,7 @@ The expression between `((` and `))` is extracted as a raw string.
 compound_word -> word_part+
 word_part     -> tilde_sub         (only at word start)
               | single_quoted      'content'
+              | ansi_c_quoted      $'content with \escapes'
               | double_quoted      "content with $expansion"
               | escaped_literal    \c
               | arith_sub          $((expr))

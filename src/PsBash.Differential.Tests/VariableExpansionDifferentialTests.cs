@@ -342,19 +342,15 @@ public class VariableExpansionDifferentialTests
     }
 
     /// <summary>
-    /// $@ expands all positional parameters as separate words.
-    /// set -- now correctly quotes string literals in @('a', 'b', 'c').
-    /// Residual bug: "$@" inside double-quotes collapses the array to a single
-    /// space-joined string instead of individual words per bash semantics.
-    /// Using GoldenAsync to document current (partially fixed) output.
+    /// $@ expands all positional parameters as separate words. set -- quotes the
+    /// literals and FormatForInList emits the positional array directly for "$@",
+    /// so the loop iterates once per parameter (a, b, c on separate lines).
     /// </summary>
     [SkippableFact]
     public async Task Differential_SpecialVar_At_PositionalParams()
     {
-        // Directive 1 exception: residual "$@" expansion collapses array to one string.
-        await AssertOracle.GoldenAsync(
+        await AssertOracle.EqualAsync(
             "set -- a b c; for x in \"$@\"; do echo $x; done",
-            "VarExpansion_At_PositionalParams",
             timeout: TimeSpan.FromSeconds(15));
     }
 
@@ -421,21 +417,24 @@ public class VariableExpansionDifferentialTests
     /// <summary>
     /// "$@" in a for loop produces one iteration per argument (word-splitting safe).
     /// Axis 12: argument containing spaces must not be split further.
-    /// Critical: "$@" (quoted) vs $@ (unquoted) difference.
-    /// KNOWN BUG: same `set --` quoting issue. `set -- "hello world" foo` transpiles
-    /// to `$global:BashPositional = @("hello world", foo)` — `foo` unquoted causes PS error.
-    /// Using GoldenAsync to document current state.
+    /// Fixed: set -- quotes each positional, and FormatForInList emits the
+    /// $global:BashPositional array directly for "$@" instead of $OFS-joining it
+    /// into one double-quoted word.
     /// </summary>
     [SkippableFact]
     public async Task Differential_QuotedAt_PreservesSpacesInArgs()
     {
-        Skip.If(true, "deferred-hard-bug: `set --` emits unquoted positionals into " +
-                      "$global:BashPositional. \"$@\" cannot preserve arg boundaries. " +
-                      "See ~/.claude/memory/deferred_hard_bugs.md.");
-        // Directive 1 exception: known `set --` emitter bug — unquoted string args
-        await AssertOracle.GoldenAsync(
+        await AssertOracle.EqualAsync(
             "set -- \"hello world\" foo; for x in \"$@\"; do echo \"[$x]\"; done",
-            "VarExpansion_QuotedAt_PreservesSpaces",
+            timeout: TimeSpan.FromSeconds(15));
+    }
+
+    /// <summary>$* in a for loop also iterates per positional.</summary>
+    [SkippableFact]
+    public async Task Differential_ForIn_BareAtStar_IteratesPerPositional()
+    {
+        await AssertOracle.EqualAsync(
+            "set -- a b c; for x in \"$*\"; do echo \"<$x>\"; done; for y in $@; do echo \"-$y\"; done",
             timeout: TimeSpan.FromSeconds(15));
     }
 

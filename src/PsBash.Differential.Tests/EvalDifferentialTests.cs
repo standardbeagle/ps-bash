@@ -64,14 +64,11 @@ public class EvalDifferentialTests
     [SkippableFact]
     public async Task Differential_Eval_VarAssignment_VisibleAfterEval()
     {
-        Skip.If(true, "deferred-hard-bug: eval caller scope. ps-bash evaluates " +
-                      "in a child runspace so variables don't leak back to the caller. " +
-                      "See ~/.claude/memory/deferred_hard_bugs.md.");
-        // Axis 12: injection guard — variable value contains no special chars here,
-        // but the quoting path exercises the same emitter code.
-        await AssertOracle.GoldenAsync(
+        // Resolved: eval now runs in-process (Invoke-Expression in the persistent
+        // SDK runspace), so a static body folds inline and a variable it sets is
+        // visible to subsequent commands in the same scope.
+        await AssertOracle.EqualAsync(
             "eval 'x=hello'; echo $x",
-            "Eval_VarAssignment_VisibleAfterEval",
             timeout: TimeSpan.FromSeconds(30));
     }
 
@@ -259,5 +256,42 @@ public class EvalDifferentialTests
             result.WallMs < 15000,
             $"eval $(...) wall time {result.WallMs} ms exceeds 15000 ms budget. " +
             $"stdout: {result.Stdout}\nstderr: {result.Stderr}\nexit: {result.ExitCode}");
+    }
+
+    // -----------------------------------------------------------------------
+    // eval inside a bash function (Dart ZiuWyjrCKODO)
+    //
+    // The general caller-scope case is resolved (in-process Invoke-Expression in
+    // the persistent SDK runspace). These probe the function-scope slice: a
+    // static body folds inline into the emitted PowerShell `function` body, and a
+    // dynamic body's Invoke-Expression runs in that same frame, so a variable the
+    // eval sets is visible to later statements in the function.
+    // -----------------------------------------------------------------------
+
+    /// <summary>eval with a static assignment inside a function is visible after it: f() { eval 'x=5'; echo "$x"; }; f → 5.</summary>
+    [SkippableFact]
+    public async Task Differential_Eval_InFunction_StaticAssignVisible()
+    {
+        await AssertOracle.EqualAsync(
+            "f() { eval 'x=5'; echo \"$x\"; }; f",
+            timeout: TimeSpan.FromSeconds(30));
+    }
+
+    /// <summary>eval of a runtime-computed assignment inside a function is visible: f() { v='y=7'; eval "$v"; echo "$y"; }; f → 7.</summary>
+    [SkippableFact]
+    public async Task Differential_Eval_InFunction_DynamicAssignVisible()
+    {
+        await AssertOracle.EqualAsync(
+            "f() { v='y=7'; eval \"$v\"; echo \"$y\"; }; f",
+            timeout: TimeSpan.FromSeconds(30));
+    }
+
+    /// <summary>eval executes a plain command inside a function: f() { eval 'echo inside'; }; f → inside.</summary>
+    [SkippableFact]
+    public async Task Differential_Eval_InFunction_ExecutesCommand()
+    {
+        await AssertOracle.EqualAsync(
+            "f() { eval 'echo inside'; }; f",
+            timeout: TimeSpan.FromSeconds(30));
     }
 }
