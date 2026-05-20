@@ -380,44 +380,64 @@ jobs:
         shell: pwsh
         run: |
           Copy-Item -Path ./src/PsBash.Module -Destination ./PsBash -Recurse
-          Test-ModuleManifest -Path ./PsBash/PsBash.psd1
+          # Sanity check only, non-fatal: Publish-Module does the authoritative
+          # validation, and Test-ModuleManifest can choke on CI-only conditions
+          # (e.g. RequiredModules not installed) that don't affect the publish.
+          try { Test-ModuleManifest -Path ./PsBash/PsBash.psd1 | Out-Null }
+          catch { Write-Warning "Test-ModuleManifest (PsBash) non-fatal: $($_.Exception.Message)" }
 
-          # Stage PsBash.Cmdlets: start from the manifest only, then add the
-          # built DLL plus its dependencies (PsBash.Core.dll, etc.) from the
-          # build output. Source .cs/.csproj files are excluded so the
-          # PSGallery package contains only what the runtime needs.
           New-Item -ItemType Directory -Path ./PsBash.Cmdlets -Force | Out-Null
           Copy-Item ./src/PsBash.Cmdlets/PsBash.Cmdlets.psd1 -Destination ./PsBash.Cmdlets/
 
           $cmdletsBin = Get-ChildItem -Path ./src/PsBash.Cmdlets/bin/Release -Directory |
               Sort-Object Name -Descending | Select-Object -First 1
           if (-not $cmdletsBin) { throw "PsBash.Cmdlets build output not found under bin/Release/" }
-          # Stage the full runtime dependency chain. PsBash.Cmdlets.dll ->
-          # PsBash.Core.dll -> PsBash.Transpiler.dll -> Parlot.dll; omitting any
-          # of these leaves transpiler-using cmdlets (eval, bash) unable to load
-          # their dependencies at runtime.
-          foreach ($dll in @('PsBash.Cmdlets.dll', 'PsBash.Core.dll', 'PsBash.Transpiler.dll', 'Parlot.dll')) {
+          # PsBash.Cmdlets.dll -> PsBash.Transpiler.dll -> Parlot.dll. It does NOT
+          # depend on PsBash.Core (the graph is Core -> Cmdlets -> Transpiler), so
+          # Core.dll is not in this bin and must not be required here.
+          foreach ($dll in @('PsBash.Cmdlets.dll', 'PsBash.Transpiler.dll', 'Parlot.dll')) {
             $src = Join-Path $cmdletsBin.FullName $dll
             if (-not (Test-Path $src)) { throw "Expected runtime dependency $dll not found at $src" }
             Copy-Item -Path $src -Destination ./PsBash.Cmdlets/ -Force
           }
           Write-Host "Staged ./PsBash.Cmdlets contents:"
           Get-ChildItem ./PsBash.Cmdlets | Format-Table Name, Length
+          try { Test-ModuleManifest -Path ./PsBash.Cmdlets/PsBash.Cmdlets.psd1 | Out-Null }
+          catch { Write-Warning "Test-ModuleManifest (PsBash.Cmdlets) non-fatal: $($_.Exception.Message)" }
 
-          Test-ModuleManifest -Path ./PsBash.Cmdlets/PsBash.Cmdlets.psd1
-
+      # continue-on-error so a PSGallery hiccup does not block the NuGet publish
+      # below (the libraries are the primary deliverable). Idempotent: skip if the
+      # version is already live so re-runs after a partial publish succeed.
       - name: Publish PsBash to PSGallery
+        continue-on-error: true
         shell: pwsh
         env:
           PSGALLERY_API_KEY: ${{ secrets.PSGALLERY_API_KEY }}
         run: |
+          $v = (Import-PowerShellDataFile ./PsBash/PsBash.psd1).ModuleVersion
+          if (Find-Module PsBash -RequiredVersion $v -Repository PSGallery -ErrorAction SilentlyContinue) {
+            Write-Host "PsBash $v already on PSGallery — skipping."; return
+          }
           Publish-Module -Path ./PsBash -NuGetApiKey $env:PSGALLERY_API_KEY -Repository PSGallery -Verbose
 
       - name: Publish PsBash.Cmdlets to PSGallery
+        continue-on-error: true
         shell: pwsh
         env:
           PSGALLERY_API_KEY: ${{ secrets.PSGALLERY_API_KEY }}
         run: |
+          $v = (Import-PowerShellDataFile ./PsBash.Cmdlets/PsBash.Cmdlets.psd1).ModuleVersion
+          if (Find-Module PsBash.Cmdlets -RequiredVersion $v -Repository PSGallery -ErrorAction SilentlyContinue) {
+            Write-Host "PsBash.Cmdlets $v already on PSGallery — skipping."; return
+          }
+          # PsBash.Cmdlets declares RequiredModules = PsBash. Make the staged PsBash
+          # discoverable on PSModulePath (versioned layout) so Publish-Module's
+          # manifest validation can resolve the dependency.
+          $modRoot = Join-Path ([System.IO.Path]::GetTempPath()) 'psb-modpath'
+          $dest = Join-Path $modRoot 'PsBash' $v
+          New-Item -ItemType Directory -Path $dest -Force | Out-Null
+          Copy-Item ./PsBash/* $dest -Recurse -Force
+          $env:PSModulePath = $modRoot + [System.IO.Path]::PathSeparator + $env:PSModulePath
           Publish-Module -Path ./PsBash.Cmdlets -NuGetApiKey $env:PSGALLERY_API_KEY -Repository PSGallery -Verbose
 
       - name: Pack and publish to NuGet
