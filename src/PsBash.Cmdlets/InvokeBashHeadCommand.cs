@@ -122,6 +122,15 @@ public sealed class InvokeBashHeadCommand : PSCmdlet
     /// reach it via reflection. Falls back to a benign return on failure
     /// (the cmdlet still produces correct output; only early-stop is missed).
     /// </summary>
+    [System.Diagnostics.CodeAnalysis.UnconditionalSuppressMessage(
+        "Trimming", "IL2026",
+        Justification = "StopUpstreamCommandsException is an internal SMA type that is " +
+            "always present in the PowerShell host runspace where this cmdlet executes " +
+            "(the non-AOT ps-bash-host); it is never trimmed away.")]
+    [System.Diagnostics.CodeAnalysis.UnconditionalSuppressMessage(
+        "Trimming", "IL2075",
+        Justification = "The SMA assembly and the resolved exception type are present at " +
+            "runtime in the host; reflecting over its constructors is safe.")]
     private void StopUpstream()
     {
         var t = typeof(PSObject).Assembly.GetType(

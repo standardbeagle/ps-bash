@@ -183,6 +183,12 @@ internal sealed class SdkRunspace : IAsyncDisposable
         return ValueTask.CompletedTask;
     }
 
+    [System.Diagnostics.CodeAnalysis.UnconditionalSuppressMessage(
+        "SingleFile", "IL3000",
+        Justification = "ps-bash-host is published self-contained, NOT single-file, so " +
+            "Assembly.Location returns the real SMA path. We need that exact path (not " +
+            "AppContext.BaseDirectory) to locate the sibling Microsoft.PowerShell.Commands.* " +
+            "DLLs, which differs from the app base dir under framework-dependent deployment.")]
     private static void RegisterSdkCmdlets(InitialSessionState iss)
     {
         // PowerShell SDK cmdlet assemblies (Microsoft.PowerShell.Commands.*)
