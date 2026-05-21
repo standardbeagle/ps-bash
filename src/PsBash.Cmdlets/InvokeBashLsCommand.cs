@@ -469,17 +469,14 @@ public sealed class InvokeBashLsCommand : PSCmdlet
                 {
                     psi.ArgumentList.Add(a);
                 }
-                using var proc = System.Diagnostics.Process.Start(psi);
-                if (proc != null)
+                // Bounded spawn + concurrent drain + kill-tree on timeout so a hung
+                // /usr/bin/stat (run once per file) cannot wedge the host runspace.
+                string statOut = BashRuntime.RunChildProcess(psi).Stdout.Trim();
+                if (statOut.Length > 0)
                 {
-                    string statOut = proc.StandardOutput.ReadToEnd().Trim();
-                    proc.WaitForExit();
-                    if (statOut.Length > 0)
-                    {
-                        var parts = statOut.Split(new[] { ' ' }, 2);
-                        owner = parts[0];
-                        group = parts.Length > 1 ? parts[1] : string.Empty;
-                    }
+                    var parts = statOut.Split(new[] { ' ' }, 2);
+                    owner = parts[0];
+                    group = parts.Length > 1 ? parts[1] : string.Empty;
                 }
             }
             catch

@@ -361,19 +361,16 @@ public sealed class InvokeBashStatCommand : PSCmdlet
                     UseShellExecute = false,
                 };
                 foreach (var a in statArgs) psi.ArgumentList.Add(a);
-                using var proc = System.Diagnostics.Process.Start(psi);
-                if (proc != null)
+                // Bounded spawn + concurrent drain + kill-tree on timeout so a hung
+                // /usr/bin/stat cannot wedge the host runspace.
+                string statOut = BashRuntime.RunChildProcess(psi).Stdout.Trim();
+                if (statOut.Length > 0)
                 {
-                    string statOut = proc.StandardOutput.ReadToEnd().Trim();
-                    proc.WaitForExit();
-                    if (statOut.Length > 0)
-                    {
-                        var parts = statOut.Split(new[] { ' ', '\t' },
-                            StringSplitOptions.RemoveEmptyEntries);
-                        if (parts.Length >= 1) long.TryParse(parts[0], out entry.Inode);
-                        if (parts.Length >= 2) long.TryParse(parts[1], out entry.Blocks);
-                        if (parts.Length >= 3) long.TryParse(parts[2], out entry.Device);
-                    }
+                    var parts = statOut.Split(new[] { ' ', '\t' },
+                        StringSplitOptions.RemoveEmptyEntries);
+                    if (parts.Length >= 1) long.TryParse(parts[0], out entry.Inode);
+                    if (parts.Length >= 2) long.TryParse(parts[1], out entry.Blocks);
+                    if (parts.Length >= 3) long.TryParse(parts[2], out entry.Device);
                 }
             }
             catch
@@ -490,17 +487,14 @@ public sealed class InvokeBashStatCommand : PSCmdlet
                     UseShellExecute = false,
                 };
                 foreach (var a in statArgs) psi.ArgumentList.Add(a);
-                using var proc = System.Diagnostics.Process.Start(psi);
-                if (proc != null)
+                // Bounded spawn + concurrent drain + kill-tree on timeout so a hung
+                // /usr/bin/stat cannot wedge the host runspace.
+                string statOut = BashRuntime.RunChildProcess(psi).Stdout.Trim();
+                if (statOut.Length > 0)
                 {
-                    string statOut = proc.StandardOutput.ReadToEnd().Trim();
-                    proc.WaitForExit();
-                    if (statOut.Length > 0)
-                    {
-                        var parts = statOut.Split(new[] { ' ' }, 2);
-                        info.Owner = parts[0];
-                        info.Group = parts.Length > 1 ? parts[1] : string.Empty;
-                    }
+                    var parts = statOut.Split(new[] { ' ' }, 2);
+                    info.Owner = parts[0];
+                    info.Group = parts.Length > 1 ? parts[1] : string.Empty;
                 }
             }
             catch

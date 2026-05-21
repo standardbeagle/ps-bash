@@ -260,4 +260,82 @@ public class BashRuntimeTests
     {
         Assert.Equal("grep: no such file", BashRuntime.FormatBashError("grep", "no such file"));
     }
+
+    // ---- RunChildProcess (safe-spawn helper) ----
+    //
+    // Failure-surface axes that DO apply here (qa-rubric Directive 3): missing
+    // target (a hung child), large input (>64KB stderr → pipe-buffer deadlock if
+    // a single stream is drained), and exit-code propagation. These spawn real OS
+    // commands (cmd.exe / /bin/sh + ping|sleep|echo) so they run on every
+    // platform without a Skip; the child binaries are always present.
+
+    [Fact]
+    public void RunChildProcess_QuickCommand_CapturesStdoutAndExitsZero()
+    {
+        var (file, args) = OperatingSystem.IsWindows()
+            ? ("cmd.exe", new[] { "/c", "echo hello-child" })
+            : ("/bin/echo", new[] { "hello-child" });
+
+        var result = BashRuntime.RunChildProcess(file, args, TimeSpan.FromSeconds(10));
+
+        Assert.False(result.TimedOut);
+        Assert.Equal(0, result.ExitCode);
+        Assert.Contains("hello-child", result.Stdout);
+    }
+
+    [Fact]
+    public void RunChildProcess_HangingCommand_TimesOutBoundedAndReports124()
+    {
+        var (file, args) = OperatingSystem.IsWindows()
+            ? ("cmd.exe", new[] { "/c", "ping -n 30 127.0.0.1 > NUL" })
+            : ("/bin/sh", new[] { "-c", "sleep 30" });
+
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        var result = BashRuntime.RunChildProcess(file, args, TimeSpan.FromSeconds(1));
+        sw.Stop();
+
+        Assert.True(result.TimedOut, "a child exceeding the budget must report TimedOut");
+        Assert.Equal(124, result.ExitCode);
+        // ~1s budget + ~2s kill-grace + overhead. 8s proves we did NOT wait the
+        // child's full 30s — the wait was bounded and the tree was killed.
+        Assert.True(sw.Elapsed < TimeSpan.FromSeconds(8),
+            $"per-child wait must be bounded; took {sw.ElapsedMilliseconds}ms");
+    }
+
+    [Fact]
+    public void RunChildProcess_LargeStderr_DrainsConcurrentlyWithoutDeadlock()
+    {
+        // ~300KB to stderr, far beyond the OS pipe buffer (~64KB). If RunChildProcess
+        // drained stdout only (the bug this helper exists to kill), the child would
+        // block writing stderr and our bounded wait would TIME OUT. Concurrent drain
+        // => the child finishes and the full stderr is captured.
+        const string pad = "yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy"; // 49 chars
+        var (file, args) = OperatingSystem.IsWindows()
+            ? ("cmd.exe", new[] { "/c", $"for /L %i in (1,1,6000) do @echo {pad} 1>&2" })
+            : ("/bin/sh", new[] { "-c", $"i=0; while [ $i -lt 6000 ]; do echo {pad} 1>&2; i=$((i+1)); done" });
+
+        var result = BashRuntime.RunChildProcess(file, args, TimeSpan.FromSeconds(30));
+
+        Assert.False(result.TimedOut, "concurrent stderr drain must prevent a pipe-buffer deadlock");
+        Assert.True(result.Stderr.Length > 70_000,
+            $"expected large stderr captured, got {result.Stderr.Length} chars");
+        Assert.Equal(0, result.ExitCode);
+    }
+
+    [Fact]
+    public void RunChildProcess_ChildReadsStdin_GetsEofAndDoesNotHang()
+    {
+        // The child blocks trying to read a line of stdin. RunChildProcess must
+        // hand it an EOF-closed stdin so it completes instead of hanging until the
+        // wait budget elapses. A generous budget proves the EOF (not the timeout)
+        // is what unblocks it.
+        var (file, args) = OperatingSystem.IsWindows()
+            ? ("cmd.exe", new[] { "/c", "set /p x= & echo done-eof" })
+            : ("/bin/sh", new[] { "-c", "read x; echo done-eof" });
+
+        var result = BashRuntime.RunChildProcess(file, args, TimeSpan.FromSeconds(10));
+
+        Assert.False(result.TimedOut, "closed stdin must give the child EOF so it does not hang");
+        Assert.Contains("done-eof", result.Stdout);
+    }
 }

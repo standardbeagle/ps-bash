@@ -127,23 +127,15 @@ public sealed class InvokeBashBashCommand : PSCmdlet
         string stderr;
         try
         {
-            using var proc = Process.Start(psi);
-            if (proc == null)
-            {
-                FileSystemHelpers.WriteBashError(this, "bash: failed to start ps-bash");
-                return;
-            }
-            // Close stdin immediately so a no-args / REPL-mode child sees EOF
-            // and exits instead of hanging on a read. ReadToEnd on the two
-            // output streams can deadlock if the child fills one beyond the OS
-            // pipe buffer, so read stderr on a background task while we drain
-            // stdout on the foreground.
-            proc.StandardInput.Close();
-            var stderrTask = proc.StandardError.ReadToEndAsync();
-            stdout = proc.StandardOutput.ReadToEnd();
-            stderr = stderrTask.GetAwaiter().GetResult();
-            proc.WaitForExit();
-            exitCode = proc.ExitCode;
+            // Bounded spawn + concurrent stdout/stderr drain + kill-tree on
+            // timeout, with stdin closed to EOF (RunChildProcess). A no-args /
+            // REPL-mode child sees EOF and exits instead of hanging on a read,
+            // and a nested ps-bash that itself wedges can no longer block the
+            // parent host runspace forever (the #3 wedge, recursively).
+            var spawn = BashRuntime.RunChildProcess(psi);
+            stdout = spawn.Stdout;
+            stderr = spawn.Stderr;
+            exitCode = spawn.ExitCode;
         }
         catch (Exception ex)
         {

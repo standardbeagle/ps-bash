@@ -115,42 +115,33 @@ public sealed class InvokeBashTputCommand : PSCmdlet
                     psi.ArgumentList.Add(a);
                 }
 
-                using var proc = Process.Start(psi);
-                if (proc != null)
+                // Bounded spawn + concurrent drain + kill-tree on timeout so a hung
+                // native tput cannot wedge the host runspace. (The old code drained
+                // stderr only AFTER the stdout loop — a mid-stream stderr burst could
+                // deadlock; concurrent drain removes that.)
+                var spawn = BashRuntime.RunChildProcess(psi);
+                if (!spawn.TimedOut && spawn.ExitCode == 0)
                 {
-                    var sb = new StringBuilder();
-                    string? line;
-                    while ((line = proc.StandardOutput.ReadLine()) != null)
+                    var nativeOut = spawn.Stdout.Replace("\r\n", "\n");
+                    if (nativeOut.EndsWith('\n'))
+                        nativeOut = nativeOut.Substring(0, nativeOut.Length - 1);
+                    // For terminal-size queries, native tput returns "0" when run
+                    // without a controlling terminal (no $TERM / redirected stdio).
+                    // Reject "0" for cols/lines and fall through to the in-process
+                    // emulator's hardcoded default so tests in non-TTY harnesses pass.
+                    bool isSizeQuery = operands.Count > 0 &&
+                        (string.Equals(operands[0], "cols", StringComparison.Ordinal) ||
+                         string.Equals(operands[0], "lines", StringComparison.Ordinal));
+                    if (!isSizeQuery ||
+                        !string.Equals(nativeOut.Trim(), "0", StringComparison.Ordinal))
                     {
-                        if (sb.Length > 0) sb.Append(Environment.NewLine);
-                        sb.Append(line);
-                    }
-                    // Drain stderr so the child can exit even if it wrote
-                    // something there; oracle suppressed it with 2>$null.
-                    _ = proc.StandardError.ReadToEnd();
-                    proc.WaitForExit();
-                    if (proc.ExitCode == 0)
-                    {
-                        var nativeOut = sb.ToString();
-                        // For terminal-size queries, native tput returns "0"
-                        // when run without a controlling terminal (no $TERM /
-                        // redirected stdio). Reject "0" for cols/lines and
-                        // fall through to the in-process emulator's hardcoded
-                        // default so tests in non-TTY harnesses still pass.
-                        bool isSizeQuery = operands.Count > 0 &&
-                            (string.Equals(operands[0], "cols", StringComparison.Ordinal) ||
-                             string.Equals(operands[0], "lines", StringComparison.Ordinal));
-                        if (!isSizeQuery ||
-                            !string.Equals(nativeOut.Trim(), "0", StringComparison.Ordinal))
+                        foreach (var emitted in BashRuntime.EmitBashLines(nativeOut))
                         {
-                            foreach (var emitted in BashRuntime.EmitBashLines(nativeOut))
-                            {
-                                WriteObject(emitted);
-                            }
-                            return;
+                            WriteObject(emitted);
                         }
-                        // else: fall through to fallback emulator below.
+                        return;
                     }
+                    // else: fall through to fallback emulator below.
                 }
             }
             catch

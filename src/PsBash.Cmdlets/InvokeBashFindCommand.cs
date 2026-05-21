@@ -553,17 +553,14 @@ public sealed class InvokeBashFindCommand : PSCmdlet
                     UseShellExecute = false,
                 };
                 foreach (var a in statArgs) psi.ArgumentList.Add(a);
-                using var proc = System.Diagnostics.Process.Start(psi);
-                if (proc != null)
+                // Bounded spawn + concurrent drain + kill-tree on timeout so a hung
+                // /usr/bin/stat (run once per file in the walk) cannot wedge the host.
+                string statOut = BashRuntime.RunChildProcess(psi).Stdout.Trim();
+                if (statOut.Length > 0)
                 {
-                    string statOut = proc.StandardOutput.ReadToEnd().Trim();
-                    proc.WaitForExit();
-                    if (statOut.Length > 0)
-                    {
-                        var parts = statOut.Split(new[] { ' ' }, 2);
-                        info.Owner = parts[0];
-                        info.Group = parts.Length > 1 ? parts[1] : string.Empty;
-                    }
+                    var parts = statOut.Split(new[] { ' ' }, 2);
+                    info.Owner = parts[0];
+                    info.Group = parts.Length > 1 ? parts[1] : string.Empty;
                 }
             }
             catch

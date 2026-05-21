@@ -344,18 +344,25 @@ public sealed class InvokeBashRgCommand : PSCmdlet
                 psi.ArgumentList.Add(arg);
             }
 
-            using var proc = Process.Start(psi);
-            if (proc == null) return false;
+            // Bounded spawn + concurrent stdout/stderr drain + kill-tree on timeout
+            // (BashRuntime.RunChildProcess). The old code drained stderr only AFTER
+            // the stdout ReadLine loop, so a large stderr burst from rg could fill
+            // its pipe buffer and deadlock; and the unbounded WaitForExit could
+            // wedge the host. Native rg here never reads stdin (only reached when
+            // _pipeline.Count == 0), so the helper's closed stdin is safe.
+            var spawn = BashRuntime.RunChildProcess(psi);
 
-            string? line;
-            while ((line = proc.StandardOutput.ReadLine()) != null)
+            // Emit one object per stdout line — ReadLine semantics: split on \n with
+            // no spurious trailing empty line.
+            var outText = spawn.Stdout.Replace("\r\n", "\n");
+            if (outText.EndsWith('\n'))
+                outText = outText.Substring(0, outText.Length - 1);
+            if (outText.Length > 0)
             {
-                WriteObject(BashRuntime.NewBashObject(line));
+                foreach (var ln in outText.Split('\n'))
+                    WriteObject(BashRuntime.NewBashObject(ln));
             }
-            // Drain stderr so the child can exit.
-            _ = proc.StandardError.ReadToEnd();
-            proc.WaitForExit();
-            FileSystemHelpers.SetLastExitCode(this, proc.ExitCode);
+            FileSystemHelpers.SetLastExitCode(this, spawn.ExitCode);
             return true;
         }
         catch

@@ -233,10 +233,10 @@ public sealed class InvokeBashIdCommand : PSCmdlet
                 // user-controlled tokens routed via ArgumentList (no shell, no string concat)
                 psi.ArgumentList.Add(a);
             }
-            using var proc = Process.Start(psi);
-            if (proc == null) return;
-            var stdout = proc.StandardOutput.ReadToEnd();
-            proc.WaitForExit();
+            // Bounded spawn with concurrent stream drain + kill-tree on timeout
+            // (BashRuntime.RunChildProcess) so a hung /usr/bin/id can never wedge
+            // the single-threaded host runspace.
+            var stdout = BashRuntime.RunChildProcess(psi).Stdout;
             var trimmed = stdout.TrimEnd('\r', '\n');
             if (trimmed.Length == 0 && !string.IsNullOrEmpty(stdout))
             {

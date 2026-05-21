@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Management.Automation;
 using System.Text;
 
@@ -280,5 +281,112 @@ public static class BashRuntime
     public static string FormatBashError(string command, string message)
     {
         return $"{command}: {message}";
+    }
+
+    /// <summary>
+    /// Result of a <see cref="RunChildProcess(string, IReadOnlyList{string}?, System.TimeSpan?)"/>
+    /// call: the child's captured stdout/stderr, its exit code, and whether the
+    /// wait budget elapsed (in which case the whole process tree was killed and
+    /// <see cref="ExitCode"/> is the GNU-<c>timeout</c> convention 124).
+    /// </summary>
+    public readonly record struct ChildProcessResult(int ExitCode, string Stdout, string Stderr, bool TimedOut);
+
+    /// <summary>
+    /// Safe child-process spawn for cmdlets that shell out to native tools. The
+    /// host runspace is single-threaded: a child that hangs (or fills a pipe
+    /// buffer while only one stream is drained) blocks the runspace forever,
+    /// wedging the host and poisoning every later invocation. This helper enforces
+    /// the spawn contract that prevents that:
+    /// <list type="bullet">
+    /// <item>both stdout and stderr are drained <b>concurrently</b> (no
+    /// pipe-buffer deadlock);</item>
+    /// <item>the wait is <b>bounded</b> by <paramref name="timeout"/> (default
+    /// <c>PSBASH_TIMEOUT</c>s, else 120s);</item>
+    /// <item>on timeout the <b>entire process tree</b> is killed so no descendant
+    /// lingers, and the call returns with <see cref="ChildProcessResult.TimedOut"/>
+    /// = <see langword="true"/> and exit code 124.</item>
+    /// </list>
+    /// AOT-safe: only <see cref="System.Diagnostics.Process"/> and stream reads,
+    /// no <see cref="ScriptBlock"/> / reflection.
+    /// </summary>
+    public static ChildProcessResult RunChildProcess(
+        string fileName, IReadOnlyList<string>? arguments = null, System.TimeSpan? timeout = null)
+    {
+        var psi = new ProcessStartInfo(fileName)
+        {
+            UseShellExecute = false,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            CreateNoWindow = true,
+        };
+        if (arguments is not null)
+            foreach (var a in arguments)
+                psi.ArgumentList.Add(a);
+        return RunChildProcess(psi, timeout);
+    }
+
+    /// <summary>
+    /// <see cref="RunChildProcess(string, IReadOnlyList{string}?, System.TimeSpan?)"/>
+    /// overload taking a caller-prepared <see cref="ProcessStartInfo"/> (for env
+    /// vars, working directory, etc.). The redirection + no-shell invariants the
+    /// spawn contract requires are forced on regardless of how the caller built it.
+    /// </summary>
+    public static ChildProcessResult RunChildProcess(ProcessStartInfo startInfo, System.TimeSpan? timeout = null)
+    {
+        ArgumentNullException.ThrowIfNull(startInfo);
+        startInfo.UseShellExecute = false;
+        startInfo.RedirectStandardOutput = true;
+        startInfo.RedirectStandardError = true;
+        // Redirect stdin so we can close it immediately (below): a non-interactive
+        // capture must never inherit a live stdin that a child could block reading
+        // (e.g. ps-bash's no-args REPL, or `sort`/`cat` with no file operand).
+        startInfo.RedirectStandardInput = true;
+
+        var budget = timeout ?? GetChildProcessTimeout();
+
+        using var proc = Process.Start(startInfo)
+            ?? throw new InvalidOperationException($"Failed to start process '{startInfo.FileName}'.");
+
+        // Hand the child an EOF-closed stdin so it never hangs waiting for input.
+        try { proc.StandardInput.Close(); } catch { /* child may not have opened it */ }
+
+        // Drain BOTH streams concurrently. Draining only one while the child fills
+        // the other's pipe buffer (~64KB) is the classic deadlock these cmdlets hit.
+        var stdoutTask = proc.StandardOutput.ReadToEndAsync();
+        var stderrTask = proc.StandardError.ReadToEndAsync();
+
+        int waitMs = budget <= System.TimeSpan.Zero
+            ? System.Threading.Timeout.Infinite
+            : (int)System.Math.Min(budget.TotalMilliseconds, int.MaxValue);
+
+        if (!proc.WaitForExit(waitMs))
+        {
+            // Budget elapsed — kill the whole tree so no descendant outlives the
+            // call, then collect whatever partial output already drained.
+            try { proc.Kill(entireProcessTree: true); } catch { /* already gone / race */ }
+            try { proc.WaitForExit(2_000); } catch { /* best effort */ }
+            return new ChildProcessResult(124, DrainBounded(stdoutTask), DrainBounded(stderrTask), TimedOut: true);
+        }
+
+        // WaitForExit(int) does NOT guarantee the async stdout/stderr readers have
+        // hit EOF; the parameterless overload does. Call it so the captured text
+        // is complete before we read the tasks.
+        try { proc.WaitForExit(); } catch { /* already reaped */ }
+        return new ChildProcessResult(
+            proc.ExitCode, DrainBounded(stdoutTask), DrainBounded(stderrTask), TimedOut: false);
+
+        static string DrainBounded(System.Threading.Tasks.Task<string> t)
+        {
+            try { return t.Wait(System.TimeSpan.FromSeconds(5)) ? t.Result : string.Empty; }
+            catch { return string.Empty; }
+        }
+    }
+
+    private static System.TimeSpan GetChildProcessTimeout()
+    {
+        var env = Environment.GetEnvironmentVariable("PSBASH_TIMEOUT");
+        if (env is not null && int.TryParse(env, out var seconds) && seconds > 0)
+            return System.TimeSpan.FromSeconds(seconds);
+        return System.TimeSpan.FromSeconds(120);
     }
 }
