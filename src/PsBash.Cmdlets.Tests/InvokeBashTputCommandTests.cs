@@ -40,6 +40,29 @@ public class InvokeBashTputCommandTests : IClassFixture<SharedPwshFixture>
         return result.Select(o => o?.ToString() ?? "").ToArray();
     }
 
+    /// <summary>
+    /// True when the cmdlet's native-passthrough path is active: a real
+    /// <c>tput</c> binary on PATH on a non-Windows host (mirrors
+    /// <see cref="InvokeBashTputCommand"/>'s native gate). In that case the
+    /// terminfo database — not the in-process emulator — produces the bytes,
+    /// so the fallback-byte assertions below do not apply (e.g. ncurses emits
+    /// <c>\e(B\e[m</c> for <c>sgr0</c> and the 16-color <c>\e[34m</c> for
+    /// <c>setaf 4</c> under the default TERM). These tests verify the emulator,
+    /// which is only reached when no native tput exists.
+    /// </summary>
+    private static bool NativeTputActive()
+    {
+        if (OperatingSystem.IsWindows()) return false;
+        var path = Environment.GetEnvironmentVariable("PATH") ?? string.Empty;
+        foreach (var dir in path.Split(Path.PathSeparator))
+        {
+            if (string.IsNullOrEmpty(dir)) continue;
+            try { if (File.Exists(Path.Combine(dir, "tput"))) return true; }
+            catch { /* malformed PATH entry — ignore */ }
+        }
+        return false;
+    }
+
     [Fact]
     public void Tput_Cols_ReturnsPositiveIntegerString()
     {
@@ -69,17 +92,21 @@ public class InvokeBashTputCommandTests : IClassFixture<SharedPwshFixture>
         Assert.Equal("\x1B[1m", lines[0]);
     }
 
-    [Fact]
+    [SkippableFact]
     public void Tput_Sgr0_EmitsAnsiSgrResetEscape()
     {
+        Skip.If(NativeTputActive(),
+            "native tput on PATH overrides the in-process emulator (ncurses emits \\e(B\\e[m for sgr0)");
         var lines = RunLines("Invoke-BashTput sgr0");
         Assert.Single(lines);
         Assert.Equal("\x1B[0m", lines[0]);
     }
 
-    [Fact]
+    [SkippableFact]
     public void Tput_Setaf_EmitsAnsi256ColorEscape()
     {
+        Skip.If(NativeTputActive(),
+            "native tput on PATH overrides the in-process emulator (ncurses emits the 16-color \\e[34m for setaf 4)");
         var lines = RunLines("Invoke-BashTput setaf 4");
         Assert.Single(lines);
         Assert.Equal("\x1B[38;5;4m", lines[0]);
