@@ -234,9 +234,38 @@ if (debug)
     Console.Error.WriteLine(Tag("transpiled: ", pwshCommand));
 }
 
-await using IWorker worker = await workerFactory();
-
-var exitCode = await worker.ExecuteAsync(BuildInvocationCwdPreamble() + pwshCommand);
+// Infrastructure failures (host won't start, host hangs, IPC breaks) must
+// surface as a one-line `ps-bash: ...` diagnostic and a defined exit code —
+// never an unhandled-exception stack trace. Before this guard, a host timeout
+// propagated a raw OperationCanceledException out of Main and the runtime
+// dumped a managed stack trace with exit code 82, which is what an embedding
+// parent (e.g. the Claude Code Bash tool) saw when the host wedged.
+int exitCode;
+try
+{
+    await using IWorker worker = await workerFactory();
+    exitCode = await worker.ExecuteAsync(BuildInvocationCwdPreamble() + pwshCommand);
+}
+catch (TimeoutException ex)
+{
+    // Host did not accept a connection / respond within the call budget.
+    // Mirror GNU `timeout`'s exit code so callers can detect the condition.
+    Console.Error.WriteLine(
+        ex.Message.StartsWith("ps-bash:", StringComparison.Ordinal) ? ex.Message : $"ps-bash: {ex.Message}");
+    return 124;
+}
+catch (HostUnavailableException ex)
+{
+    Console.Error.WriteLine($"ps-bash: {ex.Message}");
+    return 125;
+}
+catch (Exception ex) when (ex is System.IO.IOException
+                              or System.Net.Sockets.SocketException
+                              or OperationCanceledException)
+{
+    Console.Error.WriteLine($"ps-bash: host communication failed: {ex.Message}");
+    return 125;
+}
 
 if (debug)
 {

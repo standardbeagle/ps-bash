@@ -50,6 +50,34 @@ public class ProgramEndToEndTests
         Assert.Contains("deliberate failure", stdout + stderr);
     }
 
+    // Regression: a host that cannot start (or hangs) must surface a one-line
+    // "ps-bash:" diagnostic and a defined exit code — never an unhandled-exception
+    // managed stack trace with exit 82, which is what an embedding parent (the
+    // Claude Code Bash tool) saw when ps-bash served as its shell and the host
+    // wedged. We force the failure deterministically by pointing PSBASH_HOST at a
+    // binary that does not exist on a fresh isolated endpoint (no host can serve),
+    // so StartAsync throws HostUnavailableException, which Main now maps to a clean
+    // message + exit 125.
+    [SkippableFact]
+    public async Task Command_HostBinaryMissing_FailsCleanlyWithoutStackTrace()
+    {
+        Skip.If(InteractiveShellHarness.FindPsBashBinary() is null, "ps-bash binary not built");
+
+        var bogusHost = System.IO.Path.Combine(
+            System.IO.Path.GetTempPath(), $"ps-bash-host-missing-{System.Guid.NewGuid():N}.exe");
+        var psi = PsBashTestProcess.Create(
+            new[] { "-c", "echo hi" },
+            env: new System.Collections.Generic.Dictionary<string, string?> { ["PSBASH_HOST"] = bogusHost },
+            ipcEndpoint: PsBashTestProcess.CreateEndpoint());
+
+        var (exitCode, _, stderr) = await ProcessRunHelper.RunAsync(psi, timeout: TimeSpan.FromSeconds(30));
+
+        Assert.Equal(125, exitCode);
+        Assert.Contains("ps-bash:", stderr);
+        Assert.DoesNotContain("Unhandled exception", stderr);
+        Assert.DoesNotContain("   at PsBash", stderr); // no leaked managed stack trace
+    }
+
     // Regression: `ps-bash -c "git log --oneline -20"` was reported to fail
     // with "The term '-l' is not recognized". The command string must be
     // handed to the transpiler intact — long flags whose first char collides

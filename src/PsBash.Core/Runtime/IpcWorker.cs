@@ -228,6 +228,10 @@ public sealed class IpcWorker : IWorker
     /// </summary>
     private static void TryKillRecordedHost(HostMetadata metadata)
     {
+        // Never target the launcher's own process. An in-process host (tests) or
+        // a recycled PID that happens to equal ours must not make the launcher
+        // kill itself / its own process tree.
+        if (metadata.Pid == Environment.ProcessId) return;
         var (alive, exe) = HostOwnership.ProbeProcess(metadata.Pid);
         if (!alive) return;
         if (!string.IsNullOrEmpty(exe) &&
@@ -517,33 +521,103 @@ public sealed class IpcWorker : IWorker
         {
             stream = await transport.ConnectAsync(linked.Token).ConfigureAwait(false);
         }
-        catch (OperationCanceledException) when (timeoutCts.IsCancellationRequested)
+        catch (OperationCanceledException) when (timeoutCts.IsCancellationRequested && !ct.IsCancellationRequested)
         {
+            // The host is not accepting connections within the call budget. For a
+            // shared (Daemon) host this usually means a wedged process still
+            // holding the endpoint; retire it so the NEXT invocation spawns a
+            // fresh host instead of re-hanging on the same corpse — the
+            // orphaned-host failure mode where a stale host poisons every
+            // subsequent call until it is manually killed.
+            await RetireIfUnresponsiveAsync().ConfigureAwait(false);
             throw new TimeoutException(
                 $"ps-bash: connection to host timed out after {timeout.TotalSeconds:0.##}s");
         }
 
-        await using (stream)
+        try
         {
-            await HostProtocol.WriteRequestAsync(stream, mode, linked.Token).ConfigureAwait(false);
-            // REFACTOR-4: route each response frame by its stream tag. STDOUT
-            // frames go to OutputCallback (or Console.Out when no callback is
-            // set); STDERR frames always go to Console.Error — they are never
-            // folded into OutputCallback so QueryAsync's collected result and
-            // the launcher's stdout stay free of diagnostic text.
-            return await HostProtocol.ReadResponseAsync(
-                stream,
-                (line, tag) =>
-                {
-                    if (tag == StreamTag.Stderr)
+            await using (stream)
+            {
+                await HostProtocol.WriteRequestAsync(stream, mode, linked.Token).ConfigureAwait(false);
+                // REFACTOR-4: route each response frame by its stream tag. STDOUT
+                // frames go to OutputCallback (or Console.Out when no callback is
+                // set); STDERR frames always go to Console.Error — they are never
+                // folded into OutputCallback so QueryAsync's collected result and
+                // the launcher's stdout stay free of diagnostic text.
+                return await HostProtocol.ReadResponseAsync(
+                    stream,
+                    (line, tag) =>
                     {
-                        Console.Error.Write(line.EndsWith('\n') ? line : line + "\n");
-                        return;
-                    }
-                    if (OutputCallback is { } cb) cb(line);
-                    else Console.Write(line);
-                },
-                linked.Token).ConfigureAwait(false);
+                        if (tag == StreamTag.Stderr)
+                        {
+                            Console.Error.Write(line.EndsWith('\n') ? line : line + "\n");
+                            return;
+                        }
+                        if (OutputCallback is { } cb) cb(line);
+                        else Console.Write(line);
+                    },
+                    linked.Token).ConfigureAwait(false);
+            }
+        }
+        catch (OperationCanceledException) when (timeoutCts.IsCancellationRequested && !ct.IsCancellationRequested)
+        {
+            // The host accepted the connection but did not finish the response
+            // within the call budget. Convert the raw cancellation into a clean,
+            // actionable TimeoutException (the launcher's Main maps this to a
+            // one-line diagnostic + exit 124 instead of dumping a stack trace),
+            // and retire the host if a re-probe confirms it is genuinely wedged
+            // rather than merely busy with a long-running command.
+            await RetireIfUnresponsiveAsync().ConfigureAwait(false);
+            throw new TimeoutException(
+                $"ps-bash: host did not respond within {timeout.TotalSeconds:0.##}s");
+        }
+    }
+
+    /// <summary>
+    /// Recovery for a per-call timeout. A short health re-probe distinguishes a
+    /// genuinely wedged host (retire it so the next invocation self-heals) from
+    /// one that is merely slow or busy serving another connection (leave it
+    /// untouched). PerInvocation hosts are private and torn down by
+    /// <see cref="DisposeAsync"/>, so only the shared Daemon host needs endpoint
+    /// retirement here. Best-effort throughout: any failure is swallowed so it
+    /// never masks the <see cref="TimeoutException"/> the caller is about to throw.
+    /// </summary>
+    private async Task RetireIfUnresponsiveAsync()
+    {
+        try
+        {
+            // A fresh, short probe on a NEW connection. A host that is single-
+            // flighted and wedged on our timed-out call cannot answer this either
+            // (→ Unhealthy → retire); a concurrent host that is merely busy still
+            // answers (→ Healthy/Starting → leave alone).
+            var state = await CheckHealthAsync(TimeSpan.FromMilliseconds(750), CancellationToken.None)
+                .ConfigureAwait(false);
+            if (state is HostHealthState.Healthy or HostHealthState.Starting)
+                return;
+
+            // PerInvocation's owned host is killed by DisposeAsync; nothing to
+            // retire at the endpoint level.
+            if (_lifetime == Lifetime.PerInvocation)
+                return;
+
+            // Shared Daemon host is wedged and would poison every future
+            // invocation. Kill the recorded owner if (and only if) we can prove
+            // ownership, then unlink the endpoint + sidecar so the next launcher
+            // spawns a fresh host. Reuses the same ownership-gated cleanup
+            // primitives EnsureHostReachableAsync relies on.
+            var metadata = HostMetadata.TryRead(_scheme, _endpoint);
+            if (metadata is not null)
+            {
+                var decision = HostOwnership.Classify(metadata, Environment.UserName, out _);
+                if (decision == HostOwnership.CleanupDecision.SafeProcessShutdown)
+                    TryKillRecordedHost(metadata);
+            }
+            IpcTransportFactory.RetireEndpoint(_scheme, _endpoint);
+            HostMetadata.Remove(_scheme, _endpoint);
+        }
+        catch
+        {
+            // Best-effort recovery — never mask the TimeoutException.
         }
     }
 

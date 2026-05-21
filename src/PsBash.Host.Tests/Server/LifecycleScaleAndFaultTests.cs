@@ -322,6 +322,75 @@ public sealed class LifecycleScaleAndFaultTests
         }
     }
 
+    // ─── 5b. Per-call timeout surfaces TimeoutException, not raw OCE ─────────
+
+    /// <summary>
+    /// Acceptance: when a command exceeds the per-call timeout, SendRequestAsync
+    /// must surface a clean <see cref="TimeoutException"/> within a bounded time,
+    /// NOT leak a raw OperationCanceledException. (The launcher's Main maps the
+    /// TimeoutException to a one-line "ps-bash:" diagnostic + exit 124; before the
+    /// fix the raw OCE propagated out of Main and the runtime dumped a managed
+    /// stack trace with exit 82 — the failure an embedding parent like the Claude
+    /// Code Bash tool saw when the host wedged.)
+    ///
+    /// We reuse a real healthy in-process host, set a 1s call budget via
+    /// PSBASH_TIMEOUT, and issue a command that runs well past it. The host is
+    /// merely busy, not wedged; the recovery probe must not crash and must leave
+    /// the TimeoutException intact. (The self-PID guard in TryKillRecordedHost
+    /// guarantees the in-process host — whose recorded PID is this test process —
+    /// can never be killed by the recovery path.)
+    ///
+    /// Oracle note (Directive 1): IPC lifecycle is outside the bash surface;
+    /// asserted against the .NET wire contract directly.
+    /// </summary>
+    [Fact]
+    public async Task PerCallTimeout_BusyHost_ThrowsTimeoutExceptionBounded()
+    {
+        var (spec, scheme, endpoint) = NewIsolatedEndpoint("calltimeout");
+        var priorEndpoint = Environment.GetEnvironmentVariable(IpcTransportFactory.EndpointEnvVar);
+        var priorTimeout = Environment.GetEnvironmentVariable("PSBASH_TIMEOUT");
+        Environment.SetEnvironmentVariable(IpcTransportFactory.EndpointEnvVar, spec);
+        Environment.SetEnvironmentVariable("PSBASH_TIMEOUT", "1"); // 1s per-call budget
+
+        await using var transport = NewTransport(scheme, endpoint);
+        await using var worker = SdkWorker.Create();
+        await using var server = new HostServer(transport, Task.FromResult(worker));
+        using var serverCts = new CancellationTokenSource();
+        Task? serverTask = null;
+        try
+        {
+            serverTask = server.RunAsync(serverCts.Token);
+            await server.WhenListening.WaitAsync(TimeSpan.FromSeconds(5));
+
+            var bogusBinary = Path.Combine(Path.GetTempPath(), $"does-not-exist-{Guid.NewGuid():N}");
+            using var startCts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+            await using var ipc = await IpcWorker.StartAsync(
+                bogusBinary,
+                startupTimeout: TimeSpan.FromSeconds(5),
+                lifetime: Lifetime.Daemon,
+                ct: startCts.Token);
+
+            var sw = Stopwatch.StartNew();
+            var ex = await Assert.ThrowsAsync<TimeoutException>(
+                async () => await ipc.QueryAsync("Start-Sleep -Seconds 30"));
+            sw.Stop();
+
+            Assert.Contains("did not respond", ex.Message);
+            // Bounded: ~1s call budget + ~750ms recovery probe + overhead. 8s is a
+            // CI-safe ceiling that still proves we did not wait the full 30s.
+            Assert.True(sw.Elapsed < TimeSpan.FromSeconds(8),
+                $"per-call timeout must be bounded; took {sw.ElapsedMilliseconds}ms");
+        }
+        finally
+        {
+            try { serverCts.Cancel(); } catch { }
+            try { if (serverTask is not null) await serverTask.WaitAsync(TimeSpan.FromSeconds(5)); } catch { }
+            Environment.SetEnvironmentVariable(IpcTransportFactory.EndpointEnvVar, priorEndpoint);
+            Environment.SetEnvironmentVariable("PSBASH_TIMEOUT", priorTimeout);
+            CleanupEndpoint(scheme, endpoint);
+        }
+    }
+
     // ─── 3. Replace incompatible build/protocol host ────────────────────────
 
     /// <summary>
