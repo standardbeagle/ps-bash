@@ -300,7 +300,9 @@ CI runs on Windows, Linux, and macOS via GitHub Actions.
 - **[Agent Setup Guide](docs/agent-setup.md)** — configure Claude Code, OpenCode, Copilot, and Gemini CLI to use ps-bash
 - **[Parser Grammar](docs/specs/parser-grammar.md)** — tokens, AST nodes, grammar productions
 - **[Emitter Strategy](docs/specs/emitter-strategy.md)** — passthrough principle, pipe mappings
-- **[Runtime Functions](docs/specs/runtime-functions.md)** — BashObject model, command reference
+- **[Runtime Functions](docs/specs/runtime-functions.md)** — BashObject model, arg-parsing patterns, adding a command
+- **[Command Reference](docs/specs/runtime-command-reference.md)** — per-command flag / arg-parsing lookup table
+- **[Migrated Binary Cmdlets](docs/specs/runtime-migrated-cmdlets.md)** — REFACTOR-2 binary-cmdlet migration history
 
 ## License
 

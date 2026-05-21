@@ -134,4 +134,6 @@ gh workflow run publish.yml -f version=0.8.2
 
 - @docs/specs/parser-grammar.md — tokens, AST nodes, grammar productions, Oils gap analysis
 - @docs/specs/emitter-strategy.md — passthrough principle, pipe mappings, anti-patterns
-- @docs/specs/runtime-functions.md — BashObject model, command reference, temp files
+- @docs/specs/runtime-functions.md — BashObject model, arg-parsing patterns, escape handling, temp files, adding a command
+- @docs/specs/runtime-command-reference.md — per-command flag / arg-parsing lookup table
+- @docs/specs/runtime-migrated-cmdlets.md — REFACTOR-2 binary-cmdlet migration history

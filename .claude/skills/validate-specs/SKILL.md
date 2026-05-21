@@ -38,11 +38,12 @@ Spec:   grep for rows in the Mapped Commands table in docs/specs/emitter-strateg
 Match:  every case has a spec row, every spec row has a case
 ```
 
-### 3. Invoke-Bash* Functions vs runtime-functions.md Command Reference
+### 3. Invoke-Bash* Functions vs Command Reference
 
 Extract every `function Invoke-Bash*` declaration from
 `src/PsBash.Module/PsBash.psm1`. Extract every function name from the "Command
-Reference" table in `docs/specs/runtime-functions.md`. Compare the two sets.
+Reference" table in `docs/specs/runtime-command-reference.md`. Compare the two
+sets.
 
 Internal helpers (like `Invoke-BashChecksum`) that are not direct command
 mappings may appear in the psm1 but not in the spec table -- that is acceptable
@@ -54,11 +55,11 @@ Spec:   grep for Invoke-Bash entries in the Command Reference table
 Match:  every user-facing function has a spec row
 ```
 
-### 4. Alias Registrations vs runtime-functions.md
+### 4. Alias Registrations vs Command Reference
 
 Extract every `Set-Alias` at the bottom of `PsBash.psm1`. Verify each alias
-name appears somewhere in the spec (either in the Command Reference table or in
-the "Additional aliases" note).
+name appears somewhere in `docs/specs/runtime-command-reference.md` (either in
+the Command Reference table or in the "Additional aliases" note).
 
 ```
 Source: grep for "^Set-Alias" in PsBash.psm1
@@ -83,3 +84,5 @@ code. The source code is the authority; specs must follow.
 - `docs/specs/parser-grammar.md`
 - `docs/specs/emitter-strategy.md`
 - `docs/specs/runtime-functions.md`
+- `docs/specs/runtime-command-reference.md`
+- `docs/specs/runtime-migrated-cmdlets.md`

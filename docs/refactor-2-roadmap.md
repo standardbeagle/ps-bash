@@ -53,7 +53,7 @@ Larger, more flag-rich, or has a real algorithmic core. Migrate one at a time wi
 | Function | Lines | Notes |
 |---|---|---|
 | Stat | 508 | Depends on `Get-BashFileInfo` (psm1, also used by `find` cmdlet — already C++-duplicated there) and `Format-StatString` (psm1, would migrate alongside). Cross-platform branches (Linux/Mac shells out to `/usr/bin/stat`). |
-| Echo | 418 | `-e` / `-n` / `-E` flag-binding collision with `-ErrorAction` / `-Verbose`. **Per `runtime-functions.md` Section 4 this is documented as permanently psm1.** Revisit if PSCmdlet parameter-binding gains a "no common parameters" mode. |
+| Echo | 418 | `-e` / `-n` / `-E` flag-binding collision with `-ErrorAction` / `-Verbose`. **Per `runtime-migrated-cmdlets.md` this is documented as permanently psm1.** Revisit if PSCmdlet parameter-binding gains a "no common parameters" mode. |
 | Date | 174 | Date arithmetic + custom format strings (GNU-style `+%Y-%m-%d`). |
 | Tree | 178 | Directory tree rendering. `-L` depth, `-I` ignore pattern. |
 | Du | 213 | Disk usage. Recursive size summation, `-h` human-readable. |
@@ -109,7 +109,7 @@ Big enough to warrant their own dedicated session, but no novel design problems.
 
 ### Tier 5 — Permanently psm1 (1 function, 1,106 lines)
 
-- **Awk** — full AWK language interpreter (~12 psm1 helpers, ~950 LOC). Per `runtime-functions.md` Section "REFACTOR-2 Phase 3 — awk/jq/find decisions": *"awk stays psm1 permanently."* Migration cost vastly outweighs benefit; the differential suite passes against the psm1 oracle.
+- **Awk** — full AWK language interpreter (~12 psm1 helpers, ~950 LOC). Per `runtime-migrated-cmdlets.md` section "REFACTOR-2 Phase 3 — awk / jq / find decisions": *"awk stays psm1 permanently."* Migration cost vastly outweighs benefit; the differential suite passes against the psm1 oracle.
 
 ---
 

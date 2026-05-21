@@ -6,6 +6,7 @@ paths:
 # Runtime Conventions
 
 Reference: @docs/specs/runtime-functions.md
+(per-command table: @docs/specs/runtime-command-reference.md; binary-cmdlet migrations: @docs/specs/runtime-migrated-cmdlets.md)
 
 ## BashObject Contract
 

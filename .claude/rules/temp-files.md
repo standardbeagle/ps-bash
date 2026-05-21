@@ -5,7 +5,7 @@ paths:
 
 # Temp File Conventions
 
-Reference: @docs/specs/runtime-functions.md (section 7)
+Reference: @docs/specs/runtime-functions.md ("Temp File Strategy" section)
 
 ## All temp files under `ps-bash/` subdirectory
 

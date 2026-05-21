@@ -70,8 +70,8 @@ Paste verbatim into a subagent's prompt. Replace `<FUNCTION>` and `<COMMAND-NAME
 > 9. Run the new tests: `dotnet test src/PsBash.Cmdlets.Tests --filter "InvokeBash<FUNCTION>CommandTests"`. All must pass.
 > 10. Run a direct smoke test: `& src/PsBash.Shell/bin/Debug/net10.0/ps-bash.exe -c "<COMMAND-NAME> <typical-args>"`. Exit 0, expected output.
 > 11. Remove the `function Invoke-Bash<FUNCTION>` block from `src/PsBash.Module/PsBash.psm1` (and any nearby `# --- <COMMAND-NAME> Command ---` header comment). Replace with a single-line breadcrumb comment pointing at the new C# file.
-> 12. Add an entry to the migrated-cmdlets table in `docs/specs/runtime-functions.md` (the table starting `| Command | Cmdlet class | Phase | Notes |`). Use the established prose density.
-> 13. `git add` the four touched files (cmdlet, test, psm1, runtime-functions.md). Commit with the template below. **Do not push** — return the worktree branch name and a short summary so the orchestrator can review and integrate.
+> 12. Add an entry to the migrated-cmdlets table in `docs/specs/runtime-migrated-cmdlets.md` (the table starting `| Command | Cmdlet class | Phase | Notes |`). Use the established prose density. If the command's row in `docs/specs/runtime-command-reference.md` still says "Manual loop"/psm1, update it to the binary-cmdlet description too.
+> 13. `git add` the touched files (cmdlet, test, psm1, runtime-migrated-cmdlets.md, and runtime-command-reference.md if changed). Commit with the template below. **Do not push** — return the worktree branch name and a short summary so the orchestrator can review and integrate.
 >
 > Commit message template:
 >
@@ -129,7 +129,7 @@ A migration is complete when **all** of these are true:
 - [ ] `src/PsBash.Cmdlets.Tests/InvokeBash<FUNCTION>CommandTests.cs` exists
 - [ ] `function Invoke-Bash<FUNCTION>` no longer appears in `src/PsBash.Module/PsBash.psm1`
 - [ ] `Set-Alias <command-name> ...` line for this command **still exists** in psm1
-- [ ] Entry added to the migrated-cmdlets table in `docs/specs/runtime-functions.md`
+- [ ] Entry added to the migrated-cmdlets table in `docs/specs/runtime-migrated-cmdlets.md`
 - [ ] `dotnet build src/PsBash.Cmdlets/PsBash.Cmdlets.csproj`: 0 errors
 - [ ] `dotnet build src/PsBash.Shell/PsBash.Shell.csproj`: 0 errors
 - [ ] `dotnet test src/PsBash.Cmdlets.Tests --filter "InvokeBash<FUNCTION>CommandTests"`: all green
@@ -142,6 +142,6 @@ A subagent should **stop and return "blocked"** rather than improvise on any of 
 
 - The function calls a psm1 helper that doesn't have a C# equivalent in `BashRuntime` or `FileSystemHelpers` (e.g. `Get-BashFileInfo`, `Format-StatString`, `Read-BashFileLines`, `Get-BashItem`). Migrating the helper is a separate decision.
 - The function reads or writes `$global:Bash<X>` state shared with other functions (job table, dir stack, positional params). These migrate as batches with a shared design decision.
-- The function has more than one short flag that prefix-collides with PowerShell common parameters and the collision can't be resolved by declaring `SwitchParameter`s (the `Invoke-BashEcho` case — `-e` AND `-E` both ambiguous with `-ErrorAction`). Per `runtime-functions.md`, this means the function stays psm1.
+- The function has more than one short flag that prefix-collides with PowerShell common parameters and the collision can't be resolved by declaring `SwitchParameter`s (the `Invoke-BashEcho` case — `-e` AND `-E` both ambiguous with `-ErrorAction`). Per `runtime-migrated-cmdlets.md`, this means the function stays psm1.
 - The function shells out to a native binary via `Get-Command -CommandType Application` with PSDrive-style path mangling. The native-vs-fallback split needs careful thinking about Windows-vs-POSIX behavior.
 - Differential test breakage. If the new cmdlet's output differs byte-for-byte from the psm1 oracle on any differential case, the cmdlet is wrong — don't update the golden.
