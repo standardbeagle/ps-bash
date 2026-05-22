@@ -371,15 +371,127 @@ public sealed class LifecycleScaleAndFaultTests
                 ct: startCts.Token);
 
             var sw = Stopwatch.StartNew();
+            // Start-Sleep produces NO output, so the 1s IDLE window elapses with no
+            // activity and the call is aborted.
             var ex = await Assert.ThrowsAsync<TimeoutException>(
                 async () => await ipc.QueryAsync("Start-Sleep -Seconds 30"));
             sw.Stop();
 
-            Assert.Contains("did not respond", ex.Message);
-            // Bounded: ~1s call budget + ~750ms recovery probe + overhead. 8s is a
+            Assert.Contains("no output", ex.Message);
+            Assert.Contains("idle timeout", ex.Message);
+            // Bounded: ~1s idle window + ~750ms recovery probe + overhead. 8s is a
             // CI-safe ceiling that still proves we did not wait the full 30s.
             Assert.True(sw.Elapsed < TimeSpan.FromSeconds(8),
-                $"per-call timeout must be bounded; took {sw.ElapsedMilliseconds}ms");
+                $"idle timeout must be bounded; took {sw.ElapsedMilliseconds}ms");
+        }
+        finally
+        {
+            try { serverCts.Cancel(); } catch { }
+            try { if (serverTask is not null) await serverTask.WaitAsync(TimeSpan.FromSeconds(5)); } catch { }
+            Environment.SetEnvironmentVariable(IpcTransportFactory.EndpointEnvVar, priorEndpoint);
+            Environment.SetEnvironmentVariable("PSBASH_TIMEOUT", priorTimeout);
+            CleanupEndpoint(scheme, endpoint);
+        }
+    }
+
+    // ─── 5c. Idle timeout resets on output; survives long active commands ────
+
+    /// <summary>
+    /// Acceptance: PSBASH_TIMEOUT is an INACTIVITY timeout, not a total wall-clock
+    /// cap. A command that keeps producing output more often than the idle window
+    /// must run to completion even when its TOTAL runtime exceeds that window —
+    /// each output frame re-arms the deadline. (Under the old one-shot total
+    /// timeout this command would have been killed mid-stream at 1s.)
+    /// </summary>
+    [Fact]
+    public async Task IdleTimeout_StreamingOutput_SurvivesPastIdleWindow()
+    {
+        var (spec, scheme, endpoint) = NewIsolatedEndpoint("idlestream");
+        var priorEndpoint = Environment.GetEnvironmentVariable(IpcTransportFactory.EndpointEnvVar);
+        var priorTimeout = Environment.GetEnvironmentVariable("PSBASH_TIMEOUT");
+        Environment.SetEnvironmentVariable(IpcTransportFactory.EndpointEnvVar, spec);
+        Environment.SetEnvironmentVariable("PSBASH_TIMEOUT", "1"); // 1s IDLE window
+
+        await using var transport = NewTransport(scheme, endpoint);
+        await using var worker = SdkWorker.Create();
+        await using var server = new HostServer(transport, Task.FromResult(worker));
+        using var serverCts = new CancellationTokenSource();
+        Task? serverTask = null;
+        try
+        {
+            serverTask = server.RunAsync(serverCts.Token);
+            await server.WhenListening.WaitAsync(TimeSpan.FromSeconds(5));
+
+            var bogusBinary = Path.Combine(Path.GetTempPath(), $"does-not-exist-{Guid.NewGuid():N}");
+            using var startCts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+            await using var ipc = await IpcWorker.StartAsync(
+                bogusBinary, startupTimeout: TimeSpan.FromSeconds(5),
+                lifetime: Lifetime.Daemon, ct: startCts.Token);
+
+            // Emit 8 host frames ~300ms apart -> ~2.4s total (well past the 1s
+            // idle window) with no single gap near 1s. Write-Host streams a frame
+            // per call (it bypasses the success-stream format buffer that holds
+            // raw objects), and SendRequestAsync re-arms the idle deadline on every
+            // frame regardless of stream tag — so the call must complete without a
+            // TimeoutException even though the TOTAL runtime far exceeds 1s. (A
+            // one-shot total timeout of 1s would have killed it mid-stream.)
+            var sw = Stopwatch.StartNew();
+            await ipc.QueryAsync(
+                "1..8 | ForEach-Object { Write-Host 'tick'; Start-Sleep -Milliseconds 300 }");
+            sw.Stop();
+
+            // No TimeoutException means the per-frame re-arm kept the call alive.
+            // Assert the run outlasted the idle window so the result is meaningful.
+            Assert.True(sw.Elapsed > TimeSpan.FromSeconds(1.2),
+                $"streaming run should outlast the 1s idle window; took {sw.ElapsedMilliseconds}ms");
+        }
+        finally
+        {
+            try { serverCts.Cancel(); } catch { }
+            try { if (serverTask is not null) await serverTask.WaitAsync(TimeSpan.FromSeconds(5)); } catch { }
+            Environment.SetEnvironmentVariable(IpcTransportFactory.EndpointEnvVar, priorEndpoint);
+            Environment.SetEnvironmentVariable("PSBASH_TIMEOUT", priorTimeout);
+            CleanupEndpoint(scheme, endpoint);
+        }
+    }
+
+    // ─── 5d. PSBASH_TIMEOUT=none disables the idle timeout entirely ──────────
+
+    /// <summary>
+    /// Acceptance: PSBASH_TIMEOUT=none disables the idle timeout. A command that
+    /// is SILENT for longer than the (otherwise tripping) idle window still
+    /// completes — paired with <see cref="PerCallTimeout_BusyHost_ThrowsTimeoutExceptionBounded"/>,
+    /// where the same kind of silent command trips at 1s, this proves "none"
+    /// removes the cap rather than merely lengthening it.
+    /// </summary>
+    [Fact]
+    public async Task IdleTimeout_None_DisablesTimeout_SilentCommandCompletes()
+    {
+        var (spec, scheme, endpoint) = NewIsolatedEndpoint("idlenone");
+        var priorEndpoint = Environment.GetEnvironmentVariable(IpcTransportFactory.EndpointEnvVar);
+        var priorTimeout = Environment.GetEnvironmentVariable("PSBASH_TIMEOUT");
+        Environment.SetEnvironmentVariable(IpcTransportFactory.EndpointEnvVar, spec);
+        Environment.SetEnvironmentVariable("PSBASH_TIMEOUT", "none"); // disabled
+
+        await using var transport = NewTransport(scheme, endpoint);
+        await using var worker = SdkWorker.Create();
+        await using var server = new HostServer(transport, Task.FromResult(worker));
+        using var serverCts = new CancellationTokenSource();
+        Task? serverTask = null;
+        try
+        {
+            serverTask = server.RunAsync(serverCts.Token);
+            await server.WhenListening.WaitAsync(TimeSpan.FromSeconds(5));
+
+            var bogusBinary = Path.Combine(Path.GetTempPath(), $"does-not-exist-{Guid.NewGuid():N}");
+            using var startCts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+            await using var ipc = await IpcWorker.StartAsync(
+                bogusBinary, startupTimeout: TimeSpan.FromSeconds(5),
+                lifetime: Lifetime.Daemon, ct: startCts.Token);
+
+            // 2s of silence — would trip a short idle window, but "none" disables it.
+            var output = await ipc.QueryAsync("Start-Sleep -Seconds 2; 'done-after-silence'");
+            Assert.Contains("done-after-silence", output);
         }
         finally
         {

@@ -511,9 +511,26 @@ public sealed class IpcWorker : IWorker
 
     private async Task<int> SendRequestAsync(Mode mode, CancellationToken ct)
     {
-        var timeout = GetCallTimeout();
-        using var timeoutCts = new CancellationTokenSource(timeout);
+        // INACTIVITY (idle) timeout, not a total wall-clock cap: the deadline is
+        // re-armed every time the host produces an output frame, so a command
+        // that keeps streaming output (a long build, `tail -f`, `gh run watch`)
+        // runs as long as it stays active. Only genuine silence — no output for
+        // the idle window — trips the timeout. An idle value of zero/negative
+        // (PSBASH_TIMEOUT=0|none|infinite, or --timeout none) disables it
+        // entirely, leaving the caller's CancellationToken as the only stop.
+        var idleTimeout = GetCallTimeout();
+        bool unbounded = idleTimeout <= TimeSpan.Zero;
+        using var timeoutCts = new CancellationTokenSource();
         using var linked = CancellationTokenSource.CreateLinkedTokenSource(ct, timeoutCts.Token);
+
+        void ArmIdle()
+        {
+            if (unbounded) return;
+            try { timeoutCts.CancelAfter(idleTimeout); }
+            catch (ObjectDisposedException) { /* call finished; nothing to re-arm */ }
+        }
+
+        ArmIdle(); // bound the connect attempt to one idle window
 
         await using var transport = NewTransport();
         Stream stream;
@@ -523,7 +540,7 @@ public sealed class IpcWorker : IWorker
         }
         catch (OperationCanceledException) when (timeoutCts.IsCancellationRequested && !ct.IsCancellationRequested)
         {
-            // The host is not accepting connections within the call budget. For a
+            // The host is not accepting connections within an idle window. For a
             // shared (Daemon) host this usually means a wedged process still
             // holding the endpoint; retire it so the NEXT invocation spawns a
             // fresh host instead of re-hanging on the same corpse — the
@@ -531,7 +548,8 @@ public sealed class IpcWorker : IWorker
             // subsequent call until it is manually killed.
             await RetireIfUnresponsiveAsync().ConfigureAwait(false);
             throw new TimeoutException(
-                $"ps-bash: connection to host timed out after {timeout.TotalSeconds:0.##}s");
+                $"ps-bash: no response from host within {idleTimeout.TotalSeconds:0.##}s. " +
+                "Raise the idle timeout with --timeout <seconds> / PSBASH_TIMEOUT, or --timeout none to disable.");
         }
 
         try
@@ -539,6 +557,7 @@ public sealed class IpcWorker : IWorker
             await using (stream)
             {
                 await HostProtocol.WriteRequestAsync(stream, mode, linked.Token).ConfigureAwait(false);
+                ArmIdle(); // reset: now waiting for the first response frame
                 // REFACTOR-4: route each response frame by its stream tag. STDOUT
                 // frames go to OutputCallback (or Console.Out when no callback is
                 // set); STDERR frames always go to Console.Error — they are never
@@ -548,6 +567,7 @@ public sealed class IpcWorker : IWorker
                     stream,
                     (line, tag) =>
                     {
+                        ArmIdle(); // each frame is activity — push the idle deadline out
                         if (tag == StreamTag.Stderr)
                         {
                             Console.Error.Write(line.EndsWith('\n') ? line : line + "\n");
@@ -561,15 +581,16 @@ public sealed class IpcWorker : IWorker
         }
         catch (OperationCanceledException) when (timeoutCts.IsCancellationRequested && !ct.IsCancellationRequested)
         {
-            // The host accepted the connection but did not finish the response
-            // within the call budget. Convert the raw cancellation into a clean,
-            // actionable TimeoutException (the launcher's Main maps this to a
-            // one-line diagnostic + exit 124 instead of dumping a stack trace),
-            // and retire the host if a re-probe confirms it is genuinely wedged
-            // rather than merely busy with a long-running command.
+            // The host accepted the connection but produced no output for a full
+            // idle window. Convert the raw cancellation into a clean, actionable
+            // TimeoutException (the launcher's Main maps this to a one-line
+            // diagnostic + exit 124 instead of dumping a stack trace), and retire
+            // the host if a re-probe confirms it is genuinely wedged rather than
+            // merely busy with a long-running command.
             await RetireIfUnresponsiveAsync().ConfigureAwait(false);
             throw new TimeoutException(
-                $"ps-bash: host did not respond within {timeout.TotalSeconds:0.##}s");
+                $"ps-bash: no output from host for {idleTimeout.TotalSeconds:0.##}s (idle timeout). " +
+                "Raise it with --timeout <seconds> / PSBASH_TIMEOUT, or --timeout none to disable.");
         }
     }
 
@@ -636,11 +657,31 @@ public sealed class IpcWorker : IWorker
         return TimeSpan.FromSeconds(20);
     }
 
+    /// <summary>
+    /// The per-call <b>inactivity</b> timeout (see <see cref="SendRequestAsync"/>),
+    /// from <c>PSBASH_TIMEOUT</c>. A bare integer is seconds; <c>0</c>, <c>none</c>,
+    /// <c>off</c>, <c>infinite</c>, or <c>never</c> (and any non-positive integer)
+    /// mean <b>unbounded</b> — returned as <see cref="TimeSpan.Zero"/>, which
+    /// <see cref="SendRequestAsync"/> treats as "no idle timeout". Anything
+    /// unparseable falls back to the 120s default. The <c>--timeout</c> CLI flag
+    /// sets this env var, so the two share one parser.
+    /// </summary>
     private static TimeSpan GetCallTimeout()
     {
-        var envValue = Environment.GetEnvironmentVariable("PSBASH_TIMEOUT");
-        if (envValue is not null && int.TryParse(envValue, out var seconds) && seconds > 0)
-            return TimeSpan.FromSeconds(seconds);
+        var envValue = Environment.GetEnvironmentVariable("PSBASH_TIMEOUT")?.Trim();
+        if (string.IsNullOrEmpty(envValue))
+            return TimeSpan.FromSeconds(120);
+        switch (envValue.ToLowerInvariant())
+        {
+            case "0":
+            case "none":
+            case "off":
+            case "infinite":
+            case "never":
+                return TimeSpan.Zero; // unbounded
+        }
+        if (int.TryParse(envValue, out var seconds))
+            return seconds > 0 ? TimeSpan.FromSeconds(seconds) : TimeSpan.Zero;
         return TimeSpan.FromSeconds(120);
     }
 

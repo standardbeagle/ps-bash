@@ -1,3 +1,4 @@
+using System.Reflection;
 using PsBash.Core.Parser;
 using PsBash.Core.Runtime;
 using PsBash.Core.Transpiler;
@@ -36,6 +37,38 @@ if (HostCommands.IsHostCommand(args))
 
 var shellArgs = ShellArgs.Parse(args);
 
+// Informational flags short-circuit before any host/IPC work. Without this,
+// `ps-bash --version` parsed to an empty ShellArgs and fell through to the
+// interactive/stdin branch, which blocks forever when no tty is attached
+// (a tooling probe of `--version` would hang the caller).
+if (shellArgs.ShowVersion)
+{
+    Console.WriteLine($"ps-bash, version {ResolveLauncherVersion()}");
+    Console.WriteLine("Bash-to-PowerShell transpiler");
+    return 0;
+}
+if (shellArgs.ShowHelp)
+{
+    Console.WriteLine("Usage: ps-bash [options] [script-file [args...]]");
+    Console.WriteLine();
+    Console.WriteLine("Options:");
+    Console.WriteLine("  -c COMMAND        Run COMMAND (a bash string) and exit.");
+    Console.WriteLine("  -i                Force interactive mode.");
+    Console.WriteLine("  -l, --login       Run as a login shell (load profile).");
+    Console.WriteLine("  -s                Read commands from standard input.");
+    Console.WriteLine("  --noprofile,");
+    Console.WriteLine("  --norc            Do not load any profile/rc file.");
+    Console.WriteLine("  --unix-paths,");
+    Console.WriteLine("  --windows-paths   Force unix- or windows-style path translation.");
+    Console.WriteLine("  --timeout VALUE   Per-command idle timeout (seconds; default 120).");
+    Console.WriteLine("                    Resets on each line of output, so a command that");
+    Console.WriteLine("                    keeps producing output is never killed for being");
+    Console.WriteLine("                    slow. Use 'none' (or 0) to disable entirely.");
+    Console.WriteLine("  --version, -V     Print the ps-bash version and exit.");
+    Console.WriteLine("  --help            Print this help and exit.");
+    return 0;
+}
+
 // Path mode: explicit --unix-paths / --windows-paths flag wins; otherwise
 // fall back to PSBASH_UNIX_PATHS env var; otherwise default to Windows-native
 // paths (no MSYS translation). Propagate the resolved choice as an env var
@@ -43,6 +76,13 @@ var shellArgs = ShellArgs.Parse(args);
 bool unixPaths = shellArgs.UnixPaths
     ?? Environment.GetEnvironmentVariable("PSBASH_UNIX_PATHS") is "1" or "true";
 Environment.SetEnvironmentVariable("PSBASH_UNIX_PATHS", unixPaths ? "1" : "0");
+
+// --timeout <value> sets the per-command idle timeout for this invocation by
+// forwarding to PSBASH_TIMEOUT (the single knob IpcWorker reads): seconds, or
+// none/0/off/infinite to disable. An explicit flag wins over an inherited env
+// var so a caller can override the ambient default per-command.
+if (shellArgs.Timeout is { Length: > 0 } timeoutValue)
+    Environment.SetEnvironmentVariable("PSBASH_TIMEOUT", timeoutValue);
 
 // All non-interactive execution (-c, stdin pipe, script file) goes through
 // ps-bash-host over IPC. REFACTOR-7: each invocation gets its own private host
@@ -297,6 +337,31 @@ static string BuildInvocationCwdPreamble()
         "[System.Environment]::CurrentDirectory = $__psbash_invocation_cwd; " +
         "$env:PWD = $__psbash_invocation_cwd; " +
         "Set-Location -LiteralPath $__psbash_invocation_cwd -ErrorAction SilentlyContinue; ";
+}
+
+// Resolve the launcher version from the PsBash.Core assembly's
+// InformationalVersion (stamped from <Version> in PsBash.Core.csproj, which the
+// release process keeps in sync with the module manifest). Reading an attribute
+// avoids spinning up a runspace just to print a banner. Strips any `+<commit>`
+// SourceLink build-metadata suffix.
+//
+// MUST anchor on a PsBash.Core type (IpcWorker), not BashTranspiler: the release
+// process only bumps PsBash.Core.csproj's <Version> and the module manifest, so
+// every other project's version drifts. PsBash.Transpiler.csproj sat at 0.9.8
+// while Core was 0.9.10 — reading BashTranspiler's assembly reported the stale
+// 0.9.8 in the `--version` banner.
+static string ResolveLauncherVersion()
+{
+    var asm = typeof(IpcWorker).Assembly;
+    var info = asm
+        .GetCustomAttribute<System.Reflection.AssemblyInformationalVersionAttribute>()
+        ?.InformationalVersion;
+    if (!string.IsNullOrEmpty(info))
+    {
+        var plus = info.IndexOf('+');
+        return plus >= 0 ? info[..plus] : info;
+    }
+    return asm.GetName().Version?.ToString(3) ?? "0.0.0";
 }
 
 static string? ResolveHostBinary()

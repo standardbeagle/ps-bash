@@ -379,4 +379,98 @@ public class ShellArgsTests
 
         Assert.False(result.RawPowerShell);
     }
+
+    // Regression: `ps-bash --version` had no parser case, fell through to the
+    // default (a `-`-prefixed token is not a ScriptPath), leaving Command and
+    // ScriptPath null — which dropped the launcher into interactive/stdin mode
+    // and hung when no tty was attached.
+    [Fact]
+    public void Parse_VersionLongFlag_SetsShowVersion()
+    {
+        var result = ShellArgs.Parse(["--version"]);
+
+        Assert.True(result.ShowVersion);
+        Assert.Null(result.Command);
+        Assert.Null(result.ScriptPath);
+    }
+
+    [Fact]
+    public void Parse_VersionShortFlag_SetsShowVersion()
+    {
+        var result = ShellArgs.Parse(["-V"]);
+
+        Assert.True(result.ShowVersion);
+    }
+
+    [Fact]
+    public void Parse_HelpLongFlag_SetsShowHelp()
+    {
+        var result = ShellArgs.Parse(["--help"]);
+
+        Assert.True(result.ShowHelp);
+        Assert.Null(result.Command);
+        Assert.Null(result.ScriptPath);
+    }
+
+    [Fact]
+    public void Parse_NoInfoFlags_DefaultsFalse()
+    {
+        var result = ShellArgs.Parse(["-c", "echo hi"]);
+
+        Assert.False(result.ShowVersion);
+        Assert.False(result.ShowHelp);
+    }
+
+    // A literal `--version` passed as the -c command body must remain the
+    // command — only a top-level `--version` flag flips ShowVersion.
+    [Fact]
+    public void Parse_VersionAsCommandBody_DoesNotSetShowVersion()
+    {
+        var result = ShellArgs.Parse(["-c", "echo --version"]);
+
+        Assert.False(result.ShowVersion);
+        Assert.Equal("echo --version", result.Command);
+    }
+
+    // ── --timeout flag (per-command idle timeout the caller can set) ─────────
+
+    [Fact]
+    public void Parse_NoTimeoutFlag_TimeoutIsNull()
+    {
+        Assert.Null(ShellArgs.Parse(["-c", "echo hi"]).Timeout);
+    }
+
+    [Fact]
+    public void Parse_TimeoutSeconds_SetsTimeout()
+    {
+        var result = ShellArgs.Parse(["--timeout", "600", "-c", "echo hi"]);
+
+        Assert.Equal("600", result.Timeout);
+        Assert.Equal("echo hi", result.Command);
+    }
+
+    [Fact]
+    public void Parse_TimeoutEqualsForm_SetsTimeout()
+    {
+        Assert.Equal("600", ShellArgs.Parse(["--timeout=600", "-c", "echo hi"]).Timeout);
+    }
+
+    [Theory]
+    [InlineData("none")]
+    [InlineData("0")]
+    [InlineData("infinite")]
+    public void Parse_TimeoutDisableValues_PassThroughVerbatim(string value)
+    {
+        // The launcher forwards the raw value to PSBASH_TIMEOUT; IpcWorker owns
+        // interpretation (none/0/off/infinite => unbounded).
+        Assert.Equal(value, ShellArgs.Parse(["--timeout", value, "-c", "echo hi"]).Timeout);
+    }
+
+    [Fact]
+    public void Parse_TimeoutWithoutValue_DoesNotThrow()
+    {
+        // Trailing --timeout with no value: tolerated, leaves Timeout null.
+        var result = ShellArgs.Parse(["--timeout"]);
+        Assert.Null(result.Timeout);
+    }
 }

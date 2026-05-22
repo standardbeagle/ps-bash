@@ -9,7 +9,10 @@ public record ShellArgs(
     bool? UnixPaths = null,
     string? ScriptPath = null,
     string[] ScriptArgs = null!,
-    bool RawPowerShell = false)
+    bool RawPowerShell = false,
+    bool ShowVersion = false,
+    bool ShowHelp = false,
+    string? Timeout = null)
 {
     // Bash-compatible short flags ps-bash recognizes. Used to expand bundled
     // forms like `-lc` and to let `-c` skip past intervening flags when callers
@@ -35,9 +38,12 @@ public record ShellArgs(
         bool noprofile = false;
         bool? unixPaths = null;
         bool rawPs = false;
+        bool showVersion = false;
+        bool showHelp = false;
         bool endOfOptions = false;
         string? scriptPath = null;
         string[] scriptArgs = [];
+        string? timeout = null;
 
         for (int i = 0; i < expanded.Count; i++)
         {
@@ -48,6 +54,21 @@ public record ShellArgs(
                     scriptPath = expanded[i];
                 else
                     scriptArgs = [..scriptArgs, expanded[i]];
+                continue;
+            }
+
+            // --timeout <value> / --timeout=<value>: per-invocation idle timeout
+            // the caller can set without juggling the PSBASH_TIMEOUT env var.
+            // Value is seconds, or none/0/off/infinite to disable. Program.cs
+            // forwards it to PSBASH_TIMEOUT so IpcWorker's single parser owns it.
+            if (expanded[i] == "--timeout")
+            {
+                if (i + 1 < expanded.Count) timeout = expanded[++i];
+                continue;
+            }
+            if (expanded[i].StartsWith("--timeout=", StringComparison.Ordinal))
+            {
+                timeout = expanded[i]["--timeout=".Length..];
                 continue;
             }
 
@@ -102,6 +123,19 @@ public record ShellArgs(
                 case "--raw-ps":
                     rawPs = true;
                     break;
+                // Informational flags. Real bash exits 0 after printing for
+                // `--version` / `--help`. ps-bash had no case for either, so
+                // they fell through to the default (a `-`-prefixed token is not
+                // a ScriptPath), leaving command/script null — which dropped the
+                // launcher into interactive/stdin mode and hung when no tty was
+                // attached (e.g. a tooling probe of `ps-bash --version`).
+                case "--version":
+                case "-V":
+                    showVersion = true;
+                    break;
+                case "--help":
+                    showHelp = true;
+                    break;
                 case "--":
                     endOfOptions = true;
                     break;
@@ -119,7 +153,7 @@ public record ShellArgs(
             }
         }
 
-        return new ShellArgs(command, interactive, login, stdin, noprofile, unixPaths, scriptPath, scriptArgs, rawPs);
+        return new ShellArgs(command, interactive, login, stdin, noprofile, unixPaths, scriptPath, scriptArgs, rawPs, showVersion, showHelp, timeout);
     }
 
     // Expands `-lc` -> `-l`, `-c`. Single-char flags (`-c`, `-l`) and long
