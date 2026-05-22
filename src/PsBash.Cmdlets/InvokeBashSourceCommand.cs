@@ -22,10 +22,13 @@ public sealed class InvokeBashSourceCommand : PSCmdlet
         if (string.IsNullOrEmpty(Path))
             return;
 
-        string resolvedPath = GetUnresolvedProviderPathFromPSPath(Path);
+        string resolvedPath = ResolveSourcePath(Path);
 
         if (!System.IO.File.Exists(resolvedPath))
         {
+            if (TryCreateOptionalSnapshot(resolvedPath, Path))
+                return;
+
             WriteError(new ErrorRecord(
                 new System.IO.FileNotFoundException($"ps-bash: {Path}: No such file or directory"),
                 "FileNotFound",
@@ -90,6 +93,50 @@ public sealed class InvokeBashSourceCommand : PSCmdlet
                 sb,
                 input: null,
                 args: null);
+        }
+    }
+
+    private string ResolveSourcePath(string rawPath)
+    {
+        if (Environment.GetEnvironmentVariable("PSBASH_UNIX_PATHS") == "1")
+        {
+            if (OperatingSystem.IsWindows() && rawPath.StartsWith("/tmp/", StringComparison.Ordinal))
+            {
+                return System.IO.Path.Combine(
+                    System.IO.Path.GetTempPath(),
+                    rawPath[5..].Replace('/', System.IO.Path.DirectorySeparatorChar));
+            }
+
+            if (OperatingSystem.IsWindows()
+                && rawPath.Length >= 3 && rawPath[0] == '/' && rawPath[2] == '/'
+                && char.IsAsciiLetter(rawPath[1]))
+            {
+                return $"{char.ToUpperInvariant(rawPath[1])}:\\{rawPath[3..].Replace('/', '\\')}";
+            }
+        }
+
+        return GetUnresolvedProviderPathFromPSPath(rawPath);
+    }
+
+    private bool TryCreateOptionalSnapshot(string resolvedPath, string rawPath)
+    {
+        var fileName = System.IO.Path.GetFileName(rawPath);
+        if (!fileName.Contains("snapshot", StringComparison.OrdinalIgnoreCase))
+            return false;
+        if (!fileName.Contains("claude", StringComparison.OrdinalIgnoreCase))
+            return false;
+
+        try
+        {
+            var dir = System.IO.Path.GetDirectoryName(resolvedPath);
+            if (!string.IsNullOrEmpty(dir))
+                Directory.CreateDirectory(dir);
+            File.WriteAllText(resolvedPath, string.Empty);
+            return true;
+        }
+        catch
+        {
+            return false;
         }
     }
 }

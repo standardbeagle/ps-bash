@@ -111,6 +111,84 @@ public class AliasExpansionTests
         var result = InteractiveShell.ProcessAliasCommand("ls -la");
         Assert.Equal("ls -la", result);
     }
+
+    // ── source / . recognizer (TryGetInteractiveSourceTarget) ────────────────
+    // Regression coverage for the interactive `source FILE` alias gap: only the
+    // simple single-file form is intercepted (so its aliases reach the in-process
+    // table); complex forms fall through to Invoke-BashSource.
+
+    [Fact]
+    public void TryGetInteractiveSourceTarget_SourceWithAbsolutePath_Resolves()
+    {
+        var abs = OperatingSystem.IsWindows() ? "C:/tmp/aliases.sh" : "/tmp/aliases.sh";
+        var ok = InteractiveShell.TryGetInteractiveSourceTarget($"source {abs}", out var path);
+        Assert.True(ok);
+        Assert.True(Path.IsPathRooted(path));
+        Assert.EndsWith("aliases.sh", path);
+    }
+
+    [Fact]
+    public void TryGetInteractiveSourceTarget_DotFormWithAbsolutePath_Resolves()
+    {
+        var abs = OperatingSystem.IsWindows() ? "C:/tmp/dot.sh" : "/tmp/dot.sh";
+        var ok = InteractiveShell.TryGetInteractiveSourceTarget($". {abs}", out var path);
+        Assert.True(ok);
+        Assert.EndsWith("dot.sh", path);
+    }
+
+    [Fact]
+    public void TryGetInteractiveSourceTarget_TildeDotfile_HasSeparatorBeforeName()
+    {
+        // The user-reported case: `source ~/.psbashrc`. Regression: the parser
+        // consumes the '/' after '~', so the resolver must reinsert a separator.
+        // Before the fix this produced `<home>.psbashrc` (no separator) — File.Exists
+        // failed and the intercept silently fell through to Invoke-BashSource, so
+        // source'd aliases never reached the interactive table.
+        var home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+        var expected = Path.GetFullPath(Path.Combine(home, ".psbashrc"));
+        var ok = InteractiveShell.TryGetInteractiveSourceTarget("source ~/.psbashrc", out var path);
+        Assert.True(ok);
+        Assert.Equal(expected, path);
+        Assert.DoesNotContain("~", path);
+    }
+
+    [Fact]
+    public void TryGetInteractiveSourceTarget_TildeNestedPath_PreservesSeparators()
+    {
+        // A multi-segment tilde path must keep every separator, including the one
+        // the parser dropped right after '~'.
+        var home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+        var expected = Path.GetFullPath(Path.Combine(home, "psb-probe-dir", "probe.sh"));
+        var ok = InteractiveShell.TryGetInteractiveSourceTarget("source ~/psb-probe-dir/probe.sh", out var path);
+        Assert.True(ok);
+        Assert.Equal(expected, path);
+    }
+
+    [Fact]
+    public void TryGetInteractiveSourceTarget_NonSourceCommand_ReturnsFalse()
+    {
+        Assert.False(InteractiveShell.TryGetInteractiveSourceTarget("echo hi", out _));
+    }
+
+    [Fact]
+    public void TryGetInteractiveSourceTarget_ExtraArguments_ReturnsFalse()
+    {
+        // Two operands (file + positional arg) must fall through to Invoke-BashSource.
+        Assert.False(InteractiveShell.TryGetInteractiveSourceTarget("source a.sh extra", out _));
+    }
+
+    [Fact]
+    public void TryGetInteractiveSourceTarget_WithRedirect_ReturnsFalse()
+    {
+        Assert.False(InteractiveShell.TryGetInteractiveSourceTarget("source a.sh > out.txt", out _));
+    }
+
+    [Fact]
+    public void TryGetInteractiveSourceTarget_VariablePath_ReturnsFalse()
+    {
+        // A path needing variable expansion is too complex to resolve here.
+        Assert.False(InteractiveShell.TryGetInteractiveSourceTarget("source $RC", out _));
+    }
 }
 
 public class ResolveCommandTests

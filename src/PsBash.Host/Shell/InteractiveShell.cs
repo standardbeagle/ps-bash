@@ -109,6 +109,48 @@ public static class InteractiveShell
                 var originalInput = trimmed;
                 trimmed = ExpandAliases(trimmed);
 
+                // Interactive `source FILE` / `. FILE`: route the file's
+                // alias/unalias lines through the same in-process alias table the
+                // startup rc path uses, then execute the rest. Without this, an
+                // interactive source goes through Invoke-BashSource in the worker
+                // and its aliases land only in the worker's module-scope table —
+                // never reaching the interactive expander, so the user sees no
+                // alias update. Only the simple single-file form is intercepted;
+                // complex forms (extra args, redirects, pipelines) fall through to
+                // Invoke-BashSource below. A cheap prefix check gates the parse.
+                if ((trimmed.StartsWith("source ", StringComparison.Ordinal)
+                        || trimmed.StartsWith(". ", StringComparison.Ordinal))
+                    && TryGetInteractiveSourceTarget(trimmed, out var sourceTarget)
+                    && File.Exists(sourceTarget))
+                {
+                    var sourceStopwatch = Stopwatch.StartNew();
+                    int? sourceExit = null;
+                    try
+                    {
+                        await SourceFileAsync(worker, cts, sourceTarget);
+                        await SyncWorkerCwdAsync(worker);
+                        try
+                        {
+                            var ec = await worker.QueryAsync("$LASTEXITCODE");
+                            if (int.TryParse(ec?.Trim(), out var code))
+                                sourceExit = code;
+                        }
+                        catch (Exception) { /* routine: worker busy or query raced */ }
+                        await RunPromptCommandAsync(worker);
+                    }
+                    catch (OperationCanceledException)
+                    {
+                        Console.Error.WriteLine("^C");
+                        sourceExit = null;
+                    }
+                    finally
+                    {
+                        sourceStopwatch.Stop();
+                        await RecordCommandAsync(originalInput, sourceExit, sourceStopwatch.ElapsedMilliseconds);
+                    }
+                    continue;
+                }
+
                 string pwshCommand;
                 try
                 {
@@ -325,6 +367,107 @@ EnsureConsoleInputRestored();
 
     private static bool HasGlobChars(string value) =>
         value.Contains('*') || value.Contains('?') || value.Contains('[');
+
+    /// <summary>
+    /// Recognizes the simple interactive forms <c>source FILE</c> and <c>. FILE</c>
+    /// (exactly one file operand, no redirects/heredocs/extra args) and resolves
+    /// the operand to an absolute path — handling a leading <c>~</c>, single/double
+    /// quotes, and relative paths (against the current dir). Returns false for any
+    /// more complex form so it falls through to the normal Invoke-BashSource path.
+    /// </summary>
+    internal static bool TryGetInteractiveSourceTarget(string bashInput, out string resolvedPath)
+    {
+        resolvedPath = "";
+
+        Command? ast;
+        try
+        {
+            ast = BashParser.Parse(bashInput);
+        }
+        catch
+        {
+            return false;
+        }
+
+        if (ast is not Command.Simple simple)
+            return false;
+        if (simple.Redirects.Length > 0 || simple.HereDocs.Length > 0)
+            return false;
+        if (simple.Words.Length != 2)
+            return false;
+
+        var cmd = PsEmitter.GetLiteralValue(simple.Words[0]);
+        if (cmd is not ("source" or "."))
+            return false;
+
+        return TryResolveWordToPath(simple.Words[1], out resolvedPath);
+    }
+
+    /// <summary>
+    /// Resolves a <see cref="CompoundWord"/> made only of literal / quoted-literal
+    /// parts (plus an optional leading current-user <c>~</c>) to an absolute path.
+    /// Returns false when the word contains variable refs, command subs, globs, or a
+    /// <c>~user</c> form — cases the caller hands back to the general source path.
+    /// </summary>
+    private static bool TryResolveWordToPath(CompoundWord word, out string resolvedPath)
+    {
+        resolvedPath = "";
+        var sb = new StringBuilder();
+
+        for (int i = 0; i < word.Parts.Length; i++)
+        {
+            var part = word.Parts[i];
+            switch (part)
+            {
+                case WordPart.Literal lit:
+                    sb.Append(lit.Value);
+                    break;
+                case WordPart.SingleQuoted sq:
+                    sb.Append(sq.Value);
+                    break;
+                case WordPart.DoubleQuoted dq when dq.Parts.All(p => p is WordPart.Literal):
+                    foreach (var p in dq.Parts)
+                        sb.Append(((WordPart.Literal)p).Value);
+                    break;
+                case WordPart.TildeSub ts when i == 0 && ts.User is null:
+                    sb.Append(_homeDir);
+                    // BashParser consumes the '/' after '~' (so it never reaches the
+                    // following Literal), and PsEmitter reinserts a separator. Mirror
+                    // that here, otherwise `~/.psbashrc` resolves to
+                    // `C:\Users\andyb.psbashrc` (no separator) and File.Exists fails,
+                    // silently falling through to Invoke-BashSource.
+                    if (i + 1 < word.Parts.Length)
+                        sb.Append(Path.DirectorySeparatorChar);
+                    break;
+                default:
+                    return false;
+            }
+        }
+
+        var raw = sb.ToString();
+        if (raw.Length == 0)
+            return false;
+
+        // Expand a literal leading ~ as well. Depending on lexer state the parser
+        // may surface `~/foo` as a TildeSub part (handled above) or as a plain
+        // literal `~/foo`; handle the literal form here so `source ~/.psbashrc`
+        // resolves identically in both representations.
+        if (raw == "~")
+            raw = _homeDir;
+        else if (raw.StartsWith("~/", StringComparison.Ordinal) || raw.StartsWith("~\\", StringComparison.Ordinal))
+            raw = _homeDir + raw[1..];
+
+        var baseDir = Directory.Exists(_lastDir) ? _lastDir : Environment.CurrentDirectory;
+        try
+        {
+            resolvedPath = Path.GetFullPath(raw, baseDir);
+        }
+        catch
+        {
+            return false;
+        }
+        return true;
+    }
 
     internal static string? ResolveCommand(string cmdName, string? workDir)
     {
@@ -844,21 +987,43 @@ EnsureConsoleInputRestored();
         if (!File.Exists(rcPath))
             return true;
 
-        string rcContent;
+        return await SourceFileAsync(worker, cts, rcPath, "~/.psbashrc");
+    }
+
+    /// <summary>
+    /// Source a bash file the way the interactive shell needs it: each
+    /// <c>alias</c>/<c>unalias</c> line is routed through <see cref="ProcessAliasCommand"/>
+    /// so its definition lands in the in-process <see cref="Aliases"/> table that
+    /// drives pre-transpile alias expansion, then the remaining (non-alias,
+    /// non-comment) lines are transpiled as one block and executed in the worker.
+    ///
+    /// This is the shared path for both startup (~/.psbashrc) and an interactive
+    /// <c>source FILE</c> / <c>. FILE</c>. Routing source through here — rather than
+    /// the Invoke-BashSource cmdlet that runs entirely in the worker — is what makes
+    /// source'd aliases visible to the interactive expander; the cmdlet only updates
+    /// the worker's module-scope alias table, which the expander never reads.
+    /// Returns false only when execution was cancelled (Ctrl+C); true otherwise.
+    /// </summary>
+    private static async Task<bool> SourceFileAsync(
+        IWorker worker, CancellationTokenSource cts, string path, string? displayName = null)
+    {
+        var label = displayName ?? path;
+
+        string content;
         try
         {
-            rcContent = await File.ReadAllTextAsync(rcPath);
+            content = await File.ReadAllTextAsync(path);
         }
         catch
         {
             return true;
         }
 
-        if (string.IsNullOrWhiteSpace(rcContent))
+        if (string.IsNullOrWhiteSpace(content))
             return true;
 
         var filtered = new StringBuilder();
-        foreach (var rawLine in rcContent.Split('\n'))
+        foreach (var rawLine in content.Split('\n'))
         {
             var line = rawLine.TrimEnd('\r', '\n');
             var trimmed = line.Trim();
@@ -885,7 +1050,7 @@ EnsureConsoleInputRestored();
         }
         catch (ParseException ex)
         {
-            Console.Error.WriteLine($"ps-bash: ~/.psbashrc: syntax error: {ex.Message}");
+            Console.Error.WriteLine($"ps-bash: {label}: syntax error: {ex.Message}");
             return true;
         }
 
@@ -893,11 +1058,11 @@ EnsureConsoleInputRestored();
 
         if (debug)
         {
-            Console.Error.WriteLine("[ps-bash] rc bash ----");
+            Console.Error.WriteLine("[ps-bash] source bash ----");
             Console.Error.WriteLine(filtered.ToString());
-            Console.Error.WriteLine("[ps-bash] rc pwsh ----");
+            Console.Error.WriteLine("[ps-bash] source pwsh ----");
             Console.Error.WriteLine(pwshCommand);
-            Console.Error.WriteLine("[ps-bash] rc end ----");
+            Console.Error.WriteLine("[ps-bash] source end ----");
         }
 
         try
@@ -911,7 +1076,7 @@ EnsureConsoleInputRestored();
         }
         catch (Exception ex)
         {
-            Console.Error.WriteLine($"ps-bash: ~/.psbashrc: {ex.Message}");
+            Console.Error.WriteLine($"ps-bash: {label}: {ex.Message}");
         }
 
         return true;

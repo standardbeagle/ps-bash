@@ -232,4 +232,95 @@ public class AliasExpansionIntegrationTests
             try { Directory.Delete(tempHome, recursive: true); } catch { }
         }
     }
+
+    // ── Case 8: interactive `source FILE` populates the C# alias table ────────
+
+    /// <summary>
+    /// Regression: an interactive `source FILE` must route the file's alias
+    /// definitions through the in-process (C#) alias table that drives pre-transpile
+    /// expansion. Previously `source` ran via Invoke-BashSource in the worker, whose
+    /// aliases only landed in the worker's module-scope table.
+    ///
+    /// Verification uses the `alias NAME` show form, which prints from the C# table
+    /// ONLY — a worker-side module alias (which also creates a callable function)
+    /// would NOT satisfy it, so this distinguishes the real fix from the fallback.
+    ///
+    /// The file path is sent with forward slashes so the bash lexer keeps it as a
+    /// single literal word (a backslash would be treated as an escape).
+    /// </summary>
+    [SkippableFact]
+    public async Task Source_FileWithAlias_RegistersInInteractiveTable()
+    {
+        Skip.IfNot(CanRun, "ps-bash binary not found");
+
+        await using var harness = await StartAsync(); // noProfile=true → --norc, empty table
+
+        var aliasFile = Path.Combine(harness.TempHome, "aliases.sh");
+        await File.WriteAllTextAsync(aliasFile, "alias srctest='echo sourced-alias-works'\n");
+
+        await harness.SendLineAsync($"source {aliasFile.Replace('\\', '/')}");
+        await harness.WaitForPromptAsync();
+
+        await harness.SendLineAsync("alias srctest");
+        await harness.WaitForPromptAsync();
+
+        var output = NormalizeOutput(harness.ReadSinceLastPrompt());
+        Assert.Contains("alias srctest='echo sourced-alias-works'", output);
+    }
+
+    // ── Case 9: dot-form `. FILE` also populates the C# alias table ───────────
+
+    [SkippableFact]
+    public async Task SourceDotForm_FileWithAlias_RegistersInInteractiveTable()
+    {
+        Skip.IfNot(CanRun, "ps-bash binary not found");
+
+        await using var harness = await StartAsync();
+
+        var aliasFile = Path.Combine(harness.TempHome, "dotaliases.sh");
+        await File.WriteAllTextAsync(aliasFile, "alias dottest='echo dot-sourced-works'\n");
+
+        await harness.SendLineAsync($". {aliasFile.Replace('\\', '/')}");
+        await harness.WaitForPromptAsync();
+
+        await harness.SendLineAsync("alias dottest");
+        await harness.WaitForPromptAsync();
+
+        var output = NormalizeOutput(harness.ReadSinceLastPrompt());
+        Assert.Contains("alias dottest='echo dot-sourced-works'", output);
+    }
+
+    // ── Case 10: re-sourcing a changed alias overwrites it (the user's bug) ───
+
+    /// <summary>
+    /// The exact user-reported scenario: edit the rc to change an alias value, then
+    /// re-source — the new value must win. Re-sourcing must overwrite the C# table
+    /// entry, not leave the stale value. Verified via the `alias NAME` show form so
+    /// it measures the C# table (the expander's source of truth), not a worker
+    /// function that might shadow it.
+    /// </summary>
+    [SkippableFact]
+    public async Task Source_ReSourceChangedAlias_OverwritesValue()
+    {
+        Skip.IfNot(CanRun, "ps-bash binary not found");
+
+        await using var harness = await StartAsync();
+
+        var v1 = Path.Combine(harness.TempHome, "v1.sh");
+        var v2 = Path.Combine(harness.TempHome, "v2.sh");
+        await File.WriteAllTextAsync(v1, "alias swt='ls -alh'\n");
+        await File.WriteAllTextAsync(v2, "alias swt='ls -al'\n");
+
+        await harness.SendLineAsync($"source {v1.Replace('\\', '/')}");
+        await harness.WaitForPromptAsync();
+        await harness.SendLineAsync($"source {v2.Replace('\\', '/')}");
+        await harness.WaitForPromptAsync();
+
+        await harness.SendLineAsync("alias swt");
+        await harness.WaitForPromptAsync();
+
+        var output = NormalizeOutput(harness.ReadSinceLastPrompt());
+        Assert.Contains("alias swt='ls -al'", output);
+        Assert.DoesNotContain("ls -alh", output);
+    }
 }

@@ -409,4 +409,155 @@ public class ProgramEndToEndTests
         Assert.True(lines.Count >= 3,
             $"Expected >=3 output lines, got {lines.Count}: [{string.Join("|", lines)}]");
     }
+
+    // ── General CLI options ──────────────────────────────────────────────────
+    // The informational flags (--version / -V / --help) short-circuit before any
+    // host/worker spawn, so they run without pwsh and must NEVER hang. Each test
+    // carries a timeout: the pre-fix launcher had no case for these flags, so a
+    // `-`-prefixed token fell through to the interactive/stdin branch and blocked
+    // forever when no tty was attached — exactly the dogfooding probe
+    // (`ps-bash --version`) that wedged the caller. A timeout makes a regression
+    // back to that behavior fail loudly instead of hanging the suite.
+
+    // The canonical version lives in PsBash.Core.csproj's <Version> — the only
+    // project the release process bumps (alongside the module manifest). Reading
+    // it independently here is what catches the drift regression: the first
+    // --version impl anchored on PsBash.Transpiler's assembly, which sat at 0.9.8
+    // while Core (and the real release) was 0.9.10. Returns null if the source
+    // tree isn't reachable (e.g. a packaged-only run) so the format assertions
+    // still run.
+    private static string? ResolveExpectedVersion()
+    {
+        var dir = AppContext.BaseDirectory;
+        while (!string.IsNullOrEmpty(dir))
+        {
+            var csproj = Path.Combine(dir, "src", "PsBash.Core", "PsBash.Core.csproj");
+            if (File.Exists(csproj))
+            {
+                var m = System.Text.RegularExpressions.Regex.Match(
+                    File.ReadAllText(csproj), @"<Version>([^<]+)</Version>");
+                return m.Success ? m.Groups[1].Value.Trim() : null;
+            }
+            dir = Path.GetDirectoryName(dir.TrimEnd(Path.DirectorySeparatorChar));
+        }
+        return null;
+    }
+
+    [Fact]
+    public async Task VersionLongFlag_PrintsCanonicalVersion_ExitsZero_NoHang()
+    {
+        var (exitCode, stdout, _) = await RunShellAsync(
+            new[] { "--version" }, TimeSpan.FromSeconds(15));
+
+        Assert.Equal(0, exitCode);
+        Assert.Contains("ps-bash, version", stdout);
+        Assert.Contains("Bash-to-PowerShell transpiler", stdout);
+        Assert.Matches(@"ps-bash, version \d+\.\d+\.\d+", stdout);
+
+        // Regression: must report the canonical Core/manifest version, not a
+        // drifted sibling-project version (was 0.9.8 from PsBash.Transpiler).
+        var expected = ResolveExpectedVersion();
+        if (expected is not null)
+            Assert.Contains($"ps-bash, version {expected}", stdout);
+    }
+
+    [Fact]
+    public async Task VersionShortFlag_PrintsCanonicalVersion_ExitsZero_NoHang()
+    {
+        var (exitCode, stdout, _) = await RunShellAsync(
+            new[] { "-V" }, TimeSpan.FromSeconds(15));
+
+        Assert.Equal(0, exitCode);
+        Assert.Matches(@"ps-bash, version \d+\.\d+\.\d+", stdout);
+
+        var expected = ResolveExpectedVersion();
+        if (expected is not null)
+            Assert.Contains($"ps-bash, version {expected}", stdout);
+    }
+
+    [Fact]
+    public async Task HelpLongFlag_PrintsUsage_ExitsZero_NoHang()
+    {
+        var (exitCode, stdout, _) = await RunShellAsync(
+            new[] { "--help" }, TimeSpan.FromSeconds(15));
+
+        Assert.Equal(0, exitCode);
+        Assert.Contains("Usage: ps-bash", stdout);
+        Assert.Contains("-c COMMAND", stdout);
+        Assert.Contains("--version", stdout);
+    }
+
+    // --version returns before any worker spawn, so a missing/broken host must
+    // not matter and the call must not hang. Guards the exact dogfooding probe:
+    // Claude Code (which runs ps-bash as its shell) may probe `--version`, and
+    // that must succeed even if the host binary is unavailable.
+    [Fact]
+    public async Task VersionFlag_DoesNotRequireHost_EvenWithBogusHostBinary()
+    {
+        var bogusHost = Path.Combine(
+            Path.GetTempPath(), $"ps-bash-host-missing-{Guid.NewGuid():N}.exe");
+        var psi = PsBashTestProcess.Create(
+            new[] { "--version" },
+            env: new System.Collections.Generic.Dictionary<string, string?> { ["PSBASH_HOST"] = bogusHost },
+            ipcEndpoint: PsBashTestProcess.CreateEndpoint());
+
+        var (exitCode, stdout, _) = await ProcessRunHelper.RunAsync(
+            psi, timeout: TimeSpan.FromSeconds(15));
+
+        Assert.Equal(0, exitCode);
+        Assert.Contains("ps-bash, version", stdout);
+    }
+
+    // -l / --login must not swallow the -c command. Both the bundled (-lc) and
+    // split (-l -c, --login -c) forms — plus the `-c -l "cmd"` form where flags
+    // trail -c — must reach the transpiler with the command intact and still run
+    // it. These exact argv shapes were captured from Claude Code via PSBASH_TRACE
+    // (see ShellArgsTests); this is the end-to-end counterpart that proves the
+    // command actually executes, not just that the parse populates Command.
+    [SkippableTheory]
+    [InlineData("-lc", "echo login-ok", null)]
+    [InlineData("-l", "-c", "echo login-ok")]
+    [InlineData("--login", "-c", "echo login-ok")]
+    [InlineData("-c", "-l", "echo login-ok")]
+    public async Task LoginWithCommand_RunsCommand(string a1, string a2, string? a3 = null)
+    {
+        var args = new[] { a1, a2, a3 }
+            .Where(s => s is not null).Select(s => s!).ToArray();
+
+        var (exitCode, stdout, _) = await RunShellAsync(args, TimeSpan.FromSeconds(30));
+
+        Assert.Equal(0, exitCode);
+        Assert.Contains("login-ok", stdout);
+    }
+
+    // --unix-paths / --windows-paths are accepted as leading flags and the -c
+    // command still runs. (Path-translation semantics are exercised by the
+    // emitter suite; this is the launcher-level smoke that the flag is consumed,
+    // not mistaken for the command or a script path.)
+    [SkippableTheory]
+    [InlineData("--unix-paths")]
+    [InlineData("--windows-paths")]
+    public async Task PathModeFlag_WithCommand_RunsAndExitsZero(string pathFlag)
+    {
+        var (exitCode, stdout, _) = await RunShellAsync(
+            new[] { pathFlag, "-c", "echo paths-ok" }, TimeSpan.FromSeconds(30));
+
+        Assert.Equal(0, exitCode);
+        Assert.Contains("paths-ok", stdout);
+    }
+
+    // --noprofile / --norc are consumed as leading flags; the -c command runs.
+    // (Profile-skipping only changes interactive startup, which has no observable
+    // effect in -c mode — this asserts the flag doesn't break the -c path.)
+    [SkippableTheory]
+    [InlineData("--noprofile")]
+    [InlineData("--norc")]
+    public async Task NoProfileFlag_WithCommand_RunsAndExitsZero(string flag)
+    {
+        var (exitCode, stdout, _) = await RunShellAsync(
+            new[] { flag, "-c", "echo noprofile-ok" }, TimeSpan.FromSeconds(30));
+
+        Assert.Equal(0, exitCode);
+        Assert.Contains("noprofile-ok", stdout);
+    }
 }

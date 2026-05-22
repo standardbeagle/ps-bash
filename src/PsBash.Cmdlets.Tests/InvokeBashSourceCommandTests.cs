@@ -128,6 +128,62 @@ public class InvokeBashSourceCommandTests : IClassFixture<SharedPwshFixture>
     }
 
     [Fact]
+    public void SourceClaudeSnapshotMissingUnixTmp_CreatesEmptySnapshotWithoutError()
+    {
+        var pwsh = _fixture.AcquireFresh();
+        var snapshotName = $"claude-shell-snapshot-{Guid.NewGuid():N}.sh";
+        var translatedPath = Path.Combine(Path.GetTempPath(), snapshotName);
+        File.Delete(translatedPath);
+        pwsh.Streams.Error.Clear();
+
+        var oldUnixPaths = Environment.GetEnvironmentVariable("PSBASH_UNIX_PATHS");
+        try
+        {
+            Environment.SetEnvironmentVariable("PSBASH_UNIX_PATHS", "1");
+            pwsh.AddScript($"Invoke-BashSource '/tmp/{snapshotName}'").Invoke();
+            pwsh.Commands.Clear();
+
+            Assert.True(File.Exists(translatedPath));
+            Assert.Empty(pwsh.Streams.Error.ReadAll());
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("PSBASH_UNIX_PATHS", oldUnixPaths);
+            File.Delete(translatedPath);
+        }
+    }
+
+    [Fact]
+    public void SourceUnixTmpPath_WhenUnixPathsEnabled_ReadsFromWindowsTemp()
+    {
+        var pwsh = _fixture.AcquireFresh();
+        var fileName = $"psbash_source_unix_tmp_{Guid.NewGuid():N}.sh";
+        var translatedPath = Path.Combine(Path.GetTempPath(), fileName);
+        File.WriteAllText(translatedPath, "export PSBASH_SOURCE_UNIX_TMP_TEST=ok");
+        pwsh.Streams.Error.Clear();
+
+        var oldUnixPaths = Environment.GetEnvironmentVariable("PSBASH_UNIX_PATHS");
+        try
+        {
+            Environment.SetEnvironmentVariable("PSBASH_SOURCE_UNIX_TMP_TEST", null);
+            Environment.SetEnvironmentVariable("PSBASH_UNIX_PATHS", "1");
+            pwsh.AddScript($"Invoke-BashSource '/tmp/{fileName}'").Invoke();
+            pwsh.Commands.Clear();
+
+            var result = pwsh.AddScript("$env:PSBASH_SOURCE_UNIX_TMP_TEST").Invoke();
+            Assert.Single(result);
+            Assert.Equal("ok", result[0].ToString());
+            Assert.Empty(pwsh.Streams.Error.ReadAll());
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("PSBASH_SOURCE_UNIX_TMP_TEST", null);
+            Environment.SetEnvironmentVariable("PSBASH_UNIX_PATHS", oldUnixPaths);
+            File.Delete(translatedPath);
+        }
+    }
+
+    [Fact]
     public void SourceShFile_RelativePath_ResolvesAgainstCwd()
     {
         // Arrange: write a .sh file in a temp directory and source it via a relative path.
