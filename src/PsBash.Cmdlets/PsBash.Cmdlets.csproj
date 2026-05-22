@@ -39,6 +39,17 @@
     </PackageReference>
   </ItemGroup>
 
+  <!-- Strata styling engine (Format-Styled). Consumed from ../strata/local-feed
+       via nuget.config until Strata ships to nuget.org. Repack with
+       ../strata/scripts/pack-local.sh after editing Strata. Spectre.Console + ExCSS
+       flow in transitively from Strata.Render.Spectre / Strata.Css. -->
+  <ItemGroup>
+    <PackageReference Include="Strata.Css" Version="0.1.0-dev" />
+    <PackageReference Include="Strata.Adapters.PSObject" Version="0.1.0-dev" />
+    <PackageReference Include="Strata.Properties.Styling" Version="0.1.0-dev" />
+    <PackageReference Include="Strata.Render.Spectre" Version="0.1.0-dev" />
+  </ItemGroup>
+
   <ItemGroup>
     <None Include="PsBash.Cmdlets.psd1" CopyToOutputDirectory="Always"
           Condition="'$(EnableExperimentalBashEval)' != 'true'" />

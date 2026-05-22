@@ -61,7 +61,9 @@ CmdletsToExport = @(
     'Invoke-BashJq',
     # RC-8a: Invoke-ProcessSubSource migrated from PsBash.psm1 to fix
     # source <(...) scope persistence — see InvokeProcessSubSourceCommand.cs.
-    'Invoke-ProcessSubSource'
+    'Invoke-ProcessSubSource',
+    # Strata integration: CSS-styled rendering of an object pipeline.
+    'Format-Styled'
 )
 
 VariablesToExport = @()

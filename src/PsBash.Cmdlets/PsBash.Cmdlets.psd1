@@ -84,7 +84,10 @@ CmdletsToExport = @(
     # environment block (so subsequent $env:NAME expansions in transpiled bash
     # see the value). -p / -a declared as explicit string parameters to
     # bypass common-parameter prefix collisions.
-    'Invoke-BashRead'
+    'Invoke-BashRead',
+    # Strata integration: styles a pipeline of objects with a CSS stylesheet and
+    # renders them via the Strata selector engine + Spectre.Console projection.
+    'Format-Styled'
 )
 
 VariablesToExport = @()
