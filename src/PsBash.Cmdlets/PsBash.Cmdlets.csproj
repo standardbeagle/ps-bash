@@ -22,10 +22,29 @@
     <IsPackable>false</IsPackable>
     <CopyLocalLockFileAssemblies>true</CopyLocalLockFileAssemblies>
     <EnableExperimentalBashEval Condition="'$(EnableExperimentalBashEval)' == ''">false</EnableExperimentalBashEval>
+
+    <!-- Strata (the Format-Styled cmdlet) is consumed from the local feed
+         ../strata/local-feed until Strata ships to nuget.org. Auto-enable when
+         that feed is present; CI runners lack it, so the default-off build
+         excludes the Strata.* package refs AND FormatStyledCommand.cs, leaving
+         restore with nothing to fetch from the missing feed (stays green).
+         Force explicitly with -p:UseStrata=true|false. -->
+    <StrataLocalFeed Condition="'$(StrataLocalFeed)' == ''">$([System.IO.Path]::GetFullPath('$(MSBuildThisFileDirectory)..\..\..\strata\local-feed'))</StrataLocalFeed>
+    <UseStrata Condition="'$(UseStrata)' == '' and Exists('$(StrataLocalFeed)')">true</UseStrata>
+    <UseStrata Condition="'$(UseStrata)' == ''">false</UseStrata>
+    <!-- Add the Strata local feed as a restore source ONLY when enabled. The feed
+         is deliberately not in nuget.config because a missing local source is a
+         hard NU1301 restore error that would break CI. -->
+    <RestoreAdditionalProjectSources Condition="'$(UseStrata)' == 'true'">$(RestoreAdditionalProjectSources);$(StrataLocalFeed)</RestoreAdditionalProjectSources>
   </PropertyGroup>
 
   <ItemGroup Condition="'$(EnableExperimentalBashEval)' != 'true'">
     <Compile Remove="InvokeBashEvalCommand.cs" />
+  </ItemGroup>
+
+  <!-- Format-Styled compiles only when Strata is available (see UseStrata). -->
+  <ItemGroup Condition="'$(UseStrata)' != 'true'">
+    <Compile Remove="FormatStyledCommand.cs" />
   </ItemGroup>
 
   <ItemGroup>
@@ -42,8 +61,9 @@
   <!-- Strata styling engine (Format-Styled). Consumed from ../strata/local-feed
        via nuget.config until Strata ships to nuget.org. Repack with
        ../strata/scripts/pack-local.sh after editing Strata. Spectre.Console + ExCSS
-       flow in transitively from Strata.Render.Spectre / Strata.Css. -->
-  <ItemGroup>
+       flow in transitively from Strata.Render.Spectre / Strata.Css. Gated on
+       UseStrata so CI (no local feed) restores without these packages. -->
+  <ItemGroup Condition="'$(UseStrata)' == 'true'">
     <PackageReference Include="Strata.Css" Version="0.1.0-dev" />
     <PackageReference Include="Strata.Adapters.PSObject" Version="0.1.0-dev" />
     <PackageReference Include="Strata.Properties.Styling" Version="0.1.0-dev" />
