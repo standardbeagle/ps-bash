@@ -1,0 +1,30 @@
+/* Sample Strata stylesheet for `Get-Process | Format-Styled`.
+ *
+ * Selector model (see Strata docs):
+ *   Kind   = the object's type name, namespace stripped  -> `Process`
+ *   Id     = the object's `Id` then `Name` property       -> #<pid>
+ *   .class = labels from the property named by -ClassProperty (default `class`)
+ *
+ * Get-Process objects carry no `class` property, so project one first:
+ *
+ *   Get-Process |
+ *     Select-Object *, @{ n='class'; e={
+ *         if ($_.CPU -gt 50) { 'busy' }
+ *         elseif ($_.Responding -eq $false) { 'stuck' }
+ *     } } |
+ *     Format-Styled samples/Format-Styled/procs.css -Property Name,Id,CPU
+ */
+
+Process {
+  color: silver;
+}
+
+.busy {
+  color: red;
+  font-weight: bold;
+}
+
+.stuck {
+  color: yellow;
+  text-decoration: strikethrough;
+}
