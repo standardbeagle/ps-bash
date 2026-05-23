@@ -260,4 +260,68 @@ public class SdkWorkerTests : IAsyncLifetime
         Assert.Contains(run.Lines, l => l.Contains(" a ") || (l.Contains("a") && l.Contains("b")));
         Assert.DoesNotContain(run.Lines, l => l.StartsWith("@{"));
     }
+
+    // Regression: an auto-loadable *alias* must resolve via the CommandNotFoundAction
+    // discovery fallback. The SDK runspace bypasses the normal module auto-loader (to
+    // dodge the v5 PSSnapIn TypeLoadException), which left alias-triggered auto-load
+    // broken — `tnc` failed even though `Test-NetConnection` worked and plain pwsh
+    // resolved both. The handler now indexes Get-Module -ListAvailable exports and
+    // imports the owning module on a miss. NetTCPIP is Windows-only, so this uses a
+    // self-contained temp module to stay cross-platform (Directive 5).
+    // Oracle note (Directive 1): ps-bash-specific runspace behavior, no bash oracle.
+    [Fact]
+    public async Task ExecuteAsync_AutoloadableAlias_ResolvesViaDiscoveryFallback()
+    {
+        var token = Guid.NewGuid().ToString("N")[..8];
+        var modName = "PbAutoload" + token;
+        var funcName = "Get-PbProbe" + token;
+        var aliasName = "pbalias" + token;
+        var root = Path.Combine(Path.GetTempPath(), "psbash-autoload-" + token);
+        var modDir = Path.Combine(root, modName);
+        Directory.CreateDirectory(modDir);
+        try
+        {
+            File.WriteAllText(Path.Combine(modDir, modName + ".psm1"),
+                $"function {funcName} {{ 'pbprobe-ran' }}\n" +
+                $"Set-Alias -Name {aliasName} -Value {funcName}\n" +
+                $"Export-ModuleMember -Function {funcName} -Alias {aliasName}\n");
+            File.WriteAllText(Path.Combine(modDir, modName + ".psd1"),
+                "@{\n" +
+                $"  RootModule = '{modName}.psm1'\n" +
+                "  ModuleVersion = '1.0.0'\n" +
+                $"  GUID = '{Guid.NewGuid()}'\n" +
+                $"  FunctionsToExport = @('{funcName}')\n" +
+                $"  AliasesToExport = @('{aliasName}')\n" +
+                "  CmdletsToExport = @()\n" +
+                "  VariablesToExport = @()\n" +
+                "}\n");
+
+            var rootEscaped = root.Replace("'", "''");
+            // Fresh runspace (ExecuteCapturedAsync creates one): the index is cold, so it
+            // is built AFTER PSModulePath is extended, picking up the temp module. Invoke
+            // the ALIAS (not the function) — the case the auto-loader misses.
+            var script =
+                $"$env:PSModulePath = '{rootEscaped}' + [IO.Path]::PathSeparator + $env:PSModulePath; " +
+                $"{aliasName}";
+
+            var run = await _fixture.ExecuteCapturedAsync(script);
+
+            Assert.Equal(0, run.ExitCode);
+            Assert.Contains(run.Lines, l => l.Contains("pbprobe-ran", StringComparison.Ordinal));
+        }
+        finally
+        {
+            try { Directory.Delete(root, recursive: true); } catch { /* best effort */ }
+        }
+    }
+
+    // Regression guard: the discovery fallback must NOT swallow genuine unknowns —
+    // a command no module exports still exits 127 (bash "command not found").
+    [Fact]
+    public async Task ExecuteAsync_GenuineUnknownCommand_StillExits127()
+    {
+        var missing = "pbnope" + Guid.NewGuid().ToString("N")[..8];
+        var run = await _fixture.ExecuteCapturedAsync(missing);
+        Assert.Equal(127, run.ExitCode);
+    }
 }

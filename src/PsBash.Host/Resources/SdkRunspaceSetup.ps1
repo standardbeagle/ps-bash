@@ -54,12 +54,86 @@ if (-not $PsBashCmdletsAlreadyLoaded -and
 #   2. Sets $global:LASTEXITCODE = 127 so `$?` and subsequent `echo $?` see 127.
 # The substitute runs in place of the missing command, so `2>$null` on the simple
 # command still applies to the Write-Error output — `2>/dev/null` correctly silences it.
+#
+# Before giving up, the handler attempts a discovery-based module auto-load (see
+# Resolve-BashAutoloadModule). The SDK host runspace deliberately bypasses the normal
+# module auto-loader (RegisterSdkCmdlets, to dodge a Windows PowerShell v5 PSSnapIn
+# TypeLoadException — see SdkRunspace.cs and docs/solutions/), and a side effect is that
+# *alias*-triggered auto-load never fires: `Test-NetConnection` resolves but its alias
+# `tnc` does not, even though plain `pwsh` resolves both. The recovery path restores
+# parity — and because the index is case-insensitive, it also resolves wrong-cased names
+# the cold PowerShell auto-load cache would miss. Genuine unknowns still fall through to
+# the bash-style "command not found" so `2>/dev/null` semantics are preserved.
+
+# Lazy command-name -> module index, built once from manifest metadata via
+# Get-Module -ListAvailable (which reads manifests WITHOUT loading the modules, so it
+# cannot trigger the PSSnapIn crash). Keyed case-insensitively (default hashtable).
+$script:BashAutoloadIndex = $null
+$script:BashAutoloadResolving = $false
+
+function Resolve-BashAutoloadModule {
+    param([string]$Name)
+
+    if ($null -eq $script:BashAutoloadIndex) {
+        $script:BashAutoloadIndex = @{}
+        foreach ($m in (Get-Module -ListAvailable -ErrorAction SilentlyContinue)) {
+            # ExportedAliases/Functions/Cmdlets come from the manifest's explicit export
+            # lists for manifest modules — no module load required. Aliases are the case
+            # the normal auto-loader misses in this runspace.
+            $names = @($m.ExportedAliases.Keys) + @($m.ExportedFunctions.Keys) + @($m.ExportedCmdlets.Keys)
+            foreach ($n in $names) {
+                if ($n -and -not $script:BashAutoloadIndex.ContainsKey($n)) {
+                    $script:BashAutoloadIndex[$n] = $m.Name
+                }
+            }
+        }
+    }
+
+    if ($script:BashAutoloadIndex.ContainsKey($Name)) {
+        return $script:BashAutoloadIndex[$Name]
+    }
+    return $null
+}
+
 $ExecutionContext.InvokeCommand.CommandNotFoundAction = {
     param($CommandName, $EventArgs)
     # Skip if another handler already supplied a substitute.
     if ($EventArgs.StopSearch) { return }
     # Skip empty / null names (e.g. lookup probes from completion).
     if ([string]::IsNullOrEmpty($CommandName)) { return }
+
+    # Discovery-based auto-load recovery. Guard against re-entrancy: building the index
+    # and the Get-Command probe below must never recurse back into this handler.
+    if (-not $script:BashAutoloadResolving) {
+        $script:BashAutoloadResolving = $true
+        try {
+            # Candidates: the name as typed, plus the de-mangled noun when PowerShell's
+            # bare-noun resolution prepended the default Get- verb (e.g. `tnc` -> `Get-tnc`).
+            $candidates = @($CommandName)
+            if ($CommandName -match '^[Gg]et-(.+)$') { $candidates += $Matches[1] }
+
+            foreach ($cand in $candidates) {
+                $mod = Resolve-BashAutoloadModule $cand
+                if ($mod) {
+                    Import-Module $mod -ErrorAction SilentlyContinue -DisableNameChecking
+                    $resolved = Get-Command $cand -ErrorAction SilentlyContinue | Select-Object -First 1
+                    if ($resolved) {
+                        $target = $resolved
+                        $EventArgs.CommandScriptBlock = {
+                            & $target @args
+                        }.GetNewClosure()
+                        $EventArgs.StopSearch = $true
+                        return
+                    }
+                }
+            }
+        }
+        finally {
+            $script:BashAutoloadResolving = $false
+        }
+    }
+
+    # No module supplies the command — bash-style "command not found".
     # Capture the name into the scriptblock closure so the substitute knows
     # which command was missing.
     $name = $CommandName
