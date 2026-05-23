@@ -66,6 +66,26 @@ public static class ModuleExtractor
             .First();
     }
 
+    /// <summary>
+    /// Every embedded resource in the matched-TFM cmdlets folder as
+    /// (resourceName, fileName) pairs — the PsBash.Cmdlets.dll plus any embedded
+    /// dependency assemblies (Strata.* + Spectre.Console in UseStrata builds).
+    /// Empty when no cmdlets DLL is embedded.
+    /// </summary>
+    private static IEnumerable<(string Resource, string FileName)> EnumerateCmdletResources(System.Reflection.Assembly asm)
+    {
+        var cmdletsResource = ResolveCmdletsResourceName(asm);
+        if (cmdletsResource is null)
+            yield break;
+
+        var prefix = CmdletsResourcePrefix + TfmOf(cmdletsResource) + "/";
+        foreach (var name in asm.GetManifestResourceNames())
+        {
+            if (name.StartsWith(prefix, StringComparison.Ordinal))
+                yield return (name, name.Substring(prefix.Length));
+        }
+    }
+
     /// <summary>Extracts the TFM segment from a Cmdlets resource name.</summary>
     private static string TfmOf(string resourceName)
     {
@@ -154,17 +174,20 @@ public static class ModuleExtractor
                 stream.CopyTo(dest);
             }
 
-            // Extract the TFM-matching PsBash.Cmdlets.dll alongside the psm1 so
-            // the host runspace imports it from a deterministic path with no
-            // probing (see GetCmdletsDllPath).
-            var cmdletsResource = ResolveCmdletsResourceName(asm);
-            if (cmdletsResource != null)
+            // Extract the TFM-matching PsBash.Cmdlets.dll AND any embedded
+            // dependency assemblies in the same cmdlets folder (e.g. Strata.* +
+            // Spectre.Console, present only in UseStrata builds) alongside the
+            // psm1. The host imports PsBash.Cmdlets.dll from this deterministic
+            // path (see GetCmdletsDllPath); PowerShell's path-based Import-Module
+            // (LoadFrom) then resolves the cmdlet's own dependencies from beside
+            // it. Non-Strata builds embed only PsBash.Cmdlets.dll.
+            foreach (var (resName, fileName) in EnumerateCmdletResources(asm))
             {
-                var cmdletsDest = Path.Combine(dir, CmdletsDllFileName);
-                using var cmdletsStream = asm.GetManifestResourceStream(cmdletsResource)!;
-                using var cmdletsDestStream = new FileStream(
-                    cmdletsDest, FileMode.Create, FileAccess.Write, FileShare.Read);
-                cmdletsStream.CopyTo(cmdletsDestStream);
+                var destPath = Path.Combine(dir, fileName);
+                using var depStream = asm.GetManifestResourceStream(resName)!;
+                using var depDest = new FileStream(
+                    destPath, FileMode.Create, FileAccess.Write, FileShare.Read);
+                depStream.CopyTo(depDest);
             }
 
             // Write content hash as marker after all files extracted successfully
@@ -195,11 +218,12 @@ public static class ModuleExtractor
             stream.CopyTo(combined);
         }
 
-        var cmdletsResource = ResolveCmdletsResourceName(asm);
-        if (cmdletsResource != null)
+        // Hash every embedded cmdlet-folder resource (the DLL + any deps) so a
+        // rebuilt cmdlets assembly OR a changed dependency invalidates the cache.
+        foreach (var (resName, _) in EnumerateCmdletResources(asm))
         {
-            using var cmdletsStream = asm.GetManifestResourceStream(cmdletsResource)!;
-            cmdletsStream.CopyTo(combined);
+            using var depStream = asm.GetManifestResourceStream(resName)!;
+            depStream.CopyTo(combined);
         }
 
         combined.Position = 0;

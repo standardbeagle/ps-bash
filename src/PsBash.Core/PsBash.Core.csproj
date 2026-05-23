@@ -61,15 +61,41 @@
   -->
   <Target Name="EmbedCmdletsDll"
           BeforeTargets="PrepareResourceNames"
-          DependsOnTargets="ResolveProjectReferences">
+          DependsOnTargets="ResolveProjectReferences"
+          Condition="'$(_PsBashCmdletsEmbedded)' != 'true'">
+    <!-- Idempotency guard: PrepareResourceNames can run more than once in a build,
+         and a second pass would re-add these EmbeddedResource items, yielding
+         "Resource identifier ... already used" from CSC. Add them exactly once. -->
     <PropertyGroup>
+      <_PsBashCmdletsEmbedded>true</_PsBashCmdletsEmbedded>
       <_PsBashCmdletsDll>$(MSBuildThisFileDirectory)..\PsBash.Cmdlets\bin\$(Configuration)\$(TargetFramework)\PsBash.Cmdlets.dll</_PsBashCmdletsDll>
     </PropertyGroup>
     <Error Condition="!Exists('$(_PsBashCmdletsDll)')"
            Text="PsBash.Cmdlets.dll not found at $(_PsBashCmdletsDll). The Core-&gt;Cmdlets ProjectReference should have built it for TFM $(TargetFramework). Check PsBash.Cmdlets.csproj TargetFrameworks." />
+    <PropertyGroup>
+      <_PsBashCmdletsBin>$(MSBuildThisFileDirectory)..\PsBash.Cmdlets\bin\$(Configuration)\$(TargetFramework)</_PsBashCmdletsBin>
+    </PropertyGroup>
     <ItemGroup>
       <EmbeddedResource Include="$(_PsBashCmdletsDll)"
                         LogicalName="PsBash.Module/cmdlets/$(TargetFramework)/PsBash.Cmdlets.dll"
+                        Type="Non-Resx"
+                        WithCulture="false" />
+    </ItemGroup>
+    <!-- Format-Styled (Strata) runtime deps. These exist in the cmdlets bin only
+         when the cmdlets were built with UseStrata=true (the local feed is
+         present); CI builds match nothing here and embed only the DLL above.
+         Embedding them next to PsBash.Cmdlets.dll lets ModuleExtractor lay them
+         down together so the cmdlet's LoadFrom context resolves them at runtime
+         (without this, Format-Styled fails: "Could not load Strata.Abstractions").
+         Parlot / PsBash.Transpiler are already loaded by the host process, so they
+         are intentionally not re-embedded. A dedicated _StrataDep item with
+         qualified %(_StrataDep.Filename) metadata keeps the per-file LogicalName
+         batching from cross-contaminating the cmdlets-DLL item above. -->
+    <ItemGroup>
+      <_StrataDep Include="$(_PsBashCmdletsBin)\Strata.*.dll" />
+      <_StrataDep Include="$(_PsBashCmdletsBin)\Spectre.Console.dll" />
+      <EmbeddedResource Include="@(_StrataDep)"
+                        LogicalName="PsBash.Module/cmdlets/$(TargetFramework)/%(_StrataDep.Filename)%(_StrataDep.Extension)"
                         Type="Non-Resx"
                         WithCulture="false" />
     </ItemGroup>
