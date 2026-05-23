@@ -21,7 +21,13 @@ internal sealed class LineEditor
     private readonly string _cwd;  // Current working directory for suggestions
 
     // ── completion ───────────────────────────────────────────────────────────
-    private readonly Func<string, int, IReadOnlyList<string>>? _completer;
+    // Async so providers can round-trip to the runspace (live command/parameter
+    // completion). A sync completer (tests, legacy) is adapted into this shape.
+    private readonly Func<string, int, CancellationToken, Task<IReadOnlyList<string>>>? _completer;
+
+    // Upper bound on a single Tab's completion. A live runspace query that exceeds this is
+    // cancelled and the static/local candidates computed so far are used — Tab never hangs.
+    private const int CompletionTimeoutMs = 200;
 
     // Cycle state for successive Tab presses
     private IReadOnlyList<string>? _completions;
@@ -45,12 +51,29 @@ internal sealed class LineEditor
     // ── constants ────────────────────────────────────────────────────────────
     private const int MaxHistory = 5000;
 
+    // Adapt a synchronous completer into the async shape the editor now uses.
+    private static Func<string, int, CancellationToken, Task<IReadOnlyList<string>>>? Adapt(
+        Func<string, int, IReadOnlyList<string>>? sync)
+        => sync is null ? null : (line, cursor, _) => Task.FromResult(sync(line, cursor));
+
     /// <summary>
     /// Creates a new LineEditor with a history store for persistent history.
     /// </summary>
     public LineEditor(
         IHistoryStore historyStore,
         Func<string, int, IReadOnlyList<string>>? completer = null,
+        string? cwd = null)
+        : this(historyStore, Adapt(completer), cwd)
+    {
+    }
+
+    /// <summary>
+    /// Creates a new LineEditor with a history store and an async completer (runspace-backed
+    /// completion). The completer receives a CancellationToken bounded by the Tab deadline.
+    /// </summary>
+    public LineEditor(
+        IHistoryStore historyStore,
+        Func<string, int, CancellationToken, Task<IReadOnlyList<string>>>? completer,
         string? cwd = null)
     {
         _historyStore = historyStore;
@@ -73,7 +96,7 @@ internal sealed class LineEditor
         string? cwd = null)
     {
         _historyStore = new LegacyFileHistoryStore(historyPath);
-        _completer = completer;
+        _completer = Adapt(completer);
         _suggester = new Suggester(_historyStore);
         _cwd = cwd ?? Environment.CurrentDirectory;
         _history = LoadHistory(historyPath);
@@ -152,7 +175,7 @@ internal sealed class LineEditor
             if (key.Key == ConsoleKey.Tab && key.Modifiers == 0)
             {
                 ClearSuggestion();  // Clear suggestion when tab completes
-                HandleTab();
+                await HandleTabAsync();
                 continue;
             }
 
@@ -428,14 +451,24 @@ internal sealed class LineEditor
     // Tab completion
     // ─────────────────────────────────────────────────────────────────────────
 
-    private void HandleTab()
+    private async Task HandleTabAsync()
     {
         if (_completer is null) return;
 
         if (_completions is null)
         {
-            // First Tab: compute completions
-            _completions = _completer(_buf.ToString(), _cursor);
+            // First Tab: compute completions, bounded by a deadline so a slow runspace
+            // round-trip cannot hang Tab — on timeout/failure we get whatever the static
+            // providers returned (the engine swallows cancellation and falls back).
+            using var cts = new CancellationTokenSource(TimeSpan.FromMilliseconds(CompletionTimeoutMs));
+            try
+            {
+                _completions = await _completer(_buf.ToString(), _cursor, cts.Token);
+            }
+            catch (Exception)
+            {
+                _completions = [];
+            }
             _completionIndex = 0;
 
             if (_completions.Count == 0)

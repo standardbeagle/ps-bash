@@ -227,7 +227,7 @@ internal static class TabCompleter
         return results;
     }
 
-    private static string? GetCommandNameAtCursor(
+    internal static string? GetCommandNameAtCursor(
         string line,
         int cursor,
         IReadOnlyDictionary<string, string> aliases)
@@ -370,7 +370,7 @@ internal static class TabCompleter
     // Helpers
     // ─────────────────────────────────────────────────────────────────────────
 
-    private static bool IsFirstWord(string line, int cursor)
+    internal static bool IsFirstWord(string line, int cursor)
     {
         var before = cursor <= line.Length ? line[..cursor] : line;
         // Check if there's any non-whitespace before the current token

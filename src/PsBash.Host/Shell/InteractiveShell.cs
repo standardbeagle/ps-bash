@@ -51,9 +51,18 @@ public static class InteractiveShell
         var dbPath = Path.Combine(psbashDir, "history.db");
         _historyStore = new SqliteHistoryStore(dbPath);
 
-        // Initialize LineEditor with history store and tab completer
-        _lineEditor = new LineEditor(_historyStore, (line, cursor) =>
-            TabCompleter.Complete(line, cursor, Aliases, _lastDir, _lastCommand, _historyStore));
+        // Initialize LineEditor with history store and the async completion engine. The engine
+        // composes the static TabCompleter base set with live, runspace-backed command-name
+        // completion (auto-loaded cmdlets, dot-sourced functions, module commands) via the worker.
+        var completionEngine = new CompletionEngine(
+            Aliases,
+            cwd: () => _lastDir,
+            lastCommand: () => _lastCommand,
+            history: _historyStore,
+            worker: worker);
+        _lineEditor = new LineEditor(
+            _historyStore,
+            (line, cursor, ct) => completionEngine.CompleteAsync(line, cursor, ct));
 
         if (!noProfile)
         {
