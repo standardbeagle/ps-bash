@@ -1,13 +1,14 @@
-/* Property-list styling (Format-List style) — used by `Format-Styled -List` when no
- * stylesheet argument is given. Each object renders as a two-column `display: grid`
- * of property names and values; the grid rule (display + column count) is injected by
- * the cmdlet, so this sheet only needs the cell styling.
+/* Property-list STRUCTURE (Format-List style) — applied by Format-Styled for single-object /
+ * -List output, layered ON TOP of the semantic sheet (default.css or a user -Css). It styles
+ * only the synthetic key column; values stay uncoloured here so the semantic sheet's Kind/class
+ * colours win on the value (and a value with no semantic rule renders in the default fg).
+ *
+ * Cell classes the cmdlet assigns:
+ *   .property-name   the key column (bold so keys anchor each row)
+ *   .property-value  the value column (intentionally unstyled here)
  *
  * CUSTOMIZE: drop a `list.css` into $PSBASH_STYLE_PATH, ~/.config/ps-bash/styles, or
- * ~/.psbash/styles and your rules are appended after these (later declarations win).
- *
- * Cell classes: .property-name (the key column), .property-value (the value column).
+ * ~/.psbash/styles; your rules are appended after these (later declarations win).
  */
 
-.property-name  { color: cyan; font-weight: bold }
-.property-value { color: white }
+.property-name { color: cyan; font-weight: bold }

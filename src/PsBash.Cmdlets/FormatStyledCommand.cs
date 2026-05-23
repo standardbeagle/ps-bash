@@ -104,34 +104,12 @@ public sealed class FormatStyledCommand : PSCmdlet
             return;
         }
 
-        if (List.IsPresent || Table.IsPresent)
-        {
-            RenderGridMode(asTable: Table.IsPresent);
-            return;
-        }
-
-        var css = string.IsNullOrEmpty(Css) ? ResolveStylesheet("default") : ResolveCss(Css);
-
-        var registry = StylingProperties.CreateRegistry();
-        var stylesheet = new CssStylesheetParser(new CssSelectorLanguage(), registry).Parse(css);
-
-        // Synthetic root holds the pipeline rows as its children; rows themselves are leaves.
-        var rootSource = new PSObject();
-        rootSource.TypeNames.Insert(0, "StrataRoot");
-
-        var adapter = new PsObjectTreeAdapter(
-            childAccessor: src => ReferenceEquals(src, rootSource)
-                ? _rows
-                : Array.Empty<PSObject>(),
-            classes: PsObjectTreeAdapter.ClassesFromProperty(ClassProperty));
-
-        var root = adapter.Wrap(rootSource);
-        var cascade = new Cascade(registry).Compute(root, stylesheet);
-
-        var projection = new SpectreProjection { TextSelector = RenderRowText };
-        var renderable = projection.Project(root, cascade);
-
-        WriteObject(RenderToAnsi(renderable));
+        // Mode selection. Explicit -Table / -List win; otherwise auto-select the way PowerShell's
+        // own default formatting does — a single object renders as a property list, multiple
+        // objects as a table. This makes the no-flag default a real layout (columns / aligned
+        // key-value) instead of space-joined values.
+        bool asTable = Table.IsPresent || (!List.IsPresent && _rows.Count > 1);
+        RenderGridMode(asTable);
     }
 
     /// <summary>
@@ -154,16 +132,33 @@ public sealed class FormatStyledCommand : PSCmdlet
         if (asTable)
         {
             columns = props.Length;
-            foreach (var p in props)
+
+            // A column is numeric when every non-empty value parses as a number; such columns
+            // (and their headers) are right-aligned so digits line up by place value.
+            var numeric = new bool[props.Length];
+            for (var c = 0; c < props.Length; c++)
             {
-                cells.Add(MakeCell(p, "StrataHeader", "header"));
+                numeric[c] = IsNumericColumn(props[c]);
             }
 
+            // Header row: synthetic Kind so user/semantic Kind rules don't match it; numeric
+            // headers carry `num` so the column (its first cell) right-aligns.
+            for (var c = 0; c < props.Length; c++)
+            {
+                cells.Add(MakeCell(props[c], "StrataHeader", numeric[c] ? "header num" : "header"));
+            }
+
+            // Data rows: each value cell keeps the SOURCE object's Kind + class so semantic
+            // stylesheet rules (Process { … }, .busy { … }) still colour it, layered with the
+            // structural classes (cell / primary / num).
             foreach (var row in _rows)
             {
-                foreach (var p in props)
+                var kind = KindOf(row);
+                var rowClass = ClassOf(row);
+                for (var c = 0; c < props.Length; c++)
                 {
-                    cells.Add(MakeCell(CellText(row, p), "StrataCell", "cell"));
+                    cells.Add(MakeCell(CellText(row, props[c]), kind,
+                        CellClass(rowClass, "cell", isPrimary: c == 0, isNumeric: numeric[c])));
                 }
             }
         }
@@ -172,22 +167,26 @@ public sealed class FormatStyledCommand : PSCmdlet
             columns = 2;
             foreach (var row in _rows)
             {
+                var kind = KindOf(row);
+                var rowClass = ClassOf(row);
                 foreach (var p in props)
                 {
                     cells.Add(MakeCell(p, "StrataName", "property-name"));
-                    cells.Add(MakeCell(CellText(row, p), "StrataValue", "property-value"));
+                    cells.Add(MakeCell(CellText(row, p), kind,
+                        CellClass(rowClass, "property-value", isPrimary: false, isNumeric: false)));
                 }
             }
         }
 
-        // Built-in styling per mode unless the caller supplied a sheet. The injected grid rule
-        // (display + the data-driven column count) always comes first so user/built-in colour
-        // and weight rules cascade on top of it.
-        var baseCss = string.IsNullOrEmpty(Css)
-            ? ResolveStylesheet(asTable ? "table" : "list")
-            : ResolveCss(Css);
-        var tracks = string.Join(" ", Enumerable.Repeat("auto", columns));
-        var css = $"StrataRoot {{ display: grid; grid-template-columns: {tracks} }}\n{baseCss}";
+        // CSS cascade (later wins): the injected grid rule, then the SEMANTIC sheet (user -Css,
+        // else the built-in `default` palette) which colours data cells by Kind/class, then the
+        // structural sheet (table/list) which only sets structure — header weight/rule, primary
+        // weight, numeric alignment, key colour — and never colour on data cells, so semantic
+        // colours are not clobbered by the higher-specificity structural classes.
+        var gridRule = $"StrataRoot {{ display: grid; grid-template-columns: {string.Join(" ", Enumerable.Repeat("auto", columns))} }}";
+        var semanticCss = string.IsNullOrEmpty(Css) ? ResolveStylesheet("default") : ResolveCss(Css);
+        var structuralCss = ResolveStylesheet(asTable ? "table" : "list");
+        var css = $"{gridRule}\n{semanticCss}\n{structuralCss}";
 
         var registry = StylingProperties.CreateRegistry();
         // The grid path declares layout properties (display, grid-template-columns); register
@@ -259,6 +258,73 @@ public sealed class FormatStyledCommand : PSCmdlet
     {
         var source = node is PsObjectNode psNode ? psNode.Source : null;
         return source?.Properties[CellTextProperty]?.Value?.ToString() ?? string.Empty;
+    }
+
+    /// <summary>The Strata Kind of a source row: its first type name with the namespace stripped (matches the adapter's Kind derivation), so semantic <c>Process { … }</c>-style rules match data cells.</summary>
+    private static string KindOf(PSObject row)
+    {
+        var type = row.TypeNames.Count > 0 ? row.TypeNames[0] : string.Empty;
+        var dot = type.LastIndexOf('.');
+        return dot >= 0 ? type[(dot + 1)..] : type;
+    }
+
+    /// <summary>The source row's class label(s) from the <see cref="ClassProperty"/> property, or empty.</summary>
+    private string ClassOf(PSObject row)
+    {
+        try
+        {
+            return row.Properties[ClassProperty]?.Value?.ToString() ?? string.Empty;
+        }
+        catch
+        {
+            return string.Empty;
+        }
+    }
+
+    /// <summary>Compose a data cell's class list: the source row's class(es) first (so semantic rules win), then the structural markers.</summary>
+    private static string CellClass(string rowClass, string structural, bool isPrimary, bool isNumeric)
+    {
+        var parts = new List<string>(4);
+        if (!string.IsNullOrEmpty(rowClass))
+        {
+            parts.Add(rowClass);
+        }
+
+        parts.Add(structural);
+        if (isPrimary)
+        {
+            parts.Add("primary");
+        }
+
+        if (isNumeric)
+        {
+            parts.Add("num");
+        }
+
+        return string.Join(" ", parts);
+    }
+
+    /// <summary>A column is numeric when it has at least one value and every non-empty value parses as a number (invariant culture).</summary>
+    private bool IsNumericColumn(string property)
+    {
+        var any = false;
+        foreach (var row in _rows)
+        {
+            var text = CellText(row, property);
+            if (string.IsNullOrEmpty(text))
+            {
+                continue;
+            }
+
+            any = true;
+            if (!double.TryParse(text, System.Globalization.NumberStyles.Any,
+                    System.Globalization.CultureInfo.InvariantCulture, out _))
+            {
+                return false;
+            }
+        }
+
+        return any;
     }
 
     /// <summary>
@@ -392,29 +458,6 @@ public sealed class FormatStyledCommand : PSCmdlet
             yield return Path.Combine(home, ".config", "ps-bash", "styles");
             yield return Path.Combine(home, ".psbash", "styles");
         }
-    }
-
-    /// <summary>Per-row display text: selected properties joined, or the object's string form.</summary>
-    private string RenderRowText(ITreeNode node)
-    {
-        var source = node is PsObjectNode psNode ? psNode.Source : null;
-        if (source is null)
-        {
-            return string.Empty;
-        }
-
-        if (Property is { Length: > 0 })
-        {
-            var parts = new string[Property.Length];
-            for (var i = 0; i < Property.Length; i++)
-            {
-                parts[i] = source.Properties[Property[i]]?.Value?.ToString() ?? string.Empty;
-            }
-
-            return string.Join("  ", parts);
-        }
-
-        return source.ToString() ?? string.Empty;
     }
 
     /// <summary>Render a Spectre renderable to an ANSI string sized to the host width.</summary>

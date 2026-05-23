@@ -64,13 +64,13 @@
        flow in transitively from Strata.Render.Spectre / Strata.Css. Gated on
        UseStrata so CI (no local feed) restores without these packages. -->
   <ItemGroup Condition="'$(UseStrata)' == 'true'">
-    <PackageReference Include="Strata.Css" Version="0.2.0-dev" />
-    <PackageReference Include="Strata.Adapters.PSObject" Version="0.2.0-dev" />
-    <PackageReference Include="Strata.Properties.Styling" Version="0.2.0-dev" />
-    <PackageReference Include="Strata.Render.Spectre" Version="0.2.0-dev" />
+    <PackageReference Include="Strata.Css" Version="0.2.1-dev" />
+    <PackageReference Include="Strata.Adapters.PSObject" Version="0.2.1-dev" />
+    <PackageReference Include="Strata.Properties.Styling" Version="0.2.1-dev" />
+    <PackageReference Include="Strata.Render.Spectre" Version="0.2.1-dev" />
     <!-- Yoga layout pass: required for the 3-arg SpectreProjection.Project overload
          that honors `display: grid` (Format-Styled grid / property-list rendering). -->
-    <PackageReference Include="Strata.Layout.Yoga" Version="0.2.0-dev" />
+    <PackageReference Include="Strata.Layout.Yoga" Version="0.2.1-dev" />
   </ItemGroup>
 
   <!-- Built-in Format-Styled stylesheets, embedded so they travel with the DLL

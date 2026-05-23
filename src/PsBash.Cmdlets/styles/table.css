@@ -1,13 +1,18 @@
-/* Grid-table styling (Format-Table style) — used by `Format-Styled -Table` when no
- * stylesheet argument is given. Objects render as a `display: grid` with one column per
- * property and a header row; the grid rule (display + column count) is injected by the
- * cmdlet, so this sheet only needs the header / cell styling.
+/* Grid-table STRUCTURE (Format-Table style) — applied by Format-Styled for multi-object /
+ * -Table output, layered ON TOP of the semantic sheet (default.css or a user -Css). It sets
+ * only structure — header weight/rule, primary-column weight, numeric alignment — and never
+ * sets colour on data cells, so the semantic sheet's Kind/class colours win on the data.
+ *
+ * Cell classes the cmdlet assigns:
+ *   .header   first (header) row — one cell per property name
+ *   .primary  the first data column (the object's key/name) on every row
+ *   .num      header + data cells of a numeric column (right-aligned)
+ *   .cell     every data cell (left for user targeting; intentionally unstyled here)
  *
  * CUSTOMIZE: drop a `table.css` into $PSBASH_STYLE_PATH, ~/.config/ps-bash/styles, or
- * ~/.psbash/styles and your rules are appended after these (later declarations win).
- *
- * Cell classes: .header (the first/header row), .cell (data cells).
+ * ~/.psbash/styles; your rules are appended after these (later declarations win).
  */
 
-.header { color: cyan; font-weight: bold; text-decoration: underline }
-.cell   { color: white }
+.header  { font-weight: bold; text-decoration: underline }
+.primary { font-weight: bold }
+.num     { text-align: right }

@@ -1,31 +1,49 @@
-/* ps-bash default Strata stylesheet — used by `Format-Styled` when no stylesheet
- * argument is given.
+/* ps-bash default SEMANTIC stylesheet — the colour layer Format-Styled applies when no -Css
+ * is given. It colours data cells by the object's Kind and by `class` labels you project onto
+ * rows. Structural layout (table header rule, bold primary column, numeric right-alignment,
+ * bold property-list keys) comes from the per-mode structural sheets (table.css / list.css)
+ * layered on top, so colour and structure compose without fighting.
  *
- * CUSTOMIZE: drop a file with the same base name into one of these dirs and your
- * rules are appended AFTER the built-in ones, so later declarations win (the CSS
- * cascade) — you can tweak a single selector without recopying the whole sheet:
- *     $PSBASH_STYLE_PATH/<name>.css     (a dir, or a PATH-separated list of dirs)
- *     ~/.config/ps-bash/styles/<name>.css
- *     ~/.psbash/styles/<name>.css
+ * Format-Styled auto-selects the layout: a single object renders as a property list, multiple
+ * objects as a table (override with -List / -Table). Keep this sheet to colour only — leave
+ * weight/alignment/headers to the structural sheets.
  *
- * SELECTORS: Kind = the row's type name with namespace stripped (e.g. `Process`),
- *            #Id  = the row's Id then Name property,
+ * CUSTOMIZE: drop a `default.css` into one of these dirs; your rules are appended AFTER the
+ * built-ins, so later declarations win — tweak one selector without recopying the sheet:
+ *     $PSBASH_STYLE_PATH/default.css   (a dir, or a PATH-separated list of dirs)
+ *     ~/.config/ps-bash/styles/default.css
+ *     ~/.psbash/styles/default.css
+ *
+ * SELECTORS: Kind = the object's type name with namespace stripped (e.g. `Process`),
+ *            #Id  = the object's Id then Name property,
  *            .class = labels from the property named by -ClassProperty (default `class`).
+ * Project a class to drive the semantic rules, e.g.:
+ *     Get-Process | Select-Object *, @{ n='class'; e={ if ($_.CPU -gt 50) {'busy'} } } | Format-Styled
  */
 
-/* Semantic classes — set a `class` property on rows (e.g. via Select-Object) to use. */
-.error   { color: red;    font-weight: bold }
-.warn    { color: yellow }
-.warning { color: yellow }
-.ok      { color: green }
-.success { color: green }
-.info    { color: cyan }
-.muted   { color: grey }
-.dim     { color: grey }
-.bold    { font-weight: bold }
-.strike  { text-decoration: strikethrough }
+/* Status / severity — project one of these as a `class` to colour a row. */
+.error    { color: red;    font-weight: bold }
+.critical { color: red;    font-weight: bold }
+.warn     { color: yellow }
+.warning  { color: yellow }
+.ok       { color: green }
+.success  { color: green }
+.info     { color: cyan }
+.muted    { color: grey }
+.dim      { color: grey }
+.disabled { color: grey }
+.busy     { color: red;    font-weight: bold }
+.running  { color: green }
+.stopped  { color: red }
+.paused   { color: yellow }
+.pending  { color: yellow }
 
-/* Common object kinds, colored by type. */
-DirectoryInfo { color: blue;   font-weight: bold }
+/* Generic emphasis helpers. */
+.bold   { font-weight: bold }
+.accent { color: cyan }
+.strike { text-decoration: strikethrough }
+
+/* Common object kinds, coloured by type so even un-classed pipelines read with hierarchy. */
+DirectoryInfo { color: blue;  font-weight: bold }
 FileInfo      { color: white }
 Process       { color: cyan }

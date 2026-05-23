@@ -200,6 +200,52 @@ public class FormatStyledCommandTests : IClassFixture<SharedPwshFixture>
     }
 
     [Fact]
+    public void Auto_MultipleObjects_RenderAsTable_HeaderAppearsOnce()
+    {
+        var pwsh = _fixture.AcquireFresh();
+        // No -List/-Table: multiple objects auto-select TABLE. A property name then appears once
+        // (the header row) rather than once per object (which is how the LIST layout repeats keys).
+        var script = """
+            $rows = @(
+              [pscustomobject]@{ Alpha='a1'; Bravo='b1' },
+              [pscustomobject]@{ Alpha='a2'; Bravo='b2' }
+            )
+            $rows | Format-Styled -Property Alpha,Bravo
+            """;
+
+        var result = pwsh.AddScript(script).Invoke();
+
+        Assert.False(pwsh.HadErrors, string.Join("; ", pwsh.Streams.Error.Select(e => e.ToString())));
+        Assert.Single(result);
+        var plain = StripAnsi(result[0].ToString() ?? string.Empty);
+        var lines = plain.Split('\n');
+        // Header row only — exactly one line mentions the property name "Alpha".
+        Assert.Equal(1, lines.Count(l => l.Contains("Alpha")));
+        Assert.Contains("a1", plain);
+        Assert.Contains("a2", plain);
+    }
+
+    [Fact]
+    public void Auto_SingleObject_RendersAsList_KeyAndValueShareLine()
+    {
+        var pwsh = _fixture.AcquireFresh();
+        // No -List/-Table: a single object auto-selects LIST, so each property's key and value
+        // sit on the same line (the TABLE layout would put the key in a header row above the value).
+        var script = """
+            $o = [pscustomobject]@{ Alpha='aval'; Bravo='bval' }
+            $o | Format-Styled -Property Alpha,Bravo
+            """;
+
+        var result = pwsh.AddScript(script).Invoke();
+
+        Assert.False(pwsh.HadErrors, string.Join("; ", pwsh.Streams.Error.Select(e => e.ToString())));
+        Assert.Single(result);
+        var lines = StripAnsi(result[0].ToString() ?? string.Empty).Split('\n');
+        Assert.Contains(lines, l => l.Contains("Alpha") && l.Contains("aval"));
+        Assert.Contains(lines, l => l.Contains("Bravo") && l.Contains("bval"));
+    }
+
+    [Fact]
     public void UnknownStylesheetName_SurfacesError()
     {
         var pwsh = _fixture.AcquireFresh();
