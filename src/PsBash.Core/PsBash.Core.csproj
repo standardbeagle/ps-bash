@@ -94,6 +94,10 @@
     <ItemGroup>
       <_StrataDep Include="$(_PsBashCmdletsBin)\Strata.*.dll" />
       <_StrataDep Include="$(_PsBashCmdletsBin)\Spectre.Console.dll" />
+      <!-- Yoga.Net is a pure-managed Yoga port (lib/, no runtimes/native) pulled in by
+           Strata.Layout.Yoga for the grid layout pass. It does not match Strata.*, so
+           embed it explicitly or Format-Styled's grid path fails to load at runtime. -->
+      <_StrataDep Include="$(_PsBashCmdletsBin)\Yoga.Net.dll" />
       <EmbeddedResource Include="@(_StrataDep)"
                         LogicalName="PsBash.Module/cmdlets/$(TargetFramework)/%(_StrataDep.Filename)%(_StrataDep.Extension)"
                         Type="Non-Resx"

@@ -1,0 +1,13 @@
+/* Grid-table styling (Format-Table style) — used by `Format-Styled -Table` when no
+ * stylesheet argument is given. Objects render as a `display: grid` with one column per
+ * property and a header row; the grid rule (display + column count) is injected by the
+ * cmdlet, so this sheet only needs the header / cell styling.
+ *
+ * CUSTOMIZE: drop a `table.css` into $PSBASH_STYLE_PATH, ~/.config/ps-bash/styles, or
+ * ~/.psbash/styles and your rules are appended after these (later declarations win).
+ *
+ * Cell classes: .header (the first/header row), .cell (data cells).
+ */
+
+.header { color: cyan; font-weight: bold; text-decoration: underline }
+.cell   { color: white }

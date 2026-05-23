@@ -140,6 +140,65 @@ public class FormatStyledCommandTests : IClassFixture<SharedPwshFixture>
         }
     }
 
+    // A bold SGR is the parameter `1` bounded by `[`/`;` on the left and `;`/`m` on the right,
+    // so it is not mistaken for the `1` inside a colour code like `31` (red) or `36` (cyan).
+    private const string BoldSgr = @"\x1b\[(?:[0-9;]*;)?1(?:;[0-9;]*)?m";
+    private const string UnderlineSgr = @"\x1b\[(?:[0-9;]*;)?4(?:;[0-9;]*)?m";
+
+    [Fact]
+    public void List_RendersPropertyNamesBoldInTwoColumnGrid()
+    {
+        var pwsh = _fixture.AcquireFresh();
+        // -List with no stylesheet -> built-in `list` sheet: bold property names, plain values.
+        var script = """
+            $o = [pscustomobject]@{ Name='nginx'; Status='Running' }
+            $o | Format-Styled -List
+            """;
+
+        var result = pwsh.AddScript(script).Invoke();
+
+        Assert.False(pwsh.HadErrors, string.Join("; ", pwsh.Streams.Error.Select(e => e.ToString())));
+        Assert.Single(result);
+        var raw = result[0].ToString() ?? string.Empty;
+        var plain = StripAnsi(raw);
+        // Both the property names and their values are present (name/value grid cells).
+        Assert.Contains("Name", plain);
+        Assert.Contains("nginx", plain);
+        Assert.Contains("Status", plain);
+        Assert.Contains("Running", plain);
+        // The built-in list sheet renders property names bold.
+        Assert.Matches(BoldSgr, raw);
+    }
+
+    [Fact]
+    public void Table_RendersBoldUnderlinedHeaderRow()
+    {
+        var pwsh = _fixture.AcquireFresh();
+        // -Table with no stylesheet -> built-in `table` sheet: bold+underlined header row.
+        var script = """
+            $rows = @(
+              [pscustomobject]@{ Name='nginx'; Id=42 },
+              [pscustomobject]@{ Name='redis'; Id=99 }
+            )
+            $rows | Format-Styled -Table -Property Name,Id
+            """;
+
+        var result = pwsh.AddScript(script).Invoke();
+
+        Assert.False(pwsh.HadErrors, string.Join("; ", pwsh.Streams.Error.Select(e => e.ToString())));
+        Assert.Single(result);
+        var raw = result[0].ToString() ?? string.Empty;
+        var plain = StripAnsi(raw);
+        // Header (the property names) plus every data row are present.
+        Assert.Contains("Name", plain);
+        Assert.Contains("Id", plain);
+        Assert.Contains("nginx", plain);
+        Assert.Contains("redis", plain);
+        // The built-in table sheet renders the header row bold and underlined.
+        Assert.Matches(BoldSgr, raw);
+        Assert.Matches(UnderlineSgr, raw);
+    }
+
     [Fact]
     public void UnknownStylesheetName_SurfacesError()
     {

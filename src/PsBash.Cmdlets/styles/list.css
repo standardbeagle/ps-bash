@@ -1,0 +1,13 @@
+/* Property-list styling (Format-List style) — used by `Format-Styled -List` when no
+ * stylesheet argument is given. Each object renders as a two-column `display: grid`
+ * of property names and values; the grid rule (display + column count) is injected by
+ * the cmdlet, so this sheet only needs the cell styling.
+ *
+ * CUSTOMIZE: drop a `list.css` into $PSBASH_STYLE_PATH, ~/.config/ps-bash/styles, or
+ * ~/.psbash/styles and your rules are appended after these (later declarations win).
+ *
+ * Cell classes: .property-name (the key column), .property-value (the value column).
+ */
+
+.property-name  { color: cyan; font-weight: bold }
+.property-value { color: white }

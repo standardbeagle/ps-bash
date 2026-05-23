@@ -6,6 +6,7 @@ using Strata;
 using Strata.Adapters.PSObject;
 using Strata.Core;
 using Strata.Css;
+using Strata.Layout.Yoga;
 using Strata.Properties.Styling;
 using Strata.Render.Spectre;
 
@@ -65,6 +66,25 @@ public sealed class FormatStyledCommand : PSCmdlet
     [Parameter]
     public string ClassProperty { get; set; } = "class";
 
+    /// <summary>
+    /// Render each object as a property list (Format-List style): a two-column grid of
+    /// bold property names and their values, laid out via Strata's <c>display: grid</c>.
+    /// When no stylesheet is given, the built-in <c>list</c> sheet supplies the styling.
+    /// </summary>
+    [Parameter]
+    public SwitchParameter List { get; set; }
+
+    /// <summary>
+    /// Render the objects as a grid table (Format-Table style): one column per property
+    /// with a bold header row, laid out via Strata's <c>display: grid</c>. When no
+    /// stylesheet is given, the built-in <c>table</c> sheet supplies the styling.
+    /// </summary>
+    [Parameter]
+    public SwitchParameter Table { get; set; }
+
+    /// <summary>Note-property name carrying a synthetic grid cell's display text.</summary>
+    private const string CellTextProperty = "__StrataCellText";
+
     private readonly List<PSObject> _rows = new();
 
     /// <inheritdoc/>
@@ -81,6 +101,12 @@ public sealed class FormatStyledCommand : PSCmdlet
     {
         if (_rows.Count == 0)
         {
+            return;
+        }
+
+        if (List.IsPresent || Table.IsPresent)
+        {
+            RenderGridMode(asTable: Table.IsPresent);
             return;
         }
 
@@ -106,6 +132,133 @@ public sealed class FormatStyledCommand : PSCmdlet
         var renderable = projection.Project(root, cascade);
 
         WriteObject(RenderToAnsi(renderable));
+    }
+
+    /// <summary>
+    /// Render <see cref="_rows"/> as a Strata <c>display: grid</c>: a property list (two-column
+    /// name/value grid, <paramref name="asTable"/> = false) or a grid table (one column per
+    /// property with a header row, <paramref name="asTable"/> = true). Cells are synthetic
+    /// single-leaf objects; the grid rule is injected on the synthetic root so the column count
+    /// matches the data, and the cascade + Yoga layout pass drive the Spectre grid projection.
+    /// </summary>
+    private void RenderGridMode(bool asTable)
+    {
+        var props = ResolveProperties();
+        if (props.Length == 0)
+        {
+            return;
+        }
+
+        var cells = new List<PSObject>();
+        int columns;
+        if (asTable)
+        {
+            columns = props.Length;
+            foreach (var p in props)
+            {
+                cells.Add(MakeCell(p, "StrataHeader", "header"));
+            }
+
+            foreach (var row in _rows)
+            {
+                foreach (var p in props)
+                {
+                    cells.Add(MakeCell(CellText(row, p), "StrataCell", "cell"));
+                }
+            }
+        }
+        else
+        {
+            columns = 2;
+            foreach (var row in _rows)
+            {
+                foreach (var p in props)
+                {
+                    cells.Add(MakeCell(p, "StrataName", "property-name"));
+                    cells.Add(MakeCell(CellText(row, p), "StrataValue", "property-value"));
+                }
+            }
+        }
+
+        // Built-in styling per mode unless the caller supplied a sheet. The injected grid rule
+        // (display + the data-driven column count) always comes first so user/built-in colour
+        // and weight rules cascade on top of it.
+        var baseCss = string.IsNullOrEmpty(Css)
+            ? ResolveStylesheet(asTable ? "table" : "list")
+            : ResolveCss(Css);
+        var tracks = string.Join(" ", Enumerable.Repeat("auto", columns));
+        var css = $"StrataRoot {{ display: grid; grid-template-columns: {tracks} }}\n{baseCss}";
+
+        var registry = StylingProperties.CreateRegistry();
+        // The grid path declares layout properties (display, grid-template-columns); register
+        // their descriptors too or the parser rejects them as unknown.
+        LayoutProperties.RegisterAll(registry);
+        var stylesheet = new CssStylesheetParser(new CssSelectorLanguage(), registry).Parse(css);
+
+        var rootSource = new PSObject();
+        rootSource.TypeNames.Insert(0, "StrataRoot");
+
+        var adapter = new PsObjectTreeAdapter(
+            childAccessor: src => ReferenceEquals(src, rootSource)
+                ? cells
+                : Array.Empty<PSObject>(),
+            classes: PsObjectTreeAdapter.ClassesFromProperty(ClassProperty));
+
+        var root = adapter.Wrap(rootSource);
+        var cascade = new Cascade(registry).Compute(root, stylesheet);
+        // A grid container makes the tree non-trivial, so the 3-arg projection honours the grid.
+        var layout = YogaLayoutPass.Compute(root, cascade, Strata.Layout.Yoga.Size.Unbounded);
+
+        var projection = new SpectreProjection { TextSelector = CellTextSelector };
+        var renderable = projection.Project(root, cascade, layout);
+
+        WriteObject(RenderToAnsi(renderable));
+    }
+
+    /// <summary>Properties to render: the explicit <see cref="Property"/> list, else the first row's gettable properties.</summary>
+    private string[] ResolveProperties()
+    {
+        if (Property is { Length: > 0 })
+        {
+            return Property;
+        }
+
+        return _rows[0].Properties
+            .Where(p => p.IsGettable
+                && !string.Equals(p.Name, ClassProperty, StringComparison.OrdinalIgnoreCase)
+                && !string.Equals(p.Name, CellTextProperty, StringComparison.Ordinal))
+            .Select(p => p.Name)
+            .ToArray();
+    }
+
+    /// <summary>Read property <paramref name="name"/> off <paramref name="row"/> as text; calculated-property failures render empty.</summary>
+    private static string CellText(PSObject row, string name)
+    {
+        try
+        {
+            return row.Properties[name]?.Value?.ToString() ?? string.Empty;
+        }
+        catch
+        {
+            return string.Empty;
+        }
+    }
+
+    /// <summary>Build a synthetic single-leaf grid cell: <paramref name="kind"/> as its Strata Kind, <paramref name="cssClass"/> as its class, and <paramref name="text"/> as its display text.</summary>
+    private static PSObject MakeCell(string text, string kind, string cssClass)
+    {
+        var cell = new PSObject();
+        cell.TypeNames.Insert(0, kind);
+        cell.Properties.Add(new PSNoteProperty("class", cssClass));
+        cell.Properties.Add(new PSNoteProperty(CellTextProperty, text));
+        return cell;
+    }
+
+    /// <summary>Text selector for synthetic grid cells: reads the cell's stored display text.</summary>
+    private static string CellTextSelector(ITreeNode node)
+    {
+        var source = node is PsObjectNode psNode ? psNode.Source : null;
+        return source?.Properties[CellTextProperty]?.Value?.ToString() ?? string.Empty;
     }
 
     /// <summary>
