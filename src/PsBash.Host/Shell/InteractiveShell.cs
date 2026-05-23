@@ -78,6 +78,19 @@ public static class InteractiveShell
                 cts = new CancellationTokenSource();
                 _currentCts = cts;
 
+                // Restore console modes before every prompt. A prior command can leave the
+                // console in a state the line editor can't drive — most commonly a node-based
+                // CLI (e.g. `code .`, which spawns code.cmd -> node) that enables
+                // VIRTUAL_TERMINAL_INPUT and never restores it, after which arrow keys arrive
+                // as raw ESC sequences and each keystroke triggers a garbled redraw ("redrawing
+                // too much"). The TryRunDirect external path already restores after the process
+                // exits, but `code .` falls through to the worker path (Process.Start on a .cmd
+                // with UseShellExecute=false throws), which did not. Both Ensure* calls are
+                // idempotent no-ops when the mode is already correct, so running them per prompt
+                // is cheap and covers every execution path uniformly. Windows-only (early-return).
+                EnsureVirtualTerminalEnabled();
+                EnsureConsoleInputRestored();
+
                 var input = await ReadInputAsync(worker);
                 if (input is null)
                 {
