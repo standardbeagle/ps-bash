@@ -42,8 +42,10 @@ Get-Process |
 
 Parameters:
 
-- `-Css` (position 0, required): a `.css` file path **or** inline CSS text. A value
-  containing `{` or a newline is always treated as inline CSS.
+- `-Css` (position 0, **optional**; aliases `-Style`, `-Stylesheet`): the stylesheet to
+  apply. Accepts **inline CSS** (any value containing `{` or a newline), a **`.css` file
+  path**, or the **name of a built-in / user stylesheet** (`default`, `ls`, `ps`, …).
+  **Omitted entirely → the built-in `default` stylesheet.**
 - `-InputObject` (pipeline): the objects to style.
 - `-Property`: properties to render per row, in order. Omitted → row's `ToString()`.
 - `-ClassProperty`: property supplying class labels (default `class`; space-separated
@@ -53,3 +55,40 @@ Selectors match each row by `Kind` (type name, namespace stripped — e.g. `Proc
 `Id` (`Id` then `Name` property), and `.class` labels. `NO_COLOR` disables ANSI output.
 
 The cmdlet emits a single rendered ANSI string; PowerShell prints the escapes in the host.
+
+## Default and customizable stylesheets
+
+`Format-Styled` ships built-in stylesheets, embedded in the cmdlet assembly:
+
+| Name | For | Class hooks (project a `class`) |
+|------|-----|---------------------------------|
+| `default` | any pipeline (used when no stylesheet is given) | `.error .warn .ok .info .muted .bold .strike`; kinds `DirectoryInfo`, `FileInfo`, `Process` |
+| `ls` | directory listings | `.dir .exe .symlink .archive .hidden` |
+| `ps` | process listings | `.busy .stuck .idle` |
+
+```powershell
+Get-Process | Format-Styled              # built-in default
+Get-Process | Format-Styled -Style ps    # built-in ps sheet
+```
+
+**Customize** by dropping a `.css` file with the **same base name** into a user style dir.
+Your rules are appended *after* the built-in, so later declarations win (the CSS cascade) —
+retune one selector without recopying the whole sheet. Search order:
+
+1. `$PSBASH_STYLE_PATH` — a directory, or a `PATH`-separated list of directories.
+2. `~/.config/ps-bash/styles/`
+3. `~/.psbash/styles/`
+
+```powershell
+# Make the default sheet paint processes green+bold, everything else unchanged:
+New-Item ~/.config/ps-bash/styles -ItemType Directory -Force | Out-Null
+'Process { color: green; font-weight: bold }' | Set-Content ~/.config/ps-bash/styles/default.css
+Get-Process | Format-Styled              # now green+bold
+
+# Or keep a project-local style dir:
+$env:PSBASH_STYLE_PATH = "$PWD/.styles"
+```
+
+**Colors**: the 16 ANSI names (`black red green yellow blue magenta cyan white` + `bright*`),
+`transparent`, or `#rrggbb` hex (note: `silver`, `purple`, etc. are not recognized).
+**Properties**: `color`, `font-weight: bold`, `text-decoration: strikethrough` / `underline`.

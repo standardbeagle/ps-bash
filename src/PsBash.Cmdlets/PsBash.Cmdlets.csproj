@@ -70,6 +70,13 @@
     <PackageReference Include="Strata.Render.Spectre" Version="0.1.0-dev" />
   </ItemGroup>
 
+  <!-- Built-in Format-Styled stylesheets, embedded so they travel with the DLL
+       regardless of deployment layout. Logical names: PsBash.Cmdlets.styles.<name>.css.
+       Only embedded when Strata (and thus Format-Styled) is built. -->
+  <ItemGroup Condition="'$(UseStrata)' == 'true'">
+    <EmbeddedResource Include="styles\*.css" />
+  </ItemGroup>
+
   <ItemGroup>
     <None Include="PsBash.Cmdlets.psd1" CopyToOutputDirectory="Always"
           Condition="'$(EnableExperimentalBashEval)' != 'true'" />

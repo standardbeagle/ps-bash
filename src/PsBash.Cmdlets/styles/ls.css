@@ -1,0 +1,19 @@
+/* `ls`-style coloring for directory listings (Get-ChildItem or ps-bash `ls`).
+ * Use: Format-Styled -Style ls
+ *
+ * Color by type works out of the box; for finer control project a `class`:
+ *   Get-ChildItem | Select-Object *, @{ n='class'; e={
+ *       if ($_.PSIsContainer) { 'dir' }
+ *       elseif ($_.Extension -in '.exe','.ps1','.cmd','.bat') { 'exe' }
+ *       elseif ($_.Attributes -band [IO.FileAttributes]::Hidden) { 'hidden' }
+ *   } } | Format-Styled -Style ls -Property Name
+ */
+
+DirectoryInfo { color: blue;  font-weight: bold }
+FileInfo      { color: white }
+
+.dir     { color: blue;    font-weight: bold }
+.exe     { color: green;   font-weight: bold }
+.symlink { color: cyan }
+.archive { color: magenta }
+.hidden  { color: grey }

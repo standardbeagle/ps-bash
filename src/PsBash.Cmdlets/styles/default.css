@@ -1,0 +1,31 @@
+/* ps-bash default Strata stylesheet — used by `Format-Styled` when no stylesheet
+ * argument is given.
+ *
+ * CUSTOMIZE: drop a file with the same base name into one of these dirs and your
+ * rules are appended AFTER the built-in ones, so later declarations win (the CSS
+ * cascade) — you can tweak a single selector without recopying the whole sheet:
+ *     $PSBASH_STYLE_PATH/<name>.css     (a dir, or a PATH-separated list of dirs)
+ *     ~/.config/ps-bash/styles/<name>.css
+ *     ~/.psbash/styles/<name>.css
+ *
+ * SELECTORS: Kind = the row's type name with namespace stripped (e.g. `Process`),
+ *            #Id  = the row's Id then Name property,
+ *            .class = labels from the property named by -ClassProperty (default `class`).
+ */
+
+/* Semantic classes — set a `class` property on rows (e.g. via Select-Object) to use. */
+.error   { color: red;    font-weight: bold }
+.warn    { color: yellow }
+.warning { color: yellow }
+.ok      { color: green }
+.success { color: green }
+.info    { color: cyan }
+.muted   { color: grey }
+.dim     { color: grey }
+.bold    { font-weight: bold }
+.strike  { text-decoration: strikethrough }
+
+/* Common object kinds, colored by type. */
+DirectoryInfo { color: blue;   font-weight: bold }
+FileInfo      { color: white }
+Process       { color: cyan }

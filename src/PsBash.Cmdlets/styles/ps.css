@@ -1,0 +1,16 @@
+/* `ps`-style coloring for process listings (Get-Process).
+ * Use: Format-Styled -Style ps
+ *
+ * Project a `class` from process state for the highlight rules:
+ *   Get-Process | Select-Object *, @{ n='class'; e={
+ *       if ($_.CPU -gt 50) { 'busy' }
+ *       elseif (-not $_.Responding) { 'stuck' }
+ *   } } | Format-Styled -Style ps -Property Name,Id,CPU
+ */
+
+Process { color: white }
+
+.busy  { color: red;    font-weight: bold }
+.stuck { color: yellow; text-decoration: strikethrough }
+.idle  { color: grey }
+.system { color: grey }
