@@ -1,3 +1,12 @@
+# Explicit restore first. dotnet build/publish only do an *implicit* restore,
+# which is incrementally skipped when obj/project.assets.json merely looks
+# present — so a stale restore (most often after a .NET SDK update, which
+# changes the assets stamp) surfaces as NETSDK1064 "Package <X> was not found"
+# even though the package is in the NuGet cache. An explicit restore always
+# re-evaluates the graph and rewrites the assets for the current SDK.
+dotnet restore ps-bash.sln
+if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
 dotnet clean src/PsBash.Core -c Release
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
