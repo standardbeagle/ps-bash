@@ -4106,146 +4106,31 @@ function Show-BashHelp {
 
 # --- Tab Completion ---
 
-$script:BashFlagSpecs = @{
-    'echo'     = @(
-        @('-n', 'no trailing newline'), @('-e', 'enable escape sequences'), @('-E', 'disable escape sequences')
-    )
-    'ls'       = @(
-        @('-l', 'long listing'),    @('-a', 'show hidden'),      @('-h', 'human readable sizes'),
-        @('-R', 'recursive'),       @('-S', 'sort by size'),     @('-t', 'sort by time'),
-        @('-r', 'reverse sort'),    @('-1', 'one per line')
-    )
-    'cat'      = @(
-        @('-n', 'number all lines'),   @('-b', 'number non-blank lines'), @('-s', 'squeeze blank lines'),
-        @('-E', 'show $ at line end'), @('-T', 'show ^I for tabs')
-    )
-    'grep'     = @(
-        @('-i', 'ignore case'),       @('-v', 'invert match'),     @('-n', 'line numbers'),
-        @('-c', 'count only'),        @('-r', 'recursive'),        @('-l', 'files with matches'),
-        @('-E', 'extended regex'),    @('-A', 'after context'),    @('-B', 'before context'),
-        @('-C', 'context'),           @('-F', 'fixed strings'),    @('-w', 'word regexp'),
-        @('-o', 'only matching'),     @('-H', 'with filename'),    @('-h', 'no filename'),
-        @('-e', 'pattern'),           @('-m', 'max count')
-    )
-    'rg'       = @(
-        @('-i', 'ignore case'),       @('-w', 'word regexp'),      @('-c', 'count matches'),
-        @('-l', 'files with matches'),@('-n', 'line numbers'),     @('-N', 'no line numbers'),
-        @('-o', 'only matching'),     @('-v', 'invert match'),     @('-F', 'fixed strings'),
-        @('-g', 'glob filter'),       @('-A', 'after context'),    @('-B', 'before context'),
-        @('-C', 'context'),           @('--hidden', 'include dotfiles')
-    )
-    'sort'     = @(
-        @('-r', 'reverse'),           @('-n', 'numeric sort'),     @('-u', 'unique'),
-        @('-f', 'fold case'),         @('-k', 'key field'),        @('-t', 'field separator'),
-        @('-h', 'human numeric'),     @('-V', 'version sort'),     @('-M', 'month sort'),
-        @('-c', 'check sorted')
-    )
-    'head'     = @( @('-n', 'number of lines') )
-    'tail'     = @( @('-n', 'number of lines'), @('-f', 'follow file for changes'), @('-c', 'output last N bytes'), @('-s', 'poll interval in seconds') )
-    'wc'       = @( @('-l', 'line count'), @('-w', 'word count'), @('-c', 'byte count') )
-    'find'     = @(
-        @('-name', 'name pattern'),   @('-type', 'file type'),     @('-size', 'file size'),
-        @('-maxdepth', 'max depth'),  @('-mtime', 'modify time'),  @('-empty', 'empty files'),
-        @('-print0', 'null-delimited output'), @('-exec', 'execute command')
-    )
-    'stat'     = @( @('-c', 'format string'), @('-t', 'terse'), @('--printf', 'printf format') )
-    'cp'       = @( @('-r', 'recursive'), @('-v', 'verbose'), @('-n', 'no-clobber'), @('-f', 'force') )
-    'mv'       = @( @('-v', 'verbose'), @('-n', 'no-clobber'), @('-f', 'force') )
-    'rm'       = @( @('-r', 'recursive'), @('-f', 'force'), @('-v', 'verbose') )
-    'mkdir'    = @( @('-p', 'parents'), @('-v', 'verbose') )
-    'rmdir'    = @( @('-p', 'parents'), @('-v', 'verbose') )
-    'touch'    = @( @('-d', 'date string') )
-    'ln'       = @( @('-s', 'symbolic'), @('-f', 'force'), @('-v', 'verbose') )
-    'ps'       = @(
-        @('-e', 'all processes'),     @('-A', 'all processes'),    @('-f', 'full format'),
-        @('-u', 'filter user'),       @('-p', 'filter pid'),       @('--sort', 'sort key'),
-        @('-o', 'output format')
-    )
-    'sed'      = @( @('-n', 'suppress default'), @('-i', 'in-place'), @('-E', 'extended regex'), @('-e', 'expression') )
-    'awk'      = @( @('-F', 'field separator'), @('-v', 'variable'), @('-f', 'program file'), @('--file', 'program file') )
-    'cut'      = @( @('-d', 'delimiter'), @('-f', 'fields'), @('-c', 'characters') )
-    'tr'       = @( @('-c', 'complement'), @('-C', 'complement'), @('-d', 'delete'), @('-s', 'squeeze'), @('-t', 'truncate SET2') )
-    'uniq'     = @( @('-c', 'count'), @('-d', 'duplicates only') )
-    'nl'       = @( @('-ba', 'number all lines') )
-    'diff'     = @(
-        @('-u', 'unified format'),
-        @('-c', 'context format'),
-        @('-q', 'report only whether files differ'),
-        @('-w', 'ignore all whitespace'),
-        @('-b', 'ignore changes in whitespace amount'),
-        @('-B', 'ignore blank line changes'),
-        @('-i', 'case-insensitive comparison')
-    )
-    'comm'     = @( @('-1', 'suppress col 1'), @('-2', 'suppress col 2'), @('-3', 'suppress col 3') )
-    'column'   = @( @('-t', 'table mode'), @('-s', 'separator') )
-    'join'     = @( @('-t', 'delimiter'), @('-1', 'field from file 1'), @('-2', 'field from file 2') )
-    'paste'    = @( @('-d', 'delimiter'), @('-s', 'serial') )
-    'tee'      = @( @('-a', 'append') )
-    'xargs'    = @( @('-I', 'replace string'), @('-n', 'max args'), @('-0', 'null-delimited input') )
-    'jq'       = @(
-        @('-r', 'raw output'),        @('-c', 'compact output'),   @('-S', 'sort keys'),
-        @('-s', 'slurp')
-    )
-    'date'     = @( @('-d', 'date string'), @('-u', 'UTC'), @('-r', 'reference file'), @('+FORMAT', 'output format') )
-    'seq'      = @( @('-s', 'separator'), @('-w', 'equal width') )
-    'du'       = @(
-        @('-h', 'human readable'),    @('-s', 'summarize'),        @('-a', 'all files'),
-        @('-c', 'show total'),        @('-d', 'max depth')
-    )
-    'tree'     = @(
-        @('-a', 'all files'),         @('-d', 'directories only'), @('-L', 'max depth'),
-        @('-I', 'exclude pattern'),   @('--dirsfirst', 'directories first')
-    )
-    'basename' = @( @('-s', 'suffix') )
-    'pwd'      = @( @('-P', 'physical path') )
-    'uname'    = @( @('-s', 'kernel name'), @('-n', 'hostname'), @('-r', 'release'), @('-m', 'machine'), @('-a', 'all') )
-    'fold'     = @( @('-w', 'wrap width'), @('-s', 'break at spaces'), @('-b', 'count bytes') )
-    'expand'   = @( @('-t', 'tab width') )
-    'unexpand' = @( @('-t', 'tab width'), @('-a', 'convert all spaces') )
-    'strings'  = @( @('-n', 'minimum string length') )
-    'split'    = @( @('-l', 'lines per file'), @('-d', 'numeric suffixes'), @('-a', 'suffix length') )
-    'tac'      = @( @('-s', 'separator') )
-    'base64'   = @( @('-d', 'decode'), @('-w', 'wrap at column') )
-    'md5sum'   = @( @('-c', 'check'), @('-b', 'binary mode') )
-    'sha1sum'  = @( @('-c', 'check'), @('-b', 'binary mode') )
-    'sha256sum' = @( @('-c', 'check'), @('-b', 'binary mode') )
-    'file'     = @( @('-b', 'brief'), @('-i', 'MIME type'), @('-L', 'follow symlinks') )
-    'gzip'     = @(
-        @('-d', 'decompress'),           @('-c', 'write to stdout'),   @('-k', 'keep original'),
-        @('-f', 'force'),                @('-v', 'verbose'),           @('-l', 'list'),
-        @('-1', 'fastest compression'),  @('-9', 'best compression')
-    )
-    'tar'      = @(
-        @('-c', 'create archive'),       @('-x', 'extract archive'),   @('-t', 'list contents'),
-        @('-f', 'archive file'),         @('-z', 'gzip filter'),       @('-v', 'verbose'),
-        @('-C', 'change directory'),     @('--exclude', 'exclude pattern')
-    )
-    'yq'       = @(
-        @('-r', 'raw output'),           @('-o', 'output format (json, yaml)')
-    )
-    'xan'      = @(
-        @('-d', 'delimiter'),            @('headers', 'show column headers'),
-        @('count', 'count rows'),        @('select', 'select columns'),
-        @('search', 'search rows'),      @('table', 'pretty table display')
-    )
-    'sleep'    = @( @('NUMBER', 'seconds to sleep (suffix: s/m/h/d)') )
-    'time'     = @( @('COMMAND', 'command to time') )
-    'which'    = @( @('-a', 'show all matches') )
-    'alias'    = @( @('-p', 'list all aliases'), @('-u', 'unalias mode'), @('-a', 'remove all (with -u)') )
-    'eval'     = @( @('COMMAND', 'command string to evaluate') )
-    'mapfile'  = @( @('-t', 'strip trailing delimiter'), @('-n', 'copy at most N lines'), @('-O', 'start assigning at index N') )
-    'readarray' = @( @('-t', 'strip trailing delimiter'), @('-n', 'copy at most N lines'), @('-O', 'start assigning at index N') )
-    'shift'    = @( @('N', 'shift by N positions') )
-    'realpath' = @()
-    'command'  = @( @('-v', 'print command name or path') )
-    'source'   = @()
-    'unset'    = @( @('-v', 'treat each NAME as a variable'), @('-f', 'treat each NAME as a function') )
-    'pushd'    = @( @('+N', 'rotate stack so Nth dir becomes top') )
-    'popd'     = @( @('+N', 'remove Nth entry from stack') )
-    'dirs'     = @( @('-c', 'clear directory stack'), @('-p', 'print one per line'), @('-v', 'print with line numbers') )
-    'yes'      = @( @('STRING', 'repeated output (default: y)') )
-    'tput'     = @( @('CAPNAME', 'terminal capability name') )
-    'install'  = @( @('-d', 'create directories'), @('-D', 'create leading path components'), @('-m', 'set mode'), @('-v', 'verbose'), @('-s', 'strip'), @('-t', 'target directory'), @('-S', 'swap suffix') )
+# Bash flag specifications — single source of truth in BashFlagSpecs.json (the same file the
+# host's FlagSpecs.cs embeds), loaded from the module directory and reshaped into the
+# @(@('-flag','desc')) form Register-BashCompletions consumes. When the JSON is unavailable
+# (e.g. the host loads this psm1 as a script string, where $PSScriptRoot is unset — that path
+# uses the host's C# completion, not these PS completers) the table is left empty.
+$script:BashFlagSpecs = @{}
+if ($PSScriptRoot) {
+    $bashFlagSpecsPath = Join-Path $PSScriptRoot 'BashFlagSpecs.json'
+    if (Test-Path -LiteralPath $bashFlagSpecsPath) {
+        try {
+            $bashFlagSpecsRaw = Get-Content -Raw -LiteralPath $bashFlagSpecsPath | ConvertFrom-Json
+            foreach ($bashFlagSpecProp in $bashFlagSpecsRaw.PSObject.Properties) {
+                # cmd -> @(@('-flag','desc'), ...). PowerShell unwraps a single-flag command's
+                # one-element array on retrieval; both consumers re-wrap it (see the
+                # `$flagEntries[0] -is [string]` guards), so the loader stays simple.
+                $script:BashFlagSpecs[$bashFlagSpecProp.Name] = @(
+                    foreach ($bashFlagSpecEntry in $bashFlagSpecProp.Value) {
+                        , @($bashFlagSpecEntry.flag, $bashFlagSpecEntry.desc)
+                    }
+                )
+            }
+        } catch {
+            Write-Verbose "PsBash: failed to load BashFlagSpecs.json: $_"
+        }
+    }
 }
 
 $script:BashCompleters = @{}
@@ -4256,6 +4141,10 @@ function Register-BashCompletions {
 
     foreach ($commandName in $script:BashFlagSpecs.Keys) {
         $flagEntries = $script:BashFlagSpecs[$commandName]
+        if (-not $flagEntries -or $flagEntries.Count -eq 0) { continue }
+        # A single-flag command's @(@('-x','desc')) unwraps to @('-x','desc') on retrieval, so
+        # re-wrap when the first element is a string (mirrors the guard in the help-text path).
+        if ($flagEntries[0] -is [string]) { $flagEntries = @(, $flagEntries) }
 
         $completerBlock = {
             param($wordToComplete, $commandAst, $cursorPosition)

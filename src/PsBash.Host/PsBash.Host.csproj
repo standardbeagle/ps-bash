@@ -30,7 +30,11 @@
     <PackageReference Include="Microsoft.Data.Sqlite" Version="9.*" />
   </ItemGroup>
   <ItemGroup>
-    <EmbeddedResource Include="Resources\FlagSpecs.json" />
+    <!-- Single source of truth for bash flag specs lives in PsBash.Module/BashFlagSpecs.json
+         (also embedded into PsBash.Core + loaded by the psm1). Embed it here under the resource
+         name FlagSpecs.cs reads, so the host and the module never drift. -->
+    <EmbeddedResource Include="..\PsBash.Module\BashFlagSpecs.json"
+                      LogicalName="PsBash.Host.Resources.FlagSpecs.json" />
     <EmbeddedResource Include="Resources\SdkRunspaceSetup.ps1"
                       LogicalName="PsBash.Host/SdkRunspaceSetup.ps1" />
   </ItemGroup>

@@ -91,6 +91,7 @@
     <None Include="..\PsBash.Module\PsBash.psd1" CopyToOutputDirectory="PreserveNewest" />
     <None Include="..\PsBash.Module\PsBash.psm1" CopyToOutputDirectory="PreserveNewest" />
     <None Include="..\PsBash.Module\PsBash.Format.ps1xml" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="..\PsBash.Module\BashFlagSpecs.json" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 
 </Project>

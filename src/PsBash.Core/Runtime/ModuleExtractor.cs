@@ -9,6 +9,9 @@ public static class ModuleExtractor
         "PsBash.psd1",
         "PsBash.psm1",
         "PsBash.Format.ps1xml",
+        // Canonical bash flag-spec data; the psm1 loads it from the extracted module dir
+        // (single source of truth shared with the host's FlagSpecs.cs).
+        "BashFlagSpecs.json",
     ];
 
     /// <summary>
