@@ -1,6 +1,7 @@
 using System;
 using System.IO;
 using System.Linq;
+using System.Text.RegularExpressions;
 using Xunit;
 
 namespace PsBash.Core.Tests;
@@ -78,5 +79,22 @@ public class FindabilityGuardTests
         Assert.False(File.Exists(dup),
             $"A second flag-spec source reappeared at {dup}. Keep ONE source "
             + "(PsBash.Module/BashFlagSpecs.json); the host embeds it under the FlagSpecs.json resource name.");
+    }
+
+    [Fact]
+    public void ReleaseNotes_UnderPsGalleryLimit()
+    {
+        // PSGallery rejects a manifest whose ReleaseNotes exceeds 10600 chars with HTTP 400 — and
+        // the publish step is continue-on-error, so it fails the upload while the run still goes
+        // green. This guard catches the accumulating-notes overflow BEFORE a release. Keep notes
+        // to recent versions + a link to GitHub releases for history.
+        var root = RepoRoot();
+        var psd1 = File.ReadAllText(Path.Combine(root, "src", "PsBash.Module", "PsBash.psd1"));
+        var m = Regex.Match(psd1, "ReleaseNotes = '((?:[^']|'')*)'");
+        Assert.True(m.Success, "ReleaseNotes not found in PsBash.psd1.");
+        var value = m.Groups[1].Value.Replace("''", "'"); // un-escape PS single-quote doubling
+        Assert.True(value.Length <= 10600,
+            $"PsBash.psd1 ReleaseNotes is {value.Length} chars; PSGallery caps it at 10600 (publish 400s). "
+            + "Trim to recent versions + a link to GitHub releases.");
     }
 }
