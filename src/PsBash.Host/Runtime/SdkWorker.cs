@@ -9,7 +9,7 @@ namespace PsBash.Host.Runtime;
 /// Executes commands against a shared <see cref="SdkRunspace"/> without
 /// spawning an external pwsh process.
 /// </summary>
-public sealed class SdkWorker : IWorker
+public sealed class SdkWorker : IWorker, ICompletionWorker
 {
     private readonly SdkRunspace _sdkRunspace;
     // Single PowerShell instance bound to the runspace, serialised by _lock.
@@ -62,6 +62,59 @@ public sealed class SdkWorker : IWorker
         try
         {
             return await Task.Run(() => WithDefaultRunspace(() => RunCommandCollect(expression)), ct);
+        }
+        finally
+        {
+            _lock.Release();
+        }
+    }
+
+    /// <summary>
+    /// Run PowerShell's completion engine against the live runspace. Uses the runspace-scoped
+    /// <see cref="CommandCompletion.CompleteInput(string, int, System.Collections.Hashtable)"/>
+    /// overload (it reads <see cref="Runspace.DefaultRunspace"/>, which
+    /// <see cref="WithDefaultRunspace{T}"/> pins) under the same lock as command execution, so
+    /// the runspace is idle when completion runs. Never throws.
+    /// </summary>
+    async Task<IReadOnlyList<string>> ICompletionWorker.CompleteInputAsync(
+        string input, int cursorIndex, CancellationToken ct)
+    {
+        if (_disposed != 0 || string.IsNullOrEmpty(input))
+        {
+            return Array.Empty<string>();
+        }
+
+        await _lock.WaitAsync(ct);
+        try
+        {
+            return await Task.Run(() => WithDefaultRunspace<IReadOnlyList<string>>(() =>
+            {
+                try
+                {
+                    var completion = CommandCompletion.CompleteInput(input, cursorIndex, options: null);
+                    var matches = completion.CompletionMatches;
+                    if (matches is null || matches.Count == 0)
+                    {
+                        return Array.Empty<string>();
+                    }
+
+                    var results = new List<string>(matches.Count);
+                    foreach (var m in matches)
+                    {
+                        if (!string.IsNullOrEmpty(m.CompletionText))
+                        {
+                            results.Add(m.CompletionText);
+                        }
+                    }
+
+                    return results;
+                }
+                catch (Exception)
+                {
+                    // Completion is advisory — a parse/discovery failure must never surface.
+                    return Array.Empty<string>();
+                }
+            }), ct);
         }
         finally
         {

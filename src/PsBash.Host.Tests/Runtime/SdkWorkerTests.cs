@@ -324,4 +324,27 @@ public class SdkWorkerTests : IAsyncLifetime
         var run = await _fixture.ExecuteCapturedAsync(missing);
         Assert.Equal(127, run.ExitCode);
     }
+
+    // P3: the live CompleteInput path must run PowerShell's own completion engine against the
+    // runspace and honor Register-ArgumentCompleter — the parameter-value mechanism the
+    // interactive completion engine uses for dynamic values.
+    [Fact]
+    public async Task CompleteInput_HonorsRegisterArgumentCompleter()
+    {
+        var worker = _fixture.CreateWorker();
+        await worker.ExecuteAsync(
+            "function Test-Paint { param([string]$Color) }; " +
+            "Register-ArgumentCompleter -CommandName Test-Paint -ParameterName Color -ScriptBlock { " +
+            "  param($commandName,$parameterName,$wordToComplete,$commandAst,$fakeBound) " +
+            "  'crimson','cobalt','coral' | Where-Object { $_ -like \"$wordToComplete*\" } | " +
+            "  ForEach-Object { [System.Management.Automation.CompletionResult]::new($_) } }");
+
+        var completer = (ICompletionWorker)worker;
+        const string fragment = "Test-Paint -Color co";
+        var matches = await completer.CompleteInputAsync(fragment, fragment.Length);
+
+        Assert.Contains("cobalt", matches);
+        Assert.Contains("coral", matches);
+        Assert.DoesNotContain("crimson", matches); // does not match the "co" word
+    }
 }

@@ -1,4 +1,5 @@
 using PsBash.Core.Runtime;
+using PsBash.Host.Runtime;
 
 namespace PsBash.Host.Shell;
 
@@ -86,12 +87,18 @@ internal sealed class CompletionEngine
             }
             else
             {
-                // Parameter VALUE completion for the preceding -Param: [ValidateSet] values or
-                // enum names. (Dynamic/argument-completer values are Phase 3 via CompleteInput.)
+                // Parameter VALUE completion for the preceding -Param. Prefer PowerShell's own
+                // engine (P3) — dynamic Register-ArgumentCompleter, [ValidateSet], enums, provider
+                // paths — then fall back to static ValidateSet/enum introspection (P2).
                 var paramFlag = PreviousParamFlag(line, cursor);
                 if (paramFlag is not null)
                 {
-                    var values = await QueryParameterValuesAsync(cmd, paramFlag, token, ct).ConfigureAwait(false);
+                    var values = await CompleteValuesViaPsAsync(cmd, paramFlag, token, ct).ConfigureAwait(false);
+                    if (values.Count == 0)
+                    {
+                        values = await QueryParameterValuesAsync(cmd, paramFlag, token, ct).ConfigureAwait(false);
+                    }
+
                     baseResults = MergeFirst(values, baseResults);
                 }
             }
@@ -159,6 +166,23 @@ internal sealed class CompletionEngine
         var names = await QueryLinesAsync(expr, ct).ConfigureAwait(false);
         // token includes the leading '-' (e.g. "-Pa"); match parameter names case-insensitively.
         return names.Where(n => n.StartsWith(token, StringComparison.OrdinalIgnoreCase)).ToList();
+    }
+
+    /// <summary>
+    /// PowerShell-engine value completion via a synthesized fragment "&lt;cmd&gt; &lt;-Param&gt;
+    /// &lt;partial&gt;" with the caret pinned at the end — so there is no bash→PS cursor mapping.
+    /// Returns the engine's completion texts (already filtered to the partial), or empty when the
+    /// worker has no completion capability or the engine yields nothing.
+    /// </summary>
+    private async Task<IReadOnlyList<string>> CompleteValuesViaPsAsync(string cmd, string paramFlag, string token, CancellationToken ct)
+    {
+        if (_worker is not ICompletionWorker completer)
+        {
+            return Array.Empty<string>();
+        }
+
+        var fragment = $"{cmd} {paramFlag} {token}";
+        return await completer.CompleteInputAsync(fragment, fragment.Length, ct).ConfigureAwait(false);
     }
 
     private async Task<IReadOnlyList<string>> QueryParameterValuesAsync(string cmd, string paramFlag, string token, CancellationToken ct)

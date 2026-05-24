@@ -1,4 +1,5 @@
 using PsBash.Core.Runtime;
+using PsBash.Host.Runtime;
 using PsBash.Host.Shell;
 using Xunit;
 
@@ -15,10 +16,12 @@ namespace PsBash.Host.Tests.Shell;
 /// </summary>
 public class CompletionEngineTests
 {
-    private sealed class FakeWorker : IWorker
+    private sealed class FakeWorker : IWorker, ICompletionWorker
     {
         public Func<string, CancellationToken, Task<string>>? OnQuery;
+        public Func<string, int, CancellationToken, Task<IReadOnlyList<string>>>? OnComplete;
         public int QueryCount;
+        public int CompleteCount;
 
         public Action<string>? OutputCallback { get; set; }
         public bool HasExited { get; set; }
@@ -29,6 +32,14 @@ public class CompletionEngineTests
         {
             QueryCount++;
             return OnQuery is null ? Task.FromResult(string.Empty) : OnQuery(expression, ct);
+        }
+
+        Task<IReadOnlyList<string>> ICompletionWorker.CompleteInputAsync(string input, int cursorIndex, CancellationToken ct)
+        {
+            CompleteCount++;
+            return OnComplete is null
+                ? Task.FromResult<IReadOnlyList<string>>(Array.Empty<string>())
+                : OnComplete(input, cursorIndex, ct);
         }
 
         public ValueTask DisposeAsync() => ValueTask.CompletedTask;
@@ -151,5 +162,41 @@ public class CompletionEngineTests
 
         Assert.Equal(0, fake.QueryCount);
         Assert.DoesNotContain("-ShouldNotAppear", result);
+    }
+
+    [Fact]
+    public async Task ParameterValue_PrefersPowerShellEngine_OverIntrospection()
+    {
+        // The PS engine (CompleteInput) returns values, so the introspection fallback is skipped.
+        var fake = new FakeWorker
+        {
+            OnComplete = (_, _, _) => Task.FromResult<IReadOnlyList<string>>(["fast", "slow"]),
+            OnQuery = (_, _) => Task.FromResult("SHOULD-NOT-FALL-BACK\n"),
+        };
+        const string line = "Set-Thing -Mode f";
+        var result = await Engine(fake).CompleteAsync(line, line.Length, default);
+
+        Assert.Equal(1, fake.CompleteCount);
+        Assert.Equal(0, fake.QueryCount); // PS engine returned values → no introspection fallback
+        Assert.Contains("fast", result);
+        Assert.Contains("slow", result);
+    }
+
+    [Fact]
+    public async Task ParameterValue_FallsBackToIntrospection_WhenPsEngineEmpty()
+    {
+        // CompleteInput yields nothing → fall back to ValidateSet/enum introspection, filtered.
+        var fake = new FakeWorker
+        {
+            OnComplete = (_, _, _) => Task.FromResult<IReadOnlyList<string>>(Array.Empty<string>()),
+            OnQuery = (_, _) => Task.FromResult("fast\nslow\nfull\n"),
+        };
+        const string line = "Set-Thing -Mode f";
+        var result = await Engine(fake).CompleteAsync(line, line.Length, default);
+
+        Assert.Equal(1, fake.CompleteCount);
+        Assert.Equal(1, fake.QueryCount);
+        Assert.Contains("fast", result);
+        Assert.DoesNotContain("slow", result); // does not match the typed "f"
     }
 }
