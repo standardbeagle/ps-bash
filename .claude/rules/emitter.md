@@ -1,35 +1,24 @@
 ---
 paths:
-  - "src/PsBash.Core/Parser/PsEmitter.cs"
+  - "src/PsBash.Transpiler/Parser/PsEmitter.cs"
 ---
 
-# Emitter Conventions
+# EMITTER. Ref: @docs/specs/emitter-strategy.md
 
-Reference: @docs/specs/emitter-strategy.md
+文言：透傳為本——映命名、轉全參，旗由運行時解。勿譯旗、勿抽旗、勿臆旗、勿映原生cmdlet。逗號花括號之旗須引號。
 
-## The Passthrough Principle
+## PASSTHROUGH PRINCIPLE
+Map bash command name → `Invoke-Bash*`, forward ALL args unchanged. Runtime parses flags.
 
-The emitter maps bash command names to `Invoke-Bash*` functions and forwards ALL arguments unchanged. The runtime functions handle flag parsing.
+NEVER in the emitter:
+- translate bash flag → PS named param (`-d` → `-Delimiter`).
+- extract + re-emit specific flags (`-n N` out of head).
+- assume which flags a command supports.
+- map to native PS cmdlets (`Select-Object`/`Measure-Object`/`Sort-Object`).
 
-**NEVER** do any of these in the emitter:
-- Translate bash flags to PowerShell named parameters (`-d` → `-Delimiter`)
-- Extract and re-emit specific flags (`-n N` from head)
-- Assume which flags a command supports
-- Map to native PowerShell cmdlets (`Select-Object`, `Measure-Object`, `Sort-Object`)
+## PIPE-TARGET MAPPING
+- all pipe targets in `TryEmitMappedCommand` use `EmitPassthrough`.
+- add a command: case in `TryEmitMappedCommand` → `EmitPassthrough("Invoke-BashFoo", args)`. No custom `EmitFoo` unless quoting needs it.
 
-## Pipe Target Mapping
-
-All pipe targets in `TryEmitMappedCommand` should use `EmitPassthrough`.
-
-When adding a new command:
-1. Add a case to `TryEmitMappedCommand` switch
-2. Use `EmitPassthrough("Invoke-BashFoo", args)` 
-3. Do NOT create a custom `EmitFoo` method unless quoting requires it
-
-## Quoting (NeedsPassthroughQuoting)
-
-Quote flag arguments containing:
-- `,` — PowerShell interprets as array separator
-- `{` or `}` — PowerShell interprets as scriptblock
-
-The flag gets wrapped in double quotes: `"-F,"`, `"-I{}"`.
+## QUOTING (NeedsPassthroughQuoting)
+Quote a flag arg containing `,` (PS array sep) or `{`/`}` (PS scriptblock): emit `"-F,"`, `"-I{}"`.

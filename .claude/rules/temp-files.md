@@ -3,27 +3,18 @@ paths:
   - "src/PsBash.Core/Runtime/**"
 ---
 
-# Temp File Conventions
+# TEMP FILES. Ref: @docs/specs/runtime-functions.md (Temp File Strategy)
 
-Reference: @docs/specs/runtime-functions.md ("Temp File Strategy" section)
+文言：皆置 ps-bash/ 之下，勿用GetTempFileName；按時間戳失效；共享用FileShare.ReadWrite。
 
-## All temp files under `ps-bash/` subdirectory
+## ALL temp under `ps-bash/`
+Never `Path.GetTempPath()` directly, never `Path.GetTempFileName()`. Always under `ps-bash/`:
+- module extraction → `ps-bash/module-{version}/` (marker + timestamp invalidation)
+- worker script → `ps-bash/module-{version}/ps-bash-worker.ps1` (timestamp invalidation)
+- process substitution → `ps-bash/proc-sub/{random}` (ephemeral, cleaned on error)
 
-Never write directly to `Path.GetTempPath()` or use `Path.GetTempFileName()`. All temp files go under `ps-bash/` subdirectory:
+## INVALIDATION
+Re-extract when assembly `LastWriteTimeUtc` > extracted file's. (Extractor compares; missing file = extract.)
 
-| Component | Path | Strategy |
-|---|---|---|
-| Module extraction | `ps-bash/module-{version}/` | Marker file + timestamp invalidation |
-| Worker script | `ps-bash/module-{version}/ps-bash-worker.ps1` | Timestamp invalidation |
-| Process substitution | `ps-bash/proc-sub/{random}` | Ephemeral, cleaned on error |
-
-## Cache Invalidation
-
-The module extractor and worker use assembly-timestamp-based invalidation:
-- Check if extracted file exists
-- Compare assembly LastWriteTimeUtc vs extracted file LastWriteTimeUtc
-- Re-extract if assembly is newer
-
-## Concurrency
-
-Use `FileShare.ReadWrite` when writing extracted files so parallel processes don't lock each other out. Never use `FileShare.None` for shared temp files.
+## CONCURRENCY
+Shared temp files: `FileShare.ReadWrite`. NEVER `FileShare.None` (parallel processes lock out).

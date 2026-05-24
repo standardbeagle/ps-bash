@@ -3,54 +3,24 @@ paths:
   - "src/PsBash.Module/**"
 ---
 
-# Runtime Conventions
+# RUNTIME. Ref: @docs/specs/runtime-functions.md (table: runtime-command-reference.md; migrations: runtime-migrated-cmdlets.md)
 
-Reference: @docs/specs/runtime-functions.md
-(per-command table: @docs/specs/runtime-command-reference.md; binary-cmdlet migrations: @docs/specs/runtime-migrated-cmdlets.md)
+文言：Emit-BashLine分行、New-BashObject存型不分；消費者透傳原物件勿展平；$args手解旗；轉義用哨兵。
 
-## BashObject Contract
+## BASHOBJECT — pick the right output fn
+- `Emit-BashLine -Text` → stdout-like text; splits on `\n`, one object/line. printf / echo -e / heredoc.
+- `New-BashObject -BashText` → typed single-line (LsEntry/CatLine/PsEntry). Does NOT split.
+- `Get-BashText -InputObject` → text from any pipeline object. `Set-BashDisplayProperty` → ToString() for Out-String.
 
-Two output functions — use the right one:
+## PIPELINE PRESERVATION
+Consumers (grep/sed/tail…) PASS ORIGINAL objects through — keep typed props.
+- single-line (ls/cat/find): pass directly.
+- multi-line edge: defensive split — split THAT item into `New-BashObject` lines; pass single-line items unchanged.
+- NEVER flatten all input into `$allLines` — destroys typed objects.
 
-- **`Emit-BashLine -Text "text"`** — for stdout-like text output. Splits on newlines and emits one BashObject per line. Matches bash semantics where `\n` is a record boundary. Use this for printf, echo -e, and any command that produces text with embedded newlines.
-- **`New-BashObject -BashText "text"`** — for typed/structured output. Does NOT split. Use for typed objects (LsEntry, CatLine, PsEntry) that are inherently single-line.
-- `Get-BashText -InputObject $item` extracts text from any pipeline object
-- `Set-BashDisplayProperty` configures ToString() for Out-String formatting
+## ARG PARSING
+Top of every `Invoke-Bash*`: `$Arguments=[string[]]$args; $pipelineInput=@($input)`.
+Then manual `while ($i -lt $Arguments.Count)` loop. `ConvertFrom-BashArgs` = boolean-only flags; manual loop = value flags (`-n N`, `-d CHAR`).
 
-## Pipeline Object Preservation
-
-Consumer commands (grep, sed, tail, etc.) should pass original objects through the pipeline, NOT create new BashObjects. This preserves typed properties (e.g., LsEntry.Name, CatLine.Content) through pipe chains.
-
-For single-line items (the common case from ls, cat, find): pass through directly.
-For multi-line edge cases: use defensive split as safety net:
-
-```powershell
-foreach ($item in $pipelineInput) {
-    $text = Get-BashText -InputObject $item
-    if ($text -match "`n" -and $text -ne "`n") {
-        # Multi-line edge case: split into new BashObjects
-        foreach ($subLine in ($text -replace "`n$",'' -split "`n")) {
-            New-BashObject -BashText "$subLine`n"
-        }
-    } else {
-        # Single-line: pass original object (preserves type)
-        $item  # process directly
-    }
-}
-```
-
-**DO NOT** unconditionally split all pipeline items into `$allLines` — this destroys typed objects.
-
-## Arg Parsing Pattern
-
-All `Invoke-Bash*` functions use:
-```powershell
-$Arguments = [string[]]$args
-$pipelineInput = @($input)
-```
-
-Then a manual `while ($i -lt $Arguments.Count)` loop for flag parsing. Use `ConvertFrom-BashArgs` for boolean-only flags, manual loop for value-bearing flags like `-n N` or `-d CHAR`.
-
-## Escape Sequences
-
-`Expand-EscapeSequences` uses a sentinel pattern: `\\` → NUL marker → expand `\n`/`\t`/etc → restore marker to `\`. Used by tr, echo -e, printf.
+## ESCAPES
+`Expand-EscapeSequences`: `\\`→NUL sentinel→expand `\n`/`\t`/…→restore `\`. Used by tr / echo -e / printf.

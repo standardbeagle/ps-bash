@@ -5,12 +5,16 @@ paths:
   - "src/PsBash.Core/**"
   - "src/PsBash.Shell/**"
   - "src/PsBash.Cmdlets/**"
+  - "src/PsBash.Host/**"
+  - "src/PsBash.Transpiler/**"
 ---
 # QA RUBRIC. WEYLAND-YUTANI SPECIAL ORDER 937-PSB.
 # CAVEMAN RULES. NO HEDGE. NO MAYBE. SHIP NO BUG.
 
 REFERENCE: @.claude/rules/testing.md (layer names, test naming, scripts/test.sh).
 THIS FILE OVERRIDES ON CONFLICT.
+
+文言（十三令）：神諭先斷言後；無數不證；探失敗面與六模式三系統；定而不脆、勿眠；負例為主；金絲雀每PR；敗則留證；審依一模板；標準可量；安全必探；舊患勿復。
 
 ## DIRECTIVE 1. ORACLE FIRST. ASSERT LAST.
 
