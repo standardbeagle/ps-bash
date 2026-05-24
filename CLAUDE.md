@@ -1,10 +1,13 @@
 # ps-bash project instructions
 
+**Navigation: read @CODE_MAP.md first** — the static structural index (projects, key files, where to find X). A compressed top-of-context map out-navigates on-demand search; see @.claude/rules/findability.md for the doctrine.
+
 ## Architecture
 
 ```
 bash input → BashLexer → BashParser → PsEmitter → IpcWorker → ps-bash-host/SdkWorker → Invoke-Bash* runtime
 ```
+(Parser + emitter live in **PsBash.Transpiler**, not PsBash.Core.)
 
 - **Lexer/Parser**: tokenizes and parses bash into an AST modeled on Oils syntax.asdl
 - **Emitter**: maps bash commands to `Invoke-Bash*` functions via **passthrough** — forwards all args, never translates flags
@@ -136,4 +139,5 @@ gh workflow run publish.yml -f version=0.8.2
 - @docs/specs/emitter-strategy.md — passthrough principle, pipe mappings, anti-patterns
 - @docs/specs/runtime-functions.md — BashObject model, arg-parsing patterns, escape handling, temp files, adding a command
 - @docs/specs/runtime-command-reference.md — per-command flag / arg-parsing lookup table
+- @docs/specs/interactive-completion.md — interactive shell Tab completion: engine, providers, the no-cursor-map PowerShell bridge, single flag-spec source
 - docs/specs/runtime-migrated-cmdlets.md — REFACTOR-2 binary-cmdlet migration history (reference only; not auto-loaded — it is ~126 KB and would dominate the session context window)
