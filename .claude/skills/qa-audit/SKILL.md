@@ -3,61 +3,23 @@ name: qa-audit
 description: Audit one bash feature against the QA rubric and write its section into docs/testing/interactive-parity-audit.md
 ---
 
-# QA AUDIT. ONE FEATURE PER RUN.
+# QA AUDIT. ONE FEATURE PER RUN. Ref: @.claude/rules/qa-rubric.md (D10 = TEMPLATE).
 
-REFERENCE: @.claude/rules/qa-rubric.md (DIRECTIVE 10 = TEMPLATE).
+文言：審一feature——尋測試、核15失敗軸、核6模式、核oracle、核已知患，依D10模板寫一節；勿寫測、勿改碼。
 
-## INPUT
-$ARGUMENTS = feature name. EXAMPLE: "pipes", "if/elif/else", "command substitution".
+INPUT: $ARGUMENTS = feature (e.g. "pipes", "if/elif/else", "command substitution").
 
 ## STEPS
+1. RESOLVE → TEST FILES. grep `src/**/*.Tests/**` + `PsBash.psm1` (if runtime). List file:test. No prose.
+2. FAILURE-SURFACE: each of D3's 15 axes → YES/NO/PARTIAL (justify skip, 1 line).
+3. MODE: each of D4's M1..M6 → YES/NO/PARTIAL.
+4. ORACLE: grep tests for differential harness (Phase 0 fixture). None → NO + why (D1 exceptions).
+5. KNOWN BUGS: grep `docs/solutions/` + Dart (`tags: bug-fix` / feature). List file:line or Dart ID.
+6. WRITE one section, D10 template EXACTLY → append `docs/testing/interactive-parity-audit.md`. No prose outside template. Priority gaps: top 3, by user impact.
+7. SUMMARY to user: feature, gap count, P1 gap (1 line), link.
 
-1. RESOLVE FEATURE TO TEST FILES.
-   - GREP `src/**/*.Tests/**` FOR FEATURE-RELATED IDENTIFIERS.
-   - GREP `src/PsBash.Module/PsBash.psm1` IF FEATURE IS RUNTIME.
-   - LIST ALL TESTS BY FILE:TEST. NO PROSE.
-
-2. CHECK FAILURE-SURFACE COVERAGE.
-   - FOR EACH AXIS IN DIRECTIVE 3 (15 AXES):
-     - SEARCH TESTS FOR EVIDENCE.
-     - MARK YES / NO / PARTIAL.
-     - IF SKIP, JUSTIFY ONE LINE.
-
-3. CHECK MODE COVERAGE.
-   - FOR EACH MODE IN DIRECTIVE 4 (M1..M6):
-     - SEARCH TESTS FOR MODE EVIDENCE.
-     - MARK YES / NO / PARTIAL.
-
-4. CHECK ORACLE STATUS.
-   - GREP TESTS FOR DIFFERENTIAL HARNESS USAGE (Phase 0 fixture).
-   - IF NONE: ORACLE = NO. STATE WHY (DIRECTIVE 1 EXCEPTIONS).
-
-5. CHECK KNOWN BUGS.
-   - GREP `docs/solutions/` FOR FEATURE.
-   - GREP DART (`tags: bug-fix` OR FEATURE NAME) FOR OPEN BUGS.
-   - LIST FILE:LINE OR DART ID.
-
-6. WRITE SECTION USING DIRECTIVE 10 TEMPLATE EXACTLY.
-   - APPEND TO `docs/testing/interactive-parity-audit.md`.
-   - NO PROSE OUTSIDE THE TEMPLATE.
-   - PRIORITY GAPS: TOP 3 MAX. ORDERED BY USER IMPACT.
-
-7. EMIT SUMMARY TO USER:
-   - FEATURE NAME.
-   - GAP COUNT.
-   - PRIORITY-1 GAP (one line).
-   - LINK TO AUDIT FILE.
-
-## OUTPUT BAR
-- ONE NEW SECTION IN `docs/testing/interactive-parity-audit.md`.
-- AT MOST 60 LINES OF MARKDOWN.
-- TEMPLATE-CONFORMANT. REVIEWER WILL `diff` SECTIONS FOR DRIFT.
-
-## VERIFICATION
-- `grep "### FEATURE:" docs/testing/interactive-parity-audit.md | wc -l` MATCHES AUDITED FEATURE COUNT.
-- NO TWO SECTIONS DIFFER IN STRUCTURE. CONSISTENT TABLE COLUMNS.
+## BARS
+One new section, ≤60 md lines, template-conformant. `grep "### FEATURE:" … | wc -l` == audited count. Consistent columns.
 
 ## DO NOT
-- DO NOT WRITE TESTS. AUDIT ONLY.
-- DO NOT FIX BUGS. AUDIT ONLY.
-- DO NOT EDIT EXISTING SECTIONS UNLESS REFRESHING ONE FEATURE.
+No writing tests. No fixing bugs. No editing other sections (only refresh one feature).

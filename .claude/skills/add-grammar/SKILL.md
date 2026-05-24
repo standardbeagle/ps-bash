@@ -4,32 +4,14 @@ description: Add new grammar production to the bash parser (new token, AST node,
 disable-model-invocation: true
 ---
 
-Add grammar support for: $ARGUMENTS
+文言：token→詞法→AST record→parser production→emitter case→各層測試。皆在 PsBash.Transpiler/Parser。
 
-Reference: @docs/specs/parser-grammar.md
+Add grammar for: $ARGUMENTS · Ref: @docs/specs/parser-grammar.md · all files under `src/PsBash.Transpiler/Parser/`
 
-## Steps
-
-1. **Add token kind** (if new operator/keyword): In `BashToken.cs`, add to `BashTokenKind` enum
-
-2. **Update lexer**: In `BashLexer.cs`:
-   - Multi-char operators: check longest-first (e.g., `<<<` before `<<`)
-   - Remember adjacency rules for IoNumber reclassification
-   - Add lexer test in `BashLexerTests.cs`
-
-3. **Add AST node** (if new syntax construct): In `Ast/Commands.cs` or `Ast/Words.cs`:
-   - Extend `Command` or `WordPart` with a new sealed record
-   - Use `ImmutableArray<T>` for collections
-   - Add XML doc comment referencing Oils ASDL equivalent if applicable
-
-4. **Add parser production**: In `BashParser.cs`:
-   - Add handling in the appropriate parse method (`ParseSimple`, `ParseCompound`, etc.)
-   - For new compound commands, add the keyword to `IsCompoundDelimiter`
-   - Add parser test in `BashParserTests.cs`
-
-5. **Add emitter case**: In `PsEmitter.cs`:
-   - Add case to the `Emit` switch for new `Command.*` type
-   - Add case to `EmitWordPart` for new `WordPart.*` type
-   - Add emitter test in `PsEmitterTests.cs`
-
-6. **Run full test suite**: `./scripts/test.sh`
+## STEPS
+1. **Token** (new op/keyword): add to `BashTokenKind` in `BashToken.cs`.
+2. **Lexer** (`BashLexer.cs`): multi-char ops longest-first (`<<<` before `<<`); mind IoNumber adjacency. Test `BashLexerTests.cs`.
+3. **AST** (`Ast/Commands.cs` or `Ast/Words.cs`): new sealed record on `Command`/`WordPart`; `ImmutableArray<T>` collections; XML doc cites Oils ASDL if any.
+4. **Parser** (`BashParser.cs`): handle in the right parse method (`ParseSimple`/`ParseCompound`…); new compound keyword → `IsCompoundDelimiter`. Test `BashParserTests.cs`.
+5. **Emitter** (`PsEmitter.cs`): case in `Emit` for new `Command.*`; case in `EmitWordPart` for new `WordPart.*`. Test `PsEmitterTests.cs`.
+6. **Run**: `./scripts/test.sh`.

@@ -1,88 +1,19 @@
-# Validate Specs Against Source Code
+---
+name: validate-specs
+description: Validate specs against source code (detect drift)
+---
 
-Detect drift between the three spec documents and the actual source code.
+# VALIDATE SPECS vs SOURCE.
 
-## When to Use
+文言：四核——token枚舉↔grammar表、TryEmitMappedCommand↔mapped表、Invoke-Bash*↔command表、Set-Alias↔alias；漂移則改spec（碼為準）。
 
-Run this skill after making changes to the parser, emitter, or runtime module
-to ensure the spec documents still accurately describe the code.
+Run after parser/emitter/runtime changes. Source is authority; specs follow.
 
-## Validation Steps
+## CHECKS — each PASS, or DRIFT (list items in source-not-spec / spec-not-source)
+1. **Tokens**: `BashTokenKind` enum (`src/PsBash.Transpiler/Parser/BashToken.cs`) == Token Reference table in `docs/specs/parser-grammar.md`.
+2. **Mapped commands**: `case "..."` in `TryEmitMappedCommand` (`src/PsBash.Transpiler/Parser/PsEmitter.cs`) == Mapped Commands table in `emitter-strategy.md`. Also `PsBuiltinAliases` HashSet == its Standalone-Mapping doc.
+3. **Runtime fns**: `^function Invoke-Bash*` in `PsBash.psm1` == Command Reference table in `runtime-command-reference.md`. Internal helpers (e.g. `Invoke-BashChecksum`) may be absent if named in a row.
+4. **Aliases**: each `^Set-Alias` in `PsBash.psm1` appears in `runtime-command-reference.md` (table or Additional-aliases line).
 
-### 1. BashTokenKind Enum vs parser-grammar.md Token Table
-
-Extract every member from the `BashTokenKind` enum in
-`src/PsBash.Core/Parser/BashToken.cs`. Extract every token name from the
-"Token Reference" table in `docs/specs/parser-grammar.md` (the `BashTokenKind`
-column). Compare the two sets -- they must be identical.
-
-```
-Source: grep for enum members in src/PsBash.Core/Parser/BashToken.cs
-Spec:   grep for rows in the Token Reference table in docs/specs/parser-grammar.md
-Match:  every enum member appears in the spec, every spec row exists in the enum
-```
-
-### 2. TryEmitMappedCommand Cases vs emitter-strategy.md Command Table
-
-Extract every `case "..."` string from the `TryEmitMappedCommand` method in
-`src/PsBash.Core/Parser/PsEmitter.cs`. Extract every bash command name from the
-"Mapped Commands" table in `docs/specs/emitter-strategy.md`. Compare the two
-sets -- they must be identical.
-
-Also verify that the `PsBuiltinAliases` set documented in the "Standalone
-Mapping" section matches the actual `PsBuiltinAliases` HashSet in PsEmitter.cs.
-
-```
-Source: grep for case statements in TryEmitMappedCommand in PsEmitter.cs
-Spec:   grep for rows in the Mapped Commands table in docs/specs/emitter-strategy.md
-Match:  every case has a spec row, every spec row has a case
-```
-
-### 3. Invoke-Bash* Functions vs Command Reference
-
-Extract every `function Invoke-Bash*` declaration from
-`src/PsBash.Module/PsBash.psm1`. Extract every function name from the "Command
-Reference" table in `docs/specs/runtime-command-reference.md`. Compare the two
-sets.
-
-Internal helpers (like `Invoke-BashChecksum`) that are not direct command
-mappings may appear in the psm1 but not in the spec table -- that is acceptable
-as long as they are mentioned in the relevant command rows.
-
-```
-Source: grep for "^function Invoke-Bash" in PsBash.psm1
-Spec:   grep for Invoke-Bash entries in the Command Reference table
-Match:  every user-facing function has a spec row
-```
-
-### 4. Alias Registrations vs Command Reference
-
-Extract every `Set-Alias` at the bottom of `PsBash.psm1`. Verify each alias
-name appears somewhere in `docs/specs/runtime-command-reference.md` (either in
-the Command Reference table or in the "Additional aliases" note).
-
-```
-Source: grep for "^Set-Alias" in PsBash.psm1
-Spec:   the Command column in the Command Reference table + Additional aliases line
-```
-
-## Reporting
-
-For each validation step, report one of:
-- **PASS** -- sets match exactly
-- **DRIFT** -- list the specific items that are in source but not in spec, or
-  in spec but not in source
-
-If any step reports DRIFT, update the relevant spec file to match the source
-code. The source code is the authority; specs must follow.
-
-## Files Involved
-
-- `src/PsBash.Core/Parser/BashToken.cs`
-- `src/PsBash.Core/Parser/PsEmitter.cs`
-- `src/PsBash.Module/PsBash.psm1`
-- `docs/specs/parser-grammar.md`
-- `docs/specs/emitter-strategy.md`
-- `docs/specs/runtime-functions.md`
-- `docs/specs/runtime-command-reference.md`
-- `docs/specs/runtime-migrated-cmdlets.md`
+## ON DRIFT
+Update the spec to match source.
