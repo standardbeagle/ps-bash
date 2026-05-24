@@ -65,7 +65,7 @@ internal sealed class CompletionEngine
             if (token.Length >= 1 && token[0] != '-')
             {
                 var live = await QueryCommandNamesAsync(token, ct).ConfigureAwait(false);
-                baseResults = Merge(baseResults, live);
+                baseResults = CompletionMerge.Append(baseResults, live, sortSecondary: true);
             }
 
             return baseResults;
@@ -83,7 +83,7 @@ internal sealed class CompletionEngine
             {
                 // Parameter NAME completion: -Pa<tab> -> -Path, -PathType, ...
                 var names = await QueryParameterNamesAsync(cmd, token, ct).ConfigureAwait(false);
-                baseResults = MergeFirst(names, baseResults);
+                baseResults = CompletionMerge.Append(names, baseResults, sortSecondary: false);
             }
             else
             {
@@ -99,7 +99,7 @@ internal sealed class CompletionEngine
                         values = await QueryParameterValuesAsync(cmd, paramFlag, token, ct).ConfigureAwait(false);
                     }
 
-                    baseResults = MergeFirst(values, baseResults);
+                    baseResults = CompletionMerge.Append(values, baseResults, sortSecondary: false);
                 }
             }
         }
@@ -253,57 +253,4 @@ internal sealed class CompletionEngine
         return prev.StartsWith('-') ? prev : null;
     }
 
-    /// <summary>Put <paramref name="primary"/> first, then the rest of the base set with duplicates removed.</summary>
-    private static IReadOnlyList<string> MergeFirst(IReadOnlyList<string> primary, IReadOnlyList<string> rest)
-    {
-        if (primary.Count == 0)
-        {
-            return rest;
-        }
-
-        var seen = new HashSet<string>(primary, StringComparer.Ordinal);
-        var merged = new List<string>(primary);
-        foreach (var r in rest)
-        {
-            if (seen.Add(r))
-            {
-                merged.Add(r);
-            }
-        }
-
-        return merged;
-    }
-
-    /// <summary>
-    /// Append live names not already in the base set, preserving the base ordering (which may
-    /// carry sequence-suggestion priority) and sorting only the appended additions.
-    /// </summary>
-    private static IReadOnlyList<string> Merge(IReadOnlyList<string> baseSet, IReadOnlyList<string> live)
-    {
-        if (live.Count == 0)
-        {
-            return baseSet;
-        }
-
-        var seen = new HashSet<string>(baseSet, StringComparer.Ordinal);
-        var extra = new List<string>();
-        foreach (var name in live)
-        {
-            if (seen.Add(name))
-            {
-                extra.Add(name);
-            }
-        }
-
-        if (extra.Count == 0)
-        {
-            return baseSet;
-        }
-
-        extra.Sort(StringComparer.Ordinal);
-        var merged = new List<string>(baseSet.Count + extra.Count);
-        merged.AddRange(baseSet);
-        merged.AddRange(extra);
-        return merged;
-    }
 }

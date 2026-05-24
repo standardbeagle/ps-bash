@@ -56,7 +56,7 @@ internal static class TabCompleter
                 {
                     // Merge with regular command completions, prioritizing matches
                     var commandCompletions = CompleteCommand(token, aliases, cwd);
-                    return MergeCompletions(sequenceSuggestions, commandCompletions);
+                    return CompletionMerge.Append(sequenceSuggestions, commandCompletions, sortSecondary: false);
                 }
             }
             return CompleteCommand(token, aliases, cwd);
@@ -119,26 +119,6 @@ internal static class TabCompleter
             // Routine: tab completion is advisory and must never crash the shell.
             return [];
         }
-    }
-
-    private static IReadOnlyList<string> MergeCompletions(
-        IReadOnlyList<string> sequenceSuggestions,
-        IReadOnlyList<string> commandCompletions)
-    {
-        // Sequence suggestions get priority, followed by regular commands
-        var seen = new HashSet<string>(sequenceSuggestions, StringComparer.Ordinal);
-        var merged = new List<string>(sequenceSuggestions);
-
-        foreach (var cmd in commandCompletions)
-        {
-            if (!seen.Contains(cmd))
-            {
-                merged.Add(cmd);
-                seen.Add(cmd);
-            }
-        }
-
-        return merged;
     }
 
     // ─────────────────────────────────────────────────────────────────────────

@@ -12,7 +12,8 @@ public static class InteractiveShell
 {
     private const string ContinuationPrompt = "> ";
 
-    private static readonly Dictionary<string, string> Aliases = new(StringComparer.Ordinal);
+    // Alias table + expansion live in AliasExpander; the interactive REPL routes
+    // alias/unalias lines through it and shares its table with tab completion.
 
     private static readonly string[] OpenKeywords = ["if", "for", "while", "until", "case", "do", "{", "(", "function"];
     private static readonly string[] CloseKeywords = ["fi", "done", "esac", "}", ")"];
@@ -55,7 +56,7 @@ public static class InteractiveShell
         // composes the static TabCompleter base set with live, runspace-backed command-name
         // completion (auto-loaded cmdlets, dot-sourced functions, module commands) via the worker.
         var completionEngine = new CompletionEngine(
-            Aliases,
+            AliasExpander.Aliases,
             cwd: () => _lastDir,
             lastCommand: () => _lastCommand,
             history: _historyStore,
@@ -1015,7 +1016,7 @@ EnsureConsoleInputRestored();
     /// <summary>
     /// Source a bash file the way the interactive shell needs it: each
     /// <c>alias</c>/<c>unalias</c> line is routed through <see cref="ProcessAliasCommand"/>
-    /// so its definition lands in the in-process <see cref="Aliases"/> table that
+    /// so its definition lands in the in-process <see cref="AliasExpander.Aliases"/> table that
     /// drives pre-transpile alias expansion, then the remaining (non-alias,
     /// non-comment) lines are transpiled as one block and executed in the worker.
     ///
@@ -1104,174 +1105,11 @@ EnsureConsoleInputRestored();
         return true;
     }
 
-    public static string ProcessAliasCommand(string input)
-    {
-        var aliasMatch = System.Text.RegularExpressions.Regex.Match(
-            input, @"^alias\s+((?:[^=\\ ""']+|\\.|""[^""]*""|'[^']*')+)=((?:[^\\ ""']+|\\.|""[^""]*""|'[^']*')*)\s*$");
-        if (aliasMatch.Success)
-        {
-            var name = aliasMatch.Groups[1].Value.Trim();
-            var value = aliasMatch.Groups[2].Value.Trim();
-            if ((value.StartsWith('"') && value.EndsWith('"')) ||
-                (value.StartsWith('\'') && value.EndsWith('\'')))
-            {
-                value = value[1..^1];
-            }
-            Aliases[name] = value;
-            return "";
-        }
+    /// <summary>Forwards to <see cref="AliasExpander.ProcessAliasCommand"/> (alias logic lives there).</summary>
+    public static string ProcessAliasCommand(string input) => AliasExpander.ProcessAliasCommand(input);
 
-        if (input == "alias" || System.Text.RegularExpressions.Regex.IsMatch(input, @"^alias\s+-p\s*$"))
-        {
-            foreach (var kvp in Aliases)
-                Console.WriteLine($"alias {kvp.Key}='{kvp.Value}'");
-            return "";
-        }
-
-        var aliasShowMatch = System.Text.RegularExpressions.Regex.Match(input, @"^alias\s+([^\s=]+)\s*$");
-        if (aliasShowMatch.Success)
-        {
-            var name = aliasShowMatch.Groups[1].Value;
-            if (Aliases.TryGetValue(name, out var val))
-                Console.WriteLine($"alias {name}='{val}'");
-            else
-                Console.Error.WriteLine($"ps-bash: alias: {name}: not found");
-            return "";
-        }
-
-        var unaliasMatch = System.Text.RegularExpressions.Regex.Match(input, @"^unalias\s+(.+)\s*$");
-        if (unaliasMatch.Success)
-        {
-            var names = unaliasMatch.Groups[1].Value;
-            if (names.Trim() == "-a")
-            {
-                Aliases.Clear();
-            }
-            else
-            {
-                foreach (var name in names.Split((char[])[' ', '\t'], StringSplitOptions.RemoveEmptyEntries))
-                {
-                    if (!Aliases.Remove(name))
-                    {
-                        Console.Error.WriteLine($"ps-bash: unalias: {name}: not found");
-                    }
-                }
-            }
-            return "";
-        }
-
-        return input;
-    }
-
-    public static string ExpandAliases(string input)
-    {
-        if (Aliases.Count == 0)
-            return input;
-
-        var sb = new StringBuilder();
-        int pos = 0;
-
-        while (pos < input.Length)
-        {
-            // Skip leading whitespace
-            while (pos < input.Length && char.IsWhiteSpace(input[pos]))
-                sb.Append(input[pos++]);
-
-            if (pos >= input.Length)
-                break;
-
-            // Extract the next word
-            int start = pos;
-            bool quoted = false;
-            char quoteChar = '\0';
-
-            while (pos < input.Length)
-            {
-                char c = input[pos];
-                if (quoted)
-                {
-                    if (c == quoteChar) quoted = false;
-                    pos++;
-                }
-                else if (c == '"' || c == '\'')
-                {
-                    quoted = true;
-                    quoteChar = c;
-                    pos++;
-                }
-                else if (c == '\\')
-                {
-                    pos += 2;
-                }
-                else if (char.IsWhiteSpace(c) || c == ';' || c == '|' || c == '(' || c == '<' || c == '>')
-                {
-                    break;
-                }
-                else if (c == '&')
-                {
-                    if (pos + 1 < input.Length && input[pos + 1] == '&')
-                        break;
-                    break;
-                }
-                else
-                {
-                    pos++;
-                }
-            }
-
-            var word = input[start..pos];
-
-            if (Aliases.TryGetValue(word, out var expansion))
-                sb.Append(expansion);
-            else
-                sb.Append(word);
-
-            // Copy separator until next word
-            while (pos < input.Length)
-            {
-                char c = input[pos];
-                if (c == '&' && pos + 1 < input.Length && input[pos + 1] == '&')
-                {
-                    sb.Append("&&");
-                    pos += 2;
-                    break;
-                }
-                if (c == '|')
-                {
-                    if (pos + 1 < input.Length && input[pos + 1] == '|')
-                    {
-                        sb.Append("||");
-                        pos += 2;
-                        break;
-                    }
-                    sb.Append('|');
-                    pos++;
-                    break;
-                }
-                if (c == ';')
-                {
-                    sb.Append(';');
-                    pos++;
-                    break;
-                }
-                if (c == '(' || c == '<' || c == '>')
-                {
-                    sb.Append(c);
-                    pos++;
-                    break;
-                }
-                if (char.IsWhiteSpace(c))
-                {
-                    sb.Append(c);
-                    pos++;
-                    continue;
-                }
-                break;
-            }
-        }
-
-        return sb.ToString();
-    }
+    /// <summary>Forwards to <see cref="AliasExpander.ExpandAliases"/> (alias logic lives there).</summary>
+    public static string ExpandAliases(string input) => AliasExpander.ExpandAliases(input);
 
     private static bool IsExitCommand(string input, out int exitCode)
     {
