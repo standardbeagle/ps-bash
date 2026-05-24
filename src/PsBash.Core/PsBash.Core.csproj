@@ -93,12 +93,20 @@
          qualified %(_StrataDep.Filename) metadata keeps the per-file LogicalName
          batching from cross-contaminating the cmdlets-DLL item above. -->
     <ItemGroup>
+      <!-- Strata deps exist only in UseStrata=true builds (the local feed is present). In CI /
+           release (UseStrata=false) they are absent, so the single-file includes MUST be guarded
+           with Exists() — an explicit (non-wildcard) Include is created even when the file is
+           missing, and CSC then fails with CS1566 "Error reading resource … could not find file".
+           The Strata.*.dll glob is already safe (empty when nothing matches). This is what broke
+           the publish build (0.9.12/0.9.13 never reached PSGallery). -->
       <_StrataDep Include="$(_PsBashCmdletsBin)\Strata.*.dll" />
-      <_StrataDep Include="$(_PsBashCmdletsBin)\Spectre.Console.dll" />
+      <_StrataDep Include="$(_PsBashCmdletsBin)\Spectre.Console.dll"
+                  Condition="Exists('$(_PsBashCmdletsBin)\Spectre.Console.dll')" />
       <!-- Yoga.Net is a pure-managed Yoga port (lib/, no runtimes/native) pulled in by
            Strata.Layout.Yoga for the grid layout pass. It does not match Strata.*, so
-           embed it explicitly or Format-Styled's grid path fails to load at runtime. -->
-      <_StrataDep Include="$(_PsBashCmdletsBin)\Yoga.Net.dll" />
+           embed it explicitly (guarded) or Format-Styled's grid path fails to load at runtime. -->
+      <_StrataDep Include="$(_PsBashCmdletsBin)\Yoga.Net.dll"
+                  Condition="Exists('$(_PsBashCmdletsBin)\Yoga.Net.dll')" />
       <EmbeddedResource Include="@(_StrataDep)"
                         LogicalName="PsBash.Module/cmdlets/$(TargetFramework)/%(_StrataDep.Filename)%(_StrataDep.Extension)"
                         Type="Non-Resx"
