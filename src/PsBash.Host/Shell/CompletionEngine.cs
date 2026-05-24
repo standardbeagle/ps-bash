@@ -48,12 +48,29 @@ internal sealed class CompletionEngine
         // history/sequence). This always runs and is the fallback if a live query is slow.
         var baseResults = TabCompleter.Complete(line, cursor, _aliases, _cwd(), _lastCommand(), _history);
 
+        var (beforeToken, token) = TabCompleter.SplitAtWordBoundaryQuoteAware(line, cursor);
+
+        // Phase 5: bash programmable completion. When completing an ARGUMENT of a command that has a
+        // registered `complete` spec (Tier 1: a -W word list), offer those candidates first. This is
+        // local registry state — no runspace round-trip — so it runs even when the worker is absent,
+        // and a user `complete -W` overrides path/flag completion for that command.
+        if (!TabCompleter.IsFirstWord(line, cursor))
+        {
+            var specCmd = TabCompleter.GetCommandNameAtCursor(beforeToken, beforeToken.Length, _aliases);
+            if (specCmd is not null && BashCompletionRegistry.HasSpec(specCmd))
+            {
+                var spec = BashCompletionRegistry.GetCandidates(specCmd, token);
+                if (spec.Count > 0)
+                {
+                    return CompletionMerge.Append(spec, baseResults, sortSecondary: false);
+                }
+            }
+        }
+
         if (_worker is not { HasExited: false })
         {
             return baseResults;
         }
-
-        var (beforeToken, token) = TabCompleter.SplitAtWordBoundaryQuoteAware(line, cursor);
 
         // Phase 1: at the command position, merge command names that are actually resolvable in
         // the live runspace (auto-loaded cmdlets, dot-sourced functions, module commands, the

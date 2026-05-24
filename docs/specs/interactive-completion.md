@@ -10,6 +10,7 @@ Source files (all under `src/PsBash.Host/Shell/`, namespace `PsBash.Host.Shell`)
 | `LineEditor.cs` | VT100 line editor: keybindings, redraw, history nav, and the **Tab** handler. Calls the completer (async, bounded by a deadline). |
 | `CompletionEngine.cs` | The completion orchestrator. Composes the static base set with live, runspace-backed providers; the single place new completion sources are added. |
 | `TabCompleter.cs` | The static/local base providers: command list, flag specs, path, history-sequence, plus the line-tokenizing helpers (`SplitAtWordBoundaryQuoteAware`, `IsFirstWord`, `GetCommandNameAtCursor`). |
+| `BashCompletionRegistry.cs` | Bash programmable completion (`complete`/`compgen`). Parses `complete -W`/`-r` lines and holds the cmd→word-list registry the engine consults (P5, §7). |
 | `FlagSpecs.cs` | Loads bash-command flag metadata from the embedded `Resources/FlagSpecs.json`. |
 | `Suggester.cs` | Inline (greyed) autosuggestion from history. |
 | `CtrlRSearch.cs` | Reverse-i-search (Ctrl-R) overlay. |
@@ -25,6 +26,7 @@ key = Tab
   └─ LineEditor.HandleTabAsync()                 (200ms CancellationToken)
        └─ CompletionEngine.CompleteAsync(line, cursor, ct)
             ├─ TabCompleter.Complete(...)         static base set (always)
+            ├─ [arg + complete spec] word list    ─ BashCompletionRegistry (local; pre-worker)
             ├─ [command position] live command names  ─ worker Get-Command '<prefix>*'
             ├─ [PS cmdlet + "-tok"] parameter names   ─ worker Get-Command.Parameters
             └─ [PS cmdlet + value ] parameter values  ─ ICompletionWorker.CompleteInputAsync
@@ -44,6 +46,7 @@ cancellation, or any failure the engine returns the static base set — **Tab ne
 | Context | Detected by | Source |
 |---------|-------------|--------|
 | Command position | `TabCompleter.IsFirstWord` | base command list ∪ live `Get-Command` |
+| Argument of a `complete`-registered command | `BashCompletionRegistry.HasSpec(cmd)` | the command's `-W` word list (§7) — checked first, local |
 | Parameter name (PS cmdlet, token starts `-`) | resolved command not a bash command (`!IsBashCommand`) | `Get-Command.Parameters` |
 | Parameter value (PS cmdlet, after `-Flag`) | `PreviousParamFlag` | `CompleteInput` → ValidateSet/enum fallback |
 | Flag (bash command) | `FlagSpecs.GetFlags(cmd) != null` | `FlagSpecs.json` |
@@ -73,10 +76,11 @@ map a bash cursor into transpiled PS, the engine **avoids mapping**:
 | P1 live command names | done | runspace `Get-Command` merge |
 | P2 PS parameter understanding | done | parameter names + ValidateSet/enum values (introspection) |
 | P3 dynamic values via CompleteInput | done | `Register-ArgumentCompleter`, provider paths |
-| P4 unify flag specs | planned | one source of truth for bash flags (see §6) |
-| P5 bash `complete`/`compgen` | planned | programmable completion |
+| P4 unify flag specs | done | one canonical source for bash flags (§6) |
+| P5 bash `complete`/`compgen` | done (Tier 1) | static `-W` word lists (§7); `-F` Tier 2 deferred |
 
 Tests: `PsBash.Host.Tests/Shell/CompletionEngineTests.cs` (engine logic, fake worker),
+`PsBash.Host.Tests/Shell/BashCompletionTests.cs` (P5 registry + engine integration),
 `PsBash.Host.Tests/Runtime/SdkWorkerTests.cs::CompleteInput_HonorsRegisterArgumentCompleter`
 (live runspace), `PsBash.Shell.Tests` `Complete_*` (TabCompleter base set).
 
@@ -87,14 +91,39 @@ provider in `TabCompleter`, classify the context, and merge with `Merge` (append
 base order) or `MergeFirst` (new source wins). Never throw — completion is advisory; bound any
 runspace call by the passed `CancellationToken`.
 
-## 6. Known maintenance hazard: dual flag-spec sources
+## 6. Flag-spec source (one, enforced)
 
-Bash-command flag metadata is currently maintained in **two** places that drift:
+Bash-command flag metadata has **one** canonical source: `src/PsBash.Module/BashFlagSpecs.json`.
 
-- `src/PsBash.Host/Resources/FlagSpecs.json` — consumed by the interactive shell (`FlagSpecs.cs`).
-- `src/PsBash.Module/PsBash.psm1` `$script:BashFlagSpecs` — consumed by `Register-BashCompletions`
-  for module-mode PowerShell argument completers (`Import-Module PsBash` in a plain pwsh).
+- The host embeds it (resource name `PsBash.Host.Resources.FlagSpecs.json`) and `FlagSpecs.cs`
+  reads it for the interactive shell.
+- The psm1 loads the same file from the module dir for `Register-BashCompletions` (module-mode
+  PowerShell argument completers, `Import-Module PsBash` in a plain pwsh).
 
-They hold the same data in different shapes (`{"flag","desc"}` vs `@('-n','desc')`) and have
-already diverged (e.g. `find -print0/-exec`, `tail -f/-c/-s` exist only in the psm1 copy).
-P4 unifies them onto a single canonical JSON consumed by both, with a parity test.
+The old second copy (`src/PsBash.Host/Resources/FlagSpecs.json` as a hand-maintained file) is
+gone. `FindabilityGuardTests.FlagSpecs_HaveExactlyOneSource` fails the build if a second source
+reappears — do not reintroduce one (P4).
+
+## 7. Programmable completion: `complete` / `compgen` (P5)
+
+`BashCompletionRegistry` implements bash programmable completion, **Tier 1** (static word lists):
+
+- **Register** — typing `complete -W '<words>' NAME...` at the prompt is intercepted by
+  `InteractiveShell` (like `alias`; there is no `complete` cmdlet to transpile to) and stored as
+  `NAME → word list`. `complete -r [NAME...]` removes (all when no NAME); bare `complete` / `-p`
+  prints the specs.
+- **Consume** — when completing an **argument** of a registered command, `CompletionEngine`
+  consults the registry **before** any runspace round-trip (it is local state) and offers the word
+  list filtered by the typed prefix (case-sensitive, matching bash), merged ahead of the base set.
+  At the **command** position the registry is not consulted (that is command-name completion).
+
+Example: `complete -W 'start stop restart' svc` then `svc st`⇥ → `start`, `stop`.
+
+**Tier 2 (deferred):** function-based completion (`complete -F func`, with `COMP_WORDS` /
+`COMP_CWORD` / `COMPREPLY`) is **not** implemented. A `-F` spec registers (so the line is consumed,
+not transpiled to a missing command) but contributes no candidates. Standalone `compgen` output and
+registering `complete` from a sourced rc file (the intercept is prompt-side only) are likewise out
+of scope. Tier 1 is the 80/20: `complete -W` covers the common "fixed sub-command/keyword list" case.
+
+Tests: `PsBash.Host.Tests/Shell/BashCompletionTests.cs` — registry parser (quoting, `-r`, `-F`
+no-candidates, multi-name) and engine integration (argument vs command position, worker-independent).

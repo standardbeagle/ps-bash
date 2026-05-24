@@ -132,6 +132,17 @@ public static class InteractiveShell
                 var originalInput = trimmed;
                 trimmed = ExpandAliases(trimmed);
 
+                // Interactive `complete` (bash programmable completion): register/remove a Tier-1
+                // word-list spec in the in-process registry the tab completer reads, then move on.
+                // There is no `complete` cmdlet to transpile to; intercepting here (like alias) keeps
+                // the spec on the prompt side where CompletionEngine can consult it. A cheap prefix
+                // check gates the parse.
+                if ((trimmed == "complete" || trimmed.StartsWith("complete ", StringComparison.Ordinal))
+                    && BashCompletionRegistry.TryApplyCompleteCommand(trimmed))
+                {
+                    continue;
+                }
+
                 // Interactive `source FILE` / `. FILE`: route the file's
                 // alias/unalias lines through the same in-process alias table the
                 // startup rc path uses, then execute the rest. Without this, an
