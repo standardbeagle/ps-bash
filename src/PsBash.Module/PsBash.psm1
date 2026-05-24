@@ -42,6 +42,16 @@ if (-not (Get-Command Invoke-BashBasename -CommandType Cmdlet -ErrorAction Silen
         # the canonical failure mode this guards against).
         Import-Module $script:__psbashCmdletsDll -Global -ErrorAction SilentlyContinue
     }
+    # Loud failure: without PsBash.Cmdlets.dll the migrated commands (ls, cat, grep, …) AND the
+    # [PsBash.Cmdlets.BashRuntime] helpers this psm1 calls are all missing — a half-loaded,
+    # broken module. NEVER fail silently (the old `Install-Module PsBash` bug: aliases registered
+    # but `Invoke-BashLs` was "not recognized"). The host pre-registers the cmdlets via ISS, so
+    # this only fires for a genuinely incomplete module-mode install.
+    if (-not (Get-Command Invoke-BashBasename -CommandType Cmdlet -ErrorAction SilentlyContinue)) {
+        Write-Warning ("PsBash: companion binary module PsBash.Cmdlets.dll not found beside the module " +
+            "('$PSScriptRoot'). Migrated commands (ls, cat, grep, …) will not work. The PsBash package " +
+            "should bundle PsBash.Cmdlets.dll; reinstall, or run: Install-Module PsBash.Cmdlets.")
+    }
 }
 
 # Global state initialized here so bash functions can access these variables

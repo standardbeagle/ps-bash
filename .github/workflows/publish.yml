@@ -379,27 +379,33 @@ jobs:
       - name: Prepare module directories
         shell: pwsh
         run: |
-          Copy-Item -Path ./src/PsBash.Module -Destination ./PsBash -Recurse
-          # Sanity check only, non-fatal: Publish-Module does the authoritative
-          # validation, and Test-ModuleManifest can choke on CI-only conditions
-          # (e.g. RequiredModules not installed) that don't affect the publish.
-          try { Test-ModuleManifest -Path ./PsBash/PsBash.psd1 | Out-Null }
-          catch { Write-Warning "Test-ModuleManifest (PsBash) non-fatal: $($_.Exception.Message)" }
-
-          New-Item -ItemType Directory -Path ./PsBash.Cmdlets -Force | Out-Null
-          Copy-Item ./src/PsBash.Cmdlets/PsBash.Cmdlets.psd1 -Destination ./PsBash.Cmdlets/
-
+          # Resolve the built PsBash.Cmdlets runtime DLLs once. Sort descending so a netN.0
+          # variant that loads on every supported pwsh (net8.0 loads on the net10 runtime) wins.
+          # Graph is Core -> Cmdlets -> Transpiler, so Core.dll is NOT needed here.
           $cmdletsBin = Get-ChildItem -Path ./src/PsBash.Cmdlets/bin/Release -Directory |
               Sort-Object Name -Descending | Select-Object -First 1
           if (-not $cmdletsBin) { throw "PsBash.Cmdlets build output not found under bin/Release/" }
-          # PsBash.Cmdlets.dll -> PsBash.Transpiler.dll -> Parlot.dll. It does NOT
-          # depend on PsBash.Core (the graph is Core -> Cmdlets -> Transpiler), so
-          # Core.dll is not in this bin and must not be required here.
-          foreach ($dll in @('PsBash.Cmdlets.dll', 'PsBash.Transpiler.dll', 'Parlot.dll')) {
+          $runtimeDlls = foreach ($dll in @('PsBash.Cmdlets.dll', 'PsBash.Transpiler.dll', 'Parlot.dll')) {
             $src = Join-Path $cmdletsBin.FullName $dll
             if (-not (Test-Path $src)) { throw "Expected runtime dependency $dll not found at $src" }
-            Copy-Item -Path $src -Destination ./PsBash.Cmdlets/ -Force
+            $src
           }
+
+          # PsBash package = the script module + the bundled binary cmdlets. The DLLs MUST ship
+          # inside ./PsBash so `Install-Module PsBash` is self-contained: the psm1 probes
+          # $PSScriptRoot/PsBash.Cmdlets.dll, and without it every migrated command (ls/cat/grep…)
+          # plus the BashRuntime helpers are missing. (Regression: ModuleInstallLayoutTests.)
+          Copy-Item -Path ./src/PsBash.Module -Destination ./PsBash -Recurse
+          Copy-Item -Path $runtimeDlls -Destination ./PsBash/ -Force
+          Write-Host "Staged ./PsBash contents:"
+          Get-ChildItem ./PsBash | Format-Table Name, Length
+          try { Test-ModuleManifest -Path ./PsBash/PsBash.psd1 | Out-Null }
+          catch { Write-Warning "Test-ModuleManifest (PsBash) non-fatal: $($_.Exception.Message)" }
+
+          # PsBash.Cmdlets package = the binary module on its own (RequiredModules -> PsBash).
+          New-Item -ItemType Directory -Path ./PsBash.Cmdlets -Force | Out-Null
+          Copy-Item ./src/PsBash.Cmdlets/PsBash.Cmdlets.psd1 -Destination ./PsBash.Cmdlets/
+          Copy-Item -Path $runtimeDlls -Destination ./PsBash.Cmdlets/ -Force
           Write-Host "Staged ./PsBash.Cmdlets contents:"
           Get-ChildItem ./PsBash.Cmdlets | Format-Table Name, Length
           try { Test-ModuleManifest -Path ./PsBash.Cmdlets/PsBash.Cmdlets.psd1 | Out-Null }
