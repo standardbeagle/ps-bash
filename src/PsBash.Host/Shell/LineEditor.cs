@@ -898,7 +898,9 @@ internal sealed class LineEditor
                 for (int k = 0; k < take; k++)
                     rows.Add(new PanelRow(Format(hints[k]), false));
                 if (hints.Count > MaxPanelRows)
-                    rows.Add(new PanelRow($"  ↓ {hints.Count - MaxPanelRows} more — press ↓ to scroll", false));
+                    rows.Add(new PanelRow($"  ↓ {hints.Count - MaxPanelRows} more · F1 details · ↓ focus", false));
+                else
+                    rows.Add(new PanelRow("  F1 details · ↓ focus", false));
                 return rows;
             }
 
@@ -910,7 +912,9 @@ internal sealed class LineEditor
                 rows.Add(new PanelRow(Format(hints[k]), k == selected));
             // A position indicator when the list overflows the window.
             if (hints.Count > window)
-                rows.Add(new PanelRow($"  [{selected + 1}/{hints.Count}]  ↑↓ scroll · Enter insert · Esc back", false));
+                rows.Add(new PanelRow($"  [{selected + 1}/{hints.Count}]  ↑↓ scroll · → details · Enter insert · Esc", false));
+            else
+                rows.Add(new PanelRow("  ↑↓ select · → details · Enter insert · Esc", false));
             return rows;
         }
         catch (Exception)

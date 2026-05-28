@@ -300,6 +300,21 @@ autosuggestions = true   # Enable (default) or disable
 
 This is fish shell's most praised feature — it dramatically reduces typing for repeated commands. See [docs/specs/autosuggestions.md](specs/autosuggestions.md) for full details.
 
+### Completion Details
+
+Tab completion can show a compact flag/parameter detail panel under the prompt.
+Use these controls:
+
+- `F1`: open the detail browser for the current command or selected flag.
+- `Down`: focus the visible detail panel.
+- `Up` / `Down`: move within a focused panel.
+- `Right`: drill into the selected flag or parameter details.
+- `Enter`: insert the selected flag or parameter.
+- `Esc`: leave the focused panel and return to editing.
+
+The prompt legend stays compact: unfocused panels show `F1 details · ↓ focus`;
+focused panels show `→ details` next to the scroll/insert controls.
+
 ### Environment variables
 
 ```bash
