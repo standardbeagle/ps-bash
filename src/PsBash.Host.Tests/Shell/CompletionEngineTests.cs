@@ -365,4 +365,50 @@ public class CompletionEngineTests
         Assert.Contains("fast", result);
         Assert.DoesNotContain("slow", result); // does not match the typed "f"
     }
+
+    [Fact]
+    public async Task ParameterValue_FallbackDisplaysValidateSetDetailWithoutInsertingIt()
+    {
+        var fake = new FakeWorker
+        {
+            OnComplete = (_, _, _) => Task.FromResult<IReadOnlyList<string>>(Array.Empty<string>()),
+            OnQuery = (_, _) => Task.FromResult("fast|ValidateSet|String\nslow|ValidateSet|String\n"),
+        };
+        const string line = "Set-Thing -Mode f";
+        var result = await Engine(fake).CompleteAsync(line, line.Length, default);
+
+        var item = Assert.Single(result, i => i.InsertText == "fast");
+        Assert.Equal("fast", item.InsertText);
+        Assert.Equal("fast  - ValidateSet value for -Mode <String>", item.DisplayText);
+    }
+
+    [Fact]
+    public async Task ParameterValue_PowerShellEngineCandidatesRemainPlainWhenNoDescriptionAvailable()
+    {
+        var fake = new FakeWorker
+        {
+            OnComplete = (_, _, _) => Task.FromResult<IReadOnlyList<string>>(["fast"]),
+            OnQuery = (_, _) => Task.FromResult("fast|ValidateSet|String\n"),
+        };
+        const string line = "Set-Thing -Mode f";
+        var result = await Engine(fake).CompleteAsync(line, line.Length, default);
+
+        var item = Assert.Single(result, i => i.InsertText == "fast");
+        Assert.Equal("fast", item.DisplayText);
+        Assert.Equal(1, fake.CompleteCount);
+        Assert.Equal(0, fake.QueryCount);
+    }
+
+    [Fact]
+    public void BuildParameterValueItems_FiltersAndLabelsEnumValues()
+    {
+        var result = CompletionEngine.BuildParameterValueItems(
+            ["Sunday|Enum|DayOfWeek", "Monday|Enum|DayOfWeek"],
+            "-Day",
+            "M");
+
+        var item = Assert.Single(result);
+        Assert.Equal("Monday", item.InsertText);
+        Assert.Equal("Monday  - Enum value for -Day <DayOfWeek>", item.DisplayText);
+    }
 }

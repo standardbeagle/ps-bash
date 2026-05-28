@@ -115,10 +115,13 @@ internal sealed class CompletionEngine
                     var values = await CompleteValuesViaPsAsync(cmd, paramFlag, token, ct).ConfigureAwait(false);
                     if (values.Count == 0)
                     {
-                        values = await QueryParameterValuesAsync(cmd, paramFlag, token, ct).ConfigureAwait(false);
+                        var valueItems = await QueryParameterValueItemsAsync(cmd, paramFlag, token, ct).ConfigureAwait(false);
+                        baseResults = CompletionMerge.Append(valueItems, baseResults, sortSecondary: false);
                     }
-
-                    baseResults = CompletionMerge.Append(AsItems(values), baseResults, sortSecondary: false);
+                    else
+                    {
+                        baseResults = CompletionMerge.Append(AsItems(values), baseResults, sortSecondary: false);
+                    }
                 }
             }
         }
@@ -426,13 +429,13 @@ internal sealed class CompletionEngine
         return await completer.CompleteInputAsync(fragment, fragment.Length, ct).ConfigureAwait(false);
     }
 
-    private async Task<IReadOnlyList<string>> QueryParameterValuesAsync(string cmd, string paramFlag, string token, CancellationToken ct)
+    private async Task<IReadOnlyList<CompletionItem>> QueryParameterValueItemsAsync(string cmd, string paramFlag, string token, CancellationToken ct)
     {
         var cmdEsc = cmd.Replace("'", "''");
         var paramEsc = paramFlag.TrimStart('-').Replace("'", "''");
         if (paramEsc.Length == 0)
         {
-            return Array.Empty<string>();
+            return Array.Empty<CompletionItem>();
         }
 
         // ValidateSet values first, else enum names for an enum-typed parameter.
@@ -440,10 +443,34 @@ internal sealed class CompletionEngine
             $"$c = Get-Command -Name '{cmdEsc}' -ErrorAction SilentlyContinue | Select-Object -First 1; " +
             $"if ($c) {{ $p = $c.Parameters['{paramEsc}']; if ($p) {{ " +
             "$vs = $p.Attributes | Where-Object { $_ -is [System.Management.Automation.ValidateSetAttribute] } | Select-Object -First 1; " +
-            "if ($vs) { $vs.ValidValues } elseif ($p.ParameterType -and $p.ParameterType.IsEnum) { [System.Enum]::GetNames($p.ParameterType) } } }";
+            "if ($vs) { $vs.ValidValues | ForEach-Object { \"$($_)|ValidateSet|$($p.ParameterType.Name)\" } } " +
+            "elseif ($p.ParameterType -and $p.ParameterType.IsEnum) { [System.Enum]::GetNames($p.ParameterType) | ForEach-Object { \"$($_)|Enum|$($p.ParameterType.Name)\" } } } }";
 
         var values = await QueryLinesAsync(expr, ct).ConfigureAwait(false);
-        return values.Where(v => v.StartsWith(token, StringComparison.OrdinalIgnoreCase)).ToList();
+        return BuildParameterValueItems(values, paramFlag, token);
+    }
+
+    internal static IReadOnlyList<CompletionItem> BuildParameterValueItems(
+        IReadOnlyList<string> rows,
+        string paramFlag,
+        string token)
+    {
+        var items = new List<CompletionItem>();
+        foreach (var row in rows)
+        {
+            var parts = row.Split('|');
+            var value = parts[0].Trim();
+            if (value.Length == 0 || !value.StartsWith(token, StringComparison.OrdinalIgnoreCase))
+                continue;
+
+            var source = parts.Length > 1 ? parts[1].Trim() : string.Empty;
+            var type = parts.Length > 2 ? parts[2].Trim() : string.Empty;
+            var detail = source.Length > 0
+                ? $"{source} value for {paramFlag}{(type.Length > 0 ? " <" + type + ">" : "")}"
+                : $"value for {paramFlag}";
+            items.Add(CompletionItem.Labeled(value, $"{value}  - {detail}"));
+        }
+        return items;
     }
 
     /// <summary>Run a worker expression and return its non-empty output lines; never throws.</summary>
