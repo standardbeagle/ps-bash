@@ -128,6 +128,8 @@ if (shellArgs.ScriptPath is not null)
     {
         await using IWorker ps1Worker = await workerFactory();
 
+        if (compactOutput)
+            Environment.SetEnvironmentVariable("PSBASH_COMPACT_COMMAND", $"{shellArgs.ScriptPath} {string.Join(' ', shellArgs.ScriptArgs)}");
         var ps1Preamble = BuildPositionalPreamble(shellArgs.ScriptPath, shellArgs.ScriptArgs);
         var escapedPath = shellArgs.ScriptPath.Replace("'", "''");
         return await ps1Worker.ExecuteAsync(BuildInvocationCwdPreamble() + ps1Preamble + ". '" + escapedPath + "'");
@@ -149,6 +151,8 @@ if (shellArgs.ScriptPath is not null)
 
     await using IWorker scriptWorker = await workerFactory();
 
+    if (compactOutput)
+        Environment.SetEnvironmentVariable("PSBASH_COMPACT_COMMAND", $"{shellArgs.ScriptPath} {string.Join(' ', shellArgs.ScriptArgs)}");
     var preamble = BuildPositionalPreamble(shellArgs.ScriptPath, shellArgs.ScriptArgs);
     return await scriptWorker.ExecuteAsync(BuildInvocationCwdPreamble() + preamble + pwshScriptCommand);
 }
@@ -244,6 +248,8 @@ JobObjectWatchdog.StartParentDeathWatcher(parentPid);
 // follows the same ExpandAliases → Transpile → worker.ExecuteAsync sequence
 // as the interactive loop, so future alias wiring stays unified.
 var bashCommand = shellArgs.Command;
+if (compactOutput)
+    Environment.SetEnvironmentVariable("PSBASH_COMPACT_COMMAND", bashCommand);
 
 string? pwshCommand;
 if (shellArgs.RawPowerShell)

@@ -153,6 +153,10 @@ behavior is unchanged. An explicit CLI flag wins over the environment, so
 environment variable is set. `--caveman` and `--wenyan` are accepted aliases for
 the same opt-in mode.
 
+When enabled, ps-bash keeps command identity, exit code, timeout status, stream
+labels, stderr presence, file/line diagnostics, and useful tail context while
+collapsing repeated lines and verbose progress/listing noise.
+
 ```powershell
 ps-bash --compact-output -c "dotnet test"
 $env:PSBASH_COMPACT_OUTPUT = '1'

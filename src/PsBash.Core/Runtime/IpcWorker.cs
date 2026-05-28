@@ -522,6 +522,9 @@ public sealed class IpcWorker : IWorker
         bool unbounded = idleTimeout <= TimeSpan.Zero;
         using var timeoutCts = new CancellationTokenSource();
         using var linked = CancellationTokenSource.CreateLinkedTokenSource(ct, timeoutCts.Token);
+        var compactOutput = IsTruthyEnv("PSBASH_COMPACT_OUTPUT");
+        var compactFrames = compactOutput ? new List<OutputFrame>() : null;
+        var command = CommandLabel(mode);
 
         void ArmIdle()
         {
@@ -558,16 +561,23 @@ public sealed class IpcWorker : IWorker
             {
                 await HostProtocol.WriteRequestAsync(stream, mode, linked.Token).ConfigureAwait(false);
                 ArmIdle(); // reset: now waiting for the first response frame
+
                 // REFACTOR-4: route each response frame by its stream tag. STDOUT
                 // frames go to OutputCallback (or Console.Out when no callback is
                 // set); STDERR frames always go to Console.Error — they are never
                 // folded into OutputCallback so QueryAsync's collected result and
                 // the launcher's stdout stay free of diagnostic text.
-                return await HostProtocol.ReadResponseAsync(
+                var exitCode = await HostProtocol.ReadResponseAsync(
                     stream,
                     (line, tag) =>
                     {
                         ArmIdle(); // each frame is activity — push the idle deadline out
+                        if (compactFrames is not null)
+                        {
+                            compactFrames.Add(new OutputFrame(tag, line));
+                            return;
+                        }
+
                         if (tag == StreamTag.Stderr)
                         {
                             Console.Error.Write(line.EndsWith('\n') ? line : line + "\n");
@@ -577,6 +587,13 @@ public sealed class IpcWorker : IWorker
                         else Console.Write(line);
                     },
                     linked.Token).ConfigureAwait(false);
+
+                if (compactFrames is not null)
+                {
+                    EmitCompactedOutput(command, exitCode, timedOut: false, compactFrames);
+                }
+
+                return exitCode;
             }
         }
         catch (OperationCanceledException) when (timeoutCts.IsCancellationRequested && !ct.IsCancellationRequested)
@@ -588,6 +605,8 @@ public sealed class IpcWorker : IWorker
             // the host if a re-probe confirms it is genuinely wedged rather than
             // merely busy with a long-running command.
             await RetireIfUnresponsiveAsync().ConfigureAwait(false);
+            if (compactFrames is not null)
+                EmitCompactedOutput(command, 124, timedOut: true, compactFrames);
             throw new TimeoutException(
                 $"ps-bash: no output from host for {idleTimeout.TotalSeconds:0.##}s (idle timeout). " +
                 "Raise it with --timeout <seconds> / PSBASH_TIMEOUT, or --timeout none to disable.");
@@ -683,6 +702,37 @@ public sealed class IpcWorker : IWorker
         if (int.TryParse(envValue, out var seconds))
             return seconds > 0 ? TimeSpan.FromSeconds(seconds) : TimeSpan.Zero;
         return TimeSpan.FromSeconds(120);
+    }
+
+    private static bool IsTruthyEnv(string name)
+    {
+        var value = Environment.GetEnvironmentVariable(name)?.Trim();
+        return value is not null
+            && (value.Equals("1", StringComparison.OrdinalIgnoreCase)
+                || value.Equals("true", StringComparison.OrdinalIgnoreCase)
+                || value.Equals("yes", StringComparison.OrdinalIgnoreCase)
+                || value.Equals("on", StringComparison.OrdinalIgnoreCase));
+    }
+
+    private static string CommandLabel(Mode mode)
+    {
+        var original = Environment.GetEnvironmentVariable("PSBASH_COMPACT_COMMAND");
+        if (!string.IsNullOrWhiteSpace(original)) return original;
+
+        return mode switch
+        {
+            Mode.Command c => c.Body,
+            Mode.Stdin s => s.Body,
+            Mode.Script s => $"{s.Path} {string.Join(' ', s.Argv)}",
+            _ => mode.GetType().Name,
+        };
+    }
+
+    private void EmitCompactedOutput(string command, int exitCode, bool timedOut, IReadOnlyList<OutputFrame> frames)
+    {
+        var compacted = OutputCompactor.CompactCommandOutput(command, exitCode, timedOut, frames);
+        if (OutputCallback is { } cb) cb(compacted);
+        else Console.Write(compacted);
     }
 
     public static string GetHostBinaryName()

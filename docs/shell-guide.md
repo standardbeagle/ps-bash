@@ -102,6 +102,11 @@ The resolved value is propagated to the host as `PSBASH_COMPACT_OUTPUT=1` or
 `0`, so later output-rendering stages only need to read one setting. Defaults
 are unchanged when neither flag nor environment variable is present.
 
+With compact mode on, command output is summarized with the command identity,
+exit code, timeout status, stdout/stderr line counts, stream labels, stderr and
+file/line diagnostics, and tail context. Repeated lines and low-value progress
+or listing noise are collapsed to reduce token volume.
+
 ```powershell
 ps-bash --compact-output -c "dotnet test"
 $env:PSBASH_COMPACT_OUTPUT = '1'
