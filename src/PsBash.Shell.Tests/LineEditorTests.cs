@@ -99,7 +99,7 @@ public class LineEditorCommandAssistTests
         var result = LineEditor.ApplyCommandAssistResponse(
             "git st",
             cursor: 6,
-            CommandAssistResponse.ReplaceWith("git status --short"));
+            CommandAssistResponse.Insert("git status --short"));
 
         Assert.Equal("git status --short", result.Buffer);
         Assert.Equal("git status --short".Length, result.Cursor);

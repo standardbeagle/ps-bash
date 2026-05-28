@@ -78,7 +78,7 @@ public static class InteractiveShell
             aliases: AliasExpander.Aliases,
             flagHintProvider: (line, cursor, ct) => completionEngine.GetFlagHintsAsync(line, cursor, ct),
             commandAssist: (request, ct) => commandAssistRunner is not null
-                ? commandAssistRunner.RunAsync(request, _lastDir, ct)
+                ? RunCommandAssistWithReviewAsync(commandAssistRunner, request, _lastDir, ct)
                 : throw new CommandAssistProviderException(commandAssistConfigError ?? "AI provider config is unavailable."));
 
         if (!noProfile)
@@ -1137,6 +1137,91 @@ EnsureConsoleInputRestored();
 
     /// <summary>Forwards to <see cref="AliasExpander.ExpandAliases"/> (alias logic lives there).</summary>
     public static string ExpandAliases(string input) => AliasExpander.ExpandAliases(input);
+
+    private static async Task<CommandAssistResponse> RunCommandAssistWithReviewAsync(
+        CommandAssistProviderRunner runner,
+        CommandAssistRequest request,
+        string cwd,
+        CancellationToken ct)
+    {
+        string? providerName = null;
+        while (true)
+        {
+            var result = await runner.GenerateAsync(request, cwd, providerName, ct).ConfigureAwait(false);
+            var review = result.ToReviewRequest(cwd);
+            var decision = PromptCommandAssistReview(review);
+            if (decision.Action == CommandAssistReviewAction.Retry)
+                continue;
+            if (decision.Action == CommandAssistReviewAction.SwitchProvider)
+            {
+                providerName = PromptCommandAssistProviderName(runner.ProviderNames);
+                if (providerName is not null)
+                    continue;
+                return CommandAssistResponse.Cancelled;
+            }
+            return CommandAssistReview.ApplyDecision(review, decision);
+        }
+    }
+
+    internal static CommandAssistReviewDecision PromptCommandAssistReview(CommandAssistReviewRequest request)
+    {
+        Console.WriteLine("ps-bash command assist");
+        Console.WriteLine($"provider: {request.ProviderName}");
+        Console.WriteLine($"cwd: {request.Cwd}");
+        if (!string.IsNullOrWhiteSpace(request.Explanation))
+            Console.WriteLine($"explanation: {request.Explanation}");
+        Console.WriteLine("command:");
+        Console.WriteLine(request.Command);
+        if (request.Warnings.Count > 0)
+        {
+            Console.WriteLine("warning: potentially destructive command");
+            foreach (var warning in request.Warnings)
+                Console.WriteLine($"- {warning.Pattern}: {warning.Reason}");
+        }
+        Console.Write("Action [e]xecute, [i]nsert/edit, [r]etry, [s]witch provider, [c]ancel: ");
+        var action = Console.ReadLine()?.Trim().ToLowerInvariant();
+        return action switch
+        {
+            "e" or "execute" when request.Warnings.Count == 0 => CommandAssistReviewDecision.Execute(),
+            "e" or "execute" => ConfirmDangerousCommand(),
+            "i" or "insert" or "edit" => CommandAssistReviewDecision.Insert(),
+            "r" or "retry" => CommandAssistReviewDecision.Retry(),
+            "s" or "switch" => CommandAssistReviewDecision.SwitchProvider(),
+            _ => CommandAssistReviewDecision.Cancel(),
+        };
+    }
+
+    private static CommandAssistReviewDecision ConfirmDangerousCommand()
+    {
+        Console.Write("Type EXECUTE to confirm the dangerous command: ");
+        var confirm = Console.ReadLine()?.Trim();
+        return string.Equals(confirm, "EXECUTE", StringComparison.Ordinal)
+            ? CommandAssistReviewDecision.Execute(dangerousConfirmed: true)
+            : CommandAssistReviewDecision.Cancel();
+    }
+
+    private static string? PromptCommandAssistProviderName(IReadOnlyList<string> providerNames)
+    {
+        if (providerNames.Count == 0)
+        {
+            Console.WriteLine("ps-bash: no AI providers are configured.");
+            return null;
+        }
+
+        Console.WriteLine("configured providers:");
+        foreach (var name in providerNames)
+            Console.WriteLine($"- {name}");
+        Console.Write("Provider name, or empty to cancel: ");
+        return SelectCommandAssistProvider(providerNames, Console.ReadLine());
+    }
+
+    internal static string? SelectCommandAssistProvider(IReadOnlyList<string> providerNames, string? input)
+    {
+        var requested = input?.Trim();
+        if (string.IsNullOrWhiteSpace(requested))
+            return null;
+        return providerNames.FirstOrDefault(name => string.Equals(name, requested, StringComparison.OrdinalIgnoreCase));
+    }
 
     private static bool IsExitCommand(string input, out int exitCode)
     {

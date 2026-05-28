@@ -158,6 +158,13 @@ Provider processes inherit the shell environment by default. Entries in
 failures, missing executables, nonzero exits, and timeouts are reported at the
 prompt and the original line is restored.
 
+Provider output is never executed immediately. ps-bash shows the provider name,
+current directory, generated command, and any explanation before asking for an
+action: execute, insert/edit, retry, switch provider, or cancel. Commands that
+match destructive patterns such as recursive delete, forced git operations,
+forced overwrite redirects, privilege escalation, package installation, or
+network-to-shell pipelines require an additional `EXECUTE` confirmation.
+
 ```powershell
 ps-bash --compact-output -c "dotnet test"
 $env:PSBASH_COMPACT_OUTPUT = '1'

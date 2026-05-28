@@ -248,7 +248,13 @@ internal sealed class LineEditor
             // commits or corrupts the user's in-progress command.
             if (IsCommandAssistKey(key))
             {
-                await HandleCommandAssistAsync(CancellationToken.None);
+                var assistedCommand = await HandleCommandAssistAsync(CancellationToken.None);
+                if (assistedCommand is not null)
+                {
+                    Console.WriteLine();
+                    AddToHistory(assistedCommand);
+                    return assistedCommand;
+                }
                 continue;
             }
 
@@ -1245,12 +1251,12 @@ internal sealed class LineEditor
         int cursor,
         CommandAssistResponse response)
     {
-        if (!response.Apply || response.Replacement is null)
+        if (response.Action == CommandAssistResponseAction.Cancel || response.Command is null)
             return (buffer, cursor);
-        return (response.Replacement, response.Replacement.Length);
+        return (response.Command, response.Command.Length);
     }
 
-    private async Task HandleCommandAssistAsync(CancellationToken ct)
+    private async Task<string?> HandleCommandAssistAsync(CancellationToken ct)
     {
         var originalBuffer = _buf.ToString();
         var originalCursor = _cursor;
@@ -1269,33 +1275,51 @@ internal sealed class LineEditor
             {
                 Console.WriteLine("ps-bash: command assist is not configured; returning to prompt.");
                 RestoreBuffer(originalBuffer, originalCursor);
-                return;
+                return null;
             }
 
             var response = await _commandAssist(
                 new CommandAssistRequest(originalBuffer, originalCursor),
                 ct).ConfigureAwait(false);
+            if (response.Action == CommandAssistResponseAction.Execute && response.Command is { Length: > 0 } command)
+            {
+                RestoreBuffer(command, command.Length);
+                return command;
+            }
+
             var (buffer, cursor) = ApplyCommandAssistResponse(originalBuffer, originalCursor, response);
             RestoreBuffer(buffer, cursor);
+            return null;
         }
         catch (OperationCanceledException)
         {
             RestoreBuffer(originalBuffer, originalCursor);
+            return null;
         }
         catch (Exception ex)
         {
             Console.Error.WriteLine($"ps-bash: command assist failed: {ex.Message}");
             RestoreBuffer(originalBuffer, originalCursor);
+            return null;
         }
     }
 }
 
 internal readonly record struct CommandAssistRequest(string Buffer, int Cursor);
 
-internal readonly record struct CommandAssistResponse(bool Apply, string? Replacement)
+internal enum CommandAssistResponseAction
 {
-    public static CommandAssistResponse Cancelled { get; } = new(false, null);
-    public static CommandAssistResponse ReplaceWith(string replacement) => new(true, replacement);
+    Cancel,
+    Insert,
+    Execute,
+}
+
+internal readonly record struct CommandAssistResponse(CommandAssistResponseAction Action, string? Command)
+{
+    public static CommandAssistResponse Cancelled { get; } = new(CommandAssistResponseAction.Cancel, null);
+    public static CommandAssistResponse Insert(string command) => new(CommandAssistResponseAction.Insert, command);
+    public static CommandAssistResponse Execute(string command) => new(CommandAssistResponseAction.Execute, command);
+    public static CommandAssistResponse ReplaceWith(string replacement) => Insert(replacement);
 }
 
 /// <summary>

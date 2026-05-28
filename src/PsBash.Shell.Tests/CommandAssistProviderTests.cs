@@ -113,4 +113,115 @@ public sealed class CommandAssistProviderTests
             try { File.Delete(path); } catch { }
         }
     }
+
+    [Fact]
+    public void Resolve_UsesRequestedProviderForSwitchFlow()
+    {
+        var config = new CommandAssistConfig
+        {
+            DefaultProvider = "first",
+            Providers =
+            [
+                new CommandAssistProviderConfig { Name = "first", Executable = "first-ai" },
+                new CommandAssistProviderConfig { Name = "second", Executable = "second-ai" },
+            ],
+        };
+
+        var provider = config.Resolve("second");
+
+        Assert.Equal("second", provider.Name);
+        Assert.Equal("second-ai", provider.Executable);
+        Assert.Equal(["{{prompt}}"], provider.Args);
+    }
+
+    [Fact]
+    public void ProviderNames_ReturnsConfiguredProviderNames()
+    {
+        var config = new CommandAssistConfig
+        {
+            Providers =
+            [
+                new CommandAssistProviderConfig { Name = "claude", Executable = "claude" },
+                new CommandAssistProviderConfig { Name = "mock", Executable = "mock-ai" },
+            ],
+        };
+
+        Assert.Equal(["claude", "mock"], config.ProviderNames());
+    }
+}
+
+public sealed class CommandAssistReviewTests
+{
+    [Fact]
+    public void SafetyClassify_FlagsDestructiveCommands()
+    {
+        var warnings = CommandAssistSafety.Classify("git reset --hard && rm -rf bin");
+
+        Assert.Contains(warnings, w => w.Pattern == "git force/reset");
+        Assert.Contains(warnings, w => w.Pattern == "rm");
+    }
+
+    [Fact]
+    public void ApplyDecision_CancelDoesNotReturnCommand()
+    {
+        var request = ReviewRequest("echo safe");
+
+        var response = CommandAssistReview.ApplyDecision(request, CommandAssistReviewDecision.Cancel());
+
+        Assert.Equal(CommandAssistResponseAction.Cancel, response.Action);
+        Assert.Null(response.Command);
+    }
+
+    [Fact]
+    public void ApplyDecision_InsertReturnsInsertOnlyCommand()
+    {
+        var request = ReviewRequest("echo safe");
+
+        var response = CommandAssistReview.ApplyDecision(request, CommandAssistReviewDecision.Insert());
+
+        Assert.Equal(CommandAssistResponseAction.Insert, response.Action);
+        Assert.Equal("echo safe", response.Command);
+    }
+
+    [Fact]
+    public void ApplyDecision_ExecuteSafeCommandReturnsExecutableCommand()
+    {
+        var request = ReviewRequest("echo safe");
+
+        var response = CommandAssistReview.ApplyDecision(request, CommandAssistReviewDecision.Execute());
+
+        Assert.Equal(CommandAssistResponseAction.Execute, response.Action);
+        Assert.Equal("echo safe", response.Command);
+    }
+
+    [Fact]
+    public void ApplyDecision_DangerousCommandRequiresExtraConfirmation()
+    {
+        var request = ReviewRequest("rm -rf bin");
+
+        var denied = CommandAssistReview.ApplyDecision(request, CommandAssistReviewDecision.Execute());
+        var allowed = CommandAssistReview.ApplyDecision(request, CommandAssistReviewDecision.Execute(dangerousConfirmed: true));
+
+        Assert.Equal(CommandAssistResponseAction.Cancel, denied.Action);
+        Assert.Equal(CommandAssistResponseAction.Execute, allowed.Action);
+        Assert.Equal("rm -rf bin", allowed.Command);
+    }
+
+    [Fact]
+    public void SelectCommandAssistProvider_MatchesConfiguredNameCaseInsensitively()
+    {
+        var selected = InteractiveShell.SelectCommandAssistProvider(["claude", "mock"], "MOCK");
+
+        Assert.Equal("mock", selected);
+    }
+
+    [Fact]
+    public void SelectCommandAssistProvider_UnknownOrEmptyCancelsSwitch()
+    {
+        Assert.Null(InteractiveShell.SelectCommandAssistProvider(["claude"], "unknown"));
+        Assert.Null(InteractiveShell.SelectCommandAssistProvider(["claude"], ""));
+    }
+
+    private static CommandAssistReviewRequest ReviewRequest(string command)
+        => new("mock", command, "", @"C:\repo", CommandAssistSafety.Classify(command));
 }

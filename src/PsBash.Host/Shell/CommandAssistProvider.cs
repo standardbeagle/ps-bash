@@ -44,13 +44,20 @@ internal sealed record CommandAssistConfig
     }
 
     public CommandAssistProviderConfig ResolveDefault()
+        => Resolve(null);
+
+    public CommandAssistProviderConfig Resolve(string? providerName)
     {
         var config = Normalize();
-        var provider = config.Providers.FirstOrDefault(p => p.Name == config.DefaultProvider);
+        var name = string.IsNullOrWhiteSpace(providerName) ? config.DefaultProvider : providerName;
+        var provider = config.Providers.FirstOrDefault(p => p.Name == name);
         if (provider is null)
-            throw new CommandAssistProviderException($"AI provider '{config.DefaultProvider}' is not configured.");
+            throw new CommandAssistProviderException($"AI provider '{name}' is not configured.");
         return provider.Normalize();
     }
+
+    public IReadOnlyList<string> ProviderNames()
+        => Normalize().Providers.Select(p => p.Name).Where(n => !string.IsNullOrWhiteSpace(n)).ToArray();
 }
 
 internal sealed record CommandAssistProviderConfig
@@ -102,11 +109,32 @@ internal sealed record CommandAssistProviderConfig
 
 internal sealed class CommandAssistProviderException(string message) : Exception(message);
 
+internal sealed record CommandAssistProviderResult(string ProviderName, string Command, string Explanation)
+{
+    public CommandAssistReviewRequest ToReviewRequest(string cwd)
+        => new(ProviderName, Command, Explanation, cwd, CommandAssistSafety.Classify(Command));
+}
+
 internal sealed class CommandAssistProviderRunner(CommandAssistConfig config)
 {
+    public IReadOnlyList<string> ProviderNames => config.ProviderNames();
+
     public async Task<CommandAssistResponse> RunAsync(CommandAssistRequest request, string cwd, CancellationToken ct)
     {
-        var provider = config.ResolveDefault();
+        var result = await GenerateAsync(request, cwd, ct).ConfigureAwait(false);
+        return CommandAssistResponse.Insert(result.ToReviewRequest(cwd).Command);
+    }
+
+    public async Task<CommandAssistProviderResult> GenerateAsync(CommandAssistRequest request, string cwd, CancellationToken ct)
+        => await GenerateAsync(request, cwd, providerName: null, ct).ConfigureAwait(false);
+
+    public async Task<CommandAssistProviderResult> GenerateAsync(
+        CommandAssistRequest request,
+        string cwd,
+        string? providerName,
+        CancellationToken ct)
+    {
+        var provider = config.Resolve(providerName);
         var prompt = RenderTemplate(provider.PromptTemplate, request, cwd);
         var psi = new ProcessStartInfo
         {
@@ -170,7 +198,7 @@ internal sealed class CommandAssistProviderRunner(CommandAssistConfig config)
         var command = NormalizeProviderOutput(stdout);
         if (command.Length == 0)
             throw new CommandAssistProviderException($"AI provider '{provider.Name}' returned no command.");
-        return CommandAssistResponse.ReplaceWith(command);
+        return new CommandAssistProviderResult(provider.Name, command, "");
     }
 
     internal static string RenderTemplate(string template, CommandAssistRequest request, string cwd)
