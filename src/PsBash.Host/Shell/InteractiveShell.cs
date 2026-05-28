@@ -63,7 +63,11 @@ public static class InteractiveShell
             worker: worker);
         CommandAssistProviderRunner? commandAssistRunner = null;
         string? commandAssistConfigError = null;
-        try
+        if (Environment.GetEnvironmentVariable("PSBASH_AI_DISABLE") == "1")
+        {
+            commandAssistConfigError = "command assist is disabled by PSBASH_AI_DISABLE=1.";
+        }
+        else try
         {
             commandAssistRunner = new CommandAssistProviderRunner(CommandAssistConfig.Load());
         }

@@ -130,8 +130,8 @@ interactive sessions.
 
 Ctrl+~ opens command assist in the interactive editor. By default ps-bash uses
 `claude -p "{{prompt}}"` as the provider. The prompt includes the current line,
-cursor position, and working directory; the provider response replaces the line
-buffer but does not execute until Enter is pressed.
+cursor position, working directory, shell name, and OS. Provider output is
+shown for review and is never executed directly from the provider process.
 
 Provider configuration is loaded from `PSBASH_AI_CONFIG` when set, otherwise
 from `$PSBASH_HOME/.psbash/ai-providers.json` or `~/.psbash/ai-providers.json`.
@@ -147,7 +147,7 @@ Multiple providers can be declared and selected with `defaultProvider`:
       "args": ["-p", "{{prompt}}"],
       "timeoutMs": 30000,
       "outputLimit": 8192,
-      "promptTemplate": "Current line: {{buffer}}\nCursor: {{cursor}}\nWorking directory: {{cwd}}\nReturn only the command."
+      "promptTemplate": "Context:\n- input: {{buffer}}\n- cursor: {{cursor}}\n- cwd: {{cwd}}\n- shell: {{shell}}\n- OS: {{os}}\n\nReturn compact JSON only: {\"command\":\"single bash command or empty\",\"explanation\":\"why\",\"refusal\":\"optional\",\"clarification\":\"optional\",\"plan\":[\"optional steps\"]}"
     }
   ]
 }
@@ -158,12 +158,35 @@ Provider processes inherit the shell environment by default. Entries in
 failures, missing executables, nonzero exits, and timeouts are reported at the
 prompt and the original line is restored.
 
-Provider output is never executed immediately. ps-bash shows the provider name,
-current directory, generated command, and any explanation before asking for an
-action: execute, insert/edit, retry, switch provider, or cancel. Commands that
-match destructive patterns such as recursive delete, forced git operations,
-forced overwrite redirects, privilege escalation, package installation, or
-network-to-shell pipelines require an additional `EXECUTE` confirmation.
+The default contract prefers compact JSON with `command`, `explanation`,
+`refusal`, `clarification`, and `plan` fields. A structured response with a
+non-empty `command` is treated as an executable suggestion. Refusals,
+clarifications, plans, malformed JSON, and multi-line explanatory plain text are
+shown as review-only text: they can be inserted for editing but cannot be run
+with the execute action. Single-line plain text is accepted for compatibility
+with simple providers.
+
+ps-bash shows the provider name, current directory, generated text, and any
+explanation before asking for an action: execute, insert/edit, retry, switch
+provider, or cancel. Commands that match destructive patterns such as recursive
+delete, forced git operations, forced overwrite redirects, privilege
+escalation, package installation, or network-to-shell pipelines require an
+additional `EXECUTE` confirmation.
+
+To disable command assist, set `PSBASH_AI_DISABLE=1`; the hotkey will report
+that the feature is disabled and restore the original line. Ctrl+~ and Ctrl+^
+are both accepted because terminals commonly encode Ctrl+~ as the same control
+character. To change providers, set `defaultProvider` in the config or choose
+switch provider from the review prompt.
+
+Troubleshooting:
+
+- Missing provider executable: install the CLI or set `executable` to an
+  absolute path.
+- Slow provider: reduce `timeoutMs` or use a faster local provider.
+- Truncated answer: increase `outputLimit`.
+- Unexpected non-executable review text: return structured JSON with a non-empty
+  `command` field.
 
 ```powershell
 ps-bash --compact-output -c "dotnet test"

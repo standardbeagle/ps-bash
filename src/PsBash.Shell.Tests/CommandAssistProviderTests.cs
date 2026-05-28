@@ -105,7 +105,7 @@ public sealed class CommandAssistProviderTests
             Assert.Equal("mock-ai", provider.Executable);
             Assert.Equal(["--ask", "{{prompt}}"], provider.Args);
             Assert.Equal(5000, provider.TimeoutMs);
-        Assert.Equal(2048, provider.OutputLimit);
+            Assert.Equal(2048, provider.OutputLimit);
         }
         finally
         {
@@ -225,6 +225,53 @@ public sealed class CommandAssistProviderTests
 
         Assert.False(result.IsExecutable);
         Assert.Contains("malformed JSON", result.Explanation);
+    }
+
+    [Fact]
+    public async Task GenerateAsync_FakeProviderExercisesInvocationAndStructuredParsing()
+    {
+        var outputPath = Path.Combine(Path.GetTempPath(), "psbash-ai-output-" + Guid.NewGuid().ToString("N") + ".json");
+        File.WriteAllText(outputPath, """{"command":"git status --short","explanation":"fake provider"}""");
+        try
+        {
+            var (executable, args) = FakeProviderCat(outputPath);
+            var runner = new CommandAssistProviderRunner(new CommandAssistConfig
+            {
+                DefaultProvider = "fake",
+                Providers =
+                [
+                    new CommandAssistProviderConfig
+                    {
+                        Name = "fake",
+                        Executable = executable,
+                        Args = args,
+                        PromptTemplate = "{{buffer}}",
+                        TimeoutMs = 5000,
+                    }
+                ],
+            });
+
+            var result = await runner.GenerateAsync(
+                new CommandAssistRequest("git st", 6),
+                Environment.CurrentDirectory,
+                CancellationToken.None);
+
+            Assert.Equal("fake", result.ProviderName);
+            Assert.True(result.IsExecutable);
+            Assert.Equal("git status --short", result.Command);
+            Assert.Equal("fake provider", result.Explanation);
+        }
+        finally
+        {
+            try { File.Delete(outputPath); } catch { }
+        }
+    }
+
+    private static (string Executable, List<string> Args) FakeProviderCat(string path)
+    {
+        if (OperatingSystem.IsWindows())
+            return ("cmd.exe", ["/c", "type", path]);
+        return ("/bin/cat", [path]);
     }
 }
 
