@@ -12,7 +12,8 @@ public record ShellArgs(
     bool RawPowerShell = false,
     bool ShowVersion = false,
     bool ShowHelp = false,
-    string? Timeout = null)
+    string? Timeout = null,
+    bool? CompactOutput = null)
 {
     // Bash-compatible short flags ps-bash recognizes. Used to expand bundled
     // forms like `-lc` and to let `-c` skip past intervening flags when callers
@@ -24,7 +25,7 @@ public record ShellArgs(
     // command argument when callers pass flags after `-c`.
     private static readonly HashSet<string> KnownValuelessLongFlags = new()
     {
-        "--login", "--noprofile", "--norc"
+        "--login", "--noprofile", "--norc", "--compact-output", "--no-compact-output", "--caveman", "--wenyan"
     };
 
     public static ShellArgs Parse(string[] args)
@@ -40,6 +41,7 @@ public record ShellArgs(
         bool rawPs = false;
         bool showVersion = false;
         bool showHelp = false;
+        bool? compactOutput = null;
         bool endOfOptions = false;
         string? scriptPath = null;
         string[] scriptArgs = [];
@@ -83,7 +85,7 @@ public record ShellArgs(
                     int j = i + 1;
                     while (j < expanded.Count && IsKnownValuelessFlag(expanded[j]))
                     {
-                        ApplyValuelessFlag(expanded[j], ref interactive, ref login, ref stdin, ref noprofile);
+                        ApplyValuelessFlag(expanded[j], ref interactive, ref login, ref stdin, ref noprofile, ref compactOutput);
                         j++;
                     }
                     if (j < expanded.Count)
@@ -111,6 +113,14 @@ public record ShellArgs(
                     break;
                 case "--windows-paths":
                     unixPaths = false;
+                    break;
+                case "--compact-output":
+                case "--caveman":
+                case "--wenyan":
+                    compactOutput = true;
+                    break;
+                case "--no-compact-output":
+                    compactOutput = false;
                     break;
                 // PTY-9 follow-on: raw PowerShell passthrough. When set, the
                 // -c argument / stdin / script body is forwarded to the host
@@ -153,7 +163,7 @@ public record ShellArgs(
             }
         }
 
-        return new ShellArgs(command, interactive, login, stdin, noprofile, unixPaths, scriptPath, scriptArgs, rawPs, showVersion, showHelp, timeout);
+        return new ShellArgs(command, interactive, login, stdin, noprofile, unixPaths, scriptPath, scriptArgs, rawPs, showVersion, showHelp, timeout, compactOutput);
     }
 
     // Expands `-lc` -> `-l`, `-c`. Single-char flags (`-c`, `-l`) and long
@@ -185,7 +195,12 @@ public record ShellArgs(
         => arg is "-l" or "-i" or "-s" || KnownValuelessLongFlags.Contains(arg);
 
     private static void ApplyValuelessFlag(
-        string flag, ref bool interactive, ref bool login, ref bool stdin, ref bool noprofile)
+        string flag,
+        ref bool interactive,
+        ref bool login,
+        ref bool stdin,
+        ref bool noprofile,
+        ref bool? compactOutput)
     {
         switch (flag)
         {
@@ -199,6 +214,12 @@ public record ShellArgs(
             case "--noprofile":
             case "--norc":
                 noprofile = true; break;
+            case "--compact-output":
+            case "--caveman":
+            case "--wenyan":
+                compactOutput = true; break;
+            case "--no-compact-output":
+                compactOutput = false; break;
         }
     }
 }

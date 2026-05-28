@@ -421,6 +421,50 @@ public class ShellArgsTests
         Assert.False(result.ShowHelp);
     }
 
+    [Fact]
+    public void Parse_CompactOutputFlag_SetsTrue()
+    {
+        var result = ShellArgs.Parse(["--compact-output", "-c", "echo hi"]);
+
+        Assert.True(result.CompactOutput);
+        Assert.Equal("echo hi", result.Command);
+    }
+
+    [Theory]
+    [InlineData("--caveman")]
+    [InlineData("--wenyan")]
+    public void Parse_CompactOutputAliases_SetTrue(string flag)
+    {
+        var result = ShellArgs.Parse([flag, "-c", "echo hi"]);
+
+        Assert.True(result.CompactOutput);
+    }
+
+    [Fact]
+    public void Parse_NoCompactOutputFlag_SetsFalse()
+    {
+        var result = ShellArgs.Parse(["--no-compact-output", "-c", "echo hi"]);
+
+        Assert.False(result.CompactOutput);
+    }
+
+    [Fact]
+    public void Parse_NoCompactOutputFlag_LeavesNull()
+    {
+        var result = ShellArgs.Parse(["-c", "echo hi"]);
+
+        Assert.Null(result.CompactOutput);
+    }
+
+    [Fact]
+    public void Parse_CommandThenCompactOutput_SkipsFlagAndTakesRealCommand()
+    {
+        var result = ShellArgs.Parse(["-c", "--compact-output", "echo hi"]);
+
+        Assert.True(result.CompactOutput);
+        Assert.Equal("echo hi", result.Command);
+    }
+
     // A literal `--version` passed as the -c command body must remain the
     // command — only a top-level `--version` flag flips ShowVersion.
     [Fact]

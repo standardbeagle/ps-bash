@@ -64,6 +64,10 @@ if (shellArgs.ShowHelp)
     Console.WriteLine("                    Resets on each line of output, so a command that");
     Console.WriteLine("                    keeps producing output is never killed for being");
     Console.WriteLine("                    slow. Use 'none' (or 0) to disable entirely.");
+    Console.WriteLine("  --compact-output  Enable opt-in compact output mode for agent contexts.");
+    Console.WriteLine("                    Equivalent env: PSBASH_COMPACT_OUTPUT=1.");
+    Console.WriteLine("  --no-compact-output");
+    Console.WriteLine("                    Disable compact output even when the env var is set.");
     Console.WriteLine("  --version, -V     Print the ps-bash version and exit.");
     Console.WriteLine("  --help            Print this help and exit.");
     return 0;
@@ -83,6 +87,13 @@ Environment.SetEnvironmentVariable("PSBASH_UNIX_PATHS", unixPaths ? "1" : "0");
 // var so a caller can override the ambient default per-command.
 if (shellArgs.Timeout is { Length: > 0 } timeoutValue)
     Environment.SetEnvironmentVariable("PSBASH_TIMEOUT", timeoutValue);
+
+// Compact output is opt-in. The CLI flag wins over the environment; otherwise
+// PSBASH_COMPACT_OUTPUT can enable the same mode for callers that cannot add a
+// launcher flag. The resolved value is normalized into the environment so the
+// host/output layers can read one stable switch in later pipeline stages.
+bool compactOutput = shellArgs.CompactOutput ?? IsTruthyEnv("PSBASH_COMPACT_OUTPUT");
+Environment.SetEnvironmentVariable("PSBASH_COMPACT_OUTPUT", compactOutput ? "1" : "0");
 
 // All non-interactive execution (-c, stdin pipe, script file) goes through
 // ps-bash-host over IPC. REFACTOR-7: each invocation gets its own private host
@@ -371,6 +382,16 @@ static string? ResolveHostBinary()
 
     var sxs = Path.Combine(AppContext.BaseDirectory, IpcWorker.GetHostBinaryName());
     return File.Exists(sxs) ? sxs : null;
+}
+
+static bool IsTruthyEnv(string name)
+{
+    var value = Environment.GetEnvironmentVariable(name)?.Trim();
+    return value is not null
+        && (value.Equals("1", StringComparison.OrdinalIgnoreCase)
+            || value.Equals("true", StringComparison.OrdinalIgnoreCase)
+            || value.Equals("yes", StringComparison.OrdinalIgnoreCase)
+            || value.Equals("on", StringComparison.OrdinalIgnoreCase));
 }
 
 // PTY-2: spawn ps-bash-host under a pseudo-terminal allocated by the launcher,

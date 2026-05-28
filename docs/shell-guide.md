@@ -88,6 +88,27 @@ Input
 
 **External tools** bypass the worker entirely. They get the real console — stdin, stdout, Ctrl+C, ANSI colors, raw mode, alternate screen buffer. This is why `claude`, `copilot`, and `git` work interactively.
 
+### Compact Output Mode
+
+Compact output mode is opt-in for agent contexts that need lower token volume.
+Enable it per invocation with `--compact-output`, or ambiently with
+`PSBASH_COMPACT_OUTPUT=1`. The launcher resolves precedence as:
+
+1. `--compact-output` / `--no-compact-output`
+2. `PSBASH_COMPACT_OUTPUT`
+3. default off
+
+The resolved value is propagated to the host as `PSBASH_COMPACT_OUTPUT=1` or
+`0`, so later output-rendering stages only need to read one setting. Defaults
+are unchanged when neither flag nor environment variable is present.
+
+```powershell
+ps-bash --compact-output -c "dotnet test"
+$env:PSBASH_COMPACT_OUTPUT = '1'
+ps-bash -c "git status"
+ps-bash --no-compact-output -c "git status"
+```
+
 ### Interactive pager
 
 `less` is handled as shell-adjacent pager functionality. In a real `ps-bash` interactive session, `less file` and `producer | less` delegate to native `less` when it is available on `PATH`; pipeline input is spooled to a temporary file and removed after the pager exits. Native `less` provides the MVP pager behavior: arrow keys, PgUp/PgDn, `/` search, resize handling, and `q` to quit.

@@ -143,6 +143,23 @@ Test-BashSyntax 'echo hello | wc -l'
 
 Ps-bash works as a drop-in bash replacement for AI coding agents on Windows. Agents invoke `ps-bash -c "command"` and it transpiles bash to PowerShell transparently.
 
+### Compact Output Mode
+
+Agent runs can opt into compact output mode with `--compact-output` or
+`PSBASH_COMPACT_OUTPUT=1`. The launcher normalizes the setting and passes it to
+the host/output layer as `PSBASH_COMPACT_OUTPUT=1`; without either setting,
+behavior is unchanged. An explicit CLI flag wins over the environment, so
+`--no-compact-output` disables compaction for a single invocation even when the
+environment variable is set. `--caveman` and `--wenyan` are accepted aliases for
+the same opt-in mode.
+
+```powershell
+ps-bash --compact-output -c "dotnet test"
+$env:PSBASH_COMPACT_OUTPUT = '1'
+ps-bash -c "git status"
+ps-bash --no-compact-output -c "git status"
+```
+
 ### Quick Setup for Claude Code
 
 ```powershell
