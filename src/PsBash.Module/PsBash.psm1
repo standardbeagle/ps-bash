@@ -29,8 +29,23 @@
 # for Pester / standalone `Import-Module PsBash.psd1` callers that have not
 # pre-registered.
 if (-not (Get-Command Invoke-BashBasename -CommandType Cmdlet -ErrorAction SilentlyContinue)) {
+    # Probe order matters. The Runtime.dll variants are deployed by install-local.ps1
+    # into a real PSModulePath dir and are deliberately renamed from PsBash.Cmdlets.dll
+    # so that the user's pwsh maps a file path that the dev `dotnet build` output
+    # (src/PsBash.Cmdlets/bin/...) never writes to. Without this, a live pwsh session
+    # that has Import-Module PsBash loaded holds an exclusive open on bin/Debug/...DLL
+    # and the next build fails with MSB3027 ("file is locked by"). Prefer Runtime
+    # variants whenever they exist; fall back to bin/Debug only for fresh clones
+    # that have not run install-local.ps1 yet.
     $script:__psbashCmdletsDll = @(
+        # PSModulePath layout: PsBash and PsBash.Cmdlets are sibling modules.
+        (Join-Path $PSScriptRoot '..' 'PsBash.Cmdlets' 'PsBash.Cmdlets.Runtime.dll')
+        # PSGallery layout: companion DLL bundled inside the PsBash module dir.
+        (Join-Path $PSScriptRoot 'PsBash.Cmdlets.Runtime.dll')
         (Join-Path $PSScriptRoot 'PsBash.Cmdlets.dll')
+        # Dev fallback. WARNING: loading from here LOCKS the file against
+        # subsequent dotnet builds. Run scripts/install-local.ps1 to deploy the
+        # renamed Runtime.dll above and shake the lock loose.
         (Join-Path $PSScriptRoot '..' 'PsBash.Cmdlets' 'bin' 'Debug' 'net8.0' 'PsBash.Cmdlets.dll')
         (Join-Path $PSScriptRoot '..' 'PsBash.Cmdlets' 'bin' 'Release' 'net8.0' 'PsBash.Cmdlets.dll')
         (Join-Path $PSScriptRoot '..' 'PsBash.Cmdlets' 'bin' 'Debug' 'net10.0' 'PsBash.Cmdlets.dll')

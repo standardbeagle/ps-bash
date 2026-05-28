@@ -42,7 +42,7 @@ internal sealed class CompletionEngine
     /// Compute completion candidates for the token at <paramref name="cursor"/> in
     /// <paramref name="line"/>. Never throws — completion is advisory.
     /// </summary>
-    public async Task<IReadOnlyList<string>> CompleteAsync(string line, int cursor, CancellationToken ct)
+    public async Task<IReadOnlyList<CompletionItem>> CompleteAsync(string line, int cursor, CancellationToken ct)
     {
         // Base set: the existing static/local providers (command list, flag specs, path,
         // history/sequence). This always runs and is the fallback if a live query is slow.
@@ -62,7 +62,9 @@ internal sealed class CompletionEngine
                 var spec = BashCompletionRegistry.GetCandidates(specCmd, token);
                 if (spec.Count > 0)
                 {
-                    return CompletionMerge.Append(spec, baseResults, sortSecondary: false);
+                    // Word-list entries are plain candidates (insert == label).
+                    var specItems = spec.Select(s => new CompletionItem(s)).ToList();
+                    return CompletionMerge.Append(specItems, baseResults, sortSecondary: false);
                 }
             }
         }
@@ -82,7 +84,7 @@ internal sealed class CompletionEngine
             if (token.Length >= 1 && token[0] != '-')
             {
                 var live = await QueryCommandNamesAsync(token, ct).ConfigureAwait(false);
-                baseResults = CompletionMerge.Append(baseResults, live, sortSecondary: true);
+                baseResults = CompletionMerge.Append(baseResults, AsItems(live), sortSecondary: true);
             }
 
             return baseResults;
@@ -100,7 +102,7 @@ internal sealed class CompletionEngine
             {
                 // Parameter NAME completion: -Pa<tab> -> -Path, -PathType, ...
                 var names = await QueryParameterNamesAsync(cmd, token, ct).ConfigureAwait(false);
-                baseResults = CompletionMerge.Append(names, baseResults, sortSecondary: false);
+                baseResults = CompletionMerge.Append(AsItems(names), baseResults, sortSecondary: false);
             }
             else
             {
@@ -116,12 +118,78 @@ internal sealed class CompletionEngine
                         values = await QueryParameterValuesAsync(cmd, paramFlag, token, ct).ConfigureAwait(false);
                     }
 
-                    baseResults = CompletionMerge.Append(values, baseResults, sortSecondary: false);
+                    baseResults = CompletionMerge.Append(AsItems(values), baseResults, sortSecondary: false);
                 }
             }
         }
 
         return baseResults;
+    }
+
+    // Worker/introspection queries return raw strings; command names, parameter names, and
+    // parameter values are all plain candidates (the inserted text is the list label too).
+    private static IReadOnlyList<CompletionItem> AsItems(IReadOnlyList<string> texts)
+        => texts.Count == 0 ? Array.Empty<CompletionItem>() : texts.Select(t => new CompletionItem(t)).ToList();
+
+    /// <summary>
+    /// Floating-panel parameter hints for a PowerShell cmdlet under the cursor (the type-ahead
+    /// doc panel, not Tab). Returns one <see cref="FlagHint"/> per parameter whose name starts with
+    /// the typed <c>-</c>-prefixed token, carrying its type and any ValidateSet / enum value-set
+    /// (e.g. <c>-CommonTCPPort &lt;String&gt;</c> → <c>HTTP, RDP, SMB, WINRM</c>). Returns empty for
+    /// bash commands (their flags are shown synchronously from the flag specs), at the command
+    /// position, on a non-flag token, or when no live worker is available. Never throws; bounded by
+    /// <paramref name="ct"/> (the caller passes a short deadline so typing never blocks).
+    /// </summary>
+    public async Task<IReadOnlyList<FlagHint>> GetFlagHintsAsync(string line, int cursor, CancellationToken ct)
+    {
+        if (TabCompleter.IsFirstWord(line, cursor))
+            return Array.Empty<FlagHint>();
+
+        var (beforeToken, token) = TabCompleter.SplitAtWordBoundaryQuoteAware(line, cursor);
+        if (token.Length == 0 || token[0] != '-')
+            return Array.Empty<FlagHint>();
+
+        var cmd = TabCompleter.GetCommandNameAtCursor(beforeToken, beforeToken.Length, _aliases);
+        if (cmd is null || IsBashCommand(cmd))
+            return Array.Empty<FlagHint>();
+
+        if (_worker is not { HasExited: false })
+            return Array.Empty<FlagHint>();
+
+        var prefix = token.TrimStart('-');
+        var cmdEsc = cmd.Replace("'", "''");
+        var prefixEsc = prefix.Replace("'", "''");
+
+        // For each parameter whose name starts with the prefix, emit "name|type|v1,v2,...".
+        // Value-set is a [ValidateSet] if present, else the enum names for an enum-typed parameter.
+        var expr =
+            $"$c = Get-Command -Name '{cmdEsc}' -ErrorAction SilentlyContinue | Select-Object -First 1; " +
+            "if ($c -and $c.Parameters) { $c.Parameters.GetEnumerator() | " +
+            $"Where-Object {{ $_.Key -like '{prefixEsc}*' }} | Sort-Object Key | ForEach-Object {{ " +
+            "$p = $_.Value; " +
+            "$vs = ($p.Attributes | Where-Object { $_ -is [System.Management.Automation.ValidateSetAttribute] } | Select-Object -First 1).ValidValues; " +
+            "$vals = if ($vs) { $vs -join ',' } elseif ($p.ParameterType -and $p.ParameterType.IsEnum) { [System.Enum]::GetNames($p.ParameterType) -join ',' } else { '' }; " +
+            "\"$($_.Key)|$($p.ParameterType.Name)|$vals\" } }";
+
+        var lines = await QueryLinesAsync(expr, ct).ConfigureAwait(false);
+        if (lines.Count == 0)
+            return Array.Empty<FlagHint>();
+
+        var hints = new List<FlagHint>(lines.Count);
+        foreach (var raw in lines)
+        {
+            var parts = raw.Split('|');
+            if (parts.Length < 1 || parts[0].Length == 0)
+                continue;
+            var name = parts[0];
+            var type = parts.Length > 1 ? parts[1] : string.Empty;
+            var vals = parts.Length > 2 ? parts[2] : string.Empty;
+
+            var head = type.Length > 0 ? $"-{name} <{type}>" : $"-{name}";
+            var desc = vals.Length > 0 ? vals.Replace(",", ", ") : string.Empty;
+            hints.Add(new FlagHint($"-{name}", head, desc));
+        }
+        return hints;
     }
 
     private async Task<IReadOnlyList<string>> QueryCommandNamesAsync(string token, CancellationToken ct)

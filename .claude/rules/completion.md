@@ -11,6 +11,7 @@ paths:
 
 ## INVARIANTS. DO NOT BREAK.
 
+- CANDIDATES ARE `CompletionItem(InsertText, DisplayText)`, never bare strings. Apply path inserts `InsertText`; the list shows `DisplayText`. A description/annotation goes in `DisplayText` only (use `CompletionItem.Labeled`) — NEVER glue it onto the inserted text. (The flag-completion bug: `"-name  - name pattern"` got typed into the buffer because candidate = display = insert.)
 - ALL completion logic behind `CompletionEngine`. Providers compose there. `LineEditor` stays dumb (calls one async completer).
 - EVERY runspace call bounded by the passed `CancellationToken`. Tab MUST NEVER hang. On timeout/cancel/throw → return the static base set. Completion is advisory; never throw.
 - ONE flag-spec source: `PsBash.Module/BashFlagSpecs.json`. Host embeds it (resource name `PsBash.Host.Resources.FlagSpecs.json` → `FlagSpecs.cs`); psm1 loads it from the module dir. NEVER reintroduce a second flag-spec table.

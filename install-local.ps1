@@ -68,3 +68,113 @@ Copy-Item "$publishDir\*" "$destDir\" -Force -Recurse
 Remove-Item "$env:TEMP\ps-bash\module-*" -Recurse -Force -ErrorAction SilentlyContinue
 
 Write-Host "Deployed ps-bash to $destDir\ps-bash.exe" -ForegroundColor Green
+
+# ---------------------------------------------------------------------------
+# Module install to PSModulePath
+# ---------------------------------------------------------------------------
+# Why: `Import-Module PsBash` in plain pwsh used to require hand-junctioning
+# the source tree (Documents\PowerShell\Modules\PsBash → src\PsBash.Module,
+# \PsBash.Cmdlets → src\PsBash.Cmdlets\bin\Debug\net8.0). The junctions made
+# `dotnet build` collide with the live pwsh's file-mapped PsBash.Cmdlets.dll
+# (MSB3027 "file is locked"), so every test session that started with a pwsh
+# open hit a build wall.
+#
+# Fix: copy (not junction) into PSModulePath, and RENAME the binary cmdlet
+# DLL to PsBash.Cmdlets.Runtime.dll. The user's pwsh now maps a path that
+# `dotnet build` never writes to, so rebuilds stop racing the live process.
+# psm1's probe loop (see PsBash.psm1) prefers the Runtime.dll variant.
+
+$documentsDir = [Environment]::GetFolderPath('MyDocuments')
+$moduleRoot   = Join-Path $documentsDir 'PowerShell\Modules'
+$psBashDir    = Join-Path $moduleRoot   'PsBash'
+$cmdletsDir   = Join-Path $moduleRoot   'PsBash.Cmdlets'
+
+function Ensure-RealDirectory($dir) {
+    $item = Get-Item -LiteralPath $dir -Force -ErrorAction SilentlyContinue
+    if ($item -and $item.LinkType) {
+        Write-Host "Replacing module-path junction with real directory: $dir" -ForegroundColor DarkGray
+        if (($item.Attributes -band [IO.FileAttributes]::ReadOnly) -ne 0) {
+            $item.Attributes = $item.Attributes -band (-bnot [IO.FileAttributes]::ReadOnly)
+        }
+        Remove-Item -LiteralPath $dir -Force -Recurse -ErrorAction Stop
+        $item = $null
+    }
+
+    if (-not $item) {
+        New-Item -ItemType Directory -Path $dir -Force | Out-Null
+    }
+
+    $item = Get-Item -LiteralPath $dir -Force -ErrorAction Stop
+    if ($item.LinkType) {
+        throw "Refusing to stage module install through reparse point: $dir"
+    }
+}
+
+# Build the binary cmdlets DLL (Release) for the module install. PsBash.Cmdlets
+# multi-targets net8.0 + net10.0; PSGallery distribution and the user's stock
+# pwsh 7.4 both expect net8.0.
+$cmdletsBuildDir = Join-Path $env:TEMP 'ps-bash\module-build\PsBash.Cmdlets\net8.0'
+Remove-Item $cmdletsBuildDir -Recurse -Force -ErrorAction SilentlyContinue
+New-Item -ItemType Directory -Path $cmdletsBuildDir -Force | Out-Null
+
+dotnet build src/PsBash.Cmdlets/PsBash.Cmdlets.csproj -c Release -f net8.0 --nologo -o $cmdletsBuildDir
+if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+if (-not (Test-Path "$cmdletsBuildDir\PsBash.Cmdlets.dll")) {
+    Write-Warning "Module install skipped: $cmdletsBuildDir\PsBash.Cmdlets.dll missing."
+    return
+}
+
+# Stage both target dirs with the rename trick (any pwsh holding the previous
+# install keeps its old handle pointing at the renamed file; we copy fresh
+# bits over a clean path).
+foreach ($dir in @($psBashDir, $cmdletsDir)) {
+    Ensure-RealDirectory $dir
+    if (Test-Path $dir) {
+        Get-ChildItem $dir -File -Recurse -ErrorAction SilentlyContinue |
+            ForEach-Object { Move-OutOfTheWay $_.FullName }
+    }
+}
+
+# PsBash module: script module + format file + flag specs.
+Copy-Item 'src\PsBash.Module\PsBash.psd1'         $psBashDir -Force
+Copy-Item 'src\PsBash.Module\PsBash.psm1'         $psBashDir -Force
+Copy-Item 'src\PsBash.Module\PsBash.Format.ps1xml' $psBashDir -Force
+Copy-Item 'src\PsBash.Module\BashFlagSpecs.json'  $psBashDir -Force
+
+# PsBash.Cmdlets.psd1 declares PsBash.psd1 as a nested module, matching the
+# package/build output layout, so keep those script-module files beside it.
+Copy-Item 'src\PsBash.Module\PsBash.psd1'         $cmdletsDir -Force
+Copy-Item 'src\PsBash.Module\PsBash.psm1'         $cmdletsDir -Force
+Copy-Item 'src\PsBash.Module\PsBash.Format.ps1xml' $cmdletsDir -Force
+Copy-Item 'src\PsBash.Module\BashFlagSpecs.json'  $cmdletsDir -Force
+
+# PsBash.Cmdlets module: binary entrypoint renamed to PsBash.Cmdlets.Runtime.dll
+# (assembly *identity* stays PsBash.Cmdlets; only the file name differs). The
+# psd1's RootModule is rewritten to match.
+Copy-Item (Join-Path $cmdletsBuildDir 'PsBash.Cmdlets.dll') `
+          (Join-Path $cmdletsDir 'PsBash.Cmdlets.Runtime.dll') -Force
+
+# Companion DLLs (PsBash.Transpiler.dll, Parlot.dll, …) keep their names —
+# only the loader entrypoint needs the rename.
+Get-ChildItem $cmdletsBuildDir -File -Filter '*.dll' |
+    Where-Object { $_.Name -ne 'PsBash.Cmdlets.dll' } |
+    ForEach-Object { Copy-Item $_.FullName $cmdletsDir -Force }
+
+# Manifest: rewrite the single RootModule line. Done with a regex replace
+# rather than a full re-serialize so we don't have to keep a PSD1 parser
+# round-tripping in lockstep with the source manifest's evolving entries.
+$psd1Src = 'src\PsBash.Cmdlets\PsBash.Cmdlets.psd1'
+$psd1Dst = Join-Path $cmdletsDir 'PsBash.Cmdlets.psd1'
+$psd1Content = Get-Content -Raw -LiteralPath $psd1Src
+$psd1Patched = $psd1Content -replace `
+    "RootModule\s*=\s*'PsBash\.Cmdlets\.dll'", `
+    "RootModule = 'PsBash.Cmdlets.Runtime.dll'"
+if ($psd1Patched -eq $psd1Content) {
+    Write-Warning "Did not find RootModule = 'PsBash.Cmdlets.dll' to patch in $psd1Src — install may fail to auto-load cmdlets."
+}
+Set-Content -LiteralPath $psd1Dst -Value $psd1Patched -Encoding UTF8
+
+Write-Host "Installed PsBash + PsBash.Cmdlets modules to $moduleRoot" -ForegroundColor Green
+Write-Host "  (binary cmdlet DLL renamed to PsBash.Cmdlets.Runtime.dll to dodge dev-build file locks)" -ForegroundColor DarkGray
+Write-Host "  Restart any pwsh session that has Import-Module PsBash loaded to pick up the new copy." -ForegroundColor DarkGray

@@ -91,29 +91,39 @@ public sealed class InvokeBashFindCommand : PSCmdlet
             return;
         }
 
-        // psm1 oracle's known unsupported-predicate sets (kept verbatim).
+        // Predicates still not implemented. (-iname/-path/-ipath/-regex/-iregex/-newer/-mindepth
+        // and standalone -delete/-prune/-depth are now supported below.)
         var unsupportedValuePredicates = new HashSet<string>(StringComparer.Ordinal)
         {
-            "-iname", "-path", "-ipath", "-regex", "-iregex", "-newer",
-            "-perm", "-user", "-group", "-printf", "-mindepth", "-amin",
+            "-perm", "-user", "-group", "-printf", "-amin",
             "-atime", "-cmin", "-ctime", "-gid", "-uid", "-links",
-            "-samefile", "-wholename", "-iwholename", "-lname", "-ilname",
+            "-samefile", "-lname", "-ilname",
         };
         var unsupportedStandalonePredicates = new HashSet<string>(StringComparer.Ordinal)
         {
-            "-delete", "-print", "-prune", "-depth", "-follow", "-ls",
+            "-print", "-follow", "-ls",
             "-mount", "-xdev", "-noleaf", "-daystart", "-warn", "-nowarn",
             "-not", "-or", "-o", "-and", "-a", "-true", "-false",
         };
 
         string searchPath = ".";
         string? namePattern = null;
+        string? inamePattern = null;
+        string? pathPattern = null;
+        bool pathInsensitive = false;
+        string? regexPattern = null;
+        bool regexInsensitive = false;
         string? typeFilter = null;
         int maxDepth = int.MaxValue;
+        int minDepth = 0;
         string? sizeExpr = null;
         string? mtimeExpr = null;
+        string? newerFile = null;
         bool findEmpty = false;
         bool printNull = false;
+        bool doDelete = false;
+        bool doPrune = false;
+        bool depthFirst = false;
         List<string>? execCmd = null;
         string? execTerminator = null;
         var operands = new List<string>();
@@ -128,6 +138,28 @@ public sealed class InvokeBashFindCommand : PSCmdlet
                     if (++i < args.Length) namePattern = args[i];
                     i++;
                     continue;
+                case "-iname":
+                    if (++i < args.Length) inamePattern = args[i];
+                    i++;
+                    continue;
+                case "-path":
+                case "-wholename":
+                    if (++i < args.Length) { pathPattern = args[i]; pathInsensitive = false; }
+                    i++;
+                    continue;
+                case "-ipath":
+                case "-iwholename":
+                    if (++i < args.Length) { pathPattern = args[i]; pathInsensitive = true; }
+                    i++;
+                    continue;
+                case "-regex":
+                    if (++i < args.Length) { regexPattern = args[i]; regexInsensitive = false; }
+                    i++;
+                    continue;
+                case "-iregex":
+                    if (++i < args.Length) { regexPattern = args[i]; regexInsensitive = true; }
+                    i++;
+                    continue;
                 case "-type":
                     if (++i < args.Length) typeFilter = args[i];
                     i++;
@@ -137,6 +169,17 @@ public sealed class InvokeBashFindCommand : PSCmdlet
                     {
                         if (int.TryParse(args[i], out var md)) maxDepth = md;
                     }
+                    i++;
+                    continue;
+                case "-mindepth":
+                    if (++i < args.Length)
+                    {
+                        if (int.TryParse(args[i], out var mnd)) minDepth = mnd;
+                    }
+                    i++;
+                    continue;
+                case "-newer":
+                    if (++i < args.Length) newerFile = args[i];
                     i++;
                     continue;
                 case "-size":
@@ -149,6 +192,19 @@ public sealed class InvokeBashFindCommand : PSCmdlet
                     continue;
                 case "-empty":
                     findEmpty = true;
+                    i++;
+                    continue;
+                case "-delete":
+                    doDelete = true;
+                    depthFirst = true; // find: -delete implies -depth (empty dirs before parents)
+                    i++;
+                    continue;
+                case "-prune":
+                    doPrune = true;
+                    i++;
+                    continue;
+                case "-depth":
+                    depthFirst = true;
                     i++;
                     continue;
                 case "-print0":
@@ -304,19 +360,87 @@ public sealed class InvokeBashFindCommand : PSCmdlet
             }
         }
 
+        // -newer FILE: keep entries modified strictly later than FILE's mtime.
+        DateTime? newerThan = null;
+        if (newerFile != null)
+        {
+            try
+            {
+                var curDir = SessionState.Path.CurrentFileSystemLocation.Path;
+                var full = System.IO.Path.GetFullPath(newerFile, curDir);
+                if (System.IO.File.Exists(full)) newerThan = System.IO.File.GetLastWriteTime(full);
+                else if (System.IO.Directory.Exists(full)) newerThan = System.IO.Directory.GetLastWriteTime(full);
+                else { EmitError($"find: '{newerFile}': No such file or directory", 1); return; }
+            }
+            catch
+            {
+                EmitError($"find: '{newerFile}': No such file or directory", 1);
+                return;
+            }
+        }
+
+        // -regex / -iregex: the pattern must match the WHOLE printed path.
+        System.Text.RegularExpressions.Regex? rx = null;
+        if (regexPattern != null)
+        {
+            var opts = regexInsensitive
+                ? System.Text.RegularExpressions.RegexOptions.IgnoreCase
+                : System.Text.RegularExpressions.RegexOptions.None;
+            try { rx = new System.Text.RegularExpressions.Regex("^(?:" + regexPattern + ")$", opts); }
+            catch { EmitError($"find: invalid regex: {regexPattern}", 1); return; }
+        }
+
         var now = DateTime.Now;
-        var execCollectedPaths = new List<string>();
-        var nullDelimitedPaths = new StringBuilder();
+
+        // Forward-slash relative display path anchored at searchPath (the psm1 oracle's form).
+        string BuildDisplay(string itemPath)
+        {
+            string relativePath = itemPath.Substring(resolvedRoot.Length).Replace('\\', '/');
+            if (relativePath.StartsWith("/", StringComparison.Ordinal))
+                relativePath = relativePath.Substring(1);
+            if (searchPath == ".")
+                return relativePath.Length == 0 ? "." : $"./{relativePath}";
+            string normalized = searchPath.Replace('\\', '/');
+            return relativePath.Length == 0 ? normalized : $"{normalized}/{relativePath}";
+        }
+
+        var pathCmp = OperatingSystem.IsWindows()
+            ? StringComparison.OrdinalIgnoreCase
+            : StringComparison.Ordinal;
+
+        // -prune needs parents evaluated before their children so a matched directory can
+        // exclude its subtree. Sort shallow-first only then (keeps default output order otherwise).
+        if (doPrune)
+            allItems.Sort((a, b) => SegmentCount(a.FullName).CompareTo(SegmentCount(b.FullName)));
+
+        var prunedRoots = new List<string>();
+        var matches = new List<(System.IO.FileSystemInfo Item, string DisplayPath, bool IsDir, string ItemPath)>();
 
         foreach (var item in allItems)
         {
             string itemPath = item.FullName;
-            int itemDepth = itemPath.Split(new[] { '\\', '/' }).Length;
-            int relativeDepth = itemDepth - rootDepth;
+            int relativeDepth = SegmentCount(itemPath) - rootDepth;
 
             if (relativeDepth > maxDepth) continue;
 
+            // Skip anything beneath a pruned directory (don't descend into it).
+            if (prunedRoots.Count > 0)
+            {
+                bool underPruned = false;
+                foreach (var root in prunedRoots)
+                {
+                    if (itemPath.StartsWith(root + System.IO.Path.DirectorySeparatorChar, pathCmp))
+                    {
+                        underPruned = true;
+                        break;
+                    }
+                }
+                if (underPruned) continue;
+            }
+
             bool isDir = item is System.IO.DirectoryInfo;
+
+            if (relativeDepth < minDepth) continue;
 
             if (typeFilter != null)
             {
@@ -324,10 +448,13 @@ public sealed class InvokeBashFindCommand : PSCmdlet
                 if (typeFilter == "d" && !isDir) continue;
             }
 
-            if (namePattern != null)
-            {
-                if (!GlobMatch(item.Name, namePattern)) continue;
-            }
+            if (namePattern != null && !GlobMatch(item.Name, namePattern, ci: false)) continue;
+            if (inamePattern != null && !GlobMatch(item.Name, inamePattern, ci: true)) continue;
+
+            string displayPath = BuildDisplay(itemPath);
+
+            if (pathPattern != null && !PathGlobMatch(displayPath, pathPattern, pathInsensitive)) continue;
+            if (rx != null && !rx.IsMatch(displayPath)) continue;
 
             if (sizeOp != '\0')
             {
@@ -342,6 +469,8 @@ public sealed class InvokeBashFindCommand : PSCmdlet
                 if (mtimeOp == '-' && daysAgo >= mtimeDays) continue;
                 if (mtimeOp == '+' && daysAgo <= mtimeDays) continue;
             }
+
+            if (newerThan.HasValue && item.LastWriteTime <= newerThan.Value) continue;
 
             if (findEmpty)
             {
@@ -360,102 +489,111 @@ public sealed class InvokeBashFindCommand : PSCmdlet
                 }
             }
 
-            // Build display path: forward-slash relative form, anchored at
-            // searchPath. The psm1 oracle reproduces here exactly.
-            string relativePath = itemPath.Substring(resolvedRoot.Length)
-                .Replace('\\', '/');
-            if (relativePath.StartsWith("/", StringComparison.Ordinal))
-            {
-                relativePath = relativePath.Substring(1);
-            }
+            // A matched directory under -prune excludes its subtree from here on.
+            if (doPrune && isDir)
+                prunedRoots.Add(itemPath);
 
-            string displayPath;
-            if (searchPath == ".")
-            {
-                displayPath = relativePath.Length == 0 ? "." : $"./{relativePath}";
-            }
-            else
-            {
-                string normalized = searchPath.Replace('\\', '/');
-                displayPath = relativePath.Length == 0
-                    ? normalized
-                    : $"{normalized}/{relativePath}";
-            }
+            matches.Add((item, displayPath, isDir, itemPath));
+        }
 
-            if (execCmd != null)
+        // -depth (and the implied -depth of -delete): process directory contents before the
+        // directory itself, i.e. deepest paths first.
+        if (depthFirst)
+            matches.Sort((a, b) => SegmentCount(b.ItemPath).CompareTo(SegmentCount(a.ItemPath)));
+
+        // ── dispatch ────────────────────────────────────────────────────────────
+        // -delete is an action: remove matches and print nothing (deepest-first lets a
+        // directory be removed after its matched contents are gone).
+        if (doDelete)
+        {
+            foreach (var m in matches)
+            {
+                try
+                {
+                    if (m.IsDir) System.IO.Directory.Delete(m.ItemPath, recursive: false);
+                    else System.IO.File.Delete(m.ItemPath);
+                }
+                catch (Exception ex)
+                {
+                    EmitError($"find: cannot delete '{m.DisplayPath}': {ex.Message}", 1);
+                }
+            }
+            return;
+        }
+
+        if (execCmd != null)
+        {
+            var execCollectedPaths = new List<string>();
+            foreach (var m in matches)
             {
                 if (execTerminator == ";")
                 {
-                    // -exec cmd {} \;  — per-file. Substitute {} → displayPath.
                     var cmdArgs = new List<string>(execCmd.Count);
                     foreach (var token in execCmd)
-                    {
-                        cmdArgs.Add(token == "{}" ? displayPath : token);
-                    }
+                        cmdArgs.Add(token == "{}" ? m.DisplayPath : token);
                     InvokeExternalCommand(cmdArgs);
                 }
                 else
                 {
-                    execCollectedPaths.Add(displayPath);
+                    execCollectedPaths.Add(m.DisplayPath);
                 }
-                continue;
             }
-
-            if (printNull)
+            // -exec cmd {} +  — one invocation with the whole collected path set.
+            if (execTerminator == "+" && execCollectedPaths.Count > 0)
             {
-                nullDelimitedPaths.Append(displayPath);
-                nullDelimitedPaths.Append('\0');
-                continue;
+                var cmdArgs = new List<string>();
+                foreach (var token in execCmd)
+                {
+                    if (token == "{}") cmdArgs.AddRange(execCollectedPaths);
+                    else cmdArgs.Add(token);
+                }
+                InvokeExternalCommand(cmdArgs);
             }
+            return;
+        }
 
-            // Default: emit a typed FindEntry.
-            var fileInfo = BuildFileInfo(item);
+        if (printNull)
+        {
+            var nullDelimitedPaths = new StringBuilder();
+            foreach (var m in matches)
+            {
+                nullDelimitedPaths.Append(m.DisplayPath);
+                nullDelimitedPaths.Append('\0');
+            }
+            if (nullDelimitedPaths.Length > 0)
+            {
+                var obj = new PSObject();
+                obj.TypeNames.Insert(0, "PsBash.TextOutput");
+                obj.Properties.Add(new PSNoteProperty("BashText", nullDelimitedPaths.ToString()));
+                obj.Properties.Add(new PSNoteProperty("NoTrailingNewline", true));
+                WriteObject(obj);
+            }
+            return;
+        }
+
+        // Default action: emit a typed FindEntry per match.
+        foreach (var m in matches)
+        {
+            var fileInfo = BuildFileInfo(m.Item);
             var obj = new PSObject();
             obj.TypeNames.Insert(0, "PsBash.FindEntry");
-            obj.Properties.Add(new PSNoteProperty("Path", displayPath));
-            obj.Properties.Add(new PSNoteProperty("Name", item.Name));
-            obj.Properties.Add(new PSNoteProperty("FullPath", itemPath));
-            obj.Properties.Add(new PSNoteProperty("IsDirectory", isDir));
+            obj.Properties.Add(new PSNoteProperty("Path", m.DisplayPath));
+            obj.Properties.Add(new PSNoteProperty("Name", m.Item.Name));
+            obj.Properties.Add(new PSNoteProperty("FullPath", m.ItemPath));
+            obj.Properties.Add(new PSNoteProperty("IsDirectory", m.IsDir));
             obj.Properties.Add(new PSNoteProperty("SizeBytes", fileInfo.SizeBytes));
             obj.Properties.Add(new PSNoteProperty("Permissions", fileInfo.Permissions));
             obj.Properties.Add(new PSNoteProperty("LinkCount", fileInfo.LinkCount));
             obj.Properties.Add(new PSNoteProperty("Owner", fileInfo.Owner));
             obj.Properties.Add(new PSNoteProperty("Group", fileInfo.Group));
-            obj.Properties.Add(new PSNoteProperty("LastModified", item.LastWriteTime));
-            obj.Properties.Add(new PSNoteProperty("BashText", displayPath));
-            WriteObject(obj);
-        }
-
-        // -exec cmd {} + — single invocation with the full collected list,
-        // substituting one {} occurrence with the entire path set (matching
-        // the psm1 oracle's AddRange behavior).
-        if (execCmd != null && execTerminator == "+" && execCollectedPaths.Count > 0)
-        {
-            var cmdArgs = new List<string>();
-            foreach (var token in execCmd)
-            {
-                if (token == "{}")
-                {
-                    cmdArgs.AddRange(execCollectedPaths);
-                }
-                else
-                {
-                    cmdArgs.Add(token);
-                }
-            }
-            InvokeExternalCommand(cmdArgs);
-        }
-
-        if (printNull && nullDelimitedPaths.Length > 0)
-        {
-            var obj = new PSObject();
-            obj.TypeNames.Insert(0, "PsBash.TextOutput");
-            obj.Properties.Add(new PSNoteProperty(
-                "BashText", nullDelimitedPaths.ToString()));
-            obj.Properties.Add(new PSNoteProperty("NoTrailingNewline", true));
+            obj.Properties.Add(new PSNoteProperty("LastModified", m.Item.LastWriteTime));
+            obj.Properties.Add(new PSNoteProperty("BashText", m.DisplayPath));
             WriteObject(obj);
         }
     }
+
+    private static int SegmentCount(string path) =>
+        path.TrimEnd('\\', '/').Split('\\', '/').Length;
 
     // ── -exec dispatcher ─────────────────────────────────────────────────────
 
@@ -493,14 +631,24 @@ public sealed class InvokeBashFindCommand : PSCmdlet
 
     // ── glob match (bash -name semantics) ────────────────────────────────────
 
-    private static bool GlobMatch(string name, string pattern)
+    private static bool GlobMatch(string name, string pattern, bool ci)
     {
         // Bash -name uses fnmatch semantics: * matches any (including empty),
         // ? matches one char, [..] character class. PowerShell's -like
-        // operator implements the same semantics for our purposes.
+        // operator implements the same semantics for our purposes. -iname is
+        // the case-insensitive variant.
         return WildcardPattern
-            .Get(pattern, WildcardOptions.None)
+            .Get(pattern, ci ? WildcardOptions.IgnoreCase : WildcardOptions.None)
             .IsMatch(name);
+    }
+
+    // -path / -ipath: the glob is matched against the whole printed path. Unlike -name, a '*'
+    // is allowed to span '/' (fnmatch without FNM_PATHNAME), which WildcardPattern already does.
+    private static bool PathGlobMatch(string path, string pattern, bool ci)
+    {
+        return WildcardPattern
+            .Get(pattern, ci ? WildcardOptions.IgnoreCase : WildcardOptions.None)
+            .IsMatch(path);
     }
 
     // ── file metadata (Get-BashFileInfo / Get-LsEntryFromFsi slice) ─────────

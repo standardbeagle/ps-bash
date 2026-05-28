@@ -78,6 +78,39 @@ public class InvokeBashAliasCommandTests : IClassFixture<SharedPwshFixture>
     }
 
     [Fact]
+    public void Alias_QueryName_DefinedAsPowerShellAlias_FallsBackToPSAliasTable()
+    {
+        // Regression: `alias rg` reported "not found" even though psm1 had
+        // defined `rg` via `Set-Alias` at module-load time. Any caller that
+        // probed `alias NAME` to detect a tool (a Bash-tool wrapper, an
+        // npm-script preamble, a user's .psbashrc) hit the leaky "not found"
+        // line on every invocation. The fix: when the bash user-alias dict
+        // misses, fall back to the live PowerShell alias table.
+        var raw = RunRaw(
+            "Set-Alias -Name __probe_alias -Value Get-ChildItem -Scope Global -Force; " +
+            "Invoke-BashAlias __probe_alias");
+        Assert.Single(raw);
+        Assert.Equal("__probe_alias", raw[0].Properties["Name"]?.Value?.ToString());
+        Assert.Equal("Get-ChildItem", raw[0].Properties["Value"]?.Value?.ToString());
+        Assert.Equal("alias __probe_alias='Get-ChildItem'",
+            raw[0].Properties["BashText"]?.Value?.ToString());
+    }
+
+    [Fact]
+    public void Alias_QueryName_BashUserAliasWinsOverPSAlias()
+    {
+        // If both surfaces have the name, the user's bash-style alias
+        // (`alias name=value`) is authoritative — the PS-alias fallback only
+        // fills the gap for names the user never set as a bash alias.
+        var raw = RunRaw(
+            "Set-Alias -Name __probe_dup -Value Get-Date -Scope Global -Force; " +
+            "Invoke-BashAlias '__probe_dup=echo hi'; " +
+            "Invoke-BashAlias __probe_dup");
+        Assert.Single(raw);
+        Assert.Equal("echo hi", raw[0].Properties["Value"]?.Value?.ToString());
+    }
+
+    [Fact]
     public void Alias_PFlag_NoOp_EmptyDictStillEmpty()
     {
         // -p is an oracle no-op (listing happens via the no-operand path

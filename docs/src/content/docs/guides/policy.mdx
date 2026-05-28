@@ -1,0 +1,351 @@
+---
+title: Policy & Safe Execution
+description: "Lock ps-bash down with allow/deny lists for commands, arguments, and paths — for npm scripts, CI runners, LLM agent tools, and any context where you don't trust the input."
+---
+
+import { Aside, Tabs, TabItem, Steps } from '@astrojs/starlight/components';
+
+A ps-bash **policy** is a small JSON document that tells the shell which commands, arguments, and paths a script is allowed to touch. When a policy is loaded, every command — whether typed at the prompt, piped through `-c`, or spawned by a transpiled script — is checked before it runs. A violation refuses the command with a non-zero exit and a clear message; it never silently downgrades.
+
+The intended use cases are environments where ps-bash runs untrusted or semi-trusted shell text:
+
+- **`npm run` / `package.json` scripts** that you want to keep from drifting into `rm -rf`, `curl | sh`, or arbitrary network calls.
+- **LLM agent bash tools** (Claude Code, Cursor, Copilot CLI, etc.) where the model produces the command line. You want it to be able to read, search, build, and test — not delete your home directory or run `claude -p` recursively.
+- **CI runners and sandboxes** where a job should only touch its own workspace.
+- **Hosted Jupyter / notebook shells** that expose `!command` to end users.
+
+<Aside type="caution" title="Defense in depth, not a sandbox">
+A ps-bash policy stops the shell from *initiating* a forbidden command. It is not a kernel sandbox: a process that ps-bash legitimately starts can still do whatever the OS allows it to do. Combine policy with OS-level controls (containers, restricted users, AppArmor / SELinux, Windows Job Objects) when the threat model demands it.
+</Aside>
+
+---
+
+## Quick start
+
+<Steps>
+
+1. **Pick a built-in profile** to start from. `llm-agent` is a good default for AI tools:
+
+    ```powershell
+    ps-bash --policy llm-agent -c "ls && grep -r TODO src"
+    ```
+
+2. **Write a project policy** when you need to customize it. Save as `.ps-bash.policy.json` at the repo root:
+
+    ```json
+    {
+      "extends": "llm-agent",
+      "allowCommands": ["pnpm", "vitest"],
+      "denyArgs": [
+        { "command": "git", "pattern": "^push\\s+--force" }
+      ],
+      "writePaths": ["${workspace}/**", "${TEMP}/**"]
+    }
+    ```
+
+3. **Point ps-bash at it.** Any of these work, in order of precedence:
+
+    ```powershell
+    ps-bash --policy ./.ps-bash.policy.json   # explicit flag (wins)
+    $env:PSBASH_POLICY = './.ps-bash.policy.json'
+    # otherwise: auto-discovered as .ps-bash.policy.json walking up from $PWD
+    ```
+
+4. **Verify** what was loaded and what would be allowed:
+
+    ```powershell
+    ps-bash --policy-show              # prints the merged effective policy
+    ps-bash --policy-check 'rm -rf /'  # prints the verdict without executing
+    ```
+
+</Steps>
+
+---
+
+## Built-in profiles
+
+Profiles are starting points. Extend them with your own `allowCommands` / `denyArgs` / `writePaths`.
+
+| Profile        | Intent                                                  | Read paths        | Write paths       | Network | Env vars |
+|----------------|---------------------------------------------------------|-------------------|-------------------|---------|----------|
+| `strict`       | Read-only inspection. Nothing mutating, nothing remote. | `${workspace}/**` | (none)            | denied  | allowlist: `PATH`, `HOME`, `USER`, `LANG`, `LC_*`, `TEMP` only |
+| `npm-script`   | Build & test in a project. Block destructive ops outside the workspace and any agent CLIs (`claude`, `cursor-agent`, `aider`, `gh auth`). | `${workspace}/**`, system tool dirs | `${workspace}/**`, `${TEMP}/**` | allowed for known package managers only | allowlist: build/CI vars (`PATH`, `NODE_*`, `npm_*`, `CI`, `GITHUB_ACTIONS`, …) — deny `*_TOKEN`, `*_SECRET`, `*_KEY`, `AWS_*` |
+| `llm-agent`    | Coding agents. Allows the read/search/edit/build set; denies `rm -rf`, force pushes, credential exfil patterns, and recursive agent calls. | `${workspace}/**`, system tool dirs | `${workspace}/**`, `${TEMP}/**` | allowed; agent CLIs denied | allowlist: build/runtime vars — deny all `*_TOKEN`/`*_SECRET`/`*_KEY`/`*_PASSWORD`, cloud creds, `SSH_*`; `blockExpansion: true` |
+| `off`          | No policy (default — same as not passing `--policy`).    | any               | any               | any     | passthrough |
+
+Inspect any profile:
+
+```powershell
+ps-bash --policy-show llm-agent
+```
+
+---
+
+## Policy file reference
+
+A policy is a JSON object. Every field is optional; unspecified fields inherit from `extends` (or from `off` if no parent).
+
+```jsonc
+{
+  // Start from a built-in profile or another file.
+  "extends": "llm-agent",          // profile name OR relative/absolute path
+
+  // ── Command-level rules ────────────────────────────────────────────
+  "allowCommands": ["pnpm", "vitest", "git"],   // if set, ONLY these are allowed
+  "denyCommands": ["claude", "cursor-agent"],   // always refused
+  // allowCommands wins over an inherited denyCommands for the same name;
+  // denyCommands wins over an inherited allowCommands.
+
+  // ── Argument-level rules (regex against the full argv after the command) ──
+  "denyArgs": [
+    { "command": "rm",   "pattern": "(^|\\s)-[a-zA-Z]*r[a-zA-Z]*\\s+/(?!tmp/)" },
+    { "command": "git",  "pattern": "^push\\s+--force(?!-with-lease)" },
+    { "command": "curl", "pattern": "\\|\\s*(sh|bash|pwsh)\\b" },
+    { "command": "*",    "pattern": "\\bAWS_SECRET_ACCESS_KEY=" }
+  ],
+  "allowArgs": [
+    { "command": "rm", "pattern": "^-rf?\\s+\\$\\{TEMP\\}/" }   // carve-out
+  ],
+
+  // ── Path rules (glob; checked for every file operand and redirect target) ──
+  "readPaths":  ["${workspace}/**", "${HOME}/.config/**"],
+  "writePaths": ["${workspace}/**", "${TEMP}/**"],
+  "denyPaths":  ["${HOME}/.ssh/**", "${HOME}/.aws/**", "**/.env*", "**/id_rsa*"],
+
+  // ── Environment variables ──────────────────────────────────────────
+  // Controls which env vars a spawned command can SEE. ps-bash filters
+  // the child process's environment block before exec — anything not
+  // allowed is simply not present (not "blanked", not "redacted" — gone).
+  "env": {
+    "mode": "allowlist",                  // "allowlist" | "denylist" | "passthrough"
+    "allow": [
+      "PATH", "HOME", "USER", "USERNAME", "TEMP", "TMP", "LANG", "LC_*",
+      "NODE_ENV", "CI", "${workspace}_*"  // globs supported
+    ],
+    "deny": [                              // applied after allow (deny wins)
+      "*_TOKEN", "*_SECRET", "*_KEY", "*_PASSWORD",
+      "AWS_*", "GITHUB_TOKEN", "ANTHROPIC_API_KEY", "OPENAI_API_KEY",
+      "SSH_AUTH_SOCK", "SSH_AGENT_PID"
+    ],
+    // Also block reads from inside the shell itself ($env:FOO, ${FOO}, printenv FOO).
+    // When true, an expansion of a denied var produces the empty string and logs a
+    // violation; the command still runs (matching bash's "unset variable" behavior
+    // unless `set -u` is active).
+    "blockExpansion": true
+  },
+
+  // ── Network ────────────────────────────────────────────────────────
+  "network": {
+    "mode": "allow",                              // "allow" | "deny" | "hosts"
+    "hosts": ["registry.npmjs.org", "github.com"] // used when mode = "hosts"
+  },
+
+  // ── Behavior on violation ──────────────────────────────────────────
+  "onViolation": {
+    "action": "refuse",          // "refuse" | "prompt" | "log"
+    "exitCode": 126,
+    "message": "Blocked by policy: {rule}. See {policyPath}."
+  }
+}
+```
+
+### Variable expansion in patterns and paths
+
+These tokens are expanded inside `*Paths` globs and `*Args` patterns:
+
+| Token            | Expands to                                              |
+|------------------|---------------------------------------------------------|
+| `${workspace}`   | The directory containing the policy file (or `$PWD` if loaded via env var). |
+| `${HOME}`        | User home directory.                                    |
+| `${TEMP}`        | OS temp directory (`$env:TEMP` on Windows, `/tmp` on Unix). |
+| `${env:NAME}`    | Any environment variable.                               |
+
+Globs use the same syntax as ps-bash's path expansion: `*`, `**`, `?`, `[abc]`, `{a,b}`.
+
+### Merge order
+
+When a policy `extends` a parent, lists are **unioned** and `deny*` always wins over `allow*` for the same key. The single-valued blocks (`network`, `onViolation`) are object-merged with the child overriding the parent field-by-field.
+
+```text
+off ◄── built-in profile ◄── extended file(s) ◄── --policy file ◄── --policy-deny CLI overrides
+```
+
+CLI overrides for one-off tightening (these never loosen):
+
+```powershell
+ps-bash --policy llm-agent --policy-deny-cmd 'gh,docker'
+```
+
+---
+
+## Coverage — what gets checked
+
+A policy is consulted **before** any command runs, including commands inside pipelines, command substitutions, `xargs`, `find -exec`, and external (non-mapped) executables.
+
+| Surface                                        | Checked? | Notes |
+|------------------------------------------------|----------|-------|
+| Transpiled bash commands (`grep`, `head`, …)   | ✅       | Command name + argv. |
+| External executables (anything not mapped)     | ✅       | Resolved via `Get-Command`; symlinks followed. |
+| `$(…)` and backtick command substitution       | ✅       | Each inner command. |
+| `xargs cmd…` / `find … -exec cmd \;`           | ✅       | Each `cmd` invocation. |
+| Pipelines (`a \| b \| c`)                       | ✅       | Each stage. |
+| Redirects (`>`, `>>`, `<`, heredocs)           | ✅ (path) | Target path checked against `writePaths` / `readPaths`. |
+| File operands (e.g. `cat ./foo`)               | ✅ (path) | Resolved to absolute path before glob match. |
+| `source` / `.`                                  | ✅ (path) | Sourced file must be in `readPaths`; its contents are also policy-checked. |
+| Environment-variable assignments (`FOO=bar cmd`) | ✅       | Checked against `env` rules; assigning a denied name refuses the command. |
+| Environment-variable **reads** (`$env:FOO`, `${FOO}`, `printenv`) | ✅ (when `env.blockExpansion`) | Denied vars expand to `""` and log a violation. |
+| Child process environment block                | ✅       | Filtered before exec — denied vars are absent, not blanked. |
+| In-process PowerShell expressions              | ❌       | Out of scope; do not expose a raw `Invoke-Expression` surface to untrusted input. |
+
+<Aside type="note">
+ps-bash refuses **before** spawn. A denied command never starts a process; a denied write path never opens a file handle. The exit code (default `126`, matching bash's "command found but not executable") is distinguishable from a real command's failure.
+</Aside>
+
+---
+
+## Recipes
+
+### npm script that builds & tests, nothing else
+
+`.ps-bash.policy.json`:
+
+```json
+{
+  "extends": "npm-script",
+  "allowCommands": ["pnpm", "node", "vitest", "tsc", "eslint"],
+  "writePaths": ["${workspace}/dist/**", "${workspace}/coverage/**", "${TEMP}/**"]
+}
+```
+
+`package.json`:
+
+```json
+{
+  "scripts": {
+    "build": "ps-bash --policy ./.ps-bash.policy.json -c 'pnpm tsc && pnpm vitest run'"
+  }
+}
+```
+
+### LLM agent that can read, edit, build, but cannot exfiltrate or self-invoke
+
+```json
+{
+  "extends": "llm-agent",
+  "denyCommands": ["claude", "cursor-agent", "aider", "gh"],
+  "denyArgs": [
+    { "command": "*",    "pattern": "(api[_-]?key|secret|token)\\s*=" },
+    { "command": "curl", "pattern": "-X\\s*(POST|PUT|DELETE)" },
+    { "command": "git",  "pattern": "^push\\b" }
+  ],
+  "denyPaths": ["${HOME}/.ssh/**", "${HOME}/.aws/**", "**/.env*", "**/*.pem"]
+}
+```
+
+### Stop an npm script from reading secrets
+
+Even an "allowed" command like `node` or `printenv` can dump the parent's environment block — that's how leaked CI secrets usually escape. The `env` policy filters the child's env before exec, so secrets are simply not present in the child process.
+
+```json
+{
+  "extends": "npm-script",
+  "env": {
+    "mode": "allowlist",
+    "allow": ["PATH", "HOME", "USERNAME", "TEMP", "TMP", "NODE_ENV", "CI", "npm_*"],
+    "deny":  ["*_TOKEN", "*_SECRET", "*_KEY", "*_PASSWORD", "AWS_*"],
+    "blockExpansion": true
+  }
+}
+```
+
+Result:
+
+```text
+$ GITHUB_TOKEN=ghp_xxx ps-bash --policy ./.ps-bash.policy.json -c 'node -e "console.log(process.env.GITHUB_TOKEN)"'
+undefined            # the child never received it
+
+$ ps-bash --policy ./.ps-bash.policy.json -c 'printenv | grep TOKEN'
+                     # empty — printenv itself sees a filtered env
+
+$ ps-bash --policy ./.ps-bash.policy.json -c 'echo "$GITHUB_TOKEN"'
+                     # empty + a violation logged (blockExpansion)
+```
+
+### Read-only audit shell
+
+```powershell
+ps-bash --policy strict -c "grep -rn TODO src && wc -l src/**/*.ts"
+```
+
+### Carve a hole into an otherwise strict policy
+
+```json
+{
+  "extends": "strict",
+  "allowCommands": ["npm"],
+  "allowArgs": [
+    { "command": "npm", "pattern": "^(install|ci|run\\s+build|run\\s+test)\\b" }
+  ],
+  "writePaths": ["${workspace}/node_modules/**", "${workspace}/dist/**"]
+}
+```
+
+---
+
+## Diagnostics
+
+```powershell
+# What policy is active right now?
+ps-bash --policy-show
+
+# Would this command be allowed? (prints the matched rule; no execution)
+ps-bash --policy-check 'rm -rf /'
+# → REFUSE   denyArgs[rm /^(^|\s)-[a-zA-Z]*r…/]   exit 126
+
+# Log every check (allowed and denied) to a file
+$env:PSBASH_POLICY_LOG = './policy.log'
+```
+
+The log line format is stable and grep-friendly:
+
+```
+2026-05-25T12:00:01Z  DENY  cmd=rm  argv="-rf /"     rule=denyArgs[rm#0]    pid=1234
+2026-05-25T12:00:02Z  ALLOW cmd=grep argv="-rn TODO" rule=allowCommands     pid=1235
+```
+
+---
+
+## What a violation looks like
+
+```text
+$ ps-bash --policy llm-agent -c 'rm -rf /'
+ps-bash: blocked by policy
+  command : rm
+  argv    : -rf /
+  rule    : denyArgs[rm#0]   (^|\s)-[a-zA-Z]*r[a-zA-Z]*\s+/(?!tmp/)
+  policy  : ./.ps-bash.policy.json  (extends llm-agent)
+  exit    : 126
+```
+
+Errors are written to stderr in the same `Write-BashError` format as other ps-bash diagnostics, so they thread through pipelines and redirects identically.
+
+---
+
+## Compared to alternatives
+
+| Approach                       | Stops `rm -rf /`? | Stops `curl … \| sh`? | Stops writing to `~/.ssh`? | Stops env-var exfil? | Windows? |
+|--------------------------------|-------------------|-----------------------|-----------------------------|----------------------|----------|
+| ps-bash policy                 | ✅                | ✅                     | ✅                          | ✅                    | ✅        |
+| `restricted shell` (`rbash`)   | partial           | ❌                     | ❌                          | ❌                    | ❌        |
+| Container / VM                 | ✅                | ✅                     | ✅                          | ✅ (if you remember to scrub env) | requires Docker |
+| Reviewing the model's output   | depends           | depends               | depends                     | depends              | ✅        |
+
+The policy layer is meant to **compose** with the others, not replace them. Use a container for hard isolation; use ps-bash policy to keep the shell itself from helping an attacker.
+
+---
+
+## See also
+
+- [Getting Started](/getting-started/) — installing ps-bash.
+- [Cross-Platform Reference](/reference/cross-platform/) — how paths and processes differ per OS.
+- [Cookbook](/guides/cookbook/) — common script patterns that pair well with `npm-script` and `llm-agent` profiles.

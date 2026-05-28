@@ -687,6 +687,57 @@ public class CtrlRSearchBehaviorTests
         Assert.Equal(2, search.ResultCount);
     }
 
+    // ── Initial query (seeded from the current line) ───────────────────────────
+
+    [Fact]
+    public async Task InitialQuery_SeedsSearch_AndFiltersImmediately()
+    {
+        var store = new InMemoryHistoryStore();
+        await store.RecordAsync(MakeEntry("git commit", minutesAgo: 3));
+        await store.RecordAsync(MakeEntry("git push", minutesAgo: 2));
+        await store.RecordAsync(MakeEntry("docker build", minutesAgo: 1));
+
+        // Ctrl-R opened while "git" was on the line → search starts already filtered by "git".
+        using var search = new CtrlRSearch(store, "/proj", "$ ", initialQuery: "git");
+        var keys = new Queue<ConsoleKeyInfo>();
+        keys.Enqueue(Esc());
+        await search.SimulateAsync(keys);
+
+        Assert.Equal("git", search.CurrentQuery);
+        Assert.Equal(2, search.ResultCount); // "git commit", "git push" — not "docker build"
+    }
+
+    [Fact]
+    public async Task InitialQuery_BackspaceNarrowsBackFromSeed()
+    {
+        var store = new InMemoryHistoryStore();
+        await store.RecordAsync(MakeEntry("git commit", minutesAgo: 2));
+        await store.RecordAsync(MakeEntry("docker build", minutesAgo: 1));
+
+        using var search = new CtrlRSearch(store, "/proj", "$ ", initialQuery: "git c");
+        var keys = new Queue<ConsoleKeyInfo>();
+        keys.Enqueue(Backspace()); // "git "
+        keys.Enqueue(Backspace()); // "git"
+        keys.Enqueue(Esc());
+        await search.SimulateAsync(keys);
+
+        Assert.Equal("git", search.CurrentQuery); // edits start from the seed, not blank
+    }
+
+    [Fact]
+    public async Task InitialQuery_NullOrEmpty_StartsBlank()
+    {
+        var store = new InMemoryHistoryStore();
+        await store.RecordAsync(MakeEntry("npm test", minutesAgo: 1));
+
+        using var search = MakeSearch(store); // no initialQuery
+        var keys = new Queue<ConsoleKeyInfo>();
+        keys.Enqueue(Esc());
+        await search.SimulateAsync(keys);
+
+        Assert.Equal("", search.CurrentQuery);
+    }
+
     [Fact]
     public async Task Backspace_EmptyQuery_DoesNotCrash()
     {

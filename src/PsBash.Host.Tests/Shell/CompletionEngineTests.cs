@@ -56,7 +56,7 @@ public class CompletionEngineTests
     public async Task CommandPosition_MergesLiveRunspaceCommands_FilteredByPrefix()
     {
         var fake = new FakeWorker { OnQuery = (_, _) => Task.FromResult("Get-Foo\nGet-Bar\n") };
-        var result = await Engine(fake).CompleteAsync("Get-F", cursor: 5, default);
+        var result = (await Engine(fake).CompleteAsync("Get-F", cursor: 5, default)).Texts();
 
         Assert.Equal(1, fake.QueryCount);
         Assert.Contains("Get-Foo", result);          // live command, matches the typed prefix
@@ -67,7 +67,7 @@ public class CompletionEngineTests
     public async Task WorkerThrows_FallsBackToStaticBaseSet()
     {
         var fake = new FakeWorker { OnQuery = (_, _) => throw new InvalidOperationException("busy") };
-        var result = await Engine(fake).CompleteAsync("l", cursor: 1, default);
+        var result = (await Engine(fake).CompleteAsync("l", cursor: 1, default)).Texts();
 
         // No exception surfaces, and the static base set (KnownCommands) still completes.
         Assert.Contains("ls", result);
@@ -89,7 +89,7 @@ public class CompletionEngineTests
         using var cts = new CancellationTokenSource();
         cts.Cancel(); // pre-cancelled → deterministic, no timer/sleep
 
-        var result = await Engine(fake).CompleteAsync("l", cursor: 1, cts.Token);
+        var result = (await Engine(fake).CompleteAsync("l", cursor: 1, cts.Token)).Texts();
 
         Assert.Contains("ls", result);
     }
@@ -99,7 +99,7 @@ public class CompletionEngineTests
     {
         var fake = new FakeWorker { OnQuery = (_, _) => Task.FromResult("ShouldNotAppear\n") };
         // Cursor is on an argument (path), not the command word.
-        var result = await Engine(fake).CompleteAsync("ls /tmp/x", cursor: 9, default);
+        var result = (await Engine(fake).CompleteAsync("ls /tmp/x", cursor: 9, default)).Texts();
 
         Assert.Equal(0, fake.QueryCount);
         Assert.DoesNotContain("ShouldNotAppear", result);
@@ -110,7 +110,7 @@ public class CompletionEngineTests
     {
         // An empty command token would make Get-Command -Name '*' enumerate the whole session.
         var fake = new FakeWorker { OnQuery = (_, _) => Task.FromResult("Everything\n") };
-        var result = await Engine(fake).CompleteAsync(string.Empty, cursor: 0, default);
+        var result = (await Engine(fake).CompleteAsync(string.Empty, cursor: 0, default)).Texts();
 
         Assert.Equal(0, fake.QueryCount);
         Assert.DoesNotContain("Everything", result);
@@ -120,7 +120,7 @@ public class CompletionEngineTests
     public async Task ExitedWorker_SkipsLiveQuery()
     {
         var fake = new FakeWorker { HasExited = true, OnQuery = (_, _) => Task.FromResult("Get-Foo\n") };
-        var result = await Engine(fake).CompleteAsync("Get-F", cursor: 5, default);
+        var result = (await Engine(fake).CompleteAsync("Get-F", cursor: 5, default)).Texts();
 
         Assert.Equal(0, fake.QueryCount);
         Assert.DoesNotContain("Get-Foo", result);
@@ -131,7 +131,7 @@ public class CompletionEngineTests
     {
         var fake = new FakeWorker { OnQuery = (_, _) => Task.FromResult("-Path\n-PathType\n-Force\n") };
         const string line = "Get-ChildItem -Pa";
-        var result = await Engine(fake).CompleteAsync(line, line.Length, default);
+        var result = (await Engine(fake).CompleteAsync(line, line.Length, default)).Texts();
 
         Assert.Equal(1, fake.QueryCount);
         Assert.Contains("-Path", result);
@@ -144,7 +144,7 @@ public class CompletionEngineTests
     {
         var fake = new FakeWorker { OnQuery = (_, _) => Task.FromResult("quick\nquiet\nfull\n") };
         const string line = "Set-Thing -Mode q";
-        var result = await Engine(fake).CompleteAsync(line, line.Length, default);
+        var result = (await Engine(fake).CompleteAsync(line, line.Length, default)).Texts();
 
         Assert.Equal(1, fake.QueryCount);
         Assert.Contains("quick", result);
@@ -158,7 +158,7 @@ public class CompletionEngineTests
         // grep has bash flag specs, so flag completion stays on the static path — no PS query.
         var fake = new FakeWorker { OnQuery = (_, _) => Task.FromResult("-ShouldNotAppear\n") };
         const string line = "grep -i";
-        var result = await Engine(fake).CompleteAsync(line, line.Length, default);
+        var result = (await Engine(fake).CompleteAsync(line, line.Length, default)).Texts();
 
         Assert.Equal(0, fake.QueryCount);
         Assert.DoesNotContain("-ShouldNotAppear", result);
@@ -174,12 +174,82 @@ public class CompletionEngineTests
             OnQuery = (_, _) => Task.FromResult("SHOULD-NOT-FALL-BACK\n"),
         };
         const string line = "Set-Thing -Mode f";
-        var result = await Engine(fake).CompleteAsync(line, line.Length, default);
+        var result = (await Engine(fake).CompleteAsync(line, line.Length, default)).Texts();
 
         Assert.Equal(1, fake.CompleteCount);
         Assert.Equal(0, fake.QueryCount); // PS engine returned values → no introspection fallback
         Assert.Contains("fast", result);
         Assert.Contains("slow", result);
+    }
+
+    // ── Floating panel: PowerShell-cmdlet parameter hints (GetFlagHintsAsync) ──
+
+    [Fact]
+    public async Task FlagHints_PsCmdlet_ReturnsParamWithTypeAndValueSet()
+    {
+        // Worker returns "name|type|values" rows (the expression does the -like prefix filter).
+        var fake = new FakeWorker
+        {
+            OnQuery = (_, _) => Task.FromResult("CommonTCPPort|String|HTTP,RDP,SMB,WINRM\n"),
+        };
+        const string line = "tnc -C";
+        var hints = await Engine(fake).GetFlagHintsAsync(line, line.Length, default);
+
+        var h = Assert.Single(hints);
+        Assert.Equal("-CommonTCPPort <String>", h.Head);
+        Assert.Equal("HTTP, RDP, SMB, WINRM", h.Desc); // value-set expanded + spaced
+    }
+
+    [Fact]
+    public async Task FlagHints_PsParamWithoutValueSet_ShowsTypeOnly()
+    {
+        var fake = new FakeWorker { OnQuery = (_, _) => Task.FromResult("Port|Int32|\n") };
+        const string line = "tnc -P";
+        var hints = await Engine(fake).GetFlagHintsAsync(line, line.Length, default);
+
+        var h = Assert.Single(hints);
+        Assert.Equal("-Port <Int32>", h.Head);
+        Assert.Equal("", h.Desc);
+    }
+
+    [Fact]
+    public async Task FlagHints_BashCommand_ReturnsEmpty_NoQuery()
+    {
+        // grep has bash flag specs → the sync panel handles it; no runspace query.
+        var fake = new FakeWorker { OnQuery = (_, _) => Task.FromResult("ShouldNotAppear|String|\n") };
+        const string line = "grep -i";
+        var hints = await Engine(fake).GetFlagHintsAsync(line, line.Length, default);
+
+        Assert.Empty(hints);
+        Assert.Equal(0, fake.QueryCount);
+    }
+
+    [Fact]
+    public async Task FlagHints_NonFlagToken_ReturnsEmpty_NoQuery()
+    {
+        var fake = new FakeWorker { OnQuery = (_, _) => Task.FromResult("X|String|\n") };
+        const string line = "tnc foo";
+        var hints = await Engine(fake).GetFlagHintsAsync(line, line.Length, default);
+
+        Assert.Empty(hints);
+        Assert.Equal(0, fake.QueryCount);
+    }
+
+    [Fact]
+    public async Task FlagHints_CommandPosition_ReturnsEmpty()
+    {
+        var fake = new FakeWorker { OnQuery = (_, _) => Task.FromResult("X|String|\n") };
+        var hints = await Engine(fake).GetFlagHintsAsync("tn", cursor: 2, default);
+
+        Assert.Empty(hints);
+    }
+
+    [Fact]
+    public async Task FlagHints_NoWorker_ReturnsEmpty()
+    {
+        const string line = "tnc -C";
+        var hints = await Engine(null).GetFlagHintsAsync(line, line.Length, default);
+        Assert.Empty(hints);
     }
 
     [Fact]
@@ -192,7 +262,7 @@ public class CompletionEngineTests
             OnQuery = (_, _) => Task.FromResult("fast\nslow\nfull\n"),
         };
         const string line = "Set-Thing -Mode f";
-        var result = await Engine(fake).CompleteAsync(line, line.Length, default);
+        var result = (await Engine(fake).CompleteAsync(line, line.Length, default)).Texts();
 
         Assert.Equal(1, fake.CompleteCount);
         Assert.Equal(1, fake.QueryCount);

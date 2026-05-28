@@ -12,8 +12,11 @@ Source files (all under `src/PsBash.Host/Shell/`, namespace `PsBash.Host.Shell`)
 | `TabCompleter.cs` | The static/local base providers: command list, flag specs, path, history-sequence, plus the line-tokenizing helpers (`SplitAtWordBoundaryQuoteAware`, `IsFirstWord`, `GetCommandNameAtCursor`). |
 | `BashCompletionRegistry.cs` | Bash programmable completion (`complete`/`compgen`). Parses `complete -W`/`-r` lines and holds the cmd→word-list registry the engine consults (P5, §7). |
 | `FlagSpecs.cs` | Loads bash-command flag metadata from the embedded `Resources/FlagSpecs.json`. |
-| `Suggester.cs` | Inline (greyed) autosuggestion from history. |
+| `Suggester.cs` | Inline (greyed) autosuggestion from history. Rendered gray (SGR 90), not faint (SGR 2) — faint is invisible on many terminals. |
+| `CompletionItem.cs` | A candidate's `InsertText` (typed into the buffer) vs `DisplayText` (shown in lists). Keeping them apart is what stops a flag's description from being inserted. |
 | `CtrlRSearch.cs` | Reverse-i-search (Ctrl-R) overlay. |
+| `FlagHint.cs` | One unified panel/man-page row: `Insert` (typed), `Head`/`Desc` (shown), optional `Detail`/`Examples` (man-page). Spans bash flag specs + live PS params. |
+| `FlagHelpBrowser.cs` | Scrollable alt-screen man-page browser for a command's flags (P4, §8). Opened by F1 / →. |
 | `IHistoryStore` (+ `SqliteHistoryStore`) | History persistence the suggester / sequence completion query. |
 | `Runtime/ICompletionWorker.cs` | Worker capability: run PowerShell's own `CommandCompletion.CompleteInput` against the live runspace (implemented by `SdkWorker`). |
 
@@ -127,3 +130,46 @@ of scope. Tier 1 is the 80/20: `complete -W` covers the common "fixed sub-comman
 
 Tests: `PsBash.Host.Tests/Shell/BashCompletionTests.cs` — registry parser (quoting, `-r`, `-F`
 no-candidates, multi-name) and engine integration (argument vs command position, worker-independent).
+
+## 8. Floating flag-doc panel (type-ahead, no Tab)
+
+As the user types a flag token for a known bash command (`find -n`), `LineEditor` shows a **dim
+panel below the prompt** listing the matching flags + descriptions — IDE-style parameter help, no
+Tab required. It updates every keystroke and vanishes on space / Enter / a non-flag token.
+
+- **Data** — `TabCompleter.MatchingFlagSpecs(line, cursor, aliases)`: pure/synchronous (no
+  runspace), returns the `FlagSpec`s whose flag starts with the cursor's `-`-prefixed token for the
+  command at the cursor (a lone `-` matches all; redirect targets and the command word are excluded;
+  aliases are resolved). Source is the single `BashFlagSpecs.json` (§6).
+- **Render** — `LineEditor.ComputeFlagPanel` formats the rows; `Redraw` draws them below the input
+  line and returns the cursor with **relative** moves (`\x1b[{N}A`), which stay correct even if the
+  panel scrolls the screen. The whole region is erased each redraw with `\r\x1b[0J` (also on Tab /
+  Enter / Ctrl-C so the panel never lingers). `ComputeFlagPanel` never throws — the panel is advisory.
+- **PowerShell cmdlet parameters** — for a non-bash command the panel ALSO shows the cmdlet's
+  parameters with their type and any ValidateSet / enum value-set (`tnc -C` → `-CommonTCPPort
+  <String>   HTTP, RDP, SMB, WINRM`). This needs a runspace round-trip, so it is async:
+  `CompletionEngine.GetFlagHintsAsync` (returns `FlagHint`s) is wired into `LineEditor` as
+  `_flagHintProvider`. `UpdatePsFlagHintsAsync` fetches on keystroke (bounded by the 200ms Tab
+  deadline — typing never blocks) and caches the result keyed by `commandtoken`; `ComputeFlagPanel`
+  renders the bash specs synchronously (always fresh) and falls back to the cached PS hints only
+  while their key still matches the cursor. Bash takes precedence when both could apply.
+- **Focus & scrolling (P3)** — with the panel visible, **↓ moves focus into it**: `↑↓`/`PgUp`/`PgDn`
+  scroll a highlighted selection, **Enter** inserts the selected flag (the bare `Insert` text, never
+  the arg/desc), **Esc** (or ↑ past the top) returns to typing. Unfocused, the panel shows the first
+  `MaxPanelRows` with a "press ↓ to scroll" overflow hint; focused, it renders a scroll window with a
+  `[i/N]` position line. The scroll-window math is the pure, unit-tested `LineEditor.ComputeScroll`;
+  selection/scroll reset each prompt (`ExitPanelFocus`). `Right`/Enter→man-page is P4.
+- **Man-page drill-down (P4)** — a scrollable alt-screen browser (`FlagHelpBrowser`, modeled on
+  `CtrlRSearch`): ↑↓ switches option, PgUp/PgDn (or j/k) scrolls that option's man-page detail
+  (head, description, the `detail` paragraph wrapped, and `examples` for bash; type + value-set for
+  PS), Enter inserts the flag, Esc/q closes. Opened **both** ways: **F1** at the prompt (for the
+  command under the cursor — the matching flags, or the command's full bash flag set when not on a
+  flag token, via `TabCompleter.AllFlagSpecsForCommand`) and **→** on a focused inline-panel row.
+  The format helpers (`DetailLines`, `WrapText`) are pure/unit-tested; the key loop has a `Simulate`
+  seam. Tests: `PsBash.Shell.Tests/LineEditorTests.cs` `FlagHelpBrowserTests`.
+- **Scope** — bash flag specs (sync) + PS-cmdlet params (async). `complete -W` lists are not shown
+  in the panel (still Tab-driven). PS man-page detail is type/value-set only (no `Get-Help` prose yet).
+
+Tests: `PsBash.Shell.Tests/LineEditorTests.cs` `MatchingFlagSpecs_*` (bash panel data) and
+`PsBash.Host.Tests/Shell/CompletionEngineTests.cs` `FlagHints_*` (PS-param hints via fake worker);
+the ANSI rendering / caching itself is not unit-tested.

@@ -1,4 +1,5 @@
 using Xunit;
+using PsBash.Host;
 using PsBash.Host.Shell;
 
 namespace PsBash.Shell.Tests;
@@ -59,6 +60,158 @@ public class LineEditorSplitTests
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// FlagHelpBrowser — scrollable man-page drill-down (P4)
+// ─────────────────────────────────────────────────────────────────────────────
+
+public class FlagHelpBrowserTests
+{
+    private static ConsoleKeyInfo K(ConsoleKey k) => new('\0', k, false, false, false);
+
+    [Fact]
+    public void WrapText_GreedyWrapsToWidth()
+    {
+        var lines = FlagHelpBrowser.WrapText("aaa bbb ccc ddd", 7);
+        Assert.Equal(new[] { "aaa bbb", "ccc ddd" }, lines);
+    }
+
+    [Fact]
+    public void WrapText_PreservesParagraphBreaks()
+    {
+        var lines = FlagHelpBrowser.WrapText("one\ntwo", 40);
+        Assert.Equal(new[] { "one", "two" }, lines);
+    }
+
+    [Fact]
+    public void DetailLines_IncludesHead_Desc_Detail_AndExamples()
+    {
+        var h = new FlagHint("-name", "-name PATTERN", "match base name",
+            "Quote the pattern so the shell does not expand it.",
+            new[] { "find . -name '*.txt'" });
+
+        var lines = FlagHelpBrowser.DetailLines(h, 60);
+
+        Assert.Equal("-name PATTERN", lines[0]);
+        Assert.Contains("match base name", lines);
+        Assert.Contains(lines, l => l.Contains("Quote the pattern"));
+        Assert.Contains("Examples:", lines);
+        Assert.Contains("  find . -name '*.txt'", lines);
+    }
+
+    [Fact]
+    public void Simulate_DownThenEnter_InsertsSelectedFlag()
+    {
+        var hints = new[]
+        {
+            new FlagHint("-a", "-a", "alpha"),
+            new FlagHint("-b", "-b", "beta"),
+        };
+        var browser = new FlagHelpBrowser("Help: x", hints);
+        var keys = new Queue<ConsoleKeyInfo>();
+        keys.Enqueue(K(ConsoleKey.DownArrow));
+        keys.Enqueue(K(ConsoleKey.Enter));
+
+        var (result, insert) = browser.Simulate(keys);
+
+        Assert.Equal(FlagHelpBrowser.Result.Insert, result);
+        Assert.Equal("-b", insert);
+        Assert.Equal(1, browser.SelectedIndex);
+    }
+
+    [Fact]
+    public void Simulate_Escape_Cancels()
+    {
+        var hints = new[] { new FlagHint("-a", "-a", "alpha") };
+        var browser = new FlagHelpBrowser("Help: x", hints);
+        var keys = new Queue<ConsoleKeyInfo>();
+        keys.Enqueue(K(ConsoleKey.Escape));
+
+        var (result, insert) = browser.Simulate(keys);
+
+        Assert.Equal(FlagHelpBrowser.Result.Cancelled, result);
+        Assert.Null(insert);
+    }
+
+    [Fact]
+    public void Simulate_Up_StopsAtFirst_DownStopsAtLast()
+    {
+        var hints = new[]
+        {
+            new FlagHint("-a", "-a", "alpha"),
+            new FlagHint("-b", "-b", "beta"),
+        };
+        var browser = new FlagHelpBrowser("Help: x", hints);
+        var keys = new Queue<ConsoleKeyInfo>();
+        keys.Enqueue(K(ConsoleKey.UpArrow));   // already at 0 → stays
+        keys.Enqueue(K(ConsoleKey.DownArrow)); // 1
+        keys.Enqueue(K(ConsoleKey.DownArrow)); // clamp at 1
+        browser.Simulate(keys);
+        Assert.Equal(1, browser.SelectedIndex);
+    }
+
+    [Fact]
+    public void Simulate_PageDown_ScrollsDetail()
+    {
+        // A hint with a long detail so the body overflows a small window.
+        var detail = string.Join(" ", Enumerable.Range(0, 200).Select(i => "word" + i));
+        var hints = new[] { new FlagHint("-x", "-x", "many", detail) };
+        var browser = new FlagHelpBrowser("Help: x", hints);
+        var keys = new Queue<ConsoleKeyInfo>();
+        keys.Enqueue(K(ConsoleKey.PageDown));
+        browser.Simulate(keys, width: 40, height: 10);
+        Assert.True(browser.DetailScroll > 0);
+    }
+
+    [Fact]
+    public void EmptyHints_RunReturnsCancelled()
+    {
+        var browser = new FlagHelpBrowser("Help: x", System.Array.Empty<FlagHint>());
+        var (result, _) = browser.Run(); // no hints → immediate cancel (no terminal needed)
+        Assert.Equal(FlagHelpBrowser.Result.Cancelled, result);
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// LineEditor.ComputeScroll — flag-panel scroll-window math (P3)
+// ─────────────────────────────────────────────────────────────────────────────
+
+public class LineEditorPanelScrollTests
+{
+    [Fact]
+    public void Scroll_SelectionWithinWindow_NoChange()
+    {
+        // window 8, total 20, selecting row 3 while scrolled to top → stays at 0.
+        Assert.Equal(0, LineEditor.ComputeScroll(selected: 3, scroll: 0, window: 8, total: 20));
+    }
+
+    [Fact]
+    public void Scroll_SelectionBelowWindow_ScrollsDownToKeepVisible()
+    {
+        // selecting row 8 with window 8 (rows 0..7 visible) → top moves to 1 so row 8 shows.
+        Assert.Equal(1, LineEditor.ComputeScroll(selected: 8, scroll: 0, window: 8, total: 20));
+    }
+
+    [Fact]
+    public void Scroll_SelectionAboveWindow_ScrollsUp()
+    {
+        // selecting row 2 while scrolled to 5 → top moves up to 2.
+        Assert.Equal(2, LineEditor.ComputeScroll(selected: 2, scroll: 5, window: 8, total: 20));
+    }
+
+    [Fact]
+    public void Scroll_NeverPastEnd()
+    {
+        // last row selected; offset clamps so the window ends exactly at total (20-8=12).
+        Assert.Equal(12, LineEditor.ComputeScroll(selected: 19, scroll: 19, window: 8, total: 20));
+    }
+
+    [Fact]
+    public void Scroll_ListShorterThanWindow_StaysZero()
+    {
+        Assert.Equal(0, LineEditor.ComputeScroll(selected: 2, scroll: 0, window: 8, total: 3));
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // TabCompleter
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -84,7 +237,7 @@ public class TabCompleterTests : IDisposable
         File.WriteAllText(Path.Combine(_tmpDir, "alpha.sh"), "");
         File.WriteAllText(Path.Combine(_tmpDir, "beta.sh"), "");
 
-        var results = TabCompleter.Complete("cat ", 4, _noAliases, _tmpDir);
+        var results = TabCompleter.Complete("cat ", 4, _noAliases, _tmpDir).Texts();
 
         Assert.Contains("alpha.sh", results);
         Assert.Contains("beta.sh", results);
@@ -96,7 +249,7 @@ public class TabCompleterTests : IDisposable
         File.WriteAllText(Path.Combine(_tmpDir, "foo.txt"), "");
         File.WriteAllText(Path.Combine(_tmpDir, "bar.txt"), "");
 
-        var results = TabCompleter.Complete("cat fo", 6, _noAliases, _tmpDir);
+        var results = TabCompleter.Complete("cat fo", 6, _noAliases, _tmpDir).Texts();
 
         Assert.Contains("foo.txt", results);
         Assert.DoesNotContain("bar.txt", results);
@@ -108,7 +261,7 @@ public class TabCompleterTests : IDisposable
         var sub = Path.Combine(_tmpDir, "subdir");
         Directory.CreateDirectory(sub);
 
-        var results = TabCompleter.Complete("ls sub", 6, _noAliases, _tmpDir);
+        var results = TabCompleter.Complete("ls sub", 6, _noAliases, _tmpDir).Texts();
 
         Assert.Contains("subdir/", results);
     }
@@ -117,7 +270,7 @@ public class TabCompleterTests : IDisposable
     public void CompleteCommand_KnownBuiltin_Returned()
     {
         // "ec" should complete to "echo"
-        var results = TabCompleter.Complete("ec", 2, _noAliases, _tmpDir);
+        var results = TabCompleter.Complete("ec", 2, _noAliases, _tmpDir).Texts();
         Assert.Contains("echo", results);
     }
 
@@ -129,7 +282,7 @@ public class TabCompleterTests : IDisposable
             ["gst"] = "git status",
         };
 
-        var results = TabCompleter.Complete("gs", 2, aliases, _tmpDir);
+        var results = TabCompleter.Complete("gs", 2, aliases, _tmpDir).Texts();
         Assert.Contains("gst", results);
     }
 
@@ -146,7 +299,7 @@ public class TabCompleterTests : IDisposable
         File.WriteAllText(Path.Combine(_tmpDir, "readme.md"), "");
         var prefix = _tmpDir.TrimEnd('/') + "/";
 
-        var results = TabCompleter.Complete($"cat {prefix}read", prefix.Length + 4 + "read".Length, _noAliases, _tmpDir);
+        var results = TabCompleter.Complete($"cat {prefix}read", prefix.Length + 4 + "read".Length, _noAliases, _tmpDir).Texts();
         Assert.Contains(prefix + "readme.md", results);
     }
 
@@ -155,14 +308,136 @@ public class TabCompleterTests : IDisposable
     // ─────────────────────────────────────────────────────────────────────────────
 
     [Fact]
-    public void CompleteFlags_ls_dash_ReturnsAllFlagsWithDescriptions()
+    public void CompleteFlags_ls_dash_InsertsBareFlag_ListsDescription()
     {
         var results = TabCompleter.Complete("ls -", 4, _noAliases, _tmpDir);
 
-        // Should return flags formatted as "-l  - long listing"
-        Assert.Contains("-l  - long listing", results);
-        Assert.Contains("-a  - show hidden", results);
-        Assert.Contains("-h  - human readable sizes", results);
+        // The DESCRIPTION is shown in the list (DisplayText) ...
+        Assert.Contains("-l  - long listing", results.Labels());
+        Assert.Contains("-a  - show hidden", results.Labels());
+        Assert.Contains("-h  - human readable sizes", results.Labels());
+
+        // ... but only the BARE FLAG is ever inserted (InsertText) — never the description.
+        Assert.Contains("-l", results.Texts());
+        Assert.Contains("-a", results.Texts());
+        Assert.Contains("-h", results.Texts());
+        Assert.DoesNotContain("-l  - long listing", results.Texts());
+    }
+
+    [Fact]
+    public void CompleteFlags_findDashN_InsertsFlagOnly_NeverDescription()
+    {
+        // Regression: typing "find -n"<Tab> used to insert "find -name  - name pattern" because the
+        // candidate string glued the flag to its description. InsertText must be the bare flag, and
+        // it must never contain the "  - " description separator.
+        var results = TabCompleter.Complete("find -n", 7, _noAliases, _tmpDir);
+
+        Assert.NotEmpty(results);
+        Assert.Contains("-name", results.Texts());
+        Assert.All(results, c =>
+        {
+            Assert.StartsWith("-n", c.InsertText);            // matches the typed prefix
+            Assert.DoesNotContain("  - ", c.InsertText);      // description never reaches the buffer
+            Assert.Contains("  - ", c.DisplayText);           // but the list still shows it
+        });
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────────
+    // Flag-doc panel data (MatchingFlagSpecs) — the floating "what does -n mean" panel
+    // ─────────────────────────────────────────────────────────────────────────────
+
+    [Fact]
+    public void MatchingFlagSpecs_FlagPrefix_ReturnsFlagAndDescription()
+    {
+        var specs = TabCompleter.MatchingFlagSpecs("find -n", 7, _noAliases);
+
+        Assert.Contains(specs, s => s.Flag == "-name" && !string.IsNullOrWhiteSpace(s.Desc));
+        Assert.All(specs, s => Assert.StartsWith("-n", s.Flag)); // only -n* flags
+    }
+
+    [Fact]
+    public void MatchingFlagSpecs_LoneDash_ReturnsAllFlagsForCommand()
+    {
+        var specs = TabCompleter.MatchingFlagSpecs("find -", 6, _noAliases);
+
+        // A bare "-" matches every flag the command documents (the full panel).
+        Assert.Contains(specs, s => s.Flag == "-name");
+        Assert.Contains(specs, s => s.Flag == "-type");
+        Assert.True(specs.Count >= 3);
+    }
+
+    [Fact]
+    public void MatchingFlagSpecs_NotAFlagToken_ReturnsEmpty()
+    {
+        // Trailing space → empty token; the panel must not show.
+        Assert.Empty(TabCompleter.MatchingFlagSpecs("find ", 5, _noAliases));
+        // A plain operand (no leading '-') is not a flag.
+        Assert.Empty(TabCompleter.MatchingFlagSpecs("find foo", 8, _noAliases));
+    }
+
+    [Fact]
+    public void MatchingFlagSpecs_CommandPosition_ReturnsEmpty()
+    {
+        // The first word is a command name, not a flag — even "-" there gets no flag panel.
+        Assert.Empty(TabCompleter.MatchingFlagSpecs("fin", 3, _noAliases));
+    }
+
+    [Fact]
+    public void MatchingFlagSpecs_UnknownCommand_ReturnsEmpty()
+    {
+        Assert.Empty(TabCompleter.MatchingFlagSpecs("frobnicate -x", 13, _noAliases));
+    }
+
+    [Fact]
+    public void MatchingFlagSpecs_RedirectTargetStartingWithDash_ReturnsEmpty()
+    {
+        // "-out" after '>' is a redirect target (a path), not a flag of the command.
+        Assert.Empty(TabCompleter.MatchingFlagSpecs("grep x > -out", 13, _noAliases));
+    }
+
+    [Fact]
+    public void MatchingFlagSpecs_ExpandsAlias()
+    {
+        var aliases = new Dictionary<string, string>(StringComparer.Ordinal) { ["ll"] = "ls -l" };
+
+        var specs = TabCompleter.MatchingFlagSpecs("ll -a", 5, aliases);
+
+        Assert.Contains(specs, s => s.Flag == "-a");
+    }
+
+    [Fact]
+    public void MatchingFlagSpecs_RichData_CarriesArgDetailAndExamples()
+    {
+        var specs = TabCompleter.MatchingFlagSpecs("find -name", 10, _noAliases);
+
+        var name = Assert.Single(specs, s => s.Flag == "-name");
+        Assert.Equal("PATTERN", name.Arg);                       // argument placeholder
+        Assert.False(string.IsNullOrWhiteSpace(name.Detail));    // man-page paragraph present
+        Assert.NotNull(name.Examples);
+        Assert.Contains(name.Examples!, e => e.Contains("-name")); // at least one usage example
+    }
+
+    [Fact]
+    public void MatchingFlagSpecs_NewlySupportedFindPredicates_AreDocumented()
+    {
+        var dSpecs = TabCompleter.MatchingFlagSpecs("find -d", 7, _noAliases);
+        Assert.Contains(dSpecs, s => s.Flag == "-delete");
+        Assert.Contains(dSpecs, s => s.Flag == "-depth");
+
+        var iSpecs = TabCompleter.MatchingFlagSpecs("find -i", 7, _noAliases);
+        Assert.Contains(iSpecs, s => s.Flag == "-iname");
+    }
+
+    [Fact]
+    public void CompleteFlags_WithArg_ShowsArgPlaceholderInLabel_ButInsertsBareFlag()
+    {
+        var results = TabCompleter.Complete("find -n", 7, _noAliases, _tmpDir);
+
+        // The list shows the arg placeholder ("-name PATTERN  - ...") ...
+        Assert.Contains(results.Labels(), l => l.StartsWith("-name PATTERN"));
+        // ... but only the bare flag is inserted.
+        Assert.Contains("-name", results.Texts());
+        Assert.DoesNotContain(results.Texts(), t => t.Contains("PATTERN"));
     }
 
     [Fact]
@@ -172,7 +447,8 @@ public class TabCompleterTests : IDisposable
 
         // Should return only flags starting with "-l"
         Assert.Single(results);
-        Assert.Contains("-l  - long listing", results);
+        Assert.Contains("-l", results.Texts());
+        Assert.Contains("-l  - long listing", results.Labels());
     }
 
     [Fact]
@@ -180,8 +456,9 @@ public class TabCompleterTests : IDisposable
     {
         var results = TabCompleter.Complete("grep -i", 7, _noAliases, _tmpDir);
 
-        // Should return "-i  - ignore case"
-        Assert.Contains("-i  - ignore case", results);
+        // Inserts "-i"; lists "-i  - ignore case".
+        Assert.Contains("-i", results.Texts());
+        Assert.Contains("-i  - ignore case", results.Labels());
     }
 
     [Fact]
@@ -189,8 +466,9 @@ public class TabCompleterTests : IDisposable
     {
         var results = TabCompleter.Complete("cat -n", 6, _noAliases, _tmpDir);
 
-        // Should return "-n  - number all lines"
-        Assert.Contains("-n  - number all lines", results);
+        // Inserts "-n"; lists "-n  - number all lines".
+        Assert.Contains("-n", results.Texts());
+        Assert.Contains("-n  - number all lines", results.Labels());
     }
 
     [Fact]
@@ -199,7 +477,8 @@ public class TabCompleterTests : IDisposable
         var results = TabCompleter.Complete("ls -l -", 7, _noAliases, _tmpDir);
 
         // Should complete flags after existing flags
-        Assert.Contains("-a  - show hidden", results);
+        Assert.Contains("-a", results.Texts());
+        Assert.Contains("-a  - show hidden", results.Labels());
     }
 
     [Fact]
@@ -231,15 +510,17 @@ public class TabCompleterTests : IDisposable
         var results = TabCompleter.Complete("ll -", 4, aliases, _tmpDir);
 
         // Should expand alias "ll" to "ls" and return ls flags
-        Assert.Contains("-a  - show hidden", results);
-        Assert.Contains("-h  - human readable sizes", results);
+        Assert.Contains("-a", results.Texts());
+        Assert.Contains("-h", results.Texts());
+        Assert.Contains("-a  - show hidden", results.Labels());
+        Assert.Contains("-h  - human readable sizes", results.Labels());
     }
 
     [Fact]
     public void CompleteFlags_NonFlagStart_FallsBackToPathCompletion()
     {
         File.WriteAllText(Path.Combine(_tmpDir, "file.txt"), "");
-        var results = TabCompleter.Complete("ls file", 7, _noAliases, _tmpDir);
+        var results = TabCompleter.Complete("ls file", 7, _noAliases, _tmpDir).Texts();
 
         // When not starting with '-', should do path completion
         Assert.Contains("file.txt", results);
@@ -251,7 +532,8 @@ public class TabCompleterTests : IDisposable
         var results = TabCompleter.Complete("FOO=bar ls -", 12, _noAliases, _tmpDir);
 
         // Should handle env var prefix before command
-        Assert.Contains("-l  - long listing", results);
+        Assert.Contains("-l", results.Texts());
+        Assert.Contains("-l  - long listing", results.Labels());
     }
 
     // ─────────────────────────────────────────────────────────────────────────────
@@ -287,7 +569,7 @@ public class TabCompleterTests : IDisposable
 
         // Should suggest "docker run myapp" based on sequence
         Assert.NotEmpty(results);
-        Assert.Contains(results, r => r.Contains("docker run"));
+        Assert.Contains(results, r => r.InsertText.Contains("docker run"));
     }
 
     [Fact]
@@ -313,12 +595,12 @@ public class TabCompleterTests : IDisposable
 
         // Should include "git push" from sequence suggestions
         Assert.NotEmpty(results);
-        Assert.Contains(results, r => r == "git push");
+        Assert.Contains(results, r => r.InsertText == "git push");
 
         // Test with prefix "git" (first word, no space) - should suggest "git push"
         var prefixedResults = TabCompleter.Complete("git", 3, _noAliases, cwd, "git commit", store);
         Assert.NotEmpty(prefixedResults);
-        Assert.Contains(prefixedResults, r => r == "git push");
+        Assert.Contains(prefixedResults, r => r.InsertText == "git push");
     }
 
     [Fact]
@@ -357,18 +639,18 @@ public class TabCompleterTests : IDisposable
 
         // cwd1 should suggest "test" (local sequence)
         Assert.NotEmpty(results1);
-        Assert.Contains(results1, r => r == "test");
+        Assert.Contains(results1, r => r.InsertText == "test");
 
         // cwd2 should suggest "deploy" (local sequence)
         Assert.NotEmpty(results2);
-        Assert.Contains(results2, r => r == "deploy");
+        Assert.Contains(results2, r => r.InsertText == "deploy");
     }
 
     [Fact]
     public async Task Complete_EmptyLine_NoLastCommand_ReturnsCommandCompletions()
     {
         var store = new InMemoryHistoryStore();
-        var results = TabCompleter.Complete("", 0, _noAliases, _tmpDir, null, store);
+        var results = TabCompleter.Complete("", 0, _noAliases, _tmpDir, null, store).Texts();
 
         Assert.NotEmpty(results);
         // Should include known commands like "ls", "echo", etc.
@@ -391,7 +673,7 @@ public class TabCompleterTests : IDisposable
 
         // "git push" should appear early in results (sequence suggestion prioritized)
         Assert.NotEmpty(results);
-        Assert.Contains(results, r => r == "git push");
+        Assert.Contains(results, r => r.InsertText == "git push");
 
         // Should also include other commands
         Assert.True(results.Count > 1);
@@ -449,7 +731,7 @@ public class TabCompleterContextTests : IDisposable
 
         // Simulate: cat "my fi  (cursor at end, inside open double quote)
         var line = $"cat \"my f";
-        var results = TabCompleter.Complete(line, line.Length, _noAliases, _tmpDir);
+        var results = TabCompleter.Complete(line, line.Length, _noAliases, _tmpDir).Texts();
 
         // Should find "my file.txt" as a candidate
         Assert.Contains(fileName, results);
@@ -460,7 +742,7 @@ public class TabCompleterContextTests : IDisposable
     {
         File.WriteAllText(Path.Combine(_tmpDir, "normal.txt"), "");
 
-        var results = TabCompleter.Complete("cat norm", 8, _noAliases, _tmpDir);
+        var results = TabCompleter.Complete("cat norm", 8, _noAliases, _tmpDir).Texts();
         Assert.Contains("normal.txt", results);
     }
 
@@ -470,7 +752,7 @@ public class TabCompleterContextTests : IDisposable
     public void CompleteCommand_AfterPipe_IsFirstWordContext()
     {
         // "ls | ec" — after the pipe, "ec" should trigger command completion
-        var results = TabCompleter.Complete("ls | ec", 7, _noAliases, _tmpDir);
+        var results = TabCompleter.Complete("ls | ec", 7, _noAliases, _tmpDir).Texts();
         // Should suggest "echo" as a command (not path completion)
         Assert.Contains("echo", results);
     }
@@ -479,7 +761,7 @@ public class TabCompleterContextTests : IDisposable
     public void CompleteCommand_AfterPipe_EmptyToken_ReturnsCommands()
     {
         // "ls | " — cursor right after the pipe+space, empty token
-        var results = TabCompleter.Complete("ls | ", 5, _noAliases, _tmpDir);
+        var results = TabCompleter.Complete("ls | ", 5, _noAliases, _tmpDir).Texts();
         Assert.Contains("echo", results);
         Assert.Contains("grep", results);
     }
@@ -488,7 +770,7 @@ public class TabCompleterContextTests : IDisposable
     public void CompleteCommand_AfterPipePipe_IsFirstWordContext()
     {
         // "cmd1 || ec" — after ||, "ec" is a command name
-        var results = TabCompleter.Complete("cmd1 || ec", 10, _noAliases, _tmpDir);
+        var results = TabCompleter.Complete("cmd1 || ec", 10, _noAliases, _tmpDir).Texts();
         Assert.Contains("echo", results);
     }
 
@@ -496,7 +778,7 @@ public class TabCompleterContextTests : IDisposable
     public void CompleteCommand_AfterAndAnd_IsFirstWordContext()
     {
         // "cmd1 && ec" — after &&, "ec" is a command name
-        var results = TabCompleter.Complete("cmd1 && ec", 10, _noAliases, _tmpDir);
+        var results = TabCompleter.Complete("cmd1 && ec", 10, _noAliases, _tmpDir).Texts();
         Assert.Contains("echo", results);
     }
 
@@ -504,7 +786,7 @@ public class TabCompleterContextTests : IDisposable
     public void CompleteCommand_AfterSemicolon_IsFirstWordContext()
     {
         // "cmd1; ec" — after ;, "ec" is a command name
-        var results = TabCompleter.Complete("cmd1; ec", 8, _noAliases, _tmpDir);
+        var results = TabCompleter.Complete("cmd1; ec", 8, _noAliases, _tmpDir).Texts();
         Assert.Contains("echo", results);
     }
 
@@ -516,7 +798,7 @@ public class TabCompleterContextTests : IDisposable
         File.WriteAllText(Path.Combine(_tmpDir, "output.log"), "");
         // "cmd > outp" — cursor at end, should path-complete "output.log"
         var line = $"cmd > outp";
-        var results = TabCompleter.Complete(line, line.Length, _noAliases, _tmpDir);
+        var results = TabCompleter.Complete(line, line.Length, _noAliases, _tmpDir).Texts();
         Assert.Contains("output.log", results);
     }
 
@@ -526,7 +808,7 @@ public class TabCompleterContextTests : IDisposable
         File.WriteAllText(Path.Combine(_tmpDir, "input.txt"), "");
         // "cat < inpu" — should path-complete "input.txt"
         var line = "cat < inpu";
-        var results = TabCompleter.Complete(line, line.Length, _noAliases, _tmpDir);
+        var results = TabCompleter.Complete(line, line.Length, _noAliases, _tmpDir).Texts();
         Assert.Contains("input.txt", results);
     }
 
@@ -536,7 +818,7 @@ public class TabCompleterContextTests : IDisposable
         File.WriteAllText(Path.Combine(_tmpDir, "append.log"), "");
         // "echo hello >> appen" — should path-complete "append.log"
         var line = "echo hello >> appen";
-        var results = TabCompleter.Complete(line, line.Length, _noAliases, _tmpDir);
+        var results = TabCompleter.Complete(line, line.Length, _noAliases, _tmpDir).Texts();
         Assert.Contains("append.log", results);
     }
 
@@ -546,7 +828,7 @@ public class TabCompleterContextTests : IDisposable
     public void CompleteCommand_AfterCommandSub_IsFirstWordContext()
     {
         // "echo $(ec" — inside $(), "ec" should trigger command completion
-        var results = TabCompleter.Complete("echo $(ec", 9, _noAliases, _tmpDir);
+        var results = TabCompleter.Complete("echo $(ec", 9, _noAliases, _tmpDir).Texts();
         Assert.Contains("echo", results);
     }
 
@@ -607,7 +889,7 @@ public class TabCompleterContextTests : IDisposable
     public void CompleteFlags_NegativeFlag_DoesNotReturnPathsForKnownCommands()
     {
         // "ls -" with a known command should return flags, not paths
-        var results = TabCompleter.Complete("ls -", 4, _noAliases, _tmpDir);
+        var results = TabCompleter.Complete("ls -", 4, _noAliases, _tmpDir).Texts();
         // All results should be flags (start with -)
         Assert.All(results, r => Assert.StartsWith("-", r));
     }

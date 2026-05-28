@@ -23,17 +23,41 @@ internal sealed class LineEditor
     // ── completion ───────────────────────────────────────────────────────────
     // Async so providers can round-trip to the runspace (live command/parameter
     // completion). A sync completer (tests, legacy) is adapted into this shape.
-    private readonly Func<string, int, CancellationToken, Task<IReadOnlyList<string>>>? _completer;
+    private readonly Func<string, int, CancellationToken, Task<IReadOnlyList<CompletionItem>>>? _completer;
 
     // Upper bound on a single Tab's completion. A live runspace query that exceeds this is
     // cancelled and the static/local candidates computed so far are used — Tab never hangs.
     private const int CompletionTimeoutMs = 200;
 
     // Cycle state for successive Tab presses
-    private IReadOnlyList<string>? _completions;
+    private IReadOnlyList<CompletionItem>? _completions;
     private int _completionIndex;
     private string _completionBase = "";   // text before the token being completed
     private string _completionToken = "";  // partial token that triggered completion
+
+    // ── flag-doc panel ─────────────────────────────────────────────────────────
+    // Aliases used to resolve the command under the cursor when building the floating
+    // flag-doc panel (e.g. "ll" -> "ls"). Empty when none supplied.
+    private readonly IReadOnlyDictionary<string, string> _aliases;
+    // Max flag-doc rows shown at once (plus a "…" overflow row); keeps the panel from dominating.
+    private const int MaxPanelRows = 8;
+
+    // Async hint source for PowerShell-cmdlet parameters (the bash flag panel is computed
+    // synchronously from the local flag specs; PS params need a bounded runspace round-trip).
+    // Returns empty for bash commands / non-flag tokens. Null when no live worker is wired.
+    private readonly Func<string, int, CancellationToken, Task<IReadOnlyList<FlagHint>>>? _flagHintProvider;
+    // Cached PS-param hints + the "commandtoken" key they were fetched for. Computed on
+    // keystroke (UpdatePsFlagHintsAsync) and rendered by ComputeFlagPanel only while the key still
+    // matches the cursor — so a stale async result never paints under a changed token.
+    private IReadOnlyList<FlagHint>? _psPanelHints;
+    private string? _psPanelKey;
+
+    // Panel navigation: when the user presses ↓ with the panel visible, focus moves INTO the panel
+    // (↑↓/PgUp/PgDn scroll a highlighted selection; Enter inserts the flag; Esc / ↑-past-top returns
+    // to typing). _panelScroll is the index of the first visible row when the list overflows.
+    private bool _panelFocused;
+    private int _panelSelected;
+    private int _panelScroll;
 
     // ── buffer ───────────────────────────────────────────────────────────────
     private readonly StringBuilder _buf = new();
@@ -46,14 +70,19 @@ internal sealed class LineEditor
     private string _prompt = "";
 
     // ── ANSI sequences ───────────────────────────────────────────────────────
-    private const string ClearLine = "\x1b[2K\r";
+    // Color for the fish-style inline autosuggestion ("ghost" text). Use an explicit gray
+    // (bright-black, SGR 90) rather than faint (SGR 2): faint is widely unsupported and on many
+    // terminals/color-schemes renders identically to the background, making the ghost vanish.
+    // fish and zsh-autosuggestions both default to an explicit gray for exactly this reason.
+    private const string SuggestionColor = "\x1b[90m";
+    private const string SgrReset = "\x1b[0m";
 
     // ── constants ────────────────────────────────────────────────────────────
     private const int MaxHistory = 5000;
 
     // Adapt a synchronous completer into the async shape the editor now uses.
-    private static Func<string, int, CancellationToken, Task<IReadOnlyList<string>>>? Adapt(
-        Func<string, int, IReadOnlyList<string>>? sync)
+    private static Func<string, int, CancellationToken, Task<IReadOnlyList<CompletionItem>>>? Adapt(
+        Func<string, int, IReadOnlyList<CompletionItem>>? sync)
         => sync is null ? null : (line, cursor, _) => Task.FromResult(sync(line, cursor));
 
     /// <summary>
@@ -61,25 +90,31 @@ internal sealed class LineEditor
     /// </summary>
     public LineEditor(
         IHistoryStore historyStore,
-        Func<string, int, IReadOnlyList<string>>? completer = null,
-        string? cwd = null)
-        : this(historyStore, Adapt(completer), cwd)
+        Func<string, int, IReadOnlyList<CompletionItem>>? completer = null,
+        string? cwd = null,
+        IReadOnlyDictionary<string, string>? aliases = null)
+        : this(historyStore, Adapt(completer), cwd, aliases)
     {
     }
 
     /// <summary>
     /// Creates a new LineEditor with a history store and an async completer (runspace-backed
     /// completion). The completer receives a CancellationToken bounded by the Tab deadline.
+    /// <paramref name="aliases"/> resolves the command under the cursor for the flag-doc panel.
     /// </summary>
     public LineEditor(
         IHistoryStore historyStore,
-        Func<string, int, CancellationToken, Task<IReadOnlyList<string>>>? completer,
-        string? cwd = null)
+        Func<string, int, CancellationToken, Task<IReadOnlyList<CompletionItem>>>? completer,
+        string? cwd = null,
+        IReadOnlyDictionary<string, string>? aliases = null,
+        Func<string, int, CancellationToken, Task<IReadOnlyList<FlagHint>>>? flagHintProvider = null)
     {
         _historyStore = historyStore;
         _completer = completer;
+        _flagHintProvider = flagHintProvider;
         _suggester = new Suggester(historyStore);
         _cwd = cwd ?? Environment.CurrentDirectory;
+        _aliases = aliases ?? EmptyAliases;
         _history = new List<string>();
         _historyIndex = 0;
 
@@ -92,16 +127,21 @@ internal sealed class LineEditor
     /// </summary>
     public LineEditor(
         string historyPath,
-        Func<string, int, IReadOnlyList<string>>? completer = null,
-        string? cwd = null)
+        Func<string, int, IReadOnlyList<CompletionItem>>? completer = null,
+        string? cwd = null,
+        IReadOnlyDictionary<string, string>? aliases = null)
     {
         _historyStore = new LegacyFileHistoryStore(historyPath);
         _completer = Adapt(completer);
         _suggester = new Suggester(_historyStore);
         _cwd = cwd ?? Environment.CurrentDirectory;
+        _aliases = aliases ?? EmptyAliases;
         _history = LoadHistory(historyPath);
         _historyIndex = _history.Count;
     }
+
+    private static readonly IReadOnlyDictionary<string, string> EmptyAliases =
+        new Dictionary<string, string>(StringComparer.Ordinal);
 
     private async Task LoadHistoryAsync()
     {
@@ -150,6 +190,7 @@ internal sealed class LineEditor
         _savedInput = "";
         ClearCompletion();
         ClearSuggestion();
+        ExitPanelFocus();
 
         Console.Write(_prompt);
 
@@ -171,10 +212,43 @@ internal sealed class LineEditor
             try
             {
 
+            // Floating-panel focus (P3): when focused, arrow/PgUp/PgDn/Enter/Esc drive the panel.
+            // A non-panel key exits focus and is then handled normally below.
+            if (_panelFocused)
+            {
+                if (TryHandlePanelKey(key)) continue;
+                _panelFocused = false;
+            }
+            // ↓ with the panel visible (and not yet focused) moves focus INTO the panel.
+            else if (key.Key == ConsoleKey.DownArrow && key.Modifiers == 0 && CurrentFlagHints().Count > 0)
+            {
+                _panelFocused = true;
+                _panelSelected = 0;
+                _panelScroll = 0;
+                Redraw();
+                continue;
+            }
+
+            // F1 — open the scrollable man-page browser for the command under the cursor.
+            if (key.Key == ConsoleKey.F1)
+            {
+                ClearSuggestion();
+                OpenHelpBrowserFromPrompt();
+                continue;
+            }
+
             // Tab completion
             if (key.Key == ConsoleKey.Tab && key.Modifiers == 0)
             {
                 ClearSuggestion();  // Clear suggestion when tab completes
+                // Drop the floating flag-doc panel and reprint the bare input line so the
+                // completion list (if any) renders cleanly below, with no panel left behind.
+                Console.Write("\r\x1b[0J");
+                // Drop the floating flag-doc panel and reprint the bare input line so the
+                // completion list (if any) renders cleanly below, with no panel left behind.
+                Console.Write("\r\x1b[0J");
+                Console.Write(_prompt);
+                Console.Write(_buf.ToString());
                 await HandleTabAsync();
                 continue;
             }
@@ -201,7 +275,7 @@ internal sealed class LineEditor
                     return null;   // EOF
                 }
                 DeleteCharForward();
-                await UpdateSuggestionAsync();
+                await RefreshHintsAsync();
                 Redraw();
                 continue;
             }
@@ -209,6 +283,11 @@ internal sealed class LineEditor
             // Enter / newline
             if (key.Key == ConsoleKey.Enter)
             {
+                // Erase any floating flag-doc panel below, reprint the committed line cleanly
+                // (no ghost / no panel), then advance past it.
+                Console.Write("\r\x1b[0J");
+                Console.Write(_prompt);
+                Console.Write(_buf.ToString());
                 Console.WriteLine();
                 var result = _buf.ToString();
                 if (result.Length > 0)
@@ -232,6 +311,11 @@ internal sealed class LineEditor
             // Ctrl-C — caller handles SIGINT via CancelKeyPress; we just clear the line
             if (key.Key == ConsoleKey.C && key.Modifiers == ConsoleModifiers.Control)
             {
+                // Erase any floating panel, reprint the abandoned line with a trailing ^C,
+                // then drop to a fresh prompt.
+                Console.Write("\r\x1b[0J");
+                Console.Write(_prompt);
+                Console.Write(_buf.ToString());
                 Console.WriteLine("^C");
                 _buf.Clear();
                 _cursor = 0;
@@ -287,32 +371,32 @@ internal sealed class LineEditor
                 // ── deletion ─────────────────────────────────────────────────
                 case ConsoleKey.Backspace:
                     DeleteCharBack();
-                    await UpdateSuggestionAsync();
+                    await RefreshHintsAsync();
                     Redraw();
                     break;
                 case ConsoleKey.Delete:
                     DeleteCharForward();
-                    await UpdateSuggestionAsync();
+                    await RefreshHintsAsync();
                     Redraw();
                     break;
                 case ConsoleKey.K when key.Modifiers == ConsoleModifiers.Control:
                     KillToEnd();
-                    await UpdateSuggestionAsync();
+                    await RefreshHintsAsync();
                     Redraw();
                     break;
                 case ConsoleKey.U when key.Modifiers == ConsoleModifiers.Control:
                     KillToStart();
-                    await UpdateSuggestionAsync();
+                    await RefreshHintsAsync();
                     Redraw();
                     break;
                 case ConsoleKey.W when key.Modifiers == ConsoleModifiers.Control:
                     KillWordBack();
-                    await UpdateSuggestionAsync();
+                    await RefreshHintsAsync();
                     Redraw();
                     break;
                 case ConsoleKey.Y when key.Modifiers == ConsoleModifiers.Control:
                     Yank();
-                    await UpdateSuggestionAsync();
+                    await RefreshHintsAsync();
                     Redraw();
                     break;
 
@@ -328,7 +412,7 @@ internal sealed class LineEditor
                     if (key.KeyChar != '\0' && !char.IsControl(key.KeyChar))
                     {
                         InsertChar(key.KeyChar);
-                        await UpdateSuggestionAsync();
+                        await RefreshHintsAsync();
                         Redraw();
                     }
                     // Ignore other control sequences (F-keys, etc.)
@@ -502,27 +586,31 @@ internal sealed class LineEditor
         }
     }
 
-    private void ApplyCompletion(string completion)
+    private void ApplyCompletion(CompletionItem completion)
     {
+        // Only ever insert InsertText. DisplayText (which may carry a flag description like
+        // "-name  - name pattern") is for the list shown to the user and must never reach the buffer.
+        var insertText = completion.InsertText;
+
         var suffix = _buf.ToString(_cursor, _buf.Length - _cursor);
         var addSpace = suffix.Length == 0
-            && !completion.EndsWith('/')
-            && !completion.EndsWith(Path.DirectorySeparatorChar);
+            && !insertText.EndsWith('/')
+            && !insertText.EndsWith(Path.DirectorySeparatorChar);
 
         // If the completion base ends with an open double-quote, we are completing
         // inside a quoted argument. Wrap the completion in quotes so spaces in the
         // path are handled correctly.
         var isInsideQuote = _completionBase.Length > 0 && _completionBase[^1] == '"';
         string insertedCompletion;
-        if (isInsideQuote && completion.Contains(' '))
+        if (isInsideQuote && insertText.Contains(' '))
         {
             // Close the quote after the completion, no trailing space (shell adds it).
-            insertedCompletion = completion + "\"";
+            insertedCompletion = insertText + "\"";
             addSpace = false;
         }
         else
         {
-            insertedCompletion = completion;
+            insertedCompletion = insertText;
         }
 
         var newBuf = _completionBase + insertedCompletion + (addSpace ? " " : "") + suffix;
@@ -531,15 +619,16 @@ internal sealed class LineEditor
         Redraw();
     }
 
-    private static void ShowCompletionList(IReadOnlyList<string> completions)
+    private static void ShowCompletionList(IReadOnlyList<CompletionItem> completions)
     {
         Console.WriteLine();
-        var maxLen = completions.Max(c => c.Length) + 2;
+        // The list shows DisplayText (e.g. "-name  - name pattern"); only InsertText is ever typed.
+        var maxLen = completions.Max(c => c.DisplayText.Length) + 2;
         var cols = Math.Max(1, Console.WindowWidth / maxLen);
         int i = 0;
         foreach (var c in completions)
         {
-            Console.Write(c.PadRight(maxLen));
+            Console.Write(c.DisplayText.PadRight(maxLen));
             i++;
             if (i % cols == 0) Console.WriteLine();
         }
@@ -660,25 +749,291 @@ internal sealed class LineEditor
         var promptVisible = StripAnsi(_prompt);
         var text = _buf.ToString();
 
-        // Erase current line, reprint prompt + buffer, position cursor
-        Console.Write(ClearLine);
+        // The floating flag-doc panel: rows shown below the input line for the flag-prefix
+        // token under the cursor. Empty unless the cursor is on a "-flag" argument of a known
+        // command. Suppressed when suggestions are off (history navigation) to avoid noise.
+        var panel = showSuggestion ? ComputeFlagPanel() : Array.Empty<PanelRow>();
+
+        // Erase the whole region we own: carriage-return to the input line's column 0, then
+        // \x1b[0J wipes the input line AND everything below it (the previous panel). This
+        // single erase replaces the old single-line clear and also cleans up a stale panel.
+        Console.Write("\r\x1b[0J");
+
         Console.Write(_prompt);
         Console.Write(text);
 
-        // Append suggestion in dim (gray) if present and requested
-        int suggestionLen = 0;
-        if (showSuggestion && _currentSuggestion is not null && _currentSuggestion.Length > 0 && _cursor == _buf.Length)
+        // Inline history ghost — only when there is no flag panel, so the two never compete.
+        if (panel.Count == 0 && showSuggestion && _currentSuggestion is { Length: > 0 } && _cursor == _buf.Length)
         {
-            Console.Write("\x1b[2m");      // Dim on
+            Console.Write(SuggestionColor);
             Console.Write(_currentSuggestion);
-            Console.Write("\x1b[0m");      // Reset
-            suggestionLen = _currentSuggestion.Length;
+            Console.Write(SgrReset);
         }
 
-        // Move cursor back from end of rendered text (buffer + suggestion) to logical cursor position
-        var charsAfterCursor = (_buf.Length - _cursor) + suggestionLen;
-        if (charsAfterCursor > 0)
-            Console.Write($"\x1b[{charsAfterCursor}D");
+        // Draw the panel below. Each row goes on its own fresh line. Relative cursor moves
+        // (the \x1b[{N}A afterwards) stay correct even if writing the rows scrolls the screen,
+        // because the distance from the last panel row back up to the input line is always N.
+        foreach (var row in panel)
+        {
+            Console.Write("\r\n\x1b[2K");
+            if (row.Highlight)
+            {
+                Console.Write("\x1b[7m");   // reverse video for the focused selection
+                Console.Write(row.Text);
+                Console.Write("\x1b[27m");
+            }
+            else
+            {
+                Console.Write(SuggestionColor);
+                Console.Write(row.Text);
+                Console.Write(SgrReset);
+            }
+        }
+        if (panel.Count > 0)
+            Console.Write($"\x1b[{panel.Count}A"); // back up to the input line
+
+        // Place the cursor at the logical column on the input line: column 0 then forward.
+        var logicalCol = promptVisible.Length + _cursor;
+        Console.Write("\r");
+        if (logicalCol > 0)
+            Console.Write($"\x1b[{logicalCol}C");
+    }
+
+    /// <summary>
+    /// The flag/parameter hints for the token under the cursor: bash flag specs (synchronous,
+    /// always fresh) when the command is a bash command; otherwise the cached async PowerShell
+    /// parameter hints, but only while their key still matches the cursor. Empty when neither
+    /// applies. Never throws.
+    /// </summary>
+    private IReadOnlyList<FlagHint> CurrentFlagHints()
+    {
+        try
+        {
+            var specs = TabCompleter.MatchingFlagSpecs(_buf.ToString(), _cursor, _aliases);
+            if (specs.Count > 0)
+            {
+                return specs.Select(s => new FlagHint(
+                    s.Flag,
+                    s.Arg is { Length: > 0 } ? $"{s.Flag} {s.Arg}" : s.Flag,
+                    s.Desc, s.Detail, s.Examples)).ToList();
+            }
+
+            // PowerShell-cmdlet params (async, cached) — only if the cache is for this exact token.
+            if (_psPanelHints is { Count: > 0 } && _psPanelKey is not null && _psPanelKey == CurrentHintKey())
+                return _psPanelHints;
+
+            return Array.Empty<FlagHint>();
+        }
+        catch (Exception)
+        {
+            return Array.Empty<FlagHint>();
+        }
+    }
+
+    /// <summary>One rendered panel line: its text and whether it is the focused selection.</summary>
+    private readonly record struct PanelRow(string Text, bool Highlight);
+
+    /// <summary>
+    /// Rows for the floating flag-doc panel: each hint as "head  desc", two-space indented and
+    /// column-aligned. When unfocused the list is capped at <see cref="MaxPanelRows"/> with a
+    /// "press ↓" overflow hint; when focused it shows a scroll window around the highlighted
+    /// selection. Empty when not on a documented flag/parameter token. Never throws — advisory.
+    /// </summary>
+    private IReadOnlyList<PanelRow> ComputeFlagPanel()
+    {
+        try
+        {
+            var hints = CurrentFlagHints();
+            if (hints.Count == 0)
+                return Array.Empty<PanelRow>();
+
+            var headWidth = hints.Max(h => h.Head.Length);
+            int width;
+            try { width = Console.WindowWidth; } catch { width = 80; }
+            var maxWidth = Math.Max(20, width - 1);
+
+            string Format(FlagHint h)
+            {
+                var row = h.Desc.Length > 0
+                    ? "  " + h.Head.PadRight(headWidth + 2) + h.Desc
+                    : "  " + h.Head;
+                return row.Length > maxWidth ? row[..maxWidth] : row;
+            }
+
+            var rows = new List<PanelRow>(MaxPanelRows + 1);
+
+            if (!_panelFocused)
+            {
+                // Passive preview: first MaxPanelRows; if more, an overflow hint instead of scrolling.
+                int take = Math.Min(MaxPanelRows, hints.Count);
+                for (int k = 0; k < take; k++)
+                    rows.Add(new PanelRow(Format(hints[k]), false));
+                if (hints.Count > MaxPanelRows)
+                    rows.Add(new PanelRow($"  ↓ {hints.Count - MaxPanelRows} more — press ↓ to scroll", false));
+                return rows;
+            }
+
+            // Focused: clamp selection/scroll, render a window with the selection highlighted.
+            int window = Math.Min(MaxPanelRows, hints.Count);
+            int selected = Math.Clamp(_panelSelected, 0, hints.Count - 1);
+            int scroll = Math.Clamp(_panelScroll, 0, Math.Max(0, hints.Count - window));
+            for (int k = scroll; k < scroll + window && k < hints.Count; k++)
+                rows.Add(new PanelRow(Format(hints[k]), k == selected));
+            // A position indicator when the list overflows the window.
+            if (hints.Count > window)
+                rows.Add(new PanelRow($"  [{selected + 1}/{hints.Count}]  ↑↓ scroll · Enter insert · Esc back", false));
+            return rows;
+        }
+        catch (Exception)
+        {
+            // The panel is advisory; never let it break the line editor.
+            return Array.Empty<PanelRow>();
+        }
+    }
+
+    // ── panel focus navigation (P3) ───────────────────────────────────────────
+
+    /// <summary>
+    /// Handle a key while the panel is focused. Returns true if the key was consumed (navigation,
+    /// insert, or exit); false to let normal line editing handle it (which also exits focus).
+    /// </summary>
+    private bool TryHandlePanelKey(ConsoleKeyInfo key)
+    {
+        int total = CurrentFlagHints().Count;
+        if (total == 0) { _panelFocused = false; return false; }
+        int window = Math.Min(MaxPanelRows, total);
+
+        switch (key.Key)
+        {
+            case ConsoleKey.DownArrow when key.Modifiers == 0:
+                if (_panelSelected < total - 1) _panelSelected++;
+                EnsurePanelScroll(window, total); Redraw(); return true;
+            case ConsoleKey.UpArrow when key.Modifiers == 0:
+                if (_panelSelected <= 0) { ExitPanelFocus(); Redraw(); return true; }
+                _panelSelected--; EnsurePanelScroll(window, total); Redraw(); return true;
+            case ConsoleKey.PageDown:
+                _panelSelected = Math.Min(total - 1, _panelSelected + window);
+                EnsurePanelScroll(window, total); Redraw(); return true;
+            case ConsoleKey.PageUp:
+                _panelSelected = Math.Max(0, _panelSelected - window);
+                EnsurePanelScroll(window, total); Redraw(); return true;
+            case ConsoleKey.Escape:
+                ExitPanelFocus(); Redraw(); return true;
+            case ConsoleKey.Enter:
+                InsertFlagFromPanel(); return true;
+            case ConsoleKey.RightArrow when key.Modifiers == 0:
+                // Drill into the man-page detail for the selected option.
+                OpenHelpBrowser(CurrentFlagHints(), _panelSelected);
+                return true;
+            default:
+                return false; // not a panel key → caller exits focus and re-handles it
+        }
+    }
+
+    private void EnsurePanelScroll(int window, int total)
+        => _panelScroll = ComputeScroll(_panelSelected, _panelScroll, window, total);
+
+    /// <summary>
+    /// Pure scroll-window math: given the selected index, the current top-row offset, the visible
+    /// window size, and the total row count, return the offset that keeps the selection visible
+    /// (and never scrolls past the end). Extracted so the trickiest panel logic is unit-testable.
+    /// </summary>
+    internal static int ComputeScroll(int selected, int scroll, int window, int total)
+    {
+        if (selected < scroll) scroll = selected;
+        else if (selected >= scroll + window) scroll = selected - window + 1;
+        return Math.Clamp(scroll, 0, Math.Max(0, total - window));
+    }
+
+    private void ExitPanelFocus()
+    {
+        _panelFocused = false;
+        _panelSelected = 0;
+        _panelScroll = 0;
+    }
+
+    /// <summary>Insert the selected panel hint's bare flag at the cursor, then leave focus.</summary>
+    private void InsertFlagFromPanel()
+    {
+        var hints = CurrentFlagHints();
+        if (_panelSelected < 0 || _panelSelected >= hints.Count)
+        {
+            ExitPanelFocus();
+            Redraw();
+            return;
+        }
+
+        InsertFlagAtToken(hints[_panelSelected].Insert);
+        ExitPanelFocus();
+        _psPanelHints = null;
+        _psPanelKey = null;
+        Redraw();
+    }
+
+    /// <summary>Replace the partial flag token under the cursor with <paramref name="insert"/> + space.</summary>
+    private void InsertFlagAtToken(string insert)
+    {
+        var line = _buf.ToString();
+        var (baseText, _) = TabCompleter.SplitAtWordBoundaryQuoteAware(line, _cursor);
+        var suffix = _cursor <= line.Length ? line[_cursor..] : string.Empty;
+        var newBuf = baseText + insert + " " + suffix;
+        _buf.Clear();
+        _buf.Append(newBuf);
+        _cursor = (baseText + insert + " ").Length;
+    }
+
+    // ── man-page drill-down (P4) ───────────────────────────────────────────────
+
+    /// <summary>
+    /// Open the scrollable man-page browser for <paramref name="hints"/> (alt-screen). On Enter the
+    /// chosen flag replaces the current token. Always restores the prompt afterward. No-op if empty.
+    /// </summary>
+    private void OpenHelpBrowser(IReadOnlyList<FlagHint> hints, int selected)
+    {
+        if (hints.Count == 0)
+            return;
+
+        var cmd = TabCompleter.GetCommandNameAtCursor(_buf.ToString(), _cursor, _aliases) ?? "help";
+        string? insert = null;
+        try
+        {
+            var browser = new FlagHelpBrowser($"Help: {cmd}", hints, selected);
+            var (result, chosen) = browser.Run();
+            if (result == FlagHelpBrowser.Result.Insert)
+                insert = chosen;
+        }
+        catch (Exception)
+        {
+            // Advisory; never let the browser crash the shell.
+        }
+
+        ExitPanelFocus();
+        _psPanelHints = null;
+        _psPanelKey = null;
+        if (insert is not null)
+            InsertFlagAtToken(insert);
+        Redraw();
+    }
+
+    /// <summary>
+    /// Open the man-page browser for the command at the cursor from the prompt (F1): the matching
+    /// flags if on a flag token, otherwise the command's full flag set (bash). No-op when there is
+    /// nothing to show.
+    /// </summary>
+    private void OpenHelpBrowserFromPrompt()
+    {
+        var hints = CurrentFlagHints();
+        if (hints.Count == 0)
+        {
+            // Not on a flag token (or PS with nothing cached): fall back to the command's full
+            // bash flag set so F1 works even at "find ⎵".
+            var all = TabCompleter.AllFlagSpecsForCommand(_buf.ToString(), _cursor, _aliases);
+            hints = all.Select(s => new FlagHint(
+                s.Flag,
+                s.Arg is { Length: > 0 } ? $"{s.Flag} {s.Arg}" : s.Flag,
+                s.Desc, s.Detail, s.Examples)).ToList();
+        }
+        OpenHelpBrowser(hints, 0);
     }
 
     private static string StripAnsi(string s)
@@ -720,6 +1075,78 @@ internal sealed class LineEditor
     // ─────────────────────────────────────────────────────────────────────────
     // Autosuggestion
     // ─────────────────────────────────────────────────────────────────────────
+
+    /// <summary>
+    /// Refresh both keystroke-driven hints: the inline history ghost and the floating panel's
+    /// async PowerShell-parameter cache. The bash flag panel is computed synchronously in Redraw
+    /// (always fresh), so it is not refreshed here.
+    /// </summary>
+    private async Task RefreshHintsAsync()
+    {
+        await UpdateSuggestionAsync();
+        await UpdatePsFlagHintsAsync();
+    }
+
+    /// <summary>
+    /// The "commandtoken" identity of the flag token under the cursor, or null when the cursor is
+    /// not on a <c>-</c>-prefixed argument token. Used to key the async PS-param cache so a result
+    /// only paints while it still matches what the user is looking at.
+    /// </summary>
+    private string? CurrentHintKey()
+    {
+        var line = _buf.ToString();
+        if (TabCompleter.IsFirstWord(line, _cursor))
+            return null;
+        var (beforeToken, token) = TabCompleter.SplitAtWordBoundaryQuoteAware(line, _cursor);
+        if (token.Length == 0 || token[0] != '-')
+            return null;
+        var cmd = TabCompleter.GetCommandNameAtCursor(beforeToken, beforeToken.Length, _aliases);
+        if (cmd is null)
+            return null;
+        return cmd + "" + token;
+    }
+
+    /// <summary>
+    /// Populate the async PowerShell-parameter panel cache for the current flag token. No-op (and
+    /// clears the cache) when there is no provider, the token is bash-served (the sync panel wins),
+    /// or the cursor is not on a flag. Bounded by a short deadline so a busy worker never blocks
+    /// typing; on timeout / failure the cache is simply left empty.
+    /// </summary>
+    private async Task UpdatePsFlagHintsAsync()
+    {
+        if (_flagHintProvider is null)
+            return;
+
+        var key = CurrentHintKey();
+        if (key is null)
+        {
+            _psPanelHints = null;
+            _psPanelKey = null;
+            return;
+        }
+
+        // The bash flag panel (synchronous, always fresh) takes precedence; don't double up.
+        if (TabCompleter.MatchingFlagSpecs(_buf.ToString(), _cursor, _aliases).Count > 0)
+        {
+            _psPanelHints = null;
+            _psPanelKey = null;
+            return;
+        }
+
+        try
+        {
+            using var cts = new CancellationTokenSource(TimeSpan.FromMilliseconds(CompletionTimeoutMs));
+            var hints = await _flagHintProvider(_buf.ToString(), _cursor, cts.Token).ConfigureAwait(false);
+            _psPanelHints = hints.Count > 0 ? hints : null;
+            _psPanelKey = key;
+        }
+        catch (Exception)
+        {
+            // Advisory; never let a slow/failed worker break the prompt.
+            _psPanelHints = null;
+            _psPanelKey = null;
+        }
+    }
 
     private async Task UpdateSuggestionAsync()
     {
@@ -770,7 +1197,8 @@ internal sealed class LineEditor
     /// </summary>
     private async Task<string?> HandleCtrlRAsync()
     {
-        var search = new CtrlRSearch(_historyStore, _cwd, _prompt);
+        // Seed the reverse-i-search with whatever the user has already typed on the line.
+        var search = new CtrlRSearch(_historyStore, _cwd, _prompt, initialQuery: _buf.ToString());
         var (result, command) = await search.RunAsync();
 
         if (result == CtrlRSearch.Result.Execute && command is not null)

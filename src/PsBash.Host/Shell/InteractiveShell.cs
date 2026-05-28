@@ -63,7 +63,10 @@ public static class InteractiveShell
             worker: worker);
         _lineEditor = new LineEditor(
             _historyStore,
-            (line, cursor, ct) => completionEngine.CompleteAsync(line, cursor, ct));
+            (line, cursor, ct) => completionEngine.CompleteAsync(line, cursor, ct),
+            cwd: null,
+            aliases: AliasExpander.Aliases,
+            flagHintProvider: (line, cursor, ct) => completionEngine.GetFlagHintsAsync(line, cursor, ct));
 
         if (!noProfile)
         {

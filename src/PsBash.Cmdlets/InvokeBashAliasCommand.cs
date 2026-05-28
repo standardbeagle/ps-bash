@@ -192,12 +192,27 @@ public sealed class InvokeBashAliasCommand : PSCmdlet
             }
             else
             {
-                // Query an existing alias by name (direct dict lookup).
+                // Query an existing alias by name. Check the bash user-alias
+                // dict first (alias defined via `alias name=value`); fall back
+                // to the live PowerShell alias table so aliases that psm1
+                // registered via `Set-Alias` (`rg`, `ll`, `grep`, …) are
+                // findable too. Without the fallback, a tool that probes
+                // `alias rg` to detect ripgrep sees "not found" on every
+                // invocation even though `rg` IS a working alias.
                 var dict = GetAliasDict();
                 string? val = null;
                 if (dict != null && dict.Contains(arg))
                 {
                     val = dict[arg]?.ToString();
+                }
+                if (val == null)
+                {
+                    var psAlias = SessionState.InvokeCommand.GetCommand(
+                        arg, CommandTypes.Alias) as AliasInfo;
+                    if (psAlias != null)
+                    {
+                        val = psAlias.Definition;
+                    }
                 }
                 if (val != null)
                 {
@@ -210,7 +225,7 @@ public sealed class InvokeBashAliasCommand : PSCmdlet
                 }
                 else
                 {
-                    FileSystemHelpers.WriteBashError(this, $"alias: {arg}: not found");
+                    FileSystemHelpers.WriteBashError(this, $"bash: alias: {arg}: not found");
                 }
             }
         }

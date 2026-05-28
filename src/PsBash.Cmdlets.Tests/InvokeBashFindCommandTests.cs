@@ -172,6 +172,128 @@ public class InvokeBashFindCommandTests : IDisposable, IClassFixture<SharedPwshF
         Assert.Contains("recent.txt", names);
     }
 
+    // ===================== New predicates (-iname/-path/-regex/-mindepth/-newer) =====================
+
+    [Fact]
+    public void Find_INamePattern_CaseInsensitive()
+    {
+        Mk("README.md"); Mk("notes.TXT"); Mk("other.md");
+        var results = Run($"Invoke-BashFind '{Esc(_tmpDir)}' -iname 'readme*'");
+        var names = results.Select(o => (string?)o.Properties["Name"]?.Value).ToArray();
+        Assert.Contains("README.md", names);
+        Assert.DoesNotContain("other.md", names);
+    }
+
+    [Fact]
+    public void Find_PathPattern_MatchesFullPathAcrossSlashes()
+    {
+        MkDir("sub"); Mk("sub/nested.txt", "x"); Mk("top.txt", "x");
+        var results = Run($"Invoke-BashFind '{Esc(_tmpDir)}' -path '*/sub/*'");
+        var names = results.Select(o => (string?)o.Properties["Name"]?.Value).ToArray();
+        Assert.Contains("nested.txt", names);
+        Assert.DoesNotContain("top.txt", names);
+    }
+
+    [Fact]
+    public void Find_Regex_MatchesWholePath()
+    {
+        Mk("keep.log", "x"); Mk("skip.txt", "x");
+        var results = Run($"Invoke-BashFind '{Esc(_tmpDir)}' -regex '.*\\.log'");
+        var names = results.Select(o => (string?)o.Properties["Name"]?.Value).ToArray();
+        Assert.Contains("keep.log", names);
+        Assert.DoesNotContain("skip.txt", names);
+    }
+
+    [Fact]
+    public void Find_MinDepth_SkipsShallowEntries()
+    {
+        Mk("top.txt"); MkDir("sub"); Mk("sub/deep.txt");
+        var results = Run($"Invoke-BashFind '{Esc(_tmpDir)}' -mindepth 2");
+        var names = results.Select(o => (string?)o.Properties["Name"]?.Value).ToArray();
+        Assert.Contains("deep.txt", names);   // depth 2
+        Assert.DoesNotContain("top.txt", names); // depth 1
+        Assert.DoesNotContain("sub", names);     // depth 1
+    }
+
+    [Fact]
+    public void Find_Newer_FiltersByReferenceFileMtime()
+    {
+        var refPath = Mk("ref.txt", "r");
+        var oldPath = Mk("older.txt", "o");
+        var newPath = Mk("newer.txt", "n");
+        var baseTime = DateTime.Now.AddHours(-1);
+        File.SetLastWriteTime(refPath, baseTime);
+        File.SetLastWriteTime(oldPath, baseTime.AddMinutes(-10));
+        File.SetLastWriteTime(newPath, baseTime.AddMinutes(10));
+
+        var results = Run($"Invoke-BashFind '{Esc(_tmpDir)}' -type f -newer '{Esc(refPath)}'");
+        var names = results.Select(o => (string?)o.Properties["Name"]?.Value).ToArray();
+        Assert.Contains("newer.txt", names);
+        Assert.DoesNotContain("older.txt", names);
+        Assert.DoesNotContain("ref.txt", names); // equal mtime is not "newer"
+    }
+
+    // ===================== Actions: -delete / -depth / -prune =====================
+
+    [Fact]
+    public void Find_Delete_RemovesMatchedFiles_AndPrintsNothing()
+    {
+        var del = Mk("del.txt", "x");
+        var keep = Mk("keep.md", "x");
+        var results = Run($"Invoke-BashFind '{Esc(_tmpDir)}' -name '*.txt' -delete");
+        Assert.Empty(results);                 // -delete is an action; no output
+        Assert.False(File.Exists(del));        // matched file removed
+        Assert.True(File.Exists(keep));        // unmatched file untouched
+    }
+
+    [Fact]
+    public void Find_Delete_RemovesDirectoryTree_DepthFirst()
+    {
+        MkDir("tree"); Mk("tree/inner.txt", "x"); MkDir("tree/branch"); Mk("tree/branch/leaf.txt", "x");
+        var treePath = Path.Combine(_tmpDir, "tree");
+        // No filter → match everything under tree; -delete implies -depth so children go first.
+        Run($"Invoke-BashFind '{Esc(treePath)}' -delete");
+        Assert.False(Directory.Exists(treePath)); // whole tree removed, deepest-first
+    }
+
+    [Fact]
+    public void Find_Delete_NonEmptyDirNotMatched_FileSurvivesDir()
+    {
+        MkDir("d"); var inner = Mk("d/inner.txt", "x");
+        // Only the file matches; the directory is not matched, so it stays (now empty).
+        Run($"Invoke-BashFind '{Esc(_tmpDir)}' -name 'inner.txt' -delete");
+        Assert.False(File.Exists(inner));
+        Assert.True(Directory.Exists(Path.Combine(_tmpDir, "d")));
+    }
+
+    [Fact]
+    public void Find_Depth_EmitsChildrenBeforeParent()
+    {
+        MkDir("d"); Mk("d/c.txt", "x");
+        var dPath = Path.Combine(_tmpDir, "d");
+        var results = Run($"Invoke-BashFind '{Esc(dPath)}' -depth");
+        var paths = results.Select(o => (string?)o.Properties["FullPath"]?.Value).ToList();
+        int childIdx = paths.FindIndex(p => p != null && p.EndsWith("c.txt"));
+        int dirIdx = paths.FindIndex(p => p == new DirectoryInfo(dPath).FullName);
+        Assert.True(childIdx >= 0 && dirIdx >= 0);
+        Assert.True(childIdx < dirIdx, "-depth must emit directory contents before the directory");
+    }
+
+    [Fact]
+    public void Find_Prune_ExcludesMatchedDirectorySubtree()
+    {
+        // Nested dirs both named "a"; -prune on the outer must stop descent so the inner is excluded.
+        MkDir("a"); MkDir(Path.Combine("a", "a"));
+        var resultsPruned = Run($"Invoke-BashFind '{Esc(_tmpDir)}' -name 'a' -prune");
+        var pruned = resultsPruned.Select(o => (string?)o.Properties["FullPath"]?.Value).ToArray();
+        Assert.Single(pruned);
+        Assert.Equal(new DirectoryInfo(Path.Combine(_tmpDir, "a")).FullName, pruned[0]);
+
+        // Sanity: without -prune both "a" directories are returned.
+        var resultsAll = Run($"Invoke-BashFind '{Esc(_tmpDir)}' -name 'a'");
+        Assert.Equal(2, resultsAll.Count);
+    }
+
     // ===================== Path formatting =====================
 
     [Fact]
@@ -413,8 +535,9 @@ public class InvokeBashFindCommandTests : IDisposable, IClassFixture<SharedPwshF
     public void Find_UnsupportedStandalonePredicate_EmitsError()
     {
         Mk("a.txt");
+        // -ls is still an unsupported standalone predicate (-delete/-prune/-depth are now supported).
         var results = RunAllowError(
-            $"Invoke-BashFind '{Esc(_tmpDir)}' -delete -name 'a.txt' 2>&1");
+            $"Invoke-BashFind '{Esc(_tmpDir)}' -ls -name 'a.txt' 2>&1");
         bool matchedAfterError = results.Any(o =>
             (string?)o.Properties["Name"]?.Value == "a.txt");
         Assert.True(matchedAfterError,

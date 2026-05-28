@@ -83,12 +83,17 @@ public sealed class CtrlRSearch : IDisposable
         IHistoryStore historyStore,
         string cwd,
         string prompt,
-        string? homeDir = null)
+        string? homeDir = null,
+        string? initialQuery = null)
     {
         _historyStore = historyStore ?? throw new ArgumentNullException(nameof(historyStore));
         _currentCwd = cwd;
         _originalPrompt = prompt;
         _homeDir = homeDir ?? Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+        // Seed the search with the line the user was typing, so Ctrl-R immediately filters by it
+        // (and Backspace narrows back from there) instead of starting blank.
+        if (!string.IsNullOrEmpty(initialQuery))
+            _query.Append(initialQuery);
     }
 
     /// <summary>

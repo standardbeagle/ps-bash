@@ -114,7 +114,7 @@ public class BashCompletionTests
         BashCompletionRegistry.TryApplyCompleteCommand("complete -W 'start stop restart' svc");
 
         const string line = "svc st";
-        var result = await NullWorkerEngine().CompleteAsync(line, line.Length, default);
+        var result = (await NullWorkerEngine().CompleteAsync(line, line.Length, default)).Texts();
 
         Assert.Contains("start", result);
         Assert.Contains("stop", result);
@@ -129,7 +129,7 @@ public class BashCompletionTests
         BashCompletionRegistry.TryApplyCompleteCommand("complete -W 'alpha beta' deploy");
 
         const string line = "deploy a";
-        var result = await NullWorkerEngine().CompleteAsync(line, line.Length, default);
+        var result = (await NullWorkerEngine().CompleteAsync(line, line.Length, default)).Texts();
 
         Assert.Contains("alpha", result);
         Assert.DoesNotContain("beta", result);
@@ -144,7 +144,7 @@ public class BashCompletionTests
         BashCompletionRegistry.TryApplyCompleteCommand("complete -W 'start stop' svc");
 
         const string line = "sv";
-        var result = await NullWorkerEngine().CompleteAsync(line, line.Length, default);
+        var result = (await NullWorkerEngine().CompleteAsync(line, line.Length, default)).Texts();
 
         Assert.DoesNotContain("start", result);
         Assert.DoesNotContain("stop", result);
@@ -156,7 +156,7 @@ public class BashCompletionTests
         BashCompletionRegistry.Clear();
 
         const string line = "svc st";
-        var result = await NullWorkerEngine().CompleteAsync(line, line.Length, default);
+        var result = (await NullWorkerEngine().CompleteAsync(line, line.Length, default)).Texts();
 
         Assert.DoesNotContain("start", result);
         Assert.DoesNotContain("stop", result);

@@ -274,35 +274,156 @@
   "find": [
     {
       "flag": "-name",
-      "desc": "name pattern"
+      "desc": "match base name against a shell glob",
+      "arg": "PATTERN",
+      "detail": "Keep entries whose base name (the last path component, no directories) matches the shell glob PATTERN. Matching is case-sensitive. Glob metacharacters: * (any run of chars), ? (one char), [abc] / [a-z] (a character class). Quote the pattern in single quotes so the shell does not expand it before find sees it.",
+      "examples": [
+        "find . -name '*.txt'",
+        "find . -name 'Make*'",
+        "find src -name '*.[ch]'"
+      ]
     },
     {
       "flag": "-type",
-      "desc": "file type"
+      "desc": "filter by file type",
+      "arg": "f|d|l",
+      "detail": "Keep only entries of the given type: f = regular file, d = directory, l = symbolic link. Combine with -name to scope a search, e.g. only directories named build.",
+      "examples": [
+        "find . -type f",
+        "find . -type d -name node_modules"
+      ]
     },
     {
       "flag": "-size",
-      "desc": "file size"
+      "desc": "filter by file size",
+      "arg": "[+-]N[ckMG]",
+      "detail": "Match files by size. A leading + means greater than, - means less than, no sign means exactly. Unit suffix: c = bytes, k = kibibytes, M = mebibytes, G = gibibytes (default is 512-byte blocks).",
+      "examples": [
+        "find . -size +10M",
+        "find . -type f -size -1k"
+      ]
     },
     {
       "flag": "-maxdepth",
-      "desc": "max depth"
+      "desc": "limit recursion depth",
+      "arg": "N",
+      "detail": "Descend at most N directory levels below the starting point. -maxdepth 1 searches only the immediate children of the start directory (no recursion into subdirectories).",
+      "examples": [
+        "find . -maxdepth 1 -type f",
+        "find . -maxdepth 2 -name '*.log'"
+      ]
     },
     {
       "flag": "-mtime",
-      "desc": "modify time"
+      "desc": "filter by modification time (days)",
+      "arg": "[+-]N",
+      "detail": "Match files modified N*24 hours ago. +N means more than N days ago, -N means within the last N days, N means exactly N days ago.",
+      "examples": [
+        "find . -mtime -7",
+        "find /tmp -type f -mtime +30"
+      ]
     },
     {
       "flag": "-empty",
-      "desc": "empty files"
+      "desc": "match empty files and directories",
+      "detail": "Keep regular files that are zero bytes and directories that contain no entries.",
+      "examples": [
+        "find . -type f -empty",
+        "find . -type d -empty"
+      ]
     },
     {
       "flag": "-print0",
-      "desc": "null-delimited output"
+      "desc": "null-delimited output",
+      "detail": "Separate results with a NUL byte instead of a newline, so filenames containing spaces or newlines survive a pipe. Pair with 'xargs -0'.",
+      "examples": [
+        "find . -name '*.tmp' -print0 | xargs -0 rm"
+      ]
     },
     {
       "flag": "-exec",
-      "desc": "execute command"
+      "desc": "run a command on each match",
+      "arg": "CMD {} ;",
+      "detail": "Run CMD for each matched entry. {} is replaced with the path of the entry. Terminate the command with a literal ; (run once per file) or + (batch many paths into one invocation). Quote or escape ; so the shell does not consume it.",
+      "examples": [
+        "find . -name '*.sh' -exec chmod +x {} ;",
+        "find . -type f -exec grep -l TODO {} +"
+      ]
+    },
+    {
+      "flag": "-iname",
+      "desc": "case-insensitive -name",
+      "arg": "PATTERN",
+      "detail": "Like -name, but the shell-glob match against the base name ignores case. Useful when extensions or names vary in case (README vs readme, .JPG vs .jpg).",
+      "examples": [
+        "find . -iname 'readme*'",
+        "find . -iname '*.jpg'"
+      ]
+    },
+    {
+      "flag": "-path",
+      "desc": "match the whole path against a glob",
+      "arg": "PATTERN",
+      "detail": "Match the glob PATTERN against the entire path find prints (e.g. ./src/app/main.js), not just the base name. A * here also spans / , so '*/node_modules/*' matches anything under any node_modules directory. Use -ipath for the case-insensitive form.",
+      "examples": [
+        "find . -path '*/test/*'",
+        "find . -path '*/node_modules/*'"
+      ]
+    },
+    {
+      "flag": "-regex",
+      "desc": "match the whole path against a regex",
+      "arg": "REGEX",
+      "detail": "Keep entries whose entire printed path matches REGEX (the match is implicitly anchored to the whole path). Use -iregex for the case-insensitive form.",
+      "examples": [
+        "find . -regex '.*\\.(c|h)'",
+        "find . -regex '.*/test/.*\\.js'"
+      ]
+    },
+    {
+      "flag": "-mindepth",
+      "desc": "skip entries above a depth",
+      "arg": "N",
+      "detail": "Ignore entries at fewer than N directory levels below the starting point. -mindepth 1 excludes the starting directory itself; pair with -maxdepth to search an exact depth band.",
+      "examples": [
+        "find . -mindepth 1 -maxdepth 1 -type d",
+        "find . -mindepth 2 -name '*.cfg'"
+      ]
+    },
+    {
+      "flag": "-newer",
+      "desc": "modified more recently than a file",
+      "arg": "FILE",
+      "detail": "Keep entries whose modification time is strictly newer than FILE's. A common idiom for 'what changed since X' using a reference file or marker.",
+      "examples": [
+        "find . -type f -newer .last-build",
+        "find src -newer README.md"
+      ]
+    },
+    {
+      "flag": "-delete",
+      "desc": "delete matched entries (destructive)",
+      "detail": "Remove every matched entry. This is an action, not a filter: it prints nothing and should usually come last. It deletes deepest paths first (it implies -depth) so a directory can be removed after its matched contents. Only matched entries are deleted — a directory that still contains unmatched files cannot be removed and reports an error. There is no undo; preview with the same predicates (without -delete) first.",
+      "examples": [
+        "find . -name '*.tmp' -delete",
+        "find build -type f -empty -delete"
+      ]
+    },
+    {
+      "flag": "-prune",
+      "desc": "do not descend into matched directories",
+      "detail": "When a matched entry is a directory, do not recurse into it (its contents are skipped). The directory itself is still listed. Note: the classic exclude idiom (-path X -prune -o -print) needs the -o operator, which ps-bash does not support yet, so -prune is currently only useful for stopping descent.",
+      "examples": [
+        "find . -name .git -prune"
+      ]
+    },
+    {
+      "flag": "-depth",
+      "desc": "process directory contents first",
+      "detail": "Emit (or act on) the entries inside a directory before the directory itself. Implied by -delete so that directories are emptied before removal.",
+      "examples": [
+        "find . -depth -type d"
+      ]
     }
   ],
   "fold": [

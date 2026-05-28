@@ -56,9 +56,25 @@ public static class FlagSpecs
                     obj["desc"] is not JsonValue descValue)
                     continue;
 
+                var arg = (obj["arg"] as JsonValue)?.GetValue<string>();
+                var detail = (obj["detail"] as JsonValue)?.GetValue<string>();
+                IReadOnlyList<string>? examples = null;
+                if (obj["examples"] is JsonArray exArray)
+                {
+                    var list = new List<string>();
+                    foreach (var ex in exArray)
+                        if (ex is JsonValue exVal)
+                            list.Add(exVal.GetValue<string>());
+                    if (list.Count > 0)
+                        examples = list;
+                }
+
                 specs.Add(new FlagSpec(
                     flagValue.GetValue<string>(),
-                    descValue.GetValue<string>()
+                    descValue.GetValue<string>(),
+                    arg,
+                    detail,
+                    examples
                 ));
             }
 
@@ -70,8 +86,16 @@ public static class FlagSpecs
 }
 
 /// <summary>
-/// Describes a single command flag with its description.
+/// Describes a single command flag.
 /// </summary>
 /// <param name="Flag">The flag name (e.g., "-a", "--all").</param>
-/// <param name="Desc">Human-readable description of what the flag does.</param>
-public sealed record FlagSpec(string Flag, string Desc);
+/// <param name="Desc">Short one-line description (the panel / completion-list summary).</param>
+/// <param name="Arg">Optional argument placeholder shown after the flag (e.g. "PATTERN", "+CMD ;").</param>
+/// <param name="Detail">Optional longer description for the man-page drill-down view.</param>
+/// <param name="Examples">Optional example invocations for the man-page drill-down view.</param>
+public sealed record FlagSpec(
+    string Flag,
+    string Desc,
+    string? Arg = null,
+    string? Detail = null,
+    IReadOnlyList<string>? Examples = null);

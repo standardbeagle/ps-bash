@@ -1,7 +1,14 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
-    <TargetFramework>net8.0</TargetFramework>
+    <!-- net10.0 deliberately: the test host process loads PsBash.Cmdlets.dll
+         from bin/Debug/{tfm}/. A user's pwsh (Windows .NET 8 runtime) that has
+         Import-Module PsBash loaded will hold an exclusive open on the net8.0
+         build output, breaking `dotnet build` with MSB3027. Targeting net10.0
+         routes the test build through bin/Debug/net10.0/ which pwsh never maps.
+         Pairs with the Runtime.dll rename in install-local.ps1 — belt and
+         suspenders. PsBash.Host.Tests follows the same pattern. -->
+    <TargetFramework>net10.0</TargetFramework>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <IsPackable>false</IsPackable>

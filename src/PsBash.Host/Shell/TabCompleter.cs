@@ -12,7 +12,7 @@ internal static class TabCompleter
     /// Returns completion candidates for the partial token at <paramref name="cursor"/>
     /// within <paramref name="line"/>.
     /// </summary>
-    public static IReadOnlyList<string> Complete(
+    public static IReadOnlyList<CompletionItem> Complete(
         string line,
         int cursor,
         IReadOnlyDictionary<string, string> aliases,
@@ -25,7 +25,7 @@ internal static class TabCompleter
     /// Returns completion candidates for the partial token at <paramref name="cursor"/>
     /// within <paramref name="line"/>, with optional sequence-aware suggestions.
     /// </summary>
-    public static IReadOnlyList<string> Complete(
+    public static IReadOnlyList<CompletionItem> Complete(
         string line,
         int cursor,
         IReadOnlyDictionary<string, string> aliases,
@@ -85,7 +85,7 @@ internal static class TabCompleter
     // Sequence completion (after a known command)
     // ─────────────────────────────────────────────────────────────────────────
 
-    private static IReadOnlyList<string> CompleteSequence(
+    private static IReadOnlyList<CompletionItem> CompleteSequence(
         string token,
         string lastCommand,
         string cwd,
@@ -102,13 +102,13 @@ internal static class TabCompleter
                 return [];
 
             // Filter by token prefix if provided
-            var results = new List<string>();
+            var results = new List<CompletionItem>();
             foreach (var suggestion in suggestions)
             {
                 if (string.IsNullOrEmpty(token) ||
                     suggestion.Command.StartsWith(token, StringComparison.Ordinal))
                 {
-                    results.Add(suggestion.Command);
+                    results.Add(new CompletionItem(suggestion.Command));
                 }
             }
 
@@ -125,7 +125,7 @@ internal static class TabCompleter
     // Command completion (first word on the line)
     // ─────────────────────────────────────────────────────────────────────────
 
-    private static IReadOnlyList<string> CompleteCommand(
+    private static IReadOnlyList<CompletionItem> CompleteCommand(
         string token,
         IReadOnlyDictionary<string, string> aliases,
         string cwd)
@@ -182,29 +182,91 @@ internal static class TabCompleter
         }
         catch (Exception) { }
 
-        return [.. results];
+        return [.. results.Select(r => new CompletionItem(r))];
     }
 
     // ─────────────────────────────────────────────────────────────────────────
     // Flag completion (after command name)
     // ─────────────────────────────────────────────────────────────────────────
 
-    private static IReadOnlyList<string> CompleteFlags(string command, string partial)
+    private static IReadOnlyList<CompletionItem> CompleteFlags(string command, string partial)
     {
         var flags = FlagSpecs.GetFlags(command);
         if (flags is null)
             return [];
 
-        var results = new List<string>();
+        var results = new List<CompletionItem>();
         foreach (var spec in flags)
         {
             if (spec.Flag.StartsWith(partial, StringComparison.Ordinal))
             {
-                // Format: "-l  - long listing" (flag + padding + description)
-                results.Add($"{spec.Flag}  - {spec.Desc}");
+                // Insert only the flag ("-name"); LIST it with its arg + description
+                // ("-name PATTERN  - match base name..."). Only the flag is ever inserted —
+                // the arg placeholder and description are display-only (the CompletionItem split).
+                var label = spec.Arg is { Length: > 0 }
+                    ? $"{spec.Flag} {spec.Arg}  - {spec.Desc}"
+                    : $"{spec.Flag}  - {spec.Desc}";
+                results.Add(CompletionItem.Labeled(spec.Flag, label));
             }
         }
         return results;
+    }
+
+    /// <summary>
+    /// The flag specs (flag + description) matching the flag-prefix token under the cursor for the
+    /// command at the cursor — the data behind the interactive floating flag-doc panel. Returns
+    /// empty unless the cursor is on an argument token that starts with <c>-</c> (a lone <c>-</c>
+    /// matches every flag) for a command that has flag specs. Pure/synchronous — no runspace.
+    /// </summary>
+    internal static IReadOnlyList<FlagSpec> MatchingFlagSpecs(
+        string line,
+        int cursor,
+        IReadOnlyDictionary<string, string> aliases)
+    {
+        if (IsFirstWord(line, cursor))
+            return [];
+
+        var (_, token) = SplitAtWordBoundaryQuoteAware(line, cursor);
+        if (token.Length == 0 || token[0] != '-')
+            return [];
+
+        // A redirect target that happens to start with '-' is a path, not a flag.
+        if (IsAfterRedirectOp(line, cursor))
+            return [];
+
+        var command = GetCommandNameAtCursor(line, cursor, aliases);
+        if (command is null)
+            return [];
+
+        var flags = FlagSpecs.GetFlags(command);
+        if (flags is null)
+            return [];
+
+        var matches = new List<FlagSpec>();
+        foreach (var spec in flags)
+        {
+            if (spec.Flag.StartsWith(token, StringComparison.Ordinal))
+                matches.Add(spec);
+        }
+        return matches;
+    }
+
+    /// <summary>
+    /// Every flag spec for the command at the cursor, unfiltered by the current token — the data
+    /// for the F1 man-page browser even when the cursor is not on a flag (e.g. <c>find ⎵</c>).
+    /// Empty at the command position or for a command with no flag specs.
+    /// </summary>
+    internal static IReadOnlyList<FlagSpec> AllFlagSpecsForCommand(
+        string line,
+        int cursor,
+        IReadOnlyDictionary<string, string> aliases)
+    {
+        if (IsFirstWord(line, cursor))
+            return [];
+        var command = GetCommandNameAtCursor(line, cursor, aliases);
+        if (command is null)
+            return [];
+        return FlagSpecs.GetFlags(command) ?? [];
     }
 
     internal static string? GetCommandNameAtCursor(
@@ -278,7 +340,7 @@ internal static class TabCompleter
     // Path completion (arguments)
     // ─────────────────────────────────────────────────────────────────────────
 
-    private static IReadOnlyList<string> CompletePath(string token, string cwd)
+    private static IReadOnlyList<CompletionItem> CompletePath(string token, string cwd)
     {
         try
         {
@@ -309,7 +371,7 @@ internal static class TabCompleter
             var results = new List<string>();
 
             if (!Directory.Exists(dir))
-                return results;
+                return [];
 
             foreach (var entry in Directory.EnumerateFileSystemEntries(dir))
             {
@@ -325,7 +387,8 @@ internal static class TabCompleter
             }
 
             results.Sort(StringComparer.Ordinal);
-            return results;
+            // Paths are plain candidates: the inserted text and the list label are identical.
+            return [.. results.Select(r => new CompletionItem(r))];
         }
         catch (Exception)
         {
