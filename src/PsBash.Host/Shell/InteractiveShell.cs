@@ -61,12 +61,25 @@ public static class InteractiveShell
             lastCommand: () => _lastCommand,
             history: _historyStore,
             worker: worker);
+        CommandAssistProviderRunner? commandAssistRunner = null;
+        string? commandAssistConfigError = null;
+        try
+        {
+            commandAssistRunner = new CommandAssistProviderRunner(CommandAssistConfig.Load());
+        }
+        catch (CommandAssistProviderException ex)
+        {
+            commandAssistConfigError = ex.Message;
+        }
         _lineEditor = new LineEditor(
             _historyStore,
             (line, cursor, ct) => completionEngine.CompleteAsync(line, cursor, ct),
             cwd: null,
             aliases: AliasExpander.Aliases,
-            flagHintProvider: (line, cursor, ct) => completionEngine.GetFlagHintsAsync(line, cursor, ct));
+            flagHintProvider: (line, cursor, ct) => completionEngine.GetFlagHintsAsync(line, cursor, ct),
+            commandAssist: (request, ct) => commandAssistRunner is not null
+                ? commandAssistRunner.RunAsync(request, _lastDir, ct)
+                : throw new CommandAssistProviderException(commandAssistConfigError ?? "AI provider config is unavailable."));
 
         if (!noProfile)
         {

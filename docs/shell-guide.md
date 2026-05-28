@@ -126,6 +126,38 @@ it off when downstream tooling needs exact stdout/stderr bytes, when full
 progress history is the artifact being inspected, or for human-facing
 interactive sessions.
 
+### Command Assist Providers
+
+Ctrl+~ opens command assist in the interactive editor. By default ps-bash uses
+`claude -p "{{prompt}}"` as the provider. The prompt includes the current line,
+cursor position, and working directory; the provider response replaces the line
+buffer but does not execute until Enter is pressed.
+
+Provider configuration is loaded from `PSBASH_AI_CONFIG` when set, otherwise
+from `$PSBASH_HOME/.psbash/ai-providers.json` or `~/.psbash/ai-providers.json`.
+Multiple providers can be declared and selected with `defaultProvider`:
+
+```json
+{
+  "defaultProvider": "claude",
+  "providers": [
+    {
+      "name": "claude",
+      "executable": "claude",
+      "args": ["-p", "{{prompt}}"],
+      "timeoutMs": 30000,
+      "outputLimit": 8192,
+      "promptTemplate": "Current line: {{buffer}}\nCursor: {{cursor}}\nWorking directory: {{cwd}}\nReturn only the command."
+    }
+  ]
+}
+```
+
+Provider processes inherit the shell environment by default. Entries in
+`environment` override variables; a null value removes a variable. Startup
+failures, missing executables, nonzero exits, and timeouts are reported at the
+prompt and the original line is restored.
+
 ```powershell
 ps-bash --compact-output -c "dotnet test"
 $env:PSBASH_COMPACT_OUTPUT = '1'
