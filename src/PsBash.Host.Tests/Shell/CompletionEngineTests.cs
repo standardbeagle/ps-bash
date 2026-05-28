@@ -131,12 +131,108 @@ public class CompletionEngineTests
     {
         var fake = new FakeWorker { OnQuery = (_, _) => Task.FromResult("-Path\n-PathType\n-Force\n") };
         const string line = "Get-ChildItem -Pa";
-        var result = (await Engine(fake).CompleteAsync(line, line.Length, default)).Texts();
+        var result = await Engine(fake).CompleteAsync(line, line.Length, default);
 
         Assert.Equal(1, fake.QueryCount);
-        Assert.Contains("-Path", result);
-        Assert.Contains("-PathType", result);
-        Assert.DoesNotContain("-Force", result); // does not match the typed "-Pa" prefix
+        Assert.Contains("-Path", result.Texts());
+        Assert.Contains("-PathT", result.Texts());
+        Assert.DoesNotContain("-Force", result.Texts()); // does not match the typed "-Pa" prefix
+        Assert.Contains("-PathType", result.Labels()); // display remains canonical
+    }
+
+    [Fact]
+    public async Task ParameterName_DisplaysCanonicalNameAndType_ButInsertsSafePrefix()
+    {
+        var fake = new FakeWorker { OnQuery = (_, _) => Task.FromResult("Path|String|\nPathType|String|\n") };
+        const string line = "Get-ChildItem -Pa";
+        var result = await Engine(fake).CompleteAsync(line, line.Length, default);
+
+        Assert.Contains(result, item => item.InsertText == "-PathT" && item.DisplayText == "-PathType <String>");
+    }
+
+    [Fact]
+    public void BuildParameterNameItems_AmbiguousPrefixFallsBackToCanonicalFullName()
+    {
+        var candidates = new[]
+        {
+            new PowerShellParameterCandidate("Path", "String", []),
+            new PowerShellParameterCandidate("PathType", "String", []),
+        };
+
+        var result = CompletionEngine.BuildParameterNameItems(candidates, "-Pa");
+
+        Assert.Contains(result, item => item.InsertText == "-Path" && item.DisplayText == "-Path <String>");
+        Assert.Contains(result, item => item.InsertText == "-PathT" && item.DisplayText == "-PathType <String>");
+    }
+
+    [Fact]
+    public void BuildParameterNameItems_AvoidsPowerShellCommonParameterCollisions()
+    {
+        var candidates = new[]
+        {
+            new PowerShellParameterCandidate("ErrorActionPreference", "ActionPreference", []),
+        };
+
+        var result = CompletionEngine.BuildParameterNameItems(candidates, "-E");
+
+        var item = Assert.Single(result);
+        Assert.Equal("-ErrorActionP", item.InsertText);
+        Assert.Equal("-ErrorActionPreference <ActionPreference>", item.DisplayText);
+    }
+
+    [Fact]
+    public void BuildParameterNameItems_PrefersSafeAliases()
+    {
+        var candidates = new[]
+        {
+            new PowerShellParameterCandidate("LiteralPath", "String", ["LP"]),
+            new PowerShellParameterCandidate("Path", "String", []),
+        };
+
+        var result = CompletionEngine.BuildParameterNameItems(candidates, "-L");
+
+        var item = Assert.Single(result);
+        Assert.Equal("-LP", item.InsertText);
+        Assert.Equal("-LiteralPath <String>", item.DisplayText);
+    }
+
+    [Fact]
+    public void BuildParameterNameItems_MatchesCaseInsensitively()
+    {
+        var candidates = new[]
+        {
+            new PowerShellParameterCandidate("Destination", "String", []),
+        };
+
+        var result = CompletionEngine.BuildParameterNameItems(candidates, "-d");
+
+        var item = Assert.Single(result);
+        Assert.Equal("-Des", item.InsertText);
+        Assert.Equal("-Destination <String>", item.DisplayText);
+    }
+
+    [Fact]
+    public void BuildParameterNameItems_CanBeConfiguredToInsertCanonicalNames()
+    {
+        var prior = Environment.GetEnvironmentVariable("PSBASH_PS_PARAMETER_INSERT");
+        try
+        {
+            Environment.SetEnvironmentVariable("PSBASH_PS_PARAMETER_INSERT", "full");
+            var candidates = new[]
+            {
+                new PowerShellParameterCandidate("PathType", "String", []),
+            };
+
+            var result = CompletionEngine.BuildParameterNameItems(candidates, "-Pa");
+
+            var item = Assert.Single(result);
+            Assert.Equal("-PathType", item.InsertText);
+            Assert.Equal("-PathType <String>", item.DisplayText);
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("PSBASH_PS_PARAMETER_INSERT", prior);
+        }
     }
 
     [Fact]

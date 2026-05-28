@@ -101,8 +101,8 @@ internal sealed class CompletionEngine
             if (token.StartsWith('-'))
             {
                 // Parameter NAME completion: -Pa<tab> -> -Path, -PathType, ...
-                var names = await QueryParameterNamesAsync(cmd, token, ct).ConfigureAwait(false);
-                baseResults = CompletionMerge.Append(AsItems(names), baseResults, sortSecondary: false);
+                var names = await QueryParameterNameItemsAsync(cmd, token, ct).ConfigureAwait(false);
+                baseResults = CompletionMerge.Append(names, baseResults, sortSecondary: false);
             }
             else
             {
@@ -241,17 +241,173 @@ internal sealed class CompletionEngine
     private bool IsBashCommand(string cmd)
         => FlagSpecs.GetFlags(cmd) is not null || _aliases.ContainsKey(cmd);
 
-    private async Task<IReadOnlyList<string>> QueryParameterNamesAsync(string cmd, string token, CancellationToken ct)
+    private async Task<IReadOnlyList<CompletionItem>> QueryParameterNameItemsAsync(string cmd, string token, CancellationToken ct)
     {
         var escaped = cmd.Replace("'", "''");
         var expr =
             $"$c = Get-Command -Name '{escaped}' -ErrorAction SilentlyContinue | Select-Object -First 1; " +
-            "if ($c -and $c.Parameters) { $c.Parameters.Keys | Sort-Object | ForEach-Object { '-' + $_ } }";
+            "if ($c -and $c.Parameters) { $c.Parameters.GetEnumerator() | Sort-Object Key | ForEach-Object { " +
+            "$p = $_.Value; " +
+            "$aliases = if ($p.Aliases) { $p.Aliases -join ',' } else { '' }; " +
+            "\"$($_.Key)|$($p.ParameterType.Name)|$aliases\" } }";
 
-        var names = await QueryLinesAsync(expr, ct).ConfigureAwait(false);
-        // token includes the leading '-' (e.g. "-Pa"); match parameter names case-insensitively.
-        return names.Where(n => n.StartsWith(token, StringComparison.OrdinalIgnoreCase)).ToList();
+        var rows = await QueryLinesAsync(expr, ct).ConfigureAwait(false);
+        var candidates = ParseParameterCandidates(rows);
+        return BuildParameterNameItems(candidates, token);
     }
+
+    internal static IReadOnlyList<CompletionItem> BuildParameterNameItems(
+        IReadOnlyList<PowerShellParameterCandidate> candidates,
+        string token)
+    {
+        if (candidates.Count == 0)
+            return Array.Empty<CompletionItem>();
+
+        var matches = candidates
+            .Where(c => ParameterMatchesToken(c, token))
+            .OrderBy(c => c.Name, StringComparer.OrdinalIgnoreCase)
+            .ToList();
+        if (matches.Count == 0)
+            return Array.Empty<CompletionItem>();
+
+        var useCondensed = UseCondensedParameterInsertion();
+        var items = new List<CompletionItem>(matches.Count);
+        foreach (var candidate in matches)
+        {
+            var canonical = "-" + candidate.Name;
+            var insert = useCondensed
+                ? CondensedParameterInsert(candidate, candidates, token)
+                : canonical;
+            var display = string.IsNullOrWhiteSpace(candidate.TypeName)
+                ? canonical
+                : $"{canonical} <{candidate.TypeName}>";
+            items.Add(CompletionItem.Labeled(insert, display));
+        }
+        return items;
+    }
+
+    private static IReadOnlyList<PowerShellParameterCandidate> ParseParameterCandidates(IReadOnlyList<string> rows)
+    {
+        var result = new List<PowerShellParameterCandidate>(rows.Count);
+        foreach (var row in rows)
+        {
+            var parts = row.Split('|');
+            var name = parts[0].Trim().TrimStart('-');
+            if (name.Length == 0)
+                continue;
+            var type = parts.Length > 1 ? parts[1].Trim() : string.Empty;
+            var aliases = parts.Length > 2
+                ? parts[2].Split(',', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries)
+                : Array.Empty<string>();
+            result.Add(new PowerShellParameterCandidate(name, type, aliases));
+        }
+        return result;
+    }
+
+    private static bool ParameterMatchesToken(PowerShellParameterCandidate candidate, string token)
+    {
+        if (("-" + candidate.Name).StartsWith(token, StringComparison.OrdinalIgnoreCase))
+            return true;
+        return candidate.Aliases.Any(alias => ("-" + alias).StartsWith(token, StringComparison.OrdinalIgnoreCase));
+    }
+
+    private static string CondensedParameterInsert(
+        PowerShellParameterCandidate candidate,
+        IReadOnlyList<PowerShellParameterCandidate> allCandidates,
+        string token)
+    {
+        foreach (var alias in candidate.Aliases.OrderBy(a => a.Length).ThenBy(a => a, StringComparer.OrdinalIgnoreCase))
+        {
+            var aliasToken = "-" + alias;
+            if (aliasToken.StartsWith(token, StringComparison.OrdinalIgnoreCase)
+                && IsSafeParameterToken(aliasToken, candidate, allCandidates))
+            {
+                return aliasToken;
+            }
+        }
+
+        var typed = token.TrimStart('-');
+        var min = Math.Clamp(typed.Length, 1, candidate.Name.Length);
+        for (var length = min; length <= candidate.Name.Length; length++)
+        {
+            var candidateToken = "-" + candidate.Name[..length];
+            if (IsSafeParameterToken(candidateToken, candidate, allCandidates))
+                return candidateToken;
+        }
+        return "-" + candidate.Name;
+    }
+
+    private static bool IsSafeParameterToken(
+        string token,
+        PowerShellParameterCandidate owner,
+        IReadOnlyList<PowerShellParameterCandidate> allCandidates)
+    {
+        var ownerCanonical = "-" + owner.Name;
+        foreach (var reserved in CommonParameterTokens)
+        {
+            if (!string.Equals(reserved, ownerCanonical, StringComparison.OrdinalIgnoreCase)
+                && reserved.StartsWith(token, StringComparison.OrdinalIgnoreCase))
+            {
+                return false;
+            }
+        }
+
+        foreach (var candidate in allCandidates)
+        {
+            var canonical = "-" + candidate.Name;
+            if (!ReferenceEquals(candidate, owner)
+                && canonical.StartsWith(token, StringComparison.OrdinalIgnoreCase))
+            {
+                return false;
+            }
+            foreach (var alias in candidate.Aliases)
+            {
+                var aliasToken = "-" + alias;
+                if (!ReferenceEquals(candidate, owner)
+                    && aliasToken.StartsWith(token, StringComparison.OrdinalIgnoreCase))
+                {
+                    return false;
+                }
+            }
+        }
+        return true;
+    }
+
+    private static bool UseCondensedParameterInsertion()
+    {
+        var mode = Environment.GetEnvironmentVariable("PSBASH_PS_PARAMETER_INSERT");
+        return !string.Equals(mode, "full", StringComparison.OrdinalIgnoreCase)
+            && !string.Equals(mode, "canonical", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static readonly string[] CommonParameterTokens =
+    [
+        "-Debug",
+        "-ErrorAction",
+        "-ErrorVariable",
+        "-InformationAction",
+        "-InformationVariable",
+        "-OutBuffer",
+        "-OutVariable",
+        "-PipelineVariable",
+        "-ProgressAction",
+        "-Verbose",
+        "-WarningAction",
+        "-WarningVariable",
+        "-WhatIf",
+        "-Confirm",
+        "-db",
+        "-ea",
+        "-ev",
+        "-infa",
+        "-iv",
+        "-ob",
+        "-ov",
+        "-pv",
+        "-vb",
+        "-wa",
+        "-wv",
+    ];
 
     /// <summary>
     /// PowerShell-engine value completion via a synthesized fragment "&lt;cmd&gt; &lt;-Param&gt;
@@ -339,3 +495,8 @@ internal sealed class CompletionEngine
     }
 
 }
+
+internal sealed record PowerShellParameterCandidate(
+    string Name,
+    string TypeName,
+    IReadOnlyList<string> Aliases);
