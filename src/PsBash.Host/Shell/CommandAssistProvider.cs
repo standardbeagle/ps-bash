@@ -77,11 +77,18 @@ internal sealed record CommandAssistProviderConfig
         Executable = "claude",
         Args = ["-p", "{{prompt}}"],
         PromptTemplate = """
-            Generate a safe bash command for ps-bash on Windows.
-            Current line: {{buffer}}
-            Cursor: {{cursor}}
-            Working directory: {{cwd}}
-            Return only the command to place at the prompt.
+            You are helping inside ps-bash, a bash-like shell backed by PowerShell on Windows.
+            Context:
+            - current input: {{buffer}}
+            - cursor: {{cursor}}
+            - working directory: {{cwd}}
+            - shell: {{shell}}
+            - OS: {{os}}
+
+            Return compact JSON only:
+            {"command":"single bash command or empty","explanation":"why this command is appropriate","refusal":"optional reason you cannot help","clarification":"optional question if needed","plan":["optional high-level steps"]}
+
+            Use command only for a single command that can be reviewed before execution. If the user needs a multi-step plan, clarification, or refusal, leave command empty and fill the appropriate field.
             """,
         TimeoutMs = 30000,
         OutputLimit = 8192,
@@ -109,10 +116,14 @@ internal sealed record CommandAssistProviderConfig
 
 internal sealed class CommandAssistProviderException(string message) : Exception(message);
 
-internal sealed record CommandAssistProviderResult(string ProviderName, string Command, string Explanation)
+internal sealed record CommandAssistProviderResult(
+    string ProviderName,
+    string Command,
+    string Explanation,
+    bool IsExecutable)
 {
     public CommandAssistReviewRequest ToReviewRequest(string cwd)
-        => new(ProviderName, Command, Explanation, cwd, CommandAssistSafety.Classify(Command));
+        => new(ProviderName, Command, Explanation, cwd, IsExecutable, CommandAssistSafety.Classify(Command));
 }
 
 internal sealed class CommandAssistProviderRunner(CommandAssistConfig config)
@@ -195,17 +206,88 @@ internal sealed class CommandAssistProviderRunner(CommandAssistConfig config)
                 $"AI provider '{provider.Name}' exited {process.ExitCode}: {OneLine(detail)}");
         }
 
-        var command = NormalizeProviderOutput(stdout);
-        if (command.Length == 0)
+        var result = ParseProviderOutput(provider.Name, stdout);
+        if (result.Command.Length == 0)
             throw new CommandAssistProviderException($"AI provider '{provider.Name}' returned no command.");
-        return new CommandAssistProviderResult(provider.Name, command, "");
+        return result;
     }
 
     internal static string RenderTemplate(string template, CommandAssistRequest request, string cwd)
         => template
-            .Replace("{{buffer}}", request.Buffer, StringComparison.Ordinal)
+            .Replace("{{buffer}}", Truncate(Redact(request.Buffer), 2000), StringComparison.Ordinal)
             .Replace("{{cursor}}", request.Cursor.ToString(), StringComparison.Ordinal)
-            .Replace("{{cwd}}", cwd, StringComparison.Ordinal);
+            .Replace("{{cwd}}", Truncate(Redact(cwd), 1000), StringComparison.Ordinal)
+            .Replace("{{shell}}", "ps-bash", StringComparison.Ordinal)
+            .Replace("{{os}}", Environment.OSVersion.VersionString, StringComparison.Ordinal);
+
+    internal static CommandAssistProviderResult ParseProviderOutput(string providerName, string output)
+    {
+        var normalized = NormalizeProviderOutput(output);
+        if (normalized.Length == 0)
+            return new CommandAssistProviderResult(providerName, "", "", IsExecutable: false);
+
+        if (normalized[0] is '{' or '[')
+            return ParseStructuredProviderOutput(providerName, normalized);
+
+        var singleLine = !normalized.Contains('\n') && !normalized.Contains('\r');
+        return new CommandAssistProviderResult(
+            providerName,
+            normalized,
+            singleLine ? "" : "Provider returned explanatory text rather than a single executable command.",
+            IsExecutable: singleLine);
+    }
+
+    private static CommandAssistProviderResult ParseStructuredProviderOutput(string providerName, string output)
+    {
+        try
+        {
+            using var document = JsonDocument.Parse(output);
+            if (document.RootElement.ValueKind != JsonValueKind.Object)
+                return NonExecutable(providerName, output, "Provider returned structured output that was not an object.");
+
+            var root = document.RootElement;
+            var command = GetString(root, "command")?.Trim() ?? "";
+            var explanation = GetString(root, "explanation")?.Trim() ?? "";
+            var refusal = GetString(root, "refusal")?.Trim();
+            var clarification = GetString(root, "clarification")?.Trim();
+            var plan = GetStringArray(root, "plan");
+
+            if (command.Length > 0)
+                return new CommandAssistProviderResult(providerName, command, explanation, IsExecutable: true);
+
+            var text = FirstNonEmpty(refusal, clarification, plan.Count > 0 ? string.Join(Environment.NewLine, plan) : null, explanation);
+            return NonExecutable(
+                providerName,
+                string.IsNullOrWhiteSpace(text) ? output : text,
+                "Provider did not return an executable command.");
+        }
+        catch (JsonException)
+        {
+            return NonExecutable(providerName, output, "Provider returned malformed JSON; review it before inserting.");
+        }
+    }
+
+    private static CommandAssistProviderResult NonExecutable(string providerName, string text, string explanation)
+        => new(providerName, text.Trim(), explanation, IsExecutable: false);
+
+    private static string? GetString(JsonElement root, string propertyName)
+        => root.TryGetProperty(propertyName, out var value) && value.ValueKind == JsonValueKind.String
+            ? value.GetString()
+            : null;
+
+    private static IReadOnlyList<string> GetStringArray(JsonElement root, string propertyName)
+    {
+        if (!root.TryGetProperty(propertyName, out var value) || value.ValueKind != JsonValueKind.Array)
+            return Array.Empty<string>();
+        var items = new List<string>();
+        foreach (var item in value.EnumerateArray())
+            if (item.ValueKind == JsonValueKind.String && item.GetString() is { Length: > 0 } text)
+                items.Add(text);
+        return items;
+    }
+
+    private static string FirstNonEmpty(params string?[] values)
+        => values.FirstOrDefault(v => !string.IsNullOrWhiteSpace(v)) ?? "";
 
     internal static string NormalizeProviderOutput(string output)
     {
@@ -220,6 +302,16 @@ internal sealed class CommandAssistProviderRunner(CommandAssistConfig config)
         }
         return trimmed;
     }
+
+    private static string Redact(string value)
+        => SensitiveValuePattern.Replace(value, "$1=<redacted>");
+
+    private static string Truncate(string value, int maxLength)
+        => value.Length <= maxLength ? value : value[..maxLength] + "...";
+
+    private static readonly System.Text.RegularExpressions.Regex SensitiveValuePattern = new(
+        @"(?i)\b(token|secret|password|passwd|apikey|api_key|access_key)\s*=\s*[^\s;]+",
+        System.Text.RegularExpressions.RegexOptions.Compiled);
 
     private static async Task<string> ReadWithLimitAsync(StreamReader reader, int limit, CancellationToken ct)
     {

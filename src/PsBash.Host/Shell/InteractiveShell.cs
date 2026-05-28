@@ -1172,16 +1172,21 @@ EnsureConsoleInputRestored();
             Console.WriteLine($"explanation: {request.Explanation}");
         Console.WriteLine("command:");
         Console.WriteLine(request.Command);
+        if (!request.IsExecutable)
+            Console.WriteLine("note: provider output is review-only and cannot be executed directly.");
         if (request.Warnings.Count > 0)
         {
             Console.WriteLine("warning: potentially destructive command");
             foreach (var warning in request.Warnings)
                 Console.WriteLine($"- {warning.Pattern}: {warning.Reason}");
         }
-        Console.Write("Action [e]xecute, [i]nsert/edit, [r]etry, [s]witch provider, [c]ancel: ");
+        Console.Write(request.IsExecutable
+            ? "Action [e]xecute, [i]nsert/edit, [r]etry, [s]witch provider, [c]ancel: "
+            : "Action [i]nsert/edit, [r]etry, [s]witch provider, [c]ancel: ");
         var action = Console.ReadLine()?.Trim().ToLowerInvariant();
         return action switch
         {
+            "e" or "execute" when !request.IsExecutable => CommandAssistReviewDecision.Cancel(),
             "e" or "execute" when request.Warnings.Count == 0 => CommandAssistReviewDecision.Execute(),
             "e" or "execute" => ConfirmDangerousCommand(),
             "i" or "insert" or "edit" => CommandAssistReviewDecision.Insert(),

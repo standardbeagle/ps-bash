@@ -105,7 +105,7 @@ public sealed class CommandAssistProviderTests
             Assert.Equal("mock-ai", provider.Executable);
             Assert.Equal(["--ask", "{{prompt}}"], provider.Args);
             Assert.Equal(5000, provider.TimeoutMs);
-            Assert.Equal(2048, provider.OutputLimit);
+        Assert.Equal(2048, provider.OutputLimit);
         }
         finally
         {
@@ -147,6 +147,84 @@ public sealed class CommandAssistProviderTests
         };
 
         Assert.Equal(["claude", "mock"], config.ProviderNames());
+    }
+
+    [Fact]
+    public void DefaultPrompt_ContainsStructuredResponseContractAndContext()
+    {
+        var prompt = CommandAssistProviderConfig.ClaudeDefault().PromptTemplate;
+
+        Assert.Contains("Return compact JSON only", prompt);
+        Assert.Contains("\"command\"", prompt);
+        Assert.Contains("{{buffer}}", prompt);
+        Assert.Contains("{{cwd}}", prompt);
+        Assert.Contains("{{shell}}", prompt);
+        Assert.Contains("{{os}}", prompt);
+    }
+
+    [Fact]
+    public void RenderTemplate_RedactsSensitiveValuesAndAddsShellContext()
+    {
+        var rendered = CommandAssistProviderRunner.RenderTemplate(
+            "line={{buffer}} cwd={{cwd}} shell={{shell}} os={{os}}",
+            new CommandAssistRequest("TOKEN=abc123 echo hi", 20),
+            @"C:\repo");
+
+        Assert.Contains("TOKEN=<redacted>", rendered);
+        Assert.Contains("cwd=C:\\repo", rendered);
+        Assert.Contains("shell=ps-bash", rendered);
+        Assert.DoesNotContain("abc123", rendered);
+    }
+
+    [Fact]
+    public void ParseProviderOutput_StructuredCommandIsExecutable()
+    {
+        var result = CommandAssistProviderRunner.ParseProviderOutput(
+            "mock",
+            """{"command":"git status --short","explanation":"show repo state"}""");
+
+        Assert.True(result.IsExecutable);
+        Assert.Equal("git status --short", result.Command);
+        Assert.Equal("show repo state", result.Explanation);
+    }
+
+    [Fact]
+    public void ParseProviderOutput_StructuredRefusalIsReviewOnly()
+    {
+        var result = CommandAssistProviderRunner.ParseProviderOutput(
+            "mock",
+            """{"command":"","refusal":"I need more context."}""");
+
+        Assert.False(result.IsExecutable);
+        Assert.Equal("I need more context.", result.Command);
+        Assert.Contains("did not return an executable command", result.Explanation);
+    }
+
+    [Fact]
+    public void ParseProviderOutput_SingleLinePlainTextIsExecutable()
+    {
+        var result = CommandAssistProviderRunner.ParseProviderOutput("mock", "git status --short");
+
+        Assert.True(result.IsExecutable);
+        Assert.Equal("git status --short", result.Command);
+    }
+
+    [Fact]
+    public void ParseProviderOutput_ExplanatoryPlainTextIsReviewOnly()
+    {
+        var result = CommandAssistProviderRunner.ParseProviderOutput("mock", "Run these steps:\n1. git status\n2. git diff");
+
+        Assert.False(result.IsExecutable);
+        Assert.Contains("Run these steps", result.Command);
+    }
+
+    [Fact]
+    public void ParseProviderOutput_MalformedJsonIsReviewOnly()
+    {
+        var result = CommandAssistProviderRunner.ParseProviderOutput("mock", """{"command": "git status" """);
+
+        Assert.False(result.IsExecutable);
+        Assert.Contains("malformed JSON", result.Explanation);
     }
 }
 
@@ -208,6 +286,16 @@ public sealed class CommandAssistReviewTests
     }
 
     [Fact]
+    public void ApplyDecision_ReviewOnlyOutputCannotExecute()
+    {
+        var request = ReviewRequest("I need more context.", isExecutable: false);
+
+        var response = CommandAssistReview.ApplyDecision(request, CommandAssistReviewDecision.Execute());
+
+        Assert.Equal(CommandAssistResponseAction.Cancel, response.Action);
+    }
+
+    [Fact]
     public void SelectCommandAssistProvider_MatchesConfiguredNameCaseInsensitively()
     {
         var selected = InteractiveShell.SelectCommandAssistProvider(["claude", "mock"], "MOCK");
@@ -222,6 +310,6 @@ public sealed class CommandAssistReviewTests
         Assert.Null(InteractiveShell.SelectCommandAssistProvider(["claude"], ""));
     }
 
-    private static CommandAssistReviewRequest ReviewRequest(string command)
-        => new("mock", command, "", @"C:\repo", CommandAssistSafety.Classify(command));
+    private static CommandAssistReviewRequest ReviewRequest(string command, bool isExecutable = true)
+        => new("mock", command, "", @"C:\repo", isExecutable, CommandAssistSafety.Classify(command));
 }

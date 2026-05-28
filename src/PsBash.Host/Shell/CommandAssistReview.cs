@@ -18,6 +18,7 @@ internal sealed record CommandAssistReviewRequest(
     string Command,
     string Explanation,
     string Cwd,
+    bool IsExecutable,
     IReadOnlyList<CommandAssistSafetyFinding> Warnings);
 
 internal sealed record CommandAssistReviewDecision(CommandAssistReviewAction Action, bool DangerousConfirmed = false)
@@ -72,7 +73,8 @@ internal static class CommandAssistReview
         return decision.Action switch
         {
             CommandAssistReviewAction.Insert => CommandAssistResponse.Insert(request.Command),
-            CommandAssistReviewAction.Execute when request.Warnings.Count == 0 || decision.DangerousConfirmed
+            CommandAssistReviewAction.Execute when request.IsExecutable
+                && (request.Warnings.Count == 0 || decision.DangerousConfirmed)
                 => CommandAssistResponse.Execute(request.Command),
             _ => CommandAssistResponse.Cancelled,
         };
