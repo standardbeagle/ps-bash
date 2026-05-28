@@ -107,6 +107,15 @@ exit code, timeout status, stdout/stderr line counts, stream labels, stderr and
 file/line diagnostics, and tail context. Repeated lines and low-value progress
 or listing noise are collapsed to reduce token volume.
 
+Compact mode also shortens routine status surfaces such as
+`ps-bash host status`. The verbose status form normally prints endpoint,
+metadata, process, protocol, build, owner, start time, health, and final state
+as separate labeled lines; compact mode keeps those identifiers on one summary
+line. In the formatter snapshot this reduces the representative status payload
+from 222 characters and about 22 whitespace tokens across 10 lines to 201
+characters and about 15 whitespace tokens on 1 line while retaining endpoint,
+pid, protocol, build, owner, health, and state.
+
 ```powershell
 ps-bash --compact-output -c "dotnet test"
 $env:PSBASH_COMPACT_OUTPUT = '1'

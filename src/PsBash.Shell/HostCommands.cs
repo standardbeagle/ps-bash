@@ -18,9 +18,10 @@ internal static class HostCommands
             return 2;
         }
 
+        var compactOutput = IsCompactOutput(args);
         return args[1] switch
         {
-            "status" => await StatusAsync(ct).ConfigureAwait(false),
+            "status" => await StatusAsync(compactOutput, ct).ConfigureAwait(false),
             "shutdown" => await ShutdownAsync(ParseDeadline(args.AsSpan(2)), waitForExit: true, ct).ConfigureAwait(false),
             "restart" => await RestartAsync(ParseDeadline(args.AsSpan(2)), ct).ConfigureAwait(false),
             "gc" => GcOrphans(ParseGcFlags(args.AsSpan(2))),
@@ -29,37 +30,64 @@ internal static class HostCommands
         };
     }
 
-    private static async Task<int> StatusAsync(CancellationToken ct)
+    private static async Task<int> StatusAsync(bool compactOutput, CancellationToken ct)
     {
         var (scheme, endpoint) = IpcTransportFactory.ResolveEndpoint();
         var meta = HostMetadata.TryRead(scheme, endpoint);
 
-        Console.WriteLine($"endpoint: {scheme}:{endpoint}");
+        var (exitCode, lines) = await SendControlRequestAsync(new Mode.Health(), ct).ConfigureAwait(false);
+        foreach (var line in BuildStatusLines(scheme, endpoint, meta, exitCode, lines, compactOutput))
+            Console.WriteLine(line);
+        return exitCode == 0 ? 0 : 1;
+    }
+
+    internal static IReadOnlyList<string> BuildStatusLines(
+        string scheme,
+        string endpoint,
+        HostMetadata? meta,
+        int? exitCode,
+        IReadOnlyList<string> healthLines,
+        bool compactOutput)
+    {
+        if (compactOutput)
+        {
+            var status = exitCode is null
+                ? "stopped"
+                : exitCode == 0 ? "running" : $"starting-or-unhealthy exit={exitCode}";
+            var metaText = meta is null
+                ? "metadata=absent"
+                : $"metadata=present pid={meta.Pid} protocol={meta.ProtocolVersion} build={meta.BuildIdentity} owner={meta.Owner} startedAt={meta.StartedAt:O}";
+            var healthText = healthLines.Count == 0
+                ? ""
+                : " health=\"" + string.Join(" | ", healthLines.Select(OneLine)) + "\"";
+            return [$"ps-bash-host status: {status} endpoint={scheme}:{endpoint} {metaText}{healthText}"];
+        }
+
+        var result = new List<string> { $"endpoint: {scheme}:{endpoint}" };
         if (meta is null)
         {
-            Console.WriteLine("metadata: absent");
+            result.Add("metadata: absent");
         }
         else
         {
-            Console.WriteLine("metadata: present");
-            Console.WriteLine($"pid: {meta.Pid}");
-            Console.WriteLine($"executable: {meta.ExecutablePath}");
-            Console.WriteLine($"protocol: {meta.ProtocolVersion}");
-            Console.WriteLine($"build: {meta.BuildIdentity}");
-            Console.WriteLine($"owner: {meta.Owner}");
-            Console.WriteLine($"startedAt: {meta.StartedAt:O}");
+            result.Add("metadata: present");
+            result.Add($"pid: {meta.Pid}");
+            result.Add($"executable: {meta.ExecutablePath}");
+            result.Add($"protocol: {meta.ProtocolVersion}");
+            result.Add($"build: {meta.BuildIdentity}");
+            result.Add($"owner: {meta.Owner}");
+            result.Add($"startedAt: {meta.StartedAt:O}");
         }
 
-        var (exitCode, lines) = await SendControlRequestAsync(new Mode.Health(), ct).ConfigureAwait(false);
         if (exitCode is null)
         {
-            Console.WriteLine("status: stopped");
-            return 1;
+            result.Add("status: stopped");
+            return result;
         }
 
-        foreach (var line in lines) Console.WriteLine(line);
-        Console.WriteLine(exitCode == 0 ? "status: running" : $"status: starting-or-unhealthy exit={exitCode}");
-        return exitCode == 0 ? 0 : 1;
+        result.AddRange(healthLines);
+        result.Add(exitCode == 0 ? "status: running" : $"status: starting-or-unhealthy exit={exitCode}");
+        return result;
     }
 
     private static async Task<int> ShutdownAsync(int deadlineMs, bool waitForExit, CancellationToken ct)
@@ -162,6 +190,25 @@ internal static class HostCommands
         catch (ArgumentException) { return false; }
         catch (InvalidOperationException) { return false; }
     }
+
+    private static bool IsCompactOutput(string[] args)
+    {
+        if (args.Contains("--no-compact-output", StringComparer.Ordinal))
+            return false;
+        if (args.Contains("--compact-output", StringComparer.Ordinal)
+            || args.Contains("--caveman", StringComparer.Ordinal)
+            || args.Contains("--wenyan", StringComparer.Ordinal))
+            return true;
+        var value = Environment.GetEnvironmentVariable("PSBASH_COMPACT_OUTPUT")?.Trim();
+        return value is not null
+            && (value.Equals("1", StringComparison.OrdinalIgnoreCase)
+                || value.Equals("true", StringComparison.OrdinalIgnoreCase)
+                || value.Equals("yes", StringComparison.OrdinalIgnoreCase)
+                || value.Equals("on", StringComparison.OrdinalIgnoreCase));
+    }
+
+    private static string OneLine(string value)
+        => value.Replace("\r", " ").Replace("\n", " ").Trim();
 
     internal readonly record struct GcFlags(bool Force, bool DryRun);
 

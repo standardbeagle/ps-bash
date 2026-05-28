@@ -6,6 +6,49 @@ namespace PsBash.Shell.Tests;
 public sealed class HostCommandTests
 {
     [Fact]
+    public void BuildStatusLines_WhenCompactOutputEnabled_CollapsesMetadata()
+    {
+        var meta = new HostMetadata(
+            Pid: 1234,
+            ExecutablePath: @"C:\tools\ps-bash-host.exe",
+            ProtocolVersion: 1,
+            BuildIdentity: "test-build",
+            TransportScheme: "pipe",
+            Endpoint: "psbash-test",
+            StartedAt: DateTimeOffset.Parse("2026-05-28T20:00:00Z"),
+            Owner: "andy");
+        var health = new[] { "health: ok", "runspace: ready" };
+
+        var verbose = HostCommands.BuildStatusLines("pipe", "psbash-test", meta, 0, health, compactOutput: false);
+        var compact = HostCommands.BuildStatusLines("pipe", "psbash-test", meta, 0, health, compactOutput: true);
+
+        Assert.True(compact.Count < verbose.Count);
+        Assert.True(string.Join('\n', compact).Length < string.Join('\n', verbose).Length);
+        Assert.Single(compact);
+        Assert.Contains("status: running", compact[0]);
+        Assert.Contains("endpoint=pipe:psbash-test", compact[0]);
+        Assert.Contains("pid=1234", compact[0]);
+        Assert.Contains("protocol=1", compact[0]);
+        Assert.Contains("health=\"health: ok | runspace: ready\"", compact[0]);
+    }
+
+    [Fact]
+    public void BuildStatusLines_WhenStoppedAndCompactOutputEnabled_PreservesState()
+    {
+        var compact = HostCommands.BuildStatusLines(
+            "pipe",
+            "psbash-test",
+            meta: null,
+            exitCode: null,
+            healthLines: [],
+            compactOutput: true);
+
+        Assert.Equal(
+            "ps-bash-host status: stopped endpoint=pipe:psbash-test metadata=absent",
+            compact.Single());
+    }
+
+    [Fact]
     public async Task ControlRequest_WhenHostClosesDuringResponse_ReturnsUnavailableWithoutThrowing()
     {
         // macOS limits AF_UNIX path to 104 chars; the default temp prefix
