@@ -157,6 +157,10 @@ When enabled, ps-bash keeps command identity, exit code, timeout status, stream
 labels, stderr presence, file/line diagnostics, and useful tail context while
 collapsing repeated lines and verbose progress/listing noise.
 
+Use compact mode for agent and CI log capture where token volume matters. Leave
+it off when you need exact byte-for-byte stdout/stderr, full progress logs, or
+human-facing interactive output.
+
 ```powershell
 ps-bash --compact-output -c "dotnet test"
 $env:PSBASH_COMPACT_OUTPUT = '1'

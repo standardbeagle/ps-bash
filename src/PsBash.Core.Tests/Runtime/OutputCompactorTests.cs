@@ -60,4 +60,30 @@ public class OutputCompactorTests
         Assert.Contains("exit=124", compacted);
         Assert.Contains("timeout=true", compacted);
     }
+
+    [Fact]
+    public void CompactCommandOutput_ReducesRepresentativeNoisyFailureFixture()
+    {
+        var frames = new List<OutputFrame>();
+        for (var i = 0; i < 80; i++)
+            frames.Add(new OutputFrame(StreamTag.Stdout, "Determining projects to restore...\n"));
+        frames.Add(new OutputFrame(StreamTag.Stdout, "src/App.cs:42: warning CS0168: unused variable\n"));
+        frames.Add(new OutputFrame(StreamTag.Stderr, "src/App.cs:99: error CS1002: ; expected\n"));
+        frames.Add(new OutputFrame(StreamTag.Stdout, "Build FAILED.\n"));
+        frames.Add(new OutputFrame(StreamTag.Stdout, "Time Elapsed 00:00:12.34\n"));
+
+        var raw = string.Concat(frames.Select(f => f.Text));
+        var compacted = OutputCompactor.CompactCommandOutput("dotnet build", 1, false, frames);
+
+        Assert.True(compacted.Length < raw.Length / 2);
+        Assert.True(EstimateTokens(compacted) < EstimateTokens(raw) / 2);
+        Assert.Contains("exit=1", compacted);
+        Assert.Contains("[err] src/App.cs:99: error CS1002: ; expected", compacted);
+        Assert.Contains("[out] src/App.cs:42: warning CS0168: unused variable", compacted);
+        Assert.Contains("[out] Build FAILED.", compacted);
+        Assert.Contains("repeated 79 more times", compacted);
+    }
+
+    private static int EstimateTokens(string value)
+        => value.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries).Length;
 }

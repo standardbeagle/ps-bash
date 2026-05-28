@@ -116,6 +116,16 @@ from 222 characters and about 22 whitespace tokens across 10 lines to 201
 characters and about 15 whitespace tokens on 1 line while retaining endpoint,
 pid, protocol, build, owner, health, and state.
 
+The representative noisy-failure fixture in `OutputCompactorTests` reduces a
+repeated build log to less than half of the raw character count and less than
+half of the estimated whitespace-token count while preserving exit code,
+stderr, file/line diagnostics, warnings, failure text, and repetition counts.
+
+Use compact mode for agent and CI log capture where token volume matters. Leave
+it off when downstream tooling needs exact stdout/stderr bytes, when full
+progress history is the artifact being inspected, or for human-facing
+interactive sessions.
+
 ```powershell
 ps-bash --compact-output -c "dotnet test"
 $env:PSBASH_COMPACT_OUTPUT = '1'
