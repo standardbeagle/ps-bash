@@ -78,6 +78,9 @@ internal static class TabCompleter
             }
         }
 
+        if (!afterRedirect && TryCompleteGrepPatternValue(line, cursor, aliases, token, cwd, out var grepPatternCompletions))
+            return grepPatternCompletions;
+
         return CompletePath(token, cwd);
     }
 
@@ -212,6 +215,72 @@ internal static class TabCompleter
         return results;
     }
 
+    internal static bool TryGetGrepPatternValueContext(
+        string line,
+        int cursor,
+        IReadOnlyDictionary<string, string> aliases,
+        out string mode)
+    {
+        mode = "basic";
+        if (IsFirstWord(line, cursor))
+            return false;
+
+        var before = cursor <= line.Length ? line[..cursor] : line;
+        var (_, token) = SplitAtWordBoundaryQuoteAware(line, cursor);
+        var tokens = Tokenize(before);
+        if (tokens.Count < 2)
+            return false;
+
+        if (token.Length > 0 && string.Equals(tokens[^1], token, StringComparison.Ordinal))
+            tokens.RemoveAt(tokens.Count - 1);
+        if (tokens.Count < 2)
+            return false;
+
+        var command = ResolveCommandToken(tokens[0], aliases);
+        if (!string.Equals(command, "grep", StringComparison.Ordinal))
+            return false;
+
+        var previous = tokens[^1];
+        if (previous is not ("-e" or "--regexp"))
+            return false;
+
+        mode = tokens.Any(t => t == "-F" || t == "--fixed-strings")
+            ? "fixed"
+            : tokens.Any(t => t == "-E" || t == "--extended-regexp")
+                ? "extended"
+                : "basic";
+        return true;
+    }
+
+    private static bool TryCompleteGrepPatternValue(
+        string line,
+        int cursor,
+        IReadOnlyDictionary<string, string> aliases,
+        string token,
+        string cwd,
+        out IReadOnlyList<CompletionItem> completions)
+    {
+        completions = Array.Empty<CompletionItem>();
+        if (!TryGetGrepPatternValueContext(line, cursor, aliases, out var mode))
+            return false;
+
+        var snippets = mode switch
+        {
+            "fixed" => GrepFixedPatternSnippets,
+            "extended" => GrepExtendedRegexSnippets,
+            _ => GrepBasicRegexSnippets,
+        };
+
+        var matches = snippets
+            .Where(s => token.Length == 0 || s.InsertText.StartsWith(token, StringComparison.OrdinalIgnoreCase))
+            .ToList();
+        if (matches.Count == 0)
+            return false;
+
+        completions = CompletionMerge.Append(matches, CompletePath(token, cwd), sortSecondary: false);
+        return true;
+    }
+
     /// <summary>
     /// The flag specs (flag + description) matching the flag-prefix token under the cursor for the
     /// command at the cursor — the data behind the interactive floating flag-doc panel. Returns
@@ -334,6 +403,14 @@ internal static class TabCompleter
         }
 
         return tokens;
+    }
+
+    private static string ResolveCommandToken(string command, IReadOnlyDictionary<string, string> aliases)
+    {
+        if (!aliases.TryGetValue(command, out var aliasValue))
+            return command;
+        var spaceIdx = aliasValue.IndexOf(' ');
+        return spaceIdx >= 0 ? aliasValue[..spaceIdx] : aliasValue;
     }
 
     // ─────────────────────────────────────────────────────────────────────────
@@ -603,5 +680,29 @@ internal static class TabCompleter
         "npm", "ps", "python", "python3", "rm", "rmdir", "rsync", "sed",
         "sort", "ssh", "stat", "tail", "tar", "tee", "touch", "tr", "uniq",
         "unzip", "vim", "wc", "wget", "which", "xargs", "zip",
+    ];
+
+    private static readonly CompletionItem[] GrepBasicRegexSnippets =
+    [
+        CompletionItem.Labeled("'^TODO'", "^TODO  - line starts with TODO"),
+        CompletionItem.Labeled("'FIXME'", "FIXME  - literal word in basic regex"),
+        CompletionItem.Labeled("'[0-9][0-9]*'", "[0-9][0-9]*  - one or more digits"),
+        CompletionItem.Labeled("'\\.log$'", "\\.log$  - line ends with .log"),
+    ];
+
+    private static readonly CompletionItem[] GrepExtendedRegexSnippets =
+    [
+        CompletionItem.Labeled("'TODO|FIXME'", "TODO|FIXME  - either word"),
+        CompletionItem.Labeled("'error|warning'", "error|warning  - either log level"),
+        CompletionItem.Labeled("'^[A-Z_]+='", "^[A-Z_]+=  - env-style assignment"),
+        CompletionItem.Labeled("'\\.(cs|ps1)$'", "\\.(cs|ps1)$  - file extension"),
+    ];
+
+    private static readonly CompletionItem[] GrepFixedPatternSnippets =
+    [
+        CompletionItem.Labeled("TODO", "TODO  - literal text"),
+        CompletionItem.Labeled("FIXME", "FIXME  - literal text"),
+        CompletionItem.Labeled("error|warning", "error|warning  - literal pipe text"),
+        CompletionItem.Labeled("[brackets]", "[brackets]  - literal brackets"),
     ];
 }

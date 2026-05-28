@@ -531,6 +531,60 @@ public class TabCompleterTests : IDisposable
     }
 
     [Fact]
+    public void CompleteGrepPattern_AfterDashE_ReturnsRegexSnippetsBeforePaths()
+    {
+        File.WriteAllText(Path.Combine(_tmpDir, "TODO-file.txt"), "");
+
+        var results = TabCompleter.Complete("grep -e ", 8, _noAliases, _tmpDir);
+
+        Assert.NotEmpty(results);
+        Assert.Equal("'^TODO'", results[0].InsertText);
+        Assert.Contains(results, r => r.InsertText == "TODO-file.txt");
+    }
+
+    [Fact]
+    public void CompleteGrepPattern_ExtendedMode_ReturnsExtendedRegexSnippets()
+    {
+        var results = TabCompleter.Complete("grep -E -e ", 11, _noAliases, _tmpDir).Texts();
+
+        Assert.Contains("'TODO|FIXME'", results);
+        Assert.Contains("'^[A-Z_]+='", results);
+    }
+
+    [Fact]
+    public void CompleteGrepPattern_FixedMode_ReturnsLiteralSnippets()
+    {
+        var results = TabCompleter.Complete("grep -F -e ", 11, _noAliases, _tmpDir);
+
+        Assert.Contains(results, r => r.InsertText == "error|warning" && r.DisplayText.Contains("literal"));
+        Assert.DoesNotContain("'TODO|FIXME'", results.Texts());
+    }
+
+    [Fact]
+    public void CompleteGrepPattern_FileOperand_UsesPathCompletionNotRegexSnippets()
+    {
+        File.WriteAllText(Path.Combine(_tmpDir, "sample.txt"), "");
+
+        var results = TabCompleter.Complete("grep TODO s", 11, _noAliases, _tmpDir).Texts();
+
+        Assert.Contains("sample.txt", results);
+        Assert.DoesNotContain("'^TODO'", results);
+    }
+
+    [Fact]
+    public void GrepPatternContext_ClassifiesBasicExtendedAndFixed()
+    {
+        Assert.True(TabCompleter.TryGetGrepPatternValueContext("grep -e ", 8, _noAliases, out var basic));
+        Assert.Equal("basic", basic);
+
+        Assert.True(TabCompleter.TryGetGrepPatternValueContext("grep -E -e ", 11, _noAliases, out var extended));
+        Assert.Equal("extended", extended);
+
+        Assert.True(TabCompleter.TryGetGrepPatternValueContext("grep -F -e ", 11, _noAliases, out var fixedMode));
+        Assert.Equal("fixed", fixedMode);
+    }
+
+    [Fact]
     public void CompleteFlags_cat_dash_n_ReturnsNumberLinesFlag()
     {
         var results = TabCompleter.Complete("cat -n", 6, _noAliases, _tmpDir);
