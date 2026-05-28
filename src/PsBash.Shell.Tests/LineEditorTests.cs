@@ -60,6 +60,53 @@ public class LineEditorSplitTests
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// LineEditor Ctrl+~ command assist dispatch
+// ─────────────────────────────────────────────────────────────────────────────
+
+public class LineEditorCommandAssistTests
+{
+    [Fact]
+    public void IsCommandAssistKey_DetectsCtrlTildeControlCharacter()
+    {
+        var key = new ConsoleKeyInfo('\u001e', ConsoleKey.D6, shift: true, alt: false, control: true);
+
+        Assert.True(LineEditor.IsCommandAssistKey(key));
+    }
+
+    [Fact]
+    public void IsCommandAssistKey_DetectsOemTildeFallback()
+    {
+        var key = new ConsoleKeyInfo('~', ConsoleKey.Oem3, shift: true, alt: false, control: true);
+
+        Assert.True(LineEditor.IsCommandAssistKey(key));
+    }
+
+    [Fact]
+    public void ApplyCommandAssistResponse_CancelPreservesBufferAndCursor()
+    {
+        var result = LineEditor.ApplyCommandAssistResponse(
+            "git status --short",
+            cursor: 4,
+            CommandAssistResponse.Cancelled);
+
+        Assert.Equal("git status --short", result.Buffer);
+        Assert.Equal(4, result.Cursor);
+    }
+
+    [Fact]
+    public void ApplyCommandAssistResponse_ReplacementMovesCursorToEnd()
+    {
+        var result = LineEditor.ApplyCommandAssistResponse(
+            "git st",
+            cursor: 6,
+            CommandAssistResponse.ReplaceWith("git status --short"));
+
+        Assert.Equal("git status --short", result.Buffer);
+        Assert.Equal("git status --short".Length, result.Cursor);
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // FlagHelpBrowser — scrollable man-page drill-down (P4)
 // ─────────────────────────────────────────────────────────────────────────────
 

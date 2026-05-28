@@ -52,6 +52,10 @@ internal sealed class LineEditor
     private IReadOnlyList<FlagHint>? _psPanelHints;
     private string? _psPanelKey;
 
+    // Ctrl+~ command assist. Most terminals encode Ctrl+~ as ASCII 0x1e, the
+    // same control character as Ctrl+^; keep both as supported entry points.
+    private readonly Func<CommandAssistRequest, CancellationToken, Task<CommandAssistResponse>>? _commandAssist;
+
     // Panel navigation: when the user presses ↓ with the panel visible, focus moves INTO the panel
     // (↑↓/PgUp/PgDn scroll a highlighted selection; Enter inserts the flag; Esc / ↑-past-top returns
     // to typing). _panelScroll is the index of the first visible row when the list overflows.
@@ -107,11 +111,13 @@ internal sealed class LineEditor
         Func<string, int, CancellationToken, Task<IReadOnlyList<CompletionItem>>>? completer,
         string? cwd = null,
         IReadOnlyDictionary<string, string>? aliases = null,
-        Func<string, int, CancellationToken, Task<IReadOnlyList<FlagHint>>>? flagHintProvider = null)
+        Func<string, int, CancellationToken, Task<IReadOnlyList<FlagHint>>>? flagHintProvider = null,
+        Func<CommandAssistRequest, CancellationToken, Task<CommandAssistResponse>>? commandAssist = null)
     {
         _historyStore = historyStore;
         _completer = completer;
         _flagHintProvider = flagHintProvider;
+        _commandAssist = commandAssist;
         _suggester = new Suggester(historyStore);
         _cwd = cwd ?? Environment.CurrentDirectory;
         _aliases = aliases ?? EmptyAliases;
@@ -234,6 +240,15 @@ internal sealed class LineEditor
             {
                 ClearSuggestion();
                 OpenHelpBrowserFromPrompt();
+                continue;
+            }
+
+            // Ctrl+~ / Ctrl+^ opens command assist. The current line is passed
+            // as context and restored on cancel/no provider, so the hotkey never
+            // commits or corrupts the user's in-progress command.
+            if (IsCommandAssistKey(key))
+            {
+                await HandleCommandAssistAsync(CancellationToken.None);
                 continue;
             }
 
@@ -652,6 +667,14 @@ internal sealed class LineEditor
         _buf.Clear();
         _buf.Append(text);
         _cursor = text.Length;
+        Redraw();
+    }
+
+    private void RestoreBuffer(string text, int cursor)
+    {
+        _buf.Clear();
+        _buf.Append(text);
+        _cursor = Math.Clamp(cursor, 0, _buf.Length);
         Redraw();
     }
 
@@ -1208,6 +1231,71 @@ internal sealed class LineEditor
 
         return null;
     }
+
+    internal static bool IsCommandAssistKey(ConsoleKeyInfo key)
+    {
+        if (key.KeyChar == '\u001e') return true;
+        if (key.Key == ConsoleKey.Oem3 && key.Modifiers.HasFlag(ConsoleModifiers.Control)) return true;
+        if (key.Key == ConsoleKey.D6 && key.Modifiers.HasFlag(ConsoleModifiers.Control)) return true;
+        return false;
+    }
+
+    internal static (string Buffer, int Cursor) ApplyCommandAssistResponse(
+        string buffer,
+        int cursor,
+        CommandAssistResponse response)
+    {
+        if (!response.Apply || response.Replacement is null)
+            return (buffer, cursor);
+        return (response.Replacement, response.Replacement.Length);
+    }
+
+    private async Task HandleCommandAssistAsync(CancellationToken ct)
+    {
+        var originalBuffer = _buf.ToString();
+        var originalCursor = _cursor;
+        ClearCompletion();
+        ClearSuggestion();
+        ExitPanelFocus();
+
+        try
+        {
+            Console.Write("\r\x1b[0J");
+            Console.Write(_prompt);
+            Console.Write(originalBuffer);
+            Console.WriteLine();
+
+            if (_commandAssist is null)
+            {
+                Console.WriteLine("ps-bash: command assist is not configured; returning to prompt.");
+                RestoreBuffer(originalBuffer, originalCursor);
+                return;
+            }
+
+            var response = await _commandAssist(
+                new CommandAssistRequest(originalBuffer, originalCursor),
+                ct).ConfigureAwait(false);
+            var (buffer, cursor) = ApplyCommandAssistResponse(originalBuffer, originalCursor, response);
+            RestoreBuffer(buffer, cursor);
+        }
+        catch (OperationCanceledException)
+        {
+            RestoreBuffer(originalBuffer, originalCursor);
+        }
+        catch (Exception ex)
+        {
+            Console.Error.WriteLine($"ps-bash: command assist failed: {ex.Message}");
+            RestoreBuffer(originalBuffer, originalCursor);
+        }
+    }
+}
+
+internal readonly record struct CommandAssistRequest(string Buffer, int Cursor);
+
+internal readonly record struct CommandAssistResponse(bool Apply, string? Replacement)
+{
+    public static CommandAssistResponse Cancelled { get; } = new(false, null);
+    public static CommandAssistResponse ReplaceWith(string replacement) => new(true, replacement);
 }
 
 /// <summary>
