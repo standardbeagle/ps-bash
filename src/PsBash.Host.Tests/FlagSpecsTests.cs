@@ -27,4 +27,25 @@ public class FlagSpecsTests
         Assert.NotNull(tar);
         Assert.Contains(tar!, f => f.Flag == "-x");
     }
+
+    [Fact]
+    public void GrepRegexFlags_CarryDetailAndExamples()
+    {
+        var grep = FlagSpecs.GetFlags("grep");
+        Assert.NotNull(grep);
+
+        var e = Assert.Single(grep!, f => f.Flag == "-e");
+        Assert.Equal("PATTERN", e.Arg);
+        Assert.Contains("Basic regex", e.Detail);
+        Assert.NotNull(e.Examples);
+        Assert.Contains(e.Examples!, example => example.Contains("FIXME"));
+
+        foreach (var flag in new[] { "-E", "-F", "-i", "-v", "-w" })
+        {
+            var spec = Assert.Single(grep!, f => f.Flag == flag);
+            Assert.False(string.IsNullOrWhiteSpace(spec.Detail));
+            Assert.NotNull(spec.Examples);
+            Assert.NotEmpty(spec.Examples!);
+        }
+    }
 }

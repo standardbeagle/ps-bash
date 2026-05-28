@@ -465,6 +465,18 @@ public class TabCompleterTests : IDisposable
     }
 
     [Fact]
+    public void MatchingFlagSpecs_GrepE_CarriesRegexDetailAndExamples()
+    {
+        var specs = TabCompleter.MatchingFlagSpecs("grep -e", 7, _noAliases);
+
+        var e = Assert.Single(specs, s => s.Flag == "-e");
+        Assert.Equal("PATTERN", e.Arg);
+        Assert.Contains("Basic regex", e.Detail);
+        Assert.NotNull(e.Examples);
+        Assert.Contains(e.Examples!, example => example.Contains("FIXME"));
+    }
+
+    [Fact]
     public void MatchingFlagSpecs_NewlySupportedFindPredicates_AreDocumented()
     {
         var dSpecs = TabCompleter.MatchingFlagSpecs("find -d", 7, _noAliases);
@@ -506,6 +518,16 @@ public class TabCompleterTests : IDisposable
         // Inserts "-i"; lists "-i  - ignore case".
         Assert.Contains("-i", results.Texts());
         Assert.Contains("-i  - ignore case", results.Labels());
+    }
+
+    [Fact]
+    public void CompleteFlags_grep_dash_e_KeepsInlineRowConcise()
+    {
+        var results = TabCompleter.Complete("grep -e", 7, _noAliases, _tmpDir);
+
+        Assert.Contains("-e", results.Texts());
+        Assert.Contains("-e PATTERN  - pattern", results.Labels());
+        Assert.DoesNotContain(results.Labels(), label => label.Contains("Basic regex"));
     }
 
     [Fact]

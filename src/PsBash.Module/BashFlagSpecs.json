@@ -443,11 +443,21 @@
   "grep": [
     {
       "flag": "-i",
-      "desc": "ignore case"
+      "desc": "ignore case",
+      "detail": "Match without case sensitivity. This applies to basic regex, extended regex (-E), fixed string (-F), and explicit -e patterns.",
+      "examples": [
+        "grep -i 'error' app.log",
+        "grep -i -e 'todo' -e 'fixme' src/*.cs"
+      ]
     },
     {
       "flag": "-v",
-      "desc": "invert match"
+      "desc": "invert match",
+      "detail": "Select lines that do not match the pattern. Use this to filter out comments, generated files, or known-noisy log lines.",
+      "examples": [
+        "grep -v '^#' .env",
+        "grep -v -e 'DEBUG' -e 'TRACE' app.log"
+      ]
     },
     {
       "flag": "-n",
@@ -467,7 +477,12 @@
     },
     {
       "flag": "-E",
-      "desc": "extended regex"
+      "desc": "extended regex",
+      "detail": "Use extended regular expressions so operators like |, +, ?, and grouped alternation work without extra backslashes. Quote patterns so the shell passes regex metacharacters to grep unchanged.",
+      "examples": [
+        "grep -E 'error|warning' app.log",
+        "grep -E '^[A-Z_]+=' .env"
+      ]
     },
     {
       "flag": "-A",
@@ -483,11 +498,21 @@
     },
     {
       "flag": "-F",
-      "desc": "fixed strings"
+      "desc": "fixed strings",
+      "detail": "Treat the pattern as literal text instead of a regular expression. Useful for strings that contain regex metacharacters such as ., [, ], *, ?, or |.",
+      "examples": [
+        "grep -F 'a.b[0]' notes.txt",
+        "grep -F 'error|warning' app.log"
+      ]
     },
     {
       "flag": "-w",
-      "desc": "word regexp"
+      "desc": "word regexp",
+      "detail": "Require the match to be a whole word. This is handy when searching identifiers or command names and avoiding substrings inside longer words.",
+      "examples": [
+        "grep -w 'cat' README.md",
+        "grep -w -E 'init|start|stop' scripts/*.sh"
+      ]
     },
     {
       "flag": "-o",
@@ -503,7 +528,14 @@
     },
     {
       "flag": "-e",
-      "desc": "pattern"
+      "desc": "pattern",
+      "arg": "PATTERN",
+      "detail": "Add PATTERN as a search expression. Repeat -e to OR several patterns, or use it when a pattern begins with - so grep does not treat it as an option. Basic regex is the default: . matches any character, [abc] matches one listed character, [0-9] matches a range, * repeats the previous atom, ^ anchors the start of the line, and $ anchors the end. Use -E for easier alternation and grouping, or -F when the text should be literal.",
+      "examples": [
+        "grep -e '^TODO' -e 'FIXME' src/*.cs",
+        "grep -e '^-n' options.txt",
+        "grep -E -e 'error|warning' app.log"
+      ]
     },
     {
       "flag": "-m",
