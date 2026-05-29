@@ -66,19 +66,12 @@ public static class BashLexer
             }
 
             // Process substitution: <(...) or >(...) — consume as a word.
+            // Quote-aware so a ')' inside a string in the producer does not
+            // close the region early.
             if (c is '<' or '>' && pos + 1 < len && input[pos + 1] == '(')
             {
                 int psStart = pos;
-                pos += 2; // skip <( or >(
-                int depth = 1;
-                while (pos < len && depth > 0)
-                {
-                    if (input[pos] == '(') depth++;
-                    else if (input[pos] == ')') depth--;
-                    if (depth > 0) pos++;
-                }
-                if (pos < len)
-                    pos++; // skip closing )
+                pos = ScanBalancedParens(input, pos + 2, 1); // skip <( or >(
                 string psText = input[psStart..pos];
                 tokens.Add(new BashToken(BashTokenKind.Word, psText, psStart));
                 continue;
@@ -269,9 +262,14 @@ public static class BashLexer
                 continue;
             }
 
-            // Unquoted metacharacters end the word.
+            // Unquoted metacharacters end the word. NOTE: '#' is deliberately
+            // NOT here. Bash starts a comment only when '#' BEGINS a word; a
+            // '#' mid-word is literal ("abc#def", "http://x#frag"). The main
+            // tokenize loop only reaches a '#' at a word boundary (after
+            // whitespace / operator / newline), so the comment rule there fires
+            // exactly when bash's does — without this scan swallowing it.
             if (c is ' ' or '\t' or '\n' or '\r' or '|' or '&' or ';'
-                or '(' or ')' or '<' or '>' or '#')
+                or '(' or ')' or '<' or '>')
                 break;
 
             // Backslash escape: consume the backslash and the next character.
@@ -295,101 +293,37 @@ public static class BashLexer
             // Single-quoted string: consume through closing quote.
             if (c == '\'')
             {
-                pos++;
-                while (pos < len && input[pos] != '\'')
-                    pos++;
-                if (pos < len)
-                    pos++; // skip closing quote
+                pos = ScanSingleQuoted(input, pos);
                 continue;
             }
 
-            // Double-quoted string: consume through closing quote, respecting backslash.
+            // Double-quoted string. Quote-aware: recurses through $(...), ${...}
+            // and `...` so an embedded '"' inside a command substitution does
+            // not prematurely terminate the string.
             if (c == '"')
             {
-                pos++;
-                while (pos < len && input[pos] != '"')
-                {
-                    if (input[pos] == '\\' && pos + 1 < len)
-                        pos++;
-                    pos++;
-                }
-                if (pos < len)
-                    pos++; // skip closing quote
+                pos = ScanDoubleQuoted(input, pos);
                 continue;
             }
 
-            // Brace expansion ${...}: consume through closing brace.
+            // Parameter expansion ${...}: consume through matching closing brace.
             if (c == '$' && pos + 1 < len && input[pos + 1] == '{')
             {
-                pos += 2; // skip ${
-                int depth = 1;
-                while (pos < len && depth > 0)
-                {
-                    if (input[pos] == '{') depth++;
-                    else if (input[pos] == '}') depth--;
-                    if (depth > 0) pos++;
-                }
-                if (pos < len)
-                    pos++; // skip closing }
+                pos = ScanDollarBrace(input, pos);
                 continue;
             }
 
-            // Arithmetic expansion $(( ... )): consume through matching )).
-            if (c == '$' && pos + 2 < len && input[pos + 1] == '(' && input[pos + 2] == '(')
-            {
-                pos += 3; // skip $((
-                int depth = 1;
-                while (pos < len && depth > 0)
-                {
-                    if (pos + 1 < len && input[pos] == '(' && input[pos + 1] == '(')
-                    {
-                        depth++;
-                        pos += 2;
-                    }
-                    else if (pos + 1 < len && input[pos] == ')' && input[pos + 1] == ')')
-                    {
-                        depth--;
-                        if (depth > 0) pos += 2;
-                    }
-                    else
-                    {
-                        pos++;
-                    }
-                }
-                if (pos < len)
-                    pos += 2; // skip closing ))
-                continue;
-            }
-
-            // Command substitution $(...): consume through matching closing paren.
+            // Arithmetic expansion $((...)) or command substitution $(...).
             if (c == '$' && pos + 1 < len && input[pos + 1] == '(')
             {
-                pos += 2; // skip $(
-                int depth = 1;
-                while (pos < len && depth > 0)
-                {
-                    char ch = input[pos];
-                    if (ch == '(') depth++;
-                    else if (ch == ')') depth--;
-                    if (depth > 0) pos++;
-                }
-                if (pos < len)
-                    pos++; // skip closing )
+                pos = ScanDollarParen(input, pos);
                 continue;
             }
 
-            // Backtick command substitution `...`: consume through closing backtick.
+            // Backtick command substitution `...`.
             if (c == '`')
             {
-                pos++; // skip opening `
-                while (pos < len && input[pos] != '`')
-                {
-                    if (input[pos] == '\\' && pos + 1 < len)
-                        pos++; // skip escaped char
-                    pos++;
-                }
-                if (pos < len)
-                    pos++; // skip closing `
+                pos = ScanBacktick(input, pos);
                 continue;
             }
 
@@ -423,6 +357,148 @@ public static class BashLexer
             pos++;
         }
 
+        return pos;
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // Quote- and nesting-aware region scanners.
+    //
+    // Bash word scanning must treat quotes and command substitutions as ATOMIC,
+    // composing regions: a ')' inside a string must not close a $( ), and a '"'
+    // inside a $(...) inside a "..." must not close the outer string. These
+    // helpers are mutually recursive so any construct can nest inside any other.
+    // Each takes the source and the offset of the construct's opening delimiter
+    // and returns the offset one past its closing delimiter.
+    // ─────────────────────────────────────────────────────────────────────────
+
+    /// <summary>Advance past a single-quoted string. No escapes inside (bash).</summary>
+    private static int ScanSingleQuoted(string input, int pos)
+    {
+        int len = input.Length;
+        pos++; // opening '
+        while (pos < len && input[pos] != '\'')
+            pos++;
+        if (pos < len)
+            pos++; // closing '
+        return pos;
+    }
+
+    /// <summary>
+    /// Advance past a double-quoted string, recursing through embedded $(...),
+    /// ${...} and `...` (whose own quotes/parens must not end the string).
+    /// </summary>
+    private static int ScanDoubleQuoted(string input, int pos)
+    {
+        int len = input.Length;
+        pos++; // opening "
+        while (pos < len && input[pos] != '"')
+        {
+            char c = input[pos];
+            if (c == '\\' && pos + 1 < len) { pos += 2; continue; }
+            if (c == '$' && pos + 1 < len && input[pos + 1] == '(') { pos = ScanDollarParen(input, pos); continue; }
+            if (c == '$' && pos + 1 < len && input[pos + 1] == '{') { pos = ScanDollarBrace(input, pos); continue; }
+            if (c == '`') { pos = ScanBacktick(input, pos); continue; }
+            pos++;
+        }
+        if (pos < len)
+            pos++; // closing "
+        return pos;
+    }
+
+    /// <summary>Advance past a `...` backtick command substitution (no nesting; escapes honored).</summary>
+    private static int ScanBacktick(string input, int pos)
+    {
+        int len = input.Length;
+        pos++; // opening `
+        while (pos < len && input[pos] != '`')
+        {
+            if (input[pos] == '\\' && pos + 1 < len)
+                pos++; // skip escaped char
+            pos++;
+        }
+        if (pos < len)
+            pos++; // closing `
+        return pos;
+    }
+
+    /// <summary>Advance past a ${...} parameter expansion. input[pos]=='$', [pos+1]=='{'.</summary>
+    private static int ScanDollarBrace(string input, int pos)
+    {
+        int len = input.Length;
+        pos += 2; // skip ${
+        int depth = 1;
+        while (pos < len && depth > 0)
+        {
+            char c = input[pos];
+            if (c == '{') depth++;
+            else if (c == '}') depth--;
+            if (depth > 0) pos++;
+        }
+        if (pos < len)
+            pos++; // skip closing }
+        return pos;
+    }
+
+    /// <summary>
+    /// Advance past $((...)) arithmetic or $(...) command substitution.
+    /// input[pos]=='$', input[pos+1]=='('.
+    /// </summary>
+    private static int ScanDollarParen(string input, int pos)
+    {
+        int len = input.Length;
+        if (pos + 2 < len && input[pos + 2] == '(')
+            return ScanArith(input, pos);
+        return ScanBalancedParens(input, pos + 2, 1); // skip $(
+    }
+
+    /// <summary>Advance past $(( ... )). input[pos]=='$', [pos+1]=='(', [pos+2]=='('.</summary>
+    internal static int ScanArith(string input, int pos)
+    {
+        int len = input.Length;
+        pos += 3; // skip $((
+        int depth = 1;
+        while (pos < len && depth > 0)
+        {
+            if (pos + 1 < len && input[pos] == '(' && input[pos + 1] == '(')
+            {
+                depth++;
+                pos += 2;
+            }
+            else if (pos + 1 < len && input[pos] == ')' && input[pos + 1] == ')')
+            {
+                depth--;
+                if (depth > 0) pos += 2;
+            }
+            else
+            {
+                pos++;
+            }
+        }
+        if (pos < len)
+            pos += 2; // skip closing ))
+        return pos;
+    }
+
+    /// <summary>
+    /// Scan a parenthesised region with paren depth starting at <paramref name="depth"/>,
+    /// treating quotes and nested $(...) atomically. <paramref name="pos"/> is the offset
+    /// just inside the opening '('. Returns the offset one past the matching ')'.
+    /// Shared by command substitution $(...) and process substitution &lt;( )/&gt;( ).
+    /// </summary>
+    internal static int ScanBalancedParens(string input, int pos, int depth)
+    {
+        int len = input.Length;
+        while (pos < len && depth > 0)
+        {
+            char c = input[pos];
+            if (c == '\'') { pos = ScanSingleQuoted(input, pos); continue; }
+            if (c == '"') { pos = ScanDoubleQuoted(input, pos); continue; }
+            if (c == '`') { pos = ScanBacktick(input, pos); continue; }
+            if (c == '$' && pos + 1 < len && input[pos + 1] == '(') { pos = ScanDollarParen(input, pos); continue; }
+            if (c == '(') { depth++; pos++; continue; }
+            if (c == ')') { depth--; pos++; continue; }
+            pos++;
+        }
         return pos;
     }
 

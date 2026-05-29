@@ -1936,6 +1936,49 @@ public class PsEmitterTests
         Assert.Equal("@'\n# !/bin/sh style line\n\n'@ | Emit-BashLine | Invoke-BashCat", result);
     }
 
+    // Bug: '#' begins a comment only at a word boundary in bash; a '#' mid-word
+    // is literal. The lexer broke words on '#' and ate the rest as a comment, so
+    // "abc#def" lost "#def" and URLs lost their fragment.
+    [Fact]
+    public void Transpile_HashMidWord_KeptAsLiteral()
+    {
+        Assert.Equal("Invoke-BashEcho abc#def", PsEmitter.Transpile("echo abc#def"));
+        Assert.Equal("Invoke-BashEcho http://x/p#section", PsEmitter.Transpile("echo http://x/p#section"));
+    }
+
+    // Bug: command-substitution boundary scanning ignored quotes, so a ')' inside
+    // a string closed the $( ) early — "$(grep \")\" f)" leaked "f)" out of the
+    // sub. Boundary scanning is now quote-aware (shared with the lexer).
+    [Fact]
+    public void Transpile_CommandSub_QuotedCloseParen_NotTreatedAsClose()
+    {
+        var result = PsEmitter.Transpile("echo $(grep \")\" file.txt)");
+
+        Assert.Contains("Invoke-BashGrep \")\" file.txt", result);
+        Assert.DoesNotContain("file.txt)\"", result); // no leaked operand outside the sub
+    }
+
+    // Bug: the double-quote scanner terminated at the first inner '"', breaking a
+    // $(...) embedded in a double-quoted word. It now recurses through $(...).
+    [Fact]
+    public void Transpile_NestedDoubleQuoteInCommandSubInDoubleQuote_Intact()
+    {
+        var result = PsEmitter.Transpile("echo \"$(echo \"hi there\")\"");
+
+        Assert.Equal(
+            "Invoke-BashEcho \"$(Invoke-BashEcho \"hi there\" | ForEach-Object { Get-BashText $_ })\"",
+            result);
+    }
+
+    // Bug: process-substitution boundary scanning ignored quotes too.
+    [Fact]
+    public void Transpile_ProcessSub_QuotedCloseParen_NotTreatedAsClose()
+    {
+        var result = PsEmitter.Transpile("cat <(grep \")\" a)");
+
+        Assert.Contains("Invoke-BashGrep \")\" a", result);
+    }
+
     [Fact]
     public void Transpile_DLessDash_StripsLeadingTabs()
     {

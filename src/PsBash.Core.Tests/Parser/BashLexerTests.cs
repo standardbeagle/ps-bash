@@ -534,4 +534,73 @@ public class BashLexerTests
             (BashTokenKind.Word, "-I{}"),
             (BashTokenKind.Word, "echo"));
     }
+
+    // ─────────────────────────────────────────────────────────────────────
+    // Port gaps vs bash (oracle-driven). Each case encodes how bash itself
+    // tokenizes; ps-bash shortcut behaviours are bugs to be forced green.
+    // ─────────────────────────────────────────────────────────────────────
+
+    // Bug A: bash starts a comment only when '#' BEGINS a word. A '#' in the
+    // middle of a word is a literal. The lexer broke words on '#' and then ate
+    // the rest of the line as a comment, so "abc#def" lost "#def".
+    [Fact]
+    public void Tokenize_HashMidWord_IsLiteralNotComment()
+    {
+        var tokens = Tokenize("echo abc#def");
+        AssertTokens(tokens,
+            (BashTokenKind.Word, "echo"),
+            (BashTokenKind.Word, "abc#def"));
+    }
+
+    [Fact]
+    public void Tokenize_UrlWithFragment_KeepsFragment()
+    {
+        var tokens = Tokenize("echo http://x/p#section");
+        AssertTokens(tokens,
+            (BashTokenKind.Word, "echo"),
+            (BashTokenKind.Word, "http://x/p#section"));
+    }
+
+    // Positive control: '#' at a word boundary IS a comment (must still work).
+    [Fact]
+    public void Tokenize_HashAtWordStart_IsComment()
+    {
+        var tokens = Tokenize("echo a #b c");
+        AssertTokens(tokens,
+            (BashTokenKind.Word, "echo"),
+            (BashTokenKind.Word, "a"));
+    }
+
+    // Bug B: balanced-scan must be quote-aware. A ')' inside a string inside a
+    // command substitution must NOT close the $( ). The whole $(...) is one word.
+    [Fact]
+    public void Tokenize_CmdSub_WithQuotedCloseParen_StaysOneWord()
+    {
+        var tokens = Tokenize("echo $(grep \")\" f)");
+        AssertTokens(tokens,
+            (BashTokenKind.Word, "echo"),
+            (BashTokenKind.Word, "$(grep \")\" f)"));
+    }
+
+    [Fact]
+    public void Tokenize_CmdSub_WithQuotedOpenParen_StaysOneWord()
+    {
+        var tokens = Tokenize("echo $(grep '(' f) rest");
+        AssertTokens(tokens,
+            (BashTokenKind.Word, "echo"),
+            (BashTokenKind.Word, "$(grep '(' f)"),
+            (BashTokenKind.Word, "rest"));
+    }
+
+    // Bug B: a $(...) inside double quotes must be scanned as part of the word
+    // even though it contains its own '"' chars. The double-quote scan must
+    // recurse through $(...) rather than terminating at the inner quote.
+    [Fact]
+    public void Tokenize_NestedDquoteInCmdSubInDquote_StaysOneWord()
+    {
+        var tokens = Tokenize("echo \"$(echo \"hi there\")\"");
+        AssertTokens(tokens,
+            (BashTokenKind.Word, "echo"),
+            (BashTokenKind.Word, "\"$(echo \"hi there\")\""));
+    }
 }

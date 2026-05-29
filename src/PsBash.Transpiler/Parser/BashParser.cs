@@ -1579,55 +1579,33 @@ public sealed class BashParser
 
     private static int ParseArithSub(string raw, int pos, ImmutableArray<WordPart>.Builder parts)
     {
-        pos += 3; // skip $((
-        int depth = 1;
-        int start = pos;
-        while (pos < raw.Length && depth > 0)
-        {
-            if (pos + 1 < raw.Length && raw[pos] == '(' && raw[pos + 1] == '(')
-            {
-                depth++;
-                pos += 2;
-            }
-            else if (pos + 1 < raw.Length && raw[pos] == ')' && raw[pos + 1] == ')')
-            {
-                depth--;
-                if (depth > 0) pos += 2;
-            }
-            else
-            {
-                pos++;
-            }
-        }
-        string expr = raw[start..pos];
-        if (pos < raw.Length)
-            pos += 2; // skip closing ))
+        int start = pos + 3; // just inside $((
+        // Reuse the lexer's arithmetic scanner so boundary logic lives in ONE
+        // place (see BashLexer's region scanners). It returns the offset one
+        // past the closing )).
+        int end = BashLexer.ScanArith(raw, pos);
+        int innerEnd = end >= start + 2 && raw[end - 1] == ')' && raw[end - 2] == ')' ? end - 2 : end;
+        string expr = raw[start..innerEnd];
 
         parts.Add(new WordPart.ArithSub(expr.Trim()));
-        return pos;
+        return end;
     }
 
     private static int ParseCommandSub(string raw, int pos, ImmutableArray<WordPart>.Builder parts)
     {
-        pos += 2; // skip $(
-        int depth = 1;
-        int start = pos;
-        while (pos < raw.Length && depth > 0)
-        {
-            if (raw[pos] == '(') depth++;
-            else if (raw[pos] == ')') depth--;
-            if (depth > 0) pos++;
-        }
-        string inner = raw[start..pos];
-        if (pos < raw.Length)
-            pos++; // skip closing )
+        int start = pos + 2; // just inside $(
+        // Quote-aware boundary via the lexer's shared scanner: a ')' inside a
+        // string in the command sub must not close the region (e.g. $(grep ")" f)).
+        int end = BashLexer.ScanBalancedParens(raw, start, 1);
+        int innerEnd = end > start && raw[end - 1] == ')' ? end - 1 : end;
+        string inner = raw[start..innerEnd];
 
         var body = Parse(inner);
         parts.Add(new WordPart.CommandSub(body ?? new Command.Simple(
             ImmutableArray<CompoundWord>.Empty,
             ImmutableArray<EnvPair>.Empty,
             ImmutableArray<Redirect>.Empty)));
-        return pos;
+        return end;
     }
 
     private static int ParseBacktickCommandSub(string raw, int pos, ImmutableArray<WordPart>.Builder parts)
@@ -1658,25 +1636,18 @@ public sealed class BashParser
     private static int ParseProcessSub(string raw, int pos, ImmutableArray<WordPart>.Builder parts)
     {
         bool isInput = raw[pos] == '<';
-        pos += 2; // skip <( or >(
-        int depth = 1;
-        int start = pos;
-        while (pos < raw.Length && depth > 0)
-        {
-            if (raw[pos] == '(') depth++;
-            else if (raw[pos] == ')') depth--;
-            if (depth > 0) pos++;
-        }
-        string inner = raw[start..pos];
-        if (pos < raw.Length)
-            pos++; // skip closing )
+        int start = pos + 2; // just inside <( or >(
+        // Quote-aware boundary via the lexer's shared scanner.
+        int end = BashLexer.ScanBalancedParens(raw, start, 1);
+        int innerEnd = end > start && raw[end - 1] == ')' ? end - 1 : end;
+        string inner = raw[start..innerEnd];
 
         var body = Parse(inner);
         parts.Add(new WordPart.ProcessSub(body ?? new Command.Simple(
             ImmutableArray<CompoundWord>.Empty,
             ImmutableArray<EnvPair>.Empty,
             ImmutableArray<Redirect>.Empty), isInput));
-        return pos;
+        return end;
     }
 
     private static int ParseTilde(string raw, ImmutableArray<WordPart>.Builder parts)
