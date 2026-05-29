@@ -422,12 +422,21 @@ public sealed class CtrlRSearch : IDisposable
         _commandFrequencies = ComputeFrequencies(candidates);
 
         // Score and sort
-        _results = candidates
+        var scored = candidates
             .Select(e => new ScoredEntry(
                 e,
                 ScoreFuzzyMatch(e, queryText, _currentCwd)))
             .OrderByDescending(x => x.Score)
-            .ThenByDescending(x => x.Entry.Timestamp)
+            .ThenByDescending(x => x.Entry.Timestamp);
+
+        // Collapse duplicate command strings: history holds one row per
+        // invocation, so the same command recurs many times. The list shows
+        // one row per unique command — the best-ranked occurrence wins
+        // (the enumeration is already score-desc then newest-first, so the
+        // first time we see a command string is the one to keep).
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+        _results = scored
+            .Where(x => seen.Add(x.Entry.Command))
             .ToList();
 
         _selectedIndex = _results.Count > 0 ? 0 : -1;
@@ -1012,6 +1021,18 @@ public sealed class CtrlRSearch : IDisposable
     internal string? SelectedCommand =>
         _selectedIndex >= 0 && _selectedIndex < _results.Count
             ? _results[_selectedIndex].Entry.Command
+            : null;
+
+    /// <summary>For tests: the currently selected entry's exit code, or null.</summary>
+    internal int? SelectedEntryExitCode =>
+        _selectedIndex >= 0 && _selectedIndex < _results.Count
+            ? _results[_selectedIndex].Entry.ExitCode
+            : null;
+
+    /// <summary>For tests: the currently selected entry's cwd, or null.</summary>
+    internal string? SelectedEntryCwd =>
+        _selectedIndex >= 0 && _selectedIndex < _results.Count
+            ? _results[_selectedIndex].Entry.Cwd
             : null;
 
     /// <summary>For tests: current query string.</summary>

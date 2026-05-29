@@ -630,8 +630,10 @@ public class CtrlRSearchBehaviorTests
     public async Task CwdFilter_ToggleOff_ShowsAllCommands()
     {
         var store = new InMemoryHistoryStore();
+        // Distinct command strings so the toggle's effect is visible without
+        // being masked by duplicate-command collapsing.
         await store.RecordAsync(MakeEntry("git push", cwd: "/proj", minutesAgo: 2));
-        await store.RecordAsync(MakeEntry("git push", cwd: "/other", minutesAgo: 1));
+        await store.RecordAsync(MakeEntry("git pull", cwd: "/other", minutesAgo: 1));
 
         using var search = MakeSearch(store, cwd: "/proj");
         // Ctrl-G toggles CWD filter off
@@ -640,7 +642,7 @@ public class CtrlRSearchBehaviorTests
         keys.Enqueue(Esc());
         await search.SimulateAsync(keys);
 
-        // Both entries should now be visible
+        // Both entries (from /proj and /other) should now be visible
         Assert.Equal(2, search.ResultCount);
         Assert.False(search.CwdFilterEnabled);
     }
@@ -813,6 +815,62 @@ public class CtrlRSearchBehaviorTests
         }
     }
 
+    // ── Duplicate collapsing ───────────────────────────────────────────────────
+
+    [Fact]
+    public async Task DuplicateCommands_CollapseToSingleRow()
+    {
+        // History holds one row per invocation, so re-running the same command
+        // produces many rows. The list must show each command string only once.
+        var store = new InMemoryHistoryStore();
+        await store.RecordAsync(MakeEntry("git status", minutesAgo: 5));
+        await store.RecordAsync(MakeEntry("git status", minutesAgo: 3));
+        await store.RecordAsync(MakeEntry("git status", minutesAgo: 1));
+
+        using var search = MakeSearch(store);
+        var keys = TypeString("git", new[] { Esc() });
+        await search.SimulateAsync(keys);
+
+        Assert.Equal(1, search.ResultCount);
+        Assert.Equal("git status", search.SelectedCommand);
+    }
+
+    [Fact]
+    public async Task DuplicateCommands_DistinctCommandsAllSurvive()
+    {
+        var store = new InMemoryHistoryStore();
+        await store.RecordAsync(MakeEntry("git status", minutesAgo: 6));
+        await store.RecordAsync(MakeEntry("git push", minutesAgo: 5));
+        await store.RecordAsync(MakeEntry("git status", minutesAgo: 4));
+        await store.RecordAsync(MakeEntry("git push", minutesAgo: 3));
+        await store.RecordAsync(MakeEntry("git status", minutesAgo: 1));
+
+        using var search = MakeSearch(store);
+        var keys = TypeString("git", new[] { Esc() });
+        await search.SimulateAsync(keys);
+
+        // 5 history rows, 2 unique command strings.
+        Assert.Equal(2, search.ResultCount);
+    }
+
+    [Fact]
+    public async Task DuplicateCommands_KeepsBestRankedOccurrence()
+    {
+        // The surviving row for a collapsed command must be the highest-scoring
+        // occurrence (here: the most recent), not an arbitrary one.
+        var store = new InMemoryHistoryStore();
+        await store.RecordAsync(MakeEntry("npm test", cwd: "/proj", minutesAgo: 120, exitCode: 1));
+        await store.RecordAsync(MakeEntry("npm test", cwd: "/proj", minutesAgo: 2, exitCode: 0));
+
+        using var search = MakeSearch(store, cwd: "/proj");
+        var keys = TypeString("npm", new[] { Esc() });
+        await search.SimulateAsync(keys);
+
+        Assert.Equal(1, search.ResultCount);
+        // The kept occurrence is the recent successful one (recency boost wins).
+        Assert.Equal(0, search.SelectedEntryExitCode);
+    }
+
     // ── Scoring / ordering ───────────────────────────────────────────────────
 
     [Fact]
@@ -825,19 +883,18 @@ public class CtrlRSearchBehaviorTests
         await store.RecordAsync(MakeEntry("git status", cwd: "/proj", minutesAgo: 60));
 
         using var search = MakeSearch(store, cwd: "/proj");
-        // Ctrl-G disables CWD filter so both entries are visible; scoring gives /proj a 50pt boost
+        // Ctrl-G disables CWD filter so both entries are candidates; scoring gives /proj a 50pt boost
         var keys = new Queue<ConsoleKeyInfo>();
-        keys.Enqueue(CtrlG()); // toggle CWD filter OFF so both entries appear
+        keys.Enqueue(CtrlG()); // toggle CWD filter OFF so both entries are candidates
         keys.Enqueue(Esc());
         await search.SimulateAsync(keys);
 
-        Assert.Equal(2, search.ResultCount);
-        // /proj entry should rank first due to CWD boost (50 points beats ~29 point recency advantage)
+        // Both "git status" rows share the same command string, so they collapse to
+        // one row — the best-ranked occurrence survives. The /proj entry wins on the
+        // CWD boost (50pt > the ~29pt recency advantage the /other entry has), so the
+        // surviving row is the /proj one.
+        Assert.Equal(1, search.ResultCount);
         Assert.Equal("git status", search.SelectedCommand);
-        // The selected entry should be the /proj one (verify by ensuring 2 results and first is /proj)
-        // (We trust ScoreFuzzyMatch's CwdBoostPoints=50 dominates the recency delta of 59 min × 30/24 ≈ 73.75pt range,
-        //  but recency at 60 min ago gets ~(1-60/24)*30 = negative = clamped to 0, while /other at 1 min gets ~29pt.
-        //  CWD boost (50) > recency gap (29), so /proj wins.)
-        Assert.True(search.SelectedIndex == 0);
+        Assert.Equal("/proj", search.SelectedEntryCwd);
     }
 }
