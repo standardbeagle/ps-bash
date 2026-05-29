@@ -522,7 +522,7 @@ public sealed class IpcWorker : IWorker
         bool unbounded = idleTimeout <= TimeSpan.Zero;
         using var timeoutCts = new CancellationTokenSource();
         using var linked = CancellationTokenSource.CreateLinkedTokenSource(ct, timeoutCts.Token);
-        var compactOutput = IsTruthyEnv("PSBASH_COMPACT_OUTPUT");
+        var compactOutput = EnvFlags.IsTruthy("PSBASH_COMPACT_OUTPUT");
         var compactFrames = compactOutput ? new List<OutputFrame>() : null;
         var command = CommandLabel(mode);
 
@@ -574,6 +574,16 @@ public sealed class IpcWorker : IWorker
                         ArmIdle(); // each frame is activity — push the idle deadline out
                         if (compactFrames is not null)
                         {
+                            // Compact mode trades streaming for a bounded summary: every
+                            // frame (BOTH stdout and stderr) is buffered in memory until the
+                            // command finishes, then collapsed by OutputCompactor. Two
+                            // intentional departures from the REFACTOR-4 routing below:
+                            //   1. No streaming — output is held until exit, so memory grows
+                            //      with the line count (capped on emit, not on intake). This
+                            //      mode is opt-in for agent contexts that want a small digest.
+                            //   2. Stderr is folded into the same buffer as stdout; the
+                            //      stream distinction is preserved textually via the
+                            //      [out]/[err] prefixes OutputCompactor writes.
                             compactFrames.Add(new OutputFrame(tag, line));
                             return;
                         }
@@ -702,16 +712,6 @@ public sealed class IpcWorker : IWorker
         if (int.TryParse(envValue, out var seconds))
             return seconds > 0 ? TimeSpan.FromSeconds(seconds) : TimeSpan.Zero;
         return TimeSpan.FromSeconds(120);
-    }
-
-    private static bool IsTruthyEnv(string name)
-    {
-        var value = Environment.GetEnvironmentVariable(name)?.Trim();
-        return value is not null
-            && (value.Equals("1", StringComparison.OrdinalIgnoreCase)
-                || value.Equals("true", StringComparison.OrdinalIgnoreCase)
-                || value.Equals("yes", StringComparison.OrdinalIgnoreCase)
-                || value.Equals("on", StringComparison.OrdinalIgnoreCase));
     }
 
     private static string CommandLabel(Mode mode)

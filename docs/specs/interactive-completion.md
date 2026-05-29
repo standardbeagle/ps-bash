@@ -50,8 +50,9 @@ cancellation, or any failure the engine returns the static base set — **Tab ne
 |---------|-------------|--------|
 | Command position | `TabCompleter.IsFirstWord` | base command list ∪ live `Get-Command` |
 | Argument of a `complete`-registered command | `BashCompletionRegistry.HasSpec(cmd)` | the command's `-W` word list (§7) — checked first, local |
+| `grep` regex pattern value (token after `-e`/`--regexp`) | `TabCompleter.TryGetGrepPatternValueContext` | basic / extended / fixed regex snippet sets (§9), local, no runspace |
 | Parameter name (PS cmdlet, token starts `-`) | resolved command not a bash command (`!IsBashCommand`) | `Get-Command.Parameters` |
-| Parameter value (PS cmdlet, after `-Flag`) | `PreviousParamFlag` | `CompleteInput` → ValidateSet/enum fallback |
+| Parameter value (PS cmdlet, after `-Flag`) | `PreviousParamFlag` | `CompleteInput` → ValidateSet/enum fallback, labeled with source + type (§9) |
 | Flag (bash command) | `FlagSpecs.GetFlags(cmd) != null` | `FlagSpecs.json` |
 | Path / redirect target | default | filesystem |
 
@@ -173,3 +174,43 @@ Tab required. It updates every keystroke and vanishes on space / Enter / a non-f
 Tests: `PsBash.Shell.Tests/LineEditorTests.cs` `MatchingFlagSpecs_*` (bash panel data) and
 `PsBash.Host.Tests/Shell/CompletionEngineTests.cs` `FlagHints_*` (PS-param hints via fake worker);
 the ANSI rendering / caching itself is not unit-tested.
+
+## 9. Value providers (argument values, not names)
+
+Two providers complete the **value** of an argument (vs the command/parameter name). Both
+emit `CompletionItem.Labeled(insert, display)`, keeping the inserted text free of the
+description (the §invariant in `.claude/rules/completion.md`).
+
+### 9.1 `grep` regex pattern snippets (local, `TabCompleter`)
+
+When the cursor's token is the value **after `-e`/`--regexp`** for a `grep` command,
+`TryGetGrepPatternValueContext` classifies the regex dialect from the other flags on the
+line and `TryCompleteGrepPatternValue` offers a small curated snippet set:
+
+| Dialect | Trigger flag | Snippet set |
+|---------|--------------|-------------|
+| basic (BRE) | default | `GrepBasicRegexSnippets` (`'^TODO'`, `'[0-9][0-9]*'`, …) |
+| extended (ERE) | `-E`/`--extended-regexp` | `GrepExtendedRegexSnippets` (`'TODO\|FIXME'`, …) |
+| fixed (literal) | `-F`/`--fixed-strings` | `GrepFixedPatternSnippets` |
+
+This is **local** (no runspace) and consulted before the worker. It is deliberately scoped
+to the post-`-e` token only — the ambiguous positional `grep <pattern> <file>` operand is
+*not* completed (can't tell a pattern from a path). Candidates are filtered by
+`InsertText.StartsWith(token, OrdinalIgnoreCase)` (case-insensitive). Tests: `PsBash.Shell.Tests/LineEditorTests.cs`
+`MatchingFlagSpecs_*` / grep-snippet cases.
+
+### 9.2 PowerShell parameter-value detail labels (`CompletionEngine`)
+
+For a PS cmdlet parameter value, after the `CompleteInput` path returns nothing,
+`QueryParameterValueItemsAsync` introspects the parameter's `[ValidateSet]` values (else
+enum names for an enum-typed parameter) and `BuildParameterValueItems` renders each as
+`CompletionItem.Labeled(value, "value  - {ValidateSet|Enum} value for -Param <Type>")` —
+the bare value is inserted, the source + type show only in the list.
+
+The worker expression emits one row per value as `value<sep>source<sep>type`, joined by the
+**ASCII unit separator U+001F**, not `|`. This is a deliberate collision fix: a ValidateSet
+value (or type name) that itself contains `|` would be truncated/mis-split by the row parser.
+`BuildParameterValueItems` splits on the `ParameterValueFieldSeparator` const (`'\u001f'`).
+**Do not revert to `|`.** Tests: `CompletionEngineTests.cs`
+`ParameterValue_FallbackDisplaysValidateSetDetail*`, `BuildParameterValueItems_*` (incl.
+`_PreservesValueContainingPipe`).

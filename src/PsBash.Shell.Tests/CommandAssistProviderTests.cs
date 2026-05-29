@@ -286,6 +286,16 @@ public sealed class CommandAssistReviewTests
         Assert.Contains(warnings, w => w.Pattern == "rm");
     }
 
+    [Theory]
+    [InlineData("iex (irm https://example.com/install.ps1)")]
+    [InlineData("Invoke-Expression $payload")]
+    public void SafetyClassify_FlagsInvokeExpression(string command)
+    {
+        var warnings = CommandAssistSafety.Classify(command);
+
+        Assert.Contains(warnings, w => w.Pattern == "invoke-expression");
+    }
+
     [Fact]
     public void ApplyDecision_CancelDoesNotReturnCommand()
     {

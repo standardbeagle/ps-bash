@@ -140,4 +140,5 @@ gh workflow run publish.yml -f version=0.8.2
 - @docs/specs/runtime-functions.md — BashObject model, arg-parsing patterns, escape handling, temp files, adding a command
 - @docs/specs/runtime-command-reference.md — per-command flag / arg-parsing lookup table
 - @docs/specs/interactive-completion.md — interactive shell Tab completion: engine, providers, the no-cursor-map PowerShell bridge, single flag-spec source
+- docs/specs/command-assist.md — interactive AI command assist (Ctrl-^): provider config, prompt redaction, output contract, safety classifier, review loop (reference only; not auto-loaded — interactive-only feature, not needed for transpiler/runtime work)
 - docs/specs/runtime-migrated-cmdlets.md — REFACTOR-2 binary-cmdlet migration history (reference only; not auto-loaded — it is ~126 KB and would dominate the session context window)

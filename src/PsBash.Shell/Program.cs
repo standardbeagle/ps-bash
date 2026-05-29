@@ -92,7 +92,7 @@ if (shellArgs.Timeout is { Length: > 0 } timeoutValue)
 // PSBASH_COMPACT_OUTPUT can enable the same mode for callers that cannot add a
 // launcher flag. The resolved value is normalized into the environment so the
 // host/output layers can read one stable switch in later pipeline stages.
-bool compactOutput = shellArgs.CompactOutput ?? IsTruthyEnv("PSBASH_COMPACT_OUTPUT");
+bool compactOutput = shellArgs.CompactOutput ?? EnvFlags.IsTruthy("PSBASH_COMPACT_OUTPUT");
 Environment.SetEnvironmentVariable("PSBASH_COMPACT_OUTPUT", compactOutput ? "1" : "0");
 
 // All non-interactive execution (-c, stdin pipe, script file) goes through
@@ -388,16 +388,6 @@ static string? ResolveHostBinary()
 
     var sxs = Path.Combine(AppContext.BaseDirectory, IpcWorker.GetHostBinaryName());
     return File.Exists(sxs) ? sxs : null;
-}
-
-static bool IsTruthyEnv(string name)
-{
-    var value = Environment.GetEnvironmentVariable(name)?.Trim();
-    return value is not null
-        && (value.Equals("1", StringComparison.OrdinalIgnoreCase)
-            || value.Equals("true", StringComparison.OrdinalIgnoreCase)
-            || value.Equals("yes", StringComparison.OrdinalIgnoreCase)
-            || value.Equals("on", StringComparison.OrdinalIgnoreCase));
 }
 
 // PTY-2: spawn ps-bash-host under a pseudo-terminal allocated by the launcher,

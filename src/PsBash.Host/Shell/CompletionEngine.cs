@@ -439,16 +439,25 @@ internal sealed class CompletionEngine
         }
 
         // ValidateSet values first, else enum names for an enum-typed parameter.
+        // Fields are joined with the ASCII unit separator (U+001F), not '|', so a
+        // ValidateSet value or type name that itself contains '|' is not truncated
+        // or mis-split by BuildParameterValueItems.
         var expr =
             $"$c = Get-Command -Name '{cmdEsc}' -ErrorAction SilentlyContinue | Select-Object -First 1; " +
             $"if ($c) {{ $p = $c.Parameters['{paramEsc}']; if ($p) {{ " +
             "$vs = $p.Attributes | Where-Object { $_ -is [System.Management.Automation.ValidateSetAttribute] } | Select-Object -First 1; " +
-            "if ($vs) { $vs.ValidValues | ForEach-Object { \"$($_)|ValidateSet|$($p.ParameterType.Name)\" } } " +
-            "elseif ($p.ParameterType -and $p.ParameterType.IsEnum) { [System.Enum]::GetNames($p.ParameterType) | ForEach-Object { \"$($_)|Enum|$($p.ParameterType.Name)\" } } } }";
+            "if ($vs) { $vs.ValidValues | ForEach-Object { \"$($_)$([char]31)ValidateSet$([char]31)$($p.ParameterType.Name)\" } } " +
+            "elseif ($p.ParameterType -and $p.ParameterType.IsEnum) { [System.Enum]::GetNames($p.ParameterType) | ForEach-Object { \"$($_)$([char]31)Enum$([char]31)$($p.ParameterType.Name)\" } } } }";
 
         var values = await QueryLinesAsync(expr, ct).ConfigureAwait(false);
         return BuildParameterValueItems(values, paramFlag, token);
     }
+
+    // Field separator for the "<value><sep><source><sep><type>" rows produced by
+    // QueryParameterValueItemsAsync. ASCII unit separator (U+001F) — chosen because
+    // it cannot appear in a ValidateSet value or a .NET type name, so splitting is
+    // unambiguous even when a value contains '|'.
+    private const char ParameterValueFieldSeparator = '\u001f';
 
     internal static IReadOnlyList<CompletionItem> BuildParameterValueItems(
         IReadOnlyList<string> rows,
@@ -458,7 +467,7 @@ internal sealed class CompletionEngine
         var items = new List<CompletionItem>();
         foreach (var row in rows)
         {
-            var parts = row.Split('|');
+            var parts = row.Split(ParameterValueFieldSeparator);
             var value = parts[0].Trim();
             if (value.Length == 0 || !value.StartsWith(token, StringComparison.OrdinalIgnoreCase))
                 continue;

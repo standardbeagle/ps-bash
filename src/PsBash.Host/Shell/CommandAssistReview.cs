@@ -49,6 +49,7 @@ internal static class CommandAssistSafety
         (new Regex(@">\|", RegexOptions.Compiled), "overwrite redirect", "forces overwrite"),
         (new Regex(@"\b(sudo|Start-Process\s+-Verb\s+RunAs)\b", RegexOptions.IgnoreCase | RegexOptions.Compiled), "privilege escalation", "runs with elevated privileges"),
         (new Regex(@"\b(curl|wget|irm|iwr|Invoke-WebRequest|Invoke-RestMethod)\b.*\|\s*(sh|bash|pwsh|powershell)\b", RegexOptions.IgnoreCase | RegexOptions.Compiled), "network install", "pipes network content into a shell"),
+        (new Regex(@"\b(iex|Invoke-Expression)\b", RegexOptions.IgnoreCase | RegexOptions.Compiled), "invoke-expression", "executes a dynamically built string as code (e.g. iex (irm url))"),
         (new Regex(@"\b(npm|pnpm|yarn|pip|pipx|gem|cargo|dotnet)\s+.*\b(install|add|global|tool)\b", RegexOptions.IgnoreCase | RegexOptions.Compiled), "package install", "installs code or tools"),
     ];
 

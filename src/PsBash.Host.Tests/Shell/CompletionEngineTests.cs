@@ -372,7 +372,7 @@ public class CompletionEngineTests
         var fake = new FakeWorker
         {
             OnComplete = (_, _, _) => Task.FromResult<IReadOnlyList<string>>(Array.Empty<string>()),
-            OnQuery = (_, _) => Task.FromResult("fast|ValidateSet|String\nslow|ValidateSet|String\n"),
+            OnQuery = (_, _) => Task.FromResult("fast\u001fValidateSet\u001fString\nslow\u001fValidateSet\u001fString\n"),
         };
         const string line = "Set-Thing -Mode f";
         var result = await Engine(fake).CompleteAsync(line, line.Length, default);
@@ -388,7 +388,7 @@ public class CompletionEngineTests
         var fake = new FakeWorker
         {
             OnComplete = (_, _, _) => Task.FromResult<IReadOnlyList<string>>(["fast"]),
-            OnQuery = (_, _) => Task.FromResult("fast|ValidateSet|String\n"),
+            OnQuery = (_, _) => Task.FromResult("fast\u001fValidateSet\u001fString\n"),
         };
         const string line = "Set-Thing -Mode f";
         var result = await Engine(fake).CompleteAsync(line, line.Length, default);
@@ -403,12 +403,25 @@ public class CompletionEngineTests
     public void BuildParameterValueItems_FiltersAndLabelsEnumValues()
     {
         var result = CompletionEngine.BuildParameterValueItems(
-            ["Sunday|Enum|DayOfWeek", "Monday|Enum|DayOfWeek"],
+            ["Sunday\u001fEnum\u001fDayOfWeek", "Monday\u001fEnum\u001fDayOfWeek"],
             "-Day",
             "M");
 
         var item = Assert.Single(result);
         Assert.Equal("Monday", item.InsertText);
         Assert.Equal("Monday  - Enum value for -Day <DayOfWeek>", item.DisplayText);
+    }
+
+    [Fact]
+    public void BuildParameterValueItems_PreservesValueContainingPipe()
+    {
+        var result = CompletionEngine.BuildParameterValueItems(
+            ["a|b\u001fValidateSet\u001fString"],
+            "-Mode",
+            "a");
+
+        var item = Assert.Single(result);
+        Assert.Equal("a|b", item.InsertText);
+        Assert.Equal("a|b  - ValidateSet value for -Mode <String>", item.DisplayText);
     }
 }

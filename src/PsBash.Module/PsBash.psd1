@@ -12,7 +12,7 @@
 RootModule = 'PsBash.psm1'
 
 # Version number of this module.
-ModuleVersion = '0.9.13'
+ModuleVersion = '0.10.0'
 
 
 # ID used to uniquely identify this module
@@ -238,7 +238,7 @@ PrivateData = @{
         ProjectUri = 'https://github.com/standardbeagle/ps-bash'
 
         # ReleaseNotes of this module
-        ReleaseNotes = 'v0.9.13: Fix broken module install. Install-Module PsBash now bundles PsBash.Cmdlets.dll (and its PsBash.Transpiler.dll / Parlot.dll deps) so a plain Install-Module PsBash is self-contained. Previously the registered aliases (ls, cat, grep, ...) resolved to binary cmdlets that were never loaded ("Invoke-BashLs is not recognized"); the module now warns instead of failing silently if the binary companion is absent. v0.9.12: Interactive shell fixes. Auto-loadable PowerShell aliases (tnc, gip) now resolve in the host runspace, and the interactive line editor no longer redraws erratically after launching a node-based GUI CLI such as code. Full version history: https://github.com/standardbeagle/ps-bash/releases'
+        ReleaseNotes = 'v0.10.0: Interactive shell features. AI command assist (Ctrl-^) turns a natural-language prompt into a reviewed shell command via an external AI CLI, with a dangerous-command safety classifier (now also flags Invoke-Expression / iex). New opt-in compact-output mode (--compact-output / PSBASH_COMPACT_OUTPUT) replaces raw output with a bounded digest for agent contexts. Completion parameter-value rows now split on the ASCII unit separator so ValidateSet values containing a pipe are no longer truncated. v0.9.13: Fix broken module install. Install-Module PsBash now bundles PsBash.Cmdlets.dll (and its PsBash.Transpiler.dll / Parlot.dll deps) so a plain Install-Module PsBash is self-contained. Previously the registered aliases (ls, cat, grep, ...) resolved to binary cmdlets that were never loaded ("Invoke-BashLs is not recognized"); the module now warns instead of failing silently if the binary companion is absent. v0.9.12: Interactive shell fixes. Auto-loadable PowerShell aliases (tnc, gip) now resolve in the host runspace, and the interactive line editor no longer redraws erratically after launching a node-based GUI CLI such as code. Full version history: https://github.com/standardbeagle/ps-bash/releases'
 
     } # End of PSData hashtable
 

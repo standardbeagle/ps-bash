@@ -17,8 +17,8 @@ Two binaries: `ps-bash.exe` launcher (**PsBash.Shell**) talks IPC to `ps-bash-ho
 | Project | Role | Key files |
 |---|---|---|
 | **PsBash.Transpiler** | bash → PowerShell front end | `Parser/BashLexer.cs`, `Parser/BashParser.cs`, `Parser/BashToken.cs`, `Parser/Ast/{Commands,Words,Redirects,BashNode}.cs`, `Parser/PsEmitter.cs`, `Transpiler/BashTranspiler.cs` |
-| **PsBash.Core** | runtime lib: IPC + module plumbing | `Runtime/IWorker.cs`, `Runtime/IpcWorker.cs`, `Runtime/ModuleExtractor.cs`, `Runtime/Ipc/*` (transports, HostProtocol, HostMetadata). Embeds the module + per-TFM Cmdlets DLL as resources. |
-| **PsBash.Host** | in-process SDK runspace + interactive shell | `Runtime/SdkRunspace.cs`, `Runtime/SdkWorker.cs`, `Runtime/ICompletionWorker.cs`, `Resources/SdkRunspaceSetup.ps1`; `Shell/{InteractiveShell,LineEditor,CompletionEngine,TabCompleter,CompletionMerge,AliasExpander,Suggester,CtrlRSearch}.cs`, `FlagSpecs.cs` |
+| **PsBash.Core** | runtime lib: IPC + module plumbing | `Runtime/IWorker.cs`, `Runtime/IpcWorker.cs`, `Runtime/ModuleExtractor.cs`, `Runtime/OutputCompactor.cs` (compact-output digest), `Runtime/EnvFlags.cs` (shared truthy-env), `Runtime/Ipc/*` (transports, HostProtocol, HostMetadata). Embeds the module + per-TFM Cmdlets DLL as resources. |
+| **PsBash.Host** | in-process SDK runspace + interactive shell | `Runtime/SdkRunspace.cs`, `Runtime/SdkWorker.cs`, `Runtime/ICompletionWorker.cs`, `Resources/SdkRunspaceSetup.ps1`; `Shell/{InteractiveShell,LineEditor,CompletionEngine,TabCompleter,CompletionMerge,AliasExpander,Suggester,CtrlRSearch}.cs`, `Shell/{CommandAssistProvider,CommandAssistReview}.cs` (AI command assist), `FlagSpecs.cs` |
 | **PsBash.Cmdlets** | binary `Invoke-Bash*` cmdlets + `Format-Styled` | `*Command.cs` (one per migrated cmdlet), `FormatStyledCommand.cs`, `BashRuntime.cs`, `styles/*.css` |
 | **PsBash.Module** | psm1 runtime functions (the bulk of `Invoke-Bash*`) | `PsBash.psm1`, `PsBash.psd1`, `BashFlagSpecs.json` (single flag-spec source), `PsBash.Format.ps1xml` |
 | **PsBash.Shell** | AOT launcher / CLI | `Program.cs`, `Args.cs`, `Pty/TerminalMode.cs` |
@@ -32,6 +32,8 @@ Tests mirror projects: `*.Tests` + `PsBash.Differential.Tests` (bash-oracle), `P
 - **Implement/Parse a command's flags** → `Invoke-Bash*` in `PsBash.psm1`, or a `*Command.cs` binary cmdlet (Cmdlets).
 - **Bash flag specs (completion)** → ONE source: `PsBash.Module/BashFlagSpecs.json` (host embeds it; psm1 loads it).
 - **Interactive completion** → `Shell/CompletionEngine.cs` (orchestrator) → `TabCompleter` (static base) + runspace queries. Spec: `docs/specs/interactive-completion.md`.
+- **AI command assist (Ctrl-^)** → `Shell/CommandAssistProvider.cs` + `CommandAssistReview.cs`; review loop in `InteractiveShell`. Spec: `docs/specs/command-assist.md`.
+- **Compact output (`--compact-output`)** → `Runtime/OutputCompactor.cs` + `IpcWorker` buffering. Spec: `docs/specs/compact-output.md`.
 - **Alias expansion** → `Shell/AliasExpander.cs`.
 - **Host startup / runspace** → `Runtime/SdkRunspace.cs` + `Resources/SdkRunspaceSetup.ps1` (CommandNotFoundAction, module-autoload recovery).
 - **IPC / host lifetime / timeouts** → `Runtime/IpcWorker.cs`, `Runtime/Ipc/*`.

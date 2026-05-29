@@ -7,6 +7,8 @@ Nav starts at /CODE_MAP.md. Keep this index complete — a guard test fails on a
 - [atuin-adapter.md](atuin-adapter.md) — Atuin Plugin Adapter Design
 - [autosuggestions.md](autosuggestions.md) — Fish-Style Autosuggestions
 - [browse.md](browse.md) — `browse` Object Workbench
+- [command-assist.md](command-assist.md) — Command Assist Specification (AI prompt → reviewed command)
+- [compact-output.md](compact-output.md) — Compact Output Specification (opt-in bounded digest)
 - [completion-providers.md](completion-providers.md) — Tab Completion Providers Specification
 - [config-format.md](config-format.md) — Config File Format Specification
 - [ctrlr-ui.md](ctrlr-ui.md) — Ctrl-R Full-Screen Search UI
