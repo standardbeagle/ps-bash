@@ -1903,6 +1903,39 @@ public class PsEmitterTests
         Assert.Equal("@'\nhello $NAME\n\n'@ | Emit-BashLine | Invoke-BashCat", result);
     }
 
+    // Bug: the heredoc body was rebuilt by space-joining lexer tokens, which
+    // split punctuation (`(` `)` `<` `>`) into operator tokens and re-joined
+    // them with spaces — so a git commit message piped through a heredoc came
+    // back as "best-ranked ( score-desc, newest-first ) < x@y.z >". The body is
+    // raw text and must be sliced verbatim from source.
+    [Fact]
+    public void Transpile_HeredocBodyWithPunctuation_PreservedVerbatim()
+    {
+        var result = PsEmitter.Transpile("cat <<'EOF'\nbest-ranked (score-desc, newest-first) <x@y.z>\nEOF");
+
+        Assert.Equal("@'\nbest-ranked (score-desc, newest-first) <x@y.z>\n\n'@ | Emit-BashLine | Invoke-BashCat", result);
+    }
+
+    // Bug: the lexer collapses runs of whitespace, so a token-joined body lost
+    // the original spacing. Raw slicing keeps it.
+    [Fact]
+    public void Transpile_HeredocBodyWithRunsOfSpaces_PreservesSpacing()
+    {
+        var result = PsEmitter.Transpile("cat <<'EOF'\na    b      c\nEOF");
+
+        Assert.Equal("@'\na    b      c\n\n'@ | Emit-BashLine | Invoke-BashCat", result);
+    }
+
+    // Bug: the lexer drops '#' comment lines, so a body line beginning with '#'
+    // vanished from the token stream. Raw slicing recovers it.
+    [Fact]
+    public void Transpile_HeredocBodyWithHashLine_NotDroppedAsComment()
+    {
+        var result = PsEmitter.Transpile("cat <<'EOF'\n# !/bin/sh style line\nEOF");
+
+        Assert.Equal("@'\n# !/bin/sh style line\n\n'@ | Emit-BashLine | Invoke-BashCat", result);
+    }
+
     [Fact]
     public void Transpile_DLessDash_StripsLeadingTabs()
     {

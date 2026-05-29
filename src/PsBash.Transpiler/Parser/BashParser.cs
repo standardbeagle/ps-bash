@@ -1036,22 +1036,45 @@ public sealed class BashParser
     /// </summary>
     private HereDoc CollectHereDocBody(string delimiter, bool expand, bool stripTabs)
     {
-        // Skip the newline that ends the command line containing <<.
+        // A heredoc body is RAW TEXT, not shell tokens. The lexer, however,
+        // tokenizes the whole input — it collapses runs of whitespace, drops
+        // '#' comment lines, and splits punctuation like ( ) < > into their own
+        // operator tokens. Rebuilding a body line by space-joining token values
+        // therefore corrupts it: "best-ranked (score-desc, newest-first)" came
+        // back as "best-ranked ( score-desc, newest-first )". Instead we slice
+        // the ORIGINAL source between line boundaries, using the token cursor
+        // only to know where each line ends and to advance the parser position
+        // past the consumed body.
+
+        // Skip the newline that ends the command line containing <<, and set the
+        // raw start of the first body line to just past it.
+        int lineStart;
         if (Peek().Kind == BashTokenKind.Newline)
-            Advance();
+        {
+            var nl = Advance();
+            lineStart = NextLineStart(nl.Position);
+        }
+        else
+        {
+            // No newline before the body (e.g. EOF right after the delimiter).
+            lineStart = Peek().Kind == BashTokenKind.Eof ? _input.Length : Peek().Position;
+        }
 
         var bodyLines = new List<string>();
 
         while (Peek().Kind != BashTokenKind.Eof)
         {
-            // Collect all tokens on the current line into a single string.
-            var lineTokens = new List<string>();
+            // Advance the token cursor to the end of the current line so the
+            // parser resumes correctly after the heredoc.
             while (Peek().Kind != BashTokenKind.Newline && Peek().Kind != BashTokenKind.Eof)
-            {
-                lineTokens.Add(Advance().Value);
-            }
+                Advance();
 
-            string line = string.Join(" ", lineTokens);
+            // The raw line spans from lineStart up to the next newline token (or
+            // end of input). A normalized "\r\n" newline token is anchored at the
+            // '\r', so the slice naturally excludes the carriage return.
+            int lineEnd = Peek().Kind == BashTokenKind.Newline ? Peek().Position : _input.Length;
+            if (lineEnd < lineStart) lineEnd = lineStart;
+            string line = _input.Substring(lineStart, lineEnd - lineStart);
 
             // For <<- the delimiter line may have leading tabs.
             string trimmedLine = stripTabs ? line.TrimStart('\t') : line;
@@ -1068,9 +1091,17 @@ public sealed class BashParser
 
             bodyLines.Add(line);
 
-            // Consume the newline separator between body lines.
+            // Consume the newline separator and move the raw start to the first
+            // character of the next line.
             if (Peek().Kind == BashTokenKind.Newline)
-                Advance();
+            {
+                var nl = Advance();
+                lineStart = NextLineStart(nl.Position);
+            }
+            else
+            {
+                lineStart = _input.Length;
+            }
         }
 
         // bash: each body line (including the final one) is terminated by a
@@ -1082,6 +1113,27 @@ public sealed class BashParser
             ? string.Empty
             : string.Join("\n", bodyLines) + "\n";
         return new HereDoc(body, expand, stripTabs);
+    }
+
+    /// <summary>
+    /// Given the Position of a normalized Newline token — which points at the
+    /// '\n', or at the '\r' of a "\r\n" pair the lexer folded into one token —
+    /// return the source offset of the first character of the following line.
+    /// </summary>
+    private int NextLineStart(int newlinePos)
+    {
+        int p = newlinePos;
+        if (p < _input.Length && _input[p] == '\r')
+        {
+            p++;
+            if (p < _input.Length && _input[p] == '\n')
+                p++;
+        }
+        else if (p < _input.Length && _input[p] == '\n')
+        {
+            p++;
+        }
+        return p;
     }
 
     private Assignment ParseAssignmentWord()
