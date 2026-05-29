@@ -16,7 +16,7 @@ Two binaries: `ps-bash.exe` launcher (**PsBash.Shell**) talks IPC to `ps-bash-ho
 
 | Project | Role | Key files |
 |---|---|---|
-| **PsBash.Transpiler** | bash → PowerShell front end | `Parser/BashLexer.cs`, `Parser/BashParser.cs`, `Parser/BashToken.cs`, `Parser/Ast/{Commands,Words,Redirects,BashNode}.cs`, `Parser/PsEmitter.cs`, `Transpiler/BashTranspiler.cs` |
+| **PsBash.Transpiler** | bash → PowerShell front end | `Parser/BashLexer.cs`, `Parser/BashParser{,.Simple,.Words}.cs` (one partial class: spine+compound / simple-command+redirects+heredoc / word decomposition), `Parser/BashToken.cs`, `Parser/Ast/{Commands,Words,Redirects,BashNode}.cs`, `Parser/PsEmitter.cs`, `Transpiler/BashTranspiler.cs` |
 | **PsBash.Core** | runtime lib: IPC + module plumbing | `Runtime/IWorker.cs`, `Runtime/IpcWorker.cs`, `Runtime/ModuleExtractor.cs`, `Runtime/OutputCompactor.cs` (compact-output digest), `Runtime/EnvFlags.cs` (shared truthy-env), `Runtime/Ipc/*` (transports, HostProtocol, HostMetadata). Embeds the module + per-TFM Cmdlets DLL as resources. |
 | **PsBash.Host** | in-process SDK runspace + interactive shell | `Runtime/SdkRunspace.cs`, `Runtime/SdkWorker.cs`, `Runtime/ICompletionWorker.cs`, `Resources/SdkRunspaceSetup.ps1`; `Shell/{InteractiveShell,LineEditor,CompletionEngine,TabCompleter,CompletionMerge,AliasExpander,Suggester,CtrlRSearch}.cs`, `Shell/{CommandAssistProvider,CommandAssistReview}.cs` (AI command assist), `FlagSpecs.cs` |
 | **PsBash.Cmdlets** | binary `Invoke-Bash*` cmdlets + `Format-Styled` | `*Command.cs` (one per migrated cmdlet), `FormatStyledCommand.cs`, `BashRuntime.cs`, `styles/*.css` |
