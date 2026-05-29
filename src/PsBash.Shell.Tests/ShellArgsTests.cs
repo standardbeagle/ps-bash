@@ -235,6 +235,22 @@ public class ShellArgsTests
         Assert.Equal(cmd, result.Command);
     }
 
+    // The CURRENT Claude Code wrapper (2026-05-28): the snapshot bootstrap now
+    // injects a TEMP/TMP env-setup as a multi-var bare assignment before the
+    // command. The full string — multi-var assignment, pipes, redirects, quotes,
+    // force-clobber `>|` — must round-trip intact through the `-c -l` skip logic.
+    [Fact]
+    public void Parse_ClaudeCodeEnvSetupWrapper_PreservesFullCommand()
+    {
+        var cmd = "shopt -u extglob 2>/dev/null || true && "
+                + "TEMP='C:\\Temp' TMP='C:\\Temp' && "
+                + "eval 'git status' < /dev/null && pwd -P >| /tmp/x";
+        var result = ShellArgs.Parse(["-c", "-l", cmd]);
+
+        Assert.True(result.Login);
+        Assert.Equal(cmd, result.Command);
+    }
+
     // Regression: `ps-bash -c "git log --oneline -20"` was reported to fail
     // with "The term '-l' is not recognized" — i.e. somewhere `--oneline` was
     // being peeled apart as a short-flag collision (-o / -n / -e / -l / -i / -n / -e).

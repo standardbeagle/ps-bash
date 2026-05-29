@@ -2628,12 +2628,19 @@ public static class PsEmitter
                 var boolText = Emit(boolExprInChain);
                 sb.Append($"$(if ({boolText}) {{ $global:LASTEXITCODE = 0 }} else {{ $global:LASTEXITCODE = 1; Write-Error '' -ErrorAction SilentlyContinue }})");
             }
-            // ShAssignment in && / || chains: wrap in [void](...) so PS doesn't output the value.
+            // ShAssignment in && / || chains: wrap so PS doesn't output the value.
+            // A multi-pair assignment (e.g. `TEMP=x TMP=y`, as Claude Code's Bash
+            // tool emits in its env-setup preamble) emits two statements joined by
+            // "; ". PowerShell's grouping `(...)` cannot hold a statement list
+            // ("Missing closing ')'"), only the subexpression `$(...)` can — so use
+            // `[void]$(...)` for the multi-statement case. A single pair stays in the
+            // cheaper `[void](...)` form (bit-identical to prior output).
             else if (cmd is Command.ShAssignment)
             {
-                sb.Append("[void](");
-                sb.Append(Emit(cmd));
-                sb.Append(')');
+                var assignText = Emit(cmd);
+                sb.Append(assignText.Contains("; ", StringComparison.Ordinal)
+                    ? $"[void]$({assignText})"
+                    : $"[void]({assignText})");
             }
             else if (cmd is Command.Pipeline { Negated: true } negPipelineInChain)
             {

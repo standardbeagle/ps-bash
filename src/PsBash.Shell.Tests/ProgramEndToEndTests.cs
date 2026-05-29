@@ -530,6 +530,51 @@ public class ProgramEndToEndTests
         Assert.Contains("login-ok", stdout);
     }
 
+    // END-TO-END: the CURRENT Claude Code Bash-tool wrapper must run.
+    //
+    // Claude Code wraps every Bash-tool command in a shell prelude and invokes
+    // ps-bash as `-c -l "<wrapper>"`. The wrapper shape evolved past the one
+    // captured in ShellArgsTests.Parse_ClaudeCodeSnapshotPattern: the live tool
+    // now injects a TEMP/TMP env-setup as a MULTI-VAR bare assignment before the
+    // real command:
+    //   shopt ... || true && TEMP=<t> TMP=<t> && eval '<cmd>' < /dev/null && pwd -P >| <out>
+    // A multi-pair bare assignment in a && chain emitted
+    //   [void]($env:TEMP = ..; $env:TMP = ..)
+    // and PowerShell's grouping `(...)` cannot hold a `;`-separated statement
+    // list, so the host's PowerShell parser rejected it ("Missing closing ')'")
+    // and EVERY Bash-tool command failed with "ps-bash: parse error" before
+    // running. Fixed in PsEmitter (multi-statement assignment -> `[void]$(...)`).
+    //
+    // This is the launcher-level "the Bash tool works" guarantee: it runs the
+    // full wrapper through ps-bash.exe and asserts the inner command executed
+    // (sentinel on stdout), the process exited 0, and no parse error leaked.
+    // The TEMP/TMP value and the `|| true` guard / pwd redirect mirror the live
+    // wrapper so the multi-var-assignment-in-chain path is exercised exactly as
+    // Claude Code drives it. Captured from the live PSBASH parse error
+    // (2026-05-28); see ShellArgsTests for the arg-shape companion.
+    [SkippableTheory]
+    [InlineData("-lc")]          // bundled login+command (Windows form per ShellArgsTests)
+    [InlineData("-c", "-l")]     // split form Claude Code also uses
+    public async Task ClaudeCodeBashToolWrapper_RunsAndExitsZero(string a1, string? a2 = null)
+    {
+        const string sentinel = "PSBASH_WRAPPER_SENTINEL_42";
+        var wrapper =
+            "shopt -u extglob 2>/dev/null || true && "
+          + "TEMP='C:\\Temp' TMP='C:\\Temp' && "
+          + $"eval 'echo {sentinel}' < /dev/null && "
+          + "pwd -P >| /tmp/psbash-cwd-probe";
+
+        var args = (a2 is null ? new[] { a1, wrapper } : new[] { a1, a2, wrapper });
+
+        var (exitCode, stdout, stderr) = await RunShellAsync(args, TimeSpan.FromSeconds(30));
+
+        Assert.Equal(0, exitCode);
+        Assert.Contains(sentinel, stdout);
+        // The exact pre-fix failure must never reappear.
+        Assert.DoesNotContain("parse error", stderr);
+        Assert.DoesNotContain("Missing closing", stderr);
+    }
+
     // --unix-paths / --windows-paths are accepted as leading flags and the -c
     // command still runs. (Path-translation semantics are exercised by the
     // emitter suite; this is the launcher-level smoke that the flag is consumed,

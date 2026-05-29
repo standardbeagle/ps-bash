@@ -84,6 +84,58 @@ public class BashTranspilerTests
         Assert.Contains("Invoke-BashRedirect -Path", result);
     }
 
+    // Regression: Claude Code's Bash tool prepends an env-setup preamble that
+    // sets TEMP and TMP in one bare assignment before the real command:
+    //   ... && TEMP='C:\...\Temp' TMP='C:\...\Temp' && <cmd>
+    // A multi-pair ShAssignment emits "$env:A = ..; $env:B = .." — two statements
+    // joined by "; ". In a && / || chain the emitter wrapped that as
+    //   [void]($env:A = ..; $env:B = ..)
+    // but PowerShell's grouping `(...)` cannot hold a ';'-separated statement
+    // list, so the host's PowerShell parser rejected it ("Missing closing ')'")
+    // and EVERY Bash-tool command failed. The fix uses `[void]$(...)` (a
+    // subexpression, which does allow a statement list) for the multi-pair case.
+    // The fixed string below was verified to parse AND run in pwsh 7.
+    [Fact]
+    public void Transpile_MultiVarAssignmentInAndChain_UsesSubexpressionNotGrouping()
+    {
+        var result = BashTranspiler.Transpile("A=1 B=2 && echo hi");
+        Assert.Equal("[void]$($env:A = \"1\"; $env:B = \"2\") && Invoke-BashEcho hi", result);
+    }
+
+    // Single-pair assignment is a single statement — valid inside `(...)`. Keep
+    // the cheaper grouping form (bit-identical to the prior emission) so the
+    // ExportWithAnd_WrapsInVoid contract is preserved.
+    [Fact]
+    public void Transpile_SingleVarAssignmentInAndChain_StaysInVoidGrouping()
+    {
+        var result = BashTranspiler.Transpile("A=1 && echo hi");
+        Assert.Equal("[void]($env:A = \"1\") && Invoke-BashEcho hi", result);
+    }
+
+    // Three-pair assignment: still one subexpression, all statements inside.
+    [Fact]
+    public void Transpile_ThreeVarAssignmentInAndChain_UsesSubexpression()
+    {
+        var result = BashTranspiler.Transpile("A=1 B=2 C=3 && echo hi");
+        Assert.Equal("[void]$($env:A = \"1\"; $env:B = \"2\"; $env:C = \"3\") && Invoke-BashEcho hi", result);
+    }
+
+    // The full env-setup wrapper shape captured live from the Claude Code Bash
+    // tool: a `|| true` guard, then the multi-var TEMP/TMP assignment, then the
+    // real command. The multi-var assignment must use the parseable `[void]$(...)`
+    // form, never the unparseable `[void](...; ...)` grouping.
+    [Fact]
+    public void Transpile_ClaudeCodeEnvSetupWrapper_ProducesParseablePowerShell()
+    {
+        var input = "shopt -u extglob 2>/dev/null || true && "
+                  + "TEMP='C:\\Users\\me\\Temp' TMP='C:\\Users\\me\\Temp' && echo hi";
+        var result = BashTranspiler.Transpile(input);
+        // The TEMP/TMP assignment is a two-statement subexpression, not a grouping.
+        Assert.Contains("[void]$($env:TEMP = 'C:\\Users\\me\\Temp'; $env:TMP = 'C:\\Users\\me\\Temp')", result);
+        // The pre-fix unparseable shape must never reappear.
+        Assert.DoesNotContain("[void]($env:TEMP", result);
+    }
+
     [Fact]
     public void DevNullWithEnvVar_TransformsBoth()
     {
