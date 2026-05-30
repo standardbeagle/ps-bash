@@ -101,7 +101,7 @@ public sealed partial class BashParser
         while (Peek().Kind != BashTokenKind.Eof)
         {
             int startPos = Peek().Position;
-            var cmd = ParseAndOr();
+            var cmd = ParseAndOrProgress();
 
             bool bg = false;
             if (Peek().Kind == BashTokenKind.Amp)
@@ -148,7 +148,12 @@ public sealed partial class BashParser
 
     private Command ParseList()
     {
-        var first = ParseAndOr();
+        // ParseList is only entered with a non-Eof token (Parse() short-circuits
+        // empty input), so a first ParseAndOr that consumes nothing means a
+        // leading stray close-token (`)`/`}`) — a syntax error, not an empty
+        // command. Guard it so such input throws instead of silently returning
+        // an empty command (and so the top-level path matches the body loops).
+        var first = ParseAndOrProgress();
 
         // Check for & (background) after the first command.
         // In bash, & is a command terminator like ; or newline — the next
@@ -183,7 +188,7 @@ public sealed partial class BashParser
             if (Peek().Kind == BashTokenKind.Eof)
                 break;
 
-            var cmd = ParseAndOr();
+            var cmd = ParseAndOrProgress();
 
             if (Peek().Kind == BashTokenKind.Amp)
             {
@@ -426,7 +431,7 @@ public sealed partial class BashParser
             if (Peek().Kind == BashTokenKind.Word && stopWords.Contains(Peek().Value))
                 break;
 
-            commands.Add(ParseAndOr());
+            commands.Add(ParseAndOrProgress());
             SkipTerminators();
         }
 
@@ -434,6 +439,25 @@ public sealed partial class BashParser
             return commands[0];
 
         return new Command.CommandList(commands.ToImmutable());
+    }
+
+    /// <summary>
+    /// Calls <see cref="ParseAndOr"/> but guarantees forward progress. A stray
+    /// close-token (`)`, `}`, `!`) that <see cref="ParseSimpleCommand"/> cannot
+    /// absorb yields an empty command WITHOUT consuming a token; in a body loop
+    /// (<c>while (true)</c> over ParseAndOr) that spins forever. This wrapper
+    /// throws a clean <see cref="ParseException"/> at the offending position
+    /// instead of hanging on malformed input like `{ ) }` or `case x in a);; ) esac`.
+    /// </summary>
+    private Command ParseAndOrProgress()
+    {
+        int before = _pos;
+        var cmd = ParseAndOr();
+        if (_pos == before)
+            throw MakeError(
+                $"Unexpected token '{Peek().Value}' ({Peek().Kind})",
+                Peek().Position, "ParseAndOrProgress");
+        return cmd;
     }
 
     private void Expect(string word)
@@ -661,7 +685,7 @@ public sealed partial class BashParser
             if (IsDoubleSemi())
                 break;
 
-            commands.Add(ParseAndOr());
+            commands.Add(ParseAndOrProgress());
 
             // After a command, consume a single ; separator if present,
             // but stop if it's ;; (arm delimiter).
@@ -773,7 +797,7 @@ public sealed partial class BashParser
             if (Peek().Kind == BashTokenKind.RParen)
                 break;
 
-            commands.Add(ParseAndOr());
+            commands.Add(ParseAndOrProgress());
             SkipTerminators();
         }
 
@@ -824,7 +848,7 @@ public sealed partial class BashParser
             if (Peek().Kind == BashTokenKind.RBrace)
                 break;
 
-            commands.Add(ParseAndOr());
+            commands.Add(ParseAndOrProgress());
             SkipTerminators();
         }
 

@@ -1250,6 +1250,43 @@ public class BashParserTests
         Assert.Contains("}", ex.Message);
     }
 
+    // Advance-guard (H16): a stray close-token inside a compound body used to
+    // make the body loop spin forever (ParseAndOr returns an empty command
+    // without consuming the token). The ParseAndOrProgress guard now throws a
+    // clean ParseException instead of hanging. If the guard regresses, these
+    // tests HANG rather than fail — which is itself the signal.
+    [Fact]
+    public void Parse_StrayParenInBraceGroup_ThrowsNotHang()
+    {
+        Assert.Throws<ParseException>(() => Parse("{ ) }"));
+    }
+
+    [Fact]
+    public void Parse_StrayParenInCaseBody_ThrowsNotHang()
+    {
+        Assert.Throws<ParseException>(() => Parse("case x in a) ;; ) esac"));
+    }
+
+    [Fact]
+    public void Parse_StrayCloseBraceInSubshell_ThrowsNotHang()
+    {
+        Assert.Throws<ParseException>(() => Parse("( } )"));
+    }
+
+    [Fact]
+    public void Parse_StrayCloseParenAtTopLevel_ThrowsNotHang()
+    {
+        Assert.Throws<ParseException>(() => Parse(")"));
+    }
+
+    [Fact]
+    public void Parse_StrayCloseBraceMidList_ThrowsNotHang()
+    {
+        // Exercises the guard at the ParseList LOOP call site (the second
+        // command position), not just the first-command site.
+        Assert.Throws<ParseException>(() => Parse("echo a; } echo b"));
+    }
+
     [Fact]
     public void Parse_MultilineIfError_ReportsLine2()
     {
