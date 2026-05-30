@@ -99,6 +99,25 @@ public static class BashLexer
                     continue;
                 }
 
+                // `&>>` (append both stdout+stderr) — three chars, must be
+                // checked before `&>` and before the single-char `&`.
+                if (two == "&>" && pos + 2 < len && input[pos + 2] == '>')
+                {
+                    tokens.Add(new BashToken(BashTokenKind.AmpDGreat, "&>>", pos));
+                    pos += 3;
+                    continue;
+                }
+
+                // `&>` (redirect both stdout+stderr). Must beat the single-char
+                // `&` (Amp) — without this, `cmd &> f` lexes as background `&`
+                // plus a bare `> f` redirect on an empty command.
+                if (two == "&>")
+                {
+                    tokens.Add(new BashToken(BashTokenKind.AmpGreat, "&>", pos));
+                    pos += 2;
+                    continue;
+                }
+
                 // `>|` (force-clobber redirect, bash extension) ignores the
                 // `noclobber` shopt. ps-bash doesn't track noclobber, so this
                 // is semantically identical to `>`. Emit as a plain Great token

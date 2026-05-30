@@ -1610,6 +1610,11 @@ public static class PsEmitter
             ">" => r.Fd == 1 ? $">{target}" : $"{r.Fd}>{target}",
             ">>" => r.Fd == 1 ? $">>{target}" : $"{r.Fd}>>{target}",
             ">&" => $"{r.Fd}>&{target}",
+            // `&>file` / `&>>file` — redirect (or append) BOTH stdout and stderr.
+            // PowerShell: `>file 2>&1` / `>>file 2>&1` (stdout to the file, then
+            // stderr to wherever stdout now points).
+            "&>" => $">{target} 2>&1",
+            "&>>" => $">>{target} 2>&1",
             _ => $"{r.Fd}{r.Op}{target}",
         };
     }

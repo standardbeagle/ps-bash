@@ -382,6 +382,8 @@ public sealed partial class BashParser
             BashTokenKind.Less => "<",
             BashTokenKind.GreatAnd => ">&",
             BashTokenKind.LessAnd => "<&",
+            BashTokenKind.AmpGreat => "&>",
+            BashTokenKind.AmpDGreat => "&>>",
             BashTokenKind.DLess => "<<",
             BashTokenKind.DLessDash => "<<-",
             _ => opToken.Value,
@@ -404,7 +406,8 @@ public sealed partial class BashParser
     private static bool IsRedirectOp(BashTokenKind kind) =>
         kind is BashTokenKind.Great or BashTokenKind.DGreat
             or BashTokenKind.Less or BashTokenKind.GreatAnd
-            or BashTokenKind.LessAnd or BashTokenKind.DLess
+            or BashTokenKind.LessAnd or BashTokenKind.AmpGreat
+            or BashTokenKind.AmpDGreat or BashTokenKind.DLess
             or BashTokenKind.DLessDash;
 
     private static bool IsCompoundDelimiter(string word) =>

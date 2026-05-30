@@ -105,6 +105,27 @@ public class BashParserTests
     }
 
     [Fact]
+    public void Parse_AmpGreatRedirect_ProducesRedirectOp()
+    {
+        var result = Parse("cmd &> out.log");
+
+        var simple = Assert.IsType<Command.Simple>(result);
+        Assert.Equal(["cmd"], GetWordValues(simple));
+        var redirect = Assert.Single(simple.Redirects);
+        Assert.Equal("&>", redirect.Op);
+    }
+
+    [Fact]
+    public void Parse_AmpDGreatRedirect_ProducesAppendRedirectOp()
+    {
+        var result = Parse("cmd &>> out.log");
+
+        var simple = Assert.IsType<Command.Simple>(result);
+        var redirect = Assert.Single(simple.Redirects);
+        Assert.Equal("&>>", redirect.Op);
+    }
+
+    [Fact]
     public void Parse_LeadingNewlines_SkipsToCommand()
     {
         var result = Parse("\n\necho hello");

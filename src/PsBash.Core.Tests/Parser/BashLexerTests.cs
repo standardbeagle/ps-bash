@@ -65,6 +65,55 @@ public class BashLexerTests
             (BashTokenKind.Word, "file"));
     }
 
+    [Fact]
+    public void Tokenize_AmpGreat_RedirectBothStreams()
+    {
+        // `&>` must beat the single-char `&` (Amp): without a dedicated token
+        // `cmd &> f` lexes as background `&` + bare `> f`.
+        var tokens = Tokenize("cmd &> out.log");
+
+        AssertTokens(tokens,
+            (BashTokenKind.Word, "cmd"),
+            (BashTokenKind.AmpGreat, "&>"),
+            (BashTokenKind.Word, "out.log"));
+    }
+
+    [Fact]
+    public void Tokenize_AmpDGreat_AppendBothStreams()
+    {
+        var tokens = Tokenize("cmd &>> out.log");
+
+        AssertTokens(tokens,
+            (BashTokenKind.Word, "cmd"),
+            (BashTokenKind.AmpDGreat, "&>>"),
+            (BashTokenKind.Word, "out.log"));
+    }
+
+    [Fact]
+    public void Tokenize_AndIf_NotShadowedByAmpGreat()
+    {
+        // Ordering invariant: `&&` (AndIf) must not be shadowed by the new
+        // `&>`/`&>>` checks (which only fire when `&` is followed by `>`).
+        var tokens = Tokenize("a && b");
+
+        AssertTokens(tokens,
+            (BashTokenKind.Word, "a"),
+            (BashTokenKind.AndIf, "&&"),
+            (BashTokenKind.Word, "b"));
+    }
+
+    [Fact]
+    public void Tokenize_TrailingAmpersand_StillBackgrounds_NotAmpGreat()
+    {
+        // Guard: a bare trailing `&` (not followed by `>`) stays Amp.
+        var tokens = Tokenize("sleep 1 &");
+
+        AssertTokens(tokens,
+            (BashTokenKind.Word, "sleep"),
+            (BashTokenKind.Word, "1"),
+            (BashTokenKind.Amp, "&"));
+    }
+
     // --- Operators ---
 
     [Fact]

@@ -89,6 +89,34 @@ public class PsEmitterTests
     }
 
     [Fact]
+    public void Transpile_AmpGreat_RedirectsBothStreams()
+    {
+        // `&>file` = redirect stdout AND stderr → PowerShell `>file 2>&1`.
+        // Previously `&` lexed as background, dropping the stderr redirect.
+        var result = PsEmitter.Transpile("cmd &> out.log");
+
+        Assert.Equal("cmd >out.log 2>&1", result);
+    }
+
+    [Fact]
+    public void Transpile_AmpDGreat_AppendsBothStreams()
+    {
+        var result = PsEmitter.Transpile("cmd &>> out.log");
+
+        Assert.Equal("cmd >>out.log 2>&1", result);
+    }
+
+    [Fact]
+    public void Transpile_AmpGreatDevNull_MapsToNullSink()
+    {
+        // The most common real-world `&>` use: discard all output. The
+        // /dev/null -> $null target transform must still apply.
+        var result = PsEmitter.Transpile("cmd &> /dev/null");
+
+        Assert.Equal("cmd >$null 2>&1", result);
+    }
+
+    [Fact]
     public void Transpile_NegatedCommand_EmitsExitCodeNegation()
     {
         var result = PsEmitter.Transpile("! grep -q pattern file");

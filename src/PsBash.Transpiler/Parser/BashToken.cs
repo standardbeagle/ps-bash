@@ -24,6 +24,8 @@ public enum BashTokenKind
     DGreat,
     LessAnd,
     GreatAnd,
+    AmpGreat,  // &>   (redirect stdout+stderr)
+    AmpDGreat, // &>>  (append stdout+stderr)
     DLessDash,
     TLess, // <<<  (here-string)
     Bang,
