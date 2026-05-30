@@ -524,14 +524,30 @@ public sealed partial class BashParser
     private Command ParseForArith()
     {
         Advance(); // consume first (
-        Advance(); // consume second (
+        var secondParen = Advance(); // consume second (
+        int exprStart = secondParen.Position + 1;
 
-        // Collect tokens for each of the three clauses, separated by Semi.
-        string init = CollectArithClause();
-        string cond = CollectArithClause();
-        string step = CollectArithClause();
+        // Slice the raw header between `((` and the matching `))` rather than
+        // joining token values. The old per-token approach stopped at the FIRST
+        // RParen, so an inner single paren (`for ((i=(a+b); i<n; i++))`)
+        // terminated the header early and corrupted the loop; it also lost
+        // whitespace/quoting. Walk to the closing `))` (skipping inner single
+        // `)`), then split the raw text on top-level `;`. Mirrors ParseArithCommand.
+        int exprEnd = -1;
+        while (Peek().Kind != BashTokenKind.Eof)
+        {
+            if (Peek().Kind == BashTokenKind.RParen && IsDoubleRParen())
+            {
+                exprEnd = Peek().Position;
+                Advance(); // consume first )
+                Advance(); // consume second )
+                break;
+            }
+            Advance();
+        }
+        string header = exprEnd >= 0 ? _input[exprStart..exprEnd] : _input[exprStart..];
+        var (init, cond, step) = SplitArithClauses(header);
 
-        // Consume closing )) — may already be past them if CollectArithClause consumed RParen
         SkipTerminators();
         Expect("do");
         SkipTerminators();
@@ -542,31 +558,34 @@ public sealed partial class BashParser
     }
 
     /// <summary>
-    /// Collect tokens for one clause of a C-style for loop's arithmetic expression.
-    /// Stops at Semi (consumes it) or RParen (consumed to close the (( ))).
+    /// Split a C-style for header (<c>init ; cond ; step</c>) on top-level
+    /// semicolons, ignoring <c>;</c> nested inside parens/brackets, and trimming
+    /// each clause. Fewer than three clauses yields empty strings for the rest.
     /// </summary>
-    private string CollectArithClause()
+    private static (string Init, string Cond, string Step) SplitArithClauses(string header)
     {
-        var parts = new List<string>();
-        while (Peek().Kind != BashTokenKind.Eof)
+        var clauses = new List<string>();
+        var sb = new System.Text.StringBuilder();
+        int depth = 0;
+        foreach (char ch in header)
         {
-            if (Peek().Kind == BashTokenKind.Semi)
-            {
-                Advance(); // consume ;
-                break;
-            }
-            if (Peek().Kind == BashTokenKind.RParen)
-            {
-                Advance(); // consume first )
-                if (Peek().Kind == BashTokenKind.RParen)
-                    Advance(); // consume second )
-                break;
-            }
+            if (ch is '(' or '[') depth++;
+            else if (ch is ')' or ']') { if (depth > 0) depth--; }
 
-            var token = Advance();
-            parts.Add(token.Value);
+            if (ch == ';' && depth == 0)
+            {
+                clauses.Add(sb.ToString().Trim());
+                sb.Clear();
+                continue;
+            }
+            sb.Append(ch);
         }
-        return string.Join("", parts);
+        clauses.Add(sb.ToString().Trim());
+
+        string init = clauses.Count > 0 ? clauses[0] : string.Empty;
+        string cond = clauses.Count > 1 ? clauses[1] : string.Empty;
+        string step = clauses.Count > 2 ? clauses[2] : string.Empty;
+        return (init, cond, step);
     }
 
     private Command.While ParseWhile()

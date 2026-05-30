@@ -988,6 +988,32 @@ public class BashParserTests
     }
 
     [Fact]
+    public void Parse_ForArith_InnerParensInClause_NotTruncated()
+    {
+        // H2: the old per-token collector stopped at the FIRST `)`, truncating
+        // the header at the inner paren of `i=(a+b)` and corrupting the loop.
+        // The raw-slice approach keeps the whole clause and splits on top-level `;`.
+        var result = Parse("for ((i=(a+b); i<n; i++)); do echo $i; done");
+
+        var forArith = Assert.IsType<Command.ForArith>(result);
+        Assert.Equal("i=(a+b)", forArith.Init);
+        Assert.Equal("i<n", forArith.Cond);
+        Assert.Equal("i++", forArith.Step);
+        Assert.IsType<Command.Simple>(forArith.Body);
+    }
+
+    [Fact]
+    public void Parse_ForArith_EmptyClauses_YieldEmptyStrings()
+    {
+        var result = Parse("for ((;;)); do echo hi; done");
+
+        var forArith = Assert.IsType<Command.ForArith>(result);
+        Assert.Equal("", forArith.Init);
+        Assert.Equal("", forArith.Cond);
+        Assert.Equal("", forArith.Step);
+    }
+
+    [Fact]
     public void Parse_ForInWithNewlines_ReturnsForInNode()
     {
         var result = Parse("for x in a b c\ndo\necho $x\ndone");
