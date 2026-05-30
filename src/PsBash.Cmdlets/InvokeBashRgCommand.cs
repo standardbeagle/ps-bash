@@ -212,6 +212,19 @@ public sealed class InvokeBashRgCommand : PSCmdlet
             if (a == "--only-matching") { onlyMatching = true; i++; continue; }
             if (a == "--invert-match") { invertMatch = true; i++; continue; }
             if (a == "--fixed-strings") { fixedStrings = true; i++; continue; }
+            // --color[=WHEN] / --colour[=WHEN]: ripgrep accepts these; the
+            // internal fallback has no per-match ANSI coloring, so accept and
+            // ignore. Without this, the common `alias rg='rg --color=auto'`
+            // makes the fallback treat `--color=auto` as the search pattern.
+            // (When native rg.exe is on PATH the arg is forwarded verbatim and
+            // honored by the binary — this branch only affects the fallback.)
+            if (a == "--color" || a == "--colour"
+                || a.StartsWith("--color=", StringComparison.Ordinal)
+                || a.StartsWith("--colour=", StringComparison.Ordinal))
+            {
+                i++;
+                continue;
+            }
 
             // Short-flag bundle (single dash, length > 1, not --). Walk per-char
             // case-sensitively, matching the oracle's switch slice.

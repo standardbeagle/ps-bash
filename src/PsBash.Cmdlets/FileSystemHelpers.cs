@@ -140,4 +140,77 @@ internal static class FileSystemHelpers
     /// Bash-style path normalization for verbose output: backslash → slash.
     /// </summary>
     public static string ToBashPath(string winPath) => winPath.Replace('\\', '/');
+
+    /// <summary>
+    /// True when <paramref name="token"/> looks like an option (a dash flag),
+    /// as opposed to an operand (file / pattern). A lone <c>-</c> (stdin) and
+    /// the bare <c>--</c> end-of-options marker are NOT option-like — callers
+    /// handle those separately. Mirrors how the GNU getopt parsers decide a
+    /// token is an option before deciding it is unknown.
+    /// </summary>
+    public static bool IsOptionLike(string token)
+        => token.Length > 1 && token[0] == '-' && token != "--";
+
+    /// <summary>
+    /// Emit the message + exit code for an option-looking token a cmdlet could
+    /// not consume, classifying it against the command's known-valid flag
+    /// universe (<paramref name="validButUnsupported"/>):
+    /// <list type="bullet">
+    /// <item><b>Valid bash flag we don't implement</b> (in the set) → a specific
+    /// "recognized but not supported by ps-bash" message. This deliberately
+    /// diverges from bash (which would honor the flag) in favor of a clear
+    /// refusal over silently-wrong output — the project's stated policy that
+    /// every valid bash parameter maps to *something*.</item>
+    /// <item><b>Not a real flag</b> (typo / garbage) → bash-parity
+    /// <c>unrecognized option '--foo'</c> (long) or <c>invalid option -- 'x'</c>
+    /// (short), matching GNU getopt_long.</item>
+    /// </list>
+    /// Both set <c>$LASTEXITCODE = 2</c> (grep/getopt usage-error convention).
+    /// The <paramref name="validButUnsupported"/> lookup strips any <c>=value</c>
+    /// suffix from long options so <c>--include=*.c</c> matches <c>--include</c>.
+    /// </summary>
+    public static void WriteOptionError(
+        PSCmdlet cmdlet, string cmd, string token,
+        ISet<string> validButUnsupported)
+    {
+        string lookup = token;
+        if (token.StartsWith("--", StringComparison.Ordinal))
+        {
+            int eq = token.IndexOf('=');
+            if (eq >= 0) lookup = token.Substring(0, eq);
+        }
+
+        bool isLong = token.StartsWith("--", StringComparison.Ordinal);
+        // For a short bundle (-Zx) the offending option is the first char
+        // that is not recognized; the catalog stores single-letter short
+        // flags as e.g. "-P", so probe the bundle char-by-char.
+        if (!isLong && token.Length > 2)
+        {
+            foreach (var ch in token.Substring(1))
+            {
+                string single = "-" + ch;
+                if (validButUnsupported.Contains(single))
+                {
+                    lookup = single;
+                    break;
+                }
+            }
+        }
+
+        if (validButUnsupported.Contains(lookup))
+        {
+            WriteBashError(cmdlet, $"{cmd}: option '{lookup}' is recognized but not supported by ps-bash");
+        }
+        else if (isLong)
+        {
+            WriteBashError(cmdlet, $"{cmd}: unrecognized option '{token}'");
+        }
+        else
+        {
+            // GNU getopt reports the first offending short char.
+            char bad = token.Length > 1 ? token[1] : '-';
+            WriteBashError(cmdlet, $"{cmd}: invalid option -- '{bad}'");
+        }
+        SetLastExitCode(cmdlet, 2);
+    }
 }

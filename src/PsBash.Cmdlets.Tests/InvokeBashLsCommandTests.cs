@@ -137,6 +137,22 @@ public class InvokeBashLsCommandTests : IDisposable, IClassFixture<SharedPwshFix
             names);
     }
 
+    [Theory]
+    [InlineData("--color=auto")]
+    [InlineData("--color=always")]
+    [InlineData("--color")]
+    public void Ls_ColorFlagEqValue_ListsNormally_NotTreatedAsFile(string colorFlag)
+    {
+        // Regression: the near-universal `alias ls='ls --color=auto'` passes
+        // --color=auto. The shared ConvertFromBashArgs parser previously failed
+        // the exact-key lookup, dropped --color=auto into operands, and ls then
+        // reported it as a missing file. It must list the directory normally.
+        WriteFile("one.txt", "x");
+        WriteFile("two.txt", "y");
+        var names = RunBashText($"Invoke-BashLs {colorFlag} '{Q(_tmpDir)}'");
+        Assert.Equal(new[] { "one.txt", "two.txt" }, names);
+    }
+
     [Fact]
     public void Ls_EmptyDirectory_EmitsNothing()
     {

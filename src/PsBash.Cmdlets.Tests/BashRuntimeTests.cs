@@ -218,6 +218,32 @@ public class BashRuntimeTests
         Assert.Contains("--nope", r.Operands);
     }
 
+    [Theory]
+    [InlineData("--long=auto")]
+    [InlineData("--long=always")]
+    [InlineData("--long=never")]
+    public void ConvertFromBashArgs_RegisteredLongFlagWithEqValue_SetsFlag_NotOperand(string token)
+    {
+        // Regression: the near-universal `alias ls='ls --color=auto'` passes a
+        // registered boolean long flag in `--flag=value` form. The base name
+        // (before '=') must match the FlagDef; otherwise it falls into operands
+        // and the cmdlet treats it as a file → "No such file or directory".
+        // Boolean FlagDef → value ignored (the =never wart is documented).
+        var r = BashRuntime.ConvertFromBashArgs(new[] { token }, SampleDefs);
+        Assert.True(r.Flags["--long"]);
+        Assert.Empty(r.Operands);
+    }
+
+    [Fact]
+    public void ConvertFromBashArgs_UnregisteredLongFlagWithEqValue_StillOperand()
+    {
+        // The =value handling only applies to registered flags; an unknown
+        // --flag=value must remain an operand (no silent swallow).
+        var r = BashRuntime.ConvertFromBashArgs(new[] { "--nope=auto" }, SampleDefs);
+        Assert.Contains("--nope=auto", r.Operands);
+        Assert.False(r.Flags["--long"]);
+    }
+
     [Fact]
     public void ConvertFromBashArgs_Empty_AllFlagsFalseNoOperands()
     {

@@ -265,6 +265,112 @@ public class InvokeBashGrepCommandTests : IDisposable, IClassFixture<SharedPwshF
     }
 
     [Fact]
+    public void Grep_ColorAuto_FlagAcceptedAndIgnored_NotTreatedAsFile()
+    {
+        // Regression: the near-universal `alias grep='grep --color=auto'`
+        // expands every grep to `grep --color=auto ...`. GNU grep accepts
+        // --color[=WHEN] silently; ps-bash used to treat `--color=auto` as a
+        // file operand and emit `grep: --color=auto: No such file or directory`
+        // on every invocation. The flag must be swallowed, leaving the match
+        // unaffected.
+        var pwsh = _fixture.AcquireFresh();
+        pwsh.AddScript("$ErrorActionPreference='Continue'").Invoke();
+        pwsh.Commands.Clear();
+        var result = pwsh.AddScript(
+            "'apple','banana','cherry' | Invoke-BashGrep --color=auto banana 2>$null").Invoke();
+        var errs = pwsh.Streams.Error.Count;
+        pwsh.Commands.Clear();
+        Assert.Equal(0, errs);
+        var lines = result.Select(o =>
+            o?.Properties["BashText"]?.Value as string ?? o?.ToString() ?? "").ToArray();
+        Assert.Single(lines);
+        Assert.Equal("banana", lines[0]);
+    }
+
+    [Theory]
+    [InlineData("--color")]
+    [InlineData("--color=always")]
+    [InlineData("--color=never")]
+    [InlineData("--colour")]
+    [InlineData("--colour=auto")]
+    public void Grep_ColorFlagVariants_Swallowed(string colorFlag)
+    {
+        var lines = RunLines(
+            $"'apple','banana' | Invoke-BashGrep {colorFlag} banana");
+        Assert.Single(lines);
+        Assert.Equal("banana", lines[0]);
+    }
+
+    private (string[] outLines, string[] errors) RunWithErrors(string script)
+    {
+        var pwsh = _fixture.AcquireFresh();
+        pwsh.AddScript("$ErrorActionPreference='Continue'").Invoke();
+        pwsh.Commands.Clear();
+        var result = pwsh.AddScript(script).Invoke();
+        var errs = pwsh.Streams.Error.Select(e => e.Exception?.Message ?? e.ToString()).ToArray();
+        pwsh.Commands.Clear();
+        var outLines = result.Select(o =>
+            o?.Properties["BashText"]?.Value as string ?? o?.ToString() ?? "").ToArray();
+        return (outLines, errs);
+    }
+
+    [Fact]
+    public void Grep_ValidButUnsupportedFlag_X_EmitsSpecificRefusal_NotFileError()
+    {
+        // -x (line-regexp) is a real grep flag ps-bash doesn't implement.
+        // It must say so specifically — NOT "No such file or directory", and
+        // NOT silently ignore the flag and run anyway. (-x is used rather than
+        // -P because -P collides with the -PipelineVariable/-ProgressAction
+        // common parameters and is rejected by the binder before the cmdlet
+        // runs — a separate known collision class.)
+        var (outLines, errs) = RunWithErrors("'apple','banana' | Invoke-BashGrep -x 'ba.*'");
+        Assert.Empty(outLines);
+        Assert.Contains(errs,
+            m => m.Contains("not supported", StringComparison.OrdinalIgnoreCase)
+                 && m.Contains("-x", StringComparison.Ordinal));
+        Assert.DoesNotContain(errs,
+            m => m.Contains("No such file", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    public void Grep_UnsupportedFlagInBundle_ReportsFirstOffender()
+    {
+        // -i is honored, then -P (unsupported) is the offending char getopt
+        // would stop on.
+        var (_, errs) = RunWithErrors("'x' | Invoke-BashGrep -iP foo");
+        Assert.Contains(errs, m => m.Contains("-P", StringComparison.Ordinal)
+                                   && m.Contains("not supported", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    public void Grep_UnrecognizedLongOption_BashParityMessage()
+    {
+        // --bogus is not a real grep option → bash-style "unrecognized option".
+        var (_, errs) = RunWithErrors("'x' | Invoke-BashGrep --bogus foo");
+        Assert.Contains(errs, m => m.Contains("unrecognized option", StringComparison.OrdinalIgnoreCase)
+                                   && m.Contains("--bogus", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void Grep_InvalidShortOption_BashParityMessage()
+    {
+        // -j is not a real grep option → bash-style "invalid option -- 'j'".
+        var (_, errs) = RunWithErrors("'x' | Invoke-BashGrep -j foo");
+        Assert.Contains(errs, m => m.Contains("invalid option", StringComparison.OrdinalIgnoreCase)
+                                   && m.Contains("'j'", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void Grep_LongUnsupportedWithValue_StripsEqValueForLookup()
+    {
+        // --include=*.c → valid grep flag, unsupported; the =VALUE suffix must
+        // not defeat the catalog lookup.
+        var (_, errs) = RunWithErrors("'x' | Invoke-BashGrep --include=*.c foo");
+        Assert.Contains(errs, m => m.Contains("--include", StringComparison.Ordinal)
+                                   && m.Contains("not supported", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
     public void Grep_InjectionProbe_PatternWithDollarParen_LiteralRegex()
     {
         // Directive 12: a user-controlled pattern containing PowerShell

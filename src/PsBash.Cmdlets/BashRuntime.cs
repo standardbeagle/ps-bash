@@ -210,9 +210,22 @@ public static class BashRuntime
 
             if (arg.StartsWith("--", StringComparison.Ordinal) && arg.Length > 2)
             {
-                if (flags.ContainsKey(arg))
+                // Accept the `--flag=value` form for a registered long flag by
+                // matching on the base name (text before '='). The dominant
+                // real-world case is the near-universal `alias ls='ls
+                // --color=auto'` / `--color=always` — without this, `--color=auto`
+                // fails the exact-key lookup, falls into operands, and the cmdlet
+                // treats it as a file → "No such file or directory". These are
+                // boolean FlagDefs, so the value is not consumed: any
+                // `--flag=WHEN` sets the flag (an explicit `--color=never` is the
+                // known minor wart — it enables rather than disables).
+                string baseName = arg;
+                int eq = arg.IndexOf('=');
+                if (eq > 2) baseName = arg.Substring(0, eq);
+
+                if (flags.ContainsKey(baseName))
                 {
-                    flags[arg] = true;
+                    flags[baseName] = true;
                 }
                 else
                 {

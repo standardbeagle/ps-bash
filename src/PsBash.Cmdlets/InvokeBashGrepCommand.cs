@@ -101,6 +101,29 @@ public sealed class InvokeBashGrepCommand : PSCmdlet
 
     private readonly List<PSObject> _pipeline = new();
 
+    /// <summary>
+    /// GNU grep options that are valid but not (yet) implemented by ps-bash.
+    /// Hitting one yields a specific "recognized but not supported" message
+    /// (via <see cref="FileSystemHelpers.WriteOptionError"/>) instead of the
+    /// old misleading "No such file or directory" or a silent drop. Anything
+    /// option-looking NOT in this set is reported as an unrecognized/invalid
+    /// option (bash parity). NOTE: representative, not yet exhaustive — see the
+    /// per-command flag-catalog rollout.
+    /// </summary>
+    private static readonly HashSet<string> ValidButUnsupported = new(StringComparer.Ordinal)
+    {
+        // Short forms.
+        "-P", "-z", "-Z", "-x", "-s", "-a", "-L", "-b", "-D", "-d",
+        "-U", "-T", "-u", "-y", "-I", "-V",
+        // Long forms (bare names; the =VALUE suffix is stripped before lookup).
+        "--perl-regexp", "--null-data", "--null", "--line-regexp",
+        "--no-messages", "--text", "--files-without-match", "--byte-offset",
+        "--binary-files", "--devices", "--directories", "--binary",
+        "--initial-tab", "--version", "--include", "--include-dir",
+        "--exclude", "--exclude-dir", "--exclude-from", "--label",
+        "--line-buffered", "--group-separator", "--no-group-separator",
+    };
+
     protected override void ProcessRecord()
     {
         if (InputObject != null)
@@ -256,6 +279,20 @@ public sealed class InvokeBashGrepCommand : PSCmdlet
             if (a == "--word-regexp") { wholeWord = true; i++; continue; }
             if (a == "--only-matching") { outputMatchOnly = true; i++; continue; }
             if (a == "--quiet" || a == "--silent") { quietMode = true; i++; continue; }
+            // --color[=WHEN] / --colour[=WHEN]: GNU grep accepts these silently.
+            // ps-bash emits typed BashObjects with no per-match ANSI coloring, so
+            // we accept-and-ignore (parity with grep's flag surface, not its
+            // coloring). WHEN must be attached with '=' in real grep, so a bare
+            // --color does NOT consume the next token. Without this, the common
+            // `alias grep='grep --color=auto'` makes every grep treat
+            // `--color=auto` as a file operand → "No such file or directory".
+            if (a == "--color" || a == "--colour"
+                || a.StartsWith("--color=", StringComparison.Ordinal)
+                || a.StartsWith("--colour=", StringComparison.Ordinal))
+            {
+                i++;
+                continue;
+            }
             if (a == "--max-count")
             {
                 i++;
@@ -291,16 +328,34 @@ public sealed class InvokeBashGrepCommand : PSCmdlet
                         case 'R': recursive = true; break;
                         case 'l': filesOnly = true; break;
                         case 'E': extendedRegex = true; break;
+                        case 'G': extendedRegex = false; break; // basic-regexp (default)
                         case 'F': fixedString = true; break;
                         case 'w': wholeWord = true; break;
                         case 'o': outputMatchOnly = true; break;
                         case 'H': forceFileName = true; break;
                         case 'h': suppressFileName = true; break;
-                        // Other bundle chars silently ignored (oracle parity).
+                        default:
+                            // Unknown short flag: a valid-but-unsupported grep
+                            // option gets a specific refusal; anything else is
+                            // a bash-parity "invalid option" error. getopt
+                            // reports the first offending char and stops.
+                            FileSystemHelpers.WriteOptionError(this, "grep", "-" + ch, ValidButUnsupported);
+                            return;
                     }
                 }
                 i++;
                 continue;
+            }
+
+            // Any remaining option-looking token (a long flag we don't handle,
+            // e.g. --perl-regexp / --include=*.c, or a typo) is NOT a file
+            // operand. Classify it: valid-but-unsupported → specific refusal;
+            // otherwise bash-parity "unrecognized option". A lone "-" (stdin)
+            // and "--" fell through above and are handled as operands.
+            if (FileSystemHelpers.IsOptionLike(a))
+            {
+                FileSystemHelpers.WriteOptionError(this, "grep", a, ValidButUnsupported);
+                return;
             }
 
             operands.Add(a);
