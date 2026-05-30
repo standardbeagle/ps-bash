@@ -4274,7 +4274,17 @@ function Invoke-BashSed {
             continue
         }
         if (($a -ceq '-e' -or $a -ceq '--expression') -and ($i + 1) -lt $args.Count) {
-            $eValues.Add([string]$args[$i + 1])
+            # The value may be a single string (`-e 's/a/b/'`, and the repeated
+            # `-e A -e B` form) OR a PowerShell array when expressions are passed
+            # as the idiomatic comma-list (`-e 's/a/1/','s/b/2/','s/c/3/'`). A
+            # bare [string] cast on an array space-joins it into ONE bogus
+            # expression, so only the first s/// would apply. Add each element.
+            $eVal = $args[$i + 1]
+            if ($eVal -isnot [string] -and $eVal -is [System.Collections.IEnumerable]) {
+                foreach ($ev in $eVal) { $eValues.Add([string]$ev) }
+            } else {
+                $eValues.Add([string]$eVal)
+            }
             $i += 2
             continue
         }

@@ -31,11 +31,15 @@ public class InvokeBashPushdCommandTests : IClassFixture<SharedPwshFixture>
 
     private System.Management.Automation.PowerShell NewPwsh()
     {
-        var pwsh = _fixture.AcquireFresh();
-        // Clear any inherited location stack so push-tests start from 0.
-        pwsh.AddScript("while (Get-Location -Stack) { Pop-Location -Stack }").Invoke();
-        pwsh.Commands.Clear();
-        return pwsh;
+        // AcquireFresh() already drains the location stack (SharedPwshFixture.Reset
+        // uses a bounded `while ((Get-Location -Stack).Count -gt 0) { Pop-Location }`).
+        // A hand-rolled `while (Get-Location -Stack) { Pop-Location -Stack }` here
+        // was both redundant AND a hang: `Get-Location -Stack` returns a
+        // (always-truthy) PathInfoStack object so the guard never goes false, and
+        // `Pop-Location -Stack` prefix-binds the mandatory-valued -StackName with no
+        // value, which prompts and blocks forever in the non-interactive runspace.
+        // That single line hung the whole Cmdlets test suite. Reset() suffices.
+        return _fixture.AcquireFresh();
     }
 
     [Fact]
@@ -69,6 +73,9 @@ public class InvokeBashPushdCommandTests : IClassFixture<SharedPwshFixture>
         }
         finally
         {
+            // Restore the runspace location out of subdir before deleting it
+            // (the runspace was chdir'd in by pushd).
+            RunLines(pwsh, $"Set-Location '{tmp}'");
             Directory.Delete(subdir);
         }
     }
@@ -100,6 +107,10 @@ public class InvokeBashPushdCommandTests : IClassFixture<SharedPwshFixture>
         }
         finally
         {
+            // Same hazard as Pushd_WithPath: the runspace was chdir'd into d1/d2.
+            // Restore the location before deleting so the process is not sitting
+            // in a directory being removed (Windows wedge → suite hang).
+            RunLines(pwsh, $"Set-Location '{tmp}'");
             Directory.Delete(d1);
             Directory.Delete(d2);
         }
