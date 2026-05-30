@@ -92,6 +92,46 @@ public class InvokeBashCatHeadTailWcCommandTests : IClassFixture<SharedPwshFixtu
             .ToArray();
     }
 
+    private string[] RunErrors(string script)
+    {
+        var pwsh = _fixture.AcquireFresh();
+        pwsh.AddScript("$ErrorActionPreference='Continue'").Invoke();
+        pwsh.Commands.Clear();
+        pwsh.AddScript(script).Invoke();
+        var errs = pwsh.Streams.Error.Select(e => e.Exception?.Message ?? e.ToString()).ToArray();
+        pwsh.Commands.Clear();
+        return errs;
+    }
+
+    // ===== unsupported-flag classifier (head/tail/wc/cat) =====
+
+    [Theory]
+    [InlineData("'a','b' | Invoke-BashHead -z", "head", "-z")]
+    [InlineData("'a','b' | Invoke-BashTail -z", "tail", "-z")]
+    [InlineData("'a','b' | Invoke-BashWc -m", "wc", "-m")]
+    [InlineData("'a','b' | Invoke-BashCat -t", "cat", "-t")]
+    public void UnsupportedFlag_EmitsSpecificRefusal_NotFileError(string script, string cmd, string flag)
+    {
+        // A valid-but-unimplemented flag must say "not supported", NOT be
+        // treated as a missing file.
+        var errs = RunErrors(script);
+        Assert.Contains(errs, m => m.Contains("not supported", StringComparison.OrdinalIgnoreCase)
+                                   && m.Contains(flag, StringComparison.Ordinal));
+        Assert.DoesNotContain(errs, m => m.Contains("No such file", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Theory]
+    [InlineData("'a','b' | Invoke-BashHead --bogus")]
+    [InlineData("'a','b' | Invoke-BashTail --bogus")]
+    [InlineData("'a','b' | Invoke-BashWc --bogus")]
+    [InlineData("'a','b' | Invoke-BashCat --bogus")]
+    public void UnrecognizedLongOption_BashParityMessage(string script)
+    {
+        var errs = RunErrors(script);
+        Assert.Contains(errs, m => m.Contains("unrecognized option", StringComparison.OrdinalIgnoreCase)
+                                   && m.Contains("--bogus", StringComparison.Ordinal));
+    }
+
     // ======================= wc =======================
 
     [Fact]

@@ -169,6 +169,32 @@ internal static class FileSystemHelpers
     /// The <paramref name="validButUnsupported"/> lookup strips any <c>=value</c>
     /// suffix from long options so <c>--include=*.c</c> matches <c>--include</c>.
     /// </summary>
+    /// <summary>
+    /// Scans a resolved operand list for an option-looking token (an unknown
+    /// flag that fell through a cmdlet's parser into the operand/file list) and,
+    /// if found, emits the classified option error (<see cref="WriteOptionError"/>)
+    /// for the FIRST such token and returns <c>true</c> so the caller can bail
+    /// before treating the flag as a filename. Returns <c>false</c> when every
+    /// operand is genuine. Use this in file-mode cmdlets whose flag parser (e.g.
+    /// <c>ConvertFromBashArgs</c> or a static scan) routes unknown flags into the
+    /// operand list. Do NOT use it for commands whose operands may legitimately
+    /// start with <c>-</c> (echo / printf / seq treat a leading dash as literal).
+    /// </summary>
+    public static bool TryWriteOperandOptionError(
+        PSCmdlet cmdlet, string cmd, IEnumerable<string> operands,
+        ISet<string> validButUnsupported)
+    {
+        foreach (var op in operands)
+        {
+            if (IsOptionLike(op))
+            {
+                WriteOptionError(cmdlet, cmd, op, validButUnsupported);
+                return true;
+            }
+        }
+        return false;
+    }
+
     public static void WriteOptionError(
         PSCmdlet cmdlet, string cmd, string token,
         ISet<string> validButUnsupported)

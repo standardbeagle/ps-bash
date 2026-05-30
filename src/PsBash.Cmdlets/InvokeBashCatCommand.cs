@@ -68,6 +68,17 @@ public sealed class InvokeBashCatCommand : PSCmdlet
 
     private readonly List<PSObject> _pipeline = new();
 
+    /// <summary>Valid GNU <c>cat</c> options ps-bash does not implement (see
+    /// <see cref="FileSystemHelpers.TryWriteOperandOptionError"/>). Note <c>-v</c>
+    /// and <c>-e</c> are eaten by the binder (-Verbose / the -E switch) before
+    /// reaching here; listed for completeness / bundle probing.</summary>
+    private static readonly HashSet<string> CatValidButUnsupported = new(StringComparer.Ordinal)
+    {
+        "-A", "-t", "-u", "-v", "-e",
+        "--show-all", "--show-nonprinting", "--number-nonblank", "--show-ends",
+        "--number", "--squeeze-blank", "--show-tabs",
+    };
+
     protected override void ProcessRecord()
     {
         if (InputObject != null)
@@ -130,6 +141,16 @@ public sealed class InvokeBashCatCommand : PSCmdlet
         bool hasFlags = numberAll || numberNonBlank || squeezeBlanks || showEnds || showTabs;
 
         var operands = parsed.Operands;
+
+        // Any remaining option-looking operand (not the lone "-" stdin marker)
+        // is an unknown flag that fell through ConvertFromBashArgs, not a file —
+        // classify it (specific "not supported" if a valid cat flag, else
+        // bash-parity "unrecognized option") instead of reporting a missing file.
+        if (FileSystemHelpers.TryWriteOperandOptionError(this, "cat", operands, CatValidButUnsupported))
+        {
+            return;
+        }
+
         bool readStdin = operands.Count == 0 || operands.Contains("-");
         bool hadError = false;
 

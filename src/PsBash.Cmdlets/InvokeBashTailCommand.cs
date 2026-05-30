@@ -60,6 +60,21 @@ public sealed class InvokeBashTailCommand : PSCmdlet
 
     private readonly List<PSObject> _pipeline = new();
 
+    /// <summary>
+    /// Valid GNU <c>tail</c> options ps-bash does not implement. An unknown
+    /// option-looking token falls through the scan into the operand (file) list;
+    /// it is classified via <see cref="FileSystemHelpers.TryWriteOperandOptionError"/>
+    /// (specific "not supported" if listed, else bash-parity "unrecognized
+    /// option") instead of being reported as a missing file.
+    /// </summary>
+    private static readonly HashSet<string> ValidButUnsupported = new(StringComparer.Ordinal)
+    {
+        "-q", "-v", "-z", "-F",
+        "--quiet", "--silent", "--verbose", "--zero-terminated",
+        "--lines", "--retry", "--max-unchanged-stats", "--pid",
+        "--follow-retry",
+    };
+
     protected override void ProcessRecord()
     {
         if (InputObject != null)
@@ -260,6 +275,13 @@ public sealed class InvokeBashTailCommand : PSCmdlet
 
             operands.Add(arg);
             i++;
+        }
+
+        // An option-looking operand is an unknown flag that fell through the
+        // scan, not a file — classify it instead of reporting a missing file.
+        if (FileSystemHelpers.TryWriteOperandOptionError(this, "tail", operands, ValidButUnsupported))
+        {
+            return;
         }
 
         // Pipeline mode

@@ -47,6 +47,21 @@ public sealed class InvokeBashHeadCommand : PSCmdlet
     [Parameter(ValueFromPipeline = true)]
     public PSObject? InputObject { get; set; }
 
+    /// <summary>
+    /// Valid GNU <c>head</c> options ps-bash does not implement. An option-looking
+    /// token that is not a recognized flag falls through this cmdlet's static
+    /// <c>ParseArgs</c> into the operand (file) list; rather than report it as a
+    /// missing file, it is classified via
+    /// <see cref="FileSystemHelpers.TryWriteOperandOptionError"/>: in this set →
+    /// "recognized but not supported"; otherwise bash-parity "unrecognized option".
+    /// </summary>
+    private static readonly HashSet<string> ValidButUnsupported = new(StringComparer.Ordinal)
+    {
+        "-q", "-v", "-z",
+        "--quiet", "--silent", "--verbose", "--zero-terminated",
+        "--lines", "--bytes",
+    };
+
     private readonly List<PSObject> _pipeline = new();
     // Streaming state for line-mode pipeline: parse flags lazily on first
     // record so an infinite upstream (e.g. `yes`) doesn't block on EndProcessing.
@@ -174,6 +189,13 @@ public sealed class InvokeBashHeadCommand : PSCmdlet
 
         ParseArgs(args, out int count, out int? byteCount,
             out var operands, out _);
+
+        // An option-looking operand is an unknown flag that fell through the
+        // scan, not a file — classify it instead of reporting a missing file.
+        if (FileSystemHelpers.TryWriteOperandOptionError(this, "head", operands, ValidButUnsupported))
+        {
+            return;
+        }
 
         // Pipeline mode
         if (operands.Count == 0 && _pipeline.Count > 0)

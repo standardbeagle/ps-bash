@@ -68,6 +68,15 @@ public sealed class InvokeBashWcCommand : PSCmdlet
 
     private readonly List<PSObject> _pipeline = new();
 
+    /// <summary>Valid GNU <c>wc</c> options ps-bash does not implement (see
+    /// <see cref="FileSystemHelpers.TryWriteOperandOptionError"/>).</summary>
+    private static readonly HashSet<string> WcValidButUnsupported = new(StringComparer.Ordinal)
+    {
+        "-m", "-L",
+        "--lines", "--words", "--bytes", "--chars", "--max-line-length",
+        "--files0-from",
+    };
+
     private static readonly char[] WhitespaceChars = { ' ', '\t', '\n', '\r' };
 
     protected override void ProcessRecord()
@@ -122,6 +131,15 @@ public sealed class InvokeBashWcCommand : PSCmdlet
                 operands.RemoveAt(bi);
                 bi--;
             }
+        }
+
+        // Any remaining option-looking operand is an unknown flag that fell
+        // through ConvertFromBashArgs, not a file — classify it (specific "not
+        // supported" if a valid wc flag, else bash-parity "unrecognized option")
+        // instead of reporting it as a missing file.
+        if (FileSystemHelpers.TryWriteOperandOptionError(this, "wc", operands, WcValidButUnsupported))
+        {
+            return;
         }
 
         // Pipeline mode
