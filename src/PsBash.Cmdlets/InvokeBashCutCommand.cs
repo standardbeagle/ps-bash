@@ -107,6 +107,23 @@ public sealed class InvokeBashCutCommand : PSCmdlet
 
     private readonly List<PSObject> _pipeline = new();
 
+    /// <summary>
+    /// Valid GNU <c>cut</c> options ps-bash does not implement. Hitting one
+    /// yields a specific "recognized but not supported" message via
+    /// <see cref="FileSystemHelpers.WriteOptionError"/> instead of the old
+    /// misleading "No such file or directory" (the token used to fall through
+    /// to the file-operand list). Anything option-looking NOT in this set is
+    /// reported as unrecognized/invalid (bash parity). Representative — see the
+    /// per-command flag-catalog rollout.
+    /// </summary>
+    private static readonly HashSet<string> ValidButUnsupported = new(StringComparer.Ordinal)
+    {
+        "-s", "-b", "-n", "-z",
+        "--bytes", "--characters", "--fields", "--delimiter",
+        "--complement", "--only-delimited", "--output-delimiter",
+        "--zero-terminated",
+    };
+
     protected override void ProcessRecord()
     {
         if (InputObject != null)
@@ -214,6 +231,16 @@ public sealed class InvokeBashCutCommand : PSCmdlet
                 charSpec = a.Substring(2);
                 i++;
                 continue;
+            }
+
+            // Any remaining option-looking token is a flag cut doesn't handle,
+            // not a file operand: valid-but-unsupported → specific refusal,
+            // otherwise bash-parity "unrecognized option". A lone "-" (stdin)
+            // is not option-like and falls through to operands.
+            if (FileSystemHelpers.IsOptionLike(a))
+            {
+                FileSystemHelpers.WriteOptionError(this, "cut", a, ValidButUnsupported);
+                return;
             }
 
             operands.Add(a);

@@ -57,6 +57,38 @@ public class InvokeBashCutCommandTests : IClassFixture<SharedPwshFixture>, IDisp
         Assert.Empty(lines);
     }
 
+    private (string[] outLines, string[] errors) RunWithErrors(string script)
+    {
+        var pwsh = _fixture.AcquireFresh();
+        pwsh.AddScript("$ErrorActionPreference='Continue'").Invoke();
+        pwsh.Commands.Clear();
+        var result = pwsh.AddScript(script).Invoke();
+        var errs = pwsh.Streams.Error.Select(e => e.Exception?.Message ?? e.ToString()).ToArray();
+        pwsh.Commands.Clear();
+        var outLines = result.Select(o =>
+            o?.Properties["BashText"]?.Value as string ?? o?.ToString() ?? "").ToArray();
+        return (outLines, errs);
+    }
+
+    [Fact]
+    public void Cut_ValidButUnsupportedFlag_S_EmitsSpecificRefusal_NotFileError()
+    {
+        // -s (--only-delimited) is a real cut flag ps-bash doesn't implement.
+        // It must say so specifically, NOT treat -s as a missing file.
+        var (_, errs) = RunWithErrors("'a,b' | Invoke-BashCut -s -d ',' -f 1");
+        Assert.Contains(errs, m => m.Contains("not supported", StringComparison.OrdinalIgnoreCase)
+                                   && m.Contains("-s", StringComparison.Ordinal));
+        Assert.DoesNotContain(errs, m => m.Contains("No such file", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    public void Cut_UnrecognizedLongOption_BashParityMessage()
+    {
+        var (_, errs) = RunWithErrors("'a,b' | Invoke-BashCut --bogus -d ',' -f 1");
+        Assert.Contains(errs, m => m.Contains("unrecognized option", StringComparison.OrdinalIgnoreCase)
+                                   && m.Contains("--bogus", StringComparison.Ordinal));
+    }
+
     [Fact]
     public void Cut_Pipeline_SingleField_TabDelim()
     {

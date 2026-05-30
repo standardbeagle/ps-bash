@@ -67,6 +67,31 @@ public sealed class InvokeBashSortCommand : PSCmdlet
 
     private readonly List<PSObject> _pipeline = new();
 
+    /// <summary>
+    /// Valid GNU <c>sort</c> options ps-bash does not implement (this cmdlet
+    /// parses only short flags). Hitting one yields a specific "recognized but
+    /// not supported" message via <see cref="FileSystemHelpers.WriteOptionError"/>
+    /// instead of the old misleading "No such file or directory" (the token used
+    /// to fall through to the file-operand list). Anything option-looking NOT in
+    /// this set is reported as unrecognized/invalid (bash parity). Includes the
+    /// long forms of even the *supported* short flags, since the long spellings
+    /// are genuinely unparsed here. Representative — see the flag-catalog rollout.
+    /// </summary>
+    private static readonly HashSet<string> ValidButUnsupported = new(StringComparer.Ordinal)
+    {
+        // Short flags not implemented.
+        "-g", "-i", "-R", "-z", "-o", "-m", "-S", "-T",
+        // Long forms (none are implemented by this cmdlet).
+        "--reverse", "--numeric-sort", "--unique", "--ignore-case",
+        "--dictionary-order", "--ignore-leading-blanks", "--general-numeric-sort",
+        "--ignore-nonprinting", "--month-sort", "--human-numeric-sort",
+        "--random-sort", "--version-sort", "--stable", "--zero-terminated",
+        "--check", "--key", "--field-separator", "--output", "--merge",
+        "--buffer-size", "--temporary-directory", "--parallel", "--sort",
+        "--debug", "--batch-size", "--compress-program", "--files0-from",
+        "--random-source",
+    };
+
     private sealed class KeySpec
     {
         public int StartField;
@@ -193,10 +218,28 @@ public sealed class InvokeBashSortCommand : PSCmdlet
                         case 'b': blankIgnore = true; break;
                         case 'd': dictOrder = true; break;
                         case 's': /* stable — always stable in our sort */ break;
+                        default:
+                            // Unknown short flag: valid-but-unsupported sort
+                            // option → specific refusal; else bash-parity
+                            // "invalid option". getopt stops at the first
+                            // offending char.
+                            FileSystemHelpers.WriteOptionError(this, "sort", "-" + ch, ValidButUnsupported);
+                            return;
                     }
                 }
                 i++;
                 continue;
+            }
+
+            // Any remaining option-looking token (a long flag this cmdlet does
+            // not parse, e.g. --reverse / --bogus) is NOT a file operand.
+            // Classify: valid-but-unsupported → specific refusal; otherwise
+            // bash-parity "unrecognized option". A lone "-" (stdin) is not
+            // option-like and falls through to operands.
+            if (FileSystemHelpers.IsOptionLike(arg))
+            {
+                FileSystemHelpers.WriteOptionError(this, "sort", arg, ValidButUnsupported);
+                return;
             }
 
             operands.Add(arg);

@@ -52,6 +52,50 @@ public class InvokeBashSortCommandTests : IDisposable, IClassFixture<SharedPwshF
         Assert.Equal(new[] { "apple", "banana", "cherry" }, lines);
     }
 
+    private (string[] outLines, string[] errors) RunWithErrors(string script)
+    {
+        var pwsh = _fixture.AcquireFresh();
+        pwsh.AddScript("$ErrorActionPreference='Continue'").Invoke();
+        pwsh.Commands.Clear();
+        var result = pwsh.AddScript(script).Invoke();
+        var errs = pwsh.Streams.Error.Select(e => e.Exception?.Message ?? e.ToString()).ToArray();
+        pwsh.Commands.Clear();
+        var outLines = result.Select(o =>
+            o?.Properties["BashText"]?.Value as string ?? o?.ToString() ?? "").ToArray();
+        return (outLines, errs);
+    }
+
+    [Fact]
+    public void Sort_ValidButUnsupportedLongForm_EmitsSpecificRefusal_NotFileError()
+    {
+        // --reverse is a real sort option (long form of -r) this cmdlet does
+        // not parse. It must say "not supported", NOT treat --reverse as a file.
+        var (_, errs) = RunWithErrors("'a','b' | Invoke-BashSort --reverse");
+        Assert.Contains(errs, m => m.Contains("not supported", StringComparison.OrdinalIgnoreCase)
+                                   && m.Contains("--reverse", StringComparison.Ordinal));
+        Assert.DoesNotContain(errs, m => m.Contains("No such file", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    public void Sort_ValidButUnsupportedShortFlag_G_EmitsSpecificRefusal()
+    {
+        // -g (general-numeric-sort) is a real sort flag ps-bash doesn't
+        // implement. (-g is used rather than -o because -o collides with the
+        // -OutBuffer/-OutVariable common parameters and is rejected by the
+        // binder before the cmdlet runs — a separate known collision class.)
+        var (_, errs) = RunWithErrors("'a','b' | Invoke-BashSort -g");
+        Assert.Contains(errs, m => m.Contains("not supported", StringComparison.OrdinalIgnoreCase)
+                                   && m.Contains("-g", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void Sort_UnrecognizedLongOption_BashParityMessage()
+    {
+        var (_, errs) = RunWithErrors("'a','b' | Invoke-BashSort --bogus");
+        Assert.Contains(errs, m => m.Contains("unrecognized option", StringComparison.OrdinalIgnoreCase)
+                                   && m.Contains("--bogus", StringComparison.Ordinal));
+    }
+
     [Fact]
     public void Sort_ReverseFlag_ReversesOrder()
     {
