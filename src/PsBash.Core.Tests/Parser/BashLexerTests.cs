@@ -103,6 +103,19 @@ public class BashLexerTests
     }
 
     [Fact]
+    public void Tokenize_CommandSubContainingCase_CapturedAsSingleToken()
+    {
+        // $(case ...) has an unmatched ')' in the arm pattern. The balanced-paren scan
+        // must skip it (not close the command-sub early), so the whole $(...) is one
+        // token — previously it truncated at `a)` into several tokens.
+        var tokens = Tokenize("x=$(case $y in a) echo MATCH;; esac)");
+
+        var withoutEof = tokens.Where(t => t.Kind != BashTokenKind.Eof).ToList();
+        Assert.Single(withoutEof);
+        Assert.Equal("x=$(case $y in a) echo MATCH;; esac)", withoutEof[0].Value);
+    }
+
+    [Fact]
     public void Tokenize_AssignmentWithCommand_ReturnsAssignmentAndWord()
     {
         var tokens = Tokenize("FOO=bar cmd");

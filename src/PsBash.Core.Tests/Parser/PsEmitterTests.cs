@@ -2159,6 +2159,29 @@ public class PsEmitterTests
     }
 
     [Fact]
+    public void Transpile_CommandSubContainingCase_DoesNotAbortParse()
+    {
+        // $(case $y in a) echo MATCH;; esac) — the pattern ')' must not close the
+        // command-sub early. Previously this threw a ParseException and aborted the
+        // whole transpile.
+        var ex = Record.Exception(() => PsEmitter.Transpile("echo $(case $y in a) echo MATCH;; esac)"));
+        Assert.Null(ex);
+
+        var result = PsEmitter.Transpile("echo $(case $y in a) echo MATCH;; esac)");
+        Assert.Contains("switch", result);   // case -> switch
+        Assert.Contains("MATCH", result);
+    }
+
+    [Fact]
+    public void Transpile_CommandSubCaseWithSubshellBody_DoesNotAbortParse()
+    {
+        // A subshell ( ... ) inside a case arm body: its ')' is a real close (deeper than
+        // the case depth), distinct from the pattern terminator ')'.
+        var ex = Record.Exception(() => PsEmitter.Transpile("x=$(case $y in a) (echo hi);; esac)"));
+        Assert.Null(ex);
+    }
+
+    [Fact]
     public void Transpile_DiffWithTwoInputProcessSubs()
     {
         var result = PsEmitter.Transpile("diff <(ls dir1) <(ls dir2)");

@@ -569,6 +569,12 @@ public static class BashLexer
     internal static int ScanBalancedParens(string input, int pos, int depth)
     {
         int len = input.Length;
+        // Case-arm pattern terminators introduce UNMATCHED ')' (e.g. `case $y in a) cmd;; esac`).
+        // A naive paren count closes the region early at the first pattern ')'. Track the paren
+        // depth at which each `case` opens: a ')' at exactly that depth is a pattern terminator
+        // (skip it), a ')' deeper is a real subshell close, and `esac` pops the case. The
+        // command-sub/process-sub closer is the ')' that brings depth to 0 with no open case.
+        var caseDepths = new List<int>();
         while (pos < len && depth > 0)
         {
             char c = input[pos];
@@ -576,11 +582,52 @@ public static class BashLexer
             if (c == '"') { pos = ScanDoubleQuoted(input, pos); continue; }
             if (c == '`') { pos = ScanBacktick(input, pos); continue; }
             if (c == '$' && pos + 1 < len && input[pos + 1] == '(') { pos = ScanDollarParen(input, pos); continue; }
+            if (c == 'c' && IsWordAt(input, pos, "case")) { caseDepths.Add(depth); pos += 4; continue; }
+            if (c == 'e' && IsWordAt(input, pos, "esac")) { if (caseDepths.Count > 0) caseDepths.RemoveAt(caseDepths.Count - 1); pos += 4; continue; }
             if (c == '(') { depth++; pos++; continue; }
-            if (c == ')') { depth--; pos++; continue; }
+            if (c == ')')
+            {
+                // A ')' at the depth where the innermost open `case` lives is that case's
+                // pattern terminator, not a paren close — skip it without changing depth.
+                if (caseDepths.Count > 0 && depth == caseDepths[^1])
+                {
+                    pos++;
+                    continue;
+                }
+                depth--;
+                pos++;
+                continue;
+            }
             pos++;
         }
         return pos;
+    }
+
+    /// <summary>
+    /// True when the reserved word <paramref name="kw"/> appears as a whole word at
+    /// <paramref name="pos"/> — i.e. bounded by start/end of input or a shell metachar /
+    /// whitespace on each side. Prevents matching `case` inside `lowercase`/`database`.
+    /// </summary>
+    private static bool IsWordAt(string s, int pos, string kw)
+    {
+        if (pos + kw.Length > s.Length)
+            return false;
+        if (string.CompareOrdinal(s, pos, kw, 0, kw.Length) != 0)
+            return false;
+        if (pos > 0)
+        {
+            char b = s[pos - 1];
+            if (!(char.IsWhiteSpace(b) || b is ';' or '(' or ')' or '&' or '|'))
+                return false;
+        }
+        int after = pos + kw.Length;
+        if (after < s.Length)
+        {
+            char a = s[after];
+            if (!(char.IsWhiteSpace(a) || a is ';' or ')' or '&' or '|'))
+                return false;
+        }
+        return true;
     }
 
     private static BashTokenKind ClassifyWord(string value)
