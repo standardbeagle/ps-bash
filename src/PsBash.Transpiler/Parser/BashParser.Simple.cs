@@ -106,6 +106,20 @@ public sealed partial class BashParser
 
             if (kind == BashTokenKind.Word)
             {
+                // Named-fd redirect prefix `{name}` before a redirect (bash
+                // allocates a free fd into $name). PowerShell has no dynamic fd
+                // allocation, so drop the prefix and let the redirect parse as a
+                // default-fd redirect (documented degrade). The lexer only emits a
+                // `{name}` Word when a redirect immediately follows.
+                if (IsNamedFdToken(Peek().Value)
+                    && _pos + 1 < _tokens.Count
+                    && (_tokens[_pos + 1].Kind == BashTokenKind.IoNumber
+                        || IsRedirectOp(_tokens[_pos + 1].Kind)))
+                {
+                    Advance(); // drop {name}
+                    continue;
+                }
+
                 // Stop at reserved words that delimit compound commands —
                 // but ONLY when they appear in the position bash itself
                 // treats as a keyword. Per bash man: reserved words are
@@ -403,6 +417,21 @@ public sealed partial class BashParser
         var target = new CompoundWord(targetParts);
 
         return new Redirect(op, fd, target);
+    }
+
+    /// <summary>True for a <c>{varname}</c> named-fd prefix token (the lexer only
+    /// emits this Word shape when a redirect immediately follows).</summary>
+    private static bool IsNamedFdToken(string s)
+    {
+        if (s.Length < 3 || s[0] != '{' || s[^1] != '}')
+            return false;
+        string inner = s[1..^1];
+        if (!(char.IsLetter(inner[0]) || inner[0] == '_'))
+            return false;
+        foreach (var ch in inner)
+            if (!(char.IsLetterOrDigit(ch) || ch == '_'))
+                return false;
+        return true;
     }
 
     private static bool IsRedirectOp(BashTokenKind kind) =>

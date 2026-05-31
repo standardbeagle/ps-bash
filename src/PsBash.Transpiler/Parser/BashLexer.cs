@@ -171,6 +171,18 @@ public static class BashLexer
                 continue;
             }
 
+            // Named-fd redirect prefix: {name}>file / {name}<file (bash allocates
+            // a free fd into $name). Emit {name} as a Word so it is NOT lexed as
+            // LBrace — otherwise the parser tries to parse a brace group and throws
+            // on the common `exec {fd}>file` idiom. The fd allocation has no
+            // PowerShell equivalent; the parser drops the prefix (documented degrade).
+            if (c == '{' && TryScanNamedFd(input, pos, out int nfdEnd))
+            {
+                tokens.Add(new BashToken(BashTokenKind.Word, input[pos..nfdEnd], pos));
+                pos = nfdEnd;
+                continue;
+            }
+
             // Single-character operators.
             BashTokenKind? oneKind = c switch
             {
@@ -220,6 +232,30 @@ public static class BashLexer
     /// <c>{</c> followed by content containing <c>,</c> or <c>..</c>, ending with <c>}</c>,
     /// with no unquoted whitespace inside.
     /// </summary>
+    /// <summary>
+    /// Detect a named-fd redirect prefix <c>{varname}</c> immediately followed
+    /// (no gap) by a redirect operator (<c>&lt;</c> or <c>&gt;</c>), e.g.
+    /// <c>{fd}&gt;file</c>. On success <paramref name="end"/> is the position of
+    /// the redirect operator (so the caller emits <c>{varname}</c> as one Word).
+    /// </summary>
+    private static bool TryScanNamedFd(string input, int pos, out int end)
+    {
+        end = pos;
+        int len = input.Length;
+        int p = pos + 1; // after '{'
+        if (p >= len || !(char.IsLetter(input[p]) || input[p] == '_'))
+            return false;
+        while (p < len && (char.IsLetterOrDigit(input[p]) || input[p] == '_'))
+            p++;
+        if (p >= len || input[p] != '}')
+            return false;
+        p++; // after '}'
+        if (p >= len || (input[p] != '>' && input[p] != '<'))
+            return false;
+        end = p; // Word spans {name}; redirect operator starts here.
+        return true;
+    }
+
     private static bool IsBraceExpansion(string input, int pos)
     {
         int len = input.Length;

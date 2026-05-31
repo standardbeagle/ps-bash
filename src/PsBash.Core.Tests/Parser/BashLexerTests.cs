@@ -66,6 +66,28 @@ public class BashLexerTests
     }
 
     [Fact]
+    public void Tokenize_NamedFdRedirect_EmitsBraceNameAsWord_NotLBrace()
+    {
+        // {fd}>file — bash named-fd redirect. Must lex {fd} as one Word (not
+        // LBrace Word RBrace), else the parser mis-reads a brace group and throws.
+        var tokens = Tokenize("exec {fd}>output.txt");
+
+        AssertTokens(tokens,
+            (BashTokenKind.Word, "exec"),
+            (BashTokenKind.Word, "{fd}"),
+            (BashTokenKind.Great, ">"),
+            (BashTokenKind.Word, "output.txt"));
+    }
+
+    [Fact]
+    public void Tokenize_BraceGroup_StillLBrace_NotNamedFd()
+    {
+        // `{ echo hi; }` — a real brace group (space after `{`) must stay LBrace.
+        var tokens = Tokenize("{ echo hi; }");
+        Assert.Equal(BashTokenKind.LBrace, tokens[0].Kind);
+    }
+
+    [Fact]
     public void Tokenize_AmpGreat_RedirectBothStreams()
     {
         // `&>` must beat the single-char `&` (Amp): without a dedicated token

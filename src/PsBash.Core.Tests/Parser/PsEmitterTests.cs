@@ -232,6 +232,27 @@ public class PsEmitterTests
     }
 
     [Fact]
+    public void Transpile_NamedFdRedirect_DoesNotCrash_DropsPrefix()
+    {
+        // {fd}>file used to crash (mis-parsed as a brace group). Now it parses;
+        // the named-fd capture has no PowerShell equivalent so it degrades to a
+        // plain redirect (the {fd} prefix is dropped, not left as an operand).
+        var result = PsEmitter.Transpile("cmd {fd}>out.txt");
+        // ps-bash emits stdout-to-file via Invoke-BashRedirect; the point is it
+        // parses (no crash) and the {fd} prefix is gone.
+        Assert.Equal("cmd | Invoke-BashRedirect -Path out.txt", result);
+        Assert.DoesNotContain("{fd}", result);
+    }
+
+    [Fact]
+    public void Transpile_BraceGroup_StillWorks_NotNamedFd()
+    {
+        // Regression: a real brace group is unaffected by the named-fd lexer rule.
+        var result = PsEmitter.Transpile("{ echo hi; }");
+        Assert.Contains("Invoke-BashEcho hi", result);
+    }
+
+    [Fact]
     public void Transpile_CloseStdout_DiscardsToNull()
     {
         // `>&-` closes stdout; PowerShell has no fd-close, so discard to $null.
