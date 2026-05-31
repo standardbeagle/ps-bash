@@ -2534,6 +2534,16 @@ public static class PsEmitter
             return $"{open}{varRef} -replace '^{pattern}','')";
         }
 
+        // Name-prefix expansion: ${!prefix*} / ${!prefix@} -> the NAMES of
+        // variables starting with `prefix`. ps-bash models bash variables as
+        // env vars, so match over env:. (bash * joins on IFS, @ keeps words
+        // separate; both yield the same name set here.)
+        if (bvs.Suffix == "!names")
+        {
+            string expr = $"@(Get-ChildItem env: | Where-Object {{ $_.Name -like '{bvs.Name}*' }} | ForEach-Object {{ $_.Name }})";
+            return inDoubleQuote ? $"$({expr})" : expr;
+        }
+
         // Array keys: ${!arr[@]} -> $arr.Keys (or $($arr.Keys) in double quotes)
         if (bvs.Suffix.StartsWith("!"))
             return inDoubleQuote ? $"$(${bvs.Name}.Keys)" : $"${bvs.Name}.Keys";

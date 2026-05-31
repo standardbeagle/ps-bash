@@ -226,6 +226,20 @@ public sealed partial class BashParser
             while (pos < len && IsVarChar(raw[pos]))
                 pos++;
             string name = raw[nameStart..pos];
+
+            // ${!prefix*} / ${!prefix@} — names of variables whose name starts
+            // with `prefix` (distinct from the ${!arr[@]} keys form). The `*`/`@`
+            // comes immediately after the name with no `[`. Without this it fell
+            // through and mis-emitted $prefix.Keys.
+            if (pos < len && (raw[pos] == '*' || raw[pos] == '@'))
+            {
+                pos++; // skip * or @
+                if (pos < len && raw[pos] == '}')
+                    pos++; // skip }
+                parts.Add(new WordPart.BracedVarSub(name, "!names"));
+                return pos;
+            }
+
             string keysSuffix = "![@]";
             if (pos < len && raw[pos] == '[')
             {

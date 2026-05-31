@@ -129,6 +129,37 @@ public class PsEmitterTests
     }
 
     [Fact]
+    public void Transpile_NamePrefixIndirection_Star_ExpandsNames()
+    {
+        // ${!FOO*} = names of variables starting with FOO (NOT $FOO.Keys).
+        var result = PsEmitter.Transpile("echo ${!FOO*}");
+
+        Assert.Contains("Get-ChildItem env:", result);
+        Assert.Contains("-like 'FOO*'", result);
+        Assert.DoesNotContain(".Keys", result);
+    }
+
+    [Fact]
+    public void Transpile_NamePrefixIndirection_At_ExpandsNames()
+    {
+        var result = PsEmitter.Transpile("echo ${!FOO@}");
+
+        Assert.Contains("Get-ChildItem env:", result);
+        Assert.Contains("-like 'FOO*'", result);
+    }
+
+    [Fact]
+    public void Transpile_ArrayKeysIndirection_Unaffected()
+    {
+        // Regression guard: ${!arr[@]} (keys) must still map to $arr.Keys, NOT
+        // the name-prefix expansion.
+        var result = PsEmitter.Transpile("echo ${!arr[@]}");
+
+        Assert.Contains(".Keys", result);
+        Assert.DoesNotContain("Get-ChildItem", result);
+    }
+
+    [Fact]
     public void Transpile_CloseStdout_DiscardsToNull()
     {
         // `>&-` closes stdout; PowerShell has no fd-close, so discard to $null.
