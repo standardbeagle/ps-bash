@@ -2018,7 +2018,15 @@ public static class PsEmitter
         // a double-quoted context — matching bash IFS default-field-splitting.
         WordPart.CommandSub cs => $"$({Emit((Command)cs.Body)} | ForEach-Object {{ Get-BashText $_ }})",
         WordPart.ArithSub arith => EmitArithSub(arith),
-        WordPart.TildeSub ts => ts.User is null ? "$HOME" : $"~{ts.User}",
+        WordPart.TildeSub ts => ts.User switch
+        {
+            null => "$HOME",
+            "+" => "$PWD",          // ~+  -> $PWD
+            "-" => "$env:OLDPWD",   // ~-  -> $OLDPWD
+            // ~user / ~N (dirstack) have no faithful PowerShell equivalent; keep
+            // the literal `~user` (degrade) rather than emitting a bogus var.
+            _ => $"~{ts.User}",
+        },
         WordPart.GlobPart gp => gp.Pattern,
         WordPart.BracedTuple bt => FormatBraceArray(new List<string>(bt.Items)),
         WordPart.BracedRange br => FormatBraceArray(ExpandBrace(br)),

@@ -129,6 +129,40 @@ public class PsEmitterTests
     }
 
     [Fact]
+    public void Transpile_TildePlus_MapsToPwd()
+    {
+        // ~+ -> $PWD (was emitted as the literal ~+).
+        var result = PsEmitter.Transpile("echo ~+");
+        Assert.Contains("$PWD", result);
+        Assert.DoesNotContain("~+", result);
+    }
+
+    [Fact]
+    public void Transpile_TildeMinus_MapsToOldPwd()
+    {
+        var result = PsEmitter.Transpile("echo ~-");
+        Assert.Contains("$env:OLDPWD", result);
+        Assert.DoesNotContain("~-", result);
+    }
+
+    [Fact]
+    public void Transpile_TildeSlash_StillHome()
+    {
+        // Regression guard: plain ~/path is unchanged ($HOME ...).
+        var result = PsEmitter.Transpile("echo ~/bin");
+        Assert.Contains("$HOME", result);
+        Assert.DoesNotContain("$PWD", result);
+    }
+
+    [Fact]
+    public void Transpile_TildeUser_KeptLiteral()
+    {
+        // ~user has no PowerShell equivalent; kept literal (degrade), not a bogus var.
+        var result = PsEmitter.Transpile("echo ~alice");
+        Assert.Contains("~alice", result);
+    }
+
+    [Fact]
     public void Transpile_NamePrefixIndirection_Star_ExpandsNames()
     {
         // ${!FOO*} = names of variables starting with FOO (NOT $FOO.Keys).
