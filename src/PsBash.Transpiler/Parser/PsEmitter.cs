@@ -2473,23 +2473,44 @@ public static class PsEmitter
         if (bvs.Suffix is null)
             return EmitSimpleVar(bvs.Name);
 
-        // Array subscript access: ${arr[0]}, ${arr[@]}, ${arr[*]}, ${arr[key]}
-        if (bvs.Suffix.StartsWith('[') && bvs.Suffix.EndsWith(']'))
+        // Array subscript access: ${arr[0]}, ${arr[@]}, ${arr[*]}, ${arr[key]}, plus
+        // the subscript-PLUS-operator forms ${arr[@]:1:2}, ${arr[0]##*/}, ${arr[i]:-x}.
+        if (bvs.Suffix.StartsWith('['))
         {
-            string subscript = bvs.Suffix[1..^1]; // strip [ and ]
-            // Special bash array vars use their mapped name, not $Name
-            string arrayVar = bvs.Name switch
+            int close = bvs.Suffix.IndexOf(']');
+            if (close > 0)
             {
-                "BASH_VERSINFO" => "$global:BashVersionInfo",
-                var n => $"${n}"
-            };
-            if (subscript is "@" or "*")
-                return arrayVar; // ${arr[@]} -> $arr (whole array)
-            // Numeric subscript: ${arr[0]} -> $arr[0] (or $($arr[0]) in double quotes)
-            if (int.TryParse(subscript, out _))
-                return inDoubleQuote ? $"$({arrayVar}[{subscript}])" : $"{arrayVar}[{subscript}]";
-            // Associative key: ${map[key]} -> $map['key']
-            return inDoubleQuote ? $"$({arrayVar}['{subscript}'])" : $"{arrayVar}['{subscript}']";
+                string subscript = bvs.Suffix[1..close];
+                string subOp = bvs.Suffix[(close + 1)..]; // trailing operator, "" if none
+                // Special bash array vars use their mapped name, not $Name
+                string arrayVar = bvs.Name switch
+                {
+                    "BASH_VERSINFO" => "$global:BashVersionInfo",
+                    var n => $"${n}"
+                };
+
+                if (subOp.Length == 0)
+                {
+                    if (subscript is "@" or "*")
+                        return arrayVar; // ${arr[@]} -> $arr (whole array)
+                    if (int.TryParse(subscript, out _))
+                        return inDoubleQuote ? $"$({arrayVar}[{subscript}])" : $"{arrayVar}[{subscript}]";
+                    return inDoubleQuote ? $"$({arrayVar}['{subscript}'])" : $"{arrayVar}['{subscript}']";
+                }
+
+                // Whole-array operator: only slicing (${arr[@]:off:len}) maps cleanly to
+                // a PowerShell range index; other ops degrade to the whole array.
+                if (subscript is "@" or "*")
+                    return EmitArraySlice(arrayVar, subOp, inDoubleQuote) ?? arrayVar;
+
+                // Single element: the indexed value is a scalar string — apply the same
+                // scalar suffix operator the plain-variable path uses.
+                string elemRef = int.TryParse(subscript, out _)
+                    ? $"{arrayVar}[{subscript}]"
+                    : $"{arrayVar}['{subscript}']";
+                return EmitScalarSuffix(elemRef, subOp, inDoubleQuote)
+                    ?? (inDoubleQuote ? $"$({elemRef})" : elemRef);
+            }
         }
 
         // Array length: ${#arr[@]} or ${#arr[*]} -> $arr.Count
@@ -2501,94 +2522,6 @@ public static class PsEmitter
         }
 
         string varRef = EmitSimpleVar(bvs.Name);
-        string open = inDoubleQuote ? "$(" : "(";
-        char q = inDoubleQuote ? '\'' : '"';
-
-        // Length: ${#VAR}
-        if (bvs.Suffix == "#")
-            return inDoubleQuote ? $"$({varRef}.Length)" : $"{varRef}.Length";
-
-        // Default value: ${VAR:-default}
-        if (bvs.Suffix.StartsWith(":-"))
-        {
-            string defaultVal = bvs.Suffix[2..];
-            return $"{open}{varRef} ?? {q}{defaultVal}{q})";
-        }
-
-        // Assign default: ${VAR:=default}
-        if (bvs.Suffix.StartsWith(":="))
-        {
-            string defaultVal = bvs.Suffix[2..];
-            return $"{open}{varRef} ?? ({varRef} = {q}{defaultVal}{q}))";
-        }
-
-        // Use alternative: ${VAR:+alt}
-        if (bvs.Suffix.StartsWith(":+"))
-        {
-            string alt = bvs.Suffix[2..];
-            return $"{open}{varRef} ? {q}{alt}{q} : {q}{q})";
-        }
-
-        // Error if unset: ${VAR:?message}
-        if (bvs.Suffix.StartsWith(":?"))
-        {
-            string msg = bvs.Suffix[2..];
-            return $"{open}{varRef} ?? $(throw {q}{msg}{q}))";
-        }
-
-        // Colon-less unset-only variants: ${VAR-w} ${VAR=w} ${VAR+w} ${VAR?msg}.
-        // Bash distinguishes these (act only when UNSET) from the `:`-prefixed forms
-        // (act when unset OR empty); ps-bash models vars as env vars where `$env:X`
-        // is $null when unset, so `??` already approximates the unset-only test.
-        // Mapping both families to the same PowerShell is the documented 80/20 — the
-        // operator must never be silently dropped (the bug this fixes).
-        if (bvs.Suffix.StartsWith("-"))
-        {
-            string defaultVal = bvs.Suffix[1..];
-            return $"{open}{varRef} ?? {q}{defaultVal}{q})";
-        }
-        if (bvs.Suffix.StartsWith("="))
-        {
-            string defaultVal = bvs.Suffix[1..];
-            return $"{open}{varRef} ?? ({varRef} = {q}{defaultVal}{q}))";
-        }
-        if (bvs.Suffix.StartsWith("+"))
-        {
-            string alt = bvs.Suffix[1..];
-            return $"{open}{varRef} ? {q}{alt}{q} : {q}{q})";
-        }
-        if (bvs.Suffix.StartsWith("?"))
-        {
-            string msg = bvs.Suffix[1..];
-            return $"{open}{varRef} ?? $(throw {q}{msg}{q}))";
-        }
-
-        // Remove suffix: ${VAR%%pattern} or ${VAR%pattern}
-        // Bash globs use * and ? which are not valid regex without translation.
-        // %%pat: longest suffix match (greedy). %pat: shortest suffix match (lazy).
-        if (bvs.Suffix.StartsWith("%%"))
-        {
-            string pattern = GlobToRegex(bvs.Suffix[2..], lazy: false);
-            return $"{open}{varRef} -replace '{pattern}$','')";
-        }
-        if (bvs.Suffix.StartsWith("%"))
-        {
-            string pattern = GlobToRegex(bvs.Suffix[1..], lazy: true);
-            return $"{open}{varRef} -replace '{pattern}$','')";
-        }
-
-        // Remove prefix: ${VAR##pattern} or ${VAR#pattern}
-        // ##pat: longest prefix match (greedy). #pat: shortest prefix match (lazy).
-        if (bvs.Suffix.StartsWith("##"))
-        {
-            string pattern = GlobToRegex(bvs.Suffix[2..], lazy: false);
-            return $"{open}{varRef} -replace '^{pattern}','')";
-        }
-        if (bvs.Suffix.StartsWith("#"))
-        {
-            string pattern = GlobToRegex(bvs.Suffix[1..], lazy: true);
-            return $"{open}{varRef} -replace '^{pattern}','')";
-        }
 
         // Name-prefix expansion: ${!prefix*} / ${!prefix@} -> the NAMES of
         // variables starting with `prefix`. ps-bash models bash variables as
@@ -2604,34 +2537,82 @@ public static class PsEmitter
         if (bvs.Suffix.StartsWith("!"))
             return inDoubleQuote ? $"$(${bvs.Name}.Keys)" : $"${bvs.Name}.Keys";
 
-        // Replace first: ${VAR/find/replace}
-        // Use instance overload ([regex]pattern).Replace(str, rep, count) so only
-        // the first occurrence is replaced. The static [regex]::Replace overload's
-        // 4th parameter is RegexOptions (int), not count — it would replace all.
-        if (bvs.Suffix.StartsWith("/") && !bvs.Suffix.StartsWith("//"))
+        // Scalar suffix operators (default/assign/alt/error, removal, replace, slice,
+        // case, @-transform). Shared with array-element expansions like ${arr[0]##*/}.
+        return EmitScalarSuffix(varRef, bvs.Suffix, inDoubleQuote) ?? varRef;
+    }
+
+    // Emit a scalar parameter-expansion suffix operator applied to an arbitrary base
+    // reference (a plain variable, or an array element like `$arr[0]`). Returns null if
+    // `suffix` is not a scalar operator handled here — the caller falls back to the bare
+    // reference. Keeping this independent of the variable name lets ${arr[0]##*/},
+    // ${arr[i]:-x}, etc. reuse the exact same operator semantics as ${VAR##*/}.
+    private static string? EmitScalarSuffix(string varRef, string suffix, bool inDoubleQuote)
+    {
+        string open = inDoubleQuote ? "$(" : "(";
+        char q = inDoubleQuote ? '\'' : '"';
+
+        // Length: ${#VAR}
+        if (suffix == "#")
+            return inDoubleQuote ? $"$({varRef}.Length)" : $"{varRef}.Length";
+
+        // Default value: ${VAR:-default}
+        if (suffix.StartsWith(":-"))
+            return $"{open}{varRef} ?? {q}{suffix[2..]}{q})";
+        // Assign default: ${VAR:=default}
+        if (suffix.StartsWith(":="))
+            return $"{open}{varRef} ?? ({varRef} = {q}{suffix[2..]}{q}))";
+        // Use alternative: ${VAR:+alt}
+        if (suffix.StartsWith(":+"))
+            return $"{open}{varRef} ? {q}{suffix[2..]}{q} : {q}{q})";
+        // Error if unset: ${VAR:?message}
+        if (suffix.StartsWith(":?"))
+            return $"{open}{varRef} ?? $(throw {q}{suffix[2..]}{q}))";
+
+        // Colon-less unset-only variants: ${VAR-w} ${VAR=w} ${VAR+w} ${VAR?msg}.
+        // Bash distinguishes these (act only when UNSET) from the `:`-prefixed forms
+        // (act when unset OR empty); ps-bash models vars as env vars where `$env:X`
+        // is $null when unset, so `??` already approximates the unset-only test.
+        if (suffix.StartsWith("-"))
+            return $"{open}{varRef} ?? {q}{suffix[1..]}{q})";
+        if (suffix.StartsWith("="))
+            return $"{open}{varRef} ?? ({varRef} = {q}{suffix[1..]}{q}))";
+        if (suffix.StartsWith("+"))
+            return $"{open}{varRef} ? {q}{suffix[1..]}{q} : {q}{q})";
+        if (suffix.StartsWith("?"))
+            return $"{open}{varRef} ?? $(throw {q}{suffix[1..]}{q}))";
+
+        // Remove suffix: ${VAR%%pattern} (greedy) / ${VAR%pattern} (lazy).
+        if (suffix.StartsWith("%%"))
+            return $"{open}{varRef} -replace '{GlobToRegex(suffix[2..], lazy: false)}$','')";
+        if (suffix.StartsWith("%"))
+            return $"{open}{varRef} -replace '{GlobToRegex(suffix[1..], lazy: true)}$','')";
+
+        // Remove prefix: ${VAR##pattern} (greedy) / ${VAR#pattern} (lazy).
+        if (suffix.StartsWith("##"))
+            return $"{open}{varRef} -replace '^{GlobToRegex(suffix[2..], lazy: false)}','')";
+        if (suffix.StartsWith("#"))
+            return $"{open}{varRef} -replace '^{GlobToRegex(suffix[1..], lazy: true)}','')";
+
+        // Replace first: ${VAR/find/replace} — instance overload .Replace(str, rep, 1).
+        if (suffix.StartsWith("/") && !suffix.StartsWith("//"))
         {
-            var parts = bvs.Suffix[1..].Split('/', 2);
+            var parts = suffix[1..].Split('/', 2);
             string find = parts[0], replace = parts.Length > 1 ? parts[1] : "";
             return $"{open}([regex][regex]::Escape('{find}')).Replace({varRef}, '{replace}', 1))";
         }
-
-        // Replace all: ${VAR//find/replace}
-        if (bvs.Suffix.StartsWith("//"))
+        // Replace all: ${VAR//find/replace} — escape find literally; 2-arg overload = all.
+        if (suffix.StartsWith("//"))
         {
-            var parts = bvs.Suffix[2..].Split('/', 2);
+            var parts = suffix[2..].Split('/', 2);
             string find = parts[0], replace = parts.Length > 1 ? parts[1] : "";
-            // Escape `find` literally (bash patterns here are globs/literals, not .NET
-            // regex) — same treatment as the replace-first `/` branch above. The 2-arg
-            // [regex].Replace(str, rep) overload replaces ALL occurrences. Using raw
-            // `-replace '{find}'` was a regex-injection bug: `${p//./_}` matched every
-            // char instead of the literal dot.
             return $"{open}([regex][regex]::Escape('{find}')).Replace({varRef}, '{replace}'))";
         }
 
         // Slice: ${VAR:offset:length} or ${VAR:offset}
-        if (bvs.Suffix.StartsWith(":") && bvs.Suffix.Length > 1 && (char.IsDigit(bvs.Suffix[1]) || bvs.Suffix[1] == '-'))
+        if (suffix.StartsWith(":") && suffix.Length > 1 && (char.IsDigit(suffix[1]) || suffix[1] == '-'))
         {
-            var sliceParts = bvs.Suffix[1..].Split(':', 2);
+            var sliceParts = suffix[1..].Split(':', 2);
             if (sliceParts.Length == 2 && int.TryParse(sliceParts[0], out int offset) && int.TryParse(sliceParts[1], out int length))
                 return inDoubleQuote ? $"$({varRef}.Substring({offset}, {length}))" : $"{varRef}.Substring({offset}, {length})";
             if (int.TryParse(sliceParts[0], out int off2))
@@ -2639,44 +2620,67 @@ public static class PsEmitter
         }
 
         // Case conversion: ${VAR^^} ${VAR,,} ${VAR^} ${VAR,}
-        if (bvs.Suffix == "^^")
+        if (suffix == "^^")
             return inDoubleQuote ? $"$({varRef}.ToUpper())" : $"{varRef}.ToUpper()";
-        if (bvs.Suffix == ",,")
+        if (suffix == ",,")
             return inDoubleQuote ? $"$({varRef}.ToLower())" : $"{varRef}.ToLower()";
-        if (bvs.Suffix == "^")
+        if (suffix == "^")
             return $"{open}{varRef}.Substring(0,1).ToUpper() + {varRef}.Substring(1))";
-        if (bvs.Suffix == ",")
+        if (suffix == ",")
             return $"{open}{varRef}.Substring(0,1).ToLower() + {varRef}.Substring(1))";
 
-        // Transform operators ${VAR@op} (bash 4.4+/5.1). Must not silently drop the
-        // operator. @Q (quote-for-reuse) and the case transforms map cleanly; @E/@P/@A/@a
-        // have no PowerShell equivalent and degrade to the bare value (documented gap,
-        // emitter-strategy.md §6 EmitBracedVar) rather than being dropped without a trace.
-        if (bvs.Suffix.StartsWith("@") && bvs.Suffix.Length >= 2)
+        // Transform operators ${VAR@op} (bash 4.4+/5.1). @Q (quote-for-reuse) and the case
+        // transforms map cleanly; @E/@P/@A/@a have no PowerShell equivalent and degrade to
+        // the bare value (documented gap, emitter-strategy.md §6) — never silently dropped.
+        if (suffix.StartsWith("@") && suffix.Length >= 2)
         {
-            switch (bvs.Suffix[1])
+            switch (suffix[1])
             {
-                // @Q: single-quote the value so it can be reused as shell input.
-                // Matches bash: 'a b', and a' -> 'a'\''  ('-escaping via '\'').
                 case 'Q':
                     return $"{open}\"'\" + ({varRef} -replace \"'\",\"'\\''\") + \"'\")";
-                case 'U': // uppercase all
+                case 'U':
                     return inDoubleQuote ? $"$({varRef}.ToUpper())" : $"{varRef}.ToUpper()";
-                case 'L': // lowercase all
+                case 'L':
                     return inDoubleQuote ? $"$({varRef}.ToLower())" : $"{varRef}.ToLower()";
-                case 'u': // uppercase first char
+                case 'u':
                     return $"{open}{varRef}.Substring(0,1).ToUpper() + {varRef}.Substring(1))";
-                case 'l': // lowercase first char
+                case 'l':
                     return $"{open}{varRef}.Substring(0,1).ToLower() + {varRef}.Substring(1))";
-                // @E (escape-expand), @P (prompt-expand), @A (assignment form), @a (attr flags):
-                // no faithful PowerShell mapping — preserve the value, drop only the transform.
                 default:
                     return varRef;
             }
         }
 
-        // Fallback: emit as-is
-        return varRef;
+        return null;
+    }
+
+    // Emit a bash array slice ${arr[@]:offset[:length]} as a PowerShell range index.
+    // Returns null when `op` is not a `:`-prefixed numeric slice (caller degrades to the
+    // whole array). bash element indices map directly: offset..(offset+length-1), and
+    // negative offsets index from the end (PowerShell supports negative range bounds).
+    private static string? EmitArraySlice(string arrayVar, string op, bool inDoubleQuote)
+    {
+        if (!op.StartsWith(":"))
+            return null;
+        var body = op[1..].Trim();
+        var parts = body.Split(':', 2);
+        if (!int.TryParse(parts[0].Trim(), out int offset))
+            return null;
+
+        string expr;
+        if (parts.Length == 2)
+        {
+            if (!int.TryParse(parts[1].Trim(), out int length))
+                return null;
+            expr = length <= 0 ? "@()" : $"{arrayVar}[{offset}..{offset + length - 1}]";
+        }
+        else
+        {
+            // No length: from offset to the end. A negative offset runs to index -1.
+            string end = offset < 0 ? "-1" : $"({arrayVar}.Count - 1)";
+            expr = $"{arrayVar}[{offset}..{end}]";
+        }
+        return inDoubleQuote ? $"$({expr})" : expr;
     }
 
     private static void AppendDoubleQuotedInner(StringBuilder sb, ImmutableArray<WordPart> parts)

@@ -384,7 +384,8 @@ public sealed partial class BashParser
             pos++;
         string varName = raw[varStart..pos];
 
-        // Check for array subscript: ${arr[0]}, ${arr[@]}, ${arr[key]}
+        // Check for array subscript: ${arr[0]}, ${arr[@]}, ${arr[key]}, and the
+        // subscript-PLUS-operator forms ${arr[@]:1:2}, ${arr[0]##*/}, ${arr[i]:-x}.
         if (pos < len && raw[pos] == '[')
         {
             int subStart = pos;
@@ -394,6 +395,23 @@ public sealed partial class BashParser
             if (pos < len)
                 pos++; // skip ]
             string subscript = raw[subStart..pos];
+
+            // A suffix operator may follow the subscript (slice / removal / default
+            // applied to the indexed or @-expanded value). Capture everything up to
+            // the matching '}' as part of the suffix so EmitBracedVar can apply it —
+            // previously this branch returned early and the operator was dropped.
+            if (pos < len && raw[pos] != '}')
+            {
+                int opStart = pos;
+                int braceDepth = 1;
+                while (pos < len && braceDepth > 0)
+                {
+                    if (raw[pos] == '{') braceDepth++;
+                    else if (raw[pos] == '}') braceDepth--;
+                    if (braceDepth > 0) pos++;
+                }
+                subscript += raw[opStart..pos];
+            }
 
             if (pos < len && raw[pos] == '}')
                 pos++; // skip }

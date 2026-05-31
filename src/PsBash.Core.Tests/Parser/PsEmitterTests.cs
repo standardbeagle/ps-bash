@@ -985,6 +985,51 @@ public class PsEmitterTests
     }
 
     [Fact]
+    public void Transpile_ArraySliceOffsetLength_EmitsRangeIndex()
+    {
+        // ${a[@]:1:2} -> elements at index 1,2 -> PowerShell range index $a[1..2].
+        var result = PsEmitter.Transpile("echo ${a[@]:1:2}");
+        Assert.Equal("Invoke-BashEcho $a[1..2]", result);
+    }
+
+    [Fact]
+    public void Transpile_ArraySliceOffsetOnly_EmitsRangeToEnd()
+    {
+        var result = PsEmitter.Transpile("echo ${a[@]:2}");
+        Assert.Equal("Invoke-BashEcho $a[2..($a.Count - 1)]", result);
+    }
+
+    [Fact]
+    public void Transpile_ArraySliceNegativeOffset_EmitsTailRange()
+    {
+        // ${arr[@]: -2} -> last 2 elements -> $arr[-2..-1].
+        var result = PsEmitter.Transpile("echo ${arr[@]: -2}");
+        Assert.Equal("Invoke-BashEcho $arr[-2..-1]", result);
+    }
+
+    [Fact]
+    public void Transpile_ArrayElementDefault_AppliesScalarOpToElement()
+    {
+        // ${arr[0]:-x} -> the operator must apply to the indexed value, not be dropped.
+        var result = PsEmitter.Transpile("echo ${arr[0]:-x}");
+        Assert.Equal("Invoke-BashEcho ($arr[0] ?? \"x\")", result);
+    }
+
+    [Fact]
+    public void Transpile_ArrayElementSlice_AppliesSubstringToElement()
+    {
+        var result = PsEmitter.Transpile("echo ${c[1]:0:2}");
+        Assert.Equal("Invoke-BashEcho $c[1].Substring(0, 2)", result);
+    }
+
+    [Fact]
+    public void Transpile_AssocElementAlternative_AppliesScalarOpToKey()
+    {
+        var result = PsEmitter.Transpile("echo ${m[key]:+yes}");
+        Assert.Equal("Invoke-BashEcho ($m['key'] ? \"yes\" : \"\")", result);
+    }
+
+    [Fact]
     public void Transpile_BracedVarSuffixRemoval_EmitsReplace()
     {
         var result = PsEmitter.Transpile("echo ${VAR%%pattern}");

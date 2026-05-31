@@ -588,6 +588,30 @@ public class BashParserTests
     }
 
     [Fact]
+    public void Parse_BracedVarSubscriptWithSliceOp_CapturesSubscriptAndOperator()
+    {
+        // ${a[@]:1:2}: the subscript branch must capture the trailing `:1:2` operator
+        // into the suffix, not return early and drop it.
+        var result = Parse("echo ${a[@]:1:2}");
+
+        var simple = Assert.IsType<Command.Simple>(result);
+        var bvs = Assert.IsType<WordPart.BracedVarSub>(Assert.Single(simple.Words[1].Parts));
+        Assert.Equal("a", bvs.Name);
+        Assert.Equal("[@]:1:2", bvs.Suffix);
+    }
+
+    [Fact]
+    public void Parse_BracedVarSubscriptWithRemovalOp_CapturesSubscriptAndOperator()
+    {
+        var result = Parse("echo ${arr[0]##*/}");
+
+        var simple = Assert.IsType<Command.Simple>(result);
+        var bvs = Assert.IsType<WordPart.BracedVarSub>(Assert.Single(simple.Words[1].Parts));
+        Assert.Equal("arr", bvs.Name);
+        Assert.Equal("[0]##*/", bvs.Suffix);
+    }
+
+    [Fact]
     public void Parse_BracedVarLength_ReturnsBracedVarSubWithHashSuffix()
     {
         var result = Parse("echo ${#VAR}");
