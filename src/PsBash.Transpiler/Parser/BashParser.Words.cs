@@ -57,6 +57,14 @@ public sealed partial class BashParser
             {
                 pos = ParseAnsiCQuoted(raw, pos, parts);
             }
+            else if (c == '$' && pos + 1 < len && raw[pos + 1] == '"')
+            {
+                // Locale-translation quoting $"...": with no message catalog this
+                // is identical to a plain double-quoted string. Bash strips the $;
+                // drop it and parse the body as double-quoted (skip the $, parse
+                // from the opening "). Without this, the $ was kept as a literal.
+                pos = ParseDoubleQuoted(raw, pos + 1, parts);
+            }
             else if (c == '$' && pos + 1 < len && raw[pos + 1] == '{')
             {
                 pos = ParseBracedVar(raw, pos, parts);

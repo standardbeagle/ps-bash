@@ -129,6 +129,28 @@ public class PsEmitterTests
     }
 
     [Fact]
+    public void Transpile_LocaleQuoting_DropsDollar_SameAsDoubleQuote()
+    {
+        // $"..." = locale translation; with no catalog it is identical to a plain
+        // double-quoted string. Bash strips the $; ps-bash must not emit a stray $.
+        var localized = PsEmitter.Transpile("echo $\"hello world\"");
+        var plain = PsEmitter.Transpile("echo \"hello world\"");
+
+        Assert.Equal(plain, localized);
+        Assert.DoesNotContain("$\"", localized);
+    }
+
+    [Fact]
+    public void Transpile_LocaleQuoting_WithVariable_ExpandsLikeDoubleQuote()
+    {
+        // $"...$x..." still expands $x (double-quote semantics), just no leading $.
+        var localized = PsEmitter.Transpile("echo $\"hi $USER\"");
+        var plain = PsEmitter.Transpile("echo \"hi $USER\"");
+
+        Assert.Equal(plain, localized);
+    }
+
+    [Fact]
     public void Transpile_DoubleNegation_IsIdentity_NoNegationSuffix()
     {
         // `! ! cmd` = double negation = identity. The command must run unwrapped
