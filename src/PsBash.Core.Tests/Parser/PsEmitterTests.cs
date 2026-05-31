@@ -139,6 +139,34 @@ public class PsEmitterTests
     }
 
     [Fact]
+    public void Transpile_AssignmentTildeAfterColon_ExpandsBothTildes()
+    {
+        // bash expands ~ at the start of an assignment value AND after each
+        // unquoted ':' — PATH=~/bin:~/x -> $HOME/bin:$HOME/x.
+        var result = PsEmitter.Transpile("PATH=~/bin:~/x");
+        var homeCount = System.Text.RegularExpressions.Regex.Matches(result, @"\$HOME").Count;
+        Assert.True(homeCount >= 2, $"expected >= 2 $HOME, got {homeCount}: {result}");
+    }
+
+    [Fact]
+    public void Transpile_NonAssignmentColonTilde_NotExpanded()
+    {
+        // `echo a:~b` is NOT an assignment; the tilde after ':' stays literal.
+        var result = PsEmitter.Transpile("echo a:~b");
+        Assert.DoesNotContain("$HOME", result);
+        Assert.Contains("a:~b", result);
+    }
+
+    [Fact]
+    public void Transpile_AssignmentQuotedColon_NotSplitNoTilde()
+    {
+        // A quoted ':' is not a split point — no spurious expansion.
+        var result = PsEmitter.Transpile("x=\"a:b\"");
+        Assert.Contains("a:b", result);
+        Assert.DoesNotContain("$HOME", result);
+    }
+
+    [Fact]
     public void Transpile_TildePlus_MapsToPwd()
     {
         // ~+ -> $PWD (was emitted as the literal ~+).

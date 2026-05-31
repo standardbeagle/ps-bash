@@ -361,7 +361,9 @@ public sealed partial class BashParser
         if (valueRaw.Length == 0)
             return (name, null, op);
 
-        var parts = DecomposeWord(valueRaw);
+        // Assignment values expand a tilde at the start AND after each unquoted
+        // ':' (PATH-style), unlike ordinary words — use the assignment-aware path.
+        var parts = DecomposeAssignmentValue(valueRaw);
         return (name, new CompoundWord(parts), op);
     }
 

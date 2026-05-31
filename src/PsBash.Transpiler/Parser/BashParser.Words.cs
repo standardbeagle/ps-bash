@@ -98,6 +98,101 @@ public sealed partial class BashParser
         return parts.ToImmutable();
     }
 
+    /// <summary>
+    /// Decompose an assignment value (RHS of <c>NAME=...</c>). bash expands a
+    /// tilde at the START of the value AND after each UNQUOTED <c>:</c> (so
+    /// <c>PATH=~/bin:~/x</c> -> <c>$HOME/bin:$HOME/x</c>) — but NOT in ordinary
+    /// command words (<c>echo a:~b</c> stays literal). Split on top-level
+    /// (unquoted, unsubstituted) <c>:</c> and decompose each segment with
+    /// <see cref="DecomposeWord"/> (which handles a leading <c>~</c>), rejoining
+    /// with a literal <c>:</c>. A value with no top-level <c>:</c> takes the plain
+    /// <see cref="DecomposeWord"/> path (no behavior change).
+    /// </summary>
+    internal static ImmutableArray<WordPart> DecomposeAssignmentValue(string raw)
+    {
+        var segments = SplitOnUnquotedColon(raw);
+        if (segments.Count <= 1)
+            return DecomposeWord(raw);
+
+        var parts = ImmutableArray.CreateBuilder<WordPart>();
+        for (int i = 0; i < segments.Count; i++)
+        {
+            if (i > 0)
+                parts.Add(new WordPart.Literal(":"));
+            parts.AddRange(DecomposeWord(segments[i]));
+        }
+        return parts.ToImmutable();
+    }
+
+    /// <summary>
+    /// Split on <c>:</c> that is not inside single/double quotes, <c>$(...)</c>,
+    /// <c>${...}</c>, or backticks — the PATH-style segment boundaries of an
+    /// assignment value. Quoted/substituted spans are copied verbatim.
+    /// </summary>
+    private static List<string> SplitOnUnquotedColon(string raw)
+    {
+        var segments = new List<string>();
+        var sb = new System.Text.StringBuilder();
+        int i = 0, len = raw.Length;
+        while (i < len)
+        {
+            char c = raw[i];
+            if (c == '\\' && i + 1 < len)
+            {
+                sb.Append(c).Append(raw[i + 1]);
+                i += 2;
+                continue;
+            }
+            if (c == '\'')
+            {
+                int j = raw.IndexOf('\'', i + 1);
+                j = j < 0 ? len : j + 1;
+                sb.Append(raw, i, j - i);
+                i = j;
+                continue;
+            }
+            if (c == '"' || c == '`')
+            {
+                int j = i + 1;
+                while (j < len && raw[j] != c)
+                {
+                    if (raw[j] == '\\' && j + 1 < len) j++;
+                    j++;
+                }
+                j = j < len ? j + 1 : len;
+                sb.Append(raw, i, j - i);
+                i = j;
+                continue;
+            }
+            if (c == '$' && i + 1 < len && (raw[i + 1] == '(' || raw[i + 1] == '{'))
+            {
+                char open = raw[i + 1];
+                char close = open == '(' ? ')' : '}';
+                int depth = 0, j = i + 1;
+                while (j < len)
+                {
+                    if (raw[j] == open) depth++;
+                    else if (raw[j] == close) { depth--; if (depth == 0) { j++; break; } }
+                    j++;
+                }
+                sb.Append(raw, i, System.Math.Min(j, len) - i);
+                i = j;
+                continue;
+            }
+            if (c == ':')
+            {
+                segments.Add(sb.ToString());
+                sb.Clear();
+                i++;
+                continue;
+            }
+            sb.Append(c);
+            i++;
+        }
+        segments.Add(sb.ToString());
+        return segments;
+    }
+
     private static int ParseSingleQuoted(string raw, int pos, ImmutableArray<WordPart>.Builder parts)
     {
         pos++; // skip opening '
