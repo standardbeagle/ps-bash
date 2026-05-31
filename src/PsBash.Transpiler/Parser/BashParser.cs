@@ -277,6 +277,9 @@ public sealed partial class BashParser
         if (Peek().Kind == BashTokenKind.Word && Peek().Value == "case")
             return ParseCase();
 
+        if (Peek().Kind == BashTokenKind.Word && Peek().Value == "select")
+            return ParseSelect();
+
         if (Peek().Kind == BashTokenKind.Word && Peek().Value == "function")
             return ParseFunction();
 
@@ -298,12 +301,6 @@ public sealed partial class BashParser
         // Standalone brace group: { cmd1; cmd2; }
         if (Peek().Kind == BashTokenKind.LBrace)
             return ParseStandaloneBraceGroup();
-
-        // Bail for compound constructs not yet implemented — triggers regex fallback in auto mode.
-        if (Peek().Kind == BashTokenKind.Word && IsUnimplementedCompoundKeyword(Peek().Value))
-            throw MakeError(
-                $"Compound construct '{Peek().Value}' is not supported; use PSBASH_PARSER=auto for regex fallback",
-                Peek().Position, "ParseCompoundOrSimple");
 
         return ParseSimpleCommand();
     }
@@ -373,8 +370,6 @@ public sealed partial class BashParser
     private static bool IsTestOperatorToken(BashTokenKind kind) =>
         kind is BashTokenKind.Less or BashTokenKind.Great or BashTokenKind.Bang;
 
-    private static bool IsUnimplementedCompoundKeyword(string word) =>
-        word is "select";
 
     private Command.If ParseIf()
     {
@@ -519,6 +514,43 @@ public sealed partial class BashParser
         Expect("done");
 
         return new Command.ForIn(varName, list.ToImmutable(), body);
+    }
+
+    /// <summary>
+    /// Parse <c>select var [in words]; do body; done</c> — identical grammar to
+    /// for-in. ps-bash does not implement the interactive menu loop; we still
+    /// parse the full construct (so it does not abort the surrounding script's
+    /// transpile) and the emitter degrades it to a documented comment.
+    /// </summary>
+    private Command ParseSelect()
+    {
+        Expect("select");
+
+        var varToken = Advance();
+        string varName = varToken.Value;
+
+        var list = ImmutableArray.CreateBuilder<CompoundWord>();
+        SkipTerminators();
+
+        if (Peek().Kind == BashTokenKind.Word && Peek().Value == "in")
+        {
+            Advance(); // consume "in"
+            while (Peek().Kind == BashTokenKind.Word
+                && Peek().Value != "do"
+                && !IsCompoundDelimiter(Peek().Value))
+            {
+                var token = Advance();
+                list.Add(new CompoundWord(DecomposeWord(token.Value)));
+            }
+        }
+
+        SkipTerminators();
+        Expect("do");
+        SkipTerminators();
+        var body = ParseCompoundBody("done");
+        Expect("done");
+
+        return new Command.Select(varName, list.ToImmutable(), body);
     }
 
     private Command ParseForArith()

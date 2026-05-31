@@ -1272,6 +1272,26 @@ public class PsEmitterTests
     }
 
     [Fact]
+    public void Transpile_Select_DegradesToBlockComment()
+    {
+        var result = PsEmitter.Transpile("select x in a b c; do echo $x; done");
+
+        Assert.Equal("<# ps-bash: 'select x' menu loop is not supported (omitted) #>", result);
+    }
+
+    [Fact]
+    public void Transpile_SelectInScript_OtherStatementsStillEmit()
+    {
+        // Degradation: select no longer aborts the whole transpile; the block
+        // comment is inline-safe so the surrounding commands still emit.
+        var result = PsEmitter.Transpile("echo before; select x in a; do echo $x; done; echo after");
+
+        Assert.Contains("Invoke-BashEcho before", result);
+        Assert.Contains("Invoke-BashEcho after", result);
+        Assert.Contains("<# ps-bash: 'select x'", result);
+    }
+
+    [Fact]
     public void Transpile_CaseContinueTest_EmitsOwnBodyOnly()
     {
         // `;;&` (continue testing) emits just the arm's own body, no break —

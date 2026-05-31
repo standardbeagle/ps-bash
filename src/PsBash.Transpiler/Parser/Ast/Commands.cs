@@ -75,6 +75,18 @@ public abstract record Command : BashNode
         Command Body) : Command;
 
     /// <summary>
+    /// A <c>select</c> menu loop: <c>select x in a b c; do body; done</c> —
+    /// identical grammar to <see cref="ForIn"/>. ps-bash does not implement the
+    /// interactive menu/REPL behavior; the emitter degrades it to a documented
+    /// comment (rather than aborting the whole transpile) so the surrounding
+    /// script still transpiles.
+    /// </summary>
+    public sealed record Select(
+        string Var,
+        ImmutableArray<CompoundWord> List,
+        Command Body) : Command;
+
+    /// <summary>
     /// A C-style arithmetic for loop: <c>for ((init; cond; step)); do body; done</c>.
     /// The three clauses are stored as raw strings.
     /// </summary>

@@ -1271,15 +1271,28 @@ public class BashParserTests
     }
 
     [Fact]
-    public void Parse_UnsupportedSelect_ThrowsParseExceptionWithSuggestion()
+    public void Parse_Select_ParsesAsSelectNode_DoesNotThrow()
     {
-        var ex = Assert.Throws<ParseException>(() => Parse("select x in a b c; do echo $x; done"));
+        // H5: `select` used to throw and ABORT the whole transpile. It now
+        // parses into a Select node (same grammar as for-in) so the surrounding
+        // script still transpiles; the emitter degrades it to a comment.
+        var result = Parse("select x in a b c; do echo $x; done");
 
-        Assert.Equal(1, ex.Line);
-        Assert.Equal(1, ex.Column);
-        Assert.Contains("select", ex.Message);
-        Assert.Contains("not supported", ex.Message);
-        Assert.Equal("ParseCompoundOrSimple", ex.Rule);
+        var sel = Assert.IsType<Command.Select>(result);
+        Assert.Equal("x", sel.Var);
+        Assert.Equal(3, sel.List.Length);
+        Assert.IsType<Command.Simple>(sel.Body);
+    }
+
+    [Fact]
+    public void Parse_SelectInScript_OtherStatementsStillParse()
+    {
+        // Degradation: a select in the middle must not abort the whole parse.
+        var result = Parse("echo before; select x in a b; do echo $x; done; echo after");
+
+        var list = Assert.IsType<Command.CommandList>(result);
+        Assert.Equal(3, list.Commands.Length);
+        Assert.IsType<Command.Select>(list.Commands[1]);
     }
 
     [Fact]

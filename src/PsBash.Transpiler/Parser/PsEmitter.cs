@@ -76,6 +76,7 @@ public static class PsEmitter
         Command.BoolExpr boolExpr => EmitBoolExpr(boolExpr),
         Command.ForIn forIn => EmitForIn(forIn),
         Command.ForArith forArith => EmitForArith(forArith),
+        Command.Select sel => EmitSelect(sel),
         Command.While whileCmd => EmitWhile(whileCmd),
         Command.Case caseCmd => EmitCase(caseCmd),
         Command.ArithCommand arith => EmitArithCommand(arith),
@@ -312,6 +313,16 @@ public static class PsEmitter
             return item;
         return $"'{item}'";
     }
+
+    /// <summary>
+    /// Degrades <c>select</c> (interactive menu loop) — which ps-bash does not
+    /// implement — to a PowerShell BLOCK comment rather than aborting the whole
+    /// transpile. A block comment (<c>&lt;# … #&gt;</c>) is inline-safe: unlike a
+    /// <c>#</c> line comment it does not swallow following <c>;</c>-joined
+    /// statements, so the rest of the script still transpiles.
+    /// </summary>
+    private static string EmitSelect(Command.Select sel)
+        => $"<# ps-bash: 'select {sel.Var}' menu loop is not supported (omitted) #>";
 
     private static string EmitForArith(Command.ForArith forArith)
     {
