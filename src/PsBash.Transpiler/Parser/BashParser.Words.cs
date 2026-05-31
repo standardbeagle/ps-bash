@@ -415,6 +415,10 @@ public sealed partial class BashParser
             {
                 pos++; // just the leading ':', rest goes into val
             }
+            else if (pos < len && raw[pos] is '-' or '=' or '+' or '?')
+            {
+                pos++; // colon-less unset-only operator: ${VAR-w} ${VAR=w} ${VAR+w} ${VAR?msg}
+            }
             else if (pos < len && raw[pos] == '%')
             {
                 pos++;

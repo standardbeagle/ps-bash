@@ -2515,6 +2515,33 @@ public static class PsEmitter
             return $"{open}{varRef} ?? $(throw {q}{msg}{q}))";
         }
 
+        // Colon-less unset-only variants: ${VAR-w} ${VAR=w} ${VAR+w} ${VAR?msg}.
+        // Bash distinguishes these (act only when UNSET) from the `:`-prefixed forms
+        // (act when unset OR empty); ps-bash models vars as env vars where `$env:X`
+        // is $null when unset, so `??` already approximates the unset-only test.
+        // Mapping both families to the same PowerShell is the documented 80/20 — the
+        // operator must never be silently dropped (the bug this fixes).
+        if (bvs.Suffix.StartsWith("-"))
+        {
+            string defaultVal = bvs.Suffix[1..];
+            return $"{open}{varRef} ?? {q}{defaultVal}{q})";
+        }
+        if (bvs.Suffix.StartsWith("="))
+        {
+            string defaultVal = bvs.Suffix[1..];
+            return $"{open}{varRef} ?? ({varRef} = {q}{defaultVal}{q}))";
+        }
+        if (bvs.Suffix.StartsWith("+"))
+        {
+            string alt = bvs.Suffix[1..];
+            return $"{open}{varRef} ? {q}{alt}{q} : {q}{q})";
+        }
+        if (bvs.Suffix.StartsWith("?"))
+        {
+            string msg = bvs.Suffix[1..];
+            return $"{open}{varRef} ?? $(throw {q}{msg}{q}))";
+        }
+
         // Remove suffix: ${VAR%%pattern} or ${VAR%pattern}
         // Bash globs use * and ? which are not valid regex without translation.
         // %%pat: longest suffix match (greedy). %pat: shortest suffix match (lazy).

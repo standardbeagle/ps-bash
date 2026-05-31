@@ -552,6 +552,30 @@ public class BashParserTests
     }
 
     [Fact]
+    public void Parse_BracedVarColonlessDefault_ReturnsBareOperatorSuffix()
+    {
+        // Colon-less ${VAR-w} must capture the bare `-` operator in the suffix,
+        // not let it fall into the value (which dropped the operator at emit time).
+        var result = Parse("echo ${VAR-fallback}");
+
+        var simple = Assert.IsType<Command.Simple>(result);
+        var bvs = Assert.IsType<WordPart.BracedVarSub>(Assert.Single(simple.Words[1].Parts));
+        Assert.Equal("VAR", bvs.Name);
+        Assert.Equal("-fallback", bvs.Suffix);
+    }
+
+    [Fact]
+    public void Parse_BracedVarColonlessError_ReturnsBareOperatorSuffix()
+    {
+        var result = Parse("echo ${VAR?must be set}");
+
+        var simple = Assert.IsType<Command.Simple>(result);
+        var bvs = Assert.IsType<WordPart.BracedVarSub>(Assert.Single(simple.Words[1].Parts));
+        Assert.Equal("VAR", bvs.Name);
+        Assert.Equal("?must be set", bvs.Suffix);
+    }
+
+    [Fact]
     public void Parse_BracedVarLength_ReturnsBracedVarSubWithHashSuffix()
     {
         var result = Parse("echo ${#VAR}");

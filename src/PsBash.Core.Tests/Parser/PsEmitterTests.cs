@@ -898,6 +898,39 @@ public class PsEmitterTests
     }
 
     [Fact]
+    public void Transpile_BracedVarColonlessDefault_EmitsNullCoalescing()
+    {
+        // ${VAR-w} (unset-only default) must not silently drop to bare $env:VAR.
+        var result = PsEmitter.Transpile("echo ${VAR-fallback}");
+
+        Assert.Equal("Invoke-BashEcho ($env:VAR ?? \"fallback\")", result);
+    }
+
+    [Fact]
+    public void Transpile_BracedVarColonlessAssignDefault_EmitsNullCoalescingAssign()
+    {
+        var result = PsEmitter.Transpile("echo ${VAR=default}");
+
+        Assert.Equal("Invoke-BashEcho ($env:VAR ?? ($env:VAR = \"default\"))", result);
+    }
+
+    [Fact]
+    public void Transpile_BracedVarColonlessAlternative_EmitsConditional()
+    {
+        var result = PsEmitter.Transpile("echo ${VAR+yes}");
+
+        Assert.Equal("Invoke-BashEcho ($env:VAR ? \"yes\" : \"\")", result);
+    }
+
+    [Fact]
+    public void Transpile_BracedVarColonlessError_EmitsThrow()
+    {
+        var result = PsEmitter.Transpile("echo ${VAR?must be set}");
+
+        Assert.Equal("Invoke-BashEcho ($env:VAR ?? $(throw \"must be set\"))", result);
+    }
+
+    [Fact]
     public void Transpile_BracedVarSuffixRemoval_EmitsReplace()
     {
         var result = PsEmitter.Transpile("echo ${VAR%%pattern}");
