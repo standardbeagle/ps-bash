@@ -987,6 +987,34 @@ public class BashParserTests
         Assert.IsType<Command.Simple>(forArith.Body);
     }
 
+    // H3 (review finding) claimed a quoted/escaped `)` inside a case pattern
+    // would terminate the pattern early (because ConsumeCasePattern stops at the
+    // first RParen token and joins token .Value). Verified NOT reproducible: the
+    // lexer keeps a quoted string, an escaped paren, and an extglob group as a
+    // SINGLE Word token, so the only RParen the parser sees is the genuine arm
+    // terminator (a bare unquoted `)` in a bash case pattern is always the
+    // terminator). These tests lock in that correct behavior.
+    [Theory]
+    [InlineData("case $x in \"(a)\") echo m;; esac", "\"(a)\"")]   // quoted paren stays in one token
+    [InlineData("case $x in @(foo|bar)) echo m;; esac", "@(foo|bar)")] // extglob group not split on its )
+    [InlineData("case $x in a\\)b) echo m;; esac", "a\\)b")]      // escaped ) retained, not a terminator
+    public void Parse_CasePattern_QuotedEscapedExtglobParen_NotTruncated(string input, string expectedPattern)
+    {
+        var result = Parse(input);
+        var c = Assert.IsType<Command.Case>(result);
+        Assert.Equal(expectedPattern, c.Arms[0].Patterns[0]);
+        // The arm body and esac still parse — proves the `)` did not desync.
+        Assert.Single(c.Arms);
+    }
+
+    [Fact]
+    public void Parse_CasePattern_MultiPatternPipe_SplitsCorrectly()
+    {
+        var result = Parse("case $x in foo|bar|baz) echo m;; esac");
+        var c = Assert.IsType<Command.Case>(result);
+        Assert.Equal(new[] { "foo", "bar", "baz" }, c.Arms[0].Patterns.ToArray());
+    }
+
     [Fact]
     public void Parse_ForArith_InnerParensInClause_NotTruncated()
     {
