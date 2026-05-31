@@ -1030,6 +1030,43 @@ public class PsEmitterTests
     }
 
     [Fact]
+    public void Transpile_BracedParamCount_EmitsArgsCount()
+    {
+        // ${#} must map like $# (count), not $env:.Length.
+        var result = PsEmitter.Transpile("echo ${#}");
+        Assert.Equal("Invoke-BashEcho $(if ($global:BashPositional) { $global:BashPositional.Count } else { $args.Count })", result);
+    }
+
+    [Fact]
+    public void Transpile_BracedParamAt_EmitsArgs()
+    {
+        var result = PsEmitter.Transpile("echo ${@}");
+        Assert.Equal("Invoke-BashEcho $(if ($global:BashPositional) { $global:BashPositional } else { $args })", result);
+    }
+
+    [Fact]
+    public void Transpile_BracedParamStar_EmitsArgs()
+    {
+        var result = PsEmitter.Transpile("echo ${*}");
+        Assert.Equal("Invoke-BashEcho $(if ($global:BashPositional) { $global:BashPositional } else { $args })", result);
+    }
+
+    [Fact]
+    public void Transpile_BracedPositional10_EmitsPositionalIndex9()
+    {
+        // ${10} is the ONLY way to write positional >= 10 — must map to index 9, not $env:10.
+        var result = PsEmitter.Transpile("echo ${10}");
+        Assert.Equal("Invoke-BashEcho $(if ($global:BashPositional) { $global:BashPositional[9] } else { $args[9] })", result);
+    }
+
+    [Fact]
+    public void Transpile_BracedPositional11_EmitsPositionalIndex10()
+    {
+        var result = PsEmitter.Transpile("echo ${11}");
+        Assert.Equal("Invoke-BashEcho $(if ($global:BashPositional) { $global:BashPositional[10] } else { $args[10] })", result);
+    }
+
+    [Fact]
     public void Transpile_BracedVarSuffixRemoval_EmitsReplace()
     {
         var result = PsEmitter.Transpile("echo ${VAR%%pattern}");

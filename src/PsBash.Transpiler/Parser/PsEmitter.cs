@@ -2292,6 +2292,12 @@ public static class PsEmitter
             "BASH_VERSINFO" => "$global:BashVersionInfo",
             var d when d.Length == 1 && d[0] is >= '1' and <= '9' =>
                 $"$(if ($global:BashPositional) {{ $global:BashPositional[{int.Parse(d) - 1}] }} else {{ $args[{int.Parse(d) - 1}] }})",
+            // Multi-digit positionals only arise from the braced form ${10}, ${11} — a
+            // bare $10 is $1 followed by a literal 0 (handled in ParseSimpleVar). A bash
+            // variable name can never be all-digits, so an all-digit name here is unambiguously
+            // a positional parameter, not an env var.
+            var d when d.Length >= 2 && IsAllDigits(d) =>
+                $"$(if ($global:BashPositional) {{ $global:BashPositional[{int.Parse(d) - 1}] }} else {{ $args[{int.Parse(d) - 1}] }})",
             _ => $"$env:{name}",
         };
     }

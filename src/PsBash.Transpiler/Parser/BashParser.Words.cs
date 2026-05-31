@@ -313,6 +313,20 @@ public sealed partial class BashParser
         pos += 2; // skip ${
         int len = raw.Length;
 
+        // Braced special parameters: ${#} ${@} ${*} ${?} ${$} ${!} ${-}. These collide
+        // with the length (${#var}) / keys (${!arr[@]}) branches below, so detect the
+        // bare single-char-then-`}` form FIRST and map it like the equivalent $# / $@ /
+        // $! (emitted via the null-suffix BracedVarSub -> EmitSimpleVar). Multi-digit
+        // positionals ${10}, ${11} need no special-case here: the name-read consumes the
+        // digits and EmitSimpleVar maps an all-digit name to a positional parameter.
+        if (pos + 1 < len && raw[pos + 1] == '}' && raw[pos] is '#' or '@' or '*' or '?' or '$' or '!' or '-')
+        {
+            string special = raw[pos].ToString();
+            pos += 2; // skip the special char and the closing }
+            parts.Add(new WordPart.BracedVarSub(special, null));
+            return pos;
+        }
+
         // ${!arr[@]} or ${!arr[*]} -> array keys operator
         if (pos < len && raw[pos] == '!')
         {

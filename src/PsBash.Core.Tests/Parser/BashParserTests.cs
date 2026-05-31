@@ -588,6 +588,30 @@ public class BashParserTests
     }
 
     [Fact]
+    public void Parse_BracedParamCount_ReturnsSpecialNameNullSuffix()
+    {
+        // ${#} must parse as the special parameter `#` (null suffix), not as a
+        // zero-length-name length operator.
+        var result = Parse("echo ${#}");
+
+        var simple = Assert.IsType<Command.Simple>(result);
+        var bvs = Assert.IsType<WordPart.BracedVarSub>(Assert.Single(simple.Words[1].Parts));
+        Assert.Equal("#", bvs.Name);
+        Assert.Null(bvs.Suffix);
+    }
+
+    [Fact]
+    public void Parse_BracedPositional10_ReturnsDigitNameNullSuffix()
+    {
+        var result = Parse("echo ${10}");
+
+        var simple = Assert.IsType<Command.Simple>(result);
+        var bvs = Assert.IsType<WordPart.BracedVarSub>(Assert.Single(simple.Words[1].Parts));
+        Assert.Equal("10", bvs.Name);
+        Assert.Null(bvs.Suffix);
+    }
+
+    [Fact]
     public void Parse_BracedVarSubscriptWithSliceOp_CapturesSubscriptAndOperator()
     {
         // ${a[@]:1:2}: the subscript branch must capture the trailing `:1:2` operator
