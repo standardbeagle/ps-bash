@@ -417,12 +417,44 @@ public sealed partial class BashParser
         if (pos < raw.Length)
             pos++; // skip closing `
 
+        // bash strips ONE level of backslash before `\`, `$`, and `\` itself
+        // inside backtick command substitution, before re-parsing the body.
+        // Without this, `` `echo \`date\`` `` re-parsed the literal backslashes
+        // and mis-parsed the nested substitution.
+        inner = UnescapeBacktickInner(inner);
         var body = Parse(inner);
         parts.Add(new WordPart.CommandSub(body ?? new Command.Simple(
             ImmutableArray<CompoundWord>.Empty,
             ImmutableArray<EnvPair>.Empty,
             ImmutableArray<Redirect>.Empty)));
         return pos;
+    }
+
+    /// <summary>
+    /// Strip one level of backslash-escaping inside a backtick command sub:
+    /// <c>\\</c> -> <c>\</c>, <c>\`</c> -> <c>`</c>, <c>\$</c> -> <c>$</c>. Other
+    /// backslashes are preserved (bash leaves them for the inner parse). Mirrors
+    /// the bash rule applied before the backtick body is re-parsed.
+    /// </summary>
+    private static string UnescapeBacktickInner(string s)
+    {
+        if (s.IndexOf('\\') < 0)
+            return s;
+        var sb = new System.Text.StringBuilder(s.Length);
+        for (int i = 0; i < s.Length; i++)
+        {
+            if (s[i] == '\\' && i + 1 < s.Length
+                && (s[i + 1] == '\\' || s[i + 1] == '`' || s[i + 1] == '$'))
+            {
+                sb.Append(s[i + 1]);
+                i++;
+            }
+            else
+            {
+                sb.Append(s[i]);
+            }
+        }
+        return sb.ToString();
     }
 
     private static bool IsProcessSubStart(string raw, int pos) =>

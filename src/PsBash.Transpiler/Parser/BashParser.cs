@@ -808,17 +808,34 @@ public sealed partial class BashParser
         var nameToken = Advance();
         string name = nameToken.Value;
 
-        // Optional () after name in "function name() { body }" form
-        if (Peek().Kind == BashTokenKind.LParen)
+        // Optional EMPTY () after name in "function name() { body }" form. Only
+        // consume when it is literally `()`; a `(` that opens a subshell BODY
+        // (`function f ( cmd )`) must not be eaten here.
+        if (Peek().Kind == BashTokenKind.LParen
+            && _pos + 1 < _tokens.Count
+            && _tokens[_pos + 1].Kind == BashTokenKind.RParen)
         {
             Advance(); // consume (
-            if (Peek().Kind == BashTokenKind.RParen)
-                Advance(); // consume )
+            Advance(); // consume )
         }
 
         SkipTerminators();
-        var body = ParseBraceGroup();
+        var body = ParseFunctionBody();
         return new Command.ShFunction(name, body);
+    }
+
+    /// <summary>
+    /// Parse a function body. bash allows any COMPOUND command as the body
+    /// (brace group, subshell, for/while/until/if/case), not just <c>{ ... }</c>.
+    /// A brace-group body stays on the ParseBraceGroup path so its AST/emission
+    /// is unchanged (unwrapped); other compound forms go through
+    /// ParseCompoundOrSimple (subshell, loops, conditionals).
+    /// </summary>
+    private Command ParseFunctionBody()
+    {
+        if (Peek().Kind == BashTokenKind.LBrace)
+            return ParseBraceGroup();
+        return ParseCompoundOrSimple();
     }
 
     /// <summary>
@@ -840,7 +857,7 @@ public sealed partial class BashParser
         Advance(); // consume (
         Advance(); // consume )
         SkipTerminators();
-        var body = ParseBraceGroup();
+        var body = ParseFunctionBody();
         return new Command.ShFunction(name, body);
     }
 

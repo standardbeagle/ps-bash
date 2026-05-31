@@ -1296,6 +1296,33 @@ public class BashParserTests
     }
 
     [Fact]
+    public void Parse_ParensFunction_SubshellBody()
+    {
+        // bash allows any compound body, e.g. f() ( subshell ). Used to require { }.
+        var result = Parse("f() ( echo hi )");
+        var fn = Assert.IsType<Command.ShFunction>(result);
+        Assert.Equal("f", fn.Name);
+        Assert.IsType<Command.Subshell>(fn.Body);
+    }
+
+    [Fact]
+    public void Parse_ParensFunction_ForLoopBody()
+    {
+        var result = Parse("f() for x in a b; do echo $x; done");
+        var fn = Assert.IsType<Command.ShFunction>(result);
+        Assert.IsType<Command.ForIn>(fn.Body);
+    }
+
+    [Fact]
+    public void Parse_FunctionKeyword_BraceBody_StillWorks()
+    {
+        // Regression: the common `function f { ... }` form is unchanged.
+        var result = Parse("function f { echo hi; }");
+        var fn = Assert.IsType<Command.ShFunction>(result);
+        Assert.Equal("f", fn.Name);
+    }
+
+    [Fact]
     public void Parse_SingleNegation_WrapsInNegatedPipeline()
     {
         var result = Parse("! true");

@@ -129,6 +129,16 @@ public class PsEmitterTests
     }
 
     [Fact]
+    public void Transpile_BacktickNested_UnescapesInnerBackticks()
+    {
+        // `echo \`date\`` — bash un-escapes \` to ` inside the outer backticks,
+        // yielding a nested command substitution. Without un-escaping the inner
+        // backticks stayed literal and the nested `date` sub was not recognized.
+        var result = PsEmitter.Transpile(@"echo `echo \`date\``");
+        Assert.Contains("Invoke-BashDate", result);
+    }
+
+    [Fact]
     public void Transpile_TildePlus_MapsToPwd()
     {
         // ~+ -> $PWD (was emitted as the literal ~+).
