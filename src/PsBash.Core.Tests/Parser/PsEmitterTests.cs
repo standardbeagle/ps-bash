@@ -2373,6 +2373,35 @@ public class PsEmitterTests
         Assert.Equal("@'\nhello $NAME\n\n'@ | Emit-BashLine | Invoke-BashCat", result);
     }
 
+    [Fact]
+    public void Transpile_BackslashDelimiter_EmitsLiteralHereString()
+    {
+        // `<<\EOF` disables expansion exactly like `<<'EOF'` — $NAME must stay literal,
+        // and the literal single-quote here-string form (@'...'@) must be used.
+        var result = PsEmitter.Transpile("cat <<\\EOF\nhello $NAME\nEOF");
+
+        Assert.Equal("@'\nhello $NAME\n\n'@ | Emit-BashLine | Invoke-BashCat", result);
+    }
+
+    [Fact]
+    public void Transpile_MidWordBackslashDelimiter_EmitsLiteralHereString()
+    {
+        // A backslash ANYWHERE in the delimiter (here `E\OF`) disables expansion; the
+        // backslash is stripped so the terminator line `EOF` still matches.
+        var result = PsEmitter.Transpile("cat <<E\\OF\nhello $NAME\nEOF");
+
+        Assert.Equal("@'\nhello $NAME\n\n'@ | Emit-BashLine | Invoke-BashCat", result);
+    }
+
+    [Fact]
+    public void Transpile_StripTabsBackslashDelimiter_EmitsLiteralHereString()
+    {
+        // `<<-\EOF` combines tab-stripping with backslash-quoting (non-expanding).
+        var result = PsEmitter.Transpile("cat <<-\\EOF\nhello $NAME\nEOF");
+
+        Assert.Equal("@'\nhello $NAME\n\n'@ | Emit-BashLine | Invoke-BashCat", result);
+    }
+
     // Bug: the heredoc body was rebuilt by space-joining lexer tokens, which
     // split punctuation (`(` `)` `<` `>`) into operator tokens and re-joined
     // them with spaces — so a git commit message piped through a heredoc came

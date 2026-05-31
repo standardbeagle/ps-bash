@@ -183,6 +183,14 @@ public sealed partial class BashParser
                     expand = false;
                     delimiter = rawDelim[1..^1];
                 }
+                else if (rawDelim.Contains('\\'))
+                {
+                    // A backslash ANYWHERE in the delimiter word disables expansion,
+                    // exactly like quoting it (`<<\EOF`, `<<-\EOF`, `<<E\OF`). The
+                    // backslashes are stripped for the terminator-line match.
+                    expand = false;
+                    delimiter = rawDelim.Replace("\\", "");
+                }
                 else
                 {
                     expand = true;
