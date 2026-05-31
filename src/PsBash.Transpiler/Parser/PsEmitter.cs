@@ -2622,6 +2622,33 @@ public static class PsEmitter
         if (bvs.Suffix == ",")
             return $"{open}{varRef}.Substring(0,1).ToLower() + {varRef}.Substring(1))";
 
+        // Transform operators ${VAR@op} (bash 4.4+/5.1). Must not silently drop the
+        // operator. @Q (quote-for-reuse) and the case transforms map cleanly; @E/@P/@A/@a
+        // have no PowerShell equivalent and degrade to the bare value (documented gap,
+        // emitter-strategy.md §6 EmitBracedVar) rather than being dropped without a trace.
+        if (bvs.Suffix.StartsWith("@") && bvs.Suffix.Length >= 2)
+        {
+            switch (bvs.Suffix[1])
+            {
+                // @Q: single-quote the value so it can be reused as shell input.
+                // Matches bash: 'a b', and a' -> 'a'\''  ('-escaping via '\'').
+                case 'Q':
+                    return $"{open}\"'\" + ({varRef} -replace \"'\",\"'\\''\") + \"'\")";
+                case 'U': // uppercase all
+                    return inDoubleQuote ? $"$({varRef}.ToUpper())" : $"{varRef}.ToUpper()";
+                case 'L': // lowercase all
+                    return inDoubleQuote ? $"$({varRef}.ToLower())" : $"{varRef}.ToLower()";
+                case 'u': // uppercase first char
+                    return $"{open}{varRef}.Substring(0,1).ToUpper() + {varRef}.Substring(1))";
+                case 'l': // lowercase first char
+                    return $"{open}{varRef}.Substring(0,1).ToLower() + {varRef}.Substring(1))";
+                // @E (escape-expand), @P (prompt-expand), @A (assignment form), @a (attr flags):
+                // no faithful PowerShell mapping — preserve the value, drop only the transform.
+                default:
+                    return varRef;
+            }
+        }
+
         // Fallback: emit as-is
         return varRef;
     }

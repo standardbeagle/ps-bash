@@ -419,6 +419,10 @@ public sealed partial class BashParser
             {
                 pos++; // colon-less unset-only operator: ${VAR-w} ${VAR=w} ${VAR+w} ${VAR?msg}
             }
+            else if (pos < len && raw[pos] == '@')
+            {
+                pos++; // transform operator: ${VAR@Q} ${VAR@E} ${VAR@P} ${VAR@A} ${VAR@U} ...
+            }
             else if (pos < len && raw[pos] == '%')
             {
                 pos++;

@@ -931,6 +931,41 @@ public class PsEmitterTests
     }
 
     [Fact]
+    public void Transpile_BracedVarTransformQuote_EmitsQuotingExpression()
+    {
+        // ${VAR@Q} quotes the value for reuse as input — must not drop to bare $env:VAR.
+        var result = PsEmitter.Transpile("echo ${VAR@Q}");
+
+        Assert.Equal("Invoke-BashEcho (\"'\" + ($env:VAR -replace \"'\",\"'\\''\") + \"'\")", result);
+    }
+
+    [Fact]
+    public void Transpile_BracedVarTransformUppercase_EmitsToUpper()
+    {
+        var result = PsEmitter.Transpile("echo ${VAR@U}");
+
+        Assert.Equal("Invoke-BashEcho $env:VAR.ToUpper()", result);
+    }
+
+    [Fact]
+    public void Transpile_BracedVarTransformLowercase_EmitsToLower()
+    {
+        var result = PsEmitter.Transpile("echo ${VAR@L}");
+
+        Assert.Equal("Invoke-BashEcho $env:VAR.ToLower()", result);
+    }
+
+    [Fact]
+    public void Transpile_BracedVarTransformPrompt_PreservesValue()
+    {
+        // @P has no PowerShell equivalent: degrade to the bare value, not a silent total drop
+        // of the whole expansion — the variable still expands.
+        var result = PsEmitter.Transpile("echo ${VAR@P}");
+
+        Assert.Equal("Invoke-BashEcho $env:VAR", result);
+    }
+
+    [Fact]
     public void Transpile_BracedVarSuffixRemoval_EmitsReplace()
     {
         var result = PsEmitter.Transpile("echo ${VAR%%pattern}");

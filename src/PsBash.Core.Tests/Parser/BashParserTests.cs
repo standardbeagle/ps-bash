@@ -576,6 +576,18 @@ public class BashParserTests
     }
 
     [Fact]
+    public void Parse_BracedVarTransform_ReturnsAtOperatorSuffix()
+    {
+        // ${VAR@Q} transform: the `@Q` must be captured as the suffix, not dropped.
+        var result = Parse("echo ${VAR@Q}");
+
+        var simple = Assert.IsType<Command.Simple>(result);
+        var bvs = Assert.IsType<WordPart.BracedVarSub>(Assert.Single(simple.Words[1].Parts));
+        Assert.Equal("VAR", bvs.Name);
+        Assert.Equal("@Q", bvs.Suffix);
+    }
+
+    [Fact]
     public void Parse_BracedVarLength_ReturnsBracedVarSubWithHashSuffix()
     {
         var result = Parse("echo ${#VAR}");

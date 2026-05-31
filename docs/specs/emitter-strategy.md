@@ -288,6 +288,8 @@ Handles `${VAR...}` parameter expansions:
 - `${VAR//find/rep}` / `${VAR/find/rep}` -> `-replace`
 - `${VAR:offset:length}` -> `.Substring(offset, length)`
 - `${VAR^^}` / `${VAR,,}` / `${VAR^}` / `${VAR,}` -> case conversion
+- `${VAR-w}` / `${VAR=w}` / `${VAR+w}` / `${VAR?msg}` -> colon-less unset-only forms, mapped to the same `??` / assign / `?:` / `throw` as the `:`-prefixed variants (ps-bash models bash vars as env vars where `$env:X` is `$null` only when unset, so `??` already approximates the unset-only test). The operator is never dropped.
+- `${VAR@Q}` -> single-quote the value for reuse (`"'" + ($env:VAR -replace "'","'\''") + "'"`); `${VAR@U}` / `${VAR@L}` / `${VAR@u}` / `${VAR@l}` -> case transforms. `@E` (escape-expand), `@P` (prompt-expand), `@A` (assignment form), `@a` (attribute flags) have no faithful PowerShell mapping and degrade to the bare value — the transform is dropped, the value is preserved (documented gap, NOT a silent total drop).
 - `${arr[n]}` -> `$arr[n]`, `${arr[@]}` -> `$arr`, `${#arr[@]}` -> `$arr.Count`
 - `${!arr[@]}` -> `$arr.Keys`
 
