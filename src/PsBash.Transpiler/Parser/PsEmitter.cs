@@ -1659,6 +1659,15 @@ public static class PsEmitter
             // Without this, target "-" emitted invalid `1>&-`. The `target == "-"`
             // guard keeps the normal merge form (`2>&1`, target "1") intact.
             ">&" when target == "-" => r.Fd == 1 ? ">$null" : $"{r.Fd}>$null",
+            // `cmd >&file` (non-numeric, non-close target) is a bash synonym for
+            // `&>file`: redirect BOTH stdout and stderr to the FILE. The `{fd}>&{target}`
+            // form is invalid PowerShell for a file (the `>&` operator only accepts a
+            // stream number), so emit the `&>` form. A numeric target (`>&2`, `>&1`) is a
+            // genuine fd-merge and keeps the `{fd}>&{n}` form below.
+            // Only the UNPREFIXED `>&file` (fd defaults to 1) is the both-streams
+            // synonym for `&>file`. A prefixed `2>&file` is not that form, so it is
+            // left to the fallback rather than wrongly redirecting stdout.
+            ">&" when r.Fd == 1 && !IsAllDigits(target) => $">{target} 2>&1",
             ">&" => $"{r.Fd}>&{target}",
             // `n<&-` (close stdin) — no PowerShell equivalent; degrade to a
             // documented inline no-op comment rather than the invalid `0<&-`.
@@ -1670,6 +1679,18 @@ public static class PsEmitter
             "&>>" => $">>{target} 2>&1",
             _ => $"{r.Fd}{r.Op}{target}",
         };
+    }
+
+    // True only for a non-empty run of ASCII digits — used to tell a numeric fd-merge
+    // target (`>&2`) from a file target (`>&out.txt`).
+    private static bool IsAllDigits(string s)
+    {
+        if (s.Length == 0)
+            return false;
+        foreach (char c in s)
+            if (c < '0' || c > '9')
+                return false;
+        return true;
     }
 
     private static string TransformRedirectTarget(string target)

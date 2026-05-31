@@ -278,6 +278,25 @@ public class PsEmitterTests
     }
 
     [Fact]
+    public void Transpile_GreatAndFileTarget_RedirectsBothStreamsToFile()
+    {
+        // `cmd >&file` is a bash synonym for `&>file`: stdout AND stderr to the FILE.
+        // `1>&file` is invalid PowerShell (>& takes a stream number), so emit `&>` form.
+        var result = PsEmitter.Transpile("cmd >&out.txt");
+        Assert.Equal("cmd >out.txt 2>&1", result);
+    }
+
+    [Fact]
+    public void Transpile_GreatAndNumericTarget_KeepsFdMerge()
+    {
+        // Numeric target is a genuine fd-merge, NOT a file: keep the `{fd}>&{n}` form.
+        // (`>&2` has its own dedicated stdout→stderr path; use fd 3 to exercise the
+        // digit branch of the >& arm directly.)
+        var result = PsEmitter.Transpile("cmd >&3");
+        Assert.Equal("cmd 1>&3", result);
+    }
+
+    [Fact]
     public void Transpile_CloseStdin_DegradesToComment()
     {
         // `<&-` closes stdin — no PowerShell equivalent; documented no-op comment
