@@ -65,6 +65,22 @@ public static class BashLexer
                 continue;
             }
 
+            // Line continuation: a backslash immediately before a newline is removed
+            // entirely (bash joins the two lines). ScanWord only consumes this mid-word,
+            // so a `\<newline>` sitting BETWEEN tokens — e.g. an indented continued line
+            // `cmd \<nl>  -l` — used to fall through to ScanWord, which ate the `\<nl>`
+            // and then broke on the following space, emitting a spurious zero-length Word.
+            if (c == '\\' && pos + 1 < len)
+            {
+                if (input[pos + 1] == '\n') { pos += 2; continue; }
+                if (input[pos + 1] == '\r')
+                {
+                    pos += 2;
+                    if (pos < len && input[pos] == '\n') pos++;
+                    continue;
+                }
+            }
+
             // Process substitution: <(...) or >(...) — consume as a word.
             // Quote-aware so a ')' inside a string in the producer does not
             // close the region early.
@@ -213,6 +229,16 @@ public static class BashLexer
             int wordStart = pos;
             pos = ScanWord(input, pos);
             string value = input[wordStart..pos];
+
+            // Defensive: never emit a zero-length Word. ScanWord can consume a
+            // mid-word line continuation and then stop with no characters left
+            // (e.g. a trailing `\<newline>`); an empty token would become a stray
+            // empty operand/command word downstream. Force progress to avoid a hang.
+            if (value.Length == 0)
+            {
+                pos++;
+                continue;
+            }
 
             BashTokenKind wordKind = ClassifyWord(value);
             tokens.Add(new BashToken(wordKind, value, wordStart));

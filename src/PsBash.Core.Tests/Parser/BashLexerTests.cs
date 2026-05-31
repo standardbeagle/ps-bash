@@ -44,6 +44,65 @@ public class BashLexerTests
     }
 
     [Fact]
+    public void Tokenize_LineContinuationBeforeIndentedFlag_NoSpuriousEmptyWord()
+    {
+        // `ls \<newline>  -l` — the backslash-newline is joined away; the indented
+        // continued line must NOT produce a zero-length Word between `ls` and `-l`.
+        var tokens = Tokenize("ls \\\n  -l");
+
+        AssertTokens(tokens,
+            (BashTokenKind.Word, "ls"),
+            (BashTokenKind.Word, "-l"));
+    }
+
+    [Fact]
+    public void Tokenize_LineContinuationBeforePipe_JoinsToPipeline()
+    {
+        // `cmd \<newline>| grep` joins to `cmd | grep` with no empty Word, no Newline.
+        var tokens = Tokenize("cmd \\\n| grep");
+
+        AssertTokens(tokens,
+            (BashTokenKind.Word, "cmd"),
+            (BashTokenKind.Pipe, "|"),
+            (BashTokenKind.Word, "grep"));
+    }
+
+    [Fact]
+    public void Tokenize_LineContinuationCrlf_JoinsLines()
+    {
+        // Windows CRLF continuation: `ls \<CRLF>-l`.
+        var tokens = Tokenize("ls \\\r\n-l");
+
+        AssertTokens(tokens,
+            (BashTokenKind.Word, "ls"),
+            (BashTokenKind.Word, "-l"));
+    }
+
+    [Fact]
+    public void Tokenize_BackslashBeforeNonNewline_StaysInWord()
+    {
+        // A backslash NOT before a newline (e.g. `\$`) must still flow to ScanWord
+        // as part of the word — the top-level continuation case must not intercept it.
+        var tokens = Tokenize("echo \\$x");
+
+        AssertTokens(tokens,
+            (BashTokenKind.Word, "echo"),
+            (BashTokenKind.Word, "\\$x"));
+    }
+
+    [Fact]
+    public void Tokenize_TrailingBackslashAtEof_NoCrash()
+    {
+        // A lone trailing backslash with no following newline must not crash or hang
+        // (it has no continuation partner; ScanWord consumes it as a literal word char).
+        var tokens = Tokenize("echo \\");
+
+        AssertTokens(tokens,
+            (BashTokenKind.Word, "echo"),
+            (BashTokenKind.Word, "\\"));
+    }
+
+    [Fact]
     public void Tokenize_AssignmentWithCommand_ReturnsAssignmentAndWord()
     {
         var tokens = Tokenize("FOO=bar cmd");
