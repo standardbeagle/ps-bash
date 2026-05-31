@@ -90,6 +90,35 @@ public class BashLexerTests
     }
 
     [Fact]
+    public void Tokenize_SemiAmp_StaysSemiPlusAmp_ContextFree()
+    {
+        // The lexer is context-free: `;&` is Semi+Amp, NOT a dedicated token.
+        // The parser detects the Semi+Amp sequence as a case fall-through
+        // terminator only inside a case body (so it can't silently drop a
+        // command outside case). Adjacent Position proves they're contiguous.
+        var tokens = Tokenize("a ;& b");
+
+        AssertTokens(tokens,
+            (BashTokenKind.Word, "a"),
+            (BashTokenKind.Semi, ";"),
+            (BashTokenKind.Amp, "&"),
+            (BashTokenKind.Word, "b"));
+    }
+
+    [Fact]
+    public void Tokenize_DSemiAmp_StaysSemiSemiAmp_ContextFree()
+    {
+        var tokens = Tokenize("a ;;& b");
+
+        AssertTokens(tokens,
+            (BashTokenKind.Word, "a"),
+            (BashTokenKind.Semi, ";"),
+            (BashTokenKind.Semi, ";"),
+            (BashTokenKind.Amp, "&"),
+            (BashTokenKind.Word, "b"));
+    }
+
+    [Fact]
     public void Tokenize_AndIf_NotShadowedByAmpGreat()
     {
         // Ordering invariant: `&&` (AndIf) must not be shadowed by the new

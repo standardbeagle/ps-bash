@@ -1259,6 +1259,46 @@ public class PsEmitterTests
     }
 
     [Fact]
+    public void Transpile_CaseFallThrough_RunsNextArmBody()
+    {
+        // `;&` = fall through: matching `a` runs `echo a` AND the next arm's
+        // `echo b`. PowerShell switch has no clause fall-through, so the next
+        // body is inlined into the matched clause.
+        var result = PsEmitter.Transpile("case $x in a) echo a ;& b) echo b;; esac");
+
+        Assert.Equal(
+            "switch ($env:x) { 'a' { Invoke-BashEcho a; Invoke-BashEcho b } 'b' { Invoke-BashEcho b } }",
+            result);
+    }
+
+    [Fact]
+    public void Transpile_CaseContinueTest_EmitsOwnBodyOnly()
+    {
+        // `;;&` (continue testing) emits just the arm's own body, no break —
+        // PowerShell switch's default no-break behavior continues testing
+        // subsequent clauses (the bash ;;& semantic for non-overlapping patterns).
+        var result = PsEmitter.Transpile("case $x in a) echo a ;;& b) echo b;; esac");
+
+        Assert.Equal(
+            "switch ($env:x) { 'a' { Invoke-BashEcho a } 'b' { Invoke-BashEcho b } }",
+            result);
+    }
+
+    [Fact]
+    public void Transpile_CaseChainedFallThrough_InlinesAllChainedBodies()
+    {
+        // `;&` -> `;&` -> `;;`: matching `a` runs a, b, AND c.
+        var result = PsEmitter.Transpile("case $x in a) echo a ;& b) echo b ;& c) echo c;; esac");
+
+        Assert.Equal(
+            "switch ($env:x) { " +
+            "'a' { Invoke-BashEcho a; Invoke-BashEcho b; Invoke-BashEcho c } " +
+            "'b' { Invoke-BashEcho b; Invoke-BashEcho c } " +
+            "'c' { Invoke-BashEcho c } }",
+            result);
+    }
+
+    [Fact]
     public void Transpile_NestedCase_EmitsNestedSwitch()
     {
         var result = PsEmitter.Transpile(

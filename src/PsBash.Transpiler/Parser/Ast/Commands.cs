@@ -143,8 +143,23 @@ public abstract record Command : BashNode
 public sealed record IfArm(Command Cond, Command Body) : BashNode;
 
 /// <summary>
-/// A single arm of a case/esac statement: one or more patterns and a body.
+/// How a case arm terminates, which controls fall-through:
+/// <list type="bullet">
+/// <item><see cref="Break"/> — <c>;;</c>: run this arm only, then leave.</item>
+/// <item><see cref="FallThrough"/> — <c>;&amp;</c>: run this arm's body then the
+/// NEXT arm's body unconditionally (bash 4 fall-through).</item>
+/// <item><see cref="ContinueTest"/> — <c>;;&amp;</c>: run this arm, then keep
+/// testing the remaining patterns.</item>
+/// </list>
+/// </summary>
+public enum CaseTerminator { Break, FallThrough, ContinueTest }
+
+/// <summary>
+/// A single arm of a case/esac statement: one or more patterns, a body, and the
+/// terminator controlling fall-through. Defaults to <see cref="CaseTerminator.Break"/>
+/// (<c>;;</c>) so existing constructions are unaffected.
 /// </summary>
 public sealed record CaseArm(
     ImmutableArray<string> Patterns,
-    Command Body) : BashNode;
+    Command Body,
+    CaseTerminator Terminator = CaseTerminator.Break) : BashNode;

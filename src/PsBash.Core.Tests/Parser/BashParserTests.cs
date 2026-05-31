@@ -1016,6 +1016,29 @@ public class BashParserTests
     }
 
     [Fact]
+    public void Parse_CaseFallThroughTerminators_RecordedNoDesync()
+    {
+        // H4: `;&` (fall-through) and `;;&` (continue-test) used to desync the
+        // arm (lexed as Semi+Amp). They now parse cleanly with the terminator
+        // recorded on each arm.
+        var result = Parse("case $x in a) echo a ;& b) echo b ;;& c) echo c ;; esac");
+
+        var c = Assert.IsType<Command.Case>(result);
+        Assert.Equal(3, c.Arms.Length);
+        Assert.Equal(CaseTerminator.FallThrough, c.Arms[0].Terminator);
+        Assert.Equal(CaseTerminator.ContinueTest, c.Arms[1].Terminator);
+        Assert.Equal(CaseTerminator.Break, c.Arms[2].Terminator);
+    }
+
+    [Fact]
+    public void Parse_CaseBreakTerminator_DefaultsToBreak()
+    {
+        var result = Parse("case $x in a) echo a;; esac");
+        var c = Assert.IsType<Command.Case>(result);
+        Assert.Equal(CaseTerminator.Break, c.Arms[0].Terminator);
+    }
+
+    [Fact]
     public void Parse_ForArith_InnerParensInClause_NotTruncated()
     {
         // H2: the old per-token collector stopped at the FIRST `)`, truncating

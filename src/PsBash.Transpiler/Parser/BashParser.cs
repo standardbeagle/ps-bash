@@ -654,18 +654,32 @@ public sealed partial class BashParser
 
         SkipTerminators();
 
-        // Parse body commands until ;; or esac.
+        // Parse body commands until a terminator (;; / ;& / ;;&) or esac.
         var body = ParseCaseBody();
 
-        // Consume ;; (two Semi tokens) if present.
-        if (Peek().Kind == BashTokenKind.Semi)
+        // Consume the terminator and record which it was (controls fall-through).
+        // Order matters: ;;& (Semi+Semi+Amp) before ;; (Semi+Semi), and ;& (Semi+Amp).
+        var terminator = CaseTerminator.Break;
+        if (IsDoubleSemiAmp())            // ;;&  continue testing
+        {
+            Advance(); Advance(); Advance();
+            terminator = CaseTerminator.ContinueTest;
+        }
+        else if (IsDoubleSemi())          // ;;   break
+        {
+            Advance(); Advance();
+        }
+        else if (IsSemiAmp())             // ;&   fall through
+        {
+            Advance(); Advance();
+            terminator = CaseTerminator.FallThrough;
+        }
+        else if (Peek().Kind == BashTokenKind.Semi)  // lone ; before esac
         {
             Advance();
-            if (Peek().Kind == BashTokenKind.Semi)
-                Advance();
         }
 
-        return new CaseArm(patterns.ToImmutable(), body);
+        return new CaseArm(patterns.ToImmutable(), body, terminator);
     }
 
     /// <summary>
@@ -701,15 +715,15 @@ public sealed partial class BashParser
                 break;
             if (Peek().Kind == BashTokenKind.Word && Peek().Value == "esac")
                 break;
-            if (IsDoubleSemi())
+            if (IsCaseArmTerminator())
                 break;
 
             commands.Add(ParseAndOrProgress());
 
-            // After a command, consume a single ; separator if present,
-            // but stop if it's ;; (arm delimiter).
+            // After a command, consume a single ; separator if present, but stop
+            // at an arm terminator (;;, ;&, or ;;&).
             SkipNewlines();
-            if (IsDoubleSemi())
+            if (IsCaseArmTerminator())
                 break;
             if (Peek().Kind == BashTokenKind.Semi)
                 Advance();
@@ -725,6 +739,28 @@ public sealed partial class BashParser
         Peek().Kind == BashTokenKind.Semi
         && _pos + 1 < _tokens.Count
         && _tokens[_pos + 1].Kind == BashTokenKind.Semi;
+
+    /// <summary>
+    /// True at any case-arm terminator. The lexer is context-free (it never
+    /// emits dedicated `;&`/`;;&` tokens — those would silently drop commands
+    /// when they appear outside a case), so terminators are detected here as
+    /// token sequences: <c>;;</c> = Semi+Semi, <c>;&amp;</c> = Semi+Amp, <c>;;&amp;</c>
+    /// = Semi+Semi+Amp. A lone Semi (next token is a command) is a separator,
+    /// not a terminator.
+    /// </summary>
+    private bool IsCaseArmTerminator() => IsDoubleSemi() || IsSemiAmp();
+
+    /// <summary><c>;&amp;</c> — Semi immediately followed by Amp.</summary>
+    private bool IsSemiAmp() =>
+        Peek().Kind == BashTokenKind.Semi
+        && _pos + 1 < _tokens.Count
+        && _tokens[_pos + 1].Kind == BashTokenKind.Amp;
+
+    /// <summary><c>;;&amp;</c> — Semi, Semi, Amp.</summary>
+    private bool IsDoubleSemiAmp() =>
+        IsDoubleSemi()
+        && _pos + 2 < _tokens.Count
+        && _tokens[_pos + 2].Kind == BashTokenKind.Amp;
 
     private Command.ShFunction ParseFunction()
     {

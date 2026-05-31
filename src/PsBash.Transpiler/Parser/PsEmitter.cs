@@ -413,7 +413,7 @@ public static class PsEmitter
         {
             if (i > 0) sb.Append(' ');
             var arm = caseCmd.Arms[i];
-            var bodyText = Emit(arm.Body);
+            var bodyText = EmitCaseArmBody(caseCmd.Arms, i);
 
             if (arm.Patterns.Length == 1 && arm.Patterns[0] == "*")
             {
@@ -436,6 +436,40 @@ public static class PsEmitter
         }
 
         sb.Append(" }");
+        return sb.ToString();
+    }
+
+    /// <summary>
+    /// Effective body for case arm <paramref name="i"/>. For a <c>;&amp;</c>
+    /// (fall-through) arm, bash runs this arm's body AND the next arm's body
+    /// unconditionally; PowerShell's <c>switch</c> has no clause fall-through, so
+    /// we inline the subsequent bodies, chaining while the terminator stays
+    /// <see cref="CaseTerminator.FallThrough"/>. <c>;;</c> (Break) and <c>;;&amp;</c>
+    /// (ContinueTest) arms emit just their own body — identical to the prior
+    /// behavior, so non-fall-through cases are unchanged.
+    ///
+    /// NOTE on <c>;;&amp;</c> (ContinueTest): bash re-tests the remaining patterns
+    /// after running the arm. We approximate this by emitting the arm body with
+    /// NO PowerShell <c>break</c> — a <c>switch</c> clause without <c>break</c>
+    /// already continues testing subsequent clauses. This matches bash for
+    /// non-overlapping pattern sets (the common case); it can diverge only when
+    /// multiple patterns match the same subject (e.g. overlapping wildcards),
+    /// which is rare. A fully faithful rendering is deferred.
+    /// </summary>
+    private static string EmitCaseArmBody(
+        System.Collections.Immutable.ImmutableArray<CaseArm> arms, int i)
+    {
+        var sb = new StringBuilder();
+        int j = i;
+        while (true)
+        {
+            if (j > i) sb.Append("; ");
+            sb.Append(Emit(arms[j].Body));
+            if (arms[j].Terminator == CaseTerminator.FallThrough && j + 1 < arms.Length)
+                j++;
+            else
+                break;
+        }
         return sb.ToString();
     }
 
