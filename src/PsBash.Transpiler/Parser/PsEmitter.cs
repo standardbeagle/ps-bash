@@ -1654,7 +1654,15 @@ public static class PsEmitter
         {
             ">" => r.Fd == 1 ? $">{target}" : $"{r.Fd}>{target}",
             ">>" => r.Fd == 1 ? $">>{target}" : $"{r.Fd}>>{target}",
+            // `n>&-` (close output fd) — PowerShell has no fd-close; the practical
+            // equivalent for an output fd is to discard (redirect to $null).
+            // Without this, target "-" emitted invalid `1>&-`. The `target == "-"`
+            // guard keeps the normal merge form (`2>&1`, target "1") intact.
+            ">&" when target == "-" => r.Fd == 1 ? ">$null" : $"{r.Fd}>$null",
             ">&" => $"{r.Fd}>&{target}",
+            // `n<&-` (close stdin) — no PowerShell equivalent; degrade to a
+            // documented inline no-op comment rather than the invalid `0<&-`.
+            "<&" when target == "-" => "<# ps-bash: stdin fd-close (<&-) has no PowerShell equivalent #>",
             // `&>file` / `&>>file` — redirect (or append) BOTH stdout and stderr.
             // PowerShell: `>file 2>&1` / `>>file 2>&1` (stdout to the file, then
             // stderr to wherever stdout now points).

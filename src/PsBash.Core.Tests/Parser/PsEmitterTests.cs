@@ -129,6 +129,42 @@ public class PsEmitterTests
     }
 
     [Fact]
+    public void Transpile_CloseStdout_DiscardsToNull()
+    {
+        // `>&-` closes stdout; PowerShell has no fd-close, so discard to $null.
+        // Previously emitted invalid `1>&-`.
+        var result = PsEmitter.Transpile("cmd >&-");
+        Assert.Equal("cmd >$null", result);
+    }
+
+    [Fact]
+    public void Transpile_CloseFd2_DiscardsFdToNull()
+    {
+        var result = PsEmitter.Transpile("cmd 2>&-");
+        Assert.Equal("cmd 2>$null", result);
+    }
+
+    [Fact]
+    public void Transpile_StderrToStdoutMerge_Unaffected()
+    {
+        // Regression guard: the normal merge form `2>&1` (target "1", not "-")
+        // must NOT be treated as a close.
+        var result = PsEmitter.Transpile("cmd 2>&1");
+        Assert.Equal("cmd 2>&1", result);
+    }
+
+    [Fact]
+    public void Transpile_CloseStdin_DegradesToComment()
+    {
+        // `<&-` closes stdin — no PowerShell equivalent; documented no-op comment
+        // instead of the invalid `0<&-`.
+        var result = PsEmitter.Transpile("cmd <&-");
+        Assert.Contains("<#", result);
+        Assert.Contains("<&-", result);
+        Assert.DoesNotContain("0<&-", result);
+    }
+
+    [Fact]
     public void Transpile_LocaleQuoting_DropsDollar_SameAsDoubleQuote()
     {
         // $"..." = locale translation; with no catalog it is identical to a plain
