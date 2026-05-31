@@ -2736,14 +2736,21 @@ public class PsEmitterTests
         Assert.Contains("bar", result);
     }
 
-    // ${str//foo/bar} -> replace all
+    // ${str//foo/bar} -> replace all (literal find, escaped)
     [Fact]
-    public void Transpile_ParamReplaceAll_EmitsReplace()
+    public void Transpile_ParamReplaceAll_EmitsEscapedLiteralReplace()
     {
         var result = PsEmitter.Transpile("echo ${str//foo/bar}");
-        Assert.Contains("-replace", result);
-        Assert.Contains("foo", result);
-        Assert.Contains("bar", result);
+        Assert.Equal("Invoke-BashEcho (([regex][regex]::Escape('foo')).Replace($env:str, 'bar'))", result);
+    }
+
+    // ${p//./_} -> the dot must be a LITERAL, not a regex "any char". Regression for
+    // the regex-injection bug where raw `-replace '.','_'` matched every character.
+    [Fact]
+    public void Transpile_ParamReplaceAllRegexMetachar_EscapesFind()
+    {
+        var result = PsEmitter.Transpile("echo ${p//./_}");
+        Assert.Equal("Invoke-BashEcho (([regex][regex]::Escape('.')).Replace($env:p, '_'))", result);
     }
 
     // ${name:0:2} -> substring

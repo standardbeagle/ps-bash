@@ -2599,7 +2599,12 @@ public static class PsEmitter
         {
             var parts = bvs.Suffix[2..].Split('/', 2);
             string find = parts[0], replace = parts.Length > 1 ? parts[1] : "";
-            return $"{open}{varRef} -replace '{find}','{replace}')";
+            // Escape `find` literally (bash patterns here are globs/literals, not .NET
+            // regex) — same treatment as the replace-first `/` branch above. The 2-arg
+            // [regex].Replace(str, rep) overload replaces ALL occurrences. Using raw
+            // `-replace '{find}'` was a regex-injection bug: `${p//./_}` matched every
+            // char instead of the literal dot.
+            return $"{open}([regex][regex]::Escape('{find}')).Replace({varRef}, '{replace}'))";
         }
 
         // Slice: ${VAR:offset:length} or ${VAR:offset}
