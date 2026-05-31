@@ -1900,6 +1900,33 @@ public static class PsEmitter
 
     private static string EmitBraceExpandedWord(ImmutableArray<WordPart> parts)
     {
+        // Adjacent brace expansions cross-multiply: bash `{a..c}{1..2}` -> a1 a2 b1 b2 c1 c2.
+        // With 2+ brace parts, compute the full Cartesian product across all segments
+        // (each brace contributes its item list; every other part is one literal segment).
+        int braceCount = 0;
+        foreach (var p in parts)
+            if (p is WordPart.BracedTuple or WordPart.BracedRange)
+                braceCount++;
+        if (braceCount >= 2)
+        {
+            var combos = new List<string> { "" };
+            foreach (var part in parts)
+            {
+                List<string> segment = part is WordPart.BracedTuple or WordPart.BracedRange
+                    ? ExpandBrace(part)
+                    : new List<string> { EmitWordPart(part) };
+                var next = new List<string>(combos.Count * segment.Count);
+                foreach (string head in combos)
+                    foreach (string s in segment)
+                        next.Add(head + s);
+                combos = next;
+            }
+            var crossItems = new List<string>(combos.Count);
+            foreach (string c in combos)
+                crossItems.Add($"'{c}'");
+            return $"@({string.Join(',', crossItems)})";
+        }
+
         // Collect prefix (parts before brace), brace expansion, suffix (parts after brace).
         var prefix = new StringBuilder();
         var suffix = new StringBuilder();

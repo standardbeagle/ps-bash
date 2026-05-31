@@ -2137,6 +2137,28 @@ public class PsEmitterTests
     }
 
     [Fact]
+    public void Transpile_AdjacentBraceTuples_CrossMultiplies()
+    {
+        // bash {a,b}{1,2} -> Cartesian product, not literal second-brace text.
+        var result = PsEmitter.Transpile("echo a{b,c}{1,2}");
+        Assert.Equal("Invoke-BashEcho @('ab1','ab2','ac1','ac2')", result);
+    }
+
+    [Fact]
+    public void Transpile_AdjacentBraceTuplesWithMidLiteral_CrossMultiplies()
+    {
+        var result = PsEmitter.Transpile("echo pre{a,b}post{1,2}");
+        Assert.Equal("Invoke-BashEcho @('preapost1','preapost2','prebpost1','prebpost2')", result);
+    }
+
+    [Fact]
+    public void Transpile_AdjacentBraceRanges_CrossMultiplies()
+    {
+        var result = PsEmitter.Transpile("echo {1..2}{3..4}");
+        Assert.Equal("Invoke-BashEcho @('13','14','23','24')", result);
+    }
+
+    [Fact]
     public void Transpile_DiffWithTwoInputProcessSubs()
     {
         var result = PsEmitter.Transpile("diff <(ls dir1) <(ls dir2)");
