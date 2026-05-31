@@ -1296,6 +1296,32 @@ public class BashParserTests
     }
 
     [Fact]
+    public void Parse_SingleNegation_WrapsInNegatedPipeline()
+    {
+        var result = Parse("! true");
+        var pipeline = Assert.IsType<Command.Pipeline>(result);
+        Assert.True(pipeline.Negated);
+    }
+
+    [Fact]
+    public void Parse_DoubleNegation_IsIdentity_NotDropped()
+    {
+        // `! ! true` = identity: the command survives (not an empty/negated
+        // wrapper). Two `!` cancel, so it's the bare command.
+        var result = Parse("! ! true");
+        var simple = Assert.IsType<Command.Simple>(result);
+        Assert.Equal(["true"], GetWordValues(simple));
+    }
+
+    [Fact]
+    public void Parse_TripleNegation_NegatesOnce()
+    {
+        var result = Parse("! ! ! true");
+        var pipeline = Assert.IsType<Command.Pipeline>(result);
+        Assert.True(pipeline.Negated);
+    }
+
+    [Fact]
     public void Parse_MultilineError_PointsToCorrectLine()
     {
         // Missing 'fi' on a multiline if/then — error at EOF references the right location.

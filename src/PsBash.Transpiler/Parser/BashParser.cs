@@ -230,8 +230,16 @@ public sealed partial class BashParser
 
     private Command ParsePipeline()
     {
-        var negated = Peek().Kind == BashTokenKind.Bang;
-        if (negated) Advance();
+        // Consume a RUN of leading `!`. bash allows `! ! cmd` (double negation =
+        // identity); negation toggles per `!`, so an even count is identity and
+        // an odd count negates. Reading only one `!` left the second as a stray
+        // Bang that ParseSimpleCommand turned into an empty command (dropping cmd).
+        var negated = false;
+        while (Peek().Kind == BashTokenKind.Bang)
+        {
+            negated = !negated;
+            Advance();
+        }
 
         var first = ParseCompoundOrSimple();
         if (Peek().Kind is not BashTokenKind.Pipe and not BashTokenKind.PipeAmp)

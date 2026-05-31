@@ -129,6 +129,37 @@ public class PsEmitterTests
     }
 
     [Fact]
+    public void Transpile_DoubleNegation_IsIdentity_NoNegationSuffix()
+    {
+        // `! ! cmd` = double negation = identity. The command must run unwrapped
+        // (no exit-code negation), and must NOT be dropped. Previously the second
+        // `!` was a stray Bang that produced an empty command.
+        var result = PsEmitter.Transpile("! ! grep -q pattern file");
+
+        Assert.Equal("Invoke-BashGrep -q pattern file", result);
+    }
+
+    [Fact]
+    public void Transpile_DoubleNegatedPipeline_IsIdentity()
+    {
+        // `! ! cmd1 | cmd2` — double negation applies to the whole pipeline =
+        // identity. No exit-code negation suffix; pipeline runs as-is.
+        var result = PsEmitter.Transpile("! ! cmd1 | cmd2");
+
+        Assert.Equal("cmd1 | cmd2", result);
+    }
+
+    [Fact]
+    public void Transpile_TripleNegation_NegatesOnce()
+    {
+        var result = PsEmitter.Transpile("! ! ! grep -q pattern file");
+
+        Assert.Equal(
+            "Invoke-BashGrep -q pattern file; $global:LASTEXITCODE = if ($global:LASTEXITCODE -eq 0) { 1 } else { 0 }",
+            result);
+    }
+
+    [Fact]
     public void Transpile_NegatedPipeline_EmitsExitCodeNegation()
     {
         var result = PsEmitter.Transpile("! cmd1 | cmd2");
