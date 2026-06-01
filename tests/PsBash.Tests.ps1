@@ -1,12 +1,9 @@
 #Requires -Modules Pester
 
-# Remove any previously loaded copies (e.g. PSGallery installs) and import the source module.
-# This runs at discovery time so InModuleScope resolves the correct module.
-while (Get-Module PsBash) {
-    Get-Module PsBash | Remove-Module -Force -ErrorAction SilentlyContinue
-}
-$modulePath = Join-Path $PSScriptRoot '..' 'src' 'PsBash.Module' 'PsBash.psd1'
-Import-Module $modulePath -Force
+# Ensure exactly one PsBash module (the source tree) is loaded, with no installed
+# copy left discoverable for auto-loading. Runs at discovery time so InModuleScope
+# resolves the correct module. See EnsureCleanRunspace.ps1 for the why.
+$modulePath = . $PSScriptRoot/EnsureCleanRunspace.ps1
 
 BeforeAll {
     # Use PowerShell error mode so Write-BashError emits ErrorRecord objects
