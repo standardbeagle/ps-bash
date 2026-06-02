@@ -82,11 +82,18 @@ projection; `:focused` and `command:` are inert there (no input loop) but harmle
 
 ## Opt-in default (P3)
 
-`SdkRunspaceSetup.ps1` installs a proxy `Out-Default` that, when
-`$env:PSBASH_DEFAULT_FORMAT -eq 'styled'`, routes non-string objects through `Format-Styled`
-(interactive when a TTY is present, else static). Strings, already-formatted output, and the
-styled cmdlet's own output pass straight through to avoid recursion. Default unset → stock
-PowerShell formatting, so existing tests and external-command parity are untouched.
+`SdkWorker.FlushFormatBufferCore` (the point where buffered native PSObjects would be handed to
+`Out-String`) reads `$env:PSBASH_DEFAULT_FORMAT` once per invocation:
+
+| Value | Object output rendered by | Notes |
+|-------|---------------------------|-------|
+| (unset / other) | PowerShell `Out-String` (stock) | golden/differential suites untouched |
+| `styled` | `Format-Styled` (static ANSI string) | works in every mode (`-c`, pipe, file, REPL) |
+| `interactive` | `Show-Styled` (full-screen viewer) **when a TTY is present**, else `Format-Styled` | REPL only; redirected → degrades to the static string, never a blocking UI |
+
+Only PowerShell *object* output is affected — ps-bash's own `Invoke-Bash*` BashText fast-path streams
+unchanged. Each path falls back to stock formatting on failure (data preserved). `interactive` only
+fires at end-of-pipeline (runspace free), so a full-screen viewer never interrupts interleaved text.
 
 ## Status
 
@@ -106,5 +113,8 @@ All on branch `feat/strata-interactive-styled`.
   afterward (clean exit). Headless path unit-tested (3/3). The Terminal.Gui projection was built,
   verified to draw over a PTY, then **removed** (post-exit stdin death — see above), along with its
   native-dep embedding and the subprocess-isolation experiment.
-- **P5** route the styled *default* (`PSBASH_DEFAULT_FORMAT`) to the interactive viewer in the REPL
-  (today it renders the static Spectre string), and add the **ping/tracert** live sources — pending.
+- **P5a** route the styled *default* to the interactive viewer in the REPL — **done**.
+  `PSBASH_DEFAULT_FORMAT=interactive` hands buffered object output to `Show-Styled` (TTY-gated);
+  `InteractiveDefault_RoutesObjectOutputIntoViewer` drives it under a real PTY (no explicit
+  `| Show-Styled`) and confirms clean exit.
+- **P5b** **ping/tracert** live styled sources — pending.

@@ -288,9 +288,16 @@ public sealed class SdkWorker : IWorker, ICompletionWorker
         // own Invoke-Bash* text output (the BashText fast-path) is untouched — only PowerShell object
         // output is styled. Unset/any other value → stock formatting, so golden/differential suites
         // (which never set it) are unaffected. Read once per invocation for a stable decision.
-        bool styledDefault = string.Equals(
-            Environment.GetEnvironmentVariable("PSBASH_DEFAULT_FORMAT")?.Trim(),
-            "styled", StringComparison.OrdinalIgnoreCase);
+        var styledMode = Environment.GetEnvironmentVariable("PSBASH_DEFAULT_FORMAT")?.Trim();
+        bool styledDefault =
+            string.Equals(styledMode, "styled", StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(styledMode, "interactive", StringComparison.OrdinalIgnoreCase);
+        // `interactive` upgrades the default to the full-screen Show-Styled viewer, but only with a
+        // real terminal — under `-c`/pipe/SDK (redirected) it degrades to the static styled string so
+        // non-interactive output is never a blocking full-screen UI.
+        bool interactiveDefault =
+            string.Equals(styledMode, "interactive", StringComparison.OrdinalIgnoreCase) &&
+            !Console.IsOutputRedirected && !Console.IsInputRedirected;
 
         // Render the buffer via Format-Styled (one ANSI string). Like TryFormatViaRunspace this
         // needs the runspace free (end-of-pipeline); a mid-stream flush returns false and falls
@@ -320,9 +327,39 @@ public sealed class SdkWorker : IWorker, ICompletionWorker
             }
         }
 
+        // Render the buffer with the interactive Show-Styled viewer. It writes its full-screen frames
+        // straight to the host Console (the live PTY slave in `-i`) and blocks until the user quits,
+        // so there is nothing to deliver. Only fires at end-of-pipeline (runspace free); a mid-stream
+        // flush returns false so a full-screen viewer never interrupts interleaved text.
+        bool TryShowInteractive(List<PSObject> buffer)
+        {
+            var rs = _ps.Runspace;
+            if (rs is null ||
+                rs.RunspaceAvailability != System.Management.Automation.Runspaces.RunspaceAvailability.Available)
+                return false;
+            try
+            {
+                using var viewer = System.Management.Automation.PowerShell.Create();
+                viewer.Runspace = rs;
+                viewer.AddCommand("Show-Styled");
+                viewer.Invoke(buffer);
+                return !viewer.HadErrors;
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
         void FlushFormatBufferCore()
         {
             if (formatBuffer.Count == 0) return;
+
+            if (interactiveDefault && TryShowInteractive(formatBuffer))
+            {
+                formatBuffer.Clear();
+                return;
+            }
 
             if (styledDefault && TryFormatViaStyled(formatBuffer))
             {

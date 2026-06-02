@@ -61,4 +61,38 @@ public class ShowStyledPtyTests
         await harness.WriteKeysAsync("echo show_styled_exited_ok\n");
         await harness.WaitForRegexAsync(@"show_styled_exited_ok", Timeout);
     }
+
+    /// <summary>
+    /// With <c>PSBASH_DEFAULT_FORMAT=interactive</c>, native PowerShell object output is routed
+    /// straight into the Show-Styled viewer by the SdkWorker — no explicit <c>| Show-Styled</c>. The
+    /// viewer takes over, q returns to a responsive shell.
+    /// </summary>
+    [SkippableFact]
+    [Trait("Platform", "Posix")]
+    public async Task InteractiveDefault_RoutesObjectOutputIntoViewer()
+    {
+        Skip.If(RuntimeInformation.IsOSPlatform(OSPlatform.Windows),
+            "POSIX-only — Windows ConPTY runtime verification is CI-gated");
+
+        var psBash = PtyHarness.FindPsBashBinary();
+        Skip.If(psBash is null, "ps-bash launcher binary not found — build src/PsBash.Shell first");
+
+        await using var harness = await PtyHarness.StartAsync(psBash!);
+
+        // Opt into the interactive default, then emit two native PSObjects with NO `| Show-Styled`.
+        await harness.WriteKeysAsync("export PSBASH_DEFAULT_FORMAT=interactive\n");
+        await harness.WaitForRegexAsync(PtyHarness.PromptPattern, Timeout);
+        await harness.WriteKeysAsync("Get-Process | Select-Object -First 2 Name,Id\n");
+
+        // The SdkWorker buffered the two objects at end-of-pipeline and handed them to Show-Styled,
+        // which drew the viewer — the "[1/2]" position + footer is the proof it routed to the viewer.
+        await harness.WaitForRegexAsync(@"\[1/2\].*Enter expand", Timeout);
+
+        await harness.WriteKeysAsync("q");
+        await harness.WaitForRegexAsync(PtyHarness.PromptPattern, Timeout);
+
+        // Shell responsive after the viewer exits.
+        await harness.WriteKeysAsync("echo interactive_default_ok\n");
+        await harness.WaitForRegexAsync(@"interactive_default_ok", Timeout);
+    }
 }
