@@ -76,17 +76,29 @@ public sealed class ShowStyledCommand : PSCmdlet
         // interactive loop. Keeps the cmdlet usable (and unit-testable) without a real terminal.
         if (Console.IsOutputRedirected || Console.IsInputRedirected)
         {
-            using var projection = new Strata.Render.TerminalGui.TerminalGuiProjection { TextSelector = NodeText };
-            var result = cascade.Compute(surface, stylesheet);
-            var view = projection.Project(surface, result);
-            WriteObject(
-                $"Show-Styled (headless): style '{styleName}', {_rows.Count} rows, " +
-                $"{projection.LiveViewCount} views, root has {view.Subviews.Count} top-level views. " +
-                "Run in a real terminal for the interactive UI.");
+            EmitHeadlessSummary(surface, stylesheet, cascade, styleName);
             return;
         }
 
-        RunInteractive(surface, stylesheet, cascade, styleName);
+        // A real terminal: enter the live loop. If Terminal.Gui cannot initialize a driver for this
+        // terminal (marginal $TERM, no console handle), fall back to the headless summary rather than
+        // hard-failing — the data is still shown, never lost.
+        if (!TryRunInteractive(surface, stylesheet, cascade, styleName))
+        {
+            EmitHeadlessSummary(surface, stylesheet, cascade, styleName);
+        }
+    }
+
+    /// <summary>Build the view tree once and write a one-line summary (no interactive loop).</summary>
+    private void EmitHeadlessSummary(StyledNode surface, IStylesheet stylesheet, Cascade cascade, string styleName)
+    {
+        using var projection = new Strata.Render.TerminalGui.TerminalGuiProjection { TextSelector = NodeText };
+        var result = cascade.Compute(surface, stylesheet);
+        var view = projection.Project(surface, result);
+        WriteObject(
+            $"Show-Styled (headless): style '{styleName}', {_rows.Count} rows, " +
+            $"{projection.LiveViewCount} views, root has {view.Subviews.Count} top-level views. " +
+            "Run in a real terminal for the interactive UI.");
     }
 
     /// <summary>Build the <c>Surface → Row*</c> tree. Rows start collapsed (no Detail subtree).</summary>
@@ -239,9 +251,19 @@ public sealed class ShowStyledCommand : PSCmdlet
     /// with a real terminal (the headless branch returns before here); not exercised by unit tests,
     /// which always see redirected I/O.
     /// </summary>
-    private void RunInteractive(StyledNode surface, IStylesheet stylesheet, Cascade cascade, string styleName)
+    private bool TryRunInteractive(StyledNode surface, IStylesheet stylesheet, Cascade cascade, string styleName)
     {
-        Terminal.Gui.Application.Init();
+        try
+        {
+            Terminal.Gui.Application.Init();
+        }
+        catch (Exception ex)
+        {
+            // No usable console driver for this terminal — caller falls back to the headless summary.
+            WriteVerbose($"Show-Styled: interactive driver unavailable ({ex.GetType().Name}); rendering summary.");
+            return false;
+        }
+
         var projection = new Strata.Render.TerminalGui.TerminalGuiProjection { TextSelector = NodeText };
         try
         {
@@ -309,6 +331,7 @@ public sealed class ShowStyledCommand : PSCmdlet
 
             Terminal.Gui.Application.Run(top);
             top.Dispose();
+            return true;
         }
         finally
         {

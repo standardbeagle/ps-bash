@@ -35,24 +35,32 @@ objects ──► PsObject node tree (kind/class/:pseudo) ──► CSS cascade 
   actions (kill / open / restart). Headless fallback (redirected I/O) prints a one-line summary,
   mirroring the Strata demo.
 
-## The TTY-handoff constraint (P4 integration seam)
+## The TTY model (resolved) and the one remaining gap
 
-`ps-bash-host` is `PublishAot=false` (JIT) so Terminal.Gui's reflection paths are fine there —
-**but** the host's stdout is piped over IPC to the AOT launcher (`PsBash.Shell`), which owns the
-real PTY. Terminal.Gui sees `Console.IsOutputRedirected == true` in the host and goes headless.
+`ps-bash-host` is `PublishAot=false` (JIT) so Terminal.Gui's reflection paths run there. The earlier
+worry — "host stdout is IPC-piped, so Terminal.Gui sees redirected output and goes headless" — holds
+only for the **non-interactive** modes (`-c`, stdin pipe, file). In the **interactive REPL (`ps-bash
+-i`)** the launcher spawns the host **attached to the real PTY slave** as its stdio (the same path
+`browse` and `vim` use), so the host's `Console` *is* the terminal. **No launcher↔host handshake is
+needed.** Verified: `ShowStyledPtyTests` drives `seq 1 5 | Show-Styled` through `ps-bash -i` under a
+real pseudo-terminal and the Terminal.Gui window draws and quits cleanly.
 
-So the interactive viewer needs the **real terminal**, which the launcher holds. Options:
+So the mode split is automatic and correct:
 
-- **A. Host opens `/dev/tty` directly** for the Terminal.Gui session while the launcher yields raw
-  mode (an "enter TUI" IPC handshake). Host is JIT → Terminal.Gui runs. *Preferred; the work is the
-  launcher↔host handshake + Windows console-handle equivalent.*
-- **B. Viewer in the launcher** — rejected: launcher is NativeAOT, Terminal.Gui is not AOT-safe.
-- **C. Spawn a separate non-AOT helper process** bound to the tty — heavier, last resort.
+- **Interactive REPL** → host owns the PTY → `Show-Styled` enters the live Terminal.Gui loop.
+- **`-c` / pipe / file / SDK** → `Console.IsOutputRedirected` → `Show-Styled` emits the headless
+  summary; the styled *default* (`PSBASH_DEFAULT_FORMAT`, P3) renders the static Spectre string.
 
-Until the handshake lands, the interactive viewer is reachable where the host already owns a TTY
-(module-mode `Import-Module PsBash` in a plain `pwsh`, and direct one-shot runs), with the static
-renderer as the universal fallback. **This is the one piece deferred from a single session; the
-stylesheets and the static path ship complete.**
+**The one remaining gap — post-TUI LineEditor re-arm.** After a Terminal.Gui session exits, the
+shell prompt returns but the **next** input line is not processed: Terminal.Gui owns the terminal
+directly and bypasses ps-bash's `LineEditor`, so on shutdown it does not re-arm the cooked-mode line
+reader (`browse` avoids this by being hand-rolled *inside* that editor). The fix is to re-initialize
+the `InteractiveShell` line reader after `Application.Shutdown()` returns control. Until then, the
+viewer draws and quits cleanly, but a user must press Enter / re-focus to resume typing.
+`ShowStyledPtyTests` asserts the verified contract (draw + clean quit-to-prompt) and documents this
+omission per QA-rubric Directive 5.
+
+Windows ConPTY runtime verification is CI-gated (the POSIX PTY tests `Skip.If(Windows)`).
 
 ## Stylesheets (built-in, embedded)
 
@@ -89,16 +97,16 @@ All on branch `feat/strata-interactive-styled`.
   **done**. 4 theory cases parse+render green (15/15).
 - **P3** opt-in `PSBASH_DEFAULT_FORMAT=styled` at the SdkWorker flush point — **done**. Native
   PSObject output styled with ANSI when on, stock formatting when off; SdkWorker suite 18/18.
-- **P4** interactive `Show-Styled` viewer — **partially done**. The cmdlet (`Show-Styled`), the
+- **P4** interactive `Show-Styled` viewer — **landed + verified over a real PTY**. The cmdlet, the
   mutable node model (`StyledNode`), and the shared resolver (`StyledStyles`, which `Format-Styled`
-  now delegates to) are in; it builds the `Surface → Row* → Detail/Button` tree and projects it via
-  `TerminalGuiProjection`. The **headless** path (build tree + summary) is unit-tested (3/3); the
-  **live loop** (navigate / Enter-to-expand) mirrors the Show-Processes sample and is verified
-  manually in module-mode (`Import-Module PsBash` in a real `pwsh`), since a terminal driver can't be
-  unit-tested. **Still pending:** embedding `Terminal.Gui` / `System.Reactive` for the in-process
-  host (today `Show-Styled` runs in module-mode pwsh, not the IPC host), the launcher↔host TTY
-  handshake that lets the styled *default* go interactive in the REPL, and the **ping/tracert** live
-  sources.
+  delegates to) build the `Surface → Row* → Detail/Button` tree and project it via
+  `TerminalGuiProjection`. Terminal.Gui v2 + `System.Reactive` + transitive deps are now **embedded
+  in the host bundle** (Core `_StrataDep`) and extracted at runtime — confirmed end-to-end through
+  the real `ps-bash` host (`Get-Process | Show-Styled` → procsvc sheet, views built). Headless path
+  unit-tested (3/3); the **live loop drawing + clean quit** verified by `ShowStyledPtyTests` under a
+  real pseudo-terminal. **Remaining:** the post-TUI LineEditor re-arm (above), routing the styled
+  *default* to the interactive viewer in the REPL (vs the static string today), and the
+  **ping/tracert** live sources.
 
 ### Why P4 is staged separately
 
