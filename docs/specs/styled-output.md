@@ -89,11 +89,16 @@ All on branch `feat/strata-interactive-styled`.
   **done**. 4 theory cases parse+render green (15/15).
 - **P3** opt-in `PSBASH_DEFAULT_FORMAT=styled` at the SdkWorker flush point — **done**. Native
   PSObject output styled with ANSI when on, stock formatting when off; SdkWorker suite 18/18.
-- **P4** interactive Terminal.Gui viewer + ping/tracert sources + launcher↔host TTY handshake —
-  **pending**. The largest piece: needs the TerminalGui/Interaction/Reactive (+ Terminal.Gui native)
-  assemblies embedded for the host runtime and the TTY handshake above. The interactive run loop
-  cannot be unit-verified headlessly (needs a real terminal driver), so it lands behind a headless
-  fallback and is verified manually in module-mode (`Import-Module PsBash` in a real `pwsh`).
+- **P4** interactive `Show-Styled` viewer — **partially done**. The cmdlet (`Show-Styled`), the
+  mutable node model (`StyledNode`), and the shared resolver (`StyledStyles`, which `Format-Styled`
+  now delegates to) are in; it builds the `Surface → Row* → Detail/Button` tree and projects it via
+  `TerminalGuiProjection`. The **headless** path (build tree + summary) is unit-tested (3/3); the
+  **live loop** (navigate / Enter-to-expand) mirrors the Show-Processes sample and is verified
+  manually in module-mode (`Import-Module PsBash` in a real `pwsh`), since a terminal driver can't be
+  unit-tested. **Still pending:** embedding `Terminal.Gui` / `System.Reactive` for the in-process
+  host (today `Show-Styled` runs in module-mode pwsh, not the IPC host), the launcher↔host TTY
+  handshake that lets the styled *default* go interactive in the REPL, and the **ping/tracert** live
+  sources.
 
 ### Why P4 is staged separately
 
