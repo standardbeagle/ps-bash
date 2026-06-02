@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using System.Net.Sockets;
 using System.Runtime.InteropServices;
+using PsBash.Core.Runtime.Compaction;
 using PsBash.Core.Runtime.Ipc;
 
 namespace PsBash.Core.Runtime;
@@ -759,7 +760,10 @@ public sealed class IpcWorker : IWorker
 
     private void EmitCompactedOutput(string command, int exitCode, bool timedOut, IReadOnlyList<OutputFrame> frames)
     {
-        var compacted = OutputCompactor.CompactCommandOutput(command, exitCode, timedOut, frames);
+        // FilterEngine routes to a command-aware filter when one matches; with none
+        // supplied it falls back to the generic OutputCompactor digest (identical
+        // behavior to before this layer). P1 wires the loaded filter set in here.
+        var compacted = FilterEngine.Apply(command, exitCode, timedOut, frames);
         if (OutputCallback is { } cb) cb(compacted);
         else Console.Write(compacted);
     }

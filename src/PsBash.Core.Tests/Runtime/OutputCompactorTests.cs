@@ -1,4 +1,4 @@
-using PsBash.Core.Runtime;
+using PsBash.Core.Runtime.Compaction;
 using PsBash.Core.Runtime.Ipc;
 using Xunit;
 
