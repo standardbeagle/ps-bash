@@ -1,0 +1,30 @@
+/* net — network probes (ping replies, traceroute hops) coloured by latency.
+ *
+ * Auto-selected for PsBash.PingReply / PsBash.TraceHop objects (StyledStyles.AutoStyleForKind), so
+ *   ping host | Show-Styled        and       PSBASH_DEFAULT_FORMAT=interactive; ping host
+ * both render the navigable styled viewer; expand a reply/hop (Enter) for its full detail.
+ *
+ * The cmdlets project a latency `class`: ok (<80ms) · slow (<200ms) · high (>=200ms) · timeout.
+ */
+
+PingReply { color: white }
+TraceHop  { color: white }
+
+.ok      { color: brightgreen }
+.slow    { color: brightyellow }
+.high    { color: brightred; font-weight: bold }
+.timeout { color: gray; text-decoration: strikethrough }
+
+/* Expandable detail (address / time / ttl / status) + focus cursor, shared with the other sheets. */
+Detail      { color: gray }
+Detail .key { color: cyan }
+:expanded > Detail { color: white }
+
+:focused { color: black; background: brightcyan }
+Surface {
+    command: "navigate-down" when "key.ArrowDown";
+    command: "navigate-up"   when "key.ArrowUp";
+    command: "navigate-down" when "key.j";
+    command: "navigate-up"   when "key.k";
+    command: "toggle-expand" when "key.Enter";
+}

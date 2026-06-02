@@ -3243,6 +3243,13 @@ public static class PsEmitter
             case "which":
                 result = EmitPassthrough("Invoke-BashWhich", args);
                 return true;
+            case "ping":
+                result = EmitPassthrough("Invoke-BashPing", args);
+                return true;
+            case "tracert":
+            case "traceroute":
+                result = EmitPassthrough("Invoke-BashTraceroute", args);
+                return true;
             case "uname":
                 result = EmitPassthrough("Invoke-BashUname", args);
                 return true;

@@ -89,9 +89,14 @@ CmdletsToExport = @(
     # renders them via the Strata selector engine + Spectre.Console projection.
     'Format-Styled',
     # Interactive counterpart: a full-screen, navigable list with per-row detail
-    # expansion and action buttons, driven by the same Strata stylesheets via the
-    # Terminal.Gui projection. Headless (redirected I/O) emits a summary instead.
-    'Show-Styled'
+    # expansion, driven by the same Strata stylesheets via a Console.ReadKey +
+    # Spectre projection loop. Headless (redirected I/O) emits a summary instead.
+    'Show-Styled',
+    # Network probes as styled objects (managed ICMP): one object per reply / hop with
+    # a native-style BashText line plus a latency `class`, so they read like the real
+    # tools and become the interactive styled viewer when piped to Show-Styled.
+    'Invoke-BashPing',
+    'Invoke-BashTraceroute'
 )
 
 VariablesToExport = @()

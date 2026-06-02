@@ -68,6 +68,8 @@
 | sleep | Invoke-BashSleep | (duration) | Positional | No | No |
 | time | Invoke-BashTime | (command) | Positional | No | No |
 | which | Invoke-BashWhich | `-a` | Manual loop | No | No |
+| ping | Invoke-BashPing | `-c`/`-n` count, `-W` timeout, `-t` | Binary cmdlet (manual scan; managed `System.Net.NetworkInformation.Ping`). Emits one `PsBash.PingReply` object per probe — `BashText` native-style line + `Seq`/`Address`/`Time`/`Ttl`/`Status` + latency `class` (ok/slow/high/timeout). Pipe to `Show-Styled` (auto `net` sheet) for the interactive viewer | No | No |
+| tracert / traceroute | Invoke-BashTraceroute | `-m`/`-h` maxhops, `-w`/`-W` timeout | Binary cmdlet (manual scan). Prefers the native `traceroute`/`tracert` binary (TTL tracing needs raw sockets), wrapping each hop line as a `PsBash.TraceHop` object (`BashText` + `Hop`/`Address`/`Time` + latency `class`); managed `Ping` TTL fallback when no native binary (needs `cap_net_raw`). Auto `net` sheet | No | No |
 | alias | Invoke-BashAlias | `-p`, `-u`, `-a` | Binary cmdlet (`-p` / `-a` declared as `SwitchParameter`s `P` / `A`; `-u` stays in `Arguments`; psm1-scoped `$script:BashUserAliases` accessed via parameter-bound `InvokeScript`) | No | No |
 | trap | Invoke-BashTrap | `-p`, `-l` | Binary cmdlet (`-p` declared as `SwitchParameter P`; `-l` stays in `Arguments`; psm1-scoped `$script:BashTrapHandlers` accessed via parameter-bound `InvokeScript`; ERR/EXIT also publish `$global:__BashTrapERR` / `$global:__BashTrapEXIT` scriptblocks) | No | No |
 | unset | Invoke-BashUnset | `-v`, `-f` | Manual loop | No | No |

@@ -4366,6 +4366,9 @@ Set-Alias -Name 'xan'      -Value 'Invoke-BashXan'      -Force -Scope Global -Op
 Set-Alias -Name 'sleep'    -Value 'Invoke-BashSleep'    -Force -Scope Global -Option AllScope
 Set-Alias -Name 'time'     -Value 'Invoke-BashTime'     -Force -Scope Global -Option AllScope
 Set-Alias -Name 'which'    -Value 'Invoke-BashWhich'    -Force -Scope Global -Option AllScope
+Set-Alias -Name 'ping'       -Value 'Invoke-BashPing'       -Force -Scope Global -Option AllScope
+Set-Alias -Name 'tracert'    -Value 'Invoke-BashTraceroute' -Force -Scope Global -Option AllScope
+Set-Alias -Name 'traceroute' -Value 'Invoke-BashTraceroute' -Force -Scope Global -Option AllScope
 Set-Alias -Name 'alias'    -Value 'Invoke-BashAlias'    -Force -Scope Global -Option AllScope
 Set-Alias -Name 'unalias'  -Value 'Invoke-BashAlias'    -Force -Scope Global -Option AllScope
 Set-Alias -Name 'balias'   -Value 'Invoke-BashAlias'    -Force -Scope Global -Option AllScope

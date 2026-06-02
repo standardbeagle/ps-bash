@@ -40,6 +40,7 @@ internal static class StyledStyles
         "FileInfo" or "DirectoryInfo" or "FileSystemInfo" => "fs",
         "Process" or "Service" or "ServiceController" => "procsvc",
         "ErrorRecord" => "error",
+        "PingReply" or "TraceHop" => "net",
         _ => "object",
     };
 

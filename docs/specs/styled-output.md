@@ -117,4 +117,9 @@ All on branch `feat/strata-interactive-styled`.
   `PSBASH_DEFAULT_FORMAT=interactive` hands buffered object output to `Show-Styled` (TTY-gated);
   `InteractiveDefault_RoutesObjectOutputIntoViewer` drives it under a real PTY (no explicit
   `| Show-Styled`) and confirms clean exit.
-- **P5b** **ping/tracert** live styled sources — pending.
+- **P5b** **ping / tracert** styled sources — **done**. `Invoke-BashPing` (managed ICMP) and
+  `Invoke-BashTraceroute` (native binary, managed TTL fallback) emit `PsBash.PingReply` /
+  `PsBash.TraceHop` objects — a native-style `BashText` line plus a latency `class` — so `ping host`
+  reads like the real tool, `ping host | Show-Styled` (auto `net` sheet) is the navigable styled
+  viewer, and `PSBASH_DEFAULT_FORMAT=interactive` opens it automatically. Mapped in the emitter
+  (`ping`/`tracert`/`traceroute`); aliased in psm1. Tests: `InvokeBashPingCommandTests` 3/3.
