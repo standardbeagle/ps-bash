@@ -282,9 +282,53 @@ public sealed class SdkWorker : IWorker, ICompletionWorker
             }
         }
 
+        // Opt-in: make Format-Styled the default output. When PSBASH_DEFAULT_FORMAT=styled, the
+        // buffered raw PSObjects (native cmdlet output, [PSCustomObject]@{…}) are rendered by the
+        // Strata-backed Format-Styled cmdlet instead of PowerShell's Out-String formatter. ps-bash's
+        // own Invoke-Bash* text output (the BashText fast-path) is untouched — only PowerShell object
+        // output is styled. Unset/any other value → stock formatting, so golden/differential suites
+        // (which never set it) are unaffected. Read once per invocation for a stable decision.
+        bool styledDefault = string.Equals(
+            Environment.GetEnvironmentVariable("PSBASH_DEFAULT_FORMAT")?.Trim(),
+            "styled", StringComparison.OrdinalIgnoreCase);
+
+        // Render the buffer via Format-Styled (one ANSI string). Like TryFormatViaRunspace this
+        // needs the runspace free (end-of-pipeline); a mid-stream flush returns false and falls
+        // back to the stock path so interleaved text/object ordering is preserved.
+        bool TryFormatViaStyled(List<PSObject> buffer)
+        {
+            var rs = _ps.Runspace;
+            if (rs is null ||
+                rs.RunspaceAvailability != System.Management.Automation.Runspaces.RunspaceAvailability.Available)
+                return false;
+            try
+            {
+                using var fmt = System.Management.Automation.PowerShell.Create();
+                fmt.Runspace = rs;
+                fmt.AddCommand("Format-Styled");
+                var results = fmt.Invoke(buffer);
+                if (fmt.HadErrors) return false;
+                foreach (var r in results)
+                    deliver((r?.ToString() ?? "") + Environment.NewLine);
+                return true;
+            }
+            catch
+            {
+                // Styling failed (e.g. Format-Styled unavailable in a stripped build). Fall back to
+                // stock formatting so the user still sees their data rather than losing it.
+                return false;
+            }
+        }
+
         void FlushFormatBufferCore()
         {
             if (formatBuffer.Count == 0) return;
+
+            if (styledDefault && TryFormatViaStyled(formatBuffer))
+            {
+                formatBuffer.Clear();
+                return;
+            }
 
             if (TryFormatViaRunspace(formatBuffer))
             {

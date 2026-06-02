@@ -200,6 +200,45 @@ public class SdkWorkerTests : IAsyncLifetime
         Assert.Contains(run.Lines, l => l.Contains("USB Root Hub") && l.Contains("OK"));
     }
 
+    // Opt-in styled default output: with PSBASH_DEFAULT_FORMAT=styled, the same native
+    // PSObject pipeline is rendered by Format-Styled (Strata/Spectre) instead of Out-String,
+    // so the output carries ANSI SGR escapes and NOT the stock formatter's dashed separator.
+    // Oracle note (Directive 1): ps-bash-specific (no bash equivalent) — asserts on the
+    // cmdlet surface. Env-gated and restored so no other test sees the flag.
+    [Fact]
+    public async Task ExecuteAsync_StyledDefaultFlag_RendersNativePSObjectsWithAnsi()
+    {
+        var priorFormat = Environment.GetEnvironmentVariable("PSBASH_DEFAULT_FORMAT");
+        var priorNoColor = Environment.GetEnvironmentVariable("NO_COLOR");
+        try
+        {
+            Environment.SetEnvironmentVariable("PSBASH_DEFAULT_FORMAT", "styled");
+            Environment.SetEnvironmentVariable("NO_COLOR", null); // ensure ANSI is emitted
+
+            var script = @"
+                [PSCustomObject]@{ FriendlyName = 'Intel USB 3.10'; Status = 'OK' }
+                [PSCustomObject]@{ FriendlyName = 'USB Root Hub';   Status = 'OK' }
+            ";
+            var run = await _fixture.ExecuteCapturedAsync(script);
+            Assert.Equal(0, run.ExitCode);
+            Assert.NotEmpty(run.Lines);
+
+            var joined = string.Join("\n", run.Lines);
+            // Strata/Spectre emitted ANSI styling — the styled path, not Out-String.
+            Assert.Matches("\\x1b\\[[0-9;]*m", joined);
+            // The data is still present (styled, not lost).
+            Assert.Contains("Intel USB 3.10", joined);
+            Assert.Contains("USB Root Hub", joined);
+            // The stock Out-String formatter's dashed header separator must be ABSENT.
+            Assert.DoesNotContain(run.Lines, l => l.Contains("------------") && l.Contains("------"));
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("PSBASH_DEFAULT_FORMAT", priorFormat);
+            Environment.SetEnvironmentVariable("NO_COLOR", priorNoColor);
+        }
+    }
+
     // BashText-bearing objects must continue to stream as plain text and must
     // NOT be re-rendered through the formatter (which would add headers like
     // "BashText" and a separator). This is the regression bar for the existing
