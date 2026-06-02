@@ -21,44 +21,44 @@ Three deliverables, in dependency order:
 ## Two renderers, one cascade
 
 ```
-objects ──► PsObject node tree (kind/class/:pseudo) ──► CSS cascade ──┬─► SpectreProjection   ─► ANSI string   (static, any sink)
-                                          ▲                            └─► TerminalGuiProjection ─► live View tree (interactive, real TTY)
-                                          │
-                          shared built-in stylesheets (fs / procsvc / object / error)
+objects ──► StyledNode tree (kind/class/:pseudo) ──► CSS cascade ──► SpectreProjection ─► ANSI ──┬─► one string   (Format-Styled, static)
+                              ▲                                                                   └─► repaint loop (Show-Styled, interactive)
+                              │
+              shared built-in stylesheets (fs / procsvc / object / error)
 ```
 
-- **Static** (`Format-Styled`, today): `SpectreProjection` → one ANSI string forwarded over IPC.
-  Works in every mode (`-c`, pipe, file, non-TTY). Buttons render as `[ Label ]` chrome;
-  `:expanded` rows render their detail block inline. No keyboard interaction.
-- **Interactive** (`Show-Styled` / `Format-Styled -Interactive`, P4): `TerminalGuiProjection` →
-  full-screen View tree; `command:` CSS bindings move focus, toggle `:expanded`, fire button
-  actions (kill / open / restart). Headless fallback (redirected I/O) prints a one-line summary,
-  mirroring the Strata demo.
+Both renderers use the **same** AOT-clean `SpectreProjection`; only the driver differs.
 
-## The TTY model (resolved) and the one remaining gap
+- **Static** (`Format-Styled`): one ANSI string forwarded over IPC. Works in every mode (`-c`, pipe,
+  file, non-TTY). `:expanded` rows render their detail inline; no keyboard interaction.
+- **Interactive** (`Show-Styled`): a `Console.ReadKey` loop (the proven-clean `browse` pattern)
+  mutates the focused row's `:focused` / `:expanded` pseudo-state, re-runs the cascade, and repaints
+  the Spectre frame on the alternate screen. ↑↓/jk move, Enter expands a row's detail block, q quits.
+  Headless fallback (redirected I/O) prints a one-line summary.
 
-`ps-bash-host` is `PublishAot=false` (JIT) so Terminal.Gui's reflection paths run there. The earlier
-worry — "host stdout is IPC-piped, so Terminal.Gui sees redirected output and goes headless" — holds
-only for the **non-interactive** modes (`-c`, stdin pipe, file). In the **interactive REPL (`ps-bash
--i`)** the launcher spawns the host **attached to the real PTY slave** as its stdio (the same path
-`browse` and `vim` use), so the host's `Console` *is* the terminal. **No launcher↔host handshake is
-needed.** Verified: `ShowStyledPtyTests` drives `seq 1 5 | Show-Styled` through `ps-bash -i` under a
-real pseudo-terminal and the Terminal.Gui window draws and quits cleanly.
+**Why not Strata's Terminal.Gui projection:** it was built and verified to draw over a PTY, but
+Terminal.Gui v2 (prealpha) drives the tty through its own input loop + native termios and leaves the
+host's stdin dead on exit — no termios reset, subprocess isolation, or job-control reclaim recovered
+it. The `Console.ReadKey` + Spectre loop shares the exact terminal path the line editor uses
+(`browse`/`vim`), so it exits cleanly; it also drops the Terminal.Gui / System.Reactive native-dep
+embedding entirely. (`StandardBeagle.Strata.Interaction` is still referenced — only for the
+`command:` property descriptor so the stylesheets parse.)
 
-So the mode split is automatic and correct:
+## The TTY model
 
-- **Interactive REPL** → host owns the PTY → `Show-Styled` enters the live Terminal.Gui loop.
-- **`-c` / pipe / file / SDK** → `Console.IsOutputRedirected` → `Show-Styled` emits the headless
-  summary; the styled *default* (`PSBASH_DEFAULT_FORMAT`, P3) renders the static Spectre string.
+In the **interactive REPL (`ps-bash -i`)** the launcher spawns the host **attached to the real PTY
+slave** as its stdio (the same path `browse` and `vim` use), so the host's `Console` *is* the
+terminal — `Show-Styled` reads keys with `Console.ReadKey` directly, no launcher↔host handshake. In
+the **non-interactive** modes (`-c`, stdin pipe, file, SDK) the host's stdio is IPC-piped, so
+`Console.IsOutputRedirected` is true and `Show-Styled` emits the headless summary instead.
 
-**The one remaining gap — post-TUI LineEditor re-arm.** After a Terminal.Gui session exits, the
-shell prompt returns but the **next** input line is not processed: Terminal.Gui owns the terminal
-directly and bypasses ps-bash's `LineEditor`, so on shutdown it does not re-arm the cooked-mode line
-reader (`browse` avoids this by being hand-rolled *inside* that editor). The fix is to re-initialize
-the `InteractiveShell` line reader after `Application.Shutdown()` returns control. Until then, the
-viewer draws and quits cleanly, but a user must press Enter / re-focus to resume typing.
-`ShowStyledPtyTests` asserts the verified contract (draw + clean quit-to-prompt) and documents this
-omission per QA-rubric Directive 5.
+So the mode split is automatic:
+
+- **Interactive REPL** → host owns the PTY → `Show-Styled` runs the `ReadKey` repaint loop and
+  exits cleanly (the shell stays responsive — verified by `ShowStyledPtyTests`, which navigates,
+  quits, and round-trips an `echo` afterward).
+- **`-c` / pipe / file / SDK** → redirected → `Show-Styled` prints the summary; the styled *default*
+  (`PSBASH_DEFAULT_FORMAT`, P3) renders the static Spectre string.
 
 Windows ConPTY runtime verification is CI-gated (the POSIX PTY tests `Skip.If(Windows)`).
 
@@ -97,20 +97,14 @@ All on branch `feat/strata-interactive-styled`.
   **done**. 4 theory cases parse+render green (15/15).
 - **P3** opt-in `PSBASH_DEFAULT_FORMAT=styled` at the SdkWorker flush point — **done**. Native
   PSObject output styled with ANSI when on, stock formatting when off; SdkWorker suite 18/18.
-- **P4** interactive `Show-Styled` viewer — **landed + verified over a real PTY**. The cmdlet, the
-  mutable node model (`StyledNode`), and the shared resolver (`StyledStyles`, which `Format-Styled`
-  delegates to) build the `Surface → Row* → Detail/Button` tree and project it via
-  `TerminalGuiProjection`. Terminal.Gui v2 + `System.Reactive` + transitive deps are now **embedded
-  in the host bundle** (Core `_StrataDep`) and extracted at runtime — confirmed end-to-end through
-  the real `ps-bash` host (`Get-Process | Show-Styled` → procsvc sheet, views built). Headless path
-  unit-tested (3/3); the **live loop drawing + clean quit** verified by `ShowStyledPtyTests` under a
-  real pseudo-terminal. **Remaining:** the post-TUI LineEditor re-arm (above), routing the styled
-  *default* to the interactive viewer in the REPL (vs the static string today), and the
-  **ping/tracert** live sources.
-
-### Why P4 is staged separately
-
-P1–P3 satisfy the goal end-to-end on every platform and mode with automated tests. P4 adds *live*
-interaction; its two un-headless-testable risks (Terminal.Gui native-driver load in the extracted
-host bundle, and the launcher↔host TTY handshake) want a real-terminal verification loop, so they are
-deliberately not bundled into the same automated-green increment.
+- **P4** interactive `Show-Styled` viewer — **landed + verified over a real PTY, exits clean**. The
+  cmdlet, the mutable node model (`StyledNode`), the shared resolver (`StyledStyles`, which
+  `Format-Styled` delegates to), and the `Console.ReadKey` + Spectre repaint loop
+  (`StyledInteractiveSession`) build the `Surface → (Row | Detail)*` tree, cascade it, and repaint on
+  each keystroke. `ShowStyledPtyTests` drives `seq 1 5 | Show-Styled` through `ps-bash -i` under a real
+  pseudo-terminal: the viewer renders, navigates, quits, and the shell round-trips an `echo`
+  afterward (clean exit). Headless path unit-tested (3/3). The Terminal.Gui projection was built,
+  verified to draw over a PTY, then **removed** (post-exit stdin death — see above), along with its
+  native-dep embedding and the subprocess-isolation experiment.
+- **P5** route the styled *default* (`PSBASH_DEFAULT_FORMAT`) to the interactive viewer in the REPL
+  (today it renders the static Spectre string), and add the **ping/tracert** live sources — pending.

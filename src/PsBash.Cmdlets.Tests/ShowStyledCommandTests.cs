@@ -36,11 +36,9 @@ public class ShowStyledCommandTests : IClassFixture<SharedPwshFixture>
         Assert.False(pwsh.HadErrors, string.Join("; ", pwsh.Streams.Error.Select(e => e.ToString())));
         Assert.Single(result);
         var text = result[0].ToString() ?? string.Empty;
-        // Headless summary: proves the tree built and the projection produced views.
+        // Headless summary: proves the styled tree built and the cascade ran for the given rows.
         Assert.Contains("headless", text);
         Assert.Contains("2 rows", text);
-        // A Surface root projects one top-level view per Row (collapsed: no detail children yet).
-        Assert.Contains("views", text);
     }
 
     [Fact]

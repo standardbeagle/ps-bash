@@ -107,25 +107,8 @@
            embed it explicitly (guarded) or Format-Styled's grid path fails to load at runtime. -->
       <_StrataDep Include="$(_PsBashCmdletsBin)\Yoga.Net.dll"
                   Condition="Exists('$(_PsBashCmdletsBin)\Yoga.Net.dll')" />
-      <!-- Interactive Show-Styled deps: Strata.Render.TerminalGui (caught by Strata.*.dll above)
-           drags in Terminal.Gui v2 and its transitive set, plus System.Reactive (from
-           Strata.Interaction). None share the Strata.* prefix, so embed each explicitly+guarded so
-           the host's LoadFrom context resolves them when the interactive viewer runs in `ps-bash -i`.
-           Parlot is already loaded by the host process (PsBash.Transpiler) — intentionally omitted. -->
-      <_StrataDep Include="$(_PsBashCmdletsBin)\Terminal.Gui.dll"
-                  Condition="Exists('$(_PsBashCmdletsBin)\Terminal.Gui.dll')" />
       <_StrataDep Include="$(_PsBashCmdletsBin)\System.Reactive.dll"
                   Condition="Exists('$(_PsBashCmdletsBin)\System.Reactive.dll')" />
-      <_StrataDep Include="$(_PsBashCmdletsBin)\ColorHelper.dll"
-                  Condition="Exists('$(_PsBashCmdletsBin)\ColorHelper.dll')" />
-      <_StrataDep Include="$(_PsBashCmdletsBin)\Wcwidth.dll"
-                  Condition="Exists('$(_PsBashCmdletsBin)\Wcwidth.dll')" />
-      <_StrataDep Include="$(_PsBashCmdletsBin)\System.IO.Abstractions.dll"
-                  Condition="Exists('$(_PsBashCmdletsBin)\System.IO.Abstractions.dll')" />
-      <_StrataDep Include="$(_PsBashCmdletsBin)\TestableIO.System.IO.Abstractions.dll"
-                  Condition="Exists('$(_PsBashCmdletsBin)\TestableIO.System.IO.Abstractions.dll')" />
-      <_StrataDep Include="$(_PsBashCmdletsBin)\TestableIO.System.IO.Abstractions.Wrappers.dll"
-                  Condition="Exists('$(_PsBashCmdletsBin)\TestableIO.System.IO.Abstractions.Wrappers.dll')" />
       <EmbeddedResource Include="@(_StrataDep)"
                         LogicalName="PsBash.Module/cmdlets/$(TargetFramework)/%(_StrataDep.Filename)%(_StrataDep.Extension)"
                         Type="Non-Resx"

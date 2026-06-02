@@ -51,6 +51,7 @@
   <ItemGroup Condition="'$(UseStrata)' != 'true'">
     <Compile Remove="FormatStyledCommand.cs" />
     <Compile Remove="ShowStyledCommand.cs" />
+    <Compile Remove="StyledInteractiveSession.cs" />
     <Compile Remove="StyledNode.cs" />
     <Compile Remove="StyledStyles.cs" />
   </ItemGroup>
@@ -79,14 +80,10 @@
     <!-- Yoga layout pass: required for the 3-arg SpectreProjection.Project overload
          that honors `display: grid` (Format-Styled grid / property-list rendering). -->
     <PackageReference Include="StandardBeagle.Strata.Layout.Yoga" Version="$(StrataVersion)" />
-    <!-- Interaction: the `command:` property descriptor (so button/expansion stylesheets parse)
-         and, for the interactive viewer, the input/command/dispatch layer. System.Reactive flows
-         in transitively (only exercised by the interactive Terminal.Gui path). -->
+    <!-- Interaction: the `command:` property descriptor so the button/expansion stylesheets (which
+         declare `command:` bindings) parse. Only the descriptor is used (registration is pure);
+         System.Reactive flows in transitively but is never exercised. -->
     <PackageReference Include="StandardBeagle.Strata.Interaction" Version="$(StrataVersion)" />
-    <!-- Terminal.Gui projection: the interactive Show-Styled viewer. Terminal.Gui v2 (not AOT/trim
-         clean) flows in transitively; it runs only in the JIT host / module-mode pwsh, never the
-         AOT launcher. Headless (redirected I/O) builds the view tree and returns a summary. -->
-    <PackageReference Include="StandardBeagle.Strata.Render.TerminalGui" Version="$(StrataVersion)" />
   </ItemGroup>
 
   <!-- Built-in Format-Styled stylesheets, embedded so they travel with the DLL

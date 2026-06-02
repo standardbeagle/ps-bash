@@ -40,27 +40,25 @@ public class ShowStyledPtyTests
         await using var harness = await PtyHarness.StartAsync(psBash!);
 
         // seq emits five BashObjects; Show-Styled styles them via the auto-picked `object` sheet and
-        // enters the interactive loop (the host's stdout is the live PTY slave, so it is not
+        // enters the interactive viewer (the host's stdout is the live PTY slave, so it is not
         // redirected and the headless branch is skipped).
         await harness.WriteKeysAsync("seq 1 5 | Show-Styled\n");
 
-        // The titled window drew — proof the Terminal.Gui driver initialized over the PTY slave.
-        // "Enter expands" is in the interactive title only (never the headless summary), so this
-        // distinguishes the live TUI from the redirected-I/O fallback.
-        await harness.WaitForRegexAsync(@"Enter expands", Timeout);
+        // The viewer's footer drew — proof the interactive Console.ReadKey + Spectre loop is running.
+        // "Enter expand" is in the footer only (never the headless summary "… interactive viewer"),
+        // so it distinguishes the live viewer from the redirected-I/O fallback. The "[1/5]" position
+        // line confirms all five rows are in the focus ring.
+        await harness.WaitForRegexAsync(@"\[1/5\].*Enter expand", Timeout);
 
-        // q quits the viewer; Terminal.Gui restores the screen and the shell prompt returns — a
-        // clean exit, not a spin or a scroll of garbage.
+        // q quits the viewer; it leaves the alternate screen and the shell prompt returns.
         await harness.WriteKeysAsync("q");
         await harness.WaitForRegexAsync(PtyHarness.PromptPattern, Timeout);
 
-        // KNOWN GAP (post-TUI input restoration): asserting shell responsiveness *after* the viewer
-        // exits — `echo …` round-tripping — is intentionally NOT done here. Terminal.Gui owns the
-        // terminal directly and bypasses ps-bash's LineEditor, so on shutdown it does not re-arm the
-        // shell's cooked-mode line reader (unlike `browse`, which is hand-rolled inside that editor).
-        // The viewer drawing + quitting cleanly to the prompt is the verified contract; wiring the
-        // LineEditor re-arm after a Terminal.Gui session is the remaining integration step (see
-        // docs/specs/styled-output.md). Per QA-rubric Directive 5 this is a documented, justified
-        // omission, not a silent no-op.
+        // The shell is still responsive after the viewer exits — the viewer runs in process via
+        // Console.ReadKey (the same terminal path the line editor uses, exactly like `browse`), so it
+        // never leaves the host's stdin in a bad state. This is the clean-exit contract; an
+        // in-process Terminal.Gui session would leave stdin dead and swallow this echo.
+        await harness.WriteKeysAsync("echo show_styled_exited_ok\n");
+        await harness.WaitForRegexAsync(@"show_styled_exited_ok", Timeout);
     }
 }
