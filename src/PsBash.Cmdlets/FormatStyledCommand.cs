@@ -363,106 +363,11 @@ public sealed class FormatStyledCommand : PSCmdlet
     }
 
     /// <summary>
-    /// Resolve a stylesheet <paramref name="name"/> (e.g. <c>default</c>, <c>ls</c>,
-    /// <c>ps</c>) to CSS text. The built-in sheet (embedded in this assembly) is loaded
-    /// first; a user override of the same name — found under <c>$PSBASH_STYLE_PATH</c>
-    /// (a dir or PATH-separated list) or <c>~/.config/ps-bash/styles</c> /
-    /// <c>~/.psbash/styles</c> — is appended after it, so the user's rules win via the
-    /// CSS cascade. Throws <see cref="ItemNotFoundException"/> when neither exists.
+    /// Resolve a stylesheet <paramref name="name"/> (e.g. <c>default</c>, <c>ls</c>, <c>ps</c>)
+    /// to CSS text via the shared <see cref="StyledStyles.Resolve"/> (built-in + user override
+    /// cascade). Throws <see cref="ItemNotFoundException"/> when neither exists.
     /// </summary>
-    private static string ResolveStylesheet(string name)
-    {
-        var builtin = ReadEmbeddedStyle(name);
-        var user = ReadUserOverride(name);
-        if (builtin is null && user is null)
-        {
-            var names = string.Join(", ", BuiltinStyleNames());
-            throw new ItemNotFoundException(
-                $"Format-Styled: no stylesheet named '{name}'. Built-in: {names}. " +
-                "Pass inline CSS, a .css path, or drop '<name>.css' in $PSBASH_STYLE_PATH or ~/.config/ps-bash/styles.");
-        }
-
-        // Cascade: built-in first, user override appended last so later rules win.
-        return string.Join("\n", new[] { builtin, user }.Where(s => !string.IsNullOrEmpty(s)));
-    }
-
-    /// <summary>Read the embedded built-in stylesheet <c>styles/&lt;name&gt;.css</c>, or null.</summary>
-    private static string? ReadEmbeddedStyle(string name)
-    {
-        var asm = typeof(FormatStyledCommand).Assembly;
-        var suffix = $".styles.{name}.css";
-        var resource = asm.GetManifestResourceNames()
-            .FirstOrDefault(n => n.EndsWith(suffix, StringComparison.OrdinalIgnoreCase));
-        if (resource is null)
-        {
-            return null;
-        }
-
-        using var stream = asm.GetManifestResourceStream(resource);
-        if (stream is null)
-        {
-            return null;
-        }
-
-        using var reader = new StreamReader(stream);
-        return reader.ReadToEnd();
-    }
-
-    /// <summary>Names of the embedded built-in stylesheets (for error messages).</summary>
-    private static IEnumerable<string> BuiltinStyleNames()
-    {
-        const string mid = ".styles.";
-        foreach (var n in typeof(FormatStyledCommand).Assembly.GetManifestResourceNames())
-        {
-            var i = n.IndexOf(mid, StringComparison.OrdinalIgnoreCase);
-            if (i >= 0 && n.EndsWith(".css", StringComparison.OrdinalIgnoreCase))
-            {
-                yield return n.Substring(i + mid.Length, n.Length - (i + mid.Length) - ".css".Length);
-            }
-        }
-    }
-
-    /// <summary>Read a user override stylesheet <c>&lt;name&gt;.css</c> from the style dirs, or null.</summary>
-    private static string? ReadUserOverride(string name)
-    {
-        foreach (var dir in UserStyleDirs())
-        {
-            try
-            {
-                var path = Path.Combine(dir, name + ".css");
-                if (File.Exists(path))
-                {
-                    return File.ReadAllText(path);
-                }
-            }
-            catch
-            {
-                // Malformed path entry — skip and try the next dir.
-            }
-        }
-
-        return null;
-    }
-
-    /// <summary>User stylesheet search dirs: $PSBASH_STYLE_PATH (dir or list), then ~/.config and ~/.psbash.</summary>
-    private static IEnumerable<string> UserStyleDirs()
-    {
-        var env = Environment.GetEnvironmentVariable("PSBASH_STYLE_PATH");
-        if (!string.IsNullOrEmpty(env))
-        {
-            foreach (var d in env.Split(Path.PathSeparator, StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
-            {
-                yield return d;
-            }
-        }
-
-        var home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
-        if (!string.IsNullOrEmpty(home))
-        {
-            yield return Path.Combine(home, ".config", "ps-bash", "styles");
-            yield return Path.Combine(home, ".psbash", "styles");
-        }
-    }
+    private static string ResolveStylesheet(string name) => StyledStyles.Resolve(name);
 
     /// <summary>Render a Spectre renderable to an ANSI string sized to the host width.</summary>
     private string RenderToAnsi(IRenderable renderable)

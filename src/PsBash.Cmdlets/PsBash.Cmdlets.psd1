@@ -87,7 +87,11 @@ CmdletsToExport = @(
     'Invoke-BashRead',
     # Strata integration: styles a pipeline of objects with a CSS stylesheet and
     # renders them via the Strata selector engine + Spectre.Console projection.
-    'Format-Styled'
+    'Format-Styled',
+    # Interactive counterpart: a full-screen, navigable list with per-row detail
+    # expansion and action buttons, driven by the same Strata stylesheets via the
+    # Terminal.Gui projection. Headless (redirected I/O) emits a summary instead.
+    'Show-Styled'
 )
 
 VariablesToExport = @()

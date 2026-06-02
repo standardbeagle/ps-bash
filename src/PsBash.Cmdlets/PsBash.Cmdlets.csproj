@@ -46,9 +46,13 @@
     <Compile Remove="InvokeBashEvalCommand.cs" />
   </ItemGroup>
 
-  <!-- Format-Styled compiles only when Strata is available (see UseStrata). -->
+  <!-- The styled-output cmdlets (and their shared helpers) compile only when Strata is
+       available (see UseStrata); their only consumers are these cmdlets. -->
   <ItemGroup Condition="'$(UseStrata)' != 'true'">
     <Compile Remove="FormatStyledCommand.cs" />
+    <Compile Remove="ShowStyledCommand.cs" />
+    <Compile Remove="StyledNode.cs" />
+    <Compile Remove="StyledStyles.cs" />
   </ItemGroup>
 
   <ItemGroup>
@@ -79,6 +83,10 @@
          and, for the interactive viewer, the input/command/dispatch layer. System.Reactive flows
          in transitively (only exercised by the interactive Terminal.Gui path). -->
     <PackageReference Include="StandardBeagle.Strata.Interaction" Version="$(StrataVersion)" />
+    <!-- Terminal.Gui projection: the interactive Show-Styled viewer. Terminal.Gui v2 (not AOT/trim
+         clean) flows in transitively; it runs only in the JIT host / module-mode pwsh, never the
+         AOT launcher. Headless (redirected I/O) builds the view tree and returns a summary. -->
+    <PackageReference Include="StandardBeagle.Strata.Render.TerminalGui" Version="$(StrataVersion)" />
   </ItemGroup>
 
   <!-- Built-in Format-Styled stylesheets, embedded so they travel with the DLL
