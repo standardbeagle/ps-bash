@@ -82,7 +82,22 @@ PowerShell formatting, so existing tests and external-command parity are untouch
 
 ## Status
 
-- **P1** Strata integration — **done** (`feat/strata-interactive-styled`).
-- **P2** stylesheets + static `:expanded`/Button rendering — in progress.
-- **P3** opt-in `PSBASH_DEFAULT_FORMAT` Out-Default proxy — pending.
-- **P4** interactive Terminal.Gui viewer + ping/tracert sources + TTY handshake — pending.
+All on branch `feat/strata-interactive-styled`.
+
+- **P1** Strata integration — **done**. `StandardBeagle.Strata.*` @ `0.1.0-alpha.1.2`, FormatStyled 11/11.
+- **P2** stylesheets (`fs`/`procsvc`/`object`/`error`) + `command:` descriptor in the static path —
+  **done**. 4 theory cases parse+render green (15/15).
+- **P3** opt-in `PSBASH_DEFAULT_FORMAT=styled` at the SdkWorker flush point — **done**. Native
+  PSObject output styled with ANSI when on, stock formatting when off; SdkWorker suite 18/18.
+- **P4** interactive Terminal.Gui viewer + ping/tracert sources + launcher↔host TTY handshake —
+  **pending**. The largest piece: needs the TerminalGui/Interaction/Reactive (+ Terminal.Gui native)
+  assemblies embedded for the host runtime and the TTY handshake above. The interactive run loop
+  cannot be unit-verified headlessly (needs a real terminal driver), so it lands behind a headless
+  fallback and is verified manually in module-mode (`Import-Module PsBash` in a real `pwsh`).
+
+### Why P4 is staged separately
+
+P1–P3 satisfy the goal end-to-end on every platform and mode with automated tests. P4 adds *live*
+interaction; its two un-headless-testable risks (Terminal.Gui native-driver load in the extracted
+host bundle, and the launcher↔host TTY handshake) want a real-terminal verification loop, so they are
+deliberately not bundled into the same automated-green increment.
