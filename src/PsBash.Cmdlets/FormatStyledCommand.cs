@@ -192,6 +192,10 @@ public sealed class FormatStyledCommand : PSCmdlet
         // The grid path declares layout properties (display, grid-template-columns); register
         // their descriptors too or the parser rejects them as unknown.
         LayoutProperties.RegisterAll(registry);
+        // The button/expansion stylesheets (fs, procsvc, object, error) declare the `command:`
+        // interaction property. Register its descriptor so they parse here too; the bindings are
+        // inert under the static Spectre projection (no input loop) but must not be a parse error.
+        Strata.Interaction.InteractionProperties.RegisterAll(registry);
         var stylesheet = new CssStylesheetParser(new CssSelectorLanguage(), registry).Parse(css);
 
         var rootSource = new PSObject();

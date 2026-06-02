@@ -1,0 +1,47 @@
+/* fs — filesystem objects (FileInfo / DirectoryInfo) with action buttons + detail expansion.
+ *
+ * Drives BOTH renderers off one cascade:
+ *   - static  (Format-Styled):           colour + Button chrome ([ open ]) + inline :expanded detail
+ *   - interactive (Show-Styled / -Interactive): arrows move focus, Enter toggles :expanded,
+ *                                               the focused row's buttons fire `open` / `cd`.
+ * `:focused` and `command:` are inert under the static projection (no input loop) but harmless.
+ *
+ * Project a `class` to drive the highlight rules:
+ *   Get-ChildItem | Select-Object *, @{ n='class'; e={
+ *       if ($_.PSIsContainer) { 'dir' }
+ *       elseif ($_.Extension -in '.exe','.ps1','.cmd','.bat','.sh') { 'exe' }
+ *       elseif ($_.Attributes -band [IO.FileAttributes]::ReparsePoint) { 'symlink' }
+ *       elseif ($_.Attributes -band [IO.FileAttributes]::Hidden) { 'hidden' }
+ *       elseif ($_.Length -gt 10mb) { 'large' }
+ *   } } | Format-Styled -Style fs -Interactive
+ */
+
+DirectoryInfo { color: brightblue; font-weight: bold }
+FileInfo      { color: white }
+
+.dir     { color: brightblue;  font-weight: bold }
+.exe     { color: brightgreen; font-weight: bold }
+.symlink { color: cyan }
+.hidden  { color: gray }
+.large   { color: brightyellow }
+
+/* The expandable detail block (size / dates / attributes / acl). */
+Detail     { color: gray }
+Detail .key { color: cyan }
+:expanded > Detail { color: white }
+
+/* Action buttons — bracket chrome statically; focusable + bound interactively. */
+Button         { color: brightcyan }
+Button:focused { color: black; background: brightcyan }
+
+/* Full-screen focus cursor + key bindings (interactive only). */
+:focused { color: black; background: brightcyan }
+Surface {
+    command: "navigate-down"  when "key.ArrowDown";
+    command: "navigate-up"    when "key.ArrowUp";
+    command: "navigate-down"  when "key.j";
+    command: "navigate-up"    when "key.k";
+    command: "toggle-expand"  when "key.Enter";
+    command: "open"           when "key.o";
+    command: "cd"             when "key.c";
+}

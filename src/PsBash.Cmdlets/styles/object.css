@@ -1,0 +1,33 @@
+/* object — the generic fallback for any PSObject: every row is expandable to its full property
+ * list, with copy / inspect buttons. Used when no family-specific sheet matches the pipeline.
+ *
+ * Drives both renderers (see fs.css header). No class projection needed; the `.error`/`.warn`
+ * helpers are honoured if you happen to project them.
+ */
+
+/* Neutral base; type-coloured kinds so even un-classed pipelines read with hierarchy. */
+Row { color: white }
+
+.error { color: brightred;    font-weight: bold }
+.warn  { color: brightyellow }
+.ok    { color: brightgreen }
+.muted { color: gray }
+
+/* The full-property detail block. */
+Detail      { color: gray }
+Detail .key { color: cyan }
+:expanded > Detail { color: white }
+
+Button         { color: brightcyan }
+Button:focused { color: black; background: brightcyan }
+
+:focused { color: black; background: brightcyan }
+Surface {
+    command: "navigate-down" when "key.ArrowDown";
+    command: "navigate-up"   when "key.ArrowUp";
+    command: "navigate-down" when "key.j";
+    command: "navigate-up"   when "key.k";
+    command: "toggle-expand" when "key.Enter";
+    command: "copy"          when "key.y";
+    command: "inspect"       when "key.i";
+}

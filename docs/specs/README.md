@@ -31,3 +31,4 @@ Nav starts at /CODE_MAP.md. Keep this index complete — a guard test fails on a
 - [runtime-migrated-cmdlets.md](runtime-migrated-cmdlets.md) — Migrated Binary Cmdlets (REFACTOR-2)
 - [shell-implementation-phases.md](shell-implementation-phases.md) — Shell Implementation Phases
 - [sqlite-history-schema.md](sqlite-history-schema.md) — SQLite History Store Schema
+- [styled-output.md](styled-output.md) — Styled Output (interactive Format-Styled, buttons + detail expansion, opt-in default)

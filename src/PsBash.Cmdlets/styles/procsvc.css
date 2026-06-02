@@ -1,0 +1,43 @@
+/* procsvc — processes (Get-Process) and services (Get-Service) with stop/restart buttons
+ * and detail expansion (path / memory / threads / status).
+ *
+ * Drives both renderers (see fs.css header). Project a `class` from runtime state:
+ *   Get-Process | Select-Object *, @{ n='class'; e={
+ *       if ($_.CPU -gt 50) { 'busy' }
+ *       elseif (-not $_.Responding) { 'stuck' }
+ *   } } | Format-Styled -Style procsvc -Interactive
+ *   Get-Service | Select-Object *, @{ n='class'; e={ $_.Status.ToString().ToLower() } } |
+ *       Format-Styled -Style procsvc -Interactive
+ */
+
+Process { color: white }
+Service { color: white }
+
+.busy    { color: brightred;    font-weight: bold }
+.stuck   { color: brightyellow; text-decoration: strikethrough }
+.idle    { color: gray }
+.system  { color: gray }
+.running { color: brightgreen }
+.stopped { color: red }
+.paused  { color: yellow }
+
+/* Expandable detail (path / working set / threads / status). */
+Detail      { color: gray }
+Detail .key { color: cyan }
+:expanded > Detail { color: white }
+
+/* Destructive actions read warm; the focused button inverts. */
+Button          { color: brightcyan }
+Button.danger   { color: brightred }
+Button:focused  { color: black; background: brightcyan }
+
+:focused { color: black; background: brightcyan }
+Surface {
+    command: "navigate-down" when "key.ArrowDown";
+    command: "navigate-up"   when "key.ArrowUp";
+    command: "navigate-down" when "key.j";
+    command: "navigate-up"   when "key.k";
+    command: "toggle-expand" when "key.Enter";
+    command: "stop"          when "key.x";
+    command: "restart"       when "key.r";
+}

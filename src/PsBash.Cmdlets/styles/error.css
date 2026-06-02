@@ -1,0 +1,32 @@
+/* error — ErrorRecord rows with a dismiss button and expandable detail
+ * (exception type / category / invocation / stack trace).
+ *
+ * Drives both renderers (see fs.css header). Errors collapse to a one-line summary; expand to
+ * read the full exception + script stack.
+ *   $Error | Format-Styled -Style error -Interactive
+ */
+
+ErrorRecord { color: brightred; font-weight: bold }
+
+.error { color: brightred;    font-weight: bold }
+.warn  { color: brightyellow }
+
+/* Expandable detail (exception / category / invocation / stack). */
+Detail       { color: gray }
+Detail .key  { color: cyan }
+Detail .stack { color: gray }
+:expanded > Detail { color: white }
+
+Button         { color: brightcyan }
+Button.danger  { color: brightred }
+Button:focused { color: black; background: brightcyan }
+
+:focused { color: black; background: brightred }
+Surface {
+    command: "navigate-down" when "key.ArrowDown";
+    command: "navigate-up"   when "key.ArrowUp";
+    command: "navigate-down" when "key.j";
+    command: "navigate-up"   when "key.k";
+    command: "toggle-expand" when "key.Enter";
+    command: "dismiss"       when "key.d";
+}

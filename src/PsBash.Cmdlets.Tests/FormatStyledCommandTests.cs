@@ -107,6 +107,36 @@ public class FormatStyledCommandTests : IClassFixture<SharedPwshFixture>
         Assert.Matches("\\[[0-9;]*m", result[0].ToString() ?? string.Empty);
     }
 
+    [Theory]
+    [InlineData("fs")]
+    [InlineData("procsvc")]
+    [InlineData("object")]
+    [InlineData("error")]
+    public void InteractiveBuiltinSheet_ParsesAndRenders(string style)
+    {
+        // The button/expansion sheets declare the `command:` interaction property and the
+        // :focused / :expanded pseudo-classes. Parsing them through the static grid path proves
+        // the InteractionProperties descriptor is registered (else the parser throws
+        // "Unknown property 'command'") and that the sheet is a valid cascade input. The bindings
+        // are inert here (no input loop) — we only assert the render path stays clean and styled.
+        var pwsh = _fixture.AcquireFresh();
+        var script = $$"""
+            $rows = @(
+              [pscustomobject]@{ PSTypeName='Process'; Name='chrome'; class='busy' },
+              [pscustomobject]@{ PSTypeName='Process'; Name='vim';    class='idle' }
+            )
+            $rows | Format-Styled -Style {{style}} -Property Name
+            """;
+
+        var result = pwsh.AddScript(script).Invoke();
+
+        Assert.False(pwsh.HadErrors, string.Join("; ", pwsh.Streams.Error.Select(e => e.ToString())));
+        Assert.Single(result);
+        var raw = result[0].ToString() ?? string.Empty;
+        Assert.Contains("chrome", StripAnsi(raw));
+        Assert.Matches("\\[[0-9;]*m", raw);
+    }
+
     [Fact]
     public void UserOverride_CascadesOverBuiltinDefault()
     {

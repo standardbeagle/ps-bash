@@ -75,6 +75,10 @@
     <!-- Yoga layout pass: required for the 3-arg SpectreProjection.Project overload
          that honors `display: grid` (Format-Styled grid / property-list rendering). -->
     <PackageReference Include="StandardBeagle.Strata.Layout.Yoga" Version="$(StrataVersion)" />
+    <!-- Interaction: the `command:` property descriptor (so button/expansion stylesheets parse)
+         and, for the interactive viewer, the input/command/dispatch layer. System.Reactive flows
+         in transitively (only exercised by the interactive Terminal.Gui path). -->
+    <PackageReference Include="StandardBeagle.Strata.Interaction" Version="$(StrataVersion)" />
   </ItemGroup>
 
   <!-- Built-in Format-Styled stylesheets, embedded so they travel with the DLL
