@@ -782,7 +782,7 @@ public sealed partial class BashParser
 
     /// <summary>
     /// True at any case-arm terminator. The lexer is context-free (it never
-    /// emits dedicated `;&`/`;;&` tokens — those would silently drop commands
+    /// emits dedicated <c>;&amp;</c> / <c>;;&amp;</c> tokens — those would silently drop commands
     /// when they appear outside a case), so terminators are detected here as
     /// token sequences: <c>;;</c> = Semi+Semi, <c>;&amp;</c> = Semi+Amp, <c>;;&amp;</c>
     /// = Semi+Semi+Amp. A lone Semi (next token is a command) is a separator,

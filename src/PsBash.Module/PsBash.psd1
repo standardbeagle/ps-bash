@@ -213,7 +213,8 @@ AliasesToExport = 'echo', 'printf', 'ls', 'cat', 'grep', 'sort', 'head', 'tail',
                 # Set-Alias on import, so the command is still available to users.
                 'kill', 'test', 'let', 'id', 'shuf', 'balias',
                 'install', 'browse', 'more', 'less',
-                'trap', 'alias', 'mapfile', 'readarray'
+                'trap', 'alias', 'mapfile', 'readarray',
+                'ping', 'tracert', 'traceroute'
 
 # DSC resources to export from this module
 # DscResourcesToExport = @()
