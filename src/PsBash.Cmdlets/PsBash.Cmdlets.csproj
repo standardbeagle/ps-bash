@@ -30,6 +30,10 @@
          restore with nothing to fetch from the missing feed (stays green).
          Force explicitly with -p:UseStrata=true|false. -->
     <StrataLocalFeed Condition="'$(StrataLocalFeed)' == ''">$([System.IO.Path]::GetFullPath('$(MSBuildThisFileDirectory)..\..\..\strata\local-feed'))</StrataLocalFeed>
+    <!-- Strata packages publish under the StandardBeagle.Strata.* prefix (namespaces stay Strata.*).
+         pack-local.sh stamps the version from MinVer (git-tag derived); keep this in sync with the
+         newest *.nupkg in the local feed. One source so all five refs move together. -->
+    <StrataVersion Condition="'$(StrataVersion)' == ''">0.1.0-alpha.1.2</StrataVersion>
     <UseStrata Condition="'$(UseStrata)' == '' and Exists('$(StrataLocalFeed)')">true</UseStrata>
     <UseStrata Condition="'$(UseStrata)' == ''">false</UseStrata>
     <!-- Add the Strata local feed as a restore source ONLY when enabled. The feed
@@ -64,13 +68,13 @@
        flow in transitively from Strata.Render.Spectre / Strata.Css. Gated on
        UseStrata so CI (no local feed) restores without these packages. -->
   <ItemGroup Condition="'$(UseStrata)' == 'true'">
-    <PackageReference Include="Strata.Css" Version="0.2.1-dev" />
-    <PackageReference Include="Strata.Adapters.PSObject" Version="0.2.1-dev" />
-    <PackageReference Include="Strata.Properties.Styling" Version="0.2.1-dev" />
-    <PackageReference Include="Strata.Render.Spectre" Version="0.2.1-dev" />
+    <PackageReference Include="StandardBeagle.Strata.Css" Version="$(StrataVersion)" />
+    <PackageReference Include="StandardBeagle.Strata.Adapters.PSObject" Version="$(StrataVersion)" />
+    <PackageReference Include="StandardBeagle.Strata.Properties.Styling" Version="$(StrataVersion)" />
+    <PackageReference Include="StandardBeagle.Strata.Render.Spectre" Version="$(StrataVersion)" />
     <!-- Yoga layout pass: required for the 3-arg SpectreProjection.Project overload
          that honors `display: grid` (Format-Styled grid / property-list rendering). -->
-    <PackageReference Include="Strata.Layout.Yoga" Version="0.2.1-dev" />
+    <PackageReference Include="StandardBeagle.Strata.Layout.Yoga" Version="$(StrataVersion)" />
   </ItemGroup>
 
   <!-- Built-in Format-Styled stylesheets, embedded so they travel with the DLL

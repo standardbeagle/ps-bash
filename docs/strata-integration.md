@@ -9,24 +9,32 @@ with CSS and render them via Spectre.Console. This powers the `Format-Styled` cm
 Strata lives in the sibling repo `../strata` and is **not yet on nuget.org**. It is
 consumed as local NuGet packages:
 
-1. Strata is packed into `../strata/local-feed/` by `../strata/scripts/pack-local.sh`
-   (default version `0.1.0-dev`).
-2. `nuget.config` registers that folder as the `strata-local` package source.
-3. `src/PsBash.Cmdlets/PsBash.Cmdlets.csproj` references the Strata packages:
-   `Strata.Css`, `Strata.Adapters.PSObject`, `Strata.Properties.Styling`,
-   `Strata.Render.Spectre` (`Spectre.Console` + `ExCSS` flow in transitively).
+1. Strata is packed into `../strata/local-feed/` by `../strata/scripts/pack-local.sh`.
+   The packages publish under the **`StandardBeagle.Strata.*`** ID prefix (the C#
+   namespaces stay `Strata.*`; only the package IDs carry the prefix). The version is
+   derived from git tags via MinVer, so the version arg to `pack-local.sh` is ignored —
+   the feed is stamped with the MinVer value (currently `0.1.0-alpha.1.2`).
+2. The csproj adds that folder as a per-project restore source (`RestoreAdditionalProjectSources`)
+   only when `UseStrata=true`; it is deliberately NOT in `nuget.config` (a missing local
+   source is a hard NU1301 error that would break CI).
+3. `src/PsBash.Cmdlets/PsBash.Cmdlets.csproj` references the Strata packages — pinned to a
+   single `$(StrataVersion)` property: `StandardBeagle.Strata.Css`,
+   `StandardBeagle.Strata.Adapters.PSObject`, `StandardBeagle.Strata.Properties.Styling`,
+   `StandardBeagle.Strata.Render.Spectre`, `StandardBeagle.Strata.Layout.Yoga`
+   (`Spectre.Console` + `ExCSS` + `Yoga.Net` flow in transitively).
 
 ### Refreshing Strata after a change
 
 ```bash
-( cd ../strata && ./scripts/pack-local.sh )   # repack 0.1.0-dev into local-feed
+( cd ../strata && ./scripts/pack-local.sh )   # repack into local-feed (MinVer-stamped)
 dotnet nuget locals global-packages --clear    # only if the version was reused
 ./scripts/test.sh src/PsBash.Cmdlets.Tests --filter FormatStyled
 ```
 
-Reusing the same `0.1.0-dev` version means NuGet may serve the cached copy; bump the
-version (`pack-local.sh 0.1.1-dev` + matching `PackageReference` versions) or clear the
-global-packages cache when iterating on Strata internals.
+MinVer stamps the same prerelease version until a new `v*` git tag lands in `../strata`,
+so iterating on Strata internals reuses the version and NuGet may serve the cached copy.
+Clear the global-packages cache (above) after a repack, or move the `$(StrataVersion)`
+property in `PsBash.Cmdlets.csproj` to a freshly-tagged version.
 
 ## Using `Format-Styled`
 
