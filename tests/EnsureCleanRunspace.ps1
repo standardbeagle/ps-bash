@@ -41,7 +41,12 @@ $sep = [System.IO.Path]::PathSeparator
 $kept = foreach ($dir in ($env:PSModulePath -split $sep)) {
     if ([string]::IsNullOrWhiteSpace($dir)) { continue }
     $isOurs = $dir.StartsWith($srcRoot, [System.StringComparison]::OrdinalIgnoreCase)
-    $shipsPsBash = Test-Path (Join-Path $dir 'PsBash')
+    # Test-Path THROWS UnauthorizedAccessException on a dir that exists but is not
+    # readable by the current user (e.g. a root-owned /root/.local/.../Modules/PsBash on
+    # a CI runner whose Pester step runs as a different user). Such a copy is unreadable,
+    # so PowerShell auto-load can't pull it in either — treat the probe failure as "no
+    # shadowing copy here" and keep the entry rather than crashing discovery.
+    $shipsPsBash = try { Test-Path (Join-Path $dir 'PsBash') -ErrorAction Stop } catch { $false }
     if ($shipsPsBash -and -not $isOurs) { continue }   # installed copy lives here -> drop
     $dir
 }
