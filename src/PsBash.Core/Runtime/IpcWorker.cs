@@ -761,11 +761,46 @@ public sealed class IpcWorker : IWorker
     private void EmitCompactedOutput(string command, int exitCode, bool timedOut, IReadOnlyList<OutputFrame> frames)
     {
         // FilterEngine routes to a command-aware filter when one matches; with none
-        // supplied it falls back to the generic OutputCompactor digest (identical
-        // behavior to before this layer). P1 wires the loaded filter set in here.
-        var compacted = FilterEngine.Apply(command, exitCode, timedOut, frames);
+        // supplied (or no match) it falls back to the generic OutputCompactor digest.
+        var compacted = FilterEngine.Apply(command, exitCode, timedOut, frames, ResolveFilters());
         if (OutputCallback is { } cb) cb(compacted);
         else Console.Write(compacted);
+    }
+
+    // Resolve the active filter set for compact mode: embedded built-ins plus user
+    // (~/.config/ps-bash/filters) and project (.ps-bash/filters) overrides, minus any
+    // excluded commands. PSBASH_NO_FILTER disables command-aware filters (generic digest
+    // only). Loading is best-effort: a malformed filter file must never crash a command's
+    // output, so any failure degrades to the faithful generic digest (filters = null).
+    private static IReadOnlyList<FilterSpec>? ResolveFilters()
+    {
+        if (EnvFlags.IsTruthy("PSBASH_NO_FILTER")) return null;
+
+        try
+        {
+            var home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+            var userDir = string.IsNullOrEmpty(home)
+                ? null
+                : Path.Combine(home, ".config", "ps-bash", "filters");
+            var projectDir = Path.Combine(Directory.GetCurrentDirectory(), ".ps-bash", "filters");
+            var exclude = ParseExcludeCommands(Environment.GetEnvironmentVariable("PSBASH_FILTER_EXCLUDE"));
+
+            var filters = FilterLibrary.Load(userDir, projectDir, exclude);
+            return filters.Count == 0 ? null : filters;
+        }
+        catch
+        {
+            return null; // degrade to the generic digest; never break command output
+        }
+    }
+
+    private static IReadOnlySet<string>? ParseExcludeCommands(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value)) return null;
+        var set = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var part in value.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+            set.Add(part);
+        return set.Count == 0 ? null : set;
     }
 
     public static string GetHostBinaryName()

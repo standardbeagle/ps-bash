@@ -97,8 +97,14 @@ internal static class FilterStage
 
     private static void AppendBody(StringBuilder sb, string body)
     {
-        sb.Append(body);
-        if (body.Length == 0 || body[^1] != '\n') sb.Append('\n');
+        // Emit each line via AppendLine so the body uses the SAME newline as the header
+        // (CompactionText.AppendHeader → Environment.NewLine). Building the body with a
+        // hardcoded "\n" would leave a CRLF header above LF body lines on Windows.
+        var normalized = body.Replace("\r\n", "\n").Replace('\r', '\n');
+        var parts = normalized.Split('\n');
+        var count = parts.Length;
+        if (count > 0 && parts[count - 1].Length == 0) count--; // drop the trailing terminator
+        for (var i = 0; i < count; i++) sb.AppendLine(parts[i]);
     }
 
     private static bool AnyMatch(IReadOnlyList<string> patterns, string text)
