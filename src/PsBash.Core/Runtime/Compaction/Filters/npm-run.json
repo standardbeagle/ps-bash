@@ -1,0 +1,6 @@
+{
+  "name": "npm/run",
+  "match": { "command": "npm", "args": ["run"] },
+  "keep": ["error", "Error", "warning", "WARN", "npm ERR!", "✖"],
+  "skip": ["^> ", "^\\s*$"]
+}

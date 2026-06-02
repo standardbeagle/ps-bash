@@ -1,0 +1,6 @@
+{
+  "name": "git/log",
+  "match": { "command": "git", "args": ["log"] },
+  "override": ["git", "log", "--oneline", "--no-decorate", "-n", "20"],
+  "skip": ["^Author: ", "^Date: ", "^\\s*$"]
+}

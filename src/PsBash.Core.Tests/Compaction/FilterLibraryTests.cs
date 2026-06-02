@@ -92,20 +92,22 @@ public class FilterLibraryTests
 
             var merged = FilterLibrary.Load(userDir, projectDir);
 
-            Assert.Equal("project", Assert.Single(merged).OnSuccess);
+            // Project file shadows the user file (and any embedded built-in) of the same name.
+            Assert.Equal("project", merged.Single(f => f.Name == "git/status").OnSuccess);
         }
         finally { Directory.Delete(userDir, true); Directory.Delete(projectDir, true); }
     }
 
     [Fact]
-    public void Load_MissingDirs_ReturnsEmptyOrEmbeddedOnly()
+    public void Load_MissingDirs_ReturnsEmbeddedBuiltins()
     {
         var merged = FilterLibrary.Load(
             Path.Combine(Path.GetTempPath(), "ps-bash-tests", "does-not-exist-" + System.Guid.NewGuid().ToString("N")),
             Path.Combine(Path.GetTempPath(), "ps-bash-tests", "also-missing-" + System.Guid.NewGuid().ToString("N")));
 
-        // No user/project specs and (in P1) no embedded built-ins -> empty. Must not throw.
-        Assert.Empty(merged);
+        // With no user/project dirs, only the embedded built-ins remain. Must not throw.
+        Assert.NotEmpty(merged);
+        Assert.Contains(merged, f => f.Name == "git/status");
     }
 
     [Fact]
@@ -116,11 +118,11 @@ public class FilterLibraryTests
         {
             File.WriteAllText(Path.Combine(dir, "bad.json"), "{ not json");
             File.WriteAllText(Path.Combine(dir, "good.json"),
-                """{ "name": "ls", "match": { "command": "ls" } }""");
+                """{ "name": "my/tool", "match": { "command": "mytool" } }""");
 
             var merged = FilterLibrary.Load(null, dir);
 
-            Assert.Equal("ls", Assert.Single(merged).Name);
+            Assert.Contains(merged, f => f.Name == "my/tool"); // good file loaded despite the bad one
         }
         finally { Directory.Delete(dir, true); }
     }
@@ -132,11 +134,12 @@ public class FilterLibraryTests
         try
         {
             File.WriteAllText(Path.Combine(dir, "g.json"),
-                """{ "name": "git/status", "match": { "command": "git", "args": ["status"] } }""");
+                """{ "name": "git/extra", "match": { "command": "git", "args": ["extra"] } }""");
 
             var merged = FilterLibrary.Load(null, dir, new HashSet<string>(System.StringComparer.OrdinalIgnoreCase) { "git" });
 
-            Assert.Empty(merged);
+            // Every git filter — the disk one AND the embedded git/* built-ins — is excluded.
+            Assert.DoesNotContain(merged, f => f.Match.Command == "git");
         }
         finally { Directory.Delete(dir, true); }
     }
@@ -160,7 +163,7 @@ public class FilterLibraryTests
 
             var third = FilterLibrary.Load(null, dir);
             Assert.NotSame(first, third);
-            Assert.Equal("v2", Assert.Single(third).OnSuccess);
+            Assert.Equal("v2", third.Single(f => f.Name == "ls").OnSuccess);
         }
         finally { Directory.Delete(dir, true); }
     }

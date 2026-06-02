@@ -760,9 +760,12 @@ public sealed class IpcWorker : IWorker
 
     private void EmitCompactedOutput(string command, int exitCode, bool timedOut, IReadOnlyList<OutputFrame> frames)
     {
-        // FilterEngine routes to a command-aware filter when one matches; with none
-        // supplied (or no match) it falls back to the generic OutputCompactor digest.
-        var compacted = FilterEngine.Apply(command, exitCode, timedOut, frames, ResolveFilters());
+        // FilterEngine routes to a command-aware filter when one matches; otherwise an
+        // unrecognized FAILING command is trimmed to its error/summary lines (ErrorExtract),
+        // and everything else falls back to the generic OutputCompactor digest.
+        var compacted = FilterEngine.Apply(
+            command, exitCode, timedOut, frames, ResolveFilters(),
+            fallback: GenericFallback.ErrorExtract);
         if (OutputCallback is { } cb) cb(compacted);
         else Console.Write(compacted);
     }

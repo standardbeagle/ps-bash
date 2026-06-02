@@ -1,0 +1,6 @@
+{
+  "name": "kubectl/get-pods",
+  "match": { "command": "kubectl", "args": ["get", "pods"] },
+  "skip": ["^NAME\\s+READY"],
+  "dedup": true
+}

@@ -39,6 +39,14 @@
   </ItemGroup>
 
   <ItemGroup>
+    <!-- Built-in command-aware compaction filters. LoadEmbedded() matches the
+         ".Compaction.Filters." infix; an explicit LogicalName keeps hyphenated
+         file names intact in the manifest. -->
+    <EmbeddedResource Include="Runtime\Compaction\Filters\*.json"
+                      LogicalName="PsBash.Core.Compaction.Filters.%(Filename).json" />
+  </ItemGroup>
+
+  <ItemGroup>
     <ProjectReference Include="..\PsBash.Transpiler\PsBash.Transpiler.csproj" />
     <!-- Build PsBash.Cmdlets before Core so EmbedCmdletsDll can pick up its
          per-TFM build output. ReferenceOutputAssembly=false: Core does NOT

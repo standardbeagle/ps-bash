@@ -17,15 +17,21 @@ public static class FilterEngine
         bool timedOut,
         IReadOnlyList<OutputFrame> frames,
         IReadOnlyList<FilterSpec>? filters = null,
-        int maxLines = DefaultMaxLines)
+        int maxLines = DefaultMaxLines,
+        GenericFallback fallback = GenericFallback.None)
     {
         ArgumentNullException.ThrowIfNull(command);
         ArgumentNullException.ThrowIfNull(frames);
 
         var spec = filters is null || filters.Count == 0 ? null : SelectFilter(command, filters);
-        return spec is null
-            ? OutputCompactor.CompactCommandOutput(command, exitCode, timedOut, frames, maxLines)
-            : FilterStage.Run(spec, command, exitCode, timedOut, frames, maxLines);
+        if (spec is not null)
+            return FilterStage.Run(spec, command, exitCode, timedOut, frames, maxLines);
+
+        // No command-aware filter matched. ErrorExtract trims a failing command's noise;
+        // None keeps the byte-identical plain digest (default — P0 regression guard).
+        return fallback == GenericFallback.ErrorExtract
+            ? GenericFallbacks.Apply(command, exitCode, timedOut, frames, maxLines)
+            : OutputCompactor.CompactCommandOutput(command, exitCode, timedOut, frames, maxLines);
     }
 
     /// <summary>First filter whose <see cref="FilterMatch"/> matches the command, else null.</summary>

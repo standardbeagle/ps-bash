@@ -1,0 +1,8 @@
+{
+  "name": "cargo/build",
+  "match": { "command": "cargo", "args": ["build"] },
+  "matchOutput": [
+    { "contains": "Finished", "emit": "cargo build ✓" }
+  ],
+  "keep": ["^error", "^warning", "error\\[", "^\\s*-->", "cannot find", "^\\d+ (error|warning)"]
+}

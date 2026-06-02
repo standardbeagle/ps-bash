@@ -1,0 +1,16 @@
+{
+  "name": "npm/test",
+  "match": { "command": "npm", "args": ["test"] },
+  "keep": [
+    "✕", "✗", "×",
+    "\\bFAIL\\b",
+    "failing",
+    "Error:",
+    "AssertionError",
+    "Expected",
+    "Received",
+    "Tests:",
+    "\\d+ passing",
+    "\\d+ failing"
+  ]
+}

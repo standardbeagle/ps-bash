@@ -1,0 +1,6 @@
+{
+  "name": "git/add",
+  "match": { "command": "git", "args": ["add"] },
+  "onSuccess": "ok ✓",
+  "onFailure": "{{body}}"
+}

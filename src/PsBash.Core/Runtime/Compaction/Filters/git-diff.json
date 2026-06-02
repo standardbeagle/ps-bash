@@ -1,0 +1,6 @@
+{
+  "name": "git/diff",
+  "match": { "command": "git", "args": ["diff"] },
+  "override": ["git", "diff", "--stat"],
+  "skip": ["^index [0-9a-f]", "^--- ", "^\\+\\+\\+ ", "^@@ ", "^diff --git "]
+}

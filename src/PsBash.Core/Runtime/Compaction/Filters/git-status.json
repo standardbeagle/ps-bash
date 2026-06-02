@@ -1,0 +1,15 @@
+{
+  "name": "git/status",
+  "match": { "command": "git", "args": ["status"] },
+  "override": ["git", "status", "--porcelain=v1", "-b", "--find-renames"],
+  "matchOutput": [
+    { "contains": "nothing to commit, working tree clean", "emit": "clean ✓ (nothing to commit)" }
+  ],
+  "skip": [
+    "^On branch ",
+    "^Your branch is ",
+    "^\\s*\\(use ",
+    "^no changes added to commit",
+    "^\\s*$"
+  ]
+}

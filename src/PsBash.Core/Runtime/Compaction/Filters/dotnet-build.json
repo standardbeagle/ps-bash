@@ -1,0 +1,16 @@
+{
+  "name": "dotnet/build",
+  "match": { "command": "dotnet", "args": ["build"] },
+  "matchOutput": [
+    { "contains": "Build succeeded", "emit": "Build succeeded ✓" }
+  ],
+  "keep": [
+    ": error ",
+    ": warning ",
+    "\\bCS\\d{3,}\\b",
+    "Build FAILED",
+    "\\d+ Error\\(s\\)",
+    "\\d+ Warning\\(s\\)"
+  ],
+  "dedup": true
+}

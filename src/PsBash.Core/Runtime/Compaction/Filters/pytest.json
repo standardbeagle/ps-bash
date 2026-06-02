@@ -1,0 +1,14 @@
+{
+  "name": "pytest",
+  "match": { "command": "pytest" },
+  "keep": [
+    "FAILED",
+    "ERROR",
+    "\\d+ (passed|failed|error|skipped)",
+    "^E ",
+    "^_{3,}.*_{3,}$",
+    "short test summary",
+    "assert"
+  ],
+  "skip": ["^platform ", "^rootdir", "^collected ", "^cachedir", "^\\s*$"]
+}

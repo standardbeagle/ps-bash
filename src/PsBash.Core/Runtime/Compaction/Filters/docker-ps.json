@@ -1,0 +1,6 @@
+{
+  "name": "docker/ps",
+  "match": { "command": "docker", "args": ["ps"] },
+  "skip": ["^CONTAINER ID\\s"],
+  "dedup": true
+}

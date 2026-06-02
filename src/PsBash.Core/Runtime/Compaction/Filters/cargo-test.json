@@ -1,0 +1,15 @@
+{
+  "name": "cargo/test",
+  "match": { "command": "cargo", "args": ["test"] },
+  "keep": [
+    "test result:",
+    "FAILED",
+    "panicked",
+    "assertion",
+    "^---- .* stdout ----",
+    "error\\[",
+    "^error",
+    "left:",
+    "right:"
+  ]
+}

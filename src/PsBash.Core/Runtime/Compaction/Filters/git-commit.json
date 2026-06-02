@@ -1,0 +1,13 @@
+{
+  "name": "git/commit",
+  "match": { "command": "git", "args": ["commit"] },
+  "onSuccess": "{{body}}",
+  "onFailure": "{{body}}",
+  "skip": [
+    "^\\s*\\d+ files? changed",
+    "^ create mode ",
+    "^ delete mode ",
+    "^ rename ",
+    "^\\s*$"
+  ]
+}

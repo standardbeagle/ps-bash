@@ -1,0 +1,17 @@
+{
+  "name": "git/push",
+  "match": { "command": "git", "args": ["push"] },
+  "onSuccess": "ok ✓ pushed",
+  "onFailure": "{{body}}",
+  "skip": [
+    "^Enumerating objects",
+    "^Counting objects",
+    "^Delta compression",
+    "^Compressing objects",
+    "^Writing objects",
+    "^Total \\d",
+    "^remote: Resolving",
+    "^Receiving objects",
+    "^Resolving deltas"
+  ]
+}

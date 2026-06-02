@@ -1,0 +1,16 @@
+{
+  "name": "dotnet/test",
+  "match": { "command": "dotnet", "args": ["test"] },
+  "keep": [
+    "Failed!",
+    "Passed!",
+    "^\\s*Failed ",
+    ": error ",
+    "\\bFAIL\\b",
+    "Total: \\d",
+    "Assert\\.",
+    "Expected:",
+    "Actual:",
+    "Stack Trace"
+  ]
+}

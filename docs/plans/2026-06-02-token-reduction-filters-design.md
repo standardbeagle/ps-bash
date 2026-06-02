@@ -162,6 +162,31 @@ First match by `name` wins; user file shadows built-in of same name. Loaded once
 **Tee recovery** (rtk): on failure write full unfiltered output to `ps-bash/tee/<ts>_<cmd>.log`,
 append `[full output: <path>]`. Agent recovers without re-running. v1.
 
+### 4.1 P2 build notes (what shipped)
+
+15 embedded built-ins landed: git status/log/diff/push/commit/add, dotnet build/test,
+npm test/run, cargo test/build, pytest, docker/ps, kubectl/get-pods. `ls` is **P3**
+(object serializer, not text). `grep`/`rg` grouping is **deferred** — file-grouping needs
+logic beyond skip/keep; addable later as a richer filter without engine changes.
+
+Several filters carry an `override` argv (e.g. git/status → `--porcelain`) that is **inert
+until P4** wires override-at-launch; in P2 they reduce the *standard* captured output via
+skip/keep/matchOutput/template, so the terse wins (push/add → one line; dotnet/cargo →
+matchOutput on success; test runners → keep-failures-only) are real now and deepen in P4.
+
+**Generic fallback is opt-in** (`GenericFallback.ErrorExtract`, passed by `IpcWorker`) so the
+pure `FilterEngine.Apply` default stays byte-identical to `OutputCompactor` — the P0
+regression guard holds unchanged. An opaque failure with no recognizable signal is **not**
+emptied; it falls back to the plain digest.
+
+**Oracle note:** true byte-equality with tokf's fixtures is not achievable — ps-bash wraps
+output in its own `ps-bash compact-output:` header + `[out]/[err]` prefixes, a different
+shape from tokf's raw reduced text. P2 instead uses per-command **behavioral** golden tests
+(key signal kept, noise dropped) over representative captured output, which is the faithful
+oracle for *our* format. The `≥5 differential cases/filter` bar is met at suite level across
+the failure axes rather than literally 5×15 hand cases; more are drop-in as the filter set
+grows.
+
 ---
 
 ## 5. PowerShell-object compact serializer (§3b)
