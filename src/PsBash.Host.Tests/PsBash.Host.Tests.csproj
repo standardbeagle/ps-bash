@@ -34,4 +34,10 @@
          that triggers on first use of Write-Output in 7.4. -->
     <PackageReference Include="Microsoft.PowerShell.SDK" Version="7.4.*" />
   </ItemGroup>
+  <ItemGroup>
+    <!-- Cap parallelism: each class opens an in-process PS SDK runspace; an
+         unbounded thread count (CPU-count default) over-subscribes memory and
+         contends, causing host-startup flakes. 4 matches Differential.Tests. -->
+    <None Update="xunit.runner.json" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
 </Project>

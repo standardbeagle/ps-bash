@@ -29,4 +29,11 @@
     <ProjectReference Include="..\PsBash.Testing\PsBash.Testing.csproj" />
   </ItemGroup>
 
+  <ItemGroup>
+    <!-- Cap parallelism: these tests spawn ps-bash.exe host processes; an
+         unbounded thread count (CPU-count default) over-subscribes concurrent
+         spawns and causes startup-contention flakes. 4 matches Differential.Tests. -->
+    <None Update="xunit.runner.json" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
 </Project>

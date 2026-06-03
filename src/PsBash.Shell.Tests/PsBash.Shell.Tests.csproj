@@ -29,4 +29,12 @@
     <ProjectReference Include="..\PsBash.Host\PsBash.Host.csproj" />
   </ItemGroup>
 
+  <ItemGroup>
+    <!-- Cap parallelism: ProgramEndToEnd / PTY tests spawn ps-bash.exe; the
+         Pty/History collections are already serialized, but an unbounded global
+         thread count still over-subscribes concurrent spawns. 4 matches
+         Differential.Tests. -->
+    <None Update="xunit.runner.json" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
 </Project>
