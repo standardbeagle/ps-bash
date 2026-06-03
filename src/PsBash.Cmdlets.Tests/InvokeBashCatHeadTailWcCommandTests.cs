@@ -343,6 +343,51 @@ public class InvokeBashCatHeadTailWcCommandTests : IClassFixture<SharedPwshFixtu
         Assert.Equal(new[] { "aliased" }, lines);
     }
 
+    // ===== unix-style drive path runtime net (Windows-only) =====
+    // The transpiler rewrites /c/.. and /mnt/c/.. when PSBASH_UNIX_PATHS=1
+    // (the wrapper case), but a direct/interactive user has no flag set, so the
+    // cmdlet receives the raw unix path. ResolveGlob must map it via the shared
+    // WindowsPath utility so the file still opens. These exercise that net by
+    // feeding cat the unix-drive form of a real temp file.
+
+    // C:\Users\x\f.txt -> /c/Users/x/f.txt (msys) or /mnt/c/Users/x/f.txt (wsl)
+    private static string ToUnixDrivePath(string winPath, bool wsl)
+    {
+        var drive = char.ToLowerInvariant(winPath[0]);
+        var rest = winPath.Substring(2).Replace('\\', '/'); // "\Users\x" -> "/Users/x"
+        return (wsl ? "/mnt/" + drive : "/" + drive) + rest;
+    }
+
+    [Fact]
+    public void Cat_MsysDrivePath_ResolvesToWindowsFile()
+    {
+        if (!OperatingSystem.IsWindows()) return; // /c/.. is a real path off-Windows
+        var f = WriteFile("msys-cat.txt", "msys works\n");
+        var unix = ToUnixDrivePath(f, wsl: false);
+        var lines = RunBashText($"Invoke-BashCat '{unix}'");
+        Assert.Equal(new[] { "msys works" }, lines);
+    }
+
+    [Fact]
+    public void Cat_WslDrivePath_ResolvesToWindowsFile()
+    {
+        if (!OperatingSystem.IsWindows()) return;
+        var f = WriteFile("wsl-cat.txt", "wsl works\n");
+        var unix = ToUnixDrivePath(f, wsl: true);
+        var lines = RunBashText($"Invoke-BashCat '{unix}'");
+        Assert.Equal(new[] { "wsl works" }, lines);
+    }
+
+    [Fact]
+    public void Head_MsysDrivePath_ResolvesToWindowsFile()
+    {
+        if (!OperatingSystem.IsWindows()) return;
+        var f = WriteFile("msys-head.txt", "a\nb\nc\n");
+        var unix = ToUnixDrivePath(f, wsl: false);
+        var lines = RunBashText($"Invoke-BashHead -n 2 '{unix}'");
+        Assert.Equal(new[] { "a", "b" }, lines);
+    }
+
     // ======================= head =======================
 
     [Fact]

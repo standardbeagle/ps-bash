@@ -252,4 +252,37 @@ public class PipeDifferentialTests
             "printf 'a\\nb\\nc\\n' | while read line; do echo \"got:$line\"; done",
             timeout: TimeSpan.FromSeconds(15));
     }
+
+    // -----------------------------------------------------------------------
+    // Compound command AS a pipeline stage (output of a loop/group into a pipe)
+    // -----------------------------------------------------------------------
+
+    /// <summary>
+    /// Regression: a `for` loop piped into another command.
+    /// `for d in b a c; do echo "$d"; done | sort` → `a\nb\nc`.
+    /// The loop emits a `foreach` *statement*; without a `&amp; { ... }` wrapper the
+    /// transpiled pipe was `foreach (...) {} | Invoke-BashSort`, which PowerShell
+    /// rejects ("An empty pipe element is not allowed"). Captured live from the
+    /// Claude Code Bash tool. Failure-surface axis 8: sort exit 0, sorted output.
+    /// </summary>
+    [SkippableFact]
+    public async Task Differential_Pipe_ForLoopOutputIntoSort()
+    {
+        await AssertOracle.EqualAsync(
+            "for d in b a c; do echo \"$d\"; done | sort",
+            timeout: TimeSpan.FromSeconds(15));
+    }
+
+    /// <summary>
+    /// Brace group as the first pipe stage: `{ echo b; echo a; } | sort` → `a\nb`.
+    /// Same defect class as the for-loop: the group emits statements that must be
+    /// wrapped in `&amp; { ... }` to be a valid pipeline segment.
+    /// </summary>
+    [SkippableFact]
+    public async Task Differential_Pipe_BraceGroupOutputIntoSort()
+    {
+        await AssertOracle.EqualAsync(
+            "{ echo b; echo a; } | sort",
+            timeout: TimeSpan.FromSeconds(15));
+    }
 }

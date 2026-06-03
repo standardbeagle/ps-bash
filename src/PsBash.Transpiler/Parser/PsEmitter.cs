@@ -1699,18 +1699,36 @@ public static class PsEmitter
             return "$null";
         if (target.StartsWith("/tmp/"))
             return $"$env:TEMP\\{target[5..]}";
-        // MSYS / git-bash drive-letter paths: `/c/Users/...` -> `C:\Users\...`.
-        // Opt-in via PSBASH_UNIX_PATHS=1 (set by Shell layer from --unix-paths
-        // CLI flag). Off by default so direct ps-bash users don't get surprise
-        // path rewrites; on for wrappers (Claude Code, OpenCode) that emit
-        // unix-shaped paths assuming a POSIX filesystem.
-        if (Environment.GetEnvironmentVariable("PSBASH_UNIX_PATHS") == "1"
-            && target.Length >= 3 && target[0] == '/' && target[2] == '/'
-            && ((target[1] >= 'a' && target[1] <= 'z') || (target[1] >= 'A' && target[1] <= 'Z')))
-        {
-            return $"{char.ToUpperInvariant(target[1])}:\\{target[3..].Replace('/', '\\')}";
-        }
+        if (TryTranslateMsysDrivePath(target, out var translated))
+            return translated;
         return target;
+    }
+
+    /// <summary>
+    /// True when unix-path translation is opted in via <c>PSBASH_UNIX_PATHS=1</c>
+    /// (set by the Shell layer from the <c>--unix-paths</c> CLI flag). Off by
+    /// default so direct ps-bash users don't get surprise path rewrites; on for
+    /// wrappers (Claude Code, OpenCode) that emit unix-shaped paths assuming a
+    /// POSIX filesystem.
+    /// </summary>
+    private static bool UnixPathTranslationEnabled
+        => Environment.GetEnvironmentVariable("PSBASH_UNIX_PATHS") == "1";
+
+    /// <summary>
+    /// Translate a unix-style drive path (<c>/c/Users/...</c>, <c>/mnt/c/...</c>)
+    /// into a Windows path (<c>C:\Users\...</c>) when translation is enabled, using
+    /// the shared <see cref="WindowsPath"/> mapper. Applied uniformly to redirect
+    /// targets, command operands (<see cref="TransformWordPath"/>), and <c>cd</c>
+    /// targets (<see cref="EmitCd"/>) so an absolute drive path resolves the same
+    /// way everywhere — otherwise <c>cat /c/x</c> / <c>cd /c/x</c> resolve
+    /// <c>/c/x</c> against the current drive and become <c>C:\c\x</c>.
+    /// </summary>
+    private static bool TryTranslateMsysDrivePath(string path, out string windowsPath)
+    {
+        if (UnixPathTranslationEnabled && WindowsPath.TryMapUnixDrivePath(path, out windowsPath))
+            return true;
+        windowsPath = path;
+        return false;
     }
 
     /// <summary>
@@ -2043,6 +2061,8 @@ public static class PsEmitter
             return "$null";
         if (value.StartsWith("/tmp/"))
             return $"$env:TEMP\\{value[5..]}";
+        if (TryTranslateMsysDrivePath(value, out var translated))
+            return translated;
         return value;
     }
 
@@ -2932,10 +2952,18 @@ public static class PsEmitter
                 else
                     sb.Append(Emit(cmd));
             }
-            else if (i > 0 && cmd is Command.Subshell or Command.BraceGroup)
+            else if (pipeline.Commands.Length > 1 && IsCompoundPipelineStage(cmd))
             {
-                // Subshell `( ... )` and brace group `{ ... }` as pipeline stages need
-                // `& { ... }` wrapper — bare `try { } finally { }` is not a valid PS pipeline segment.
+                // A compound command used as a pipeline stage emits PowerShell
+                // *statements*, not a pipeable expression: a subshell / brace group
+                // becomes `try { } finally { }`; a for/while loop becomes
+                // `$__psbash_iter = 0; foreach (...) { ... }`; an `if`/`case` becomes
+                // an `if`/`switch` block. None of these are a valid bare pipeline
+                // segment — PowerShell rejects `foreach (...) {} | sort` with
+                // "An empty pipe element is not allowed". Wrapping in `& { ... }`
+                // turns the statement list into a single pipeable command, and
+                // matches bash, which runs every pipe stage in its own subshell.
+                // This applies at ANY position (incl. the first stage), not just i > 0.
                 sb.Append($"& {{ {Emit(cmd)} }}");
             }
             else
@@ -2951,6 +2979,20 @@ public static class PsEmitter
 
         return sb.ToString();
     }
+
+    /// <summary>
+    /// True for compound commands whose emission is a PowerShell statement (or
+    /// statement list) rather than a pipeable expression. Such a command must be
+    /// wrapped in <c>&amp; { ... }</c> when it appears as a stage of a multi-stage
+    /// pipeline, or PowerShell rejects the pipe ("An empty pipe element is not
+    /// allowed"). Simple commands and and-or/command lists are not included —
+    /// simple commands already emit pipeable cmdlet calls, and lists never appear
+    /// directly as a pipeline stage (bash grammar: a stage is compound-or-simple).
+    /// </summary>
+    private static bool IsCompoundPipelineStage(Command cmd) =>
+        cmd is Command.Subshell or Command.BraceGroup or Command.ForIn or Command.ForArith
+            or Command.While or Command.If or Command.Case or Command.ArithCommand
+            or Command.ShFunction;
 
     private static void EmitPipeTargetRedirects(Command.Simple cmd, StringBuilder sb)
     {
@@ -2996,6 +3038,8 @@ public static class PsEmitter
                 targetExpr = "$HOME";
             else if (literal.StartsWith("~/") || literal.StartsWith("~\\"))
                 targetExpr = "$HOME + " + QuotePsString("\\" + literal[2..]);
+            else if (TryTranslateMsysDrivePath(literal, out var winPath))
+                targetExpr = QuotePsString(winPath);
             else
                 targetExpr = QuotePsString(literal);
         }

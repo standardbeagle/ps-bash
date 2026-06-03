@@ -233,6 +233,7 @@ function Read-BashFileBytes {
         [string]$Command
     )
 
+    if ($IsWindows) { $Path = [PsBash.Core.WindowsPath]::Normalize($Path) }
     try {
         $rawText = [System.IO.File]::ReadAllText($Path)
     } catch {
@@ -267,6 +268,7 @@ function Open-BashFileReader {
         [string]$Command
     )
 
+    if ($IsWindows) { $Path = [PsBash.Core.WindowsPath]::Normalize($Path) }
     try {
         $fs = [System.IO.FileStream]::new(
             $Path,
@@ -560,6 +562,13 @@ function Resolve-BashGlob {
     param([string[]]$Paths)
     $resolved = [System.Collections.Generic.List[string]]::new()
     foreach ($p in $Paths) {
+        # Runtime safety net: on Windows, map unix-style drive paths
+        # (/c/.., /mnt/c/..) and native drive variants (c:/..) to a native
+        # Windows path via the SAME shared mapper the transpiler uses, so a
+        # direct/interactive user who types a unix path gets the file they
+        # meant instead of one resolved against C:\c\.. . No-op off-Windows,
+        # where /c/.. and /mnt/c/.. can be real paths.
+        if ($IsWindows) { $p = [PsBash.Core.WindowsPath]::Normalize($p) }
         if ($p -match '[*?]') {
             $expanded = @(Resolve-Path -Path $p -ErrorAction SilentlyContinue | ForEach-Object { $_.Path })
             if ($expanded.Count -eq 0) {

@@ -1,4 +1,5 @@
 using System.Management.Automation;
+using PsBash.Core;
 
 namespace PsBash.Cmdlets;
 
@@ -22,6 +23,7 @@ internal static class FileSystemHelpers
     /// </summary>
     public static IEnumerable<string> ResolveOperandPaths(PSCmdlet cmdlet, string raw)
     {
+        raw = NormalizeOperandPath(raw);
         if (raw.IndexOf('*') < 0 && raw.IndexOf('?') < 0)
         {
             yield return cmdlet.SessionState.Path.GetUnresolvedProviderPathFromPSPath(raw);
@@ -140,6 +142,21 @@ internal static class FileSystemHelpers
     /// Bash-style path normalization for verbose output: backslash → slash.
     /// </summary>
     public static string ToBashPath(string winPath) => winPath.Replace('\\', '/');
+
+    /// <summary>
+    /// Map a raw file operand to a native Windows path before it reaches the
+    /// PowerShell path provider, via the shared <see cref="WindowsPath"/> mapper.
+    /// On Windows this rewrites unix-style drive paths (<c>/c/..</c>, <c>/mnt/c/..</c>)
+    /// and canonicalizes native drive variants (<c>c:/..</c>) so a user (or LLM)
+    /// who types a unix-shaped path gets the file they meant instead of a
+    /// "No such file or directory" resolved against <c>C:\c\..</c>. No-op on
+    /// non-Windows, where <c>/c/..</c> and <c>/mnt/c/..</c> may be real paths.
+    /// This is the runtime safety net for the direct/interactive case; the
+    /// transpiler handles the wrapper case (PSBASH_UNIX_PATHS) ahead of time.
+    /// Both paths share the SAME <see cref="WindowsPath"/> rules.
+    /// </summary>
+    public static string NormalizeOperandPath(string raw)
+        => OperatingSystem.IsWindows() ? WindowsPath.Normalize(raw) : raw;
 
     /// <summary>
     /// True when <paramref name="token"/> looks like an option (a dash flag),

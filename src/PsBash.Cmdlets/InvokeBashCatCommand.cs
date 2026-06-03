@@ -353,8 +353,9 @@ public sealed class InvokeBashCatCommand : PSCmdlet
     /// </summary>
     private IEnumerable<string> ResolveGlob(IReadOnlyList<string> paths)
     {
-        foreach (var p in paths)
+        foreach (var rawP in paths)
         {
+            var p = FileSystemHelpers.NormalizeOperandPath(rawP);
             if (p.IndexOf('*') >= 0 || p.IndexOf('?') >= 0)
             {
                 var matched = new List<string>();

@@ -97,6 +97,7 @@ internal static class ChecksumEngine
 
     private static IEnumerable<string> ResolveOperandPaths(PSCmdlet cmdlet, string raw)
     {
+        raw = FileSystemHelpers.NormalizeOperandPath(raw);
         // Glob slice mirrors InvokeBashCatCommand: '*'/'?' triggers
         // SessionState resolution; literal paths fall through unchanged so a
         // bash-style "no such file" error can be emitted by the caller.

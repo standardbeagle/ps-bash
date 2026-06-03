@@ -71,6 +71,148 @@ public class BashTranspilerTests
         finally { Environment.SetEnvironmentVariable("PSBASH_UNIX_PATHS", prior); }
     }
 
+    // Regression: MSYS drive paths were translated only in redirect targets, not
+    // in plain command operands. `cat /c/Users/andyb/foo` passed `/c/Users/...`
+    // through verbatim; the runtime resolved it against the current drive and got
+    // `C:\c\Users\...` ("No such file or directory"). Captured live from the Claude
+    // Code Bash tool, which runs with PSBASH_UNIX_PATHS=1.
+    [Fact]
+    public void MsysDrivePathInCommandOperand_TranslatedToWindowsPath_WhenUnixPathsOn()
+    {
+        var prior = Environment.GetEnvironmentVariable("PSBASH_UNIX_PATHS");
+        Environment.SetEnvironmentVariable("PSBASH_UNIX_PATHS", "1");
+        try
+        {
+            var result = BashTranspiler.Transpile("cat /c/Users/andyb/foo.log");
+            Assert.Contains("Invoke-BashCat C:\\Users\\andyb\\foo.log", result);
+        }
+        finally { Environment.SetEnvironmentVariable("PSBASH_UNIX_PATHS", prior); }
+    }
+
+    [Fact]
+    public void MsysDrivePathInCommandOperand_PreservedLiteral_WhenUnixPathsOff()
+    {
+        var prior = Environment.GetEnvironmentVariable("PSBASH_UNIX_PATHS");
+        Environment.SetEnvironmentVariable("PSBASH_UNIX_PATHS", "0");
+        try
+        {
+            var result = BashTranspiler.Transpile("cat /c/Users/andyb/foo.log");
+            Assert.Contains("Invoke-BashCat /c/Users/andyb/foo.log", result);
+        }
+        finally { Environment.SetEnvironmentVariable("PSBASH_UNIX_PATHS", prior); }
+    }
+
+    // WSL-style drive paths (/mnt/c/...) must translate the same as MSYS /c/...,
+    // since LLMs emit both. Operand + cd both go through the shared WindowsPath
+    // mapper now.
+    [Fact]
+    public void WslDrivePathInCommandOperand_TranslatedToWindowsPath_WhenUnixPathsOn()
+    {
+        var prior = Environment.GetEnvironmentVariable("PSBASH_UNIX_PATHS");
+        Environment.SetEnvironmentVariable("PSBASH_UNIX_PATHS", "1");
+        try
+        {
+            var result = BashTranspiler.Transpile("cat /mnt/c/Users/andyb/foo.log");
+            Assert.Contains("Invoke-BashCat C:\\Users\\andyb\\foo.log", result);
+        }
+        finally { Environment.SetEnvironmentVariable("PSBASH_UNIX_PATHS", prior); }
+    }
+
+    [Fact]
+    public void WslDrivePathInCdTarget_TranslatedToWindowsPath_WhenUnixPathsOn()
+    {
+        var prior = Environment.GetEnvironmentVariable("PSBASH_UNIX_PATHS");
+        Environment.SetEnvironmentVariable("PSBASH_UNIX_PATHS", "1");
+        try
+        {
+            var result = BashTranspiler.Transpile("cd /mnt/c/Users/andyb");
+            Assert.Contains("$__psbash_cd_target = 'C:\\Users\\andyb'", result);
+        }
+        finally { Environment.SetEnvironmentVariable("PSBASH_UNIX_PATHS", prior); }
+    }
+
+    [Fact]
+    public void WslDrivePathInRedirectTarget_TranslatedToWindowsPath_WhenUnixPathsOn()
+    {
+        var prior = Environment.GetEnvironmentVariable("PSBASH_UNIX_PATHS");
+        Environment.SetEnvironmentVariable("PSBASH_UNIX_PATHS", "1");
+        try
+        {
+            var result = BashTranspiler.Transpile("echo hi > /mnt/c/Users/andyb/foo.log");
+            Assert.Contains("Invoke-BashRedirect -Path C:\\Users\\andyb\\foo.log", result);
+        }
+        finally { Environment.SetEnvironmentVariable("PSBASH_UNIX_PATHS", prior); }
+    }
+
+    // Same gap for `cd`: `cd /c/Users/andyb` resolved `/c/Users/andyb` against the
+    // current drive via [Path]::GetFullPath -> `C:\c\Users\andyb`, which does not
+    // exist, so every `cd /c/...` failed with "No such file or directory".
+    [Fact]
+    public void MsysDrivePathInCdTarget_TranslatedToWindowsPath_WhenUnixPathsOn()
+    {
+        var prior = Environment.GetEnvironmentVariable("PSBASH_UNIX_PATHS");
+        Environment.SetEnvironmentVariable("PSBASH_UNIX_PATHS", "1");
+        try
+        {
+            var result = BashTranspiler.Transpile("cd /c/Users/andyb");
+            Assert.Contains("$__psbash_cd_target = 'C:\\Users\\andyb'", result);
+        }
+        finally { Environment.SetEnvironmentVariable("PSBASH_UNIX_PATHS", prior); }
+    }
+
+    [Fact]
+    public void MsysDrivePathInCdTarget_PreservedLiteral_WhenUnixPathsOff()
+    {
+        var prior = Environment.GetEnvironmentVariable("PSBASH_UNIX_PATHS");
+        Environment.SetEnvironmentVariable("PSBASH_UNIX_PATHS", "0");
+        try
+        {
+            var result = BashTranspiler.Transpile("cd /c/Users/andyb");
+            Assert.Contains("$__psbash_cd_target = '/c/Users/andyb'", result);
+        }
+        finally { Environment.SetEnvironmentVariable("PSBASH_UNIX_PATHS", prior); }
+    }
+
+    // Regression: a compound command (for/while/if/case, subshell, brace group)
+    // used as a pipeline stage emits PowerShell *statements* — e.g. a `for` loop
+    // becomes `$__psbash_iter = 0; foreach (...) { ... }`. PowerShell cannot pipe a
+    // bare statement: `foreach (...) {} | Invoke-BashSort` is a parse error
+    // ("An empty pipe element is not allowed"). The stage must be wrapped in
+    // `& { ... }` so it becomes a pipeable command (and matches bash, which runs
+    // every pipe stage in its own subshell). Captured live from the Claude Code
+    // Bash tool running `for d in ...; do echo ...; done | <cmd>`.
+    [Fact]
+    public void Transpile_ForLoopPipedIntoCommand_WrapsLoopInScriptBlockSoPipeIsValid()
+    {
+        var result = BashTranspiler.Transpile("for d in a b; do echo $d; done | sort");
+        // The loop stage must be wrapped so the pipe has a real left operand.
+        // The broken form started with `$__psbash_iter = 0; foreach (...) {...} | ...`,
+        // a bare statement piped — which fails to parse. The wrapped form starts `& {`.
+        Assert.StartsWith("& {", result);
+        Assert.Contains("foreach (", result);
+        Assert.Contains("} | Invoke-BashSort", result);
+    }
+
+    // Same defect for a brace group as the FIRST pipe stage (previously only
+    // wrapped at stage index > 0). `{ echo a; echo b; } | sort` must wrap.
+    [Fact]
+    public void Transpile_BraceGroupAsFirstPipeStage_WrapsInScriptBlock()
+    {
+        var result = BashTranspiler.Transpile("{ echo a; echo b; } | sort");
+        Assert.StartsWith("& {", result);
+        Assert.Contains("| Invoke-BashSort", result);
+    }
+
+    // Subshell as the first pipe stage emits `try { } finally { }`, also not a
+    // valid bare pipeline segment. Must wrap.
+    [Fact]
+    public void Transpile_SubshellAsFirstPipeStage_WrapsInScriptBlock()
+    {
+        var result = BashTranspiler.Transpile("(echo a; echo b) | sort");
+        Assert.StartsWith("& {", result);
+        Assert.Contains("| Invoke-BashSort", result);
+    }
+
     [Fact]
     public void ClaudeCodeBashWrapper_TranspilesWithoutEmptyPipeOrAssignmentJunk()
     {
