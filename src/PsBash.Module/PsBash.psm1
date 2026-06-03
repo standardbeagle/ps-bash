@@ -233,7 +233,7 @@ function Read-BashFileBytes {
         [string]$Command
     )
 
-    if ($IsWindows) { $Path = [PsBash.Core.WindowsPath]::Normalize($Path) }
+    $Path = [PsBash.Cmdlets.BashRuntime]::NormalizeWindowsPath($Path)
     try {
         $rawText = [System.IO.File]::ReadAllText($Path)
     } catch {
@@ -268,7 +268,7 @@ function Open-BashFileReader {
         [string]$Command
     )
 
-    if ($IsWindows) { $Path = [PsBash.Core.WindowsPath]::Normalize($Path) }
+    $Path = [PsBash.Cmdlets.BashRuntime]::NormalizeWindowsPath($Path)
     try {
         $fs = [System.IO.FileStream]::new(
             $Path,
@@ -566,9 +566,12 @@ function Resolve-BashGlob {
         # (/c/.., /mnt/c/..) and native drive variants (c:/..) to a native
         # Windows path via the SAME shared mapper the transpiler uses, so a
         # direct/interactive user who types a unix path gets the file they
-        # meant instead of one resolved against C:\c\.. . No-op off-Windows,
-        # where /c/.. and /mnt/c/.. can be real paths.
-        if ($IsWindows) { $p = [PsBash.Core.WindowsPath]::Normalize($p) }
+        # meant instead of one resolved against C:\c\.. . Routed through the
+        # BashRuntime forwarder (NOT a direct [PsBash.Core.WindowsPath]
+        # reference): that Transpiler type is not always loaded in a psm1-only
+        # runspace (e.g. isolated Pester), but the Cmdlets static always is.
+        # No-op off-Windows.
+        $p = [PsBash.Cmdlets.BashRuntime]::NormalizeWindowsPath($p)
         if ($p -match '[*?]') {
             $expanded = @(Resolve-Path -Path $p -ErrorAction SilentlyContinue | ForEach-Object { $_.Path })
             if ($expanded.Count -eq 0) {

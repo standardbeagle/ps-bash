@@ -37,6 +37,24 @@ public static class BashRuntime
     }
 
     /// <summary>
+    /// Forwards to the shared <see cref="PsBash.Core.WindowsPath"/> mapper, gated
+    /// on running under Windows. Exposed here — in the reliably-loaded Cmdlets
+    /// assembly the psm1 already calls — so a psm1 function can normalize a
+    /// unix-style drive path (<c>/c/..</c>, <c>/mnt/c/..</c>, <c>c:/..</c>)
+    /// WITHOUT a script-level <c>[PsBash.Core.WindowsPath]</c> reference. That
+    /// type lives in PsBash.Transpiler, a transitively-referenced assembly that
+    /// is not necessarily loaded when a psm1 function runs (e.g. an isolated
+    /// Pester runspace that never transpiled anything) — script-level type
+    /// resolution only searches already-loaded assemblies, so it would throw
+    /// "Unable to find type". A JIT reference from inside this already-loaded
+    /// method instead triggers the assembly resolver to load Transpiler.dll from
+    /// beside Cmdlets.dll on first call. No-op off Windows, where <c>/c/..</c>
+    /// and <c>/mnt/c/..</c> can be real paths.
+    /// </summary>
+    public static string NormalizeWindowsPath(string path)
+        => OperatingSystem.IsWindows() ? PsBash.Core.WindowsPath.Normalize(path) : path;
+
+    /// <summary>
     /// Builds a BashObject, reproducing the psm1 <c>New-BashObject</c> contract:
     /// <list type="bullet">
     /// <item>Fast path — default <c>PsBash.TextOutput</c> type with no
