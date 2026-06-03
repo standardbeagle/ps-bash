@@ -30,10 +30,13 @@
          restore with nothing to fetch from the missing feed (stays green).
          Force explicitly with -p:UseStrata=true|false. -->
     <StrataLocalFeed Condition="'$(StrataLocalFeed)' == ''">$([System.IO.Path]::GetFullPath('$(MSBuildThisFileDirectory)..\..\..\strata\local-feed'))</StrataLocalFeed>
-    <!-- Strata packages publish under the StandardBeagle.Strata.* prefix (namespaces stay Strata.*).
-         pack-local.sh stamps the version from MinVer (git-tag derived); keep this in sync with the
-         newest *.nupkg in the local feed. One source so all five refs move together. -->
-    <StrataVersion Condition="'$(StrataVersion)' == ''">0.1.0-alpha.1.2</StrataVersion>
+    <!-- The local feed (../strata/scripts/pack-local.sh) packs unprefixed Strata.* IDs
+         (the project PackageIds; namespaces also Strata.*). nuget.org carries a frozen
+         StandardBeagle.Strata.* 0.1.0-alpha.1 widgets release, but ps-bash only ever
+         consumes Strata from the local feed (CI lacks the feed → UseStrata=false → these
+         refs and FormatStyledCommand.cs are excluded). So pin to the newest *.nupkg in the
+         local feed. One source so all six refs move together. -->
+    <StrataVersion Condition="'$(StrataVersion)' == ''">0.2.1-dev</StrataVersion>
     <UseStrata Condition="'$(UseStrata)' == '' and Exists('$(StrataLocalFeed)')">true</UseStrata>
     <UseStrata Condition="'$(UseStrata)' == ''">false</UseStrata>
     <!-- Add the Strata local feed as a restore source ONLY when enabled. The feed
@@ -73,17 +76,17 @@
        flow in transitively from Strata.Render.Spectre / Strata.Css. Gated on
        UseStrata so CI (no local feed) restores without these packages. -->
   <ItemGroup Condition="'$(UseStrata)' == 'true'">
-    <PackageReference Include="StandardBeagle.Strata.Css" Version="$(StrataVersion)" />
-    <PackageReference Include="StandardBeagle.Strata.Adapters.PSObject" Version="$(StrataVersion)" />
-    <PackageReference Include="StandardBeagle.Strata.Properties.Styling" Version="$(StrataVersion)" />
-    <PackageReference Include="StandardBeagle.Strata.Render.Spectre" Version="$(StrataVersion)" />
+    <PackageReference Include="Strata.Css" Version="$(StrataVersion)" />
+    <PackageReference Include="Strata.Adapters.PSObject" Version="$(StrataVersion)" />
+    <PackageReference Include="Strata.Properties.Styling" Version="$(StrataVersion)" />
+    <PackageReference Include="Strata.Render.Spectre" Version="$(StrataVersion)" />
     <!-- Yoga layout pass: required for the 3-arg SpectreProjection.Project overload
          that honors `display: grid` (Format-Styled grid / property-list rendering). -->
-    <PackageReference Include="StandardBeagle.Strata.Layout.Yoga" Version="$(StrataVersion)" />
+    <PackageReference Include="Strata.Layout.Yoga" Version="$(StrataVersion)" />
     <!-- Interaction: the `command:` property descriptor so the button/expansion stylesheets (which
          declare `command:` bindings) parse. Only the descriptor is used (registration is pure);
          System.Reactive flows in transitively but is never exercised. -->
-    <PackageReference Include="StandardBeagle.Strata.Interaction" Version="$(StrataVersion)" />
+    <PackageReference Include="Strata.Interaction" Version="$(StrataVersion)" />
   </ItemGroup>
 
   <!-- Built-in Format-Styled stylesheets, embedded so they travel with the DLL
