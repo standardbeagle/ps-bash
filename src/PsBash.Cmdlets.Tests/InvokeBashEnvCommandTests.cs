@@ -113,13 +113,28 @@ public class InvokeBashEnvCommandTests : IClassFixture<SharedPwshFixture>
     }
 
     [Fact]
-    public void Env_ViaPrintenvAlias_Works()
+    public void Env_ViaPrintenvAlias_NamedVar_EmitsValueOnly()
     {
-        // psm1 also aliases `printenv` to Invoke-BashEnv.
+        // bash `printenv NAME` prints the VALUE only (no `NAME=` prefix);
+        // `env NAME` (the ps-bash-ism) keeps the NAME=VALUE shape. The cmdlet
+        // distinguishes the two via MyInvocation.InvocationName (Dart wpCPSd25qMuI).
         var raw = RunRaw(
             "$env:PSB_ENV_PRINTENV = 'printed'; printenv PSB_ENV_PRINTENV");
         Assert.Single(raw);
-        Assert.Equal("PSB_ENV_PRINTENV=printed", raw[0].Properties["BashText"]?.Value?.ToString());
+        Assert.Equal("printed", raw[0].Properties["BashText"]?.Value?.ToString());
+        // The typed Name/Value properties are preserved for downstream consumers.
+        Assert.Equal("PSB_ENV_PRINTENV", raw[0].Properties["Name"]?.Value?.ToString());
+        Assert.Equal("printed", raw[0].Properties["Value"]?.Value?.ToString());
+    }
+
+    [Fact]
+    public void Env_ViaPrintenvAlias_MultipleNames_EmitsValuePerLine()
+    {
+        // bash `printenv A B` prints each value on its own line, value-only.
+        var raw = RunRaw(
+            "$env:PSB_PE_A = 'aaa'; $env:PSB_PE_B = 'bbb'; printenv PSB_PE_A PSB_PE_B");
+        var texts = raw.Select(o => o.Properties["BashText"]?.Value?.ToString()).ToArray();
+        Assert.Equal(new[] { "aaa", "bbb" }, texts);
     }
 
     [Fact]

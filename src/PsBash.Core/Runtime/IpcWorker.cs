@@ -533,7 +533,16 @@ public sealed class IpcWorker : IWorker
             catch (ObjectDisposedException) { /* call finished; nothing to re-arm */ }
         }
 
-        ArmIdle(); // bound the connect attempt to one idle window
+        // Bound the CONNECT attempt even when the post-connect idle is unbounded
+        // (the default). A host that never accepts a connection is wedged and must
+        // be retired so the next invocation spawns fresh, rather than re-hanging on
+        // the corpse — the orphaned-host poison guard below. The post-connect idle
+        // (what `--timeout` governs) is a separate concern handled by ArmIdle once
+        // we are connected. Use the caller's idle timeout for the connect window
+        // when they set one, else the startup window.
+        var connectBound = unbounded ? _startupTimeout : idleTimeout;
+        try { timeoutCts.CancelAfter(connectBound); }
+        catch (ObjectDisposedException) { }
 
         await using var transport = NewTransport();
         Stream stream;
@@ -543,7 +552,7 @@ public sealed class IpcWorker : IWorker
         }
         catch (OperationCanceledException) when (timeoutCts.IsCancellationRequested && !ct.IsCancellationRequested)
         {
-            // The host is not accepting connections within an idle window. For a
+            // The host is not accepting connections within the connect window. For a
             // shared (Daemon) host this usually means a wedged process still
             // holding the endpoint; retire it so the NEXT invocation spawns a
             // fresh host instead of re-hanging on the same corpse — the
@@ -551,8 +560,17 @@ public sealed class IpcWorker : IWorker
             // subsequent call until it is manually killed.
             await RetireIfUnresponsiveAsync().ConfigureAwait(false);
             throw new TimeoutException(
-                $"ps-bash: no response from host within {idleTimeout.TotalSeconds:0.##}s. " +
+                $"ps-bash: no response from host within {connectBound.TotalSeconds:0.##}s. " +
                 "Raise the idle timeout with --timeout <seconds> / PSBASH_TIMEOUT, or --timeout none to disable.");
+        }
+
+        // Connected: the connect window no longer applies. Disarm it so a long,
+        // quiet command isn't killed when the idle timeout is unbounded; ArmIdle()
+        // re-arms below for the bounded case.
+        if (unbounded)
+        {
+            try { timeoutCts.CancelAfter(Timeout.InfiniteTimeSpan); }
+            catch (ObjectDisposedException) { }
         }
 
         try
@@ -688,18 +706,29 @@ public sealed class IpcWorker : IWorker
 
     /// <summary>
     /// The per-call <b>inactivity</b> timeout (see <see cref="SendRequestAsync"/>),
-    /// from <c>PSBASH_TIMEOUT</c>. A bare integer is seconds; <c>0</c>, <c>none</c>,
-    /// <c>off</c>, <c>infinite</c>, or <c>never</c> (and any non-positive integer)
-    /// mean <b>unbounded</b> — returned as <see cref="TimeSpan.Zero"/>, which
-    /// <see cref="SendRequestAsync"/> treats as "no idle timeout". Anything
-    /// unparseable falls back to the 120s default. The <c>--timeout</c> CLI flag
-    /// sets this env var, so the two share one parser.
+    /// read from <c>PSBASH_TIMEOUT</c> (which the <c>--timeout</c> CLI flag sets, so
+    /// the two share one parser). See <see cref="ParseCallTimeout"/> for the rules;
+    /// the default (unset) is unbounded.
     /// </summary>
     private static TimeSpan GetCallTimeout()
+        => ParseCallTimeout(Environment.GetEnvironmentVariable("PSBASH_TIMEOUT"));
+
+    /// <summary>
+    /// Pure parser for the per-call inactivity timeout (see
+    /// <see cref="GetCallTimeout"/> / <see cref="SendRequestAsync"/>). A bare
+    /// positive integer is seconds; <c>0</c>, <c>none</c>, <c>off</c>,
+    /// <c>infinite</c>, <c>never</c> (and any non-positive integer) mean
+    /// <b>unbounded</b> (<see cref="TimeSpan.Zero"/>). Unset/blank/unparseable
+    /// also mean unbounded — the default matches core bash, which applies no
+    /// idle timeout to <c>-c</c>/non-interactive runs (the only modes that reach
+    /// <see cref="IpcWorker"/>; the interactive REPL is PTY-bound and bypasses it).
+    /// Bound a run with <c>--timeout N</c> / <c>PSBASH_TIMEOUT=N</c>.
+    /// </summary>
+    internal static TimeSpan ParseCallTimeout(string? raw)
     {
-        var envValue = Environment.GetEnvironmentVariable("PSBASH_TIMEOUT")?.Trim();
+        var envValue = raw?.Trim();
         if (string.IsNullOrEmpty(envValue))
-            return TimeSpan.FromSeconds(120);
+            return TimeSpan.Zero; // default: unbounded, matching core bash
         switch (envValue.ToLowerInvariant())
         {
             case "0":
@@ -711,7 +740,7 @@ public sealed class IpcWorker : IWorker
         }
         if (int.TryParse(envValue, out var seconds))
             return seconds > 0 ? TimeSpan.FromSeconds(seconds) : TimeSpan.Zero;
-        return TimeSpan.FromSeconds(120);
+        return TimeSpan.Zero; // unparseable falls back to the (unbounded) default
     }
 
     private static string CommandLabel(Mode mode)

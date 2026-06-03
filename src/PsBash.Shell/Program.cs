@@ -12,6 +12,12 @@ using PsBash.Shell.Pty;
 // shell's process group + SIGHUP already handles this.
 JobObjectWatchdog.AttachCurrentProcess();
 
+// Emit non-ASCII output as UTF-8 regardless of the inherited console code page
+// (Dart z0GXccJmhX2H) — must run before any Console.Write. Harmless to the PTY
+// path, which pumps raw bytes via Console.OpenStandardOutput() (unaffected by
+// Console.OutputEncoding).
+ConsoleEncoding.EnsureUtf8Output();
+
 var debug = Environment.GetEnvironmentVariable("PSBASH_DEBUG") == "1";
 
 // Diagnostic: when PSBASH_TRACE=<path> is set, append a line per invocation

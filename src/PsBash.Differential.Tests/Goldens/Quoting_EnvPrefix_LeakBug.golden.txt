@@ -1,2 +1,0 @@
-PSBASH_ENVPFX_TEST=yes
-gone

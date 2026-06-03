@@ -207,18 +207,17 @@ public class QuotingDifferentialTests
     }
 
     /// <summary>
-    /// Unicode escape (Axis 3): $'café' → café. Quarantined: the \uHHHH escape
-    /// expands correctly (transpile yields `Invoke-BashEcho 'café'`, see
-    /// PsEmitterTests.Transpile_AnsiCUnicodeEscape_*), but the ps-bash host emits
-    /// non-ASCII stdout in the system code page on a non-UTF-8 console (CI
-    /// runners) so the roundtrip mojibakes (café -> cafΘ). Pre-existing host
-    /// encoding bug, Dart z0GXccJmhX2H. Re-enable once that lands.
+    /// Unicode escape (Axis 3): $'café' → café, including the stdout byte stream.
+    /// The \uHHHH escape expands at transpile (see
+    /// PsEmitterTests.Transpile_AnsiCUnicodeEscape_*); this asserts the non-ASCII
+    /// bytes survive the host→IPC→launcher roundtrip on any console code page.
+    /// Was quarantined while the launcher emitted stdout in the system code page
+    /// (café -> cafΘ on a non-UTF-8 CI console); fixed by pinning the launcher to
+    /// UTF-8 output (ConsoleEncoding.EnsureUtf8Output, Dart z0GXccJmhX2H).
     /// </summary>
-    [SkippableFact]
+    [Fact]
     public async Task Differential_AnsiCQuote_Unicode()
     {
-        Skip.If(true, "quarantine: non-ASCII stdout encoding on non-UTF-8 host (Dart z0GXccJmhX2H); " +
-                      "\\u expansion itself is covered at transpile level in PsEmitterTests.");
         await AssertOracle.EqualAsync(
             "echo $'caf\\u00e9'",
             timeout: TimeSpan.FromSeconds(15));
@@ -339,23 +338,17 @@ public class QuotingDifferentialTests
     }
 
     /// <summary>
-    /// Documents the residual `printenv VAR` shape difference (separate from the
-    /// env-leak above, which is fixed): the env cmdlet's one-name form emits
-    /// "NAME=value" where bash `printenv VAR` emits just "value". The second
-    /// line ("gone") confirms there is NO leak. Frozen via GoldenAsync until the
-    /// printenv one-name form is fixed.
+    /// `printenv VAR` prints the VALUE only ("yes"), matching bash; the env
+    /// cmdlet branches on InvocationName so `printenv` drops the "NAME=" prefix
+    /// that `env NAME` keeps (Dart wpCPSd25qMuI). The second line ("gone")
+    /// confirms the env-prefix does NOT leak. Live oracle diff (was a frozen
+    /// GoldenAsync gap before the printenv shape was fixed 2026-06-03).
     /// </summary>
-    [SkippableFact]
-    public async Task Differential_Printenv_OneNameShape_KnownGap()
+    [Fact]
+    public async Task Differential_Printenv_OneNameForm_PrintsValueOnly()
     {
-        Skip.If(true, "quarantine: documents the printenv NAME=value gap (Dart wpCPSd25qMuI); " +
-                      "golden is host-env-sensitive and unreliable on CI runners. " +
-                      "env-leak itself is covered by Differential_EnvPrefix_DoesNotLeakToShell.");
-        // Directive 1 exception: known cmdlet shape gap — printenv VAR prints
-        // "NAME=value" instead of "value". Tracked separately; not an env leak.
-        await AssertOracle.GoldenAsync(
+        await AssertOracle.EqualAsync(
             "unset PSBASH_ENVPFX_TEST; PSBASH_ENVPFX_TEST=yes printenv PSBASH_ENVPFX_TEST; echo ${PSBASH_ENVPFX_TEST:-gone}",
-            "Quoting_EnvPrefix_LeakBug",
             timeout: TimeSpan.FromSeconds(15));
     }
 
