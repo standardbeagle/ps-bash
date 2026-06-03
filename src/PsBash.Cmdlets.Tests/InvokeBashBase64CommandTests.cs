@@ -153,7 +153,7 @@ public class InvokeBashBase64CommandTests : IClassFixture<SharedPwshFixture>, ID
     [Fact]
     public void Base64_MissingFile_EmitsErrorContinues_NoOutput()
     {
-        using var pwsh = PwshTestFixture.Create();
+        var pwsh = _fixture.AcquireFresh();
         pwsh.AddScript("$ErrorActionPreference='Continue'").Invoke();
         pwsh.Commands.Clear();
         var missing = Path.Combine(_tmpDir, "no-such-file.txt").Replace("'", "''");
@@ -190,7 +190,7 @@ public class InvokeBashBase64CommandTests : IClassFixture<SharedPwshFixture>, ID
         // SessionState.Path, then File.ReadAllBytes — there is no script
         // body concatenation. A missing file yields no output (the error
         // goes to the error stream, suppressed via 2>$null).
-        using var pwsh = PwshTestFixture.Create();
+        var pwsh = _fixture.AcquireFresh();
         pwsh.AddScript("$ErrorActionPreference='Continue'").Invoke();
         pwsh.Commands.Clear();
         var probe = "; $(throw 'INJECTED'); echo pwned";

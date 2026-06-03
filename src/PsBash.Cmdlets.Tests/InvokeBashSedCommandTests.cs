@@ -416,7 +416,7 @@ public class InvokeBashSedCommandTests : IDisposable, IClassFixture<SharedPwshFi
     public void Sed_MissingScriptFile_EmitsErrorAndExitCode2()
     {
         var missing = Path.Combine(_tmpDir, "no-script.sed");
-        using var pwsh = PwshTestFixture.Create();
+        var pwsh = _fixture.AcquireFresh();
         pwsh.AddScript(
             $"Invoke-BashSed -f '{Esc(missing)}' ; $global:LASTEXITCODE").Invoke();
         var ec = pwsh.AddScript("$global:LASTEXITCODE").Invoke();
@@ -426,7 +426,7 @@ public class InvokeBashSedCommandTests : IDisposable, IClassFixture<SharedPwshFi
     [Fact]
     public void Sed_BadSubstitution_EmitsErrorAndExitCode2()
     {
-        using var pwsh = PwshTestFixture.Create();
+        var pwsh = _fixture.AcquireFresh();
         // "s/x" has only one delimiter section — bad substitution.
         pwsh.AddScript("'a' | Invoke-BashSed 's/x'").Invoke();
         pwsh.Commands.Clear();
@@ -437,7 +437,7 @@ public class InvokeBashSedCommandTests : IDisposable, IClassFixture<SharedPwshFi
     [Fact]
     public void Sed_UnsupportedCommand_EmitsErrorAndExitCode2()
     {
-        using var pwsh = PwshTestFixture.Create();
+        var pwsh = _fixture.AcquireFresh();
         pwsh.AddScript("'a' | Invoke-BashSed 'Z'").Invoke();
         pwsh.Commands.Clear();
         var ec = pwsh.AddScript("$global:LASTEXITCODE").Invoke();
@@ -447,7 +447,7 @@ public class InvokeBashSedCommandTests : IDisposable, IClassFixture<SharedPwshFi
     [Fact]
     public void Sed_NoExpression_EmitsUsageErrorAndExitCode2()
     {
-        using var pwsh = PwshTestFixture.Create();
+        var pwsh = _fixture.AcquireFresh();
         pwsh.AddScript("@() | Invoke-BashSed").Invoke();
         pwsh.Commands.Clear();
         var ec = pwsh.AddScript("$global:LASTEXITCODE").Invoke();

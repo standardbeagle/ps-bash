@@ -58,7 +58,7 @@ public class InvokeBashDateCommandTests : IClassFixture<SharedPwshFixture>
     {
         // -d "2025-01-15" → 2025-01-15 at 00:00:00 local. Verify the Y/M/D
         // properties on the typed object — wall-clock independent.
-        using var pwsh = PwshTestFixture.Create();
+        var pwsh = _fixture.AcquireFresh();
         var result = pwsh.AddScript(
             "$d = Invoke-BashDate -D '2025-01-15'; \"$($d.Year)-$($d.Month)-$($d.Day)\"").Invoke();
         Assert.Single(result);
@@ -88,7 +88,7 @@ public class InvokeBashDateCommandTests : IClassFixture<SharedPwshFixture>
     [Fact]
     public void Date_UtcFlag_TimeZoneIsUTC()
     {
-        using var pwsh = PwshTestFixture.Create();
+        var pwsh = _fixture.AcquireFresh();
         var result = pwsh.AddScript("(Invoke-BashDate -u).TimeZone").Invoke();
         Assert.Single(result);
         Assert.Equal("UTC", result[0]?.ToString());
@@ -117,7 +117,7 @@ public class InvokeBashDateCommandTests : IClassFixture<SharedPwshFixture>
     public void Date_DateFlagInvalid_NoOutputWritesError()
     {
         // Oracle returns after Write-BashError on parse failure: no output.
-        using var pwsh = PwshTestFixture.Create();
+        var pwsh = _fixture.AcquireFresh();
         var result = pwsh.AddScript(
             "Invoke-BashDate -D 'not a date' 2>$null").Invoke();
         Assert.Empty(result);
@@ -126,7 +126,7 @@ public class InvokeBashDateCommandTests : IClassFixture<SharedPwshFixture>
     [Fact]
     public void Date_ReferenceMissingFile_NoOutputWritesError()
     {
-        using var pwsh = PwshTestFixture.Create();
+        var pwsh = _fixture.AcquireFresh();
         var result = pwsh.AddScript(
             "Invoke-BashDate -r /no/such/path/xyzzy.txt 2>$null").Invoke();
         Assert.Empty(result);

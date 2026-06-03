@@ -199,7 +199,7 @@ public class InvokeBashCatHeadTailWcCommandTests : IClassFixture<SharedPwshFixtu
     {
         // Missing-target axis: a non-existent file produces a bash-style error
         // on the Write-BashError sink (not a PowerShell error record).
-        using var pwsh = PwshTestFixture.Create();
+        var pwsh = _fixture.AcquireFresh();
         pwsh.AddScript("$global:LASTEXITCODE = 0").Invoke();
         pwsh.Commands.Clear();
         pwsh.AddScript("Invoke-BashWc '/no/such/wc/file' 2>$null").Invoke();
@@ -308,7 +308,7 @@ public class InvokeBashCatHeadTailWcCommandTests : IClassFixture<SharedPwshFixtu
     public void Cat_MissingFile_SetsExitCodeOne()
     {
         // Missing-target axis: a file-read failure sets $global:LASTEXITCODE = 1.
-        using var pwsh = PwshTestFixture.Create();
+        var pwsh = _fixture.AcquireFresh();
         pwsh.AddScript("$global:LASTEXITCODE = 0").Invoke();
         pwsh.Commands.Clear();
         pwsh.AddScript("Invoke-BashCat '/no/such/cat/file' 2>$null").Invoke();

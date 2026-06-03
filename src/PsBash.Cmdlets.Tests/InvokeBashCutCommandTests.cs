@@ -204,7 +204,7 @@ public class InvokeBashCutCommandTests : IClassFixture<SharedPwshFixture>, IDisp
     [Fact]
     public void Cut_FileMode_MissingFile_NoOutput()
     {
-        using var pwsh = PwshTestFixture.Create();
+        var pwsh = _fixture.AcquireFresh();
         pwsh.AddScript("$ErrorActionPreference='Continue'").Invoke();
         pwsh.Commands.Clear();
         var missing = Path.Combine(_tmpDir, "missing.txt").Replace("'", "''");

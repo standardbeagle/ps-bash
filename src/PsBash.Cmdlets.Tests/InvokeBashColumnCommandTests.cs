@@ -152,7 +152,7 @@ public class InvokeBashColumnCommandTests : IClassFixture<SharedPwshFixture>, ID
     public void Column_MissingFile_Error_NoOutputForThatFile()
     {
         var missing = Path.Combine(_tmpDir, "no-such-file.txt");
-        using var pwsh = PwshTestFixture.Create();
+        var pwsh = _fixture.AcquireFresh();
         pwsh.AddScript("$ErrorActionPreference='Continue'").Invoke();
         pwsh.Commands.Clear();
         var result = pwsh.AddScript($"Invoke-BashColumn '{Q(missing)}' 2>$null").Invoke();
@@ -214,7 +214,7 @@ public class InvokeBashColumnCommandTests : IClassFixture<SharedPwshFixture>, ID
         // body. A non-existent file whose name contains injection chars must
         // hit the bash-style "no such file" path with no script side effect.
         var probe = "; $(throw 'INJECTED'); echo pwned";
-        using var pwsh = PwshTestFixture.Create();
+        var pwsh = _fixture.AcquireFresh();
         pwsh.AddScript("$ErrorActionPreference='Continue'").Invoke();
         pwsh.Commands.Clear();
         var result = pwsh.AddScript($"Invoke-BashColumn '{Q(probe)}' 2>$null").Invoke();

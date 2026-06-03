@@ -163,7 +163,7 @@ public class InvokeBashExpandCommandTests : IClassFixture<SharedPwshFixture>, ID
     [Fact]
     public void Expand_FileMode_MissingFile_NoThrow_NoOutput()
     {
-        using var pwsh = PwshTestFixture.Create();
+        var pwsh = _fixture.AcquireFresh();
         pwsh.AddScript("$ErrorActionPreference='Continue'").Invoke();
         pwsh.Commands.Clear();
         var missing = Path.Combine(_tmpDir, "does-not-exist.txt").Replace("'", "''");

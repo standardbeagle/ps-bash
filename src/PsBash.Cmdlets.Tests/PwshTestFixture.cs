@@ -48,6 +48,8 @@ namespace PsBash.Cmdlets.Tests;
 ///   - Current location -> back to original PWD captured at fixture start
 ///   - Location stack -> drained (pushd/popd/dirs share the runspace's default stack)
 ///   - $error.Clear()
+///   - $global:ErrorActionPreference -> 'Continue' (runspace default; isolates
+///     error-path tests that flip it)
 ///   - BashErrorMode -> 'PowerShell' (so Write-Error surfaces to in-process tests)
 ///
 /// What is NOT reset (intentional):
@@ -303,6 +305,12 @@ while ((Get-Location -Stack).Count -gt 0 -and $stackGuard -lt 64) {{
     $stackGuard++
 }}
 $error.Clear()
+# Reset $ErrorActionPreference to the runspace default so a test that flips it
+# (e.g. to 'Stop' or 'Continue' for an error-path probe) cannot bleed into the
+# next test sharing this runspace. This is what the per-test PwshTestFixture.Create()
+# calls used to provide for free; resetting to the default keeps migrated error-path
+# tests isolated. Setting to the default can only improve isolation.
+$global:ErrorActionPreference = 'Continue'
 try {{ Set-BashErrorMode -Mode PowerShell -ErrorAction SilentlyContinue }} catch {{ }}
 ";
         _pwsh.AddScript(resetScript).Invoke();

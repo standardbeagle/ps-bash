@@ -160,7 +160,7 @@ public class InvokeBashCommCommandTests : IClassFixture<SharedPwshFixture>, IDis
     public void Comm_MissingOperand_Error_NoOutput()
     {
         var f1 = WriteFile("a.txt", "a\n");
-        using var pwsh = PwshTestFixture.Create();
+        var pwsh = _fixture.AcquireFresh();
         pwsh.AddScript("$ErrorActionPreference='Continue'").Invoke();
         pwsh.Commands.Clear();
         var result = pwsh.AddScript($"Invoke-BashComm '{Q(f1)}' 2>$null").Invoke();
@@ -173,7 +173,7 @@ public class InvokeBashCommCommandTests : IClassFixture<SharedPwshFixture>, IDis
     {
         var f1 = WriteFile("a.txt", "a\n");
         var missing = Path.Combine(_tmpDir, "does-not-exist.txt");
-        using var pwsh = PwshTestFixture.Create();
+        var pwsh = _fixture.AcquireFresh();
         pwsh.AddScript("$ErrorActionPreference='Continue'").Invoke();
         pwsh.Commands.Clear();
         var result = pwsh.AddScript(
@@ -232,7 +232,7 @@ public class InvokeBashCommCommandTests : IClassFixture<SharedPwshFixture>, IDis
         // hit the bash-style "no such file" path with no script side effect.
         var probe = "; $(throw 'INJECTED'); echo pwned";
         var f1 = WriteFile("a.txt", "a\n");
-        using var pwsh = PwshTestFixture.Create();
+        var pwsh = _fixture.AcquireFresh();
         pwsh.AddScript("$ErrorActionPreference='Continue'").Invoke();
         pwsh.Commands.Clear();
         var result = pwsh.AddScript(
