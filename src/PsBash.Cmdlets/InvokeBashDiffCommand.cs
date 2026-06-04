@@ -20,7 +20,9 @@ namespace PsBash.Cmdlets;
 /// Flag-binding hazards declared explicitly: <c>-i</c> (prefix-collides with
 /// <c>-InformationAction</c>/<c>-InformationVariable</c>) and <c>-w</c>
 /// (prefix-collides with <c>-WarningAction</c>/<c>-WarningVariable</c>) are
-/// declared as named <see cref="SwitchParameter"/>s. <c>-u</c>, <c>-c</c>,
+/// declared as named <see cref="SwitchParameter"/>s, as is <c>-c</c> (context
+/// format) — it prefix-collides with <c>-Confirm</c> and was silently dropped
+/// before this fix (an earlier audit wrongly called it collision-free). <c>-u</c>,
 /// <c>-b</c>, <c>-B</c>, <c>-q</c> share no prefix with PowerShell common
 /// parameters and stay in <see cref="Arguments"/>, parsed by the manual loop.
 /// Long forms (<c>--brief</c>, <c>--ignore-all-space</c>, etc.) also flow
@@ -59,6 +61,15 @@ public sealed class InvokeBashDiffCommand : PSCmdlet
     [Parameter]
     public SwitchParameter W { get; set; }
 
+    /// <summary>
+    /// <c>-c</c> context-diff format — declared explicitly because the bare token
+    /// <c>-c</c> prefix-collides with the <c>-Confirm</c> common parameter and
+    /// would otherwise be silently bound (the flag dropped, normal format used)
+    /// before reaching <see cref="Arguments"/>.
+    /// </summary>
+    [Parameter]
+    public SwitchParameter C { get; set; }
+
     protected override void EndProcessing()
     {
         var args = Arguments ?? Array.Empty<string>();
@@ -74,7 +85,7 @@ public sealed class InvokeBashDiffCommand : PSCmdlet
         }
 
         bool unified = false;
-        bool context = false;
+        bool context = C.IsPresent;
         bool brief = false;
         bool ignoreAllSpace = W.IsPresent;
         bool ignoreSpaceChange = false;

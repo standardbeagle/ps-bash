@@ -143,6 +143,18 @@ public sealed partial class BashParser
                 var parts = DecomposeWord(token.Value);
                 words.Add(new CompoundWord(parts));
             }
+            else if (kind == BashTokenKind.Bang && words.Count > 0)
+            {
+                // A `!` AFTER the command word is a literal argument, not negation:
+                // `find . ! -name x`, `test ! -f y`. Per bash, `!` is the negation
+                // reserved word only at the start of a pipeline — ParsePipeline
+                // already consumes a leading run of `!` before we get here, so any
+                // `!` reaching this loop mid-command is an operand. Without this it
+                // fell to the `else break`, ending the command and leaving
+                // `! -name x` to be mis-parsed as a separate negated pipeline.
+                var token = Advance();
+                words.Add(new CompoundWord(DecomposeWord(token.Value)));
+            }
             else if (kind == BashTokenKind.TLess)
             {
                 // Here-string: <<< word — the word becomes the body directly.

@@ -81,6 +81,18 @@ public class InvokeBashChecksumCommandTests : IClassFixture<SharedPwshFixture>, 
     }
 
     [Fact]
+    public void Md5sum_CheckMode_DashC_DoesNotSilentlyHashTheChecksumFile()
+    {
+        // Regression: bare `-c` prefix-collides with the -Confirm common parameter.
+        // It used to be silently bound and dropped, so `md5sum -c sums.txt` hashed
+        // sums.txt as data instead of verifying it. Now `-c` binds the C decoy and
+        // check mode emits "recognized but not supported" — no hash on the success
+        // stream, and no ambiguous-binder crash.
+        var lines = RunLines($"Invoke-BashMd5sum -c '{_testFile.Replace("'", "''")}'");
+        Assert.Empty(lines);
+    }
+
+    [Fact]
     public void Md5sum_HelpFlag_EmitsUsage()
     {
         var lines = RunLines("Invoke-BashMd5sum --help");

@@ -32,7 +32,8 @@ internal static class ChecksumEngine
         string algorithmLabel,
         string commandName,
         string[] arguments,
-        IList<PSObject>? pipelineInput)
+        IList<PSObject>? pipelineInput,
+        bool checkMode = false)
     {
         if (Array.IndexOf(arguments, "--help") >= 0)
         {
@@ -41,6 +42,21 @@ internal static class ChecksumEngine
             {
                 cmdlet.WriteObject(line);
             }
+            return;
+        }
+
+        // Check mode (-c / --check): verify a checksum file. NOT implemented by
+        // the binary cmdlet. `-c` prefix-collides with the -Confirm common
+        // parameter, so each cmdlet declares a `C` decoy and passes checkMode
+        // here; `--check` (no collision) arrives as an operand. Emit the
+        // policy-compliant "recognized but not supported" error instead of
+        // silently hashing the checksum file as if it were data.
+        if (checkMode || Array.IndexOf(arguments, "--check") >= 0)
+        {
+            FileSystemHelpers.WriteBashError(
+                cmdlet,
+                $"{commandName}: option '-c' (--check) is recognized but not supported by ps-bash");
+            FileSystemHelpers.SetLastExitCode(cmdlet, 1);
             return;
         }
 
@@ -169,6 +185,9 @@ public sealed class InvokeBashMd5sumCommand : PSCmdlet
     [Parameter(ValueFromRemainingArguments = true)]
     public string[]? Arguments { get; set; }
 
+    /// <summary>Bash <c>-c</c> (check). Decoy — prefix-collides with <c>-Confirm</c>.</summary>
+    [Parameter] public SwitchParameter C { get; set; }
+
     [Parameter(ValueFromPipeline = true)]
     public PSObject? InputObject { get; set; }
 
@@ -183,7 +202,7 @@ public sealed class InvokeBashMd5sumCommand : PSCmdlet
     {
         ChecksumEngine.Run(
             this, HashAlgorithmName.MD5, "MD5", "md5sum",
-            Arguments ?? Array.Empty<string>(), _pipeline);
+            Arguments ?? Array.Empty<string>(), _pipeline, C.IsPresent);
     }
 }
 
@@ -199,6 +218,9 @@ public sealed class InvokeBashSha1sumCommand : PSCmdlet
     [Parameter(ValueFromRemainingArguments = true)]
     public string[]? Arguments { get; set; }
 
+    /// <summary>Bash <c>-c</c> (check). Decoy — prefix-collides with <c>-Confirm</c>.</summary>
+    [Parameter] public SwitchParameter C { get; set; }
+
     [Parameter(ValueFromPipeline = true)]
     public PSObject? InputObject { get; set; }
 
@@ -213,7 +235,7 @@ public sealed class InvokeBashSha1sumCommand : PSCmdlet
     {
         ChecksumEngine.Run(
             this, HashAlgorithmName.SHA1, "SHA1", "sha1sum",
-            Arguments ?? Array.Empty<string>(), _pipeline);
+            Arguments ?? Array.Empty<string>(), _pipeline, C.IsPresent);
     }
 }
 
@@ -229,6 +251,9 @@ public sealed class InvokeBashSha256sumCommand : PSCmdlet
     [Parameter(ValueFromRemainingArguments = true)]
     public string[]? Arguments { get; set; }
 
+    /// <summary>Bash <c>-c</c> (check). Decoy — prefix-collides with <c>-Confirm</c>.</summary>
+    [Parameter] public SwitchParameter C { get; set; }
+
     [Parameter(ValueFromPipeline = true)]
     public PSObject? InputObject { get; set; }
 
@@ -243,6 +268,6 @@ public sealed class InvokeBashSha256sumCommand : PSCmdlet
     {
         ChecksumEngine.Run(
             this, HashAlgorithmName.SHA256, "SHA256", "sha256sum",
-            Arguments ?? Array.Empty<string>(), _pipeline);
+            Arguments ?? Array.Empty<string>(), _pipeline, C.IsPresent);
     }
 }

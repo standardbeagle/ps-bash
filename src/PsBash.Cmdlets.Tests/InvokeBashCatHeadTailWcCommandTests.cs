@@ -160,6 +160,18 @@ public class InvokeBashCatHeadTailWcCommandTests : IClassFixture<SharedPwshFixtu
     }
 
     [Fact]
+    public void Wc_Pipeline_BytesOnlyFlag_DashC_NotSilentlyDropped()
+    {
+        // Regression: bare `-c` prefix-collides with -Confirm and was silently
+        // bound (the byte count dropped, all three columns printed) before
+        // reaching the cmdlet. Declared as the C decoy now. "abc" + the line's
+        // \n = 4 bytes.
+        var lines = RunBashText("'abc' | Invoke-BashWc -c");
+        Assert.Single(lines);
+        Assert.Equal("4", lines[0]);
+    }
+
+    [Fact]
     public void Wc_File_EmitsCountsWithFileName()
     {
         // "alpha beta\ngamma\n" = 17 bytes (10 + \n + 5 + \n).

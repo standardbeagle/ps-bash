@@ -138,6 +138,34 @@ public class QuotingDifferentialTests
     }
 
     /// <summary>
+    /// Backslash before a double-quote inside double quotes is a literal " in the
+    /// string. bash: echo "a\"b" outputs a"b. Regression: the Literal("\"") part was
+    /// emitted bare into the PowerShell double-quoted string, terminating it early and
+    /// producing a PowerShell parse error ("The string is missing the terminator").
+    /// </summary>
+    [SkippableFact]
+    public async Task Differential_Backslash_EscapesDoubleQuoteInDoubleQuotes()
+    {
+        await AssertOracle.EqualAsync(
+            "echo \"a\\\"b\"",
+            timeout: TimeSpan.FromSeconds(15));
+    }
+
+    /// <summary>
+    /// Backslash before a backtick inside double quotes is a literal ` (no command
+    /// substitution). bash: echo "a\`b" outputs a`b. Regression: the Literal("`")
+    /// part was emitted bare, where backtick is PowerShell's escape character and
+    /// would corrupt the following character.
+    /// </summary>
+    [SkippableFact]
+    public async Task Differential_Backslash_EscapesBacktickInDoubleQuotes()
+    {
+        await AssertOracle.EqualAsync(
+            "echo \"a\\`b\"",
+            timeout: TimeSpan.FromSeconds(15));
+    }
+
+    /// <summary>
     /// Backslash before a non-special char inside double quotes is literal
     /// (both backslash and the character appear in output).
     /// Per bash spec: backslash is only special before $ ` " \ and newline.

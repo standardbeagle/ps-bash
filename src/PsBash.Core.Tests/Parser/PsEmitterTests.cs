@@ -139,6 +139,74 @@ public class PsEmitterTests
     }
 
     [Fact]
+    public void Transpile_EscapedQuoteInsideDoubleQuotes_BacktickEscapesForPowerShell()
+    {
+        // bash: echo "a\"b" -> literal a"b. The inner " is parsed as Literal("\"") and
+        // must be emitted as `" inside the PowerShell double-quoted string, else the PS
+        // string terminates early ("The string is missing the terminator").
+        var result = PsEmitter.Transpile("echo \"a\\\"b\"");
+        Assert.Contains("a`\"b", result);
+        Assert.DoesNotContain("\"a\"b\"", result);
+    }
+
+    [Fact]
+    public void Transpile_FindOrOperator_QuotesDashOToSurvivePowerShellBinder()
+    {
+        // bash find's infix `-o` (OR) prefix-collides with -OutVariable/-OutBuffer.
+        // The emitter quotes it so it reaches Invoke-BashFind's Arguments in place
+        // (a switch decoy on the cmdlet would resolve the crash but lose position).
+        var result = PsEmitter.Transpile("find . -name a -o -name b");
+        Assert.Equal("Invoke-BashFind . -name a \"-o\" -name b", result);
+    }
+
+    [Fact]
+    public void Transpile_FindAndOperator_QuotesDashAToAvoidArgumentsParamCollision()
+    {
+        // find's `-a` (AND) prefix-matches the cmdlet's own -Arguments parameter,
+        // which would bind it as named and swallow the next token. Quote it too.
+        var result = PsEmitter.Transpile("find . -type f -a -name x");
+        Assert.Equal("Invoke-BashFind . -type f \"-a\" -name x", result);
+    }
+
+    [Fact]
+    public void Transpile_BangAfterCommandWord_KeptAsLiteralArgument()
+    {
+        // bash `!` is the negation reserved word only at pipeline start. A `!`
+        // after the command word is a literal operand (find . ! -name x). The
+        // parser used to break the command at `!`, dropping `! -name x`.
+        var result = PsEmitter.Transpile("find . ! -name x");
+        Assert.Equal("Invoke-BashFind . ! -name x", result);
+    }
+
+    [Fact]
+    public void Transpile_LeadingBang_StillNegatesPipeline()
+    {
+        // The fix must not disturb real pipeline negation: a LEADING `!` is still
+        // consumed by ParsePipeline as negation, not treated as an argument.
+        var result = PsEmitter.Transpile("! grep -q pattern file");
+        Assert.Contains("LASTEXITCODE", result); // negation bridges exit code
+    }
+
+    [Fact]
+    public void Transpile_FindDashOInOtherCommands_NotQuoted()
+    {
+        // The force-quote is scoped to find; grep -o stays bare (grep declares its
+        // own O decoy parameter, so the bare token binds correctly there).
+        var result = PsEmitter.Transpile("grep -o foo file");
+        Assert.DoesNotContain("\"-o\"", result);
+    }
+
+    [Fact]
+    public void Transpile_EscapedBacktickInsideDoubleQuotes_DoublesBacktickForPowerShell()
+    {
+        // bash: echo "a\`b" -> literal a`b. The inner ` is parsed as Literal("`") and
+        // must be doubled (``) inside the PowerShell double-quoted string, where backtick
+        // is the escape character.
+        var result = PsEmitter.Transpile("echo \"a\\`b\"");
+        Assert.Contains("a``b", result);
+    }
+
+    [Fact]
     public void Transpile_AssignmentTildeAfterColon_ExpandsBothTildes()
     {
         // bash expands ~ at the start of an assignment value AND after each

@@ -130,6 +130,21 @@ public class InvokeBashDiffCommandTests : IClassFixture<SharedPwshFixture>, IDis
     }
 
     [Fact]
+    public void Diff_ContextFormat_DashC_NotSilentlyDropped()
+    {
+        // Regression: bare `-c` prefix-collides with -Confirm and was silently
+        // bound (the flag dropped, normal format used) before reaching the
+        // cmdlet. Declared as the C decoy now — -c selects context format.
+        var f1 = WriteFile("a.txt", "a\nb\nc\n");
+        var f2 = WriteFile("b.txt", "a\nB\nc\n");
+        var lines = RunLines($"Invoke-BashDiff -c '{Q(f1)}' '{Q(f2)}'");
+        // Context format uses *** / --- file headers and `! ` change markers,
+        // none of which appear in the default "normal" format.
+        Assert.Contains(lines, l => l.StartsWith("***"));
+        Assert.Contains(lines, l => l.StartsWith("! "));
+    }
+
+    [Fact]
     public void Diff_IgnoreCase_TreatsLowerAndUpperAsEqual()
     {
         var f1 = WriteFile("a.txt", "Hello\nWorld\n");

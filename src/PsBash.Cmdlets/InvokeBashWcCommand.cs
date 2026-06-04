@@ -45,8 +45,12 @@ namespace PsBash.Cmdlets;
 /// <see cref="Arguments"/>. It is therefore declared as an explicit
 /// <see cref="SwitchParameter"/> (<see cref="W"/>): an exact parameter-name
 /// match beats a common-parameter prefix match, so <c>Invoke-BashWc -w</c>
-/// binds the way the psm1 oracle's <c>$args</c> scan did. <c>-l</c> and
-/// <c>-c</c> have no colliding prefix and stay in <see cref="Arguments"/>.
+/// binds the way the psm1 oracle's <c>$args</c> scan did. <c>-c</c>
+/// (bytes-only) likewise prefix-collides with <c>-Confirm</c> and is declared
+/// as <see cref="C"/> (an earlier audit wrongly called <c>-c</c> collision-free
+/// — a bare <c>-c</c> was silently bound to <c>-Confirm</c> and the byte count
+/// dropped). <c>-l</c> has no colliding prefix and stays in
+/// <see cref="Arguments"/>.
 /// </summary>
 [Cmdlet(VerbsLifecycle.Invoke, "BashWc")]
 [OutputType(typeof(PSObject))]
@@ -59,6 +63,16 @@ public sealed class InvokeBashWcCommand : PSCmdlet
     /// </summary>
     [Parameter]
     public SwitchParameter W { get; set; }
+
+    /// <summary>
+    /// The bash <c>-c</c> (bytes-only) switch — declared explicitly because the
+    /// bare token <c>-c</c> prefix-collides with the <c>-Confirm</c> common
+    /// parameter and would otherwise be silently bound (the flag dropped, byte
+    /// count never selected) before reaching <see cref="Arguments"/>. An exact
+    /// parameter-name match beats the common-parameter prefix match.
+    /// </summary>
+    [Parameter]
+    public SwitchParameter C { get; set; }
 
     [Parameter(ValueFromRemainingArguments = true)]
     public string[]? Arguments { get; set; }
@@ -111,7 +125,7 @@ public sealed class InvokeBashWcCommand : PSCmdlet
         var parsed = BashRuntime.ConvertFromBashArgs(args, flagDefs);
         bool linesOnly = parsed.Flags["-l"];
         bool wordsOnly = W.IsPresent;
-        bool bytesOnly = parsed.Flags["-c"];
+        bool bytesOnly = parsed.Flags["-c"] || C.IsPresent;
         var operands = parsed.Operands;
 
         // Bundled-flag recovery: a bundle like -lw or -wc reaches operands

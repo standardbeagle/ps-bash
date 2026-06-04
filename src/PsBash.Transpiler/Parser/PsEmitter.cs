@@ -2755,10 +2755,13 @@ public static class PsEmitter
             }
             else if (part is WordPart.Literal lit)
             {
-                // Inside double quotes, bash's \$ is parsed as Literal("$") — the parser
-                // consumed the backslash and stored only the dollar sign.  A bare $ in a
-                // PS double-quoted string starts variable expansion, so escape it as `$.
-                sb.Append(lit.Value.Replace("$", "`$"));
+                // Inside double quotes, bash's \$ \" \` are each parsed as Literal("$"/"\""/"`")
+                // — the parser consumed the backslash and stored only the escaped char (see
+                // BashParser.Words ParseDoubleQuoted). In a PS double-quoted string `$` starts
+                // variable expansion, `"` ends the string, and backtick is the escape char, so
+                // each must be backtick-escaped. Backtick first (it is introduced by the other
+                // two replacements). Mirrors the SingleQuoted branch of FlattenPartsToDoubleQuotedString.
+                sb.Append(lit.Value.Replace("`", "``").Replace("$", "`$").Replace("\"", "`\""));
             }
             else
                 sb.Append(EmitWordPart(part));
@@ -3141,7 +3144,11 @@ public static class PsEmitter
                 result = EmitPassthrough("Invoke-BashLs", args);
                 return true;
             case "find":
-                result = EmitPassthrough("Invoke-BashFind", args);
+                // find's `-o` is the OR operator (infix, position-critical), and it
+                // prefix-collides with -OutVariable/-OutBuffer. Quote it so it reaches
+                // the cmdlet's Arguments in place; the find cmdlet's expression
+                // evaluator needs the position a switch decoy would discard.
+                result = EmitPassthrough("Invoke-BashFind", args, FindForceQuoteFlags);
                 return true;
             case "stat":
                 result = EmitPassthrough("Invoke-BashStat", args);
@@ -3628,7 +3635,24 @@ public static class PsEmitter
         return sb.ToString();
     }
 
-    private static string EmitPassthrough(string cmdlet, ImmutableArray<CompoundWord> args)
+    /// <summary>
+    /// Bare short flags that must be quoted when emitted for <c>find</c> because
+    /// the PowerShell binder would otherwise consume them — destroying the
+    /// operator's position in find's expression grammar. <c>-o</c> (OR)
+    /// prefix-collides with the <c>-OutVariable</c>/<c>-OutBuffer</c> common
+    /// parameters; <c>-a</c> (AND) prefix-collides with the find cmdlet's own
+    /// <c>-Arguments</c> (<c>ValueFromRemainingArguments</c>) parameter, which
+    /// would bind <c>-a</c> as named and swallow the following token as its
+    /// value. <c>-and</c>/<c>-or</c>/<c>-not</c> and <c>!</c>/<c>(</c>/<c>)</c>
+    /// share no parameter prefix and reach Arguments unaided.
+    /// </summary>
+    private static readonly IReadOnlySet<string> FindForceQuoteFlags =
+        new HashSet<string>(StringComparer.Ordinal) { "-o", "-a" };
+
+    private static string EmitPassthrough(
+        string cmdlet,
+        ImmutableArray<CompoundWord> args,
+        IReadOnlySet<string>? forceQuoteFlags = null)
     {
         if (args.IsEmpty)
             return cmdlet;
@@ -3643,7 +3667,14 @@ public static class PsEmitter
             var emitted = i == pipelineProcessSubIndex
                 ? EmitProcessSubPipeline((WordPart.ProcessSub)args[i].Parts[0])
                 : EmitWord(args[i]);
-            return NeedsPassthroughQuoting(emitted)
+            // forceQuoteFlags carries bare short flags that prefix-collide with a
+            // PowerShell common parameter (e.g. find's infix `-o`, ambiguous with
+            // -OutVariable/-OutBuffer). Quoting routes the literal token to the
+            // cmdlet's ValueFromRemainingArguments in its original position — a
+            // switch decoy on the cmdlet would resolve the crash but lose the
+            // operator's position. See docs/solutions on common-param collisions.
+            bool force = forceQuoteFlags is not null && forceQuoteFlags.Contains(emitted);
+            return NeedsPassthroughQuoting(emitted) || force
                 ? $"\"{emitted}\""
                 : emitted;
         }

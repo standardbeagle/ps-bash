@@ -14,7 +14,7 @@
 | head | Invoke-BashHead | `-n`, `-c` | Binary cmdlet (manual value-flag scan) | Yes | Yes |
 | tail | Invoke-BashTail | `-n`, `-c`, `-f`, `-s` | Binary cmdlet (manual value-flag scan) | Yes | Yes |
 | wc | Invoke-BashWc | `-l`, `-w`, `-c` | Binary cmdlet (`-w` is a declared SwitchParameter; rest via ConvertFromBashArgs) | Yes | Yes |
-| find | Invoke-BashFind | `-name`, `-type`, `-size`, `-maxdepth`, `-mtime`, `-empty` | Manual loop | No | Yes |
+| find | Invoke-BashFind | `-name`/`-iname`, `-path`/`-ipath`, `-regex`/`-iregex`, `-type`, `-size`, `-maxdepth`/`-mindepth`, `-mtime`, `-newer`, `-empty`, `-print0`, `-prune`, `-delete`, `-depth`, `-exec`; boolean expression operators `-a`/`-and`, `-o`/`-or`, `-not`/`!`, `( )` grouping, `-true`/`-false` | Binary cmdlet (predicates compiled to leaf delegates, combined by a per-item boolean-expression evaluator with GNU precedence `! > AND > OR`; implicit-AND of sequential predicates is byte-identical to the old flat filter). **Binder note:** the infix `-o` (vs `-OutVariable`/`-OutBuffer`) and `-a` (vs the cmdlet's own `-Arguments`) are position-critical, so the emitter force-quotes them (`PsEmitter.FindForceQuoteFlags`) rather than declaring switch decoys, which would lose position. Bare `!` works (the parser keeps a post-command-word `!` as a literal operand). | No | Yes |
 | stat | Invoke-BashStat | `-c`, `-t`, `--printf` | Binary cmdlet (`-c FORMAT` declared as value-bearing parameter `C`; `-t` / `--printf=` stay in `Arguments`) | No | Yes |
 | cp | Invoke-BashCp | `-r`, `-v`, `-n`, `-f` | ConvertFrom-BashArgs | No | Yes |
 | mv | Invoke-BashMv | `-v`, `-n`, `-f` | ConvertFrom-BashArgs | No | Yes |

@@ -103,23 +103,14 @@ public sealed class InvokeBashFindCommand : PSCmdlet
         {
             "-print", "-follow", "-ls",
             "-mount", "-xdev", "-noleaf", "-daystart", "-warn", "-nowarn",
-            "-not", "-or", "-o", "-and", "-a", "-true", "-false",
+            // NOTE: the boolean operators -not/-or/-o/-and/-a and the constant
+            // predicates -true/-false are now SUPPORTED via the expression
+            // evaluator below — they are no longer listed here.
         };
 
         string searchPath = ".";
-        string? namePattern = null;
-        string? inamePattern = null;
-        string? pathPattern = null;
-        bool pathInsensitive = false;
-        string? regexPattern = null;
-        bool regexInsensitive = false;
-        string? typeFilter = null;
         int maxDepth = int.MaxValue;
         int minDepth = 0;
-        string? sizeExpr = null;
-        string? mtimeExpr = null;
-        string? newerFile = null;
-        bool findEmpty = false;
         bool printNull = false;
         bool doDelete = false;
         bool doPrune = false;
@@ -128,72 +119,32 @@ public sealed class InvokeBashFindCommand : PSCmdlet
         string? execTerminator = null;
         var operands = new List<string>();
 
+        // The filter predicates (-name/-type/-size/...) plus the boolean operators
+        // (-a/-and, -o/-or, -not/!, parentheses) form a per-item boolean EXPRESSION.
+        // Each predicate is compiled into a leaf delegate over EvalCtx as it is
+        // parsed (capturing its already-parsed config: glob pattern, size op/bytes,
+        // compiled regex, resolved -newer timestamp); the operators become structural
+        // tokens. -maxdepth/-mindepth and the actions (-prune/-delete/-exec/-print0/
+        // -depth) are global options, NOT part of the expression, and are extracted
+        // here as before. An empty token list matches everything (bash: `find .`).
+        var exprTokens = new List<FindTok>();
+
         int i = 0;
         while (i < args.Length)
         {
             string arg = args[i];
             switch (arg)
             {
-                case "-name":
-                    if (++i < args.Length) namePattern = args[i];
-                    i++;
-                    continue;
-                case "-iname":
-                    if (++i < args.Length) inamePattern = args[i];
-                    i++;
-                    continue;
-                case "-path":
-                case "-wholename":
-                    if (++i < args.Length) { pathPattern = args[i]; pathInsensitive = false; }
-                    i++;
-                    continue;
-                case "-ipath":
-                case "-iwholename":
-                    if (++i < args.Length) { pathPattern = args[i]; pathInsensitive = true; }
-                    i++;
-                    continue;
-                case "-regex":
-                    if (++i < args.Length) { regexPattern = args[i]; regexInsensitive = false; }
-                    i++;
-                    continue;
-                case "-iregex":
-                    if (++i < args.Length) { regexPattern = args[i]; regexInsensitive = true; }
-                    i++;
-                    continue;
-                case "-type":
-                    if (++i < args.Length) typeFilter = args[i];
-                    i++;
-                    continue;
+                // ── global options (not part of the boolean expression) ──
                 case "-maxdepth":
-                    if (++i < args.Length)
-                    {
-                        if (int.TryParse(args[i], out var md)) maxDepth = md;
-                    }
+                    if (++i < args.Length && int.TryParse(args[i], out var md)) maxDepth = md;
                     i++;
                     continue;
                 case "-mindepth":
-                    if (++i < args.Length)
-                    {
-                        if (int.TryParse(args[i], out var mnd)) minDepth = mnd;
-                    }
+                    if (++i < args.Length && int.TryParse(args[i], out var mnd)) minDepth = mnd;
                     i++;
                     continue;
-                case "-newer":
-                    if (++i < args.Length) newerFile = args[i];
-                    i++;
-                    continue;
-                case "-size":
-                    if (++i < args.Length) sizeExpr = args[i];
-                    i++;
-                    continue;
-                case "-mtime":
-                    if (++i < args.Length) mtimeExpr = args[i];
-                    i++;
-                    continue;
-                case "-empty":
-                    findEmpty = true;
-                    i++;
-                    continue;
+                // ── actions ──
                 case "-delete":
                     doDelete = true;
                     depthFirst = true; // find: -delete implies -depth (empty dirs before parents)
@@ -228,6 +179,140 @@ public sealed class InvokeBashFindCommand : PSCmdlet
                         i++;
                     }
                     continue;
+                // ── boolean operators ──
+                case "-a":
+                case "-and":
+                    exprTokens.Add(new FindTok(FTk.And, null));
+                    i++;
+                    continue;
+                case "-o":
+                case "-or":
+                    exprTokens.Add(new FindTok(FTk.Or, null));
+                    i++;
+                    continue;
+                case "!":
+                case "-not":
+                    exprTokens.Add(new FindTok(FTk.Not, null));
+                    i++;
+                    continue;
+                case "(":
+                    exprTokens.Add(new FindTok(FTk.LParen, null));
+                    i++;
+                    continue;
+                case ")":
+                    exprTokens.Add(new FindTok(FTk.RParen, null));
+                    i++;
+                    continue;
+                // ── predicate leaves ──
+                case "-name":
+                {
+                    string p = (++i < args.Length) ? args[i] : string.Empty;
+                    exprTokens.Add(new FindTok(FTk.Leaf, c => GlobMatch(c.Item.Name, p, ci: false)));
+                    i++;
+                    continue;
+                }
+                case "-iname":
+                {
+                    string p = (++i < args.Length) ? args[i] : string.Empty;
+                    exprTokens.Add(new FindTok(FTk.Leaf, c => GlobMatch(c.Item.Name, p, ci: true)));
+                    i++;
+                    continue;
+                }
+                case "-path":
+                case "-wholename":
+                {
+                    string p = (++i < args.Length) ? args[i] : string.Empty;
+                    exprTokens.Add(new FindTok(FTk.Leaf, c => PathGlobMatch(c.DisplayPath, p, false)));
+                    i++;
+                    continue;
+                }
+                case "-ipath":
+                case "-iwholename":
+                {
+                    string p = (++i < args.Length) ? args[i] : string.Empty;
+                    exprTokens.Add(new FindTok(FTk.Leaf, c => PathGlobMatch(c.DisplayPath, p, true)));
+                    i++;
+                    continue;
+                }
+                case "-regex":
+                case "-iregex":
+                {
+                    bool ci = arg == "-iregex";
+                    string p = (++i < args.Length) ? args[i] : string.Empty;
+                    System.Text.RegularExpressions.Regex rxLeaf;
+                    try
+                    {
+                        rxLeaf = new System.Text.RegularExpressions.Regex(
+                            "^(?:" + p + ")$",
+                            ci ? System.Text.RegularExpressions.RegexOptions.IgnoreCase
+                               : System.Text.RegularExpressions.RegexOptions.None);
+                    }
+                    catch
+                    {
+                        EmitError($"find: invalid regex: {p}", 1);
+                        return;
+                    }
+                    exprTokens.Add(new FindTok(FTk.Leaf, c => rxLeaf.IsMatch(c.DisplayPath)));
+                    i++;
+                    continue;
+                }
+                case "-type":
+                {
+                    string tf = (++i < args.Length) ? args[i] : string.Empty;
+                    exprTokens.Add(new FindTok(FTk.Leaf,
+                        c => (tf == "f" && !c.IsDir) || (tf == "d" && c.IsDir)));
+                    i++;
+                    continue;
+                }
+                case "-size":
+                {
+                    string e = (++i < args.Length) ? args[i] : string.Empty;
+                    var (op, bytes) = ParseSizeExpr(e);
+                    exprTokens.Add(new FindTok(FTk.Leaf, c => SizeMatch(c.Item, c.IsDir, op, bytes)));
+                    i++;
+                    continue;
+                }
+                case "-mtime":
+                {
+                    string e = (++i < args.Length) ? args[i] : string.Empty;
+                    var (op, days) = ParseMtimeExpr(e);
+                    exprTokens.Add(new FindTok(FTk.Leaf, c => MtimeMatch(c, op, days)));
+                    i++;
+                    continue;
+                }
+                case "-newer":
+                {
+                    string f = (++i < args.Length) ? args[i] : string.Empty;
+                    DateTime newerThan;
+                    try
+                    {
+                        var curDir = SessionState.Path.CurrentFileSystemLocation.Path;
+                        var full = System.IO.Path.GetFullPath(f, curDir);
+                        if (System.IO.File.Exists(full)) newerThan = System.IO.File.GetLastWriteTime(full);
+                        else if (System.IO.Directory.Exists(full)) newerThan = System.IO.Directory.GetLastWriteTime(full);
+                        else { EmitError($"find: '{f}': No such file or directory", 1); return; }
+                    }
+                    catch
+                    {
+                        EmitError($"find: '{f}': No such file or directory", 1);
+                        return;
+                    }
+                    exprTokens.Add(new FindTok(FTk.Leaf, c => c.Item.LastWriteTime > newerThan));
+                    i++;
+                    continue;
+                }
+                case "-empty":
+                    exprTokens.Add(new FindTok(FTk.Leaf, EmptyMatch));
+                    i++;
+                    continue;
+                case "-true":
+                    exprTokens.Add(new FindTok(FTk.Leaf, static _ => true));
+                    i++;
+                    continue;
+                case "-false":
+                    exprTokens.Add(new FindTok(FTk.Leaf, static _ => false));
+                    i++;
+                    continue;
                 default:
                     if (unsupportedValuePredicates.Contains(arg))
                     {
@@ -245,6 +330,18 @@ public sealed class InvokeBashFindCommand : PSCmdlet
                     i++;
                     continue;
             }
+        }
+
+        // Compile the predicate tokens into one per-item boolean delegate.
+        Func<EvalCtx, bool> matchExpr;
+        try
+        {
+            matchExpr = ParseFindExpr(exprTokens);
+        }
+        catch (FindSyntaxException ex)
+        {
+            EmitError($"find: {ex.Message}", 1);
+            return;
         }
 
         if (operands.Count > 0)
@@ -322,74 +419,8 @@ public sealed class InvokeBashFindCommand : PSCmdlet
             }
         }
 
-        // Parse size expression: +1k, -500c, +1M, +1G — block (no suffix)
-        // defaults to 512 bytes, matching POSIX find.
-        char sizeOp = '\0';
-        long sizeBytes = 0;
-        if (sizeExpr != null)
-        {
-            var m = System.Text.RegularExpressions.Regex.Match(
-                sizeExpr, @"^([+-])(\d+)([ckMG]?)$");
-            if (m.Success)
-            {
-                sizeOp = m.Groups[1].Value[0];
-                long n = long.Parse(m.Groups[2].Value);
-                string suffix = m.Groups[3].Value;
-                sizeBytes = suffix switch
-                {
-                    "c" => n,
-                    "k" => n * 1024L,
-                    "M" => n * 1048576L,
-                    "G" => n * 1073741824L,
-                    _ => n * 512L,
-                };
-            }
-        }
-
-        // Parse mtime expression: -7 (modified within the last 7 days),
-        // +30 (older than 30 days).
-        char mtimeOp = '\0';
-        int mtimeDays = 0;
-        if (mtimeExpr != null)
-        {
-            var m = System.Text.RegularExpressions.Regex.Match(mtimeExpr, @"^([+-])(\d+)$");
-            if (m.Success)
-            {
-                mtimeOp = m.Groups[1].Value[0];
-                mtimeDays = int.Parse(m.Groups[2].Value);
-            }
-        }
-
-        // -newer FILE: keep entries modified strictly later than FILE's mtime.
-        DateTime? newerThan = null;
-        if (newerFile != null)
-        {
-            try
-            {
-                var curDir = SessionState.Path.CurrentFileSystemLocation.Path;
-                var full = System.IO.Path.GetFullPath(newerFile, curDir);
-                if (System.IO.File.Exists(full)) newerThan = System.IO.File.GetLastWriteTime(full);
-                else if (System.IO.Directory.Exists(full)) newerThan = System.IO.Directory.GetLastWriteTime(full);
-                else { EmitError($"find: '{newerFile}': No such file or directory", 1); return; }
-            }
-            catch
-            {
-                EmitError($"find: '{newerFile}': No such file or directory", 1);
-                return;
-            }
-        }
-
-        // -regex / -iregex: the pattern must match the WHOLE printed path.
-        System.Text.RegularExpressions.Regex? rx = null;
-        if (regexPattern != null)
-        {
-            var opts = regexInsensitive
-                ? System.Text.RegularExpressions.RegexOptions.IgnoreCase
-                : System.Text.RegularExpressions.RegexOptions.None;
-            try { rx = new System.Text.RegularExpressions.Regex("^(?:" + regexPattern + ")$", opts); }
-            catch { EmitError($"find: invalid regex: {regexPattern}", 1); return; }
-        }
-
+        // (Size/mtime/newer/regex predicates are parsed into leaf delegates at
+        // argument-scan time above; nothing to pre-parse here.)
         var now = DateTime.Now;
 
         // Forward-slash relative display path anchored at searchPath (the psm1 oracle's form).
@@ -442,52 +473,11 @@ public sealed class InvokeBashFindCommand : PSCmdlet
 
             if (relativeDepth < minDepth) continue;
 
-            if (typeFilter != null)
-            {
-                if (typeFilter == "f" && isDir) continue;
-                if (typeFilter == "d" && !isDir) continue;
-            }
-
-            if (namePattern != null && !GlobMatch(item.Name, namePattern, ci: false)) continue;
-            if (inamePattern != null && !GlobMatch(item.Name, inamePattern, ci: true)) continue;
-
             string displayPath = BuildDisplay(itemPath);
 
-            if (pathPattern != null && !PathGlobMatch(displayPath, pathPattern, pathInsensitive)) continue;
-            if (rx != null && !rx.IsMatch(displayPath)) continue;
-
-            if (sizeOp != '\0')
-            {
-                long fileSize = isDir ? 0L : ((System.IO.FileInfo)item).Length;
-                if (sizeOp == '+' && fileSize <= sizeBytes) continue;
-                if (sizeOp == '-' && fileSize >= sizeBytes) continue;
-            }
-
-            if (mtimeOp != '\0')
-            {
-                double daysAgo = (now - item.LastWriteTime).TotalDays;
-                if (mtimeOp == '-' && daysAgo >= mtimeDays) continue;
-                if (mtimeOp == '+' && daysAgo <= mtimeDays) continue;
-            }
-
-            if (newerThan.HasValue && item.LastWriteTime <= newerThan.Value) continue;
-
-            if (findEmpty)
-            {
-                if (isDir)
-                {
-                    try
-                    {
-                        if (((System.IO.DirectoryInfo)item)
-                                .EnumerateFileSystemInfos().Any()) continue;
-                    }
-                    catch { continue; }
-                }
-                else
-                {
-                    if (((System.IO.FileInfo)item).Length > 0) continue;
-                }
-            }
+            // Evaluate the full predicate expression for this item. An empty
+            // expression (no predicates) matches everything.
+            if (!matchExpr(new EvalCtx(item, isDir, displayPath, now))) continue;
 
             // A matched directory under -prune excludes its subtree from here on.
             if (doPrune && isDir)
@@ -594,6 +584,160 @@ public sealed class InvokeBashFindCommand : PSCmdlet
 
     private static int SegmentCount(string path) =>
         path.TrimEnd('\\', '/').Split('\\', '/').Length;
+
+    // ── predicate expression model ───────────────────────────────────────────
+    // find combines predicates with an implicit AND, explicit -a/-and, -o/-or
+    // (OR), -not/! (negation) and ( ) grouping. Each predicate is compiled to a
+    // leaf delegate over this context; the operators are parsed (GNU precedence:
+    // ! > AND > OR) into one composite delegate evaluated per filesystem item.
+
+    /// <summary>Per-item evaluation context handed to every predicate leaf.</summary>
+    private readonly record struct EvalCtx(
+        System.IO.FileSystemInfo Item, bool IsDir, string DisplayPath, DateTime Now);
+
+    private enum FTk { Leaf, And, Or, Not, LParen, RParen }
+
+    /// <summary>A parsed expression token: either a compiled predicate leaf or a
+    /// structural operator. <see cref="Pred"/> is non-null only for <see cref="FTk.Leaf"/>.</summary>
+    private readonly record struct FindTok(FTk Kind, Func<EvalCtx, bool>? Pred);
+
+    private sealed class FindSyntaxException : Exception
+    {
+        public FindSyntaxException(string message) : base(message) { }
+    }
+
+    /// <summary>Compile the token stream into one per-item predicate. An empty
+    /// stream matches everything. Throws <see cref="FindSyntaxException"/> on a
+    /// paren mismatch or a dangling operator.</summary>
+    private static Func<EvalCtx, bool> ParseFindExpr(IReadOnlyList<FindTok> toks)
+    {
+        if (toks.Count == 0) return static _ => true;
+        int pos = 0;
+        var pred = ParseOr(toks, ref pos);
+        if (pos != toks.Count)
+            throw new FindSyntaxException("paren mismatch near predicate");
+        return pred;
+    }
+
+    // orExpr := andExpr ( ('-o'|'-or') andExpr )*
+    private static Func<EvalCtx, bool> ParseOr(IReadOnlyList<FindTok> t, ref int p)
+    {
+        var left = ParseAnd(t, ref p);
+        while (p < t.Count && t[p].Kind == FTk.Or)
+        {
+            p++;
+            var right = ParseAnd(t, ref p);
+            var l = left;
+            left = c => l(c) || right(c);
+        }
+        return left;
+    }
+
+    // andExpr := notExpr ( ('-a'|'-and')? notExpr )*   (juxtaposition = implicit AND)
+    private static Func<EvalCtx, bool> ParseAnd(IReadOnlyList<FindTok> t, ref int p)
+    {
+        var left = ParseNot(t, ref p);
+        while (p < t.Count && (t[p].Kind == FTk.And || IsTermStart(t[p].Kind)))
+        {
+            if (t[p].Kind == FTk.And) p++;
+            var right = ParseNot(t, ref p);
+            var l = left;
+            left = c => l(c) && right(c);
+        }
+        return left;
+    }
+
+    // notExpr := ('!'|'-not') notExpr | term
+    private static Func<EvalCtx, bool> ParseNot(IReadOnlyList<FindTok> t, ref int p)
+    {
+        if (p < t.Count && t[p].Kind == FTk.Not)
+        {
+            p++;
+            var inner = ParseNot(t, ref p);
+            return c => !inner(c);
+        }
+        return ParseTerm(t, ref p);
+    }
+
+    // term := '(' orExpr ')' | leaf
+    private static Func<EvalCtx, bool> ParseTerm(IReadOnlyList<FindTok> t, ref int p)
+    {
+        if (p >= t.Count)
+            throw new FindSyntaxException("expected predicate");
+        var tok = t[p];
+        if (tok.Kind == FTk.LParen)
+        {
+            p++;
+            var inner = ParseOr(t, ref p);
+            if (p >= t.Count || t[p].Kind != FTk.RParen)
+                throw new FindSyntaxException("expected `)'");
+            p++;
+            return inner;
+        }
+        if (tok.Kind == FTk.Leaf)
+        {
+            p++;
+            return tok.Pred!;
+        }
+        throw new FindSyntaxException("expected predicate");
+    }
+
+    private static bool IsTermStart(FTk k) =>
+        k is FTk.Leaf or FTk.Not or FTk.LParen;
+
+    // ── leaf predicate helpers ───────────────────────────────────────────────
+
+    /// <summary>Parse a find size expression (<c>+1k</c>, <c>-500c</c>, <c>+1M</c>,
+    /// …). Block (no suffix) defaults to 512 bytes (POSIX). Returns op <c>'\0'</c>
+    /// for an unparseable expression — the leaf then matches everything, mirroring
+    /// the old lenient guard.</summary>
+    private static (char Op, long Bytes) ParseSizeExpr(string expr)
+    {
+        var m = System.Text.RegularExpressions.Regex.Match(expr, @"^([+-])(\d+)([ckMG]?)$");
+        if (!m.Success) return ('\0', 0);
+        long n = long.Parse(m.Groups[2].Value);
+        long bytes = m.Groups[3].Value switch
+        {
+            "c" => n,
+            "k" => n * 1024L,
+            "M" => n * 1048576L,
+            "G" => n * 1073741824L,
+            _ => n * 512L,
+        };
+        return (m.Groups[1].Value[0], bytes);
+    }
+
+    private static bool SizeMatch(System.IO.FileSystemInfo item, bool isDir, char op, long bytes)
+    {
+        if (op == '\0') return true;
+        long fileSize = isDir ? 0L : ((System.IO.FileInfo)item).Length;
+        return op == '+' ? fileSize > bytes : fileSize < bytes;
+    }
+
+    /// <summary>Parse a find mtime expression (<c>-7</c> within last 7 days,
+    /// <c>+30</c> older than 30 days). Op <c>'\0'</c> = unparseable = match all.</summary>
+    private static (char Op, int Days) ParseMtimeExpr(string expr)
+    {
+        var m = System.Text.RegularExpressions.Regex.Match(expr, @"^([+-])(\d+)$");
+        return m.Success ? (m.Groups[1].Value[0], int.Parse(m.Groups[2].Value)) : ('\0', 0);
+    }
+
+    private static bool MtimeMatch(EvalCtx c, char op, int days)
+    {
+        if (op == '\0') return true;
+        double daysAgo = (c.Now - c.Item.LastWriteTime).TotalDays;
+        return op == '-' ? daysAgo < days : daysAgo > days;
+    }
+
+    private static bool EmptyMatch(EvalCtx c)
+    {
+        if (c.IsDir)
+        {
+            try { return !((System.IO.DirectoryInfo)c.Item).EnumerateFileSystemInfos().Any(); }
+            catch { return false; }
+        }
+        return ((System.IO.FileInfo)c.Item).Length == 0;
+    }
 
     // ── -exec dispatcher ─────────────────────────────────────────────────────
 

@@ -27,9 +27,11 @@ namespace PsBash.Cmdlets;
 /// <c>-v</c> vs <c>-Verbose</c> → <see cref="V"/>; <c>-c</c> vs
 /// <c>-Confirm</c> → <see cref="C"/>; <c>-e</c> vs <c>-ErrorAction</c> →
 /// <see cref="E"/> (value-bearing <c>string[]</c>, repeatable); <c>-w</c> vs
-/// <c>-WarningAction</c> → <see cref="W"/>. <c>-n</c>, <c>-r</c>, <c>-R</c>,
-/// <c>-l</c>, <c>-F</c>, <c>-E</c>, <c>-q</c>, <c>-H</c>, <c>-h</c>, <c>-o</c>,
-/// <c>-A</c>, <c>-B</c>, <c>-C</c>, <c>-m</c>, <c>--include</c>,
+/// <c>-WarningAction</c> → <see cref="W"/>; <c>-o</c> vs <c>-OutVariable</c> /
+/// <c>-OutBuffer</c> → <see cref="O"/> (an earlier audit wrongly listed <c>-o</c>
+/// as collision-free — it is ambiguous and hard-crashes if undeclared). <c>-n</c>,
+/// <c>-r</c>, <c>-R</c>, <c>-l</c>, <c>-F</c>, <c>-E</c>, <c>-q</c>, <c>-H</c>,
+/// <c>-h</c>, <c>-A</c>, <c>-B</c>, <c>-C</c>, <c>-m</c>, <c>--include</c>,
 /// <c>--exclude</c>, <c>--help</c>, and <c>--</c> have no PowerShell
 /// common-parameter prefix collision and stay in <see cref="Arguments"/>.
 /// Bundled short forms (<c>-ivn</c>, <c>-Ev</c>, etc.) land in
@@ -78,6 +80,12 @@ public sealed class InvokeBashGrepCommand : PSCmdlet
 
     /// <summary>Bash <c>-w</c> (word-regexp). Prefix-collides with <c>-WarningAction</c>.</summary>
     [Parameter] public SwitchParameter W { get; set; }
+
+    /// <summary>Bash <c>-o</c> (only-matching). Prefix-collides with <c>-OutVariable</c> /
+    /// <c>-OutBuffer</c> (ambiguous → hard binder error if undeclared). Mirrors <c>rg</c>'s
+    /// <c>O</c> decoy. The per-char bundle scan also maps <c>o</c>, so a bundled <c>-vo</c>
+    /// still works via <see cref="Arguments"/>.</summary>
+    [Parameter] public SwitchParameter O { get; set; }
 
     /// <summary>
     /// Bash <c>-A N</c> (after-context). The bare token <c>-A</c> prefix-matches
@@ -156,7 +164,7 @@ public sealed class InvokeBashGrepCommand : PSCmdlet
         bool extendedRegex = false;
         bool fixedString = false;
         bool wholeWord = W.IsPresent;
-        bool outputMatchOnly = false;
+        bool outputMatchOnly = O.IsPresent;
         bool forceFileName = false;
         bool suppressFileName = false;
         int maxMatches = int.MaxValue;

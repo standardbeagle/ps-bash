@@ -16,11 +16,14 @@ namespace PsBash.Cmdlets;
 ///
 /// Flags: <c>-r</c> raw-output, <c>-c</c> compact, <c>-S</c> sort-keys,
 /// <c>-s</c> slurp (also their long forms). The flags <c>-S</c> / <c>-s</c>
-/// are case-sensitive in the bash oracle (they mean different things). The
-/// PowerShell common-parameter set has no <c>-s</c> / <c>-S</c> / <c>-c</c> /
-/// <c>-r</c> prefix, so no explicit-parameter collision fix is required —
-/// <see cref="Arguments"/> via <c>ValueFromRemainingArguments</c> captures
-/// them and the manual loop in <see cref="EndProcessing"/> distinguishes case.
+/// are case-sensitive in the bash oracle (they mean different things). <c>-c</c>
+/// (compact) prefix-collides with the <c>-Confirm</c> common parameter and is
+/// declared as the <see cref="C"/> decoy (an earlier audit wrongly called it
+/// collision-free — a bare <c>-c</c> was silently bound to <c>-Confirm</c> and
+/// compact output dropped). <c>-s</c> / <c>-S</c> / <c>-r</c> have no
+/// common-parameter prefix, so <see cref="Arguments"/> via
+/// <c>ValueFromRemainingArguments</c> captures them and the manual loop in
+/// <see cref="EndProcessing"/> distinguishes case.
 ///
 /// File-input errors emit through the psm1 <c>Write-BashError</c> sink via
 /// <see cref="PSCmdlet.InvokeCommand"/> (string-bodied — no ScriptBlock
@@ -39,6 +42,15 @@ public sealed class InvokeBashJqCommand : PSCmdlet
 {
     [Parameter(ValueFromRemainingArguments = true)]
     public string[]? Arguments { get; set; }
+
+    /// <summary>
+    /// <c>-c</c> compact-output — declared explicitly because the bare token
+    /// <c>-c</c> prefix-collides with the <c>-Confirm</c> common parameter and
+    /// would otherwise be silently bound (the flag dropped, pretty output used)
+    /// before reaching <see cref="Arguments"/>.
+    /// </summary>
+    [Parameter]
+    public SwitchParameter C { get; set; }
 
     [Parameter(ValueFromPipeline = true)]
     public PSObject? InputObject { get; set; }
@@ -68,7 +80,7 @@ public sealed class InvokeBashJqCommand : PSCmdlet
         }
 
         bool rawOutput = false;
-        bool compact = false;
+        bool compact = C.IsPresent;
         bool sortKeys = false;
         bool slurp = false;
         string filterExpr = ".";

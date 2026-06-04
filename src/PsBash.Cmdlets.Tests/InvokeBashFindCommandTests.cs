@@ -93,6 +93,85 @@ public class InvokeBashFindCommandTests : IDisposable, IClassFixture<SharedPwshF
         Assert.DoesNotContain("c.md", names);
     }
 
+    // ===================== Boolean expression operators =====================
+    // find combines predicates with -a/-and (AND), -o/-or (OR), -not/! (NOT) and
+    // ( ) grouping. The emitter quotes the infix `-o` (it prefix-collides with
+    // -OutVariable/-OutBuffer) and passes a quoted `!`/`(`/`)` through, so these
+    // tests pass those tokens quoted to mirror the emitted invocation.
+
+    private string[] Names(System.Collections.ObjectModel.Collection<PSObject> r) =>
+        r.Select(o => (string?)o.Properties["Name"]?.Value).Where(n => n != null).ToArray()!;
+
+    [Fact]
+    public void Find_OrOperator_MatchesEitherPredicate()
+    {
+        Mk("a.txt"); Mk("b.md"); Mk("c.log");
+        var names = Names(Run($"Invoke-BashFind '{Esc(_tmpDir)}' -name '*.txt' '-o' -name '*.md'"));
+        Assert.Contains("a.txt", names);
+        Assert.Contains("b.md", names);
+        Assert.DoesNotContain("c.log", names);
+    }
+
+    [Fact]
+    public void Find_NotOperator_NegatesPredicate()
+    {
+        Mk("keep.txt"); Mk("skip.md");
+        var names = Names(Run($"Invoke-BashFind '{Esc(_tmpDir)}' -type f -not -name '*.md'"));
+        Assert.Contains("keep.txt", names);
+        Assert.DoesNotContain("skip.md", names);
+    }
+
+    [Fact]
+    public void Find_BangOperator_NegatesPredicate()
+    {
+        Mk("keep.txt"); Mk("skip.md");
+        var names = Names(Run($"Invoke-BashFind '{Esc(_tmpDir)}' -type f '!' -name '*.md'"));
+        Assert.Contains("keep.txt", names);
+        Assert.DoesNotContain("skip.md", names);
+    }
+
+    [Fact]
+    public void Find_Grouping_OrInsideThenAnd()
+    {
+        Mk("a.txt"); Mk("b.md"); MkDir("d.txt");
+        // ( -name *.txt -o -name *.md ) -type f → only FILES matching either name.
+        var names = Names(Run(
+            $"Invoke-BashFind '{Esc(_tmpDir)}' '(' -name '*.txt' '-o' -name '*.md' ')' -type f"));
+        Assert.Contains("a.txt", names);
+        Assert.Contains("b.md", names);
+        Assert.DoesNotContain("d.txt", names); // a directory → excluded by -type f
+    }
+
+    [Fact]
+    public void Find_ExplicitAnd_BothPredicatesRequired()
+    {
+        Mk("a.txt"); Mk("a.md");
+        // `-a` is quoted: it prefix-collides with the cmdlet's own -Arguments
+        // parameter, so the emitter quotes it (like -o). This mirrors that.
+        var names = Names(Run($"Invoke-BashFind '{Esc(_tmpDir)}' -name 'a.*' '-a' -name '*.txt'"));
+        Assert.Contains("a.txt", names);
+        Assert.DoesNotContain("a.md", names);
+    }
+
+    [Fact]
+    public void Find_ImplicitAnd_MatchesOldFlatFilterBehavior()
+    {
+        // No operator between predicates = implicit AND (the pre-expression
+        // behavior must be byte-identical).
+        Mk("a.txt"); Mk("a.md"); MkDir("sub"); Mk("sub/a.txt");
+        var names = Names(Run($"Invoke-BashFind '{Esc(_tmpDir)}' -type f -name '*.txt'"));
+        Assert.Contains("a.txt", names);
+        Assert.DoesNotContain("a.md", names);
+    }
+
+    [Fact]
+    public void Find_TrueFalse_ConstantPredicates()
+    {
+        Mk("only.txt");
+        Assert.NotEmpty(Run($"Invoke-BashFind '{Esc(_tmpDir)}' -true"));
+        Assert.Empty(Run($"Invoke-BashFind '{Esc(_tmpDir)}' -false"));
+    }
+
     [Fact]
     public void Find_TypeF_ReturnsFilesOnly()
     {

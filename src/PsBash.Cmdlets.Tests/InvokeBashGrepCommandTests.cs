@@ -66,6 +66,17 @@ public class InvokeBashGrepCommandTests : IDisposable, IClassFixture<SharedPwshF
     }
 
     [Fact]
+    public void Grep_OnlyMatching_DashO_DoesNotCrashOnAmbiguousBinder()
+    {
+        // Regression: bare `-o` prefix-collides with -OutVariable/-OutBuffer and
+        // used to hard-crash ("parameter 'o' is ambiguous") before reaching the
+        // cmdlet. Declared as the O decoy switch now. -o prints only the match.
+        var lines = RunLines("'hello world' | Invoke-BashGrep -o wor");
+        Assert.Single(lines);
+        Assert.Equal("wor", lines[0]);
+    }
+
+    [Fact]
     public void Grep_RegexMatch_FromPipeline()
     {
         // Basic regex — `.` matches any char.
