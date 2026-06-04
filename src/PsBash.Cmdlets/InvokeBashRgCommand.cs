@@ -128,6 +128,7 @@ public sealed class InvokeBashRgCommand : PSCmdlet
         bool onlyMatching = O.IsPresent;
         bool fixedStrings = false;
         bool includeHidden = false;
+        bool noIgnore = false;
         int afterContext = A ?? 0;
         int beforeContext = B ?? 0;
         string? globPattern = null;
@@ -201,6 +202,20 @@ public sealed class InvokeBashRgCommand : PSCmdlet
             }
 
             if (a == "--hidden") { includeHidden = true; i++; continue; }
+
+            // --no-ignore / --no-ignore-vcs and the unrestricted shorthands
+            // (-u, -uu, -uuu / --unrestricted) turn OFF the default directory
+            // pruning so .git / bin / obj / node_modules are searched too. -uu
+            // additionally implies --hidden (ripgrep semantics).
+            if (a == "--no-ignore" || a == "--no-ignore-vcs") { noIgnore = true; i++; continue; }
+            if (a == "--unrestricted") { noIgnore = true; i++; continue; }
+            if (Regex.IsMatch(a, @"^-u+$"))
+            {
+                noIgnore = true;
+                if (a.Length >= 3) includeHidden = true; // -uu and beyond
+                i++;
+                continue;
+            }
 
             // Long-form flags (oracle parity).
             if (a == "--ignore-case") { ignoreCase = true; i++; continue; }
@@ -304,7 +319,7 @@ public sealed class InvokeBashRgCommand : PSCmdlet
 
         // --- File mode (recursive by default; cwd if no operands) ---
         RunFileMode(regex, fileOperands, invertMatch, showLineNumbers, countOnly,
-            filesOnly, onlyMatching, includeHidden, globPattern,
+            filesOnly, onlyMatching, includeHidden, noIgnore, globPattern,
             beforeContext, afterContext);
     }
 
@@ -455,11 +470,24 @@ public sealed class InvokeBashRgCommand : PSCmdlet
     private void RunFileMode(
         Regex regex, List<string> fileOperands, bool invertMatch,
         bool showLineNumbers, bool countOnly, bool filesOnly, bool onlyMatching,
-        bool includeHidden, string? globPattern, int beforeContext, int afterContext)
+        bool includeHidden, bool noIgnore, string? globPattern,
+        int beforeContext, int afterContext)
     {
-        var filePaths = new List<string>();
         var searchTargets = fileOperands.Count > 0 ? fileOperands : new List<string> { "." };
+        // ripgrep filters by default (.gitignore + hidden + .git). We approximate
+        // that with the shared directory-prune set; PSBASH_SEARCH_NO_IGNORE or the
+        // --no-ignore / -u flags turn it off. Pruning happens BEFORE descent in
+        // EnumerateSearchFiles, so .git / bin / obj / node_modules are never
+        // walked — this is the fix for the old AllDirectories walk that descended
+        // into them and went silent long enough to trip the host idle-timeout.
+        bool includeIgnored = noIgnore || FileSystemHelpers.DefaultFilteringDisabled();
+
+        // Resolve each target to either a single file or a lazy directory walk.
+        // multipleFiles must be known before emitting, so derive it from the
+        // target shapes (any directory target, or more than one file target).
+        var sources = new List<IEnumerable<string>>();
         bool anyTargetIsDir = false;
+        int fileTargetCount = 0;
 
         foreach (var target in searchTargets)
         {
@@ -483,53 +511,28 @@ public sealed class InvokeBashRgCommand : PSCmdlet
             if (Directory.Exists(resolved))
             {
                 anyTargetIsDir = true;
-                try
-                {
-                    foreach (var fp in Directory.EnumerateFiles(resolved, "*", SearchOption.AllDirectories))
-                    {
-                        if (fp.Contains($"{Path.DirectorySeparatorChar}.git{Path.DirectorySeparatorChar}",
-                                StringComparison.Ordinal)
-                            || fp.Contains("/.git/", StringComparison.Ordinal))
-                        {
-                            continue;
-                        }
-                        if (!includeHidden)
-                        {
-                            // Skip dotfiles/dotdirs relative to the search root.
-                            string rel = fp.Substring(resolved.Length);
-                            if (Regex.IsMatch(rel, @"[\\/]\.[^\\/]"))
-                            {
-                                continue;
-                            }
-                        }
-                        if (globPattern != null)
-                        {
-                            string name = Path.GetFileName(fp);
-                            if (!WildcardPattern.Get(globPattern, WildcardOptions.IgnoreCase).IsMatch(name))
-                            {
-                                continue;
-                            }
-                        }
-                        filePaths.Add(fp);
-                    }
-                }
-                catch { /* best-effort */ }
+                sources.Add(WalkSearchDir(resolved, includeIgnored, includeHidden, globPattern));
             }
             else
             {
-                filePaths.Add(resolved);
+                fileTargetCount++;
+                sources.Add(new[] { resolved });
             }
         }
 
-        bool multipleFiles = filePaths.Count > 1 || anyTargetIsDir;
+        bool multipleFiles = anyTargetIsDir || fileTargetCount > 1;
         var matchedFiles = new List<string>();
         var perFileCounts = new Dictionary<string, int>();
+        // Files actually read, in walk order — drives the multi-file count pass.
+        var scanned = new List<string>();
         int totalMatchCount = 0;
 
-        foreach (var filePath in filePaths)
+        foreach (var source in sources)
+        foreach (var filePath in source)
         {
             var lines = ReadFileLines(filePath);
             if (lines == null) continue;
+            scanned.Add(filePath);
 
             var matchIndices = new List<int>();
             for (int li = 0; li < lines.Length; li++)
@@ -593,7 +596,7 @@ public sealed class InvokeBashRgCommand : PSCmdlet
         {
             if (multipleFiles)
             {
-                foreach (var fp in filePaths)
+                foreach (var fp in scanned)
                 {
                     if (perFileCounts.TryGetValue(fp, out int n))
                     {
@@ -605,6 +608,26 @@ public sealed class InvokeBashRgCommand : PSCmdlet
             {
                 WriteObject(BashRuntime.NewBashObject(totalMatchCount.ToString()));
             }
+        }
+    }
+
+    /// <summary>
+    /// Lazy directory walk for one search-root directory: the shared
+    /// dir-pruning enumerator (<see cref="FileSystemHelpers.EnumerateSearchFiles"/>)
+    /// with the optional <c>-g</c>/<c>--glob</c> filename filter applied. Kept as
+    /// an iterator so the caller streams matches as files are visited.
+    /// </summary>
+    private static IEnumerable<string> WalkSearchDir(
+        string root, bool includeIgnored, bool includeHidden, string? globPattern)
+    {
+        WildcardPattern? glob = globPattern != null
+            ? WildcardPattern.Get(globPattern, WildcardOptions.IgnoreCase)
+            : null;
+
+        foreach (var fp in FileSystemHelpers.EnumerateSearchFiles(root, includeIgnored, includeHidden))
+        {
+            if (glob != null && !glob.IsMatch(Path.GetFileName(fp))) continue;
+            yield return fp;
         }
     }
 

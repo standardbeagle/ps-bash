@@ -567,7 +567,12 @@ public sealed class InvokeBashGrepCommand : PSCmdlet
         bool suppressFileName, int maxMatches,
         int beforeContext, int afterContext)
     {
-        var filePaths = new List<string>();
+        // File source is built lazily so a recursive search STREAMS — each file
+        // is read and its matches emitted as the tree is walked, instead of
+        // first draining the whole tree into a list (the old AllDirectories walk
+        // went silent for 120s on a big repo and tripped the host watchdog).
+        IEnumerable<string> fileSource;
+        bool multipleFiles;
 
         if (recursive)
         {
@@ -575,22 +580,30 @@ public sealed class InvokeBashGrepCommand : PSCmdlet
             string resolved = SessionState.Path.GetUnresolvedProviderPathFromPSPath(searchDir);
             if (Directory.Exists(resolved))
             {
-                try
-                {
-                    foreach (var fp in Directory.EnumerateFiles(resolved, "*", SearchOption.AllDirectories))
-                    {
-                        filePaths.Add(fp);
-                    }
-                }
-                catch { /* best-effort */ }
+                // grep -r searches dot-files too — only the prune set (.git,
+                // bin, obj, node_modules, …) is skipped, so a stray .env is
+                // still searched but .git is not. PSBASH_SEARCH_NO_IGNORE turns
+                // the prune set off entirely (restores GNU grep parity).
+                fileSource = FileSystemHelpers.EnumerateSearchFiles(
+                    resolved,
+                    includeIgnored: FileSystemHelpers.DefaultFilteringDisabled(),
+                    includeHidden: true);
             }
             else if (File.Exists(resolved))
             {
-                filePaths.Add(resolved);
+                fileSource = new[] { resolved };
             }
+            else
+            {
+                fileSource = Array.Empty<string>();
+            }
+            // -r always prefixes filenames (oracle parity: the old
+            // `|| recursive` term).
+            multipleFiles = true;
         }
         else
         {
+            var resolvedList = new List<string>();
             foreach (var raw in fileOperands)
             {
                 bool any = false;
@@ -598,7 +611,7 @@ public sealed class InvokeBashGrepCommand : PSCmdlet
                 {
                     if (File.Exists(fp) || Directory.Exists(fp))
                     {
-                        filePaths.Add(fp);
+                        resolvedList.Add(fp);
                         any = true;
                     }
                 }
@@ -606,19 +619,24 @@ public sealed class InvokeBashGrepCommand : PSCmdlet
                 {
                     string normalized = raw.Replace('\\', '/');
                     FileSystemHelpers.WriteBashError(this, $"grep: {normalized}: No such file or directory");
-        FileSystemHelpers.SetLastExitCode(this, 2);
+                    FileSystemHelpers.SetLastExitCode(this, 2);
                 }
             }
+            fileSource = resolvedList;
+            multipleFiles = resolvedList.Count > 1 || forceFileName;
         }
 
-        bool multipleFiles = filePaths.Count > 1 || recursive || forceFileName;
         var matchedFiles = new List<string>();
         var perFileCounts = new Dictionary<string, int>();
+        // Files actually visited, in order — used by the multi-file count pass
+        // below (replaces the old materialized filePaths list).
+        var scanned = new List<string>();
         int totalMatchCount = 0;
 
-        foreach (var filePath in filePaths)
+        foreach (var filePath in fileSource)
         {
             if (totalMatchCount >= maxMatches) break;
+            scanned.Add(filePath);
 
             var lines = ReadFileLines(filePath);
             if (lines == null) continue;
@@ -732,7 +750,7 @@ public sealed class InvokeBashGrepCommand : PSCmdlet
         {
             if (multipleFiles)
             {
-                foreach (var fp in filePaths)
+                foreach (var fp in scanned)
                 {
                     if (perFileCounts.TryGetValue(fp, out int n))
                     {

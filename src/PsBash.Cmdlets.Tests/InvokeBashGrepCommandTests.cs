@@ -17,6 +17,7 @@ namespace PsBash.Cmdlets.Tests;
 /// target (axis 14), alias, <c>--help</c>, and an injection probe per
 /// Directive 12.
 /// </summary>
+[Collection("PsBashSearchEnv")]
 public class InvokeBashGrepCommandTests : IDisposable, IClassFixture<SharedPwshFixture>
 {
     private readonly string _tmpDir;
@@ -234,6 +235,65 @@ public class InvokeBashGrepCommandTests : IDisposable, IClassFixture<SharedPwshF
         var lines = RunLines($"Invoke-BashGrep -r match '{Q(_tmpDir)}'");
         // Two files contain "match".
         Assert.Equal(2, lines.Length);
+    }
+
+    [Fact]
+    public void Grep_Recursive_PrunesBuildDirs_ByDefault()
+    {
+        // Regression for the recursive-grep idle-timeout quirk: `grep -r` used to
+        // descend into bin/obj/.git/node_modules, draining huge artifact trees
+        // with no output until the host watchdog killed it. The pruning walk now
+        // skips those directory names BEFORE descending. (This is a deliberate
+        // divergence from GNU grep -r, which prunes nothing.)
+        File.WriteAllText(Path.Combine(_tmpDir, "top.txt"), "match\n");
+        var bin = Path.Combine(_tmpDir, "bin");
+        Directory.CreateDirectory(bin);
+        File.WriteAllText(Path.Combine(bin, "artifact.txt"), "match\n");
+
+        var lines = RunLines($"Invoke-BashGrep -r match '{Q(_tmpDir)}'");
+
+        // Only top.txt is searched; bin/ is pruned.
+        Assert.Single(lines);
+        Assert.Contains("top.txt", lines[0]);
+        Assert.DoesNotContain(lines, l => l.Contains("artifact.txt"));
+    }
+
+    [Fact]
+    public void Grep_Recursive_PrunesGitDir_ByDefault()
+    {
+        // The original dogfood failure: `grep -r` walking the whole repo
+        // enumerated the .git object store. .git is in the default prune set.
+        File.WriteAllText(Path.Combine(_tmpDir, "top.txt"), "match\n");
+        var git = Path.Combine(_tmpDir, ".git");
+        Directory.CreateDirectory(git);
+        File.WriteAllText(Path.Combine(git, "config"), "match\n");
+
+        var lines = RunLines($"Invoke-BashGrep -r match '{Q(_tmpDir)}'");
+
+        Assert.Single(lines);
+        Assert.Contains("top.txt", lines[0]);
+    }
+
+    [Fact]
+    public void Grep_Recursive_NoIgnoreEnv_SearchesPrunedDirs()
+    {
+        // PSBASH_SEARCH_NO_IGNORE=1 disables the default pruning, restoring the
+        // unfiltered GNU grep -r behavior (search bin/obj/.git too).
+        File.WriteAllText(Path.Combine(_tmpDir, "top.txt"), "match\n");
+        var bin = Path.Combine(_tmpDir, "bin");
+        Directory.CreateDirectory(bin);
+        File.WriteAllText(Path.Combine(bin, "artifact.txt"), "match\n");
+
+        Environment.SetEnvironmentVariable("PSBASH_SEARCH_NO_IGNORE", "1");
+        try
+        {
+            var lines = RunLines($"Invoke-BashGrep -r match '{Q(_tmpDir)}'");
+            Assert.Equal(2, lines.Length);
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("PSBASH_SEARCH_NO_IGNORE", null);
+        }
     }
 
     [Fact]

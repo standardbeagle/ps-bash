@@ -24,6 +24,7 @@ namespace PsBash.Cmdlets.Tests;
 /// file, CRLF, missing target (axis 14), alias, <c>--help</c>, and an
 /// injection probe per Directive 12.
 /// </summary>
+[Collection("PsBashSearchEnv")]
 public class InvokeBashRgCommandTests : IDisposable, IClassFixture<SharedPwshFixture>
 {
     private readonly SharedPwshFixture _fixture;
@@ -150,6 +151,89 @@ public class InvokeBashRgCommandTests : IDisposable, IClassFixture<SharedPwshFix
         var lines = RunLines($"Invoke-BashRg -l apple '{Q(file)}' '{Q(file2)}'");
         Assert.Single(lines);
         Assert.Contains("a.txt", lines[0]);
+    }
+
+    /// <summary>
+    /// True when a native <c>rg</c>/<c>rg.exe</c> is discoverable on PATH. The
+    /// directory-pruning tests below exercise the cmdlet's INTERNAL fallback; when
+    /// a native ripgrep is present the cmdlet shells out to it (and ripgrep does
+    /// its own .gitignore-based filtering), so the internal prune set is not the
+    /// code under test. Skip rather than assert against the native binary.
+    /// </summary>
+    private static bool NativeRgPresent()
+    {
+        var path = Environment.GetEnvironmentVariable("PATH") ?? "";
+        foreach (var dir in path.Split(Path.PathSeparator))
+        {
+            if (string.IsNullOrWhiteSpace(dir)) continue;
+            try
+            {
+                if (File.Exists(Path.Combine(dir, "rg")) || File.Exists(Path.Combine(dir, "rg.exe")))
+                    return true;
+            }
+            catch { /* unreadable PATH entry */ }
+        }
+        return false;
+    }
+
+    [SkippableFact]
+    public void Rg_Recursive_PrunesBuildDirs_ByDefault()
+    {
+        Skip.If(NativeRgPresent(), "native rg governs filtering; this asserts the internal fallback");
+
+        // rg filters by default (ripgrep skips .gitignored + hidden + .git). The
+        // internal fallback approximates that with the shared dir-prune set, and
+        // prunes BEFORE descent — the fix for the old AllDirectories walk that
+        // descended into bin/obj/.git and tripped the host idle-timeout.
+        File.WriteAllText(Path.Combine(_tmpDir, "top.txt"), "match\n");
+        var obj = Path.Combine(_tmpDir, "obj");
+        Directory.CreateDirectory(obj);
+        File.WriteAllText(Path.Combine(obj, "artifact.txt"), "match\n");
+
+        var lines = RunLines($"Invoke-BashRg match '{Q(_tmpDir)}'");
+
+        Assert.Single(lines);
+        Assert.Contains("top.txt", lines[0]);
+        Assert.DoesNotContain(lines, l => l.Contains("artifact.txt"));
+    }
+
+    [SkippableFact]
+    public void Rg_Recursive_NoIgnoreFlag_SearchesPrunedDirs()
+    {
+        Skip.If(NativeRgPresent(), "native rg governs filtering; this asserts the internal fallback");
+
+        // --no-ignore turns the prune set off (ripgrep semantics).
+        File.WriteAllText(Path.Combine(_tmpDir, "top.txt"), "match\n");
+        var obj = Path.Combine(_tmpDir, "obj");
+        Directory.CreateDirectory(obj);
+        File.WriteAllText(Path.Combine(obj, "artifact.txt"), "match\n");
+
+        var lines = RunLines($"Invoke-BashRg --no-ignore match '{Q(_tmpDir)}'");
+
+        Assert.Equal(2, lines.Length);
+    }
+
+    [SkippableFact]
+    public void Rg_Recursive_NoIgnoreEnv_SearchesPrunedDirs()
+    {
+        Skip.If(NativeRgPresent(), "native rg governs filtering; this asserts the internal fallback");
+
+        // PSBASH_SEARCH_NO_IGNORE=1 disables pruning for both grep and rg.
+        File.WriteAllText(Path.Combine(_tmpDir, "top.txt"), "match\n");
+        var obj = Path.Combine(_tmpDir, "obj");
+        Directory.CreateDirectory(obj);
+        File.WriteAllText(Path.Combine(obj, "artifact.txt"), "match\n");
+
+        Environment.SetEnvironmentVariable("PSBASH_SEARCH_NO_IGNORE", "1");
+        try
+        {
+            var lines = RunLines($"Invoke-BashRg match '{Q(_tmpDir)}'");
+            Assert.Equal(2, lines.Length);
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("PSBASH_SEARCH_NO_IGNORE", null);
+        }
     }
 
     [Fact]
