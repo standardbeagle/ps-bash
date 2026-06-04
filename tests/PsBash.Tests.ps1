@@ -2262,8 +2262,25 @@ Describe 'Invoke-BashPs — Flags' {
     It 'ps -A is equivalent to -e' {
         $resultsE = @(Invoke-BashPs -e)
         $resultsA = @(Invoke-BashPs -A)
-        # Both should return the same set of processes (count may vary slightly due to timing)
-        [System.Math]::Abs($resultsE.Count - $resultsA.Count) | Should -BeLessOrEqual 5
+        # -A and -e are aliases — both enumerate every process. The two calls take
+        # independent LIVE snapshots, so the OS process table drifts between them.
+        # Comparing absolute counts (the old `Abs(countE-countA) -le 5`) is
+        # inherently flaky: a busy CI runner can spawn/reap dozens of short-lived
+        # processes in the gap, and ANY fixed absolute tolerance eventually loses
+        # (this failed on macOS with a delta of 7). Assert structural equivalence
+        # instead — both return a real process list whose PIDs overwhelmingly
+        # overlap. This is robust to churn yet still fails a genuinely broken -A
+        # (empty / divergent result → ~0 overlap). No two-snapshot count compare.
+        $resultsE.Count | Should -BeGreaterOrEqual 2
+        $resultsA.Count | Should -BeGreaterOrEqual 2
+
+        $pidsA = @($resultsA | ForEach-Object { $_.PID })
+        $common = @($resultsE | Where-Object { $pidsA -contains $_.PID }).Count
+        $minCount = [System.Math]::Min($resultsE.Count, $resultsA.Count)
+        # >=70% of the smaller snapshot's PIDs appear in both. Back-to-back ps
+        # calls overlap ~99%; 70% tolerates extreme churn while still catching a
+        # broken alias.
+        $common | Should -BeGreaterOrEqual ([System.Math]::Floor($minCount * 0.7))
     }
 
     It 'ps -f shows full format with PPID' {
