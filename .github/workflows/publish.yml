@@ -350,26 +350,15 @@ jobs:
           $data = Import-PowerShellDataFile ./src/PsBash.Module/PsBash.psd1
           Write-Host "Manifest version: $($data.ModuleVersion)"
 
-          # Sync version to PsBash.Cmdlets.psd1 and update RequiredModules dependency
-          $cmdletsManifest = Get-Content ./src/PsBash.Cmdlets/PsBash.Cmdlets.psd1 -Raw
-          $cmdletsManifest = $cmdletsManifest -replace "ModuleVersion = '[^']*'", "ModuleVersion = '$version'"
-          $cmdletsManifest = $cmdletsManifest -replace "ModuleName = 'PsBash'; ModuleVersion = '[^']*'", "ModuleName = 'PsBash'; ModuleVersion = '$version'"
-          Set-Content ./src/PsBash.Cmdlets/PsBash.Cmdlets.psd1 -Value $cmdletsManifest
-          $cmdletsData = Import-PowerShellDataFile ./src/PsBash.Cmdlets/PsBash.Cmdlets.psd1
-          Write-Host "Cmdlets manifest version: $($cmdletsData.ModuleVersion)"
-
       - name: Setup .NET
         uses: actions/setup-dotnet@v4
         with:
           dotnet-version: '10.0.x'
 
       # Build the PsBash.Cmdlets binary so the published PSGallery package
-      # contains an actual PsBash.Cmdlets.dll. Previously only source files
-      # (.cs/.csproj/.psd1) were copied into the staged module directory,
-      # which meant `Install-Module PsBash.Cmdlets` produced an unusable
-      # module — RootModule pointed at a DLL that did not exist. Symptom:
-      # `eval $(...)` (the runtime cmdlet path) hung the host on command
-      # discovery for 120 s before the IPC client gave up.
+      # contains an actual PsBash.Cmdlets.dll. It is bundled INSIDE the ./PsBash
+      # module package below (the psm1 probes $PSScriptRoot/PsBash.Cmdlets.dll);
+      # without the real DLL every migrated command (ls/cat/grep…) is missing.
       - name: Build PsBash.Cmdlets binary
         shell: pwsh
         run: |
@@ -402,15 +391,6 @@ jobs:
           try { Test-ModuleManifest -Path ./PsBash/PsBash.psd1 | Out-Null }
           catch { Write-Warning "Test-ModuleManifest (PsBash) non-fatal: $($_.Exception.Message)" }
 
-          # PsBash.Cmdlets package = the binary module on its own (RequiredModules -> PsBash).
-          New-Item -ItemType Directory -Path ./PsBash.Cmdlets -Force | Out-Null
-          Copy-Item ./src/PsBash.Cmdlets/PsBash.Cmdlets.psd1 -Destination ./PsBash.Cmdlets/
-          Copy-Item -Path $runtimeDlls -Destination ./PsBash.Cmdlets/ -Force
-          Write-Host "Staged ./PsBash.Cmdlets contents:"
-          Get-ChildItem ./PsBash.Cmdlets | Format-Table Name, Length
-          try { Test-ModuleManifest -Path ./PsBash.Cmdlets/PsBash.Cmdlets.psd1 | Out-Null }
-          catch { Write-Warning "Test-ModuleManifest (PsBash.Cmdlets) non-fatal: $($_.Exception.Message)" }
-
       # continue-on-error so a PSGallery hiccup does not block the NuGet publish
       # below (the libraries are the primary deliverable). Idempotent: skip if the
       # version is already live so re-runs after a partial publish succeed.
@@ -426,25 +406,10 @@ jobs:
           }
           Publish-Module -Path ./PsBash -NuGetApiKey $env:PSGALLERY_API_KEY -Repository PSGallery -Verbose
 
-      - name: Publish PsBash.Cmdlets to PSGallery
-        continue-on-error: true
-        shell: pwsh
-        env:
-          PSGALLERY_API_KEY: ${{ secrets.PSGALLERY_API_KEY }}
-        run: |
-          $v = (Import-PowerShellDataFile ./PsBash.Cmdlets/PsBash.Cmdlets.psd1).ModuleVersion
-          if (Find-Module PsBash.Cmdlets -RequiredVersion $v -Repository PSGallery -ErrorAction SilentlyContinue) {
-            Write-Host "PsBash.Cmdlets $v already on PSGallery — skipping."; return
-          }
-          # PsBash.Cmdlets declares RequiredModules = PsBash. Make the staged PsBash
-          # discoverable on PSModulePath (versioned layout) so Publish-Module's
-          # manifest validation can resolve the dependency.
-          $modRoot = Join-Path ([System.IO.Path]::GetTempPath()) 'psb-modpath'
-          $dest = Join-Path $modRoot 'PsBash' $v
-          New-Item -ItemType Directory -Path $dest -Force | Out-Null
-          Copy-Item ./PsBash/* $dest -Recurse -Force
-          $env:PSModulePath = $modRoot + [System.IO.Path]::PathSeparator + $env:PSModulePath
-          Publish-Module -Path ./PsBash.Cmdlets -NuGetApiKey $env:PSGALLERY_API_KEY -Repository PSGallery -Verbose
+      # NOTE: PsBash.Cmdlets is NOT published as a standalone PSGallery module.
+      # Its DLL ships bundled inside the ./PsBash package above, so a separate
+      # module is redundant — and its publish never actually succeeded (the step
+      # reported a false green while silently exiting 1). Removed deliberately.
 
       - name: Pack and publish to NuGet
         shell: pwsh
