@@ -250,6 +250,24 @@ public class InvokeBashFileSystemMutatorTests : IDisposable, IClassFixture<Share
     }
 
     [Fact]
+    public void Rm_Recursive_RemovesReadOnlyFiles()
+    {
+        // Regression: a read-only file in the tree (e.g. .git pack/object files) made the native
+        // recursive delete throw UnauthorizedAccessException on Windows, leaving a half-deleted
+        // tree. Non-interactive rm should remove it. (On Linux the read-only bit doesn't block
+        // unlink, so this also passes there — the fallback is simply not exercised.)
+        var dir = Path.Combine(_tmpRoot, "rotree");
+        Directory.CreateDirectory(Path.Combine(dir, "sub"));
+        var ro = Path.Combine(dir, "sub", "locked.txt");
+        File.WriteAllText(ro, "x");
+        File.SetAttributes(ro, File.GetAttributes(ro) | FileAttributes.ReadOnly);
+
+        Run($"Invoke-BashRm -rf {Q(dir)}");
+
+        Assert.False(Directory.Exists(dir));
+    }
+
+    [Fact]
     public void Rm_MissingWithoutF_EmitsError()
     {
         var ghost = Path.Combine(_tmpRoot, "ghost.txt");

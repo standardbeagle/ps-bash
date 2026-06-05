@@ -1,3 +1,4 @@
+using System.Linq;
 using System.Management.Automation;
 using System.Text.RegularExpressions;
 
@@ -81,6 +82,15 @@ public sealed class InvokeBashGrepCommand : PSCmdlet
     /// <summary>Bash <c>-w</c> (word-regexp). Prefix-collides with <c>-WarningAction</c>.</summary>
     [Parameter] public SwitchParameter W { get; set; }
 
+    /// <summary>
+    /// Bash <c>-P</c> (perl-regexp). Declared as an explicit switch decoy: a bare <c>-P</c>
+    /// otherwise prefix-binds to the <c>-PipelineVariable</c> / <c>-ProgressAction</c> common
+    /// parameters and never reaches <see cref="Arguments"/>. Routed through the .NET-regex path
+    /// (see the <c>--perl-regexp</c> note); the bundled (<c>-iP</c>) and long (<c>--perl-regexp</c>)
+    /// forms are handled in the argument scan.
+    /// </summary>
+    [Parameter] public SwitchParameter P { get; set; }
+
     /// <summary>Bash <c>-o</c> (only-matching). Prefix-collides with <c>-OutVariable</c> /
     /// <c>-OutBuffer</c> (ambiguous → hard binder error if undeclared). Mirrors <c>rg</c>'s
     /// <c>O</c> decoy. The per-char bundle scan also maps <c>o</c>, so a bundled <c>-vo</c>
@@ -121,14 +131,14 @@ public sealed class InvokeBashGrepCommand : PSCmdlet
     private static readonly HashSet<string> ValidButUnsupported = new(StringComparer.Ordinal)
     {
         // Short forms.
-        "-P", "-z", "-Z", "-x", "-s", "-a", "-L", "-b", "-D", "-d",
+        "-z", "-Z", "-a", "-b", "-D", "-d",
         "-U", "-T", "-u", "-y", "-I", "-V",
         // Long forms (bare names; the =VALUE suffix is stripped before lookup).
-        "--perl-regexp", "--null-data", "--null", "--line-regexp",
-        "--no-messages", "--text", "--files-without-match", "--byte-offset",
+        "--null-data", "--null",
+        "--text", "--byte-offset",
         "--binary-files", "--devices", "--directories", "--binary",
-        "--initial-tab", "--version", "--include", "--include-dir",
-        "--exclude", "--exclude-dir", "--exclude-from", "--label",
+        "--initial-tab", "--version", "--include-dir",
+        "--exclude-from", "--label",
         "--line-buffered", "--group-separator", "--no-group-separator",
     };
 
@@ -161,7 +171,7 @@ public sealed class InvokeBashGrepCommand : PSCmdlet
         bool quietMode = false;
         bool recursive = false;
         bool filesOnly = false;
-        bool extendedRegex = false;
+        bool extendedRegex = P.IsPresent;   // -P (perl) → .NET regex path, same as -E
         bool fixedString = false;
         bool wholeWord = W.IsPresent;
         bool outputMatchOnly = O.IsPresent;
@@ -170,6 +180,14 @@ public sealed class InvokeBashGrepCommand : PSCmdlet
         int maxMatches = int.MaxValue;
         int afterContext = A ?? 0;
         int beforeContext = B ?? 0;
+
+        bool filesWithoutMatch = false;   // -L / --files-without-match
+        bool lineRegexp = false;          // -x / --line-regexp
+        bool noMessages = false;          // -s / --no-messages
+        // Recursive filename filters (basename fnmatch), GNU grep --include/--exclude/--exclude-dir.
+        var includeGlobs = new List<string>();
+        var excludeGlobs = new List<string>();
+        var excludeDirGlobs = new List<string>();
 
         var patterns = new List<string>();
         if (E != null) patterns.AddRange(E);
@@ -287,6 +305,20 @@ public sealed class InvokeBashGrepCommand : PSCmdlet
             if (a == "--word-regexp") { wholeWord = true; i++; continue; }
             if (a == "--only-matching") { outputMatchOnly = true; i++; continue; }
             if (a == "--quiet" || a == "--silent") { quietMode = true; i++; continue; }
+            if (a == "--files-without-match") { filesWithoutMatch = true; i++; continue; }
+            if (a == "--line-regexp") { lineRegexp = true; i++; continue; }
+            if (a == "--no-messages") { noMessages = true; i++; continue; }
+            // -P / --perl-regexp: ps-bash has no PCRE engine; route through .NET regex (a close
+            // PCRE superset). Common patterns (\d, \b, lookaround, named groups) work identically;
+            // PCRE-only syntax .NET lacks (\K, possessive ++, recursion) errors visibly rather than
+            // silently mismatching. Same raw-pattern path as -E.
+            if (a == "--perl-regexp") { extendedRegex = true; i++; continue; }
+            // --include=GLOB / --include GLOB (and --exclude / --exclude-dir): recursive-search
+            // filename filters matched against the file's BASE name, like GNU grep. Check
+            // --exclude-dir before --exclude so the longer flag wins.
+            if (TryTakeGlobFlag(args, ref i, "--include", includeGlobs)) continue;
+            if (TryTakeGlobFlag(args, ref i, "--exclude-dir", excludeDirGlobs)) continue;
+            if (TryTakeGlobFlag(args, ref i, "--exclude", excludeGlobs)) continue;
             // --color[=WHEN] / --colour[=WHEN]: GNU grep accepts these silently.
             // ps-bash emits typed BashObjects with no per-match ANSI coloring, so
             // we accept-and-ignore (parity with grep's flag surface, not its
@@ -342,6 +374,10 @@ public sealed class InvokeBashGrepCommand : PSCmdlet
                         case 'o': outputMatchOnly = true; break;
                         case 'H': forceFileName = true; break;
                         case 'h': suppressFileName = true; break;
+                        case 'L': filesWithoutMatch = true; break;
+                        case 'x': lineRegexp = true; break;
+                        case 's': noMessages = true; break;
+                        case 'P': extendedRegex = true; break; // PCRE → .NET regex (see --perl-regexp note)
                         default:
                             // Unknown short flag: a valid-but-unsupported grep
                             // option gets a specific refusal; anything else is
@@ -417,6 +453,13 @@ public sealed class InvokeBashGrepCommand : PSCmdlet
                 regexPattern = "\\b" + regexPattern + "\\b";
             }
 
+            // -x / --line-regexp: the pattern must match the WHOLE line. Anchor it; the
+            // non-capturing group keeps an inner alternation (a|b) from binding only the ends.
+            if (lineRegexp)
+            {
+                regexPattern = "^(?:" + regexPattern + ")$";
+            }
+
             try
             {
                 regexes.Add(new Regex(regexPattern, regexOpts));
@@ -438,9 +481,85 @@ public sealed class InvokeBashGrepCommand : PSCmdlet
         }
 
         // --- File mode (incl. recursive) ---
+        var recursiveFilter = BuildRecursiveFileFilter(includeGlobs, excludeGlobs, excludeDirGlobs);
         RunFileMode(regexes, fileOperands, recursive, invertMatch, showLineNumbers,
-            countOnly, quietMode, filesOnly, outputMatchOnly, forceFileName,
-            suppressFileName, maxMatches, beforeContext, afterContext);
+            countOnly, quietMode, filesOnly, filesWithoutMatch, noMessages, outputMatchOnly,
+            forceFileName, suppressFileName, maxMatches, beforeContext, afterContext,
+            recursiveFilter);
+    }
+
+    /// <summary>
+    /// Consume a <c>--flag=GLOB</c> or <c>--flag GLOB</c> filename-filter option into
+    /// <paramref name="into"/>; returns false (advancing nothing) when <paramref name="args"/>[i] is
+    /// not this flag. Used for grep <c>--include</c> / <c>--exclude</c> / <c>--exclude-dir</c>.
+    /// </summary>
+    private static bool TryTakeGlobFlag(string[] args, ref int i, string flag, List<string> into)
+    {
+        var a = args[i];
+        if (a.StartsWith(flag + "=", StringComparison.Ordinal))
+        {
+            into.Add(a.Substring(flag.Length + 1));
+            i++;
+            return true;
+        }
+        if (a == flag)
+        {
+            i++;
+            if (i < args.Length) { into.Add(args[i]); i++; }
+            return true;
+        }
+        return false;
+    }
+
+    /// <summary>
+    /// Build the recursive-search filename predicate from the include/exclude/exclude-dir globs, or
+    /// null when none were given (so the common case adds no per-file cost). Matches each glob against
+    /// the file's BASE name (and, for exclude-dir, each ancestor directory name) case-sensitively,
+    /// like GNU grep. Applied only to the recursive directory walk — explicitly-named files are always
+    /// searched, per grep semantics.
+    /// </summary>
+    private static Func<string, bool>? BuildRecursiveFileFilter(
+        List<string> includeGlobs, List<string> excludeGlobs, List<string> excludeDirGlobs)
+    {
+        if (includeGlobs.Count == 0 && excludeGlobs.Count == 0 && excludeDirGlobs.Count == 0)
+            return null;
+
+        // Compile once (cold path — LINQ is fine here). The returned predicate runs once PER FILE on
+        // the recursive walk, so it uses hand foreach over these arrays, not `.Any(lambda)`: a
+        // capturing lambda would allocate a fresh closure + enumerator on every file (GC pressure on
+        // a 100k-file tree).
+        var inc = includeGlobs.Select(g => WildcardPattern.Get(g, WildcardOptions.None)).ToArray();
+        var exc = excludeGlobs.Select(g => WildcardPattern.Get(g, WildcardOptions.None)).ToArray();
+        var excDir = excludeDirGlobs.Select(g => WildcardPattern.Get(g, WildcardOptions.None)).ToArray();
+
+        return path =>
+        {
+            var name = Path.GetFileName(path);
+
+            if (inc.Length > 0)
+            {
+                bool included = false;
+                foreach (var g in inc) { if (g.IsMatch(name)) { included = true; break; } }
+                if (!included) return false;
+            }
+
+            foreach (var g in exc) { if (g.IsMatch(name)) return false; }
+
+            if (excDir.Length > 0)
+            {
+                var dir = Path.GetDirectoryName(path);
+                while (!string.IsNullOrEmpty(dir))
+                {
+                    var seg = Path.GetFileName(dir);
+                    if (seg.Length > 0)
+                        foreach (var g in excDir) { if (g.IsMatch(seg)) return false; }
+                    var parent = Path.GetDirectoryName(dir);
+                    if (parent == dir) break;
+                    dir = parent;
+                }
+            }
+            return true;
+        };
     }
 
     private void RunPipelineMode(
@@ -563,10 +682,13 @@ public sealed class InvokeBashGrepCommand : PSCmdlet
     private void RunFileMode(
         List<Regex> regexes, List<string> fileOperands, bool recursive,
         bool invertMatch, bool showLineNumbers, bool countOnly, bool quietMode,
-        bool filesOnly, bool outputMatchOnly, bool forceFileName,
-        bool suppressFileName, int maxMatches,
-        int beforeContext, int afterContext)
+        bool filesOnly, bool filesWithoutMatch, bool noMessages, bool outputMatchOnly,
+        bool forceFileName, bool suppressFileName, int maxMatches,
+        int beforeContext, int afterContext, Func<string, bool>? recursiveFilter)
     {
+        // -l (files-with-matches) and -L (files-without-match) both only need to know whether each
+        // file has ANY match, and neither emits per-line output — share the scanning shortcut.
+        bool fileListMode = filesOnly || filesWithoutMatch;
         // File source is built lazily so a recursive search STREAMS — each file
         // is read and its matches emitted as the tree is walked, instead of
         // first draining the whole tree into a list (the old AllDirectories walk
@@ -588,6 +710,10 @@ public sealed class InvokeBashGrepCommand : PSCmdlet
                     resolved,
                     includeIgnored: BashFileSystem.DefaultFilteringDisabled(),
                     includeHidden: true);
+                // --include / --exclude / --exclude-dir apply to the recursive directory walk
+                // (an explicitly-named file is always searched, per grep semantics).
+                if (recursiveFilter != null)
+                    fileSource = fileSource.Where(recursiveFilter);
             }
             else if (File.Exists(resolved))
             {
@@ -617,8 +743,12 @@ public sealed class InvokeBashGrepCommand : PSCmdlet
                 }
                 if (!any)
                 {
-                    string normalized = raw.Replace('\\', '/');
-                    FileSystemHelpers.WriteBashError(this, $"grep: {normalized}: No such file or directory");
+                    // -s / --no-messages suppresses the diagnostic but still sets the failure code.
+                    if (!noMessages)
+                    {
+                        string normalized = raw.Replace('\\', '/');
+                        FileSystemHelpers.WriteBashError(this, $"grep: {normalized}: No such file or directory");
+                    }
                     FileSystemHelpers.SetLastExitCode(this, 2);
                 }
             }
@@ -662,7 +792,7 @@ public sealed class InvokeBashGrepCommand : PSCmdlet
                     if (!isMatch) continue;
                     fileMatches++;
                     if (quietMode) { FileSystemHelpers.SetLastExitCode(this, 0); return; }
-                    if (filesOnly) { matchedFiles.Add(filePath); break; }
+                    if (fileListMode) { matchedFiles.Add(filePath); break; }
                     if (countOnly) continue;
                     string outText = (outputMatchOnly && mo != null) ? mo.Value : line;
                     EmitGrepLine(filePath, lineNum, line, outText, showFile, showLineNumbers);
@@ -698,7 +828,7 @@ public sealed class InvokeBashGrepCommand : PSCmdlet
                 return;
             }
 
-            if (filesOnly)
+            if (fileListMode)
             {
                 if (fileMatchCount > 0) matchedFiles.Add(filePath);
                 continue;
@@ -747,6 +877,18 @@ public sealed class InvokeBashGrepCommand : PSCmdlet
             foreach (var fp in matchedFiles)
             {
                 WriteObject(BashRuntime.NewBashObject(fp));
+            }
+            return;
+        }
+
+        if (filesWithoutMatch)
+        {
+            // -L: list the (non-binary) files that produced NO match, in scan order. perFileCounts
+            // holds only processed text files; a matched file has a positive count.
+            foreach (var fp in scanned)
+            {
+                if (perFileCounts.TryGetValue(fp, out int n) && n == 0)
+                    WriteObject(BashRuntime.NewBashObject(fp));
             }
             return;
         }

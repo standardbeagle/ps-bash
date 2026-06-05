@@ -238,6 +238,74 @@ public class InvokeBashGrepCommandTests : IDisposable, IClassFixture<SharedPwshF
     }
 
     [Fact]
+    public void Grep_Recursive_Include_OnlySearchesMatchingFilenames()
+    {
+        File.WriteAllText(Path.Combine(_tmpDir, "a.cs"), "match\n");
+        File.WriteAllText(Path.Combine(_tmpDir, "b.txt"), "match\n");
+        var sub = Path.Combine(_tmpDir, "sub");
+        Directory.CreateDirectory(sub);
+        File.WriteAllText(Path.Combine(sub, "c.cs"), "match\n");
+        // --include=*.cs restricts the recursive walk to *.cs basenames → a.cs + sub/c.cs.
+        var lines = RunLines($"Invoke-BashGrep -r --include=*.cs match '{Q(_tmpDir)}'");
+        Assert.Equal(2, lines.Length);
+        Assert.All(lines, l => Assert.Contains(".cs:", l));
+    }
+
+    [Fact]
+    public void Grep_Recursive_Exclude_SkipsMatchingFilenames()
+    {
+        File.WriteAllText(Path.Combine(_tmpDir, "keep.txt"), "match\n");
+        File.WriteAllText(Path.Combine(_tmpDir, "skip.log"), "match\n");
+        var lines = RunLines($"Invoke-BashGrep -r --exclude=*.log match '{Q(_tmpDir)}'");
+        Assert.Single(lines);
+        Assert.Contains("keep.txt:", lines[0]);
+    }
+
+    [Fact]
+    public void Grep_Recursive_ExcludeDir_PrunesNamedDirectories()
+    {
+        File.WriteAllText(Path.Combine(_tmpDir, "top.txt"), "match\n");
+        var vendor = Path.Combine(_tmpDir, "vendor");
+        Directory.CreateDirectory(vendor);
+        File.WriteAllText(Path.Combine(vendor, "dep.txt"), "match\n");
+        // --exclude-dir=vendor drops files under any 'vendor' directory.
+        var lines = RunLines($"Invoke-BashGrep -r --exclude-dir=vendor match '{Q(_tmpDir)}'");
+        Assert.Single(lines);
+        Assert.Contains("top.txt:", lines[0]);
+    }
+
+    [Fact]
+    public void Grep_FilesWithoutMatch_L_ListsNonMatchingFiles()
+    {
+        File.WriteAllText(Path.Combine(_tmpDir, "hit.txt"), "match\n");
+        File.WriteAllText(Path.Combine(_tmpDir, "miss.txt"), "other\n");
+        // -L lists files that have NO match.
+        var lines = RunLines($"Invoke-BashGrep -r -L match '{Q(_tmpDir)}'");
+        Assert.Single(lines);
+        Assert.EndsWith("miss.txt", lines[0]);
+    }
+
+    [Fact]
+    public void Grep_NoMessages_S_SuppressesMissingFileError()
+    {
+        var missing = Path.Combine(_tmpDir, "does-not-exist.txt");
+        // -s suppresses the "No such file or directory" diagnostic (exit code still set).
+        var (_, errs) = RunWithErrors($"Invoke-BashGrep -s pattern '{Q(missing)}'");
+        Assert.DoesNotContain(errs, m => m.Contains("No such file", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    public void Grep_PerlRegexp_P_SupportsDotNetEscapes()
+    {
+        // -P routes through the .NET regex engine, so PCRE-style classes like \d work
+        // (GNU basic/extended regex would not honor \d). Bare -P is the binder-decoy form.
+        var hit = RunLines("'abc123' | Invoke-BashGrep -P '\\d+'");
+        Assert.Single(hit);
+        var miss = RunLines("'abcdef' | Invoke-BashGrep -P '\\d+'");
+        Assert.Empty(miss);
+    }
+
+    [Fact]
     public void Grep_Recursive_PrunesBuildDirs_ByDefault()
     {
         // Regression for the recursive-grep idle-timeout quirk: `grep -r` used to
@@ -424,30 +492,24 @@ public class InvokeBashGrepCommandTests : IDisposable, IClassFixture<SharedPwshF
     }
 
     [Fact]
-    public void Grep_ValidButUnsupportedFlag_X_EmitsSpecificRefusal_NotFileError()
+    public void Grep_LineRegexp_X_MatchesWholeLineOnly()
     {
-        // -x (line-regexp) is a real grep flag ps-bash doesn't implement.
-        // It must say so specifically — NOT "No such file or directory", and
-        // NOT silently ignore the flag and run anyway. (-x is used rather than
-        // -P because -P collides with the -PipelineVariable/-ProgressAction
-        // common parameters and is rejected by the binder before the cmdlet
-        // runs — a separate known collision class.)
-        var (outLines, errs) = RunWithErrors("'apple','banana' | Invoke-BashGrep -x 'ba.*'");
-        Assert.Empty(outLines);
-        Assert.Contains(errs,
-            m => m.Contains("not supported", StringComparison.OrdinalIgnoreCase)
-                 && m.Contains("-x", StringComparison.Ordinal));
-        Assert.DoesNotContain(errs,
-            m => m.Contains("No such file", StringComparison.OrdinalIgnoreCase));
+        // -x (line-regexp): the pattern must match the ENTIRE line. 'ba.*' matches
+        // the whole of 'banana' but a partial pattern like 'anana' would not.
+        var matched = RunLines("'apple','banana' | Invoke-BashGrep -x 'ba.*'");
+        Assert.Equal(new[] { "banana" }, matched);
+        var partial = RunLines("'apple','banana' | Invoke-BashGrep -x 'anana'");
+        Assert.Empty(partial); // 'anana' is not the whole line, so no match under -x
     }
 
     [Fact]
     public void Grep_UnsupportedFlagInBundle_ReportsFirstOffender()
     {
-        // -i is honored, then -P (unsupported) is the offending char getopt
-        // would stop on.
-        var (_, errs) = RunWithErrors("'x' | Invoke-BashGrep -iP foo");
-        Assert.Contains(errs, m => m.Contains("-P", StringComparison.Ordinal)
+        // -i is honored, then -y (a real but unsupported grep flag) is the offending
+        // char getopt would stop on. (-y is used rather than -x/-P now that those are
+        // implemented.)
+        var (_, errs) = RunWithErrors("'x' | Invoke-BashGrep -iy foo");
+        Assert.Contains(errs, m => m.Contains("-y", StringComparison.Ordinal)
                                    && m.Contains("not supported", StringComparison.OrdinalIgnoreCase));
     }
 
@@ -472,10 +534,11 @@ public class InvokeBashGrepCommandTests : IDisposable, IClassFixture<SharedPwshF
     [Fact]
     public void Grep_LongUnsupportedWithValue_StripsEqValueForLookup()
     {
-        // --include=*.c → valid grep flag, unsupported; the =VALUE suffix must
-        // not defeat the catalog lookup.
-        var (_, errs) = RunWithErrors("'x' | Invoke-BashGrep --include=*.c foo");
-        Assert.Contains(errs, m => m.Contains("--include", StringComparison.Ordinal)
+        // --label=foo → valid grep flag, still unsupported; the =VALUE suffix must
+        // not defeat the catalog lookup. (--include is now implemented, so it is no
+        // longer a valid example of an unsupported =VALUE flag.)
+        var (_, errs) = RunWithErrors("'x' | Invoke-BashGrep --label=foo foo");
+        Assert.Contains(errs, m => m.Contains("--label", StringComparison.Ordinal)
                                    && m.Contains("not supported", StringComparison.OrdinalIgnoreCase));
     }
 
