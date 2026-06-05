@@ -101,6 +101,7 @@ public sealed class InvokeBashBase64Command : PSCmdlet
     {
         var args = Arguments ?? Array.Empty<string>();
 
+        if (FileSystemHelpers.TryHandleVersion(this, "base64", args)) return;
         if (Array.IndexOf(args, "--help") >= 0)
         {
             foreach (var line in InvokeCommand.InvokeScript(

@@ -68,6 +68,7 @@ public sealed class InvokeBashNlCommand : PSCmdlet
     {
         var args = Arguments ?? Array.Empty<string>();
 
+        if (FileSystemHelpers.TryHandleVersion(this, "nl", args)) return;
         if (Array.IndexOf(args, "--help") >= 0)
         {
             foreach (var line in InvokeCommand.InvokeScript(

@@ -35,6 +35,7 @@ internal static class ChecksumEngine
         IList<PSObject>? pipelineInput,
         bool checkMode = false)
     {
+        if (FileSystemHelpers.TryHandleVersion(cmdlet, commandName, arguments)) return;
         if (Array.IndexOf(arguments, "--help") >= 0)
         {
             foreach (var line in cmdlet.InvokeCommand.InvokeScript(

@@ -36,6 +36,7 @@ public sealed class InvokeBashPushdCommand : PSCmdlet
     {
         var args = Arguments ?? Array.Empty<string>();
 
+        if (FileSystemHelpers.TryHandleVersion(this, "pushd", args)) return;
         if (Array.IndexOf(args, "--help") >= 0)
         {
             foreach (var line in InvokeCommand.InvokeScript(

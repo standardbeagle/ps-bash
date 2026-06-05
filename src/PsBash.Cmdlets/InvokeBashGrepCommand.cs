@@ -137,7 +137,7 @@ public sealed class InvokeBashGrepCommand : PSCmdlet
         "--null-data", "--null",
         "--text", "--byte-offset",
         "--binary-files", "--devices", "--directories", "--binary",
-        "--initial-tab", "--version", "--include-dir",
+        "--initial-tab", "--include-dir",
         "--exclude-from", "--label",
         "--line-buffered", "--group-separator", "--no-group-separator",
     };
@@ -163,6 +163,8 @@ public sealed class InvokeBashGrepCommand : PSCmdlet
             }
             return;
         }
+
+        if (FileSystemHelpers.TryHandleVersion(this, "grep", args)) return;
 
         bool ignoreCase = I.IsPresent;
         bool invertMatch = V.IsPresent;

@@ -37,6 +37,7 @@ public sealed class InvokeBashMvCommand : PSCmdlet
     {
         var args = Arguments ?? Array.Empty<string>();
 
+        if (FileSystemHelpers.TryHandleVersion(this, "mv", args)) return;
         if (Array.IndexOf(args, "--help") >= 0)
         {
             foreach (var line in InvokeCommand.InvokeScript(

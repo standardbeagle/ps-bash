@@ -306,6 +306,15 @@ public class InvokeBashGrepCommandTests : IDisposable, IClassFixture<SharedPwshF
     }
 
     [Fact]
+    public void Grep_Version_IdentifiesPsBash()
+    {
+        // --version must identify ps-bash (not refuse), so tooling can detect the runtime.
+        var lines = RunLines("Invoke-BashGrep --version");
+        Assert.Single(lines);
+        Assert.StartsWith("grep (ps-bash) ", lines[0]);
+    }
+
+    [Fact]
     public void Grep_Recursive_PrunesBuildDirs_ByDefault()
     {
         // Regression for the recursive-grep idle-timeout quirk: `grep -r` used to

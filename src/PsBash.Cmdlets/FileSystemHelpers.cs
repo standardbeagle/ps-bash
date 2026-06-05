@@ -212,6 +212,26 @@ internal static class FileSystemHelpers
         return false;
     }
 
+    /// <summary>
+    /// Handle a <c>--version</c> request uniformly across commands so tooling can identify ps-bash.
+    /// When <paramref name="args"/> contains <c>--version</c>, emits a single GNU-style line
+    /// <c>{commandName} (ps-bash) {version}</c> and returns true (the caller should then return).
+    /// The version is the real ps-bash module version, read from the runspace global
+    /// <c>$global:PsBashVersion</c> the module sets at load; falls back to "unknown" if unavailable.
+    /// </summary>
+    public static bool TryHandleVersion(PSCmdlet cmdlet, string commandName, string[]? args)
+    {
+        if (args is null || Array.IndexOf(args, "--version") < 0)
+            return false;
+
+        string version;
+        try { version = cmdlet.GetVariableValue("global:PsBashVersion") as string ?? "unknown"; }
+        catch { version = "unknown"; }
+
+        cmdlet.WriteObject(BashRuntime.NewBashObject($"{commandName} (ps-bash) {version}\n"));
+        return true;
+    }
+
     public static void WriteOptionError(
         PSCmdlet cmdlet, string cmd, string token,
         ISet<string> validButUnsupported)

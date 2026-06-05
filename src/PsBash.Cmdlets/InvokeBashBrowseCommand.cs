@@ -73,6 +73,7 @@ public sealed class InvokeBashBrowseCommand : PSCmdlet
     protected override void EndProcessing()
     {
         var args = Arguments ?? Array.Empty<string>();
+        if (FileSystemHelpers.TryHandleVersion(this, "browse", args)) return;
         if (Array.IndexOf(args, "--help") >= 0)
         {
             foreach (var line in InvokeCommand.InvokeScript(

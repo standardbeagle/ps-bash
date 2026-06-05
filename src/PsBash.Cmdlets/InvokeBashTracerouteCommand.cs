@@ -33,6 +33,7 @@ public sealed class InvokeBashTracerouteCommand : PSCmdlet
     protected override void ProcessRecord()
     {
         var args = Arguments ?? Array.Empty<string>();
+        if (FileSystemHelpers.TryHandleVersion(this, "traceroute", args)) return;
         if (Array.IndexOf(args, "--help") >= 0)
         {
             WriteObject(BashRuntime.NewBashObject("usage: traceroute [-m maxhops] [-w timeout] HOST"));

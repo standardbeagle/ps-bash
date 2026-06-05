@@ -71,6 +71,7 @@ public sealed class InvokeBashUniqCommand : PSCmdlet
     {
         var rawArgs = Arguments ?? Array.Empty<string>();
 
+        if (FileSystemHelpers.TryHandleVersion(this, "uniq", rawArgs)) return;
         if (Array.IndexOf(rawArgs, "--help") >= 0)
         {
             foreach (var line in InvokeCommand.InvokeScript(

@@ -115,6 +115,7 @@ public sealed class InvokeBashSortCommand : PSCmdlet
     {
         var rawArgs = Arguments ?? Array.Empty<string>();
 
+        if (FileSystemHelpers.TryHandleVersion(this, "sort", rawArgs)) return;
         if (Array.IndexOf(rawArgs, "--help") >= 0)
         {
             foreach (var line in InvokeCommand.InvokeScript(

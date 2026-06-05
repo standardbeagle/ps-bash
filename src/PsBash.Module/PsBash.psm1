@@ -3831,6 +3831,9 @@ function Complete-BashBgJob {
 }
 $global:BashStartTime = [DateTime]::UtcNow
 $__bashVer = try { $MyInvocation.MyCommand.Module?.Version ?? [version]'0.8.0' } catch { [version]'0.8.0' }
+# The real ps-bash module version (distinct from the emulated $BASH_VERSION above). Binary cmdlets
+# and runtime functions read this for `<cmd> --version`, so tooling can identify it is ps-bash.
+$global:PsBashVersion = $__bashVer.ToString()
 $global:BashVersion = "$($__bashVer.Major).$($__bashVer.Minor).0(1)-release"
 $global:BashVersionInfo = @($__bashVer.Major, $__bashVer.Minor, 0, 1, 'release', "$($__bashVer.Major).$($__bashVer.Minor).0")
 # bash default shell flags: h (hash commands), B (brace expansion enabled)

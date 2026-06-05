@@ -47,6 +47,21 @@ public class InvokeBashFileSystemMutatorTests : IDisposable, IClassFixture<Share
 
     private string Q(string path) => "'" + path.Replace("'", "''") + "'";
 
+    [Theory]
+    [InlineData("Invoke-BashCat", "cat")]
+    [InlineData("Invoke-BashLs", "ls")]
+    [InlineData("Invoke-BashRm", "rm")]
+    [InlineData("Invoke-BashCp", "cp")]
+    [InlineData("Invoke-BashHead", "head")]
+    [InlineData("Invoke-BashSort", "sort")]
+    public void Version_IdentifiesPsBash(string cmdlet, string name)
+    {
+        // --version must identify ps-bash across commands so tooling can detect the runtime,
+        // instead of refusing the flag or treating it as a file operand.
+        var lines = Run($"{cmdlet} --version");
+        Assert.Contains(lines, l => l.StartsWith($"{name} (ps-bash) ", StringComparison.Ordinal));
+    }
+
     // ─────────────────────────── mkdir ───────────────────────────
 
     [Fact]
