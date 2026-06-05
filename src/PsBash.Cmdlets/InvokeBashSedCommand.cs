@@ -238,7 +238,7 @@ public sealed class InvokeBashSedCommand : PSCmdlet
             string scriptText;
             try
             {
-                scriptText = File.ReadAllText(resolved);
+                scriptText = BashFileSystem.ReadAllTextRaw(resolved);
             }
             catch
             {
@@ -913,7 +913,7 @@ public sealed class InvokeBashSedCommand : PSCmdlet
     {
         try
         {
-            return File.ReadAllText(path).Replace("\r\n", "\n");
+            return BashFileSystem.ReadAllText(path);
         }
         catch (Exception ex)
         {

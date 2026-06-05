@@ -90,7 +90,7 @@ internal static class StyledStyles
                 var path = Path.Combine(dir, name + ".css");
                 if (File.Exists(path))
                 {
-                    return File.ReadAllText(path);
+                    return BashFileSystem.ReadAllTextRaw(path);
                 }
             }
             catch

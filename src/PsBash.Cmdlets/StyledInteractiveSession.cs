@@ -219,7 +219,7 @@ public static class StyledInteractiveSession
 
         if (File.Exists(nameOrInline))
         {
-            return File.ReadAllText(nameOrInline);
+            return BashFileSystem.ReadAllTextRaw(nameOrInline);
         }
 
         return StyledStyles.Resolve(nameOrInline);

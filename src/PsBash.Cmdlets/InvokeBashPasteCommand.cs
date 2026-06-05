@@ -203,7 +203,7 @@ public sealed class InvokeBashPasteCommand : PSCmdlet
     {
         try
         {
-            string content = File.ReadAllText(path).Replace("\r\n", "\n");
+            string content = BashFileSystem.ReadAllText(path);
             if (content.Length == 0)
             {
                 return Array.Empty<string>();

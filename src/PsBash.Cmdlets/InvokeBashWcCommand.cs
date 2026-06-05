@@ -202,7 +202,7 @@ public sealed class InvokeBashWcCommand : PSCmdlet
             string rawText;
             try
             {
-                rawText = File.ReadAllText(filePath).Replace("\r\n", "\n");
+                rawText = BashFileSystem.ReadAllText(filePath);
             }
             catch (Exception ex)
             {
@@ -218,7 +218,7 @@ public sealed class InvokeBashWcCommand : PSCmdlet
             try
             {
                 fileBytes = new FileInfo(filePath).Length;
-                using var fs = File.OpenRead(filePath);
+                using var fs = BashFileSystem.OpenRead(filePath);
                 var bom = new byte[3];
                 if (fs.Read(bom, 0, 3) >= 3
                     && bom[0] == 0xEF && bom[1] == 0xBB && bom[2] == 0xBF)

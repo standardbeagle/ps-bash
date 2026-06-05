@@ -164,7 +164,7 @@ public sealed class InvokeBashTestCommand : PSCmdlet
                 case "-d": return Directory.Exists(val);
                 case "-e": return File.Exists(val) || Directory.Exists(val);
                 case "-r":
-                    try { using var s = File.OpenRead(val); return true; }
+                    try { using var s = BashFileSystem.OpenRead(val); return true; }
                     catch { return false; }
                 case "-w":
                     try { using var s = File.OpenWrite(val); return true; }

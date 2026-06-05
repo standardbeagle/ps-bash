@@ -350,7 +350,7 @@ public sealed class FormatStyledCommand : PSCmdlet
             var resolved = GetUnresolvedProviderPathFromPSPath(value);
             if (File.Exists(resolved))
             {
-                return File.ReadAllText(resolved);
+                return BashFileSystem.ReadAllTextRaw(resolved);
             }
         }
         catch (Exception ex) when (ex is System.Management.Automation.DriveNotFoundException or ProviderNotFoundException or ItemNotFoundException)

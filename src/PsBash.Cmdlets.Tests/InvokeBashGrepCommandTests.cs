@@ -275,6 +275,44 @@ public class InvokeBashGrepCommandTests : IDisposable, IClassFixture<SharedPwshF
     }
 
     [Fact]
+    public void Grep_Recursive_SkipsBinaryFiles_ByDefault()
+    {
+        // Perf + correctness: a recursive grep used to read every file fully as
+        // text and line-split it — a 1.2 GB dist/ tree of AOT binaries took 61s.
+        // Binary files (NUL byte in first 8 KB) are now skipped, like ripgrep.
+        File.WriteAllText(Path.Combine(_tmpDir, "text.txt"), "match\n");
+        // A "binary" file: NUL byte + the search term as bytes.
+        var bin = Path.Combine(_tmpDir, "blob.bin");
+        File.WriteAllBytes(bin, new byte[] { (byte)'m', (byte)'a', 0, (byte)'t', (byte)'c', (byte)'h', (byte)'\n' });
+
+        var lines = RunLines($"Invoke-BashGrep -r match '{Q(_tmpDir)}'");
+
+        Assert.Single(lines);
+        Assert.Contains("text.txt", lines[0]);
+        Assert.DoesNotContain(lines, l => l.Contains("blob.bin"));
+    }
+
+    [Fact]
+    public void Grep_Recursive_NoIgnoreEnv_SearchesBinary()
+    {
+        // PSBASH_SEARCH_NO_IGNORE=1 also disables binary skipping (same "search
+        // everything" escape hatch as dir pruning).
+        var bin = Path.Combine(_tmpDir, "blob.bin");
+        File.WriteAllBytes(bin, new byte[] { 0, (byte)'m', (byte)'a', (byte)'t', (byte)'c', (byte)'h', (byte)'\n' });
+
+        Environment.SetEnvironmentVariable("PSBASH_SEARCH_NO_IGNORE", "1");
+        try
+        {
+            var lines = RunLines($"Invoke-BashGrep -r match '{Q(_tmpDir)}'");
+            Assert.Contains(lines, l => l.Contains("blob.bin"));
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("PSBASH_SEARCH_NO_IGNORE", null);
+        }
+    }
+
+    [Fact]
     public void Grep_Recursive_NoIgnoreEnv_SearchesPrunedDirs()
     {
         // PSBASH_SEARCH_NO_IGNORE=1 disables the default pruning, restoring the

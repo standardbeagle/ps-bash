@@ -262,7 +262,7 @@ public sealed class InvokeBashUnexpandCommand : PSCmdlet
     {
         try
         {
-            return File.ReadAllText(path).Replace("\r\n", "\n");
+            return BashFileSystem.ReadAllText(path);
         }
         catch (Exception ex)
         {

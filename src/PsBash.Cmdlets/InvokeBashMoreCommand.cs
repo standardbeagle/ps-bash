@@ -91,7 +91,7 @@ public sealed class InvokeBashMoreCommand : PSCmdlet
             }
             try
             {
-                var text = System.IO.File.ReadAllText(full).Replace("\r\n", "\n");
+                var text = BashFileSystem.ReadAllText(full);
                 AppendText(lines, text);
             }
             catch (System.Exception ex)

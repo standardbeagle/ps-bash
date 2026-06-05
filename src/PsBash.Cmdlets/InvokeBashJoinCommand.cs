@@ -199,7 +199,7 @@ public sealed class InvokeBashJoinCommand : PSCmdlet
         string content;
         try
         {
-            content = File.ReadAllText(path);
+            content = BashFileSystem.ReadAllTextRaw(path);
         }
         catch (Exception ex)
         {

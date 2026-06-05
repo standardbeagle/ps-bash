@@ -123,7 +123,7 @@ public sealed class InvokeBashLessCommand : PSCmdlet
                 string text;
                 try
                 {
-                    text = System.IO.File.ReadAllText(full).Replace("\r\n", "\n");
+                    text = BashFileSystem.ReadAllText(full);
                 }
                 catch (System.Exception ex)
                 {

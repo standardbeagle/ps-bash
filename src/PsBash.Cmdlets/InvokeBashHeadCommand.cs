@@ -245,9 +245,21 @@ public sealed class InvokeBashHeadCommand : PSCmdlet
             {
                 try
                 {
-                    byte[] bytes = File.ReadAllBytes(filePath);
-                    int take = Math.Min(byteCount.Value, bytes.Length);
-                    WriteObject(Encoding.UTF8.GetString(bytes, 0, take));
+                    // Stream at most N bytes — never read the whole file just to
+                    // take the head of it. Chunked so a huge -c N on a small file
+                    // doesn't pre-allocate N (reads stop at EOF).
+                    using var fs = BashFileSystem.OpenRead(filePath);
+                    int remaining = byteCount.Value;
+                    using var ms = new MemoryStream();
+                    var chunk = new byte[Math.Min(remaining, 65536)];
+                    int n;
+                    while (remaining > 0 &&
+                           (n = fs.Read(chunk, 0, Math.Min(chunk.Length, remaining))) > 0)
+                    {
+                        ms.Write(chunk, 0, n);
+                        remaining -= n;
+                    }
+                    WriteObject(Encoding.UTF8.GetString(ms.GetBuffer(), 0, (int)ms.Length));
                 }
                 catch (Exception ex)
                 {
@@ -398,9 +410,7 @@ public sealed class InvokeBashHeadCommand : PSCmdlet
         FileStream fs;
         try
         {
-            fs = new FileStream(
-                path, FileMode.Open, FileAccess.Read, FileShare.Read, 4096,
-                FileOptions.SequentialScan);
+            fs = BashFileSystem.OpenRead(path);
         }
         catch (Exception ex)
         {

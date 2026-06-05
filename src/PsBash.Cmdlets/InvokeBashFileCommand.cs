@@ -130,7 +130,7 @@ public sealed class InvokeBashFileCommand : PSCmdlet
                 byte[] headBytes;
                 try
                 {
-                    using var stream = File.OpenRead(filePath);
+                    using var stream = BashFileSystem.OpenRead(filePath);
                     var buf = new byte[16];
                     int read = stream.Read(buf, 0, 16);
                     if (read <= 0)
@@ -208,35 +208,34 @@ public sealed class InvokeBashFileCommand : PSCmdlet
 
                 if (fileType == null)
                 {
+                    // Stream-scan the bytes (same test the psm1 oracle applied to
+                    // the whole array) and stop at the first non-text byte — a
+                    // binary is classified after a few KB, and an all-text file is
+                    // never held in memory. An unreadable path / directory reports
+                    // "data" rather than throwing (conservative coreutils parity).
                     bool allText = true;
-                    byte[] fileBytes;
                     try
                     {
-                        fileBytes = File.ReadAllBytes(filePath);
+                        using var s = BashFileSystem.OpenRead(filePath);
+                        var buffer = new byte[65536];
+                        int read;
+                        while (allText && (read = s.Read(buffer, 0, buffer.Length)) > 0)
+                        {
+                            for (int i = 0; i < read; i++)
+                            {
+                                byte b = buffer[i];
+                                // psm1 oracle: b < 0x07 OR (b > 0x0D and b < 0x20 and b != 0x1B)
+                                if (b < 0x07 || (b > 0x0D && b < 0x20 && b != 0x1B))
+                                {
+                                    allText = false;
+                                    break;
+                                }
+                            }
+                        }
                     }
                     catch
                     {
-                        // psm1 oracle: ReadAllBytes is unguarded — on a
-                        // directory or unreadable path it would throw. We
-                        // surface the same outcome here by reporting the
-                        // file as "data" rather than throwing out of the
-                        // cmdlet, matching the conservative coreutils
-                        // behavior.
-                        fileBytes = Array.Empty<byte>();
                         allText = false;
-                    }
-
-                    if (allText)
-                    {
-                        foreach (var b in fileBytes)
-                        {
-                            // psm1 oracle: b < 0x07 OR (b > 0x0D and b < 0x20 and b != 0x1B)
-                            if (b < 0x07 || (b > 0x0D && b < 0x20 && b != 0x1B))
-                            {
-                                allText = false;
-                                break;
-                            }
-                        }
                     }
 
                     if (allText)

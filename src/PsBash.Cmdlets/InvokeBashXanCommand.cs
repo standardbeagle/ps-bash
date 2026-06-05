@@ -206,7 +206,7 @@ public sealed class InvokeBashXanCommand : PSCmdlet
             }
             try
             {
-                csvText = File.ReadAllText(resolved).Replace("\r\n", "\n");
+                csvText = BashFileSystem.ReadAllText(resolved);
             }
             catch (Exception ex)
             {

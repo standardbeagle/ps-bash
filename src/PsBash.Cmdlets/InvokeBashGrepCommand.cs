@@ -584,9 +584,9 @@ public sealed class InvokeBashGrepCommand : PSCmdlet
                 // bin, obj, node_modules, …) is skipped, so a stray .env is
                 // still searched but .git is not. PSBASH_SEARCH_NO_IGNORE turns
                 // the prune set off entirely (restores GNU grep parity).
-                fileSource = FileSystemHelpers.EnumerateSearchFiles(
+                fileSource = BashFileSystem.EnumerateSearchFiles(
                     resolved,
-                    includeIgnored: FileSystemHelpers.DefaultFilteringDisabled(),
+                    includeIgnored: BashFileSystem.DefaultFilteringDisabled(),
                     includeHidden: true);
             }
             else if (File.Exists(resolved))
@@ -632,32 +632,55 @@ public sealed class InvokeBashGrepCommand : PSCmdlet
         // below (replaces the old materialized filePaths list).
         var scanned = new List<string>();
         int totalMatchCount = 0;
+        // Binary files are skipped by default (NUL probe) — the same escape hatch
+        // (PSBASH_SEARCH_NO_IGNORE) that disables dir pruning also searches them.
+        bool skipBinary = !BashFileSystem.DefaultFilteringDisabled();
+        // Streaming fast path: with no context (-A/-B/-C) and no -m cap, every
+        // matching line emits the instant it is read — nothing is buffered, so a
+        // 2 GB log streams in constant memory. Context / -m need look-back or a
+        // global cap, so they fall back to a per-file pass (still a STREAMED read,
+        // still binary-skipped — only those rarer cases hold one file in memory).
+        bool needsBuffer = beforeContext > 0 || afterContext > 0 || maxMatches != int.MaxValue;
 
         foreach (var filePath in fileSource)
         {
             if (totalMatchCount >= maxMatches) break;
             scanned.Add(filePath);
+            // Binary files are skipped entirely (not counted, not listed) — probe
+            // once here so a binary never lands in perFileCounts as a noisy ":0".
+            if (skipBinary && BashFileSystem.IsBinary(filePath)) continue;
+            bool showFile = multipleFiles && !suppressFileName;
 
-            var lines = ReadFileLines(filePath);
+            if (!needsBuffer)
+            {
+                int fileMatches = 0;
+                int lineNum = 0;
+                foreach (var line in ReadFileLinesStream(filePath))
+                {
+                    lineNum++;
+                    var mo = MatchLine(regexes, line, invertMatch, out bool isMatch);
+                    if (!isMatch) continue;
+                    fileMatches++;
+                    if (quietMode) { FileSystemHelpers.SetLastExitCode(this, 0); return; }
+                    if (filesOnly) { matchedFiles.Add(filePath); break; }
+                    if (countOnly) continue;
+                    string outText = (outputMatchOnly && mo != null) ? mo.Value : line;
+                    EmitGrepLine(filePath, lineNum, line, outText, showFile, showLineNumbers);
+                }
+                totalMatchCount += fileMatches;
+                perFileCounts[filePath] = fileMatches;
+                continue;
+            }
+
+            // --- context / -m fallback: this file's lines, read by streaming. ---
+            var lines = ReadFileLinesArray(filePath);
             if (lines == null) continue;
 
             var matchIndices = new List<int>();
             var matchObjects = new Dictionary<int, Match>();
             for (int li = 0; li < lines.Length; li++)
             {
-                bool isMatch = false;
-                Match? mo = null;
-                foreach (var rx in regexes)
-                {
-                    var m = rx.Match(lines[li]);
-                    if (m.Success)
-                    {
-                        isMatch = true;
-                        mo = m;
-                        break;
-                    }
-                }
-                if (invertMatch) isMatch = !isMatch;
+                var mo = MatchLine(regexes, lines[li], invertMatch, out bool isMatch);
                 if (isMatch)
                 {
                     matchIndices.Add(li);
@@ -704,28 +727,10 @@ public sealed class InvokeBashGrepCommand : PSCmdlet
 
                 string line = lines[li];
                 int lineNum = li + 1;
-                bool showFile = multipleFiles && !suppressFileName;
-
-                string outputText = (outputMatchOnly && matchObjects.TryGetValue(li, out var mo))
-                    ? mo.Value
+                string outputText = (outputMatchOnly && matchObjects.TryGetValue(li, out var mo2))
+                    ? mo2.Value
                     : line;
-
-                string bashText;
-                if (showLineNumbers)
-                {
-                    string prefix = showFile ? (filePath + ":") : "";
-                    bashText = prefix + lineNum + ":" + outputText;
-                }
-                else if (showFile)
-                {
-                    bashText = filePath + ":" + outputText;
-                }
-                else
-                {
-                    bashText = outputText;
-                }
-
-                WriteObject(BuildGrepMatch(filePath, lineNum, line, bashText));
+                EmitGrepLine(filePath, lineNum, line, outputText, showFile, showLineNumbers);
             }
         }
 
@@ -798,29 +803,104 @@ public sealed class InvokeBashGrepCommand : PSCmdlet
         return pat;
     }
 
-    private string[]? ReadFileLines(string path)
+    /// <summary>
+    /// First regex that matches <paramref name="line"/> (null if none), with
+    /// invert applied to <paramref name="isMatch"/>. Shared by the streaming fast
+    /// path and the context/-m fallback so match semantics stay identical.
+    /// </summary>
+    private static Match? MatchLine(List<Regex> regexes, string line, bool invertMatch, out bool isMatch)
+    {
+        Match? mo = null;
+        bool matched = false;
+        foreach (var rx in regexes)
+        {
+            var m = rx.Match(line);
+            if (m.Success) { matched = true; mo = m; break; }
+        }
+        isMatch = invertMatch ? !matched : matched;
+        return mo;
+    }
+
+    /// <summary>Build the <c>file:line:</c> prefix and emit one GrepMatch.</summary>
+    private void EmitGrepLine(string filePath, int lineNum, string fullLine, string outputText,
+        bool showFile, bool showLineNumbers)
+    {
+        string bashText;
+        if (showLineNumbers)
+        {
+            string prefix = showFile ? (filePath + ":") : "";
+            bashText = prefix + lineNum + ":" + outputText;
+        }
+        else if (showFile)
+        {
+            bashText = filePath + ":" + outputText;
+        }
+        else
+        {
+            bashText = outputText;
+        }
+        WriteObject(BuildGrepMatch(filePath, lineNum, fullLine, bashText));
+    }
+
+    /// <summary>
+    /// Stream a (known-text) file's lines for the fast path. The file is opened
+    /// lazily on first enumeration; an IO error there emits the grep-style message
+    /// and ends the stream cleanly. Binary skipping is done by the caller's probe.
+    /// </summary>
+    private IEnumerable<string> ReadFileLinesStream(string path)
+    {
+        IEnumerator<string>? it = null;
+        try
+        {
+            while (true)
+            {
+                string current;
+                try
+                {
+                    it ??= BashFileSystem.ReadLines(path).GetEnumerator();
+                    if (!it.MoveNext()) yield break;
+                    current = it.Current;
+                }
+                catch (Exception ex)
+                {
+                    EmitGrepReadError(path, ex);
+                    yield break;
+                }
+                yield return current;
+            }
+        }
+        finally
+        {
+            it?.Dispose();
+        }
+    }
+
+    /// <summary>
+    /// Materialize a (known-text) file's lines for the context / -m fallback —
+    /// still a streamed read. Returns null on IO error (message emitted).
+    /// </summary>
+    private string[]? ReadFileLinesArray(string path)
     {
         try
         {
-            string text = File.ReadAllText(path).Replace("\r\n", "\n");
-            if (text.Length == 0) return Array.Empty<string>();
-            bool trailingNl = text.EndsWith("\n", StringComparison.Ordinal);
-            if (trailingNl)
-            {
-                text = text.Substring(0, text.Length - 1);
-            }
-            if (text.Length == 0 && trailingNl) return new[] { string.Empty };
-            return text.Split('\n');
+            var list = new List<string>();
+            foreach (var l in BashFileSystem.ReadLines(path)) list.Add(l);
+            return list.ToArray();
         }
         catch (Exception ex)
         {
-            bool notFound = ex is FileNotFoundException or DirectoryNotFoundException
-                || ex.InnerException is FileNotFoundException or DirectoryNotFoundException;
-            string msg = notFound ? "No such file or directory" : ex.Message;
-            string normalized = path.Replace('\\', '/');
-            FileSystemHelpers.WriteBashError(this, $"grep: {normalized}: {msg}");
-        FileSystemHelpers.SetLastExitCode(this, 2);
+            EmitGrepReadError(path, ex);
             return null;
         }
+    }
+
+    private void EmitGrepReadError(string path, Exception ex)
+    {
+        bool notFound = ex is FileNotFoundException or DirectoryNotFoundException
+            || ex.InnerException is FileNotFoundException or DirectoryNotFoundException;
+        string msg = notFound ? "No such file or directory" : ex.Message;
+        string normalized = path.Replace('\\', '/');
+        FileSystemHelpers.WriteBashError(this, $"grep: {normalized}: {msg}");
+        FileSystemHelpers.SetLastExitCode(this, 2);
     }
 }

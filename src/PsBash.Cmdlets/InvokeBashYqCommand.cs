@@ -135,7 +135,7 @@ public sealed class InvokeBashYqCommand : PSCmdlet
                 }
                 try
                 {
-                    yamlTexts.Add(File.ReadAllText(resolved));
+                    yamlTexts.Add(BashFileSystem.ReadAllTextRaw(resolved));
                 }
                 catch (Exception ex)
                 {

@@ -399,7 +399,7 @@ public sealed class InvokeBashCutCommand : PSCmdlet
     {
         try
         {
-            string text = File.ReadAllText(path).Replace("\r\n", "\n");
+            string text = BashFileSystem.ReadAllText(path);
             if (text.Length == 0) return Array.Empty<string>();
             bool trailingNl = text.EndsWith("\n", StringComparison.Ordinal);
             if (trailingNl)

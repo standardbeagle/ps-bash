@@ -144,7 +144,7 @@ public sealed class InvokeBashJqCommand : PSCmdlet
                 }
                 try
                 {
-                    jsonTexts.Add(File.ReadAllText(resolved));
+                    jsonTexts.Add(BashFileSystem.ReadAllTextRaw(resolved));
                 }
                 catch (Exception ex)
                 {

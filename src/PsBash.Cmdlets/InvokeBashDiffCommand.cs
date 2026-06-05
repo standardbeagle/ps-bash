@@ -443,7 +443,7 @@ public sealed class InvokeBashDiffCommand : PSCmdlet
         string content;
         try
         {
-            content = File.ReadAllText(path).Replace("\r\n", "\n");
+            content = BashFileSystem.ReadAllText(path);
         }
         catch (Exception ex)
         {

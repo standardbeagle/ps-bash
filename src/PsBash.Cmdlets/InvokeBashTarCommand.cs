@@ -390,7 +390,7 @@ public sealed class InvokeBashTarCommand : PSCmdlet
         TarReader? reader = null;
         try
         {
-            inStream = File.OpenRead(archiveFile);
+            inStream = BashFileSystem.OpenRead(archiveFile);
             tarStream = isGz
                 ? (Stream)new GZipStream(inStream, CompressionMode.Decompress)
                 : inStream;
@@ -440,7 +440,7 @@ public sealed class InvokeBashTarCommand : PSCmdlet
         TarReader? reader = null;
         try
         {
-            inStream = File.OpenRead(archiveFile);
+            inStream = BashFileSystem.OpenRead(archiveFile);
             tarStream = isGz
                 ? (Stream)new GZipStream(inStream, CompressionMode.Decompress)
                 : inStream;

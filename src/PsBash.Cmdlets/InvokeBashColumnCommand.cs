@@ -233,7 +233,7 @@ public sealed class InvokeBashColumnCommand : PSCmdlet
         string content;
         try
         {
-            content = File.ReadAllText(path).Replace("\r\n", "\n");
+            content = BashFileSystem.ReadAllText(path);
         }
         catch (Exception ex)
         {

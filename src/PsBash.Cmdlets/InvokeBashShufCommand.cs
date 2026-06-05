@@ -263,7 +263,7 @@ public sealed class InvokeBashShufCommand : PSCmdlet
                 string? content;
                 try
                 {
-                    content = File.ReadAllText(filePath);
+                    content = BashFileSystem.ReadAllTextRaw(filePath);
                 }
                 catch
                 {

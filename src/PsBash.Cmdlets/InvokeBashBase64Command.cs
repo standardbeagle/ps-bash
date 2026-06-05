@@ -153,7 +153,7 @@ public sealed class InvokeBashBase64Command : PSCmdlet
             {
                 try
                 {
-                    rawBytes = File.ReadAllBytes(filePath);
+                    rawBytes = BashFileSystem.ReadAllBytes(filePath);
                 }
                 catch (Exception ex)
                 {
@@ -244,7 +244,7 @@ public sealed class InvokeBashBase64Command : PSCmdlet
     {
         try
         {
-            string raw = File.ReadAllText(path);
+            string raw = BashFileSystem.ReadAllTextRaw(path);
             return raw.Replace("\r\n", "\n");
         }
         catch (Exception ex)

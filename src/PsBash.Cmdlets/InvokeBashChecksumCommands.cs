@@ -80,10 +80,13 @@ internal static class ChecksumEngine
                         continue;
                     }
 
-                    byte[] bytes;
+                    string hex;
                     try
                     {
-                        bytes = File.ReadAllBytes(filePath);
+                        // Stream-hash in chunks — never load the whole file. A
+                        // checksum of a multi-GB file runs in ~80 KB of memory.
+                        using var s = BashFileSystem.OpenRead(filePath);
+                        hex = ComputeHexFromStream(algorithmName, s);
                     }
                     catch (Exception ex)
                     {
@@ -91,7 +94,6 @@ internal static class ChecksumEngine
                         continue;
                     }
 
-                    var hex = ComputeHex(algorithmName, bytes);
                     cmdlet.WriteObject(MakeOutput(hex, filePath, algorithmLabel));
                 }
             }
@@ -157,6 +159,23 @@ internal static class ChecksumEngine
         hasher.AppendData(bytes);
         var hashBytes = hasher.GetHashAndReset();
         return Convert.ToHexString(hashBytes).ToLowerInvariant();
+    }
+
+    /// <summary>
+    /// Hash a stream in 80 KB chunks — the streaming counterpart of
+    /// <see cref="ComputeHex"/> for file input, so a multi-gigabyte file is never
+    /// loaded into memory.
+    /// </summary>
+    private static string ComputeHexFromStream(HashAlgorithmName name, Stream stream)
+    {
+        using var hasher = IncrementalHash.CreateHash(name);
+        var buffer = new byte[81920];
+        int read;
+        while ((read = stream.Read(buffer, 0, buffer.Length)) > 0)
+        {
+            hasher.AppendData(buffer, 0, read);
+        }
+        return Convert.ToHexString(hasher.GetHashAndReset()).ToLowerInvariant();
     }
 
     private static PSObject MakeOutput(string hex, string fileName, string algorithmLabel)

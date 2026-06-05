@@ -198,10 +198,10 @@ public sealed class InvokeBashGzipCommand : PSCmdlet
                     continue;
                 }
 
-                byte[]? rawBytes;
+                long inputSize;
                 try
                 {
-                    rawBytes = File.ReadAllBytes(filePath);
+                    inputSize = new FileInfo(filePath).Length;
                 }
                 catch (Exception ex)
                 {
@@ -212,15 +212,17 @@ public sealed class InvokeBashGzipCommand : PSCmdlet
 
                 if (list)
                 {
-                    int compressedSize = rawBytes.Length;
+                    int compressedSize = (int)inputSize;
                     int uncompressedSize;
                     try
                     {
-                        using var ms = new MemoryStream(rawBytes);
-                        using var gs = new GZipStream(ms, CompressionMode.Decompress);
-                        using var buf = new MemoryStream();
-                        gs.CopyTo(buf);
-                        uncompressedSize = (int)buf.Length;
+                        // Stream-count the decompressed size — never materialize it.
+                        using var input = BashFileSystem.OpenRead(filePath);
+                        using var gs = new GZipStream(input, CompressionMode.Decompress);
+                        var cbuf = new byte[81920];
+                        long total = 0; int cn;
+                        while ((cn = gs.Read(cbuf, 0, cbuf.Length)) > 0) total += cn;
+                        uncompressedSize = (int)total;
                     }
                     catch (Exception ex)
                     {
@@ -247,25 +249,23 @@ public sealed class InvokeBashGzipCommand : PSCmdlet
 
                 if (decompress)
                 {
-                    byte[] outBytes;
-                    try
-                    {
-                        using var ms = new MemoryStream(rawBytes);
-                        using var gs = new GZipStream(ms, CompressionMode.Decompress);
-                        using var buf = new MemoryStream();
-                        gs.CopyTo(buf);
-                        outBytes = buf.ToArray();
-                    }
-                    catch (Exception ex)
-                    {
-                        string normalized = filePath.Replace('\\', '/');
-                        FileSystemHelpers.WriteBashError(this, $"gzip: {normalized}: {ex.Message}");
-                        continue;
-                    }
-
                     if (toStdout)
                     {
-                        string text = Encoding.UTF8.GetString(outBytes);
+                        string text;
+                        try
+                        {
+                            using var input = BashFileSystem.OpenRead(filePath);
+                            using var gs = new GZipStream(input, CompressionMode.Decompress);
+                            using var buf = new MemoryStream();
+                            gs.CopyTo(buf);
+                            text = Encoding.UTF8.GetString(buf.GetBuffer(), 0, (int)buf.Length);
+                        }
+                        catch (Exception ex)
+                        {
+                            string normalized = filePath.Replace('\\', '/');
+                            FileSystemHelpers.WriteBashError(this, $"gzip: {normalized}: {ex.Message}");
+                            continue;
+                        }
                         WriteObject(BashRuntime.NewBashObject(text));
                     }
                     else
@@ -273,16 +273,34 @@ public sealed class InvokeBashGzipCommand : PSCmdlet
                         string outPath = filePath.EndsWith(".gz", StringComparison.Ordinal)
                             ? filePath.Substring(0, filePath.Length - 3)
                             : filePath;
-                        if (!TryWriteAllBytes(outPath, outBytes)) continue;
+                        long outSize;
+                        try
+                        {
+                            // Stream decompress straight into the output file — the
+                            // decompressed content is never held in memory.
+                            using (var input = BashFileSystem.OpenRead(filePath))
+                            using (var gs = new GZipStream(input, CompressionMode.Decompress))
+                            using (var outFs = File.Create(outPath))
+                            {
+                                gs.CopyTo(outFs);
+                            }
+                            outSize = new FileInfo(outPath).Length;
+                        }
+                        catch (Exception ex)
+                        {
+                            string normalized = filePath.Replace('\\', '/');
+                            FileSystemHelpers.WriteBashError(this, $"gzip: {normalized}: {ex.Message}");
+                            continue;
+                        }
                         if (!keep)
                         {
                             try { File.Delete(filePath); } catch { /* best effort, oracle parity */ }
                         }
                         if (verbose)
                         {
-                            string ratio = outBytes.Length > 0
+                            string ratio = outSize > 0
                                 ? string.Format(System.Globalization.CultureInfo.InvariantCulture,
-                                    "{0:F1}%", (1.0 - ((double)rawBytes.Length / outBytes.Length)) * 100)
+                                    "{0:F1}%", (1.0 - ((double)inputSize / outSize)) * 100)
                                 : "0.0%";
                             WriteObject(BashRuntime.NewBashObject($"{filePath}: {ratio}"));
                         }
@@ -290,51 +308,72 @@ public sealed class InvokeBashGzipCommand : PSCmdlet
                 }
                 else
                 {
-                    byte[] compressedBytes;
-                    try
+                    CompressionLevel compLevel = level switch
                     {
-                        using var ms = new MemoryStream();
-                        CompressionLevel compLevel = level switch
-                        {
-                            <= 1 => CompressionLevel.Fastest,
-                            >= 9 => CompressionLevel.SmallestSize,
-                            _ => CompressionLevel.Optimal,
-                        };
-                        using (var gs = new GZipStream(ms, compLevel, leaveOpen: true))
-                        {
-                            gs.Write(rawBytes, 0, rawBytes.Length);
-                        }
-                        compressedBytes = ms.ToArray();
-                    }
-                    catch (Exception ex)
-                    {
-                        string normalized = filePath.Replace('\\', '/');
-                        FileSystemHelpers.WriteBashError(this, $"gzip: {normalized}: {ex.Message}");
-                        continue;
-                    }
+                        <= 1 => CompressionLevel.Fastest,
+                        >= 9 => CompressionLevel.SmallestSize,
+                        _ => CompressionLevel.Optimal,
+                    };
 
                     if (toStdout)
                     {
-                        // The psm1 oracle base64-emits compressed bytes because
-                        // a string pipeline cannot carry arbitrary bytes — keep
-                        // that behavior so a `gzip -c FILE | base64 -d` chain
-                        // round-trips identically.
+                        // The psm1 oracle base64-emits compressed bytes because a
+                        // string pipeline cannot carry arbitrary bytes — keep that
+                        // so a `gzip -c FILE | base64 -d` chain round-trips. base64
+                        // needs the whole blob, so the compressed output is
+                        // materialized here (the input is still streamed in).
+                        byte[] compressedBytes;
+                        try
+                        {
+                            using var ms = new MemoryStream();
+                            using (var gs = new GZipStream(ms, compLevel, leaveOpen: true))
+                            using (var input = BashFileSystem.OpenRead(filePath))
+                            {
+                                input.CopyTo(gs);
+                            }
+                            compressedBytes = ms.ToArray();
+                        }
+                        catch (Exception ex)
+                        {
+                            string normalized = filePath.Replace('\\', '/');
+                            FileSystemHelpers.WriteBashError(this, $"gzip: {normalized}: {ex.Message}");
+                            continue;
+                        }
                         string b64 = Convert.ToBase64String(compressedBytes);
                         WriteObject(BashRuntime.NewBashObject(b64));
                     }
                     else
                     {
                         string outPath = filePath + ".gz";
-                        if (!TryWriteAllBytes(outPath, compressedBytes)) continue;
+                        long compSize;
+                        try
+                        {
+                            // Stream the input straight through the compressor to
+                            // disk — neither the raw nor the compressed bytes are
+                            // ever fully held in memory.
+                            using (var input = BashFileSystem.OpenRead(filePath))
+                            using (var outFs = File.Create(outPath))
+                            using (var gs = new GZipStream(outFs, compLevel))
+                            {
+                                input.CopyTo(gs);
+                            }
+                            compSize = new FileInfo(outPath).Length;
+                        }
+                        catch (Exception ex)
+                        {
+                            string normalized = filePath.Replace('\\', '/');
+                            FileSystemHelpers.WriteBashError(this, $"gzip: {normalized}: {ex.Message}");
+                            continue;
+                        }
                         if (!keep)
                         {
                             try { File.Delete(filePath); } catch { /* best effort, oracle parity */ }
                         }
                         if (verbose)
                         {
-                            string ratio = rawBytes.Length > 0
+                            string ratio = inputSize > 0
                                 ? string.Format(System.Globalization.CultureInfo.InvariantCulture,
-                                    "{0:F1}%", (1.0 - ((double)compressedBytes.Length / rawBytes.Length)) * 100)
+                                    "{0:F1}%", (1.0 - ((double)compSize / inputSize)) * 100)
                                 : "0.0%";
                             WriteObject(BashRuntime.NewBashObject($"{filePath}: {ratio}"));
                         }

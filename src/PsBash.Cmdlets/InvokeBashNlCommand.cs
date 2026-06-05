@@ -184,7 +184,7 @@ public sealed class InvokeBashNlCommand : PSCmdlet
     {
         try
         {
-            string content = File.ReadAllText(path).Replace("\r\n", "\n");
+            string content = BashFileSystem.ReadAllText(path);
             var result = new List<string>();
             // StreamReader.ReadLine() semantics: split on \n, no spurious
             // trailing empty line if content ends with \n.

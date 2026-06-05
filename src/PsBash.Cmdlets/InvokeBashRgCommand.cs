@@ -480,7 +480,7 @@ public sealed class InvokeBashRgCommand : PSCmdlet
         // EnumerateSearchFiles, so .git / bin / obj / node_modules are never
         // walked — this is the fix for the old AllDirectories walk that descended
         // into them and went silent long enough to trip the host idle-timeout.
-        bool includeIgnored = noIgnore || FileSystemHelpers.DefaultFilteringDisabled();
+        bool includeIgnored = noIgnore || BashFileSystem.DefaultFilteringDisabled();
 
         // Resolve each target to either a single file or a lazy directory walk.
         // multipleFiles must be known before emitting, so derive it from the
@@ -526,11 +526,14 @@ public sealed class InvokeBashRgCommand : PSCmdlet
         // Files actually read, in walk order — drives the multi-file count pass.
         var scanned = new List<string>();
         int totalMatchCount = 0;
+        // Binary files are skipped (NUL probe) like ripgrep; the same
+        // PSBASH_SEARCH_NO_IGNORE escape hatch searches them too.
+        bool skipBinary = !BashFileSystem.DefaultFilteringDisabled();
 
         foreach (var source in sources)
         foreach (var filePath in source)
         {
-            var lines = ReadFileLines(filePath);
+            var lines = ReadFileLines(filePath, skipBinary);
             if (lines == null) continue;
             scanned.Add(filePath);
 
@@ -613,7 +616,7 @@ public sealed class InvokeBashRgCommand : PSCmdlet
 
     /// <summary>
     /// Lazy directory walk for one search-root directory: the shared
-    /// dir-pruning enumerator (<see cref="FileSystemHelpers.EnumerateSearchFiles"/>)
+    /// dir-pruning enumerator (<see cref="BashFileSystem.EnumerateSearchFiles"/>)
     /// with the optional <c>-g</c>/<c>--glob</c> filename filter applied. Kept as
     /// an iterator so the caller streams matches as files are visited.
     /// </summary>
@@ -624,7 +627,7 @@ public sealed class InvokeBashRgCommand : PSCmdlet
             ? WildcardPattern.Get(globPattern, WildcardOptions.IgnoreCase)
             : null;
 
-        foreach (var fp in FileSystemHelpers.EnumerateSearchFiles(root, includeIgnored, includeHidden))
+        foreach (var fp in BashFileSystem.EnumerateSearchFiles(root, includeIgnored, includeHidden))
         {
             if (glob != null && !glob.IsMatch(Path.GetFileName(fp))) continue;
             yield return fp;
@@ -653,16 +656,15 @@ public sealed class InvokeBashRgCommand : PSCmdlet
         return obj;
     }
 
-    private string[]? ReadFileLines(string path)
+    private static string[]? ReadFileLines(string path, bool skipBinary)
     {
         try
         {
-            string text = File.ReadAllText(path).Replace("\r\n", "\n");
-            if (text.Length == 0) return Array.Empty<string>();
-            bool trailingNl = text.EndsWith("\n", StringComparison.Ordinal);
-            if (trailingNl) text = text.Substring(0, text.Length - 1);
-            if (text.Length == 0 && trailingNl) return new[] { string.Empty };
-            return text.Split('\n');
+            // null => binary (NUL in first 8 KB) or IO error => caller skips it.
+            if (skipBinary && BashFileSystem.IsBinary(path)) return null;
+            var list = new List<string>();
+            foreach (var l in BashFileSystem.ReadLines(path)) list.Add(l);
+            return list.ToArray();
         }
         catch
         {
