@@ -20,6 +20,14 @@ internal sealed class LineEditor
     private string? _currentSuggestion;  // Suffix to append (null = no suggestion)
     private readonly string _cwd;  // Current working directory for suggestions
 
+    // ── async, debounced prediction ───────────────────────────────────────────
+    // The prediction (inline history ghost + PowerShell-parameter panel) NEVER gates the glyph echo:
+    // a keystroke mutates the buffer and Redraw()s the typed character immediately, THEN awaits the
+    // prediction inline (single flow — no background thread touches the console, which .NET's Console
+    // does not allow concurrently). The lookup is skipped while more input is queued and re-checked
+    // after it completes (MaybeRenderPredictionAsync), so fast typing / paste never blocks on it and a
+    // result for a line the user has moved past is discarded rather than painted.
+
     // ── completion ───────────────────────────────────────────────────────────
     // Async so providers can round-trip to the runspace (live command/parameter
     // completion). A sync completer (tests, legacy) is adapted into this shape.
@@ -47,7 +55,7 @@ internal sealed class LineEditor
     // Returns empty for bash commands / non-flag tokens. Null when no live worker is wired.
     private readonly Func<string, int, CancellationToken, Task<IReadOnlyList<FlagHint>>>? _flagHintProvider;
     // Cached PS-param hints + the "commandtoken" key they were fetched for. Computed on
-    // keystroke (UpdatePsFlagHintsAsync) and rendered by ComputeFlagPanel only while the key still
+    // keystroke (ComputeHintsAsync) and rendered by ComputeFlagPanel only while the key still
     // matches the cursor — so a stale async result never paints under a changed token.
     private IReadOnlyList<FlagHint>? _psPanelHints;
     private string? _psPanelKey;
@@ -83,6 +91,12 @@ internal sealed class LineEditor
 
     // ── constants ────────────────────────────────────────────────────────────
     private const int MaxHistory = 5000;
+
+    // Kill switch: PSBASH_NO_PREDICT=1 disables the inline history ghost + flag panel entirely.
+    // Insurance against a prediction-path regression ever degrading input — set it and the line
+    // editor is a plain echo loop you can always type into. Read once at process start.
+    private static readonly bool PredictionDisabled =
+        Environment.GetEnvironmentVariable("PSBASH_NO_PREDICT") is "1" or "true";
 
     // Adapt a synchronous completer into the async shape the editor now uses.
     private static Func<string, int, CancellationToken, Task<IReadOnlyList<CompletionItem>>>? Adapt(
@@ -226,7 +240,7 @@ internal sealed class LineEditor
                 _panelFocused = false;
             }
             // ↓ with the panel visible (and not yet focused) moves focus INTO the panel.
-            else if (key.Key == ConsoleKey.DownArrow && key.Modifiers == 0 && CurrentFlagHints().Count > 0)
+            else if (key.Key == ConsoleKey.DownArrow && key.Modifiers == 0 && CurrentFlagHints(_buf.ToString(), _cursor).Count > 0)
             {
                 _panelFocused = true;
                 _panelSelected = 0;
@@ -296,8 +310,8 @@ internal sealed class LineEditor
                     return null;   // EOF
                 }
                 DeleteCharForward();
-                await RefreshHintsAsync();
-                Redraw();
+                Redraw();                            // echo the edit immediately
+                await MaybeRenderPredictionAsync();   // prediction renders after; never blocks the echo
                 continue;
             }
 
@@ -392,33 +406,33 @@ internal sealed class LineEditor
                 // ── deletion ─────────────────────────────────────────────────
                 case ConsoleKey.Backspace:
                     DeleteCharBack();
-                    await RefreshHintsAsync();
-                    Redraw();
+                    Redraw();                            // echo the edit immediately
+                    await MaybeRenderPredictionAsync();   // prediction renders after; never blocks the echo
                     break;
                 case ConsoleKey.Delete:
                     DeleteCharForward();
-                    await RefreshHintsAsync();
-                    Redraw();
+                    Redraw();                            // echo the edit immediately
+                    await MaybeRenderPredictionAsync();   // prediction renders after; never blocks the echo
                     break;
                 case ConsoleKey.K when key.Modifiers == ConsoleModifiers.Control:
                     KillToEnd();
-                    await RefreshHintsAsync();
-                    Redraw();
+                    Redraw();                            // echo the edit immediately
+                    await MaybeRenderPredictionAsync();   // prediction renders after; never blocks the echo
                     break;
                 case ConsoleKey.U when key.Modifiers == ConsoleModifiers.Control:
                     KillToStart();
-                    await RefreshHintsAsync();
-                    Redraw();
+                    Redraw();                            // echo the edit immediately
+                    await MaybeRenderPredictionAsync();   // prediction renders after; never blocks the echo
                     break;
                 case ConsoleKey.W when key.Modifiers == ConsoleModifiers.Control:
                     KillWordBack();
-                    await RefreshHintsAsync();
-                    Redraw();
+                    Redraw();                            // echo the edit immediately
+                    await MaybeRenderPredictionAsync();   // prediction renders after; never blocks the echo
                     break;
                 case ConsoleKey.Y when key.Modifiers == ConsoleModifiers.Control:
                     Yank();
-                    await RefreshHintsAsync();
-                    Redraw();
+                    Redraw();                            // echo the edit immediately
+                    await MaybeRenderPredictionAsync();   // prediction renders after; never blocks the echo
                     break;
 
                 // ── misc ─────────────────────────────────────────────────────
@@ -433,8 +447,12 @@ internal sealed class LineEditor
                     if (key.KeyChar != '\0' && !char.IsControl(key.KeyChar))
                     {
                         InsertChar(key.KeyChar);
-                        await RefreshHintsAsync();
+                        // Echo the glyph BEFORE any prediction lookup — the visible character must
+                        // never wait on history/runspace I/O (the suggestion was already cleared
+                        // above, so this paints no stale ghost). The prediction is then computed and
+                        // rendered inline (debounced), still without ever gating this echo.
                         Redraw();
+                        await MaybeRenderPredictionAsync();
                     }
                     // Ignore other control sequences (F-keys, etc.)
                     break;
@@ -684,9 +702,9 @@ internal sealed class LineEditor
         Redraw();
     }
 
-    // Buffer mutators do NOT redraw — the keystroke handler in ReadLineAsync
-    // calls UpdateSuggestionAsync then Redraw() once after, eliminating the
-    // stale-suggestion flicker that came from drawing twice per keystroke.
+    // Buffer mutators do NOT redraw — the keystroke handler in ReadLineAsync calls Redraw() once
+    // immediately after to echo the edit, then awaits MaybeRenderPredictionAsync() to compute and
+    // paint the prediction (debounced, inline on the same flow) without ever gating that echo.
     private void InsertChar(char c)
     {
         _buf.Insert(_cursor, c);
@@ -767,21 +785,22 @@ internal sealed class LineEditor
     // Terminal rendering
     // ─────────────────────────────────────────────────────────────────────────
 
-    private void Redraw()
-    {
-        Redraw(showSuggestion: true);
-    }
+    private void Redraw() => Redraw(showSuggestion: true);
 
+    // Renders the current line. Only ever called on the single key-loop flow (the printable/edit
+    // handlers call it before awaiting the prediction, and MaybeRenderPredictionAsync calls it after),
+    // so there is never a second thread writing the console.
     private void Redraw(bool showSuggestion)
     {
         // Strip ANSI from prompt to measure visual length
         var promptVisible = StripAnsi(_prompt);
         var text = _buf.ToString();
+        var cursor = _cursor;
 
         // The floating flag-doc panel: rows shown below the input line for the flag-prefix
         // token under the cursor. Empty unless the cursor is on a "-flag" argument of a known
         // command. Suppressed when suggestions are off (history navigation) to avoid noise.
-        var panel = showSuggestion ? ComputeFlagPanel() : Array.Empty<PanelRow>();
+        var panel = showSuggestion ? ComputeFlagPanel(text, cursor) : Array.Empty<PanelRow>();
 
         // Erase the whole region we own: carriage-return to the input line's column 0, then
         // \x1b[0J wipes the input line AND everything below it (the previous panel). This
@@ -792,7 +811,7 @@ internal sealed class LineEditor
         Console.Write(text);
 
         // Inline history ghost — only when there is no flag panel, so the two never compete.
-        if (panel.Count == 0 && showSuggestion && _currentSuggestion is { Length: > 0 } && _cursor == _buf.Length)
+        if (panel.Count == 0 && showSuggestion && _currentSuggestion is { Length: > 0 } && cursor == text.Length)
         {
             Console.Write(SuggestionColor);
             Console.Write(_currentSuggestion);
@@ -822,7 +841,7 @@ internal sealed class LineEditor
             Console.Write($"\x1b[{panel.Count}A"); // back up to the input line
 
         // Place the cursor at the logical column on the input line: column 0 then forward.
-        var logicalCol = promptVisible.Length + _cursor;
+        var logicalCol = promptVisible.Length + cursor;
         Console.Write("\r");
         if (logicalCol > 0)
             Console.Write($"\x1b[{logicalCol}C");
@@ -834,11 +853,11 @@ internal sealed class LineEditor
     /// parameter hints, but only while their key still matches the cursor. Empty when neither
     /// applies. Never throws.
     /// </summary>
-    private IReadOnlyList<FlagHint> CurrentFlagHints()
+    private IReadOnlyList<FlagHint> CurrentFlagHints(string line, int cursor)
     {
         try
         {
-            var specs = TabCompleter.MatchingFlagSpecs(_buf.ToString(), _cursor, _aliases);
+            var specs = TabCompleter.MatchingFlagSpecs(line, cursor, _aliases);
             if (specs.Count > 0)
             {
                 return specs.Select(s => new FlagHint(
@@ -848,7 +867,7 @@ internal sealed class LineEditor
             }
 
             // PowerShell-cmdlet params (async, cached) — only if the cache is for this exact token.
-            if (_psPanelHints is { Count: > 0 } && _psPanelKey is not null && _psPanelKey == CurrentHintKey())
+            if (_psPanelHints is { Count: > 0 } && _psPanelKey is not null && _psPanelKey == HintKeyFor(line, cursor))
                 return _psPanelHints;
 
             return Array.Empty<FlagHint>();
@@ -868,11 +887,11 @@ internal sealed class LineEditor
     /// "press ↓" overflow hint; when focused it shows a scroll window around the highlighted
     /// selection. Empty when not on a documented flag/parameter token. Never throws — advisory.
     /// </summary>
-    private IReadOnlyList<PanelRow> ComputeFlagPanel()
+    private IReadOnlyList<PanelRow> ComputeFlagPanel(string line, int cursor)
     {
         try
         {
-            var hints = CurrentFlagHints();
+            var hints = CurrentFlagHints(line, cursor);
             if (hints.Count == 0)
                 return Array.Empty<PanelRow>();
 
@@ -932,7 +951,7 @@ internal sealed class LineEditor
     /// </summary>
     private bool TryHandlePanelKey(ConsoleKeyInfo key)
     {
-        int total = CurrentFlagHints().Count;
+        int total = CurrentFlagHints(_buf.ToString(), _cursor).Count;
         if (total == 0) { _panelFocused = false; return false; }
         int window = Math.Min(MaxPanelRows, total);
 
@@ -956,7 +975,7 @@ internal sealed class LineEditor
                 InsertFlagFromPanel(); return true;
             case ConsoleKey.RightArrow when key.Modifiers == 0:
                 // Drill into the man-page detail for the selected option.
-                OpenHelpBrowser(CurrentFlagHints(), _panelSelected);
+                OpenHelpBrowser(CurrentFlagHints(_buf.ToString(), _cursor), _panelSelected);
                 return true;
             default:
                 return false; // not a panel key → caller exits focus and re-handles it
@@ -988,7 +1007,7 @@ internal sealed class LineEditor
     /// <summary>Insert the selected panel hint's bare flag at the cursor, then leave focus.</summary>
     private void InsertFlagFromPanel()
     {
-        var hints = CurrentFlagHints();
+        var hints = CurrentFlagHints(_buf.ToString(), _cursor);
         if (_panelSelected < 0 || _panelSelected >= hints.Count)
         {
             ExitPanelFocus();
@@ -1055,7 +1074,7 @@ internal sealed class LineEditor
     /// </summary>
     private void OpenHelpBrowserFromPrompt()
     {
-        var hints = CurrentFlagHints();
+        var hints = CurrentFlagHints(_buf.ToString(), _cursor);
         if (hints.Count == 0)
         {
             // Not on a flag token (or PS with nothing cached): fall back to the command's full
@@ -1110,14 +1129,94 @@ internal sealed class LineEditor
     // ─────────────────────────────────────────────────────────────────────────
 
     /// <summary>
-    /// Refresh both keystroke-driven hints: the inline history ghost and the floating panel's
-    /// async PowerShell-parameter cache. The bash flag panel is computed synchronously in Redraw
-    /// (always fresh), so it is not refreshed here.
+    /// Compute the prediction for a snapshot of the line — the inline history ghost (a history
+    /// prefix lookup) plus the floating PowerShell-parameter panel (a bounded runspace round-trip).
+    /// Pure with respect to editor state (reads only the passed snapshot + immutable fields), so it
+    /// runs entirely off the key loop and never touches <see cref="_buf"/>. Never throws.
     /// </summary>
-    private async Task RefreshHintsAsync()
+    private async Task<(string? Suggestion, IReadOnlyList<FlagHint>? PsHints, string? PsKey)>
+        ComputeHintsAsync(string line, int cursor, CancellationToken ct)
     {
-        await UpdateSuggestionAsync();
-        await UpdatePsFlagHintsAsync();
+        string? suggestion = null;
+        try
+        {
+            var suffix = await _suggester.SuggestAsync(line, _cwd).ConfigureAwait(false);
+            // SuggestAsync returns "" for an exact match (nothing to append) and null for no match —
+            // both mean "no ghost".
+            suggestion = string.IsNullOrEmpty(suffix) ? null : suffix;
+        }
+        catch (Exception) { suggestion = null; }
+
+        IReadOnlyList<FlagHint>? psHints = null;
+        string? psKey = null;
+        if (_flagHintProvider is not null)
+        {
+            try
+            {
+                var key = HintKeyFor(line, cursor);
+                // The synchronous bash flag panel (computed in Redraw) takes precedence; only
+                // fetch PS-cmdlet params when the cursor is on a flag token with no bash spec.
+                if (key is not null && TabCompleter.MatchingFlagSpecs(line, cursor, _aliases).Count == 0)
+                {
+                    var hints = await _flagHintProvider(line, cursor, ct).ConfigureAwait(false);
+                    if (hints.Count > 0) { psHints = hints; psKey = key; }
+                }
+            }
+            catch (Exception) { psHints = null; psKey = null; }
+        }
+
+        return (suggestion, psHints, psKey);
+    }
+
+    /// <summary>
+    /// Compute and render the prediction for the line as it stands now, having already echoed the
+    /// keystroke. Runs INLINE on the single key-loop flow — never on a second thread — because .NET's
+    /// <see cref="Console"/> tolerates no concurrent access (a background writer corrupts the cursor
+    /// and reorders/drops input). It never gates the glyph (the caller redrew the character first),
+    /// and it is debounced both ways: skipped up front while more input is queued, and discarded after
+    /// the lookup if a key arrived meanwhile or the line moved on. So fast typing / paste never waits
+    /// on it, and on an IO/memory-bound system the only cost is that a key pressed DURING a drained-
+    /// input lookup waits for that one lookup — never a corrupted prompt. Advisory: never throws.
+    /// </summary>
+    private async Task MaybeRenderPredictionAsync()
+    {
+        if (PredictionDisabled) return;   // kill switch — keep the editor a plain echo loop
+
+        // Still typing — the result would be superseded immediately and the lookup would sit in front
+        // of the next keystroke. Defer; the next keystroke runs this again once input drains.
+        if (KeyAvailableSafe()) return;
+
+        var line = _buf.ToString();
+        var cursor = _cursor;
+
+        (string? Suggestion, IReadOnlyList<FlagHint>? PsHints, string? PsKey) result;
+        try
+        {
+            using var cts = new CancellationTokenSource(CompletionTimeoutMs);
+            result = await ComputeHintsAsync(line, cursor, cts.Token).ConfigureAwait(true);
+        }
+        catch (Exception) { return; }
+
+        // A key landed during the lookup, or the buffer moved on — discard rather than paint a stale
+        // prediction. The buffered keystroke will echo and re-run this on the next loop turn.
+        if (KeyAvailableSafe()) return;
+        if (_buf.ToString() != line || _cursor != cursor) return;
+
+        _currentSuggestion = result.Suggestion;
+        _psPanelHints = result.PsHints;
+        _psPanelKey = result.PsKey;
+        Redraw();
+    }
+
+    /// <summary>
+    /// Whether another key is already waiting in the console buffer. Used to debounce the prediction
+    /// while the user types fast / pastes. Called only on the key-loop flow (never a second thread —
+    /// concurrent Console.KeyAvailable corrupts input). Safe against a redirected/closed console.
+    /// </summary>
+    private bool KeyAvailableSafe()
+    {
+        try { return Console.KeyAvailable; }
+        catch { return false; }
     }
 
     /// <summary>
@@ -1125,80 +1224,17 @@ internal sealed class LineEditor
     /// not on a <c>-</c>-prefixed argument token. Used to key the async PS-param cache so a result
     /// only paints while it still matches what the user is looking at.
     /// </summary>
-    private string? CurrentHintKey()
+    private string? HintKeyFor(string line, int cursor)
     {
-        var line = _buf.ToString();
-        if (TabCompleter.IsFirstWord(line, _cursor))
+        if (TabCompleter.IsFirstWord(line, cursor))
             return null;
-        var (beforeToken, token) = TabCompleter.SplitAtWordBoundaryQuoteAware(line, _cursor);
+        var (beforeToken, token) = TabCompleter.SplitAtWordBoundaryQuoteAware(line, cursor);
         if (token.Length == 0 || token[0] != '-')
             return null;
         var cmd = TabCompleter.GetCommandNameAtCursor(beforeToken, beforeToken.Length, _aliases);
         if (cmd is null)
             return null;
         return cmd + "" + token;
-    }
-
-    /// <summary>
-    /// Populate the async PowerShell-parameter panel cache for the current flag token. No-op (and
-    /// clears the cache) when there is no provider, the token is bash-served (the sync panel wins),
-    /// or the cursor is not on a flag. Bounded by a short deadline so a busy worker never blocks
-    /// typing; on timeout / failure the cache is simply left empty.
-    /// </summary>
-    private async Task UpdatePsFlagHintsAsync()
-    {
-        if (_flagHintProvider is null)
-            return;
-
-        var key = CurrentHintKey();
-        if (key is null)
-        {
-            _psPanelHints = null;
-            _psPanelKey = null;
-            return;
-        }
-
-        // The bash flag panel (synchronous, always fresh) takes precedence; don't double up.
-        if (TabCompleter.MatchingFlagSpecs(_buf.ToString(), _cursor, _aliases).Count > 0)
-        {
-            _psPanelHints = null;
-            _psPanelKey = null;
-            return;
-        }
-
-        try
-        {
-            using var cts = new CancellationTokenSource(TimeSpan.FromMilliseconds(CompletionTimeoutMs));
-            var hints = await _flagHintProvider(_buf.ToString(), _cursor, cts.Token).ConfigureAwait(false);
-            _psPanelHints = hints.Count > 0 ? hints : null;
-            _psPanelKey = key;
-        }
-        catch (Exception)
-        {
-            // Advisory; never let a slow/failed worker break the prompt.
-            _psPanelHints = null;
-            _psPanelKey = null;
-        }
-    }
-
-    private async Task UpdateSuggestionAsync()
-    {
-        var prefix = _buf.ToString();
-        var suffix = await _suggester.SuggestAsync(prefix, _cwd);
-
-        if (suffix is null)
-        {
-            _currentSuggestion = null;
-        }
-        else if (suffix.Length == 0)
-        {
-            // Exact match - no suggestion needed
-            _currentSuggestion = null;
-        }
-        else
-        {
-            _currentSuggestion = suffix;
-        }
     }
 
     private void AcceptSuggestion()
