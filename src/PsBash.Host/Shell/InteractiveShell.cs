@@ -208,7 +208,9 @@ public static class InteractiveShell
                 string pwshCommand;
                 try
                 {
-                    pwshCommand = BashTranspiler.Transpile(trimmed);
+                    // Long-lived REPL: a re-run or a large pasted script is transpiled once via the
+                    // in-process LRU (short commands bypass it and transpile directly).
+                    pwshCommand = TranspileCache.GetOrTranspileMemory(trimmed);
                 }
                 catch (ParseException ex)
                 {
@@ -592,7 +594,8 @@ EnsureConsoleInputRestored();
                 cmd = cmd.Trim();
                 try
                 {
-                    var pwshCmd = BashTranspiler.Transpile(cmd);
+                    // PROMPT_COMMAND is the same string every prompt — an ideal in-memory cache hit.
+                    var pwshCmd = TranspileCache.GetOrTranspileMemory(cmd);
                     await worker.ExecuteAsync(pwshCmd, CancellationToken.None);
                 }
                 catch (Exception ex) { Console.Error.WriteLine($"[ps-bash] warning: PROMPT_COMMAND failed: {ex.Message}"); }
@@ -1100,7 +1103,9 @@ EnsureConsoleInputRestored();
         string pwshCommand;
         try
         {
-            pwshCommand = BashTranspiler.Transpile(filtered.ToString());
+            // rc / sourced files are stable across sessions — cache the transpile on disk so startup
+            // (~/.psbashrc on every launch) and a re-sourced file skip parse+emit.
+            pwshCommand = TranspileCache.GetOrTranspileFile(filtered.ToString());
         }
         catch (ParseException ex)
         {

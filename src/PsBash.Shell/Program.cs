@@ -147,7 +147,9 @@ if (shellArgs.ScriptPath is not null)
     string? pwshScriptCommand;
     try
     {
-        pwshScriptCommand = BashTranspiler.Transpile(scriptContent);
+        // Script files are stable across runs — cache the transpile on disk (keyed by content
+        // hash + build + path mode) so re-running the same script skips parse+emit.
+        pwshScriptCommand = TranspileCache.GetOrTranspileFile(scriptContent);
     }
     catch (ParseException ex)
     {
