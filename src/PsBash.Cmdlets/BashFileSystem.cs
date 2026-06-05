@@ -96,34 +96,32 @@ public static class BashFileSystem
             using var reader = new StreamReader(
                 fs, Encoding.UTF8, detectEncodingFromByteOrderMarks: true);
 
+            // Scan each buffer chunk for '\n' and BULK-append the segment between
+            // newlines (one Append per line, not per char — the per-char version
+            // was 6× slower than ReadAllText+Split on a 95 MB file). A '\r'
+            // immediately before '\n' is dropped (CRLF→LF); a lone '\r' stays in
+            // the line. CRLF straddling a chunk boundary is handled: the '\r' is
+            // carried in `sb` and stripped when the next chunk's leading '\n' lands.
             var sb = new StringBuilder(256);
-            var buf = new char[BinaryProbeBytes];
+            var buf = new char[16384];
             int read;
-            bool any = false;
             while ((read = reader.Read(buf, 0, buf.Length)) > 0)
             {
+                int start = 0;
                 for (int i = 0; i < read; i++)
                 {
-                    char c = buf[i];
-                    if (c == '\n')
-                    {
-                        if (sb.Length > 0 && sb[sb.Length - 1] == '\r') sb.Length--;
-                        any = true;
-                        yield return sb.ToString();
-                        sb.Clear();
-                    }
-                    else
-                    {
-                        sb.Append(c);
-                    }
+                    if (buf[i] != '\n') continue;
+                    sb.Append(buf, start, i - start);
+                    if (sb.Length > 0 && sb[sb.Length - 1] == '\r') sb.Length--;
+                    yield return sb.ToString();
+                    sb.Clear();
+                    start = i + 1;
                 }
+                if (start < read) sb.Append(buf, start, read - start);
             }
             // Trailing content with no final newline is the last line. A file that
             // ends in '\n' leaves sb empty here → no spurious trailing "" (parity).
             if (sb.Length > 0) yield return sb.ToString();
-            // `any` keeps the empty-file case (no lines) distinct from a single
-            // empty line — both already fall out correctly above.
-            _ = any;
         }
     }
 
