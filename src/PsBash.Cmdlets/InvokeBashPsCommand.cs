@@ -80,6 +80,24 @@ public sealed class InvokeBashPsCommand : PSCmdlet
     public string[]? Arguments { get; set; }
 
     private static long s_totalMemBytes = 0;
+    private static int s_currentSessionId = -1;
+
+    /// <summary>
+    /// The current process's Windows session id, cached. Calling
+    /// <c>Process.GetCurrentProcess().SessionId</c> allocates a fresh Process and
+    /// re-queries the session every time — doing that once PER enumerated process
+    /// (the entry loop runs for every PID) cost ~3s for ~400 processes. Caching it
+    /// makes that comparison ~30ms total.
+    /// </summary>
+    private static int CurrentSessionId()
+    {
+        if (s_currentSessionId < 0)
+        {
+            try { s_currentSessionId = Process.GetCurrentProcess().SessionId; }
+            catch { s_currentSessionId = 0; }
+        }
+        return s_currentSessionId;
+    }
 
     protected override void EndProcessing()
     {
@@ -247,21 +265,34 @@ public sealed class InvokeBashPsCommand : PSCmdlet
                 procs = Array.Empty<Process>();
             }
 
-            // Windows batch metadata. GetOwner() on each Win32_Process is the
-            // slow part (per-process WMI RPC roundtrip — 5s+ for ~200 procs).
-            // Skip the owner lookup unless the requested format actually
-            // needs a user column: `aux`, `-f` (full), or a custom -o spec
-            // mentioning user/ruser/euser.
+            // Windows batch metadata via Win32_Process CIM. TWO costs, both gated:
+            //   * the CIM query itself (CommandLine + ParentProcessId for every
+            //     process) is ~seconds, and
+            //   * GetOwner() per process (for a user column) is a per-process WMI
+            //     RPC roundtrip — 5s+ for ~200 procs.
+            // Default `ps`, `-e`, and `--sort pid` show only PID/TTY/TIME/NAME —
+            // the command NAME comes from System.Diagnostics.Process, PID/sort
+            // don't need CIM — so skip the whole query unless the output actually
+            // needs the full command line, the parent PID, or a user column. This
+            // takes a default Windows `ps` from ~4s to well under a second.
             Dictionary<int, (string CommandLine, string User, int PPID)>? winLookup = null;
             if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows) && procs.Length > 0)
             {
-                bool needUser = bsdAux || fullFormat ||
-                    (customFormat != null &&
-                     (customFormat.Contains("user", StringComparison.OrdinalIgnoreCase) ||
-                      customFormat.Contains("ruser", StringComparison.OrdinalIgnoreCase) ||
-                      customFormat.Contains("euser", StringComparison.OrdinalIgnoreCase))) ||
-                    filterUser != null;
-                winLookup = BuildWindowsCimLookup(needUser);
+                var cols = customFormat?.Split(',').Select(c => c.Trim().ToLowerInvariant()).ToArray();
+                bool ColIs(params string[] names) => cols != null && cols.Any(names.Contains);
+
+                bool needUser = bsdAux || fullFormat || filterUser != null
+                    || string.Equals(sortKey, "user", StringComparison.OrdinalIgnoreCase)
+                    || ColIs("user", "ruser", "euser");
+                bool needCmdLine = bsdAux || fullFormat || ColIs("args", "cmd", "command");
+                bool needPpid = fullFormat
+                    || string.Equals(sortKey, "ppid", StringComparison.OrdinalIgnoreCase)
+                    || ColIs("ppid");
+
+                if (needUser || needCmdLine || needPpid)
+                {
+                    winLookup = BuildWindowsCimLookup(needUser);
+                }
             }
             // macOS batch metadata
             Dictionary<int, (string User, int PPID, string TTY)>? macLookup = null;
@@ -682,7 +713,7 @@ public sealed class InvokeBashPsCommand : PSCmdlet
             {
                 try
                 {
-                    if (p.SessionId == Process.GetCurrentProcess().SessionId)
+                    if (p.SessionId == CurrentSessionId())
                         userName = Environment.UserName;
                 }
                 catch { }
@@ -709,7 +740,10 @@ public sealed class InvokeBashPsCommand : PSCmdlet
         string statStr = "S";
         try
         {
-            if (!p.Responding && !RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
+            // `!IsWindows` first so Windows short-circuits BEFORE p.Responding —
+            // Responding pumps a window message per process (~170ms for ~400) and
+            // its result is discarded on Windows anyway (the 'D' state is *nix-only).
+            if (!RuntimeInformation.IsOSPlatform(OSPlatform.Windows) && !p.Responding)
                 statStr = "D";
             else if (p.Threads.Count > 1) statStr = "Sl";
         }
