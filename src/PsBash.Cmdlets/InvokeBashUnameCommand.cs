@@ -54,6 +54,7 @@ public sealed class InvokeBashUnameCommand : PSCmdlet
     {
         var args = Arguments ?? Array.Empty<string>();
 
+        FileSystemHelpers.SetLastExitCode(this, 0);
         if (FileSystemHelpers.TryHandleVersion(this, "uname", args)) return;
         if (Array.IndexOf(args, "--help") >= 0)
         {

@@ -78,6 +78,7 @@ public sealed class InvokeBashTestCommand : PSCmdlet
     {
         var raw = Arguments ?? Array.Empty<string>();
 
+        FileSystemHelpers.SetLastExitCode(this, 0);
         if (FileSystemHelpers.TryHandleVersion(this, "test", raw)) return;
         if (Array.IndexOf(raw, "--help") >= 0)
         {

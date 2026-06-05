@@ -58,6 +58,7 @@ public sealed class InvokeBashPwdCommand : PSCmdlet
     {
         var args = Arguments ?? Array.Empty<string>();
 
+        FileSystemHelpers.SetLastExitCode(this, 0);
         if (FileSystemHelpers.TryHandleVersion(this, "pwd", args)) return;
         if (Array.IndexOf(args, "--help") >= 0)
         {

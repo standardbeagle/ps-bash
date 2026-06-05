@@ -70,6 +70,7 @@ public sealed class InvokeBashSplitCommand : PSCmdlet
     {
         var args = Arguments ?? Array.Empty<string>();
 
+        FileSystemHelpers.SetLastExitCode(this, 0);
         if (FileSystemHelpers.TryHandleVersion(this, "split", args)) return;
         if (Array.IndexOf(args, "--help") >= 0)
         {

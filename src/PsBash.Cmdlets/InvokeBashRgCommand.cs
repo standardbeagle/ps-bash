@@ -107,6 +107,7 @@ public sealed class InvokeBashRgCommand : PSCmdlet
     {
         var args = Arguments ?? Array.Empty<string>();
 
+        FileSystemHelpers.SetLastExitCode(this, 0);
         if (FileSystemHelpers.TryHandleVersion(this, "rg", args)) return;
         if (Array.IndexOf(args, "--help") >= 0)
         {

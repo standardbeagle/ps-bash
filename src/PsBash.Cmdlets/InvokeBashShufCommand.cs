@@ -90,6 +90,7 @@ public sealed class InvokeBashShufCommand : PSCmdlet
     {
         var rawArgs = Arguments ?? Array.Empty<string>();
 
+        FileSystemHelpers.SetLastExitCode(this, 0);
         if (FileSystemHelpers.TryHandleVersion(this, "shuf", rawArgs)) return;
         if (Array.IndexOf(rawArgs, "--help") >= 0)
         {

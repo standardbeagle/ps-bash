@@ -69,6 +69,7 @@ public sealed class InvokeBashCommandCommand : PSCmdlet
     {
         var args = Arguments ?? Array.Empty<string>();
 
+        FileSystemHelpers.SetLastExitCode(this, 0);
         if (FileSystemHelpers.TryHandleVersion(this, "command", args)) return;
         if (Array.IndexOf(args, "--help") >= 0)
         {

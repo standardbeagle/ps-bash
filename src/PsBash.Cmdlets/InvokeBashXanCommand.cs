@@ -111,6 +111,7 @@ public sealed class InvokeBashXanCommand : PSCmdlet
         }
         var args = flat.ToArray();
 
+        FileSystemHelpers.SetLastExitCode(this, 0);
         if (FileSystemHelpers.TryHandleVersion(this, "xan", args)) return;
         if (Array.IndexOf(args, "--help") >= 0)
         {

@@ -42,6 +42,7 @@ public sealed class InvokeBashTputCommand : PSCmdlet
     {
         var args = Arguments ?? Array.Empty<string>();
 
+        FileSystemHelpers.SetLastExitCode(this, 0);
         if (FileSystemHelpers.TryHandleVersion(this, "tput", args)) return;
         if (Array.IndexOf(args, "--help") >= 0)
         {

@@ -48,6 +48,20 @@ public class InvokeBashFileSystemMutatorTests : IDisposable, IClassFixture<Share
     private string Q(string path) => "'" + path.Replace("'", "''") + "'";
 
     [Theory]
+    [InlineData("Invoke-BashPwd")]
+    [InlineData("Invoke-BashWhoami")]
+    [InlineData("Invoke-BashHostname")]
+    [InlineData("Invoke-BashLs")]
+    public void SuccessfulCommand_ResetsStaleExitCode(string cmdlet)
+    {
+        // Bash sets $? on EVERY command; a successful cmdlet must not leak the prior command's exit
+        // code. Regression for `nonexistent; pwd` reporting 127 (and the Bash-tool wrapper's trailing
+        // pwd surfacing a stale 127).
+        var lines = Run($"$global:LASTEXITCODE = 127; {cmdlet} *> $null; $global:LASTEXITCODE");
+        Assert.Equal("0", lines[^1]);
+    }
+
+    [Theory]
     [InlineData("Invoke-BashCat", "cat")]
     [InlineData("Invoke-BashLs", "ls")]
     [InlineData("Invoke-BashRm", "rm")]
