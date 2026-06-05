@@ -3,7 +3,8 @@
     "allow": [
       "PowerShell(git *)",
       "Bash(git commit *)",
-      "Bash(rm .git/COMMIT_MSG.txt)"
+      "Bash(rm .git/COMMIT_MSG.txt)",
+      "Bash(dotnet restore *)"
     ]
   }
 }
