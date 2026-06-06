@@ -1320,7 +1320,7 @@ public class PsEmitterTests
         var result = PsEmitter.Transpile("if cmd; then echo yes; fi");
 
         // A command condition tests its EXIT CODE (bash semantics), not its output truthiness.
-        Assert.Equal("if ((& { [void](cmd); $LASTEXITCODE -eq 0 })) { Invoke-BashEcho yes }", result);
+        Assert.Equal("if ((& { [void](cmd); $global:LASTEXITCODE -eq 0 })) { Invoke-BashEcho yes }", result);
     }
 
     [Fact]
@@ -1328,7 +1328,19 @@ public class PsEmitterTests
     {
         var result = PsEmitter.Transpile("if cmd; then a; else b; fi");
 
-        Assert.Equal("if ((& { [void](cmd); $LASTEXITCODE -eq 0 })) { a } else { b }", result);
+        Assert.Equal("if ((& { [void](cmd); $global:LASTEXITCODE -eq 0 })) { a } else { b }", result);
+    }
+
+    [Fact]
+    public void Transpile_IfNegatedCommandCondition_SuppressesOutputWithVoid()
+    {
+        // Regression: a negated-pipeline condition (`if ! cmd`) must wrap the command in
+        // [void]. Without it, `& { cmd; $global:LASTEXITCODE -ne 0 }` returns the command's
+        // OUTPUT alongside the boolean — a 2-element array PowerShell reads as truthy — so the
+        // condition silently inverts (`if ! echo X; then A; else B` ran A and swallowed X).
+        var result = PsEmitter.Transpile("if ! cmd; then a; else b; fi");
+
+        Assert.Equal("if ((& { [void](cmd); $global:LASTEXITCODE -ne 0 })) { a } else { b }", result);
     }
 
     [Fact]
@@ -1336,7 +1348,7 @@ public class PsEmitterTests
     {
         var result = PsEmitter.Transpile("if cmd1; then a; elif cmd2; then b; else c; fi");
 
-        Assert.Equal("if ((& { [void](cmd1); $LASTEXITCODE -eq 0 })) { a } elseif ((& { [void](cmd2); $LASTEXITCODE -eq 0 })) { b } else { c }", result);
+        Assert.Equal("if ((& { [void](cmd1); $global:LASTEXITCODE -eq 0 })) { a } elseif ((& { [void](cmd2); $global:LASTEXITCODE -eq 0 })) { b } else { c }", result);
     }
 
     [Fact]
@@ -1352,7 +1364,7 @@ public class PsEmitterTests
     {
         var result = PsEmitter.Transpile("if cmd1; then if cmd2; then inner; fi; fi");
 
-        Assert.Equal("if ((& { [void](cmd1); $LASTEXITCODE -eq 0 })) { if ((& { [void](cmd2); $LASTEXITCODE -eq 0 })) { inner } }", result);
+        Assert.Equal("if ((& { [void](cmd1); $global:LASTEXITCODE -eq 0 })) { if ((& { [void](cmd2); $global:LASTEXITCODE -eq 0 })) { inner } }", result);
     }
 
     [Fact]
@@ -1368,7 +1380,7 @@ public class PsEmitterTests
     {
         var result = PsEmitter.Transpile("if cmd; then a; b; fi");
 
-        Assert.Equal("if ((& { [void](cmd); $LASTEXITCODE -eq 0 })) { a; b }", result);
+        Assert.Equal("if ((& { [void](cmd); $global:LASTEXITCODE -eq 0 })) { a; b }", result);
     }
 
     [Fact]
@@ -1631,7 +1643,7 @@ public class PsEmitterTests
     {
         var result = PsEmitter.Transpile("while cmd; do body; done");
 
-        Assert.Equal("$__psbash_iter = 0; while ((& { [void](cmd); $LASTEXITCODE -eq 0 })) { if (++$__psbash_iter -gt ($env:PSBASH_MAX_ITERATIONS ?? 100000)) { throw \"ps-bash: loop iteration limit exceeded ($(($env:PSBASH_MAX_ITERATIONS ?? 100000)))\" }; body }", result);
+        Assert.Equal("$__psbash_iter = 0; while ((& { [void](cmd); $global:LASTEXITCODE -eq 0 })) { if (++$__psbash_iter -gt ($env:PSBASH_MAX_ITERATIONS ?? 100000)) { throw \"ps-bash: loop iteration limit exceeded ($(($env:PSBASH_MAX_ITERATIONS ?? 100000)))\" }; body }", result);
     }
 
     [Fact]
@@ -1639,7 +1651,7 @@ public class PsEmitterTests
     {
         var result = PsEmitter.Transpile("until cmd; do body; done");
 
-        Assert.Equal("$__psbash_iter = 0; while (-not ((& { [void](cmd); $LASTEXITCODE -eq 0 }))) { if (++$__psbash_iter -gt ($env:PSBASH_MAX_ITERATIONS ?? 100000)) { throw \"ps-bash: loop iteration limit exceeded ($(($env:PSBASH_MAX_ITERATIONS ?? 100000)))\" }; body }", result);
+        Assert.Equal("$__psbash_iter = 0; while (-not ((& { [void](cmd); $global:LASTEXITCODE -eq 0 }))) { if (++$__psbash_iter -gt ($env:PSBASH_MAX_ITERATIONS ?? 100000)) { throw \"ps-bash: loop iteration limit exceeded ($(($env:PSBASH_MAX_ITERATIONS ?? 100000)))\" }; body }", result);
     }
 
     [Fact]

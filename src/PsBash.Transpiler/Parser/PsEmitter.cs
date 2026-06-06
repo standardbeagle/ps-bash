@@ -804,7 +804,7 @@ public static class PsEmitter
         // drained explicitly via `$input`. Without it the chain got zero input and the leading
         // ForEach-Object ran once with a null `$_`, hitting "Cannot index into a null array" on the
         // property probe. The `$null -ne $_` guard makes that probe null-safe regardless.
-        return $"$input | ForEach-Object {{ if ($null -ne $_ -and $_.PSObject.Properties['BashText']) {{ $_.BashText }} else {{ \"$_\" }} }} | ForEach-Object {{ ($_ -replace \"`n$\",\"\") -split \"`n\" }} | ForEach-Object {{ {bodyText} }}";
+        return $"$input | ForEach-Object {{ {PsBuild.NullSafeBashText} }} | ForEach-Object {{ ($_ -replace \"`n$\",\"\") -split \"`n\" }} | ForEach-Object {{ {bodyText} }}";
     }
 
     private static string? ExtractArithVar(string init)
@@ -951,7 +951,7 @@ public static class PsEmitter
         if (cond is Command.Pipeline { Negated: true } negPipeline)
         {
             var unnegated = negPipeline with { Negated = false };
-            return $"(& {{ {EmitPipeline(unnegated)}; $global:LASTEXITCODE -ne 0 }})";
+            return PsBuild.ExitCodeTest(EmitPipeline(unnegated), negate: true);
         }
 
         // A simple command or pipeline as a condition: bash tests its EXIT CODE, not its output.
@@ -989,11 +989,11 @@ public static class PsEmitter
         if (cmd is Command.AndOrList nested)
             return EmitConditionAndOrList(nested);
 
-        // General command: run it and evaluate LASTEXITCODE.
-        // Wrap in a subexpression so the command's output does not pollute the
-        // boolean result.  [void] suppresses pipeline objects; the last statement
-        // ($LASTEXITCODE -eq 0) becomes the subexpression value.
-        return $"(& {{ [void]({Emit(cmd)}); $LASTEXITCODE -eq 0 }})";
+        // General command: run it and evaluate the exit code (bash semantics).
+        // PsBuild.ExitCodeTest wraps the command in [void](...) so its output does not
+        // pollute the boolean — without that the scriptblock returns the output objects
+        // alongside the boolean and PowerShell reads the array as truthy.
+        return PsBuild.ExitCodeTest(Emit(cmd), negate: false);
     }
 
     /// <summary>
@@ -1023,7 +1023,7 @@ public static class PsEmitter
     // Callers needing the bare boolean expression (conditions, && / || chains) use EmitBoolExprInner.
     private static string EmitBoolExpr(Command.BoolExpr expr)
     {
-        return $"$(if (({EmitBoolExprInner(expr)})) {{ $global:LASTEXITCODE = 0 }} else {{ $global:LASTEXITCODE = 1 }})";
+        return PsBuild.SilentExitFromBool("(" + EmitBoolExprInner(expr) + ")");
     }
 
     private static string EmitBoolExprInner(Command.BoolExpr expr)
@@ -1496,7 +1496,7 @@ public static class PsEmitter
                             if (emitted.Length > 0 && emitted[0] is '\'' or '"' or '$' or '(' or '@')
                                 return emitted;
                             // Bare literal — wrap in single quotes.
-                            return "'" + emitted.Replace("'", "''") + "'";
+                            return PsBuild.SingleQuote(emitted);
                         }));
                         specialResult = $"$global:BashPositional = @({items})";
                     }
@@ -1912,11 +1912,11 @@ public static class PsEmitter
             if (part is WordPart.DoubleQuoted dq)
                 AppendDoubleQuotedInner(sb, dq.Parts);
             else if (part is WordPart.SingleQuoted sq)
-                sb.Append(sq.Value.Replace("`", "``").Replace("$", "`$").Replace("\"", "`\""));
+                sb.Append(PsBuild.EscapeForDoubleQuote(sq.Value));
             else if (part is WordPart.AnsiCQuoted aq)
-                sb.Append(ExpandAnsiCEscapes(aq.Value).Replace("`", "``").Replace("$", "`$").Replace("\"", "`\""));
+                sb.Append(PsBuild.EscapeForDoubleQuote(ExpandAnsiCEscapes(aq.Value)));
             else if (part is WordPart.Literal lit)
-                sb.Append(lit.Value.Replace("$", "`$").Replace("\"", "`\""));
+                sb.Append(PsBuild.EscapeForDoubleQuote(lit.Value));
             else
                 sb.Append(EmitWordPart(part));
         }
@@ -2127,7 +2127,7 @@ public static class PsEmitter
     /// (Directive 12: a payload like $'$(rm)' becomes the literal text, never code).
     /// </summary>
     private static string EmitAnsiCQuoted(WordPart.AnsiCQuoted aq)
-        => "'" + ExpandAnsiCEscapes(aq.Value).Replace("'", "''") + "'";
+        => PsBuild.SingleQuote(ExpandAnsiCEscapes(aq.Value));
 
     /// <summary>
     /// Expand bash ANSI-C ($'...') escape sequences into their literal characters.
@@ -2462,13 +2462,7 @@ public static class PsEmitter
                 "word; guard with IsPureUnquotedVarWord."),
         };
 
-        // The whole if-expression is wrapped in @(...): assigning a bare
-        // `if (...) { @() }` to a variable collapses the empty branch to $null
-        // (the statement produces nothing), and splatting $null injects one
-        // spurious empty argument. @(...) forces an array context so the empty
-        // branch stays an empty array and @-splatting it contributes nothing.
-        return $"@(if ([string]::IsNullOrEmpty({varRef})) {{ @() }} " +
-               $"else {{ @({varRef} -split '\\s+') }})";
+        return PsBuild.WordSplitArray(varRef);
     }
 
     /// <summary>
@@ -2777,9 +2771,9 @@ public static class PsEmitter
                 // — the parser consumed the backslash and stored only the escaped char (see
                 // BashParser.Words ParseDoubleQuoted). In a PS double-quoted string `$` starts
                 // variable expansion, `"` ends the string, and backtick is the escape char, so
-                // each must be backtick-escaped. Backtick first (it is introduced by the other
-                // two replacements). Mirrors the SingleQuoted branch of FlattenPartsToDoubleQuotedString.
-                sb.Append(lit.Value.Replace("`", "``").Replace("$", "`$").Replace("\"", "`\""));
+                // each must be backtick-escaped. PsBuild.EscapeForDoubleQuote does this in the
+                // load-bearing order (backtick first). Mirrors FlattenPartsToDoubleQuotedString.
+                sb.Append(PsBuild.EscapeForDoubleQuote(lit.Value));
             }
             else
                 sb.Append(EmitWordPart(part));
@@ -2863,7 +2857,7 @@ public static class PsEmitter
                 // statement form for a standalone BoolExpr) — this site supplies its own exit-code
                 // wrapper below.
                 var boolText = "(" + EmitBoolExprInner(boolExprInChain) + ")";
-                sb.Append($"$(if ({boolText}) {{ $global:LASTEXITCODE = 0 }} else {{ $global:LASTEXITCODE = 1; Write-Error '' -ErrorAction SilentlyContinue }})");
+                sb.Append(PsBuild.SetExitFromBool(boolText));
             }
             // ShAssignment in && / || chains: wrap so PS doesn't output the value.
             // A multi-pair assignment (e.g. `TEMP=x TMP=y`, as Claude Code's Bash
@@ -2875,9 +2869,7 @@ public static class PsEmitter
             else if (cmd is Command.ShAssignment)
             {
                 var assignText = Emit(cmd);
-                sb.Append(assignText.Contains("; ", StringComparison.Ordinal)
-                    ? $"[void]$({assignText})"
-                    : $"[void]({assignText})");
+                sb.Append(PsBuild.VoidStatement(assignText));
             }
             else if (cmd is Command.Pipeline { Negated: true } negPipelineInChain)
             {
@@ -2886,7 +2878,7 @@ public static class PsEmitter
                 // Use Write-Error to set $?=false when negation yields failure so the
                 // chain operators observe the correct success/failure state.
                 var unnegated = negPipelineInChain with { Negated = false };
-                sb.Append($"$(if ((& {{ {EmitPipeline(unnegated)}; $global:LASTEXITCODE -ne 0 }})) {{ $global:LASTEXITCODE = 0 }} else {{ $global:LASTEXITCODE = 1; Write-Error '' -ErrorAction SilentlyContinue }})");
+                sb.Append(PsBuild.SetExitFromBool(PsBuild.ExitCodeTest(EmitPipeline(unnegated), negate: true)));
             }
             else if (cmd is Command.Pipeline pipeline)
             {
@@ -2900,7 +2892,7 @@ public static class PsEmitter
                 // calls Write-Error. A $(& { ... }) wrapper does NOT propagate $?.
                 var pipelineText = EmitPipeline(pipeline);
                 sb.Append(pipelineText);
-                sb.Append("; $(if ($global:LASTEXITCODE -ne 0) { Write-Error '' -ErrorAction SilentlyContinue })");
+                sb.Append("; " + PsBuild.SignalFailIfNonZero());
             }
             else if (cmd is Command.Simple simple)
             {
@@ -3089,8 +3081,7 @@ public static class PsEmitter
             "} else { Write-Error -Message (\"cd: \" + $__psbash_cd_target + \": No such file or directory\") -ErrorAction Continue; $global:LASTEXITCODE = 1 }";
     }
 
-    private static string QuotePsString(string value)
-        => "'" + value.Replace("'", "''") + "'";
+    private static string QuotePsString(string value) => PsBuild.SingleQuote(value);
 
     /// <summary>
     /// Tries to emit a mapped PowerShell equivalent for known bash pipe-target commands.

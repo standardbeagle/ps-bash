@@ -239,34 +239,9 @@ public sealed class InvokeBashRmCommand : PSCmdlet
 
             try
             {
-                if (isDir)
-                {
-                    try
-                    {
-                        Directory.Delete(target, recursive: true);
-                    }
-                    catch (UnauthorizedAccessException)
-                    {
-                        // A read-only file/dir in the tree makes the native recursive delete throw on
-                        // Windows (e.g. .git pack/object files, some node_modules), even though
-                        // non-interactive `rm` should remove it. Retry clearing the read-only bit as
-                        // we go. Linux unlink doesn't need this (dir-write suffices), so the bit is
-                        // simply absent there and this branch rarely fires.
-                        ForceDeleteDirectory(target);
-                    }
-                }
-                else
-                {
-                    try
-                    {
-                        File.Delete(target);
-                    }
-                    catch (UnauthorizedAccessException)
-                    {
-                        ClearReadOnly(target);
-                        File.Delete(target);
-                    }
-                }
+                // Shared OS-interface force-delete: native recursive delete with a
+                // read-only-clearing fallback for Windows (.git packs, node_modules).
+                FileSystemHelpers.DeleteEntryForce(target, isDir);
             }
             catch (Exception ex)
             {
@@ -278,39 +253,5 @@ public sealed class InvokeBashRmCommand : PSCmdlet
         }
 
         if (hadError) FileSystemHelpers.SetLastExitCode(this, 1);
-    }
-
-    /// <summary>
-    /// Recursively delete <paramref name="dir"/> bottom-up, clearing the read-only attribute on each
-    /// entry first. Fallback for when the native <see cref="Directory.Delete(string,bool)"/> throws
-    /// <see cref="UnauthorizedAccessException"/> on a read-only descendant (common on Windows). Uses
-    /// the array <c>GetFiles</c>/<c>GetDirectories</c> (safe to delete during iteration) — this is the
-    /// rare recovery path, not the hot one, so the extra arrays are acceptable.
-    /// </summary>
-    private static void ForceDeleteDirectory(string dir)
-    {
-        foreach (var file in Directory.GetFiles(dir))
-        {
-            ClearReadOnly(file);
-            File.Delete(file);
-        }
-        foreach (var sub in Directory.GetDirectories(dir))
-        {
-            ForceDeleteDirectory(sub);
-        }
-        ClearReadOnly(dir);
-        Directory.Delete(dir, recursive: false);
-    }
-
-    /// <summary>Clear the read-only attribute on <paramref name="path"/> if set. Best-effort.</summary>
-    private static void ClearReadOnly(string path)
-    {
-        try
-        {
-            var attrs = File.GetAttributes(path);
-            if ((attrs & FileAttributes.ReadOnly) != 0)
-                File.SetAttributes(path, attrs & ~FileAttributes.ReadOnly);
-        }
-        catch { /* best-effort: if attrs can't be read/set, let the delete surface the real error */ }
     }
 }

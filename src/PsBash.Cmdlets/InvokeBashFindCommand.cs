@@ -502,8 +502,19 @@ public sealed class InvokeBashFindCommand : PSCmdlet
             {
                 try
                 {
-                    if (m.IsDir) System.IO.Directory.Delete(m.ItemPath, recursive: false);
-                    else System.IO.File.Delete(m.ItemPath);
+                    if (m.IsDir)
+                    {
+                        // Non-recursive on purpose: bash `find -delete` errors on a non-empty
+                        // directory (matched contents are deleted first, depth-first). Clear the
+                        // read-only bit first so an empty-but-read-only dir still deletes on Windows.
+                        FileSystemHelpers.ClearReadOnly(m.ItemPath);
+                        System.IO.Directory.Delete(m.ItemPath, recursive: false);
+                    }
+                    else
+                    {
+                        // Read-only-aware file delete (Windows read-only bit).
+                        FileSystemHelpers.DeleteFileForce(m.ItemPath);
+                    }
                 }
                 catch (Exception ex)
                 {

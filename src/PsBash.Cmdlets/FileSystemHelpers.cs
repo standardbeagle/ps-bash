@@ -1,3 +1,4 @@
+using System.IO;
 using System.Management.Automation;
 using PsBash.Core;
 
@@ -275,5 +276,92 @@ internal static class FileSystemHelpers
             WriteBashError(cmdlet, $"{cmd}: invalid option -- '{bad}'");
         }
         SetLastExitCode(cmdlet, 2);
+    }
+
+    // ───────────────────────── Destructive filesystem ops (OS interface) ─────────────────────────
+    //
+    // The ONE place that knows how to force-delete on every platform. The native
+    // Directory.Delete / File.Delete throw UnauthorizedAccessException on a read-only
+    // descendant on Windows (.git pack/object files, some node_modules), even though a
+    // bash force-delete (rm -rf, mv overwrite, cp -rf overwrite, find -delete) should
+    // remove it. Every destructive cmdlet routes through these so the read-only fallback
+    // is fixed once, not re-derived (or forgotten) per command. Linux unlink needs no
+    // fallback — dir-write suffices, the bit is absent, and the fast native path wins.
+
+    /// <summary>
+    /// Recursively delete <paramref name="dir"/>. Tries the fast native recursive delete
+    /// first; on <see cref="UnauthorizedAccessException"/> (a read-only descendant on
+    /// Windows) falls back to a bottom-up walk that clears the read-only bit on each entry.
+    /// </summary>
+    public static void DeleteDirectoryForce(string dir)
+    {
+        try
+        {
+            Directory.Delete(dir, recursive: true);
+        }
+        catch (UnauthorizedAccessException)
+        {
+            ForceDeleteDirectoryRecursive(dir);
+        }
+    }
+
+    /// <summary>
+    /// Delete a single file. On <see cref="UnauthorizedAccessException"/> (Windows
+    /// read-only bit) clears the attribute and retries once.
+    /// </summary>
+    public static void DeleteFileForce(string path)
+    {
+        try
+        {
+            File.Delete(path);
+        }
+        catch (UnauthorizedAccessException)
+        {
+            ClearReadOnly(path);
+            File.Delete(path);
+        }
+    }
+
+    /// <summary>
+    /// Delete a single filesystem entry — directory (recursive, force) or file — choosing
+    /// the right force-delete primitive. Convenience for callers (e.g. <c>find -delete</c>)
+    /// that hold a mixed list of matched paths.
+    /// </summary>
+    public static void DeleteEntryForce(string path, bool isDirectory)
+    {
+        if (isDirectory) DeleteDirectoryForce(path);
+        else DeleteFileForce(path);
+    }
+
+    /// <summary>
+    /// Bottom-up recovery walk: clear the read-only attribute on each entry before deleting.
+    /// Uses the array <c>GetFiles</c>/<c>GetDirectories</c> (safe to delete during iteration)
+    /// — this is the rare recovery path, not the hot one, so the extra arrays are acceptable.
+    /// </summary>
+    private static void ForceDeleteDirectoryRecursive(string dir)
+    {
+        foreach (var file in Directory.GetFiles(dir))
+        {
+            ClearReadOnly(file);
+            File.Delete(file);
+        }
+        foreach (var sub in Directory.GetDirectories(dir))
+        {
+            ForceDeleteDirectoryRecursive(sub);
+        }
+        ClearReadOnly(dir);
+        Directory.Delete(dir, recursive: false);
+    }
+
+    /// <summary>Clear the read-only attribute on <paramref name="path"/> if set. Best-effort.</summary>
+    public static void ClearReadOnly(string path)
+    {
+        try
+        {
+            var attrs = File.GetAttributes(path);
+            if ((attrs & FileAttributes.ReadOnly) != 0)
+                File.SetAttributes(path, attrs & ~FileAttributes.ReadOnly);
+        }
+        catch { /* best-effort: if attrs can't be read/set, let the delete surface the real error */ }
     }
 }

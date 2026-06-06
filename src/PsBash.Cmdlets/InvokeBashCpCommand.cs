@@ -135,7 +135,9 @@ public sealed class InvokeBashCpCommand : PSCmdlet
                 {
                     if (Directory.Exists(targetPath) && force)
                     {
-                        Directory.Delete(targetPath, recursive: true);
+                        // Read-only-aware force delete (Windows .git packs / node_modules)
+                        // — was a plain Directory.Delete that threw on read-only descendants.
+                        FileSystemHelpers.DeleteDirectoryForce(targetPath);
                     }
                     CopyDirectoryRecursive(src, targetPath);
                 }

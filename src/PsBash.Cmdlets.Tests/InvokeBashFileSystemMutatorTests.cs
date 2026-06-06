@@ -297,6 +297,73 @@ public class InvokeBashFileSystemMutatorTests : IDisposable, IClassFixture<Share
     }
 
     [Fact]
+    public void Cp_Recursive_OverwritesReadOnlyTarget()
+    {
+        // Sibling of the rm read-only fix: cp -rf into an existing dir resolves the target to
+        // dst/basename(src) and force-deletes it first when it already exists. A read-only
+        // descendant in that target threw UnauthorizedAccessException on Windows before cp routed
+        // through the shared FileSystemHelpers.DeleteDirectoryForce.
+        var src = Path.Combine(_tmpRoot, "cpsrc");
+        Directory.CreateDirectory(src);
+        File.WriteAllText(Path.Combine(src, "new.txt"), "new");
+
+        // Existing dest dir already holds a "cpsrc" subtree (same basename) with a read-only file.
+        var dst = Path.Combine(_tmpRoot, "cpdst");
+        var collision = Path.Combine(dst, "cpsrc");
+        Directory.CreateDirectory(collision);
+        var ro = Path.Combine(collision, "locked.txt");
+        File.WriteAllText(ro, "old");
+        File.SetAttributes(ro, File.GetAttributes(ro) | FileAttributes.ReadOnly);
+
+        // cp's flag parser matches exact tokens (no bundling), so pass -r -f separately.
+        Run($"Invoke-BashCp -r -f {Q(src)} {Q(dst)}");
+
+        // The read-only target subtree was force-deleted and replaced by the source.
+        Assert.True(File.Exists(Path.Combine(collision, "new.txt")));
+        Assert.False(File.Exists(ro));
+    }
+
+    [Fact]
+    public void Mv_OverwritesReadOnlyTargetDirectory()
+    {
+        // Sibling of the rm read-only fix: mv into an existing dir resolves to dst/basename(src)
+        // and does remove-then-move when it already exists. A read-only descendant in the target
+        // threw on Windows before mv routed through FileSystemHelpers.DeleteDirectoryForce.
+        var src = Path.Combine(_tmpRoot, "mvsrc");
+        Directory.CreateDirectory(src);
+        File.WriteAllText(Path.Combine(src, "moved.txt"), "moved");
+
+        var dst = Path.Combine(_tmpRoot, "mvdst");
+        var collision = Path.Combine(dst, "mvsrc");
+        Directory.CreateDirectory(collision);
+        var ro = Path.Combine(collision, "locked.txt");
+        File.WriteAllText(ro, "old");
+        File.SetAttributes(ro, File.GetAttributes(ro) | FileAttributes.ReadOnly);
+
+        Run($"Invoke-BashMv {Q(src)} {Q(dst)}");
+
+        Assert.True(File.Exists(Path.Combine(collision, "moved.txt")));
+        Assert.False(File.Exists(ro));
+        Assert.False(Directory.Exists(src));
+    }
+
+    [Fact]
+    public void Find_Delete_RemovesReadOnlyFile()
+    {
+        // Sibling of the rm read-only fix: find -delete of a read-only file threw on Windows
+        // before routing through FileSystemHelpers.DeleteFileForce.
+        var dir = Path.Combine(_tmpRoot, "findro");
+        Directory.CreateDirectory(dir);
+        var ro = Path.Combine(dir, "locked.tmp");
+        File.WriteAllText(ro, "x");
+        File.SetAttributes(ro, File.GetAttributes(ro) | FileAttributes.ReadOnly);
+
+        Run($"Invoke-BashFind {Q(dir)} -name '*.tmp' -delete");
+
+        Assert.False(File.Exists(ro));
+    }
+
+    [Fact]
     public void Rm_MissingWithoutF_EmitsError()
     {
         var ghost = Path.Combine(_tmpRoot, "ghost.txt");
