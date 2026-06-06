@@ -22,7 +22,12 @@ internal sealed class CompletionEngine
     private readonly Func<string> _cwd;
     private readonly Func<string?> _lastCommand;
     private readonly IHistoryStore? _history;
-    private readonly IWorker? _worker;
+    private readonly Func<IWorker?> _getWorker;
+
+    // Late-bound worker: null while the runspace is still warming up (startup type-ahead), then the
+    // live worker once ready. Every live-completion path already guards on a null/exited worker and
+    // falls back to the static base set, so completion degrades gracefully during warmup.
+    private IWorker? Worker => _getWorker();
 
     public CompletionEngine(
         IReadOnlyDictionary<string, string> aliases,
@@ -30,12 +35,22 @@ internal sealed class CompletionEngine
         Func<string?> lastCommand,
         IHistoryStore? history,
         IWorker? worker)
+        : this(aliases, cwd, lastCommand, history, () => worker)
+    {
+    }
+
+    public CompletionEngine(
+        IReadOnlyDictionary<string, string> aliases,
+        Func<string> cwd,
+        Func<string?> lastCommand,
+        IHistoryStore? history,
+        Func<IWorker?> worker)
     {
         _aliases = aliases;
         _cwd = cwd;
         _lastCommand = lastCommand;
         _history = history;
-        _worker = worker;
+        _getWorker = worker;
     }
 
     /// <summary>
@@ -69,7 +84,7 @@ internal sealed class CompletionEngine
             }
         }
 
-        if (_worker is not { HasExited: false })
+        if (Worker is not { HasExited: false })
         {
             return baseResults;
         }
@@ -156,7 +171,7 @@ internal sealed class CompletionEngine
         if (cmd is null || IsBashCommand(cmd))
             return Array.Empty<FlagHint>();
 
-        if (_worker is not { HasExited: false })
+        if (Worker is not { HasExited: false })
             return Array.Empty<FlagHint>();
 
         var prefix = token.TrimStart('-');
@@ -206,7 +221,7 @@ internal sealed class CompletionEngine
                 $"Get-Command -Name '{escaped}*' -All -ErrorAction SilentlyContinue " +
                 "| Select-Object -ExpandProperty Name -Unique";
 
-            var raw = await _worker!.QueryAsync(expr, ct).ConfigureAwait(false);
+            var raw = await Worker!.QueryAsync(expr, ct).ConfigureAwait(false);
             if (string.IsNullOrEmpty(raw))
             {
                 return Array.Empty<string>();
@@ -420,7 +435,7 @@ internal sealed class CompletionEngine
     /// </summary>
     private async Task<IReadOnlyList<string>> CompleteValuesViaPsAsync(string cmd, string paramFlag, string token, CancellationToken ct)
     {
-        if (_worker is not ICompletionWorker completer)
+        if (Worker is not ICompletionWorker completer)
         {
             return Array.Empty<string>();
         }
@@ -487,7 +502,7 @@ internal sealed class CompletionEngine
     {
         try
         {
-            var raw = await _worker!.QueryAsync(expr, ct).ConfigureAwait(false);
+            var raw = await Worker!.QueryAsync(expr, ct).ConfigureAwait(false);
             if (string.IsNullOrEmpty(raw))
             {
                 return Array.Empty<string>();

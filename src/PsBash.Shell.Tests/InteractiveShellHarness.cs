@@ -232,6 +232,13 @@ internal sealed class InteractiveShellHarness : IAsyncDisposable
         try
         {
             await harness.WaitForPromptAsync(startTimeout ?? DefaultStartTimeout);
+
+            // Startup type-ahead: the first prompt now appears BEFORE the runspace is executable
+            // (the slow init runs in the background while the prompt accepts type-ahead). Warm it with
+            // a no-op `true` and wait within the generous start timeout, so the runspace-init latency
+            // is absorbed here — not by the tight per-command WaitForPromptAsync timeouts the tests use.
+            await harness.SendLineAsync("true");
+            await harness.WaitForPromptAsync(startTimeout ?? DefaultStartTimeout);
         }
         catch
         {

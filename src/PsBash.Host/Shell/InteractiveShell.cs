@@ -31,12 +31,10 @@ public static class InteractiveShell
     /// this method will not dispose or respawn it. Ctrl+C cancels the in-flight
     /// PS pipeline but keeps the worker alive for the next prompt.
     /// </summary>
-    public static async Task<int> RunAsync(IWorker worker, bool noProfile = false)
+    public static async Task<int> RunAsync(Task<IWorker> workerTask, bool noProfile = false)
     {
         Console.CancelKeyPress += OnCancelKeyPress;
         EnsureVirtualTerminalEnabled();
-
-        using var loading = LoadingIndicator.Start("Loading ps-bash");
 
         var cts = new CancellationTokenSource();
         _currentCts = cts;
@@ -52,15 +50,17 @@ public static class InteractiveShell
         var dbPath = Path.Combine(psbashDir, "history.db");
         _historyStore = new SqliteHistoryStore(dbPath);
 
-        // Initialize LineEditor with history store and the async completion engine. The engine
-        // composes the static TabCompleter base set with live, runspace-backed command-name
-        // completion (auto-loaded cmdlets, dot-sourced functions, module commands) via the worker.
+        // Startup type-ahead: the slow runspace init runs on the launcher's background task; we build
+        // the line editor and draw the prompt NOW so the user can type while it warms up. Completion
+        // uses a late-bound worker accessor (null while warming -> static base set); command EXECUTION
+        // waits on the `ready` gate below.
+        IWorker? readyWorker = null;
         var completionEngine = new CompletionEngine(
             AliasExpander.Aliases,
             cwd: () => _lastDir,
             lastCommand: () => _lastCommand,
             history: _historyStore,
-            worker: worker);
+            worker: () => readyWorker);
         CommandAssistProviderRunner? commandAssistRunner = null;
         string? commandAssistConfigError = null;
         if (Environment.GetEnvironmentVariable("PSBASH_AI_DISABLE") == "1")
@@ -85,20 +85,26 @@ public static class InteractiveShell
                 ? RunCommandAssistWithReviewAsync(commandAssistRunner, request, _lastDir, ct)
                 : throw new CommandAssistProviderException(commandAssistConfigError ?? "AI provider config is unavailable."));
 
-        if (!noProfile)
+        // Readiness gate: finish runspace init, source ~/.psbashrc (so the first PS1 reflects rc),
+        // THEN expose the worker to completion + the prompt. Awaited before each command executes
+        // (instant after the first). Runs concurrently with the prompt + the user's type-ahead.
+        var ready = Task.Run(async () =>
         {
-            loading.Update("Sourcing ~/.psbashrc");
-            if (!await SourceRcFileAsync(worker, cts))
-                return 130;
-        }
-
-        loading.Finish();
+            var w = await workerTask.ConfigureAwait(false);
+            if (!noProfile)
+            {
+                try { await SourceRcFileAsync(w, cts); }
+                catch (OperationCanceledException) { /* Ctrl-C during rc load — proceed to the prompt */ }
+            }
+            readyWorker = w;
+            return w;
+        });
 
         while (true)
         {
             try
             {
-                if (worker.HasExited)
+                if (readyWorker is { HasExited: true })
                 {
                     Console.Error.WriteLine("[ps-bash] worker exited unexpectedly.");
                     if (_historyStore is IDisposable d0) d0.Dispose();
@@ -121,7 +127,9 @@ public static class InteractiveShell
                 EnsureVirtualTerminalEnabled();
                 EnsureConsoleInputRestored();
 
-                var input = await ReadInputAsync(worker);
+                // readyWorker is null while the runspace warms up: ReadInputAsync draws the builtin
+                // prompt and accepts type-ahead; the worker-dependent prompt (PS1) kicks in once ready.
+                var input = await ReadInputAsync(readyWorker);
                 if (input is null)
                 {
                     Console.WriteLine();
@@ -161,6 +169,24 @@ public static class InteractiveShell
                     && BashCompletionRegistry.TryApplyCompleteCommand(trimmed))
                 {
                     continue;
+                }
+
+                // Everything below executes in the runspace, so wait for it to be ready (+ rc
+                // sourced). This is where any residual startup latency is actually paid — but only on
+                // the FIRST command, and only if the user submits before warmup finished. exit / empty
+                // / alias / complete above never reach here, so they work fully during warmup.
+                IWorker worker;
+                try
+                {
+                    worker = await ready;
+                }
+                catch (Exception ex)
+                {
+                    // The background runspace init (or rc sourcing) failed — exit with a diagnostic
+                    // instead of looping on the same failure for every prompt.
+                    Console.Error.WriteLine($"[ps-bash] runspace failed to start: {ex.Message}");
+                    if (_historyStore is IDisposable d) d.Dispose();
+                    return 1;
                 }
 
                 // Interactive `source FILE` / `. FILE`: route the file's
@@ -632,8 +658,20 @@ EnsureConsoleInputRestored();
         catch (Exception) { /* routine: cd target inaccessible; shell continues */ }
     }
 
-    private static async Task<string> BuildPromptAsync(IWorker worker)
+    private static async Task<string> BuildPromptAsync(IWorker? worker)
     {
+        // While the runspace is still warming up (startup type-ahead) there is no worker to query
+        // $env:PS1 from the runspace. But PS1 set in the ENVIRONMENT is already on the host process,
+        // so read it directly — the warm-up prompt then reflects an env-set PS1 immediately (an
+        // rc-file-set PS1 still kicks in once the worker is ready, via the GetPS1Async path below).
+        if (worker is null)
+        {
+            var envPs1 = Environment.GetEnvironmentVariable("PS1");
+            return string.IsNullOrWhiteSpace(envPs1)
+                ? BuildBuiltinPrompt()
+                : ExpandPS1(envPs1.Trim());
+        }
+
         // Check if user has set PS1
         var ps1 = await GetPS1Async(worker);
         if (ps1 is not null)
@@ -879,7 +917,7 @@ EnsureConsoleInputRestored();
         return true;
     }
 
-    private static async Task<string?> ReadInputAsync(IWorker worker)
+    private static async Task<string?> ReadInputAsync(IWorker? worker)
     {
         var prompt = await BuildPromptAsync(worker);
         var line = _lineEditor is not null

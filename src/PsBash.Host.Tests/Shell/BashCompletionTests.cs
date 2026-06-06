@@ -23,7 +23,7 @@ public class BashCompletionTests
         cwd: () => Environment.CurrentDirectory,
         lastCommand: () => null,
         history: null,
-        worker: null);
+        worker: () => null);
 
     // ---- registry parser ------------------------------------------------------------------
 

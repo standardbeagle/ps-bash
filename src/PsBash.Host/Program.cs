@@ -1,3 +1,4 @@
+using PsBash.Core.Runtime;
 using PsBash.Core.Runtime.Ipc;
 using PsBash.Host.Runtime;
 using PsBash.Host.Server;
@@ -43,13 +44,22 @@ internal sealed class Program
             Console.CancelKeyPress += (_, e) => { e.Cancel = true; iCts.Cancel(); };
             using var iDeathWatcher = ParentDeathWatcher.TryCreate(iLauncherPid, iCts);
 
+            // Startup type-ahead: build the SDK runspace (the slow part) on a background thread so the
+            // REPL can draw its prompt and accept keystrokes while it warms up. RunAsync awaits this
+            // task before executing each command; we own its disposal here.
+            var interactiveWorkerTask = Task.Run(() => (IWorker)SdkWorker.Create());
             try
             {
-                await using var interactiveWorker = SdkWorker.Create();
-                return await InteractiveShell.RunAsync(interactiveWorker, noProfile);
+                return await InteractiveShell.RunAsync(interactiveWorkerTask, noProfile);
             }
             finally
             {
+                try
+                {
+                    var w = await interactiveWorkerTask;
+                    if (w is IAsyncDisposable d) await d.DisposeAsync();
+                }
+                catch { /* runspace never came up, or already torn down */ }
                 Environment.SetEnvironmentVariable("PSBASH_INTERACTIVE", priorInteractive);
             }
         }
