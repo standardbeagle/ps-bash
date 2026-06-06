@@ -159,10 +159,16 @@ public class AgentPatternEndToEndTests
     [SkippableFact]
     public async Task CdMissingDirectory_ReturnsNonZeroAndKeepsCwd()
     {
-        var (exitCode, stdout, _) = await RunShellAsync(
-            ["-c", "pwd; cd /definitely/not/ps-bash-here; pwd"]);
+        // cd to a missing dir returns its OWN non-zero exit (verified as the command's last status).
+        var (cdExit, _, _) = await RunShellAsync(["-c", "cd /definitely/not/ps-bash-here"]);
+        Assert.NotEqual(0, cdExit);
 
-        Assert.NotEqual(0, exitCode);
+        // A failed cd keeps the cwd unchanged. Per bash the SHELL exit reflects the LAST command —
+        // here the trailing pwd succeeds, so the run exits 0 (correct). The old assertion of non-zero
+        // relied on a stale-$?-propagation bug where the successful pwd leaked cd's failure code,
+        // since fixed; it is intentionally no longer asserted.
+        var (_, stdout, _) = await RunShellAsync(
+            ["-c", "pwd; cd /definitely/not/ps-bash-here 2>/dev/null; pwd"]);
         var lines = stdout.Replace('\\', '/')
             .Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries);
         Assert.True(lines.Length >= 2);
