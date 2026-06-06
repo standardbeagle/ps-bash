@@ -16,10 +16,10 @@ Two binaries: `ps-bash.exe` launcher (**PsBash.Shell**) talks IPC to `ps-bash-ho
 
 | Project | Role | Key files |
 |---|---|---|
-| **PsBash.Transpiler** | bash → PowerShell front end | `Parser/BashLexer.cs`, `Parser/BashParser{,.Simple,.Words}.cs` (one partial class: spine+compound / simple-command+redirects+heredoc / word decomposition), `Parser/BashToken.cs`, `Parser/Ast/{Commands,Words,Redirects,BashNode}.cs`, `Parser/PsEmitter.cs`, `Transpiler/BashTranspiler.cs` |
+| **PsBash.Transpiler** | bash → PowerShell front end | `Parser/BashLexer.cs`, `Parser/BashParser{,.Simple,.Words}.cs` (one partial class: spine+compound / simple-command+redirects+heredoc / word decomposition), `Parser/BashToken.cs`, `Parser/Ast/{Commands,Words,Redirects,BashNode}.cs`, `Parser/PsEmitter.cs`, `Parser/PsBuild.cs` (PS-text builder: quoting/exit-code/void/splat), `Transpiler/BashTranspiler.cs` |
 | **PsBash.Core** | runtime lib: IPC + module plumbing | `Runtime/IWorker.cs`, `Runtime/IpcWorker.cs`, `Runtime/ModuleExtractor.cs`, `Runtime/OutputCompactor.cs` (compact-output digest), `Runtime/EnvFlags.cs` (shared truthy-env), `Runtime/Ipc/*` (transports, HostProtocol, HostMetadata). Embeds the module + per-TFM Cmdlets DLL as resources. |
 | **PsBash.Host** | in-process SDK runspace + interactive shell | `Runtime/SdkRunspace.cs`, `Runtime/SdkWorker.cs`, `Runtime/ICompletionWorker.cs`, `Resources/SdkRunspaceSetup.ps1`; `Shell/{InteractiveShell,LineEditor,CompletionEngine,TabCompleter,CompletionMerge,AliasExpander,Suggester,CtrlRSearch}.cs`, `Shell/{CommandAssistProvider,CommandAssistReview}.cs` (AI command assist), `FlagSpecs.cs` |
-| **PsBash.Cmdlets** | binary `Invoke-Bash*` cmdlets + `Format-Styled` | `*Command.cs` (one per migrated cmdlet), `FormatStyledCommand.cs`, `BashRuntime.cs`, `styles/*.css` |
+| **PsBash.Cmdlets** | binary `Invoke-Bash*` cmdlets + `Format-Styled` | `*Command.cs` (one per migrated cmdlet), `FormatStyledCommand.cs`, `BashRuntime.cs` (`RunChildProcess` = bounded spawn), `FileSystemHelpers.cs` (OS interface: `Delete*Force`/`ClearReadOnly`, version, exit-code), `styles/*.css` |
 | **PsBash.Module** | psm1 runtime functions (the bulk of `Invoke-Bash*`) | `PsBash.psm1`, `PsBash.psd1`, `BashFlagSpecs.json` (single flag-spec source), `PsBash.Format.ps1xml` |
 | **PsBash.Shell** | AOT launcher / CLI | `Program.cs`, `Args.cs`, `Pty/TerminalMode.cs` |
 | **PsBash.Testing** | shared test harness | `CanonicalEnv`, `PsBashRunner`, `ProcessSpawn` |
@@ -29,6 +29,9 @@ Tests mirror projects: `*.Tests` + `PsBash.Differential.Tests` (bash-oracle), `P
 ## Where to find X
 
 - **Map a bash command → cmdlet** → `PsEmitter.TryEmitMappedCommand` (Transpiler). Passthrough only; flags parsed in the runtime.
+- **Build emitted PowerShell text** (quoting/escaping, exit-code test, `[void]`, subshell, word-split splat, null-safe probe) → `Parser/PsBuild.cs`. NEVER hand-concatenate these in `PsEmitter` — route through `PsBuild` so the seam-escaping/`[void]` fixes stay in one place.
+- **Destructive filesystem op** (delete/overwrite for rm/cp/mv/find) → `FileSystemHelpers.Delete{Directory,File,Entry}Force` / `ClearReadOnly` (Cmdlets). NEVER raw `Directory.Delete`/`File.Delete` on a force path — they throw on Windows read-only descendants.
+- **Spawn a child process** → `BashRuntime.RunChildProcess` (timeout + kill-tree) for buffered shell-outs. Raw `Process.Start` only for streaming/interactive (traceroute/less) that handle `Stopping` themselves.
 - **Implement/Parse a command's flags** → `Invoke-Bash*` in `PsBash.psm1`, or a `*Command.cs` binary cmdlet (Cmdlets).
 - **Bash flag specs (completion)** → ONE source: `PsBash.Module/BashFlagSpecs.json` (host embeds it; psm1 loads it).
 - **Interactive completion** → `Shell/CompletionEngine.cs` (orchestrator) → `TabCompleter` (static base) + runspace queries. Spec: `docs/specs/interactive-completion.md`.
@@ -48,5 +51,6 @@ not auto-loaded.
 
 ## Path-scoped rules (`.claude/rules/`, load by glob)
 
-`parser.md`/`emitter.md` → Transpiler parser/emitter; `runtime.md`/`temp-files.md` → runtime;
-`completion.md` → `Shell/**`; `testing.md`/`qa-rubric.md` → global; `findability.md` → global doctrine.
+`parser.md`/`emitter.md` → Transpiler parser/emitter (`emitter.md` covers `PsBuild.cs`); `runtime.md`/`temp-files.md` → psm1 runtime;
+`os-interface.md` → `Cmdlets/**` (destructive FS + spawn + path helpers); `completion.md` → `Shell/**`;
+`testing.md`/`qa-rubric.md` → global; `findability.md` → global doctrine.
