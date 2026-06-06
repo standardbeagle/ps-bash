@@ -1319,7 +1319,8 @@ public class PsEmitterTests
     {
         var result = PsEmitter.Transpile("if cmd; then echo yes; fi");
 
-        Assert.Equal("if (cmd) { Invoke-BashEcho yes }", result);
+        // A command condition tests its EXIT CODE (bash semantics), not its output truthiness.
+        Assert.Equal("if ((& { [void](cmd); $LASTEXITCODE -eq 0 })) { Invoke-BashEcho yes }", result);
     }
 
     [Fact]
@@ -1327,7 +1328,7 @@ public class PsEmitterTests
     {
         var result = PsEmitter.Transpile("if cmd; then a; else b; fi");
 
-        Assert.Equal("if (cmd) { a } else { b }", result);
+        Assert.Equal("if ((& { [void](cmd); $LASTEXITCODE -eq 0 })) { a } else { b }", result);
     }
 
     [Fact]
@@ -1335,7 +1336,7 @@ public class PsEmitterTests
     {
         var result = PsEmitter.Transpile("if cmd1; then a; elif cmd2; then b; else c; fi");
 
-        Assert.Equal("if (cmd1) { a } elseif (cmd2) { b } else { c }", result);
+        Assert.Equal("if ((& { [void](cmd1); $LASTEXITCODE -eq 0 })) { a } elseif ((& { [void](cmd2); $LASTEXITCODE -eq 0 })) { b } else { c }", result);
     }
 
     [Fact]
@@ -1351,7 +1352,7 @@ public class PsEmitterTests
     {
         var result = PsEmitter.Transpile("if cmd1; then if cmd2; then inner; fi; fi");
 
-        Assert.Equal("if (cmd1) { if (cmd2) { inner } }", result);
+        Assert.Equal("if ((& { [void](cmd1); $LASTEXITCODE -eq 0 })) { if ((& { [void](cmd2); $LASTEXITCODE -eq 0 })) { inner } }", result);
     }
 
     [Fact]
@@ -1367,7 +1368,7 @@ public class PsEmitterTests
     {
         var result = PsEmitter.Transpile("if cmd; then a; b; fi");
 
-        Assert.Equal("if (cmd) { a; b }", result);
+        Assert.Equal("if ((& { [void](cmd); $LASTEXITCODE -eq 0 })) { a; b }", result);
     }
 
     [Fact]
@@ -1630,7 +1631,7 @@ public class PsEmitterTests
     {
         var result = PsEmitter.Transpile("while cmd; do body; done");
 
-        Assert.Equal("$__psbash_iter = 0; while (cmd) { if (++$__psbash_iter -gt ($env:PSBASH_MAX_ITERATIONS ?? 100000)) { throw \"ps-bash: loop iteration limit exceeded ($(($env:PSBASH_MAX_ITERATIONS ?? 100000)))\" }; body }", result);
+        Assert.Equal("$__psbash_iter = 0; while ((& { [void](cmd); $LASTEXITCODE -eq 0 })) { if (++$__psbash_iter -gt ($env:PSBASH_MAX_ITERATIONS ?? 100000)) { throw \"ps-bash: loop iteration limit exceeded ($(($env:PSBASH_MAX_ITERATIONS ?? 100000)))\" }; body }", result);
     }
 
     [Fact]
@@ -1638,7 +1639,7 @@ public class PsEmitterTests
     {
         var result = PsEmitter.Transpile("until cmd; do body; done");
 
-        Assert.Equal("$__psbash_iter = 0; while (-not (cmd)) { if (++$__psbash_iter -gt ($env:PSBASH_MAX_ITERATIONS ?? 100000)) { throw \"ps-bash: loop iteration limit exceeded ($(($env:PSBASH_MAX_ITERATIONS ?? 100000)))\" }; body }", result);
+        Assert.Equal("$__psbash_iter = 0; while (-not ((& { [void](cmd); $LASTEXITCODE -eq 0 }))) { if (++$__psbash_iter -gt ($env:PSBASH_MAX_ITERATIONS ?? 100000)) { throw \"ps-bash: loop iteration limit exceeded ($(($env:PSBASH_MAX_ITERATIONS ?? 100000)))\" }; body }", result);
     }
 
     [Fact]

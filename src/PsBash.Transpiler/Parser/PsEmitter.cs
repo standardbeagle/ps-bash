@@ -949,6 +949,15 @@ public static class PsEmitter
             return $"(& {{ {EmitPipeline(unnegated)}; $global:LASTEXITCODE -ne 0 }})";
         }
 
+        // A simple command or pipeline as a condition: bash tests its EXIT CODE, not its output.
+        // The old `if (cmd)` form tested the command's OUTPUT truthiness, which is wrong for any
+        // silent success — `grep -q`, `cmd >/dev/null` — which produce no output and so were always
+        // treated as false. Route through the exit-code form already used for and-or-list conditions
+        // (output is [void]-suppressed there too, so this is consistent with the existing convention).
+        // (Subshell conditions are handled above; arith `(( ))` keeps its native-bool emission below.)
+        if (cond is Command.Simple or Command.Pipeline)
+            return EmitConditionAsExpr(cond);
+
         return Emit(cond);
     }
 
