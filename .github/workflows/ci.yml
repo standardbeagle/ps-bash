@@ -39,21 +39,25 @@ jobs:
         with:
           dotnet-version: '8.0.x'
 
-      - name: Build PsBash.Cmdlets binary module
+      - name: Build and stage PsBash.Cmdlets binary module (+ deps)
         shell: pwsh
         run: |
-          # The psm1 probes well-known relative paths for PsBash.Cmdlets.dll
-          # so Import-Module PsBash can load the binary cmdlets that many
-          # Invoke-Bash* names now resolve to (REFACTOR-2 migrations).
+          # The psm1 probes $PSScriptRoot for PsBash.Cmdlets.dll and loads it so
+          # Import-Module PsBash can resolve the migrated Invoke-Bash* binary cmdlets.
+          # That assembly in turn depends on PsBash.Transpiler.dll and Parlot.dll, so
+          # ALL THREE must sit next to PsBash.psd1 — otherwise the load fails with
+          # "Could not load file or assembly 'PsBash.Transpiler'" (the bug that kept
+          # this job red on every commit). Mirrors publish.yml's Pester staging.
+          # net8.0 loads on both the net8 and net10 pwsh runtimes.
           dotnet build src/PsBash.Cmdlets/PsBash.Cmdlets.csproj -c Debug --framework net8.0 -nologo
-          # Copy the built dll next to PsBash.psd1 so the first probe path
-          # (sibling of the manifest) succeeds without depending on bin/ layout.
-          $dll = Get-ChildItem -Path src/PsBash.Cmdlets/bin -Filter PsBash.Cmdlets.dll -Recurse -ErrorAction SilentlyContinue |
-                 Where-Object { $_.FullName -match 'net8\.0' } |
-                 Select-Object -First 1
-          if (-not $dll) { throw "PsBash.Cmdlets.dll not found under src/PsBash.Cmdlets/bin after build" }
-          Copy-Item $dll.FullName src/PsBash.Module/PsBash.Cmdlets.dll -Force
-          Write-Host "Staged $($dll.FullName) -> src/PsBash.Module/PsBash.Cmdlets.dll"
+          if ($LASTEXITCODE -ne 0) { throw "PsBash.Cmdlets net8.0 build failed" }
+          $bin = "src/PsBash.Cmdlets/bin/Debug/net8.0"
+          foreach ($dll in @('PsBash.Cmdlets.dll', 'PsBash.Transpiler.dll', 'Parlot.dll')) {
+            $src = Join-Path $bin $dll
+            if (-not (Test-Path $src)) { throw "missing $src after build" }
+            Copy-Item $src src/PsBash.Module/ -Force
+            Write-Host "Staged $dll -> src/PsBash.Module/"
+          }
 
       - name: Install Pester
         shell: pwsh

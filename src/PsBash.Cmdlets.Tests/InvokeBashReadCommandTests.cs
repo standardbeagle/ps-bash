@@ -164,10 +164,20 @@ public class InvokeBashReadCommandTests : IClassFixture<SharedPwshFixture>
     [Fact]
     public void Read_EmptyPipeline_NoAssignmentToREPLY()
     {
-        // Empty pipeline + no interactive console: ReadLine returns null →
-        // EOF path → exit 1, no assignment. REPLY stays empty/unset.
+        // Empty pipeline + EOF stdin: ReadLine returns null → EOF path → exit 1, no
+        // assignment. REPLY stays empty/unset.
+        //
+        // DETERMINISM (QA Directive 6): with an empty pipeline the cmdlet falls back to
+        // [Console]::In.ReadLine(). Whether that blocks depends on the ambient console of
+        // the *test host* — under a real console (local `dotnet test` from a terminal)
+        // it blocks FOREVER and hangs the entire suite; under redirected CI stdin it does
+        // not. We pin the input to an empty StringReader so the fallback reads a
+        // deterministic EOF in every environment instead of the ambient stdin. Restored
+        // in a finally so sibling tests see the original reader.
         var v = ReadVariable(
-            "@() | Invoke-BashRead; ''",
+            "$__in = [Console]::In; " +
+            "try { [Console]::SetIn([System.IO.StringReader]::new('')); @() | Invoke-BashRead } " +
+            "finally { [Console]::SetIn($__in) }; ''",
             "REPLY");
         // Either unset or empty — both indicate no assignment occurred.
         // (The test runspace may have a leftover REPLY from a sibling test

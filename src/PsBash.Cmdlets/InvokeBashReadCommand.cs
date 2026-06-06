@@ -83,6 +83,23 @@ public sealed class InvokeBashReadCommand : PSCmdlet
 
     private readonly List<PSObject> _pipeline = new();
 
+    /// <summary>
+    /// Upper bound (ms) on a no-<c>-t</c> read from REDIRECTED stdin (a pipe/file or a
+    /// non-interactive host). A real producer's line arrives in &lt;1 ms, so this never
+    /// fires in normal use; it only stops an input source that never produces (e.g. a
+    /// test host whose stdin stays open and empty) from hanging forever. Overridable via
+    /// <c>PSBASH_READ_REDIRECT_TIMEOUT_MS</c>. Does NOT apply to a real interactive TTY,
+    /// which blocks indefinitely so the user can type.
+    /// </summary>
+    private static int RedirectedReadTimeoutMs
+    {
+        get
+        {
+            var raw = Environment.GetEnvironmentVariable("PSBASH_READ_REDIRECT_TIMEOUT_MS");
+            return int.TryParse(raw, out var v) && v > 0 ? v : 2000;
+        }
+    }
+
     protected override void ProcessRecord()
     {
         if (InputObject != null) _pipeline.Add(InputObject);
@@ -211,14 +228,39 @@ public sealed class InvokeBashReadCommand : PSCmdlet
                     }
                     inputLine = readTask.Result;
                 }
+                else if (Console.IsInputRedirected)
+                {
+                    // Redirected stdin (a real pipe/file, OR a non-interactive host such as
+                    // the xUnit test runspace whose stdin stays open with no data). A genuine
+                    // producer delivers its line and EOFs within milliseconds; a no-data
+                    // source would otherwise BLOCK FOREVER on ReadLine and hang the whole
+                    // process (this is what wedged the test suite). Bound the wait so the
+                    // no-data case resolves to EOF (exit 1) instead of hanging. A real
+                    // interactive TTY takes the unbounded branch below so the user can type.
+                    var readTask = System.Threading.Tasks.Task.Run(() => Console.In.ReadLine());
+                    if (!readTask.Wait(RedirectedReadTimeoutMs))
+                    {
+                        FileSystemHelpers.SetLastExitCode(this, 1);
+                        return;
+                    }
+                    inputLine = readTask.Result;
+                }
                 else
                 {
+                    // Real interactive console — block for the user.
                     inputLine = Console.In.ReadLine();
                 }
             }
             catch (InvalidOperationException)
             {
                 // Console handle closed mid-read — treat as EOF.
+                FileSystemHelpers.SetLastExitCode(this, 1);
+                return;
+            }
+            catch (NotSupportedException)
+            {
+                // Some hosts (e.g. the interactive ExitTrackingHost) throw on a console
+                // read — treat as EOF rather than crashing.
                 FileSystemHelpers.SetLastExitCode(this, 1);
                 return;
             }

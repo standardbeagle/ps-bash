@@ -155,8 +155,21 @@ public sealed class InvokeBashTeeCommand : PSCmdlet
 
         foreach (var rawPath in validOperands)
         {
+            // /dev/null (or NUL) as a tee target: discard the write (bash sends it to the
+            // null device — nowhere) but still pass stdin through to stdout below. Without
+            // this the resolved path (e.g. C:\dev\null on Windows) has no parent dir and
+            // tee would wrongly report "No such file or directory".
+            if (FileSystemHelpers.IsNullDevice(rawPath))
+            {
+                continue;
+            }
+
             foreach (var filePath in FileSystemHelpers.ResolveOperandPaths(this, rawPath))
             {
+                if (FileSystemHelpers.IsNullDevice(filePath))
+                {
+                    continue;
+                }
                 string normalized = FileSystemHelpers.ToBashPath(filePath);
                 string? parentDir;
                 try
