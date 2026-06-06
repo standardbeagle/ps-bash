@@ -32,23 +32,36 @@ public static class PsBuild
 {
     // ─────────────────────────────── Quoting / escaping ───────────────────────────────
 
+    /// <summary>The chars that must be escaped inside a PowerShell double-quoted string.</summary>
+    private static readonly System.Buffers.SearchValues<char> s_doubleQuoteSpecials =
+        System.Buffers.SearchValues.Create("`$\"");
+
     /// <summary>
     /// Wrap <paramref name="value"/> in a PowerShell single-quoted literal, escaping
     /// embedded single quotes by doubling (<c>'</c> → <c>''</c>) — the only escape a
     /// PS single-quoted string honors. Use for literal paths, positional args, and any
     /// value that must reach PowerShell verbatim with no expansion.
     /// </summary>
-    public static string SingleQuote(string value) => "'" + value.Replace("'", "''") + "'";
+    public static string SingleQuote(string value)
+        // Fast path (the common case — no embedded quote): one Concat, skip the Replace scan+alloc.
+        => value.IndexOf('\'') < 0 ? "'" + value + "'" : "'" + value.Replace("'", "''") + "'";
 
     /// <summary>
     /// Escape <paramref name="value"/> for placement INSIDE a PowerShell double-quoted
     /// string (returns the inner text, no surrounding quotes). Order is load-bearing:
     /// backtick first (it is PowerShell's escape char, introduced by the next two
     /// replacements), then <c>$</c> (starts variable expansion), then <c>"</c> (ends
-    /// the string).
+    /// the string). Called once per literal string part during emission — the hottest
+    /// builder — so the clean case is allocation-free: a single <see cref="System.Buffers.SearchValues{T}"/>
+    /// scan returns the original string with no rebuild when nothing needs escaping
+    /// (vs. three full Replace passes).
     /// </summary>
-    public static string EscapeForDoubleQuote(string value) =>
-        value.Replace("`", "``").Replace("$", "`$").Replace("\"", "`\"");
+    public static string EscapeForDoubleQuote(string value)
+    {
+        if (value.AsSpan().IndexOfAny(s_doubleQuoteSpecials) < 0)
+            return value;
+        return value.Replace("`", "``").Replace("$", "`$").Replace("\"", "`\"");
+    }
 
     /// <summary>
     /// Wrap <paramref name="value"/> in a PowerShell double-quoted string with the
@@ -95,7 +108,9 @@ public static class PsBuild
     /// (<c>-ne 0</c>), i.e. bash <c>! cmd</c> which succeeds when <paramref name="emittedCmd"/> fails.
     /// </param>
     public static string ExitCodeTest(string emittedCmd, bool negate = false) =>
-        "(& { " + Void(emittedCmd) + "; $global:LASTEXITCODE " + (negate ? "-ne" : "-eq") + " 0 })";
+        // Single Concat (don't nest Void() — this is the most-called composite, one
+        // builder per if/while/until/&&/|| condition; nesting would double the allocation).
+        "(& { [void](" + emittedCmd + "); $global:LASTEXITCODE " + (negate ? "-ne" : "-eq") + " 0 })";
 
     // ──────────────────────── Exit-code propagation (&& / || chains) ───────────────────
 
