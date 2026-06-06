@@ -45,10 +45,25 @@ public class InvokeBashTestCommandTests : IClassFixture<SharedPwshFixture>
         var errs = pwsh.AddScript("$error | ForEach-Object { $_.ToString() }").Invoke();
         pwsh.Commands.Clear();
 
-        bool? val = null;
-        if (result.Count > 0 && result[0]?.BaseObject is bool b) val = b;
+        // test/[ is silent (bash semantics): success/failure is the EXIT CODE, not output. The
+        // cmdlet no longer emits a bool object, so derive the logical value from the exit code.
+        bool? val = (exit == 0);
 
         return (val, exit, errs.Select(o => o?.ToString() ?? "").ToArray());
+    }
+
+    // ---- silence (bash test/[ writes only an exit code, never stdout) ----
+
+    [Theory]
+    [InlineData("Invoke-BashTest 1 -eq 1")]   // true
+    [InlineData("Invoke-BashTest 1 -eq 2")]   // false
+    [InlineData("Invoke-BashTest -n abc")]    // true
+    public void Test_WritesNothingToStdout(string script)
+    {
+        var pwsh = _fixture.AcquireFresh();
+        var result = pwsh.AddScript(script).Invoke();
+        pwsh.Commands.Clear();
+        Assert.Empty(result); // no True/False — the result is the exit code only
     }
 
     // ---- file predicates ----

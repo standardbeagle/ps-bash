@@ -1376,7 +1376,7 @@ public class PsEmitterTests
     {
         var result = PsEmitter.Transpile("[ -f file ]");
 
-        Assert.Equal("(Test-Path \"file\" -PathType Leaf)", result);
+        Assert.Equal("$(if ((Test-Path \"file\" -PathType Leaf)) { $global:LASTEXITCODE = 0 } else { $global:LASTEXITCODE = 1 })", result);
     }
 
     [Fact]
@@ -1384,7 +1384,7 @@ public class PsEmitterTests
     {
         var result = PsEmitter.Transpile("[ -d dir ]");
 
-        Assert.Equal("(Test-Path \"dir\" -PathType Container)", result);
+        Assert.Equal("$(if ((Test-Path \"dir\" -PathType Container)) { $global:LASTEXITCODE = 0 } else { $global:LASTEXITCODE = 1 })", result);
     }
 
     [Fact]
@@ -1400,7 +1400,7 @@ public class PsEmitterTests
     {
         var result = PsEmitter.Transpile("[ -z \"$VAR\" ]");
 
-        Assert.Equal("([string]::IsNullOrEmpty($env:VAR))", result);
+        Assert.Equal("$(if (([string]::IsNullOrEmpty($env:VAR))) { $global:LASTEXITCODE = 0 } else { $global:LASTEXITCODE = 1 })", result);
     }
 
     [Fact]
@@ -1408,7 +1408,7 @@ public class PsEmitterTests
     {
         var result = PsEmitter.Transpile("[ -n \"$VAR\" ]");
 
-        Assert.Equal("(-not [string]::IsNullOrEmpty($env:VAR))", result);
+        Assert.Equal("$(if ((-not [string]::IsNullOrEmpty($env:VAR))) { $global:LASTEXITCODE = 0 } else { $global:LASTEXITCODE = 1 })", result);
     }
 
     [Fact]
@@ -1416,7 +1416,7 @@ public class PsEmitterTests
     {
         var result = PsEmitter.Transpile("[[ -f file ]]");
 
-        Assert.Equal("(Test-Path \"file\" -PathType Leaf)", result);
+        Assert.Equal("$(if ((Test-Path \"file\" -PathType Leaf)) { $global:LASTEXITCODE = 0 } else { $global:LASTEXITCODE = 1 })", result);
     }
 
     [Fact]
@@ -1424,7 +1424,7 @@ public class PsEmitterTests
     {
         var result = PsEmitter.Transpile("[[ $var == \"foo\" ]]");
 
-        Assert.Equal("($env:var -eq \"foo\")", result);
+        Assert.Equal("$(if (($env:var -eq \"foo\")) { $global:LASTEXITCODE = 0 } else { $global:LASTEXITCODE = 1 })", result);
     }
 
     [Fact]
@@ -1432,7 +1432,7 @@ public class PsEmitterTests
     {
         var result = PsEmitter.Transpile("[[ $a -eq $b ]]");
 
-        Assert.Equal("($env:a -eq $env:b)", result);
+        Assert.Equal("$(if (($env:a -eq $env:b)) { $global:LASTEXITCODE = 0 } else { $global:LASTEXITCODE = 1 })", result);
     }
 
     [Fact]
@@ -1440,7 +1440,7 @@ public class PsEmitterTests
     {
         var result = PsEmitter.Transpile("[[ $a =~ ^[0-9]+$ ]]");
 
-        Assert.Equal("($env:a -match '^[0-9]+$')", result);
+        Assert.Equal("$(if (($env:a -match '^[0-9]+$')) { $global:LASTEXITCODE = 0 } else { $global:LASTEXITCODE = 1 })", result);
     }
 
     [Fact]
@@ -1448,7 +1448,7 @@ public class PsEmitterTests
     {
         var result = PsEmitter.Transpile("[[ $a == foo* ]]");
 
-        Assert.Equal("($env:a -like 'foo*')", result);
+        Assert.Equal("$(if (($env:a -like 'foo*')) { $global:LASTEXITCODE = 0 } else { $global:LASTEXITCODE = 1 })", result);
     }
 
     [Fact]
@@ -1456,7 +1456,7 @@ public class PsEmitterTests
     {
         var result = PsEmitter.Transpile("[[ -f file && -d dir ]]");
 
-        Assert.Equal("((Test-Path \"file\" -PathType Leaf) -and (Test-Path \"dir\" -PathType Container))", result);
+        Assert.Equal("$(if (((Test-Path \"file\" -PathType Leaf) -and (Test-Path \"dir\" -PathType Container))) { $global:LASTEXITCODE = 0 } else { $global:LASTEXITCODE = 1 })", result);
     }
 
     [Fact]
@@ -1464,7 +1464,7 @@ public class PsEmitterTests
     {
         var result = PsEmitter.Transpile("[[ $a == \"x\" || $b == \"y\" ]]");
 
-        Assert.Equal("(($env:a -eq \"x\") -or ($env:b -eq \"y\"))", result);
+        Assert.Equal("$(if ((($env:a -eq \"x\") -or ($env:b -eq \"y\"))) { $global:LASTEXITCODE = 0 } else { $global:LASTEXITCODE = 1 })", result);
     }
 
     [Fact]
@@ -1472,7 +1472,7 @@ public class PsEmitterTests
     {
         var result = PsEmitter.Transpile("[[ $a != \"bar\" ]]");
 
-        Assert.Equal("($env:a -ne \"bar\")", result);
+        Assert.Equal("$(if (($env:a -ne \"bar\")) { $global:LASTEXITCODE = 0 } else { $global:LASTEXITCODE = 1 })", result);
     }
 
     [Fact]
@@ -1480,7 +1480,7 @@ public class PsEmitterTests
     {
         var result = PsEmitter.Transpile("[[ $a < $b ]]");
 
-        Assert.Equal("([string]::Compare($env:a, $env:b, [System.StringComparison]::Ordinal) -lt 0)", result);
+        Assert.Equal("$(if (([string]::Compare($env:a, $env:b, [System.StringComparison]::Ordinal) -lt 0)) { $global:LASTEXITCODE = 0 } else { $global:LASTEXITCODE = 1 })", result);
     }
 
     [Fact]
@@ -1488,7 +1488,7 @@ public class PsEmitterTests
     {
         var result = PsEmitter.Transpile("[[ $a > $b ]]");
 
-        Assert.Equal("([string]::Compare($env:a, $env:b, [System.StringComparison]::Ordinal) -gt 0)", result);
+        Assert.Equal("$(if (([string]::Compare($env:a, $env:b, [System.StringComparison]::Ordinal) -gt 0)) { $global:LASTEXITCODE = 0 } else { $global:LASTEXITCODE = 1 })", result);
     }
 
     [Fact]
@@ -1496,7 +1496,7 @@ public class PsEmitterTests
     {
         var result = PsEmitter.Transpile("[[ $a -lt $b ]]");
 
-        Assert.Equal("($env:a -lt $env:b)", result);
+        Assert.Equal("$(if (($env:a -lt $env:b)) { $global:LASTEXITCODE = 0 } else { $global:LASTEXITCODE = 1 })", result);
     }
 
     [Fact]
@@ -1504,7 +1504,7 @@ public class PsEmitterTests
     {
         var result = PsEmitter.Transpile("[[ $a -gt $b ]]");
 
-        Assert.Equal("($env:a -gt $env:b)", result);
+        Assert.Equal("$(if (($env:a -gt $env:b)) { $global:LASTEXITCODE = 0 } else { $global:LASTEXITCODE = 1 })", result);
     }
 
     [Fact]

@@ -141,8 +141,10 @@ public sealed class InvokeBashTestCommand : PSCmdlet
             return;
         }
 
+        // bash `test` / `[` is SILENT — the result is the EXIT CODE only, never stdout. Emitting the
+        // bool here leaked "True"/"False" into output for `test ... && cmd` and standalone `test`/`[`.
+        // (if/while/&&/|| conditions consume the exit code, not this object — see EmitConditionAsExpr.)
         FileSystemHelpers.SetLastExitCode(this, result ? 0 : 1);
-        WriteObject(result);
     }
 
     /// <summary>

@@ -1012,9 +1012,13 @@ public static class PsEmitter
         return sb.ToString();
     }
 
+    // A BoolExpr ([ ... ] / [[ ... ]]) as its OWN statement: bash `[ x ]` is silent and sets only the
+    // exit code. Emitting the bare `(expr)` boolean here leaked "True"/"False" to stdout and never set
+    // $LASTEXITCODE. Emit a silent form that sets the exit code instead (mirrors the &&/|| chain form).
+    // Callers needing the bare boolean expression (conditions, && / || chains) use EmitBoolExprInner.
     private static string EmitBoolExpr(Command.BoolExpr expr)
     {
-        return "(" + EmitBoolExprInner(expr) + ")";
+        return $"$(if (({EmitBoolExprInner(expr)})) {{ $global:LASTEXITCODE = 0 }} else {{ $global:LASTEXITCODE = 1 }})";
     }
 
     private static string EmitBoolExprInner(Command.BoolExpr expr)
@@ -2850,7 +2854,10 @@ public static class PsEmitter
             // Instead, evaluate the expression and set $global:LASTEXITCODE explicitly.
             if (cmd is Command.BoolExpr boolExprInChain)
             {
-                var boolText = Emit(boolExprInChain);
+                // Use the BARE boolean expression here (not Emit(), which now produces the silent
+                // statement form for a standalone BoolExpr) — this site supplies its own exit-code
+                // wrapper below.
+                var boolText = "(" + EmitBoolExprInner(boolExprInChain) + ")";
                 sb.Append($"$(if ({boolText}) {{ $global:LASTEXITCODE = 0 }} else {{ $global:LASTEXITCODE = 1; Write-Error '' -ErrorAction SilentlyContinue }})");
             }
             // ShAssignment in && / || chains: wrap so PS doesn't output the value.
