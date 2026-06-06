@@ -35,10 +35,34 @@ public static class ModuleExtractor
     /// </summary>
     public static string GetCmdletsDllPath()
     {
-        var asm = typeof(ModuleExtractor).Assembly;
-        var version = asm.GetName().Version?.ToString() ?? "0.0.0";
-        var dir = Path.Combine(Path.GetTempPath(), "ps-bash", $"module-{version}");
-        return Path.Combine(dir, CmdletsDllFileName);
+        return Path.Combine(ExtractionDir(), CmdletsDllFileName);
+    }
+
+    private static string? _cachedDir;
+    private static readonly object _dirLock = new();
+
+    /// <summary>
+    /// The version- AND content-stamped extraction directory:
+    /// <c>{tmp}/ps-bash/module-{version}-{hash}</c>. The content hash in the directory NAME is what
+    /// keeps two builds that share a version string — most importantly a dev build running next to an
+    /// installed ps-bash (which the Claude Code Bash tool spawns constantly) — from extracting into the
+    /// SAME directory and clobbering each other. Without it, both invalidate the shared marker on every
+    /// run (their embedded content differs), producing a constant re-extraction war where whoever ran
+    /// last wins, so a dev host would silently load the installed build's stale cmdlets. Computed once
+    /// (the hash covers the ~400 KB cmdlets DLL) and cached.
+    /// </summary>
+    private static string ExtractionDir()
+    {
+        if (_cachedDir != null) return _cachedDir;
+        lock (_dirLock)
+        {
+            if (_cachedDir != null) return _cachedDir;
+            var asm = typeof(ModuleExtractor).Assembly;
+            var version = asm.GetName().Version?.ToString() ?? "0.0.0";
+            var hash = ComputeEmbeddedHash(asm).Substring(0, 12).ToLowerInvariant();
+            _cachedDir = Path.Combine(Path.GetTempPath(), "ps-bash", $"module-{version}-{hash}");
+            return _cachedDir;
+        }
     }
 
     /// <summary>
@@ -133,8 +157,7 @@ public static class ModuleExtractor
     public static string ExtractEmbedded()
     {
         var asm = typeof(ModuleExtractor).Assembly;
-        var version = asm.GetName().Version?.ToString() ?? "0.0.0";
-        var dir = Path.Combine(Path.GetTempPath(), "ps-bash", $"module-{version}");
+        var dir = ExtractionDir();
         var marker = Path.Combine(dir, ".extracted");
         var psd1Path = Path.Combine(dir, "PsBash.psd1");
 
