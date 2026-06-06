@@ -799,7 +799,12 @@ public static class PsEmitter
         bodyText = System.Text.RegularExpressions.Regex.Replace(
             bodyText, @$"\${varName}(?!\w)", "$$_");
 
-        return $"ForEach-Object {{ if ($_.PSObject.Properties['BashText']) {{ $_.BashText }} else {{ \"$_\" }} }} | ForEach-Object {{ ($_ -replace \"`n$\",\"\") -split \"`n\" }} | ForEach-Object {{ {bodyText} }}";
+        // `$input |` is required: when this `while read` is a pipe target it is wrapped in `& { ... }`,
+        // and a scriptblock's piped input does NOT auto-feed a leading `ForEach-Object` — it must be
+        // drained explicitly via `$input`. Without it the chain got zero input and the leading
+        // ForEach-Object ran once with a null `$_`, hitting "Cannot index into a null array" on the
+        // property probe. The `$null -ne $_` guard makes that probe null-safe regardless.
+        return $"$input | ForEach-Object {{ if ($null -ne $_ -and $_.PSObject.Properties['BashText']) {{ $_.BashText }} else {{ \"$_\" }} }} | ForEach-Object {{ ($_ -replace \"`n$\",\"\") -split \"`n\" }} | ForEach-Object {{ {bodyText} }}";
     }
 
     private static string? ExtractArithVar(string init)

@@ -1647,8 +1647,11 @@ public class PsEmitterTests
     {
         var result = PsEmitter.Transpile("while read line; do echo $line; done");
 
+        // `$input |` drains the scriptblock's piped input into the chain (a leading ForEach-Object
+        // does not auto-receive it when this is a pipe target wrapped in `& { ... }`); the
+        // `$null -ne $_` guard makes the BashText probe null-safe.
         Assert.Equal(
-            "ForEach-Object { if ($_.PSObject.Properties['BashText']) { $_.BashText } else { \"$_\" } } | ForEach-Object { ($_ -replace \"`n$\",\"\") -split \"`n\" } | ForEach-Object { Invoke-BashEcho $_ }",
+            "$input | ForEach-Object { if ($null -ne $_ -and $_.PSObject.Properties['BashText']) { $_.BashText } else { \"$_\" } } | ForEach-Object { ($_ -replace \"`n$\",\"\") -split \"`n\" } | ForEach-Object { Invoke-BashEcho $_ }",
             result);
     }
 
