@@ -364,6 +364,42 @@ public class InvokeBashFileSystemMutatorTests : IDisposable, IClassFixture<Share
     }
 
     [Fact]
+    public void Cp_BundledShortFlags_DeBundle()
+    {
+        // Regression: cp parses exact tokens, so bundled `-rf` was unrecognized (recursive copy
+        // never happened). It now de-bundles to -r -f.
+        var src = Path.Combine(_tmpRoot, "bsrc");
+        Directory.CreateDirectory(Path.Combine(src, "sub"));
+        File.WriteAllText(Path.Combine(src, "sub", "f.txt"), "x");
+        var dst = Path.Combine(_tmpRoot, "bdst");
+
+        Run($"Invoke-BashCp -rf {Q(src)} {Q(dst)}");
+
+        Assert.True(File.Exists(Path.Combine(dst, "sub", "f.txt")));
+    }
+
+    [Theory]
+    [InlineData("Invoke-BashCat /dev/null")]
+    [InlineData("Invoke-BashWc -l /dev/null")]
+    [InlineData("Invoke-BashHead /dev/null")]
+    public void NullDevice_ReadsAsEmpty_NoError(string cmd)
+    {
+        // Regression: /dev/null as a file OPERAND mapped to $null and crashed cmdlets
+        // ("Value cannot be null"). It is now an empty file served from the OS null device.
+        // (wc -l prints "0 /dev/null"; the point is it does not error / set a failure code.)
+        var lines = Run($"{cmd} *> $null; $global:LASTEXITCODE");
+        Assert.Equal("0", lines[^1]);
+    }
+
+    [Fact]
+    public void NullDevice_GrepEmptyFile_ExitsOne()
+    {
+        // grep on an empty file finds nothing → exit 1 (bash parity), no "No such file" error.
+        var lines = Run("Invoke-BashGrep needle /dev/null *> $null; $global:LASTEXITCODE");
+        Assert.Equal("1", lines[^1]);
+    }
+
+    [Fact]
     public void Rm_MissingWithoutF_EmitsError()
     {
         var ghost = Path.Combine(_tmpRoot, "ghost.txt");

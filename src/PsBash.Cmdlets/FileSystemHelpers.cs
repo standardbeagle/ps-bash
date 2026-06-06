@@ -353,6 +353,28 @@ internal static class FileSystemHelpers
         Directory.Delete(dir, recursive: false);
     }
 
+    /// <summary>
+    /// True when <paramref name="path"/> denotes the platform null device — bash's
+    /// <c>/dev/null</c> (also the Windows provider-resolved form <c>X:\dev\null</c> that
+    /// <c>GetUnresolvedProviderPathFromPSPath</c> produces) or the Windows <c>NUL</c> device.
+    /// As a command OPERAND the null device is an empty file: <see cref="BashFileSystem.OpenRead"/>
+    /// serves it from the OS-native device, and the existence pre-checks in grep/wc treat it as
+    /// present rather than emitting "No such file or directory".
+    /// </summary>
+    public static bool IsNullDevice(string? path)
+    {
+        if (string.IsNullOrEmpty(path)) return false;
+        string slashed = path.Replace('\\', '/');
+        if (slashed.Equals("/dev/null", StringComparison.OrdinalIgnoreCase)
+            || slashed.EndsWith("/dev/null", StringComparison.OrdinalIgnoreCase))
+            return true;
+        if (OperatingSystem.IsWindows()
+            && (path.Equals("NUL", StringComparison.OrdinalIgnoreCase)
+                || slashed.EndsWith("/NUL", StringComparison.OrdinalIgnoreCase)))
+            return true;
+        return false;
+    }
+
     /// <summary>Clear the read-only attribute on <paramref name="path"/> if set. Best-effort.</summary>
     public static void ClearReadOnly(string path)
     {

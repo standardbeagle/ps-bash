@@ -64,6 +64,23 @@ public sealed class InvokeBashCpCommand : PSCmdlet
 
         foreach (var a in args)
         {
+            // De-bundle combined short flags (-rf, -rfv) — only when every char is a known
+            // cp short flag, so unknown tokens (and filenames starting with '-') stay operands.
+            if (a.Length > 2 && a[0] == '-' && a[1] != '-' && IsCpShortBundle(a))
+            {
+                foreach (var c in a.AsSpan(1))
+                {
+                    switch (c)
+                    {
+                        case 'r': case 'R': recursive = true; break;
+                        case 'n': noClobber = true; break;
+                        case 'f': force = true; break;
+                        case 'v': verbose = true; break;
+                    }
+                }
+                continue;
+            }
+
             switch (a)
             {
                 case "-r": case "-R": recursive = true; break;
@@ -167,6 +184,17 @@ public sealed class InvokeBashCpCommand : PSCmdlet
         }
 
         if (hadError) FileSystemHelpers.SetLastExitCode(this, 1);
+    }
+
+    /// <summary>True when <paramref name="s"/> (a multi-char <c>-xyz</c> token) is a bundle of
+    /// only known cp short flags, so it can be safely split into individual switches.</summary>
+    private static bool IsCpShortBundle(string s)
+    {
+        for (int i = 1; i < s.Length; i++)
+        {
+            if (s[i] is not ('r' or 'R' or 'n' or 'f' or 'v')) return false;
+        }
+        return true;
     }
 
     private static void CopyDirectoryRecursive(string src, string dest)

@@ -2075,8 +2075,12 @@ public static class PsEmitter
 
     private static string TransformWordPath(string value)
     {
-        if (value == "/dev/null")
-            return "$null";
+        // NOTE: do NOT map /dev/null -> $null here. As a command OPERAND (vs a redirect target,
+        // which TransformRedirectTarget still maps to $null), bash's /dev/null is an empty FILE —
+        // `grep x /dev/null` reads an empty file (no match, exit 1), not the $null discard sink
+        // (which crashed cmdlets with "Value cannot be null"). The literal /dev/null flows to the
+        // runtime, where BashFileSystem.OpenRead (via FileSystemHelpers.IsNullDevice) serves it
+        // from the OS-native null device as empty.
         if (value.StartsWith("/tmp/"))
             return $"$env:TEMP\\{value[5..]}";
         if (TryTranslateMsysDrivePath(value, out var translated))

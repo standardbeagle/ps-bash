@@ -34,8 +34,16 @@ public static class BashFileSystem
     /// temp-files rule. The caller owns disposal.
     /// </summary>
     public static FileStream OpenRead(string path)
-        => new(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite, BinaryProbeBytes,
+    {
+        // A /dev/null (or Windows NUL) OPERAND is an empty file. Serve it from the OS-native
+        // null device so every read method — ReadLines / ReadAllText / ReadAllBytes / IsBinary
+        // all route through here — sees empty content, instead of throwing on the non-existent
+        // resolved path (e.g. C:\dev\null on Windows). Both devices read as zero bytes.
+        if (FileSystemHelpers.IsNullDevice(path))
+            path = OperatingSystem.IsWindows() ? "NUL" : "/dev/null";
+        return new(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite, BinaryProbeBytes,
             FileOptions.SequentialScan);
+    }
 
     // -- Binary detection ---------------------------------------------------
 

@@ -195,7 +195,8 @@ public sealed class InvokeBashWcCommand : PSCmdlet
 
         foreach (var filePath in ResolveGlob(operands))
         {
-            if (!File.Exists(filePath) && !Directory.Exists(filePath))
+            // The null device (/dev/null, NUL) is an empty file, not a missing one.
+            if (!File.Exists(filePath) && !Directory.Exists(filePath) && !FileSystemHelpers.IsNullDevice(filePath))
             {
                 WriteBashError($"wc: {filePath}: No such file or directory");
                 continue;

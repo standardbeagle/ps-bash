@@ -737,7 +737,8 @@ public sealed class InvokeBashGrepCommand : PSCmdlet
                 bool any = false;
                 foreach (var fp in FileSystemHelpers.ResolveOperandPaths(this, raw))
                 {
-                    if (File.Exists(fp) || Directory.Exists(fp))
+                    // The null device (/dev/null, NUL) is an empty file, not a missing one.
+                    if (File.Exists(fp) || Directory.Exists(fp) || FileSystemHelpers.IsNullDevice(fp))
                     {
                         resolvedList.Add(fp);
                         any = true;

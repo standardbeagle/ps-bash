@@ -1249,11 +1249,14 @@ public class PsEmitterTests
     }
 
     [Fact]
-    public void Transpile_DevNullAsArgument_EmitsNull()
+    public void Transpile_DevNullAsArgument_StaysLiteralPath()
     {
+        // As a command OPERAND /dev/null is a literal path (an empty file), NOT the $null
+        // discard sink — bash `echo /dev/null` prints "/dev/null", and `grep x /dev/null`
+        // reads an empty file. The $null mapping is only for redirect targets.
         var result = PsEmitter.Transpile("echo /dev/null");
 
-        Assert.Equal("Invoke-BashEcho $null", result);
+        Assert.Equal("Invoke-BashEcho /dev/null", result);
     }
 
     [Fact]
