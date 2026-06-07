@@ -816,26 +816,14 @@ public sealed class InvokeBashPsCommand : PSCmdlet
         try
         {
             if (!File.Exists(fileName)) return null;
-            using var proc = new Process
+            var psi = new ProcessStartInfo
             {
-                StartInfo = new ProcessStartInfo
-                {
-                    FileName = fileName,
-                    Arguments = arguments,
-                    RedirectStandardOutput = true,
-                    RedirectStandardError = true,
-                    UseShellExecute = false,
-                    CreateNoWindow = true,
-                }
+                FileName = fileName,
+                Arguments = arguments,
+                CreateNoWindow = true,
             };
-            proc.Start();
-            string output = proc.StandardOutput.ReadToEnd();
-            if (!proc.WaitForExit(2000))
-            {
-                try { proc.Kill(entireProcessTree: true); } catch { }
-                return null;
-            }
-            return output.TrimEnd('\r', '\n');
+            var result = BashRuntime.RunChildProcess(psi, TimeSpan.FromSeconds(2));
+            return result.TimedOut ? null : result.Stdout.TrimEnd('\r', '\n');
         }
         catch
         {

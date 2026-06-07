@@ -267,11 +267,148 @@ public sealed class CommandAssistProviderTests
         }
     }
 
+    [SkippableFact]
+    public async Task GenerateAsync_CallerCancellationKillsProviderProcess()
+    {
+        var pidPath = Path.Combine(Path.GetTempPath(), "psbash-ai-pid-" + Guid.NewGuid().ToString("N") + ".txt");
+        var (executable, args) = FakeProviderSleepWithPid(pidPath);
+        Skip.If(string.IsNullOrEmpty(executable), "No platform shell available for cancellation cleanup probe.");
+
+        var runner = new CommandAssistProviderRunner(new CommandAssistConfig
+        {
+            DefaultProvider = "fake",
+            Providers =
+            [
+                new CommandAssistProviderConfig
+                {
+                    Name = "fake",
+                    Executable = executable,
+                    Args = args,
+                    PromptTemplate = "{{buffer}}",
+                    TimeoutMs = 30000,
+                }
+            ],
+        });
+
+        int pid = 0;
+        using var cts = new CancellationTokenSource();
+        try
+        {
+            var task = runner.GenerateAsync(
+                new CommandAssistRequest("git st", 6),
+                Environment.CurrentDirectory,
+                cts.Token);
+
+            pid = await WaitForPidAsync(pidPath).ConfigureAwait(false);
+            cts.Cancel();
+
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(() => task);
+            Assert.False(await WaitForProcessExitAsync(pid).ConfigureAwait(false), $"provider process {pid} was still alive after cancellation");
+        }
+        finally
+        {
+            cts.Cancel();
+            if (pid > 0) TryKillProcess(pid);
+            try { File.Delete(pidPath); } catch { }
+        }
+    }
+
     private static (string Executable, List<string> Args) FakeProviderCat(string path)
     {
         if (OperatingSystem.IsWindows())
             return ("cmd.exe", ["/c", "type", path]);
         return ("/bin/cat", [path]);
+    }
+
+    private static (string Executable, List<string> Args) FakeProviderSleepWithPid(string pidPath)
+    {
+        if (OperatingSystem.IsWindows())
+        {
+            var pwsh = FindOnPath("pwsh.exe") ?? FindOnPath("powershell.exe");
+            if (pwsh is null) return ("", []);
+
+            return (pwsh,
+            [
+                "-NoProfile",
+                "-Command",
+                $"$PID | Set-Content -LiteralPath '{pidPath.Replace("'", "''")}'; Start-Sleep -Seconds 30",
+            ]);
+        }
+
+        if (!File.Exists("/bin/sh")) return ("", []);
+        return ("/bin/sh", ["-c", $"echo $$ > '{pidPath.Replace("'", "'\\''")}'; sleep 30"]);
+    }
+
+    private static string? FindOnPath(string name)
+    {
+        var path = Environment.GetEnvironmentVariable("PATH") ?? "";
+        foreach (var dir in path.Split(Path.PathSeparator, StringSplitOptions.RemoveEmptyEntries))
+        {
+            var candidate = Path.Combine(dir, name);
+            if (File.Exists(candidate))
+                return candidate;
+        }
+        return null;
+    }
+
+    private static async Task<int> WaitForPidAsync(string pidPath)
+    {
+        var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(5);
+        while (DateTime.UtcNow < deadline)
+        {
+            if (File.Exists(pidPath)
+                && int.TryParse((await File.ReadAllTextAsync(pidPath)).Trim(), out var pid)
+                && pid > 0)
+            {
+                return pid;
+            }
+
+            await Task.Delay(25).ConfigureAwait(false);
+        }
+
+        throw new TimeoutException("fake provider did not write its PID.");
+    }
+
+    private static async Task<bool> WaitForProcessExitAsync(int pid)
+    {
+        var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(5);
+        while (DateTime.UtcNow < deadline)
+        {
+            if (!ProcessExists(pid))
+                return false;
+
+            await Task.Delay(25).ConfigureAwait(false);
+        }
+
+        return ProcessExists(pid);
+    }
+
+    private static bool ProcessExists(int pid)
+    {
+        try
+        {
+            using var process = System.Diagnostics.Process.GetProcessById(pid);
+            return !process.HasExited;
+        }
+        catch (ArgumentException)
+        {
+            return false;
+        }
+        catch (InvalidOperationException)
+        {
+            return false;
+        }
+    }
+
+    private static void TryKillProcess(int pid)
+    {
+        try
+        {
+            using var process = System.Diagnostics.Process.GetProcessById(pid);
+            if (!process.HasExited)
+                process.Kill(entireProcessTree: true);
+        }
+        catch (Exception) { }
     }
 }
 

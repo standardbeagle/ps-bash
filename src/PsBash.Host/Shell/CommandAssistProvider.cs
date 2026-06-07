@@ -190,9 +190,14 @@ internal sealed class CommandAssistProviderRunner(CommandAssistConfig config)
         {
             await process.WaitForExitAsync(timeoutCts.Token).ConfigureAwait(false);
         }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            await KillAndDrainAsync(process, stdoutTask, stderrTask).ConfigureAwait(false);
+            throw;
+        }
         catch (OperationCanceledException) when (!ct.IsCancellationRequested)
         {
-            TryKill(process);
+            await KillAndDrainAsync(process, stdoutTask, stderrTask).ConfigureAwait(false);
             throw new CommandAssistProviderException(
                 $"AI provider '{provider.Name}' timed out after {provider.TimeoutMs}ms.");
         }
@@ -341,6 +346,24 @@ internal sealed class CommandAssistProviderRunner(CommandAssistConfig config)
             if (!process.HasExited) process.Kill(entireProcessTree: true);
         }
         catch (Exception) { }
+    }
+
+    private static async Task KillAndDrainAsync(
+        Process process,
+        Task<string> stdoutTask,
+        Task<string> stderrTask)
+    {
+        TryKill(process);
+
+        try
+        {
+            using var waitCts = new CancellationTokenSource(TimeSpan.FromSeconds(2));
+            await process.WaitForExitAsync(waitCts.Token).ConfigureAwait(false);
+        }
+        catch (Exception) { }
+
+        try { await stdoutTask.ConfigureAwait(false); } catch { }
+        try { await stderrTask.ConfigureAwait(false); } catch { }
     }
 }
 
