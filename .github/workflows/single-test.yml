@@ -48,25 +48,39 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  # Compute the run matrix from the `platform` input here. A job-level `if` CANNOT
+  # filter the matrix per platform: the `matrix` context does not exist until the
+  # matrix is expanded, which is after the job `if` is evaluated. The old
+  # `if: inputs.platform == matrix.label` referenced `matrix` in the job `if`, which
+  # fails GitHub's workflow schema validation — surfacing as a "workflow file issue"
+  # startup-failure run on every push (the workflow is manual-only, but invalid files
+  # are reported against the push). Emitting the matrix from this setup job and
+  # consuming it via needs + fromJSON keeps "run only the selected platform" while
+  # staying schema-valid (verified with actionlint).
+  setup:
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.gen.outputs.matrix }}
+    steps:
+      - id: gen
+        shell: bash
+        env:
+          PLATFORM: ${{ inputs.platform }}
+        run: |
+          all='[{"os":"windows-latest","rid":"win-x64","label":"windows"},{"os":"ubuntu-latest","rid":"linux-x64","label":"linux"},{"os":"macos-latest","rid":"osx-arm64","label":"macos"}]'
+          if [ "$PLATFORM" = "all" ] || [ -z "$PLATFORM" ]; then
+            sel="$all"
+          else
+            sel=$(printf '%s' "$all" | jq -c --arg p "$PLATFORM" '[.[] | select(.label == $p)]')
+          fi
+          printf 'matrix={"include":%s}\n' "$sel" >> "$GITHUB_OUTPUT"
+
   test:
+    needs: setup
     strategy:
       fail-fast: false
-      matrix:
-        include:
-          - os: windows-latest
-            rid: win-x64
-            label: windows
-          - os: ubuntu-latest
-            rid: linux-x64
-            label: linux
-          - os: macos-latest
-            rid: osx-arm64
-            label: macos
-        # Filter the matrix at job-level via `if` below — `include` with
-        # conditional expressions is not supported.
-
+      matrix: ${{ fromJSON(needs.setup.outputs.matrix) }}
     runs-on: ${{ matrix.os }}
-    if: ${{ inputs.platform == 'all' || inputs.platform == matrix.label }}
 
     steps:
       - uses: actions/checkout@v4
