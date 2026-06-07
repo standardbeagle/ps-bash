@@ -66,7 +66,12 @@ jobs:
         # conditional expressions is not supported.
 
     runs-on: ${{ matrix.os }}
-    if: ${{ inputs.platform == 'all' || inputs.platform == matrix.label }}
+    # Use github.event.inputs.* (valid/empty in every event) rather than the strict
+    # inputs.* context (defined only for workflow_dispatch). GitHub evaluates this
+    # job-level if at startup for the push event too; referencing the dispatch-only
+    # inputs context there produced a "workflow file issue" startup-failure run on
+    # every push even though the workflow itself is manual-only.
+    if: ${{ github.event.inputs.platform == 'all' || github.event.inputs.platform == matrix.label }}
 
     steps:
       - uses: actions/checkout@v4
@@ -87,8 +92,8 @@ jobs:
       - name: Run filtered test
         timeout-minutes: 10
         run: |
-          dotnet test ${{ inputs.project }} --no-build -c Release \
-            --filter "${{ inputs.filter }}" \
+          dotnet test ${{ github.event.inputs.project }} --no-build -c Release \
+            --filter "${{ github.event.inputs.filter }}" \
             --blame-hang-timeout 2m \
             --blame-hang-dump-type none \
             --logger "console;verbosity=detailed"
