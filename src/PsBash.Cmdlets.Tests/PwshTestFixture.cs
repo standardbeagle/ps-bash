@@ -122,6 +122,46 @@ public static class PwshTestFixture
         return null;
     }
 
+    // Script that makes any installed PsBash undiscoverable for auto-loading and drops
+    // any copy already pulled into the session. Run at fixture creation AND before every
+    // test (AcquireFresh): PowerShell re-adds the default user module dir to
+    // $env:PSModulePath per pipeline, and once any test auto-loads an installed PsBash it
+    // stays loaded for the rest of that class's runspace — so a one-shot strip leaks.
+    // Re-applying per test keeps the session clean. Auto-loading itself stays ENABLED
+    // (the runtime relies on it); only PsBash-shipping path entries are removed.
+    //
+    // Without this, calling an Invoke-Bash* command mid-test auto-loads a
+    // PSGallery/dev-installed PsBash whose psm1 *function* Invoke-Bash* shadows our binary
+    // cmdlet (Function > Cmdlet precedence) and runs stale code — e.g. an old per-object
+    // `Add-Member ToString` collides with the current type-level ToString ("Cannot force
+    // the member ToString ... not an instance extension"), failing hundreds of tests on
+    // any machine with an installed PsBash. C# counterpart of tests/EnsureCleanRunspace.ps1.
+    private const string CleanInstalledPsBashScript = @"
+        $sep = [System.IO.Path]::PathSeparator
+        $kept = foreach ($dir in ($env:PSModulePath -split $sep)) {
+            if ([string]::IsNullOrWhiteSpace($dir)) { continue }
+            # Test-Path throws on an existing-but-unreadable dir (e.g. a root-owned copy on
+            # a CI runner). Such a copy is unloadable anyway — keep the entry.
+            $shipsPsBash = try { Test-Path (Join-Path $dir 'PsBash') -ErrorAction Stop } catch { $false }
+            if ($shipsPsBash) { continue }
+            $dir
+        }
+        $env:PSModulePath = ($kept | Where-Object { $_ }) -join $sep
+        # Drop any installed PsBash *script* module a prior pipeline auto-loaded — its
+        # functions are what shadow our binary cmdlets. Our source module is run as a
+        # script body (never Import-Module'd), so nothing named 'PsBash' is legitimately
+        # loaded; only an installed copy shows up. Do NOT touch 'PsBash.Cmdlets' — that
+        # name belongs to OUR explicitly-imported binary DLL.
+        while (Get-Module PsBash) { Get-Module PsBash | Remove-Module -Force -ErrorAction SilentlyContinue }
+    ";
+
+    // Public so SharedPwshFixture.AcquireFresh can re-apply it before each test.
+    internal static void CleanInstalledPsBash(PowerShell pwsh)
+    {
+        pwsh.AddScript(CleanInstalledPsBashScript).Invoke();
+        pwsh.Commands.Clear();
+    }
+
     /// <summary>
     /// Creates a brand-new PowerShell + Runspace, loads psm1 + cmdlets + format data,
     /// and returns it. The caller owns the lifetime (use `using var`).
@@ -161,6 +201,10 @@ public static class PwshTestFixture
 
         var pwsh = PowerShell.Create();
         pwsh.Runspace = runspace;
+
+        // 0. Make any installed PsBash undiscoverable before loading our source module,
+        //    so the module-load self-import and later test commands resolve to our copy.
+        CleanInstalledPsBash(pwsh);
 
         var baseDir = AppContext.BaseDirectory;
 
@@ -260,6 +304,11 @@ public class SharedPwshFixture : IDisposable
     public PowerShell AcquireFresh()
     {
         Reset();
+        // Re-clean per test: PowerShell re-adds the default user module dir to
+        // PSModulePath per pipeline, and a previous test may have auto-loaded an
+        // installed PsBash into this shared runspace. Re-stripping keeps each test
+        // resolving Invoke-Bash* to our copy (see CleanInstalledPsBashScript).
+        PwshTestFixture.CleanInstalledPsBash(_pwsh);
         return _pwsh;
     }
 
