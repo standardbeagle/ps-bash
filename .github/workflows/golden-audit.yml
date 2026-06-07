@@ -42,11 +42,6 @@ jobs:
           dotnet restore
           dotnet build src/PsBash.Differential.Tests -c Release --no-restore
 
-      - name: Capture goldens baseline
-        run: |
-          mkdir -p /tmp/goldens-baseline
-          cp -r src/PsBash.Differential.Tests/Goldens/. /tmp/goldens-baseline/
-
       # UPDATE_GOLDENS=1 makes every GoldenAsync call rewrite the file
       # from current ps-bash output. The test still passes (the new
       # golden equals the new output), but the file changes on disk.
@@ -59,7 +54,13 @@ jobs:
       - name: Diff regenerated vs committed
         id: diff
         run: |
-          diff -ruN /tmp/goldens-baseline src/PsBash.Differential.Tests/Goldens > /tmp/golden-drift.diff || true
+          # Drift = a change to a COMMITTED golden, detected via git (tracked
+          # modifications only). Do NOT diff against a cp baseline: tests that
+          # exercise the golden harness itself (GoldenRoundTrip_*, GoldenMismatch_*)
+          # write transient GUID-named goldens into this dir at runtime. Those are
+          # untracked artifacts, not drift — a cp-baseline diff flagged them and
+          # failed this audit every night. git diff ignores untracked files.
+          git diff --no-color -- src/PsBash.Differential.Tests/Goldens > /tmp/golden-drift.diff || true
           if [ -s /tmp/golden-drift.diff ]; then
             echo "drift=yes" >> "$GITHUB_OUTPUT"
             echo "Golden drift detected — see artifact."
