@@ -69,18 +69,102 @@ public sealed class InvokeBashTrCommand : PSCmdlet
     [Parameter]
     public SwitchParameter C { get; set; }
 
-    private readonly List<PSObject> _pipeline = new();
+    // Parsed-once state. tr has no file mode — operands are the SET1/SET2
+    // translate sets, and input always comes from the pipeline — so the only
+    // reason to suppress streaming is a --help / --version request.
+    private bool _parsed;
+    private bool _deleteMode;
+    private bool _complementMode;
+    private bool _squeezeMode;
+    private bool _truncateMode;
+    private List<string> _operands = new();
+    private bool _suppress;
+
+    private void ParseOnce()
+    {
+        if (_parsed) return;
+        _parsed = true;
+
+        var args = Arguments ?? Array.Empty<string>();
+
+        if (Array.IndexOf(args, "--version") >= 0 || Array.IndexOf(args, "--help") >= 0)
+        {
+            _suppress = true;
+            return;
+        }
+
+        _deleteMode = D.IsPresent;
+        _complementMode = C.IsPresent;
+
+        for (int i = 0; i < args.Length; i++)
+        {
+            string arg = args[i];
+
+            if (arg == "--complement") { _complementMode = true; continue; }
+            if (arg == "--truncate-set1") { _truncateMode = true; continue; }
+            if (arg == "--delete") { _deleteMode = true; continue; }
+            if (arg == "--squeeze-repeats") { _squeezeMode = true; continue; }
+
+            if (arg == "-d") { _deleteMode = true; continue; }
+            if (arg == "-s") { _squeezeMode = true; continue; }
+
+            if (arg.Length > 1 && arg[0] == '-')
+            {
+                // Bundled / single short flags. Matches the psm1 oracle's
+                // per-char scan over arg.Substring(1).
+                foreach (char ch in arg.AsSpan(1))
+                {
+                    switch (ch)
+                    {
+                        case 'd': _deleteMode = true; break;
+                        case 's': _squeezeMode = true; break;
+                        case 'c': _complementMode = true; break;
+                        case 'C': _complementMode = true; break;
+                        case 't': _truncateMode = true; break;
+                    }
+                }
+                continue;
+            }
+
+            _operands.Add(arg);
+        }
+
+        // Expand C-style escape sequences in operands before class expansion.
+        for (int oi = 0; oi < _operands.Count; oi++)
+        {
+            _operands[oi] = BashRuntime.ExpandEscapeSequences(_operands[oi]);
+        }
+    }
 
     protected override void ProcessRecord()
     {
-        if (InputObject != null)
+        if (InputObject == null) return;
+
+        ParseOnce();
+        if (_suppress) return;
+
+        // Stream the per-line transform instead of buffering the whole pipe.
+        // The buffered oracle joined items with '\n' and stripped one trailing
+        // '\n' before splitting on '\n'; that is exactly equivalent to
+        // splitting each record on '\n' (NO trailing trim) and transforming
+        // each sub-line — the inter-item join '\n' is the same separator the
+        // split would produce, so item boundaries are line boundaries. Squeeze
+        // / translate are already per-line (TransformLine takes one line), so
+        // no cross-record state is needed.
+        string text = BashRuntime.GetBashText(InputObject);
+        foreach (var line in text.Split('\n'))
         {
-            _pipeline.Add(InputObject);
+            string transformed = TransformLine(
+                line, _operands, _deleteMode, _squeezeMode,
+                _complementMode, _truncateMode);
+            WriteObject(BashRuntime.NewBashObject(transformed));
         }
     }
 
     protected override void EndProcessing()
     {
+        ParseOnce();
+
         var args = Arguments ?? Array.Empty<string>();
 
         FileSystemHelpers.SetLastExitCode(this, 0);
@@ -95,80 +179,8 @@ public sealed class InvokeBashTrCommand : PSCmdlet
             return;
         }
 
-        bool deleteMode = D.IsPresent;
-        bool complementMode = C.IsPresent;
-        bool squeezeMode = false;
-        bool truncateMode = false;
-        var operands = new List<string>();
-
-        for (int i = 0; i < args.Length; i++)
-        {
-            string arg = args[i];
-
-            if (arg == "--complement") { complementMode = true; continue; }
-            if (arg == "--truncate-set1") { truncateMode = true; continue; }
-            if (arg == "--delete") { deleteMode = true; continue; }
-            if (arg == "--squeeze-repeats") { squeezeMode = true; continue; }
-
-            if (arg == "-d") { deleteMode = true; continue; }
-            if (arg == "-s") { squeezeMode = true; continue; }
-
-            if (arg.Length > 1 && arg[0] == '-')
-            {
-                // Bundled / single short flags. Matches the psm1 oracle's
-                // per-char scan over arg.Substring(1).
-                foreach (char ch in arg.AsSpan(1))
-                {
-                    switch (ch)
-                    {
-                        case 'd': deleteMode = true; break;
-                        case 's': squeezeMode = true; break;
-                        case 'c': complementMode = true; break;
-                        case 'C': complementMode = true; break;
-                        case 't': truncateMode = true; break;
-                    }
-                }
-                continue;
-            }
-
-            operands.Add(arg);
-        }
-
-        // Expand C-style escape sequences in operands before class expansion.
-        for (int oi = 0; oi < operands.Count; oi++)
-        {
-            operands[oi] = BashRuntime.ExpandEscapeSequences(operands[oi]);
-        }
-
-        // Collect all pipeline text. The oracle joins items with '\n' and
-        // strips a single trailing '\n' before splitting on '\n' to drive the
-        // per-line transform loop.
-        var allText = new StringBuilder();
-        foreach (var item in _pipeline)
-        {
-            allText.Append(BashRuntime.GetBashText(item));
-            allText.Append('\n');
-        }
-        string inputText = allText.ToString();
-        if (inputText.EndsWith('\n'))
-        {
-            inputText = inputText.Substring(0, inputText.Length - 1);
-        }
-
-        // Empty input -> no output. (The oracle would split "" into a single
-        // empty line and emit one empty object; matching that for parity.)
-        if (_pipeline.Count == 0)
-        {
-            return;
-        }
-
-        foreach (var line in inputText.Split('\n'))
-        {
-            string transformed = TransformLine(
-                line, operands, deleteMode, squeezeMode,
-                complementMode, truncateMode);
-            WriteObject(BashRuntime.NewBashObject(transformed));
-        }
+        // Pipeline records (if any) were streamed in ProcessRecord; empty
+        // input produces no output, matching the oracle's count==0 guard.
     }
 
     private static string TransformLine(
