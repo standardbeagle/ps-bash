@@ -77,18 +77,112 @@ public sealed class InvokeBashFoldCommand : PSCmdlet
     [Alias("s")]
     public SwitchParameter Spaces { get; set; }
 
-    private readonly List<PSObject> _pipeline = new();
+    // Parsed-once state.
+    private bool _parsed;
+    private int _width = 80;
+    private bool _breakSpaces;
+    private List<string> _operands = new();
+    // True when stdin must NOT be streamed: file operands present (file mode
+    // ignores stdin) or a --help / --version request. Matches the buffered
+    // oracle, which only consumed the pipeline when there were no operands.
+    private bool _suppressStdin;
+
+    private void ParseOnce()
+    {
+        if (_parsed) return;
+        _parsed = true;
+
+        var args = Arguments ?? Array.Empty<string>();
+        _breakSpaces = Spaces.IsPresent;
+
+        if (!string.IsNullOrEmpty(Width) && int.TryParse(Width, out int wBound))
+        {
+            _width = wBound;
+        }
+
+        int i = 0;
+        while (i < args.Length)
+        {
+            string a = args[i];
+            // -wN  (joined form)
+            if (a.Length > 2 && a.StartsWith("-w") && int.TryParse(a.AsSpan(2), out int wJoined))
+            {
+                _width = wJoined;
+                i++;
+                continue;
+            }
+            // -w N
+            if (a == "-w" && i + 1 < args.Length && int.TryParse(args[i + 1], out int wSep))
+            {
+                _width = wSep;
+                i += 2;
+                continue;
+            }
+            // --width=N
+            if (a.StartsWith("--width=") && int.TryParse(a.AsSpan(8), out int wLong))
+            {
+                _width = wLong;
+                i++;
+                continue;
+            }
+            if (a == "-s" || a == "--spaces")
+            {
+                _breakSpaces = true;
+                i++;
+                continue;
+            }
+            if (a == "-b" || a == "--bytes")
+            {
+                // bytes mode — no-op for the ASCII text path; oracle parity.
+                i++;
+                continue;
+            }
+            _operands.Add(a);
+            i++;
+        }
+
+        if (_width <= 0)
+        {
+            // Guard against zero/negative widths producing infinite loops.
+            // The psm1 oracle never explicitly validated; on an int <= 0 the
+            // while-loop in PowerShell would either never enter or stall on
+            // the chunk arithmetic. Treat as "emit each line unchanged".
+            _width = int.MaxValue;
+        }
+
+        bool helpOrVersion = Array.IndexOf(args, "--help") >= 0
+            || Array.IndexOf(args, "--version") >= 0;
+        _suppressStdin = _operands.Count > 0 || helpOrVersion;
+    }
 
     protected override void ProcessRecord()
     {
-        if (InputObject != null)
+        if (InputObject == null) return;
+
+        ParseOnce();
+        if (_suppressStdin) return;
+
+        // Pipeline mode: wrap each stdin sub-line as it arrives instead of
+        // buffering the whole pipe.
+        string text = BashRuntime.GetBashText(InputObject);
+        string trimmed = text.TrimEnd('\n');
+        if (trimmed.Contains('\n'))
         {
-            _pipeline.Add(InputObject);
+            foreach (var sub in trimmed.Split('\n'))
+            {
+                EmitWrapped(sub, _width, _breakSpaces);
+            }
+        }
+        else
+        {
+            EmitWrapped(trimmed, _width, _breakSpaces);
         }
     }
 
     protected override void EndProcessing()
     {
+        ParseOnce();
+
         var args = Arguments ?? Array.Empty<string>();
 
         FileSystemHelpers.SetLastExitCode(this, 0);
@@ -103,119 +197,32 @@ public sealed class InvokeBashFoldCommand : PSCmdlet
             return;
         }
 
-        int width = 80;
-        bool breakSpaces = Spaces.IsPresent;
-        var operands = new List<string>();
+        // Pipeline mode (no operands) was already streamed in ProcessRecord.
+        if (_operands.Count == 0) return;
 
-        if (!string.IsNullOrEmpty(Width) && int.TryParse(Width, out int wBound))
+        // File mode.
+        bool hadError = false;
+        foreach (var raw in _operands)
         {
-            width = wBound;
-        }
-
-        int i = 0;
-        while (i < args.Length)
-        {
-            string a = args[i];
-            // -wN  (joined form)
-            if (a.Length > 2 && a.StartsWith("-w") && int.TryParse(a.AsSpan(2), out int wJoined))
+            foreach (var filePath in FileSystemHelpers.ResolveOperandPaths(this, raw))
             {
-                width = wJoined;
-                i++;
-                continue;
-            }
-            // -w N
-            if (a == "-w" && i + 1 < args.Length && int.TryParse(args[i + 1], out int wSep))
-            {
-                width = wSep;
-                i += 2;
-                continue;
-            }
-            // --width=N
-            if (a.StartsWith("--width=") && int.TryParse(a.AsSpan(8), out int wLong))
-            {
-                width = wLong;
-                i++;
-                continue;
-            }
-            if (a == "-s" || a == "--spaces")
-            {
-                breakSpaces = true;
-                i++;
-                continue;
-            }
-            if (a == "-b" || a == "--bytes")
-            {
-                // bytes mode — no-op for the ASCII text path; oracle parity.
-                i++;
-                continue;
-            }
-            operands.Add(a);
-            i++;
-        }
-
-        if (width <= 0)
-        {
-            // Guard against zero/negative widths producing infinite loops.
-            // The psm1 oracle never explicitly validated; on an int <= 0 the
-            // while-loop in PowerShell would either never enter or stall on
-            // the chunk arithmetic. Treat as "emit each line unchanged".
-            width = int.MaxValue;
-        }
-
-        var lines = new List<string>();
-
-        if (operands.Count == 0 && _pipeline.Count > 0)
-        {
-            // Pipeline mode.
-            foreach (var item in _pipeline)
-            {
-                string text = BashRuntime.GetBashText(item);
-                string trimmed = text.TrimEnd('\n');
-                if (trimmed.Contains('\n'))
+                try
                 {
-                    foreach (var sub in trimmed.Split('\n'))
+                    foreach (var line in BashFileSystem.ReadLines(filePath))
                     {
-                        lines.Add(sub);
+                        EmitWrapped(line, _width, _breakSpaces);
                     }
                 }
-                else
+                catch (Exception ex)
                 {
-                    lines.Add(trimmed);
+                    WriteReadError(filePath, ex);
+                    hadError = true;
                 }
             }
         }
-        else
+        if (hadError)
         {
-            // File mode.
-            bool hadError = false;
-            foreach (var raw in operands)
-            {
-                foreach (var filePath in FileSystemHelpers.ResolveOperandPaths(this, raw))
-                {
-                    try
-                    {
-                        foreach (var line in BashFileSystem.ReadLines(filePath))
-                        {
-                            EmitWrapped(line, width, breakSpaces);
-                        }
-                    }
-                    catch (Exception ex)
-                    {
-                        WriteReadError(filePath, ex);
-                        hadError = true;
-                    }
-                }
-            }
-            if (hadError)
-            {
-                FileSystemHelpers.SetLastExitCode(this, 1);
-            }
-            return;
-        }
-
-        foreach (var line in lines)
-        {
-            EmitWrapped(line, width, breakSpaces);
+            FileSystemHelpers.SetLastExitCode(this, 1);
         }
     }
 

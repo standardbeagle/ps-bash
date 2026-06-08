@@ -47,13 +47,29 @@ public sealed class InvokeBashRevCommand : PSCmdlet
     [Parameter(ValueFromPipeline = true)]
     public PSObject? InputObject { get; set; }
 
-    private readonly List<PSObject> _pipeline = new();
-
     protected override void ProcessRecord()
     {
-        if (InputObject != null)
+        if (InputObject == null) return;
+
+        // Pipeline mode is selected solely by the absence of operands (rev's
+        // only flags are --help / --version, both of which carry an arg). When
+        // any arg is present we are in file / help / version mode and stdin is
+        // ignored — exactly as the buffered oracle did. Streaming here instead
+        // of buffering keeps a huge pipe from materializing in memory.
+        if ((Arguments?.Length ?? 0) != 0) return;
+
+        string text = BashRuntime.GetBashText(InputObject);
+        string trimmed = text.TrimEnd('\n');
+        if (trimmed.Contains('\n'))
         {
-            _pipeline.Add(InputObject);
+            foreach (var subLine in trimmed.Split('\n'))
+            {
+                WriteObject(BashRuntime.NewBashObject(ReverseString(subLine)));
+            }
+        }
+        else
+        {
+            WriteObject(BashRuntime.NewBashObject(ReverseString(trimmed)));
         }
     }
 
@@ -73,27 +89,8 @@ public sealed class InvokeBashRevCommand : PSCmdlet
             return;
         }
 
-        // Pipeline mode: no operands, take from $input.
-        if (args.Length == 0 && _pipeline.Count > 0)
-        {
-            foreach (var item in _pipeline)
-            {
-                string text = BashRuntime.GetBashText(item);
-                string trimmed = text.TrimEnd('\n');
-                if (trimmed.Contains('\n'))
-                {
-                    foreach (var subLine in trimmed.Split('\n'))
-                    {
-                        WriteObject(BashRuntime.NewBashObject(ReverseString(subLine)));
-                    }
-                }
-                else
-                {
-                    WriteObject(BashRuntime.NewBashObject(ReverseString(trimmed)));
-                }
-            }
-            return;
-        }
+        // Pipeline mode (no operands) was already streamed in ProcessRecord.
+        if (args.Length == 0) return;
 
         // File mode: each operand is a (possibly globbed) file path.
         bool hadError = false;
