@@ -1,5 +1,6 @@
 using System.Management.Automation;
 using System.Text;
+using System.Text.Json;
 
 namespace PsBash.Cmdlets;
 
@@ -121,8 +122,10 @@ public sealed class InvokeBashJqCommand : PSCmdlet
             }
         }
 
-        // Collect JSON input
-        var jsonTexts = new List<string>();
+        // Parse all inputs into the same nested-hashtable / array shape the
+        // oracle used (ConvertFrom-Json -AsHashtable). File mode parses from
+        // streams so large JSON files are not also materialized as raw strings.
+        var allData = new List<object?>();
         if (files.Count > 0)
         {
             foreach (var file in files)
@@ -146,7 +149,14 @@ public sealed class InvokeBashJqCommand : PSCmdlet
                 }
                 try
                 {
-                    jsonTexts.Add(BashFileSystem.ReadAllTextRaw(resolved));
+                    using var stream = BashFileSystem.OpenRead(resolved);
+                    allData.Add(JqEngine.ParseJson(stream));
+                }
+                catch (JsonException ex)
+                {
+                    EmitError($"jq: parse error: {ex.Message}");
+                    SessionState.PSVariable.Set("global:LASTEXITCODE", 5);
+                    return;
                 }
                 catch (Exception ex)
                 {
@@ -169,30 +179,20 @@ public sealed class InvokeBashJqCommand : PSCmdlet
             string combined = textParts.ToString().Trim();
             if (combined.Length > 0)
             {
-                jsonTexts.Add(combined);
+                try
+                {
+                    allData.Add(JqEngine.ParseJson(combined));
+                }
+                catch (Exception ex)
+                {
+                    EmitError($"jq: parse error: {ex.Message}");
+                    SessionState.PSVariable.Set("global:LASTEXITCODE", 5);
+                    return;
+                }
             }
         }
 
-        if (jsonTexts.Count == 0) return;
-
-        // Parse all inputs into the same nested-hashtable / array shape the
-        // oracle used (ConvertFrom-Json -AsHashtable).
-        var allData = new List<object?>();
-        foreach (var jsonText in jsonTexts)
-        {
-            object? parsed;
-            try
-            {
-                parsed = JqEngine.ParseJson(jsonText);
-            }
-            catch (Exception ex)
-            {
-                EmitError($"jq: parse error: {ex.Message}");
-                SessionState.PSVariable.Set("global:LASTEXITCODE", 5);
-                return;
-            }
-            allData.Add(parsed);
-        }
+        if (allData.Count == 0) return;
 
         // Slurp = wrap all inputs into a single array value processed once.
         List<object?> dataStream;

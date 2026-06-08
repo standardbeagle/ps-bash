@@ -15,6 +15,8 @@ namespace PsBash.Shell;
 /// </summary>
 internal static class JobObjectWatchdog
 {
+    private const int ProcStatMaxBytes = 4096;
+
     // Must live for the process lifetime so the kernel handle is not GC'd and
     // the Job Object is not closed prematurely. Closing the handle triggers the
     // KILL_ON_JOB_CLOSE semantics immediately.
@@ -177,7 +179,7 @@ internal static class JobObjectWatchdog
         {
             try
             {
-                var statText = File.ReadAllText($"/proc/{pid}/stat");
+                var statText = ReadProcStat(pid);
                 int lastParen = statText.LastIndexOf(')');
                 if (lastParen < 0 || lastParen + 2 >= statText.Length) return 0;
                 // After ")" comes: " S ppid ..." (state then ppid)
@@ -189,6 +191,15 @@ internal static class JobObjectWatchdog
             catch { return 0; }
         }
         return 0;
+    }
+
+    private static string ReadProcStat(int pid)
+    {
+        var path = $"/proc/{pid}/stat";
+        using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
+        Span<byte> buffer = stackalloc byte[ProcStatMaxBytes];
+        int read = stream.Read(buffer);
+        return System.Text.Encoding.UTF8.GetString(buffer[..read]);
     }
 
     // ------------------------- P/Invoke -------------------------

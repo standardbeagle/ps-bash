@@ -43,6 +43,18 @@ internal static class JqEngine
         return ConvertElement(doc.RootElement);
     }
 
+    public static object? ParseJson(Stream jsonStream)
+    {
+        using var doc = JsonDocument.Parse(
+            jsonStream,
+            new JsonDocumentOptions
+            {
+                AllowTrailingCommas = false,
+                CommentHandling = JsonCommentHandling.Skip,
+            });
+        return ConvertElement(doc.RootElement);
+    }
+
     private static object? ConvertElement(JsonElement el)
     {
         switch (el.ValueKind)
