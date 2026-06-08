@@ -57,29 +57,32 @@ public sealed class InvokeBashUniqCommand : PSCmdlet
     [Parameter(ValueFromPipeline = true)]
     public PSObject? InputObject { get; set; }
 
-    private readonly List<PSObject> _pipeline = new();
+    // Parsed-once state.
+    private bool _parsed;
+    private bool _countMode, _duplicatesOnly, _ignoreCase, _uniqueOnly;
+    private int _skipFields, _skipChars, _checkChars;
+    private List<string> _operands = new();
+    // True when stdin must NOT be streamed: file operands present (file mode
+    // ignores stdin) or a --help / --version request.
+    private bool _suppressStdin;
+    // Adjacent-dedup state — uniq only needs the current run, never the whole
+    // pipe. Instance state so a streamed stdin run carries across records.
+    private string? _prevLine;
+    private string? _prevKey;
+    private int _runCount;
+    private bool _hadError;
 
-    protected override void ProcessRecord()
+    private void ParseOnce()
     {
-        if (InputObject != null)
-        {
-            _pipeline.Add(InputObject);
-        }
-    }
+        if (_parsed) return;
+        _parsed = true;
 
-    protected override void EndProcessing()
-    {
         var rawArgs = Arguments ?? Array.Empty<string>();
 
-        FileSystemHelpers.SetLastExitCode(this, 0);
-        if (FileSystemHelpers.TryHandleVersion(this, "uniq", rawArgs)) return;
-        if (Array.IndexOf(rawArgs, "--help") >= 0)
+        // --help / --version short-circuit before flag scanning (oracle order).
+        if (Array.IndexOf(rawArgs, "--version") >= 0 || Array.IndexOf(rawArgs, "--help") >= 0)
         {
-            foreach (var line in InvokeCommand.InvokeScript(
-                         "param($n) Show-BashHelp $n", "uniq"))
-            {
-                WriteObject(line);
-            }
+            _suppressStdin = true;
             return;
         }
 
@@ -230,79 +233,112 @@ public sealed class InvokeBashUniqCommand : PSCmdlet
             i++;
         }
 
-        bool hadError = false;
-        string? prevLine = null;
-        string? prevKey = null;
-        int runCount = 0;
+        // Publish the parsed flags to instance state so the streamed
+        // ProcessRecord and EndProcessing share them.
+        _countMode = countMode;
+        _duplicatesOnly = duplicatesOnly;
+        _ignoreCase = ignoreCase;
+        _uniqueOnly = uniqueOnly;
+        _skipFields = skipFields;
+        _skipChars = skipChars;
+        _checkChars = checkChars;
+        _operands = operands;
+        _suppressStdin = operands.Count > 0;
+    }
 
-        void FlushRun()
+    private void FlushRun()
+    {
+        if (_prevLine == null) return;
+        if (_duplicatesOnly && _runCount < 2) return;
+        if (_uniqueOnly && _runCount > 1) return;
+
+        if (_countMode)
         {
-            if (prevLine == null) return;
-            if (duplicatesOnly && runCount < 2) return;
-            if (uniqueOnly && runCount > 1) return;
+            string text = string.Format("{0,7} {1}", _runCount, _prevLine);
+            WriteObject(BashRuntime.NewBashObject(text));
+        }
+        else
+        {
+            WriteObject(BashRuntime.NewBashObject(_prevLine));
+        }
+    }
 
-            if (countMode)
-            {
-                string text = string.Format("{0,7} {1}", runCount, prevLine);
-                WriteObject(BashRuntime.NewBashObject(text));
-            }
-            else
-            {
-                WriteObject(BashRuntime.NewBashObject(prevLine));
-            }
+    private void ProcessLine(string line)
+    {
+        string key = GetUniqKey(line, _skipFields, _skipChars, _checkChars);
+        bool same;
+        if (_prevKey == null)
+        {
+            same = false;
+        }
+        else if (_ignoreCase)
+        {
+            same = string.Equals(key, _prevKey, StringComparison.OrdinalIgnoreCase);
+        }
+        else
+        {
+            same = string.Equals(key, _prevKey, StringComparison.Ordinal);
         }
 
-        void ProcessLine(string line)
+        if (same)
         {
-            string key = GetUniqKey(line, skipFields, skipChars, checkChars);
-            bool same;
-            if (prevKey == null)
-            {
-                same = false;
-            }
-            else if (ignoreCase)
-            {
-                same = string.Equals(key, prevKey, StringComparison.OrdinalIgnoreCase);
-            }
-            else
-            {
-                same = string.Equals(key, prevKey, StringComparison.Ordinal);
-            }
-
-            if (same)
-            {
-                runCount++;
-                return;
-            }
-
-            FlushRun();
-            prevLine = line;
-            prevKey = key;
-            runCount = 1;
+            _runCount++;
+            return;
         }
 
-        if (operands.Count == 0 && _pipeline.Count > 0)
+        FlushRun();
+        _prevLine = line;
+        _prevKey = key;
+        _runCount = 1;
+    }
+
+    protected override void ProcessRecord()
+    {
+        if (InputObject == null) return;
+
+        ParseOnce();
+        if (_suppressStdin) return;
+
+        // Stream the adjacent dedup instead of buffering the pipe — uniq only
+        // needs the current run (prev line/key + count), never the whole input.
+        string text = BashRuntime.GetBashText(InputObject);
+        string trimmed = text.TrimEnd('\n');
+        if (trimmed.Contains('\n'))
         {
-            foreach (var item in _pipeline)
+            foreach (var subLine in trimmed.Split('\n'))
             {
-                string text = BashRuntime.GetBashText(item);
-                string trimmed = text.TrimEnd('\n');
-                if (trimmed.Contains('\n'))
-                {
-                    foreach (var subLine in trimmed.Split('\n'))
-                    {
-                        ProcessLine(subLine);
-                    }
-                }
-                else
-                {
-                    ProcessLine(trimmed);
-                }
+                ProcessLine(subLine);
             }
         }
         else
         {
-            foreach (var raw in operands)
+            ProcessLine(trimmed);
+        }
+    }
+
+    protected override void EndProcessing()
+    {
+        ParseOnce();
+
+        var rawArgs = Arguments ?? Array.Empty<string>();
+
+        FileSystemHelpers.SetLastExitCode(this, 0);
+        if (FileSystemHelpers.TryHandleVersion(this, "uniq", rawArgs)) return;
+        if (Array.IndexOf(rawArgs, "--help") >= 0)
+        {
+            foreach (var line in InvokeCommand.InvokeScript(
+                         "param($n) Show-BashHelp $n", "uniq"))
+            {
+                WriteObject(line);
+            }
+            return;
+        }
+
+        // File mode: stdin was suppressed; read each operand. Pipeline mode
+        // (no operands) already streamed its lines through ProcessRecord.
+        if (_operands.Count > 0)
+        {
+            foreach (var raw in _operands)
             {
                 foreach (var filePath in FileSystemHelpers.ResolveOperandPaths(this, raw))
                 {
@@ -316,15 +352,16 @@ public sealed class InvokeBashUniqCommand : PSCmdlet
                     catch (Exception ex)
                     {
                         WriteReadError(filePath, ex);
-                        hadError = true;
+                        _hadError = true;
                     }
                 }
             }
         }
 
+        // Flush the final run (the buffered oracle's single trailing FlushRun).
         FlushRun();
 
-        if (hadError)
+        if (_hadError)
         {
             FileSystemHelpers.SetLastExitCode(this, 1);
         }
