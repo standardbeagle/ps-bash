@@ -25,6 +25,8 @@ namespace PsBash.Cmdlets;
 public static class BashFileSystem
 {
     private const int BinaryProbeBytes = 8192;
+    private const int DefaultWholeDocumentMaxChars = 16 * 1024 * 1024;
+    private const int DefaultWholeDocumentMaxBytes = 16 * 1024 * 1024;
 
     public readonly record struct TextLine(string Text, bool HasTrailingNewline);
 
@@ -168,9 +170,7 @@ public static class BashFileSystem
     /// </summary>
     public static string ReadAllText(Stream stream)
     {
-        using var reader = new StreamReader(
-            stream, Encoding.UTF8, detectEncodingFromByteOrderMarks: true, leaveOpen: true);
-        return reader.ReadToEnd().Replace("\r\n", "\n");
+        return ReadAllTextBounded(stream, normalizeCrLf: true);
     }
 
     /// <summary>
@@ -184,7 +184,15 @@ public static class BashFileSystem
     {
         using var fs = OpenRead(path);
         using var ms = new MemoryStream();
-        fs.CopyTo(ms);
+        var maxBytes = WholeDocumentMaxBytes();
+        var buffer = new byte[8192];
+        int read;
+        while ((read = fs.Read(buffer, 0, buffer.Length)) > 0)
+        {
+            if (ms.Length + read > maxBytes)
+                throw new IOException($"Whole-document binary read exceeds {maxBytes} bytes.");
+            ms.Write(buffer, 0, read);
+        }
         return ms.ToArray();
     }
 
@@ -205,9 +213,42 @@ public static class BashFileSystem
     /// </summary>
     public static string ReadAllTextRaw(Stream stream)
     {
+        return ReadAllTextBounded(stream, normalizeCrLf: false);
+    }
+
+    private static string ReadAllTextBounded(Stream stream, bool normalizeCrLf)
+    {
         using var reader = new StreamReader(
             stream, Encoding.UTF8, detectEncodingFromByteOrderMarks: true, leaveOpen: true);
-        return reader.ReadToEnd();
+        var maxChars = WholeDocumentMaxChars();
+        var sb = new StringBuilder();
+        var buffer = new char[4096];
+        int read;
+        while ((read = reader.Read(buffer, 0, buffer.Length)) > 0)
+        {
+            if (sb.Length + read > maxChars)
+                throw new IOException($"Whole-document text read exceeds {maxChars} characters.");
+            sb.Append(buffer, 0, read);
+        }
+
+        var text = sb.ToString();
+        return normalizeCrLf ? text.Replace("\r\n", "\n") : text;
+    }
+
+    private static int WholeDocumentMaxChars()
+    {
+        var raw = Environment.GetEnvironmentVariable("PSBASH_WHOLE_DOCUMENT_MAX_CHARS");
+        return int.TryParse(raw, out var value) && value > 0
+            ? Math.Max(value, 1024)
+            : DefaultWholeDocumentMaxChars;
+    }
+
+    private static int WholeDocumentMaxBytes()
+    {
+        var raw = Environment.GetEnvironmentVariable("PSBASH_WHOLE_DOCUMENT_MAX_BYTES");
+        return int.TryParse(raw, out var value) && value > 0
+            ? Math.Max(value, 1024)
+            : DefaultWholeDocumentMaxBytes;
     }
 
     // -- Recursive search enumeration (pruned, streaming) -------------------

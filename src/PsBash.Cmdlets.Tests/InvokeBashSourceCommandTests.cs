@@ -102,6 +102,31 @@ public class InvokeBashSourceCommandTests : IClassFixture<SharedPwshFixture>
     }
 
     [Fact]
+    public void SourceShFile_AboveWholeDocumentCap_WritesReadError()
+    {
+        var pwsh = _fixture.AcquireFresh();
+        var tempFile = Path.Combine(Path.GetTempPath(), $"psbash_source_large_{Guid.NewGuid()}.sh");
+        File.WriteAllText(tempFile, new string('#', 2048));
+        var priorCap = Environment.GetEnvironmentVariable("PSBASH_WHOLE_DOCUMENT_MAX_CHARS");
+        try
+        {
+            Environment.SetEnvironmentVariable("PSBASH_WHOLE_DOCUMENT_MAX_CHARS", "1024");
+            pwsh.Streams.Error.Clear();
+            pwsh.AddScript($"Invoke-BashSource '{tempFile.Replace("'", "''")}'; $global:LASTEXITCODE").Invoke();
+            pwsh.Commands.Clear();
+
+            var errors = pwsh.Streams.Error.ReadAll();
+            Assert.NotEmpty(errors);
+            Assert.Contains(errors, e => e.Exception.Message.Contains("Whole-document text read exceeds"));
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("PSBASH_WHOLE_DOCUMENT_MAX_CHARS", priorCap);
+            File.Delete(tempFile);
+        }
+    }
+
+    [Fact]
     public void SourceNonExistentPs1File_WritesError()
     {
         var pwsh = _fixture.AcquireFresh();

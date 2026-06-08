@@ -75,9 +75,19 @@ public sealed class InvokeBashSourceCommand : PSCmdlet
             }
 
             string content;
-            using (var reader = new StreamReader(resolvedPath, System.Text.Encoding.UTF8))
+            try
             {
-                content = reader.ReadToEnd();
+                content = BashFileSystem.ReadAllTextRaw(resolvedPath);
+            }
+            catch (IOException ex)
+            {
+                WriteError(new ErrorRecord(
+                    ex,
+                    "SourceReadFailed",
+                    ErrorCategory.ReadError,
+                    resolvedPath));
+                SessionState.PSVariable.Set("global:LASTEXITCODE", 1);
+                return;
             }
 
             if (string.IsNullOrWhiteSpace(content))
