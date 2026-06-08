@@ -155,9 +155,17 @@ public sealed class InvokeBashColumnCommand : PSCmdlet
             {
                 foreach (var filePath in FileSystemHelpers.ResolveOperandPaths(this, raw))
                 {
-                    string[]? fileLines = ReadFileLines(filePath);
-                    if (fileLines == null) continue;
-                    lines.AddRange(fileLines);
+                    try
+                    {
+                        foreach (var line in BashFileSystem.ReadLines(filePath))
+                        {
+                            lines.Add(line);
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        WriteReadError(filePath, ex);
+                    }
                 }
             }
         }
@@ -221,37 +229,12 @@ public sealed class InvokeBashColumnCommand : PSCmdlet
         }
     }
 
-    /// <summary>
-    /// File → string[] of lines, mirroring the psm1 <c>Read-BashFileLines</c>
-    /// helper byte for byte: BOM-tolerant UTF-8 via <see cref="File.ReadAllText(string)"/>,
-    /// CRLF normalized to LF, split on <c>\n</c> with
-    /// <c>StreamReader.ReadLine()</c> trailing-newline semantics (a file
-    /// ending in <c>\n</c> does not yield a spurious empty final line; a
-    /// file of exactly <c>"\n"</c> yields one empty line). On read failure,
-    /// emits the bash-style error and returns <c>null</c>.
-    /// </summary>
-    private string[]? ReadFileLines(string path)
+    private void WriteReadError(string path, Exception ex)
     {
-        string content;
-        try
-        {
-            content = BashFileSystem.ReadAllText(path);
-        }
-        catch (Exception ex)
-        {
-            bool notFound = ex is FileNotFoundException or DirectoryNotFoundException
-                || ex.InnerException is FileNotFoundException or DirectoryNotFoundException;
-            string msg = notFound ? "No such file or directory" : ex.Message;
-            string normalized = path.Replace('\\', '/');
-            FileSystemHelpers.WriteBashError(this, $"column: {normalized}: {msg}");
-            return null;
-        }
-
-        if (content.Length == 0) return Array.Empty<string>();
-
-        bool trailingNl = content.EndsWith("\n");
-        string body = trailingNl ? content.Substring(0, content.Length - 1) : content;
-        if (body.Length == 0) return new[] { string.Empty };
-        return body.Split('\n');
+        bool notFound = ex is FileNotFoundException or DirectoryNotFoundException
+            || ex.InnerException is FileNotFoundException or DirectoryNotFoundException;
+        string msg = notFound ? "No such file or directory" : ex.Message;
+        string normalized = path.Replace('\\', '/');
+        FileSystemHelpers.WriteBashError(this, $"column: {normalized}: {msg}");
     }
 }

@@ -17,8 +17,8 @@ namespace PsBash.Cmdlets;
 /// File + pipeline dual mode. Pipeline mode preserves the original typed
 /// pipeline objects (LsEntry / CatLine / ...) — they are sorted by their
 /// <c>BashText</c> derived sort key and re-emitted in sorted order. File mode
-/// reads via <see cref="File.ReadAllText(string)"/> with CRLF normalization
-/// and splits on <c>\n</c> (StreamReader.ReadLine semantics).
+/// streams input lines with CRLF normalization and StreamReader.ReadLine
+/// semantics.
 ///
 /// Flag binding: three short flags prefix-collide with PowerShell common
 /// parameters and are declared as explicit <see cref="SwitchParameter"/>s
@@ -275,21 +275,17 @@ public sealed class InvokeBashSortCommand : PSCmdlet
         {
             foreach (var filePath in FileSystemHelpers.ResolveOperandPaths(this, raw))
             {
-                string? content = ReadFileText(filePath);
-                if (content == null)
+                try
                 {
+                    foreach (var line in BashFileSystem.ReadLines(filePath))
+                    {
+                        items.Add(BashRuntime.NewBashObject(line));
+                    }
+                }
+                catch (Exception ex)
+                {
+                    WriteReadError(filePath, ex);
                     hadError = true;
-                    continue;
-                }
-                string body = content;
-                if (body.EndsWith("\n", StringComparison.Ordinal))
-                {
-                    body = body.Substring(0, body.Length - 1);
-                }
-                if (body.Length == 0) continue;
-                foreach (var l in body.Split('\n'))
-                {
-                    items.Add(BashRuntime.NewBashObject(l));
                 }
             }
         }
@@ -677,20 +673,12 @@ public sealed class InvokeBashSortCommand : PSCmdlet
         return 0;
     }
 
-    private string? ReadFileText(string path)
+    private void WriteReadError(string path, Exception ex)
     {
-        try
-        {
-            return BashFileSystem.ReadAllText(path);
-        }
-        catch (Exception ex)
-        {
-            bool notFound = ex is FileNotFoundException or DirectoryNotFoundException
-                || ex.InnerException is FileNotFoundException or DirectoryNotFoundException;
-            string msg = notFound ? "No such file or directory" : ex.Message;
-            string normalized = path.Replace('\\', '/');
-            FileSystemHelpers.WriteBashError(this, $"sort: {normalized}: {msg}");
-            return null;
-        }
+        bool notFound = ex is FileNotFoundException or DirectoryNotFoundException
+            || ex.InnerException is FileNotFoundException or DirectoryNotFoundException;
+        string msg = notFound ? "No such file or directory" : ex.Message;
+        string normalized = path.Replace('\\', '/');
+        FileSystemHelpers.WriteBashError(this, $"sort: {normalized}: {msg}");
     }
 }

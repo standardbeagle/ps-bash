@@ -262,27 +262,17 @@ public sealed class InvokeBashShufCommand : PSCmdlet
         {
             foreach (var filePath in FileSystemHelpers.ResolveOperandPaths(this, inputFile))
             {
-                string? content;
                 try
                 {
-                    content = BashFileSystem.ReadAllTextRaw(filePath);
+                    foreach (var line in BashFileSystem.ReadLines(filePath))
+                    {
+                        items.Add(line);
+                    }
                 }
                 catch
                 {
                     // Oracle uses `-ErrorAction SilentlyContinue` — no
                     // emission, no items added.
-                    content = null;
-                }
-                if (content == null) continue;
-                // Match `Get-Content -Path` line-splitting: split on \n with
-                // CRLF normalization; a trailing newline does not produce a
-                // spurious empty final line.
-                content = content.Replace("\r\n", "\n");
-                if (content.EndsWith("\n")) content = content.Substring(0, content.Length - 1);
-                if (content.Length == 0) continue;
-                foreach (var line in content.Split('\n'))
-                {
-                    items.Add(line);
                 }
             }
         }

@@ -28,8 +28,8 @@ namespace PsBash.Cmdlets;
 /// Long forms (<c>--brief</c>, <c>--ignore-all-space</c>, etc.) also flow
 /// through <see cref="Arguments"/>.
 ///
-/// File-only mode. Reads via <see cref="File.ReadAllText(string)"/> with CRLF
-/// normalization; the trailing-newline-eats-empty-line slice matches
+/// File-only mode. Streams lines with CRLF normalization; the
+/// trailing-newline-eats-empty-line slice matches
 /// <c>StreamReader.ReadLine()</c> semantics (a file ending in <c>\n</c> does
 /// not produce a spurious empty final line). Each emitted line goes through
 /// <see cref="BashRuntime.NewBashObject(string)"/>.
@@ -442,10 +442,9 @@ public sealed class InvokeBashDiffCommand : PSCmdlet
 
     private string[]? ReadFileLines(string path)
     {
-        string content;
         try
         {
-            content = BashFileSystem.ReadAllText(path);
+            return BashFileSystem.ReadLines(path).ToArray();
         }
         catch (Exception ex)
         {
@@ -456,13 +455,6 @@ public sealed class InvokeBashDiffCommand : PSCmdlet
             FileSystemHelpers.WriteBashError(this, $"diff: {normalized}: {msg}");
             return null;
         }
-
-        if (content.Length == 0) return Array.Empty<string>();
-
-        bool trailingNl = content.EndsWith("\n");
-        string body = trailingNl ? content.Substring(0, content.Length - 1) : content;
-        if (body.Length == 0) return new[] { string.Empty };
-        return body.Split('\n');
     }
 
     private readonly struct Edit

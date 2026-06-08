@@ -15,26 +15,24 @@ namespace PsBash.Cmdlets;
 ///
 /// Algorithm (byte-for-byte parity with the psm1 oracle):
 /// <list type="number">
-/// <item>Read both files into line arrays.</item>
 /// <item>Build a lookup from file 2 keyed by the join field. The lookup is
 /// a <c>Dictionary&lt;string, List&lt;string[]&gt;&gt;</c> so that duplicate
 /// keys preserve insertion order and emit one output row per file-2 match.</item>
-/// <item>Iterate file 1 lines in order. For each, split on the delimiter,
+/// <item>Stream file 1 lines in order. For each, split on the delimiter,
 /// take the key field (skipping rows whose split has fewer fields than the
 /// key column), and for each matching file-2 row emit
 /// <c>key + delim + file1-rest + delim + file2-rest</c>.</item>
 /// </list>
 ///
-/// Both files: read via <see cref="System.IO.File.ReadAllText(string)"/>
-/// with CRLF normalization and <c>\n</c> split, mirroring the oracle's
-/// <c>Read-BashFileLines</c> slice (StreamReader.ReadLine semantics — a
-/// trailing newline does not produce a spurious empty final line). Paths
-/// resolve via <c>SessionState.Path.GetUnresolvedProviderPathFromPSPath</c>
-/// (no glob expansion — matching the oracle exactly). Missing files emit a
-/// bash-style <c>join: PATH: No such file or directory</c> error via the
-/// psm1 <c>Write-BashError</c> shim and return with no further output.
-/// Missing operand (&lt; 2 file operands) emits <c>join: missing operand</c>
-/// and returns.
+/// Both files stream with CRLF normalization and StreamReader.ReadLine
+/// semantics — a trailing newline does not produce a spurious empty final
+/// line. Paths resolve via
+/// <c>SessionState.Path.GetUnresolvedProviderPathFromPSPath</c> (no glob
+/// expansion — matching the oracle exactly). Missing files emit a bash-style
+/// <c>join: PATH: No such file or directory</c> error via the psm1
+/// <c>Write-BashError</c> shim and return with no further output. Missing
+/// operand (&lt; 2 file operands) emits <c>join: missing operand</c> and
+/// returns.
 ///
 /// No PowerShell common-parameter prefix collision: <c>-t</c>, <c>-1</c>,
 /// and <c>-2</c> have no overlap with any common parameter, so all three
@@ -139,10 +137,19 @@ public sealed class InvokeBashJoinCommand : PSCmdlet
         string path1 = SessionState.Path.GetUnresolvedProviderPathFromPSPath(operands[0]);
         string path2 = SessionState.Path.GetUnresolvedProviderPathFromPSPath(operands[1]);
 
-        string[]? lines1 = ReadFileLines(path1);
-        if (lines1 == null) { return; }
-        string[]? lines2 = ReadFileLines(path2);
-        if (lines2 == null) { return; }
+        IEnumerator<string>? file1 = null;
+        bool hasFile1Line;
+        try
+        {
+            file1 = BashFileSystem.ReadLines(path1).GetEnumerator();
+            hasFile1Line = file1.MoveNext();
+        }
+        catch (Exception ex)
+        {
+            file1?.Dispose();
+            WriteReadError(path1, ex);
+            return;
+        }
 
         // String.Split takes a char[]; we use a single-char or multi-char
         // delimiter consistently via Split(string[], StringSplitOptions).
@@ -152,78 +159,83 @@ public sealed class InvokeBashJoinCommand : PSCmdlet
         // (matches the oracle's [System.StringComparer]::Ordinal).
         var file2Map = new Dictionary<string, List<string[]>>(StringComparer.Ordinal);
         int keyIdx2 = field2 - 1;
-        foreach (var line in lines2)
-        {
-            var fields = line.Split(delimAsArray, StringSplitOptions.None);
-            if (keyIdx2 >= fields.Length) { continue; }
-            var key = fields[keyIdx2];
-            if (!file2Map.TryGetValue(key, out var bucket))
-            {
-                bucket = new List<string[]>();
-                file2Map[key] = bucket;
-            }
-            bucket.Add(fields);
-        }
-
-        int keyIdx1 = field1 - 1;
-        foreach (var line in lines1)
-        {
-            var fields1 = line.Split(delimAsArray, StringSplitOptions.None);
-            if (keyIdx1 >= fields1.Length) { continue; }
-            var key = fields1[keyIdx1];
-
-            if (!file2Map.TryGetValue(key, out var matches)) { continue; }
-
-            foreach (var fields2 in matches)
-            {
-                var parts = new List<string>();
-                parts.Add(key);
-                for (int c = 0; c < fields1.Length; c++)
-                {
-                    if (c != keyIdx1) { parts.Add(fields1[c]); }
-                }
-                for (int c = 0; c < fields2.Length; c++)
-                {
-                    if (c != keyIdx2) { parts.Add(fields2[c]); }
-                }
-                WriteObject(BashRuntime.NewBashObject(string.Join(delimiter, parts)));
-            }
-        }
-    }
-
-    /// <summary>
-    /// Read a file into an array of lines (no trailing newline carried per
-    /// line). On failure, emit a bash-style error via the psm1
-    /// <c>Write-BashError</c> shim and return <c>null</c>.
-    /// </summary>
-    private string[]? ReadFileLines(string path)
-    {
-        string content;
         try
         {
-            content = BashFileSystem.ReadAllTextRaw(path);
+            foreach (var line in BashFileSystem.ReadLines(path2))
+            {
+                var fields = line.Split(delimAsArray, StringSplitOptions.None);
+                if (keyIdx2 >= fields.Length) { continue; }
+                var key = fields[keyIdx2];
+                if (!file2Map.TryGetValue(key, out var bucket))
+                {
+                    bucket = new List<string[]>();
+                    file2Map[key] = bucket;
+                }
+                bucket.Add(fields);
+            }
         }
         catch (Exception ex)
         {
-            bool notFound = ex is FileNotFoundException or DirectoryNotFoundException
-                || ex.InnerException is FileNotFoundException or DirectoryNotFoundException;
-            string msg = notFound ? "No such file or directory" : ex.Message;
-            string normalized = path.Replace('\\', '/');
-            FileSystemHelpers.WriteBashError(this, $"join: {normalized}: {msg}");
-            return null;
+            file1?.Dispose();
+            WriteReadError(path2, ex);
+            return;
         }
 
-        // CRLF normalization + StreamReader.ReadLine() semantics: a trailing
-        // newline does not produce a spurious empty final line.
-        string body = content.Replace("\r\n", "\n");
-        if (body.EndsWith("\n"))
+        int keyIdx1 = field1 - 1;
+        try
         {
-            body = body.Substring(0, body.Length - 1);
+            while (hasFile1Line)
+            {
+                EmitJoinedRows(file1.Current, delimAsArray, keyIdx1, keyIdx2, file2Map, delimiter);
+                hasFile1Line = file1.MoveNext();
+            }
         }
-        if (body.Length == 0)
+        catch (Exception ex)
         {
-            return Array.Empty<string>();
+            WriteReadError(path1, ex);
         }
-        return body.Split('\n');
+        finally
+        {
+            file1?.Dispose();
+        }
+    }
+
+    private void EmitJoinedRows(
+        string line,
+        string[] delimAsArray,
+        int keyIdx1,
+        int keyIdx2,
+        Dictionary<string, List<string[]>> file2Map,
+        string delimiter)
+    {
+        var fields1 = line.Split(delimAsArray, StringSplitOptions.None);
+        if (keyIdx1 >= fields1.Length) { return; }
+        var key = fields1[keyIdx1];
+
+        if (!file2Map.TryGetValue(key, out var matches)) { return; }
+
+        foreach (var fields2 in matches)
+        {
+            var parts = new List<string>();
+            parts.Add(key);
+            for (int c = 0; c < fields1.Length; c++)
+            {
+                if (c != keyIdx1) { parts.Add(fields1[c]); }
+            }
+            for (int c = 0; c < fields2.Length; c++)
+            {
+                if (c != keyIdx2) { parts.Add(fields2[c]); }
+            }
+            WriteObject(BashRuntime.NewBashObject(string.Join(delimiter, parts)));
+        }
+    }
+
+    private void WriteReadError(string path, Exception ex)
+    {
+        bool notFound = ex is FileNotFoundException or DirectoryNotFoundException
+            || ex.InnerException is FileNotFoundException or DirectoryNotFoundException;
+        string msg = notFound ? "No such file or directory" : ex.Message;
+        string normalized = path.Replace('\\', '/');
+        FileSystemHelpers.WriteBashError(this, $"join: {normalized}: {msg}");
     }
 }

@@ -16,8 +16,9 @@ namespace PsBash.Cmdlets;
 /// newlines and split on <c>\n</c>; the resulting line list is accumulated.</item>
 /// <item><b>File mode</b> — otherwise the operands are treated as file paths
 /// (glob-expanded via <see cref="FileSystemHelpers.ResolveOperandPaths"/>).
-/// Each file is read with CRLF normalization and split into lines (no trailing
-/// newline carried per line — matching <c>StreamReader.ReadLine()</c>).</item>
+/// Each file is streamed with CRLF normalization and split into lines (no
+/// trailing newline carried per line — matching
+/// <c>StreamReader.ReadLine()</c>).</item>
 /// </list>
 /// After collection: when <c>-s SEP</c> is set, the lines are joined with
 /// <c>\n</c>, split on <c>SEP</c>, the chunks reversed, and each emitted;
@@ -37,9 +38,7 @@ namespace PsBash.Cmdlets;
 /// <see cref="CommandInvocationIntrinsics.InvokeScript(string, object[])"/>,
 /// no <see cref="ScriptBlock"/> construction — AOT-safe) and sets
 /// <c>$global:LASTEXITCODE = 1</c>, matching the oracle's behavior for missing
-/// targets. The <c>Read-BashFileLines</c> helper the psm1 oracle called is
-/// small enough to inline as a single <see cref="File.ReadAllText(string)"/>
-/// with CRLF normalization and <c>\n</c> split.
+/// targets.
 /// </summary>
 [Cmdlet(VerbsLifecycle.Invoke, "BashTac")]
 [OutputType(typeof(string))]
@@ -127,26 +126,17 @@ public sealed class InvokeBashTacCommand : PSCmdlet
             {
                 foreach (var filePath in FileSystemHelpers.ResolveOperandPaths(this, raw))
                 {
-                    string? content = ReadFileText(filePath);
-                    if (content == null)
+                    try
                     {
+                        foreach (var l in BashFileSystem.ReadLines(filePath))
+                        {
+                            lines.Add(l);
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        WriteReadError(filePath, ex);
                         hadError = true;
-                        continue;
-                    }
-                    // StreamReader.ReadLine() semantics: split on \n; a trailing
-                    // newline does not produce a spurious empty final line.
-                    string body = content;
-                    if (body.EndsWith("\n"))
-                    {
-                        body = body.Substring(0, body.Length - 1);
-                    }
-                    if (body.Length == 0)
-                    {
-                        continue;
-                    }
-                    foreach (var l in body.Split('\n'))
-                    {
-                        lines.Add(l);
                     }
                 }
             }
@@ -196,20 +186,12 @@ public sealed class InvokeBashTacCommand : PSCmdlet
         }
     }
 
-    private string? ReadFileText(string path)
+    private void WriteReadError(string path, Exception ex)
     {
-        try
-        {
-            return BashFileSystem.ReadAllText(path);
-        }
-        catch (Exception ex)
-        {
-            bool notFound = ex is FileNotFoundException or DirectoryNotFoundException
-                || ex.InnerException is FileNotFoundException or DirectoryNotFoundException;
-            string msg = notFound ? "No such file or directory" : ex.Message;
-            string normalized = path.Replace('\\', '/');
-            FileSystemHelpers.WriteBashError(this, $"tac: {normalized}: {msg}");
-            return null;
-        }
+        bool notFound = ex is FileNotFoundException or DirectoryNotFoundException
+            || ex.InnerException is FileNotFoundException or DirectoryNotFoundException;
+        string msg = notFound ? "No such file or directory" : ex.Message;
+        string normalized = path.Replace('\\', '/');
+        FileSystemHelpers.WriteBashError(this, $"tac: {normalized}: {msg}");
     }
 }
