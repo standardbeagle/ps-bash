@@ -28,6 +28,21 @@ if (Test-Path $managementClient) {
     }
 }
 
+# `host shutdown` only retires the ONE daemon answering the canonical endpoint.
+# Stray ps-bash-host processes — orphans on isolated/per-invocation endpoints, or
+# OLD-BUILD daemons left over from a previous install — survive it, and a daemon
+# outlives its launcher by design. After a rebuild those leftovers POISON reuse:
+# a new-build launcher sees an old-build host, treats it as obsolete, and does the
+# slow retire-and-replace cycle on every -c (observed as 12-19s/call + exit-125
+# "connection forcibly closed"). Force-kill every remaining host so the freshly
+# deployed build starts from a clean slate.
+$strays = @(Get-Process ps-bash-host -ErrorAction SilentlyContinue)
+if ($strays.Count -gt 0) {
+    Write-Host "Force-killing $($strays.Count) leftover ps-bash-host process(es) so the new build starts clean..." -ForegroundColor DarkGray
+    $strays | Stop-Process -Force -ErrorAction SilentlyContinue
+    Start-Sleep -Milliseconds 500
+}
+
 # NTFS trick: a locked file cannot be deleted or overwritten, but it CAN be
 # renamed — existing handles keep pointing at the old file by its file record.
 # Rename every ps-bash/PsBash file to .old.<n> so Copy-Item can write the new
@@ -178,3 +193,20 @@ Set-Content -LiteralPath $psd1Dst -Value $psd1Patched -Encoding UTF8
 Write-Host "Installed PsBash + PsBash.Cmdlets modules to $moduleRoot" -ForegroundColor Green
 Write-Host "  (binary cmdlet DLL renamed to PsBash.Cmdlets.Runtime.dll to dodge dev-build file locks)" -ForegroundColor DarkGray
 Write-Host "  Restart any pwsh session that has Import-Module PsBash loaded to pick up the new copy." -ForegroundColor DarkGray
+
+# ---------------------------------------------------------------------------
+# Warm-load the daemon so the install ends with a hot host.
+# ---------------------------------------------------------------------------
+# `-c` defaults to the shared Daemon lifetime: the first invocation pays a ~2 s
+# cold start to spawn the host and warm its runspace pool, then every later -c
+# reuses it (~300 ms). Pre-warming here means the user's (or an agent's) very
+# first -c after install is already fast. `host start` is idempotent and leaves
+# the daemon running for subsequent launchers.
+$deployedClient = Join-Path $destDir 'ps-bash.exe'
+if (Test-Path $deployedClient) {
+    Write-Host "Warm-loading ps-bash-host..." -ForegroundColor DarkGray
+    & $deployedClient host start
+    if ($LASTEXITCODE -ne 0) {
+        Write-Warning "ps-bash host start returned exit code $LASTEXITCODE; the daemon will warm on the first -c instead."
+    }
+}

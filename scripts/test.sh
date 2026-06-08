@@ -75,6 +75,37 @@ if [[ "$coverage_enabled" == "1" ]]; then
     echo "test.sh: coverage collection enabled (XPlat Code Coverage)" >&2
 fi
 
+# Stress isolation. Host-startup stress tests (real ps-bash-host spawns and
+# concurrent cold-start races) carry [Trait("Category","Stress")]. They are
+# CPU-heavy and EXCLUDED from the default run so the fast suite does not
+# thundering-herd the box (the exact saturation that trips the host's startup
+# timeout). Run them explicitly:
+#   ./scripts/test.sh --stress         # only the stress suite
+#   PSBASH_STRESS=1 ./scripts/test.sh  # same, via env
+# A caller-supplied --filter wins and disables this auto-filtering entirely.
+run_stress="${PSBASH_STRESS:-0}"
+forwarded_args=()
+caller_has_filter=0
+for a in "$@"; do
+    case "$a" in
+        --stress) run_stress=1 ;;
+        --filter|--filter=*) caller_has_filter=1; forwarded_args+=("$a") ;;
+        *) forwarded_args+=("$a") ;;
+    esac
+done
+
+filter_args=()
+if [[ "$caller_has_filter" -eq 0 ]]; then
+    if [[ "$run_stress" == "1" ]]; then
+        echo "test.sh: running ONLY Category=Stress tests" >&2
+        filter_args=("--filter" "Category=Stress")
+    else
+        filter_args=("--filter" "Category!=Stress")
+    fi
+elif [[ "$run_stress" == "1" ]]; then
+    echo "test.sh: --stress ignored because an explicit --filter was provided" >&2
+fi
+
 # Build the whole solution explicitly BEFORE `dotnet test`. Rationale:
 # `dotnet test` on a solution dispatches one vstest worker per project in
 # parallel and only guarantees each project's *own* build is done before
@@ -96,10 +127,10 @@ fi
 test_exit=0
 
 if [[ "$timeout_secs" == "0" ]] || ! command -v timeout >/dev/null 2>&1; then
-    dotnet test "$@" "${coverage_args[@]+"${coverage_args[@]}"}" || test_exit=$?
+    dotnet test "${forwarded_args[@]+"${forwarded_args[@]}"}" "${filter_args[@]+"${filter_args[@]}"}" "${coverage_args[@]+"${coverage_args[@]}"}" || test_exit=$?
 else
     # -k 10: if SIGTERM doesn't stop it in 10s, SIGKILL.
-    timeout -k 10 "$timeout_secs" dotnet test "$@" "${coverage_args[@]+"${coverage_args[@]}"}" || test_exit=$?
+    timeout -k 10 "$timeout_secs" dotnet test "${forwarded_args[@]+"${forwarded_args[@]}"}" "${filter_args[@]+"${filter_args[@]}"}" "${coverage_args[@]+"${coverage_args[@]}"}" || test_exit=$?
     if [[ $test_exit -eq 124 ]]; then
         echo "test.sh: dotnet test exceeded PSBASH_TEST_TIMEOUT=${timeout_secs}s — killed." >&2
         exit 124

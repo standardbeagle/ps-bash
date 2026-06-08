@@ -30,22 +30,25 @@
          restore with nothing to fetch from the missing feed (stays green).
          Force explicitly with -p:UseStrata=true|false. -->
     <StrataLocalFeed Condition="'$(StrataLocalFeed)' == ''">$([System.IO.Path]::GetFullPath('$(MSBuildThisFileDirectory)..\..\..\strata\local-feed'))</StrataLocalFeed>
-    <!-- The local feed (../strata/scripts/pack-local.sh) packs the StandardBeagle.Strata.*
-         package IDs (the project PackageIds; C# namespaces stay plain Strata.*). pack-local.sh
-         IGNORES its version arg — MinVer stamps the version from strata's git tags. Rather than
-         hand-pin a version here (which silently drifts every time strata's MinVer bumps — the
-         exact failure this replaces), AUTO-DETECT it from the newest StandardBeagle.Strata.Css
-         nupkg in the feed at evaluation time. So `pack-local.sh` in strata + a build here is all
-         it takes; no edit to this file on a strata version bump. pack-local.sh cleans the feed
-         before packing, so exactly one version is present. Override with -p:StrataVersion=X.
-         ps-bash only ever consumes Strata from the local feed (CI lacks the feed →
-         UseStrata=false → these refs and FormatStyledCommand.cs are excluded); the exact derived
-         pin means nuget.org's frozen StandardBeagle.Strata.* copy can never be selected instead. -->
+    <!-- The local feed (../strata/scripts/pack-local.sh) packs UNPREFIXED Strata.* package IDs
+         (Strata.Css, Strata.Render.Spectre, …). NOTE: this is NOT the nuget.org id — nuget.org
+         hosts a frozen StandardBeagle.Strata.* @ 0.1.0-alpha.1; ps-bash deliberately references the
+         plain Strata.* ids so only the local feed can ever satisfy them. pack-local.sh IGNORES its
+         version arg — MinVer stamps the version from strata's git tags. Rather than hand-pin a
+         version here (which silently drifts every time strata's MinVer bumps — the exact failure
+         this replaces), AUTO-DETECT it from the NEWEST Strata.Css nupkg in the feed at evaluation
+         time. So `pack-local.sh` in strata + a build here is all it takes; no edit to this file on a
+         strata version bump. Override with -p:StrataVersion=X. ps-bash only ever consumes Strata
+         from the local feed (CI lacks the feed → UseStrata=false → these refs and
+         FormatStyledCommand.cs are excluded). -->
     <!-- Two steps: GetFiles returns a String[] (MSBuild renders it ';'-joined into the
          property), then Regex pulls the version out. A String[] can't be passed straight
          into Regex.Match as an argument, hence the intermediate property. -->
-    <_StrataFeedCssNupkg Condition="'$(StrataVersion)' == '' and Exists('$(StrataLocalFeed)')">$([System.IO.Directory]::GetFiles('$(StrataLocalFeed)', 'StandardBeagle.Strata.Css.*.nupkg'))</_StrataFeedCssNupkg>
-    <StrataVersion Condition="'$(StrataVersion)' == '' and '$(_StrataFeedCssNupkg)' != ''">$([System.Text.RegularExpressions.Regex]::Match('$(_StrataFeedCssNupkg)', 'StandardBeagle\.Strata\.Css\.(.+?)\.nupkg').Groups[1].Value)</StrataVersion>
+    <_StrataFeedCssNupkg Condition="'$(StrataVersion)' == '' and Exists('$(StrataLocalFeed)')">$([System.IO.Directory]::GetFiles('$(StrataLocalFeed)', 'Strata.Css.*.nupkg'))</_StrataFeedCssNupkg>
+    <!-- GetFiles returns the matches alphabetically sorted (newest *-dev sorts last). The
+         leading greedy '.*' anchors the capture on the LAST 'Strata.Css.' occurrence, so a feed
+         with multiple stale versions still resolves to the newest. -->
+    <StrataVersion Condition="'$(StrataVersion)' == '' and '$(_StrataFeedCssNupkg)' != ''">$([System.Text.RegularExpressions.Regex]::Match('$(_StrataFeedCssNupkg)', '.*Strata\.Css\.(.+?)\.nupkg').Groups[1].Value)</StrataVersion>
     <UseStrata Condition="'$(UseStrata)' == '' and Exists('$(StrataLocalFeed)')">true</UseStrata>
     <UseStrata Condition="'$(UseStrata)' == ''">false</UseStrata>
     <!-- Add the Strata local feed as a restore source ONLY when enabled. The feed
@@ -85,17 +88,17 @@
        flow in transitively from Strata.Render.Spectre / Strata.Css. Gated on
        UseStrata so CI (no local feed) restores without these packages. -->
   <ItemGroup Condition="'$(UseStrata)' == 'true'">
-    <PackageReference Include="StandardBeagle.Strata.Css" Version="$(StrataVersion)" />
-    <PackageReference Include="StandardBeagle.Strata.Adapters.PSObject" Version="$(StrataVersion)" />
-    <PackageReference Include="StandardBeagle.Strata.Properties.Styling" Version="$(StrataVersion)" />
-    <PackageReference Include="StandardBeagle.Strata.Render.Spectre" Version="$(StrataVersion)" />
+    <PackageReference Include="Strata.Css" Version="$(StrataVersion)" />
+    <PackageReference Include="Strata.Adapters.PSObject" Version="$(StrataVersion)" />
+    <PackageReference Include="Strata.Properties.Styling" Version="$(StrataVersion)" />
+    <PackageReference Include="Strata.Render.Spectre" Version="$(StrataVersion)" />
     <!-- Yoga layout pass: required for the 3-arg SpectreProjection.Project overload
          that honors `display: grid` (Format-Styled grid / property-list rendering). -->
-    <PackageReference Include="StandardBeagle.Strata.Layout.Yoga" Version="$(StrataVersion)" />
+    <PackageReference Include="Strata.Layout.Yoga" Version="$(StrataVersion)" />
     <!-- Interaction: the `command:` property descriptor so the button/expansion stylesheets (which
          declare `command:` bindings) parse. Only the descriptor is used (registration is pure);
          System.Reactive flows in transitively but is never exercised. -->
-    <PackageReference Include="StandardBeagle.Strata.Interaction" Version="$(StrataVersion)" />
+    <PackageReference Include="Strata.Interaction" Version="$(StrataVersion)" />
   </ItemGroup>
 
   <!-- Built-in Format-Styled stylesheets, embedded so they travel with the DLL

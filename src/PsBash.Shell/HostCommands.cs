@@ -22,6 +22,7 @@ internal static class HostCommands
         return args[1] switch
         {
             "status" => await StatusAsync(compactOutput, ct).ConfigureAwait(false),
+            "start" or "warm" => await StartAsync(ct).ConfigureAwait(false),
             "shutdown" => await ShutdownAsync(ParseDeadline(args.AsSpan(2)), waitForExit: true, ct).ConfigureAwait(false),
             "restart" => await RestartAsync(ParseDeadline(args.AsSpan(2)), ct).ConfigureAwait(false),
             "gc" => GcOrphans(ParseGcFlags(args.AsSpan(2))),
@@ -227,6 +228,34 @@ internal static class HostCommands
         return new GcFlags(force, dryRun);
     }
 
+    // Warm-load the shared daemon: spawn it (and warm its runspace pool) if no
+    // healthy host is already answering the canonical endpoint, otherwise reuse
+    // the running one. Returns once the host is health-ready, so the NEXT `-c`
+    // invocation reuses a hot host instead of paying the ~2 s cold start. Idempotent
+    // — safe to run at shell login / session start. Unlike `restart`, it does NOT
+    // retire a healthy running host.
+    private static async Task<int> StartAsync(CancellationToken ct)
+    {
+        var (scheme, endpoint) = IpcTransportFactory.ResolveEndpoint();
+        var existing = await SendControlRequestAsync(new Mode.Health(), ct).ConfigureAwait(false);
+        if (existing.ExitCode == 0)
+        {
+            Console.WriteLine("ps-bash-host already warm");
+            return 0;
+        }
+
+        var hostBinary = ResolveHostBinary()
+            ?? throw new HostUnavailableException(
+                "ps-bash-host binary not found. Set PSBASH_HOST=<path> or install alongside ps-bash.");
+
+        // Lifetime.Daemon: spawn-if-absent on the canonical endpoint and LEAVE the
+        // host running (do not kill on dispose) for subsequent launchers.
+        await using var worker = await IpcWorker.StartAsync(
+            hostBinary, lifetime: Lifetime.Daemon, ct: ct).ConfigureAwait(false);
+        Console.WriteLine($"ps-bash-host warm ({scheme}:{endpoint})");
+        return 0;
+    }
+
     private static async Task<int> RestartAsync(int deadlineMs, CancellationToken ct)
     {
         var shutdownExit = await ShutdownAsync(deadlineMs, waitForExit: true, ct).ConfigureAwait(false);
@@ -336,6 +365,7 @@ internal static class HostCommands
     private static void PrintUsage()
     {
         Console.Error.WriteLine("usage: ps-bash host status");
+        Console.Error.WriteLine("       ps-bash host start            # warm-load the daemon (alias: warm)");
         Console.Error.WriteLine("       ps-bash host shutdown [--deadline-ms N]");
         Console.Error.WriteLine("       ps-bash host restart [--deadline-ms N]");
         Console.Error.WriteLine("       ps-bash host gc [--force] [--dry-run]");

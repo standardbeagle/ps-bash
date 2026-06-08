@@ -91,6 +91,15 @@ public static class CanonicalEnv
     {
         var env = ForBash(homeDir);
 
+        // Force the per-invocation host lifetime for the whole test suite. In
+        // production `-c` defaults to the shared Daemon host (reused across
+        // launchers for speed), but a persisted daemon outlives each test and
+        // would accumulate orphan hosts on isolated per-test endpoints, adding
+        // CPU contention and non-determinism. PSBASH_PER_INVOCATION=1 gives each
+        // spawned ps-bash its own private host, killed on dispose — deterministic
+        // cleanup and the isolation the oracle/differential suites already assume.
+        env["PSBASH_PER_INVOCATION"] = "1";
+
         // The ps-bash launcher is a framework-dependent apphost: it must find
         // the shared .NET runtime. DOTNET_ROOT (and the dotnet dir on PATH) is
         // how a non-default install location is discovered. Preserve whatever

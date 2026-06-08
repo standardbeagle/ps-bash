@@ -17,17 +17,27 @@ implementation lands.
 
 This contract covers the **shared, reusable** `ps-bash-host` — the one reached
 through `IpcWorker.StartAsync` with `Lifetime.Daemon` on the canonical per-user
-endpoint. As of PTY-10 the only caller of that path is the `ps-bash host
-restart` subcommand (`src/PsBash.Shell/HostCommands.cs`).
+endpoint. As of the pooled-host change this is the **default** path for `-c`,
+stdin-pipe, and script-file modes (the launcher in `src/PsBash.Shell/Program.cs`),
+as well as the `ps-bash host restart` subcommand (`src/PsBash.Shell/HostCommands.cs`).
+
+**Pooled isolation.** A `Daemon` host serves each connection from its own isolated
+runspace, drawn from a warm `WorkerPool` (`src/PsBash.Host/Runtime/WorkerPool.cs`)
+and **discarded on release**. So daemon reuse is fast (no per-command runspace
+cold-start) without leaking session state between commands — each `-c` still gets a
+structurally clean PowerShell session, and concurrent launchers run in parallel on
+distinct runspaces (bounded by `PSBASH_POOL_MAX`). Warm spares are created on
+dedicated (LongRunning) threads so warm-up never starves the host's async accept /
+health-handshake loop. Pool size: `PSBASH_POOL_WARM` (default 2) warm spares,
+`PSBASH_POOL_MAX` (default: CPU count clamped to [2, 8]) concurrency cap.
 
 Two host populations are explicitly **out of scope**:
 
-- **`Lifetime.PerInvocation` hosts** (the default for `-c`, stdin pipe, and
-  script-file modes). Each is private to one launcher invocation on a
-  process-local endpoint, is owned by that launcher's `IpcWorker`, and is killed
-  on `DisposeAsync`. There is no discovery, no sidecar ownership classification,
-  and no reuse — so none of the Reusable/Obsolete/Stale/Unsafe machinery below
-  applies.
+- **`Lifetime.PerInvocation` hosts** (opt-in via `PSBASH_PER_INVOCATION=1`). Each is
+  private to one launcher invocation on a process-local endpoint, is owned by that
+  launcher's `IpcWorker`, and is killed on `DisposeAsync`. There is no discovery, no
+  sidecar ownership classification, and no reuse — so none of the
+  Reusable/Obsolete/Stale/Unsafe machinery below applies.
 - **Interactive hosts.** The interactive REPL (`ps-bash -i`, and the bare REPL)
   does **not** go through `IpcWorker` at all. `Program.RunHostUnderPtyAsync`
   (and the legacy inherited-stdio fallback in `Program.cs`) spawns
@@ -144,6 +154,33 @@ through a short-lived lifecycle lock beside the metadata record:
 This gives tmux-style single-host-per-user behavior without per-session endpoint
 names. The canonical endpoint remains stable; lifecycle metadata and the lock
 make replacement decisions explicit.
+
+### Implementation (single-flight spawn)
+
+Steps 1-6 are implemented by `IpcWorker.EnsureHostReachableAsync` (the
+`Lifetime.Daemon` path) plus `HostSpawnLock`
+(`src/PsBash.Core/Runtime/Ipc/HostSpawnLock.cs`):
+
+- The lock is an exclusively-opened file (`FileShare.None`) under
+  `{TEMP}/ps-bash/spawn-{scheme}-{hash(endpoint)}.lock`. It is **endpoint-scoped**,
+  so an isolated test endpoint (`PSBASH_IPC_ENDPOINT`) never serializes against the
+  real per-user daemon, and the `Lifetime.PerInvocation` path — whose endpoints are
+  process-local and uncontended — never acquires it.
+- Step 6 (stale-lock breaking) is handled by the OS: a file handle is released on
+  `Dispose` **or on process death**, so a crashed lock holder cannot deadlock the
+  herd — the next launcher's `TryAcquire` simply succeeds. A file handle (unlike
+  `System.Threading.Mutex`) is not thread-affine, so it survives the `await` in the
+  spawn path.
+- The lock holder runs `SpawnOrReplaceHostAsync` (classify → graceful-retire
+  obsolete → kill wedged owned host → retire artifacts → spawn); losers poll health
+  and reuse the winner's host the moment it answers.
+
+Without this, concurrent cold-start launchers each reached the spawn path and left
+N-1 orphan runspaces — `UnixSocketTransport.ListenAsync` unlinks-before-bind (each
+racer steals the socket path) and the Windows named pipe allows 16 server instances
+(N hosts split the shared session state). Regression coverage:
+`PsBash.Host.Tests/Server/HostStartupStressTests.ColdStartHerd_ConcurrentDaemonLaunchers_SpawnExactlyOneHost`
+(a `Category=Stress` test; see `scripts/test.sh --stress`).
 
 ## Interaction With `IpcTransportFactory`
 

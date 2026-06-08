@@ -59,8 +59,8 @@ public sealed class GracefulShutdownTests
         var pipeName = $"psbash-shutdown-{Guid.NewGuid():N}";
 
         await using var serverTransport = new NamedPipeTransport(pipeName);
-        await using var worker = SdkWorker.Create();
-        await using var server = new HostServer(serverTransport, Task.FromResult(worker));
+        await using var pool = new WorkerPool<SdkWorker>(0, 2, SdkWorker.Create);
+        await using var server = new HostServer(serverTransport, pool);
         var serverTask = server.RunAsync(cts.Token);
         await server.WhenListening.WaitAsync(cts.Token);
 
@@ -84,8 +84,8 @@ public sealed class GracefulShutdownTests
         var pipeName = $"psbash-drain-{Guid.NewGuid():N}";
 
         await using var serverTransport = new NamedPipeTransport(pipeName);
-        await using var worker = SdkWorker.Create();
-        await using var server = new HostServer(serverTransport, Task.FromResult(worker));
+        await using var pool = new WorkerPool<SdkWorker>(0, 2, SdkWorker.Create);
+        await using var server = new HostServer(serverTransport, pool);
         var serverTask = server.RunAsync(cts.Token);
         await server.WhenListening.WaitAsync(cts.Token);
 
@@ -116,8 +116,8 @@ public sealed class GracefulShutdownTests
         var pipeName = $"psbash-reject-{Guid.NewGuid():N}";
 
         await using var serverTransport = new NamedPipeTransport(pipeName);
-        await using var worker = SdkWorker.Create();
-        await using var server = new HostServer(serverTransport, Task.FromResult(worker));
+        await using var pool = new WorkerPool<SdkWorker>(0, 2, SdkWorker.Create);
+        await using var server = new HostServer(serverTransport, pool);
         var serverTask = server.RunAsync(cts.Token);
         await server.WhenListening.WaitAsync(cts.Token);
 
@@ -154,8 +154,8 @@ public sealed class GracefulShutdownTests
 
         // First host: start, accept, shut down.
         await using (var oldTransport = new NamedPipeTransport(pipeName))
-        await using (var oldWorker = SdkWorker.Create())
-        await using (var oldServer = new HostServer(oldTransport, Task.FromResult(oldWorker)))
+        await using (var oldPool = new WorkerPool<SdkWorker>(0, 2, SdkWorker.Create))
+        await using (var oldServer = new HostServer(oldTransport, oldPool))
         {
             var oldServerTask = oldServer.RunAsync(cts.Token);
             await oldServer.WhenListening.WaitAsync(cts.Token);
@@ -169,8 +169,8 @@ public sealed class GracefulShutdownTests
 
         // Second host: bind same name, must succeed and accept work.
         await using var newTransport = new NamedPipeTransport(pipeName);
-        await using var newWorker = SdkWorker.Create();
-        await using var newServer = new HostServer(newTransport, Task.FromResult(newWorker));
+        await using var newPool = new WorkerPool<SdkWorker>(0, 2, SdkWorker.Create);
+        await using var newServer = new HostServer(newTransport, newPool);
         using var newCts = CancellationTokenSource.CreateLinkedTokenSource(cts.Token);
         var newServerTask = newServer.RunAsync(newCts.Token);
         await newServer.WhenListening.WaitAsync(cts.Token);
@@ -195,10 +195,10 @@ public sealed class GracefulShutdownTests
         // deadline.
         using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
 
-        await using var worker = SdkWorker.Create();
+        await using var pool = new WorkerPool<SdkWorker>(0, 2, SdkWorker.Create);
         await using var server = new HostServer(
             new NamedPipeTransport($"psbash-deadline-{Guid.NewGuid():N}"),
-            Task.FromResult(worker));
+            pool);
 
         // No accept loop needed — call RequestShutdownAsync directly with no
         // in-flight work. Must complete near-instantly (no drain wait when

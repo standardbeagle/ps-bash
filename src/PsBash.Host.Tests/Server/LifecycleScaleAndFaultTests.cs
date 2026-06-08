@@ -109,8 +109,8 @@ public sealed class LifecycleScaleAndFaultTests
         Environment.SetEnvironmentVariable(IpcTransportFactory.EndpointEnvVar, spec);
 
         await using var transport = NewTransport(scheme, endpoint);
-        await using var worker = SdkWorker.Create();
-        await using var server = new HostServer(transport, Task.FromResult(worker));
+        await using var pool = new WorkerPool<SdkWorker>(1, 2, SdkWorker.Create);
+        await using var server = new HostServer(transport, pool);
         using var serverCts = new CancellationTokenSource();
         Task? serverTask = null;
         try
@@ -353,8 +353,8 @@ public sealed class LifecycleScaleAndFaultTests
         Environment.SetEnvironmentVariable("PSBASH_TIMEOUT", "1"); // 1s per-call budget
 
         await using var transport = NewTransport(scheme, endpoint);
-        await using var worker = SdkWorker.Create();
-        await using var server = new HostServer(transport, Task.FromResult(worker));
+        await using var pool = new WorkerPool<SdkWorker>(1, 2, SdkWorker.Create);
+        await using var server = new HostServer(transport, pool);
         using var serverCts = new CancellationTokenSource();
         Task? serverTask = null;
         try
@@ -413,8 +413,8 @@ public sealed class LifecycleScaleAndFaultTests
         Environment.SetEnvironmentVariable("PSBASH_TIMEOUT", "1"); // 1s IDLE window
 
         await using var transport = NewTransport(scheme, endpoint);
-        await using var worker = SdkWorker.Create();
-        await using var server = new HostServer(transport, Task.FromResult(worker));
+        await using var pool = new WorkerPool<SdkWorker>(1, 2, SdkWorker.Create);
+        await using var server = new HostServer(transport, pool);
         using var serverCts = new CancellationTokenSource();
         Task? serverTask = null;
         try
@@ -474,8 +474,8 @@ public sealed class LifecycleScaleAndFaultTests
         Environment.SetEnvironmentVariable("PSBASH_TIMEOUT", "none"); // disabled
 
         await using var transport = NewTransport(scheme, endpoint);
-        await using var worker = SdkWorker.Create();
-        await using var server = new HostServer(transport, Task.FromResult(worker));
+        await using var pool = new WorkerPool<SdkWorker>(1, 2, SdkWorker.Create);
+        await using var server = new HostServer(transport, pool);
         using var serverCts = new CancellationTokenSource();
         Task? serverTask = null;
         try
@@ -616,8 +616,8 @@ public sealed class LifecycleScaleAndFaultTests
         Environment.SetEnvironmentVariable(IpcTransportFactory.EndpointEnvVar, spec);
 
         await using var transport = NewTransport(scheme, endpoint);
-        await using var worker = SdkWorker.Create();
-        await using var server = new HostServer(transport, Task.FromResult(worker));
+        await using var pool = new WorkerPool<SdkWorker>(1, 2, SdkWorker.Create);
+        await using var server = new HostServer(transport, pool);
         using var serverCts = new CancellationTokenSource();
         Task? serverTask = null;
         var clients = new List<IpcWorker>();
@@ -677,6 +677,7 @@ public sealed class LifecycleScaleAndFaultTests
     /// without a build).
     /// </summary>
     [SkippableFact]
+    [Trait("Category", "Stress")] // spawns a real ps-bash-host process
     public async Task IdleShutdown_NoConnections_HostExitsAfterIdleSecs()
     {
         var hostBinary = TryLocateHostBinary();
@@ -765,6 +766,7 @@ public sealed class LifecycleScaleAndFaultTests
     /// .NET-side wire contract directly.
     /// </summary>
     [SkippableFact]
+    [Trait("Category", "Stress")] // spawns a real ps-bash-host process
     public async Task PerInvocation_DisposeWorker_KillsPrivateHost()
     {
         var hostBinary = TryLocateHostBinary();
@@ -811,6 +813,7 @@ public sealed class LifecycleScaleAndFaultTests
     /// state-isolation property the refactor buys.
     /// </summary>
     [SkippableFact]
+    [Trait("Category", "Stress")] // spawns two real ps-bash-host processes
     public async Task PerInvocation_TwoWorkers_GetDistinctPrivateHosts()
     {
         var hostBinary = TryLocateHostBinary();

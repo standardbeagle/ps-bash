@@ -18,24 +18,33 @@ public enum Lifetime
     /// <see cref="System.Diagnostics.Process"/> handle, and kills the host tree
     /// when it is disposed. The host therefore never outlives its single client,
     /// which contains the pipe-inheritance hazard within the launcher's lifetime
-    /// and gives every invocation a clean PowerShell session by construction.
-    /// Default for the non-interactive modes (<c>-c</c>, stdin pipe, script file).
+    /// and gives every invocation a hard process boundary.
+    /// <para>Opt-in via <c>PSBASH_PER_INVOCATION=1</c>. No longer the default for
+    /// <c>-c</c> — see <see cref="Daemon"/> — but retained for callers that need a
+    /// fresh host process per command.</para>
     /// </summary>
     PerInvocation,
 
     /// <summary>
     /// Long-lived shared daemon on the canonical per-user endpoint
     /// (<see cref="IpcTransportFactory.ResolveEndpoint(string)"/>). The worker connects
-    /// to an existing healthy host if one answers, otherwise spawns one and
-    /// leaves it running for subsequent launchers. The worker does NOT kill the
-    /// host on dispose. This is the shared-socket daemon-reuse path; it pays for
-    /// the cross-launcher state-isolation guardrails and the dup2-detach hang fix.
-    /// <para>PTY-10 — who actually uses this: the <b>only</b> caller is
-    /// <c>ps-bash host restart</c> (<c>HostCommands.cs</c>), the explicit
-    /// daemon-management subcommand. It is <b>not</b> used by the interactive
-    /// REPL. The interactive launcher path (<c>Program.RunHostUnderPtyAsync</c>
-    /// and the legacy inherited-stdio fallback in <c>Program.cs</c>) spawns its
-    /// host <i>directly</i> — <c>PtySpawner</c> / <c>Process.Start</c> with
+    /// to an existing healthy host if one answers, otherwise spawns one (single-
+    /// flighted via <c>HostSpawnLock</c>) and leaves it running for subsequent
+    /// launchers. The worker does NOT kill the host on dispose. This is the
+    /// shared-socket daemon-reuse path; it pays for the cross-launcher
+    /// ownership/health guardrails and the dup2-detach hang fix.
+    /// <para><b>Default for the non-interactive modes</b> (<c>-c</c>, stdin pipe,
+    /// script file) as of the pooled-host change: a <c>-c</c> invocation pays the
+    /// host runspace cold-start only on the first call, then reuses the warm
+    /// daemon. Per-command isolation is preserved because the daemon hands each
+    /// connection its OWN runspace from a discard-on-release pool
+    /// (<c>WorkerPool</c>), so reuse is fast WITHOUT leaking session state across
+    /// commands, and concurrent launchers run in parallel. Other callers:
+    /// <c>ps-bash host restart</c> (<c>HostCommands.cs</c>).</para>
+    /// <para>It is <b>not</b> used by the interactive REPL. The interactive
+    /// launcher path (<c>Program.RunHostUnderPtyAsync</c> and the legacy
+    /// inherited-stdio fallback in <c>Program.cs</c>) spawns its host
+    /// <i>directly</i> — <c>PtySpawner</c> / <c>Process.Start</c> with
     /// <c>--interactive --launcher-pid</c> — and never reaches
     /// <see cref="IpcWorker"/> at all. An interactive host is PTY-bound and must
     /// not be shared across launchers (keystroke cross-talk); a fresh host per
@@ -78,6 +87,15 @@ public sealed class IpcWorker : IWorker
     // dispose. Null for Daemon lifetime (the shared host outlives this worker).
     private Process? _ownedHost;
     private int _disposed;
+
+    /// <summary>
+    /// Test seam: count of actual host <see cref="Process.Start(ProcessStartInfo)"/> calls, keyed by
+    /// <c>scheme:endpoint</c>. The concurrent-cold-start test asserts single-flight
+    /// spawned exactly one host for its (unique) endpoint. Keyed by endpoint so it
+    /// is immune to spawns on any other endpoint running concurrently — never read
+    /// in production.
+    /// </summary>
+    internal static readonly System.Collections.Concurrent.ConcurrentDictionary<string, int> SpawnCounts = new();
 
     public Action<string>? OutputCallback { get; set; }
 
@@ -145,36 +163,95 @@ public sealed class IpcWorker : IWorker
     private async Task EnsureHostReachableAsync(CancellationToken ct)
     {
         // 1) Probe the canonical socket. If a compatible host answers the health
-        // handshake, reuse it. If the host answers but is obsolete (protocol
-        // or build mismatch), ask it to retire gracefully before we replace.
+        // handshake, reuse it. A host that answers but is Starting is waited out;
+        // an obsolete (protocol/build mismatch) host is handled under the spawn
+        // lock below (graceful shutdown → replace).
         var initial = await CheckHealthAsync(TimeSpan.FromMilliseconds(750), ct).ConfigureAwait(false);
-        if (initial == HostHealthState.Healthy)
+        if (initial == HostHealthState.Healthy && CurrentHostMatchesLauncher())
+            return;
+        if (initial == HostHealthState.Starting && await WaitForHealthyAsync(ct).ConfigureAwait(false))
+            return;
+
+        // 2) No reusable host answered. Single-flight the spawn: when N launchers
+        // race from cold, exactly ONE runs the classify→graceful→retire→spawn path
+        // while the rest wait for its host. Without this, every launcher spawns a
+        // host and — because UnixSocketTransport unlinks-before-bind and the
+        // Windows pipe allows 16 instances — N-1 become orphan runspaces (the
+        // concurrent-cold-start thundering herd). The lock is endpoint-scoped, so
+        // an isolated test endpoint never serializes against the real daemon.
+        var deadline = DateTime.UtcNow + _startupTimeout;
+        while (true)
         {
-            var healthyMetadata = HostMetadata.TryRead(_scheme, _endpoint);
-            if (HostOwnership.MetadataMatchesLauncher(
-                    healthyMetadata,
-                    _hostBinaryPath,
-                    HostProtocol.BuildIdentity))
+            ct.ThrowIfCancellationRequested();
+
+            using (var spawnLock = HostSpawnLock.TryAcquire(_scheme, _endpoint))
+            {
+                if (spawnLock is not null)
+                {
+                    // We hold the spawn right — run the full replace-or-spawn path.
+                    await SpawnOrReplaceHostAsync(ct).ConfigureAwait(false);
+                    return;
+                }
+            }
+
+            // A concurrent launcher holds the spawn lock. Wait for its host to come
+            // up instead of spawning our own; reuse the moment it answers healthy.
+            var state = await CheckHealthAsync(TimeSpan.FromMilliseconds(750), ct).ConfigureAwait(false);
+            if (state == HostHealthState.Healthy && CurrentHostMatchesLauncher())
                 return;
 
-            initial = HostHealthState.Obsolete;
+            if (DateTime.UtcNow >= deadline)
+                throw new HostUnavailableException(
+                    $"ps-bash-host did not become reachable within {_startupTimeout.TotalSeconds:0.##}s " +
+                    "(a concurrent launcher held the spawn lock but no healthy host appeared).");
+
+            try { await Task.Delay(_startupPollInterval, ct).ConfigureAwait(false); }
+            catch (OperationCanceledException) { throw; }
         }
-        if (initial == HostHealthState.Starting)
+    }
+
+    /// <summary>
+    /// True when a host currently answering the canonical endpoint is the same
+    /// build/binary this launcher would spawn (or there is no sidecar to compare,
+    /// which <see cref="HostOwnership.MetadataMatchesLauncher"/> treats as a
+    /// match). Used both for initial reuse and for the wait-for-winner path.
+    /// </summary>
+    private bool CurrentHostMatchesLauncher()
+        => HostOwnership.MetadataMatchesLauncher(
+               HostMetadata.TryRead(_scheme, _endpoint),
+               _hostBinaryPath,
+               HostProtocol.BuildIdentity);
+
+    /// <summary>
+    /// The spawn/replace path, run ONLY by the launcher holding the
+    /// <see cref="HostSpawnLock"/>. Re-probes under the lock (a prior winner may
+    /// have brought a host up while we waited to acquire), then classifies
+    /// ownership, gracefully retires an obsolete host, kills a wedged owned host,
+    /// cleans endpoint+sidecar artifacts, and spawns a fresh host. All the
+    /// ownership-safety gates from docs/specs/host-lifecycle-contract.md are
+    /// preserved — single-flight only ensures one launcher executes them at a time.
+    /// </summary>
+    private async Task SpawnOrReplaceHostAsync(CancellationToken ct)
+    {
+        // Re-derive health under the lock. A compatible host that appeared while we
+        // waited for the lock means there is nothing to spawn.
+        var state = await CheckHealthAsync(TimeSpan.FromMilliseconds(750), ct).ConfigureAwait(false);
+        if (state == HostHealthState.Healthy)
         {
-            if (await WaitForHealthyAsync(ct).ConfigureAwait(false)) return;
+            if (CurrentHostMatchesLauncher()) return;
+            state = HostHealthState.Obsolete; // answered but wrong build/protocol
         }
 
-        // 2) Classify what cleanup we are allowed to do BEFORE touching anything.
-        // The metadata sidecar is the ownership proof; without it, only the
-        // endpoint artifact may be unlinked, never a process. Per
-        // docs/specs/host-lifecycle-contract.md.
+        // Classify what cleanup we are allowed to do BEFORE touching anything. The
+        // metadata sidecar is the ownership proof; without it, only the endpoint
+        // artifact may be unlinked, never a process.
         var metadata = HostMetadata.TryRead(_scheme, _endpoint);
         var decision = HostOwnership.Classify(metadata, Environment.UserName, out var unsafeReason);
         if (decision == HostOwnership.CleanupDecision.UnsafeToTouch)
             throw new HostUnavailableException(
                 $"Cannot replace ps-bash-host at {_scheme}:{_endpoint} — {unsafeReason}.");
 
-        if (initial == HostHealthState.Obsolete)
+        if (state == HostHealthState.Obsolete)
         {
             // The current host responded — give it a chance to drain and exit
             // cleanly before we touch the endpoint or spawn a replacement. Bound
@@ -182,10 +259,9 @@ public sealed class IpcWorker : IWorker
             await TryRequestGracefulShutdownAsync(GetShutdownDeadline(), ct).ConfigureAwait(false);
         }
 
-        // 3) Re-probe after graceful attempt. If a process is still answering
-        // and we have ownership, escalate to kill. If a process is still
-        // answering and we do NOT have ownership, refuse cleanup so we never
-        // leave a recycled-PID footgun for the next launcher run.
+        // Re-probe after graceful attempt. If a process is still answering and we
+        // have ownership, escalate to kill. If it is still answering and we do NOT
+        // have ownership, refuse cleanup so we never leave a recycled-PID footgun.
         var post = await CheckHealthAsync(TimeSpan.FromMilliseconds(250), ct).ConfigureAwait(false);
         if (post != HostHealthState.Unhealthy)
         {
@@ -195,25 +271,22 @@ public sealed class IpcWorker : IWorker
             }
             else
             {
-                // initial wasn't Healthy (we'd have returned); host is alive but
-                // not gracefully retiring and we cannot prove ownership. Surface
-                // rather than risk a wrong-process kill.
+                // Host is alive but not gracefully retiring and we cannot prove
+                // ownership. Surface rather than risk a wrong-process kill.
                 throw new HostUnavailableException(
                     $"ps-bash-host at {_scheme}:{_endpoint} is alive but did not shut down gracefully " +
                     $"and has no ownership proof to authorize a process kill.");
             }
         }
 
-        // 4) Endpoint and sidecar artifacts may now be cleaned. Unix unlinks the
-        // socket file; Windows named pipes have no kernel-namespace file to
-        // remove (the pipe disappears when the previous server's handle closed).
-        // The sidecar is removed in either case so the next launcher does not
-        // see ghost ownership info.
+        // Endpoint and sidecar artifacts may now be cleaned. Unix unlinks the
+        // socket file; Windows named pipes have no kernel-namespace file to remove.
+        // The sidecar is removed so the next launcher does not see ghost ownership.
         IpcTransportFactory.RetireEndpoint(_scheme, _endpoint);
         HostMetadata.Remove(_scheme, _endpoint);
 
-        // 5) No healthy host running — spawn one. Verify the binary first so the
-        //    exception names the actual problem.
+        // No healthy host running — spawn one. Verify the binary first so the
+        // exception names the actual problem.
         if (!File.Exists(_hostBinaryPath))
             throw new HostUnavailableException(
                 $"ps-bash-host binary not found at '{_hostBinaryPath}'. Cannot start host.");
@@ -379,17 +452,26 @@ public sealed class IpcWorker : IWorker
             // startup timeout"). The Windows equivalent of POSIX's
             // PSBASH_HOST_DETACH dup2(/dev/null) replacement.
             //
-            // We deliberately do NOT redirect stdout/stderr: the host is
-            // largely silent, and unredirected stdout/stderr inherit the
-            // launcher's handles (which on Windows under CreateProcess with
-            // bInheritHandles=false means the host starts with detached/NUL
-            // handles, not the launcher's pipe).
+            // We MUST redirect stdout/stderr (not leave them inherited). Because
+            // RedirectStandardInput=true forces CreateProcess bInheritHandles=true,
+            // a host with un-redirected stdout/stderr INHERITS the launcher's own
+            // stdout/stderr handles. For a Daemon host — which outlives the
+            // launcher — that is fatal: the persisted host keeps the launcher's
+            // stdout pipe open forever, so the launcher's PARENT (e.g. the Claude
+            // Code Bash tool) never sees stdout EOF and hangs after every command,
+            // even though the launcher process itself has exited. Redirecting binds
+            // the host's stdout/stderr to launcher-owned pipes instead; we drain
+            // them to null below so the host never blocks on a full pipe and the
+            // launcher's real parent stdout/stderr are never shared with the host.
+            // (PerInvocation killed its host on dispose, masking this; Daemon does
+            // not — and Daemon never ran a -c command before it became the -c
+            // default, so this latent hazard had never fired.)
             UseShellExecute = false,
             CreateNoWindow = true,
             WindowStyle = ProcessWindowStyle.Hidden,
             RedirectStandardInput = true,
-            RedirectStandardOutput = false,
-            RedirectStandardError = false,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
         };
         psi.ArgumentList.Add($"--ipc-endpoint={_scheme}:{_endpoint}");
         // REFACTOR-7: a PerInvocation host is private to this launcher — pass
@@ -401,23 +483,31 @@ public sealed class IpcWorker : IWorker
             psi.ArgumentList.Add($"--launcher-pid={Environment.ProcessId}");
         // POSIX-only: signal the host to dup2 /dev/null over the inherited
         // stdio fds at startup so it can never write into the launcher's pipes.
-        // Windows handles the same hazard via RedirectStandardInput=true above
-        // plus proc.StandardInput.Close() right after Process.Start: the host
-        // sees a closed stdin instead of the launcher's inherited handle, and
-        // CreateProcess with bInheritHandles=false keeps stdout/stderr detached.
+        // On Windows the equivalent is structural: stdin is redirected + closed
+        // (above), and stdout/stderr are redirected to launcher-owned pipes that
+        // are drained to null (below) — so the host never shares the launcher's
+        // real parent stdout/stderr, the hazard that hangs a persisted Daemon.
         //
-        // REFACTOR-7 note on cc8bf88: this dup2-detach is the daemon-era hang
-        // fix. PerInvocation already contains the pipe-inheritance hazard within
-        // the launcher's lifetime (single client, single connection, host killed
-        // on dispose), so the detach is not strictly load-bearing for that path
-        // — but it is harmless there and still REQUIRED for the Daemon path,
-        // where the host outlives the launcher. Kept for both lifetimes per the
-        // task's "only remove it where genuinely dead" guidance; deleting it
-        // would regress Daemon.
+        // REFACTOR-7 note: this detach is the daemon-era hang fix. PerInvocation
+        // contains the pipe-inheritance hazard within the launcher's lifetime
+        // (host killed on dispose), but it is still load-bearing for Daemon, where
+        // the host outlives the launcher. Kept for both lifetimes.
         if (!isWindows)
         {
             psi.Environment["PSBASH_HOST_DETACH"] = "1";
         }
+        // Windows: clear HANDLE_FLAG_INHERIT on our OWN std handles before spawn.
+        // RedirectStandardInput forces CreateProcess bInheritHandles=true, which
+        // otherwise leaks a copy of the launcher's real stdout/stderr handles into
+        // the child as stray inherited handles (separate from the redirect pipes
+        // it uses as StdOut/StdErr). A persisted Daemon holding those stray copies
+        // keeps the launcher's PARENT pipe open after the launcher exits → the
+        // parent (Bash tool) hangs with no EOF. Clearing inherit means the child
+        // inherits ONLY the redirect pipes. (POSIX handles the equivalent via
+        // PSBASH_HOST_DETACH dup2 + pipe-fd close in InheritedFdDetach.)
+        if (isWindows)
+            ClearStdHandleInheritanceWindows();
+
         Process? proc = null;
         bool spawnSucceeded = false;
         try
@@ -425,6 +515,11 @@ public sealed class IpcWorker : IWorker
             proc = Process.Start(psi)
                 ?? throw new HostUnavailableException(
                     $"Process.Start returned null for '{_hostBinaryPath}'.");
+
+            // Test seam: record that this launcher actually spawned a host on this
+            // endpoint. Single-flight (EnsureHostReachableAsync) must keep this at
+            // exactly one per shared endpoint under a concurrent cold-start race.
+            SpawnCounts.AddOrUpdate($"{_scheme}:{_endpoint}", 1, static (_, n) => n + 1);
 
             // Close our end of the redirected stdin pipe. The host now sees
             // an EOF-closed stdin instead of whatever stdin the launcher
@@ -434,6 +529,17 @@ public sealed class IpcWorker : IWorker
             // UseShellExecute=false attempt.
             try { proc.StandardInput.Close(); }
             catch { /* harmless — already closed if host exited fast */ }
+
+            // Drain the host's redirected stdout/stderr to null on background
+            // tasks. This keeps the host from ever blocking on a full pipe (it is
+            // near-silent in framed mode, but a stray banner/error must not wedge
+            // it) and, crucially, means the host's stdout/stderr are launcher-owned
+            // pipes — NOT the launcher's real parent handles. When the launcher
+            // exits, these pipes close; a persisted daemon writing afterward just
+            // gets a broken pipe (swallowed). Fire-and-forget: process exit does
+            // not wait on these.
+            DrainToNull(proc.StandardOutput);
+            DrainToNull(proc.StandardError);
 
             var deadline = DateTime.UtcNow + _startupTimeout;
             while (DateTime.UtcNow < deadline)
@@ -810,6 +916,46 @@ public sealed class IpcWorker : IWorker
         => RuntimeInformation.IsOSPlatform(OSPlatform.Windows)
             ? "ps-bash-host.exe"
             : "ps-bash-host";
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern IntPtr GetStdHandle(int nStdHandle);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool SetHandleInformation(IntPtr hObject, uint dwMask, uint dwFlags);
+
+    private const uint HANDLE_FLAG_INHERIT = 0x1;
+
+    // Clear the inherit flag on this process's stdin/stdout/stderr so a spawned
+    // child (with CreateProcess bInheritHandles=true, forced by stream redirection)
+    // does NOT inherit stray copies of them. See call site in SpawnAndWaitAsync.
+    private static void ClearStdHandleInheritanceWindows()
+    {
+        foreach (var id in stackalloc[] { -10, -11, -12 }) // STD_INPUT/OUTPUT/ERROR
+        {
+            try
+            {
+                var h = GetStdHandle(id);
+                // Skip null/invalid (-1) handles — a launcher with no console.
+                if (h != IntPtr.Zero && h != new IntPtr(-1))
+                    SetHandleInformation(h, HANDLE_FLAG_INHERIT, 0);
+            }
+            catch { /* best effort — never block spawn on this */ }
+        }
+    }
+
+    // Read a child stream to completion and discard it, on a background task that
+    // never blocks process exit. Used to absorb a spawned host's redirected
+    // stdout/stderr (see SpawnAndWaitAsync) so the host neither blocks on a full
+    // pipe nor holds the launcher's real parent stdout/stderr open.
+    private static void DrainToNull(StreamReader reader)
+    {
+        _ = Task.Run(async () =>
+        {
+            try { await reader.BaseStream.CopyToAsync(Stream.Null).ConfigureAwait(false); }
+            catch { /* pipe closed on launcher exit / host death — expected */ }
+        });
+    }
 
     public ValueTask DisposeAsync()
     {

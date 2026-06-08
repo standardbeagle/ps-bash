@@ -102,21 +102,31 @@ bool compactOutput = shellArgs.CompactOutput ?? EnvFlags.IsTruthy("PSBASH_COMPAC
 Environment.SetEnvironmentVariable("PSBASH_COMPACT_OUTPUT", compactOutput ? "1" : "0");
 
 // All non-interactive execution (-c, stdin pipe, script file) goes through
-// ps-bash-host over IPC. REFACTOR-7: each invocation gets its own private host
-// (Lifetime.PerInvocation) — spawned on a process-local socket and killed when
-// the worker is disposed — so the host never outlives its single client. This
-// contains the pipe-inheritance hazard within the launcher's lifetime and gives
-// every -c/script run a clean PowerShell session by construction. Interactive
-// mode does not use this factory: it spawns ps-bash-host --interactive directly
-// so the host inherits the real tty. If the host binary is missing or fails to
-// start, the invocation exits non-zero with the underlying error.
+// ps-bash-host over IPC. Default lifetime is Lifetime.Daemon: a single shared
+// per-user host is spawned once (single-flighted via HostSpawnLock) and reused by
+// every subsequent launcher, so a -c invocation pays the ~3 s runspace cold-start
+// only on the first call — critical when an embedding parent (e.g. the Claude Code
+// Bash tool) issues many commands. The daemon host gives each connection its OWN
+// isolated runspace from a warm pool (see WorkerPool), so reuse is fast WITHOUT
+// leaking session state between commands, and concurrent launchers run in parallel.
+//
+// Escape hatch: set PSBASH_PER_INVOCATION=1 to force the old private-host-per-call
+// model (Lifetime.PerInvocation) — a fresh host process per invocation, killed on
+// dispose. Used by callers that need a hard process boundary per command.
+//
+// Interactive mode does not use this factory: it spawns ps-bash-host --interactive
+// directly so the host inherits the real tty. If the host binary is missing or
+// fails to start, the invocation exits non-zero with the underlying error.
+var hostLifetime = EnvFlags.IsTruthy("PSBASH_PER_INVOCATION")
+    ? Lifetime.PerInvocation
+    : Lifetime.Daemon;
 Func<Task<IWorker>> workerFactory = async () =>
 {
     var hostBinary = ResolveHostBinary()
         ?? throw new HostUnavailableException(
             "ps-bash-host binary not found. Set PSBASH_HOST=<path> or install alongside ps-bash.");
 
-    return await IpcWorker.StartAsync(hostBinary, lifetime: Lifetime.PerInvocation).ConfigureAwait(false);
+    return await IpcWorker.StartAsync(hostBinary, lifetime: hostLifetime).ConfigureAwait(false);
 };
 
 // M3: file-arg mode — ps-bash script.sh [arg1 arg2 ...]
@@ -278,8 +288,25 @@ else
     }
     catch (ParseException ex)
     {
-        Console.Error.WriteLine($"ps-bash: parse error: {ex.Message}");
-        return 2;
+        // The bash parser rejected this input. If it is actually PowerShell
+        // (e.g. `if (Test-Path x) { ... }`, `Get-Content`, `[Type]::Method`),
+        // run it as PowerShell directly — the host runspace IS PowerShell. This
+        // makes ps-bash forgiving of mixed bash/PowerShell input (e.g. an agent
+        // whose harness advertises a PowerShell shell). Bash-first is preserved:
+        // valid bash always transpiles, so only un-transpilable input reaches
+        // here. Opt out with PSBASH_NO_PS_FALLBACK=1 to always surface the bash
+        // parse error.
+        if (!EnvFlags.IsTruthy("PSBASH_NO_PS_FALLBACK") && LooksLikePowerShell(bashCommand))
+        {
+            pwshCommand = bashCommand;
+            if (debug)
+                Console.Error.WriteLine("[ps-bash] note: bash parse failed; input detected as PowerShell, running raw");
+        }
+        else
+        {
+            Console.Error.WriteLine($"ps-bash: parse error: {ex.Message}");
+            return 2;
+        }
     }
 }
 
@@ -352,6 +379,46 @@ static string BuildPositionalPreamble(string script0, string[] scriptArgs)
     var arrayLiteral = scriptArgs.Length == 0 ? "@()" : $"@({argList})";
 
     return $"$global:BashPositional0 = {scriptName}; $global:BashPositional = {arrayLiteral}; ";
+}
+
+// Heuristic: does this input look like PowerShell rather than bash? Only consulted
+// AFTER the bash transpiler has already failed to parse it, so it need not exclude
+// valid bash — it only has to distinguish "PowerShell the user meant" from "a bash
+// typo". The signals below are constructs that are unambiguously PowerShell and
+// NOT valid bash (so e.g. `[ $a -eq $b ]`, which bash and PowerShell share, is
+// deliberately NOT a signal). Pure string/regex so it stays AOT-safe.
+static bool LooksLikePowerShell(string input)
+{
+    if (string.IsNullOrWhiteSpace(input)) return false;
+
+    // A Pascal-case hyphenated cmdlet token: Get-Content, Test-Path, New-Item, …
+    // Bash command names are lower-case, so a Capitalized-Capitalized token is a
+    // strong PowerShell signal.
+    if (System.Text.RegularExpressions.Regex.IsMatch(input, @"\b[A-Z][a-z]+-[A-Z][A-Za-z]+\b"))
+        return true;
+
+    // A .NET static member access: [System.IO.Path]::GetFullPath(...), [Console]::…
+    if (System.Text.RegularExpressions.Regex.IsMatch(input, @"\[[\w.]+\]::"))
+        return true;
+
+    // PowerShell control flow with a brace block: `if (...) { }`, `while (...) {`,
+    // `foreach (...) {`, `switch (...) {`. Bash uses `if …; then … fi` / `do … done`
+    // and would never put a `{` block directly after `(...)`.
+    if (System.Text.RegularExpressions.Regex.IsMatch(
+            input, @"\b(if|elseif|while|foreach|switch)\b\s*\([^)]*\)\s*\{",
+            System.Text.RegularExpressions.RegexOptions.Singleline))
+        return true;
+
+    // A param block (script/function signature) at the start.
+    if (System.Text.RegularExpressions.Regex.IsMatch(
+            input, @"^\s*param\s*\(", System.Text.RegularExpressions.RegexOptions.IgnoreCase))
+        return true;
+
+    // Pipeline automatic variable property access ($_.Prop) or $PSItem.
+    if (System.Text.RegularExpressions.Regex.IsMatch(input, @"\$_\.\w|\$PSItem\b"))
+        return true;
+
+    return false;
 }
 
 static string BuildInvocationCwdPreamble()

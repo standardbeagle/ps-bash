@@ -7,28 +7,31 @@ namespace PsBash.Host.Tests.Server;
 
 /// <summary>
 /// Integration tests for HostServer accept loop and Connection dispatcher.
-/// A single SdkWorker + HostServer is shared across tests in this class so
-/// that sequential tests can verify cross-connection runspace state sharing.
+/// The server is backed by a <see cref="WorkerPool{SdkWorker}"/>, so each
+/// connection checks out its own isolated runspace — sequential connections do
+/// NOT share runspace state (verified below).
 /// </summary>
 [Collection("SdkHost")]
 public sealed class HostServerTests : IAsyncLifetime
 {
-    private SdkWorker _worker = null!;
+    private WorkerPool<SdkWorker> _pool = null!;
     private NamedPipeTransport _serverTransport = null!;
     private HostServer _server = null!;
     private CancellationTokenSource _cts = null!;
     private Task _serverTask = null!;
     private string _pipeName = null!;
 
-    public async Task InitializeAsync()
+    public Task InitializeAsync()
     {
-        _worker = SdkWorker.Create();
+        // warmTarget 0: create a runspace on demand (per command) to keep the
+        // test's runspace count minimal, matching the old single-worker cost.
+        _pool = new WorkerPool<SdkWorker>(warmTarget: 0, max: 2, SdkWorker.Create);
         _pipeName = $"psbash-test-{Guid.NewGuid():N}";
         _serverTransport = new NamedPipeTransport(_pipeName);
-        _server = new HostServer(_serverTransport, Task.FromResult(_worker));
+        _server = new HostServer(_serverTransport, _pool);
         _cts = new CancellationTokenSource();
         _serverTask = _server.RunAsync(_cts.Token);
-        await _server.WhenListening;
+        return _server.WhenListening;
     }
 
     public async Task DisposeAsync()
@@ -36,7 +39,7 @@ public sealed class HostServerTests : IAsyncLifetime
         _cts.Cancel();
         try { await _serverTask.WaitAsync(TimeSpan.FromSeconds(3)); } catch { }
         await _server.DisposeAsync();
-        await _worker.DisposeAsync();
+        await _pool.DisposeAsync();
         _cts.Dispose();
     }
 
@@ -78,10 +81,16 @@ public sealed class HostServerTests : IAsyncLifetime
     public async Task HealthConnection_DoesNotWaitForWorkerInitialization()
     {
         var pipeName = $"psbash-health-{Guid.NewGuid():N}";
-        var workerTcs = new TaskCompletionSource<SdkWorker>(TaskCreationOptions.RunContinuationsAsynchronously);
-        await using var transport = new NamedPipeTransport(pipeName);
-        await using var server = new HostServer(transport, workerTcs.Task);
         using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        // A pool whose factory blocks (until the test cancels) models a host whose
+        // first runspace is still warming: IsReady stays false, so health must
+        // report "starting" without waiting for a runspace. No real SdkWorker is
+        // ever built — the blocked factory unwinds via the cts on teardown.
+        using var neverReady = new ManualResetEventSlim(false);
+        SdkWorker BlockingFactory() { neverReady.Wait(cts.Token); return SdkWorker.Create(); }
+        await using var pool = new WorkerPool<SdkWorker>(warmTarget: 1, max: 2, BlockingFactory);
+        await using var transport = new NamedPipeTransport(pipeName);
+        await using var server = new HostServer(transport, pool);
 
         var serverTask = server.RunAsync(cts.Token);
         await server.WhenListening.WaitAsync(cts.Token);
@@ -96,16 +105,18 @@ public sealed class HostServerTests : IAsyncLifetime
     }
 
     [Fact]
-    public async Task TwoSequentialConnections_ShareRunspaceState()
+    public async Task TwoSequentialConnections_DoNotShareRunspaceState()
     {
-        // Set a global PS variable across one connection, read it back in another.
-        // Using a variable avoids cmdlet auto-loading issues with Set-Location.
+        // Each connection checks out its own isolated runspace from the pool (and
+        // the runspace is discarded on release), so a $global set in one -c does
+        // NOT leak into the next — matching a fresh bash process per -c. This is
+        // the isolation guarantee that lets the daemon be reused safely.
         var (_, setExit) = await SendCommandAsync("$global:PsBashTestShared = 'state-shared-42'");
         Assert.Equal(0, setExit);
 
         var (output, getExit) = await SendCommandAsync("$global:PsBashTestShared");
         Assert.Equal(0, getExit);
-        Assert.Contains("state-shared-42", output);
+        Assert.DoesNotContain("state-shared-42", output);
     }
 
     [Fact]
