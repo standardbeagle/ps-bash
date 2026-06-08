@@ -9,16 +9,16 @@ namespace PsBash.Host.Server;
 /// incoming connection to a <see cref="Connection"/>. Exceptions at the
 /// connection boundary are swallowed so the host stays alive after bad requests.
 ///
-/// Accepts a <c>Task&lt;SdkWorker&gt;</c> so the transport can start listening
-/// and write its lock file before the runspace finishes initializing. Connections
-/// that arrive while the runspace is still warming up are held at the worker's
-/// internal semaphore until the first <see cref="IWorker.ExecuteAsync"/> call
-/// can proceed.
+/// Accepts a <see cref="WorkerPool"/> so the transport can start listening and
+/// write its lock file before the first runspace finishes warming. Each connection
+/// checks out its own isolated worker from the pool (see <see cref="Connection"/>);
+/// a connection that arrives before any runspace is warm waits inside
+/// <see cref="WorkerPool.AcquireAsync"/> until one is ready.
 /// </summary>
 public sealed class HostServer : IAsyncDisposable
 {
     private readonly IIpcTransport _transport;
-    private readonly Task<SdkWorker> _workerTask;
+    private readonly WorkerPool<SdkWorker> _pool;
     private readonly IdleShutdown? _idle;
     private readonly TaskCompletionSource _ready = new(TaskCreationOptions.RunContinuationsAsynchronously);
     private readonly CancellationTokenSource _acceptStop = new();
@@ -27,10 +27,10 @@ public sealed class HostServer : IAsyncDisposable
     private TaskCompletionSource? _drained;
     private int _disposed;
 
-    public HostServer(IIpcTransport transport, Task<SdkWorker> workerTask, IdleShutdown? idle = null)
+    public HostServer(IIpcTransport transport, WorkerPool<SdkWorker> pool, IdleShutdown? idle = null)
     {
         _transport = transport;
-        _workerTask = workerTask;
+        _pool = pool;
         _idle = idle;
     }
 
@@ -79,7 +79,7 @@ public sealed class HostServer : IAsyncDisposable
         {
             await using (stream)
             {
-                var conn = new Connection(stream, _workerTask, this);
+                var conn = new Connection(stream, _pool, this);
                 await conn.HandleAsync(ct);
             }
         }

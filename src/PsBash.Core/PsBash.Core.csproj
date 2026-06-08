@@ -29,6 +29,9 @@
     <!-- Expose internals so the test project can unit-test pure helpers
          (e.g. IpcWorker.ParseCallTimeout) without spawning a host. -->
     <InternalsVisibleTo Include="PsBash.Core.Tests" />
+    <!-- Host.Tests asserts the IpcWorker.SpawnCounts single-flight seam in the
+         concurrent cold-start stress test (HostStartupStressTests). -->
+    <InternalsVisibleTo Include="PsBash.Host.Tests" />
   </ItemGroup>
 
   <ItemGroup>

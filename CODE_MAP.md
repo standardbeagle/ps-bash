@@ -39,7 +39,9 @@ Tests mirror projects: `*.Tests` + `PsBash.Differential.Tests` (bash-oracle), `P
 - **Compact output (`--compact-output`)** → `Runtime/OutputCompactor.cs` + `IpcWorker` buffering. Spec: `docs/specs/compact-output.md`.
 - **Alias expansion** → `Shell/AliasExpander.cs`.
 - **Host startup / runspace** → `Runtime/SdkRunspace.cs` + `Resources/SdkRunspaceSetup.ps1` (CommandNotFoundAction, module-autoload recovery).
-- **IPC / host lifetime / timeouts** → `Runtime/IpcWorker.cs`, `Runtime/Ipc/*`.
+- **Warm runspace pool** (each `-c` connection gets an isolated runspace, discarded on release → clean session per command + concurrency; warmed on dedicated threads so warm-up can't starve the accept/health loop) → `Runtime/WorkerPool.cs`. Sized via `PSBASH_POOL_WARM`/`PSBASH_POOL_MAX`. Spec: `docs/specs/host-lifecycle-contract.md`.
+- **IPC / host lifetime / timeouts** → `Runtime/IpcWorker.cs`, `Runtime/Ipc/*`. **`-c` defaults to `Lifetime.Daemon`** (warm pooled host reused across launchers; opt out with `PSBASH_PER_INVOCATION=1`). The daemon spawn MUST sever stdio inheritance (`IpcWorker.SpawnAndWaitAsync`: redirect+drain host stdout/stderr + clear `HANDLE_FLAG_INHERIT` on Windows / `PSBASH_HOST_DETACH` on POSIX) or a persisted daemon holds the launcher's parent stdout open and hangs it.
+- **Concurrent host-spawn arbitration** (Daemon single-flight; stops the cold-start thundering-herd that orphans N-1 runspaces) → `IpcWorker.EnsureHostReachableAsync` + `Runtime/Ipc/HostSpawnLock.cs` (endpoint-scoped exclusive FILE lock, NOT a thread-affine Mutex). Spec: `docs/specs/host-lifecycle-contract.md` §Concurrency.
 - **Module/cmdlets extraction** → `Runtime/ModuleExtractor.cs`.
 
 ## Specs (deep reference)

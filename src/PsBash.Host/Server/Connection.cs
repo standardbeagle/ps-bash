@@ -4,15 +4,18 @@ using PsBash.Host.Runtime;
 namespace PsBash.Host.Server;
 
 /// <summary>
-/// Handles a single accepted connection: reads one request, executes it
-/// against the shared <see cref="SdkWorker"/>, and streams the response.
+/// Handles a single accepted connection: reads one request, checks out an isolated
+/// <see cref="SdkWorker"/> from the <see cref="WorkerPool"/>, executes the command,
+/// streams the response, and releases the worker (whose runspace is discarded so
+/// the next command runs in a clean session).
 /// </summary>
 internal sealed class Connection
 {
-    // Prepended to every command to reset globals that accumulate across
-    // invocations on the shared runspace.  'set -e' emits __BashErrexit = true;
-    // positional params are set by BuildPositionalPreamble — both must be cleared
-    // between invocations so state from one -c call does not affect the next.
+    // Belt-and-suspenders reset of globals that a transpiled command may set
+    // ('set -e' → __BashErrexit; positional params via BuildPositionalPreamble).
+    // With per-connection pooled isolation each worker is already a fresh runspace,
+    // so this is redundant for the daemon path — but it is cheap and keeps any
+    // single-worker / warm-spare edge correct.
     private const string PerInvocationReset =
         "$global:__BashErrexit = $false; " +
         "$ErrorActionPreference = 'Continue'; " +
@@ -21,13 +24,13 @@ internal sealed class Connection
         "$global:BashPositional0 = $null; ";
 
     private readonly Stream _stream;
-    private readonly Task<SdkWorker> _workerTask;
+    private readonly WorkerPool<SdkWorker> _pool;
     private readonly HostServer? _server;
 
-    internal Connection(Stream stream, Task<SdkWorker> workerTask, HostServer? server = null)
+    internal Connection(Stream stream, WorkerPool<SdkWorker> pool, HostServer? server = null)
     {
         _stream = stream;
-        _workerTask = workerTask;
+        _pool = pool;
         _server = server;
     }
 
@@ -85,12 +88,13 @@ internal sealed class Connection
 
         if (mode is Mode.Health)
         {
-            if (_workerTask.IsCompletedSuccessfully)
+            // Health must not consume a pool slot — it only inspects warm state.
+            if (_pool.IsReady)
             {
                 await HostProtocol.WriteResponseLineAsync(_stream, HostProtocol.HealthPayload, ct);
                 await HostProtocol.WriteExitAsync(_stream, 0, ct);
             }
-            else if (_workerTask.IsFaulted || _workerTask.IsCanceled)
+            else if (_pool.FirstWarmError is not null && !_pool.IsWarming)
             {
                 await HostProtocol.WriteResponseLineAsync(_stream, "ps-bash-host worker failed", ct);
                 await HostProtocol.WriteExitAsync(_stream, 1, ct);
@@ -158,9 +162,25 @@ internal sealed class Connection
             ? null
             : WriteError;
 
-        var worker = await _workerTask.ConfigureAwait(false);
-        var exitCode = await worker.ExecuteWithOutputAsync(command, outputSink, errorSink, ct);
+        // Check out an isolated worker for this one command; discard it on the way
+        // out so the next -c never sees this command's session state. Distinct
+        // connections get distinct workers, so concurrent launchers run in parallel.
+        WorkerPool<SdkWorker>.DiagLog("Connection: acquiring worker");
+        var worker = await _pool.AcquireAsync(ct).ConfigureAwait(false);
+        WorkerPool<SdkWorker>.DiagLog("Connection: acquired; executing command");
+        int exitCode;
+        try
+        {
+            exitCode = await worker.ExecuteWithOutputAsync(command, outputSink, errorSink, ct);
+            WorkerPool<SdkWorker>.DiagLog($"Connection: executed, exit={exitCode}");
+        }
+        finally
+        {
+            _pool.Release(worker);
+            WorkerPool<SdkWorker>.DiagLog("Connection: released worker");
+        }
         await HostProtocol.WriteExitAsync(_stream, exitCode, ct);
+        WorkerPool<SdkWorker>.DiagLog("Connection: wrote exit");
 
         if (sessionMode == SessionMode.Interactive)
         {

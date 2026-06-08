@@ -10,6 +10,18 @@ internal sealed class Program
 {
     static async Task<int> Main(string[] args)
     {
+        // Raise the thread-pool floor. The command path blocks a thread inside
+        // RunCommand's output sink (WriteResponseLineAsync(...).GetAwaiter()
+        // .GetResult()), and the pool may have runspaces warming concurrently;
+        // a too-small starting pool could starve the threads those blocking
+        // continuations need. A modest floor avoids the slow-grow stall without
+        // committing the threads unless they are used. (Worker pool create is on
+        // dedicated LongRunning threads, so this is defense-in-depth.)
+        {
+            ThreadPool.GetMinThreads(out var minW, out var minIo);
+            ThreadPool.SetMinThreads(Math.Max(minW, 16), Math.Max(minIo, 16));
+        }
+
         // Detach inherited launcher stdio when spawned as a daemon. See
         // InheritedFdDetach for the rationale and the RC-5 macOS fix.
         InheritedFdDetach.DetachInheritedStdioIfRequested();
@@ -67,10 +79,14 @@ internal sealed class Program
         using var cts = new CancellationTokenSource();
         Console.CancelKeyPress += (_, e) => { e.Cancel = true; cts.Cancel(); };
 
-        // Start runspace init on a background thread — this is the slow part (~2-8 s).
-        // The transport starts listening while the runspace warms up so clients
-        // can connect immediately and queue work.
-        var workerTask = Task.Run(SdkWorker.Create);
+        // Warm a pool of isolated runspaces in the background — runspace creation
+        // is the slow part (~2-8 s) and the pool keeps spares hot so steady-state
+        // command latency is near zero. The transport starts listening while the
+        // first runspace warms so clients can connect immediately and queue work;
+        // each connection checks out its own isolated worker (clean session per
+        // command, concurrent across launchers). Sized from the environment
+        // (PSBASH_POOL_WARM / PSBASH_POOL_MAX).
+        await using var pool = WorkerPool.FromEnvironment();
 
         var (transport, scheme, endpoint) = CreateTransport(args);
 
@@ -80,23 +96,16 @@ internal sealed class Program
         int? launcherPid = GetNonInteractiveLauncherPid(args);
         using var deathWatcher = ParentDeathWatcher.TryCreate(launcherPid, cts);
 
-        await using var server = new HostServer(transport, workerTask, idle);
+        await using var server = new HostServer(transport, pool, idle);
 
-        try
-        {
-            var serverTask = server.RunAsync(cts.Token);
-            await server.WhenListening;
-            // Sidecar must be written AFTER bind succeeds — otherwise a launcher
-            // racing with us would read metadata for a process that hasn't yet
-            // claimed the endpoint. Per docs/specs/host-lifecycle-contract.md.
-            WriteHostMetadata(scheme, endpoint);
-            try { await serverTask; }
-            finally { HostMetadata.Remove(scheme, endpoint); }
-        }
-        finally
-        {
-            try { var w = await workerTask; await w.DisposeAsync(); } catch { }
-        }
+        var serverTask = server.RunAsync(cts.Token);
+        await server.WhenListening;
+        // Sidecar must be written AFTER bind succeeds — otherwise a launcher
+        // racing with us would read metadata for a process that hasn't yet
+        // claimed the endpoint. Per docs/specs/host-lifecycle-contract.md.
+        WriteHostMetadata(scheme, endpoint);
+        try { await serverTask; }
+        finally { HostMetadata.Remove(scheme, endpoint); }
 
         return 0;
     }
