@@ -16,6 +16,7 @@ internal static class RunspaceSetupExtractor
 {
     internal const string ResourceName = "PsBash.Host/SdkRunspaceSetup.ps1";
     internal const string FileName = "SdkRunspaceSetup.ps1";
+    private const int MaxSetupScriptChars = 256 * 1024;
 
     /// <summary>
     /// Extract SdkRunspaceSetup.ps1 into <paramref name="moduleDir"/> and
@@ -77,6 +78,15 @@ internal static class RunspaceSetupExtractor
             ?? throw new InvalidOperationException(
                 $"Embedded resource not found: {ResourceName}.");
         using var reader = new StreamReader(stream);
-        return reader.ReadToEnd();
+        var buffer = new char[4096];
+        var sb = new System.Text.StringBuilder();
+        int read;
+        while ((read = reader.Read(buffer, 0, buffer.Length)) > 0)
+        {
+            if (sb.Length + read > MaxSetupScriptChars)
+                throw new InvalidOperationException("Embedded runspace setup script exceeds the maximum supported size.");
+            sb.Append(buffer, 0, read);
+        }
+        return sb.ToString();
     }
 }

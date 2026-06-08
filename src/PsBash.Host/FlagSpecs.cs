@@ -37,8 +37,7 @@ public static class FlagSpecs
             return new Dictionary<string, FlagSpec[]>(StringComparer.Ordinal);
         }
 
-        var json = new StreamReader(stream).ReadToEnd();
-        var node = JsonNode.Parse(json);
+        var node = JsonNode.Parse(stream);
         if (node is not JsonObject jsonObject)
             return new Dictionary<string, FlagSpec[]>(StringComparer.Ordinal);
 

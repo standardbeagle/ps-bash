@@ -23,6 +23,7 @@ public static class TranspileCache
     private const int MemoryMinLength = 256;
     private const int MemoryMaxEntries = 64;
     private const int DiskMaxEntries = 256;
+    private const long DiskCacheEntryMaxBytes = 16 * 1024 * 1024;
 
     // Changes on every compile of the transpiler assembly — the strongest possible "the emitter may
     // have changed" signal, far safer than a hand-maintained version string for invalidation.
@@ -56,7 +57,7 @@ public static class TranspileCache
             {
                 if (File.Exists(path))
                 {
-                    var cached = File.ReadAllText(path);
+                    var cached = ReadCacheEntry(path);
                     // Touch so the LRU-by-mtime prune keeps frequently-used entries.
                     try { File.SetLastWriteTimeUtc(path, DateTime.UtcNow); } catch { /* touch is best-effort */ }
                     return cached;
@@ -71,6 +72,13 @@ public static class TranspileCache
             TryWriteDisk(dir, key, pwsh);
 
         return pwsh;
+    }
+
+    private static string ReadCacheEntry(string path)
+    {
+        if (new FileInfo(path).Length > DiskCacheEntryMaxBytes)
+            throw new IOException("Cached transpile entry exceeds the maximum cached entry size.");
+        return File.ReadAllText(path);
     }
 
     /// <summary>

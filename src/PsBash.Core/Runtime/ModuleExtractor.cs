@@ -4,6 +4,8 @@ namespace PsBash.Core.Runtime;
 
 public static class ModuleExtractor
 {
+    private const long ExtractionMarkerMaxBytes = 1024;
+
     private static readonly string[] ModuleFiles =
     [
         "PsBash.psd1",
@@ -164,7 +166,7 @@ public static class ModuleExtractor
         // Invalidate cache if embedded resource content has changed.
         if (File.Exists(marker))
         {
-            var storedHash = File.ReadAllText(marker).Trim();
+            var storedHash = ReadExtractionMarker(marker);
             var currentHash = ComputeEmbeddedHash(asm);
             if (storedHash != currentHash)
             {
@@ -227,6 +229,13 @@ public static class ModuleExtractor
         }
 
         return psd1Path;
+    }
+
+    private static string ReadExtractionMarker(string marker)
+    {
+        if (new FileInfo(marker).Length > ExtractionMarkerMaxBytes)
+            return string.Empty;
+        return File.ReadAllText(marker).Trim();
     }
 
     /// <summary>

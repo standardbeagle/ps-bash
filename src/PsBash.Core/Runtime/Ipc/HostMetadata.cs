@@ -26,6 +26,8 @@ public sealed record HostMetadata(
     [property: JsonPropertyName("startedAt")] DateTimeOffset StartedAt,
     [property: JsonPropertyName("owner")] string Owner)
 {
+    private const long MaxMetadataBytes = 64 * 1024;
+
     /// <summary>
     /// Path of the metadata sidecar derived from a resolved endpoint. For
     /// <c>unix</c>, the sidecar lives next to the socket so a single ownership
@@ -75,6 +77,7 @@ public sealed record HostMetadata(
         if (!File.Exists(path)) return null;
         try
         {
+            if (new FileInfo(path).Length > MaxMetadataBytes) return null;
             var json = File.ReadAllText(path);
             return JsonSerializer.Deserialize(json, HostMetadataJsonContext.Default.HostMetadata);
         }

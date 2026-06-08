@@ -11,6 +11,7 @@ namespace PsBash.Host.Shell;
 public static class InteractiveShell
 {
     private const string ContinuationPrompt = "> ";
+    private const long GitHeadMaxBytes = 4096;
 
     // Alias table + expansion live in AliasExpander; the interactive REPL routes
     // alias/unalias lines through it and shares its table with tab completion.
@@ -870,7 +871,7 @@ EnsureConsoleInputRestored();
                     var headFile = Path.Combine(dir, ".git", "HEAD");
                     if (File.Exists(headFile))
                     {
-                        var head = File.ReadAllText(headFile).Trim();
+                        var head = ReadGitHead(headFile);
                         const string prefix = "ref: refs/heads/";
                         if (head.StartsWith(prefix))
                             return head[prefix.Length..];
@@ -901,7 +902,7 @@ EnsureConsoleInputRestored();
                     // A simple proxy: check if there are modified files
                     var headFile = Path.Combine(gitDir, "HEAD");
                     if (!File.Exists(headFile)) return true;
-                    var head = File.ReadAllText(headFile).Trim();
+                    var head = ReadGitHead(headFile);
                     const string prefix = "ref: refs/heads/";
                     if (!head.StartsWith(prefix)) return true;
                     var refPath = Path.Combine(gitDir, head[prefix.Length..]);
@@ -915,6 +916,13 @@ EnsureConsoleInputRestored();
         }
         catch (Exception) { /* routine: git index unreadable; prompt reports clean */ }
         return true;
+    }
+
+    private static string ReadGitHead(string path)
+    {
+        if (new FileInfo(path).Length > GitHeadMaxBytes)
+            return string.Empty;
+        return File.ReadAllText(path).Trim();
     }
 
     private static async Task<string?> ReadInputAsync(IWorker? worker)

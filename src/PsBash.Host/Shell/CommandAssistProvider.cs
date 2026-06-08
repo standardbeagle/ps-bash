@@ -8,6 +8,8 @@ namespace PsBash.Host.Shell;
 
 internal sealed record CommandAssistConfig
 {
+    private const long MaxConfigBytes = 1024 * 1024;
+
     public string DefaultProvider { get; init; } = "claude";
     public List<CommandAssistProviderConfig> Providers { get; init; } = [CommandAssistProviderConfig.ClaudeDefault()];
 
@@ -26,6 +28,8 @@ internal sealed record CommandAssistConfig
 
         try
         {
+            if (new FileInfo(path).Length > MaxConfigBytes)
+                throw new IOException("config file exceeds the maximum supported size.");
             var json = File.ReadAllText(path);
             var config = JsonSerializer.Deserialize(json, CommandAssistJsonContext.Default.CommandAssistConfig);
             return config?.Normalize() ?? new CommandAssistConfig();

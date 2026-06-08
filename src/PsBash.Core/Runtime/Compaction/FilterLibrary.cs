@@ -15,6 +15,7 @@ public sealed class FilterLibrary
 {
     /// <summary>Logical-name infix marking an embedded built-in filter resource.</summary>
     private const string EmbeddedInfix = ".Compaction.Filters.";
+    private const int MaxFilterFileChars = 1024 * 1024;
 
     private static readonly object Gate = new();
     private static string? _cacheKey;
@@ -87,8 +88,7 @@ public sealed class FilterLibrary
             {
                 using var stream = assembly.GetManifestResourceStream(name);
                 if (stream is null) continue;
-                using var reader = new StreamReader(stream, Encoding.UTF8);
-                specs.AddRange(FilterJson.ParseFile(reader.ReadToEnd()));
+                specs.AddRange(FilterJson.ParseFile(ReadStreamBounded(stream)));
             }
             catch
             {
@@ -114,9 +114,25 @@ public sealed class FilterLibrary
 
     private static string ReadShared(string path)
     {
+        if (new FileInfo(path).Length > MaxFilterFileChars)
+            throw new IOException("Filter file exceeds the maximum supported size.");
         using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
+        return ReadStreamBounded(stream);
+    }
+
+    private static string ReadStreamBounded(Stream stream)
+    {
         using var reader = new StreamReader(stream, Encoding.UTF8);
-        return reader.ReadToEnd();
+        var sb = new StringBuilder();
+        var buffer = new char[4096];
+        int read;
+        while ((read = reader.Read(buffer, 0, buffer.Length)) > 0)
+        {
+            if (sb.Length + read > MaxFilterFileChars)
+                throw new IOException("Filter file exceeds the maximum supported size.");
+            sb.Append(buffer, 0, read);
+        }
+        return sb.ToString();
     }
 
     private static string BuildCacheKey(

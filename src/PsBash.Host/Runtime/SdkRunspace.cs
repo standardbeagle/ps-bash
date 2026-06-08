@@ -12,6 +12,8 @@ namespace PsBash.Host.Runtime;
 /// </summary>
 internal sealed class SdkRunspace : IAsyncDisposable
 {
+    private const long MaxStartupModuleBytes = 4 * 1024 * 1024;
+
     private readonly Runspace _runspace;
     private int _disposed;
 
@@ -162,7 +164,7 @@ internal sealed class SdkRunspace : IAsyncDisposable
         var psm1Path = Path.Combine(Path.GetDirectoryName(modulePath)!, "PsBash.psm1");
         if (File.Exists(psm1Path))
         {
-            var psm1Content = File.ReadAllText(psm1Path);
+            var psm1Content = ReadStartupModule(psm1Path);
             Trace("psm1-read");
             ps.AddScript(psm1Content).Invoke();
             ps.Commands.Clear();
@@ -172,6 +174,13 @@ internal sealed class SdkRunspace : IAsyncDisposable
         Interlocked.Increment(ref ModuleLoadCount);
         Trace("startup-complete");
         return new SdkRunspace(runspace, host);
+    }
+
+    private static string ReadStartupModule(string path)
+    {
+        if (new FileInfo(path).Length > MaxStartupModuleBytes)
+            throw new IOException("Extracted PsBash module exceeds the maximum supported startup size.");
+        return File.ReadAllText(path);
     }
 
     public Runspace Runspace => _runspace;

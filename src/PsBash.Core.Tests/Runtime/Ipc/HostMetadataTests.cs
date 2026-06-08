@@ -86,6 +86,14 @@ public class HostMetadataTests : IDisposable
     }
 
     [Fact]
+    public void TryRead_OversizedSidecar_ReturnsNullInsteadOfSlurping()
+    {
+        var endpoint = Path.Combine(_tempRoot, "huge.sock");
+        File.WriteAllText(HostMetadata.PathFor("unix", endpoint), new string('x', 70 * 1024));
+        Assert.Null(HostMetadata.TryRead("unix", endpoint));
+    }
+
+    [Fact]
     public void Remove_RemovesExistingSidecar()
     {
         var endpoint = Path.Combine(_tempRoot, "rm.sock");

@@ -115,6 +115,28 @@ public sealed class CommandAssistProviderTests
     }
 
     [Fact]
+    public void Load_OversizedConfigFileReportsActionableError()
+    {
+        var prior = Environment.GetEnvironmentVariable("PSBASH_AI_CONFIG");
+        var path = Path.Combine(Path.GetTempPath(), "psbash-ai-" + Guid.NewGuid().ToString("N") + ".json");
+        try
+        {
+            File.WriteAllText(path, new string(' ', 1024 * 1024 + 1));
+            Environment.SetEnvironmentVariable("PSBASH_AI_CONFIG", path);
+
+            var ex = Assert.Throws<CommandAssistProviderException>(CommandAssistConfig.Load);
+
+            Assert.Contains("could not read AI provider config", ex.Message);
+            Assert.Contains(path, ex.Message);
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("PSBASH_AI_CONFIG", prior);
+            try { File.Delete(path); } catch { }
+        }
+    }
+
+    [Fact]
     public void Resolve_UsesRequestedProviderForSwitchFlow()
     {
         var config = new CommandAssistConfig

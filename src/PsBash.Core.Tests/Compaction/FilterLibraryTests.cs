@@ -128,6 +128,23 @@ public class FilterLibraryTests
     }
 
     [Fact]
+    public void Load_OversizedFile_SkippedButOthersLoad()
+    {
+        var dir = NewTempDir();
+        try
+        {
+            File.WriteAllText(Path.Combine(dir, "huge.json"), new string(' ', 1024 * 1024 + 1));
+            File.WriteAllText(Path.Combine(dir, "good.json"),
+                """{ "name": "my/tool", "match": { "command": "mytool" } }""");
+
+            var merged = FilterLibrary.Load(null, dir);
+
+            Assert.Contains(merged, f => f.Name == "my/tool");
+        }
+        finally { Directory.Delete(dir, true); }
+    }
+
+    [Fact]
     public void Load_ExcludeCommand_DropsMatching()
     {
         var dir = NewTempDir();

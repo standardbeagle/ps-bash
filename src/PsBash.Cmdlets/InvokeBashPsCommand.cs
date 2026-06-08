@@ -81,6 +81,9 @@ public sealed class InvokeBashPsCommand : PSCmdlet
 
     private static long s_totalMemBytes = 0;
     private static int s_currentSessionId = -1;
+    private const int ProcStatMaxBytes = 4096;
+    private const int ProcCmdlineMaxBytes = 128 * 1024;
+    private const int ProcUptimeMaxBytes = 256;
 
     /// <summary>
     /// The current process's Windows session id, cached. Calling
@@ -442,7 +445,7 @@ public sealed class InvokeBashPsCommand : PSCmdlet
     {
         string statPath = Path.Combine(procDir, "stat");
         string statRaw;
-        try { statRaw = File.ReadAllText(statPath); }
+        try { statRaw = ReadProcText(statPath, ProcStatMaxBytes); }
         catch { return null; }
 
         // PID (comm) state PPID ... — comm can contain spaces and parens
@@ -491,7 +494,7 @@ public sealed class InvokeBashPsCommand : PSCmdlet
         string cmdline = "";
         try
         {
-            var bytes = File.ReadAllBytes(Path.Combine(procDir, "cmdline"));
+            var bytes = ReadProcBytes(Path.Combine(procDir, "cmdline"), ProcCmdlineMaxBytes);
             if (bytes.Length > 0)
             {
                 cmdline = System.Text.Encoding.UTF8.GetString(bytes).TrimEnd('\0').Replace('\0', ' ');
@@ -522,7 +525,7 @@ public sealed class InvokeBashPsCommand : PSCmdlet
         DateTimeOffset bootTime = DateTimeOffset.UtcNow;
         try
         {
-            var uptimeStr = File.ReadAllText("/proc/uptime").Trim().Split(' ')[0];
+            var uptimeStr = ReadProcText("/proc/uptime", ProcUptimeMaxBytes).Trim().Split(' ')[0];
             if (double.TryParse(uptimeStr, NumberStyles.Float, CultureInfo.InvariantCulture, out var uptimeSec))
             {
                 bootTime = DateTimeOffset.UtcNow.AddSeconds(-uptimeSec);
@@ -604,6 +607,24 @@ public sealed class InvokeBashPsCommand : PSCmdlet
             }
         }
         catch { }
+    }
+
+    private static string ReadProcText(string path, int maxBytes)
+        => System.Text.Encoding.UTF8.GetString(ReadProcBytes(path, maxBytes));
+
+    private static byte[] ReadProcBytes(string path, int maxBytes)
+    {
+        using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
+        using var ms = new MemoryStream(Math.Min(maxBytes, 4096));
+        var buffer = new byte[Math.Min(maxBytes, 4096)];
+        while (ms.Length < maxBytes)
+        {
+            int take = Math.Min(buffer.Length, maxBytes - (int)ms.Length);
+            int read = stream.Read(buffer, 0, take);
+            if (read == 0) break;
+            ms.Write(buffer, 0, read);
+        }
+        return ms.ToArray();
     }
 
     private Dictionary<int, (string CommandLine, string User, int PPID)>? BuildWindowsCimLookup(bool needUser)
