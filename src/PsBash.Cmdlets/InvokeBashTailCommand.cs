@@ -359,25 +359,7 @@ public sealed class InvokeBashTailCommand : PSCmdlet
         // -c bytes mode
         if (byteCount != null)
         {
-            string? rawText = ReadFileText(firstFile, "tail");
-            if (rawText == null) return;
-
-            if (fromLine)
-            {
-                int startIdx = Math.Min(byteCount.Value, rawText.Length);
-                foreach (var obj in BashRuntime.EmitBashLines(rawText.Substring(startIdx)))
-                {
-                    WriteObject(obj);
-                }
-            }
-            else
-            {
-                int startIdx = Math.Max(0, rawText.Length - byteCount.Value);
-                foreach (var obj in BashRuntime.EmitBashLines(rawText.Substring(startIdx)))
-                {
-                    WriteObject(obj);
-                }
-            }
+            EmitFileBytes(firstFile, byteCount.Value, fromLine, "tail");
             return;
         }
 
@@ -456,29 +438,7 @@ public sealed class InvokeBashTailCommand : PSCmdlet
     {
         try
         {
-            string? initial = ReadFileText(filePath, "tail");
-            var lines = initial == null
-                ? Array.Empty<string>()
-                : (initial.Length == 0 ? Array.Empty<string>() : initial.Split('\n'));
-            // ReadAllText keeps a trailing empty element when the file ends in
-            // \n; drop it so line indexing matches Read-BashFileLines.
-            if (lines.Length > 0 && lines[^1].Length == 0
-                && initial != null && initial.EndsWith("\n"))
-            {
-                Array.Resize(ref lines, lines.Length - 1);
-            }
-
-            int lastOutputLine = fromLine
-                ? count - 1
-                : Math.Max(-1, lines.Length - count - 1);
-
-            for (int li = lastOutputLine + 1; li < lines.Length; li++)
-            {
-                foreach (var obj in BashRuntime.EmitBashLines(lines[li]))
-                {
-                    WriteObject(obj);
-                }
-            }
+            EmitInitialFollowTail(filePath, count, fromLine);
 
             long filePos = new FileInfo(filePath).Length;
 
@@ -488,7 +448,6 @@ public sealed class InvokeBashTailCommand : PSCmdlet
                 var info = new FileInfo(filePath);
                 if (info.Length > filePos)
                 {
-                    string? newContent = null;
                     try
                     {
                         using var fs = new FileStream(
@@ -496,28 +455,19 @@ public sealed class InvokeBashTailCommand : PSCmdlet
                             FileShare.ReadWrite);
                         using var sr = new StreamReader(fs);
                         fs.Seek(filePos, SeekOrigin.Begin);
-                        newContent = sr.ReadToEnd();
+                        string? line;
+                        while ((line = sr.ReadLine()) != null)
+                        {
+                            foreach (var obj in BashRuntime.EmitBashLines(line))
+                            {
+                                WriteObject(obj);
+                            }
+                        }
                         filePos = fs.Position;
                     }
                     catch
                     {
                         continue;
-                    }
-
-                    if (!string.IsNullOrEmpty(newContent))
-                    {
-                        if (newContent.EndsWith("\n"))
-                        {
-                            newContent = newContent.Substring(0, newContent.Length - 1);
-                        }
-                        newContent = newContent.Replace("\r\n", "\n");
-                        foreach (var nl in newContent.Split('\n'))
-                        {
-                            foreach (var obj in BashRuntime.EmitBashLines(nl))
-                            {
-                                WriteObject(obj);
-                            }
-                        }
                     }
                 }
                 else if (info.Length < filePos)
@@ -530,6 +480,94 @@ public sealed class InvokeBashTailCommand : PSCmdlet
         {
             FileSystemHelpers.WriteBashError(this, $"tail: cannot follow file: {ex.Message}");
         }
+    }
+
+    private void EmitFileBytes(string path, int byteCount, bool fromByte, string command)
+    {
+        try
+        {
+            using var fs = BashFileSystem.OpenRead(path);
+            long safeCount = Math.Max(byteCount, 0);
+            long start = fromByte
+                ? Math.Min(safeCount, fs.Length)
+                : Math.Max(0, fs.Length - safeCount);
+            fs.Seek(start, SeekOrigin.Begin);
+
+            using var reader = new StreamReader(
+                fs, Encoding.UTF8, detectEncodingFromByteOrderMarks: true);
+            string? line;
+            while ((line = reader.ReadLine()) != null)
+            {
+                foreach (var obj in BashRuntime.EmitBashLines(line))
+                {
+                    WriteObject(obj);
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            WriteFileReadError(path, command, ex);
+        }
+    }
+
+    private void EmitInitialFollowTail(string filePath, int count, bool fromLine)
+    {
+        StreamReader? reader = OpenReader(filePath, "tail");
+        if (reader == null) return;
+
+        try
+        {
+            if (fromLine)
+            {
+                int lineNumber = 0;
+                string? line;
+                while ((line = reader.ReadLine()) != null)
+                {
+                    lineNumber++;
+                    if (lineNumber >= count)
+                    {
+                        foreach (var obj in BashRuntime.EmitBashLines(line))
+                        {
+                            WriteObject(obj);
+                        }
+                    }
+                }
+                return;
+            }
+
+            int cap = Math.Max(count, 1);
+            var buf = new string[cap];
+            int bufLen = 0, pos = 0;
+            string? current;
+            while ((current = reader.ReadLine()) != null)
+            {
+                buf[pos] = current;
+                pos = (pos + 1) % cap;
+                if (bufLen < cap) bufLen++;
+            }
+
+            int start = bufLen < cap ? 0 : pos;
+            for (int k = 0; k < bufLen; k++)
+            {
+                foreach (var obj in BashRuntime.EmitBashLines(buf[(start + k) % cap]))
+                {
+                    WriteObject(obj);
+                }
+            }
+        }
+        finally
+        {
+            reader.Dispose();
+        }
+    }
+
+    private void WriteFileReadError(string path, string command, Exception ex)
+    {
+        string normalized = path.Replace('\\', '/');
+        bool notFound = ex is FileNotFoundException or DirectoryNotFoundException
+            || ex.InnerException is FileNotFoundException or DirectoryNotFoundException;
+        string msg = notFound ? "No such file or directory" : ex.Message;
+        FileSystemHelpers.WriteBashError(this, $"{command}: {normalized}: {msg}");
     }
 
     private static PSObject MakeCatLine(int lineNumber, string content, string fileName)
@@ -552,28 +590,6 @@ public sealed class InvokeBashTailCommand : PSCmdlet
             if (!char.IsDigit(c)) return false;
         }
         return true;
-    }
-
-    /// <summary>
-    /// psm1 oracle: <c>Read-BashFileBytes</c> — reads a file as text with CRLF
-    /// normalization; on failure emits a bash-style error and returns
-    /// <c>null</c>.
-    /// </summary>
-    private string? ReadFileText(string path, string command)
-    {
-        try
-        {
-            return BashFileSystem.ReadAllText(path);
-        }
-        catch (Exception ex)
-        {
-            string normalized = path.Replace('\\', '/');
-            bool notFound = ex is FileNotFoundException or DirectoryNotFoundException
-                || ex.InnerException is FileNotFoundException or DirectoryNotFoundException;
-            string msg = notFound ? "No such file or directory" : ex.Message;
-            FileSystemHelpers.WriteBashError(this, $"{command}: {normalized}: {msg}");
-            return null;
-        }
     }
 
     /// <summary>

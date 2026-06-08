@@ -127,8 +127,22 @@ public sealed class InvokeBashNlCommand : PSCmdlet
             i++;
         }
 
-        // Collect lines.
-        var lines = new List<string>();
+        int lineNum = 0;
+        void EmitNumbered(string line)
+        {
+            if (!numberAll && line.Length == 0)
+            {
+                WriteObject(BashRuntime.NewBashObject(string.Empty));
+                return;
+            }
+
+            lineNum++;
+            // psm1 oracle format: '{0,6}\t{1}' -f $lineNum, $line
+            string bashText = string.Format(
+                System.Globalization.CultureInfo.InvariantCulture,
+                "{0,6}\t{1}", lineNum, line);
+            WriteObject(BashRuntime.NewBashObject(bashText));
+        }
 
         if (operands.Count == 0 && _pipeline.Count > 0)
         {
@@ -140,12 +154,12 @@ public sealed class InvokeBashNlCommand : PSCmdlet
                 {
                     foreach (var subLine in trimmed.Split('\n'))
                     {
-                        lines.Add(subLine);
+                        EmitNumbered(subLine);
                     }
                 }
                 else
                 {
-                    lines.Add(trimmed);
+                    EmitNumbered(trimmed);
                 }
             }
         }
@@ -155,69 +169,28 @@ public sealed class InvokeBashNlCommand : PSCmdlet
             {
                 foreach (var filePath in FileSystemHelpers.ResolveOperandPaths(this, raw))
                 {
-                    var fileLines = ReadFileLines(filePath);
-                    if (fileLines == null) continue;
-                    lines.AddRange(fileLines);
+                    try
+                    {
+                        foreach (var line in BashFileSystem.ReadLines(filePath))
+                        {
+                            EmitNumbered(line);
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        WriteReadError(filePath, ex);
+                    }
                 }
-            }
-        }
-
-        // Number and emit.
-        int lineNum = 0;
-        foreach (var line in lines)
-        {
-            if (!numberAll && line.Length == 0)
-            {
-                WriteObject(BashRuntime.NewBashObject(string.Empty));
-            }
-            else
-            {
-                lineNum++;
-                // psm1 oracle format: '{0,6}\t{1}' -f $lineNum, $line
-                string bashText = string.Format(
-                    System.Globalization.CultureInfo.InvariantCulture,
-                    "{0,6}\t{1}", lineNum, line);
-                WriteObject(BashRuntime.NewBashObject(bashText));
             }
         }
     }
 
-    private List<string>? ReadFileLines(string path)
+    private void WriteReadError(string path, Exception ex)
     {
-        try
-        {
-            string content = BashFileSystem.ReadAllText(path);
-            var result = new List<string>();
-            // StreamReader.ReadLine() semantics: split on \n, no spurious
-            // trailing empty line if content ends with \n.
-            bool trailingNl = content.EndsWith("\n");
-            if (trailingNl)
-            {
-                content = content.Substring(0, content.Length - 1);
-            }
-            if (content.Length == 0 && !trailingNl)
-            {
-                return result;
-            }
-            if (content.Length == 0 && trailingNl)
-            {
-                result.Add(string.Empty);
-                return result;
-            }
-            foreach (var line in content.Split('\n'))
-            {
-                result.Add(line);
-            }
-            return result;
-        }
-        catch (Exception ex)
-        {
-            bool notFound = ex is FileNotFoundException or DirectoryNotFoundException
-                || ex.InnerException is FileNotFoundException or DirectoryNotFoundException;
-            string msg = notFound ? "No such file or directory" : ex.Message;
-            string normalized = path.Replace('\\', '/');
-            FileSystemHelpers.WriteBashError(this, $"nl: {normalized}: {msg}");
-            return null;
-        }
+        bool notFound = ex is FileNotFoundException or DirectoryNotFoundException
+            || ex.InnerException is FileNotFoundException or DirectoryNotFoundException;
+        string msg = notFound ? "No such file or directory" : ex.Message;
+        string normalized = path.Replace('\\', '/');
+        FileSystemHelpers.WriteBashError(this, $"nl: {normalized}: {msg}");
     }
 }

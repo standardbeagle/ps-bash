@@ -145,23 +145,16 @@ public sealed class InvokeBashPasteCommand : PSCmdlet
             operands.Add(a);
         }
 
-        // Read all files first. On any read failure, emit error and return
-        // (matches oracle's `if ($null -eq $fileLines) { return }`).
-        var allFiles = new List<string[]>();
+        var filePaths = new List<string>();
         foreach (var raw in operands)
         {
             foreach (var filePath in FileSystemHelpers.ResolveOperandPaths(this, raw))
             {
-                string[]? fileLines = ReadFileLines(filePath);
-                if (fileLines == null)
-                {
-                    return;
-                }
-                allFiles.Add(fileLines);
+                filePaths.Add(filePath);
             }
         }
 
-        if (allFiles.Count == 0)
+        if (filePaths.Count == 0)
         {
             return;
         }
@@ -169,67 +162,97 @@ public sealed class InvokeBashPasteCommand : PSCmdlet
         if (serial)
         {
             // Serial mode: each file becomes one line with its fields joined.
-            foreach (var fileLines in allFiles)
+            foreach (var filePath in filePaths)
             {
-                WriteObject(BashRuntime.NewBashObject(string.Join(delimiter, fileLines)));
+                string? line = ReadSerialLine(filePath, delimiter);
+                if (line is null)
+                {
+                    return;
+                }
+                WriteObject(BashRuntime.NewBashObject(line));
             }
             return;
         }
 
         // Normal mode: merge files line by line, padding short files with
         // empty strings up to the max line count.
-        int maxLines = 0;
-        foreach (var fileLines in allFiles)
-        {
-            if (fileLines.Length > maxLines) maxLines = fileLines.Length;
-        }
-
-        for (int lineIdx = 0; lineIdx < maxLines; lineIdx++)
-        {
-            var parts = new string[allFiles.Count];
-            for (int f = 0; f < allFiles.Count; f++)
-            {
-                parts[f] = lineIdx < allFiles[f].Length ? allFiles[f][lineIdx] : string.Empty;
-            }
-            WriteObject(BashRuntime.NewBashObject(string.Join(delimiter, parts)));
-        }
+        EmitParallelPaste(filePaths, delimiter);
     }
 
-    /// <summary>
-    /// Read a file into a line array. CRLF-normalized. A trailing newline
-    /// does NOT yield a spurious empty final line (StreamReader.ReadLine()
-    /// semantics — same as the psm1 Read-BashFileLines oracle which used
-    /// StreamReader internally).
-    /// </summary>
-    private string[]? ReadFileLines(string path)
+    private void EmitParallelPaste(IReadOnlyList<string> filePaths, string delimiter)
     {
+        var enumerators = new List<IEnumerator<string>>(filePaths.Count);
+        var current = new string?[filePaths.Count];
+
         try
         {
-            string content = BashFileSystem.ReadAllText(path);
-            if (content.Length == 0)
+            for (int i = 0; i < filePaths.Count; i++)
             {
-                return Array.Empty<string>();
+                var e = BashFileSystem.ReadLines(filePaths[i]).GetEnumerator();
+                enumerators.Add(e);
+                current[i] = e.MoveNext() ? e.Current : null;
             }
-            bool trailingNl = content[content.Length - 1] == '\n';
-            if (trailingNl)
+
+            while (current.Any(line => line is not null))
             {
-                content = content.Substring(0, content.Length - 1);
+                var parts = new string[filePaths.Count];
+                for (int i = 0; i < current.Length; i++)
+                {
+                    parts[i] = current[i] ?? string.Empty;
+                }
+                WriteObject(BashRuntime.NewBashObject(string.Join(delimiter, parts)));
+
+                for (int i = 0; i < enumerators.Count; i++)
+                {
+                    current[i] = current[i] is not null && enumerators[i].MoveNext()
+                        ? enumerators[i].Current
+                        : null;
+                }
             }
-            if (content.Length == 0)
-            {
-                // Source was exactly "\n" → one empty line.
-                return new[] { string.Empty };
-            }
-            return content.Split('\n');
         }
         catch (Exception ex)
         {
-            bool notFound = ex is FileNotFoundException or DirectoryNotFoundException
-                || ex.InnerException is FileNotFoundException or DirectoryNotFoundException;
-            string msg = notFound ? "No such file or directory" : ex.Message;
-            string normalized = path.Replace('\\', '/');
-            FileSystemHelpers.WriteBashError(this, $"paste: {normalized}: {msg}");
+            string path = enumerators.Count < filePaths.Count
+                ? filePaths[enumerators.Count]
+                : filePaths[Math.Max(0, enumerators.Count - 1)];
+            WriteReadError(path, ex);
+        }
+        finally
+        {
+            foreach (var e in enumerators)
+            {
+                e.Dispose();
+            }
+        }
+    }
+
+    private string? ReadSerialLine(string path, string delimiter)
+    {
+        try
+        {
+            var sb = new System.Text.StringBuilder();
+            bool first = true;
+            foreach (var line in BashFileSystem.ReadLines(path))
+            {
+                if (!first) sb.Append(delimiter);
+                sb.Append(line);
+                first = false;
+            }
+            return sb.ToString();
+        }
+        catch (Exception ex)
+        {
+            WriteReadError(path, ex);
             return null;
         }
+    }
+
+    private void WriteReadError(string path, Exception ex)
+    {
+        bool notFound = ex is FileNotFoundException or DirectoryNotFoundException
+            || ex.InnerException is FileNotFoundException or DirectoryNotFoundException;
+        string msg = notFound ? "No such file or directory" : ex.Message;
+        string normalized = path.Replace('\\', '/');
+        FileSystemHelpers.WriteBashError(this, $"paste: {normalized}: {msg}");
     }
 }

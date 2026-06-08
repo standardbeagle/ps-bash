@@ -564,7 +564,7 @@ internal sealed class LineEditor
         try
         {
             if (File.Exists(path))
-                return [.. File.ReadAllLines(path).Where(l => l.Length > 0)];
+                return [.. File.ReadLines(path).Where(l => l.Length > 0).TakeLast(MaxHistory)];
         }
         catch (Exception) { }
         return [];
@@ -1383,7 +1383,7 @@ internal sealed class LegacyFileHistoryStore : IHistoryStore
         try
         {
             if (File.Exists(_historyPath))
-                _history.AddRange(File.ReadAllLines(_historyPath).Where(l => l.Length > 0));
+                _history.AddRange(File.ReadLines(_historyPath).Where(l => l.Length > 0).TakeLast(5000));
         }
         finally
         {

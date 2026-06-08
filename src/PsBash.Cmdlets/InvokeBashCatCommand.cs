@@ -182,15 +182,19 @@ public sealed class InvokeBashCatCommand : PSCmdlet
             var fileOperands = operands.Where(o => o != "-").ToList();
             foreach (var filePath in ResolveGlob(fileOperands))
             {
-                string? content = ReadFileText(filePath, "cat");
-                if (content == null)
+                try
                 {
-                    hadError = true;
-                    continue;
+                    foreach (var line in BashFileSystem.ReadTextLines(filePath))
+                    {
+                        WriteObject(BashRuntime.NewBashObject(
+                            line.Text,
+                            noTrailingNewline: !line.HasTrailingNewline));
+                    }
                 }
-                foreach (var obj in BashRuntime.EmitBashLines(content))
+                catch (Exception ex)
                 {
-                    WriteObject(obj);
+                    EmitReadError(filePath, "cat", ex);
+                    hadError = true;
                 }
             }
 
@@ -266,74 +270,23 @@ public sealed class InvokeBashCatCommand : PSCmdlet
         var flaggedFileOperands = operands.Where(o => o != "-").ToList();
         foreach (var filePath in ResolveGlob(flaggedFileOperands))
         {
-            string? content = ReadFileLinesText(filePath, "cat");
-            if (content == null)
+            try
             {
-                hadError = true;
-                continue;
-            }
-            // ReadLine semantics: split on \n after CRLF normalization; a
-            // trailing newline does not yield a spurious empty final line.
-            string body = content;
-            bool trailingNl = body.EndsWith("\n");
-            if (trailingNl)
-            {
-                body = body.Substring(0, body.Length - 1);
-            }
-            if (body.Length == 0 && trailingNl)
-            {
-                // File was exactly "\n" — one empty line.
-                EmitLine(string.Empty, filePath);
-            }
-            else if (body.Length > 0 || !trailingNl)
-            {
-                foreach (var line in body.Split('\n'))
+                foreach (var line in BashFileSystem.ReadLines(filePath))
                 {
                     EmitLine(line, filePath);
                 }
+            }
+            catch (Exception ex)
+            {
+                EmitReadError(filePath, "cat", ex);
+                hadError = true;
             }
         }
 
         if (hadError)
         {
             SessionState.PSVariable.Set("global:LASTEXITCODE", 1);
-        }
-    }
-
-    /// <summary>
-    /// psm1 oracle: <c>Read-BashFileBytes</c> — reads a file as text with CRLF
-    /// normalization; on failure emits a bash-style error and returns
-    /// <c>null</c>.
-    /// </summary>
-    private string? ReadFileText(string path, string command)
-    {
-        try
-        {
-            return BashFileSystem.ReadAllText(path);
-        }
-        catch (Exception ex)
-        {
-            EmitReadError(path, command, ex);
-            return null;
-        }
-    }
-
-    /// <summary>
-    /// psm1 oracle: the flagged path opened an <c>Open-BashFileReader</c> and
-    /// looped <c>ReadLine()</c>. <see cref="StreamReader.ReadLine"/> already
-    /// strips <c>\r\n</c> and <c>\n</c>, so reading the whole text with CRLF
-    /// normalization and splitting is line-for-line equivalent.
-    /// </summary>
-    private string? ReadFileLinesText(string path, string command)
-    {
-        try
-        {
-            return BashFileSystem.ReadAllText(path);
-        }
-        catch (Exception ex)
-        {
-            EmitReadError(path, command, ex);
-            return null;
         }
     }
 

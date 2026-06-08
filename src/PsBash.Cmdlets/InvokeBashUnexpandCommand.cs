@@ -164,20 +164,23 @@ public sealed class InvokeBashUnexpandCommand : PSCmdlet
             {
                 foreach (var filePath in FileSystemHelpers.ResolveOperandPaths(this, raw))
                 {
-                    string? content = ReadFileText(filePath);
-                    if (content == null) continue;
-                    string body = content;
-                    if (body.EndsWith("\n"))
+                    try
                     {
-                        body = body.Substring(0, body.Length - 1);
+                        foreach (var line in BashFileSystem.ReadLines(filePath))
+                        {
+                            string transformed = allSpaces
+                                ? UnexpandAll(line, tabWidth)
+                                : UnexpandLeading(line, tabWidth);
+                            WriteObject(BashRuntime.NewBashObject(transformed));
+                        }
                     }
-                    if (body.Length == 0) continue;
-                    foreach (var l in body.Split('\n'))
+                    catch (Exception ex)
                     {
-                        lines.Add(l);
+                        WriteReadError(filePath, ex);
                     }
                 }
             }
+            return;
         }
 
         foreach (var line in lines)
@@ -260,20 +263,12 @@ public sealed class InvokeBashUnexpandCommand : PSCmdlet
         return true;
     }
 
-    private string? ReadFileText(string path)
+    private void WriteReadError(string path, Exception ex)
     {
-        try
-        {
-            return BashFileSystem.ReadAllText(path);
-        }
-        catch (Exception ex)
-        {
-            bool notFound = ex is FileNotFoundException or DirectoryNotFoundException
-                || ex.InnerException is FileNotFoundException or DirectoryNotFoundException;
-            string msg = notFound ? "No such file or directory" : ex.Message;
-            string normalized = path.Replace('\\', '/');
-            FileSystemHelpers.WriteBashError(this, $"unexpand: {normalized}: {msg}");
-            return null;
-        }
+        bool notFound = ex is FileNotFoundException or DirectoryNotFoundException
+            || ex.InnerException is FileNotFoundException or DirectoryNotFoundException;
+        string msg = notFound ? "No such file or directory" : ex.Message;
+        string normalized = path.Replace('\\', '/');
+        FileSystemHelpers.WriteBashError(this, $"unexpand: {normalized}: {msg}");
     }
 }

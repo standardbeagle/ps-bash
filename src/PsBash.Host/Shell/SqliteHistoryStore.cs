@@ -140,9 +140,6 @@ public sealed class SqliteHistoryStore : IHistoryStore, IDisposable
 
         try
         {
-            var lines = File.ReadAllLines(_legacyHistoryPath);
-            if (lines.Length == 0) return;
-
             var fileTime = File.GetLastWriteTimeUtc(_legacyHistoryPath);
             var session = Guid.NewGuid().ToString();
 
@@ -161,8 +158,9 @@ public sealed class SqliteHistoryStore : IHistoryStore, IDisposable
 
             // Step back from file time to maintain order
             var timestamp = fileTime;
+            int migrated = 0;
 
-            foreach (var line in lines)
+            foreach (var line in File.ReadLines(_legacyHistoryPath))
             {
                 if (string.IsNullOrWhiteSpace(line)) continue;
 
@@ -171,14 +169,17 @@ public sealed class SqliteHistoryStore : IHistoryStore, IDisposable
                 insertCmd.Parameters["@timestamp"].Value = timestamp.ToString("o");
 
                 insertCmd.ExecuteNonQuery();
+                migrated++;
 
                 // Step back 1 second per command to maintain order
                 timestamp = timestamp.AddSeconds(-1);
             }
 
+            if (migrated == 0) return;
+
             transaction.Commit();
 
-            Console.Error.WriteLine($"ps-bash: migrated {lines.Count(l => !string.IsNullOrWhiteSpace(l))} entries from legacy history file");
+            Console.Error.WriteLine($"ps-bash: migrated {migrated} entries from legacy history file");
         }
         catch (Exception ex)
         {

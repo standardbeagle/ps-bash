@@ -142,7 +142,7 @@ if (shellArgs.ScriptPath is not null)
     }
 
     // .sh execution: read, transpile, build positional preamble, execute.
-    var scriptContent = File.ReadAllText(shellArgs.ScriptPath);
+    var scriptContent = await File.ReadAllTextAsync(shellArgs.ScriptPath);
 
     string? pwshScriptCommand;
     try

@@ -26,6 +26,8 @@ public static class BashFileSystem
 {
     private const int BinaryProbeBytes = 8192;
 
+    public readonly record struct TextLine(string Text, bool HasTrailingNewline);
+
     // -- Streams ------------------------------------------------------------
 
     /// <summary>
@@ -91,11 +93,25 @@ public static class BashFileSystem
     /// </summary>
     public static IEnumerable<string> ReadLines(string path, bool skipBinary = false)
     {
-        var fs = OpenRead(path);
-        return ReadLinesIterator(fs, skipBinary);
+        foreach (var line in ReadTextLines(path, skipBinary))
+        {
+            yield return line.Text;
+        }
     }
 
-    private static IEnumerable<string> ReadLinesIterator(FileStream fs, bool skipBinary)
+    /// <summary>
+    /// Lazily stream text lines while preserving whether the source line ended
+    /// in <c>\n</c>. This is for commands like <c>cat</c> where the final
+    /// no-newline marker affects downstream serialization. CRLF is normalized
+    /// the same way <see cref="ReadLines"/> normalizes it.
+    /// </summary>
+    public static IEnumerable<TextLine> ReadTextLines(string path, bool skipBinary = false)
+    {
+        var fs = OpenRead(path);
+        return ReadTextLinesIterator(fs, skipBinary);
+    }
+
+    private static IEnumerable<TextLine> ReadTextLinesIterator(FileStream fs, bool skipBinary)
     {
         using (fs)
         {
@@ -121,7 +137,7 @@ public static class BashFileSystem
                     if (buf[i] != '\n') continue;
                     sb.Append(buf, start, i - start);
                     if (sb.Length > 0 && sb[sb.Length - 1] == '\r') sb.Length--;
-                    yield return sb.ToString();
+                    yield return new TextLine(sb.ToString(), HasTrailingNewline: true);
                     sb.Clear();
                     start = i + 1;
                 }
@@ -129,7 +145,7 @@ public static class BashFileSystem
             }
             // Trailing content with no final newline is the last line. A file that
             // ends in '\n' leaves sb empty here → no spurious trailing "" (parity).
-            if (sb.Length > 0) yield return sb.ToString();
+            if (sb.Length > 0) yield return new TextLine(sb.ToString(), HasTrailingNewline: false);
         }
     }
 

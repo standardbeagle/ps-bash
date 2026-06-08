@@ -202,21 +202,6 @@ public sealed class InvokeBashWcCommand : PSCmdlet
                 continue;
             }
 
-            string rawText;
-            try
-            {
-                rawText = BashFileSystem.ReadAllText(filePath);
-            }
-            catch (Exception ex)
-            {
-                string normalized = filePath.Replace('\\', '/');
-                bool notFound = ex is FileNotFoundException or DirectoryNotFoundException
-                    || ex.InnerException is FileNotFoundException or DirectoryNotFoundException;
-                string msg = notFound ? "No such file or directory" : ex.Message;
-                WriteBashError($"wc: {normalized}: {msg}");
-                continue;
-            }
-
             long fileBytes;
             try
             {
@@ -237,12 +222,21 @@ public sealed class InvokeBashWcCommand : PSCmdlet
                 catch { fileBytes = 0; }
             }
 
-            int lineCount = 0;
-            foreach (char c in rawText)
+            int lineCount;
+            int wordCount;
+            try
             {
-                if (c == '\n') lineCount++;
+                (lineCount, wordCount) = CountFileText(filePath);
             }
-            int wordCount = CountWords(rawText);
+            catch (Exception ex)
+            {
+                string normalized = filePath.Replace('\\', '/');
+                bool notFound = ex is FileNotFoundException or DirectoryNotFoundException
+                    || ex.InnerException is FileNotFoundException or DirectoryNotFoundException;
+                string msg = notFound ? "No such file or directory" : ex.Message;
+                WriteBashError($"wc: {normalized}: {msg}");
+                continue;
+            }
 
             grandLines += lineCount;
             grandWords += wordCount;
@@ -264,6 +258,43 @@ public sealed class InvokeBashWcCommand : PSCmdlet
     private static int CountWords(string text)
     {
         return text.Split(WhitespaceChars, StringSplitOptions.RemoveEmptyEntries).Length;
+    }
+
+    private static (int Lines, int Words) CountFileText(string path)
+    {
+        using var fs = BashFileSystem.OpenRead(path);
+        using var reader = new StreamReader(
+            fs, Encoding.UTF8, detectEncodingFromByteOrderMarks: true);
+
+        int lines = 0;
+        int words = 0;
+        bool inWord = false;
+        var buffer = new char[16384];
+        int read;
+        while ((read = reader.Read(buffer, 0, buffer.Length)) > 0)
+        {
+            for (int i = 0; i < read; i++)
+            {
+                char c = buffer[i];
+                if (c == '\n') lines++;
+
+                bool isWordChar = c is not (' ' or '\t' or '\n' or '\r');
+                if (isWordChar)
+                {
+                    if (!inWord)
+                    {
+                        words++;
+                        inWord = true;
+                    }
+                }
+                else
+                {
+                    inWord = false;
+                }
+            }
+        }
+
+        return (lines, words);
     }
 
     private static PSObject BuildResult(

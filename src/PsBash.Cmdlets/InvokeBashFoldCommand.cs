@@ -192,30 +192,17 @@ public sealed class InvokeBashFoldCommand : PSCmdlet
             {
                 foreach (var filePath in FileSystemHelpers.ResolveOperandPaths(this, raw))
                 {
-                    string? content = ReadFileText(filePath);
-                    if (content == null)
+                    try
                     {
+                        foreach (var line in BashFileSystem.ReadLines(filePath))
+                        {
+                            EmitWrapped(line, width, breakSpaces);
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        WriteReadError(filePath, ex);
                         hadError = true;
-                        continue;
-                    }
-                    string body = content;
-                    bool trailingNl = body.EndsWith("\n");
-                    if (trailingNl)
-                    {
-                        body = body.Substring(0, body.Length - 1);
-                    }
-                    if (body.Length == 0 && !trailingNl)
-                    {
-                        continue;
-                    }
-                    if (body.Length == 0 && trailingNl)
-                    {
-                        lines.Add(string.Empty);
-                        continue;
-                    }
-                    foreach (var line in body.Split('\n'))
-                    {
-                        lines.Add(line);
                     }
                 }
             }
@@ -223,6 +210,7 @@ public sealed class InvokeBashFoldCommand : PSCmdlet
             {
                 FileSystemHelpers.SetLastExitCode(this, 1);
             }
+            return;
         }
 
         foreach (var line in lines)
@@ -266,20 +254,12 @@ public sealed class InvokeBashFoldCommand : PSCmdlet
         }
     }
 
-    private string? ReadFileText(string path)
+    private void WriteReadError(string path, Exception ex)
     {
-        try
-        {
-            return BashFileSystem.ReadAllText(path);
-        }
-        catch (Exception ex)
-        {
-            bool notFound = ex is FileNotFoundException or DirectoryNotFoundException
-                || ex.InnerException is FileNotFoundException or DirectoryNotFoundException;
-            string msg = notFound ? "No such file or directory" : ex.Message;
-            string normalized = path.Replace('\\', '/');
-            FileSystemHelpers.WriteBashError(this, $"fold: {normalized}: {msg}");
-            return null;
-        }
+        bool notFound = ex is FileNotFoundException or DirectoryNotFoundException
+            || ex.InnerException is FileNotFoundException or DirectoryNotFoundException;
+        string msg = notFound ? "No such file or directory" : ex.Message;
+        string normalized = path.Replace('\\', '/');
+        FileSystemHelpers.WriteBashError(this, $"fold: {normalized}: {msg}");
     }
 }

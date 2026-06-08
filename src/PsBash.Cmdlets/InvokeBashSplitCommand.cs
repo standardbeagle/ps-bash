@@ -141,7 +141,8 @@ public sealed class InvokeBashSplitCommand : PSCmdlet
             suffixLength = 2;
         }
 
-        var lines = new List<string>();
+        IEnumerable<string> lines;
+        string? fileReadPath = null;
         string prefix = "x";
 
         if (operands.Count >= 1)
@@ -153,16 +154,14 @@ public sealed class InvokeBashSplitCommand : PSCmdlet
             }
             if (filePath == "-")
             {
-                CollectPipelineLines(lines);
+                var pipelineLines = new List<string>();
+                CollectPipelineLines(pipelineLines);
+                lines = pipelineLines;
             }
             else
             {
-                var fileLines = ReadFileLines(filePath, "split");
-                if (fileLines == null)
-                {
-                    return;
-                }
-                lines.AddRange(fileLines);
+                lines = BashFileSystem.ReadLines(filePath);
+                fileReadPath = filePath;
             }
             if (operands.Count >= 2)
             {
@@ -171,7 +170,9 @@ public sealed class InvokeBashSplitCommand : PSCmdlet
         }
         else if (_pipeline.Count > 0)
         {
-            CollectPipelineLines(lines);
+            var pipelineLines = new List<string>();
+            CollectPipelineLines(pipelineLines);
+            lines = pipelineLines;
         }
         else
         {
@@ -182,40 +183,81 @@ public sealed class InvokeBashSplitCommand : PSCmdlet
         // Resolve working directory exactly as the oracle did: Join-Path $PWD ...
         string cwd = SessionState.Path.CurrentLocation.Path;
 
+        WritePieces(lines, cwd, prefix, lineCount.Value, suffixLength, numericSuffix, fileReadPath);
+    }
+
+    private void WritePieces(
+        IEnumerable<string> lines,
+        string cwd,
+        string prefix,
+        int lineCount,
+        int suffixLength,
+        bool numericSuffix,
+        string? fileReadPath)
+    {
         int chunkIndex = 0;
-        for (int start = 0; start < lines.Count; start += lineCount.Value)
+        var chunk = new List<string>(Math.Min(lineCount, 4096));
+
+        try
         {
-            int end = Math.Min(start + lineCount.Value, lines.Count);
-            var chunk = lines.GetRange(start, end - start);
+            foreach (var line in lines)
+            {
+                chunk.Add(line);
+                if (chunk.Count >= lineCount)
+                {
+                    if (!WriteChunk(chunk, cwd, prefix, chunkIndex, suffixLength, numericSuffix))
+                    {
+                        return;
+                    }
+                    chunkIndex++;
+                    chunk.Clear();
+                }
+            }
 
-            string suffix;
-            if (numericSuffix)
+            if (chunk.Count > 0)
             {
-                suffix = chunkIndex.ToString().PadLeft(suffixLength, '0');
+                WriteChunk(chunk, cwd, prefix, chunkIndex, suffixLength, numericSuffix);
             }
-            else
-            {
-                suffix = BuildAlphaSuffix(chunkIndex, suffixLength);
-            }
+        }
+        catch (Exception ex) when (fileReadPath is not null)
+        {
+            string normalized = fileReadPath.Replace('\\', '/');
+            bool notFound = ex is FileNotFoundException or DirectoryNotFoundException
+                || ex.InnerException is FileNotFoundException or DirectoryNotFoundException;
+            string msg = notFound ? "No such file or directory" : ex.Message;
+            FileSystemHelpers.WriteBashError(this, $"split: {normalized}: {msg}");
+        }
+    }
 
-            string outName = prefix + suffix;
-            string outPath = Path.IsPathRooted(outName)
-                ? outName
-                : Path.Combine(cwd, outName);
+    private bool WriteChunk(
+        List<string> chunk,
+        string cwd,
+        string prefix,
+        int chunkIndex,
+        int suffixLength,
+        bool numericSuffix)
+    {
+        string suffix = numericSuffix
+            ? chunkIndex.ToString().PadLeft(suffixLength, '0')
+            : BuildAlphaSuffix(chunkIndex, suffixLength);
 
-            string content = string.Join("\n", chunk) + "\n";
-            try
-            {
-                File.WriteAllText(outPath, content);
-            }
-            catch (Exception ex)
-            {
-                string normalized = outPath.Replace('\\', '/');
-                FileSystemHelpers.WriteBashError(
-                    this, $"split: {normalized}: {ex.Message}");
-                return;
-            }
-            chunkIndex++;
+        string outName = prefix + suffix;
+        string outPath = Path.IsPathRooted(outName)
+            ? outName
+            : Path.Combine(cwd, outName);
+
+        string content = string.Join("\n", chunk) + "\n";
+        try
+        {
+            File.WriteAllText(outPath, content);
+            return true;
+        }
+        catch (Exception ex)
+        {
+            string normalized = outPath.Replace('\\', '/');
+            FileSystemHelpers.WriteBashError(
+                this, $"split: {normalized}: {ex.Message}");
+            return false;
         }
     }
 
@@ -260,27 +302,4 @@ public sealed class InvokeBashSplitCommand : PSCmdlet
         }
     }
 
-    /// <summary>
-    /// psm1 oracle: <c>Read-BashFileLines</c> — read all lines (no trailing
-    /// newlines per line); on failure emit a bash-style error and return null.
-    /// </summary>
-    private string[]? ReadFileLines(string path, string command)
-    {
-        try
-        {
-            // Match Read-BashFileLines (StreamReader.ReadLine semantics) — splits
-            // on \n and \r\n, no spurious trailing empty line for a file ending
-            // in a newline.
-            return File.ReadAllLines(path);
-        }
-        catch (Exception ex)
-        {
-            string normalized = path.Replace('\\', '/');
-            bool notFound = ex is FileNotFoundException or DirectoryNotFoundException
-                || ex.InnerException is FileNotFoundException or DirectoryNotFoundException;
-            string msg = notFound ? "No such file or directory" : ex.Message;
-            FileSystemHelpers.WriteBashError(this, $"{command}: {normalized}: {msg}");
-            return null;
-        }
-    }
 }
