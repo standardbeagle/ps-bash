@@ -60,18 +60,112 @@ public sealed class InvokeBashStringsCommand : PSCmdlet
     [Parameter(ValueFromPipeline = true)]
     public PSObject? InputObject { get; set; }
 
-    private readonly List<PSObject> _pipeline = new();
+    // Parsed-once state.
+    private bool _parsed;
+    private int _minLength = 4;
+    private List<string> _operands = new();
+    // True when stdin must NOT be streamed: file operands present, or a
+    // --help / --version request.
+    private bool _suppressStdin;
+    // Scanner state — instance so a streamed stdin run carries across records
+    // exactly as the buffered scan did (a synthetic '\n' separates items, so a
+    // printable run never actually spans two pipeline records).
+    private readonly StringBuilder _run = new();
+    private bool _seenRecord;
+
+    private void ParseOnce()
+    {
+        if (_parsed) return;
+        _parsed = true;
+
+        var args = Arguments ?? Array.Empty<string>();
+
+        if (Array.IndexOf(args, "--version") >= 0 || Array.IndexOf(args, "--help") >= 0)
+        {
+            _suppressStdin = true;
+            return;
+        }
+
+        for (int i = 0; i < args.Length; i++)
+        {
+            var arg = args[i];
+            if (arg == "-n" && (i + 1) < args.Length)
+            {
+                if (int.TryParse(args[i + 1], out var parsed))
+                {
+                    _minLength = parsed;
+                }
+                i++;
+                continue;
+            }
+            if (arg.StartsWith("--bytes=", StringComparison.Ordinal))
+            {
+                if (int.TryParse(arg.Substring("--bytes=".Length), out var parsed))
+                {
+                    _minLength = parsed;
+                }
+                continue;
+            }
+            _operands.Add(arg);
+        }
+
+        if (_minLength < 1)
+        {
+            // GNU strings rejects N < 1; psm1 oracle would build an invalid
+            // regex {0,}. Guard so we always have a sane pattern.
+            _minLength = 1;
+        }
+
+        _suppressStdin = _operands.Count > 0;
+    }
+
+    private void ScanChar(char ch)
+    {
+        if (ch is >= '\x20' and <= '\x7E')
+        {
+            _run.Append(ch);
+            return;
+        }
+
+        FlushRun();
+    }
+
+    private void FlushRun()
+    {
+        if (_run.Length >= _minLength)
+        {
+            WriteObject(BashRuntime.NewBashObject(_run.ToString()));
+        }
+        _run.Clear();
+    }
+
+    private void ScanText(string text)
+    {
+        foreach (var ch in text)
+        {
+            ScanChar(ch);
+        }
+    }
 
     protected override void ProcessRecord()
     {
-        if (InputObject != null)
-        {
-            _pipeline.Add(InputObject);
-        }
+        if (InputObject == null) return;
+
+        ParseOnce();
+        if (_suppressStdin) return;
+
+        // Stream the stdin scan instead of buffering every record first. The
+        // synthetic '\n' between records (a non-printable that flushes the run)
+        // reproduces the buffered scan's inter-item separator.
+        if (_seenRecord) ScanChar('\n');
+        _seenRecord = true;
+        ScanText(BashRuntime.GetBashText(InputObject));
     }
 
     protected override void EndProcessing()
     {
+        ParseOnce();
+
         var args = Arguments ?? Array.Empty<string>();
 
         FileSystemHelpers.SetLastExitCode(this, 0);
@@ -86,100 +180,33 @@ public sealed class InvokeBashStringsCommand : PSCmdlet
             return;
         }
 
-        int minLength = 4;
-        var operands = new List<string>();
-
-        for (int i = 0; i < args.Length; i++)
+        if (_operands.Count == 0)
         {
-            var arg = args[i];
-            if (arg == "-n" && (i + 1) < args.Length)
-            {
-                if (int.TryParse(args[i + 1], out var parsed))
-                {
-                    minLength = parsed;
-                }
-                i++;
-                continue;
-            }
-            if (arg.StartsWith("--bytes=", StringComparison.Ordinal))
-            {
-                if (int.TryParse(arg.Substring("--bytes=".Length), out var parsed))
-                {
-                    minLength = parsed;
-                }
-                continue;
-            }
-            operands.Add(arg);
-        }
-
-        if (minLength < 1)
-        {
-            // GNU strings rejects N < 1; psm1 oracle would build an invalid
-            // regex {0,}. Guard so we always have a sane pattern.
-            minLength = 1;
-        }
-
-        var run = new StringBuilder();
-
-        void ScanChar(char ch)
-        {
-            if (ch is >= '\x20' and <= '\x7E')
-            {
-                run.Append(ch);
-                return;
-            }
-
+            // Pipeline mode: records already streamed; flush the trailing run.
             FlushRun();
+            return;
         }
 
-        void FlushRun()
+        foreach (var filePath in ResolveGlob(_operands))
         {
-            if (run.Length >= minLength)
+            try
             {
-                WriteObject(BashRuntime.NewBashObject(run.ToString()));
-            }
-            run.Clear();
-        }
-
-        void ScanText(string text)
-        {
-            foreach (var ch in text)
-            {
-                ScanChar(ch);
-            }
-        }
-
-        if (operands.Count == 0 && _pipeline.Count > 0)
-        {
-            for (int i = 0; i < _pipeline.Count; i++)
-            {
-                if (i > 0) ScanChar('\n');
-                ScanText(BashRuntime.GetBashText(_pipeline[i]));
-            }
-        }
-        else
-        {
-            foreach (var filePath in ResolveGlob(operands))
-            {
-                try
+                using var fs = BashFileSystem.OpenRead(filePath);
+                using var reader = new StreamReader(
+                    fs, Encoding.UTF8, detectEncodingFromByteOrderMarks: true);
+                var buffer = new char[16384];
+                int read;
+                while ((read = reader.Read(buffer, 0, buffer.Length)) > 0)
                 {
-                    using var fs = BashFileSystem.OpenRead(filePath);
-                    using var reader = new StreamReader(
-                        fs, Encoding.UTF8, detectEncodingFromByteOrderMarks: true);
-                    var buffer = new char[16384];
-                    int read;
-                    while ((read = reader.Read(buffer, 0, buffer.Length)) > 0)
+                    for (int i = 0; i < read; i++)
                     {
-                        for (int i = 0; i < read; i++)
-                        {
-                            ScanChar(buffer[i]);
-                        }
+                        ScanChar(buffer[i]);
                     }
                 }
-                catch (Exception ex)
-                {
-                    WriteReadError(filePath, "strings", ex);
-                }
+            }
+            catch (Exception ex)
+            {
+                WriteReadError(filePath, "strings", ex);
             }
         }
 
