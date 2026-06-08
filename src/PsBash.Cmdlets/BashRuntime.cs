@@ -316,11 +316,17 @@ public static class BashRuntime
 
     /// <summary>
     /// Result of a <see cref="RunChildProcess(string, IReadOnlyList{string}?, System.TimeSpan?)"/>
-    /// call: the child's captured stdout/stderr, its exit code, and whether the
-    /// wait budget elapsed (in which case the whole process tree was killed and
-    /// <see cref="ExitCode"/> is the GNU-<c>timeout</c> convention 124).
+    /// call: the child's captured stdout/stderr, its exit code, whether the wait
+    /// budget elapsed, and whether either captured stream was truncated at the
+    /// configured memory ceiling.
     /// </summary>
-    public readonly record struct ChildProcessResult(int ExitCode, string Stdout, string Stderr, bool TimedOut);
+    public readonly record struct ChildProcessResult(
+        int ExitCode,
+        string Stdout,
+        string Stderr,
+        bool TimedOut,
+        bool StdoutTruncated = false,
+        bool StderrTruncated = false);
 
     /// <summary>
     /// Safe child-process spawn for cmdlets that shell out to native tools. The
@@ -381,10 +387,14 @@ public static class BashRuntime
         // Hand the child an EOF-closed stdin so it never hangs waiting for input.
         try { proc.StandardInput.Close(); } catch { /* child may not have opened it */ }
 
-        // Drain BOTH streams concurrently. Draining only one while the child fills
-        // the other's pipe buffer (~64KB) is the classic deadlock these cmdlets hit.
-        var stdoutTask = proc.StandardOutput.ReadToEndAsync();
-        var stderrTask = proc.StandardError.ReadToEndAsync();
+        // Drain BOTH streams concurrently. Each drain keeps reading after the
+        // capture cap and discards excess text, so a noisy child cannot exhaust
+        // memory or block on a full pipe.
+        var captureLimit = GetChildCaptureLimitChars();
+        var stdoutCapture = new BoundedTextCapture(captureLimit);
+        var stderrCapture = new BoundedTextCapture(captureLimit);
+        using var stdoutDrain = StreamDrain.Start(proc.StandardOutput, stdoutCapture);
+        using var stderrDrain = StreamDrain.Start(proc.StandardError, stderrCapture);
 
         int waitMs = budget <= System.TimeSpan.Zero
             ? System.Threading.Timeout.Infinite
@@ -396,21 +406,29 @@ public static class BashRuntime
             // call, then collect whatever partial output already drained.
             try { proc.Kill(entireProcessTree: true); } catch { /* already gone / race */ }
             try { proc.WaitForExit(2_000); } catch { /* best effort */ }
-            return new ChildProcessResult(124, DrainBounded(stdoutTask), DrainBounded(stderrTask), TimedOut: true);
+            stdoutDrain.Join(System.TimeSpan.FromSeconds(5));
+            stderrDrain.Join(System.TimeSpan.FromSeconds(5));
+            return new ChildProcessResult(
+                124,
+                stdoutCapture.Text,
+                stderrCapture.Text,
+                TimedOut: true,
+                StdoutTruncated: stdoutCapture.Truncated,
+                StderrTruncated: stderrCapture.Truncated);
         }
 
-        // WaitForExit(int) does NOT guarantee the async stdout/stderr readers have
-        // hit EOF; the parameterless overload does. Call it so the captured text
-        // is complete before we read the tasks.
+        // WaitForExit(int) does NOT guarantee the stdout/stderr drainers have hit
+        // EOF; the parameterless overload does. Call it before joining them.
         try { proc.WaitForExit(); } catch { /* already reaped */ }
+        stdoutDrain.Join(System.TimeSpan.FromSeconds(5));
+        stderrDrain.Join(System.TimeSpan.FromSeconds(5));
         return new ChildProcessResult(
-            proc.ExitCode, DrainBounded(stdoutTask), DrainBounded(stderrTask), TimedOut: false);
-
-        static string DrainBounded(System.Threading.Tasks.Task<string> t)
-        {
-            try { return t.Wait(System.TimeSpan.FromSeconds(5)) ? t.Result : string.Empty; }
-            catch { return string.Empty; }
-        }
+            proc.ExitCode,
+            stdoutCapture.Text,
+            stderrCapture.Text,
+            TimedOut: false,
+            StdoutTruncated: stdoutCapture.Truncated,
+            StderrTruncated: stderrCapture.Truncated);
     }
 
     private static System.TimeSpan GetChildProcessTimeout()
@@ -419,5 +437,112 @@ public static class BashRuntime
         if (env is not null && int.TryParse(env, out var seconds) && seconds > 0)
             return System.TimeSpan.FromSeconds(seconds);
         return System.TimeSpan.FromSeconds(120);
+    }
+
+    private static int GetChildCaptureLimitChars()
+    {
+        var env = Environment.GetEnvironmentVariable("PSBASH_CHILD_CAPTURE_MAX_CHARS");
+        if (env is not null && int.TryParse(env, out var chars) && chars > 0)
+            return Math.Max(chars, 1024);
+        return 16 * 1024 * 1024;
+    }
+
+    private sealed class BoundedTextCapture
+    {
+        private readonly int _maxChars;
+        private readonly object _gate = new();
+        private readonly StringBuilder _text = new();
+
+        public BoundedTextCapture(int maxChars)
+        {
+            _maxChars = maxChars;
+        }
+
+        private bool _truncated;
+
+        public bool Truncated
+        {
+            get
+            {
+                lock (_gate) return _truncated;
+            }
+        }
+
+        public string Text
+        {
+            get
+            {
+                lock (_gate) return _text.ToString();
+            }
+        }
+
+        public void Append(char[] buffer, int length)
+        {
+            if (length <= 0) return;
+
+            lock (_gate)
+            {
+                var remaining = _maxChars - _text.Length;
+                if (remaining <= 0)
+                {
+                    _truncated = true;
+                    return;
+                }
+
+                var toAppend = Math.Min(length, remaining);
+                _text.Append(buffer, 0, toAppend);
+                if (toAppend < length)
+                {
+                    _truncated = true;
+                }
+            }
+        }
+    }
+
+    private sealed class StreamDrain : IDisposable
+    {
+        private readonly Thread _thread;
+
+        private StreamDrain(Thread thread)
+        {
+            _thread = thread;
+        }
+
+        public static StreamDrain Start(TextReader reader, BoundedTextCapture capture)
+        {
+            var thread = new Thread(() =>
+            {
+                var buffer = new char[4096];
+                try
+                {
+                    int read;
+                    while ((read = reader.Read(buffer, 0, buffer.Length)) > 0)
+                    {
+                        capture.Append(buffer, read);
+                    }
+                }
+                catch
+                {
+                    // Process teardown races can close redirected streams while
+                    // drains are exiting. Partial output is still useful.
+                }
+            })
+            {
+                IsBackground = true,
+                Name = "ps-bash child stream drain",
+            };
+            thread.Start();
+            return new StreamDrain(thread);
+        }
+
+        public bool Join(System.TimeSpan timeout) => _thread.Join(timeout);
+
+        public void Dispose()
+        {
+            if (_thread.IsAlive)
+            {
+                _thread.Join(System.TimeSpan.FromMilliseconds(100));
+            }
+        }
     }
 }
