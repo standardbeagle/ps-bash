@@ -275,18 +275,33 @@ public sealed class InvokeBashDuCommand : PSCmdlet
                 entries.Add(obj);
             }
 
-            // Individual file entries with -a
+            // Individual file entries with -a. Enumerate lazily rather than
+            // materializing every file in the tree into a List first — the
+            // per-file entries already accumulate into `entries` (which the
+            // trailing Sort-Object needs), so the intermediate FileInfo list
+            // was a redundant full copy of the whole subtree.
             if (allFiles)
             {
-                List<FileInfo> allFileItems = new();
-                try
-                {
-                    allFileItems.AddRange(rootDir.EnumerateFiles("*", SearchOption.AllDirectories));
-                }
-                catch { }
+                // Manual enumeration so an IO error mid-walk stops silently
+                // (the oracle's AddRange-in-try swallowed it) while the per-file
+                // body below is NOT wrapped in that catch.
+                IEnumerator<FileInfo>? fileEnum = null;
+                try { fileEnum = rootDir.EnumerateFiles("*", SearchOption.AllDirectories).GetEnumerator(); }
+                catch { fileEnum = null; }
 
-                foreach (var f in allFileItems)
+                while (fileEnum != null)
                 {
+                    FileInfo f;
+                    try
+                    {
+                        if (!fileEnum.MoveNext()) break;
+                        f = fileEnum.Current;
+                    }
+                    catch
+                    {
+                        break;
+                    }
+
                     int fileDepth = f.FullName.Split(new[] { '\\', '/' }).Length - rootDepth;
                     if (fileDepth > maxDepth) continue;
                     if (summarize) continue;
@@ -309,6 +324,7 @@ public sealed class InvokeBashDuCommand : PSCmdlet
                     obj.Properties.Add(new PSNoteProperty("BashText", $"{displaySize}\t{displayPath}"));
                     entries.Add(obj);
                 }
+                fileEnum?.Dispose();
             }
 
             // Sort by Path (oracle: Sort-Object { $_.Path })
