@@ -121,24 +121,18 @@ public sealed class InvokeBashLessCommand : PSCmdlet
                     FileSystemHelpers.SetLastExitCode(this, 1);
                     return;
                 }
-                string text;
                 try
                 {
-                    text = BashFileSystem.ReadAllText(full);
+                    foreach (var line in BashFileSystem.ReadLines(full))
+                    {
+                        WriteObject(BashRuntime.NewBashObject(line));
+                    }
                 }
                 catch (System.Exception ex)
                 {
                     FileSystemHelpers.WriteBashError(this, $"less: {path}: {ex.Message}");
                     FileSystemHelpers.SetLastExitCode(this, 1);
                     return;
-                }
-                // Emit one TextOutput per line, no spurious trailing empty.
-                var lines = text.Split('\n');
-                int limit = lines.Length;
-                if (limit > 0 && lines[limit - 1].Length == 0) limit--;
-                for (int i = 0; i < limit; i++)
-                {
-                    WriteObject(BashRuntime.NewBashObject(lines[i]));
                 }
             }
             FileSystemHelpers.SetLastExitCode(this, 0);

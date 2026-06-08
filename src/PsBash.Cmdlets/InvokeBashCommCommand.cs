@@ -109,64 +109,95 @@ public sealed class InvokeBashCommCommand : PSCmdlet
         string? path2 = ResolveSingleOperand(operands[1]);
         if (path2 == null) return;
 
-        string[]? lines1 = ReadFileLines(path1);
-        if (lines1 == null) return;
-        string[]? lines2 = ReadFileLines(path2);
-        if (lines2 == null) return;
+        IEnumerator<string>? file1 = null;
+        IEnumerator<string>? file2 = null;
+        string currentReadPath = path1;
 
-        int i1 = 0, i2 = 0;
-        while (i1 < lines1.Length && i2 < lines2.Length)
+        try
         {
-            int cmp = string.CompareOrdinal(lines1[i1], lines2[i2]);
-            if (cmp == 0)
+            file1 = BashFileSystem.ReadLines(path1).GetEnumerator();
+            file2 = BashFileSystem.ReadLines(path2).GetEnumerator();
+
+            currentReadPath = path1;
+            bool has1 = file1.MoveNext();
+            currentReadPath = path2;
+            bool has2 = file2.MoveNext();
+
+            while (has1 && has2)
             {
-                if (!suppress3)
+                int cmp = string.CompareOrdinal(file1.Current, file2.Current);
+                if (cmp == 0)
                 {
-                    string prefix = "";
-                    if (!suppress1) prefix += "\t";
-                    if (!suppress2) prefix += "\t";
-                    WriteObject(BashRuntime.NewBashObject(prefix + lines1[i1]));
+                    if (!suppress3)
+                    {
+                        string prefix = "";
+                        if (!suppress1) prefix += "\t";
+                        if (!suppress2) prefix += "\t";
+                        WriteObject(BashRuntime.NewBashObject(prefix + file1.Current));
+                    }
+
+                    currentReadPath = path1;
+                    has1 = file1.MoveNext();
+                    currentReadPath = path2;
+                    has2 = file2.MoveNext();
                 }
-                i1++; i2++;
+                else if (cmp < 0)
+                {
+                    if (!suppress1)
+                    {
+                        WriteObject(BashRuntime.NewBashObject(file1.Current));
+                    }
+
+                    currentReadPath = path1;
+                    has1 = file1.MoveNext();
+                }
+                else
+                {
+                    if (!suppress2)
+                    {
+                        string prefix = "";
+                        if (!suppress1) prefix += "\t";
+                        WriteObject(BashRuntime.NewBashObject(prefix + file2.Current));
+                    }
+
+                    currentReadPath = path2;
+                    has2 = file2.MoveNext();
+                }
             }
-            else if (cmp < 0)
+
+            while (has1)
             {
                 if (!suppress1)
                 {
-                    WriteObject(BashRuntime.NewBashObject(lines1[i1]));
+                    WriteObject(BashRuntime.NewBashObject(file1.Current));
                 }
-                i1++;
+
+                currentReadPath = path1;
+                has1 = file1.MoveNext();
             }
-            else
+
+            while (has2)
             {
                 if (!suppress2)
                 {
                     string prefix = "";
                     if (!suppress1) prefix += "\t";
-                    WriteObject(BashRuntime.NewBashObject(prefix + lines2[i2]));
+                    WriteObject(BashRuntime.NewBashObject(prefix + file2.Current));
                 }
-                i2++;
+
+                currentReadPath = path2;
+                has2 = file2.MoveNext();
             }
         }
-
-        while (i1 < lines1.Length)
+        catch (Exception ex)
         {
-            if (!suppress1)
-            {
-                WriteObject(BashRuntime.NewBashObject(lines1[i1]));
-            }
-            i1++;
+            WriteReadError(currentReadPath, ex);
+            return;
         }
-
-        while (i2 < lines2.Length)
+        finally
         {
-            if (!suppress2)
-            {
-                string prefix = "";
-                if (!suppress1) prefix += "\t";
-                WriteObject(BashRuntime.NewBashObject(prefix + lines2[i2]));
-            }
-            i2++;
+            file1?.Dispose();
+            file2?.Dispose();
         }
     }
 
@@ -193,45 +224,12 @@ public sealed class InvokeBashCommCommand : PSCmdlet
         return raw;
     }
 
-    /// <summary>
-    /// File → string[] of lines, mirroring the psm1 <c>Read-BashFileLines</c>
-    /// helper byte for byte: BOM-tolerant UTF-8 read via
-    /// <see cref="File.ReadAllText(string)"/>, CRLF normalized to LF, split on
-    /// <c>\n</c> with the trailing-newline-eats-empty-line slice
-    /// (<c>StreamReader.ReadLine()</c> semantics). On read failure, emits the
-    /// bash-style error and returns <c>null</c>.
-    /// </summary>
-    private string[]? ReadFileLines(string path)
+    private void WriteReadError(string path, Exception ex)
     {
-        string content;
-        try
-        {
-            content = BashFileSystem.ReadAllText(path);
-        }
-        catch (Exception ex)
-        {
-            bool notFound = ex is FileNotFoundException or DirectoryNotFoundException
-                || ex.InnerException is FileNotFoundException or DirectoryNotFoundException;
-            string msg = notFound ? "No such file or directory" : ex.Message;
-            string normalized = path.Replace('\\', '/');
-            FileSystemHelpers.WriteBashError(this, $"comm: {normalized}: {msg}");
-            return null;
-        }
-
-        if (content.Length == 0)
-        {
-            return Array.Empty<string>();
-        }
-
-        bool trailingNl = content.EndsWith("\n");
-        string body = trailingNl ? content.Substring(0, content.Length - 1) : content;
-
-        if (body.Length == 0)
-        {
-            // Content was exactly "\n" → one empty line, matching StreamReader.ReadLine.
-            return new[] { string.Empty };
-        }
-
-        return body.Split('\n');
+        bool notFound = ex is FileNotFoundException or DirectoryNotFoundException
+            || ex.InnerException is FileNotFoundException or DirectoryNotFoundException;
+        string msg = notFound ? "No such file or directory" : ex.Message;
+        string normalized = path.Replace('\\', '/');
+        FileSystemHelpers.WriteBashError(this, $"comm: {normalized}: {msg}");
     }
 }

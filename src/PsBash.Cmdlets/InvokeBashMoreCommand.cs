@@ -92,8 +92,16 @@ public sealed class InvokeBashMoreCommand : PSCmdlet
             }
             try
             {
-                var text = BashFileSystem.ReadAllText(full);
-                AppendText(lines, text);
+                bool emitted = false;
+                foreach (var line in BashFileSystem.ReadLines(full))
+                {
+                    lines.Add(line);
+                    emitted = true;
+                }
+                if (!emitted && new FileInfo(full).Length == 0)
+                {
+                    lines.Add(string.Empty);
+                }
             }
             catch (System.Exception ex)
             {

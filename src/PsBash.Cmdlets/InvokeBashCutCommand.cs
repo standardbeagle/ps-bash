@@ -249,40 +249,6 @@ public sealed class InvokeBashCutCommand : PSCmdlet
             i++;
         }
 
-        // Collect input lines.
-        var lines = new List<string>();
-        if (operands.Count == 0 && _pipeline.Count > 0)
-        {
-            foreach (var item in _pipeline)
-            {
-                string text = BashRuntime.GetBashText(item);
-                string trimmed = text.TrimEnd('\n');
-                if (trimmed.Contains('\n'))
-                {
-                    foreach (var sub in trimmed.Split('\n'))
-                    {
-                        lines.Add(sub);
-                    }
-                }
-                else
-                {
-                    lines.Add(trimmed);
-                }
-            }
-        }
-        else
-        {
-            foreach (var raw in operands)
-            {
-                foreach (var filePath in FileSystemHelpers.ResolveOperandPaths(this, raw))
-                {
-                    var fileLines = ReadFileLines(filePath);
-                    if (fileLines == null) continue;
-                    lines.AddRange(fileLines);
-                }
-            }
-        }
-
         // Pre-parse the active spec once.
         int[]? indices = null;
         try
@@ -304,7 +270,7 @@ public sealed class InvokeBashCutCommand : PSCmdlet
             return;
         }
 
-        foreach (var line in lines)
+        void EmitCutLine(string line)
         {
             string result;
             if (charSpec.Length > 0)
@@ -345,6 +311,46 @@ public sealed class InvokeBashCutCommand : PSCmdlet
                 result = line;
             }
             WriteObject(BashRuntime.NewBashObject(result));
+        }
+
+        if (operands.Count == 0 && _pipeline.Count > 0)
+        {
+            foreach (var item in _pipeline)
+            {
+                string text = BashRuntime.GetBashText(item);
+                string trimmed = text.TrimEnd('\n');
+                if (trimmed.Contains('\n'))
+                {
+                    foreach (var sub in trimmed.Split('\n'))
+                    {
+                        EmitCutLine(sub);
+                    }
+                }
+                else
+                {
+                    EmitCutLine(trimmed);
+                }
+            }
+        }
+        else
+        {
+            foreach (var raw in operands)
+            {
+                foreach (var filePath in FileSystemHelpers.ResolveOperandPaths(this, raw))
+                {
+                    try
+                    {
+                        foreach (var line in BashFileSystem.ReadLines(filePath))
+                        {
+                            EmitCutLine(line);
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        WriteReadError(filePath, ex);
+                    }
+                }
+            }
         }
     }
 
@@ -390,35 +396,12 @@ public sealed class InvokeBashCutCommand : PSCmdlet
         return true;
     }
 
-    /// <summary>
-    /// Reads a file and returns its lines with CRLF normalization. A trailing
-    /// <c>\n</c> does NOT produce a spurious empty final line, matching the
-    /// psm1 oracle's <c>StreamReader.ReadLine()</c> semantics. Returns
-    /// <c>null</c> and emits a bash-style error on read failure (the oracle's
-    /// <c>Read-BashFileLines</c> contract).
-    /// </summary>
-    private string[]? ReadFileLines(string path)
+    private void WriteReadError(string path, Exception ex)
     {
-        try
-        {
-            string text = BashFileSystem.ReadAllText(path);
-            if (text.Length == 0) return Array.Empty<string>();
-            bool trailingNl = text.EndsWith("\n", StringComparison.Ordinal);
-            if (trailingNl)
-            {
-                text = text.Substring(0, text.Length - 1);
-            }
-            if (text.Length == 0 && trailingNl) return new[] { string.Empty };
-            return text.Split('\n');
-        }
-        catch (Exception ex)
-        {
-            bool notFound = ex is FileNotFoundException or DirectoryNotFoundException
-                || ex.InnerException is FileNotFoundException or DirectoryNotFoundException;
-            string msg = notFound ? "No such file or directory" : ex.Message;
-            string normalized = path.Replace('\\', '/');
-            FileSystemHelpers.WriteBashError(this, $"cut: {normalized}: {msg}");
-            return null;
-        }
+        bool notFound = ex is FileNotFoundException or DirectoryNotFoundException
+            || ex.InnerException is FileNotFoundException or DirectoryNotFoundException;
+        string msg = notFound ? "No such file or directory" : ex.Message;
+        string normalized = path.Replace('\\', '/');
+        FileSystemHelpers.WriteBashError(this, $"cut: {normalized}: {msg}");
     }
 }

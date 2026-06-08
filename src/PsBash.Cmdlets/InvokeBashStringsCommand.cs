@@ -1,5 +1,5 @@
 using System.Management.Automation;
-using System.Text.RegularExpressions;
+using System.Text;
 
 namespace PsBash.Cmdlets;
 
@@ -119,71 +119,86 @@ public sealed class InvokeBashStringsCommand : PSCmdlet
             minLength = 1;
         }
 
-        string content = string.Empty;
+        var run = new StringBuilder();
+
+        void ScanChar(char ch)
+        {
+            if (ch is >= '\x20' and <= '\x7E')
+            {
+                run.Append(ch);
+                return;
+            }
+
+            FlushRun();
+        }
+
+        void FlushRun()
+        {
+            if (run.Length >= minLength)
+            {
+                WriteObject(BashRuntime.NewBashObject(run.ToString()));
+            }
+            run.Clear();
+        }
+
+        void ScanText(string text)
+        {
+            foreach (var ch in text)
+            {
+                ScanChar(ch);
+            }
+        }
 
         if (operands.Count == 0 && _pipeline.Count > 0)
         {
-            var parts = new List<string>(_pipeline.Count);
-            foreach (var item in _pipeline)
+            for (int i = 0; i < _pipeline.Count; i++)
             {
-                parts.Add(BashRuntime.GetBashText(item));
+                if (i > 0) ScanChar('\n');
+                ScanText(BashRuntime.GetBashText(_pipeline[i]));
             }
-            content = string.Join("\n", parts);
         }
         else
         {
-            var sb = new System.Text.StringBuilder();
             foreach (var filePath in ResolveGlob(operands))
             {
-                string? fileText = ReadFileText(filePath, "strings");
-                if (fileText == null)
+                try
                 {
-                    continue;
+                    using var fs = BashFileSystem.OpenRead(filePath);
+                    using var reader = new StreamReader(
+                        fs, Encoding.UTF8, detectEncodingFromByteOrderMarks: true);
+                    var buffer = new char[16384];
+                    int read;
+                    while ((read = reader.Read(buffer, 0, buffer.Length)) > 0)
+                    {
+                        for (int i = 0; i < read; i++)
+                        {
+                            ScanChar(buffer[i]);
+                        }
+                    }
                 }
-                sb.Append(fileText);
+                catch (Exception ex)
+                {
+                    WriteReadError(filePath, "strings", ex);
+                }
             }
-            content = sb.ToString();
         }
 
-        if (content.Length == 0)
-        {
-            return;
-        }
-
-        // psm1 oracle: [regex]::Matches($content, "[\x20-\x7E]{$minLength,}")
-        var pattern = "[\\x20-\\x7E]{" + minLength + ",}";
-        foreach (Match m in Regex.Matches(content, pattern))
-        {
-            WriteObject(BashRuntime.NewBashObject(m.Value));
-        }
+        FlushRun();
     }
 
-    /// <summary>
-    /// psm1 oracle: <c>Read-BashFileBytes</c> — reads a file as text with CRLF
-    /// normalization; on failure emits a bash-style error and returns
-    /// <c>null</c>.
-    /// </summary>
-    private string? ReadFileText(string path, string command)
+    private void WriteReadError(string path, string command, Exception ex)
     {
-        try
-        {
-            return BashFileSystem.ReadAllText(path);
-        }
-        catch (Exception ex)
-        {
-            string normalized = path.Replace('\\', '/');
-            bool notFound = ex is FileNotFoundException or DirectoryNotFoundException
-                || ex.InnerException is FileNotFoundException or DirectoryNotFoundException;
-            string msg = notFound ? "No such file or directory" : ex.Message;
-            FileSystemHelpers.WriteBashError(this, $"{command}: {normalized}: {msg}");
-            return null;
-        }
+        string normalized = path.Replace('\\', '/');
+        bool notFound = ex is FileNotFoundException or DirectoryNotFoundException
+            || ex.InnerException is FileNotFoundException or DirectoryNotFoundException;
+        string msg = notFound ? "No such file or directory" : ex.Message;
+        FileSystemHelpers.WriteBashError(this, $"{command}: {normalized}: {msg}");
     }
 
     /// <summary>
     /// Same glob slice as <see cref="InvokeBashCatCommand"/>: <c>*</c>/<c>?</c>
     /// expands against the current location; literal paths fall through via
-    /// the unresolved-PS-path provider so <see cref="ReadFileText"/> can emit a
+    /// the unresolved-PS-path provider so the scanner can emit a
     /// bash-style "no such file" error.
     /// </summary>
     private IEnumerable<string> ResolveGlob(IReadOnlyList<string> paths)

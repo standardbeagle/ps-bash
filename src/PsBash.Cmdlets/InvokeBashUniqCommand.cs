@@ -230,65 +230,29 @@ public sealed class InvokeBashUniqCommand : PSCmdlet
             i++;
         }
 
-        // Collect lines.
-        var lines = new List<string>();
         bool hadError = false;
-
-        if (operands.Count == 0 && _pipeline.Count > 0)
-        {
-            foreach (var item in _pipeline)
-            {
-                string text = BashRuntime.GetBashText(item);
-                string trimmed = text.TrimEnd('\n');
-                if (trimmed.Contains('\n'))
-                {
-                    foreach (var subLine in trimmed.Split('\n'))
-                    {
-                        lines.Add(subLine);
-                    }
-                }
-                else
-                {
-                    lines.Add(trimmed);
-                }
-            }
-        }
-        else
-        {
-            foreach (var raw in operands)
-            {
-                foreach (var filePath in FileSystemHelpers.ResolveOperandPaths(this, raw))
-                {
-                    string? content = ReadFileText(filePath);
-                    if (content == null)
-                    {
-                        hadError = true;
-                        continue;
-                    }
-                    string body = content;
-                    if (body.EndsWith("\n"))
-                    {
-                        body = body.Substring(0, body.Length - 1);
-                    }
-                    if (body.Length == 0)
-                    {
-                        continue;
-                    }
-                    foreach (var l in body.Split('\n'))
-                    {
-                        lines.Add(l);
-                    }
-                }
-            }
-        }
-
-        // Group consecutive identical lines using the key comparison.
-        var groups = new List<(string Line, int Count)>();
         string? prevLine = null;
         string? prevKey = null;
         int runCount = 0;
 
-        foreach (var line in lines)
+        void FlushRun()
+        {
+            if (prevLine == null) return;
+            if (duplicatesOnly && runCount < 2) return;
+            if (uniqueOnly && runCount > 1) return;
+
+            if (countMode)
+            {
+                string text = string.Format("{0,7} {1}", runCount, prevLine);
+                WriteObject(BashRuntime.NewBashObject(text));
+            }
+            else
+            {
+                WriteObject(BashRuntime.NewBashObject(prevLine));
+            }
+        }
+
+        void ProcessLine(string line)
         {
             string key = GetUniqKey(line, skipFields, skipChars, checkChars);
             bool same;
@@ -308,38 +272,57 @@ public sealed class InvokeBashUniqCommand : PSCmdlet
             if (same)
             {
                 runCount++;
+                return;
             }
-            else
+
+            FlushRun();
+            prevLine = line;
+            prevKey = key;
+            runCount = 1;
+        }
+
+        if (operands.Count == 0 && _pipeline.Count > 0)
+        {
+            foreach (var item in _pipeline)
             {
-                if (prevLine != null)
+                string text = BashRuntime.GetBashText(item);
+                string trimmed = text.TrimEnd('\n');
+                if (trimmed.Contains('\n'))
                 {
-                    groups.Add((prevLine, runCount));
+                    foreach (var subLine in trimmed.Split('\n'))
+                    {
+                        ProcessLine(subLine);
+                    }
                 }
-                prevLine = line;
-                prevKey = key;
-                runCount = 1;
+                else
+                {
+                    ProcessLine(trimmed);
+                }
             }
         }
-        if (prevLine != null)
+        else
         {
-            groups.Add((prevLine, runCount));
+            foreach (var raw in operands)
+            {
+                foreach (var filePath in FileSystemHelpers.ResolveOperandPaths(this, raw))
+                {
+                    try
+                    {
+                        foreach (var line in BashFileSystem.ReadLines(filePath))
+                        {
+                            ProcessLine(line);
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        WriteReadError(filePath, ex);
+                        hadError = true;
+                    }
+                }
+            }
         }
 
-        foreach (var (gline, gcount) in groups)
-        {
-            if (duplicatesOnly && gcount < 2) continue;
-            if (uniqueOnly && gcount > 1) continue;
-
-            if (countMode)
-            {
-                string text = string.Format("{0,7} {1}", gcount, gline);
-                WriteObject(BashRuntime.NewBashObject(text));
-            }
-            else
-            {
-                WriteObject(BashRuntime.NewBashObject(gline));
-            }
-        }
+        FlushRun();
 
         if (hadError)
         {
@@ -421,20 +404,12 @@ public sealed class InvokeBashUniqCommand : PSCmdlet
         return line.Substring(idx);
     }
 
-    private string? ReadFileText(string path)
+    private void WriteReadError(string path, Exception ex)
     {
-        try
-        {
-            return BashFileSystem.ReadAllText(path);
-        }
-        catch (Exception ex)
-        {
-            bool notFound = ex is FileNotFoundException or DirectoryNotFoundException
-                || ex.InnerException is FileNotFoundException or DirectoryNotFoundException;
-            string msg = notFound ? "No such file or directory" : ex.Message;
-            string normalized = path.Replace('\\', '/');
-            FileSystemHelpers.WriteBashError(this, $"uniq: {normalized}: {msg}");
-            return null;
-        }
+        bool notFound = ex is FileNotFoundException or DirectoryNotFoundException
+            || ex.InnerException is FileNotFoundException or DirectoryNotFoundException;
+        string msg = notFound ? "No such file or directory" : ex.Message;
+        string normalized = path.Replace('\\', '/');
+        FileSystemHelpers.WriteBashError(this, $"uniq: {normalized}: {msg}");
     }
 }
