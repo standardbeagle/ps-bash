@@ -80,7 +80,17 @@ public sealed class InvokeBashWcCommand : PSCmdlet
     [Parameter(ValueFromPipeline = true)]
     public PSObject? InputObject { get; set; }
 
-    private readonly List<PSObject> _pipeline = new();
+    // Parsed-once state.
+    private bool _parsed;
+    private bool _linesOnly, _wordsOnly, _bytesOnly;
+    private List<string> _operands = new();
+    // True when stdin must NOT be counted: file operands present (file mode
+    // ignores stdin) or a --help / --version request.
+    private bool _suppressStdin;
+    // Streamed counters — wc needs only running totals, never the buffered
+    // pipeline. int (not long) for byte-exact parity with the buffered oracle.
+    private int _totalLines, _totalWords, _totalBytes;
+    private bool _sawRecord;
 
     /// <summary>Valid GNU <c>wc</c> options ps-bash does not implement (see
     /// <see cref="FileSystemHelpers.TryWriteOperandOptionError"/>).</summary>
@@ -93,16 +103,92 @@ public sealed class InvokeBashWcCommand : PSCmdlet
 
     private static readonly char[] WhitespaceChars = { ' ', '\t', '\n', '\r' };
 
+    private void ParseOnce()
+    {
+        if (_parsed) return;
+        _parsed = true;
+
+        var args = Arguments ?? Array.Empty<string>();
+
+        // --help / --version short-circuit before flag parsing (oracle order).
+        if (Array.IndexOf(args, "--version") >= 0 || Array.IndexOf(args, "--help") >= 0)
+        {
+            _suppressStdin = true;
+            return;
+        }
+
+        // -w is bound via the explicit W switch (common-parameter collision);
+        // -l and -c stay in Arguments and are parsed by ConvertFromBashArgs.
+        var flagDefs = BashRuntime.NewFlagDefs(new[]
+        {
+            "-l", "line count only",
+            "-c", "byte count only",
+        });
+        var parsed = BashRuntime.ConvertFromBashArgs(args, flagDefs);
+        _linesOnly = parsed.Flags["-l"];
+        _wordsOnly = W.IsPresent;
+        _bytesOnly = parsed.Flags["-c"] || C.IsPresent;
+        _operands = parsed.Operands;
+
+        // Bundled-flag recovery: a bundle like -lw or -wc reaches operands
+        // intact (the explicit W switch only binds a bare -w, and
+        // ConvertFromBashArgs turns the unrecognized -w bundle char into an
+        // operand). Restore -l/-w/-c from such a bundle, matching the psm1
+        // oracle's ConvertFrom-BashArgs which split bundled short flags.
+        for (int bi = 0; bi < _operands.Count; bi++)
+        {
+            var op = _operands[bi];
+            if (op.Length > 1 && op[0] == '-' && op[1] != '-'
+                && op.Skip(1).All(c => "lwc".IndexOf(c) >= 0))
+            {
+                if (op.IndexOf('l') >= 0) _linesOnly = true;
+                if (op.IndexOf('w') >= 0) _wordsOnly = true;
+                if (op.IndexOf('c') >= 0) _bytesOnly = true;
+                _operands.RemoveAt(bi);
+                bi--;
+            }
+        }
+
+        _suppressStdin = _operands.Count > 0;
+    }
+
     protected override void ProcessRecord()
     {
-        if (InputObject != null)
+        if (InputObject == null) return;
+
+        ParseOnce();
+        if (_suppressStdin) return;
+
+        // Stream the counts instead of buffering the pipe — wc only ever needs
+        // running totals. Per-record accumulation is exactly the buffered
+        // oracle's per-item loop (no cross-item state in the counting).
+        _sawRecord = true;
+        string text = BashRuntime.GetBashText(InputObject);
+        string trimmed = text.TrimEnd('\n');
+        if (trimmed.Contains('\n'))
         {
-            _pipeline.Add(InputObject);
+            foreach (var subLine in trimmed.Split('\n'))
+            {
+                AccumulateLine(subLine);
+            }
         }
+        else
+        {
+            AccumulateLine(trimmed);
+        }
+    }
+
+    private void AccumulateLine(string line)
+    {
+        _totalLines++;
+        _totalWords += CountWords(line);
+        _totalBytes += Encoding.UTF8.GetByteCount(line) + 1;
     }
 
     protected override void EndProcessing()
     {
+        ParseOnce();
+
         var args = Arguments ?? Array.Empty<string>();
 
         FileSystemHelpers.SetLastExitCode(this, 0);
@@ -117,83 +203,34 @@ public sealed class InvokeBashWcCommand : PSCmdlet
             return;
         }
 
-        // -w is bound via the explicit W switch (common-parameter collision);
-        // -l and -c stay in Arguments and are parsed by ConvertFromBashArgs.
-        var flagDefs = BashRuntime.NewFlagDefs(new[]
-        {
-            "-l", "line count only",
-            "-c", "byte count only",
-        });
-        var parsed = BashRuntime.ConvertFromBashArgs(args, flagDefs);
-        bool linesOnly = parsed.Flags["-l"];
-        bool wordsOnly = W.IsPresent;
-        bool bytesOnly = parsed.Flags["-c"] || C.IsPresent;
-        var operands = parsed.Operands;
-
-        // Bundled-flag recovery: a bundle like -lw or -wc reaches operands
-        // intact (the explicit W switch only binds a bare -w, and
-        // ConvertFromBashArgs turns the unrecognized -w bundle char into an
-        // operand). Restore -l/-w/-c from such a bundle, matching the psm1
-        // oracle's ConvertFrom-BashArgs which split bundled short flags.
-        for (int bi = 0; bi < operands.Count; bi++)
-        {
-            var op = operands[bi];
-            if (op.Length > 1 && op[0] == '-' && op[1] != '-'
-                && op.Skip(1).All(c => "lwc".IndexOf(c) >= 0))
-            {
-                if (op.IndexOf('l') >= 0) linesOnly = true;
-                if (op.IndexOf('w') >= 0) wordsOnly = true;
-                if (op.IndexOf('c') >= 0) bytesOnly = true;
-                operands.RemoveAt(bi);
-                bi--;
-            }
-        }
-
         // Any remaining option-looking operand is an unknown flag that fell
         // through ConvertFromBashArgs, not a file — classify it (specific "not
         // supported" if a valid wc flag, else bash-parity "unrecognized option")
         // instead of reporting it as a missing file.
-        if (FileSystemHelpers.TryWriteOperandOptionError(this, "wc", operands, WcValidButUnsupported))
+        if (FileSystemHelpers.TryWriteOperandOptionError(this, "wc", _operands, WcValidButUnsupported))
         {
             return;
         }
 
-        // Pipeline mode
-        if (operands.Count == 0 && _pipeline.Count > 0)
+        // Pipeline mode: counts were streamed in ProcessRecord. Emit only when
+        // stdin actually delivered a record (matching the buffered oracle's
+        // `_pipeline.Count > 0` gate; no input + no operands emits nothing).
+        if (_operands.Count == 0)
         {
-            int totalLines = 0, totalWords = 0, totalBytes = 0;
-            foreach (var item in _pipeline)
+            if (_sawRecord)
             {
-                string text = BashRuntime.GetBashText(item);
-                string trimmed = text.TrimEnd('\n');
-                if (trimmed.Contains('\n'))
-                {
-                    foreach (var subLine in trimmed.Split('\n'))
-                    {
-                        totalLines++;
-                        totalWords += CountWords(subLine);
-                        totalBytes += Encoding.UTF8.GetByteCount(subLine) + 1;
-                    }
-                }
-                else
-                {
-                    totalLines++;
-                    totalWords += CountWords(trimmed);
-                    totalBytes += Encoding.UTF8.GetByteCount(trimmed) + 1;
-                }
+                WriteObject(BuildResult(
+                    _totalLines, _totalWords, _totalBytes, string.Empty,
+                    _linesOnly, _wordsOnly, _bytesOnly));
             }
-
-            WriteObject(BuildResult(
-                totalLines, totalWords, totalBytes, string.Empty,
-                linesOnly, wordsOnly, bytesOnly));
             return;
         }
 
         // File mode
         int grandLines = 0, grandWords = 0, grandBytes = 0;
-        bool multipleFiles = operands.Count > 1;
+        bool multipleFiles = _operands.Count > 1;
 
-        foreach (var filePath in ResolveGlob(operands))
+        foreach (var filePath in ResolveGlob(_operands))
         {
             // The null device (/dev/null, NUL) is an empty file, not a missing one.
             if (!File.Exists(filePath) && !Directory.Exists(filePath) && !FileSystemHelpers.IsNullDevice(filePath))
@@ -244,14 +281,14 @@ public sealed class InvokeBashWcCommand : PSCmdlet
 
             WriteObject(BuildResult(
                 lineCount, wordCount, (int)fileBytes, filePath,
-                linesOnly, wordsOnly, bytesOnly));
+                _linesOnly, _wordsOnly, _bytesOnly));
         }
 
         if (multipleFiles)
         {
             WriteObject(BuildResult(
                 grandLines, grandWords, grandBytes, "total",
-                linesOnly, wordsOnly, bytesOnly));
+                _linesOnly, _wordsOnly, _bytesOnly));
         }
     }
 
