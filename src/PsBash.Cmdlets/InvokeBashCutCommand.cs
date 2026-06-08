@@ -105,7 +105,22 @@ public sealed class InvokeBashCutCommand : PSCmdlet
     [Parameter(ValueFromPipeline = true)]
     public PSObject? InputObject { get; set; }
 
-    private readonly List<PSObject> _pipeline = new();
+    // Parsed-once state.
+    private bool _parsed;
+    private string _delimiter = "\t";
+    private string _fieldSpec = string.Empty;
+    private string _charSpec = string.Empty;
+    private List<string> _operands = new();
+    private int[]? _indices;
+    // Deferred parse failures: emitted in EndProcessing (ProcessRecord runs
+    // first and must not write the error twice). Either of these also
+    // suppresses stdin streaming.
+    private string? _optionErrorToken;
+    private string? _invalidListMsg;
+    // True when stdin must NOT be streamed: file operands present, a
+    // --help / --version request, or a deferred parse error. Matches the
+    // buffered oracle, which only consumed the pipeline in pipeline mode.
+    private bool _suppressStdin;
 
     /// <summary>
     /// Valid GNU <c>cut</c> options ps-bash does not implement. Hitting one
@@ -124,27 +139,18 @@ public sealed class InvokeBashCutCommand : PSCmdlet
         "--zero-terminated",
     };
 
-    protected override void ProcessRecord()
+    private void ParseOnce()
     {
-        if (InputObject != null)
-        {
-            _pipeline.Add(InputObject);
-        }
-    }
+        if (_parsed) return;
+        _parsed = true;
 
-    protected override void EndProcessing()
-    {
         var args = Arguments ?? Array.Empty<string>();
 
-        FileSystemHelpers.SetLastExitCode(this, 0);
-        if (FileSystemHelpers.TryHandleVersion(this, "cut", args)) return;
-        if (Array.IndexOf(args, "--help") >= 0)
+        // --help / --version short-circuit before any flag/spec parsing
+        // (oracle order — EndProcessing checked them first).
+        if (Array.IndexOf(args, "--version") >= 0 || Array.IndexOf(args, "--help") >= 0)
         {
-            foreach (var line in InvokeCommand.InvokeScript(
-                         "param($n) Show-BashHelp $n", "cut"))
-            {
-                WriteObject(line);
-            }
+            _suppressStdin = true;
             return;
         }
 
@@ -154,7 +160,7 @@ public sealed class InvokeBashCutCommand : PSCmdlet
         // D="-f2", and `-d: -f1,3` errors on the array conversion. To honor
         // the bash convention (`-d:` means delimiter is colon), detect the
         // joined literal in MyInvocation.Line and override.
-        string delimiter = D ?? "\t";
+        _delimiter = D ?? "\t";
         var rawLine = MyInvocation?.Line ?? string.Empty;
         if (!string.IsNullOrEmpty(rawLine))
         {
@@ -162,7 +168,7 @@ public sealed class InvokeBashCutCommand : PSCmdlet
                 rawLine, @"(?<![A-Za-z0-9])-d(\S)(?!\w)");
             if (m.Success)
             {
-                delimiter = m.Groups[1].Value;
+                _delimiter = m.Groups[1].Value;
                 // The PowerShell binder may have consumed the NEXT token as
                 // D's value (e.g. -d: -f2 → D="-f2"). Re-inject that token
                 // into Arguments so the manual scan picks up the -f.
@@ -174,9 +180,7 @@ public sealed class InvokeBashCutCommand : PSCmdlet
                 }
             }
         }
-        string fieldSpec = string.Empty;
-        string charSpec = C ?? string.Empty;
-        var operands = new List<string>();
+        _charSpec = C ?? string.Empty;
         bool pastDoubleDash = false;
 
         int i = 0;
@@ -185,7 +189,7 @@ public sealed class InvokeBashCutCommand : PSCmdlet
             string a = args[i];
             if (pastDoubleDash)
             {
-                operands.Add(a);
+                _operands.Add(a);
                 i++;
                 continue;
             }
@@ -201,7 +205,7 @@ public sealed class InvokeBashCutCommand : PSCmdlet
             // joined `-dC` lands here (oracle: ^-d(.)$).
             if (a.Length == 3 && a[0] == '-' && a[1] == 'd')
             {
-                delimiter = a.Substring(2, 1);
+                _delimiter = a.Substring(2, 1);
                 i++;
                 continue;
             }
@@ -212,7 +216,7 @@ public sealed class InvokeBashCutCommand : PSCmdlet
                 i++;
                 if (i < args.Length)
                 {
-                    fieldSpec = args[i];
+                    _fieldSpec = args[i];
                 }
                 i++;
                 continue;
@@ -221,7 +225,7 @@ public sealed class InvokeBashCutCommand : PSCmdlet
             // Joined `-fLIST` form (oracle: ^-f(.+)$).
             if (a.Length > 2 && a[0] == '-' && a[1] == 'f')
             {
-                fieldSpec = a.Substring(2);
+                _fieldSpec = a.Substring(2);
                 i++;
                 continue;
             }
@@ -230,7 +234,7 @@ public sealed class InvokeBashCutCommand : PSCmdlet
             // already bound to the C parameter by the binder.
             if (a.Length > 2 && a[0] == '-' && a[1] == 'c')
             {
-                charSpec = a.Substring(2);
+                _charSpec = a.Substring(2);
                 i++;
                 continue;
             }
@@ -238,117 +242,158 @@ public sealed class InvokeBashCutCommand : PSCmdlet
             // Any remaining option-looking token is a flag cut doesn't handle,
             // not a file operand: valid-but-unsupported → specific refusal,
             // otherwise bash-parity "unrecognized option". A lone "-" (stdin)
-            // is not option-like and falls through to operands.
+            // is not option-like and falls through to operands. The error is
+            // deferred to EndProcessing (ProcessRecord runs first).
             if (FileSystemHelpers.IsOptionLike(a))
             {
-                FileSystemHelpers.WriteOptionError(this, "cut", a, ValidButUnsupported);
+                _optionErrorToken = a;
+                _suppressStdin = true;
                 return;
             }
 
-            operands.Add(a);
+            _operands.Add(a);
             i++;
         }
 
         // Pre-parse the active spec once.
-        int[]? indices = null;
         try
         {
-            if (charSpec.Length > 0)
+            if (_charSpec.Length > 0)
             {
-                indices = ParseSpec(charSpec);
+                _indices = ParseSpec(_charSpec);
             }
-            else if (fieldSpec.Length > 0)
+            else if (_fieldSpec.Length > 0)
             {
-                indices = ParseSpec(fieldSpec);
+                _indices = ParseSpec(_fieldSpec);
             }
         }
         catch (FormatException ex)
         {
             // Oracle: [int]$part on a non-integer token throws; we surface
-            // the same failure mode via a bash-style error and bail.
-            FileSystemHelpers.WriteBashError(this, $"cut: invalid list: {ex.Message}");
+            // the same failure mode via a bash-style error and bail (deferred
+            // to EndProcessing).
+            _invalidListMsg = ex.Message;
+            _suppressStdin = true;
             return;
         }
 
-        void EmitCutLine(string line)
-        {
-            string result;
-            if (charSpec.Length > 0)
-            {
-                var sb = new StringBuilder();
-                foreach (var pos in indices!)
-                {
-                    int idx = pos - 1;
-                    if (idx >= 0 && idx < line.Length)
-                    {
-                        sb.Append(line[idx]);
-                    }
-                }
-                result = sb.ToString();
-            }
-            else if (fieldSpec.Length > 0)
-            {
-                // String.Split(string) — single-string separator overload
-                // matches PowerShell's .Split($string) behavior when the
-                // delimiter is a multi-char string. The oracle uses
-                // $Line.Split($delimiter) where $delimiter may be 1 char or
-                // a string passed via -d. .NET's Split(string) splits on the
-                // string as a substring boundary.
-                string[] fields = line.Split(new[] { delimiter }, StringSplitOptions.None);
-                var picks = new List<string>();
-                foreach (var pos in indices!)
-                {
-                    int fi = pos - 1;
-                    if (fi >= 0 && fi < fields.Length)
-                    {
-                        picks.Add(fields[fi]);
-                    }
-                }
-                result = string.Join(delimiter, picks);
-            }
-            else
-            {
-                result = line;
-            }
-            WriteObject(BashRuntime.NewBashObject(result));
-        }
+        _suppressStdin = _operands.Count > 0;
+    }
 
-        if (operands.Count == 0 && _pipeline.Count > 0)
+    private void EmitCutLine(string line)
+    {
+        string result;
+        if (_charSpec.Length > 0)
         {
-            foreach (var item in _pipeline)
+            var sb = new StringBuilder();
+            foreach (var pos in _indices!)
             {
-                string text = BashRuntime.GetBashText(item);
-                string trimmed = text.TrimEnd('\n');
-                if (trimmed.Contains('\n'))
+                int idx = pos - 1;
+                if (idx >= 0 && idx < line.Length)
                 {
-                    foreach (var sub in trimmed.Split('\n'))
-                    {
-                        EmitCutLine(sub);
-                    }
+                    sb.Append(line[idx]);
                 }
-                else
+            }
+            result = sb.ToString();
+        }
+        else if (_fieldSpec.Length > 0)
+        {
+            // String.Split(string) — single-string separator overload
+            // matches PowerShell's .Split($string) behavior when the
+            // delimiter is a multi-char string. The oracle uses
+            // $Line.Split($delimiter) where $delimiter may be 1 char or
+            // a string passed via -d. .NET's Split(string) splits on the
+            // string as a substring boundary.
+            string[] fields = line.Split(new[] { _delimiter }, StringSplitOptions.None);
+            var picks = new List<string>();
+            foreach (var pos in _indices!)
+            {
+                int fi = pos - 1;
+                if (fi >= 0 && fi < fields.Length)
                 {
-                    EmitCutLine(trimmed);
+                    picks.Add(fields[fi]);
                 }
+            }
+            result = string.Join(_delimiter, picks);
+        }
+        else
+        {
+            result = line;
+        }
+        WriteObject(BashRuntime.NewBashObject(result));
+    }
+
+    protected override void ProcessRecord()
+    {
+        if (InputObject == null) return;
+
+        ParseOnce();
+        if (_suppressStdin) return;
+
+        // Pipeline mode: cut each stdin sub-line as it arrives instead of
+        // buffering the whole pipe.
+        string text = BashRuntime.GetBashText(InputObject);
+        string trimmed = text.TrimEnd('\n');
+        if (trimmed.Contains('\n'))
+        {
+            foreach (var sub in trimmed.Split('\n'))
+            {
+                EmitCutLine(sub);
             }
         }
         else
         {
-            foreach (var raw in operands)
+            EmitCutLine(trimmed);
+        }
+    }
+
+    protected override void EndProcessing()
+    {
+        ParseOnce();
+
+        var args = Arguments ?? Array.Empty<string>();
+
+        FileSystemHelpers.SetLastExitCode(this, 0);
+        if (FileSystemHelpers.TryHandleVersion(this, "cut", args)) return;
+        if (Array.IndexOf(args, "--help") >= 0)
+        {
+            foreach (var line in InvokeCommand.InvokeScript(
+                         "param($n) Show-BashHelp $n", "cut"))
             {
-                foreach (var filePath in FileSystemHelpers.ResolveOperandPaths(this, raw))
+                WriteObject(line);
+            }
+            return;
+        }
+
+        // Deferred parse failures (captured in ParseOnce).
+        if (_optionErrorToken != null)
+        {
+            FileSystemHelpers.WriteOptionError(this, "cut", _optionErrorToken, ValidButUnsupported);
+            return;
+        }
+        if (_invalidListMsg != null)
+        {
+            FileSystemHelpers.WriteBashError(this, $"cut: invalid list: {_invalidListMsg}");
+            return;
+        }
+
+        // Pipeline mode (no operands) was already streamed in ProcessRecord.
+        if (_operands.Count == 0) return;
+
+        foreach (var raw in _operands)
+        {
+            foreach (var filePath in FileSystemHelpers.ResolveOperandPaths(this, raw))
+            {
+                try
                 {
-                    try
+                    foreach (var line in BashFileSystem.ReadLines(filePath))
                     {
-                        foreach (var line in BashFileSystem.ReadLines(filePath))
-                        {
-                            EmitCutLine(line);
-                        }
+                        EmitCutLine(line);
                     }
-                    catch (Exception ex)
-                    {
-                        WriteReadError(filePath, ex);
-                    }
+                }
+                catch (Exception ex)
+                {
+                    WriteReadError(filePath, ex);
                 }
             }
         }
