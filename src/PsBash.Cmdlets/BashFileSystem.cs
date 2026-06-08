@@ -158,8 +158,18 @@ public static class BashFileSystem
     public static string ReadAllText(string path)
     {
         using var fs = OpenRead(path);
+        return ReadAllText(fs);
+    }
+
+    /// <summary>
+    /// Read an ENTIRE stream as text (CRLF normalized to LF, BOM-aware UTF-8).
+    /// The caller owns the stream lifetime. Reserved for whole-document
+    /// consumers that already opened or received a stream.
+    /// </summary>
+    public static string ReadAllText(Stream stream)
+    {
         using var reader = new StreamReader(
-            fs, Encoding.UTF8, detectEncodingFromByteOrderMarks: true);
+            stream, Encoding.UTF8, detectEncodingFromByteOrderMarks: true, leaveOpen: true);
         return reader.ReadToEnd().Replace("\r\n", "\n");
     }
 
@@ -186,8 +196,17 @@ public static class BashFileSystem
     public static string ReadAllTextRaw(string path)
     {
         using var fs = OpenRead(path);
+        return ReadAllTextRaw(fs);
+    }
+
+    /// <summary>
+    /// Like <see cref="ReadAllText(Stream)"/> but WITHOUT CRLF normalization.
+    /// The caller owns the stream lifetime.
+    /// </summary>
+    public static string ReadAllTextRaw(Stream stream)
+    {
         using var reader = new StreamReader(
-            fs, Encoding.UTF8, detectEncodingFromByteOrderMarks: true);
+            stream, Encoding.UTF8, detectEncodingFromByteOrderMarks: true, leaveOpen: true);
         return reader.ReadToEnd();
     }
 

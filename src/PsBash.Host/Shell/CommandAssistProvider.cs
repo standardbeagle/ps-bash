@@ -28,9 +28,10 @@ internal sealed record CommandAssistConfig
 
         try
         {
-            if (new FileInfo(path).Length > MaxConfigBytes)
-                throw new IOException("config file exceeds the maximum supported size.");
-            var json = File.ReadAllText(path);
+            var json = PsBash.Host.Runtime.BoundedTextFile.Read(
+                path,
+                MaxConfigBytes,
+                "config file exceeds the maximum supported size.");
             var config = JsonSerializer.Deserialize(json, CommandAssistJsonContext.Default.CommandAssistConfig);
             return config?.Normalize() ?? new CommandAssistConfig();
         }

@@ -1,5 +1,6 @@
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using PsBash.Core.Runtime;
 
 namespace PsBash.Core.Runtime.Ipc;
 
@@ -77,8 +78,10 @@ public sealed record HostMetadata(
         if (!File.Exists(path)) return null;
         try
         {
-            if (new FileInfo(path).Length > MaxMetadataBytes) return null;
-            var json = File.ReadAllText(path);
+            var json = BoundedTextFile.Read(
+                path,
+                MaxMetadataBytes,
+                "Host metadata sidecar exceeds the maximum supported size.");
             return JsonSerializer.Deserialize(json, HostMetadataJsonContext.Default.HostMetadata);
         }
         catch (JsonException) { return null; }

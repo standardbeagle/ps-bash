@@ -114,57 +114,7 @@ public sealed class InvokeBashYqCommand : PSCmdlet
             }
         }
 
-        // Collect YAML input
-        var yamlTexts = new List<string>();
-        if (files.Count > 0)
-        {
-            foreach (var file in files)
-            {
-                string resolved;
-                try
-                {
-                    resolved = SessionState.Path.GetUnresolvedProviderPathFromPSPath(file);
-                }
-                catch (Exception ex)
-                {
-                    EmitError($"yq: {file}: {ex.Message}");
-                    return;
-                }
-                if (!File.Exists(resolved))
-                {
-                    EmitError($"yq: {file}: No such file or directory");
-                    return;
-                }
-                try
-                {
-                    yamlTexts.Add(BashFileSystem.ReadAllTextRaw(resolved));
-                }
-                catch (Exception ex)
-                {
-                    EmitError($"yq: {file}: {ex.Message}");
-                    return;
-                }
-            }
-        }
-        else
-        {
-            var textParts = new StringBuilder();
-            foreach (var item in _pipeline)
-            {
-                string text = BashRuntime.GetBashText(item);
-                textParts.Append(text);
-                textParts.Append('\n');
-            }
-            string combined = textParts.ToString().Trim();
-            if (combined.Length > 0)
-            {
-                yamlTexts.Add(combined);
-            }
-        }
-
-        if (yamlTexts.Count == 0) return;
-
-        // Dispatch the entire parse/filter/emit loop to psm1 — this preserves
+        // Dispatch the parse/filter/emit loop to psm1 — this preserves
         // byte-for-byte parity with the oracle since the helpers (and their
         // hashtable graph) live there. The script body is a closed string;
         // user tokens flow in only via $args, never via concatenation.
@@ -187,16 +137,87 @@ foreach ($result in $results) {
 }
 ";
 
-        foreach (var yamlText in yamlTexts)
+        var resolvedFiles = new List<(string Original, string Resolved)>();
+        if (files.Count > 0)
         {
-            var emitted = InvokeCommand.InvokeScript(
-                emitScript,
-                yamlText, filterExpr, outputFormat, rawOutput);
-            if (emitted == null) continue;
-            foreach (var obj in emitted)
+            foreach (var file in files)
             {
-                if (obj != null) WriteObject(obj);
+                string resolved;
+                try
+                {
+                    resolved = SessionState.Path.GetUnresolvedProviderPathFromPSPath(file);
+                }
+                catch (Exception ex)
+                {
+                    EmitError($"yq: {file}: {ex.Message}");
+                    return;
+                }
+                if (!File.Exists(resolved))
+                {
+                    EmitError($"yq: {file}: No such file or directory");
+                    return;
+                }
+                resolvedFiles.Add((file, resolved));
             }
+
+            foreach (var (original, resolved) in resolvedFiles)
+            {
+                try
+                {
+                    using var _ = BashFileSystem.OpenRead(resolved);
+                }
+                catch (Exception ex)
+                {
+                    EmitError($"yq: {original}: {ex.Message}");
+                    return;
+                }
+            }
+
+            foreach (var (original, resolved) in resolvedFiles)
+            {
+                string yamlText;
+                try
+                {
+                    using var stream = BashFileSystem.OpenRead(resolved);
+                    yamlText = BashFileSystem.ReadAllTextRaw(stream);
+                }
+                catch (Exception ex)
+                {
+                    EmitError($"yq: {original}: {ex.Message}");
+                    return;
+                }
+
+                EmitYamlResults(emitScript, yamlText, filterExpr, outputFormat, rawOutput);
+            }
+            return;
+        }
+
+        var textParts = new StringBuilder();
+        foreach (var item in _pipeline)
+        {
+            string text = BashRuntime.GetBashText(item);
+            textParts.Append(text);
+            textParts.Append('\n');
+        }
+        string combined = textParts.ToString().Trim();
+        if (combined.Length == 0) return;
+        EmitYamlResults(emitScript, combined, filterExpr, outputFormat, rawOutput);
+    }
+
+    private void EmitYamlResults(
+        string emitScript,
+        string yamlText,
+        string filterExpr,
+        string outputFormat,
+        bool rawOutput)
+    {
+        var emitted = InvokeCommand.InvokeScript(
+            emitScript,
+            yamlText, filterExpr, outputFormat, rawOutput);
+        if (emitted == null) return;
+        foreach (var obj in emitted)
+        {
+            if (obj != null) WriteObject(obj);
         }
     }
 

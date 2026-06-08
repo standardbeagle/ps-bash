@@ -233,9 +233,17 @@ public static class ModuleExtractor
 
     private static string ReadExtractionMarker(string marker)
     {
-        if (new FileInfo(marker).Length > ExtractionMarkerMaxBytes)
+        try
+        {
+            return BoundedTextFile.Read(
+                marker,
+                ExtractionMarkerMaxBytes,
+                "Extraction marker exceeds the maximum supported size.").Trim();
+        }
+        catch (IOException)
+        {
             return string.Empty;
-        return File.ReadAllText(marker).Trim();
+        }
     }
 
     /// <summary>

@@ -62,8 +62,7 @@ internal static class StyledStyles
             return null;
         }
 
-        using var reader = new StreamReader(stream);
-        return reader.ReadToEnd();
+        return BashFileSystem.ReadAllTextRaw(stream);
     }
 
     /// <summary>Names of the embedded built-in stylesheets (for error messages).</summary>

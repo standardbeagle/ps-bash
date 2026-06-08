@@ -237,25 +237,22 @@ public sealed class InvokeBashSedCommand : PSCmdlet
                 return;
             }
 
-            string scriptText;
             try
             {
-                scriptText = BashFileSystem.ReadAllTextRaw(resolved);
+                foreach (var scriptLine in BashFileSystem.ReadLines(resolved))
+                {
+                    string trimmed = scriptLine.Trim();
+                    if (trimmed.Length > 0)
+                    {
+                        expressions.Add(trimmed);
+                    }
+                }
             }
             catch
             {
                 EmitError($"sed: can't read {scriptFile}");
                 SessionState.PSVariable.Set("global:LASTEXITCODE", 2);
                 return;
-            }
-
-            foreach (var scriptLine in scriptText.Split('\n'))
-            {
-                string trimmed = scriptLine.Trim();
-                if (trimmed.Length > 0)
-                {
-                    expressions.Add(trimmed);
-                }
             }
         }
 

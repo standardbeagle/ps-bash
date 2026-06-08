@@ -178,9 +178,10 @@ internal sealed class SdkRunspace : IAsyncDisposable
 
     private static string ReadStartupModule(string path)
     {
-        if (new FileInfo(path).Length > MaxStartupModuleBytes)
-            throw new IOException("Extracted PsBash module exceeds the maximum supported startup size.");
-        return File.ReadAllText(path);
+        return BoundedTextFile.Read(
+            path,
+            MaxStartupModuleBytes,
+            "Extracted PsBash module exceeds the maximum supported startup size.");
     }
 
     public Runspace Runspace => _runspace;

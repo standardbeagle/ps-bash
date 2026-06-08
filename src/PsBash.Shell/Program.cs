@@ -1,3 +1,4 @@
+using System.Text;
 using System.Reflection;
 using PsBash.Core.Parser;
 using PsBash.Core.Runtime;
@@ -5,6 +6,7 @@ using PsBash.Core.Transpiler;
 using PsBash.Shell;
 using PsBash.Shell.Pty;
 
+const long MaxCommandInputChars = 16 * 1024 * 1024;
 
 // Reliability watchdog: on Windows, attach the current process to a Job Object
 // with KILL_ON_JOB_CLOSE so the SDK host (and any other descendants) die
@@ -152,7 +154,19 @@ if (shellArgs.ScriptPath is not null)
     }
 
     // .sh execution: read, transpile, build positional preamble, execute.
-    var scriptContent = await File.ReadAllTextAsync(shellArgs.ScriptPath);
+    string scriptContent;
+    try
+    {
+        scriptContent = await ReadFileTextBoundedAsync(
+            shellArgs.ScriptPath,
+            MaxCommandInputChars,
+            "script exceeds the maximum supported command input size.").ConfigureAwait(false);
+    }
+    catch (IOException ex)
+    {
+        Console.Error.WriteLine($"ps-bash: {shellArgs.ScriptPath}: {ex.Message}");
+        return 2;
+    }
 
     string? pwshScriptCommand;
     try
@@ -178,7 +192,20 @@ if (shellArgs.ScriptPath is not null)
 // Auto-detect piped stdin: if no command given and stdin is redirected, try reading it.
 if (shellArgs.ReadFromStdin || (!shellArgs.Interactive && shellArgs.Command is null && Console.IsInputRedirected))
 {
-    var stdinCommand = await Console.In.ReadToEndAsync();
+    string stdinCommand;
+    try
+    {
+        stdinCommand = await ReadTextBoundedAsync(
+            Console.In,
+            MaxCommandInputChars,
+            "stdin command input exceeds the maximum supported size.").ConfigureAwait(false);
+    }
+    catch (IOException ex)
+    {
+        Console.Error.WriteLine($"ps-bash: {ex.Message}");
+        return 2;
+    }
+
     if (string.IsNullOrEmpty(stdinCommand) && Console.IsInputRedirected)
     {
         // Parent closed the pipe without sending a command. Exit cleanly
@@ -379,6 +406,34 @@ static string BuildPositionalPreamble(string script0, string[] scriptArgs)
     var arrayLiteral = scriptArgs.Length == 0 ? "@()" : $"@({argList})";
 
     return $"$global:BashPositional0 = {scriptName}; $global:BashPositional = {arrayLiteral}; ";
+}
+
+static async Task<string> ReadFileTextBoundedAsync(string path, long maxChars, string tooLargeMessage)
+{
+    await using var stream = new FileStream(
+        path,
+        FileMode.Open,
+        FileAccess.Read,
+        FileShare.ReadWrite,
+        bufferSize: 8192,
+        FileOptions.SequentialScan);
+    using var reader = new StreamReader(stream, Encoding.UTF8, detectEncodingFromByteOrderMarks: true);
+    return await ReadTextBoundedAsync(reader, maxChars, tooLargeMessage).ConfigureAwait(false);
+}
+
+static async Task<string> ReadTextBoundedAsync(TextReader reader, long maxChars, string tooLargeMessage)
+{
+    var sb = new StringBuilder();
+    var buffer = new char[4096];
+    int read;
+    while ((read = await reader.ReadAsync(buffer.AsMemory()).ConfigureAwait(false)) > 0)
+    {
+        if (sb.Length + read > maxChars)
+            throw new IOException(tooLargeMessage);
+        sb.Append(buffer, 0, read);
+    }
+
+    return sb.ToString();
 }
 
 // Heuristic: does this input look like PowerShell rather than bash? Only consulted

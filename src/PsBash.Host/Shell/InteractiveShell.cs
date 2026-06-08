@@ -12,6 +12,7 @@ public static class InteractiveShell
 {
     private const string ContinuationPrompt = "> ";
     private const long GitHeadMaxBytes = 4096;
+    private const long MaxSourceFileChars = 16 * 1024 * 1024;
 
     // Alias table + expansion live in AliasExpander; the interactive REPL routes
     // alias/unalias lines through it and shares its table with tab completion.
@@ -920,9 +921,17 @@ EnsureConsoleInputRestored();
 
     private static string ReadGitHead(string path)
     {
-        if (new FileInfo(path).Length > GitHeadMaxBytes)
+        try
+        {
+            return PsBash.Host.Runtime.BoundedTextFile.Read(
+                path,
+                GitHeadMaxBytes,
+                "Git HEAD exceeds the maximum supported size.").Trim();
+        }
+        catch (IOException)
+        {
             return string.Empty;
-        return File.ReadAllText(path).Trim();
+        }
     }
 
     private static async Task<string?> ReadInputAsync(IWorker? worker)
@@ -1115,7 +1124,11 @@ EnsureConsoleInputRestored();
         string content;
         try
         {
-            content = await File.ReadAllTextAsync(path);
+            content = await PsBash.Host.Runtime.BoundedTextFile.ReadAsync(
+                path,
+                MaxSourceFileChars,
+                $"{label} exceeds the maximum supported source size.",
+                cts.Token).ConfigureAwait(false);
         }
         catch
         {
