@@ -29,9 +29,8 @@ namespace PsBash.Cmdlets;
 /// <c>SessionState.Path.GetUnresolvedProviderPathFromPSPath</c> and probed
 /// with <c>File.Exists</c>; a missing target emits a bash-style error via
 /// <see cref="FileSystemHelpers.WriteBashError"/> and the cmdlet returns
-/// with no output. File reads use <c>File.ReadAllText</c> with CRLF
-/// normalization (the rev/strings/cut slice — a trailing newline does not
-/// yield a spurious empty final line).
+/// with no output. File reads stream with CRLF normalization and no spurious
+/// trailing empty line.
 ///
 /// CSV parsing is intentionally simple, matching the psm1 oracle's
 /// <c>ConvertFrom-Csv -Delimiter</c> behavior for the common case (no
@@ -186,8 +185,9 @@ public sealed class InvokeBashXanCommand : PSCmdlet
                 return;
         }
 
-        // Resolve CSV text from file or pipeline.
-        string? csvText = null;
+        string[] headers;
+        var records = new List<string[]>();
+
         if (fileArg != null)
         {
             string resolved;
@@ -208,7 +208,26 @@ public sealed class InvokeBashXanCommand : PSCmdlet
             }
             try
             {
-                csvText = BashFileSystem.ReadAllText(resolved);
+                bool sawHeader = false;
+                string[]? parsedHeaders = null;
+                foreach (var line in BashFileSystem.ReadLines(resolved))
+                {
+                    if (!sawHeader)
+                    {
+                        parsedHeaders = SplitCsvLine(line, delimiter);
+                        sawHeader = true;
+                        continue;
+                    }
+
+                    if (line.Length == 0) continue;
+                    records.Add(SplitCsvLine(line, delimiter));
+                }
+
+                if (!sawHeader || parsedHeaders == null)
+                {
+                    return;
+                }
+                headers = parsedHeaders;
             }
             catch (Exception ex)
             {
@@ -225,33 +244,26 @@ public sealed class InvokeBashXanCommand : PSCmdlet
                 sb.Append(text);
                 sb.Append('\n');
             }
-            csvText = sb.ToString().Trim();
-        }
+            string csvText = sb.ToString().Trim();
+            if (string.IsNullOrEmpty(csvText))
+            {
+                return;
+            }
 
-        if (string.IsNullOrEmpty(csvText))
-        {
-            return;
-        }
+            // Pipeline mode is already \n-delimited from the BashText concat above.
+            string[] allLines = csvText.Split('\n');
+            if (allLines.Length == 0)
+            {
+                return;
+            }
 
-        // Parse CSV. Split on raw \n (file mode already normalized; pipeline
-        // mode is already \n-delimited from the BashText concat above).
-        string[] allLines = csvText.Split('\n');
-        if (allLines.Length == 0)
-        {
-            return;
-        }
-
-        string headerLine = allLines[0];
-        string[] headers = SplitCsvLine(headerLine, delimiter);
-
-        // Build records as parallel string[] arrays. Empty lines after the
-        // header are skipped (oracle: ConvertFrom-Csv drops them).
-        var records = new List<string[]>();
-        for (int li = 1; li < allLines.Length; li++)
-        {
-            string line = allLines[li];
-            if (line.Length == 0) continue;
-            records.Add(SplitCsvLine(line, delimiter));
+            headers = SplitCsvLine(allLines[0], delimiter);
+            for (int li = 1; li < allLines.Length; li++)
+            {
+                string line = allLines[li];
+                if (line.Length == 0) continue;
+                records.Add(SplitCsvLine(line, delimiter));
+            }
         }
 
         switch (subcommand)

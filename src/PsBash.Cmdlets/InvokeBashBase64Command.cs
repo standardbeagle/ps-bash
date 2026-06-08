@@ -15,11 +15,10 @@ namespace PsBash.Cmdlets;
 /// <list type="bullet">
 /// <item><b>File mode</b> — only the first operand is consumed (the psm1
 /// oracle indexes <c>$operands[0]</c> directly; later operands are ignored).
-/// For encoding, the file is read via <see cref="File.ReadAllBytes"/> so the
-/// raw bytes are base64-encoded unchanged. For decoding, the file is read
-/// via <see cref="File.ReadAllText"/> with CRLF normalization (the psm1
-/// oracle's <c>Read-BashFileBytes</c> slice) and the result is whitespace-
-/// trimmed before <see cref="Convert.FromBase64String"/>.</item>
+/// For encoding, the file stream is encoded in chunks so raw bytes are never
+/// materialized as one array. For decoding, base64 characters are consumed
+/// incrementally while whitespace is ignored, matching
+/// <see cref="Convert.FromBase64String(string)"/>.</item>
 /// <item><b>Pipeline mode</b> — pipeline items' <c>BashText</c> values are
 /// joined with <c>\n</c> separators plus a trailing <c>\n</c> if absent.
 /// For encoding, the joined text is UTF-8 encoded and base64'd. For decoding,
@@ -138,34 +137,54 @@ public sealed class InvokeBashBase64Command : PSCmdlet
             i++;
         }
 
-        byte[]? rawBytes = null;
-        string? rawText = null;
-
         if (operands.Count > 0)
         {
             // Oracle uses operands[0] directly — later operands are ignored.
             string filePath = SessionState.Path.GetUnresolvedProviderPathFromPSPath(operands[0]);
             if (decode)
             {
-                string? fileText = ReadFileTextCrlfNormalized(filePath);
-                if (fileText == null) return;
-                rawText = fileText.Trim();
-            }
-            else
-            {
+                string output;
                 try
                 {
-                    rawBytes = BashFileSystem.ReadAllBytes(filePath);
+                    output = DecodeBase64FileToOutput(filePath);
+                }
+                catch (FormatException ex)
+                {
+                    FileSystemHelpers.WriteBashError(this, $"base64: invalid input: {ex.Message}");
+                    return;
                 }
                 catch (Exception ex)
                 {
-                    string normalized = filePath.Replace('\\', '/');
-                    FileSystemHelpers.WriteBashError(this, $"base64: {normalized}: {ex.Message}");
+                    WriteReadError(filePath, ex, normalizeNotFound: true);
                     return;
                 }
+                WriteObject(BashRuntime.NewBashObject(output));
+                return;
+            }
+            else
+            {
+                string output;
+                try
+                {
+                    output = EncodeFileToBase64String(filePath, wrapCol);
+                }
+                catch (Exception ex)
+                {
+                    WriteReadError(filePath, ex, normalizeNotFound: false);
+                    return;
+                }
+                WriteObject(BashRuntime.NewBashObject(output));
+                return;
             }
         }
-        else if (_pipeline.Count > 0)
+
+        if (_pipeline.Count == 0)
+        {
+            // No operand, no pipeline -> oracle returns nothing.
+            return;
+        }
+
+        string pipelineText;
         {
             var sb = new StringBuilder();
             for (int p = 0; p < _pipeline.Count; p++)
@@ -173,90 +192,192 @@ public sealed class InvokeBashBase64Command : PSCmdlet
                 if (p > 0) sb.Append('\n');
                 sb.Append(BashRuntime.GetBashText(_pipeline[p]));
             }
-            string text = sb.ToString();
-            if (!text.EndsWith("\n", StringComparison.Ordinal)) text += "\n";
-            if (decode)
-            {
-                rawText = text.Trim();
-            }
-            else
-            {
-                rawBytes = Encoding.UTF8.GetBytes(text);
-            }
-        }
-        else
-        {
-            // No operand, no pipeline -> oracle returns nothing.
-            return;
+            pipelineText = sb.ToString();
+            if (!pipelineText.EndsWith("\n", StringComparison.Ordinal)) pipelineText += "\n";
         }
 
         if (decode)
         {
-            byte[] decoded;
+            string output;
             try
             {
-                decoded = Convert.FromBase64String(rawText ?? string.Empty);
+                output = DecodeBase64TextToOutput(pipelineText.Trim());
             }
             catch (FormatException ex)
             {
                 FileSystemHelpers.WriteBashError(this, $"base64: invalid input: {ex.Message}");
                 return;
             }
-            string output = Encoding.UTF8.GetString(decoded);
-            if (output.EndsWith("\n", StringComparison.Ordinal))
-            {
-                output = output.Substring(0, output.Length - 1);
-            }
             WriteObject(BashRuntime.NewBashObject(output));
         }
         else
         {
-            string encoded = Convert.ToBase64String(rawBytes ?? Array.Empty<byte>());
-            string output;
-            if (wrapCol > 0)
-            {
-                // The oracle joins wrap-sized substrings with
-                // StringBuilder.AppendLine (Environment.NewLine on the host
-                // platform), then strips trailing CR/LF. Mirror exactly.
-                var wrapped = new StringBuilder();
-                for (int c = 0; c < encoded.Length; c += wrapCol)
-                {
-                    int len = Math.Min(wrapCol, encoded.Length - c);
-                    wrapped.Append(encoded, c, len);
-                    wrapped.Append(Environment.NewLine);
-                }
-                output = wrapped.ToString().TrimEnd('\r', '\n');
-            }
-            else
-            {
-                output = encoded;
-            }
+            string output = EncodeBytesToBase64String(Encoding.UTF8.GetBytes(pipelineText), wrapCol);
             WriteObject(BashRuntime.NewBashObject(output));
         }
     }
 
-    /// <summary>
-    /// Reads a file as UTF-8 text with BOM detection (delegated to
-    /// <see cref="File.ReadAllText(string)"/>) and CRLF normalization.
-    /// On failure emits a bash-style error matching the psm1
-    /// <c>Read-BashFileBytes</c> oracle (No such file or directory vs the
-    /// exception message). Returns <c>null</c> on error.
-    /// </summary>
-    private string? ReadFileTextCrlfNormalized(string path)
+    private static string EncodeFileToBase64String(string path, int wrapCol)
     {
-        try
+        using var stream = BashFileSystem.OpenRead(path);
+        return EncodeByteStream(stream, wrapCol);
+    }
+
+    private static string EncodeBytesToBase64String(byte[] bytes, int wrapCol)
+    {
+        using var stream = new MemoryStream(bytes);
+        return EncodeByteStream(stream, wrapCol);
+    }
+
+    private static string EncodeByteStream(Stream stream, int wrapCol)
+    {
+        var output = new Base64OutputBuilder(wrapCol);
+        var buffer = new byte[49152]; // Multiple of 3, so most chunks encode independently.
+        var carry = new byte[2];
+        int carryLen = 0;
+
+        int read;
+        while ((read = stream.Read(buffer, 0, buffer.Length)) > 0)
         {
-            string raw = BashFileSystem.ReadAllTextRaw(path);
-            return raw.Replace("\r\n", "\n");
+            int offset = 0;
+            if (carryLen > 0)
+            {
+                int needed = 3 - carryLen;
+                if (read < needed)
+                {
+                    Array.Copy(buffer, 0, carry, carryLen, read);
+                    carryLen += read;
+                    continue;
+                }
+
+                var triple = new byte[3];
+                Array.Copy(carry, 0, triple, 0, carryLen);
+                Array.Copy(buffer, 0, triple, carryLen, needed);
+                output.Append(Convert.ToBase64String(triple));
+                offset = needed;
+                carryLen = 0;
+            }
+
+            int fullLen = ((read - offset) / 3) * 3;
+            if (fullLen > 0)
+            {
+                output.Append(Convert.ToBase64String(buffer, offset, fullLen));
+                offset += fullLen;
+            }
+
+            carryLen = read - offset;
+            if (carryLen > 0)
+            {
+                Array.Copy(buffer, offset, carry, 0, carryLen);
+            }
         }
-        catch (Exception ex)
+
+        if (carryLen > 0)
         {
-            bool notFound = ex is FileNotFoundException or DirectoryNotFoundException
-                || ex.InnerException is FileNotFoundException or DirectoryNotFoundException;
-            string msg = notFound ? "No such file or directory" : ex.Message;
-            string normalized = path.Replace('\\', '/');
-            FileSystemHelpers.WriteBashError(this, $"base64: {normalized}: {msg}");
-            return null;
+            var final = new byte[carryLen];
+            Array.Copy(carry, final, carryLen);
+            output.Append(Convert.ToBase64String(final));
         }
+
+        return output.ToString();
+    }
+
+    private static string DecodeBase64FileToOutput(string path)
+    {
+        using var stream = BashFileSystem.OpenRead(path);
+        using var reader = new StreamReader(
+            stream, Encoding.UTF8, detectEncodingFromByteOrderMarks: true);
+        using var decoded = new MemoryStream();
+        var chars = new char[16384];
+        var quartet = new char[4];
+        int quartetLen = 0;
+
+        int read;
+        while ((read = reader.Read(chars, 0, chars.Length)) > 0)
+        {
+            for (int i = 0; i < read; i++)
+            {
+                char ch = chars[i];
+                if (char.IsWhiteSpace(ch)) continue;
+                quartet[quartetLen++] = ch;
+                if (quartetLen != 4) continue;
+
+                byte[] bytes = Convert.FromBase64CharArray(quartet, 0, quartetLen);
+                decoded.Write(bytes, 0, bytes.Length);
+                quartetLen = 0;
+            }
+        }
+
+        if (quartetLen > 0)
+        {
+            byte[] bytes = Convert.FromBase64CharArray(quartet, 0, quartetLen);
+            decoded.Write(bytes, 0, bytes.Length);
+        }
+
+        return DecodeBytesToOutput(decoded.GetBuffer(), (int)decoded.Length);
+    }
+
+    private static string DecodeBase64TextToOutput(string text)
+    {
+        byte[] decoded = Convert.FromBase64String(text);
+        return DecodeBytesToOutput(decoded, decoded.Length);
+    }
+
+    private static string DecodeBytesToOutput(byte[] decoded, int count)
+    {
+        string output = Encoding.UTF8.GetString(decoded, 0, count);
+        if (output.EndsWith("\n", StringComparison.Ordinal))
+        {
+            output = output.Substring(0, output.Length - 1);
+        }
+        return output;
+    }
+
+    private void WriteReadError(string path, Exception ex, bool normalizeNotFound)
+    {
+        bool notFound = normalizeNotFound
+            && (ex is FileNotFoundException or DirectoryNotFoundException
+                || ex.InnerException is FileNotFoundException or DirectoryNotFoundException);
+        string msg = notFound ? "No such file or directory" : ex.Message;
+        string normalized = path.Replace('\\', '/');
+        FileSystemHelpers.WriteBashError(this, $"base64: {normalized}: {msg}");
+    }
+
+    private sealed class Base64OutputBuilder
+    {
+        private readonly int _wrapCol;
+        private readonly StringBuilder _builder = new();
+        private int _lineLen;
+
+        public Base64OutputBuilder(int wrapCol)
+        {
+            _wrapCol = wrapCol;
+        }
+
+        public void Append(string encoded)
+        {
+            if (_wrapCol <= 0)
+            {
+                _builder.Append(encoded);
+                return;
+            }
+
+            int offset = 0;
+            while (offset < encoded.Length)
+            {
+                if (_lineLen == _wrapCol)
+                {
+                    _builder.Append(Environment.NewLine);
+                    _lineLen = 0;
+                }
+
+                int take = Math.Min(_wrapCol - _lineLen, encoded.Length - offset);
+                _builder.Append(encoded, offset, take);
+                _lineLen += take;
+                offset += take;
+            }
+        }
+
+        public override string ToString() => _builder.ToString();
     }
 }
