@@ -469,7 +469,7 @@ public sealed class InvokeBashPsCommand : PSCmdlet
         int uid = 0;
         try
         {
-            foreach (var line in File.ReadAllLines(Path.Combine(procDir, "status")))
+            foreach (var line in File.ReadLines(Path.Combine(procDir, "status")))
             {
                 if (line.StartsWith("Uid:", StringComparison.Ordinal))
                 {
@@ -541,7 +541,7 @@ public sealed class InvokeBashPsCommand : PSCmdlet
         long totalMemKB = 1;
         try
         {
-            foreach (var ml in File.ReadAllLines("/proc/meminfo"))
+            foreach (var ml in File.ReadLines("/proc/meminfo"))
             {
                 if (ml.StartsWith("MemTotal:", StringComparison.Ordinal))
                 {

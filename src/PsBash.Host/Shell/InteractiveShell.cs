@@ -424,12 +424,12 @@ EnsureConsoleInputRestored();
                     var pattern = Path.IsPathRooted(lit) ? lit : Path.Combine(dir, lit);
                     var dirPart = Path.GetDirectoryName(pattern) ?? ".";
                     var filePart = Path.GetFileName(pattern);
-                    var matches = Directory.GetFiles(dirPart, filePart);
-                    if (matches.Length == 0)
-                        return new List<string> { lit };
-                    return matches
+                    var matches = Directory.EnumerateFiles(dirPart, filePart)
                         .Select(m => Path.GetRelativePath(dir, m))
                         .ToList();
+                    if (matches.Count == 0)
+                        return new List<string> { lit };
+                    return matches;
                 }
                 catch
                 {

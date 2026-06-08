@@ -574,7 +574,7 @@ static async Task<int> RunHostUnderPtyAsync(string hostBinary, ShellArgs shellAr
     // user's default signal handlers. modeScope.IsActive doubles as the
     // "launcher stdin is a real tty" probe — a pipe-driven launcher has no
     // terminal signals to forward.
-    using var signalForwarder = SignalForwarder.Install(
+    await using var signalForwarder = SignalForwarder.Install(
         hostPid: spawner.Pid,
         pty: pty,
         isLauncherStdinTty: modeScope.IsActive);

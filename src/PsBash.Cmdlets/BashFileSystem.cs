@@ -305,9 +305,8 @@ public static class BashFileSystem
             string dir = stack.Pop();
 
             string[] files;
-            try { files = Directory.GetFiles(dir); }
+            try { files = Directory.EnumerateFiles(dir).Order(StringComparer.Ordinal).ToArray(); }
             catch { files = Array.Empty<string>(); }
-            Array.Sort(files, StringComparer.Ordinal);
             foreach (var f in files)
             {
                 if (!includeHidden && IsHiddenName(Path.GetFileName(f))) continue;
@@ -315,9 +314,8 @@ public static class BashFileSystem
             }
 
             string[] subdirs;
-            try { subdirs = Directory.GetDirectories(dir); }
+            try { subdirs = Directory.EnumerateDirectories(dir).OrderDescending(StringComparer.Ordinal).ToArray(); }
             catch { subdirs = Array.Empty<string>(); }
-            Array.Sort(subdirs, static (a, b) => string.CompareOrdinal(b, a));
             foreach (var sd in subdirs)
             {
                 string name = Path.GetFileName(sd);

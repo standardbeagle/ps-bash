@@ -187,9 +187,10 @@ public static class TranspileCache
     {
         try
         {
-            var files = Directory.GetFiles(dir, "*.ps1");
+            var files = Directory.EnumerateFiles(dir, "*.ps1")
+                .OrderBy(File.GetLastWriteTimeUtc)
+                .ToArray();
             if (files.Length <= DiskMaxEntries) return;
-            Array.Sort(files, (a, b) => File.GetLastWriteTimeUtc(a).CompareTo(File.GetLastWriteTimeUtc(b)));
             for (int i = 0; i < files.Length - DiskMaxEntries; i++)
             {
                 try { File.Delete(files[i]); } catch { /* ignore */ }

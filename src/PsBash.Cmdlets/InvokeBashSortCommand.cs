@@ -418,23 +418,15 @@ public sealed class InvokeBashSortCommand : PSCmdlet
 
         if (versionSort)
         {
-            // Insertion sort with version compare — preserves stability.
-            for (int i2 = 1; i2 < indexed.Count; i2++)
+            indexed.Sort((a, b) =>
             {
-                var cur = indexed[i2];
-                string curText = GetFullText(cur.Item, gBlank);
-                int j = i2 - 1;
-                while (j >= 0)
-                {
-                    string otherText = GetFullText(indexed[j].Item, gBlank);
-                    int vcmp = CompareVersion(otherText, curText);
-                    if (gReverse) vcmp = -vcmp;
-                    if (vcmp <= 0) break;
-                    indexed[j + 1] = indexed[j];
-                    j--;
-                }
-                indexed[j + 1] = cur;
-            }
+                string aText = GetFullText(a.Item, gBlank);
+                string bText = GetFullText(b.Item, gBlank);
+                int c = CompareVersion(aText, bText);
+                if (gReverse) c = -c;
+                if (c != 0) return c;
+                return a.Index - b.Index;
+            });
         }
         else
         {

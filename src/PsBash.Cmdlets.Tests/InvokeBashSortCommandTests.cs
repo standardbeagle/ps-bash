@@ -164,6 +164,19 @@ public class InvokeBashSortCommandTests : IDisposable, IClassFixture<SharedPwshF
     }
 
     [Fact]
+    public void Sort_VersionSort_StableForEqualKeys()
+    {
+        var lines = RunLines(@"
+            @(
+                [pscustomobject]@{ BashText = 'v1.0'; Marker = 'first' },
+                [pscustomobject]@{ BashText = 'v1.0'; Marker = 'second' },
+                [pscustomobject]@{ BashText = 'v0.9'; Marker = 'third' }
+            ) | Invoke-BashSort -V | ForEach-Object { $_.Marker }
+        ");
+        Assert.Equal(new[] { "third", "first", "second" }, lines);
+    }
+
+    [Fact]
     public void Sort_MonthSort_OrdersMonthNames()
     {
         var lines = RunLines("'Mar','Jan','Feb','Dec' | Invoke-BashSort -M");

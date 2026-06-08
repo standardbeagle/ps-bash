@@ -52,10 +52,11 @@ namespace PsBash.Shell.Pty;
 /// <c>SIGWINCH</c> which <see cref="PosixSignal"/> does not enumerate. No
 /// runtime codegen, no reflection — AOT-safe.</para>
 /// </summary>
-internal sealed partial class SignalForwarder : IDisposable
+internal sealed partial class SignalForwarder : IDisposable, IAsyncDisposable
 {
     private readonly List<IDisposable> _registrations = new();
     private readonly Action _detach;
+    private readonly Func<ValueTask> _detachAsync;
     private int _disposed;
 
     /// <summary>
@@ -82,10 +83,15 @@ internal sealed partial class SignalForwarder : IDisposable
     /// <summary>Whether this scope installed any handlers.</summary>
     public bool IsActive { get; }
 
-    private SignalForwarder(bool active, Action detach)
+    private SignalForwarder(bool active, Action detach, Func<ValueTask>? detachAsync = null)
     {
         IsActive = active;
         _detach = detach;
+        _detachAsync = detachAsync ?? (() =>
+        {
+            detach();
+            return ValueTask.CompletedTask;
+        });
     }
 
     /// <summary>
@@ -319,14 +325,28 @@ internal sealed partial class SignalForwarder : IDisposable
         {
             WindowsNative.SetConsoleCtrlHandler(handler, add: false);
             cts.Cancel();
-            try { pollTask.Wait(TimeSpan.FromSeconds(1)); } catch { /* best-effort */ }
-            cts.Dispose();
+            _ = pollTask.ContinueWith(
+                static (_, state) => ((CancellationTokenSource)state!).Dispose(),
+                cts,
+                CancellationToken.None,
+                TaskContinuationOptions.ExecuteSynchronously,
+                TaskScheduler.Default);
             // Keep the delegate rooted until detach so the GC cannot collect
             // it while the OS still holds the native function pointer.
             GC.KeepAlive(handler);
         }
 
-        self = new SignalForwarder(active: true, Detach);
+        async ValueTask DetachAsync()
+        {
+            WindowsNative.SetConsoleCtrlHandler(handler, add: false);
+            cts.Cancel();
+            try { await pollTask.WaitAsync(TimeSpan.FromSeconds(1)).ConfigureAwait(false); }
+            catch { /* best-effort */ }
+            cts.Dispose();
+            GC.KeepAlive(handler);
+        }
+
+        self = new SignalForwarder(active: true, Detach, DetachAsync);
         return self;
     }
 
@@ -339,6 +359,19 @@ internal sealed partial class SignalForwarder : IDisposable
         if (Interlocked.Exchange(ref _disposed, 1) != 0) return;
         try { _detach(); }
         catch { /* best-effort: a launcher tearing down must not throw here */ }
+        DisposeRegistrations();
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        if (Interlocked.Exchange(ref _disposed, 1) != 0) return;
+        try { await _detachAsync().ConfigureAwait(false); }
+        catch { /* best-effort: a launcher tearing down must not throw here */ }
+        DisposeRegistrations();
+    }
+
+    private void DisposeRegistrations()
+    {
         foreach (var r in _registrations)
         {
             try { r.Dispose(); } catch { /* best-effort */ }
