@@ -10,13 +10,12 @@ internal sealed class Program
 {
     static async Task<int> Main(string[] args)
     {
-        // Raise the thread-pool floor. The command path blocks a thread inside
-        // RunCommand's output sink (WriteResponseLineAsync(...).GetAwaiter()
-        // .GetResult()), and the pool may have runspaces warming concurrently;
-        // a too-small starting pool could starve the threads those blocking
-        // continuations need. A modest floor avoids the slow-grow stall without
-        // committing the threads unless they are used. (Worker pool create is on
-        // dedicated LongRunning threads, so this is defense-in-depth.)
+        // Raise the thread-pool floor. The pool may have runspaces warming while
+        // accepted connections and IPC output writer tasks are active; a too-small
+        // starting pool can make the runtime slow-grow under bursty launchers. A
+        // modest floor avoids the stall without committing the threads unless
+        // they are used. (Worker pool create is on dedicated LongRunning threads,
+        // so this is defense-in-depth.)
         {
             ThreadPool.GetMinThreads(out var minW, out var minIo);
             ThreadPool.SetMinThreads(Math.Max(minW, 16), Math.Max(minIo, 16));
@@ -54,7 +53,7 @@ internal sealed class Program
             Environment.SetEnvironmentVariable("PSBASH_INTERACTIVE", "1");
             using var iCts = new CancellationTokenSource();
             Console.CancelKeyPress += (_, e) => { e.Cancel = true; iCts.Cancel(); };
-            using var iDeathWatcher = ParentDeathWatcher.TryCreate(iLauncherPid, iCts);
+            await using var iDeathWatcher = ParentDeathWatcher.TryCreate(iLauncherPid, iCts);
 
             // Startup type-ahead: build the SDK runspace (the slow part) on a background thread so the
             // REPL can draw its prompt and accept keystrokes while it warms up. RunAsync awaits this
@@ -94,7 +93,7 @@ internal sealed class Program
         using var idle = new IdleShutdown(cts, idleTimeout);
 
         int? launcherPid = GetNonInteractiveLauncherPid(args);
-        using var deathWatcher = ParentDeathWatcher.TryCreate(launcherPid, cts);
+        await using var deathWatcher = ParentDeathWatcher.TryCreate(launcherPid, cts);
 
         await using var server = new HostServer(transport, pool, idle);
 

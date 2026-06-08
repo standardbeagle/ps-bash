@@ -1,5 +1,6 @@
 using PsBash.Core.Runtime.Ipc;
 using PsBash.Host.Runtime;
+using System.Collections.Concurrent;
 
 namespace PsBash.Host.Server;
 
@@ -43,12 +44,7 @@ internal sealed class Connection
         }
         catch (Exception ex) when (ex is IOException or InvalidDataException or FormatException)
         {
-            try
-            {
-                await HostProtocol.WriteResponseLineAsync(_stream, $"error: {ex.Message}", ct);
-                await HostProtocol.WriteExitAsync(_stream, 2, ct);
-            }
-            catch { }
+            WorkerPool<SdkWorker>.DiagLog($"Connection: malformed request: {ex.Message}");
             return;
         }
 
@@ -118,20 +114,9 @@ internal sealed class Connection
         // leak into the next invocation on the shared SdkWorker runspace.
         command = PerInvocationReset + command;
 
-        void WriteOutput(string line)
-        {
-            HostProtocol.WriteResponseLineAsync(_stream, line, StreamTag.Stdout, ct).GetAwaiter().GetResult();
-        }
-
-        // REFACTOR-4: stderr sink. Host stderr writes (error records, parse/
-        // runtime exception text, the emitter's `cmd >&2` rewrite) are framed
-        // as STDERR-tagged IPC lines so the launcher can route them to its own
-        // Console.Error. SdkWorker delivers each line without a trailing
-        // newline; WriteResponseLineAsync base64-encodes it as one frame.
-        void WriteError(string line)
-        {
-            HostProtocol.WriteResponseLineAsync(_stream, line, StreamTag.Stderr, ct).GetAwaiter().GetResult();
-        }
+        IpcOutputQueue? frameWriter = sessionMode == SessionMode.Interactive
+            ? null
+            : new IpcOutputQueue(_stream, ct);
 
         // PTY-4: in interactive mode the host runspace's Console.Out is the PTY
         // slave (PtySpawner wired stdio inheritance). Bypass the IPC writer so
@@ -152,7 +137,7 @@ internal sealed class Connection
         //                                    the same byte stream)
         Action<string>? outputSink = sessionMode == SessionMode.Interactive
             ? null
-            : WriteOutput;
+            : line => frameWriter!.Write(line, StreamTag.Stdout);
 
         // REFACTOR-4: in framed mode the stderr sink is a STDERR-tagged IPC
         // frame writer; in interactive mode (PTY) stderr — like stdout — goes
@@ -160,7 +145,7 @@ internal sealed class Connection
         // SdkWorker fall back to Console.Error.
         Action<string>? errorSink = sessionMode == SessionMode.Interactive
             ? null
-            : WriteError;
+            : line => frameWriter!.Write(line, StreamTag.Stderr);
 
         // Check out an isolated worker for this one command; discard it on the way
         // out so the next -c never sees this command's session state. Distinct
@@ -178,6 +163,10 @@ internal sealed class Connection
         {
             _pool.Release(worker);
             WorkerPool<SdkWorker>.DiagLog("Connection: released worker");
+            if (frameWriter is not null)
+            {
+                await frameWriter.CompleteAsync().ConfigureAwait(false);
+            }
         }
         await HostProtocol.WriteExitAsync(_stream, exitCode, ct);
         WorkerPool<SdkWorker>.DiagLog("Connection: wrote exit");
@@ -189,6 +178,82 @@ internal sealed class Connection
             // Skipped in framed mode for back-compat — pre-PTY-4 launchers
             // would treat the unexpected line as a malformed response frame.
             await HostProtocol.WritePromptReadyAsync(_stream, ct);
+        }
+    }
+
+    private readonly record struct IpcOutputFrame(StreamTag Tag, string Line);
+
+    private sealed class IpcOutputQueue : IAsyncDisposable
+    {
+        private const int DefaultCapacity = 4096;
+
+        private readonly BlockingCollection<IpcOutputFrame> _queue;
+        private readonly CancellationToken _ct;
+        private readonly Task _drainTask;
+        private Exception? _failure;
+
+        public IpcOutputQueue(Stream stream, CancellationToken ct)
+        {
+            _ct = ct;
+            _queue = new BlockingCollection<IpcOutputFrame>(QueueCapacity());
+            _drainTask = Task.Run(async () =>
+            {
+                try
+                {
+                    foreach (var frame in _queue.GetConsumingEnumerable(ct))
+                    {
+                        await HostProtocol.WriteResponseLineAsync(stream, frame.Line, frame.Tag, ct)
+                            .ConfigureAwait(false);
+                    }
+                }
+                catch (OperationCanceledException) when (ct.IsCancellationRequested)
+                {
+                    // Connection is shutting down.
+                }
+                catch (Exception ex)
+                {
+                    _failure = ex;
+                    try { _queue.CompleteAdding(); } catch { }
+                }
+            }, CancellationToken.None);
+        }
+
+        public void Write(string line, StreamTag tag)
+        {
+            if (_failure is not null)
+                throw new IOException("IPC output writer failed.", _failure);
+
+            try
+            {
+                _queue.Add(new IpcOutputFrame(tag, line), _ct);
+            }
+            catch (Exception ex) when (ex is InvalidOperationException or OperationCanceledException)
+            {
+                throw new IOException("IPC output writer is closed.", ex);
+            }
+        }
+
+        public async Task CompleteAsync()
+        {
+            try { _queue.CompleteAdding(); } catch { }
+            await _drainTask.ConfigureAwait(false);
+            if (_failure is not null)
+                throw new IOException("IPC output writer failed.", _failure);
+        }
+
+        public async ValueTask DisposeAsync()
+        {
+            try { await CompleteAsync().ConfigureAwait(false); }
+            catch { /* connection teardown best-effort */ }
+            _queue.Dispose();
+        }
+
+        private static int QueueCapacity()
+        {
+            var raw = Environment.GetEnvironmentVariable("PSBASH_IPC_OUTPUT_QUEUE_CAPACITY");
+            return int.TryParse(raw, out var value) && value > 0
+                ? Math.Max(value, 16)
+                : DefaultCapacity;
         }
     }
 }

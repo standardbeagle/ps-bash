@@ -125,13 +125,8 @@ public sealed class HostServerTests : IAsyncLifetime
         using var cts = CancellationTokenSource.CreateLinkedTokenSource(_cts.Token);
         cts.CancelAfter(TimeSpan.FromSeconds(10));
 
-        // Send bytes that don't start with "MODE:" — server catches the IOException,
-        // makes a best-effort write of EXIT:2, and closes the connection.
-        // We don't read the server's error response: on Windows named pipes,
-        // FlushFileBuffers (called by WriteExitAsync) only returns after the
-        // client reads, so waiting here creates a deadlock if the client-read
-        // hasn't started. Close the connection immediately and verify the server
-        // accepts the next valid connection (the real requirement).
+        // Send bytes that don't start with "MODE:"; the server should drop the
+        // malformed connection and keep accepting valid clients.
         var garbledTransport = new NamedPipeTransport(_pipeName);
         await using (garbledTransport)
         {

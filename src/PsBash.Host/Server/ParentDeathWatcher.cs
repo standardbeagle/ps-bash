@@ -12,7 +12,7 @@ namespace PsBash.Host.Server;
 /// 200 ms poll interval matches the host parent-death
 /// detection.
 /// </remarks>
-public sealed class ParentDeathWatcher : IDisposable
+public sealed class ParentDeathWatcher : IDisposable, IAsyncDisposable
 {
     public static readonly TimeSpan PollInterval = TimeSpan.FromMilliseconds(200);
 
@@ -70,7 +70,13 @@ public sealed class ParentDeathWatcher : IDisposable
     public void Dispose()
     {
         _watcherCts.Cancel();
-        try { _watchTask.Wait(TimeSpan.FromSeconds(1)); } catch { }
+        _watcherCts.Dispose();
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        _watcherCts.Cancel();
+        try { await _watchTask.WaitAsync(TimeSpan.FromSeconds(1)).ConfigureAwait(false); } catch { }
         _watcherCts.Dispose();
     }
 }

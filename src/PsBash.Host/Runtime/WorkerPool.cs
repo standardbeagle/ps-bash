@@ -201,13 +201,11 @@ public sealed class WorkerPool<TWorker> : IAsyncDisposable where TWorker : class
     // Create a worker on a DEDICATED thread, never a thread-pool thread.
     // Runspace creation (psm1 import) is heavy and CPU-bound. Running it via
     // Task.Run would occupy thread-pool threads; with warmTarget spares warming
-    // (and refilling) in the background, that starves the very thread pool the
-    // command path needs — RunCommand's output sink blocks a thread on
-    // WriteResponseLineAsync(...).GetAwaiter().GetResult(), and if no thread is
-    // free the command wedges. The old single-worker host dodged this because its
-    // one worker finished warming before any command (health-gated). A LongRunning
-    // task gets its own thread, so warming never competes with command execution
-    // or the async accept/health loop.
+    // (and refilling) in the background, that competes with the async accept,
+    // connection, and IPC writer work the command path needs. The old
+    // single-worker host dodged this because its one worker finished warming
+    // before any command (health-gated). A LongRunning task gets its own thread,
+    // so warming never competes with command execution or the async server loop.
     private Task<TWorker> CreateAsync(CancellationToken ct)
         => Task.Factory.StartNew(
             _factory,

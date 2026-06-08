@@ -67,7 +67,7 @@ public sealed class HostServer : IAsyncDisposable
                 continue;
             }
 
-            _ = HandleConnectionAsync(stream, ct);
+            _ = Task.Run(() => HandleConnectionAsync(stream, ct), CancellationToken.None);
         }
     }
 

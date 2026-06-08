@@ -72,6 +72,7 @@ public sealed class NamedPipeTransport : IIpcTransport
     {
         if (_listening) throw new InvalidOperationException("Already listening");
         ThrowIfDisposed();
+        DeletePipeSocketFile();
         // Listening is per-connection on Windows pipes — there is no
         // long-lived listener socket. We just record state; AcceptAsync
         // creates the server stream on demand.
@@ -122,6 +123,7 @@ public sealed class NamedPipeTransport : IIpcTransport
     public ValueTask DisposeAsync()
     {
         if (Interlocked.Exchange(ref _disposed, 1) != 0) return ValueTask.CompletedTask;
+        if (_listening) DeletePipeSocketFile();
         // Outstanding server streams are owned by the caller of AcceptAsync.
         // Nothing global to release here.
         _listening = false;
@@ -134,22 +136,6 @@ public sealed class NamedPipeTransport : IIpcTransport
         {
             return CreateWindowsPipeServer();
         }
-        // Cross-plat dotnet supports named pipes on Linux/macOS via AF_UNIX
-        // socket files at {TempPath}/CoreFxPipe_{name}. .NET does not always
-        // reliably unlink that file when an instance is disposed (e.g. when
-        // AcceptAsync is cancelled mid-flight). A surviving stale file makes
-        // the next bind fail with EADDRINUSE, which the HostServer accept
-        // loop interprets as a transient error and retries forever — the
-        // replacement-host test then exhausts its 30s budget. Mirror the
-        // UnixSocketTransport.ListenAsync pattern: best-effort delete the
-        // stale socket file before binding.
-        try
-        {
-            var stalePath = Path.Combine(Path.GetTempPath(), "CoreFxPipe_" + _pipeName);
-            if (File.Exists(stalePath)) File.Delete(stalePath);
-        }
-        catch (IOException) { /* let bind surface the real error */ }
-        catch (UnauthorizedAccessException) { /* ditto */ }
         return new NamedPipeServerStream(
             _pipeName, PipeDirection.InOut, MaxInstances,
             PipeTransmissionMode.Byte, PipeOptions.Asynchronous,
@@ -180,6 +166,24 @@ public sealed class NamedPipeTransport : IIpcTransport
             inBufferSize: 65536,
             outBufferSize: 65536,
             pipeSecurity: security);
+    }
+
+    private void DeletePipeSocketFile()
+    {
+        if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows)) return;
+
+        // Cross-plat dotnet supports named pipes on Linux/macOS via AF_UNIX
+        // socket files at {TempPath}/CoreFxPipe_{name}. .NET does not always
+        // reliably unlink that file after cancellation or process exit. Remove
+        // it when a listener starts/stops, not between accepts, because deleting
+        // the file for a live listener makes later clients unable to connect.
+        try
+        {
+            var path = Path.Combine(Path.GetTempPath(), "CoreFxPipe_" + _pipeName);
+            if (File.Exists(path)) File.Delete(path);
+        }
+        catch (IOException) { /* let bind surface the real error */ }
+        catch (UnauthorizedAccessException) { /* ditto */ }
     }
 
     private void ThrowIfDisposed()
