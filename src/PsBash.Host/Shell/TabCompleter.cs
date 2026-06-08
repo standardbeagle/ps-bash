@@ -33,6 +33,43 @@ internal static class TabCompleter
         string? lastCommand,
         IHistoryStore? historyStore)
     {
+        return CompleteCore(line, cursor, aliases, cwd, lastCommand, sequenceSuggestions: []);
+    }
+
+    public static async Task<IReadOnlyList<CompletionItem>> CompleteAsync(
+        string line,
+        int cursor,
+        IReadOnlyDictionary<string, string> aliases,
+        string cwd,
+        string? lastCommand,
+        IHistoryStore? historyStore)
+    {
+        IReadOnlyList<SequenceSuggestion> sequenceSuggestions = [];
+        if (historyStore is not null && !string.IsNullOrEmpty(lastCommand))
+        {
+            try
+            {
+                sequenceSuggestions = await historyStore.GetSequenceSuggestionsAsync(lastCommand, cwd)
+                    .ConfigureAwait(false);
+            }
+            catch
+            {
+                // Routine: tab completion is advisory and must never crash the shell.
+                sequenceSuggestions = [];
+            }
+        }
+
+        return CompleteCore(line, cursor, aliases, cwd, lastCommand, sequenceSuggestions);
+    }
+
+    private static IReadOnlyList<CompletionItem> CompleteCore(
+        string line,
+        int cursor,
+        IReadOnlyDictionary<string, string> aliases,
+        string cwd,
+        string? lastCommand,
+        IReadOnlyList<SequenceSuggestion> sequenceSuggestions)
+    {
         var (_, token) = SplitAtWordBoundaryQuoteAware(line, cursor);
         var (_, firstToken) = SplitFirstToken(line, cursor);
 
@@ -49,14 +86,14 @@ internal static class TabCompleter
         if (isFirstWord)
         {
             // Check for sequence suggestions on empty line or matching prefix
-            if (historyStore is not null && !string.IsNullOrEmpty(lastCommand))
+            if (sequenceSuggestions.Count > 0)
             {
-                var sequenceSuggestions = CompleteSequence(token, lastCommand, cwd, historyStore);
-                if (sequenceSuggestions.Count > 0)
+                var sequenceCompletions = CompleteSequence(token, sequenceSuggestions);
+                if (sequenceCompletions.Count > 0)
                 {
                     // Merge with regular command completions, prioritizing matches
                     var commandCompletions = CompleteCommand(token, aliases, cwd);
-                    return CompletionMerge.Append(sequenceSuggestions, commandCompletions, sortSecondary: false);
+                    return CompletionMerge.Append(sequenceCompletions, commandCompletions, sortSecondary: false);
                 }
             }
             return CompleteCommand(token, aliases, cwd);
@@ -90,38 +127,23 @@ internal static class TabCompleter
 
     private static IReadOnlyList<CompletionItem> CompleteSequence(
         string token,
-        string lastCommand,
-        string cwd,
-        IHistoryStore historyStore)
+        IReadOnlyList<SequenceSuggestion> suggestions)
     {
-        // Only suggest on empty input or when we have a partial match
-        // Get suggestions synchronously for tab completion (fire-and-forget if it fails)
-        try
-        {
-            var suggestions = historyStore.GetSequenceSuggestionsAsync(lastCommand, cwd)
-                .GetAwaiter().GetResult();
-
-            if (suggestions.Count == 0)
-                return [];
-
-            // Filter by token prefix if provided
-            var results = new List<CompletionItem>();
-            foreach (var suggestion in suggestions)
-            {
-                if (string.IsNullOrEmpty(token) ||
-                    suggestion.Command.StartsWith(token, StringComparison.Ordinal))
-                {
-                    results.Add(new CompletionItem(suggestion.Command));
-                }
-            }
-
-            return results;
-        }
-        catch (Exception)
-        {
-            // Routine: tab completion is advisory and must never crash the shell.
+        if (suggestions.Count == 0)
             return [];
+
+        // Filter by token prefix if provided
+        var results = new List<CompletionItem>();
+        foreach (var suggestion in suggestions)
+        {
+            if (string.IsNullOrEmpty(token) ||
+                suggestion.Command.StartsWith(token, StringComparison.Ordinal))
+            {
+                results.Add(new CompletionItem(suggestion.Command));
+            }
         }
+
+        return results;
     }
 
     // ─────────────────────────────────────────────────────────────────────────

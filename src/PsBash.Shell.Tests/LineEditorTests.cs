@@ -688,7 +688,7 @@ public class TabCompleterTests : IDisposable
             });
         }
 
-        var results = TabCompleter.Complete("", 0, _noAliases, cwd, "docker build -t myapp .", store);
+        var results = await TabCompleter.CompleteAsync("", 0, _noAliases, cwd, "docker build -t myapp .", store);
 
         // Should suggest "docker run myapp" based on sequence
         Assert.NotEmpty(results);
@@ -714,14 +714,14 @@ public class TabCompleterTests : IDisposable
         Assert.Contains(suggestions, r => r.Command == "git push");
 
         // Test with empty line to trigger sequence suggestions
-        var results = TabCompleter.Complete("", 0, _noAliases, cwd, "git commit", store);
+        var results = await TabCompleter.CompleteAsync("", 0, _noAliases, cwd, "git commit", store);
 
         // Should include "git push" from sequence suggestions
         Assert.NotEmpty(results);
         Assert.Contains(results, r => r.InsertText == "git push");
 
         // Test with prefix "git" (first word, no space) - should suggest "git push"
-        var prefixedResults = TabCompleter.Complete("git", 3, _noAliases, cwd, "git commit", store);
+        var prefixedResults = await TabCompleter.CompleteAsync("git", 3, _noAliases, cwd, "git commit", store);
         Assert.NotEmpty(prefixedResults);
         Assert.Contains(prefixedResults, r => r.InsertText == "git push");
     }
@@ -757,8 +757,8 @@ public class TabCompleterTests : IDisposable
             await store.RecordAsync(new HistoryEntry { Command = "deploy", Cwd = cwd2, Timestamp = DateTime.UtcNow.AddSeconds(i * 2 + 11), SessionId = "s1" });
         }
 
-        var results1 = TabCompleter.Complete("", 0, _noAliases, cwd1, "build", store);
-        var results2 = TabCompleter.Complete("", 0, _noAliases, cwd2, "build", store);
+        var results1 = await TabCompleter.CompleteAsync("", 0, _noAliases, cwd1, "build", store);
+        var results2 = await TabCompleter.CompleteAsync("", 0, _noAliases, cwd2, "build", store);
 
         // cwd1 should suggest "test" (local sequence)
         Assert.NotEmpty(results1);
@@ -773,7 +773,7 @@ public class TabCompleterTests : IDisposable
     public async Task Complete_EmptyLine_NoLastCommand_ReturnsCommandCompletions()
     {
         var store = new InMemoryHistoryStore();
-        var results = TabCompleter.Complete("", 0, _noAliases, _tmpDir, null, store).Texts();
+        var results = (await TabCompleter.CompleteAsync("", 0, _noAliases, _tmpDir, null, store)).Texts();
 
         Assert.NotEmpty(results);
         // Should include known commands like "ls", "echo", etc.
@@ -792,7 +792,7 @@ public class TabCompleterTests : IDisposable
         await store.RecordAsync(new HistoryEntry { Command = "git commit", Cwd = cwd, Timestamp = DateTime.UtcNow.AddSeconds(2), SessionId = "s1" });
         await store.RecordAsync(new HistoryEntry { Command = "git push", Cwd = cwd, Timestamp = DateTime.UtcNow.AddSeconds(3), SessionId = "s1" });
 
-        var results = TabCompleter.Complete("", 0, _noAliases, cwd, "git commit", store);
+        var results = await TabCompleter.CompleteAsync("", 0, _noAliases, cwd, "git commit", store);
 
         // "git push" should appear early in results (sequence suggestion prioritized)
         Assert.NotEmpty(results);

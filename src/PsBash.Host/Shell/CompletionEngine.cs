@@ -61,7 +61,8 @@ internal sealed class CompletionEngine
     {
         // Base set: the existing static/local providers (command list, flag specs, path,
         // history/sequence). This always runs and is the fallback if a live query is slow.
-        var baseResults = TabCompleter.Complete(line, cursor, _aliases, _cwd(), _lastCommand(), _history);
+        var baseResults = await TabCompleter.CompleteAsync(line, cursor, _aliases, _cwd(), _lastCommand(), _history)
+            .ConfigureAwait(false);
 
         var (beforeToken, token) = TabCompleter.SplitAtWordBoundaryQuoteAware(line, cursor);
 
