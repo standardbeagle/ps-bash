@@ -70,18 +70,107 @@ public sealed class InvokeBashUnexpandCommand : PSCmdlet
     [Parameter]
     public SwitchParameter a { get; set; }
 
-    private readonly List<PSObject> _pipeline = new();
+    // Parsed-once state.
+    private bool _parsed;
+    private int _tabWidth = 8;
+    private bool _allSpaces;
+    private List<string> _operands = new();
+    // True when stdin must NOT be streamed: file operands present, or a
+    // --help / --version request (both short-circuit the scan in the oracle —
+    // important here because the scan can throw on a malformed -t value).
+    private bool _suppressStdin;
+
+    private void ParseOnce()
+    {
+        if (_parsed) return;
+        _parsed = true;
+
+        var args = Arguments ?? Array.Empty<string>();
+        _allSpaces = a.IsPresent;
+
+        // --help / --version short-circuit before flag scanning (oracle order).
+        if (Array.IndexOf(args, "--version") >= 0 || Array.IndexOf(args, "--help") >= 0)
+        {
+            _suppressStdin = true;
+            return;
+        }
+
+        for (int i = 0; i < args.Length; i++)
+        {
+            var arg = args[i];
+
+            // -tN (joined form): "-t" followed by one or more digits.
+            if (arg.Length > 2 && arg[0] == '-' && arg[1] == 't' && AllDigits(arg, 2))
+            {
+                _tabWidth = int.Parse(arg.AsSpan(2));
+                continue;
+            }
+            // -t N (separated form): consume next arg.
+            if (arg == "-t" && i + 1 < args.Length)
+            {
+                _tabWidth = int.Parse(args[i + 1]);
+                i++;
+                continue;
+            }
+            // --tabs=N
+            if (arg.StartsWith("--tabs=", StringComparison.Ordinal))
+            {
+                _tabWidth = int.Parse(arg.AsSpan("--tabs=".Length));
+                continue;
+            }
+            // -a (case-sensitive per oracle's -ceq) or --all.
+            if (arg == "-a" || arg == "--all")
+            {
+                _allSpaces = true;
+                continue;
+            }
+            if (arg == "--first-only")
+            {
+                _allSpaces = false;
+                continue;
+            }
+            _operands.Add(arg);
+        }
+
+        _suppressStdin = _operands.Count > 0;
+    }
+
+    private void EmitTransformed(string line)
+    {
+        string transformed = _allSpaces
+            ? UnexpandAll(line, _tabWidth)
+            : UnexpandLeading(line, _tabWidth);
+        WriteObject(BashRuntime.NewBashObject(transformed));
+    }
 
     protected override void ProcessRecord()
     {
-        if (InputObject != null)
+        if (InputObject == null) return;
+
+        ParseOnce();
+        if (_suppressStdin) return;
+
+        // Pipeline mode: transform each stdin sub-line as it arrives instead of
+        // buffering the whole pipe.
+        string text = BashRuntime.GetBashText(InputObject);
+        string trimmed = text.TrimEnd('\n');
+        if (trimmed.Contains('\n'))
         {
-            _pipeline.Add(InputObject);
+            foreach (var sub in trimmed.Split('\n'))
+            {
+                EmitTransformed(sub);
+            }
+        }
+        else
+        {
+            EmitTransformed(trimmed);
         }
     }
 
     protected override void EndProcessing()
     {
+        ParseOnce();
+
         var args = Arguments ?? Array.Empty<string>();
 
         FileSystemHelpers.SetLastExitCode(this, 0);
@@ -96,99 +185,25 @@ public sealed class InvokeBashUnexpandCommand : PSCmdlet
             return;
         }
 
-        int tabWidth = 8;
-        bool allSpaces = a.IsPresent;
-        var operands = new List<string>();
+        // Pipeline mode (no operands) was already streamed in ProcessRecord.
+        if (_operands.Count == 0) return;
 
-        for (int i = 0; i < args.Length; i++)
+        foreach (var raw in _operands)
         {
-            var arg = args[i];
-
-            // -tN (joined form): "-t" followed by one or more digits.
-            if (arg.Length > 2 && arg[0] == '-' && arg[1] == 't' && AllDigits(arg, 2))
+            foreach (var filePath in FileSystemHelpers.ResolveOperandPaths(this, raw))
             {
-                tabWidth = int.Parse(arg.AsSpan(2));
-                continue;
-            }
-            // -t N (separated form): consume next arg.
-            if (arg == "-t" && i + 1 < args.Length)
-            {
-                tabWidth = int.Parse(args[i + 1]);
-                i++;
-                continue;
-            }
-            // --tabs=N
-            if (arg.StartsWith("--tabs=", StringComparison.Ordinal))
-            {
-                tabWidth = int.Parse(arg.AsSpan("--tabs=".Length));
-                continue;
-            }
-            // -a (case-sensitive per oracle's -ceq) or --all.
-            if (arg == "-a" || arg == "--all")
-            {
-                allSpaces = true;
-                continue;
-            }
-            if (arg == "--first-only")
-            {
-                allSpaces = false;
-                continue;
-            }
-            operands.Add(arg);
-        }
-
-        var lines = new List<string>();
-
-        if (operands.Count == 0 && _pipeline.Count > 0)
-        {
-            foreach (var item in _pipeline)
-            {
-                string text = BashRuntime.GetBashText(item);
-                string trimmed = text.TrimEnd('\n');
-                if (trimmed.Contains('\n'))
+                try
                 {
-                    foreach (var sub in trimmed.Split('\n'))
+                    foreach (var line in BashFileSystem.ReadLines(filePath))
                     {
-                        lines.Add(sub);
+                        EmitTransformed(line);
                     }
                 }
-                else
+                catch (Exception ex)
                 {
-                    lines.Add(trimmed);
+                    WriteReadError(filePath, ex);
                 }
             }
-        }
-        else
-        {
-            foreach (var raw in operands)
-            {
-                foreach (var filePath in FileSystemHelpers.ResolveOperandPaths(this, raw))
-                {
-                    try
-                    {
-                        foreach (var line in BashFileSystem.ReadLines(filePath))
-                        {
-                            string transformed = allSpaces
-                                ? UnexpandAll(line, tabWidth)
-                                : UnexpandLeading(line, tabWidth);
-                            WriteObject(BashRuntime.NewBashObject(transformed));
-                        }
-                    }
-                    catch (Exception ex)
-                    {
-                        WriteReadError(filePath, ex);
-                    }
-                }
-            }
-            return;
-        }
-
-        foreach (var line in lines)
-        {
-            string transformed = allSpaces
-                ? UnexpandAll(line, tabWidth)
-                : UnexpandLeading(line, tabWidth);
-            WriteObject(BashRuntime.NewBashObject(transformed));
         }
     }
 

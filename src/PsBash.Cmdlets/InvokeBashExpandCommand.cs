@@ -62,18 +62,90 @@ public sealed class InvokeBashExpandCommand : PSCmdlet
     [Parameter(ValueFromPipeline = true)]
     public PSObject? InputObject { get; set; }
 
-    private readonly List<PSObject> _pipeline = new();
+    // Parsed-once state.
+    private bool _parsed;
+    private int _tabWidth = 8;
+    private List<string> _operands = new();
+    // True when stdin must NOT be streamed: file operands present, or a
+    // --help / --version request (both short-circuit the scan in the oracle —
+    // important here because the scan can throw on a malformed -t value).
+    private bool _suppressStdin;
+
+    private void ParseOnce()
+    {
+        if (_parsed) return;
+        _parsed = true;
+
+        var args = Arguments ?? Array.Empty<string>();
+
+        // --help / --version short-circuit before flag scanning (oracle order),
+        // so a malformed -t value never throws ahead of a help request.
+        if (Array.IndexOf(args, "--version") >= 0 || Array.IndexOf(args, "--help") >= 0)
+        {
+            _suppressStdin = true;
+            return;
+        }
+
+        int i = 0;
+        while (i < args.Length)
+        {
+            var a = args[i];
+            // -tN (joined, digits only)
+            if (a.Length > 2 && a[0] == '-' && a[1] == 't' && IsAllDigits(a, 2))
+            {
+                _tabWidth = int.Parse(a.Substring(2));
+                i++;
+                continue;
+            }
+            // -t N (separate)
+            if (a == "-t" && (i + 1) < args.Length)
+            {
+                _tabWidth = int.Parse(args[i + 1]);
+                i += 2;
+                continue;
+            }
+            // --tabs=N
+            if (a.StartsWith("--tabs=", StringComparison.Ordinal))
+            {
+                _tabWidth = int.Parse(a.Substring("--tabs=".Length));
+                i++;
+                continue;
+            }
+            _operands.Add(a);
+            i++;
+        }
+
+        _suppressStdin = _operands.Count > 0;
+    }
 
     protected override void ProcessRecord()
     {
-        if (InputObject != null)
+        if (InputObject == null) return;
+
+        ParseOnce();
+        if (_suppressStdin) return;
+
+        // Pipeline mode: expand each stdin sub-line as it arrives instead of
+        // buffering the whole pipe.
+        string text = BashRuntime.GetBashText(InputObject);
+        string trimmed = text.TrimEnd('\n');
+        if (trimmed.Contains('\n'))
         {
-            _pipeline.Add(InputObject);
+            foreach (var subLine in trimmed.Split('\n'))
+            {
+                WriteObject(BashRuntime.NewBashObject(ExpandTabs(subLine, _tabWidth)));
+            }
+        }
+        else
+        {
+            WriteObject(BashRuntime.NewBashObject(ExpandTabs(trimmed, _tabWidth)));
         }
     }
 
     protected override void EndProcessing()
     {
+        ParseOnce();
+
         var args = Arguments ?? Array.Empty<string>();
 
         FileSystemHelpers.SetLastExitCode(this, 0);
@@ -88,92 +160,31 @@ public sealed class InvokeBashExpandCommand : PSCmdlet
             return;
         }
 
-        int tabWidth = 8;
-        var operands = new List<string>();
+        // Pipeline mode (no operands) was already streamed in ProcessRecord.
+        if (_operands.Count == 0) return;
 
-        int i = 0;
-        while (i < args.Length)
+        bool hadError = false;
+        foreach (var raw in _operands)
         {
-            var a = args[i];
-            // -tN (joined, digits only)
-            if (a.Length > 2 && a[0] == '-' && a[1] == 't' && IsAllDigits(a, 2))
+            foreach (var filePath in FileSystemHelpers.ResolveOperandPaths(this, raw))
             {
-                tabWidth = int.Parse(a.Substring(2));
-                i++;
-                continue;
-            }
-            // -t N (separate)
-            if (a == "-t" && (i + 1) < args.Length)
-            {
-                tabWidth = int.Parse(args[i + 1]);
-                i += 2;
-                continue;
-            }
-            // --tabs=N
-            if (a.StartsWith("--tabs=", StringComparison.Ordinal))
-            {
-                tabWidth = int.Parse(a.Substring("--tabs=".Length));
-                i++;
-                continue;
-            }
-            operands.Add(a);
-            i++;
-        }
-
-        var lines = new List<string>();
-
-        // Pipeline mode: no operands, take from $input.
-        if (operands.Count == 0 && _pipeline.Count > 0)
-        {
-            foreach (var item in _pipeline)
-            {
-                string text = BashRuntime.GetBashText(item);
-                string trimmed = text.TrimEnd('\n');
-                if (trimmed.Contains('\n'))
+                try
                 {
-                    foreach (var subLine in trimmed.Split('\n'))
+                    foreach (var line in BashFileSystem.ReadLines(filePath))
                     {
-                        lines.Add(subLine);
+                        WriteObject(BashRuntime.NewBashObject(ExpandTabs(line, _tabWidth)));
                     }
                 }
-                else
+                catch (Exception ex)
                 {
-                    lines.Add(trimmed);
+                    WriteReadError(filePath, ex);
+                    hadError = true;
                 }
             }
         }
-        else
+        if (hadError)
         {
-            bool hadError = false;
-            foreach (var raw in operands)
-            {
-                foreach (var filePath in FileSystemHelpers.ResolveOperandPaths(this, raw))
-                {
-                    try
-                    {
-                        foreach (var line in BashFileSystem.ReadLines(filePath))
-                        {
-                            WriteObject(BashRuntime.NewBashObject(ExpandTabs(line, tabWidth)));
-                        }
-                    }
-                    catch (Exception ex)
-                    {
-                        WriteReadError(filePath, ex);
-                        hadError = true;
-                    }
-                }
-            }
-            if (hadError)
-            {
-                FileSystemHelpers.SetLastExitCode(this, 1);
-            }
-            return;
-        }
-
-        // Tab-expansion pass — byte-for-byte parity with oracle.
-        foreach (var line in lines)
-        {
-            WriteObject(BashRuntime.NewBashObject(ExpandTabs(line, tabWidth)));
+            FileSystemHelpers.SetLastExitCode(this, 1);
         }
     }
 

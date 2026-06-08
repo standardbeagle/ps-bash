@@ -54,37 +54,33 @@ public sealed class InvokeBashNlCommand : PSCmdlet
     [Parameter(ValueFromPipeline = true)]
     public PSObject? InputObject { get; set; }
 
-    private readonly List<PSObject> _pipeline = new();
+    // Parsed-once state.
+    private bool _parsed;
+    private bool _numberAll;
+    private List<string> _operands = new();
+    // True when stdin must NOT be streamed: file operands present, or a
+    // --help / --version request (both short-circuit the scan in the oracle).
+    private bool _suppressStdin;
+    // Numbering counter — instance state so a streamed stdin run and any
+    // trailing file reads number continuously.
+    private int _lineNum;
 
-    protected override void ProcessRecord()
+    private void ParseOnce()
     {
-        if (InputObject != null)
-        {
-            _pipeline.Add(InputObject);
-        }
-    }
+        if (_parsed) return;
+        _parsed = true;
 
-    protected override void EndProcessing()
-    {
         var args = Arguments ?? Array.Empty<string>();
 
-        FileSystemHelpers.SetLastExitCode(this, 0);
-        if (FileSystemHelpers.TryHandleVersion(this, "nl", args)) return;
-        if (Array.IndexOf(args, "--help") >= 0)
+        // --help / --version short-circuit before flag scanning (oracle order).
+        if (Array.IndexOf(args, "--version") >= 0 || Array.IndexOf(args, "--help") >= 0)
         {
-            foreach (var line in InvokeCommand.InvokeScript(
-                         "param($n) Show-BashHelp $n", "nl"))
-            {
-                WriteObject(line);
-            }
+            _suppressStdin = true;
             return;
         }
 
         // Parse flags manually (mirrors the psm1 oracle's while loop).
-        bool numberAll = false;
-        var operands = new List<string>();
         bool pastDoubleDash = false;
-
         int i = 0;
         while (i < args.Length)
         {
@@ -92,7 +88,7 @@ public sealed class InvokeBashNlCommand : PSCmdlet
 
             if (pastDoubleDash)
             {
-                operands.Add(arg);
+                _operands.Add(arg);
                 i++;
                 continue;
             }
@@ -107,7 +103,7 @@ public sealed class InvokeBashNlCommand : PSCmdlet
             // Case-sensitive match per the psm1 oracle's `-ceq`.
             if (string.Equals(arg, "-ba", StringComparison.Ordinal))
             {
-                numberAll = true;
+                _numberAll = true;
                 i++;
                 continue;
             }
@@ -117,69 +113,94 @@ public sealed class InvokeBashNlCommand : PSCmdlet
                 i++;
                 if (i < args.Length && string.Equals(args[i], "a", StringComparison.Ordinal))
                 {
-                    numberAll = true;
+                    _numberAll = true;
                 }
                 i++;
                 continue;
             }
 
-            operands.Add(arg);
+            _operands.Add(arg);
             i++;
         }
 
-        int lineNum = 0;
-        void EmitNumbered(string line)
-        {
-            if (!numberAll && line.Length == 0)
-            {
-                WriteObject(BashRuntime.NewBashObject(string.Empty));
-                return;
-            }
+        _suppressStdin = _operands.Count > 0;
+    }
 
-            lineNum++;
-            // psm1 oracle format: '{0,6}\t{1}' -f $lineNum, $line
-            string bashText = string.Format(
-                System.Globalization.CultureInfo.InvariantCulture,
-                "{0,6}\t{1}", lineNum, line);
-            WriteObject(BashRuntime.NewBashObject(bashText));
+    private void EmitNumbered(string line)
+    {
+        if (!_numberAll && line.Length == 0)
+        {
+            WriteObject(BashRuntime.NewBashObject(string.Empty));
+            return;
         }
 
-        if (operands.Count == 0 && _pipeline.Count > 0)
+        _lineNum++;
+        // psm1 oracle format: '{0,6}\t{1}' -f $lineNum, $line
+        string bashText = string.Format(
+            System.Globalization.CultureInfo.InvariantCulture,
+            "{0,6}\t{1}", _lineNum, line);
+        WriteObject(BashRuntime.NewBashObject(bashText));
+    }
+
+    protected override void ProcessRecord()
+    {
+        if (InputObject == null) return;
+
+        ParseOnce();
+        if (_suppressStdin) return;
+
+        // Pipeline mode: number each stdin sub-line as it arrives instead of
+        // buffering the whole pipe.
+        string text = BashRuntime.GetBashText(InputObject);
+        string trimmed = text.TrimEnd('\n');
+        if (trimmed.Contains('\n'))
         {
-            foreach (var item in _pipeline)
+            foreach (var subLine in trimmed.Split('\n'))
             {
-                string text = BashRuntime.GetBashText(item);
-                string trimmed = text.TrimEnd('\n');
-                if (trimmed.Contains('\n'))
-                {
-                    foreach (var subLine in trimmed.Split('\n'))
-                    {
-                        EmitNumbered(subLine);
-                    }
-                }
-                else
-                {
-                    EmitNumbered(trimmed);
-                }
+                EmitNumbered(subLine);
             }
         }
         else
         {
-            foreach (var raw in operands)
+            EmitNumbered(trimmed);
+        }
+    }
+
+    protected override void EndProcessing()
+    {
+        ParseOnce();
+
+        var args = Arguments ?? Array.Empty<string>();
+
+        FileSystemHelpers.SetLastExitCode(this, 0);
+        if (FileSystemHelpers.TryHandleVersion(this, "nl", args)) return;
+        if (Array.IndexOf(args, "--help") >= 0)
+        {
+            foreach (var line in InvokeCommand.InvokeScript(
+                         "param($n) Show-BashHelp $n", "nl"))
             {
-                foreach (var filePath in FileSystemHelpers.ResolveOperandPaths(this, raw))
+                WriteObject(line);
+            }
+            return;
+        }
+
+        // Pipeline mode (no operands) was already streamed in ProcessRecord.
+        if (_operands.Count == 0) return;
+
+        foreach (var raw in _operands)
+        {
+            foreach (var filePath in FileSystemHelpers.ResolveOperandPaths(this, raw))
+            {
+                try
                 {
-                    try
+                    foreach (var line in BashFileSystem.ReadLines(filePath))
                     {
-                        foreach (var line in BashFileSystem.ReadLines(filePath))
-                        {
-                            EmitNumbered(line);
-                        }
+                        EmitNumbered(line);
                     }
-                    catch (Exception ex)
-                    {
-                        WriteReadError(filePath, ex);
-                    }
+                }
+                catch (Exception ex)
+                {
+                    WriteReadError(filePath, ex);
                 }
             }
         }
