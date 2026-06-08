@@ -29,6 +29,16 @@ namespace PsBash.Cmdlets;
 /// <c>-</c> operand is present — matching the oracle. Flags are parsed via
 /// <see cref="BashRuntime.ConvertFromBashArgs"/>.
 ///
+/// <b>Streaming:</b> stdin records are emitted from <see cref="ProcessRecord"/>
+/// as they arrive instead of being buffered into a list and processed in
+/// <see cref="EndProcessing"/> — a bare <c>cat</c> on a huge pipe must not
+/// materialize the whole stream in memory. Flags / operands are parsed lazily on
+/// the first record (or in <see cref="EndProcessing"/> when there is no pipeline
+/// input); the flagged-path numbering counters live on the instance so stdin
+/// lines and any trailing file lines number continuously, exactly as the
+/// buffered oracle did (stdin first, then files). File operands are still read
+/// in <see cref="EndProcessing"/>.
+///
 /// psm1-only dependencies, and why a clean migration is still possible:
 /// <c>Resolve-BashGlob</c> needs the <c>$PWD</c> path provider, reachable from a
 /// <see cref="PSCmdlet"/> via <see cref="PSCmdlet.SessionState"/>; its glob
@@ -66,8 +76,6 @@ public sealed class InvokeBashCatCommand : PSCmdlet
     [Parameter(ValueFromPipeline = true)]
     public PSObject? InputObject { get; set; }
 
-    private readonly List<PSObject> _pipeline = new();
-
     /// <summary>Valid GNU <c>cat</c> options ps-bash does not implement (see
     /// <see cref="FileSystemHelpers.TryWriteOperandOptionError"/>). Note <c>-v</c>
     /// and <c>-e</c> are eaten by the binder (-Verbose / the -E switch) before
@@ -79,16 +87,117 @@ public sealed class InvokeBashCatCommand : PSCmdlet
         "--number", "--squeeze-blank", "--show-tabs",
     };
 
+    // Parsed-once flag / operand state.
+    private bool _parsed;
+    private bool _numberAll, _numberNonBlank, _squeezeBlanks, _showEnds, _showTabs, _hasFlags;
+    private List<string> _operands = new();
+    private bool _readStdin;
+    // True when stdin must NOT be streamed: a file-only invocation, or a
+    // --help / --version / unknown-option request whose output EndProcessing
+    // produces instead. In every such case the buffered oracle ignored stdin.
+    private bool _suppressStdin;
+
+    // Flagged-path numbering counters — shared across the stdin stream and the
+    // trailing file reads so numbering is continuous (stdin first, then files).
+    private int _lineNum;
+    private int _nonBlankNum;
+    private bool _lastWasBlank;
+
+    private bool _hadError;
+
+    private void ParseOnce()
+    {
+        if (_parsed) return;
+        _parsed = true;
+
+        var args = Arguments ?? Array.Empty<string>();
+
+        // -E is bound via the explicit E switch (common-parameter collision);
+        // the rest stay in Arguments and are parsed by ConvertFromBashArgs.
+        var flagDefs = BashRuntime.NewFlagDefs(new[]
+        {
+            "-n", "number all lines",
+            "-b", "number non-blank lines",
+            "-s", "squeeze blank lines",
+            "-T", "show ^I for tabs",
+        });
+        var parsed = BashRuntime.ConvertFromBashArgs(args, flagDefs);
+        _numberAll = parsed.Flags["-n"];
+        _numberNonBlank = parsed.Flags["-b"];
+        _squeezeBlanks = parsed.Flags["-s"];
+        _showEnds = E.IsPresent;
+        _showTabs = parsed.Flags["-T"];
+
+        // Bundled-flag recovery: a bundle like -nE or -Es reaches Arguments
+        // intact (the explicit E switch only binds a bare -E). ConvertFromBashArgs
+        // turns an unrecognized bundle char into an operand, so -E inside a
+        // bundle of otherwise-known cat flags would be lost. Detect that case
+        // and restore -n/-b/-s/-T/-E from the bundle, matching the psm1 oracle's
+        // ConvertFrom-BashArgs which split bundled short flags.
+        for (int bi = 0; bi < parsed.Operands.Count; bi++)
+        {
+            var op = parsed.Operands[bi];
+            if (op.Length > 1 && op[0] == '-' && op[1] != '-'
+                && op.Skip(1).All(c => "nbsTE".IndexOf(c) >= 0))
+            {
+                if (op.IndexOf('n') >= 0) _numberAll = true;
+                if (op.IndexOf('b') >= 0) _numberNonBlank = true;
+                if (op.IndexOf('s') >= 0) _squeezeBlanks = true;
+                if (op.IndexOf('T') >= 0) _showTabs = true;
+                if (op.IndexOf('E') >= 0) _showEnds = true;
+                parsed.Operands.RemoveAt(bi);
+                bi--;
+            }
+        }
+        _hasFlags = _numberAll || _numberNonBlank || _squeezeBlanks || _showEnds || _showTabs;
+        _operands = parsed.Operands;
+        _readStdin = _operands.Count == 0 || _operands.Contains("-");
+
+        // Help / version / an unknown option all make EndProcessing emit
+        // something other than the catenation and return early; the oracle
+        // ignored stdin in those cases. A file-only invocation likewise never
+        // reads stdin. In all of these we must not stream the pipeline.
+        bool helpOrVersion = Array.IndexOf(args, "--help") >= 0
+            || Array.IndexOf(args, "--version") >= 0;
+        bool unknownOption = _operands.Any(FileSystemHelpers.IsOptionLike);
+        _suppressStdin = !_readStdin || helpOrVersion || unknownOption;
+    }
+
     protected override void ProcessRecord()
     {
-        if (InputObject != null)
+        if (InputObject == null) return;
+
+        ParseOnce();
+        if (_suppressStdin) return;
+
+        if (!_hasFlags)
         {
-            _pipeline.Add(InputObject);
+            // Fast path: pass items through, splitting a multi-line item.
+            string text = BashRuntime.GetBashText(InputObject);
+            string trimmed = text.TrimEnd('\n');
+            if (trimmed.Contains('\n'))
+            {
+                foreach (var subLine in trimmed.Split('\n'))
+                {
+                    WriteObject(subLine);
+                }
+            }
+            else
+            {
+                WriteObject(InputObject);
+            }
+            return;
         }
+
+        // Flagged path: one CatLine per stdin item (no multi-line split — the
+        // oracle's flagged stdin path numbered each pipeline item as one line).
+        EmitLine(BashRuntime.GetBashText(InputObject), string.Empty);
     }
 
     protected override void EndProcessing()
     {
+        ParseOnce();
+
         var args = Arguments ?? Array.Empty<string>();
 
         FileSystemHelpers.SetLastExitCode(this, 0);
@@ -103,83 +212,21 @@ public sealed class InvokeBashCatCommand : PSCmdlet
             return;
         }
 
-        // -E is bound via the explicit E switch (common-parameter collision);
-        // the rest stay in Arguments and are parsed by ConvertFromBashArgs.
-        var flagDefs = BashRuntime.NewFlagDefs(new[]
-        {
-            "-n", "number all lines",
-            "-b", "number non-blank lines",
-            "-s", "squeeze blank lines",
-            "-T", "show ^I for tabs",
-        });
-        var parsed = BashRuntime.ConvertFromBashArgs(args, flagDefs);
-        bool numberAll = parsed.Flags["-n"];
-        bool numberNonBlank = parsed.Flags["-b"];
-        bool squeezeBlanks = parsed.Flags["-s"];
-        bool showEnds = E.IsPresent;
-        bool showTabs = parsed.Flags["-T"];
-
-        // Bundled-flag recovery: a bundle like -nE or -Es reaches Arguments
-        // intact (the explicit E switch only binds a bare -E). ConvertFromBashArgs
-        // turns an unrecognized bundle char into an operand, so -E inside a
-        // bundle of otherwise-known cat flags would be lost. Detect that case
-        // and restore -n/-b/-s/-T/-E from the bundle, matching the psm1 oracle's
-        // ConvertFrom-BashArgs which split bundled short flags.
-        for (int bi = 0; bi < parsed.Operands.Count; bi++)
-        {
-            var op = parsed.Operands[bi];
-            if (op.Length > 1 && op[0] == '-' && op[1] != '-'
-                && op.Skip(1).All(c => "nbsTE".IndexOf(c) >= 0))
-            {
-                if (op.IndexOf('n') >= 0) numberAll = true;
-                if (op.IndexOf('b') >= 0) numberNonBlank = true;
-                if (op.IndexOf('s') >= 0) squeezeBlanks = true;
-                if (op.IndexOf('T') >= 0) showTabs = true;
-                if (op.IndexOf('E') >= 0) showEnds = true;
-                parsed.Operands.RemoveAt(bi);
-                bi--;
-            }
-        }
-        bool hasFlags = numberAll || numberNonBlank || squeezeBlanks || showEnds || showTabs;
-
-        var operands = parsed.Operands;
-
         // Any remaining option-looking operand (not the lone "-" stdin marker)
         // is an unknown flag that fell through ConvertFromBashArgs, not a file —
         // classify it (specific "not supported" if a valid cat flag, else
         // bash-parity "unrecognized option") instead of reporting a missing file.
-        if (FileSystemHelpers.TryWriteOperandOptionError(this, "cat", operands, CatValidButUnsupported))
+        if (FileSystemHelpers.TryWriteOperandOptionError(this, "cat", _operands, CatValidButUnsupported))
         {
             return;
         }
 
-        bool readStdin = operands.Count == 0 || operands.Contains("-");
-        bool hadError = false;
+        // Stdin was already streamed from ProcessRecord; only files remain.
+        var fileOperands = _operands.Where(o => o != "-").ToList();
 
-        // Fast path: bare cat with no flags.
-        if (!hasFlags)
+        if (!_hasFlags)
         {
-            if (readStdin && _pipeline.Count > 0)
-            {
-                foreach (var item in _pipeline)
-                {
-                    string text = BashRuntime.GetBashText(item);
-                    string trimmed = text.TrimEnd('\n');
-                    if (trimmed.Contains('\n'))
-                    {
-                        foreach (var subLine in trimmed.Split('\n'))
-                        {
-                            WriteObject(subLine);
-                        }
-                    }
-                    else
-                    {
-                        WriteObject(item);
-                    }
-                }
-            }
-
-            var fileOperands = operands.Where(o => o != "-").ToList();
+            // Fast path: read each file, one TextOutput object per line.
             foreach (var filePath in ResolveGlob(fileOperands))
             {
                 try
@@ -194,100 +241,89 @@ public sealed class InvokeBashCatCommand : PSCmdlet
                 catch (Exception ex)
                 {
                     EmitReadError(filePath, "cat", ex);
-                    hadError = true;
+                    _hadError = true;
                 }
             }
-
-            if (hadError)
-            {
-                SessionState.PSVariable.Set("global:LASTEXITCODE", 1);
-            }
-            return;
         }
-
-        // Flagged path: full CatLine objects with numbering / squeezing.
-        int lineNum = 0;
-        int nonBlankNum = 0;
-        bool lastWasBlank = false;
-
-        void EmitLine(string content, string fileName)
+        else
         {
-            bool isBlank = content.Length == 0;
-
-            if (squeezeBlanks && isBlank && lastWasBlank)
+            // Flagged path: continue numbering from where the stdin stream left off.
+            foreach (var filePath in ResolveGlob(fileOperands))
             {
-                return;
-            }
-            lastWasBlank = isBlank;
-
-            lineNum++;
-            if (!isBlank)
-            {
-                nonBlankNum++;
-            }
-
-            string text = content;
-            if (showTabs)
-            {
-                text = text.Replace("\t", "^I");
-            }
-            if (showEnds)
-            {
-                text += "$";
-            }
-
-            if (numberNonBlank)
-            {
-                if (!isBlank)
+                try
                 {
-                    text = nonBlankNum.ToString().PadLeft(6) + "\t" + text;
+                    foreach (var line in BashFileSystem.ReadLines(filePath))
+                    {
+                        EmitLine(line, filePath);
+                    }
                 }
-            }
-            else if (numberAll)
-            {
-                text = lineNum.ToString().PadLeft(6) + "\t" + text;
-            }
-
-            var obj = new PSObject();
-            obj.TypeNames.Insert(0, "PsBash.CatLine");
-            obj.Properties.Add(new PSNoteProperty("LineNumber", lineNum));
-            obj.Properties.Add(new PSNoteProperty("Content", content));
-            obj.Properties.Add(new PSNoteProperty("FileName", fileName));
-            obj.Properties.Add(new PSNoteProperty(
-                "BashText", BashRuntime.NormalizeBashText(text + "\n")));
-            WriteObject(obj);
-        }
-
-        if (readStdin && _pipeline.Count > 0)
-        {
-            foreach (var item in _pipeline)
-            {
-                string content = BashRuntime.GetBashText(item);
-                EmitLine(content, string.Empty);
-            }
-        }
-
-        var flaggedFileOperands = operands.Where(o => o != "-").ToList();
-        foreach (var filePath in ResolveGlob(flaggedFileOperands))
-        {
-            try
-            {
-                foreach (var line in BashFileSystem.ReadLines(filePath))
+                catch (Exception ex)
                 {
-                    EmitLine(line, filePath);
+                    EmitReadError(filePath, "cat", ex);
+                    _hadError = true;
                 }
-            }
-            catch (Exception ex)
-            {
-                EmitReadError(filePath, "cat", ex);
-                hadError = true;
             }
         }
 
-        if (hadError)
+        if (_hadError)
         {
             SessionState.PSVariable.Set("global:LASTEXITCODE", 1);
         }
+    }
+
+    /// <summary>
+    /// Flagged-path line emitter. Reproduces the psm1 oracle's <c>$emitLine</c>
+    /// closure exactly: squeeze-blank drop, 6-wide tab-separated numbering
+    /// (<c>-b</c> numbers non-blank only), <c>-T</c> tab rendering, <c>-E</c>
+    /// end marker. Counters are instance state so a stdin stream and trailing
+    /// file reads number continuously.
+    /// </summary>
+    private void EmitLine(string content, string fileName)
+    {
+        bool isBlank = content.Length == 0;
+
+        if (_squeezeBlanks && isBlank && _lastWasBlank)
+        {
+            return;
+        }
+        _lastWasBlank = isBlank;
+
+        _lineNum++;
+        if (!isBlank)
+        {
+            _nonBlankNum++;
+        }
+
+        string text = content;
+        if (_showTabs)
+        {
+            text = text.Replace("\t", "^I");
+        }
+        if (_showEnds)
+        {
+            text += "$";
+        }
+
+        if (_numberNonBlank)
+        {
+            if (!isBlank)
+            {
+                text = _nonBlankNum.ToString().PadLeft(6) + "\t" + text;
+            }
+        }
+        else if (_numberAll)
+        {
+            text = _lineNum.ToString().PadLeft(6) + "\t" + text;
+        }
+
+        var obj = new PSObject();
+        obj.TypeNames.Insert(0, "PsBash.CatLine");
+        obj.Properties.Add(new PSNoteProperty("LineNumber", _lineNum));
+        obj.Properties.Add(new PSNoteProperty("Content", content));
+        obj.Properties.Add(new PSNoteProperty("FileName", fileName));
+        obj.Properties.Add(new PSNoteProperty(
+            "BashText", BashRuntime.NormalizeBashText(text + "\n")));
+        WriteObject(obj);
     }
 
     private void EmitReadError(string path, string command, Exception ex)
