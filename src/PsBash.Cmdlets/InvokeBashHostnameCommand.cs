@@ -51,6 +51,7 @@ public sealed class InvokeBashHostnameCommand : PSCmdlet
         }
         catch (Exception ex)
         {
+            if (FileSystemHelpers.IsPipelineStop(ex)) throw;
             FileSystemHelpers.WriteBashError(this, $"hostname: {ex.Message}");
             return;
         }

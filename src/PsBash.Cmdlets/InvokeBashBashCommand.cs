@@ -139,6 +139,7 @@ public sealed class InvokeBashBashCommand : PSCmdlet
         }
         catch (Exception ex)
         {
+            if (FileSystemHelpers.IsPipelineStop(ex)) throw;
             FileSystemHelpers.WriteBashError(this, "bash: " + ex.Message);
             SessionState.PSVariable.Set("global:LASTEXITCODE", 1);
             return;

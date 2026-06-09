@@ -212,6 +212,7 @@ public sealed class InvokeBashPasteCommand : PSCmdlet
         }
         catch (Exception ex)
         {
+            if (FileSystemHelpers.IsPipelineStop(ex)) throw;
             string path = enumerators.Count < filePaths.Count
                 ? filePaths[enumerators.Count]
                 : filePaths[Math.Max(0, enumerators.Count - 1)];
@@ -242,6 +243,7 @@ public sealed class InvokeBashPasteCommand : PSCmdlet
         }
         catch (Exception ex)
         {
+            if (FileSystemHelpers.IsPipelineStop(ex)) throw;
             WriteReadError(path, ex);
             return null;
         }

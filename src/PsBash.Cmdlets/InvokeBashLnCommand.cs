@@ -112,6 +112,7 @@ public sealed class InvokeBashLnCommand : PSCmdlet
             }
             catch (Exception ex)
             {
+                if (FileSystemHelpers.IsPipelineStop(ex)) throw;
                 FileSystemHelpers.WriteBashError(this,
                     $"ln: cannot remove existing '{linkName}': {ex.Message}");
                 return;
@@ -170,6 +171,7 @@ public sealed class InvokeBashLnCommand : PSCmdlet
         }
         catch (Exception ex)
         {
+            if (FileSystemHelpers.IsPipelineStop(ex)) throw;
             FileSystemHelpers.WriteBashError(this,
                 $"ln: failed to create {(symbolic ? "symbolic " : "")}link '{linkName}': {ex.Message}");
             return;

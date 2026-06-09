@@ -114,6 +114,7 @@ public sealed class InvokeBashMkdirCommand : PSCmdlet
             }
             catch (Exception ex)
             {
+                if (FileSystemHelpers.IsPipelineStop(ex)) throw;
                 FileSystemHelpers.WriteBashError(this,
                     $"mkdir: cannot create directory '{dir}': {ex.Message}");
                 hadError = true;

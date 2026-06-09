@@ -106,6 +106,7 @@ public sealed class InvokeBashMktempCommand : PSCmdlet
         }
         catch (Exception ex)
         {
+            if (FileSystemHelpers.IsPipelineStop(ex)) throw;
             FileSystemHelpers.WriteBashError(this, $"mktemp: failed to create: {ex.Message}");
             FileSystemHelpers.SetLastExitCode(this, 1);
             return;

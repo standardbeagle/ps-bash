@@ -191,6 +191,7 @@ public sealed class InvokeBashCommCommand : PSCmdlet
         }
         catch (Exception ex)
         {
+            if (FileSystemHelpers.IsPipelineStop(ex)) throw;
             WriteReadError(currentReadPath, ex);
             return;
         }

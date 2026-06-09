@@ -146,6 +146,7 @@ public sealed class InvokeBashJoinCommand : PSCmdlet
         }
         catch (Exception ex)
         {
+            if (FileSystemHelpers.IsPipelineStop(ex)) throw;
             file1?.Dispose();
             WriteReadError(path1, ex);
             return;
@@ -176,6 +177,7 @@ public sealed class InvokeBashJoinCommand : PSCmdlet
         }
         catch (Exception ex)
         {
+            if (FileSystemHelpers.IsPipelineStop(ex)) throw;
             file1?.Dispose();
             WriteReadError(path2, ex);
             return;
@@ -192,6 +194,7 @@ public sealed class InvokeBashJoinCommand : PSCmdlet
         }
         catch (Exception ex)
         {
+            if (FileSystemHelpers.IsPipelineStop(ex)) throw;
             WriteReadError(path1, ex);
         }
         finally

@@ -267,6 +267,7 @@ public sealed class InvokeBashWcCommand : PSCmdlet
             }
             catch (Exception ex)
             {
+                if (FileSystemHelpers.IsPipelineStop(ex)) throw;
                 string normalized = filePath.Replace('\\', '/');
                 bool notFound = ex is FileNotFoundException or DirectoryNotFoundException
                     || ex.InnerException is FileNotFoundException or DirectoryNotFoundException;

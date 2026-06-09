@@ -149,6 +149,7 @@ foreach ($result in $results) {
                 }
                 catch (Exception ex)
                 {
+                    if (FileSystemHelpers.IsPipelineStop(ex)) throw;
                     EmitError($"yq: {file}: {ex.Message}");
                     return;
                 }
@@ -168,6 +169,7 @@ foreach ($result in $results) {
                 }
                 catch (Exception ex)
                 {
+                    if (FileSystemHelpers.IsPipelineStop(ex)) throw;
                     EmitError($"yq: {original}: {ex.Message}");
                     return;
                 }
@@ -183,6 +185,7 @@ foreach ($result in $results) {
                 }
                 catch (Exception ex)
                 {
+                    if (FileSystemHelpers.IsPipelineStop(ex)) throw;
                     EmitError($"yq: {original}: {ex.Message}");
                     return;
                 }

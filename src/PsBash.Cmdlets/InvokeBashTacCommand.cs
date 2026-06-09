@@ -135,6 +135,7 @@ public sealed class InvokeBashTacCommand : PSCmdlet
                     }
                     catch (Exception ex)
                     {
+                        if (FileSystemHelpers.IsPipelineStop(ex)) throw;
                         WriteReadError(filePath, ex);
                         hadError = true;
                     }

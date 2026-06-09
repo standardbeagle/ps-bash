@@ -362,6 +362,7 @@ public sealed class InvokeBashTarCommand : PSCmdlet
         }
         catch (Exception ex)
         {
+            if (FileSystemHelpers.IsPipelineStop(ex)) throw;
             FileSystemHelpers.WriteBashError(this, $"tar: {ex.Message}");
             FileSystemHelpers.SetLastExitCode(this, 1);
         }
@@ -415,6 +416,7 @@ public sealed class InvokeBashTarCommand : PSCmdlet
         }
         catch (Exception ex)
         {
+            if (FileSystemHelpers.IsPipelineStop(ex)) throw;
             FileSystemHelpers.WriteBashError(this, $"tar: {ex.Message}");
             FileSystemHelpers.SetLastExitCode(this, 1);
         }
@@ -466,6 +468,7 @@ public sealed class InvokeBashTarCommand : PSCmdlet
         }
         catch (Exception ex)
         {
+            if (FileSystemHelpers.IsPipelineStop(ex)) throw;
             FileSystemHelpers.WriteBashError(this, $"tar: {ex.Message}");
             FileSystemHelpers.SetLastExitCode(this, 1);
         }

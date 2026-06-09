@@ -100,6 +100,7 @@ public sealed class InvokeBashRmdirCommand : PSCmdlet
             }
             catch (Exception ex)
             {
+                if (FileSystemHelpers.IsPipelineStop(ex)) throw;
                 FileSystemHelpers.WriteBashError(this,
                     $"rmdir: failed to remove '{dir}': {ex.Message}");
                 hadError = true;

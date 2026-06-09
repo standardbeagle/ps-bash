@@ -265,6 +265,7 @@ public sealed class InvokeBashHeadCommand : PSCmdlet
                 }
                 catch (Exception ex)
                 {
+                    if (FileSystemHelpers.IsPipelineStop(ex)) throw;
                     FileSystemHelpers.WriteBashError(this, $"head: cannot read '{filePath}': {ex.Message}");
                 }
                 continue;
@@ -416,6 +417,7 @@ public sealed class InvokeBashHeadCommand : PSCmdlet
         }
         catch (Exception ex)
         {
+            if (FileSystemHelpers.IsPipelineStop(ex)) throw;
             string normalized = path.Replace('\\', '/');
             bool notFound = ex is FileNotFoundException or DirectoryNotFoundException
                 || ex.InnerException is FileNotFoundException or DirectoryNotFoundException;

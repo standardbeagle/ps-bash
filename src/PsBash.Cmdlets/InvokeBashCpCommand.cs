@@ -170,6 +170,7 @@ public sealed class InvokeBashCpCommand : PSCmdlet
             }
             catch (Exception ex)
             {
+                if (FileSystemHelpers.IsPipelineStop(ex)) throw;
                 FileSystemHelpers.WriteBashError(this,
                     $"cp: cannot copy '{src}' to '{targetPath}': {ex.Message}");
                 hadError = true;

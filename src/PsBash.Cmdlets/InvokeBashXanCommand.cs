@@ -197,6 +197,7 @@ public sealed class InvokeBashXanCommand : PSCmdlet
             }
             catch (Exception ex)
             {
+                if (FileSystemHelpers.IsPipelineStop(ex)) throw;
                 FileSystemHelpers.WriteBashError(this, $"xan: {fileArg}: {ex.Message}");
                 return;
             }
@@ -231,6 +232,7 @@ public sealed class InvokeBashXanCommand : PSCmdlet
             }
             catch (Exception ex)
             {
+                if (FileSystemHelpers.IsPipelineStop(ex)) throw;
                 FileSystemHelpers.WriteBashError(this, $"xan: {fileArg}: {ex.Message}");
                 return;
             }

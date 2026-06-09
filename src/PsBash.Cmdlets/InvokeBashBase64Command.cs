@@ -155,6 +155,7 @@ public sealed class InvokeBashBase64Command : PSCmdlet
                 }
                 catch (Exception ex)
                 {
+                    if (FileSystemHelpers.IsPipelineStop(ex)) throw;
                     WriteReadError(filePath, ex, normalizeNotFound: true);
                     return;
                 }
@@ -170,6 +171,7 @@ public sealed class InvokeBashBase64Command : PSCmdlet
                 }
                 catch (Exception ex)
                 {
+                    if (FileSystemHelpers.IsPipelineStop(ex)) throw;
                     WriteReadError(filePath, ex, normalizeNotFound: false);
                     return;
                 }

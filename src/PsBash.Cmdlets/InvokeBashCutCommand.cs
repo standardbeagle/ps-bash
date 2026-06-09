@@ -393,6 +393,7 @@ public sealed class InvokeBashCutCommand : PSCmdlet
                 }
                 catch (Exception ex)
                 {
+                    if (FileSystemHelpers.IsPipelineStop(ex)) throw;
                     WriteReadError(filePath, ex);
                 }
             }

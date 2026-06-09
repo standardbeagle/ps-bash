@@ -131,6 +131,7 @@ public sealed class InvokeBashMvCommand : PSCmdlet
             }
             catch (Exception ex)
             {
+                if (FileSystemHelpers.IsPipelineStop(ex)) throw;
                 FileSystemHelpers.WriteBashError(this,
                     $"mv: cannot move '{src}' to '{targetPath}': {ex.Message}");
                 hadError = true;

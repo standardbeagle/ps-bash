@@ -240,6 +240,7 @@ public sealed class InvokeBashCatCommand : PSCmdlet
                 }
                 catch (Exception ex)
                 {
+                    if (FileSystemHelpers.IsPipelineStop(ex)) throw;
                     EmitReadError(filePath, "cat", ex);
                     _hadError = true;
                 }
@@ -259,6 +260,7 @@ public sealed class InvokeBashCatCommand : PSCmdlet
                 }
                 catch (Exception ex)
                 {
+                    if (FileSystemHelpers.IsPipelineStop(ex)) throw;
                     EmitReadError(filePath, "cat", ex);
                     _hadError = true;
                 }

@@ -82,6 +82,7 @@ public sealed class HookRegistry
                 }
                 catch (Exception ex)
                 {
+                    if (FileSystemHelpers.IsPipelineStop(ex)) throw;
                     AppendHookError(callerState, ex);
                 }
             }
@@ -95,6 +96,7 @@ public sealed class HookRegistry
             }
             catch (Exception ex)
             {
+                if (FileSystemHelpers.IsPipelineStop(ex)) throw;
                 AppendHookError(callerState, ex);
             }
         }

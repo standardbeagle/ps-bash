@@ -478,6 +478,7 @@ public sealed class InvokeBashTailCommand : PSCmdlet
         }
         catch (Exception ex)
         {
+            if (FileSystemHelpers.IsPipelineStop(ex)) throw;
             FileSystemHelpers.WriteBashError(this, $"tail: cannot follow file: {ex.Message}");
         }
     }
@@ -506,6 +507,7 @@ public sealed class InvokeBashTailCommand : PSCmdlet
         }
         catch (Exception ex)
         {
+            if (FileSystemHelpers.IsPipelineStop(ex)) throw;
             WriteFileReadError(path, command, ex);
         }
     }
@@ -609,6 +611,7 @@ public sealed class InvokeBashTailCommand : PSCmdlet
         }
         catch (Exception ex)
         {
+            if (FileSystemHelpers.IsPipelineStop(ex)) throw;
             string normalized = path.Replace('\\', '/');
             bool notFound = ex is FileNotFoundException or DirectoryNotFoundException
                 || ex.InnerException is FileNotFoundException or DirectoryNotFoundException;

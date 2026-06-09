@@ -152,6 +152,7 @@ public sealed class InvokeBashTouchCommand : PSCmdlet
                 }
                 catch (Exception ex)
                 {
+                    if (FileSystemHelpers.IsPipelineStop(ex)) throw;
                     FileSystemHelpers.WriteBashError(this,
                         $"touch: cannot touch '{file}': {ex.Message}");
                     continue;
@@ -175,6 +176,7 @@ public sealed class InvokeBashTouchCommand : PSCmdlet
             }
             catch (Exception ex)
             {
+                if (FileSystemHelpers.IsPipelineStop(ex)) throw;
                 FileSystemHelpers.WriteBashError(this,
                     $"touch: setting times of '{file}': {ex.Message}");
             }

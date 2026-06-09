@@ -518,6 +518,7 @@ public sealed class InvokeBashFindCommand : PSCmdlet
                 }
                 catch (Exception ex)
                 {
+                    if (FileSystemHelpers.IsPipelineStop(ex)) throw;
                     EmitError($"find: cannot delete '{m.DisplayPath}': {ex.Message}", 1);
                 }
             }
@@ -782,6 +783,7 @@ public sealed class InvokeBashFindCommand : PSCmdlet
         }
         catch (Exception ex)
         {
+            if (FileSystemHelpers.IsPipelineStop(ex)) throw;
             EmitError($"find: -exec failed: {ex.Message}", 1);
         }
     }

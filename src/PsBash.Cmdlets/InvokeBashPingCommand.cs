@@ -80,6 +80,7 @@ public sealed class InvokeBashPingCommand : PSCmdlet
             }
             catch (Exception ex)
             {
+                if (FileSystemHelpers.IsPipelineStop(ex)) throw;
                 error = (ex.InnerException ?? ex).Message;
             }
 

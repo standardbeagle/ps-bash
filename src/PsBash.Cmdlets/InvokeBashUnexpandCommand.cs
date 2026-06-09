@@ -201,6 +201,7 @@ public sealed class InvokeBashUnexpandCommand : PSCmdlet
                 }
                 catch (Exception ex)
                 {
+                    if (FileSystemHelpers.IsPipelineStop(ex)) throw;
                     WriteReadError(filePath, ex);
                 }
             }

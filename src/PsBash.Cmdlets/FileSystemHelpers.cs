@@ -130,6 +130,26 @@ internal static class FileSystemHelpers
     }
 
     /// <summary>
+    /// True when <paramref name="ex"/> is the engine's pipeline-stop signal: a
+    /// <see cref="System.Management.Automation.PipelineStoppedException"/>, which
+    /// the internal <c>StopUpstreamCommandsException</c> raised by
+    /// <c>Invoke-BashHead</c> / <c>Select-Object -First</c> also derives from.
+    /// <para>
+    /// A producer cmdlet's catch-all around its <c>WriteObject</c> loop MUST
+    /// rethrow this instead of formatting it as a read error. When a downstream
+    /// consumer stops the pipeline early — <c>cat file | head -n 5</c>,
+    /// <c>rm -v * | head -1</c> — the stop unwinds through the producer's
+    /// <c>WriteObject</c>; swallowing it emits a spurious
+    /// <c>"cat: file: The pipeline has been stopped"</c> and sets exit 1, which
+    /// is wrong (the consumer asked to stop; that is success, not an error).
+    /// Guard every such catch with <c>if (FileSystemHelpers.IsPipelineStop(ex)) throw;</c>.
+    /// </para>
+    /// </summary>
+    public static bool IsPipelineStop(Exception ex)
+        => ex is System.Management.Automation.PipelineStoppedException
+           || ex.InnerException is System.Management.Automation.PipelineStoppedException;
+
+    /// <summary>
     /// Sets the bash-visible exit code via the global LASTEXITCODE. The psm1
     /// mutator oracles all do this on the last error in a multi-operand run;
     /// we mirror it exactly.

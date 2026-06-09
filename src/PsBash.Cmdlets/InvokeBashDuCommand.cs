@@ -161,6 +161,7 @@ public sealed class InvokeBashDuCommand : PSCmdlet
             }
             catch (Exception ex)
             {
+                if (FileSystemHelpers.IsPipelineStop(ex)) throw;
                 string norm = target.Replace('\\', '/');
                 FileSystemHelpers.WriteBashError(
                     this, $"du: cannot access '{norm}': {ex.Message}");

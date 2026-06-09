@@ -448,6 +448,7 @@ public sealed class InvokeBashDiffCommand : PSCmdlet
         }
         catch (Exception ex)
         {
+            if (FileSystemHelpers.IsPipelineStop(ex)) throw;
             bool notFound = ex is FileNotFoundException or DirectoryNotFoundException
                 || ex.InnerException is FileNotFoundException or DirectoryNotFoundException;
             string msg = notFound ? "No such file or directory" : ex.Message;

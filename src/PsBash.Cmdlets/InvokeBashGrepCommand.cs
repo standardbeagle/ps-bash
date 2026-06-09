@@ -1008,6 +1008,7 @@ public sealed class InvokeBashGrepCommand : PSCmdlet
                 }
                 catch (Exception ex)
                 {
+                    if (FileSystemHelpers.IsPipelineStop(ex)) throw;
                     EmitGrepReadError(path, ex);
                     yield break;
                 }
@@ -1034,6 +1035,7 @@ public sealed class InvokeBashGrepCommand : PSCmdlet
         }
         catch (Exception ex)
         {
+            if (FileSystemHelpers.IsPipelineStop(ex)) throw;
             EmitGrepReadError(path, ex);
             return null;
         }

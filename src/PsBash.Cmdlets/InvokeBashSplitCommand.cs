@@ -254,6 +254,7 @@ public sealed class InvokeBashSplitCommand : PSCmdlet
         }
         catch (Exception ex)
         {
+            if (FileSystemHelpers.IsPipelineStop(ex)) throw;
             string normalized = outPath.Replace('\\', '/');
             FileSystemHelpers.WriteBashError(
                 this, $"split: {normalized}: {ex.Message}");

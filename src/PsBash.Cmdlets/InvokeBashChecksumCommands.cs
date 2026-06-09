@@ -92,6 +92,7 @@ internal static class ChecksumEngine
                     }
                     catch (Exception ex)
                     {
+                        if (FileSystemHelpers.IsPipelineStop(ex)) throw;
                         FileSystemHelpers.WriteBashError(cmdlet, $"{commandName}: {filePath}: {ex.Message}");
                         continue;
                     }

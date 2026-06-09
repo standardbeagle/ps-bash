@@ -201,6 +201,7 @@ public sealed class InvokeBashTeeCommand : PSCmdlet
                 }
                 catch (Exception ex)
                 {
+                    if (FileSystemHelpers.IsPipelineStop(ex)) throw;
                     FileSystemHelpers.WriteBashError(
                         this, $"tee: {normalized}: {ex.Message}");
                 }

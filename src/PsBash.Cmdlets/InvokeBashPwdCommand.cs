@@ -101,6 +101,7 @@ public sealed class InvokeBashPwdCommand : PSCmdlet
             }
             catch (Exception ex)
             {
+                if (FileSystemHelpers.IsPipelineStop(ex)) throw;
                 FileSystemHelpers.WriteBashError(this, $"pwd: error resolving path: {ex.Message}");
                 return;
             }

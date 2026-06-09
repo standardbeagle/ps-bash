@@ -220,6 +220,7 @@ public sealed class InvokeBashInstallCommand : PSCmdlet
                     }
                     catch (Exception ex)
                     {
+                        if (FileSystemHelpers.IsPipelineStop(ex)) throw;
                         FileSystemHelpers.WriteBashError(this,
                             $"install: cannot create directory '{dir}': {ex.Message}");
                         FileSystemHelpers.SetLastExitCode(this, 1);
@@ -287,6 +288,7 @@ public sealed class InvokeBashInstallCommand : PSCmdlet
                 }
                 catch (Exception ex)
                 {
+                    if (FileSystemHelpers.IsPipelineStop(ex)) throw;
                     FileSystemHelpers.WriteBashError(this,
                         $"install: cannot create directory '{destParent}': {ex.Message}");
                     FileSystemHelpers.SetLastExitCode(this, 1);
@@ -373,6 +375,7 @@ public sealed class InvokeBashInstallCommand : PSCmdlet
             }
             catch (Exception ex)
             {
+                if (FileSystemHelpers.IsPipelineStop(ex)) throw;
                 FileSystemHelpers.WriteBashError(this,
                     $"install: cannot install '{src}': {ex.Message}");
                 hadError = true;

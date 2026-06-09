@@ -137,6 +137,7 @@ public sealed class InvokeBashJqCommand : PSCmdlet
                 }
                 catch (Exception ex)
                 {
+                    if (FileSystemHelpers.IsPipelineStop(ex)) throw;
                     EmitError($"jq: {file}: {ex.Message}");
                     SessionState.PSVariable.Set("global:LASTEXITCODE", 2);
                     return;
@@ -160,6 +161,7 @@ public sealed class InvokeBashJqCommand : PSCmdlet
                 }
                 catch (Exception ex)
                 {
+                    if (FileSystemHelpers.IsPipelineStop(ex)) throw;
                     EmitError($"jq: {file}: {ex.Message}");
                     SessionState.PSVariable.Set("global:LASTEXITCODE", 2);
                     return;
@@ -185,6 +187,7 @@ public sealed class InvokeBashJqCommand : PSCmdlet
                 }
                 catch (Exception ex)
                 {
+                    if (FileSystemHelpers.IsPipelineStop(ex)) throw;
                     EmitError($"jq: parse error: {ex.Message}");
                     SessionState.PSVariable.Set("global:LASTEXITCODE", 5);
                     return;

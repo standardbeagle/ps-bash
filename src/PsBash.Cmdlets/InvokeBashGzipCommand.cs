@@ -207,6 +207,7 @@ public sealed class InvokeBashGzipCommand : PSCmdlet
                 }
                 catch (Exception ex)
                 {
+                    if (FileSystemHelpers.IsPipelineStop(ex)) throw;
                     string normalized = filePath.Replace('\\', '/');
                     FileSystemHelpers.WriteBashError(this, $"gzip: {normalized}: {ex.Message}");
                     continue;
@@ -228,6 +229,7 @@ public sealed class InvokeBashGzipCommand : PSCmdlet
                     }
                     catch (Exception ex)
                     {
+                        if (FileSystemHelpers.IsPipelineStop(ex)) throw;
                         string normalized = filePath.Replace('\\', '/');
                         FileSystemHelpers.WriteBashError(this, $"gzip: {normalized}: {ex.Message}");
                         continue;
@@ -264,6 +266,7 @@ public sealed class InvokeBashGzipCommand : PSCmdlet
                         }
                         catch (Exception ex)
                         {
+                            if (FileSystemHelpers.IsPipelineStop(ex)) throw;
                             string normalized = filePath.Replace('\\', '/');
                             FileSystemHelpers.WriteBashError(this, $"gzip: {normalized}: {ex.Message}");
                             continue;
@@ -290,6 +293,7 @@ public sealed class InvokeBashGzipCommand : PSCmdlet
                         }
                         catch (Exception ex)
                         {
+                            if (FileSystemHelpers.IsPipelineStop(ex)) throw;
                             string normalized = filePath.Replace('\\', '/');
                             FileSystemHelpers.WriteBashError(this, $"gzip: {normalized}: {ex.Message}");
                             continue;
@@ -337,6 +341,7 @@ public sealed class InvokeBashGzipCommand : PSCmdlet
                         }
                         catch (Exception ex)
                         {
+                            if (FileSystemHelpers.IsPipelineStop(ex)) throw;
                             string normalized = filePath.Replace('\\', '/');
                             FileSystemHelpers.WriteBashError(this, $"gzip: {normalized}: {ex.Message}");
                             continue;
@@ -363,6 +368,7 @@ public sealed class InvokeBashGzipCommand : PSCmdlet
                         }
                         catch (Exception ex)
                         {
+                            if (FileSystemHelpers.IsPipelineStop(ex)) throw;
                             string normalized = filePath.Replace('\\', '/');
                             FileSystemHelpers.WriteBashError(this, $"gzip: {normalized}: {ex.Message}");
                             continue;
@@ -400,6 +406,7 @@ public sealed class InvokeBashGzipCommand : PSCmdlet
         }
         catch (Exception ex)
         {
+            if (FileSystemHelpers.IsPipelineStop(ex)) throw;
             string normalized = path.Replace('\\', '/');
             FileSystemHelpers.WriteBashError(this, $"gzip: {normalized}: {ex.Message}");
             return false;

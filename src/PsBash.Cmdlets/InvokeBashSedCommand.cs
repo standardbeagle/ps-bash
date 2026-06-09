@@ -916,6 +916,7 @@ public sealed class InvokeBashSedCommand : PSCmdlet
         }
         catch (Exception ex)
         {
+            if (FileSystemHelpers.IsPipelineStop(ex)) throw;
             string normalized = path.Replace('\\', '/');
             bool notFound = ex is FileNotFoundException or DirectoryNotFoundException
                 || ex.InnerException is FileNotFoundException or DirectoryNotFoundException;
@@ -934,6 +935,7 @@ public sealed class InvokeBashSedCommand : PSCmdlet
         }
         catch (Exception ex)
         {
+            if (FileSystemHelpers.IsPipelineStop(ex)) throw;
             string normalized = path.Replace('\\', '/');
             EmitError($"sed: {normalized}: {ex.Message}");
             return false;

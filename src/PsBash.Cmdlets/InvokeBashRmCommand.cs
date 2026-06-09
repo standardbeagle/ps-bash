@@ -245,6 +245,7 @@ public sealed class InvokeBashRmCommand : PSCmdlet
             }
             catch (Exception ex)
             {
+                if (FileSystemHelpers.IsPipelineStop(ex)) throw;
                 FileSystemHelpers.WriteBashError(this,
                     $"rm: cannot remove '{target}': {ex.Message}");
                 hadError = true;

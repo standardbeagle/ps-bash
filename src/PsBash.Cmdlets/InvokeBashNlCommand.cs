@@ -200,6 +200,7 @@ public sealed class InvokeBashNlCommand : PSCmdlet
                 }
                 catch (Exception ex)
                 {
+                    if (FileSystemHelpers.IsPipelineStop(ex)) throw;
                     WriteReadError(filePath, ex);
                 }
             }

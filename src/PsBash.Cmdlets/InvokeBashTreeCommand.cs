@@ -191,6 +191,7 @@ public sealed class InvokeBashTreeCommand : PSCmdlet
         }
         catch (Exception ex)
         {
+            if (FileSystemHelpers.IsPipelineStop(ex)) throw;
             string normalized = target.Replace('\\', '/');
             FileSystemHelpers.WriteBashError(
                 this,

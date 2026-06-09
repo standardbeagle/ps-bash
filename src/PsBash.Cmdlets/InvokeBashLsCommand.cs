@@ -248,6 +248,7 @@ public sealed class InvokeBashLsCommand : PSCmdlet
                     }
                     catch (Exception ex)
                     {
+                        if (FileSystemHelpers.IsPipelineStop(ex)) throw;
                         WriteBashError(
                             $"ls: cannot open directory '{target}': {ex.Message}", 2);
                         hadError = true;
