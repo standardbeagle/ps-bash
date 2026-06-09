@@ -386,4 +386,46 @@ public class SdkWorkerTests : IAsyncLifetime
         Assert.Contains("coral", matches);
         Assert.DoesNotContain("crimson", matches); // does not match the "co" word
     }
+
+    // Regression guard for the concurrent env/cwd corruption (fb6bf72): a bash
+    // command's variables are process-global ($env:NAME) and the warm pool does
+    // NOT isolate them across runspaces. Two commands executing concurrently in
+    // the same host process therefore race on the shared env unless SdkWorker's
+    // process-wide _globalExecGate serializes execution.
+    //
+    // Deterministic by construction: each worker writes its own marker to the
+    // SHARED env var, sleeps (forcing temporal overlap), then reads it back.
+    // WITH the gate each command runs to completion atomically and reads its own
+    // marker. WITHOUT the gate every worker writes (last writer wins), all sleep
+    // concurrently, then all read the same final value — so at least one worker
+    // reads a marker that is not its own and the assertion fails.
+    [Fact]
+    public async Task ConcurrentExecute_SharedEnvVar_EachCommandReadsItsOwnValue()
+    {
+        const int workerCount = 5;
+        var workers = Enumerable.Range(0, workerCount)
+            .Select(_ => _fixture.CreateWorker())
+            .ToArray();
+
+        async Task<(int Id, List<string> Lines)> RunAsync(int id, SdkWorker worker)
+        {
+            var lines = new List<string>();
+            worker.OutputCallback = lines.Add;
+            // Set the shared env var, force overlap with a sleep, then echo it.
+            await worker.ExecuteAsync(
+                $"$env:__psbash_racevar = '{id}'; " +
+                "Start-Sleep -Milliseconds 150; " +
+                "Invoke-BashEcho $env:__psbash_racevar");
+            return (id, lines);
+        }
+
+        var results = await Task.WhenAll(
+            workers.Select((w, id) => RunAsync(id, w)));
+
+        foreach (var (id, lines) in results)
+        {
+            var emitted = string.Concat(lines).Replace("\n", string.Empty).Trim();
+            Assert.Equal(id.ToString(), emitted);
+        }
+    }
 }
