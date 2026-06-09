@@ -20,6 +20,24 @@ public sealed class SdkWorker : IWorker, ICompletionWorker
     private readonly SemaphoreSlim _lock = new(1, 1);
     private int _disposed;
 
+    // PROCESS-WIDE command-execution gate. A bash command reads/writes its
+    // variables as `$env:NAME` and its working directory as
+    // `[System.Environment]::CurrentDirectory` — both PROCESS-GLOBAL, shared by
+    // every runspace in this host. The warm pool gives each connection its own
+    // runspace, but that does NOT isolate env vars or cwd, so two commands
+    // executing concurrently in the daemon corrupt each other (e.g. a
+    // `while` loop racing on `$env:i` drops/duplicates iterations). Serialize
+    // the actual execution so only one command mutates the shared process state
+    // at a time. The gate is held ONLY across RunCommand (CPU/runspace work);
+    // IPC output drains asynchronously after release, so a fast command is not
+    // blocked on a slow consumer — only on another command actively executing.
+    // Cost: concurrent `-c` launchers queue instead of truly running in
+    // parallel (parallelism in one process is unsound under shared env/cwd
+    // anyway; opt into real parallelism with PSBASH_PER_INVOCATION=1, which
+    // gives each launcher its own host process). Uncontended in the
+    // single-launcher, per-invocation, and interactive paths.
+    private static readonly SemaphoreSlim _globalExecGate = new(1, 1);
+
     public Action<string>? OutputCallback { get; set; }
 
     public bool HasExited => _disposed != 0;
@@ -44,14 +62,22 @@ public sealed class SdkWorker : IWorker, ICompletionWorker
     {
         ObjectDisposedException.ThrowIf(_disposed != 0, this);
         var callback = OutputCallback;
-        await _lock.WaitAsync(ct);
+        await _globalExecGate.WaitAsync(ct);
         try
         {
-            return await Task.Run(() => WithDefaultRunspace(() => RunCommand(command, callback, null)), ct);
+            await _lock.WaitAsync(ct);
+            try
+            {
+                return await Task.Run(() => WithDefaultRunspace(() => RunCommand(command, callback, null)), ct);
+            }
+            finally
+            {
+                _lock.Release();
+            }
         }
         finally
         {
-            _lock.Release();
+            _globalExecGate.Release();
         }
     }
 
@@ -134,17 +160,25 @@ public sealed class SdkWorker : IWorker, ICompletionWorker
         CancellationToken ct = default)
     {
         ObjectDisposedException.ThrowIf(_disposed != 0, this);
-        await _lock.WaitAsync(ct);
+        await _globalExecGate.WaitAsync(ct);
         try
         {
-            // When ct fires mid-command (e.g. parent-death watcher), stop the PS
-            // pipeline so Invoke() returns instead of blocking indefinitely.
-            using var stopReg = ct.Register(() => _ps.Stop());
-            return await Task.Run(() => WithDefaultRunspace(() => RunCommand(command, output, errorOutput)), ct);
+            await _lock.WaitAsync(ct);
+            try
+            {
+                // When ct fires mid-command (e.g. parent-death watcher), stop the PS
+                // pipeline so Invoke() returns instead of blocking indefinitely.
+                using var stopReg = ct.Register(() => _ps.Stop());
+                return await Task.Run(() => WithDefaultRunspace(() => RunCommand(command, output, errorOutput)), ct);
+            }
+            finally
+            {
+                _lock.Release();
+            }
         }
         finally
         {
-            _lock.Release();
+            _globalExecGate.Release();
         }
     }
 
