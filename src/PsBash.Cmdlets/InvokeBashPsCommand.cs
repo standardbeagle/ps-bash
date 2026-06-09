@@ -382,6 +382,17 @@ public sealed class InvokeBashPsCommand : PSCmdlet
 
         foreach (var entry in entries)
         {
+            // A process command line can carry embedded newlines (e.g. pwsh
+            // -Command with a multi-line script reaches /proc/PID/cmdline with
+            // real \n bytes). ps is line-oriented — one process per line — so
+            // collapse any \r/\n into spaces before rendering. Otherwise the
+            // single-line PsEntry's BashText becomes multi-line and downstream
+            // line consumers (grep/sort/head) defensively split it into several
+            // rows, fragmenting one process and dropping the typed PsEntry.
+            // Real ps likewise never emits a multi-line entry.
+            entry.Command = CollapseNewlines(entry.Command);
+            entry.CommandLine = CollapseNewlines(entry.CommandLine);
+
             string bashText;
             if (columns != null)
             {
@@ -792,6 +803,13 @@ public sealed class InvokeBashPsCommand : PSCmdlet
             WorkingSet = ws,
         };
     }
+
+    /// <summary>
+    /// Collapse embedded carriage returns / newlines into single spaces so a
+    /// process's rendered line stays single-line (ps is one-process-per-line).
+    /// </summary>
+    private static string CollapseNewlines(string s)
+        => string.IsNullOrEmpty(s) ? s : s.Replace('\r', ' ').Replace('\n', ' ');
 
     private static string FormatPsAuxLine(PsEntry e)
     {
