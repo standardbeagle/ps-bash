@@ -1285,6 +1285,38 @@ public class PsEmitterTests
     }
 
     [Fact]
+    public void Transpile_CdRecordsOldPwdOnSuccess()
+    {
+        // Every successful cd must stash the dir it leaves into $OLDPWD so `cd -` can return.
+        var result = PsEmitter.Transpile("cd /tmp");
+
+        Assert.Contains("$env:OLDPWD = [System.Environment]::CurrentDirectory", result);
+    }
+
+    [Fact]
+    public void Transpile_CdDash_TargetsOldPwdAndPrints()
+    {
+        var result = PsEmitter.Transpile("cd -");
+
+        Assert.StartsWith("$__psbash_cd_target = $env:OLDPWD", result);
+        // bash echoes the directory it lands in for `cd -`.
+        Assert.Contains("Write-Output $__psbash_cd_resolved", result);
+        // Unset OLDPWD must fail with bash's message, not try to resolve an empty path.
+        Assert.Contains("cd: OLDPWD not set", result);
+        Assert.Contains("[string]::IsNullOrEmpty([string]$__psbash_cd_target)", result);
+    }
+
+    [Fact]
+    public void Transpile_CdNonDash_DoesNotPrintTarget()
+    {
+        // Only `cd -` echoes; a normal cd stays silent.
+        var result = PsEmitter.Transpile("cd /tmp");
+
+        Assert.DoesNotContain("Write-Output $__psbash_cd_resolved", result);
+        Assert.DoesNotContain("cd: OLDPWD not set", result);
+    }
+
+    [Fact]
     public void Transpile_CdInAndChain_WrapsStatementOperand()
     {
         var result = PsEmitter.Transpile("cd C:/Temp && echo ok");

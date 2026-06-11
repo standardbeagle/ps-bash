@@ -27,6 +27,10 @@ public static class InteractiveShell
     private static string _sessionId = Guid.NewGuid().ToString();
     private static string? _lastCommand;
 
+    // In-session command list backing bash-style history expansion (!!, !$, !n, ^old^new).
+    // Holds the typed (pre-alias-expansion) lines, newest last — what the user sees in history.
+    private static readonly List<string> _sessionHistory = new();
+
     /// <summary>
     /// Run the interactive REPL against an externally-provided worker (the
     /// SdkWorker owned by ps-bash-host). The caller owns the worker lifetime;
@@ -143,6 +147,24 @@ public static class InteractiveShell
                 var trimmed = input.Trim();
                 if (trimmed.Length == 0)
                     continue;
+
+                // Bash-style history expansion (!!, !$, !n, !str, ^old^new) runs first — before
+                // alias expansion, exit detection, and transpilation — matching bash's order.
+                if (HistoryExpander.ContainsExpansion(trimmed))
+                {
+                    var expanded = HistoryExpander.Expand(trimmed, _sessionHistory, out var histError);
+                    if (histError != null)
+                    {
+                        Console.Error.WriteLine($"ps-bash: {histError}");
+                        continue;
+                    }
+                    if (!ReferenceEquals(expanded, trimmed) && expanded != trimmed)
+                    {
+                        // Echo the expanded line so the user sees what actually ran, like bash.
+                        Console.WriteLine(expanded);
+                        trimmed = expanded!;
+                    }
+                }
 
                 if (IsExitCommand(trimmed, out var exitCode))
                 {
@@ -303,6 +325,15 @@ public static class InteractiveShell
 
     private static async Task RecordCommandAsync(string command, int? exitCode, long durationMs)
     {
+        // Feed the in-session list backing history expansion (!!, !$, ...). Done unconditionally
+        // (not gated on the store) and capped to bound growth on a long-lived REPL.
+        if (!string.IsNullOrEmpty(command))
+        {
+            _sessionHistory.Add(command);
+            if (_sessionHistory.Count > 5000)
+                _sessionHistory.RemoveRange(0, _sessionHistory.Count - 5000);
+        }
+
         if (_historyStore == null || _lineEditor == null) return;
 
         try

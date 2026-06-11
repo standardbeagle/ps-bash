@@ -207,6 +207,18 @@ recursive `EmitSimple`.
 
 The `$global:__BashErrexit` guard variable prevents strict-mode crashes when checking `$?` in error handlers. When `set -e` is active, PowerShell's `Set-StrictMode -Version Latest` would throw on null property accesses in conditions like `if [ $? -ne 0 ]`. The guard allows the emitter to conditionally suppress strict-mode behavior around exit-code checks.
 
+### `cd`
+
+`EmitCd` resolves the target against `[System.Environment]::CurrentDirectory` and, on success,
+updates `$global:__PsBashCwd`, `CurrentDirectory`, `$env:PWD`, and `Set-Location`. Every
+successful `cd` first records the directory it is leaving into `$env:OLDPWD` (captured before
+`CurrentDirectory` is overwritten) — this is what makes `cd -` work.
+
+- `cd` (no args) / `cd ~` -> `$HOME`
+- `cd -` -> `$env:OLDPWD`, and like bash echoes the directory it lands in (`Write-Output`).
+  When `$OLDPWD` is unset it fails with `cd: OLDPWD not set` instead of resolving an empty path.
+- A missing directory emits `cd: <target>: No such file or directory` and sets `$LASTEXITCODE = 1`.
+
 ### `source` / `.`
 
 - `source file.sh` -> `. file.ps1` (extension rewritten)

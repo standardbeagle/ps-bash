@@ -3048,13 +3048,22 @@ public static class PsEmitter
     private static string EmitCd(ImmutableArray<CompoundWord> args)
     {
         string targetExpr;
+        // `cd -` switches to the previous directory ($OLDPWD) and, like bash, echoes
+        // the directory it lands in. Bash also records $OLDPWD on EVERY successful cd,
+        // which is what makes `-` work — see the success branch below.
+        var isDash = false;
         if (args.IsEmpty)
         {
             targetExpr = "$HOME";
         }
         else if (GetLiteralValue(args[0]) is { } literal)
         {
-            if (literal == "~")
+            if (literal == "-")
+            {
+                targetExpr = "$env:OLDPWD";
+                isDash = true;
+            }
+            else if (literal == "~")
                 targetExpr = "$HOME";
             else if (literal.StartsWith("~/") || literal.StartsWith("~\\"))
                 targetExpr = "$HOME + " + QuotePsString("\\" + literal[2..]);
@@ -3073,16 +3082,32 @@ public static class PsEmitter
                 targetExpr = emitted;
         }
 
-        return
-            "$__psbash_cd_target = " + targetExpr + "; " +
+        // The success branch captures the dir we are leaving into $OLDPWD BEFORE
+        // overwriting CurrentDirectory, so the next `cd -` can return to it.
+        var resolveAndAct =
             "$__psbash_cd_resolved = [System.IO.Path]::GetFullPath([string]$__psbash_cd_target, [System.Environment]::CurrentDirectory); " +
             "if ([System.IO.Directory]::Exists($__psbash_cd_resolved)) { " +
+            "$env:OLDPWD = [System.Environment]::CurrentDirectory; " +
             "$global:__PsBashCwd = $__psbash_cd_resolved; " +
             "[System.Environment]::CurrentDirectory = $__psbash_cd_resolved; " +
             "$env:PWD = $__psbash_cd_resolved; " +
             "Set-Location -LiteralPath $__psbash_cd_resolved -ErrorAction SilentlyContinue; " +
+            (isDash ? "Write-Output $__psbash_cd_resolved; " : "") +
             "$global:LASTEXITCODE = 0 " +
             "} else { Write-Error -Message (\"cd: \" + $__psbash_cd_target + \": No such file or directory\") -ErrorAction Continue; $global:LASTEXITCODE = 1 }";
+
+        var prefix = "$__psbash_cd_target = " + targetExpr + "; ";
+        if (isDash)
+        {
+            // `cd -` with no prior directory: bash prints "cd: OLDPWD not set" and fails
+            // rather than trying to resolve an empty path (GetFullPath would throw).
+            return prefix +
+                "if ([string]::IsNullOrEmpty([string]$__psbash_cd_target)) { " +
+                "Write-Error -Message 'cd: OLDPWD not set' -ErrorAction Continue; $global:LASTEXITCODE = 1 " +
+                "} else { " + resolveAndAct + " }";
+        }
+
+        return prefix + resolveAndAct;
     }
 
     private static string QuotePsString(string value) => PsBuild.SingleQuote(value);
