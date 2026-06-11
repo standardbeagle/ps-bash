@@ -27,6 +27,15 @@
   <ItemGroup>
     <ProjectReference Include="..\PsBash.Cmdlets\PsBash.Cmdlets.csproj" />
     <ProjectReference Include="..\PsBash.Testing\PsBash.Testing.csproj" />
+    <!-- Build-ordering only: forces a fresh ps-bash launcher + host (via Shell's
+         CopyHostRuntimeAssets) before the spawn-mode canary tests resolve the
+         binary, so `dotnet test` of this project never runs against a stale
+         on-disk launcher/host. ReferenceOutputAssembly=false keeps Shell's
+         apphost out of the test output — the tests spawn it as an external
+         process via PsBashLocator, not as a referenced assembly. -->
+    <ProjectReference Include="..\PsBash.Shell\PsBash.Shell.csproj"
+                      ReferenceOutputAssembly="false"
+                      PrivateAssets="all" />
   </ItemGroup>
 
   <ItemGroup>

@@ -25,6 +25,14 @@
   <ItemGroup>
     <ProjectReference Include="..\PsBash.Core\PsBash.Core.csproj" />
     <ProjectReference Include="..\PsBash.Testing\PsBash.Testing.csproj" />
+    <!-- Build-ordering only: forces a fresh ps-bash launcher + host (via Shell's
+         CopyHostRuntimeAssets) before the oracle's ps-bash side resolves the
+         binary, so `dotnet test` of this project never differentials a stale
+         build against bash. ReferenceOutputAssembly=false keeps Shell's apphost
+         out of the test output (spawned externally via PsBashLocator). -->
+    <ProjectReference Include="..\PsBash.Shell\PsBash.Shell.csproj"
+                      ReferenceOutputAssembly="false"
+                      PrivateAssets="all" />
   </ItemGroup>
 
   <ItemGroup>

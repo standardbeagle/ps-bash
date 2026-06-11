@@ -44,9 +44,13 @@ public class ScaleTests
         // Split on whitespace (spaces or newlines between tokens).
         var tokens = normalized.Split(new[] { ' ', '\n', '\t' },
             StringSplitOptions.RemoveEmptyEntries);
-        // Must have approximately 1000 tokens (allow ±50 for any joining behavior).
-        Assert.True(tokens.Length >= 950 && tokens.Length <= 1050,
-            $"Expected ~1000 tokens, got {tokens.Length}. stderr={stderr}");
+        // EXACTLY 1000 tokens. brace expansion of {1..1000} is deterministic;
+        // a ±50 band would pass while silently dropping up to 50 elements. The
+        // first and last token must also be exactly "1" and "1000" — a count
+        // alone can't catch an off-by-one in the range bounds.
+        Assert.Equal(1000, tokens.Length);
+        Assert.Equal("1", tokens[0]);
+        Assert.Equal("1000", tokens[^1]);
     }
 
     // ── 2. Large pipe — ~50 KB via seq | wc -c ───────────────────────────────
@@ -87,11 +91,15 @@ public class ScaleTests
         Assert.True(long.TryParse(parts[0], out var byteCount),
             $"Expected numeric first token from wc -c, got: '{parts[0]}'. stdout={normalized}");
 
-        // seq 1 10000 produces 48894 bytes on LF systems.
-        // On CRLF (Windows): each line gains 1 extra byte — up to 58894.
-        // Allow a range that covers both: 38000–75000 bytes.
-        Assert.True(byteCount is >= 38_000 and <= 75_000,
-            $"Expected 38000–75000 bytes from seq 1 10000 | wc -c, got {byteCount}. stderr={stderr}");
+        // EXACT byte count. seq 1 10000 emits the decimals 1..10000 each followed
+        // by one line terminator. The only legitimate variance is the terminator:
+        //   LF   → 48894 bytes  (observed; the internal pipe is \n-terminated BashText)
+        //   CRLF → 58894 bytes  (one extra byte per line, if a build ever switches)
+        // Anything else means lines were dropped, duplicated, or mis-counted — the
+        // old 38000–75000 band (±~50%) would have rubber-stamped all of those.
+        Assert.True(byteCount is 48_894 or 58_894,
+            $"Expected exactly 48894 (LF) or 58894 (CRLF) bytes from seq 1 10000 | wc -c, " +
+            $"got {byteCount}. stderr={stderr}");
     }
 
     // ── 3. 10k lines through sed ──────────────────────────────────────────────

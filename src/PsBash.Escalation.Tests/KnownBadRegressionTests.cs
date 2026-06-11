@@ -101,4 +101,74 @@ public class KnownBadRegressionTests
 
         Assert.Contains("did not exit within", ex.Message);
     }
+
+    // ── 4. Concurrent daemon commands do not corrupt shared shell state ────────
+
+    /// <summary>
+    /// Known-bad: concurrent daemon command execution corrupting process-global
+    /// state. A bash variable is transpiled to <c>$env:NAME</c> and the working
+    /// directory to <c>[Environment]::CurrentDirectory</c> — both process-global
+    /// and shared by every pooled runspace in the daemon host. Without the
+    /// process-wide execution gate (commit fb6bf72), two concurrent <c>-c</c>
+    /// launchers racing on the same loop variable drop/duplicate/skip iterations
+    /// (observed shapes: "1,2,4", "1,2,3,4,6", "1,2,3,4,5,1,2,3,4,5").
+    ///
+    /// This is the END-TO-END guard for that fix: it drives real concurrent
+    /// launcher processes against one shared daemon, where the unit-level
+    /// SdkWorker env-race test cannot see the IPC/pool/launcher path. The
+    /// invariant is precise: any command that SUCCEEDS (exit 0) must produce
+    /// EXACTLY its own 1..5 — a corrupted-but-successful result is the bug.
+    /// Cold-start connection transients (non-zero exit) are a separate concern
+    /// and are excluded; the daemon is pre-warmed to minimize them, and the test
+    /// requires enough successes that it cannot pass vacuously.
+    ///
+    /// Stress-tagged: spawns many concurrent processes, so it runs under
+    /// <c>--stress</c> rather than the default gate (same isolation as the
+    /// cold-start single-flight stress test).
+    /// </summary>
+    [SkippableFact]
+    [Trait("Category", "Stress")]
+    public async Task Regression_ConcurrentDaemonCommands_NoSharedVariableCorruption()
+    {
+        const string loop = "i=1; while [ $i -le 5 ]; do echo $i; i=$((i+1)); done";
+        const string expected = "1\n2\n3\n4\n5";
+        const int concurrency = 8;
+        const int rounds = 3;
+
+        // Warm the daemon so the concurrent batch hits a live host (keeps the
+        // test focused on execution-serialization, not cold-start spawn).
+        await ProcessRunHelper.RunAsync(new[] { "-c", "echo warmup" });
+
+        int successes = 0;
+        var corrupted = new List<string>();
+
+        for (int round = 0; round < rounds; round++)
+        {
+            var tasks = Enumerable.Range(0, concurrency)
+                .Select(_ => ProcessRunHelper.RunAsync(
+                    new[] { "-c", loop }, timeout: TimeSpan.FromSeconds(30)))
+                .ToArray();
+            var results = await Task.WhenAll(tasks);
+
+            foreach (var (exitCode, stdout, _) in results)
+            {
+                // Only successful commands carry the data-integrity contract;
+                // a non-zero exit is a connection transient, counted out.
+                if (exitCode != 0) continue;
+                var normalized = stdout.Replace("\r\n", "\n").Replace("\r", "\n").Trim();
+                if (normalized == expected) successes++;
+                else corrupted.Add($"[exit0] '{normalized.Replace("\n", ",")}'");
+            }
+        }
+
+        Assert.True(corrupted.Count == 0,
+            $"Concurrent -c launchers corrupted shared shell state in {corrupted.Count} run(s) — " +
+            $"the daemon execution gate is not serializing. Samples: {string.Join("  ", corrupted.Take(8))}");
+
+        // Guard against a vacuous pass (e.g. every run failing to connect): the
+        // corruption invariant is only meaningful if commands actually executed.
+        Assert.True(successes >= concurrency,
+            $"Too few successful concurrent runs ({successes}) to validate the no-corruption invariant; " +
+            "expected the warmed daemon to serve most of the batch.");
+    }
 }

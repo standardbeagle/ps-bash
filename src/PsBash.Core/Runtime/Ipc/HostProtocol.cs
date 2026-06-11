@@ -644,6 +644,47 @@ public static class HostProtocol
             ?? "unknown";
     }
 
+    /// <summary>
+    /// <see cref="BuildIdentity"/> augmented with the host binary's file stamp
+    /// (last-write-time + size). The bare <see cref="BuildIdentity"/> is the
+    /// assembly <c>InformationalVersion</c>, which does NOT change between dev
+    /// rebuilds of the same <c>&lt;Version&gt;</c> — so without this, a launcher
+    /// happily reuses a daemon running OLD code after a recompile (the stale-host
+    /// trap). The stamp folds the actual on-disk binary into the identity:
+    /// <list type="bullet">
+    /// <item>the launcher computes it from the host binary it will spawn
+    /// (<c>_hostBinaryPath</c>);</item>
+    /// <item>the host computes it from its own executable
+    /// (<see cref="Environment.ProcessPath"/>).</item>
+    /// </list>
+    /// Because the launcher spawns exactly that file, both sides stat the same
+    /// physical file and agree — until a rebuild changes it, at which point the
+    /// running daemon's recorded identity no longer matches and the
+    /// obsolete-replacement path fires. If the file cannot be stat'd the bare
+    /// version is returned, so a stat failure degrades to the prior version-only
+    /// behavior instead of looping on respawn.
+    /// </summary>
+    public static string BuildIdentityFor(string? hostBinaryPath)
+    {
+        var stamp = BinaryStamp(hostBinaryPath);
+        return stamp is null ? BuildIdentity : $"{BuildIdentity}#{stamp}";
+    }
+
+    private static string? BinaryStamp(string? path)
+    {
+        if (string.IsNullOrEmpty(path)) return null;
+        try
+        {
+            var fi = new FileInfo(path);
+            if (!fi.Exists) return null;
+            return $"{fi.LastWriteTimeUtc.Ticks:x}-{fi.Length:x}";
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
     private static string EncodeArgv(IReadOnlyList<string> argv)
     {
         if (argv.Count == 0) return "";

@@ -115,7 +115,10 @@ internal sealed class Program
             Pid: Environment.ProcessId,
             ExecutablePath: Environment.ProcessPath ?? "<unknown>",
             ProtocolVersion: HostProtocol.ProtocolVersion,
-            BuildIdentity: HostProtocol.BuildIdentity,
+            // Record the version-plus-binary-stamp identity so a launcher whose
+            // host binary was rebuilt (same <Version>, new code) detects this
+            // daemon as obsolete and replaces it instead of reusing stale code.
+            BuildIdentity: HostProtocol.BuildIdentityFor(Environment.ProcessPath),
             TransportScheme: scheme,
             Endpoint: endpoint,
             StartedAt: DateTimeOffset.UtcNow,

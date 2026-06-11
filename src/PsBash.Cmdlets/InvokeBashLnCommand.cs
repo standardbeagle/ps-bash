@@ -97,18 +97,26 @@ public sealed class InvokeBashLnCommand : PSCmdlet
         var linkName = operands[1];
         var linkAbsolute = SessionState.Path.GetUnresolvedProviderPathFromPSPath(linkName);
 
-        if (force && (File.Exists(linkAbsolute) || Directory.Exists(linkAbsolute)))
+        // GNU ln: when LINK_NAME is an existing REAL directory, the link is
+        // created INSIDE it as basename(TARGET) — the directory is never
+        // removed. (The old code ran Directory.Delete(recursive:true) here,
+        // silently destroying a populated tree on `ln -sf x existing_dir`.)
+        if (Directory.Exists(linkAbsolute) && !IsReparsePoint(linkAbsolute))
+        {
+            var leaf = Path.GetFileName(target.TrimEnd('/', '\\'));
+            if (!string.IsNullOrEmpty(leaf))
+                linkAbsolute = Path.Combine(linkAbsolute, leaf);
+        }
+
+        // -f force-removes an existing link name, but ONLY a file or a symlink.
+        // A real directory at the (resolved) link path is left intact and falls
+        // through to the "File exists" guard below — matching GNU's refusal to
+        // overwrite a directory.
+        if (force && (File.Exists(linkAbsolute) || IsReparsePoint(linkAbsolute)))
         {
             try
             {
-                if (Directory.Exists(linkAbsolute) && !IsReparsePoint(linkAbsolute))
-                {
-                    Directory.Delete(linkAbsolute, recursive: true);
-                }
-                else
-                {
-                    File.Delete(linkAbsolute);
-                }
+                RemoveLinkOrFile(linkAbsolute);
             }
             catch (Exception ex)
             {
@@ -185,6 +193,23 @@ public sealed class InvokeBashLnCommand : PSCmdlet
                 symbolic ? $"'{bashLink}' -> '{bashTarget}'\n"
                          : $"'{bashLink}' => '{bashTarget}'\n"));
         }
+    }
+
+    /// <summary>
+    /// Remove an existing link name that is a file or a symlink — never a real
+    /// directory. A directory reparse point (symlink/junction) is removed with a
+    /// non-recursive <see cref="Directory.Delete(string,bool)"/>, which unlinks
+    /// the reparse point only and leaves its target untouched; everything else
+    /// goes through the read-only-aware <see cref="FileSystemHelpers.DeleteFileForce"/>.
+    /// </summary>
+    private static void RemoveLinkOrFile(string path)
+    {
+        if (Directory.Exists(path) && IsReparsePoint(path))
+        {
+            Directory.Delete(path, recursive: false);
+            return;
+        }
+        FileSystemHelpers.DeleteFileForce(path);
     }
 
     private static bool IsReparsePoint(string path)

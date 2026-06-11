@@ -34,6 +34,28 @@ public sealed class CanaryFeatureTests
     private static bool IsSpawnMode(ModeResult r) =>
         r.Mode is Mode.M1_CFlag or Mode.M2_StdinPipe or Mode.M3_FileArg;
 
+    /// <summary>CRLF→LF fold — the one sanctioned line-ending normalization (Directive 1).</summary>
+    private static string NormalizeLf(string s) => s.Replace("\r\n", "\n").Replace("\r", "\n");
+
+    /// <summary>
+    /// Assert a spawn-mode stdout equals EXACTLY the given lines (after the single
+    /// sanctioned CRLF→LF fold and trimming the final trailing newline). Unlike a
+    /// substring Contains() check, this fails on duplicated output (e.g. the
+    /// "1 2 3 1 2 3" env/cwd-corruption mode that motivated the daemon execution
+    /// serialization), dropped lines, reordering, and stray extra tokens.
+    /// </summary>
+    private static void AssertSpawnLinesExact(ModeResult r, params string[] expectedLines)
+    {
+        var actual = NormalizeLf(r.Stdout).TrimEnd('\n');
+        var lines = actual.Length == 0 ? Array.Empty<string>() : actual.Split('\n');
+        Assert.Equal(expectedLines, lines);
+    }
+
+    /// <summary>Assert spawn-mode stdout equals EXACTLY <paramref name="expected"/>, byte for byte
+    /// after CRLF→LF — used where a trailing newline's presence/absence is the behavior under test.</summary>
+    private static void AssertSpawnStdoutExact(ModeResult r, string expected)
+        => Assert.Equal(expected, NormalizeLf(r.Stdout));
+
     // =========================================================================
     // 1. ECHO
     // =========================================================================
@@ -51,7 +73,7 @@ public sealed class CanaryFeatureTests
             Skip.If(r.ExitCode == -999, $"{r.Mode} skipped: {r.Stderr}");
             Assert.Equal(0, r.ExitCode);
             if (IsSpawnMode(r))
-                Assert.Contains("hello", r.Stdout);
+                AssertSpawnLinesExact(r, "hello");
         }
     }
 
@@ -67,8 +89,11 @@ public sealed class CanaryFeatureTests
         {
             Skip.If(r.ExitCode == -999, $"{r.Mode} skipped: {r.Stderr}");
             Assert.Equal(0, r.ExitCode);
+            // The ENTIRE point of -n is the absence of a trailing newline. A
+            // Contains("hello") check passes whether or not the newline was
+            // suppressed; assert the exact "hello" with no terminator.
             if (IsSpawnMode(r))
-                Assert.Contains("hello", r.Stdout);
+                AssertSpawnStdoutExact(r, "hello");
         }
     }
 
@@ -300,12 +325,12 @@ public sealed class CanaryFeatureTests
         {
             Skip.If(r.ExitCode == -999, $"{r.Mode} skipped: {r.Stderr}");
             Assert.Equal(0, r.ExitCode);
+            // EXACT lines 1,2,3 — a Contains() check passes on the duplicated
+            // "1 2 3 1 2 3" output that concurrent env/cwd corruption produced
+            // (the failure mode the daemon execution serialization fixed). It
+            // also passes on "12"/"13" joins. Exact-line assertion catches both.
             if (IsSpawnMode(r))
-            {
-                Assert.Contains("1", r.Stdout);
-                Assert.Contains("2", r.Stdout);
-                Assert.Contains("3", r.Stdout);
-            }
+                AssertSpawnLinesExact(r, "1", "2", "3");
         }
     }
 
@@ -403,8 +428,9 @@ public sealed class CanaryFeatureTests
         {
             Skip.If(r.ExitCode == -999, $"{r.Mode} skipped: {r.Stderr}");
             Assert.Equal(0, r.ExitCode);
+            // EXACT "5" — Contains("5") also passes on "15", "50", "25", etc.
             if (IsSpawnMode(r))
-                Assert.Contains("5", r.Stdout);
+                AssertSpawnLinesExact(r, "5");
         }
     }
 
@@ -419,8 +445,9 @@ public sealed class CanaryFeatureTests
         {
             Skip.If(r.ExitCode == -999, $"{r.Mode} skipped: {r.Stderr}");
             Assert.Equal(0, r.ExitCode);
+            // EXACT "30" — Contains("30") also passes on "130", "300", "3010".
             if (IsSpawnMode(r))
-                Assert.Contains("30", r.Stdout);
+                AssertSpawnLinesExact(r, "30");
         }
     }
 

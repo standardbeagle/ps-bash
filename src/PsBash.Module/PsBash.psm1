@@ -1621,6 +1621,7 @@ function Invoke-BashAwk {
     $variables = @{}
     $programText = $null
     $programFiles = [System.Collections.Generic.List[string]]::new()
+    $operands = [System.Collections.Generic.List[string]]::new()
     $i = 0
 
     while ($i -lt $Arguments.Count) {
@@ -1666,8 +1667,14 @@ function Invoke-BashAwk {
             continue
         }
 
-        if ($null -eq $programText) {
+        # Non-flag operand. With no -f, the first operand is the awk program and
+        # every later operand is an input file. With -f, the program came from a
+        # file so ALL operands are input files. (The old code kept only the first
+        # operand as the program and silently discarded every file path.)
+        if ($programFiles.Count -eq 0 -and $null -eq $programText) {
             $programText = $arg
+        } else {
+            $operands.Add($arg)
         }
         $i++
     }
@@ -1723,9 +1730,33 @@ function Invoke-BashAwk {
         New-BashObject -BashText "$line`n"
     }
 
-    # Process input lines
-    if ($pipelineInput.Count -eq 0) {
-        # Still run END blocks
+    # Gather input lines from data-file operands (file mode) or, when none were
+    # given, from the pipeline (stdin mode). File mode is the path the old code
+    # missed: `awk '{...}' file.txt` dropped the operand and read nothing.
+    $printfBuffer = [System.Text.StringBuilder]::new()
+    $allLines = [System.Collections.Generic.List[string]]::new()
+
+    if ($operands.Count -gt 0) {
+        foreach ($dataFile in (Resolve-BashGlob -Paths $operands)) {
+            $fileLines = Read-BashFileLines -Path $dataFile -Command 'awk'
+            if ($null -eq $fileLines) { continue }   # missing-file error already emitted
+            foreach ($fl in $fileLines) { $allLines.Add($fl) }
+        }
+    } else {
+        foreach ($item in $pipelineInput) {
+            $text = Get-BashText -InputObject $item
+            if ($text.TrimEnd("`n".ToCharArray()).Contains("`n")) {
+                foreach ($subLine in ($text.TrimEnd("`n".ToCharArray()) -split "`n")) {
+                    $allLines.Add($subLine)
+                }
+            } else {
+                $allLines.Add(($text.TrimEnd("`n".ToCharArray())))
+            }
+        }
+    }
+
+    # No input records at all → run END with an empty record and finish.
+    if ($allLines.Count -eq 0) {
         $endOutput = [System.Collections.Generic.List[string]]::new()
         foreach ($rule in $rules) {
             if ($rule.Pattern -eq 'END') {
@@ -1738,18 +1769,6 @@ function Invoke-BashAwk {
         return
     }
 
-    $printfBuffer = [System.Text.StringBuilder]::new()
-    $allLines = [System.Collections.Generic.List[string]]::new()
-    foreach ($item in $pipelineInput) {
-        $text = Get-BashText -InputObject $item
-        if ($text.TrimEnd("`n".ToCharArray()).Contains("`n")) {
-            foreach ($subLine in ($text.TrimEnd("`n".ToCharArray()) -split "`n")) {
-                $allLines.Add($subLine)
-            }
-        } else {
-            $allLines.Add(($text.TrimEnd("`n".ToCharArray())))
-        }
-    }
     for ($idx = 0; $idx -lt $allLines.Count; $idx++) {
         $text = $allLines[$idx]
         $variables['NR'] = $idx + 1
@@ -4476,6 +4495,17 @@ function Invoke-BashKill {
             $i++
             continue
         }
+        # Named-signal short form: -KILL, -TERM, -INT, -SIGKILL, ... (bash's
+        # `kill -SIGNAME pid`). Must be matched before the pid fallthrough or the
+        # signal token is silently dropped by [int]::TryParse.
+        if ($a -cmatch '^-(SIG)?([A-Za-z][A-Za-z0-9]*)$') {
+            $sigArg = $a.Substring(1)
+            if ($sigArg -match '^SIG') { $signalName = $sigArg }
+            elseif ($signals.ContainsKey($sigArg)) { $signalName = $signals[$sigArg] }
+            else { $signalName = "SIG$sigArg" }
+            $i++
+            continue
+        }
         if ($a -match '^--signal=(.+)$') {
             $sigArg = $Matches[1]
             if ($sigArg -match '^SIG') { $signalName = $sigArg }
@@ -4501,20 +4531,23 @@ function Invoke-BashKill {
         return
     }
 
-    foreach ($pid in $pids) {
+    # NOTE: the loop variable must NOT be $pid — $PID is a read-only automatic
+    # variable and `foreach ($pid in ...)` throws "Cannot overwrite variable PID
+    # because it is read-only or constant", silently breaking every kill.
+    foreach ($procId in $pids) {
         try {
-            $proc = Get-Process -Id $pid -ErrorAction Stop
+            $proc = Get-Process -Id $procId -ErrorAction Stop
             if ($signalName -eq 'SIGKILL') {
-                Stop-Process -Id $pid -Force
+                Stop-Process -Id $procId -Force
             } elseif ($signalName -eq 'SIGTERM' -or -not $signalName) {
-                Stop-Process -Id $pid
+                Stop-Process -Id $procId
             } elseif ($signalName -eq 'SIGINT') {
                 $proc.Kill()
             } else {
-                Stop-Process -Id $pid
+                Stop-Process -Id $procId
             }
         } catch {
-            Write-BashError -Message "kill: ($pid) - No such process" -ExitCode 1
+            Write-BashError -Message "kill: ($procId) - No such process" -ExitCode 1
         }
     }
 }

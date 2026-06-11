@@ -220,7 +220,12 @@ public sealed class IpcWorker : IWorker
         => HostOwnership.MetadataMatchesLauncher(
                HostMetadata.TryRead(_scheme, _endpoint),
                _hostBinaryPath,
-               HostProtocol.BuildIdentity);
+               // Stamp the expected identity with the host binary we would spawn,
+               // so a daemon running an OLDER build of the same <Version> is
+               // classified Obsolete and replaced (the host records the matching
+               // stamp from its own Environment.ProcessPath). Without the stamp a
+               // recompiled-but-not-version-bumped host is silently reused.
+               HostProtocol.BuildIdentityFor(_hostBinaryPath));
 
     /// <summary>
     /// The spawn/replace path, run ONLY by the launcher holding the
