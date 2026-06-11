@@ -151,9 +151,11 @@ Describe 'Invoke-BashPrintf' {
         $result.BashText | Should -Be "a`tb"
     }
 
-    It '%s with multiple string args uses first only' {
+    It '%s recycles the format over multiple args (bash semantics)' {
+        # bash reuses the format string until args are exhausted:
+        # printf '%s' hello world -> "helloworld".
         $result = Invoke-BashPrintf '%s' 'hello' 'world'
-        $result.BashText | Should -Be 'hello'
+        $result.BashText | Should -Be 'helloworld'
     }
 }
 
