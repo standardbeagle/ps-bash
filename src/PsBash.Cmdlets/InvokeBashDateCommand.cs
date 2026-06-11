@@ -157,15 +157,24 @@ public sealed class InvokeBashDateCommand : PSCmdlet
         }
         else if (dateString != null)
         {
-            try
+            // -d @EPOCH: interpret the value as Unix seconds.
+            if (dateString.StartsWith("@", StringComparison.Ordinal)
+                && long.TryParse(dateString.Substring(1), out var epochIn))
             {
-                dto = DateTimeOffset.Parse(dateString,
-                    CultureInfo.InvariantCulture);
+                dto = DateTimeOffset.FromUnixTimeSeconds(epochIn).ToLocalTime();
             }
-            catch
+            else
             {
-                WriteBashError($"date: invalid date '{dateString}'");
-                return;
+                try
+                {
+                    dto = DateTimeOffset.Parse(dateString,
+                        CultureInfo.InvariantCulture);
+                }
+                catch
+                {
+                    WriteBashError($"date: invalid date '{dateString}'");
+                    return;
+                }
             }
         }
         else
@@ -260,6 +269,23 @@ public sealed class InvokeBashDateCommand : PSCmdlet
                         break;
                     case 'a': sb.Append(dto.ToString("ddd", ci)); break;
                     case 'b': sb.Append(dto.ToString("MMM", ci)); break;
+                    case 'h': sb.Append(dto.ToString("MMM", ci)); break; // = %b
+                    case 'I': sb.Append(dto.ToString("hh", ci)); break;  // 12-hour, zero-padded
+                    case 'l': sb.Append((((dto.Hour + 11) % 12) + 1).ToString(ci).PadLeft(2)); break; // 12h space-padded
+                    case 'k': sb.Append(dto.Hour.ToString(ci).PadLeft(2)); break; // 24h space-padded
+                    case 'R': sb.Append(dto.ToString("HH:mm", ci)); break;        // = %H:%M
+                    case 'r': sb.Append(dto.ToString("hh:mm:ss tt", ci)); break;  // 12h time
+                    case 'D': sb.Append(dto.ToString("MM/dd/yy", ci)); break;     // = %m/%d/%y
+                    case 'u': sb.Append((((int)dto.DayOfWeek + 6) % 7 + 1).ToString(ci)); break; // ISO weekday 1=Mon..7=Sun
+                    case 'P': sb.Append(dto.ToString("tt", ci).ToLowerInvariant()); break;       // lowercase am/pm
+                    case 'z':
+                    {
+                        var off = dto.Offset;
+                        sb.Append(off < TimeSpan.Zero ? '-' : '+')
+                          .Append(Math.Abs(off.Hours).ToString("00", ci))
+                          .Append(Math.Abs(off.Minutes).ToString("00", ci));
+                        break;
+                    }
                     case 'e': sb.Append(dto.Day.ToString(ci).PadLeft(2)); break;
                     case 'j': sb.Append(dto.DayOfYear.ToString("000", ci)); break;
                     case 'p': sb.Append(dto.ToString("tt", ci)); break;

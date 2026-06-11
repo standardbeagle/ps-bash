@@ -192,4 +192,47 @@ public class NewFlagSupportTests : IClassFixture<SharedPwshFixture>, IDisposable
         Assert.Contains(lines, l => l.EndsWith("ff.txt", StringComparison.Ordinal));
         Assert.DoesNotContain(lines, l => l.Replace('\\', '/').EndsWith("/dd"));
     }
+
+    // ── date format codes + @epoch ───────────────────────────────────────────
+
+    [Theory]
+    [InlineData("Invoke-BashDate -u -d '@0' +%F", "1970-01-01")]
+    [InlineData("Invoke-BashDate -d '2021-03-05 13:00:00' +%R", "13:00")]
+    [InlineData("Invoke-BashDate -d '2021-03-05' +%D", "03/05/21")]
+    [InlineData("Invoke-BashDate -d '2021-03-08' +%u", "1")] // Monday
+    [InlineData("Invoke-BashDate -d '2021-03-05 13:00:00' +%I", "01")]
+    public void Date_FormatCodes(string script, string expected)
+    {
+        var lines = RunLines(script);
+        Assert.Single(lines);
+        Assert.Equal(expected, lines[0]);
+    }
+
+    // ── printf recycling + numeric specs ─────────────────────────────────────
+
+    [Fact]
+    public void Printf_RecyclesFormatUntilArgsExhausted()
+    {
+        // The format repeats once per argument. BashText strips the final
+        // trailing newline for object display (the streamed output keeps it).
+        var lines = RunLines("Invoke-BashPrintf '%s\\n' a b c");
+        Assert.Single(lines);
+        Assert.Equal("a\nb\nc", lines[0]);
+    }
+
+    [Theory]
+    [InlineData("Invoke-BashPrintf '%i' 42", "42")]
+    [InlineData("Invoke-BashPrintf '%u' 42", "42")]
+    public void Printf_IntegerAliases(string script, string expected)
+    {
+        var lines = RunLines(script);
+        Assert.Equal(expected, lines[0]);
+    }
+
+    [Fact]
+    public void Printf_Scientific()
+    {
+        var lines = RunLines("Invoke-BashPrintf '%e' 1234.5");
+        Assert.StartsWith("1.234500e+0", lines[0]);
+    }
 }

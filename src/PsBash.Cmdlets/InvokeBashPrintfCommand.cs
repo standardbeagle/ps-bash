@@ -94,6 +94,13 @@ public sealed class InvokeBashPrintfCommand : PSCmdlet
 
         var sb = new StringBuilder();
         int argIdx = 0;
+        // bash reuses (recycles) the format string until the argument list is
+        // exhausted: `printf '%s\n' a b c` prints three lines. We repeat the
+        // whole format while a pass consumes at least one more argument; a format
+        // with no conversions consumes none and the loop stops after one pass.
+        do
+        {
+        int passStartArgIdx = argIdx;
         int i = 0;
         while (i < format.Length)
         {
@@ -153,6 +160,7 @@ public sealed class InvokeBashPrintfCommand : PSCmdlet
                         i = j + 1;
                         break;
                     case 'd':
+                    case 'i': // %i is an alias of %d
                         if (argIdx < converted.Count)
                         {
                             int val = ToInt(converted[argIdx]);
@@ -176,6 +184,41 @@ public sealed class InvokeBashPrintfCommand : PSCmdlet
                             {
                                 sb.Append(val);
                             }
+                        }
+                        argIdx++;
+                        i = j + 1;
+                        break;
+                    case 'u': // unsigned decimal
+                        if (argIdx < converted.Count)
+                        {
+                            uint uval = unchecked((uint)ToInt(converted[argIdx]));
+                            string str = uval.ToString(CultureInfo.InvariantCulture);
+                            if (widthStr.Length > 0)
+                            {
+                                str = flagStr.Contains('-')
+                                    ? str.PadRight(int.Parse(widthStr))
+                                    : str.PadLeft(int.Parse(widthStr), flagStr.Contains('0') ? '0' : ' ');
+                            }
+                            sb.Append(str);
+                        }
+                        argIdx++;
+                        i = j + 1;
+                        break;
+                    case 'e':
+                    case 'E':
+                    case 'g':
+                    case 'G':
+                        if (argIdx < converted.Count)
+                        {
+                            int prec = precStr.Length > 0 ? int.Parse(precStr) : 6;
+                            double d = ToDouble(converted[argIdx]);
+                            string formatted = (spec == 'e' || spec == 'E')
+                                // 2-digit exponent like C printf (not .NET's 3-digit "E+00n").
+                                ? d.ToString("0." + new string('0', prec) + (spec == 'e' ? "e+00" : "E+00"), CultureInfo.InvariantCulture)
+                                : d.ToString((spec == 'g' ? "G" : "G") + prec, CultureInfo.InvariantCulture);
+                            if (spec == 'G') formatted = formatted.ToUpperInvariant();
+                            if (widthStr.Length > 0) formatted = formatted.PadLeft(int.Parse(widthStr));
+                            sb.Append(formatted);
                         }
                         argIdx++;
                         i = j + 1;
@@ -279,6 +322,10 @@ public sealed class InvokeBashPrintfCommand : PSCmdlet
                 i++;
             }
         }
+        // Recycle only while we keep consuming arguments.
+        if (argIdx <= passStartArgIdx) break;
+        }
+        while (argIdx < converted.Count);
 
         string result = sb.ToString().Replace(EscapedPercentSentinel, "%");
 
