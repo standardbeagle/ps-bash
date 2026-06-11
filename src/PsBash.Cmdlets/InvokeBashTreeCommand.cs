@@ -69,6 +69,9 @@ public sealed class InvokeBashTreeCommand : PSCmdlet
     private bool _showAll;
     private bool _dirsOnly;
     private bool _dirsFirst;
+    private bool _noReport;
+    private bool _fullPath;
+    private string _normTarget = ".";
 
     protected override void EndProcessing()
     {
@@ -133,6 +136,18 @@ public sealed class InvokeBashTreeCommand : PSCmdlet
                 _dirsFirst = true;
                 continue;
             }
+            if (arg == "--noreport")
+            {
+                _noReport = true;
+                continue;
+            }
+            // -f: print the full (target-relative) path for each entry. No
+            // common-parameter collision; handled before the bundle decoder.
+            if (arg == "-f")
+            {
+                _fullPath = true;
+                continue;
+            }
 
             // Short-bundle decoder for -a / -d that arrived via the catch-all
             // (e.g. PowerShell may forward "-ad" as a single token, or the
@@ -164,6 +179,8 @@ public sealed class InvokeBashTreeCommand : PSCmdlet
         }
 
         string target = operands[0];
+        _normTarget = target.Replace('\\', '/').TrimEnd('/');
+        if (_normTarget.Length == 0) _normTarget = "/";
 
         string resolved;
         string rootName;
@@ -209,7 +226,7 @@ public sealed class InvokeBashTreeCommand : PSCmdlet
         rootObj.Properties.Add(new PSNoteProperty("Depth", 0));
         rootObj.Properties.Add(new PSNoteProperty("IsDirectory", true));
         rootObj.Properties.Add(new PSNoteProperty("TreePrefix", ""));
-        rootObj.Properties.Add(new PSNoteProperty("BashText", rootName));
+        rootObj.Properties.Add(new PSNoteProperty("BashText", _fullPath ? _normTarget : rootName));
         WriteObject(rootObj);
 
         if (Directory.Exists(resolved))
@@ -217,7 +234,9 @@ public sealed class InvokeBashTreeCommand : PSCmdlet
             WriteTreeLevel(resolved, currentDepth: 1, prefix: "");
         }
 
-        // Summary line.
+        // Summary line — suppressed by --noreport.
+        if (_noReport) return;
+
         string dirLabel = _dirCount == 1 ? "directory" : "directories";
         string fileLabel = _fileCount == 1 ? "file" : "files";
         string summaryText = _dirsOnly
@@ -314,7 +333,9 @@ public sealed class InvokeBashTreeCommand : PSCmdlet
             }
 
             string treePrefix = prefix + connector;
-            string bashText = prefix + connector + item.Name;
+            // -f: show the target-relative path instead of the bare name.
+            string display = _fullPath ? $"{_normTarget}/{relativePath}" : item.Name;
+            string bashText = prefix + connector + display;
 
             var entryObj = new PSObject();
             entryObj.TypeNames.Insert(0, "PsBash.TreeEntry");

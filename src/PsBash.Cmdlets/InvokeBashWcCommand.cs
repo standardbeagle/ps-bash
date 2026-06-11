@@ -82,22 +82,21 @@ public sealed class InvokeBashWcCommand : PSCmdlet
 
     // Parsed-once state.
     private bool _parsed;
-    private bool _linesOnly, _wordsOnly, _bytesOnly;
+    private bool _linesOnly, _wordsOnly, _bytesOnly, _charsOnly, _maxLineOnly;
     private List<string> _operands = new();
     // True when stdin must NOT be counted: file operands present (file mode
     // ignores stdin) or a --help / --version request.
     private bool _suppressStdin;
     // Streamed counters — wc needs only running totals, never the buffered
     // pipeline. int (not long) for byte-exact parity with the buffered oracle.
-    private int _totalLines, _totalWords, _totalBytes;
+    private int _totalLines, _totalWords, _totalBytes, _totalChars, _maxLine;
     private bool _sawRecord;
 
     /// <summary>Valid GNU <c>wc</c> options ps-bash does not implement (see
     /// <see cref="FileSystemHelpers.TryWriteOperandOptionError"/>).</summary>
     private static readonly HashSet<string> WcValidButUnsupported = new(StringComparer.Ordinal)
     {
-        "-m", "-L",
-        "--lines", "--words", "--bytes", "--chars", "--max-line-length",
+        "--lines", "--words", "--bytes",
         "--files0-from",
     };
 
@@ -123,11 +122,17 @@ public sealed class InvokeBashWcCommand : PSCmdlet
         {
             "-l", "line count only",
             "-c", "byte count only",
+            "-m", "char count only",
+            "-L", "longest line length",
+            "--chars", "char count only",
+            "--max-line-length", "longest line length",
         });
         var parsed = BashRuntime.ConvertFromBashArgs(args, flagDefs);
         _linesOnly = parsed.Flags["-l"];
         _wordsOnly = W.IsPresent;
         _bytesOnly = parsed.Flags["-c"] || C.IsPresent;
+        _charsOnly = parsed.Flags["-m"] || parsed.Flags["--chars"];
+        _maxLineOnly = parsed.Flags["-L"] || parsed.Flags["--max-line-length"];
         _operands = parsed.Operands;
 
         // Bundled-flag recovery: a bundle like -lw or -wc reaches operands
@@ -139,11 +144,13 @@ public sealed class InvokeBashWcCommand : PSCmdlet
         {
             var op = _operands[bi];
             if (op.Length > 1 && op[0] == '-' && op[1] != '-'
-                && op.Skip(1).All(c => "lwc".IndexOf(c) >= 0))
+                && op.Skip(1).All(c => "lwcmL".IndexOf(c) >= 0))
             {
                 if (op.IndexOf('l') >= 0) _linesOnly = true;
                 if (op.IndexOf('w') >= 0) _wordsOnly = true;
                 if (op.IndexOf('c') >= 0) _bytesOnly = true;
+                if (op.IndexOf('m') >= 0) _charsOnly = true;
+                if (op.IndexOf('L') >= 0) _maxLineOnly = true;
                 _operands.RemoveAt(bi);
                 bi--;
             }
@@ -183,6 +190,21 @@ public sealed class InvokeBashWcCommand : PSCmdlet
         _totalLines++;
         _totalWords += CountWords(line);
         _totalBytes += Encoding.UTF8.GetByteCount(line) + 1;
+        int cp = CountCodePoints(line);
+        _totalChars += cp + 1; // +1 for the line's newline (GNU counts it as a char)
+        if (cp > _maxLine) _maxLine = cp;
+    }
+
+    /// <summary>Unicode code points (scalar values) in a string — a surrogate
+    /// pair counts as one, matching GNU <c>wc -m</c> per-character counting.</summary>
+    private static int CountCodePoints(string s)
+    {
+        int n = 0;
+        foreach (var c in s)
+        {
+            if (!char.IsLowSurrogate(c)) n++;
+        }
+        return n;
     }
 
     protected override void EndProcessing()
@@ -220,14 +242,13 @@ public sealed class InvokeBashWcCommand : PSCmdlet
             if (_sawRecord)
             {
                 WriteObject(BuildResult(
-                    _totalLines, _totalWords, _totalBytes, string.Empty,
-                    _linesOnly, _wordsOnly, _bytesOnly));
+                    _totalLines, _totalWords, _totalBytes, _totalChars, _maxLine, string.Empty));
             }
             return;
         }
 
         // File mode
-        int grandLines = 0, grandWords = 0, grandBytes = 0;
+        int grandLines = 0, grandWords = 0, grandBytes = 0, grandChars = 0, grandMax = 0;
         bool multipleFiles = _operands.Count > 1;
 
         foreach (var filePath in ResolveGlob(_operands))
@@ -261,9 +282,11 @@ public sealed class InvokeBashWcCommand : PSCmdlet
 
             int lineCount;
             int wordCount;
+            int charCount;
+            int maxLineLen;
             try
             {
-                (lineCount, wordCount) = CountFileText(filePath);
+                (lineCount, wordCount, charCount, maxLineLen) = CountFileText(filePath);
             }
             catch (Exception ex)
             {
@@ -279,17 +302,17 @@ public sealed class InvokeBashWcCommand : PSCmdlet
             grandLines += lineCount;
             grandWords += wordCount;
             grandBytes += (int)fileBytes;
+            grandChars += charCount;
+            if (maxLineLen > grandMax) grandMax = maxLineLen;
 
             WriteObject(BuildResult(
-                lineCount, wordCount, (int)fileBytes, filePath,
-                _linesOnly, _wordsOnly, _bytesOnly));
+                lineCount, wordCount, (int)fileBytes, charCount, maxLineLen, filePath));
         }
 
         if (multipleFiles)
         {
             WriteObject(BuildResult(
-                grandLines, grandWords, grandBytes, "total",
-                _linesOnly, _wordsOnly, _bytesOnly));
+                grandLines, grandWords, grandBytes, grandChars, grandMax, "total"));
         }
     }
 
@@ -298,7 +321,7 @@ public sealed class InvokeBashWcCommand : PSCmdlet
         return text.Split(WhitespaceChars, StringSplitOptions.RemoveEmptyEntries).Length;
     }
 
-    private static (int Lines, int Words) CountFileText(string path)
+    private static (int Lines, int Words, int Chars, int MaxLine) CountFileText(string path)
     {
         using var fs = BashFileSystem.OpenRead(path);
         using var reader = new StreamReader(
@@ -306,6 +329,9 @@ public sealed class InvokeBashWcCommand : PSCmdlet
 
         int lines = 0;
         int words = 0;
+        int chars = 0;     // code points, including newlines (GNU -m)
+        int maxLine = 0;   // longest line in code points, excluding the newline
+        int curLine = 0;
         bool inWord = false;
         var buffer = new char[16384];
         int read;
@@ -314,7 +340,20 @@ public sealed class InvokeBashWcCommand : PSCmdlet
             for (int i = 0; i < read; i++)
             {
                 char c = buffer[i];
-                if (c == '\n') lines++;
+                // Count code points: a surrogate pair (high+low) is one char.
+                bool isLow = char.IsLowSurrogate(c);
+                if (!isLow) chars++;
+
+                if (c == '\n')
+                {
+                    lines++;
+                    if (curLine > maxLine) maxLine = curLine;
+                    curLine = 0;
+                }
+                else if (!isLow)
+                {
+                    curLine++;
+                }
 
                 bool isWordChar = c is not (' ' or '\t' or '\n' or '\r');
                 if (isWordChar)
@@ -331,32 +370,31 @@ public sealed class InvokeBashWcCommand : PSCmdlet
                 }
             }
         }
+        // A final line without a trailing newline still counts toward -L.
+        if (curLine > maxLine) maxLine = curLine;
 
-        return (lines, words);
+        return (lines, words, chars, maxLine);
     }
 
-    private static PSObject BuildResult(
-        int lines, int words, int bytes, string fileName,
-        bool linesOnly, bool wordsOnly, bool bytesOnly)
+    private PSObject BuildResult(
+        int lines, int words, int bytes, int chars, int maxLine, string fileName)
     {
+        // GNU prints the SELECTED columns in a fixed order: lines, words, chars,
+        // bytes, max-line-length. With no selector, the default is lines/words/bytes.
+        var cols = new List<int>(5);
+        if (_linesOnly) cols.Add(lines);
+        if (_wordsOnly) cols.Add(words);
+        if (_charsOnly) cols.Add(chars);
+        if (_bytesOnly) cols.Add(bytes);
+        if (_maxLineOnly) cols.Add(maxLine);
+        if (cols.Count == 0) { cols.Add(lines); cols.Add(words); cols.Add(bytes); }
+
         var sb = new StringBuilder();
-        if (linesOnly)
+        for (int k = 0; k < cols.Count; k++)
         {
-            sb.Append(lines.ToString().PadLeft(7));
-        }
-        else if (wordsOnly)
-        {
-            sb.Append(words.ToString().PadLeft(7));
-        }
-        else if (bytesOnly)
-        {
-            sb.Append(bytes.ToString().PadLeft(7));
-        }
-        else
-        {
-            sb.Append(lines.ToString().PadLeft(7));
-            sb.Append(words.ToString().PadLeft(8));
-            sb.Append(bytes.ToString().PadLeft(8));
+            // Width parity with the oracle: first column 7-wide, the rest 8-wide
+            // (so a single column is 7 and the default triple is 7/8/8).
+            sb.Append(cols[k].ToString().PadLeft(k == 0 ? 7 : 8));
         }
         if (fileName.Length > 0)
         {
@@ -372,6 +410,8 @@ public sealed class InvokeBashWcCommand : PSCmdlet
         obj.Properties.Add(new PSNoteProperty("Lines", lines));
         obj.Properties.Add(new PSNoteProperty("Words", words));
         obj.Properties.Add(new PSNoteProperty("Bytes", bytes));
+        obj.Properties.Add(new PSNoteProperty("Chars", chars));
+        obj.Properties.Add(new PSNoteProperty("MaxLineLength", maxLine));
         obj.Properties.Add(new PSNoteProperty("FileName", fileName));
         obj.Properties.Add(new PSNoteProperty("BashText", BashRuntime.NormalizeBashText(bashText)));
         return obj;

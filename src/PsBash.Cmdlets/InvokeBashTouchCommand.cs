@@ -82,6 +82,7 @@ public sealed class InvokeBashTouchCommand : PSCmdlet
 
         bool modOnly = false;
         string? dateStr = D;
+        string? refFile = null;
         var operands = new List<string>();
 
         int i = 0;
@@ -92,6 +93,20 @@ public sealed class InvokeBashTouchCommand : PSCmdlet
             {
                 i++;
                 if (i < args.Length) dateStr = args[i];
+                i++;
+                continue;
+            }
+            // -r FILE / --reference=FILE: take timestamps from a reference file.
+            if (arg == "-r" || arg == "--reference")
+            {
+                i++;
+                if (i < args.Length) refFile = args[i];
+                i++;
+                continue;
+            }
+            if (arg.StartsWith("--reference=", StringComparison.Ordinal))
+            {
+                refFile = arg.Substring("--reference=".Length);
                 i++;
                 continue;
             }
@@ -117,14 +132,31 @@ public sealed class InvokeBashTouchCommand : PSCmdlet
             return;
         }
 
-        DateTime timestamp = DateTime.Now;
-        if (dateStr is not null)
+        // Resolve the access/modify timestamps to apply. With -r the two come
+        // from the reference file's own atime/mtime (they can differ); -d/none
+        // use one value for both.
+        DateTime mtime = DateTime.Now;
+        DateTime atime = mtime;
+        if (refFile is not null)
         {
-            if (!DateTime.TryParse(dateStr, out timestamp))
+            var refAbs = SessionState.Path.GetUnresolvedProviderPathFromPSPath(refFile);
+            if (!File.Exists(refAbs) && !Directory.Exists(refAbs))
+            {
+                FileSystemHelpers.WriteBashError(this,
+                    $"touch: failed to get attributes of '{refFile}': No such file or directory");
+                return;
+            }
+            mtime = File.GetLastWriteTime(refAbs);
+            atime = File.GetLastAccessTime(refAbs);
+        }
+        else if (dateStr is not null)
+        {
+            if (!DateTime.TryParse(dateStr, out mtime))
             {
                 FileSystemHelpers.WriteBashError(this, $"touch: invalid date format '{dateStr}'");
                 return;
             }
+            atime = mtime;
         }
 
         foreach (var file in operands)
@@ -165,13 +197,13 @@ public sealed class InvokeBashTouchCommand : PSCmdlet
             {
                 if (Directory.Exists(absolute))
                 {
-                    if (!accessOnly) Directory.SetLastWriteTime(absolute, timestamp);
-                    if (!modOnly) Directory.SetLastAccessTime(absolute, timestamp);
+                    if (!accessOnly) Directory.SetLastWriteTime(absolute, mtime);
+                    if (!modOnly) Directory.SetLastAccessTime(absolute, atime);
                 }
                 else
                 {
-                    if (!accessOnly) File.SetLastWriteTime(absolute, timestamp);
-                    if (!modOnly) File.SetLastAccessTime(absolute, timestamp);
+                    if (!accessOnly) File.SetLastWriteTime(absolute, mtime);
+                    if (!modOnly) File.SetLastAccessTime(absolute, atime);
                 }
             }
             catch (Exception ex)

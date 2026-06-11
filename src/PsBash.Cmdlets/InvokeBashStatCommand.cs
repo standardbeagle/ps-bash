@@ -116,6 +116,19 @@ public sealed class InvokeBashStatCommand : PSCmdlet
                 i += 2;
                 continue;
             }
+            // --format=FMT / --format FMT — GNU long form of -c.
+            if (a.StartsWith("--format=", StringComparison.Ordinal))
+            {
+                formatString = a.Substring("--format=".Length);
+                i++;
+                continue;
+            }
+            if (a == "--format" && i + 1 < args.Length)
+            {
+                formatString = args[i + 1];
+                i += 2;
+                continue;
+            }
             if (a.StartsWith("--printf=", StringComparison.Ordinal))
             {
                 printfString = a.Substring("--printf=".Length);

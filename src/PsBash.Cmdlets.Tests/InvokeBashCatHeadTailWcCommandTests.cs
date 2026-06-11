@@ -108,7 +108,8 @@ public class InvokeBashCatHeadTailWcCommandTests : IClassFixture<SharedPwshFixtu
     [Theory]
     [InlineData("'a','b' | Invoke-BashHead -z", "head", "-z")]
     [InlineData("'a','b' | Invoke-BashTail -z", "tail", "-z")]
-    [InlineData("'a','b' | Invoke-BashWc -m", "wc", "-m")]
+    // wc -m / -L are now implemented; --files0-from remains valid-but-unsupported.
+    [InlineData("'a','b' | Invoke-BashWc --files0-from", "wc", "--files0-from")]
     [InlineData("'a','b' | Invoke-BashCat -t", "cat", "-t")]
     public void UnsupportedFlag_EmitsSpecificRefusal_NotFileError(string script, string cmd, string flag)
     {

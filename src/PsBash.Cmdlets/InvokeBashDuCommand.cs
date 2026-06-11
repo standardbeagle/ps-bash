@@ -105,6 +105,25 @@ public sealed class InvokeBashDuCommand : PSCmdlet
                 continue;
             }
 
+            // --max-depth=N / --max-depth N — GNU long form of -d.
+            if (arg.StartsWith("--max-depth=", StringComparison.Ordinal))
+            {
+                if (int.TryParse(arg.Substring("--max-depth=".Length), out var parsed))
+                {
+                    maxDepth = parsed;
+                }
+                continue;
+            }
+            if (arg == "--max-depth" && (i + 1) < args.Length)
+            {
+                if (int.TryParse(args[i + 1], out var parsed))
+                {
+                    maxDepth = parsed;
+                }
+                i++;
+                continue;
+            }
+
             // Per-char short-flag bundle (oracle's per-char dispatch)
             if (arg.StartsWith("-", StringComparison.Ordinal) && arg.Length > 1
                 && !arg.StartsWith("--", StringComparison.Ordinal))

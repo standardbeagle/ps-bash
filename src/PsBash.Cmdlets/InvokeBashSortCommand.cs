@@ -62,6 +62,16 @@ public sealed class InvokeBashSortCommand : PSCmdlet
     [Parameter]
     public SwitchParameter V { get; set; }
 
+    /// <summary>
+    /// Bash <c>-o FILE</c> (output file). A bare <c>-o</c> is an ambiguous
+    /// prefix of the common parameters <c>-OutVariable</c> / <c>-OutBuffer</c>,
+    /// so it must be declared with an exact single-letter name to bind. The
+    /// joined form <c>-oFILE</c> and <c>--output=FILE</c> arrive via
+    /// <see cref="Arguments"/> and are recovered by the manual scan.
+    /// </summary>
+    [Parameter]
+    public string? O { get; set; }
+
     [Parameter(ValueFromPipeline = true)]
     public PSObject? InputObject { get; set; }
 
@@ -80,13 +90,13 @@ public sealed class InvokeBashSortCommand : PSCmdlet
     private static readonly HashSet<string> ValidButUnsupported = new(StringComparer.Ordinal)
     {
         // Short flags not implemented.
-        "-g", "-i", "-R", "-z", "-o", "-m", "-S", "-T",
+        "-g", "-i", "-R", "-z", "-m", "-S", "-T",
         // Long forms (none are implemented by this cmdlet).
         "--reverse", "--numeric-sort", "--unique", "--ignore-case",
         "--dictionary-order", "--ignore-leading-blanks", "--general-numeric-sort",
         "--ignore-nonprinting", "--month-sort", "--human-numeric-sort",
         "--random-sort", "--version-sort", "--stable", "--zero-terminated",
-        "--check", "--key", "--field-separator", "--output", "--merge",
+        "--check", "--key", "--field-separator", "--merge",
         "--buffer-size", "--temporary-directory", "--parallel", "--sort",
         "--debug", "--batch-size", "--compress-program", "--files0-from",
         "--random-source",
@@ -137,6 +147,7 @@ public sealed class InvokeBashSortCommand : PSCmdlet
         bool blankIgnore = false;
         bool dictOrder = D.IsPresent;
         string? delimiter = null;
+        string? outputFile = O;
         var keySpecs = new List<KeySpec>();
         var operands = new List<string>();
         bool pastDoubleDash = false;
@@ -156,6 +167,32 @@ public sealed class InvokeBashSortCommand : PSCmdlet
             if (arg == "--")
             {
                 pastDoubleDash = true;
+                i++;
+                continue;
+            }
+
+            // -o FILE (output) — separate, joined, and long forms.
+            if (arg == "-o" && i + 1 < rawArgs.Length)
+            {
+                outputFile = rawArgs[++i];
+                i++;
+                continue;
+            }
+            if (arg.Length > 2 && arg.StartsWith("-o", StringComparison.Ordinal))
+            {
+                outputFile = arg.Substring(2);
+                i++;
+                continue;
+            }
+            if (arg.StartsWith("--output=", StringComparison.Ordinal))
+            {
+                outputFile = arg.Substring("--output=".Length);
+                i++;
+                continue;
+            }
+            if (arg == "--output" && i + 1 < rawArgs.Length)
+            {
+                outputFile = rawArgs[++i];
                 i++;
                 continue;
             }
@@ -452,6 +489,31 @@ public sealed class InvokeBashSortCommand : PSCmdlet
                 if (seen.Add(key)) deduped.Add(entry);
             }
             sorted = deduped;
+        }
+
+        // -o FILE: write the sorted lines to a file (newline-terminated) instead
+        // of the pipeline. GNU sort -o is a stdout redirect that also allows
+        // in-place sort (`sort -o f f`); we materialize then write so an
+        // input==output file is read fully before being overwritten.
+        if (outputFile != null)
+        {
+            var sb = new System.Text.StringBuilder();
+            foreach (var entry in sorted)
+            {
+                sb.Append(BashRuntime.GetBashText(entry.Item).TrimEnd('\n')).Append('\n');
+            }
+            try
+            {
+                var outPath = SessionState.Path.GetUnresolvedProviderPathFromPSPath(outputFile);
+                File.WriteAllText(outPath, sb.ToString(), new System.Text.UTF8Encoding(false));
+            }
+            catch (Exception ex)
+            {
+                if (FileSystemHelpers.IsPipelineStop(ex)) throw;
+                FileSystemHelpers.WriteBashError(this, $"sort: {outputFile.Replace('\\', '/')}: {ex.Message}");
+                FileSystemHelpers.SetLastExitCode(this, 1);
+            }
+            return;
         }
 
         foreach (var entry in sorted)

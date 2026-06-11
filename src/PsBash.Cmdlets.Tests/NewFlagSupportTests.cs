@@ -1,0 +1,138 @@
+using Xunit;
+
+namespace PsBash.Cmdlets.Tests;
+
+/// <summary>
+/// Tests for newly-implemented flag support (Tier 1 quick wins): wc -m/-L,
+/// stat --format, touch -r, du --max-depth, tree --noreport/-f, sort -o.
+/// Each was previously missing or refused.
+/// </summary>
+public class NewFlagSupportTests : IClassFixture<SharedPwshFixture>, IDisposable
+{
+    private readonly SharedPwshFixture _fixture;
+    private readonly string _tmp;
+
+    public NewFlagSupportTests(SharedPwshFixture fixture)
+    {
+        _fixture = fixture;
+        _tmp = Path.Combine(Path.GetTempPath(), $"psb-newflag-{Guid.NewGuid():N}".Substring(0, 24));
+        Directory.CreateDirectory(_tmp);
+    }
+
+    public void Dispose()
+    {
+        try { Directory.Delete(_tmp, recursive: true); } catch { /* best-effort */ }
+    }
+
+    private string[] RunLines(string script)
+    {
+        var pwsh = _fixture.AcquireFresh();
+        var result = pwsh.AddScript(script).Invoke();
+        pwsh.Commands.Clear();
+        return result.Select(o => o?.Properties["BashText"]?.Value as string ?? o?.ToString() ?? "").ToArray();
+    }
+
+    private static string Q(string s) => s.Replace("'", "''");
+
+    // ── wc -m / -L ──────────────────────────────────────────────────────────
+
+    [Fact]
+    public void Wc_M_CountsCharacters()
+    {
+        // "héllo\n" = 6 chars (5 letters + newline). -c (bytes) would be 7 (é = 2 bytes UTF-8).
+        var f = Path.Combine(_tmp, "uni.txt");
+        File.WriteAllText(f, "héllo\n", new System.Text.UTF8Encoding(false));
+        var chars = RunLines($"Invoke-BashWc -m '{Q(f)}'");
+        Assert.Single(chars);
+        Assert.StartsWith("6", chars[0].TrimStart());
+        var bytes = RunLines($"Invoke-BashWc -c '{Q(f)}'");
+        Assert.StartsWith("7", bytes[0].TrimStart());
+    }
+
+    [Fact]
+    public void Wc_L_ReportsLongestLineLength()
+    {
+        var f = Path.Combine(_tmp, "lines.txt");
+        File.WriteAllText(f, "ab\nabcdef\nabc\n");
+        var lines = RunLines($"Invoke-BashWc -L '{Q(f)}'");
+        Assert.Single(lines);
+        Assert.StartsWith("6", lines[0].TrimStart());
+    }
+
+    // ── stat --format ──────────────────────────────────────────────────────
+
+    [Fact]
+    public void Stat_LongFormat_AliasesShortC()
+    {
+        var f = Path.Combine(_tmp, "s.txt");
+        File.WriteAllText(f, "data");
+        var viaC = RunLines($"Invoke-BashStat -c '%n' '{Q(f)}'");
+        var viaLong = RunLines($"Invoke-BashStat --format='%n' '{Q(f)}'");
+        Assert.Equal(viaC[0].TrimEnd('\n'), viaLong[0].TrimEnd('\n'));
+        Assert.Contains("s.txt", viaLong[0]);
+    }
+
+    // ── touch -r ────────────────────────────────────────────────────────────
+
+    [Fact]
+    public void Touch_Reference_CopiesTimestamp()
+    {
+        var refFile = Path.Combine(_tmp, "ref.txt");
+        var target = Path.Combine(_tmp, "tgt.txt");
+        File.WriteAllText(refFile, "r");
+        File.WriteAllText(target, "t");
+        var refTime = new DateTime(2019, 5, 6, 7, 8, 9, DateTimeKind.Local);
+        File.SetLastWriteTime(refFile, refTime);
+        RunLines($"Invoke-BashTouch -r '{Q(refFile)}' '{Q(target)}'");
+        Assert.Equal(refTime, File.GetLastWriteTime(target));
+    }
+
+    // ── du --max-depth ──────────────────────────────────────────────────────
+
+    [Fact]
+    public void Du_MaxDepth_AliasesShortD()
+    {
+        Directory.CreateDirectory(Path.Combine(_tmp, "a", "b", "c"));
+        File.WriteAllText(Path.Combine(_tmp, "a", "b", "c", "deep.txt"), new string('x', 100));
+        var d1 = RunLines($"Invoke-BashDu --max-depth=1 '{Q(Path.Combine(_tmp, "a"))}'");
+        // depth-1 must not list the grandchild "a/b/c"
+        Assert.DoesNotContain(d1, l => l.Replace('\\', '/').EndsWith("/b/c"));
+        Assert.Contains(d1, l => l.Replace('\\', '/').EndsWith("/b"));
+    }
+
+    // ── tree --noreport / -f ────────────────────────────────────────────────
+
+    [Fact]
+    public void Tree_NoReport_OmitsSummaryLine()
+    {
+        Directory.CreateDirectory(Path.Combine(_tmp, "td"));
+        File.WriteAllText(Path.Combine(_tmp, "td", "f.txt"), "x");
+        var lines = RunLines($"Invoke-BashTree --noreport '{Q(Path.Combine(_tmp, "td"))}'");
+        Assert.DoesNotContain(lines, l => l.Contains("directories", StringComparison.Ordinal)
+                                          || l.Contains("files", StringComparison.Ordinal));
+        Assert.Contains(lines, l => l.Contains("f.txt", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void Tree_FullPath_ShowsTargetRelativePaths()
+    {
+        Directory.CreateDirectory(Path.Combine(_tmp, "tf", "sub"));
+        File.WriteAllText(Path.Combine(_tmp, "tf", "sub", "leaf.txt"), "x");
+        var target = Path.Combine(_tmp, "tf");
+        var lines = RunLines($"Invoke-BashTree -f '{Q(target)}'");
+        // -f prints the target-relative path on the leaf line.
+        Assert.Contains(lines, l => l.Replace('\\', '/').Contains("/sub/leaf.txt", StringComparison.Ordinal));
+    }
+
+    // ── sort -o ──────────────────────────────────────────────────────────────
+
+    [Fact]
+    public void Sort_OutputFile_WritesSortedLinesToFile()
+    {
+        var outFile = Path.Combine(_tmp, "sorted.txt");
+        RunLines($"'banana','apple','cherry' | Invoke-BashSort -o '{Q(outFile)}'");
+        Assert.True(File.Exists(outFile));
+        var written = File.ReadAllText(outFile).Replace("\r\n", "\n").TrimEnd('\n').Split('\n');
+        Assert.Equal(new[] { "apple", "banana", "cherry" }, written);
+    }
+}
