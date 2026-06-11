@@ -1,0 +1,311 @@
+---
+title: "The Interactive Shell"
+description: "ps-bash's interactive REPL: emacs keybindings, Ctrl-R history search, inline autosuggestions, tab completion, prompt and on-cd hooks, aliases, bash history expansion, and AI command assist."
+head:
+  - tag: meta
+    attrs:
+      name: keywords
+      content: ps-bash interactive shell, bash repl powershell, ctrl-r history search, bash history expansion powershell, powershell prompt bash, oh-my-posh starship bash
+---
+
+import { Tabs, TabItem, Card, CardGrid, Aside, Badge } from '@astrojs/starlight/components';
+
+ps-bash ships two things: a **module** you import into PowerShell (`Import-Module PsBash`),
+and a standalone **interactive shell** (`ps-bash`) — a full REPL that reads bash, runs it on a
+warm PowerShell runspace, and gives you the line-editing, history, completion, and prompt
+experience a bash user expects. This page documents the interactive shell.
+
+```powershell
+# Launch the interactive shell
+ps-bash
+```
+
+<Aside type="note">
+Everything here is for the **interactive `ps-bash` shell**. Inside an `Import-Module PsBash`
+session you get the commands and aliases, but the line editor, history search, and prompt
+hooks below belong to the standalone shell. Prompt/chpwd hooks (`Register-Bash*Hook`) and
+`cd` behavior work in both.
+</Aside>
+
+## Line editing
+
+The line editor is a VT100 editor with emacs-style keybindings, a kill ring, and a persistent,
+CWD-aware history.
+
+| Key | Action |
+|-----|--------|
+| `←` / `→` | Move cursor one character (← / →; → also accepts an autosuggestion at end of line) |
+| `Ctrl-A` / `Home` | Jump to start of line |
+| `Ctrl-E` / `End` | Jump to end of line (also accepts an autosuggestion) |
+| `Alt-B` / `Alt-F` | Move back / forward one word |
+| `Backspace` / `Delete` | Delete character left / right |
+| `Ctrl-K` | Kill to end of line (text → kill ring) |
+| `Ctrl-U` | Kill to start of line (text → kill ring) |
+| `Ctrl-W` | Kill the word before the cursor (text → kill ring) |
+| `Ctrl-Y` | Yank (paste) the kill ring at the cursor |
+| `Ctrl-D` | Delete forward; on an empty line, exit the shell (EOF) |
+| `↑` / `↓` | Previous / next command in history (CWD-filtered by default) |
+| `Ctrl-R` | Reverse history search (full-screen — see below) |
+| `Tab` | Complete; press again to cycle matches |
+| `F1` | Open the man-page flag browser for the command under the cursor |
+| `Ctrl-L` | Clear the screen |
+| `Ctrl-C` | Cancel the current line, echo `^C`, redraw a fresh prompt |
+| `Enter` | Submit |
+
+## Reverse history search (Ctrl-R)
+
+`Ctrl-R` opens a **full-screen, fuzzy, ranked** search over your command history — closer to
+fzf/atuin than bash's one-line `(reverse-i-search)`.
+
+- **Type to filter.** Matching is incremental and ranked: exact > prefix > substring > fuzzy
+  subsequence, with a score that boosts commands run **in the current directory**, run
+  **recently**, and run **often**.
+- **Rich rows.** Each result shows the command, the directory it ran in (`~`-shortened), a
+  relative time (`2m ago`), the exit code (green `0` / red non-zero), and its history id.
+  Duplicate command lines are collapsed to the best-ranked occurrence.
+
+| Key | Action |
+|-----|--------|
+| Type / `Backspace` | Edit the query; results re-filter live |
+| `Ctrl-R` / `Ctrl-S` | Cycle to the next / previous match (wraps) |
+| `↑` / `↓` | Move the selection up / down |
+| `PgUp` / `PgDn` | Page the selection |
+| `Home` / `End` | Jump to the first / last result |
+| `Ctrl-G` | Toggle between current-directory and all-history scope |
+| `Tab` | Edit the selected command in place before running |
+| `Enter` | Run the selected command |
+| `Esc` / `Ctrl-C` | Cancel, leaving your original line untouched |
+
+If a current-directory search returns nothing, it automatically falls back to global history.
+
+## Inline autosuggestions
+
+As you type, the shell suggests the most recent matching history command as **gray ghost text**
+(fish-style) after the cursor.
+
+- The suggestion is the *suffix* needed to complete the match; it appears only when the cursor
+  is at the end of the line and a match exists.
+- **Accept** it with `→` (Right arrow), `End`, or `Ctrl-E`. Any other key dismisses it and edits
+  normally.
+- Suggestions prefer commands from the **current directory**, then fall back to global history.
+
+<Aside type="tip">
+Set `PSBASH_NO_PREDICT=1` to turn off all prediction — both the inline ghost text and the
+floating flag panel below. It's the kill switch if prediction ever gets in your way.
+</Aside>
+
+## Tab completion
+
+Completion is context-aware. The engine composes a static base set with live queries against the
+runspace, and **every runspace round-trip is bounded by a 200 ms deadline** — Tab never hangs.
+
+| You're typing… | Tab completes with… |
+|----------------|---------------------|
+| The first word | Command names — bash commands ∪ live `Get-Command` results ∪ your aliases |
+| `-` after a bash command | That command's flags (from the bundled flag specs) |
+| `-` after a PowerShell cmdlet | The cmdlet's parameter names (live introspection) |
+| A value after `-Param` | Parameter values — `[ValidateSet]`, enum names, or anything a `Register-ArgumentCompleter` provides |
+| An argument of a `complete`-registered command | That command's word list (see below) |
+| A pattern after `grep -e` | A small set of regex snippets matched to the dialect (`-E`/`-F`) |
+| Anything else | File paths |
+
+### Floating flag panel + man-page browser
+
+You don't have to press Tab to discover flags. As you type a flag token (`find -`), a **dim panel**
+appears below the prompt listing the matching flags and their descriptions — IDE-style parameter
+help that updates every keystroke. For PowerShell cmdlets it shows each parameter with its type
+and any `ValidateSet`/enum values (`tnc -C` → `-CommonTCPPort <String>  HTTP, RDP, SMB, WINRM`).
+
+- Press `↓` to **focus** the panel, then `↑↓`/`PgUp`/`PgDn` to scroll and `Enter` to insert the
+  selected flag. `Esc` returns to typing.
+- Press `F1` (at the prompt) or `→` (on a focused panel row) to open a scrollable **man-page
+  browser** for the command's flags — description, detail paragraph, and examples. `↑↓` switches
+  flags, `PgUp`/`PgDn` (or `j`/`k`) scrolls, `Enter` inserts, `Esc`/`q` closes.
+
+### Programmable completion (`complete`)
+
+Bash's `complete` is supported for **static word lists** (Tier 1):
+
+```bash
+complete -W 'start stop restart status' svc
+svc st⇥        # → start, status, stop
+complete -p             # print registered specs
+complete -r svc         # remove
+```
+
+<Aside type="caution">
+Function-based completion (`complete -F func` with `COMP_WORDS`/`COMPREPLY`) and standalone
+`compgen` are **not** implemented. A `-F` spec registers but contributes no candidates.
+</Aside>
+
+## Aliases
+
+`alias` and `unalias` work with full bash syntax in the value — including pipes and redirects —
+because the shell expands the alias **before** transpiling, so the expansion is seen as ordinary
+bash.
+
+```bash
+alias ll='ls -la'
+alias gs='git status | head -20'      # pipes are fine in shell mode
+alias                                  # list all (also: alias -p)
+alias ll                               # show one
+unalias gs                             # remove one (also: unalias -a)
+```
+
+Aliases defined in your startup file (`~/.psbashrc`) and via interactive `source FILE` land in the
+same table the completion engine reads, so they're immediately tab-completable.
+
+## History expansion (bang commands)
+
+The shell expands bash "bang" history references on the typed line, before alias expansion —
+matching bash's order. The expanded line is echoed so you see what actually ran.
+
+| Form | Expands to |
+|------|-----------|
+| `!!` | The previous command |
+| `!n` | Command number `n` in this session (1-based) |
+| `!-n` | The n-th command back (`!-1` == `!!`) |
+| `!str` | The most recent command starting with `str` |
+| `!?str?` | The most recent command containing `str` |
+| `!$` / `!^` / `!*` | Last / first / all argument words of the previous command |
+| `!ev:$` `:^` `:*` `:n` | A word designator applied to any event |
+| `^old^new` | Quick substitution on the previous command (first match) |
+
+```bash
+git commit -m wip
+sudo !!                 # → sudo git commit -m wip
+cat !$                  # → cat wip   (last arg of previous command)
+^wip^done               # → git commit -m done
+```
+
+Expansion is **suppressed inside single quotes** and after a backslash, and a `!` followed by a
+space, `=`, `(`, or end-of-line stays literal — so the `! cmd` negation operator and `a != b`
+comparisons are untouched. Expansion does happen inside double quotes (bash semantics). A failed
+reference prints `ps-bash: !x: event not found` and does not run.
+
+<Aside type="note">
+Ranged designators (`!!:2-4`) and modifiers (`:h`, `:t`, `:s/old/new`) are out of scope — this is
+the common 80/20 of history expansion.
+</Aside>
+
+## Persistent history
+
+Every command is recorded in a SQLite database at `~/.psbash/history.db` (override the home dir
+with `PSBASH_HOME`). Each row stores the typed command, the working directory, exit code, duration,
+timestamp, and a per-session id — which is what powers the CWD-aware ranking in `Ctrl-R`, the
+arrow-key navigation, and the inline autosuggestions. Consecutive duplicates are de-duplicated and
+the store uses WAL mode for safe concurrent access.
+
+<Aside type="note">
+A read-only **atuin** adapter (merge ps-bash history with an existing `atuin` database) is
+designed but not yet implemented.
+</Aside>
+
+## Directory navigation: `cd` and `$OLDPWD`
+
+`cd` updates `$env:PWD`, `[System.Environment]::CurrentDirectory`, and PowerShell's location
+together, and records the directory you're leaving into `$env:OLDPWD` on **every** successful `cd`.
+
+| Command | Behavior |
+|---------|----------|
+| `cd` / `cd ~` | Change to `$HOME` |
+| `cd ~/path` | Change relative to home |
+| `cd -` | Return to the previous directory (`$OLDPWD`) and echo it, like bash |
+| `cd nope` | `cd: nope: No such file or directory`, exit code 1 |
+
+```bash
+cd /var/log
+cd /etc
+cd -            # → /var/log   (printed), and another `cd -` toggles back
+```
+
+If `$OLDPWD` is unset, `cd -` reports `cd: OLDPWD not set` instead of failing on an empty path.
+The tilde forms `~+` (`$PWD`) and `~-` (`$OLDPWD`) are also recognized.
+
+## Prompt customization and hooks
+
+ps-bash bridges bash's prompt model onto PowerShell's `prompt` function.
+
+### `PROMPT_COMMAND`
+
+A bash `PROMPT_COMMAND="cmd"` assignment is translated into a registered prompt hook that fires on
+every prompt. Appends (`PROMPT_COMMAND+="other"`) register additional hooks, preserving bash's
+additive semantics; `unset PROMPT_COMMAND` unregisters it.
+
+### Prompt + chpwd hooks
+
+You can register hooks directly (these work in module mode too):
+
+```powershell
+# Run on every prompt
+Register-BashPromptHook -Name 'clock' -ScriptBlock { $host.UI.RawUI.WindowTitle = (Get-Date) }
+
+# Run when the directory changes — receives $OldPath, $NewPath
+Register-BashChpwdHook -Name 'direnv' -ScriptBlock { direnv export pwsh | Invoke-Expression }
+Register-BashChpwdHook -Name 'fnm'    -ScriptBlock { fnm use --silent-if-unchanged }
+
+Get-BashHook                       # list registered hooks
+Unregister-BashChpwdHook -Name 'fnm'
+```
+
+chpwd hooks fire between prompts when `$PWD` changes, run in the **global process scope** (so
+`$env:` and `$global:` mutations persist), fire in name-sorted order, and a throwing hook is
+caught (the error is appended to `$global:BashHookErrors`, never crashing the shell).
+
+### Coexisting with oh-my-posh, Starship, and PSReadLine
+
+ps-bash installs its prompt as a **wrapper**: it stores any pre-existing `prompt` function in
+`$global:__BashOriginalPrompt`, runs the hooks, then calls the original. This means oh-my-posh and
+Starship prompts render fine alongside ps-bash hooks. Tools driven by `PROMPT_COMMAND` or directory
+changes — `direnv`, `fnm`, `nodenv`/`rbenv`, `pyenv-virtualenv`, `zoxide` — work through the prompt
+and chpwd hooks.
+
+<Aside type="caution">
+Two known gaps: (1) if you define your own `prompt` function *after* importing ps-bash, it replaces
+the wrapper and hooks stop firing — use `Register-BashPromptHook` instead. (2) Starship's
+command-**duration** display depends on a pre-command (`DEBUG`) trap, which PowerShell has no
+equivalent for; the prompt still renders, but duration is unavailable.
+</Aside>
+
+## Shell options and traps
+
+| Construct | Maps to |
+|-----------|---------|
+| `set -e` / `set -o errexit` | `$ErrorActionPreference = 'Stop'` (+ an errexit guard) |
+| `set -x` / `set -o xtrace` | `Set-PSDebug -Trace 1` |
+| `set -u` / `set -o nounset` | `Set-StrictMode -Version Latest` |
+| `set -- a b c` | Reset positional parameters |
+| `trap '…' ERR` | Fires the handler when a command returns non-zero |
+
+Combined flags like `set -euo pipefail` are decomposed (`pipefail` has no PowerShell equivalent and
+is ignored — see the [pipeline exit-code note](/ps-bash/comparison/)). `trap '…' DEBUG` has no faithful
+mapping (no pre-command event in PowerShell) and is a documented gap.
+
+## AI command assist (Ctrl-^) <Badge text="opt-in" variant="tip" />
+
+Press `Ctrl-^` (also bindable as Ctrl-backtick or `Ctrl-6`) to send your current buffer to an external AI CLI and
+get back a bash command. The shell shows the suggestion, **flags risky patterns** (`rm`, `git push
+--force`, `sudo`, `curl … | sh`, package installs, `Invoke-Expression`), and asks what to do:
+execute (a flagged command requires typing `EXECUTE` to confirm), insert into the buffer for
+editing, retry, switch providers, or cancel. Your original line is restored on cancel or error.
+
+- **Default provider** is the `claude` CLI (`claude -p "{{prompt}}"`); configure others in
+  `~/.psbash/ai-providers.json` (or `$PSBASH_AI_CONFIG`).
+- Prompts are **redacted** for obvious secrets (`API_KEY=…` → `<redacted>`) and the buffer/cwd are
+  truncated before sending.
+- Disable the feature entirely with `PSBASH_AI_DISABLE=1`.
+
+## Startup file
+
+On launch the shell sources `~/.psbashrc` (override with `PSBASH_HOME`; skip with `--no-profile`).
+`alias`/`unalias`/`complete` lines are applied to the interactive tables; the rest is transpiled
+and run. This is the same path used by interactive `source FILE`, so sourced aliases and completions
+are immediately live.
+
+```bash
+# ~/.psbashrc
+alias ll='ls -la'
+alias gl='git log --oneline | head -20'
+complete -W 'start stop restart status' svc
+export EDITOR=code
+```

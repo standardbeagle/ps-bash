@@ -239,6 +239,76 @@ PS> find . -name '*.cs' | grep 'TODO' -r
 ```
 
 </TabItem>
+<TabItem label="vs Windows coreutils">
+
+## PsBash vs Windows coreutils (uutils)
+
+Microsoft is bringing a native Unix toolset to Windows by adopting the Rust
+[`uutils/coreutils`](https://github.com/uutils/coreutils) — an MIT-licensed reimplementation of
+GNU coreutils — so commands like `cat`, `ls`, `cut`, and `sort` ship as real Windows executables.
+This is great news, and it solves a **different problem** than PsBash.
+
+The two projects optimize for opposite goals:
+
+| | **Windows coreutils (uutils)** | **PsBash** |
+|---|---|---|
+| Goal | **Exact GNU compatibility** | **Conceptual compatibility on PowerShell** |
+| Unit of compatibility | The single command (byte-for-byte vs GNU) | The whole script (control flow, pipelines, quoting, expansion) |
+| Data model | **Text streams** — bytes in, bytes out | **Typed objects** — `LsEntry`, `GrepMatch`, `WcResult` flow through the pipeline |
+| What it is | A set of standalone `.exe` binaries | A transpiler + runtime + interactive shell on PowerShell |
+| Pipeline | Real OS process pipes between binaries | A PowerShell object pipeline |
+| `ls -la \| awk '{print $5}'` | Re-parse text columns, exactly like GNU | `(ls -la).SizeBytes` — the field is already a typed property |
+| Runs *as a shell* | No — you still need bash/PowerShell to drive them | Yes — `ps-bash` is an interactive REPL and script runner |
+| Best when | You want a drop-in `cat`/`sort`/`cut` that matches GNU output to the byte | You want bash *scripts and sessions* to run on PowerShell with objects underneath |
+
+### Exact text compatibility vs conceptual compatibility
+
+uutils aims to be **the GNU tool**: feed it the same bytes and you get GNU's bytes back, including
+the quirks. That is exactly what you want when a Makefile or a CI step shells out to `sort -u` and
+depends on its precise text output.
+
+PsBash aims for **conceptual** compatibility. `sort` *means* "order these records"; on PsBash it
+orders typed objects and the records keep their structure, so the next stage reads
+`.SizeBytes` instead of re-splitting a text column. The bash you write looks the same — the thing
+flowing through the pipe is richer.
+
+```powershell
+# uutils: real coreutils, text in / text out — matches GNU exactly
+PS> uu-ls -la | uu-awk '{print $5}'   # parse column 5 back out of text
+
+# PsBash: same bash surface, but objects underneath
+PS> (ls -la).SizeBytes                # the size is already a number
+```
+
+### Single command vs script coverage
+
+uutils replaces commands **one at a time**. It does not parse `if`/`for`/`case`, here-docs,
+`$(...)` substitution, parameter expansion (`${x:-default}`), brace expansion, `&&`/`||` lists, or
+`trap`/`set -e` — those belong to whichever shell invokes the binaries.
+
+PsBash's transpiler covers exactly that layer. The goal is for a **bash script** — not just a lone
+command — to run on PowerShell:
+
+```bash
+# A script, not a single command. PsBash transpiles the whole thing.
+set -euo pipefail
+for f in *.log; do
+  count=$(grep -c ERROR "$f")
+  if [ "$count" -gt 0 ]; then
+    echo "${f}: ${count} errors"
+  fi
+done | sort -t: -k2 -rn | head -5
+```
+
+### Use both
+
+These are complementary, not competing. If Windows ships uutils, you get fast, GNU-exact binaries
+for the cases that need byte-for-byte text fidelity — and PsBash can call them like any external
+command. Reach for **uutils** when you need a drop-in GNU command with exact text output; reach for
+**PsBash** when you want to run bash *scripts and interactive sessions* on PowerShell and keep typed
+objects in the pipeline.
+
+</TabItem>
 </Tabs>
 
 ## Who Should Use PsBash?

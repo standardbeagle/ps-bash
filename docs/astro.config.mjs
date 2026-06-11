@@ -58,6 +58,7 @@ export default defineConfig({
         {
           label: 'Guides',
           items: [
+            { label: 'The Interactive Shell', slug: 'guides/interactive-shell' },
             { label: 'Pipeline Cookbook', slug: 'guides/cookbook' },
           ],
         },
