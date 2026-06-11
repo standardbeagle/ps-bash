@@ -294,6 +294,41 @@ internal static class JqEngine
             return EvalIf(data, filter, variables);
         }
 
+        // Boolean and / or (lower precedence than arithmetic). Whitespace-delimited
+        // so they can't be confused with identifiers.
+        foreach (var boolOp in new[] { " or ", " and " })
+        {
+            int bi = FindTopLevelStr(filter, boolOp);
+            if (bi >= 0)
+            {
+                bool isOr = boolOp == " or ";
+                var lefts = EvalFilter(data, filter.Substring(0, bi).Trim(), variables);
+                var rights = EvalFilter(data, filter.Substring(bi + boolOp.Length).Trim(), variables);
+                var res = new List<object?>();
+                foreach (var l in lefts)
+                    foreach (var r in rights)
+                        res.Add(isOr ? (!IsFalsy(l) || !IsFalsy(r)) : (!IsFalsy(l) && !IsFalsy(r)));
+                return res;
+            }
+        }
+
+        // Arithmetic: + - (additive, lowest), then * / % (multiplicative). Split on
+        // the LAST top-level whitespace-surrounded operator (left-associative). The
+        // mandatory surrounding spaces keep `.a-b`, `-1`, and negative literals safe.
+        var arith = FindLastSpacedArithOp(filter, additive: true)
+                    ?? FindLastSpacedArithOp(filter, additive: false);
+        if (arith != null)
+        {
+            var (opIdx, op) = arith.Value;
+            var lefts = EvalFilter(data, filter.Substring(0, opIdx).Trim(), variables);
+            var rights = EvalFilter(data, filter.Substring(opIdx + 3).Trim(), variables);
+            var res = new List<object?>();
+            foreach (var l in lefts)
+                foreach (var r in rights)
+                    res.Add(ApplyArith(l, op, r));
+            return res;
+        }
+
         // Recursive descent ..
         if (filter == "..")
         {
@@ -916,6 +951,92 @@ internal static class JqEngine
         s = s.Trim();
         if (s.Length >= 2 && s[0] == '"' && s[s.Length - 1] == '"') return s.Substring(1, s.Length - 2);
         return s;
+    }
+
+    /// <summary>
+    /// Find the LAST top-level whitespace-surrounded arithmetic operator (for
+    /// left-associative evaluation). Mandatory spaces around the operator keep
+    /// dot-paths (<c>.a-b</c>), negative literals, and array indices safe.
+    /// Returns (index of the leading space, operator char) or null.
+    /// </summary>
+    private static (int idx, char op)? FindLastSpacedArithOp(string f, bool additive)
+    {
+        string ops = additive ? "+-" : "*/%";
+        int depth = 0; bool inStr = false; int found = -1; char foundOp = '\0';
+        for (int i = 0; i < f.Length; i++)
+        {
+            char c = f[i];
+            if (c == '"' && (i == 0 || f[i - 1] != '\\')) { inStr = !inStr; continue; }
+            if (inStr) continue;
+            if (c is '(' or '[' or '{') depth++;
+            else if (c is ')' or ']' or '}') depth--;
+            else if (depth == 0 && c == ' ' && i + 2 < f.Length && f[i + 2] == ' ' && ops.IndexOf(f[i + 1]) >= 0)
+            {
+                found = i; foundOp = f[i + 1];
+            }
+        }
+        return found >= 0 ? (found, foundOp) : null;
+    }
+
+    private static bool IsNum(object? v) => v is int or long or double or decimal or float;
+    private static double ToD(object? v) => Convert.ToDouble(v, CultureInfo.InvariantCulture);
+
+    /// <summary>jq binary arithmetic: number math, plus the string/array/object
+    /// overloads (<c>+</c> concat/merge, <c>-</c> array difference, <c>*</c> string
+    /// repeat, <c>/</c> string split).</summary>
+    private static object? ApplyArith(object? l, char op, object? r)
+    {
+        switch (op)
+        {
+            case '+':
+                if (l == null) return r;
+                if (r == null) return l;
+                if (IsNum(l) && IsNum(r)) return ToD(l) + ToD(r);
+                if (l is string ls && r is string rs) return ls + rs;
+                if (l is IList la && r is IList lb)
+                {
+                    var c = new List<object?>();
+                    foreach (var x in la) c.Add(x);
+                    foreach (var x in lb) c.Add(x);
+                    return c.ToArray();
+                }
+                if (l is IDictionary da && r is IDictionary db)
+                {
+                    var m = new Dictionary<string, object?>();
+                    foreach (DictionaryEntry e in da) m[e.Key?.ToString() ?? ""] = e.Value;
+                    foreach (DictionaryEntry e in db) m[e.Key?.ToString() ?? ""] = e.Value;
+                    return m;
+                }
+                throw new JqException($"jq: {TypeOf(l)} and {TypeOf(r)} cannot be added");
+            case '-':
+                if (IsNum(l) && IsNum(r)) return ToD(l) - ToD(r);
+                if (l is IList la2 && r is IList lb2)
+                {
+                    var c = new List<object?>();
+                    foreach (var x in la2)
+                    {
+                        bool inR = false;
+                        foreach (var y in lb2) if (JqCompare(x, y) == 0) { inR = true; break; }
+                        if (!inR) c.Add(x);
+                    }
+                    return c.ToArray();
+                }
+                throw new JqException($"jq: {TypeOf(l)} and {TypeOf(r)} cannot be subtracted");
+            case '*':
+                if (IsNum(l) && IsNum(r)) return ToD(l) * ToD(r);
+                if (l is string sl && IsNum(r)) { int n = (int)ToD(r); return n <= 0 ? null : string.Concat(Enumerable.Repeat(sl, n)); }
+                if (r is string sr && IsNum(l)) { int n = (int)ToD(l); return n <= 0 ? null : string.Concat(Enumerable.Repeat(sr, n)); }
+                throw new JqException($"jq: {TypeOf(l)} and {TypeOf(r)} cannot be multiplied");
+            case '/':
+                if (IsNum(l) && IsNum(r)) { double d = ToD(r); if (d == 0) throw new JqException("jq: number divided by zero"); return ToD(l) / d; }
+                if (l is string sls && r is string srs) return sls.Split(new[] { srs }, StringSplitOptions.None).Cast<object?>().ToArray();
+                throw new JqException($"jq: {TypeOf(l)} and {TypeOf(r)} cannot be divided");
+            case '%':
+                if (IsNum(l) && IsNum(r)) { long rr = (long)ToD(r); if (rr == 0) throw new JqException("jq: number divided by zero"); return (double)((long)ToD(l) % rr); }
+                throw new JqException($"jq: {TypeOf(l)} and {TypeOf(r)} cannot be divided (remainder)");
+            default:
+                return null;
+        }
     }
 
     private static List<object?> Recurse(object? data)

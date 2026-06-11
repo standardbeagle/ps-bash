@@ -487,4 +487,33 @@ public class NewFlagSupportTests : IClassFixture<SharedPwshFixture>, IDisposable
         Assert.Equal("a-b-c", JqRaw(@"[""a"",""b"",""c""]", "join(\"-\")"));
         Assert.Equal("true", JqRaw(@"""hello""", "startswith(\"he\")"));
     }
+
+    // ── jq arithmetic + and/or ───────────────────────────────────────────────
+
+    [Fact]
+    public void Jq_Arithmetic_NumberFields()
+        => Assert.Equal("3", JqRaw(@"{""a"":1,""b"":2}", ".a + .b"));
+
+    [Fact]
+    public void Jq_Arithmetic_LengthPlusConstant()
+        => Assert.Equal("13", JqRaw("[1,2,3]", "length + 10"));
+
+    [Fact]
+    public void Jq_Arithmetic_Subtract()
+        => Assert.Equal("3", JqRaw("null", "5 - 2"));
+
+    [Fact]
+    public void Jq_Arithmetic_StringConcat()
+        => Assert.Equal("foobar", JqRaw(@"{""x"":""foo""}", ".x + \"bar\""));
+
+    [Fact]
+    public void Jq_Arithmetic_StringSplitViaDivide()
+        => Assert.Equal("[\"a\",\"b\",\"c\"]", JqCompact(@"""a,b,c""", ". / \",\""));
+
+    [Fact]
+    public void Jq_BooleanAndOr()
+    {
+        Assert.Equal("false", JqRaw("true", ". and false"));
+        Assert.Equal("true", JqRaw("false", ". or true"));
+    }
 }
