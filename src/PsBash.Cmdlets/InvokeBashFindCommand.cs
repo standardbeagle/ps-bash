@@ -103,7 +103,7 @@ public sealed class InvokeBashFindCommand : PSCmdlet
         };
         var unsupportedStandalonePredicates = new HashSet<string>(StringComparer.Ordinal)
         {
-            "-print", "-follow", "-ls",
+            "-follow", "-ls",
             "-mount", "-xdev", "-noleaf", "-daystart", "-warn", "-nowarn",
             // NOTE: the boolean operators -not/-or/-o/-and/-a and the constant
             // predicates -true/-false are now SUPPORTED via the expression
@@ -261,11 +261,23 @@ public sealed class InvokeBashFindCommand : PSCmdlet
                 case "-type":
                 {
                     string tf = (++i < args.Length) ? args[i] : string.Empty;
-                    exprTokens.Add(new FindTok(FTk.Leaf,
-                        c => (tf == "f" && !c.IsDir) || (tf == "d" && c.IsDir)));
+                    exprTokens.Add(new FindTok(FTk.Leaf, c => tf switch
+                    {
+                        "f" => !c.IsDir,
+                        "d" => c.IsDir,
+                        // -type l: symlink / junction (a reparse point on Windows).
+                        "l" => (c.Item.Attributes & System.IO.FileAttributes.ReparsePoint) != 0,
+                        _ => false, // b/c/p/s special files: no Windows analogue
+                    }));
                     i++;
                     continue;
                 }
+                case "-print":
+                    // ps-bash always prints matches (no action model), so -print is
+                    // a no-op that stays true to keep the boolean expression valid.
+                    exprTokens.Add(new FindTok(FTk.Leaf, static _ => true));
+                    i++;
+                    continue;
                 case "-size":
                 {
                     string e = (++i < args.Length) ? args[i] : string.Empty;

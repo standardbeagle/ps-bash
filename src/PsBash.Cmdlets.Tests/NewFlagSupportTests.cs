@@ -135,4 +135,61 @@ public class NewFlagSupportTests : IClassFixture<SharedPwshFixture>, IDisposable
         var written = File.ReadAllText(outFile).Replace("\r\n", "\n").TrimEnd('\n').Split('\n');
         Assert.Equal(new[] { "apple", "banana", "cherry" }, written);
     }
+
+    // ── nl formatting params ─────────────────────────────────────────────────
+
+    [Fact]
+    public void Nl_WidthSeparatorStartIncrement_AreHonored()
+    {
+        // -w3 width, -s' ' separator, -v10 start, -i5 increment.
+        var lines = RunLines("'a','b' | Invoke-BashNl -w 3 -s ' ' -v 10 -i 5");
+        Assert.Equal(new[] { " 10 a", " 15 b" }, lines);
+    }
+
+    [Fact]
+    public void Nl_NumberFormat_LeftAndZero()
+    {
+        var rz = RunLines("'x' | Invoke-BashNl -n rz -w 4");
+        Assert.Equal(new[] { "0001\tx" }, rz);
+    }
+
+    // ── uniq -D / --all-repeated ─────────────────────────────────────────────
+
+    [Fact]
+    public void Uniq_AllRepeated_PrintsEveryLineOfDuplicateRuns()
+    {
+        var lines = RunLines("'a','a','b','c','c','c' | Invoke-BashUniq --all-repeated");
+        Assert.Equal(new[] { "a", "a", "c", "c", "c" }, lines);
+    }
+
+    [Fact]
+    public void Uniq_DashD_PrintsEveryLineOfDuplicateRuns()
+    {
+        var lines = RunLines("'a','a','b' | Invoke-BashUniq -D");
+        Assert.Equal(new[] { "a", "a" }, lines);
+    }
+
+    // ── grep -f ──────────────────────────────────────────────────────────────
+
+    [Fact]
+    public void Grep_PatternFile_MatchesAnyPattern()
+    {
+        var pf = Path.Combine(_tmp, "pats.txt");
+        File.WriteAllText(pf, "apple\ncherry\n");
+        var lines = RunLines($"'apple pie','banana','cherry tart','date' | Invoke-BashGrep -f '{Q(pf)}'");
+        Assert.Equal(new[] { "apple pie", "cherry tart" }, lines);
+    }
+
+    // ── find -type l ─────────────────────────────────────────────────────────
+
+    [Fact]
+    public void Find_TypeF_AndPrint_Work()
+    {
+        File.WriteAllText(Path.Combine(_tmp, "ff.txt"), "x");
+        Directory.CreateDirectory(Path.Combine(_tmp, "dd"));
+        // -print is now a recognized no-op action (default emission still happens).
+        var lines = RunLines($"Invoke-BashFind '{Q(_tmp)}' -type f -print");
+        Assert.Contains(lines, l => l.EndsWith("ff.txt", StringComparison.Ordinal));
+        Assert.DoesNotContain(lines, l => l.Replace('\\', '/').EndsWith("/dd"));
+    }
 }

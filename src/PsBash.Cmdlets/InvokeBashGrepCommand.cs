@@ -138,7 +138,7 @@ public sealed class InvokeBashGrepCommand : PSCmdlet
         "--text", "--byte-offset",
         "--binary-files", "--devices", "--directories", "--binary",
         "--initial-tab", "--include-dir",
-        "--exclude-from", "--label",
+        "--label",
         "--line-buffered", "--group-separator", "--no-group-separator",
     };
 
@@ -195,6 +195,10 @@ public sealed class InvokeBashGrepCommand : PSCmdlet
         if (E != null) patterns.AddRange(E);
         var operands = new List<string>();
         bool pastDoubleDash = false;
+        // True once -f/--file was given: the pattern list is fully determined by
+        // the file(s), so the first operand must NOT be reinterpreted as a pattern
+        // (an empty pattern file means "match nothing", not "use file as pattern").
+        bool sawPatternFile = false;
 
         // PowerShell's binder is case-insensitive, so the bash conventions
         // `-e PATTERN` (multi-pattern) and `-E` (extended-regex flag) both
@@ -240,6 +244,45 @@ public sealed class InvokeBashGrepCommand : PSCmdlet
             }
 
             // Joined -ePATTERN form (oracle did not match, but be defensive).
+
+            // -f FILE / --file=FILE / -fFILE: read patterns from a file, one per
+            // line. Each line becomes an OR pattern (added to `patterns`).
+            if (a == "-f" || a == "--file")
+            {
+                i++;
+                if (i < args.Length) { AddLinesFromFile(args[i], patterns, noMessages); sawPatternFile = true; }
+                i++;
+                continue;
+            }
+            if (a.StartsWith("--file=", StringComparison.Ordinal))
+            {
+                AddLinesFromFile(a.Substring("--file=".Length), patterns, noMessages);
+                sawPatternFile = true;
+                i++;
+                continue;
+            }
+            if (a.Length > 2 && a[0] == '-' && a[1] == 'f' && a[2] != '-')
+            {
+                AddLinesFromFile(a.Substring(2), patterns, noMessages);
+                sawPatternFile = true;
+                i++;
+                continue;
+            }
+
+            // --exclude-from=FILE / --exclude-from FILE: read exclude globs from a file.
+            if (a == "--exclude-from")
+            {
+                i++;
+                if (i < args.Length) AddLinesFromFile(args[i], excludeGlobs, noMessages);
+                i++;
+                continue;
+            }
+            if (a.StartsWith("--exclude-from=", StringComparison.Ordinal))
+            {
+                AddLinesFromFile(a.Substring("--exclude-from=".Length), excludeGlobs, noMessages);
+                i++;
+                continue;
+            }
 
             // -A NUM, -B NUM, -C NUM (separated) or -A2 / -B2 / -C2 (joined).
             var ctxJoined = Regex.Match(a, @"^-([ABC])(\d+)$");
@@ -408,8 +451,8 @@ public sealed class InvokeBashGrepCommand : PSCmdlet
             i++;
         }
 
-        // Pattern collection: -e patterns (already accumulated) or first operand.
-        if (patterns.Count == 0 && operands.Count > 0)
+        // Pattern collection: -e/-f patterns (already accumulated) or first operand.
+        if (patterns.Count == 0 && operands.Count > 0 && !sawPatternFile)
         {
             patterns.Add(operands[0]);
             operands.RemoveAt(0);
@@ -417,6 +460,12 @@ public sealed class InvokeBashGrepCommand : PSCmdlet
 
         if (patterns.Count == 0)
         {
+            // An empty -f pattern file means "match nothing" (exit 1), not a usage error.
+            if (sawPatternFile)
+            {
+                FileSystemHelpers.SetLastExitCode(this, 1);
+                return;
+            }
             FileSystemHelpers.WriteBashError(this, "grep: usage: grep [options] pattern [file ...]");
         FileSystemHelpers.SetLastExitCode(this, 2);
             return;
@@ -495,6 +544,38 @@ public sealed class InvokeBashGrepCommand : PSCmdlet
     /// <paramref name="into"/>; returns false (advancing nothing) when <paramref name="args"/>[i] is
     /// not this flag. Used for grep <c>--include</c> / <c>--exclude</c> / <c>--exclude-dir</c>.
     /// </summary>
+    /// <summary>
+    /// Read a file's lines into <paramref name="dest"/> — backing <c>-f</c>
+    /// (pattern file) and <c>--exclude-from</c> (glob file). A missing/unreadable
+    /// file emits a bash-style error (unless <paramref name="noMessages"/>) and
+    /// contributes nothing, matching GNU grep.
+    /// </summary>
+    private void AddLinesFromFile(string rawPath, List<string> dest, bool noMessages)
+    {
+        string path;
+        try
+        {
+            path = SessionState.Path.GetUnresolvedProviderPathFromPSPath(
+                FileSystemHelpers.NormalizeOperandPath(rawPath));
+        }
+        catch
+        {
+            path = rawPath;
+        }
+        try
+        {
+            foreach (var line in BashFileSystem.ReadLines(path)) dest.Add(line);
+        }
+        catch (Exception ex)
+        {
+            if (FileSystemHelpers.IsPipelineStop(ex)) throw;
+            if (!noMessages)
+            {
+                FileSystemHelpers.WriteBashError(this, $"grep: {rawPath.Replace('\\', '/')}: No such file or directory");
+            }
+        }
+    }
+
     private static bool TryTakeGlobFlag(string[] args, ref int i, string flag, List<string> into)
     {
         var a = args[i];

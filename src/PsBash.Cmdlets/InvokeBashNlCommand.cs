@@ -54,9 +54,22 @@ public sealed class InvokeBashNlCommand : PSCmdlet
     [Parameter(ValueFromPipeline = true)]
     public PSObject? InputObject { get; set; }
 
+    /// <summary>-w N (number width) decoy: bare -w is ambiguous with -WarningAction/-WarningVariable.</summary>
+    [Parameter] public string? W { get; set; }
+    /// <summary>-v N (start number) decoy: bare -v abbreviates -Verbose.</summary>
+    [Parameter] public string? V { get; set; }
+    /// <summary>-i N (increment) decoy: bare -i is ambiguous with -Information*.</summary>
+    [Parameter] public string? I { get; set; }
+
     // Parsed-once state.
     private bool _parsed;
     private bool _numberAll;
+    private bool _numberNone;
+    private int _width = 6;
+    private string _sep = "\t";
+    private int _start = 1;
+    private int _incr = 1;
+    private string _style = "rn"; // rn=right, ln=left, rz=right zero-padded
     private List<string> _operands = new();
     // True when stdin must NOT be streamed: file operands present, or a
     // --help / --version request (both short-circuit the scan in the oracle).
@@ -79,6 +92,11 @@ public sealed class InvokeBashNlCommand : PSCmdlet
             return;
         }
 
+        // Bare -w/-v/-i arrive via the decoy parameters (common-param collisions).
+        _width = ParseIntOr(W, _width);
+        _start = ParseIntOr(V, _start);
+        _incr = ParseIntOr(I, _incr);
+
         // Parse flags manually (mirrors the psm1 oracle's while loop).
         bool pastDoubleDash = false;
         int i = 0;
@@ -100,46 +118,86 @@ public sealed class InvokeBashNlCommand : PSCmdlet
                 continue;
             }
 
-            // Case-sensitive match per the psm1 oracle's `-ceq`.
-            if (string.Equals(arg, "-ba", StringComparison.Ordinal))
+            // -b STYLE (a=all, t=non-empty[default], n=none) — `-ba` joined or `-b a` split.
+            if (arg.Length == 3 && arg[0] == '-' && arg[1] == 'b')
             {
-                _numberAll = true;
+                ApplyBodyStyle(arg[2]);
+                i++;
+                continue;
+            }
+            if (string.Equals(arg, "-b", StringComparison.Ordinal))
+            {
+                i++;
+                if (i < args.Length && args[i].Length == 1) ApplyBodyStyle(args[i][0]);
                 i++;
                 continue;
             }
 
-            if (string.Equals(arg, "-b", StringComparison.Ordinal))
-            {
-                i++;
-                if (i < args.Length && string.Equals(args[i], "a", StringComparison.Ordinal))
-                {
-                    _numberAll = true;
-                }
-                i++;
-                continue;
-            }
+            // -n FORMAT (ln / rn / rz) — number style.
+            if (arg == "-n" && i + 1 < args.Length) { _style = NormalizeStyle(args[i + 1]); i += 2; continue; }
+            if (arg.Length > 2 && arg.StartsWith("-n", StringComparison.Ordinal)) { _style = NormalizeStyle(arg.Substring(2)); i++; continue; }
+
+            // -s SEP (separator between number and line).
+            if (arg == "-s" && i + 1 < args.Length) { _sep = args[i + 1]; i += 2; continue; }
+            if (arg.Length > 2 && arg.StartsWith("-s", StringComparison.Ordinal)) { _sep = arg.Substring(2); i++; continue; }
+
+            // Joined -wN / -vN / -iN (the bare forms came through W/V/I).
+            if (arg.Length > 2 && arg.StartsWith("-w", StringComparison.Ordinal) && int.TryParse(arg.Substring(2), out var w)) { _width = w; i++; continue; }
+            if (arg.Length > 2 && arg.StartsWith("-v", StringComparison.Ordinal) && int.TryParse(arg.Substring(2), out var v)) { _start = v; i++; continue; }
+            if (arg.Length > 2 && arg.StartsWith("-i", StringComparison.Ordinal) && int.TryParse(arg.Substring(2), out var inc)) { _incr = inc; i++; continue; }
 
             _operands.Add(arg);
             i++;
         }
 
+        // Seed the counter so the first numbered line is exactly _start.
+        _lineNum = _start - _incr;
         _suppressStdin = _operands.Count > 0;
     }
 
+    private void ApplyBodyStyle(char s)
+    {
+        switch (s)
+        {
+            case 'a': _numberAll = true; _numberNone = false; break;
+            case 'n': _numberNone = true; _numberAll = false; break;
+            case 't': _numberAll = false; _numberNone = false; break;
+            // 'p<BRE>' regex numbering is not supported; ignore.
+        }
+    }
+
+    private static int ParseIntOr(string? s, int def) =>
+        !string.IsNullOrEmpty(s) && int.TryParse(s, out var v) ? v : def;
+
+    private static string NormalizeStyle(string s) => s switch
+    {
+        "ln" or "rn" or "rz" => s,
+        _ => "rn",
+    };
+
     private void EmitNumbered(string line)
     {
+        // -b n: never number; GNU still prints the blank number field + separator.
+        if (_numberNone)
+        {
+            WriteObject(BashRuntime.NewBashObject(new string(' ', _width) + _sep + line));
+            return;
+        }
+        // Default (-b t): empty lines are unnumbered (bare empty — oracle parity).
         if (!_numberAll && line.Length == 0)
         {
             WriteObject(BashRuntime.NewBashObject(string.Empty));
             return;
         }
 
-        _lineNum++;
-        // psm1 oracle format: '{0,6}\t{1}' -f $lineNum, $line
-        string bashText = string.Format(
-            System.Globalization.CultureInfo.InvariantCulture,
-            "{0,6}\t{1}", _lineNum, line);
-        WriteObject(BashRuntime.NewBashObject(bashText));
+        _lineNum += _incr;
+        string num = _style switch
+        {
+            "ln" => _lineNum.ToString().PadRight(_width),
+            "rz" => _lineNum.ToString().PadLeft(_width, '0'),
+            _ => _lineNum.ToString().PadLeft(_width),
+        };
+        WriteObject(BashRuntime.NewBashObject(num + _sep + line));
     }
 
     protected override void ProcessRecord()

@@ -59,7 +59,7 @@ public sealed class InvokeBashUniqCommand : PSCmdlet
 
     // Parsed-once state.
     private bool _parsed;
-    private bool _countMode, _duplicatesOnly, _ignoreCase, _uniqueOnly;
+    private bool _countMode, _duplicatesOnly, _ignoreCase, _uniqueOnly, _allRepeated;
     private int _skipFields, _skipChars, _checkChars;
     private List<string> _operands = new();
     // True when stdin must NOT be streamed: file operands present (file mode
@@ -114,6 +114,14 @@ public sealed class InvokeBashUniqCommand : PSCmdlet
             if (arg == "--ignore-case")
             {
                 ignoreCase = true;
+                i++;
+                continue;
+            }
+
+            // -D / --all-repeated[=METHOD]: print ALL lines of each duplicate run.
+            if (arg == "--all-repeated" || arg.StartsWith("--all-repeated=", StringComparison.Ordinal))
+            {
+                _allRepeated = true;
                 i++;
                 continue;
             }
@@ -235,6 +243,14 @@ public sealed class InvokeBashUniqCommand : PSCmdlet
 
         // Publish the parsed flags to instance state so the streamed
         // ProcessRecord and EndProcessing share them.
+        // Bare -D binds to the -d decoy (case-insensitive), so recover the
+        // distinct uppercase -D from the raw invocation line.
+        var rawLine = MyInvocation?.Line ?? string.Empty;
+        if (System.Text.RegularExpressions.Regex.IsMatch(rawLine, @"(?<![\w-])-D(?![\w])"))
+        {
+            _allRepeated = true;
+        }
+
         _countMode = countMode;
         _duplicatesOnly = duplicatesOnly;
         _ignoreCase = ignoreCase;
@@ -249,6 +265,19 @@ public sealed class InvokeBashUniqCommand : PSCmdlet
     private void FlushRun()
     {
         if (_prevLine == null) return;
+
+        // -D / --all-repeated: emit EVERY line of a duplicate run (count >= 2),
+        // not a single representative. No count prefix (GNU rejects -cD).
+        if (_allRepeated)
+        {
+            if (_runCount < 2) return;
+            for (int k = 0; k < _runCount; k++)
+            {
+                WriteObject(BashRuntime.NewBashObject(_prevLine));
+            }
+            return;
+        }
+
         if (_duplicatesOnly && _runCount < 2) return;
         if (_uniqueOnly && _runCount > 1) return;
 
