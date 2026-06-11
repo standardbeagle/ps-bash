@@ -310,4 +310,54 @@ public class NewFlagSupportTests : IClassFixture<SharedPwshFixture>, IDisposable
         var lines = RunLines("'\"42\"' | Invoke-BashJq -r 'tonumber'");
         Assert.Contains("42", string.Join("", lines));
     }
+
+    // ── tar --strip-components ────────────────────────────────────────────────
+
+    [Fact]
+    public void Tar_StripComponents_DropsLeadingPathSegments()
+    {
+        // Build an archive whose entries live under top/sub/.
+        var src = Path.Combine(_tmp, "top", "sub");
+        Directory.CreateDirectory(src);
+        File.WriteAllText(Path.Combine(src, "leaf.txt"), "content");
+        var archive = Path.Combine(_tmp, "a.tar");
+        RunLines($"Push-Location '{Q(_tmp)}'; try {{ Invoke-BashTar -c -f '{Q(archive)}' top }} finally {{ Pop-Location }}");
+        Assert.True(File.Exists(archive), "archive created");
+
+        var dest = Path.Combine(_tmp, "out");
+        Directory.CreateDirectory(dest);
+        // --strip-components=2 drops top/sub/, so leaf.txt lands directly in dest.
+        RunLines($"Invoke-BashTar -x -f '{Q(archive)}' --strip-components=2 --directory='{Q(dest)}'");
+        Assert.True(File.Exists(Path.Combine(dest, "leaf.txt")), "leaf.txt extracted at the stripped path");
+    }
+
+    // ── gzip -t ──────────────────────────────────────────────────────────────
+
+    [Fact]
+    public void Gzip_Test_ValidArchive_NoErrorExitZero()
+    {
+        var f = Path.Combine(_tmp, "g.txt");
+        File.WriteAllText(f, "compress me please");
+        RunLines($"Invoke-BashGzip -k '{Q(f)}'"); // creates g.txt.gz, keeps original
+        var gz = f + ".gz";
+        Assert.True(File.Exists(gz), "gz created");
+        // -t on a valid archive is silent and succeeds.
+        var pwsh = _fixture.AcquireFresh();
+        var result = pwsh.AddScript($"Invoke-BashGzip -t '{Q(gz)}'; $global:LASTEXITCODE").Invoke();
+        pwsh.Commands.Clear();
+        Assert.Equal("0", result[^1]?.ToString());
+    }
+
+    [Fact]
+    public void Gzip_Test_CorruptArchive_Fails()
+    {
+        var bad = Path.Combine(_tmp, "bad.gz");
+        File.WriteAllText(bad, "this is not gzip data at all");
+        var pwsh = _fixture.AcquireFresh();
+        pwsh.AddScript("$ErrorActionPreference='Continue'").Invoke();
+        pwsh.Commands.Clear();
+        var result = pwsh.AddScript($"Invoke-BashGzip -t '{Q(bad)}' 2>$null; $global:LASTEXITCODE").Invoke();
+        pwsh.Commands.Clear();
+        Assert.Equal("1", result[^1]?.ToString());
+    }
 }

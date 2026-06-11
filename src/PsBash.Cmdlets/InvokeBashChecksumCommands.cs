@@ -1,6 +1,7 @@
 using System.Management.Automation;
 using System.Security.Cryptography;
 using System.Text;
+using System.Text.RegularExpressions;
 
 namespace PsBash.Cmdlets;
 
@@ -47,18 +48,12 @@ internal static class ChecksumEngine
             return;
         }
 
-        // Check mode (-c / --check): verify a checksum file. NOT implemented by
-        // the binary cmdlet. `-c` prefix-collides with the -Confirm common
-        // parameter, so each cmdlet declares a `C` decoy and passes checkMode
-        // here; `--check` (no collision) arrives as an operand. Emit the
-        // policy-compliant "recognized but not supported" error instead of
-        // silently hashing the checksum file as if it were data.
+        // Check mode (-c / --check): verify the named files against a checksum
+        // file. `-c` prefix-collides with -Confirm, so each cmdlet passes
+        // checkMode via a `C` decoy; `--check` arrives as an operand.
         if (checkMode || Array.IndexOf(arguments, "--check") >= 0)
         {
-            FileSystemHelpers.WriteBashError(
-                cmdlet,
-                $"{commandName}: option '-c' (--check) is recognized but not supported by ps-bash");
-            FileSystemHelpers.SetLastExitCode(cmdlet, 1);
+            RunCheck(cmdlet, algorithmName, commandName, arguments);
             return;
         }
 
@@ -126,6 +121,117 @@ internal static class ChecksumEngine
             }
             var hex = ComputeHex(algorithmName, Encoding.UTF8.GetBytes(sb.ToString()));
             cmdlet.WriteObject(MakeOutput(hex, "-", algorithmLabel, marker));
+        }
+    }
+
+    /// <summary>
+    /// <c>-c</c> / <c>--check</c>: read checksum file(s) (lines of
+    /// <c>HASH  FILENAME</c> or <c>HASH *FILENAME</c>), recompute each named
+    /// file's digest, and report <c>FILENAME: OK</c> / <c>FILENAME: FAILED</c>.
+    /// <c>--status</c> suppresses all output (exit code only); <c>--quiet</c>
+    /// prints only failures. Exit 1 if any line fails or a file is missing.
+    /// </summary>
+    private static void RunCheck(
+        PSCmdlet cmdlet, HashAlgorithmName algorithmName, string commandName, string[] arguments)
+    {
+        bool status = false, quiet = false, pastDoubleDash = false;
+        var checkFiles = new List<string>();
+        foreach (var a in arguments)
+        {
+            if (!pastDoubleDash)
+            {
+                if (a == "--") { pastDoubleDash = true; continue; }
+                if (a == "-c" || a == "--check") continue;
+                if (a == "--status") { status = true; continue; }
+                if (a == "--quiet") { quiet = true; continue; }
+                if (a == "--warn" || a == "--strict" || a == "--ignore-missing") continue;
+                if (a == "-b" || a == "--binary" || a == "-t" || a == "--text") continue;
+            }
+            checkFiles.Add(a);
+        }
+
+        int failures = 0;
+        var lineRx = new Regex(@"^([0-9A-Fa-f]+)[ \t]+\*?(.+)$");
+
+        foreach (var cf in checkFiles)
+        {
+            foreach (var checkPath in ResolveOperandPaths(cmdlet, cf))
+            {
+                if (!File.Exists(checkPath))
+                {
+                    FileSystemHelpers.WriteBashError(cmdlet, $"{commandName}: {checkPath}: No such file or directory");
+                    failures++;
+                    continue;
+                }
+
+                List<string> lines;
+                try { lines = new List<string>(BashFileSystem.ReadLines(checkPath)); }
+                catch (Exception ex)
+                {
+                    if (FileSystemHelpers.IsPipelineStop(ex)) throw;
+                    FileSystemHelpers.WriteBashError(cmdlet, $"{commandName}: {checkPath}: {ex.Message}");
+                    failures++;
+                    continue;
+                }
+
+                foreach (var line in lines)
+                {
+                    if (string.IsNullOrWhiteSpace(line)) continue;
+                    var m = lineRx.Match(line.Trim());
+                    if (!m.Success) continue;
+
+                    string expected = m.Groups[1].Value;
+                    string fname = m.Groups[2].Value;
+                    string fpath;
+                    try { fpath = cmdlet.SessionState.Path.GetUnresolvedProviderPathFromPSPath(fname); }
+                    catch { fpath = fname; }
+
+                    if (!File.Exists(fpath))
+                    {
+                        if (!status) cmdlet.WriteObject(BashRuntime.NewBashObject($"{fname}: FAILED open or read"));
+                        failures++;
+                        continue;
+                    }
+
+                    string actual;
+                    try
+                    {
+                        using var s = BashFileSystem.OpenRead(fpath);
+                        actual = ComputeHexFromStream(algorithmName, s);
+                    }
+                    catch (Exception ex)
+                    {
+                        if (FileSystemHelpers.IsPipelineStop(ex)) throw;
+                        if (!status) cmdlet.WriteObject(BashRuntime.NewBashObject($"{fname}: FAILED open or read"));
+                        failures++;
+                        continue;
+                    }
+
+                    if (string.Equals(actual, expected, StringComparison.OrdinalIgnoreCase))
+                    {
+                        if (!status && !quiet) cmdlet.WriteObject(BashRuntime.NewBashObject($"{fname}: OK"));
+                    }
+                    else
+                    {
+                        if (!status) cmdlet.WriteObject(BashRuntime.NewBashObject($"{fname}: FAILED"));
+                        failures++;
+                    }
+                }
+            }
+        }
+
+        if (failures > 0)
+        {
+            if (!status)
+            {
+                FileSystemHelpers.WriteBashError(cmdlet,
+                    $"{commandName}: WARNING: {failures} computed checksum(s) did NOT match");
+            }
+            FileSystemHelpers.SetLastExitCode(cmdlet, 1);
+        }
+        else
+        {
+            FileSystemHelpers.SetLastExitCode(cmdlet, 0);
         }
     }
 

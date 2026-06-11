@@ -113,6 +113,8 @@ public sealed class InvokeBashTarCommand : PSCmdlet
         var excludePatterns = new List<string>();
         var operands = new List<string>();
         bool sawExplicitCreate = false;
+        int stripComponents = 0;
+        bool toStdout = false;
 
         int i = 0;
         while (i < args.Length)
@@ -165,6 +167,22 @@ public sealed class InvokeBashTarCommand : PSCmdlet
                 i++;
                 continue;
             }
+            // --strip-components=N / --strip-components N: drop leading path
+            // components on extract (ubiquitous for "extract into current dir").
+            if (a.StartsWith("--strip-components=", StringComparison.Ordinal))
+            {
+                int.TryParse(a.Substring("--strip-components=".Length), out stripComponents);
+                i++;
+                continue;
+            }
+            if (a == "--strip-components")
+            {
+                i++;
+                if (i < args.Length) int.TryParse(args[i], out stripComponents);
+                i++;
+                continue;
+            }
+            if (a == "--to-stdout") { toStdout = true; i++; continue; }
 
             // Bundled / joined short flags (oracle: `arg.Substring(1).ToCharArray()`
             // loop). `f` and `C` are value-bearing and consume the rest of the
@@ -182,6 +200,7 @@ public sealed class InvokeBashTarCommand : PSCmdlet
                     else if (ch == 'z') { gzipFilter = true; }
                     else if (ch == 'v') { verbose = true; }
                     else if (ch == 'p') { /* preserve perms — ignored, oracle parity */ }
+                    else if (ch == 'O') { toStdout = true; }
                     else if (ch == 'f')
                     {
                         string rest = body.Substring(j + 1);
@@ -284,7 +303,7 @@ public sealed class InvokeBashTarCommand : PSCmdlet
         }
         else if (extract)
         {
-            DoExtract(archiveFile!, gzipFilter, verbose, changeDir);
+            DoExtract(archiveFile!, gzipFilter, verbose, changeDir, stripComponents, toStdout);
         }
         else if (listMode)
         {
@@ -374,7 +393,8 @@ public sealed class InvokeBashTarCommand : PSCmdlet
         }
     }
 
-    private void DoExtract(string archiveFile, bool gzipFilter, bool verbose, string? changeDir)
+    private void DoExtract(string archiveFile, bool gzipFilter, bool verbose, string? changeDir,
+        int stripComponents = 0, bool toStdout = false)
     {
         if (!File.Exists(archiveFile))
         {
@@ -403,13 +423,32 @@ public sealed class InvokeBashTarCommand : PSCmdlet
             while ((entry = reader.GetNextEntry(copyData: true)) != null)
             {
                 if (entry.DataStream == null) { continue; }
-                string targetPath = Path.Join(destDir, entry.Name.Replace('/', Path.DirectorySeparatorChar));
+
+                // -O / --to-stdout: emit the entry's content instead of writing a file.
+                if (toStdout)
+                {
+                    using var sr = new StreamReader(entry.DataStream);
+                    foreach (var o in BashRuntime.EmitBashLines(sr.ReadToEnd())) WriteObject(o);
+                    continue;
+                }
+
+                // --strip-components=N: drop the first N path segments of the name.
+                string name = entry.Name;
+                if (stripComponents > 0)
+                {
+                    var parts = name.Replace('\\', '/').Split('/');
+                    if (parts.Length <= stripComponents) continue; // nothing left after strip
+                    name = string.Join("/", parts.Skip(stripComponents));
+                    if (name.Length == 0) continue;
+                }
+
+                string targetPath = Path.Join(destDir, name.Replace('/', Path.DirectorySeparatorChar));
                 string? dir = Path.GetDirectoryName(targetPath);
                 if (!string.IsNullOrEmpty(dir) && !Directory.Exists(dir))
                 {
                     Directory.CreateDirectory(dir);
                 }
-                if (verbose) { WriteObject(BashRuntime.NewBashObject(entry.Name)); }
+                if (verbose) { WriteObject(BashRuntime.NewBashObject(name)); }
                 using var fs = File.Create(targetPath);
                 entry.DataStream.CopyTo(fs);
             }

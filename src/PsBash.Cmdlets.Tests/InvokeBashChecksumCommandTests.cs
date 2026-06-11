@@ -94,15 +94,43 @@ public class InvokeBashChecksumCommandTests : IClassFixture<SharedPwshFixture>, 
     }
 
     [Fact]
-    public void Md5sum_CheckMode_DashC_DoesNotSilentlyHashTheChecksumFile()
+    public void Md5sum_CheckMode_VerifiesMatchingFile()
     {
-        // Regression: bare `-c` prefix-collides with the -Confirm common parameter.
-        // It used to be silently bound and dropped, so `md5sum -c sums.txt` hashed
-        // sums.txt as data instead of verifying it. Now `-c` binds the C decoy and
-        // check mode emits "recognized but not supported" — no hash on the success
-        // stream, and no ambiguous-binder crash.
-        var lines = RunLines($"Invoke-BashMd5sum -c '{_testFile.Replace("'", "''")}'");
-        Assert.Empty(lines);
+        // Write a checksum file referencing _testFile (data.txt) with its real hash.
+        var hash = ToHex(System.Security.Cryptography.MD5.HashData(_testBytes));
+        var sums = Path.Combine(_tmpDir, "sums.md5");
+        File.WriteAllText(sums, $"{hash}  data.txt\n");
+        // Run from the temp dir so the relative "data.txt" resolves.
+        var lines = RunLines(
+            $"Push-Location '{_tmpDir.Replace("'", "''")}'; " +
+            $"try {{ Invoke-BashMd5sum -c 'sums.md5' }} finally {{ Pop-Location }}");
+        Assert.Contains(lines, l => l == "data.txt: OK");
+    }
+
+    [Fact]
+    public void Md5sum_CheckMode_ReportsMismatchAsFailed()
+    {
+        var sums = Path.Combine(_tmpDir, "bad.md5");
+        File.WriteAllText(sums, "00000000000000000000000000000000  data.txt\n");
+        var (lines, exit) = RunLinesWithExit(
+            $"Push-Location '{_tmpDir.Replace("'", "''")}'; " +
+            $"try {{ Invoke-BashMd5sum -c 'bad.md5' }} finally {{ Pop-Location }}");
+        Assert.Contains(lines, l => l == "data.txt: FAILED");
+        Assert.Equal(1, exit);
+    }
+
+    private (string[] lines, int exit) RunLinesWithExit(string script)
+    {
+        var pwsh = _fixture.AcquireFresh();
+        pwsh.AddScript("$ErrorActionPreference='Continue'").Invoke();
+        pwsh.Commands.Clear();
+        var result = pwsh.AddScript(script).Invoke();
+        pwsh.Commands.Clear();
+        var ec = pwsh.AddScript("$global:LASTEXITCODE").Invoke();
+        pwsh.Commands.Clear();
+        int exit = ec.Count > 0 && int.TryParse(ec[0]?.ToString(), out var x) ? x : 0;
+        var lines = result.Select(o => o?.Properties["BashText"]?.Value as string ?? o?.ToString() ?? "").ToArray();
+        return (lines, exit);
     }
 
     [Fact]

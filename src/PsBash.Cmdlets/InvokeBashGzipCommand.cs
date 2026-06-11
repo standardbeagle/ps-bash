@@ -110,6 +110,7 @@ public sealed class InvokeBashGzipCommand : PSCmdlet
         bool force = F.IsPresent;
         bool verbose = V.IsPresent;
         bool list = false;
+        bool test = false;
         int level = 6;
 
         // Detect gunzip / zcat invocation via alias name. Matches the psm1
@@ -143,6 +144,7 @@ public sealed class InvokeBashGzipCommand : PSCmdlet
             if (a == "--force") { force = true; i++; continue; }
             if (a == "--verbose") { verbose = true; i++; continue; }
             if (a == "--list") { list = true; i++; continue; }
+            if (a == "--test") { test = true; i++; continue; }
 
             // -N single-digit level (oracle: `^-(\d)$`).
             if (a.Length == 2 && a[0] == '-' && a[1] >= '0' && a[1] <= '9')
@@ -165,6 +167,7 @@ public sealed class InvokeBashGzipCommand : PSCmdlet
                         case 'f': force = true; break;
                         case 'v': verbose = true; break;
                         case 'l': list = true; break;
+                        case 't': test = true; break;
                         default:
                             if (ch >= '0' && ch <= '9') { level = ch - '0'; }
                             break;
@@ -210,6 +213,27 @@ public sealed class InvokeBashGzipCommand : PSCmdlet
                     if (FileSystemHelpers.IsPipelineStop(ex)) throw;
                     string normalized = filePath.Replace('\\', '/');
                     FileSystemHelpers.WriteBashError(this, $"gzip: {normalized}: {ex.Message}");
+                    continue;
+                }
+
+                // -t / --test: decompress and discard to verify integrity. Silent
+                // on success (exit 0); a corrupt stream errors and sets exit 1.
+                if (test)
+                {
+                    try
+                    {
+                        using var input = BashFileSystem.OpenRead(filePath);
+                        using var gs = new GZipStream(input, CompressionMode.Decompress);
+                        var tbuf = new byte[81920];
+                        while (gs.Read(tbuf, 0, tbuf.Length) > 0) { }
+                        if (verbose) WriteObject(BashRuntime.NewBashObject($"{filePath}: OK"));
+                    }
+                    catch (Exception ex)
+                    {
+                        if (FileSystemHelpers.IsPipelineStop(ex)) throw;
+                        FileSystemHelpers.WriteBashError(this, $"gzip: {filePath.Replace('\\', '/')}: not in gzip format");
+                        FileSystemHelpers.SetLastExitCode(this, 1);
+                    }
                     continue;
                 }
 
