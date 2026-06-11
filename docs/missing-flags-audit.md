@@ -1,7 +1,38 @@
 # ps-bash Missing Flags Audit
 
 Generated: 2026-04-07
-Updated: 2026-04-08
+Updated: 2026-06-11
+
+## 2026-06 flag-coverage sweep (prioritized by utility × complexity)
+
+A source-verified re-audit replaced the stale matrix below. Implemented since:
+
+**Correctness bugs (were wrong/destructive):** `kill -0` (was killing the process),
+`cut -f2-`/open ranges (threw), `env NAME=VAL cmd` (unimplemented), `cp -p` (leaked as
+operand), `paste -d'\n'` (literal), `md5sum -b` (treated as filename), `realpath -e` (no-op).
+
+**New flag support:** `cut -s`/`--output-delimiter`; `cp -a`/`-u`; `wc -m`/`-L`;
+`stat --format`; `touch -r`; `du --max-depth`; `tree --noreport`/`-f`; `sort -o`;
+`nl -w`/`-s`/`-v`/`-i`/`-n`/`-b n`; `uniq -D`/`--all-repeated`; `grep -f`/`--exclude-from`;
+`find -type l`/`-print`; `date` (`%I %l %k %R %r %D %h %u %P %z`, `-d @EPOCH`);
+`printf` recycling + `%i`/`%u`/`%e`/`%g`; `ls --group-directories-first`;
+`rg -S`/`-s`/`-x`; `jq add`/`tostring`/`tonumber`/`ascii_downcase`/`ascii_upcase`;
+`tar --strip-components`/`-O`; `gzip -t`; `md5sum/sha* -c`; `join -a`/`-v`/`-j`/`-i`;
+`split -b`/`--additional-suffix`; `xargs -d`.
+
+**Still pending (the engine-heavy work):**
+- **jq operators** — `@base64`/`@csv`/`@tsv`, `to_entries`/`from_entries`,
+  `group_by`/`sort_by`/`unique_by`, arithmetic `+ - * / %`, `and`/`or`, string builtins
+  (`split`/`join`/`startswith`), `-R` raw-input, `--arg`. Needs an expression-evaluator extension.
+- **awk control flow** — `if`/`for`/`while`, user `function`, `getline`, `next`/`exit`.
+  The action engine is a flat statement list; this is a statement-engine project.
+- **Won't-fix (Windows-incompatible):** mode bits (`mkdir -m`, `find -perm`), uid/gid
+  (`ls -n`, `find -user`), inodes (`ls -i`), POSIX signal delivery (`kill -HUP/-USR1`),
+  tar bzip2/xz, true PCRE (`grep -P`/`rg -P`), real `xargs -P` parallelism.
+
+---
+
+## (historical — April 2026 audit, superseded above)
 
 ## Critical Issues — RESOLVED
 
