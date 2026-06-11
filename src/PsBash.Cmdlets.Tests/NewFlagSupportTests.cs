@@ -235,4 +235,47 @@ public class NewFlagSupportTests : IClassFixture<SharedPwshFixture>, IDisposable
         var lines = RunLines("Invoke-BashPrintf '%e' 1234.5");
         Assert.StartsWith("1.234500e+0", lines[0]);
     }
+
+    // ── ls --group-directories-first ─────────────────────────────────────────
+
+    [Fact]
+    public void Ls_GroupDirectoriesFirst_ListsDirsBeforeFiles()
+    {
+        Directory.CreateDirectory(Path.Combine(_tmp, "lsg", "zdir"));
+        File.WriteAllText(Path.Combine(_tmp, "lsg", "afile.txt"), "x");
+        var names = RunLines($"Invoke-BashLs --group-directories-first '{Q(Path.Combine(_tmp, "lsg"))}'")
+            .Select(l => l.Trim()).Where(l => l.Length > 0).ToArray();
+        int dirIdx = Array.FindIndex(names, n => n.Contains("zdir", StringComparison.Ordinal));
+        int fileIdx = Array.FindIndex(names, n => n.Contains("afile", StringComparison.Ordinal));
+        Assert.True(dirIdx >= 0 && fileIdx >= 0, "both entries present");
+        Assert.True(dirIdx < fileIdx, "directory must sort before the file despite 'z' > 'a'");
+    }
+
+    // ── rg -S (smart-case) / -x (line-regexp) ────────────────────────────────
+
+    [Fact]
+    public void Rg_SmartCase_InsensitiveForLowercasePattern()
+    {
+        // -S with an all-lowercase pattern matches case-insensitively.
+        var lines = RunLines("'Hello','WORLD','hello there' | Invoke-BashRg -S hello");
+        Assert.Equal(2, lines.Count(l => l.Contains("hello", StringComparison.OrdinalIgnoreCase)));
+    }
+
+    [Fact]
+    public void Rg_SmartCase_SensitiveWhenPatternHasUppercase()
+    {
+        // -S with an uppercase letter becomes case-sensitive.
+        var lines = RunLines("'Hello','hello' | Invoke-BashRg -S Hello");
+        Assert.Single(lines);
+        Assert.Contains("Hello", lines[0], StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Rg_LineRegexp_MatchesWholeLineOnly()
+    {
+        var lines = RunLines("'cat','category','a cat' | Invoke-BashRg -x cat");
+        Assert.Single(lines);
+        Assert.Contains("cat", lines[0], StringComparison.Ordinal);
+        Assert.DoesNotContain(lines, l => l.Contains("category", StringComparison.Ordinal));
+    }
 }

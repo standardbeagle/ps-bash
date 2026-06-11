@@ -131,6 +131,9 @@ public sealed class InvokeBashRgCommand : PSCmdlet
         bool fixedStrings = false;
         bool includeHidden = false;
         bool noIgnore = false;
+        bool smartCase = false;     // -S: case-insensitive unless pattern has uppercase
+        bool caseSensitive = false; // -s: force case-sensitive
+        bool lineRegexp = false;    // -x: whole-line match
         int afterContext = A ?? 0;
         int beforeContext = B ?? 0;
         string? globPattern = null;
@@ -229,6 +232,9 @@ public sealed class InvokeBashRgCommand : PSCmdlet
             if (a == "--only-matching") { onlyMatching = true; i++; continue; }
             if (a == "--invert-match") { invertMatch = true; i++; continue; }
             if (a == "--fixed-strings") { fixedStrings = true; i++; continue; }
+            if (a == "--smart-case") { smartCase = true; i++; continue; }
+            if (a == "--case-sensitive") { caseSensitive = true; i++; continue; }
+            if (a == "--line-regexp") { lineRegexp = true; i++; continue; }
             // --color[=WHEN] / --colour[=WHEN]: ripgrep accepts these; the
             // internal fallback has no per-match ANSI coloring, so accept and
             // ignore. Without this, the common `alias rg='rg --color=auto'`
@@ -260,6 +266,9 @@ public sealed class InvokeBashRgCommand : PSCmdlet
                         case 'o': onlyMatching = true; break;
                         case 'v': invertMatch = true; break;
                         case 'F': fixedStrings = true; break;
+                        case 'S': smartCase = true; break;
+                        case 's': caseSensitive = true; break;
+                        case 'x': lineRegexp = true; break;
                         // Other bundle chars silently ignored (oracle parity).
                     }
                 }
@@ -297,9 +306,20 @@ public sealed class InvokeBashRgCommand : PSCmdlet
 
         if (fixedStrings) pattern = Regex.Escape(pattern);
         if (wordRegexp) pattern = "\\b" + pattern + "\\b";
+        // -x / --line-regexp: anchor to the whole line.
+        if (lineRegexp) pattern = "^(?:" + pattern + ")$";
+
+        // Case resolution: -s (case-sensitive) wins; then -S (smart-case →
+        // insensitive only when the pattern has no uppercase); else -i.
+        bool effectiveIgnore = ignoreCase;
+        if (smartCase && !caseSensitive)
+        {
+            effectiveIgnore = !PatternHasUpper(operands[0]);
+        }
+        if (caseSensitive) effectiveIgnore = false;
 
         var regexOpts = RegexOptions.None;
-        if (ignoreCase) regexOpts |= RegexOptions.IgnoreCase;
+        if (effectiveIgnore) regexOpts |= RegexOptions.IgnoreCase;
 
         Regex regex;
         try
@@ -323,6 +343,16 @@ public sealed class InvokeBashRgCommand : PSCmdlet
         RunFileMode(regex, fileOperands, invertMatch, showLineNumbers, countOnly,
             filesOnly, onlyMatching, includeHidden, noIgnore, globPattern,
             beforeContext, afterContext);
+    }
+
+    /// <summary>Smart-case test: does the raw pattern contain an uppercase letter?</summary>
+    private static bool PatternHasUpper(string pattern)
+    {
+        foreach (var c in pattern)
+        {
+            if (char.IsUpper(c)) return true;
+        }
+        return false;
     }
 
     private bool TryRunNativeRg(string[] originalArgs)

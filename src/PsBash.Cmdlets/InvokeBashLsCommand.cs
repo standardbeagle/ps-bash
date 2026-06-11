@@ -146,6 +146,7 @@ public sealed class InvokeBashLsCommand : PSCmdlet
             "--color", "colorize output",
             "-i", "show inode number",
             "-s", "show allocated size in blocks",
+            "--group-directories-first", "list directories before files",
         });
         var parsed = BashRuntime.ConvertFromBashArgs(args, flagDefs);
 
@@ -331,6 +332,13 @@ public sealed class InvokeBashLsCommand : PSCmdlet
             sorted = reverseSort
                 ? byName.Reverse()
                 : byName;
+        }
+
+        // --group-directories-first: stable re-order so directories precede files
+        // (LINQ OrderBy is stable, preserving the within-group sort above).
+        if (parsed.Flags["--group-directories-first"])
+        {
+            sorted = sorted.OrderByDescending(e => GetBool(e, "IsDirectory"));
         }
 
         // Format and emit.
