@@ -53,6 +53,15 @@ public sealed class InvokeBashJoinCommand : PSCmdlet
     [Parameter(ValueFromRemainingArguments = true)]
     public string[]? Arguments { get; set; }
 
+    /// <summary>-i (case-insensitive) decoy: bare -i is ambiguous with -Information*.</summary>
+    [Parameter] public SwitchParameter I { get; set; }
+
+    /// <summary>-a FILENUM decoy: bare -a abbreviates the cmdlet's own -Arguments.</summary>
+    [Parameter] public string? A { get; set; }
+
+    /// <summary>-v FILENUM decoy: bare -v abbreviates -Verbose.</summary>
+    [Parameter] public string? V { get; set; }
+
     protected override void EndProcessing()
     {
         var args = Arguments ?? Array.Empty<string>();
@@ -72,6 +81,12 @@ public sealed class InvokeBashJoinCommand : PSCmdlet
         string delimiter = " ";
         int field1 = 1;
         int field2 = 1;
+        bool ignoreCase = I.IsPresent;     // bare -i arrives via the decoy
+        var aFiles = new HashSet<int>();   // -a FILENUM: also print that file's unpaired lines
+        var vFiles = new HashSet<int>();   // -v FILENUM: print ONLY that file's unpaired lines
+        // Bare -a/-v arrive via the decoy parameters (they abbreviate -Arguments/-Verbose).
+        if (A != null && int.TryParse(A, out var aDecoy)) aFiles.Add(aDecoy);
+        if (V != null && int.TryParse(V, out var vDecoy)) vFiles.Add(vDecoy);
         var operands = new List<string>();
         bool pastDoubleDash = false;
 
@@ -125,6 +140,30 @@ public sealed class InvokeBashJoinCommand : PSCmdlet
                 continue;
             }
 
+            // -j N: join on the same field in both files.
+            if (arg == "-j" && (i + 1) < args.Length)
+            {
+                if (int.TryParse(args[i + 1], out var jf)) { field1 = jf; field2 = jf; }
+                i++;
+                continue;
+            }
+
+            // -a FILENUM / -v FILENUM (separated or joined like -a1).
+            if ((arg == "-a" || arg == "-v") && (i + 1) < args.Length && int.TryParse(args[i + 1], out var fnSep))
+            {
+                (arg == "-a" ? aFiles : vFiles).Add(fnSep);
+                i++;
+                continue;
+            }
+            if (arg.Length == 3 && arg[0] == '-' && (arg[1] == 'a' || arg[1] == 'v') && (arg[2] == '1' || arg[2] == '2'))
+            {
+                (arg[1] == 'a' ? aFiles : vFiles).Add(arg[2] - '0');
+                continue;
+            }
+
+            // -i / --ignore-case: case-insensitive key comparison.
+            if (arg == "-i" || arg == "--ignore-case") { ignoreCase = true; continue; }
+
             operands.Add(arg);
         }
 
@@ -156,9 +195,19 @@ public sealed class InvokeBashJoinCommand : PSCmdlet
         // delimiter consistently via Split(string[], StringSplitOptions).
         var delimAsArray = new[] { delimiter };
 
-        // Build lookup from file2 keyed by join field. Use Ordinal comparer
-        // (matches the oracle's [System.StringComparer]::Ordinal).
-        var file2Map = new Dictionary<string, List<string[]>>(StringComparer.Ordinal);
+        // Output controls for -a / -v:
+        //   emitPaired   — print matched rows (suppressed when -v is given alone)
+        //   emitUnpaired1 — also print file-1 lines with no match (-a1 / -v1)
+        //   emitUnpaired2 — also print file-2 lines with no match (-a2 / -v2)
+        bool emitPaired = !(vFiles.Count > 0 && aFiles.Count == 0);
+        bool emitUnpaired1 = aFiles.Contains(1) || vFiles.Contains(1);
+        bool emitUnpaired2 = aFiles.Contains(2) || vFiles.Contains(2);
+
+        // Build lookup from file2 keyed by join field. Comparer honors -i.
+        var cmp = ignoreCase ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal;
+        var file2Map = new Dictionary<string, List<string[]>>(cmp);
+        var matchedKeys2 = new HashSet<string>(cmp);
+        var file2Order = new List<string>(); // preserve key first-seen order for -a2/-v2 output
         int keyIdx2 = field2 - 1;
         try
         {
@@ -171,6 +220,7 @@ public sealed class InvokeBashJoinCommand : PSCmdlet
                 {
                     bucket = new List<string[]>();
                     file2Map[key] = bucket;
+                    file2Order.Add(key);
                 }
                 bucket.Add(fields);
             }
@@ -188,8 +238,22 @@ public sealed class InvokeBashJoinCommand : PSCmdlet
         {
             while (hasFile1Line)
             {
-                EmitJoinedRows(file1.Current, delimAsArray, keyIdx1, keyIdx2, file2Map, delimiter);
+                EmitJoinedRows(file1.Current, delimAsArray, keyIdx1, keyIdx2, file2Map,
+                    delimiter, emitPaired, emitUnpaired1, matchedKeys2);
                 hasFile1Line = file1.MoveNext();
+            }
+
+            // -a2 / -v2: emit file-2 lines whose key never matched file 1.
+            if (emitUnpaired2)
+            {
+                foreach (var key in file2Order)
+                {
+                    if (matchedKeys2.Contains(key)) continue;
+                    foreach (var fields2 in file2Map[key])
+                    {
+                        WriteObject(BashRuntime.NewBashObject(ReorderKeyFirst(fields2, keyIdx2, delimiter)));
+                    }
+                }
             }
         }
         catch (Exception ex)
@@ -209,13 +273,27 @@ public sealed class InvokeBashJoinCommand : PSCmdlet
         int keyIdx1,
         int keyIdx2,
         Dictionary<string, List<string[]>> file2Map,
-        string delimiter)
+        string delimiter,
+        bool emitPaired,
+        bool emitUnpaired1,
+        HashSet<string> matchedKeys2)
     {
         var fields1 = line.Split(delimAsArray, StringSplitOptions.None);
         if (keyIdx1 >= fields1.Length) { return; }
         var key = fields1[keyIdx1];
 
-        if (!file2Map.TryGetValue(key, out var matches)) { return; }
+        if (!file2Map.TryGetValue(key, out var matches))
+        {
+            // Unpaired file-1 line: print it (key first) under -a1 / -v1.
+            if (emitUnpaired1)
+            {
+                WriteObject(BashRuntime.NewBashObject(ReorderKeyFirst(fields1, keyIdx1, delimiter)));
+            }
+            return;
+        }
+
+        matchedKeys2.Add(key);
+        if (!emitPaired) return;
 
         foreach (var fields2 in matches)
         {
@@ -231,6 +309,18 @@ public sealed class InvokeBashJoinCommand : PSCmdlet
             }
             WriteObject(BashRuntime.NewBashObject(string.Join(delimiter, parts)));
         }
+    }
+
+    /// <summary>Reorder a line's fields with the join key first (GNU's unpaired-line shape).</summary>
+    private static string ReorderKeyFirst(string[] fields, int keyIdx, string delimiter)
+    {
+        if (keyIdx >= fields.Length) return string.Join(delimiter, fields);
+        var parts = new List<string> { fields[keyIdx] };
+        for (int c = 0; c < fields.Length; c++)
+        {
+            if (c != keyIdx) parts.Add(fields[c]);
+        }
+        return string.Join(delimiter, parts);
     }
 
     private void WriteReadError(string path, Exception ex)

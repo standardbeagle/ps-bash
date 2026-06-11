@@ -360,4 +360,55 @@ public class NewFlagSupportTests : IClassFixture<SharedPwshFixture>, IDisposable
         pwsh.Commands.Clear();
         Assert.Equal("1", result[^1]?.ToString());
     }
+
+    // ── join -a / -v ─────────────────────────────────────────────────────────
+
+    [Fact]
+    public void Join_OuterLeft_IncludesUnpairedFile1Lines()
+    {
+        var f1 = Path.Combine(_tmp, "j1.txt");
+        var f2 = Path.Combine(_tmp, "j2.txt");
+        File.WriteAllText(f1, "1 apple\n2 banana\n3 cherry\n");
+        File.WriteAllText(f2, "1 red\n3 dark\n");
+        // -a1: matched rows + file-1 lines with no match (key 2).
+        var lines = RunLines($"Invoke-BashJoin -a 1 '{Q(f1)}' '{Q(f2)}'");
+        Assert.Contains(lines, l => l == "1 apple red");
+        Assert.Contains(lines, l => l == "3 cherry dark");
+        Assert.Contains(lines, l => l == "2 banana"); // unpaired, printed key-first
+    }
+
+    [Fact]
+    public void Join_AntiJoin_V1_OnlyUnpairedFile1Lines()
+    {
+        var f1 = Path.Combine(_tmp, "v1.txt");
+        var f2 = Path.Combine(_tmp, "v2.txt");
+        File.WriteAllText(f1, "1 a\n2 b\n3 c\n");
+        File.WriteAllText(f2, "1 x\n3 y\n");
+        var lines = RunLines($"Invoke-BashJoin -v 1 '{Q(f1)}' '{Q(f2)}'");
+        Assert.Equal(new[] { "2 b" }, lines); // only the unpaired file-1 line, no matches
+    }
+
+    // ── split -b ─────────────────────────────────────────────────────────────
+
+    [Fact]
+    public void Split_ByBytes_WritesSizedChunks()
+    {
+        var src = Path.Combine(_tmp, "splitme.txt");
+        // 30 bytes of content (after the trailing newline split adds 1).
+        File.WriteAllText(src, "abcdefghijklmnopqrstuvwxyz123"); // 29 chars + "\n" = 30 bytes reconstructed
+        RunLines($"Push-Location '{Q(_tmp)}'; try {{ Invoke-BashSplit -b 10 '{Q(src)}' part_ }} finally {{ Pop-Location }}");
+        var parts = Directory.GetFiles(_tmp, "part_*").OrderBy(p => p).ToArray();
+        Assert.True(parts.Length >= 3, $"expected >=3 chunks, got {parts.Length}");
+        Assert.Equal(10, new FileInfo(parts[0]).Length); // first chunk is exactly the byte size
+    }
+
+    [Fact]
+    public void Split_AdditionalSuffix_AppendsToNames()
+    {
+        var src = Path.Combine(_tmp, "lines.txt");
+        File.WriteAllText(src, "a\nb\nc\nd\n");
+        RunLines($"Push-Location '{Q(_tmp)}'; try {{ Invoke-BashSplit -l 2 '{Q(src)}' chunk_ --additional-suffix=.txt }} finally {{ Pop-Location }}");
+        var parts = Directory.GetFiles(_tmp, "chunk_*.txt");
+        Assert.True(parts.Length >= 2, "chunks have the .txt suffix");
+    }
 }

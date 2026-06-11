@@ -83,6 +83,8 @@ public sealed class InvokeBashSplitCommand : PSCmdlet
         }
 
         int? lineCount = null;
+        long? byteSize = null;
+        string additionalSuffix = string.Empty;
         bool numericSuffix = D.IsPresent;
         int suffixLength = A ?? 2;
         var operands = new List<string>();
@@ -90,6 +92,23 @@ public sealed class InvokeBashSplitCommand : PSCmdlet
         for (int i = 0; i < args.Length; i++)
         {
             var arg = args[i];
+            // -b SIZE / --bytes=SIZE: split by byte size (K/M/G suffixes).
+            if (arg == "-b" && (i + 1) < args.Length)
+            {
+                byteSize = ParseByteSize(args[i + 1]);
+                i++;
+                continue;
+            }
+            if (arg.StartsWith("--bytes=", StringComparison.Ordinal))
+            {
+                byteSize = ParseByteSize(arg.Substring("--bytes=".Length));
+                continue;
+            }
+            if (arg.StartsWith("--additional-suffix=", StringComparison.Ordinal))
+            {
+                additionalSuffix = arg.Substring("--additional-suffix=".Length);
+                continue;
+            }
             if (arg == "-l" && (i + 1) < args.Length)
             {
                 if (int.TryParse(args[i + 1], out var parsed))
@@ -183,7 +202,71 @@ public sealed class InvokeBashSplitCommand : PSCmdlet
         // Resolve working directory exactly as the oracle did: Join-Path $PWD ...
         string cwd = SessionState.Path.CurrentLocation.Path;
 
-        WritePieces(lines, cwd, prefix, lineCount.Value, suffixLength, numericSuffix, fileReadPath);
+        // -b: byte-size mode. Reconstruct the (CRLF-normalized) content bytes and
+        // chunk them by size, rather than by line count.
+        if (byteSize is > 0)
+        {
+            WriteByteePieces(lines, cwd, prefix, byteSize.Value, suffixLength, numericSuffix, additionalSuffix);
+            return;
+        }
+
+        WritePieces(lines, cwd, prefix, lineCount.Value, suffixLength, numericSuffix, fileReadPath, additionalSuffix);
+    }
+
+    private void WriteByteePieces(
+        IEnumerable<string> lines, string cwd, string prefix, long byteSize,
+        int suffixLength, bool numericSuffix, string additionalSuffix)
+    {
+        byte[] bytes;
+        try
+        {
+            var content = string.Join("\n", lines) + "\n";
+            bytes = System.Text.Encoding.UTF8.GetBytes(content);
+        }
+        catch (Exception ex)
+        {
+            if (FileSystemHelpers.IsPipelineStop(ex)) throw;
+            FileSystemHelpers.WriteBashError(this, $"split: {ex.Message}");
+            return;
+        }
+
+        int chunkIndex = 0;
+        for (long offset = 0; offset < bytes.Length; offset += byteSize)
+        {
+            int len = (int)Math.Min(byteSize, bytes.Length - offset);
+            string suffix = numericSuffix
+                ? chunkIndex.ToString().PadLeft(suffixLength, '0')
+                : BuildAlphaSuffix(chunkIndex, suffixLength);
+            string outName = prefix + suffix + additionalSuffix;
+            string outPath = Path.IsPathRooted(outName) ? outName : Path.Combine(cwd, outName);
+            try
+            {
+                using var fs = File.Create(outPath);
+                fs.Write(bytes, (int)offset, len);
+            }
+            catch (Exception ex)
+            {
+                if (FileSystemHelpers.IsPipelineStop(ex)) throw;
+                FileSystemHelpers.WriteBashError(this, $"split: {outPath.Replace('\\', '/')}: {ex.Message}");
+                return;
+            }
+            chunkIndex++;
+        }
+    }
+
+    /// <summary>Parse a split SIZE: plain number, or K/M/G (1024-based) suffix.</summary>
+    private static long? ParseByteSize(string s)
+    {
+        if (string.IsNullOrEmpty(s)) return null;
+        long mult = 1;
+        string num = s;
+        char last = char.ToUpperInvariant(s[s.Length - 1]);
+        if (last is 'K' or 'M' or 'G')
+        {
+            mult = last switch { 'K' => 1024L, 'M' => 1048576L, _ => 1073741824L };
+            num = s.Substring(0, s.Length - 1);
+        }
+        return long.TryParse(num, out var n) ? n * mult : null;
     }
 
     private void WritePieces(
@@ -193,7 +276,8 @@ public sealed class InvokeBashSplitCommand : PSCmdlet
         int lineCount,
         int suffixLength,
         bool numericSuffix,
-        string? fileReadPath)
+        string? fileReadPath,
+        string additionalSuffix)
     {
         int chunkIndex = 0;
         var chunk = new List<string>(Math.Min(lineCount, 4096));
@@ -205,7 +289,7 @@ public sealed class InvokeBashSplitCommand : PSCmdlet
                 chunk.Add(line);
                 if (chunk.Count >= lineCount)
                 {
-                    if (!WriteChunk(chunk, cwd, prefix, chunkIndex, suffixLength, numericSuffix))
+                    if (!WriteChunk(chunk, cwd, prefix, chunkIndex, suffixLength, numericSuffix, additionalSuffix))
                     {
                         return;
                     }
@@ -216,7 +300,7 @@ public sealed class InvokeBashSplitCommand : PSCmdlet
 
             if (chunk.Count > 0)
             {
-                WriteChunk(chunk, cwd, prefix, chunkIndex, suffixLength, numericSuffix);
+                WriteChunk(chunk, cwd, prefix, chunkIndex, suffixLength, numericSuffix, additionalSuffix);
             }
         }
         catch (Exception ex) when (fileReadPath is not null)
@@ -235,13 +319,14 @@ public sealed class InvokeBashSplitCommand : PSCmdlet
         string prefix,
         int chunkIndex,
         int suffixLength,
-        bool numericSuffix)
+        bool numericSuffix,
+        string additionalSuffix)
     {
         string suffix = numericSuffix
             ? chunkIndex.ToString().PadLeft(suffixLength, '0')
             : BuildAlphaSuffix(chunkIndex, suffixLength);
 
-        string outName = prefix + suffix;
+        string outName = prefix + suffix + additionalSuffix;
         string outPath = Path.IsPathRooted(outName)
             ? outName
             : Path.Combine(cwd, outName);
