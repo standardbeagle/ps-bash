@@ -399,6 +399,71 @@ internal static class JqEngine
                 return new List<object?> { data is string ds ? ds.ToLowerInvariant() : data };
             case "ascii_upcase":
                 return new List<object?> { data is string us ? us.ToUpperInvariant() : data };
+            case "sort":
+                return new List<object?> { SortArray(data, null, variables) };
+            case "unique":
+                return new List<object?> { UniqueArray(data, null, variables) };
+            case "reverse":
+                return new List<object?> { ReverseValue(data) };
+            case "first":
+                return new List<object?> { data is IList fl && fl.Count > 0 ? fl[0] : null };
+            case "last":
+                return new List<object?> { data is IList ll && ll.Count > 0 ? ll[ll.Count - 1] : null };
+            case "min":
+                return new List<object?> { MinMax(data, wantMax: false) };
+            case "max":
+                return new List<object?> { MinMax(data, wantMax: true) };
+            case "flatten":
+                return new List<object?> { FlattenArray(data) };
+            case "to_entries":
+                return new List<object?> { ToEntries(data) };
+            case "from_entries":
+                return new List<object?> { FromEntries(data) };
+            case "@base64":
+                return new List<object?> { Convert.ToBase64String(Encoding.UTF8.GetBytes(data is string b64s ? b64s : JqToString(data))) };
+            case "@base64d":
+                return new List<object?> { data is string b64d ? Encoding.UTF8.GetString(Convert.FromBase64String(b64d)) : null };
+            case "@json":
+                return new List<object?> { JqSerialize(data) };
+            case "@csv":
+                return new List<object?> { RowToDelimited(data, ',', quote: true) };
+            case "@tsv":
+                return new List<object?> { RowToDelimited(data, '\t', quote: false) };
+        }
+
+        // has(KEY) — object/array membership test.
+        if (filter.StartsWith("has(", StringComparison.Ordinal) && filter.EndsWith(")", StringComparison.Ordinal))
+        {
+            string inner = filter.Substring(4, filter.Length - 5).Trim();
+            return new List<object?> { HasKey(data, inner) };
+        }
+
+        // group_by(expr) / sort_by(expr) / unique_by(expr)
+        foreach (var (name, prefix) in new[] { ("group_by", "group_by("), ("sort_by", "sort_by("), ("unique_by", "unique_by(") })
+        {
+            if (filter.StartsWith(prefix, StringComparison.Ordinal) && filter.EndsWith(")", StringComparison.Ordinal))
+            {
+                string keyExpr = filter.Substring(prefix.Length, filter.Length - prefix.Length - 1);
+                return new List<object?> { name switch
+                {
+                    "group_by" => GroupBy(data, keyExpr, variables),
+                    "sort_by" => SortArray(data, keyExpr, variables),
+                    _ => UniqueArray(data, keyExpr, variables),
+                } };
+            }
+        }
+
+        // String builtins: join(sep), split(sep), startswith(s), endswith(s), ltrimstr/rtrimstr.
+        foreach (var (name, prefix) in new[]
+                 { ("join", "join("), ("split", "split("), ("startswith", "startswith("),
+                   ("endswith", "endswith("), ("ltrimstr", "ltrimstr("), ("rtrimstr", "rtrimstr(") })
+        {
+            if (filter.StartsWith(prefix, StringComparison.Ordinal) && filter.EndsWith(")", StringComparison.Ordinal))
+            {
+                string argExpr = filter.Substring(prefix.Length, filter.Length - prefix.Length - 1).Trim();
+                string argVal = UnquoteJqString(argExpr);
+                return new List<object?> { StringBuiltin(name, data, argVal) };
+            }
         }
 
         // map(expr)
@@ -633,6 +698,224 @@ internal static class JqEngine
         if (data is int or long or double or decimal or float) return data;
         if (data is string s && double.TryParse(s, NumberStyles.Any, CultureInfo.InvariantCulture, out var v)) return v;
         throw new JqException("jq: cannot be parsed as a number");
+    }
+
+    // ── array / object / string operators (no arithmetic evaluator needed) ────
+
+    private static int TypeRank(object? v) => v switch
+    {
+        null => 0,
+        bool => 1,
+        int or long or double or decimal or float => 2,
+        string => 3,
+        IList => 4,
+        IDictionary => 5,
+        _ => 6,
+    };
+
+    /// <summary>jq's total value ordering: null &lt; bool &lt; number &lt; string &lt; array &lt; object.</summary>
+    private static int JqCompare(object? a, object? b)
+    {
+        int ta = TypeRank(a), tb = TypeRank(b);
+        if (ta != tb) return ta.CompareTo(tb);
+        switch (ta)
+        {
+            case 1: return ((bool)a!).CompareTo((bool)b!);
+            case 2: return Convert.ToDouble(a, CultureInfo.InvariantCulture)
+                .CompareTo(Convert.ToDouble(b, CultureInfo.InvariantCulture));
+            case 3: return string.CompareOrdinal((string)a!, (string)b!);
+            case 4:
+            {
+                var la = (IList)a!; var lb = (IList)b!;
+                int n = Math.Min(la.Count, lb.Count);
+                for (int i = 0; i < n; i++) { int c = JqCompare(la[i], lb[i]); if (c != 0) return c; }
+                return la.Count.CompareTo(lb.Count);
+            }
+            default: return 0;
+        }
+    }
+
+    private static object? KeyOf(object? elem, string? keyExpr, Dictionary<string, object?> vars)
+        => keyExpr == null ? elem : EvalFilter(elem, keyExpr, vars).Count > 0 ? EvalFilter(elem, keyExpr, vars)[0] : null;
+
+    private static object?[] SortArray(object? data, string? keyExpr, Dictionary<string, object?> vars)
+    {
+        if (data is not IList list) return Array.Empty<object?>();
+        var items = new List<object?>();
+        foreach (var e in list) items.Add(e);
+        items.Sort((x, y) => JqCompare(KeyOf(x, keyExpr, vars), KeyOf(y, keyExpr, vars)));
+        return items.ToArray();
+    }
+
+    private static object?[] UniqueArray(object? data, string? keyExpr, Dictionary<string, object?> vars)
+    {
+        var sorted = SortArray(data, keyExpr, vars);
+        var result = new List<object?>();
+        object? prevKey = null; bool first = true;
+        foreach (var item in sorted)
+        {
+            var key = KeyOf(item, keyExpr, vars);
+            if (first || JqCompare(key, prevKey) != 0) { result.Add(item); prevKey = key; first = false; }
+        }
+        return result.ToArray();
+    }
+
+    private static object? ReverseValue(object? data)
+    {
+        if (data is string s) { var a = s.ToCharArray(); Array.Reverse(a); return new string(a); }
+        if (data is IList list) { var r = new List<object?>(); for (int i = list.Count - 1; i >= 0; i--) r.Add(list[i]); return r.ToArray(); }
+        return data;
+    }
+
+    private static object? MinMax(object? data, bool wantMax)
+    {
+        if (data is not IList list || list.Count == 0) return null;
+        object? best = list[0];
+        for (int i = 1; i < list.Count; i++)
+        {
+            int c = JqCompare(list[i], best);
+            if (wantMax ? c > 0 : c < 0) best = list[i];
+        }
+        return best;
+    }
+
+    private static object?[] FlattenArray(object? data)
+    {
+        var result = new List<object?>();
+        void Walk(object? v)
+        {
+            if (v is IList l) foreach (var e in l) Walk(e);
+            else result.Add(v);
+        }
+        if (data is IList top) foreach (var e in top) Walk(e);
+        return result.ToArray();
+    }
+
+    private static object?[] ToEntries(object? data)
+    {
+        var result = new List<object?>();
+        if (data is IDictionary dict)
+        {
+            foreach (DictionaryEntry e in dict)
+            {
+                result.Add(new Dictionary<string, object?>
+                {
+                    ["key"] = e.Key?.ToString(),
+                    ["value"] = e.Value,
+                });
+            }
+        }
+        return result.ToArray();
+    }
+
+    private static object FromEntries(object? data)
+    {
+        var obj = new Dictionary<string, object?>();
+        if (data is IList list)
+        {
+            foreach (var entry in list)
+            {
+                if (entry is IDictionary d)
+                {
+                    string? key = (d["key"] ?? d["k"] ?? d["name"])?.ToString();
+                    object? val = d.Contains("value") ? d["value"] : d.Contains("v") ? d["v"] : null;
+                    if (key != null) obj[key] = val;
+                }
+            }
+        }
+        return obj;
+    }
+
+    private static object?[] GroupBy(object? data, string keyExpr, Dictionary<string, object?> vars)
+    {
+        if (data is not IList list) return Array.Empty<object?>();
+        var withKeys = new List<(object? key, object? val)>();
+        foreach (var e in list) withKeys.Add((KeyOf(e, keyExpr, vars), e));
+        withKeys.Sort((x, y) => JqCompare(x.key, y.key));
+
+        var groups = new List<List<object?>>();
+        object? prev = null; bool first = true;
+        foreach (var (key, val) in withKeys)
+        {
+            if (first || JqCompare(key, prev) != 0) { groups.Add(new List<object?>()); prev = key; first = false; }
+            groups[groups.Count - 1].Add(val);
+        }
+        var outArr = new object?[groups.Count];
+        for (int i = 0; i < groups.Count; i++) outArr[i] = groups[i].ToArray();
+        return outArr;
+    }
+
+    private static bool HasKey(object? data, string innerExpr)
+    {
+        if (data is IDictionary dict)
+        {
+            string key = UnquoteJqString(innerExpr);
+            foreach (var k in dict.Keys) if (string.Equals(k?.ToString(), key, StringComparison.Ordinal)) return true;
+            return false;
+        }
+        if (data is IList list && int.TryParse(innerExpr, out var idx)) return idx >= 0 && idx < list.Count;
+        return false;
+    }
+
+    private static object? StringBuiltin(string name, object? data, string arg)
+    {
+        switch (name)
+        {
+            case "join":
+            {
+                if (data is not IList list) return null;
+                var sb = new StringBuilder();
+                for (int i = 0; i < list.Count; i++)
+                {
+                    if (i > 0) sb.Append(arg);
+                    sb.Append(list[i] is string s ? s : JqToString(list[i]));
+                }
+                return sb.ToString();
+            }
+            case "split":
+                return data is string ss ? ss.Split(new[] { arg }, StringSplitOptions.None).Cast<object?>().ToArray() : null;
+            case "startswith":
+                return data is string sw && sw.StartsWith(arg, StringComparison.Ordinal);
+            case "endswith":
+                return data is string ew && ew.EndsWith(arg, StringComparison.Ordinal);
+            case "ltrimstr":
+                return data is string ls && ls.StartsWith(arg, StringComparison.Ordinal) ? ls.Substring(arg.Length) : data;
+            case "rtrimstr":
+                return data is string rs && rs.EndsWith(arg, StringComparison.Ordinal) ? rs.Substring(0, rs.Length - arg.Length) : data;
+            default: return data;
+        }
+    }
+
+    private static string JqSerialize(object? data) => ToJson(data, compact: true, sortKeys: false, rawOutput: false);
+
+    /// <summary>jq <c>@csv</c> / <c>@tsv</c>: render an array as one delimited row.</summary>
+    private static string RowToDelimited(object? data, char sep, bool quote)
+    {
+        if (data is not IList list) return string.Empty;
+        var parts = new List<string>(list.Count);
+        foreach (var v in list)
+        {
+            if (v is string s)
+            {
+                parts.Add(quote ? "\"" + s.Replace("\"", "\"\"") + "\"" : s);
+            }
+            else if (v == null)
+            {
+                parts.Add(string.Empty);
+            }
+            else
+            {
+                parts.Add(JqToString(v));
+            }
+        }
+        return string.Join(sep.ToString(), parts);
+    }
+
+    private static string UnquoteJqString(string s)
+    {
+        s = s.Trim();
+        if (s.Length >= 2 && s[0] == '"' && s[s.Length - 1] == '"') return s.Substring(1, s.Length - 2);
+        return s;
     }
 
     private static List<object?> Recurse(object? data)

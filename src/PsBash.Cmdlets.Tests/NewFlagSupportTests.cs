@@ -423,4 +423,68 @@ public class NewFlagSupportTests : IClassFixture<SharedPwshFixture>, IDisposable
                                     && l.Contains("b", StringComparison.Ordinal)
                                     && l.Contains("c", StringComparison.Ordinal));
     }
+
+    // ── jq operators (sort/unique/group_by/@csv/@base64/to_entries/string) ────
+
+    private string JqRaw(string json, string filter)
+        => string.Join("\n", RunLines($"'{json}' | Invoke-BashJq -r '{filter}'"));
+
+    private string JqCompact(string json, string filter)
+        => string.Join("\n", RunLines($"'{json}' | Invoke-BashJq -c '{filter}'"));
+
+    [Fact]
+    public void Jq_Sort_OrdersArray()
+        => Assert.Equal("[1,2,3]", JqCompact("[3,1,2]", "sort"));
+
+    [Fact]
+    public void Jq_Unique_SortsAndDedups()
+        => Assert.Equal("[1,2,3]", JqCompact("[3,1,2,1,3]", "unique"));
+
+    [Fact]
+    public void Jq_Reverse_ReversesArray()
+        => Assert.Equal("[3,2,1]", JqCompact("[1,2,3]", "reverse"));
+
+    [Fact]
+    public void Jq_SortBy_OrdersByKey()
+        => Assert.Equal(@"[{""n"":1},{""n"":2},{""n"":3}]", JqCompact(@"[{""n"":3},{""n"":1},{""n"":2}]", "sort_by(.n)"));
+
+    [Fact]
+    public void Jq_GroupBy_GroupsByKey()
+    {
+        // group_by(.t) on three items with t in {a,b} → two groups.
+        var outp = JqCompact(@"[{""t"":""a"",""v"":1},{""t"":""b"",""v"":2},{""t"":""a"",""v"":3}]", "group_by(.t)");
+        Assert.Contains("\"v\":1", outp);
+        Assert.Contains("\"v\":3", outp);
+        Assert.StartsWith("[[", outp); // array of arrays
+    }
+
+    [Fact]
+    public void Jq_ToEntries_RendersKeyValuePairs()
+    {
+        var entries = JqCompact(@"{""a"":1,""b"":2}", "to_entries");
+        Assert.Contains("\"key\":\"a\"", entries);
+        Assert.Contains("\"value\":1", entries);
+    }
+
+    [Fact]
+    public void Jq_Csv_RendersRow()
+        => Assert.Equal("\"a\",\"b\",1", JqRaw(@"[""a"",""b"",1]", "@csv"));
+
+    [Fact]
+    public void Jq_Base64_Encodes()
+        => Assert.Equal("aGk=", JqRaw(@"""hi""", "@base64"));
+
+    [Fact]
+    public void Jq_Has_TestsObjectKey()
+    {
+        Assert.Equal("true", JqRaw(@"{""x"":1}", "has(\"x\")"));
+        Assert.Equal("false", JqRaw(@"{""x"":1}", "has(\"y\")"));
+    }
+
+    [Fact]
+    public void Jq_Join_And_Startswith()
+    {
+        Assert.Equal("a-b-c", JqRaw(@"[""a"",""b"",""c""]", "join(\"-\")"));
+        Assert.Equal("true", JqRaw(@"""hello""", "startswith(\"he\")"));
+    }
 }
