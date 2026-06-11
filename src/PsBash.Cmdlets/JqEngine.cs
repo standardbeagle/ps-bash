@@ -389,6 +389,16 @@ internal static class JqEngine
                 return new List<object?> { false };
             case "null":
                 return new List<object?> { null };
+            case "add":
+                return new List<object?> { AddOf(data) };
+            case "tostring":
+                return new List<object?> { data is string ts ? ts : JqToString(data) };
+            case "tonumber":
+                return new List<object?> { ToNumber(data) };
+            case "ascii_downcase":
+                return new List<object?> { data is string ds ? ds.ToLowerInvariant() : data };
+            case "ascii_upcase":
+                return new List<object?> { data is string us ? us.ToUpperInvariant() : data };
         }
 
         // map(expr)
@@ -572,6 +582,57 @@ internal static class JqEngine
         if (data is IList) return "array";
         if (data is IDictionary) return "object";
         return "unknown";
+    }
+
+    /// <summary>jq <c>add</c>: sum numbers / concatenate strings or arrays /
+    /// merge objects across an array's elements. Empty or non-array → null.</summary>
+    private static object? AddOf(object? data)
+    {
+        if (data is not IList list || list.Count == 0) return null;
+        // Numbers → sum.
+        if (list[0] is int or long or double or decimal or float)
+        {
+            double sum = 0;
+            foreach (var e in list) sum += Convert.ToDouble(e, CultureInfo.InvariantCulture);
+            return sum;
+        }
+        // Strings → concat.
+        if (list[0] is string)
+        {
+            var sb = new System.Text.StringBuilder();
+            foreach (var e in list) sb.Append(e?.ToString() ?? string.Empty);
+            return sb.ToString();
+        }
+        // Arrays → concat into one list.
+        if (list[0] is IList)
+        {
+            var combined = new List<object?>();
+            foreach (var e in list)
+            {
+                if (e is IList el) foreach (var x in el) combined.Add(x);
+            }
+            return combined.ToArray();
+        }
+        return null;
+    }
+
+    /// <summary>jq <c>tostring</c> for non-string scalars: numbers/bools/null
+    /// render like jq's compact output.</summary>
+    private static string JqToString(object? data)
+    {
+        if (data == null) return "null";
+        if (data is bool b) return b ? "true" : "false";
+        if (data is double d) return d.ToString(CultureInfo.InvariantCulture);
+        if (data is int or long or decimal or float) return Convert.ToString(data, CultureInfo.InvariantCulture) ?? string.Empty;
+        return data.ToString() ?? string.Empty;
+    }
+
+    /// <summary>jq <c>tonumber</c>: parse a string to a number; pass numbers through.</summary>
+    private static object? ToNumber(object? data)
+    {
+        if (data is int or long or double or decimal or float) return data;
+        if (data is string s && double.TryParse(s, NumberStyles.Any, CultureInfo.InvariantCulture, out var v)) return v;
+        throw new JqException("jq: cannot be parsed as a number");
     }
 
     private static List<object?> Recurse(object? data)

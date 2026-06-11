@@ -278,4 +278,36 @@ public class NewFlagSupportTests : IClassFixture<SharedPwshFixture>, IDisposable
         Assert.Contains("cat", lines[0], StringComparison.Ordinal);
         Assert.DoesNotContain(lines, l => l.Contains("category", StringComparison.Ordinal));
     }
+
+    // ── jq simple builtins ───────────────────────────────────────────────────
+
+    [Fact]
+    public void Jq_Add_SumsNumberArray()
+    {
+        var lines = RunLines("'[1,2,3]' | Invoke-BashJq -r 'add'");
+        Assert.Contains("6", string.Join("", lines));
+    }
+
+    [Fact]
+    public void Jq_Add_ConcatenatesStrings()
+    {
+        var lines = RunLines("'[\"a\",\"b\",\"c\"]' | Invoke-BashJq -r 'add'");
+        Assert.Contains(lines, l => l == "abc");
+    }
+
+    [Fact]
+    public void Jq_AsciiDowncaseUpcase()
+    {
+        var down = RunLines("'\"HELLO\"' | Invoke-BashJq -r 'ascii_downcase'");
+        Assert.Contains(down, l => l == "hello");
+        var up = RunLines("'\"hi\"' | Invoke-BashJq -r 'ascii_upcase'");
+        Assert.Contains(up, l => l == "HI");
+    }
+
+    [Fact]
+    public void Jq_ToNumber_ParsesString()
+    {
+        var lines = RunLines("'\"42\"' | Invoke-BashJq -r 'tonumber'");
+        Assert.Contains("42", string.Join("", lines));
+    }
 }
