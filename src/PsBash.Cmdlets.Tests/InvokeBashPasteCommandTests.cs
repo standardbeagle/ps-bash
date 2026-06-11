@@ -58,6 +58,26 @@ public class InvokeBashPasteCommandTests : IDisposable, IClassFixture<SharedPwsh
     private static string Q(string s) => s.Replace("'", "''");
 
     [Fact]
+    public void Paste_Serial_DelimiterEscapeTab_ProducesRealTab()
+    {
+        // REGRESSION: `-d'\t'` stored the raw backslash-t and joined with a
+        // literal "\t" instead of a real tab. Now the delimiter is escape-expanded.
+        var f = WriteFile("nums.txt", "a\nb\nc\n");
+        var lines = RunLines($"Invoke-BashPaste -s -d '\\t' '{Q(f)}'");
+        Assert.Single(lines);
+        Assert.Equal("a\tb\tc", lines[0]);
+    }
+
+    [Fact]
+    public void Paste_Serial_DelimiterEscapeNewline_ProducesRealNewline()
+    {
+        var f = WriteFile("nums2.txt", "a\nb\n");
+        var lines = RunLines($"Invoke-BashPaste -s -d '\\n' '{Q(f)}'");
+        Assert.Single(lines);
+        Assert.Equal("a\nb", lines[0]);
+    }
+
+    [Fact]
     public void Paste_NoOperands_EmitsNothing()
     {
         var lines = RunLines("Invoke-BashPaste");

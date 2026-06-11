@@ -55,6 +55,44 @@ public class InvokeBashEnvCommandTests : IClassFixture<SharedPwshFixture>
     }
 
     [Fact]
+    public void Env_NameValueCommand_RunsCommandWithVarSet()
+    {
+        // env's PRIMARY form: run a command with a modified environment. Running
+        // `printenv PSB_ENVRUN` with the var set must surface its value — proving
+        // the assignment was visible to the child command. (Whether the output is
+        // value-only or NAME=VALUE depends on the alias name surviving the `&`
+        // call operator, so we assert the value appears rather than the exact shape.)
+        var lines = RunLines(
+            "env PSB_ENVRUN=zzz9 printenv PSB_ENVRUN | ForEach-Object { $_.BashText }");
+        Assert.Contains(lines, l => l.Contains("zzz9", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void Env_NameValueCommand_RestoresEnvironmentAfter()
+    {
+        // The temporary assignment must not leak past the command.
+        var lines = RunLines(
+            "env PSB_RUNX=hi printenv PSB_RUNX | Out-Null; " +
+            "\"after=$([string]::IsNullOrEmpty($env:PSB_RUNX))\"");
+        Assert.Contains("after=True", lines);
+    }
+
+    [Fact]
+    public void Env_AssignmentNoCommand_PrintsEnvIncludingAssignment()
+    {
+        var lines = RunLines("env PSB_PRINTV=qqq | ForEach-Object { $_.BashText }");
+        Assert.Contains(lines, l => l == "PSB_PRINTV=qqq");
+    }
+
+    [Fact]
+    public void Env_IgnoreEnvironment_PrintsOnlyAssignments()
+    {
+        // `env -i NAME=VALUE` starts from an empty environment.
+        var lines = RunLines("env -i PSB_ONLY=1 | ForEach-Object { $_.BashText }");
+        Assert.Equal(new[] { "PSB_ONLY=1" }, lines);
+    }
+
+    [Fact]
     public void Env_NoArgs_OutputIsSortedByName()
     {
         // The psm1 oracle calls Sort-Object on the key set. Verify ordinal

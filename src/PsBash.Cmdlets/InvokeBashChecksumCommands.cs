@@ -62,11 +62,24 @@ internal static class ChecksumEngine
             return;
         }
 
+        // Separate flags from file operands. -b/--binary and -t/--text are the
+        // GNU mode tags; previously they fell through as bogus filenames
+        // ("No such file"). Binary mode changes the output marker from two
+        // spaces to " *" (GNU md5sum convention). `--` ends flag parsing.
         var operands = new List<string>();
+        bool binary = false;
+        bool pastDoubleDash = false;
         foreach (var a in arguments)
         {
+            if (!pastDoubleDash)
+            {
+                if (a == "--") { pastDoubleDash = true; continue; }
+                if (a == "-b" || a == "--binary") { binary = true; continue; }
+                if (a == "-t" || a == "--text") { binary = false; continue; }
+            }
             operands.Add(a);
         }
+        string marker = binary ? " *" : "  ";
 
         using var hasher = IncrementalHash.CreateHash(algorithmName);
 
@@ -97,7 +110,7 @@ internal static class ChecksumEngine
                         continue;
                     }
 
-                    cmdlet.WriteObject(MakeOutput(hex, filePath, algorithmLabel));
+                    cmdlet.WriteObject(MakeOutput(hex, filePath, algorithmLabel, marker));
                 }
             }
             return;
@@ -112,7 +125,7 @@ internal static class ChecksumEngine
                 sb.Append('\n');
             }
             var hex = ComputeHex(algorithmName, Encoding.UTF8.GetBytes(sb.ToString()));
-            cmdlet.WriteObject(MakeOutput(hex, "-", algorithmLabel));
+            cmdlet.WriteObject(MakeOutput(hex, "-", algorithmLabel, marker));
         }
     }
 
@@ -181,11 +194,11 @@ internal static class ChecksumEngine
         return Convert.ToHexString(hasher.GetHashAndReset()).ToLowerInvariant();
     }
 
-    private static PSObject MakeOutput(string hex, string fileName, string algorithmLabel)
+    private static PSObject MakeOutput(string hex, string fileName, string algorithmLabel, string marker = "  ")
     {
         var obj = new PSObject();
         obj.TypeNames.Insert(0, "PsBash.TextOutput");
-        obj.Properties.Add(new PSNoteProperty("BashText", $"{hex}  {fileName}"));
+        obj.Properties.Add(new PSNoteProperty("BashText", $"{hex}{marker}{fileName}"));
         obj.Properties.Add(new PSNoteProperty("Hash", hex));
         obj.Properties.Add(new PSNoteProperty("FileName", fileName));
         obj.Properties.Add(new PSNoteProperty("Algorithm", algorithmLabel));

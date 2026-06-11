@@ -4537,7 +4537,12 @@ function Invoke-BashKill {
     foreach ($procId in $pids) {
         try {
             $proc = Get-Process -Id $procId -ErrorAction Stop
-            if ($signalName -eq 'SIGKILL') {
+            if ($signalName -eq 'SIG0') {
+                # Signal 0: existence test ONLY — send no signal. The Get-Process
+                # above already proved the process exists (exit 0); a missing one
+                # throws and the catch reports it with exit 1. `kill -0 PID` is the
+                # standard "is it alive?" probe and must NEVER terminate.
+            } elseif ($signalName -eq 'SIGKILL') {
                 Stop-Process -Id $procId -Force
             } elseif ($signalName -eq 'SIGTERM' -or -not $signalName) {
                 Stop-Process -Id $procId

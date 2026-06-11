@@ -75,6 +75,11 @@ public sealed class InvokeBashRealpathCommand : PSCmdlet
             return;
         }
 
+        // -e (canonicalize-existing): GNU realpath fails if the path does not
+        // exist. The default/-m path stays lenient (resolves missing paths),
+        // which is what this cmdlet always did.
+        bool requireExists = e.IsPresent;
+
         foreach (var path in args)
         {
             if (path.StartsWith('-')) continue;
@@ -91,6 +96,13 @@ public sealed class InvokeBashRealpathCommand : PSCmdlet
             catch
             {
                 full = SessionState.Path.GetUnresolvedProviderPathFromPSPath(path);
+            }
+
+            if (requireExists && !File.Exists(full) && !Directory.Exists(full))
+            {
+                FileSystemHelpers.WriteBashError(this, $"realpath: {path}: No such file or directory");
+                FileSystemHelpers.SetLastExitCode(this, 1);
+                continue;
             }
 
             WriteObject(BashRuntime.NewBashObject(full));

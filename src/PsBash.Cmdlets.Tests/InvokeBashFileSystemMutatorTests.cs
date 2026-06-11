@@ -155,6 +155,48 @@ public class InvokeBashFileSystemMutatorTests : IDisposable, IClassFixture<Share
     // ─────────────────────────── cp ───────────────────────────
 
     [Fact]
+    public void Cp_Preserve_KeepsTimestampAndDoesNotLeakFlagAsOperand()
+    {
+        // REGRESSION: -p was documented as handled but the switch had no case,
+        // so it leaked through as a source operand ("cannot stat '-p'"). Now it
+        // is consumed and preserves the source's modification time.
+        var src = Path.Combine(_tmpRoot, "psrc.txt");
+        var dst = Path.Combine(_tmpRoot, "pdst.txt");
+        File.WriteAllText(src, "x");
+        var oldTime = new DateTime(2020, 1, 2, 3, 4, 5, DateTimeKind.Utc);
+        File.SetLastWriteTimeUtc(src, oldTime);
+        Run($"Invoke-BashCp -p {Q(src)} {Q(dst)}");
+        Assert.True(File.Exists(dst), "cp -p must copy (regression: -p leaked as operand)");
+        Assert.Equal(oldTime, File.GetLastWriteTimeUtc(dst));
+    }
+
+    [Fact]
+    public void Cp_Update_SkipsWhenDestinationNotOlder()
+    {
+        var src = Path.Combine(_tmpRoot, "usrc.txt");
+        var dst = Path.Combine(_tmpRoot, "udst.txt");
+        File.WriteAllText(src, "SRC");
+        File.WriteAllText(dst, "DST");
+        File.SetLastWriteTimeUtc(src, new DateTime(2020, 1, 1, 0, 0, 0, DateTimeKind.Utc));
+        File.SetLastWriteTimeUtc(dst, new DateTime(2021, 1, 1, 0, 0, 0, DateTimeKind.Utc));
+        Run($"Invoke-BashCp -u {Q(src)} {Q(dst)}");
+        Assert.Equal("DST", File.ReadAllText(dst)); // dest newer → not overwritten
+    }
+
+    [Fact]
+    public void Cp_Update_CopiesWhenSourceNewer()
+    {
+        var src = Path.Combine(_tmpRoot, "u2src.txt");
+        var dst = Path.Combine(_tmpRoot, "u2dst.txt");
+        File.WriteAllText(src, "SRC");
+        File.WriteAllText(dst, "DST");
+        File.SetLastWriteTimeUtc(dst, new DateTime(2020, 1, 1, 0, 0, 0, DateTimeKind.Utc));
+        File.SetLastWriteTimeUtc(src, new DateTime(2021, 1, 1, 0, 0, 0, DateTimeKind.Utc));
+        Run($"Invoke-BashCp -u {Q(src)} {Q(dst)}");
+        Assert.Equal("SRC", File.ReadAllText(dst)); // src newer → overwritten
+    }
+
+    [Fact]
     public void Cp_File_CreatesCopy()
     {
         var src = Path.Combine(_tmpRoot, "src.txt");

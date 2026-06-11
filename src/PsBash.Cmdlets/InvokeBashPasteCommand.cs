@@ -145,6 +145,12 @@ public sealed class InvokeBashPasteCommand : PSCmdlet
             operands.Add(a);
         }
 
+        // GNU paste interprets backslash escapes in the delimiter (`\n` `\t`
+        // `\\` `\0`). The oracle stored the raw string, so `paste -d'\n'` joined
+        // with a literal backslash-n instead of a newline. Expanding here is a
+        // no-op for the default tab (a real \x09 with no backslash).
+        delimiter = ExpandPasteDelimiter(delimiter);
+
         var filePaths = new List<string>();
         foreach (var raw in operands)
         {
@@ -256,5 +262,39 @@ public sealed class InvokeBashPasteCommand : PSCmdlet
         string msg = notFound ? "No such file or directory" : ex.Message;
         string normalized = path.Replace('\\', '/');
         FileSystemHelpers.WriteBashError(this, $"paste: {normalized}: {msg}");
+    }
+
+    /// <summary>
+    /// Expand GNU paste's recognized delimiter backslash escapes: <c>\n</c>
+    /// (newline), <c>\t</c> (tab), <c>\\</c> (backslash), <c>\0</c> (empty / no
+    /// separator). An unrecognized <c>\x</c> degrades to the literal char
+    /// <c>x</c>. No backslash → returned unchanged (so a real tab default is a
+    /// no-op).
+    /// </summary>
+    private static string ExpandPasteDelimiter(string d)
+    {
+        if (d.IndexOf('\\') < 0) return d;
+        var sb = new System.Text.StringBuilder(d.Length);
+        for (int i = 0; i < d.Length; i++)
+        {
+            if (d[i] == '\\' && i + 1 < d.Length)
+            {
+                char n = d[++i];
+                switch (n)
+                {
+                    case 'n': sb.Append('\n'); break;
+                    case 't': sb.Append('\t'); break;
+                    case 'r': sb.Append('\r'); break;
+                    case '\\': sb.Append('\\'); break;
+                    case '0': break; // \0 → empty separator
+                    default: sb.Append(n); break;
+                }
+            }
+            else
+            {
+                sb.Append(d[i]);
+            }
+        }
+        return sb.ToString();
     }
 }

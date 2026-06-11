@@ -68,6 +68,19 @@ public class InvokeBashChecksumCommandTests : IClassFixture<SharedPwshFixture>, 
     }
 
     [Fact]
+    public void Md5sum_BinaryFlag_HashesFile_WithStarMarker()
+    {
+        // REGRESSION: -b / --binary was swallowed as a bogus filename ("No such
+        // file"). It is now a recognized mode flag; binary mode uses the " *"
+        // marker (GNU md5sum convention) before the path.
+        var expectedHash = ToHex(System.Security.Cryptography.MD5.HashData(_testBytes));
+        var lines = RunLines($"Invoke-BashMd5sum -b '{_testFile.Replace("'", "''")}'");
+        Assert.Single(lines);
+        Assert.StartsWith(expectedHash + " *", lines[0]);
+        Assert.EndsWith("data.txt", lines[0]);
+    }
+
+    [Fact]
     public void Md5sum_PipelineInput_EmitsStdinMarker()
     {
         var lines = RunLines("'hello world' | Invoke-BashMd5sum");

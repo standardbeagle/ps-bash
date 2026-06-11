@@ -37,6 +37,16 @@ public sealed class InvokeBashCpCommand : PSCmdlet
 {
     [Parameter] public SwitchParameter v { get; set; }
 
+    /// <summary>
+    /// Bash <c>-p</c> (preserve) decoy. The bare token <c>-p</c> prefix-collides
+    /// with the value-bearing common parameter <c>-PipelineVariable</c>, which
+    /// would otherwise consume the next token (the source) as its value. An exact
+    /// single-letter parameter name beats the common-parameter prefix, so a bare
+    /// <c>-p</c> binds here; bundled forms (<c>-rp</c>) still flow through
+    /// <see cref="Arguments"/>.
+    /// </summary>
+    [Parameter] public SwitchParameter p { get; set; }
+
     [Parameter(ValueFromRemainingArguments = true)]
     public string[]? Arguments { get; set; }
 
@@ -60,11 +70,13 @@ public sealed class InvokeBashCpCommand : PSCmdlet
         bool noClobber = false;
         bool force = false;
         bool verbose = v.IsPresent;
+        bool preserve = p.IsPresent;  // bare -p arrives via the decoy parameter
+        bool update = false;
         var operands = new List<string>();
 
         foreach (var a in args)
         {
-            // De-bundle combined short flags (-rf, -rfv) — only when every char is a known
+            // De-bundle combined short flags (-rf, -rpv) — only when every char is a known
             // cp short flag, so unknown tokens (and filenames starting with '-') stay operands.
             if (a.Length > 2 && a[0] == '-' && a[1] != '-' && IsCpShortBundle(a))
             {
@@ -76,6 +88,9 @@ public sealed class InvokeBashCpCommand : PSCmdlet
                         case 'n': noClobber = true; break;
                         case 'f': force = true; break;
                         case 'v': verbose = true; break;
+                        case 'p': preserve = true; break;
+                        case 'u': update = true; break;
+                        case 'a': recursive = true; preserve = true; break;
                     }
                 }
                 continue;
@@ -83,10 +98,15 @@ public sealed class InvokeBashCpCommand : PSCmdlet
 
             switch (a)
             {
-                case "-r": case "-R": recursive = true; break;
-                case "-n": noClobber = true; break;
-                case "-f": force = true; break;
-                case "-v": verbose = true; break;
+                case "-r": case "-R": case "--recursive": recursive = true; break;
+                case "-n": case "--no-clobber": noClobber = true; break;
+                case "-f": case "--force": force = true; break;
+                case "-v": case "--verbose": verbose = true; break;
+                case "-p": preserve = true; break;
+                case "-u": case "--update": update = true; break;
+                // -a / --archive == -dR --preserve=all; on Windows we honor the
+                // recursive + timestamp/attribute preservation that maps.
+                case "-a": case "--archive": recursive = true; preserve = true; break;
                 default: operands.Add(a); break;
             }
         }
@@ -156,16 +176,23 @@ public sealed class InvokeBashCpCommand : PSCmdlet
                         // — was a plain Directory.Delete that threw on read-only descendants.
                         FileSystemHelpers.DeleteDirectoryForce(targetPath);
                     }
-                    CopyDirectoryRecursive(src, targetPath);
+                    CopyDirectoryRecursive(src, targetPath, preserve, update);
                 }
                 else
                 {
+                    // -u: skip when the destination exists and is not older than the source.
+                    if (update && File.Exists(targetPath)
+                        && File.GetLastWriteTimeUtc(src) <= File.GetLastWriteTimeUtc(targetPath))
+                    {
+                        continue;
+                    }
                     var parent = Path.GetDirectoryName(targetPath);
                     if (!string.IsNullOrEmpty(parent) && !Directory.Exists(parent))
                     {
                         Directory.CreateDirectory(parent);
                     }
                     File.Copy(src, targetPath, overwrite: true);
+                    if (preserve) PreserveMetadata(src, targetPath, isDir: false);
                 }
             }
             catch (Exception ex)
@@ -193,21 +220,65 @@ public sealed class InvokeBashCpCommand : PSCmdlet
     {
         for (int i = 1; i < s.Length; i++)
         {
-            if (s[i] is not ('r' or 'R' or 'n' or 'f' or 'v')) return false;
+            if (s[i] is not ('r' or 'R' or 'n' or 'f' or 'v' or 'p' or 'u' or 'a')) return false;
         }
         return true;
     }
 
-    private static void CopyDirectoryRecursive(string src, string dest)
+    private static void CopyDirectoryRecursive(string src, string dest, bool preserve, bool update)
     {
         Directory.CreateDirectory(dest);
         foreach (var file in Directory.EnumerateFiles(src))
         {
-            File.Copy(file, Path.Combine(dest, Path.GetFileName(file)), overwrite: true);
+            var target = Path.Combine(dest, Path.GetFileName(file));
+            if (update && File.Exists(target)
+                && File.GetLastWriteTimeUtc(file) <= File.GetLastWriteTimeUtc(target))
+            {
+                continue;
+            }
+            File.Copy(file, target, overwrite: true);
+            if (preserve) PreserveMetadata(file, target, isDir: false);
         }
         foreach (var sub in Directory.EnumerateDirectories(src))
         {
-            CopyDirectoryRecursive(sub, Path.Combine(dest, Path.GetFileName(sub)));
+            CopyDirectoryRecursive(sub, Path.Combine(dest, Path.GetFileName(sub)), preserve, update);
+        }
+        // Apply directory timestamps LAST — writing children bumps the dir mtime,
+        // so GNU cp -p restores it after the contents are in place.
+        if (preserve) PreserveMetadata(src, dest, isDir: true);
+    }
+
+    /// <summary>
+    /// Best-effort <c>cp -p</c>: copy timestamps and attributes from source to
+    /// destination. Unix mode bits and ownership have no faithful Windows
+    /// representation, so those parts of <c>--preserve=all</c> are silently not
+    /// applied; timestamps and the read-only/hidden/archive attributes are.
+    /// </summary>
+    private static void PreserveMetadata(string src, string dest, bool isDir)
+    {
+        try
+        {
+            if (isDir)
+            {
+                var s = new DirectoryInfo(src);
+                var d = new DirectoryInfo(dest);
+                d.CreationTimeUtc = s.CreationTimeUtc;
+                d.LastWriteTimeUtc = s.LastWriteTimeUtc;
+                d.LastAccessTimeUtc = s.LastAccessTimeUtc;
+                d.Attributes = s.Attributes;
+            }
+            else
+            {
+                File.SetCreationTimeUtc(dest, File.GetCreationTimeUtc(src));
+                File.SetLastWriteTimeUtc(dest, File.GetLastWriteTimeUtc(src));
+                File.SetLastAccessTimeUtc(dest, File.GetLastAccessTimeUtc(src));
+                new FileInfo(dest) { Attributes = new FileInfo(src).Attributes };
+            }
+        }
+        catch
+        {
+            // Preservation is best-effort; a locked attribute or unsupported
+            // timestamp must not fail the copy itself.
         }
     }
 }

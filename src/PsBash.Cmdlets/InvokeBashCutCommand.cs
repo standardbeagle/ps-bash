@@ -111,7 +111,15 @@ public sealed class InvokeBashCutCommand : PSCmdlet
     private string _fieldSpec = string.Empty;
     private string _charSpec = string.Empty;
     private List<string> _operands = new();
-    private int[]? _indices;
+    // Selected ranges (1-based, inclusive). hi == int.MaxValue means "to the
+    // end of the line/record" — an OPEN range (`-f2-`). These are resolved
+    // against each line's actual char/field count in EmitCutLine, which is why
+    // open ranges can't be flattened to a fixed index array at parse time.
+    private List<(int Lo, int Hi)>? _ranges;
+    // -s: in field mode, drop lines that contain no delimiter (GNU --only-delimited).
+    private bool _suppressNonDelimited;
+    // --output-delimiter=STR: rejoin selected fields with STR instead of the input delimiter.
+    private string? _outputDelimiter;
     // Deferred parse failures: emitted in EndProcessing (ProcessRecord runs
     // first and must not write the error twice). Either of these also
     // suppresses stdin streaming.
@@ -133,9 +141,9 @@ public sealed class InvokeBashCutCommand : PSCmdlet
     /// </summary>
     private static readonly HashSet<string> ValidButUnsupported = new(StringComparer.Ordinal)
     {
-        "-s", "-b", "-n", "-z",
+        "-b", "-n", "-z",
         "--bytes", "--characters", "--fields", "--delimiter",
-        "--complement", "--only-delimited", "--output-delimiter",
+        "--complement",
         "--zero-terminated",
     };
 
@@ -239,6 +247,29 @@ public sealed class InvokeBashCutCommand : PSCmdlet
                 continue;
             }
 
+            // -s / --only-delimited: field mode drops lines with no delimiter.
+            if (a == "-s" || a == "--only-delimited")
+            {
+                _suppressNonDelimited = true;
+                i++;
+                continue;
+            }
+
+            // --output-delimiter=STR (and the rare separate-arg form).
+            if (a.StartsWith("--output-delimiter=", StringComparison.Ordinal))
+            {
+                _outputDelimiter = a.Substring("--output-delimiter=".Length);
+                i++;
+                continue;
+            }
+            if (a == "--output-delimiter")
+            {
+                i++;
+                if (i < args.Length) _outputDelimiter = args[i];
+                i++;
+                continue;
+            }
+
             // Any remaining option-looking token is a flag cut doesn't handle,
             // not a file operand: valid-but-unsupported → specific refusal,
             // otherwise bash-parity "unrecognized option". A lone "-" (stdin)
@@ -255,16 +286,16 @@ public sealed class InvokeBashCutCommand : PSCmdlet
             i++;
         }
 
-        // Pre-parse the active spec once.
+        // Pre-parse the active spec once into (possibly open-ended) ranges.
         try
         {
             if (_charSpec.Length > 0)
             {
-                _indices = ParseSpec(_charSpec);
+                _ranges = ParseRanges(_charSpec);
             }
             else if (_fieldSpec.Length > 0)
             {
-                _indices = ParseSpec(_fieldSpec);
+                _ranges = ParseRanges(_fieldSpec);
             }
         }
         catch (FormatException ex)
@@ -286,7 +317,7 @@ public sealed class InvokeBashCutCommand : PSCmdlet
         if (_charSpec.Length > 0)
         {
             var sb = new StringBuilder();
-            foreach (var pos in _indices!)
+            foreach (var pos in ExpandRanges(_ranges!, line.Length))
             {
                 int idx = pos - 1;
                 if (idx >= 0 && idx < line.Length)
@@ -305,8 +336,11 @@ public sealed class InvokeBashCutCommand : PSCmdlet
             // a string passed via -d. .NET's Split(string) splits on the
             // string as a substring boundary.
             string[] fields = line.Split(new[] { _delimiter }, StringSplitOptions.None);
+            // -s: a line with no delimiter splits into a single field; GNU
+            // --only-delimited suppresses it entirely.
+            if (_suppressNonDelimited && fields.Length <= 1) return;
             var picks = new List<string>();
-            foreach (var pos in _indices!)
+            foreach (var pos in ExpandRanges(_ranges!, fields.Length))
             {
                 int fi = pos - 1;
                 if (fi >= 0 && fi < fields.Length)
@@ -314,7 +348,7 @@ public sealed class InvokeBashCutCommand : PSCmdlet
                     picks.Add(fields[fi]);
                 }
             }
-            result = string.Join(_delimiter, picks);
+            result = string.Join(_outputDelimiter ?? _delimiter, picks);
         }
         else
         {
@@ -401,36 +435,74 @@ public sealed class InvokeBashCutCommand : PSCmdlet
     }
 
     /// <summary>
-    /// Parse a cut list spec (comma-separated, with optional <c>N-M</c>
-    /// ranges). Mirrors the oracle's <c>$parseSpec</c> scriptblock exactly:
-    /// each part either matches <c>^(\d+)-(\d+)$</c> (inclusive range) or
-    /// falls through to <c>[int]$part</c>. Open ranges and bare dashes are
-    /// not supported — the oracle throws, we throw <see cref="FormatException"/>.
+    /// Parse a cut list spec (comma-separated) into 1-based inclusive ranges.
+    /// Each part is one of GNU cut's forms:
+    /// <list type="bullet">
+    /// <item><c>N</c> — single position → <c>(N, N)</c>.</item>
+    /// <item><c>N-M</c> — closed range → <c>(N, M)</c>.</item>
+    /// <item><c>N-</c> — open from N to end → <c>(N, int.MaxValue)</c>.</item>
+    /// <item><c>-M</c> — open from start to M → <c>(1, M)</c>.</item>
+    /// </list>
+    /// Open ranges are resolved per line in <see cref="ExpandRanges"/> against
+    /// the actual char/field count. A non-numeric token still throws
+    /// <see cref="FormatException"/> (bash/oracle parity: invalid list).
     /// </summary>
-    private static int[] ParseSpec(string spec)
+    private static List<(int Lo, int Hi)> ParseRanges(string spec)
     {
-        var result = new List<int>();
+        var result = new List<(int, int)>();
         foreach (var partRaw in spec.Split(','))
         {
             string part = partRaw;
             int dash = part.IndexOf('-');
-            if (dash > 0 && dash < part.Length - 1)
+            if (dash >= 0)
             {
                 string lo = part.Substring(0, dash);
                 string hi = part.Substring(dash + 1);
-                if (lo.Length > 0 && hi.Length > 0 &&
-                    AllDigits(lo) && AllDigits(hi))
+                // -M  (open start)
+                if (lo.Length == 0 && hi.Length > 0 && AllDigits(hi))
                 {
-                    int start = int.Parse(lo);
-                    int end = int.Parse(hi);
-                    for (int n = start; n <= end; n++) result.Add(n);
+                    result.Add((1, int.Parse(hi)));
                     continue;
                 }
+                // N-  (open end)
+                if (hi.Length == 0 && lo.Length > 0 && AllDigits(lo))
+                {
+                    result.Add((int.Parse(lo), int.MaxValue));
+                    continue;
+                }
+                // N-M (closed)
+                if (lo.Length > 0 && hi.Length > 0 && AllDigits(lo) && AllDigits(hi))
+                {
+                    result.Add((int.Parse(lo), int.Parse(hi)));
+                    continue;
+                }
+                // Malformed (e.g. bare "-", "a-b") — surface as invalid list.
+                throw new FormatException($"invalid byte/character position '{part}'");
             }
-            // Oracle falls through to [int]$part — non-integer throws.
-            result.Add(int.Parse(part));
+            // Single index: [int]$part — non-integer throws (oracle parity).
+            int n = int.Parse(part);
+            result.Add((n, n));
         }
-        return result.ToArray();
+        return result;
+    }
+
+    /// <summary>
+    /// Expand parsed ranges into the concrete 1-based positions for a line of
+    /// <paramref name="max"/> chars/fields, preserving spec order (the oracle's
+    /// behavior). An open range (<c>Hi == int.MaxValue</c>) runs to
+    /// <paramref name="max"/>; positions past <paramref name="max"/> are simply
+    /// not produced (EmitCutLine's index guard also drops any stragglers).
+    /// </summary>
+    private static IEnumerable<int> ExpandRanges(List<(int Lo, int Hi)> ranges, int max)
+    {
+        foreach (var (lo, hi) in ranges)
+        {
+            int end = hi == int.MaxValue ? max : hi;
+            for (int n = lo; n <= end && n <= max; n++)
+            {
+                if (n >= 1) yield return n;
+            }
+        }
     }
 
     private static bool AllDigits(string s)

@@ -51,6 +51,30 @@ public class InvokeBashRealpathCommandTests : IDisposable, IClassFixture<SharedP
     }
 
     [Fact]
+    public void Realpath_E_ExistingPath_ResolvesNormally()
+    {
+        var lines = RunLines($"Invoke-BashRealpath -e '{_existingFile.Replace("'", "''")}'");
+        Assert.Single(lines);
+        Assert.Contains("exists.txt", lines[0]);
+    }
+
+    [Fact]
+    public void Realpath_E_MissingPath_ErrorsAndEmitsNoPath()
+    {
+        // REGRESSION: -e was declared but a no-op — a missing path was silently
+        // resolved. GNU realpath -e fails on a non-existent path.
+        var pwsh = _fixture.AcquireFresh();
+        pwsh.AddScript("$ErrorActionPreference='Continue'").Invoke();
+        pwsh.Commands.Clear();
+        var missing = Path.Combine(_tmpDir, "nope.txt").Replace("'", "''");
+        var result = pwsh.AddScript($"Invoke-BashRealpath -e '{missing}'").Invoke();
+        var errs = pwsh.Streams.Error.Select(e => e.Exception?.Message ?? e.ToString()).ToArray();
+        pwsh.Commands.Clear();
+        Assert.Empty(result);
+        Assert.Contains(errs, m => m.Contains("No such file", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
     public void Realpath_ExistingFile_ReturnsResolvedPath()
     {
         var lines = RunLines($"Invoke-BashRealpath '{_existingFile.Replace("'", "''")}'");

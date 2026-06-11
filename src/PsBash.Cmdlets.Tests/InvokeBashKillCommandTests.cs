@@ -97,6 +97,28 @@ public class InvokeBashKillCommandTests : IClassFixture<SharedPwshFixture>
     }
 
     [Fact]
+    public void Kill_Signal0_DoesNotTerminate_ExistenceProbeOnly()
+    {
+        using var proc = StartLongLivedProcess();
+        Skip.If(proc is null, "no spawnable process host available");
+        var pid = proc!.Id;
+
+        // REGRESSION: `kill -0` mapped to SIG0 and fell through to Stop-Process,
+        // KILLING the process. signal 0 is an existence probe that must NOT kill.
+        Run($"Invoke-BashKill -0 {pid}");
+
+        Assert.False(proc.HasExited, "kill -0 <pid> must NOT terminate the process");
+        proc.Kill(); // cleanup
+    }
+
+    [Fact]
+    public void Kill_Signal0_NonexistentPid_EmitsNoSuchProcess()
+    {
+        var errs = RunErrors("Invoke-BashKill -0 2147483646");
+        Assert.Contains(errs, m => m.Contains("No such process", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
     public void Kill_NoArguments_EmitsUsageError()
     {
         var errs = RunErrors("Invoke-BashKill");

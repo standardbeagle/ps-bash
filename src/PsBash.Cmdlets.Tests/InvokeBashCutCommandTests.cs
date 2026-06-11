@@ -71,14 +71,49 @@ public class InvokeBashCutCommandTests : IClassFixture<SharedPwshFixture>, IDisp
     }
 
     [Fact]
-    public void Cut_ValidButUnsupportedFlag_S_EmitsSpecificRefusal_NotFileError()
+    public void Cut_S_SuppressesLinesWithoutDelimiter()
     {
-        // -s (--only-delimited) is a real cut flag ps-bash doesn't implement.
-        // It must say so specifically, NOT treat -s as a missing file.
-        var (_, errs) = RunWithErrors("'a,b' | Invoke-BashCut -s -d ',' -f 1");
+        // -s / --only-delimited: a delimited line is kept...
+        var kept = RunLines("'a,b,c' | Invoke-BashCut -s -d ',' -f 2");
+        Assert.Equal(new[] { "b" }, kept);
+        // ...and a line with no delimiter is dropped entirely.
+        var dropped = RunLines("'nodelim' | Invoke-BashCut -s -d ',' -f 1");
+        Assert.Empty(dropped);
+    }
+
+    [Fact]
+    public void Cut_OpenRange_FromN_ToEnd()
+    {
+        // `-f2-` (open range) is everyday syntax that used to THROW.
+        var lines = RunLines("\"a`tb`tc`td\" | Invoke-BashCut -f 2-");
+        Assert.Single(lines);
+        Assert.Equal("b\tc\td", lines[0]);
+    }
+
+    [Fact]
+    public void Cut_OpenRange_StartTo_M()
+    {
+        // `-c-3` (open from start) selects positions 1..3.
+        var lines = RunLines("'abcdef' | Invoke-BashCut -c -3");
+        Assert.Single(lines);
+        Assert.Equal("abc", lines[0]);
+    }
+
+    [Fact]
+    public void Cut_OutputDelimiter_RejoinsWithCustomString()
+    {
+        var lines = RunLines("'a,b,c' | Invoke-BashCut -d ',' --output-delimiter='|' -f '1,3'");
+        Assert.Single(lines);
+        Assert.Equal("a|c", lines[0]);
+    }
+
+    [Fact]
+    public void Cut_UnrecognizedLongOption_StillRefused()
+    {
+        // A genuinely unsupported flag must still be refused, not treated as a file.
+        var (_, errs) = RunWithErrors("'a,b' | Invoke-BashCut --complement -d ',' -f 1");
         Assert.Contains(errs, m => m.Contains("not supported", StringComparison.OrdinalIgnoreCase)
-                                   && m.Contains("-s", StringComparison.Ordinal));
-        Assert.DoesNotContain(errs, m => m.Contains("No such file", StringComparison.OrdinalIgnoreCase));
+                                   || m.Contains("unrecognized", StringComparison.OrdinalIgnoreCase));
     }
 
     [Fact]
