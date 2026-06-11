@@ -411,4 +411,16 @@ public class NewFlagSupportTests : IClassFixture<SharedPwshFixture>, IDisposable
         var parts = Directory.GetFiles(_tmp, "chunk_*.txt");
         Assert.True(parts.Length >= 2, "chunks have the .txt suffix");
     }
+
+    // ── xargs -d ─────────────────────────────────────────────────────────────
+
+    [Fact]
+    public void Xargs_CustomDelimiter_SplitsOnIt()
+    {
+        // -d ',' splits the input on commas; echo joins the items back.
+        var lines = RunLines("'a,b,c' | Invoke-BashXargs -d ',' echo");
+        Assert.Contains(lines, l => l.Contains("a", StringComparison.Ordinal)
+                                    && l.Contains("b", StringComparison.Ordinal)
+                                    && l.Contains("c", StringComparison.Ordinal));
+    }
 }

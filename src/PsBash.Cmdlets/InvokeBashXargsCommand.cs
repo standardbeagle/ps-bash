@@ -73,6 +73,15 @@ public sealed class InvokeBashXargsCommand : PSCmdlet
     [Parameter]
     public int? P { get; set; }
 
+    /// <summary>
+    /// <c>-d DELIM</c> — value-bearing input-item delimiter. Declared literally
+    /// as <c>D</c> because the bare token <c>-d</c> prefix-collides with the
+    /// <c>-Debug</c> common parameter. The joined <c>-dDELIM</c> and
+    /// <c>--delimiter=</c> forms arrive via <see cref="Arguments"/>.
+    /// </summary>
+    [Parameter]
+    public string? D { get; set; }
+
     [Parameter(ValueFromRemainingArguments = true)]
     public string[]? Arguments { get; set; }
 
@@ -81,6 +90,30 @@ public sealed class InvokeBashXargsCommand : PSCmdlet
     protected override void ProcessRecord()
     {
         _pipelineItems.Add(InputObject);
+    }
+
+    /// <summary>Expand GNU xargs -d backslash escapes (\n \t \r \0 \\); other
+    /// chars pass through, so a literal delimiter like "," is returned as-is.</summary>
+    private static string ExpandDelimEscapes(string d)
+    {
+        if (d.IndexOf('\\') < 0) return d;
+        var sb = new System.Text.StringBuilder(d.Length);
+        for (int i = 0; i < d.Length; i++)
+        {
+            if (d[i] == '\\' && i + 1 < d.Length)
+            {
+                char n = d[++i];
+                sb.Append(n switch
+                {
+                    'n' => '\n', 't' => '\t', 'r' => '\r', '0' => '\0', '\\' => '\\', _ => n,
+                });
+            }
+            else
+            {
+                sb.Append(d[i]);
+            }
+        }
+        return sb.ToString();
     }
 
     protected override void EndProcessing()
@@ -105,6 +138,7 @@ public sealed class InvokeBashXargsCommand : PSCmdlet
         bool nullDelim = false;
         bool noRunIfEmpty = false;
         bool traceCmd = false;
+        string? customDelim = D;  // -d DELIM (also set by -dDELIM / --delimiter=)
         // P is accepted via parameter binding but otherwise unused.
         _ = P;
 
@@ -159,6 +193,28 @@ public sealed class InvokeBashXargsCommand : PSCmdlet
             {
                 // Interactive prompt — accepted but ignored (the oracle had
                 // no concept of it and a PS runspace cannot prompt).
+                i++;
+                continue;
+            }
+
+            // -d DELIM / -dDELIM / --delimiter=DELIM / --delimiter DELIM.
+            if (string.Equals(arg, "-d", System.StringComparison.Ordinal)
+                || string.Equals(arg, "--delimiter", System.StringComparison.Ordinal))
+            {
+                i++;
+                if (i < args.Length) customDelim = args[i];
+                i++;
+                continue;
+            }
+            if (arg.Length > 2 && arg.StartsWith("-d", System.StringComparison.Ordinal))
+            {
+                customDelim = arg.Substring(2);
+                i++;
+                continue;
+            }
+            if (arg.StartsWith("--delimiter=", System.StringComparison.Ordinal))
+            {
+                customDelim = arg.Substring("--delimiter=".Length);
                 i++;
                 continue;
             }
@@ -254,9 +310,14 @@ public sealed class InvokeBashXargsCommand : PSCmdlet
         var cmdArgs = new List<string>();
         for (int k = 1; k < operands.Count; k++) cmdArgs.Add(operands[k]);
 
-        // Split pipeline input by delimiter (NUL or newline).
+        // Split pipeline input by delimiter: -d DELIM (custom) overrides; else
+        // -0 (NUL) or the newline default. A custom delimiter honors the common
+        // backslash escapes (\n \t \r \0 \\), matching GNU xargs -d.
         var inputLines = new List<string>();
-        var delim = nullDelim ? "\0" : "\n";
+        var delim = customDelim != null
+            ? ExpandDelimEscapes(customDelim)
+            : (nullDelim ? "\0" : "\n");
+        if (delim.Length == 0) delim = "\n"; // empty delimiter is meaningless; fall back
         foreach (var item in _pipelineItems)
         {
             var text = BashRuntime.GetBashText(item);
