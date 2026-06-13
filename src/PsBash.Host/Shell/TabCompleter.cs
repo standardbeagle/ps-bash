@@ -155,6 +155,14 @@ internal static class TabCompleter
         IReadOnlyDictionary<string, string> aliases,
         string cwd)
     {
+        // Bash rule: a command word containing a slash (or a ~ home reference) is a path to an
+        // executable, so it gets filename completion — directories AND files, not a $PATH search.
+        // CompletePath appends '/' to directories, so "./sc"<tab> -> "./scripts/" lets the user
+        // keep drilling into the directory. (CompleteCommand's $PATH/cwd scan only sees files, so
+        // without this a "./dir" prefix completed to nothing.)
+        if (LooksLikeCommandPath(token))
+            return CompletePath(token, cwd);
+
         var results = new SortedSet<string>(StringComparer.Ordinal);
 
         // Aliases
@@ -195,20 +203,18 @@ internal static class TabCompleter
             catch (Exception) { /* skip inaccessible dirs */ }
         }
 
-        // Local executables in cwd
-        try
-        {
-            foreach (var file in Directory.EnumerateFiles(cwd))
-            {
-                var name = "./" + Path.GetFileName(file);
-                if (name.StartsWith(token, StringComparison.Ordinal))
-                    results.Add(name);
-            }
-        }
-        catch (Exception) { }
-
         return [.. results.Select(r => new CompletionItem(r))];
     }
+
+    /// <summary>
+    /// True when a command-position token is a path to an executable (contains a directory
+    /// separator or starts with a <c>~</c> home reference) rather than a bare command name to
+    /// resolve against <c>$PATH</c>. Mirrors bash: <c>./x</c>, <c>../x</c>, <c>/usr/bin/x</c>,
+    /// <c>dir/x</c>, and <c>~/x</c> get filename completion; <c>foo</c> gets command completion.
+    /// </summary>
+    private static bool LooksLikeCommandPath(string token)
+        => token.Length > 0
+           && (token.Contains('/') || token.Contains('\\') || token[0] == '~');
 
     // ─────────────────────────────────────────────────────────────────────────
     // Flag completion (after command name)

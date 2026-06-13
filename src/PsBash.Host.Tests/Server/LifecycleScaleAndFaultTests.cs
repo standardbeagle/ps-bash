@@ -10,7 +10,7 @@ namespace PsBash.Host.Tests.Server;
 
 /// <summary>
 /// Lifecycle scale + fault-injection coverage for launcher-side host startup
-/// (IpcWorker.StartAsync). Proves the launcher's tmux-style single-host-per-user
+/// (IpcWorker.StartAsync). Proves the launcher's single-host-per-session
 /// behavior under concurrent races, reuse, replacement, stale endpoints,
 /// wedged hosts, and idle shutdown.
 ///
@@ -807,7 +807,7 @@ public sealed class LifecycleScaleAndFaultTests
     /// <summary>
     /// REFACTOR-7 acceptance: two concurrent <see cref="Lifetime.PerInvocation"/>
     /// workers each get their OWN private host on a process-local endpoint — they
-    /// do NOT share the per-user daemon socket. Proven by asking each host for
+    /// do NOT share the canonical (per-session) daemon socket. Proven by asking each host for
     /// its <c>$PID</c>: distinct PIDs ⇒ distinct host processes ⇒ no shared
     /// daemon. Each host also gets a clean session by construction, which is the
     /// state-isolation property the refactor buys.
@@ -845,8 +845,8 @@ public sealed class LifecycleScaleAndFaultTests
 
     /// <summary>
     /// REFACTOR-7 acceptance: <see cref="IpcTransportFactory.ResolvePerInvocationEndpoint"/>
-    /// returns a process-local endpoint that is NOT the shared per-user daemon
-    /// endpoint (<see cref="IpcTransportFactory.ResolveEndpoint()"/>), and two
+    /// returns a process-local endpoint that is NOT the shared canonical (per-session)
+    /// daemon endpoint (<see cref="IpcTransportFactory.ResolveEndpoint()"/>), and two
     /// calls never collide. This is the unit-level proof that a PerInvocation
     /// host binds a private socket — no real spawn needed.
     /// </summary>

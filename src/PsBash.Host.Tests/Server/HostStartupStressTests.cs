@@ -22,7 +22,7 @@ public sealed class HostStartupStressCollection { }
 /// <summary>
 /// Concurrent host-startup stress coverage for <see cref="IpcWorker"/>'s
 /// shared-daemon path. Proves single-flight spawn: N launchers racing to start
-/// the per-user daemon FROM COLD spawn exactly one host, not N (which would
+/// the canonical (per-session) daemon FROM COLD spawn exactly one host, not N (which would
 /// orphan N-1 runspaces via UnixSocketTransport's unlink-before-bind or the
 /// Windows 16-instance pipe).
 ///

@@ -105,10 +105,12 @@ Environment.SetEnvironmentVariable("PSBASH_COMPACT_OUTPUT", compactOutput ? "1" 
 
 // All non-interactive execution (-c, stdin pipe, script file) goes through
 // ps-bash-host over IPC. Default lifetime is Lifetime.Daemon: a single shared
-// per-user host is spawned once (single-flighted via HostSpawnLock) and reused by
-// every subsequent launcher, so a -c invocation pays the ~3 s runspace cold-start
-// only on the first call — critical when an embedding parent (e.g. the Claude Code
-// Bash tool) issues many commands. The daemon host gives each connection its OWN
+// per-session host is spawned once (single-flighted via HostSpawnLock) and reused by
+// every subsequent launcher in the same session, so a -c invocation pays the ~3 s
+// runspace cold-start only on the first call — critical when an embedding parent
+// (e.g. the Claude Code Bash tool) issues many commands. Per-session (not per-user)
+// so independent shells/agents get their own daemon and don't contend on one host
+// (see IpcTransportFactory.ResolveEndpoint). The daemon host gives each connection its OWN
 // isolated runspace from a warm pool (see WorkerPool), so reuse is fast WITHOUT
 // leaking session state between commands, and concurrent launchers run in parallel.
 //

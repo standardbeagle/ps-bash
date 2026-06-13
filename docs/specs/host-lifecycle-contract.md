@@ -1,13 +1,15 @@
 # Host Lifecycle Metadata and Ownership Contract
 
-This contract defines how launchers decide whether the canonical per-user
-`ps-bash-host` can be reused, replaced, or left alone. It is intentionally a
-design contract only: current behavior may be simpler until the lifecycle
+This contract defines how launchers decide whether the canonical per-session
+`ps-bash-host` (one daemon per `(user, session)`; see "Interaction With
+`IpcTransportFactory`") can be reused, replaced, or left alone. It is intentionally
+a design contract only: current behavior may be simpler until the lifecycle
 implementation lands.
 
 ## Goals
 
-- Keep the existing canonical per-user endpoint from `IpcTransportFactory`.
+- Keep the canonical endpoint from `IpcTransportFactory` as the single source of
+  truth (now per-`(user, session)`, see below).
 - Make host reuse decisions from explicit metadata plus a health handshake, not
   from endpoint presence alone.
 - Distinguish endpoint cleanup from process cleanup.
@@ -16,7 +18,7 @@ implementation lands.
 ## Scope: this contract governs the shared `Daemon` host only
 
 This contract covers the **shared, reusable** `ps-bash-host` — the one reached
-through `IpcWorker.StartAsync` with `Lifetime.Daemon` on the canonical per-user
+through `IpcWorker.StartAsync` with `Lifetime.Daemon` on the canonical per-session
 endpoint. As of the pooled-host change this is the **default** path for `-c`,
 stdin-pipe, and script-file modes (the launcher in `src/PsBash.Shell/Program.cs`),
 as well as the `ps-bash host restart` subcommand (`src/PsBash.Shell/HostCommands.cs`).
@@ -151,9 +153,18 @@ through a short-lived lifecycle lock beside the metadata record:
    when the lock owner process is dead or the lock timestamp is beyond the
    startup timeout and no healthy host answers.
 
-This gives tmux-style single-host-per-user behavior without per-session endpoint
-names. The canonical endpoint remains stable; lifecycle metadata and the lock
-make replacement decisions explicit.
+This gives single-host-per-**session** behavior: one daemon per `(user, session)`,
+where the session token is an explicit `PSBASH_SESSION` or, when unset, the
+launcher's parent process id (`ProcessAncestry.GetParentProcessId`). Repeated `-c`
+invocations from one shell / agent share a parent → resolve the same endpoint →
+reuse one warm daemon; independent shells / agents resolve distinct endpoints, so
+load spreads instead of contending on a single per-user host (the contention that
+serializes N callers behind one warm pool and starves it under multi-agent load).
+The session token is **per-session, not per-invocation** — warm reuse within a
+session is preserved; only independent sessions diverge. When no session token is
+available the endpoint degrades to the historical per-user name (`host-{user}`).
+The canonical endpoint remains stable for a given session; lifecycle metadata and
+the lock make replacement decisions explicit, scoped to that endpoint.
 
 ### Implementation (single-flight spawn)
 
@@ -185,9 +196,14 @@ racer steals the socket path) and the Windows named pipe allows 16 server instan
 ## Interaction With `IpcTransportFactory`
 
 `IpcTransportFactory.ResolveEndpoint()` continues to be the source of truth for
-the per-user endpoint and transport scheme. Future lifecycle code should derive
-metadata and lock paths from the resolved `(scheme, endpoint)` pair and should
-not add per-process suffixes to the endpoint itself.
+the endpoint and transport scheme. The resolved name now carries a per-**session**
+segment (`host-{user}-s{token}`, token = `PSBASH_SESSION` or parent pid); lifecycle
+code derives metadata and lock paths from the resolved `(scheme, endpoint)` pair, so
+each session's metadata/lock are naturally isolated. The session segment is the
+**only** discriminator added — a per-*process* (per-invocation) suffix must NOT be
+added to the canonical endpoint, because that would defeat warm-pool reuse (every
+command would cold-start its own daemon). `Lifetime.PerInvocation` is the dedicated
+path for process-local endpoints (`ResolvePerInvocationEndpoint`).
 
 `IpcTransportFactory.RetireEndpoint()` remains endpoint cleanup only. For `unix`
 it may unlink the socket path after lifecycle validation has decided cleanup is

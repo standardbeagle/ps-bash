@@ -341,6 +341,40 @@ public class TabCompleterTests : IDisposable
     }
 
     [Fact]
+    public void CompleteCommand_DotSlashPrefix_CompletesSubdirectory()
+    {
+        // Regression: "./sc"<tab> in command position must offer a "scripts" subdirectory
+        // (CompleteCommand previously scanned only files in cwd, so dirs were never offered).
+        Directory.CreateDirectory(Path.Combine(_tmpDir, "scripts"));
+
+        var results = TabCompleter.Complete("./sc", 4, _noAliases, _tmpDir).Texts();
+
+        Assert.Contains("./scripts/", results);
+    }
+
+    [Fact]
+    public void CompleteCommand_DotSlashPrefix_CompletesLocalExecutableFile()
+    {
+        File.WriteAllText(Path.Combine(_tmpDir, "run.sh"), "");
+
+        var results = TabCompleter.Complete("./ru", 4, _noAliases, _tmpDir).Texts();
+
+        Assert.Contains("./run.sh", results);
+    }
+
+    [Fact]
+    public void CompleteCommand_NestedPathPrefix_CompletesInsideSubdirectory()
+    {
+        var scripts = Path.Combine(_tmpDir, "scripts");
+        Directory.CreateDirectory(scripts);
+        File.WriteAllText(Path.Combine(scripts, "test.sh"), "");
+
+        var results = TabCompleter.Complete("./scripts/te", 12, _noAliases, _tmpDir).Texts();
+
+        Assert.Contains("./scripts/test.sh", results);
+    }
+
+    [Fact]
     public void CompletePath_AbsolutePath_Works()
     {
         File.WriteAllText(Path.Combine(_tmpDir, "readme.md"), "");

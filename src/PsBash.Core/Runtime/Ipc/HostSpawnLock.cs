@@ -5,8 +5,8 @@ namespace PsBash.Core.Runtime.Ipc;
 
 /// <summary>
 /// Cross-process single-flight lock guarding host <b>spawn</b> on a shared
-/// (<see cref="Lifetime.Daemon"/>) endpoint. When N launchers race to start the
-/// per-user daemon from cold, all N would otherwise reach the spawn path and —
+/// (<see cref="Lifetime.Daemon"/>) endpoint. When N launchers in the same session
+/// race to start that session's daemon from cold, all N would otherwise reach the spawn path and —
 /// because <see cref="UnixSocketTransport"/> unlinks-before-bind and the Windows
 /// pipe allows 16 server instances — leave N-1 orphan runspaces (the
 /// concurrent-cold-start thundering herd). This lock lets exactly one launcher
@@ -22,8 +22,9 @@ namespace PsBash.Core.Runtime.Ipc;
 /// it is safe to acquire before an <c>await</c> and release after the
 /// continuation resumes on another thread — which the async spawn path does.</para>
 ///
-/// <para>The lock is scoped to <c>scheme:endpoint</c>, so an isolated test
-/// endpoint never serializes against the real per-user daemon (or another
+/// <para>The lock is scoped to <c>scheme:endpoint</c> — and the endpoint is now
+/// per-session — so each session arbitrates its own spawn independently, and an
+/// isolated test endpoint never serializes against a real session daemon (or another
 /// test's endpoint). The <see cref="Lifetime.PerInvocation"/> path never
 /// acquires it: those endpoints are process-local and uncontended.</para>
 /// </summary>

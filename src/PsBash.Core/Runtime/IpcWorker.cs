@@ -26,8 +26,9 @@ public enum Lifetime
     PerInvocation,
 
     /// <summary>
-    /// Long-lived shared daemon on the canonical per-user endpoint
-    /// (<see cref="IpcTransportFactory.ResolveEndpoint(string)"/>). The worker connects
+    /// Long-lived shared daemon on the canonical per-session endpoint
+    /// (<see cref="IpcTransportFactory.ResolveEndpoint(string)"/>; one daemon per
+    /// <c>(user, session)</c>). The worker connects
     /// to an existing healthy host if one answers, otherwise spawns one (single-
     /// flighted via <c>HostSpawnLock</c>) and leaves it running for subsequent
     /// launchers. The worker does NOT kill the host on dispose. This is the
@@ -69,7 +70,7 @@ public enum Lifetime
 /// no ownership classification, and no obsolete-host handshake — the endpoint
 /// is private to this launcher.</para>
 /// <para><see cref="Lifetime.Daemon"/>: discovery is socket-direct against the
-/// canonical per-user endpoint. If the connect fails, the host binary is spawned
+/// canonical per-session endpoint. If the connect fails, the host binary is spawned
 /// and connect is retried until the socket accepts or the timeout elapses. The
 /// host is left running for the next launcher. There is no lock file, no session
 /// id, and no fallback to an SDK host worker — failure to reach the host throws
@@ -116,7 +117,7 @@ public sealed class IpcWorker : IWorker
     /// <see cref="Lifetime.PerInvocation"/> (default) a fresh private host is
     /// spawned on a process-local endpoint and owned by the returned worker;
     /// with <see cref="Lifetime.Daemon"/> the worker connects to the canonical
-    /// per-user daemon, spawning one only if no healthy host answers. Throws
+    /// per-session daemon, spawning one only if no healthy host answers. Throws
     /// <see cref="HostUnavailableException"/> if the binary is missing or fails
     /// to come up within the startup timeout.
     /// </summary>
@@ -969,7 +970,7 @@ public sealed class IpcWorker : IWorker
         // REFACTOR-7: PerInvocation owns its private host — kill the tree so the
         // host never outlives this launcher, then unlink the process-local
         // socket artifact. Daemon retains nothing here: the shared host stays up
-        // for the next launcher and its endpoint is the canonical per-user one.
+        // for the next launcher and its endpoint is the canonical per-session one.
         if (_lifetime == Lifetime.PerInvocation && _ownedHost is { } host)
         {
             try { if (!host.HasExited) host.Kill(entireProcessTree: true); }

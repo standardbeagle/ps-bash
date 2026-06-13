@@ -3,9 +3,13 @@ using System.Text;
 namespace PsBash.Core.Runtime.Ipc;
 
 /// <summary>
-/// Resolves the canonical ps-bash-host endpoint. One socket per OS user —
-/// interactive REPL and one-shot <c>-c</c> invocations connect to the same
-/// listener. Session ids do not participate in endpoint naming; lifecycle
+/// Resolves the canonical ps-bash-host endpoint. One daemon per
+/// <c>(user, session)</c>: the session token is an explicit <see cref="SessionEnvVar"/>
+/// or, when unset, the launcher's parent process id (<see cref="ProcessAncestry"/>).
+/// So repeated <c>-c</c> invocations from one shell / agent reuse the same warm
+/// daemon, while independent shells / agents get distinct daemons — spreading load
+/// instead of contending on a single per-user host. When no session token is
+/// available the historical per-user endpoint (<c>host-{user}</c>) is used. Lifecycle
 /// metadata and ownership rules are specified in
 /// <c>docs/specs/host-lifecycle-contract.md</c>.
 /// </summary>
@@ -21,8 +25,24 @@ public static class IpcTransportFactory
     /// </summary>
     public const string EndpointEnvVar = "PSBASH_IPC_ENDPOINT";
 
+    /// <summary>
+    /// Explicit per-session grouping token. When set (and <see cref="EndpointEnvVar"/>
+    /// is not), the canonical endpoint becomes one daemon per <c>(user, session)</c>
+    /// instead of one per user — so independent shells / agents do not pile onto a
+    /// single shared host. Repeated invocations that share a <c>PSBASH_SESSION</c>
+    /// value reuse the same warm daemon. A multi-agent runner should set this to a
+    /// stable per-agent id. When unset, the session token is derived automatically
+    /// from the launcher's parent process id (see <see cref="ProcessAncestry"/>).
+    /// </summary>
+    public const string SessionEnvVar = "PSBASH_SESSION";
+
     // Test seam: override platform detection without P/Invoke or env hacks.
     internal static Func<bool>? UnixSocketSupportedOverride { get; set; }
+
+    // Test seam: override the automatic (parent-pid) session token without P/Invoke.
+    // Null = use the real ProcessAncestry-derived token. A provider returning null/blank
+    // selects the per-user canonical endpoint (the pre-per-session behavior).
+    internal static Func<string?>? SessionTokenOverride { get; set; }
 
 
     public static bool IsUnixSocketSupported()
@@ -34,9 +54,11 @@ public static class IpcTransportFactory
     /// <summary>
     /// Resolve the endpoint a host should bind / a client should connect to.
     /// Precedence: <paramref name="cliOverride"/> &gt; <c>PSBASH_IPC_ENDPOINT</c>
-    /// env var &gt; canonical per-user endpoint. The canonical endpoint is a
-    /// filesystem path on POSIX, named-pipe name on pre-1803 Windows. One per
-    /// user, no per-process suffix.
+    /// env var &gt; canonical per-session endpoint. The canonical endpoint is a
+    /// filesystem path on POSIX, named-pipe name on pre-1803 Windows. One daemon per
+    /// <c>(user, session)</c> (session = <c>PSBASH_SESSION</c> or parent pid; see
+    /// <see cref="ResolveSessionToken"/>), per-session not per-process so warm reuse
+    /// within a session is preserved.
     /// </summary>
     /// <param name="cliOverride">
     /// Optional explicit override in <c>scheme:endpoint</c> form. The host
@@ -53,20 +75,45 @@ public static class IpcTransportFactory
         if (TryParseEndpointSpec(envValue, EndpointEnvVar, out var env)) return env;
 
         var user = SanitizeUser(Environment.UserName);
+        // Per-session suffix: one daemon per (user, session) so independent shells /
+        // agents don't contend on a single shared host (the contention that
+        // serializes N callers behind one warm pool and starves it under load).
+        // Empty token → the historical per-user endpoint (back-compat).
+        var session = ResolveSessionToken();
+        var suffix = session.Length > 0 ? $"-s{session}" : "";
         if (IsUnixSocketSupported())
         {
             var sockDir = Path.Combine(Path.GetTempPath(), "ps-bash");
             Directory.CreateDirectory(sockDir);
-            return ("unix", Path.Combine(sockDir, $"host-{user}.sock"));
+            return ("unix", Path.Combine(sockDir, $"host-{user}{suffix}.sock"));
         }
-        return ("pipe", $"psbash-host-{user}");
+        return ("pipe", $"psbash-host-{user}{suffix}");
+    }
+
+    /// <summary>
+    /// The per-session grouping token folded into the canonical endpoint name.
+    /// Precedence: explicit <see cref="SessionEnvVar"/> &gt; the launcher's parent
+    /// process id (<see cref="ProcessAncestry"/>). Returns <c>""</c> when neither is
+    /// available, selecting the historical per-user endpoint. The token is sanitized
+    /// to the filesystem/pipe-safe charset (it lands in a socket path / pipe name).
+    /// </summary>
+    private static string ResolveSessionToken()
+    {
+        var explicitSession = Environment.GetEnvironmentVariable(SessionEnvVar);
+        if (!string.IsNullOrWhiteSpace(explicitSession))
+            return SanitizeUser(explicitSession);
+
+        var ppid = SessionTokenOverride is { } seam
+            ? seam()
+            : ProcessAncestry.GetParentProcessId()?.ToString(System.Globalization.CultureInfo.InvariantCulture);
+        return string.IsNullOrWhiteSpace(ppid) ? "" : SanitizeUser(ppid);
     }
 
     /// <summary>
     /// Resolve a process-local endpoint unique to a single launcher invocation.
     /// REFACTOR-7: a <see cref="IpcWorker"/> running with
     /// <c>Lifetime.PerInvocation</c> spawns a private host on this endpoint
-    /// instead of the shared per-user daemon socket
+    /// instead of the shared per-session daemon socket
     /// (<see cref="ResolveEndpoint(string)"/>). Because the endpoint name carries the
     /// launcher PID plus a random suffix, two concurrent launchers never collide
     /// and there is no obsolete-host / ownership classification to perform — the

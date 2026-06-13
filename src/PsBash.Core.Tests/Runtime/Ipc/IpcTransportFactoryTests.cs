@@ -13,18 +13,32 @@ namespace PsBash.Core.Tests.Runtime.Ipc;
 public class IpcTransportFactoryTests : IDisposable
 {
     private readonly string? _priorEnv;
+    private readonly string? _priorSession;
 
     public IpcTransportFactoryTests()
     {
         _priorEnv = Environment.GetEnvironmentVariable(IpcTransportFactory.EndpointEnvVar);
+        _priorSession = Environment.GetEnvironmentVariable(IpcTransportFactory.SessionEnvVar);
         Environment.SetEnvironmentVariable(IpcTransportFactory.EndpointEnvVar, null);
+        Environment.SetEnvironmentVariable(IpcTransportFactory.SessionEnvVar, null);
+        // Pin the automatic session token off by default so the canonical-fallback
+        // tests are deterministic regardless of the test runner's real parent pid;
+        // per-session tests set this seam (or PSBASH_SESSION) explicitly.
+        IpcTransportFactory.SessionTokenOverride = () => null;
     }
 
     public void Dispose()
-        => Environment.SetEnvironmentVariable(IpcTransportFactory.EndpointEnvVar, _priorEnv);
+    {
+        Environment.SetEnvironmentVariable(IpcTransportFactory.EndpointEnvVar, _priorEnv);
+        Environment.SetEnvironmentVariable(IpcTransportFactory.SessionEnvVar, _priorSession);
+        IpcTransportFactory.SessionTokenOverride = null;
+    }
 
     private static void SetEnv(string? value)
         => Environment.SetEnvironmentVariable(IpcTransportFactory.EndpointEnvVar, value);
+
+    private static void SetSession(string? value)
+        => Environment.SetEnvironmentVariable(IpcTransportFactory.SessionEnvVar, value);
 
     [Fact]
     public void ResolveEndpoint_CliOverrideUnix_ReturnsParsedPair()
@@ -66,6 +80,71 @@ public class IpcTransportFactoryTests : IDisposable
         var (scheme, endpoint) = IpcTransportFactory.ResolveEndpoint();
         Assert.True(scheme is "unix" or "pipe");
         Assert.False(string.IsNullOrEmpty(endpoint));
+    }
+
+    [Fact]
+    public void ResolveEndpoint_NoSessionToken_OmitsSessionSuffix()
+    {
+        // Seam returns null and PSBASH_SESSION unset → historical per-user endpoint,
+        // no "-s" session segment.
+        var (_, endpoint) = IpcTransportFactory.ResolveEndpoint();
+        Assert.DoesNotContain("-s", System.IO.Path.GetFileName(endpoint));
+    }
+
+    [Fact]
+    public void ResolveEndpoint_ExplicitSession_FoldedIntoEndpoint()
+    {
+        SetSession("agent42");
+        var (_, endpoint) = IpcTransportFactory.ResolveEndpoint();
+        Assert.Contains("-sagent42", endpoint);
+    }
+
+    [Fact]
+    public void ResolveEndpoint_DistinctSessions_ProduceDistinctEndpoints()
+    {
+        SetSession("alpha");
+        var (_, a) = IpcTransportFactory.ResolveEndpoint();
+        SetSession("beta");
+        var (_, b) = IpcTransportFactory.ResolveEndpoint();
+        Assert.NotEqual(a, b);
+    }
+
+    [Fact]
+    public void ResolveEndpoint_SameSession_ProducesSameEndpoint()
+    {
+        SetSession("shared");
+        var (_, a) = IpcTransportFactory.ResolveEndpoint();
+        var (_, b) = IpcTransportFactory.ResolveEndpoint();
+        Assert.Equal(a, b);
+    }
+
+    [Fact]
+    public void ResolveEndpoint_ExplicitSessionBeatsAutomaticToken()
+    {
+        // Even when the automatic (parent-pid) token is available, an explicit
+        // PSBASH_SESSION takes precedence.
+        IpcTransportFactory.SessionTokenOverride = () => "9999";
+        SetSession("explicit");
+        var (_, endpoint) = IpcTransportFactory.ResolveEndpoint();
+        Assert.Contains("-sexplicit", endpoint);
+        Assert.DoesNotContain("9999", endpoint);
+    }
+
+    [Fact]
+    public void ResolveEndpoint_AutomaticToken_UsedWhenNoExplicitSession()
+    {
+        IpcTransportFactory.SessionTokenOverride = () => "12345";
+        var (_, endpoint) = IpcTransportFactory.ResolveEndpoint();
+        Assert.Contains("-s12345", endpoint);
+    }
+
+    [Fact]
+    public void ResolveEndpoint_EndpointOverrideBeatsSession()
+    {
+        SetSession("ignored");
+        var (scheme, endpoint) = IpcTransportFactory.ResolveEndpoint("pipe:custom");
+        Assert.Equal("pipe", scheme);
+        Assert.Equal("custom", endpoint);
     }
 
     [Theory]

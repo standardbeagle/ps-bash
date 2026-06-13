@@ -265,8 +265,8 @@ internal static class HostCommands
             ?? throw new HostUnavailableException(
                 "ps-bash-host binary not found. Set PSBASH_HOST=<path> or install alongside ps-bash.");
 
-        // `ps-bash host restart` explicitly manages the shared per-user daemon —
-        // start it on the canonical endpoint and leave it running for subsequent
+        // `ps-bash host restart` explicitly manages this session's shared daemon —
+        // start it on the canonical (per-session) endpoint and leave it running for subsequent
         // launchers. REFACTOR-7: must NOT use the PerInvocation default, which
         // would spawn a private host on a process-local socket and kill it on
         // dispose, leaving "restart" with nothing running.

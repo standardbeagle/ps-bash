@@ -13,7 +13,7 @@ public static class WorkerFactory
     /// Spawn a private <c>ps-bash-host</c> and return a worker that proxies
     /// commands to it. REFACTOR-7: uses <see cref="Lifetime.PerInvocation"/> —
     /// the worker owns the host process and kills it on dispose. Callers that
-    /// need the shared per-user daemon must call
+    /// need the shared per-session daemon must call
     /// <see cref="IpcWorker.StartAsync"/> with <see cref="Lifetime.Daemon"/>
     /// directly.
     /// </summary>
