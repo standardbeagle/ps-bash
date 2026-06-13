@@ -668,9 +668,12 @@ EnsureConsoleInputRestored();
                 {
                     // Record the visit in the frecency DB only when the directory
                     // actually changed (sitting at one prompt shouldn't inflate its
-                    // rank). Fire-and-forget; AddAsync is best-effort and swallows.
-                    if (!string.Equals(path, _lastDir, StringComparison.OrdinalIgnoreCase))
-                        _ = _frecencyStore?.AddAsync(path);
+                    // rank). Awaited so the write commits before the next prompt —
+                    // a `z` immediately after a `cd` must see the visit. Only costs
+                    // on an actual directory change, and AddAsync swallows errors.
+                    if (_frecencyStore is not null
+                        && !string.Equals(path, _lastDir, StringComparison.OrdinalIgnoreCase))
+                        await _frecencyStore.AddAsync(path);
                     _lastDir = path;
                 }
             }
