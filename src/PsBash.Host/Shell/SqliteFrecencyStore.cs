@@ -103,8 +103,10 @@ public sealed class SqliteFrecencyStore : IFrecencyStore, IDisposable
                     MaybeAge();
                 }
             }
-            catch (SqliteException ex)
+            catch (Exception ex)
             {
+                // Best-effort + fire-and-forget from the shell: swallow everything
+                // (not just SqliteException) so a faulted task can't go unobserved.
                 Console.Error.WriteLine($"ps-bash: frecency write failed: {ex.Message}");
             }
         });

@@ -24,6 +24,7 @@ public static class InteractiveShell
     private static string _lastDir = Environment.CurrentDirectory;
     private static LineEditor? _lineEditor;
     private static IHistoryStore? _historyStore;
+    private static IFrecencyStore? _frecencyStore;
     private static string _sessionId = Guid.NewGuid().ToString();
     private static string? _lastCommand;
 
@@ -55,6 +56,12 @@ public static class InteractiveShell
 
         var dbPath = Path.Combine(psbashDir, "history.db");
         _historyStore = new SqliteHistoryStore(dbPath);
+
+        // zoxide-style directory frecency DB, alongside history. Powers the `z`/`zi`
+        // jump commands and cd-aware completion / ghost text. Seed the startup dir
+        // so it is immediately jumpable; subsequent visits are recorded by SyncWorkerCwdAsync.
+        _frecencyStore = new SqliteFrecencyStore(Path.Combine(psbashDir, "frecency.db"));
+        if (Directory.Exists(_lastDir)) _ = _frecencyStore.AddAsync(_lastDir);
 
         // Startup type-ahead: the slow runspace init runs on the launcher's background task; we build
         // the line editor and draw the prompt NOW so the user can type while it warms up. Completion
@@ -114,6 +121,7 @@ public static class InteractiveShell
                 {
                     Console.Error.WriteLine("[ps-bash] worker exited unexpectedly.");
                     if (_historyStore is IDisposable d0) d0.Dispose();
+                    (_frecencyStore as IDisposable)?.Dispose();
                     return 1;
                 }
                 cts.Dispose();
@@ -141,6 +149,7 @@ public static class InteractiveShell
                     Console.WriteLine();
                     if (_historyStore is IDisposable disposable)
                         disposable.Dispose();
+                    (_frecencyStore as IDisposable)?.Dispose();
                     return 0;
                 }
 
@@ -170,6 +179,7 @@ public static class InteractiveShell
                 {
                     if (_historyStore is IDisposable disposable)
                         disposable.Dispose();
+                    (_frecencyStore as IDisposable)?.Dispose();
                     return exitCode;
                 }
 
@@ -195,6 +205,20 @@ public static class InteractiveShell
                     continue;
                 }
 
+                // zoxide `z` / `zi`: resolve the highest-frecency matching directory
+                // from the prompt side (where the frecency store lives), then rewrite
+                // to `cd <path>` so the jump reuses all of cd's behavior (OLDPWD,
+                // chpwd hooks, cwd tracking). A no-match / cancelled pick is fully
+                // handled here. Intercepted like alias/complete — there is no `z`
+                // cmdlet to transpile to in interactive mode.
+                if (TryParseZCommand(trimmed, out var zInteractive, out var zKeywords))
+                {
+                    var zRewrite = await ResolveZTargetAsync(zInteractive, zKeywords);
+                    if (zRewrite is null)
+                        continue;   // handled (home/no-match/cancel) — nothing to execute
+                    trimmed = zRewrite;   // "cd '<path>'" — falls through to transpile + execute
+                }
+
                 // Everything below executes in the runspace, so wait for it to be ready (+ rc
                 // sourced). This is where any residual startup latency is actually paid — but only on
                 // the FIRST command, and only if the user submits before warmup finished. exit / empty
@@ -210,6 +234,7 @@ public static class InteractiveShell
                     // instead of looping on the same failure for every prompt.
                     Console.Error.WriteLine($"[ps-bash] runspace failed to start: {ex.Message}");
                     if (_historyStore is IDisposable d) d.Dispose();
+                    (_frecencyStore as IDisposable)?.Dispose();
                     return 1;
                 }
 
@@ -637,7 +662,14 @@ EnsureConsoleInputRestored();
             {
                 var path = pwd.Trim().Replace('/', '\\');
                 if (Directory.Exists(path))
+                {
+                    // Record the visit in the frecency DB only when the directory
+                    // actually changed (sitting at one prompt shouldn't inflate its
+                    // rank). Fire-and-forget; AddAsync is best-effort and swallows.
+                    if (!string.Equals(path, _lastDir, StringComparison.OrdinalIgnoreCase))
+                        _ = _frecencyStore?.AddAsync(path);
                     _lastDir = path;
+                }
             }
         }
         catch (Exception) { /* routine: cwd may have been removed underneath us */ }
@@ -690,6 +722,112 @@ EnsureConsoleInputRestored();
         }
         catch (Exception) { /* routine: cd target inaccessible; shell continues */ }
     }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // zoxide `z` / `zi` (prompt-side, like alias/complete)
+    // ─────────────────────────────────────────────────────────────────────────
+
+    /// <summary>
+    /// Recognize a <c>z</c> / <c>zi</c> jump command and split its keyword args.
+    /// Returns false for any other line (including commands merely starting with 'z').
+    /// </summary>
+    internal static bool TryParseZCommand(string line, out bool interactive, out string[] keywords)
+    {
+        interactive = false;
+        keywords = Array.Empty<string>();
+        string rest;
+        if (line == "z") rest = "";
+        else if (line == "zi") { interactive = true; rest = ""; }
+        else if (line.StartsWith("z ", StringComparison.Ordinal)) rest = line[2..];
+        else if (line.StartsWith("zi ", StringComparison.Ordinal)) { interactive = true; rest = line[3..]; }
+        else return false;
+
+        keywords = rest.Split(' ', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        return true;
+    }
+
+    /// <summary>
+    /// Resolve a z/zi jump to a <c>cd '&lt;path&gt;'</c> rewrite, or null when the
+    /// command is fully handled here (home jump emits a rewrite; no-match / invalid
+    /// pick prints a message and returns null).
+    /// </summary>
+    private static async Task<string?> ResolveZTargetAsync(bool interactive, string[] keywords)
+    {
+        // No args: `z` → home (zoxide convention); `zi` → pick from all tracked dirs.
+        if (keywords.Length == 0)
+            return interactive ? await PickFrecencyAsync(keywords) : "cd ~";
+
+        // `z <existing-path>`: when the single arg looks like a path AND resolves to
+        // a real directory, cd straight there (zoxide passthrough) — no frecency query.
+        if (!interactive && keywords.Length == 1 && LooksLikePath(keywords[0]))
+        {
+            var resolved = ResolveAgainstCwd(keywords[0]);
+            if (resolved != null && Directory.Exists(resolved))
+                return "cd " + SingleQuoteBash(keywords[0]);
+        }
+
+        return interactive ? await PickFrecencyAsync(keywords) : await JumpFrecencyAsync(keywords);
+    }
+
+    private static async Task<string?> JumpFrecencyAsync(string[] keywords)
+    {
+        var matches = _frecencyStore is null
+            ? (IReadOnlyList<FrecencyMatch>)Array.Empty<FrecencyMatch>()
+            : await _frecencyStore.QueryAsync(keywords);
+        if (matches.Count == 0)
+        {
+            Console.Error.WriteLine($"ps-bash: z: no match for '{string.Join(' ', keywords)}'");
+            return null;
+        }
+        return "cd " + SingleQuoteBash(matches[0].Path);
+    }
+
+    private static async Task<string?> PickFrecencyAsync(string[] keywords)
+    {
+        var matches = _frecencyStore is null
+            ? (IReadOnlyList<FrecencyMatch>)Array.Empty<FrecencyMatch>()
+            : await _frecencyStore.QueryAsync(keywords, limit: 20);
+        if (matches.Count == 0)
+        {
+            Console.Error.WriteLine(keywords.Length == 0
+                ? "ps-bash: zi: no directories tracked yet"
+                : $"ps-bash: zi: no match for '{string.Join(' ', keywords)}'");
+            return null;
+        }
+
+        for (int idx = 0; idx < matches.Count; idx++)
+            Console.WriteLine($"{idx + 1,3}  {matches[idx].Path}");
+        Console.Write("select> ");
+        var sel = Console.ReadLine();
+        if (string.IsNullOrWhiteSpace(sel)) return null;   // cancelled
+        if (int.TryParse(sel.Trim(), out var n) && n >= 1 && n <= matches.Count)
+            return "cd " + SingleQuoteBash(matches[n - 1].Path);
+        Console.Error.WriteLine("ps-bash: zi: invalid selection");
+        return null;
+    }
+
+    /// <summary>True when a z arg should be treated as a literal path, not a keyword.</summary>
+    internal static bool LooksLikePath(string token)
+        => token.Length > 0
+           && (token.Contains('/') || token.Contains('\\') || token[0] == '~'
+               || token == "." || token == ".."
+               || (token.Length >= 2 && token[1] == ':'));   // drive-letter form C:
+
+    private static string? ResolveAgainstCwd(string token)
+    {
+        try
+        {
+            var t = token.StartsWith('~') ? _homeDir + token[1..] : token;
+            if (!Path.IsPathRooted(t))
+                t = Path.GetFullPath(Path.Combine(_lastDir, t));
+            return t;
+        }
+        catch { return null; }
+    }
+
+    /// <summary>Wrap a path as a bash single-quoted word (safe for the transpiler).</summary>
+    internal static string SingleQuoteBash(string s)
+        => "'" + s.Replace("'", "'\\''") + "'";
 
     private static async Task<string> BuildPromptAsync(IWorker? worker)
     {
