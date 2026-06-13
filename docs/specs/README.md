@@ -17,6 +17,7 @@ Nav starts at /CODE_MAP.md. Keep this index complete — a guard test fails on a
 - [emitter-strategy.md](emitter-strategy.md) — Emitter Strategy Specification
 - [error-handling.md](error-handling.md) — Error Handling Specification
 - [flagspec-extraction.md](flagspec-extraction.md) — FlagSpecs Extraction Plan
+- [frecency-jump.md](frecency-jump.md) — Frecency Directory Jump (zoxide-style `z` / `zi`)
 - [history-store-interface.md](history-store-interface.md) — IHistoryStore Interface Specification
 - [host-lifecycle-contract.md](host-lifecycle-contract.md) — Host Lifecycle Metadata and Ownership Contract
 - [interactive-completion.md](interactive-completion.md) — Interactive Completion Specification

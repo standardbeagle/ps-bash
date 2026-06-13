@@ -36,6 +36,7 @@ Tests mirror projects: `*.Tests` + `PsBash.Differential.Tests` (bash-oracle), `P
 - **Bash flag specs (completion)** → ONE source: `PsBash.Module/BashFlagSpecs.json` (host embeds it; psm1 loads it).
 - **Interactive completion** → `Shell/CompletionEngine.cs` (orchestrator) → `TabCompleter` (static base) + runspace queries. Spec: `docs/specs/interactive-completion.md`.
 - **AI command assist (Ctrl-^)** → `Shell/CommandAssistProvider.cs` + `CommandAssistReview.cs`; review loop in `InteractiveShell`. Spec: `docs/specs/command-assist.md`.
+- **Frecency dir jump (`z`/`zi`, zoxide-style)** → `Shell/SqliteFrecencyStore.cs` (scoring/aging/prune) + `IFrecencyStore`; `InteractiveShell` records cd visits in `SyncWorkerCwdAsync` and intercepts `z`/`zi` prompt-side → `cd` rewrite; Tab completion in `CompletionEngine`, ghost text in `Shell/FrecencySuggester.cs`. Interactive-only. Spec: `docs/specs/frecency-jump.md`.
 - **Compact output (`--compact-output`)** → `Runtime/OutputCompactor.cs` + `IpcWorker` buffering. Spec: `docs/specs/compact-output.md`.
 - **Alias expansion** → `Shell/AliasExpander.cs`.
 - **History expansion** (`!!`, `!$`, `!n`, `!str`, `^old^new`) → `Shell/HistoryExpander.cs` (pure; REPL runs it pre-alias on the in-session list).
