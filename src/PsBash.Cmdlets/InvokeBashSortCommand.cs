@@ -77,6 +77,17 @@ public sealed class InvokeBashSortCommand : PSCmdlet
 
     private readonly List<PSObject> _pipeline = new();
 
+    // Comparator/key-extraction patterns are invariant but were evaluated per
+    // comparison (O(n log n)) or per key. Hoisted to compiled static fields so
+    // a sort never relocks the shared Regex cache or risks cache eviction.
+    private static readonly Regex s_dictStrip = new(@"[^a-zA-Z0-9\s]", RegexOptions.Compiled);
+    private static readonly Regex s_leadingBlank = new(@"^\s+", RegexOptions.Compiled);
+    private static readonly Regex s_numericPrefix = new(@"^[+-]?\d+(?:\.\d+)?", RegexOptions.Compiled);
+    private static readonly Regex s_humanNumeric = new(@"^([0-9]*\.?[0-9]+)\s*([KMGTP])$", RegexOptions.Compiled);
+    private static readonly Regex s_versionSplit = new(@"[.\-]", RegexOptions.Compiled);
+    private static readonly Regex s_keySpecPos = new(@"^(\d+)(?:\.(\d+))?([nrRbB]*)?$", RegexOptions.Compiled);
+    private static readonly Regex s_whitespaceSplit = new(@"\s+", RegexOptions.Compiled);
+
     /// <summary>
     /// Valid GNU <c>sort</c> options ps-bash does not implement (this cmdlet
     /// parses only short flags). Hitting one yields a specific "recognized but
@@ -338,47 +349,93 @@ public sealed class InvokeBashSortCommand : PSCmdlet
         bool gDict = dictOrder;
         string? gDelim = delimiter;
 
-        int Compare(object a, object b)
+        // Decorate-sort-undecorate: a comparison sort calls the comparator
+        // O(n log n) times, but every sort key is a pure function of its item.
+        // Extracting keys per comparison meant ~2·n·log n key derivations (each
+        // doing GetBashText + regex splits); precomputing each item's key ONCE
+        // into parallel arrays (indexed by original position) drops that to n.
+        // The arrays carry exactly the values the comparator used to recompute,
+        // so results are byte-identical — this is memoization, not new logic.
+        int n = items.Count;
+        bool hasKeySpecs = keySpecs.Count > 0;
+        var dRaw = new string[n];                                   // GetFullText (version sort / unique)
+        var dGlobalText = hasKeySpecs ? null : new string[n];       // global cmp text (post dict-strip)
+        var dGlobalNum = (!hasKeySpecs && (gHuman || gNumeric)) ? new double[n] : null;
+        var dGlobalMonth = (!hasKeySpecs && gMonth) ? new int[n] : null;
+        // Per-key-spec decorated values: text (post dict-strip) + numeric.
+        var dKeyText = hasKeySpecs ? new string[n][] : null;
+        var dKeyNum = hasKeySpecs ? new double[n][] : null;
+        var dKeyMonth = hasKeySpecs ? new int[n][] : null;
+        var dVerParts = versionSort ? new string[n][] : null;
+        for (int di = 0; di < n; di++)
         {
-            if (keySpecs.Count > 0)
+            object it = items[di];
+            string raw = GetFullText(it, gBlank);
+            dRaw[di] = raw;
+            if (versionSort) dVerParts![di] = s_versionSplit.Split(raw);
+            if (hasKeySpecs)
             {
-                foreach (var spec in keySpecs)
+                int ks = keySpecs.Count;
+                var kt = new string[ks];
+                var kn = new double[ks];
+                var km = new int[ks];
+                for (int s = 0; s < ks; s++)
                 {
-                    string aKey = ExtractKeyText(a, spec, gDelim, gBlank);
-                    string bKey = ExtractKeyText(b, spec, gDelim, gBlank);
-                    if (gDict)
-                    {
-                        aKey = Regex.Replace(aKey, @"[^a-zA-Z0-9\s]", "");
-                        bKey = Regex.Replace(bKey, @"[^a-zA-Z0-9\s]", "");
-                    }
-                    int cmp = 0;
+                    var spec = keySpecs[s];
+                    string key = ExtractKeyText(it, spec, gDelim, gBlank);
+                    if (gDict) key = s_dictStrip.Replace(key, "");
+                    kt[s] = key;
+                    if (gHuman) kn[s] = ConvertFromHumanNumeric(key);
+                    else if (spec.Numeric || gNumeric) kn[s] = ParseNumericPrefix(key);
+                    else if (gMonth) km[s] = ConvertFromMonthName(key);
+                }
+                dKeyText![di] = kt;
+                dKeyNum![di] = kn;
+                dKeyMonth![di] = km;
+            }
+            else
+            {
+                string text = gDict ? s_dictStrip.Replace(raw, "") : raw;
+                dGlobalText![di] = text;
+                if (gHuman) dGlobalNum![di] = ExtractSizeBytes(it) ?? ConvertFromHumanNumeric(text);
+                else if (gNumeric)
+                {
+                    double.TryParse(text, NumberStyles.Float, CultureInfo.InvariantCulture, out double v);
+                    dGlobalNum![di] = v;
+                }
+                else if (gMonth) dGlobalMonth![di] = ConvertFromMonthName(text);
+            }
+        }
+
+        int Compare(int ai, int bi)
+        {
+            if (hasKeySpecs)
+            {
+                for (int s = 0; s < keySpecs.Count; s++)
+                {
+                    var spec = keySpecs[s];
+                    int cmp;
                     if (gHuman)
                     {
-                        double aH = ConvertFromHumanNumeric(aKey);
-                        double bH = ConvertFromHumanNumeric(bKey);
+                        double aH = dKeyNum![ai][s], bH = dKeyNum![bi][s];
                         cmp = aH < bH ? -1 : (aH > bH ? 1 : 0);
                     }
                     else if (spec.Numeric || gNumeric)
                     {
-                        double aN = ParseNumericPrefix(aKey);
-                        double bN = ParseNumericPrefix(bKey);
+                        double aN = dKeyNum![ai][s], bN = dKeyNum![bi][s];
                         cmp = aN < bN ? -1 : (aN > bN ? 1 : 0);
                     }
                     else if (gMonth)
                     {
-                        int aM = ConvertFromMonthName(aKey);
-                        int bM = ConvertFromMonthName(bKey);
-                        cmp = aM - bM;
-                        if (cmp < 0) cmp = -1;
-                        else if (cmp > 0) cmp = 1;
+                        cmp = Math.Sign(dKeyMonth![ai][s] - dKeyMonth![bi][s]);
                     }
                     else if (gFold)
                     {
-                        cmp = string.Compare(aKey, bKey, StringComparison.OrdinalIgnoreCase);
+                        cmp = string.Compare(dKeyText![ai][s], dKeyText![bi][s], StringComparison.OrdinalIgnoreCase);
                     }
                     else
                     {
-                        cmp = string.CompareOrdinal(aKey, bKey);
+                        cmp = string.CompareOrdinal(dKeyText![ai][s], dKeyText![bi][s]);
                     }
                     if (spec.Reverse || gReverse) cmp = -cmp;
                     if (cmp != 0) return Math.Sign(cmp);
@@ -386,46 +443,29 @@ public sealed class InvokeBashSortCommand : PSCmdlet
                 return 0;
             }
 
-            string aText = GetFullText(a, gBlank);
-            string bText = GetFullText(b, gBlank);
-            if (gDict)
-            {
-                aText = Regex.Replace(aText, @"[^a-zA-Z0-9\s]", "");
-                bText = Regex.Replace(bText, @"[^a-zA-Z0-9\s]", "");
-            }
-            int cmp2 = 0;
+            int cmp2;
             if (gHuman)
             {
-                // Prefer the typed SizeBytes property when present (LsEntry
-                // objects from ls -lh): the full ls line doesn't parse as a
-                // bare human-readable number, so falling back to text-only
-                // comparison would mis-sort the pipeline by leading char.
-                double aH = ExtractSizeBytes(a) ?? ConvertFromHumanNumeric(aText);
-                double bH = ExtractSizeBytes(b) ?? ConvertFromHumanNumeric(bText);
+                // SizeBytes-aware value precomputed per item (LsEntry from ls -lh).
+                double aH = dGlobalNum![ai], bH = dGlobalNum![bi];
                 cmp2 = aH < bH ? -1 : (aH > bH ? 1 : 0);
             }
             else if (gNumeric)
             {
-                double aN = 0; double bN = 0;
-                double.TryParse(aText, NumberStyles.Float, CultureInfo.InvariantCulture, out aN);
-                double.TryParse(bText, NumberStyles.Float, CultureInfo.InvariantCulture, out bN);
+                double aN = dGlobalNum![ai], bN = dGlobalNum![bi];
                 cmp2 = aN < bN ? -1 : (aN > bN ? 1 : 0);
             }
             else if (gMonth)
             {
-                int aM = ConvertFromMonthName(aText);
-                int bM = ConvertFromMonthName(bText);
-                cmp2 = aM - bM;
-                if (cmp2 < 0) cmp2 = -1;
-                else if (cmp2 > 0) cmp2 = 1;
+                cmp2 = Math.Sign(dGlobalMonth![ai] - dGlobalMonth![bi]);
             }
             else if (gFold)
             {
-                cmp2 = string.Compare(aText, bText, StringComparison.OrdinalIgnoreCase);
+                cmp2 = string.Compare(dGlobalText![ai], dGlobalText![bi], StringComparison.OrdinalIgnoreCase);
             }
             else
             {
-                cmp2 = string.CompareOrdinal(aText, bText);
+                cmp2 = string.CompareOrdinal(dGlobalText![ai], dGlobalText![bi]);
             }
             if (gReverse) cmp2 = -cmp2;
             return Math.Sign(cmp2);
@@ -436,7 +476,7 @@ public sealed class InvokeBashSortCommand : PSCmdlet
         {
             for (int idx = 1; idx < items.Count; idx++)
             {
-                if (Compare(items[idx - 1], items[idx]) > 0)
+                if (Compare(idx - 1, idx) > 0)
                 {
                     FileSystemHelpers.SetLastExitCode(this, 1);
                     return;
@@ -458,9 +498,7 @@ public sealed class InvokeBashSortCommand : PSCmdlet
         {
             indexed.Sort((a, b) =>
             {
-                string aText = GetFullText(a.Item, gBlank);
-                string bText = GetFullText(b.Item, gBlank);
-                int c = CompareVersion(aText, bText);
+                int c = CompareVersionParts(dVerParts![a.Index], dVerParts![b.Index]);
                 if (gReverse) c = -c;
                 if (c != 0) return c;
                 return a.Index - b.Index;
@@ -470,7 +508,7 @@ public sealed class InvokeBashSortCommand : PSCmdlet
         {
             indexed.Sort((a, b) =>
             {
-                int c = Compare(a.Item, b.Item);
+                int c = Compare(a.Index, b.Index);
                 if (c != 0) return c;
                 return a.Index - b.Index;
             });
@@ -484,7 +522,7 @@ public sealed class InvokeBashSortCommand : PSCmdlet
             var deduped = new List<(int Index, object Item)>();
             foreach (var entry in indexed)
             {
-                string t = GetFullText(entry.Item, gBlank);
+                string t = dRaw[entry.Index];
                 string key = foldCase ? t.ToLowerInvariant() : t;
                 if (seen.Add(key)) deduped.Add(entry);
             }
@@ -546,7 +584,7 @@ public sealed class InvokeBashSortCommand : PSCmdlet
     {
         string text = BashRuntime.GetBashText(item);
         text = text.TrimEnd('\n');
-        if (blankIgnore) text = Regex.Replace(text, @"^\s+", "");
+        if (blankIgnore) text = s_leadingBlank.Replace(text, "");
         return text;
     }
 
@@ -554,8 +592,12 @@ public sealed class InvokeBashSortCommand : PSCmdlet
     {
         string text = BashRuntime.GetBashText(item);
         text = text.TrimEnd('\n');
-        string sep = delimiter != null ? Regex.Escape(delimiter) : @"\s+";
-        var parts = Regex.Split(text, sep);
+        // Default whitespace split is the hot path — use the compiled field.
+        // The -t delimiter branch stays byte-identical to the oracle (escaped
+        // literal split), which is the less common case.
+        var parts = delimiter != null
+            ? Regex.Split(text, Regex.Escape(delimiter))
+            : s_whitespaceSplit.Split(text);
         int startIdx = spec.StartField - 1;
         if (startIdx < 0) startIdx = 0;
         if (startIdx >= parts.Length) return "";
@@ -588,7 +630,7 @@ public sealed class InvokeBashSortCommand : PSCmdlet
 
     private static double ParseNumericPrefix(string s)
     {
-        var m = Regex.Match(s, @"^[+-]?\d+(?:\.\d+)?");
+        var m = s_numericPrefix.Match(s);
         string numStr = m.Success ? m.Value : "0";
         double.TryParse(numStr, NumberStyles.Float, CultureInfo.InvariantCulture, out var v);
         return v;
@@ -620,7 +662,7 @@ public sealed class InvokeBashSortCommand : PSCmdlet
         ParseKeySpecPos(string s)
     {
         // Oracle regex: ^(\d+)(?:\.(\d+))?([nrRbB]*)?$
-        var m = Regex.Match(s, @"^(\d+)(?:\.(\d+))?([nrRbB]*)?$");
+        var m = s_keySpecPos.Match(s);
         int field = 0, charOffset = 0;
         bool numeric = false, reverse = false, blankIgnore = false;
         if (m.Success)
@@ -672,7 +714,7 @@ public sealed class InvokeBashSortCommand : PSCmdlet
     {
         string trimmed = value.Trim();
         if (trimmed.Length == 0) return 0.0;
-        var m = Regex.Match(trimmed, @"^([0-9]*\.?[0-9]+)\s*([KMGTP])$");
+        var m = s_humanNumeric.Match(trimmed);
         if (m.Success)
         {
             double num = double.Parse(m.Groups[1].Value, NumberStyles.Float, CultureInfo.InvariantCulture);
@@ -704,10 +746,8 @@ public sealed class InvokeBashSortCommand : PSCmdlet
         };
     }
 
-    private static int CompareVersion(string left, string right)
+    private static int CompareVersionParts(string[] leftParts, string[] rightParts)
     {
-        var leftParts = Regex.Split(left, @"[.\-]");
-        var rightParts = Regex.Split(right, @"[.\-]");
         int max = Math.Max(leftParts.Length, rightParts.Length);
         for (int i = 0; i < max; i++)
         {

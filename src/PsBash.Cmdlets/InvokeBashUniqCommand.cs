@@ -1,4 +1,5 @@
 using System.Management.Automation;
+using System.Text.RegularExpressions;
 
 namespace PsBash.Cmdlets;
 
@@ -449,10 +450,17 @@ public sealed class InvokeBashUniqCommand : PSCmdlet
         return key;
     }
 
+    private static readonly Regex s_wsRun = new(@"\s+", RegexOptions.Compiled);
+
     private static int CountWhitespaceFields(string s)
     {
-        // Same shape as PowerShell's `$s -split '\s+'` (unbounded).
-        return System.Text.RegularExpressions.Regex.Split(s, @"\s+").Length;
+        // Same shape as PowerShell's `$s -split '\s+'` (unbounded). `Regex.Split`
+        // yields (whitespace-run count + 1) pieces because `\s+` never matches
+        // empty; count the runs allocation-free with the same `\s+` semantics
+        // instead of materializing — and discarding — the split array per line.
+        int runs = 0;
+        foreach (var _ in s_wsRun.EnumerateMatches(s)) runs++;
+        return runs + 1;
     }
 
     private static string ConsumeSkipFields(string line, int skipFields)

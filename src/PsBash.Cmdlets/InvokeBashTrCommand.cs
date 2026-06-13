@@ -80,6 +80,15 @@ public sealed class InvokeBashTrCommand : PSCmdlet
     private List<string> _operands = new();
     private bool _suppress;
 
+    // Translation tables built ONCE in ParseOnce (the SET expansion, complement
+    // construction, and per-char membership/mapping are constant across every
+    // input line — building them per line was O(lines × set) churn). After
+    // BuildTables runs, each line is transformed with O(1) lookups.
+    private HashSet<char>? _membershipSet;   // delete / squeeze-only: chars in SET1
+    private Dictionary<char, char>? _translateMap; // translate: SET1 char -> SET2 char
+    private HashSet<char>? _translateDrop;   // translate: SET1 chars dropped (SET2 empty)
+    private HashSet<char>? _squeezeSet2;     // squeeze-after-translate: chars in SET2
+
     private void ParseOnce()
     {
         if (_parsed) return;
@@ -134,6 +143,80 @@ public sealed class InvokeBashTrCommand : PSCmdlet
         {
             _operands[oi] = BashRuntime.ExpandEscapeSequences(_operands[oi]);
         }
+
+        BuildTables();
+    }
+
+    /// <summary>
+    /// Precomputes the membership / translation tables once. The expanded SETs,
+    /// the complement construction, and the SET1→SET2 mapping are all invariant
+    /// across input lines, so doing this once turns each line into O(1)-per-char
+    /// lookups instead of re-expanding the SETs and scanning them with IndexOf.
+    /// Mirrors the per-line logic in <see cref="TransformLine"/> exactly.
+    /// </summary>
+    private void BuildTables()
+    {
+        // Delete mode and squeeze-only mode test membership against SET1 (the
+        // complement flag flips the test at use-site, not the set contents).
+        if (_deleteMode)
+        {
+            if (_operands.Count == 0) return;
+            _membershipSet = new HashSet<char>(ExpandClass(_operands[0]));
+            return;
+        }
+        if (_squeezeMode && _operands.Count == 1)
+        {
+            _membershipSet = new HashSet<char>(ExpandClass(_operands[0]));
+            return;
+        }
+
+        if (_operands.Count >= 2)
+        {
+            string set1 = ExpandClass(_operands[0]);
+            string set2 = ExpandClass(_operands[1]);
+
+            if (_truncateMode && set2.Length > set1.Length)
+            {
+                set2 = set2.Substring(0, set1.Length);
+            }
+
+            if (_complementMode)
+            {
+                // SET1 becomes all 256 chars MINUS the original SET1.
+                var compSb = new StringBuilder();
+                var set1Hash = new HashSet<char>(set1);
+                for (int c = 0; c <= 255; c++)
+                {
+                    char ch = (char)c;
+                    if (!set1Hash.Contains(ch)) compSb.Append(ch);
+                }
+                set1 = compSb.ToString();
+                // Extend SET2 by repeating last char to match new SET1 length.
+                if (set2.Length > 0)
+                {
+                    var ext = new StringBuilder(set2);
+                    char last = set2[set2.Length - 1];
+                    while (ext.Length < set1.Length) ext.Append(last);
+                    set2 = ext.ToString();
+                }
+            }
+
+            // Build the char->char map honoring first-occurrence (IndexOf
+            // returns the first index, so the first SET1 occurrence wins).
+            _translateMap = new Dictionary<char, char>();
+            _translateDrop = new HashSet<char>();
+            for (int idx = 0; idx < set1.Length; idx++)
+            {
+                char from = set1[idx];
+                if (_translateMap.ContainsKey(from) || _translateDrop.Contains(from))
+                    continue; // first occurrence already recorded
+                if (idx < set2.Length) _translateMap[from] = set2[idx];
+                else if (set2.Length > 0) _translateMap[from] = set2[set2.Length - 1];
+                else _translateDrop.Add(from); // set2 empty: drop (oracle parity)
+            }
+
+            if (_squeezeMode) _squeezeSet2 = new HashSet<char>(set2);
+        }
     }
 
     protected override void ProcessRecord()
@@ -154,10 +237,7 @@ public sealed class InvokeBashTrCommand : PSCmdlet
         string text = BashRuntime.GetBashText(InputObject);
         foreach (var line in text.Split('\n'))
         {
-            string transformed = TransformLine(
-                line, _operands, _deleteMode, _squeezeMode,
-                _complementMode, _truncateMode);
-            WriteObject(BashRuntime.NewBashObject(transformed));
+            WriteObject(BashRuntime.NewBashObject(TransformLine(line)));
         }
     }
 
@@ -183,48 +263,38 @@ public sealed class InvokeBashTrCommand : PSCmdlet
         // input produces no output, matching the oracle's count==0 guard.
     }
 
-    private static string TransformLine(
-        string text,
-        List<string> operands,
-        bool deleteMode,
-        bool squeezeMode,
-        bool complementMode,
-        bool truncateMode)
+    /// <summary>
+    /// Transforms one line using the tables built by <see cref="BuildTables"/>.
+    /// All per-char tests are O(1) hash lookups; the SETs were expanded once.
+    /// </summary>
+    private string TransformLine(string text)
     {
         // Delete mode — uses SET1 only.
-        if (deleteMode)
+        if (_deleteMode)
         {
-            if (operands.Count == 0) return text;
-            string set = ExpandClass(operands[0]);
-            var sb = new StringBuilder();
+            if (_membershipSet == null) return text;
+            var sb = new StringBuilder(text.Length);
             foreach (char ch in text)
             {
-                bool inSet = set.IndexOf(ch) >= 0;
-                if (complementMode)
-                {
-                    // Complement + delete: keep chars that ARE in set
-                    // (oracle behavior — preserved).
-                    if (inSet) sb.Append(ch);
-                }
-                else
-                {
-                    if (!inSet) sb.Append(ch);
-                }
+                bool inSet = _membershipSet.Contains(ch);
+                // Complement + delete keeps chars that ARE in set (oracle
+                // behavior — preserved); plain delete drops them.
+                if (_complementMode ? inSet : !inSet) sb.Append(ch);
             }
             return sb.ToString();
         }
 
         // Squeeze-only mode — single SET, no translation.
-        if (squeezeMode && operands.Count == 1)
+        if (_squeezeMode && _operands.Count == 1)
         {
-            string set = ExpandClass(operands[0]);
-            var sb = new StringBuilder();
+            if (_membershipSet == null) return text;
+            var sb = new StringBuilder(text.Length);
             char prevChar = '\0';
             bool prevInSet = false;
             foreach (char ch in text)
             {
-                bool inSet = set.IndexOf(ch) >= 0;
-                if (complementMode) inSet = !inSet;
+                bool inSet = _membershipSet.Contains(ch);
+                if (_complementMode) inSet = !inSet;
                 if (inSet && prevInSet && ch == prevChar) continue;
                 sb.Append(ch);
                 prevChar = ch;
@@ -234,56 +304,25 @@ public sealed class InvokeBashTrCommand : PSCmdlet
         }
 
         // Translation mode — SET1 -> SET2.
-        if (operands.Count >= 2)
+        if (_translateMap != null)
         {
-            string set1 = ExpandClass(operands[0]);
-            string set2 = ExpandClass(operands[1]);
-
-            if (truncateMode && set2.Length > set1.Length)
-            {
-                set2 = set2.Substring(0, set1.Length);
-            }
-
-            if (complementMode)
-            {
-                // SET1 becomes all 256 chars MINUS the original SET1.
-                var compSb = new StringBuilder();
-                var set1Hash = new HashSet<char>(set1);
-                for (int c = 0; c <= 255; c++)
-                {
-                    char ch = (char)c;
-                    if (!set1Hash.Contains(ch)) compSb.Append(ch);
-                }
-                set1 = compSb.ToString();
-                // Extend SET2 by repeating last char to match new SET1 length.
-                if (set2.Length > 0)
-                {
-                    var ext = new StringBuilder(set2);
-                    char last = set2[set2.Length - 1];
-                    while (ext.Length < set1.Length) ext.Append(last);
-                    set2 = ext.ToString();
-                }
-            }
-
-            var sb = new StringBuilder();
+            var sb = new StringBuilder(text.Length);
             foreach (char ch in text)
             {
-                int idx = set1.IndexOf(ch);
-                if (idx >= 0 && idx < set2.Length) sb.Append(set2[idx]);
-                else if (idx >= 0 && set2.Length > 0) sb.Append(set2[set2.Length - 1]);
-                else if (idx >= 0) { /* set2 empty: drop (oracle parity) */ }
+                if (_translateMap.TryGetValue(ch, out char mapped)) sb.Append(mapped);
+                else if (_translateDrop != null && _translateDrop.Contains(ch)) { /* drop */ }
                 else sb.Append(ch);
             }
             string result = sb.ToString();
 
-            if (squeezeMode)
+            if (_squeezeMode && _squeezeSet2 != null)
             {
-                var sb2 = new StringBuilder();
+                var sb2 = new StringBuilder(result.Length);
                 char prevCh = '\0';
                 bool prevInSet2 = false;
                 foreach (char ch in result)
                 {
-                    bool inSet2 = set2.IndexOf(ch) >= 0;
+                    bool inSet2 = _squeezeSet2.Contains(ch);
                     if (inSet2 && prevInSet2 && ch == prevCh) continue;
                     sb2.Append(ch);
                     prevCh = ch;

@@ -335,7 +335,10 @@ public sealed class InvokeBashCutCommand : PSCmdlet
             // $Line.Split($delimiter) where $delimiter may be 1 char or
             // a string passed via -d. .NET's Split(string) splits on the
             // string as a substring boundary.
-            string[] fields = line.Split(new[] { _delimiter }, StringSplitOptions.None);
+            // Single-string Split overload — same substring-boundary semantics
+            // as Split(new[]{ _delimiter }, None) but without allocating a
+            // one-element separator array on every line.
+            string[] fields = line.Split(_delimiter, StringSplitOptions.None);
             // -s: a line with no delimiter splits into a single field; GNU
             // --only-delimited suppresses it entirely.
             if (_suppressNonDelimited && fields.Length <= 1) return;
