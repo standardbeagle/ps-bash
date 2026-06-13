@@ -175,35 +175,59 @@ internal static class TabCompleter
             if (name.StartsWith(token, StringComparison.Ordinal))
                 results.Add(name);
 
-        // $PATH executables
+        // $PATH executables (from the cached snapshot — see GetPathCommands).
+        foreach (var name in GetPathCommands())
+            if (name.StartsWith(token, StringComparison.Ordinal))
+                results.Add(name);
+
+        return [.. results.Select(r => new CompletionItem(r))];
+    }
+
+    // $PATH executable-name snapshot, cached and invalidated by the PATH value.
+    // The old code re-walked every PATH directory on EVERY command-position Tab
+    // (Directory.EnumerateFiles across all dirs), which is a synchronous disk
+    // scan that can blow the completion deadline on a large or slow (networked /
+    // AV-scanned) PATH. The set of executables only changes when PATH changes or
+    // something is installed, so we snapshot once and reuse until PATH differs.
+    private static readonly object _pathCacheLock = new();
+    private static string? _pathCacheKey;
+    private static string[] _pathCommandCache = [];
+
+    private static string[] GetPathCommands()
+    {
         var pathVar = Environment.GetEnvironmentVariable("PATH") ?? "";
-        foreach (var dir in pathVar.Split(Path.PathSeparator, StringSplitOptions.RemoveEmptyEntries))
+        lock (_pathCacheLock)
         {
-            try
+            if (_pathCacheKey == pathVar)
+                return _pathCommandCache;
+
+            var names = new SortedSet<string>(StringComparer.Ordinal);
+            foreach (var dir in pathVar.Split(Path.PathSeparator, StringSplitOptions.RemoveEmptyEntries))
             {
-                foreach (var file in Directory.EnumerateFiles(dir))
+                try
                 {
-                    var name = Path.GetFileName(file);
-                    if (name.StartsWith(token, StringComparison.Ordinal))
+                    foreach (var file in Directory.EnumerateFiles(dir))
                     {
                         if (OperatingSystem.IsWindows())
                         {
-                            // Only include executable extensions on Windows
+                            // Only executable extensions count as commands on Windows.
                             var ext = Path.GetExtension(file).ToUpperInvariant();
                             if (ext is ".EXE" or ".CMD" or ".BAT" or ".PS1")
-                                results.Add(OperatingSystem.IsWindows() ? name : Path.GetFileNameWithoutExtension(name));
+                                names.Add(Path.GetFileName(file));
                         }
                         else
                         {
-                            results.Add(name);
+                            names.Add(Path.GetFileName(file));
                         }
                     }
                 }
+                catch (Exception) { /* skip inaccessible dirs */ }
             }
-            catch (Exception) { /* skip inaccessible dirs */ }
-        }
 
-        return [.. results.Select(r => new CompletionItem(r))];
+            _pathCommandCache = [.. names];
+            _pathCacheKey = pathVar;
+            return _pathCommandCache;
+        }
     }
 
     /// <summary>
