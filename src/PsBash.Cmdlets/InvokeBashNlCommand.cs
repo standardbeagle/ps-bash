@@ -77,6 +77,7 @@ public sealed class InvokeBashNlCommand : PSCmdlet
     // Numbering counter — instance state so a streamed stdin run and any
     // trailing file reads number continuously.
     private int _lineNum;
+    private string? _blankNum;   // cached `-b n` blank number field (width is fixed post-parse)
 
     private void ParseOnce()
     {
@@ -180,7 +181,8 @@ public sealed class InvokeBashNlCommand : PSCmdlet
         // -b n: never number; GNU still prints the blank number field + separator.
         if (_numberNone)
         {
-            WriteObject(BashRuntime.NewBashObject(new string(' ', _width) + _sep + line));
+            _blankNum ??= new string(' ', _width);
+            WriteObject(BashRuntime.NewBashObject(_blankNum + _sep + line));
             return;
         }
         // Default (-b t): empty lines are unnumbered (bare empty — oracle parity).

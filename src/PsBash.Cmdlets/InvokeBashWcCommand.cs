@@ -100,8 +100,6 @@ public sealed class InvokeBashWcCommand : PSCmdlet
         "--files0-from",
     };
 
-    private static readonly char[] WhitespaceChars = { ' ', '\t', '\n', '\r' };
-
     private void ParseOnce()
     {
         if (_parsed) return;
@@ -318,7 +316,17 @@ public sealed class InvokeBashWcCommand : PSCmdlet
 
     private static int CountWords(string text)
     {
-        return text.Split(WhitespaceChars, StringSplitOptions.RemoveEmptyEntries).Length;
+        // Count maximal runs of non-whitespace — identical to
+        // Split(WhitespaceChars, RemoveEmptyEntries).Length but without
+        // allocating (and discarding) a word array on every line.
+        int words = 0;
+        bool inWord = false;
+        foreach (char c in text)
+        {
+            if (c is ' ' or '\t' or '\n' or '\r') inWord = false;
+            else if (!inWord) { words++; inWord = true; }
+        }
+        return words;
     }
 
     private static (int Lines, int Words, int Chars, int MaxLine) CountFileText(string path)

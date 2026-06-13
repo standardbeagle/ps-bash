@@ -123,6 +123,11 @@ public sealed class InvokeBashCommCommand : PSCmdlet
             currentReadPath = path2;
             bool has2 = file2.MoveNext();
 
+            // Column prefixes depend only on the suppress flags — constant for the
+            // whole run, so build them once instead of concatenating per output line.
+            string col2Prefix = suppress1 ? "" : "\t";                       // "only in file2"
+            string col3Prefix = (suppress1 ? "" : "\t") + (suppress2 ? "" : "\t"); // "in both"
+
             while (has1 && has2)
             {
                 int cmp = string.CompareOrdinal(file1.Current, file2.Current);
@@ -130,10 +135,7 @@ public sealed class InvokeBashCommCommand : PSCmdlet
                 {
                     if (!suppress3)
                     {
-                        string prefix = "";
-                        if (!suppress1) prefix += "\t";
-                        if (!suppress2) prefix += "\t";
-                        WriteObject(BashRuntime.NewBashObject(prefix + file1.Current));
+                        WriteObject(BashRuntime.NewBashObject(col3Prefix + file1.Current));
                     }
 
                     currentReadPath = path1;
@@ -155,9 +157,7 @@ public sealed class InvokeBashCommCommand : PSCmdlet
                 {
                     if (!suppress2)
                     {
-                        string prefix = "";
-                        if (!suppress1) prefix += "\t";
-                        WriteObject(BashRuntime.NewBashObject(prefix + file2.Current));
+                        WriteObject(BashRuntime.NewBashObject(col2Prefix + file2.Current));
                     }
 
                     currentReadPath = path2;
@@ -180,9 +180,7 @@ public sealed class InvokeBashCommCommand : PSCmdlet
             {
                 if (!suppress2)
                 {
-                    string prefix = "";
-                    if (!suppress1) prefix += "\t";
-                    WriteObject(BashRuntime.NewBashObject(prefix + file2.Current));
+                    WriteObject(BashRuntime.NewBashObject(col2Prefix + file2.Current));
                 }
 
                 currentReadPath = path2;

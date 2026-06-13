@@ -199,7 +199,7 @@ public sealed class InvokeBashPasteCommand : PSCmdlet
                 current[i] = e.MoveNext() ? e.Current : null;
             }
 
-            while (current.Any(line => line is not null))
+            while (AnyNonNull(current))
             {
                 var parts = new string[filePaths.Count];
                 for (int i = 0; i < current.Length; i++)
@@ -231,6 +231,15 @@ public sealed class InvokeBashPasteCommand : PSCmdlet
                 e.Dispose();
             }
         }
+    }
+
+    // Allocation-free replacement for `current.Any(l => l is not null)` — that
+    // LINQ form built an enumerator + closure on every merged output line.
+    private static bool AnyNonNull(string?[] items)
+    {
+        for (int i = 0; i < items.Length; i++)
+            if (items[i] is not null) return true;
+        return false;
     }
 
     private string? ReadSerialLine(string path, string delimiter)
