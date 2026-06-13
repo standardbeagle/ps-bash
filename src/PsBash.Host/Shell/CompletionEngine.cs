@@ -22,7 +22,11 @@ internal sealed class CompletionEngine
     private readonly Func<string> _cwd;
     private readonly Func<string?> _lastCommand;
     private readonly IHistoryStore? _history;
+    private readonly IFrecencyStore? _frecency;
     private readonly Func<IWorker?> _getWorker;
+
+    // Commands whose directory ARGUMENT is completed from the frecency DB.
+    private static readonly HashSet<string> FrecencyDirCommands = new(StringComparer.Ordinal) { "cd", "z", "zi" };
 
     // Late-bound worker: null while the runspace is still warming up (startup type-ahead), then the
     // live worker once ready. Every live-completion path already guards on a null/exited worker and
@@ -34,8 +38,9 @@ internal sealed class CompletionEngine
         Func<string> cwd,
         Func<string?> lastCommand,
         IHistoryStore? history,
-        IWorker? worker)
-        : this(aliases, cwd, lastCommand, history, () => worker)
+        IWorker? worker,
+        IFrecencyStore? frecency = null)
+        : this(aliases, cwd, lastCommand, history, () => worker, frecency)
     {
     }
 
@@ -44,13 +49,15 @@ internal sealed class CompletionEngine
         Func<string> cwd,
         Func<string?> lastCommand,
         IHistoryStore? history,
-        Func<IWorker?> worker)
+        Func<IWorker?> worker,
+        IFrecencyStore? frecency = null)
     {
         _aliases = aliases;
         _cwd = cwd;
         _lastCommand = lastCommand;
         _history = history;
         _getWorker = worker;
+        _frecency = frecency;
     }
 
     /// <summary>
@@ -82,6 +89,23 @@ internal sealed class CompletionEngine
                     var specItems = spec.Select(s => new CompletionItem(s)).ToList();
                     return CompletionMerge.Append(specItems, baseResults, sortSecondary: false);
                 }
+            }
+        }
+
+        // Frecency directory completion for cd / z / zi arguments. Local (no
+        // runspace), so it runs even during warmup. Offers the highest-frecency
+        // directories whose final component matches the typed token — inserted as
+        // full paths (z's path-passthrough then cd's straight there). Skipped when
+        // the token already looks like a literal path (base path completion owns
+        // that). Merged ahead of the base set.
+        if (_frecency is not null && !TabCompleter.IsFirstWord(line, cursor) && !TokenLooksLikePath(token))
+        {
+            var argCmd = TabCompleter.GetCommandNameAtCursor(beforeToken, beforeToken.Length, _aliases);
+            if (argCmd is not null && FrecencyDirCommands.Contains(argCmd))
+            {
+                var dirs = await QueryFrecencyDirsAsync(token).ConfigureAwait(false);
+                if (dirs.Count > 0)
+                    baseResults = CompletionMerge.Append(dirs, baseResults, sortSecondary: false);
             }
         }
 
@@ -149,6 +173,34 @@ internal sealed class CompletionEngine
     // parameter values are all plain candidates (the inserted text is the list label too).
     private static IReadOnlyList<CompletionItem> AsItems(IReadOnlyList<string> texts)
         => texts.Count == 0 ? Array.Empty<CompletionItem>() : texts.Select(t => new CompletionItem(t)).ToList();
+
+    // Frecency directory candidates for a cd/z/zi argument: the token is a single
+    // keyword (empty → all tracked dirs, ranked); inserts the full directory path.
+    private async Task<IReadOnlyList<CompletionItem>> QueryFrecencyDirsAsync(string token)
+    {
+        if (_frecency is null) return Array.Empty<CompletionItem>();
+        var keywords = string.IsNullOrEmpty(token) ? Array.Empty<string>() : new[] { token };
+        try
+        {
+            var matches = await _frecency.QueryAsync(keywords, limit: 10).ConfigureAwait(false);
+            return matches.Count == 0
+                ? Array.Empty<CompletionItem>()
+                : matches.Select(m => new CompletionItem(m.Path)).ToList();
+        }
+        catch
+        {
+            // Advisory — never let a completion query surface an error.
+            return Array.Empty<CompletionItem>();
+        }
+    }
+
+    // A token already containing a separator / drive / ~ / . is a literal path the
+    // user is typing; base path completion owns it, so frecency stays out of the way.
+    private static bool TokenLooksLikePath(string token)
+        => token.Length > 0
+           && (token.Contains('/') || token.Contains('\\') || token[0] == '~'
+               || token == "." || token == ".."
+               || (token.Length >= 2 && token[1] == ':'));
 
     /// <summary>
     /// Floating-panel parameter hints for a PowerShell cmdlet under the cursor (the type-ahead

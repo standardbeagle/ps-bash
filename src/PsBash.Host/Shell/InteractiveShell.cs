@@ -73,7 +73,8 @@ public static class InteractiveShell
             cwd: () => _lastDir,
             lastCommand: () => _lastCommand,
             history: _historyStore,
-            worker: () => readyWorker);
+            worker: () => readyWorker,
+            frecency: _frecencyStore);
         CommandAssistProviderRunner? commandAssistRunner = null;
         string? commandAssistConfigError = null;
         if (Environment.GetEnvironmentVariable("PSBASH_AI_DISABLE") == "1")
@@ -88,6 +89,7 @@ public static class InteractiveShell
         {
             commandAssistConfigError = ex.Message;
         }
+        var frecencySuggester = _frecencyStore is not null ? new FrecencySuggester(_frecencyStore) : null;
         _lineEditor = new LineEditor(
             _historyStore,
             (line, cursor, ct) => completionEngine.CompleteAsync(line, cursor, ct),
@@ -96,7 +98,8 @@ public static class InteractiveShell
             flagHintProvider: (line, cursor, ct) => completionEngine.GetFlagHintsAsync(line, cursor, ct),
             commandAssist: (request, ct) => commandAssistRunner is not null
                 ? RunCommandAssistWithReviewAsync(commandAssistRunner, request, _lastDir, ct)
-                : throw new CommandAssistProviderException(commandAssistConfigError ?? "AI provider config is unavailable."));
+                : throw new CommandAssistProviderException(commandAssistConfigError ?? "AI provider config is unavailable."),
+            frecencySuggest: frecencySuggester is not null ? frecencySuggester.SuggestSuffixAsync : null);
 
         // Readiness gate: finish runspace init, source ~/.psbashrc (so the first PS1 reflects rc),
         // THEN expose the worker to completion + the prompt. Awaited before each command executes

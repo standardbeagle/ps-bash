@@ -64,6 +64,10 @@ internal sealed class LineEditor
     // same control character as Ctrl+^; keep both as supported entry points.
     private readonly Func<CommandAssistRequest, CancellationToken, Task<CommandAssistResponse>>? _commandAssist;
 
+    // Optional frecency ghost-text provider (cd/z/zi → directory suffix). Tried
+    // before the history suggester so a jump command previews its target.
+    private readonly Func<string, Task<string?>>? _frecencySuggest;
+
     // Panel navigation: when the user presses ↓ with the panel visible, focus moves INTO the panel
     // (↑↓/PgUp/PgDn scroll a highlighted selection; Enter inserts the flag; Esc / ↑-past-top returns
     // to typing). _panelScroll is the index of the first visible row when the list overflows.
@@ -126,12 +130,14 @@ internal sealed class LineEditor
         string? cwd = null,
         IReadOnlyDictionary<string, string>? aliases = null,
         Func<string, int, CancellationToken, Task<IReadOnlyList<FlagHint>>>? flagHintProvider = null,
-        Func<CommandAssistRequest, CancellationToken, Task<CommandAssistResponse>>? commandAssist = null)
+        Func<CommandAssistRequest, CancellationToken, Task<CommandAssistResponse>>? commandAssist = null,
+        Func<string, Task<string?>>? frecencySuggest = null)
     {
         _historyStore = historyStore;
         _completer = completer;
         _flagHintProvider = flagHintProvider;
         _commandAssist = commandAssist;
+        _frecencySuggest = frecencySuggest;
         _suggester = new Suggester(historyStore);
         _cwd = cwd ?? Environment.CurrentDirectory;
         _aliases = aliases ?? EmptyAliases;
@@ -1138,14 +1144,30 @@ internal sealed class LineEditor
         ComputeHintsAsync(string line, int cursor, CancellationToken ct)
     {
         string? suggestion = null;
-        try
+
+        // Frecency ghost first: for a cd/z/zi line it previews the jump target.
+        // Returns null for every other line, so history suggestion is unaffected.
+        if (_frecencySuggest is not null)
         {
-            var suffix = await _suggester.SuggestAsync(line, _cwd).ConfigureAwait(false);
-            // SuggestAsync returns "" for an exact match (nothing to append) and null for no match —
-            // both mean "no ghost".
-            suggestion = string.IsNullOrEmpty(suffix) ? null : suffix;
+            try
+            {
+                var frec = await _frecencySuggest(line).ConfigureAwait(false);
+                suggestion = string.IsNullOrEmpty(frec) ? null : frec;
+            }
+            catch (Exception) { suggestion = null; }
         }
-        catch (Exception) { suggestion = null; }
+
+        if (suggestion is null)
+        {
+            try
+            {
+                var suffix = await _suggester.SuggestAsync(line, _cwd).ConfigureAwait(false);
+                // SuggestAsync returns "" for an exact match (nothing to append) and null for no match —
+                // both mean "no ghost".
+                suggestion = string.IsNullOrEmpty(suffix) ? null : suffix;
+            }
+            catch (Exception) { suggestion = null; }
+        }
 
         IReadOnlyList<FlagHint>? psHints = null;
         string? psKey = null;
