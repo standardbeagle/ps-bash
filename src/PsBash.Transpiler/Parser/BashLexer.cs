@@ -93,52 +93,57 @@ public static class BashLexer
                 continue;
             }
 
-            // Two-character and three-character operators.
+            // Two- and three-character operators. Probe with direct char reads
+            // (no per-position Substring allocation) and emit interned string
+            // literals as token text (no per-token allocation). Behaviour mirrors
+            // the previous Substring(pos,2) switch exactly, including which forms
+            // reclassify a preceding IO-number.
             if (pos + 1 < len)
             {
-                string two = input.Substring(pos, 2);
+                char c2 = input[pos + 1];
+                char c3 = pos + 2 < len ? input[pos + 2] : '\0';
 
-                // <<< (here-string) must be checked before <<- and <<.
-                if (two == "<<" && pos + 2 < len && input[pos + 2] == '<')
+                // `<<` family: `<<<` (here-string) and `<<-` are checked before plain `<<`.
+                if (c == '<' && c2 == '<')
                 {
-                    tokens.Add(new BashToken(BashTokenKind.TLess, "<<<", pos));
-                    pos += 3;
+                    if (c3 == '<')
+                    {
+                        tokens.Add(new BashToken(BashTokenKind.TLess, "<<<", pos));
+                        pos += 3;
+                        continue;
+                    }
+                    if (c3 == '-')
+                    {
+                        TryReclassifyIoNumber(tokens, pos);
+                        tokens.Add(new BashToken(BashTokenKind.DLessDash, "<<-", pos));
+                        pos += 3;
+                        continue;
+                    }
+                    if (IsRedirectKind(BashTokenKind.DLess))
+                        TryReclassifyIoNumber(tokens, pos);
+                    tokens.Add(new BashToken(BashTokenKind.DLess, "<<", pos));
+                    pos += 2;
                     continue;
                 }
 
-                // <<- must be checked before <<.
-                if (two == "<<" && pos + 2 < len && input[pos + 2] == '-')
+                // `&>>` (append both stdout+stderr) before `&>` (redirect both) before
+                // the single-char `&` — else `cmd &> f` would lex as background `&` + `> f`.
+                if (c == '&' && c2 == '>')
                 {
-                    TryReclassifyIoNumber(tokens, pos);
-                    tokens.Add(new BashToken(BashTokenKind.DLessDash, "<<-", pos));
-                    pos += 3;
-                    continue;
-                }
-
-                // `&>>` (append both stdout+stderr) — three chars, must be
-                // checked before `&>` and before the single-char `&`.
-                if (two == "&>" && pos + 2 < len && input[pos + 2] == '>')
-                {
-                    tokens.Add(new BashToken(BashTokenKind.AmpDGreat, "&>>", pos));
-                    pos += 3;
-                    continue;
-                }
-
-                // `&>` (redirect both stdout+stderr). Must beat the single-char
-                // `&` (Amp) — without this, `cmd &> f` lexes as background `&`
-                // plus a bare `> f` redirect on an empty command.
-                if (two == "&>")
-                {
+                    if (c3 == '>')
+                    {
+                        tokens.Add(new BashToken(BashTokenKind.AmpDGreat, "&>>", pos));
+                        pos += 3;
+                        continue;
+                    }
                     tokens.Add(new BashToken(BashTokenKind.AmpGreat, "&>", pos));
                     pos += 2;
                     continue;
                 }
 
-                // `>|` (force-clobber redirect, bash extension) ignores the
-                // `noclobber` shopt. ps-bash doesn't track noclobber, so this
-                // is semantically identical to `>`. Emit as a plain Great token
+                // `>|` (force-clobber): ps-bash ignores noclobber, so emit a plain Great
                 // with op text ">" so downstream emitters match.
-                if (two == ">|")
+                if (c == '>' && c2 == '|')
                 {
                     TryReclassifyIoNumber(tokens, pos);
                     tokens.Add(new BashToken(BashTokenKind.Great, ">", pos));
@@ -146,24 +151,23 @@ public static class BashLexer
                     continue;
                 }
 
-                BashTokenKind? twoKind = two switch
+                (BashTokenKind Kind, string Text)? two = (c, c2) switch
                 {
-                    "&&" => BashTokenKind.AndIf,
-                    "||" => BashTokenKind.OrIf,
-                    "|&" => BashTokenKind.PipeAmp,
-                    ">>" => BashTokenKind.DGreat,
-                    "<<" => BashTokenKind.DLess,
-                    "<&" => BashTokenKind.LessAnd,
-                    ">&" => BashTokenKind.GreatAnd,
+                    ('&', '&') => (BashTokenKind.AndIf, "&&"),
+                    ('|', '|') => (BashTokenKind.OrIf, "||"),
+                    ('|', '&') => (BashTokenKind.PipeAmp, "|&"),
+                    ('>', '>') => (BashTokenKind.DGreat, ">>"),
+                    ('<', '&') => (BashTokenKind.LessAnd, "<&"),
+                    ('>', '&') => (BashTokenKind.GreatAnd, ">&"),
                     _ => null,
                 };
 
-                if (twoKind is not null)
+                if (two is { } op)
                 {
-                    if (IsRedirectKind(twoKind.Value))
+                    if (IsRedirectKind(op.Kind))
                         TryReclassifyIoNumber(tokens, pos);
 
-                    tokens.Add(new BashToken(twoKind.Value, two, pos));
+                    tokens.Add(new BashToken(op.Kind, op.Text, pos));
                     pos += 2;
                     continue;
                 }
@@ -199,28 +203,29 @@ public static class BashLexer
                 continue;
             }
 
-            // Single-character operators.
-            BashTokenKind? oneKind = c switch
+            // Single-character operators. Interned literal token text avoids the
+            // per-token c.ToString() allocation.
+            (BashTokenKind Kind, string Text)? one = c switch
             {
-                '|' => BashTokenKind.Pipe,
-                ';' => BashTokenKind.Semi,
-                '&' => BashTokenKind.Amp,
-                '(' => BashTokenKind.LParen,
-                ')' => BashTokenKind.RParen,
-                '{' => BashTokenKind.LBrace,
-                '}' => BashTokenKind.RBrace,
-                '<' => BashTokenKind.Less,
-                '>' => BashTokenKind.Great,
-                '!' => BashTokenKind.Bang,
+                '|' => (BashTokenKind.Pipe, "|"),
+                ';' => (BashTokenKind.Semi, ";"),
+                '&' => (BashTokenKind.Amp, "&"),
+                '(' => (BashTokenKind.LParen, "("),
+                ')' => (BashTokenKind.RParen, ")"),
+                '{' => (BashTokenKind.LBrace, "{"),
+                '}' => (BashTokenKind.RBrace, "}"),
+                '<' => (BashTokenKind.Less, "<"),
+                '>' => (BashTokenKind.Great, ">"),
+                '!' => (BashTokenKind.Bang, "!"),
                 _ => null,
             };
 
-            if (oneKind is not null)
+            if (one is { } onef)
             {
-                if (IsRedirectKind(oneKind.Value))
+                if (IsRedirectKind(onef.Kind))
                     TryReclassifyIoNumber(tokens, pos);
 
-                tokens.Add(new BashToken(oneKind.Value, c.ToString(), pos));
+                tokens.Add(new BashToken(onef.Kind, onef.Text, pos));
                 pos++;
                 continue;
             }
