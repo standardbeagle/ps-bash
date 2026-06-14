@@ -238,23 +238,35 @@ public sealed class InvokeBashAwkCommand : PSCmdlet
         else files.Add(arg);
     }
 
+    /// <summary>
+    /// Records from the pipeline, split on the default record separator (\n,
+    /// with a trailing \r of a CRLF stripped). Streams a line at a time with a
+    /// small carry-over buffer instead of materializing all input at once, so a
+    /// large piped stream is bounded by one item + one partial line.
+    /// </summary>
     private IEnumerable<string> PipelineRecords()
     {
-        var sb = new StringBuilder();
-        foreach (var item in _pipeline) sb.Append(BashRuntime.GetBashText(item));
-        string all = sb.ToString();
-        if (all.Length == 0) yield break;
-        all = all.Replace("\r\n", "\n").Replace('\r', '\n');
-        int start = 0;
-        for (int i = 0; i < all.Length; i++)
+        string leftover = "";
+        foreach (var item in _pipeline)
         {
-            if (all[i] == '\n')
+            string text = BashRuntime.GetBashText(item);
+            if (text.Length == 0) continue;
+            if (leftover.Length != 0) { text = leftover + text; leftover = ""; }
+            int start = 0;
+            for (int i = 0; i < text.Length; i++)
             {
-                yield return all.Substring(start, i - start);
+                if (text[i] != '\n') continue;
+                int end = i > start && text[i - 1] == '\r' ? i - 1 : i;
+                yield return text.Substring(start, end - start);
                 start = i + 1;
             }
+            if (start < text.Length) leftover = text.Substring(start);
         }
-        if (start < all.Length) yield return all.Substring(start);
+        if (leftover.Length > 0)
+        {
+            if (leftover[^1] == '\r') leftover = leftover[..^1];
+            if (leftover.Length > 0) yield return leftover;
+        }
     }
 
     /// <summary>

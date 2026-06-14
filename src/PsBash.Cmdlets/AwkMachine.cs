@@ -26,7 +26,10 @@ internal sealed class AwkMachine
     private readonly StringBuilder _outBuf = new();
     private Random _rand = new(0);
     private double _prevSeed;
-    private static readonly Dictionary<string, Regex> RegexCache = new();
+    // Per-machine (per awk invocation): caches compiled regexes across the
+    // record loop without sharing mutable state between concurrently-pooled
+    // host runspaces. Discarded with the machine after the run.
+    private readonly Dictionary<string, Regex> _regexCache = new();
 
     public bool Exited { get; private set; }
     public int ExitCode { get; private set; }
@@ -204,11 +207,7 @@ internal sealed class AwkMachine
         if (fsIsRegexLiteral)
             return new List<string>(GetRegex(fs).Split(s));
         if (fs == " ")
-        {
-            string trimmed = s.Trim(' ', '\t', '\n');
-            if (trimmed.Length == 0) return new List<string>();
-            return new List<string>(Regex.Split(trimmed, "[ \t\n]+"));
-        }
+            return SplitWhitespace(s);
         if (fs.Length == 0)
         {
             var chars = new List<string>(s.Length);
@@ -218,6 +217,27 @@ internal sealed class AwkMachine
         if (fs.Length == 1)
             return new List<string>(s.Split(fs[0]));
         return new List<string>(GetRegex(fs).Split(s));
+    }
+
+    /// <summary>
+    /// Default field split (FS == " "): split on runs of spaces/tabs/newlines,
+    /// ignoring leading/trailing whitespace. A manual scan on the per-record hot
+    /// path — avoids a <see cref="Regex"/> match and the trimmed-string + array
+    /// allocations the regex route required.
+    /// </summary>
+    private static List<string> SplitWhitespace(string s)
+    {
+        var result = new List<string>();
+        int i = 0, n = s.Length;
+        while (i < n)
+        {
+            while (i < n && (s[i] == ' ' || s[i] == '\t' || s[i] == '\n')) i++;
+            if (i >= n) break;
+            int start = i;
+            while (i < n && s[i] != ' ' && s[i] != '\t' && s[i] != '\n') i++;
+            result.Add(s.Substring(start, i - start));
+        }
+        return result;
     }
 
     // ── variables / arrays ───────────────────────────────────────────────────
@@ -737,12 +757,12 @@ internal sealed class AwkMachine
         return AwkValue.Str(fmt);
     }
 
-    private static Regex GetRegex(string pattern)
+    private Regex GetRegex(string pattern)
     {
-        if (!RegexCache.TryGetValue(pattern, out var rx))
+        if (!_regexCache.TryGetValue(pattern, out var rx))
         {
             rx = new Regex(pattern, RegexOptions.None);
-            if (RegexCache.Count < 256) RegexCache[pattern] = rx;
+            _regexCache[pattern] = rx;
         }
         return rx;
     }

@@ -95,8 +95,8 @@ internal readonly struct AwkValue
         int end = n;
         while (end > i && (s[end - 1] == ' ' || s[end - 1] == '\t' || s[end - 1] == '\n')) end--;
         if (i >= end) return false;
-        string core = s.Substring(i, end - i);
-        return double.TryParse(core, NumberStyles.Float, CultureInfo.InvariantCulture, out _);
+        // Span slice avoids a Substring allocation on every comparison.
+        return double.TryParse(s.AsSpan(i, end - i), NumberStyles.Float, CultureInfo.InvariantCulture, out _);
     }
 
     /// <summary>
@@ -131,7 +131,7 @@ internal readonly struct AwkValue
             while (i < n && char.IsDigit(s[i])) i++;
             if (i == expDigits) i = expMark; // no exponent digits — back off
         }
-        string core = s.Substring(start, i - start);
-        return double.TryParse(core, NumberStyles.Float, CultureInfo.InvariantCulture, out var v) ? v : 0;
+        // Span slice avoids a Substring allocation on every numeric coercion.
+        return double.TryParse(s.AsSpan(start, i - start), NumberStyles.Float, CultureInfo.InvariantCulture, out var v) ? v : 0;
     }
 }
