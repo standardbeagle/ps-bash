@@ -1059,41 +1059,10 @@ function Get-BashLsProviderEntries {
 # PowerShell common-parameter prefix, so a clean PSCmdlet migration was safe.
 
 # --- File Redirect Helper ---
-
-function Invoke-BashRedirect {
-    [OutputType('PsBash.TextOutput')]
-    param()
-    $Arguments = [string[]]$args
-    $pipelineInput = @($input)
-
-    $filePath = $null
-    $append = $false
-    $i = 0
-    while ($i -lt $Arguments.Count) {
-        $arg = $Arguments[$i]
-        if ($arg -ceq '-Append') { $append = $true; $i++; continue }
-        if ($arg -ceq '-Path' -and ($i + 1) -lt $Arguments.Count) { $i++; $filePath = $Arguments[$i]; $i++; continue }
-        if ($null -eq $filePath) { $filePath = $arg }
-        $i++
-    }
-
-    if ($null -eq $filePath) { return }
-
-    $lines = [System.Collections.Generic.List[string]]::new()
-    foreach ($item in $pipelineInput) {
-        $text = Get-BashText -InputObject $item
-        $text = $text.TrimEnd("`n".ToCharArray())
-        $lines.Add($text)
-    }
-    $content = ($lines -join "`n")
-    if ($lines.Count -gt 0) { $content += "`n" }
-
-    if ($append) {
-        [System.IO.File]::AppendAllText($filePath, $content)
-    } else {
-        [System.IO.File]::WriteAllText($filePath, $content)
-    }
-}
+# Invoke-BashRedirect migrated to a binary cmdlet
+# (PsBash.Cmdlets/InvokeBashRedirectCommand.cs). The emitter pipes stdout into
+# `Invoke-BashRedirect -Path file [-Append]` for > / >> redirects; -Path/-Append
+# are PowerShell-style flags that bind directly to the cmdlet.
 
 # --- BashText Extraction Helper ---
 
