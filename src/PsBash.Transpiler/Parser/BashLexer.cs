@@ -27,6 +27,16 @@ public static class BashLexer
         int pos = 0;
         int len = input.Length;
 
+        // Heredoc bodies are RAW LINE TEXT, not shell tokens. We must not tokenize
+        // them: a body line with an unbalanced quote/backtick/paren would otherwise
+        // make a word scanner swallow the delimiter line and every following command
+        // into one token. So we record each `<<`/`<<-` delimiter as it is seen and,
+        // at the newline that ends the command line, skip past the bodies in raw
+        // source — the parser re-reads the same raw region to build the body text.
+        var pendingHeredocs = new List<(string Delim, bool StripTabs)>();
+        // The next word token is a heredoc delimiter: 0 = none, 1 = `<<`, 2 = `<<-`.
+        int heredocDelimPending = 0;
+
         while (pos < len)
         {
             char c = input[pos];
@@ -51,6 +61,12 @@ public static class BashLexer
             {
                 tokens.Add(new BashToken(BashTokenKind.Newline, "\n", pos));
                 pos++;
+                heredocDelimPending = 0;
+                if (pendingHeredocs.Count > 0)
+                {
+                    pos = SkipHeredocBodies(input, pos, pendingHeredocs);
+                    pendingHeredocs.Clear();
+                }
                 continue;
             }
 
@@ -62,6 +78,12 @@ public static class BashLexer
                 if (pos < len && input[pos] == '\n')
                     pos++;
                 tokens.Add(new BashToken(BashTokenKind.Newline, "\n", start));
+                heredocDelimPending = 0;
+                if (pendingHeredocs.Count > 0)
+                {
+                    pos = SkipHeredocBodies(input, pos, pendingHeredocs);
+                    pendingHeredocs.Clear();
+                }
                 continue;
             }
 
@@ -117,12 +139,14 @@ public static class BashLexer
                         TryReclassifyIoNumber(tokens, pos);
                         tokens.Add(new BashToken(BashTokenKind.DLessDash, "<<-", pos));
                         pos += 3;
+                        heredocDelimPending = 2;
                         continue;
                     }
                     if (IsRedirectKind(BashTokenKind.DLess))
                         TryReclassifyIoNumber(tokens, pos);
                     tokens.Add(new BashToken(BashTokenKind.DLess, "<<", pos));
                     pos += 2;
+                    heredocDelimPending = 1;
                     continue;
                 }
 
@@ -247,10 +271,68 @@ public static class BashLexer
 
             BashTokenKind wordKind = ClassifyWord(value);
             tokens.Add(new BashToken(wordKind, value, wordStart));
+
+            // The word immediately following `<<`/`<<-` is the heredoc delimiter.
+            // Record it (with the strip-tabs flag from the operator) so the next
+            // newline knows which line ends each body.
+            if (heredocDelimPending != 0)
+            {
+                var (delim, _) = ParseHeredocDelimiter(value);
+                pendingHeredocs.Add((delim, heredocDelimPending == 2));
+                heredocDelimPending = 0;
+            }
         }
 
         tokens.Add(new BashToken(BashTokenKind.Eof, "", pos));
         return tokens;
+    }
+
+    /// <summary>
+    /// Skip past one or more heredoc bodies in raw source, consuming each body up
+    /// to and including its delimiter line. <paramref name="pos"/> is the offset of
+    /// the first body line (just past the command-line newline); the return value
+    /// is the offset where normal tokenizing resumes (the line after the last
+    /// delimiter, or end of input if a delimiter never appears — bash's
+    /// "here-document delimited by end-of-file"). Matches bash exactly: the
+    /// delimiter is compared against whole physical lines with no quote or comment
+    /// interpretation; <c>&lt;&lt;-</c> strips leading tabs before the comparison.
+    /// </summary>
+    private static int SkipHeredocBodies(string input, int pos, List<(string Delim, bool StripTabs)> pending)
+    {
+        int len = input.Length;
+        foreach (var (delim, stripTabs) in pending)
+        {
+            while (pos < len)
+            {
+                int nlPos = input.IndexOf('\n', pos);
+                int lineEnd = nlPos < 0 ? len : nlPos;
+                int textEnd = lineEnd > pos && input[lineEnd - 1] == '\r' ? lineEnd - 1 : lineEnd;
+                string line = input.Substring(pos, textEnd - pos);
+                string trimmed = stripTabs ? line.TrimStart('\t') : line;
+                bool isDelim = trimmed == delim;
+                pos = nlPos < 0 ? len : nlPos + 1;
+                if (isDelim) break;
+            }
+        }
+        return pos;
+    }
+
+    /// <summary>
+    /// Extract a heredoc's terminator string and whether its body expands, from the
+    /// raw delimiter word. Quoting (<c>'EOF'</c> / <c>"EOF"</c>) or a backslash
+    /// anywhere (<c>\EOF</c>) suppresses expansion and is stripped for the
+    /// terminator-line match; otherwise the body expands. Shared by the lexer
+    /// (body skipping) and the parser (body capture) so the two never disagree on
+    /// where a body ends.
+    /// </summary>
+    public static (string Delimiter, bool Expand) ParseHeredocDelimiter(string rawDelim)
+    {
+        if ((rawDelim.StartsWith('\'') && rawDelim.EndsWith('\''))
+            || (rawDelim.StartsWith('"') && rawDelim.EndsWith('"')))
+            return (rawDelim.Length >= 2 ? rawDelim[1..^1] : string.Empty, false);
+        if (rawDelim.Contains('\\'))
+            return (rawDelim.Replace("\\", ""), false);
+        return (rawDelim, true);
     }
 
     /// <summary>

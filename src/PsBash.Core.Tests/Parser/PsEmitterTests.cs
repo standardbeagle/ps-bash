@@ -2560,6 +2560,33 @@ public class PsEmitterTests
         Assert.Equal("'before\n''@\nafter\n' | Emit-BashLine | Invoke-BashCat", result);
     }
 
+    // End-to-end: a command after a heredoc whose body has an unbalanced quote
+    // must still be parsed. Before the lexer skipped bodies, the lone " folded the
+    // delimiter line and `echo DONE` into one token, so the post-heredoc command
+    // vanished from the transpiled output.
+    [Fact]
+    public void Transpile_CommandAfterHeredocWithUnbalancedQuoteInBody_NotSwallowed()
+    {
+        var result = PsEmitter.Transpile("cat <<EOF\nval=\"oops\nmore\nEOF\necho DONE");
+
+        Assert.Contains("Invoke-BashCat", result);
+        Assert.Contains("DONE", result);
+    }
+
+    // Stacked heredocs end-to-end: bash connects only the LAST heredoc to stdin (so
+    // `beta`, not `alpha`, is the body), and the command after both bodies survives.
+    // The first body must still be consumed by the scanner so its lines aren't
+    // mistaken for commands.
+    [Fact]
+    public void Transpile_StackedHeredocs_LastBodyUsedAndTrailingCommandSurvives()
+    {
+        var result = PsEmitter.Transpile("cat <<A <<B\nalpha\nA\nbeta\nB\necho DONE");
+
+        Assert.Contains("beta", result);     // last heredoc → stdin
+        Assert.DoesNotContain("alpha", result); // first heredoc opened then discarded
+        Assert.Contains("DONE", result);     // trailing command not swallowed
+    }
+
     [Fact]
     public void Transpile_BackslashDelimiter_EmitsLiteralHereString()
     {

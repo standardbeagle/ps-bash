@@ -275,4 +275,42 @@ public class RedirectionDifferentialTests
             "cat <<-EOF\n\thello\n\tworld\nEOF",
             timeout: TimeSpan.FromSeconds(15));
     }
+
+    // -----------------------------------------------------------------------
+    // A command AFTER a heredoc must run as its own command. The command-line
+    // newline is the separator; the lexer skips the body so it never swallows
+    // the trailing command.
+    // -----------------------------------------------------------------------
+    [SkippableFact]
+    public async Task Differential_Redirect_HeredocFollowedByCommand()
+    {
+        await AssertOracle.EqualAsync(
+            "cat <<EOF\nbody line\nEOF\necho SECOND",
+            timeout: TimeSpan.FromSeconds(15));
+    }
+
+    // -----------------------------------------------------------------------
+    // Regression: an unbalanced quote/backtick/paren in a heredoc body is just
+    // literal text and must not start a region that eats the delimiter and the
+    // next command. bash prints the body verbatim then runs `echo DONE`.
+    // -----------------------------------------------------------------------
+    [SkippableFact]
+    public async Task Differential_Redirect_HeredocBodyUnbalancedQuote_ThenCommand()
+    {
+        await AssertOracle.EqualAsync(
+            "cat <<'EOF'\nval=\"oops\nmore )( ` stuff\nEOF\necho DONE",
+            timeout: TimeSpan.FromSeconds(15));
+    }
+
+    // -----------------------------------------------------------------------
+    // Stacked heredocs: bash connects only the last to stdin, then the trailing
+    // command runs. Both bodies must be consumed by the scanner.
+    // -----------------------------------------------------------------------
+    [SkippableFact]
+    public async Task Differential_Redirect_StackedHeredocs_ThenCommand()
+    {
+        await AssertOracle.EqualAsync(
+            "cat <<A <<B\nalpha\nA\nbeta\nB\necho END",
+            timeout: TimeSpan.FromSeconds(15));
+    }
 }

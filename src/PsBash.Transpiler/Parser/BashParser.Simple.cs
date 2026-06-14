@@ -184,30 +184,11 @@ public sealed partial class BashParser
                 bool stripTabs = kind == BashTokenKind.DLessDash;
                 Advance(); // consume << or <<-
                 var delimToken = Advance();
-                string rawDelim = delimToken.Value;
-
-                bool expand;
-                string delimiter;
-                // Quoted delimiter (single or double quotes) suppresses expansion.
-                if ((rawDelim.StartsWith('\'') && rawDelim.EndsWith('\''))
-                    || (rawDelim.StartsWith('"') && rawDelim.EndsWith('"')))
-                {
-                    expand = false;
-                    delimiter = rawDelim[1..^1];
-                }
-                else if (rawDelim.Contains('\\'))
-                {
-                    // A backslash ANYWHERE in the delimiter word disables expansion,
-                    // exactly like quoting it (`<<\EOF`, `<<-\EOF`, `<<E\OF`). The
-                    // backslashes are stripped for the terminator-line match.
-                    expand = false;
-                    delimiter = rawDelim.Replace("\\", "");
-                }
-                else
-                {
-                    expand = true;
-                    delimiter = rawDelim;
-                }
+                // Quoted (`'EOF'` / `"EOF"`) or backslashed (`\EOF`) delimiters
+                // suppress expansion; the shared helper is the single source the
+                // lexer's body-skip also uses, so the two can't disagree on the
+                // terminator.
+                var (delimiter, expand) = BashLexer.ParseHeredocDelimiter(delimToken.Value);
                 pendingHeredocs.Add((delimiter, expand, stripTabs));
             }
             else if (kind == BashTokenKind.IoNumber || IsRedirectOp(kind))
@@ -226,8 +207,8 @@ public sealed partial class BashParser
             return new Command.ShAssignment(assignmentPairs.ToImmutable());
 
         // Collect heredoc bodies in order for all pending heredoc redirects.
-        foreach (var (delimiter, expand, stripTabs) in pendingHeredocs)
-            hereDocs.Add(CollectHereDocBody(delimiter, expand, stripTabs));
+        if (pendingHeredocs.Count > 0)
+            CollectHereDocBodies(pendingHeredocs, hereDocs);
 
         return new Command.Simple(
             words.ToImmutable(),
@@ -237,71 +218,56 @@ public sealed partial class BashParser
     }
 
     /// <summary>
-    /// Collect the body lines of a here-document from the token stream.
-    /// Consumes tokens after the current line's newline until the delimiter
-    /// is found on its own line.
+    /// Collect the bodies of all pending here-documents from RAW source, in order.
     /// </summary>
-    private HereDoc CollectHereDocBody(string delimiter, bool expand, bool stripTabs)
+    /// <remarks>
+    /// A heredoc body is raw, line-oriented text — bash matches the delimiter
+    /// against whole physical lines with no quote/comment interpretation. The lexer
+    /// has already skipped the bodies (it emits NO body tokens), so the current
+    /// token is the command-line newline that both starts the body region and
+    /// serves as the separator before whatever follows the heredoc. We therefore
+    /// read the body text straight from source — peeling one body per pending
+    /// delimiter from a single running offset, which is what lets STACKED heredocs
+    /// (<c>cat &lt;&lt;A &lt;&lt;B</c>) resolve in order — and DO NOT advance the
+    /// token cursor: leaving that newline in place lets <c>ParseList</c> see the
+    /// separator and parse the command after the heredoc.
+    /// </remarks>
+    private void CollectHereDocBodies(
+        List<(string Delimiter, bool Expand, bool StripTabs)> pending,
+        ImmutableArray<HereDoc>.Builder hereDocs)
     {
-        // A heredoc body is RAW TEXT, not shell tokens. The lexer, however,
-        // tokenizes the whole input — it collapses runs of whitespace, drops
-        // '#' comment lines, and splits punctuation like ( ) < > into their own
-        // operator tokens. Rebuilding a body line by space-joining token values
-        // therefore corrupts it: "best-ranked (score-desc, newest-first)" came
-        // back as "best-ranked ( score-desc, newest-first )". Instead we slice
-        // the ORIGINAL source between line boundaries, using the token cursor
-        // only to know where each line ends and to advance the parser position
-        // past the consumed body.
-
-        // Skip the newline that ends the command line containing <<, and set the
-        // raw start of the first body line to just past it.
-        int lineStart;
-        if (Peek().Kind == BashTokenKind.Newline)
+        // The first body line begins just past the command-line newline (peeked,
+        // not consumed). If the command ended at EOF instead, there is no body.
+        int scan = Peek().Kind switch
         {
-            var nl = Advance();
-            lineStart = NextLineStart(nl.Position);
-        }
-        else
-        {
-            // No newline before the body (e.g. EOF right after the delimiter).
-            lineStart = Peek().Kind == BashTokenKind.Eof ? _input.Length : Peek().Position;
-        }
+            BashTokenKind.Newline => NextLineStart(Peek().Position),
+            BashTokenKind.Eof => _input.Length,
+            _ => Peek().Position,
+        };
 
-        // Scan the RAW source line by line — NOT the token stream. The body's
-        // newlines are not reliable tokens: an unbalanced quote, backtick, or
-        // parenthesis in a body line makes the lexer fold the rest of the input
-        // (including the delimiter line, and any following commands) into a single
-        // token, so a token-driven scan loses the delimiter and swallows the whole
-        // remainder. bash matches the delimiter against whole physical lines with
-        // no quote/comment interpretation, which is exactly what this raw scan does.
-        var bodyLines = new List<string>();
-        int scan = lineStart;
-        while (scan < _input.Length)
+        foreach (var (delimiter, expand, stripTabs) in pending)
         {
-            int nlPos = _input.IndexOf('\n', scan);
-            int lineEnd = nlPos < 0 ? _input.Length : nlPos;
-            // A folded "\r\n": exclude the trailing '\r' from the line text.
-            int textEnd = lineEnd > scan && _input[lineEnd - 1] == '\r' ? lineEnd - 1 : lineEnd;
-            string line = _input.Substring(scan, textEnd - scan);
-
-            // For <<- the delimiter line may have leading tabs.
-            string trimmedLine = stripTabs ? line.TrimStart('\t') : line;
-            if (trimmedLine == delimiter)
+            var bodyLines = new List<string>();
+            while (scan < _input.Length)
             {
-                // Resume parsing just past the delimiter line's newline.
-                ResyncTokenCursor(nlPos < 0 ? _input.Length : nlPos + 1);
-                return new HereDoc(BuildHereDocBody(bodyLines), expand, stripTabs);
+                int nlPos = _input.IndexOf('\n', scan);
+                int lineEnd = nlPos < 0 ? _input.Length : nlPos;
+                // A folded "\r\n": exclude the trailing '\r' from the line text.
+                int textEnd = lineEnd > scan && _input[lineEnd - 1] == '\r' ? lineEnd - 1 : lineEnd;
+                string line = _input.Substring(scan, textEnd - scan);
+
+                // For <<- the delimiter line may have leading tabs.
+                string trimmedLine = stripTabs ? line.TrimStart('\t') : line;
+                bool isDelim = trimmedLine == delimiter;
+                if (!isDelim) bodyLines.Add(stripTabs ? line.TrimStart('\t') : line);
+
+                if (nlPos < 0) { scan = _input.Length; break; }
+                scan = nlPos + 1;
+                if (isDelim) break;
             }
-
-            bodyLines.Add(stripTabs ? line.TrimStart('\t') : line);
-            if (nlPos < 0) break;
-            scan = nlPos + 1;
+            hereDocs.Add(new HereDoc(BuildHereDocBody(bodyLines), expand, stripTabs));
         }
-
-        // No delimiter before end of input (bash warns "here-document delimited by
-        // end-of-file" and uses everything up to EOF). Consume the remainder.
-        ResyncTokenCursor(_input.Length);
-        return new HereDoc(BuildHereDocBody(bodyLines), expand, stripTabs);
+        // Cursor intentionally left at the command-line newline (the separator).
     }
 
     // bash: each body line (including the final one) is terminated by a newline, so
@@ -309,16 +275,6 @@ public sealed partial class BashParser
     // empty body ("cat <<EOF\nEOF") yields "" because there are no body lines.
     private static string BuildHereDocBody(List<string> bodyLines) =>
         bodyLines.Count == 0 ? string.Empty : string.Join("\n", bodyLines) + "\n";
-
-    // Advance the token cursor to the first token at or beyond <paramref
-    // name="rawOffset"/> in the source, so the parser resumes after a raw-scanned
-    // heredoc body. Tokens the lexer produced inside the body (Position &lt;
-    // rawOffset) are skipped.
-    private void ResyncTokenCursor(int rawOffset)
-    {
-        while (Peek().Kind != BashTokenKind.Eof && Peek().Position < rawOffset)
-            Advance();
-    }
 
     /// <summary>
     /// Given the Position of a normalized Newline token — which points at the

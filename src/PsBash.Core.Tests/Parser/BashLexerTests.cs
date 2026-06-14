@@ -775,4 +775,52 @@ public class BashLexerTests
             (BashTokenKind.Word, "echo"),
             (BashTokenKind.Word, "\"$(echo \"hi there\")\""));
     }
+
+    // The lexer skips heredoc bodies entirely (they are raw text, captured by the
+    // parser from source). No body or delimiter-line tokens are emitted; the
+    // command after the delimiter tokenizes normally.
+    [Fact]
+    public void Tokenize_Heredoc_SkipsBody_TokenizesFollowingCommand()
+    {
+        var tokens = Tokenize("cat <<EOF\nbody line\nEOF\necho after");
+        AssertTokens(tokens,
+            (BashTokenKind.Word, "cat"),
+            (BashTokenKind.DLess, "<<"),
+            (BashTokenKind.Word, "EOF"),
+            (BashTokenKind.Newline, "\n"),
+            (BashTokenKind.Word, "echo"),
+            (BashTokenKind.Word, "after"));
+    }
+
+    // Regression: a lone unbalanced quote in a heredoc body must NOT start a string
+    // token that swallows the delimiter line and every following command. Skipping
+    // the body in raw source is what makes `echo after` survive as its own tokens.
+    [Fact]
+    public void Tokenize_HeredocBodyWithUnbalancedQuote_DoesNotSwallowFollowingCommand()
+    {
+        var tokens = Tokenize("cat <<EOF\nval=\"oops\nEOF\necho after");
+        AssertTokens(tokens,
+            (BashTokenKind.Word, "cat"),
+            (BashTokenKind.DLess, "<<"),
+            (BashTokenKind.Word, "EOF"),
+            (BashTokenKind.Newline, "\n"),
+            (BashTokenKind.Word, "echo"),
+            (BashTokenKind.Word, "after"));
+    }
+
+    // Stacked heredocs: both bodies are skipped (in order), then the next command.
+    [Fact]
+    public void Tokenize_StackedHeredocs_SkipsBothBodies()
+    {
+        var tokens = Tokenize("cat <<A <<B\nbody a\nA\nbody b\nB\necho done");
+        AssertTokens(tokens,
+            (BashTokenKind.Word, "cat"),
+            (BashTokenKind.DLess, "<<"),
+            (BashTokenKind.Word, "A"),
+            (BashTokenKind.DLess, "<<"),
+            (BashTokenKind.Word, "B"),
+            (BashTokenKind.Newline, "\n"),
+            (BashTokenKind.Word, "echo"),
+            (BashTokenKind.Word, "done"));
+    }
 }
