@@ -156,4 +156,22 @@ public class InvokeBashAwkFileModeTests : IClassFixture<SharedPwshFixture>, IDis
         var lines = RunBashText("\"p q`nr s\" | Invoke-BashAwk '{print $2}'");
         Assert.Equal(new[] { "q", "s" }, lines);
     }
+
+    [Fact]
+    public void Awk_PipelineOfSeparateObjects_OneRecordEach_NotConcatenated()
+    {
+        // ls / find / grep emit one typed object per line whose BashText has NO
+        // trailing newline. Each object must be its own awk record — regression:
+        // a streaming reader that joined on \n concatenated them into one record
+        // (`ls | awk '{print $NF}'` printed all names run together).
+        var lines = RunBashText("@('alpha','beta','gamma') | Invoke-BashAwk '{print $1}'");
+        Assert.Equal(new[] { "alpha", "beta", "gamma" }, lines);
+    }
+
+    [Fact]
+    public void Awk_PipelineOfSeparateObjects_NRCountsEachObject()
+    {
+        var lines = RunBashText("@('a','b','c','d') | Invoke-BashAwk 'END{print NR}'");
+        Assert.Equal(new[] { "4" }, lines);
+    }
 }

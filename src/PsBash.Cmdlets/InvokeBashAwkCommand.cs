@@ -239,19 +239,25 @@ public sealed class InvokeBashAwkCommand : PSCmdlet
     }
 
     /// <summary>
-    /// Records from the pipeline, split on the default record separator (\n,
-    /// with a trailing \r of a CRLF stripped). Streams a line at a time with a
-    /// small carry-over buffer instead of materializing all input at once, so a
-    /// large piped stream is bounded by one item + one partial line.
+    /// Records from the pipeline. In ps-bash's model each pipeline object is one
+    /// record — but typed objects (LsEntry, CatLine, …) carry a bare
+    /// <c>BashText</c> with no trailing newline, while text sources (printf /
+    /// echo -e) carry one with a trailing newline (and may pack several lines
+    /// into one object). So per item: drop a single trailing line terminator,
+    /// then split any remaining embedded newlines. This keeps <c>ls | awk</c>
+    /// (objects without newlines) from being concatenated into one record while
+    /// still splitting a multi-line text object into multiple records.
     /// </summary>
     private IEnumerable<string> PipelineRecords()
     {
-        string leftover = "";
         foreach (var item in _pipeline)
         {
             string text = BashRuntime.GetBashText(item);
             if (text.Length == 0) continue;
-            if (leftover.Length != 0) { text = leftover + text; leftover = ""; }
+            // Drop exactly one trailing line terminator (the object's own line break).
+            if (text.EndsWith("\r\n", StringComparison.Ordinal)) text = text.Substring(0, text.Length - 2);
+            else if (text[^1] == '\n' || text[^1] == '\r') text = text.Substring(0, text.Length - 1);
+
             int start = 0;
             for (int i = 0; i < text.Length; i++)
             {
@@ -260,12 +266,7 @@ public sealed class InvokeBashAwkCommand : PSCmdlet
                 yield return text.Substring(start, end - start);
                 start = i + 1;
             }
-            if (start < text.Length) leftover = text.Substring(start);
-        }
-        if (leftover.Length > 0)
-        {
-            if (leftover[^1] == '\r') leftover = leftover[..^1];
-            if (leftover.Length > 0) yield return leftover;
+            yield return start == 0 ? text : text.Substring(start);
         }
     }
 
