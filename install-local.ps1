@@ -67,6 +67,10 @@ if (Test-Path $destDir) {
         Move-OutOfTheWay $_.FullName
     }
     Get-ChildItem $destDir -File -Filter 'PsBash.*' | ForEach-Object {
+        # Skip already-renamed backups — otherwise each install re-renames
+        # PsBash.Core.dll.old → .old.old → .old.old.old …, growing the suffix
+        # unboundedly (the 'ps-bash*' and '*.dll' loops already guard this).
+        if ($_.Name -like '*.old*') { return }
         Move-OutOfTheWay $_.FullName
     }
     # Framework/dependency DLLs published alongside the host (System.*.dll etc).
