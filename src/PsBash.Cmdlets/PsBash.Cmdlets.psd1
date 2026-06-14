@@ -49,6 +49,7 @@ CmdletsToExport = @(
     # lines resolve to it.
     'Invoke-BashBasename',
     'Invoke-BashDirname',
+    'Invoke-BashEcho',
     'Invoke-BashPrintf',
     'Invoke-BashPwd',
     # REFACTOR-2 Phase 1c: cat / head / tail / wc migrated from PsBash.psm1.

@@ -3173,7 +3173,11 @@ public static class PsEmitter
                 result = EmitPassthrough("Invoke-BashMore", args);
                 return true;
             case "echo":
-                result = EmitPassthrough("Invoke-BashEcho", args);
+                // `-e` (enable escapes) and `-E` (disable) both prefix-collide with
+                // -ErrorAction/-ErrorVariable and are case-indistinguishable to the
+                // binder; force-quote them so they reach the cmdlet's Arguments with
+                // case intact (the cmdlet parses -e/-E case-sensitively). `-n` is safe.
+                result = EmitPassthrough("Invoke-BashEcho", args, EchoForceQuoteFlags);
                 return true;
             case "printf":
                 result = EmitPassthrough("Invoke-BashPrintf", args);
@@ -3689,6 +3693,14 @@ public static class PsEmitter
     /// </summary>
     private static readonly IReadOnlySet<string> FindForceQuoteFlags =
         new HashSet<string>(StringComparer.Ordinal) { "-o", "-a" };
+
+    /// <summary>
+    /// echo's <c>-e</c> / <c>-E</c> collide with the <c>-Error*</c> common
+    /// parameters and are case-indistinguishable to the binder; quoting routes
+    /// them to <c>Invoke-BashEcho</c>'s Arguments with case intact.
+    /// </summary>
+    private static readonly IReadOnlySet<string> EchoForceQuoteFlags =
+        new HashSet<string>(StringComparer.Ordinal) { "-e", "-E", "--" };
 
     private static string EmitPassthrough(
         string cmdlet,

@@ -664,34 +664,12 @@ function New-FlagDefs {
 # (Invoke-BashPrintf and Invoke-BashPwd, which have no colliding short flags,
 # WERE migrated — see PsBash.Cmdlets/InvokeBashPrintfCommand.cs / InvokeBashPwdCommand.cs.)
 
-function Invoke-BashEcho {
-    [OutputType('PsBash.TextOutput')]
-    param()
-    $Arguments = [string[]]$args
-    if ($Arguments -contains '--help') { return Show-BashHelp 'echo' }
-
-    $defs = New-FlagDefs -Entries @(
-        '-n', 'no trailing newline'
-        '-e', 'enable escape sequences'
-        '-E', 'disable escape sequences'
-    )
-
-    $parsed = ConvertFrom-BashArgs -Arguments $Arguments -FlagDefs $defs
-
-    $text = $parsed.Operands -join ' '
-
-    if ($parsed.Flags['-e']) {
-        $text = Expand-EscapeSequences -Text $text
-    }
-
-    if (-not $parsed.Flags['-n']) {
-        $text = $text + "`n"
-    }
-
-    Emit-BashLine -Text $text -Command 'echo'
-    $global:LASTEXITCODE = 0
-    $global:BashLastArg = if ($parsed.Operands.Count -gt 0) { $parsed.Operands[-1] } else { '' }
-}
+# --- echo Command ---
+# Invoke-BashEcho migrated to a binary cmdlet
+# (PsBash.Cmdlets/InvokeBashEchoCommand.cs). The emitter force-quotes -e/-E so
+# they reach the cmdlet's Arguments with case intact (the binder cannot
+# disambiguate them); the `Set-Alias echo -> Invoke-BashEcho` below resolves to
+# the cmdlet.
 
 # --- printf Command ---
 # REFACTOR-2 Phase 1b: Invoke-BashPrintf migrated to a binary cmdlet
