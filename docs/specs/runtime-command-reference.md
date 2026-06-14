@@ -4,7 +4,7 @@
 
 | Command | Function | Key Flags | Arg Parsing | Pipeline | File |
 |---|---|---|---|---|---|
-| echo | Invoke-BashEcho | `-n`, `-e`, `-E` | ConvertFrom-BashArgs | No | No |
+| echo | Invoke-BashEcho | `-n`, `-e`, `-E` | Binary cmdlet (ConvertFromBashArgs; emitter force-quotes `-e`/`-E`/`--` so they reach Arguments with case intact past the case-insensitive binder) | No | No |
 | printf | Invoke-BashPrintf | (format + args) | Positional | No | No |
 | ls | Invoke-BashLs | `-l`, `-a`, `-A`, `-h`, `-R`, `-S`, `-t`, `-r`, `-1`, `-p`, `-d`, `-F`, `--color`, `-i`, `-s` | Binary cmdlet (`-a`/`-A`, `-d`, `-p` are declared SwitchParameters; rest via ConvertFromBashArgs; bundles recovered post-parse) | No | Yes |
 | cat | Invoke-BashCat | `-n`, `-b`, `-s`, `-E`, `-T` | Binary cmdlet (`-E` is a declared SwitchParameter; rest via ConvertFromBashArgs) | Yes | Yes |
