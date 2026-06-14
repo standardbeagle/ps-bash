@@ -182,50 +182,72 @@ public sealed class InvokeBashAwkCommand : PSCmdlet
 
         int fileError = 0;
 
-        machine.RunBegin();
-        if (!machine.Exited)
+        // A runtime fault (bad dynamic regex, field index past the ceiling, a
+        // regex that blows the match-time budget) must surface as an awk error
+        // with whatever output was already produced flushed — never an unhandled
+        // .NET exception, which would tear down the shared host runspace.
+        try
         {
-            if (files.Count > 0)
+            machine.RunBegin();
+            if (!machine.Exited)
             {
-                foreach (var file in files)
+                if (files.Count > 0)
                 {
-                    string resolved;
-                    try { resolved = SessionState.Path.GetUnresolvedProviderPathFromPSPath(file); }
-                    catch (Exception ex)
+                    foreach (var file in files)
                     {
-                        if (FileSystemHelpers.IsPipelineStop(ex)) throw;
-                        FileSystemHelpers.WriteBashError(this, $"awk: can't open file {file}: {ex.Message}");
-                        fileError = 2;
-                        continue;
-                    }
-                    if (!File.Exists(resolved))
-                    {
-                        FileSystemHelpers.WriteBashError(this, $"awk: can't open file {file}: No such file or directory");
-                        fileError = 2;
-                        continue;
-                    }
+                        string resolved;
+                        try { resolved = SessionState.Path.GetUnresolvedProviderPathFromPSPath(file); }
+                        catch (Exception ex)
+                        {
+                            if (FileSystemHelpers.IsPipelineStop(ex)) throw;
+                            FileSystemHelpers.WriteBashError(this, $"awk: can't open file {file}: {ex.Message}");
+                            fileError = 2;
+                            continue;
+                        }
+                        if (!File.Exists(resolved))
+                        {
+                            FileSystemHelpers.WriteBashError(this, $"awk: can't open file {file}: No such file or directory");
+                            fileError = 2;
+                            continue;
+                        }
 
-                    machine.StartFile(file);
-                    foreach (var record in BashFileSystem.ReadLines(resolved))
+                        machine.StartFile(file);
+                        foreach (var record in BashFileSystem.ReadLines(resolved))
+                        {
+                            machine.ProcessRecord(record);
+                            if (machine.Exited) break;
+                        }
+                        if (machine.Exited) break;
+                    }
+                }
+                else
+                {
+                    machine.StartFile("");
+                    foreach (var record in PipelineRecords())
                     {
                         machine.ProcessRecord(record);
                         if (machine.Exited) break;
                     }
-                    if (machine.Exited) break;
                 }
             }
-            else
-            {
-                machine.StartFile("");
-                foreach (var record in PipelineRecords())
-                {
-                    machine.ProcessRecord(record);
-                    if (machine.Exited) break;
-                }
-            }
+
+            machine.RunEnd();
+        }
+        catch (AwkInterpreter.AwkRuntimeException ex)
+        {
+            machine.Flush();
+            FileSystemHelpers.WriteBashError(this, $"awk: {ex.Message}");
+            SessionState.PSVariable.Set("global:LASTEXITCODE", 2);
+            return;
+        }
+        catch (System.Text.RegularExpressions.RegexMatchTimeoutException)
+        {
+            machine.Flush();
+            FileSystemHelpers.WriteBashError(this, "awk: regular expression match timed out");
+            SessionState.PSVariable.Set("global:LASTEXITCODE", 2);
+            return;
         }
 
-        machine.RunEnd();
         machine.Flush();
 
         int exit = machine.ExitCode != 0 ? machine.ExitCode : fileError;

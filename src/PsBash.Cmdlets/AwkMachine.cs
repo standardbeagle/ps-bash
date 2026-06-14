@@ -161,10 +161,19 @@ internal sealed class AwkMachine
         return AwkValue.Uninitialized;
     }
 
+    // Ceiling on how many fields a single record may hold. A field index comes
+    // from `(int)Eval(...).ToNumber()`, so an expression like `$(1e30) = "x"` or
+    // `NF = 1e30` would otherwise saturate the cast to int.MaxValue and try to
+    // append ~2.1 billion empty strings — instant OOM that wedges the host. Real
+    // awk would also exhaust memory here; we fail with a bounded awk error.
+    private const int MaxFields = 10_000_000;
+
     private void SetField(int i, string value)
     {
         if (i == 0) { SetRecord(value); return; }
         if (i < 0) return;
+        if (i > MaxFields)
+            throw new AwkInterpreter.AwkRuntimeException($"field index {i} exceeds the maximum of {MaxFields}");
         if (i > _nf)
         {
             while (_fields.Count <= i) _fields.Add("");
@@ -177,6 +186,8 @@ internal sealed class AwkMachine
     private void SetNF(int newNf)
     {
         if (newNf < 0) newNf = 0;
+        if (newNf > MaxFields)
+            throw new AwkInterpreter.AwkRuntimeException($"NF value {newNf} exceeds the maximum of {MaxFields}");
         if (newNf < _nf)
         {
             _fields.RemoveRange(newNf + 1, _fields.Count - (newNf + 1));
@@ -204,16 +215,21 @@ internal sealed class AwkMachine
     private List<string> SplitWithFS(string s, string fs, bool fsIsRegexLiteral)
     {
         if (s.Length == 0) return new List<string>();
-        if (fsIsRegexLiteral)
-            return new List<string>(GetRegex(fs).Split(s));
-        if (fs == " ")
-            return SplitWhitespace(s);
+        // An empty separator — whether the literal regex // or the empty string —
+        // splits into individual characters in gawk. .NET's Regex.Split("") instead
+        // matches at every boundary including the ends, yielding spurious leading
+        // and trailing empty fields (split("ab",a,//) → ["","a","b",""], n=4 vs
+        // gawk's 2). Route both empty forms to the character split.
         if (fs.Length == 0)
         {
             var chars = new List<string>(s.Length);
             foreach (char c in s) chars.Add(c.ToString());
             return chars;
         }
+        if (fsIsRegexLiteral)
+            return new List<string>(GetRegex(fs).Split(s));
+        if (fs == " ")
+            return SplitWhitespace(s);
         if (fs.Length == 1)
             return new List<string>(s.Split(fs[0]));
         return new List<string>(GetRegex(fs).Split(s));
@@ -757,11 +773,29 @@ internal sealed class AwkMachine
         return AwkValue.Str(fmt);
     }
 
+    // Bound on how long any single regex operation may run. .NET's backtracking
+    // engine is vulnerable to catastrophic backtracking (e.g. /^(a+)+b/ against a
+    // long run of 'a's); without a timeout one pathological match hangs the
+    // single-threaded host indefinitely. On expiry the engine throws
+    // RegexMatchTimeoutException, which GetRegex's callers see surfaced as an awk
+    // runtime error rather than a hang.
+    private static readonly TimeSpan RegexTimeout = TimeSpan.FromSeconds(5);
+
     private Regex GetRegex(string pattern)
     {
         if (!_regexCache.TryGetValue(pattern, out var rx))
         {
-            rx = new Regex(pattern, RegexOptions.None);
+            try
+            {
+                rx = new Regex(pattern, RegexOptions.None, RegexTimeout);
+            }
+            catch (ArgumentException ex)
+            {
+                // Malformed pattern (unbalanced paren/class, bad quantifier). Real
+                // awk reports a fatal regex error; surface it the same way instead
+                // of letting RegexParseException escape and crash the runspace.
+                throw new AwkInterpreter.AwkRuntimeException($"invalid regular expression: /{pattern}/: {ex.Message}");
+            }
             _regexCache[pattern] = rx;
         }
         return rx;

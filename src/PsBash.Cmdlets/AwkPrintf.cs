@@ -44,16 +44,16 @@ internal static class AwkPrintf
 
             // width
             int width = -1;
-            if (i < n && format[i] == '*') { width = (int)NextArg().ToNumber(); i++; if (width < 0) { left = true; width = -width; } }
-            else { int w = 0; bool any = false; while (i < n && char.IsDigit(format[i])) { w = w * 10 + (format[i] - '0'); i++; any = true; } if (any) width = w; }
+            if (i < n && format[i] == '*') { width = ClampSpec(NextArg().ToNumber()); i++; if (width < 0) { left = true; width = -width; } }
+            else { width = ParseSpecDigits(format, ref i, out bool anyW); if (!anyW) width = -1; }
 
             // precision
             int prec = -1;
             if (i < n && format[i] == '.')
             {
                 i++;
-                if (i < n && format[i] == '*') { prec = (int)NextArg().ToNumber(); i++; if (prec < 0) prec = -1; }
-                else { int p = 0; while (i < n && char.IsDigit(format[i])) { p = p * 10 + (format[i] - '0'); i++; } prec = p; }
+                if (i < n && format[i] == '*') { prec = ClampSpec(NextArg().ToNumber()); i++; if (prec < 0) prec = -1; }
+                else { prec = ParseSpecDigits(format, ref i, out _); }
             }
 
             if (i >= n) { sb.Append('%'); break; }
@@ -162,6 +162,43 @@ internal static class AwkPrintf
         }
 
         return sb.ToString();
+    }
+
+    // Upper bound on a field width or precision. A width/precision is either
+    // accumulated from format digits (`%999999999d`, which overflows a raw
+    // `w*10+d` int and wraps to a bogus huge positive) or taken from a `*`
+    // argument (`printf "%*s", 1e20, x`, whose `(int)` cast saturates to
+    // int.MaxValue). Either way the padding code would then allocate a multi-
+    // gigabyte string. 1,000,000 is far past any legitimate use and caps a single
+    // directive's allocation at ~1 MB.
+    private const int MaxSpec = 1_000_000;
+
+    /// <summary>Clamp a <c>*</c> width/precision argument to [-MaxSpec, MaxSpec], preserving sign.</summary>
+    private static int ClampSpec(double v)
+    {
+        if (double.IsNaN(v)) return 0;
+        if (v >= MaxSpec) return MaxSpec;
+        if (v <= -MaxSpec) return -MaxSpec;
+        return (int)v;
+    }
+
+    /// <summary>
+    /// Parse a run of format digits into a width/precision, saturating at MaxSpec
+    /// instead of overflowing the accumulator. <paramref name="any"/> reports
+    /// whether at least one digit was consumed (distinguishes width 0 from absent).
+    /// </summary>
+    private static int ParseSpecDigits(string format, ref int i, out bool any)
+    {
+        int v = 0;
+        any = false;
+        while (i < format.Length && char.IsDigit(format[i]))
+        {
+            any = true;
+            if (v < MaxSpec) v = v * 10 + (format[i] - '0');
+            if (v > MaxSpec) v = MaxSpec;
+            i++;
+        }
+        return v;
     }
 
     private static string Pad(string s, int width, bool left, bool zero)

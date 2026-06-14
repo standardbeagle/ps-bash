@@ -2537,6 +2537,29 @@ public class PsEmitterTests
         Assert.Equal("@'\nhello $NAME\n\n'@ | Emit-BashLine | Invoke-BashCat", result);
     }
 
+    // A body line that IS the PowerShell here-string terminator (`"@`) would close
+    // the @"..."@ string early — bash prints it literally, ps-bash used to throw
+    // "missing terminator". The emitter must fall back to an ordinary double-quoted
+    // string (same value, expansion preserved) and never emit @".
+    [Fact]
+    public void Transpile_ExpandingHeredocBodyHasTerminatorLine_FallsBackToQuotedString()
+    {
+        var result = PsEmitter.Transpile("cat <<EOF\nbefore\n\"@\nafter\nEOF");
+
+        Assert.DoesNotContain("@\"", result);
+        Assert.Equal("\"before\n`\"@\nafter\n\" | Emit-BashLine | Invoke-BashCat", result);
+    }
+
+    // The literal-heredoc analogue: a body line of `'@` would close @'...'@ early.
+    [Fact]
+    public void Transpile_LiteralHeredocBodyHasTerminatorLine_FallsBackToSingleQuotedString()
+    {
+        var result = PsEmitter.Transpile("cat <<'EOF'\nbefore\n'@\nafter\nEOF");
+
+        Assert.DoesNotContain("@'", result);
+        Assert.Equal("'before\n''@\nafter\n' | Emit-BashLine | Invoke-BashCat", result);
+    }
+
     [Fact]
     public void Transpile_BackslashDelimiter_EmitsLiteralHereString()
     {

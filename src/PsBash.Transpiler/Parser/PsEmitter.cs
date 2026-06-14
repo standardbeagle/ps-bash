@@ -1305,9 +1305,20 @@ public static class PsEmitter
                 body = StripLeadingTabs(body);
             if (hereDoc.Expand)
                 body = TranslateHereDocVars(body);
-            string hereString = hereDoc.Expand
-                ? $"@\"\n{body}\n\"@"
-                : $"@'\n{body}\n'@";
+            // A PowerShell here-string ends at the first line that begins with its
+            // terminator (`"@` for @"..."@, `'@` for @'...'@). A heredoc body
+            // containing such a line would close the string early — bash prints
+            // the line literally, ps-bash threw "missing terminator". When that
+            // collision is present fall back to an ordinary quoted string (whose
+            // value is identical to the here-string content); otherwise keep the
+            // here-string, which is the readable common-case form.
+            string hereString = HereStringWouldBreak(body, hereDoc.Expand)
+                ? (hereDoc.Expand
+                    ? "\"" + EscapeForDoubleQuotedHereDocBody(body) + "\""
+                    : PsBuild.SingleQuote(body))
+                : (hereDoc.Expand
+                    ? $"@\"\n{body}\n\"@"
+                    : $"@'\n{body}\n'@");
             string cmdText = EmitSimple(innerCmd);
             return $"{hereString} | Emit-BashLine | {cmdText}";
         }
@@ -1764,6 +1775,41 @@ public static class PsEmitter
             lines[i] = lines[i].TrimStart('\t');
         return string.Join('\n', lines);
     }
+
+    /// <summary>
+    /// True when <paramref name="body"/> contains a line that begins with the
+    /// PowerShell here-string terminator (<c>"@</c> for an expanding heredoc,
+    /// <c>'@</c> for a literal one). Such a line closes the here-string early, so
+    /// the emitter must fall back to an ordinary quoted string instead.
+    /// </summary>
+    private static bool HereStringWouldBreak(string body, bool expand)
+    {
+        string terminator = expand ? "\"@" : "'@";
+        int pos = 0;
+        while (pos < body.Length)
+        {
+            int nl = body.IndexOf('\n', pos);
+            int lineStart = pos;
+            // A '\r' before the '\n' is part of the line, not its start.
+            if (string.CompareOrdinal(body, lineStart, terminator, 0, terminator.Length) == 0)
+                return true;
+            if (nl < 0) break;
+            pos = nl + 1;
+        }
+        return false;
+    }
+
+    /// <summary>
+    /// Escape a heredoc body for placement inside a non-here double-quoted string
+    /// while preserving the <c>@"..."@</c> expansion contract: <c>$</c> and
+    /// backtick keep their here-string meaning (interpolation / escape), and only
+    /// a literal <c>"</c> — which would close the ordinary string — is backtick
+    /// escaped. (A body that already contains a backtick-escaped quote is a
+    /// documented corner the fallback does not round-trip; the common heredoc
+    /// bodies that hit this path do not.)
+    /// </summary>
+    private static string EscapeForDoubleQuotedHereDocBody(string body) =>
+        body.IndexOf('"') < 0 ? body : body.Replace("\"", "`\"");
 
     private static string TranslateHereDocVars(string body)
     {

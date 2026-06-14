@@ -102,9 +102,13 @@ internal static class AwkLexer
                 if (c == '0' && i + 1 < n && (src[i + 1] == 'x' || src[i + 1] == 'X'))
                 {
                     i += 2;
-                    while (i < n && Uri.IsHexDigit(src[i])) i++;
+                    // Accumulate directly into a double (awk's only numeric type).
+                    // Convert.ToInt64 would throw OverflowException on a value past
+                    // Int64.MaxValue (e.g. 0xFFFFFFFFFFFFFFFFFF) and FormatException
+                    // on a bare `0x` with no digits — both crash the lexer.
+                    double hv = 0;
+                    while (i < n && Uri.IsHexDigit(src[i])) { hv = hv * 16 + HexVal(src[i]); i++; }
                     string hex = src.Substring(start, i - start);
-                    double hv = (double)Convert.ToInt64(hex, 16);
                     toks.Add(new Tok { Kind = TokKind.Number, Text = hex, Num = hv });
                     continue;
                 }
@@ -163,7 +167,8 @@ internal static class AwkLexer
                     }
                     else { sb.Append(src[i]); i++; }
                 }
-                if (i < n) i++; // closing quote
+                if (i >= n) throw new AwkInterpreter.AwkSyntaxException("awk: syntax error: unterminated string literal");
+                i++; // closing quote
                 toks.Add(new Tok { Kind = TokKind.String, Text = sb.ToString() });
                 continue;
             }
@@ -183,7 +188,8 @@ internal static class AwkLexer
                         else if (src[i] == ']') inClass = false;
                         sb.Append(src[i]); i++;
                     }
-                    if (i < n) i++; // closing slash
+                    if (i >= n) throw new AwkInterpreter.AwkSyntaxException("awk: syntax error: unterminated regex literal");
+                    i++; // closing slash
                     toks.Add(new Tok { Kind = TokKind.Regex, Text = sb.ToString() });
                     continue;
                 }
@@ -272,6 +278,11 @@ internal static class AwkLexer
     }
 
     private static char Next(string s, int i) => i + 1 < s.Length ? s[i + 1] : '\0';
+
+    private static int HexVal(char c) =>
+        c >= '0' && c <= '9' ? c - '0' :
+        c >= 'a' && c <= 'f' ? c - 'a' + 10 :
+        c - 'A' + 10;
 
     private static void Add(List<Tok> toks, TokKind kind, string text) => toks.Add(new Tok { Kind = kind, Text = text });
 

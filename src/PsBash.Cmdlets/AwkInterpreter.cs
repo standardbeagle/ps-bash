@@ -37,4 +37,16 @@ internal static class AwkInterpreter
     {
         public AwkSyntaxException(string message) : base(message) { }
     }
+
+    /// <summary>
+    /// A runtime fault raised while *executing* a parsed program — an invalid
+    /// dynamic regex, a field/NF index past the bounded ceiling, a regex match
+    /// that exceeds the time budget, etc. The driving cmdlet catches this and
+    /// reports it as an awk error (exit 2) instead of letting a raw .NET
+    /// exception escape and wedge the shared host runspace.
+    /// </summary>
+    public sealed class AwkRuntimeException : Exception
+    {
+        public AwkRuntimeException(string message) : base(message) { }
+    }
 }

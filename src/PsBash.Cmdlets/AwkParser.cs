@@ -14,10 +14,22 @@ internal sealed class AwkParser
     private readonly List<Tok> _t;
     private int _pos;
     private bool _noGt; // inside an unparenthesized print/printf arg list
+    private int _depth; // nesting depth, to bound recursion (see EnterDepth)
 
     public AwkParser(List<Tok> tokens) { _t = tokens; }
 
-    private Tok Cur => _t[_pos];
+    // The recursive-descent expression/statement grammar self-recurses on every
+    // nesting level — `(((…)))`, `---x`, `a=b=c=…`, nested if/blocks. A crafted
+    // program with thousands of levels would otherwise overflow the native stack
+    // (an uncatchable process kill). Cap the depth and report a syntax error.
+    private const int MaxDepth = 1000;
+
+    private void EnterDepth()
+    {
+        if (++_depth > MaxDepth) throw Err("expression or statement nesting too deep");
+    }
+
+    private Tok Cur => _pos < _t.Count ? _t[_pos] : _t[^1];
     private Tok Peek(int k = 1) => _t[Math.Min(_pos + k, _t.Count - 1)];
     private bool Is(TokKind k) => Cur.Kind == k;
     private bool IsKw(string w) => Cur.Kind == TokKind.Keyword && Cur.Text == w;
@@ -102,6 +114,13 @@ internal sealed class AwkParser
     }
 
     private AwkStmt ParseStatement()
+    {
+        EnterDepth();
+        try { return ParseStatementInner(); }
+        finally { _depth--; }
+    }
+
+    private AwkStmt ParseStatementInner()
     {
         if (Is(TokKind.LBrace)) return ParseBlock();
 
@@ -296,6 +315,13 @@ internal sealed class AwkParser
 
     private AwkExpr ParseAssignment()
     {
+        EnterDepth();
+        try { return ParseAssignmentInner(); }
+        finally { _depth--; }
+    }
+
+    private AwkExpr ParseAssignmentInner()
+    {
         var left = ParseTernary();
         if (AssignOps.TryGetValue(Cur.Kind, out var op))
         {
@@ -435,6 +461,13 @@ internal sealed class AwkParser
 
     private AwkExpr ParseUnary()
     {
+        EnterDepth();
+        try { return ParseUnaryInner(); }
+        finally { _depth--; }
+    }
+
+    private AwkExpr ParseUnaryInner()
+    {
         if (Is(TokKind.Not)) { Advance(); return new Unary { Op = '!', Operand = ParseUnary() }; }
         if (Is(TokKind.Minus)) { Advance(); return new Unary { Op = '-', Operand = ParseUnary() }; }
         if (Is(TokKind.Plus)) { Advance(); return new Unary { Op = '+', Operand = ParseUnary() }; }
@@ -467,6 +500,13 @@ internal sealed class AwkParser
     }
 
     private AwkExpr ParsePrimary()
+    {
+        EnterDepth();
+        try { return ParsePrimaryInner(); }
+        finally { _depth--; }
+    }
+
+    private AwkExpr ParsePrimaryInner()
     {
         switch (Cur.Kind)
         {
