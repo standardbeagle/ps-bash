@@ -77,6 +77,14 @@ CmdletsToExport = @(
     # web reimplemented in C# inside JqEngine; ConvertTo-JqJson +
     # Invoke-JqFilter remain as psm1 shims for the still-psm1 Invoke-BashYq).
     'Invoke-BashJq',
+    # REFACTOR-2 follow-on: awk migrated from PsBash.psm1. The psm1 awk
+    # function web was a regex/string-scan approximation; the cmdlet drives a
+    # real recursive-descent AWK interpreter (AwkInterpreter / AwkLexer /
+    # AwkParser / AwkMachine / AwkValue / AwkPrintf), closing the five
+    # differential parity gaps (field string-concat, += accumulation, index()
+    # in print position, split() into an array, if/else). psm1's Set-Alias
+    # 'awk' resolves to this cmdlet.
+    'Invoke-BashAwk',
     # RC-8a: Invoke-ProcessSubSource migrated from PsBash.psm1. The psm1
     # function introduced a script function scope, so source <(...) env vars
     # and function defs were discarded on return. The cmdlet has no script

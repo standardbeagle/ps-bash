@@ -118,20 +118,27 @@ Phase 3 was explicitly split-friendly (each command "likely warrants its own
 task"). After a per-command cost/benefit audit, the Phase 3 outcome is **sed
 migrated**, with the rest decided as follows:
 
-- **`awk` stays a psm1 function — permanently.** `Invoke-BashAwk` is the entry
-  point to a near-complete AWK language interpreter: ~950+ lines across twelve
-  psm1 functions (`ConvertFrom-AwkProgram`, `Split-AwkFields`, `Read-AwkBlock`,
-  `Test-AwkPattern`, `Resolve-AwkExpression`, `Expand-AwkString`,
-  `Invoke-AwkAction`, `Split-AwkStatements`, `Split-AwkFuncArgs`,
-  `Format-AwkPrintf`, `Resolve-AwkStringFunc`). It is a recursive-descent
-  expression evaluator with its own variable scope, field model, string-function
-  library, and `printf` engine. The original Phase 3 task text names awk as the
-  prime "may stay in psm1 indefinitely" candidate. Reimplementing an interpreter
-  of this size in C# is a multi-week effort whose only payoff is cold-start /
-  AOT cost — the migration cost vastly outweighs the benefit, and a port would
-  be a large new bug surface against a psm1 oracle that already passes its
-  differential cases. **Decision: awk's sub-scope is closed; it remains a psm1
-  function.**
+- **`awk` migrated (REFACTOR-2 follow-on — decision reversed).** The original
+  Phase 3 audit deferred awk indefinitely (a ~950-line, twelve-function psm1
+  interpreter; the port looked like a large bug surface against an oracle that
+  "already passed"). That last clause was the flaw: the psm1 awk was a
+  regex/string-scan *approximation*, not a parser. Pinning it against a real
+  bash oracle (`AwkDifferentialTests`, commit 115d57a) exposed five cases it
+  could not even express — field string-concat (`$1 $2`), `+=` accumulation,
+  `index()` in print position, `split()` into an array, and `if/else` control
+  flow. Closing those required a real parser, not psm1 patches. `Invoke-BashAwk`
+  is now a binary cmdlet (`InvokeBashAwkCommand`) driving a genuine
+  recursive-descent interpreter split across `AwkLexer` (tokenizer with
+  regex-vs-division disambiguation), `AwkParser` (full awk precedence + the
+  print/printf redirection rule), `AwkMachine` (evaluator: variable/array/field
+  state, special vars, builtin library, line-oriented output), `AwkValue`
+  (the dual string/number/strnum value model that drives awk's comparison
+  rules), and `AwkPrintf` (the C `printf` / CONVFMT / OFMT engine). The twelve
+  psm1 functions were deleted; psm1's `Set-Alias 'awk'` resolves to the cmdlet.
+  All five previously-skipped differential cases are now active assertions. The
+  `-v VAR=VAL` flag is declared as the value-bearing `string[] V` decoy because
+  a bare `-v` prefix-collides with the `-Verbose` common parameter (see the
+  PowerShell common-param collision pattern).
 - **`jq` migrated in REFACTOR-2 Phase F6 (follow-on from Phase 3).**
   `Invoke-BashJq` is now a binary cmdlet (`InvokeBashJqCommand`); the
   `*-Jq*` helper web is reimplemented in C# inside the static `JqEngine`

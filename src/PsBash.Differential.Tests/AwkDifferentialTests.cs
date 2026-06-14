@@ -16,12 +16,10 @@ public class AwkDifferentialTests
     private static Task Eq(string script) =>
         AssertOracle.EqualAsync(script, timeout: TimeSpan.FromSeconds(15));
 
-    // These five cases diverge from bash on the CURRENT psm1 awk (verified
-    // 2026-06-14: string-concat of fields, split(), += accumulation, index(),
-    // and if/else). They are not regressions — they are the parity targets the
-    // C# awk port must fix. Kept here (skipped) so the gap list is tracked in
-    // the oracle and flips to active assertions the moment the port closes them.
-    private const string GapNote = "known psm1 awk gap — C# port parity target (un-skip when fixed)";
+    // The five cases below (string-concat of fields, += accumulation, index(),
+    // split(), if/else) were skipped gaps on the regex/string-scan psm1 awk.
+    // They became active assertions when the binary-cmdlet AWK interpreter
+    // (AwkInterpreter / AwkParser / AwkMachine) landed and closed them.
 
     [SkippableFact] public Task Awk_PrintWholeLine() => Eq("printf 'a b c\\n' | awk '{print}'");
     [SkippableFact] public Task Awk_PrintDollar0() => Eq("printf 'a b c\\n' | awk '{print $0}'");
@@ -42,19 +40,19 @@ public class AwkDifferentialTests
 
     [SkippableFact] public Task Awk_VarFlag() => Eq("printf '' | awk -v x=5 'BEGIN{print x}'");
     [SkippableFact] public Task Awk_Arithmetic() => Eq("printf '2 3\\n' | awk '{print $1 + $2}'");
-    [SkippableFact] public Task Awk_StringConcat() { Skip.If(true, GapNote); return Eq("printf 'a b\\n' | awk '{print $1 $2}'"); }
-    [SkippableFact] public Task Awk_SumAccumulate() { Skip.If(true, GapNote); return Eq("printf '1\\n2\\n3\\n' | awk '{s+=$1} END{print s}'"); }
+    [SkippableFact] public Task Awk_StringConcat() => Eq("printf 'a b\\n' | awk '{print $1 $2}'");
+    [SkippableFact] public Task Awk_SumAccumulate() => Eq("printf '1\\n2\\n3\\n' | awk '{s+=$1} END{print s}'");
 
     [SkippableFact] public Task Awk_Length() => Eq("printf 'hello\\n' | awk '{print length($0)}'");
     [SkippableFact] public Task Awk_Substr() => Eq("printf 'hello\\n' | awk '{print substr($0,2,3)}'");
     [SkippableFact] public Task Awk_Toupper() => Eq("printf 'abc\\n' | awk '{print toupper($0)}'");
     [SkippableFact] public Task Awk_Tolower() => Eq("printf 'ABC\\n' | awk '{print tolower($0)}'");
-    [SkippableFact] public Task Awk_Index() { Skip.If(true, GapNote); return Eq("printf 'hello\\n' | awk '{print index($0,\"ll\")}'"); }
+    [SkippableFact] public Task Awk_Index() => Eq("printf 'hello\\n' | awk '{print index($0,\"ll\")}'");
     [SkippableFact] public Task Awk_Printf() => Eq("printf 'a\\n' | awk '{printf \"%s-%s\\n\", $1, \"x\"}'");
     [SkippableFact] public Task Awk_Sub() => Eq("printf 'aaa\\n' | awk '{sub(/a/,\"b\"); print}'");
     [SkippableFact] public Task Awk_Gsub() => Eq("printf 'aaa\\n' | awk '{gsub(/a/,\"b\"); print}'");
-    [SkippableFact] public Task Awk_Split() { Skip.If(true, GapNote); return Eq("printf 'a,b,c\\n' | awk '{n=split($0,arr,\",\"); print n, arr[1], arr[3]}'"); }
+    [SkippableFact] public Task Awk_Split() => Eq("printf 'a,b,c\\n' | awk '{n=split($0,arr,\",\"); print n, arr[1], arr[3]}'");
 
     [SkippableFact] public Task Awk_Ofs() => Eq("printf 'a b\\n' | awk 'BEGIN{OFS=\"-\"} {print $1, $2}'");
-    [SkippableFact] public Task Awk_IfElse() { Skip.If(true, GapNote); return Eq("printf '1\\n5\\n' | awk '{if ($1>3) print \"big\"; else print \"small\"}'"); }
+    [SkippableFact] public Task Awk_IfElse() => Eq("printf '1\\n5\\n' | awk '{if ($1>3) print \"big\"; else print \"small\"}'");
 }

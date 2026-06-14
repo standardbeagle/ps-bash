@@ -25,7 +25,7 @@
 | ln | Invoke-BashLn | `-s`, `-f`, `-v` | Manual loop | No | Yes |
 | ps | Invoke-BashPs | `-e`/`-A`, `-f`, `-u`, `-p`, `--sort`, `-o` | Binary cmdlet (`-e` / `-A` declared as `SwitchParameter`s `E` / `A`; `-p` / `-o` declared as nullable `string`s `P` / `O`; `-f` / `-u` / `--sort` / `aux` stay in `Arguments`) | No | No |
 | sed | Invoke-BashSed | `-n`, `-i`, `-E`, `-e` | Manual loop | Yes | Yes |
-| awk | Invoke-BashAwk | `-F`, `-v` | Manual loop | Yes | Yes |
+| awk | Invoke-BashAwk | `-F`, `-v`, `-f` | Binary cmdlet (`-v VAR=VAL` declared as value-bearing `string[] V` — bare `-v` prefix-collides with the `-Verbose` common parameter; `-F`/`-f` and joined forms stay in `Arguments`). Backed by a real recursive-descent AWK interpreter (`AwkInterpreter`/`AwkLexer`/`AwkParser`/`AwkMachine`/`AwkValue`/`AwkPrintf`), not a flag table — the psm1 regex/string-scan approximation was replaced, closing the five differential gaps (field string-concat, `+=`, `index()`, `split()`, `if/else`) | Yes | Yes |
 | cut | Invoke-BashCut | `-d`, `-f`, `-c` | Binary cmdlet (`-d` and `-c` are declared value-bearing parameters `D` / `C`; `-f` and joined `-dC`/`-fLIST`/`-cLIST` stay in `Arguments`) | Yes | Yes |
 | tr | Invoke-BashTr | `-d`, `-s` | Binary cmdlet (`-d`/`-c` declared as SwitchParameters; `-s`/`-t` and bundled forms stay in `Arguments`) | Yes | No |
 | uniq | Invoke-BashUniq | `-c`, `-d`, `-u`, `-i`, `-f`, `-s`, `-w` | Binary cmdlet (`-c`/`-d`/`-i` declared SwitchParameters; `-u`/`-f`/`-s`/`-w` and bundled forms stay in `Arguments`) | Yes | Yes |
