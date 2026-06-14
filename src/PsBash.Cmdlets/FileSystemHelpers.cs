@@ -367,7 +367,21 @@ internal static class FileSystemHelpers
         }
         foreach (var sub in Directory.GetDirectories(dir))
         {
-            ForceDeleteDirectoryRecursive(sub);
+            // A directory symlink / junction must be UNLINKED, not recursed into.
+            // Recursing would enumerate and delete the link TARGET's contents — a
+            // destructive escape out of the tree being removed — and a cycle
+            // (link -> ancestor) would recurse until the stack overflows.
+            // Directory.Delete(recursive:false) removes the link itself, matching
+            // what the fast Directory.Delete(recursive:true) path already does.
+            if ((File.GetAttributes(sub) & FileAttributes.ReparsePoint) != 0)
+            {
+                ClearReadOnly(sub);
+                Directory.Delete(sub, recursive: false);
+            }
+            else
+            {
+                ForceDeleteDirectoryRecursive(sub);
+            }
         }
         ClearReadOnly(dir);
         Directory.Delete(dir, recursive: false);

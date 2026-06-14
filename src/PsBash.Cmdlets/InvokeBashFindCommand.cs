@@ -721,15 +721,20 @@ public sealed class InvokeBashFindCommand : PSCmdlet
     {
         var m = System.Text.RegularExpressions.Regex.Match(expr, @"^([+-])(\d+)([ckMG]?)$");
         if (!m.Success) return ('\0', 0);
-        long n = long.Parse(m.Groups[2].Value);
-        long bytes = m.Groups[3].Value switch
+        // The regex admits arbitrarily many digits, so a 20+-digit number overflows.
+        // Clamp to long.MaxValue instead of letting long.Parse throw: no real file is
+        // that big, so `+overflow` then matches nothing and `-overflow` matches all —
+        // the semantically correct result, and never a crash.
+        if (!long.TryParse(m.Groups[2].Value, out long n)) n = long.MaxValue;
+        long mult = m.Groups[3].Value switch
         {
-            "c" => n,
-            "k" => n * 1024L,
-            "M" => n * 1048576L,
-            "G" => n * 1073741824L,
-            _ => n * 512L,
+            "c" => 1L,
+            "k" => 1024L,
+            "M" => 1048576L,
+            "G" => 1073741824L,
+            _ => 512L,
         };
+        long bytes = n > long.MaxValue / mult ? long.MaxValue : n * mult;
         return (m.Groups[1].Value[0], bytes);
     }
 
@@ -745,7 +750,11 @@ public sealed class InvokeBashFindCommand : PSCmdlet
     private static (char Op, int Days) ParseMtimeExpr(string expr)
     {
         var m = System.Text.RegularExpressions.Regex.Match(expr, @"^([+-])(\d+)$");
-        return m.Success ? (m.Groups[1].Value[0], int.Parse(m.Groups[2].Value)) : ('\0', 0);
+        if (!m.Success) return ('\0', 0);
+        // Clamp instead of letting int.Parse throw on a huge day count: `+overflow`
+        // (older than ~5.8M years) matches nothing, `-overflow` matches all.
+        int days = int.TryParse(m.Groups[2].Value, out int d) ? d : int.MaxValue;
+        return (m.Groups[1].Value[0], days);
     }
 
     private static bool MtimeMatch(EvalCtx c, char op, int days)

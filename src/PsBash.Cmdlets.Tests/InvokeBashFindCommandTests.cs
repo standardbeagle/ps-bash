@@ -102,6 +102,34 @@ public class InvokeBashFindCommandTests : IDisposable, IClassFixture<SharedPwshF
     private string[] Names(System.Collections.ObjectModel.Collection<PSObject> r) =>
         r.Select(o => (string?)o.Properties["Name"]?.Value).Where(n => n != null).ToArray()!;
 
+    // A -size/-mtime number too large for long/int used to crash the cmdlet with
+    // an unhandled OverflowException (long.Parse / int.Parse on a regex-matched
+    // run of digits). It must clamp instead: `+overflow` matches nothing, like GNU.
+    [Fact]
+    public void Find_SizeOverflow_DoesNotCrash_MatchesNothing()
+    {
+        Mk("small.txt", "hi");
+        var names = Names(RunAllowError($"Invoke-BashFind '{Esc(_tmpDir)}' -size +99999999999999999999c"));
+        Assert.DoesNotContain("small.txt", names);
+    }
+
+    [Fact]
+    public void Find_SizeOverflow_NegativeMatchesAll()
+    {
+        Mk("small.txt", "hi");
+        // `-overflow` (smaller than an astronomically large size) matches everything.
+        var names = Names(RunAllowError($"Invoke-BashFind '{Esc(_tmpDir)}' -type f -size -99999999999999999999c"));
+        Assert.Contains("small.txt", names);
+    }
+
+    [Fact]
+    public void Find_MtimeOverflow_DoesNotCrash_MatchesNothing()
+    {
+        Mk("small.txt", "hi");
+        var names = Names(RunAllowError($"Invoke-BashFind '{Esc(_tmpDir)}' -mtime +9999999999999"));
+        Assert.DoesNotContain("small.txt", names);
+    }
+
     [Fact]
     public void Find_OrOperator_MatchesEitherPredicate()
     {
