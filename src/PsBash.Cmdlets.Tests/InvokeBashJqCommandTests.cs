@@ -411,6 +411,35 @@ public class InvokeBashJqCommandTests : IDisposable, IClassFixture<SharedPwshFix
         Assert.Equal("{ Write-Host PWNED }", lines[0]);
     }
 
+    // ===================== // alternative over a stream =====================
+
+    [Fact]
+    public void Jq_AlternativeOverStream_KeepsAllTruthyValues()
+    {
+        // `.[] // "x"` must yield every truthy element, not collapse to the
+        // first. Oracle: echo '[1,2,3]' | jq -c '.[] // "x"' -> 1 2 3
+        var lines = RunText("'[1,2,3]' | Invoke-BashJq -c '.[] // \"x\"'");
+        Assert.Equal(new[] { "1", "2", "3" }, lines);
+    }
+
+    [Fact]
+    public void Jq_AlternativeOverStream_DropsFalsyButKeepsRest()
+    {
+        // null/false are falsy and dropped; the surviving truthy values remain.
+        // Oracle: echo '[1,null,false,2]' | jq -c '.[] // "x"' -> 1 2
+        var lines = RunText("'[1,null,false,2]' | Invoke-BashJq -c '.[] // \"x\"'");
+        Assert.Equal(new[] { "1", "2" }, lines);
+    }
+
+    [Fact]
+    public void Jq_AlternativeOverStream_FallsBackWhenAllFalsy()
+    {
+        // When the left side yields no truthy value, fall back to the right.
+        // Oracle: echo '[null,false]' | jq -c '.[] // "x"' -> "x"
+        var lines = RunText("'[null,false]' | Invoke-BashJq -c '.[] // \"x\"'");
+        Assert.Equal(new[] { "\"x\"" }, lines);
+    }
+
     // ===================== Alias resolves to cmdlet =====================
 
     [Fact]

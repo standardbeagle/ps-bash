@@ -277,14 +277,17 @@ internal static class JqEngine
         {
             string leftExpr = filter.Substring(0, altIdx).Trim();
             string rightExpr = filter.Substring(altIdx + 2).Trim();
+            // jq's `a // b` yields *every* non-false/non-null output of `a`; only
+            // when `a` produces no truthy value at all does it fall back to `b`.
+            // (The old code returned just the first truthy value, collapsing a
+            // stream like `.[] // "x"` over [1,2,3] to a single `1`.)
             var leftResults = EvalFilter(data, leftExpr, variables);
+            var kept = new List<object?>();
             foreach (var val in leftResults)
             {
-                if (!IsFalsy(val))
-                {
-                    return new List<object?> { val };
-                }
+                if (!IsFalsy(val)) { kept.Add(val); }
             }
+            if (kept.Count > 0) { return kept; }
             return EvalFilter(data, rightExpr, variables);
         }
 

@@ -144,8 +144,9 @@ public class InvokeBashGzipCommandTests : IDisposable, IClassFixture<SharedPwshF
         Assert.Single(objs);
         var o = objs[0];
         Assert.Contains("PsBash.GzipListOutput", o.TypeNames);
-        Assert.Equal(payload.Length, (int)o.Properties["UncompressedSize"].Value);
-        Assert.True(((int)o.Properties["CompressedSize"].Value) > 0);
+        // Sizes are 64-bit so a >2 GB member can't overflow the listing.
+        Assert.Equal((long)payload.Length, (long)o.Properties["UncompressedSize"].Value);
+        Assert.True(((long)o.Properties["CompressedSize"].Value) > 0);
     }
 
     [Fact]
@@ -258,5 +259,27 @@ public class InvokeBashGzipCommandTests : IDisposable, IClassFixture<SharedPwshF
             $"Invoke-BashGzip '{probe.Replace("'", "''")}' 2>$null").Invoke();
         pwsh.Commands.Clear();
         Assert.Empty(result);
+    }
+
+    [Fact]
+    public void Gzip_Compress_ReadOnlySource_ForceDeletesOriginal()
+    {
+        // Default compress removes the source. If the source is read-only
+        // (e.g. a file under a .git pack dir) a bare File.Delete throws on
+        // Windows and the original lingers; the cmdlet must force-delete it.
+        string file = Path.Combine(_tmpDir, "readonly.txt");
+        File.WriteAllText(file, "force-delete-me");
+        File.SetAttributes(file, FileAttributes.ReadOnly);
+        try
+        {
+            RunLines($"Invoke-BashGzip '{PsQuote(file)}'");
+            Assert.True(File.Exists(file + ".gz"), "compressed output should exist");
+            Assert.False(File.Exists(file),
+                "compress should force-delete a read-only source");
+        }
+        finally
+        {
+            if (File.Exists(file)) { File.SetAttributes(file, FileAttributes.Normal); }
+        }
     }
 }

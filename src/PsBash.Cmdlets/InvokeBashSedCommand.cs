@@ -402,10 +402,47 @@ public sealed class InvokeBashSedCommand : PSCmdlet
         public Regex? Regex;           // s
         public string? Replacement;    // s
         public bool Global;            // s
+        public int Nth;                // s — Nth-occurrence flag (0 = unset)
         public int ExitCode;           // q
         public string? Text;           // a / i / c
         public string? Source;         // y
         public string? Dest;           // y
+    }
+
+    /// <summary>
+    /// Convert a GNU-sed replacement string into a .NET regex replacement
+    /// string. Handles backrefs (\1-\9 → $1-$9), whole-match & → $0, the
+    /// C-escapes \n \t \r, the literalizers \&amp; and \\, a dropped backslash
+    /// before any other char, and escapes a literal $ to $$ so .NET does not
+    /// read it as a group reference.
+    /// </summary>
+    private static string BuildReplacement(string sed)
+    {
+        var sb = new StringBuilder(sed.Length);
+        for (int i = 0; i < sed.Length; i++)
+        {
+            char c = sed[i];
+            if (c == '\\' && i + 1 < sed.Length)
+            {
+                char n = sed[i + 1];
+                switch (n)
+                {
+                    case 'n': sb.Append('\n'); break;
+                    case 't': sb.Append('\t'); break;
+                    case 'r': sb.Append('\r'); break;
+                    case '\\': sb.Append('\\'); break;
+                    case '&': sb.Append('&'); break;          // literal &, not whole-match
+                    case >= '0' and <= '9': sb.Append('$').Append(n); break; // backref
+                    default: sb.Append(n); break;              // \x → x
+                }
+                i++;
+                continue;
+            }
+            if (c == '&') { sb.Append("$0"); continue; }       // whole match
+            if (c == '$') { sb.Append("$$"); continue; }       // literal $ for .NET
+            sb.Append(c);
+        }
+        return sb.ToString();
     }
 
     /// <summary>
@@ -556,7 +593,21 @@ public sealed class InvokeBashSedCommand : PSCmdlet
                 string searchPattern = parts[0];
                 string replacement = parts[1];
                 string flags = parts.Count > 2 ? parts[2] : string.Empty;
-                bool global = flags.Contains('g');
+
+                // Parse the substitution flags. GNU allows g, i/I, p, and a
+                // numeric occurrence N (and the combination Ng = "Nth and
+                // onward"). Accumulate digit runs so `s/x/y/10` parses as 10,
+                // not three separate flags. TryParse guards the int.Parse
+                // overflow trap on an absurd count (`s/x/y/9999999999`).
+                bool global = false;
+                int nth = 0;
+                var numBuf = new StringBuilder();
+                foreach (char f in flags)
+                {
+                    if (char.IsDigit(f)) { numBuf.Append(f); }
+                    else if (f == 'g') { global = true; }
+                }
+                if (numBuf.Length > 0 && !int.TryParse(numBuf.ToString(), out nth)) { nth = 0; }
 
                 // An empty regex (`s//repl/`) means "reuse the last regex" in sed;
                 // with none to reuse it is an error. ps-bash does not track a previous
@@ -569,9 +620,11 @@ public sealed class InvokeBashSedCommand : PSCmdlet
                         "sed: -e expression #1, char 0: no previous regular expression", 1);
                 }
 
-                // Backreference translation: \1-\9 → $1-$9, \& → $0.
-                replacement = Regex.Replace(replacement, @"\\(\d)", "$$$1");
-                replacement = Regex.Replace(replacement, @"\\&", "$$0");
+                // Translate a GNU-sed replacement into a .NET replacement string:
+                // backrefs \1-\9 → $1-$9, whole-match & → $0, C-escapes \n \t \r
+                // → real control chars, \& and \\ → literal & and \, and a literal
+                // $ → $$ (else .NET would read it as a group reference).
+                replacement = BuildReplacement(replacement);
 
                 var regexOpts = RegexOptions.None;
                 if (flags.Contains('I') || flags.Contains('i'))
@@ -608,6 +661,7 @@ public sealed class InvokeBashSedCommand : PSCmdlet
                     Regex = regex,
                     Replacement = replacement,
                     Global = global,
+                    Nth = nth,
                 };
             }
             case 'd':
@@ -778,10 +832,21 @@ public sealed class InvokeBashSedCommand : PSCmdlet
                     switch (cmd.Type)
                     {
                         case 's':
-                            patternSpace = cmd.Global
-                                ? cmd.Regex!.Replace(patternSpace, cmd.Replacement!)
-                                : cmd.Regex!.Replace(patternSpace, cmd.Replacement!, 1);
+                        {
+                            // Walk every match and decide per-occurrence whether to
+                            // substitute, so the four GNU forms all fall out of one
+                            // path: first-only (count == 1), g (count >= 1), Nth
+                            // (count == N), and Ng (count >= N).
+                            int target = cmd.Nth > 0 ? cmd.Nth : 1;
+                            int count = 0;
+                            patternSpace = cmd.Regex!.Replace(patternSpace, m =>
+                            {
+                                count++;
+                                bool hit = cmd.Global ? count >= target : count == target;
+                                return hit ? m.Result(cmd.Replacement!) : m.Value;
+                            });
                             break;
+                        }
                         case 'd':
                             deleted = true;
                             break;

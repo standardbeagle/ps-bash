@@ -239,17 +239,19 @@ public sealed class InvokeBashGzipCommand : PSCmdlet
 
                 if (list)
                 {
-                    int compressedSize = (int)inputSize;
-                    int uncompressedSize;
+                    long compressedSize = inputSize;
+                    long uncompressedSize;
                     try
                     {
                         // Stream-count the decompressed size — never materialize it.
+                        // Keep it 64-bit: a >2 GB member overflows an int cast and
+                        // prints a negative/wrapped size and bogus ratio.
                         using var input = BashFileSystem.OpenRead(filePath);
                         using var gs = new GZipStream(input, CompressionMode.Decompress);
                         var cbuf = new byte[81920];
                         long total = 0; int cn;
                         while ((cn = gs.Read(cbuf, 0, cbuf.Length)) > 0) total += cn;
-                        uncompressedSize = (int)total;
+                        uncompressedSize = total;
                     }
                     catch (Exception ex)
                     {
@@ -324,7 +326,10 @@ public sealed class InvokeBashGzipCommand : PSCmdlet
                         }
                         if (!keep)
                         {
-                            try { File.Delete(filePath); } catch { /* best effort, oracle parity */ }
+                            // Force-delete: the source may be read-only (e.g. a
+                            // file inside a .git pack dir); bare File.Delete throws
+                            // UnauthorizedAccess on Windows and the original lingers.
+                            try { FileSystemHelpers.DeleteFileForce(filePath); } catch { /* best effort, oracle parity */ }
                         }
                         if (verbose)
                         {
@@ -399,7 +404,7 @@ public sealed class InvokeBashGzipCommand : PSCmdlet
                         }
                         if (!keep)
                         {
-                            try { File.Delete(filePath); } catch { /* best effort, oracle parity */ }
+                            try { FileSystemHelpers.DeleteFileForce(filePath); } catch { /* best effort, oracle parity */ }
                         }
                         if (verbose)
                         {

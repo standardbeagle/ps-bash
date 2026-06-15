@@ -357,6 +357,9 @@ public sealed class InvokeBashTarCommand : PSCmdlet
                         bool skip = false;
                         foreach (string pat in excludePatterns)
                         {
+                            // An empty pattern must match nothing — string.Contains("")
+                            // is true for every input and would exclude the whole tree.
+                            if (pat.Length == 0) { continue; }
                             if (child.Contains(pat, StringComparison.Ordinal)) { skip = true; break; }
                         }
                         if (skip) { continue; }
@@ -370,6 +373,7 @@ public sealed class InvokeBashTarCommand : PSCmdlet
                     bool skip = false;
                     foreach (string pat in excludePatterns)
                     {
+                        if (pat.Length == 0) { continue; }
                         if (resolved.Contains(pat, StringComparison.Ordinal)) { skip = true; break; }
                     }
                     if (skip) { continue; }
@@ -442,7 +446,18 @@ public sealed class InvokeBashTarCommand : PSCmdlet
                     if (name.Length == 0) continue;
                 }
 
-                string targetPath = Path.Join(destDir, name.Replace('/', Path.DirectorySeparatorChar));
+                // Guard against tar-slip / Zip-Slip: a malicious entry named
+                // `../../x`, an absolute path, or a Windows drive/UNC path would
+                // otherwise let Path.Join + File.Create write OUTSIDE destDir.
+                // GNU tar strips a leading `/` and refuses to extract members that
+                // resolve above the destination; mirror that — skip and warn.
+                if (!TryResolveWithinDest(destDir, name, out string targetPath))
+                {
+                    FileSystemHelpers.WriteBashError(this,
+                        $"tar: Skipping to next header: {name}: path escapes archive destination");
+                    FileSystemHelpers.SetLastExitCode(this, 1);
+                    continue;
+                }
                 string? dir = Path.GetDirectoryName(targetPath);
                 if (!string.IsNullOrEmpty(dir) && !Directory.Exists(dir))
                 {
@@ -465,6 +480,41 @@ public sealed class InvokeBashTarCommand : PSCmdlet
             if (isGz) { tarStream?.Dispose(); }
             inStream?.Dispose();
         }
+    }
+
+    /// <summary>
+    /// Resolve a tar entry name against the extraction destination and confirm
+    /// it stays inside it. Returns false for absolute paths, drive/UNC roots, or
+    /// names that climb out via <c>..</c>. On success <paramref name="targetPath"/>
+    /// is the fully-resolved, contained path to write.
+    /// </summary>
+    private static bool TryResolveWithinDest(string destDir, string name, out string targetPath)
+    {
+        targetPath = string.Empty;
+        string rel = name.Replace('/', Path.DirectorySeparatorChar);
+
+        // A rooted entry (leading separator, C:\..., \\server\...) must never
+        // escape the destination — reject rather than letting Path.Join discard
+        // destDir and honor the absolute path.
+        if (Path.IsPathRooted(rel)) { return false; }
+
+        string destFull = Path.GetFullPath(destDir);
+        string candidate = Path.GetFullPath(Path.Combine(destFull, rel));
+
+        // Containment check: candidate must equal destFull or sit beneath it.
+        string prefix = destFull.EndsWith(Path.DirectorySeparatorChar)
+            ? destFull
+            : destFull + Path.DirectorySeparatorChar;
+        var cmp = OperatingSystem.IsWindows()
+            ? StringComparison.OrdinalIgnoreCase
+            : StringComparison.Ordinal;
+        if (!candidate.StartsWith(prefix, cmp) &&
+            !string.Equals(candidate, destFull, cmp))
+        {
+            return false;
+        }
+        targetPath = candidate;
+        return true;
     }
 
     private void DoList(string archiveFile, bool gzipFilter)

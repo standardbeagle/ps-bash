@@ -231,4 +231,73 @@ public class InvokeBashTarCommandTests : IDisposable, IClassFixture<SharedPwshFi
         var objs = RunObjects($"Invoke-BashTar -t -f '{PsQuote(injection)}'");
         Assert.Empty(objs);
     }
+
+    // ===================== Security: path traversal (tar-slip) =====================
+
+    /// <summary>Write a tar containing a single entry under an attacker-chosen name.</summary>
+    private string WriteMaliciousTar(string archiveName, string entryName, string body)
+    {
+        string archive = Path.Combine(_tmpDir, archiveName);
+        using var fs = File.Create(archive);
+        using var tw = new System.Formats.Tar.TarWriter(fs);
+        var entry = new System.Formats.Tar.PaxTarEntry(
+            System.Formats.Tar.TarEntryType.RegularFile, entryName)
+        {
+            DataStream = new MemoryStream(Encoding.UTF8.GetBytes(body)),
+        };
+        tw.WriteEntry(entry);
+        return archive;
+    }
+
+    [Fact]
+    public void Tar_Extract_DotDotTraversalEntry_DoesNotEscapeDest()
+    {
+        // A malicious entry named ../escape.txt must NOT be written into the
+        // parent of the extraction dir (classic tar-slip / Zip-Slip).
+        string archive = WriteMaliciousTar("evil.tar", "../escape.txt", "pwned");
+        string dest = Path.Combine(_tmpDir, "dest");
+        Directory.CreateDirectory(dest);
+
+        RunLines($"Invoke-BashTar -xf '{PsQuote(archive)}' --directory='{PsQuote(dest)}'");
+
+        // The traversal target sits in _tmpDir (parent of dest) — it must not exist.
+        Assert.False(File.Exists(Path.Combine(_tmpDir, "escape.txt")),
+            "tar extracted a ../ entry outside the destination directory");
+    }
+
+    [Fact]
+    public void Tar_Extract_AbsolutePathEntry_DoesNotEscapeDest()
+    {
+        // An absolute/rooted entry name must be rejected, not honored verbatim
+        // (which would let Path.Combine discard the destination).
+        string rooted = OperatingSystem.IsWindows()
+            ? @"C:\Windows\Temp\psb-tarslip-probe.txt"
+            : "/tmp/psb-tarslip-probe.txt";
+        string archive = WriteMaliciousTar("evilabs.tar", rooted, "pwned");
+        string dest = Path.Combine(_tmpDir, "dest2");
+        Directory.CreateDirectory(dest);
+
+        RunLines($"Invoke-BashTar -xf '{PsQuote(archive)}' --directory='{PsQuote(dest)}'");
+
+        Assert.False(File.Exists(rooted),
+            "tar extracted an absolute-path entry outside the destination directory");
+    }
+
+    // ===================== Empty --exclude must match nothing =====================
+
+    [Fact]
+    public void Tar_Create_EmptyExcludePattern_DoesNotExcludeEverything()
+    {
+        // An empty --exclude= pattern must exclude nothing — string.Contains("")
+        // is true for every path and would otherwise produce an empty archive.
+        string dir = Path.Combine(_tmpDir, "tree");
+        Directory.CreateDirectory(dir);
+        File.WriteAllText(Path.Combine(dir, "keep.txt"), "x");
+        string archive = Path.Combine(_tmpDir, "ex.tar");
+
+        RunLines($"Invoke-BashTar -c --exclude= -f '{PsQuote(archive)}' '{PsQuote(dir)}'");
+
+        string[] listed = RunLines($"Invoke-BashTar -t -f '{PsQuote(archive)}'");
+        Assert.Contains(listed, e => e.EndsWith("keep.txt"));
+    }
 }

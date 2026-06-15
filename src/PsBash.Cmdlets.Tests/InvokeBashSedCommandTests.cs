@@ -136,12 +136,53 @@ public class InvokeBashSedCommandTests : IDisposable, IClassFixture<SharedPwshFi
     }
 
     [Fact]
-    public void Sed_Pipeline_AmpersandBackreference_IsWholeMatch()
+    public void Sed_Pipeline_BareAmpersand_IsWholeMatch()
     {
-        // \& in the replacement is the entire match (.NET $0).
-        var lines = RunText(@"'cat' | Invoke-BashSed 's/cat/[\&]/'");
+        // A bare & in the replacement is the entire match (.NET $0).
+        // Oracle: printf 'cat' | sed 's/cat/[&]/' -> [cat]
+        var lines = RunText(@"'cat' | Invoke-BashSed 's/cat/[&]/'");
         Assert.Single(lines);
         Assert.Equal("[cat]", lines[0]);
+    }
+
+    [Fact]
+    public void Sed_Pipeline_EscapedAmpersand_IsLiteral()
+    {
+        // \& is a LITERAL ampersand in GNU sed, NOT the whole match.
+        // Oracle: printf 'cat' | sed 's/cat/[\&]/' -> [&]
+        var lines = RunText(@"'cat' | Invoke-BashSed 's/cat/[\&]/'");
+        Assert.Single(lines);
+        Assert.Equal("[&]", lines[0]);
+    }
+
+    [Fact]
+    public void Sed_Pipeline_NumericOccurrenceFlag_ReplacesNthOnly()
+    {
+        // s/a/b/2 replaces only the 2nd match.
+        // Oracle: printf 'a a a a' | sed 's/a/b/2' -> a b a a
+        var lines = RunText("'a a a a' | Invoke-BashSed 's/a/b/2'");
+        Assert.Single(lines);
+        Assert.Equal("a b a a", lines[0]);
+    }
+
+    [Fact]
+    public void Sed_Pipeline_NumericPlusGlobalFlag_ReplacesNthOnward()
+    {
+        // s/a/b/2g replaces the 2nd match and everything after it.
+        // Oracle: printf 'a a a a' | sed 's/a/b/2g' -> a b b b
+        var lines = RunText("'a a a a' | Invoke-BashSed 's/a/b/2g'");
+        Assert.Single(lines);
+        Assert.Equal("a b b b", lines[0]);
+    }
+
+    [Fact]
+    public void Sed_Pipeline_EscapeSequencesInReplacement_Expand()
+    {
+        // \t in the replacement expands to a real tab (GNU sed).
+        // Oracle: printf 'aXb' | sed 's/X/\t/' -> "a\tb"
+        var lines = RunText(@"'aXb' | Invoke-BashSed 's/X/\t/'");
+        Assert.Single(lines);
+        Assert.Equal("a\tb", lines[0]);
     }
 
     [Fact]
