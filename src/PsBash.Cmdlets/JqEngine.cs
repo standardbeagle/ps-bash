@@ -223,6 +223,15 @@ internal static class JqEngine
             return new List<object?> { data };
         }
 
+        // Fully-parenthesized sub-expression: (expr) — strip and evaluate inside,
+        // so `(1,2)` becomes the stream 1,2 (e.g. as an object-construction value).
+        // Only when the opening paren matches the very last char (so `(a)+(b)` is
+        // left for the arithmetic splitter).
+        if (filter[0] == '(' && MatchingBracket(filter, '(', ')', 0) == filter.Length - 1)
+        {
+            return EvalFilter(data, filter.Substring(1, filter.Length - 2).Trim(), variables);
+        }
+
         // Top-level pipe split
         var pipeSegments = SplitTopLevel(filter, '|');
         if (pipeSegments.Count > 1)
@@ -316,15 +325,15 @@ internal static class JqEngine
         }
 
         // Arithmetic: + - (additive, lowest), then * / % (multiplicative). Split on
-        // the LAST top-level whitespace-surrounded operator (left-associative). The
-        // mandatory surrounding spaces keep `.a-b`, `-1`, and negative literals safe.
-        var arith = FindLastSpacedArithOp(filter, additive: true)
-                    ?? FindLastSpacedArithOp(filter, additive: false);
+        // the LAST top-level operator (left-associative). Spaces are optional;
+        // unary-sign detection keeps `-1`, `.a-b`, and array indices safe.
+        var arith = FindLastArithOp(filter, additive: true)
+                    ?? FindLastArithOp(filter, additive: false);
         if (arith != null)
         {
             var (opIdx, op) = arith.Value;
             var lefts = EvalFilter(data, filter.Substring(0, opIdx).Trim(), variables);
-            var rights = EvalFilter(data, filter.Substring(opIdx + 3).Trim(), variables);
+            var rights = EvalFilter(data, filter.Substring(opIdx + 1).Trim(), variables);
             var res = new List<object?>();
             foreach (var l in lefts)
                 foreach (var r in rights)
@@ -371,8 +380,16 @@ internal static class JqEngine
             && MatchingBracket(filter, '{', '}', 0) == filter.Length - 1)
         {
             string inner = filter.Substring(1, filter.Length - 2).Trim();
-            var result = new System.Collections.Specialized.OrderedDictionary();
             var pairs = SplitTopLevel(inner, ',');
+
+            // A field whose value (or computed key) expands to N results makes the
+            // whole object construction a stream: jq takes the Cartesian product
+            // across fields, first field varying slowest. We build it up by
+            // cloning each partial object once per value of the next field.
+            var objects = new List<System.Collections.Specialized.OrderedDictionary>
+            {
+                new System.Collections.Specialized.OrderedDictionary(),
+            };
             foreach (var rawPair in pairs)
             {
                 string pair = rawPair.Trim();
@@ -405,9 +422,28 @@ internal static class JqEngine
                     keyPart = pair.TrimStart('.');
                     vals = EvalFilter(data, "." + keyPart, variables);
                 }
-                result[keyPart] = vals.Count == 1 ? vals[0] : vals.ToArray();
+
+                // Cartesian expansion: each existing partial object gets one copy
+                // per value of this field, preserving insertion order in each copy.
+                var next = new List<System.Collections.Specialized.OrderedDictionary>(objects.Count * Math.Max(vals.Count, 1));
+                foreach (var partial in objects)
+                {
+                    if (vals.Count == 0)
+                    {
+                        // jq: a field producing 'empty' drops the whole object.
+                        continue;
+                    }
+                    foreach (var v in vals)
+                    {
+                        var clone = new System.Collections.Specialized.OrderedDictionary();
+                        foreach (System.Collections.DictionaryEntry e in partial) { clone[e.Key] = e.Value; }
+                        clone[keyPart] = v;
+                        next.Add(clone);
+                    }
+                }
+                objects = next;
             }
-            return new List<object?> { result };
+            return new List<object?>(objects);
         }
 
         // String literal with interpolation
@@ -969,26 +1005,39 @@ internal static class JqEngine
     }
 
     /// <summary>
-    /// Find the LAST top-level whitespace-surrounded arithmetic operator (for
-    /// left-associative evaluation). Mandatory spaces around the operator keep
-    /// dot-paths (<c>.a-b</c>), negative literals, and array indices safe.
-    /// Returns (index of the leading space, operator char) or null.
+    /// Find the LAST top-level arithmetic operator (for left-associative
+    /// evaluation). Spaces around the operator are optional — jq accepts
+    /// <c>1+2</c>, <c>.a+.b</c>, and <c>.foo-1</c> as well as the spaced forms.
+    /// A leading <c>+</c>/<c>-</c> (unary sign) or one that follows another
+    /// operator / opener / comma / pipe is skipped, which keeps negative
+    /// literals and <c>(1, -2)</c> safe. Returns (operator index, op) or null.
     /// </summary>
-    private static (int idx, char op)? FindLastSpacedArithOp(string f, bool additive)
+    private static (int idx, char op)? FindLastArithOp(string f, bool additive)
     {
         string ops = additive ? "+-" : "*/%";
+        const string unaryBefore = "+-*/%(,|<>=!"; // op is unary if preceded by one of these
         int depth = 0; bool inStr = false; int found = -1; char foundOp = '\0';
         for (int i = 0; i < f.Length; i++)
         {
             char c = f[i];
             if (c == '"' && (i == 0 || f[i - 1] != '\\')) { inStr = !inStr; continue; }
             if (inStr) continue;
-            if (c is '(' or '[' or '{') depth++;
-            else if (c is ')' or ']' or '}') depth--;
-            else if (depth == 0 && c == ' ' && i + 2 < f.Length && f[i + 2] == ' ' && ops.IndexOf(f[i + 1]) >= 0)
-            {
-                found = i; foundOp = f[i + 1];
-            }
+            if (c is '(' or '[' or '{') { depth++; continue; }
+            if (c is ')' or ']' or '}') { depth--; continue; }
+            if (depth != 0 || ops.IndexOf(c) < 0) { continue; }
+
+            // Require a left operand: the previous non-space char must exist and
+            // not itself be an operator/opener (else this is a unary sign).
+            int j = i - 1;
+            while (j >= 0 && f[j] == ' ') { j--; }
+            if (j < 0 || unaryBefore.IndexOf(f[j]) >= 0) { continue; }
+
+            // Require a right operand.
+            int k = i + 1;
+            while (k < f.Length && f[k] == ' ') { k++; }
+            if (k >= f.Length) { continue; }
+
+            found = i; foundOp = c;
         }
         return found >= 0 ? (found, foundOp) : null;
     }

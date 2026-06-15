@@ -340,4 +340,92 @@ public class InvokeBashTarCommandTests : IDisposable, IClassFixture<SharedPwshFi
         Assert.Contains(listed, e => e.EndsWith("a.txt"));
         Assert.DoesNotContain(listed, e => e.Contains("nm"));
     }
+
+    [Fact]
+    public void Tar_Create_ExcludeIsGlobNotSubstring_KeepsPartialMatch()
+    {
+        // Negative guard: a bare `.tmp` (no wildcard) is a glob that matches only
+        // a component named exactly ".tmp" — it must NOT substring-match
+        // "skip.tmp". Oracle: tar --exclude=.tmp keeps skip.tmp. This pins the
+        // glob semantics so the old Contains()-substring behavior can't return.
+        string dir = Path.Combine(_tmpDir, "g3");
+        Directory.CreateDirectory(dir);
+        File.WriteAllText(Path.Combine(dir, "skip.tmp"), "x");
+        string archive = Path.Combine(_tmpDir, "g3.tar");
+
+        RunLines($"Invoke-BashTar -c --exclude=.tmp -f '{PsQuote(archive)}' '{PsQuote(dir)}'");
+
+        string[] listed = RunLines($"Invoke-BashTar -t -f '{PsQuote(archive)}'");
+        Assert.Contains(listed, e => e.EndsWith("skip.tmp"));
+    }
+
+    // ===================== symlink / hardlink extraction =====================
+
+    private static bool CanCreateSymlinks()
+    {
+        string d = Path.Combine(Path.GetTempPath(), "psb-slprobe-" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            Directory.CreateDirectory(d);
+            File.WriteAllText(Path.Combine(d, "t"), "x");
+            string l = Path.Combine(d, "l");
+            File.CreateSymbolicLink(l, "t");
+            return new FileInfo(l).LinkTarget is not null;
+        }
+        catch { return false; }
+        finally { try { Directory.Delete(d, true); } catch { /* best-effort */ } }
+    }
+
+    /// <summary>Write a tar with a regular file plus a symlink entry to it.</summary>
+    private string WriteSymlinkTar(string archiveName, string linkName, string linkTarget)
+    {
+        string archive = Path.Combine(_tmpDir, archiveName);
+        using var fs = File.Create(archive);
+        using var tw = new System.Formats.Tar.TarWriter(fs);
+        var file = new System.Formats.Tar.PaxTarEntry(
+            System.Formats.Tar.TarEntryType.RegularFile, "target.txt")
+        {
+            DataStream = new MemoryStream(Encoding.UTF8.GetBytes("link-body")),
+        };
+        tw.WriteEntry(file);
+        var link = new System.Formats.Tar.PaxTarEntry(
+            System.Formats.Tar.TarEntryType.SymbolicLink, linkName)
+        {
+            LinkName = linkTarget,
+        };
+        tw.WriteEntry(link);
+        return archive;
+    }
+
+    [SkippableFact]
+    public void Tar_Extract_Symlink_RoundTrips()
+    {
+        Skip.IfNot(CanCreateSymlinks(), "symlink creation not permitted on this machine");
+
+        string archive = WriteSymlinkTar("sl.tar", "link.txt", "target.txt");
+        string dest = Path.Combine(_tmpDir, "sldest");
+        Directory.CreateDirectory(dest);
+
+        RunLines($"Invoke-BashTar -xf '{PsQuote(archive)}' --directory='{PsQuote(dest)}'");
+
+        string linkPath = Path.Combine(dest, "link.txt");
+        Assert.True(File.Exists(linkPath));
+        Assert.Equal("target.txt", new FileInfo(linkPath).LinkTarget);
+    }
+
+    [Fact]
+    public void Tar_Extract_EscapingSymlink_IsRefused()
+    {
+        // A symlink whose target climbs out of the destination is the tar-slip
+        // pivot — it must be refused, not created.
+        string archive = WriteSymlinkTar("evilsl.tar", "link.txt",
+            "../../psb-tarslip-link-probe");
+        string dest = Path.Combine(_tmpDir, "esldest");
+        Directory.CreateDirectory(dest);
+
+        RunLines($"Invoke-BashTar -xf '{PsQuote(archive)}' --directory='{PsQuote(dest)}'");
+
+        Assert.False(File.Exists(Path.Combine(dest, "link.txt")),
+            "an escaping symlink must not be created");
+    }
 }

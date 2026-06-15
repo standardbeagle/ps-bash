@@ -455,12 +455,63 @@ public class InvokeBashJqCommandTests : IDisposable, IClassFixture<SharedPwshFix
     [Fact]
     public void Jq_ComputedKey_StringConcat()
     {
-        // {(expr): v} evaluates the key expression. Uses the spaced concat form
-        // ("a" + "b") — the no-space form ("a"+"b") hits a separate pre-existing
-        // arith-operator-needs-spaces gap unrelated to computed keys.
-        // Oracle: echo '{}' | jq -c '{("a" + "b"): 1}' -> {"ab":1}
-        var lines = RunText("'{}' | Invoke-BashJq -c '{(\"a\" + \"b\"): 1}'");
+        // {(expr): v} evaluates the key expression, including no-space concat.
+        // Oracle: echo '{}' | jq -c '{("a"+"b"): 1}' -> {"ab":1}
+        var lines = RunText("'{}' | Invoke-BashJq -c '{(\"a\"+\"b\"): 1}'");
         Assert.Equal(new[] { "{\"ab\":1}" }, lines);
+    }
+
+    [Fact]
+    public void Jq_Arithmetic_NoSpacesAroundOperator()
+    {
+        // jq accepts arithmetic without surrounding spaces. Oracle: 1+2 -> 3.
+        var lines = RunText("'null' | Invoke-BashJq -c '1+2'");
+        Assert.Equal(new[] { "3" }, lines);
+    }
+
+    [Fact]
+    public void Jq_Arithmetic_FieldSubtractionNoSpaces()
+    {
+        // .foo-1 is subtraction, not part of an identifier. Oracle: foo=5 -> 4.
+        var lines = RunText("'{\"foo\":5}' | Invoke-BashJq -c '.foo-1'");
+        Assert.Equal(new[] { "4" }, lines);
+    }
+
+    [Fact]
+    public void Jq_StringConcat_NoSpaces()
+    {
+        // "a"+"b" must not be misread as a single string literal. Oracle: "ab".
+        var lines = RunText("'null' | Invoke-BashJq -c '\"a\"+\"b\"'");
+        Assert.Equal(new[] { "\"ab\"" }, lines);
+    }
+
+    [Fact]
+    public void Jq_NegativeLiteral_NotTreatedAsSubtraction()
+    {
+        // A leading - is a sign, not a binary operator. Oracle: -1 -> -1.
+        var lines = RunText("'null' | Invoke-BashJq -c '-1'");
+        Assert.Equal(new[] { "-1" }, lines);
+    }
+
+    [Fact]
+    public void Jq_ObjectConstruction_SingleMultiValue_CartesianProduct()
+    {
+        // {a:(1,2)} streams one object per value. Oracle: {"a":1} {"a":2}
+        var lines = RunText("'null' | Invoke-BashJq -c '{a:(1,2)}'");
+        Assert.Equal(new[] { "{\"a\":1}", "{\"a\":2}" }, lines);
+    }
+
+    [Fact]
+    public void Jq_ObjectConstruction_TwoMultiValues_CartesianProduct()
+    {
+        // {a:(1,2),b:(3,4)} — first field varies slowest (a-major).
+        // Oracle: {"a":1,"b":3} {"a":1,"b":4} {"a":2,"b":3} {"a":2,"b":4}
+        var lines = RunText("'null' | Invoke-BashJq -c '{a:(1,2),b:(3,4)}'");
+        Assert.Equal(new[]
+        {
+            "{\"a\":1,\"b\":3}", "{\"a\":1,\"b\":4}",
+            "{\"a\":2,\"b\":3}", "{\"a\":2,\"b\":4}",
+        }, lines);
     }
 
     [Fact]

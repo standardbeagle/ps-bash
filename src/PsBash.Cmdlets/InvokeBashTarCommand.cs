@@ -418,11 +418,10 @@ public sealed class InvokeBashTarCommand : PSCmdlet
             TarEntry? entry;
             while ((entry = reader.GetNextEntry(copyData: true)) != null)
             {
-                if (entry.DataStream == null) { continue; }
-
-                // -O / --to-stdout: emit the entry's content instead of writing a file.
+                // -O / --to-stdout: emit a regular file's content instead of writing.
                 if (toStdout)
                 {
+                    if (entry.DataStream == null) { continue; }
                     using var sr = new StreamReader(entry.DataStream);
                     foreach (var o in BashRuntime.EmitBashLines(sr.ReadToEnd())) WriteObject(o);
                     continue;
@@ -450,12 +449,28 @@ public sealed class InvokeBashTarCommand : PSCmdlet
                     FileSystemHelpers.SetLastExitCode(this, 1);
                     continue;
                 }
+                if (verbose) { WriteObject(BashRuntime.NewBashObject(name)); }
+
+                switch (entry.EntryType)
+                {
+                    case TarEntryType.Directory:
+                        Directory.CreateDirectory(targetPath);
+                        continue;
+                    case TarEntryType.SymbolicLink:
+                        ExtractLink(destDir, targetPath, name, entry.LinkName, symbolic: true);
+                        continue;
+                    case TarEntryType.HardLink:
+                        ExtractLink(destDir, targetPath, name, entry.LinkName, symbolic: false);
+                        continue;
+                }
+
+                // Regular file.
+                if (entry.DataStream == null) { continue; }
                 string? dir = Path.GetDirectoryName(targetPath);
                 if (!string.IsNullOrEmpty(dir) && !Directory.Exists(dir))
                 {
                     Directory.CreateDirectory(dir);
                 }
-                if (verbose) { WriteObject(BashRuntime.NewBashObject(name)); }
                 using var fs = File.Create(targetPath);
                 entry.DataStream.CopyTo(fs);
             }
@@ -492,21 +507,87 @@ public sealed class InvokeBashTarCommand : PSCmdlet
 
         string destFull = Path.GetFullPath(destDir);
         string candidate = Path.GetFullPath(Path.Combine(destFull, rel));
+        if (!PathIsWithin(destFull, candidate)) { return false; }
+        targetPath = candidate;
+        return true;
+    }
 
-        // Containment check: candidate must equal destFull or sit beneath it.
+    /// <summary>True if <paramref name="candidateFull"/> equals or sits beneath
+    /// <paramref name="destFull"/> (both already fully-resolved).</summary>
+    private static bool PathIsWithin(string destFull, string candidateFull)
+    {
         string prefix = destFull.EndsWith(Path.DirectorySeparatorChar)
             ? destFull
             : destFull + Path.DirectorySeparatorChar;
         var cmp = OperatingSystem.IsWindows()
             ? StringComparison.OrdinalIgnoreCase
             : StringComparison.Ordinal;
-        if (!candidate.StartsWith(prefix, cmp) &&
-            !string.Equals(candidate, destFull, cmp))
+        return candidateFull.StartsWith(prefix, cmp)
+            || string.Equals(candidateFull, destFull, cmp);
+    }
+
+    /// <summary>
+    /// Extract a symbolic or hard link entry. The link is created only if its
+    /// target stays within the destination — an escaping link (absolute, or
+    /// climbing out via <c>..</c>) is the classic tar-slip pivot (extract a
+    /// <c>link → /etc</c> then a regular file <c>link/passwd</c>), so it is
+    /// refused. Symlinks that can't be created (e.g. Windows without the
+    /// privilege) warn and continue rather than aborting the whole archive.
+    /// </summary>
+    private void ExtractLink(string destDir, string linkPath, string name, string? linkName, bool symbolic)
+    {
+        if (string.IsNullOrEmpty(linkName))
         {
-            return false;
+            return;
         }
-        targetPath = candidate;
-        return true;
+
+        string destFull = Path.GetFullPath(destDir);
+        string linkDir = Path.GetDirectoryName(linkPath) ?? destFull;
+        string relTarget = linkName.Replace('/', Path.DirectorySeparatorChar);
+
+        // Resolve the target relative to the link's own directory (symlink) or
+        // the destination root (hardlink names are archive-root-relative).
+        string resolvedTarget = Path.IsPathRooted(relTarget)
+            ? Path.GetFullPath(relTarget)
+            : Path.GetFullPath(Path.Combine(symbolic ? linkDir : destFull, relTarget));
+
+        if (Path.IsPathRooted(relTarget) || !PathIsWithin(destFull, resolvedTarget))
+        {
+            FileSystemHelpers.WriteBashError(this,
+                $"tar: Skipping to next header: {name}: link target escapes archive destination");
+            FileSystemHelpers.SetLastExitCode(this, 1);
+            return;
+        }
+
+        if (!string.IsNullOrEmpty(linkDir) && !Directory.Exists(linkDir))
+        {
+            Directory.CreateDirectory(linkDir);
+        }
+        if (File.Exists(linkPath) || Directory.Exists(linkPath))
+        {
+            FileSystemHelpers.DeleteFileForce(linkPath);
+        }
+
+        try
+        {
+            if (symbolic)
+            {
+                // Preserve the original (relative) link text, like GNU tar.
+                File.CreateSymbolicLink(linkPath, linkName);
+            }
+            else
+            {
+                // No portable hardlink API — copy the already-extracted target's
+                // bytes, which preserves the data (loses inode sharing).
+                File.Copy(resolvedTarget, linkPath, overwrite: true);
+            }
+        }
+        catch (Exception ex)
+        {
+            if (FileSystemHelpers.IsPipelineStop(ex)) throw;
+            FileSystemHelpers.WriteBashError(this, $"tar: {name}: cannot create link: {ex.Message}");
+            FileSystemHelpers.SetLastExitCode(this, 1);
+        }
     }
 
     /// <summary>
