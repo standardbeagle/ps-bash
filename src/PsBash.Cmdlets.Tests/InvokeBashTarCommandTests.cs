@@ -146,7 +146,9 @@ public class InvokeBashTarCommandTests : IDisposable, IClassFixture<SharedPwshFi
         File.WriteAllText(Path.Combine(dir, "skip.tmp"), "s");
         string archive = Path.Combine(_tmpDir, "ex.tar");
 
-        RunLines($"Invoke-BashTar -c -f '{PsQuote(archive)}' --exclude=.tmp '{PsQuote(dir)}'");
+        // --exclude is a glob, not a substring: `*.tmp` excludes skip.tmp.
+        // (A bare `.tmp` would NOT, matching GNU tar — see oracle.)
+        RunLines($"Invoke-BashTar -c -f '{PsQuote(archive)}' --exclude=*.tmp '{PsQuote(dir)}'");
         string[] listed = RunLines($"Invoke-BashTar -t -f '{PsQuote(archive)}'");
 
         Assert.Contains(listed, l => l.Contains("keep.txt"));
@@ -299,5 +301,43 @@ public class InvokeBashTarCommandTests : IDisposable, IClassFixture<SharedPwshFi
 
         string[] listed = RunLines($"Invoke-BashTar -t -f '{PsQuote(archive)}'");
         Assert.Contains(listed, e => e.EndsWith("keep.txt"));
+    }
+
+    [Fact]
+    public void Tar_Create_ExcludeGlob_ExcludesMatchingFilesOnly()
+    {
+        // --exclude='*.log' is a glob, not a substring — it must drop a.log but
+        // keep b.txt. Oracle: tar --exclude='*.log' ... lists b.txt only.
+        string dir = Path.Combine(_tmpDir, "g1");
+        Directory.CreateDirectory(dir);
+        File.WriteAllText(Path.Combine(dir, "a.log"), "x");
+        File.WriteAllText(Path.Combine(dir, "b.txt"), "y");
+        string archive = Path.Combine(_tmpDir, "g1.tar");
+
+        RunLines($"Invoke-BashTar -c --exclude=*.log -f '{PsQuote(archive)}' '{PsQuote(dir)}'");
+
+        string[] listed = RunLines($"Invoke-BashTar -t -f '{PsQuote(archive)}'");
+        Assert.Contains(listed, e => e.EndsWith("b.txt"));
+        Assert.DoesNotContain(listed, e => e.EndsWith("a.log"));
+    }
+
+    [Fact]
+    public void Tar_Create_ExcludeDirName_PrunesWholeSubtree()
+    {
+        // --exclude=nm matches a path component and prunes the whole nm/ subtree
+        // (entry and its children). Oracle: tar --exclude=nm lists only a.txt.
+        string dir = Path.Combine(_tmpDir, "g2");
+        Directory.CreateDirectory(dir);
+        File.WriteAllText(Path.Combine(dir, "a.txt"), "x");
+        string nm = Path.Combine(dir, "nm");
+        Directory.CreateDirectory(nm);
+        File.WriteAllText(Path.Combine(nm, "c.txt"), "z");
+        string archive = Path.Combine(_tmpDir, "g2.tar");
+
+        RunLines($"Invoke-BashTar -c --exclude=nm -f '{PsQuote(archive)}' '{PsQuote(dir)}'");
+
+        string[] listed = RunLines($"Invoke-BashTar -t -f '{PsQuote(archive)}'");
+        Assert.Contains(listed, e => e.EndsWith("a.txt"));
+        Assert.DoesNotContain(listed, e => e.Contains("nm"));
     }
 }

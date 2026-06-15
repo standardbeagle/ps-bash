@@ -388,6 +388,16 @@ internal static class JqEngine
                     {
                         keyPart = keyPart.Substring(1, keyPart.Length - 2);
                     }
+                    else if (keyPart.Length >= 2 && keyPart[0] == '('
+                        && MatchingBracket(keyPart, '(', ')', 0) == keyPart.Length - 1)
+                    {
+                        // Computed key: {(expr): v} — evaluate expr and use its
+                        // first result (stringified) as the object key.
+                        var keyVals = EvalFilter(data, keyPart.Substring(1, keyPart.Length - 2).Trim(), variables);
+                        keyPart = keyVals.Count > 0
+                            ? Convert.ToString(keyVals[0], CultureInfo.InvariantCulture) ?? string.Empty
+                            : string.Empty;
+                    }
                     vals = EvalFilter(data, valExpr, variables);
                 }
                 else
@@ -848,7 +858,9 @@ internal static class JqEngine
 
     private static object FromEntries(object? data)
     {
-        var obj = new Dictionary<string, object?>();
+        // Insertion-ordered: jq preserves entry order through to_entries/from_entries
+        // round-trips. A plain Dictionary would re-order by hash.
+        var obj = new System.Collections.Specialized.OrderedDictionary();
         if (data is IList list)
         {
             foreach (var entry in list)

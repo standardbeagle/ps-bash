@@ -1,6 +1,7 @@
 using System.Formats.Tar;
 using System.IO.Compression;
 using System.Management.Automation;
+using System.Text;
 
 namespace PsBash.Cmdlets;
 
@@ -334,6 +335,11 @@ public sealed class InvokeBashTarCommand : PSCmdlet
                 : outStream;
             writer = new TarWriter(tarStream);
 
+            // Compile each --exclude glob once. GNU tar matches the pattern
+            // (fnmatch glob) against the member name; a match on any path
+            // component prunes that component's whole subtree.
+            var excludeRegexes = BuildExcludeRegexes(excludePatterns);
+
             foreach (string src in sources)
             {
                 string resolved = SessionState.Path.GetUnresolvedProviderPathFromPSPath(src);
@@ -354,30 +360,16 @@ public sealed class InvokeBashTarCommand : PSCmdlet
                     if (verbose) { WriteObject(BashRuntime.NewBashObject(root)); }
                     foreach (string child in children)
                     {
-                        bool skip = false;
-                        foreach (string pat in excludePatterns)
-                        {
-                            // An empty pattern must match nothing — string.Contains("")
-                            // is true for every input and would exclude the whole tree.
-                            if (pat.Length == 0) { continue; }
-                            if (child.Contains(pat, StringComparison.Ordinal)) { skip = true; break; }
-                        }
-                        if (skip) { continue; }
                         string relPath = child.Substring(baseDir.Length + 1).Replace('\\', '/');
+                        if (IsExcluded(relPath, excludeRegexes)) { continue; }
                         if (verbose) { WriteObject(BashRuntime.NewBashObject(relPath)); }
                         writer.WriteEntry(child, relPath);
                     }
                 }
                 else
                 {
-                    bool skip = false;
-                    foreach (string pat in excludePatterns)
-                    {
-                        if (pat.Length == 0) { continue; }
-                        if (resolved.Contains(pat, StringComparison.Ordinal)) { skip = true; break; }
-                    }
-                    if (skip) { continue; }
                     string relPath = Path.GetFileName(resolved);
+                    if (IsExcluded(relPath, excludeRegexes)) { continue; }
                     if (verbose) { WriteObject(BashRuntime.NewBashObject(relPath)); }
                     writer.WriteEntry(resolved, relPath);
                 }
@@ -515,6 +507,56 @@ public sealed class InvokeBashTarCommand : PSCmdlet
         }
         targetPath = candidate;
         return true;
+    }
+
+    /// <summary>
+    /// Compile each non-empty <c>--exclude</c> glob into an anchored regex.
+    /// Empty patterns are dropped (an empty glob must match nothing, not
+    /// everything). <c>*</c> → <c>.*</c> (matches across <c>/</c>, like GNU
+    /// tar's default fnmatch), <c>?</c> → <c>.</c>, <c>[...]</c> preserved.
+    /// </summary>
+    private static List<System.Text.RegularExpressions.Regex> BuildExcludeRegexes(List<string> patterns)
+    {
+        var list = new List<System.Text.RegularExpressions.Regex>();
+        foreach (string pat in patterns)
+        {
+            if (string.IsNullOrEmpty(pat)) { continue; }
+            var sb = new StringBuilder("^");
+            foreach (char c in pat)
+            {
+                switch (c)
+                {
+                    case '*': sb.Append(".*"); break;
+                    case '?': sb.Append('.'); break;
+                    case '[': sb.Append('['); break;
+                    case ']': sb.Append(']'); break;
+                    default: sb.Append(System.Text.RegularExpressions.Regex.Escape(c.ToString())); break;
+                }
+            }
+            sb.Append('$');
+            list.Add(new System.Text.RegularExpressions.Regex(sb.ToString()));
+        }
+        return list;
+    }
+
+    /// <summary>
+    /// A member is excluded if any compiled pattern matches the full relative
+    /// path OR any single path component (so <c>--exclude=node_modules</c>
+    /// prunes the whole <c>node_modules/…</c> subtree, matching GNU tar).
+    /// </summary>
+    private static bool IsExcluded(string relPath, List<System.Text.RegularExpressions.Regex> excludeRegexes)
+    {
+        if (excludeRegexes.Count == 0) { return false; }
+        string norm = relPath.Replace('\\', '/');
+        foreach (var rx in excludeRegexes)
+        {
+            if (rx.IsMatch(norm)) { return true; }
+            foreach (string comp in norm.Split('/'))
+            {
+                if (comp.Length > 0 && rx.IsMatch(comp)) { return true; }
+            }
+        }
+        return false;
     }
 
     private void DoList(string archiveFile, bool gzipFilter)

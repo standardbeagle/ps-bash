@@ -39,7 +39,13 @@ public class CommonParameterCollisionGuardTests
     /// MUST stay in sync with <c>PsEmitter.FindForceQuoteFlags</c>.
     /// </summary>
     private static readonly Dictionary<string, HashSet<char>> EmitterForceQuoted =
-        new(StringComparer.Ordinal) { ["find"] = new() { 'o', 'a' } };
+        new(StringComparer.Ordinal)
+        {
+            ["find"] = new() { 'o', 'a' },
+            // echo's -e/-E are force-quoted by PsEmitter.EchoForceQuoteFlags
+            // (they collide with -Error*); both fold to 'e' here.
+            ["echo"] = new() { 'e' },
+        };
 
     [Fact]
     public void NoBinaryCmdlet_HasUnguardedCommonParameterCollidingShortFlag()

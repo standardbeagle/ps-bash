@@ -526,4 +526,66 @@ public class InvokeBashSedCommandTests : IDisposable, IClassFixture<SharedPwshFi
         Assert.Single(lines);
         Assert.Equal("aXc", lines[0]);
     }
+
+    // ===================== address negation / step / 0,/re/ =====================
+
+    [Fact]
+    public void Sed_LineNegation_DeletesAllButTheGivenLine()
+    {
+        // 2!d keeps only line 2. Oracle: printf 'a\nb\nc' | sed '2!d' -> b
+        var lines = RunText("'a','b','c' | Invoke-BashSed '2!d'");
+        Assert.Equal(new[] { "b" }, lines);
+    }
+
+    [Fact]
+    public void Sed_RegexNegation_DeletesNonMatchingLines()
+    {
+        // /b/!d keeps only the /b/-matching line. Oracle -> b
+        var lines = RunText("'a','b','c' | Invoke-BashSed '/b/!d'");
+        Assert.Equal(new[] { "b" }, lines);
+    }
+
+    [Fact]
+    public void Sed_StepAddress_MatchesEveryNthLine()
+    {
+        // 1~2 = lines 1,3,5. Oracle: sed -n '1~2p' -> 1 3 5
+        var lines = RunText("'1','2','3','4','5' | Invoke-BashSed -n '1~2p'");
+        Assert.Equal(new[] { "1", "3", "5" }, lines);
+    }
+
+    [Fact]
+    public void Sed_ZeroCommaRegexRange_MatchesFirstLine()
+    {
+        // 0,/a/d deletes through the first /a/ — which may be line 1.
+        // Oracle: printf 'a\nb\na' | sed '0,/a/d' -> b a
+        var lines = RunText("'a','b','a' | Invoke-BashSed '0,/a/d'");
+        Assert.Equal(new[] { "b", "a" }, lines);
+    }
+
+    // ===================== = / Q / s///p =====================
+
+    [Fact]
+    public void Sed_EqualsCommand_PrintsLineNumbers()
+    {
+        // = prints the line number before the line. Oracle: sed '=' -> 1 one 2 two
+        var lines = RunText("'one','two' | Invoke-BashSed '='");
+        Assert.Equal(new[] { "1", "one", "2", "two" }, lines);
+    }
+
+    [Fact]
+    public void Sed_QCommand_QuitsWithoutPrintingCurrentLine()
+    {
+        // 2Q quits at line 2 WITHOUT auto-printing it. Oracle: printf 'a\nb\nc' | sed '2Q' -> a
+        var lines = RunText("'a','b','c' | Invoke-BashSed '2Q'");
+        Assert.Equal(new[] { "a" }, lines);
+    }
+
+    [Fact]
+    public void Sed_SubstitutePrintFlag_WithN_PrintsOnlySubstitutedLines()
+    {
+        // -n 's/a/X/p' prints only lines where a substitution occurred.
+        // Oracle: printf 'a\nb\na' | sed -n 's/a/X/p' -> X X
+        var lines = RunText("'a','b','a' | Invoke-BashSed -n 's/a/X/p'");
+        Assert.Equal(new[] { "X", "X" }, lines);
+    }
 }

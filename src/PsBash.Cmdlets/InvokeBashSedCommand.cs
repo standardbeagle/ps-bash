@@ -382,28 +382,36 @@ public sealed class InvokeBashSedCommand : PSCmdlet
 
     // ── sed command model ────────────────────────────────────────────────────
 
-    private enum AddressType { None, Regex, Line, RangeNum, RangeRegex }
+    private enum AddressType
+    {
+        None, Regex, Line, RangeNum, RangeRegex,
+        Step,            // first~step
+        RangeNumToRegex, // N,/re/  (incl. the 0,/re/ special case)
+    }
 
     private sealed class SedAddress
     {
         public AddressType Type;
         public string? Pattern;        // Regex
         public int Line;               // Line
-        public int Start;              // RangeNum
+        public int Start;              // RangeNum / Step / RangeNumToRegex
         public int End;                // RangeNum
+        public int Step;               // Step
         public string? StartPattern;   // RangeRegex
-        public string? EndPattern;     // RangeRegex
+        public string? EndPattern;     // RangeRegex / RangeNumToRegex
     }
 
     private sealed class SedCommand
     {
         public char Type;
         public SedAddress? Address;
+        public bool Negate;            // addr!cmd
         public Regex? Regex;           // s
         public string? Replacement;    // s
         public bool Global;            // s
         public int Nth;                // s — Nth-occurrence flag (0 = unset)
-        public int ExitCode;           // q
+        public bool PrintOnSub;        // s///p
+        public int ExitCode;           // q / Q
         public string? Text;           // a / i / c
         public string? Source;         // y
         public string? Dest;           // y
@@ -501,9 +509,31 @@ public sealed class InvokeBashSedCommand : PSCmdlet
                 numStr.Append(expression[pos]);
                 pos++;
             }
-            int startNum = int.Parse(numStr.ToString());
+            // TryParse guards the int.Parse overflow trap on an absurd address.
+            if (!int.TryParse(numStr.ToString(), out int startNum))
+            {
+                startNum = int.MaxValue;
+            }
 
-            if (pos < expression.Length && expression[pos] == ',')
+            if (pos < expression.Length && expression[pos] == '~')
+            {
+                // first~step — match line `first` and every `step`-th line after.
+                pos++;
+                var stepStr = new StringBuilder();
+                while (pos < expression.Length && char.IsDigit(expression[pos]))
+                {
+                    stepStr.Append(expression[pos]);
+                    pos++;
+                }
+                int step = int.TryParse(stepStr.ToString(), out int sv) ? sv : 0;
+                addr = new SedAddress
+                {
+                    Type = AddressType.Step,
+                    Start = startNum,
+                    Step = step,
+                };
+            }
+            else if (pos < expression.Length && expression[pos] == ',')
             {
                 pos++;
                 if (pos < expression.Length && expression[pos] == '$')
@@ -516,6 +546,24 @@ public sealed class InvokeBashSedCommand : PSCmdlet
                     };
                     pos++;
                 }
+                else if (pos < expression.Length && expression[pos] == '/')
+                {
+                    // N,/re/ — numeric start, regex end. With N==0 the end regex
+                    // may match the very first line (GNU's 0,/re/ idiom).
+                    pos++;
+                    int endSlashR = expression.IndexOf('/', pos);
+                    if (endSlashR < 0)
+                    {
+                        return ParseFail("sed: unterminated address regex", 2);
+                    }
+                    addr = new SedAddress
+                    {
+                        Type = AddressType.RangeNumToRegex,
+                        Start = startNum,
+                        EndPattern = expression.Substring(pos, endSlashR - pos),
+                    };
+                    pos = endSlashR + 1;
+                }
                 else
                 {
                     var numStr2 = new StringBuilder();
@@ -524,11 +572,15 @@ public sealed class InvokeBashSedCommand : PSCmdlet
                         numStr2.Append(expression[pos]);
                         pos++;
                     }
+                    if (!int.TryParse(numStr2.ToString(), out int endNum))
+                    {
+                        endNum = int.MaxValue;
+                    }
                     addr = new SedAddress
                     {
                         Type = AddressType.RangeNum,
                         Start = startNum,
-                        End = int.Parse(numStr2.ToString()),
+                        End = endNum,
                     };
                 }
             }
@@ -536,6 +588,15 @@ public sealed class InvokeBashSedCommand : PSCmdlet
             {
                 addr = new SedAddress { Type = AddressType.Line, Line = startNum };
             }
+        }
+
+        // Optional negation between the address and the command: `addr!cmd`
+        // (e.g. `2!d`, `/re/!s///`). GNU also tolerates spaces and a repeated `!`.
+        bool negate = false;
+        while (pos < expression.Length && (expression[pos] == '!' || expression[pos] == ' '))
+        {
+            if (expression[pos] == '!') { negate = true; }
+            pos++;
         }
 
         string remaining = expression.Substring(pos);
@@ -601,11 +662,13 @@ public sealed class InvokeBashSedCommand : PSCmdlet
                 // overflow trap on an absurd count (`s/x/y/9999999999`).
                 bool global = false;
                 int nth = 0;
+                bool printOnSub = false;
                 var numBuf = new StringBuilder();
                 foreach (char f in flags)
                 {
                     if (char.IsDigit(f)) { numBuf.Append(f); }
                     else if (f == 'g') { global = true; }
+                    else if (f == 'p') { printOnSub = true; }
                 }
                 if (numBuf.Length > 0 && !int.TryParse(numBuf.ToString(), out nth)) { nth = 0; }
 
@@ -658,10 +721,12 @@ public sealed class InvokeBashSedCommand : PSCmdlet
                 {
                     Type = 's',
                     Address = addr,
+                    Negate = negate,
                     Regex = regex,
                     Replacement = replacement,
                     Global = global,
                     Nth = nth,
+                    PrintOnSub = printOnSub,
                 };
             }
             case 'd':
@@ -669,19 +734,27 @@ public sealed class InvokeBashSedCommand : PSCmdlet
             case 'p':
             case 'P':
             case 'N':
-                return new SedCommand { Type = cmdChar, Address = addr };
+            case '=':
+                return new SedCommand { Type = cmdChar, Address = addr, Negate = negate };
             case 'q':
+            case 'Q':
             {
+                // Q quits like q but WITHOUT auto-printing the pattern space.
+                // Both accept an optional exit code.
                 int exitCode = 0;
                 if (remaining.Length > 1)
                 {
                     string qArg = remaining.Substring(1).Trim();
-                    if (qArg.Length > 0 && Regex.IsMatch(qArg, @"^\d+$"))
+                    if (qArg.Length > 0 && Regex.IsMatch(qArg, @"^\d+$")
+                        && int.TryParse(qArg, out int parsed))
                     {
-                        exitCode = int.Parse(qArg);
+                        exitCode = parsed;
                     }
                 }
-                return new SedCommand { Type = 'q', Address = addr, ExitCode = exitCode };
+                return new SedCommand
+                {
+                    Type = cmdChar, Address = addr, Negate = negate, ExitCode = exitCode,
+                };
             }
             case 'a':
             case 'i':
@@ -689,7 +762,7 @@ public sealed class InvokeBashSedCommand : PSCmdlet
             {
                 string text = remaining.Length > 1 ? remaining.Substring(1) : string.Empty;
                 text = text.TrimStart('\\').TrimStart();
-                return new SedCommand { Type = cmdChar, Address = addr, Text = text };
+                return new SedCommand { Type = cmdChar, Address = addr, Negate = negate, Text = text };
             }
             case 'y':
             {
@@ -712,6 +785,7 @@ public sealed class InvokeBashSedCommand : PSCmdlet
                 {
                     Type = 'y',
                     Address = addr,
+                    Negate = negate,
                     Source = parts[0],
                     Dest = parts[1],
                 };
@@ -748,6 +822,34 @@ public sealed class InvokeBashSedCommand : PSCmdlet
                 return lineNum == addr.Line;
             case AddressType.RangeNum:
                 return lineNum >= addr.Start && lineNum <= addr.End;
+            case AddressType.Step:
+            {
+                // first~step: match `first`, then every step-th line after it.
+                // step <= 0 degenerates to just `first` (GNU). first may be 0,
+                // in which case 0~step matches multiples of step.
+                if (addr.Step <= 0) { return lineNum == addr.Start; }
+                return lineNum >= Math.Max(addr.Start, 1)
+                    && (lineNum - addr.Start) % addr.Step == 0;
+            }
+            case AddressType.RangeNumToRegex:
+            {
+                // N,/re/ — active from line max(Start,1); ends on the first line
+                // whose text matches the end regex (inclusive). The 0,/re/ idiom
+                // (Start == 0) lets the end regex match the very first line.
+                int begin = Math.Max(addr.Start, 1);
+                if (lineNum < begin) { return false; }
+                bool canEndOnStart = addr.Start == 0;
+                for (int ri = begin; ri <= lineNum && ri <= allLines.Length; ri++)
+                {
+                    if ((ri > begin || canEndOnStart)
+                        && Regex.IsMatch(allLines[ri - 1], addr.EndPattern!))
+                    {
+                        // Range closed at line ri — only lines begin..ri are in range.
+                        return lineNum <= ri;
+                    }
+                }
+                return true; // end regex never matched up to here — still in range.
+            }
             case AddressType.RangeRegex:
             {
                 bool inRange = false;
@@ -815,7 +917,7 @@ public sealed class InvokeBashSedCommand : PSCmdlet
                     {
                         break;
                     }
-                    if (quit && cmd.Type != 'q')
+                    if (quit && cmd.Type != 'q' && cmd.Type != 'Q')
                     {
                         continue;
                     }
@@ -824,7 +926,9 @@ public sealed class InvokeBashSedCommand : PSCmdlet
                         ? patternSpace.Substring(0, patternSpace.IndexOf('\n'))
                         : patternSpace;
 
-                    if (!TestAddress(cmd, firstLine, lineNum, inputLines))
+                    bool matched = TestAddress(cmd, firstLine, lineNum, inputLines);
+                    if (cmd.Negate) { matched = !matched; }
+                    if (!matched)
                     {
                         continue;
                     }
@@ -839,12 +943,16 @@ public sealed class InvokeBashSedCommand : PSCmdlet
                             // (count == N), and Ng (count >= N).
                             int target = cmd.Nth > 0 ? cmd.Nth : 1;
                             int count = 0;
+                            bool subbed = false;
                             patternSpace = cmd.Regex!.Replace(patternSpace, m =>
                             {
                                 count++;
                                 bool hit = cmd.Global ? count >= target : count == target;
+                                if (hit) { subbed = true; }
                                 return hit ? m.Result(cmd.Replacement!) : m.Value;
                             });
+                            // s///p: print the pattern space only if a sub happened.
+                            if (cmd.PrintOnSub && subbed) { printedLines.Add(patternSpace); }
                             break;
                         }
                         case 'd':
@@ -888,6 +996,15 @@ public sealed class InvokeBashSedCommand : PSCmdlet
                             break;
                         case 'q':
                             quit = true;
+                            break;
+                        case 'Q':
+                            // Quit immediately WITHOUT auto-printing this line.
+                            quit = true;
+                            deleted = true;
+                            break;
+                        case '=':
+                            // Print the current line number (before the line text).
+                            printedLines.Add(lineNum.ToString());
                             break;
                         case 'a':
                             appendTexts.Add(cmd.Text!);

@@ -440,6 +440,38 @@ public class InvokeBashJqCommandTests : IDisposable, IClassFixture<SharedPwshFix
         Assert.Equal(new[] { "\"x\"" }, lines);
     }
 
+    // ===================== object construction =====================
+
+    [Fact]
+    public void Jq_FromEntries_PreservesEntryOrder()
+    {
+        // from_entries must keep insertion order (b before a), not hash order.
+        // Oracle: ... | jq -c from_entries -> {"b":1,"a":2}
+        var lines = RunText(
+            "'[{\"key\":\"b\",\"value\":1},{\"key\":\"a\",\"value\":2}]' | Invoke-BashJq -c from_entries");
+        Assert.Equal(new[] { "{\"b\":1,\"a\":2}" }, lines);
+    }
+
+    [Fact]
+    public void Jq_ComputedKey_StringConcat()
+    {
+        // {(expr): v} evaluates the key expression. Uses the spaced concat form
+        // ("a" + "b") — the no-space form ("a"+"b") hits a separate pre-existing
+        // arith-operator-needs-spaces gap unrelated to computed keys.
+        // Oracle: echo '{}' | jq -c '{("a" + "b"): 1}' -> {"ab":1}
+        var lines = RunText("'{}' | Invoke-BashJq -c '{(\"a\" + \"b\"): 1}'");
+        Assert.Equal(new[] { "{\"ab\":1}" }, lines);
+    }
+
+    [Fact]
+    public void Jq_ComputedKey_FromField()
+    {
+        // {(.k): .v} uses the value of .k as the key.
+        // Oracle: echo '{"k":"name","v":5}' | jq -c '{(.k): .v}' -> {"name":5}
+        var lines = RunText("'{\"k\":\"name\",\"v\":5}' | Invoke-BashJq -c '{(.k): .v}'");
+        Assert.Equal(new[] { "{\"name\":5}" }, lines);
+    }
+
     // ===================== Alias resolves to cmdlet =====================
 
     [Fact]
