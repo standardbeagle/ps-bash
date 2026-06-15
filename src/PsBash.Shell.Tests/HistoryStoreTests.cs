@@ -96,6 +96,33 @@ public class HistoryStoreTests : IDisposable
     }
 
     [Fact]
+    public async Task RecordAsync_ConcurrentWritersSameDb_NoRecordsDropped()
+    {
+        // Two stores on the same DB file model two ps-bash processes writing at
+        // once. Without a busy timeout the writer that loses the lock gets
+        // SQLITE_BUSY and silently drops its entry; the busy_timeout pragma makes it
+        // wait out the brief lock so every record persists.
+        using var store2 = new SqliteHistoryStore(_dbPath);
+
+        var tasks = new List<Task>();
+        for (int i = 0; i < 20; i++)
+        {
+            var s = i % 2 == 0 ? _store : store2;
+            tasks.Add(s.RecordAsync(new HistoryEntry
+            {
+                Command = $"cmd{i}",
+                Cwd = "/tmp",
+                Timestamp = DateTime.UtcNow,
+                SessionId = "sess",
+            }));
+        }
+        await Task.WhenAll(tasks);
+
+        var results = await _store.SearchAsync(new HistoryQuery { Limit = 100 });
+        Assert.Equal(20, results.Count);
+    }
+
+    [Fact]
     public async Task SearchAsync_WithFilter_ReturnsMatchingPrefixes()
     {
         await _store.RecordAsync(new HistoryEntry { Command = "git status", Cwd = "/home/user", Timestamp = DateTime.UtcNow, SessionId = "s1" });

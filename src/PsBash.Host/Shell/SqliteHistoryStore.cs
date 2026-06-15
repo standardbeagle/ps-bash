@@ -193,11 +193,25 @@ public sealed class SqliteHistoryStore : IHistoryStore, IDisposable
         {
             _connection = new SqliteConnection(_connectionString);
             _connection.Open();
+            ApplyBusyTimeout(_connection);
         }
         else if (_connection.State != System.Data.ConnectionState.Open)
         {
             _connection.Open();
+            ApplyBusyTimeout(_connection);
         }
+    }
+
+    // Every ps-bash process (each -c connection) writes the same history DB. Under
+    // WAL, concurrent readers never block, but two concurrent WRITERS still contend
+    // for the write lock — without a busy timeout the loser gets SQLITE_BUSY
+    // immediately and the record is silently dropped. A 3s timeout lets it wait out
+    // a brief lock instead of losing the entry.
+    private static void ApplyBusyTimeout(SqliteConnection connection)
+    {
+        using var cmd = connection.CreateCommand();
+        cmd.CommandText = "PRAGMA busy_timeout = 3000;";
+        cmd.ExecuteNonQuery();
     }
 
     public async Task RecordAsync(HistoryEntry entry)
@@ -258,7 +272,7 @@ public sealed class SqliteHistoryStore : IHistoryStore, IDisposable
                 {
                     EnsureConnectionOpen();
 
-                    var cmd = _connection!.CreateCommand();
+                    using var cmd = _connection!.CreateCommand();
                     var sql = new System.Text.StringBuilder();
                     sql.Append("SELECT id, command, cwd, exit_code, timestamp, duration_ms, session ");
                     sql.Append("FROM history ");

@@ -63,11 +63,23 @@ public sealed class SqliteFrecencyStore : IFrecencyStore, IDisposable
         {
             _connection = new SqliteConnection(_connectionString);
             _connection.Open();
+            ApplyBusyTimeout(_connection);
         }
         else if (_connection.State != System.Data.ConnectionState.Open)
         {
             _connection.Open();
+            ApplyBusyTimeout(_connection);
         }
+    }
+
+    // Concurrent ps-bash processes record cd visits into the same frecency DB; a
+    // busy timeout lets a contending writer wait out a brief write lock rather than
+    // hitting SQLITE_BUSY and silently dropping the visit.
+    private static void ApplyBusyTimeout(SqliteConnection connection)
+    {
+        using var cmd = connection.CreateCommand();
+        cmd.CommandText = "PRAGMA busy_timeout = 3000;";
+        cmd.ExecuteNonQuery();
     }
 
     private static long NowEpoch() => DateTimeOffset.UtcNow.ToUnixTimeSeconds();
