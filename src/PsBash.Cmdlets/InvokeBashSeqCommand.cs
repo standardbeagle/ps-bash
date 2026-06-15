@@ -128,6 +128,16 @@ public sealed class InvokeBashSeqCommand : PSCmdlet
             last = ParseDouble(operands[2]);
         }
 
+        // GNU seq rejects an explicit zero increment (exit 1) rather than looping
+        // forever; ps-bash previously broke out of the loop silently producing no
+        // output. Only an explicit step (3 operands) can be zero — the 1/2-operand
+        // forms default the increment to 1.
+        if (operands.Count >= 3 && increment == 0)
+        {
+            FileSystemHelpers.WriteBashError(this, $"seq: invalid Zero increment value: '{operands[1]}'");
+            return;
+        }
+
         bool isInteger = (first == Math.Floor(first))
             && (increment == Math.Floor(increment))
             && (last == Math.Floor(last));

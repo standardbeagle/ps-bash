@@ -125,6 +125,7 @@ public sealed class InvokeBashCutCommand : PSCmdlet
     // suppresses stdin streaming.
     private string? _optionErrorToken;
     private string? _invalidListMsg;
+    private string? _cutRangeMsg;
     // True when stdin must NOT be streamed: file operands present, a
     // --help / --version request, or a deferred parse error. Matches the
     // buffered oracle, which only consumed the pipeline in pipeline mode.
@@ -291,12 +292,22 @@ public sealed class InvokeBashCutCommand : PSCmdlet
         {
             if (_charSpec.Length > 0)
             {
-                _ranges = ParseRanges(_charSpec);
+                _ranges = ParseRanges(_charSpec, isField: false);
             }
             else if (_fieldSpec.Length > 0)
             {
-                _ranges = ParseRanges(_fieldSpec);
+                _ranges = ParseRanges(_fieldSpec, isField: true);
             }
+        }
+        catch (CutRangeError ex)
+        {
+            // GNU cut rejects a zero position (`fields are numbered from 1`) and a
+            // decreasing range (`-f3-1`) with a dedicated message and exit 1 —
+            // distinct from the generic "invalid list" malformed-token path. Before
+            // this they silently produced empty output.
+            _cutRangeMsg = ex.Message;
+            _suppressStdin = true;
+            return;
         }
         catch (FormatException ex)
         {
@@ -408,6 +419,11 @@ public sealed class InvokeBashCutCommand : PSCmdlet
             FileSystemHelpers.WriteOptionError(this, "cut", _optionErrorToken, ValidButUnsupported);
             return;
         }
+        if (_cutRangeMsg != null)
+        {
+            FileSystemHelpers.WriteBashError(this, $"cut: {_cutRangeMsg}");
+            return;
+        }
         if (_invalidListMsg != null)
         {
             FileSystemHelpers.WriteBashError(this, $"cut: invalid list: {_invalidListMsg}");
@@ -450,8 +466,12 @@ public sealed class InvokeBashCutCommand : PSCmdlet
     /// the actual char/field count. A non-numeric token still throws
     /// <see cref="FormatException"/> (bash/oracle parity: invalid list).
     /// </summary>
-    private static List<(int Lo, int Hi)> ParseRanges(string spec)
+    private static List<(int Lo, int Hi)> ParseRanges(string spec, bool isField)
     {
+        // GNU cut: position 0 is rejected; the wording differs for -f vs -c/-b.
+        string numbered = isField
+            ? "fields are numbered from 1"
+            : "byte/character positions are numbered from 1";
         var result = new List<(int, int)>();
         foreach (var partRaw in spec.Split(','))
         {
@@ -464,19 +484,26 @@ public sealed class InvokeBashCutCommand : PSCmdlet
                 // -M  (open start)
                 if (lo.Length == 0 && hi.Length > 0 && AllDigits(hi))
                 {
-                    result.Add((1, int.Parse(hi)));
+                    int m = int.Parse(hi);
+                    if (m == 0) throw new CutRangeError(numbered);
+                    result.Add((1, m));
                     continue;
                 }
                 // N-  (open end)
                 if (hi.Length == 0 && lo.Length > 0 && AllDigits(lo))
                 {
-                    result.Add((int.Parse(lo), int.MaxValue));
+                    int nlo = int.Parse(lo);
+                    if (nlo == 0) throw new CutRangeError(numbered);
+                    result.Add((nlo, int.MaxValue));
                     continue;
                 }
                 // N-M (closed)
                 if (lo.Length > 0 && hi.Length > 0 && AllDigits(lo) && AllDigits(hi))
                 {
-                    result.Add((int.Parse(lo), int.Parse(hi)));
+                    int a = int.Parse(lo), b = int.Parse(hi);
+                    if (a == 0 || b == 0) throw new CutRangeError(numbered);
+                    if (a > b) throw new CutRangeError("invalid decreasing range");
+                    result.Add((a, b));
                     continue;
                 }
                 // Malformed (e.g. bare "-", "a-b") — surface as invalid list.
@@ -484,9 +511,17 @@ public sealed class InvokeBashCutCommand : PSCmdlet
             }
             // Single index: [int]$part — non-integer throws (oracle parity).
             int n = int.Parse(part);
+            if (n == 0) throw new CutRangeError(numbered);
             result.Add((n, n));
         }
         return result;
+    }
+
+    /// <summary>A GNU-specific cut list error (zero position / decreasing range)
+    /// that is reported verbatim, not wrapped in the generic "invalid list" form.</summary>
+    private sealed class CutRangeError : Exception
+    {
+        public CutRangeError(string message) : base(message) { }
     }
 
     /// <summary>

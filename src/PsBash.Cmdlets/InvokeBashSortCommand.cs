@@ -295,6 +295,15 @@ public sealed class InvokeBashSortCommand : PSCmdlet
             i++;
         }
 
+        // GNU sort rejects an empty field separator (`-t ''`) with exit 2 rather
+        // than mis-splitting at every position via an empty-pattern regex.
+        if (delimiter is { Length: 0 })
+        {
+            FileSystemHelpers.WriteBashError(this, "sort: empty tab");
+            FileSystemHelpers.SetLastExitCode(this, 2);
+            return;
+        }
+
         // Collect items.
         var items = new List<object>();
         bool hadError = false;

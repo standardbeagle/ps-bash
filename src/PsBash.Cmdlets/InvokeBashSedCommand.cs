@@ -558,6 +558,17 @@ public sealed class InvokeBashSedCommand : PSCmdlet
                 string flags = parts.Count > 2 ? parts[2] : string.Empty;
                 bool global = flags.Contains('g');
 
+                // An empty regex (`s//repl/`) means "reuse the last regex" in sed;
+                // with none to reuse it is an error. ps-bash does not track a previous
+                // regex, so an empty pattern would compile to .NET's match-empty-
+                // everywhere regex and inject the replacement at every position. Reject
+                // it like GNU (exit 1) instead of silently mangling the input.
+                if (searchPattern.Length == 0)
+                {
+                    return ParseFail(
+                        "sed: -e expression #1, char 0: no previous regular expression", 1);
+                }
+
                 // Backreference translation: \1-\9 → $1-$9, \& → $0.
                 replacement = Regex.Replace(replacement, @"\\(\d)", "$$$1");
                 replacement = Regex.Replace(replacement, @"\\&", "$$0");

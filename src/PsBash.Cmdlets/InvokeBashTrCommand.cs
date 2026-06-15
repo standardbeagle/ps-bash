@@ -79,6 +79,7 @@ public sealed class InvokeBashTrCommand : PSCmdlet
     private bool _truncateMode;
     private List<string> _operands = new();
     private bool _suppress;
+    private string? _rangeErrorMsg;
 
     // Translation tables built ONCE in ParseOnce (the SET expansion, complement
     // construction, and per-char membership/mapping are constant across every
@@ -155,6 +156,20 @@ public sealed class InvokeBashTrCommand : PSCmdlet
     /// Mirrors the per-line logic in <see cref="TransformLine"/> exactly.
     /// </summary>
     private void BuildTables()
+    {
+        // A reversed range (`a-A`) makes ExpandClass throw; GNU tr rejects it with
+        // exit 1 instead of silently expanding to nothing. Defer the message to the
+        // EndProcessing emit and suppress output.
+        try { BuildTablesCore(); }
+        catch (TrRangeError ex) { _rangeErrorMsg = ex.Message; _suppress = true; }
+    }
+
+    private sealed class TrRangeError : Exception
+    {
+        public TrRangeError(string message) : base(message) { }
+    }
+
+    private void BuildTablesCore()
     {
         // Delete mode and squeeze-only mode test membership against SET1 (the
         // complement flag flips the test at use-site, not the set contents).
@@ -259,6 +274,12 @@ public sealed class InvokeBashTrCommand : PSCmdlet
             return;
         }
 
+        if (_rangeErrorMsg != null)
+        {
+            FileSystemHelpers.WriteBashError(this, $"tr: {_rangeErrorMsg}");
+            return;
+        }
+
         // Pipeline records (if any) were streamed in ProcessRecord; empty
         // input produces no output, matching the oracle's count==0 guard.
     }
@@ -353,6 +374,9 @@ public sealed class InvokeBashTrCommand : PSCmdlet
             {
                 int start = spec[i];
                 int end = spec[i + 2];
+                if (start > end)
+                    throw new TrRangeError(
+                        $"range-endpoints of '{(char)start}-{(char)end}' are in reverse collating sequence order");
                 for (int c = start; c <= end; c++)
                 {
                     sb.Append((char)c);
