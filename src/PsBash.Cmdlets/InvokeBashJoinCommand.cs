@@ -53,6 +53,18 @@ public sealed class InvokeBashJoinCommand : PSCmdlet
     [Parameter(ValueFromRemainingArguments = true)]
     public string[]? Arguments { get; set; }
 
+    // Valid GNU join flags not implemented by ps-bash. Implemented flags
+    // (-t/-1/-2/-j/-o/-e/-a/-v/-i/--ignore-case) are NOT in this set.
+    private static readonly HashSet<string> JoinValidButUnsupported =
+        new(StringComparer.Ordinal)
+        {
+            "--check-order",
+            "--nocheck-order",
+            "--header",
+            "-z",
+            "--zero-terminated",
+        };
+
     /// <summary>-i (case-insensitive) decoy: bare -i is ambiguous with -Information*.</summary>
     [Parameter] public SwitchParameter I { get; set; }
 
@@ -172,6 +184,9 @@ public sealed class InvokeBashJoinCommand : PSCmdlet
             FileSystemHelpers.WriteBashError(this, "join: missing operand");
             return;
         }
+
+        if (FileSystemHelpers.TryWriteOperandOptionError(
+                this, "join", operands, JoinValidButUnsupported)) return;
 
         string path1 = SessionState.Path.GetUnresolvedProviderPathFromPSPath(operands[0]);
         string path2 = SessionState.Path.GetUnresolvedProviderPathFromPSPath(operands[1]);

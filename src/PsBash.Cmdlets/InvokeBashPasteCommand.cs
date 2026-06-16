@@ -65,6 +65,15 @@ public sealed class InvokeBashPasteCommand : PSCmdlet
     [Parameter(ValueFromPipeline = true)]
     public PSObject? InputObject { get; set; }
 
+    // Valid GNU paste flags not implemented by ps-bash. Implemented flags
+    // (-d/-s) are NOT in this set.
+    private static readonly HashSet<string> PasteValidButUnsupported =
+        new(StringComparer.Ordinal)
+        {
+            "-z",
+            "--zero-terminated",
+        };
+
     protected override void ProcessRecord()
     {
         // paste in the psm1 oracle never consumes pipeline input — file
@@ -150,6 +159,9 @@ public sealed class InvokeBashPasteCommand : PSCmdlet
         // with a literal backslash-n instead of a newline. Expanding here is a
         // no-op for the default tab (a real \x09 with no backslash).
         delimiter = ExpandPasteDelimiter(delimiter);
+
+        if (FileSystemHelpers.TryWriteOperandOptionError(
+                this, "paste", operands, PasteValidButUnsupported)) return;
 
         var filePaths = new List<string>();
         foreach (var raw in operands)

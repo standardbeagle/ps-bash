@@ -235,4 +235,33 @@ $b = [PSCustomObject]@{{ BashText = ""b`n"" }}
         // Confirm it was a write (not an append) — pre-existing content
         // would have been preserved if -a leaked through.
     }
+
+    [Fact]
+    public void Tee_UnrecognizedOption_WritesError()
+    {
+        // Unrecognized option-like token: classified as "unrecognized option", exit 2.
+        var pwsh = _fixture.AcquireFresh();
+        pwsh.AddScript("$ErrorActionPreference='Continue'").Invoke();
+        pwsh.Commands.Clear();
+        var result = pwsh.AddScript(
+            "'x' | Invoke-BashTee --bogus 2>$null; $LASTEXITCODE").Invoke();
+        pwsh.Commands.Clear();
+        Assert.Single(result);
+        Assert.Equal(2, (int)result[0].BaseObject);
+    }
+
+    [Fact]
+    public void Tee_ValidButUnsupportedOption_WritesError()
+    {
+        // Catalog flag (valid GNU, not implemented): classified as "recognized but not supported", exit 2.
+        // --ignore-interrupts is listed as the long form (bare -i collides with PS binder).
+        var pwsh = _fixture.AcquireFresh();
+        pwsh.AddScript("$ErrorActionPreference='Continue'").Invoke();
+        pwsh.Commands.Clear();
+        var result = pwsh.AddScript(
+            "'x' | Invoke-BashTee --ignore-interrupts 2>$null; $LASTEXITCODE").Invoke();
+        pwsh.Commands.Clear();
+        Assert.Single(result);
+        Assert.Equal(2, (int)result[0].BaseObject);
+    }
 }

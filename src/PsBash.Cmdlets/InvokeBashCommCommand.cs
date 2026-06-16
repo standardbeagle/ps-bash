@@ -38,6 +38,19 @@ public sealed class InvokeBashCommCommand : PSCmdlet
     [Parameter(ValueFromRemainingArguments = true)]
     public string[]? Arguments { get; set; }
 
+    // Valid GNU comm flags not implemented by ps-bash. Single dash (-) is
+    // stdin and is not option-like; digit flags -1/-2/-3 ARE implemented.
+    private static readonly HashSet<string> CommValidButUnsupported =
+        new(StringComparer.Ordinal)
+        {
+            "--check-order",
+            "--nocheck-order",
+            "--output-delimiter",
+            "-z",
+            "--zero-terminated",
+            "--total",
+        };
+
     protected override void EndProcessing()
     {
         var args = Arguments ?? Array.Empty<string>();
@@ -99,6 +112,9 @@ public sealed class InvokeBashCommCommand : PSCmdlet
             FileSystemHelpers.WriteBashError(this, "comm: missing operand");
             return;
         }
+
+        if (FileSystemHelpers.TryWriteOperandOptionError(
+                this, "comm", operands, CommValidButUnsupported)) return;
 
         // First operand path: route through glob expansion for symmetry with
         // the wider migrated set (the oracle used GetUnresolvedProviderPathFromPSPath

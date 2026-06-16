@@ -71,6 +71,17 @@ public sealed class InvokeBashTeeCommand : PSCmdlet
     [Parameter(ValueFromPipeline = true)]
     public PSObject? InputObject { get; set; }
 
+    // Valid GNU tee flags not implemented by ps-bash. -a IS implemented
+    // (declared SwitchParameter A). Note: bare -i collides with the PS binder
+    // so it is represented by its long form only.
+    private static readonly HashSet<string> TeeValidButUnsupported =
+        new(StringComparer.Ordinal)
+        {
+            "--ignore-interrupts",
+            "--output-error",
+            "--append",
+        };
+
     private readonly List<PSObject> _pipeline = new();
 
     protected override void ProcessRecord()
@@ -123,6 +134,9 @@ public sealed class InvokeBashTeeCommand : PSCmdlet
             }
             operands.Add(arg);
         }
+
+        if (FileSystemHelpers.TryWriteOperandOptionError(
+                this, "tee", operands, TeeValidButUnsupported)) return;
 
         // Collect BashText for file output (oracle: $textParts loop).
         var textParts = new List<string>(_pipeline.Count);

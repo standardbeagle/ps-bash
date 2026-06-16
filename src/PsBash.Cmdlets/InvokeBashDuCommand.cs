@@ -55,6 +55,25 @@ public sealed class InvokeBashDuCommand : PSCmdlet
     [Parameter(ValueFromRemainingArguments = true)]
     public string[]? Arguments { get; set; }
 
+    // Valid GNU du flags not implemented by ps-bash. Implemented flags
+    // (-h/-s/-a/-c/-d/--max-depth) are NOT in this set.
+    // Note: short flags like -B/-l/-P are swallowed by the per-char bundle
+    // decoder (oracle behavior) and never reach the operand list, so only
+    // long forms are practically catchable by TryWriteOperandOptionError.
+    private static readonly HashSet<string> DuValidButUnsupported =
+        new(StringComparer.Ordinal)
+        {
+            "--apparent-size",
+            "--block-size",
+            "-B",
+            "-l",
+            "--inodes",
+            "-P",
+            "--no-dereference",
+            "--time",
+            "--exclude",
+        };
+
     protected override void EndProcessing()
     {
         var args = Arguments ?? Array.Empty<string>();
@@ -144,6 +163,9 @@ public sealed class InvokeBashDuCommand : PSCmdlet
 
             operands.Add(arg);
         }
+
+        if (FileSystemHelpers.TryWriteOperandOptionError(
+                this, "du", operands, DuValidButUnsupported)) return;
 
         if (operands.Count == 0)
         {

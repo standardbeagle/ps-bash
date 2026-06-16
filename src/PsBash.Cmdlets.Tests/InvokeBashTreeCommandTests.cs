@@ -231,4 +231,32 @@ public class InvokeBashTreeCommandTests : IClassFixture<SharedPwshFixture>, IDis
         var bashText = first.Properties["BashText"]?.Value as string;
         Assert.NotNull(bashText);
     }
+
+    [Fact]
+    public void Tree_UnrecognizedOption_WritesError()
+    {
+        // Unrecognized option-like token: classified as "unrecognized option", exit 2.
+        var pwsh = _fixture.AcquireFresh();
+        pwsh.AddScript("$ErrorActionPreference='Continue'").Invoke();
+        pwsh.Commands.Clear();
+        var result = pwsh.AddScript(
+            "Invoke-BashTree --bogus 2>$null; $LASTEXITCODE").Invoke();
+        pwsh.Commands.Clear();
+        Assert.Single(result);
+        Assert.Equal(2, (int)result[0].BaseObject);
+    }
+
+    [Fact]
+    public void Tree_ValidButUnsupportedOption_WritesError()
+    {
+        // Catalog flag (valid GNU, not implemented): classified as "recognized but not supported", exit 2.
+        var pwsh = _fixture.AcquireFresh();
+        pwsh.AddScript("$ErrorActionPreference='Continue'").Invoke();
+        pwsh.Commands.Clear();
+        var result = pwsh.AddScript(
+            "Invoke-BashTree --prune 2>$null; $LASTEXITCODE").Invoke();
+        pwsh.Commands.Clear();
+        Assert.Single(result);
+        Assert.Equal(2, (int)result[0].BaseObject);
+    }
 }

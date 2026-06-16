@@ -61,6 +61,26 @@ public sealed class InvokeBashTreeCommand : PSCmdlet
     [Parameter(ValueFromRemainingArguments = true)]
     public string[]? Arguments { get; set; }
 
+    // Valid GNU tree flags not implemented by ps-bash. Implemented flags
+    // (-a/-d/-I/-L/--dirsfirst/--noreport/-f) are NOT in this set.
+    // Note: unrecognized short flags that hit the bundle decoder's default
+    // case are passed through to operands and caught here.
+    private static readonly HashSet<string> TreeValidButUnsupported =
+        new(StringComparer.Ordinal)
+        {
+            "--prune",
+            "--sort",
+            "--noreport",
+            "--charset",
+            "--fromfile",
+            "--gitignore",
+            "-C",
+            "-J",
+            "-X",
+            "-F",
+            "-p",
+        };
+
     private int _dirCount;
     private int _fileCount;
     private string _resolvedRoot = string.Empty;
@@ -172,6 +192,9 @@ public sealed class InvokeBashTreeCommand : PSCmdlet
 
             operands.Add(arg);
         }
+
+        if (FileSystemHelpers.TryWriteOperandOptionError(
+                this, "tree", operands, TreeValidButUnsupported)) return;
 
         if (operands.Count == 0)
         {

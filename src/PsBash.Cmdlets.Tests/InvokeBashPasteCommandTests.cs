@@ -242,4 +242,32 @@ public class InvokeBashPasteCommandTests : IDisposable, IClassFixture<SharedPwsh
         // Padding semantics: empty file contributes "" for every row.
         Assert.Equal(new[] { "\tx", "\ty" }, lines);
     }
+
+    [Fact]
+    public void Paste_UnrecognizedOption_WritesError()
+    {
+        // Unrecognized option-like token: classified as "unrecognized option", exit 2.
+        var pwsh = _fixture.AcquireFresh();
+        pwsh.AddScript("$ErrorActionPreference='Continue'").Invoke();
+        pwsh.Commands.Clear();
+        var result = pwsh.AddScript(
+            "Invoke-BashPaste --bogus 2>$null; $LASTEXITCODE").Invoke();
+        pwsh.Commands.Clear();
+        Assert.Single(result);
+        Assert.Equal(2, (int)result[0].BaseObject);
+    }
+
+    [Fact]
+    public void Paste_ValidButUnsupportedOption_WritesError()
+    {
+        // Catalog flag (valid GNU, not implemented): classified as "recognized but not supported", exit 2.
+        var pwsh = _fixture.AcquireFresh();
+        pwsh.AddScript("$ErrorActionPreference='Continue'").Invoke();
+        pwsh.Commands.Clear();
+        var result = pwsh.AddScript(
+            "Invoke-BashPaste -z 2>$null; $LASTEXITCODE").Invoke();
+        pwsh.Commands.Clear();
+        Assert.Single(result);
+        Assert.Equal(2, (int)result[0].BaseObject);
+    }
 }

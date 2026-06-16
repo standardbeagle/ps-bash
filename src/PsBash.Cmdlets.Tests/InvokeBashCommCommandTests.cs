@@ -249,4 +249,34 @@ public class InvokeBashCommCommandTests : IClassFixture<SharedPwshFixture>, IDis
         var lines = RunLines($"Invoke-BashComm '{Q(f1)}' '{Q(f2)}'");
         Assert.Equal(new[] { "\t\ta", "\t\tb", "\t\tc" }, lines);
     }
+
+    [Fact]
+    public void Comm_UnrecognizedOption_WritesError()
+    {
+        // Unrecognized option-like token: classified as "unrecognized option".
+        // Pass two extra dummy file operands so the missing-operand guard does not fire first.
+        var pwsh = _fixture.AcquireFresh();
+        pwsh.AddScript("$ErrorActionPreference='Continue'").Invoke();
+        pwsh.Commands.Clear();
+        var result = pwsh.AddScript(
+            "Invoke-BashComm --bogus /nonexistent-a /nonexistent-b 2>$null; $LASTEXITCODE").Invoke();
+        pwsh.Commands.Clear();
+        Assert.Single(result);
+        Assert.Equal(2, (int)result[0].BaseObject);
+    }
+
+    [Fact]
+    public void Comm_ValidButUnsupportedOption_WritesError()
+    {
+        // Catalog flag (valid GNU, not implemented): classified as "recognized but not supported".
+        // Pass two extra dummy file operands so the missing-operand guard does not fire first.
+        var pwsh = _fixture.AcquireFresh();
+        pwsh.AddScript("$ErrorActionPreference='Continue'").Invoke();
+        pwsh.Commands.Clear();
+        var result = pwsh.AddScript(
+            "Invoke-BashComm --check-order /nonexistent-a /nonexistent-b 2>$null; $LASTEXITCODE").Invoke();
+        pwsh.Commands.Clear();
+        Assert.Single(result);
+        Assert.Equal(2, (int)result[0].BaseObject);
+    }
 }
