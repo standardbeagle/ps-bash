@@ -48,7 +48,6 @@ public sealed class InvokeBashCommCommand : PSCmdlet
             "--output-delimiter",
             "-z",
             "--zero-terminated",
-            "--total",
         };
 
     protected override void EndProcessing()
@@ -70,6 +69,7 @@ public sealed class InvokeBashCommCommand : PSCmdlet
         bool suppress1 = false;
         bool suppress2 = false;
         bool suppress3 = false;
+        bool total = false;
         var operands = new List<string>();
         bool pastDoubleDash = false;
 
@@ -86,6 +86,12 @@ public sealed class InvokeBashCommCommand : PSCmdlet
             if (arg == "--")
             {
                 pastDoubleDash = true;
+                continue;
+            }
+
+            if (arg == "--total")
+            {
+                total = true;
                 continue;
             }
 
@@ -144,11 +150,15 @@ public sealed class InvokeBashCommCommand : PSCmdlet
             string col2Prefix = suppress1 ? "" : "\t";                       // "only in file2"
             string col3Prefix = (suppress1 ? "" : "\t") + (suppress2 ? "" : "\t"); // "in both"
 
+            // --total counts each category regardless of column suppression.
+            long n1 = 0, n2 = 0, n3 = 0;
+
             while (has1 && has2)
             {
                 int cmp = string.CompareOrdinal(file1.Current, file2.Current);
                 if (cmp == 0)
                 {
+                    n3++;
                     if (!suppress3)
                     {
                         WriteObject(BashRuntime.NewBashObject(col3Prefix + file1.Current));
@@ -161,6 +171,7 @@ public sealed class InvokeBashCommCommand : PSCmdlet
                 }
                 else if (cmp < 0)
                 {
+                    n1++;
                     if (!suppress1)
                     {
                         WriteObject(BashRuntime.NewBashObject(file1.Current));
@@ -171,6 +182,7 @@ public sealed class InvokeBashCommCommand : PSCmdlet
                 }
                 else
                 {
+                    n2++;
                     if (!suppress2)
                     {
                         WriteObject(BashRuntime.NewBashObject(col2Prefix + file2.Current));
@@ -183,6 +195,7 @@ public sealed class InvokeBashCommCommand : PSCmdlet
 
             while (has1)
             {
+                n1++;
                 if (!suppress1)
                 {
                     WriteObject(BashRuntime.NewBashObject(file1.Current));
@@ -194,6 +207,7 @@ public sealed class InvokeBashCommCommand : PSCmdlet
 
             while (has2)
             {
+                n2++;
                 if (!suppress2)
                 {
                     WriteObject(BashRuntime.NewBashObject(col2Prefix + file2.Current));
@@ -201,6 +215,13 @@ public sealed class InvokeBashCommCommand : PSCmdlet
 
                 currentReadPath = path2;
                 has2 = file2.MoveNext();
+            }
+
+            // --total: trailing summary line "n1<TAB>n2<TAB>n3<TAB>total"
+            // (GNU prints all three counts regardless of -1/-2/-3 suppression).
+            if (total)
+            {
+                WriteObject(BashRuntime.NewBashObject($"{n1}\t{n2}\t{n3}\ttotal"));
             }
         }
         catch (Exception ex)

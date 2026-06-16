@@ -57,9 +57,11 @@ public sealed class InvokeBashHeadCommand : PSCmdlet
     /// </summary>
     private static readonly HashSet<string> ValidButUnsupported = new(StringComparer.Ordinal)
     {
-        "-q", "-v", "-z",
-        "--quiet", "--silent", "--verbose", "--zero-terminated",
-        "--lines", "--bytes",
+        // -q/--quiet/--silent accepted (no-op); --lines/--bytes parsed (aliases
+        // of -n/-c). -v/--verbose (force per-file headers) is unsupported because
+        // ps-bash head does not emit the "==> name <==" headers at all.
+        "-v", "-z",
+        "--verbose", "--zero-terminated",
     };
 
     private readonly List<PSObject> _pipeline = new();
@@ -329,6 +331,44 @@ public sealed class InvokeBashHeadCommand : PSCmdlet
             if (arg == "--")
             {
                 pastDoubleDash = true;
+                i++;
+                continue;
+            }
+
+            // Long-form aliases of -n / -c.
+            if (arg.StartsWith("--lines=", StringComparison.Ordinal))
+            {
+                if (int.TryParse(arg.Substring("--lines=".Length), out int ln)) count = ln;
+                i++;
+                continue;
+            }
+            if (arg == "--lines")
+            {
+                i++;
+                if (i < args.Length && int.TryParse(args[i], out int ln)) count = ln;
+                i++;
+                continue;
+            }
+            if (arg.StartsWith("--bytes=", StringComparison.Ordinal))
+            {
+                if (int.TryParse(arg.Substring("--bytes=".Length), out int bc)) byteCount = bc;
+                i++;
+                continue;
+            }
+            if (arg == "--bytes")
+            {
+                i++;
+                if (i < args.Length && int.TryParse(args[i], out int bc)) byteCount = bc;
+                i++;
+                continue;
+            }
+
+            // -q / --quiet / --silent: never print the per-file "==> name <=="
+            // header. ps-bash head never prints those headers, so this is the
+            // effective behavior already — accept the flag as a no-op so it is
+            // honored rather than refused.
+            if (arg == "-q" || arg == "--quiet" || arg == "--silent")
+            {
                 i++;
                 continue;
             }

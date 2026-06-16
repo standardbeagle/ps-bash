@@ -96,7 +96,7 @@ public sealed class InvokeBashWcCommand : PSCmdlet
     /// <see cref="FileSystemHelpers.TryWriteOperandOptionError"/>).</summary>
     private static readonly HashSet<string> WcValidButUnsupported = new(StringComparer.Ordinal)
     {
-        "--lines", "--words", "--bytes",
+        // --lines / --words / --bytes are now parsed (aliases of -l / -w / -c).
         "--files0-from",
     };
 
@@ -124,11 +124,14 @@ public sealed class InvokeBashWcCommand : PSCmdlet
             "-L", "longest line length",
             "--chars", "char count only",
             "--max-line-length", "longest line length",
+            "--lines", "line count only",
+            "--words", "word count only",
+            "--bytes", "byte count only",
         });
         var parsed = BashRuntime.ConvertFromBashArgs(args, flagDefs);
-        _linesOnly = parsed.Flags["-l"];
-        _wordsOnly = W.IsPresent;
-        _bytesOnly = parsed.Flags["-c"] || C.IsPresent;
+        _linesOnly = parsed.Flags["-l"] || parsed.Flags["--lines"];
+        _wordsOnly = W.IsPresent || parsed.Flags["--words"];
+        _bytesOnly = parsed.Flags["-c"] || C.IsPresent || parsed.Flags["--bytes"];
         _charsOnly = parsed.Flags["-m"] || parsed.Flags["--chars"];
         _maxLineOnly = parsed.Flags["-L"] || parsed.Flags["--max-line-length"];
         _operands = parsed.Operands;

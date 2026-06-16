@@ -279,4 +279,14 @@ public class InvokeBashCommCommandTests : IClassFixture<SharedPwshFixture>, IDis
         Assert.Single(result);
         Assert.Equal(2, (int)result[0].BaseObject);
     }
+
+    [Fact]
+    public void Comm_Total_AppendsSummaryLine()
+    {
+        // file1: a,c   file2: b,c  →  uniq1=a, uniq2=b, both=c → "1\t1\t1\ttotal".
+        var f1 = WriteFile("t1.txt", "a\nc\n");
+        var f2 = WriteFile("t2.txt", "b\nc\n");
+        var lines = RunLines($"Invoke-BashComm --total '{Q(f1)}' '{Q(f2)}'");
+        Assert.Equal("1\t1\t1\ttotal", lines[^1]);
+    }
 }

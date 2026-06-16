@@ -64,10 +64,7 @@ public sealed class InvokeBashBase64Command : PSCmdlet
     /// instead of the misleading "No such file or directory".
     /// </summary>
     private static readonly HashSet<string> Base64ValidButUnsupported =
-        new(StringComparer.Ordinal)
-        {
-            "-i", "--ignore-garbage",
-        };
+        new(StringComparer.Ordinal);
 
     [Parameter(ValueFromRemainingArguments = true)]
     public string[]? Arguments { get; set; }
@@ -93,6 +90,16 @@ public sealed class InvokeBashBase64Command : PSCmdlet
     /// </summary>
     [Parameter]
     public int? W { get; set; }
+
+    /// <summary>
+    /// The bash <c>-i</c> (ignore-garbage) switch — declared explicitly because
+    /// the bare token <c>-i</c> prefix-collides with the <c>-InformationAction</c>
+    /// / <c>-InformationVariable</c> common parameters. When decoding, any
+    /// non-alphabet byte is skipped. The long form <c>--ignore-garbage</c> and
+    /// bundled forms are recovered post-parse from <see cref="Arguments"/>.
+    /// </summary>
+    [Parameter]
+    public SwitchParameter I { get; set; }
 
     [Parameter(ValueFromPipeline = true)]
     public PSObject? InputObject { get; set; }
@@ -129,6 +136,7 @@ public sealed class InvokeBashBase64Command : PSCmdlet
         // tokens land in Arguments and are recovered here. Bare positional
         // tokens are operands.
         bool decode = D.IsPresent;
+        bool ignoreGarbage = I.IsPresent;
         int wrapCol = W ?? 76;
         var operands = new List<string>();
         int i = 0;
@@ -139,10 +147,19 @@ public sealed class InvokeBashBase64Command : PSCmdlet
             {
                 decode = true; i++; continue;
             }
+            if (a == "--ignore-garbage")
+            {
+                ignoreGarbage = true; i++; continue;
+            }
             if (a.StartsWith("--wrap=", StringComparison.Ordinal))
             {
                 if (int.TryParse(a.Substring("--wrap=".Length), out var parsed)) wrapCol = parsed;
                 i++; continue;
+            }
+            if (a == "--wrap" && i + 1 < args.Length)
+            {
+                if (int.TryParse(args[i + 1], out var parsed)) wrapCol = parsed;
+                i += 2; continue;
             }
             operands.Add(a);
             i++;
@@ -162,7 +179,7 @@ public sealed class InvokeBashBase64Command : PSCmdlet
                 string output;
                 try
                 {
-                    output = DecodeBase64FileToOutput(filePath);
+                    output = DecodeBase64FileToOutput(filePath, ignoreGarbage);
                 }
                 catch (FormatException ex)
                 {
@@ -219,7 +236,7 @@ public sealed class InvokeBashBase64Command : PSCmdlet
             string output;
             try
             {
-                output = DecodeBase64TextToOutput(pipelineText.Trim());
+                output = DecodeBase64TextToOutput(pipelineText.Trim(), ignoreGarbage);
             }
             catch (FormatException ex)
             {
@@ -300,7 +317,7 @@ public sealed class InvokeBashBase64Command : PSCmdlet
         return output.ToString();
     }
 
-    private static string DecodeBase64FileToOutput(string path)
+    private static string DecodeBase64FileToOutput(string path, bool ignoreGarbage)
     {
         using var stream = BashFileSystem.OpenRead(path);
         using var reader = new StreamReader(
@@ -317,6 +334,8 @@ public sealed class InvokeBashBase64Command : PSCmdlet
             {
                 char ch = chars[i];
                 if (char.IsWhiteSpace(ch)) continue;
+                // -i: silently drop any non-alphabet char instead of throwing.
+                if (ignoreGarbage && !IsBase64Char(ch)) continue;
                 quartet[quartetLen++] = ch;
                 if (quartetLen != 4) continue;
 
@@ -335,11 +354,25 @@ public sealed class InvokeBashBase64Command : PSCmdlet
         return DecodeBytesToOutput(decoded.GetBuffer(), (int)decoded.Length);
     }
 
-    private static string DecodeBase64TextToOutput(string text)
+    private static string DecodeBase64TextToOutput(string text, bool ignoreGarbage)
     {
+        if (ignoreGarbage)
+        {
+            var sb = new StringBuilder(text.Length);
+            foreach (char ch in text)
+            {
+                if (IsBase64Char(ch)) sb.Append(ch);
+            }
+            text = sb.ToString();
+        }
         byte[] decoded = Convert.FromBase64String(text);
         return DecodeBytesToOutput(decoded, decoded.Length);
     }
+
+    /// <summary>True for a standard base64 alphabet char (incl. <c>=</c> padding).</summary>
+    private static bool IsBase64Char(char ch)
+        => (ch >= 'A' && ch <= 'Z') || (ch >= 'a' && ch <= 'z')
+           || (ch >= '0' && ch <= '9') || ch == '+' || ch == '/' || ch == '=';
 
     private static string DecodeBytesToOutput(byte[] decoded, int count)
     {

@@ -63,12 +63,14 @@ public sealed class InvokeBashExpandCommand : PSCmdlet
     public PSObject? InputObject { get; set; }
 
     // Valid GNU expand flags recognized but not implemented by ps-bash.
+    // (-i/--first-only and --tabs in all forms are now implemented.)
     private static readonly HashSet<string> ExpandValidButUnsupported =
-        new(StringComparer.Ordinal) { "-i", "--first-only", "--tabs" };
+        new(StringComparer.Ordinal);
 
     // Parsed-once state.
     private bool _parsed;
     private int _tabWidth = 8;
+    private bool _initialOnly;
     private List<string> _operands = new();
     // True when stdin must NOT be streamed: file operands present, or a
     // --help / --version request (both short-circuit the scan in the oracle —
@@ -115,6 +117,20 @@ public sealed class InvokeBashExpandCommand : PSCmdlet
                 i++;
                 continue;
             }
+            // --tabs N (separate form)
+            if (a == "--tabs" && (i + 1) < args.Length)
+            {
+                _tabWidth = int.Parse(args[i + 1]);
+                i += 2;
+                continue;
+            }
+            // -i / --first-only: convert only the leading (pre-text) tabs.
+            if (a == "-i" || a == "--first-only")
+            {
+                _initialOnly = true;
+                i++;
+                continue;
+            }
             _operands.Add(a);
             i++;
         }
@@ -137,12 +153,12 @@ public sealed class InvokeBashExpandCommand : PSCmdlet
         {
             foreach (var subLine in trimmed.Split('\n'))
             {
-                WriteObject(BashRuntime.NewBashObject(ExpandTabs(subLine, _tabWidth)));
+                WriteObject(BashRuntime.NewBashObject(ExpandTabs(subLine, _tabWidth, _initialOnly)));
             }
         }
         else
         {
-            WriteObject(BashRuntime.NewBashObject(ExpandTabs(trimmed, _tabWidth)));
+            WriteObject(BashRuntime.NewBashObject(ExpandTabs(trimmed, _tabWidth, _initialOnly)));
         }
     }
 
@@ -179,7 +195,7 @@ public sealed class InvokeBashExpandCommand : PSCmdlet
                 {
                     foreach (var line in BashFileSystem.ReadLines(filePath))
                     {
-                        WriteObject(BashRuntime.NewBashObject(ExpandTabs(line, _tabWidth)));
+                        WriteObject(BashRuntime.NewBashObject(ExpandTabs(line, _tabWidth, _initialOnly)));
                     }
                 }
                 catch (Exception ex)
@@ -196,20 +212,30 @@ public sealed class InvokeBashExpandCommand : PSCmdlet
         }
     }
 
-    private static string ExpandTabs(string line, int tabWidth)
+    private static string ExpandTabs(string line, int tabWidth, bool initialOnly = false)
     {
         var sb = new StringBuilder(line.Length);
         int col = 0;
+        bool seenNonBlank = false;
         foreach (var ch in line)
         {
             if (ch == '\t')
             {
+                // -i: once a non-blank char has appeared on the line, leave tabs
+                // literal (GNU "do not convert tabs after non blanks").
+                if (initialOnly && seenNonBlank)
+                {
+                    sb.Append('\t');
+                    col++;
+                    continue;
+                }
                 int spaces = tabWidth - (col % tabWidth);
                 sb.Append(' ', spaces);
                 col += spaces;
             }
             else
             {
+                if (ch != ' ') seenNonBlank = true;
                 sb.Append(ch);
                 col++;
             }

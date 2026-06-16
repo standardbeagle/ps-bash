@@ -69,9 +69,11 @@ public sealed class InvokeBashTailCommand : PSCmdlet
     /// </summary>
     private static readonly HashSet<string> ValidButUnsupported = new(StringComparer.Ordinal)
     {
-        "-q", "-v", "-z", "-F",
-        "--quiet", "--silent", "--verbose", "--zero-terminated",
-        "--lines", "--retry", "--max-unchanged-stats", "--pid",
+        // -q/--quiet/--silent accepted (no-op); --lines parsed (alias of -n).
+        // -v/--verbose unsupported (ps-bash tail emits no "==> name <==" headers).
+        "-v", "-z", "-F",
+        "--verbose", "--zero-terminated",
+        "--retry", "--max-unchanged-stats", "--pid",
         "--follow-retry",
     };
 
@@ -147,6 +149,39 @@ public sealed class InvokeBashTailCommand : PSCmdlet
             if (arg == "-f" || arg == "--follow")
             {
                 followFile = true;
+                i++;
+                continue;
+            }
+
+            // --lines=N / --lines N / --lines +N  (alias of -n, incl. the +N
+            // "from line N onward" form).
+            if (arg.StartsWith("--lines=", StringComparison.Ordinal))
+            {
+                var val = arg.Substring("--lines=".Length);
+                if (val.StartsWith("+", StringComparison.Ordinal)
+                    && int.TryParse(val.Substring(1), out int lp)) { count = lp; fromLine = true; }
+                else if (int.TryParse(val, out int ln)) { count = ln; }
+                i++;
+                continue;
+            }
+            if (arg == "--lines")
+            {
+                i++;
+                if (i < args.Length)
+                {
+                    var val = args[i];
+                    if (val.StartsWith("+", StringComparison.Ordinal)
+                        && int.TryParse(val.Substring(1), out int lp)) { count = lp; fromLine = true; }
+                    else if (int.TryParse(val, out int ln)) { count = ln; }
+                }
+                i++;
+                continue;
+            }
+
+            // -q / --quiet / --silent: never print per-file headers — already the
+            // ps-bash behavior, so accept the flag as a no-op rather than refuse it.
+            if (arg == "-q" || arg == "--quiet" || arg == "--silent")
+            {
                 i++;
                 continue;
             }

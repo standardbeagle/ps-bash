@@ -82,9 +82,12 @@ public sealed class InvokeBashCatCommand : PSCmdlet
     /// reaching here; listed for completeness / bundle probing.</summary>
     private static readonly HashSet<string> CatValidButUnsupported = new(StringComparer.Ordinal)
     {
+        // -A / -e / -t / -v all require -v non-printing (caret/M- notation),
+        // which is not implemented. The long-form aliases of the SUPPORTED short
+        // flags (--number, --number-nonblank, --squeeze-blank, --show-ends,
+        // --show-tabs) are now parsed and are NOT listed here.
         "-A", "-t", "-u", "-v", "-e",
-        "--show-all", "--show-nonprinting", "--number-nonblank", "--show-ends",
-        "--number", "--squeeze-blank", "--show-tabs",
+        "--show-all", "--show-nonprinting",
     };
 
     // Parsed-once flag / operand state.
@@ -112,6 +115,28 @@ public sealed class InvokeBashCatCommand : PSCmdlet
 
         var args = Arguments ?? Array.Empty<string>();
 
+        // Translate the GNU long forms that are exact aliases of the supported
+        // short flags into their short spelling before ConvertFromBashArgs sees
+        // them (it parses short flags). --show-ends maps to the E switch, so it
+        // is tracked separately and dropped from the arg stream.
+        bool longShowEnds = false;
+        {
+            var translated = new List<string>(args.Length);
+            foreach (var a in args)
+            {
+                switch (a)
+                {
+                    case "--number": translated.Add("-n"); break;
+                    case "--number-nonblank": translated.Add("-b"); break;
+                    case "--squeeze-blank": translated.Add("-s"); break;
+                    case "--show-tabs": translated.Add("-T"); break;
+                    case "--show-ends": longShowEnds = true; break;
+                    default: translated.Add(a); break;
+                }
+            }
+            args = translated.ToArray();
+        }
+
         // -E is bound via the explicit E switch (common-parameter collision);
         // the rest stay in Arguments and are parsed by ConvertFromBashArgs.
         var flagDefs = BashRuntime.NewFlagDefs(new[]
@@ -125,7 +150,7 @@ public sealed class InvokeBashCatCommand : PSCmdlet
         _numberAll = parsed.Flags["-n"];
         _numberNonBlank = parsed.Flags["-b"];
         _squeezeBlanks = parsed.Flags["-s"];
-        _showEnds = E.IsPresent;
+        _showEnds = E.IsPresent || longShowEnds;
         _showTabs = parsed.Flags["-T"];
 
         // Bundled-flag recovery: a bundle like -nE or -Es reaches Arguments

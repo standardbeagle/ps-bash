@@ -294,4 +294,25 @@ public class InvokeBashDuCommandTests : IClassFixture<SharedPwshFixture>, IDispo
         Assert.Single(result);
         Assert.Equal(2, (int)result[0].BaseObject);
     }
+
+    [Fact]
+    public void Du_Exclude_PrunesMatchingSubtree()
+    {
+        // --exclude=GLOB prunes a matching directory (and its subtree) from the
+        // totals. Build keep/ (1 file) and skip/ (1 large file); excluding skip
+        // must drop it from the listing entirely.
+        var keep = Path.Combine(_tmpDir, "keep");
+        var skip = Path.Combine(_tmpDir, "skip");
+        Directory.CreateDirectory(keep);
+        Directory.CreateDirectory(skip);
+        WriteBytes(Path.Combine(keep, "a.txt"), 100);
+        WriteBytes(Path.Combine(skip, "big.txt"), 5000);
+
+        var paths = RunText("Invoke-BashDu --exclude=skip .")
+            .Select(t => t.Split('\t').Last())
+            .ToArray();
+
+        Assert.Contains(paths, p => p.EndsWith("keep", StringComparison.Ordinal));
+        Assert.DoesNotContain(paths, p => p.Contains("skip", StringComparison.Ordinal));
+    }
 }

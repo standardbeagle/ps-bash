@@ -71,7 +71,6 @@ public sealed class InvokeBashDuCommand : PSCmdlet
             "-P",
             "--no-dereference",
             "--time",
-            "--exclude",
         };
 
     protected override void EndProcessing()
@@ -97,10 +96,24 @@ public sealed class InvokeBashDuCommand : PSCmdlet
         int maxDepth = D ?? int.MaxValue;
 
         var operands = new List<string>();
+        var excludePatterns = new List<string>();
 
         for (int i = 0; i < args.Length; i++)
         {
             var arg = args[i];
+
+            // --exclude=GLOB / --exclude GLOB — prune matching files/dirs.
+            if (arg.StartsWith("--exclude=", StringComparison.Ordinal))
+            {
+                excludePatterns.Add(arg.Substring("--exclude=".Length));
+                continue;
+            }
+            if (arg == "--exclude" && (i + 1) < args.Length)
+            {
+                excludePatterns.Add(args[i + 1]);
+                i++;
+                continue;
+            }
 
             // -d<digits> joined form (oracle: -cmatch '^-d(\d+)$')
             if (arg.Length > 2 && arg.StartsWith("-d", StringComparison.Ordinal)
@@ -166,6 +179,10 @@ public sealed class InvokeBashDuCommand : PSCmdlet
 
         if (FileSystemHelpers.TryWriteOperandOptionError(
                 this, "du", operands, DuValidButUnsupported)) return;
+
+        var excludeWild = excludePatterns
+            .Select(p => WildcardPattern.Get(p, WildcardOptions.None))
+            .ToList();
 
         if (operands.Count == 0)
         {
@@ -246,6 +263,9 @@ public sealed class InvokeBashDuCommand : PSCmdlet
                 foreach (var sub in rootDir.EnumerateDirectories(
                              "*", SearchOption.AllDirectories))
                 {
+                    // --exclude prunes a matching directory (and its subtree:
+                    // any descendant carries the excluded segment in its rel path).
+                    if (IsSegmentExcluded(sub.FullName, resolvedRoot, excludeWild)) continue;
                     allDirs.Add(sub);
                 }
             }
@@ -260,6 +280,7 @@ public sealed class InvokeBashDuCommand : PSCmdlet
                 {
                     foreach (var f in d.EnumerateFiles())
                     {
+                        if (IsSegmentExcluded(f.FullName, resolvedRoot, excludeWild)) continue;
                         total += f.Length;
                     }
                 }
@@ -344,6 +365,7 @@ public sealed class InvokeBashDuCommand : PSCmdlet
                         break;
                     }
 
+                    if (IsSegmentExcluded(f.FullName, resolvedRoot, excludeWild)) continue;
                     int fileDepth = f.FullName.Split(new[] { '\\', '/' }).Length - rootDepth;
                     if (fileDepth > maxDepth) continue;
                     if (summarize) continue;
@@ -399,6 +421,30 @@ public sealed class InvokeBashDuCommand : PSCmdlet
             obj.Properties.Add(new PSNoteProperty("BashText", $"{displaySize}\ttotal"));
             WriteObject(obj);
         }
+    }
+
+    /// <summary>
+    /// True when any path segment of <paramref name="fullName"/> below
+    /// <paramref name="root"/> matches a <c>--exclude</c> glob. Checking every
+    /// segment (not just the basename) means an excluded directory prunes its
+    /// whole subtree, matching GNU <c>du --exclude</c>.
+    /// </summary>
+    private static bool IsSegmentExcluded(string fullName, string root, List<WildcardPattern> pats)
+    {
+        if (pats.Count == 0) return false;
+        string rel = fullName.Length > root.Length
+            && fullName.StartsWith(root, StringComparison.Ordinal)
+            ? fullName.Substring(root.Length)
+            : fullName;
+        foreach (var seg in rel.Split('\\', '/'))
+        {
+            if (seg.Length == 0) continue;
+            foreach (var w in pats)
+            {
+                if (w.IsMatch(seg)) return true;
+            }
+        }
+        return false;
     }
 
     private static bool AllDigits(string s, int start)

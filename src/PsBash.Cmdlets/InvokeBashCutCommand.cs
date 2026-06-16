@@ -142,8 +142,10 @@ public sealed class InvokeBashCutCommand : PSCmdlet
     /// </summary>
     private static readonly HashSet<string> ValidButUnsupported = new(StringComparer.Ordinal)
     {
+        // --fields / --characters / --delimiter are now parsed (aliases of
+        // -f / -c / -d). -b/--bytes (byte mode) and --complement remain unimplemented.
         "-b", "-n", "-z",
-        "--bytes", "--characters", "--fields", "--delimiter",
+        "--bytes",
         "--complement",
         "--zero-terminated",
     };
@@ -270,6 +272,21 @@ public sealed class InvokeBashCutCommand : PSCmdlet
                 i++;
                 continue;
             }
+
+            // Long-form aliases of the supported short flags (-f / -d / -c).
+            // GNU cut accepts both spellings interchangeably.
+            if (a.StartsWith("--fields=", StringComparison.Ordinal))
+            { _fieldSpec = a.Substring("--fields=".Length); i++; continue; }
+            if (a == "--fields")
+            { i++; if (i < args.Length) _fieldSpec = args[i]; i++; continue; }
+            if (a.StartsWith("--characters=", StringComparison.Ordinal))
+            { _charSpec = a.Substring("--characters=".Length); i++; continue; }
+            if (a == "--characters")
+            { i++; if (i < args.Length) _charSpec = args[i]; i++; continue; }
+            if (a.StartsWith("--delimiter=", StringComparison.Ordinal))
+            { _delimiter = a.Substring("--delimiter=".Length); i++; continue; }
+            if (a == "--delimiter")
+            { i++; if (i < args.Length) _delimiter = args[i]; i++; continue; }
 
             // Any remaining option-looking token is a flag cut doesn't handle,
             // not a file operand: valid-but-unsupported → specific refusal,

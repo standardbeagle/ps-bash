@@ -7,13 +7,13 @@
 | echo | Invoke-BashEcho | `-n`, `-e`, `-E` | Binary cmdlet (ConvertFromBashArgs; emitter force-quotes `-e`/`-E`/`--` so they reach Arguments with case intact past the case-insensitive binder) | No | No |
 | printf | Invoke-BashPrintf | (format + args) | Positional | No | No |
 | ls | Invoke-BashLs | `-l`, `-a`, `-A`, `-h`, `-R`, `-S`, `-t`, `-r`, `-1`, `-p`, `-d`, `-F`, `--color`, `-i`, `-s` | Binary cmdlet (`-a`/`-A`, `-d`, `-p` are declared SwitchParameters; rest via ConvertFromBashArgs; bundles recovered post-parse) | No | Yes |
-| cat | Invoke-BashCat | `-n`, `-b`, `-s`, `-E`, `-T` | Binary cmdlet (`-E` is a declared SwitchParameter; rest via ConvertFromBashArgs) | Yes | Yes |
+| cat | Invoke-BashCat | `-n`/`--number`, `-b`/`--number-nonblank`, `-s`/`--squeeze-blank`, `-E`/`--show-ends`, `-T`/`--show-tabs` | Binary cmdlet (`-E` is a declared SwitchParameter; rest via ConvertFromBashArgs; long forms translated to short pre-parse). `-A`/`-e`/`-t`/`-v` (need `-v` caret notation) remain unsupported. | Yes | Yes |
 | grep | Invoke-BashGrep | `-i`, `-v`, `-n`, `-c`, `-r`, `-l`, `-E`, `-F`, `-w`, `-A`, `-B`, `-C`, `-e`, `-m`, `-q`, `-o`, `-H`, `-h` | Binary cmdlet (`-i`/`-v`/`-c`/`-w` declared as SwitchParameters `I`/`V`/`C`/`W`; `-e` declared as value-bearing `string[] E`; `-A`/`-B` declared as nullable `int? A`/`int? B`; other flags + bundled forms stay in `Arguments`). **Recursive default-prune:** `-r` skips the `FileSystemHelpers.DefaultPrunedDirectories` set (`.git`, `.hg`, `.svn`, `.vs`, `node_modules`, `bin`, `obj`) BEFORE descending, streaming matches as the tree is walked. This is a deliberate divergence from GNU `grep -r` (which prunes nothing) — it fixes the host idle-timeout the old `AllDirectories` walk tripped on big repos. Set env `PSBASH_SEARCH_NO_IGNORE=1` (truthy) to disable pruning and restore the unfiltered walk. | Yes | Yes |
 | rg | Invoke-BashRg | `-i`, `-w`, `-c`, `-l`, `-n`, `-N`, `-o`, `-v`, `-F`, `-g`, `-A`, `-B`, `-C`, `--hidden`, `--no-ignore`/`-u`/`-uu` | Binary cmdlet (`-i`/`-v`/`-c`/`-w` declared as SwitchParameters `I`/`V`/`C`/`W`; `-A`/`-B` declared as nullable `int? A`/`int? B`; other flags + bundled forms stay in `Arguments`; native `rg.exe` passthrough when on PATH, else internal regex engine). **Default-prune (internal engine only):** prunes the shared `DefaultPrunedDirectories` set + hidden (unless `--hidden`) BEFORE descending, streaming results — approximating ripgrep's gitignore filtering. `--no-ignore`/`-u` (or `-uu` to also add hidden) and env `PSBASH_SEARCH_NO_IGNORE=1` disable the prune set. The native-`rg.exe` passthrough does its own `.gitignore` filtering. | Yes | Yes |
-| sort | Invoke-BashSort | `-r`, `-n`, `-u`, `-f`, `-k`, `-t`, `-h`, `-V`, `-M`, `-c` | Binary cmdlet (`-c` / `-d` / `-V` declared as `SwitchParameter`s `C` / `D` / `V`; `-r` / `-n` / `-u` / `-f` / `-h` / `-M` / `-b` / `-s` plus value-bearing `-k` / `-t` stay in `Arguments`) | Yes | Yes |
-| head | Invoke-BashHead | `-n`, `-c` | Binary cmdlet (manual value-flag scan) | Yes | Yes |
-| tail | Invoke-BashTail | `-n`, `-c`, `-f`, `-s` | Binary cmdlet (manual value-flag scan) | Yes | Yes |
-| wc | Invoke-BashWc | `-l`, `-w`, `-c` | Binary cmdlet (`-w` is a declared SwitchParameter; rest via ConvertFromBashArgs) | Yes | Yes |
+| sort | Invoke-BashSort | `-r`, `-n`, `-g`, `-u`, `-f`, `-k`, `-t`, `-h`, `-V`, `-M`, `-c`, `-b`, `-d`, `-s` + long forms `--reverse`/`--numeric-sort`/`--general-numeric-sort`/`--unique`/`--ignore-case`/`--key=`/`--field-separator=`/`--human-numeric-sort`/`--version-sort`/`--month-sort`/`--check`/`--dictionary-order`/`--ignore-leading-blanks`/`--stable`/`--sort=WORD` | Binary cmdlet (`-c` / `-d` / `-V` declared as `SwitchParameter`s `C` / `D` / `V`; rest + long forms parsed in `Arguments`). `-g`/`--general-numeric-sort` parses each field as a general float (handles `1e3`). | Yes | Yes |
+| head | Invoke-BashHead | `-n`/`--lines`, `-c`/`--bytes`, `-q`/`--quiet`/`--silent` (no-op) | Binary cmdlet (manual value-flag scan). `-v`/`--verbose` unsupported (no per-file `==>` headers emitted). | Yes | Yes |
+| tail | Invoke-BashTail | `-n`/`--lines`, `-c`/`--bytes`, `-f`/`--follow`, `-s`, `-q`/`--quiet`/`--silent` (no-op) | Binary cmdlet (manual value-flag scan). `-v`/`--verbose` unsupported. | Yes | Yes |
+| wc | Invoke-BashWc | `-l`/`--lines`, `-w`/`--words`, `-c`/`--bytes`, `-m`/`--chars`, `-L`/`--max-line-length` | Binary cmdlet (`-w` is a declared SwitchParameter; rest + long forms via ConvertFromBashArgs) | Yes | Yes |
 | find | Invoke-BashFind | `-name`/`-iname`, `-path`/`-ipath`, `-regex`/`-iregex`, `-type`, `-size`, `-maxdepth`/`-mindepth`, `-mtime`, `-newer`, `-empty`, `-print0`, `-prune`, `-delete`, `-depth`, `-exec`; boolean expression operators `-a`/`-and`, `-o`/`-or`, `-not`/`!`, `( )` grouping, `-true`/`-false` | Binary cmdlet (predicates compiled to leaf delegates, combined by a per-item boolean-expression evaluator with GNU precedence `! > AND > OR`; implicit-AND of sequential predicates is byte-identical to the old flat filter). **Binder note:** the infix `-o` (vs `-OutVariable`/`-OutBuffer`) and `-a` (vs the cmdlet's own `-Arguments`) are position-critical, so the emitter force-quotes them (`PsEmitter.FindForceQuoteFlags`) rather than declaring switch decoys, which would lose position. Bare `!` works (the parser keeps a post-command-word `!` as a literal operand). **Unsupported-predicate classifier:** valid-but-unimplemented predicates (`-perm`, `-user`, `-printf`, …) emit `find: unsupported predicate` and continue; any other dash-led token is rejected with `find: unknown predicate '<arg>'` (exit 1) rather than being silently swallowed as a search-path operand. | No | Yes |
 | stat | Invoke-BashStat | `-c`, `-t`, `--printf` | Binary cmdlet (`-c FORMAT` declared as value-bearing parameter `C`; `-t` / `--printf=` stay in `Arguments`) | No | Yes |
 | cp | Invoke-BashCp | `-r`/`-R`, `-v`, `-n`, `-f`, `-p`, `-u`, `-a` | Binary cmdlet (manual scan + short-bundle de-bundling; `-v`/`-p` declared as decoy switches). `--` ends flag parsing. Classifier (exit 2): valid-but-unsupported `-i`/`--interactive`, `-l`/`--link`, `-s`/`--symbolic-link`, `-b`/`--backup`, `--reflink`, `-t`/`--target-directory`, etc.; unknown → bash-parity error. | No | Yes |
@@ -26,13 +26,13 @@
 | ps | Invoke-BashPs | `-e`/`-A`, `-f`, `-u`, `-p`, `--sort`, `-o` | Binary cmdlet (`-e` / `-A` declared as `SwitchParameter`s `E` / `A`; `-p` / `-o` declared as nullable `string`s `P` / `O`; `-f` / `-u` / `--sort` / `aux` stay in `Arguments`) | No | No |
 | sed | Invoke-BashSed | `-n`, `-i`, `-E`, `-e` | Manual loop | Yes | Yes |
 | awk | Invoke-BashAwk | `-F`, `-v`, `-f` | Binary cmdlet (`-v VAR=VAL` declared as value-bearing `string[] V` — bare `-v` prefix-collides with the `-Verbose` common parameter; `-F`/`-f` and joined forms stay in `Arguments`). Backed by a real recursive-descent AWK interpreter (`AwkInterpreter`/`AwkLexer`/`AwkParser`/`AwkMachine`/`AwkValue`/`AwkPrintf`), not a flag table — the psm1 regex/string-scan approximation was replaced, closing the five differential gaps (field string-concat, `+=`, `index()`, `split()`, `if/else`) | Yes | Yes |
-| cut | Invoke-BashCut | `-d`, `-f`, `-c` | Binary cmdlet (`-d` and `-c` are declared value-bearing parameters `D` / `C`; `-f` and joined `-dC`/`-fLIST`/`-cLIST` stay in `Arguments`) | Yes | Yes |
+| cut | Invoke-BashCut | `-d`/`--delimiter`, `-f`/`--fields`, `-c`/`--characters`, `-s`/`--only-delimited`, `--output-delimiter` | Binary cmdlet (`-d` and `-c` are declared value-bearing parameters `D` / `C`; `-f`, joined short forms, and the long-form aliases stay in `Arguments`). `-b`/`--bytes` and `--complement` unsupported. | Yes | Yes |
 | tr | Invoke-BashTr | `-d`, `-s` | Binary cmdlet (`-d`/`-c` declared as SwitchParameters; `-s`/`-t` and bundled forms stay in `Arguments`) | Yes | No |
 | uniq | Invoke-BashUniq | `-c`, `-d`, `-u`, `-i`, `-f`, `-s`, `-w` | Binary cmdlet (`-c`/`-d`/`-i` declared SwitchParameters; `-u`/`-f`/`-s`/`-w` and bundled forms stay in `Arguments`) | Yes | Yes |
 | rev | Invoke-BashRev | (none) | Positional | Yes | Yes |
 | nl | Invoke-BashNl | `-ba` | Manual loop | Yes | Yes |
 | diff | Invoke-BashDiff | `-u` | Manual loop | No | Yes |
-| comm | Invoke-BashComm | `-1`, `-2`, `-3` | Binary cmdlet (digit-bundle scan in `Arguments`; no colliding flags) | No | Yes |
+| comm | Invoke-BashComm | `-1`, `-2`, `-3`, `--total` | Binary cmdlet (digit-bundle scan in `Arguments`; no colliding flags). `--total` appends a `c1<TAB>c2<TAB>c3<TAB>total` summary line. | No | Yes |
 | column | Invoke-BashColumn | `-t`, `-s` | Binary cmdlet (manual scan; no colliding flags) | Yes | Yes |
 | join | Invoke-BashJoin | `-t`, `-1`, `-2` | Binary cmdlet (manual value-flag scan) | No | Yes |
 | paste | Invoke-BashPaste | `-d`, `-s` | Manual loop | Yes | Yes |
@@ -42,7 +42,7 @@
 | date | Invoke-BashDate | `-d`, `-u`, `-r`, `+FORMAT` | Binary cmdlet (`-d` declared as value-bearing parameter `D`; `-u` / `-r` / `+FORMAT` stay in `Arguments`) | No | No |
 | seq | Invoke-BashSeq | `-s`, `-w` | Manual loop | No | No |
 | expr | Invoke-BashExpr | (expression tokens) | Positional | No | No |
-| du | Invoke-BashDu | `-h`, `-s`, `-a`, `-c`, `-d` | Binary cmdlet (`-a` / `-c` declared as `SwitchParameter`s; `-d N` as nullable `int? D`; `-h` / `-s` and joined `-dN` stay in `Arguments`) | No | Yes |
+| du | Invoke-BashDu | `-h`, `-s`, `-a`, `-c`, `-d`/`--max-depth`, `--exclude=GLOB` | Binary cmdlet (`-a` / `-c` declared as `SwitchParameter`s; `-d N` as nullable `int? D`; `-h` / `-s` and joined `-dN` stay in `Arguments`). `--exclude=GLOB` prunes matching files/dirs (any path segment match prunes the subtree). | No | Yes |
 | tree | Invoke-BashTree | `-a`, `-d`, `-L`, `-I`, `--dirsfirst` | Binary cmdlet (`-a` / `-d` declared as SwitchParameters; `-I` declared as a value-bearing string parameter; `-L` and `--dirsfirst` stay in `Arguments`) | No | Yes |
 | env | Invoke-BashEnv | (none) | Positional | No | No |
 | basename | Invoke-BashBasename | `-s` | Manual loop | No | No |
@@ -51,12 +51,12 @@
 | hostname | Invoke-BashHostname | (none) | None | No | No |
 | whoami | Invoke-BashWhoami | (none) | None | No | No |
 | fold | Invoke-BashFold | `-w`, `-s`, `-b` | Binary cmdlet (`-w` is a declared value-bearing parameter; `-s` is a declared SwitchParameter; `-b` and joined `-wN`/`--width=N` stay in `Arguments`) | Yes | Yes |
-| expand | Invoke-BashExpand | `-t` | Manual loop | Yes | Yes |
+| expand | Invoke-BashExpand | `-t`/`--tabs`, `-i`/`--first-only` | Manual loop. `-i` converts only leading (pre-text) tabs. | Yes | Yes |
 | unexpand | Invoke-BashUnexpand | `-t`, `-a` | Manual loop | Yes | Yes |
 | strings | Invoke-BashStrings | `-n` | Manual loop | Yes | Yes |
 | split | Invoke-BashSplit | `-l`, `-d`, `-a` | Manual loop | Yes | Yes |
 | tac | Invoke-BashTac | `-s` | Manual loop | Yes | Yes |
-| base64 | Invoke-BashBase64 | `-d`, `-w` | Manual loop | Yes | Yes |
+| base64 | Invoke-BashBase64 | `-d`/`--decode`, `-w`/`--wrap`, `-i`/`--ignore-garbage` | Manual loop (`-d`/`-w`/`-i` declared as decoy params `D`/`W`/`I` for common-param collisions). `-i` skips non-alphabet chars on decode. | Yes | Yes |
 | md5sum | Invoke-BashMd5sum | `-c`, `-b` | (delegates to Invoke-BashChecksum) | Yes | Yes |
 | sha1sum | Invoke-BashSha1sum | `-c`, `-b` | (delegates to Invoke-BashChecksum) | Yes | Yes |
 | sha256sum | Invoke-BashSha256sum | `-c`, `-b` | (delegates to Invoke-BashChecksum) | Yes | Yes |

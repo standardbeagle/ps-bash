@@ -226,14 +226,23 @@ public class InvokeBashBase64CommandTests : IClassFixture<SharedPwshFixture>, ID
     }
 
     [Fact]
-    public void Base64_ValidButUnsupportedFlag_NotSupportedMessage()
+    public void Base64_IgnoreGarbage_LongForm_SkipsNonAlphabetChars()
     {
-        // --ignore-garbage is a real GNU base64 flag (skip non-base64 chars
-        // during decode) but ps-bash does not implement it. Must report
-        // "not supported", not "No such file or directory".
-        // Use long form to avoid -i binder collision (-InformationAction).
-        var (_, errs) = RunWithErrors("'aGVsbG8=' | Invoke-BashBase64 --ignore-garbage");
-        Assert.Contains(errs, m => m.Contains("not supported", StringComparison.OrdinalIgnoreCase));
+        // --ignore-garbage drops non-base64 chars during decode. The payload
+        // "aGVs bG8=" with stray junk still decodes to "hello".
+        var lines = RunLines("'a-G-V-s-b-G-8-=' | Invoke-BashBase64 -d --ignore-garbage");
+        Assert.Single(lines);
+        Assert.Equal("hello", lines[0]);
+    }
+
+    [Fact]
+    public void Base64_IgnoreGarbage_ShortForm_SkipsNonAlphabetChars()
+    {
+        // -i is the short form; it binds via the explicit I decoy switch
+        // (bare -i otherwise collides with -InformationAction).
+        var lines = RunLines("'a!G!V!s!b!G!8!=' | Invoke-BashBase64 -d -i");
+        Assert.Single(lines);
+        Assert.Equal("hello", lines[0]);
     }
 
     [Fact]

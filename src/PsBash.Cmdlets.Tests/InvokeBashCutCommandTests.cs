@@ -108,6 +108,25 @@ public class InvokeBashCutCommandTests : IClassFixture<SharedPwshFixture>, IDisp
     }
 
     [Fact]
+    public void Cut_LongFormFieldsAndDelimiter_SelectField()
+    {
+        // --delimiter / --fields are aliases of -d / -f. The delimiter token is
+        // quoted because a bare comma is PowerShell's array operator (the emitter
+        // force-quotes comma-bearing flags in real transpiled use).
+        var lines = RunLines("'a,b,c' | Invoke-BashCut '--delimiter=,' --fields=2");
+        Assert.Single(lines);
+        Assert.Equal("b", lines[0]);
+    }
+
+    [Fact]
+    public void Cut_LongFormCharacters_SelectChars()
+    {
+        var lines = RunLines("'abcdef' | Invoke-BashCut --characters=2-4");
+        Assert.Single(lines);
+        Assert.Equal("bcd", lines[0]);
+    }
+
+    [Fact]
     public void Cut_UnrecognizedLongOption_StillRefused()
     {
         // A genuinely unsupported flag must still be refused, not treated as a file.

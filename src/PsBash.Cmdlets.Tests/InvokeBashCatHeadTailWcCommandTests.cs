@@ -133,6 +133,48 @@ public class InvokeBashCatHeadTailWcCommandTests : IClassFixture<SharedPwshFixtu
                                    && m.Contains("--bogus", StringComparison.Ordinal));
     }
 
+    // ===== long-form aliases of supported short flags =====
+
+    [Fact]
+    public void Head_LongFormLines_LimitsOutput()
+    {
+        var lines = RunBashText("'1','2','3','4','5' | Invoke-BashHead --lines=2");
+        Assert.Equal(new[] { "1", "2" }, lines);
+    }
+
+    [Fact]
+    public void Head_QuietFlag_AcceptedAsNoOp()
+    {
+        // -q is accepted (ps-bash head never prints "==> name <==" headers).
+        var errs = RunErrors("'1','2','3' | Invoke-BashHead -q --lines=1 2>$null");
+        Assert.DoesNotContain(errs, m => m.Contains("not supported", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    public void Tail_LongFormLines_LimitsOutput()
+    {
+        var lines = RunBashText("'1','2','3','4','5' | Invoke-BashTail --lines=2");
+        Assert.Equal(new[] { "4", "5" }, lines);
+    }
+
+    [Fact]
+    public void Wc_LongFormLines_CountsLines()
+    {
+        // --lines is the alias of -l; pipeline line count only.
+        var lines = RunBashText("'a','b','c' | Invoke-BashWc --lines");
+        Assert.Contains(lines, l => l.Trim() == "3");
+    }
+
+    [Fact]
+    public void Cat_LongFormNumberAndShowEnds_FormatLines()
+    {
+        // --number (alias -n) + --show-ends (alias -E).
+        var lines = RunBashText("'x','y' | Invoke-BashCat --number --show-ends");
+        Assert.Equal(2, lines.Length);
+        Assert.Contains("1", lines[0]);
+        Assert.EndsWith("$", lines[0].TrimEnd('\n'));
+    }
+
     // ======================= wc =======================
 
     [Fact]

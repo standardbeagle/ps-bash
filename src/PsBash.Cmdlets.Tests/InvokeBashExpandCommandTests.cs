@@ -204,18 +204,14 @@ public class InvokeBashExpandCommandTests : IClassFixture<SharedPwshFixture>, ID
     }
 
     [Fact]
-    public void Expand_ValidButUnsupported_FirstOnly_ExitCode2()
+    public void Expand_FirstOnly_ConvertsOnlyLeadingTabs()
     {
-        // --first-only is a recognized GNU expand option but not implemented
-        // by ps-bash → "option recognized but not supported", exit 2.
-        var pwsh = _fixture.AcquireFresh();
-        pwsh.AddScript("$ErrorActionPreference='Continue'").Invoke();
-        pwsh.Commands.Clear();
-        var result = pwsh.AddScript(
-            "Invoke-BashExpand --first-only 2>$null; $LASTEXITCODE").Invoke();
-        pwsh.Commands.Clear();
-        Assert.Single(result);
-        Assert.Equal(2, (int)result[0].BaseObject);
+        // -i / --first-only: a tab after a non-blank char stays literal; only
+        // the leading tab is expanded. Input "a\tb\tc" (no leading tab) keeps
+        // both tabs literal; "\ta\tb" expands the first, keeps the second.
+        var lines = RunLines("\"`ta`tb\" | Invoke-BashExpand --first-only -t4");
+        Assert.Single(lines);
+        Assert.Equal("    a\tb", lines[0]);
     }
 
     [Fact]
