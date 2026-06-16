@@ -340,6 +340,15 @@ public sealed class InvokeBashFindCommand : PSCmdlet
                         i++;
                         continue;
                     }
+                    // Any other dash-led token is a predicate find does not know
+                    // at all (bucket 3 — typo / garbage). GNU find rejects it with
+                    // "unknown predicate" rather than treating it as a path operand;
+                    // a non-dash token is a genuine search-path operand.
+                    if (FileSystemHelpers.IsOptionLike(arg))
+                    {
+                        EmitError($"find: unknown predicate '{arg}'", 1);
+                        return;
+                    }
                     operands.Add(arg);
                     i++;
                     continue;

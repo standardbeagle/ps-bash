@@ -64,16 +64,17 @@ namespace PsBash.Cmdlets;
 [OutputType(typeof(string))]
 public sealed class InvokeBashGzipCommand : PSCmdlet
 {
-    /// <summary>Valid GNU <c>gzip</c> options ps-bash does not implement (see
-    /// <see cref="FileSystemHelpers.TryWriteOperandOptionError"/>). Short forms
-    /// (<c>-r</c>, <c>-n</c>, etc.) are silently consumed by the bundle handler and
-    /// will not reach the operand list; only their long-form equivalents are catchable
-    /// at this layer.</summary>
-    private static readonly HashSet<string> GzipValidButUnsupported = new(StringComparer.Ordinal)
-    {
-        "-r", "--recursive", "-n", "--no-name", "-N", "--name",
-        "-S", "--suffix", "-q", "--quiet", "-a", "--ascii",
-    };
+    /// <summary>Valid GNU <c>gzip</c> options ps-bash does not implement. This set
+    /// is now empty: every documented GNU <c>gzip</c> flag is handled — either with
+    /// real behavior (<c>-d -c -k -f -v -l -t -r -q -S --fast --best -1..-9</c>) or
+    /// as an accept-and-ignore no-op where the .NET <see cref="GZipStream"/> header
+    /// surface offers no faithful mapping (<c>-n/--no-name</c>, <c>-N/--name</c>,
+    /// <c>-a/--ascii</c>, <c>--rsyncable</c>, <c>--synchronous</c> — see the per-flag
+    /// notes in <see cref="EndProcessing"/>). An option-looking token that matches
+    /// none of these still produces the bash-parity "unrecognized option" /
+    /// "invalid option" diagnostic via <see cref="FileSystemHelpers.WriteOptionError"/>
+    /// (empty catalog ⇒ bucket 3).</summary>
+    private static readonly HashSet<string> GzipValidButUnsupported = new(StringComparer.Ordinal);
 
     [Parameter(ValueFromRemainingArguments = true)]
     public string[]? Arguments { get; set; }
@@ -122,7 +123,11 @@ public sealed class InvokeBashGzipCommand : PSCmdlet
         bool verbose = V.IsPresent;
         bool list = false;
         bool test = false;
+        bool recursive = false;
+        bool quiet = false;
+        string suffix = ".gz";
         int level = 6;
+        var unknownShort = new List<string>();
 
         // Detect gunzip / zcat invocation via alias name. Matches the psm1
         // oracle's `$MyInvocation.InvocationName -eq 'gunzip'` branch.
@@ -156,6 +161,23 @@ public sealed class InvokeBashGzipCommand : PSCmdlet
             if (a == "--verbose") { verbose = true; i++; continue; }
             if (a == "--list") { list = true; i++; continue; }
             if (a == "--test") { test = true; i++; continue; }
+            if (a == "--recursive") { recursive = true; i++; continue; }
+            if (a == "--quiet" || a == "--silent") { quiet = true; i++; continue; }
+            if (a == "--fast") { level = 1; i++; continue; }
+            if (a == "--best") { level = 9; i++; continue; }
+            // --suffix SUF / --suffix=SUF: change the (de)compress suffix.
+            if (a == "--suffix") { i++; if (i < args.Length) suffix = args[i]; i++; continue; }
+            if (a.StartsWith("--suffix=", StringComparison.Ordinal))
+            {
+                suffix = a.Substring("--suffix=".Length); i++; continue;
+            }
+            // Accept-and-ignore: the .NET GZipStream header surface has no name /
+            // timestamp / text-mode controls, so these GNU flags are honored as
+            // no-ops rather than refused — every valid gzip flag still maps to
+            // *something* (the unsupported-flag policy).
+            if (a == "--no-name" || a == "--name" || a == "--ascii"
+                || a == "--rsyncable" || a == "--synchronous") { i++; continue; }
+            if (a == "--license") { i++; continue; }
 
             // -N single-digit level (oracle: `^-(\d)$`).
             if (a.Length == 2 && a[0] == '-' && a[1] >= '0' && a[1] <= '9')
@@ -166,10 +188,16 @@ public sealed class InvokeBashGzipCommand : PSCmdlet
             }
 
             // Bundled short flags (oracle: `arg.Substring(1).ToCharArray()` switch).
+            // `S` is value-bearing: it consumes the rest of the token, or the next
+            // argument, as the suffix.
             if (a.Length > 1 && a[0] == '-' && !a.StartsWith("--", StringComparison.Ordinal))
             {
-                foreach (char ch in a.Substring(1))
+                string body = a.Substring(1);
+                int j = 0;
+                bool consumedNext = false;
+                while (j < body.Length)
                 {
+                    char ch = body[j];
                     switch (ch)
                     {
                         case 'd': decompress = true; break;
@@ -179,11 +207,26 @@ public sealed class InvokeBashGzipCommand : PSCmdlet
                         case 'v': verbose = true; break;
                         case 'l': list = true; break;
                         case 't': test = true; break;
+                        case 'r': recursive = true; break;
+                        case 'q': quiet = true; break;
+                        case 'n': case 'N': case 'a': break; // accept-and-ignore (see above)
+                        case 'L': break; // --license, accept-ignore
+                        case 'S':
+                        {
+                            string rest = body.Substring(j + 1);
+                            if (rest.Length > 0) { suffix = rest; }
+                            else { i++; if (i < args.Length) { suffix = args[i]; } consumedNext = true; }
+                            j = body.Length; // S consumes the remainder of the token
+                            continue;
+                        }
                         default:
                             if (ch >= '0' && ch <= '9') { level = ch - '0'; }
+                            else { unknownShort.Add("-" + ch); }
                             break;
                     }
+                    j++;
                 }
+                _ = consumedNext;
                 i++;
                 continue;
             }
@@ -192,6 +235,13 @@ public sealed class InvokeBashGzipCommand : PSCmdlet
             i++;
         }
 
+        // An unrecognized short flag (bucket 3) reported in bash-parity form.
+        if (unknownShort.Count > 0)
+        {
+            FileSystemHelpers.WriteBashError(this, $"gzip: invalid option -- '{unknownShort[0].Substring(1)}'");
+            FileSystemHelpers.SetLastExitCode(this, 2);
+            return;
+        }
         if (FileSystemHelpers.TryWriteOperandOptionError(this, "gzip", operands, GzipValidButUnsupported))
             return;
 
@@ -206,9 +256,51 @@ public sealed class InvokeBashGzipCommand : PSCmdlet
         // doesn't strip the local under nullability/clean analyzers.
         _ = force;
 
+        // Flatten operands into the concrete file list. A directory operand is
+        // expanded into its contained files under -r/--recursive; without -r it
+        // is skipped with the GNU "is a directory -- ignored" warning (suppressed
+        // by -q). A missing path errors and is skipped.
+        var files = new List<string>();
         foreach (string operand in operands)
         {
-            foreach (string filePath in FileSystemHelpers.ResolveOperandPaths(this, operand))
+            foreach (string resolved in FileSystemHelpers.ResolveOperandPaths(this, operand))
+            {
+                if (File.Exists(resolved))
+                {
+                    files.Add(resolved);
+                }
+                else if (Directory.Exists(resolved))
+                {
+                    if (recursive)
+                    {
+                        try
+                        {
+                            foreach (var child in Directory.EnumerateFiles(
+                                         resolved, "*", SearchOption.AllDirectories))
+                            {
+                                files.Add(child);
+                            }
+                        }
+                        catch (Exception ex)
+                        {
+                            if (FileSystemHelpers.IsPipelineStop(ex)) throw;
+                            FileSystemHelpers.WriteBashError(this, $"gzip: {resolved.Replace('\\', '/')}: {ex.Message}");
+                        }
+                    }
+                    else if (!quiet)
+                    {
+                        FileSystemHelpers.WriteBashError(this, $"gzip: {resolved.Replace('\\', '/')} is a directory -- ignored");
+                    }
+                }
+                else
+                {
+                    FileSystemHelpers.WriteBashError(this, $"gzip: {resolved.Replace('\\', '/')}: No such file or directory");
+                }
+            }
+        }
+
+        {
+            foreach (string filePath in files)
             {
                 if (!File.Exists(filePath) && !Directory.Exists(filePath))
                 {
@@ -315,9 +407,19 @@ public sealed class InvokeBashGzipCommand : PSCmdlet
                     }
                     else
                     {
-                        string outPath = filePath.EndsWith(".gz", StringComparison.Ordinal)
-                            ? filePath.Substring(0, filePath.Length - 3)
-                            : filePath;
+                        // GNU gzip refuses to decompress a file whose name lacks the
+                        // expected suffix (it cannot derive the output name) — warn
+                        // and skip rather than overwrite the input in place.
+                        if (!filePath.EndsWith(suffix, StringComparison.Ordinal))
+                        {
+                            if (!quiet)
+                            {
+                                FileSystemHelpers.WriteBashError(this,
+                                    $"gzip: {filePath.Replace('\\', '/')}: unknown suffix -- ignored");
+                            }
+                            continue;
+                        }
+                        string outPath = filePath.Substring(0, filePath.Length - suffix.Length);
                         long outSize;
                         try
                         {
@@ -394,7 +496,7 @@ public sealed class InvokeBashGzipCommand : PSCmdlet
                     }
                     else
                     {
-                        string outPath = filePath + ".gz";
+                        string outPath = filePath + suffix;
                         long compSize;
                         try
                         {

@@ -490,4 +490,66 @@ public class InvokeBashFileSystemMutatorTests : IDisposable, IClassFixture<Share
         // No other file in the temp root should have been affected.
         Assert.True(Directory.Exists(_tmpRoot));
     }
+
+    // ─────────────────────── unsupported-flag classifier ───────────────────────
+    // Every valid bash flag must map to *something* — never silently mistaken for
+    // a file operand. The mover family routes unknown / valid-but-unsupported
+    // option-looking tokens through FileSystemHelpers.TryWriteOperandOptionError
+    // (exit 2), like grep/cut/sort/etc.
+
+    [Theory]
+    [InlineData("Invoke-BashCp --reflink a b")]      // valid GNU cp flag, unimplemented
+    [InlineData("Invoke-BashMv --backup a b")]       // valid GNU mv flag, unimplemented
+    [InlineData("Invoke-BashRm --interactive a")]    // valid GNU rm flag, unimplemented
+    [InlineData("Invoke-BashMkdir -m 755 d")]        // valid GNU mkdir flag, unimplemented
+    [InlineData("Invoke-BashRmdir --ignore-fail-on-non-empty d")]
+    public void Mover_ValidButUnsupportedFlag_ExitsTwo(string cmd)
+    {
+        var lines = Run($"{cmd} *> $null; $global:LASTEXITCODE");
+        Assert.Equal("2", lines[^1]);
+    }
+
+    [Theory]
+    [InlineData("Invoke-BashCp --bogus a b")]
+    [InlineData("Invoke-BashMv --bogus a b")]
+    [InlineData("Invoke-BashRm --bogus a")]
+    [InlineData("Invoke-BashMkdir --bogus d")]
+    [InlineData("Invoke-BashRmdir --bogus d")]
+    public void Mover_UnrecognizedFlag_ExitsTwo(string cmd)
+    {
+        var lines = Run($"{cmd} *> $null; $global:LASTEXITCODE");
+        Assert.Equal("2", lines[^1]);
+    }
+
+    [Fact]
+    public void Rm_ForceDoesNotSuppressUnsupportedFlagError()
+    {
+        // GNU rm -f suppresses missing-file errors but NOT a usage error for a
+        // bad option. The classifier still fires (exit 2) under -f.
+        var lines = Run("Invoke-BashRm -f --interactive ghost.txt *> $null; $global:LASTEXITCODE");
+        Assert.Equal("2", lines[^1]);
+    }
+
+    [Fact]
+    public void Mover_DoubleDash_EndsFlagParsing_DashLeadingNameIsOperand()
+    {
+        // After `--`, a token starting with '-' is a real filename, not a flag.
+        var dashFile = Path.Combine(_tmpRoot, "-weird.txt");
+        File.WriteAllText(dashFile, "x");
+        Run($"Invoke-BashRm -- {Q(dashFile)}");
+        Assert.False(File.Exists(dashFile), "-- should let a dash-leading filename through to deletion");
+    }
+
+    [Fact]
+    public void Mkdir_BundledVP_CreatesNestedWithVerbose()
+    {
+        // -vp must de-bundle to verbose+parents, not be misclassified as an
+        // unknown flag now that mkdir parses its short bundle. (The reverse form
+        // -pv is the PowerShell -PipelineVariable alias and is eaten by the
+        // binder before the cmdlet runs — a documented common-parameter collision.)
+        var nested = Path.Combine(_tmpRoot, "x", "y", "z");
+        var lines = Run($"Invoke-BashMkdir -vp {Q(nested)}");
+        Assert.True(Directory.Exists(nested));
+        Assert.Contains(lines, l => l.Contains("created directory", StringComparison.OrdinalIgnoreCase));
+    }
 }

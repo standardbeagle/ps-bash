@@ -652,6 +652,23 @@ public class InvokeBashFindCommandTests : IDisposable, IClassFixture<SharedPwshF
     }
 
     [Fact]
+    public void Find_UnknownPredicate_EmitsUnknownPredicateError()
+    {
+        // A dash-led token find does not recognize at all (bucket 3) must be
+        // rejected as "unknown predicate", not silently treated as a search path.
+        Mk("a.txt");
+        var results = RunAllowError(
+            $"Invoke-BashFind '{Esc(_tmpDir)}' -frobnicate 2>&1");
+        bool sawUnknown = results.Any(o =>
+        {
+            var s = o.BaseObject is ErrorRecord er ? er.ToString() : o.ToString();
+            return s.Contains("unknown predicate", StringComparison.OrdinalIgnoreCase)
+                && s.Contains("-frobnicate", StringComparison.Ordinal);
+        });
+        Assert.True(sawUnknown, "an unknown dash-led predicate should error, not become a path operand");
+    }
+
+    [Fact]
     public void Find_MalformedSize_IgnoredSilently()
     {
         // The psm1 oracle's regex parse fails on bad input and leaves the

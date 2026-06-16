@@ -50,6 +50,24 @@ public sealed class InvokeBashCpCommand : PSCmdlet
     [Parameter(ValueFromRemainingArguments = true)]
     public string[]? Arguments { get; set; }
 
+    /// <summary>Valid GNU <c>cp</c> flags ps-bash does not implement. An
+    /// option-looking operand matching one of these gets the bash-parity
+    /// "recognized but not supported" diagnostic; anything else option-looking
+    /// gets "unrecognized/invalid option" (see
+    /// <see cref="FileSystemHelpers.TryWriteOperandOptionError"/>). Short forms
+    /// that prefix-collide with a PowerShell common parameter never reach this
+    /// list (the binder eats them first) so the long form is the catchable
+    /// one.</summary>
+    private static readonly HashSet<string> CpValidButUnsupported = new(StringComparer.Ordinal)
+    {
+        "-i", "--interactive", "-l", "--link", "-s", "--symbolic-link",
+        "-b", "--backup", "--reflink", "-P", "--no-dereference",
+        "-L", "--dereference", "-H", "-t", "--target-directory",
+        "-T", "--no-target-directory", "-x", "--one-file-system",
+        "--sparse", "--strip-trailing-slashes", "-Z", "--context",
+        "--attributes-only", "-d",
+    };
+
     protected override void ProcessRecord()
     {
         var args = Arguments ?? Array.Empty<string>();
@@ -73,9 +91,13 @@ public sealed class InvokeBashCpCommand : PSCmdlet
         bool preserve = p.IsPresent;  // bare -p arrives via the decoy parameter
         bool update = false;
         var operands = new List<string>();
+        bool pastDoubleDash = false;
 
         foreach (var a in args)
         {
+            if (pastDoubleDash) { operands.Add(a); continue; }
+            if (a == "--") { pastDoubleDash = true; continue; }
+
             // De-bundle combined short flags (-rf, -rpv) — only when every char is a known
             // cp short flag, so unknown tokens (and filenames starting with '-') stay operands.
             if (a.Length > 2 && a[0] == '-' && a[1] != '-' && IsCpShortBundle(a))
@@ -110,6 +132,13 @@ public sealed class InvokeBashCpCommand : PSCmdlet
                 default: operands.Add(a); break;
             }
         }
+
+        // An option-looking token that survived flag parsing is an unknown or
+        // valid-but-unsupported flag, not a file — classify it (exit 2) before it
+        // is mistaken for a source/dest path. Tokens after `--` are real operands.
+        if (!pastDoubleDash &&
+            FileSystemHelpers.TryWriteOperandOptionError(this, "cp", operands, CpValidButUnsupported))
+            return;
 
         if (operands.Count < 2)
         {

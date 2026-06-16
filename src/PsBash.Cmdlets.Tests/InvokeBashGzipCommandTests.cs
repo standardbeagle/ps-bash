@@ -296,18 +296,58 @@ public class InvokeBashGzipCommandTests : IDisposable, IClassFixture<SharedPwshF
         }
     }
 
-    // ===================== Unsupported-flag classifier =====================
+    // ===================== Full-flag support =====================
 
     [Fact]
-    public void Gzip_ValidButUnsupportedLongFlag_ReportsNotSupported()
+    public void Gzip_Recursive_CompressesFilesUnderDirectory()
     {
-        // --recursive is a valid GNU gzip option ps-bash does not implement.
-        // A long flag that falls through the parser to the operand list must
-        // be classified as "recognized but not supported", not treated as a filename.
-        // (Short -r is silently consumed in the bundle handler — only long form reachable here.)
-        var (_, errs) = RunWithErrors("Invoke-BashGzip --recursive 2>$null");
-        Assert.Contains(errs, m => m.Contains("not supported", StringComparison.OrdinalIgnoreCase));
+        // -r/--recursive: a directory operand is expanded into its files, each
+        // compressed in place. Was previously refused as "not supported".
+        var sub = Path.Combine(_tmpDir, "tree", "nested");
+        Directory.CreateDirectory(sub);
+        var a = Path.Combine(_tmpDir, "tree", "a.txt");
+        var b = Path.Combine(sub, "b.txt");
+        File.WriteAllText(a, "aaa");
+        File.WriteAllText(b, "bbb");
+
+        RunLines($"Invoke-BashGzip -r '{PsQuote(Path.Combine(_tmpDir, "tree"))}'");
+
+        Assert.True(File.Exists(a + ".gz"), "top-level file compressed");
+        Assert.True(File.Exists(b + ".gz"), "nested file compressed");
+        Assert.False(File.Exists(a));
+        Assert.False(File.Exists(b));
     }
+
+    [Fact]
+    public void Gzip_CustomSuffix_RoundTrips()
+    {
+        // -S SUF: compress appends the custom suffix; -d -S SUF strips it.
+        string file = Path.Combine(_tmpDir, "s.txt");
+        byte[] original = Encoding.UTF8.GetBytes("suffix payload");
+        File.WriteAllBytes(file, original);
+
+        RunLines($"Invoke-BashGzip -S .gzz '{PsQuote(file)}'");
+        Assert.True(File.Exists(file + ".gzz"));
+        Assert.False(File.Exists(file + ".gz"));
+
+        RunLines($"Invoke-BashGzip -d -S .gzz '{PsQuote(file + ".gzz")}'");
+        Assert.True(File.Exists(file));
+        Assert.Equal(original, File.ReadAllBytes(file));
+    }
+
+    [Fact]
+    public void Gzip_NoNameFlag_AcceptedAsNoOp()
+    {
+        // -n / --no-name has no faithful .NET header mapping → accept-and-ignore
+        // (must NOT error). The compress still happens.
+        string file = Path.Combine(_tmpDir, "n.txt");
+        File.WriteAllText(file, "x");
+        var (_, errs) = RunWithErrors($"Invoke-BashGzip -n '{PsQuote(file)}' 2>$null");
+        Assert.Empty(errs);
+        Assert.True(File.Exists(file + ".gz"));
+    }
+
+    // ===================== Unsupported-flag classifier =====================
 
     [Fact]
     public void Gzip_UnrecognizedLongOption_BashParityMessage()
@@ -316,5 +356,15 @@ public class InvokeBashGzipCommandTests : IDisposable, IClassFixture<SharedPwshF
         Assert.Contains(errs, m =>
             m.Contains("unrecognized option", StringComparison.OrdinalIgnoreCase)
             && m.Contains("--bogus", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void Gzip_UnrecognizedShortOption_BashParityMessage()
+    {
+        // A bundled unknown short char is rejected with "invalid option -- 'X'".
+        var (_, errs) = RunWithErrors("Invoke-BashGzip -dQ 2>$null");
+        Assert.Contains(errs, m =>
+            m.Contains("invalid option", StringComparison.OrdinalIgnoreCase)
+            && m.Contains("Q", StringComparison.Ordinal));
     }
 }

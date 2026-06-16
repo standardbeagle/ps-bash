@@ -79,6 +79,21 @@ public class InvokeBashTeeCommandTests : IClassFixture<SharedPwshFixture>, IDisp
     }
 
     [Fact]
+    public void Tee_AppendFlag_LongForm_AppendsRatherThanOverwrites()
+    {
+        // --append is the long form of -a. It was wrongly listed as
+        // valid-but-unsupported; it must now append like -a, not error.
+        string target = Path.Combine(_tmpDir, "out.txt");
+        File.WriteAllText(target, "PREEXISTING\n");
+
+        var lines = RunLines(
+            $"'one','two' | Invoke-BashTee --append '{Q(target)}'");
+
+        Assert.Equal(new[] { "one", "two" }, lines);
+        Assert.Equal("PREEXISTING\none\ntwo\n", File.ReadAllText(target));
+    }
+
+    [Fact]
     public void Tee_MultipleFiles_AllReceiveSameContent()
     {
         string a = Path.Combine(_tmpDir, "a.txt");

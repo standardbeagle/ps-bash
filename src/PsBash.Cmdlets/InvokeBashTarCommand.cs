@@ -63,15 +63,23 @@ namespace PsBash.Cmdlets;
 [OutputType(typeof(string))]
 public sealed class InvokeBashTarCommand : PSCmdlet
 {
-    /// <summary>Valid GNU <c>tar</c> options ps-bash does not implement (see
-    /// <see cref="FileSystemHelpers.TryWriteOperandOptionError"/>). Short forms
-    /// (<c>-j</c>, <c>-J</c>, etc.) are silently consumed by the bundle handler and
-    /// will not reach the operand list; only their long-form equivalents are catchable
-    /// at this layer.</summary>
+    /// <summary>Valid GNU <c>tar</c> options ps-bash does not implement. The
+    /// only residual gaps are compression formats with no managed codec in the
+    /// .NET BCL — bzip2, xz/lzma, zstd, and the legacy LZW <c>compress</c>. These
+    /// are a genuine PowerShell/.NET limit, not a missing wiring: gzip
+    /// (<c>-z</c>) is the only filter <c>System.IO.Compression</c> ships. Both
+    /// the long forms (catchable here as operands) and the bundled short forms
+    /// (<c>-cjf</c>, caught in the bundle loop) produce the bash-parity
+    /// "recognized but not supported" diagnostic rather than silently writing an
+    /// uncompressed archive. Every other documented flag is now handled — real
+    /// behavior (<c>-c -x -t -z -v -f -k --strip-components --exclude --directory
+    /// --to-stdout -a/--auto-compress</c>) or accept-and-ignore where it maps to
+    /// our existing default (<c>--overwrite</c>, <c>-m/--touch</c>,
+    /// <c>--wildcards</c>, <c>--no-wildcards</c>, <c>-p</c>).</summary>
     private static readonly HashSet<string> TarValidButUnsupported = new(StringComparer.Ordinal)
     {
-        "-j", "--bzip2", "-J", "--xz", "-a", "--auto-compress",
-        "--overwrite", "--keep-old-files", "--touch", "--wildcards", "--no-wildcards",
+        "-j", "--bzip2", "-J", "--xz", "--lzma", "--lzip", "--lzop",
+        "--zstd", "-Z", "--compress",
     };
 
     [Parameter(ValueFromRemainingArguments = true)]
@@ -127,6 +135,9 @@ public sealed class InvokeBashTarCommand : PSCmdlet
         bool sawExplicitCreate = false;
         int stripComponents = 0;
         bool toStdout = false;
+        bool autoCompress = false;
+        bool keepOldFiles = false;
+        string? unsupportedCompression = null;
 
         int i = 0;
         while (i < args.Length)
@@ -139,6 +150,20 @@ public sealed class InvokeBashTarCommand : PSCmdlet
             if (a == "--list") { listMode = true; i++; continue; }
             if (a == "--gzip" || a == "--gunzip") { gzipFilter = true; i++; continue; }
             if (a == "--verbose") { verbose = true; i++; continue; }
+            if (a == "--auto-compress") { autoCompress = true; i++; continue; }
+            if (a == "--keep-old-files") { keepOldFiles = true; i++; continue; }
+            // Accept-and-ignore: these map to ps-bash's existing default behavior
+            // (we overwrite on extract, don't restore mtime, and --exclude already
+            // globs), so the flags are honored as no-ops rather than refused.
+            if (a == "--overwrite" || a == "--touch" || a == "--no-same-owner"
+                || a == "--same-owner" || a == "--no-same-permissions"
+                || a == "--preserve-permissions" || a == "--wildcards"
+                || a == "--no-wildcards") { i++; continue; }
+            // Compression formats with no managed .NET codec: refuse clearly
+            // rather than silently produce an uncompressed archive.
+            if (a == "--bzip2" || a == "--xz" || a == "--lzma" || a == "--lzip"
+                || a == "--lzop" || a == "--zstd" || a == "--compress")
+            { unsupportedCompression = a; i++; continue; }
 
             if (a == "--file")
             {
@@ -212,7 +237,16 @@ public sealed class InvokeBashTarCommand : PSCmdlet
                     else if (ch == 'z') { gzipFilter = true; }
                     else if (ch == 'v') { verbose = true; }
                     else if (ch == 'p') { /* preserve perms — ignored, oracle parity */ }
+                    else if (ch == 'm') { /* --touch: don't restore mtime — already our default */ }
+                    else if (ch == 'k') { keepOldFiles = true; }
+                    else if (ch == 'a') { autoCompress = true; }
                     else if (ch == 'O') { toStdout = true; }
+                    else if (ch == 'j' || ch == 'J' || ch == 'Z')
+                    {
+                        // bzip2 / xz / LZW — no managed codec; refuse clearly so a
+                        // bundled `-cjf` never silently writes an uncompressed tar.
+                        unsupportedCompression = "-" + ch;
+                    }
                     else if (ch == 'f')
                     {
                         string rest = body.Substring(j + 1);
@@ -309,6 +343,37 @@ public sealed class InvokeBashTarCommand : PSCmdlet
             return;
         }
 
+        // A compression format with no managed .NET codec was requested — refuse
+        // clearly (bucket 2) instead of writing an uncompressed archive.
+        if (unsupportedCompression != null)
+        {
+            FileSystemHelpers.WriteBashError(this,
+                $"tar: option '{unsupportedCompression}' is recognized but not supported by ps-bash");
+            FileSystemHelpers.SetLastExitCode(this, 2);
+            return;
+        }
+
+        // -a/--auto-compress: pick the filter from the archive extension. Only
+        // gzip is available; a .bz2/.xz/.zst extension is the same .NET-codec gap.
+        if (autoCompress)
+        {
+            if (archiveFile!.EndsWith(".gz", StringComparison.OrdinalIgnoreCase)
+                || archiveFile.EndsWith(".tgz", StringComparison.OrdinalIgnoreCase))
+            {
+                gzipFilter = true;
+            }
+            else if (archiveFile.EndsWith(".bz2", StringComparison.OrdinalIgnoreCase)
+                     || archiveFile.EndsWith(".xz", StringComparison.OrdinalIgnoreCase)
+                     || archiveFile.EndsWith(".zst", StringComparison.OrdinalIgnoreCase)
+                     || archiveFile.EndsWith(".Z", StringComparison.Ordinal))
+            {
+                FileSystemHelpers.WriteBashError(this,
+                    "tar: auto-compress: this archive's compression format is recognized but not supported by ps-bash");
+                FileSystemHelpers.SetLastExitCode(this, 2);
+                return;
+            }
+        }
+
         if (FileSystemHelpers.TryWriteOperandOptionError(this, "tar", operands, TarValidButUnsupported))
             return;
 
@@ -318,7 +383,7 @@ public sealed class InvokeBashTarCommand : PSCmdlet
         }
         else if (extract)
         {
-            DoExtract(archiveFile!, gzipFilter, verbose, changeDir, stripComponents, toStdout);
+            DoExtract(archiveFile!, gzipFilter, verbose, changeDir, stripComponents, toStdout, keepOldFiles);
         }
         else if (listMode)
         {
@@ -404,7 +469,7 @@ public sealed class InvokeBashTarCommand : PSCmdlet
     }
 
     private void DoExtract(string archiveFile, bool gzipFilter, bool verbose, string? changeDir,
-        int stripComponents = 0, bool toStdout = false)
+        int stripComponents = 0, bool toStdout = false, bool keepOldFiles = false)
     {
         if (!File.Exists(archiveFile))
         {
@@ -480,6 +545,14 @@ public sealed class InvokeBashTarCommand : PSCmdlet
 
                 // Regular file.
                 if (entry.DataStream == null) { continue; }
+                // -k/--keep-old-files: never overwrite an existing file.
+                if (keepOldFiles && File.Exists(targetPath))
+                {
+                    FileSystemHelpers.WriteBashError(this,
+                        $"tar: {name}: Cannot open: File exists");
+                    FileSystemHelpers.SetLastExitCode(this, 1);
+                    continue;
+                }
                 string? dir = Path.GetDirectoryName(targetPath);
                 if (!string.IsNullOrEmpty(dir) && !Directory.Exists(dir))
                 {

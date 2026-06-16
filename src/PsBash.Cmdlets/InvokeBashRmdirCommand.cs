@@ -1,3 +1,4 @@
+using System.Linq;
 using System.Management.Automation;
 
 namespace PsBash.Cmdlets;
@@ -36,6 +37,13 @@ public sealed class InvokeBashRmdirCommand : PSCmdlet
     [Parameter(ValueFromRemainingArguments = true)]
     public string[]? Arguments { get; set; }
 
+    /// <summary>Valid GNU <c>rmdir</c> flags ps-bash does not implement.
+    /// Classified via <see cref="FileSystemHelpers.TryWriteOperandOptionError"/>.</summary>
+    private static readonly HashSet<string> RmdirValidButUnsupported = new(StringComparer.Ordinal)
+    {
+        "--ignore-fail-on-non-empty", "-Z", "--context",
+    };
+
     protected override void ProcessRecord()
     {
         var args = Arguments ?? Array.Empty<string>();
@@ -56,7 +64,29 @@ public sealed class InvokeBashRmdirCommand : PSCmdlet
         bool verbose = v.IsPresent;
 
         var operands = new List<string>();
-        foreach (var a in args) operands.Add(a);
+        bool pastDoubleDash = false;
+        foreach (var a in args)
+        {
+            if (pastDoubleDash) { operands.Add(a); continue; }
+            if (a == "--") { pastDoubleDash = true; continue; }
+            if (a == "-p" || a == "--parents") { removeParents = true; continue; }
+            if (a == "-v" || a == "--verbose") { verbose = true; continue; }
+            if (a.Length > 2 && a[0] == '-' && a[1] != '-'
+                && a.Skip(1).All(ch => ch == 'p' || ch == 'v'))
+            {
+                foreach (var ch in a.Skip(1))
+                {
+                    if (ch == 'p') removeParents = true;
+                    else if (ch == 'v') verbose = true;
+                }
+                continue;
+            }
+            operands.Add(a);
+        }
+
+        if (!pastDoubleDash &&
+            FileSystemHelpers.TryWriteOperandOptionError(this, "rmdir", operands, RmdirValidButUnsupported))
+            return;
 
         if (operands.Count == 0)
         {

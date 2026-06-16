@@ -43,6 +43,15 @@ public sealed class InvokeBashRmCommand : PSCmdlet
     [Parameter(ValueFromRemainingArguments = true)]
     public string[]? Arguments { get; set; }
 
+    /// <summary>Valid GNU <c>rm</c> flags ps-bash does not implement. See
+    /// <see cref="FileSystemHelpers.TryWriteOperandOptionError"/> /
+    /// <see cref="InvokeBashCpCommand"/> for the classification contract.</summary>
+    private static readonly HashSet<string> RmValidButUnsupported = new(StringComparer.Ordinal)
+    {
+        "-i", "-I", "--interactive", "-d", "--dir",
+        "--one-file-system", "--no-preserve-root", "--preserve-root",
+    };
+
     private static readonly HashSet<string> WinReservedNames = new(StringComparer.OrdinalIgnoreCase)
     {
         "CON", "PRN", "AUX", "NUL",
@@ -70,14 +79,17 @@ public sealed class InvokeBashRmCommand : PSCmdlet
         bool force = false;
         bool verbose = v.IsPresent;
         var operands = new List<string>();
+        bool pastDoubleDash = false;
 
         foreach (var a in args)
         {
+            if (pastDoubleDash) { operands.Add(a); continue; }
             switch (a)
             {
-                case "-r": case "-R": recursive = true; break;
-                case "-f": force = true; break;
-                case "-v": verbose = true; break;
+                case "--": pastDoubleDash = true; break;
+                case "-r": case "-R": case "--recursive": recursive = true; break;
+                case "-f": case "--force": force = true; break;
+                case "-v": case "--verbose": verbose = true; break;
                 default:
                     // Bundled short flags: -rf, -fr, -rvf, etc. Each char
                     // maps to one of r/R/f/v. Anything else is an operand.
@@ -98,6 +110,13 @@ public sealed class InvokeBashRmCommand : PSCmdlet
                     break;
             }
         }
+
+        // Classify an unknown / valid-but-unsupported option-looking token before
+        // it is treated as a target. rm -f does NOT suppress a usage error, so the
+        // classification runs regardless of -f (matching GNU rm).
+        if (!pastDoubleDash &&
+            FileSystemHelpers.TryWriteOperandOptionError(this, "rm", operands, RmValidButUnsupported))
+            return;
 
         if (operands.Count == 0)
         {

@@ -465,4 +465,54 @@ public class InvokeBashTarCommandTests : IDisposable, IClassFixture<SharedPwshFi
             m.Contains("unrecognized option", StringComparison.OrdinalIgnoreCase)
             && m.Contains("--bogus", StringComparison.Ordinal));
     }
+
+    [Fact]
+    public void Tar_BundledBzip2_ReportsNotSupported_NotSilentlyUncompressed()
+    {
+        // -cjf must NOT silently write an uncompressed tar (bzip2 has no managed
+        // .NET codec). The bundle handler now refuses it clearly (exit 2).
+        string src = Path.Combine(_tmpDir, "z.txt");
+        File.WriteAllText(src, "x");
+        string arc = Path.Combine(_tmpDir, "z.tar.bz2");
+        var (_, errs) = RunWithErrors(
+            $"Invoke-BashTar -cjf '{PsQuote(arc)}' '{PsQuote(src)}' 2>$null");
+        Assert.Contains(errs, m => m.Contains("not supported", StringComparison.OrdinalIgnoreCase));
+        Assert.False(File.Exists(arc), "no archive should be written when the codec is unsupported");
+    }
+
+    [Fact]
+    public void Tar_AutoCompress_GzipByExtension_RoundTrips()
+    {
+        // -a/--auto-compress picks gzip from a .tgz/.tar.gz extension.
+        string src = Path.Combine(_tmpDir, "auto.txt");
+        File.WriteAllText(src, "auto-compress-payload");
+        string arc = Path.Combine(_tmpDir, "auto.tar.gz");
+
+        RunLines($"Invoke-BashTar -caf '{PsQuote(arc)}' '{PsQuote(src)}'");
+        Assert.True(File.Exists(arc));
+        // Confirm it really is gzip (magic 0x1f 0x8b), not a bare tar.
+        byte[] head = File.ReadAllBytes(arc);
+        Assert.True(head.Length > 2 && head[0] == 0x1f && head[1] == 0x8b, "archive must be gzip-compressed");
+
+        string[] listed = RunLines($"Invoke-BashTar -taf '{PsQuote(arc)}'");
+        Assert.Contains("auto.txt", listed);
+    }
+
+    [Fact]
+    public void Tar_KeepOldFiles_DoesNotOverwriteExisting()
+    {
+        string src = Path.Combine(_tmpDir, "keep.txt");
+        File.WriteAllText(src, "fromarchive");
+        string arc = Path.Combine(_tmpDir, "keep.tar");
+        RunLines($"Invoke-BashTar -cf '{PsQuote(arc)}' '{PsQuote(src)}'");
+
+        string dest = Path.Combine(_tmpDir, "kdest");
+        Directory.CreateDirectory(dest);
+        File.WriteAllText(Path.Combine(dest, "keep.txt"), "preexisting");
+
+        var (_, errs) = RunWithErrors(
+            $"Invoke-BashTar -xkf '{PsQuote(arc)}' --directory='{PsQuote(dest)}' 2>$null");
+        Assert.Equal("preexisting", File.ReadAllText(Path.Combine(dest, "keep.txt")));
+        Assert.Contains(errs, m => m.Contains("File exists", StringComparison.OrdinalIgnoreCase));
+    }
 }

@@ -33,6 +33,17 @@ public sealed class InvokeBashMvCommand : PSCmdlet
     [Parameter(ValueFromRemainingArguments = true)]
     public string[]? Arguments { get; set; }
 
+    /// <summary>Valid GNU <c>mv</c> flags ps-bash does not implement. See
+    /// <see cref="FileSystemHelpers.TryWriteOperandOptionError"/> /
+    /// <see cref="InvokeBashCpCommand"/> for the classification contract.</summary>
+    private static readonly HashSet<string> MvValidButUnsupported = new(StringComparer.Ordinal)
+    {
+        "-i", "--interactive", "-b", "--backup", "-S", "--suffix",
+        "-u", "--update", "-t", "--target-directory",
+        "-T", "--no-target-directory", "--strip-trailing-slashes",
+        "-Z", "--context",
+    };
+
     protected override void ProcessRecord()
     {
         var args = Arguments ?? Array.Empty<string>();
@@ -52,17 +63,24 @@ public sealed class InvokeBashMvCommand : PSCmdlet
         bool noClobber = false;
         bool verbose = v.IsPresent;
         var operands = new List<string>();
+        bool pastDoubleDash = false;
 
         foreach (var a in args)
         {
+            if (pastDoubleDash) { operands.Add(a); continue; }
             switch (a)
             {
-                case "-n": noClobber = true; break;
-                case "-f": /* no-op: File.Move(overwrite:true) already forces */ break;
-                case "-v": verbose = true; break;
+                case "--": pastDoubleDash = true; break;
+                case "-n": case "--no-clobber": noClobber = true; break;
+                case "-f": case "--force": /* no-op: File.Move(overwrite:true) already forces */ break;
+                case "-v": case "--verbose": verbose = true; break;
                 default: operands.Add(a); break;
             }
         }
+
+        if (!pastDoubleDash &&
+            FileSystemHelpers.TryWriteOperandOptionError(this, "mv", operands, MvValidButUnsupported))
+            return;
 
         if (operands.Count < 2)
         {

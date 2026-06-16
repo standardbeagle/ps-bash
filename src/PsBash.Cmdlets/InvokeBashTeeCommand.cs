@@ -71,15 +71,16 @@ public sealed class InvokeBashTeeCommand : PSCmdlet
     [Parameter(ValueFromPipeline = true)]
     public PSObject? InputObject { get; set; }
 
-    // Valid GNU tee flags not implemented by ps-bash. -a IS implemented
-    // (declared SwitchParameter A). Note: bare -i collides with the PS binder
-    // so it is represented by its long form only.
+    // Valid GNU tee flags not implemented by ps-bash. Note: -a / --append IS
+    // implemented (the explicit SwitchParameter A plus the --append long form
+    // handled in the manual scan), so it is NOT listed here. Bare -i collides
+    // with the PS binder so it is represented by its long form only.
     private static readonly HashSet<string> TeeValidButUnsupported =
         new(StringComparer.Ordinal)
         {
             "--ignore-interrupts",
             "--output-error",
-            "--append",
+            "-p",
         };
 
     private readonly List<PSObject> _pipeline = new();
@@ -127,7 +128,7 @@ public sealed class InvokeBashTeeCommand : PSCmdlet
                 pastDoubleDash = true;
                 continue;
             }
-            if (arg == "-a")
+            if (arg == "-a" || arg == "--append")
             {
                 append = true;
                 continue;

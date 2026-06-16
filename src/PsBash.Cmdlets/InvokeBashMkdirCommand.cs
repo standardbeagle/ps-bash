@@ -1,3 +1,4 @@
+using System.Linq;
 using System.Management.Automation;
 
 namespace PsBash.Cmdlets;
@@ -42,6 +43,15 @@ public sealed class InvokeBashMkdirCommand : PSCmdlet
     [Parameter(ValueFromRemainingArguments = true)]
     public string[]? Arguments { get; set; }
 
+    /// <summary>Valid GNU <c>mkdir</c> flags ps-bash does not implement
+    /// (<c>-m MODE</c> has no faithful Windows ACL mapping; <c>-Z</c>/SELinux is
+    /// Linux-only). Classified via
+    /// <see cref="FileSystemHelpers.TryWriteOperandOptionError"/>.</summary>
+    private static readonly HashSet<string> MkdirValidButUnsupported = new(StringComparer.Ordinal)
+    {
+        "-m", "--mode", "-Z", "--context",
+    };
+
     protected override void ProcessRecord()
     {
         var args = Arguments ?? Array.Empty<string>();
@@ -58,16 +68,38 @@ public sealed class InvokeBashMkdirCommand : PSCmdlet
             return;
         }
 
+        // Bare -p / -v arrive via the decoy SwitchParameters above. Bundled
+        // (-pv) and long (--parents / --verbose) forms flow through Arguments and
+        // are parsed here; `--` ends flag parsing so a dir literally named "-foo"
+        // can be created after it.
         bool parents = p.IsPresent;
         bool verbose = v.IsPresent;
 
         var operands = new List<string>();
+        bool pastDoubleDash = false;
         foreach (var a in args)
         {
-            // The psm1 oracle treated any remaining token (including unknown
-            // -flags) as an operand. Match that — no flag re-parsing here.
+            if (pastDoubleDash) { operands.Add(a); continue; }
+            if (a == "--") { pastDoubleDash = true; continue; }
+            if (a == "-p" || a == "--parents") { parents = true; continue; }
+            if (a == "-v" || a == "--verbose") { verbose = true; continue; }
+            // De-bundle a pure -p/-v short bundle (e.g. -pv, -vp).
+            if (a.Length > 2 && a[0] == '-' && a[1] != '-'
+                && a.Skip(1).All(ch => ch == 'p' || ch == 'v'))
+            {
+                foreach (var ch in a.Skip(1))
+                {
+                    if (ch == 'p') parents = true;
+                    else if (ch == 'v') verbose = true;
+                }
+                continue;
+            }
             operands.Add(a);
         }
+
+        if (!pastDoubleDash &&
+            FileSystemHelpers.TryWriteOperandOptionError(this, "mkdir", operands, MkdirValidButUnsupported))
+            return;
 
         if (operands.Count == 0)
         {
