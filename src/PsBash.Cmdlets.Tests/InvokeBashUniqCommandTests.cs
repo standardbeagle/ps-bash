@@ -48,6 +48,19 @@ public class InvokeBashUniqCommandTests : IClassFixture<SharedPwshFixture>, IDis
         }).ToArray();
     }
 
+    private (string[] outLines, string[] errors) RunWithErrors(string script)
+    {
+        var pwsh = _fixture.AcquireFresh();
+        pwsh.AddScript("$ErrorActionPreference='Continue'").Invoke();
+        pwsh.Commands.Clear();
+        var result = pwsh.AddScript(script).Invoke();
+        var errs = pwsh.Streams.Error.Select(e => e.Exception?.Message ?? e.ToString()).ToArray();
+        pwsh.Commands.Clear();
+        var outLines = result.Select(o =>
+            o?.Properties["BashText"]?.Value as string ?? o?.ToString() ?? "").ToArray();
+        return (outLines, errs);
+    }
+
     [Fact]
     public void Uniq_EmptyPipeline_EmitsNothing()
     {
@@ -195,5 +208,23 @@ public class InvokeBashUniqCommandTests : IClassFixture<SharedPwshFixture>, IDis
         var lines = RunLines(
             $"Invoke-BashUniq '{probe.Replace("'", "''")}' 2>$null");
         Assert.Empty(lines);
+    }
+
+    [Fact]
+    public void Uniq_ValidButUnsupportedFlag_NotSupportedMessage()
+    {
+        // --zero-terminated is a real GNU uniq flag but ps-bash does not
+        // implement it. It must report "not supported", not "No such file".
+        var (_, errs) = RunWithErrors("'a','a','b' | Invoke-BashUniq --zero-terminated");
+        Assert.Contains(errs, m => m.Contains("not supported", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    public void Uniq_UnrecognizedLongOption_BashParityMessage()
+    {
+        // --bogus is not a real uniq option → bash-style "unrecognized option".
+        var (_, errs) = RunWithErrors("'a','a','b' | Invoke-BashUniq --bogus");
+        Assert.Contains(errs, m => m.Contains("unrecognized option", StringComparison.OrdinalIgnoreCase)
+                                   && m.Contains("--bogus", StringComparison.Ordinal));
     }
 }

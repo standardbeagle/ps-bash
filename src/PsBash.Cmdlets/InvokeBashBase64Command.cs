@@ -58,6 +58,17 @@ namespace PsBash.Cmdlets;
 [OutputType(typeof(string))]
 public sealed class InvokeBashBase64Command : PSCmdlet
 {
+    /// <summary>
+    /// Valid GNU <c>base64</c> options ps-bash does not implement (representative).
+    /// An option-looking token in this set yields "recognized but not supported"
+    /// instead of the misleading "No such file or directory".
+    /// </summary>
+    private static readonly HashSet<string> Base64ValidButUnsupported =
+        new(StringComparer.Ordinal)
+        {
+            "-i", "--ignore-garbage",
+        };
+
     [Parameter(ValueFromRemainingArguments = true)]
     public string[]? Arguments { get; set; }
 
@@ -136,6 +147,11 @@ public sealed class InvokeBashBase64Command : PSCmdlet
             operands.Add(a);
             i++;
         }
+
+        // Any remaining option-looking operand is an unknown flag that fell
+        // through the parser — classify it instead of reporting "No such file".
+        if (FileSystemHelpers.TryWriteOperandOptionError(this, "base64", operands, Base64ValidButUnsupported))
+            return;
 
         if (operands.Count > 0)
         {

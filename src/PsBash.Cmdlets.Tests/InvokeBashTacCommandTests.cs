@@ -47,6 +47,19 @@ public class InvokeBashTacCommandTests : IDisposable, IClassFixture<SharedPwshFi
         }).ToArray();
     }
 
+    private (string[] outLines, string[] errors) RunWithErrors(string script)
+    {
+        var pwsh = _fixture.AcquireFresh();
+        pwsh.AddScript("$ErrorActionPreference='Continue'").Invoke();
+        pwsh.Commands.Clear();
+        var result = pwsh.AddScript(script).Invoke();
+        var errs = pwsh.Streams.Error.Select(e => e.Exception?.Message ?? e.ToString()).ToArray();
+        pwsh.Commands.Clear();
+        var outLines = result.Select(o =>
+            o?.Properties["BashText"]?.Value as string ?? o?.ToString() ?? "").ToArray();
+        return (outLines, errs);
+    }
+
     [Fact]
     public void Tac_EmptyPipeline_EmitsNothing()
     {
@@ -166,5 +179,23 @@ public class InvokeBashTacCommandTests : IDisposable, IClassFixture<SharedPwshFi
         // No output. If the probe had been evaluated as script, the test
         // would have thrown or 'pwned' would appear in the output.
         Assert.Empty(lines);
+    }
+
+    [Fact]
+    public void Tac_ValidButUnsupportedFlag_NotSupportedMessage()
+    {
+        // --regex is a real GNU tac flag but ps-bash does not implement it.
+        // It must report "not supported", not "No such file or directory".
+        var (_, errs) = RunWithErrors("'a','b' | Invoke-BashTac --regex");
+        Assert.Contains(errs, m => m.Contains("not supported", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    public void Tac_UnrecognizedLongOption_BashParityMessage()
+    {
+        // --bogus is not a real tac option → bash-style "unrecognized option".
+        var (_, errs) = RunWithErrors("'a','b' | Invoke-BashTac --bogus");
+        Assert.Contains(errs, m => m.Contains("unrecognized option", StringComparison.OrdinalIgnoreCase)
+                                   && m.Contains("--bogus", StringComparison.Ordinal));
     }
 }

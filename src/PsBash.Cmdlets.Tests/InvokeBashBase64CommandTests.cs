@@ -45,6 +45,19 @@ public class InvokeBashBase64CommandTests : IClassFixture<SharedPwshFixture>, ID
         }).ToArray();
     }
 
+    private (string[] outLines, string[] errors) RunWithErrors(string script)
+    {
+        var pwsh = _fixture.AcquireFresh();
+        pwsh.AddScript("$ErrorActionPreference='Continue'").Invoke();
+        pwsh.Commands.Clear();
+        var result = pwsh.AddScript(script).Invoke();
+        var errs = pwsh.Streams.Error.Select(e => e.Exception?.Message ?? e.ToString()).ToArray();
+        pwsh.Commands.Clear();
+        var outLines = result.Select(o =>
+            o?.Properties["BashText"]?.Value as string ?? o?.ToString() ?? "").ToArray();
+        return (outLines, errs);
+    }
+
     [Fact]
     public void Base64_EmptyPipeline_NoOperands_EmitsNothing()
     {
@@ -210,5 +223,25 @@ public class InvokeBashBase64CommandTests : IClassFixture<SharedPwshFixture>, ID
         var lines = RunLines("'  aGVsbG8=  ' | Invoke-BashBase64 -d");
         Assert.Single(lines);
         Assert.Equal("hello", lines[0]);
+    }
+
+    [Fact]
+    public void Base64_ValidButUnsupportedFlag_NotSupportedMessage()
+    {
+        // --ignore-garbage is a real GNU base64 flag (skip non-base64 chars
+        // during decode) but ps-bash does not implement it. Must report
+        // "not supported", not "No such file or directory".
+        // Use long form to avoid -i binder collision (-InformationAction).
+        var (_, errs) = RunWithErrors("'aGVsbG8=' | Invoke-BashBase64 --ignore-garbage");
+        Assert.Contains(errs, m => m.Contains("not supported", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    public void Base64_UnrecognizedLongOption_BashParityMessage()
+    {
+        // --bogus is not a real base64 option → bash-style "unrecognized option".
+        var (_, errs) = RunWithErrors("'aGVsbG8=' | Invoke-BashBase64 --bogus");
+        Assert.Contains(errs, m => m.Contains("unrecognized option", StringComparison.OrdinalIgnoreCase)
+                                   && m.Contains("--bogus", StringComparison.Ordinal));
     }
 }

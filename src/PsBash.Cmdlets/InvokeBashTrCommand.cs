@@ -69,6 +69,15 @@ public sealed class InvokeBashTrCommand : PSCmdlet
     [Parameter]
     public SwitchParameter C { get; set; }
 
+    /// <summary>
+    /// Valid GNU <c>tr</c> options ps-bash does not implement. GNU tr's
+    /// flag surface is fully covered by this cmdlet (complement/delete/
+    /// squeeze/truncate), so this set is empty — any unknown option-looking
+    /// token is classified as "unrecognized/invalid" (bash parity).
+    /// </summary>
+    private static readonly HashSet<string> TrValidButUnsupported =
+        new(StringComparer.Ordinal);
+
     // Parsed-once state. tr has no file mode — operands are the SET1/SET2
     // translate sets, and input always comes from the pipeline — so the only
     // reason to suppress streaming is a --help / --version request.
@@ -80,6 +89,9 @@ public sealed class InvokeBashTrCommand : PSCmdlet
     private List<string> _operands = new();
     private bool _suppress;
     private string? _rangeErrorMsg;
+    // Deferred parse failure: an unrecognized flag found in ParseOnce.
+    // Emitted in EndProcessing so ProcessRecord's early-return path stays clean.
+    private string? _optionErrorToken;
 
     // Translation tables built ONCE in ParseOnce (the SET expansion, complement
     // construction, and per-char membership/mapping are constant across every
@@ -115,6 +127,14 @@ public sealed class InvokeBashTrCommand : PSCmdlet
             if (arg == "--delete") { _deleteMode = true; continue; }
             if (arg == "--squeeze-repeats") { _squeezeMode = true; continue; }
 
+            // Unknown long flag (all known --xxx forms were matched above).
+            if (arg.StartsWith("--", StringComparison.Ordinal))
+            {
+                _optionErrorToken = arg;
+                _suppress = true;
+                return;
+            }
+
             if (arg == "-d") { _deleteMode = true; continue; }
             if (arg == "-s") { _squeezeMode = true; continue; }
 
@@ -122,6 +142,7 @@ public sealed class InvokeBashTrCommand : PSCmdlet
             {
                 // Bundled / single short flags. Matches the psm1 oracle's
                 // per-char scan over arg.Substring(1).
+                bool unknownFlag = false;
                 foreach (char ch in arg.AsSpan(1))
                 {
                     switch (ch)
@@ -131,8 +152,14 @@ public sealed class InvokeBashTrCommand : PSCmdlet
                         case 'c': _complementMode = true; break;
                         case 'C': _complementMode = true; break;
                         case 't': _truncateMode = true; break;
+                        default:
+                            _optionErrorToken = $"-{ch}";
+                            unknownFlag = true;
+                            break;
                     }
+                    if (unknownFlag) break;
                 }
+                if (unknownFlag) { _suppress = true; return; }
                 continue;
             }
 
@@ -271,6 +298,12 @@ public sealed class InvokeBashTrCommand : PSCmdlet
             {
                 WriteObject(line);
             }
+            return;
+        }
+
+        if (_optionErrorToken != null)
+        {
+            FileSystemHelpers.WriteOptionError(this, "tr", _optionErrorToken, TrValidButUnsupported);
             return;
         }
 

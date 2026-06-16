@@ -51,6 +51,20 @@ public class InvokeBashSplitCommandTests : IDisposable, IClassFixture<SharedPwsh
         }).ToArray();
     }
 
+    private (string[] outLines, string[] errors) RunInDirWithErrors(string script)
+    {
+        var pwsh = _fixture.AcquireFresh();
+        pwsh.AddScript("$ErrorActionPreference='Continue'").Invoke();
+        pwsh.Commands.Clear();
+        var wrapped = $"Set-Location -LiteralPath '{Esc(_tmpDir)}'; {script}";
+        var result = pwsh.AddScript(wrapped).Invoke();
+        var errs = pwsh.Streams.Error.Select(e => e.Exception?.Message ?? e.ToString()).ToArray();
+        pwsh.Commands.Clear();
+        var outLines = result.Select(o =>
+            o?.Properties["BashText"]?.Value as string ?? o?.ToString() ?? "").ToArray();
+        return (outLines, errs);
+    }
+
     private static string Esc(string path) => path.Replace("'", "''");
 
     private static string MakeLines(int count)
@@ -200,5 +214,24 @@ public class InvokeBashSplitCommandTests : IDisposable, IClassFixture<SharedPwsh
         Assert.True(File.Exists(Path.Combine(_tmpDir, "xaa")));
         Assert.True(File.Exists(Path.Combine(_tmpDir, "xab")));
         Assert.True(File.Exists(Path.Combine(_tmpDir, "xac")));
+    }
+
+    [Fact]
+    public void Split_ValidButUnsupportedFlag_NotSupportedMessage()
+    {
+        // --number is a real GNU split flag (split into N chunks) but
+        // ps-bash does not implement it. Must report "not supported",
+        // not "No such file or directory".
+        var (_, errs) = RunInDirWithErrors("'a','b' | Invoke-BashSplit --number 2");
+        Assert.Contains(errs, m => m.Contains("not supported", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    public void Split_UnrecognizedLongOption_BashParityMessage()
+    {
+        // --bogus is not a real split option → bash-style "unrecognized option".
+        var (_, errs) = RunInDirWithErrors("'a','b' | Invoke-BashSplit --bogus");
+        Assert.Contains(errs, m => m.Contains("unrecognized option", StringComparison.OrdinalIgnoreCase)
+                                   && m.Contains("--bogus", StringComparison.Ordinal));
     }
 }

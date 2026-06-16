@@ -42,6 +42,23 @@ namespace PsBash.Cmdlets;
 [OutputType(typeof(string))]
 public sealed class InvokeBashSplitCommand : PSCmdlet
 {
+    /// <summary>
+    /// Valid GNU <c>split</c> options ps-bash does not implement (representative).
+    /// An option-looking token in this set yields "recognized but not supported"
+    /// instead of the misleading "No such file or directory".
+    /// </summary>
+    private static readonly HashSet<string> SplitValidButUnsupported =
+        new(StringComparer.Ordinal)
+        {
+            "-n", "--number",
+            "-C", "--line-bytes",
+            "-t", "--separator",
+            "--filter",
+            "--verbose",
+            "-z", "--null-data",
+            "-e", "--elide-empty-files",
+        };
+
     /// <summary>The bash <c>-d</c> (numeric suffixes) switch.</summary>
     [Parameter]
     public SwitchParameter D { get; set; }
@@ -159,6 +176,11 @@ public sealed class InvokeBashSplitCommand : PSCmdlet
         {
             suffixLength = 2;
         }
+
+        // Any remaining option-looking operand is an unknown flag that fell
+        // through the parser — classify it instead of reporting "No such file".
+        if (FileSystemHelpers.TryWriteOperandOptionError(this, "split", operands, SplitValidButUnsupported))
+            return;
 
         IEnumerable<string> lines;
         string? fileReadPath = null;

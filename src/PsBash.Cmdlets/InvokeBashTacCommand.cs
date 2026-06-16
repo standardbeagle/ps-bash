@@ -44,6 +44,18 @@ namespace PsBash.Cmdlets;
 [OutputType(typeof(string))]
 public sealed class InvokeBashTacCommand : PSCmdlet
 {
+    /// <summary>
+    /// Valid GNU <c>tac</c> options ps-bash does not implement (representative).
+    /// An option-looking token in this set yields "recognized but not supported"
+    /// instead of the misleading "No such file or directory".
+    /// </summary>
+    private static readonly HashSet<string> TacValidButUnsupported =
+        new(StringComparer.Ordinal)
+        {
+            "-r", "--regex",
+            "-b", "--before",
+        };
+
     [Parameter(ValueFromRemainingArguments = true)]
     public string[]? Arguments { get; set; }
 
@@ -95,6 +107,11 @@ public sealed class InvokeBashTacCommand : PSCmdlet
             }
             operands.Add(arg);
         }
+
+        // Any remaining option-looking operand is an unknown flag that fell
+        // through the parser — classify it instead of reporting "No such file".
+        if (FileSystemHelpers.TryWriteOperandOptionError(this, "tac", operands, TacValidButUnsupported))
+            return;
 
         var lines = new List<string>();
         bool hadError = false;

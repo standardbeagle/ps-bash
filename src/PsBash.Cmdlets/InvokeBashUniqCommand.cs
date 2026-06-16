@@ -58,6 +58,20 @@ public sealed class InvokeBashUniqCommand : PSCmdlet
     [Parameter(ValueFromPipeline = true)]
     public PSObject? InputObject { get; set; }
 
+    /// <summary>
+    /// Valid GNU <c>uniq</c> options ps-bash does not implement. An
+    /// option-looking token in this set yields "recognized but not supported"
+    /// instead of the old misleading "No such file or directory". Anything
+    /// option-looking NOT here is reported as unrecognized/invalid (bash parity).
+    /// </summary>
+    private static readonly HashSet<string> UniqValidButUnsupported =
+        new(StringComparer.Ordinal)
+        {
+            "-z", "--zero-terminated",
+            "--group",
+            "--output-delimiter",
+        };
+
     // Parsed-once state.
     private bool _parsed;
     private bool _countMode, _duplicatesOnly, _ignoreCase, _uniqueOnly, _allRepeated;
@@ -66,6 +80,9 @@ public sealed class InvokeBashUniqCommand : PSCmdlet
     // True when stdin must NOT be streamed: file operands present (file mode
     // ignores stdin) or a --help / --version request.
     private bool _suppressStdin;
+    // Deferred parse failure: an unrecognized flag found in ParseOnce.
+    // Emitted in EndProcessing so the stdin-streaming path stays clean.
+    private string? _optionErrorToken;
     // Adjacent-dedup state — uniq only needs the current run, never the whole
     // pipe. Instance state so a streamed stdin run carries across records.
     private string? _prevLine;
@@ -157,6 +174,14 @@ public sealed class InvokeBashUniqCommand : PSCmdlet
                 continue;
             }
 
+            // Unknown long flag (all known --xxx forms were matched above).
+            if (arg.StartsWith("--", StringComparison.Ordinal))
+            {
+                _optionErrorToken = arg;
+                _suppressStdin = true;
+                return;
+            }
+
             // Short-flag bundle. Numeric-leading (e.g. "-5") is treated as an
             // operand (oracle parity).
             if (arg.StartsWith("-", StringComparison.Ordinal) && arg.Length > 1 && !IsNumericFlag(arg))
@@ -230,10 +255,12 @@ public sealed class InvokeBashUniqCommand : PSCmdlet
                             break;
                         }
                         default:
-                            j++;
+                            _optionErrorToken = $"-{ch}";
+                            j = body.Length; // exit inner while
                             break;
                     }
                 }
+                if (_optionErrorToken != null) { _suppressStdin = true; return; }
                 i++;
                 continue;
             }
@@ -361,6 +388,13 @@ public sealed class InvokeBashUniqCommand : PSCmdlet
             {
                 WriteObject(line);
             }
+            return;
+        }
+
+        // Deferred parse failure: an unrecognized or unsupported flag was found.
+        if (_optionErrorToken != null)
+        {
+            FileSystemHelpers.WriteOptionError(this, "uniq", _optionErrorToken, UniqValidButUnsupported);
             return;
         }
 

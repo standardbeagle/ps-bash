@@ -54,6 +54,19 @@ public class InvokeBashStringsCommandTests : IDisposable, IClassFixture<SharedPw
         }).ToArray();
     }
 
+    private (string[] outLines, string[] errors) RunWithErrors(string script)
+    {
+        var pwsh = _fixture.AcquireFresh();
+        pwsh.AddScript("$ErrorActionPreference='Continue'").Invoke();
+        pwsh.Commands.Clear();
+        var result = pwsh.AddScript(script).Invoke();
+        var errs = pwsh.Streams.Error.Select(e => e.Exception?.Message ?? e.ToString()).ToArray();
+        pwsh.Commands.Clear();
+        var outLines = result.Select(o =>
+            o?.Properties["BashText"]?.Value as string ?? o?.ToString() ?? "").ToArray();
+        return (outLines, errs);
+    }
+
     private static string Esc(string path) => path.Replace("'", "''");
 
     [Fact]
@@ -206,5 +219,24 @@ public class InvokeBashStringsCommandTests : IDisposable, IClassFixture<SharedPw
 
         var lines = RunLines($"Invoke-BashStrings '{Esc(weirdPath)}'");
         Assert.Contains("INJECT_SAFE", lines);
+    }
+
+    [Fact]
+    public void Strings_ValidButUnsupportedFlag_NotSupportedMessage()
+    {
+        // --radix is a real GNU strings flag (print file offset in given
+        // radix) but ps-bash does not implement it. Must report "not
+        // supported", not "No such file or directory".
+        var (_, errs) = RunWithErrors("Invoke-BashStrings --radix d");
+        Assert.Contains(errs, m => m.Contains("not supported", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    public void Strings_UnrecognizedLongOption_BashParityMessage()
+    {
+        // --bogus is not a real strings option → bash-style "unrecognized option".
+        var (_, errs) = RunWithErrors("Invoke-BashStrings --bogus");
+        Assert.Contains(errs, m => m.Contains("unrecognized option", StringComparison.OrdinalIgnoreCase)
+                                   && m.Contains("--bogus", StringComparison.Ordinal));
     }
 }

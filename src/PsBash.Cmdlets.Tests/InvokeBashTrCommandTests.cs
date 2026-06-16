@@ -38,6 +38,19 @@ public class InvokeBashTrCommandTests : IClassFixture<SharedPwshFixture>
         }).ToArray();
     }
 
+    private (string[] outLines, string[] errors) RunWithErrors(string script)
+    {
+        var pwsh = _fixture.AcquireFresh();
+        pwsh.AddScript("$ErrorActionPreference='Continue'").Invoke();
+        pwsh.Commands.Clear();
+        var result = pwsh.AddScript(script).Invoke();
+        var errs = pwsh.Streams.Error.Select(e => e.Exception?.Message ?? e.ToString()).ToArray();
+        pwsh.Commands.Clear();
+        var outLines = result.Select(o =>
+            o?.Properties["BashText"]?.Value as string ?? o?.ToString() ?? "").ToArray();
+        return (outLines, errs);
+    }
+
     [Fact]
     public void Tr_EmptyPipeline_EmitsNothing()
     {
@@ -169,5 +182,26 @@ public class InvokeBashTrCommandTests : IClassFixture<SharedPwshFixture>
         // per-line transform loop; each line goes out as its own object.
         var lines = RunLines("'one','two','three' | Invoke-BashTr 'a-z' 'A-Z'");
         Assert.Equal(new[] { "ONE", "TWO", "THREE" }, lines);
+    }
+
+    [Fact]
+    public void Tr_UnknownLongFlag_BashParityMessage()
+    {
+        // GNU tr has no valid-but-unsupported flags (all four main flags are
+        // implemented), so any unknown long option reports "unrecognized option".
+        var (_, errs) = RunWithErrors("'hi' | Invoke-BashTr --bogus 'a' 'A'");
+        Assert.Contains(errs, m => m.Contains("unrecognized option", StringComparison.OrdinalIgnoreCase)
+                                   && m.Contains("--bogus", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void Tr_BundledUnknownShortFlag_BashParityMessage()
+    {
+        // -dx: 'd' is implemented (delete), 'x' is unknown. The bundle scanner
+        // should report -x as an invalid option rather than silently ignoring it.
+        // Use a bundled form to avoid any binder collision on the bare -x token.
+        var (_, errs) = RunWithErrors("'hi' | Invoke-BashTr '-dx' 'a'");
+        Assert.Contains(errs, m => m.Contains("invalid option", StringComparison.OrdinalIgnoreCase)
+                                   || m.Contains("unrecognized", StringComparison.OrdinalIgnoreCase));
     }
 }

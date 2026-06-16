@@ -60,6 +60,21 @@ public sealed class InvokeBashStringsCommand : PSCmdlet
     [Parameter(ValueFromPipeline = true)]
     public PSObject? InputObject { get; set; }
 
+    /// <summary>
+    /// Valid GNU <c>strings</c> options ps-bash does not implement (representative).
+    /// An option-looking token in this set yields "recognized but not supported"
+    /// instead of the misleading "No such file or directory".
+    /// </summary>
+    private static readonly HashSet<string> StringsValidButUnsupported =
+        new(StringComparer.Ordinal)
+        {
+            "-a", "--all",
+            "-t", "--radix",
+            "-f", "--print-file-name",
+            "-e", "--encoding",
+            "-T", "--target",
+        };
+
     // Parsed-once state.
     private bool _parsed;
     private int _minLength = 4;
@@ -186,6 +201,11 @@ public sealed class InvokeBashStringsCommand : PSCmdlet
             FlushRun();
             return;
         }
+
+        // Any remaining option-looking operand is an unknown flag that fell
+        // through the parser — classify it instead of reporting "No such file".
+        if (FileSystemHelpers.TryWriteOperandOptionError(this, "strings", _operands, StringsValidButUnsupported))
+            return;
 
         foreach (var filePath in ResolveGlob(_operands))
         {
