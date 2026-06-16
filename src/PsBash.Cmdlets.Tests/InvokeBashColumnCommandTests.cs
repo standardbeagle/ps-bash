@@ -236,4 +236,34 @@ public class InvokeBashColumnCommandTests : IClassFixture<SharedPwshFixture>, ID
             "x      y",
         }, lines);
     }
+
+    [Fact]
+    public void Column_ValidButUnsupportedLongFlag_ExitCode2()
+    {
+        // --json is a recognized GNU column option but not implemented
+        // by ps-bash → "option recognized but not supported", exit 2.
+        var pwsh = _fixture.AcquireFresh();
+        pwsh.AddScript("$ErrorActionPreference='Continue'").Invoke();
+        pwsh.Commands.Clear();
+        var result = pwsh.AddScript(
+            "Invoke-BashColumn --json 2>$null; $LASTEXITCODE").Invoke();
+        pwsh.Commands.Clear();
+        Assert.Single(result);
+        Assert.Equal(2, (int)result[0].BaseObject);
+    }
+
+    [Fact]
+    public void Column_UnrecognizedLongOption_ExitCode2()
+    {
+        // Completely unknown option → bash-parity "unrecognized option" error,
+        // LASTEXITCODE=2, no stdout.
+        var pwsh = _fixture.AcquireFresh();
+        pwsh.AddScript("$ErrorActionPreference='Continue'").Invoke();
+        pwsh.Commands.Clear();
+        var result = pwsh.AddScript(
+            "Invoke-BashColumn --bogus 2>$null; $LASTEXITCODE").Invoke();
+        pwsh.Commands.Clear();
+        Assert.Single(result);
+        Assert.Equal(2, (int)result[0].BaseObject);
+    }
 }

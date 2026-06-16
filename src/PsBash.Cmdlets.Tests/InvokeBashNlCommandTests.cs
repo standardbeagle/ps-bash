@@ -196,4 +196,34 @@ public class InvokeBashNlCommandTests : IDisposable, IClassFixture<SharedPwshFix
             $"Invoke-BashNl '{probe.Replace("'", "''")}' 2>$null");
         Assert.Empty(lines);
     }
+
+    [Fact]
+    public void Nl_ValidButUnsupportedLongFlag_ExitCode2()
+    {
+        // --body-numbering is a recognized GNU nl option but not implemented
+        // by ps-bash → "option recognized but not supported", exit 2.
+        var pwsh = _fixture.AcquireFresh();
+        pwsh.AddScript("$ErrorActionPreference='Continue'").Invoke();
+        pwsh.Commands.Clear();
+        var result = pwsh.AddScript(
+            "Invoke-BashNl --body-numbering 2>$null; $LASTEXITCODE").Invoke();
+        pwsh.Commands.Clear();
+        Assert.Single(result);
+        Assert.Equal(2, (int)result[0].BaseObject);
+    }
+
+    [Fact]
+    public void Nl_UnrecognizedLongOption_ExitCode2()
+    {
+        // Completely unknown option → bash-parity "unrecognized option" error,
+        // LASTEXITCODE=2, no stdout.
+        var pwsh = _fixture.AcquireFresh();
+        pwsh.AddScript("$ErrorActionPreference='Continue'").Invoke();
+        pwsh.Commands.Clear();
+        var result = pwsh.AddScript(
+            "Invoke-BashNl --bogus 2>$null; $LASTEXITCODE").Invoke();
+        pwsh.Commands.Clear();
+        Assert.Single(result);
+        Assert.Equal(2, (int)result[0].BaseObject);
+    }
 }

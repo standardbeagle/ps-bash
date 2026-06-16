@@ -202,4 +202,34 @@ public class InvokeBashExpandCommandTests : IClassFixture<SharedPwshFixture>, ID
             $"Invoke-BashExpand '{probe.Replace("'", "''")}' 2>$null");
         Assert.Empty(lines);
     }
+
+    [Fact]
+    public void Expand_ValidButUnsupported_FirstOnly_ExitCode2()
+    {
+        // --first-only is a recognized GNU expand option but not implemented
+        // by ps-bash → "option recognized but not supported", exit 2.
+        var pwsh = _fixture.AcquireFresh();
+        pwsh.AddScript("$ErrorActionPreference='Continue'").Invoke();
+        pwsh.Commands.Clear();
+        var result = pwsh.AddScript(
+            "Invoke-BashExpand --first-only 2>$null; $LASTEXITCODE").Invoke();
+        pwsh.Commands.Clear();
+        Assert.Single(result);
+        Assert.Equal(2, (int)result[0].BaseObject);
+    }
+
+    [Fact]
+    public void Expand_UnrecognizedLongOption_ExitCode2()
+    {
+        // Completely unknown option → bash-parity "unrecognized option" error,
+        // LASTEXITCODE=2, no stdout.
+        var pwsh = _fixture.AcquireFresh();
+        pwsh.AddScript("$ErrorActionPreference='Continue'").Invoke();
+        pwsh.Commands.Clear();
+        var result = pwsh.AddScript(
+            "Invoke-BashExpand --bogus 2>$null; $LASTEXITCODE").Invoke();
+        pwsh.Commands.Clear();
+        Assert.Single(result);
+        Assert.Equal(2, (int)result[0].BaseObject);
+    }
 }

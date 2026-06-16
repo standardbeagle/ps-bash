@@ -61,6 +61,16 @@ public sealed class InvokeBashNlCommand : PSCmdlet
     /// <summary>-i N (increment) decoy: bare -i is ambiguous with -Information*.</summary>
     [Parameter] public string? I { get; set; }
 
+    // Valid GNU nl flags recognized but not implemented by ps-bash.
+    private static readonly HashSet<string> NlValidButUnsupported =
+        new(StringComparer.Ordinal)
+        {
+            "-bt", "-bn", "--body-numbering", "--header-numbering",
+            "--footer-numbering", "--starting-line-number", "--line-increment",
+            "--join-blank-lines", "--number-format", "--number-width",
+            "--number-separator", "--section-delimiter",
+        };
+
     // Parsed-once state.
     private bool _parsed;
     private bool _numberAll;
@@ -243,6 +253,9 @@ public sealed class InvokeBashNlCommand : PSCmdlet
             }
             return;
         }
+
+        if (FileSystemHelpers.TryWriteOperandOptionError(
+                this, "nl", _operands, NlValidButUnsupported)) return;
 
         // Pipeline mode (no operands) was already streamed in ProcessRecord.
         if (_operands.Count == 0) return;

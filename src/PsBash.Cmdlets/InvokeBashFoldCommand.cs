@@ -77,6 +77,11 @@ public sealed class InvokeBashFoldCommand : PSCmdlet
     [Alias("s")]
     public SwitchParameter Spaces { get; set; }
 
+    // Valid GNU fold flags not implemented by ps-bash (empty — all GNU flags are
+    // either implemented or not worth a separate bucket; unknown flags are garbage).
+    private static readonly HashSet<string> FoldValidButUnsupported =
+        new(StringComparer.Ordinal);
+
     // Parsed-once state.
     private bool _parsed;
     private int _width = 80;
@@ -196,6 +201,9 @@ public sealed class InvokeBashFoldCommand : PSCmdlet
             }
             return;
         }
+
+        if (FileSystemHelpers.TryWriteOperandOptionError(
+                this, "fold", _operands, FoldValidButUnsupported)) return;
 
         // Pipeline mode (no operands) was already streamed in ProcessRecord.
         if (_operands.Count == 0) return;

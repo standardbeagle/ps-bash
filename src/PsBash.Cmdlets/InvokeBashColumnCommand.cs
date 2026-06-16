@@ -52,6 +52,20 @@ public sealed class InvokeBashColumnCommand : PSCmdlet
     [Parameter(ValueFromPipeline = true)]
     public PSObject? InputObject { get; set; }
 
+    // Valid GNU column flags recognized but not implemented by ps-bash.
+    private static readonly HashSet<string> ColumnValidButUnsupported =
+        new(StringComparer.Ordinal)
+        {
+            "-x", "--fillrows",
+            "-c", "--output-width",
+            "-o", "--output-separator",
+            "-N", "--table-columns",
+            "-J", "--json",
+            "-n", "--table-name",
+            "-R", "--table-right",
+            "-L", "--keep-empty-lines",
+        };
+
     private readonly List<PSObject> _pipeline = new();
 
     protected override void ProcessRecord()
@@ -126,6 +140,9 @@ public sealed class InvokeBashColumnCommand : PSCmdlet
 
             operands.Add(arg);
         }
+
+        if (FileSystemHelpers.TryWriteOperandOptionError(
+                this, "column", operands, ColumnValidButUnsupported)) return;
 
         // Collect input lines.
         var lines = new List<string>();

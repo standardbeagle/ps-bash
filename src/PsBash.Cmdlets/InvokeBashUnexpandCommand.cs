@@ -70,6 +70,13 @@ public sealed class InvokeBashUnexpandCommand : PSCmdlet
     [Parameter]
     public SwitchParameter a { get; set; }
 
+    // Valid GNU unexpand flags recognized but not implemented by ps-bash.
+    // Note: --first-only IS implemented (sets leading-only mode), but listed
+    // here so any future variant or typo reaches the classifier rather than
+    // being silently swallowed.
+    private static readonly HashSet<string> UnexpandValidButUnsupported =
+        new(StringComparer.Ordinal) { "--first-only" };
+
     // Parsed-once state.
     private bool _parsed;
     private int _tabWidth = 8;
@@ -184,6 +191,9 @@ public sealed class InvokeBashUnexpandCommand : PSCmdlet
             }
             return;
         }
+
+        if (FileSystemHelpers.TryWriteOperandOptionError(
+                this, "unexpand", _operands, UnexpandValidButUnsupported)) return;
 
         // Pipeline mode (no operands) was already streamed in ProcessRecord.
         if (_operands.Count == 0) return;

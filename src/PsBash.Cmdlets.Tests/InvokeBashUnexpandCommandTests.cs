@@ -222,4 +222,31 @@ public class InvokeBashUnexpandCommandTests : IClassFixture<SharedPwshFixture>, 
             $"Invoke-BashUnexpand '{probe.Replace("'", "''")}' 2>$null");
         Assert.Empty(lines);
     }
+
+    [Fact]
+    public void Unexpand_UnrecognizedLongOption_ExitCode2_NoOutput()
+    {
+        // Completely unknown option → bash-parity "unrecognized option" error,
+        // LASTEXITCODE=2, no stdout.
+        var pwsh = _fixture.AcquireFresh();
+        pwsh.AddScript("$ErrorActionPreference='Continue'").Invoke();
+        pwsh.Commands.Clear();
+        var result = pwsh.AddScript(
+            "Invoke-BashUnexpand --bogus 2>$null; $LASTEXITCODE").Invoke();
+        pwsh.Commands.Clear();
+        Assert.Single(result);
+        Assert.Equal(2, (int)result[0].BaseObject);
+    }
+
+    [Fact]
+    public void Unexpand_FirstOnlyFlag_StillProcessesInput()
+    {
+        // --first-only IS implemented in ps-bash (sets leading-only mode,
+        // same as the default). Regression guard: verifying the flag doesn't
+        // break normal operation.
+        var lines = RunLines("'        hello' | Invoke-BashUnexpand --first-only");
+        Assert.Single(lines);
+        // Eight leading spaces → one tab (default tab width 8).
+        Assert.Equal("\thello", lines[0]);
+    }
 }

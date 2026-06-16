@@ -202,4 +202,37 @@ public class InvokeBashFoldCommandTests : IDisposable, IClassFixture<SharedPwshF
         var lines = RunLines("'abcdef' | Invoke-BashFold -b -w 3");
         Assert.Equal(new[] { "abc", "def" }, lines);
     }
+
+    [Fact]
+    public void Fold_UnrecognizedLongOption_ExitCode2_NoOutput()
+    {
+        // Unrecognized options (garbage) → bash-parity error on stderr,
+        // LASTEXITCODE=2, no stdout.
+        var pwsh = _fixture.AcquireFresh();
+        pwsh.AddScript("$ErrorActionPreference='Continue'").Invoke();
+        pwsh.Commands.Clear();
+        var result = pwsh.AddScript(
+            "Invoke-BashFold --bogus 2>$null; $LASTEXITCODE").Invoke();
+        pwsh.Commands.Clear();
+        // Only the exit-code integer should be in the output stream.
+        Assert.Single(result);
+        Assert.Equal(2, (int)result[0].BaseObject);
+    }
+
+    [Fact]
+    public void Fold_UnrecognizedOption_NotTreatedAsFilename()
+    {
+        // Verify that an unknown flag does NOT fall through to the file-read
+        // path (which would try to open "--bogus" as a file and emit a
+        // "no such file" error with exit 1). The classifier must intercept it
+        // first and emit exit 2.
+        var pwsh = _fixture.AcquireFresh();
+        pwsh.AddScript("$ErrorActionPreference='Continue'").Invoke();
+        pwsh.Commands.Clear();
+        var result = pwsh.AddScript(
+            "Invoke-BashFold --bogus 2>$null; $LASTEXITCODE").Invoke();
+        pwsh.Commands.Clear();
+        Assert.Single(result);
+        Assert.Equal(2, (int)result[0].BaseObject);
+    }
 }

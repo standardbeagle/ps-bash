@@ -62,6 +62,10 @@ public sealed class InvokeBashExpandCommand : PSCmdlet
     [Parameter(ValueFromPipeline = true)]
     public PSObject? InputObject { get; set; }
 
+    // Valid GNU expand flags recognized but not implemented by ps-bash.
+    private static readonly HashSet<string> ExpandValidButUnsupported =
+        new(StringComparer.Ordinal) { "-i", "--first-only", "--tabs" };
+
     // Parsed-once state.
     private bool _parsed;
     private int _tabWidth = 8;
@@ -159,6 +163,9 @@ public sealed class InvokeBashExpandCommand : PSCmdlet
             }
             return;
         }
+
+        if (FileSystemHelpers.TryWriteOperandOptionError(
+                this, "expand", _operands, ExpandValidButUnsupported)) return;
 
         // Pipeline mode (no operands) was already streamed in ProcessRecord.
         if (_operands.Count == 0) return;
