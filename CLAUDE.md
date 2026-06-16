@@ -58,24 +58,27 @@ If you're unsure whether a change needs CI, ask before pushing.
 
 ## Release Process
 
-### 1. Bump version and update notes
+> Operational checklist: the `/publish` skill (`.claude/commands/publish.md`). Keep the two in sync.
 
-Edit `src/PsBash.Module/PsBash.psd1`:
-- Update `ModuleVersion` (e.g. `'0.8.1'` → `'0.8.2'`)
-- Prepend new entry to `ReleaseNotes` (format: `v0.8.2: description. v0.8.1: ...`)
+### 1. Update the ReleaseNotes (the only required manual edit)
 
-Edit `src/PsBash.Core/PsBash.Core.csproj`:
-- Update `<Version>` to match the module manifest version
+`publish.yml` **auto-patches every version from the release tag** — `ModuleVersion` in
+`PsBash.psd1` and `<Version>` in both `PsBash.Core.csproj` / `PsBash.Transpiler.csproj` — so
+you do NOT need to bump versions by hand (bumping is harmless hygiene if you want the source to
+match). What you MUST do: prepend a `vX.Y.Z: description.` entry to `ReleaseNotes` in
+`src/PsBash.Module/PsBash.psd1`. The whole string is **guard-capped at 10600 chars**
+(`ReleaseNotes_UnderPsGalleryLimit`, PSGallery 400s above it) — if you go over, trim your entry
+and drop the oldest entries (the trailing version-history URL still links them).
 
-Alternatively, run `pwsh scripts/pack-local.ps1` which syncs the csproj version from the manifest and packs into `dist/`.
+### 2. Run the gate locally — Pester + Core.Tests, not just xunit
 
-### 2. Run all tests
-
-```bash
-./scripts/test.sh
-```
-
-Fix any failures before proceeding.
+The publish gate is the **Pester** suite (`tests/PsBash.Tests.ps1`) + **Core.Tests**; the other
+suites and every `Skip report` step are `continue-on-error` (non-fatal). A green
+`scripts/test.sh` / xunit run is NOT enough — Pester calls cmdlets directly
+(`Invoke-BashEcho -e '...'`), hitting bare-flag binder collisions and manifest invariants xunit
+never touches. Run Pester locally first (refresh the gitignored beside-module DLL, then
+`Invoke-Pester ./tests/`) — see the **release-pester-gate-local** memory and the `/publish`
+skill for the exact commands. Fix any failure before proceeding.
 
 ### 3. Commit, tag, push
 
@@ -111,14 +114,17 @@ Check the run status. If in progress, watch it:
 gh run watch
 ```
 
-All three jobs must pass: `build-binaries` (3 matrix jobs), `test` (3 OS matrix), `publish`.
+All jobs must pass: `build-binaries` (3 matrix), `test` (3 OS matrix), `publish`. A gate failure
+shows `publish` as **skipped** (it `needs:` the test job).
 
 If any job fails:
 ```bash
 gh run view <run-id> --log-failed
 ```
 
-Fix the issue, bump to a new patch version, and re-release.
+Fix on `main`, then re-cut. Because a skipped `publish` never reached PSGallery/nuget, the
+version is reusable: `gh release delete vX.Y.Z --yes --cleanup-tag`, re-tag the SAME version at
+the fix commit, push, and re-create the release (no patch number burned).
 
 ### 6. Verify PSGallery publication
 
