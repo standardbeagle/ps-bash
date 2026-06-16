@@ -82,11 +82,15 @@ public sealed class InvokeBashSortCommand : PSCmdlet
     // a sort never relocks the shared Regex cache or risks cache eviction.
     private static readonly Regex s_dictStrip = new(@"[^a-zA-Z0-9\s]", RegexOptions.Compiled);
     private static readonly Regex s_leadingBlank = new(@"^\s+", RegexOptions.Compiled);
-    private static readonly Regex s_numericPrefix = new(@"^[+-]?\d+(?:\.\d+)?", RegexOptions.Compiled);
+    // GNU `-n` ignores a field's leading blanks: the prefix scan allows
+    // optional leading whitespace (the captured value is fed to double.Parse
+    // with NumberStyles.Float, which also tolerates leading white). Without the
+    // `^\s*` a numeric key like "\t9" (a tab-led field under the GNU field
+    // model) failed to match and collapsed to 0 — the -k-with-leading-blank bug.
+    private static readonly Regex s_numericPrefix = new(@"^\s*[+-]?\d+(?:\.\d+)?", RegexOptions.Compiled);
     private static readonly Regex s_humanNumeric = new(@"^([0-9]*\.?[0-9]+)\s*([KMGTP])$", RegexOptions.Compiled);
     private static readonly Regex s_versionSplit = new(@"[.\-]", RegexOptions.Compiled);
     private static readonly Regex s_keySpecPos = new(@"^(\d+)(?:\.(\d+))?([nrRbB]*)?$", RegexOptions.Compiled);
-    private static readonly Regex s_whitespaceSplit = new(@"\s+", RegexOptions.Compiled);
 
     /// <summary>
     /// Valid GNU <c>sort</c> options ps-bash does not implement (this cmdlet
@@ -100,15 +104,15 @@ public sealed class InvokeBashSortCommand : PSCmdlet
     /// </summary>
     private static readonly HashSet<string> ValidButUnsupported = new(StringComparer.Ordinal)
     {
-        // Short flags not implemented.
-        "-g", "-i", "-R", "-z", "-m", "-S", "-T",
-        // Long forms (none are implemented by this cmdlet).
-        "--reverse", "--numeric-sort", "--unique", "--ignore-case",
-        "--dictionary-order", "--ignore-leading-blanks", "--general-numeric-sort",
-        "--ignore-nonprinting", "--month-sort", "--human-numeric-sort",
-        "--random-sort", "--version-sort", "--stable", "--zero-terminated",
-        "--check", "--key", "--field-separator", "--merge",
-        "--buffer-size", "--temporary-directory", "--parallel", "--sort",
+        // Short flags not implemented. (-g is now supported.)
+        "-i", "-R", "-z", "-m", "-S", "-T",
+        // Long forms not implemented. The aliases of supported short flags
+        // (--reverse, --numeric-sort, --unique, --ignore-case, --dictionary-order,
+        // --ignore-leading-blanks, --general-numeric-sort, --month-sort,
+        // --human-numeric-sort, --version-sort, --stable, --check, --key,
+        // --field-separator, --sort) are now parsed and are NOT listed here.
+        "--ignore-nonprinting", "--random-sort", "--zero-terminated", "--merge",
+        "--buffer-size", "--temporary-directory", "--parallel",
         "--debug", "--batch-size", "--compress-program", "--files0-from",
         "--random-source",
     };
@@ -149,6 +153,7 @@ public sealed class InvokeBashSortCommand : PSCmdlet
 
         bool reverse = false;
         bool numeric = false;
+        bool generalNumeric = false;
         bool unique = false;
         bool foldCase = false;
         bool humanNumeric = false;
@@ -157,6 +162,7 @@ public sealed class InvokeBashSortCommand : PSCmdlet
         bool checkOnly = C.IsPresent;
         bool blankIgnore = false;
         bool dictOrder = D.IsPresent;
+        bool stable = false;
         string? delimiter = null;
         string? outputFile = O;
         var keySpecs = new List<KeySpec>();
@@ -249,6 +255,56 @@ public sealed class InvokeBashSortCommand : PSCmdlet
                 continue;
             }
 
+            // Long-form flags. The boolean ones are exact aliases of the short
+            // flags above; the value-bearing ones (--key / --field-separator)
+            // mirror -k / -t. GNU sort accepts both spellings interchangeably.
+            if (arg.StartsWith("--", StringComparison.Ordinal))
+            {
+                // --field-separator=SEP / --field-separator SEP  (alias of -t)
+                if (arg.StartsWith("--field-separator=", StringComparison.Ordinal))
+                { delimiter = arg.Substring("--field-separator=".Length); i++; continue; }
+                if (arg == "--field-separator")
+                { i++; if (i < rawArgs.Length) delimiter = rawArgs[i]; i++; continue; }
+                // --key=SPEC / --key SPEC  (alias of -k)
+                if (arg.StartsWith("--key=", StringComparison.Ordinal))
+                { var s = ParseKeySpec(arg.Substring("--key=".Length)); if (s != null) keySpecs.Add(s); i++; continue; }
+                if (arg == "--key")
+                { i++; if (i < rawArgs.Length) { var s = ParseKeySpec(rawArgs[i]); if (s != null) keySpecs.Add(s); } i++; continue; }
+                // --sort=WORD  (GNU mode selector)
+                if (arg.StartsWith("--sort=", StringComparison.Ordinal))
+                {
+                    switch (arg.Substring("--sort=".Length))
+                    {
+                        case "general-numeric": generalNumeric = true; break;
+                        case "numeric": numeric = true; break;
+                        case "human-numeric": humanNumeric = true; break;
+                        case "month": monthSort = true; break;
+                        case "version": versionSort = true; break;
+                        // "general" / unknown WORD: leave default (lexical).
+                    }
+                    i++;
+                    continue;
+                }
+                bool matchedLong = true;
+                switch (arg)
+                {
+                    case "--reverse": reverse = true; break;
+                    case "--numeric-sort": numeric = true; break;
+                    case "--general-numeric-sort": generalNumeric = true; break;
+                    case "--unique": unique = true; break;
+                    case "--ignore-case": foldCase = true; break;
+                    case "--human-numeric-sort": humanNumeric = true; break;
+                    case "--version-sort": versionSort = true; break;
+                    case "--month-sort": monthSort = true; break;
+                    case "--check": checkOnly = true; break;
+                    case "--ignore-leading-blanks": blankIgnore = true; break;
+                    case "--dictionary-order": dictOrder = true; break;
+                    case "--stable": stable = true; break;
+                    default: matchedLong = false; break;
+                }
+                if (matchedLong) { i++; continue; }
+            }
+
             if (arg.StartsWith("-", StringComparison.Ordinal) && arg.Length > 1
                 && !arg.StartsWith("--", StringComparison.Ordinal))
             {
@@ -258,6 +314,7 @@ public sealed class InvokeBashSortCommand : PSCmdlet
                     {
                         case 'r': reverse = true; break;
                         case 'n': numeric = true; break;
+                        case 'g': generalNumeric = true; break;
                         case 'u': unique = true; break;
                         case 'f': foldCase = true; break;
                         case 'h': humanNumeric = true; break;
@@ -266,7 +323,7 @@ public sealed class InvokeBashSortCommand : PSCmdlet
                         case 'c': checkOnly = true; break;
                         case 'b': blankIgnore = true; break;
                         case 'd': dictOrder = true; break;
-                        case 's': /* stable — always stable in our sort */ break;
+                        case 's': stable = true; break;
                         default:
                             // Unknown short flag: valid-but-unsupported sort
                             // option → specific refusal; else bash-parity
@@ -351,11 +408,13 @@ public sealed class InvokeBashSortCommand : PSCmdlet
         // Capture closure state for the comparator.
         bool gReverse = reverse;
         bool gNumeric = numeric;
+        bool gGeneral = generalNumeric;
         bool gFold = foldCase;
         bool gHuman = humanNumeric;
         bool gMonth = monthSort;
         bool gBlank = blankIgnore;
         bool gDict = dictOrder;
+        bool gStable = stable;
         string? gDelim = delimiter;
 
         // Decorate-sort-undecorate: a comparison sort calls the comparator
@@ -369,19 +428,21 @@ public sealed class InvokeBashSortCommand : PSCmdlet
         bool hasKeySpecs = keySpecs.Count > 0;
         var dRaw = new string[n];                                   // GetFullText (version sort / unique)
         var dGlobalText = hasKeySpecs ? null : new string[n];       // global cmp text (post dict-strip)
-        var dGlobalNum = (!hasKeySpecs && (gHuman || gNumeric)) ? new double[n] : null;
+        var dGlobalNum = (!hasKeySpecs && (gHuman || gNumeric || gGeneral)) ? new double[n] : null;
         var dGlobalMonth = (!hasKeySpecs && gMonth) ? new int[n] : null;
         // Per-key-spec decorated values: text (post dict-strip) + numeric.
         var dKeyText = hasKeySpecs ? new string[n][] : null;
         var dKeyNum = hasKeySpecs ? new double[n][] : null;
         var dKeyMonth = hasKeySpecs ? new int[n][] : null;
-        var dVerParts = versionSort ? new string[n][] : null;
+        // Version-sort decoration honors -k: one version-part array per key spec
+        // (or a single full-line entry when no -k is given). This is what makes
+        // `sort -V -k1,1` compare the keyed field, not the whole line (GNU parity).
+        var dVerKeyParts = versionSort ? new string[n][][] : null;
         for (int di = 0; di < n; di++)
         {
             object it = items[di];
             string raw = GetFullText(it, gBlank);
             dRaw[di] = raw;
-            if (versionSort) dVerParts![di] = s_versionSplit.Split(raw);
             if (hasKeySpecs)
             {
                 int ks = keySpecs.Count;
@@ -395,18 +456,27 @@ public sealed class InvokeBashSortCommand : PSCmdlet
                     if (gDict) key = s_dictStrip.Replace(key, "");
                     kt[s] = key;
                     if (gHuman) kn[s] = ConvertFromHumanNumeric(key);
+                    else if (gGeneral) kn[s] = ParseGeneralNumeric(key);
                     else if (spec.Numeric || gNumeric) kn[s] = ParseNumericPrefix(key);
                     else if (gMonth) km[s] = ConvertFromMonthName(key);
                 }
                 dKeyText![di] = kt;
                 dKeyNum![di] = kn;
                 dKeyMonth![di] = km;
+                if (versionSort)
+                {
+                    var vp = new string[ks][];
+                    for (int s = 0; s < ks; s++) vp[s] = s_versionSplit.Split(kt[s]);
+                    dVerKeyParts![di] = vp;
+                }
             }
             else
             {
+                if (versionSort) dVerKeyParts![di] = new[] { s_versionSplit.Split(raw) };
                 string text = gDict ? s_dictStrip.Replace(raw, "") : raw;
                 dGlobalText![di] = text;
                 if (gHuman) dGlobalNum![di] = ExtractSizeBytes(it) ?? ConvertFromHumanNumeric(text);
+                else if (gGeneral) dGlobalNum![di] = ParseGeneralNumeric(text);
                 else if (gNumeric)
                 {
                     double.TryParse(text, NumberStyles.Float, CultureInfo.InvariantCulture, out double v);
@@ -424,7 +494,7 @@ public sealed class InvokeBashSortCommand : PSCmdlet
                 {
                     var spec = keySpecs[s];
                     int cmp;
-                    if (gHuman)
+                    if (gHuman || gGeneral)
                     {
                         double aH = dKeyNum![ai][s], bH = dKeyNum![bi][s];
                         cmp = aH < bH ? -1 : (aH > bH ? 1 : 0);
@@ -453,9 +523,10 @@ public sealed class InvokeBashSortCommand : PSCmdlet
             }
 
             int cmp2;
-            if (gHuman)
+            if (gHuman || gGeneral)
             {
-                // SizeBytes-aware value precomputed per item (LsEntry from ls -lh).
+                // SizeBytes-aware value precomputed per item (LsEntry from ls -lh),
+                // or general-numeric (-g) full double parse.
                 double aH = dGlobalNum![ai], bH = dGlobalNum![bi];
                 cmp2 = aH < bH ? -1 : (aH > bH ? 1 : 0);
             }
@@ -495,8 +566,24 @@ public sealed class InvokeBashSortCommand : PSCmdlet
             return;
         }
 
-        // Build index list for stable sort tracking (LINQ OrderBy is stable but
-        // we want explicit control; List.Sort is not stable so we attach index).
+        // GNU last-resort tie-break: when the keyed/global comparison is equal,
+        // sort compares the ENTIRE original line bytewise (reversed by a GLOBAL
+        // -r). This is NOT applied in -c check mode (GNU -c treats equal keys as
+        // in order) and is suppressed by -s (stable: equal keys keep input
+        // order). Without it, ps-bash fell back to input order for every tie,
+        // diverging from GNU whenever equal-key lines differed in their tails
+        // (e.g. `Apple` vs `apple`, both field2=5). The original-line index is
+        // the absolute last tie-break, preserving stability for identical lines.
+        int LastResort(int ai, int bi)
+        {
+            if (gStable) return 0;
+            int c = string.CompareOrdinal(dRaw[ai], dRaw[bi]);
+            if (gReverse) c = -c;
+            return Math.Sign(c);
+        }
+
+        // Build index list for stable sort tracking (List.Sort is not stable so
+        // we attach the original index as the absolute final tie-break).
         var indexed = new List<(int Index, object Item)>(items.Count);
         for (int idx = 0; idx < items.Count; idx++)
         {
@@ -507,8 +594,18 @@ public sealed class InvokeBashSortCommand : PSCmdlet
         {
             indexed.Sort((a, b) =>
             {
-                int c = CompareVersionParts(dVerParts![a.Index], dVerParts![b.Index]);
-                if (gReverse) c = -c;
+                var pa = dVerKeyParts![a.Index];
+                var pb = dVerKeyParts![b.Index];
+                int c = 0;
+                for (int s = 0; s < pa.Length; s++)
+                {
+                    int cc = CompareVersionParts(pa[s], pb[s]);
+                    bool rev = hasKeySpecs ? (keySpecs[s].Reverse || gReverse) : gReverse;
+                    if (rev) cc = -cc;
+                    if (cc != 0) { c = cc; break; }
+                }
+                if (c != 0) return c;
+                c = LastResort(a.Index, b.Index);
                 if (c != 0) return c;
                 return a.Index - b.Index;
             });
@@ -518,6 +615,8 @@ public sealed class InvokeBashSortCommand : PSCmdlet
             indexed.Sort((a, b) =>
             {
                 int c = Compare(a.Index, b.Index);
+                if (c != 0) return c;
+                c = LastResort(a.Index, b.Index);
                 if (c != 0) return c;
                 return a.Index - b.Index;
             });
@@ -601,40 +700,117 @@ public sealed class InvokeBashSortCommand : PSCmdlet
     {
         string text = BashRuntime.GetBashText(item);
         text = text.TrimEnd('\n');
-        // Default whitespace split is the hot path — use the compiled field.
-        // The -t delimiter branch stays byte-identical to the oracle (escaped
-        // literal split), which is the less common case.
-        var parts = delimiter != null
-            ? Regex.Split(text, Regex.Escape(delimiter))
-            : s_whitespaceSplit.Split(text);
+
+        // Field splitting. GNU sort has two field models:
+        //   * With -t CHAR: split on the exact char; empty fields are real and
+        //     the separator delimits but is NOT part of a field. A multi-field
+        //     key re-joins the selected fields with the delimiter (GNU includes
+        //     the separator between fields of a -k range).
+        //   * Default (no -t): a field is any leading blanks followed by a
+        //     maximal run of non-blanks. The field separator is the zero-width
+        //     point between a non-blank and a following blank, so the leading
+        //     blanks of a field belong to the field that FOLLOWS them — they are
+        //     part of the key and are significant for lexical comparison (unless
+        //     -b). A naive `\s+` split instead emitted an empty leading field for
+        //     a line with leading blanks ("  x\t9" -> ["", "x", "9"]), so -k2
+        //     selected "x" not "9": the -k misalignment bug. Each field carries
+        //     its own leading separator blanks, so a multi-field key is the raw
+        //     substring — concatenate the selected fields with no extra separator.
+        string[] parts;
+        string joinSep;
+        if (delimiter != null)
+        {
+            parts = Regex.Split(text, Regex.Escape(delimiter));
+            joinSep = delimiter;
+        }
+        else
+        {
+            parts = SplitWhitespaceFields(text);
+            joinSep = "";
+        }
+
         int startIdx = spec.StartField - 1;
         if (startIdx < 0) startIdx = 0;
         if (startIdx >= parts.Length) return "";
         int endIdx = spec.EndField > 0 ? spec.EndField - 1 : parts.Length - 1;
         if (endIdx >= parts.Length) endIdx = parts.Length - 1;
+        if (endIdx < startIdx) endIdx = startIdx;
 
-        var fields = new List<string>();
-        for (int fi = startIdx; fi <= endIdx; fi++)
+        string key;
+        if (startIdx == endIdx)
         {
-            string fieldText = parts[fi];
-            if (fi == startIdx && spec.StartChar > 0)
-            {
-                int skip = spec.StartChar - 1;
-                fieldText = skip < fieldText.Length ? fieldText.Substring(skip) : "";
-            }
-            if (fi == endIdx && spec.EndChar > 0)
-            {
-                if (spec.EndChar < fieldText.Length)
-                    fieldText = fieldText.Substring(0, spec.EndChar);
-            }
-            fields.Add(fieldText);
+            // Single-field key — the common case, no join allocation.
+            key = ApplyCharOffsets(parts[startIdx], spec.StartChar, spec.EndChar);
         }
-        string key = string.Join(" ", fields);
+        else
+        {
+            var sb = new System.Text.StringBuilder();
+            for (int fi = startIdx; fi <= endIdx; fi++)
+            {
+                int startChar = fi == startIdx ? spec.StartChar : 0;
+                int endChar = fi == endIdx ? spec.EndChar : 0;
+                if (fi > startIdx) sb.Append(joinSep);
+                sb.Append(ApplyCharOffsets(parts[fi], startChar, endChar));
+            }
+            key = sb.ToString();
+        }
+
         if (spec.BlankIgnore || gBlank)
         {
-            key = Regex.Replace(key, @"^\s+", "");
+            key = StripLeadingBlanks(key);
         }
         return key;
+    }
+
+    /// <summary>
+    /// Applies a key position's 1-based start/end character offsets within a
+    /// single field (0 = no offset). Matches the original per-field slicing.
+    /// </summary>
+    private static string ApplyCharOffsets(string fieldText, int startChar, int endChar)
+    {
+        if (startChar > 0)
+        {
+            int skip = startChar - 1;
+            fieldText = skip < fieldText.Length ? fieldText.Substring(skip) : "";
+        }
+        if (endChar > 0 && endChar < fieldText.Length)
+        {
+            fieldText = fieldText.Substring(0, endChar);
+        }
+        return fieldText;
+    }
+
+    /// <summary>
+    /// GNU default field split (no -t): each field is its leading blanks plus a
+    /// maximal run of non-blanks. A field boundary is the point where a blank
+    /// (space/tab) follows a non-blank, so the run of blanks separating two
+    /// fields is attached to the FOLLOWING field. Manual single-pass scan (no
+    /// regex) — this is the per-line, per-key hot path.
+    /// </summary>
+    private static string[] SplitWhitespaceFields(string text)
+    {
+        if (text.Length == 0) return new[] { string.Empty };
+        var fields = new List<string>();
+        int start = 0;
+        for (int i = 1; i < text.Length; i++)
+        {
+            bool cBlank = text[i] == ' ' || text[i] == '\t';
+            bool pBlank = text[i - 1] == ' ' || text[i - 1] == '\t';
+            if (cBlank && !pBlank)
+            {
+                fields.Add(text.Substring(start, i - start));
+                start = i;
+            }
+        }
+        fields.Add(text.Substring(start));
+        return fields.ToArray();
+    }
+
+    private static string StripLeadingBlanks(string s)
+    {
+        int i = 0;
+        while (i < s.Length && (s[i] == ' ' || s[i] == '\t')) i++;
+        return i == 0 ? s : s.Substring(i);
     }
 
     private static double ParseNumericPrefix(string s)
@@ -643,6 +819,18 @@ public sealed class InvokeBashSortCommand : PSCmdlet
         string numStr = m.Success ? m.Value : "0";
         double.TryParse(numStr, NumberStyles.Float, CultureInfo.InvariantCulture, out var v);
         return v;
+    }
+
+    /// <summary>
+    /// GNU <c>-g</c> / <c>--general-numeric-sort</c>: parse the whole (trimmed)
+    /// field as a general floating-point number — unlike <c>-n</c> this honors
+    /// scientific notation (<c>1e3</c>) and a leading sign on the full value.
+    /// An unparseable field sorts as 0 (GNU treats non-numbers as 0).
+    /// </summary>
+    private static double ParseGeneralNumeric(string s)
+    {
+        return double.TryParse(s.Trim(), NumberStyles.Float, CultureInfo.InvariantCulture, out var v)
+            ? v : 0.0;
     }
 
     private static KeySpec? ParseKeySpec(string spec)

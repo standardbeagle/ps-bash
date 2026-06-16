@@ -66,26 +66,36 @@ public class InvokeBashSortCommandTests : IDisposable, IClassFixture<SharedPwshF
     }
 
     [Fact]
-    public void Sort_ValidButUnsupportedLongForm_EmitsSpecificRefusal_NotFileError()
+    public void Sort_LongFormReverse_ReversesOrder()
     {
-        // --reverse is a real sort option (long form of -r) this cmdlet does
-        // not parse. It must say "not supported", NOT treat --reverse as a file.
-        var (_, errs) = RunWithErrors("'a','b' | Invoke-BashSort --reverse");
-        Assert.Contains(errs, m => m.Contains("not supported", StringComparison.OrdinalIgnoreCase)
-                                   && m.Contains("--reverse", StringComparison.Ordinal));
-        Assert.DoesNotContain(errs, m => m.Contains("No such file", StringComparison.OrdinalIgnoreCase));
+        // --reverse is now parsed as the long form of -r.
+        var lines = RunLines("'a','b','c' | Invoke-BashSort --reverse");
+        Assert.Equal(new[] { "c", "b", "a" }, lines);
     }
 
     [Fact]
-    public void Sort_ValidButUnsupportedShortFlag_G_EmitsSpecificRefusal()
+    public void Sort_LongFormNumeric_OrdersByNumber()
     {
-        // -g (general-numeric-sort) is a real sort flag ps-bash doesn't
-        // implement. (-g is used rather than -o because -o collides with the
-        // -OutBuffer/-OutVariable common parameters and is rejected by the
-        // binder before the cmdlet runs — a separate known collision class.)
-        var (_, errs) = RunWithErrors("'a','b' | Invoke-BashSort -g");
-        Assert.Contains(errs, m => m.Contains("not supported", StringComparison.OrdinalIgnoreCase)
-                                   && m.Contains("-g", StringComparison.Ordinal));
+        var lines = RunLines("'10','2','1','20' | Invoke-BashSort --numeric-sort");
+        Assert.Equal(new[] { "1", "2", "10", "20" }, lines);
+    }
+
+    [Fact]
+    public void Sort_LongFormKeyAndFieldSeparator_SortByField()
+    {
+        // --key / --field-separator are aliases of -k / -t.
+        var lines = RunLines(
+            "'c:1','a:3','b:2' | Invoke-BashSort --field-separator=: --key=2");
+        Assert.Equal(new[] { "c:1", "b:2", "a:3" }, lines);
+    }
+
+    [Fact]
+    public void Sort_GeneralNumeric_HandlesScientificNotation()
+    {
+        // -g parses the whole field as a general float, so 1e3 > 50 (which -n,
+        // reading only the leading integer, would get wrong: 1 < 50).
+        var lines = RunLines("'1e3','50','2e0' | Invoke-BashSort -g");
+        Assert.Equal(new[] { "2e0", "50", "1e3" }, lines);
     }
 
     [Fact]
@@ -261,6 +271,117 @@ public class InvokeBashSortCommandTests : IDisposable, IClassFixture<SharedPwshF
         // --help routes through Show-BashHelp; output is some non-empty text.
         var lines = RunLines("Invoke-BashSort --help");
         Assert.NotEmpty(lines);
+    }
+
+    // ---- GNU field-model parity regressions (oracle: WSL `sort`, GNU coreutils 9.4) ----
+    // These cover three divergences that the hand-written cases above never
+    // exercised because none used leading whitespace, -V with a key, or
+    // equal-key tie ordering. Each expected value is the byte output of the
+    // `wsl sort ...` command quoted in the comment (Directive 1: oracle first).
+
+    [Fact]
+    public void Sort_KeyField_LeadingSpace_NumericField2_GnuFieldSplit()
+    {
+        // BUG 1: GNU's default field model attaches a field's leading blanks to
+        // that field, so "  leading\t9" splits as ["  leading", "\t9"] and -k2
+        // is the numeric 9 — NOT "leading" (the old `\s+` split produced an
+        // empty leading field, mis-selecting field 2).
+        // Oracle: printf '  leading\t9\nzulu\t5\nalpha\t100\n' | sort -n -k2
+        //   -> zulu\t5 / "  leading"\t9 / alpha\t100
+        var lines = RunLines(
+            "\"  leading`t9\", \"zulu`t5\", \"alpha`t100\" | Invoke-BashSort -n '-k2'");
+        Assert.Equal(new[] { "zulu\t5", "  leading\t9", "alpha\t100" }, lines);
+    }
+
+    [Fact]
+    public void Sort_KeyField_LeadingTab_NumericField2_GnuFieldSplit()
+    {
+        // BUG 1, leading-tab variant.
+        // Oracle: printf '\tindent\t9\nzulu\t5\nalpha\t100\n' | sort -n -k2
+        //   -> zulu\t5 / "\tindent"\t9 / alpha\t100
+        var lines = RunLines(
+            "\"`tindent`t9\", \"zulu`t5\", \"alpha`t100\" | Invoke-BashSort -n '-k2'");
+        Assert.Equal(new[] { "zulu\t5", "\tindent\t9", "alpha\t100" }, lines);
+    }
+
+    [Fact]
+    public void Sort_KeyField_LeadingBlanksAreSignificantInLexicalKey()
+    {
+        // BUG 1 discriminator (no -b): the leading separator blanks ARE part of
+        // the lexical key, so "x  bbb" (field2 = "  bbb", two leading spaces)
+        // sorts BEFORE "y aaa" (field2 = " aaa") because the extra space
+        // (0x20) < 'a'. Proves the key retains leading blanks rather than
+        // stripping or collapsing them.
+        // Oracle: printf 'x  bbb\ny aaa\n' | sort -k2  -> x  bbb / y aaa
+        var lines = RunLines("'x  bbb', 'y aaa' | Invoke-BashSort '-k2'");
+        Assert.Equal(new[] { "x  bbb", "y aaa" }, lines);
+    }
+
+    [Fact]
+    public void Sort_KeyField_BlankIgnore_StripsLeadingBlanksFromKey()
+    {
+        // BUG 1, -b counterpart of the discriminator: -b strips the field's
+        // leading blanks so the key becomes "bbb" / "aaa" and order flips.
+        // Oracle: printf 'x  bbb\ny aaa\n' | sort -b -k2  -> y aaa / x  bbb
+        var lines = RunLines("'x  bbb', 'y aaa' | Invoke-BashSort -b '-k2'");
+        Assert.Equal(new[] { "y aaa", "x  bbb" }, lines);
+    }
+
+    [Fact]
+    public void Sort_FieldSeparator_EmptyFieldsAreReal_NumericKey()
+    {
+        // -t splits on the exact char with no blank-collapsing; empty fields are
+        // real, so field 3 of "a::3" is "3".
+        // Oracle: printf 'a::3\nb::1\nc::2\n' | sort -t: -k3 -n  -> b::1 / c::2 / a::3
+        var lines = RunLines("'a::3', 'b::1', 'c::2' | Invoke-BashSort -t ':' -n '-k3'");
+        Assert.Equal(new[] { "b::1", "c::2", "a::3" }, lines);
+    }
+
+    [Fact]
+    public void Sort_VersionSort_HonorsKey_Field2()
+    {
+        // BUG 2: -V must compare the keyed field, not the whole line.
+        // Oracle: printf 'x 1.10.0\ny 1.2.0\nz 1.9.0\n' | sort -V -k2
+        //   -> y 1.2.0 / z 1.9.0 / x 1.10.0
+        var lines = RunLines(
+            "'x 1.10.0', 'y 1.2.0', 'z 1.9.0' | Invoke-BashSort -V '-k2'");
+        Assert.Equal(new[] { "y 1.2.0", "z 1.9.0", "x 1.10.0" }, lines);
+    }
+
+    [Fact]
+    public void Sort_VersionSort_HonorsKey_Field1Range()
+    {
+        // BUG 2, -k1,1 restricts the version compare to field 1.
+        // Oracle: printf '1.10.0 b\n1.2.0 a\n1.9.0 c\n' | sort -V -k1,1
+        //   -> 1.2.0 a / 1.9.0 c / 1.10.0 b
+        var lines = RunLines(
+            "'1.10.0 b', '1.2.0 a', '1.9.0 c' | Invoke-BashSort -V '-k1,1'");
+        Assert.Equal(new[] { "1.2.0 a", "1.9.0 c", "1.10.0 b" }, lines);
+    }
+
+    [Fact]
+    public void Sort_EqualKeys_LastResortWholeLineTieBreak()
+    {
+        // GNU last-resort: when the key compares equal (both field2 = 5), sort
+        // falls back to comparing the ENTIRE line bytewise — "Apple\t5\talpha"
+        // (A=0x41) sorts before "apple\t5\tzeta" (a=0x61) despite input order.
+        // Oracle: printf 'apple\t5\tzeta\nApple\t5\talpha\n' | sort -n -k2
+        //   -> Apple\t5\talpha / apple\t5\tzeta
+        var lines = RunLines(
+            "\"apple`t5`tzeta\", \"Apple`t5`talpha\" | Invoke-BashSort -n '-k2'");
+        Assert.Equal(new[] { "Apple\t5\talpha", "apple\t5\tzeta" }, lines);
+    }
+
+    [Fact]
+    public void Sort_StableFlag_SuppressesLastResortTieBreak()
+    {
+        // -s disables the last-resort whole-line tie-break: equal-key lines keep
+        // their original input order ("apple" stays before "Apple").
+        // Oracle: printf 'apple\t5\tzeta\nApple\t5\talpha\n' | sort -s -n -k2
+        //   -> apple\t5\tzeta / Apple\t5\talpha
+        var lines = RunLines(
+            "\"apple`t5`tzeta\", \"Apple`t5`talpha\" | Invoke-BashSort -s -n '-k2'");
+        Assert.Equal(new[] { "apple\t5\tzeta", "Apple\t5\talpha" }, lines);
     }
 
     [Fact]
