@@ -531,6 +531,17 @@ public class InvokeBashFileSystemMutatorTests : IDisposable, IClassFixture<Share
     }
 
     [Fact]
+    public void Mover_UnsupportedFlagBeforeDoubleDash_StillClassified()
+    {
+        // An unsupported flag placed BEFORE `--` must still be classified (exit 2),
+        // not leak into the operand list because a later `--` appeared. (--reflink
+        // is a catalog flag that reaches Arguments; bare -i would be eaten by the
+        // -InformationAction binder collision before the cmdlet runs.)
+        var lines = Run("Invoke-BashCp --reflink -- a b *> $null; $global:LASTEXITCODE");
+        Assert.Equal("2", lines[^1]);
+    }
+
+    [Fact]
     public void Mover_DoubleDash_EndsFlagParsing_DashLeadingNameIsOperand()
     {
         // After `--`, a token starting with '-' is a real filename, not a flag.

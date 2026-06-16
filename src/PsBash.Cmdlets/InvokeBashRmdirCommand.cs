@@ -65,10 +65,11 @@ public sealed class InvokeBashRmdirCommand : PSCmdlet
 
         var operands = new List<string>();
         bool pastDoubleDash = false;
+        int preDashCount = -1;
         foreach (var a in args)
         {
             if (pastDoubleDash) { operands.Add(a); continue; }
-            if (a == "--") { pastDoubleDash = true; continue; }
+            if (a == "--") { pastDoubleDash = true; preDashCount = operands.Count; continue; }
             if (a == "-p" || a == "--parents") { removeParents = true; continue; }
             if (a == "-v" || a == "--verbose") { verbose = true; continue; }
             if (a.Length > 2 && a[0] == '-' && a[1] != '-'
@@ -84,8 +85,8 @@ public sealed class InvokeBashRmdirCommand : PSCmdlet
             operands.Add(a);
         }
 
-        if (!pastDoubleDash &&
-            FileSystemHelpers.TryWriteOperandOptionError(this, "rmdir", operands, RmdirValidButUnsupported))
+        var rmdirToClassify = preDashCount < 0 ? operands : operands.GetRange(0, preDashCount);
+        if (FileSystemHelpers.TryWriteOperandOptionError(this, "rmdir", rmdirToClassify, RmdirValidButUnsupported))
             return;
 
         if (operands.Count == 0)

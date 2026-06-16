@@ -459,6 +459,21 @@ public sealed class InvokeBashGzipCommand : PSCmdlet
                 }
                 else
                 {
+                    // GNU gzip refuses to compress a file that already ends in the
+                    // active suffix ("already has .gz suffix -- unchanged"). Without
+                    // this guard `gzip -r` over a tree containing *.gz members would
+                    // re-compress each into *.gz.gz and delete the original. The
+                    // -c/stdout path is exempt (it never renames/deletes, matching GNU).
+                    if (!toStdout && filePath.EndsWith(suffix, StringComparison.Ordinal))
+                    {
+                        if (!quiet)
+                        {
+                            FileSystemHelpers.WriteBashError(this,
+                                $"gzip: {filePath.Replace('\\', '/')} already has {suffix} suffix -- unchanged");
+                        }
+                        continue;
+                    }
+
                     CompressionLevel compLevel = level switch
                     {
                         <= 1 => CompressionLevel.Fastest,

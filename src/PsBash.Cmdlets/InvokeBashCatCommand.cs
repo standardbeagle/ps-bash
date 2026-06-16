@@ -122,8 +122,13 @@ public sealed class InvokeBashCatCommand : PSCmdlet
         bool longShowEnds = false;
         {
             var translated = new List<string>(args.Length);
+            bool sawDashDash = false;
             foreach (var a in args)
             {
+                // After a bare `--`, every token is a filename (GNU) — copy verbatim,
+                // never translate a file literally named like a long flag.
+                if (sawDashDash) { translated.Add(a); continue; }
+                if (a == "--") { sawDashDash = true; translated.Add(a); continue; }
                 switch (a)
                 {
                     case "--number": translated.Add("-n"); break;

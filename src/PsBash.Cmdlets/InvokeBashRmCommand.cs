@@ -80,13 +80,14 @@ public sealed class InvokeBashRmCommand : PSCmdlet
         bool verbose = v.IsPresent;
         var operands = new List<string>();
         bool pastDoubleDash = false;
+        int preDashCount = -1;
 
         foreach (var a in args)
         {
             if (pastDoubleDash) { operands.Add(a); continue; }
             switch (a)
             {
-                case "--": pastDoubleDash = true; break;
+                case "--": pastDoubleDash = true; preDashCount = operands.Count; break;
                 case "-r": case "-R": case "--recursive": recursive = true; break;
                 case "-f": case "--force": force = true; break;
                 case "-v": case "--verbose": verbose = true; break;
@@ -113,9 +114,10 @@ public sealed class InvokeBashRmCommand : PSCmdlet
 
         // Classify an unknown / valid-but-unsupported option-looking token before
         // it is treated as a target. rm -f does NOT suppress a usage error, so the
-        // classification runs regardless of -f (matching GNU rm).
-        if (!pastDoubleDash &&
-            FileSystemHelpers.TryWriteOperandOptionError(this, "rm", operands, RmValidButUnsupported))
+        // classification runs regardless of -f (matching GNU rm). Only pre-`--`
+        // operands are classified; a `-leading` filename after `--` passes through.
+        var rmToClassify = preDashCount < 0 ? operands : operands.GetRange(0, preDashCount);
+        if (FileSystemHelpers.TryWriteOperandOptionError(this, "rm", rmToClassify, RmValidButUnsupported))
             return;
 
         if (operands.Count == 0)

@@ -432,16 +432,26 @@ public sealed class InvokeBashDuCommand : PSCmdlet
     private static bool IsSegmentExcluded(string fullName, string root, List<WildcardPattern> pats)
     {
         if (pats.Count == 0) return false;
-        string rel = fullName.Length > root.Length
-            && fullName.StartsWith(root, StringComparison.Ordinal)
-            ? fullName.Substring(root.Length)
-            : fullName;
-        foreach (var seg in rel.Split('\\', '/'))
+        // Runs once per directory and once per file in the walk, so avoid the
+        // per-call string[] that String.Split allocates: scan segment boundaries
+        // manually below root and materialize a segment only to test it (the
+        // WildcardPattern API takes a string), short-circuiting on first match.
+        int i = (fullName.Length > root.Length
+                 && fullName.StartsWith(root, StringComparison.Ordinal))
+            ? root.Length : 0;
+        int n = fullName.Length;
+        while (i < n)
         {
-            if (seg.Length == 0) continue;
-            foreach (var w in pats)
+            while (i < n && (fullName[i] == '\\' || fullName[i] == '/')) i++;
+            int segStart = i;
+            while (i < n && fullName[i] != '\\' && fullName[i] != '/') i++;
+            if (i > segStart)
             {
-                if (w.IsMatch(seg)) return true;
+                string seg = fullName.Substring(segStart, i - segStart);
+                foreach (var w in pats)
+                {
+                    if (w.IsMatch(seg)) return true;
+                }
             }
         }
         return false;

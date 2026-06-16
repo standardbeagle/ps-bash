@@ -64,13 +64,14 @@ public sealed class InvokeBashMvCommand : PSCmdlet
         bool verbose = v.IsPresent;
         var operands = new List<string>();
         bool pastDoubleDash = false;
+        int preDashCount = -1;
 
         foreach (var a in args)
         {
             if (pastDoubleDash) { operands.Add(a); continue; }
             switch (a)
             {
-                case "--": pastDoubleDash = true; break;
+                case "--": pastDoubleDash = true; preDashCount = operands.Count; break;
                 case "-n": case "--no-clobber": noClobber = true; break;
                 case "-f": case "--force": /* no-op: File.Move(overwrite:true) already forces */ break;
                 case "-v": case "--verbose": verbose = true; break;
@@ -78,8 +79,8 @@ public sealed class InvokeBashMvCommand : PSCmdlet
             }
         }
 
-        if (!pastDoubleDash &&
-            FileSystemHelpers.TryWriteOperandOptionError(this, "mv", operands, MvValidButUnsupported))
+        var mvToClassify = preDashCount < 0 ? operands : operands.GetRange(0, preDashCount);
+        if (FileSystemHelpers.TryWriteOperandOptionError(this, "mv", mvToClassify, MvValidButUnsupported))
             return;
 
         if (operands.Count < 2)

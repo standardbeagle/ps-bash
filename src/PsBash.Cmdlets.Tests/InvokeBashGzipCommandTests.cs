@@ -319,6 +319,42 @@ public class InvokeBashGzipCommandTests : IDisposable, IClassFixture<SharedPwshF
     }
 
     [Fact]
+    public void Gzip_AlreadyHasSuffix_RefusedUnchanged()
+    {
+        // GNU refuses to compress a file already ending in the suffix. It must
+        // NOT produce foo.gz.gz nor delete foo.gz.
+        string file = Path.Combine(_tmpDir, "done.txt");
+        File.WriteAllText(file, "payload");
+        RunLines($"Invoke-BashGzip '{PsQuote(file)}'");
+        Assert.True(File.Exists(file + ".gz"));
+
+        var (_, errs) = RunWithErrors($"Invoke-BashGzip '{PsQuote(file + ".gz")}' 2>$null");
+        Assert.False(File.Exists(file + ".gz.gz"), "must not double-compress");
+        Assert.True(File.Exists(file + ".gz"), "must not delete the already-compressed file");
+        Assert.Contains(errs, m => m.Contains("already has", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    public void Gzip_Recursive_SkipsAlreadyCompressedMembers()
+    {
+        // Regression: `gzip -r` over a tree containing a *.gz member must skip it
+        // (not re-compress to *.gz.gz and delete the original).
+        var dir = Path.Combine(_tmpDir, "rtree");
+        Directory.CreateDirectory(dir);
+        var plain = Path.Combine(dir, "p.txt");
+        var already = Path.Combine(dir, "c.txt.gz");
+        File.WriteAllText(plain, "plain");
+        File.WriteAllText(already, "pretend-gz");
+
+        RunLines($"Invoke-BashGzip -r -q '{PsQuote(dir)}'");
+
+        Assert.True(File.Exists(plain + ".gz"), "plain file compressed");
+        Assert.False(File.Exists(plain), "plain source removed");
+        Assert.True(File.Exists(already), "existing .gz left in place");
+        Assert.False(File.Exists(already + ".gz"), "existing .gz not double-compressed");
+    }
+
+    [Fact]
     public void Gzip_CustomSuffix_RoundTrips()
     {
         // -S SUF: compress appends the custom suffix; -d -S SUF strips it.

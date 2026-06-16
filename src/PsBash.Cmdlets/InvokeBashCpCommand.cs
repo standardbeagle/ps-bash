@@ -92,11 +92,12 @@ public sealed class InvokeBashCpCommand : PSCmdlet
         bool update = false;
         var operands = new List<string>();
         bool pastDoubleDash = false;
+        int preDashCount = -1; // count of operands collected before `--` (-1 = no `--`)
 
         foreach (var a in args)
         {
             if (pastDoubleDash) { operands.Add(a); continue; }
-            if (a == "--") { pastDoubleDash = true; continue; }
+            if (a == "--") { pastDoubleDash = true; preDashCount = operands.Count; continue; }
 
             // De-bundle combined short flags (-rf, -rpv) — only when every char is a known
             // cp short flag, so unknown tokens (and filenames starting with '-') stay operands.
@@ -135,9 +136,11 @@ public sealed class InvokeBashCpCommand : PSCmdlet
 
         // An option-looking token that survived flag parsing is an unknown or
         // valid-but-unsupported flag, not a file — classify it (exit 2) before it
-        // is mistaken for a source/dest path. Tokens after `--` are real operands.
-        if (!pastDoubleDash &&
-            FileSystemHelpers.TryWriteOperandOptionError(this, "cp", operands, CpValidButUnsupported))
+        // is mistaken for a source/dest path. Only operands collected BEFORE `--`
+        // are classified; tokens after `--` are real filenames (even if they look
+        // like flags), so a `-leading` file passes through.
+        var cpToClassify = preDashCount < 0 ? operands : operands.GetRange(0, preDashCount);
+        if (FileSystemHelpers.TryWriteOperandOptionError(this, "cp", cpToClassify, CpValidButUnsupported))
             return;
 
         if (operands.Count < 2)

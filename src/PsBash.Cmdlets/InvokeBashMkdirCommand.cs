@@ -77,10 +77,11 @@ public sealed class InvokeBashMkdirCommand : PSCmdlet
 
         var operands = new List<string>();
         bool pastDoubleDash = false;
+        int preDashCount = -1;
         foreach (var a in args)
         {
             if (pastDoubleDash) { operands.Add(a); continue; }
-            if (a == "--") { pastDoubleDash = true; continue; }
+            if (a == "--") { pastDoubleDash = true; preDashCount = operands.Count; continue; }
             if (a == "-p" || a == "--parents") { parents = true; continue; }
             if (a == "-v" || a == "--verbose") { verbose = true; continue; }
             // De-bundle a pure -p/-v short bundle (e.g. -pv, -vp).
@@ -97,8 +98,8 @@ public sealed class InvokeBashMkdirCommand : PSCmdlet
             operands.Add(a);
         }
 
-        if (!pastDoubleDash &&
-            FileSystemHelpers.TryWriteOperandOptionError(this, "mkdir", operands, MkdirValidButUnsupported))
+        var mkdirToClassify = preDashCount < 0 ? operands : operands.GetRange(0, preDashCount);
+        if (FileSystemHelpers.TryWriteOperandOptionError(this, "mkdir", mkdirToClassify, MkdirValidButUnsupported))
             return;
 
         if (operands.Count == 0)
