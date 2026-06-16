@@ -57,6 +57,19 @@ public class InvokeBashTarCommandTests : IDisposable, IClassFixture<SharedPwshFi
 
     private static string PsQuote(string p) => p.Replace("'", "''");
 
+    private (string[] outLines, string[] errors) RunWithErrors(string script)
+    {
+        var pwsh = _fixture.AcquireFresh();
+        pwsh.AddScript("$ErrorActionPreference='Continue'").Invoke();
+        pwsh.Commands.Clear();
+        var result = pwsh.AddScript(script).Invoke();
+        var errs = pwsh.Streams.Error.Select(e => e.Exception?.Message ?? e.ToString()).ToArray();
+        pwsh.Commands.Clear();
+        var outLines = result.Select(o =>
+            o?.Properties["BashText"]?.Value as string ?? o?.ToString() ?? "").ToArray();
+        return (outLines, errs);
+    }
+
     [Fact]
     public void Tar_CreateAndList_RoundTrip_ListsCreatedFile()
     {
@@ -427,5 +440,29 @@ public class InvokeBashTarCommandTests : IDisposable, IClassFixture<SharedPwshFi
 
         Assert.False(File.Exists(Path.Combine(dest, "link.txt")),
             "an escaping symlink must not be created");
+    }
+
+    // ===================== Unsupported-flag classifier =====================
+
+    [Fact]
+    public void Tar_ValidButUnsupportedLongFlag_ReportsNotSupported()
+    {
+        // --bzip2 is a valid GNU tar option ps-bash does not implement.
+        // It lands in the operand list and the classifier must report
+        // "recognized but not supported" rather than treating it as a filename.
+        // (Short -j is silently consumed by the bundle handler — only long form reachable here.)
+        string arc = Path.Combine(_tmpDir, "dummy.tar");
+        var (_, errs) = RunWithErrors($"Invoke-BashTar -xf '{PsQuote(arc)}' --bzip2 2>$null");
+        Assert.Contains(errs, m => m.Contains("not supported", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    public void Tar_UnrecognizedLongOption_BashParityMessage()
+    {
+        string arc = Path.Combine(_tmpDir, "dummy2.tar");
+        var (_, errs) = RunWithErrors($"Invoke-BashTar -xf '{PsQuote(arc)}' --bogus 2>$null");
+        Assert.Contains(errs, m =>
+            m.Contains("unrecognized option", StringComparison.OrdinalIgnoreCase)
+            && m.Contains("--bogus", StringComparison.Ordinal));
     }
 }

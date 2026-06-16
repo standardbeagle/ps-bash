@@ -57,6 +57,19 @@ public class InvokeBashGzipCommandTests : IDisposable, IClassFixture<SharedPwshF
 
     private static string PsQuote(string p) => p.Replace("'", "''");
 
+    private (string[] outLines, string[] errors) RunWithErrors(string script)
+    {
+        var pwsh = _fixture.AcquireFresh();
+        pwsh.AddScript("$ErrorActionPreference='Continue'").Invoke();
+        pwsh.Commands.Clear();
+        var result = pwsh.AddScript(script).Invoke();
+        var errs = pwsh.Streams.Error.Select(e => e.Exception?.Message ?? e.ToString()).ToArray();
+        pwsh.Commands.Clear();
+        var outLines = result.Select(o =>
+            o?.Properties["BashText"]?.Value as string ?? o?.ToString() ?? "").ToArray();
+        return (outLines, errs);
+    }
+
     [Fact]
     public void Gzip_CompressDecompress_RoundTrip_RestoresFile()
     {
@@ -281,5 +294,27 @@ public class InvokeBashGzipCommandTests : IDisposable, IClassFixture<SharedPwshF
         {
             if (File.Exists(file)) { File.SetAttributes(file, FileAttributes.Normal); }
         }
+    }
+
+    // ===================== Unsupported-flag classifier =====================
+
+    [Fact]
+    public void Gzip_ValidButUnsupportedLongFlag_ReportsNotSupported()
+    {
+        // --recursive is a valid GNU gzip option ps-bash does not implement.
+        // A long flag that falls through the parser to the operand list must
+        // be classified as "recognized but not supported", not treated as a filename.
+        // (Short -r is silently consumed in the bundle handler — only long form reachable here.)
+        var (_, errs) = RunWithErrors("Invoke-BashGzip --recursive 2>$null");
+        Assert.Contains(errs, m => m.Contains("not supported", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    public void Gzip_UnrecognizedLongOption_BashParityMessage()
+    {
+        var (_, errs) = RunWithErrors("Invoke-BashGzip --bogus 2>$null");
+        Assert.Contains(errs, m =>
+            m.Contains("unrecognized option", StringComparison.OrdinalIgnoreCase)
+            && m.Contains("--bogus", StringComparison.Ordinal));
     }
 }

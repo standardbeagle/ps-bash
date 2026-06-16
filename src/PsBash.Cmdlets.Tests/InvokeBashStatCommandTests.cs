@@ -66,6 +66,19 @@ public class InvokeBashStatCommandTests : IDisposable, IClassFixture<SharedPwshF
 
     private static string Esc(string p) => p.Replace("\\", "\\\\");
 
+    private (string[] outLines, string[] errors) RunWithErrors(string script)
+    {
+        var pwsh = _fixture.AcquireFresh();
+        pwsh.AddScript("$ErrorActionPreference='Continue'").Invoke();
+        pwsh.Commands.Clear();
+        var result = pwsh.AddScript(script).Invoke();
+        var errs = pwsh.Streams.Error.Select(e => e.Exception?.Message ?? e.ToString()).ToArray();
+        pwsh.Commands.Clear();
+        var outLines = result.Select(o =>
+            o?.Properties["BashText"]?.Value as string ?? o?.ToString() ?? "").ToArray();
+        return (outLines, errs);
+    }
+
     // ===================== Default multi-line output =====================
 
     [Fact]
@@ -290,5 +303,30 @@ public class InvokeBashStatCommandTests : IDisposable, IClassFixture<SharedPwshF
         var results = Run($"Invoke-BashStat '{Esc(f)}'");
         Assert.Single(results);
         Assert.Contains("PsBash.StatEntry", results[0].TypeNames);
+    }
+
+    // ===================== Unsupported-flag classifier =====================
+
+    [Fact]
+    public void Stat_ValidButUnsupportedFlag_ReportsNotSupported()
+    {
+        // --dereference is a valid GNU stat option ps-bash does not implement.
+        // It must not be treated as a filename — the classifier catches it and
+        // emits "recognized but not supported", exit 2.
+        var f = Mk("derefsrc.txt", "x");
+        var (_, errs) = RunWithErrors($"Invoke-BashStat --dereference '{Esc(f)}' 2>$null");
+        Assert.Contains(errs, m => m.Contains("not supported", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    public void Stat_UnrecognizedLongOption_BashParityMessage()
+    {
+        // A completely unknown flag gets the "unrecognized option" message and
+        // must include the token in the error so the caller knows what to fix.
+        var f = Mk("unrecsrc.txt", "x");
+        var (_, errs) = RunWithErrors($"Invoke-BashStat --bogus '{Esc(f)}' 2>$null");
+        Assert.Contains(errs, m =>
+            m.Contains("unrecognized option", StringComparison.OrdinalIgnoreCase)
+            && m.Contains("--bogus", StringComparison.Ordinal));
     }
 }

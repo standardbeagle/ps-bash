@@ -63,6 +63,17 @@ namespace PsBash.Cmdlets;
 [OutputType(typeof(string))]
 public sealed class InvokeBashTarCommand : PSCmdlet
 {
+    /// <summary>Valid GNU <c>tar</c> options ps-bash does not implement (see
+    /// <see cref="FileSystemHelpers.TryWriteOperandOptionError"/>). Short forms
+    /// (<c>-j</c>, <c>-J</c>, etc.) are silently consumed by the bundle handler and
+    /// will not reach the operand list; only their long-form equivalents are catchable
+    /// at this layer.</summary>
+    private static readonly HashSet<string> TarValidButUnsupported = new(StringComparer.Ordinal)
+    {
+        "-j", "--bzip2", "-J", "--xz", "-a", "--auto-compress",
+        "--overwrite", "--keep-old-files", "--touch", "--wildcards", "--no-wildcards",
+    };
+
     [Parameter(ValueFromRemainingArguments = true)]
     public string[]? Arguments { get; set; }
 
@@ -297,6 +308,9 @@ public sealed class InvokeBashTarCommand : PSCmdlet
             FileSystemHelpers.WriteBashError(this, "tar: you must specify -f archive");
             return;
         }
+
+        if (FileSystemHelpers.TryWriteOperandOptionError(this, "tar", operands, TarValidButUnsupported))
+            return;
 
         if (create)
         {

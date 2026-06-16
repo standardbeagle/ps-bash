@@ -64,6 +64,17 @@ namespace PsBash.Cmdlets;
 [OutputType(typeof(string))]
 public sealed class InvokeBashGzipCommand : PSCmdlet
 {
+    /// <summary>Valid GNU <c>gzip</c> options ps-bash does not implement (see
+    /// <see cref="FileSystemHelpers.TryWriteOperandOptionError"/>). Short forms
+    /// (<c>-r</c>, <c>-n</c>, etc.) are silently consumed by the bundle handler and
+    /// will not reach the operand list; only their long-form equivalents are catchable
+    /// at this layer.</summary>
+    private static readonly HashSet<string> GzipValidButUnsupported = new(StringComparer.Ordinal)
+    {
+        "-r", "--recursive", "-n", "--no-name", "-N", "--name",
+        "-S", "--suffix", "-q", "--quiet", "-a", "--ascii",
+    };
+
     [Parameter(ValueFromRemainingArguments = true)]
     public string[]? Arguments { get; set; }
 
@@ -180,6 +191,9 @@ public sealed class InvokeBashGzipCommand : PSCmdlet
             operands.Add(a);
             i++;
         }
+
+        if (FileSystemHelpers.TryWriteOperandOptionError(this, "gzip", operands, GzipValidButUnsupported))
+            return;
 
         if (operands.Count == 0)
         {

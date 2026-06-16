@@ -71,6 +71,13 @@ namespace PsBash.Cmdlets;
 [OutputType(typeof(PSObject))]
 public sealed class InvokeBashStatCommand : PSCmdlet
 {
+    /// <summary>Valid GNU <c>stat</c> options ps-bash does not implement (see
+    /// <see cref="FileSystemHelpers.TryWriteOperandOptionError"/>).</summary>
+    private static readonly HashSet<string> StatValidButUnsupported = new(StringComparer.Ordinal)
+    {
+        "-L", "--dereference", "-f", "--file-system", "--cached", "-Z", "--context",
+    };
+
     [Parameter(ValueFromRemainingArguments = true)]
     public string[]? Arguments { get; set; }
 
@@ -151,6 +158,9 @@ public sealed class InvokeBashStatCommand : PSCmdlet
             FileSystemHelpers.SetLastExitCode(this, 1);
             return;
         }
+
+        if (FileSystemHelpers.TryWriteOperandOptionError(this, "stat", operands, StatValidButUnsupported))
+            return;
 
         bool hadError = false;
 

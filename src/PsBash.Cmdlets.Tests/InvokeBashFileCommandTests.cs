@@ -57,6 +57,19 @@ public class InvokeBashFileCommandTests : IDisposable, IClassFixture<SharedPwshF
 
     private static string Esc(string path) => path.Replace("'", "''");
 
+    private (string[] outLines, string[] errors) RunWithErrors(string script)
+    {
+        var pwsh = _fixture.AcquireFresh();
+        pwsh.AddScript("$ErrorActionPreference='Continue'").Invoke();
+        pwsh.Commands.Clear();
+        var result = pwsh.AddScript(script).Invoke();
+        var errs = pwsh.Streams.Error.Select(e => e.Exception?.Message ?? e.ToString()).ToArray();
+        pwsh.Commands.Clear();
+        var outLines = result.Select(o =>
+            o?.Properties["BashText"]?.Value as string ?? o?.ToString() ?? "").ToArray();
+        return (outLines, errs);
+    }
+
     [Fact]
     public void File_PlainAsciiText_EmitsAsciiText()
     {
@@ -209,5 +222,29 @@ public class InvokeBashFileCommandTests : IDisposable, IClassFixture<SharedPwshF
         var (_, lines) = Run($"Invoke-BashFile -b '{Esc(weirdPath)}'");
         Assert.Single(lines);
         Assert.Equal("ASCII text", lines[0]);
+    }
+
+    // ===================== Unsupported-flag classifier =====================
+
+    [Fact]
+    public void File_ValidButUnsupportedFlag_ReportsNotSupported()
+    {
+        // --keep-going is a valid GNU file option ps-bash does not implement.
+        // It must not be silently ignored or treated as a filename.
+        var f = Path.Combine(_tmpDir, "kgsrc.txt");
+        File.WriteAllText(f, "hello\n");
+        var (_, errs) = RunWithErrors($"Invoke-BashFile --keep-going '{Esc(f)}' 2>$null");
+        Assert.Contains(errs, m => m.Contains("not supported", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    public void File_UnrecognizedLongOption_BashParityMessage()
+    {
+        var f = Path.Combine(_tmpDir, "unrecsrc.txt");
+        File.WriteAllText(f, "hello\n");
+        var (_, errs) = RunWithErrors($"Invoke-BashFile --bogus '{Esc(f)}' 2>$null");
+        Assert.Contains(errs, m =>
+            m.Contains("unrecognized option", StringComparison.OrdinalIgnoreCase)
+            && m.Contains("--bogus", StringComparison.Ordinal));
     }
 }

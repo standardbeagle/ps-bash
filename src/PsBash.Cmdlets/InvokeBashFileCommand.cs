@@ -53,6 +53,14 @@ namespace PsBash.Cmdlets;
 [OutputType(typeof(PSObject))]
 public sealed class InvokeBashFileCommand : PSCmdlet
 {
+    /// <summary>Valid GNU <c>file</c> options ps-bash does not implement (see
+    /// <see cref="FileSystemHelpers.TryWriteOperandOptionError"/>).</summary>
+    private static readonly HashSet<string> FileValidButUnsupported = new(StringComparer.Ordinal)
+    {
+        "-z", "--uncompress", "-s", "--special-files", "-k", "--keep-going",
+        "--mime-type", "--mime-encoding", "-f", "--files-from", "-r", "--raw",
+    };
+
     /// <summary>
     /// GNU file's <c>-i</c> (<c>--mime</c>). <c>-i</c> prefix-collides with
     /// <c>-InformationAction</c> / <c>-InformationVariable</c>, so it MUST be
@@ -112,6 +120,9 @@ public sealed class InvokeBashFileCommand : PSCmdlet
             }
             operands.Add(arg);
         }
+
+        if (FileSystemHelpers.TryWriteOperandOptionError(this, "file", operands, FileValidButUnsupported))
+            return;
 
         foreach (var raw in operands)
         {
