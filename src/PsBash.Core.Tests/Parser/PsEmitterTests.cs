@@ -1498,7 +1498,9 @@ public class PsEmitterTests
     {
         var result = PsEmitter.Transpile("[[ $var == \"foo\" ]]");
 
-        Assert.Equal("$(if (($env:var -eq \"foo\")) { $global:LASTEXITCODE = 0 } else { $global:LASTEXITCODE = 1 })", result);
+        // Literal operands are single-quoted (equivalent to "foo" for comparison,
+        // and avoids accidental PowerShell interpolation).
+        Assert.Equal("$(if (($env:var -eq 'foo')) { $global:LASTEXITCODE = 0 } else { $global:LASTEXITCODE = 1 })", result);
     }
 
     [Fact]
@@ -1538,7 +1540,7 @@ public class PsEmitterTests
     {
         var result = PsEmitter.Transpile("[[ $a == \"x\" || $b == \"y\" ]]");
 
-        Assert.Equal("$(if ((($env:a -eq \"x\") -or ($env:b -eq \"y\"))) { $global:LASTEXITCODE = 0 } else { $global:LASTEXITCODE = 1 })", result);
+        Assert.Equal("$(if ((($env:a -eq 'x') -or ($env:b -eq 'y'))) { $global:LASTEXITCODE = 0 } else { $global:LASTEXITCODE = 1 })", result);
     }
 
     [Fact]
@@ -1546,8 +1548,24 @@ public class PsEmitterTests
     {
         var result = PsEmitter.Transpile("[[ $a != \"bar\" ]]");
 
-        Assert.Equal("$(if (($env:a -ne \"bar\")) { $global:LASTEXITCODE = 0 } else { $global:LASTEXITCODE = 1 })", result);
+        Assert.Equal("$(if (($env:a -ne 'bar')) { $global:LASTEXITCODE = 0 } else { $global:LASTEXITCODE = 1 })", result);
     }
+
+    [Fact]
+    public void Transpile_TestBareStringLiterals_AreQuotedNotBarewords()
+    {
+        // Regression: `[ abc = abc ]` emitted `(abc -eq abc)` — bare `abc` ran as
+        // a PowerShell command ("command not found"). Literal operands must be
+        // single-quoted strings. Numeric operands stay bare for numeric compares.
+        Assert.Contains("'abc' -eq 'abc'", PsEmitter.Transpile("[ abc = abc ]"));
+        Assert.Contains("'abc' -ne 'xyz'", PsEmitter.Transpile("[ abc != xyz ]"));
+        Assert.Contains("$env:x -eq 'abc'", PsEmitter.Transpile("x=1; [ $x = abc ]"));
+        Assert.Contains("5 -eq 5", PsEmitter.Transpile("[ 5 -eq 5 ]"));   // numbers stay bare
+    }
+
+    [Fact]
+    public void Transpile_TestBareLiteral_ZeroLength()
+        => Assert.Contains("[string]::IsNullOrEmpty('abc')", PsEmitter.Transpile("[ -z abc ]"));
 
     [Fact]
     public void Transpile_ExtendedLessThan_EmitsStringCompare()

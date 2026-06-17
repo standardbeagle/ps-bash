@@ -1118,26 +1118,27 @@ public static class PsEmitter
             if (flag == "-e")
                 return $"Test-Path \"{EmitWord(words[1])}\"";
             if (flag == "-z")
-                return $"[string]::IsNullOrEmpty({EmitTestArg(words[1])})";
+                return $"[string]::IsNullOrEmpty({EmitTestOperand(words[1])})";
             if (flag == "-n")
-                return $"-not [string]::IsNullOrEmpty({EmitTestArg(words[1])})";
+                return $"-not [string]::IsNullOrEmpty({EmitTestOperand(words[1])})";
         }
 
         if (words.Length == 3)
         {
-            var lhs = EmitWord(words[0]);
+            var lhs = EmitTestOperand(words[0]);
             var op = GetLiteralValue(words[1]);
-            var rhs = EmitWord(words[2]);
 
+            // Glob/regex RHS build their own single-quoted pattern from the
+            // stripped literal; everything else compares two quoted operands.
             if (op == "=~")
-                return $"{lhs} -match '{rhs}'";
+                return $"{lhs} -match '{StripQuotes(EmitWord(words[2]))}'";
 
             if (op is "==" or "=")
             {
-                var unquoted = StripQuotes(rhs);
+                var unquoted = StripQuotes(EmitWord(words[2]));
                 if (HasGlobChars(unquoted))
                     return $"{lhs} -like '{unquoted}'";
-                return $"{lhs} -eq {rhs}";
+                return $"{lhs} -eq {EmitTestOperand(words[2])}";
             }
 
             // In [[ ]], < and > are lexicographic string comparisons.
@@ -1145,7 +1146,7 @@ public static class PsEmitter
             if (extended && op is "<" or ">")
             {
                 var cmpOp = op == "<" ? "-lt" : "-gt";
-                return $"[string]::Compare({lhs}, {rhs}, [System.StringComparison]::Ordinal) {cmpOp} 0";
+                return $"[string]::Compare({lhs}, {EmitTestOperand(words[2])}, [System.StringComparison]::Ordinal) {cmpOp} 0";
             }
 
             var psOp = op switch
@@ -1155,17 +1156,43 @@ public static class PsEmitter
                 ">" => "-gt",
                 _ => op,
             };
-            return $"{lhs} {psOp} {rhs}";
+            return $"{lhs} {psOp} {EmitTestOperand(words[2])}";
         }
 
-        // Fallback: emit the inner words as a plain expression.
+        // Fallback (e.g. `[ str ]` = non-empty test): emit each operand quoted so
+        // a bare literal is a PowerShell string, not a command invocation.
         var sb = new StringBuilder();
         for (int i = 0; i < words.Length; i++)
         {
             if (i > 0) sb.Append(' ');
-            sb.Append(EmitWord(words[i]));
+            sb.Append(EmitTestOperand(words[i]));
         }
         return sb.ToString();
+    }
+
+    /// <summary>
+    /// Emit a <c>[ ]</c>/<c>[[ ]]</c> operand as a PowerShell value. A bare
+    /// string literal (<c>abc</c>) MUST be single-quoted or PowerShell treats it
+    /// as a command to invoke (<c>[ abc = abc ]</c> → <c>abc -eq abc</c> →
+    /// "command not found"). Variable references (<c>$env:x</c>), already-quoted
+    /// strings, subexpressions, and pure integers (for numeric <c>-eq</c>/<c>-lt</c>)
+    /// pass through unquoted. Builds on <see cref="EmitTestArg"/> (which unwraps a
+    /// double-quoted word and quotes it if it is a bare literal).
+    /// </summary>
+    private static string EmitTestOperand(CompoundWord word)
+        => QuoteIfBareLiteral(EmitTestArg(word));
+
+    private static string QuoteIfBareLiteral(string emitted)
+    {
+        if (emitted.Length == 0) return "''";
+        char c = emitted[0];
+        // $var / "already" / 'already' / (subexpr) / @(array) are valid PS values.
+        if (c is '$' or '"' or '\'' or '(' or '@') return emitted;
+        // A pure integer stays bare so numeric -eq/-ne/-lt/-gt compare as numbers.
+        if (long.TryParse(emitted, System.Globalization.NumberStyles.AllowLeadingSign,
+                System.Globalization.CultureInfo.InvariantCulture, out _))
+            return emitted;
+        return "'" + emitted.Replace("'", "''") + "'";
     }
 
     /// <summary>
