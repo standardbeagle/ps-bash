@@ -1,0 +1,30 @@
+# ~/.psbashrc — PsBash interactive shell startup file
+# ---------------------------------------------------------------------------
+# Copy to  ~/.psbashrc  (override the home dir with PSBASH_HOME).
+# The shell sources this on launch; alias / unalias / complete lines are applied
+# to the interactive tables, everything else is transpiled and run. This is the
+# same path used by interactive `source FILE`, so these land live immediately.
+# ---------------------------------------------------------------------------
+
+# --- Aliases (full bash syntax allowed — pipes, redirects, the lot) ---------
+alias ll='ls -la'
+alias la='ls -A'
+alias gs='git status'
+alias gl='git log --oneline | head -20'      # pipes work in shell mode
+alias serve='python -m http.server'
+
+# --- Environment ------------------------------------------------------------
+export EDITOR=code
+export PAGER=less
+
+# --- Programmable completion (Tier 1: static word lists) --------------------
+# After this, `svc st<Tab>` offers start / status / stop / restart.
+complete -W 'start stop restart status reload' svc
+complete -W 'up down build logs ps exec' dc      # e.g. a docker-compose wrapper
+
+# --- Prompt hook: set the window title every prompt -------------------------
+# PROMPT_COMMAND is translated into a registered prompt hook.
+PROMPT_COMMAND='echo -ne "\033]0;ps-bash: ${PWD}\007"'
+
+# --- on-cd hooks (direnv / fnm style) — see ../05-hooks for the API ---------
+# Register-BashChpwdHook -Name 'fnm' -ScriptBlock { fnm use --silent-if-unchanged }

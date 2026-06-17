@@ -75,6 +75,53 @@ The output looks like bash. The pipeline carries typed objects. You get both.
 
 Same command. Typed objects. No string parsing.
 
+## More than commands — a whole shell
+
+PsBash also ships a standalone interactive shell: type bash, run it on a warm PowerShell
+runspace, and get the line-editing, history, and completion experience a bash user expects —
+on every platform.
+
+<CardGrid>
+  <Card title="Fuzzy Ctrl-R" icon="magnifier">
+    A full-screen, ranked history search — closer to fzf/atuin than bash. Boosts commands run
+    in this directory, recently, and often. [History search →](/ps-bash/guides/interactive-shell/#reverse-history-search-ctrl-r)
+  </Card>
+  <Card title="Smart cd: z & zi" icon="rocket">
+    Zoxide-style jumping, built in. `z core` lands on the directory you most likely mean,
+    ranked by frecency. [Directory jumping →](/ps-bash/guides/directory-jumping/)
+  </Card>
+  <Card title="Real completion" icon="list-format">
+    Bash flags **and** PowerShell cmdlet parameters, ValidateSet values, and a floating
+    flag-doc panel with an `F1` man-page browser. [Completion →](/ps-bash/guides/interactive-shell/#tab-completion)
+  </Card>
+  <Card title="!! and aliases" icon="seti:shell">
+    `!!`, `!$`, `^old^new` bang-history in PowerShell, plus full-syntax bash `alias` (pipes
+    and all). [Bang history →](/ps-bash/guides/interactive-shell/#history-expansion-bang-commands)
+  </Card>
+</CardGrid>
+
+## Bash in, *styled objects* out
+
+Pipe a bash command's typed output into `Format-Styled` and theme your terminal with real
+**CSS** — selectors, classes, colors, alignment. Or open it as an interactive, navigable TUI.
+
+```powershell
+ps aux | Format-Styled -Style ps        # CSS-themed process table
+ping example.com | Show-Styled          # full-screen, auto-themed by latency
+ls -la | browse                         # arrow-key file workbench, with actions
+```
+
+<CardGrid>
+  <Card title="CSS-styled output" icon="seti:css">
+    Ten built-in stylesheets, custom themes from `~/.config/ps-bash/styles/`, `NO_COLOR`-aware.
+    [Styled output →](/ps-bash/guides/styled-output/)
+  </Card>
+  <Card title="Interactive TUIs from a .psm1" icon="open-book">
+    Build a navigable workbench by writing a PowerShell module — adapters and actions, no C#,
+    no TUI framework. [Interactive TUIs →](/ps-bash/guides/interactive-tui/)
+  </Card>
+</CardGrid>
+
 ## By the Numbers
 
 <CardGrid>

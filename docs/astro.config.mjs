@@ -56,9 +56,17 @@ export default defineConfig({
           ],
         },
         {
-          label: 'Guides',
+          label: 'Interactive Shell',
           items: [
             { label: 'The Interactive Shell', slug: 'guides/interactive-shell' },
+            { label: 'Jump Anywhere: z & zi', slug: 'guides/directory-jumping' },
+            { label: 'Styled Output & CSS', slug: 'guides/styled-output' },
+            { label: 'Interactive TUIs', slug: 'guides/interactive-tui' },
+          ],
+        },
+        {
+          label: 'Guides',
+          items: [
             { label: 'Pipeline Cookbook', slug: 'guides/cookbook' },
           ],
         },

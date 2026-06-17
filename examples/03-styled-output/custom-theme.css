@@ -1,0 +1,23 @@
+/* A custom Format-Styled theme.
+ * Pass with:  ... | Format-Styled -Css path/to/custom-theme.css
+ * Or drop a file named after a built-in (e.g. default.css) into one of the
+ * theme search dirs to extend it via the cascade (later rules win):
+ *   $PSBASH_STYLE_PATH  |  ~/.config/ps-bash/styles/  |  ~/.psbash/styles/
+ *
+ * Selectors:
+ *   Kind        the object's type name, namespace stripped (FileInfo, Process)
+ *   .class      labels from the object's `class` property
+ *   #id         the object's Id, then Name
+ * Supported props: color (16 ANSI names | #rrggbb), background, font-weight,
+ *   font-style, text-decoration, text-align, overflow, plus grid/flex layout.
+ */
+
+DirectoryInfo { color: bright-blue; font-weight: bold; }
+FileInfo      { color: white; }
+
+.dir   { color: bright-blue; font-weight: bold; }
+.file  { color: white; }
+
+/* Structural classes the table sheet applies to header/numeric cells. */
+.header { font-weight: bold; text-decoration: underline; }
+.num    { text-align: right; }

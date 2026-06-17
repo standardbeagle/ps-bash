@@ -1,0 +1,128 @@
+---
+title: "Jump Anywhere: z and zi"
+description: "ps-bash's zoxide-style smart cd. z jumps to the directory you most likely mean, ranked by frecency (frequency + recency), with Tab completion and ghost-text previews sourced from the same data."
+head:
+  - tag: meta
+    attrs:
+      name: keywords
+      content: zoxide powershell, smart cd, z jump directory, frecency, ps-bash z, bash cd powershell
+---
+
+import { Tabs, TabItem, Card, CardGrid, Aside, Badge, Steps } from '@astrojs/starlight/components';
+
+Stop typing `cd ../../../projects/whatever/src`. After you've visited a directory once,
+**`z whatever`** takes you straight there. ps-bash ships a built-in, zoxide-faithful
+"smart cd" — no plugin, no separate binary, no `eval "$(zoxide init)"`.
+
+```bash
+z core        # jump to the highest-ranked dir matching "core"
+z ps src      # keywords match in order; last one must hit the final path segment
+zi core       # interactive: pick from a numbered list of matches
+z             # no args → cd ~
+```
+
+<Aside type="note">
+`z`/`zi` are part of the **interactive `ps-bash` shell** only. They're a prompt-side
+rewrite to `cd`, not a cmdlet — so `ps-bash -c "z foo"` is a documented v1 gap.
+</Aside>
+
+## What "frecency" means
+
+Every directory you `cd` into is scored by a blend of how **often** and how **recently**
+you visit it — the same algorithm zoxide uses.
+
+<CardGrid>
+  <Card title="Frequency" icon="bars">
+    Each visit bumps the directory's rank by 1. The places you live in float to the top.
+  </Card>
+  <Card title="Recency" icon="seti:clock">
+    Rank is multiplied by a recency boost: visited within the hour ×4, the day ×2, the
+    week ×0.5, older ×0.25. Yesterday's hot directory cools off on its own.
+  </Card>
+  <Card title="Self-bounding" icon="trash">
+    When the total rank crosses 9000, every entry decays ×0.9 and anything below 1 is
+    dropped. The database ages itself — it never grows without bound.
+  </Card>
+  <Card title="Self-healing" icon="approve-check">
+    Directories that no longer exist are skipped and pruned the moment a query touches
+    them. Deleted a project? It quietly disappears from your jump list.
+  </Card>
+</CardGrid>
+
+The store is a tiny SQLite database (`frecency.db`) living beside your history at
+`{PSBASH_HOME}/.psbash/`, in WAL mode for safe concurrent access.
+
+## How matching works
+
+Keywords match **in order** and **case-insensitively** anywhere in the path, with one
+rule that makes results feel intentional: the **last** keyword must match the **final
+path component**.
+
+```bash
+# Visited: ~/work/core/ps-bash, ~/work/core/strata, ~/work/api/core-svc
+
+z core          # → ~/work/core/ps-bash  (highest frecency in /core)
+z ps            # → ~/work/core/ps-bash  ("ps" hits the leaf "ps-bash")
+z work strata   # → ~/work/core/strata   ("work" then leaf "strata")
+z nope          # → ps-bash: z: no match for 'nope'
+```
+
+If you pass something that's already a real path, `z` just hands it to `cd` unchanged —
+so `z` is always a safe superset of `cd`.
+
+## `zi` — interactive pick
+
+When several directories match and you want to choose, `zi` lists them numbered by score
+and reads your selection — no `fzf` dependency:
+
+```text
+ps-bash$ zi core
+  1  ~/work/core/ps-bash      (rank 42.0)
+  2  ~/work/core/strata       (rank 18.5)
+  3  ~/personal/core-utils    (rank  3.2)
+Select: 2
+ps-bash$ cd ~/work/core/strata
+```
+
+## Tab completion and ghost text, from the same data
+
+The frecency store doesn't just power `z` — it feeds completion and inline previews for
+`cd`, `z`, and `zi` alike.
+
+| You type… | You get… |
+|-----------|----------|
+| `z ` then `Tab` | Highest-frecency directories, full paths, merged ahead of the base set |
+| `cd ` (empty) | Ghost-text preview of your single most-frecent directory |
+| `z co` then `Tab` | Directories whose **final component** matches `co`, ranked |
+| `z co` (ghost) | Completes the keyword to the matched basename (re-resolved via frecency) |
+
+<Aside type="tip">
+Completion for jump commands is **local** — it runs during the runspace warmup window,
+so it never waits on a round-trip. Literal-path tokens (`cd ./src`) defer to ordinary
+path completion, so the two never fight.
+</Aside>
+
+## It records *every* directory change
+
+Because the visit is recorded from the shell's post-command cwd sync — not from parsing
+your command — frecency captures **every** way you change directories: `cd`, `pushd`/`popd`,
+`z` itself, even a `cd` buried inside a script you ran. The write is awaited on an actual
+change, so a `z` issued immediately after a `cd` already sees the new visit.
+
+This also means `z` composes with everything else in the shell: the jump flows through the
+normal `cd` path, so `$OLDPWD`, `cd -`, and your [chpwd hooks](/ps-bash/guides/interactive-shell/#prompt--chpwd-hooks)
+(direnv, fnm, …) all fire exactly as they would for a hand-typed `cd`.
+
+## Where it lives
+
+<CardGrid>
+  <Card title="History DB" icon="seti:db">
+    `~/.psbash/history.db` — commands, cwd, exit, duration (powers Ctrl-R, ↑↓, suggestions).
+  </Card>
+  <Card title="Frecency DB" icon="seti:db">
+    `~/.psbash/frecency.db` — `dirs(path, rank, last_access)`, WAL mode (powers z/zi).
+  </Card>
+</CardGrid>
+
+Override the home directory with `PSBASH_HOME`. Both databases are local to your machine
+and never leave it.

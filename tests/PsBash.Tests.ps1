@@ -7011,3 +7011,53 @@ Describe 'Background Jobs — E2E via Transpiler' {
         }
     }
 }
+
+Describe 'Register-BrowseAdapter' {
+    BeforeEach {
+        # Snapshot + reset the registry so tests don't leak adapters into each other.
+        InModuleScope PsBash { Initialize-BrowseAdapters; $script:BrowseAdapters = $null; Initialize-BrowseAdapters }
+    }
+
+    It 'registers a custom adapter that wins over the default fallback' {
+        $act = New-BrowseAction -Name 'noop' -Description 'no-op' -Script { param($Current,[object[]]$Items) }
+        Register-BrowseAdapter -Name 'demo' -TypeNames @('Demo.Thing') -DisplayProperties @('A') -Actions @($act)
+        $obj = [PSCustomObject]@{ PSTypeName = 'Demo.Thing'; A = 1 }
+        $row = $obj | browse --list
+        $row.Adapter | Should -Be 'demo'
+    }
+
+    It 'accepts an adapter object via the pipeline' {
+        $act = New-BrowseAction -Name 'noop' -Description 'no-op' -Script { param($Current,[object[]]$Items) }
+        New-BrowseAdapter -Name 'demo2' -TypeNames @('Demo.Thing2') -Actions @($act) | Register-BrowseAdapter
+        (Get-BrowseAdapter -Name 'demo2').Name | Should -Be 'demo2'
+    }
+
+    It 'replaces an existing adapter of the same name (no duplicates)' {
+        $act = New-BrowseAction -Name 'noop' -Description 'no-op' -Script { param($Current,[object[]]$Items) }
+        Register-BrowseAdapter -Name 'demo3' -TypeNames @('Demo.A') -Actions @($act)
+        Register-BrowseAdapter -Name 'demo3' -TypeNames @('Demo.B') -Actions @($act)
+        @(Get-BrowseAdapter -Name 'demo3').Count | Should -Be 1
+        (Get-BrowseAdapter -Name 'demo3').TypeNames | Should -Be @('Demo.B')
+    }
+
+    It 'Unregister-BrowseAdapter removes a custom adapter' {
+        $act = New-BrowseAction -Name 'noop' -Description 'no-op' -Script { param($Current,[object[]]$Items) }
+        Register-BrowseAdapter -Name 'demo4' -TypeNames @('Demo.C') -Actions @($act)
+        Unregister-BrowseAdapter -Name 'demo4'
+        @(Get-BrowseAdapter -Name 'demo4').Count | Should -Be 0
+    }
+
+    It 'refuses to remove the default adapter' {
+        { Unregister-BrowseAdapter -Name 'default' } | Should -Throw
+    }
+}
+
+Describe 'Invoke-BashPs error hygiene' {
+    It 'ps aux does not emit ErrorRecords (regression: CimInstance GetOwner spam)' {
+        $Error.Clear()
+        $out  = ps aux 2>&1
+        $errs = @($out | Where-Object { $_ -is [System.Management.Automation.ErrorRecord] })
+        $errs.Count | Should -Be 0
+        @($Error).Count | Should -Be 0
+    }
+}

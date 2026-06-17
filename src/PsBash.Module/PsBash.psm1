@@ -3480,6 +3480,59 @@ function Initialize-BrowseAdapters {
     )
 }
 
+# Register a custom browse adapter so a user's module can drive the `browse`
+# workbench for its own object types. The registry ($script:BrowseAdapters)
+# lives in THIS module's scope, so a `$script:BrowseAdapters += ...` from another
+# module would write the wrong scope — this function is the supported entry point.
+# User adapters take precedence over the built-ins; the 'default' fallback stays last.
+function Register-BrowseAdapter {
+    [CmdletBinding(DefaultParameterSetName = 'Object')]
+    param(
+        [Parameter(Mandatory, ParameterSetName = 'Object', ValueFromPipeline)]
+        [PSObject]$Adapter,
+
+        [Parameter(Mandatory, ParameterSetName = 'Inline')]
+        [string]$Name,
+        [Parameter(Mandatory, ParameterSetName = 'Inline')]
+        [string[]]$TypeNames,
+        [Parameter(ParameterSetName = 'Inline')]
+        [string[]]$DisplayProperties = @(),
+        [Parameter(Mandatory, ParameterSetName = 'Inline')]
+        [object[]]$Actions
+    )
+
+    process {
+        Initialize-BrowseAdapters
+        if ($PSCmdlet.ParameterSetName -eq 'Inline') {
+            $Adapter = New-BrowseAdapter -Name $Name -TypeNames $TypeNames `
+                -DisplayProperties $DisplayProperties -Actions $Actions
+        }
+
+        $others  = @($script:BrowseAdapters | Where-Object { $_.Name -ne $Adapter.Name -and $_.Name -ne 'default' })
+        $default = @($script:BrowseAdapters | Where-Object { $_.Name -eq 'default' })
+        # Prepend the user adapter so it wins over built-ins; keep 'default' last.
+        $script:BrowseAdapters = @($Adapter) + $others + $default
+    }
+}
+
+function Get-BrowseAdapter {
+    [CmdletBinding()]
+    param([string]$Name)
+
+    Initialize-BrowseAdapters
+    if ($Name) { return @($script:BrowseAdapters | Where-Object Name -eq $Name) }
+    $script:BrowseAdapters
+}
+
+function Unregister-BrowseAdapter {
+    [CmdletBinding()]
+    param([Parameter(Mandatory)][string]$Name)
+
+    Initialize-BrowseAdapters
+    if ($Name -eq 'default') { throw "Cannot remove the 'default' browse adapter." }
+    $script:BrowseAdapters = @($script:BrowseAdapters | Where-Object { $_.Name -ne $Name })
+}
+
 function Resolve-BrowseAdapter {
     [CmdletBinding()]
     param([Parameter(ValueFromPipeline, Mandatory)][object]$InputObject)

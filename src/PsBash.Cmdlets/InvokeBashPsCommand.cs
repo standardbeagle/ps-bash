@@ -643,12 +643,21 @@ public sealed class InvokeBashPsCommand : PSCmdlet
         var dict = new Dictionary<int, (string, string, int)>();
         try
         {
-            // GetOwner() is a per-process WMI RPC roundtrip — orders of
-            // magnitude slower than the rest of the query. Only ask for it
-            // when the caller's format actually needs a user column.
-            string ownerExpr = needUser
-                ? "$u=''; try { $u = $_.GetOwner().User } catch {}; "
-                : "$u=''; ";
+            // Process owner is intentionally NOT resolved on Windows. Two reasons,
+            // both learned the hard way:
+            //   1. Correctness — the old `$_.GetOwner()` called a method that a
+            //      CimInstance does not have (that was the WMI/Get-WmiObject era),
+            //      throwing a MethodException PER PROCESS and spamming $Error 256×.
+            //   2. Performance — the correct CIM call (Invoke-CimMethod GetOwner) is
+            //      a per-process WMI RPC roundtrip; for a few hundred processes it
+            //      adds seconds-to-tens-of-seconds of latency (and can hang under WMI
+            //      pressure), which is unacceptable for a `ps`/`ps aux` invocation.
+            // Net: the user column was ALWAYS empty in practice anyway, just at the
+            // cost of 256 caught-but-recorded errors. Leave it empty, fast and clean.
+            // (`needUser` is retained for callers/format selection but no longer
+            // triggers an owner RPC. A future fast owner source could repopulate it.)
+            _ = needUser;
+            const string ownerExpr = "$u=''; ";
             var results = InvokeCommand.InvokeScript(
                 "Get-CimInstance Win32_Process -ErrorAction SilentlyContinue | " +
                 "ForEach-Object { " + ownerExpr +

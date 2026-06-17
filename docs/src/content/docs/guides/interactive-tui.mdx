@@ -1,0 +1,189 @@
+---
+title: "Interactive TUIs from a .psm1"
+description: "Two terminal workbenches in ps-bash: browse, an object-aware list you extend with PowerShell adapters and actions, and Show-Styled, a CSS-driven navigable viewer. Build a real TUI by writing a module — no C#, no TUI framework."
+head:
+  - tag: meta
+    attrs:
+      name: keywords
+      content: powershell tui, terminal ui powershell, browse cmdlet, interactive list powershell, ps-bash tui, build tui psm1
+---
+
+import { Tabs, TabItem, Card, CardGrid, Aside, Badge, Steps } from '@astrojs/starlight/components';
+
+ps-bash turns a pipeline of objects into an **interactive terminal app** — a navigable list
+you move through with the arrow keys, expand for detail, select, and run actions on. And you
+build your own by writing a **PowerShell module**: define an adapter, register some actions,
+pipe objects in. No C#, no TUI framework, no curses.
+
+```bash
+ls -la | browse           # arrow-key file workbench
+ps aux | browse           # processes, with a built-in "stop" action
+seq 1 5 | Show-Styled     # CSS-themed, expandable viewer
+```
+
+There are two complementary surfaces:
+
+<CardGrid>
+  <Card title="browse — object workbench" icon="list-format">
+    A compact table you navigate, select, inspect, and act on. Extended in **pure PowerShell**
+    via adapters. Preserves your live objects — actions get the real thing, not a copy.
+  </Card>
+  <Card title="Show-Styled — themed viewer" icon="seti:css">
+    A full-screen, CSS-driven list with detail expansion. Extended with **stylesheets**.
+    Auto-themes by object kind. See [Styled Output](/ps-bash/guides/styled-output/).
+  </Card>
+</CardGrid>
+
+<Aside type="caution">
+Both need a **real terminal**. Under redirected I/O (tests, CI, a pipe) `browse` falls back
+to a line-mode list and `Show-Styled` prints a one-line summary — they never block a
+non-interactive run.
+</Aside>
+
+## `browse`: the object workbench
+
+Pipe any objects into `browse` and you get a single-key-driven table:
+
+| Key | Action |
+|-----|--------|
+| `n` / `p` (or `↓` / `↑`) | Move the cursor down / up |
+| `s` | Toggle selection on the current row |
+| `i` | Inspect — dump the current object's properties below the list |
+| `a` | Run a named **action** on the selection |
+| `e` | Run an inline command (`$_`, `$1`, `$items` are bound to your selection) |
+| `q` | Quit |
+
+It repaints incrementally (only the cells that change), shows up to 14 rows at a time, and
+redraws on terminal resize. Crucially, it **preserves your original objects** — every row
+carries the live `.NET` object, so an action operates on the real `Process` or `FileInfo`,
+not a stringified shadow.
+
+### Non-interactive flags
+
+`browse` is also scriptable — the same workbench, driven by flags instead of keys:
+
+```bash
+ls -la | browse --list                 # just the rows (line mode)
+ls -la | browse --inspect 0            # inspect row 0
+ps aux | browse --select 0 --action stop          # preview the stop action
+ps aux | browse --select 0 --action stop --force  # actually run it
+ls    | browse --select 0,2 --exec 'Remove-Item $_'
+```
+
+### Built-in adapters
+
+`browse` ships adapters that decide a type's columns and actions:
+
+| Adapter | Matches | Columns / actions |
+|---------|---------|-------------------|
+| `file` | `FileInfo`, `DirectoryInfo`, `LsEntry`, `FindEntry` | name/size/dates; `inspect`, `delete` (destructive) |
+| `process` | `Process`, `PsEntry` | name/id/cpu; `inspect`, `stop` (destructive) |
+| `default` | anything else | display set → public properties → `ToString()` |
+
+The first adapter whose `TypeNames` match the object's `PSTypeNames` (or .NET type) wins.
+
+### Safety model
+
+Actions flagged **destructive** (`delete`, `stop`, …) return a **preview** unless you pass
+`-Force`. A command classifier independently rejects destructive verbs (`Remove-Item`,
+`Stop-Process`, `kill`, …) entered through `--exec` without `-Force`. You can't fat-finger a
+deletion from the workbench.
+
+## Build your own workbench — from a .psm1
+
+This is the headline: a custom TUI is **just a module**. Define an action, wrap it in an
+adapter for your type, register it, and pipe your objects in.
+
+<Steps>
+
+1. **Write an action.** A scriptblock receives `$Current` (the focused row) and `$Items`
+   (the selection). Mark mutating actions `-Destructive`.
+
+   ```powershell
+   $approve = New-BrowseAction -Name 'approve' -Description 'Approve this PR' -Script {
+       param($Current, [object[]]$Items)
+       foreach ($pr in $Items) { gh pr review $pr.Number --approve }
+   }
+
+   $close = New-BrowseAction -Name 'close' -Description 'Close PR' -Destructive -Script {
+       param($Current, [object[]]$Items)
+       foreach ($pr in $Items) { gh pr close $pr.Number }
+   }
+   ```
+
+2. **Wrap it in an adapter** for your object type, naming the columns to show:
+
+   ```powershell
+   $prAdapter = New-BrowseAdapter -Name 'pr' `
+       -TypeNames @('MyTools.PullRequest') `
+       -DisplayProperties @('Number', 'Title', 'Author', 'State') `
+       -Actions @($approve, $close)
+   ```
+
+3. **Register it** with `Register-BrowseAdapter`. This is the supported entry point —
+   it writes PsBash's own adapter registry (a bare `$script:BrowseAdapters += …` from
+   your module would write the *wrong* scope), and your adapter takes precedence over
+   the built-ins:
+
+   ```powershell
+   Register-BrowseAdapter -Adapter $prAdapter
+   # or inline, no New-BrowseAdapter needed:
+   Register-BrowseAdapter -Name 'pr' -TypeNames @('MyTools.PullRequest') `
+       -DisplayProperties @('Number','Title','Author','State') -Actions @($approve, $close)
+
+   Get-BrowseAdapter                       # list registered adapters
+   Unregister-BrowseAdapter -Name 'pr'     # remove yours (the 'default' fallback is protected)
+   ```
+
+4. **Use it.** Anything carrying `PSTypeName = 'MyTools.PullRequest'` now drives your TUI:
+
+   ```powershell
+   Get-MyPullRequests | browse        # n/p to move, s to select, a to approve, q to quit
+   ```
+
+</Steps>
+
+The whole adapter surface is PowerShell — the binary `browse` cmdlet just dispatches to your
+psm1 helpers. You ship a module; your users get a workbench.
+
+## Build your own with CSS instead: `Show-Styled`
+
+If your "TUI" is really *a themed, expandable view* — color rows by state, hide detail until
+expanded — you don't need an adapter at all. Write a **stylesheet** and let
+[`Show-Styled`](/ps-bash/guides/styled-output/) drive the cascade:
+
+```css
+/* ~/.config/ps-bash/styles/pr.css */
+PullRequest            { display: block; color: white; }
+PullRequest.draft      { color: gray; }
+PullRequest.approved   { color: green; font-weight: bold; }
+PullRequest:focused    { background: blue; color: bright-white; }
+
+/* detail rows hidden until the row is expanded with Enter */
+PullRequest > DetailLine            { display: none; }
+PullRequest:expanded > DetailLine   { display: block; }
+```
+
+```powershell
+Get-MyPullRequests | Show-Styled pr      # ↑↓/jk move, Enter expand, q quit
+```
+
+`Show-Styled` builds a `Surface → (Row | Detail)*` tree, runs the cascade, and repaints on
+each keystroke — mutating the focused row's `:focused` / `:expanded` pseudo-state. The
+**styled path is CSS-only**; no PowerShell code required.
+
+<Aside type="tip">
+**Which one?** Use **`browse`** when the point is *doing things* to objects (actions,
+selection, side effects). Use **`Show-Styled`** when the point is *seeing* them well
+(themed, expandable, read-mostly). They share the same clean `Console.ReadKey` + alternate-screen
+terminal path the line editor uses, so both exit without corrupting your terminal.
+</Aside>
+
+## How it stays clean on exit
+
+Both workbenches use a `Console.ReadKey` loop over the alternate screen buffer
+(`ESC[?1049h` … `ESC[?1049l`) — the exact path `vim` and the line editor use. An earlier
+Terminal.Gui-based projection was built and verified, then **removed**: Terminal.Gui v2
+(prealpha) drove the tty through its own input loop and left stdin dead on exit. The
+ReadKey + Spectre approach round-trips a following command cleanly — proven by the PTY tests
+that navigate, quit, then run an `echo` afterward.

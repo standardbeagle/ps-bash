@@ -1,0 +1,198 @@
+---
+title: "Styled Output: Bash Commands, CSS-Styled Objects"
+description: "Pipe ps-bash's typed objects into Format-Styled and style your terminal with real CSS — colors, weights, tables, and per-row classes. Built on the Strata cascade engine, cross-platform ANSI, NO_COLOR-aware."
+head:
+  - tag: meta
+    attrs:
+      name: keywords
+      content: powershell css output, format-styled, terminal css, ansi styling powershell, strata, ps-bash styled, colorize ps output
+---
+
+import { Tabs, TabItem, Card, CardGrid, Aside, Badge, Steps } from '@astrojs/starlight/components';
+
+This is where ps-bash's two halves meet. Bash commands give you the muscle memory; the
+**typed pipeline** gives you real objects; and **`Format-Styled`** lets you paint those
+objects with **actual CSS** — selectors, classes, colors, weights, alignment — straight to
+your terminal.
+
+```powershell
+ps aux | Format-Styled -Style ps
+ls -la | Format-Styled -Style ls
+ping example.com | Show-Styled          # full-screen, navigable, auto-themed
+```
+
+Same bash command in. Styled, structured output out. No `awk '{print $1}'` to fake columns,
+no ANSI escape-code soup — a stylesheet does it.
+
+## The idea: a stylesheet is a theme
+
+`Format-Styled` treats every object like a tiny DOM node and runs a **CSS cascade** over it
+(powered by the [Strata](#strata-the-engine-underneath) selector engine). It matches three
+things about each object:
+
+| CSS selector | Matches | Example |
+|--------------|---------|---------|
+| `Kind { … }` | The object's type name, namespace stripped | `Process`, `FileInfo`, `DirectoryInfo` |
+| `#id { … }` | The object's `Id` then `Name` property | `#PsBash.psm1` |
+| `.class { … }` | Labels from the object's `class` property | `.busy`, `.error`, `.dir` |
+
+```powershell
+# Tag rows with a class, then style by class:
+Get-Process |
+  Select-Object *, @{ n='class'; e={ if ($_.CPU -gt 50) { 'busy' } } } |
+  Format-Styled 'Process { color: grey }  .busy { color: red; font-weight: bold }' `
+                -Property Name, Id, CPU
+```
+
+The `-Css` argument (alias `-Style` / `-Stylesheet`) accepts **a built-in sheet name**, an
+**inline CSS string** (anything containing `{` or a newline), or a **path to a `.css` file**.
+Omit it and you get the built-in `default` sheet.
+
+## Layout: list vs table, chosen for you
+
+<CardGrid>
+  <Card title="One object → list" icon="document">
+    A single object renders as a two-column property list (key / value). Force it with `-List`.
+  </Card>
+  <Card title="Many objects → table" icon="list-format">
+    Multiple objects render as a grid table with a header row. Force it with `-Table`.
+  </Card>
+</CardGrid>
+
+Pick the columns and their order with `-Property Name,Id,CPU`; omit it and each row uses its
+own `ToString()`. The structural sheet (`table.css` / `list.css`) handles header weight,
+primary-column bold, and right-aligning numeric cells — **without** coloring data cells, so
+your semantic colors always win the cascade.
+
+## Built-in stylesheets
+
+Ten sheets ship embedded in the cmdlet. Name them with `-Style <name>`:
+
+| Sheet | For | What it does |
+|-------|-----|--------------|
+| `default` | anything | Generic semantic palette: `.error .warn .ok .info .muted .busy …` |
+| `ls` | `ls` output | `DirectoryInfo` bright-blue+bold, `.dir .exe .symlink .hidden .archive` |
+| `ps` | `ps` output | `.busy` red+bold, `.stuck` yellow+strikethrough, `.idle` gray |
+| `table` | grid structure | header bold+underline, `.primary` bold, `.num` right-aligned |
+| `list` | property lists | `.property-name` cyan+bold |
+| `net` | `ping` / `traceroute` | `.ok` under 80ms green, `.slow` under 200ms yellow, `.high` red+bold, `.timeout` strikethrough |
+| `fs` | files (interactive) | adds `open`/`cd` buttons + size/dates/attrs/acl expansion |
+| `procsvc` | processes (interactive) | adds `stop`/`restart` buttons + path/memory/threads expansion |
+| `object` | any PSObject (interactive) | `copy`/`inspect` buttons + full property list |
+| `error` | `ErrorRecord` (interactive) | `dismiss` button + stack/invocation/category |
+
+### Supported CSS properties
+
+Strata implements a focused, terminal-meaningful subset of CSS:
+
+```css
+/* text (inherited) */
+color: red | bright-cyan | #88ccff | transparent;   /* 16 ANSI names + hex */
+font-weight: bold;
+font-style: italic;
+text-decoration: underline | strikethrough | none;
+text-align: left | right | center;
+
+/* box */
+background: blue;
+overflow: visible | hidden | ellipsis;
+padding: …;  margin: …;
+
+/* layout */
+display: block | flex | grid | none;
+grid-template-columns: auto auto;
+flex-direction: …;  justify-content: …;  align-items: …;  gap: …;
+
+/* interactive sheets only */
+command: "stop" when "key.s";   /* keybindings, inert in the static path */
+```
+
+Pseudo-classes `:focused` and `:expanded` apply in the interactive viewer.
+
+## Auto-theming: the right sheet, automatically
+
+ps-bash's network commands already emit typed objects carrying a latency `class`, so they
+theme themselves — `ping` picks the `net` sheet with no `-Style` needed:
+
+```powershell
+ping example.com | Show-Styled        # green/yellow/red by latency, automatically
+```
+
+When you don't name a sheet, `Show-Styled` auto-selects from the first row's kind:
+
+| Object kind | Sheet |
+|-------------|-------|
+| `FileInfo` / `DirectoryInfo` / `FileSystemInfo` | `fs` |
+| `Process` / `Service` / `ServiceController` | `procsvc` |
+| `ErrorRecord` | `error` |
+| `PingReply` / `TraceHop` | `net` |
+| anything else | `object` |
+
+## Make it the default
+
+Two environment switches route *all* PowerShell object output through styling — bash
+commands stay on their fast text path untouched:
+
+```powershell
+$env:PSBASH_DEFAULT_FORMAT = 'styled'       # static ANSI everywhere (-c, pipe, file, REPL)
+$env:PSBASH_DEFAULT_FORMAT = 'interactive'  # full-screen viewer in a TTY, static string otherwise
+```
+
+`styled` works in every mode and never blocks; `interactive` only opens the full-screen
+viewer when a real terminal is present and only at end-of-pipeline, so it can't interrupt
+interleaved text. Either way, each path falls back to stock formatting on any failure — your
+data is never lost to a styling error.
+
+## Bring your own theme
+
+Drop a `.css` file with a built-in's name to extend it (cascade — your rules win), searched
+in order:
+
+<Steps>
+1. `$PSBASH_STYLE_PATH` — a directory or PATH-separated list of directories
+2. `~/.config/ps-bash/styles/`
+3. `~/.psbash/styles/`
+</Steps>
+
+```css
+/* ~/.config/ps-bash/styles/ps.css — extend the built-in ps sheet */
+.busy   { color: bright-red; font-weight: bold; }
+.idle   { color: #555555; }
+Process { color: bright-white; }
+```
+
+You don't recopy the whole sheet — your file appends after the built-in, so you only write
+the rules you want to change.
+
+## Strata: the engine underneath
+
+`Format-Styled` and `Show-Styled` are thin shells over **[Strata](https://github.com/standardbeagle)**,
+a sibling CSS-cascade-for-terminals engine. The pipeline is:
+
+```text
+PowerShell objects
+  → PsObjectTreeAdapter   (wrap objects as a styled node tree, kind/id/class)
+  → Cascade               (match selectors, resolve specificity + inheritance)
+  → SpectreProjection     (project to Spectre.Console)
+  → ANSI text             (one string for static; a repaint loop for interactive)
+```
+
+<Aside type="note">
+Strata isn't on NuGet — it's consumed from a local package feed (`../strata/local-feed`,
+gated by `UseStrata=true` in the build). The Format-Styled / Show-Styled cmdlets are the
+public, cross-platform surface; you never touch Strata directly.
+</Aside>
+
+## Cross-platform and CI-safe
+
+- **ANSI everywhere** — output is one Spectre-rendered ANSI string, handed to PowerShell's
+  host. Works in `-c`, pipes, files, and the REPL on Windows, Linux, and macOS.
+- **`NO_COLOR` honored** — set `NO_COLOR` and `Format-Styled` emits plain text, no escapes.
+- **Width-aware** — it probes the host window width and falls back gracefully when there
+  isn't one (redirected output, CI).
+
+<Aside type="tip">
+`Format-Styled` is *static* — perfect for logs, CI, and `-c`. For a keyboard-navigable,
+expandable view of the same objects, see **[Interactive TUIs](/ps-bash/guides/interactive-tui/)**
+(`Show-Styled` and `browse`).
+</Aside>

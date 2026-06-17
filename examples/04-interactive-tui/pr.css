@@ -1,0 +1,18 @@
+/* A Show-Styled TUI defined purely in CSS — no PowerShell required.
+ *   Get-DemoPullRequests | Show-Styled (Join-Path $PSScriptRoot pr.css)
+ * Show-Styled builds a Surface -> (Row | Detail)* tree, runs this cascade, and
+ * repaints on each keystroke, mutating the focused row's :focused / :expanded
+ * pseudo-state. Keys: up/down or j/k move, Enter expands, q quits.
+ */
+
+PullRequest          { display: block; color: white; }
+PullRequest.draft    { color: gray; }
+PullRequest.open     { color: green; }
+PullRequest.approved { color: bright-green; font-weight: bold; }
+
+/* The full-screen focus cursor. */
+PullRequest:focused  { background: blue; color: bright-white; font-weight: bold; }
+
+/* Detail rows are hidden until the row is expanded with Enter. */
+PullRequest > DetailLine          { display: none; }
+PullRequest:expanded > DetailLine { display: block; color: #aaaaaa; }
