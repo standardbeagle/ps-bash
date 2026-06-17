@@ -62,6 +62,19 @@ public class BashRuntimeTests
     }
 
     [Fact]
+    public void NewBashObject_NoTrailingNewline_PreservesTrailingNewlineVerbatim()
+    {
+        // Regression (parity-followups-2026-06-17): a noTrailingNewline object
+        // means "emit these bytes EXACTLY"; the old unconditional NormalizeBashText
+        // stripped the trailing \n, so `printf '%s\n' b` → "b" not "b\n", and the
+        // newline vanished whenever a following frame got concatenated.
+        var result = BashRuntime.NewBashObject("b\n", noTrailingNewline: true);
+        var pso = Assert.IsType<PSObject>(result);
+        Assert.Equal("b\n", pso.Properties["BashText"].Value);
+        Assert.Equal(true, pso.Properties["NoTrailingNewline"].Value);
+    }
+
+    [Fact]
     public void NewBashObject_CommandProperty_AttachedWhenProvided()
     {
         var result = BashRuntime.NewBashObject("x", "PsBash.WcResult", command: "wc");

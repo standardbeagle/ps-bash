@@ -213,11 +213,14 @@ public class NewFlagSupportTests : IClassFixture<SharedPwshFixture>, IDisposable
     [Fact]
     public void Printf_RecyclesFormatUntilArgsExhausted()
     {
-        // The format repeats once per argument. BashText strips the final
-        // trailing newline for object display (the streamed output keeps it).
+        // The format repeats once per argument → "a\nb\nc\n". printf emits a
+        // single NoTrailingNewline object that carries its bytes VERBATIM — the
+        // trailing \n the format produced is preserved (regression: it was
+        // silently stripped, so `printf '%s\n' b; echo c` printed "bc" instead
+        // of "b"/"c" on two lines — see parity-followups-2026-06-17).
         var lines = RunLines("Invoke-BashPrintf '%s\\n' a b c");
         Assert.Single(lines);
-        Assert.Equal("a\nb\nc", lines[0]);
+        Assert.Equal("a\nb\nc\n", lines[0]);
     }
 
     [Theory]

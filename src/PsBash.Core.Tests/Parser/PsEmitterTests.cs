@@ -1121,6 +1121,30 @@ public class PsEmitterTests
     }
 
     [Fact]
+    public void Transpile_ArrayKeys_BareArg_UsesArraySubexprNotDollarSubexpr()
+    {
+        // Regression (parity-followups-2026-06-17): as a BARE argument the
+        // indices expansion must use `@(...)`, not `$(...)`. A `$(...)` that
+        // yields an empty collection still binds ONE $null positional argument,
+        // so `echo ${!arr[@]}` on an empty array crashed the cmdlet
+        // (ConvertFromBashArgs NPE). `@(...)` unrolls empty → zero args (bash
+        // parity: a blank line) and populated → N separate args.
+        var result = PsEmitter.Transpile("echo ${!arr[@]}");
+        Assert.Contains("@(if ($arr -is [System.Collections.IDictionary])", result);
+        Assert.DoesNotContain("$(if ($arr -is [System.Collections.IDictionary])", result);
+    }
+
+    [Fact]
+    public void Transpile_ArrayKeys_InsideDoubleQuotes_UsesDollarSubexpr()
+    {
+        // Inside a double-quoted string the expansion is interpolated into the
+        // string (no null-arg hazard), so the array subexpression must be the
+        // string-embeddable `$(...)` form, not `@(...)`.
+        var result = PsEmitter.Transpile("echo \"${!arr[@]}\"");
+        Assert.Contains("$(if ($arr -is [System.Collections.IDictionary])", result);
+    }
+
+    [Fact]
     public void Transpile_QuotedArrayAll_ForIn_IteratesElements()
     {
         // `for x in "${arr[@]}"` iterates per element; the quoted expansion must

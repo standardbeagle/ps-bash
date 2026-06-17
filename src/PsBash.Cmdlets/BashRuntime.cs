@@ -64,7 +64,14 @@ public static class BashRuntime
     /// a <see cref="PSObject"/> carrying <c>PSTypeName</c>, <c>BashText</c>, and
     /// optional <c>NoTrailingNewline</c> / <c>Command</c> note properties.</item>
     /// </list>
-    /// Always normalizes a trailing <c>\n</c> off BashText first.
+    /// Normalizes a single trailing <c>\n</c> off BashText for the implicit-
+    /// newline path only. A <paramref name="noTrailingNewline"/> object means
+    /// "the serializer must emit these bytes EXACTLY — it adds no record
+    /// boundary"; stripping there would silently delete output the producer
+    /// emitted on purpose (<c>printf '%s\n' b</c> builds <c>"b\n"</c> and passes
+    /// the flag so no extra newline is appended — the <c>"\n"</c> it already
+    /// contains must survive; the old unconditional strip turned it into
+    /// <c>"b"</c>, dropping the newline whenever another frame followed).
     /// </summary>
     public static object NewBashObject(
         string bashText,
@@ -72,7 +79,8 @@ public static class BashRuntime
         bool noTrailingNewline = false,
         string? command = null)
     {
-        bashText = NormalizeBashText(bashText);
+        if (!noTrailingNewline)
+            bashText = NormalizeBashText(bashText);
 
         if (typeName == "PsBash.TextOutput" && !noTrailingNewline)
         {

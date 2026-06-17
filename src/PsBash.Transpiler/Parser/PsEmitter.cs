@@ -2814,10 +2814,21 @@ public static class PsEmitter
         // does not exist on a PowerShell array, so the old emission crashed
         // ("Object reference not set") on a normal `arr=(a b c)`. Branch on the
         // runtime type; guard the empty array (0..-1 would descend to @(0,-1)).
+        //
+        // As a BARE argument use the array-subexpression `@(...)`, not `$(...)`:
+        // a `$(...)` that yields an empty collection still binds ONE $null
+        // positional argument (`echo ${!arr[@]}` on an empty array → the cmdlet
+        // sees a lone null → NPE in ConvertFromBashArgs). `@(...)` unrolls an
+        // empty array to ZERO arguments (bash parity: empty line) and a populated
+        // one to N separate args. Inside double quotes the expansion is joined
+        // into the string, so `$(...)` is correct there.
         if (bvs.Suffix.StartsWith("!"))
-            return $"$(if (${bvs.Name} -is [System.Collections.IDictionary]) "
+        {
+            string idxBody = $"if (${bvs.Name} -is [System.Collections.IDictionary]) "
                 + $"{{ ${bvs.Name}.Keys }} elseif (${bvs.Name}.Count -gt 0) "
-                + $"{{ 0..(${bvs.Name}.Count - 1) }} else {{ @() }})";
+                + $"{{ 0..(${bvs.Name}.Count - 1) }} else {{ @() }}";
+            return inDoubleQuote ? $"$({idxBody})" : $"@({idxBody})";
+        }
 
         // Scalar suffix operators (default/assign/alt/error, removal, replace, slice,
         // case, @-transform). Shared with array-element expansions like ${arr[0]##*/}.
