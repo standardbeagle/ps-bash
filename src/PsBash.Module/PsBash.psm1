@@ -3081,9 +3081,13 @@ if ($env:PSBASH_INTERACTIVE -eq '1') {
 
 # Remove built-in PowerShell aliases that conflict with our bash commands
 $script:conflictingAliases = @('echo','ls','cat','cp','mv','rm','mkdir','pwd','sort','diff','sleep','test','kill','time','pushd','popd','type')
-foreach ($a in $script:conflictingAliases) {
-    if (Test-Path "Alias:\$a") {
-        Remove-Item "Alias:\$a" -Force -ErrorAction SilentlyContinue
+# Namespaced loop variable: this runs at module (script) scope, so a bare loop
+# var like `$a` would LEAK into the runspace and shadow any transpiled bash
+# variable of the same name (e.g. `a=5; echo $((a))` saw `$a` = 'type', the last
+# alias). Prefix with __psbash so it can never collide with user code.
+foreach ($__psbashConflictingAlias in $script:conflictingAliases) {
+    if (Test-Path "Alias:\$__psbashConflictingAlias") {
+        Remove-Item "Alias:\$__psbashConflictingAlias" -Force -ErrorAction SilentlyContinue
     }
 }
 
@@ -3931,7 +3935,9 @@ Set-Alias -Name 'more'     -Value 'Invoke-BashMore'     -Force -Scope Global -Op
 # --- Type-level ToString for BashObject types ---
 # Update-TypeData defines ToString() once per type name instead of per-object,
 # eliminating the per-object Add-Member ScriptMethod overhead (~6x faster).
-foreach ($tn in @(
+# Namespaced loop var: top-level (script) scope leaks into the runspace and could
+# shadow a transpiled bash variable (see the $__psbashConflictingAlias note above).
+foreach ($__psbashTypeName in @(
         'PsBash.TextOutput', 'PsBash.LsEntry', 'PsBash.CatLine', 'PsBash.GrepMatch',
         'PsBash.WcResult', 'PsBash.FindEntry', 'PsBash.StatEntry', 'PsBash.PsEntry',
         'PsBash.DateOutput', 'PsBash.SeqOutput', 'PsBash.ExprOutput', 'PsBash.DuEntry',
@@ -3939,5 +3945,5 @@ foreach ($tn in @(
         'PsBash.TarListOutput', 'PsBash.TimeOutput', 'PsBash.WhichOutput', 'PsBash.AliasOutput',
         'PsBash.TrapOutput', 'PsBash.ReadlinkOutput', 'PsBash.MktempOutput', 'PsBash.TypeOutput'
     )) {
-    Update-TypeData -TypeName $tn -MemberName ToString -MemberType ScriptMethod -Value { $this.BashText } -Force
+    Update-TypeData -TypeName $__psbashTypeName -MemberName ToString -MemberType ScriptMethod -Value { $this.BashText } -Force
 }

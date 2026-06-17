@@ -107,7 +107,12 @@ CmdletsToExport = @(
     # a native-style BashText line plus a latency `class`, so they read like the real
     # tools and become the interactive styled viewer when piped to Show-Styled.
     'Invoke-BashPing',
-    'Invoke-BashTraceroute'
+    'Invoke-BashTraceroute',
+    # Bash arithmetic evaluator backing $(( )) / (( )). Integer (Int64) C-operator
+    # semantics (** , / truncating, bitwise/shift, 1/0 comparisons & logicals,
+    # ternary, bases) that PowerShell's $( ) subexpression mistranslated. Emitted
+    # by the transpiler as $(Invoke-BashArith '<expr>'); not a bash command alias.
+    'Invoke-BashArith'
 )
 
 VariablesToExport = @()

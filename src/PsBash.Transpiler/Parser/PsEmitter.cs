@@ -2351,10 +2351,38 @@ public static class PsEmitter
             return $"$({expr[..2]}{varRef})";
         }
 
-        expr = PrefixBareVar(expr);
-        expr = ExpandArithPositionalRefs(expr);
-        return $"$({expr})";
+        // General arithmetic: hand the RAW expression to the runtime evaluator,
+        // which computes the bash-correct Int64 result. PowerShell's $( )
+        // subexpression mistranslated almost every non-trivial operator —
+        // ** (parse error), integer / (gave a float), bitwise & | ^ ~ and
+        // shifts << >>, C comparisons/logicals (True/False instead of 1/0),
+        // the ternary operator, octal/base#digits — so a verbatim hand-off was
+        // wrong 26 ways. Invoke-BashArith resolves bare variables itself
+        // (PowerShell variable / $env / 0), so no PrefixBareVar is needed.
+        //
+        // Exception: positional parameters ($1..$9, $#, $@, $*, $?) have no
+        // representation in the evaluator's bare-identifier model, so an
+        // expression that references one keeps the legacy PrefixBareVar +
+        // $args-expansion path.
+        if (ReferencesPositional(expr))
+        {
+            string legacy = PrefixBareVar(expr);
+            legacy = ExpandArithPositionalRefs(legacy);
+            return $"$({legacy})";
+        }
+        return $"$(Invoke-BashArith {PsBuild.SingleQuote(expr)})";
     }
+
+    /// <summary>
+    /// True when an arithmetic expression references a positional or special
+    /// parameter (<c>$1</c>..<c>$9</c>, <c>$#</c>, <c>$@</c>, <c>$*</c>,
+    /// <c>$?</c>, <c>$$</c>, <c>$!</c>) — a <c>$</c> immediately followed by a
+    /// digit or special-parameter sigil. These are resolved by the legacy
+    /// <see cref="ExpandArithPositionalRefs"/> path rather than the bare-name
+    /// arithmetic evaluator.
+    /// </summary>
+    private static bool ReferencesPositional(string expr) =>
+        System.Text.RegularExpressions.Regex.IsMatch(expr, @"\$[0-9@#*?$!]");
 
     /// <summary>
     /// In arithmetic expressions, <c>$1</c>-<c>$9</c> are bash positional parameters.

@@ -81,6 +81,33 @@ public class PsEmitterTests
     }
 
     [Fact]
+    public void Transpile_ArithExponent_RoutesToInvokeBashArith()
+    {
+        // $(( )) value context is evaluated by the runtime bash-arithmetic
+        // evaluator, not a verbatim PowerShell $( ) subexpression (which
+        // mistranslated **, integer /, bitwise, 1/0 comparisons, etc.).
+        var result = PsEmitter.Transpile("echo $((2**10))");
+        Assert.Equal("Invoke-BashEcho $(Invoke-BashArith '2**10')", result);
+    }
+
+    [Fact]
+    public void Transpile_ArithWithVariableAndComparison_RoutesToInvokeBashArith()
+    {
+        var result = PsEmitter.Transpile("echo $(( n > 5 ? n * 100 : -1 ))");
+        Assert.Contains("Invoke-BashArith 'n > 5 ? n * 100 : -1'", result);
+    }
+
+    [Fact]
+    public void Transpile_ArithWithPositionalParam_KeepsLegacyArgsPath()
+    {
+        // Positional/special parameters ($1..$9, $#, …) have no representation in
+        // the evaluator's bare-identifier model, so they keep the legacy
+        // $args-expansion path rather than routing to Invoke-BashArith.
+        var result = PsEmitter.Transpile("echo $(($1 + 1))");
+        Assert.DoesNotContain("Invoke-BashArith", result);
+    }
+
+    [Fact]
     public void Transpile_PipeAmpersand_EmitsStderrMerge()
     {
         var result = PsEmitter.Transpile("cmd |& other");
@@ -1975,25 +2002,30 @@ public class PsEmitterTests
         Assert.Equal("Invoke-BashBackground { Invoke-BashSleep 0.1 }; Invoke-BashEcho hello", result);
     }
 
+    // $(( )) value context now routes to the runtime bash-arithmetic evaluator
+    // (Invoke-BashArith) instead of a verbatim PowerShell $( ) subexpression. The
+    // old emission mistranslated almost every non-trivial operator (integer /,
+    // **, bitwise/shift, 1/0 comparisons) — see BashArithTests for the oracle
+    // values. The evaluator resolves bare variables itself, so no $env: prefix.
     [Fact]
     public void Transpile_ArithSub_BasicAddition()
     {
         var result = PsEmitter.Transpile("echo $((x + 1))");
-        Assert.Equal("Invoke-BashEcho $([int]$env:x + 1)", result);
+        Assert.Equal("Invoke-BashEcho $(Invoke-BashArith 'x + 1')", result);
     }
 
     [Fact]
     public void Transpile_ArithSub_LiteralAddition()
     {
         var result = PsEmitter.Transpile("echo $((2 + 3))");
-        Assert.Equal("Invoke-BashEcho $(2 + 3)", result);
+        Assert.Equal("Invoke-BashEcho $(Invoke-BashArith '2 + 3')", result);
     }
 
     [Fact]
     public void Transpile_ArithSub_Multiplication()
     {
         var result = PsEmitter.Transpile("echo $((x * y))");
-        Assert.Equal("Invoke-BashEcho $([int]$env:x * [int]$env:y)", result);
+        Assert.Equal("Invoke-BashEcho $(Invoke-BashArith 'x * y')", result);
     }
 
     [Fact]
@@ -2077,28 +2109,30 @@ public class PsEmitterTests
     public void Transpile_ArithSub_InAssignment()
     {
         var result = PsEmitter.Transpile("result=$((x + 1))");
-        Assert.Equal("$env:result = \"$([int]$env:x + 1)\"", result);
+        Assert.Equal("$env:result = \"$(Invoke-BashArith 'x + 1')\"", result);
     }
 
     [Fact]
     public void Transpile_ArithSub_Power()
     {
+        // The old emission was a literal PowerShell `$(2 ** 3)`, which is a PARSE
+        // ERROR (** is not a PowerShell operator). Now evaluated correctly = 8.
         var result = PsEmitter.Transpile("echo $((2 ** 3))");
-        Assert.Equal("Invoke-BashEcho $(2 ** 3)", result);
+        Assert.Equal("Invoke-BashEcho $(Invoke-BashArith '2 ** 3')", result);
     }
 
     [Fact]
     public void Transpile_ArithSub_Modulo()
     {
         var result = PsEmitter.Transpile("echo $((10 % 3))");
-        Assert.Equal("Invoke-BashEcho $(10 % 3)", result);
+        Assert.Equal("Invoke-BashEcho $(Invoke-BashArith '10 % 3')", result);
     }
 
     [Fact]
     public void Transpile_ArithSub_NestedInString()
     {
         var result = PsEmitter.Transpile("echo \"result is $((x + 1))\"");
-        Assert.Equal("Invoke-BashEcho \"result is $([int]$env:x + 1)\"", result);
+        Assert.Equal("Invoke-BashEcho \"result is $(Invoke-BashArith 'x + 1')\"", result);
     }
 
     [Fact]
