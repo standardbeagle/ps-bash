@@ -82,6 +82,26 @@ public class FindabilityGuardTests
     }
 
     [Fact]
+    public void Psm1_HasNoTopLevelLoops_ThatLeakVariablesIntoTheRunspace()
+    {
+        // PsBash.psm1 is imported into the host runspace at module (script) scope.
+        // A `foreach`/`for` written at column 0 therefore leaks its loop variable
+        // into the scope where transpiled bash and the binary cmdlets resolve
+        // names — a leaked `$a` ('type', the last conflicting alias) once made
+        // `a=5; echo $((a))` return 0. Such loops MUST be wrapped in `& { … }`
+        // (block scope) or live inside a function. This guard blocks regressions.
+        var root = RepoRoot();
+        var psm1 = File.ReadAllText(Path.Combine(root, "src", "PsBash.Module", "PsBash.psm1"));
+        var offenders = Regex.Matches(psm1, @"(?m)^(foreach|for)\b[^\n]*")
+            .Select(m => m.Value.Trim())
+            .ToList();
+        Assert.True(offenders.Count == 0,
+            "Top-level (column-0) loop in PsBash.psm1 leaks its loop variable into the runspace and can "
+            + "shadow a transpiled bash variable. Wrap it in `& { … }` or move it into a function. Found: "
+            + string.Join(", ", offenders));
+    }
+
+    [Fact]
     public void ReleaseNotes_UnderPsGalleryLimit()
     {
         // PSGallery rejects a manifest whose ReleaseNotes exceeds 10600 chars with HTTP 400 — and
