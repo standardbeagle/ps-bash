@@ -87,6 +87,13 @@ internal sealed class Program
         // (PSBASH_POOL_WARM / PSBASH_POOL_MAX).
         await using var pool = WorkerPool.FromEnvironment();
 
+        // Janitor: reap endpoint sockets / sidecars / spawn locks left behind by
+        // hosts and launchers that were killed before they could clean up. Only
+        // artifacts whose owning process is provably gone are removed, so this
+        // can never disturb a live daemon. One cheap flat-dir scan per launch,
+        // off the hot path; best-effort (never throws).
+        try { StaleArtifactReaper.Reap(); } catch { /* never block startup on cleanup */ }
+
         var (transport, scheme, endpoint) = CreateTransport(args);
 
         var idleTimeout = IdleShutdown.DefaultTimeout;

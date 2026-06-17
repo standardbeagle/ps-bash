@@ -622,7 +622,80 @@ public sealed class IpcWorker : IWorker
         }
     }
 
+    /// <summary>
+    /// True for the exceptions that mean "the IPC connection broke" — the host
+    /// was killed, the endpoint went stale, or the peer reset the socket
+    /// (<c>SocketException</c> / connection refused) — as opposed to a timeout
+    /// (<c>OperationCanceledException</c> → <c>TimeoutException</c>) or a clean
+    /// non-zero exit. A <c>NetworkStream</c> read/write surfaces a reset as an
+    /// <c>IOException</c> (often wrapping a <c>SocketException</c>); a connect to
+    /// a missing/listener-less endpoint surfaces a bare <c>SocketException</c>.
+    /// Both are recoverable by retiring the host and reconnecting.
+    /// </summary>
+    internal static bool IsTransportReset(Exception ex)
+        => ex is System.IO.IOException or System.Net.Sockets.SocketException;
+
     private async Task<int> SendRequestAsync(Mode mode, CancellationToken ct)
+    {
+        var idleTimeout = GetCallTimeout();
+        bool unbounded = idleTimeout <= TimeSpan.Zero;
+        var compactOutput = EnvFlags.IsTruthy("PSBASH_COMPACT_OUTPUT");
+        var compactFrames = compactOutput ? new List<OutputFrame>() : null;
+        var command = CommandLabel(mode);
+
+        // Self-healing retry for a mid-command transport RESET (host killed,
+        // endpoint gone stale, connection refused). The reset is recoverable —
+        // but ONLY when no output frame escaped on the failed attempt, so a
+        // side-effecting command can never double-execute (the user-chosen
+        // "safe pre-output retry" policy). Any reset, retried or not, also
+        // retires/respawns the host so the NEXT invocation starts clean rather
+        // than re-hanging on the corpse. Timeouts are NOT retried here: they
+        // throw TimeoutException from ExchangeOnceAsync (see below).
+        const int maxAttempts = 2;
+        for (int attempt = 1; ; attempt++)
+        {
+            // framesDelivered is flipped by the line handler on the FIRST frame
+            // (any mode). Read in the catch filter to gate the retry: no frame
+            // delivered ⇒ nothing observed downstream ⇒ safe to re-run.
+            bool framesDelivered = false;
+            try
+            {
+                return await ExchangeOnceAsync(
+                    mode, command, idleTimeout, unbounded, compactFrames,
+                    () => framesDelivered = true, ct).ConfigureAwait(false);
+            }
+            catch (Exception ex) when (IsTransportReset(ex))
+            {
+                if (attempt < maxAttempts && !framesDelivered)
+                {
+                    // Pre-output reset: retire the broken host, bring up a
+                    // healthy one (reuse if it still answers, else spawn fresh),
+                    // and retry. A genuine inability to get a host (re-spawn
+                    // fails) surfaces as HostUnavailableException — let it out.
+                    await RetireAndRespawnAsync(ct).ConfigureAwait(false);
+                    continue;
+                }
+                // Output already streamed (unsafe to retry) or retries exhausted:
+                // retire so the next invocation self-heals, then surface the
+                // failure (Program.cs maps it to a one-line diagnostic + exit 125).
+                await RetireIfUnresponsiveAsync().ConfigureAwait(false);
+                throw;
+            }
+        }
+    }
+
+    /// <summary>
+    /// One connect → write-request → read-response exchange against the current
+    /// host. Owns its own per-attempt timeout <see cref="CancellationTokenSource"/>
+    /// (so it is safe to call again on retry). Converts a connect / idle timeout
+    /// into a clean <see cref="TimeoutException"/> (after a best-effort host
+    /// retire); lets a transport RESET (<see cref="IsTransportReset"/>) propagate
+    /// so the caller's retry loop can recover. <paramref name="onFirstFrame"/> is
+    /// invoked the first time any output frame is delivered.
+    /// </summary>
+    private async Task<int> ExchangeOnceAsync(
+        Mode mode, string command, TimeSpan idleTimeout, bool unbounded,
+        List<OutputFrame>? compactFrames, Action onFirstFrame, CancellationToken ct)
     {
         // INACTIVITY (idle) timeout, not a total wall-clock cap: the deadline is
         // re-armed every time the host produces an output frame, so a command
@@ -631,13 +704,17 @@ public sealed class IpcWorker : IWorker
         // the idle window — trips the timeout. An idle value of zero/negative
         // (PSBASH_TIMEOUT=0|none|infinite, or --timeout none) disables it
         // entirely, leaving the caller's CancellationToken as the only stop.
-        var idleTimeout = GetCallTimeout();
-        bool unbounded = idleTimeout <= TimeSpan.Zero;
         using var timeoutCts = new CancellationTokenSource();
-        using var linked = CancellationTokenSource.CreateLinkedTokenSource(ct, timeoutCts.Token);
-        var compactOutput = EnvFlags.IsTruthy("PSBASH_COMPACT_OUTPUT");
-        var compactFrames = compactOutput ? new List<OutputFrame>() : null;
-        var command = CommandLabel(mode);
+        // Tripped by the host-liveness watchdog (below) when the host PROCESS
+        // dies mid-exchange. On Windows a killed AF_UNIX peer does not reliably
+        // surface a socket reset on the client's pending read — without this the
+        // launcher would hang to the idle timeout (exit 124), or FOREVER when the
+        // idle timeout is unbounded (the default for -c). Watching the PID detects
+        // host death directly and converts it into the recoverable reset path,
+        // while leaving a genuinely slow-but-alive host untouched (no false retry).
+        using var hostDeadCts = new CancellationTokenSource();
+        using var linked = CancellationTokenSource.CreateLinkedTokenSource(
+            ct, timeoutCts.Token, hostDeadCts.Token);
 
         void ArmIdle()
         {
@@ -686,6 +763,18 @@ public sealed class IpcWorker : IWorker
             catch (ObjectDisposedException) { }
         }
 
+        // Start the host-liveness watchdog now that we are connected. The PID
+        // comes from the owned handle (PerInvocation) or the sidecar (Daemon);
+        // if neither is available we simply skip the watchdog and fall back to
+        // the timeout backstops. Stopped in the finally below.
+        int hostPid = _lifetime == Lifetime.PerInvocation
+            ? (_ownedHost?.Id ?? 0)
+            : (HostMetadata.TryRead(_scheme, _endpoint)?.Pid ?? 0);
+        using var watchdogStop = new CancellationTokenSource();
+        Task? watchdog = hostPid > 0
+            ? StartHostLivenessWatchdog(hostPid, hostDeadCts, watchdogStop.Token)
+            : null;
+
         try
         {
             await using (stream)
@@ -702,6 +791,7 @@ public sealed class IpcWorker : IWorker
                     stream,
                     (line, tag) =>
                     {
+                        onFirstFrame(); // mark output observed (gates the retry decision)
                         ArmIdle(); // each frame is activity — push the idle deadline out
                         if (compactFrames is not null)
                         {
@@ -737,14 +827,24 @@ public sealed class IpcWorker : IWorker
                 return exitCode;
             }
         }
+        catch (OperationCanceledException) when (hostDeadCts.IsCancellationRequested && !ct.IsCancellationRequested)
+        {
+            // The host PROCESS died mid-exchange (watchdog). Surface it as a
+            // transport reset so SendRequestAsync's retry loop recovers it (pre-
+            // output) or fails cleanly (post-output) — never a silent hang. This
+            // is the case a killed Windows AF_UNIX peer does NOT report as a
+            // socket reset on the pending read.
+            throw new IOException("ps-bash-host process exited mid-command.");
+        }
         catch (OperationCanceledException) when (timeoutCts.IsCancellationRequested && !ct.IsCancellationRequested)
         {
             // The host accepted the connection but produced no output for a full
-            // idle window. Convert the raw cancellation into a clean, actionable
-            // TimeoutException (the launcher's Main maps this to a one-line
-            // diagnostic + exit 124 instead of dumping a stack trace), and retire
-            // the host if a re-probe confirms it is genuinely wedged rather than
-            // merely busy with a long-running command.
+            // idle window, AND the watchdog confirms the host is still alive
+            // (else the hostDeadCts branch above would have fired) — so this is a
+            // genuinely slow/quiet command, not a dead host. Convert the raw
+            // cancellation into a clean, actionable TimeoutException (the
+            // launcher's Main maps this to exit 124 instead of a stack trace),
+            // and retire the host only if a re-probe confirms it is wedged.
             await RetireIfUnresponsiveAsync().ConfigureAwait(false);
             if (compactFrames is not null)
                 EmitCompactedOutput(command, 124, timedOut: true, compactFrames);
@@ -752,6 +852,57 @@ public sealed class IpcWorker : IWorker
                 $"ps-bash: no output from host for {idleTimeout.TotalSeconds:0.##}s (idle timeout). " +
                 "Raise it with --timeout <seconds> / PSBASH_TIMEOUT, or --timeout none to disable.");
         }
+        finally
+        {
+            // Stop the watchdog. Fire-and-forget cancellation: the task observes
+            // watchdogStop and exits; we never block command teardown on it.
+            try { watchdogStop.Cancel(); } catch { }
+        }
+    }
+
+    /// <summary>
+    /// Background loop that trips <paramref name="hostDeadCts"/> when the host
+    /// process <paramref name="pid"/> exits, so a dead host aborts the pending
+    /// read instead of hanging it. Cheap (a liveness check every ~150 ms) and
+    /// bounded by <paramref name="stop"/>, which the exchange cancels on
+    /// completion. Best-effort: any failure leaves the timeout backstops intact.
+    /// </summary>
+    private static Task StartHostLivenessWatchdog(int pid, CancellationTokenSource hostDeadCts, CancellationToken stop)
+        => Task.Run(async () =>
+        {
+            try
+            {
+                while (!stop.IsCancellationRequested)
+                {
+                    if (!IsProcessAlive(pid))
+                    {
+                        try { hostDeadCts.Cancel(); } catch { }
+                        return;
+                    }
+                    await Task.Delay(150, stop).ConfigureAwait(false);
+                }
+            }
+            catch (OperationCanceledException) { /* exchange finished — normal stop */ }
+            catch { /* never let the watchdog throw into the void */ }
+        }, CancellationToken.None);
+
+    /// <summary>
+    /// True while process <paramref name="pid"/> is running. A gone PID (or a
+    /// recycled one we can no longer open) reads as not-alive; when we cannot
+    /// tell, we err toward alive so the watchdog never forces a false retry on a
+    /// healthy host.
+    /// </summary>
+    private static bool IsProcessAlive(int pid)
+    {
+        if (pid <= 0) return false;
+        try
+        {
+            using var p = Process.GetProcessById(pid);
+            return !p.HasExited;
+        }
+        catch (ArgumentException) { return false; }        // no such process
+        catch (InvalidOperationException) { return false; } // exited / no handle
+        catch { return true; }                               // unsure ⇒ don't force a retry
     }
 
     /// <summary>
@@ -799,6 +950,37 @@ public sealed class IpcWorker : IWorker
         catch
         {
             // Best-effort recovery — never mask the TimeoutException.
+        }
+    }
+
+    /// <summary>
+    /// Recovery for a pre-output transport RESET: bring up a host we can retry
+    /// against. For a shared <see cref="Lifetime.Daemon"/>, reuse a host that
+    /// still answers the health handshake, else retire the corpse and spawn a
+    /// fresh one (single-flighted) — exactly the <see cref="EnsureHostReachableAsync"/>
+    /// path. For a private <see cref="Lifetime.PerInvocation"/> host, the reset
+    /// means OUR host died mid-command: kill the stale handle, clean the
+    /// process-local endpoint, and spawn a fresh private host on it. Throws
+    /// <see cref="HostUnavailableException"/> if no host can be brought up.
+    /// </summary>
+    private async Task RetireAndRespawnAsync(CancellationToken ct)
+    {
+        if (_lifetime == Lifetime.PerInvocation)
+        {
+            var old = _ownedHost;
+            _ownedHost = null;
+            if (old is not null)
+            {
+                try { if (!old.HasExited) old.Kill(entireProcessTree: true); }
+                catch { /* already gone / race — best effort */ }
+                try { old.Dispose(); } catch { }
+            }
+            IpcTransportFactory.RetireEndpoint(_scheme, _endpoint);
+            await SpawnAndWaitAsync(ct).ConfigureAwait(false);
+        }
+        else
+        {
+            await EnsureHostReachableAsync(ct).ConfigureAwait(false);
         }
     }
 
