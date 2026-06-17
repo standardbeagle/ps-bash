@@ -2792,11 +2792,17 @@ public static class PsEmitter
         if (suffix.StartsWith("?"))
             return $"{open}{varRef} ?? $(throw {q}{suffix[1..]}{q}))";
 
-        // Remove suffix: ${VAR%%pattern} (greedy) / ${VAR%pattern} (lazy).
+        // Remove suffix: ${VAR%%pattern} (longest) / ${VAR%pattern} (shortest).
+        // Both anchor the pattern at end-of-string ($). For the LONGEST match a
+        // greedy pattern starting at the leftmost feasible position is correct.
+        // For the SHORTEST suffix a lazy quantifier does NOT help — the match
+        // still starts at the leftmost position, so `foo.bar.baz` %`.*` wrongly
+        // gave `foo` instead of `foo.bar`. Instead capture a GREEDY prefix and
+        // keep it: `^(.*)PAT$` -> `$1` leaves the shortest trailing match for PAT.
         if (suffix.StartsWith("%%"))
             return $"{open}{varRef} -replace '{GlobToRegex(suffix[2..], lazy: false)}$','')";
         if (suffix.StartsWith("%"))
-            return $"{open}{varRef} -replace '{GlobToRegex(suffix[1..], lazy: true)}$','')";
+            return $"{open}{varRef} -replace '^(.*){GlobToRegex(suffix[1..], lazy: false)}$','$1')";
 
         // Remove prefix: ${VAR##pattern} (greedy) / ${VAR#pattern} (lazy).
         if (suffix.StartsWith("##"))
@@ -2819,14 +2825,35 @@ public static class PsEmitter
             return $"{open}([regex][regex]::Escape('{find}')).Replace({varRef}, '{replace}'))";
         }
 
-        // Slice: ${VAR:offset:length} or ${VAR:offset}
-        if (suffix.StartsWith(":") && suffix.Length > 1 && (char.IsDigit(suffix[1]) || suffix[1] == '-'))
+        // Slice: ${VAR:offset:length} or ${VAR:offset}. The body is trimmed so a
+        // negative offset written with the disambiguating space — ${VAR: -2}
+        // (without the space it would be the ${VAR:-default} operator) — parses.
+        // A negative offset counts from the end (bash), so it maps to
+        // Length - |offset|; indices are clamped so an out-of-range slice yields
+        // "" instead of throwing (.NET Substring is strict where bash is lenient).
+        if (suffix.StartsWith(":") && suffix.Length > 1)
         {
-            var sliceParts = suffix[1..].Split(':', 2);
-            if (sliceParts.Length == 2 && int.TryParse(sliceParts[0], out int offset) && int.TryParse(sliceParts[1], out int length))
-                return inDoubleQuote ? $"$({varRef}.Substring({offset}, {length}))" : $"{varRef}.Substring({offset}, {length})";
-            if (int.TryParse(sliceParts[0], out int off2))
-                return inDoubleQuote ? $"$({varRef}.Substring({off2}))" : $"{varRef}.Substring({off2})";
+            var sliceBody = suffix[1..].Trim();
+            bool looksNumeric = sliceBody.Length > 0 && (char.IsDigit(sliceBody[0])
+                || (sliceBody[0] == '-' && sliceBody.Length > 1 && char.IsDigit(sliceBody[1])));
+            if (looksNumeric)
+            {
+                var sliceParts = sliceBody.Split(':', 2);
+                if (int.TryParse(sliceParts[0].Trim(), out int offset))
+                {
+                    string len = $"{varRef}.Length";
+                    string start = offset >= 0
+                        ? $"[Math]::Min({offset}, {len})"
+                        : $"[Math]::Max(0, {len} - {-offset})";
+                    string? expr = null;
+                    if (sliceParts.Length == 1)
+                        expr = $"{varRef}.Substring({start})";
+                    else if (int.TryParse(sliceParts[1].Trim(), out int length) && length >= 0)
+                        expr = $"{varRef}.Substring({start}, [Math]::Min({length}, {len} - ({start})))";
+                    if (expr is not null)
+                        return inDoubleQuote ? $"$({expr})" : expr;
+                }
+            }
         }
 
         // Case conversion: ${VAR^^} ${VAR,,} ${VAR^} ${VAR,}

@@ -1113,8 +1113,10 @@ public class PsEmitterTests
     [Fact]
     public void Transpile_ArrayElementSlice_AppliesSubstringToElement()
     {
+        // Substring indices are clamped so an out-of-range slice yields "" rather
+        // than throwing (bash is lenient where .NET Substring is strict).
         var result = PsEmitter.Transpile("echo ${c[1]:0:2}");
-        Assert.Equal("Invoke-BashEcho $c[1].Substring(0, 2)", result);
+        Assert.Contains("$c[1].Substring([Math]::Min(0, $c[1].Length)", result);
     }
 
     [Fact]
@@ -3139,7 +3141,26 @@ public class PsEmitterTests
     public void Transpile_ParamSlice_EmitsSubstring()
     {
         var result = PsEmitter.Transpile("echo ${name:0:2}");
-        Assert.Contains("Substring(0, 2)", result);
+        Assert.Contains("$env:name.Substring([Math]::Min(0, $env:name.Length)", result);
+    }
+
+    [Fact]
+    public void Transpile_ParamSlice_NegativeOffset_CountsFromEnd()
+    {
+        // ${s: -2} (space disambiguates from the :-default operator) = last 2
+        // chars; offset maps to Length - 2. Regression: was ignored, returning $s.
+        var result = PsEmitter.Transpile("echo ${s: -2}");
+        Assert.Contains("Substring([Math]::Max(0, $env:s.Length - 2))", result);
+    }
+
+    [Fact]
+    public void Transpile_ParamRemoveShortestSuffix_KeepsGreedyPrefix()
+    {
+        // ${p%.*} removes the SHORTEST suffix matching `.*` -> keep `foo.bar`,
+        // not `foo`. Emitted as `^(.*)\..*$` -> `$1` (greedy prefix capture).
+        var result = PsEmitter.Transpile("echo ${p%.*}");
+        Assert.Contains("-replace '^(.*)", result);
+        Assert.Contains("$1", result);
     }
 
     // ${str^^} -> ToUpper
