@@ -127,6 +127,21 @@ public sealed class InvokeBashReadCommand : PSCmdlet
         double? timeoutSecs = null;
         var varNames = new List<string>();
 
+        // De-bundle short flags: `-ra` -> `-r` `-a`. Without this a bundled value
+        // flag like the array flag in `read -ra parts` was unrecognized (it starts
+        // with '-' so it was not a var name either), so `-a` never fired and the
+        // whole line landed in a scalar `parts`. bash puts a value-taking flag
+        // last in a bundle; its value is the following argument (handled below).
+        var debundled = new List<string>();
+        foreach (var a in args)
+        {
+            if (a.Length > 2 && a[0] == '-' && a[1] != '-' && a.Skip(1).All(char.IsLetter))
+                foreach (var ch in a.Skip(1)) debundled.Add("-" + ch);
+            else
+                debundled.Add(a);
+        }
+        args = debundled.ToArray();
+
         int i = 0;
         while (i < args.Length)
         {
@@ -286,10 +301,9 @@ public sealed class InvokeBashReadCommand : PSCmdlet
         // Assign.
         if (arrayName != null)
         {
-            // -a ARR: whitespace-split the line into an indexed array.
-            string[] parts = inputLine.Length == 0
-                ? Array.Empty<string>()
-                : System.Text.RegularExpressions.Regex.Split(inputLine, @"\s+");
+            // -a ARR: split the line into an indexed array on $IFS (bash uses IFS,
+            // not just whitespace — `IFS=, read -ra parts` must split on commas).
+            string[] parts = SplitByIfs(inputLine, Environment.GetEnvironmentVariable("IFS"));
             AssignVariable(arrayName, parts);
             // Also assign positional names (oracle parity — `-a` did not
             // suppress positional name assignment, though typical usage has
@@ -352,6 +366,55 @@ public sealed class InvokeBashReadCommand : PSCmdlet
         };
         try { Environment.SetEnvironmentVariable(name, envVal); }
         catch { /* env-set may fail for restricted names; non-fatal */ }
+    }
+
+    /// <summary>
+    /// Split a line into fields the way bash does using <c>$IFS</c>:
+    /// <list type="bullet">
+    /// <item>unset IFS → default: split on runs of whitespace, ignoring leading/
+    /// trailing whitespace;</item>
+    /// <item>empty IFS → no splitting (one field = the whole line);</item>
+    /// <item>otherwise → whitespace IFS chars fold (runs collapse, ends trimmed)
+    /// while each non-whitespace IFS char is its own delimiter that preserves
+    /// empty fields between adjacent delimiters (so <c>IFS=,</c> on <c>"a,,c"</c>
+    /// yields <c>a</c>, <c>""</c>, <c>c</c>).</item>
+    /// </list>
+    /// </summary>
+    internal static string[] SplitByIfs(string line, string? ifs)
+    {
+        if (ifs is null)
+            return line.Length == 0 ? Array.Empty<string>()
+                : System.Text.RegularExpressions.Regex.Split(line.Trim(), @"\s+");
+        if (ifs.Length == 0)
+            return line.Length == 0 ? Array.Empty<string>() : new[] { line };
+
+        var ws = new System.Text.StringBuilder();
+        var nonWs = new System.Text.StringBuilder();
+        foreach (var c in ifs)
+            (char.IsWhiteSpace(c) ? ws : nonWs).Append(System.Text.RegularExpressions.Regex.Escape(c.ToString()));
+
+        string wsCls = ws.Length > 0 ? "[" + ws + "]" : null!;
+        if (line.Length == 0) return Array.Empty<string>();
+
+        if (nonWs.Length == 0)
+        {
+            // IFS is all whitespace: fold runs, trim ends (the default shape).
+            var trimmed = System.Text.RegularExpressions.Regex.Replace(
+                line, $"^{wsCls}+|{wsCls}+$", "");
+            return trimmed.Length == 0 ? Array.Empty<string>()
+                : System.Text.RegularExpressions.Regex.Split(trimmed, wsCls + "+");
+        }
+
+        // Mixed/non-whitespace IFS: a delimiter is a non-ws IFS char optionally
+        // padded by whitespace IFS, OR a run of whitespace IFS. Trim leading/
+        // trailing whitespace-IFS first so it doesn't create phantom end fields.
+        string body = wsCls is null ? line
+            : System.Text.RegularExpressions.Regex.Replace(line, $"^{wsCls}+|{wsCls}+$", "");
+        string nonWsCls = "[" + nonWs + "]";
+        string delim = wsCls is null
+            ? nonWsCls
+            : $"{wsCls}*{nonWsCls}{wsCls}*|{wsCls}+";
+        return System.Text.RegularExpressions.Regex.Split(body, delim);
     }
 
     /// <summary>

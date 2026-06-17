@@ -1111,6 +1111,25 @@ public class PsEmitterTests
     }
 
     [Fact]
+    public void Transpile_ArrayKeys_IndexedArray_EmitsIndicesNotDotKeys()
+    {
+        // ${!arr[@]} on an indexed array is its INDICES (0..n-1), and `.Keys`
+        // does not exist on a PS array (the old emission crashed). Branch on type.
+        var result = PsEmitter.Transpile("echo ${!arr[@]}");
+        Assert.Contains("0..($arr.Count - 1)", result);     // indexed-array indices
+        Assert.Contains("IDictionary", result);              // associative -> .Keys branch
+    }
+
+    [Fact]
+    public void Transpile_QuotedArrayAll_ForIn_IteratesElements()
+    {
+        // `for x in "${arr[@]}"` iterates per element; the quoted expansion must
+        // not stringify the array into one word. Emit the array variable directly.
+        var result = PsEmitter.Transpile("for x in \"${arr[@]}\"; do echo $x; done");
+        Assert.Contains("foreach ($x in $arr)", result);
+    }
+
+    [Fact]
     public void Transpile_ArrayElementSlice_AppliesSubstringToElement()
     {
         // Substring indices are clamped so an out-of-range slice yields "" rather

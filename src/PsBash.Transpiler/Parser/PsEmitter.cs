@@ -255,6 +255,32 @@ public static class PsEmitter
         };
     }
 
+    /// <summary>
+    /// True when a word is a whole-array expansion that iterates once per element
+    /// in a for-in list: bare <c>${arr[@]}</c>/<c>${arr[*]}</c> and quoted
+    /// <c>"${arr[@]}"</c> (each element preserved). Quoted <c>"${arr[*]}"</c> is
+    /// excluded — it joins the array into one word (IFS), so it iterates once via
+    /// the normal stringified path. Outputs the bare array name.
+    /// </summary>
+    private static bool IsArrayAllWord(CompoundWord w, out string arrayName)
+    {
+        arrayName = "";
+        if (w.Parts.Length != 1)
+            return false;
+        if (w.Parts[0] is WordPart.BracedVarSub b && b.Suffix is "[@]" or "[*]")
+        {
+            arrayName = b.Name;
+            return true;
+        }
+        if (w.Parts[0] is WordPart.DoubleQuoted dq && dq.Parts.Length == 1
+            && dq.Parts[0] is WordPart.BracedVarSub qb && qb.Suffix == "[@]")
+        {
+            arrayName = qb.Name;
+            return true;
+        }
+        return false;
+    }
+
     private static string FormatForInList(ImmutableArray<CompoundWord> list)
     {
         if (list.Length == 1)
@@ -266,6 +292,12 @@ public static class PsEmitter
             // whole join. Emit the positional array directly instead.
             if (IsPositionalAllWord(list[0]))
                 return "$(if ($global:BashPositional) { $global:BashPositional } else { $args })";
+
+            // `for x in "${arr[@]}"` (and bare ${arr[@]}/${arr[*]}) iterates per
+            // element. Quoted "${arr[@]}" would otherwise stringify the array into
+            // one space-joined word and run once. Emit the array variable directly.
+            if (IsArrayAllWord(list[0], out var arrName))
+                return "$" + arrName;
 
             var single = EmitWord(list[0]);
             if (HasGlobChars(single))
@@ -1360,6 +1392,18 @@ public static class PsEmitter
 
     private static string EmitSimple(Command.Simple cmd)
     {
+        // Env-var prefix (`VAR=val cmd`) must wrap the ENTIRE command — including
+        // the mapped (Invoke-Bash*), heredoc, and special-form paths, all of which
+        // return early below. The save/set/restore block further down only wraps
+        // the general fallback, so `IFS=, read ...`, `X=1 cat <<< ...`, and any
+        // `VAR=val <mapped-command>` silently DROPPED the assignment. Strip the
+        // pairs, re-emit the bare command through every path, then wrap once.
+        if (!cmd.EnvPairs.IsEmpty)
+        {
+            var bare = cmd with { EnvPairs = ImmutableArray<EnvPair>.Empty };
+            return WrapEnvPairs(cmd.EnvPairs, EmitSimple(bare));
+        }
+
         // Heredoc: emit as @"body"@ | cmd (or @'body'@ for no-expand).
         if (!cmd.HereDocs.IsDefaultOrEmpty)
         {
@@ -1739,6 +1783,28 @@ public static class PsEmitter
             sb.Append('}');
         }
 
+        return sb.ToString();
+    }
+
+    /// <summary>
+    /// Wrap an already-emitted command in the <c>VAR=val cmd</c> env-prefix
+    /// save/set/restore so the assignment applies for the duration of the command
+    /// and is then restored (no leak), regardless of which emission path produced
+    /// <paramref name="inner"/>.
+    /// </summary>
+    private static string WrapEnvPairs(ImmutableArray<EnvPair> pairs, string inner)
+    {
+        var sb = new StringBuilder();
+        foreach (var p in pairs)
+            sb.Append($"$__saved_{p.Name} = $env:{p.Name}; ");
+        sb.Append("try { ");
+        foreach (var p in pairs)
+            sb.Append($"$env:{p.Name} = {EmitAssignmentValue(p.Value)}; ");
+        sb.Append(inner);
+        sb.Append(" } finally { ");
+        foreach (var p in pairs)
+            sb.Append($"$env:{p.Name} = $__saved_{p.Name}; ");
+        sb.Append('}');
         return sb.ToString();
     }
 
@@ -2743,9 +2809,15 @@ public static class PsEmitter
             return inDoubleQuote ? $"$({expr})" : expr;
         }
 
-        // Array keys: ${!arr[@]} -> $arr.Keys (or $($arr.Keys) in double quotes)
+        // Array keys/indices: ${!arr[@]}. bash gives the KEYS of an associative
+        // array but the numeric INDICES (0..n-1) of an indexed array — and `.Keys`
+        // does not exist on a PowerShell array, so the old emission crashed
+        // ("Object reference not set") on a normal `arr=(a b c)`. Branch on the
+        // runtime type; guard the empty array (0..-1 would descend to @(0,-1)).
         if (bvs.Suffix.StartsWith("!"))
-            return inDoubleQuote ? $"$(${bvs.Name}.Keys)" : $"${bvs.Name}.Keys";
+            return $"$(if (${bvs.Name} -is [System.Collections.IDictionary]) "
+                + $"{{ ${bvs.Name}.Keys }} elseif (${bvs.Name}.Count -gt 0) "
+                + $"{{ 0..(${bvs.Name}.Count - 1) }} else {{ @() }})";
 
         // Scalar suffix operators (default/assign/alt/error, removal, replace, slice,
         // case, @-transform). Shared with array-element expansions like ${arr[0]##*/}.
