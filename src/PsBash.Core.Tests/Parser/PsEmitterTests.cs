@@ -2029,80 +2029,65 @@ public class PsEmitterTests
     }
 
     [Fact]
+    // Standalone (( expr )) now evaluates via the bash-arithmetic evaluator and
+    // sets $LASTEXITCODE (0 iff result != 0) with no stdout — so **, bitwise,
+    // etc. are correct and `(( … )) && cmd` chains work. We assert the evaluator
+    // routing; the exact $LASTEXITCODE wrapper is PsBuild.SilentExitFromBool.
     public void Transpile_ArithCommand_Increment()
-    {
-        var result = PsEmitter.Transpile("(( x++ ))");
-        Assert.Equal("$env:x = [int]$env:x + 1", result);
-    }
+        => Assert.Contains("Invoke-BashArith 'x++'", PsEmitter.Transpile("(( x++ ))"));
 
     [Fact]
     public void Transpile_ArithCommand_Decrement()
-    {
-        var result = PsEmitter.Transpile("(( x-- ))");
-        Assert.Equal("$env:x = [int]$env:x + -1", result);
-    }
+        => Assert.Contains("Invoke-BashArith 'x--'", PsEmitter.Transpile("(( x-- ))"));
 
     [Fact]
     public void Transpile_ArithCommand_PreIncrement()
-    {
-        var result = PsEmitter.Transpile("(( ++x ))");
-        Assert.Equal("$env:x = [int]$env:x + 1", result);
-    }
+        => Assert.Contains("Invoke-BashArith '++x'", PsEmitter.Transpile("(( ++x ))"));
 
     [Fact]
     public void Transpile_ArithCommand_PreDecrement()
-    {
-        var result = PsEmitter.Transpile("(( --x ))");
-        Assert.Equal("$env:x = [int]$env:x + -1", result);
-    }
+        => Assert.Contains("Invoke-BashArith '--x'", PsEmitter.Transpile("(( --x ))"));
 
     [Fact]
     public void Transpile_ArithCommand_Comparison_GreaterThan()
-    {
-        var result = PsEmitter.Transpile("(( x > 5 ))");
-        Assert.Equal("[int]$env:x -gt 5", result);
-    }
+        => Assert.Contains("Invoke-BashArith 'x > 5'", PsEmitter.Transpile("(( x > 5 ))"));
 
     [Fact]
     public void Transpile_ArithCommand_Comparison_LessThan()
-    {
-        var result = PsEmitter.Transpile("(( x < 5 ))");
-        Assert.Equal("[int]$env:x -lt 5", result);
-    }
+        => Assert.Contains("Invoke-BashArith 'x < 5'", PsEmitter.Transpile("(( x < 5 ))"));
 
     [Fact]
     public void Transpile_ArithCommand_Comparison_GreaterEqual()
-    {
-        var result = PsEmitter.Transpile("(( x >= 5 ))");
-        Assert.Equal("[int]$env:x -ge 5", result);
-    }
+        => Assert.Contains("Invoke-BashArith 'x >= 5'", PsEmitter.Transpile("(( x >= 5 ))"));
 
     [Fact]
     public void Transpile_ArithCommand_Comparison_LessEqual()
-    {
-        var result = PsEmitter.Transpile("(( x <= 5 ))");
-        Assert.Equal("[int]$env:x -le 5", result);
-    }
+        => Assert.Contains("Invoke-BashArith 'x <= 5'", PsEmitter.Transpile("(( x <= 5 ))"));
 
     [Fact]
     public void Transpile_ArithCommand_Comparison_Equal()
-    {
-        var result = PsEmitter.Transpile("(( x == 5 ))");
-        Assert.Equal("[int]$env:x -eq 5", result);
-    }
+        => Assert.Contains("Invoke-BashArith 'x == 5'", PsEmitter.Transpile("(( x == 5 ))"));
 
     [Fact]
     public void Transpile_ArithCommand_Comparison_NotEqual()
-    {
-        var result = PsEmitter.Transpile("(( x != 5 ))");
-        Assert.Equal("[int]$env:x -ne 5", result);
-    }
+        => Assert.Contains("Invoke-BashArith 'x != 5'", PsEmitter.Transpile("(( x != 5 ))"));
 
     [Fact]
     public void Transpile_ArithCommand_Ternary()
+        => Assert.Contains("Invoke-BashArith 'x > 0 ? 1 : 0'", PsEmitter.Transpile("(( x > 0 ? 1 : 0 ))"));
+
+    [Fact]
+    public void Transpile_ArithCommand_Standalone_SetsExitCode()
+        => Assert.Contains("$global:LASTEXITCODE", PsEmitter.Transpile("(( x++ ))"));
+
+    [Fact]
+    public void Transpile_IfArithCommand_Condition_RoutesToEvaluatorNonZeroTest()
     {
-        var result = PsEmitter.Transpile("(( x > 0 ? 1 : 0 ))");
-        Assert.Equal("if ([int]$env:x -gt 0) { 1 } else { 0 }", result);
+        // The old native emission made `if (( 2 ** 10 > 1000 ))` a PowerShell
+        // parse error (** ). Now the condition is true iff the evaluator result
+        // is non-zero.
+        var result = PsEmitter.Transpile("if (( 2 ** 10 > 1000 )); then echo big; fi");
+        Assert.Contains("(Invoke-BashArith '2 ** 10 > 1000') -ne 0", result);
     }
 
     [Fact]

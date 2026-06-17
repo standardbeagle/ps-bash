@@ -639,10 +639,39 @@ public static class PsEmitter
         return $"Invoke-BashBackground {{ {inner} }}";
     }
 
+    /// <summary>
+    /// Standalone <c>(( expr ))</c> statement. Bash evaluates the expression for
+    /// its side effects and sets <c>$?</c> to 0 when the result is non-zero, 1
+    /// otherwise. We evaluate via <see cref="BashArith"/> (so <c>**</c>, integer
+    /// division, bitwise/shift, etc. are correct) and set <c>$LASTEXITCODE</c>
+    /// accordingly with no stdout — which also makes <c>(( … )) &amp;&amp; cmd</c>
+    /// and <c>(( … )) || cmd</c> chains work. Positional/special-parameter
+    /// expressions keep the legacy translation. The condition context
+    /// (<c>if (( … ))</c> / <c>while (( … ))</c>) is handled in
+    /// <see cref="EmitCondition"/> via <see cref="EmitArithConditionExpr"/>.
+    /// </summary>
     private static string EmitArithCommand(Command.ArithCommand arith)
     {
         string expr = arith.Expr.Trim();
+        if (!ReferencesPositional(expr))
+            return PsBuild.SilentExitFromBool($"(Invoke-BashArith {PsBuild.SingleQuote(expr)}) -ne 0");
+        return EmitArithCommandLegacy(expr);
+    }
 
+    /// <summary>
+    /// Boolean expression for <c>(( expr ))</c> used as an <c>if</c>/<c>while</c>
+    /// condition: true iff the evaluated result is non-zero.
+    /// </summary>
+    private static string EmitArithConditionExpr(string expr)
+    {
+        expr = expr.Trim();
+        if (!ReferencesPositional(expr))
+            return $"((Invoke-BashArith {PsBuild.SingleQuote(expr)}) -ne 0)";
+        return "(" + EmitArithCommandLegacy(expr) + ")";
+    }
+
+    private static string EmitArithCommandLegacy(string expr)
+    {
         // Increment/decrement: env vars need assignment with [int] cast;
         // loop/PS vars can use native ++ / -- operators.
         if (expr.EndsWith("++") || expr.EndsWith("--"))
@@ -963,6 +992,13 @@ public static class PsEmitter
         if (cond is Command.Simple or Command.Pipeline)
             return EmitConditionAsExpr(cond);
 
+        // Arithmetic (( expr )) as a condition: true iff the evaluated value is
+        // non-zero. Routed through the bash-arithmetic evaluator so **, integer
+        // division, bitwise/shift, etc. are correct (the old native emission
+        // mistranslated them — e.g. `if (( 2**10 > 1000 ))` was a parse error).
+        if (cond is Command.ArithCommand arithCmd)
+            return EmitArithConditionExpr(arithCmd.Expr);
+
         return Emit(cond);
     }
 
@@ -988,6 +1024,10 @@ public static class PsEmitter
         // Nested AndOrList: recurse
         if (cmd is Command.AndOrList nested)
             return EmitConditionAndOrList(nested);
+
+        // Arithmetic (( expr )): non-zero result is true (see EmitCondition).
+        if (cmd is Command.ArithCommand arithCmd)
+            return EmitArithConditionExpr(arithCmd.Expr);
 
         // General command: run it and evaluate the exit code (bash semantics).
         // PsBuild.ExitCodeTest wraps the command in [void](...) so its output does not
