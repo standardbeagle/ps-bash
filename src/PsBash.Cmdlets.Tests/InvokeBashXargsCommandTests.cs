@@ -72,6 +72,29 @@ public class InvokeBashXargsCommandTests : IClassFixture<SharedPwshFixture>
     }
 
     [Fact]
+    public void Xargs_WhitespaceInput_SplitsOnBlanksLikeGnu()
+    {
+        // Regression: a SINGLE input line with space-separated tokens must split
+        // into separate items (GNU xargs default = whitespace-delimited), so
+        // `-n 1` runs once per token. The old newline-only split merged them
+        // into one item, so `-n 1` produced a single `echo a b c`.
+        // Oracle: `printf "a b c\n" | xargs -n1 echo` -> "a\nb\nc".
+        var (result, _) = Run("'a b c' | Invoke-BashXargs -n 1 echo");
+        var joined = JoinBashText(result);
+        Assert.Equal("a\nb\nc", joined);          // three separate invocations
+        Assert.DoesNotContain("a b c", joined);   // NOT one merged invocation
+    }
+
+    [Fact]
+    public void Xargs_MixedBlanksAndNewlines_SplitIntoAllItems()
+    {
+        // Tabs, spaces, and newlines are all item separators by default.
+        var (result, _) = Run("\"a b\tc\nd\" | Invoke-BashXargs -n 1 echo");
+        var joined = JoinBashText(result);
+        Assert.Equal("a\nb\nc\nd", joined);
+    }
+
+    [Fact]
     public void Xargs_DashIReplace_SubstitutesTokenOncePerLine()
     {
         // Replace mode: '{}' gets replaced with each input line, one invocation per line.

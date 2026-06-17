@@ -7,8 +7,12 @@ namespace PsBash.Cmdlets;
 /// (REFACTOR-2). Reads items from pipeline input, builds and runs a command
 /// per item-batch.
 ///
-/// Oracle parity: the psm1 oracle implemented <c>-0</c> (NUL-separated input
-/// vs newline-separated default), <c>-I REPLACE</c> (replace-token mode —
+/// Oracle parity: the real-bash oracle splits the DEFAULT input stream on
+/// whitespace (blanks AND newlines), so `printf "a b c\n" | xargs -n1` runs
+/// three times. <c>-0</c> (NUL-separated) and <c>-d DELIM</c> are the explicit
+/// single-delimiter overrides. (The original psm1 oracle split on newlines
+/// only — a divergence from GNU xargs that silently merged space-separated
+/// tokens; corrected here.) <c>-I REPLACE</c> (replace-token mode —
 /// run command once per input line with REPLACE substituted in each arg),
 /// <c>-n N</c> (batch N items per invocation), <c>--</c> end-of-flags, and
 /// the leading-word "if a runtime function named <c>Invoke-Bash{Cmd}</c>
@@ -310,18 +314,37 @@ public sealed class InvokeBashXargsCommand : PSCmdlet
         var cmdArgs = new List<string>();
         for (int k = 1; k < operands.Count; k++) cmdArgs.Add(operands[k]);
 
-        // Split pipeline input by delimiter: -d DELIM (custom) overrides; else
-        // -0 (NUL) or the newline default. A custom delimiter honors the common
-        // backslash escapes (\n \t \r \0 \\), matching GNU xargs -d.
+        // Split pipeline input into items. GNU xargs splits the DEFAULT input
+        // stream on BLANKS (spaces, tabs) AND newlines — so `printf "a b c\n"`
+        // yields three items, and `xargs -n1` runs the command three times. The
+        // old psm1 oracle split on newlines only, which silently merged
+        // space-separated tokens into one item (so `-n1`/`-L1` appeared to do
+        // nothing). This now matches the real-bash oracle. `-d DELIM` (custom,
+        // with \n \t \r \0 \\ escapes) and `-0` (NUL) are the explicit overrides
+        // that switch to single-delimiter splitting and suppress whitespace
+        // segmentation — exactly as GNU xargs documents.
         var inputLines = new List<string>();
-        var delim = customDelim != null
-            ? ExpandDelimEscapes(customDelim)
-            : (nullDelim ? "\0" : "\n");
-        if (delim.Length == 0) delim = "\n"; // empty delimiter is meaningless; fall back
+        bool whitespaceSplit = customDelim == null && !nullDelim;
+        var delim = customDelim != null ? ExpandDelimEscapes(customDelim) : "\0";
+        if (!whitespaceSplit && delim.Length == 0) whitespaceSplit = true; // empty -d is meaningless
+
         foreach (var item in _pipelineItems)
         {
             var text = BashRuntime.GetBashText(item);
-            // Strip trailing delimiter exactly once.
+            if (whitespaceSplit)
+            {
+                // Split on any run of whitespace (space, tab, CR, LF, FF, VT),
+                // dropping empty fields — leading/trailing/embedded blank runs
+                // never produce empty items, matching GNU xargs.
+                foreach (var part in text.Split((char[]?)null, System.StringSplitOptions.RemoveEmptyEntries))
+                {
+                    inputLines.Add(part);
+                }
+                continue;
+            }
+
+            // Single-delimiter mode (-d / -0): strip one trailing delimiter, then
+            // split, dropping empty fields.
             if (text.Length > 0 && text.EndsWith(delim, System.StringComparison.Ordinal))
             {
                 text = text.Substring(0, text.Length - delim.Length);
