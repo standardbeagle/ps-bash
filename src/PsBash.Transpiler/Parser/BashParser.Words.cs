@@ -294,10 +294,19 @@ public sealed partial class BashParser
         pos++; // skip $
         int start = pos;
         // Special single-char variables: $? $! $# $$ $_ $@ $* $- $0-$9
-        if (pos < raw.Length && raw[pos] is '?' or '!' or '#' or '$' or '_' or '@' or '*' or '-'
+        // `_` is special ONLY as a lone `$_` (last arg). `$_cc_bin` is the ordinary
+        // variable `_cc_bin` — bash names match [A-Za-z_][A-Za-z0-9_]* — so when `_` is
+        // followed by another name char, fall through to the named-variable scan below.
+        if (pos < raw.Length && raw[pos] is '?' or '!' or '#' or '$' or '@' or '*' or '-'
             or (>= '0' and <= '9'))
         {
             parts.Add(new WordPart.SimpleVarSub(raw[pos].ToString()));
+            return pos + 1;
+        }
+        if (pos < raw.Length && raw[pos] == '_'
+            && !(pos + 1 < raw.Length && IsVarChar(raw[pos + 1])))
+        {
+            parts.Add(new WordPart.SimpleVarSub("_"));
             return pos + 1;
         }
         // Named variable: letter/underscore followed by alnum/underscore

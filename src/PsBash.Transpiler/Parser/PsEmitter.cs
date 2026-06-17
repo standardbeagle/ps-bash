@@ -1105,6 +1105,15 @@ public static class PsEmitter
         return TranslateTestCondition(expr.Inner, extended: false);
     }
 
+    // The full GNU set of unary file-test operators. Any of these in a `[ -X file ]` /
+    // `[[ -X file ]]` unary position must map to a valid PowerShell boolean (see the switch
+    // in TranslateTestCondition). `-z`/`-n` are string tests handled separately.
+    private static readonly System.Collections.Generic.HashSet<string> UnaryFileTestOps = new(System.StringComparer.Ordinal)
+    {
+        "-e", "-a", "-f", "-d", "-r", "-w", "-x", "-s", "-h", "-L",
+        "-b", "-c", "-p", "-S", "-g", "-u", "-k", "-t", "-N", "-O", "-G",
+    };
+
     private static string EmitExtendedTest(ImmutableArray<CompoundWord> inner)
     {
         // Split on logical operators (&& / ||) into sub-expressions.
@@ -1143,16 +1152,34 @@ public static class PsEmitter
         if (words.Length >= 2)
         {
             var flag = GetLiteralValue(words[0]);
-            if (flag == "-f")
-                return $"Test-Path \"{EmitWord(words[1])}\" -PathType Leaf";
-            if (flag == "-d")
-                return $"Test-Path \"{EmitWord(words[1])}\" -PathType Container";
-            if (flag == "-e")
-                return $"Test-Path \"{EmitWord(words[1])}\"";
+            // String tests.
             if (flag == "-z")
                 return $"[string]::IsNullOrEmpty({EmitTestOperand(words[1])})";
             if (flag == "-n")
                 return $"-not [string]::IsNullOrEmpty({EmitTestOperand(words[1])})";
+
+            // Unary file tests. Bash file tests have no faithful cross-platform PowerShell
+            // equivalent for POSIX permission/mode bits, so these are best-effort:
+            //   - existence-class ops (-e -a -f -d -r -w -x -O -G) -> Test-Path
+            //   - -s -> exists and non-empty
+            //   - -h/-L -> reparse-point (symlink) check
+            //   - special-file / mode-bit / terminal ops -> $false (Windows has no equivalent)
+            // Crucially, EVERY recognized unary op maps to a valid PowerShell boolean so the
+            // old broken fallback ('-x' $f) — two adjacent tokens, a parse error — never fires.
+            if (UnaryFileTestOps.Contains(flag))
+            {
+                var path = $"\"{EmitWord(words[1])}\"";
+                return flag switch
+                {
+                    "-f" => $"Test-Path {path} -PathType Leaf",
+                    "-d" => $"Test-Path {path} -PathType Container",
+                    "-s" => $"((Test-Path {path} -PathType Leaf) -and ((Get-Item -LiteralPath {path} -Force -ErrorAction SilentlyContinue).Length -gt 0))",
+                    "-h" or "-L" => $"([bool]((Get-Item -LiteralPath {path} -Force -ErrorAction SilentlyContinue).Attributes -band [System.IO.FileAttributes]::ReparsePoint))",
+                    "-b" or "-c" or "-p" or "-S" or "-g" or "-u" or "-k" or "-t" or "-N" => "$false",
+                    // -e -a -r -w -x -O -G and any remaining existence-class op.
+                    _ => $"Test-Path {path}",
+                };
+            }
         }
 
         if (words.Length == 3)
