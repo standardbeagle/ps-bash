@@ -674,7 +674,7 @@ public static class PsEmitter
     /// <summary>
     /// Standalone <c>(( expr ))</c> statement. Bash evaluates the expression for
     /// its side effects and sets <c>$?</c> to 0 when the result is non-zero, 1
-    /// otherwise. We evaluate via <see cref="BashArith"/> (so <c>**</c>, integer
+    /// otherwise. We evaluate via <c>Invoke-BashArith</c> (so <c>**</c>, integer
     /// division, bitwise/shift, etc. are correct) and set <c>$LASTEXITCODE</c>
     /// accordingly with no stdout — which also makes <c>(( … )) &amp;&amp; cmd</c>
     /// and <c>(( … )) || cmd</c> chains work. Positional/special-parameter
