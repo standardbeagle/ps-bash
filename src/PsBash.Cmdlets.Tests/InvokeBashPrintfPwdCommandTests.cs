@@ -89,6 +89,45 @@ public class InvokeBashPrintfPwdCommandTests : IClassFixture<SharedPwshFixture>
     }
 
     [Fact]
+    public void Printf_PercentC_PrintsFirstCharOfArg_NotAsciiCode()
+    {
+        // bash: printf '%c%c' 65 66 -> "66" (first char of "65", first char of "66"),
+        // NOT "AB" (which would be the ASCII-code interpretation).
+        var lines = RunBashText("Invoke-BashPrintf '%c%c' '65' '66'");
+        Assert.Equal(new[] { "66" }, lines);
+    }
+
+    [Fact]
+    public void Printf_PercentC_StringArg_TakesFirstChar()
+    {
+        var lines = RunBashText("Invoke-BashPrintf '%c' 'hello'");
+        Assert.Equal(new[] { "h" }, lines);
+    }
+
+    [Fact]
+    public void Printf_FloatZeroPadWidth()
+    {
+        // bash: printf '%05.2f' 3.14159 -> "03.14" (width 5, zero-padded). The old
+        // code space-padded then Trim()'d it off, yielding "3.14".
+        var lines = RunBashText("Invoke-BashPrintf '%05.2f' '3.14159'");
+        Assert.Equal(new[] { "03.14" }, lines);
+    }
+
+    [Fact]
+    public void Printf_FloatSpaceWidth()
+    {
+        var lines = RunBashText("Invoke-BashPrintf '%8.2f' '3.14159'");
+        Assert.Equal(new[] { "    3.14" }, lines);
+    }
+
+    [Fact]
+    public void Printf_FloatLeftAlignWidth()
+    {
+        var lines = RunBashText("Invoke-BashPrintf '[%-8.2f]' '3.14159'");
+        Assert.Equal(new[] { "[3.14    ]" }, lines);
+    }
+
+    [Fact]
     public void Printf_IntZeroPadWidth()
     {
         var lines = RunBashText("Invoke-BashPrintf '%05d' '42'");
@@ -145,11 +184,12 @@ public class InvokeBashPrintfPwdCommandTests : IClassFixture<SharedPwshFixture>
     }
 
     [Fact]
-    public void Printf_CharConversion_FromIntCodepoint()
+    public void Printf_CharConversion_TakesFirstCharOfArg()
     {
-        // 65 coerces to int -> [char]65 -> 'A'.
+        // bash %c is the FIRST CHARACTER of the argument string: '65' -> '6'
+        // (NOT the ASCII-code interpretation [char]65 -> 'A').
         var lines = RunBashText("Invoke-BashPrintf '%c' '65'");
-        Assert.Equal(new[] { "A" }, lines);
+        Assert.Equal(new[] { "6" }, lines);
     }
 
     [Fact]

@@ -232,9 +232,15 @@ public sealed class InvokeBashPrintfCommand : PSCmdlet
                                 "F" + prec, CultureInfo.InvariantCulture);
                             if (widthStr.Length > 0)
                             {
-                                formatted = formatted.PadLeft(int.Parse(widthStr));
+                                // Honor the field width with the right fill: `0` flag
+                                // zero-pads (sign kept ahead of the zeros), `-` left-
+                                // justifies, otherwise space-pad on the left. The old
+                                // code space-padded then Trim()'d it straight back off,
+                                // so `%05.2f` produced `3.14` instead of `03.14`.
+                                formatted = PadNumeric(formatted, int.Parse(widthStr),
+                                    zeroPad: flagStr.Contains('0'), leftAlign: flagStr.Contains('-'));
                             }
-                            sb.Append(formatted.Trim());
+                            sb.Append(formatted);
                         }
                         argIdx++;
                         i = j + 1;
@@ -282,20 +288,11 @@ public sealed class InvokeBashPrintfCommand : PSCmdlet
                     case 'c':
                         if (argIdx < converted.Count)
                         {
-                            object v = converted[argIdx];
-                            if (v is int iv)
-                            {
-                                sb.Append((char)iv);
-                            }
-                            else if (v is long lv)
-                            {
-                                sb.Append((char)(int)lv);
-                            }
-                            else
-                            {
-                                string s = v?.ToString() ?? string.Empty;
-                                if (s.Length > 0) sb.Append(s[0]);
-                            }
+                            // bash %c prints the FIRST CHARACTER of the argument's
+                            // string form (`printf '%c' 65` -> '6'), NOT the ASCII
+                            // code of a numeric value (which would give 'A').
+                            string s = converted[argIdx]?.ToString() ?? string.Empty;
+                            if (s.Length > 0) sb.Append(s[0]);
                         }
                         argIdx++;
                         i = j + 1;
@@ -331,6 +328,26 @@ public sealed class InvokeBashPrintfCommand : PSCmdlet
 
         WriteObject(BashRuntime.NewBashObject(
             result, "PsBash.TextOutput", noTrailingNewline: true, command: "printf"));
+    }
+
+    /// <summary>
+    /// Pad a formatted numeric string to <paramref name="width"/>. With
+    /// <paramref name="leftAlign"/> (the <c>-</c> flag) pads on the right with
+    /// spaces; with <paramref name="zeroPad"/> (the <c>0</c> flag) pads on the
+    /// left with zeros, keeping any leading sign ahead of the zeros
+    /// (<c>-1.5</c> width 6 → <c>-001.5</c>); otherwise pads left with spaces.
+    /// </summary>
+    private static string PadNumeric(string s, int width, bool zeroPad, bool leftAlign)
+    {
+        if (s.Length >= width) return s;
+        if (leftAlign) return s.PadRight(width);
+        if (zeroPad)
+        {
+            if (s.Length > 0 && (s[0] == '-' || s[0] == '+'))
+                return s[0] + s.Substring(1).PadLeft(width - 1, '0');
+            return s.PadLeft(width, '0');
+        }
+        return s.PadLeft(width);
     }
 
     private static int ToInt(object o)
