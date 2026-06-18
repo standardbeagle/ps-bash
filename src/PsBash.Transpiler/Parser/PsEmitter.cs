@@ -1166,7 +1166,7 @@ public static class PsEmitter
             //   - special-file / mode-bit / terminal ops -> $false (Windows has no equivalent)
             // Crucially, EVERY recognized unary op maps to a valid PowerShell boolean so the
             // old broken fallback ('-x' $f) — two adjacent tokens, a parse error — never fires.
-            if (UnaryFileTestOps.Contains(flag))
+            if (flag is not null && UnaryFileTestOps.Contains(flag))
             {
                 var path = $"\"{EmitWord(words[1])}\"";
                 return flag switch
