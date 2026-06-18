@@ -87,6 +87,11 @@ public sealed class IpcWorker : IWorker
     // PerInvocation only: the private host process this worker owns and kills on
     // dispose. Null for Daemon lifetime (the shared host outlives this worker).
     private Process? _ownedHost;
+    // Daemon only: the host PID resolved when the daemon was confirmed reachable
+    // (optimistic local reuse, or a fresh spawn). Lets ExchangeOnceAsync arm its
+    // liveness watchdog WITHOUT re-reading + re-parsing the sidecar per command
+    // (B). 0 = not yet resolved; reset to 0 on retire/respawn so it re-resolves.
+    private int _cachedHostPid;
     private int _disposed;
 
     /// <summary>
@@ -163,6 +168,28 @@ public sealed class IpcWorker : IWorker
 
     private async Task EnsureHostReachableAsync(CancellationToken ct)
     {
+        // 0) OPTIMISTIC LOCAL REUSE (A). If the sidecar names a LIVE process
+        // running OUR build, skip the health round-trip entirely — the command's
+        // own connect, backed by the full reset→retire→respawn recovery in
+        // SendRequestAsync, IS the liveness test. Two wins under overload:
+        //   • one fewer host connection per command on the happy path (the health
+        //     probe + the command were two separate connects);
+        //   • no 750 ms health-probe that misclassifies a BUSY-but-healthy daemon
+        //     as Unhealthy/Starting and shoves the launcher into a needless
+        //     spawn/replace — i.e. the launcher stops manufacturing load exactly
+        //     when the system is already saturated.
+        // The local check is purely file/process inspection (no socket): build
+        // identity proves it is not an obsolete daemon (a mismatch falls through
+        // to the full replace path), and a live PID proves there is something to
+        // talk to (a dead/stale sidecar falls through to spawn). Anything the
+        // local check can't vouch for takes the original probe+spawn path below.
+        var localMeta = HostMetadata.TryRead(_scheme, _endpoint);
+        if (ShouldReuseLocally(localMeta, _hostBinaryPath))
+        {
+            _cachedHostPid = localMeta!.Pid; // (B) skip the per-command sidecar re-read
+            return;
+        }
+
         // 1) Probe the canonical socket. If a compatible host answers the health
         // handshake, reuse it. A host that answers but is Starting is waited out;
         // an obsolete (protocol/build mismatch) host is handled under the spawn
@@ -217,6 +244,28 @@ public sealed class IpcWorker : IWorker
     /// which <see cref="HostOwnership.MetadataMatchesLauncher"/> treats as a
     /// match). Used both for initial reuse and for the wait-for-winner path.
     /// </summary>
+    /// <summary>
+    /// Local-only (no socket) decision for the optimistic-reuse fast path (A): may
+    /// the launcher send its command straight to the daemon the sidecar describes,
+    /// skipping the health round-trip? True only when the sidecar exists, names OUR
+    /// build (so an obsolete daemon is NOT silently reused), and its PID is alive
+    /// (so a stale sidecar is NOT trusted). Every false answer falls through to the
+    /// full probe/spawn/replace path, which keeps all the ownership-safety gates.
+    /// </summary>
+    private bool ShouldReuseLocally(HostMetadata? meta, string hostBinaryPath)
+        => ShouldReuseLocally(meta, hostBinaryPath, HostProtocol.BuildIdentityFor(hostBinaryPath), IsProcessAlive);
+
+    // Pure seam: build identity + liveness are injected so the decision is unit-
+    // testable without a real binary or a live process.
+    internal static bool ShouldReuseLocally(
+        HostMetadata? meta, string hostBinaryPath, string expectedBuildIdentity, Func<int, bool> isAlive)
+    {
+        if (meta is null) return false; // no known daemon → must probe/spawn
+        if (!HostOwnership.MetadataMatchesLauncher(meta, hostBinaryPath, expectedBuildIdentity))
+            return false;               // obsolete/foreign build → full replace path
+        return meta.Pid > 0 && isAlive(meta.Pid); // stale sidecar → full spawn path
+    }
+
     private bool CurrentHostMatchesLauncher()
         => HostOwnership.MetadataMatchesLauncher(
                HostMetadata.TryRead(_scheme, _endpoint),
@@ -566,6 +615,11 @@ public sealed class IpcWorker : IWorker
                     // and must NOT retain (or later kill) the handle.
                     if (_lifetime == Lifetime.PerInvocation)
                         _ownedHost = proc;
+                    else
+                        // (B) Cache the fresh daemon's PID for the watchdog now,
+                        // off the spawned process handle — no sidecar re-read on
+                        // the upcoming command exchange.
+                        _cachedHostPid = proc.Id;
                     return;
                 }
 
@@ -767,9 +821,13 @@ public sealed class IpcWorker : IWorker
         // comes from the owned handle (PerInvocation) or the sidecar (Daemon);
         // if neither is available we simply skip the watchdog and fall back to
         // the timeout backstops. Stopped in the finally below.
+        // (B) Daemon: prefer the PID cached when the host was confirmed reachable
+        // (optimistic reuse or fresh spawn), so the common path never re-reads and
+        // re-parses the sidecar per command. Fall back to a single read only when
+        // it was not cached (the rare health-reuse paths).
         int hostPid = _lifetime == Lifetime.PerInvocation
             ? (_ownedHost?.Id ?? 0)
-            : (HostMetadata.TryRead(_scheme, _endpoint)?.Pid ?? 0);
+            : (_cachedHostPid != 0 ? _cachedHostPid : (HostMetadata.TryRead(_scheme, _endpoint)?.Pid ?? 0));
         using var watchdogStop = new CancellationTokenSource();
         Task? watchdog = hostPid > 0
             ? StartHostLivenessWatchdog(hostPid, hostDeadCts, watchdogStop.Token)
@@ -861,28 +919,32 @@ public sealed class IpcWorker : IWorker
     }
 
     /// <summary>
-    /// Background loop that trips <paramref name="hostDeadCts"/> when the host
-    /// process <paramref name="pid"/> exits, so a dead host aborts the pending
-    /// read instead of hanging it. Cheap (a liveness check every ~150 ms) and
-    /// bounded by <paramref name="stop"/>, which the exchange cancels on
-    /// completion. Best-effort: any failure leaves the timeout backstops intact.
+    /// Trips <paramref name="hostDeadCts"/> when the host process
+    /// <paramref name="pid"/> exits, so a dead host aborts the pending read
+    /// instead of hanging it (the Windows AF_UNIX killed-peer gap). EVENT-DRIVEN
+    /// (D): opens the process handle once and awaits <see cref="Process.WaitForExitAsync"/>
+    /// rather than polling <c>GetProcessById</c> every 150 ms. That removes the
+    /// poll loop's per-iteration handle-open + <c>Task.Delay</c> allocation churn
+    /// (GC + syscall pressure when many launchers run concurrently) AND detects
+    /// host death immediately instead of up to 150 ms late. Bounded by
+    /// <paramref name="stop"/>, which the exchange cancels on completion.
+    /// Best-effort: any failure leaves the timeout backstops intact.
     /// </summary>
     private static Task StartHostLivenessWatchdog(int pid, CancellationTokenSource hostDeadCts, CancellationToken stop)
         => Task.Run(async () =>
         {
             try
             {
-                while (!stop.IsCancellationRequested)
-                {
-                    if (!IsProcessAlive(pid))
-                    {
-                        try { hostDeadCts.Cancel(); } catch { }
-                        return;
-                    }
-                    await Task.Delay(150, stop).ConfigureAwait(false);
-                }
+                using var proc = Process.GetProcessById(pid);
+                if (proc.HasExited) { try { hostDeadCts.Cancel(); } catch { } return; }
+                await proc.WaitForExitAsync(stop).ConfigureAwait(false);
+                // Returned without cancellation ⇒ the host PROCESS exited.
+                try { hostDeadCts.Cancel(); } catch { }
             }
             catch (OperationCanceledException) { /* exchange finished — normal stop */ }
+            // No such process / already exited / no handle ⇒ host is gone.
+            catch (ArgumentException) { try { hostDeadCts.Cancel(); } catch { } }
+            catch (InvalidOperationException) { try { hostDeadCts.Cancel(); } catch { } }
             catch { /* never let the watchdog throw into the void */ }
         }, CancellationToken.None);
 
@@ -975,11 +1037,13 @@ public sealed class IpcWorker : IWorker
                 catch { /* already gone / race — best effort */ }
                 try { old.Dispose(); } catch { }
             }
+            _cachedHostPid = 0; // old host gone; SpawnAndWaitAsync re-caches
             IpcTransportFactory.RetireEndpoint(_scheme, _endpoint);
             await SpawnAndWaitAsync(ct).ConfigureAwait(false);
         }
         else
         {
+            _cachedHostPid = 0; // current host is being retired; re-resolve on reconnect
             await EnsureHostReachableAsync(ct).ConfigureAwait(false);
         }
     }

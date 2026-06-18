@@ -10,6 +10,14 @@
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
     <StripSymbols>true</StripSymbols>
     <AssemblyName>ps-bash</AssemblyName>
+    <!-- The launcher is a short-lived one-shot (~one command, then exit). Workstation,
+         NON-concurrent GC fits that profile: Server GC would spin up per-core heaps and
+         GC threads, and background (concurrent) GC adds a dedicated GC thread — both pure
+         startup/teardown overhead for a process that barely collects. This trims fixed
+         per-invocation cost, which matters most under overload (every `-c` is a fresh
+         process). The host (long-lived, concurrent connections) keeps its own defaults. -->
+    <ServerGarbageCollection>false</ServerGarbageCollection>
+    <ConcurrentGarbageCollection>false</ConcurrentGarbageCollection>
   </PropertyGroup>
 
   <ItemGroup>
