@@ -114,6 +114,34 @@ public class HostMetadataTests : IDisposable
     }
 
     [Fact]
+    public void Write_WhenDirectoryUnavailable_ReturnsFalseAndDoesNotThrow()
+    {
+        // Regression (burn-in): the saboteur deleting/corrupting the sidecar's
+        // directory raced the host's Write and an unhandled UnauthorizedAccess/
+        // IOException crashed a serving host (exit 0xE0434352). Write is
+        // best-effort: it must return false, never throw. Force the failure
+        // deterministically + cross-platform by making the sidecar's parent a
+        // FILE (so every directory/file op under it fails).
+        var fileAsParent = Path.Combine(_tempRoot, "iam-a-file");
+        File.WriteAllText(fileAsParent, "not a directory");
+        var endpoint = Path.Combine(fileAsParent, "x.sock"); // parent path is a file
+        var meta = Sample(endpoint: endpoint);
+
+        bool ok = true;
+        var ex = Record.Exception(() => { ok = meta.Write("unix", endpoint); });
+
+        Assert.Null(ex);
+        Assert.False(ok);
+    }
+
+    [Fact]
+    public void Write_Succeeds_ReturnsTrue()
+    {
+        var endpoint = Path.Combine(_tempRoot, "ret.sock");
+        Assert.True(Sample(endpoint: endpoint).Write("unix", endpoint));
+    }
+
+    [Fact]
     public void Write_OverwritesExistingSidecar()
     {
         var endpoint = Path.Combine(_tempRoot, "ow.sock");

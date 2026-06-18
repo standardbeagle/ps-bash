@@ -53,16 +53,44 @@ public sealed record HostMetadata(
     /// can never observe a torn JSON document. Caller owns the deletion of
     /// the file on graceful shutdown via <see cref="Remove"/>.
     /// </summary>
-    public void Write(string scheme, string endpoint)
+    /// <returns><c>true</c> if the sidecar was written; <c>false</c> if a
+    /// transient/permission failure prevented it.</returns>
+    /// <remarks>
+    /// BEST-EFFORT BY CONTRACT. The sidecar is advisory: <see cref="TryRead"/>
+    /// treats an absent or malformed sidecar as "no ownership info" and the
+    /// launcher falls through to the no-metadata (stale-or-orphaned) policy. So
+    /// a write that loses a race — a sibling launcher cleaning a "stale"
+    /// endpoint, antivirus, the chaos/burn-in harness deleting the file
+    /// mid-flight — must NEVER crash the host: a bound, serving host is worth
+    /// far more than its ownership metadata. The burn-in surfaced exactly this:
+    /// an unhandled <see cref="UnauthorizedAccessException"/> from this method
+    /// killed a serving host (exit 0xE0434352). We retry once for the common
+    /// momentary race, then give up quietly. Programming errors
+    /// (<see cref="ArgumentException"/> from an unknown scheme) still throw.
+    /// </remarks>
+    public bool Write(string scheme, string endpoint)
     {
         var path = PathFor(scheme, endpoint);
         var dir = System.IO.Path.GetDirectoryName(path);
-        if (!string.IsNullOrEmpty(dir)) Directory.CreateDirectory(dir);
-
         var tmp = path + ".tmp";
-        File.WriteAllText(tmp, JsonSerializer.Serialize(this, HostMetadataJsonContext.Default.HostMetadata));
-        try { File.Move(tmp, path, overwrite: true); }
-        catch { try { File.Delete(tmp); } catch { } throw; }
+
+        for (int attempt = 0; attempt < 2; attempt++)
+        {
+            try
+            {
+                if (!string.IsNullOrEmpty(dir)) Directory.CreateDirectory(dir);
+                File.WriteAllText(tmp, JsonSerializer.Serialize(this, HostMetadataJsonContext.Default.HostMetadata));
+                try { File.Move(tmp, path, overwrite: true); }
+                catch { try { File.Delete(tmp); } catch { } throw; }
+                return true;
+            }
+            catch (IOException) { }
+            catch (UnauthorizedAccessException) { }
+            // Clean up a half-written temp so a retry (or a later TryRead of a
+            // sibling's write) never trips over our orphan.
+            try { File.Delete(tmp); } catch { }
+        }
+        return false;
     }
 
     /// <summary>

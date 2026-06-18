@@ -109,7 +109,14 @@ internal sealed class Program
         // Sidecar must be written AFTER bind succeeds — otherwise a launcher
         // racing with us would read metadata for a process that hasn't yet
         // claimed the endpoint. Per docs/specs/host-lifecycle-contract.md.
-        WriteHostMetadata(scheme, endpoint);
+        // Defense in depth: HostMetadata.Write is already best-effort, but the
+        // host has bound and is about to serve — nothing about advisory
+        // ownership metadata is worth crashing a live host over.
+        try { WriteHostMetadata(scheme, endpoint); }
+        catch (Exception ex)
+        {
+            Console.Error.WriteLine($"ps-bash-host: host metadata sidecar write failed (non-fatal): {ex.Message}");
+        }
         try { await serverTask; }
         finally { HostMetadata.Remove(scheme, endpoint); }
 
