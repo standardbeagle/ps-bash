@@ -108,6 +108,10 @@ CmdletsToExport = @(
     # tools and become the interactive styled viewer when piped to Show-Styled.
     'Invoke-BashPing',
     'Invoke-BashTraceroute',
+    # git as structured objects (psgit): status/log/branch/remote/tag/stash list/diff parsed into
+    # typed PsBash.Git* objects; other subcommands pass through to native git. No Strata dependency,
+    # so it ships even without the styling cmdlets; piping to Show-Styled/Format-Styled git colours it.
+    'Invoke-BashGit',
     # Bash arithmetic evaluator backing $(( )) / (( )). Integer (Int64) C-operator
     # semantics (** , / truncating, bitwise/shift, 1/0 comparisons & logicals,
     # ternary, bases) that PowerShell's $( ) subexpression mistranslated. Emitted

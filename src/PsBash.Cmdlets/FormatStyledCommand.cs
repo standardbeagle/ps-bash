@@ -232,12 +232,26 @@ public sealed class FormatStyledCommand : PSCmdlet
         WriteObject(RenderToAnsi(renderable));
     }
 
-    /// <summary>Properties to render: the explicit <see cref="Property"/> list, else the first row's gettable properties.</summary>
+    /// <summary>
+    /// Properties to render: the explicit <see cref="Property"/> list; else the first row's
+    /// <c>DefaultDisplayPropertySet</c> (the same curated column set PowerShell's own Format-Table
+    /// uses, so a typed object — <c>PsBash.GitCommit</c>, <c>FileInfo</c>, … — shows its sensible
+    /// columns instead of every property); else all gettable properties.
+    /// </summary>
     private string[] ResolveProperties()
     {
         if (Property is { Length: > 0 })
         {
             return Property;
+        }
+
+        var defaults = DefaultDisplayProperties(_rows[0]);
+        if (defaults is { Length: > 0 })
+        {
+            return defaults
+                .Where(n => !string.Equals(n, ClassProperty, StringComparison.OrdinalIgnoreCase)
+                    && !string.Equals(n, CellTextProperty, StringComparison.Ordinal))
+                .ToArray();
         }
 
         return _rows[0].Properties
@@ -246,6 +260,26 @@ public sealed class FormatStyledCommand : PSCmdlet
                 && !string.Equals(p.Name, CellTextProperty, StringComparison.Ordinal))
             .Select(p => p.Name)
             .ToArray();
+    }
+
+    /// <summary>The object's <c>PSStandardMembers.DefaultDisplayPropertySet</c> column names, or null when it declares none.</summary>
+    private static string[]? DefaultDisplayProperties(PSObject row)
+    {
+        try
+        {
+            if (row.Members["PSStandardMembers"] is PSMemberSet standard
+                && standard.Members["DefaultDisplayPropertySet"] is PSPropertySet set
+                && set.ReferencedPropertyNames.Count > 0)
+            {
+                return set.ReferencedPropertyNames.ToArray();
+            }
+        }
+        catch
+        {
+            // Malformed / inaccessible member set — fall back to all properties.
+        }
+
+        return null;
     }
 
     // ── Filesystem view (Get-ChildItem → curated, classified, human-formatted table) ──────────

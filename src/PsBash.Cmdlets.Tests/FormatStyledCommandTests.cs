@@ -161,6 +161,32 @@ public class FormatStyledCommandTests : IClassFixture<SharedPwshFixture>
     }
 
     [Fact]
+    public void DefaultDisplayPropertySet_CuratesColumnsWhenNoPropertyGiven()
+    {
+        // A typed object that declares DefaultDisplayPropertySet (as the psgit Git* objects do)
+        // renders ONLY those columns — not every property — even without -Property.
+        var pwsh = _fixture.AcquireFresh();
+        var script = """
+            $o = [pscustomobject]@{ Keep1='a'; Keep2='b'; Hidden='SECRET'; class='' }
+            $o.PSObject.TypeNames.Insert(0,'Demo')
+            $o | Add-Member -MemberType MemberSet PSStandardMembers (
+                [System.Management.Automation.PSMemberInfo[]]@(
+                  New-Object System.Management.Automation.PSPropertySet 'DefaultDisplayPropertySet', ([string[]]@('Keep1','Keep2'))))
+            $o | Format-Styled -Table
+            """;
+
+        var result = pwsh.AddScript(script).Invoke();
+
+        Assert.False(pwsh.HadErrors, string.Join("; ", pwsh.Streams.Error.Select(e => e.ToString())));
+        Assert.Single(result);
+        var plain = StripAnsi(result[0].ToString() ?? string.Empty);
+        Assert.Contains("Keep1", plain);
+        Assert.Contains("Keep2", plain);
+        Assert.DoesNotContain("Hidden", plain);   // not in the default set
+        Assert.DoesNotContain("SECRET", plain);
+    }
+
+    [Fact]
     public void StylesRows_ByPropertyAndKind()
     {
         var pwsh = _fixture.AcquireFresh();

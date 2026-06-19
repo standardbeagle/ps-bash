@@ -1,0 +1,51 @@
+/* git — structured git output (psgit status/log/branch/remote/tag/stash/diff) coloured by state.
+ *
+ * Auto-selected for PsBash.Git* objects (StyledStyles.AutoStyleForKind), so
+ *   psgit status | Show-Styled        psgit log | Format-Styled git        psgit branch | Show-Styled
+ * render the styled view. The cmdlet projects a `class` per row:
+ *   status  staged · modified · untracked · deleted · renamed · conflict · branch
+ *   branch  current · local · remote
+ *   diff    added · deleted · modified · binary
+ */
+
+GitStatusEntry { color: white }
+GitCommit      { color: white }
+GitBranch      { color: white }
+GitRemote      { color: cyan }
+GitTag         { color: brightyellow }
+GitStash       { color: magenta }
+GitDiffStat    { color: white }
+
+/* status / diff state */
+.staged    { color: brightgreen }
+.modified  { color: brightyellow }
+.untracked { color: gray }
+.deleted   { color: brightred }
+.renamed   { color: cyan }
+.conflict  { color: brightred; font-weight: bold }
+.branch    { color: brightblue; font-weight: bold }
+.added     { color: brightgreen }
+.binary    { color: magenta }
+
+/* branch listing */
+.current { color: brightgreen; font-weight: bold }
+.local   { color: white }
+.remote  { color: magenta }
+
+.commit  { color: white }
+.tag     { color: brightyellow }
+.stash   { color: magenta }
+
+/* Expandable detail + focus cursor, shared with the other sheets. */
+Detail      { color: gray }
+Detail .key { color: cyan }
+:expanded > Detail { color: white }
+
+:focused { color: black; background: brightcyan }
+Surface {
+    command: "navigate-down" when "key.ArrowDown";
+    command: "navigate-up"   when "key.ArrowUp";
+    command: "navigate-down" when "key.j";
+    command: "navigate-up"   when "key.k";
+    command: "toggle-expand" when "key.Enter";
+}

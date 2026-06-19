@@ -41,6 +41,7 @@ internal static class StyledStyles
         "Process" or "Service" or "ServiceController" => "procsvc",
         "ErrorRecord" => "error",
         "PingReply" or "TraceHop" => "net",
+        "GitStatusEntry" or "GitCommit" or "GitBranch" or "GitRemote" or "GitTag" or "GitStash" or "GitDiffStat" => "git",
         _ => "object",
     };
 
