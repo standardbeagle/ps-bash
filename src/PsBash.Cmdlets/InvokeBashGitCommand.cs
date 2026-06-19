@@ -80,7 +80,7 @@ public sealed class InvokeBashGitCommand : PSCmdlet
         }
     }
 
-    private static (string State, string Class, bool Staged) ClassifyStatus(char x, char y)
+    internal static (string State, string Class, bool Staged) ClassifyStatus(char x, char y)
     {
         if (x == '?' && y == '?')
         {
@@ -113,7 +113,7 @@ public sealed class InvokeBashGitCommand : PSCmdlet
         return (state, cls, staged);
     }
 
-    private static PSObject MakeStatus(string? branch, char x, char y, string path, string state, string cls, bool staged, string text)
+    internal static PSObject MakeStatus(string? branch, char x, char y, string path, string state, string cls, bool staged, string text)
     {
         var o = NewGit("PsBash.GitStatusEntry", text);
         o.Properties.Add(new PSNoteProperty("State", state));
@@ -444,6 +444,34 @@ public sealed class InvokeBashGitCommand : PSCmdlet
     private bool TryRunGit(IReadOnlyList<string> args, out BashRuntime.ChildProcessResult result)
     {
         result = default;
+        string? cwd = null;
+        try { cwd = SessionState.Path.CurrentFileSystemLocation.Path; }
+        catch { /* provider path unavailable — inherit the process cwd */ }
+
+        try
+        {
+            result = RunGitCapture(cwd, args);
+            return true;
+        }
+        catch (System.ComponentModel.Win32Exception)
+        {
+            FileSystemHelpers.WriteBashError(this, "psgit: git is not installed or not on PATH");
+            FileSystemHelpers.SetLastExitCode(this, 127);
+            return false;
+        }
+    }
+
+    /// <summary>
+    /// Spawn git (bounded + kill-tree) in <paramref name="workingDir"/> and capture its output.
+    /// Shared by the cmdlet and the interactive TUI. GIT_TERMINAL_PROMPT=0 keeps a credential helper
+    /// that would need a terminal prompt from hanging: psgit's child git has no usable interactive
+    /// TTY and buffers output, so an un-answerable prompt fails fast with "terminal prompts disabled"
+    /// instead of blocking to the timeout. Non-terminal auth (SSH agent, cached / GUI credential
+    /// helpers) is unaffected and reuses your configured git auth. Throws Win32Exception if git is
+    /// not on PATH.
+    /// </summary>
+    internal static BashRuntime.ChildProcessResult RunGitCapture(string? workingDir, IReadOnlyList<string> args)
+    {
         var psi = new ProcessStartInfo("git")
         {
             UseShellExecute = false,
@@ -455,31 +483,90 @@ public sealed class InvokeBashGitCommand : PSCmdlet
         {
             psi.ArgumentList.Add(a);
         }
-        try { psi.WorkingDirectory = SessionState.Path.CurrentFileSystemLocation.Path; }
-        catch { /* provider path unavailable — inherit the process cwd */ }
-
-        // psgit reuses your configured git auth (it IS native git, with the inherited env / config):
-        // SSH agent + keys and credential helpers that return cached/stored creds (Git Credential
-        // Manager, store, cache, osxkeychain) work non-interactively. But psgit's child git has no
-        // usable interactive TTY and its output is buffered, so a credential helper that needs to
-        // PROMPT on the terminal can't be answered — without this it would block until the
-        // RunChildProcess timeout. GIT_TERMINAL_PROMPT=0 makes such a case fail fast with a clear
-        // "terminal prompts disabled" message instead. (Non-terminal auth above is unaffected; for
-        // anything needing an interactive prompt, use native `git`.)
-        psi.Environment["GIT_TERMINAL_PROMPT"] = "0";
-
-        try
+        if (!string.IsNullOrEmpty(workingDir))
         {
-            result = BashRuntime.RunChildProcess(psi);
-            return true;
+            try { psi.WorkingDirectory = workingDir; } catch { /* inherit process cwd */ }
         }
-        catch (System.ComponentModel.Win32Exception)
+        psi.Environment["GIT_TERMINAL_PROMPT"] = "0";
+        return BashRuntime.RunChildProcess(psi);
+    }
+
+    // ── interactive TUI building blocks (used by StyledInteractiveSession.RunGitStatus) ──────────
+
+    /// <summary>Fetch the working-tree status as typed GitStatusEntry rows (branch header first). Empty on error / not-a-repo.</summary>
+    internal static List<PSObject> FetchStatus(string? workingDir)
+    {
+        var rows = new List<PSObject>();
+        BashRuntime.ChildProcessResult r;
+        try { r = RunGitCapture(workingDir, new[] { "status", "--porcelain=v1", "--branch" }); }
+        catch (System.ComponentModel.Win32Exception) { return rows; }
+        if (r.ExitCode != 0)
         {
-            FileSystemHelpers.WriteBashError(this, "psgit: git is not installed or not on PATH");
-            FileSystemHelpers.SetLastExitCode(this, 127);
+            return rows;
+        }
+
+        foreach (var line in SplitLines(r.Stdout))
+        {
+            if (line.StartsWith("## ", StringComparison.Ordinal))
+            {
+                rows.Add(MakeStatus(line.Substring(3), ' ', ' ', line.Substring(3), "branch", "branch", false, line));
+                continue;
+            }
+            if (line.Length < 3)
+            {
+                continue;
+            }
+            char x = line[0], y = line[1];
+            var (state, cls, staged) = ClassifyStatus(x, y);
+            rows.Add(MakeStatus(null, x, y, line.Substring(3), state, cls, staged, line));
+        }
+        return rows;
+    }
+
+    /// <summary>Stage (git add) or unstage (git reset HEAD) a path; no-op for the branch header row. Returns true on success.</summary>
+    internal static bool ToggleStage(string? workingDir, PSObject row)
+    {
+        var path = row.Properties["Path"]?.Value?.ToString();
+        var cls = row.Properties["class"]?.Value?.ToString();
+        if (string.IsNullOrEmpty(path) || cls == "branch")
+        {
             return false;
         }
+
+        var staged = row.Properties["Staged"]?.Value is bool b && b;
+        // Renamed entries arrive as "old -> new"; act on the new path git reports.
+        var arrow = path.IndexOf(" -> ", StringComparison.Ordinal);
+        if (arrow >= 0)
+        {
+            path = path.Substring(arrow + 4);
+        }
+
+        var args = staged
+            ? new[] { "reset", "-q", "HEAD", "--", path }
+            : new[] { "add", "--", path };
+        try { return RunGitCapture(workingDir, args).ExitCode == 0; }
+        catch (System.ComponentModel.Win32Exception) { return false; }
     }
+
+    /// <summary>An action the interactive git-status pane takes for a keypress.</summary>
+    public enum GitTuiAction { None, Up, Down, ToggleStage, ToggleExpand, Refresh, Quit }
+
+    /// <summary>Map a keystroke to a pane action (pure — unit-tested; the loop wiring is not).</summary>
+    internal static GitTuiAction Decide(ConsoleKey key, char ch) => (key, ch) switch
+    {
+        (ConsoleKey.Q, _) => GitTuiAction.Quit,
+        (ConsoleKey.Escape, _) => GitTuiAction.Quit,
+        (ConsoleKey.DownArrow, _) => GitTuiAction.Down,
+        (ConsoleKey.UpArrow, _) => GitTuiAction.Up,
+        (_, 'j') => GitTuiAction.Down,
+        (_, 'k') => GitTuiAction.Up,
+        (ConsoleKey.Spacebar, _) => GitTuiAction.ToggleStage,
+        (_, 's') => GitTuiAction.ToggleStage,
+        (_, 'u') => GitTuiAction.ToggleStage,
+        (_, 'r') => GitTuiAction.Refresh,
+        (ConsoleKey.Enter, _) => GitTuiAction.ToggleExpand,
+        _ => GitTuiAction.None,
+    };
 
     /// <summary>A new typed git PSObject carrying a native-style <c>BashText</c> line.</summary>
     private static PSObject NewGit(string typeName, string bashText)

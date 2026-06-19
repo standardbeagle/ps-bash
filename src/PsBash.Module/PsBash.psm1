@@ -3247,6 +3247,8 @@ Set-Alias -Name 'tracert'    -Value 'Invoke-BashTraceroute' -Force -Scope Global
 Set-Alias -Name 'traceroute' -Value 'Invoke-BashTraceroute' -Force -Scope Global -Option AllScope
 # psgit: structured git viewer. Deliberately NOT aliased to `git` — native git stays interactive.
 Set-Alias -Name 'psgit'      -Value 'Invoke-BashGit'        -Force -Scope Global -Option AllScope
+# gtui: interactive git-status TUI (Strata-gated; resolves only when the styling cmdlets are built).
+Set-Alias -Name 'gtui'       -Value 'Invoke-BashGitTui'     -Force -Scope Global -Option AllScope
 Set-Alias -Name 'alias'    -Value 'Invoke-BashAlias'    -Force -Scope Global -Option AllScope
 Set-Alias -Name 'unalias'  -Value 'Invoke-BashAlias'    -Force -Scope Global -Option AllScope
 Set-Alias -Name 'balias'   -Value 'Invoke-BashAlias'    -Force -Scope Global -Option AllScope

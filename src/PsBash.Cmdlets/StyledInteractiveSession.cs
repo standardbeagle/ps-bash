@@ -137,6 +137,120 @@ public static class StyledInteractiveSession
         return 0;
     }
 
+    /// <summary>
+    /// Interactive git-status pane (the first lazygit-style TUI): navigate changed files, stage /
+    /// unstage with s/u/Space (re-fetching status after each), Enter expands a row's detail, r
+    /// refreshes, q quits. Built on the same alt-screen + <see cref="Console.ReadKey(bool)"/> loop as
+    /// <see cref="RunInteractive"/>, coloured by the <c>git</c> sheet. Returns 0 normally, or -1 when
+    /// there is no interactive terminal (the caller prints a hint).
+    /// </summary>
+    public static int RunGitStatus(string? workingDir)
+    {
+        if (Console.IsInputRedirected || Console.IsOutputRedirected)
+        {
+            return -1;
+        }
+
+        var css = ResolveCss("git");
+        var registry = StylingProperties.CreateRegistry();
+        LayoutProperties.RegisterAll(registry);
+        InteractionProperties.RegisterAll(registry);
+        var stylesheet = new CssStylesheetParser(new CssSelectorLanguage(), registry).Parse(css);
+        var cascade = new Cascade(registry);
+        var projection = new SpectreProjection { TextSelector = NodeText };
+
+        static string GitText(PSObject r) => r.Properties["BashText"]?.Value?.ToString() ?? string.Empty;
+
+        var rows = InvokeBashGitCommand.FetchStatus(workingDir);
+        var expanded = new HashSet<StyledNode>();
+        var focus = 0;
+
+        List<StyledNode> BuildRows()
+        {
+            expanded.Clear();
+            var nodes = rows.Select(r =>
+            {
+                var n = new StyledNode(KindOf(r), id: null, classes: ClassesOf(r, "class")) { Source = r };
+                n.SetAttribute("Name", GitText(r));
+                return n;
+            }).ToList();
+            if (nodes.Count > 0)
+            {
+                focus = Math.Clamp(focus, 0, nodes.Count - 1);
+                nodes[focus].AddPseudoState("focused");
+            }
+            return nodes;
+        }
+
+        var rowNodes = BuildRows();
+        var surface = new StyledNode("Surface");
+
+        void Rebuild()
+        {
+            var children = new List<StyledNode>(rowNodes.Count * 2);
+            foreach (var row in rowNodes)
+            {
+                children.Add(row);
+                if (expanded.Contains(row))
+                {
+                    children.Add(BuildDetail(row.Source, property: null, classProperty: "class"));
+                }
+            }
+            surface.SetChildren(children);
+        }
+
+        try
+        {
+            Console.Write("\x1b[?1049h");
+            try { Console.CursorVisible = false; } catch { /* unsupported host */ }
+
+            while (true)
+            {
+                Rebuild();
+                var result = cascade.Compute(surface, stylesheet);
+                var frame = RenderToAnsi(projection.Project(surface, result));
+                var footer = rowNodes.Count == 0
+                    ? "\n(clean working tree)   r refresh · q quit"
+                    : $"\n[{focus + 1}/{rowNodes.Count}]  ↑↓/jk move · s/u/Space stage · Enter expand · r refresh · q quit";
+                Console.Write("\x1b[2J\x1b[H" + frame + footer);
+
+                var key = Console.ReadKey(intercept: true);
+                switch (InvokeBashGitCommand.Decide(key.Key, key.KeyChar))
+                {
+                    case InvokeBashGitCommand.GitTuiAction.Quit:
+                        return 0;
+                    case InvokeBashGitCommand.GitTuiAction.Down when rowNodes.Count > 0:
+                        MoveFocus(rowNodes, ref focus, +1);
+                        break;
+                    case InvokeBashGitCommand.GitTuiAction.Up when rowNodes.Count > 0:
+                        MoveFocus(rowNodes, ref focus, -1);
+                        break;
+                    case InvokeBashGitCommand.GitTuiAction.ToggleExpand when rowNodes.Count > 0:
+                    {
+                        var row = rowNodes[focus];
+                        if (!expanded.Remove(row)) { expanded.Add(row); row.AddPseudoState("expanded"); }
+                        else { row.RemovePseudoState("expanded"); }
+                        break;
+                    }
+                    case InvokeBashGitCommand.GitTuiAction.ToggleStage when rowNodes.Count > 0:
+                        InvokeBashGitCommand.ToggleStage(workingDir, rowNodes[focus].Source!);
+                        rows = InvokeBashGitCommand.FetchStatus(workingDir);
+                        rowNodes = BuildRows();
+                        break;
+                    case InvokeBashGitCommand.GitTuiAction.Refresh:
+                        rows = InvokeBashGitCommand.FetchStatus(workingDir);
+                        rowNodes = BuildRows();
+                        break;
+                }
+            }
+        }
+        finally
+        {
+            Console.Write("\x1b[2J\x1b[H\x1b[?1049l");
+            try { Console.CursorVisible = true; } catch { /* unsupported host */ }
+        }
+    }
+
     private static void MoveFocus(List<StyledNode> rowNodes, ref int focus, int delta)
     {
         rowNodes[focus].RemovePseudoState("focused");

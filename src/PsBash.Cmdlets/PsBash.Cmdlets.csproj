@@ -75,6 +75,7 @@
     <Compile Remove="StyledInteractiveSession.cs" />
     <Compile Remove="StyledNode.cs" />
     <Compile Remove="StyledStyles.cs" />
+    <Compile Remove="InvokeBashGitTuiCommand.cs" />
   </ItemGroup>
 
   <ItemGroup>

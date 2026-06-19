@@ -141,6 +141,68 @@ public class InvokeBashGitCommandTests : IClassFixture<SharedPwshFixture>
         finally { Cleanup(repo); }
     }
 
+    // ── interactive TUI building blocks (headless-testable; the ReadKey loop is not) ────────────
+
+    [Theory]
+    [InlineData(ConsoleKey.Q, '\0', InvokeBashGitCommand.GitTuiAction.Quit)]
+    [InlineData(ConsoleKey.Escape, '\0', InvokeBashGitCommand.GitTuiAction.Quit)]
+    [InlineData(ConsoleKey.DownArrow, '\0', InvokeBashGitCommand.GitTuiAction.Down)]
+    [InlineData(ConsoleKey.UpArrow, '\0', InvokeBashGitCommand.GitTuiAction.Up)]
+    [InlineData(ConsoleKey.J, 'j', InvokeBashGitCommand.GitTuiAction.Down)]
+    [InlineData(ConsoleKey.K, 'k', InvokeBashGitCommand.GitTuiAction.Up)]
+    [InlineData(ConsoleKey.Spacebar, ' ', InvokeBashGitCommand.GitTuiAction.ToggleStage)]
+    [InlineData(ConsoleKey.S, 's', InvokeBashGitCommand.GitTuiAction.ToggleStage)]
+    [InlineData(ConsoleKey.U, 'u', InvokeBashGitCommand.GitTuiAction.ToggleStage)]
+    [InlineData(ConsoleKey.R, 'r', InvokeBashGitCommand.GitTuiAction.Refresh)]
+    [InlineData(ConsoleKey.Enter, '\r', InvokeBashGitCommand.GitTuiAction.ToggleExpand)]
+    [InlineData(ConsoleKey.X, 'x', InvokeBashGitCommand.GitTuiAction.None)]
+    public void Decide_MapsKeysToPaneActions(ConsoleKey key, char ch, InvokeBashGitCommand.GitTuiAction expected)
+    {
+        Assert.Equal(expected, InvokeBashGitCommand.Decide(key, ch));
+    }
+
+    [SkippableFact]
+    public void ToggleStage_StagesThenUnstagesAFile()
+    {
+        Skip.IfNot(GitAvailable(), "git is not installed");
+        var repo = NewRepo();
+        try
+        {
+            File.WriteAllText(Path.Combine(repo, "junk.txt"), "x\n");   // untracked
+
+            var untracked = InvokeBashGitCommand.FetchStatus(repo).Single(r => RowPath(r) == "junk.txt");
+            Assert.Equal("untracked", Cls(untracked));
+
+            // Stage it.
+            Assert.True(InvokeBashGitCommand.ToggleStage(repo, untracked));
+            var staged = InvokeBashGitCommand.FetchStatus(repo).Single(r => RowPath(r) == "junk.txt");
+            Assert.Equal("staged", Cls(staged));
+            Assert.True((bool)staged.Properties["Staged"]!.Value!);
+
+            // Unstage it (back to untracked).
+            Assert.True(InvokeBashGitCommand.ToggleStage(repo, staged));
+            var back = InvokeBashGitCommand.FetchStatus(repo).Single(r => RowPath(r) == "junk.txt");
+            Assert.Equal("untracked", Cls(back));
+        }
+        finally { Cleanup(repo); }
+    }
+
+    [SkippableFact]
+    public void ToggleStage_BranchHeaderRow_IsNoOp()
+    {
+        Skip.IfNot(GitAvailable(), "git is not installed");
+        var repo = NewRepo();
+        try
+        {
+            var header = InvokeBashGitCommand.FetchStatus(repo).First(r => Cls(r) == "branch");
+            Assert.False(InvokeBashGitCommand.ToggleStage(repo, header));
+        }
+        finally { Cleanup(repo); }
+    }
+
+    private static string RowPath(System.Management.Automation.PSObject r) => r.Properties["Path"]?.Value?.ToString() ?? "";
+    private static string Cls(System.Management.Automation.PSObject r) => r.Properties["class"]?.Value?.ToString() ?? "";
+
     // ── helpers ───────────────────────────────────────────────────────────────────────────────
 
     private System.Collections.Generic.List<System.Management.Automation.PSObject> InvokeGit(string repo, string sub)

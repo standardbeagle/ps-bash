@@ -206,7 +206,7 @@ AliasesToExport = 'echo', 'printf', 'ls', 'cat', 'grep', 'sort', 'head', 'tail',
                 'install', 'browse', 'more', 'less',
                 'trap', 'alias', 'mapfile', 'readarray',
                 'ping', 'tracert', 'traceroute',
-                'psgit'
+                'psgit', 'gtui'
 
 # DSC resources to export from this module
 # DscResourcesToExport = @()

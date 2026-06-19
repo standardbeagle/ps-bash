@@ -112,6 +112,9 @@ CmdletsToExport = @(
     # typed PsBash.Git* objects; other subcommands pass through to native git. No Strata dependency,
     # so it ships even without the styling cmdlets; piping to Show-Styled/Format-Styled git colours it.
     'Invoke-BashGit',
+    # Interactive git-status TUI (gtui): navigate + stage/unstage via the Strata Show-Styled loop.
+    # Strata-gated (compiled out without the styling cmdlets), like Show-Styled.
+    'Invoke-BashGitTui',
     # Bash arithmetic evaluator backing $(( )) / (( )). Integer (Int64) C-operator
     # semantics (** , / truncating, bitwise/shift, 1/0 comparisons & logicals,
     # ternary, bases) that PowerShell's $( ) subexpression mistranslated. Emitted
