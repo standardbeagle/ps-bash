@@ -28,6 +28,11 @@
       <PrivateAssets>all</PrivateAssets>
     </PackageReference>
     <PackageReference Include="Microsoft.Data.Sqlite" Version="9.*" />
+    <!-- Override the vulnerable SQLitePCLRaw.lib.e_sqlite3 2.1.10 that Microsoft.Data.Sqlite
+         pulls transitively (NU1903 GHSA-2m69-gcr7-jv3q, high severity). /warnaserror in the
+         AOT build-binaries job promotes the NuGet-audit warning to an error, which broke the
+         win-x64 publish for v0.10.16. 2.1.11 is the patched bundle. -->
+    <PackageReference Include="SQLitePCLRaw.bundle_e_sqlite3" Version="2.1.11" />
   </ItemGroup>
   <ItemGroup>
     <!-- Single source of truth for bash flag specs lives in PsBash.Module/BashFlagSpecs.json
