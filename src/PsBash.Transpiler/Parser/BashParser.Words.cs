@@ -444,6 +444,7 @@ public sealed partial class BashParser
 
         // Check for suffix operator or closing brace
         string? suffix = null;
+        ImmutableArray<WordPart>? argWord = null;
         if (pos < len && raw[pos] != '}')
         {
             // Read operator: :-, :=, :+, :?, :offset:len, %, %%, #, ##, /, //, ^^, ,,, ^, ,
@@ -507,14 +508,34 @@ public sealed partial class BashParser
             }
             string val = raw[valStart..pos];
             suffix = op + val;
+
+            // Word-bearing operators expand their argument (default / alternative /
+            // assigned value / error message). Decompose it NOW so $var, $(cmd), and
+            // "$@" recurse through normal word emission instead of surviving as a raw
+            // literal slice — the ${1+"$@"} family bug. Pattern-removal / slice / case
+            // / @-transform operators take no expandable word argument: leave ArgWord
+            // null so the emitter keeps the raw-slice path.
+            if (IsWordBearingBracedOp(op))
+                argWord = DecomposeWord(val);
         }
 
         if (pos < len && raw[pos] == '}')
             pos++; // skip }
 
-        parts.Add(new WordPart.BracedVarSub(varName, suffix));
+        parts.Add(new WordPart.BracedVarSub(varName, suffix, argWord));
         return pos;
     }
+
+    /// <summary>
+    /// True for the parameter-expansion operators whose argument is an expandable WORD
+    /// (Oils <c>suffix_op.Unary</c>): default <c>:-</c>/<c>-</c>, assign <c>:=</c>/<c>=</c>,
+    /// alternative <c>:+</c>/<c>+</c>, error message <c>:?</c>/<c>?</c>. These — and ONLY these —
+    /// get their argument decomposed into word parts so embedded expansions are emitted, not
+    /// copied verbatim. Pattern removal (<c>#</c> <c>##</c> <c>%</c> <c>%%</c>), replace (<c>/</c>
+    /// <c>//</c>), slice (<c>:</c>N), case (<c>^</c> <c>,</c>), and <c>@</c>-transforms are excluded.
+    /// </summary>
+    private static bool IsWordBearingBracedOp(string op) =>
+        op is ":-" or ":=" or ":+" or ":?" or "-" or "=" or "+" or "?";
 
     private static int ParseArithSub(string raw, int pos, ImmutableArray<WordPart>.Builder parts)
     {

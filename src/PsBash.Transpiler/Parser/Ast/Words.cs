@@ -30,8 +30,17 @@ public abstract record WordPart : BashNode
     /// <summary>A simple variable substitution, e.g. <c>$foo</c> or <c>$?</c>.</summary>
     public sealed record SimpleVarSub(string Name) : WordPart;
 
-    /// <summary>A braced variable substitution, e.g. <c>${foo:-default}</c>.</summary>
-    public sealed record BracedVarSub(string Name, string? Suffix) : WordPart;
+    /// <summary>
+    /// A braced variable substitution, e.g. <c>${foo:-default}</c>. <paramref name="Suffix"/> is
+    /// the raw operator-plus-argument slice (kept for operator dispatch). <paramref name="ArgWord"/>
+    /// is the DECOMPOSED argument word for the word-bearing operators (<c>:-</c> <c>:=</c> <c>:+</c>
+    /// <c>:?</c> and their colon-less forms): bash expands that word, so it must recurse through
+    /// normal word emission rather than survive as a literal slice. <c>null</c> when the operator
+    /// takes no expandable word argument (pattern removal, slice, case, <c>@</c>-transform), in which
+    /// case the emitter falls back to the raw <paramref name="Suffix"/> slice. This is the Oils
+    /// <c>suffix_op.Unary(arg_word)</c> recursion boundary the original flat-string port dropped.
+    /// </summary>
+    public sealed record BracedVarSub(string Name, string? Suffix, ImmutableArray<WordPart>? ArgWord = null) : WordPart;
 
     /// <summary>A command substitution, e.g. <c>$(cmd)</c> or <c>`cmd`</c>.</summary>
     public sealed record CommandSub(BashNode Body) : WordPart;

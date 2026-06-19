@@ -74,6 +74,61 @@ public class ShellSnapshotShimTests
         Assert.DoesNotContain($"'{op}'", result);
     }
 
+    // ---- RC3: word-bearing parameter expansions expand their argument word ----
+    //
+    // The argument of ${VAR:-w} / ${VAR:=w} / ${VAR:+w} / ${VAR:?w} (and the colon-less
+    // forms) is an expandable WORD in bash. The original port stored the whole suffix as a
+    // raw string and the emitter wrapped that slice in quotes, so an argument containing an
+    // expansion survived verbatim. The portable-"$@" idiom ${1+"$@"} (line 10 of the Claude
+    // Code rg shim) emitted `... ? ""$@"" : ""` — a doubled quote plus an untranslated $@ —
+    // which PowerShell could not parse, spewing errors on EVERY Bash-tool command.
+
+    [Fact]
+    public void Transpile_AlternativeValueWithPositionalParams_ExpandsDollarAt()
+    {
+        // ${1+"$@"}: must NOT leave the literal $@ (untranslated) nor a doubled-quote artifact.
+        var result = BashTranspiler.Transpile("command rg ${1+\"$@\"}");
+        Assert.DoesNotContain("\"\"$@", result);   // the broken ""$@"" doubled-quote token
+        Assert.DoesNotContain("$@", result);        // $@ must translate, never survive literally
+        Assert.Contains("BashPositional", result);  // it became the positional-param expansion
+    }
+
+    [Fact]
+    public void Transpile_DefaultValueWithVariable_ExpandsInnerVariable()
+    {
+        // ${x:-$y}: the default word $y must become $env:y, not the literal text "$y".
+        var result = BashTranspiler.Transpile("echo ${x:-$y}");
+        Assert.Contains("env:y", result);
+    }
+
+    [Fact]
+    public void Transpile_DefaultValueWithCommandSub_ExpandsCommandSubstitution()
+    {
+        // ${name:-$(whoami)}: the default must run the command, not emit literal $(whoami) text.
+        var result = BashTranspiler.Transpile("echo ${name:-$(whoami)}");
+        Assert.Contains("Invoke-BashWhoami", result);
+    }
+
+    [Fact]
+    public void Transpile_DefaultValueLiteral_StillEmitsLiteralString()
+    {
+        // Regression guard: a plain literal default must remain a literal string.
+        var result = BashTranspiler.Transpile("echo ${x:-hello}");
+        Assert.Contains("hello", result);
+        Assert.DoesNotContain("env:hello", result);
+    }
+
+    [Fact]
+    public void Transpile_EmptyDefaultInsideDoubleQuotes_UsesSingleQuotedEmpty()
+    {
+        // local _cc_bin="${CLAUDE_CODE_EXECPATH:-}" (snapshot line 8). The empty default lands
+        // inside "$( … )"; a nested EMPTY double-quoted string ("") makes PowerShell mis-parse
+        // ("string is missing the terminator"). Must emit '' (single-quoted empty) instead.
+        var result = BashTranspiler.Transpile("x=\"${CLAUDE_CODE_EXECPATH:-}\"");
+        Assert.Contains("?? '')", result);
+        Assert.DoesNotContain("?? \"\")", result);
+    }
+
     // ---- Full snapshot rg-shim: every fragment must be present and well-formed ----
 
     [Fact]
@@ -83,11 +138,13 @@ public class ShellSnapshotShimTests
             function rg {
               local _cc_bin="${CLAUDE_CODE_EXECPATH:-}"
               [[ -x $_cc_bin ]] || _cc_bin=/c/claude.exe
-              if [[ ! -x $_cc_bin ]]; then command rg "$@"; return; fi
+              if [[ ! -x $_cc_bin ]]; then command rg ${1+"$@"}; return; fi
             }
             """;
         var result = BashTranspiler.Transpile(shim);
         Assert.DoesNotContain("BashLastArg", result);
         Assert.DoesNotContain("'-x'", result);
+        Assert.DoesNotContain("\"\"$@", result);
+        Assert.DoesNotContain("$@", result);
     }
 }

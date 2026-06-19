@@ -2130,6 +2130,37 @@ public static class PsEmitter
         return sb.ToString();
     }
 
+    /// <summary>
+    /// Emit a parameter-expansion ARGUMENT word (the W in ${VAR:-W} / ${VAR:+W} / …) as a
+    /// PowerShell value expression. A pure-literal word — including the EMPTY word — is emitted
+    /// single-quoted (<c>'foo'</c>, <c>''</c>); only a word that genuinely needs interpolation
+    /// (a variable / command-sub / "$@") falls through to the double-quoted flatten. This is
+    /// load-bearing: the value can land inside <c>"$( … )"</c> (when the whole ${} sits in a
+    /// bash double-quoted string), and PowerShell mis-parses a nested *double-quoted* string that
+    /// is empty (<c>""</c>) or contains a quote — but a single-quoted literal and a non-empty
+    /// interpolating string are both safe there. (RC3 — the ${CLAUDE_CODE_EXECPATH:-} break.)
+    /// </summary>
+    private static string EmitBracedArgWordValue(ImmutableArray<WordPart> parts)
+    {
+        var sb = new StringBuilder();
+        foreach (var part in parts)
+        {
+            string? lit = part switch
+            {
+                WordPart.Literal l => l.Value,
+                WordPart.EscapedLiteral el => el.Value,
+                WordPart.SingleQuoted sq => sq.Value,
+                WordPart.AnsiCQuoted aq => ExpandAnsiCEscapes(aq.Value),
+                _ => null,
+            };
+            if (lit is null)            // a real expansion (var / $( ) / "$@") — needs interpolation
+                return FlattenPartsToDoubleQuotedString(parts);
+            sb.Append(lit);
+        }
+        // Pure literal (possibly empty): single-quote it, doubling embedded single quotes.
+        return $"'{sb.Replace("'", "''")}'";
+    }
+
     private static bool HasBraceExpansion(ImmutableArray<WordPart> parts)
     {
         foreach (var part in parts)
@@ -2859,7 +2890,7 @@ public static class PsEmitter
 
         // Scalar suffix operators (default/assign/alt/error, removal, replace, slice,
         // case, @-transform). Shared with array-element expansions like ${arr[0]##*/}.
-        return EmitScalarSuffix(varRef, bvs.Suffix, inDoubleQuote) ?? varRef;
+        return EmitScalarSuffix(varRef, bvs.Suffix, inDoubleQuote, bvs.ArgWord) ?? varRef;
     }
 
     // Emit a scalar parameter-expansion suffix operator applied to an arbitrary base
@@ -2867,10 +2898,26 @@ public static class PsEmitter
     // `suffix` is not a scalar operator handled here — the caller falls back to the bare
     // reference. Keeping this independent of the variable name lets ${arr[0]##*/},
     // ${arr[i]:-x}, etc. reuse the exact same operator semantics as ${VAR##*/}.
-    private static string? EmitScalarSuffix(string varRef, string suffix, bool inDoubleQuote)
+    private static string? EmitScalarSuffix(string varRef, string suffix, bool inDoubleQuote,
+        ImmutableArray<WordPart>? argWord = null)
     {
         string open = inDoubleQuote ? "$(" : "(";
         char q = inDoubleQuote ? '\'' : '"';
+
+        // The word-bearing operators (default/assign/alt/error message) carry a DECOMPOSED
+        // argument word (parser populates BracedVarSub.ArgWord). Emit it through the normal
+        // word machinery so $var/$(cmd)/"$@" expand — the ${1+"$@"} fix. FlattenParts always
+        // yields a PowerShell double-quoted string, valid in both the bare `(...)` and the
+        // double-quote `$(...)` contexts (the subexpression reopens a fresh parse scope).
+        // When ArgWord is null (array-element path, or a non-word operator) fall back to the
+        // raw-slice literal so existing behavior is unchanged.
+        // Bare context: the double-quoted flatten is safe (not nested) and matches the
+        // historical literal emission. Inside an outer "$( … )" string a nested double-quoted
+        // value mis-parses when empty / quote-bearing, so use the single-quote-safe path there.
+        string ArgVal(string rawSlice) =>
+            !argWord.HasValue ? $"{q}{rawSlice}{q}"
+            : inDoubleQuote ? EmitBracedArgWordValue(argWord.Value)
+            : FlattenPartsToDoubleQuotedString(argWord.Value);
 
         // Length: ${#VAR}
         if (suffix == "#")
@@ -2878,29 +2925,29 @@ public static class PsEmitter
 
         // Default value: ${VAR:-default}
         if (suffix.StartsWith(":-"))
-            return $"{open}{varRef} ?? {q}{suffix[2..]}{q})";
+            return $"{open}{varRef} ?? {ArgVal(suffix[2..])})";
         // Assign default: ${VAR:=default}
         if (suffix.StartsWith(":="))
-            return $"{open}{varRef} ?? ({varRef} = {q}{suffix[2..]}{q}))";
+            return $"{open}{varRef} ?? ({varRef} = {ArgVal(suffix[2..])}))";
         // Use alternative: ${VAR:+alt}
         if (suffix.StartsWith(":+"))
-            return $"{open}{varRef} ? {q}{suffix[2..]}{q} : {q}{q})";
+            return $"{open}{varRef} ? {ArgVal(suffix[2..])} : {q}{q})";
         // Error if unset: ${VAR:?message}
         if (suffix.StartsWith(":?"))
-            return $"{open}{varRef} ?? $(throw {q}{suffix[2..]}{q}))";
+            return $"{open}{varRef} ?? $(throw {ArgVal(suffix[2..])}))";
 
         // Colon-less unset-only variants: ${VAR-w} ${VAR=w} ${VAR+w} ${VAR?msg}.
         // Bash distinguishes these (act only when UNSET) from the `:`-prefixed forms
         // (act when unset OR empty); ps-bash models vars as env vars where `$env:X`
         // is $null when unset, so `??` already approximates the unset-only test.
         if (suffix.StartsWith("-"))
-            return $"{open}{varRef} ?? {q}{suffix[1..]}{q})";
+            return $"{open}{varRef} ?? {ArgVal(suffix[1..])})";
         if (suffix.StartsWith("="))
-            return $"{open}{varRef} ?? ({varRef} = {q}{suffix[1..]}{q}))";
+            return $"{open}{varRef} ?? ({varRef} = {ArgVal(suffix[1..])}))";
         if (suffix.StartsWith("+"))
-            return $"{open}{varRef} ? {q}{suffix[1..]}{q} : {q}{q})";
+            return $"{open}{varRef} ? {ArgVal(suffix[1..])} : {q}{q})";
         if (suffix.StartsWith("?"))
-            return $"{open}{varRef} ?? $(throw {q}{suffix[1..]}{q}))";
+            return $"{open}{varRef} ?? $(throw {ArgVal(suffix[1..])}))";
 
         // Remove suffix: ${VAR%%pattern} (longest) / ${VAR%pattern} (shortest).
         // Both anchor the pattern at end-of-string ($). For the LONGEST match a

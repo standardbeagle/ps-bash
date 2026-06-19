@@ -3318,6 +3318,9 @@ public class PsEmitterTests
     public void Transpile_BracedVarDefaultInsideDoubleQuotes_EmitsSubexpression()
     {
         var result = PsEmitter.Transpile("echo \"${UNSET_VAR:-fallback}\"");
+        // RC3: the default word is decomposed, but a PURE LITERAL is emitted single-quoted
+        // (EmitBracedArgWordValue) — a nested double-quoted string inside "$( … )" mis-parses
+        // when empty or quote-bearing, so literals must stay single-quoted here.
         Assert.Equal("Invoke-BashEcho \"$($env:UNSET_VAR ?? 'fallback')\"", result);
     }
 
@@ -3348,6 +3351,7 @@ public class PsEmitterTests
     public void Transpile_BracedVarAlternativeInsideDoubleQuotes_EmitsSubexpression()
     {
         var result = PsEmitter.Transpile("echo \"${VAR:+yes}\"");
+        // RC3: alternative word decomposed; a pure literal stays single-quoted (see above).
         Assert.Equal("Invoke-BashEcho \"$($env:VAR ? 'yes' : '')\"", result);
     }
 
