@@ -163,12 +163,24 @@ internal static class TabCompleter
         if (LooksLikeCommandPath(token))
             return CompletePath(token, cwd);
 
-        var results = new SortedSet<string>(StringComparer.Ordinal);
+        var results = CollectCommandNames(token);
 
-        // Aliases
+        // Aliases (a user's own shortcuts) also complete at the command position.
         foreach (var name in aliases.Keys)
             if (name.StartsWith(token, StringComparison.Ordinal))
                 results.Add(name);
+
+        return [.. results.Select(r => new CompletionItem(r))];
+    }
+
+    /// <summary>
+    /// Command names matching <paramref name="token"/>: aliases, known bash builtins/coreutils, and
+    /// <c>$PATH</c> executables, deduped and ordinal-sorted. Shared by Tab command completion and the
+    /// live command-doc panel.
+    /// </summary>
+    private static SortedSet<string> CollectCommandNames(string token)
+    {
+        var results = new SortedSet<string>(StringComparer.Ordinal);
 
         // Built-ins / known bash commands
         foreach (var name in KnownCommands)
@@ -180,7 +192,51 @@ internal static class TabCompleter
             if (name.StartsWith(token, StringComparison.Ordinal))
                 results.Add(name);
 
-        return [.. results.Select(r => new CompletionItem(r))];
+        return results;
+    }
+
+    /// <summary>
+    /// Command-name matches for the live type-ahead panel at the command position (mirrors the
+    /// flag-doc panel, but for the first word). Returns the matching alias and command names, with
+    /// aliases first so a user's own shortcuts surface above the builtin list. Empty unless the
+    /// cursor is on a plain command-name token (non-empty, not a flag, not a path) at the first word.
+    /// Pure/synchronous — no runspace, so it stays inside the keystroke budget.
+    /// </summary>
+    internal static IReadOnlyList<string> MatchingCommandNames(
+        string line,
+        int cursor,
+        IReadOnlyDictionary<string, string> aliases,
+        IReadOnlyList<string>? powerShellCommands = null)
+    {
+        if (!IsFirstWord(line, cursor))
+            return [];
+
+        var (_, token) = SplitAtWordBoundaryQuoteAware(line, cursor);
+        // A flag, a path-like token (./x, /usr/bin/x, ~/x), or an empty prompt are not command-name
+        // prefixes — the path/flag providers (or nothing) own those.
+        if (token.Length == 0 || token[0] == '-' || LooksLikeCommandPath(token))
+            return [];
+
+        // Aliases first (a user's own shortcuts), then bash builtins/$PATH, then PowerShell
+        // commands — each prefix-filtered. PowerShell command resolution is case-insensitive, so a
+        // lowercase "get-c" prefix still surfaces "Get-Command"; bash commands stay case-sensitive.
+        var ordered = new List<string>();
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var name in aliases.Keys)
+            if (name.StartsWith(token, StringComparison.Ordinal) && seen.Add(name))
+                ordered.Add(name);
+        foreach (var name in CollectCommandNames(token))
+            if (seen.Add(name))
+                ordered.Add(name);
+
+        // PowerShell commands: the live runspace snapshot (loaded modules + session-defined
+        // functions/aliases) when available, else the curated static fallback during warmup.
+        var psCommands = powerShellCommands is { Count: > 0 } ? powerShellCommands : KnownPowerShellCommands;
+        foreach (var name in psCommands)
+            if (name.StartsWith(token, StringComparison.OrdinalIgnoreCase) && seen.Add(name))
+                ordered.Add(name);
+
+        return ordered;
     }
 
     // $PATH executable-name snapshot, cached and invalidated by the PATH value.
@@ -733,6 +789,41 @@ internal static class TabCompleter
         "sort", "ssh", "stat", "tail", "tar", "tee", "touch", "tr", "uniq",
         "unzip", "vim", "wc", "wget", "which", "xargs", "zip",
     ];
+
+    // Warm-up fallback for the type-ahead command panel: common PowerShell cmdlets shown while the
+    // runspace is still starting and CommandNameCache has no live snapshot yet. Once the worker is
+    // ready the panel uses the dynamic snapshot (loaded modules + session-defined functions/aliases)
+    // passed to MatchingCommandNames; this static set is only the pre-warmup placeholder. Kept small
+    // on purpose — the full, accurate set arrives from the background cache within a moment.
+    private static readonly string[] KnownPowerShellCommands =
+    [
+        "Add-Content", "Clear-Content", "Clear-Host", "Compare-Object",
+        "ConvertFrom-Csv", "ConvertFrom-Json", "ConvertTo-Csv", "ConvertTo-Json",
+        "Copy-Item", "ForEach-Object", "Format-List", "Format-Table",
+        "Get-ChildItem", "Get-Command", "Get-Content", "Get-Date", "Get-Help",
+        "Get-Item", "Get-ItemProperty", "Get-Location", "Get-Member",
+        "Get-Process", "Get-Service", "Group-Object", "Import-Csv", "Import-Module",
+        "Invoke-Expression", "Invoke-RestMethod", "Invoke-WebRequest", "Join-Path",
+        "Measure-Object", "Move-Item", "New-Item", "Out-File", "Out-Host",
+        "Out-Null", "Out-String", "Remove-Item", "Rename-Item", "Resolve-Path",
+        "Select-Object", "Select-String", "Set-Content", "Set-Item",
+        "Set-Location", "Sort-Object", "Split-Path", "Start-Process", "Stop-Process",
+        "Tee-Object", "Test-Connection", "Test-Path", "Where-Object", "Write-Error",
+        "Write-Host", "Write-Output", "Write-Warning",
+    ];
+
+    /// <summary>
+    /// True when <paramref name="name"/> is one of the curated <see cref="KnownPowerShellCommands"/>
+    /// (case-insensitive, matching PowerShell's command resolution). Lets the type-ahead panel mark a
+    /// PowerShell command distinctly from a bash builtin or alias.
+    /// </summary>
+    internal static bool IsKnownPowerShellCommand(string name)
+    {
+        foreach (var ps in KnownPowerShellCommands)
+            if (string.Equals(ps, name, StringComparison.OrdinalIgnoreCase))
+                return true;
+        return false;
+    }
 
     private static readonly CompletionItem[] GrepBasicRegexSnippets =
     [

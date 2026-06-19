@@ -29,6 +29,50 @@ public class BashTranspilerTests
         Assert.Contains("|| $($global:LASTEXITCODE = 0; [void]$true)", result);
     }
 
+    // Regression: a path-like `.sh` script invocation must run through `bash`, not be emitted
+    // bare. Bare `./x.sh` makes PowerShell treat the file as a "document": it ShellExecutes one
+    // standalone (never running the script body) and ERRORS inside a pipeline ("Cannot run a
+    // document in the middle of a pipeline"). Routing through bash runs it and composes in a pipe.
+    [Fact]
+    public void LocalShellScript_RelativePath_RoutedThroughBash()
+    {
+        Assert.Equal("bash ./scripts/test.sh", BashTranspiler.Transpile("./scripts/test.sh"));
+    }
+
+    [Fact]
+    public void LocalShellScript_InPipeline_RoutedThroughBash()
+    {
+        var result = BashTranspiler.Transpile("./scripts/test.sh foo | tail -30");
+        Assert.Equal("bash ./scripts/test.sh foo | Invoke-BashTail -30", result);
+    }
+
+    [Fact]
+    public void LocalShellScript_AbsoluteDotDotAndQuotedTildePaths_RoutedThroughBash()
+    {
+        Assert.StartsWith("bash /opt/x.sh", BashTranspiler.Transpile("/opt/x.sh"));
+        Assert.StartsWith("bash ../build.sh", BashTranspiler.Transpile("../build.sh"));
+        // A QUOTED tilde is a literal path (bash does not home-expand inside quotes), so it routes
+        // through bash. An UNQUOTED ~/x.sh is parsed as a tilde expansion ($HOME) and keeps the
+        // pre-existing tilde-path behavior — not rewritten (conservative: only plain literal paths).
+        Assert.Equal("bash '~/dotfiles/setup.bash'", BashTranspiler.Transpile("'~/dotfiles/setup.bash'"));
+    }
+
+    [Fact]
+    public void LocalShellScript_QuotedPath_RoutedThroughBashNotCallOperator()
+    {
+        // A quoted command word would normally get the `& ` call operator; a quoted script path
+        // takes the `bash ` prefix instead so it still executes correctly.
+        Assert.Equal("bash './build.sh'", BashTranspiler.Transpile("'./build.sh'"));
+    }
+
+    [Fact]
+    public void BareShScriptWithoutPath_NotRewritten_MatchesBashPathLookup()
+    {
+        // A bare `x.sh` (no directory component) is a PATH/command lookup in bash, not a local
+        // file run — so it is NOT rewritten to `bash x.sh`.
+        Assert.DoesNotContain("bash ", BashTranspiler.Transpile("foo.sh arg"));
+    }
+
     [Fact]
     public void ForceClobberRedirect_TreatedAsPlainStdoutRedirect()
     {

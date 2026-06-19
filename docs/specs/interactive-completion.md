@@ -168,8 +168,33 @@ Tab required. It updates every keystroke and vanishes on space / Enter / a non-f
   flag token, via `TabCompleter.AllFlagSpecsForCommand`) and **→** on a focused inline-panel row.
   The format helpers (`DetailLines`, `WrapText`) are pure/unit-tested; the key loop has a `Simulate`
   seam. Tests: `PsBash.Shell.Tests/LineEditorTests.cs` `FlagHelpBrowserTests`.
-- **Scope** — bash flag specs (sync) + PS-cmdlet params (async). `complete -W` lists are not shown
-  in the panel (still Tab-driven). PS man-page detail is type/value-set only (no `Get-Help` prose yet).
+- **Command position (first word)** — the panel is the first-word counterpart to the flag panel:
+  as the user types a command prefix, `TabCompleter.MatchingCommandNames(line, cursor, aliases)`
+  (pure/synchronous — aliases first, then the static bash builtin/`$PATH` snapshot, then the live
+  PowerShell command snapshot, prefix-filtered) feeds `CurrentFlagHints`, which renders one row per
+  matching command. An alias row shows `→ {expansion}`; a PowerShell command shows its kind
+  (`PowerShell cmdlet` / `function` / `alias` / …, from the cache's `DescribeKind`). PowerShell
+  prefixes match case-insensitively (`get-c…` → `Get-ChildItem`), matching PS command resolution;
+  bash names stay case-sensitive. It is suppressed for empty / flag (`-…`) / path-like (`./x`, `/x`,
+  `~/x`) tokens, so the path and flag providers still own those. Focus/scroll/Enter-insert reuse the
+  flag-panel machinery unchanged (`InsertFlagAtToken` replaces the partial command word). Tests:
+  `LineEditorTests.cs` `MatchingCommandNames_*`.
+  - **PowerShell command snapshot (dynamic, background-loaded)** — `CommandNameCache` holds the set
+    of command names resolvable in the live runspace (cmdlets / functions / filters / aliases from
+    every loaded module, **plus anything the session has defined** — a `function foo {}` or
+    `Set-Alias` the user just ran). It is **preloaded in the background** once the worker is ready
+    (after rc sourcing) and **refreshed after each executed command** that may have added a
+    function/alias/module, and after a `source`. The panel reads `CommandNameCache.Names` /
+    `DescribeKind` **synchronously** (no runspace round-trip, no keystroke-budget cost). `RefreshAsync`
+    is single-flighted and coalesces a burst of triggers into one trailing query. During the brief
+    warmup before the first snapshot lands, `MatchingCommandNames` falls back to the curated static
+    `TabCompleter.KnownPowerShellCommands` set (label via `IsKnownPowerShellCommand`). This replaces
+    the old "panel is deliberately runspace-free / no PS commands" rule — the panel is still
+    keystroke-synchronous, but now reads a background-maintained live snapshot. The Tab Phase-1
+    `Get-Command` merge (§1) remains the on-demand, fully-live path.
+- **Scope** — command names (sync, first word) + bash flag specs (sync) + PS-cmdlet params (async).
+  `complete -W` lists are not shown in the panel (still Tab-driven). PS man-page detail is
+  type/value-set only (no `Get-Help` prose yet).
 
 Tests: `PsBash.Shell.Tests/LineEditorTests.cs` `MatchingFlagSpecs_*` (bash panel data) and
 `PsBash.Host.Tests/Shell/CompletionEngineTests.cs` `FlagHints_*` (PS-param hints via fake worker);

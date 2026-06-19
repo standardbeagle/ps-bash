@@ -19,7 +19,7 @@
          consumers hit NU1101. The publish workflow patches <Version> from the
          release tag (kept in lockstep with PsBash.Core / the module). -->
     <PackageId>PsBash.Transpiler</PackageId>
-    <Version>0.10.13</Version>
+    <Version>0.10.18</Version>
     <Authors>StandardBeagle</Authors>
     <Description>Bash parser and AST (based on Oils/OSH) plus the PowerShell emitter that powers PsBash.Core. Leaf library with no PsBash dependencies.</Description>
     <PackageTags>bash;powershell;transpiler;parser;ast;shell</PackageTags>

@@ -522,6 +522,95 @@ public class TabCompleterTests : IDisposable
     }
 
     [Fact]
+    public void MatchingCommandNames_CommandPrefix_ReturnsMatchingCommands()
+    {
+        // The live command-doc panel at the first word: "gre" → grep (and only -gre* matches).
+        var names = TabCompleter.MatchingCommandNames("gre", 3, _noAliases);
+
+        Assert.Contains("grep", names);
+        Assert.All(names, n => Assert.StartsWith("gre", n));
+    }
+
+    [Fact]
+    public void MatchingCommandNames_NotFirstWord_ReturnsEmpty()
+    {
+        // A token in argument position is not a command name — the flag/path providers own it.
+        Assert.Empty(TabCompleter.MatchingCommandNames("grep pat", 8, _noAliases));
+    }
+
+    [Fact]
+    public void MatchingCommandNames_EmptyFlagOrPathToken_ReturnsEmpty()
+    {
+        Assert.Empty(TabCompleter.MatchingCommandNames("", 0, _noAliases));        // empty prompt
+        Assert.Empty(TabCompleter.MatchingCommandNames("-x", 2, _noAliases));      // a flag, not a command
+        Assert.Empty(TabCompleter.MatchingCommandNames("./scr", 5, _noAliases));   // path → path completion owns it
+    }
+
+    [Fact]
+    public void MatchingCommandNames_AliasesMatchAndComeFirst()
+    {
+        var aliases = new Dictionary<string, string>(StringComparer.Ordinal) { ["grunt"] = "echo hi" };
+
+        var names = TabCompleter.MatchingCommandNames("gr", 2, aliases);
+
+        Assert.Contains("grunt", names);
+        Assert.Contains("grep", names);
+        Assert.True(names.ToList().IndexOf("grunt") < names.ToList().IndexOf("grep")); // alias precedes builtin
+    }
+
+    [Fact]
+    public void MatchingCommandNames_StaticFallback_IncludesPowerShellCommands()
+    {
+        // With no live snapshot (warmup), the panel falls back to the curated static PS-cmdlet set.
+        var names = TabCompleter.MatchingCommandNames("Get-Ch", 6, _noAliases);
+
+        Assert.Contains("Get-ChildItem", names);
+        Assert.True(TabCompleter.IsKnownPowerShellCommand("Get-ChildItem"));
+    }
+
+    [Fact]
+    public void MatchingCommandNames_DynamicSnapshot_SurfacesLiveCommands()
+    {
+        // The live runspace snapshot (loaded modules + session-defined functions/aliases) is
+        // merged in — a session-defined function shows up even though it is in no static list.
+        var live = new[] { "Get-MyCustomThing", "Invoke-SessionWidget" };
+
+        var names = TabCompleter.MatchingCommandNames("Get-My", 6, _noAliases, live);
+
+        Assert.Contains("Get-MyCustomThing", names);
+    }
+
+    [Fact]
+    public void MatchingCommandNames_DynamicSnapshot_PrefixIsCaseInsensitive()
+    {
+        // PowerShell command resolution is case-insensitive — a lowercase prefix still matches.
+        var live = new[] { "Get-Command", "Get-ChildItem" };
+
+        var names = TabCompleter.MatchingCommandNames("get-com", 7, _noAliases, live);
+
+        Assert.Contains("Get-Command", names);
+    }
+
+    [Fact]
+    public void IsKnownPowerShellCommand_BashCommand_ReturnsFalse()
+    {
+        // A bash builtin/coreutil is not flagged as a PowerShell cmdlet (panel label stays correct).
+        Assert.False(TabCompleter.IsKnownPowerShellCommand("grep"));
+    }
+
+    [Theory]
+    [InlineData("Cmdlet", "PowerShell cmdlet")]
+    [InlineData("Function", "PowerShell function")]
+    [InlineData("Alias", "PowerShell alias")]
+    [InlineData("Filter", "PowerShell filter")]
+    [InlineData("Script", "PowerShell script")]
+    [InlineData("Application", "PowerShell command")]
+    public void CommandNameCache_DescribeCommandType_LabelsByKind(string type, string expected)
+    {
+        Assert.Equal(expected, CommandNameCache.DescribeCommandType(type));
+    }
+
+    [Fact]
     public void CompleteFlags_WithArg_ShowsArgPlaceholderInLabel_ButInsertsBareFlag()
     {
         var results = TabCompleter.Complete("find -n", 7, _noAliases, _tmpDir);

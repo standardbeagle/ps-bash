@@ -1828,12 +1828,18 @@ public static class PsEmitter
         var commandArgs = cmd.Words.Length > 1
             ? cmd.Words.RemoveAt(0)
             : ImmutableArray<CompoundWord>.Empty;
+        // Command-word prefix: a path-like `.sh`/`.bash` script runs through `bash` (so it executes
+        // correctly AND composes in a pipeline — see IsLocalShellScriptCommand); otherwise a quoted
+        // command word needs the `& ` call operator; a bare command word needs nothing.
+        string leading = IsLocalShellScriptCommand(cmd.Words[0]) ? "bash "
+            : IsQuotedCommandWord(cmd.Words[0]) ? "& "
+            : "";
+
         if (HasUnquotedVarSplatArg(commandArgs))
         {
             // Hoist each unquoted-variable operand to a temp var and splat it.
             // The command word keeps its existing emission (incl. the `& `
-            // call-operator prefix for a quoted command word).
-            string leading = IsQuotedCommandWord(cmd.Words[0]) ? "& " : "";
+            // call-operator prefix for a quoted command word, or the `bash ` prefix for a script).
             sb.Append(EmitCommandWithSplatArgs(
                 leading + EmitWord(cmd.Words[0]),
                 commandArgs,
@@ -1845,8 +1851,8 @@ public static class PsEmitter
             {
                 if (i > 0)
                     sb.Append(' ');
-                else if (IsQuotedCommandWord(cmd.Words[0]))
-                    sb.Append("& ");
+                else if (leading.Length > 0)
+                    sb.Append(leading);
                 sb.Append(EmitWord(cmd.Words[i]));
             }
         }
@@ -3972,6 +3978,33 @@ public static class PsEmitter
         if (word.Parts.Length != 1)
             return false;
         return word.Parts[0] is WordPart.SingleQuoted or WordPart.DoubleQuoted;
+    }
+
+    /// <summary>
+    /// True when the command word is a <em>path-like</em> reference to a shell script — e.g.
+    /// <c>./build.sh</c>, <c>../t.sh</c>, <c>/abs/x.sh</c>, <c>dir/x.sh</c>, <c>~/x.sh</c> (and the
+    /// <c>.bash</c> variant). Such a command must be run through <c>bash</c>, not invoked bare:
+    /// PowerShell treats a <c>.sh</c> file as a "document" — it ShellExecutes one standalone (which
+    /// does not actually run the script's contents) but <em>refuses it inside a pipeline</em>
+    /// ("Cannot run a document in the middle of a pipeline"). Routing through bash runs the script
+    /// correctly and composes in a pipeline, matching bash (which execs the file via its shebang).
+    /// Only path-like references are matched: a bare <c>x.sh</c> stays a PATH/command lookup, as in
+    /// bash (where the current dir is not on PATH). Words with variable/command expansion return
+    /// false (handled conservatively — only plain literal / quoted-literal paths are rewritten).
+    /// </summary>
+    private static bool IsLocalShellScriptCommand(CompoundWord word)
+    {
+        var value = ExtractSingleQuotedOrLiteralValue(word);
+        if (string.IsNullOrEmpty(value))
+            return false;
+        bool isPathLike = value.Contains('/') || value.Contains('\\')
+            || value.StartsWith("./", StringComparison.Ordinal)
+            || value.StartsWith("../", StringComparison.Ordinal)
+            || value.StartsWith("~", StringComparison.Ordinal);
+        if (!isPathLike)
+            return false;
+        return value.EndsWith(".sh", StringComparison.OrdinalIgnoreCase)
+            || value.EndsWith(".bash", StringComparison.OrdinalIgnoreCase);
     }
 
     /// <summary>

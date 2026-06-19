@@ -25,6 +25,10 @@ public static class InteractiveShell
     private static LineEditor? _lineEditor;
     private static IHistoryStore? _historyStore;
     private static IFrecencyStore? _frecencyStore;
+    // Background-maintained snapshot of live PowerShell command names for the type-ahead panel.
+    // Preloaded once the worker is ready and refreshed after each command that may add a
+    // function/alias/module, so newly-defined commands show up in the panel without a Tab round-trip.
+    private static readonly CommandNameCache _commandNameCache = new();
     private static string _sessionId = Guid.NewGuid().ToString();
     private static string? _lastCommand;
 
@@ -99,7 +103,8 @@ public static class InteractiveShell
             commandAssist: (request, ct) => commandAssistRunner is not null
                 ? RunCommandAssistWithReviewAsync(commandAssistRunner, request, _lastDir, ct)
                 : throw new CommandAssistProviderException(commandAssistConfigError ?? "AI provider config is unavailable."),
-            frecencySuggest: frecencySuggester is not null ? frecencySuggester.SuggestSuffixAsync : null);
+            frecencySuggest: frecencySuggester is not null ? frecencySuggester.SuggestSuffixAsync : null,
+            commandNameCache: _commandNameCache);
 
         // Readiness gate: finish runspace init, source ~/.psbashrc (so the first PS1 reflects rc),
         // THEN expose the worker to completion + the prompt. Awaited before each command executes
@@ -113,6 +118,9 @@ public static class InteractiveShell
                 catch (OperationCanceledException) { /* Ctrl-C during rc load — proceed to the prompt */ }
             }
             readyWorker = w;
+            // Preload the command-name panel cache in the background now that the runspace (and rc,
+            // which may import modules / define functions) is ready. Off the keystroke path.
+            _ = _commandNameCache.RefreshAsync(w);
             return w;
         });
 
@@ -261,6 +269,8 @@ public static class InteractiveShell
                     {
                         await SourceFileAsync(worker, cts, sourceTarget);
                         await SyncWorkerCwdAsync(worker);
+                        // A sourced file commonly defines functions/aliases — refresh the panel cache.
+                        _ = _commandNameCache.RefreshAsync(worker);
                         try
                         {
                             var ec = await worker.QueryAsync("$LASTEXITCODE");
@@ -312,6 +322,9 @@ public static class InteractiveShell
 
                     await worker.ExecuteAsync(pwshCommand, cts.Token);
                     await SyncWorkerCwdAsync(worker);
+                    // The command may have defined a function / alias or imported a module — refresh
+                    // the type-ahead command panel's snapshot in the background (off the prompt path).
+                    _ = _commandNameCache.RefreshAsync(worker);
 
                     try
                     {

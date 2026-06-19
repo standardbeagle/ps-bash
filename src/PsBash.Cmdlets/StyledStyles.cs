@@ -24,7 +24,7 @@ internal static class StyledStyles
             var names = string.Join(", ", BuiltinStyleNames());
             throw new ItemNotFoundException(
                 $"No stylesheet named '{name}'. Built-in: {names}. " +
-                "Pass inline CSS, a .css path, or drop '<name>.css' in $PSBASH_STYLE_PATH or ~/.config/ps-bash/styles.");
+                "Pass inline CSS, a .pcss/.css path, or drop '<name>.pcss' in $PSBASH_STYLE_PATH or ~/.config/ps-bash/styles.");
         }
 
         return string.Join("\n", new[] { builtin, user }.Where(s => !string.IsNullOrEmpty(s)));
@@ -44,11 +44,11 @@ internal static class StyledStyles
         _ => "object",
     };
 
-    /// <summary>Read the embedded built-in stylesheet <c>styles/&lt;name&gt;.css</c>, or null.</summary>
+    /// <summary>Read the embedded built-in stylesheet <c>styles/&lt;name&gt;.pcss</c>, or null.</summary>
     public static string? ReadEmbeddedStyle(string name)
     {
         var asm = typeof(StyledStyles).Assembly;
-        var suffix = $".styles.{name}.css";
+        var suffix = $".styles.{name}.pcss";
         var resource = asm.GetManifestResourceNames()
             .FirstOrDefault(n => n.EndsWith(suffix, StringComparison.OrdinalIgnoreCase));
         if (resource is null)
@@ -69,27 +69,36 @@ internal static class StyledStyles
     public static IEnumerable<string> BuiltinStyleNames()
     {
         const string mid = ".styles.";
+        const string ext = ".pcss";
         foreach (var n in typeof(StyledStyles).Assembly.GetManifestResourceNames())
         {
             var i = n.IndexOf(mid, StringComparison.OrdinalIgnoreCase);
-            if (i >= 0 && n.EndsWith(".css", StringComparison.OrdinalIgnoreCase))
+            if (i >= 0 && n.EndsWith(ext, StringComparison.OrdinalIgnoreCase))
             {
-                yield return n.Substring(i + mid.Length, n.Length - (i + mid.Length) - ".css".Length);
+                yield return n.Substring(i + mid.Length, n.Length - (i + mid.Length) - ext.Length);
             }
         }
     }
 
-    /// <summary>Read a user override stylesheet <c>&lt;name&gt;.css</c> from the style dirs, or null.</summary>
+    /// <summary>
+    /// Read a user override stylesheet from the style dirs, or null. Prefers the ps-bash dialect
+    /// extension <c>&lt;name&gt;.pcss</c>; falls back to <c>&lt;name&gt;.css</c> for back-compat with
+    /// overrides authored before the rename. The first dir (in <see cref="UserStyleDirs"/> order)
+    /// to contain either wins.
+    /// </summary>
     public static string? ReadUserOverride(string name)
     {
         foreach (var dir in UserStyleDirs())
         {
             try
             {
-                var path = Path.Combine(dir, name + ".css");
-                if (File.Exists(path))
+                foreach (var ext in new[] { ".pcss", ".css" })
                 {
-                    return BashFileSystem.ReadAllTextRaw(path);
+                    var path = Path.Combine(dir, name + ext);
+                    if (File.Exists(path))
+                    {
+                        return BashFileSystem.ReadAllTextRaw(path);
+                    }
                 }
             }
             catch

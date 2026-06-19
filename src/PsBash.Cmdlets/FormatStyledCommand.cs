@@ -29,7 +29,7 @@ namespace PsBash.Cmdlets;
 /// .zombie  { color: yellow; text-decoration: strikethrough }
 /// </code>
 /// <example>
-///   <code>Get-Process | Format-Styled procs.css -Property Name,CPU</code>
+///   <code>Get-Process | Format-Styled procs.pcss -Property Name,CPU</code>
 /// </example>
 /// </remarks>
 [Cmdlet(VerbsCommon.Format, "Styled")]
@@ -37,7 +37,7 @@ namespace PsBash.Cmdlets;
 public sealed class FormatStyledCommand : PSCmdlet
 {
     /// <summary>
-    /// The stylesheet to apply. Accepts inline CSS text, a path to a <c>.css</c> file,
+    /// The stylesheet to apply. Accepts inline CSS text, a path to a <c>.pcss</c>/<c>.css</c> file,
     /// or the name of a built-in / user stylesheet (<c>default</c>, <c>ls</c>, <c>ps</c>,
     /// …). Omitted entirely → the built-in <c>default</c> stylesheet. A value containing
     /// <c>{</c> or a newline is treated as inline CSS; a value resolving to an existing

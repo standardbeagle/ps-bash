@@ -209,7 +209,7 @@ public static class StyledInteractiveSession
         return writer.ToString().TrimEnd('\r', '\n');
     }
 
-    /// <summary>Resolve a style name / inline CSS / .css path to CSS text (plain File.Exists — no PowerShell provider).</summary>
+    /// <summary>Resolve a style name / inline CSS / .pcss/.css path to CSS text (plain File.Exists — no PowerShell provider).</summary>
     public static string ResolveCss(string nameOrInline)
     {
         if (nameOrInline.Contains('{') || nameOrInline.Contains('\n'))

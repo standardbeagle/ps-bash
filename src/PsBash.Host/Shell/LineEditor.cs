@@ -68,6 +68,11 @@ internal sealed class LineEditor
     // before the history suggester so a jump command previews its target.
     private readonly Func<string, Task<string?>>? _frecencySuggest;
 
+    // Optional background cache of live PowerShell command names (loaded modules + session-defined
+    // functions/aliases). Read synchronously on the keystroke path by the command-position panel so
+    // it surfaces real PS commands without a runspace round-trip. Null when no live worker is wired.
+    private readonly CommandNameCache? _commandNameCache;
+
     // Panel navigation: when the user presses ↓ with the panel visible, focus moves INTO the panel
     // (↑↓/PgUp/PgDn scroll a highlighted selection; Enter inserts the flag; Esc / ↑-past-top returns
     // to typing). _panelScroll is the index of the first visible row when the list overflows.
@@ -131,13 +136,15 @@ internal sealed class LineEditor
         IReadOnlyDictionary<string, string>? aliases = null,
         Func<string, int, CancellationToken, Task<IReadOnlyList<FlagHint>>>? flagHintProvider = null,
         Func<CommandAssistRequest, CancellationToken, Task<CommandAssistResponse>>? commandAssist = null,
-        Func<string, Task<string?>>? frecencySuggest = null)
+        Func<string, Task<string?>>? frecencySuggest = null,
+        CommandNameCache? commandNameCache = null)
     {
         _historyStore = historyStore;
         _completer = completer;
         _flagHintProvider = flagHintProvider;
         _commandAssist = commandAssist;
         _frecencySuggest = frecencySuggest;
+        _commandNameCache = commandNameCache;
         _suggester = new Suggester(historyStore);
         _cwd = cwd ?? Environment.CurrentDirectory;
         _aliases = aliases ?? EmptyAliases;
@@ -863,6 +870,18 @@ internal sealed class LineEditor
     {
         try
         {
+            // Command position: the live command-doc panel — the first-word counterpart to the
+            // flag panel. As the user types a command prefix, show the matching commands/aliases,
+            // including PowerShell commands from the background cache (loaded modules + functions /
+            // aliases the session has defined). The cache read is synchronous (no runspace round-trip).
+            var psCommands = _commandNameCache?.Names;
+            var commands = TabCompleter.MatchingCommandNames(line, cursor, _aliases, psCommands);
+            if (commands.Count > 0)
+            {
+                return commands.Select(c => new FlagHint(
+                    c, c, CommandHintDesc(c))).ToList();
+            }
+
             var specs = TabCompleter.MatchingFlagSpecs(line, cursor, _aliases);
             if (specs.Count > 0)
             {
@@ -882,6 +901,20 @@ internal sealed class LineEditor
         {
             return Array.Empty<FlagHint>();
         }
+    }
+
+    /// <summary>
+    /// The desc shown beside a command-position panel row: a user alias shows its expansion
+    /// (<c>→ ls -la</c>); a PowerShell command shows its kind from the live cache ("PowerShell
+    /// cmdlet/function/alias", or the static-fallback "PowerShell cmdlet" during warmup); a bash
+    /// command shows nothing.
+    /// </summary>
+    private string CommandHintDesc(string command)
+    {
+        if (_aliases.TryGetValue(command, out var exp))
+            return $"→ {exp}";
+        return _commandNameCache?.DescribeKind(command)
+            ?? (TabCompleter.IsKnownPowerShellCommand(command) ? "PowerShell cmdlet" : string.Empty);
     }
 
     /// <summary>One rendered panel line: its text and whether it is the focused selection.</summary>

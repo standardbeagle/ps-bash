@@ -102,10 +102,11 @@
   </ItemGroup>
 
   <!-- Built-in Format-Styled stylesheets, embedded so they travel with the DLL
-       regardless of deployment layout. Logical names: PsBash.Cmdlets.styles.<name>.css.
-       Only embedded when Strata (and thus Format-Styled) is built. -->
+       regardless of deployment layout. Logical names: PsBash.Cmdlets.styles.<name>.pcss.
+       The `.pcss` extension marks the ps-bash CSS dialect (CSS-like, but with Strata
+       Kind selectors and `command:` bindings). Only embedded when Strata is built. -->
   <ItemGroup Condition="'$(UseStrata)' == 'true'">
-    <EmbeddedResource Include="styles\*.css" />
+    <EmbeddedResource Include="styles\*.pcss" />
   </ItemGroup>
 
   <ItemGroup>
