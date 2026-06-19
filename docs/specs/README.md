@@ -33,3 +33,4 @@ Nav starts at /CODE_MAP.md. Keep this index complete — a guard test fails on a
 - [shell-implementation-phases.md](shell-implementation-phases.md) — Shell Implementation Phases
 - [sqlite-history-schema.md](sqlite-history-schema.md) — SQLite History Store Schema
 - [styled-output.md](styled-output.md) — Styled Output (interactive Format-Styled, buttons + detail expansion, opt-in default)
+- [transpile-fuzz-grammar.md](transpile-fuzz-grammar.md) — Transpile Fuzz Grammar & Parseability Contract (never emit broken PowerShell)

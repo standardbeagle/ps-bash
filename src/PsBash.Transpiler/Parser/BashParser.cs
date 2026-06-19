@@ -127,11 +127,23 @@ public sealed partial class BashParser
             line, col, rule);
     }
 
-    private BashToken Peek() => _tokens[_pos];
+    // Peek clamps to the trailing Eof sentinel so an unguarded read at/just-past the end
+    // returns Eof rather than throwing ArgumentOutOfRangeException (a raw crash). Eof at the
+    // tail is a legitimate Peek target (loops guard on `Peek().Kind != Eof`).
+    private BashToken Peek() => _tokens[_pos < _tokens.Count ? _pos : _tokens.Count - 1];
 
+    // Advance, by contrast, must REFUSE to consume the Eof sentinel: a truncated construct
+    // (`for`, `function`, `2>&`, `echo $(`, …) reaches Advance() expecting another token but
+    // finds only Eof. Throwing a clean ParseException here both (a) prevents the old raw
+    // ArgumentOutOfRangeException crash and (b) prevents an infinite loop — a `while (Peek != X)
+    // Advance()` that never finds X would spin forever if Advance silently stalled at Eof.
+    // Valid parsing never advances the Eof token (it Peek-guards), so this only fires on
+    // genuinely incomplete input, converting it to a positioned "unexpected end of input".
     private BashToken Advance()
     {
-        var token = _tokens[_pos];
+        var token = Peek();
+        if (token.Kind == BashTokenKind.Eof)
+            throw MakeError("Unexpected end of input", token.Position, "Advance");
         _pos++;
         return token;
     }
@@ -205,12 +217,31 @@ public sealed partial class BashParser
         return new Command.CommandList(commands.ToImmutable());
     }
 
+    // Parse a unit that MUST consume at least one token, else the operand is missing
+    // (a dangling `&&`/`||`/`|`, a leading binary operator, or EOF) — reject cleanly
+    // instead of building an empty command that emits unparseable PowerShell.
+    private Command RequireCommand(Func<Command> parse, string afterWhat, string rule)
+    {
+        int before = _pos;
+        var cmd = parse();
+        if (_pos == before)
+            throw MakeError($"Expected a command {afterWhat} but got '{Peek().Value}' ({Peek().Kind})",
+                Peek().Position, rule);
+        return cmd;
+    }
+
     private Command ParseAndOr()
     {
+        int firstStart = _pos;
         var first = ParsePipeline();
 
         if (Peek().Kind is not BashTokenKind.AndIf and not BashTokenKind.OrIf)
             return first;
+
+        // A `&&`/`||` with no left operand (leading binary operator, e.g. `&& x`).
+        if (_pos == firstStart)
+            throw MakeError($"Expected a command before '{Peek().Value}'",
+                Peek().Position, "ParseAndOr");
 
         var commands = ImmutableArray.CreateBuilder<Command>();
         var ops = ImmutableArray.CreateBuilder<string>();
@@ -222,7 +253,7 @@ public sealed partial class BashParser
             ops.Add(opToken.Value);
             // In bash, a newline after && or || is a line continuation.
             SkipNewlines();
-            commands.Add(ParsePipeline());
+            commands.Add(RequireCommand(ParsePipeline, $"after '{opToken.Value}'", "ParseAndOr"));
         }
 
         return new Command.AndOrList(commands.ToImmutable(), ops.ToImmutable());
@@ -265,7 +296,7 @@ public sealed partial class BashParser
             // before reading the next pipeline command.
             SkipNewlines();
 
-            commands.Add(ParseCompoundOrSimple());
+            commands.Add(RequireCommand(ParseCompoundOrSimple, "after '|'", "ParsePipeline"));
         }
 
         return new Command.Pipeline(commands.ToImmutable(), ops.ToImmutable(), Negated: negated);

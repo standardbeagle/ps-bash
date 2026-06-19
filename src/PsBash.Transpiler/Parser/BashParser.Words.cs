@@ -40,10 +40,22 @@ public sealed partial class BashParser
             {
                 pos = ParseDoubleQuoted(raw, pos, parts);
             }
-            else if (c == '\\' && pos + 1 < len)
+            else if (c == '\\')
             {
-                parts.Add(new WordPart.EscapedLiteral(raw[pos + 1].ToString()));
-                pos += 2;
+                if (pos + 1 < len)
+                {
+                    parts.Add(new WordPart.EscapedLiteral(raw[pos + 1].ToString()));
+                    pos += 2;
+                }
+                else
+                {
+                    // Trailing backslash with nothing to escape. Emit it as a literal and
+                    // ADVANCE — the bare-literal fallback breaks on '\' without consuming it,
+                    // so a lone trailing '\' (`echo \`, or any word ending in '\') spun the
+                    // decomposition loop forever (garbage-fuzz find: minimal hang was "\").
+                    parts.Add(new WordPart.Literal("\\"));
+                    pos++;
+                }
             }
             else if (c == '$' && pos + 2 < len && raw[pos + 1] == '(' && raw[pos + 2] == '(')
             {
@@ -278,7 +290,19 @@ public sealed partial class BashParser
                 int start = pos;
                 while (pos < len && raw[pos] != '"' && raw[pos] != '\\' && raw[pos] != '$' && raw[pos] != '`')
                     pos++;
-                innerParts.Add(new WordPart.Literal(raw[start..pos]));
+                if (pos == start)
+                {
+                    // A '$' or '`' that did not form an expansion — a trailing '$' at EOF, or
+                    // '$' not followed by a var/'('/'{'. The scan above stops on it without
+                    // consuming it, so emit it literally and ADVANCE; otherwise the outer loop
+                    // spins forever on an unterminated `"$` (garbage-fuzz find: minimal hang "$).
+                    innerParts.Add(new WordPart.Literal(raw[pos].ToString()));
+                    pos++;
+                }
+                else
+                {
+                    innerParts.Add(new WordPart.Literal(raw[start..pos]));
+                }
             }
         }
 

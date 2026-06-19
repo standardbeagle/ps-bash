@@ -340,10 +340,17 @@ public static class PsEmitter
 
     private static string FormatForItem(string item)
     {
+        if (item.Length == 0) return "''";
+        // Only a BARE literal needs quoting. An item EmitWord already rendered as a PS value —
+        // a single/double-quoted string ('a\t1'), a variable ($x), a subexpression ($(…)/(…)),
+        // or a brace-expansion array (@('a','')) — must pass through untouched; re-wrapping it
+        // in '…' produced ''a\t1'' and '@('a','')', neither of which parses (grammar-fuzz find).
+        char c = item[0];
+        if (c is '$' or '"' or '\'' or '(' or '@') return item;
         if (double.TryParse(item, System.Globalization.NumberStyles.Any,
             System.Globalization.CultureInfo.InvariantCulture, out _))
             return item;
-        return $"'{item}'";
+        return "'" + item.Replace("'", "''") + "'";
     }
 
     /// <summary>
@@ -1149,6 +1156,19 @@ public static class PsEmitter
             return $"!({TranslateTestCondition(inner, extended)})";
         }
 
+        // POSIX `[ ]` combinators `-a` (AND) / `-o` (OR): split the clause list on a
+        // top-level operator and recurse per clause, joining with -and / -or. A single
+        // unary/binary clause is ≤3 words, so only >3 words can hold a combinator; an
+        // operator at index 0 is the unary `-a` file-exists test, not AND (handled
+        // below). Without this, `[ x = y -a c = d ]` fell through to the bare-operand
+        // fallback and emitted adjacent quoted strings — invalid PowerShell.
+        // Precedence: -o binds looser than -a, so split on -o first.
+        if (!extended && words.Length > 3)
+        {
+            if (TrySplitTestCombinator(words, "-o", "-or", out var orResult)) return orResult;
+            if (TrySplitTestCombinator(words, "-a", "-and", out var andResult)) return andResult;
+        }
+
         if (words.Length >= 2)
         {
             var flag = GetLiteralValue(words[0]);
@@ -1168,7 +1188,16 @@ public static class PsEmitter
             // old broken fallback ('-x' $f) — two adjacent tokens, a parse error — never fires.
             if (flag is not null && UnaryFileTestOps.Contains(flag))
             {
-                var path = $"\"{EmitWord(words[1])}\"";
+                // Wrap a BARE literal in double quotes (`Test-Path "dir"`), but pass an operand
+                // EmitWord already rendered as a PS value — a quoted string ("$env:file"), a
+                // variable, or a subexpression — through unchanged. The old code blindly wrapped
+                // every operand, so `[ -f "$file" ]` (extremely common) became `""$env:file""`,
+                // unparseable PowerShell (grammar-fuzz find). Passing the quoted form through also
+                // keeps the variable expanding, which single-quoting would have suppressed.
+                var operand = EmitWord(words[1]);
+                var path = operand.Length > 0 && operand[0] is '"' or '\'' or '$' or '('
+                    ? operand
+                    : $"\"{operand}\"";
                 return flag switch
                 {
                     "-f" => $"Test-Path {path} -PathType Leaf",
@@ -1227,6 +1256,41 @@ public static class PsEmitter
             sb.Append(EmitTestOperand(words[i]));
         }
         return sb.ToString();
+    }
+
+    // Split a `[ ]` clause list on a top-level POSIX combinator (`-a` / `-o`) and
+    // recurse on each clause, joining with the PowerShell logical op (-and / -or).
+    // Only separators at index 1..len-2 count (operands on both sides); an operator
+    // at the edge is a unary file test, not a combinator. Returns false if the token
+    // does not appear in a separator position, so the caller falls through to the
+    // single-clause translation.
+    private static bool TrySplitTestCombinator(
+        ImmutableArray<CompoundWord> words, string token, string psOp, out string result)
+    {
+        result = string.Empty;
+        var clauses = new List<ImmutableArray<CompoundWord>>();
+        int start = 0;
+        for (int i = 1; i < words.Length - 1; i++)
+        {
+            if (GetLiteralValue(words[i]) == token)
+            {
+                clauses.Add(ImmutableArray.CreateRange(words.Skip(start).Take(i - start)));
+                start = i + 1;
+            }
+        }
+        if (clauses.Count == 0) return false; // no separator → not a combinator here
+        clauses.Add(ImmutableArray.CreateRange(words.Skip(start)));
+
+        var sb = new StringBuilder();
+        for (int i = 0; i < clauses.Count; i++)
+        {
+            if (i > 0) { sb.Append(' '); sb.Append(psOp); sb.Append(' '); }
+            sb.Append('(');
+            sb.Append(TranslateTestCondition(clauses[i], extended: false));
+            sb.Append(')');
+        }
+        result = sb.ToString();
+        return true;
     }
 
     /// <summary>
@@ -1512,8 +1576,25 @@ public static class PsEmitter
                 if (isPrint) return EmitPassthrough("Invoke-BashType", cmd.Words.Skip(1).ToImmutableArray());
                 if (varName is not null)
                 {
-                    if (isAssoc) return "$global:" + varName + " = @{}";
+                    // An initializer (`declare -i n=5`, `declare x=hello`) arrives as a
+                    // single literal `name=value`; split it so we never emit the broken
+                    // `[int]$global:n=5 = 0`. No `=` → the bare-declaration defaults below.
+                    int eq = varName.IndexOf('=');
                     bool isInt = cmd.Words.Skip(1).Any(w => GetLiteralValue(w) == "-i");
+                    if (eq >= 0)
+                    {
+                        string declName = varName[..eq];
+                        string rawVal = varName[(eq + 1)..];
+                        if (isAssoc) return "$global:" + declName + " = @{}";
+                        if (isInt)
+                        {
+                            // Integer attribute: bash evaluates the RHS arithmetically.
+                            string intVal = long.TryParse(rawVal, out _) ? rawVal : "0";
+                            return "[int]$global:" + declName + " = " + intVal;
+                        }
+                        return "$global:" + declName + " = " + PsBuild.SingleQuote(rawVal);
+                    }
+                    if (isAssoc) return "$global:" + varName + " = @{}";
                     return isInt ? "[int]$global:" + varName + " = 0" : "$global:" + varName + " = @()";
                 }
             }
@@ -2123,6 +2204,14 @@ public static class PsEmitter
                 sb.Append(PsBuild.EscapeForDoubleQuote(ExpandAnsiCEscapes(aq.Value)));
             else if (part is WordPart.Literal lit)
                 sb.Append(PsBuild.EscapeForDoubleQuote(lit.Value));
+            // A NESTED expansion (e.g. ${x:-${y:-z}}) must be emitted in double-quote
+            // context: its bare form `($env:y ?? "z")` carries raw `"`, which would
+            // break out of this surrounding "...". The inDoubleQuote form uses `$(...)`
+            // with single-quoted inner literals, which is safe nested here.
+            else if (part is WordPart.BracedVarSub nbvs)
+                sb.Append(EmitBracedVar(nbvs, inDoubleQuote: true));
+            else if (part is WordPart.SimpleVarSub nvs)
+                sb.Append(EmitSimpleVar(nvs.Name, inDoubleQuote: true));
             else
                 sb.Append(EmitWordPart(part));
         }
@@ -2343,7 +2432,7 @@ public static class PsEmitter
         // produces nothing (preserving empty-capture semantics), and a
         // multi-element pipeline is space-joined by $OFS when interpolated in
         // a double-quoted context — matching bash IFS default-field-splitting.
-        WordPart.CommandSub cs => $"$({Emit((Command)cs.Body)} | ForEach-Object {{ Get-BashText $_ }})",
+        WordPart.CommandSub cs => EmitCommandSub(cs),
         WordPart.ArithSub arith => EmitArithSub(arith),
         WordPart.TildeSub ts => ts.User switch
         {
@@ -2495,6 +2584,23 @@ public static class PsEmitter
     //   step 7 (trace metric):      DEFERRED until a real bridge branch exists.
     // Default classifier today: temp-file path via Invoke-ProcessSub. This is the
     // correctness-first fallback for unknown external, seekable, and multi-file consumers.
+    // RC-8d: capture command-substitution output as bash text (see the CommandSub
+    // case for the ForEach-Object rationale). A simple command or pipeline is a
+    // valid PowerShell pipeline head, so it pipes directly. A COMPOUND body
+    // (if/for/while/case/subshell/brace-group/list/and-or/assignment/arith) emits
+    // a PowerShell *statement*, which CANNOT head a pipeline — `switch (...) {} |
+    // ForEach-Object` is a parse error ("An empty pipe element is not allowed").
+    // Wrap those in `& { ... }` so the statement runs in a child scope (matching
+    // bash command-sub subshell semantics) and yields a pipeable result.
+    private static string EmitCommandSub(WordPart.CommandSub cs)
+    {
+        var body = (Command)cs.Body;
+        string inner = Emit(body);
+        bool pipeableHead = body is Command.Simple or Command.Pipeline;
+        string head = pipeableHead ? inner : $"& {{ {inner} }}";
+        return $"$({head} | ForEach-Object {{ Get-BashText $_ }})";
+    }
+
     private static string EmitProcessSub(WordPart.ProcessSub ps)
     {
         string inner = Emit((Command)ps.Body);
@@ -2956,30 +3062,33 @@ public static class PsEmitter
         // still starts at the leftmost position, so `foo.bar.baz` %`.*` wrongly
         // gave `foo` instead of `foo.bar`. Instead capture a GREEDY prefix and
         // keep it: `^(.*)PAT$` -> `$1` leaves the shortest trailing match for PAT.
+        // Every embed below lands inside a PowerShell single-quoted string, so any literal
+        // ' in the pattern/replacement (e.g. from a $'…' word inside ${VAR##pat}) must be
+        // doubled or it breaks out and emits unparseable PowerShell (grammar-fuzz find).
         if (suffix.StartsWith("%%"))
-            return $"{open}{varRef} -replace '{GlobToRegex(suffix[2..], lazy: false)}$','')";
+            return $"{open}{varRef} -replace '{SqEsc(GlobToRegex(suffix[2..], lazy: false))}$','')";
         if (suffix.StartsWith("%"))
-            return $"{open}{varRef} -replace '^(.*){GlobToRegex(suffix[1..], lazy: false)}$','$1')";
+            return $"{open}{varRef} -replace '^(.*){SqEsc(GlobToRegex(suffix[1..], lazy: false))}$','$1')";
 
         // Remove prefix: ${VAR##pattern} (greedy) / ${VAR#pattern} (lazy).
         if (suffix.StartsWith("##"))
-            return $"{open}{varRef} -replace '^{GlobToRegex(suffix[2..], lazy: false)}','')";
+            return $"{open}{varRef} -replace '^{SqEsc(GlobToRegex(suffix[2..], lazy: false))}','')";
         if (suffix.StartsWith("#"))
-            return $"{open}{varRef} -replace '^{GlobToRegex(suffix[1..], lazy: true)}','')";
+            return $"{open}{varRef} -replace '^{SqEsc(GlobToRegex(suffix[1..], lazy: true))}','')";
 
         // Replace first: ${VAR/find/replace} — instance overload .Replace(str, rep, 1).
         if (suffix.StartsWith("/") && !suffix.StartsWith("//"))
         {
             var parts = suffix[1..].Split('/', 2);
             string find = parts[0], replace = parts.Length > 1 ? parts[1] : "";
-            return $"{open}([regex][regex]::Escape('{find}')).Replace({varRef}, '{replace}', 1))";
+            return $"{open}([regex][regex]::Escape('{SqEsc(find)}')).Replace({varRef}, '{SqEsc(replace)}', 1))";
         }
         // Replace all: ${VAR//find/replace} — escape find literally; 2-arg overload = all.
         if (suffix.StartsWith("//"))
         {
             var parts = suffix[2..].Split('/', 2);
             string find = parts[0], replace = parts.Length > 1 ? parts[1] : "";
-            return $"{open}([regex][regex]::Escape('{find}')).Replace({varRef}, '{replace}'))";
+            return $"{open}([regex][regex]::Escape('{SqEsc(find)}')).Replace({varRef}, '{SqEsc(replace)}'))";
         }
 
         // Slice: ${VAR:offset:length} or ${VAR:offset}. The body is trimmed so a
@@ -3268,23 +3377,29 @@ public static class PsEmitter
                 // true/false as pipe targets need a cmdlet form, not a subexpression.
                 // $($global:LASTEXITCODE = 0; [void]$true) cannot be a pipeline segment.
                 var word0 = simple.Words.Length == 1 ? GetLiteralValue(simple.Words[0]) : null;
-                if (simple.Words.Length == 1 && simple.EnvPairs.IsEmpty && simple.Redirects.IsEmpty)
+                // Redirects are allowed here (e.g. `… | true 2>&1`): `true`/`false` ignore
+                // stdin, so we emit Out-Null and append any redirects. Excluding the redirect
+                // case sent it to the Emit fallback, which emitted the bare subexpression
+                // `$($global:LASTEXITCODE = 0; [void]$true)` — not a valid pipeline segment.
+                if (simple.Words.Length == 1 && simple.EnvPairs.IsEmpty)
                 {
                     if (word0 == "true")
                     {
                         // Consume all piped input and succeed (exit 0).
                         // Out-Null is a valid pipeline cmdlet; after the pipeline set LASTEXITCODE=0.
                         bool isLast = i == pipeline.Commands.Length - 1;
-                        sb.Append(isLast ? "Out-Null; $global:LASTEXITCODE = 0" : "Out-Null");
+                        sb.Append("Out-Null");
+                        EmitPipeTargetRedirects(simple, sb);
+                        if (isLast) sb.Append("; $global:LASTEXITCODE = 0");
                         continue;
                     }
                     if (word0 == "false")
                     {
                         // Consume all piped input and fail (exit 1).
                         bool isLast = i == pipeline.Commands.Length - 1;
-                        sb.Append(isLast
-                            ? "Out-Null; $($global:LASTEXITCODE = 1; Write-Error '' -ErrorAction SilentlyContinue)"
-                            : "Out-Null");
+                        sb.Append("Out-Null");
+                        EmitPipeTargetRedirects(simple, sb);
+                        if (isLast) sb.Append("; $($global:LASTEXITCODE = 1; Write-Error '' -ErrorAction SilentlyContinue)");
                         continue;
                     }
                 }
@@ -4157,6 +4272,9 @@ public static class PsEmitter
     /// When <c>true</c>, <c>*</c> translates to <c>.*?</c> (lazy/shortest match).
     /// When <c>false</c>, <c>*</c> translates to <c>.*</c> (greedy/longest match).
     /// </param>
+    // Double ' for safe embedding inside a PowerShell single-quoted string literal.
+    private static string SqEsc(string s) => s.Replace("'", "''");
+
     private static string GlobToRegex(string glob, bool lazy)
     {
         var sb = new StringBuilder(glob.Length * 2);
