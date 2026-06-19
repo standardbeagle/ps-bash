@@ -61,6 +61,12 @@
     <Compile Remove="InvokeBashEvalCommand.cs" />
   </ItemGroup>
 
+  <!-- Let the test project exercise internal helpers directly (e.g. the filesystem-view
+       formatters: HumanSize / SizeBar / HumanTime / ClassifyFs). -->
+  <ItemGroup>
+    <InternalsVisibleTo Include="PsBash.Cmdlets.Tests" />
+  </ItemGroup>
+
   <!-- The styled-output cmdlets (and their shared helpers) compile only when Strata is
        available (see UseStrata); their only consumers are these cmdlets. -->
   <ItemGroup Condition="'$(UseStrata)' != 'true'">

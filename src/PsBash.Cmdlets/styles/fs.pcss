@@ -1,29 +1,40 @@
-/* fs — filesystem objects (FileInfo / DirectoryInfo) with action buttons + detail expansion.
+/* fs — filesystem objects (Get-ChildItem / FileInfo / DirectoryInfo).
  *
- * Drives BOTH renderers off one cascade:
- *   - static  (Format-Styled):           colour + Button chrome ([ open ]) + inline :expanded detail
- *   - interactive (Show-Styled / -Interactive): arrows move focus, Enter toggles :expanded,
- *                                               the focused row's buttons fire `open` / `cd`.
- * `:focused` and `command:` are inert under the static projection (no input loop) but harmless.
+ * `Get-ChildItem | Format-Styled fs` renders a CURATED, human-oriented table — Format-Styled
+ * builds it automatically for FileSystemInfo rows (no -Property needed):
+ *   - Name      type emoji + name        (📁 dir  📘 code  🖼 image  🎵 audio  📦 archive  …)
+ *   - Size      human size + a ▰▱ meter   (a log-scaled visual indicator of relative file size)
+ *   - Modified  relative time             (5m ago / 3h ago / 2d ago / "Jun 12")
+ * Each row carries a `class` naming its type bucket; the rules below colour by it. Pass an explicit
+ * -Property (or a different sheet) to opt out and get the raw property grid.
  *
- * Project a `class` to drive the highlight rules:
- *   Get-ChildItem | Select-Object *, @{ n='class'; e={
- *       if ($_.PSIsContainer) { 'dir' }
- *       elseif ($_.Extension -in '.exe','.ps1','.cmd','.bat','.sh') { 'exe' }
- *       elseif ($_.Attributes -band [IO.FileAttributes]::ReparsePoint) { 'symlink' }
- *       elseif ($_.Attributes -band [IO.FileAttributes]::Hidden) { 'hidden' }
- *       elseif ($_.Length -gt 10mb) { 'large' }
- *   } } | Format-Styled -Style fs -Interactive
+ * Also drives the interactive viewer (Show-Styled / -Interactive): arrows move focus, Enter toggles
+ * :expanded, the focused row's buttons fire `open` / `cd`. `:focused` / `command:` are inert under
+ * the static projection but harmless.
  */
 
+/* Base colours by Strata Kind (also covers rows that have no `class`). */
 DirectoryInfo { color: brightblue; font-weight: bold }
 FileInfo      { color: white }
 
-.dir     { color: brightblue;  font-weight: bold }
-.exe     { color: brightgreen; font-weight: bold }
+/* File-type buckets (set by Format-Styled's filesystem view; also project your own `class`). */
+.dir     { color: brightblue;    font-weight: bold }
+.image   { color: brightmagenta }
+.video   { color: magenta }
+.audio   { color: brightcyan }
+.archive { color: yellow }
+.app     { color: brightgreen;   font-weight: bold }
+.exe     { color: brightgreen;   font-weight: bold }   /* legacy alias for .app */
+.script  { color: green }
+.code    { color: brightcyan }
+.doc     { color: white }
+.data    { color: brightyellow }
+.text    { color: white }
 .symlink { color: cyan }
+.large   { color: brightyellow }                        /* legacy size accent */
+
+/* Hidden last so it dims regardless of type. */
 .hidden  { color: gray }
-.large   { color: brightyellow }
 
 /* The expandable detail block (size / dates / attributes / acl). */
 Detail     { color: gray }

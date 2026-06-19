@@ -20,6 +20,146 @@ public class FormatStyledCommandTests : IClassFixture<SharedPwshFixture>
     // Spectre emits ANSI SGR escapes; strip them to assert on plain content.
     private static string StripAnsi(string s) => Regex.Replace(s, "\\[[0-9;]*m", string.Empty);
 
+    // ── Filesystem view (Get-ChildItem → curated, classified, human-formatted table) ──────────
+
+    [Theory]
+    [InlineData(0, "0B")]
+    [InlineData(9, "9B")]
+    [InlineData(1023, "1023B")]
+    [InlineData(1024, "1.0K")]
+    [InlineData(1536, "1.5K")]
+    [InlineData(250000, "244K")]
+    [InlineData(10485760, "10M")]
+    [InlineData(2147483648, "2.0G")]
+    public void HumanSize_FormatsBinaryUnits(long bytes, string expected)
+    {
+        Assert.Equal(expected, FormatStyledCommand.HumanSize(bytes));
+    }
+
+    [Fact]
+    public void SizeBar_IsLogScaledFixedWidthMeter()
+    {
+        // Empty / no-max → all-empty meter; the max-size file fills it; width is fixed.
+        Assert.Equal("▱▱▱▱▱▱", FormatStyledCommand.SizeBar(0, 1000));
+        Assert.Equal("▱▱▱▱▱▱", FormatStyledCommand.SizeBar(100, 0));
+        Assert.Equal("▰▰▰▰▰▰", FormatStyledCommand.SizeBar(1000, 1000));
+        var mid = FormatStyledCommand.SizeBar(100, 1_000_000);
+        Assert.Equal(6, mid.Length);
+        Assert.Contains("▰", mid);   // non-empty file shows at least some fill
+        Assert.Contains("▱", mid);   // but well below max, so not full
+    }
+
+    [Theory]
+    [InlineData(".cs", "code", "📘")]
+    [InlineData(".ps1", "script", "📜")]
+    [InlineData(".png", "image", "🖼")]
+    [InlineData(".mp4", "video", "🎬")]
+    [InlineData(".mp3", "audio", "🎵")]
+    [InlineData(".zip", "archive", "📦")]
+    [InlineData(".exe", "app", "⚙")]
+    [InlineData(".json", "data", "🗃")]
+    [InlineData(".pdf", "doc", "📕")]
+    [InlineData(".unknownext", "text", "📄")]
+    public void ClassifyFs_MapsExtensionToBucketAndEmoji(string ext, string expectedClass, string expectedEmoji)
+    {
+        var dir = Path.Combine(Path.GetTempPath(), "psbash-classify-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(dir);
+        try
+        {
+            var path = Path.Combine(dir, "file" + ext);
+            File.WriteAllText(path, "x");
+            var (emoji, cls) = FormatStyledCommand.ClassifyFs(new FileInfo(path));
+            Assert.Equal(expectedClass, cls);
+            Assert.Equal(expectedEmoji, emoji);
+        }
+        finally { try { Directory.Delete(dir, true); } catch { /* best effort */ } }
+    }
+
+    [Fact]
+    public void ClassifyFs_Directory_IsFolderEmojiAndDirClass()
+    {
+        var dir = Path.Combine(Path.GetTempPath(), "psbash-classify-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(dir);
+        try
+        {
+            var (emoji, cls) = FormatStyledCommand.ClassifyFs(new DirectoryInfo(dir));
+            Assert.Equal("dir", cls);
+            Assert.Equal("📁", emoji);
+        }
+        finally { try { Directory.Delete(dir, true); } catch { /* best effort */ } }
+    }
+
+    [Theory]
+    [InlineData(30, "just now")]
+    [InlineData(5 * 60, "5m ago")]
+    [InlineData(3 * 3600, "3h ago")]
+    [InlineData(2 * 86400, "2d ago")]
+    public void HumanTime_RecentTimestampsAreRelative(int secondsAgo, string expected)
+    {
+        Assert.Equal(expected, FormatStyledCommand.HumanTime(DateTime.Now.AddSeconds(-secondsAgo)));
+    }
+
+    [Fact]
+    public void FilesystemView_GciFsSheet_ParesToCuratedColumnsWithEmojiSizeAndTime()
+    {
+        var dir = Path.Combine(Path.GetTempPath(), "psbash-fsview-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(dir);
+        try
+        {
+            Directory.CreateDirectory(Path.Combine(dir, "subdir"));
+            File.WriteAllText(Path.Combine(dir, "app.cs"), new string('x', 4400));
+            File.WriteAllBytes(Path.Combine(dir, "photo.png"), new byte[250000]);
+            File.WriteAllText(Path.Combine(dir, "notes.md"), "hello");
+
+            var pwsh = _fixture.AcquireFresh();
+            var result = pwsh.AddScript($"Get-ChildItem -LiteralPath '{dir}' | Format-Styled fs").Invoke();
+
+            Assert.False(pwsh.HadErrors, string.Join("; ", pwsh.Streams.Error.Select(e => e.ToString())));
+            Assert.Single(result);
+            var raw = result[0].ToString() ?? string.Empty;
+            var plain = StripAnsi(raw);
+
+            // Curated columns only — NOT the raw FileInfo property dump.
+            Assert.Contains("Name", plain);
+            Assert.Contains("Modified", plain);
+            Assert.DoesNotContain("Attributes", plain);
+            Assert.DoesNotContain("LastWriteTimeUtc", plain);
+            // Type emoji per kind.
+            Assert.Contains("📁", plain);   // subdir
+            Assert.Contains("📘", plain);   // app.cs (code)
+            Assert.Contains("🖼", plain);   // photo.png (image)
+            // Human size + visual meter.
+            Assert.Contains("K", plain);    // 244K / 4.3K
+            Assert.Contains("▰", plain);    // size meter
+            // Colour applied (ANSI SGR present in the raw output).
+            Assert.Matches("\\[[0-9;]*m", raw);
+        }
+        finally { try { Directory.Delete(dir, true); } catch { /* best effort */ } }
+    }
+
+    [Fact]
+    public void FilesystemView_ExplicitProperty_OptsOutToRawColumns()
+    {
+        // -Property is the escape hatch: the user drives columns, so the curated view does NOT apply
+        // (no emoji injected) — the named property renders as-is.
+        var dir = Path.Combine(Path.GetTempPath(), "psbash-fsview-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(dir);
+        try
+        {
+            File.WriteAllText(Path.Combine(dir, "app.cs"), "x");
+
+            var pwsh = _fixture.AcquireFresh();
+            var result = pwsh.AddScript($"Get-ChildItem -LiteralPath '{dir}' | Format-Styled fs -Property Name").Invoke();
+
+            Assert.False(pwsh.HadErrors, string.Join("; ", pwsh.Streams.Error.Select(e => e.ToString())));
+            Assert.Single(result);
+            var plain = StripAnsi(result[0].ToString() ?? string.Empty);
+            Assert.Contains("app.cs", plain);
+            Assert.DoesNotContain("📘", plain);   // no curated emoji when -Property drives columns
+        }
+        finally { try { Directory.Delete(dir, true); } catch { /* best effort */ } }
+    }
+
     [Fact]
     public void StylesRows_ByPropertyAndKind()
     {
