@@ -4254,6 +4254,9 @@ public static class PsEmitter
         return null;
     }
 
+    // Double ' for safe embedding inside a PowerShell single-quoted string literal.
+    private static string SqEsc(string s) => s.Replace("'", "''");
+
     /// <summary>
     /// Translates a bash glob pattern to a .NET regex pattern suitable for use in
     /// PowerShell's <c>-replace</c> operator.
@@ -4272,9 +4275,6 @@ public static class PsEmitter
     /// When <c>true</c>, <c>*</c> translates to <c>.*?</c> (lazy/shortest match).
     /// When <c>false</c>, <c>*</c> translates to <c>.*</c> (greedy/longest match).
     /// </param>
-    // Double ' for safe embedding inside a PowerShell single-quoted string literal.
-    private static string SqEsc(string s) => s.Replace("'", "''");
-
     private static string GlobToRegex(string glob, bool lazy)
     {
         var sb = new StringBuilder(glob.Length * 2);
