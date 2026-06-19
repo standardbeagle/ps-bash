@@ -458,6 +458,16 @@ public sealed class InvokeBashGitCommand : PSCmdlet
         try { psi.WorkingDirectory = SessionState.Path.CurrentFileSystemLocation.Path; }
         catch { /* provider path unavailable — inherit the process cwd */ }
 
+        // psgit reuses your configured git auth (it IS native git, with the inherited env / config):
+        // SSH agent + keys and credential helpers that return cached/stored creds (Git Credential
+        // Manager, store, cache, osxkeychain) work non-interactively. But psgit's child git has no
+        // usable interactive TTY and its output is buffered, so a credential helper that needs to
+        // PROMPT on the terminal can't be answered — without this it would block until the
+        // RunChildProcess timeout. GIT_TERMINAL_PROMPT=0 makes such a case fail fast with a clear
+        // "terminal prompts disabled" message instead. (Non-terminal auth above is unaffected; for
+        // anything needing an interactive prompt, use native `git`.)
+        psi.Environment["GIT_TERMINAL_PROMPT"] = "0";
+
         try
         {
             result = BashRuntime.RunChildProcess(psi);
