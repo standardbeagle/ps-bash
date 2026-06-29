@@ -194,6 +194,31 @@ public static class InteractiveShell
                     return exitCode;
                 }
 
+                // Alias expansion (below) and the `complete`/`z` interceptions read the in-process
+                // alias/completion tables that ~/.psbashrc populates, and execution needs the runspace,
+                // so wait for the readiness gate (runspace ready + rc sourced) HERE — before any alias
+                // work. Doing alias expansion before rc finishes was a race: the FIRST command typed
+                // during warmup expanded against an empty alias table, so `ll` (rc alias for `ls -la`)
+                // fell through unexpanded and PowerShell's default-verb fallback turned it into a
+                // `Get-ll: command not found`; the same command then "worked" once rc had landed.
+                // Only the cheap, rc-independent paths above (exit / empty / history expansion) run
+                // during warmup; this is the single point where residual startup latency is paid, and
+                // only on the first command if the user submits before warmup finished.
+                IWorker worker;
+                try
+                {
+                    worker = await ready;
+                }
+                catch (Exception ex)
+                {
+                    // The background runspace init (or rc sourcing) failed — exit with a diagnostic
+                    // instead of looping on the same failure for every prompt.
+                    Console.Error.WriteLine($"[ps-bash] runspace failed to start: {ex.Message}");
+                    if (_historyStore is IDisposable d) d.Dispose();
+                    (_frecencyStore as IDisposable)?.Dispose();
+                    return 1;
+                }
+
                 trimmed = ProcessAliasCommand(trimmed);
                 if (trimmed.Length == 0)
                     continue;
@@ -228,25 +253,6 @@ public static class InteractiveShell
                     if (zRewrite is null)
                         continue;   // handled (home/no-match/cancel) — nothing to execute
                     trimmed = zRewrite;   // "cd '<path>'" — falls through to transpile + execute
-                }
-
-                // Everything below executes in the runspace, so wait for it to be ready (+ rc
-                // sourced). This is where any residual startup latency is actually paid — but only on
-                // the FIRST command, and only if the user submits before warmup finished. exit / empty
-                // / alias / complete above never reach here, so they work fully during warmup.
-                IWorker worker;
-                try
-                {
-                    worker = await ready;
-                }
-                catch (Exception ex)
-                {
-                    // The background runspace init (or rc sourcing) failed — exit with a diagnostic
-                    // instead of looping on the same failure for every prompt.
-                    Console.Error.WriteLine($"[ps-bash] runspace failed to start: {ex.Message}");
-                    if (_historyStore is IDisposable d) d.Dispose();
-                    (_frecencyStore as IDisposable)?.Dispose();
-                    return 1;
                 }
 
                 // Interactive `source FILE` / `. FILE`: route the file's

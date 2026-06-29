@@ -136,7 +136,18 @@ $ExecutionContext.InvokeCommand.CommandNotFoundAction = {
     # No module supplies the command — bash-style "command not found".
     # Capture the name into the scriptblock closure so the substitute knows
     # which command was missing.
-    $name = $CommandName
+    #
+    # De-mangle for the MESSAGE the same way the resolution candidates above do:
+    # when PowerShell can't resolve a bare, verb-less token it retries with the
+    # default `Get-` verb (`ll` -> `Get-ll`) and the handler is invoked with the
+    # mangled name. ps-bash is a bash shell — the user typed `ll`, never `Get-ll`
+    # — so a bash-style error must report the original token, otherwise a missing
+    # `ll` prints the misleading `bash: Get-ll: command not found`. Strip a leading
+    # `Get-` so the message matches what was typed.
+    # Edge case (accepted): a user who literally types `Get-Foo` for a nonexistent
+    # cmdlet sees `bash: Foo: command not found`. In a bash-emulation shell that
+    # form is vanishingly rare, and parity for real bash commands is the priority.
+    $name = if ($CommandName -match '^[Gg]et-(.+)$') { $Matches[1] } else { $CommandName }
     $EventArgs.CommandScriptBlock = {
         $msg = "bash: ${name}: command not found"
         Write-Error -Message $msg -Category ObjectNotFound -TargetObject $name
