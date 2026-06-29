@@ -29,6 +29,59 @@ public class BashTranspilerTests
         Assert.Contains("|| $($global:LASTEXITCODE = 0; [void]$true)", result);
     }
 
+    // ===================== H1: single-quote escaping at the bash/PS seam =====================
+    //
+    // Several sites dropped raw bash text into a PowerShell '...' literal; an embedded ' broke
+    // out of the literal (Directive 12: transpiled output must not be hijackable). Each now
+    // routes through SqEsc, doubling ' -> '' so the value stays inert. The fragments below are
+    // the escaped form (a'b -> a''b inside the literal).
+
+    [Fact]
+    public void Transpile_RegexMatchPatternWithQuote_EscapesSingleQuote()
+    {
+        var result = BashTranspiler.Transpile("[[ $x =~ \"a'b\" ]]");
+        Assert.Contains("-match 'a''b'", result);
+    }
+
+    [Fact]
+    public void Transpile_GlobEqualsPatternWithQuote_EscapesSingleQuote()
+    {
+        var result = BashTranspiler.Transpile("[[ $x == \"a'*\" ]]");
+        Assert.Contains("-like 'a''*'", result);
+    }
+
+    [Fact]
+    public void Transpile_CasePatternWithQuote_EscapesSingleQuote()
+    {
+        var result = BashTranspiler.Transpile("case $x in \"a'b\") echo hi;; esac");
+        // The case label literal must not break out of its own single quotes.
+        Assert.Contains("'\"a''b\"'", result);
+    }
+
+    [Fact]
+    public void Transpile_ReadonlyPlainValue_StillSingleQuoted()
+    {
+        // Guards the readonly value path (SqEsc hardening) — a plain value is unchanged.
+        Assert.Contains("-Value 'ab'", BashTranspiler.Transpile("readonly X=ab"));
+    }
+
+    // ===================== declare -i: arithmetic RHS, not silent 0 =====================
+
+    [Fact]
+    public void Transpile_DeclareIntExpression_RoutesThroughArith()
+    {
+        // `declare -i n=2+3` must evaluate the RHS (bash sets n=5), not collapse to 0.
+        Assert.Equal("[int]$global:n = (Invoke-BashArith '2+3')",
+            BashTranspiler.Transpile("declare -i n=2+3"));
+    }
+
+    [Fact]
+    public void Transpile_DeclareIntLiteral_EmittedDirectly()
+    {
+        // A plain integer literal keeps the direct, allocation-free form.
+        Assert.Equal("[int]$global:m = 5", BashTranspiler.Transpile("declare -i m=5"));
+    }
+
     // Regression: a path-like `.sh` script invocation must run through `bash`, not be emitted
     // bare. Bare `./x.sh` makes PowerShell treat the file as a "document": it ShellExecutes one
     // standalone (never running the script body) and ERRORS inside a pipeline ("Cannot run a

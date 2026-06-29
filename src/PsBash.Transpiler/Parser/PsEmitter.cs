@@ -159,7 +159,7 @@ public static class PsEmitter
 
         // Only track plain literal words to avoid breaking complex expressions
         if (lastWordObj.Parts.Length == 1 && lastWordObj.Parts[0] is WordPart.Literal lit)
-            return $"'{lit.Value}'";
+            return $"'{SqEsc(lit.Value)}'";
 
         return null;
     }
@@ -477,7 +477,7 @@ public static class PsEmitter
                 {
                     if (p > 0) sb.Append(' ');
                     sb.Append('\'');
-                    sb.Append(arm.Patterns[p]);
+                    sb.Append(SqEsc(arm.Patterns[p]));
                     sb.Append("' { ");
                     sb.Append(bodyText);
                     sb.Append(" }");
@@ -541,7 +541,7 @@ public static class PsEmitter
         if (emitted.Length > 0 && (emitted[0] == '$' || emitted[0] == '"' || emitted[0] == '\'' || emitted[0] == '('))
             return emitted;
         // Bare literal — wrap in single quotes so PowerShell treats it as a string.
-        return $"'{emitted}'";
+        return $"'{SqEsc(emitted)}'";
     }
 
     private static string EmitFunction(Command.ShFunction func)
@@ -1219,13 +1219,13 @@ public static class PsEmitter
             // Glob/regex RHS build their own single-quoted pattern from the
             // stripped literal; everything else compares two quoted operands.
             if (op == "=~")
-                return $"{lhs} -match '{StripQuotes(EmitWord(words[2]))}'";
+                return $"{lhs} -match '{SqEsc(StripQuotes(EmitWord(words[2])))}'";
 
             if (op is "==" or "=")
             {
                 var unquoted = StripQuotes(EmitWord(words[2]));
                 if (HasGlobChars(unquoted))
-                    return $"{lhs} -like '{unquoted}'";
+                    return $"{lhs} -like '{SqEsc(unquoted)}'";
                 return $"{lhs} -eq {EmitTestOperand(words[2])}";
             }
 
@@ -1588,8 +1588,13 @@ public static class PsEmitter
                         if (isAssoc) return "$global:" + declName + " = @{}";
                         if (isInt)
                         {
-                            // Integer attribute: bash evaluates the RHS arithmetically.
-                            string intVal = long.TryParse(rawVal, out _) ? rawVal : "0";
+                            // Integer attribute: bash evaluates the RHS arithmetically
+                            // (`declare -i n=2+3` -> 5, `declare -i n=x*2` reads $x). A plain
+                            // integer literal is emitted directly; any expression routes through
+                            // the shared arithmetic evaluator instead of silently collapsing to 0.
+                            string intVal = long.TryParse(rawVal, out _)
+                                ? rawVal
+                                : $"(Invoke-BashArith {PsBuild.SingleQuote(rawVal)})";
                             return "[int]$global:" + declName + " = " + intVal;
                         }
                         return "$global:" + declName + " = " + PsBuild.SingleQuote(rawVal);
@@ -1692,7 +1697,7 @@ public static class PsEmitter
                     {
                         string varName = val[..eq];
                         string varVal = val[(eq + 1)..];
-                        roSb.Append($"Set-Variable -Name {varName} -Value '{varVal}' -Option Constant -Scope Global");
+                        roSb.Append($"Set-Variable -Name {varName} -Value '{SqEsc(varVal)}' -Option Constant -Scope Global");
                     }
                     else
                     {
@@ -2941,7 +2946,7 @@ public static class PsEmitter
                         return arrayVar; // ${arr[@]} -> $arr (whole array)
                     if (int.TryParse(subscript, out _))
                         return inDoubleQuote ? $"$({arrayVar}[{subscript}])" : $"{arrayVar}[{subscript}]";
-                    return inDoubleQuote ? $"$({arrayVar}['{subscript}'])" : $"{arrayVar}['{subscript}']";
+                    return inDoubleQuote ? $"$({arrayVar}['{SqEsc(subscript)}'])" : $"{arrayVar}['{SqEsc(subscript)}']";
                 }
 
                 // Whole-array operator: only slicing (${arr[@]:off:len}) maps cleanly to
@@ -2953,7 +2958,7 @@ public static class PsEmitter
                 // scalar suffix operator the plain-variable path uses.
                 string elemRef = int.TryParse(subscript, out _)
                     ? $"{arrayVar}[{subscript}]"
-                    : $"{arrayVar}['{subscript}']";
+                    : $"{arrayVar}['{SqEsc(subscript)}']";
                 return EmitScalarSuffix(elemRef, subOp, inDoubleQuote)
                     ?? (inDoubleQuote ? $"$({elemRef})" : elemRef);
             }
