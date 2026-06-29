@@ -128,7 +128,16 @@ internal sealed record CommandAssistProviderResult(
     bool IsExecutable)
 {
     public CommandAssistReviewRequest ToReviewRequest(string cwd)
-        => new(ProviderName, Command, Explanation, cwd, IsExecutable, CommandAssistSafety.Classify(Command));
+    {
+        // Default-deny execution (H3): an LLM-authored command is INSERT-ONLY unless the user
+        // has explicitly opted into the [e]xecute action via PSBASH_AI_ALLOW_EXEC. The
+        // destructive-pattern classifier (CommandAssistSafety) is a best-effort denylist WARNING,
+        // not a safe-execute gate — anything it doesn't list (Remove-Item bypasses, Format-Volume,
+        // diskpart, [io.file]::Delete, obfuscation) would otherwise run on one keystroke. So the
+        // safe default is: the user reviews/edits the command in the buffer and runs it themselves.
+        bool executable = IsExecutable && PsBash.Core.Runtime.EnvFlags.IsTruthy("PSBASH_AI_ALLOW_EXEC");
+        return new(ProviderName, Command, Explanation, cwd, executable, CommandAssistSafety.Classify(Command));
+    }
 }
 
 internal sealed class CommandAssistProviderRunner(CommandAssistConfig config)
@@ -313,14 +322,40 @@ internal sealed class CommandAssistProviderRunner(CommandAssistConfig config)
         return trimmed;
     }
 
+    // Best-effort scrub of obvious secrets before the buffer leaves the machine. This is
+    // defense-in-depth, NOT a guarantee — the user opted in (PSBASH_AI_ENABLE) knowing the line
+    // is sent to an external model. It covers key=value / key: value (key name embedded anywhere,
+    // so AWS_SECRET_ACCESS_KEY matches), quoted values, `Bearer <tok>`, JWTs, and AWS key ids.
     private static string Redact(string value)
-        => SensitiveValuePattern.Replace(value, "$1=<redacted>");
+    {
+        // Specific token shapes FIRST: an assignment key like `Authorization:` would otherwise
+        // consume only the bare `Bearer` word as its value and leave the token itself exposed.
+        value = BearerTokenPattern.Replace(value, "$1<redacted>");
+        value = JwtPattern.Replace(value, "<redacted-jwt>");
+        value = AwsAccessKeyPattern.Replace(value, "<redacted-aws-key>");
+        value = SensitiveAssignmentPattern.Replace(value, m => m.Groups[1].Value + m.Groups[2].Value + "<redacted>");
+        return value;
+    }
 
     private static string Truncate(string value, int maxLength)
         => value.Length <= maxLength ? value : value[..maxLength] + "...";
 
-    private static readonly System.Text.RegularExpressions.Regex SensitiveValuePattern = new(
-        @"(?i)\b(token|secret|password|passwd|apikey|api_key|access_key)\s*=\s*[^\s;]+",
+    private static readonly System.Text.RegularExpressions.Regex SensitiveAssignmentPattern = new(
+        // group 1 = the key (with any surrounding word chars, e.g. AWS_SECRET_ACCESS_KEY),
+        // group 2 = the = / : separator; the value (quoted or bare) is dropped.
+        @"(?i)\b([\w.-]*(?:token|secret|password|passwd|pwd|api[_-]?key|access[_-]?key|session[_-]?token|client[_-]?secret|private[_-]?key|credential|auth)[\w.-]*)(\s*[:=]\s*)(?:""[^""]*""|'[^']*'|[^\s;,]+)",
+        System.Text.RegularExpressions.RegexOptions.Compiled);
+
+    private static readonly System.Text.RegularExpressions.Regex BearerTokenPattern = new(
+        @"(?i)\b(bearer\s+)[A-Za-z0-9._\-+/=]+",
+        System.Text.RegularExpressions.RegexOptions.Compiled);
+
+    private static readonly System.Text.RegularExpressions.Regex JwtPattern = new(
+        @"\beyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+",
+        System.Text.RegularExpressions.RegexOptions.Compiled);
+
+    private static readonly System.Text.RegularExpressions.Regex AwsAccessKeyPattern = new(
+        @"\b(?:AKIA|ASIA)[0-9A-Z]{16}\b",
         System.Text.RegularExpressions.RegexOptions.Compiled);
 
     private static async Task<string> ReadWithLimitAsync(StreamReader reader, int limit, CancellationToken ct)

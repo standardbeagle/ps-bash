@@ -198,6 +198,40 @@ public sealed class CommandAssistProviderTests
         Assert.DoesNotContain("abc123", rendered);
     }
 
+    [Theory]
+    [InlineData("AWS_SECRET_ACCESS_KEY=wJalrXUtnFEMI/bPxRfiCYz", "wJalrXUtnFEMI/bPxRfiCYz")]
+    [InlineData("curl -H 'Authorization: Bearer ey9.abc.def' x", "ey9.abc.def")]
+    [InlineData("export JWT=eyJhbGc.eyJzdWI.SflKxwRJ", "eyJhbGc.eyJzdWI.SflKxwRJ")]
+    [InlineData("aws --key AKIAIOSFODNN7EXAMPLE list", "AKIAIOSFODNN7EXAMPLE")]
+    [InlineData("client_secret=\"a b c\" run", "a b c")]
+    public void RenderTemplate_RedactsBroaderSecretShapes(string buffer, string secret)
+    {
+        var rendered = CommandAssistProviderRunner.RenderTemplate(
+            "line={{buffer}}", new CommandAssistRequest(buffer, 0), @"C:\repo");
+        Assert.DoesNotContain(secret, rendered);
+        Assert.Contains("redacted", rendered);
+    }
+
+    [Fact]
+    public void ToReviewRequest_DefaultDeny_NotExecutableUnlessOptedIn()
+    {
+        var prior = Environment.GetEnvironmentVariable("PSBASH_AI_ALLOW_EXEC");
+        try
+        {
+            var result = new CommandAssistProviderResult("mock", "git status", "", IsExecutable: true);
+
+            Environment.SetEnvironmentVariable("PSBASH_AI_ALLOW_EXEC", null);
+            Assert.False(result.ToReviewRequest(@"C:\repo").IsExecutable); // insert-only by default
+
+            Environment.SetEnvironmentVariable("PSBASH_AI_ALLOW_EXEC", "1");
+            Assert.True(result.ToReviewRequest(@"C:\repo").IsExecutable);  // explicit opt-in
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("PSBASH_AI_ALLOW_EXEC", prior);
+        }
+    }
+
     [Fact]
     public void ParseProviderOutput_StructuredCommandIsExecutable()
     {

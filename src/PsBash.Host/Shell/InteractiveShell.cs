@@ -81,9 +81,19 @@ public static class InteractiveShell
             frecency: _frecencyStore);
         CommandAssistProviderRunner? commandAssistRunner = null;
         string? commandAssistConfigError = null;
-        if (Environment.GetEnvironmentVariable("PSBASH_AI_DISABLE") == "1")
+        // Command assist sends the typed line — which routinely contains secrets, tokens, and
+        // paths — to an external AI model (`claude -p ...`). That is a data-egress surface, so it
+        // is OPT-IN: off unless PSBASH_AI_ENABLE is truthy. PSBASH_AI_DISABLE remains an explicit
+        // kill switch and wins if both are set.
+        if (PsBash.Core.Runtime.EnvFlags.IsTruthy("PSBASH_AI_DISABLE"))
         {
-            commandAssistConfigError = "command assist is disabled by PSBASH_AI_DISABLE=1.";
+            commandAssistConfigError = "command assist is disabled by PSBASH_AI_DISABLE.";
+        }
+        else if (!PsBash.Core.Runtime.EnvFlags.IsTruthy("PSBASH_AI_ENABLE"))
+        {
+            commandAssistConfigError =
+                "command assist is off by default; set PSBASH_AI_ENABLE=1 to enable it "
+                + "(it sends the current input line to an external AI model).";
         }
         else try
         {
