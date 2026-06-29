@@ -1,3 +1,4 @@
+using System.Collections.Generic;
 using System.IO;
 using System.Management.Automation;
 using PsBash.Core;
@@ -419,5 +420,79 @@ internal static class FileSystemHelpers
                 File.SetAttributes(path, attrs & ~FileAttributes.ReadOnly);
         }
         catch { /* best-effort: if attrs can't be read/set, let the delete surface the real error */ }
+    }
+
+    // ───────────────────────── Reparse-point-safe enumeration (OS interface) ─────────────────────────
+    //
+    // The ONE place that knows how to walk a tree WITHOUT following directory symlinks /
+    // junctions. Recursing into a reparse point is a destructive escape out of the tree being
+    // walked (cp -r would copy / tar -c would pack / find -delete would remove the link
+    // TARGET's contents) and a self- or ancestor-referential link recurses unbounded. The
+    // delete path (ForceDeleteDirectoryRecursive) already treats reparse points as leaves;
+    // cp -r / find / tar -c route their recursive walk through EnumerateNoFollow so they do too.
+
+    private static readonly EnumerationOptions _noFollowEnumOptions = new()
+    {
+        IgnoreInaccessible = true,
+        AttributesToSkip = 0,
+        ReturnSpecialDirectories = false,
+        RecurseSubdirectories = false,
+    };
+
+    /// <summary>True when <paramref name="path"/> is a directory symlink / junction (reparse point).</summary>
+    public static bool IsReparsePoint(string path)
+    {
+        try { return (File.GetAttributes(path) & FileAttributes.ReparsePoint) != 0; }
+        catch { return false; }
+    }
+
+    /// <summary>
+    /// Depth-first pre-order enumeration of <paramref name="root"/>'s descendants that treats a
+    /// directory reparse point (junction / symlink) as a LEAF: the link entry is yielded but is
+    /// NEVER descended into. Mirrors GNU find's default (no <c>-follow</c>) and the leaf treatment
+    /// in <see cref="ForceDeleteDirectoryRecursive"/>. <paramref name="maxDepth"/> is the maximum
+    /// relative depth below <paramref name="root"/> (root's direct children are depth 1);
+    /// <see cref="int.MaxValue"/> = unlimited. Per-directory enumeration errors are swallowed
+    /// (best-effort), matching the callers' prior behaviour.
+    /// </summary>
+    public static IEnumerable<FileSystemInfo> EnumerateNoFollow(DirectoryInfo root, int maxDepth = int.MaxValue)
+        => EnumerateNoFollowCore(root, 1, maxDepth);
+
+    private static IEnumerable<FileSystemInfo> EnumerateNoFollowCore(DirectoryInfo dir, int depth, int maxDepth)
+    {
+        List<FileSystemInfo> children;
+        try { children = new List<FileSystemInfo>(dir.EnumerateFileSystemInfos("*", _noFollowEnumOptions)); }
+        catch { yield break; }
+
+        foreach (var child in children)
+        {
+            yield return child;
+            if (depth < maxDepth
+                && child is DirectoryInfo sub
+                && (sub.Attributes & FileAttributes.ReparsePoint) == 0)
+            {
+                foreach (var descendant in EnumerateNoFollowCore(sub, depth + 1, maxDepth))
+                    yield return descendant;
+            }
+        }
+    }
+
+    /// <summary>
+    /// Best-effort recreate a directory symlink / junction at <paramref name="destLink"/> pointing
+    /// at the same target as <paramref name="srcLink"/>, WITHOUT copying the target's contents.
+    /// Used by <c>cp -r</c> so a junction in the source tree is copied as a link, never followed.
+    /// If the platform / privileges disallow link creation (Windows without Developer Mode), the
+    /// link is silently skipped — safer than recursing into the target.
+    /// </summary>
+    public static void TryCopyDirectoryLink(string srcLink, string destLink)
+    {
+        try
+        {
+            string? target = new DirectoryInfo(srcLink).LinkTarget;
+            if (string.IsNullOrEmpty(target)) return;
+            if (Directory.Exists(destLink) || File.Exists(destLink)) return;
+            Directory.CreateSymbolicLink(destLink, target);
+        }
+        catch { /* best-effort: unsupported / unprivileged — skip rather than follow the link */ }
     }
 }

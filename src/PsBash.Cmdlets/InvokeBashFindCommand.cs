@@ -415,23 +415,12 @@ public sealed class InvokeBashFindCommand : PSCmdlet
         {
             try
             {
-                var enumOpts = new System.IO.EnumerationOptions
-                {
-                    IgnoreInaccessible = true,
-                    AttributesToSkip = 0,
-                    ReturnSpecialDirectories = false,
-                };
-                if (maxDepth < int.MaxValue)
-                {
-                    enumOpts.RecurseSubdirectories = maxDepth > 0;
-                    enumOpts.MaxRecursionDepth = Math.Max(0, maxDepth - 1);
-                }
-                else
-                {
-                    enumOpts.RecurseSubdirectories = true;
-                }
-
-                foreach (var fsi in rootDir.EnumerateFileSystemInfos("*", enumOpts))
+                // Reparse-point-safe walk: a directory junction / symlink is listed but never
+                // descended into (GNU find's default, no -follow), so the walk can't escape the
+                // tree or loop forever on a cyclic link. maxDepth is find's -maxdepth (relative
+                // to root; root's direct children are depth 1); the per-item post-filter below
+                // (relativeDepth > maxDepth) still clamps the boundary.
+                foreach (var fsi in FileSystemHelpers.EnumerateNoFollow(rootDir, maxDepth))
                 {
                     allItems.Add(fsi);
                 }

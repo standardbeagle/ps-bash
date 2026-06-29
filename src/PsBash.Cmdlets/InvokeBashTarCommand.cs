@@ -433,12 +433,14 @@ public sealed class InvokeBashTarCommand : PSCmdlet
                     string root = Path.GetFileName(resolved);
                     string? baseDir = Path.GetDirectoryName(resolved);
                     if (baseDir == null) { baseDir = string.Empty; }
-                    var enumOpts = new EnumerationOptions { RecurseSubdirectories = true };
-                    string[] children = Directory.GetFileSystemEntries(resolved, "*", enumOpts);
+                    // Reparse-point-safe walk: a directory junction / symlink is archived as its
+                    // own entry but never descended into, so tar -c can't pack the link TARGET's
+                    // contents (an escape out of the source tree) or loop on a cyclic link.
                     writer.WriteEntry(resolved, root);
                     if (verbose) { WriteObject(BashRuntime.NewBashObject(root)); }
-                    foreach (string child in children)
+                    foreach (var childInfo in FileSystemHelpers.EnumerateNoFollow(new DirectoryInfo(resolved)))
                     {
+                        string child = childInfo.FullName;
                         string relPath = child.Substring(baseDir.Length + 1).Replace('\\', '/');
                         if (IsExcluded(relPath, excludeRegexes)) { continue; }
                         if (verbose) { WriteObject(BashRuntime.NewBashObject(relPath)); }

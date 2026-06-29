@@ -273,7 +273,16 @@ public sealed class InvokeBashCpCommand : PSCmdlet
         }
         foreach (var sub in Directory.EnumerateDirectories(src))
         {
-            CopyDirectoryRecursive(sub, Path.Combine(dest, Path.GetFileName(sub)), preserve, update);
+            var subDest = Path.Combine(dest, Path.GetFileName(sub));
+            // A directory junction / symlink must be copied as a LINK, never recursed into:
+            // recursing would copy the link TARGET's contents (a destructive escape out of the
+            // source tree), and a cycle (link -> ancestor) would recurse until the stack overflows.
+            if (FileSystemHelpers.IsReparsePoint(sub))
+            {
+                FileSystemHelpers.TryCopyDirectoryLink(sub, subDest);
+                continue;
+            }
+            CopyDirectoryRecursive(sub, subDest, preserve, update);
         }
         // Apply directory timestamps LAST — writing children bumps the dir mtime,
         // so GNU cp -p restores it after the contents are in place.

@@ -468,20 +468,26 @@ public static class InteractiveShell
                 }
             }
 
+            // _suspendCancel pauses the REPL's Ctrl+C handler while the child owns the terminal.
+            // It MUST be reset on every exit path — a throw from Process.Start / WaitForExit that
+            // left it true would permanently kill Ctrl+C for the rest of the session (M3).
             _suspendCancel = true;
-            var proc = Process.Start(psi);
-            if (proc is null)
+            try
+            {
+                var proc = Process.Start(psi);
+                if (proc is null)
+                    return false;
+
+                proc.WaitForExit();
+                EnsureVirtualTerminalEnabled();
+                EnsureConsoleInputRestored();
+                exitCode = proc.ExitCode;
+                return true;
+            }
+            finally
             {
                 _suspendCancel = false;
-                return false;
             }
-
-proc.WaitForExit();
-_suspendCancel = false;
-EnsureVirtualTerminalEnabled();
-EnsureConsoleInputRestored();
-            exitCode = proc.ExitCode;
-            return true;
         }
         catch
         {

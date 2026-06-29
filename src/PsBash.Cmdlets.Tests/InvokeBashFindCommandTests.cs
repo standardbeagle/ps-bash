@@ -246,6 +246,83 @@ public class InvokeBashFindCommandTests : IDisposable, IClassFixture<SharedPwshF
         Assert.DoesNotContain("deep.txt", names);
     }
 
+    // ===================== Reparse-point (junction / symlink) safety (H4) =====================
+    //
+    // find must NOT descend into a directory junction / symlink: doing so escapes the tree
+    // being searched (and find -delete would then remove the link TARGET's contents), and a
+    // cyclic link would recurse forever. GNU find's default (no -follow) lists the link but
+    // treats it as a leaf. These tests prove the shared FileSystemHelpers.EnumerateNoFollow
+    // walk used by find + tar -c.
+
+    /// <summary>Create a directory link at <paramref name="linkPath"/> -> <paramref name="target"/>.
+    /// Windows uses a junction (mklink /J — no privilege needed, unlike a symlink); other
+    /// platforms use a directory symlink. Returns false if the OS refused (test soft-skips).</summary>
+    private static bool TryCreateDirLink(string linkPath, string target)
+    {
+        try
+        {
+            if (OperatingSystem.IsWindows())
+            {
+                var psi = new System.Diagnostics.ProcessStartInfo("cmd.exe",
+                    $"/c mklink /J \"{linkPath}\" \"{target}\"")
+                {
+                    UseShellExecute = false,
+                    RedirectStandardOutput = true,
+                    RedirectStandardError = true,
+                    CreateNoWindow = true,
+                };
+                using var p = System.Diagnostics.Process.Start(psi)!;
+                p.WaitForExit(10_000);
+                return p.ExitCode == 0 && Directory.Exists(linkPath);
+            }
+            Directory.CreateSymbolicLink(linkPath, target);
+            return true;
+        }
+        catch { return false; }
+    }
+
+    [Fact]
+    public void Find_DirectoryJunction_ListedButNotFollowed()
+    {
+        // Target lives OUTSIDE the searched tree, with a sentinel that must never surface.
+        var external = Path.Combine(Path.GetTempPath(), "psbash-find-ext-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(external);
+        File.WriteAllText(Path.Combine(external, "secret.txt"), "SENTINEL");
+        try
+        {
+            Mk("inside.txt");
+            if (!TryCreateDirLink(Path.Combine(_tmpDir, "link"), external)) return; // OS refused → soft-skip
+
+            var results = Run($"Invoke-BashFind '{Esc(_tmpDir)}'");
+            var names = results.Select(o => (string?)o.Properties["Name"]?.Value).ToArray();
+
+            Assert.Contains("inside.txt", names);
+            Assert.Contains("link", names);            // the junction itself IS listed
+            Assert.DoesNotContain("secret.txt", names); // but its target's contents are NOT
+        }
+        finally
+        {
+            try { Directory.Delete(external, recursive: true); } catch { }
+        }
+    }
+
+    [Fact]
+    public void Find_SelfReferentialJunction_TerminatesWithoutInfiniteRecursion()
+    {
+        Mk("a.txt");
+        // A link pointing back at its own parent tree — following it would recurse forever.
+        if (!TryCreateDirLink(Path.Combine(_tmpDir, "loop"), _tmpDir)) return; // OS refused → soft-skip
+
+        // The assertion is simply that this returns (no stack overflow / hang) and lists the
+        // link once without re-walking the tree through it.
+        var results = Run($"Invoke-BashFind '{Esc(_tmpDir)}'");
+        var names = results.Select(o => (string?)o.Properties["Name"]?.Value).ToList();
+
+        Assert.Contains("a.txt", names);
+        Assert.Contains("loop", names);
+        Assert.Single(names, n => n == "loop"); // listed exactly once, not re-entered
+    }
+
     [Fact]
     public void Find_SizeFilter_LargeFile()
     {
