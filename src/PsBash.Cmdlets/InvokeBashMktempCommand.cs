@@ -95,13 +95,29 @@ public sealed class InvokeBashMktempCommand : PSCmdlet
 
         try
         {
+            // mktemp's contract is a PRIVATE scratch target (it routinely holds secrets), so
+            // create it exclusively (O_EXCL — never adopt a pre-existing path) and, on Unix,
+            // with owner-only permissions (0700 dir / 0600 file). Default umask + non-exclusive
+            // create would leave it group/world-readable and racy.
             if (makeDir)
             {
-                Directory.CreateDirectory(fullPath);
+                if (OperatingSystem.IsWindows())
+                    Directory.CreateDirectory(fullPath);
+                else
+                    Directory.CreateDirectory(fullPath,
+                        UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
             }
             else
             {
-                File.WriteAllText(fullPath, "");
+                var fileOpts = new FileStreamOptions
+                {
+                    Mode = FileMode.CreateNew,   // O_EXCL: fail if the path already exists
+                    Access = FileAccess.Write,
+                    Share = FileShare.None,
+                };
+                if (!OperatingSystem.IsWindows())
+                    fileOpts.UnixCreateMode = UnixFileMode.UserRead | UnixFileMode.UserWrite;
+                using var fs = new FileStream(fullPath, fileOpts);
             }
         }
         catch (Exception ex)

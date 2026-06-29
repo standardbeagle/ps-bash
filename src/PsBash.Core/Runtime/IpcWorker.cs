@@ -37,10 +37,16 @@ public enum Lifetime
     /// <para><b>Default for the non-interactive modes</b> (<c>-c</c>, stdin pipe,
     /// script file) as of the pooled-host change: a <c>-c</c> invocation pays the
     /// host runspace cold-start only on the first call, then reuses the warm
-    /// daemon. Per-command isolation is preserved because the daemon hands each
-    /// connection its OWN runspace from a discard-on-release pool
-    /// (<c>WorkerPool</c>), so reuse is fast WITHOUT leaking session state across
-    /// commands, and concurrent launchers run in parallel. Other callers:
+    /// daemon. Each connection gets its OWN runspace from a discard-on-release
+    /// pool (<c>WorkerPool</c>), so <b>runspace-scoped</b> state (functions,
+    /// variables, imported modules) does not leak across commands.
+    /// <b>Process-global</b> state is NOT isolated, however: environment
+    /// variables (<c>$env:*</c>) and the current directory are owned by the host
+    /// process, shared by every pooled runspace, and only partially reset between
+    /// commands (<c>Connection.PerInvocationReset</c> resets errexit /
+    /// <c>$ErrorActionPreference</c> / <c>$LASTEXITCODE</c> / positionals — not
+    /// env or cwd). So <c>cd</c> and <c>export</c> in one <c>-c</c> are visible to
+    /// the next on the same daemon, unlike a fresh <c>bash -c</c>. Other callers:
     /// <c>ps-bash host restart</c> (<c>HostCommands.cs</c>).</para>
     /// <para>It is <b>not</b> used by the interactive REPL. The interactive
     /// launcher path (<c>Program.RunHostUnderPtyAsync</c> and the legacy

@@ -410,8 +410,11 @@ public static class BashRuntime
 
         if (!proc.WaitForExit(waitMs))
         {
-            // Budget elapsed — kill the whole tree so no descendant outlives the
-            // call, then collect whatever partial output already drained.
+            // Budget elapsed — kill the process and the descendants still attached to
+            // it via OS parent-pid links. NOTE: this is best-effort, not a guarantee —
+            // a double-forked grandchild reparented to PID 1 (or a Windows-detached
+            // process) has no live parent link back to `proc` and so survives. A real
+            // guarantee would need a Windows Job Object / POSIX process group (setsid).
             try { proc.Kill(entireProcessTree: true); } catch { /* already gone / race */ }
             try { proc.WaitForExit(2_000); } catch { /* best effort */ }
             stdoutDrain.Join(System.TimeSpan.FromSeconds(5));
