@@ -744,6 +744,25 @@ public sealed class IpcWorker : IWorker
         }
     }
 
+    // Compact-output intake caps (M6): OutputCompactor caps on EMIT, not intake, so without a
+    // ceiling a high-volume command grows compactFrames until the launcher OOMs. Crossing either
+    // cap degrades the run to streaming (digest forfeited, memory bounded).
+    private const int CompactIntakeMaxFrames = 200_000;
+    private const long CompactIntakeMaxBytes = 32L * 1024 * 1024; // 32 MB
+
+    /// <summary>Stream one response frame to the launcher's stdout/stderr (the non-compact path,
+    /// and the fallback when compact buffering hits its intake cap).</summary>
+    private void StreamFrame(string line, StreamTag tag)
+    {
+        if (tag == StreamTag.Stderr)
+        {
+            Console.Error.Write(line.EndsWith('\n') ? line : line + "\n");
+            return;
+        }
+        if (OutputCallback is { } cb) cb(line);
+        else Console.Write(line);
+    }
+
     /// <summary>
     /// One connect → write-request → read-response exchange against the current
     /// host. Owns its own per-attempt timeout <see cref="CancellationTokenSource"/>
@@ -757,6 +776,7 @@ public sealed class IpcWorker : IWorker
         Mode mode, string command, TimeSpan idleTimeout, bool unbounded,
         List<OutputFrame>? compactFrames, Action onFirstFrame, CancellationToken ct)
     {
+        long compactBytes = 0;
         // INACTIVITY (idle) timeout, not a total wall-clock cap: the deadline is
         // re-armed every time the host produces an output frame, so a command
         // that keeps streaming output (a long build, `tail -f`, `gh run watch`)
@@ -861,25 +881,29 @@ public sealed class IpcWorker : IWorker
                         {
                             // Compact mode trades streaming for a bounded summary: every
                             // frame (BOTH stdout and stderr) is buffered in memory until the
-                            // command finishes, then collapsed by OutputCompactor. Two
-                            // intentional departures from the REFACTOR-4 routing below:
-                            //   1. No streaming — output is held until exit, so memory grows
-                            //      with the line count (capped on emit, not on intake). This
-                            //      mode is opt-in for agent contexts that want a small digest.
-                            //   2. Stderr is folded into the same buffer as stdout; the
-                            //      stream distinction is preserved textually via the
-                            //      [out]/[err] prefixes OutputCompactor writes.
+                            // command finishes, then collapsed by OutputCompactor. Stderr is
+                            // folded into the same buffer as stdout; the stream distinction is
+                            // preserved textually via the [out]/[err] prefixes OutputCompactor
+                            // writes.
+                            compactBytes += line.Length;
                             compactFrames.Add(new OutputFrame(tag, line));
+                            // Intake cap (M6): OutputCompactor caps on EMIT, not intake, so a
+                            // high-volume command would grow this buffer until the launcher OOMs.
+                            // When the buffer crosses the cap, flush it and DEGRADE TO STREAMING
+                            // for the rest of the command — the per-command digest is forfeited
+                            // for this run, but memory stays bounded.
+                            if (compactFrames.Count > CompactIntakeMaxFrames
+                                || compactBytes > CompactIntakeMaxBytes)
+                            {
+                                Console.Error.Write(
+                                    "ps-bash: --compact-output exceeded its buffer cap; streaming the rest\n");
+                                foreach (var f in compactFrames) StreamFrame(f.Text, f.Stream);
+                                compactFrames = null;
+                            }
                             return;
                         }
 
-                        if (tag == StreamTag.Stderr)
-                        {
-                            Console.Error.Write(line.EndsWith('\n') ? line : line + "\n");
-                            return;
-                        }
-                        if (OutputCallback is { } cb) cb(line);
-                        else Console.Write(line);
+                        StreamFrame(line, tag);
                     },
                     linked.Token).ConfigureAwait(false);
 
