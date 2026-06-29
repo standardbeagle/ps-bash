@@ -495,7 +495,7 @@ public sealed class InvokeBashPsCommand : PSCmdlet
         catch { }
 
         string userName = uid.ToString(CultureInfo.InvariantCulture);
-        var getent = TryRun("/usr/bin/getent", $"passwd {uid}");
+        var getent = TryRun("/usr/bin/getent", "passwd", uid.ToString(CultureInfo.InvariantCulture));
         if (!string.IsNullOrEmpty(getent))
         {
             var first = getent.Split(':')[0];
@@ -608,7 +608,7 @@ public sealed class InvokeBashPsCommand : PSCmdlet
             }
             else if (RuntimeInformation.IsOSPlatform(OSPlatform.OSX))
             {
-                var sysctl = TryRun("/usr/sbin/sysctl", "-n hw.memsize");
+                var sysctl = TryRun("/usr/sbin/sysctl", "-n", "hw.memsize");
                 if (!string.IsNullOrEmpty(sysctl) &&
                     long.TryParse(sysctl, NumberStyles.Integer,
                         CultureInfo.InvariantCulture, out var tb))
@@ -685,7 +685,7 @@ public sealed class InvokeBashPsCommand : PSCmdlet
         var dict = new Dictionary<int, (string, int, string)>();
         try
         {
-            var output = TryRun("/bin/ps", "-axo pid=,user=,ppid=,tty=");
+            var output = TryRun("/bin/ps", "-axo", "pid=,user=,ppid=,tty=");
             if (string.IsNullOrEmpty(output)) return dict;
             foreach (var line in output.Split('\n'))
             {
@@ -859,7 +859,7 @@ public sealed class InvokeBashPsCommand : PSCmdlet
         return string.Join(' ', parts);
     }
 
-    private static string? TryRun(string fileName, string arguments)
+    private static string? TryRun(string fileName, params string[] args)
     {
         try
         {
@@ -867,9 +867,11 @@ public sealed class InvokeBashPsCommand : PSCmdlet
             var psi = new ProcessStartInfo
             {
                 FileName = fileName,
-                Arguments = arguments,
                 CreateNoWindow = true,
             };
+            // ArgumentList (per the project's spawn convention) — no shell-string quoting to get
+            // wrong. Each token is passed verbatim to the child.
+            foreach (var a in args) psi.ArgumentList.Add(a);
             var result = BashRuntime.RunChildProcess(psi, TimeSpan.FromSeconds(2));
             return result.TimedOut ? null : result.Stdout.TrimEnd('\r', '\n');
         }
