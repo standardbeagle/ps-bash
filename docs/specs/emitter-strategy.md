@@ -218,6 +218,15 @@ successful `cd` first records the directory it is leaving into `$env:OLDPWD` (ca
 - `cd -` -> `$env:OLDPWD`, and like bash echoes the directory it lands in (`Write-Output`).
   When `$OLDPWD` is unset it fails with `cd: OLDPWD not set` instead of resolving an empty path.
 - A missing directory emits `cd: <target>: No such file or directory` and sets `$LASTEXITCODE = 1`.
+- **Bare Windows drive paths** (`cd C:\Users\andyb\work`) are reconstructed by
+  `TryReconstructWindowsPath`. Bash's lexer treats each `\X` as an escape and drops the
+  backslash (`C:\Users` decomposes to `Literal("C:")` + `EscapedLiteral("U")` + `Literal("sers")`),
+  which is correct POSIX but useless on Windows. When a `cd` operand is a plain word (no
+  variable/command-sub/glob/tilde part), the emitter restores the backslash for every "useless"
+  escape (an escaped ordinary character = a separator) while keeping genuine bash escapes
+  (`\ ` space, `\"`, `\'`, `\$`, `` \` ``). The word is only claimed when the reconstruction still
+  contains a backslash — so `my\ dir` (→ `my dir`, no separator) stays on the normal emission
+  path. Forward-slash drive paths (`cd C:/Users/...`) already resolve as-is and are untouched.
 
 ### `source` / `.`
 

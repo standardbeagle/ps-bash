@@ -3523,6 +3523,14 @@ public static class PsEmitter
             else
                 targetExpr = QuotePsString(literal);
         }
+        else if (TryReconstructWindowsPath(args[0], out var winLiteral))
+        {
+            // A bare Windows path like `cd C:\Users\andyb\work` — bash's lexer treats
+            // each `\X` as an escape and drops the backslash (`C:\Users` -> `C:Users`),
+            // which is correct POSIX but useless on Windows. Reconstruct the path with
+            // the separators restored so the drive path resolves as the user intended.
+            targetExpr = QuotePsString(winLiteral);
+        }
         else
         {
             var emitted = EmitWord(args[0]);
@@ -3560,6 +3568,67 @@ public static class PsEmitter
 
         return prefix + resolveAndAct;
     }
+
+    /// <summary>
+    /// Reconstructs a bare Windows-style path from a word whose backslash separators
+    /// bash's lexer swallowed as escapes. In bash <c>C:\Users</c> decomposes to
+    /// <c>Literal("C:")</c> + <c>EscapedLiteral("U")</c> + <c>Literal("sers")</c> — the
+    /// backslash is gone. A Windows user typing that path means it as a separator, so we
+    /// put the backslash back for every "useless" escape (an escaped ordinary character)
+    /// while preserving genuine bash escapes (<c>\ </c> space, <c>\"</c>, <c>\'</c>,
+    /// <c>\$</c>, <c>\`</c>). Returns <c>false</c> for any word that carries an
+    /// expansion / glob / tilde part (not a plain path) or contains no restorable
+    /// backslash escape (nothing to fix — let normal emission handle it).
+    /// </summary>
+    private static bool TryReconstructWindowsPath(CompoundWord word, out string path)
+    {
+        path = "";
+        var sb = new System.Text.StringBuilder();
+        foreach (var part in word.Parts)
+        {
+            switch (part)
+            {
+                case WordPart.Literal lit:
+                    sb.Append(lit.Value);
+                    break;
+                case WordPart.SingleQuoted sq:
+                    sb.Append(sq.Value);
+                    break;
+                case WordPart.DoubleQuoted dq when dq.Parts.All(p => p is WordPart.Literal):
+                    foreach (var p in dq.Parts)
+                        sb.Append(((WordPart.Literal)p).Value);
+                    break;
+                case WordPart.EscapedLiteral el:
+                    // Restore the backslash for an escaped ordinary character (a Windows
+                    // separator); keep the bare char for a genuine bash escape.
+                    if (el.Value.Length == 1 && IsBashEscapeChar(el.Value[0]))
+                        sb.Append(el.Value);
+                    else
+                        sb.Append('\\').Append(el.Value);
+                    break;
+                default:
+                    // Variable/command substitution, glob, tilde, brace expansion, etc. —
+                    // not a plain path; leave it to normal word emission.
+                    return false;
+            }
+        }
+        // Only claim the word when it actually reads as a Windows path (has a separator);
+        // a plain name or a genuinely escaped word (`my\ dir` -> "my dir") has no backslash
+        // left and stays on the normal emission path.
+        var candidate = sb.ToString();
+        if (!candidate.Contains('\\'))
+            return false;
+        path = candidate;
+        return true;
+    }
+
+    /// <summary>
+    /// True for characters where a leading backslash is a meaningful bash escape rather
+    /// than a Windows path separator, so <see cref="TryReconstructWindowsPath"/> must not
+    /// re-insert the backslash.
+    /// </summary>
+    private static bool IsBashEscapeChar(char c) =>
+        c is ' ' or '\t' or '\n' or '"' or '\'' or '$' or '`';
 
     private static string QuotePsString(string value) => PsBuild.SingleQuote(value);
 

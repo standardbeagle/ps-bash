@@ -1398,6 +1398,44 @@ public class PsEmitterTests
     }
 
     [Fact]
+    public void Transpile_CdWindowsBackslashPath_RestoresSeparatorsAndQuotes()
+    {
+        // Bash's lexer eats `\U` etc. as escapes (`C:\Users` -> `C:Users`); a Windows user
+        // means the backslashes as separators. cd must reconstruct the drive path and quote it.
+        var result = PsEmitter.Transpile(@"cd C:\Users\andyb\work\beagle-term");
+
+        Assert.StartsWith(@"$__psbash_cd_target = 'C:\Users\andyb\work\beagle-term'", result);
+    }
+
+    [Fact]
+    public void Transpile_CdWindowsDriveRoot_Quotes()
+    {
+        var result = PsEmitter.Transpile(@"cd C:\");
+
+        Assert.StartsWith(@"$__psbash_cd_target = 'C:\'", result);
+    }
+
+    [Fact]
+    public void Transpile_CdWindowsPathWithEscapedSpace_KeepsSpaceNotBackslash()
+    {
+        // `\ ` is a genuine bash escape (space), not a Windows separator — the reconstructed
+        // path keeps the space so `C:\Users\andyb\3D\ Objects` targets "C:\Users\andyb\3D Objects".
+        var result = PsEmitter.Transpile(@"cd C:\Users\andyb\3D\ Objects");
+
+        Assert.StartsWith(@"$__psbash_cd_target = 'C:\Users\andyb\3D Objects'", result);
+    }
+
+    [Fact]
+    public void Transpile_CdEscapedSpaceOnlyWord_StaysOnNormalEmission()
+    {
+        // No backslash survives reconstruction (`my\ dir` -> "my dir"), so the word is not a
+        // Windows path and must not be hijacked into a quoted drive-path literal.
+        var result = PsEmitter.Transpile(@"cd my\ dir");
+
+        Assert.DoesNotContain(@"$__psbash_cd_target = 'my", result);
+    }
+
+    [Fact]
     public void Transpile_TildeNestedPath_EmitsHomePath()
     {
         var result = PsEmitter.Transpile("ls ~/.config/app");
