@@ -1882,7 +1882,7 @@ public class PsEmitterTests
     {
         var result = PsEmitter.Transpile("case $x in a) echo a;; b) echo b;; esac");
 
-        Assert.Equal("switch ($env:x) { 'a' { Invoke-BashEcho a } 'b' { Invoke-BashEcho b } }", result);
+        Assert.Equal("switch ($env:x) { 'a' { Invoke-BashEcho a; break } 'b' { Invoke-BashEcho b; break } }", result);
     }
 
     [Fact]
@@ -1890,7 +1890,7 @@ public class PsEmitterTests
     {
         var result = PsEmitter.Transpile("case $x in a|b) echo ab;; esac");
 
-        Assert.Equal("switch ($env:x) { 'a' { Invoke-BashEcho ab } 'b' { Invoke-BashEcho ab } }", result);
+        Assert.Equal("switch ($env:x) { 'a' { Invoke-BashEcho ab; break } 'b' { Invoke-BashEcho ab; break } }", result);
     }
 
     [Fact]
@@ -1898,7 +1898,7 @@ public class PsEmitterTests
     {
         var result = PsEmitter.Transpile("case $x in a) echo a;; *) echo other;; esac");
 
-        Assert.Equal("switch ($env:x) { 'a' { Invoke-BashEcho a } default { Invoke-BashEcho other } }", result);
+        Assert.Equal("switch ($env:x) { 'a' { Invoke-BashEcho a; break } default { Invoke-BashEcho other; break } }", result);
     }
 
     [Fact]
@@ -1910,7 +1910,7 @@ public class PsEmitterTests
         var result = PsEmitter.Transpile("case $x in a) echo a ;& b) echo b;; esac");
 
         Assert.Equal(
-            "switch ($env:x) { 'a' { Invoke-BashEcho a; Invoke-BashEcho b } 'b' { Invoke-BashEcho b } }",
+            "switch ($env:x) { 'a' { Invoke-BashEcho a; Invoke-BashEcho b; break } 'b' { Invoke-BashEcho b; break } }",
             result);
     }
 
@@ -1942,8 +1942,9 @@ public class PsEmitterTests
         // subsequent clauses (the bash ;;& semantic for non-overlapping patterns).
         var result = PsEmitter.Transpile("case $x in a) echo a ;;& b) echo b;; esac");
 
+        // The ;;& arm 'a' emits no break (continue testing); the trailing ;; arm 'b' does.
         Assert.Equal(
-            "switch ($env:x) { 'a' { Invoke-BashEcho a } 'b' { Invoke-BashEcho b } }",
+            "switch ($env:x) { 'a' { Invoke-BashEcho a } 'b' { Invoke-BashEcho b; break } }",
             result);
     }
 
@@ -1955,9 +1956,9 @@ public class PsEmitterTests
 
         Assert.Equal(
             "switch ($env:x) { " +
-            "'a' { Invoke-BashEcho a; Invoke-BashEcho b; Invoke-BashEcho c } " +
-            "'b' { Invoke-BashEcho b; Invoke-BashEcho c } " +
-            "'c' { Invoke-BashEcho c } }",
+            "'a' { Invoke-BashEcho a; Invoke-BashEcho b; Invoke-BashEcho c; break } " +
+            "'b' { Invoke-BashEcho b; Invoke-BashEcho c; break } " +
+            "'c' { Invoke-BashEcho c; break } }",
             result);
     }
 
@@ -1968,7 +1969,7 @@ public class PsEmitterTests
             "case $x in a) case $y in b) echo b;; esac;; esac");
 
         Assert.Equal(
-            "switch ($env:x) { 'a' { switch ($env:y) { 'b' { Invoke-BashEcho b } } } }",
+            "switch ($env:x) { 'a' { switch ($env:y) { 'b' { Invoke-BashEcho b; break } }; break } }",
             result);
     }
 
@@ -1978,7 +1979,7 @@ public class PsEmitterTests
         var result = PsEmitter.Transpile("case $f in *.txt) echo text;; *) echo other;; esac");
 
         Assert.Equal(
-            "switch -Wildcard ($env:f) { '*.txt' { Invoke-BashEcho text } default { Invoke-BashEcho other } }",
+            "switch -Wildcard ($env:f) { '*.txt' { Invoke-BashEcho text; break } default { Invoke-BashEcho other; break } }",
             result);
     }
 
@@ -2595,7 +2596,9 @@ public class PsEmitterTests
     public void Transpile_ArrayDeclaration_EmitsPsArray()
     {
         var result = PsEmitter.Transpile("arr=(a b c)");
-        Assert.Equal("$arr = @('a','b','c')", result);
+        // Elements route through EmitAssignmentValue now (bare literals → double-quoted),
+        // so a "$x" element expands and $'a\'b' stays balanced (var-expansion fix).
+        Assert.Equal("$arr = @(\"a\",\"b\",\"c\")", result);
     }
 
     [Fact]
@@ -2637,7 +2640,7 @@ public class PsEmitterTests
     public void Transpile_AssociativeArrayAssignment_EmitsHashtableEntry()
     {
         var result = PsEmitter.Transpile("map[key]=val");
-        Assert.Equal("$map['key'] = 'val'", result);
+        Assert.Equal("$map['key'] = \"val\"", result);
     }
 
     [Fact]
@@ -3663,7 +3666,7 @@ public class PsEmitterTests
     {
         var result = PsEmitter.Transpile("array=(one two three)\necho ${#array[@]}");
         Assert.NotNull(result);
-        Assert.Contains("@('one','two','three')", result);
+        Assert.Contains("@(\"one\",\"two\",\"three\")", result);
         Assert.Contains("Invoke-BashEcho", result);
         Assert.Contains(".Count", result);
     }
