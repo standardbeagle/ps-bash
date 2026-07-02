@@ -1620,6 +1620,15 @@ function Format-PsCustomLine {
 
 # --- jq Command ---
 
+# JSON string-literal escape (backslash, quote, control chars) + surrounding quotes.
+# Shared by string values AND object keys — keys were previously quoted WITHOUT
+# escaping, so a key containing " or \ produced invalid JSON.
+function ConvertTo-JqJsonStringLiteral {
+    param([string]$s)
+    $escaped = $s -replace '\\', '\\' -replace '"', '\"' -replace "`n", '\n' -replace "`r", '\r' -replace "`t", '\t'
+    return "`"$escaped`""
+}
+
 function ConvertTo-JqJson {
     param([object]$Value, [bool]$Compact, [bool]$SortKeys, [bool]$RawOutput)
 
@@ -1633,8 +1642,7 @@ function ConvertTo-JqJson {
     }
     if ($Value -is [string]) {
         if ($RawOutput) { return $Value }
-        $escaped = $Value -replace '\\', '\\' -replace '"', '\"' -replace "`n", '\n' -replace "`r", '\r' -replace "`t", '\t'
-        return "`"$escaped`""
+        return ConvertTo-JqJsonStringLiteral $Value
     }
     if ($Value -is [array] -or $Value -is [System.Collections.IList]) {
         $items = @(foreach ($item in $Value) {
@@ -1651,7 +1659,7 @@ function ConvertTo-JqJson {
         $keys = @($Value.Keys)
         if ($SortKeys) { $keys = @($keys | Sort-Object) }
         $pairs = @(foreach ($k in $keys) {
-            $kJson = "`"$k`""
+            $kJson = ConvertTo-JqJsonStringLiteral ([string]$k)
             $vJson = ConvertTo-JqJson -Value $Value[$k] -Compact $Compact -SortKeys $SortKeys -RawOutput $false
             if ($Compact) { "${kJson}:${vJson}" } else { "  ${kJson}: ${vJson}" }
         })
@@ -1669,7 +1677,7 @@ function ConvertTo-JqJson {
         }
         return ConvertTo-JqJson -Value $dict -Compact $Compact -SortKeys $SortKeys -RawOutput $false
     }
-    return "`"$Value`""
+    return ConvertTo-JqJsonStringLiteral ([string]$Value)
 }
 
 function Invoke-JqFilter {
@@ -2033,9 +2041,13 @@ function Resolve-JqDotPath {
                 $idx = [int]$inner
                 foreach ($item in $current) {
                     if ($item -is [array] -or $item -is [System.Collections.IList]) {
-                        if ($idx -lt 0) { $idx = $item.Count + $idx }
-                        if ($idx -ge 0 -and $idx -lt $item.Count) {
-                            $next.Add($item[$idx])
+                        # Resolve the negative index PER ITEM into a local — mutating
+                        # the shared $idx baked the first item's Count into every later
+                        # item, so .[-1] over [[1,2,3],[4,5]] mis-indexed the 2nd array.
+                        $ei = $idx
+                        if ($ei -lt 0) { $ei = $item.Count + $ei }
+                        if ($ei -ge 0 -and $ei -lt $item.Count) {
+                            $next.Add($item[$ei])
                         } else {
                             $next.Add($null)
                         }
