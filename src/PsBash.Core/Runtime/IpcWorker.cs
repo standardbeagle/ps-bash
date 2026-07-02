@@ -320,24 +320,28 @@ public sealed class IpcWorker : IWorker
             await TryRequestGracefulShutdownAsync(GetShutdownDeadline(), ct).ConfigureAwait(false);
         }
 
-        // Re-probe after graceful attempt. If a process is still answering and we
-        // have ownership, escalate to kill. If it is still answering and we do NOT
-        // have ownership, refuse cleanup so we never leave a recycled-PID footgun.
+        // Re-probe after graceful attempt.
         var post = await CheckHealthAsync(TimeSpan.FromMilliseconds(250), ct).ConfigureAwait(false);
-        if (post != HostHealthState.Unhealthy)
+        bool weOwnIt = decision == HostOwnership.CleanupDecision.SafeProcessShutdown && metadata is not null;
+
+        // A host that is still answering and that we cannot prove ownership of must
+        // NOT be cleaned up — surface rather than risk a recycled-PID wrong kill.
+        if (post != HostHealthState.Unhealthy && !weOwnIt)
         {
-            if (decision == HostOwnership.CleanupDecision.SafeProcessShutdown && metadata is not null)
-            {
-                TryKillRecordedHost(metadata);
-            }
-            else
-            {
-                // Host is alive but not gracefully retiring and we cannot prove
-                // ownership. Surface rather than risk a wrong-process kill.
-                throw new HostUnavailableException(
-                    $"ps-bash-host at {_scheme}:{_endpoint} is alive but did not shut down gracefully " +
-                    $"and has no ownership proof to authorize a process kill.");
-            }
+            throw new HostUnavailableException(
+                $"ps-bash-host at {_scheme}:{_endpoint} is alive but did not shut down gracefully " +
+                $"and has no ownership proof to authorize a process kill.");
+        }
+
+        // Kill the recorded owner before retiring the endpoint. Doing this on the
+        // Unhealthy path too is deliberate (#8): the 250ms re-probe misclassifies a
+        // slow-but-alive owned host as Unhealthy, and if we only unlink the endpoint
+        // without killing it, on Windows it keeps serving the SAME pipe name — so
+        // launchers then round-robin between the orphan and the fresh replacement
+        // (split env/cwd, stale build). A genuinely dead host makes this a no-op.
+        if (weOwnIt)
+        {
+            TryKillRecordedHost(metadata!);
         }
 
         // Endpoint and sidecar artifacts may now be cleaned. Unix unlinks the
@@ -1024,8 +1028,25 @@ public sealed class IpcWorker : IWorker
             if (_lifetime == Lifetime.PerInvocation)
                 return;
 
-            // Shared Daemon host is wedged and would poison every future
-            // invocation. Kill the recorded owner if (and only if) we can prove
+            // Shared Daemon host looks wedged. Retire it ONLY under the spawn lock
+            // (#9): the endpoint-scoped lock serializes this against every other
+            // launcher's spawn/replace and retirement, so one launcher's per-call
+            // timeout can no longer kill a daemon that other launchers are mid-
+            // command on. If another launcher already holds the lock it owns host
+            // lifecycle right now — leave it be rather than racing its decision.
+            using var spawnLock = HostSpawnLock.TryAcquire(_scheme, _endpoint);
+            if (spawnLock is null)
+                return;
+
+            // Re-probe under the lock before killing. The host may have recovered,
+            // or a lock-holder we queued behind may have already replaced it — in
+            // either case a fresh probe now answers healthy and we must not kill it.
+            var confirm = await CheckHealthAsync(TimeSpan.FromMilliseconds(750), CancellationToken.None)
+                .ConfigureAwait(false);
+            if (confirm is HostHealthState.Healthy or HostHealthState.Starting)
+                return;
+
+            // Still wedged. Kill the recorded owner if (and only if) we can prove
             // ownership, then unlink the endpoint + sidecar so the next launcher
             // spawns a fresh host. Reuses the same ownership-gated cleanup
             // primitives EnsureHostReachableAsync relies on.
