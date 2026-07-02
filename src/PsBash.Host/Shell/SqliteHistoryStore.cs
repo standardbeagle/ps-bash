@@ -207,6 +207,13 @@ public sealed class SqliteHistoryStore : IHistoryStore, IDisposable
     // for the write lock — without a busy timeout the loser gets SQLITE_BUSY
     // immediately and the record is silently dropped. A 3s timeout lets it wait out
     // a brief lock instead of losing the entry.
+    /// <summary>
+    /// Escape SQL LIKE metacharacters (<c>\ % _</c>) so a user filter is matched as
+    /// a literal prefix. Paired with an <c>ESCAPE '\'</c> clause on the query.
+    /// </summary>
+    private static string EscapeLike(string s)
+        => s.Replace("\\", "\\\\").Replace("%", "\\%").Replace("_", "\\_");
+
     private static void ApplyBusyTimeout(SqliteConnection connection)
     {
         using var cmd = connection.CreateCommand();
@@ -280,8 +287,11 @@ public sealed class SqliteHistoryStore : IHistoryStore, IDisposable
 
                     if (!string.IsNullOrEmpty(query.Filter))
                     {
-                        sql.Append("AND command LIKE @filter || '%' ");
-                        cmd.Parameters.AddWithValue("@filter", query.Filter);
+                        // Escape LIKE metacharacters in the user filter so a command
+                        // containing % or _ is matched literally, not as a wildcard.
+                        // The trailing '%' stays the intended prefix wildcard.
+                        sql.Append("AND command LIKE @filter || '%' ESCAPE '\\' ");
+                        cmd.Parameters.AddWithValue("@filter", EscapeLike(query.Filter));
                     }
 
                     if (!string.IsNullOrEmpty(query.Cwd))

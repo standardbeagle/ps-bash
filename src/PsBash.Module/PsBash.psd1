@@ -113,11 +113,11 @@ FunctionsToExport = @(
     'Initialize-BrowseAdapters',
     'Invoke-BashBackground',
     'Invoke-BashBg',
-    'Invoke-BashEcho',
+    # Invoke-BashEcho / Invoke-BashKill / Invoke-BashRedirect migrated to binary
+    # cmdlets (PsBash.Cmdlets); they are no longer psm1 functions, so exporting them
+    # here was stale (harmless — PowerShell ignores missing names — but misleading).
     'Invoke-BashFg',
     'Invoke-BashJobs',
-    'Invoke-BashKill',
-    'Invoke-BashRedirect',
     # Wrapper: normalizes 'sed -e A -e B' to '-e @(A,B)' so the underlying
     # binary cmdlet's array Expression parameter accepts repeated -e.
     'Invoke-BashSed',
