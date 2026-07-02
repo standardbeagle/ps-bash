@@ -266,7 +266,7 @@ public sealed class Suggester
 
 ### Implementation Files
 
-- `src/PsBash.Core/Parser/BashFlagSpec.cs` (new - reflect runtime specs)
+- `src/PsBash.Transpiler/Parser/BashFlagSpec.cs` (new - reflect runtime specs)
 - `src/PsBash.Shell/TabCompleter.cs` (extend for flags)
 - `src/PsBash.Shell.Tests/TabCompleterTests.cs` (extend)
 

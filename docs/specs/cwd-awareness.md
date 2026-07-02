@@ -92,13 +92,13 @@ When `cwd_filter = true` and **CWD + Parents mode** is enabled (default for Ctrl
 ~/projects/ps-bash/
   ├── src/
   │   ├── PsBash.Core/
-  │   │   └── Parser/     # CWD: ~/projects/ps-bash/src/PsBash.Core/Parser
+  │   │   └── Parser/     # CWD: ~/projects/ps-bash/src/PsBash.Transpiler/Parser
   │   └── PsBash.Shell/
   └── docs/
 ```
 
-When in `~/projects/ps-bash/src/PsBash.Core/Parser`, parent directory matching includes commands from:
-- `~/projects/ps-bash/src/PsBash.Core/Parser` (exact CWD)
+When in `~/projects/ps-bash/src/PsBash.Transpiler/Parser`, parent directory matching includes commands from:
+- `~/projects/ps-bash/src/PsBash.Transpiler/Parser` (exact CWD)
 - `~/projects/ps-bash/src/PsBash.Core/` (parent)
 - `~/projects/ps-bash/src/` (grandparent)
 - `~/projects/ps-bash/` (great-grandparent)
@@ -421,7 +421,7 @@ For deeply nested directories (> 200 characters), path comparison may slow down:
 Automatically detect project roots (`.git`, `package.json`, `Cargo.toml`, etc.) and treat the entire subtree as one "project scope" for history:
 
 ```
-~/projects/ps-bash/src/PsBash.Core/Parser  # CWD
+~/projects/ps-bash/src/PsBash.Transpiler/Parser  # CWD
 ~/projects/ps-bash/                         # Detected project root
 # History from any ~/projects/ps-bash/* subdirectory is considered "local"
 ```

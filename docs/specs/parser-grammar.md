@@ -4,12 +4,12 @@ This document specifies the lexer, grammar, and AST of the ps-bash v2 parser.
 The design follows the [Oils/OSH `syntax.asdl`](https://github.com/oilshell/oil/blob/master/frontend/syntax.asdl) model.
 
 Source files:
-- `src/PsBash.Core/Parser/BashToken.cs` -- token kinds
-- `src/PsBash.Core/Parser/BashLexer.cs` -- tokenization
-- `src/PsBash.Core/Parser/BashParser.cs` -- recursive-descent grammar
-- `src/PsBash.Core/Parser/Ast/Commands.cs` -- command AST nodes
-- `src/PsBash.Core/Parser/Ast/Words.cs` -- word-part AST nodes
-- `src/PsBash.Core/Parser/Ast/Redirects.cs` -- redirect, heredoc, assignment nodes
+- `src/PsBash.Transpiler/Parser/BashToken.cs` -- token kinds
+- `src/PsBash.Transpiler/Parser/BashLexer.cs` -- tokenization
+- `src/PsBash.Transpiler/Parser/BashParser.cs` -- recursive-descent grammar
+- `src/PsBash.Transpiler/Parser/Ast/Commands.cs` -- command AST nodes
+- `src/PsBash.Transpiler/Parser/Ast/Words.cs` -- word-part AST nodes
+- `src/PsBash.Transpiler/Parser/Ast/Redirects.cs` -- redirect, heredoc, assignment nodes
 
 ---
 

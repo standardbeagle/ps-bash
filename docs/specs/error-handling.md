@@ -6,7 +6,7 @@ matches real bash behavior, and where PowerShell semantics intentionally diverge
 Source files:
 - `src/PsBash.Module/PsBash.psm1` -- runtime error functions and file I/O helpers
 - `src/PsBash.Core/Runtime/Ipc/HostProtocol.cs` -- exit code protocol between worker and host
-- `src/PsBash.Core/Parser/PsEmitter.cs` -- `set -e`/`-u`/`-x` translation
+- `src/PsBash.Transpiler/Parser/PsEmitter.cs` -- `set -e`/`-u`/`-x` translation
 
 ---
 

@@ -329,7 +329,7 @@ src/PsBash.Shell/
     ├── ICompletionProvider.cs
     └── PluginLoader.cs
 
-src/PsBash.Core/Parser/
+src/PsBash.Transpiler/Parser/
 ├── BashLexer.cs             # Tokenization
 ├── BashParser.cs            # AST construction
 ├── PsEmitter.cs             # Bash → PowerShell

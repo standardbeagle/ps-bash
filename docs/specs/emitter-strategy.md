@@ -1,7 +1,7 @@
 # Emitter Strategy Specification
 
 This document describes how `PsEmitter` translates parsed bash AST nodes into
-PowerShell text. The emitter lives in `src/PsBash.Core/Parser/PsEmitter.cs`.
+PowerShell text. The emitter lives in `src/PsBash.Transpiler/Parser/PsEmitter.cs`.
 
 ---
 
@@ -34,10 +34,16 @@ path.
 2. **Standalone commands** -- any `Command.Simple` whose command name is in the
    mapping table and is **not** a PowerShell builtin alias (see Section 2.2).
 
-It inspects the command name and dispatches to `EmitPassthrough`. All 69 mapped
-commands use the same `EmitPassthrough` path with no exceptions.
+It inspects the command name and dispatches to `EmitPassthrough`. Every mapped
+command uses the same `EmitPassthrough` path (a few force-quote specific colliding
+flags — `echo`, `find` — but still via `EmitPassthrough`).
 
-### 2.1 Mapped Commands (69 total)
+**Source of truth:** the `switch (name)` in `PsEmitter.TryEmitMappedCommand`
+(~99 command-name cases as of this writing). The table below is a representative
+subset for orientation and is not exhaustively kept in sync — consult the switch
+for the authoritative, current list.
+
+### 2.1 Mapped Commands (representative subset)
 
 | Bash command | PowerShell function      |
 |--------------|--------------------------|
