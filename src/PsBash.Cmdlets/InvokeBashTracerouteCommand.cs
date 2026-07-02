@@ -100,6 +100,14 @@ public sealed class InvokeBashTracerouteCommand : PSCmdlet
                 return false;
             }
 
+            // Drain stderr concurrently. It is redirected but we only read stdout
+            // synchronously below; once the child writes more than the ~4KB stderr
+            // pipe buffer it blocks on the write, which stops it producing stdout,
+            // which wedges our ReadLine forever (and the unbounded WaitForExit after
+            // it). An async drain empties the buffer so the child keeps flowing.
+            proc.ErrorDataReceived += static (_, _) => { /* discard: stderr is noise here */ };
+            proc.BeginErrorReadLine();
+
             string? line;
             while ((line = proc.StandardOutput.ReadLine()) is not null)
             {
@@ -118,7 +126,13 @@ public sealed class InvokeBashTracerouteCommand : PSCmdlet
                 WriteObject(BuildHopFromLine(host, int.Parse(match.Groups[1].Value), line.TrimEnd()));
             }
 
-            proc.WaitForExit();
+            // Stdout has reached EOF (child closed it), so the process is done or
+            // nearly so — but bound the wait anyway so a child that closes stdout
+            // without exiting cannot hang the host runspace. Kill on timeout.
+            if (!proc.WaitForExit(10_000))
+            {
+                try { proc.Kill(entireProcessTree: true); } catch { /* ignore */ }
+            }
             return true;
         }
         catch

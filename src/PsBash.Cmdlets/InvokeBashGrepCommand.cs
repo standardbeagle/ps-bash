@@ -708,6 +708,32 @@ public sealed class InvokeBashGrepCommand : PSCmdlet
         }
     }
 
+    /// <summary>
+    /// All non-overlapping match strings on <paramref name="lineText"/> in
+    /// left-to-right order, for grep <c>-o</c>. Gathers matches from every
+    /// pattern (multiple <c>-e</c>), orders by start index (longest wins on a
+    /// tie), and skips any that overlap an already-emitted match — matching GNU
+    /// grep, which advances past each reported match.
+    /// </summary>
+    private static IEnumerable<string> AllMatchValues(List<Regex> regexes, string lineText)
+    {
+        var found = new List<(int Index, int Length, string Value)>();
+        foreach (var rx in regexes)
+            foreach (Match m in rx.Matches(lineText))
+                if (m.Length > 0)
+                    found.Add((m.Index, m.Length, m.Value));
+
+        found.Sort((a, b) => a.Index != b.Index ? a.Index - b.Index : b.Length - a.Length);
+
+        int consumedTo = -1;
+        foreach (var f in found)
+        {
+            if (f.Index <= consumedTo) continue; // overlaps a reported match
+            yield return f.Value;
+            consumedTo = f.Index + f.Length - 1;
+        }
+    }
+
     private void ProcessPipelineLine(
         string lineText, PSObject originalItem, List<Regex> regexes,
         bool invertMatch, bool showLineNumbers, bool countOnly, bool quietMode,
@@ -733,21 +759,25 @@ public sealed class InvokeBashGrepCommand : PSCmdlet
         if (quietMode) return;
         if (countOnly) return;
 
-        string outputText = (outputMatchOnly && matchObject != null)
-            ? matchObject.Value
-            : lineText;
-
         string prefix = "";
         if (forceFileName) prefix = "<stdin>:";
         if (showLineNumbers) prefix = prefix + lineNum + ":";
 
+        if (outputMatchOnly)
+        {
+            // -o: emit EVERY non-overlapping match on the line, each on its own
+            // line (bash semantics), not just the first. The prefix (filename /
+            // line number) is repeated on each match line, matching GNU grep.
+            foreach (var mv in AllMatchValues(regexes, lineText))
+                WriteObject(BuildGrepMatch("<stdin>", lineNum, lineText, prefix + mv));
+            return;
+        }
+
+        string outputText = lineText;
+
         if (prefix.Length > 0)
         {
             WriteObject(BuildGrepMatch("<stdin>", lineNum, lineText, prefix + outputText));
-        }
-        else if (outputMatchOnly)
-        {
-            WriteObject(BuildGrepMatch("<stdin>", lineNum, lineText, outputText));
         }
         else if (asNewObject)
         {
@@ -878,8 +908,14 @@ public sealed class InvokeBashGrepCommand : PSCmdlet
                     if (quietMode) { FileSystemHelpers.SetLastExitCode(this, 0); return; }
                     if (fileListMode) { matchedFiles.Add(filePath); break; }
                     if (countOnly) continue;
-                    string outText = (outputMatchOnly && mo != null) ? mo.Value : line;
-                    EmitGrepLine(filePath, lineNum, line, outText, showFile, showLineNumbers);
+                    if (outputMatchOnly)
+                    {
+                        // -o: one output line per non-overlapping match (bash), not first only.
+                        foreach (var mv in AllMatchValues(regexes, line))
+                            EmitGrepLine(filePath, lineNum, line, mv, showFile, showLineNumbers);
+                        continue;
+                    }
+                    EmitGrepLine(filePath, lineNum, line, line, showFile, showLineNumbers);
                 }
                 totalMatchCount += fileMatches;
                 perFileCounts[filePath] = fileMatches;
@@ -941,10 +977,15 @@ public sealed class InvokeBashGrepCommand : PSCmdlet
 
                 string line = lines[li];
                 int lineNum = li + 1;
-                string outputText = (outputMatchOnly && matchObjects.TryGetValue(li, out var mo2))
-                    ? mo2.Value
-                    : line;
-                EmitGrepLine(filePath, lineNum, line, outputText, showFile, showLineNumbers);
+                if (outputMatchOnly && matchIndices.Contains(li))
+                {
+                    // -o: emit every non-overlapping match (bash). Context lines
+                    // (non-match) produce no -o output, matching GNU grep.
+                    foreach (var mv in AllMatchValues(regexes, line))
+                        EmitGrepLine(filePath, lineNum, line, mv, showFile, showLineNumbers);
+                    continue;
+                }
+                EmitGrepLine(filePath, lineNum, line, line, showFile, showLineNumbers);
             }
         }
 

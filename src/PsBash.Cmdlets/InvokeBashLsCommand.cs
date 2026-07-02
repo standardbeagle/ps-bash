@@ -497,7 +497,20 @@ public sealed class InvokeBashLsCommand : PSCmdlet
             }
         }
 
-        long sizeBytes = isDir ? 4096L : ((FileInfo)item).Length;
+        // FileInfo.Length throws (FileNotFoundException) on a dangling symlink —
+        // the target is gone. bash `ls -l` still lists such an entry (with the
+        // link's own size), so fall back to 0 rather than crashing the listing.
+        long sizeBytes;
+        if (isDir)
+        {
+            sizeBytes = 4096L;
+        }
+        else
+        {
+            try { sizeBytes = ((FileInfo)item).Length; }
+            catch (System.IO.FileNotFoundException) { sizeBytes = 0L; }
+            catch (System.IO.DirectoryNotFoundException) { sizeBytes = 0L; }
+        }
 
         var obj = new PSObject();
         obj.TypeNames.Insert(0, "PsBash.LsEntry");

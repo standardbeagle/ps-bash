@@ -344,7 +344,7 @@ public sealed class InvokeBashInstallCommand : PSCmdlet
                 // for instance), fall back to a direct copy.
                 try
                 {
-                    if (File.Exists(oldPath)) File.Delete(oldPath);
+                    if (File.Exists(oldPath)) FileSystemHelpers.DeleteFileForce(oldPath);
                     File.Move(targetPath, oldPath);
                     swapped = true;
                     if (verbose)
@@ -371,6 +371,11 @@ public sealed class InvokeBashInstallCommand : PSCmdlet
                     hadError = true;
                     continue;
                 }
+                // Clear a read-only attribute on an un-swapped existing target so
+                // the overwrite copy does not throw UnauthorizedAccess (os-interface
+                // rule: read-only-aware destructive ops go through FileSystemHelpers).
+                if (!swapped && File.Exists(targetPath))
+                    FileSystemHelpers.ClearReadOnly(targetPath);
                 File.Copy(src, targetPath, overwrite: true);
             }
             catch (Exception ex)
@@ -401,7 +406,7 @@ public sealed class InvokeBashInstallCommand : PSCmdlet
                 }
                 if (!scheduled)
                 {
-                    try { File.Delete(oldPath); }
+                    try { FileSystemHelpers.DeleteFileForce(oldPath); }
                     catch
                     {
                         if (verbose)

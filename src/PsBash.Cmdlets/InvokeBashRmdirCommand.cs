@@ -127,6 +127,10 @@ public sealed class InvokeBashRmdirCommand : PSCmdlet
                     continue;
                 }
 
+                // Non-recursive (rmdir removes only empty dirs), but a read-only
+                // attribute still makes Directory.Delete throw on Windows. Clear it
+                // first — mirrors find's non-recursive dir delete (os-interface rule).
+                FileSystemHelpers.ClearReadOnly(absolute);
                 Directory.Delete(absolute);
             }
             catch (Exception ex)
@@ -156,7 +160,7 @@ public sealed class InvokeBashRmdirCommand : PSCmdlet
                         WriteObject(BashRuntime.NewBashObject(
                             $"rmdir: removing directory, '{FileSystemHelpers.ToBashPath(parent)}'\n"));
                     }
-                    try { Directory.Delete(parent); }
+                    try { FileSystemHelpers.ClearReadOnly(parent); Directory.Delete(parent); }
                     catch { break; }
                     parent = Path.GetDirectoryName(parent);
                 }

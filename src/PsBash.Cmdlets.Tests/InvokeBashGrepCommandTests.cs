@@ -78,6 +78,15 @@ public class InvokeBashGrepCommandTests : IDisposable, IClassFixture<SharedPwshF
     }
 
     [Fact]
+    public void Grep_OnlyMatching_EmitsEveryMatchOnItsOwnLine()
+    {
+        // Oracle: printf 'foo1 foo2 foo3\n' | grep -o 'foo[0-9]' → three lines.
+        // Regression: -o previously emitted only the FIRST match per line.
+        var lines = RunLines("'foo1 foo2 foo3' | Invoke-BashGrep -o 'foo[0-9]'");
+        Assert.Equal(new[] { "foo1", "foo2", "foo3" }, lines);
+    }
+
+    [Fact]
     public void Grep_RegexMatch_FromPipeline()
     {
         // Basic regex — `.` matches any char.
