@@ -850,8 +850,7 @@ public static class PsEmitter
         // The `read` variable is the loop binding for this construct: register
         // it as a loop var so the body emits it bare ($line, not $env:line) and
         // RC-7 word-splitting does not splat it (a `read` var holds a single
-        // bound line, exactly like a for-loop variable). The bare $VAR is then
-        // string-replaced to $_ below.
+        // bound line, exactly like a for-loop variable).
         var vars = _loopVars ??= new HashSet<string>();
         bool added = vars.Add(varName);
 
@@ -865,20 +864,19 @@ public static class PsEmitter
             if (added)
                 vars.Remove(varName);
         }
-        // Replace $env:VAR with $_ (exact match, not prefix of longer name)
-        // Note: $_ in Regex.Replace is a special substitution; use $$ to produce literal $.
-        bodyText = System.Text.RegularExpressions.Regex.Replace(
-            bodyText, @$"\$env:{varName}(?!\w)", "$$_");
-        // Also replace bare $VAR references (loop var scope)
-        bodyText = System.Text.RegularExpressions.Regex.Replace(
-            bodyText, @$"\${varName}(?!\w)", "$$_");
 
+        // Bind the read variable to the current line with a REAL PowerShell
+        // assignment at the top of the loop body — `${VAR} = $_`. The body already
+        // emits the read var bare (loop-var scope), so it resolves naturally. The
+        // old approach text-rewrote every `$VAR` in the emitted body to `$_`, which
+        // clobbered occurrences of the name inside single-quoted PS literals (e.g. a
+        // bash `'has $line literal'` that must stay literal), corrupting output.
         // `$input |` is required: when this `while read` is a pipe target it is wrapped in `& { ... }`,
         // and a scriptblock's piped input does NOT auto-feed a leading `ForEach-Object` — it must be
         // drained explicitly via `$input`. Without it the chain got zero input and the leading
         // ForEach-Object ran once with a null `$_`, hitting "Cannot index into a null array" on the
         // property probe. The `$null -ne $_` guard makes that probe null-safe regardless.
-        return $"$input | ForEach-Object {{ {PsBuild.NullSafeBashText} }} | ForEach-Object {{ ($_ -replace \"`n$\",\"\") -split \"`n\" }} | ForEach-Object {{ {bodyText} }}";
+        return $"$input | ForEach-Object {{ {PsBuild.NullSafeBashText} }} | ForEach-Object {{ ($_ -replace \"`n$\",\"\") -split \"`n\" }} | ForEach-Object {{ ${{{varName}}} = $_; {bodyText} }}";
     }
 
     private static string? ExtractArithVar(string init)

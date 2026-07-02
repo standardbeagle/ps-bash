@@ -1824,10 +1824,24 @@ public class PsEmitterTests
 
         // `$input |` drains the scriptblock's piped input into the chain (a leading ForEach-Object
         // does not auto-receive it when this is a pipe target wrapped in `& { ... }`); the
-        // `$null -ne $_` guard makes the BashText probe null-safe.
+        // `$null -ne $_` guard makes the BashText probe null-safe. The read var is bound with a real
+        // `${line} = $_` assignment (not a text rewrite of $line -> $_, which clobbered literals).
         Assert.Equal(
-            "$input | ForEach-Object { if ($null -ne $_ -and $_.PSObject.Properties['BashText']) { $_.BashText } else { \"$_\" } } | ForEach-Object { ($_ -replace \"`n$\",\"\") -split \"`n\" } | ForEach-Object { Invoke-BashEcho $_ }",
+            "$input | ForEach-Object { if ($null -ne $_ -and $_.PSObject.Properties['BashText']) { $_.BashText } else { \"$_\" } } | ForEach-Object { ($_ -replace \"`n$\",\"\") -split \"`n\" } | ForEach-Object { ${line} = $_; Invoke-BashEcho $line }",
             result);
+    }
+
+    [Fact]
+    public void Transpile_WhileReadLine_PreservesReadVarInsideSingleQuotedLiteral()
+    {
+        // Regression (#6): the old $line -> $_ text rewrite clobbered the name inside
+        // single-quoted PS literals. A bash '... $line ...' must stay literal (bash
+        // prints it verbatim), so the emitted single-quoted string must be untouched.
+        var result = PsEmitter.Transpile("while read line; do echo 'lit=$line'; done");
+
+        Assert.Contains("${line} = $_;", result);
+        Assert.Contains("'lit=$line'", result);   // literal preserved, NOT rewritten to $_
+        Assert.DoesNotContain("'lit=$_'", result);
     }
 
     [Fact]
