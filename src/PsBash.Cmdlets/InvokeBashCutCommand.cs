@@ -501,7 +501,7 @@ public sealed class InvokeBashCutCommand : PSCmdlet
                 // -M  (open start)
                 if (lo.Length == 0 && hi.Length > 0 && AllDigits(hi))
                 {
-                    int m = int.Parse(hi);
+                    int m = BashRuntime.ParseCountClamped(hi);
                     if (m == 0) throw new CutRangeError(numbered);
                     result.Add((1, m));
                     continue;
@@ -509,7 +509,7 @@ public sealed class InvokeBashCutCommand : PSCmdlet
                 // N-  (open end)
                 if (hi.Length == 0 && lo.Length > 0 && AllDigits(lo))
                 {
-                    int nlo = int.Parse(lo);
+                    int nlo = BashRuntime.ParseCountClamped(lo);
                     if (nlo == 0) throw new CutRangeError(numbered);
                     result.Add((nlo, int.MaxValue));
                     continue;
@@ -517,7 +517,7 @@ public sealed class InvokeBashCutCommand : PSCmdlet
                 // N-M (closed)
                 if (lo.Length > 0 && hi.Length > 0 && AllDigits(lo) && AllDigits(hi))
                 {
-                    int a = int.Parse(lo), b = int.Parse(hi);
+                    int a = BashRuntime.ParseCountClamped(lo), b = BashRuntime.ParseCountClamped(hi);
                     if (a == 0 || b == 0) throw new CutRangeError(numbered);
                     if (a > b) throw new CutRangeError("invalid decreasing range");
                     result.Add((a, b));
@@ -526,8 +526,14 @@ public sealed class InvokeBashCutCommand : PSCmdlet
                 // Malformed (e.g. bare "-", "a-b") — surface as invalid list.
                 throw new FormatException($"invalid byte/character position '{part}'");
             }
-            // Single index: [int]$part — non-integer throws (oracle parity).
-            int n = int.Parse(part);
+            // Single index: non-integer throws (oracle parity); a digit string too
+            // big for int clamps to int.MaxValue instead of an unhandled OverflowException.
+            if (!int.TryParse(part, out int n))
+            {
+                if (!AllDigits(part))
+                    throw new FormatException($"invalid byte/character position '{part}'");
+                n = int.MaxValue;
+            }
             if (n == 0) throw new CutRangeError(numbered);
             result.Add((n, n));
         }

@@ -99,28 +99,28 @@ public sealed class InvokeBashExpandCommand : PSCmdlet
             // -tN (joined, digits only)
             if (a.Length > 2 && a[0] == '-' && a[1] == 't' && IsAllDigits(a, 2))
             {
-                _tabWidth = int.Parse(a.Substring(2));
+                _tabWidth = BashRuntime.ParseCountClamped(a.AsSpan(2), fallback: 8);
                 i++;
                 continue;
             }
             // -t N (separate)
             if (a == "-t" && (i + 1) < args.Length)
             {
-                _tabWidth = int.Parse(args[i + 1]);
+                _tabWidth = BashRuntime.ParseCountClamped(args[i + 1], fallback: 8);
                 i += 2;
                 continue;
             }
             // --tabs=N
             if (a.StartsWith("--tabs=", StringComparison.Ordinal))
             {
-                _tabWidth = int.Parse(a.Substring("--tabs=".Length));
+                _tabWidth = BashRuntime.ParseCountClamped(a.AsSpan("--tabs=".Length), fallback: 8);
                 i++;
                 continue;
             }
             // --tabs N (separate form)
             if (a == "--tabs" && (i + 1) < args.Length)
             {
-                _tabWidth = int.Parse(args[i + 1]);
+                _tabWidth = BashRuntime.ParseCountClamped(args[i + 1], fallback: 8);
                 i += 2;
                 continue;
             }

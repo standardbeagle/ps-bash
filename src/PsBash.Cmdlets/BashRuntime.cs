@@ -23,6 +23,29 @@ namespace PsBash.Cmdlets;
 public static class BashRuntime
 {
     /// <summary>
+    /// Parse a numeric count/width flag value without the <see cref="int.Parse(string)"/>
+    /// overflow-crash trap. Joined flag forms (e.g. <c>head -n99999999999</c>, <c>grep -A9…9</c>)
+    /// reach a bare <c>int.Parse</c> on a digit string the regex/substring admitted but that
+    /// overflows <see cref="int"/> — an unhandled <see cref="OverflowException"/> that crashes the
+    /// host runspace. A well-formed but too-large value clamps to <see cref="int.MaxValue"/>
+    /// (negative to <see cref="int.MinValue"/>) — the semantically correct "no practical limit";
+    /// a non-numeric value returns <paramref name="fallback"/>. Never throws. Mirrors the clamp
+    /// idiom already used in <c>InvokeBashFindCommand.ParseSizeExpr</c>/<c>ParseMtimeExpr</c>.
+    /// </summary>
+    public static int ParseCountClamped(ReadOnlySpan<char> s, int fallback = int.MaxValue)
+    {
+        if (int.TryParse(s, out int v)) return v;
+        var t = s.Trim();
+        if (t.Length > 0)
+        {
+            char c0 = t[0];
+            if (c0 == '-') return int.MinValue;
+            if (c0 == '+' || (c0 >= '0' && c0 <= '9')) return int.MaxValue;
+        }
+        return fallback;
+    }
+
+    /// <summary>
     /// Strips a single trailing <c>\n</c> from BashText, matching the psm1
     /// <c>New-BashObject</c> / <c>Set-BashDisplayProperty</c> normalization
     /// (the worker serializer owns line endings).

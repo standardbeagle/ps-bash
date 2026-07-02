@@ -40,7 +40,7 @@ public sealed class InvokeBashPopdCommand : PSCmdlet
         if (args.Length > 0 && System.Text.RegularExpressions.Regex.IsMatch(args[0], @"^\+(\d+)$"))
         {
             var m = System.Text.RegularExpressions.Regex.Match(args[0], @"^\+(\d+)$");
-            var n = int.Parse(m.Groups[1].Value, System.Globalization.CultureInfo.InvariantCulture);
+            var n = BashRuntime.ParseCountClamped(m.Groups[1].Value);
 
             InvokeCommand.InvokeScript(
                 @"param($n)

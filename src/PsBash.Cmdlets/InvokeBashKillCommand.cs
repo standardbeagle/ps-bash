@@ -92,7 +92,7 @@ public sealed class InvokeBashKillCommand : PSCmdlet
             if (mLong.Success) { signalName = ResolveSignal(mLong.Groups[1].Value); i++; continue; }
 
             var mPid = PidSpec.Match(a);
-            if (mPid.Success) { pids.Add(int.Parse(mPid.Groups[1].Value)); i++; continue; }
+            if (mPid.Success) { pids.Add(BashRuntime.ParseCountClamped(mPid.Groups[1].Value)); i++; continue; }
 
             if (int.TryParse(a, out var pidVal)) pids.Add(pidVal);
             i++;

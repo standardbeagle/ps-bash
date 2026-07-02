@@ -32,6 +32,28 @@ public class BashRuntimeTests
         Assert.Equal(expected, BashRuntime.NormalizeBashText(input));
     }
 
+    // ---- ParseCountClamped (#14: unclamped int.Parse overflow crash) ----
+
+    [Theory]
+    [InlineData("5", 5)]
+    [InlineData("0", 0)]
+    [InlineData("-3", -3)]
+    [InlineData("2147483647", int.MaxValue)]           // exactly int.MaxValue
+    [InlineData("99999999999", int.MaxValue)]          // overflow → clamp, not crash
+    [InlineData("+99999999999", int.MaxValue)]
+    [InlineData("-99999999999", int.MinValue)]
+    [InlineData("abc", int.MaxValue)]                  // non-numeric → default fallback
+    public void ParseCountClamped_NeverThrows_ClampsOnOverflow(string input, int expected)
+    {
+        Assert.Equal(expected, BashRuntime.ParseCountClamped(input));
+    }
+
+    [Fact]
+    public void ParseCountClamped_NonNumeric_UsesProvidedFallback()
+    {
+        Assert.Equal(8, BashRuntime.ParseCountClamped("xyz", fallback: 8));
+    }
+
     // ---- NewBashObject ----
 
     [Fact]

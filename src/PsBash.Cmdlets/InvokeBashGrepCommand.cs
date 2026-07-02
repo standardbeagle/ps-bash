@@ -288,7 +288,7 @@ public sealed class InvokeBashGrepCommand : PSCmdlet
             var ctxJoined = Regex.Match(a, @"^-([ABC])(\d+)$");
             if (ctxJoined.Success)
             {
-                int v = int.Parse(ctxJoined.Groups[2].Value);
+                int v = BashRuntime.ParseCountClamped(ctxJoined.Groups[2].Value);
                 switch (ctxJoined.Groups[1].Value)
                 {
                     case "A": afterContext = v; break;
@@ -320,7 +320,7 @@ public sealed class InvokeBashGrepCommand : PSCmdlet
             var mJoined = Regex.Match(a, @"^-m(\d+)$");
             if (mJoined.Success)
             {
-                maxMatches = int.Parse(mJoined.Groups[1].Value);
+                maxMatches = BashRuntime.ParseCountClamped(mJoined.Groups[1].Value);
                 i++;
                 continue;
             }
@@ -391,7 +391,7 @@ public sealed class InvokeBashGrepCommand : PSCmdlet
             var maxLong = Regex.Match(a, @"^--max-count=(\d+)$");
             if (maxLong.Success)
             {
-                maxMatches = int.Parse(maxLong.Groups[1].Value);
+                maxMatches = BashRuntime.ParseCountClamped(maxLong.Groups[1].Value);
                 i++;
                 continue;
             }

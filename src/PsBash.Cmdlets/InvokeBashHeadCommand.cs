@@ -376,7 +376,7 @@ public sealed class InvokeBashHeadCommand : PSCmdlet
             if (arg.Length > 2 && arg.StartsWith("-n", StringComparison.Ordinal)
                 && IsAllDigits(arg.Substring(2)))
             {
-                count = int.Parse(arg.Substring(2));
+                count = BashRuntime.ParseCountClamped(arg.AsSpan(2));
                 i++;
                 continue;
             }
@@ -395,7 +395,7 @@ public sealed class InvokeBashHeadCommand : PSCmdlet
             if (arg.Length > 2 && arg.StartsWith("-c", StringComparison.Ordinal)
                 && IsAllDigits(arg.Substring(2)))
             {
-                byteCount = int.Parse(arg.Substring(2));
+                byteCount = BashRuntime.ParseCountClamped(arg.AsSpan(2));
                 i++;
                 continue;
             }
@@ -414,7 +414,7 @@ public sealed class InvokeBashHeadCommand : PSCmdlet
             // Legacy -N shorthand (e.g. head -5).
             if (arg.Length > 1 && arg[0] == '-' && IsAllDigits(arg.Substring(1)))
             {
-                count = int.Parse(arg.Substring(1));
+                count = BashRuntime.ParseCountClamped(arg.AsSpan(1));
                 i++;
                 continue;
             }
@@ -422,7 +422,7 @@ public sealed class InvokeBashHeadCommand : PSCmdlet
             // Bare leading positional number (e.g. head 5).
             if (operands.Count == 0 && arg.Length > 0 && IsAllDigits(arg))
             {
-                count = int.Parse(arg);
+                count = BashRuntime.ParseCountClamped(arg.AsSpan());
                 i++;
                 continue;
             }

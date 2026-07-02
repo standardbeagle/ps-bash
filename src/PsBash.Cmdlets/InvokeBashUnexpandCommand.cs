@@ -109,20 +109,20 @@ public sealed class InvokeBashUnexpandCommand : PSCmdlet
             // -tN (joined form): "-t" followed by one or more digits.
             if (arg.Length > 2 && arg[0] == '-' && arg[1] == 't' && AllDigits(arg, 2))
             {
-                _tabWidth = int.Parse(arg.AsSpan(2));
+                _tabWidth = BashRuntime.ParseCountClamped(arg.AsSpan(2), fallback: 8);
                 continue;
             }
             // -t N (separated form): consume next arg.
             if (arg == "-t" && i + 1 < args.Length)
             {
-                _tabWidth = int.Parse(args[i + 1]);
+                _tabWidth = BashRuntime.ParseCountClamped(args[i + 1], fallback: 8);
                 i++;
                 continue;
             }
             // --tabs=N
             if (arg.StartsWith("--tabs=", StringComparison.Ordinal))
             {
-                _tabWidth = int.Parse(arg.AsSpan("--tabs=".Length));
+                _tabWidth = BashRuntime.ParseCountClamped(arg.AsSpan("--tabs=".Length), fallback: 8);
                 continue;
             }
             // -a (case-sensitive per oracle's -ceq) or --all.

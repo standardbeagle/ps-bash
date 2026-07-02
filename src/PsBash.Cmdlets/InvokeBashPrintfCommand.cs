@@ -144,15 +144,15 @@ public sealed class InvokeBashPrintfCommand : PSCmdlet
                             string val = converted[argIdx]?.ToString() ?? string.Empty;
                             if (widthStr.Length > 0 && hasPrecision && precStr.Length > 0)
                             {
-                                val = val.PadLeft(int.Parse(widthStr));
-                                int take = Math.Min(int.Parse(precStr), val.Length);
+                                val = val.PadLeft(ParseFieldWidth(widthStr));
+                                int take = Math.Min(ParseFieldWidth(precStr), val.Length);
                                 val = val.Substring(0, take);
                             }
                             else if (widthStr.Length > 0)
                             {
                                 val = flagStr.Contains('-')
-                                    ? val.PadRight(int.Parse(widthStr))
-                                    : val.PadLeft(int.Parse(widthStr));
+                                    ? val.PadRight(ParseFieldWidth(widthStr))
+                                    : val.PadLeft(ParseFieldWidth(widthStr));
                             }
                             sb.Append(val);
                         }
@@ -171,7 +171,7 @@ public sealed class InvokeBashPrintfCommand : PSCmdlet
                                 bool showPlus = flagStr.Contains('+');
                                 string prefix = val >= 0 && showPlus ? "+" : string.Empty;
                                 string str = prefix + val.ToString(CultureInfo.InvariantCulture);
-                                int w = int.Parse(widthStr);
+                                int w = ParseFieldWidth(widthStr);
                                 if (zeroPad && !leftAlign)
                                     str = str.PadLeft(w, '0');
                                 else if (leftAlign)
@@ -196,8 +196,8 @@ public sealed class InvokeBashPrintfCommand : PSCmdlet
                             if (widthStr.Length > 0)
                             {
                                 str = flagStr.Contains('-')
-                                    ? str.PadRight(int.Parse(widthStr))
-                                    : str.PadLeft(int.Parse(widthStr), flagStr.Contains('0') ? '0' : ' ');
+                                    ? str.PadRight(ParseFieldWidth(widthStr))
+                                    : str.PadLeft(ParseFieldWidth(widthStr), flagStr.Contains('0') ? '0' : ' ');
                             }
                             sb.Append(str);
                         }
@@ -210,14 +210,14 @@ public sealed class InvokeBashPrintfCommand : PSCmdlet
                     case 'G':
                         if (argIdx < converted.Count)
                         {
-                            int prec = precStr.Length > 0 ? int.Parse(precStr) : 6;
+                            int prec = precStr.Length > 0 ? ParseFieldWidth(precStr) : 6;
                             double d = ToDouble(converted[argIdx]);
                             string formatted = (spec == 'e' || spec == 'E')
                                 // 2-digit exponent like C printf (not .NET's 3-digit "E+00n").
                                 ? d.ToString("0." + new string('0', prec) + (spec == 'e' ? "e+00" : "E+00"), CultureInfo.InvariantCulture)
                                 : d.ToString((spec == 'g' ? "G" : "G") + prec, CultureInfo.InvariantCulture);
                             if (spec == 'G') formatted = formatted.ToUpperInvariant();
-                            if (widthStr.Length > 0) formatted = formatted.PadLeft(int.Parse(widthStr));
+                            if (widthStr.Length > 0) formatted = formatted.PadLeft(ParseFieldWidth(widthStr));
                             sb.Append(formatted);
                         }
                         argIdx++;
@@ -226,7 +226,7 @@ public sealed class InvokeBashPrintfCommand : PSCmdlet
                     case 'f':
                         if (argIdx < converted.Count)
                         {
-                            int prec = precStr.Length > 0 ? int.Parse(precStr) : 6;
+                            int prec = precStr.Length > 0 ? ParseFieldWidth(precStr) : 6;
                             double d = ToDouble(converted[argIdx]);
                             string formatted = d.ToString(
                                 "F" + prec, CultureInfo.InvariantCulture);
@@ -237,7 +237,7 @@ public sealed class InvokeBashPrintfCommand : PSCmdlet
                                 // justifies, otherwise space-pad on the left. The old
                                 // code space-padded then Trim()'d it straight back off,
                                 // so `%05.2f` produced `3.14` instead of `03.14`.
-                                formatted = PadNumeric(formatted, int.Parse(widthStr),
+                                formatted = PadNumeric(formatted, ParseFieldWidth(widthStr),
                                     zeroPad: flagStr.Contains('0'), leftAlign: flagStr.Contains('-'));
                             }
                             sb.Append(formatted);
@@ -252,7 +252,7 @@ public sealed class InvokeBashPrintfCommand : PSCmdlet
                             string str = val.ToString("x", CultureInfo.InvariantCulture);
                             if (flagStr.Contains('#')) str = "0x" + str;
                             if (widthStr.Length > 0)
-                                str = str.PadLeft(int.Parse(widthStr), '0');
+                                str = str.PadLeft(ParseFieldWidth(widthStr), '0');
                             sb.Append(str);
                         }
                         argIdx++;
@@ -265,7 +265,7 @@ public sealed class InvokeBashPrintfCommand : PSCmdlet
                             string str = val.ToString("X", CultureInfo.InvariantCulture);
                             if (flagStr.Contains('#')) str = "0X" + str;
                             if (widthStr.Length > 0)
-                                str = str.PadLeft(int.Parse(widthStr), '0');
+                                str = str.PadLeft(ParseFieldWidth(widthStr), '0');
                             sb.Append(str);
                         }
                         argIdx++;
@@ -279,7 +279,7 @@ public sealed class InvokeBashPrintfCommand : PSCmdlet
                             if (flagStr.Contains('#') && !str.StartsWith("0", StringComparison.Ordinal))
                                 str = "0" + str;
                             if (widthStr.Length > 0)
-                                str = str.PadLeft(int.Parse(widthStr), '0');
+                                str = str.PadLeft(ParseFieldWidth(widthStr), '0');
                             sb.Append(str);
                         }
                         argIdx++;
@@ -337,6 +337,15 @@ public sealed class InvokeBashPrintfCommand : PSCmdlet
     /// left with zeros, keeping any leading sign ahead of the zeros
     /// (<c>-1.5</c> width 6 → <c>-001.5</c>); otherwise pads left with spaces.
     /// </summary>
+    // printf field width / precision from the format spec (a \d+ run). A naive
+    // int.Parse throws OverflowException on an absurd spec like %999999999999d;
+    // clamping to int.MaxValue only trades that for an OutOfMemoryException in
+    // PadLeft. Cap at a value past any meaningful terminal field so neither can
+    // happen. The spec regex only yields digits, so a parse failure IS overflow.
+    private const int MaxPrintfField = 1_000_000;
+    private static int ParseFieldWidth(string digits)
+        => int.TryParse(digits, out int v) ? Math.Min(v, MaxPrintfField) : MaxPrintfField;
+
     private static string PadNumeric(string s, int width, bool zeroPad, bool leftAlign)
     {
         if (s.Length >= width) return s;

@@ -165,7 +165,7 @@ public sealed class InvokeBashRgCommand : PSCmdlet
             var ctxJoined = Regex.Match(a, @"^-([ABC])(\d+)$");
             if (ctxJoined.Success)
             {
-                int v = int.Parse(ctxJoined.Groups[2].Value);
+                int v = BashRuntime.ParseCountClamped(ctxJoined.Groups[2].Value);
                 switch (ctxJoined.Groups[1].Value)
                 {
                     case "A": afterContext = v; break;
