@@ -334,6 +334,10 @@ internal sealed class CommandAssistProviderRunner(CommandAssistConfig config)
         value = JwtPattern.Replace(value, "<redacted-jwt>");
         value = AwsAccessKeyPattern.Replace(value, "<redacted-aws-key>");
         value = SensitiveAssignmentPattern.Replace(value, m => m.Groups[1].Value + m.Groups[2].Value + "<redacted>");
+        // Credentials embedded in a URL's userinfo (scheme://user:PASSWORD@host).
+        value = UrlUserInfoPattern.Replace(value, "$1<redacted>$2");
+        // Password / secret command flags: --password X / --token=X / -pSECRET (joined).
+        value = SecretFlagPattern.Replace(value, m => m.Groups[1].Value + "<redacted>");
         return value;
     }
 
@@ -344,6 +348,21 @@ internal sealed class CommandAssistProviderRunner(CommandAssistConfig config)
         // group 1 = the key (with any surrounding word chars, e.g. AWS_SECRET_ACCESS_KEY),
         // group 2 = the = / : separator; the value (quoted or bare) is dropped.
         @"(?i)\b([\w.-]*(?:token|secret|password|passwd|pwd|api[_-]?key|access[_-]?key|session[_-]?token|client[_-]?secret|private[_-]?key|credential|auth)[\w.-]*)(\s*[:=]\s*)(?:""[^""]*""|'[^']*'|[^\s;,]+)",
+        System.Text.RegularExpressions.RegexOptions.Compiled);
+
+    // scheme://user:PASSWORD@host — redact only the password portion (group 1 keeps
+    // scheme://user:, group 2 keeps the @). Username is preserved (it is not the secret).
+    private static readonly System.Text.RegularExpressions.Regex UrlUserInfoPattern = new(
+        @"(?i)\b([a-z][a-z0-9+.\-]*://[^\s:/@]+:)[^\s@/]+(@)",
+        System.Text.RegularExpressions.RegexOptions.Compiled);
+
+    // Password / secret command flags. Group 1 (flag + separator) is kept; the value
+    // is dropped. Covers the long forms with =, space, or quotes, plus the classic
+    // short -p in its JOINED form (mysql -phunter2). Bare spaced `-p <arg>` is
+    // deliberately NOT matched — it is far more often a non-secret (cp/mkdir/ps/docker
+    // -p), and over-redacting it would strip useful context from the assist prompt.
+    private static readonly System.Text.RegularExpressions.Regex SecretFlagPattern = new(
+        @"(?i)((?:--(?:password|passwd|pass|token|secret|api[-_]?key|access[-_]?key|client[-_]?secret)(?:\s*=\s*|\s+)|(?<![\w-])-p(?=\S)))(?:""[^""]*""|'[^']*'|\S+)",
         System.Text.RegularExpressions.RegexOptions.Compiled);
 
     private static readonly System.Text.RegularExpressions.Regex BearerTokenPattern = new(

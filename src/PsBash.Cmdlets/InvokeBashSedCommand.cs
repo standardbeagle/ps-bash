@@ -424,6 +424,54 @@ public sealed class InvokeBashSedCommand : PSCmdlet
     /// before any other char, and escapes a literal $ to $$ so .NET does not
     /// read it as a group reference.
     /// </summary>
+    /// <summary>
+    /// Translate a POSIX Basic Regular Expression (sed's default) to a .NET regex.
+    /// In BRE, <c>( ) { } | + ?</c> are LITERAL unless backslash-escaped, and the
+    /// backslash-escaped forms <c>\( \) \{ \} \| \+ \?</c> are the metacharacters —
+    /// the exact inverse of .NET. A single-char lookbehind (the old approach) cannot
+    /// tell <c>\(</c> (escaped → group) from <c>\\(</c> (escaped backslash, then a
+    /// literal paren), and it never converted <c>\(</c> to a group at all. This
+    /// left-to-right walk tracks the escape state exactly.
+    /// </summary>
+    private static string TranslateBasicRegexToNet(string bre)
+    {
+        var sb = new StringBuilder(bre.Length + 8);
+        for (int i = 0; i < bre.Length; i++)
+        {
+            char c = bre[i];
+            if (c == '\\' && i + 1 < bre.Length)
+            {
+                char n = bre[i + 1];
+                switch (n)
+                {
+                    // BRE escaped metachar → .NET metachar (drop the backslash).
+                    case '(': case ')': case '{': case '}': case '|': case '+': case '?':
+                        sb.Append(n);
+                        break;
+                    // Everything else (\\, \., \1 backref, \n, \w, \< …) passes through
+                    // verbatim — including \\, which consumes both backslashes here so a
+                    // following bare metachar is correctly treated as a literal.
+                    default:
+                        sb.Append('\\').Append(n);
+                        break;
+                }
+                i++; // consumed the escaped char
+                continue;
+            }
+            switch (c)
+            {
+                // BRE bare metachar → literal (escape for .NET).
+                case '(': case ')': case '{': case '}': case '|': case '+': case '?':
+                    sb.Append('\\').Append(c);
+                    break;
+                default:
+                    sb.Append(c);
+                    break;
+            }
+        }
+        return sb.ToString();
+    }
+
     private static string BuildReplacement(string sed)
     {
         var sb = new StringBuilder(sed.Length);
@@ -697,14 +745,7 @@ public sealed class InvokeBashSedCommand : PSCmdlet
 
                 if (!extendedRegex)
                 {
-                    // BRE: ( ) { } | + ? are literal unless backslash-escaped.
-                    searchPattern = Regex.Replace(searchPattern, @"(?<!\\)\(", @"\(");
-                    searchPattern = Regex.Replace(searchPattern, @"(?<!\\)\)", @"\)");
-                    searchPattern = Regex.Replace(searchPattern, @"(?<!\\)\{", @"\{");
-                    searchPattern = Regex.Replace(searchPattern, @"(?<!\\)\}", @"\}");
-                    searchPattern = Regex.Replace(searchPattern, @"(?<!\\)\|", @"\|");
-                    searchPattern = Regex.Replace(searchPattern, @"(?<!\\)\+", @"\+");
-                    searchPattern = Regex.Replace(searchPattern, @"(?<!\\)\?", @"\?");
+                    searchPattern = TranslateBasicRegexToNet(searchPattern);
                 }
 
                 Regex regex;
