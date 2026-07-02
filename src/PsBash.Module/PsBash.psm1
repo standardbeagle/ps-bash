@@ -3332,6 +3332,10 @@ function Test-BashCondition {
         }
     }
     if ($args_list.Count -eq 3) {
+        # `[ ! <unary> <operand> ]` — negation of a 2-token primary.
+        if ($args_list[0] -eq '!') {
+            return -not [bool](Test-BashCondition $args_list[1] $args_list[2])
+        }
         $lhs = $args_list[0]
         $op  = $args_list[1]
         $rhs = $args_list[2]
@@ -3349,42 +3353,44 @@ function Test-BashCondition {
         }
     }
 
-    $i = 0
-    $result = $true
-    $currentOp = $null
-    while ($i -lt $args_list.Count) {
-        $tok = $args_list[$i]
-        if ($tok -eq '!') {
-            $i++
-            if ($i -lt $args_list.Count) {
-                $nextResult = Test-BashCondition $args_list[$i]
-                $result = -not $nextResult
-            }
-            $i++
-            continue
+    # N-ary expression. In bash `[ ]`, -a (AND) binds TIGHTER than -o (OR):
+    #   A -o B -a C  ==  A OR (B AND C)
+    # The old loop treated every operand as a unary `flag value` pair, so a binary
+    # primary like `1 -eq 2` was mis-parsed (Test-BashCondition 1 -eq → true) and
+    # -a/-o carried no precedence — `[ 1 -eq 2 -a 3 -eq 3 ]` wrongly returned true.
+    # Split on -o into OR-groups, each split on -a into AND-terms; evaluate each
+    # term as a primary (1/2/3 tokens, optional leading `!`) by recursion.
+    $evalTerm = {
+        param([string[]]$toks)
+        if ($null -eq $toks -or $toks.Count -eq 0) { return $true }
+        $neg = $false
+        if ($toks[0] -eq '!') {
+            $neg = $true
+            $toks = if ($toks.Count -gt 1) { [string[]]$toks[1..($toks.Count - 1)] } else { [string[]]@() }
         }
-        if ($tok -eq '-a') {
-            $currentOp = 'and'
-            $i++
-            continue
-        }
-        if ($tok -eq '-o') {
-            $currentOp = 'or'
-            $i++
-            continue
-        }
-        if ($i + 2 -le $args_list.Count) {
-            $check = Test-BashCondition $tok $args_list[$i+1]
-        } else {
-            $check = [bool]$tok
-        }
-        if ($currentOp -eq 'and') { $result = $result -and $check }
-        elseif ($currentOp -eq 'or') { $result = $result -or $check }
-        else { $result = $check }
-        $currentOp = $null
-        $i += 2
+        $r = if ($toks.Count -eq 0) { $false } else { [bool](Test-BashCondition @toks) }
+        if ($neg) { -not $r } else { $r }
     }
-    return $result
+
+    $orResult  = $false
+    $andResult = $true
+    $term = [System.Collections.Generic.List[string]]::new()
+    foreach ($tok in $args_list) {
+        if ($tok -eq '-a') {
+            $andResult = $andResult -and [bool](& $evalTerm $term.ToArray())
+            $term.Clear()
+        } elseif ($tok -eq '-o') {
+            $andResult = $andResult -and [bool](& $evalTerm $term.ToArray())
+            $orResult  = $orResult -or $andResult
+            $andResult = $true
+            $term.Clear()
+        } else {
+            $term.Add($tok)
+        }
+    }
+    $andResult = $andResult -and [bool](& $evalTerm $term.ToArray())
+    $orResult  = $orResult -or $andResult
+    return $orResult
 }
 
 # --- let ---
