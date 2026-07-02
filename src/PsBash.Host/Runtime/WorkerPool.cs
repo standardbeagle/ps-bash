@@ -134,8 +134,14 @@ public sealed class WorkerPool<TWorker> : IAsyncDisposable where TWorker : class
     {
         ArgumentNullException.ThrowIfNull(worker);
         _ = DisposeWorkerAsync(worker);
-        _slots.Release();
-        if (_disposed == 0) TopUpWarm();
+        // If the pool was disposed while this worker was checked out, _slots is
+        // already disposed and Release() would throw ObjectDisposedException on
+        // the caller's cleanup path. The slot count no longer matters once the
+        // pool is gone, so skip it (and the warm top-up) rather than throw.
+        if (_disposed != 0) return;
+        try { _slots.Release(); }
+        catch (ObjectDisposedException) { return; }
+        TopUpWarm();
     }
 
     private bool TryTakeIdle(out TWorker worker)

@@ -36,14 +36,20 @@ internal sealed class HostSpawnLock : IDisposable
 
     /// <summary>
     /// Try to acquire the spawn lock for <paramref name="scheme"/>:<paramref name="endpoint"/>
-    /// without blocking. Returns the held lock, or <c>null</c> if another launcher
-    /// holds it (the caller should wait for that launcher's host instead of
-    /// spawning), or if the lock file cannot be created at all — in which case the
-    /// caller degrades to spawning unguarded, which is never worse than the
-    /// pre-lock behavior.
+    /// without blocking. Returns the held lock, or <c>null</c> in two distinct
+    /// cases the caller MUST tell apart via <paramref name="lockUnavailable"/>:
+    /// <list type="bullet">
+    /// <item><paramref name="lockUnavailable"/> = <c>false</c>: another launcher holds
+    /// the lock (contention). The caller should wait for that launcher's host.</item>
+    /// <item><paramref name="lockUnavailable"/> = <c>true</c>: the lock file could not
+    /// be created at all (e.g. unwritable temp dir). No winner will ever appear, so
+    /// the caller must DEGRADE to spawning unguarded — waiting-for-winner here is a
+    /// permanent hang. Unguarded spawn is never worse than the pre-lock behavior.</item>
+    /// </list>
     /// </summary>
-    public static HostSpawnLock? TryAcquire(string scheme, string endpoint)
+    public static HostSpawnLock? TryAcquire(string scheme, string endpoint, out bool lockUnavailable)
     {
+        lockUnavailable = false;
         string path;
         try
         {
@@ -53,7 +59,8 @@ internal sealed class HostSpawnLock : IDisposable
         }
         catch
         {
-            return null; // cannot establish a lock file — degrade to unguarded spawn
+            lockUnavailable = true; // cannot establish a lock file — caller degrades to unguarded spawn
+            return null;
         }
 
         try
@@ -61,8 +68,8 @@ internal sealed class HostSpawnLock : IDisposable
             var fs = new FileStream(path, FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None);
             return new HostSpawnLock(fs);
         }
-        catch (IOException) { return null; }                 // held by a concurrent launcher
-        catch (UnauthorizedAccessException) { return null; } // transient ACL/permission race
+        catch (IOException) { return null; }                 // held by a concurrent launcher (contention)
+        catch (UnauthorizedAccessException) { return null; } // transient ACL/permission race — treat as contention, retry
     }
 
     /// <summary>

@@ -68,6 +68,11 @@ public sealed class SdkWorker : IWorker, ICompletionWorker
             await _lock.WaitAsync(ct);
             try
             {
+                // When ct fires mid-command, stop the PS pipeline so RunCommand
+                // returns instead of running to completion while holding the gate.
+                // Without this a runaway command holds _globalExecGate forever
+                // (Task.Run's ct only affects scheduling, not an in-flight delegate).
+                using var stopReg = ct.Register(() => _ps.Stop());
                 return await Task.Run(() => WithDefaultRunspace(() => RunCommand(command, callback, null)), ct);
             }
             finally

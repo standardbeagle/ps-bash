@@ -218,11 +218,20 @@ public sealed class IpcWorker : IWorker
         {
             ct.ThrowIfCancellationRequested();
 
-            using (var spawnLock = HostSpawnLock.TryAcquire(_scheme, _endpoint))
+            using (var spawnLock = HostSpawnLock.TryAcquire(_scheme, _endpoint, out bool lockUnavailable))
             {
                 if (spawnLock is not null)
                 {
                     // We hold the spawn right — run the full replace-or-spawn path.
+                    await SpawnOrReplaceHostAsync(ct).ConfigureAwait(false);
+                    return;
+                }
+                if (lockUnavailable)
+                {
+                    // The lock file itself couldn't be created (e.g. unwritable temp).
+                    // No lock-holder will ever appear, so waiting-for-winner below would
+                    // hang forever with a misleading error. Degrade to an unguarded
+                    // spawn — never worse than the pre-lock behavior.
                     await SpawnOrReplaceHostAsync(ct).ConfigureAwait(false);
                     return;
                 }
@@ -1034,9 +1043,9 @@ public sealed class IpcWorker : IWorker
             // timeout can no longer kill a daemon that other launchers are mid-
             // command on. If another launcher already holds the lock it owns host
             // lifecycle right now — leave it be rather than racing its decision.
-            using var spawnLock = HostSpawnLock.TryAcquire(_scheme, _endpoint);
+            using var spawnLock = HostSpawnLock.TryAcquire(_scheme, _endpoint, out _);
             if (spawnLock is null)
-                return;
+                return; // contended (another launcher owns lifecycle) or no lock file — either way, don't kill unguarded
 
             // Re-probe under the lock before killing. The host may have recovered,
             // or a lock-holder we queued behind may have already replaced it — in
