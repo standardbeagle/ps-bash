@@ -148,6 +148,22 @@ function Invoke-ProcessSub {
 
     $subDir = [System.IO.Path]::Combine([System.IO.Path]::GetTempPath(), 'ps-bash', 'proc-sub')
     [void][System.IO.Directory]::CreateDirectory($subDir)
+
+    # The consumer reads $tmp during the same command and nothing deletes it after,
+    # so in a long-lived daemon host these files accumulate unbounded. Best-effort
+    # reap any older than a few minutes — well past the lifetime of the command that
+    # created them, so an in-flight substitution is never swept out from under a reader.
+    try {
+        $cutoff = [DateTime]::UtcNow.AddMinutes(-5)
+        foreach ($old in [System.IO.Directory]::EnumerateFiles($subDir)) {
+            try {
+                if ([System.IO.File]::GetLastWriteTimeUtc($old) -lt $cutoff) {
+                    [System.IO.File]::Delete($old)
+                }
+            } catch { }
+        }
+    } catch { }
+
     $tmp = [System.IO.Path]::Combine($subDir, [System.IO.Path]::GetRandomFileName())
     try {
         $output = & $Command
@@ -1260,7 +1276,9 @@ function Get-LinuxProcEntry {
     )
 
     $pidStr = Split-Path $ProcDir -Leaf
-    $pid = [int]$pidStr
+    # NOT $pid: that is a read-only automatic variable (the host's own PID); assigning
+    # it fails with an error record and leaves every entry reporting the host PID.
+    $procId = [int]$pidStr
 
     # Read /proc/[pid]/stat
     $statPath = Join-Path $ProcDir 'stat'
@@ -1369,7 +1387,7 @@ function Get-LinuxProcEntry {
     $statStr = $state
 
     [PSCustomObject]@{
-        PID         = $pid
+        PID         = $procId
         PPID        = $ppid
         User        = $userName
         CPU         = [double]$cpuPct
@@ -1398,7 +1416,8 @@ function Get-DotNetProcEntry {
 
     $p = $Process
     $procName = $p.ProcessName
-    $pid = $p.Id
+    # NOT $pid (read-only automatic = host PID). See Get-LinuxProcEntry.
+    $procId = $p.Id
     $ppid = 0
     $userName = ''
     $cpu = [double]0.0
@@ -1441,8 +1460,8 @@ function Get-DotNetProcEntry {
     } catch {}
 
     if ($IsWindows) {
-        if ($null -ne $script:WinCimLookup -and $script:WinCimLookup.ContainsKey($pid)) {
-            $info = $script:WinCimLookup[$pid]
+        if ($null -ne $script:WinCimLookup -and $script:WinCimLookup.ContainsKey($procId)) {
+            $info = $script:WinCimLookup[$procId]
             $cmdline = $info.CommandLine
             $userName = $info.User
             $ppid = $info.PPID
@@ -1452,8 +1471,8 @@ function Get-DotNetProcEntry {
         }
         if ($p.SessionId -gt 0) { $tty = "con$($p.SessionId)" }
     } elseif ($IsMacOS) {
-        if ($null -ne $script:MacPsLookup -and $script:MacPsLookup.ContainsKey($pid)) {
-            $info = $script:MacPsLookup[$pid]
+        if ($null -ne $script:MacPsLookup -and $script:MacPsLookup.ContainsKey($procId)) {
+            $info = $script:MacPsLookup[$procId]
             $userName = $info.User
             $ppid = $info.PPID
             $tty = $info.TTY
@@ -1467,7 +1486,7 @@ function Get-DotNetProcEntry {
     elseif ($p.Threads.Count -gt 1) { $statStr = 'Sl' }
 
     [PSCustomObject]@{
-        PID         = $pid
+        PID         = $procId
         PPID        = $ppid
         User        = $userName
         CPU         = [double]$cpu
