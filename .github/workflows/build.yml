@@ -88,6 +88,15 @@ jobs:
         timeout-minutes: 15
         run: dotnet test src/PsBash.Core.Tests/PsBash.Core.Tests.csproj --no-build -c Release --blame-hang-timeout 180s --blame-hang-dump-type none
 
+      # Security probes are Directive-12 mandatory and MUST gate the build. They
+      # previously rode along only in the non-blocking full-suite step below, so a
+      # transpiler quoting-seam / injection regression shipped green (#16). Scoped
+      # to Category=Security so it runs the injection/quoting probes without pulling
+      # in the bash-oracle / TTY suites CI cannot run.
+      - name: Security probes (gates the build)
+        timeout-minutes: 15
+        run: dotnet test src/PsBash.Escalation.Tests/PsBash.Escalation.Tests.csproj --no-build -c Release --filter "Category=Security" --blame-hang-timeout 180s --blame-hang-dump-type none
+
       # Full xUnit suite for visibility — NON-BLOCKING. The Differential suite
       # needs a bash oracle that GitHub runners lack (even `echo hello` fails),
       # the Shell/PTY suite needs TTY primitives (setsid) they lack, and a Cmdlets

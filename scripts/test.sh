@@ -31,12 +31,26 @@ cleanup() {
     # ps-bash.exe because the binary was locked. Use taskkill.exe with exact
     # image-name matching so we never touch unrelated user processes (e.g.
     # an interactive `pwsh` session would NOT be matched here).
-    if command -v taskkill.exe >/dev/null 2>&1; then
-        # Test-spawned ps-bash binaries that can lock build outputs.
+    # Windows: kill ONLY this repo's leaked test processes, not every testhost /
+    # vstest / ps-bash on the box. On a shared machine with many concurrent agents
+    # (each in its own worktree) the old blanket `taskkill //IM testhost.exe`
+    # aborted OTHER agents' in-flight test runs (#17). Scope by matching this
+    # repo's path in the process ExecutablePath/CommandLine via a CIM query.
+    if command -v pwsh >/dev/null 2>&1 && command -v taskkill.exe >/dev/null 2>&1; then
+        PSBASH_CLEANUP_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -W 2>/dev/null || pwd)" \
+        pwsh -NoProfile -Command '
+            $root = $env:PSBASH_CLEANUP_ROOT.Replace("\","/").ToLower()
+            if ([string]::IsNullOrWhiteSpace($root)) { return }
+            Get-CimInstance Win32_Process -ErrorAction SilentlyContinue |
+              Where-Object { $_.Name -in @("testhost.exe","vstest.console.exe","ps-bash.exe","ps-bash-host.exe") } |
+              Where-Object { "$($_.ExecutablePath) $($_.CommandLine)".Replace("\","/").ToLower().Contains($root) } |
+              ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
+        ' 2>/dev/null || true
+    elif command -v taskkill.exe >/dev/null 2>&1; then
+        # Fallback (no pwsh): blanket image kill. Machine-wide — only reached on a
+        # box without PowerShell, where the shared-agent hazard does not apply.
         taskkill.exe //F //IM ps-bash-host.exe //T 2>/dev/null || true
         taskkill.exe //F //IM ps-bash.exe      //T 2>/dev/null || true
-        # Test infrastructure that may hold ps-bash children alive via Job
-        # Object inheritance.
         taskkill.exe //F //IM testhost.exe        //T 2>/dev/null || true
         taskkill.exe //F //IM vstest.console.exe  //T 2>/dev/null || true
     elif command -v pkill >/dev/null 2>&1; then
