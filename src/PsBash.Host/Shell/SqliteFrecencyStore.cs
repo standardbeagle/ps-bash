@@ -179,7 +179,7 @@ public sealed class SqliteFrecencyStore : IFrecencyStore, IDisposable
                             var lastAccess = reader.GetInt64(2);
 
                             if (!KeywordsMatch(path, keywords)) continue;
-                            if (!Directory.Exists(path)) { stale.Add(path); continue; }
+                            if (!DirectoryExistsBounded(path)) { stale.Add(path); continue; }
 
                             matches.Add(new FrecencyMatch { Path = path, Score = Frecency(rank, now - lastAccess) });
                         }
@@ -198,6 +198,29 @@ public sealed class SqliteFrecencyStore : IFrecencyStore, IDisposable
                 return Array.Empty<FrecencyMatch>();
             }
         });
+    }
+
+    /// <summary>
+    /// Existence check that cannot freeze the completion query. <see cref="Directory.Exists"/>
+    /// on a dead network path blocks for the full SMB timeout (seconds) — with the query on the
+    /// keystroke path that froze typing. UNC paths get a bounded probe; on timeout we assume the
+    /// dir exists (keep it, do NOT prune) so a transient network stall neither hangs the prompt
+    /// nor evicts a real directory. Local paths take the direct, fast check.
+    /// </summary>
+    private static bool DirectoryExistsBounded(string path)
+    {
+        bool isUnc = path.StartsWith(@"\\", StringComparison.Ordinal)
+            || path.StartsWith("//", StringComparison.Ordinal);
+        if (!isUnc) return Directory.Exists(path);
+        try
+        {
+            var probe = Task.Run(() => Directory.Exists(path));
+            return probe.Wait(TimeSpan.FromMilliseconds(200)) ? probe.Result : true;
+        }
+        catch
+        {
+            return true;
+        }
     }
 
     private void PruneStale(List<string> stale)

@@ -103,7 +103,7 @@ internal sealed class CompletionEngine
             var argCmd = TabCompleter.GetCommandNameAtCursor(beforeToken, beforeToken.Length, _aliases);
             if (argCmd is not null && FrecencyDirCommands.Contains(argCmd))
             {
-                var dirs = await QueryFrecencyDirsAsync(token).ConfigureAwait(false);
+                var dirs = await QueryFrecencyDirsAsync(token, ct).ConfigureAwait(false);
                 if (dirs.Count > 0)
                     baseResults = CompletionMerge.Append(dirs, baseResults, sortSecondary: false);
             }
@@ -176,13 +176,16 @@ internal sealed class CompletionEngine
 
     // Frecency directory candidates for a cd/z/zi argument: the token is a single
     // keyword (empty → all tracked dirs, ranked); inserts the full directory path.
-    private async Task<IReadOnlyList<CompletionItem>> QueryFrecencyDirsAsync(string token)
+    private async Task<IReadOnlyList<CompletionItem>> QueryFrecencyDirsAsync(string token, CancellationToken ct)
     {
         if (_frecency is null) return Array.Empty<CompletionItem>();
         var keywords = string.IsNullOrEmpty(token) ? Array.Empty<string>() : new[] { token };
         try
         {
-            var matches = await _frecency.QueryAsync(keywords, limit: 10).ConfigureAwait(false);
+            // Bound by the caller's deadline (the 200ms Tab token). Even with the
+            // store's own bounded existence check, a stalled DB/network must never
+            // hold the keystroke path — on cancel we fall back to the base set.
+            var matches = await _frecency.QueryAsync(keywords, limit: 10).WaitAsync(ct).ConfigureAwait(false);
             return matches.Count == 0
                 ? Array.Empty<CompletionItem>()
                 : matches.Select(m => new CompletionItem(m.Path)).ToList();

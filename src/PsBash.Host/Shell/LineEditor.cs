@@ -1184,7 +1184,7 @@ internal sealed class LineEditor
         {
             try
             {
-                var frec = await _frecencySuggest(line).ConfigureAwait(false);
+                var frec = await _frecencySuggest(line).WaitAsync(ct).ConfigureAwait(false);
                 suggestion = string.IsNullOrEmpty(frec) ? null : frec;
             }
             catch (Exception) { suggestion = null; }
@@ -1194,7 +1194,7 @@ internal sealed class LineEditor
         {
             try
             {
-                var suffix = await _suggester.SuggestAsync(line, _cwd).ConfigureAwait(false);
+                var suffix = await _suggester.SuggestAsync(line, _cwd).WaitAsync(ct).ConfigureAwait(false);
                 // SuggestAsync returns "" for an exact match (nothing to append) and null for no match —
                 // both mean "no ghost".
                 suggestion = string.IsNullOrEmpty(suffix) ? null : suffix;
