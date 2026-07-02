@@ -1831,7 +1831,12 @@ public static class PsEmitter
         // Command-word prefix: a path-like `.sh`/`.bash` script runs through `bash` (so it executes
         // correctly AND composes in a pipeline — see IsLocalShellScriptCommand); otherwise a quoted
         // command word needs the `& ` call operator; a bare command word needs nothing.
-        string leading = IsLocalShellScriptCommand(cmd.Words[0]) ? "bash "
+        // Guard the Words[0] access: a Simple command CAN have zero words (an empty
+        // inner body of a malformed `<(` / `$(` / bare heredoc that the parser accepts).
+        // Without the guard this threw IndexOutOfRange — a crash, not the clean
+        // parseable-or-ParseException the fuzz invariant requires.
+        string leading = cmd.Words.Length == 0 ? ""
+            : IsLocalShellScriptCommand(cmd.Words[0]) ? "bash "
             : IsQuotedCommandWord(cmd.Words[0]) ? "& "
             : IsVariableCommandWord(cmd.Words[0]) ? "& "
             : "";
