@@ -90,6 +90,12 @@ public sealed class IpcWorker : IWorker
     private readonly TimeSpan _startupTimeout;
     private readonly TimeSpan _startupPollInterval;
     private readonly Lifetime _lifetime;
+    // Serializes ExecuteAsync / QueryAsync on this worker. One request in flight at
+    // a time is already the de facto model (a launcher issues one command; the pool
+    // gives each -c connection its own worker), and it makes QueryAsync's temporary
+    // OutputCallback swap safe: without it a concurrent request could observe or
+    // clobber the swapped-in collector and misroute output frames.
+    private readonly SemaphoreSlim _requestGate = new(1, 1);
     // PerInvocation only: the private host process this worker owns and kills on
     // dispose. Null for Daemon lifetime (the shared host outlives this worker).
     private Process? _ownedHost;
@@ -673,7 +679,15 @@ public sealed class IpcWorker : IWorker
     {
         ObjectDisposedException.ThrowIf(_disposed != 0, this);
         ArgumentNullException.ThrowIfNull(command);
-        return await SendRequestAsync(new Mode.Command(command), ct).ConfigureAwait(false);
+        await _requestGate.WaitAsync(ct).ConfigureAwait(false);
+        try
+        {
+            return await SendRequestAsync(new Mode.Command(command), ct).ConfigureAwait(false);
+        }
+        finally
+        {
+            _requestGate.Release();
+        }
     }
 
     public async Task<string> QueryAsync(string expression, CancellationToken ct = default)
@@ -681,7 +695,10 @@ public sealed class IpcWorker : IWorker
         ObjectDisposedException.ThrowIf(_disposed != 0, this);
         ArgumentNullException.ThrowIfNull(expression);
 
+        await _requestGate.WaitAsync(ct).ConfigureAwait(false);
         var lines = new List<string>();
+        // Safe now that _requestGate serializes requests: nothing else touches
+        // OutputCallback while this swap is in effect.
         var prevCallback = OutputCallback;
         OutputCallback = line => lines.Add(line);
         try
@@ -692,6 +709,7 @@ public sealed class IpcWorker : IWorker
         finally
         {
             OutputCallback = prevCallback;
+            _requestGate.Release();
         }
     }
 
@@ -1292,6 +1310,7 @@ public sealed class IpcWorker : IWorker
             try { HostMetadata.Remove(_scheme, _endpoint); } catch { }
         }
 
+        try { _requestGate.Dispose(); } catch { /* best effort */ }
         return ValueTask.CompletedTask;
     }
 
