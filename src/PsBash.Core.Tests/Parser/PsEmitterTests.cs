@@ -894,7 +894,7 @@ public class PsEmitterTests
 
         Assert.Equal(
             "& { $__bashsplat0 = @(if ([string]::IsNullOrEmpty($env:FOO)) " +
-            "{ @() } else { @($env:FOO -split '\\s+') }); " +
+            "{ @() } else { @($env:FOO -split '\\s+' | Where-Object { $_ -ne '' }) }); " +
             "Invoke-BashEcho @__bashsplat0 }",
             result);
     }
@@ -909,7 +909,7 @@ public class PsEmitterTests
 
         Assert.Equal(
             "& { $__bashsplat0 = @(if ([string]::IsNullOrEmpty($env:PATH)) " +
-            "{ @() } else { @($env:PATH -split '\\s+') }); " +
+            "{ @() } else { @($env:PATH -split '\\s+' | Where-Object { $_ -ne '' }) }); " +
             "Invoke-BashEcho @__bashsplat0 }",
             result);
     }
@@ -2886,7 +2886,7 @@ public class PsEmitterTests
         Assert.Equal(
             "[void]($env:FOO = \"bar\") && $(& { $__bashsplat0 = " +
             "@(if ([string]::IsNullOrEmpty($env:FOO)) { @() } " +
-            "else { @($env:FOO -split '\\s+') }); " +
+            "else { @($env:FOO -split '\\s+' | Where-Object { $_ -ne '' }) }); " +
             "Invoke-BashEcho @__bashsplat0 })",
             result);
     }
@@ -3987,7 +3987,7 @@ public class PsEmitterTests
 
         Assert.Contains("$__bashsplat0 = @(if ([string]::IsNullOrEmpty($env:x))",
             result);
-        Assert.Contains("@($env:x -split '\\s+')", result);
+        Assert.Contains("@($env:x -split '\\s+' | Where-Object { $_ -ne '' })", result);
         Assert.Contains("@__bashsplat0", result);
         // Wrapped in & { } so the temp assignment never leaks into a pipeline.
         Assert.Contains("& {", result);

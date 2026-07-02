@@ -137,7 +137,9 @@ public class PsBuildTests
         // which would splat one spurious empty argument).
         var result = PsBuild.WordSplitArray("$env:x");
         Assert.StartsWith("@(if ", result);
-        Assert.Equal("@(if ([string]::IsNullOrEmpty($env:x)) { @() } else { @($env:x -split '\\s+') })", result);
+        // Where-Object filters the leading/trailing empty fields -split yields on
+        // whitespace-padded values, matching bash IFS word-splitting (RC-7 fix).
+        Assert.Equal("@(if ([string]::IsNullOrEmpty($env:x)) { @() } else { @($env:x -split '\\s+' | Where-Object { $_ -ne '' }) })", result);
     }
 
     // ─────────────── NullSafeBashText ───────────────

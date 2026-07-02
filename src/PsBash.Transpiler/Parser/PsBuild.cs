@@ -151,14 +151,21 @@ public static class PsBuild
     /// <summary>
     /// The array an unquoted ordinary <c>$var</c> operand word-splits into, for
     /// <c>@</c>-splatting: <c>@(if ([string]::IsNullOrEmpty(varRef)) { @() } else {
-    /// @(varRef -split '\s+') })</c>. The OUTER <c>@(...)</c> is required — assigning a
-    /// bare <c>if (...) { @() }</c> collapses the empty branch to <c>$null</c>, and
-    /// splatting <c>$null</c> injects one spurious empty argument; <c>@(...)</c> forces
-    /// array context so the empty branch stays an empty array that splats to nothing.
+    /// @(varRef -split '\s+' | Where-Object { $_ -ne '' }) })</c>. The OUTER
+    /// <c>@(...)</c> is required — assigning a bare <c>if (...) { @() }</c> collapses
+    /// the empty branch to <c>$null</c>, and splatting <c>$null</c> injects one
+    /// spurious empty argument; <c>@(...)</c> forces array context so the empty branch
+    /// stays an empty array that splats to nothing.
+    /// <para>The <c>Where-Object { $_ -ne '' }</c> is load-bearing: PowerShell's
+    /// <c>-split '\s+'</c> yields a LEADING empty field when the value has leading
+    /// whitespace (<c>"  a b" -split</c> → <c>['', 'a', 'b']</c>) and a trailing empty
+    /// for trailing whitespace, but bash IFS word-splitting discards both (<c>set -- $x</c>
+    /// on <c>"  a b"</c> gives 2 params, not 3). Filtering empties matches bash — and
+    /// also makes a whitespace-only value split to nothing.</para>
     /// </summary>
     public static string WordSplitArray(string varRef) =>
         "@(if ([string]::IsNullOrEmpty(" + varRef + ")) { @() } "
-        + "else { @(" + varRef + " -split '\\s+') })";
+        + "else { @(" + varRef + " -split '\\s+' | Where-Object { $_ -ne '' }) })";
 
     // ─────────────────────── Null-safe pipeline text extraction ────────────────────────
 
