@@ -3918,7 +3918,11 @@ function Invoke-BrowseInteractive {
 # --- Prompt Hook Integration ---
 
 # Initialized at module load; tracks last known working directory for chpwd detection.
-$global:__BashLastCwd = (Get-Location).Path
+# MUST be $script: (module scope) to match the prompt wrapper, which reads and writes
+# $script:__BashLastCwd. Initializing it as $global: left the script-scoped variable
+# $null on the first prompt, so chpwd fired spuriously on shell startup (oldPath $null
+# != the initial cwd) — bash does not fire chpwd for the shell's starting directory.
+$script:__BashLastCwd = (Get-Location).Path
 
 # Error log for hook exceptions; grows unbounded unless cleared by user.
 # Unconditionally initialize to ensure it's always a List (idempotent on re-import).

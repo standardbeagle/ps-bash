@@ -268,9 +268,9 @@ function Invoke-BashPrompt {
     $currentPath = $PWD.Path
 
     # --- ChpwdHook firing ---
-    if ($currentPath -ne $global:__BashLastCwd) {
-        $oldPath = $global:__BashLastCwd
-        $global:__BashLastCwd = $currentPath
+    if ($currentPath -ne $script:__BashLastCwd) {
+        $oldPath = $script:__BashLastCwd
+        $script:__BashLastCwd = $currentPath
         foreach ($sb in [HookRegistry]::Instance.GetByKind('ChpwdHook')) {
             try {
                 & $sb -OldPath $oldPath -NewPath $currentPath
@@ -486,7 +486,7 @@ public sealed class BashHookInfo
 
 | Variable | Type | Initial Value | Purpose |
 |----------|------|---------------|---------|
-| `$global:__BashLastCwd` | `string` | `$PWD.Path` at module import | Previous directory; compared each prompt tick to detect changes |
+| `$script:__BashLastCwd` | `string` | `$PWD.Path` at module import | Previous directory; compared each prompt tick to detect changes |
 | `$global:BashHookErrors` | `List[ErrorRecord]` | `@()` | Error log for hook exceptions |
 
 Both variables are initialized by the `PsBash.Cmdlets` module's `OnImport` handler.
@@ -542,7 +542,7 @@ returned array, not the live dictionary.
 
 ### 11.3 First-Tick Initialization
 
-On the first prompt tick, `$global:__BashLastCwd` is the directory at module
+On the first prompt tick, `$script:__BashLastCwd` is the directory at module
 import time. If the user changes directory before the first prompt fires (rare
 but possible in scripts), the chpwd hook fires correctly because `$PWD.Path`
 will differ from the recorded initial value.
@@ -572,7 +572,7 @@ Implementation is complete when:
 - [ ] A hook can unregister itself; no collection-modified exception
 - [ ] `direnv export pwsh | Invoke-Expression` from inside a ChpwdHook lands env mutations in the process
 - [ ] `fnm use` from inside a ChpwdHook updates `$env:PATH` persistently
-- [ ] `$global:__BashLastCwd` is initialized on module import
+- [ ] `$script:__BashLastCwd` is initialized on module import
 - [ ] Hooks fire in deterministic name-sorted order
 
 ---
@@ -751,7 +751,7 @@ When `Remove-Module PsBash.Cmdlets` executes:
 - The `HookRegistry` instance is released.
 - The module's `OnRemove` handler restores `$global:__BashOriginalPrompt` as the
   active `prompt` function (if one was captured during import).
-- `$global:BashHookErrors` and `$global:__BashLastCwd` are left in place (not
+- `$global:BashHookErrors` and `$script:__BashLastCwd` are left in place (not
   cleared) to allow post-unload inspection.
 
 ### 16.3 No Per-Session Scope
