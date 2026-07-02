@@ -150,6 +150,9 @@ public class TranspileParseabilityCorpusTests
     // ── 3.11 special vars / env prefix / declare ───────────────────────
     [InlineData("echo $? $@ $# $1 $$ $! $- $_ $0 ${10}")]
     [InlineData("FOO=bar BAZ=qux cmd")]
+    // variable in command position — fixed: emitted unparseable `$env:CMD hello`.
+    [InlineData("CMD=echo; $CMD hello")]
+    [InlineData("arr=(\"$x\" b)")]
     [InlineData("export PATH=/x:$PATH")]
     [InlineData("declare -i n=5")]   // fixed: emitted broken [int]$global:n=5 = 0
     [InlineData("declare -i count")]

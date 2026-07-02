@@ -520,6 +520,12 @@ public static class PsEmitter
             else
                 break;
         }
+        // Bash runs only the first matching arm; PowerShell's switch runs EVERY
+        // matching clause. Emit an explicit break so overlapping patterns don't
+        // fire multiple arms. ;;& (ContinueTest) intentionally omits it (bash
+        // re-tests remaining patterns — a switch clause with no break does too).
+        if (arms[j].Terminator != CaseTerminator.ContinueTest)
+            sb.Append("; break");
         return sb.ToString();
     }
 
@@ -1428,20 +1434,10 @@ public static class PsEmitter
                     if (j > 0)
                         sb.Append(',');
                     var elem = pair.ArrayValue.Elements[j];
-                    // If the element is a pure single-quoted word, emit 'value' directly
-                    // to avoid doubled quotes ('value' -> ''value'').
-                    if (elem.Parts.Length == 1 && elem.Parts[0] is WordPart.SingleQuoted sq)
-                    {
-                        sb.Append('\'');
-                        sb.Append(sq.Value);
-                        sb.Append('\'');
-                    }
-                    else
-                    {
-                        sb.Append('\'');
-                        sb.Append(EmitWord(elem));
-                        sb.Append('\'');
-                    }
+                    // Emit each element as a properly-quoted PS value expression. Naively
+                    // wrapping EmitWord() in single quotes stored the literal string "$env:x"
+                    // for a "$x" element and produced unbalanced quotes for $'a\'b' elements.
+                    sb.Append(EmitAssignmentValue(elem));
                 }
                 sb.Append(')');
                 continue;
@@ -1457,9 +1453,10 @@ public static class PsEmitter
                 sb.Append(baseName);
                 sb.Append("['");
                 sb.Append(subscript);
-                sb.Append("'] = '");
-                sb.Append(pair.Value is not null ? EmitWord(pair.Value) : "");
-                sb.Append('\'');
+                sb.Append("'] = ");
+                // Emit the value as a properly-quoted PS expression; single-quoting
+                // EmitWord() stored the literal "$env:x" for a $x value.
+                sb.Append(EmitAssignmentValue(pair.Value));
                 continue;
             }
 
@@ -1838,6 +1835,7 @@ public static class PsEmitter
         // command word needs the `& ` call operator; a bare command word needs nothing.
         string leading = IsLocalShellScriptCommand(cmd.Words[0]) ? "bash "
             : IsQuotedCommandWord(cmd.Words[0]) ? "& "
+            : IsVariableCommandWord(cmd.Words[0]) ? "& "
             : "";
 
         if (HasUnquotedVarSplatArg(commandArgs))
@@ -4052,6 +4050,19 @@ public static class PsEmitter
         if (word.Parts.Length != 1)
             return false;
         return word.Parts[0] is WordPart.SingleQuoted or WordPart.DoubleQuoted;
+    }
+
+    /// <summary>
+    /// True when the command word is a bare variable expansion (<c>$CMD</c> / <c>${CMD}</c>).
+    /// Such a word emits to <c>$env:CMD</c>, which PowerShell reads as a value, not a command —
+    /// running it as a command requires the <c>&amp;</c> call operator (<c>&amp; $env:CMD args</c>).
+    /// Without this, <c>CMD=echo; $CMD hi</c> transpiled to the unparseable <c>$env:CMD hi</c>.
+    /// </summary>
+    private static bool IsVariableCommandWord(CompoundWord word)
+    {
+        if (word.Parts.Length != 1)
+            return false;
+        return word.Parts[0] is WordPart.SimpleVarSub or WordPart.BracedVarSub;
     }
 
     /// <summary>

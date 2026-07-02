@@ -232,7 +232,10 @@ public sealed class SdkWorker : IWorker, ICompletionWorker
             {
                 // Output callback failed (e.g. IPC stream closed). Stop the pipeline
                 // rather than letting subsequent calls fire into a broken sink.
-                _ps.Stop();
+                // Use BeginStop, not Stop: this runs on the pipeline's own DataAdded
+                // thread, and a synchronous Stop() there self-deadlocks (wedging the
+                // static _globalExecGate and hanging the whole daemon).
+                _ps.BeginStop(null, null);
             }
         };
         _host.HostUI.SetWriteLineForwarder(deliver);
@@ -256,7 +259,9 @@ public sealed class SdkWorker : IWorker, ICompletionWorker
             {
                 // Stderr sink failed (e.g. IPC stream closed). Stop the pipeline
                 // rather than firing into a broken sink on every subsequent line.
-                _ps.Stop();
+                // BeginStop (not Stop): a synchronous Stop() on this DataAdded thread
+                // self-deadlocks and wedges the static _globalExecGate.
+                _ps.BeginStop(null, null);
             }
         };
         _host.HostUI.SetWriteErrorLineForwarder(errorOutput is not null ? deliverError : null);

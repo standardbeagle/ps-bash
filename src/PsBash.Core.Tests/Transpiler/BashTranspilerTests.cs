@@ -43,6 +43,48 @@ public class BashTranspilerTests
         Assert.Contains("-match 'a''b'", result);
     }
 
+    // ===================== Emitted-PS correctness regressions =====================
+    // Each of these previously emitted unparseable or semantically-wrong PowerShell,
+    // slipping past the parseability fuzz layer (which had no execution-semantics oracle).
+
+    // #1: a variable in command position emitted the unparseable `$env:CMD hello`.
+    // A value is not a command — it needs the `&` call operator.
+    [Fact]
+    public void Transpile_VariableInCommandPosition_UsesCallOperator()
+    {
+        var result = BashTranspiler.Transpile("CMD=echo; $CMD hello");
+        Assert.Contains("& $env:CMD hello", result);
+    }
+
+    // #2: array elements were blindly single-quoted around EmitWord, storing the
+    // literal string "$env:x" for a "$x" element and breaking on $'a\'b'.
+    [Fact]
+    public void Transpile_ArrayElementWithVar_ExpandsInsteadOfLiteral()
+    {
+        var result = BashTranspiler.Transpile("arr=(\"$x\" b)");
+        Assert.Contains("@(\"$env:x\",\"b\")", result);
+        Assert.DoesNotContain("'$env:x'", result);
+    }
+
+    // #3: subscript assignment stored the literal $env:x for a $x value.
+    [Fact]
+    public void Transpile_SubscriptAssignmentWithVar_ExpandsInsteadOfLiteral()
+    {
+        var result = BashTranspiler.Transpile("declare -A m; m[k]=$x");
+        Assert.Contains("$m['k'] = \"$env:x\"", result);
+        Assert.DoesNotContain("= '$env:x'", result);
+    }
+
+    // #4: case arms emitted no break, so PowerShell's switch ran EVERY matching
+    // clause; bash runs only the first. Overlapping patterns are the failure case.
+    [Fact]
+    public void Transpile_CaseArms_EmitBreakSoOnlyFirstMatchRuns()
+    {
+        var result = BashTranspiler.Transpile("case $x in a) echo A;; b) echo B;; esac");
+        Assert.Contains("'a' { Invoke-BashEcho A; break }", result);
+        Assert.Contains("'b' { Invoke-BashEcho B; break }", result);
+    }
+
     [Fact]
     public void Transpile_GlobEqualsPatternWithQuote_EscapesSingleQuote()
     {

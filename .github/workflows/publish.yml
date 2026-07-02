@@ -329,7 +329,11 @@ jobs:
           if-no-files-found: ignore
 
   publish:
-    needs: test
+    # Gate on BOTH the test suite AND the AOT binary build. Gating on `test`
+    # alone let releases ship to PSGallery/NuGet while the win-x64/linux/osx zips
+    # were missing (v0.10.15/16). A release that can't produce its binaries must
+    # not publish the module either.
+    needs: [test, build-binaries]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -391,11 +395,11 @@ jobs:
           try { Test-ModuleManifest -Path ./PsBash/PsBash.psd1 | Out-Null }
           catch { Write-Warning "Test-ModuleManifest (PsBash) non-fatal: $($_.Exception.Message)" }
 
-      # continue-on-error so a PSGallery hiccup does not block the NuGet publish
-      # below (the libraries are the primary deliverable). Idempotent: skip if the
-      # version is already live so re-runs after a partial publish succeed.
+      # Fail the job on a genuine PSGallery publish failure — a silent
+      # continue-on-error here reported false green while the module never
+      # reached PSGallery. Still idempotent: the version-already-live check below
+      # returns early, so re-runs after a partial publish succeed without erroring.
       - name: Publish PsBash to PSGallery
-        continue-on-error: true
         shell: pwsh
         env:
           PSGALLERY_API_KEY: ${{ secrets.PSGALLERY_API_KEY }}
