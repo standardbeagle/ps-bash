@@ -126,6 +126,10 @@ public class TranspileParseabilityCorpusTests
     [InlineData("cat <<<\"here string\"")]
     [InlineData("cat <<EOF\nline with \"quotes\" and 'ticks' and $(cmd)\nEOF")]
     [InlineData("cat <<EOF && echo after\nbody\nEOF")]
+    // expanding heredoc with parameter-expansion operators — fixed: ${x:-fb} inside
+    // an expanding heredoc emitted $env:x:-fb (operator body treated as the var name).
+    [InlineData("cat <<EOF\nval=${x:-fallback}\nEOF")]
+    [InlineData("cat <<EOF\nu=${x^^} p=${x#pre} n=${x:-${y:-z}}\nEOF")]
     // ── 3.8 redirections ───────────────────────────────────────────────
     [InlineData("cmd 2>&1")]
     [InlineData("cmd &> /tmp/f")]

@@ -75,6 +75,16 @@ public class BashTranspilerTests
         Assert.DoesNotContain("= '$env:x'", result);
     }
 
+    // #5: ${x:-fallback} inside an expanding heredoc emitted $env:x:-fallback
+    // (the whole operator body was treated as the variable name).
+    [Fact]
+    public void Transpile_ExpandingHeredocParamExpansion_ExpandsOperator()
+    {
+        var result = BashTranspiler.Transpile("cat <<EOF\nv=${x:-fallback}\nEOF");
+        Assert.Contains("$(($env:x ?? \"fallback\"))", result);
+        Assert.DoesNotContain("$env:x:-fallback", result);
+    }
+
     // #4: case arms emitted no break, so PowerShell's switch ran EVERY matching
     // clause; bash runs only the first. Overlapping patterns are the failure case.
     [Fact]

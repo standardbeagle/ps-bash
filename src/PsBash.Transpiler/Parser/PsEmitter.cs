@@ -2071,12 +2071,30 @@ public static class PsEmitter
         {
             if (body[pos] == '$' && pos + 1 < len && body[pos + 1] == '{')
             {
-                // ${VAR} -> $env:VAR
-                int close = body.IndexOf('}', pos + 2);
+                // ${...} — find the matching (balanced) close brace so nested
+                // expansions like ${x:-${y}} are captured whole.
+                int close = FindMatchingBrace(body, pos + 1);
                 if (close >= 0)
                 {
-                    string name = body[(pos + 2)..close];
-                    sb.Append(EmitSimpleVar(name));
+                    string content = body[(pos + 2)..close];
+                    if (IsSimpleHereDocVarName(content))
+                    {
+                        // Plain ${VAR} -> $env:VAR (cheap, known-good).
+                        sb.Append(EmitSimpleVar(content));
+                    }
+                    else
+                    {
+                        // Parameter expansion with an operator (${x:-fallback},
+                        // ${x#pre}, ${x^^}, …). Emitting the raw content as a
+                        // variable name produced $env:x:-fallback. Decompose the
+                        // whole ${...} and route through the real braced-var
+                        // emitter, then wrap in $(...) so it expands inside the
+                        // @"..."@ here-string.
+                        var parts = BashParser.DecomposeWord(body[pos..(close + 1)]);
+                        sb.Append("$(");
+                        sb.Append(EmitWord(new CompoundWord(parts)));
+                        sb.Append(')');
+                    }
                     pos = close + 1;
                 }
                 else
@@ -2102,6 +2120,29 @@ public static class PsEmitter
         }
 
         return sb.ToString();
+    }
+
+    /// <summary>Index of the <c>}</c> matching the <c>{</c> at <paramref name="openBrace"/>,
+    /// honoring nesting; -1 if unbalanced.</summary>
+    private static int FindMatchingBrace(string s, int openBrace)
+    {
+        int depth = 0;
+        for (int i = openBrace; i < s.Length; i++)
+        {
+            if (s[i] == '{') depth++;
+            else if (s[i] == '}' && --depth == 0) return i;
+        }
+        return -1;
+    }
+
+    /// <summary>True when the brace content is a bare variable name (no expansion
+    /// operator), so <c>${VAR}</c> can take the cheap <c>$env:VAR</c> path.</summary>
+    private static bool IsSimpleHereDocVarName(string content)
+    {
+        if (content.Length == 0) return false;
+        foreach (char c in content)
+            if (!IsHereDocVarChar(c)) return false;
+        return true;
     }
 
     private static bool IsHereDocVarStart(char c) =>
