@@ -27,15 +27,19 @@ invariants** (`ReleaseNotes_UnderPsGalleryLimit`, cap 10600 chars). Run Pester l
    `(Import-PowerShellDataFile src/PsBash.Module/PsBash.psd1).PrivateData.PSData.ReleaseNotes.Length`.
 
 2. **Run both blocking gates locally** (NOT just xunit):
-   - Build + refresh the gitignored beside-module DLLs the psm1 probes first, or the Pester
-     run loads stale code and reproduces nothing:
-     `dotnet build src/PsBash.Cmdlets/PsBash.Cmdlets.csproj -c Debug`, then copy
-     `bin/Debug/net8.0/{PsBash.Cmdlets,PsBash.Transpiler,Parlot}.dll` → `src/PsBash.Module/`.
-   - Pester: `pwsh -NoProfile -c "Import-Module Pester; Invoke-Pester ./tests/ -Output Minimal"`
-     (self-isolates via `tests/EnsureCleanRunspace.ps1`). Expect 0 failed.
+   - **Pester (easy path): `./scripts/pester.ps1`** — builds PsBash.Cmdlets, refreshes the
+     gitignored beside-module DLLs the psm1 probes for, and runs Invoke-Pester in a fresh
+     child pwsh that first strips any INSTALLED PsBash from PSModulePath (so a stale
+     user-scope copy can't shadow the source tree — otherwise dozens of ls/cat/grep tests
+     fail locally for reasons unrelated to your change). Flags: `-Detailed`, `-Filter
+     <wildcard>`, `-SkipBuild` (psm1-only edits load from source → instant re-run). Green
+     baseline ≈ 1068 passed / 0 failed. Expect 0 failed.
+   - Manual fallback: `dotnet build src/PsBash.Cmdlets/PsBash.Cmdlets.csproj -c Debug`, copy
+     `bin/Debug/net8.0/{PsBash.Cmdlets,PsBash.Transpiler,Parlot}.dll` → `src/PsBash.Module/`,
+     then `pwsh -NoProfile -c "Import-Module Pester; Invoke-Pester ./tests/ -Output Minimal"`.
    - Core.Tests (the ReleaseNotes/manifest guards): `dotnet test src/PsBash.Core.Tests`.
-   - (scripts/test.sh is the canonical runner but is often blocked in this env — see the
-     running-tests memory; the two commands above are the gate-equivalent subset.)
+   - (scripts/test.sh is the canonical xunit runner but is often blocked in this env — see the
+     running-tests memory; the commands above are the gate-equivalent subset.)
    Abort if either gate has a failure.
 
 3. **Pick the version.** `gh release list --repo standardbeagle/ps-bash --limit 1`. Use the
