@@ -3061,11 +3061,13 @@ function Show-BashHelp {
         }
     }
 
-    # Emit one BashObject PER LINE (Emit-BashLine splits on `n) so `--help` output is
-    # a stream of line records like every other command's stdout, not a single
-    # multi-line object that downstream consumers (grep, head, wc) treat as one line.
+    # ONE object carrying the whole help text in .BashText. This is the tested,
+    # relied-upon contract (`(Show-BashHelp 'ls').BashText -match 'Usage: ls'`, and every
+    # command's `--help` path). Consumers that need per-line records (grep/head/wc)
+    # defensively split a multi-line BashText themselves (see runtime-functions spec), so
+    # emitting per-line here is unnecessary and breaks the single-object callers.
     $text = ($lines -join "`n") + "`n"
-    Emit-BashLine -Text $text
+    New-BashObject -BashText $text
 }
 
 # --- Tab Completion ---
