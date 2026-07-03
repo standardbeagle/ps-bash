@@ -34,3 +34,11 @@ omitted the `[void]` its sibling had → wrong branch). Build them through `PsBu
 - suppress output → `Void` / `VoidStatement`; isolate → `Subshell` / `Subexpr`.
 - unquoted-var word-split splat → `WordSplitArray`; pipeline text extract → `NullSafeBashText`.
 Exit-code scope is ALWAYS `$global:LASTEXITCODE`. New repeated fragment → add a `PsBuild` primitive + unit test, don't inline it.
+
+## SEAMS (route through these; don't re-derive — each has a regression test)
+- numeric `[ ]`/`[[ ]]` compare (`-eq -ne -lt -le -gt -ge`) → `[long](lhs) op [long](rhs)`. Bare = string compare (`'10' -gt 9` is FALSE).
+- multi-statement condition (`cd` emits a `;`-list) → `ExitCodeTest`→`VoidStatement` = `[void]$(…)`, NEVER `[void](…)` (grouping parens can't hold a stmt list → "Missing closing ')'").
+- command-sub: QUOTED / ASSIGNMENT context → `EmitCommandSubString` (newline-preserved, trailing-stripped); bare UNQUOTED arg → `EmitCommandSub` (array → PS arg-splat = bash word-split). Do NOT swap.
+- case pattern → `NormalizeCasePattern` (strip quotes; a glob metachar INSIDE quotes → backtick-escape). Raw slice kept `"foo"` literal → never matched.
+- array/`${x:off:len}` slice with a dynamic or out-of-range bound → runtime-clamped scriptblock, ALWAYS wrapped `$(& { … })` — a bare `& {}` is not a valid command arg (`&` parses as the background op).
+- passthrough force-quote: single-quote via `TryGetStaticArgValue` ONLY when the emitted word already contains a quote (`-F","`→`'-F,'`); else keep the historical `"…"`. Don't blanket-requote.

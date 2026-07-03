@@ -22,3 +22,11 @@ paths:
 ## ADDING A SOURCE
 
 Use the `add-completion-source` skill. Classify context, add a provider in `CompletionEngine`, bound any worker call by ct, merge with `CompletionMerge.Append`, test (`CompletionEngineTests`, fake worker), update the spec.
+
+## LINE RENDERING (LineEditor, multi-row + wide chars)
+`Redraw` OWNS a multi-row region (prompt + wrapped input + flag panel). Invariants:
+- Track `_renderCursorRow`/`_renderRows`; erase by walking UP to the region's first row (`ESC[{n}A`) then `\r\x1b[0J`. NEVER erase only from the cursor's bottom row — that re-renders one row PER keystroke on a wrapped line.
+- All column math via `LineEditor.DisplayWidth` (wcwidth: wide CJK/emoji = 2, combining/format/control = 0), NEVER `string.Length`. ZWJ emoji are approximated.
+- The pure builder is `ComputeRender` (side-effect-free; test via a terminal-grid sim — `LineEditorRenderTests`). Redraw is a thin wrapper.
+- After ANY bare `Console.Write(_prompt)` or a completion-list print, reset geometry (`ResetRenderStateForPrompt`, or set `_renderCursorRow=0`) so the next erase starts on the right row. Alt-screen overlays (Ctrl-R / FlagHelpBrowser) restore the primary buffer, so geometry stays valid across them.
+- The reprint-and-advance paths (Tab / Enter / Ctrl-C / command-assist) use `ReprintBareLine` (region-erase first), not a bare `\r\x1b[0J`.

@@ -24,3 +24,9 @@ Then manual `while ($i -lt $Arguments.Count)` loop. `ConvertFrom-BashArgs` = boo
 
 ## ESCAPES
 `Expand-EscapeSequences`: `\\`→NUL sentinel→expand `\n`/`\t`/…→restore `\`. Used by tr / echo -e / printf.
+
+## PSM1 INVARIANTS (each learned via a bug)
+- jq/yq truthiness → `Test-JqTruthy` (ONLY `$null` / `[bool]$false` are falsy). `$x -ne $false` mis-coerces `0` and the string `"false"` to falsy → `// 99` and `select(.n)` broke on 0.
+- `Show-BashHelp` returns ONE `New-BashObject` (whole help in `.BashText`). Do NOT per-line it — breaks `(Show-BashHelp x).BashText -match 'Usage'` and every command's `--help` test. Consumers split multi-line BashText themselves.
+- glob detection = `[*?[]` (a `[..]` char class counts), not `[*?]`.
+- `fg %N` / `wait %N` = positional JOB NUMBER (the `[N]` from `jobs`), NOT the synthetic `$!` id (which starts at 1000).
