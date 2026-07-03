@@ -46,6 +46,66 @@ public static class BashRuntime
     }
 
     /// <summary>
+    /// Returns ONLY the current command's segment of the pipeline text in
+    /// <see cref="InvocationInfo.Line"/>. Several migrated cmdlets recover a flag the
+    /// case-insensitive PowerShell binder swallowed (grep/sed <c>-E</c>, cut <c>-d:</c>,
+    /// uniq <c>-D</c>, echo <c>-e</c>/<c>-E</c>) by regex-scanning the raw invocation
+    /// line. Scanning the WHOLE line lets a flag belonging to another command in the same
+    /// pipeline leak in — e.g. <c>grep 'a+' f | sed -E 's/x/y/'</c> would flip grep into
+    /// extended-regex mode. Scoping the scan to this command's own segment fixes that.
+    ///
+    /// Splits <see cref="InvocationInfo.Line"/> on top-level <c>|</c> (pipes inside single-
+    /// or double-quoted runs, escaped with a backtick, or part of a <c>||</c> chain operator
+    /// are not separators) and returns the element at <see cref="InvocationInfo.PipelinePosition"/>
+    /// (1-based). Falls back to the whole line for a single-command pipeline or when the
+    /// position metadata is unavailable.
+    /// </summary>
+    public static string CurrentPipelineSegment(InvocationInfo? invocation)
+    {
+        var line = invocation?.Line ?? string.Empty;
+        if (invocation is null || line.Length == 0)
+            return line;
+
+        int position = invocation.PipelinePosition;   // 1-based
+        if (invocation.PipelineLength <= 1 || position < 1)
+            return line;
+
+        var segments = new List<string>();
+        int start = 0;
+        char quote = '\0';
+        for (int i = 0; i < line.Length; i++)
+        {
+            char c = line[i];
+            if (quote != '\0')
+            {
+                if (c == quote) quote = '\0';
+                continue;
+            }
+            if (c == '\'' || c == '"')
+            {
+                quote = c;
+            }
+            else if (c == '`')
+            {
+                i++;   // backtick escape — skip the escaped char
+            }
+            else if (c == '|')
+            {
+                if (i + 1 < line.Length && line[i + 1] == '|')
+                {
+                    i++;   // `||` chain operator, not a pipeline separator
+                    continue;
+                }
+                segments.Add(line.Substring(start, i - start));
+                start = i + 1;
+            }
+        }
+        segments.Add(line.Substring(start));
+
+        return position <= segments.Count ? segments[position - 1] : line;
+    }
+
+    /// <summary>
     /// Strips a single trailing <c>\n</c> from BashText, matching the psm1
     /// <c>New-BashObject</c> / <c>Set-BashDisplayProperty</c> normalization
     /// (the worker serializer owns line endings).

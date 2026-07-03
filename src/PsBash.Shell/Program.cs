@@ -277,7 +277,14 @@ if (shellArgs.Interactive || shellArgs.Command is null)
     psi.ArgumentList.Add($"--launcher-pid={Environment.ProcessId}");
     if (shellArgs.NoProfile) psi.ArgumentList.Add("--no-profile");
 
-    using var hostProc = System.Diagnostics.Process.Start(psi)!;
+    using var hostProc = System.Diagnostics.Process.Start(psi);
+    if (hostProc is null)
+    {
+        // Process.Start returns null when no new process was started; the old `!`
+        // turned that into an NRE on the next line. Fail with a clear diagnostic.
+        await Console.Error.WriteLineAsync($"ps-bash: failed to start host process '{hostBinary}'.");
+        return 1;
+    }
     await hostProc.WaitForExitAsync();
     return hostProc.ExitCode;
 }

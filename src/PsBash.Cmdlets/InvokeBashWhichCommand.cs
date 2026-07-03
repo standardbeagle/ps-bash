@@ -26,6 +26,17 @@ namespace PsBash.Cmdlets;
 [OutputType(typeof(PSObject))]
 public sealed class InvokeBashWhichCommand : PSCmdlet
 {
+    // Decoy for the bare `-a` (show-all) flag. Without it `-a` prefix-collides with
+    // this cmdlet's own -Arguments parameter and the binder consumes it (and the
+    // following token) BEFORE ProcessRecord runs — so `which -a foo` silently lost
+    // the -a. A declared single-letter [Parameter] is an EXACT match that wins over
+    // the -Arguments prefix. (The literal `-a` scan below still handles the emitter's
+    // force-quoted / bundled forms.) Note: the binder is case-insensitive, so a bare
+    // `-A` also binds here — an accepted, negligible divergence from bash treating
+    // `-A` as a literal command name.
+    [Parameter]
+    public SwitchParameter A { get; set; }
+
     [Parameter(ValueFromRemainingArguments = true)]
     public string[]? Arguments { get; set; }
 
@@ -45,7 +56,7 @@ public sealed class InvokeBashWhichCommand : PSCmdlet
             return;
         }
 
-        bool showAll = false;
+        bool showAll = A.IsPresent;
         var operands = new List<string>();
         foreach (var a in args)
         {

@@ -84,7 +84,10 @@ public sealed class InvokeBashHeadCommand : PSCmdlet
         //   - no --help (which goes through EndProcessing)
         //   - no file operands (file mode runs in EndProcessing)
         //   - line mode (byte mode needs to join everything first)
-        _streamingLineMode = !help && operands.Count == 0 && _byteCount == null;
+        //   - a NON-negative line count. GNU `head -n -K` means "all lines but the
+        //     last K", which is undecidable while streaming (you can't know which are
+        //     the last K until input ends) — buffer and resolve in EndProcessing.
+        _streamingLineMode = !help && operands.Count == 0 && _byteCount == null && _lineCount >= 0;
         if (help || operands.Count > 0) _suppress = true;
     }
 
@@ -213,22 +216,40 @@ public sealed class InvokeBashHeadCommand : PSCmdlet
                     sb.Append(BashRuntime.GetBashText(_pipeline[k]));
                 }
                 byte[] bytes = Encoding.UTF8.GetBytes(sb.ToString());
-                int take = Math.Min(byteCount.Value, bytes.Length);
+                // GNU head: -c N takes the first N bytes; -c -K takes all but the last K.
+                int take = byteCount.Value >= 0
+                    ? Math.Min(byteCount.Value, bytes.Length)
+                    : Math.Max(0, bytes.Length + byteCount.Value);
                 WriteObject(Encoding.UTF8.GetString(bytes, 0, take));
                 return;
+            }
+
+            // GNU head: -n N emits the first N lines; -n -K emits all but the last K.
+            // For the negative form the emit limit needs the total line count, which
+            // the buffered pipeline provides.
+            int limit = count;
+            if (count < 0)
+            {
+                int total = 0;
+                foreach (var item in _pipeline)
+                {
+                    string t = BashRuntime.GetBashText(item).TrimEnd('\n');
+                    total += t.Contains('\n') ? t.Split('\n').Length : 1;
+                }
+                limit = Math.Max(0, total + count);
             }
 
             int emitted = 0;
             foreach (var item in _pipeline)
             {
-                if (emitted >= count) break;
+                if (emitted >= limit) break;
                 string text = BashRuntime.GetBashText(item);
                 string trimmed = text.TrimEnd('\n');
                 if (trimmed.Contains('\n'))
                 {
                     foreach (var subLine in trimmed.Split('\n'))
                     {
-                        if (emitted >= count) break;
+                        if (emitted >= limit) break;
                         WriteObject(subLine);
                         emitted++;
                     }
@@ -249,6 +270,15 @@ public sealed class InvokeBashHeadCommand : PSCmdlet
             {
                 try
                 {
+                    if (byteCount.Value < 0)
+                    {
+                        // GNU head -c -K: all but the last K bytes. This needs the
+                        // whole file, so read it fully and drop the trailing K.
+                        byte[] all = BashFileSystem.ReadAllBytes(filePath);
+                        int take = Math.Max(0, all.Length + byteCount.Value);
+                        WriteObject(Encoding.UTF8.GetString(all, 0, take));
+                        continue;
+                    }
                     // Stream at most N bytes — never read the whole file just to
                     // take the head of it. Chunked so a huge -c N on a small file
                     // doesn't pre-allocate N (reads stop at EOF).
@@ -278,19 +308,28 @@ public sealed class InvokeBashHeadCommand : PSCmdlet
 
             try
             {
-                int li = 0;
-                string? line;
-                while (li < count && (line = reader.ReadLine()) != null)
+                if (count < 0)
                 {
-                    li++;
-                    var obj = new PSObject();
-                    obj.TypeNames.Insert(0, "PsBash.CatLine");
-                    obj.Properties.Add(new PSNoteProperty("LineNumber", li));
-                    obj.Properties.Add(new PSNoteProperty("Content", line));
-                    obj.Properties.Add(new PSNoteProperty("FileName", filePath));
-                    obj.Properties.Add(new PSNoteProperty(
-                        "BashText", BashRuntime.NormalizeBashText(line)));
-                    WriteObject(obj);
+                    // GNU head -n -K: emit all lines but the last K. Buffer the file's
+                    // lines, then emit the first (total - K).
+                    var allLines = new List<string>();
+                    string? l;
+                    while ((l = reader.ReadLine()) != null) allLines.Add(l);
+                    int emit = Math.Max(0, allLines.Count + count);
+                    for (int idx = 0; idx < emit; idx++)
+                    {
+                        WriteCatLine(allLines[idx], idx + 1, filePath);
+                    }
+                }
+                else
+                {
+                    int li = 0;
+                    string? line;
+                    while (li < count && (line = reader.ReadLine()) != null)
+                    {
+                        li++;
+                        WriteCatLine(line, li, filePath);
+                    }
                 }
             }
             finally
@@ -298,6 +337,22 @@ public sealed class InvokeBashHeadCommand : PSCmdlet
                 reader.Dispose();
             }
         }
+    }
+
+    /// <summary>
+    /// Emit one <c>PsBash.CatLine</c> object for a file-mode line (shared by the
+    /// positive first-N and the negative all-but-last-K paths).
+    /// </summary>
+    private void WriteCatLine(string line, int lineNumber, string filePath)
+    {
+        var obj = new PSObject();
+        obj.TypeNames.Insert(0, "PsBash.CatLine");
+        obj.Properties.Add(new PSNoteProperty("LineNumber", lineNumber));
+        obj.Properties.Add(new PSNoteProperty("Content", line));
+        obj.Properties.Add(new PSNoteProperty("FileName", filePath));
+        obj.Properties.Add(new PSNoteProperty(
+            "BashText", BashRuntime.NormalizeBashText(line)));
+        WriteObject(obj);
     }
 
     private static void ParseArgs(string[] args, out int count, out int? byteCount,

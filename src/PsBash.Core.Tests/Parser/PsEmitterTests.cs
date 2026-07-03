@@ -1084,22 +1084,25 @@ public class PsEmitterTests
     {
         // ${a[@]:1:2} -> elements at index 1,2 -> PowerShell range index $a[1..2].
         var result = PsEmitter.Transpile("echo ${a[@]:1:2}");
-        Assert.Equal("Invoke-BashEcho $a[1..2]", result);
+        // Runtime-clamped slice (bash offset/length semantics) so an out-of-range
+        // offset yields @() instead of a reversed PowerShell range. Wrapped in $(...)
+        // so the scriptblock is a valid command argument.
+        Assert.Equal("Invoke-BashEcho $(& { $__psbA = @($a); $__psbO = 1; if ($__psbO -lt 0) { $__psbO = $__psbA.Count + $__psbO }; $__psbO = [Math]::Max(0, [Math]::Min($__psbO, $__psbA.Count)); $__psbN = 2; if ($__psbN -lt 0) { $__psbN = 0 }; $__psbN = [Math]::Min($__psbN, $__psbA.Count - $__psbO); if ($__psbN -le 0) { @() } else { $__psbA[$__psbO..($__psbO + $__psbN - 1)] } })", result);
     }
 
     [Fact]
     public void Transpile_ArraySliceOffsetOnly_EmitsRangeToEnd()
     {
         var result = PsEmitter.Transpile("echo ${a[@]:2}");
-        Assert.Equal("Invoke-BashEcho $a[2..($a.Count - 1)]", result);
+        Assert.Equal("Invoke-BashEcho $(& { $__psbA = @($a); $__psbO = 2; if ($__psbO -lt 0) { $__psbO = $__psbA.Count + $__psbO }; $__psbO = [Math]::Max(0, [Math]::Min($__psbO, $__psbA.Count)); $__psbN = $__psbA.Count - $__psbO; if ($__psbN -lt 0) { $__psbN = 0 }; $__psbN = [Math]::Min($__psbN, $__psbA.Count - $__psbO); if ($__psbN -le 0) { @() } else { $__psbA[$__psbO..($__psbO + $__psbN - 1)] } })", result);
     }
 
     [Fact]
     public void Transpile_ArraySliceNegativeOffset_EmitsTailRange()
     {
-        // ${arr[@]: -2} -> last 2 elements -> $arr[-2..-1].
+        // ${arr[@]: -2} -> last 2 elements, runtime-clamped (negative offset from end).
         var result = PsEmitter.Transpile("echo ${arr[@]: -2}");
-        Assert.Equal("Invoke-BashEcho $arr[-2..-1]", result);
+        Assert.Equal("Invoke-BashEcho $(& { $__psbA = @($arr); $__psbO = -2; if ($__psbO -lt 0) { $__psbO = $__psbA.Count + $__psbO }; $__psbO = [Math]::Max(0, [Math]::Min($__psbO, $__psbA.Count)); $__psbN = $__psbA.Count - $__psbO; if ($__psbN -lt 0) { $__psbN = 0 }; $__psbN = [Math]::Min($__psbN, $__psbA.Count - $__psbO); if ($__psbN -le 0) { @() } else { $__psbA[$__psbO..($__psbO + $__psbN - 1)] } })", result);
     }
 
     [Fact]
@@ -1278,7 +1281,10 @@ public class PsEmitterTests
     {
         var result = PsEmitter.Transpile("VAR=$(cat file)");
 
-        Assert.Equal("$env:VAR = \"$(Invoke-BashCat file | ForEach-Object { Get-BashText $_ })\"", result);
+        // Assignment command-sub preserves internal newlines and strips trailing ones
+        // (bash), instead of the array $OFS-joining with a space (which flattened the
+        // file to one line).
+        Assert.Equal("$env:VAR = \"$((@(Invoke-BashCat file | ForEach-Object { Get-BashText $_ }) -join \"`n\") -replace '(\\r?\\n)+$','')\"", result);
     }
 
     [Fact]
@@ -1301,7 +1307,7 @@ public class PsEmitterTests
     {
         var result = PsEmitter.Transpile("dir=$(pwd)");
 
-        Assert.Equal("$env:dir = \"$(Invoke-BashPwd | ForEach-Object { Get-BashText $_ })\"", result);
+        Assert.Equal("$env:dir = \"$((@(Invoke-BashPwd | ForEach-Object { Get-BashText $_ }) -join \"`n\") -replace '(\\r?\\n)+$','')\"", result);
     }
 
     [Fact]
@@ -1591,7 +1597,9 @@ public class PsEmitterTests
     {
         var result = PsEmitter.Transpile("[[ $a -eq $b ]]");
 
-        Assert.Equal("$(if (($env:a -eq $env:b)) { $global:LASTEXITCODE = 0 } else { $global:LASTEXITCODE = 1 })", result);
+        // Numeric operators cast both operands to [long] so the compare is integer, not
+        // string ('10' -gt 9 must be true).
+        Assert.Equal("$(if (([long]($env:a) -eq [long]($env:b))) { $global:LASTEXITCODE = 0 } else { $global:LASTEXITCODE = 1 })", result);
     }
 
     [Fact]
@@ -1643,7 +1651,7 @@ public class PsEmitterTests
         Assert.Contains("'abc' -eq 'abc'", PsEmitter.Transpile("[ abc = abc ]"));
         Assert.Contains("'abc' -ne 'xyz'", PsEmitter.Transpile("[ abc != xyz ]"));
         Assert.Contains("$env:x -eq 'abc'", PsEmitter.Transpile("x=1; [ $x = abc ]"));
-        Assert.Contains("5 -eq 5", PsEmitter.Transpile("[ 5 -eq 5 ]"));   // numbers stay bare
+        Assert.Contains("[long](5) -eq [long](5)", PsEmitter.Transpile("[ 5 -eq 5 ]"));   // numeric compare casts to [long]
     }
 
     [Fact]
@@ -1671,7 +1679,7 @@ public class PsEmitterTests
     {
         var result = PsEmitter.Transpile("[[ $a -lt $b ]]");
 
-        Assert.Equal("$(if (($env:a -lt $env:b)) { $global:LASTEXITCODE = 0 } else { $global:LASTEXITCODE = 1 })", result);
+        Assert.Equal("$(if (([long]($env:a) -lt [long]($env:b))) { $global:LASTEXITCODE = 0 } else { $global:LASTEXITCODE = 1 })", result);
     }
 
     [Fact]
@@ -1679,7 +1687,31 @@ public class PsEmitterTests
     {
         var result = PsEmitter.Transpile("[[ $a -gt $b ]]");
 
-        Assert.Equal("$(if (($env:a -gt $env:b)) { $global:LASTEXITCODE = 0 } else { $global:LASTEXITCODE = 1 })", result);
+        Assert.Equal("$(if (([long]($env:a) -gt [long]($env:b))) { $global:LASTEXITCODE = 0 } else { $global:LASTEXITCODE = 1 })", result);
+    }
+
+    [Fact]
+    public void Transpile_IfCdThen_UsesSubexpressionForMultiStatementCondition()
+    {
+        // Regression: `cd` emits a multi-statement block, so the if-condition exit-code
+        // test must wrap it in [void]$(...) (a subexpression). [void](...) (grouping
+        // parens) cannot hold a statement list — `if cd /tmp; then …` was unparseable
+        // PowerShell ("Missing closing ')'").
+        var result = PsEmitter.Transpile("if cd /tmp; then echo ok; fi");
+        Assert.Contains("[void]$(", result);
+        Assert.DoesNotContain("[void]($__psbash_cd_target", result);
+    }
+
+    [Fact]
+    public void Transpile_AwkFieldSepExplicitlyQuoted_EmitsSingleStringNotArray()
+    {
+        // Regression: `awk -F"," …` — the word -F"," (a bare -F literal adjacent to a
+        // double-quoted comma) must emit ONE single-quoted argument '-F,'. The old
+        // re-wrap produced "-F",", which PowerShell parses as the two-element array
+        // @('-F',''), corrupting the flag.
+        var result = PsEmitter.Transpile("echo x | awk -F\",\" '{print $1}'");
+        Assert.Contains("Invoke-BashAwk '-F,'", result);
+        Assert.DoesNotContain("\"-F\",\"", result);
     }
 
     [Fact]
@@ -2816,7 +2848,7 @@ public class PsEmitterTests
         var result = PsEmitter.Transpile("echo \"$(echo \"hi there\")\"");
 
         Assert.Equal(
-            "Invoke-BashEcho \"$(Invoke-BashEcho \"hi there\" | ForEach-Object { Get-BashText $_ })\"",
+            "Invoke-BashEcho \"$((@(Invoke-BashEcho \"hi there\" | ForEach-Object { Get-BashText $_ }) -join \"`n\") -replace '(\\r?\\n)+$','')\"",
             result);
     }
 
@@ -3845,7 +3877,7 @@ public class PsEmitterTests
         // if [ 1 -eq 1 ] && [ 2 -eq 2 ]; then echo yes; fi
         // Both sides are BoolExpr — no LASTEXITCODE wrapper needed.
         var result = PsEmitter.Transpile("if [ 1 -eq 1 ] && [ 2 -eq 2 ]; then echo yes; fi");
-        Assert.Equal("if (((1 -eq 1) -and (2 -eq 2))) { Invoke-BashEcho yes }", result);
+        Assert.Equal("if ((([long](1) -eq [long](1)) -and ([long](2) -eq [long](2)))) { Invoke-BashEcho yes }", result);
     }
 
     [Fact]

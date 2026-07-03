@@ -139,7 +139,9 @@ public sealed class InvokeBashSedCommand : PSCmdlet
         // ("specified more than once"). If MyInvocation.Line shows
         // multiple `-e <value>` occurrences, reparse them ourselves and
         // replace the binder's view of Expression.
-        var rawLine = MyInvocation?.Line ?? string.Empty;
+        // Scope the raw-line scan to sed's own pipeline segment so another command's
+        // `-e`/`-E` (e.g. `sed -e … f | grep -e foo`) cannot be swallowed as sed scripts.
+        var rawLine = BashRuntime.CurrentPipelineSegment(MyInvocation);
         if (!string.IsNullOrEmpty(rawLine))
         {
             // Match `-e` followed by either a quoted or whitespace-delimited

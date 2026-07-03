@@ -203,15 +203,15 @@ public sealed class SqliteFrecencyStore : IFrecencyStore, IDisposable
     /// <summary>
     /// Existence check that cannot freeze the completion query. <see cref="Directory.Exists"/>
     /// on a dead network path blocks for the full SMB timeout (seconds) — with the query on the
-    /// keystroke path that froze typing. UNC paths get a bounded probe; on timeout we assume the
-    /// dir exists (keep it, do NOT prune) so a transient network stall neither hangs the prompt
-    /// nor evicts a real directory. Local paths take the direct, fast check.
+    /// keystroke path that froze typing. A UNC path (<c>\\server\share</c>) is NOT the only
+    /// offender: a MAPPED network drive (<c>Z:\</c>) on an unreachable share blocks just as long,
+    /// yet the old code only bounded UNC and took the raw check for everything else. Bound EVERY
+    /// probe; on timeout assume the dir exists (keep it, do NOT prune) so a transient network
+    /// stall neither hangs the prompt nor evicts a real directory. A fast local path resolves the
+    /// probe in microseconds, so the bound costs nothing in the common case.
     /// </summary>
     private static bool DirectoryExistsBounded(string path)
     {
-        bool isUnc = path.StartsWith(@"\\", StringComparison.Ordinal)
-            || path.StartsWith("//", StringComparison.Ordinal);
-        if (!isUnc) return Directory.Exists(path);
         try
         {
             var probe = Task.Run(() => Directory.Exists(path));

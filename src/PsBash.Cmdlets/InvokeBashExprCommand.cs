@@ -1,4 +1,5 @@
 using System.Management.Automation;
+using System.Numerics;
 using System.Text.RegularExpressions;
 
 namespace PsBash.Cmdlets;
@@ -89,13 +90,15 @@ public sealed class InvokeBashExprCommand : PSCmdlet
                 WriteBashErrorWithExitCode("expr: non-integer argument", 2);
                 return;
             }
-            // Oracle: $str.Substring($pos - 1, [Math]::Min($len, $str.Length - $pos + 1))
+            // GNU `expr substr STRING POS LENGTH` (POS is 1-based) yields "" when POS
+            // is out of range or LENGTH < 1 — it does NOT crash. The old code mirrored
+            // an unclamped PowerShell Substring, so `expr substr hello 10 3` computed
+            // Substring(9, -2) and threw. Clamp to bash semantics.
             int start = pos - 1;
-            int avail = str.Length - pos + 1;
-            int take = Math.Min(len, avail);
-            // Oracle does no clamping of start/take; an out-of-range Substring throws.
-            // Preserve that — bad indices throw, surfacing as a runtime error like the oracle.
-            result = str.Substring(start, take);
+            if (start < 0 || start >= str.Length || len <= 0)
+                result = "";
+            else
+                result = str.Substring(start, Math.Min(len, str.Length - start));
         }
         else if (string.Equals(keyword, "index", StringComparison.Ordinal) && args.Length >= 3)
         {
@@ -158,8 +161,10 @@ public sealed class InvokeBashExprCommand : PSCmdlet
 
             if (numericLeft && numericRight)
             {
-                long l = long.Parse(left, System.Globalization.CultureInfo.InvariantCulture);
-                long r = long.Parse(right, System.Globalization.CultureInfo.InvariantCulture);
+                // GNU expr uses arbitrary-precision integers. Parse as BigInteger so a
+                // 20-digit operand no longer overflows a bare long.Parse and crashes.
+                BigInteger l = BigInteger.Parse(left, System.Globalization.CultureInfo.InvariantCulture);
+                BigInteger r = BigInteger.Parse(right, System.Globalization.CultureInfo.InvariantCulture);
                 switch (op)
                 {
                     case "+": result = (l + r).ToString(System.Globalization.CultureInfo.InvariantCulture); break;
@@ -171,8 +176,9 @@ public sealed class InvokeBashExprCommand : PSCmdlet
                             WriteBashErrorWithExitCode("expr: division by zero", 2);
                             return;
                         }
-                        // Oracle: [long][Math]::Truncate($l / $r) — float divide then truncate-toward-zero.
-                        result = ((long)Math.Truncate((double)l / r)).ToString(System.Globalization.CultureInfo.InvariantCulture);
+                        // BigInteger division already truncates toward zero (like the
+                        // oracle's float-divide-then-truncate), and keeps full precision.
+                        result = (l / r).ToString(System.Globalization.CultureInfo.InvariantCulture);
                         break;
                     case "%":
                         if (r == 0)
@@ -219,11 +225,20 @@ public sealed class InvokeBashExprCommand : PSCmdlet
             result = args[0];
         }
 
-        // Build the typed PsBash.ExprOutput PSObject (Value + BashText shape).
+        // Build the typed PsBash.ExprOutput PSObject (Value + BashText shape). A
+        // numeric result that exceeds long (a big-integer computation or literal) must
+        // not crash the typed-value parse — fall back to BigInteger, then string.
         bool numericResult = NumericPattern.IsMatch(result);
-        object value = numericResult
-            ? (object)long.Parse(result, System.Globalization.CultureInfo.InvariantCulture)
-            : result;
+        object value = result;
+        if (numericResult)
+        {
+            if (long.TryParse(result, System.Globalization.NumberStyles.Integer,
+                    System.Globalization.CultureInfo.InvariantCulture, out var lv))
+                value = lv;
+            else if (BigInteger.TryParse(result, System.Globalization.NumberStyles.Integer,
+                    System.Globalization.CultureInfo.InvariantCulture, out var bv))
+                value = bv;
+        }
 
         var obj = new PSObject();
         obj.TypeNames.Insert(0, "PsBash.ExprOutput");

@@ -81,10 +81,18 @@ internal static class HistoryExpander
                 continue;
             }
 
-            // A '!' not followed by an expandable char (end, space, '=', '(') is literal —
-            // this preserves the `! cmd` negation operator and `a != b` style text.
+            // A '!' is only a history reference when the NEXT char actually starts an
+            // event selector or word designator: another '!', '?', the '$'/'^'/'*'
+            // shorthands, a '-'/digit event number, or a letter/digit for `!str`.
+            // Anything else — whitespace, '=', '(', a closing quote, ')', ';', end of
+            // line, … — is literal. Bash does NOT expand `!` before a closing quote, so
+            // `echo "done!"` stays literal; testing only a blocklist let `!"` fall into
+            // ExpandBang with an EMPTY event token, which ResolveEvent mis-read as `!!`
+            // and spliced in the previous command.
             var next = i + 1 < line.Length ? line[i + 1] : '\0';
-            if (next is '\0' or ' ' or '\t' or '=' or '(')
+            var isSelectorStart = next is '!' or '?' or '$' or '^' or '*' or '-'
+                                  || char.IsLetterOrDigit(next);
+            if (!isSelectorStart)
             {
                 sb.Append(c);
                 continue;
@@ -144,6 +152,14 @@ internal static class HistoryExpander
             while (i < line.Length && (char.IsLetterOrDigit(line[i]) || line[i] is '-' or '_' or '.' or '/'))
                 i++;
             var token = line[es..i];
+            // Defensive: an empty token here means '!' was not followed by a real event
+            // selector. Keep it literal rather than falling through to ResolveEvent's
+            // empty-token == `!!` path (the caller's positive guard normally prevents this).
+            if (token.Length == 0)
+            {
+                Reset(ref i, start);
+                return "!";
+            }
             i--; // point at last consumed char of the event token
             eventCmd = ResolveEvent(token, history, out error);
         }

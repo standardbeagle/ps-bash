@@ -106,8 +106,9 @@ public class BashTranspilerTests
     public void Transpile_CasePatternWithQuote_EscapesSingleQuote()
     {
         var result = BashTranspiler.Transpile("case $x in \"a'b\") echo hi;; esac");
-        // The case label literal must not break out of its own single quotes.
-        Assert.Contains("'\"a''b\"'", result);
+        // Bash strips the pattern's quotes ("a'b" matches the string a'b); the embedded
+        // single quote is doubled so the PS clause literal does not break out.
+        Assert.Contains("'a''b'", result);
     }
 
     [Fact]

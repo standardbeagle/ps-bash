@@ -42,14 +42,17 @@ internal static class TabCompleter
         IReadOnlyDictionary<string, string> aliases,
         string cwd,
         string? lastCommand,
-        IHistoryStore? historyStore)
+        IHistoryStore? historyStore,
+        CancellationToken ct = default)
     {
         IReadOnlyList<SequenceSuggestion> sequenceSuggestions = [];
         if (historyStore is not null && !string.IsNullOrEmpty(lastCommand))
         {
             try
             {
-                sequenceSuggestions = await historyStore.GetSequenceSuggestionsAsync(lastCommand, cwd)
+                // Bound the sqlite sequence query by the Tab deadline — its 3s busy
+                // timeout must never hang the prompt (completion is advisory).
+                sequenceSuggestions = await historyStore.GetSequenceSuggestionsAsync(lastCommand, cwd, ct)
                     .ConfigureAwait(false);
             }
             catch

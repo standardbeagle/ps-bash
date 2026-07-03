@@ -436,6 +436,54 @@ public static class PsEmitter
         }
     }
 
+    /// <summary>
+    /// Normalize a raw case pattern (as sliced from the token stream, quotes and all)
+    /// into a PowerShell <c>switch -Wildcard</c> clause pattern. Bash REMOVES the quote
+    /// characters from a case pattern — <c>"foo"</c> matches the string <c>foo</c>, not
+    /// the 5-char literal <c>"foo"</c> — but a glob metacharacter that was INSIDE quotes
+    /// is literal, so it is backtick-escaped (the PowerShell wildcard escape, preserved
+    /// verbatim inside the single-quoted clause). Glob metacharacters OUTSIDE quotes stay
+    /// active (<c>"foo"*</c> → <c>foo*</c>). Backslash escapes the next char in both
+    /// contexts. (Variable expansion inside a pattern — <c>$pat</c> — is a separate,
+    /// larger change: the parser stores patterns as raw text, not words.)
+    /// </summary>
+    private static string NormalizeCasePattern(string raw)
+    {
+        var sb = new StringBuilder(raw.Length);
+        char quote = '\0';
+        for (int i = 0; i < raw.Length; i++)
+        {
+            char c = raw[i];
+            if (quote != '\0')
+            {
+                if (c == quote) { quote = '\0'; continue; }      // drop closing quote
+                if (quote == '"' && c == '\\' && i + 1 < raw.Length)
+                {
+                    AppendLiteralWildcardChar(sb, raw[++i]);      // "\x" → literal x
+                    continue;
+                }
+                AppendLiteralWildcardChar(sb, c);                 // quoted glob char is literal
+                continue;
+            }
+            if (c is '\'' or '"') { quote = c; continue; }        // drop opening quote
+            if (c == '\\' && i + 1 < raw.Length)
+            {
+                AppendLiteralWildcardChar(sb, raw[++i]);          // \x → literal x
+                continue;
+            }
+            sb.Append(c);                                          // unquoted: glob stays active
+        }
+        return sb.ToString();
+    }
+
+    private static void AppendLiteralWildcardChar(StringBuilder sb, char c)
+    {
+        // Backtick is the PowerShell -Wildcard escape; it survives verbatim inside the
+        // single-quoted clause string the caller wraps this in.
+        if (c is '*' or '?' or '[' or ']') sb.Append('`');
+        sb.Append(c);
+    }
+
     private static string EmitCase(Command.Case caseCmd)
     {
         bool useWildcard = false;
@@ -477,7 +525,7 @@ public static class PsEmitter
                 {
                     if (p > 0) sb.Append(' ');
                     sb.Append('\'');
-                    sb.Append(SqEsc(arm.Patterns[p]));
+                    sb.Append(SqEsc(NormalizeCasePattern(arm.Patterns[p])));
                     sb.Append("' { ");
                     sb.Append(bodyText);
                     sb.Append(" }");
@@ -1240,6 +1288,16 @@ public static class PsEmitter
                 var cmpOp = op == "<" ? "-lt" : "-gt";
                 return $"[string]::Compare({lhs}, {EmitTestOperand(words[2])}, [System.StringComparison]::Ordinal) {cmpOp} 0";
             }
+
+            // Numeric comparison operators are ALWAYS integer comparisons in bash
+            // (-eq -ne -lt -le -gt -ge). Without an explicit cast PowerShell compares
+            // by the LHS's runtime type — and an env-backed operand ($env:x) is a
+            // String, so `'10' -gt 9` coerces 9 to "9" and does a LEXICOGRAPHIC
+            // compare ('10' sorts before '9'), silently taking the wrong branch at 10.
+            // Cast both operands to [long] so the compare is numeric like bash. (The
+            // string operators == / = / != are handled above/below and stay string.)
+            if (op is "-eq" or "-ne" or "-lt" or "-le" or "-gt" or "-ge")
+                return $"[long]({lhs}) {op} [long]({EmitTestOperand(words[2])})";
 
             var psOp = op switch
             {
@@ -2265,6 +2323,10 @@ public static class PsEmitter
                 sb.Append(EmitBracedVar(nbvs, inDoubleQuote: true));
             else if (part is WordPart.SimpleVarSub nvs)
                 sb.Append(EmitSimpleVar(nvs.Name, inDoubleQuote: true));
+            else if (part is WordPart.CommandSub ncs)
+                // Assignment/flatten context (x=$(cmd)) preserves internal newlines and
+                // strips trailing ones, like bash — not the array $OFS-join a space.
+                sb.Append(EmitCommandSubString(ncs));
             else
                 sb.Append(EmitWordPart(part));
         }
@@ -2652,6 +2714,25 @@ public static class PsEmitter
         bool pipeableHead = body is Command.Simple or Command.Pipeline;
         string head = pipeableHead ? inner : $"& {{ {inner} }}";
         return $"$({head} | ForEach-Object {{ Get-BashText $_ }})";
+    }
+
+    /// <summary>
+    /// Command substitution used in a QUOTED or ASSIGNMENT context (<c>x=$(cmd)</c>,
+    /// <c>"$(cmd)"</c>). Unlike <see cref="EmitCommandSub"/>, which yields the per-line
+    /// object ARRAY so an UNQUOTED arg word-splits via PowerShell's argument-array
+    /// splat, this rejoins the lines with a newline and strips only the TRAILING
+    /// newline run — exactly bash's rule for <c>$()</c> in a quoted/assignment context.
+    /// Without it the array's every stringification <c>$OFS</c>-joins with a space, so
+    /// <c>x=$(printf "a\nb")</c> collapsed to <c>a b</c> and <c>x=$(cat file)</c>
+    /// flattened the file to one line.
+    /// </summary>
+    private static string EmitCommandSubString(WordPart.CommandSub cs)
+    {
+        var body = (Command)cs.Body;
+        string inner = Emit(body);
+        bool pipeableHead = body is Command.Simple or Command.Pipeline;
+        string head = pipeableHead ? inner : $"& {{ {inner} }}";
+        return $"$((@({head} | ForEach-Object {{ Get-BashText $_ }}) -join \"`n\") -replace '(\\r?\\n)+$','')";
     }
 
     private static string EmitProcessSub(WordPart.ProcessSub ps)
@@ -3173,6 +3254,38 @@ public static class PsEmitter
                         return inDoubleQuote ? $"$({expr})" : expr;
                 }
             }
+
+            // Non-literal offset/length (e.g. ${x:$i}, ${x:$i:$n}, ${x:i+1}). Bash
+            // treats both as ARITHMETIC expressions, so route each through
+            // Invoke-BashArith (which resolves bare and $-prefixed variables) in a
+            // scriptblock that evaluates each component ONCE and normalizes/clamps at
+            // runtime. Without this, ${x:$i} failed the digit test above and silently
+            // fell through to the bare variable — dropping the slice entirely.
+            {
+                var sliceParts = sliceBody.Split(':', 2);
+                string offArith = $"[int](Invoke-BashArith {PsBuild.SingleQuote(sliceParts[0].Trim())})";
+                var sb = new StringBuilder("& { $__psbS = [string](");
+                sb.Append(varRef);
+                sb.Append("); $__psbO = ").Append(offArith).Append("; ");
+                sb.Append("if ($__psbO -lt 0) { $__psbO = [Math]::Max(0, $__psbS.Length + $__psbO) } ");
+                sb.Append("else { $__psbO = [Math]::Min($__psbO, $__psbS.Length) }; ");
+                if (sliceParts.Length == 2 && sliceParts[1].Trim().Length > 0)
+                {
+                    string lenArith = $"[int](Invoke-BashArith {PsBuild.SingleQuote(sliceParts[1].Trim())})";
+                    sb.Append("$__psbL = ").Append(lenArith).Append("; ");
+                    // bash: negative length ends |length| chars from the string end.
+                    sb.Append("$__psbE = if ($__psbL -ge 0) { $__psbO + $__psbL } else { $__psbS.Length + $__psbL }; ");
+                    sb.Append("$__psbC = [Math]::Max(0, [Math]::Min($__psbE, $__psbS.Length) - $__psbO); ");
+                    sb.Append("$__psbS.Substring($__psbO, $__psbC) }");
+                }
+                else
+                {
+                    sb.Append("$__psbS.Substring($__psbO) }");
+                }
+                // Wrap in a subexpression in EVERY context: a bare `& { … }` is not a
+                // valid command argument (`&` would parse as the background operator).
+                return $"$({sb})";
+            }
         }
 
         // Case conversion: ${VAR^^} ${VAR,,} ${VAR^} ${VAR,}
@@ -3223,20 +3336,39 @@ public static class PsEmitter
         if (!int.TryParse(parts[0].Trim(), out int offset))
             return null;
 
-        string expr;
+        int? length = null;
         if (parts.Length == 2)
         {
-            if (!int.TryParse(parts[1].Trim(), out int length))
+            if (!int.TryParse(parts[1].Trim(), out int len))
                 return null;
-            expr = length <= 0 ? "@()" : $"{arrayVar}[{offset}..{offset + length - 1}]";
+            length = len;
         }
+
+        // ${arr[@]:offset[:length]} with bash clamping, computed at RUNTIME because
+        // the element count is not known until execution. The old code emitted a raw
+        // PowerShell range `$arr[offset..end]`; when offset ran past the end (e.g.
+        // `${arr[@]:2}` on a 2-element array) that became a DESCENDING range
+        // (`$arr[2..1]`), which PowerShell walks backwards — returning the trailing
+        // elements instead of the empty slice bash produces. The scriptblock
+        // normalizes a negative offset (from the end), clamps to [0, Count], and
+        // yields @() whenever the resulting count is <= 0 so no reversed range forms.
+        var sb = new StringBuilder("& { $__psbA = @(");
+        sb.Append(arrayVar);
+        sb.Append("); $__psbO = ").Append(offset).Append("; ");
+        sb.Append("if ($__psbO -lt 0) { $__psbO = $__psbA.Count + $__psbO }; ");
+        sb.Append("$__psbO = [Math]::Max(0, [Math]::Min($__psbO, $__psbA.Count)); ");
+        if (length is int litLen)
+            sb.Append("$__psbN = ").Append(litLen).Append("; ");
         else
-        {
-            // No length: from offset to the end. A negative offset runs to index -1.
-            string end = offset < 0 ? "-1" : $"({arrayVar}.Count - 1)";
-            expr = $"{arrayVar}[{offset}..{end}]";
-        }
-        return inDoubleQuote ? $"$({expr})" : expr;
+            sb.Append("$__psbN = $__psbA.Count - $__psbO; ");
+        sb.Append("if ($__psbN -lt 0) { $__psbN = 0 }; ");
+        sb.Append("$__psbN = [Math]::Min($__psbN, $__psbA.Count - $__psbO); ");
+        sb.Append("if ($__psbN -le 0) { @() } else { $__psbA[$__psbO..($__psbO + $__psbN - 1)] } }");
+        // Always wrap the scriptblock invocation in a subexpression: a bare `& { … }`
+        // is NOT a valid command argument (`cmd & {…}` parses `&` as the PS background
+        // operator). `$(& { … })` is a valid argument in every context and splats the
+        // array like the old bare `$a[1..2]` did.
+        return $"$({sb})";
     }
 
     private static void AppendDoubleQuotedInner(StringBuilder sb, ImmutableArray<WordPart> parts)
@@ -3256,6 +3388,10 @@ public static class PsEmitter
                 else
                     sb.Append(EmitSimpleVar(vs.Name, inDoubleQuote: true));
             }
+            else if (part is WordPart.CommandSub qcs)
+                // Quoted `"$(cmd)"` preserves internal newlines (see EmitCommandSubString);
+                // the array-yielding EmitCommandSub would $OFS-join with spaces here.
+                sb.Append(EmitCommandSubString(qcs));
             else if (part is WordPart.Literal lit)
             {
                 // Inside double quotes, bash's \$ \" \` are each parsed as Literal("$"/"\""/"`")
@@ -4031,6 +4167,43 @@ public static class PsEmitter
     }
 
     /// <summary>
+    /// Collapses a word to its literal string VALUE when every part is static (bare
+    /// literals, escaped literals, single-quoted, or double-quoted runs of literals) —
+    /// i.e. no variable/command/arith substitution, no glob. Unlike
+    /// <see cref="ExtractSingleQuotedOrLiteralValue"/> this handles MIXED words such as
+    /// <c>-F","</c> (a bare <c>-F</c> literal adjacent to a double-quoted <c>,</c>).
+    /// Returns <c>null</c> for any word carrying dynamic parts. Used by passthrough
+    /// force-quoting so a flag needing protection becomes ONE single-quoted PS string
+    /// instead of re-wrapping already-quoted emitted text.
+    /// </summary>
+    private static string? TryGetStaticArgValue(CompoundWord word)
+    {
+        var sb = new StringBuilder();
+        foreach (var part in word.Parts)
+        {
+            switch (part)
+            {
+                case WordPart.Literal lit:
+                    sb.Append(lit.Value);
+                    break;
+                case WordPart.EscapedLiteral esc:
+                    sb.Append(esc.Value);
+                    break;
+                case WordPart.SingleQuoted sq:
+                    sb.Append(sq.Value);
+                    break;
+                case WordPart.DoubleQuoted dq when dq.Parts.All(p => p is WordPart.Literal or WordPart.EscapedLiteral):
+                    foreach (var inner in dq.Parts)
+                        sb.Append(inner is WordPart.Literal il ? il.Value : ((WordPart.EscapedLiteral)inner).Value);
+                    break;
+                default:
+                    return null;
+            }
+        }
+        return sb.ToString();
+    }
+
+    /// <summary>
     /// Returns the first 8 hex characters of the MD5 hash of <paramref name="text"/>.
     /// Used to produce stable short names for hook registrations derived from command strings.
     /// </summary>
@@ -4329,9 +4502,22 @@ public static class PsEmitter
             // switch decoy on the cmdlet would resolve the crash but lose the
             // operator's position. See docs/solutions on common-param collisions.
             bool force = forceQuoteFlags is not null && forceQuoteFlags.Contains(emitted);
-            return NeedsPassthroughQuoting(emitted) || force
-                ? $"\"{emitted}\""
-                : emitted;
+            if (NeedsPassthroughQuoting(emitted) || force)
+            {
+                // If the emitted text ALREADY contains a quote char, wrapping it in
+                // another pair of double quotes corrupts it: `-F","` (EmitWord text
+                // `-F","`) becomes `"-F","`, which PowerShell parses as the two-element
+                // array @('-F',''), not the string `-F,`. Emit the literal value as ONE
+                // single-quoted string instead. When there are no embedded quotes the
+                // historical "..." wrap is unambiguous, so keep it (no needless churn).
+                if ((emitted.IndexOf('"') >= 0 || emitted.IndexOf('\'') >= 0)
+                    && TryGetStaticArgValue(args[i]) is { } staticValue)
+                {
+                    return PsBuild.SingleQuote(staticValue);
+                }
+                return $"\"{emitted}\"";
+            }
+            return emitted;
         }
 
         // RC-7: when any operand is a pure unquoted ordinary variable, hoist it

@@ -90,6 +90,12 @@ internal static class AliasExpander
 
         var sb = new StringBuilder();
         int pos = 0;
+        // Bash expands an alias ONLY in command position — the first word, or the
+        // first word after a command separator (; | || && & ( or newline). A word in
+        // ARGUMENT position must never be alias-expanded: `alias ll='ls -la'` then
+        // `echo ll` must run `echo ll`, not `echo ls -la`. A redirect target after
+        // < / > is not a command either. Track it as we walk the separators.
+        bool atCommandStart = true;
 
         while (pos < input.Length)
         {
@@ -141,12 +147,15 @@ internal static class AliasExpander
 
             var word = input[start..pos];
 
-            if (Aliases.TryGetValue(word, out var expansion))
+            if (atCommandStart && Aliases.TryGetValue(word, out var expansion))
                 sb.Append(expansion);
             else
                 sb.Append(word);
 
-            // Copy separator until next word
+            // Copy separator until next word, deciding whether the NEXT word is a
+            // command. Only a command separator (; | || && & () re-arms expansion;
+            // plain whitespace (argument) and a redirect target (< >) leave it off.
+            atCommandStart = false;
             while (pos < input.Length)
             {
                 char c = input[pos];
@@ -154,6 +163,14 @@ internal static class AliasExpander
                 {
                     sb.Append("&&");
                     pos += 2;
+                    atCommandStart = true;
+                    break;
+                }
+                if (c == '&')
+                {
+                    sb.Append('&');
+                    pos++;
+                    atCommandStart = true;
                     break;
                 }
                 if (c == '|')
@@ -162,20 +179,31 @@ internal static class AliasExpander
                     {
                         sb.Append("||");
                         pos += 2;
+                        atCommandStart = true;
                         break;
                     }
                     sb.Append('|');
                     pos++;
+                    atCommandStart = true;
                     break;
                 }
                 if (c == ';')
                 {
                     sb.Append(';');
                     pos++;
+                    atCommandStart = true;
                     break;
                 }
-                if (c == '(' || c == '<' || c == '>')
+                if (c == '(')
                 {
+                    sb.Append(c);
+                    pos++;
+                    atCommandStart = true;
+                    break;
+                }
+                if (c == '<' || c == '>')
+                {
+                    // Redirect operator: the following word is a filename, not a command.
                     sb.Append(c);
                     pos++;
                     break;

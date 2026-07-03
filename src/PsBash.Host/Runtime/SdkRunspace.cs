@@ -116,6 +116,11 @@ internal sealed class SdkRunspace : IAsyncDisposable
         var runspace = RunspaceFactory.CreateRunspace(host, iss);
         runspace.Open();
         Trace("runspace-opened");
+        // From here on every step (SetLocation, setup script, psm1 load) can throw.
+        // The runspace is already OPEN, so a throw must dispose it — otherwise a
+        // wedged daemon leaks one opened runspace per pool top-up attempt.
+        try
+        {
         try
         {
             runspace.SessionStateProxy.Path.SetLocation(Environment.CurrentDirectory);
@@ -174,6 +179,12 @@ internal sealed class SdkRunspace : IAsyncDisposable
         Interlocked.Increment(ref ModuleLoadCount);
         Trace("startup-complete");
         return new SdkRunspace(runspace, host);
+        }
+        catch
+        {
+            try { runspace.Dispose(); } catch { }
+            throw;
+        }
     }
 
     private static string ReadStartupModule(string path)

@@ -10,7 +10,12 @@ internal sealed class LineEditor
 {
     // ── history ──────────────────────────────────────────────────────────────
     private readonly IHistoryStore _historyStore;
-    private readonly List<string> _history;  // In-memory cache for fast navigation
+    // In-memory cache for fast navigation. `volatile` because the background
+    // LoadHistoryAsync PUBLISHES the loaded history by swapping this reference; the
+    // key-loop thread reads it for ↑/↓ navigation. All in-place mutations (append)
+    // happen on the single key-loop thread, so the only cross-thread event is that
+    // one atomic swap — a reader therefore always sees a COMPLETE list.
+    private volatile List<string> _history;  // In-memory cache for fast navigation
     private int _historyIndex;         // points into _history; _history.Count = current input
     private string _savedInput = "";   // stashed current input while navigating history
     private readonly SemaphoreSlim _historyLock = new(1, 1);
@@ -89,6 +94,16 @@ internal sealed class LineEditor
 
     // ── prompt ───────────────────────────────────────────────────────────────
     private string _prompt = "";
+
+    // ── multi-row render tracking ──────────────────────────────────────────────
+    // Where the last render left the terminal cursor, measured as row/rows within
+    // the region WE own (prompt + wrapped input + flag panel). Redraw uses
+    // _renderCursorRow to walk BACK UP to the region's first row before erasing, so a
+    // line that wraps to multiple rows is cleared in full. Without this the erase only
+    // cleared from the cursor's (bottom) row down, so each keystroke on a wrapped line
+    // re-rendered one row lower (the "adds a row per character" bug).
+    private int _renderRows = 1;
+    private int _renderCursorRow;
 
     // ── ANSI sequences ───────────────────────────────────────────────────────
     // Color for the fish-style inline autosuggestion ("ghost" text). Use an explicit gray
@@ -178,18 +193,16 @@ internal sealed class LineEditor
 
     private async Task LoadHistoryAsync()
     {
-        await _historyLock.WaitAsync();
-        try
-        {
-            var entries = await _historyStore.SearchAsync(new HistoryQuery { Limit = MaxHistory });
-            _history.Clear();
-            _history.AddRange(entries.Select(e => e.Command).Reverse());
-            _historyIndex = _history.Count;
-        }
-        finally
-        {
-            _historyLock.Release();
-        }
+        // Fetch OUTSIDE any lock (async I/O), then PUBLISH by an atomic reference swap
+        // rather than an in-place Clear()+AddRange(). The key loop reads _history
+        // unsynchronized for ↑/↓ navigation; the old in-place mutation exposed a
+        // window where the list was empty (between Clear and AddRange), so pressing ↑
+        // early threw (index out of range) and wiped the in-progress line. A swap means
+        // a concurrent reader always observes a COMPLETE list — the old one or the new.
+        var entries = await _historyStore.SearchAsync(new HistoryQuery { Limit = MaxHistory });
+        var loaded = new List<string>(entries.Select(e => e.Command).Reverse());
+        _history = loaded;
+        _historyIndex = loaded.Count;
     }
 
     // ─────────────────────────────────────────────────────────────────────────
@@ -226,6 +239,7 @@ internal sealed class LineEditor
         ExitPanelFocus();
 
         Console.Write(_prompt);
+        ResetRenderStateForPrompt();
 
         while (true)
         {
@@ -289,14 +303,9 @@ internal sealed class LineEditor
             if (key.Key == ConsoleKey.Tab && key.Modifiers == 0)
             {
                 ClearSuggestion();  // Clear suggestion when tab completes
-                // Drop the floating flag-doc panel and reprint the bare input line so the
-                // completion list (if any) renders cleanly below, with no panel left behind.
-                Console.Write("\r\x1b[0J");
-                // Drop the floating flag-doc panel and reprint the bare input line so the
-                // completion list (if any) renders cleanly below, with no panel left behind.
-                Console.Write("\r\x1b[0J");
-                Console.Write(_prompt);
-                Console.Write(_buf.ToString());
+                // Drop the floating flag-doc panel and reprint the bare input line (fully
+                // erasing any wrapped rows first) so the completion list renders cleanly below.
+                ReprintBareLine();
                 await HandleTabAsync();
                 continue;
             }
@@ -331,11 +340,9 @@ internal sealed class LineEditor
             // Enter / newline
             if (key.Key == ConsoleKey.Enter)
             {
-                // Erase any floating flag-doc panel below, reprint the committed line cleanly
-                // (no ghost / no panel), then advance past it.
-                Console.Write("\r\x1b[0J");
-                Console.Write(_prompt);
-                Console.Write(_buf.ToString());
+                // Erase the whole (possibly wrapped) region, reprint the committed line
+                // cleanly (no ghost / no panel), then advance past all of its rows.
+                ReprintBareLine();
                 Console.WriteLine();
                 var result = _buf.ToString();
                 if (result.Length > 0)
@@ -359,15 +366,14 @@ internal sealed class LineEditor
             // Ctrl-C — caller handles SIGINT via CancelKeyPress; we just clear the line
             if (key.Key == ConsoleKey.C && key.Modifiers == ConsoleModifiers.Control)
             {
-                // Erase any floating panel, reprint the abandoned line with a trailing ^C,
-                // then drop to a fresh prompt.
-                Console.Write("\r\x1b[0J");
-                Console.Write(_prompt);
-                Console.Write(_buf.ToString());
+                // Erase the whole (possibly wrapped) region, reprint the abandoned line with
+                // a trailing ^C, then drop to a fresh prompt.
+                ReprintBareLine();
                 Console.WriteLine("^C");
                 _buf.Clear();
                 _cursor = 0;
                 Console.Write(_prompt);
+                ResetRenderStateForPrompt();
                 continue;
             }
 
@@ -625,8 +631,12 @@ internal sealed class LineEditor
                 return;
             }
 
-            // Multiple matches: show list below, apply first
+            // Multiple matches: show list below, apply first. ShowCompletionList advances
+            // the cursor onto a fresh line beneath the list, so reset the region geometry —
+            // the following redraw draws a new prompt HERE, it must not walk up into the list.
             ShowCompletionList(_completions);
+            _renderCursorRow = 0;
+            _renderRows = 1;
             ApplyCompletion(_completions[0]);
             _completionIndex = 1;
         }
@@ -712,6 +722,11 @@ internal sealed class LineEditor
         _buf.Clear();
         _buf.Append(text);
         _cursor = Math.Clamp(cursor, 0, _buf.Length);
+        // Only reached from the command-assist flow, which has just printed output and
+        // left the cursor on a fresh line. Treat that line as the region origin so the
+        // redraw does not walk up into the printed assist output.
+        _renderCursorRow = 0;
+        _renderRows = 1;
         Redraw();
     }
 
@@ -805,59 +820,108 @@ internal sealed class LineEditor
     // so there is never a second thread writing the console.
     private void Redraw(bool showSuggestion)
     {
-        // Strip ANSI from prompt to measure visual length
         var promptVisible = StripAnsi(_prompt);
         var text = _buf.ToString();
-        var cursor = _cursor;
+        var cursor = Math.Clamp(_cursor, 0, text.Length);
+        int cols = Math.Max(1, SafeWindowWidth());
 
         // The floating flag-doc panel: rows shown below the input line for the flag-prefix
         // token under the cursor. Empty unless the cursor is on a "-flag" argument of a known
         // command. Suppressed when suggestions are off (history navigation) to avoid noise.
         var panel = showSuggestion ? ComputeFlagPanel(text, cursor) : Array.Empty<PanelRow>();
+        string? ghost = panel.Count == 0 && showSuggestion
+                        && _currentSuggestion is { Length: > 0 } && cursor == text.Length
+            ? _currentSuggestion : null;
 
-        // Erase the whole region we own: carriage-return to the input line's column 0, then
-        // \x1b[0J wipes the input line AND everything below it (the previous panel). This
-        // single erase replaces the old single-line clear and also cleans up a stale panel.
-        Console.Write("\r\x1b[0J");
+        var r = ComputeRender(_prompt, DisplayWidth(promptVisible), text, cursor, ghost, panel, cols, _renderCursorRow);
+        Console.Write(r.Sequence);
+        _renderRows = r.TotalRows;
+        _renderCursorRow = r.CursorRow;
+    }
 
-        Console.Write(_prompt);
-        Console.Write(text);
+    internal readonly record struct RenderResult(string Sequence, int TotalRows, int CursorRow);
 
-        // Inline history ghost — only when there is no flag panel, so the two never compete.
-        if (panel.Count == 0 && showSuggestion && _currentSuggestion is { Length: > 0 } && cursor == text.Length)
+    /// <summary>
+    /// Pure builder for one redraw's terminal byte sequence, given the display geometry.
+    /// Extracted from <see cref="Redraw(bool)"/> so the wrap / wide-character / cursor math
+    /// is unit-testable (feed the result through a terminal-grid simulator) without a live
+    /// console. Erases the whole region (walking up <paramref name="prevCursorRow"/> rows
+    /// first — the multi-row wrap fix), rewrites prompt + text + ghost + panel, and
+    /// repositions to the logical cursor by display column. Returns the sequence plus the
+    /// new region geometry the caller must persist for the next erase.
+    /// </summary>
+    internal static RenderResult ComputeRender(
+        string promptRaw, int promptWidth,
+        string text, int cursor,
+        string? ghost,
+        IReadOnlyList<PanelRow> panel,
+        int cols, int prevCursorRow)
+    {
+        cols = Math.Max(1, cols);
+        cursor = Math.Clamp(cursor, 0, text.Length);
+
+        int cursorW = promptWidth + DisplayWidth(text.AsSpan(0, cursor));
+        int contentW = promptWidth + DisplayWidth(text)
+                       + (ghost is { Length: > 0 } ? DisplayWidth(ghost) : 0);
+
+        var sb = new StringBuilder();
+
+        // 1. Erase the ENTIRE region: walk up to the first (prompt) row, then clear to end of
+        //    screen. The old `\r\x1b[0J` cleared only from the cursor's current (bottom) row
+        //    down, leaving rows above intact, so each keystroke on a wrapped line re-rendered
+        //    one row lower ("adds a row per character").
+        if (prevCursorRow > 0) sb.Append($"\x1b[{prevCursorRow}A");
+        sb.Append("\r\x1b[0J");
+
+        // 2. Prompt + text + optional inline history ghost.
+        sb.Append(promptRaw);
+        sb.Append(text);
+        if (ghost is { Length: > 0 })
         {
-            Console.Write(SuggestionColor);
-            Console.Write(_currentSuggestion);
-            Console.Write(SgrReset);
+            sb.Append(SuggestionColor);
+            sb.Append(ghost);
+            sb.Append(SgrReset);
         }
 
-        // Draw the panel below. Each row goes on its own fresh line. Relative cursor moves
-        // (the \x1b[{N}A afterwards) stay correct even if writing the rows scrolls the screen,
-        // because the distance from the last panel row back up to the input line is always N.
+        // Exact-fill guard: when content ends exactly on a column boundary the terminal leaves
+        // the cursor pending at the row's right edge rather than on the next row, desyncing the
+        // row math. Force the wrap deterministically.
+        bool forcedNewline = contentW > 0 && contentW % cols == 0;
+        if (forcedNewline) sb.Append("\r\n");
+
+        int contentRows = (contentW == 0 ? 1 : (contentW - 1) / cols + 1) + (forcedNewline ? 1 : 0);
+
+        // 3. Flag panel, each row on its own fresh line below the input.
         foreach (var row in panel)
         {
-            Console.Write("\r\n\x1b[2K");
+            sb.Append("\r\n\x1b[2K");
             if (row.Highlight)
             {
-                Console.Write("\x1b[7m");   // reverse video for the focused selection
-                Console.Write(row.Text);
-                Console.Write("\x1b[27m");
+                sb.Append("\x1b[7m");
+                sb.Append(row.Text);
+                sb.Append("\x1b[27m");
             }
             else
             {
-                Console.Write(SuggestionColor);
-                Console.Write(row.Text);
-                Console.Write(SgrReset);
+                sb.Append(SuggestionColor);
+                sb.Append(row.Text);
+                sb.Append(SgrReset);
             }
         }
-        if (panel.Count > 0)
-            Console.Write($"\x1b[{panel.Count}A"); // back up to the input line
 
-        // Place the cursor at the logical column on the input line: column 0 then forward.
-        var logicalCol = promptVisible.Length + cursor;
-        Console.Write("\r");
-        if (logicalCol > 0)
-            Console.Write($"\x1b[{logicalCol}C");
+        int totalRows = contentRows + panel.Count;
+
+        // 4. Reposition to the logical cursor (row, col). After the writes above the terminal
+        //    cursor sits on the LAST rendered row, so move up to the cursor's row then set the
+        //    column — both from display columns, so wide glyphs land right.
+        int cursorRow = cursorW / cols;
+        int cursorCol = cursorW % cols;
+        int afterRow = totalRows - 1;
+        if (afterRow > cursorRow) sb.Append($"\x1b[{afterRow - cursorRow}A");
+        sb.Append('\r');
+        if (cursorCol > 0) sb.Append($"\x1b[{cursorCol}C");
+
+        return new RenderResult(sb.ToString(), totalRows, cursorRow);
     }
 
     /// <summary>
@@ -918,7 +982,7 @@ internal sealed class LineEditor
     }
 
     /// <summary>One rendered panel line: its text and whether it is the focused selection.</summary>
-    private readonly record struct PanelRow(string Text, bool Highlight);
+    internal readonly record struct PanelRow(string Text, bool Highlight);
 
     /// <summary>
     /// Rows for the floating flag-doc panel: each hint as "head  desc", two-space indented and
@@ -1145,6 +1209,124 @@ internal sealed class LineEditor
         return sb.ToString();
     }
 
+    // ── display-width + region helpers (multi-row rendering) ────────────────────
+
+    /// <summary>Current terminal width in columns, never throwing and never zero.</summary>
+    private static int SafeWindowWidth()
+    {
+        try { int w = Console.WindowWidth; return w > 0 ? w : 80; }
+        catch { return 80; }
+    }
+
+    /// <summary>
+    /// Display width (terminal columns) of <paramref name="s"/>, accounting for wide
+    /// East-Asian / emoji code points (2 columns) and zero-width combining / format /
+    /// control characters (0 columns). This is what fixes the CJK/emoji cursor drift:
+    /// the old code used <c>string.Length</c> (UTF-16 code units), which over- or
+    /// under-counts every non-ASCII glyph. ZWJ emoji sequences are still approximated
+    /// (each component counted) — a documented residual, not a crash.
+    /// </summary>
+    internal static int DisplayWidth(ReadOnlySpan<char> s)
+    {
+        int w = 0;
+        int i = 0;
+        while (i < s.Length)
+        {
+            if (System.Text.Rune.DecodeFromUtf16(s[i..], out var rune, out int consumed)
+                == System.Buffers.OperationStatus.Done)
+            {
+                w += RuneWidth(rune.Value);
+                i += consumed;
+            }
+            else
+            {
+                w += 1;   // lone surrogate / invalid unit → assume 1 column
+                i += 1;
+            }
+        }
+        return w;
+    }
+
+    internal static int DisplayWidth(string s) => DisplayWidth(s.AsSpan());
+
+    private static int RuneWidth(int cp)
+    {
+        if (cp == 0) return 0;
+        switch (System.Globalization.CharUnicodeInfo.GetUnicodeCategory(cp))
+        {
+            case System.Globalization.UnicodeCategory.Control:
+            case System.Globalization.UnicodeCategory.NonSpacingMark:
+            case System.Globalization.UnicodeCategory.EnclosingMark:
+            case System.Globalization.UnicodeCategory.Format:
+                return 0;
+        }
+        return IsWide(cp) ? 2 : 1;
+    }
+
+    private static bool IsWide(int cp) =>
+        (cp >= 0x1100 && cp <= 0x115F) ||   // Hangul Jamo
+        (cp >= 0x2E80 && cp <= 0x303E) ||   // CJK radicals, Kangxi
+        (cp >= 0x3041 && cp <= 0x33FF) ||   // Hiragana … CJK symbols
+        (cp >= 0x3400 && cp <= 0x4DBF) ||   // CJK Ext A
+        (cp >= 0x4E00 && cp <= 0x9FFF) ||   // CJK Unified
+        (cp >= 0xA000 && cp <= 0xA4CF) ||   // Yi
+        (cp >= 0xAC00 && cp <= 0xD7A3) ||   // Hangul syllables
+        (cp >= 0xF900 && cp <= 0xFAFF) ||   // CJK compatibility
+        (cp >= 0xFE10 && cp <= 0xFE19) ||   // vertical forms
+        (cp >= 0xFE30 && cp <= 0xFE6F) ||   // CJK compatibility forms
+        (cp >= 0xFF00 && cp <= 0xFF60) ||   // fullwidth forms
+        (cp >= 0xFFE0 && cp <= 0xFFE6) ||
+        (cp >= 0x1F300 && cp <= 0x1FAFF) || // emoji & pictographs
+        (cp >= 0x20000 && cp <= 0x3FFFD);   // CJK Ext B+
+
+    /// <summary>
+    /// Erase the ENTIRE region we own: walk up to the region's first (prompt) row,
+    /// carriage-return to column 0, then <c>ESC[0J</c> (clear to end of screen). Leaves
+    /// the cursor at the region origin and resets the tracked geometry to a single row.
+    /// </summary>
+    private void EraseRegion()
+    {
+        var sb = new StringBuilder();
+        if (_renderCursorRow > 0) sb.Append($"\x1b[{_renderCursorRow}A");
+        sb.Append("\r\x1b[0J");
+        Console.Write(sb.ToString());
+        _renderCursorRow = 0;
+        _renderRows = 1;
+    }
+
+    /// <summary>
+    /// Record that only the (freshly written) prompt occupies the region — the buffer is
+    /// empty and the cursor sits right after the prompt. Called after every raw
+    /// <c>Console.Write(_prompt)</c> that (re)starts a line so the next Redraw walks back
+    /// up the correct number of rows.
+    /// </summary>
+    private void ResetRenderStateForPrompt()
+    {
+        int cols = Math.Max(1, SafeWindowWidth());
+        int promptW = DisplayWidth(StripAnsi(_prompt));
+        _renderCursorRow = promptW / cols;
+        _renderRows = _renderCursorRow + 1;
+    }
+
+    /// <summary>
+    /// Reprint the bare input line (prompt + buffer, no ghost / no panel) after fully
+    /// erasing the current multi-row region, leaving the cursor at the end of the
+    /// buffer. Used by the Tab / Enter / Ctrl-C paths that need a clean line before
+    /// handing off (Tab), or before advancing past it (Enter / Ctrl-C).
+    /// </summary>
+    private void ReprintBareLine()
+    {
+        EraseRegion();
+        var text = _buf.ToString();
+        Console.Write(_prompt);
+        Console.Write(text);
+
+        int cols = Math.Max(1, SafeWindowWidth());
+        int endW = DisplayWidth(StripAnsi(_prompt)) + DisplayWidth(text);
+        _renderRows = endW == 0 ? 1 : (endW - 1) / cols + 1;
+        _renderCursorRow = _renderRows - 1;   // cursor left at end, on the last row
+    }
+
     // ─────────────────────────────────────────────────────────────────────────
     // Helpers
     // ─────────────────────────────────────────────────────────────────────────
@@ -1361,9 +1543,7 @@ internal sealed class LineEditor
 
         try
         {
-            Console.Write("\r\x1b[0J");
-            Console.Write(_prompt);
-            Console.Write(originalBuffer);
+            ReprintBareLine();
             Console.WriteLine();
 
             if (_commandAssist is null)
@@ -1500,7 +1680,7 @@ internal sealed class LegacyFileHistoryStore : IHistoryStore
         }
     }
 
-    public Task<IReadOnlyList<SequenceSuggestion>> GetSequenceSuggestionsAsync(string? lastCommand, string cwd)
+    public Task<IReadOnlyList<SequenceSuggestion>> GetSequenceSuggestionsAsync(string? lastCommand, string cwd, CancellationToken ct = default)
     {
         return Task.FromResult<IReadOnlyList<SequenceSuggestion>>(Array.Empty<SequenceSuggestion>());
     }

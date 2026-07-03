@@ -356,7 +356,21 @@ public sealed class IpcWorker : IWorker
         // (split env/cwd, stale build). A genuinely dead host makes this a no-op.
         if (weOwnIt)
         {
-            TryKillRecordedHost(metadata!);
+            bool confirmedDead = TryKillRecordedHost(metadata!);
+            if (!confirmedDead && _scheme == "pipe")
+            {
+                // Windows named-pipe split-brain guard. A named pipe allows MULTIPLE
+                // server instances on the same name, so spawning a replacement while
+                // the old host is STILL listening (the kill failed — permission denied
+                // or a wedged handle) would leave two hosts accepting connections and
+                // clients round-robining between the stale and the fresh one (split
+                // env/cwd, stale build). Refuse rather than create that split-brain.
+                // (Unix unlinks+rebinds the socket path, so it is not affected.)
+                throw new HostUnavailableException(
+                    $"ps-bash-host (pid {metadata!.Pid}) is still listening and could not be " +
+                    "terminated; refusing to start a second host on the same named pipe. " +
+                    "Terminate it manually, or set PSBASH_PER_INVOCATION=1 for a private host.");
+            }
         }
 
         // Endpoint and sidecar artifacts may now be cleaned. Unix unlinks the
@@ -380,23 +394,28 @@ public sealed class IpcWorker : IWorker
     /// Re-verifies pid liveness and executable match immediately before kill so
     /// a PID reused between classification and termination cannot be hit.
     /// </summary>
-    private static void TryKillRecordedHost(HostMetadata metadata)
+    /// <returns>
+    /// <c>true</c> when the recorded host is confirmed gone (already dead, PID reused,
+    /// or killed and observed to exit); <c>false</c> when it is still alive after the
+    /// kill attempt (permission denied / wedged handle). The caller uses this to avoid
+    /// spawning a second named-pipe server alongside a surviving host (split-brain).
+    /// </returns>
+    private static bool TryKillRecordedHost(HostMetadata metadata)
     {
         // Never target the launcher's own process. An in-process host (tests) or
         // a recycled PID that happens to equal ours must not make the launcher
         // kill itself / its own process tree.
-        if (metadata.Pid == Environment.ProcessId) return;
+        if (metadata.Pid == Environment.ProcessId) return true;
         var (alive, exe) = HostOwnership.ProbeProcess(metadata.Pid);
-        if (!alive) return;
+        if (!alive) return true;
         if (!string.IsNullOrEmpty(exe) &&
             !string.Equals(
                 Path.GetFullPath(exe),
                 Path.GetFullPath(metadata.ExecutablePath),
                 StringComparison.OrdinalIgnoreCase))
         {
-            // PID was reused between Classify and now — abandon kill silently;
-            // the next iteration's Classify will surface UnsafeToTouch.
-            return;
+            // PID was reused between Classify and now — the recorded host is gone.
+            return true;
         }
 
         try
@@ -404,12 +423,13 @@ public sealed class IpcWorker : IWorker
             using var proc = Process.GetProcessById(metadata.Pid);
             proc.Kill(entireProcessTree: true);
             // Bounded wait so a wedged kernel handle doesn't stall startup; the
-            // outer loop times out via _startupTimeout regardless.
-            try { proc.WaitForExit(2_000); } catch { }
+            // outer loop times out via _startupTimeout regardless. Returns true iff
+            // the process actually exited within the window.
+            return proc.WaitForExit(2_000);
         }
-        catch (ArgumentException) { /* exited between probe and kill */ }
-        catch (InvalidOperationException) { /* same */ }
-        catch (System.ComponentModel.Win32Exception) { /* permission denied; surfaces as still-listening on next loop */ }
+        catch (ArgumentException) { return true; }            // exited between probe and kill
+        catch (InvalidOperationException) { return true; }    // same
+        catch (System.ComponentModel.Win32Exception) { return false; } // permission denied; still alive
     }
 
     /// <summary>
@@ -726,6 +746,19 @@ public sealed class IpcWorker : IWorker
     internal static bool IsTransportReset(Exception ex)
         => ex is System.IO.IOException or System.Net.Sockets.SocketException;
 
+    /// <summary>
+    /// The host PROCESS the liveness watchdog was observing exited mid-exchange.
+    /// Subclasses <see cref="System.IO.IOException"/> so the existing transport-reset
+    /// recovery (retire/respawn) still recognizes it, but is a DISTINCT type so
+    /// <see cref="SendRequestAsync"/> can refuse to retry it: the watched PID is not
+    /// guaranteed to be the process serving this connection, so re-running would risk
+    /// double-executing a no-output side-effecting command.
+    /// </summary>
+    private sealed class HostProcessExitedException : System.IO.IOException
+    {
+        public HostProcessExitedException(string message) : base(message) { }
+    }
+
     private async Task<int> SendRequestAsync(Mode mode, CancellationToken ct)
     {
         var idleTimeout = GetCallTimeout();
@@ -757,7 +790,17 @@ public sealed class IpcWorker : IWorker
             }
             catch (Exception ex) when (IsTransportReset(ex))
             {
-                if (attempt < maxAttempts && !framesDelivered)
+                // A watchdog-detected host death (HostProcessExitedException) is NOT
+                // retried, even pre-output. The watchdog watches a cached/sidecar PID
+                // that is not guaranteed to be the process actually serving THIS
+                // connection: a concurrent launcher replacing the daemon mid-exchange
+                // makes the watched PID die while our real peer keeps running our
+                // command. Retrying then re-runs a no-output side-effecting command
+                // (`echo x >> f`, `rm -rf dir`) a second time. A GENUINE transport
+                // reset — observed directly on our own read as a SocketException/plain
+                // IOException — still retries pre-output (the common self-healing path).
+                bool watchdogDeath = ex is HostProcessExitedException;
+                if (attempt < maxAttempts && !framesDelivered && !watchdogDeath)
                 {
                     // Pre-output reset: retire the broken host, bring up a
                     // healthy one (reuse if it still answers, else spawn fresh),
@@ -953,7 +996,7 @@ public sealed class IpcWorker : IWorker
             // output) or fails cleanly (post-output) — never a silent hang. This
             // is the case a killed Windows AF_UNIX peer does NOT report as a
             // socket reset on the pending read.
-            throw new IOException("ps-bash-host process exited mid-command.");
+            throw new HostProcessExitedException("ps-bash-host process exited mid-command.");
         }
         catch (OperationCanceledException) when (timeoutCts.IsCancellationRequested && !ct.IsCancellationRequested)
         {

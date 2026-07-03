@@ -186,6 +186,13 @@ internal sealed class Connection
     private sealed class IpcOutputQueue : IAsyncDisposable
     {
         private const int DefaultCapacity = 4096;
+        // Upper bound on how long a single frame may wait for a queue slot before we
+        // declare the consumer dead. Write() runs inside RunCommand under the
+        // PROCESS-WIDE exec gate, so an unbounded block here (queue full because the
+        // launcher stopped reading its stdout) wedges every OTHER session behind the
+        // gate. A live-but-slow consumer keeps the drain moving so a slot frees long
+        // before this elapses; only a truly dead consumer exhausts it.
+        private const int DefaultStallTimeoutMs = 30_000;
 
         private readonly BlockingCollection<IpcOutputFrame> _queue;
         private readonly CancellationToken _ct;
@@ -225,12 +232,22 @@ internal sealed class Connection
 
             try
             {
-                _queue.Add(new IpcOutputFrame(tag, line), _ct);
+                // Bounded add, NOT an unbounded blocking Add: see DefaultStallTimeoutMs.
+                // On timeout the consumer is dead — fail THIS connection so RunCommand
+                // aborts and releases the gate, instead of wedging the whole daemon.
+                if (!_queue.TryAdd(new IpcOutputFrame(tag, line), StallTimeoutMs(), _ct))
+                    throw new IOException("IPC output consumer stalled; abandoning connection.");
             }
             catch (Exception ex) when (ex is InvalidOperationException or OperationCanceledException)
             {
                 throw new IOException("IPC output writer is closed.", ex);
             }
+        }
+
+        private static int StallTimeoutMs()
+        {
+            var raw = Environment.GetEnvironmentVariable("PSBASH_IPC_OUTPUT_STALL_TIMEOUT_MS");
+            return int.TryParse(raw, out var value) && value > 0 ? value : DefaultStallTimeoutMs;
         }
 
         public async Task CompleteAsync()

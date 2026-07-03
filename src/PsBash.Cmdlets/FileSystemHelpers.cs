@@ -18,7 +18,7 @@ internal static class FileSystemHelpers
     /// Replicates the psm1 <c>Resolve-BashGlob</c> contract for a single
     /// operand: literal paths fall through unchanged so the caller can emit a
     /// bash-style "no such file" error on a missing target; wildcard paths
-    /// (<c>*</c> / <c>?</c>) expand via
+    /// (<c>*</c> / <c>?</c> / a <c>[..]</c> character class) expand via
     /// <see cref="System.Management.Automation.PathIntrinsics.GetResolvedProviderPathFromPSPath(string, out ProviderInfo)"/>
     /// and fall through as literal if nothing matches. Same slice
     /// <see cref="InvokeBashCatCommand"/> and the ChecksumEngine use.
@@ -26,7 +26,9 @@ internal static class FileSystemHelpers
     public static IEnumerable<string> ResolveOperandPaths(PSCmdlet cmdlet, string raw)
     {
         raw = NormalizeOperandPath(raw);
-        if (raw.IndexOf('*') < 0 && raw.IndexOf('?') < 0)
+        // *, ?, or a [..] character class → wildcard. A lone unmatched '[' matches
+        // nothing and falls through to literal passthrough (bash-literal semantics).
+        if (raw.IndexOf('*') < 0 && raw.IndexOf('?') < 0 && raw.IndexOf('[') < 0)
         {
             yield return cmdlet.SessionState.Path.GetUnresolvedProviderPathFromPSPath(raw);
             yield break;

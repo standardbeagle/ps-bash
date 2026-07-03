@@ -54,5 +54,6 @@ public interface IHistoryStore
     /// </remarks>
     Task<IReadOnlyList<SequenceSuggestion>> GetSequenceSuggestionsAsync(
         string? lastCommand,
-        string cwd);
+        string cwd,
+        CancellationToken ct = default);
 }

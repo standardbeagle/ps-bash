@@ -108,9 +108,12 @@ public static class PsBuild
     /// (<c>-ne 0</c>), i.e. bash <c>! cmd</c> which succeeds when <paramref name="emittedCmd"/> fails.
     /// </param>
     public static string ExitCodeTest(string emittedCmd, bool negate = false) =>
-        // Single Concat (don't nest Void() — this is the most-called composite, one
-        // builder per if/while/until/&&/|| condition; nesting would double the allocation).
-        "(& { [void](" + emittedCmd + "); $global:LASTEXITCODE " + (negate ? "-ne" : "-eq") + " 0 })";
+        // Suppress the command's output via VoidStatement, which picks [void]$(...) over
+        // [void](...) when the emitted text is a statement LIST (contains "; "). A grouping
+        // paren cannot hold `stmt1; stmt2` ("Missing closing ')'"), so a multi-statement
+        // command like `cd DIR` (which emits an if/else block) would produce unparseable
+        // PowerShell inside `if cd DIR; then …`. The subexpression form survives it.
+        "(& { " + VoidStatement(emittedCmd) + "; $global:LASTEXITCODE " + (negate ? "-ne" : "-eq") + " 0 })";
 
     // ──────────────────────── Exit-code propagation (&& / || chains) ───────────────────
 

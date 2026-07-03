@@ -205,7 +205,9 @@ public sealed class InvokeBashGrepCommand : PSCmdlet
         // bind to the same `E` parameter. Detect the uppercase form in the
         // raw command line and switch on extended-regex mode. The pattern
         // value is already in `patterns` from the E binding above.
-        var rawLine = MyInvocation?.Line ?? string.Empty;
+        // Scan only THIS grep's pipeline segment, not the whole line — a `-E` in a
+        // different command (e.g. `grep 'a+' f | sed -E …`) must not flip grep here.
+        var rawLine = BashRuntime.CurrentPipelineSegment(MyInvocation);
         if (!string.IsNullOrEmpty(rawLine)
             && System.Text.RegularExpressions.Regex.IsMatch(
                 rawLine, @"(?<![A-Za-z0-9])-E(?![a-zA-Z0-9])"))
@@ -303,14 +305,21 @@ public sealed class InvokeBashGrepCommand : PSCmdlet
             {
                 string flag = ctxBare.Groups[1].Value;
                 i++;
-                if (i < args.Length && int.TryParse(args[i], out int v))
+                // GNU grep: a missing or non-numeric context length is a hard error
+                // (exit 2), NOT a silently-consumed-and-ignored operand. `grep -A foo f`
+                // previously ate "foo" and searched with zero context.
+                if (i >= args.Length || !int.TryParse(args[i], out int v))
                 {
-                    switch (flag)
-                    {
-                        case "A": afterContext = v; break;
-                        case "B": beforeContext = v; break;
-                        case "C": afterContext = v; beforeContext = v; break;
-                    }
+                    string bad = i < args.Length ? args[i] : "";
+                    FileSystemHelpers.WriteBashError(this, $"grep: {bad}: invalid context length argument");
+                    FileSystemHelpers.SetLastExitCode(this, 2);
+                    return;
+                }
+                switch (flag)
+                {
+                    case "A": afterContext = v; break;
+                    case "B": beforeContext = v; break;
+                    case "C": afterContext = v; beforeContext = v; break;
                 }
                 i++;
                 continue;

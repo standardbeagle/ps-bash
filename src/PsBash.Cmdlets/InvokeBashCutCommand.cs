@@ -172,7 +172,9 @@ public sealed class InvokeBashCutCommand : PSCmdlet
         // the bash convention (`-d:` means delimiter is colon), detect the
         // joined literal in MyInvocation.Line and override.
         _delimiter = D ?? "\t";
-        var rawLine = MyInvocation?.Line ?? string.Empty;
+        // Scope the joined-delimiter scan to cut's own pipeline segment — a `-d,` in a
+        // different command (e.g. `paste -d, a b | cut -f1`) must not become cut's delimiter.
+        var rawLine = BashRuntime.CurrentPipelineSegment(MyInvocation);
         if (!string.IsNullOrEmpty(rawLine))
         {
             var m = System.Text.RegularExpressions.Regex.Match(

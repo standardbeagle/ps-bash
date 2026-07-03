@@ -43,12 +43,8 @@
   ],
   "basename": [
     {
-      "flag": "-",
-      "desc": "s"
-    },
-    {
-      "flag": "s",
-      "desc": "u"
+      "flag": "-s",
+      "desc": "suffix"
     }
   ],
   "cat": [
@@ -99,12 +95,8 @@
   ],
   "command": [
     {
-      "flag": "-",
-      "desc": "v"
-    },
-    {
-      "flag": "p",
-      "desc": "r"
+      "flag": "-v",
+      "desc": "print command name or path"
     }
   ],
   "cp": [
@@ -239,22 +231,14 @@
   ],
   "eval": [
     {
-      "flag": "C",
-      "desc": "O"
-    },
-    {
-      "flag": "c",
-      "desc": "o"
+      "flag": "COMMAND",
+      "desc": "command string to evaluate"
     }
   ],
   "expand": [
     {
-      "flag": "-",
-      "desc": "t"
-    },
-    {
-      "flag": "t",
-      "desc": "a"
+      "flag": "-t",
+      "desc": "tab width"
     }
   ],
   "file": [
@@ -578,12 +562,8 @@
   ],
   "head": [
     {
-      "flag": "-",
-      "desc": "n"
-    },
-    {
-      "flag": "n",
-      "desc": "u"
+      "flag": "-n",
+      "desc": "number of lines"
     }
   ],
   "install": [
@@ -746,12 +726,8 @@
   ],
   "nl": [
     {
-      "flag": "-",
-      "desc": "b"
-    },
-    {
-      "flag": "n",
-      "desc": "u"
+      "flag": "-ba",
+      "desc": "number all lines"
     }
   ],
   "paste": [
@@ -766,12 +742,8 @@
   ],
   "popd": [
     {
-      "flag": "+",
-      "desc": "N"
-    },
-    {
-      "flag": "r",
-      "desc": "e"
+      "flag": "+N",
+      "desc": "remove Nth entry from stack"
     }
   ],
   "ps": [
@@ -806,22 +778,14 @@
   ],
   "pushd": [
     {
-      "flag": "+",
-      "desc": "N"
-    },
-    {
-      "flag": "r",
-      "desc": "o"
+      "flag": "+N",
+      "desc": "rotate stack so Nth dir becomes top"
     }
   ],
   "pwd": [
     {
-      "flag": "-",
-      "desc": "P"
-    },
-    {
-      "flag": "p",
-      "desc": "h"
+      "flag": "-P",
+      "desc": "physical path"
     }
   ],
   "readarray": [
@@ -972,21 +936,13 @@
   "shift": [
     {
       "flag": "N",
-      "desc": ""
-    },
-    {
-      "flag": "s",
-      "desc": "h"
+      "desc": "shift by N positions"
     }
   ],
   "sleep": [
     {
-      "flag": "N",
-      "desc": "U"
-    },
-    {
-      "flag": "s",
-      "desc": "e"
+      "flag": "NUMBER",
+      "desc": "seconds to sleep (suffix: s/m/h/d)"
     }
   ],
   "sort": [
@@ -1062,22 +1018,14 @@
   ],
   "strings": [
     {
-      "flag": "-",
-      "desc": "n"
-    },
-    {
-      "flag": "m",
-      "desc": "i"
+      "flag": "-n",
+      "desc": "minimum string length"
     }
   ],
   "tac": [
     {
-      "flag": "-",
-      "desc": "s"
-    },
-    {
-      "flag": "s",
-      "desc": "e"
+      "flag": "-s",
+      "desc": "separator"
     }
   ],
   "tail": [
@@ -1134,42 +1082,26 @@
   ],
   "tee": [
     {
-      "flag": "-",
-      "desc": "a"
-    },
-    {
-      "flag": "a",
-      "desc": "p"
+      "flag": "-a",
+      "desc": "append"
     }
   ],
   "time": [
     {
-      "flag": "C",
-      "desc": "O"
-    },
-    {
-      "flag": "c",
-      "desc": "o"
+      "flag": "COMMAND",
+      "desc": "command to time"
     }
   ],
   "touch": [
     {
-      "flag": "-",
-      "desc": "d"
-    },
-    {
-      "flag": "d",
-      "desc": "a"
+      "flag": "-d",
+      "desc": "date string"
     }
   ],
   "tput": [
     {
-      "flag": "C",
-      "desc": "A"
-    },
-    {
-      "flag": "t",
-      "desc": "e"
+      "flag": "CAPNAME",
+      "desc": "terminal capability name"
     }
   ],
   "tr": [
@@ -1284,12 +1216,8 @@
   ],
   "which": [
     {
-      "flag": "-",
-      "desc": "a"
-    },
-    {
-      "flag": "s",
-      "desc": "h"
+      "flag": "-a",
+      "desc": "show all matches"
     }
   ],
   "xan": [
@@ -1334,12 +1262,8 @@
   ],
   "yes": [
     {
-      "flag": "S",
-      "desc": "T"
-    },
-    {
-      "flag": "r",
-      "desc": "e"
+      "flag": "STRING",
+      "desc": "repeated output (default: y)"
     }
   ],
   "yq": [

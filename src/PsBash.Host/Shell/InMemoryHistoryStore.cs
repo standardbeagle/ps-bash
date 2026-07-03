@@ -37,7 +37,8 @@ internal sealed class InMemoryHistoryStore : IHistoryStore
 
     public Task<IReadOnlyList<SequenceSuggestion>> GetSequenceSuggestionsAsync(
         string? lastCommand,
-        string cwd)
+        string cwd,
+        CancellationToken ct = default)
     {
         if (string.IsNullOrEmpty(lastCommand))
             return Task.FromResult<IReadOnlyList<SequenceSuggestion>>(Array.Empty<SequenceSuggestion>());

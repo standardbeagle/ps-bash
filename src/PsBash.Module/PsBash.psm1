@@ -573,8 +573,8 @@ function Emit-BashLine {
 
 function Resolve-BashGlob {
     # Expands glob patterns in file operands, matching bash behavior.
-    # Literal paths pass through unchanged. Patterns with * or ? are resolved.
-    # Returns expanded list of file paths.
+    # Literal paths pass through unchanged. Patterns with *, ?, or a [..] character
+    # class are resolved. Returns expanded list of file paths.
     param([string[]]$Paths)
     $resolved = [System.Collections.Generic.List[string]]::new()
     foreach ($p in $Paths) {
@@ -588,7 +588,9 @@ function Resolve-BashGlob {
         # runspace (e.g. isolated Pester), but the Cmdlets static always is.
         # No-op off-Windows.
         $p = [PsBash.Cmdlets.BashRuntime]::NormalizeWindowsPath($p)
-        if ($p -match '[*?]') {
+        # *, ?, or a [..] character class → glob. A lone unmatched '[' resolves to
+        # nothing and falls through as a literal path (bash treats it literally too).
+        if ($p -match '[*?[]') {
             $expanded = @(Resolve-Path -Path $p -ErrorAction SilentlyContinue | ForEach-Object { $_.Path })
             if ($expanded.Count -eq 0) {
                 # No matches — pass through literally so the caller can emit its own error
@@ -1680,6 +1682,19 @@ function ConvertTo-JqJson {
     return ConvertTo-JqJsonStringLiteral ([string]$Value)
 }
 
+function Test-JqTruthy {
+    # jq/yq truthiness: ONLY null and boolean false are falsy. Every other value —
+    # including 0, "", the string "false", [], {} — is TRUTHY. The old `$val -ne $false`
+    # test was wrong because PowerShell coerces the RHS to the LHS's type: `0 -ne $false`
+    # compares 0 -ne 0 (False → 0 read as falsy), and `"false" -ne $false` compares
+    # "false" -ne "False" case-insensitively (equal → read as falsy). So `.count // 99`
+    # on count:0 returned 99, and select(.n) dropped every n:0. Test the type explicitly.
+    param([object]$Value)
+    if ($null -eq $Value) { return $false }
+    if ($Value -is [bool]) { return [bool]$Value }
+    return $true
+}
+
 function Invoke-JqFilter {
     param([object]$Data, [string]$Filter, [hashtable]$Variables)
 
@@ -1734,7 +1749,7 @@ function Invoke-JqFilter {
         $rightExpr = $filter.Substring($altIdx + 2).Trim()
         $leftResults = @(Invoke-JqFilter -Data $Data -Filter $leftExpr -Variables $Variables)
         foreach ($val in $leftResults) {
-            if ($null -ne $val -and $val -ne $false) { return @(, $val) }
+            if (Test-JqTruthy $val) { return @(, $val) }
         }
         return @(Invoke-JqFilter -Data $Data -Filter $rightExpr -Variables $Variables)
     }
@@ -1855,7 +1870,9 @@ function Invoke-JqFilter {
 
     # not
     if ($filter -eq 'not') {
-        $falsy = ($null -eq $Data) -or ($Data -is [bool] -and -not $Data) -or ($Data -eq $false)
+        # jq `not`: true iff the value is falsy (null or boolean false). The old
+        # `-or ($Data -eq $false)` term wrongly made 0 falsy (0 -eq $false → True).
+        $falsy = -not (Test-JqTruthy $Data)
         return @(, $falsy)
     }
 
@@ -2122,7 +2139,7 @@ function Invoke-JqSelect {
     $vals = @(Invoke-JqFilter -Data $Data -Filter $Expr -Variables $Variables)
     if ($vals.Count -eq 0) { return $false }
     $val = $vals[0]
-    return ($null -ne $val) -and ($val -ne $false)
+    return (Test-JqTruthy $val)
 }
 
 function Invoke-JqIf {
@@ -2149,7 +2166,7 @@ function Invoke-JqIf {
 
         # Evaluate condition
         $condVals = @(Invoke-JqFilter -Data $Data -Filter $condExpr -Variables $Variables)
-        $condTrue = ($condVals.Count -gt 0) -and ($null -ne $condVals[0]) -and ($condVals[0] -ne $false)
+        $condTrue = ($condVals.Count -gt 0) -and (Test-JqTruthy $condVals[0])
 
         if ($condTrue) {
             return @(Invoke-JqFilter -Data $Data -Filter $bodyExpr -Variables $Variables)
@@ -2701,7 +2718,9 @@ function Complete-BashBgJob {
         $out = $ps.EndInvoke($Job.AsyncResult)
         foreach ($item in $out) {
             $text = if ($null -ne $item -and $item.PSObject.Properties['BashText']) { $item.BashText } else { "$item" }
-            if ($text) { Emit-BashLine -Text $text }
+            # Emit blank lines too — a background command's empty output line is real
+            # output. `if ($text)` is false for "", silently dropping blank lines.
+            if ($null -ne $text) { Emit-BashLine -Text $text }
         }
         foreach ($err in $ps.Streams.Error) {
             Write-BashHostStderr ("$err")
@@ -2780,11 +2799,22 @@ function Invoke-BashWait {
     if ($Arguments -contains '--help') { return Show-BashHelp 'wait' }
 
     if ($Arguments.Count -gt 0) {
-        # wait $! / wait <id>: wait for specific synthetic background-job ids.
+        # wait $! / wait <id>: wait for a synthetic background-job id; wait %N: the
+        # bash job number (positional, 1-based) shown by `jobs` — NOT the id.
         foreach ($pidArg in $Arguments) {
-            if (-not [int]::TryParse($pidArg, [ref]$null)) { continue }
-            $wantId = [int]$pidArg
-            $job = $script:BashBgJobs | Where-Object { $_.Id -eq $wantId } | Select-Object -First 1
+            $job = $null
+            if ($pidArg -like '%*') {
+                $wantNum = $pidArg -replace '^%', ''
+                if ([int]::TryParse($wantNum, [ref]$null)) {
+                    $idx = [int]$wantNum - 1
+                    if ($idx -ge 0 -and $idx -lt $script:BashBgJobs.Count) {
+                        $job = @($script:BashBgJobs)[$idx]
+                    }
+                }
+            } elseif ([int]::TryParse($pidArg, [ref]$null)) {
+                $wantId = [int]$pidArg
+                $job = $script:BashBgJobs | Where-Object { $_.Id -eq $wantId } | Select-Object -First 1
+            }
             if ($job) {
                 [void]$job.AsyncResult.AsyncWaitHandle.WaitOne()
                 Complete-BashBgJob -Job $job
@@ -2840,9 +2870,16 @@ function Invoke-BashFg {
                 $target = @($script:BashBgJobs)[$idx]
             }
         } else {
-            $wantId = $jobNum -replace '^%', ''
-            if ([int]::TryParse($wantId, [ref]$null)) {
-                $target = @($script:BashBgJobs) | Where-Object { $_.Id -eq [int]$wantId } | Select-Object -First 1
+            # A `%N` jobspec is the bash JOB NUMBER (the [N] shown by `jobs`), which is
+            # positional and 1-based — NOT the synthetic $! id (which starts at 1000).
+            # Comparing the stripped "1" against $_.Id never matched. Map it to the
+            # same positional index as the bare-number form.
+            $wantNum = $jobNum -replace '^%', ''
+            if ([int]::TryParse($wantNum, [ref]$null)) {
+                $idx = [int]$wantNum - 1
+                if ($idx -ge 0 -and $idx -lt $script:BashBgJobs.Count) {
+                    $target = @($script:BashBgJobs)[$idx]
+                }
             }
         }
     } else {
@@ -3024,8 +3061,11 @@ function Show-BashHelp {
         }
     }
 
+    # Emit one BashObject PER LINE (Emit-BashLine splits on `n) so `--help` output is
+    # a stream of line records like every other command's stdout, not a single
+    # multi-line object that downstream consumers (grep, head, wc) treat as one line.
     $text = ($lines -join "`n") + "`n"
-    New-BashObject -BashText $text
+    Emit-BashLine -Text $text
 }
 
 # --- Tab Completion ---
@@ -3099,12 +3139,16 @@ function Register-BashCompletions {
 # transpiled IPC path never prompts the user for completions) but costs ~1.5 s
 # of psm1-load time — one Register-ArgumentCompleter call per command in
 # $script:BashFlagSpecs. The interactive REPL (PsBash.Shell / InteractiveShell)
-# sets PSBASH_INTERACTIVE=1 before starting the host, and Import-Module PsBash
-# from a user pwsh prompt is also interactive — gate on both signals so the
-# REPL and ad-hoc interactive sessions still get completions, but the
-# per-invocation host (Lifetime.PerInvocation, the load-bearing case for
-# host-startup #9) skips the registration entirely.
-if ($env:PSBASH_INTERACTIVE -eq '1') {
+# sets PSBASH_INTERACTIVE=1 before starting the host; `Import-Module PsBash` from a
+# user pwsh prompt is ALSO interactive but sets no such variable — the previous
+# PSBASH_INTERACTIVE-only gate meant plain-import users never got completers despite
+# the documented intent. Register when EITHER signal holds: the env flag (REPL) OR a
+# genuinely interactive ConsoleHost session (ad-hoc import). The headless
+# per-invocation IPC host is neither UserInteractive nor a ConsoleHost, so it still
+# skips the registration (host-startup #9 stays fast).
+$__psbashRegisterCompleters = ($env:PSBASH_INTERACTIVE -eq '1') -or
+    ([Environment]::UserInteractive -and $Host.Name -eq 'ConsoleHost')
+if ($__psbashRegisterCompleters) {
     Register-BashCompletions
 }
 

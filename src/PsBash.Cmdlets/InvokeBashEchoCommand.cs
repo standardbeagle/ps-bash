@@ -63,7 +63,9 @@ public sealed class InvokeBashEchoCommand : PSCmdlet
         // line is somehow unavailable.
         if (E.IsPresent)
         {
-            string line = MyInvocation.Line ?? string.Empty;
+            // Scope to echo's own pipeline segment so a later command's -e/-E
+            // (e.g. `echo -e x | grep -E y`) cannot override echo's own flag.
+            string line = BashRuntime.CurrentPipelineSegment(MyInvocation);
             var m = Regex.Matches(line, @"(?<=\s)-([eE])(?=\s|$)");
             string flag = m.Count > 0 ? "-" + m[m.Count - 1].Groups[1].Value : "-e";
             var argList = new List<string>(args.Length + 1) { flag };

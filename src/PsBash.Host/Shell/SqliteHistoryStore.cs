@@ -347,10 +347,12 @@ public sealed class SqliteHistoryStore : IHistoryStore, IDisposable
 
     public Task<IReadOnlyList<SequenceSuggestion>> GetSequenceSuggestionsAsync(
         string? lastCommand,
-        string cwd)
+        string cwd,
+        CancellationToken ct = default)
     {
         return Task.Run(() =>
         {
+            ct.ThrowIfCancellationRequested();
             if (string.IsNullOrEmpty(lastCommand))
                 return Array.Empty<SequenceSuggestion>();
 
@@ -433,7 +435,18 @@ public sealed class SqliteHistoryStore : IHistoryStore, IDisposable
                     // Sort by score (descending), then by total frequency (descending)
                     results = results
                         .OrderByDescending(r => r.Score)
-                        .ThenByDescending(r => r.Reason.Contains("total") ? int.Parse(r.Reason.Split(" ").Last()) : 0)
+                        // Tie-break by the "… M total" count. The number is the token
+                        // BEFORE the word "total"; the old `.Last()` parsed the literal
+                        // word "total" (and "directory"/"times" for the other reason
+                        // shapes) → int.Parse threw → the blanket catch silently killed
+                        // ALL suggestions exactly when history was richest. TryParse the
+                        // right token instead.
+                        .ThenByDescending(r =>
+                        {
+                            var parts = r.Reason.Split(' ');
+                            return parts.Length >= 2 && parts[^1] == "total"
+                                   && int.TryParse(parts[^2], out var total) ? total : 0;
+                        })
                         .Take(10)
                         .ToList();
 
@@ -445,7 +458,7 @@ public sealed class SqliteHistoryStore : IHistoryStore, IDisposable
                 // Routine: suggestions are advisory; empty result is acceptable.
                 return Array.Empty<SequenceSuggestion>();
             }
-        });
+        }, ct);
     }
 
     public void Dispose()

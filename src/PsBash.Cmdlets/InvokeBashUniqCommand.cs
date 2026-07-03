@@ -273,7 +273,9 @@ public sealed class InvokeBashUniqCommand : PSCmdlet
         // ProcessRecord and EndProcessing share them.
         // Bare -D binds to the -d decoy (case-insensitive), so recover the
         // distinct uppercase -D from the raw invocation line.
-        var rawLine = MyInvocation?.Line ?? string.Empty;
+        // Scope the -D recovery scan to uniq's own pipeline segment so another command's
+        // uppercase -D cannot leak in as uniq's --all-repeated.
+        var rawLine = BashRuntime.CurrentPipelineSegment(MyInvocation);
         if (System.Text.RegularExpressions.Regex.IsMatch(rawLine, @"(?<![\w-])-D(?![\w])"))
         {
             _allRepeated = true;

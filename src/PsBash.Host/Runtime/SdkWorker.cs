@@ -92,6 +92,11 @@ public sealed class SdkWorker : IWorker, ICompletionWorker
         await _lock.WaitAsync(ct);
         try
         {
+            // Stop the in-flight pipeline when ct fires so a slow query releases _lock
+            // instead of holding it uncancellably — otherwise the NEXT command blocks
+            // behind it forever (Task.Run's ct only guards scheduling, not the running
+            // delegate). Same pattern ExecuteWithOutputAsync uses.
+            using var stopReg = ct.Register(() => _ps.Stop());
             return await Task.Run(() => WithDefaultRunspace(() => RunCommandCollect(expression)), ct);
         }
         finally
