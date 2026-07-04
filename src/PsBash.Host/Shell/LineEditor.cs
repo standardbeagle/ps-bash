@@ -1058,36 +1058,57 @@ internal sealed class LineEditor
         if (total == 0) { _panelFocused = false; return false; }
         int window = Math.Min(MaxPanelRows, total);
 
-        switch (key.Key)
+        switch (ClassifyPanelKey(key.Key, key.Modifiers))
         {
-            case ConsoleKey.DownArrow when key.Modifiers == 0:
+            case PanelAction.Down:
                 if (_panelSelected < total - 1) _panelSelected++;
                 EnsurePanelScroll(window, total); Redraw(); return true;
-            case ConsoleKey.UpArrow when key.Modifiers == 0:
+            case PanelAction.Up:
                 if (_panelSelected <= 0) { ExitPanelFocus(); Redraw(); return true; }
                 _panelSelected--; EnsurePanelScroll(window, total); Redraw(); return true;
-            case ConsoleKey.PageDown:
+            case PanelAction.PageDown:
                 _panelSelected = Math.Min(total - 1, _panelSelected + window);
                 EnsurePanelScroll(window, total); Redraw(); return true;
-            case ConsoleKey.PageUp:
+            case PanelAction.PageUp:
                 _panelSelected = Math.Max(0, _panelSelected - window);
                 EnsurePanelScroll(window, total); Redraw(); return true;
-            case ConsoleKey.Escape:
+            case PanelAction.Exit:
                 ExitPanelFocus(); Redraw(); return true;
-            case ConsoleKey.Enter:
+            case PanelAction.Insert:
                 InsertFlagFromPanel(); return true;
-            case ConsoleKey.Tab when key.Modifiers == 0:
-                // Tab on a focused panel commits the SELECTED row (like Enter), rather than
-                // falling through to a fresh Tab-completion cycle that ignores the selection
-                // and inserts a different candidate.
-                InsertFlagFromPanel(); return true;
-            case ConsoleKey.RightArrow when key.Modifiers == 0:
+            case PanelAction.OpenHelp:
                 // Drill into the man-page detail for the selected option.
                 OpenHelpBrowser(CurrentFlagHints(_buf.ToString(), _cursor), _panelSelected);
                 return true;
             default:
                 return false; // not a panel key → caller exits focus and re-handles it
         }
+    }
+
+    /// <summary>The action a key triggers while the floating completion panel is focused.</summary>
+    internal enum PanelAction { None, Down, Up, PageDown, PageUp, Exit, Insert, OpenHelp }
+
+    /// <summary>
+    /// Pure classification of a keystroke while the panel is focused. Both <c>Enter</c> and <c>Tab</c>
+    /// map to <see cref="PanelAction.Insert"/> — committing the SELECTED row. (The Tab case is the fix
+    /// for Tab previously falling through to a fresh completion cycle that ignored the selection and
+    /// inserted a different candidate.) Extracted so the mapping is unit-testable without the key loop.
+    /// </summary>
+    internal static PanelAction ClassifyPanelKey(ConsoleKey key, ConsoleModifiers mods)
+    {
+        bool noMod = mods == 0;
+        return key switch
+        {
+            ConsoleKey.DownArrow when noMod => PanelAction.Down,
+            ConsoleKey.UpArrow when noMod => PanelAction.Up,
+            ConsoleKey.PageDown => PanelAction.PageDown,
+            ConsoleKey.PageUp => PanelAction.PageUp,
+            ConsoleKey.Escape => PanelAction.Exit,
+            ConsoleKey.Enter => PanelAction.Insert,
+            ConsoleKey.Tab when noMod => PanelAction.Insert,
+            ConsoleKey.RightArrow when noMod => PanelAction.OpenHelp,
+            _ => PanelAction.None,
+        };
     }
 
     private void EnsurePanelScroll(int window, int total)

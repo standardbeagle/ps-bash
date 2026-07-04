@@ -259,6 +259,47 @@ public class LineEditorPanelScrollTests
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// LineEditor.ClassifyPanelKey — focused-panel key mapping
+// ─────────────────────────────────────────────────────────────────────────────
+
+public class LineEditorPanelKeyTests
+{
+    [Fact]
+    public void Tab_CommitsSelectedRow_LikeEnter()
+    {
+        // Regression: with the panel focused, Tab must INSERT the selected candidate (same as Enter),
+        // not fall through to a fresh Tab-completion cycle that inserts a different option.
+        Assert.Equal(LineEditor.PanelAction.Insert, LineEditor.ClassifyPanelKey(ConsoleKey.Tab, 0));
+        Assert.Equal(LineEditor.PanelAction.Insert, LineEditor.ClassifyPanelKey(ConsoleKey.Enter, 0));
+    }
+
+    [Fact]
+    public void NavigationKeys_MapToTheirActions()
+    {
+        Assert.Equal(LineEditor.PanelAction.Down, LineEditor.ClassifyPanelKey(ConsoleKey.DownArrow, 0));
+        Assert.Equal(LineEditor.PanelAction.Up, LineEditor.ClassifyPanelKey(ConsoleKey.UpArrow, 0));
+        Assert.Equal(LineEditor.PanelAction.PageDown, LineEditor.ClassifyPanelKey(ConsoleKey.PageDown, 0));
+        Assert.Equal(LineEditor.PanelAction.PageUp, LineEditor.ClassifyPanelKey(ConsoleKey.PageUp, 0));
+        Assert.Equal(LineEditor.PanelAction.Exit, LineEditor.ClassifyPanelKey(ConsoleKey.Escape, 0));
+        Assert.Equal(LineEditor.PanelAction.OpenHelp, LineEditor.ClassifyPanelKey(ConsoleKey.RightArrow, 0));
+    }
+
+    [Fact]
+    public void PrintableAndUnknownKeys_AreNone_SoFocusExitsAndKeyIsRehandled()
+    {
+        Assert.Equal(LineEditor.PanelAction.None, LineEditor.ClassifyPanelKey(ConsoleKey.A, 0));
+        Assert.Equal(LineEditor.PanelAction.None, LineEditor.ClassifyPanelKey(ConsoleKey.Backspace, 0));
+    }
+
+    [Fact]
+    public void Tab_WithModifier_IsNotInsert()
+    {
+        // Only bare Tab commits; Shift-Tab / Ctrl-Tab are not the panel-commit key.
+        Assert.Equal(LineEditor.PanelAction.None, LineEditor.ClassifyPanelKey(ConsoleKey.Tab, ConsoleModifiers.Shift));
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // TabCompleter
 // ─────────────────────────────────────────────────────────────────────────────
 
