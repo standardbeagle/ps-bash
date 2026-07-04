@@ -1076,6 +1076,11 @@ internal sealed class LineEditor
                 ExitPanelFocus(); Redraw(); return true;
             case ConsoleKey.Enter:
                 InsertFlagFromPanel(); return true;
+            case ConsoleKey.Tab when key.Modifiers == 0:
+                // Tab on a focused panel commits the SELECTED row (like Enter), rather than
+                // falling through to a fresh Tab-completion cycle that ignores the selection
+                // and inserts a different candidate.
+                InsertFlagFromPanel(); return true;
             case ConsoleKey.RightArrow when key.Modifiers == 0:
                 // Drill into the man-page detail for the selected option.
                 OpenHelpBrowser(CurrentFlagHints(_buf.ToString(), _cursor), _panelSelected);

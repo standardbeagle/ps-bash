@@ -2,9 +2,9 @@
  *
  * `Get-ChildItem | Format-Styled fs` renders a CURATED, human-oriented table — Format-Styled
  * builds it automatically for FileSystemInfo rows (no -Property needed):
- *   - Name      type emoji + name        (📁 dir  📘 code  🖼 image  🎵 audio  📦 archive  …)
- *   - Size      human size + a ▰▱ meter   (a log-scaled visual indicator of relative file size)
- *   - Modified  relative time             (5m ago / 3h ago / 2d ago / "Jun 12")
+ *   - Name      type tag + name          (dir  src  img  aud  arc  … — coloured by type below)
+ *   - Size      human size               (820B / 1.4K / 340M / 2.1G)
+ *   - Modified  relative time            (5m ago / 3h ago / 2d ago / "Jun 12")
  * Each row carries a `class` naming its type bucket; the rules below colour by it. Pass an explicit
  * -Property (or a different sheet) to opt out and get the raw property grid.
  *

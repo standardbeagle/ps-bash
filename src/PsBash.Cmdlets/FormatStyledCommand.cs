@@ -106,9 +106,9 @@ public sealed class FormatStyledCommand : PSCmdlet
 
         // Filesystem view: when the rows are Get-ChildItem output (FileSystemInfo) and the user
         // asked for the `fs` sheet (or gave no sheet at all) without an explicit -Property, replace
-        // the dump-every-property grid with a curated, human-oriented table — a type emoji + name, a
-        // human size with a visual size meter, and a relative modified time — coloured by file type
-        // through the fs stylesheet. An explicit -Property, or a non-fs sheet, keeps the generic path.
+        // the dump-every-property grid with a curated, human-oriented table — a short type tag + name,
+        // a human size, and a relative modified time — coloured by file type through the fs
+        // stylesheet. An explicit -Property, or a non-fs sheet, keeps the generic path.
         if (TryBuildFilesystemView(out var fsRows, out var fsColumns))
         {
             _rows.Clear();
@@ -287,8 +287,8 @@ public sealed class FormatStyledCommand : PSCmdlet
     /// <summary>
     /// Build the curated filesystem table when it applies: rows are all <see cref="FileSystemInfo"/>,
     /// the effective sheet is <c>fs</c> (or none), and no explicit <see cref="Property"/> was given.
-    /// Produces one synthetic row per entry with <c>Name</c> (type emoji + name), <c>Size</c> (human
-    /// size + a log-scaled visual meter), and <c>Modified</c> (relative time) columns, plus a
+    /// Produces one synthetic row per entry with <c>Name</c> (type tag + name), <c>Size</c> (human
+    /// size), and <c>Modified</c> (relative time) columns, plus a
     /// <c>class</c> naming the file-type bucket the <c>fs</c> sheet colours by. Returns false (and the
     /// generic property grid is used) when any condition is unmet.
     /// </summary>
@@ -326,20 +326,9 @@ public sealed class FormatStyledCommand : PSCmdlet
             return false;
         }
 
-        // Scale the size meter against the largest file in this listing (log, so a few huge files
-        // don't flatten everything else to empty).
-        long max = 0;
         foreach (var i in infos)
         {
-            if (i is FileInfo fi)
-            {
-                max = Math.Max(max, fi.Length);
-            }
-        }
-
-        foreach (var i in infos)
-        {
-            rows.Add(BuildFsRow(i, max));
+            rows.Add(BuildFsRow(i));
         }
 
         columns = new[] { "Name", "Size", "Modified" };
@@ -347,18 +336,22 @@ public sealed class FormatStyledCommand : PSCmdlet
     }
 
     /// <summary>Build one synthetic filesystem-view row (Name / Size / Modified + class) for an entry.</summary>
-    private static PSObject BuildFsRow(FileSystemInfo info, long max)
+    private static PSObject BuildFsRow(FileSystemInfo info)
     {
-        var (emoji, cls) = ClassifyFs(info);
+        var (tag, cls) = ClassifyFs(info);
         bool hidden = (info.Attributes & FileAttributes.Hidden) != 0;
         // `hidden` is appended LAST so the fs sheet's `.hidden` rule wins over the type colour.
         var classList = hidden ? cls + " hidden" : cls;
 
         bool isDir = info is DirectoryInfo;
-        string name = isDir ? $"{emoji}  {info.Name}/" : $"{emoji}  {info.Name}";
+        // A fixed-width lowercase type tag (colour conveys the same bucket via the fs sheet) is the
+        // terminal-oriented replacement for the old type emoji: meaningful, ASCII, and calm. Dirs
+        // keep the trailing `/` classifier.
+        string name = isDir ? $"{tag}  {info.Name}/" : $"{tag}  {info.Name}";
 
+        // Human size only — the log-scaled ▰▱ meter was removed as visual noise.
         string sizeCell = info is FileInfo file
-            ? $"{HumanSize(file.Length),6}  {SizeBar(file.Length, max)}"
+            ? $"{HumanSize(file.Length),6}"
             : $"{"—",6}";
 
         var o = new PSObject();
@@ -370,43 +363,47 @@ public sealed class FormatStyledCommand : PSCmdlet
         return o;
     }
 
-    /// <summary>Classify a filesystem entry into a (display emoji, fs-sheet class) pair by kind / extension.</summary>
-    internal static (string Emoji, string Class) ClassifyFs(FileSystemInfo info)
+    /// <summary>
+    /// Classify a filesystem entry into a (display tag, fs-sheet class) pair by kind / extension.
+    /// The tag is a fixed-width lowercase ASCII mnemonic (<c>dir</c> / <c>src</c> / <c>img</c> …) —
+    /// a terminal-oriented, colour-reinforced marker in place of a type emoji.
+    /// </summary>
+    internal static (string Tag, string Class) ClassifyFs(FileSystemInfo info)
     {
         if (info is DirectoryInfo)
         {
-            return ("📁", "dir");
+            return ("dir", "dir");
         }
 
         if ((info.Attributes & FileAttributes.ReparsePoint) != 0)
         {
-            return ("🔗", "symlink");
+            return ("lnk", "symlink");
         }
 
         var ext = info.Extension.TrimStart('.').ToLowerInvariant();
         return ext switch
         {
             "png" or "jpg" or "jpeg" or "gif" or "bmp" or "svg" or "webp" or "ico" or "tif" or "tiff" or "heic" or "avif"
-                => ("🖼", "image"),
+                => ("img", "image"),
             "mp4" or "mkv" or "mov" or "avi" or "webm" or "wmv" or "flv" or "m4v" or "mpg" or "mpeg"
-                => ("🎬", "video"),
+                => ("vid", "video"),
             "mp3" or "wav" or "flac" or "ogg" or "m4a" or "aac" or "wma" or "opus"
-                => ("🎵", "audio"),
+                => ("aud", "audio"),
             "zip" or "tar" or "gz" or "tgz" or "bz2" or "bz" or "xz" or "7z" or "rar" or "zst" or "lz" or "lzma"
-                => ("📦", "archive"),
+                => ("arc", "archive"),
             "exe" or "dll" or "msi" or "com" or "sys" or "so" or "dylib"
-                => ("⚙", "app"),
+                => ("exe", "app"),
             "sh" or "bash" or "zsh" or "ps1" or "psm1" or "cmd" or "bat"
-                => ("📜", "script"),
+                => ("scr", "script"),
             "cs" or "c" or "cpp" or "cc" or "h" or "hpp" or "js" or "mjs" or "cjs" or "ts" or "tsx" or "jsx"
                 or "py" or "rb" or "go" or "rs" or "java" or "kt" or "swift" or "php" or "scala" or "lua"
                 or "pl" or "r" or "dart" or "vue" or "svelte"
-                => ("📘", "code"),
+                => ("src", "code"),
             "pdf" or "doc" or "docx" or "odt" or "rtf" or "ppt" or "pptx" or "xls" or "xlsx" or "ods" or "csv" or "tsv" or "md"
-                => ("📕", "doc"),
+                => ("doc", "doc"),
             "json" or "yaml" or "yml" or "xml" or "toml" or "ini" or "cfg" or "conf" or "sql" or "db" or "sqlite" or "parquet"
-                => ("🗃", "data"),
-            _ => ("📄", "text"),
+                => ("dat", "data"),
+            _ => ("txt", "text"),
         };
     }
 
@@ -432,19 +429,6 @@ public sealed class FormatStyledCommand : PSCmdlet
             ? value.ToString("0.0", System.Globalization.CultureInfo.InvariantCulture)
             : value.ToString("0", System.Globalization.CultureInfo.InvariantCulture);
         return num + units[unit];
-    }
-
-    /// <summary>A fixed-width unicode meter (▰ filled / ▱ empty) log-scaled to <paramref name="max"/> — the visual size indicator.</summary>
-    internal static string SizeBar(long bytes, long max, int width = 6)
-    {
-        if (bytes <= 0 || max <= 0)
-        {
-            return new string('▱', width);
-        }
-
-        double frac = Math.Log(bytes + 1) / Math.Log(max + 1);
-        int filled = Math.Clamp((int)Math.Round(frac * width), 0, width);
-        return new string('▰', filled) + new string('▱', width - filled);
     }
 
     /// <summary>Relative modified time: <c>just now</c>, <c>5m ago</c>, <c>3h ago</c>, <c>2d ago</c>, then <c>MMM d</c> / <c>MMM d yyyy</c>.</summary>
