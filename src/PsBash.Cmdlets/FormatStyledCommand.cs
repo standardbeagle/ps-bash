@@ -104,18 +104,46 @@ public sealed class FormatStyledCommand : PSCmdlet
             return;
         }
 
-        // Filesystem view: when the rows are Get-ChildItem output (FileSystemInfo) and the user
-        // asked for the `fs` sheet (or gave no sheet at all) without an explicit -Property, replace
-        // the dump-every-property grid with a curated, human-oriented table — a short type tag + name,
-        // a human size, and a relative modified time — coloured by file type through the fs
-        // stylesheet. An explicit -Property, or a non-fs sheet, keeps the generic path.
-        if (TryBuildFilesystemView(out var fsRows, out var fsColumns))
+        // Curated per-type view: when the rows are a recognised output type (FileSystemInfo,
+        // ps-bash ls/find/du/ps/stat, or any BashText text-line type) and the user did not drive
+        // columns with -Property, replace the dump-every-property grid with a compact, human-oriented
+        // table (or the plain text lines) coloured by the type's auto-sheet. See TryBuildCuratedView.
+        if (TryBuildCuratedView(out var curatedRows, out var curatedColumns, out var curatedSheet, out var textOnly))
         {
+            if (textOnly)
+            {
+                // A text-line type (grep/cat/tree/wc/…): the BashText string IS the record. Emit the
+                // lines, not a one-column grid — matches the un-styled default and avoids the huge
+                // every-property table the user hit piping `ls`/`grep`/… into Format-Styled.
+                foreach (var row in curatedRows)
+                {
+                    WriteObject(PropStr(row, "BashText"));
+                }
+                return;
+            }
+
             _rows.Clear();
-            _rows.AddRange(fsRows);
-            Property = fsColumns;
+            _rows.AddRange(curatedRows);
+            Property = curatedColumns;
+            if (string.IsNullOrEmpty(Css))
+            {
+                Css = curatedSheet; // apply the type's colours (the user gave no sheet).
+            }
             RenderGridMode(asTable: true);
             return;
+        }
+
+        // Auto-sheet for the generic grid: colour a recognised uniform kind (Process, Git*, ErrorRecord,
+        // ping/trace) with its family stylesheet even when the user named no sheet. Unknown kinds keep
+        // the neutral `default` palette, so this never recolours arbitrary objects.
+        if (string.IsNullOrEmpty(Css))
+        {
+            var kind = UniformKind();
+            var auto = kind is null ? null : StyledStyles.AutoStyleForKind(kind);
+            if (auto is not null && auto != "object")
+            {
+                Css = auto;
+            }
         }
 
         // Mode selection. Explicit -Table / -List win; otherwise auto-select the way PowerShell's
@@ -282,105 +310,279 @@ public sealed class FormatStyledCommand : PSCmdlet
         return null;
     }
 
-    // ── Filesystem view (Get-ChildItem → curated, classified, human-formatted table) ──────────
+    // ── Curated per-type views (cross-indexed by object type) ─────────────────────────────────
+    //
+    // Format-Styled recognises the common output object types from both PowerShell and ps-bash and
+    // replaces the dump-every-property grid with a compact, human-oriented table (or, for the many
+    // text-line types, the plain lines). Adding a type is one `case` in the switch below plus a pure
+    // Project* row-builder — all unit-testable without a runspace.
+    //
+    //   FileSystemInfo / LsEntry / StatEntry  → fs view  (tag+name, size+meter, modified)   sheet fs
+    //   FindEntry                             → fs view over the match path                  sheet fs
+    //   DuEntry                               → size + path                                  sheet object
+    //   PsEntry                               → PID / User / %CPU / MEM / Command            sheet ps
+    //   any *.BashText text-line type         → the BashText lines (grep/cat/tree/wc/…)      (no grid)
+    //   everything else (Process/Git/…)       → generic grid, auto-coloured by AutoStyleForKind
+
+    private static readonly string[] FsColumns = { "Name", "Size", "Modified" };
 
     /// <summary>
-    /// Build the curated filesystem table when it applies: rows are all <see cref="FileSystemInfo"/>,
-    /// the effective sheet is <c>fs</c> (or none), and no explicit <see cref="Property"/> was given.
-    /// Produces one synthetic row per entry with <c>Name</c> (type tag + name), <c>Size</c> (human
-    /// size), and <c>Modified</c> (relative time) columns, plus a
-    /// <c>class</c> naming the file-type bucket the <c>fs</c> sheet colours by. Returns false (and the
-    /// generic property grid is used) when any condition is unmet.
+    /// Project the accumulated rows into a curated view when one applies (no explicit
+    /// <see cref="Property"/>, and the effective sheet permits it). On success sets
+    /// <paramref name="rows"/>/<paramref name="columns"/> to the curated table and
+    /// <paramref name="sheet"/> to the type's auto-sheet; <paramref name="textOnly"/> signals a
+    /// BashText-line type that should render as plain lines rather than a grid. Returns false to fall
+    /// through to the generic property grid.
     /// </summary>
-    private bool TryBuildFilesystemView(out List<PSObject> rows, out string[] columns)
+    private bool TryBuildCuratedView(out List<PSObject> rows, out string[] columns, out string sheet, out bool textOnly)
     {
         rows = new List<PSObject>();
         columns = Array.Empty<string>();
+        sheet = "object";
+        textOnly = false;
 
         if (Property is { Length: > 0 })
         {
             return false; // explicit columns: the user is driving — don't override.
         }
 
-        // The fs view owns the `fs` sheet and the no-sheet default; a different named sheet opts out.
-        if (!(string.IsNullOrEmpty(Css) || Css!.Equals("fs", StringComparison.OrdinalIgnoreCase)))
-        {
-            return false;
-        }
-
+        // (1) Get-ChildItem output: every row is a live FileSystemInfo (kind may mix File/Directory).
         var infos = new List<FileSystemInfo>(_rows.Count);
+        bool allFsi = _rows.Count > 0;
         foreach (var row in _rows)
         {
-            if (row.BaseObject is FileSystemInfo fsi)
-            {
-                infos.Add(fsi);
-            }
-            else
-            {
-                return false; // mixed / non-filesystem input: fall back to the generic grid.
-            }
+            if (row.BaseObject is FileSystemInfo fsi) { infos.Add(fsi); }
+            else { allFsi = false; break; }
         }
-
-        if (infos.Count == 0)
+        if (allFsi)
         {
-            return false;
+            if (!SheetAllows("fs")) { return false; }
+            long max = 0;
+            foreach (var i in infos) { if (i is FileInfo f) { long s; try { s = f.Length; } catch { s = 0; } max = Math.Max(max, s); } }
+            foreach (var i in infos) { rows.Add(BuildFsRow(i, max)); }
+            columns = FsColumns; sheet = "fs"; return true;
         }
 
-        foreach (var i in infos)
+        // (2) ps-bash typed output: dispatch by the row's uniform Strata kind.
+        var kind = UniformKind();
+        if (kind is null)
         {
-            rows.Add(BuildFsRow(i));
+            return false; // mixed kinds → generic grid.
         }
 
-        columns = new[] { "Name", "Size", "Modified" };
+        switch (kind)
+        {
+            case "LsEntry":
+            case "StatEntry":
+                if (!SheetAllows("fs")) { return false; }
+                { long max = MaxSizeBytes(); foreach (var r in _rows) { rows.Add(ProjectFsLike(r, max)); } }
+                columns = FsColumns; sheet = "fs"; return true;
+
+            case "FindEntry":
+                if (!SheetAllows("fs")) { return false; }
+                { long max = MaxSizeBytes(); foreach (var r in _rows) { rows.Add(ProjectFindEntry(r, max)); } }
+                columns = FsColumns; sheet = "fs"; return true;
+
+            case "DuEntry":
+                if (!SheetAllows("object")) { return false; }
+                foreach (var r in _rows) { rows.Add(ProjectDuEntry(r)); }
+                columns = new[] { "Size", "Path" }; sheet = "object"; return true;
+
+            case "PsEntry":
+                if (!SheetAllows("ps")) { return false; }
+                foreach (var r in _rows) { rows.Add(ProjectPsEntry(r)); }
+                columns = new[] { "PID", "User", "%CPU", "MEM", "Command" }; sheet = "ps"; return true;
+
+            default:
+                // Text-line types (grep/rg/cat/tree/wc/env/date/…): a single BashText string is the
+                // whole record. Collapse to plain lines instead of a one-column property grid.
+                // Only when the user did not name a sheet (which would have nothing to colour anyway).
+                if (string.IsNullOrEmpty(Css) && AllHaveBashText())
+                {
+                    rows.AddRange(_rows);
+                    textOnly = true; return true;
+                }
+                return false;
+        }
+    }
+
+    /// <summary>The shared Strata kind of every row, or null when the rows are of mixed kinds.</summary>
+    private string? UniformKind()
+    {
+        string? kind = null;
+        foreach (var row in _rows)
+        {
+            var k = KindOf(row);
+            if (kind is null) { kind = k; }
+            else if (!string.Equals(kind, k, StringComparison.Ordinal)) { return null; }
+        }
+        return kind;
+    }
+
+    /// <summary>True when the caller gave no sheet or named exactly <paramref name="name"/> — so a curated view for that sheet applies.</summary>
+    private bool SheetAllows(string name)
+        => string.IsNullOrEmpty(Css) || Css!.Equals(name, StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>True when every row exposes a gettable <c>BashText</c> property (a text-line type).</summary>
+    private bool AllHaveBashText()
+    {
+        foreach (var row in _rows)
+        {
+            var p = row.Properties["BashText"];
+            if (p is null || !p.IsGettable) { return false; }
+        }
         return true;
     }
 
-    /// <summary>Build one synthetic filesystem-view row (Name / Size / Modified + class) for an entry.</summary>
-    private static PSObject BuildFsRow(FileSystemInfo info)
+    /// <summary>Largest <c>SizeBytes</c> across the rows (for the size meter's log scale); 0 when none.</summary>
+    private long MaxSizeBytes()
     {
-        var (tag, cls) = ClassifyFs(info);
-        bool hidden = (info.Attributes & FileAttributes.Hidden) != 0;
-        // `hidden` is appended LAST so the fs sheet's `.hidden` rule wins over the type colour.
-        var classList = hidden ? cls + " hidden" : cls;
+        long max = 0;
+        foreach (var row in _rows)
+        {
+            if (!PropBool(row, "IsDirectory")) { max = Math.Max(max, PropLong(row, "SizeBytes")); }
+        }
+        return max;
+    }
 
+    // ── property readers (null / type-mismatch safe) ──────────────────────────────────────────
+    private static string PropStr(PSObject row, string name)
+    {
+        try { return row.Properties[name]?.Value?.ToString() ?? string.Empty; }
+        catch { return string.Empty; }
+    }
+
+    private static long PropLong(PSObject row, string name)
+    {
+        try
+        {
+            var v = row.Properties[name]?.Value;
+            return v is null ? 0L : Convert.ToInt64(v, System.Globalization.CultureInfo.InvariantCulture);
+        }
+        catch { return 0L; }
+    }
+
+    private static bool PropBool(PSObject row, string name)
+    {
+        try { return row.Properties[name]?.Value is bool b && b; }
+        catch { return false; }
+    }
+
+    private static DateTime PropDate(PSObject row, string name)
+    {
+        try { return row.Properties[name]?.Value is DateTime d ? d : DateTime.MinValue; }
+        catch { return DateTime.MinValue; }
+    }
+
+    // ── row projectors (pure; unit-tested) ────────────────────────────────────────────────────
+
+    /// <summary>Build the fs-view row for a live <see cref="FileSystemInfo"/> (Get-ChildItem path).</summary>
+    private static PSObject BuildFsRow(FileSystemInfo info, long max)
+    {
         bool isDir = info is DirectoryInfo;
-        // A fixed-width lowercase type tag (colour conveys the same bucket via the fs sheet) is the
-        // terminal-oriented replacement for the old type emoji: meaningful, ASCII, and calm. Dirs
-        // keep the trailing `/` classifier.
-        string name = isDir ? $"{tag}  {info.Name}/" : $"{tag}  {info.Name}";
+        bool isLink = (info.Attributes & FileAttributes.ReparsePoint) != 0;
+        bool hidden = (info.Attributes & FileAttributes.Hidden) != 0;
+        long size = 0;
+        if (info is FileInfo fi) { try { size = fi.Length; } catch { size = 0; } }
+        return BuildFsRow(info.Name, isDir, isLink, size, info.LastWriteTime, hidden, max);
+    }
 
-        // Human size only — the log-scaled ▰▱ meter was removed as visual noise.
-        string sizeCell = info is FileInfo file
-            ? $"{HumanSize(file.Length),6}"
-            : $"{"—",6}";
+    /// <summary>Project a ps-bash <c>LsEntry</c>/<c>StatEntry</c> PSObject into the fs view via its typed properties.</summary>
+    internal static PSObject ProjectFsLike(PSObject row, long max)
+        => BuildFsRow(PropStr(row, "Name"), PropBool(row, "IsDirectory"), PropBool(row, "IsSymlink"),
+            PropLong(row, "SizeBytes"), PropDate(row, "LastModified"), hidden: false, max);
 
+    /// <summary>Project a ps-bash <c>FindEntry</c> into the fs view keyed on the match <c>Path</c>.</summary>
+    internal static PSObject ProjectFindEntry(PSObject row, long max)
+        => BuildFsRow(PropStr(row, "Path"), PropBool(row, "IsDirectory"), isLink: false,
+            PropLong(row, "SizeBytes"), PropDate(row, "LastModified"), hidden: false, max);
+
+    /// <summary>Project a ps-bash <c>DuEntry</c> into a right-aligned human size + path row (the <c>total</c> line gets a class).</summary>
+    internal static PSObject ProjectDuEntry(PSObject row)
+    {
+        bool isTotal = PropBool(row, "IsTotal");
         var o = new PSObject();
-        o.TypeNames.Insert(0, isDir ? "DirectoryInfo" : "FileInfo");
-        o.Properties.Add(new PSNoteProperty("Name", name));
-        o.Properties.Add(new PSNoteProperty("Size", sizeCell));
-        o.Properties.Add(new PSNoteProperty("Modified", HumanTime(info.LastWriteTime)));
-        o.Properties.Add(new PSNoteProperty("class", classList));
+        o.TypeNames.Insert(0, "DuEntry");
+        o.Properties.Add(new PSNoteProperty("Size", $"{PropStr(row, "SizeHuman"),8}"));
+        o.Properties.Add(new PSNoteProperty("Path", PropStr(row, "Path")));
+        o.Properties.Add(new PSNoteProperty("class", isTotal ? "total" : string.Empty));
+        return o;
+    }
+
+    /// <summary>Project a ps-bash <c>PsEntry</c> into the compact process view; <c>busy</c> class when CPU &gt; 50 so the ps sheet can highlight it.</summary>
+    internal static PSObject ProjectPsEntry(PSObject row)
+    {
+        var cpu = PropStr(row, "CPU");
+        bool busy = double.TryParse(cpu, System.Globalization.NumberStyles.Any,
+            System.Globalization.CultureInfo.InvariantCulture, out var c) && c > 50;
+        var o = new PSObject();
+        // Kind "Process" so the ps stylesheet (which targets `Process`) colours these rows.
+        o.TypeNames.Insert(0, "Process");
+        o.Properties.Add(new PSNoteProperty("PID", PropStr(row, "PID")));
+        o.Properties.Add(new PSNoteProperty("User", PropStr(row, "User")));
+        o.Properties.Add(new PSNoteProperty("%CPU", cpu));
+        o.Properties.Add(new PSNoteProperty("MEM", PropStr(row, "MemoryMB")));
+        o.Properties.Add(new PSNoteProperty("Command", PropStr(row, "Command")));
+        o.Properties.Add(new PSNoteProperty("class", busy ? "busy" : string.Empty));
         return o;
     }
 
     /// <summary>
-    /// Classify a filesystem entry into a (display tag, fs-sheet class) pair by kind / extension.
+    /// Build one fs-view row from primitives: <c>Name</c> (type tag + name, dirs keep a trailing
+    /// <c>/</c>), <c>Size</c> (human size + a log-scaled ▰▱ meter, or <c>—</c> for a dir), and
+    /// <c>Modified</c> (relative time), plus the file-type <c>class</c> the fs sheet colours by.
+    /// Shared by the FileSystemInfo, LsEntry/StatEntry, and FindEntry paths.
+    /// </summary>
+    internal static PSObject BuildFsRow(string name, bool isDir, bool isLink, long sizeBytes, DateTime modified, bool hidden, long max)
+    {
+        var (tag, cls) = ClassifyFsByExt(isDir, isLink, GetExtension(name));
+        // `hidden` is appended LAST so the fs sheet's `.hidden` rule wins over the type colour.
+        var classList = hidden ? cls + " hidden" : cls;
+
+        // A fixed-width lowercase type tag (colour conveys the same bucket via the fs sheet) is the
+        // terminal-oriented replacement for the old type emoji: meaningful, ASCII, and calm.
+        string display = isDir ? $"{tag}  {name}/" : $"{tag}  {name}";
+        string sizeCell = isDir ? $"{"—",6}" : $"{HumanSize(sizeBytes),6}  {SizeBar(sizeBytes, max)}";
+
+        var o = new PSObject();
+        o.TypeNames.Insert(0, isDir ? "DirectoryInfo" : "FileInfo");
+        o.Properties.Add(new PSNoteProperty("Name", display));
+        o.Properties.Add(new PSNoteProperty("Size", sizeCell));
+        o.Properties.Add(new PSNoteProperty("Modified", HumanTime(modified)));
+        o.Properties.Add(new PSNoteProperty("class", classList));
+        return o;
+    }
+
+    /// <summary>Lowercase extension without the dot, or empty; tolerant of a full path or bare name.</summary>
+    private static string GetExtension(string name)
+    {
+        var ext = Path.GetExtension(name);
+        return string.IsNullOrEmpty(ext) ? string.Empty : ext.TrimStart('.').ToLowerInvariant();
+    }
+
+    /// <summary>Classify a live <see cref="FileSystemInfo"/> into a (display tag, fs-sheet class) pair.</summary>
+    internal static (string Tag, string Class) ClassifyFs(FileSystemInfo info)
+        => ClassifyFsByExt(info is DirectoryInfo, (info.Attributes & FileAttributes.ReparsePoint) != 0,
+            info.Extension.TrimStart('.').ToLowerInvariant());
+
+    /// <summary>
+    /// Classify a filesystem entry into a (display tag, fs-sheet class) pair from primitives.
     /// The tag is a fixed-width lowercase ASCII mnemonic (<c>dir</c> / <c>src</c> / <c>img</c> …) —
     /// a terminal-oriented, colour-reinforced marker in place of a type emoji.
     /// </summary>
-    internal static (string Tag, string Class) ClassifyFs(FileSystemInfo info)
+    internal static (string Tag, string Class) ClassifyFsByExt(bool isDir, bool isLink, string extension)
     {
-        if (info is DirectoryInfo)
+        if (isDir)
         {
             return ("dir", "dir");
         }
 
-        if ((info.Attributes & FileAttributes.ReparsePoint) != 0)
+        if (isLink)
         {
             return ("lnk", "symlink");
         }
 
-        var ext = info.Extension.TrimStart('.').ToLowerInvariant();
+        var ext = extension.TrimStart('.').ToLowerInvariant();
         return ext switch
         {
             "png" or "jpg" or "jpeg" or "gif" or "bmp" or "svg" or "webp" or "ico" or "tif" or "tiff" or "heic" or "avif"
@@ -429,6 +631,19 @@ public sealed class FormatStyledCommand : PSCmdlet
             ? value.ToString("0.0", System.Globalization.CultureInfo.InvariantCulture)
             : value.ToString("0", System.Globalization.CultureInfo.InvariantCulture);
         return num + units[unit];
+    }
+
+    /// <summary>A fixed-width unicode meter (▰ filled / ▱ empty) log-scaled to <paramref name="max"/> — the visual size indicator.</summary>
+    internal static string SizeBar(long bytes, long max, int width = 6)
+    {
+        if (bytes <= 0 || max <= 0)
+        {
+            return new string('▱', width);
+        }
+
+        double frac = Math.Log(bytes + 1) / Math.Log(max + 1);
+        int filled = Math.Clamp((int)Math.Round(frac * width), 0, width);
+        return new string('▰', filled) + new string('▱', width - filled);
     }
 
     /// <summary>Relative modified time: <c>just now</c>, <c>5m ago</c>, <c>3h ago</c>, <c>2d ago</c>, then <c>MMM d</c> / <c>MMM d yyyy</c>.</summary>
