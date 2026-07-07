@@ -809,6 +809,18 @@ public sealed class IpcWorker : IWorker
                     await RetireAndRespawnAsync(ct).ConfigureAwait(false);
                     continue;
                 }
+                // Output already streamed (unsafe to retry) or retries exhausted. In
+                // compact mode the frames buffered before the reset were about to be
+                // silently dropped (they were never streamed and completion was never
+                // reached) — flush them as a partial digest so the user sees the output
+                // collected so far, then surface the failure. Best-effort: a flush error
+                // must not mask the original transport reset.
+                if (compactFrames is { Count: > 0 })
+                {
+                    try { EmitCompactedOutput(command, 125, timedOut: false, compactFrames); }
+                    catch { /* partial flush is best-effort */ }
+                    compactFrames = null;
+                }
                 // Output already streamed (unsafe to retry) or retries exhausted:
                 // retire so the next invocation self-heals, then surface the
                 // failure (Program.cs maps it to a one-line diagnostic + exit 125).
@@ -972,6 +984,10 @@ public sealed class IpcWorker : IWorker
                                 Console.Error.Write(
                                     "ps-bash: --compact-output exceeded its buffer cap; streaming the rest\n");
                                 foreach (var f in compactFrames) StreamFrame(f.Text, f.Stream);
+                                // Empty the SHARED list (the outer retry scope holds the same
+                                // reference) so a later transport-reset partial-flush does not
+                                // re-emit these already-streamed frames.
+                                compactFrames.Clear();
                                 compactFrames = null;
                             }
                             return;

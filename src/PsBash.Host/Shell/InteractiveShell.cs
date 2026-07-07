@@ -385,6 +385,7 @@ public static class InteractiveShell
             {
                 Console.Error.WriteLine("[ps-bash] worker connection lost; exiting.");
                 if (_historyStore is IDisposable d) d.Dispose();
+                (_frecencyStore as IDisposable)?.Dispose();  // every other exit path disposes both
                 return 1;
             }
             catch (Exception ex)

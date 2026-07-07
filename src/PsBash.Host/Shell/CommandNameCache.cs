@@ -49,27 +49,43 @@ internal sealed class CommandNameCache
         if (worker is not { HasExited: false })
             return;
 
-        // If a refresh is already running, just mark that another is wanted and return — the running
+        // If a refresh is already running, mark that another is wanted and return — the running
         // one will re-run once on completion, coalescing a burst of triggers into one trailing query.
         if (Interlocked.CompareExchange(ref _refreshing, 1, 0) == 1)
         {
             _pending = true;
-            return;
+            // The owner may release between our failed CAS above and this store. Re-try the
+            // CAS once: if it now succeeds we run the request ourselves rather than lose it
+            // (the owner already passed its own _pending check). Still owned → the owner (or
+            // its post-release guard below) will observe our _pending, so returning is safe.
+            if (Interlocked.CompareExchange(ref _refreshing, 1, 0) == 1)
+                return;
         }
 
-        try
+        // We own the flag. Drain, release, then guard the release race: a request that set
+        // _pending AFTER the inner loop's last check but BEFORE we cleared _refreshing would
+        // otherwise be dropped (the lost-wakeup the single-shot version had). The outer loop
+        // re-acquires and re-drains in that case; if another caller grabbed the flag meanwhile
+        // it owns the pending work, so we stop.
+        do
         {
-            do
+            try
             {
-                _pending = false;
-                await QueryAndPublishAsync(worker, ct).ConfigureAwait(false);
+                do
+                {
+                    _pending = false;
+                    await QueryAndPublishAsync(worker, ct).ConfigureAwait(false);
+                }
+                while (_pending && worker is { HasExited: false } && !ct.IsCancellationRequested);
             }
-            while (_pending && worker is { HasExited: false } && !ct.IsCancellationRequested);
+            finally
+            {
+                Interlocked.Exchange(ref _refreshing, 0);
+            }
         }
-        finally
-        {
-            Interlocked.Exchange(ref _refreshing, 0);
-        }
+        while (_pending
+               && worker is { HasExited: false } && !ct.IsCancellationRequested
+               && Interlocked.CompareExchange(ref _refreshing, 1, 0) == 0);
     }
 
     private async Task QueryAndPublishAsync(IWorker worker, CancellationToken ct)
