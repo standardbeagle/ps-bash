@@ -110,6 +110,11 @@ public class TranspileParseabilityCorpusTests
     [InlineData("echo {a,b}{1,2}")]
     [InlineData("echo pre{a,b}post")]
     [InlineData("echo {a,{b,c},d}")]
+    // brace item containing a quote — fixed: @('a','b'c'd') was a PS parse error.
+    [InlineData("echo {a,b'c'd}")]
+    [InlineData("echo pre{a,b'c'd}post")]
+    // out-of-int-range brace tuple integer — fixed: int.Parse OverflowException.
+    [InlineData("echo {10000000000,2}")]
     // ── 3.1 quoting / word seams ───────────────────────────────────────
     [InlineData("echo $'ansi\\nC'")]
     [InlineData("echo \"a\"'b'\"c\"")]
@@ -130,6 +135,11 @@ public class TranspileParseabilityCorpusTests
     // an expanding heredoc emitted $env:x:-fb (operator body treated as the var name).
     [InlineData("cat <<EOF\nval=${x:-fallback}\nEOF")]
     [InlineData("cat <<EOF\nu=${x^^} p=${x#pre} n=${x:-${y:-z}}\nEOF")]
+    // expanding heredoc command substitution — fixed: raw $(cmd)/`cmd` leaked into
+    // the interpolating @"..."@ and executed as PowerShell (injection). Now transpiled.
+    [InlineData("cat <<EOF\nnow is $(echo hi)\nEOF")]
+    [InlineData("cat <<EOF\nnow is `echo hi`\nEOF")]
+    [InlineData("cat <<EOF\nliteral \\$(echo hi) and \\`tick\\`\nEOF")]
     // ── 3.8 redirections ───────────────────────────────────────────────
     [InlineData("cmd 2>&1")]
     [InlineData("cmd &> /tmp/f")]
@@ -137,6 +147,10 @@ public class TranspileParseabilityCorpusTests
     [InlineData("cmd 1>&2")]
     [InlineData("diff <(sort a) <(sort b)")]
     [InlineData("cmd > /dev/null 2>&1")]
+    // subshell input redirect — fixed: `(cmd) < file` fell to the raw 0<file
+    // fallback ("'<' is reserved for future use"). Now Get-Content | & {...}.
+    [InlineData("(cat foo) < bar")]
+    [InlineData("(while read l; do echo $l; done) < input.txt")]
     // ── 3.10 control flow / lists ──────────────────────────────────────
     [InlineData("if true; then echo y; elif false; then echo m; else echo n; fi")]
     [InlineData("while read l; do echo $l; done")]

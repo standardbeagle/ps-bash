@@ -161,10 +161,15 @@ public sealed partial class BashParser
                 Advance(); // consume <<<
                 var wordToken = Advance();
                 string raw = wordToken.Value;
-                // Strip surrounding quotes from the here-string word.
+                // Strip surrounding quotes from the here-string word. Require at
+                // least two chars so a lone quote (`<<< '`) — where StartsWith and
+                // EndsWith both see the SAME single char — is not sliced to a
+                // start-past-end range (raw[1..^1] on length 1 threw
+                // ArgumentOutOfRangeException).
                 bool expand = true;
-                if ((raw.StartsWith('\'') && raw.EndsWith('\''))
-                    || (raw.StartsWith('"') && raw.EndsWith('"')))
+                if (raw.Length >= 2
+                    && ((raw.StartsWith('\'') && raw.EndsWith('\''))
+                        || (raw.StartsWith('"') && raw.EndsWith('"'))))
                 {
                     expand = raw[0] == '"';
                     raw = raw[1..^1];
@@ -361,7 +366,12 @@ public sealed partial class BashParser
 
         if (Peek().Kind == BashTokenKind.IoNumber)
         {
-            fd = int.Parse(Advance().Value);
+            var fdToken = Advance();
+            // A pathological digit run (e.g. `999999999999>file`) overflows int.
+            // Bash rejects an out-of-range fd; convert to a clean ParseException
+            // rather than the raw OverflowException that violated the fuzz invariant.
+            if (!int.TryParse(fdToken.Value, out fd))
+                throw MakeError($"file descriptor '{fdToken.Value}' out of range", fdToken.Position, "redirect");
         }
 
         var opToken = Advance();
@@ -385,7 +395,12 @@ public sealed partial class BashParser
             fd = op[0] == '<' ? 0 : 1;
         }
 
-        // Consume the target word.
+        // Consume the target word. It MUST be a word — a redirect with no target
+        // (`echo > ; ls`, `cat <` at a separator/EOF) is a syntax error in bash.
+        // Without this guard Advance() swallowed the following `;`/newline/operator
+        // token as the "target", silently merging two statements.
+        if (Peek().Kind != BashTokenKind.Word)
+            throw MakeError($"syntax error near unexpected token `{Peek().Value}'", Peek().Position, "redirect");
         var targetToken = Advance();
         var targetParts = DecomposeWord(targetToken.Value);
         var target = new CompoundWord(targetParts);

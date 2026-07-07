@@ -598,6 +598,12 @@ public static class BashLexer
         while (pos < len && depth > 0)
         {
             char c = input[pos];
+            // A brace inside a quoted span is literal, not a nesting delimiter:
+            // `${x:-"}"}` closes at the LAST `}`, not the one inside the quotes.
+            // Skip quoted / escaped spans so the depth count stays balanced.
+            if (c == '\'') { pos = ScanSingleQuoted(input, pos); continue; }
+            if (c == '"') { pos = ScanDoubleQuoted(input, pos); continue; }
+            if (c == '\\' && pos + 1 < len) { pos += 2; continue; }
             if (c == '{') depth++;
             else if (c == '}') depth--;
             if (depth > 0) pos++;

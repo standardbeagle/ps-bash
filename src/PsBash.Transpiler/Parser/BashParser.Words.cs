@@ -521,13 +521,35 @@ public sealed partial class BashParser
             }
             string op = raw[opStart..pos];
 
-            // Read value until closing brace
+            // Read value until closing brace. A brace inside a quoted / escaped
+            // span is literal (`${x:-"}"}` must close at the LAST `}`), so skip
+            // quoted spans instead of counting their braces.
             int valStart = pos;
             int braceDepth = 1;
             while (pos < len && braceDepth > 0)
             {
-                if (raw[pos] == '{') braceDepth++;
-                else if (raw[pos] == '}') braceDepth--;
+                char vc = raw[pos];
+                if (vc == '\\' && pos + 1 < len) { pos += 2; continue; }
+                if (vc == '\'')
+                {
+                    pos++;
+                    while (pos < len && raw[pos] != '\'') pos++;
+                    if (pos < len) pos++;
+                    continue;
+                }
+                if (vc == '"')
+                {
+                    pos++;
+                    while (pos < len && raw[pos] != '"')
+                    {
+                        if (raw[pos] == '\\' && pos + 1 < len) pos += 2;
+                        else pos++;
+                    }
+                    if (pos < len) pos++;
+                    continue;
+                }
+                if (vc == '{') braceDepth++;
+                else if (vc == '}') braceDepth--;
                 if (braceDepth > 0) pos++;
             }
             string val = raw[valStart..pos];

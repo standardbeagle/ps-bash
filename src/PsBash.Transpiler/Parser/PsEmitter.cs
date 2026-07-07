@@ -691,16 +691,26 @@ public static class PsEmitter
         sb.Append(" } finally { Pop-Location }");
 
         Redirect? fileRedirect = null;
+        Redirect? inputRedirect = null;
         foreach (var redirect in subshell.Redirects)
         {
             var target = TransformRedirectTarget(EmitWord(redirect.Target));
             bool isStdoutFile = redirect.Fd == 1
                 && (redirect.Op == ">" || redirect.Op == ">>")
                 && target != "$null";
+            // `(cmd) < file` feeds the file to the subshell's stdin. Without this
+            // the input redirect fell to the raw `0<file` fallback, which is
+            // invalid PowerShell ("'<' is reserved for future use"). Common as
+            // `(while read l; ...) < file`. Last input redirect wins (bash).
+            bool isStdinFile = redirect.Fd == 0 && redirect.Op == "<";
 
             if (isStdoutFile && fileRedirect is null)
             {
                 fileRedirect = redirect;
+            }
+            else if (isStdinFile)
+            {
+                inputRedirect = redirect;
             }
             else
             {
@@ -718,7 +728,17 @@ public static class PsEmitter
                 sb.Append(" -Append");
         }
 
-        return sb.ToString();
+        string result = sb.ToString();
+        if (inputRedirect is not null)
+        {
+            var inTarget = TransformRedirectTarget(EmitWord(inputRedirect.Target));
+            // /dev/null maps to $null; `Get-Content $null` errors, and empty stdin
+            // is the same as no piped input, so skip the pipe in that case.
+            if (inTarget != "$null")
+                result = $"Get-Content {inTarget} | & {{ {result} }}";
+        }
+
+        return result;
     }
 
     private static string EmitBraceGroup(Command.BraceGroup braceGroup)
@@ -2130,7 +2150,54 @@ public static class PsEmitter
 
         while (pos < len)
         {
-            if (body[pos] == '$' && pos + 1 < len && body[pos + 1] == '{')
+            // Backslash escapes an expansion char in an unquoted heredoc: bash
+            // renders \$ \` \\ as the literal char (no expansion). Emit the literal
+            // backtick-escaped so the interpolating @"..."@ here-string does not
+            // re-interpret it — this is also what stops `\$(cmd)` from executing.
+            if (body[pos] == '\\' && pos + 1 < len)
+            {
+                char n = body[pos + 1];
+                if (n == '$') { sb.Append("`$"); pos += 2; continue; }
+                if (n == '`') { sb.Append("``"); pos += 2; continue; }
+                if (n == '\\') { sb.Append('\\'); pos += 2; continue; }
+                // Other \x: bash keeps the backslash literally.
+                sb.Append(body[pos]); pos++;
+                continue;
+            }
+            if (body[pos] == '$' && pos + 1 < len && body[pos + 1] == '(')
+            {
+                // $(...) command substitution. bash EXPANDS it in an unquoted
+                // heredoc — so transpile the inner command to PowerShell and keep
+                // it as a subexpression. Passing the raw `$(date)` through executed
+                // it as PowerShell (Get-Date), a quoting-seam code-execution leak.
+                int cclose = FindMatchingParenQuoteAware(body, pos + 1);
+                if (cclose >= 0)
+                {
+                    sb.Append(EmitHereDocCommandSub(body[pos..(cclose + 1)]));
+                    pos = cclose + 1;
+                }
+                else
+                {
+                    // Unbalanced — emit a literal, escaped `$` so nothing executes.
+                    sb.Append("`$"); pos++;
+                }
+            }
+            else if (body[pos] == '`')
+            {
+                // `...` command substitution — same story; a raw backtick was also
+                // swallowed as a PowerShell escape, silently destroying the sub.
+                int bclose = body.IndexOf('`', pos + 1);
+                if (bclose >= 0)
+                {
+                    sb.Append(EmitHereDocCommandSub(body[pos..(bclose + 1)]));
+                    pos = bclose + 1;
+                }
+                else
+                {
+                    sb.Append("``"); pos++;
+                }
+            }
+            else if (body[pos] == '$' && pos + 1 < len && body[pos + 1] == '{')
             {
                 // ${...} — find the matching (balanced) close brace so nested
                 // expansions like ${x:-${y}} are captured whole.
@@ -2180,6 +2247,52 @@ public static class PsEmitter
             }
         }
 
+        return sb.ToString();
+    }
+
+    /// <summary>Index of the <c>)</c> matching the <c>(</c> at <paramref name="openParen"/>,
+    /// honoring nesting and quoted/escaped spans; -1 if unbalanced.</summary>
+    private static int FindMatchingParenQuoteAware(string s, int openParen)
+    {
+        int depth = 0;
+        for (int i = openParen; i < s.Length; i++)
+        {
+            char c = s[i];
+            if (c == '\\' && i + 1 < s.Length) { i++; continue; }
+            if (c == '\'')
+            {
+                i++;
+                while (i < s.Length && s[i] != '\'') i++;
+                continue;
+            }
+            if (c == '"')
+            {
+                i++;
+                while (i < s.Length && s[i] != '"')
+                {
+                    if (s[i] == '\\' && i + 1 < s.Length) i++;
+                    i++;
+                }
+                continue;
+            }
+            if (c == '(') depth++;
+            else if (c == ')' && --depth == 0) return i;
+        }
+        return -1;
+    }
+
+    /// <summary>
+    /// Transpile a heredoc-embedded command substitution (<c>$(cmd)</c> or
+    /// <c>`cmd`</c>) to the newline-preserving PowerShell subexpression form.
+    /// Heredoc expansion follows double-quote rules, so the STRING form
+    /// (<see cref="EmitCommandSubString"/>) is correct, not the word-split array.
+    /// </summary>
+    private static string EmitHereDocCommandSub(string raw)
+    {
+        var parts = BashParser.DecomposeWord(raw);
+        var sb = new StringBuilder();
+        foreach (var p in parts)
+            sb.Append(p is WordPart.CommandSub cs ? EmitCommandSubString(cs) : EmitWordPart(p));
         return sb.ToString();
     }
 
@@ -2400,7 +2513,7 @@ public static class PsEmitter
             }
             var crossItems = new List<string>(combos.Count);
             foreach (string c in combos)
-                crossItems.Add($"'{c}'");
+                crossItems.Add(PsBuild.SingleQuote(c));
             return $"@({string.Join(',', crossItems)})";
         }
 
@@ -2436,10 +2549,12 @@ public static class PsEmitter
         if (pre.Length == 0 && suf.Length == 0)
             return FormatBraceArray(expanded);
 
-        // With prefix/suffix, generate explicit items.
+        // With prefix/suffix, generate explicit items. Route through PsBuild so an
+        // item/prefix/suffix containing a quote is escaped (a hand-built `'{...}'`
+        // emitted `@('a','b'c'd')` — a PowerShell parse error — for `{a,b'c'd}`).
         var items = new List<string>();
         foreach (string item in expanded)
-            items.Add($"'{pre}{item}{suf}'");
+            items.Add(PsBuild.SingleQuote(pre + item + suf));
 
         return $"@({string.Join(',', items)})";
     }
@@ -2468,15 +2583,19 @@ public static class PsEmitter
     private static string FormatBraceArray(List<string> items)
     {
         // Check if all items are integers — use PS range operator if sequential.
-        if (items.Count >= 2 && items.All(IsPlainInteger))
+        // IsPlainInteger accepts arbitrary-length digit runs (`{10000000000,2}`),
+        // so parse with long/TryParse: an out-of-range item just disables the
+        // range optimization (falls through to the literal array) instead of
+        // throwing OverflowException.
+        if (items.Count >= 2 && items.All(IsPlainInteger)
+            && long.TryParse(items[0], out long first)
+            && long.TryParse(items[^1], out long last))
         {
-            int first = int.Parse(items[0]);
-            int last = int.Parse(items[^1]);
             bool isSequential = true;
-            int step = first <= last ? 1 : -1;
+            long step = first <= last ? 1 : -1;
             for (int i = 0; i < items.Count; i++)
             {
-                if (int.Parse(items[i]) != first + i * step)
+                if (!long.TryParse(items[i], out long v) || v != first + i * step)
                 {
                     isSequential = false;
                     break;
@@ -2493,7 +2612,7 @@ public static class PsEmitter
             if (IsPlainInteger(item))
                 formatted.Add(item);
             else
-                formatted.Add($"'{item}'");
+                formatted.Add(PsBuild.SingleQuote(item));
         }
         return $"@({string.Join(',', formatted)})";
     }
@@ -2870,8 +2989,13 @@ public static class PsEmitter
             // bare $10 is $1 followed by a literal 0 (handled in ParseSimpleVar). A bash
             // variable name can never be all-digits, so an all-digit name here is unambiguously
             // a positional parameter, not an env var.
+            // ${10000000000} — a positional index beyond any possible arg count is
+            // an unset parameter → empty in bash. int.Parse overflowed here; guard
+            // with TryParse and emit the empty string for an out-of-range index.
             var d when d.Length >= 2 && IsAllDigits(d) =>
-                $"$(if ($global:BashPositional) {{ $global:BashPositional[{int.Parse(d) - 1}] }} else {{ $args[{int.Parse(d) - 1}] }})",
+                int.TryParse(d, out int posIdx)
+                    ? $"$(if ($global:BashPositional) {{ $global:BashPositional[{posIdx - 1}] }} else {{ $args[{posIdx - 1}] }})"
+                    : "''",
             _ => $"$env:{name}",
         };
     }
