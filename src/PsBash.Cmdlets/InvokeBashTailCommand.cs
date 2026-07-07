@@ -497,17 +497,45 @@ public sealed class InvokeBashTailCommand : PSCmdlet
                         using var fs = new FileStream(
                             filePath, FileMode.Open, FileAccess.Read,
                             FileShare.ReadWrite);
-                        using var sr = new StreamReader(fs);
                         fs.Seek(filePos, SeekOrigin.Begin);
-                        string? line;
-                        while ((line = sr.ReadLine()) != null)
+                        long avail = info.Length - filePos;
+                        // Cap the per-poll read so a huge burst append doesn't allocate
+                        // unboundedly; the remainder is picked up on the next poll.
+                        int toRead = (int)Math.Min(avail, 64L << 20);
+                        var buffer = new byte[toRead];
+                        int read = fs.Read(buffer, 0, toRead);
+                        if (read <= 0) continue;
+
+                        // GNU tail -f emits only COMPLETE lines: a trailing fragment with
+                        // no newline is WITHHELD until its newline arrives (the old
+                        // StreamReader.ReadLine loop emitted it early as a full record).
+                        // '\n' (0x0A) never occurs mid-UTF-8-sequence, so a byte-level
+                        // newline scan is safe.
+                        int lastNl = Array.LastIndexOf(buffer, (byte)'\n', read - 1);
+                        if (lastNl < 0)
                         {
-                            foreach (var obj in BashRuntime.EmitBashLines(line))
+                            // No newline yet. Hold the fragment (don't advance filePos) —
+                            // UNLESS we filled the cap on a pathological newline-less run,
+                            // in which case emit it so following can't stall forever.
+                            if (read < toRead) continue;
+                            lastNl = read - 1;
+                        }
+
+                        var text = Encoding.UTF8.GetString(buffer, 0, lastNl + 1);
+                        // text ends at the last newline (or the forced cap): split drops the
+                        // trailing empty element; strip a CRLF's \r to match ReadLine.
+                        var lines = text.Split('\n');
+                        int emitCount = text.EndsWith('\n') ? lines.Length - 1 : lines.Length;
+                        for (int k = 0; k < emitCount; k++)
+                        {
+                            var l = lines[k];
+                            if (l.EndsWith('\r')) l = l[..^1];
+                            foreach (var obj in BashRuntime.EmitBashLines(l))
                             {
                                 WriteObject(obj);
                             }
                         }
-                        filePos = fs.Position;
+                        filePos += lastNl + 1; // advance past COMPLETE lines only
                     }
                     catch
                     {

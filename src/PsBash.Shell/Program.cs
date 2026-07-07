@@ -68,10 +68,11 @@ if (shellArgs.ShowHelp)
     Console.WriteLine("  --norc            Do not load any profile/rc file.");
     Console.WriteLine("  --unix-paths,");
     Console.WriteLine("  --windows-paths   Force unix- or windows-style path translation.");
-    Console.WriteLine("  --timeout VALUE   Per-command idle timeout (seconds; default 120).");
-    Console.WriteLine("                    Resets on each line of output, so a command that");
-    Console.WriteLine("                    keeps producing output is never killed for being");
-    Console.WriteLine("                    slow. Use 'none' (or 0) to disable entirely.");
+    Console.WriteLine("  --timeout VALUE   Per-command idle timeout in seconds (default: none —");
+    Console.WriteLine("                    unbounded, matching core bash). Resets on each line of");
+    Console.WriteLine("                    output, so a command that keeps producing output is");
+    Console.WriteLine("                    never killed for being slow. Use 'none' (or 0) to keep");
+    Console.WriteLine("                    it disabled; set a positive number to bound idle runs.");
     Console.WriteLine("  --compact-output  Enable opt-in compact output mode for agent contexts.");
     Console.WriteLine("                    Equivalent env: PSBASH_COMPACT_OUTPUT=1.");
     Console.WriteLine("  --no-compact-output");
