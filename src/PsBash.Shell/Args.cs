@@ -91,6 +91,17 @@ public record ShellArgs(
                     if (j < expanded.Count)
                     {
                         command = expanded[j];
+                        // Bash: `-c string [name [args...]]` — everything AFTER the
+                        // command string is POSITIONAL (name → $0, then $1…), never a
+                        // flag. So `-c 'echo hi' --version` runs the command; it does
+                        // NOT print the version banner, and the trailing args are not
+                        // dropped. Capture them as ScriptArgs and stop flag parsing.
+                        if (j + 1 < expanded.Count)
+                            scriptArgs = [.. scriptArgs, .. expanded.Skip(j + 1)];
+                        i = expanded.Count; // end option parsing — the rest are positionals
+                    }
+                    else
+                    {
                         i = j;
                     }
                     break;

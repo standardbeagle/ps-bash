@@ -74,6 +74,14 @@ public static class HostProtocol
     public const string PromptReadySentinel = "<<<PROMPT-READY>>>";
 
     /// <summary>
+    /// Deadline for the trailing <see cref="PromptReadySentinel"/> read AFTER the EXIT
+    /// sentinel has been observed. A live host emits the sentinel (or closes the stream)
+    /// within milliseconds; this bounds the wait so a wedged host cannot hang a caller
+    /// that passed no cancellation token. Generous relative to the expected latency.
+    /// </summary>
+    private const int PostExitSentinelDeadlineMs = 2000;
+
+    /// <summary>
     /// PTY-5 lifecycle sentinel: the launcher emits this on the interactive
     /// response stream after it has forwarded a terminal signal (Ctrl-C /
     /// SIGINT, Ctrl-Z / SIGTSTP) to the host's foreground process group. It is
@@ -562,7 +570,32 @@ public static class HostProtocol
         bool promptReady = false;
         while (true)
         {
-            var line = await reader.ReadLineAsync(ct).ConfigureAwait(false);
+            // Once EXIT is observed, the only remaining protocol event is the optional
+            // trailing PromptReadySentinel, which a live host emits within milliseconds
+            // (or it closes the stream). Bound that read with the deadline the doc
+            // comment promises: a wedged host that sent EXIT but neither the sentinel
+            // nor an EOF must not hang the caller (which often passes ct = default).
+            string? line;
+            if (exitCode is null)
+            {
+                line = await reader.ReadLineAsync(ct).ConfigureAwait(false);
+            }
+            else
+            {
+                using var linked = CancellationTokenSource.CreateLinkedTokenSource(ct);
+                linked.CancelAfter(PostExitSentinelDeadlineMs);
+                try
+                {
+                    line = await reader.ReadLineAsync(linked.Token).ConfigureAwait(false);
+                }
+                catch (OperationCanceledException) when (!ct.IsCancellationRequested)
+                {
+                    // Post-EXIT deadline elapsed with no sentinel — return what we have
+                    // instead of blocking forever. A genuine caller-cancel (ct fired)
+                    // is NOT swallowed by the `when` guard and propagates.
+                    return (exitCode.Value, promptReady);
+                }
+            }
             if (line is null)
             {
                 if (exitCode is null)

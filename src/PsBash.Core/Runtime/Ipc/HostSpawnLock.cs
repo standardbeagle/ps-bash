@@ -69,7 +69,30 @@ internal sealed class HostSpawnLock : IDisposable
             return new HostSpawnLock(fs);
         }
         catch (IOException) { return null; }                 // held by a concurrent launcher (contention)
-        catch (UnauthorizedAccessException) { return null; } // transient ACL/permission race — treat as contention, retry
+        catch (UnauthorizedAccessException)
+        {
+            // UnauthorizedAccessException has two very different causes:
+            //   • TRANSIENT — the lock file is in its DeleteOnClose pending-delete
+            //     window (Windows reports UAE, not IOException, while a handle is
+            //     tearing down). A few immediate retries ride out that microsecond gap.
+            //   • PERSISTENT — the temp dir is genuinely unwritable. Here NO winner
+            //     will ever appear, so returning lockUnavailable=false (contention)
+            //     made the caller wait the full ~20 s host-connect timeout for a host
+            //     that never comes. Set lockUnavailable=true so it degrades to an
+            //     unguarded spawn (never worse than the pre-lock behavior) instead.
+            for (int retry = 0; retry < 5; retry++)
+            {
+                try
+                {
+                    var fs = new FileStream(path, FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None);
+                    return new HostSpawnLock(fs);
+                }
+                catch (IOException) { return null; }               // now genuinely held → contention
+                catch (UnauthorizedAccessException) { /* still in the window — retry */ }
+            }
+            lockUnavailable = true;
+            return null;
+        }
     }
 
     /// <summary>

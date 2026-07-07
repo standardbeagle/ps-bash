@@ -28,6 +28,27 @@ public class ShellArgsTests
     }
 
     [Fact]
+    public void Parse_CommandThenVersionFlag_RunsCommand_NotVersionBanner()
+    {
+        // Bash: `-c 'cmd' --version` runs cmd (--version is $0), no version print.
+        var result = ShellArgs.Parse(["-c", "echo hi", "--version"]);
+
+        Assert.Equal("echo hi", result.Command);
+        Assert.False(result.ShowVersion);
+        Assert.Contains("--version", result.ScriptArgs);
+    }
+
+    [Fact]
+    public void Parse_CommandThenPositionals_CapturesThemAsScriptArgs()
+    {
+        // Bash: `-c 'cmd' name a b` → the trailing args are positionals, not dropped.
+        var result = ShellArgs.Parse(["-c", "echo $1", "name", "a", "b"]);
+
+        Assert.Equal("echo $1", result.Command);
+        Assert.Equal(new[] { "name", "a", "b" }, result.ScriptArgs);
+    }
+
+    [Fact]
     public void Parse_InteractiveFlag_SetsInteractive()
     {
         var result = ShellArgs.Parse(["-i"]);
