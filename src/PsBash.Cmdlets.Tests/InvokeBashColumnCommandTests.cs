@@ -66,6 +66,17 @@ public class InvokeBashColumnCommandTests : IClassFixture<SharedPwshFixture>, ID
     }
 
     [Fact]
+    public void Column_TableMode_EmptySeparator_TreatsLineAsSingleField()
+    {
+        // Regression: -s '' made Regex.Split(line, "") match every position -> one
+        // phantom column per character. An empty delimiter means "no split".
+        var lines = RunLines("'abc','de' | Invoke-BashColumn -t -s ''");
+        Assert.Equal(2, lines.Length);
+        Assert.Equal("abc", lines[0].TrimEnd());   // NOT "a  b  c"
+        Assert.Equal("de", lines[1].TrimEnd());
+    }
+
+    [Fact]
     public void Column_TableMode_AlignsColumnsByMaxWidth()
     {
         // Three rows, three cols. Per-col max widths:

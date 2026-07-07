@@ -201,7 +201,16 @@ public sealed class InvokeBashColumnCommand : PSCmdlet
         // emit padded rows. The oracle pre-trims each non-empty line before
         // splitting (its `$line.Trim()`); empty lines become a single empty
         // field. The output column separator is hard-coded to two spaces.
-        string splitPattern = separator != null ? Regex.Escape(separator) : @"\s+";
+        // An EMPTY separator (`-s ''`) cannot delimit: Regex.Escape("") = "" and
+        // Regex.Split(line, "") matches every position, yielding one phantom column
+        // per character. Guard it like the sort/awk/tr empty-pattern traps — an empty
+        // delimiter means "no split", so each line is a single field.
+        string? splitPattern = separator switch
+        {
+            null => @"\s+",
+            "" => null,
+            _ => Regex.Escape(separator),
+        };
         var rows = new List<string[]>();
         int maxCols = 0;
         foreach (var line in lines)
@@ -210,6 +219,10 @@ public sealed class InvokeBashColumnCommand : PSCmdlet
             if (line == string.Empty)
             {
                 fields = new[] { string.Empty };
+            }
+            else if (splitPattern is null)
+            {
+                fields = new[] { line.Trim() };
             }
             else
             {

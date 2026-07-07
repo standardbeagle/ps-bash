@@ -714,7 +714,13 @@ public static class InteractiveShell
             var pwd = await worker.QueryAsync("(Get-Location).Path");
             if (!string.IsNullOrWhiteSpace(pwd))
             {
-                var path = pwd.Trim().Replace('/', '\\');
+                // Only fold '/'→'\' on Windows. On Linux/macOS native paths use '/',
+                // so the unconditional replace turned "/home/user" into "\home\user",
+                // Directory.Exists failed, and the prompt/frecency/child-cwd all went
+                // stale after every cd.
+                var path = pwd.Trim();
+                if (OperatingSystem.IsWindows())
+                    path = path.Replace('/', '\\');
                 if (Directory.Exists(path))
                 {
                     // Record the visit in the frecency DB only when the directory
