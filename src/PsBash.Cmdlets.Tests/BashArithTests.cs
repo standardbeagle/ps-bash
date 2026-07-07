@@ -60,7 +60,10 @@ public class BashArithTests
     [InlineData("0?1:2", 2)]
     // number bases
     [InlineData("0xFF", 255)]
+    [InlineData("0xABCDEF", 11259375)]   // uppercase hex A-F = 10-15 (not bash base 36-41)
+    [InlineData("0xabcdef", 11259375)]   // lowercase hex, same value
     [InlineData("010", 8)]
+    [InlineData("0755", 493)]            // multi-digit octal
     [InlineData("2#1010", 10)]
     // precedence / grouping
     [InlineData("2+3*4", 14)]
@@ -70,6 +73,18 @@ public class BashArithTests
     [InlineData("1+2, 3+4", 7)]      // comma yields last
     public void Evaluate_Operator_MatchesBashOracle(string expr, long expected)
         => Assert.Equal(expected, Eval(expr));
+
+    [Fact]
+    public void Evaluate_HexBeyond64Bits_WrapsInsteadOfThrowing()
+    {
+        // bash arithmetic is 64-bit two's complement; a >64-bit literal wraps.
+        // Convert.ToInt64 threw OverflowException (a raw crash escaping the
+        // BashArithException contract) — ParseRadix wraps instead. 18 hex F's =
+        // 72 all-ones bits; the low 64 are all-ones = -1.
+        var ex = Record.Exception(() => Eval("0xFFFFFFFFFFFFFFFFFF"));
+        Assert.Null(ex);
+        Assert.Equal(-1L, Eval("0xFFFFFFFFFFFFFFFFFF"));
+    }
 
     [Fact]
     public void Evaluate_ResolvesVariables()

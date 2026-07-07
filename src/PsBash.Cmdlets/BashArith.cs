@@ -513,13 +513,38 @@ public static class BashArith
                 return acc;
             }
             if (tok.StartsWith("0x", StringComparison.OrdinalIgnoreCase))
-                return Convert.ToInt64(tok[2..], 16);
+                return ParseRadix(tok[2..], 16, tok);
             // leading-zero octal (but plain "0" is zero)
             if (tok.Length > 1 && tok[0] == '0')
-                return Convert.ToInt64(tok, 8);
+                return ParseRadix(tok, 8, tok);
             if (!long.TryParse(tok, NumberStyles.None, CultureInfo.InvariantCulture, out long val))
                 throw new BashArithException($"invalid arithmetic number '{tok}'");
             return val;
+        }
+
+        // Parse a hex/octal digit run with 64-bit WRAPAROUND (bash arithmetic is
+        // 64-bit two's complement), not Convert.ToInt64 — which threw OverflowException
+        // on a >64-bit literal like 0xFFFFFFFFFFFFFFFFFF, a raw crash that escaped
+        // Evaluate's BashArithException contract.
+        private static long ParseRadix(string digits, int radix, string tok)
+        {
+            if (digits.Length == 0)
+                throw new BashArithException($"invalid arithmetic number '{tok}'");
+            long acc = 0;
+            foreach (char d in digits)
+            {
+                // Standard hex/octal digit value (case-insensitive a-f = 10-15) — NOT
+                // DigitValue, which uses bash's base#digits mapping where A-Z = 36-61.
+                int dv =
+                    d is >= '0' and <= '9' ? d - '0' :
+                    d is >= 'a' and <= 'f' ? d - 'a' + 10 :
+                    d is >= 'A' and <= 'F' ? d - 'A' + 10 :
+                    -1;
+                if (dv < 0 || dv >= radix)
+                    throw new BashArithException($"invalid digit '{d}' in '{tok}'");
+                acc = unchecked(acc * radix + dv); // wraps at 64 bits, matching bash
+            }
+            return acc;
         }
 
         // bash base#digits digit set: 0-9, a-z (10..35), A-Z (36..61), @ (62), _ (63)
