@@ -243,10 +243,7 @@ public sealed class InvokeBashHeadCommand : PSCmdlet
             {
                 int total = 0;
                 foreach (var item in _pipeline)
-                {
-                    string t = BashRuntime.GetBashText(item).TrimEnd('\n');
-                    total += t.Contains('\n') ? t.Split('\n').Length : 1;
-                }
+                    total += ItemLines(BashRuntime.GetBashText(item)).Length;
                 limit = Math.Max(0, total + count);
             }
 
@@ -254,21 +251,22 @@ public sealed class InvokeBashHeadCommand : PSCmdlet
             foreach (var item in _pipeline)
             {
                 if (emitted >= limit) break;
-                string text = BashRuntime.GetBashText(item);
-                string trimmed = text.TrimEnd('\n');
-                if (trimmed.Contains('\n'))
+                var lines = ItemLines(BashRuntime.GetBashText(item));
+                if (lines.Length <= 1)
                 {
-                    foreach (var subLine in trimmed.Split('\n'))
+                    // Single-line item: pass the ORIGINAL object through so typed
+                    // properties (LsEntry.Name, CatLine.Content, …) survive.
+                    WriteObject(item);
+                    emitted++;
+                }
+                else
+                {
+                    foreach (var subLine in lines)
                     {
                         if (emitted >= limit) break;
                         WriteObject(subLine);
                         emitted++;
                     }
-                }
-                else
-                {
-                    WriteObject(item);
-                    emitted++;
                 }
             }
             return;
@@ -364,6 +362,23 @@ public sealed class InvokeBashHeadCommand : PSCmdlet
         obj.Properties.Add(new PSNoteProperty(
             "BashText", BashRuntime.NormalizeBashText(line)));
         WriteObject(obj);
+    }
+
+    /// <summary>
+    /// Split a pipeline item's BashText into its constituent lines. A trailing <c>'\n'</c>
+    /// TERMINATES the last line, so the split's spurious trailing empty element is dropped
+    /// — but genuine interior/trailing BLANK lines are KEPT. Used by the <c>head -n -K</c>
+    /// line count + emit so both agree with GNU. (The old <c>TrimEnd('\n')</c> stripped ALL
+    /// trailing newlines, undercounting <c>"a\nb\n\n\n"</c> as 2 lines instead of 4.)
+    /// </summary>
+    internal static string[] ItemLines(string text)
+    {
+        if (text.EndsWith('\n'))
+        {
+            var parts = text.Split('\n');
+            return parts[..^1]; // drop the terminator's trailing empty element
+        }
+        return text.Split('\n');
     }
 
     private static void ParseArgs(string[] args, out int count, out int? byteCount,
