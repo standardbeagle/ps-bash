@@ -635,12 +635,20 @@ static async Task<int> RunHostUnderPtyAsync(string hostBinary, ShellArgs shellAr
     // subsequent `using` dispose of modeScope finds the scope already
     // restored and is a no-op.
     //
-    // A clean exit (exitCode == 0) takes the normal `using` dispose path with
-    // no escape sequence — a full reset there would flicker the screen.
-    if (exitCode != 0)
+    // Only an ABNORMAL termination skips the host's own teardown and needs the
+    // emergency reset. A plain non-zero USER exit (a bash command that returned 1,
+    // `exit 2`, 126/127 not-found) exited cleanly — firing RIS (ESC c) there wipes
+    // the terminal scrollback for nothing. Restrict the reset to the signal-death
+    // range (POSIX 128+N) and Windows crash statuses (large / negative codes).
+    if (WasAbnormalTermination(exitCode))
     {
         TerminalMode.EmergencyRestoreAll();
     }
 
     return exitCode;
+
+    // 128+N is the shell convention for "killed by signal N" (129 SIGHUP … 137
+    // SIGKILL …); a Windows structured-exception crash surfaces as a large positive
+    // (e.g. 0xC0000005) or a negative code. A normal command exit is 0–127.
+    static bool WasAbnormalTermination(int code) => code >= 128 || code < 0;
 }

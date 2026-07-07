@@ -685,12 +685,16 @@ internal sealed class LineEditor
     {
         Console.WriteLine();
         // The list shows DisplayText (e.g. "-name  - name pattern"); only InsertText is ever typed.
-        var maxLen = completions.Max(c => c.DisplayText.Length) + 2;
+        // Column math uses DISPLAY width (wcwidth), not string.Length: a CJK / emoji
+        // DisplayText is 2 terminal cells per char, so .Length mis-sizes the column and
+        // PadRight (char count) skews the grid (completion.md line-rendering invariant).
+        var maxLen = completions.Max(c => DisplayWidth(c.DisplayText)) + 2;
         var cols = Math.Max(1, Console.WindowWidth / maxLen);
         int i = 0;
         foreach (var c in completions)
         {
-            Console.Write(c.DisplayText.PadRight(maxLen));
+            int pad = maxLen - DisplayWidth(c.DisplayText);
+            Console.Write(pad > 0 ? c.DisplayText + new string(' ', pad) : c.DisplayText);
             i++;
             if (i % cols == 0) Console.WriteLine();
         }

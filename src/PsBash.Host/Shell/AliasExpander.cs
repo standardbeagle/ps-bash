@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Text;
 using System.Text.RegularExpressions;
 
@@ -12,8 +13,14 @@ namespace PsBash.Host.Shell;
 /// </summary>
 internal static class AliasExpander
 {
-    /// <summary>The live alias table: name → expansion. Read by tab completion to resolve the command word.</summary>
-    internal static readonly Dictionary<string, string> Aliases = new(StringComparer.Ordinal);
+    /// <summary>
+    /// The live alias table: name → expansion. Read by tab completion (on the keystroke
+    /// task) while it is written by the REPL / rc-sourcing — a plain Dictionary raced
+    /// (a concurrent read during a resize/write can throw or return corrupt state), so
+    /// it is a <see cref="ConcurrentDictionary{TKey,TValue}"/>.
+    /// </summary>
+    internal static readonly ConcurrentDictionary<string, string> Aliases =
+        new(StringComparer.Ordinal);
 
     /// <summary>
     /// Handle an <c>alias</c>/<c>unalias</c> line: define (<c>alias n=v</c>), list (<c>alias</c>,
@@ -67,7 +74,7 @@ internal static class AliasExpander
             {
                 foreach (var name in names.Split((char[])[' ', '\t'], StringSplitOptions.RemoveEmptyEntries))
                 {
-                    if (!Aliases.Remove(name))
+                    if (!Aliases.TryRemove(name, out _))
                     {
                         Console.Error.WriteLine($"ps-bash: unalias: {name}: not found");
                     }
