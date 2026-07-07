@@ -30,6 +30,13 @@ public sealed class InvokeBashMvCommand : PSCmdlet
 {
     [Parameter] public SwitchParameter v { get; set; }
 
+    /// <summary>
+    /// Decoy for the valid-but-unsupported <c>-i</c> (interactive). Bare <c>-i</c>
+    /// prefix-collides with <c>-InformationAction</c>/<c>-InformationVariable</c> and
+    /// crashed the binder before the classifier. Re-injected below so it fires exit 2.
+    /// </summary>
+    [Parameter] public SwitchParameter I { get; set; }
+
     [Parameter(ValueFromRemainingArguments = true)]
     public string[]? Arguments { get; set; }
 
@@ -46,7 +53,11 @@ public sealed class InvokeBashMvCommand : PSCmdlet
 
     protected override void ProcessRecord()
     {
-        var args = Arguments ?? Array.Empty<string>();
+        // Re-inject the decoy-bound -i so the classifier still emits exit 2.
+        var argsList = new List<string>();
+        if (I.IsPresent) argsList.Add("-i");
+        argsList.AddRange(Arguments ?? Array.Empty<string>());
+        var args = argsList.ToArray();
 
         FileSystemHelpers.SetLastExitCode(this, 0);
         if (FileSystemHelpers.TryHandleVersion(this, "mv", args)) return;

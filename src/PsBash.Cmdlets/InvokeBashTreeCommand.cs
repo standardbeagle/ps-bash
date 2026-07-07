@@ -58,6 +58,14 @@ public sealed class InvokeBashTreeCommand : PSCmdlet
     [Parameter]
     public string? I { get; set; }
 
+    /// <summary>Decoy for the unsupported <c>-C</c> (force color). Bare <c>-C</c>
+    /// silently bound <c>-Confirm</c>; re-injected below so the classifier fires.</summary>
+    [Parameter] public SwitchParameter C { get; set; }
+
+    /// <summary>Decoy for the unsupported <c>-p</c> (print permissions). Bare <c>-p</c>
+    /// prefix-collides with <c>-ProgressAction</c> and crashed the binder.</summary>
+    [Parameter] public SwitchParameter P { get; set; }
+
     [Parameter(ValueFromRemainingArguments = true)]
     public string[]? Arguments { get; set; }
 
@@ -95,7 +103,13 @@ public sealed class InvokeBashTreeCommand : PSCmdlet
 
     protected override void EndProcessing()
     {
-        var args = Arguments ?? Array.Empty<string>();
+        // Re-inject decoy-bound classifier flags so TryWriteOperandOptionError fires
+        // (bare -C/-p never reach Arguments — the binder eats/crashes them).
+        var argsList = new List<string>();
+        if (C.IsPresent) argsList.Add("-C");
+        if (P.IsPresent) argsList.Add("-p");
+        argsList.AddRange(Arguments ?? Array.Empty<string>());
+        var args = argsList.ToArray();
 
         FileSystemHelpers.SetLastExitCode(this, 0);
         if (FileSystemHelpers.TryHandleVersion(this, "tree", args)) return;

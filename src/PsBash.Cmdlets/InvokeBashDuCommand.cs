@@ -55,6 +55,14 @@ public sealed class InvokeBashDuCommand : PSCmdlet
     [Parameter(ValueFromRemainingArguments = true)]
     public string[]? Arguments { get; set; }
 
+    /// <summary>
+    /// Decoy for the unsupported <c>-P</c> (no-dereference). Bare <c>-P</c> prefix-
+    /// collides with <c>-ProgressAction</c> and crashed the binder. du silently
+    /// swallows unknown short flags (oracle behavior), so this just prevents the
+    /// crash — <c>du -P</c> is ignored, exactly like <c>-B</c>/<c>-l</c>.
+    /// </summary>
+    [Parameter] public SwitchParameter P { get; set; }
+
     // Valid GNU du flags not implemented by ps-bash. Implemented flags
     // (-h/-s/-a/-c/-d/--max-depth) are NOT in this set.
     // Note: short flags like -B/-l/-P are swallowed by the per-char bundle

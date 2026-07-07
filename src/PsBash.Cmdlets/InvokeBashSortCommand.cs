@@ -62,6 +62,12 @@ public sealed class InvokeBashSortCommand : PSCmdlet
     [Parameter]
     public SwitchParameter V { get; set; }
 
+    /// <summary>Decoy for the valid-but-unsupported <c>-i</c> (--ignore-nonprinting).
+    /// Bare <c>-i</c> prefix-collides with <c>-InformationAction</c>/<c>-InformationVariable</c>
+    /// and crashed the binder; re-injected below so the scan emits exit 2.</summary>
+    [Parameter]
+    public SwitchParameter I { get; set; }
+
     /// <summary>
     /// Bash <c>-o FILE</c> (output file). A bare <c>-o</c> is an ambiguous
     /// prefix of the common parameters <c>-OutVariable</c> / <c>-OutBuffer</c>,
@@ -138,7 +144,12 @@ public sealed class InvokeBashSortCommand : PSCmdlet
 
     protected override void EndProcessing()
     {
-        var rawArgs = Arguments ?? Array.Empty<string>();
+        // Re-inject the decoy-bound -i so the scan emits the exit-2 "recognized but
+        // not supported" message (bare -i crashed the binder otherwise).
+        var reinjected = new List<string>();
+        if (I.IsPresent) reinjected.Add("-i");
+        reinjected.AddRange(Arguments ?? Array.Empty<string>());
+        var rawArgs = reinjected.ToArray();
 
         if (FileSystemHelpers.TryHandleVersion(this, "sort", rawArgs)) return;
         if (Array.IndexOf(rawArgs, "--help") >= 0)

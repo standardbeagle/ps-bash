@@ -60,6 +60,29 @@ public sealed class InvokeBashStringsCommand : PSCmdlet
     [Parameter(ValueFromPipeline = true)]
     public PSObject? InputObject { get; set; }
 
+    /// <summary>Decoy for the unsupported <c>-a</c> (--all). Bare <c>-a</c> prefix-
+    /// matches the cmdlet's own <c>-Arguments</c>, silently swallowing the next
+    /// operand; re-injected via <see cref="ArgsWithDecoys"/> so the classifier fires.</summary>
+    [Parameter] public SwitchParameter A { get; set; }
+
+    /// <summary>Decoy for the unsupported <c>-e</c> (--encoding). Bare <c>-e</c>
+    /// prefix-collides with <c>-ErrorAction</c>/<c>-ErrorVariable</c> and crashed the
+    /// binder; re-injected so the classifier fires exit 2.</summary>
+    [Parameter] public SwitchParameter E { get; set; }
+
+    /// <summary>Arguments with decoy-bound classifier flags (-a/-e) re-injected. Used
+    /// at both the ParseOnce and EndProcessing read sites.</summary>
+    private string[] ArgsWithDecoys()
+    {
+        var raw = Arguments ?? Array.Empty<string>();
+        if (!A.IsPresent && !E.IsPresent) return raw;
+        var list = new List<string>(raw.Length + 2);
+        if (A.IsPresent) list.Add("-a");
+        if (E.IsPresent) list.Add("-e");
+        list.AddRange(raw);
+        return list.ToArray();
+    }
+
     /// <summary>
     /// Valid GNU <c>strings</c> options ps-bash does not implement (representative).
     /// An option-looking token in this set yields "recognized but not supported"
@@ -93,7 +116,7 @@ public sealed class InvokeBashStringsCommand : PSCmdlet
         if (_parsed) return;
         _parsed = true;
 
-        var args = Arguments ?? Array.Empty<string>();
+        var args = ArgsWithDecoys();
 
         if (Array.IndexOf(args, "--version") >= 0 || Array.IndexOf(args, "--help") >= 0)
         {
@@ -181,7 +204,7 @@ public sealed class InvokeBashStringsCommand : PSCmdlet
     {
         ParseOnce();
 
-        var args = Arguments ?? Array.Empty<string>();
+        var args = ArgsWithDecoys();
 
         FileSystemHelpers.SetLastExitCode(this, 0);
         if (FileSystemHelpers.TryHandleVersion(this, "strings", args)) return;

@@ -65,6 +65,14 @@ public sealed class InvokeBashTeeCommand : PSCmdlet
     [Parameter]
     public SwitchParameter A { get; set; }
 
+    /// <summary>
+    /// Decoy for the valid-but-unsupported <c>-p</c> (diagnose write errors). Bare
+    /// <c>-p</c> prefix-collides with <c>-ProgressAction</c> and crashed the binder
+    /// before the classifier. Re-injected below so it fires exit 2.
+    /// </summary>
+    [Parameter]
+    public SwitchParameter P { get; set; }
+
     [Parameter(ValueFromRemainingArguments = true)]
     public string[]? Arguments { get; set; }
 
@@ -95,7 +103,11 @@ public sealed class InvokeBashTeeCommand : PSCmdlet
 
     protected override void EndProcessing()
     {
-        var args = Arguments ?? Array.Empty<string>();
+        // Re-inject the decoy-bound -p so the classifier still fires exit 2.
+        var argsList = new List<string>();
+        if (P.IsPresent) argsList.Add("-p");
+        argsList.AddRange(Arguments ?? Array.Empty<string>());
+        var args = argsList.ToArray();
 
         FileSystemHelpers.SetLastExitCode(this, 0);
         if (FileSystemHelpers.TryHandleVersion(this, "tee", args)) return;

@@ -52,6 +52,11 @@ public sealed class InvokeBashTailCommand : PSCmdlet
     // parameter so 'tail -c 30 file' binds correctly.
     [Parameter] public string? C { get; set; }
 
+    /// <summary>Decoy for the unsupported <c>-v</c> (--verbose, per-file headers).
+    /// Bare <c>-v</c> silently bound <c>-Verbose</c>; re-injected below so the
+    /// classifier fires exit 2.</summary>
+    [Parameter] public SwitchParameter V { get; set; }
+
     [Parameter(ValueFromRemainingArguments = true)]
     public string[]? Arguments { get; set; }
 
@@ -87,7 +92,11 @@ public sealed class InvokeBashTailCommand : PSCmdlet
 
     protected override void EndProcessing()
     {
-        var args = Arguments ?? Array.Empty<string>();
+        // Re-inject the decoy-bound -v so the classifier fires exit 2.
+        var argsList = new List<string>();
+        if (V.IsPresent) argsList.Add("-v");
+        argsList.AddRange(Arguments ?? Array.Empty<string>());
+        var args = argsList.ToArray();
 
         FileSystemHelpers.SetLastExitCode(this, 0);
         if (FileSystemHelpers.TryHandleVersion(this, "tail", args)) return;

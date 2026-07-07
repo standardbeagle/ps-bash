@@ -66,7 +66,16 @@ public class CommonParameterCollisionGuardTests
             var guarded = DeclaredSingleLetterNames(type);
             EmitterForceQuoted.TryGetValue(command, out var forceQuoted);
 
-            foreach (var flag in flags)
+            // A short flag can also reach the binder from the cmdlet's own
+            // "valid-but-unsupported" classifier sets (e.g. cp/mv/rm -i, column -o,
+            // tee -p) — those are NOT in BashFlagSpecs.json, but the token still has
+            // to survive binding to reach the classifier and emit its exit-2 message.
+            // Fold every single-letter -x found in a static flag-set field into the
+            // checked set so the guard covers the whole binder-collision class.
+            var allFlags = new List<string>(flags);
+            allFlags.AddRange(ClassifierShortFlags(type));
+
+            foreach (var flag in allFlags)
             {
                 // Only bare single-letter short flags (-x) can prefix-collide.
                 if (flag.Length != 2 || flag[0] != '-' || !char.IsLetter(flag[1]))
@@ -100,6 +109,28 @@ public class CommonParameterCollisionGuardTests
             + "like the existing I/V/C/W/O switches), or — for a position-critical infix operator — by "
             + "adding it to PsEmitter.FindForceQuoteFlags and this test's EmitterForceQuoted map. "
             + "See docs/solutions/common-parameter-flag-collisions.md.");
+    }
+
+    /// <summary>
+    /// Every single-letter short flag (<c>-x</c>) mentioned in a cmdlet's static
+    /// string-set fields — the "valid-but-unsupported" classifier tables. These flags
+    /// are not in <c>BashFlagSpecs.json</c> but must still survive the binder to reach
+    /// the classifier, so they belong in the collision check.
+    /// </summary>
+    private static IEnumerable<string> ClassifierShortFlags(Type type)
+    {
+        foreach (var field in type.GetFields(
+                     BindingFlags.Static | BindingFlags.NonPublic | BindingFlags.Public))
+        {
+            if (field.GetValue(null) is not IEnumerable<string> set) continue;
+            foreach (var entry in set)
+            {
+                if (entry is { Length: 2 } && entry[0] == '-' && char.IsLetter(entry[1]))
+                {
+                    yield return entry;
+                }
+            }
+        }
     }
 
     private static HashSet<char> DeclaredSingleLetterNames(Type type)

@@ -40,6 +40,20 @@ public sealed class InvokeBashRmCommand : PSCmdlet
 {
     [Parameter] public SwitchParameter v { get; set; }
 
+    /// <summary>
+    /// Decoy for the valid-but-unsupported <c>-i</c>/<c>-I</c> (interactive). Bare
+    /// <c>-i</c> prefix-collides with <c>-InformationAction</c>/<c>-InformationVariable</c>
+    /// and crashed the binder — so "rm -i fires even under -f" (the spec) was impossible.
+    /// Re-injected below so the classifier fires exit 2.
+    /// </summary>
+    [Parameter] public SwitchParameter I { get; set; }
+
+    /// <summary>
+    /// Decoy for the valid-but-unsupported <c>-d</c> (remove empty dirs). Bare <c>-d</c>
+    /// silently bound <c>-Debug</c>, so the classifier never fired.
+    /// </summary>
+    [Parameter] public SwitchParameter D { get; set; }
+
     [Parameter(ValueFromRemainingArguments = true)]
     public string[]? Arguments { get; set; }
 
@@ -61,7 +75,13 @@ public sealed class InvokeBashRmCommand : PSCmdlet
 
     protected override void ProcessRecord()
     {
-        var args = Arguments ?? Array.Empty<string>();
+        // Re-inject decoy-bound classifier flags so the classifier still fires exit 2
+        // (bare -i/-I/-d never reach Arguments — the binder crashes/silent-drops them).
+        var argsList = new List<string>();
+        if (I.IsPresent) argsList.Add("-i");
+        if (D.IsPresent) argsList.Add("-d");
+        argsList.AddRange(Arguments ?? Array.Empty<string>());
+        var args = argsList.ToArray();
 
         FileSystemHelpers.SetLastExitCode(this, 0);
         if (FileSystemHelpers.TryHandleVersion(this, "rm", args)) return;

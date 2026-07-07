@@ -47,6 +47,23 @@ public sealed class InvokeBashHeadCommand : PSCmdlet
     [Parameter(ValueFromPipeline = true)]
     public PSObject? InputObject { get; set; }
 
+    /// <summary>Decoy for the unsupported <c>-v</c> (--verbose, per-file headers).
+    /// Bare <c>-v</c> silently bound <c>-Verbose</c>; re-injected via
+    /// <see cref="ArgsWithDecoys"/> so the classifier fires exit 2.</summary>
+    [Parameter] public SwitchParameter V { get; set; }
+
+    /// <summary>Arguments with decoy-bound classifier flags re-injected (bare -v never
+    /// reaches Arguments — it binds -Verbose). Used at both the streaming and
+    /// EndProcessing parse sites so the flag is seen consistently.</summary>
+    private string[] ArgsWithDecoys()
+    {
+        var raw = Arguments ?? Array.Empty<string>();
+        if (!V.IsPresent) return raw;
+        var list = new List<string>(raw.Length + 1) { "-v" };
+        list.AddRange(raw);
+        return list.ToArray();
+    }
+
     /// <summary>
     /// Valid GNU <c>head</c> options ps-bash does not implement. An option-looking
     /// token that is not a recognized flag falls through this cmdlet's static
@@ -78,7 +95,7 @@ public sealed class InvokeBashHeadCommand : PSCmdlet
     {
         if (_flagsParsed) return;
         _flagsParsed = true;
-        ParseArgs(Arguments ?? Array.Empty<string>(),
+        ParseArgs(ArgsWithDecoys(),
             out _lineCount, out _byteCount, out var operands, out var help);
         // We stream the pipeline only when:
         //   - no --help (which goes through EndProcessing)
@@ -180,7 +197,7 @@ public sealed class InvokeBashHeadCommand : PSCmdlet
             return;
         }
 
-        var args = Arguments ?? Array.Empty<string>();
+        var args = ArgsWithDecoys();
 
         FileSystemHelpers.SetLastExitCode(this, 0);
         if (FileSystemHelpers.TryHandleVersion(this, "head", args)) return;

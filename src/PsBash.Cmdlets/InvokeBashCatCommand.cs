@@ -70,6 +70,21 @@ public sealed class InvokeBashCatCommand : PSCmdlet
     [Parameter]
     public SwitchParameter E { get; set; }
 
+    /// <summary>
+    /// Decoy for the valid-but-unsupported <c>-A</c> (show-all). Bare <c>-A</c>
+    /// prefix-matches the cmdlet's own <c>-Arguments</c> (the only param starting with
+    /// 'a'), silently swallowing the next operand. Re-injected so the classifier fires.
+    /// </summary>
+    [Parameter]
+    public SwitchParameter A { get; set; }
+
+    /// <summary>
+    /// Decoy for the valid-but-unsupported <c>-v</c> (show-nonprinting). Bare <c>-v</c>
+    /// silently bound <c>-Verbose</c>, so cat produced wrong output with exit 0.
+    /// </summary>
+    [Parameter]
+    public SwitchParameter V { get; set; }
+
     [Parameter(ValueFromRemainingArguments = true)]
     public string[]? Arguments { get; set; }
 
@@ -113,7 +128,13 @@ public sealed class InvokeBashCatCommand : PSCmdlet
         if (_parsed) return;
         _parsed = true;
 
-        var args = Arguments ?? Array.Empty<string>();
+        // Re-inject decoy-bound classifier flags (bare -A/-v never reach Arguments —
+        // -A binds -Arguments, -v binds -Verbose) so TryWriteOperandOptionError fires.
+        var reinjected = new List<string>();
+        if (A.IsPresent) reinjected.Add("-A");
+        if (V.IsPresent) reinjected.Add("-v");
+        reinjected.AddRange(Arguments ?? Array.Empty<string>());
+        var args = reinjected.ToArray();
 
         // Translate the GNU long forms that are exact aliases of the supported
         // short flags into their short spelling before ConvertFromBashArgs sees

@@ -67,6 +67,15 @@ public sealed class InvokeBashSplitCommand : PSCmdlet
     [Parameter]
     public int? A { get; set; }
 
+    /// <summary>Decoy for the unsupported <c>-e</c> (--elide-empty-files). Bare
+    /// <c>-e</c> prefix-collides with <c>-ErrorAction</c>/<c>-ErrorVariable</c> and
+    /// crashed the binder; re-injected below so the classifier fires exit 2.</summary>
+    [Parameter] public SwitchParameter E { get; set; }
+
+    /// <summary>Decoy for the unsupported <c>-C N</c> (--line-bytes). Bare <c>-C</c>
+    /// silently bound <c>-Confirm</c>; re-injected below so the classifier fires.</summary>
+    [Parameter] public SwitchParameter C { get; set; }
+
     [Parameter(ValueFromRemainingArguments = true)]
     public string[]? Arguments { get; set; }
 
@@ -85,7 +94,13 @@ public sealed class InvokeBashSplitCommand : PSCmdlet
 
     protected override void EndProcessing()
     {
-        var args = Arguments ?? Array.Empty<string>();
+        // Re-inject decoy-bound classifier flags so the classifier fires exit 2
+        // (bare -e/-C never reach Arguments — the binder eats/crashes them).
+        var argsList = new List<string>();
+        if (E.IsPresent) argsList.Add("-e");
+        if (C.IsPresent) argsList.Add("-C");
+        argsList.AddRange(Arguments ?? Array.Empty<string>());
+        var args = argsList.ToArray();
 
         FileSystemHelpers.SetLastExitCode(this, 0);
         if (FileSystemHelpers.TryHandleVersion(this, "split", args)) return;

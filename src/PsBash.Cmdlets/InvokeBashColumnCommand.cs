@@ -52,6 +52,14 @@ public sealed class InvokeBashColumnCommand : PSCmdlet
     [Parameter(ValueFromPipeline = true)]
     public PSObject? InputObject { get; set; }
 
+    /// <summary>Decoy for the unsupported <c>-c</c> (--output-width). Bare <c>-c</c>
+    /// silently bound <c>-Confirm</c>; re-injected below so the classifier fires.</summary>
+    [Parameter] public SwitchParameter C { get; set; }
+
+    /// <summary>Decoy for the unsupported <c>-o</c> (--output-separator). Bare <c>-o</c>
+    /// prefix-collides with <c>-OutVariable</c>/<c>-OutBuffer</c> and crashed the binder.</summary>
+    [Parameter] public SwitchParameter O { get; set; }
+
     // Valid GNU column flags recognized but not implemented by ps-bash.
     private static readonly HashSet<string> ColumnValidButUnsupported =
         new(StringComparer.Ordinal)
@@ -78,7 +86,13 @@ public sealed class InvokeBashColumnCommand : PSCmdlet
 
     protected override void EndProcessing()
     {
-        var args = Arguments ?? Array.Empty<string>();
+        // Re-inject decoy-bound classifier flags so the classifier fires exit 2
+        // (bare -c/-o never reach Arguments — the binder eats/crashes them).
+        var argsList = new List<string>();
+        if (C.IsPresent) argsList.Add("-c");
+        if (O.IsPresent) argsList.Add("-o");
+        argsList.AddRange(Arguments ?? Array.Empty<string>());
+        var args = argsList.ToArray();
 
         FileSystemHelpers.SetLastExitCode(this, 0);
         if (FileSystemHelpers.TryHandleVersion(this, "column", args)) return;

@@ -47,6 +47,20 @@ public sealed class InvokeBashCpCommand : PSCmdlet
     /// </summary>
     [Parameter] public SwitchParameter p { get; set; }
 
+    /// <summary>
+    /// Decoy for the valid-but-unsupported <c>-i</c> (interactive). The bare <c>-i</c>
+    /// prefix-collides with <c>-InformationAction</c>/<c>-InformationVariable</c> and
+    /// the binder crashes ("ambiguous") before the classifier could emit its exit-2
+    /// "recognized but not supported" message. Re-injected below so the classifier fires.
+    /// </summary>
+    [Parameter] public SwitchParameter I { get; set; }
+
+    /// <summary>
+    /// Decoy for the valid-but-unsupported <c>-d</c> (copy-as-is / no-dereference). Bare
+    /// <c>-d</c> silently bound <c>-Debug</c> before this, so the classifier never fired.
+    /// </summary>
+    [Parameter] public SwitchParameter D { get; set; }
+
     [Parameter(ValueFromRemainingArguments = true)]
     public string[]? Arguments { get; set; }
 
@@ -70,7 +84,14 @@ public sealed class InvokeBashCpCommand : PSCmdlet
 
     protected override void ProcessRecord()
     {
-        var args = Arguments ?? Array.Empty<string>();
+        // Re-inject decoy-bound classifier flags (bare -i/-d never reach Arguments —
+        // the binder crashes/silent-drops them) so TryWriteOperandOptionError still
+        // emits the exit-2 "recognized but not supported" message.
+        var argsList = new List<string>();
+        if (I.IsPresent) argsList.Add("-i");
+        if (D.IsPresent) argsList.Add("-d");
+        argsList.AddRange(Arguments ?? Array.Empty<string>());
+        var args = argsList.ToArray();
 
         FileSystemHelpers.SetLastExitCode(this, 0);
         if (FileSystemHelpers.TryHandleVersion(this, "cp", args)) return;

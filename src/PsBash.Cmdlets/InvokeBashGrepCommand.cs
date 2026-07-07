@@ -114,6 +114,15 @@ public sealed class InvokeBashGrepCommand : PSCmdlet
     /// </summary>
     [Parameter] public int? B { get; set; }
 
+    /// <summary>
+    /// Decoy for the valid-but-unsupported <c>-d</c> (--directories) / <c>-D</c>
+    /// (--devices). Bare <c>-d</c> silently bound <c>-Debug</c> and <c>-D</c> likewise,
+    /// so the classifier never fired. A single switch catches both (case-insensitive
+    /// binder); re-injected as <c>-d</c> so grep's scan emits exit 2. Both are
+    /// unsupported, so the shared representative token is harmless.
+    /// </summary>
+    [Parameter] public SwitchParameter D { get; set; }
+
     [Parameter(ValueFromPipeline = true)]
     public PSObject? InputObject { get; set; }
 
@@ -152,7 +161,12 @@ public sealed class InvokeBashGrepCommand : PSCmdlet
 
     protected override void EndProcessing()
     {
-        var args = Arguments ?? Array.Empty<string>();
+        // Re-inject the decoy-bound -d/-D so grep's scan emits the exit-2 "recognized
+        // but not supported" message (bare -d/-D silently bound -Debug otherwise).
+        var argsList = new List<string>();
+        if (D.IsPresent) argsList.Add("-d");
+        argsList.AddRange(Arguments ?? Array.Empty<string>());
+        var args = argsList.ToArray();
 
         if (Array.IndexOf(args, "--help") >= 0)
         {
