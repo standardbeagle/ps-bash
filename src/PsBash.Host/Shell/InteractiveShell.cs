@@ -47,8 +47,18 @@ public static class InteractiveShell
         Console.CancelKeyPress += OnCancelKeyPress;
         EnsureVirtualTerminalEnabled();
 
-        var cts = new CancellationTokenSource();
-        _currentCts = cts;
+        // Dedicated CTS for the readiness / rc-sourcing task below. That task owns it
+        // for its whole life; the per-prompt loop must NEVER dispose it — the old code
+        // shared one CTS between the ready task and the loop, and the loop's first
+        // iteration disposed it while rc-sourcing was still using its token
+        // (ObjectDisposedException on the ready task). During startup this is the
+        // "current" cancellable operation, so Ctrl-C cancels rc load.
+        var readinessCts = new CancellationTokenSource();
+        _currentCts = readinessCts;
+
+        // Per-prompt CTS, swapped each loop iteration. Seeded with the readiness CTS
+        // so the first swap has a valid predecessor to publish over.
+        CancellationTokenSource cts = readinessCts;
 
         // Initialize history store. PSBASH_HOME overrides the home directory used to
         // locate the history DB so that tests can isolate history to a temp directory
@@ -124,7 +134,7 @@ public static class InteractiveShell
             var w = await workerTask.ConfigureAwait(false);
             if (!noProfile)
             {
-                try { await SourceRcFileAsync(w, cts); }
+                try { await SourceRcFileAsync(w, readinessCts); }
                 catch (OperationCanceledException) { /* Ctrl-C during rc load — proceed to the prompt */ }
             }
             readyWorker = w;
@@ -145,9 +155,15 @@ public static class InteractiveShell
                     (_frecencyStore as IDisposable)?.Dispose();
                     return 1;
                 }
-                cts.Dispose();
-                cts = new CancellationTokenSource();
-                _currentCts = cts;
+                // Swap in a fresh per-prompt CTS. Create + PUBLISH the new source
+                // before disposing the old one, so the Ctrl-C handler (which reads
+                // _currentCts on another thread) can never observe a disposed source.
+                // Never dispose the readiness CTS — the ready task may still own it.
+                var newCts = new CancellationTokenSource();
+                var prevCts = Interlocked.Exchange(ref _currentCts, newCts);
+                cts = newCts;
+                if (!ReferenceEquals(prevCts, readinessCts))
+                    prevCts?.Dispose();
 
                 // Restore console modes before every prompt. A prior command can leave the
                 // console in a state the line editor can't drive — most commonly a node-based
@@ -1585,7 +1601,14 @@ public static class InteractiveShell
     private static void OnCancelKeyPress(object? sender, ConsoleCancelEventArgs e)
     {
         e.Cancel = true;
-        if (!_suspendCancel)
-            _currentCts?.Cancel();
+        if (_suspendCancel) return;
+        // Snapshot the field once — the prompt loop swaps it on another thread — and
+        // tolerate a dispose race: a CTS that was disposed between our read and the
+        // Cancel() call is already finished, so there is nothing left to cancel.
+        // Without this guard the ObjectDisposedException surfaced on the CancelKeyPress
+        // thread as an unhandled exception and killed the shell process.
+        var cts = _currentCts;
+        try { cts?.Cancel(); }
+        catch (ObjectDisposedException) { /* raced the per-prompt CTS swap — nothing to cancel */ }
     }
 }

@@ -51,8 +51,11 @@ internal static class TabCompleter
             try
             {
                 // Bound the sqlite sequence query by the Tab deadline — its 3s busy
-                // timeout must never hang the prompt (completion is advisory).
+                // timeout must never hang the prompt (completion is advisory). WaitAsync
+                // enforces the deadline even if the query blocks on the busy timeout
+                // internally without observing ct.
                 sequenceSuggestions = await historyStore.GetSequenceSuggestionsAsync(lastCommand, cwd, ct)
+                    .WaitAsync(ct)
                     .ConfigureAwait(false);
             }
             catch

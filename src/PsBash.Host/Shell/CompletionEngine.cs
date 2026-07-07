@@ -497,7 +497,22 @@ internal sealed class CompletionEngine
         }
 
         var fragment = $"{cmd} {paramFlag} {token}";
-        return await completer.CompleteInputAsync(fragment, fragment.Length, ct).ConfigureAwait(false);
+        try
+        {
+            // Bound by the caller's Tab deadline. CompleteInputAsync runs
+            // CommandCompletion.CompleteInput on the runspace, which is NOT cancellable
+            // once started — a provider/argument completer touching a dead network share
+            // can block for seconds, and the Task.Run token only prevents scheduling.
+            // WaitAsync lets THIS call return at the deadline so Tab never hangs. The
+            // worker's own finally still releases its lock only when the runspace work
+            // truly finishes, so abandoning the await here cannot corrupt a later command.
+            return await completer.CompleteInputAsync(fragment, fragment.Length, ct)
+                .WaitAsync(ct).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException)
+        {
+            return Array.Empty<string>(); // deadline hit — advisory, fall back to the base set
+        }
     }
 
     private async Task<IReadOnlyList<CompletionItem>> QueryParameterValueItemsAsync(string cmd, string paramFlag, string token, CancellationToken ct)

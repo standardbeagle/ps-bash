@@ -278,6 +278,33 @@ public class CompletionEngineTests
         Assert.Contains("slow", result);
     }
 
+    [Fact]
+    public async Task ParameterValue_WorkerCompleteInputBlocks_FallsBackToBase_WithoutHanging()
+    {
+        // Regression: CommandCompletion.CompleteInput is not cancellable once started
+        // (a provider/argument completer touching a dead network share blocks), and the
+        // Task.Run token only prevents scheduling. The engine must bound the call by the
+        // Tab deadline (WaitAsync) and return, never hang. Pre-cancelled token →
+        // deterministic, no sleep (Directive 6).
+        var fake = new FakeWorker
+        {
+            OnComplete = (_, _, ct) =>
+            {
+                var tcs = new TaskCompletionSource<IReadOnlyList<string>>();
+                ct.Register(() => tcs.TrySetCanceled(ct));
+                return tcs.Task; // never completes on its own
+            },
+        };
+        using var cts = new CancellationTokenSource();
+        cts.Cancel();
+
+        const string line = "Set-Thing -Mode f";
+        // Must complete (no hang) and surface no exception — advisory completion.
+        var result = (await Engine(fake).CompleteAsync(line, line.Length, cts.Token)).Texts();
+
+        Assert.DoesNotContain("fast", result); // the blocked PS engine yielded nothing
+    }
+
     // ── Floating panel: PowerShell-cmdlet parameter hints (GetFlagHintsAsync) ──
 
     [Fact]
