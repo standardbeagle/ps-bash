@@ -146,10 +146,7 @@ public sealed class InvokeBashSortCommand : PSCmdlet
     {
         // Re-inject the decoy-bound -i so the scan emits the exit-2 "recognized but
         // not supported" message (bare -i crashed the binder otherwise).
-        var reinjected = new List<string>();
-        if (I.IsPresent) reinjected.Add("-i");
-        reinjected.AddRange(Arguments ?? Array.Empty<string>());
-        var rawArgs = reinjected.ToArray();
+        var rawArgs = BashRuntime.PrependDecoys(Arguments, (I.IsPresent, "-i"));
 
         if (FileSystemHelpers.TryHandleVersion(this, "sort", rawArgs)) return;
         if (Array.IndexOf(rawArgs, "--help") >= 0)

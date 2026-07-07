@@ -56,13 +56,7 @@ public sealed class InvokeBashHeadCommand : PSCmdlet
     /// reaches Arguments — it binds -Verbose). Used at both the streaming and
     /// EndProcessing parse sites so the flag is seen consistently.</summary>
     private string[] ArgsWithDecoys()
-    {
-        var raw = Arguments ?? Array.Empty<string>();
-        if (!V.IsPresent) return raw;
-        var list = new List<string>(raw.Length + 1) { "-v" };
-        list.AddRange(raw);
-        return list.ToArray();
-    }
+        => BashRuntime.PrependDecoys(Arguments, (V.IsPresent, "-v"));
 
     /// <summary>
     /// Valid GNU <c>head</c> options ps-bash does not implement. An option-looking

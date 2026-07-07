@@ -88,11 +88,7 @@ public sealed class InvokeBashColumnCommand : PSCmdlet
     {
         // Re-inject decoy-bound classifier flags so the classifier fires exit 2
         // (bare -c/-o never reach Arguments — the binder eats/crashes them).
-        var argsList = new List<string>();
-        if (C.IsPresent) argsList.Add("-c");
-        if (O.IsPresent) argsList.Add("-o");
-        argsList.AddRange(Arguments ?? Array.Empty<string>());
-        var args = argsList.ToArray();
+        var args = BashRuntime.PrependDecoys(Arguments, (C.IsPresent, "-c"), (O.IsPresent, "-o"));
 
         FileSystemHelpers.SetLastExitCode(this, 0);
         if (FileSystemHelpers.TryHandleVersion(this, "column", args)) return;

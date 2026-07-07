@@ -73,15 +73,7 @@ public sealed class InvokeBashStringsCommand : PSCmdlet
     /// <summary>Arguments with decoy-bound classifier flags (-a/-e) re-injected. Used
     /// at both the ParseOnce and EndProcessing read sites.</summary>
     private string[] ArgsWithDecoys()
-    {
-        var raw = Arguments ?? Array.Empty<string>();
-        if (!A.IsPresent && !E.IsPresent) return raw;
-        var list = new List<string>(raw.Length + 2);
-        if (A.IsPresent) list.Add("-a");
-        if (E.IsPresent) list.Add("-e");
-        list.AddRange(raw);
-        return list.ToArray();
-    }
+        => BashRuntime.PrependDecoys(Arguments, (A.IsPresent, "-a"), (E.IsPresent, "-e"));
 
     /// <summary>
     /// Valid GNU <c>strings</c> options ps-bash does not implement (representative).

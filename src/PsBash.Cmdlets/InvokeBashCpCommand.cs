@@ -87,11 +87,7 @@ public sealed class InvokeBashCpCommand : PSCmdlet
         // Re-inject decoy-bound classifier flags (bare -i/-d never reach Arguments —
         // the binder crashes/silent-drops them) so TryWriteOperandOptionError still
         // emits the exit-2 "recognized but not supported" message.
-        var argsList = new List<string>();
-        if (I.IsPresent) argsList.Add("-i");
-        if (D.IsPresent) argsList.Add("-d");
-        argsList.AddRange(Arguments ?? Array.Empty<string>());
-        var args = argsList.ToArray();
+        var args = BashRuntime.PrependDecoys(Arguments, (I.IsPresent, "-i"), (D.IsPresent, "-d"));
 
         FileSystemHelpers.SetLastExitCode(this, 0);
         if (FileSystemHelpers.TryHandleVersion(this, "cp", args)) return;

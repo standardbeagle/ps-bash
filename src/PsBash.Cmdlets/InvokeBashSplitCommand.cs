@@ -96,11 +96,7 @@ public sealed class InvokeBashSplitCommand : PSCmdlet
     {
         // Re-inject decoy-bound classifier flags so the classifier fires exit 2
         // (bare -e/-C never reach Arguments — the binder eats/crashes them).
-        var argsList = new List<string>();
-        if (E.IsPresent) argsList.Add("-e");
-        if (C.IsPresent) argsList.Add("-C");
-        argsList.AddRange(Arguments ?? Array.Empty<string>());
-        var args = argsList.ToArray();
+        var args = BashRuntime.PrependDecoys(Arguments, (E.IsPresent, "-e"), (C.IsPresent, "-C"));
 
         FileSystemHelpers.SetLastExitCode(this, 0);
         if (FileSystemHelpers.TryHandleVersion(this, "split", args)) return;

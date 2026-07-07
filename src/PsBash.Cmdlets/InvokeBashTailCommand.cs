@@ -93,10 +93,7 @@ public sealed class InvokeBashTailCommand : PSCmdlet
     protected override void EndProcessing()
     {
         // Re-inject the decoy-bound -v so the classifier fires exit 2.
-        var argsList = new List<string>();
-        if (V.IsPresent) argsList.Add("-v");
-        argsList.AddRange(Arguments ?? Array.Empty<string>());
-        var args = argsList.ToArray();
+        var args = BashRuntime.PrependDecoys(Arguments, (V.IsPresent, "-v"));
 
         FileSystemHelpers.SetLastExitCode(this, 0);
         if (FileSystemHelpers.TryHandleVersion(this, "tail", args)) return;
@@ -501,41 +498,20 @@ public sealed class InvokeBashTailCommand : PSCmdlet
                         long avail = info.Length - filePos;
                         // Cap the per-poll read so a huge burst append doesn't allocate
                         // unboundedly; the remainder is picked up on the next poll.
-                        int toRead = (int)Math.Min(avail, 64L << 20);
+                        int toRead = (int)Math.Min(avail, FollowReadCap);
                         var buffer = new byte[toRead];
                         int read = fs.Read(buffer, 0, toRead);
-                        if (read <= 0) continue;
 
-                        // GNU tail -f emits only COMPLETE lines: a trailing fragment with
-                        // no newline is WITHHELD until its newline arrives (the old
-                        // StreamReader.ReadLine loop emitted it early as a full record).
-                        // '\n' (0x0A) never occurs mid-UTF-8-sequence, so a byte-level
-                        // newline scan is safe.
-                        int lastNl = Array.LastIndexOf(buffer, (byte)'\n', read - 1);
-                        if (lastNl < 0)
+                        var (advance, follows) = SplitFollowChunk(buffer, read, avail, FollowReadCap);
+                        if (advance == 0) continue; // fragment withheld — re-read next poll
+                        foreach (var l in follows)
                         {
-                            // No newline yet. Hold the fragment (don't advance filePos) —
-                            // UNLESS we filled the cap on a pathological newline-less run,
-                            // in which case emit it so following can't stall forever.
-                            if (read < toRead) continue;
-                            lastNl = read - 1;
-                        }
-
-                        var text = Encoding.UTF8.GetString(buffer, 0, lastNl + 1);
-                        // text ends at the last newline (or the forced cap): split drops the
-                        // trailing empty element; strip a CRLF's \r to match ReadLine.
-                        var lines = text.Split('\n');
-                        int emitCount = text.EndsWith('\n') ? lines.Length - 1 : lines.Length;
-                        for (int k = 0; k < emitCount; k++)
-                        {
-                            var l = lines[k];
-                            if (l.EndsWith('\r')) l = l[..^1];
                             foreach (var obj in BashRuntime.EmitBashLines(l))
                             {
                                 WriteObject(obj);
                             }
                         }
-                        filePos += lastNl + 1; // advance past COMPLETE lines only
+                        filePos += advance; // advance past COMPLETE lines only
                     }
                     catch
                     {
@@ -553,6 +529,47 @@ public sealed class InvokeBashTailCommand : PSCmdlet
             if (FileSystemHelpers.IsPipelineStop(ex)) throw;
             FileSystemHelpers.WriteBashError(this, $"tail: cannot follow file: {ex.Message}");
         }
+    }
+
+    // Per-poll read cap for tail -f: bounds the byte[] a huge burst append allocates.
+    private const long FollowReadCap = 64L << 20;
+
+    /// <summary>
+    /// Pure core of the <c>tail -f</c> poll: given a chunk of <paramref name="read"/>
+    /// bytes read from the follow position (with <paramref name="avail"/> total bytes
+    /// pending, capped by <paramref name="capBytes"/>), return the COMPLETE lines to emit
+    /// and the number of bytes to advance the follow position past.
+    /// <para>GNU <c>tail -f</c> emits only complete lines: a trailing newline-less
+    /// fragment is WITHHELD (advance 0) until its newline arrives — EXCEPT when the
+    /// pending data exceeds the cap (a pathological unterminated &gt;64MB run), which is
+    /// force-emitted so following cannot stall. <c>'\n'</c> (0x0A) never occurs
+    /// mid-UTF-8-sequence, so the byte-level newline scan is safe; a CRLF's <c>\r</c> is
+    /// stripped to match the old <c>StreamReader.ReadLine</c> behaviour. Extracted from
+    /// the I/O loop so the withhold/advance logic is unit-testable.</para>
+    /// </summary>
+    internal static (int Advance, List<string> Lines) SplitFollowChunk(
+        byte[] buffer, int read, long avail, long capBytes)
+    {
+        var lines = new List<string>();
+        if (read <= 0) return (0, lines);
+
+        int lastNl = Array.LastIndexOf(buffer, (byte)'\n', read - 1);
+        if (lastNl < 0)
+        {
+            if (avail <= capBytes) return (0, lines); // withhold the whole fragment
+            lastNl = read - 1;                          // cap exceeded — force-emit
+        }
+
+        var text = Encoding.UTF8.GetString(buffer, 0, lastNl + 1);
+        var parts = text.Split('\n');
+        int emitCount = text.EndsWith('\n') ? parts.Length - 1 : parts.Length;
+        for (int k = 0; k < emitCount; k++)
+        {
+            var l = parts[k];
+            if (l.EndsWith('\r')) l = l[..^1];
+            lines.Add(l);
+        }
+        return (lastNl + 1, lines);
     }
 
     private void EmitFileBytes(string path, int byteCount, bool fromByte, string command)

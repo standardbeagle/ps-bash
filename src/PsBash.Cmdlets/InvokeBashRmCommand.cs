@@ -77,11 +77,7 @@ public sealed class InvokeBashRmCommand : PSCmdlet
     {
         // Re-inject decoy-bound classifier flags so the classifier still fires exit 2
         // (bare -i/-I/-d never reach Arguments — the binder crashes/silent-drops them).
-        var argsList = new List<string>();
-        if (I.IsPresent) argsList.Add("-i");
-        if (D.IsPresent) argsList.Add("-d");
-        argsList.AddRange(Arguments ?? Array.Empty<string>());
-        var args = argsList.ToArray();
+        var args = BashRuntime.PrependDecoys(Arguments, (I.IsPresent, "-i"), (D.IsPresent, "-d"));
 
         FileSystemHelpers.SetLastExitCode(this, 0);
         if (FileSystemHelpers.TryHandleVersion(this, "rm", args)) return;

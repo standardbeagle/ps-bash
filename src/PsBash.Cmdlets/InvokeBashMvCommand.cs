@@ -54,10 +54,7 @@ public sealed class InvokeBashMvCommand : PSCmdlet
     protected override void ProcessRecord()
     {
         // Re-inject the decoy-bound -i so the classifier still emits exit 2.
-        var argsList = new List<string>();
-        if (I.IsPresent) argsList.Add("-i");
-        argsList.AddRange(Arguments ?? Array.Empty<string>());
-        var args = argsList.ToArray();
+        var args = BashRuntime.PrependDecoys(Arguments, (I.IsPresent, "-i"));
 
         FileSystemHelpers.SetLastExitCode(this, 0);
         if (FileSystemHelpers.TryHandleVersion(this, "mv", args)) return;

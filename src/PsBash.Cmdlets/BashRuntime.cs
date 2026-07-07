@@ -70,9 +70,27 @@ public static class BashRuntime
         if (invocation.PipelineLength <= 1 || position < 1)
             return line;
 
+        var segments = SplitPipelineSegments(line);
+        return position <= segments.Count ? segments[position - 1] : line;
+    }
+
+    /// <summary>
+    /// Split an emitted PowerShell command line on TOP-LEVEL <c>|</c>. A <c>|</c> nested
+    /// inside a <c>(...)</c> / <c>{...}</c> / <c>[...]</c> group — the emitted PowerShell
+    /// for a bash subshell <c>&amp; { a | b }</c>, a command sub <c>$(a | b)</c>, or
+    /// <c>@(...)</c> — is part of a CHILD pipeline that PowerShell's
+    /// <c>PipelinePosition</c>/<c>PipelineLength</c> does NOT count, so it is not a
+    /// separator. Pipes inside single/double quotes, a backtick escape, or a <c>||</c>
+    /// chain operator are likewise not separators. Pure and side-effect-free so
+    /// <see cref="CurrentPipelineSegment"/>'s segmentation is unit-testable without an
+    /// <see cref="InvocationInfo"/> (which has no public constructor).
+    /// </summary>
+    public static List<string> SplitPipelineSegments(string line)
+    {
         var segments = new List<string>();
         int start = 0;
         char quote = '\0';
+        int depth = 0;
         for (int i = 0; i < line.Length; i++)
         {
             char c = line[i];
@@ -81,28 +99,67 @@ public static class BashRuntime
                 if (c == quote) quote = '\0';
                 continue;
             }
-            if (c == '\'' || c == '"')
+            switch (c)
             {
-                quote = c;
-            }
-            else if (c == '`')
-            {
-                i++;   // backtick escape — skip the escaped char
-            }
-            else if (c == '|')
-            {
-                if (i + 1 < line.Length && line[i + 1] == '|')
-                {
-                    i++;   // `||` chain operator, not a pipeline separator
-                    continue;
-                }
-                segments.Add(line.Substring(start, i - start));
-                start = i + 1;
+                case '\'':
+                case '"':
+                    quote = c;
+                    break;
+                case '`':
+                    i++;   // backtick escape — skip the escaped char
+                    break;
+                case '(':
+                case '{':
+                case '[':
+                    depth++;
+                    break;
+                case ')':
+                case '}':
+                case ']':
+                    if (depth > 0) depth--;
+                    break;
+                case '|':
+                    if (depth > 0) break;   // nested pipe — not a top-level separator
+                    if (i + 1 < line.Length && line[i + 1] == '|')
+                    {
+                        i++;   // `||` chain operator, not a pipeline separator
+                        break;
+                    }
+                    segments.Add(line.Substring(start, i - start));
+                    start = i + 1;
+                    break;
             }
         }
         segments.Add(line.Substring(start));
+        return segments;
+    }
 
-        return position <= segments.Count ? segments[position - 1] : line;
+    /// <summary>
+    /// Prepend the tokens of any PRESENT decoy switches to <paramref name="arguments"/>.
+    /// A binary cmdlet declares a single-letter <c>[Parameter]</c> decoy for each bash
+    /// short flag that would otherwise collide with a PowerShell common parameter (crash
+    /// on <c>-e/-i/-o/-p</c>, silent-bind of <c>-Debug/-Verbose/-Confirm</c> on
+    /// <c>-c/-d/-v</c>, or <c>-Arguments</c> swallow on <c>-a</c>); the bound flag then
+    /// never reaches <see cref="System.Management.Automation.PSCmdlet"/>'s remaining-args
+    /// list, so it must be re-injected here for the cmdlet's own scan / classifier to see
+    /// it. Single source for the ~13 cmdlets that were each open-coding this
+    /// <c>new List; if (X.IsPresent) Add("-x"); AddRange(Arguments)</c> block in three
+    /// different spellings. Returns the original array unchanged when no decoy is present
+    /// (the common case), so it allocates only when a decoy actually fired.
+    /// </summary>
+    public static string[] PrependDecoys(string[]? arguments, params (bool Present, string Flag)[] decoys)
+    {
+        var raw = arguments ?? Array.Empty<string>();
+        int extra = 0;
+        foreach (var (present, _) in decoys)
+            if (present) extra++;
+        if (extra == 0) return raw;
+
+        var list = new List<string>(raw.Length + extra);
+        foreach (var (present, flag) in decoys)
+            if (present) list.Add(flag);
+        list.AddRange(raw);
+        return list.ToArray();
     }
 
     /// <summary>

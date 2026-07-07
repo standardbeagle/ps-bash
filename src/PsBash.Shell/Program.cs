@@ -347,6 +347,17 @@ else
     }
 }
 
+// bash `-c 'string' name args...` sets $0=name and $1.. from the trailing operands.
+// Args.Parse captures them into ScriptArgs; apply them here (they were previously
+// captured but never used, so $0/$1/$@/$# were empty in -c mode). No-op when no
+// trailing operands are present — the common `ps-bash -c "cmd"` invocation is unchanged.
+if (pwshCommand is not null && shellArgs.ScriptArgs.Length > 0)
+{
+    pwshCommand = BuildPositionalPreamble(
+        shellArgs.ScriptArgs[0],
+        shellArgs.ScriptArgs.Skip(1).ToArray()) + pwshCommand;
+}
+
 if (debug)
 {
     // Tag EVERY line of multi-line debug output so AssertOracle's

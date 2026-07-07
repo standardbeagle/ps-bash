@@ -105,11 +105,7 @@ public sealed class InvokeBashTreeCommand : PSCmdlet
     {
         // Re-inject decoy-bound classifier flags so TryWriteOperandOptionError fires
         // (bare -C/-p never reach Arguments — the binder eats/crashes them).
-        var argsList = new List<string>();
-        if (C.IsPresent) argsList.Add("-C");
-        if (P.IsPresent) argsList.Add("-p");
-        argsList.AddRange(Arguments ?? Array.Empty<string>());
-        var args = argsList.ToArray();
+        var args = BashRuntime.PrependDecoys(Arguments, (C.IsPresent, "-C"), (P.IsPresent, "-p"));
 
         FileSystemHelpers.SetLastExitCode(this, 0);
         if (FileSystemHelpers.TryHandleVersion(this, "tree", args)) return;

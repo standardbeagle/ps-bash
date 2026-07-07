@@ -163,10 +163,7 @@ public sealed class InvokeBashGrepCommand : PSCmdlet
     {
         // Re-inject the decoy-bound -d/-D so grep's scan emits the exit-2 "recognized
         // but not supported" message (bare -d/-D silently bound -Debug otherwise).
-        var argsList = new List<string>();
-        if (D.IsPresent) argsList.Add("-d");
-        argsList.AddRange(Arguments ?? Array.Empty<string>());
-        var args = argsList.ToArray();
+        var args = BashRuntime.PrependDecoys(Arguments, (D.IsPresent, "-d"));
 
         if (Array.IndexOf(args, "--help") >= 0)
         {
@@ -321,7 +318,9 @@ public sealed class InvokeBashGrepCommand : PSCmdlet
                 i++;
                 // GNU grep: a missing or non-numeric context length is a hard error
                 // (exit 2), NOT a silently-consumed-and-ignored operand. `grep -A foo f`
-                // previously ate "foo" and searched with zero context.
+                // previously ate "foo" and searched with zero context. (The common
+                // separate form `-A NUM` is handled by the value-bearing int? A/B decoy
+                // parameters at the binder; this Arguments path covers the residual cases.)
                 if (i >= args.Length || !int.TryParse(args[i], out int v))
                 {
                     string bad = i < args.Length ? args[i] : "";

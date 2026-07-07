@@ -32,6 +32,36 @@ public class BashRuntimeTests
         Assert.Equal(expected, BashRuntime.NormalizeBashText(input));
     }
 
+    // ---- SplitPipelineSegments (raw-line flag-recovery segmentation) ----
+    // Regression: a `|` nested in $(...)/(...)/{...} is a CHILD pipeline that
+    // PowerShell's PipelinePosition does NOT count; the splitter must not treat it as
+    // a top-level separator, or the flag recovery (grep -E / sed -e / cut -d / uniq -D)
+    // reads a neighbour command's segment.
+
+    [Theory]
+    [InlineData("a | b", 2)]
+    [InlineData("a | b | c", 3)]
+    [InlineData("foo $(a | b) | grep x", 2)]     // inner | in $() not a separator
+    [InlineData("& { a | b } | c", 2)]           // inner | in {} not a separator
+    [InlineData("(a | b) | c", 2)]               // inner | in () not a separator
+    [InlineData("a @(x | y) | b", 2)]            // inner | in @() not a separator
+    [InlineData("a 'x | y' | b", 2)]             // | in single quotes not a separator
+    [InlineData("a \"x | y\" | b", 2)]           // | in double quotes not a separator
+    [InlineData("a || b", 1)]                    // || chain operator, not a separator
+    [InlineData("single", 1)]
+    public void SplitPipelineSegments_CountsOnlyTopLevelPipes(string line, int expectedCount)
+        => Assert.Equal(expectedCount, BashRuntime.SplitPipelineSegments(line).Count);
+
+    [Fact]
+    public void SplitPipelineSegments_NestedPipe_IndexesTheOuterStage()
+    {
+        // `foo $(a | b) | grep -E x` — grep at outer PipelinePosition 2 must map to the
+        // "grep -E x" segment, not the over-counted inner piece.
+        var segs = BashRuntime.SplitPipelineSegments("foo $(a | b) | grep -E x");
+        Assert.Equal(2, segs.Count);
+        Assert.Contains("grep -E x", segs[1]);
+    }
+
     // ---- ParseCountClamped (#14: unclamped int.Parse overflow crash) ----
 
     [Theory]

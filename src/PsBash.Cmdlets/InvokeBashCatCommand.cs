@@ -130,11 +130,7 @@ public sealed class InvokeBashCatCommand : PSCmdlet
 
         // Re-inject decoy-bound classifier flags (bare -A/-v never reach Arguments —
         // -A binds -Arguments, -v binds -Verbose) so TryWriteOperandOptionError fires.
-        var reinjected = new List<string>();
-        if (A.IsPresent) reinjected.Add("-A");
-        if (V.IsPresent) reinjected.Add("-v");
-        reinjected.AddRange(Arguments ?? Array.Empty<string>());
-        var args = reinjected.ToArray();
+        var args = BashRuntime.PrependDecoys(Arguments, (A.IsPresent, "-A"), (V.IsPresent, "-v"));
 
         // Translate the GNU long forms that are exact aliases of the supported
         // short flags into their short spelling before ConvertFromBashArgs sees

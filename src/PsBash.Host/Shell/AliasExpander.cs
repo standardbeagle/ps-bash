@@ -175,6 +175,17 @@ internal static class AliasExpander
                 }
                 if (c == '&')
                 {
+                    // `&>` / `&>>` is a REDIRECT operator (both streams to a file), NOT
+                    // the background operator — the following word is a filename, not a
+                    // new command, so it must not re-arm alias expansion. Emit the `&`
+                    // and let the next iteration handle `>` (which leaves atCommandStart
+                    // false). Without this, `echo hi &>ll` alias-expanded the target `ll`.
+                    if (pos + 1 < input.Length && input[pos + 1] == '>')
+                    {
+                        sb.Append('&');
+                        pos++;
+                        continue;
+                    }
                     sb.Append('&');
                     pos++;
                     atCommandStart = true;
@@ -213,7 +224,18 @@ internal static class AliasExpander
                     // Redirect operator: the following word is a filename, not a command.
                     sb.Append(c);
                     pos++;
+                    atCommandStart = false;
                     break;
+                }
+                if (c == '\n' || c == '\r')
+                {
+                    // A newline (multi-line / bracketed-paste input) starts a new command
+                    // line — the next word re-arms alias expansion, like `;`. The generic
+                    // whitespace branch below would leave atCommandStart off.
+                    sb.Append(c);
+                    pos++;
+                    atCommandStart = true;
+                    continue;
                 }
                 if (char.IsWhiteSpace(c))
                 {

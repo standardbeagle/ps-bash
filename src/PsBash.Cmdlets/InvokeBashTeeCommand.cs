@@ -104,10 +104,7 @@ public sealed class InvokeBashTeeCommand : PSCmdlet
     protected override void EndProcessing()
     {
         // Re-inject the decoy-bound -p so the classifier still fires exit 2.
-        var argsList = new List<string>();
-        if (P.IsPresent) argsList.Add("-p");
-        argsList.AddRange(Arguments ?? Array.Empty<string>());
-        var args = argsList.ToArray();
+        var args = BashRuntime.PrependDecoys(Arguments, (P.IsPresent, "-p"));
 
         FileSystemHelpers.SetLastExitCode(this, 0);
         if (FileSystemHelpers.TryHandleVersion(this, "tee", args)) return;
