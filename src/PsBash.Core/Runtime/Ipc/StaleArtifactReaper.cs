@@ -91,13 +91,24 @@ public static class StaleArtifactReaper
             // The owner holds the lock with FileShare.None for its whole life. If
             // we can open it exclusively, no live owner holds it ⇒ safe to delete.
             // A still-held lock throws IOException (sharing violation) and is left.
+            //
+            // Delete via DeleteOnClose (the unlink happens on handle close, WHILE we
+            // still hold the exclusive FileShare.None handle) rather than close-then-
+            // File.Delete. On POSIX, File.Delete/unlink is NOT blocked by the advisory
+            // lock, so a "prove-free, close, then delete" sequence has a window in
+            // which a launcher's HostSpawnLock.TryAcquire grabs the lock — then the
+            // reaper unlinks it, the next launcher creates a fresh inode, and BOTH run
+            // the spawn path (the very thundering herd HostSpawnLock exists to stop).
+            // Holding the exclusive handle across the unlink closes that window: while
+            // we hold it, a concurrent FileShare.None acquire fails (contention) and
+            // the launcher retries after we release.
             try
             {
-                using (new FileStream(lockFile, FileMode.Open, FileAccess.ReadWrite, FileShare.None))
+                using (new FileStream(lockFile, FileMode.Open, FileAccess.ReadWrite,
+                                      FileShare.None, bufferSize: 1, FileOptions.DeleteOnClose))
                 {
-                    // opened exclusively — owner is gone
+                    // opened exclusively — owner is gone; DeleteOnClose unlinks on close.
                 }
-                TryDelete(lockFile);
                 removed++;
             }
             catch (IOException) { /* still held by a live owner — leave it */ }

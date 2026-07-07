@@ -183,12 +183,40 @@ public static class ModuleExtractor
 
         // Use a lock file to serialize extraction across concurrent processes.
         var lockPath = Path.Combine(dir, ".lock");
+
+        // Step 1 — ACQUIRE the lock. A failure HERE means another process holds it
+        // (and is extracting), so waiting for its marker is correct. Two distinct
+        // failure shapes both mean "someone else owns the lock":
+        //   • IOException — sharing violation (the classic held-lock case);
+        //   • UnauthorizedAccessException — the lock file is in its DeleteOnClose
+        //     pending-delete window (a prior holder is tearing down). The old
+        //     IOException-only catch missed this and crashed host startup.
+        FileStream lockFile;
         try
         {
-            using var lockFile = new FileStream(
+            lockFile = new FileStream(
                 lockPath, FileMode.OpenOrCreate, FileAccess.ReadWrite,
                 FileShare.None, 4096, FileOptions.DeleteOnClose);
+        }
+        catch (IOException)
+        {
+            WaitForMarker(marker);
+            return psd1Path;
+        }
+        catch (UnauthorizedAccessException)
+        {
+            WaitForMarker(marker);
+            return psd1Path;
+        }
 
+        // Step 2 — we are the WINNER and hold the lock. A failure in this critical
+        // section is NOT contention: no other process will write the marker, so
+        // WaitForMarker would stall the full timeout and then return a
+        // half-clobbered dir with no marker (the reported bug). Let it propagate so
+        // the caller sees the real, actionable error (e.g. "Cmdlets.dll is mapped by
+        // a running host" when a stale daemon has the file locked).
+        try
+        {
             // Re-check marker after acquiring lock — another process may have finished.
             if (File.Exists(marker))
                 return psd1Path;
@@ -222,10 +250,9 @@ public static class ModuleExtractor
             var hash = ComputeEmbeddedHash(asm);
             File.WriteAllText(marker, hash);
         }
-        catch (IOException)
+        finally
         {
-            // Another process holds the lock and is extracting. Wait for marker.
-            WaitForMarker(marker);
+            lockFile.Dispose();
         }
 
         return psd1Path;
