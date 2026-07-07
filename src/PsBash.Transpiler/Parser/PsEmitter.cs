@@ -690,43 +690,22 @@ public static class PsEmitter
         sb.Append(Emit(subshell.Body));
         sb.Append(" } finally { Pop-Location }");
 
-        Redirect? fileRedirect = null;
+        // Partition out the input redirect: `(cmd) < file` feeds the file to the
+        // subshell's stdin and wraps the WHOLE result (`Get-Content file | & { … }`),
+        // so it can't go through the shared stdout/other tail — without this it fell to
+        // the raw `0<file` fallback ("'<' is reserved for future use"), common as
+        // `(while read l; ...) < file`. Last input redirect wins (bash). Everything
+        // else (stdout file + `2>&1` etc.) uses the shared AppendRedirectTail.
         Redirect? inputRedirect = null;
+        var tailRedirects = new List<Redirect>(subshell.Redirects.Length);
         foreach (var redirect in subshell.Redirects)
         {
-            var target = TransformRedirectTarget(EmitWord(redirect.Target));
-            bool isStdoutFile = redirect.Fd == 1
-                && (redirect.Op == ">" || redirect.Op == ">>")
-                && target != "$null";
-            // `(cmd) < file` feeds the file to the subshell's stdin. Without this
-            // the input redirect fell to the raw `0<file` fallback, which is
-            // invalid PowerShell ("'<' is reserved for future use"). Common as
-            // `(while read l; ...) < file`. Last input redirect wins (bash).
-            bool isStdinFile = redirect.Fd == 0 && redirect.Op == "<";
-
-            if (isStdoutFile && fileRedirect is null)
-            {
-                fileRedirect = redirect;
-            }
-            else if (isStdinFile)
-            {
+            if (redirect.Fd == 0 && redirect.Op == "<")
                 inputRedirect = redirect;
-            }
             else
-            {
-                sb.Append(' ');
-                sb.Append(EmitRedirect(redirect));
-            }
+                tailRedirects.Add(redirect);
         }
-
-        if (fileRedirect is not null)
-        {
-            var target = TransformRedirectTarget(EmitWord(fileRedirect.Target));
-            sb.Append(" | Invoke-BashRedirect -Path ");
-            sb.Append(target);
-            if (fileRedirect.Op == ">>")
-                sb.Append(" -Append");
-        }
+        AppendRedirectTail(sb, tailRedirects);
 
         string result = sb.ToString();
         if (inputRedirect is not null)
@@ -1941,36 +1920,10 @@ public static class PsEmitter
             }
         }
 
-        // Separate stdout file redirects from other redirects.
-        // Stdout file redirects (> file, >> file) use Invoke-BashRedirect to avoid
-        // lingering file handles that cause IO.IOException in chained commands.
-        Redirect? fileRedirect = null;
-        foreach (var redirect in cmd.Redirects)
-        {
-            var target = TransformRedirectTarget(EmitWord(redirect.Target));
-            bool isStdoutFile = redirect.Fd == 1
-                && (redirect.Op == ">" || redirect.Op == ">>")
-                && target != "$null";
-
-            if (isStdoutFile && fileRedirect is null)
-            {
-                fileRedirect = redirect;
-            }
-            else
-            {
-                sb.Append(' ');
-                sb.Append(EmitRedirect(redirect));
-            }
-        }
-
-        if (fileRedirect is not null)
-        {
-            var target = TransformRedirectTarget(EmitWord(fileRedirect.Target));
-            sb.Append(" | Invoke-BashRedirect -Path ");
-            sb.Append(target);
-            if (fileRedirect.Op == ">>")
-                sb.Append(" -Append");
-        }
+        // Stdout file redirects (> file, >> file) route through Invoke-BashRedirect
+        // (avoids lingering file handles that cause IO.IOException in chained
+        // commands); every other redirect is emitted inline. Shared selection helper.
+        AppendRedirectTail(sb, cmd.Redirects);
 
         // Close the try/finally for env-var prefix save/restore.
         if (!cmd.EnvPairs.IsEmpty)
@@ -3770,9 +3723,26 @@ public static class PsEmitter
     private static void EmitPipeTargetRedirects(Command.Simple cmd, StringBuilder sb)
     {
         if (cmd.Redirects.IsEmpty) return;
+        AppendRedirectTail(sb, cmd.Redirects);
+    }
 
+    /// <summary>
+    /// Append a command's redirect tail to <paramref name="sb"/>: every NON-stdout-file
+    /// redirect (<c>2&gt;&amp;1</c>, <c>&amp;&gt;</c>, <c>&lt;&amp;-</c>, …) is emitted
+    /// inline via <see cref="EmitRedirect"/>, while the FIRST stdout file redirect
+    /// (<c>&gt; file</c> / <c>&gt;&gt; file</c>) is piped through
+    /// <c>Invoke-BashRedirect</c> instead — a raw <c>&gt;</c> left a lingering file
+    /// handle that threw IOException in chained commands.
+    /// <para>Single source for EmitSimple, EmitSubshell, and
+    /// <see cref="EmitPipeTargetRedirects"/>: the subshell <c>&lt; file</c> bug came
+    /// from this selection being copy-pasted three times and a fix landing in only one.
+    /// Input redirects (<c>&lt; file</c>) are the caller's responsibility — they wrap
+    /// the whole command (<c>Get-Content | …</c>), so partition them out first.</para>
+    /// </summary>
+    private static void AppendRedirectTail(StringBuilder sb, IEnumerable<Redirect> redirects)
+    {
         Redirect? fileRedirect = null;
-        foreach (var redirect in cmd.Redirects)
+        foreach (var redirect in redirects)
         {
             var target = TransformRedirectTarget(EmitWord(redirect.Target));
             bool isStdoutFile = redirect.Fd == 1
