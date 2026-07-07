@@ -64,6 +64,26 @@ public class InvokeBashMktempCommandTests : IDisposable, IClassFixture<SharedPws
         Path.Combine(Path.GetTempPath(), "ps-bash", "proc-sub");
 
     [Fact]
+    public void Mktemp_DashP_HonorsDirectory_NoBinderCrash()
+    {
+        // Regression: bare -p prefix-collides with -ProgressAction (PS 7.4) and the
+        // binder crashed ("ambiguous") before the cmdlet ran. The P decoy binds -p DIR
+        // and DIR overrides the proc-sub target. A passing invocation proves no crash.
+        var dir = Path.Combine(Path.GetTempPath(), $"psb-mktemp-p-{Guid.NewGuid():N}".Substring(0, 25));
+        Directory.CreateDirectory(dir);
+        _createdPaths.Add(dir);
+
+        var lines = RunLines($"(Invoke-BashMktemp -p '{dir.Replace("'", "''")}').Path");
+
+        Assert.Single(lines);
+        Assert.True(File.Exists(lines[0]), $"expected a file at {lines[0]}");
+        Assert.StartsWith(
+            new DirectoryInfo(dir).FullName,
+            new FileInfo(lines[0]).FullName,
+            StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
     public void Mktemp_NoArgs_CreatesEmptyFileInProcSubDir()
     {
         var lines = RunLines("(Invoke-BashMktemp).Path");

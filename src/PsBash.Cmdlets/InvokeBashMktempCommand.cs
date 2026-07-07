@@ -43,6 +43,15 @@ public sealed class InvokeBashMktempCommand : PSCmdlet
 {
     [Parameter] public SwitchParameter d { get; set; }
 
+    /// <summary>
+    /// GNU mktemp's <c>-p DIR</c> (place the temp under DIR). Declared as a decoy
+    /// value-bearing parameter because the bare <c>-p</c> prefix-collides with
+    /// <c>-ProgressAction</c> (added in PS 7.4) and the binder crashes ("ambiguous")
+    /// before <see cref="Arguments"/> sees it. When present, DIR overrides the default
+    /// <c>ps-bash/proc-sub/</c> target.
+    /// </summary>
+    [Parameter] public string? P { get; set; }
+
     [Parameter(ValueFromRemainingArguments = true)]
     public string[]? Arguments { get; set; }
 
@@ -77,7 +86,12 @@ public sealed class InvokeBashMktempCommand : PSCmdlet
             template = arg;
         }
 
-        var subDir = Path.Combine(Path.GetTempPath(), "ps-bash", "proc-sub");
+        // -p DIR overrides the default target directory (bound to the P decoy so the
+        // bare -p never reaches the crashing binder). Normalize a unix-style path to
+        // the host convention, as the other file cmdlets do.
+        var subDir = !string.IsNullOrEmpty(P)
+            ? FileSystemHelpers.NormalizeOperandPath(P!)
+            : Path.Combine(Path.GetTempPath(), "ps-bash", "proc-sub");
         Directory.CreateDirectory(subDir);
 
         string name = Path.GetRandomFileName();

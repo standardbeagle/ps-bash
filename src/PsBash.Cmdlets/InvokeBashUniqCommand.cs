@@ -29,9 +29,14 @@ namespace PsBash.Cmdlets;
 /// <item><c>-i</c> (case-insensitive) vs <c>-InformationAction</c> /
 /// <c>-InformationVariable</c> — declared as <c>I</c>.</item>
 /// </list>
-/// <c>-u</c>, <c>-f</c>, <c>-s</c>, <c>-w</c> have no PS common-parameter
-/// prefix collision and stay in <see cref="Arguments"/>; they are parsed
-/// (separated and joined forms) by the manual value-flag scan. Bundled forms
+/// <c>-u</c>, <c>-f</c>, <c>-s</c> have no PS common-parameter prefix collision
+/// and stay in <see cref="Arguments"/>; they are parsed (separated and joined
+/// forms) by the manual value-flag scan. <c>-w N</c> (compare at most N chars) is
+/// the exception: a bare <c>-w</c> prefix-collides with <c>-WarningAction</c> /
+/// <c>-WarningVariable</c> and the binder crashes ("ambiguous"), so the SEPARATE
+/// form is captured by the declared value-bearing decoy <see cref="W"/>; the
+/// joined (<c>-w3</c>) and bundled forms still land in <see cref="Arguments"/> and
+/// are recovered by the scan. Bundled forms
 /// like <c>-cd</c>, <c>-ci</c>, <c>-cdi</c> survive the binder by landing in
 /// <see cref="Arguments"/> intact (they don't bind to any switch's exact name)
 /// and are recovered post-parse against the oracle's per-char dispatch.
@@ -54,6 +59,15 @@ public sealed class InvokeBashUniqCommand : PSCmdlet
 
     [Parameter]
     public SwitchParameter I { get; set; }
+
+    /// <summary>
+    /// <c>-w N</c> (compare at most N chars). Value-bearing decoy for the
+    /// <c>-WarningAction</c>/<c>-WarningVariable</c> ambiguous-prefix collision on a
+    /// bare <c>-w</c>. Joined/bundled forms are still recovered from
+    /// <see cref="Arguments"/> by the manual scan.
+    /// </summary>
+    [Parameter]
+    public int? W { get; set; }
 
     [Parameter(ValueFromPipeline = true)]
     public PSObject? InputObject { get; set; }
@@ -280,6 +294,10 @@ public sealed class InvokeBashUniqCommand : PSCmdlet
         {
             _allRepeated = true;
         }
+
+        // The SEPARATE `-w N` form binds to the W decoy (never reaches the scan
+        // above), so apply it here. A joined/bundled `-w3` already set checkChars.
+        if (W.HasValue) checkChars = W.Value;
 
         _countMode = countMode;
         _duplicatesOnly = duplicatesOnly;

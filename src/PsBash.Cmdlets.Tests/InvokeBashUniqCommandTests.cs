@@ -69,6 +69,25 @@ public class InvokeBashUniqCommandTests : IClassFixture<SharedPwshFixture>, IDis
     }
 
     [Fact]
+    public void Uniq_DashW_SeparateForm_ComparesFirstNChars_NoBinderCrash()
+    {
+        // Regression: bare -w prefix-collides with -WarningAction/-WarningVariable; the
+        // SEPARATE `-w N` form crashed the binder ("ambiguous") before the W decoy.
+        // -w 3 compares only the first 3 chars → abcX/abcY collapse.
+        var lines = RunLines("'abcX','abcY','zzz' | Invoke-BashUniq -w 3");
+        Assert.Equal(new[] { "abcX", "zzz" }, lines);
+    }
+
+    [Fact]
+    public void Uniq_DashW_JoinedForm_StillWorksViaArguments()
+    {
+        // The joined `-w3` form lands in Arguments (no exact param match) and is
+        // recovered by the manual scan — the decoy must not break it.
+        var lines = RunLines("'abcX','abcY' | Invoke-BashUniq -w3");
+        Assert.Equal(new[] { "abcX" }, lines);
+    }
+
+    [Fact]
     public void Uniq_AllUnique_PreservesAll()
     {
         var lines = RunLines("'a','b','c' | Invoke-BashUniq");

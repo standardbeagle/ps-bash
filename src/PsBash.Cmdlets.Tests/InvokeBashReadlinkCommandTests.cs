@@ -79,6 +79,28 @@ public class InvokeBashReadlinkCommandTests : IDisposable, IClassFixture<SharedP
             StringComparison.OrdinalIgnoreCase));
     }
 
+    [Fact]
+    public void Readlink_DashE_CanonicalizesWithoutBinderCrash()
+    {
+        // Regression: bare -e prefix-collides with -ErrorAction/-ErrorVariable and the
+        // binder crashed ("ambiguous") before the cmdlet ran. It must bind (E decoy)
+        // and canonicalize like -f. A passing invocation proves no binder crash.
+        var lines = RunBashText($"Invoke-BashReadlink -e '{_regularFile.Replace("'", "''")}'");
+        Assert.Single(lines);
+        Assert.True(new FileInfo(lines[0]).FullName.Equals(
+            new FileInfo(_regularFile).FullName,
+            StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    public void Readlink_DashV_AcceptedWithoutBinderCrash()
+    {
+        // Regression: bare -v silently bound -Verbose. It must be accepted (V decoy)
+        // and produce the normal output for the operand.
+        var lines = RunBashText($"Invoke-BashReadlink -v '{_regularFile.Replace("'", "''")}'");
+        Assert.Single(lines);
+    }
+
     [SkippableFact]
     public void Readlink_Symlink_ReturnsLinkTarget()
     {

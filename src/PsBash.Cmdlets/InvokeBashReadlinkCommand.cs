@@ -37,6 +37,24 @@ public sealed class InvokeBashReadlinkCommand : PSCmdlet
     [Parameter]
     public SwitchParameter f { get; set; }
 
+    /// <summary>
+    /// GNU readlink's <c>-e</c> (canonicalize; every component must exist). Declared
+    /// as a decoy <see cref="SwitchParameter"/> because the bare <c>-e</c> prefix-
+    /// collides with <c>-ErrorAction</c>/<c>-ErrorVariable</c> and the binder crashes
+    /// ("ambiguous") before <see cref="Arguments"/> ever sees it. realpath guarded this
+    /// surface; readlink was missed. Treated like <c>-f</c> (canonicalize).
+    /// </summary>
+    [Parameter]
+    public SwitchParameter E { get; set; }
+
+    /// <summary>
+    /// GNU readlink's <c>-v</c> (verbose). Decoy for the <c>-Verbose</c> prefix
+    /// collision (a bare <c>-v</c> silently bound <c>-Verbose</c>). Accepted and
+    /// ignored — readlink's diagnostics are already emitted.
+    /// </summary>
+    [Parameter]
+    public SwitchParameter V { get; set; }
+
     [Parameter(ValueFromRemainingArguments = true)]
     public string[]? Arguments { get; set; }
 
@@ -56,15 +74,21 @@ public sealed class InvokeBashReadlinkCommand : PSCmdlet
             return;
         }
 
-        // psm1 oracle: every non-"-f" token is an operand. Even unknown
-        // -prefixed tokens are operands (and will fail Get-Item). We preserve
-        // this exactly — only "-f" is consumed as the canonicalize flag.
+        // -f/-e/-m are canonicalize variants; -v is verbose (accepted, ignored).
+        // -e and -v are bound to the E/V decoys (never in Arguments); -f/-m arrive
+        // here and must not be treated as path operands. Every other -prefixed token
+        // stays an operand (psm1 oracle: it fails Get-Item, matching GNU).
         var operands = new List<string>();
         foreach (var a in args)
         {
-            if (a == "-f") continue;
+            if (a is "-f" or "-e" or "-m" or "-v") continue;
             operands.Add(a);
         }
+
+        // Canonicalize for -f (bound), -e (E decoy), or -m (canonicalize-missing,
+        // reaches Arguments since 'm' has no common-parameter collision). ps-bash's
+        // oracle only resolves existing paths, so -m behaves like -e/-f here.
+        bool canonicalize = f.IsPresent || E.IsPresent || Array.IndexOf(args, "-m") >= 0;
 
         if (operands.Count == 0)
         {
@@ -75,7 +99,7 @@ public sealed class InvokeBashReadlinkCommand : PSCmdlet
         foreach (var path in operands)
         {
             string text;
-            if (f.IsPresent)
+            if (canonicalize)
             {
                 try
                 {
