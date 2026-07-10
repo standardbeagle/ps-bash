@@ -276,15 +276,7 @@ public static class BashFileSystem
     public const string NoIgnoreEnvVar = "PSBASH_SEARCH_NO_IGNORE";
 
     /// <summary>True when <see cref="NoIgnoreEnvVar"/> is set to a truthy value.</summary>
-    public static bool DefaultFilteringDisabled()
-    {
-        var v = Environment.GetEnvironmentVariable(NoIgnoreEnvVar)?.Trim();
-        return v is not null
-            && (v.Equals("1", StringComparison.OrdinalIgnoreCase)
-                || v.Equals("true", StringComparison.OrdinalIgnoreCase)
-                || v.Equals("yes", StringComparison.OrdinalIgnoreCase)
-                || v.Equals("on", StringComparison.OrdinalIgnoreCase));
-    }
+    public static bool DefaultFilteringDisabled() => BashRuntime.IsEnvTruthy(NoIgnoreEnvVar);
 
     /// <summary>
     /// Lazily enumerate files under <paramref name="root"/> for recursive search,

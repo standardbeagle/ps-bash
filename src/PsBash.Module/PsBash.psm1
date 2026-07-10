@@ -28,45 +28,55 @@
 # 1.5 MB binary module on every host cold start (#9). The probe path stays
 # for Pester / standalone `Import-Module PsBash.psd1` callers that have not
 # pre-registered.
-if (-not (Get-Command Invoke-BashBasename -CommandType Cmdlet -ErrorAction SilentlyContinue)) {
-    # Probe order matters. The Runtime.dll variants are deployed by install-local.ps1
-    # into a real PSModulePath dir and are deliberately renamed from PsBash.Cmdlets.dll
-    # so that the user's pwsh maps a file path that the dev `dotnet build` output
-    # (src/PsBash.Cmdlets/bin/...) never writes to. Without this, a live pwsh session
-    # that has Import-Module PsBash loaded holds an exclusive open on bin/Debug/...DLL
-    # and the next build fails with MSB3027 ("file is locked by"). Prefer Runtime
-    # variants whenever they exist; fall back to bin/Debug only for fresh clones
-    # that have not run install-local.ps1 yet.
-    $script:__psbashCmdletsDll = @(
-        # PSModulePath layout: PsBash and PsBash.Cmdlets are sibling modules.
-        (Join-Path $PSScriptRoot '..' 'PsBash.Cmdlets' 'PsBash.Cmdlets.Runtime.dll')
-        # PSGallery layout: companion DLL bundled inside the PsBash module dir.
-        (Join-Path $PSScriptRoot 'PsBash.Cmdlets.Runtime.dll')
-        (Join-Path $PSScriptRoot 'PsBash.Cmdlets.dll')
-        # Dev fallback. WARNING: loading from here LOCKS the file against
-        # subsequent dotnet builds. Run scripts/install-local.ps1 to deploy the
-        # renamed Runtime.dll above and shake the lock loose.
-        (Join-Path $PSScriptRoot '..' 'PsBash.Cmdlets' 'bin' 'Debug' 'net8.0' 'PsBash.Cmdlets.dll')
-        (Join-Path $PSScriptRoot '..' 'PsBash.Cmdlets' 'bin' 'Release' 'net8.0' 'PsBash.Cmdlets.dll')
-        (Join-Path $PSScriptRoot '..' 'PsBash.Cmdlets' 'bin' 'Debug' 'net10.0' 'PsBash.Cmdlets.dll')
-        (Join-Path $PSScriptRoot '..' 'PsBash.Cmdlets' 'bin' 'Release' 'net10.0' 'PsBash.Cmdlets.dll')
-    ) | Where-Object { Test-Path -LiteralPath $_ } | Select-Object -First 1
-    if ($script:__psbashCmdletsDll) {
-        # -Global so the binary cmdlets are reachable via Get-Command after
-        # Import-Module PsBash from any scope (Pester's psd1-import path is
-        # the canonical failure mode this guards against).
+# Probe order matters. The Runtime.dll variants are deployed by install-local.ps1
+# into a real PSModulePath dir and are deliberately renamed from PsBash.Cmdlets.dll
+# so that the user's pwsh maps a file path that the dev `dotnet build` output
+# (src/PsBash.Cmdlets/bin/...) never writes to. Without this, a live pwsh session
+# that has Import-Module PsBash loaded holds an exclusive open on bin/Debug/...DLL
+# and the next build fails with MSB3027 ("file is locked by"). Prefer Runtime
+# variants whenever they exist; fall back to bin/Debug only for fresh clones
+# that have not run install-local.ps1 yet.
+#
+# Do not use Get-Command as the import guard: it autoloads installed modules from
+# PSModulePath, which lets an older user-installed PsBash.Cmdlets shadow this
+# source tree during local Pester runs.
+$script:__psbashCmdletsDll = @(
+    # PSModulePath layout: PsBash and PsBash.Cmdlets are sibling modules.
+    (Join-Path $PSScriptRoot '..' 'PsBash.Cmdlets' 'PsBash.Cmdlets.Runtime.dll')
+    # PSGallery / dev-staged layout: companion DLL bundled inside the PsBash module dir.
+    (Join-Path $PSScriptRoot 'PsBash.Cmdlets.Runtime.dll')
+    (Join-Path $PSScriptRoot 'PsBash.Cmdlets.dll')
+    # Dev fallback. WARNING: loading from here LOCKS the file against
+    # subsequent dotnet builds. Run scripts/install-local.ps1 to deploy the
+    # renamed Runtime.dll above and shake the lock loose.
+    (Join-Path $PSScriptRoot '..' 'PsBash.Cmdlets' 'bin' 'Debug' 'net8.0' 'PsBash.Cmdlets.dll')
+    (Join-Path $PSScriptRoot '..' 'PsBash.Cmdlets' 'bin' 'Release' 'net8.0' 'PsBash.Cmdlets.dll')
+    (Join-Path $PSScriptRoot '..' 'PsBash.Cmdlets' 'bin' 'Debug' 'net10.0' 'PsBash.Cmdlets.dll')
+    (Join-Path $PSScriptRoot '..' 'PsBash.Cmdlets' 'bin' 'Release' 'net10.0' 'PsBash.Cmdlets.dll')
+) | Where-Object { Test-Path -LiteralPath $_ } | Select-Object -First 1
+if ($script:__psbashCmdletsDll) {
+    # -Global so the binary cmdlets are reachable via Get-Command after
+    # Import-Module PsBash from any scope (Pester's psd1-import path is
+    # the canonical failure mode this guards against).
+    $script:__psbashLoadedCmdletsAssembly = [AppDomain]::CurrentDomain.GetAssemblies() |
+        Where-Object { $_.GetName().Name -eq 'PsBash.Cmdlets' } |
+        Select-Object -First 1
+    $script:__psbashCmdletsDllResolved = (Resolve-Path -LiteralPath $script:__psbashCmdletsDll).Path
+    if ((-not $script:__psbashLoadedCmdletsAssembly) -or
+        ($script:__psbashLoadedCmdletsAssembly.Location -eq $script:__psbashCmdletsDllResolved)) {
         Import-Module $script:__psbashCmdletsDll -Global -ErrorAction SilentlyContinue
     }
-    # Loud failure: without PsBash.Cmdlets.dll the migrated commands (ls, cat, grep, …) AND the
-    # [PsBash.Cmdlets.BashRuntime] helpers this psm1 calls are all missing — a half-loaded,
-    # broken module. NEVER fail silently (the old `Install-Module PsBash` bug: aliases registered
-    # but `Invoke-BashLs` was "not recognized"). The host pre-registers the cmdlets via ISS, so
-    # this only fires for a genuinely incomplete module-mode install.
-    if (-not (Get-Command Invoke-BashBasename -CommandType Cmdlet -ErrorAction SilentlyContinue)) {
-        Write-Warning ("PsBash: companion binary module PsBash.Cmdlets.dll not found beside the module " +
-            "('$PSScriptRoot'). Migrated commands (ls, cat, grep, …) will not work. The PsBash package " +
-            "should bundle PsBash.Cmdlets.dll; reinstall, or run: Install-Module PsBash.Cmdlets.")
-    }
+}
+# Loud failure: without PsBash.Cmdlets.dll the migrated commands (ls, cat, grep, …) AND the
+# [PsBash.Cmdlets.BashRuntime] helpers this psm1 calls are all missing — a half-loaded,
+# broken module. NEVER fail silently (the old `Install-Module PsBash` bug: aliases registered
+# but `Invoke-BashLs` was "not recognized"). The host pre-registers the cmdlets via ISS, so
+# this only fires for a genuinely incomplete module-mode install.
+if ((-not $script:__psbashLoadedCmdletsAssembly) -and
+    (-not (Get-Command Invoke-BashBasename -CommandType Cmdlet -ErrorAction SilentlyContinue))) {
+    Write-Warning ("PsBash: companion binary module PsBash.Cmdlets.dll not found beside the module " +
+        "('$PSScriptRoot'). Migrated commands (ls, cat, grep, …) will not work. The PsBash package " +
+        "should bundle PsBash.Cmdlets.dll; reinstall, or run: Install-Module PsBash.Cmdlets.")
 }
 
 # Global state initialized here so bash functions can access these variables

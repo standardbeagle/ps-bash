@@ -74,11 +74,16 @@ internal sealed partial class ConPtyAdapter : IPty
             var outputClient = output.ClientSafePipeHandle;
 
             var size = new NativeMethods.COORD { X = cols, Y = rows };
+            // Do not request PSEUDOCONSOLE_INHERIT_CURSOR here. That flag makes
+            // ConPTY query the parent terminal for cursor position (ESC[6n);
+            // under test harnesses or pipe-driven launchers there may be no
+            // terminal emulator to answer, so child startup can stall before
+            // the process reaches Main.
             int hr = NativeMethods.CreatePseudoConsole(
                 size,
                 inputClient.DangerousGetHandle(),
                 outputClient.DangerousGetHandle(),
-                NativeMethods.PSEUDOCONSOLE_INHERIT_CURSOR,
+                0,
                 out IntPtr hpc);
             if (hr != 0)
             {

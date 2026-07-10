@@ -586,11 +586,27 @@ public class PsEmitterTests
     }
 
     [Fact]
+    public void Transpile_EmptyAssignment_EmitsEmptyStringAssignment()
+    {
+        var result = PsEmitter.Transpile("FOO=");
+
+        Assert.Equal("$env:FOO = \"\"", result);
+    }
+
+    [Fact]
     public void Transpile_AssignmentWithCommand_EmitsEnvPrefix()
     {
         var result = PsEmitter.Transpile("FOO=bar baz");
 
         Assert.Equal("$__saved_FOO = $env:FOO; try { $env:FOO = \"bar\"; baz } finally { $env:FOO = $__saved_FOO; }", result);
+    }
+
+    [Fact]
+    public void Transpile_EmptyAssignmentWithCommand_EmitsEmptyEnvPrefix()
+    {
+        var result = PsEmitter.Transpile("FOO= baz");
+
+        Assert.Equal("$__saved_FOO = $env:FOO; try { $env:FOO = \"\"; baz } finally { $env:FOO = $__saved_FOO; }", result);
     }
 
     [Fact]

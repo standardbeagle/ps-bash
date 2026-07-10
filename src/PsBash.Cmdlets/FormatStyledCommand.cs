@@ -529,7 +529,8 @@ public sealed class FormatStyledCommand : PSCmdlet
 
     /// <summary>
     /// Build one fs-view row from primitives: <c>Name</c> (type tag + name, dirs keep a trailing
-    /// <c>/</c>), <c>Size</c> (human size + a log-scaled ▰▱ meter, or <c>—</c> for a dir), and
+    /// <c>/</c>), <c>Size</c> (human size + a log-scaled ▃▁ meter — filled thickness keyed to the byte
+    /// range, dim baseline for the empty track — or <c>—</c> for a dir), and
     /// <c>Modified</c> (relative time), plus the file-type <c>class</c> the fs sheet colours by.
     /// Shared by the FileSystemInfo, LsEntry/StatEntry, and FindEntry paths.
     /// </summary>
@@ -609,41 +610,72 @@ public sealed class FormatStyledCommand : PSCmdlet
         };
     }
 
+    /// <summary>
+    /// Bucket a byte count into its binary-unit exponent (0=B, 1=K, 2=M, 3=G, 4=T, 5=P, capped at
+    /// P) and the value scaled into that unit. The single source of the 1024-power bucketing that
+    /// both <see cref="HumanSize"/> and <see cref="SizeExponent"/> consume, so they can never drift.
+    /// Cap is keyed to <see cref="FilledByExponent"/> so <see cref="SizeExponent"/> stays a valid
+    /// index into it.
+    /// </summary>
+    private static (int Exp, double Scaled) SizeBucket(long bytes)
+    {
+        double value = bytes;
+        int exp = 0;
+        while (value >= 1024 && exp < FilledByExponent.Length - 1)
+        {
+            value /= 1024;
+            exp++;
+        }
+
+        return (exp, value);
+    }
+
     /// <summary>Human-readable byte size: <c>0B</c>, <c>820B</c>, <c>1.4K</c>, <c>340M</c>, <c>2.1G</c> (binary units).</summary>
     internal static string HumanSize(long bytes)
     {
-        if (bytes < 1024)
+        var (exp, value) = SizeBucket(bytes);
+        if (exp == 0)
         {
             return bytes + "B";
         }
 
         string[] units = { "K", "M", "G", "T", "P" };
-        double value = bytes;
-        int unit = -1;
-        do
-        {
-            value /= 1024;
-            unit++;
-        }
-        while (value >= 1024 && unit < units.Length - 1);
-
         var num = value < 10
             ? value.ToString("0.0", System.Globalization.CultureInfo.InvariantCulture)
             : value.ToString("0", System.Globalization.CultureInfo.InvariantCulture);
-        return num + units[unit];
+        return num + units[exp - 1];
     }
 
-    /// <summary>A fixed-width unicode meter (▰ filled / ▱ empty) log-scaled to <paramref name="max"/> — the visual size indicator.</summary>
+    /// <summary>
+    /// The filled bar glyph per binary-unit exponent (0=B … 5=P): a rising lower-block whose
+    /// height (visual "thickness") grows with the size's magnitude, so a GB file's bar reads as
+    /// heavier than a KB file's at a glance — the range is legible from the glyph weight alone.
+    /// </summary>
+    private static readonly char[] FilledByExponent = { '▃', '▄', '▅', '▆', '▇', '█' };
+
+    /// <summary>The empty-track glyph: a thin dim baseline sliver, far lighter than any filled glyph so the filled/empty split reads as high vs low intensity (not the old ▰/▱ near-tie).</summary>
+    private const char EmptyGlyph = '▁';
+
+    /// <summary>Binary-unit exponent of a byte count: 0=B, 1=K, 2=M, 3=G, 4=T, 5=P — the same bucketing <see cref="HumanSize"/> uses.</summary>
+    internal static int SizeExponent(long bytes) => SizeBucket(bytes).Exp;
+
+    /// <summary>
+    /// A fixed-width unicode meter, log-scaled to <paramref name="max"/>. The empty track is a dim
+    /// baseline sliver (<c>▁</c>); the filled run uses a rising lower-block whose thickness is keyed
+    /// to <paramref name="bytes"/>' magnitude (B/K/M/G/T/P), so both the fill fraction AND the byte
+    /// range are visible in one compact, monochrome mark.
+    /// </summary>
     internal static string SizeBar(long bytes, long max, int width = 6)
     {
+        char fill = FilledByExponent[SizeExponent(Math.Max(bytes, 0))];
         if (bytes <= 0 || max <= 0)
         {
-            return new string('▱', width);
+            return new string(EmptyGlyph, width);
         }
 
         double frac = Math.Log(bytes + 1) / Math.Log(max + 1);
         int filled = Math.Clamp((int)Math.Round(frac * width), 0, width);
-        return new string('▰', filled) + new string('▱', width - filled);
+        return new string(fill, filled) + new string(EmptyGlyph, width - filled);
     }
 
     /// <summary>Relative modified time: <c>just now</c>, <c>5m ago</c>, <c>3h ago</c>, <c>2d ago</c>, then <c>MMM d</c> / <c>MMM d yyyy</c>.</summary>

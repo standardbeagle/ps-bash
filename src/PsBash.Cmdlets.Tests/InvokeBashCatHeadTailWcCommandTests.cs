@@ -117,6 +117,7 @@ public class InvokeBashCatHeadTailWcCommandTests : IClassFixture<SharedPwshFixtu
         // treated as a missing file.
         var errs = RunErrors(script);
         Assert.Contains(errs, m => m.Contains("not supported", StringComparison.OrdinalIgnoreCase)
+                                   && m.Contains(cmd, StringComparison.OrdinalIgnoreCase)
                                    && m.Contains(flag, StringComparison.Ordinal));
         Assert.DoesNotContain(errs, m => m.Contains("No such file", StringComparison.OrdinalIgnoreCase));
     }

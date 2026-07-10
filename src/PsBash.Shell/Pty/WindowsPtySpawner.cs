@@ -91,9 +91,10 @@ internal sealed partial class WindowsPtySpawner : PtySpawner
                 NativeMethods.EXTENDED_STARTUPINFO_PRESENT |
                 NativeMethods.CREATE_UNICODE_ENVIRONMENT;
 
+            var mutableCommandLine = new StringBuilder(commandLine);
             if (!NativeMethods.CreateProcessW(
-                    lpApplicationName: executablePath,
-                    lpCommandLine: commandLine,
+                    lpApplicationName: null,
+                    lpCommandLine: mutableCommandLine,
                     lpProcessAttributes: IntPtr.Zero,
                     lpThreadAttributes: IntPtr.Zero,
                     bInheritHandles: false,
@@ -300,12 +301,12 @@ internal sealed partial class WindowsPtySpawner : PtySpawner
         [LibraryImport("kernel32.dll")]
         public static partial void DeleteProcThreadAttributeList(IntPtr lpAttributeList);
 
-        [LibraryImport("kernel32.dll", SetLastError = true, EntryPoint = "CreateProcessW",
-            StringMarshalling = StringMarshalling.Utf16)]
+        [DllImport("kernel32.dll", SetLastError = true, EntryPoint = "CreateProcessW",
+            CharSet = CharSet.Unicode)]
         [return: MarshalAs(UnmanagedType.Bool)]
-        public static partial bool CreateProcessW(
+        public static extern bool CreateProcessW(
             string? lpApplicationName,
-            string lpCommandLine,
+            StringBuilder lpCommandLine,
             IntPtr lpProcessAttributes,
             IntPtr lpThreadAttributes,
             [MarshalAs(UnmanagedType.Bool)] bool bInheritHandles,

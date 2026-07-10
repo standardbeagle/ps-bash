@@ -84,6 +84,7 @@ public sealed class BashOracleFixture
                 {
                     ["PSBASH_DEBUG"] = "1",
                     ["PSBASH_TIMEOUT"] = "15",
+                    ["PSBASH_PER_INVOCATION"] = "1",
                 });
 
             await Task.WhenAll(bashTask, psBashTask).ConfigureAwait(false);

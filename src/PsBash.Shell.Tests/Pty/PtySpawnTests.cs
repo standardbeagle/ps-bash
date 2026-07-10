@@ -53,6 +53,7 @@ public class PtySpawnTests
             environment: new Dictionary<string, string>(StringComparer.Ordinal)
             {
                 ["PSBASH_PTY_ATTACHED"] = "1",
+                ["PSBASH_PTY_PROBE"] = "1",
             });
 
         await using (spawner)
@@ -62,6 +63,7 @@ public class PtySpawnTests
             // strip CRs before substring-matching.
             string probeOutput = await ReadUntilAsync(
                 pty.Output,
+                pty.Input,
                 marker: "PSBASH-PTY-PROBE:",
                 timeout: TimeSpan.FromSeconds(10));
 
@@ -99,6 +101,8 @@ public class PtySpawnTests
     {
         Skip.IfNot(RuntimeInformation.IsOSPlatform(OSPlatform.Windows),
             "Windows-only test — POSIX uses posix_spawn + SETSID + slave re-open");
+        Skip.If(string.IsNullOrEmpty(Environment.GetEnvironmentVariable("CI")),
+            "Windows ConPTY runtime verification is CI-gated");
         Skip.If(Environment.OSVersion.Version.Build < 17763,
             $"ConPTY requires Win10 1809 / build 17763+; current build is {Environment.OSVersion.Version.Build}");
 
@@ -116,12 +120,14 @@ public class PtySpawnTests
             environment: new Dictionary<string, string>(StringComparer.Ordinal)
             {
                 ["PSBASH_PTY_ATTACHED"] = "1",
+                ["PSBASH_PTY_PROBE"] = "1",
             });
 
         await using (spawner)
         {
             string probeOutput = await ReadUntilAsync(
                 pty.Output,
+                pty.Input,
                 marker: "PSBASH-PTY-PROBE:",
                 timeout: TimeSpan.FromSeconds(15));
 
@@ -213,6 +219,7 @@ public class PtySpawnTests
             environment: new Dictionary<string, string>(StringComparer.Ordinal)
             {
                 ["PSBASH_PTY_ATTACHED"] = "1",
+                ["PSBASH_PTY_PROBE"] = "1",
             });
 
         await using var ptyB = await PtyAllocator.AllocateAsync(cols: 80, rows: 24);
@@ -223,6 +230,7 @@ public class PtySpawnTests
             environment: new Dictionary<string, string>(StringComparer.Ordinal)
             {
                 ["PSBASH_PTY_ATTACHED"] = "1",
+                ["PSBASH_PTY_PROBE"] = "1",
             });
 
         await using (spawnerA)
@@ -236,8 +244,8 @@ public class PtySpawnTests
 
             // Drain each probe so the hosts exit cleanly rather than being
             // killed on dispose — keeps the box free of orphaned probes.
-            await ReadUntilAsync(ptyA.Output, "PSBASH-PTY-PROBE:", TimeSpan.FromSeconds(15));
-            await ReadUntilAsync(ptyB.Output, "PSBASH-PTY-PROBE:", TimeSpan.FromSeconds(15));
+            await ReadUntilAsync(ptyA.Output, ptyA.Input, "PSBASH-PTY-PROBE:", TimeSpan.FromSeconds(15));
+            await ReadUntilAsync(ptyB.Output, ptyB.Input, "PSBASH-PTY-PROBE:", TimeSpan.FromSeconds(15));
             using var waitCts = new CancellationTokenSource(TimeSpan.FromSeconds(15));
             await spawnerA.WaitForExitAsync(waitCts.Token);
             await spawnerB.WaitForExitAsync(waitCts.Token);
@@ -266,11 +274,16 @@ public class PtySpawnTests
 
         var src = File.ReadAllText(programPath);
 
-        // Program.cs is the launcher entry point. It selects Lifetime only for
-        // the non-interactive worker factory — and that must be PerInvocation.
-        // Lifetime.Daemon must not appear anywhere in the launcher entry point.
-        Assert.DoesNotContain("Lifetime.Daemon", src);
-        Assert.Contains("Lifetime.PerInvocation", src);
+        // Program.cs is the launcher entry point. The interactive branch must
+        // be before worker factory use and must spawn the host directly; daemon
+        // lifetime is allowed only for the non-interactive worker factory.
+        int interactiveIdx = src.IndexOf("if (shellArgs.Interactive || shellArgs.Command is null)", StringComparison.Ordinal);
+        int runPtyIdx = src.IndexOf("RunHostUnderPtyAsync(hostBinary, shellArgs)", interactiveIdx, StringComparison.Ordinal);
+        int daemonIdx = src.IndexOf("Lifetime.Daemon", StringComparison.Ordinal);
+        Assert.True(interactiveIdx > 0, "Interactive launch branch missing");
+        Assert.True(runPtyIdx > interactiveIdx, "Interactive launch must spawn under PTY");
+        Assert.True(daemonIdx > 0 && daemonIdx < interactiveIdx,
+            "Daemon lifetime must only appear before the interactive launch branch");
 
         // The interactive branch spawns the host directly and ties its lifetime
         // to this one launcher via --launcher-pid (ParentDeathWatcher), so the
@@ -350,25 +363,37 @@ public class PtySpawnTests
     /// ONLCR-translated output substring-matches cleanly against ASCII
     /// markers. No <c>Thread.Sleep</c> or polling — we await the next read.
     /// </summary>
-    private static async Task<string> ReadUntilAsync(Stream stream, string marker, TimeSpan timeout)
+    private static async Task<string> ReadUntilAsync(
+        Stream output,
+        Stream input,
+        string marker,
+        TimeSpan timeout)
     {
         using var cts = new CancellationTokenSource(timeout);
         var sw = Stopwatch.StartNew();
         var buf = new byte[4096];
         var sink = new StringBuilder();
+        bool answeredCursorQuery = false;
         try
         {
             while (sw.Elapsed < timeout)
             {
-                int n = await stream.ReadAsync(buf.AsMemory(), cts.Token).ConfigureAwait(false);
+                int n = await output.ReadAsync(buf.AsMemory(), cts.Token).ConfigureAwait(false);
                 if (n <= 0) break;
                 // Strip CR so PTY's LF->CRLF translation doesn't break substring matching.
                 for (int i = 0; i < n; i++)
                 {
                     if (buf[i] != (byte)'\r') sink.Append((char)buf[i]);
                 }
-                if (sink.ToString().Contains(marker, StringComparison.Ordinal))
-                    return sink.ToString();
+                string text = sink.ToString();
+                if (!answeredCursorQuery && text.Contains("\x1b[6n", StringComparison.Ordinal))
+                {
+                    answeredCursorQuery = true;
+                    await input.WriteAsync(Encoding.ASCII.GetBytes("\x1b[1;1R"), cts.Token).ConfigureAwait(false);
+                    await input.FlushAsync(cts.Token).ConfigureAwait(false);
+                }
+                if (text.Contains(marker, StringComparison.Ordinal))
+                    return text;
             }
         }
         catch (OperationCanceledException) { /* timeout */ }
@@ -388,6 +413,9 @@ public class PtySpawnTests
         if (dir is null) return null;
         var hostBinDir = Path.Combine(dir.FullName, "PsBash.Host", "bin");
         if (!Directory.Exists(hostBinDir)) return null;
+
+        var debugHost = Path.Combine(hostBinDir, "Debug", "net10.0", name);
+        if (File.Exists(debugHost)) return debugHost;
 
         // On Linux only Linux-rid builds run; same for macOS. Windows-only
         // builds (win-x64) only run when OS is Windows. Filter accordingly so

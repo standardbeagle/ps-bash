@@ -40,14 +40,32 @@ public class FormatStyledCommandTests : IClassFixture<SharedPwshFixture>
     [Fact]
     public void SizeBar_IsLogScaledFixedWidthMeter()
     {
-        // Empty / no-max → all-empty meter; the max-size file fills it; width is fixed.
-        Assert.Equal("▱▱▱▱▱▱", FormatStyledCommand.SizeBar(0, 1000));
-        Assert.Equal("▱▱▱▱▱▱", FormatStyledCommand.SizeBar(100, 0));
-        Assert.Equal("▰▰▰▰▰▰", FormatStyledCommand.SizeBar(1000, 1000));
+        // Empty / no-max → all-empty (dim baseline) meter; the max-size file fills it; width is fixed.
+        Assert.Equal("▁▁▁▁▁▁", FormatStyledCommand.SizeBar(0, 1000));
+        Assert.Equal("▁▁▁▁▁▁", FormatStyledCommand.SizeBar(100, 0));
+        // 1000B is in the B range (exp 0 → ▃); fully filled against an equal max.
+        Assert.Equal("▃▃▃▃▃▃", FormatStyledCommand.SizeBar(1000, 1000));
         var mid = FormatStyledCommand.SizeBar(100, 1_000_000);
         Assert.Equal(6, mid.Length);
-        Assert.Contains("▰", mid);   // non-empty file shows at least some fill
-        Assert.Contains("▱", mid);   // but well below max, so not full
+        Assert.Contains("▃", mid);   // non-empty B-range file shows at least some fill
+        Assert.Contains("▁", mid);   // but well below max, so not full (dim baseline shows)
+    }
+
+    [Fact]
+    public void SizeBar_FilledGlyphThicknessTracksByteRange()
+    {
+        // Filled glyph weight rises with the size's binary-unit exponent (B < K < M < G < T < P),
+        // so the range is legible from the mark alone even at the same fill fraction.
+        Assert.Equal(0, FormatStyledCommand.SizeExponent(512));            // B
+        Assert.Equal(1, FormatStyledCommand.SizeExponent(4L * 1024));      // K
+        Assert.Equal(2, FormatStyledCommand.SizeExponent(4L * 1024 * 1024)); // M
+        Assert.Equal(3, FormatStyledCommand.SizeExponent(4L * 1024 * 1024 * 1024)); // G
+
+        // Same fraction (fully filled vs equal max), heavier glyph as the range climbs.
+        Assert.Equal("▃▃▃▃▃▃", FormatStyledCommand.SizeBar(512, 512));                       // B → ▃
+        Assert.Equal("▄▄▄▄▄▄", FormatStyledCommand.SizeBar(4L * 1024, 4L * 1024));            // K → ▄
+        Assert.Equal("▅▅▅▅▅▅", FormatStyledCommand.SizeBar(4L * 1024 * 1024, 4L * 1024 * 1024)); // M → ▅
+        Assert.Equal("▆▆▆▆▆▆", FormatStyledCommand.SizeBar(4L * 1024 * 1024 * 1024, 4L * 1024 * 1024 * 1024)); // G → ▆
     }
 
     // Terminal-oriented ASCII type tags replaced the old type emoji. Pure classifier — no temp files.
@@ -124,7 +142,7 @@ public class FormatStyledCommandTests : IClassFixture<SharedPwshFixture>
             sizeBytes: 4400, modified: DateTime.Now.AddHours(-3), hidden: false, max: 4400);
         Assert.Equal("src  app.cs", Prop(row, "Name"));
         Assert.Contains("4.3K", Prop(row, "Size"));
-        Assert.Contains("▰", Prop(row, "Size"));        // meter present
+        Assert.Contains("▄", Prop(row, "Size"));        // meter present (K range → ▄ fill)
         Assert.Equal("3h ago", Prop(row, "Modified"));
         Assert.Equal("code", Prop(row, "class"));
     }
@@ -136,7 +154,7 @@ public class FormatStyledCommandTests : IClassFixture<SharedPwshFixture>
             sizeBytes: 0, modified: DateTime.Now.AddDays(-2), hidden: false, max: 4400);
         Assert.Equal("dir  sub/", Prop(row, "Name"));
         Assert.Contains("—", Prop(row, "Size"));        // no size/meter for a dir
-        Assert.DoesNotContain("▰", Prop(row, "Size"));
+        Assert.DoesNotContain("▁", Prop(row, "Size"));  // no meter track at all
         Assert.Equal("dir", Prop(row, "class"));
     }
 
@@ -243,7 +261,7 @@ public class FormatStyledCommandTests : IClassFixture<SharedPwshFixture>
             Assert.DoesNotContain("📘", plain);
             // Human size + visual meter.
             Assert.Contains("K", plain);    // 244K / 4.3K
-            Assert.Contains("▰", plain);    // size meter (retained)
+            Assert.Contains("▄", plain);    // size meter (K-range fill glyph)
             // Colour applied (ANSI SGR present in the raw output).
             Assert.Matches("\\[[0-9;]*m", raw);
         }

@@ -317,8 +317,10 @@ public sealed partial class BashParser
         var token = Advance();
         var (name, value, op) = SplitAssignmentWord(token.Value);
 
-        // Array assignment: arr=(a b c) or arr+=('x') — value is empty and next token is LParen.
-        if (value is null && Peek().Kind == BashTokenKind.LParen)
+        // Array assignment: arr=(a b c) or arr+=('x') — the assignment word
+        // ends at '=' / '+=' and the next token is LParen. A plain empty
+        // assignment (`x=`) is different: it assigns an explicit empty string.
+        if (value is not null && value.Parts.IsEmpty && Peek().Kind == BashTokenKind.LParen)
         {
             Advance(); // consume (
             var elements = ImmutableArray.CreateBuilder<CompoundWord>();
@@ -352,7 +354,7 @@ public sealed partial class BashParser
         var op = isPlus ? AssignOp.PlusEqual : AssignOp.Equal;
 
         if (valueRaw.Length == 0)
-            return (name, null, op);
+            return (name, new CompoundWord(ImmutableArray<WordPart>.Empty), op);
 
         // Assignment values expand a tilde at the start AND after each unquoted
         // ':' (PATH-style), unlike ordinary words — use the assignment-aware path.

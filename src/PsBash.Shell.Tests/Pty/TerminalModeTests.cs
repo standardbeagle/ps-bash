@@ -298,9 +298,9 @@ public class TerminalModeTests
 
         // It must be guarded by an exit-code check — a clean exit takes the
         // normal `using` dispose path with no reset escape sequence.
-        int guardIdx = src.IndexOf("if (exitCode != 0)", methodSig, StringComparison.Ordinal);
+        int guardIdx = src.IndexOf("if (WasAbnormalTermination(exitCode))", methodSig, StringComparison.Ordinal);
         Assert.True(guardIdx > 0 && guardIdx < emergencyIdx,
-            "Emergency restore must be gated on a non-zero (crash) exit code, not run on clean exit");
+            "Emergency restore must be gated on abnormal termination, not run on clean non-zero user exits");
     }
 
     private static string ReadProgramSource()

@@ -46,7 +46,7 @@ public class CoreutilsErrorParityTests : IClassFixture<SharedPwshFixture>
         var (outp, err, exit) = Run("\"a`tb\" | Invoke-BashCut -f0");
         AssertErr(err, "fields are numbered from 1");
         Assert.Equal(1, exit);
-        Assert.Empty(outp.Where(s => s.Length > 0));
+        Assert.DoesNotContain(outp, s => s.Length > 0);
     }
 
     [Fact]
@@ -63,7 +63,7 @@ public class CoreutilsErrorParityTests : IClassFixture<SharedPwshFixture>
         var (outp, err, exit) = Run("\"a`tb`tc\" | Invoke-BashCut -f3-1");
         AssertErr(err, "invalid decreasing range");
         Assert.Equal(1, exit);
-        Assert.Empty(outp.Where(s => s.Length > 0));
+        Assert.DoesNotContain(outp, s => s.Length > 0);
     }
 
     [Fact]
@@ -105,7 +105,7 @@ public class CoreutilsErrorParityTests : IClassFixture<SharedPwshFixture>
         var (outp, err, exit) = Run("Invoke-BashSeq 1 0 5");
         AssertErr(err, "invalid Zero increment value: '0'");
         Assert.Equal(1, exit);
-        Assert.Empty(outp.Where(s => s.Length > 0));
+        Assert.DoesNotContain(outp, s => s.Length > 0);
     }
 
     [Fact]

@@ -46,6 +46,24 @@ public static class BashRuntime
     }
 
     /// <summary>
+    /// True when environment variable <paramref name="name"/> is set to a truthy token
+    /// (<c>1</c>, <c>true</c>, <c>yes</c>, or <c>on</c>, case-insensitive, surrounding
+    /// whitespace ignored). One implementation so every cmdlet-side boolean env flag
+    /// (<c>PSBASH_SEARCH_NO_IGNORE</c>, <c>PSBASH_RG_NATIVE</c>, …) agrees on what counts
+    /// as "on" — mirrors <c>PsBash.Core.Runtime.EnvFlags.IsTruthy</c>, duplicated here only
+    /// because the AOT-leaf Cmdlets assembly cannot reference Core (Core embeds it).
+    /// </summary>
+    public static bool IsEnvTruthy(string name)
+    {
+        var value = Environment.GetEnvironmentVariable(name)?.Trim();
+        return value is not null
+            && (value.Equals("1", StringComparison.OrdinalIgnoreCase)
+                || value.Equals("true", StringComparison.OrdinalIgnoreCase)
+                || value.Equals("yes", StringComparison.OrdinalIgnoreCase)
+                || value.Equals("on", StringComparison.OrdinalIgnoreCase));
+    }
+
+    /// <summary>
     /// Returns ONLY the current command's segment of the pipeline text in
     /// <see cref="InvocationInfo.Line"/>. Several migrated cmdlets recover a flag the
     /// case-insensitive PowerShell binder swallowed (grep/sed <c>-E</c>, cut <c>-d:</c>,

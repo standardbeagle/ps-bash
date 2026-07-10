@@ -81,9 +81,10 @@ public class InvokeBashRealpathCommandTests : IDisposable, IClassFixture<SharedP
         Assert.Single(lines);
         // The resolved path should reference the same file. Use FileInfo for
         // canonical comparison (handles case-insensitivity on Windows).
-        Assert.True(new FileInfo(lines[0]).FullName.Equals(
+        Assert.Equal(
             new FileInfo(_existingFile).FullName,
-            StringComparison.OrdinalIgnoreCase));
+            new FileInfo(lines[0]).FullName,
+            ignoreCase: true);
     }
 
     [Fact]
@@ -94,7 +95,7 @@ public class InvokeBashRealpathCommandTests : IDisposable, IClassFixture<SharedP
         var ghost = Path.Combine(_tmpDir, "ghost.txt");
         var lines = RunLines($"Invoke-BashRealpath '{ghost.Replace("'", "''")}'");
         Assert.Single(lines);
-        Assert.True(lines[0].EndsWith("ghost.txt", StringComparison.OrdinalIgnoreCase));
+        Assert.EndsWith("ghost.txt", lines[0], StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]
@@ -104,8 +105,8 @@ public class InvokeBashRealpathCommandTests : IDisposable, IClassFixture<SharedP
         var lines = RunLines(
             $"Invoke-BashRealpath '{_existingFile.Replace("'", "''")}' '{second.Replace("'", "''")}'");
         Assert.Equal(2, lines.Length);
-        Assert.True(lines[0].EndsWith("exists.txt", StringComparison.OrdinalIgnoreCase));
-        Assert.True(lines[1].EndsWith("ghost.txt", StringComparison.OrdinalIgnoreCase));
+        Assert.EndsWith("exists.txt", lines[0], StringComparison.OrdinalIgnoreCase);
+        Assert.EndsWith("ghost.txt", lines[1], StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]
@@ -123,7 +124,7 @@ public class InvokeBashRealpathCommandTests : IDisposable, IClassFixture<SharedP
     {
         var lines = RunLines($"Invoke-BashRealpath -e '{_existingFile.Replace("'", "''")}'");
         Assert.Single(lines);
-        Assert.True(lines[0].EndsWith("exists.txt", StringComparison.OrdinalIgnoreCase));
+        Assert.EndsWith("exists.txt", lines[0], StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]
@@ -131,7 +132,7 @@ public class InvokeBashRealpathCommandTests : IDisposable, IClassFixture<SharedP
     {
         var lines = RunLines($"realpath '{_existingFile.Replace("'", "''")}'");
         Assert.Single(lines);
-        Assert.True(lines[0].EndsWith("exists.txt", StringComparison.OrdinalIgnoreCase));
+        Assert.EndsWith("exists.txt", lines[0], StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]
@@ -153,6 +154,6 @@ public class InvokeBashRealpathCommandTests : IDisposable, IClassFixture<SharedP
         var lines = RunLines($"Invoke-BashRealpath '{weirdPath.Replace("'", "''")}'");
         Assert.Single(lines);
         Assert.DoesNotContain(lines, l => l.Contains("pwn") && !l.Contains("$(throw"));
-        Assert.True(lines[0].EndsWith(".txt", StringComparison.OrdinalIgnoreCase));
+        Assert.EndsWith(".txt", lines[0], StringComparison.OrdinalIgnoreCase);
     }
 }

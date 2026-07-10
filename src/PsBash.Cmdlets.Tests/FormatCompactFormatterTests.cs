@@ -39,7 +39,7 @@ public class FormatCompactFormatterTests
         Assert.Equal("Name        Size", lines[0]); // padded to widest cell ("cargo.toml")
         Assert.Equal("main.rs     1234", lines[1]);
         Assert.Equal("cargo.toml  456", lines[2]);
-        Assert.Single(lines.Where(l => l.Contains("Name"))); // header appears exactly once
+        Assert.Single(lines, l => l.Contains("Name")); // header appears exactly once
     }
 
     [Fact]

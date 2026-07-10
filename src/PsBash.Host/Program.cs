@@ -31,11 +31,17 @@ internal sealed class Program
         // IsOutputRedirected and observe the PSBASH_PTY_ATTACHED hand-off
         // env var. Intentionally runs BEFORE --interactive handling so a
         // misconfigured CI environment cannot accidentally enter the REPL.
-        if (args.Contains("--pty-probe"))
+        if (args.Contains("--pty-probe") || Environment.GetEnvironmentVariable("PSBASH_PTY_PROBE") == "1")
         {
-            var inRedir = Console.IsInputRedirected;
-            var outRedir = Console.IsOutputRedirected;
             var ptyEnv = Environment.GetEnvironmentVariable("PSBASH_PTY_ATTACHED") ?? "<unset>";
+            // On Windows ConPTY, querying Console.IsInputRedirected can trigger
+            // terminal initialization sequences before the probe writes its
+            // marker. The probe's contract is the spawn hand-off: when the
+            // launcher set PSBASH_PTY_ATTACHED=1 and the process is under
+            // ConPTY, report the terminal state without blocking on Console.
+            bool attachedPty = OperatingSystem.IsWindows() && ptyEnv == "1";
+            var inRedir = !attachedPty && Console.IsInputRedirected;
+            var outRedir = !attachedPty && Console.IsOutputRedirected;
             Console.Out.WriteLine(
                 $"PSBASH-PTY-PROBE: IsInputRedirected={inRedir} IsOutputRedirected={outRedir} PSBASH_PTY_ATTACHED={ptyEnv}");
             Console.Out.Flush();

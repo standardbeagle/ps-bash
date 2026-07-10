@@ -371,7 +371,7 @@ if (debug)
             ? "[ps-bash] " + label + value.Replace("\n", "\n[ps-bash] ")
             : "[ps-bash] " + label + value;
     Console.Error.WriteLine(Tag("input:      ", bashCommand));
-    Console.Error.WriteLine(Tag("transpiled: ", pwshCommand));
+    Console.Error.WriteLine(Tag("transpiled: ", pwshCommand ?? string.Empty));
 }
 
 // Infrastructure failures (host won't start, host hangs, IPC breaks) must

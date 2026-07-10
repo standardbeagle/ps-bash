@@ -7,11 +7,12 @@ namespace PsBash.Cmdlets;
 
 /// <summary>
 /// Binary cmdlet replacement for the psm1 <c>Invoke-BashRg</c> function
-/// (REFACTOR-2 Phase 4 follow-on). Wrapper around the ripgrep binary
-/// <c>rg.exe</c> when present on PATH, with an internal regex-search
-/// fallback that mirrors the psm1 oracle byte-for-byte.
+/// (REFACTOR-2 Phase 4 follow-on). Internal regex-search implementation
+/// that mirrors the psm1 oracle byte-for-byte, with an opt-in passthrough
+/// to the ripgrep binary <c>rg.exe</c>.
 ///
-/// Native passthrough: <c>Get-Command rg -CommandType Application</c> via
+/// Native passthrough, enabled by setting <c>PSBASH_RG_NATIVE</c> to a truthy
+/// value: <c>Get-Command rg -CommandType Application</c> via
 /// parameter-bound <see cref="CommandInvocationIntrinsics.InvokeScript(string, object[])"/>;
 /// when found, shells out via <see cref="Process"/> with
 /// <c>UseShellExecute=false</c>, <c>RedirectStandardOutput=true</c>, and
@@ -20,8 +21,8 @@ namespace PsBash.Cmdlets;
 /// Captured stdout is emitted line-by-line as bare <c>PsBash.TextOutput</c>
 /// strings.
 ///
-/// Fallback (no <c>rg</c> on PATH): the cmdlet implements the same flag
-/// surface the psm1 oracle implemented internally — <c>-i</c>, <c>-w</c>,
+/// Default internal mode: the cmdlet implements the same flag surface the
+/// psm1 oracle implemented internally — <c>-i</c>, <c>-w</c>,
 /// <c>-c</c>, <c>-l</c>, <c>-n</c>, <c>-N</c>, <c>-o</c>, <c>-v</c>,
 /// <c>-F</c>, <c>-g</c>, <c>-A</c>, <c>-B</c>, <c>-C</c>, <c>--hidden</c>
 /// — over pipeline or recursive file-mode input.
@@ -239,8 +240,9 @@ public sealed class InvokeBashRgCommand : PSCmdlet
             // internal fallback has no per-match ANSI coloring, so accept and
             // ignore. Without this, the common `alias rg='rg --color=auto'`
             // makes the fallback treat `--color=auto` as the search pattern.
-            // (When native rg.exe is on PATH the arg is forwarded verbatim and
-            // honored by the binary — this branch only affects the fallback.)
+            // (When PSBASH_RG_NATIVE enables native rg.exe passthrough, the arg
+            // is forwarded verbatim and honored by the binary. This branch only
+            // affects the internal mode.)
             if (a == "--color" || a == "--colour"
                 || a.StartsWith("--color=", StringComparison.Ordinal)
                 || a.StartsWith("--colour=", StringComparison.Ordinal))
@@ -286,14 +288,11 @@ public sealed class InvokeBashRgCommand : PSCmdlet
             return;
         }
 
-        // Native passthrough: only when we have no pipeline input. The psm1
-        // oracle did not actually shell out (it implemented internally); but
-        // the task requests probing for a native rg binary first. When the
-        // binary is present and we have no pipeline (rg cannot read PowerShell
-        // pipeline objects), shell out with the full original arg list.
-        // Otherwise (binary missing or pipeline mode) fall through to the
-        // internal regex engine.
-        if (_pipeline.Count == 0 && TryRunNativeRg(args))
+        // Native passthrough is opt-in and only applies when we have no
+        // pipeline input. The psm1 oracle implemented rg internally, and the
+        // default path preserves typed PsBash.RgMatch output even when rg.exe
+        // is installed on PATH.
+        if (_pipeline.Count == 0 && NativeRgPassthroughEnabled() && TryRunNativeRg(args))
         {
             return;
         }
@@ -431,6 +430,8 @@ public sealed class InvokeBashRgCommand : PSCmdlet
             return false;
         }
     }
+
+    private static bool NativeRgPassthroughEnabled() => BashRuntime.IsEnvTruthy("PSBASH_RG_NATIVE");
 
     private void RunPipelineMode(Regex regex, bool invertMatch, bool countOnly, bool onlyMatching)
     {

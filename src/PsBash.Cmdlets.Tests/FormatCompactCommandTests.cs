@@ -31,7 +31,7 @@ public class FormatCompactCommandTests : IClassFixture<SharedPwshFixture>
             """);
 
         Assert.Equal(3, lines.Count);                                   // header + 2 rows
-        Assert.Single(lines.Where(l => l.Contains("Name")));            // header once, no rule line
+        Assert.Single(lines, l => l.Contains("Name"));                  // header once, no rule line
         Assert.Contains(lines, l => l.Contains("main.rs") && l.Contains("1234"));
         Assert.DoesNotContain(lines, string.IsNullOrWhiteSpace);        // no blank lines
     }

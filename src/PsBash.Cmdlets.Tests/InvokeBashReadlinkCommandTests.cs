@@ -74,9 +74,10 @@ public class InvokeBashReadlinkCommandTests : IDisposable, IClassFixture<SharedP
         // psm1 oracle: when item.Target is empty, emit item.FullName.
         var lines = RunBashText($"Invoke-BashReadlink '{_regularFile.Replace("'", "''")}'");
         Assert.Single(lines);
-        Assert.True(new FileInfo(lines[0]).FullName.Equals(
+        Assert.Equal(
             new FileInfo(_regularFile).FullName,
-            StringComparison.OrdinalIgnoreCase));
+            new FileInfo(lines[0]).FullName,
+            ignoreCase: true);
     }
 
     [Fact]
@@ -87,9 +88,10 @@ public class InvokeBashReadlinkCommandTests : IDisposable, IClassFixture<SharedP
         // and canonicalize like -f. A passing invocation proves no binder crash.
         var lines = RunBashText($"Invoke-BashReadlink -e '{_regularFile.Replace("'", "''")}'");
         Assert.Single(lines);
-        Assert.True(new FileInfo(lines[0]).FullName.Equals(
+        Assert.Equal(
             new FileInfo(_regularFile).FullName,
-            StringComparison.OrdinalIgnoreCase));
+            new FileInfo(lines[0]).FullName,
+            ignoreCase: true);
     }
 
     [Fact]
@@ -146,9 +148,10 @@ public class InvokeBashReadlinkCommandTests : IDisposable, IClassFixture<SharedP
         // canonical path.
         var lines = RunBashText($"Invoke-BashReadlink -f '{_regularFile.Replace("'", "''")}'");
         Assert.Single(lines);
-        Assert.True(new FileInfo(lines[0]).FullName.Equals(
+        Assert.Equal(
             new FileInfo(_regularFile).FullName,
-            StringComparison.OrdinalIgnoreCase));
+            new FileInfo(lines[0]).FullName,
+            ignoreCase: true);
     }
 
     [Fact]
@@ -166,9 +169,10 @@ public class InvokeBashReadlinkCommandTests : IDisposable, IClassFixture<SharedP
         var lines = RunBashText(
             $"Invoke-BashReadlink '{_regularFile.Replace("'", "''")}' '{ghost.Replace("'", "''")}'");
         Assert.Single(lines); // only the existing one emits
-        Assert.True(new FileInfo(lines[0]).FullName.Equals(
+        Assert.Equal(
             new FileInfo(_regularFile).FullName,
-            StringComparison.OrdinalIgnoreCase));
+            new FileInfo(lines[0]).FullName,
+            ignoreCase: true);
     }
 
     [Fact]
@@ -178,9 +182,10 @@ public class InvokeBashReadlinkCommandTests : IDisposable, IClassFixture<SharedP
         File.WriteAllText(unicodeFile, "hi\n");
         var lines = RunBashText($"Invoke-BashReadlink '{unicodeFile.Replace("'", "''")}'");
         Assert.Single(lines);
-        Assert.True(new FileInfo(lines[0]).FullName.Equals(
+        Assert.Equal(
             new FileInfo(unicodeFile).FullName,
-            StringComparison.OrdinalIgnoreCase));
+            new FileInfo(lines[0]).FullName,
+            ignoreCase: true);
     }
 
     [Fact]
@@ -188,9 +193,10 @@ public class InvokeBashReadlinkCommandTests : IDisposable, IClassFixture<SharedP
     {
         var lines = RunBashText($"readlink '{_regularFile.Replace("'", "''")}'");
         Assert.Single(lines);
-        Assert.True(new FileInfo(lines[0]).FullName.Equals(
+        Assert.Equal(
             new FileInfo(_regularFile).FullName,
-            StringComparison.OrdinalIgnoreCase));
+            new FileInfo(lines[0]).FullName,
+            ignoreCase: true);
     }
 
     [Fact]
