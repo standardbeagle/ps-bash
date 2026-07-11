@@ -37,6 +37,45 @@ public sealed class HostServer : IAsyncDisposable
     /// <summary>Completes once <see cref="RunAsync"/> has called ListenAsync and is ready to accept.</summary>
     public Task WhenListening => _ready.Task;
 
+    /// <summary>
+    /// Await readiness without deadlocking if <see cref="RunAsync"/> faults before
+    /// it begins listening. <see cref="WhenListening"/> (the <c>_ready</c> TCS) is
+    /// only completed AFTER <c>ListenAsync</c> succeeds, so a bind fault
+    /// (EADDRINUSE / stale-socket TOCTOU / replace race) makes <see cref="RunAsync"/>
+    /// throw <em>without ever completing <c>_ready</c></em>. A bare
+    /// <c>await WhenListening</c> would then hang forever as a zombie — the idle
+    /// timer and parent-death watcher only cancel the CTS, which does not complete
+    /// <c>_ready</c>. This observes both tasks: if <paramref name="runTask"/>
+    /// finishes first it is awaited so a fault propagates (or a clean pre-bind
+    /// cancellation is observed) instead of deadlocking.
+    /// </summary>
+    /// <param name="runTask">The task returned by <see cref="RunAsync"/>.</param>
+    /// <returns>
+    /// <c>true</c> when the server reached the listening state; <c>false</c> when
+    /// <see cref="RunAsync"/> returned before it began listening. In practice a
+    /// pre-bind exit surfaces as a fault (bind error) or an
+    /// <see cref="OperationCanceledException"/> (pre-bind cancellation) — both are
+    /// rethrown by the awaited <paramref name="runTask"/>; <c>false</c> is the
+    /// defensive path for a hypothetical clean early return with nothing to serve.
+    /// </returns>
+    /// <exception cref="Exception">Rethrows whatever <see cref="RunAsync"/> faulted with.</exception>
+    public async Task<bool> WaitUntilListeningAsync(Task runTask)
+    {
+        ArgumentNullException.ThrowIfNull(runTask);
+
+        var first = await Task.WhenAny(WhenListening, runTask).ConfigureAwait(false);
+        if (first == runTask)
+        {
+            // RunAsync ended before it began listening. Await it so a fault throws
+            // (surfacing EADDRINUSE etc. to the caller) or a clean early return is
+            // observed. Either way the server is not listening.
+            await runTask.ConfigureAwait(false);
+            return false;
+        }
+
+        return true;
+    }
+
     /// <summary>True once <see cref="RequestShutdownAsync"/> has been called.</summary>
     public bool ShutdownRequested => _acceptStop.IsCancellationRequested;
 

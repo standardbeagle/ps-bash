@@ -111,7 +111,18 @@ internal sealed class Program
         await using var server = new HostServer(transport, pool, idle);
 
         var serverTask = server.RunAsync(cts.Token);
-        await server.WhenListening;
+        // Observe serverTask alongside WhenListening: if ListenAsync faults (a
+        // stale-socket bind TOCTOU or endpoint-replace race), _ready is never
+        // completed and a bare `await WhenListening` would hang forever as a
+        // zombie. WaitUntilListeningAsync rethrows the bind fault instead.
+        if (!await server.WaitUntilListeningAsync(serverTask))
+        {
+            // Defensive: RunAsync returned before binding without faulting —
+            // nothing was served, so exit cleanly. A real bind fault or a
+            // pre-bind cancellation would have thrown out of the call above
+            // instead of returning false.
+            return 0;
+        }
         // Sidecar must be written AFTER bind succeeds — otherwise a launcher
         // racing with us would read metadata for a process that hasn't yet
         // claimed the endpoint. Per docs/specs/host-lifecycle-contract.md.
