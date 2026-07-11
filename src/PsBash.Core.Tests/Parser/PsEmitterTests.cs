@@ -1778,7 +1778,24 @@ public class PsEmitterTests
     {
         var result = PsEmitter.Transpile("for ((i=0; i<10; i++)); do echo $i; done");
 
-        Assert.Equal("$__psbash_iter = 0; for ($i = 0; $i -lt 10; $i++) { if (++$__psbash_iter -gt ($env:PSBASH_MAX_ITERATIONS ?? 100000)) { throw \"ps-bash: loop iteration limit exceeded ($(($env:PSBASH_MAX_ITERATIONS ?? 100000)))\" }; Invoke-BashEcho $i }", result);
+        // The condition is evaluated through Invoke-BashArith (like a standalone
+        // (( … )) condition) rather than the old naive </> string-replace, so the
+        // full C operator set — including << / >> shifts — is honored. See
+        // Transpile_ForArith_ShiftOperatorInCondition_NotShredded.
+        Assert.Equal("$__psbash_iter = 0; for ($i = 0; ((Invoke-BashArith 'i<10') -ne 0); $i++) { if (++$__psbash_iter -gt ($env:PSBASH_MAX_ITERATIONS ?? 100000)) { throw \"ps-bash: loop iteration limit exceeded ($(($env:PSBASH_MAX_ITERATIONS ?? 100000)))\" }; Invoke-BashEcho $i }", result);
+    }
+
+    // Regression: TranslateArithCondition string-replaced < and > unconditionally,
+    // shredding the << and >> shift operators — `i < (n<<1)` became
+    // `[int]$env:n -lt -lt 1`, an invalid PowerShell parse. Routing the clause
+    // through Invoke-BashArith keeps the shift intact and produces parseable PS.
+    [Fact]
+    public void Transpile_ForArith_ShiftOperatorInCondition_NotShredded()
+    {
+        var result = PsEmitter.Transpile("for ((i=0; i < (n<<1); i++)); do echo $i; done");
+
+        Assert.Contains("(Invoke-BashArith 'i < (n<<1)') -ne 0", result);
+        Assert.DoesNotContain("-lt -lt", result);
     }
 
     [Fact]

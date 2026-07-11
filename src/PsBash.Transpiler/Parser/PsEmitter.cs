@@ -379,7 +379,7 @@ public static class PsEmitter
                 sb.Append("for (");
                 sb.Append(TranslateArithClause(forArith.Init, isInit: true));
                 sb.Append("; ");
-                sb.Append(TranslateArithCondition(forArith.Cond));
+                sb.Append(TranslateForArithCondition(forArith.Cond));
                 sb.Append("; ");
                 sb.Append(TranslateArithClause(forArith.Step, isInit: false));
                 sb.Append(") { ");
@@ -969,6 +969,25 @@ public static class PsEmitter
         clause = PrefixBareVar(clause);
 
         return clause;
+    }
+
+    /// <summary>
+    /// Condition clause of a C-style <c>for ((init; cond; step))</c> header.
+    /// An empty clause is bash's infinite-true loop, and PowerShell treats an
+    /// empty <c>for</c> condition the same, so it emits nothing. A non-empty
+    /// clause is evaluated through <see cref="EmitArithConditionExpr"/> so the
+    /// FULL C operator set is honored by <c>Invoke-BashArith</c> — in
+    /// particular the <c>&lt;&lt;</c>/<c>&gt;&gt;</c> shift operators that the
+    /// old naive <c>&lt;</c>/<c>&gt;</c> string-replace shredded (e.g.
+    /// <c>i &lt; (n&lt;&lt;1)</c> became <c>[int]$env:n -lt -lt 1</c>, an
+    /// invalid PowerShell parse). Mirrors how a standalone/if/while
+    /// <c>(( … ))</c> condition is emitted.
+    /// </summary>
+    private static string TranslateForArithCondition(string cond)
+    {
+        cond = cond.Trim();
+        if (cond.Length == 0) return "";
+        return EmitArithConditionExpr(cond);
     }
 
     private static string TranslateArithCondition(string cond)
