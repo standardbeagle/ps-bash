@@ -2884,16 +2884,18 @@ public static class PsEmitter
         // wrong 26 ways. Invoke-BashArith resolves bare variables itself
         // (PowerShell variable / $env / 0), so no PrefixBareVar is needed.
         //
-        // Exception: positional parameters ($1..$9, $#, $@, $*, $?) have no
-        // representation in the evaluator's bare-identifier model, so an
-        // expression that references one keeps the legacy PrefixBareVar +
-        // $args-expansion path.
+        // Positional/special parameters ($1..$9, $#, $@, $*, $?, $$, $!) have no
+        // representation in Invoke-BashArith's bare-identifier model — its lexer
+        // strips a leading $ and would read $1 as the literal 1, and $#/$@/$*
+        // as invalid arithmetic characters. So we substitute each reference with
+        // a PowerShell subexpression yielding its runtime value and hand the
+        // assembled string to Invoke-BashArith, which still resolves ordinary
+        // bare/$-prefixed variables and applies the bash-correct integer
+        // operators the legacy verbatim $() path mistranslated (** was a
+        // PowerShell parse error, integer / gave a float, C comparisons gave
+        // True/False, etc.).
         if (ReferencesPositional(expr))
-        {
-            string legacy = PrefixBareVar(expr);
-            legacy = ExpandArithPositionalRefs(legacy);
-            return $"$({legacy})";
-        }
+            return EmitPositionalArith(expr);
         return $"$(Invoke-BashArith {PsBuild.SingleQuote(expr)})";
     }
 
@@ -2901,39 +2903,99 @@ public static class PsEmitter
     /// True when an arithmetic expression references a positional or special
     /// parameter (<c>$1</c>..<c>$9</c>, <c>$#</c>, <c>$@</c>, <c>$*</c>,
     /// <c>$?</c>, <c>$$</c>, <c>$!</c>) — a <c>$</c> immediately followed by a
-    /// digit or special-parameter sigil. These are resolved by the legacy
-    /// <see cref="ExpandArithPositionalRefs"/> path rather than the bare-name
-    /// arithmetic evaluator.
+    /// digit or special-parameter sigil. These are substituted with their
+    /// runtime values by <see cref="EmitPositionalArith"/> before the string is
+    /// handed to the bash-arithmetic evaluator.
     /// </summary>
     private static bool ReferencesPositional(string expr) =>
         System.Text.RegularExpressions.Regex.IsMatch(expr, @"\$[0-9@#*?$!]");
 
     /// <summary>
-    /// In arithmetic expressions, <c>$1</c>-<c>$9</c> are bash positional parameters.
-    /// PowerShell's <c>$1</c> is not a positional param; replace with the BashPositional
-    /// array access so recursive function calls see the right value.
-    /// After <see cref="EmitFunction"/> wraps bodies with the BashPositional save/restore,
-    /// <c>$global:BashPositional</c> is always set inside function bodies; we emit a null-coalesce
-    /// using the <c>??</c> operator to fall back to <c>$args</c> at script level.
+    /// Emit an arithmetic subexpression that references positional/special
+    /// parameters. Each reference is replaced by a PowerShell subexpression
+    /// producing its runtime value; the surrounding text (ordinary variables,
+    /// numbers, operators) is preserved verbatim as single-quoted literal
+    /// fragments, and the whole is reassembled by string concatenation and
+    /// handed to <c>Invoke-BashArith</c>. This lets the evaluator resolve
+    /// ordinary <c>$var</c>/bare-name references itself while still seeing a
+    /// concrete numeric literal in place of each positional — so
+    /// <c>$(($1 ** 2))</c> becomes <c>$(Invoke-BashArith ('' + &lt;value-of-$1&gt; + ' ** 2'))</c>
+    /// and the bash-correct <c>**</c> operator is applied (the legacy verbatim
+    /// <c>$()</c> path emitted a literal <c>**</c>, which is not a PowerShell
+    /// operator and failed to parse).
+    ///
+    /// A leading <c>'' + </c> forces string concatenation so a positional whose
+    /// value happens to be an integer object does not trigger numeric addition.
+    /// Values are concatenated as text (not <c>[int]</c>-cast) so the evaluator
+    /// applies bash's expand-then-evaluate semantics — a non-numeric or unset
+    /// positional degrades exactly as bash would.
     /// </summary>
-    private static string ExpandArithPositionalRefs(string expr)
+    private static string EmitPositionalArith(string expr)
     {
-        return System.Text.RegularExpressions.Regex.Replace(
-            expr,
-            @"\$([1-9])",
-            m =>
-            {
-                int idx = int.Parse(m.Groups[1].Value) - 1;
-                // $global:BashPositional is always set inside function bodies
-                // (EmitFunction wraps with save/restore). At script-top-level,
-                // positional params come from $args. Use the same pattern as
-                // EmitSimpleVar but as an integer cast so arithmetic can proceed.
-                // PowerShell 7+: $null[N] = $null, [int]$null = 0.
-                // $(if ...) captures the if-statement output — valid in $() subexpressions.
-                // Cast to [int] so the value participates correctly in integer arithmetic.
-                return $"([int]$(if ($global:BashPositional) {{ $global:BashPositional[{idx}] }} else {{ $args[{idx}] }}))";
-            });
+        var rx = new System.Text.RegularExpressions.Regex(@"\$([1-9]|#|@|\*|\?|\$|!)");
+        var parts = new List<string>();
+        int last = 0;
+        foreach (System.Text.RegularExpressions.Match m in rx.Matches(expr))
+        {
+            if (m.Index > last)
+                parts.Add(PsBuild.SingleQuote(expr[last..m.Index]));
+            parts.Add(PositionalRefExpr(m.Groups[1].Value));
+            last = m.Index + m.Length;
+        }
+        if (last < expr.Length)
+            parts.Add(PsBuild.SingleQuote(expr[last..]));
+        if (parts.Count == 0)
+            parts.Add("''");
+        string joined = "'' + " + string.Join(" + ", parts);
+        return $"$(Invoke-BashArith ({joined}))";
     }
+
+    /// <summary>
+    /// A PowerShell subexpression yielding the runtime value of a positional or
+    /// special parameter, for interpolation into an arithmetic string.
+    /// <c>$global:BashPositional</c> is set inside function bodies
+    /// (<see cref="EmitFunction"/> save/restore); at script top level positional
+    /// params come from <c>$args</c>. An unset/empty result is defaulted to
+    /// <c>0</c> (see <see cref="ZeroDefault"/>) so a reference to a missing
+    /// positional matches bash's zero-fill instead of producing a malformed
+    /// arithmetic string.
+    /// </summary>
+    private static string PositionalRefExpr(string sigil)
+    {
+        string inner;
+        if (sigil.Length == 1 && sigil[0] is >= '1' and <= '9')
+        {
+            int idx = sigil[0] - '1';
+            inner = $"if ($global:BashPositional) {{ $global:BashPositional[{idx}] }} else {{ $args[{idx}] }}";
+        }
+        else
+        {
+            inner = sigil switch
+            {
+                "#" => "if ($global:BashPositional) { $global:BashPositional.Count } else { $args.Count }",
+                "@" or "*" => "if ($global:BashPositional) { $global:BashPositional -join ' ' } else { $args -join ' ' }",
+                "?" => "$global:LASTEXITCODE",
+                "$" => "$PID",
+                "!" => "$global:BashBgLastPid",
+                _ => "0",
+            };
+        }
+        return ZeroDefault(inner);
+    }
+
+    /// <summary>
+    /// Wrap a value-producing PowerShell expression so an unset/empty result
+    /// stringifies to <c>0</c> rather than an empty fragment. bash treats an
+    /// unset positional as <c>0</c> in arithmetic; without this default,
+    /// <c>$(($1 * 2))</c> with no args would reassemble to the malformed string
+    /// <c>" * 2"</c> and the evaluator would error instead of yielding 0. The
+    /// value is stringified (<c>$null</c> → empty) and an empty result is
+    /// replaced with <c>0</c>; a non-numeric value passes through for
+    /// <c>Invoke-BashArith</c> to resolve as a bare name (also 0), matching
+    /// bash's expand-then-evaluate.
+    /// </summary>
+    private static string ZeroDefault(string valueExpr) =>
+        $"$(\"$({valueExpr})\" -replace '^$','0')";
 
     private static string EmitSimpleVar(string name, bool inDoubleQuote = false)
     {

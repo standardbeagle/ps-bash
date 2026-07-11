@@ -98,13 +98,59 @@ public class PsEmitterTests
     }
 
     [Fact]
-    public void Transpile_ArithWithPositionalParam_KeepsLegacyArgsPath()
+    public void Transpile_ArithWithPositionalParam_RoutesToInvokeBashArith()
     {
-        // Positional/special parameters ($1..$9, $#, …) have no representation in
-        // the evaluator's bare-identifier model, so they keep the legacy
-        // $args-expansion path rather than routing to Invoke-BashArith.
+        // Positional parameters ($1..$9) have no representation in the evaluator's
+        // bare-identifier model (its lexer reads $1 as the literal 1), so the
+        // emitter substitutes the runtime value and still routes the expression
+        // through Invoke-BashArith — the same evaluator the non-positional path
+        // uses — so bash-correct integer operators apply.
         var result = PsEmitter.Transpile("echo $(($1 + 1))");
-        Assert.DoesNotContain("Invoke-BashArith", result);
+        Assert.Equal(
+            "Invoke-BashEcho $(Invoke-BashArith ('' + $(\"$(if ($global:BashPositional) { $global:BashPositional[0] } else { $args[0] })\" -replace '^$','0') + ' + 1'))",
+            result);
+    }
+
+    [Fact]
+    public void Transpile_ArithPositionalExponent_RoutesToInvokeBashArith()
+    {
+        // Regression: `$(($1 ** 2))` used to take the legacy verbatim $() path and
+        // emit a literal `**`, which is not a PowerShell operator and failed to
+        // parse. It must now go through Invoke-BashArith (which implements **) with
+        // the positional value substituted in.
+        var result = PsEmitter.Transpile("echo $(($1 ** 2))");
+        Assert.Equal(
+            "Invoke-BashEcho $(Invoke-BashArith ('' + $(\"$(if ($global:BashPositional) { $global:BashPositional[0] } else { $args[0] })\" -replace '^$','0') + ' ** 2'))",
+            result);
+        // The nonexistent-PowerShell-operator `**` must not appear as raw output.
+        Assert.DoesNotContain("$($1 ** 2)", result);
+    }
+
+    [Fact]
+    public void Transpile_ArithParamCount_RoutesToInvokeBashArith()
+    {
+        // $# (parameter count) is likewise substituted with its runtime value.
+        var result = PsEmitter.Transpile("echo $(($# * 2))");
+        Assert.Equal(
+            "Invoke-BashEcho $(Invoke-BashArith ('' + $(\"$(if ($global:BashPositional) { $global:BashPositional.Count } else { $args.Count })\" -replace '^$','0') + ' * 2'))",
+            result);
+    }
+
+    [Fact]
+    public void Transpile_ArithUnsetPositionalNonAdditiveOp_DefaultsToZeroNotMalformed()
+    {
+        // Regression (reviewer finding): an unset positional must default to "0",
+        // not an empty fragment. Without the ZeroDefault wrapper, `$(($1 * 2))`
+        // with no args reassembled to the malformed string " * 2" and the
+        // evaluator threw instead of yielding bash's 0. The `-replace '^$','0'`
+        // guard turns an empty ($null / out-of-range) substitution into "0".
+        var result = PsEmitter.Transpile("echo $(($1 * 2))");
+        Assert.Equal(
+            "Invoke-BashEcho $(Invoke-BashArith ('' + $(\"$(if ($global:BashPositional) { $global:BashPositional[0] } else { $args[0] })\" -replace '^$','0') + ' * 2'))",
+            result);
+        // The empty-default guard is present so an unset positional never yields a
+        // leading-operator (malformed) arithmetic string.
+        Assert.Contains("-replace '^$','0'", result);
     }
 
     [Fact]
