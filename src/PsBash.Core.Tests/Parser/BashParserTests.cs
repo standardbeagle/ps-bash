@@ -1855,4 +1855,80 @@ public class BashParserTests
         Assert.Contains("do", ex.Message);
         Assert.Equal("Expect", ex.Rule);
     }
+
+    // ===================== Trailing redirects on compound commands =====================
+    // Regression: only Command.Simple/Subshell carried a Redirects field, so a trailing
+    // redirect on a while/for/if/case/brace-group was orphaned and silently dropped
+    // (e.g. `while ...; done < input.txt` read nothing). Each compound node now parses
+    // its trailing redirects.
+
+    [Fact]
+    public void Parse_WhileWithInputRedirect_AttachesRedirectToWhile()
+    {
+        var result = Parse("while read line; do echo $line; done < input.txt");
+
+        var whileCmd = Assert.IsType<Command.While>(result);
+        var redirect = Assert.Single(whileCmd.Redirects);
+        Assert.Equal("<", redirect.Op);
+        Assert.Equal(0, redirect.Fd);
+    }
+
+    [Fact]
+    public void Parse_ForInWithOutputRedirect_AttachesRedirectToFor()
+    {
+        var result = Parse("for x in 1 2; do echo $x; done > out.txt");
+
+        var forIn = Assert.IsType<Command.ForIn>(result);
+        var redirect = Assert.Single(forIn.Redirects);
+        Assert.Equal(">", redirect.Op);
+        Assert.Equal(1, redirect.Fd);
+    }
+
+    [Fact]
+    public void Parse_IfWithOutputRedirect_AttachesRedirectToIf()
+    {
+        var result = Parse("if true; then echo hi; fi > log.txt");
+
+        var ifCmd = Assert.IsType<Command.If>(result);
+        Assert.Equal(">", Assert.Single(ifCmd.Redirects).Op);
+    }
+
+    [Fact]
+    public void Parse_BraceGroupWithOutputRedirect_AttachesRedirectToGroup()
+    {
+        var result = Parse("{ echo a; echo b; } > out.txt");
+
+        var group = Assert.IsType<Command.BraceGroup>(result);
+        Assert.Equal(">", Assert.Single(group.Redirects).Op);
+    }
+
+    [Fact]
+    public void Parse_CaseWithOutputRedirect_AttachesRedirectToCase()
+    {
+        var result = Parse("case $x in a) echo hi;; esac > out.txt");
+
+        var caseCmd = Assert.IsType<Command.Case>(result);
+        Assert.Equal(">", Assert.Single(caseCmd.Redirects).Op);
+    }
+
+    [Fact]
+    public void Parse_WhileWithInputRedirectThenPipe_KeepsBothRedirectAndPipeStage()
+    {
+        // Cascade repro: the orphaned redirect used to also swallow the `| sort` stage.
+        var result = Parse("while read a; do echo $a; done < f | sort");
+
+        var pipeline = Assert.IsType<Command.Pipeline>(result);
+        Assert.Equal(2, pipeline.Commands.Length);
+        var whileCmd = Assert.IsType<Command.While>(pipeline.Commands[0]);
+        Assert.Equal("<", Assert.Single(whileCmd.Redirects).Op);
+    }
+
+    [Fact]
+    public void Parse_ForWithoutRedirect_HasEmptyRedirects()
+    {
+        var result = Parse("for x in 1 2; do echo $x; done");
+
+        var forIn = Assert.IsType<Command.ForIn>(result);
+        Assert.True(forIn.Redirects.IsDefaultOrEmpty);
+    }
 }

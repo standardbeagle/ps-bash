@@ -190,7 +190,7 @@ public static class PsEmitter
             sb.Append(" }");
         }
 
-        return sb.ToString();
+        return ApplyCompoundRedirects(sb.ToString(), ifCmd.Redirects);
     }
 
     private static string EmitForIn(Command.ForIn forIn)
@@ -227,7 +227,7 @@ public static class PsEmitter
             }
 
             sb.Append(" }");
-            return sb.ToString();
+            return ApplyCompoundRedirects(sb.ToString(), forIn.Redirects);
         }
         finally
         {
@@ -386,7 +386,7 @@ public static class PsEmitter
                 sb.Append(IterGuardCheck(depth));
                 sb.Append(Emit(forArith.Body));
                 sb.Append(" }");
-                return sb.ToString();
+                return ApplyCompoundRedirects(sb.ToString(), forArith.Redirects);
         }
         finally
         {
@@ -401,9 +401,11 @@ public static class PsEmitter
 
     private static string EmitWhile(Command.While whileCmd)
     {
-        // Special case: while read VAR -> ForEach-Object pipeline (no infinite loop risk)
+        // Special case: while read VAR -> ForEach-Object pipeline (no infinite loop risk).
+        // The classic `while read line; do ...; done < input.txt` idiom attaches its input
+        // redirect here; ApplyCompoundRedirects feeds it in via Get-Content | & { $input | ... }.
         if (IsWhileRead(whileCmd.Cond, out var readVar))
-            return EmitWhileRead(readVar, whileCmd.Body);
+            return ApplyCompoundRedirects(EmitWhileRead(readVar, whileCmd.Body), whileCmd.Redirects);
 
         int depth = _loopDepth++;
         try
@@ -428,7 +430,7 @@ public static class PsEmitter
             sb.Append(IterGuardCheck(depth));
             sb.Append(Emit(whileCmd.Body));
             sb.Append(" }");
-            return sb.ToString();
+            return ApplyCompoundRedirects(sb.ToString(), whileCmd.Redirects);
         }
         finally
         {
@@ -534,7 +536,7 @@ public static class PsEmitter
         }
 
         sb.Append(" }");
-        return sb.ToString();
+        return ApplyCompoundRedirects(sb.ToString(), caseCmd.Redirects);
     }
 
     /// <summary>
@@ -722,7 +724,7 @@ public static class PsEmitter
 
     private static string EmitBraceGroup(Command.BraceGroup braceGroup)
     {
-        return Emit(braceGroup.Body);
+        return ApplyCompoundRedirects(Emit(braceGroup.Body), braceGroup.Redirects);
     }
 
     private static string EmitBackground(Command.Background bg)
@@ -3766,6 +3768,62 @@ public static class PsEmitter
             if (fileRedirect.Op == ">>")
                 sb.Append(" -Append");
         }
+    }
+
+    /// <summary>
+    /// Apply a COMPOUND command's trailing redirects (<c>while ...; done &lt; in &gt; out</c>,
+    /// <c>{ ...; } &gt; out</c>, …) to its already-emitted body. Unlike a subshell this does
+    /// NOT open a new location/variable scope — a loop / conditional / brace-group runs in the
+    /// current shell — it only groups the statement list so a single redirect covers the whole
+    /// construct. The emitted body is wrapped in <c>&amp; { ... }</c> (a valid pipeline segment),
+    /// output/other redirects are appended via the shared <see cref="AppendRedirectTail"/>, and the
+    /// LAST input redirect (bash: last wins) feeds the group via <c>Get-Content &lt;file&gt; | …</c>.
+    /// Empty/absent redirects return the body untouched, so non-redirected compounds are unchanged.
+    /// <para>
+    /// STDIN-DELIVERY LIMITATION (parity with <see cref="EmitSubshell"/>): the
+    /// <c>Get-Content &lt;file&gt; |</c> prefix places the file on the group's PowerShell pipeline,
+    /// so it reaches any body that consumes <c>$input</c> — the <c>while read</c> form (which drains
+    /// <c>$input</c> explicitly) and any inner stage that reads the pipeline. A bare stdin-reading
+    /// command inside a non-<c>while-read</c> body (e.g. <c>read</c>/<c>cat</c> with no operand in
+    /// <c>if …; read x; fi &lt; f</c>) does NOT auto-receive it, exactly as the identical
+    /// <c>(read x) &lt; f</c> subshell emission does not. This is a pre-existing, codebase-wide
+    /// limitation of the <c>Get-Content | &amp; { … }</c> stdin model, NOT a regression introduced
+    /// here: before this fix the redirect was dropped entirely, so those readers already fell back
+    /// to the console. A general per-command fd-0 bridge is out of scope for this node-set fix and
+    /// would have to land uniformly for subshells too.
+    /// </para>
+    /// </summary>
+    private static string ApplyCompoundRedirects(string body, ImmutableArray<Redirect> redirects)
+    {
+        if (redirects.IsDefaultOrEmpty)
+            return body;
+
+        Redirect? inputRedirect = null;
+        var tailRedirects = new List<Redirect>(redirects.Length);
+        foreach (var redirect in redirects)
+        {
+            if (redirect.Fd == 0 && redirect.Op == "<")
+                inputRedirect = redirect; // last input redirect wins (bash)
+            else
+                tailRedirects.Add(redirect);
+        }
+
+        var sb = new StringBuilder("& { ");
+        sb.Append(body);
+        sb.Append(" }");
+        AppendRedirectTail(sb, tailRedirects);
+        string result = sb.ToString();
+
+        if (inputRedirect is not null)
+        {
+            var inTarget = TransformRedirectTarget(EmitWord(inputRedirect.Target));
+            // /dev/null maps to $null; `Get-Content $null` errors, and empty stdin is the
+            // same as no piped input, so skip the pipe in that case (matches EmitSubshell).
+            if (inTarget != "$null")
+                result = $"Get-Content {inTarget} | {result}";
+        }
+
+        return result;
     }
 
     private static string EmitCd(ImmutableArray<CompoundWord> args)

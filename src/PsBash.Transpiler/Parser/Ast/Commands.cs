@@ -55,7 +55,8 @@ public abstract record Command : BashNode
     /// </summary>
     public sealed record If(
         ImmutableArray<IfArm> Arms,
-        Command? ElseBody) : Command;
+        Command? ElseBody,
+        ImmutableArray<Redirect> Redirects = default) : Command;
 
     /// <summary>
     /// A test expression: <c>[ ... ]</c> or <c>[[ ... ]]</c>.
@@ -72,7 +73,8 @@ public abstract record Command : BashNode
     public sealed record ForIn(
         string Var,
         ImmutableArray<CompoundWord> List,
-        Command Body) : Command;
+        Command Body,
+        ImmutableArray<Redirect> Redirects = default) : Command;
 
     /// <summary>
     /// A <c>select</c> menu loop: <c>select x in a b c; do body; done</c> —
@@ -94,7 +96,8 @@ public abstract record Command : BashNode
         string Init,
         string Cond,
         string Step,
-        Command Body) : Command;
+        Command Body,
+        ImmutableArray<Redirect> Redirects = default) : Command;
 
     /// <summary>
     /// A while or until loop: <c>while cmd; do body; done</c> / <c>until cmd; do body; done</c>.
@@ -103,7 +106,8 @@ public abstract record Command : BashNode
     public sealed record While(
         bool IsUntil,
         Command Cond,
-        Command Body) : Command;
+        Command Body,
+        ImmutableArray<Redirect> Redirects = default) : Command;
 
     /// <summary>
     /// A case/esac statement: <c>case expr in pattern) body;; esac</c>.
@@ -111,7 +115,8 @@ public abstract record Command : BashNode
     /// </summary>
     public sealed record Case(
         CompoundWord Expr,
-        ImmutableArray<CaseArm> Arms) : Command;
+        ImmutableArray<CaseArm> Arms,
+        ImmutableArray<Redirect> Redirects = default) : Command;
 
     /// <summary>
     /// A standalone arithmetic command: <c>(( expr ))</c>.
@@ -139,7 +144,9 @@ public abstract record Command : BashNode
     /// A brace group: <c>{ cmd1; cmd2; }</c> runs commands in the current shell.
     /// Emitted inline (passthrough, same scope).
     /// </summary>
-    public sealed record BraceGroup(Command Body) : Command;
+    public sealed record BraceGroup(
+        Command Body,
+        ImmutableArray<Redirect> Redirects = default) : Command;
 
     /// <summary>
     /// A background command: <c>cmd &amp;</c> runs the inner command asynchronously.

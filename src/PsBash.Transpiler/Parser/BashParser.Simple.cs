@@ -425,6 +425,32 @@ public sealed partial class BashParser
         return true;
     }
 
+    /// <summary>
+    /// Collect trailing file-descriptor redirects that follow a COMPOUND command's
+    /// closing keyword (<c>done</c> / <c>fi</c> / <c>esac</c> / <c>}</c>), e.g.
+    /// <c>while ...; done &lt; input.txt</c> or <c>for x in 1 2; do ...; done &gt; out</c>.
+    /// Bash attaches the redirect to the whole compound; the emitter wraps the body in
+    /// <c>&amp; { ... }</c> and applies these. Heredoc operators (<c>&lt;&lt;</c> /
+    /// <c>&lt;&lt;-</c>) are intentionally excluded — their body collection is driven by
+    /// the simple-command loop, not by <see cref="ParseRedirect"/>, so a compound heredoc
+    /// stays out of scope here rather than being mis-parsed as a plain redirect target.
+    /// </summary>
+    private ImmutableArray<Redirect> ParseTrailingRedirects()
+    {
+        if (Peek().Kind != BashTokenKind.IoNumber && !IsCompoundRedirectOp(Peek().Kind))
+            return ImmutableArray<Redirect>.Empty;
+
+        var redirects = ImmutableArray.CreateBuilder<Redirect>();
+        while (Peek().Kind == BashTokenKind.IoNumber || IsCompoundRedirectOp(Peek().Kind))
+            redirects.Add(ParseRedirect());
+        return redirects.ToImmutable();
+    }
+
+    private static bool IsCompoundRedirectOp(BashTokenKind kind) =>
+        IsRedirectOp(kind)
+            && kind is not BashTokenKind.DLess
+            && kind is not BashTokenKind.DLessDash;
+
     private static bool IsRedirectOp(BashTokenKind kind) =>
         kind is BashTokenKind.Great or BashTokenKind.DGreat
             or BashTokenKind.Less or BashTokenKind.GreatAnd

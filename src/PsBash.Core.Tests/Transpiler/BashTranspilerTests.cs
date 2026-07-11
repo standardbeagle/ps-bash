@@ -805,4 +805,90 @@ public class BashTranspilerTests
         Assert.Contains("{ return }", result);
         Assert.DoesNotContain("$global:LASTEXITCODE", result);
     }
+
+    // ===================== Redirects on compound commands (silent-data-loss regression) =====================
+    // Only Command.Simple/Subshell carried a Redirects field, so a trailing redirect on a
+    // while/for/if/case/brace-group was silently dropped: `while read line; do ...; done < in`
+    // read unbound stdin, `for ...; done > out` went to the console, etc. The compound now
+    // wraps in `& { ... }` and applies the redirect (input via Get-Content, output via
+    // Invoke-BashRedirect). Assertions below check the emitted PS carries the redirect.
+
+    [Fact]
+    public void Transpile_WhileReadWithInputRedirect_FeedsFileViaGetContent()
+    {
+        var result = BashTranspiler.Transpile("while read line; do echo $line; done < input.txt");
+        // The file must be fed into the loop, not left unbound.
+        Assert.StartsWith("Get-Content input.txt |", result);
+    }
+
+    [Fact]
+    public void Transpile_ForInWithOutputRedirect_RoutesThroughInvokeBashRedirect()
+    {
+        var result = BashTranspiler.Transpile("for x in 1 2; do echo $x; done > out.txt");
+        Assert.Contains("| Invoke-BashRedirect -Path out.txt", result);
+        // The loop must be grouped so the redirect covers the whole construct.
+        Assert.StartsWith("& {", result);
+    }
+
+    [Fact]
+    public void Transpile_IfWithOutputRedirect_RoutesThroughInvokeBashRedirect()
+    {
+        var result = BashTranspiler.Transpile("if true; then echo hi; fi > log.txt");
+        Assert.Contains("| Invoke-BashRedirect -Path log.txt", result);
+        Assert.StartsWith("& {", result);
+    }
+
+    [Fact]
+    public void Transpile_BraceGroupWithOutputRedirect_RoutesThroughInvokeBashRedirect()
+    {
+        var result = BashTranspiler.Transpile("{ echo a; echo b; } > out.txt");
+        Assert.Contains("| Invoke-BashRedirect -Path out.txt", result);
+    }
+
+    [Fact]
+    public void Transpile_CaseWithOutputRedirect_RoutesThroughInvokeBashRedirect()
+    {
+        var result = BashTranspiler.Transpile("case $x in a) echo hi;; esac > out.txt");
+        Assert.Contains("| Invoke-BashRedirect -Path out.txt", result);
+    }
+
+    [Fact]
+    public void Transpile_ForArithWithOutputRedirect_RoutesThroughInvokeBashRedirect()
+    {
+        var result = BashTranspiler.Transpile("for ((i=0;i<3;i++)); do echo $i; done > out.txt");
+        Assert.Contains("| Invoke-BashRedirect -Path out.txt", result);
+    }
+
+    [Fact]
+    public void Transpile_WhileReadRedirectThenPipe_KeepsBothRedirectAndPipe()
+    {
+        // Cascade repro: the dropped redirect used to also swallow the `| sort` stage.
+        var result = BashTranspiler.Transpile("while read a; do echo $a; done < f | sort");
+        Assert.Contains("Get-Content f |", result);
+        Assert.Contains("Invoke-BashSort", result);
+    }
+
+    [Fact]
+    public void Transpile_ForWithoutRedirect_IsNotWrappedInScriptBlock()
+    {
+        // A non-redirected compound must be unchanged (no spurious `& { }` grouping).
+        var result = BashTranspiler.Transpile("for x in 1 2; do echo $x; done");
+        Assert.DoesNotContain("Invoke-BashRedirect", result);
+        Assert.StartsWith("$__psbash_iter", result);
+    }
+
+    // Documents the stdin-delivery limitation of ApplyCompoundRedirects: an input redirect on a
+    // NON-while-read compound emits the SAME `Get-Content <file> | & { ... }` shape as the identical
+    // subshell construct. A bare inner `read` does not auto-drain $input in either — a pre-existing,
+    // codebase-wide limitation (parity with EmitSubshell), NOT a regression from this fix. This test
+    // pins the parity so a future stdin bridge lands uniformly for both compound and subshell.
+    [Fact]
+    public void Transpile_IfWithInputRedirect_MatchesSubshellStdinModel()
+    {
+        var compound = BashTranspiler.Transpile("if true; then read line; echo $line; fi < input.txt");
+        var subshell = BashTranspiler.Transpile("(read line; echo $line) < input.txt");
+        // Both place the file on the group's pipeline via Get-Content.
+        Assert.StartsWith("Get-Content input.txt | & {", compound);
+        Assert.StartsWith("Get-Content input.txt | & {", subshell);
+    }
 }

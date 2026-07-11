@@ -435,7 +435,7 @@ public sealed partial class BashParser
         }
 
         Expect("fi");
-        return new Command.If(arms.ToImmutable(), elseBody);
+        return new Command.If(arms.ToImmutable(), elseBody, ParseTrailingRedirects());
     }
 
     private IfArm ParseIfArm()
@@ -568,7 +568,7 @@ public sealed partial class BashParser
         var body = ParseCompoundBody("done");
         Expect("done");
 
-        return new Command.ForIn(varName, list.ToImmutable(), body);
+        return new Command.ForIn(varName, list.ToImmutable(), body, ParseTrailingRedirects());
     }
 
     /// <summary>
@@ -641,7 +641,7 @@ public sealed partial class BashParser
         var body = ParseCompoundBody("done");
         Expect("done");
 
-        return new Command.ForArith(init, cond, step, body);
+        return new Command.ForArith(init, cond, step, body, ParseTrailingRedirects());
     }
 
     /// <summary>
@@ -688,7 +688,7 @@ public sealed partial class BashParser
         var body = ParseCompoundBody("done");
         Expect("done");
 
-        return new Command.While(isUntil, cond, body);
+        return new Command.While(isUntil, cond, body, ParseTrailingRedirects());
     }
 
     private Command.Case ParseCase()
@@ -713,7 +713,7 @@ public sealed partial class BashParser
         }
 
         Expect("esac");
-        return new Command.Case(expr, arms.ToImmutable());
+        return new Command.Case(expr, arms.ToImmutable(), ParseTrailingRedirects());
     }
 
     private CaseArm ParseCaseArm()
@@ -981,7 +981,7 @@ public sealed partial class BashParser
     private Command.BraceGroup ParseStandaloneBraceGroup()
     {
         var body = ParseBraceGroup();
-        return new Command.BraceGroup(body);
+        return new Command.BraceGroup(body, ParseTrailingRedirects());
     }
 
     /// <summary>
