@@ -1801,11 +1801,38 @@ public class PsEmitterTests
     }
 
     [Fact]
-    public void Transpile_ForInGlob_EmitsResolvePath()
+    public void Transpile_ForInGlob_EmitsResolveBashGlob()
     {
         var result = PsEmitter.Transpile("for f in *.txt; do cat $f; done");
 
-        Assert.Equal("$__psbash_iter = 0; foreach ($f in (Resolve-Path *.txt)) { if (++$__psbash_iter -gt ($env:PSBASH_MAX_ITERATIONS ?? 100000)) { throw \"ps-bash: loop iteration limit exceeded ($(($env:PSBASH_MAX_ITERATIONS ?? 100000)))\" }; Invoke-BashCat $f }", result);
+        // Resolve-BashGlob (not Resolve-Path): a matching glob expands, but an
+        // unmatched glob falls back to the literal word so the loop still runs
+        // once — bash nullglob is OFF by default.
+        Assert.Equal("$__psbash_iter = 0; foreach ($f in (Resolve-BashGlob *.txt)) { if (++$__psbash_iter -gt ($env:PSBASH_MAX_ITERATIONS ?? 100000)) { throw \"ps-bash: loop iteration limit exceeded ($(($env:PSBASH_MAX_ITERATIONS ?? 100000)))\" }; Invoke-BashCat $f }", result);
+    }
+
+    [Fact]
+    public void Transpile_ForInSingleNonMatchingGlob_FallsBackToLiteralWordViaResolveBashGlob()
+    {
+        // bash: `for f in *.xyz` with no match iterates ONCE with the literal
+        // word `*.xyz` (nullglob off). Resolve-Path would error + yield nothing
+        // (zero iterations). Resolve-BashGlob returns the literal on no-match.
+        var result = PsEmitter.Transpile("for f in *.xyz; do echo $f; done");
+
+        Assert.Contains("foreach ($f in (Resolve-BashGlob *.xyz))", result);
+        Assert.DoesNotContain("Resolve-Path", result);
+    }
+
+    [Fact]
+    public void Transpile_ForInMixedGlobList_RoutesWholeListThroughResolveBashGlob()
+    {
+        // A single non-matching glob/literal must NOT nuke the rest of the list:
+        // Resolve-BashGlob resolves each operand independently, so `a.txt` and
+        // `missing.xyz` survive even when `*.log` matches nothing.
+        var result = PsEmitter.Transpile("for f in a.txt *.log missing.xyz; do echo $f; done");
+
+        Assert.Contains("foreach ($f in (Resolve-BashGlob a.txt *.log missing.xyz))", result);
+        Assert.DoesNotContain("Resolve-Path", result);
     }
 
     [Fact]
@@ -2460,10 +2487,10 @@ public class PsEmitterTests
     }
 
     [Fact]
-    public void Transpile_ForInGlobCharClass_EmitsResolvePath()
+    public void Transpile_ForInGlobCharClass_EmitsResolveBashGlob()
     {
         var result = PsEmitter.Transpile("for f in [abc]*.txt; do cat $f; done");
-        Assert.Equal("$__psbash_iter = 0; foreach ($f in (Resolve-Path [abc]*.txt)) { if (++$__psbash_iter -gt ($env:PSBASH_MAX_ITERATIONS ?? 100000)) { throw \"ps-bash: loop iteration limit exceeded ($(($env:PSBASH_MAX_ITERATIONS ?? 100000)))\" }; Invoke-BashCat $f }", result);
+        Assert.Equal("$__psbash_iter = 0; foreach ($f in (Resolve-BashGlob [abc]*.txt)) { if (++$__psbash_iter -gt ($env:PSBASH_MAX_ITERATIONS ?? 100000)) { throw \"ps-bash: loop iteration limit exceeded ($(($env:PSBASH_MAX_ITERATIONS ?? 100000)))\" }; Invoke-BashCat $f }", result);
     }
 
     [Fact]

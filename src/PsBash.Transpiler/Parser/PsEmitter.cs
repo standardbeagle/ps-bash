@@ -301,7 +301,12 @@ public static class PsEmitter
 
             var single = EmitWord(list[0]);
             if (HasGlobChars(single))
-                return $"(Resolve-Path {single})";
+                // nullglob is OFF by default in bash: an unmatched glob iterates
+                // ONCE with the literal pattern word, never zero times. Resolve-Path
+                // errors + yields nothing on no-match (=> zero iterations), diverging.
+                // Resolve-BashGlob expands matches but falls back to the literal word
+                // when there is no match, matching bash.
+                return $"(Resolve-BashGlob {single})";
             return single;
         }
 
@@ -318,7 +323,12 @@ public static class PsEmitter
 
         if (hasGlob)
         {
-            var sb = new StringBuilder("(Resolve-Path ");
+            // nullglob-off + per-item fallback: Resolve-Path throws on the FIRST
+            // non-matching operand and drops the ENTIRE list. Resolve-BashGlob
+            // resolves each operand independently — expanding matches, passing an
+            // unmatched glob (or a literal) through as the word itself — so one
+            // non-matching item never nukes the rest of the list.
+            var sb = new StringBuilder("(Resolve-BashGlob ");
             for (int i = 0; i < list.Length; i++)
             {
                 if (i > 0) sb.Append(' ');
