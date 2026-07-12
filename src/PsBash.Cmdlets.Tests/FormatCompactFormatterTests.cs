@@ -117,6 +117,27 @@ public class FormatCompactFormatterTests
     }
 
     [Fact]
+    public void RenderTable_ColumnNonEmptyOnlyBeyondMaxRows_IsDropped()
+    {
+        // "Mode" is blank in every visible row (1..3) and only carries data in row 4,
+        // which is collapsed past maxRows=3. The visible table must not show "Mode".
+        var rows = new[]
+        {
+            Row(("Name", "a"), ("Mode", "")),
+            Row(("Name", "b"), ("Mode", "")),
+            Row(("Name", "c"), ("Mode", null)),
+            Row(("Name", "d"), ("Mode", "x")), // hidden — beyond maxRows
+        };
+
+        var lines = CompactObjectFormatter.RenderTable(["Name", "Mode"], rows, ultra: false, maxRows: 3);
+
+        Assert.DoesNotContain("Mode", lines[0]);      // dropped: blank across all visible rows
+        Assert.Contains("Name", lines[0]);
+        Assert.DoesNotContain(lines, l => l.Contains("Mode")); // and never leaks into a data row
+        Assert.Equal("+1 more rows", lines[^1]);      // the data-bearing row is the collapsed one
+    }
+
+    [Fact]
     public void RenderTable_MaxRowsZero_CollapsesAll()
     {
         var rows = new[] { Row(("N", "1")), Row(("N", "2")) };

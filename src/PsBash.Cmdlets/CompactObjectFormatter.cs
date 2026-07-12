@@ -28,13 +28,20 @@ public static class CompactObjectFormatter
         ArgumentNullException.ThrowIfNull(rows);
         if (rows.Count == 0 || columns.Count == 0) return [];
 
-        var kept = new List<string>();
-        foreach (var c in columns)
-            if (rows.Any(r => !string.IsNullOrEmpty(Cell(r, c)))) kept.Add(c);
-        if (kept.Count == 0) return [];
-
         var limit = Math.Max(0, maxRows);
         var shown = rows.Count > limit ? rows.Take(limit).ToList() : rows;
+
+        // Drop columns that are blank across every *visible* row. The decision is made over
+        // `shown` (post-MaxRows truncation), not the full `rows`: a column that only carries
+        // data in a collapsed/hidden row must not survive as a blank column in the visible
+        // table. Degenerate case — when MaxRows collapses every row away (`shown` empty) —
+        // fall back to the full set so the header + `+N more rows` marker still render
+        // (see RenderTable_MaxRowsZero_CollapsesAll).
+        var keepBasis = shown.Count > 0 ? shown : rows;
+        var kept = new List<string>();
+        foreach (var c in columns)
+            if (keepBasis.Any(r => !string.IsNullOrEmpty(Cell(r, c)))) kept.Add(c);
+        if (kept.Count == 0) return [];
 
         var widths = new int[kept.Count];
         if (!ultra)
