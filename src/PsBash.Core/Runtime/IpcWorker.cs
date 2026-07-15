@@ -1259,46 +1259,40 @@ public sealed class IpcWorker : IWorker
         // unrecognized FAILING command is trimmed to its error/summary lines (ErrorExtract),
         // and everything else falls back to the generic OutputCompactor digest.
         var compacted = FilterEngine.Apply(
-            command, exitCode, timedOut, frames, ResolveFilters(),
+            command, exitCode, timedOut, frames, FilterLibrary.ResolveActive(),
             fallback: GenericFallback.ErrorExtract);
+        if (exitCode != 0 || timedOut)
+        {
+            var teePath = TryWriteFailureTee(command, frames);
+            if (teePath is not null)
+            {
+                if (!compacted.EndsWith('\n')) compacted += Environment.NewLine;
+                compacted += $"[full output: {teePath}]{Environment.NewLine}";
+            }
+        }
         if (OutputCallback is { } cb) cb(compacted);
         else Console.Write(compacted);
     }
 
-    // Resolve the active filter set for compact mode: embedded built-ins plus user
-    // (~/.config/ps-bash/filters) and project (.ps-bash/filters) overrides, minus any
-    // excluded commands. PSBASH_NO_FILTER disables command-aware filters (generic digest
-    // only). Loading is best-effort: a malformed filter file must never crash a command's
-    // output, so any failure degrades to the faithful generic digest (filters = null).
-    private static IReadOnlyList<FilterSpec>? ResolveFilters()
+    internal static string? TryWriteFailureTee(string command, IReadOnlyList<OutputFrame> frames)
     {
-        if (EnvFlags.IsTruthy("PSBASH_NO_FILTER")) return null;
-
         try
         {
-            var home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
-            var userDir = string.IsNullOrEmpty(home)
-                ? null
-                : Path.Combine(home, ".config", "ps-bash", "filters");
-            var projectDir = Path.Combine(Directory.GetCurrentDirectory(), ".ps-bash", "filters");
-            var exclude = ParseExcludeCommands(Environment.GetEnvironmentVariable("PSBASH_FILTER_EXCLUDE"));
-
-            var filters = FilterLibrary.Load(userDir, projectDir, exclude);
-            return filters.Count == 0 ? null : filters;
+            var dir = Path.Combine(Path.GetTempPath(), "ps-bash", "tee");
+            Directory.CreateDirectory(dir);
+            var leaf = FilterEngine.SplitCommand(command).Command;
+            var safe = string.Concat((string.IsNullOrWhiteSpace(leaf) ? "command" : leaf)
+                .Select(c => char.IsLetterOrDigit(c) || c is '-' or '_' ? c : '_'));
+            var path = Path.Combine(dir, $"{DateTime.UtcNow:yyyyMMdd_HHmmss_fffffff}_{safe}.log");
+            using var stream = new FileStream(path, FileMode.Append, FileAccess.Write, FileShare.ReadWrite);
+            using var writer = new StreamWriter(stream, new System.Text.UTF8Encoding(false));
+            foreach (var frame in frames) writer.Write(frame.Text);
+            return path;
         }
         catch
         {
-            return null; // degrade to the generic digest; never break command output
+            return null;
         }
-    }
-
-    private static IReadOnlySet<string>? ParseExcludeCommands(string? value)
-    {
-        if (string.IsNullOrWhiteSpace(value)) return null;
-        var set = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        foreach (var part in value.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
-            set.Add(part);
-        return set.Count == 0 ? null : set;
     }
 
     public static string GetHostBinaryName()

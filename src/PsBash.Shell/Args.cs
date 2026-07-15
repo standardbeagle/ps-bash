@@ -13,7 +13,8 @@ public record ShellArgs(
     bool ShowVersion = false,
     bool ShowHelp = false,
     string? Timeout = null,
-    bool? CompactOutput = null)
+    bool? CompactOutput = null,
+    bool Verbose = false)
 {
     // Bash-compatible short flags ps-bash recognizes. Used to expand bundled
     // forms like `-lc` and to let `-c` skip past intervening flags when callers
@@ -25,7 +26,7 @@ public record ShellArgs(
     // command argument when callers pass flags after `-c`.
     private static readonly HashSet<string> KnownValuelessLongFlags = new()
     {
-        "--login", "--noprofile", "--norc", "--compact-output", "--no-compact-output", "--caveman", "--wenyan"
+        "--login", "--noprofile", "--norc", "--compact-output", "--no-compact-output", "--caveman", "--wenyan", "--verbose"
     };
 
     public static ShellArgs Parse(string[] args)
@@ -42,6 +43,7 @@ public record ShellArgs(
         bool showVersion = false;
         bool showHelp = false;
         bool? compactOutput = null;
+        bool verbose = false;
         bool endOfOptions = false;
         string? scriptPath = null;
         string[] scriptArgs = [];
@@ -85,7 +87,7 @@ public record ShellArgs(
                     int j = i + 1;
                     while (j < expanded.Count && IsKnownValuelessFlag(expanded[j]))
                     {
-                        ApplyValuelessFlag(expanded[j], ref interactive, ref login, ref stdin, ref noprofile, ref compactOutput);
+                        ApplyValuelessFlag(expanded[j], ref interactive, ref login, ref stdin, ref noprofile, ref compactOutput, ref verbose);
                         j++;
                     }
                     if (j < expanded.Count)
@@ -133,6 +135,9 @@ public record ShellArgs(
                 case "--no-compact-output":
                     compactOutput = false;
                     break;
+                case "--verbose":
+                    verbose = true;
+                    break;
                 // PTY-9 follow-on: raw PowerShell passthrough. When set, the
                 // -c argument / stdin / script body is forwarded to the host
                 // runspace WITHOUT bash transpilation. Enables driving raw
@@ -174,7 +179,7 @@ public record ShellArgs(
             }
         }
 
-        return new ShellArgs(command, interactive, login, stdin, noprofile, unixPaths, scriptPath, scriptArgs, rawPs, showVersion, showHelp, timeout, compactOutput);
+        return new ShellArgs(command, interactive, login, stdin, noprofile, unixPaths, scriptPath, scriptArgs, rawPs, showVersion, showHelp, timeout, compactOutput, verbose);
     }
 
     // Expands `-lc` -> `-l`, `-c`. Single-char flags (`-c`, `-l`) and long
@@ -211,7 +216,8 @@ public record ShellArgs(
         ref bool login,
         ref bool stdin,
         ref bool noprofile,
-        ref bool? compactOutput)
+        ref bool? compactOutput,
+        ref bool verbose)
     {
         switch (flag)
         {
@@ -231,6 +237,8 @@ public record ShellArgs(
                 compactOutput = true; break;
             case "--no-compact-output":
                 compactOutput = false; break;
+            case "--verbose":
+                verbose = true; break;
         }
     }
 }

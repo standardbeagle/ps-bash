@@ -6,6 +6,15 @@ namespace PsBash.Shell.Tests;
 public class ShellArgsTests
 {
     [Fact]
+    public void Parse_VerboseBeforeCompactCommand_EnablesVerboseDiagnostics()
+    {
+        var result = ShellArgs.Parse(["--verbose", "--compact-output", "-c", "git status"]);
+
+        Assert.True(result.Verbose);
+        Assert.True(result.CompactOutput);
+        Assert.Equal("git status", result.Command);
+    }
+    [Fact]
     public void Parse_EmptyArgs_ReturnsDefaults()
     {
         var result = ShellArgs.Parse([]);

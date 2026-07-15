@@ -74,6 +74,35 @@ public sealed class FilterLibrary
         }
     }
 
+    /// <summary>Resolve the active filter set from the standard user/project locations and environment.</summary>
+    public static IReadOnlyList<FilterSpec>? ResolveActive()
+    {
+        if (EnvFlags.IsTruthy("PSBASH_NO_FILTER")) return null;
+
+        try
+        {
+            var home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+            var userDir = string.IsNullOrEmpty(home)
+                ? null
+                : Path.Combine(home, ".config", "ps-bash", "filters");
+            var projectDir = Path.Combine(Directory.GetCurrentDirectory(), ".ps-bash", "filters");
+            var exclude = ParseExcludeCommands(Environment.GetEnvironmentVariable("PSBASH_FILTER_EXCLUDE"));
+            var filters = Load(userDir, projectDir, exclude);
+            return filters.Count == 0 ? null : filters;
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    private static IReadOnlySet<string>? ParseExcludeCommands(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value)) return null;
+        return value.Split([',', ';'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+    }
+
     internal static IReadOnlyList<FilterSpec> LoadEmbedded()
     {
         var assembly = typeof(FilterLibrary).Assembly;

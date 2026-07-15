@@ -2,6 +2,7 @@ using System.Text;
 using System.Reflection;
 using PsBash.Core.Parser;
 using PsBash.Core.Runtime;
+using PsBash.Core.Runtime.Compaction;
 using PsBash.Core.Transpiler;
 using PsBash.Shell;
 using PsBash.Shell.Pty;
@@ -77,6 +78,7 @@ if (shellArgs.ShowHelp)
     Console.WriteLine("                    Equivalent env: PSBASH_COMPACT_OUTPUT=1.");
     Console.WriteLine("  --no-compact-output");
     Console.WriteLine("                    Disable compact output even when the env var is set.");
+    Console.WriteLine("  --verbose         Report compact-filter override fallbacks.");
     Console.WriteLine("  --version, -V     Print the ps-bash version and exit.");
     Console.WriteLine("  --help            Print this help and exit.");
     return 0;
@@ -305,6 +307,16 @@ JobObjectWatchdog.StartParentDeathWatcher(parentPid);
 var bashCommand = shellArgs.Command;
 if (compactOutput)
     Environment.SetEnvironmentVariable("PSBASH_COMPACT_COMMAND", bashCommand);
+
+// Command-aware compact filters may provide a reduced argv. Apply it before bash
+// transpilation while retaining the user's command as the digest label.
+if (compactOutput && !shellArgs.RawPowerShell)
+{
+    bashCommand = CompactOverridePolicy.Rewrite(
+        bashCommand, FilterLibrary.ResolveActive(), out var overrideSkipReason);
+    if (overrideSkipReason is not null && shellArgs.Verbose)
+        Console.Error.WriteLine($"[ps-bash] compact filter override skipped: {overrideSkipReason}");
+}
 
 string? pwshCommand;
 if (shellArgs.RawPowerShell)

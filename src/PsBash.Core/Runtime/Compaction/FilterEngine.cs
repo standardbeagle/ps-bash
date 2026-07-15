@@ -45,6 +45,31 @@ public static class FilterEngine
         return null;
     }
 
+    /// <summary>Return the launch-time argv override for the first matching filter.</summary>
+    public static IReadOnlyList<string>? SelectOverride(
+        string command, IReadOnlyList<FilterSpec>? filters)
+    {
+        ArgumentNullException.ThrowIfNull(command);
+        if (filters is null || filters.Count == 0) return null;
+        return SelectFilter(command, filters)?.Override;
+    }
+
+    /// <summary>
+    /// Return an override only when the user's argv is exactly the filter's match prefix.
+    /// Extra options, revisions, and pathspecs carry user semantics and must never be discarded.
+    /// </summary>
+    public static IReadOnlyList<string>? SelectLaunchOverride(
+        string command, IReadOnlyList<FilterSpec>? filters)
+    {
+        ArgumentNullException.ThrowIfNull(command);
+        if (filters is null || filters.Count == 0) return null;
+
+        var spec = SelectFilter(command, filters);
+        if (spec?.Override is not { Count: > 0 } argv) return null;
+        var (_, commandArgv) = SplitCommand(command);
+        return commandArgv.Count == spec.Match.Args.Count ? argv : null;
+    }
+
     /// <summary>
     /// Split a command label into name + argv on whitespace. The command name is matched
     /// on its leaf (last path segment) so <c>/usr/bin/git</c> matches a <c>git</c> filter.

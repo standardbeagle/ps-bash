@@ -11,6 +11,45 @@ namespace PsBash.Core.Tests.Compaction;
 /// </summary>
 public class FilterEngineTests
 {
+    [Fact]
+    public void SelectOverride_MatchingFilter_ReturnsConfiguredArgv()
+    {
+        var filter = new FilterSpec
+        {
+            Name = "git/status",
+            Match = new FilterMatch { Command = "git", Args = ["status"] },
+            Override = ["git", "status", "--porcelain=v1", "-b"]
+        };
+
+        var result = FilterEngine.SelectOverride("git status --short", [filter]);
+
+        Assert.Equal(filter.Override, result);
+    }
+
+    [Fact]
+    public void SelectOverride_NoMatchingFilter_ReturnsNull()
+    {
+        Assert.Null(FilterEngine.SelectOverride("git push", []));
+    }
+
+    [Theory]
+    [InlineData("git diff -p")]
+    [InlineData("git diff --name-only")]
+    [InlineData("git diff HEAD~1")]
+    [InlineData("git log feature-branch")]
+    [InlineData("git status -- src/file.cs")]
+    public void SelectLaunchOverride_ExplicitSemantics_ReturnsNull(string command)
+    {
+        var subcommand = command.Split(' ')[1];
+        var filter = new FilterSpec
+        {
+            Name = $"git/{subcommand}",
+            Match = new FilterMatch { Command = "git", Args = [subcommand] },
+            Override = ["git", subcommand, "--compact-shape"]
+        };
+
+        Assert.Null(FilterEngine.SelectLaunchOverride(command, [filter]));
+    }
     private static OutputFrame Out(string text) => new(StreamTag.Stdout, text);
     private static OutputFrame Err(string text) => new(StreamTag.Stderr, text);
 
