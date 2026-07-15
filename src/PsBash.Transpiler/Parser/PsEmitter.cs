@@ -2661,12 +2661,64 @@ public static class PsEmitter
             // the literal `~user` (degrade) rather than emitting a bogus var.
             _ => $"~{ts.User}",
         },
-        WordPart.GlobPart gp => gp.Pattern,
+        WordPart.GlobPart gp => NormalizePosixGlobClasses(gp.Pattern),
         WordPart.BracedTuple bt => FormatBraceArray(new List<string>(bt.Items)),
         WordPart.BracedRange br => FormatBraceArray(ExpandBrace(br)),
         WordPart.ProcessSub ps => EmitProcessSub(ps),
         _ => throw new NotSupportedException($"Unknown word part type: {part.GetType().Name}"),
     };
+
+    private static string NormalizePosixGlobClasses(string pattern)
+    {
+        if (!pattern.Contains("[:", StringComparison.Ordinal) ||
+            pattern.Length < 2 || pattern[0] != '[' || pattern[^1] != ']')
+            return pattern;
+
+        var result = new StringBuilder(pattern.Length);
+        result.Append('[');
+        for (int pos = 1; pos < pattern.Length - 1;)
+        {
+            if (pattern[pos] == '[' && pos + 1 < pattern.Length - 1 &&
+                pattern[pos + 1] is '.' or '=')
+            {
+                char marker = pattern[pos + 1];
+                int close = pattern.IndexOf($"{marker}]", pos + 2, StringComparison.Ordinal);
+                if (close < 0) return pattern;
+                result.Append(pattern, pos, close + 2 - pos);
+                pos = close + 2;
+                continue;
+            }
+
+            if (pattern[pos] == '[' && pos + 1 < pattern.Length - 1 && pattern[pos + 1] == ':')
+            {
+                int close = pattern.IndexOf(":]", pos + 2, StringComparison.Ordinal);
+                if (close < 0) return pattern;
+                string name = pattern[(pos + 2)..close];
+                string? replacement = name switch
+                {
+                    "alnum" => "A-Za-z0-9",
+                    "alpha" => "A-Za-z",
+                    // Backticks keep whitespace inside the unquoted PowerShell token.
+                    "blank" => "` `t",
+                    "digit" => "0-9",
+                    "lower" => "a-z",
+                    "space" => "` `t`r`n`f`v",
+                    "upper" => "A-Z",
+                    "word" => "A-Za-z0-9_",
+                    "xdigit" => "A-Fa-f0-9",
+                    _ => null,
+                };
+                if (replacement is null) return pattern;
+                result.Append(replacement);
+                pos = close + 2;
+                continue;
+            }
+
+            result.Append(pattern[pos++]);
+        }
+        result.Append(']');
+        return result.ToString();
+    }
 
     /// <summary>
     /// Emit an ANSI-C quoted string ($'...'). The C-style escapes are expanded at

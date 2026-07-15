@@ -438,7 +438,22 @@ public sealed partial class BashParser
             int subStart = pos;
             pos++; // skip [
             while (pos < len && raw[pos] != ']')
+            {
+                // POSIX bracket expressions contain a nested terminator, e.g.
+                // [[:alpha:]].  Keep the inner ":]" inside this glob part and
+                // continue to the outer closing bracket.
+                if (raw[pos] == '[' && pos + 1 < len && raw[pos + 1] is ':' or '.' or '=')
+                {
+                    char marker = raw[pos + 1];
+                    int nestedClose = raw.IndexOf($"{marker}]", pos + 2, StringComparison.Ordinal);
+                    if (nestedClose >= 0)
+                    {
+                        pos = nestedClose + 2;
+                        continue;
+                    }
+                }
                 pos++;
+            }
             if (pos < len)
                 pos++; // skip ]
             string subscript = raw[subStart..pos];
@@ -766,8 +781,25 @@ public sealed partial class BashParser
                 pos++;
             if (pos < len && raw[pos] == ']')
                 pos++;
-            while (pos < len && raw[pos] != ']')
+            while (pos < len)
+            {
+                // POSIX bracket expressions nest a named class/collating symbol/
+                // equivalence class inside the outer glob class.  The inner "]"
+                // is not the terminator for the outer expression.
+                if (raw[pos] == '[' && pos + 1 < len && raw[pos + 1] is ':' or '.' or '=')
+                {
+                    char marker = raw[pos + 1];
+                    int nestedClose = raw.IndexOf($"{marker}]", pos + 2, StringComparison.Ordinal);
+                    if (nestedClose >= 0)
+                    {
+                        pos = nestedClose + 2;
+                        continue;
+                    }
+                }
+                if (raw[pos] == ']')
+                    break;
                 pos++;
+            }
             if (pos < len)
                 pos++; // skip closing ]
             parts.Add(new WordPart.GlobPart(raw[start..pos]));
@@ -812,6 +844,16 @@ public sealed partial class BashParser
             i++;
         while (i < len)
         {
+            if (raw[i] == '[' && i + 1 < len && raw[i + 1] is ':' or '.' or '=')
+            {
+                char marker = raw[i + 1];
+                int nestedClose = raw.IndexOf($"{marker}]", i + 2, StringComparison.Ordinal);
+                if (nestedClose >= 0)
+                {
+                    i = nestedClose + 2;
+                    continue;
+                }
+            }
             if (raw[i] == ']')
                 return true;
             i++;

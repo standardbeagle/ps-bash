@@ -1616,6 +1616,17 @@ public class BashParserTests
         Assert.Equal("*", ((WordPart.GlobPart)parts[1]).Pattern);
     }
 
+    [Theory]
+    [InlineData("[[:alpha:]]")]
+    [InlineData("[[:digit:][:upper:]]")]
+    public void Parse_PosixGlobCharClass_ProducesSingleGlobPart(string pattern)
+    {
+        var simple = Assert.IsType<Command.Simple>(Parse($"echo {pattern}"));
+
+        var glob = Assert.IsType<WordPart.GlobPart>(Assert.Single(simple.Words[1].Parts));
+        Assert.Equal(pattern, glob.Pattern);
+    }
+
     [Fact]
     public void Parse_ExtGlob_ProducesGlobPart()
     {

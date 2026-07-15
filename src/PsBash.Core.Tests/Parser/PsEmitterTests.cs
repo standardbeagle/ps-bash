@@ -2465,6 +2465,31 @@ public class PsEmitterTests
         Assert.Equal("*", ((WordPart.GlobPart)parts[1]).Pattern);
     }
 
+    [Theory]
+    [InlineData("[[:alpha:]]", "[A-Za-z]")]
+    [InlineData("[[:digit:][:upper:]]", "[0-9A-Z]")]
+    [InlineData("[![:xdigit:]]", "[!A-Fa-f0-9]")]
+    [InlineData("[[:blank:]]", "[` `t]")]
+    [InlineData("[[:space:]]", "[` `t`r`n`f`v]")]
+    public void Transpile_PosixGlobCharClass_NormalizesForPowerShellWildcard(string pattern, string expected)
+    {
+        var result = PsEmitter.Emit(Assert.IsType<Command.Simple>(BashParser.Parse($"echo {pattern}")));
+
+        Assert.Contains(expected, result);
+        Assert.DoesNotContain("[:", result);
+    }
+
+    [Theory]
+    [InlineData("[[:unknown:]]")]
+    [InlineData("[[.x[:alpha:].]]")]
+    [InlineData("[[=x[:alpha:]=]]")]
+    public void Transpile_UnsupportedNestedGlobClass_PreservesPattern(string pattern)
+    {
+        var result = PsEmitter.Emit(Assert.IsType<Command.Simple>(BashParser.Parse($"echo {pattern}")));
+
+        Assert.Contains(pattern, result);
+    }
+
     [Fact]
     public void Parse_ExtGlob_ProducesGlobPart()
     {
