@@ -634,13 +634,44 @@ public sealed class InvokeBashSortCommand : PSCmdlet
 
         if (unique)
         {
-            var seen = new HashSet<string>(StringComparer.Ordinal);
+            // GNU `sort -u` emits only the FIRST line of each run of lines that
+            // COMPARE EQUAL under the active key/ordering — it does NOT dedup by
+            // the whole line. The whole-line LastResort/stable tiebreak is
+            // deliberately EXCLUDED from the equality test, so two lines equal on
+            // the key but differing in the rest of the line collapse to one (e.g.
+            // `1 a`/`1 b` under `-k1,1`, or `01`/`1` under `-n`). The list is
+            // already sorted, so equal-key lines are contiguous — keep the first
+            // of each run. With no `-k`/`-n`/... the "key" is the full line, so
+            // plain `-u` still dedups by full line exactly as before.
+            int KeyCompare(int ai, int bi)
+            {
+                if (versionSort)
+                {
+                    var pa = dVerKeyParts![ai];
+                    var pb = dVerKeyParts![bi];
+                    for (int s = 0; s < pa.Length; s++)
+                    {
+                        int cc = CompareVersionParts(pa[s], pb[s]);
+                        bool rev = hasKeySpecs ? (keySpecs[s].Reverse || gReverse) : gReverse;
+                        if (rev) cc = -cc;
+                        if (cc != 0) return cc;
+                    }
+                    return 0;
+                }
+                return Compare(ai, bi);
+            }
+
             var deduped = new List<(int Index, object Item)>();
+            bool havePrev = false;
+            int prevIndex = -1;
             foreach (var entry in indexed)
             {
-                string t = dRaw[entry.Index];
-                string key = foldCase ? t.ToLowerInvariant() : t;
-                if (seen.Add(key)) deduped.Add(entry);
+                if (!havePrev || KeyCompare(prevIndex, entry.Index) != 0)
+                {
+                    deduped.Add(entry);
+                    prevIndex = entry.Index;
+                    havePrev = true;
+                }
             }
             sorted = deduped;
         }

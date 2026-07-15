@@ -128,6 +128,37 @@ public class InvokeBashSortCommandTests : IDisposable, IClassFixture<SharedPwshF
     }
 
     [Fact]
+    public void Sort_UniqueByKey_CollapsesLinesEqualOnKeyDifferingAfter()
+    {
+        // GNU `sort -u` dedups by the active comparison key, NOT the whole line:
+        // two lines equal on the key but differing after it collapse to the FIRST.
+        // Oracle: printf '1 a\n1 b\n' | sort -u -k1,1  =>  "1 a" (one line).
+        var lines = RunLines("'1 a','1 b' | Invoke-BashSort -u '-k1,1'");
+        Assert.Equal(new[] { "1 a" }, lines);
+    }
+
+    [Fact]
+    public void Sort_UniqueNumeric_TreatsEqualNumbersAsOne()
+    {
+        // Under -n, "01" and "1" compare equal, so -u keeps only the first of the
+        // sorted run. The whole-line last-resort tiebreak orders "01" before "1".
+        // Oracle: printf '01\n1\n' | sort -n -u  =>  "01" (one line).
+        var lines = RunLines("'01','1' | Invoke-BashSort -n -u");
+        Assert.Equal(new[] { "01" }, lines);
+    }
+
+    [Fact]
+    public void Sort_UniqueNoKey_StillDedupsByFullLine()
+    {
+        // Control: with no -k/-n the comparison key IS the full line, so plain -u
+        // must still dedup by full line — distinct full lines are all kept, only
+        // the exact duplicate collapses.
+        // Oracle: printf '1 a\n1 b\n1 a\n' | sort -u  =>  "1 a", "1 b".
+        var lines = RunLines("'1 a','1 b','1 a' | Invoke-BashSort -u");
+        Assert.Equal(new[] { "1 a", "1 b" }, lines);
+    }
+
+    [Fact]
     public void Sort_FoldCase_IgnoresCase()
     {
         var lines = RunLines("'Banana','apple','Cherry' | Invoke-BashSort -f");

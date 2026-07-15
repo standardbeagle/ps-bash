@@ -477,13 +477,7 @@ public static class InteractiveShell
             if (resolvedCmd is null)
                 return false;
 
-            var psi = new ProcessStartInfo(resolvedCmd)
-            {
-                UseShellExecute = false,
-                WorkingDirectory = workDir,
-            };
-            foreach (var arg in args)
-                psi.ArgumentList.Add(arg);
+            var psi = BuildDirectProcessStartInfo(resolvedCmd, args, workDir);
 
             foreach (var envPair in simple.EnvPairs)
             {
@@ -706,6 +700,81 @@ public static class InteractiveShell
         }
 
         return null;
+    }
+
+    internal static ProcessStartInfo BuildDirectProcessStartInfo(
+        string resolvedCmd,
+        IReadOnlyList<string> args,
+        string? workDir)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(resolvedCmd);
+        ArgumentNullException.ThrowIfNull(args);
+
+        var ext = Path.GetExtension(resolvedCmd);
+        ProcessStartInfo psi;
+        if (OperatingSystem.IsWindows()
+            && (ext.Equals(".cmd", StringComparison.OrdinalIgnoreCase)
+                || ext.Equals(".bat", StringComparison.OrdinalIgnoreCase)))
+        {
+            psi = new ProcessStartInfo(Environment.GetEnvironmentVariable("COMSPEC") ?? "cmd.exe")
+            {
+                UseShellExecute = false,
+                WorkingDirectory = workDir,
+            };
+            psi.ArgumentList.Add("/d");
+            psi.ArgumentList.Add("/c");
+            psi.ArgumentList.Add("call");
+            psi.ArgumentList.Add(resolvedCmd);
+        }
+        else if (OperatingSystem.IsWindows()
+                 && ext.Equals(".ps1", StringComparison.OrdinalIgnoreCase))
+        {
+            psi = new ProcessStartInfo(ResolvePowerShellHost())
+            {
+                UseShellExecute = false,
+                WorkingDirectory = workDir,
+            };
+            psi.ArgumentList.Add("-NoLogo");
+            psi.ArgumentList.Add("-NoProfile");
+            psi.ArgumentList.Add("-ExecutionPolicy");
+            psi.ArgumentList.Add("Bypass");
+            psi.ArgumentList.Add("-File");
+            psi.ArgumentList.Add(resolvedCmd);
+        }
+        else
+        {
+            psi = new ProcessStartInfo(resolvedCmd)
+            {
+                UseShellExecute = false,
+                WorkingDirectory = workDir,
+            };
+        }
+
+        foreach (var arg in args)
+            psi.ArgumentList.Add(arg);
+
+        return psi;
+    }
+
+    private static string ResolvePowerShellHost()
+    {
+        var pathDirs = (Environment.GetEnvironmentVariable("PATH") ?? "")
+            .Split(Path.PathSeparator, StringSplitOptions.RemoveEmptyEntries);
+        foreach (var dir in pathDirs)
+        {
+            try
+            {
+                var pwsh = Path.Combine(dir, "pwsh.exe");
+                if (File.Exists(pwsh))
+                    return pwsh;
+            }
+            catch
+            {
+                // Ignore malformed PATH entries and fall through to powershell.exe.
+            }
+        }
+
+        return "powershell.exe";
     }
 
     private static async Task SyncWorkerCwdAsync(IWorker worker)

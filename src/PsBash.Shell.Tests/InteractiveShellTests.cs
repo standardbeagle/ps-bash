@@ -316,6 +316,36 @@ public class ResolveCommandTests
         Assert.EndsWith(".exe", result, StringComparison.OrdinalIgnoreCase);
     }
 
+    [SkippableFact]
+    public void BuildDirectProcessStartInfo_CmdFile_UsesCmdHost()
+    {
+        Skip.IfNot(OperatingSystem.IsWindows(), "Windows command scripts require cmd.exe");
+        using var tmp = new TempDir();
+        var cmdPath = Path.Combine(tmp.Path, "myapp.cmd");
+
+        var psi = InteractiveShell.BuildDirectProcessStartInfo(cmdPath, ["one", "two words"], tmp.Path);
+
+        Assert.False(psi.UseShellExecute);
+        Assert.Equal(tmp.Path, psi.WorkingDirectory);
+        Assert.EndsWith("cmd.exe", psi.FileName, StringComparison.OrdinalIgnoreCase);
+        Assert.Equal(["/d", "/c", "call", cmdPath, "one", "two words"], psi.ArgumentList.ToArray());
+    }
+
+    [SkippableFact]
+    public void BuildDirectProcessStartInfo_Ps1File_UsesPowerShellHost()
+    {
+        Skip.IfNot(OperatingSystem.IsWindows(), "Windows PowerShell scripts require a PowerShell host");
+        using var tmp = new TempDir();
+        var ps1Path = Path.Combine(tmp.Path, "myapp.ps1");
+
+        var psi = InteractiveShell.BuildDirectProcessStartInfo(ps1Path, ["--help"], tmp.Path);
+
+        Assert.False(psi.UseShellExecute);
+        Assert.Equal(tmp.Path, psi.WorkingDirectory);
+        Assert.EndsWith(".exe", psi.FileName, StringComparison.OrdinalIgnoreCase);
+        Assert.Equal(["-NoLogo", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", ps1Path, "--help"], psi.ArgumentList.ToArray());
+    }
+
     private class TempDir : IDisposable
     {
         public string Path { get; }
