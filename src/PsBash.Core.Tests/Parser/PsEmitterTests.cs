@@ -471,6 +471,18 @@ public class PsEmitterTests
     }
 
     [Fact]
+    public void Transpile_LocaleTranslationQuote_MatchesDoubleQuotedInterpolationAndEscaping()
+    {
+        var localized = PsEmitter.Transpile("echo $\"say \\\"hi\\\" to $USER; cost \\$5; slash \\\\\"");
+        var plain = PsEmitter.Transpile("echo \"say \\\"hi\\\" to $USER; cost \\$5; slash \\\\\"");
+
+        Assert.Equal(plain, localized);
+        Assert.Contains("say `\"hi`\"", localized);
+        Assert.Contains("$env:USER", localized);
+        Assert.Contains("cost `$5", localized);
+    }
+
+    [Fact]
     public void Transpile_DoubleNegation_IsIdentity_NoNegationSuffix()
     {
         // `! ! cmd` = double negation = identity. The command must run unwrapped

@@ -162,6 +162,27 @@ public class BashParserTests
     }
 
     [Fact]
+    public void Parse_LocaleTranslationQuote_MatchesDoubleQuotedInterpolationAndEscaping()
+    {
+        var localized = Parse("echo $\"say \\\"hi\\\" to $USER; cost \\$5; slash \\\\\"");
+        var plain = Parse("echo \"say \\\"hi\\\" to $USER; cost \\$5; slash \\\\\"");
+
+        var localizedSimple = Assert.IsType<Command.Simple>(localized);
+        var plainSimple = Assert.IsType<Command.Simple>(plain);
+        var localizedQuote = Assert.IsType<WordPart.DoubleQuoted>(Assert.Single(localizedSimple.Words[1].Parts));
+        var plainQuote = Assert.IsType<WordPart.DoubleQuoted>(Assert.Single(plainSimple.Words[1].Parts));
+
+        static string Describe(WordPart part) => part switch
+        {
+            WordPart.Literal literal => $"literal:{literal.Value}",
+            WordPart.SimpleVarSub variable => $"variable:{variable.Name}",
+            _ => $"{part.GetType().Name}:{part}"
+        };
+
+        Assert.Equal(plainQuote.Parts.Select(Describe), localizedQuote.Parts.Select(Describe));
+    }
+
+    [Fact]
     public void Parse_BackslashEscape_ProducesEscapedLiteral()
     {
         var result = Parse("echo hello\\ world");
