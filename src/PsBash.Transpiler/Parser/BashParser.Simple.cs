@@ -98,7 +98,7 @@ public sealed partial class BashParser
         var words = ImmutableArray.CreateBuilder<CompoundWord>();
         var redirects = ImmutableArray.CreateBuilder<Redirect>();
         var hereDocs = ImmutableArray.CreateBuilder<HereDoc>();
-        var pendingHeredocs = new List<(string Delimiter, bool Expand, bool StripTabs)>();
+        var pendingHeredocs = new List<(string Delimiter, bool Expand, bool StripTabs, string? FdVar)>();
 
         while (true)
         {
@@ -107,16 +107,26 @@ public sealed partial class BashParser
             if (kind == BashTokenKind.Word)
             {
                 // Named-fd redirect prefix `{name}` before a redirect (bash
-                // allocates a free fd into $name). PowerShell has no dynamic fd
-                // allocation, so drop the prefix and let the redirect parse as a
-                // default-fd redirect (documented degrade). The lexer only emits a
-                // `{name}` Word when a redirect immediately follows.
+                // allocates a free fd into $name). Preserve the name in the AST;
+                // the emitter degrades it to the default-fd redirect form.
                 if (IsNamedFdToken(Peek().Value)
                     && _pos + 1 < _tokens.Count
-                    && (_tokens[_pos + 1].Kind == BashTokenKind.IoNumber
-                        || IsRedirectOp(_tokens[_pos + 1].Kind)))
+                    && IsRedirectOp(_tokens[_pos + 1].Kind))
                 {
-                    Advance(); // drop {name}
+                    var fdVar = Peek().Value[1..^1];
+                    Advance();
+                    if (Peek().Kind is BashTokenKind.DLess or BashTokenKind.DLessDash)
+                    {
+                        bool stripTabs = Peek().Kind == BashTokenKind.DLessDash;
+                        Advance();
+                        var delimToken = Advance();
+                        var (delimiter, expand) = BashLexer.ParseHeredocDelimiter(delimToken.Value);
+                        pendingHeredocs.Add((delimiter, expand, stripTabs, fdVar));
+                    }
+                    else
+                    {
+                        redirects.Add(ParseRedirect(fdVar));
+                    }
                     continue;
                 }
 
@@ -194,7 +204,7 @@ public sealed partial class BashParser
                 // lexer's body-skip also uses, so the two can't disagree on the
                 // terminator.
                 var (delimiter, expand) = BashLexer.ParseHeredocDelimiter(delimToken.Value);
-                pendingHeredocs.Add((delimiter, expand, stripTabs));
+                pendingHeredocs.Add((delimiter, expand, stripTabs, null));
             }
             else if (kind == BashTokenKind.IoNumber || IsRedirectOp(kind))
             {
@@ -238,7 +248,7 @@ public sealed partial class BashParser
     /// separator and parse the command after the heredoc.
     /// </remarks>
     private void CollectHereDocBodies(
-        List<(string Delimiter, bool Expand, bool StripTabs)> pending,
+        List<(string Delimiter, bool Expand, bool StripTabs, string? FdVar)> pending,
         ImmutableArray<HereDoc>.Builder hereDocs)
     {
         // The first body line begins just past the command-line newline (peeked,
@@ -250,7 +260,7 @@ public sealed partial class BashParser
             _ => Peek().Position,
         };
 
-        foreach (var (delimiter, expand, stripTabs) in pending)
+        foreach (var (delimiter, expand, stripTabs, fdVar) in pending)
         {
             var bodyLines = new List<string>();
             while (scan < _input.Length)
@@ -270,7 +280,7 @@ public sealed partial class BashParser
                 scan = nlPos + 1;
                 if (isDelim) break;
             }
-            hereDocs.Add(new HereDoc(BuildHereDocBody(bodyLines), expand, stripTabs));
+            hereDocs.Add(new HereDoc(BuildHereDocBody(bodyLines), expand, stripTabs, fdVar));
         }
         // Cursor intentionally left at the command-line newline (the separator).
     }
@@ -362,7 +372,7 @@ public sealed partial class BashParser
         return (name, new CompoundWord(parts), op);
     }
 
-    private Redirect ParseRedirect()
+    private Redirect ParseRedirect(string? fdVar = null)
     {
         int fd = -1;
 
@@ -407,7 +417,7 @@ public sealed partial class BashParser
         var targetParts = DecomposeWord(targetToken.Value);
         var target = new CompoundWord(targetParts);
 
-        return new Redirect(op, fd, target);
+        return new Redirect(op, fd, target, fdVar);
     }
 
     /// <summary>True for a <c>{varname}</c> named-fd prefix token (the lexer only
@@ -437,14 +447,35 @@ public sealed partial class BashParser
     /// </summary>
     private ImmutableArray<Redirect> ParseTrailingRedirects()
     {
-        if (Peek().Kind != BashTokenKind.IoNumber && !IsCompoundRedirectOp(Peek().Kind))
+        if (!IsNamedCompoundRedirect() && Peek().Kind != BashTokenKind.IoNumber
+            && !IsCompoundRedirectOp(Peek().Kind))
             return ImmutableArray<Redirect>.Empty;
 
         var redirects = ImmutableArray.CreateBuilder<Redirect>();
-        while (Peek().Kind == BashTokenKind.IoNumber || IsCompoundRedirectOp(Peek().Kind))
-            redirects.Add(ParseRedirect());
+        while (true)
+        {
+            if (IsNamedCompoundRedirect())
+            {
+                var fdVar = Advance().Value[1..^1];
+                redirects.Add(ParseRedirect(fdVar));
+            }
+            else if (Peek().Kind == BashTokenKind.IoNumber || IsCompoundRedirectOp(Peek().Kind))
+            {
+                redirects.Add(ParseRedirect());
+            }
+            else
+            {
+                break;
+            }
+        }
         return redirects.ToImmutable();
     }
+
+    private bool IsNamedCompoundRedirect() =>
+        Peek().Kind == BashTokenKind.Word
+        && IsNamedFdToken(Peek().Value)
+        && _pos + 1 < _tokens.Count
+        && IsCompoundRedirectOp(_tokens[_pos + 1].Kind);
 
     private static bool IsCompoundRedirectOp(BashTokenKind kind) =>
         IsRedirectOp(kind)

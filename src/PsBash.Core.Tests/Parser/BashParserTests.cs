@@ -387,6 +387,70 @@ public class BashParserTests
     }
 
     [Fact]
+    public void Parse_NamedFdRedirect_CapturesFdVar()
+    {
+        var result = Parse("exec {fd}> output.txt");
+
+        var simple = Assert.IsType<Command.Simple>(result);
+        Assert.Equal(["exec"], GetWordValues(simple));
+        var redir = Assert.Single(simple.Redirects);
+        Assert.Equal(">", redir.Op);
+        Assert.Equal(1, redir.Fd);
+        Assert.Equal("fd", redir.FdVar);
+        Assert.Equal("output.txt", Assert.IsType<WordPart.Literal>(Assert.Single(redir.Target.Parts)).Value);
+    }
+
+    [Fact]
+    public void Parse_NamedFdInputRedirect_CapturesFdVar()
+    {
+        var result = Parse("exec {fd}< input.txt");
+
+        var simple = Assert.IsType<Command.Simple>(result);
+        Assert.Equal(["exec"], GetWordValues(simple));
+        var redir = Assert.Single(simple.Redirects);
+        Assert.Equal("<", redir.Op);
+        Assert.Equal(0, redir.Fd);
+        Assert.Equal("fd", redir.FdVar);
+        Assert.Equal("input.txt", Assert.IsType<WordPart.Literal>(Assert.Single(redir.Target.Parts)).Value);
+    }
+
+    [Theory]
+    [InlineData("<<", false)]
+    [InlineData("<<-", true)]
+    public void Parse_NamedFdHeredoc_PreservesBodyAndFdVar(string op, bool stripTabs)
+    {
+        var indent = stripTabs ? "\t" : "";
+        var result = Parse($"exec {{fd}}{op}EOF\n{indent}body\nEOF");
+
+        var simple = Assert.IsType<Command.Simple>(result);
+        Assert.Empty(simple.Redirects);
+        var hereDoc = Assert.Single(simple.HereDocs);
+        Assert.Equal("fd", hereDoc.FdVar);
+        Assert.Equal("body\n", hereDoc.Body);
+        Assert.Equal(stripTabs, hereDoc.StripTabs);
+    }
+
+    [Fact]
+    public void Parse_NamedFdRedirectAfterBraceGroup_CapturesFdVar()
+    {
+        var result = Parse("{ echo hi; } {fd}>out");
+
+        var group = Assert.IsType<Command.BraceGroup>(result);
+        var redirect = Assert.Single(group.Redirects);
+        Assert.Equal("fd", redirect.FdVar);
+        Assert.Equal("out", Assert.IsType<WordPart.Literal>(Assert.Single(redirect.Target.Parts)).Value);
+    }
+
+    [Fact]
+    public void Parse_NamedFdRedirectAfterSubshell_CapturesFdVar()
+    {
+        var result = Parse("(echo hi) {fd}>out");
+
+        var subshell = Assert.IsType<Command.Subshell>(result);
+        Assert.Equal("fd", Assert.Single(subshell.Redirects).FdVar);
+    }
+
+    [Fact]
     public void Parse_AndIf_ReturnsAndOrList()
     {
         var result = Parse("mkdir dir && cd dir");

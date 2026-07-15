@@ -972,8 +972,22 @@ public sealed partial class BashParser
 
         // Collect trailing redirects (e.g. (cmd) > out.txt)
         var redirects = ImmutableArray.CreateBuilder<Redirect>();
-        while (Peek().Kind == BashTokenKind.IoNumber || IsRedirectOp(Peek().Kind))
-            redirects.Add(ParseRedirect());
+        while (true)
+        {
+            if (IsNamedCompoundRedirect())
+            {
+                var fdVar = Advance().Value[1..^1];
+                redirects.Add(ParseRedirect(fdVar));
+            }
+            else if (Peek().Kind == BashTokenKind.IoNumber || IsCompoundRedirectOp(Peek().Kind))
+            {
+                redirects.Add(ParseRedirect());
+            }
+            else
+            {
+                break;
+            }
+        }
 
         return new Command.Subshell(body, redirects.ToImmutable());
     }

@@ -203,6 +203,17 @@ public class AstNodeTests
         Assert.Equal(">>", redir.Op);
         Assert.Equal(2, redir.Fd);
         Assert.Equal("/dev/null", ((WordPart.Literal)redir.Target.Parts[0]).Value);
+        Assert.Null(redir.FdVar);
+    }
+
+    [Fact]
+    public void Redirect_StoresFdVar()
+    {
+        var target = new CompoundWord(ImmutableArray.Create<WordPart>(new WordPart.Literal("out")));
+
+        var redir = new Redirect(">", 1, target, "fd");
+
+        Assert.Equal("fd", redir.FdVar);
     }
 
     [Fact]

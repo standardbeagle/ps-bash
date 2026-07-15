@@ -4,7 +4,7 @@ namespace PsBash.Core.Parser.Ast;
 /// A redirect operation, e.g. <c>&gt;file</c>, <c>2&gt;&amp;1</c>.
 /// Modeled after oils syntax.asdl Redir.
 /// </summary>
-public sealed record Redirect(string Op, int Fd, CompoundWord Target) : BashNode;
+public sealed record Redirect(string Op, int Fd, CompoundWord Target, string? FdVar = null) : BashNode;
 
 /// <summary>
 /// A here-document redirect, e.g. <c>&lt;&lt;EOF\ntext\nEOF</c>.
@@ -12,7 +12,7 @@ public sealed record Redirect(string Op, int Fd, CompoundWord Target) : BashNode
 /// <paramref name="Expand"/> is true when variable expansion should occur (unquoted delimiter).
 /// <paramref name="StripTabs"/> is true for <c>&lt;&lt;-</c> (leading tabs stripped from body).
 /// </summary>
-public sealed record HereDoc(string Body, bool Expand, bool StripTabs) : BashNode;
+public sealed record HereDoc(string Body, bool Expand, bool StripTabs, string? FdVar = null) : BashNode;
 
 /// <summary>
 /// Assignment operator: <c>=</c> or <c>+=</c>.
