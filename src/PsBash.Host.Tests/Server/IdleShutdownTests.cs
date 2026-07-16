@@ -76,4 +76,70 @@ public sealed class IdleShutdownTests
         Assert.False(cts.Token.WaitHandle.WaitOne(TimeSpan.FromMilliseconds(200)),
             "Timer should not fire after Dispose");
     }
+
+    // --- Regression coverage for the timer-callback-vs-ConnectionStarted race -----------------
+    //
+    // Timer.Dispose() cannot abort a callback that the threadpool has already dequeued and is
+    // about to run. Sequence under test: _inFlight==0, the idle timer fires (callback queued),
+    // then a NEW connection starts (ConnectionStarted takes _gate, increments _inFlight,
+    // CancelTimer()s) before the queued callback actually executes. The callback must not tear
+    // down the CTS. Reproduced deterministically via the SimulateTimerFired/CurrentGenerationForTest
+    // test seams rather than racing a real Timer with sleeps (Directive 6: no Thread.Sleep in tests).
+
+    [Fact]
+    public void TimerFiresConcurrentlyWithConnectionStart_DoesNotCancel()
+    {
+        using var cts = new CancellationTokenSource();
+        using var idle = new IdleShutdown(cts, TimeSpan.FromHours(1)); // long enough it never fires for real
+
+        var scheduledGeneration = idle.CurrentGenerationForTest;
+
+        // A connection arrives concurrently with the (simulated) already-fired callback.
+        idle.ConnectionStarted();
+
+        // The stale callback, from the generation scheduled before the connection started, runs late.
+        idle.SimulateTimerFired(scheduledGeneration);
+
+        Assert.False(cts.IsCancellationRequested,
+            "A timer callback racing a concurrent ConnectionStarted() must not cancel the CTS");
+    }
+
+    [Fact]
+    public void StaleGenerationCallback_NeverCancels_EvenWhenIdle()
+    {
+        using var cts = new CancellationTokenSource();
+        using var idle = new IdleShutdown(cts, TimeSpan.FromHours(1));
+
+        var staleGeneration = idle.CurrentGenerationForTest;
+
+        // Superseding activity bumps the generation without the callback for the OLD
+        // generation ever being cancelled in time (Timer.Dispose can't abort a running callback).
+        idle.ConnectionStarted();
+        idle.ConnectionEnded();
+
+        Assert.NotEqual(staleGeneration, idle.CurrentGenerationForTest);
+
+        // Even though the host is idle again (_inFlight == 0), a callback for the superseded
+        // generation must be a no-op.
+        idle.SimulateTimerFired(staleGeneration);
+
+        Assert.False(cts.IsCancellationRequested,
+            "A callback for a superseded timer generation must never cancel the CTS");
+    }
+
+    [Fact]
+    public void CurrentGenerationCallback_WhenIdle_StillCancels()
+    {
+        using var cts = new CancellationTokenSource();
+        using var idle = new IdleShutdown(cts, TimeSpan.FromHours(1));
+
+        var currentGeneration = idle.CurrentGenerationForTest;
+
+        // No connections in flight, callback belongs to the current (not superseded) generation:
+        // normal idle expiry must still tear down the CTS.
+        idle.SimulateTimerFired(currentGeneration);
+
+        Assert.True(cts.IsCancellationRequested,
+            "A non-superseded, non-racing timer callback must still cancel the CTS on idle expiry");
+    }
 }

@@ -29,6 +29,12 @@ public sealed class IdleShutdown : IDisposable
     private int _inFlight;
     private Timer? _timer;
     private int _disposed;
+    // Bumped every time the scheduled timer is superseded or cancelled (ScheduleTimer /
+    // CancelTimer). The timer callback captures the generation it was scheduled under and
+    // re-checks both this and _inFlight under _gate before cancelling — closes the race where
+    // Timer.Dispose() cannot abort a callback that has already been dequeued by the threadpool
+    // (a callback queued just before ConnectionStarted() must not tear down a live connection).
+    private int _generation;
 
     public IdleShutdown(CancellationTokenSource cts, TimeSpan? timeout = null)
     {
@@ -59,13 +65,40 @@ public sealed class IdleShutdown : IDisposable
     private void ScheduleTimer()
     {
         _timer?.Dispose();
-        _timer = new Timer(_ => _cts.TryCancel(), null, _timeout, Timeout.InfiniteTimeSpan);
+        var generation = ++_generation;
+        _timer = new Timer(_ => OnTimerFired(generation), null, _timeout, Timeout.InfiniteTimeSpan);
     }
 
     private void CancelTimer()
     {
         _timer?.Dispose();
         _timer = null;
+        // Invalidate any callback already queued/running for the timer just disposed —
+        // Timer.Dispose() does not abort an in-flight callback.
+        _generation++;
+    }
+
+    private void OnTimerFired(int generation)
+    {
+        lock (_gate)
+        {
+            if (generation != _generation) return; // superseded — a newer schedule/cancel won the race
+            if (_inFlight > 0) return;              // a connection started concurrently — do not tear down
+            _cts.TryCancel();
+        }
+    }
+
+    /// <summary>
+    /// Test-only seam: invokes the timer callback logic directly with an explicit generation,
+    /// so a race between a fired-but-not-yet-run callback and a concurrent ConnectionStarted()
+    /// can be reproduced deterministically instead of racing a real <see cref="Timer"/>.
+    /// </summary>
+    internal void SimulateTimerFired(int generation) => OnTimerFired(generation);
+
+    /// <summary>Test-only seam: the generation the currently scheduled/last-cancelled timer holds.</summary>
+    internal int CurrentGenerationForTest
+    {
+        get { lock (_gate) return _generation; }
     }
 
     public void Dispose()
