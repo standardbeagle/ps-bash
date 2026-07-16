@@ -62,6 +62,13 @@ public class InvokeBashFindCommandTests : IDisposable, IClassFixture<SharedPwshF
         return path;
     }
 
+    private string MkBytes(string rel, int length)
+    {
+        var path = Path.Combine(_tmpDir, rel);
+        File.WriteAllBytes(path, new byte[length]);
+        return path;
+    }
+
     private System.Collections.ObjectModel.Collection<PSObject> Run(string script)
     {
         var pwsh = _fixture.AcquireFresh();
@@ -335,6 +342,65 @@ public class InvokeBashFindCommandTests : IDisposable, IClassFixture<SharedPwshF
     }
 
     [Fact]
+    public void Find_SizeBareNumber_MatchesExactSizeOnly()
+    {
+        Mk("smaller.txt", "abc");
+        Mk("exact.txt", "abcd");
+        Mk("larger.txt", "abcde");
+
+        var names = Names(Run($"Invoke-BashFind '{Esc(_tmpDir)}' -type f -size '4c'"));
+
+        Assert.Contains("exact.txt", names);
+        Assert.DoesNotContain("smaller.txt", names);
+        Assert.DoesNotContain("larger.txt", names);
+    }
+
+    [Theory]
+    [InlineData("1k", true, true, false)]
+    [InlineData("2", false, true, false)]
+    public void Find_SizeUnsigned_UsesRoundedUnitBuckets(
+        string expression, bool includesOneByte, bool includesOneKib, bool includesOverKib)
+    {
+        MkBytes("one-byte.txt", 1);
+        MkBytes("one-kib.txt", 1024);
+        MkBytes("over-kib.txt", 1025);
+
+        var names = Names(Run($"Invoke-BashFind '{Esc(_tmpDir)}' -type f -size '{expression}'"));
+
+        Assert.Equal(includesOneByte, names.Contains("one-byte.txt"));
+        Assert.Equal(includesOneKib, names.Contains("one-kib.txt"));
+        Assert.Equal(includesOverKib, names.Contains("over-kib.txt"));
+    }
+
+    [Theory]
+    [InlineData("+1k")]
+    [InlineData("+2")]
+    public void Find_SizePlus_UsesRoundedUnitBuckets(string expression)
+    {
+        MkBytes("one-kib.txt", 1024);
+        MkBytes("over-kib.txt", 1025);
+
+        var names = Names(Run($"Invoke-BashFind '{Esc(_tmpDir)}' -type f -size '{expression}'"));
+
+        Assert.DoesNotContain("one-kib.txt", names);
+        Assert.Contains("over-kib.txt", names);
+    }
+
+    [Theory]
+    [InlineData("-2k")]
+    [InlineData("-3")]
+    public void Find_SizeMinus_UsesRoundedUnitBuckets(string expression)
+    {
+        MkBytes("one-kib.txt", 1024);
+        MkBytes("over-kib.txt", 1025);
+
+        var names = Names(Run($"Invoke-BashFind '{Esc(_tmpDir)}' -type f -size '{expression}'"));
+
+        Assert.Contains("one-kib.txt", names);
+        Assert.DoesNotContain("over-kib.txt", names);
+    }
+
+    [Fact]
     public void Find_EmptyFilter_FindsEmptyFilesAndDirs()
     {
         Mk("empty.txt");
@@ -354,6 +420,40 @@ public class InvokeBashFindCommandTests : IDisposable, IClassFixture<SharedPwshF
         var results = Run($"Invoke-BashFind '{Esc(_tmpDir)}' -mtime '-7'");
         var names = results.Select(o => (string?)o.Properties["Name"]?.Value).ToArray();
         Assert.Contains("recent.txt", names);
+    }
+
+    [Fact]
+    public void Find_MtimeBareNumber_MatchesExactDayBucketOnly()
+    {
+        var newer = Mk("newer.txt", "n");
+        var exact = Mk("exact.txt", "e");
+        var older = Mk("older.txt", "o");
+        File.SetLastWriteTime(newer, DateTime.Now.AddDays(-1.5));
+        File.SetLastWriteTime(exact, DateTime.Now.AddDays(-2.5));
+        File.SetLastWriteTime(older, DateTime.Now.AddDays(-3.5));
+
+        var names = Names(Run($"Invoke-BashFind '{Esc(_tmpDir)}' -type f -mtime '2'"));
+
+        Assert.Contains("exact.txt", names);
+        Assert.DoesNotContain("newer.txt", names);
+        Assert.DoesNotContain("older.txt", names);
+    }
+
+    [Theory]
+    [InlineData("+2", false, true)]
+    [InlineData("-3", true, false)]
+    public void Find_MtimeSigned_UsesCompletedDayBuckets(
+        string expression, bool includesTwoAndHalfDays, bool includesThreeAndHalfDays)
+    {
+        var twoAndHalf = Mk("two-and-half.txt", "2");
+        var threeAndHalf = Mk("three-and-half.txt", "3");
+        File.SetLastWriteTime(twoAndHalf, DateTime.Now.AddDays(-2.5));
+        File.SetLastWriteTime(threeAndHalf, DateTime.Now.AddDays(-3.5));
+
+        var names = Names(Run($"Invoke-BashFind '{Esc(_tmpDir)}' -type f -mtime '{expression}'"));
+
+        Assert.Equal(includesTwoAndHalfDays, names.Contains("two-and-half.txt"));
+        Assert.Equal(includesThreeAndHalfDays, names.Contains("three-and-half.txt"));
     }
 
     // ===================== New predicates (-iname/-path/-regex/-mindepth/-newer) =====================
@@ -671,6 +771,84 @@ public class InvokeBashFindCommandTests : IDisposable, IClassFixture<SharedPwshF
         var names = results.Select(o => (string?)o.Properties["Name"]?.Value).ToArray();
         Assert.Contains(names, n => n != null && n.Contains("世界"));
         Assert.Contains(names, n => n != null && n.Contains("🚀"));
+    }
+
+    // ===================== Multiple search-path operands =====================
+
+    [Fact]
+    public void Find_SingleRoot_BehaviorUnchanged()
+    {
+        // (c) baseline: exactly one root operand still searches only that root.
+        var dir1 = MkDir("dir1");
+        var dir2 = MkDir("dir2");
+        Mk("dir1/a.cs", "x");
+        Mk("dir2/b.cs", "x");
+
+        var names = Names(Run($"Invoke-BashFind '{Esc(dir1)}' -name '*.cs'"));
+
+        Assert.Contains("a.cs", names);
+        Assert.DoesNotContain("b.cs", names);
+    }
+
+    [Fact]
+    public void Find_MultipleRoots_SearchesAllRootsInOrder()
+    {
+        // (a) two roots both searched, root1's matches before root2's (GNU
+        // find walks each listed root in the order given).
+        var dir1 = MkDir("dir1");
+        var dir2 = MkDir("dir2");
+        Mk("dir1/a.cs", "x");
+        Mk("dir2/b.cs", "x");
+
+        var results = Run($"Invoke-BashFind '{Esc(dir1)}' '{Esc(dir2)}' -name '*.cs'");
+        var names = Names(results);
+
+        Assert.Contains("a.cs", names);
+        Assert.Contains("b.cs", names);
+        Assert.True(Array.IndexOf(names, "a.cs") < Array.IndexOf(names, "b.cs"),
+            "expected dir1's match before dir2's match (roots walked in order)");
+    }
+
+    [Fact]
+    public void Find_MultipleRootsMixedWithPredicate_AllLeadingOperandsAreRoots()
+    {
+        // (d) `find dir1 dir2 -name '*.cs'` — both leading path operands are
+        // roots, the predicate applies to both trees.
+        var dir1 = MkDir("dir1");
+        var dir2 = MkDir("dir2");
+        Mk("dir1/a.cs", "x");
+        Mk("dir1/skip.txt", "x");
+        Mk("dir2/b.cs", "x");
+        Mk("dir2/skip2.txt", "x");
+
+        var names = Names(Run($"Invoke-BashFind '{Esc(dir1)}' '{Esc(dir2)}' -name '*.cs'"));
+
+        Assert.Contains("a.cs", names);
+        Assert.Contains("b.cs", names);
+        Assert.DoesNotContain("skip.txt", names);
+        Assert.DoesNotContain("skip2.txt", names);
+    }
+
+    [Fact]
+    public void Find_MultipleRoots_MissingRoot_ErrorsButContinuesWithRemainingRoots()
+    {
+        // (b) a missing root prints an error + sets exit 1, but find still
+        // walks and reports matches from the roots that DO exist.
+        var dir1 = MkDir("dir1");
+        Mk("dir1/a.cs", "x");
+        var missing = Path.Combine(_tmpDir, "does-not-exist-root");
+
+        var results = RunAllowError(
+            $"Invoke-BashFind '{Esc(dir1)}' '{Esc(missing)}' -name '*.cs'; $LASTEXITCODE");
+
+        var names = results
+            .SkipLast(1)
+            .Select(o => (string?)o.Properties["Name"]?.Value)
+            .ToArray();
+        Assert.Contains("a.cs", names);
+
+        var lastExitCode = results.Last()?.BaseObject;
+        Assert.Equal(1, Convert.ToInt32(lastExitCode));
     }
 
     [Fact]

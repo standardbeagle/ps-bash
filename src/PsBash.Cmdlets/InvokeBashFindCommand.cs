@@ -281,8 +281,8 @@ public sealed class InvokeBashFindCommand : PSCmdlet
                 case "-size":
                 {
                     string e = (++i < args.Length) ? args[i] : string.Empty;
-                    var (op, bytes) = ParseSizeExpr(e);
-                    exprTokens.Add(new FindTok(FTk.Leaf, c => SizeMatch(c.Item, c.IsDir, op, bytes)));
+                    var (op, units, unitSize) = ParseSizeExpr(e);
+                    exprTokens.Add(new FindTok(FTk.Leaf, c => SizeMatch(c.Item, c.IsDir, op, units, unitSize)));
                     i++;
                     continue;
                 }
@@ -367,141 +367,150 @@ public sealed class InvokeBashFindCommand : PSCmdlet
             return;
         }
 
-        if (operands.Count > 0)
-        {
-            searchPath = operands[0];
-        }
-
-        // Resolve root via Get-BashItem (psm1 oracle's error-message format,
-        // including the bash "No such file or directory" mapping). Wrap with
-        // inner 2>&1 so any Write-BashError ErrorRecord lands in the script's
-        // success stream rather than buried in the sub-pipeline (otherwise
-        // invisible to the cmdlet's caller's 2>&1 redirect).
-        var rootResult = InvokeCommand.InvokeScript(
-            "param($p) Get-BashItem -Path $p -Command 'find' 2>&1", searchPath);
-        System.IO.FileSystemInfo? rootItem = null;
-        foreach (var r in rootResult)
-        {
-            if (r?.BaseObject is System.IO.FileSystemInfo fsi)
-            {
-                rootItem = fsi;
-                break;
-            }
-            if (r?.BaseObject is ErrorRecord innerEr)
-            {
-                FileSystemHelpers.WriteBashError(this, innerEr.ToString());
-            }
-        }
-        if (rootItem == null)
-        {
-            SessionState.PSVariable.Set("global:LASTEXITCODE", 1);
-            return;
-        }
-
-        string resolvedRoot = rootItem.FullName;
-        char[] sepChars = {
-            System.IO.Path.DirectorySeparatorChar,
-            System.IO.Path.AltDirectorySeparatorChar,
-        };
-        int rootDepth = resolvedRoot
-            .TrimEnd(sepChars)
-            .Split(new[] { '\\', '/' })
-            .Length;
-
-        // Collect items: root + recursive children, with maxdepth honored at
-        // enumeration time so a large tree does not load into memory.
-        var allItems = new List<System.IO.FileSystemInfo> { rootItem };
-        if (rootItem is System.IO.DirectoryInfo rootDir)
-        {
-            try
-            {
-                // Reparse-point-safe walk: a directory junction / symlink is listed but never
-                // descended into (GNU find's default, no -follow), so the walk can't escape the
-                // tree or loop forever on a cyclic link. maxDepth is find's -maxdepth (relative
-                // to root; root's direct children are depth 1); the per-item post-filter below
-                // (relativeDepth > maxDepth) still clamps the boundary.
-                foreach (var fsi in FileSystemHelpers.EnumerateNoFollow(rootDir, maxDepth))
-                {
-                    allItems.Add(fsi);
-                }
-            }
-            catch
-            {
-                // best-effort, oracle swallows enumeration errors too.
-            }
-        }
-
-        // (Size/mtime/newer/regex predicates are parsed into leaf delegates at
-        // argument-scan time above; nothing to pre-parse here.)
-        var now = DateTime.Now;
-
-        // Forward-slash relative display path anchored at searchPath (the psm1 oracle's form).
-        string BuildDisplay(string itemPath)
-        {
-            string relativePath = itemPath.Substring(resolvedRoot.Length).Replace('\\', '/');
-            if (relativePath.StartsWith("/", StringComparison.Ordinal))
-                relativePath = relativePath.Substring(1);
-            if (searchPath == ".")
-                return relativePath.Length == 0 ? "." : $"./{relativePath}";
-            string normalized = searchPath.Replace('\\', '/');
-            return relativePath.Length == 0 ? normalized : $"{normalized}/{relativePath}";
-        }
+        // GNU find walks every listed search-path operand as its own root, in the
+        // order given (`find dir1 dir2 -name x` searches BOTH dir1 and dir2, not
+        // just the first). A missing root prints the bash "No such file or
+        // directory" error, sets exit 1, and CONTINUES with the remaining roots
+        // rather than aborting the whole invocation.
+        var searchPaths = operands.Count > 0 ? operands : new List<string> { searchPath };
 
         var pathCmp = OperatingSystem.IsWindows()
             ? StringComparison.OrdinalIgnoreCase
             : StringComparison.Ordinal;
+        char[] sepChars = {
+            System.IO.Path.DirectorySeparatorChar,
+            System.IO.Path.AltDirectorySeparatorChar,
+        };
 
-        // -prune needs parents evaluated before their children so a matched directory can
-        // exclude its subtree. Sort shallow-first only then (keeps default output order otherwise).
-        if (doPrune)
-            allItems.Sort((a, b) => SegmentCount(a.FullName).CompareTo(SegmentCount(b.FullName)));
-
-        var prunedRoots = new List<string>();
+        var now = DateTime.Now;
         var matches = new List<(System.IO.FileSystemInfo Item, string DisplayPath, bool IsDir, string ItemPath)>();
 
-        foreach (var item in allItems)
+        foreach (var rootSearchPath in searchPaths)
         {
-            string itemPath = item.FullName;
-            int relativeDepth = SegmentCount(itemPath) - rootDepth;
-
-            if (relativeDepth > maxDepth) continue;
-
-            // Skip anything beneath a pruned directory (don't descend into it).
-            if (prunedRoots.Count > 0)
+            // Resolve root via Get-BashItem (psm1 oracle's error-message format,
+            // including the bash "No such file or directory" mapping). Wrap with
+            // inner 2>&1 so any Write-BashError ErrorRecord lands in the script's
+            // success stream rather than buried in the sub-pipeline (otherwise
+            // invisible to the cmdlet's caller's 2>&1 redirect).
+            var rootResult = InvokeCommand.InvokeScript(
+                "param($p) Get-BashItem -Path $p -Command 'find' 2>&1", rootSearchPath);
+            System.IO.FileSystemInfo? rootItem = null;
+            foreach (var r in rootResult)
             {
-                bool underPruned = false;
-                foreach (var root in prunedRoots)
+                if (r?.BaseObject is System.IO.FileSystemInfo fsi)
                 {
-                    if (itemPath.StartsWith(root + System.IO.Path.DirectorySeparatorChar, pathCmp))
-                    {
-                        underPruned = true;
-                        break;
-                    }
+                    rootItem = fsi;
+                    break;
                 }
-                if (underPruned) continue;
+                if (r?.BaseObject is ErrorRecord innerEr)
+                {
+                    FileSystemHelpers.WriteBashError(this, innerEr.ToString());
+                }
+            }
+            if (rootItem == null)
+            {
+                // Missing root: bash parity is exit 1 + continue with the rest.
+                SessionState.PSVariable.Set("global:LASTEXITCODE", 1);
+                continue;
             }
 
-            bool isDir = item is System.IO.DirectoryInfo;
+            string resolvedRoot = rootItem.FullName;
+            int rootDepth = resolvedRoot
+                .TrimEnd(sepChars)
+                .Split(new[] { '\\', '/' })
+                .Length;
 
-            if (relativeDepth < minDepth) continue;
+            // Collect items: root + recursive children, with maxdepth honored at
+            // enumeration time so a large tree does not load into memory.
+            var rootItems = new List<System.IO.FileSystemInfo> { rootItem };
+            if (rootItem is System.IO.DirectoryInfo rootDir)
+            {
+                try
+                {
+                    // Reparse-point-safe walk: a directory junction / symlink is listed but never
+                    // descended into (GNU find's default, no -follow), so the walk can't escape the
+                    // tree or loop forever on a cyclic link. maxDepth is find's -maxdepth (relative
+                    // to root; root's direct children are depth 1); the per-item post-filter below
+                    // (relativeDepth > maxDepth) still clamps the boundary.
+                    foreach (var fsi in FileSystemHelpers.EnumerateNoFollow(rootDir, maxDepth))
+                    {
+                        rootItems.Add(fsi);
+                    }
+                }
+                catch
+                {
+                    // best-effort, oracle swallows enumeration errors too.
+                }
+            }
 
-            string displayPath = BuildDisplay(itemPath);
+            // Forward-slash relative display path anchored at this root's search path
+            // (the psm1 oracle's form).
+            string BuildDisplay(string itemPath)
+            {
+                string relativePath = itemPath.Substring(resolvedRoot.Length).Replace('\\', '/');
+                if (relativePath.StartsWith("/", StringComparison.Ordinal))
+                    relativePath = relativePath.Substring(1);
+                if (rootSearchPath == ".")
+                    return relativePath.Length == 0 ? "." : $"./{relativePath}";
+                string normalized = rootSearchPath.Replace('\\', '/');
+                return relativePath.Length == 0 ? normalized : $"{normalized}/{relativePath}";
+            }
 
-            // Evaluate the full predicate expression for this item. An empty
-            // expression (no predicates) matches everything.
-            if (!matchExpr(new EvalCtx(item, isDir, displayPath, now))) continue;
+            // -prune needs parents evaluated before their children so a matched directory can
+            // exclude its subtree. Sort shallow-first only then (keeps default output order otherwise).
+            if (doPrune)
+                rootItems.Sort((a, b) => SegmentCount(a.FullName).CompareTo(SegmentCount(b.FullName)));
 
-            // A matched directory under -prune excludes its subtree from here on.
-            if (doPrune && isDir)
-                prunedRoots.Add(itemPath);
+            var prunedRoots = new List<string>();
+            var rootMatches = new List<(System.IO.FileSystemInfo Item, string DisplayPath, bool IsDir, string ItemPath)>();
 
-            matches.Add((item, displayPath, isDir, itemPath));
+            foreach (var item in rootItems)
+            {
+                string itemPath = item.FullName;
+                int relativeDepth = SegmentCount(itemPath) - rootDepth;
+
+                if (relativeDepth > maxDepth) continue;
+
+                // Skip anything beneath a pruned directory (don't descend into it).
+                if (prunedRoots.Count > 0)
+                {
+                    bool underPruned = false;
+                    foreach (var pruned in prunedRoots)
+                    {
+                        if (itemPath.StartsWith(pruned + System.IO.Path.DirectorySeparatorChar, pathCmp))
+                        {
+                            underPruned = true;
+                            break;
+                        }
+                    }
+                    if (underPruned) continue;
+                }
+
+                bool isDir = item is System.IO.DirectoryInfo;
+
+                if (relativeDepth < minDepth) continue;
+
+                string displayPath = BuildDisplay(itemPath);
+
+                // Evaluate the full predicate expression for this item. An empty
+                // expression (no predicates) matches everything.
+                if (!matchExpr(new EvalCtx(item, isDir, displayPath, now))) continue;
+
+                // A matched directory under -prune excludes its subtree from here on.
+                if (doPrune && isDir)
+                    prunedRoots.Add(itemPath);
+
+                rootMatches.Add((item, displayPath, isDir, itemPath));
+            }
+
+            // -depth (and the implied -depth of -delete): process directory contents before the
+            // directory itself, i.e. deepest paths first. Scoped to this root's matches so
+            // multiple roots don't interleave by absolute segment count.
+            if (depthFirst)
+                rootMatches.Sort((a, b) => SegmentCount(b.ItemPath).CompareTo(SegmentCount(a.ItemPath)));
+
+            matches.AddRange(rootMatches);
         }
-
-        // -depth (and the implied -depth of -delete): process directory contents before the
-        // directory itself, i.e. deepest paths first.
-        if (depthFirst)
-            matches.Sort((a, b) => SegmentCount(b.ItemPath).CompareTo(SegmentCount(a.ItemPath)));
 
         // ── dispatch ────────────────────────────────────────────────────────────
         // -delete is an action: remove matches and print nothing (deepest-first lets a
@@ -711,14 +720,15 @@ public sealed class InvokeBashFindCommand : PSCmdlet
 
     // ── leaf predicate helpers ───────────────────────────────────────────────
 
-    /// <summary>Parse a find size expression (<c>+1k</c>, <c>-500c</c>, <c>+1M</c>,
-    /// …). Block (no suffix) defaults to 512 bytes (POSIX). Returns op <c>'\0'</c>
+    /// <summary>Parse a find size expression (<c>1k</c>, <c>+1k</c>, <c>-500c</c>,
+    /// …). A bare number uses exact (rounded-unit) matching. Block (no suffix)
+    /// defaults to 512 bytes (POSIX). Returns op <c>'\0'</c>
     /// for an unparseable expression — the leaf then matches everything, mirroring
     /// the old lenient guard.</summary>
-    private static (char Op, long Bytes) ParseSizeExpr(string expr)
+    private static (char Op, long Units, long UnitSize) ParseSizeExpr(string expr)
     {
-        var m = System.Text.RegularExpressions.Regex.Match(expr, @"^([+-])(\d+)([ckMG]?)$");
-        if (!m.Success) return ('\0', 0);
+        var m = System.Text.RegularExpressions.Regex.Match(expr, @"^([+-]?)(\d+)([ckMG]?)$");
+        if (!m.Success) return ('\0', 0, 1);
         // The regex admits arbitrarily many digits, so a 20+-digit number overflows.
         // Clamp to long.MaxValue instead of letting long.Parse throw: no real file is
         // that big, so `+overflow` then matches nothing and `-overflow` matches all —
@@ -732,34 +742,50 @@ public sealed class InvokeBashFindCommand : PSCmdlet
             "G" => 1073741824L,
             _ => 512L,
         };
-        long bytes = n > long.MaxValue / mult ? long.MaxValue : n * mult;
-        return (m.Groups[1].Value[0], bytes);
+        char op = m.Groups[1].Value.Length == 0 ? '=' : m.Groups[1].Value[0];
+        return (op, n, mult);
     }
 
-    private static bool SizeMatch(System.IO.FileSystemInfo item, bool isDir, char op, long bytes)
+    private static bool SizeMatch(System.IO.FileSystemInfo item, bool isDir, char op, long units, long unitSize)
     {
         if (op == '\0') return true;
         long fileSize = isDir ? 0L : ((System.IO.FileInfo)item).Length;
-        return op == '+' ? fileSize > bytes : fileSize < bytes;
+        // GNU find compares N with the file size rounded up to the selected unit
+        // for every operator. Avoid `fileSize + unitSize - 1`, which can overflow.
+        long fileUnits = fileSize == 0 ? 0 : 1 + ((fileSize - 1) / unitSize);
+        return op switch
+        {
+            '+' => fileUnits > units,
+            '-' => fileUnits < units,
+            _ => fileUnits == units,
+        };
     }
 
-    /// <summary>Parse a find mtime expression (<c>-7</c> within last 7 days,
-    /// <c>+30</c> older than 30 days). Op <c>'\0'</c> = unparseable = match all.</summary>
+    /// <summary>Parse a find mtime expression (<c>2</c> exactly two whole days ago,
+    /// <c>-7</c> within last 7 days, <c>+30</c> older than 30 days).
+    /// Op <c>'\0'</c> = unparseable = match all.</summary>
     private static (char Op, int Days) ParseMtimeExpr(string expr)
     {
-        var m = System.Text.RegularExpressions.Regex.Match(expr, @"^([+-])(\d+)$");
+        var m = System.Text.RegularExpressions.Regex.Match(expr, @"^([+-]?)(\d+)$");
         if (!m.Success) return ('\0', 0);
         // Clamp instead of letting int.Parse throw on a huge day count: `+overflow`
         // (older than ~5.8M years) matches nothing, `-overflow` matches all.
         int days = int.TryParse(m.Groups[2].Value, out int d) ? d : int.MaxValue;
-        return (m.Groups[1].Value[0], days);
+        char op = m.Groups[1].Value.Length == 0 ? '=' : m.Groups[1].Value[0];
+        return (op, days);
     }
 
     private static bool MtimeMatch(EvalCtx c, char op, int days)
     {
         if (op == '\0') return true;
         double daysAgo = (c.Now - c.Item.LastWriteTime).TotalDays;
-        return op == '-' ? daysAgo < days : daysAgo > days;
+        double completedDays = Math.Floor(daysAgo);
+        return op switch
+        {
+            '-' => completedDays < days,
+            '+' => completedDays > days,
+            _ => completedDays == days,
+        };
     }
 
     private static bool EmptyMatch(EvalCtx c)
