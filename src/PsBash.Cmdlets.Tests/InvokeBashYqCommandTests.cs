@@ -179,6 +179,57 @@ public class InvokeBashYqCommandTests : IClassFixture<SharedPwshFixture>, IDispo
         Assert.NotNull(result);
     }
 
+    // --- Numeric overflow / control-char / culture guards
+    // (worktrack-task 01KX8V6FC0G3XHTD6QMWPFKN2M) ---
+
+    [Fact]
+    public void Yq_HugeIntegerValue_DoesNotCrash_EmitsNumber()
+    {
+        // int64.MaxValue is ~9.2e18; 20 nines overflows [long] and used to throw
+        // an uncaught OverflowException out of ConvertFrom-YamlValue.
+        var path = WriteFile("big.yaml", "n: 99999999999999999999\n");
+        var lines = RunText($"Invoke-BashYq '.n' '{Esc(path)}'");
+        Assert.Single(lines);
+        // A valid JSON number: optional '-', digits, optional fraction, optional exponent.
+        Assert.Matches(@"^-?\d+(\.\d+)?([eE][+-]?\d+)?$", lines[0]);
+    }
+
+    [Fact]
+    public void Yq_ControlCharsInStringValue_EmitsValidJsonEscapes()
+    {
+        // Backspace (\b), form feed (\f), and a raw 0x01 control char embedded
+        // (via an actual embedded byte below, not a textual escape -- C#'s \x
+        // escape is variable-width and would greedily consume a following hex
+        // digit) in a quoted YAML scalar. ConvertFrom-YamlValue does not
+        // unescape simple YAML, so these ride through as literal control
+        // characters into the JSON serializer, which must escape all of them
+        // to stay valid JSON.
+        var path = WriteFile("ctrl.yaml", "g: \"a\bb\fc" + (char)0x01 + "d\"\n");
+        var lines = RunText($"Invoke-BashYq '.g' '{Esc(path)}'");
+        Assert.Single(lines);
+        Assert.Equal("\"a\\bb\\fc\\u0001d\"", lines[0]);
+    }
+
+    [Fact]
+    public void Yq_DecimalNumberSerialization_IsCultureInvariant()
+    {
+        // Force a comma-decimal culture around the call; the fix formats numbers
+        // via InvariantCulture so the JSON output stays period-decimal regardless
+        // of the current thread culture. The pre-fix "$Value" string interpolation
+        // was culture-sensitive and would emit "1,5" (invalid JSON) under de-DE.
+        var lines = RunText(@"
+$orig = [System.Threading.Thread]::CurrentThread.CurrentCulture
+try {
+    [System.Threading.Thread]::CurrentThread.CurrentCulture = [System.Globalization.CultureInfo]::GetCultureInfo('de-DE')
+    'n: 1.5' | Invoke-BashYq '.n'
+} finally {
+    [System.Threading.Thread]::CurrentThread.CurrentCulture = $orig
+}
+");
+        Assert.Single(lines);
+        Assert.Equal("1.5", lines[0]);
+    }
+
     // --- Directive 12 injection probe ---
 
     [Fact]

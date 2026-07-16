@@ -1637,7 +1637,21 @@ function Format-PsCustomLine {
 # escaping, so a key containing " or \ produced invalid JSON.
 function ConvertTo-JqJsonStringLiteral {
     param([string]$s)
-    $escaped = $s -replace '\\', '\\' -replace '"', '\"' -replace "`n", '\n' -replace "`r", '\r' -replace "`t", '\t'
+    $escaped = $s -replace '\\', '\\' -replace '"', '\"' -replace "`n", '\n' -replace "`r", '\r' -replace "`t", '\t' -replace "`b", '\b' -replace "`f", '\f'
+    # Any remaining control char (< 0x20) has no short JSON escape -- emit \uXXXX
+    # so the result stays valid JSON instead of embedding a raw control byte.
+    if ($escaped -match '[\x00-\x1f]') {
+        $sb = [System.Text.StringBuilder]::new($escaped.Length)
+        foreach ($ch in $escaped.ToCharArray()) {
+            $code = [int]$ch
+            if ($code -lt 0x20) {
+                $sb.Append(('\u{0:x4}' -f $code)) | Out-Null
+            } else {
+                $sb.Append($ch) | Out-Null
+            }
+        }
+        $escaped = $sb.ToString()
+    }
     return "`"$escaped`""
 }
 
@@ -1649,8 +1663,13 @@ function ConvertTo-JqJson {
     if ($Value -is [bool]) {
         if ($Value) { return 'true' } else { return 'false' }
     }
-    if ($Value -is [int] -or $Value -is [long] -or $Value -is [double] -or $Value -is [decimal]) {
-        return "$Value"
+    if ($Value -is [int] -or $Value -is [long] -or $Value -is [decimal]) {
+        # Invariant culture: a comma-decimal locale would otherwise render "$Value"
+        # as e.g. "1,5" (invalid JSON).
+        return $Value.ToString([System.Globalization.CultureInfo]::InvariantCulture)
+    }
+    if ($Value -is [double]) {
+        return $Value.ToString('R', [System.Globalization.CultureInfo]::InvariantCulture)
     }
     if ($Value -is [string]) {
         if ($RawOutput) { return $Value }
@@ -2532,8 +2551,27 @@ function ConvertFrom-YamlValue {
     if ($s -eq 'null' -or $s -eq '~') { return $null }
     if ($s -eq 'true') { return $true }
     if ($s -eq 'false') { return $false }
-    if ($s -match '^\-?\d+$') { return [long]$s }
-    if ($s -match '^\-?\d+\.\d+$') { return [double]$s }
+    if ($s -match '^\-?\d+$') {
+        $longVal = [long]0
+        if ([long]::TryParse($s, [System.Globalization.NumberStyles]::Integer, [System.Globalization.CultureInfo]::InvariantCulture, [ref]$longVal)) {
+            return $longVal
+        }
+        # Too big for int64 (e.g. "99999999999999999999"): fall through to double
+        # (precision loss, matching jq's arbitrary-size-number handling) rather
+        # than throwing OverflowException out of the yq cmdlet.
+        $doubleVal = [double]0
+        if ([double]::TryParse($s, [System.Globalization.NumberStyles]::Float, [System.Globalization.CultureInfo]::InvariantCulture, [ref]$doubleVal)) {
+            return $doubleVal
+        }
+        return $s
+    }
+    if ($s -match '^\-?\d+\.\d+$') {
+        $doubleVal = [double]0
+        if ([double]::TryParse($s, [System.Globalization.NumberStyles]::Float, [System.Globalization.CultureInfo]::InvariantCulture, [ref]$doubleVal)) {
+            return $doubleVal
+        }
+        return $s
+    }
     # Quoted strings
     if (($s.StartsWith('"') -and $s.EndsWith('"')) -or ($s.StartsWith("'") -and $s.EndsWith("'"))) {
         return $s.Substring(1, $s.Length - 2)
