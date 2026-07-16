@@ -311,34 +311,46 @@ public sealed class InvokeBashPsCommand : PSCmdlet
 
             foreach (var p in procs)
             {
-                PsEntry? entry;
+                // Process (and every array element from GetProcesses()/GetProcessById(),
+                // including ones filtered out below) wraps a SafeProcessHandle on Windows.
+                // Dispose unconditionally per iteration; GetDotNetProcEntry materializes
+                // every property it needs (name, id, times, memory, ...) into the plain
+                // PsEntry before returning, so disposing p here is always safe.
                 try
                 {
-                    entry = GetDotNetProcEntry(p, winLookup, macLookup);
-                }
-                catch
-                {
-                    continue;
-                }
-                if (entry == null) continue;
-
-                if (!showAll && !bsdAux && !filterPid.HasValue && filterUser == null)
-                {
-                    if (currentUser == null)
+                    PsEntry? entry;
+                    try
                     {
-                        if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
-                        {
-                            currentUser = Environment.UserName;
-                        }
-                        else
-                        {
-                            currentUser = TryRun("/usr/bin/id", "-un");
-                        }
+                        entry = GetDotNetProcEntry(p, winLookup, macLookup);
                     }
-                    if (!string.IsNullOrEmpty(currentUser) && entry.User != currentUser) continue;
+                    catch
+                    {
+                        continue;
+                    }
+                    if (entry == null) continue;
+
+                    if (!showAll && !bsdAux && !filterPid.HasValue && filterUser == null)
+                    {
+                        if (currentUser == null)
+                        {
+                            if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
+                            {
+                                currentUser = Environment.UserName;
+                            }
+                            else
+                            {
+                                currentUser = TryRun("/usr/bin/id", "-un");
+                            }
+                        }
+                        if (!string.IsNullOrEmpty(currentUser) && entry.User != currentUser) continue;
+                    }
+                    if (filterUser != null && entry.User != filterUser) continue;
+                    entries.Add(entry);
                 }
-                if (filterUser != null && entry.User != filterUser) continue;
-                entries.Add(entry);
+                finally
+                {
+                    p.Dispose();
+                }
             }
         }
 
