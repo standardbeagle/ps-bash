@@ -165,7 +165,24 @@ internal sealed class Connection
             WorkerPool<SdkWorker>.DiagLog("Connection: released worker");
             if (frameWriter is not null)
             {
-                await frameWriter.CompleteAsync().ConfigureAwait(false);
+                try
+                {
+                    // CompleteAsync drains the queue and rethrows a writer failure so
+                    // the caller sees it (preserved behavior) — DisposeAsync alone
+                    // would swallow that failure ("best-effort" teardown).
+                    await frameWriter.CompleteAsync().ConfigureAwait(false);
+                }
+                finally
+                {
+                    // Always dispose the queue's BlockingCollection, even when
+                    // CompleteAsync above threw. DisposeAsync re-invokes CompleteAsync
+                    // internally, but BlockingCollection.CompleteAdding is idempotent
+                    // and the drain task is already complete, so the second call is a
+                    // cheap no-op; any exception it raises is caught inside
+                    // DisposeAsync itself, so this finally never masks the exception
+                    // (if any) from the CompleteAsync call above.
+                    await frameWriter.DisposeAsync().ConfigureAwait(false);
+                }
             }
         }
         await HostProtocol.WriteExitAsync(_stream, exitCode, ct);
