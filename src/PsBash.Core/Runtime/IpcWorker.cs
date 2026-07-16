@@ -935,11 +935,17 @@ public sealed class IpcWorker : IWorker
         // the timeout backstops. Stopped in the finally below.
         // (B) Daemon: prefer the PID cached when the host was confirmed reachable
         // (optimistic reuse or fresh spawn), so the common path never re-reads and
-        // re-parses the sidecar per command. Fall back to a single read only when
-        // it was not cached (the rare health-reuse paths).
-        int hostPid = _lifetime == Lifetime.PerInvocation
-            ? (_ownedHost?.Id ?? 0)
-            : (_cachedHostPid != 0 ? _cachedHostPid : (HostMetadata.TryRead(_scheme, _endpoint)?.Pid ?? 0));
+        // re-parses the sidecar per command. See ResolveWatchdogPid for the stale-
+        // PID race this guards against — a concurrent launcher replacing the daemon
+        // between the pre-connect cache and this now-successful connect.
+        int hostPid = ResolveWatchdogPid(
+            _lifetime,
+            _ownedHost?.Id ?? 0,
+            _cachedHostPid,
+            () => IsProcessAlive(_cachedHostPid),
+            () => HostMetadata.TryRead(_scheme, _endpoint),
+            _hostBinaryPath,
+            HostOwnership.ProbeProcess);
         using var watchdogStop = new CancellationTokenSource();
         Task? watchdog = hostPid > 0
             ? StartHostLivenessWatchdog(hostPid, hostDeadCts, watchdogStop.Token)
@@ -1036,6 +1042,64 @@ public sealed class IpcWorker : IWorker
             // watchdogStop and exits; we never block command teardown on it.
             try { watchdogStop.Cancel(); } catch { }
         }
+    }
+
+    /// <summary>
+    /// Resolve the PID the host-liveness watchdog should watch for THIS exchange.
+    /// Fixes the stale-PID watchdog race: <c>_cachedHostPid</c> is resolved BEFORE
+    /// <c>ConnectAsync</c>; if a concurrent launcher replaces the daemon (kills the
+    /// cached PID, spawns a new host) between that resolution and the connect
+    /// completing, the connection lands on the NEW host while the watchdog would
+    /// have opened the OLD (now-dead) PID — <c>GetProcessById</c> throws almost
+    /// immediately, the watchdog trips <c>hostDeadCts</c>, and the in-flight read on
+    /// the perfectly-healthy new host is aborted as a false
+    /// <see cref="HostProcessExitedException"/>.
+    ///
+    /// <para><see cref="Lifetime.PerInvocation"/> never races: the PID is the
+    /// process WE spawned and own, so it always corresponds to the connection.</para>
+    ///
+    /// <para><see cref="Lifetime.Daemon"/>: the common case reuses
+    /// <paramref name="cachedHostPid"/> (avoids a per-command sidecar re-read,
+    /// (B) above) as long as it is STILL ALIVE at this point — <paramref name="cachedPidIsAlive"/>
+    /// is a cheap in-memory <c>Process.GetProcessById</c> probe, no file I/O. A
+    /// cached PID that has already exited is exactly the race signal: something
+    /// replaced the daemon since it was cached, so the cache can no longer be
+    /// trusted. In that case <paramref name="readFreshMetadata"/> re-reads the
+    /// sidecar — taken AFTER the successful connect, so it reflects whichever host
+    /// is actually serving this connection — and the resolved PID is gated on
+    /// <see cref="HostOwnership.ExecutableMatches"/> against
+    /// <paramref name="hostBinaryPath"/> so a recycled/foreign PID (or a
+    /// mid-write/garbled sidecar) is never handed to the watchdog. Returns 0 (skip
+    /// the watchdog, fall back to the idle-timeout backstop) whenever no PID can be
+    /// trusted — a live command is never sacrificed to an unresolved watchdog PID.</para>
+    /// </summary>
+    internal static int ResolveWatchdogPid(
+        Lifetime lifetime,
+        int ownedHostId,
+        int cachedHostPid,
+        Func<bool> cachedPidIsAlive,
+        Func<HostMetadata?> readFreshMetadata,
+        string? hostBinaryPath,
+        Func<int, (bool Alive, string? ExecutablePath)> probeProcess)
+    {
+        if (lifetime == Lifetime.PerInvocation)
+            return ownedHostId;
+
+        if (cachedHostPid > 0 && cachedPidIsAlive())
+            return cachedHostPid;
+
+        // Cached PID is gone (or was never cached) — re-resolve from a fresh
+        // sidecar read taken post-connect, then gate on the executable actually
+        // matching the host binary before trusting it.
+        var fresh = readFreshMetadata();
+        if (fresh is null || fresh.Pid <= 0) return 0;
+
+        var (alive, exe) = probeProcess(fresh.Pid);
+        if (!alive) return 0;
+        if (!string.IsNullOrEmpty(hostBinaryPath) && !HostOwnership.ExecutableMatches(exe, hostBinaryPath))
+            return 0; // PID recycled to (or sidecar mid-write named) an unrelated process
+
+        return fresh.Pid;
     }
 
     /// <summary>

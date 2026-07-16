@@ -129,6 +129,15 @@ public static class HostOwnership
         => string.Equals(recorded, current, StringComparison.OrdinalIgnoreCase);
 
     /// <summary>
+    /// Public entry point for <see cref="ExecutablesMatch"/> used by callers
+    /// outside this class (e.g. the watchdog PID resolution in
+    /// <c>IpcWorker</c>) that need the same permission-tolerant executable
+    /// comparison without duplicating the normalization logic.
+    /// </summary>
+    public static bool ExecutableMatches(string? running, string recorded)
+        => ExecutablesMatch(running, recorded);
+
+    /// <summary>
     /// Compare executable paths case-insensitively after normalization. If we
     /// could not read the running executable (null), return <c>true</c> so
     /// the caller doesn't escalate to UnsafeToTouch on a permission glitch
