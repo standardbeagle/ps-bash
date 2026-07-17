@@ -327,4 +327,82 @@ public class InvokeBashFusedPipelineCommandTests : IClassFixture<SharedPwshFixtu
             "Invoke-BashFusedPipeline -Stages @(@('seq','1','5'),@('grep','zzzznope')) -Fallback { throw 'fb' }");
         Assert.Empty(result);
     }
+
+    // ── Full argv-form coverage per streamed stage (review attempt-1 blocker) ──
+    // Every argv form TryCreate ACCEPTS must have a streamed-vs-unfused byte-parity
+    // case, so the certified subset can never outrun the tested matrix.
+
+    // wc: each single selector + bare.
+    [Theory]
+    [InlineData("Invoke-BashWc",     "@('wc')")]
+    [InlineData("Invoke-BashWc -l",  "@('wc','-l')")]
+    [InlineData("Invoke-BashWc -w",  "@('wc','-w')")]
+    [InlineData("Invoke-BashWc -c",  "@('wc','-c')")]
+    [InlineData("Invoke-BashWc -m",  "@('wc','-m')")]
+    [InlineData("Invoke-BashWc -L",  "@('wc','-L')")]
+    public void Streamed_WcSelectors_ByteIdenticalToUnfused(string wcInner, string wcStage)
+        => AssertStreamedMatchesUnfused(
+            $"Invoke-BashSeq 1 30 | {wcInner}",
+            $"@(@('seq','1','30'),{wcStage})");
+
+    // grep: every accepted SINGLE-flag form (-i -v -n -c -w -F -E) + -e.
+    [Theory]
+    [InlineData("Invoke-BashGrep -i 1",    "@('grep','-i','1')")]
+    [InlineData("Invoke-BashGrep -v 1",    "@('grep','-v','1')")]
+    [InlineData("Invoke-BashGrep -w 1",    "@('grep','-w','1')")]
+    [InlineData("Invoke-BashGrep -F 1",    "@('grep','-F','1')")]
+    [InlineData("Invoke-BashGrep -n 2",    "@('grep','-n','2')")]
+    [InlineData("Invoke-BashGrep -c 1",    "@('grep','-c','1')")]
+    [InlineData("Invoke-BashGrep -e 2",    "@('grep','-e','2')")]
+    public void Streamed_GrepFlagForms_ByteIdenticalToUnfused(string grepInner, string grepStage)
+        => AssertStreamedMatchesUnfused(
+            $"Invoke-BashSeq 1 30 | {grepInner}",
+            $"@(@('seq','1','30'),{grepStage})");
+
+    [Fact]
+    public void Streamed_GrepBundle_DeclinesToFallback()
+    {
+        // A flag bundle is declined by the streaming stage → the Fallback scriptblock
+        // (the real cmdlet, with its binder decoys) runs and must match the unfused path.
+        var inner = "Invoke-BashSeq 1 30 | Invoke-BashGrep -vn 1";
+        var unfused = Render(Run(inner));
+        var fused = Render(Run(
+            $"Invoke-BashFusedPipeline -Stages @(@('seq','1','30'),@('grep','-vn','1')) -Fallback {{ {inner} }}"));
+        Assert.Equal(unfused, fused);
+    }
+
+    [Fact]
+    public void Streamed_GrepExtendedAlternation_ByteIdenticalToUnfused()
+        => AssertStreamedMatchesUnfused(
+            "Invoke-BashSeq 1 30 | Invoke-BashGrep -E '1|2'",
+            "@(@('seq','1','30'),@('grep','-E','1|2'))");
+
+    // sed: -E / -r extended, and repeated -e composition (cmdlet raw-line reparse).
+    [Fact]
+    public void Streamed_SedExtended_ByteIdenticalToUnfused()
+        => AssertStreamedMatchesUnfused(
+            "Invoke-BashSeq 1 30 | Invoke-BashSed -E 's/[0-9]+/X/'",
+            "@(@('seq','1','30'),@('sed','-E','s/[0-9]+/X/'))");
+
+    [Fact]
+    public void Streamed_SedRExtended_ByteIdenticalToUnfused()
+        => AssertStreamedMatchesUnfused(
+            "Invoke-BashSeq 1 30 | Invoke-BashSed -r 's/[0-9]+/X/'",
+            "@(@('seq','1','30'),@('sed','-r','s/[0-9]+/X/'))");
+
+    [Fact]
+    public void Streamed_SedMultipleExpressions_ByteIdenticalToUnfused()
+        => AssertStreamedMatchesUnfused(
+            "Invoke-BashSeq 1 30 | Invoke-BashSed -e 's/1/X/' -e 's/2/Y/'",
+            "@(@('seq','1','30'),@('sed','-e','s/1/X/','-e','s/2/Y/'))");
+
+    // head: joined -n7 and legacy -7.
+    [Theory]
+    [InlineData("Invoke-BashHead -n7", "@('head','-n7')")]
+    [InlineData("Invoke-BashHead -7",  "@('head','-7')")]
+    [InlineData("Invoke-BashHead -n 0", "@('head','-n','0')")]
+    public void Streamed_HeadCountForms_ByteIdenticalToUnfused(string headInner, string headStage)
+        => AssertStreamedMatchesUnfused(
+            $"Invoke-BashSeq 1 40 | {headInner}",
+            $"@(@('seq','1','40'),{headStage})");
 }

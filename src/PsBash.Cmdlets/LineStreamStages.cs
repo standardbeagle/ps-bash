@@ -168,7 +168,10 @@ internal sealed class HeadStage : ILineStreamStage
             if (a == "-n")
             {
                 i++;
-                if (i >= argv.Length || !int.TryParse(argv[i], out count) || count < 0) return null;
+                // Decline a '+'-prefixed count (rare, and int.TryParse("+5")==5 is an
+                // ambiguity we won't certify) — the cmdlet handles it on fallback.
+                if (i >= argv.Length || argv[i].StartsWith('+')
+                    || !int.TryParse(argv[i], out count) || count < 0) return null;
                 i++;
                 continue;
             }
@@ -258,12 +261,16 @@ internal sealed class WcStage : ILineStreamStage
     }
 }
 
-/// <summary><c>grep</c> pipeline mode. Certified subset: a single pattern (first
-/// operand or <c>-e</c>) with the boolean flags <c>-i -v -n -c -w -F -E</c> (and
-/// bundles of them). Declines <c>-o/-A/-B/-C/-m/-q/-r/-l/-L/-x/-s/-H/-h/-f/-P</c>,
-/// file operands, long forms, and <c>--</c> — the cmdlet handles those. Reuses
-/// grep's regex construction (<see cref="InvokeBashGrepCommand.EscapeBreMetas"/> /
-/// <see cref="InvokeBashGrepCommand.MatchLine"/>).</summary>
+/// <summary><c>grep</c> pipeline mode. Certified subset: exactly ONE pattern (the
+/// first non-flag operand or a single <c>-e</c>) with the SINGLE boolean flags
+/// <c>-i -v -n -c -w -F -E</c>. Declines flag bundles (`-in`, `-vc`: a bundle can
+/// prefix-collide with the cmdlet binder, e.g. `-InputObject`), multiple patterns,
+/// <c>-o/-A/-B/-C/-m/-q/-r/-l/-L/-x/-s/-H/-h/-f/-P</c>, file operands, long forms,
+/// and <c>--</c> — all handled by the cmdlet on fallback. Regex assembly + matching
+/// are the cmdlet's own shared helpers
+/// (<see cref="InvokeBashGrepCommand.TryBuildRegexes"/> /
+/// <see cref="InvokeBashGrepCommand.MatchLine"/>), so no ladder is duplicated here —
+/// the two paths cannot drift.</summary>
 internal sealed class GrepStage : ILineStreamStage
 {
     private readonly List<Regex> _regexes;
@@ -295,32 +302,28 @@ internal sealed class GrepStage : ILineStreamStage
                 i++;
                 continue;
             }
-            // A short-flag group of ONLY the supported boolean flags.
-            if (a.Length > 1 && a[0] == '-' && a[1] != '-')
+            // A SINGLE supported boolean flag only. Bundles (`-in`, `-vc`, …) are
+            // declined: a bundle can prefix-collide with the cmdlet's binder (e.g.
+            // `-in` prefix-matches `-InputObject`), so its unfused behavior isn't the
+            // simple char-by-char union — decline and let the cmdlet's decoy handling
+            // run on fallback, keeping the two paths byte-identical.
+            if (a.Length == 2 && a[0] == '-')
             {
-                bool ok = true;
-                bool li = ignoreCase, lv = invert, ln = lineNumbers, lc = countOnly, lw = wholeWord, lf = fixedString, le = extended;
-                foreach (var ch in a.Substring(1))
+                switch (a[1])
                 {
-                    switch (ch)
-                    {
-                        case 'i': li = true; break;
-                        case 'v': lv = true; break;
-                        case 'n': ln = true; break;
-                        case 'c': lc = true; break;
-                        case 'w': lw = true; break;
-                        case 'F': lf = true; break;
-                        case 'E': le = true; break;
-                        default: ok = false; break;
-                    }
-                    if (!ok) break;
+                    case 'i': ignoreCase = true; break;
+                    case 'v': invert = true; break;
+                    case 'n': lineNumbers = true; break;
+                    case 'c': countOnly = true; break;
+                    case 'w': wholeWord = true; break;
+                    case 'F': fixedString = true; break;
+                    case 'E': extended = true; break;
+                    default: return null; // unsupported single flag → decline
                 }
-                if (!ok) return null; // any unsupported flag char → decline
-                ignoreCase = li; invert = lv; lineNumbers = ln; countOnly = lc;
-                wholeWord = lw; fixedString = lf; extended = le;
                 i++;
                 continue;
             }
+            if (a.Length > 1 && a[0] == '-' && a[1] != '-') return null; // bundle → decline
             // Non-flag operand: the pattern (first) — a second operand is a file → decline.
             operands.Add(a);
             i++;
@@ -333,19 +336,13 @@ internal sealed class GrepStage : ILineStreamStage
             operands.RemoveAt(0);
         }
         if (operands.Count > 0) return null; // file operand(s) → file mode, decline
+        if (patterns.Count != 1) return null; // multiple patterns not certified — decline
 
-        var opts = RegexOptions.None;
-        if (ignoreCase) opts |= RegexOptions.IgnoreCase;
-        var regexes = new List<Regex>();
-        foreach (var pat in patterns)
-        {
-            string rp = fixedString ? Regex.Escape(pat)
-                      : extended ? pat
-                      : InvokeBashGrepCommand.EscapeBreMetas(pat);
-            if (wholeWord) rp = "\\b" + rp + "\\b";
-            try { regexes.Add(new Regex(rp, opts)); }
-            catch (ArgumentException) { return null; } // invalid regex → cmdlet emits the error
-        }
+        // Shared ladder with the cmdlet (lineRegexp=false — -x is declined above).
+        if (!InvokeBashGrepCommand.TryBuildRegexes(
+                patterns, fixedString, extended, wholeWord, lineRegexp: false, ignoreCase,
+                out var regexes, out _))
+            return null; // invalid regex → decline; the cmdlet emits the error
 
         return new GrepStage(regexes, invert, lineNumbers, countOnly);
     }
@@ -408,28 +405,24 @@ internal sealed class SedStage : ILineStreamStage
                 i++;
                 continue;
             }
-            if (a == "-i" || a.StartsWith("-i", StringComparison.Ordinal) && a.Length > 1 && a != "-i"
-                || a == "-f" || a == "--")
-            {
-                // in-place / script-file / end-of-options → cmdlet paths, decline.
+            // Script-file / end-of-options / any long flag → cmdlet paths, decline.
+            if (a == "-f" || a == "--" || a.StartsWith("--", StringComparison.Ordinal))
                 return null;
-            }
-            if (a.Length > 1 && a[0] == '-' && a[1] != '-')
+            // A SINGLE supported flag only. Bundles (`-nE`, `-i.bak`, …) are declined —
+            // as in grep, a bundle's unfused behavior may not be the char-by-char union
+            // under the cmdlet binder, so let the cmdlet handle it on fallback.
+            if (a.Length == 2 && a[0] == '-')
             {
-                foreach (var ch in a.Substring(1))
+                switch (a[1])
                 {
-                    switch (ch)
-                    {
-                        case 'n': suppress = true; break;
-                        case 'E': extended = true; break;
-                        case 'r': extended = true; break;
-                        default: return null; // i (in-place), f (script), unknown → decline
-                    }
+                    case 'n': suppress = true; break;
+                    case 'E': case 'r': extended = true; break;
+                    default: return null; // -i (in-place) / unknown single flag → decline
                 }
                 i++;
                 continue;
             }
-            if (a.StartsWith("--", StringComparison.Ordinal)) return null;
+            if (a.Length > 1 && a[0] == '-' && a[1] != '-') return null; // bundle / -i.bak → decline
             operands.Add(a);
             i++;
         }
@@ -454,6 +447,10 @@ internal sealed class SedStage : ILineStreamStage
         // lines), so buffer the stream — same as the cmdlet's pipeline path. Still
         // removes the per-line PSObject allocation that this phase targets.
         var lines = input as List<string> ?? new List<string>(input);
+        // SuppressDefault is a [ThreadStatic] carrier the pure ProcessLines reads; set
+        // it immediately before the call. No reset needed: every ProcessLines caller
+        // (cmdlet + this stage) sets it first, and cmdlet invocations never overlap on
+        // one runspace thread — the value is always freshly written before it is read.
         InvokeBashSedCommand.SuppressDefault = _suppress;
         var output = InvokeBashSedCommand.ProcessLines(lines.ToArray(), _commands);
         foreach (var line in output) yield return line;

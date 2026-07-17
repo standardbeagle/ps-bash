@@ -498,51 +498,13 @@ public sealed class InvokeBashGrepCommand : PSCmdlet
         // pattern (or it came from -e), operands now contains the file list.
         var fileOperands = operands;
 
-        // Build regex list (OR logic across multiple patterns).
-        var regexOpts = RegexOptions.None;
-        if (ignoreCase) regexOpts |= RegexOptions.IgnoreCase;
-        var regexes = new List<Regex>();
-        foreach (var pat in patterns)
+        // Build regex list (OR logic across multiple patterns) via the shared ladder.
+        if (!TryBuildRegexes(patterns, fixedString, extendedRegex, wholeWord, lineRegexp,
+                ignoreCase, out var regexes, out var invalidRegex))
         {
-            string regexPattern;
-            if (fixedString)
-            {
-                regexPattern = Regex.Escape(pat);
-            }
-            else if (!extendedRegex)
-            {
-                // Basic grep: escape ( ) { } | + ? when not already preceded
-                // by a backslash. The oracle uses a -replace chain with
-                // (?<!\\)\( etc. — reproduced here.
-                regexPattern = EscapeBreMetas(pat);
-            }
-            else
-            {
-                regexPattern = pat;
-            }
-
-            if (wholeWord)
-            {
-                regexPattern = "\\b" + regexPattern + "\\b";
-            }
-
-            // -x / --line-regexp: the pattern must match the WHOLE line. Anchor it; the
-            // non-capturing group keeps an inner alternation (a|b) from binding only the ends.
-            if (lineRegexp)
-            {
-                regexPattern = "^(?:" + regexPattern + ")$";
-            }
-
-            try
-            {
-                regexes.Add(new Regex(regexPattern, regexOpts));
-            }
-            catch (ArgumentException ex)
-            {
-                FileSystemHelpers.WriteBashError(this, $"grep: invalid regular expression: {ex.Message}");
-        FileSystemHelpers.SetLastExitCode(this, 2);
-                return;
-            }
+            FileSystemHelpers.WriteBashError(this, $"grep: invalid regular expression: {invalidRegex}");
+            FileSystemHelpers.SetLastExitCode(this, 2);
+            return;
         }
 
         // --- Pipeline mode ---
@@ -1082,6 +1044,36 @@ public sealed class InvokeBashGrepCommand : PSCmdlet
     /// backslash. Mirrors the oracle's <c>-replace</c> chain with
     /// <c>(?&lt;!\\)\(</c> etc.
     /// </summary>
+    /// <summary>
+    /// The grep regex-assembly ladder, shared by the cmdlet and the fused-pipeline
+    /// streaming stage so the two can never drift: per pattern, fixed → escape,
+    /// basic (BRE) → <see cref="EscapeBreMetas"/>, extended → verbatim; then the
+    /// optional word (<c>\b…\b</c>) and whole-line (<c>^(?:…)$</c>) wraps;
+    /// <c>-i</c> → <see cref="RegexOptions.IgnoreCase"/>. Returns false with
+    /// <paramref name="invalidMessage"/> set (no error emission) on the first
+    /// pattern that fails to compile — the caller decides how to report it.
+    /// </summary>
+    internal static bool TryBuildRegexes(
+        IReadOnlyList<string> patterns, bool fixedString, bool extendedRegex,
+        bool wholeWord, bool lineRegexp, bool ignoreCase,
+        out List<Regex> regexes, out string? invalidMessage)
+    {
+        regexes = new List<Regex>();
+        invalidMessage = null;
+        var opts = ignoreCase ? RegexOptions.IgnoreCase : RegexOptions.None;
+        foreach (var pat in patterns)
+        {
+            string rp = fixedString ? Regex.Escape(pat)
+                      : !extendedRegex ? EscapeBreMetas(pat)
+                      : pat;
+            if (wholeWord) rp = "\\b" + rp + "\\b";
+            if (lineRegexp) rp = "^(?:" + rp + ")$";
+            try { regexes.Add(new Regex(rp, opts)); }
+            catch (ArgumentException ex) { invalidMessage = ex.Message; return false; }
+        }
+        return true;
+    }
+
     internal static string EscapeBreMetas(string pat)
     {
         var escapeChars = new[] { '(', ')', '{', '}', '|', '+', '?' };
