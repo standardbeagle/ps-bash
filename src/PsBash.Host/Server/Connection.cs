@@ -114,7 +114,14 @@ internal sealed class Connection
         // leak into the next invocation on the shared SdkWorker runspace.
         command = PerInvocationReset + command;
 
-        IpcOutputQueue? frameWriter = sessionMode == SessionMode.Interactive
+        // `await using` binds disposal to the whole remaining scope, so ANY exit
+        // after construction — including a throw from _pool.AcquireAsync below
+        // (cancellation / pool disposed / worker-spawn failure) — disposes the
+        // queue and unpins its drain task. Disposing an unwritten/never-faulted
+        // queue is safe: DisposeAsync → CompleteAsync → CompleteAdding on an empty
+        // queue lets the drain foreach exit immediately (no hang). In interactive
+        // mode frameWriter is null and `await using` on null is a no-op.
+        await using IpcOutputQueue? frameWriter = sessionMode == SessionMode.Interactive
             ? null
             : new IpcOutputQueue(_stream, ct);
 
@@ -165,24 +172,12 @@ internal sealed class Connection
             WorkerPool<SdkWorker>.DiagLog("Connection: released worker");
             if (frameWriter is not null)
             {
-                try
-                {
-                    // CompleteAsync drains the queue and rethrows a writer failure so
-                    // the caller sees it (preserved behavior) — DisposeAsync alone
-                    // would swallow that failure ("best-effort" teardown).
-                    await frameWriter.CompleteAsync().ConfigureAwait(false);
-                }
-                finally
-                {
-                    // Always dispose the queue's BlockingCollection, even when
-                    // CompleteAsync above threw. DisposeAsync re-invokes CompleteAsync
-                    // internally, but BlockingCollection.CompleteAdding is idempotent
-                    // and the drain task is already complete, so the second call is a
-                    // cheap no-op; any exception it raises is caught inside
-                    // DisposeAsync itself, so this finally never masks the exception
-                    // (if any) from the CompleteAsync call above.
-                    await frameWriter.DisposeAsync().ConfigureAwait(false);
-                }
+                // CompleteAsync drains the queue and rethrows a writer failure so the
+                // caller sees it — the `await using` DisposeAsync at scope end would
+                // swallow that failure ("best-effort" teardown), so CompleteAsync stays
+                // here on the normal exit path. DisposeAsync re-runs CompleteAdding
+                // (idempotent) on the already-drained queue and disposes it.
+                await frameWriter.CompleteAsync().ConfigureAwait(false);
             }
         }
         await HostProtocol.WriteExitAsync(_stream, exitCode, ct);
