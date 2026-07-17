@@ -79,13 +79,7 @@ public sealed class BashOracleFixture
             var bashPsi = BashLocator.BuildPsi(host, script)!;
 
             var bashTask = RunOnePsiAsync(bashPsi, effective, extraEnv: env);
-            var psBashTask = RunOneAsync(PsBashPath!, "-c", script, effective, env,
-                extraEnv: new Dictionary<string, string>
-                {
-                    ["PSBASH_DEBUG"] = "1",
-                    ["PSBASH_TIMEOUT"] = "15",
-                    ["PSBASH_PER_INVOCATION"] = "1",
-                });
+            var psBashTask = RunPsBashAsync(script, effective, env);
 
             await Task.WhenAll(bashTask, psBashTask).ConfigureAwait(false);
             return (await bashTask, await psBashTask);
@@ -94,6 +88,27 @@ public sealed class BashOracleFixture
         {
             _bashConcurrency.Release();
         }
+    }
+
+    /// <summary>
+    /// Runs <paramref name="script"/> through ps-bash ONLY (no bash), with the
+    /// same extra env the differential comparison uses. This is the sole path in
+    /// replay mode — the bash oracle comes from a cassette, so no bash spawns.
+    /// Kept identical to the ps-bash side of <see cref="RunBothAsync"/> so a
+    /// replayed diff is byte-equivalent to a live one.
+    /// </summary>
+    public Task<OracleResult> RunPsBashAsync(
+        string script,
+        TimeSpan? timeout = null,
+        IReadOnlyDictionary<string, string>? env = null)
+    {
+        return RunOneAsync(PsBashPath!, "-c", script, timeout ?? DefaultTimeout, env,
+            extraEnv: new Dictionary<string, string>
+            {
+                ["PSBASH_DEBUG"] = "1",
+                ["PSBASH_TIMEOUT"] = "15",
+                ["PSBASH_PER_INVOCATION"] = "1",
+            });
     }
 
     /// <summary>

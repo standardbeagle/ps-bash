@@ -72,23 +72,83 @@ public static class AssertOracle
     }
 
     /// <summary>
-    /// Runs <paramref name="script"/> through bash and ps-bash, asserts identical
-    /// canonicalized stdout, stderr, and exit code.
-    /// Skips when bash or ps-bash binary is not available.
+    /// Asserts ps-bash matches the bash oracle for <paramref name="script"/>
+    /// (canonicalized stdout, stderr, exit code).
+    ///
+    /// The bash oracle is sourced by run mode (<see cref="OracleCassette.CurrentMode"/>):
+    ///   - <b>Replay</b> (default): the oracle is read from a checked-in cassette;
+    ///     ZERO bash processes spawn, only ps-bash runs live. A missing cassette
+    ///     is a hard failure (record it) — never a silent skip.
+    ///   - <b>Live</b> (<c>PSBASH_ORACLE_LIVE=1</c>): spawns real bash + ps-bash
+    ///     and diffs. Skips when no bash host.
+    ///   - <b>Record</b> (<c>PSBASH_ORACLE_RECORD=1</c>): spawns both, verifies
+    ///     they agree, then rewrites the cassette from the bash side.
     /// </summary>
     /// <param name="script">The bash script to compare.</param>
-    /// <param name="timeout">Per-process timeout; defaults to 5 s.</param>
-    /// <exception cref="XunitException">When outputs differ.</exception>
+    /// <param name="timeout">Per-process timeout; defaults to 20 s.</param>
+    /// <param name="liveOnly">
+    /// Marks a case whose oracle output is not reproducible from a frozen cassette
+    /// (env / timing / PID / machine-specific filesystem). Such cases are never
+    /// cassetted: they run live under Live/Record and skip-with-reason under
+    /// Replay rather than diffing against a stale frozen value.
+    /// </param>
+    /// <exception cref="XunitException">When outputs differ, or (Replay) the cassette is missing.</exception>
     public static async Task EqualAsync(
         string script,
-        TimeSpan? timeout = null)
+        TimeSpan? timeout = null,
+        bool liveOnly = false)
     {
-        var host = BashLocator.Find();
-        Skip.If(!host.IsAvailable, "oracle: no bash available");
         Skip.If(Fixture.PsBashPath is null, "ps-bash binary not found -- build PsBash.Shell first");
 
-        var (bashResult, psBashResult) = await Fixture.RunBothAsync(script, timeout);
+        var mode = OracleCassette.CurrentMode;
 
+        if (mode == OracleRunMode.Replay)
+        {
+            Skip.If(liveOnly,
+                "oracle: live-only case (env/timing/PID/filesystem-dependent) — " +
+                "not reproducible from a cassette. Set PSBASH_ORACLE_LIVE=1 to run it.");
+
+            if (!OracleCassette.TryLoad(script, out var cassette))
+                throw new XunitException(OracleCassette.MissingMessage(script));
+
+            var psReplay = await Fixture.RunPsBashAsync(script, timeout);
+            AssertMatches(script, cassette!.ToOracleResult(), psReplay);
+            return;
+        }
+
+        // Live or Record: both need a bash host.
+        var host = BashLocator.Find();
+        Skip.If(!host.IsAvailable, "oracle: no bash available");
+
+        var (bashResult, psBashResult) = await Fixture.RunBothAsync(script, timeout);
+        var (bashStdoutC, bashStderrC) = AssertMatches(script, bashResult, psBashResult);
+
+        // Record mode: freeze the (verified) bash oracle. liveOnly cases are
+        // deliberately not cassetted — they must always run live.
+        if (mode == OracleRunMode.Record && !liveOnly)
+        {
+            OracleCassette.Save(new OracleCassette.CassetteEntry(
+                Script: script,
+                BashVersion: host.Version,
+                Stdout: bashStdoutC,
+                Stderr: bashStderrC,
+                ExitCode: bashResult.ExitCode));
+        }
+    }
+
+    /// <summary>
+    /// Canonicalizes both sides, compares stdout/stderr/exit, and throws a diff
+    /// bundle on mismatch. Returns the canonicalized bash stdout/stderr so a
+    /// caller (Record mode) can freeze exactly what was compared. The
+    /// <paramref name="bashResult"/> may be a live bash result or a replayed
+    /// cassette result — canonicalization is idempotent, so both paths are byte
+    /// equivalent.
+    /// </summary>
+    private static (string BashStdout, string BashStderr) AssertMatches(
+        string script,
+        OracleResult bashResult,
+        OracleResult psBashResult)
+    {
         var bashStdout = Canonicalizer.Canonicalize(bashResult.Stdout);
         var psBashStdout = Canonicalizer.Canonicalize(psBashResult.Stdout);
         var bashStderr = Canonicalizer.Canonicalize(bashResult.Stderr);
@@ -103,7 +163,7 @@ public static class AssertOracle
         bool exitMatch = bashResult.ExitCode == psBashResult.ExitCode;
 
         if (stdoutMatch && stderrMatch && exitMatch)
-            return;
+            return (bashStdout, bashStderr);
 
         var bundle = BuildDiffBundle(
             script,

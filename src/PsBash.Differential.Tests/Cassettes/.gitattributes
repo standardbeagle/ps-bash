@@ -1,0 +1,3 @@
+# Oracle cassettes are recorded LF and byte-length-indexed; pin LF so a
+# CRLF checkout on Windows does not corrupt the length headers or create diff noise.
+*.cassette text eol=lf
