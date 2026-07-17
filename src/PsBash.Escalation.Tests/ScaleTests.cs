@@ -102,22 +102,30 @@ public class ScaleTests
             $"got {byteCount}. stderr={stderr}");
     }
 
-    // ── 3. 10k lines through sed ──────────────────────────────────────────────
+    // ── 3. 1M lines through sed (output-heavy, fused lane) ────────────────────
 
     /// <summary>
     /// Directive 7 (large input) / Failure-surface axis 2.
-    /// seq 1 10000 | sed 's/^/line: /' — output must have exactly 10000 lines.
+    /// seq 1 1000000 | sed 's/^/line: /' — output must have exactly 1,000,000 lines.
     /// Timeout: 30s.
+    ///
+    /// Raised from 10k → 1M once the fused-pipeline lane landed (task
+    /// 01KXQQ9QN4EVH1NA21EBE4PDZ8). This is the OUTPUT-HEAVY case: all 1M lines
+    /// stream back through the IPC return path, so it exercises the exact seam the
+    /// fused lane optimises. The 30s timeout is deliberately generous — these tests
+    /// measure SURVIVAL under scale, not speed. Reference costs: a warm host floors
+    /// around ~250ms and a cold daemon spawn adds ~3.8s, leaving ample headroom for
+    /// the streamed 1M-line body.
     ///
     /// ps-bash-specific assertion: line count is the oracle (bash and ps-bash
     /// must produce the same number of lines; content prefix is ps-bash-specific).
     /// </summary>
     [SkippableFact]
-    public async Task Scale_10kLines_Sed()
+    public async Task Scale_1MLines_Sed()
     {
 
         var (exitCode, stdout, stderr) = await ProcessRunHelper.RunAsync(
-            new[] { "-c", "seq 1 10000 | sed 's/^/line: /'" },
+            new[] { "-c", "seq 1 1000000 | sed 's/^/line: /'" },
             timeout: TimeSpan.FromSeconds(30));
 
         Assert.Equal(0, exitCode);
@@ -125,8 +133,8 @@ public class ScaleTests
         var normalized = stdout.Replace("\r\n", "\n").TrimEnd('\n');
         var lines = normalized.Split('\n', StringSplitOptions.RemoveEmptyEntries);
 
-        Assert.True(lines.Length == 10000,
-            $"Expected 10000 output lines, got {lines.Length}. stderr={stderr}");
+        Assert.True(lines.Length == 1_000_000,
+            $"Expected 1000000 output lines, got {lines.Length}. stderr={stderr}");
 
         // Spot-check first and last lines have the prefix.
         Assert.StartsWith("line: ", lines[0], StringComparison.Ordinal);
@@ -137,14 +145,22 @@ public class ScaleTests
 
     /// <summary>
     /// Directive 7 (large input) / Failure-surface axis 2.
-    /// Multi-stage pipeline with 10000 lines: seq 1 10000 | sed 's/$/!/' | wc -l.
-    /// Output must be 10000. Timeout: 30s.
+    /// Multi-stage pipeline with 1M lines: seq 1 1000000 | sed 's/$/ /' | wc -l.
+    /// Output must be 1,000,000. Timeout: 30s.
+    ///
+    /// Raised from 10k → 1M once the fused-pipeline lane landed (task
+    /// 01KXQQ9QN4EVH1NA21EBE4PDZ8). This is the REDUCE case: the three-stage chain
+    /// collapses to a single output line, so 1M lines flow through the internal fused
+    /// stages (source → transform → count) with almost no IPC return traffic —
+    /// complementing the output-heavy Scale_1MLines_Sed above. The 30s timeout is
+    /// deliberately generous — these tests measure SURVIVAL under scale, not speed
+    /// (warm floor ~250ms, cold daemon spawn ~3.8s).
     ///
     /// Note: yes | head is not used here because ps-bash buffers all pipeline
     /// data in memory — yes produces infinite data faster than head can terminate,
     /// causing OOM / timeout. seq produces finite bounded data.
     ///
-    /// This test deliberately overlaps in spirit with Scale_10kLines_Sed to probe
+    /// This test deliberately overlaps in spirit with Scale_1MLines_Sed to probe
     /// the three-stage pipeline code path specifically (source → transform → count).
     ///
     /// ps-bash-specific assertion: wc -l numeric output is the oracle.
@@ -154,13 +170,13 @@ public class ScaleTests
     {
 
         var (exitCode, stdout, stderr) = await ProcessRunHelper.RunAsync(
-            new[] { "-c", "seq 1 10000 | sed 's/$/ /' | wc -l" },
+            new[] { "-c", "seq 1 1000000 | sed 's/$/ /' | wc -l" },
             timeout: TimeSpan.FromSeconds(30));
 
         Assert.Equal(0, exitCode);
 
         var normalized = stdout.Replace("\r\n", "\n").Trim();
-        // wc -l may produce "  10000" with leading spaces or "10000 -".
+        // wc -l may produce "  1000000" with leading spaces or "1000000 -".
         var parts = normalized.Split(new[] { ' ', '\t', '\n' },
             StringSplitOptions.RemoveEmptyEntries);
         Assert.True(parts.Length >= 1,
@@ -169,8 +185,8 @@ public class ScaleTests
         Assert.True(long.TryParse(parts[0], out var lineCount),
             $"Expected numeric first token from wc -l, got: '{parts[0]}'. stdout={normalized}");
 
-        // All 10000 lines must pass through the three-stage pipeline.
-        Assert.True(lineCount == 10_000,
-            $"Expected 10000 lines, got {lineCount}. stderr={stderr}");
+        // All 1,000,000 lines must pass through the three-stage pipeline.
+        Assert.True(lineCount == 1_000_000,
+            $"Expected 1000000 lines, got {lineCount}. stderr={stderr}");
     }
 }

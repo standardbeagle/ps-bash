@@ -96,4 +96,57 @@ public class FusedStreamingBench : IClassFixture<SharedPwshFixture>
         // Also surface it if the run shows output.
         Assert.True(File.Exists(outPath), sb.ToString());
     }
+
+    /// <summary>
+    /// Throughput REGRESSION guard for the phase-2b streaming lane (task
+    /// 01KXQQ9QN4EVH1NA21EBE4PDZ8). Locks in the fused-pipeline wins measured on a
+    /// quiet-box Release build so a future refactor that quietly reintroduces
+    /// per-line PSObject/IPC framing fails CI instead of shipping.
+    ///
+    /// Opt-in only, behind the SAME <c>PSBASH_BENCH=1</c> gate as the full bench, so
+    /// the default suite (and CI) is unaffected. Drive it with:
+    ///   <code>
+    ///   PSBASH_BENCH=1 dotnet test src/PsBash.Cmdlets.Tests -f net10.0 \
+    ///       --filter "FullyQualifiedName~FusedStreaming"
+    ///   </code>
+    ///
+    /// Thresholds are 25% of the user-signed-off target (>=1M l/s for grep/cat-class),
+    /// i.e. a 250k l/s FLOOR — deliberately generous so ordinary box variance can't
+    /// flake it. Measured internal (no-IPC) 2b l/s on the quiet-box Release run at
+    /// N=100k: cat ~9.3M, grep ~340k, sed ~590k. Each chain is measured best-of-3: a
+    /// floor asserts PEAK capability ("not catastrophically slow"), so a transient
+    /// load spike on the timed run cannot drive it red. sed does NOT reach the 1M
+    /// target (whole-input buffering + full per-line cycle engine — see the class doc
+    /// and the task return), so it is floored at 25% of its own Release measurement.
+    /// </summary>
+    [Trait("bench", "phase2b")]
+    [Fact]
+    public void FusedStreaming_ThroughputRegression()
+    {
+        if (Environment.GetEnvironmentVariable("PSBASH_BENCH") != "1") return;
+
+        const int n = 100_000;
+
+        double catLps = BestStreamingLps(n, $"@(@('seq','1','{n}'),@('cat'))");
+        double grepLps = BestStreamingLps(n, $"@(@('seq','1','{n}'),@('grep','1'))");
+        double sedLps = BestStreamingLps(n, $"@(@('seq','1','{n}'),@('sed','s/1/X/'))");
+
+        // grep/cat-class: >=25% of the 1M l/s target.
+        Assert.True(catLps >= 250_000, $"cat streaming {catLps:N0} l/s < 250k floor (25% of 1M target)");
+        Assert.True(grepLps >= 250_000, $"grep streaming {grepLps:N0} l/s < 250k floor (25% of 1M target)");
+        // sed: >=25% of its Release measurement (~590k l/s @100k) = ~147k, floored at 140k.
+        Assert.True(sedLps >= 140_000, $"sed streaming {sedLps:N0} l/s < 140k floor (25% of ~590k Release measurement)");
+    }
+
+    /// <summary>Best-of-3 internal (no-IPC) streaming lines/sec for a fused stage chain.</summary>
+    private double BestStreamingLps(int n, string stages)
+    {
+        double best = 0;
+        for (int i = 0; i < 3; i++)
+        {
+            var t = Time($"$null = (Invoke-BashFusedPipeline -Stages {stages} -Fallback {{ throw 'fb' }})");
+            best = Math.Max(best, n / t.seconds);
+        }
+        return best;
+    }
 }
