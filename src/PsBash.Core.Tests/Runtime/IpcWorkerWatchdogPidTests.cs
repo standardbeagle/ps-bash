@@ -145,4 +145,45 @@ public class IpcWorkerWatchdogPidTests
 
         Assert.Equal(333, pid);
     }
+
+    // ---- IpcWorker.ShouldWatchProcess ----
+    //
+    // The gate applied where StartHostLivenessWatchdog actually opens its
+    // process handle: ResolveWatchdogPid already gates its OWN fresh-sidecar
+    // path against HostOwnership.ExecutableMatches, but a PID it hands back
+    // (cached-fast-path OR PerInvocation's owned PID) can still be recycled by
+    // the OS between that resolution and the handle-open. This is the
+    // re-verification at the handle-open site.
+
+    [Fact]
+    public void ShouldWatchProcess_ExecutableMatches_ReturnsTrue()
+    {
+        Assert.True(IpcWorker.ShouldWatchProcess(HostBinary, HostBinary));
+    }
+
+    [Fact]
+    public void ShouldWatchProcess_PidRecycledToUnrelatedExecutable_ReturnsFalse()
+    {
+        // The PID this launcher resolved now belongs to a foreign process —
+        // the reused-PID race the finding describes. Must not watch it.
+        Assert.False(IpcWorker.ShouldWatchProcess("/opt/other/unrelated-process", HostBinary));
+    }
+
+    [Fact]
+    public void ShouldWatchProcess_UnreadableExecutablePath_TreatedAsMatch()
+    {
+        // proc.MainModule?.FileName can come back null on a permission
+        // denied / 32-64 bit bridge failure. HostOwnership.ExecutableMatches
+        // treats that as "cannot prove foreign" so a platform quirk never
+        // silently disables the watchdog.
+        Assert.True(IpcWorker.ShouldWatchProcess(null, HostBinary));
+    }
+
+    [Fact]
+    public void ShouldWatchProcess_NoHostBinaryPathConfigured_ReturnsTrue()
+    {
+        // Nothing to gate against — treat as a match (existing watchdog
+        // behavior when hostBinaryPath is unset).
+        Assert.True(IpcWorker.ShouldWatchProcess("/opt/other/unrelated-process", null));
+    }
 }

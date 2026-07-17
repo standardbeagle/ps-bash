@@ -58,7 +58,15 @@ internal sealed class Program
             var priorInteractive = Environment.GetEnvironmentVariable("PSBASH_INTERACTIVE");
             Environment.SetEnvironmentVariable("PSBASH_INTERACTIVE", "1");
             using var iCts = new CancellationTokenSource();
-            Console.CancelKeyPress += (_, e) => { e.Cancel = true; iCts.Cancel(); };
+            // Raw cts.Cancel() would throw ObjectDisposedException if this
+            // handler fires after iCts is disposed below (a late Ctrl-C
+            // racing teardown); TryCancel swallows that race. The handler
+            // must also be unsubscribed in the finally — Console.CancelKeyPress
+            // is a static event, so a bare `+=` here would keep this closure
+            // (and its disposed iCts) alive and reachable for the rest of the
+            // process if anything else re-enters this code path.
+            ConsoleCancelEventHandler iCancelHandler = (_, e) => { e.Cancel = true; iCts.TryCancel(); };
+            Console.CancelKeyPress += iCancelHandler;
             await using var iDeathWatcher = ParentDeathWatcher.TryCreate(iLauncherPid, iCts);
 
             // Startup type-ahead: build the SDK runspace (the slow part) on a background thread so the
@@ -71,6 +79,7 @@ internal sealed class Program
             }
             finally
             {
+                Console.CancelKeyPress -= iCancelHandler;
                 try
                 {
                     var w = await interactiveWorkerTask;
@@ -82,8 +91,23 @@ internal sealed class Program
         }
 
         using var cts = new CancellationTokenSource();
-        Console.CancelKeyPress += (_, e) => { e.Cancel = true; cts.Cancel(); };
+        // Same TryCancel + unsubscribe discipline as the interactive branch
+        // above (see the comment there): raw Cancel() can race disposal, and
+        // the static event must not outlive this scope's cts.
+        ConsoleCancelEventHandler cancelHandler = (_, e) => { e.Cancel = true; cts.TryCancel(); };
+        Console.CancelKeyPress += cancelHandler;
+        try
+        {
+            return await RunNonInteractiveAsync(args, cts);
+        }
+        finally
+        {
+            Console.CancelKeyPress -= cancelHandler;
+        }
+    }
 
+    private static async Task<int> RunNonInteractiveAsync(string[] args, CancellationTokenSource cts)
+    {
         // Warm a pool of isolated runspaces in the background — runspace creation
         // is the slow part (~2-8 s) and the pool keeps spares hot so steady-state
         // command latency is near zero. The transport starts listening while the

@@ -948,7 +948,7 @@ public sealed class IpcWorker : IWorker
             HostOwnership.ProbeProcess);
         using var watchdogStop = new CancellationTokenSource();
         Task? watchdog = hostPid > 0
-            ? StartHostLivenessWatchdog(hostPid, hostDeadCts, watchdogStop.Token)
+            ? StartHostLivenessWatchdog(hostPid, _hostBinaryPath, hostDeadCts, watchdogStop.Token)
             : null;
 
         try
@@ -1103,6 +1103,24 @@ public sealed class IpcWorker : IWorker
     }
 
     /// <summary>
+    /// The PID-reuse gate applied right where the watchdog opens its process
+    /// handle (see <see cref="StartHostLivenessWatchdog"/>): a resolved PID —
+    /// however it was resolved — can still be recycled by the OS in the window
+    /// between resolution and this handle-open. When <paramref name="hostBinaryPath"/>
+    /// is unset there is nothing to gate against (treat as a match). Otherwise
+    /// delegate to <see cref="HostOwnership.ExecutableMatches"/>, which already
+    /// treats an unreadable running-executable path (permission denied / 32-64
+    /// bridge) as a match so a platform quirk never disables the watchdog.
+    /// Extracted as a pure seam so the branch is unit-testable without a real
+    /// process handle.
+    /// </summary>
+    internal static bool ShouldWatchProcess(string? runningExecutablePath, string? hostBinaryPath)
+    {
+        if (string.IsNullOrEmpty(hostBinaryPath)) return true;
+        return HostOwnership.ExecutableMatches(runningExecutablePath, hostBinaryPath);
+    }
+
+    /// <summary>
     /// Trips <paramref name="hostDeadCts"/> when the host process
     /// <paramref name="pid"/> exits, so a dead host aborts the pending read
     /// instead of hanging it (the Windows AF_UNIX killed-peer gap). EVENT-DRIVEN
@@ -1113,14 +1131,38 @@ public sealed class IpcWorker : IWorker
     /// host death immediately instead of up to 150 ms late. Bounded by
     /// <paramref name="stop"/>, which the exchange cancels on completion.
     /// Best-effort: any failure leaves the timeout backstops intact.
+    ///
+    /// <para>PID-reuse gate: <see cref="ResolveWatchdogPid"/> already gates its
+    /// OWN fresh-sidecar-read path against <see cref="HostOwnership.ExecutableMatches"/>,
+    /// but the cached-PID fast path (and the plain <see cref="Lifetime.PerInvocation"/>
+    /// PID) reach here unverified, and — regardless of path — a resolved PID can
+    /// still be recycled by the OS in the window between <see cref="ResolveWatchdogPid"/>
+    /// returning and THIS handle-open. Re-verify the executable right here, at the
+    /// point the handle is actually opened, before trusting
+    /// <see cref="Process.WaitForExitAsync"/> on it — watching a foreign process
+    /// would silently disable dead-host detection for the whole exchange instead
+    /// of erroring loudly.</para>
     /// </summary>
-    private static Task StartHostLivenessWatchdog(int pid, CancellationTokenSource hostDeadCts, CancellationToken stop)
+    private static Task StartHostLivenessWatchdog(
+        int pid, string? hostBinaryPath, CancellationTokenSource hostDeadCts, CancellationToken stop)
         => Task.Run(async () =>
         {
             try
             {
                 using var proc = Process.GetProcessById(pid);
                 if (proc.HasExited) { try { hostDeadCts.Cancel(); } catch { } return; }
+
+                string? exe = null;
+                try { exe = proc.MainModule?.FileName; }
+                catch { /* permission denied / 32-64 bridge; leave exe null (treated as match) */ }
+                if (!ShouldWatchProcess(exe, hostBinaryPath))
+                {
+                    // Foreign process at this PID — skip the watchdog for
+                    // this exchange rather than watch the wrong process; the
+                    // idle-timeout backstop still applies.
+                    return;
+                }
+
                 await proc.WaitForExitAsync(stop).ConfigureAwait(false);
                 // Returned without cancellation ⇒ the host PROCESS exited.
                 try { hostDeadCts.Cancel(); } catch { }
