@@ -529,11 +529,20 @@ public sealed class InvokeBashSortCommand : PSCmdlet
 
             // (gHuman/gGeneral use a SizeBytes-aware or general-numeric value
             // precomputed into dGlobalNum during decoration — same array as -n.)
+            // dGlobalNum/dGlobalMonth are allocated ONLY when their mode flag is
+            // set (see the decoration loop above) — reading them unconditionally
+            // here (even as unused args when useNumeric2/gMonth is false) would
+            // null-deref for a plain lexicographic/-f sort. Only touch the array
+            // that matches the active mode; the other pair of "unused" values
+            // must never dereference a possibly-null array.
             bool useNumeric2 = gHuman || gGeneral || gNumeric;
+            double numA = useNumeric2 ? dGlobalNum![ai] : 0.0;
+            double numB = useNumeric2 ? dGlobalNum![bi] : 0.0;
+            int monthA = gMonth ? dGlobalMonth![ai] : 0;
+            int monthB = gMonth ? dGlobalMonth![bi] : 0;
             int cmp2 = CompareByMode(
                 useNumeric2, gMonth, gFold,
-                dGlobalNum![ai], dGlobalNum![bi],
-                dGlobalMonth![ai], dGlobalMonth![bi],
+                numA, numB, monthA, monthB,
                 dGlobalText![ai], dGlobalText![bi]);
             if (gReverse) cmp2 = -cmp2;
             return Math.Sign(cmp2);
