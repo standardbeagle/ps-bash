@@ -360,7 +360,7 @@ public sealed class FormatStyledCommand : PSCmdlet
             long max = 0;
             foreach (var i in infos) { if (i is FileInfo f) { long s; try { s = f.Length; } catch { s = 0; } max = Math.Max(max, s); } }
             foreach (var i in infos) { rows.Add(BuildFsRow(i, max)); }
-            columns = FsColumns; sheet = "fs"; return true;
+            columns = (string[])FsColumns.Clone(); sheet = "fs"; return true;
         }
 
         // (2) ps-bash typed output: dispatch by the row's uniform Strata kind.
@@ -376,12 +376,12 @@ public sealed class FormatStyledCommand : PSCmdlet
             case "StatEntry":
                 if (!SheetAllows("fs")) { return false; }
                 { long max = MaxSizeBytes(); foreach (var r in _rows) { rows.Add(ProjectFsLike(r, max)); } }
-                columns = FsColumns; sheet = "fs"; return true;
+                columns = (string[])FsColumns.Clone(); sheet = "fs"; return true;
 
             case "FindEntry":
                 if (!SheetAllows("fs")) { return false; }
                 { long max = MaxSizeBytes(); foreach (var r in _rows) { rows.Add(ProjectFindEntry(r, max)); } }
-                columns = FsColumns; sheet = "fs"; return true;
+                columns = (string[])FsColumns.Clone(); sheet = "fs"; return true;
 
             case "DuEntry":
                 if (!SheetAllows("object")) { return false; }

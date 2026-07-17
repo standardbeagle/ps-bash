@@ -228,6 +228,57 @@ public class FormatStyledCommandTests : IClassFixture<SharedPwshFixture>
         Assert.Equal(expectedClass, Prop(row, "class"));
     }
 
+    /// <summary>
+    /// Drives the private <c>TryBuildCuratedView</c> seam directly via reflection (no runspace
+    /// needed — <c>UniformKind</c>/<c>SheetAllows</c>/<c>MaxSizeBytes</c> only read plain fields).
+    /// </summary>
+    private static string[] BuildCuratedFsColumns(PSObject row)
+    {
+        var cmd = new FormatStyledCommand();
+        var rowsField = typeof(FormatStyledCommand).GetField(
+            "_rows", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!;
+        var rows = (System.Collections.IList)rowsField.GetValue(cmd)!;
+        rows.Add(row);
+
+        var method = typeof(FormatStyledCommand).GetMethod(
+            "TryBuildCuratedView", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!;
+        var args = new object?[] { null, null, null, null };
+        method.Invoke(cmd, args);
+        return (string[])args[1]!;
+    }
+
+    [Fact]
+    public void TryBuildCuratedView_TwoInvocations_ReturnDistinctColumnsArrays()
+    {
+        // FsColumns is a single shared `static readonly string[]`. Handing that same array
+        // reference out as the `columns` out-param (and from there into the cmdlet's own
+        // `Property`) would let an in-place edit on one invocation's result corrupt every
+        // other invocation sharing the static — the fix clones at each assignment site.
+        var ls1 = Typed("PsBash.LsEntry", new System.Collections.Hashtable
+        {
+            { "Name", "a.cs" }, { "IsDirectory", false }, { "IsSymlink", false },
+            { "SizeBytes", 10L }, { "LastModified", DateTime.Now },
+        });
+        var ls2 = Typed("PsBash.LsEntry", new System.Collections.Hashtable
+        {
+            { "Name", "b.cs" }, { "IsDirectory", false }, { "IsSymlink", false },
+            { "SizeBytes", 20L }, { "LastModified", DateTime.Now },
+        });
+
+        var columns1 = BuildCuratedFsColumns(ls1);
+        var columns2 = BuildCuratedFsColumns(ls2);
+
+        Assert.False(ReferenceEquals(columns1, columns2),
+            "each invocation must get its own columns array, not a shared static");
+
+        // Mutating one invocation's array must not corrupt the other (or the shared static
+        // that seeds future invocations).
+        columns1[0] = "CORRUPTED";
+        Assert.NotEqual("CORRUPTED", columns2[0]);
+        var columns3 = BuildCuratedFsColumns(ls2);
+        Assert.NotEqual("CORRUPTED", columns3[0]);
+    }
+
     [Fact]
     public void FilesystemView_GciFsSheet_ParsesToCuratedColumnsWithTagSizeAndTime()
     {
