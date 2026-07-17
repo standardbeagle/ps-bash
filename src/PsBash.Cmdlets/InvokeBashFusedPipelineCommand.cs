@@ -1,4 +1,5 @@
 using System.Collections.ObjectModel;
+using System.Linq;
 using System.Management.Automation;
 using System.Text;
 
@@ -79,10 +80,26 @@ public sealed class InvokeBashFusedPipelineCommand : PSCmdlet
 {
     /// <summary>
     /// The transpiled inner pipeline (the exact text the unfused path would have
-    /// emitted), wrapped as a scriptblock by the emitter.
+    /// emitted), wrapped as a scriptblock by the emitter. In phase-2b this is the
+    /// FALLBACK path: it runs when <see cref="Stages"/> is absent or any stage's
+    /// argv is outside its streaming core's certified subset.
     /// </summary>
     [Parameter(Mandatory = true, Position = 0)]
+    [Alias("Fallback")]
     public ScriptBlock Pipeline { get; set; } = null!;
+
+    /// <summary>
+    /// Structured stage list emitted by <c>PsEmitter</c> when every stage's args are
+    /// plain literals (phase-2b): each element is an <c>object[]</c> of
+    /// <c>[commandName, arg1, arg2, …]</c>. When present AND every stage resolves to
+    /// a streaming core (<see cref="LineStreamRegistry.TryCreate"/>), the fused
+    /// pipeline runs the lazy line→line chain directly — no per-line
+    /// <c>PSCustomObject</c>, no PowerShell pipeline dispatch (profile bottleneck #2).
+    /// Any stage that declines forces the <see cref="Pipeline"/> fallback, so
+    /// correctness is preserved for every case the streaming cores do not (yet) cover.
+    /// </summary>
+    [Parameter]
+    public object[]? Stages { get; set; }
 
     /// <summary>
     /// Flush the accumulated output once it reaches this many chars. 32 KiB keeps
@@ -92,8 +109,18 @@ public sealed class InvokeBashFusedPipelineCommand : PSCmdlet
 
     protected override void EndProcessing()
     {
-        // Run the inner pipeline in the current scope so $global:LASTEXITCODE the
-        // last stage sets is visible to the host.
+        // Phase-2b streaming lane: when the emitter supplied a plain-arg stage list
+        // and every stage has a certified streaming core, run the composed lazy
+        // line→line chain directly (no per-line PSObject). Any decline → fall through
+        // to the phase-2a scriptblock path below (byte-identical, always correct).
+        if (Stages is { Length: > 0 } && TryBuildStreamingStages(out var stages))
+        {
+            RunStreaming(stages);
+            return;
+        }
+
+        // Fallback (phase-2a): run the inner pipeline in the current scope so
+        // $global:LASTEXITCODE the last stage sets is visible to the host.
         Collection<PSObject> results = InvokeCommand.InvokeScript(
             useLocalScope: false,
             scriptBlock: Pipeline,
@@ -110,6 +137,76 @@ public sealed class InvokeBashFusedPipelineCommand : PSCmdlet
             }
         }
         Flush(sb);
+    }
+
+    /// <summary>
+    /// Resolve every element of <see cref="Stages"/> to a streaming core. All-or-nothing:
+    /// returns false (and the caller uses the fallback) if any stage's command/argv is
+    /// not in a streaming core's certified subset. No stage is executed here — building
+    /// is pure, so a late decline never leaves partial output.
+    /// </summary>
+    private bool TryBuildStreamingStages(out List<ILineStreamStage> stages)
+    {
+        stages = new List<ILineStreamStage>();
+        foreach (var element in Stages!)
+        {
+            var argv = ToArgv(element);
+            if (argv is null || argv.Length == 0) return false;
+            var name = argv[0];
+            var rest = argv.Length > 1 ? argv[1..] : System.Array.Empty<string>();
+            if (!LineStreamRegistry.TryCreate(name, rest, out var stage)) return false;
+            stages.Add(stage);
+        }
+        return stages.Count > 0;
+    }
+
+    /// <summary>Coerce one stage element (a PS <c>@('cmd','a','b')</c> literal) into a
+    /// <c>string[]</c> of command-name + args. Returns null on an unexpected shape.</summary>
+    private static string[]? ToArgv(object? element)
+    {
+        if (element is PSObject pso) element = pso.BaseObject;
+        switch (element)
+        {
+            case string[] sa:
+                return sa;
+            case object[] oa:
+                return oa.Select(o => (o is PSObject p ? p.BaseObject : o)?.ToString() ?? string.Empty).ToArray();
+            case System.Collections.IEnumerable en when element is not string:
+                return en.Cast<object?>()
+                    .Select(o => (o is PSObject p ? p.BaseObject : o)?.ToString() ?? string.Empty)
+                    .ToArray();
+            default:
+                return null;
+        }
+    }
+
+    /// <summary>
+    /// Run the composed streaming chain and batch its output exactly like the
+    /// phase-2a fallback (one <c>NoTrailingNewline</c> frame per ~32 KiB). Each
+    /// yielded line renders as <c>line + Environment.NewLine</c> — byte-identical to
+    /// the unfused per-object serialization. The LAST stage's exit code becomes
+    /// <c>$global:LASTEXITCODE</c>, matching an unfused pipe's exit semantics.
+    /// </summary>
+    private void RunStreaming(List<ILineStreamStage> stages)
+    {
+        IEnumerable<string> cur = System.Array.Empty<string>();
+        foreach (var stage in stages) cur = stage.Run(cur);
+
+        var nl = System.Environment.NewLine;
+        var sb = new StringBuilder(FlushThresholdChars + 4096);
+        foreach (var line in cur)
+        {
+            sb.Append(line).Append(nl);
+            if (sb.Length >= FlushThresholdChars)
+            {
+                Flush(sb);
+            }
+        }
+        Flush(sb);
+
+        // Exit code is valid only after the chain is fully enumerated (grep sets it
+        // during iteration). Propagate the terminal stage's code, like a real pipe.
+        FileSystemHelpers.SetLastExitCode(this, stages[^1].ExitCode);
     }
 
     private void Flush(StringBuilder sb)

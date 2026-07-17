@@ -169,4 +169,162 @@ public class InvokeBashFusedPipelineCommandTests : IClassFixture<SharedPwshFixtu
         var q = f.Replace("\\", "\\\\");
         AssertFusedMatchesUnfused($"Invoke-BashCat '{q}' | Invoke-BashCut '-d,' -f2 | Invoke-BashTr a-z A-Z");
     }
+
+    // ── Phase-2b: streaming-core lane (-Stages) ──────────────────────────────
+    //
+    // These prove the STREAMING path (no per-line PSObject) is byte-identical to
+    // the unfused per-object path. The -Fallback scriptblock THROWS: if any stage
+    // declined and the cmdlet fell back, the throw surfaces and the test fails —
+    // so a green test also proves the streaming lane actually ran.
+
+    /// <summary>Assert the streaming (-Stages) lane matches the unfused pipeline
+    /// AND that the streaming lane (not the fallback) was taken.</summary>
+    private void AssertStreamedMatchesUnfused(string unfusedInner, string stagesLiteral)
+    {
+        var unfused = Render(Run(unfusedInner));
+        var streamed = Render(Run(
+            $"Invoke-BashFusedPipeline -Stages {stagesLiteral} -Fallback {{ throw 'fell back to scriptblock lane' }}"));
+        Assert.Equal(unfused, streamed);
+    }
+
+    [Fact]
+    public void Streamed_SeqProducer_ByteIdenticalToUnfused()
+        => AssertStreamedMatchesUnfused("Invoke-BashSeq 1 20", "@(,@('seq','1','20'))");
+
+    [Fact]
+    public void Streamed_SeqEqualWidth_ByteIdenticalToUnfused()
+        => AssertStreamedMatchesUnfused("Invoke-BashSeq -w 8 12", "@(,@('seq','-w','8','12'))");
+
+    [Fact]
+    public void Streamed_SeqSeparator_ByteIdenticalToUnfused()
+        => AssertStreamedMatchesUnfused("Invoke-BashSeq -s ',' 1 5", "@(,@('seq','-s',',','1','5'))");
+
+    [Fact]
+    public void Streamed_SeqSed_ByteIdenticalToUnfused()
+        => AssertStreamedMatchesUnfused(
+            "Invoke-BashSeq 1 30 | Invoke-BashSed 's/1/X/'",
+            "@(@('seq','1','30'),@('sed','s/1/X/'))");
+
+    [Fact]
+    public void Streamed_SeqSedGlobal_ByteIdenticalToUnfused()
+        => AssertStreamedMatchesUnfused(
+            "Invoke-BashSeq 1 40 | Invoke-BashSed 's/1/X/g'",
+            "@(@('seq','1','40'),@('sed','s/1/X/g'))");
+
+    [Fact]
+    public void Streamed_SeqSedSuppressPrint_ByteIdenticalToUnfused()
+        => AssertStreamedMatchesUnfused(
+            "Invoke-BashSeq 1 40 | Invoke-BashSed -n '/3/p'",
+            "@(@('seq','1','40'),@('sed','-n','/3/p'))");
+
+    [Fact]
+    public void Streamed_SeqGrep_ByteIdenticalToUnfused()
+        => AssertStreamedMatchesUnfused(
+            "Invoke-BashSeq 1 50 | Invoke-BashGrep 3",
+            "@(@('seq','1','50'),@('grep','3'))");
+
+    [Fact]
+    public void Streamed_SeqGrepInvertLineNumber_ByteIdenticalToUnfused()
+        => AssertStreamedMatchesUnfused(
+            "Invoke-BashSeq 1 20 | Invoke-BashGrep -v -n 1",
+            "@(@('seq','1','20'),@('grep','-v','-n','1'))");
+
+    [Fact]
+    public void Streamed_SeqGrepCount_ByteIdenticalToUnfused()
+        => AssertStreamedMatchesUnfused(
+            "Invoke-BashSeq 1 50 | Invoke-BashGrep -c 1",
+            "@(@('seq','1','50'),@('grep','-c','1'))");
+
+    [Fact]
+    public void Streamed_SeqCat_ByteIdenticalToUnfused()
+        => AssertStreamedMatchesUnfused(
+            "Invoke-BashSeq 1 25 | Invoke-BashCat",
+            "@(@('seq','1','25'),@('cat'))");
+
+    [Fact]
+    public void Streamed_SeqRev_ByteIdenticalToUnfused()
+        => AssertStreamedMatchesUnfused(
+            "Invoke-BashSeq 8 13 | Invoke-BashRev",
+            "@(@('seq','8','13'),@('rev'))");
+
+    [Fact]
+    public void Streamed_SeqHead_ByteIdenticalToUnfused()
+        => AssertStreamedMatchesUnfused(
+            "Invoke-BashSeq 1 100 | Invoke-BashHead -n 7",
+            "@(@('seq','1','100'),@('head','-n','7'))");
+
+    [Fact]
+    public void Streamed_SeqWcLines_ByteIdenticalToUnfused()
+        => AssertStreamedMatchesUnfused(
+            "Invoke-BashSeq 1 37 | Invoke-BashWc -l",
+            "@(@('seq','1','37'),@('wc','-l'))");
+
+    [Fact]
+    public void Streamed_SeqSedWc_EndToEnd_ByteIdenticalToUnfused()
+        => AssertStreamedMatchesUnfused(
+            "Invoke-BashSeq 1 200 | Invoke-BashSed 's/1/X/' | Invoke-BashWc -l",
+            "@(@('seq','1','200'),@('sed','s/1/X/'),@('wc','-l'))");
+
+    [Fact]
+    public void Streamed_SeqGrepHead_MultiStage_ByteIdenticalToUnfused()
+        => AssertStreamedMatchesUnfused(
+            "Invoke-BashSeq 1 500 | Invoke-BashGrep 1 | Invoke-BashHead -n 4",
+            "@(@('seq','1','500'),@('grep','1'),@('head','-n','4'))");
+
+    [Fact]
+    public void Streamed_GrepNoMatch_ExitCodeOne()
+    {
+        var lec = Run(
+            "$null = (Invoke-BashFusedPipeline -Stages @(@('seq','1','5'),@('grep','zzz')) -Fallback { throw 'fb' }); $global:LASTEXITCODE")
+            .Select(o => o.BaseObject).LastOrDefault();
+        Assert.Equal(1, Convert.ToInt32(lec));
+    }
+
+    [Fact]
+    public void Streamed_GrepMatch_ExitCodeZero()
+    {
+        var lec = Run(
+            "$null = (Invoke-BashFusedPipeline -Stages @(@('seq','1','5'),@('grep','3')) -Fallback { throw 'fb' }); $global:LASTEXITCODE")
+            .Select(o => o.BaseObject).LastOrDefault();
+        Assert.Equal(0, Convert.ToInt32(lec));
+    }
+
+    [Fact]
+    public void Streamed_HeadEarlyExit_DoesNotEnumerateWholeProducer()
+    {
+        // head -n 3 over a 2,000,000-line seq: if head did not stop the upstream
+        // generator this would take seconds / large memory. The lazy chain stops
+        // pulling after 3 lines, so it returns instantly. (Correctness of the
+        // early-exit; the byte parity is covered above.)
+        var streamed = Render(Run(
+            "Invoke-BashFusedPipeline -Stages @(@('seq','1','2000000'),@('head','-n','3')) -Fallback { throw 'fb' }"));
+        Assert.Equal("1" + Environment.NewLine + "2" + Environment.NewLine + "3" + Environment.NewLine, streamed);
+    }
+
+    [Fact]
+    public void Streamed_UnsupportedStageArgv_FallsBackToScriptblock()
+    {
+        // grep -o is NOT in the streaming subset → the whole chain must use the
+        // Fallback scriptblock. Here the fallback DOES the real work and must match
+        // the unfused pipeline (proving decline → correct fallback, not a throw).
+        var inner = "Invoke-BashSeq 1 20 | Invoke-BashGrep -o 1";
+        var unfused = Render(Run(inner));
+        var fused = Render(Run(
+            $"Invoke-BashFusedPipeline -Stages @(@('seq','1','20'),@('grep','-o','1')) -Fallback {{ {inner} }}"));
+        Assert.Equal(unfused, fused);
+    }
+
+    [Fact]
+    public void Streamed_UnicodeContent_ByteIdenticalToUnfused()
+        => AssertStreamedMatchesUnfused(
+            "Invoke-BashSeq 1 5 | Invoke-BashSed 's/3/café🚀/'",
+            "@(@('seq','1','5'),@('sed','s/3/café🚀/'))");
+
+    [Fact]
+    public void Streamed_EmptyGrepOutput_ProducesNothing()
+    {
+        var result = Run(
+            "Invoke-BashFusedPipeline -Stages @(@('seq','1','5'),@('grep','zzzznope')) -Fallback { throw 'fb' }");
+        Assert.Empty(result);
+    }
 }
