@@ -107,6 +107,28 @@ public class InvokeBashPsCommandTests : IClassFixture<SharedPwshFixture>
         Assert.Contains(currentPid, pids);
     }
 
+    [Theory]
+    [InlineData("abc")]        // wholly non-integer
+    [InlineData("1,abc")]      // mixed valid + invalid in a list
+    public void Ps_MalformedPidList_ErrorsWithExit1AndNoEntries(string operand)
+    {
+        // GNU ps errors ("error: process ID list syntax error", exit 1) on a
+        // malformed -p operand rather than silently listing every process.
+        // Verified against the WSL oracle: `ps -p abc` / `ps -p 1,abc` ->
+        // exit 1, stderr "error: process ID list syntax error".
+        var pwsh = _fixture.AcquireFresh();
+        var results = pwsh.AddScript($"Invoke-BashPs -p '{operand}'; $LASTEXITCODE").Invoke();
+        var errs = pwsh.Streams.Error.ToArray();
+        pwsh.Commands.Clear();
+
+        Assert.NotEmpty(errs);
+        Assert.Contains(errs, e => (e.Exception?.Message ?? e.ToString())
+            .Contains("process ID list syntax error", System.StringComparison.OrdinalIgnoreCase));
+        // No process rows leaked — only the trailing $LASTEXITCODE value.
+        Assert.Single(results);
+        Assert.Equal("1", results[0]?.ToString());
+    }
+
     [Fact]
     public void Ps_UnknownSortSpecifier_ErrorsWithExit1AndNoEntries()
     {
@@ -232,15 +254,12 @@ public class InvokeBashPsCommandTests : IClassFixture<SharedPwshFixture>
     [Fact]
     public void Ps_InjectionInDashP_NoExceptionFallsThroughToEmpty()
     {
-        // -p value containing $(throw 'pwn') is a non-integer. The cmdlet must
-        // not evaluate it — int.TryParse fails silently, filterPid stays null
-        // (or matches nothing). No throw, no "pwn" in output, no process.
+        // -p value containing $(throw 'pwn') is a non-integer token. The cmdlet
+        // must NOT evaluate it — int.TryParse fails, so this is now a GNU
+        // "process ID list syntax error" (exit 1, no rows) rather than a silent
+        // unfiltered listing. Either way the security invariant holds: the
+        // payload is never evaluated and no output row contains "pwn".
         var results = RunRaw("Invoke-BashPs -p '$(throw ''pwn'')'");
-        // Either empty (filter never matched any PID — non-Linux path takes
-        // the no-filter branch and returns all processes only when filterPid
-        // is set; we set it to null on parse fail so it falls back to all
-        // processes; we want no error, no exception). Just assert we did not
-        // throw and no output line contains "pwn".
         Assert.DoesNotContain(results, o =>
             (o.Properties["BashText"]?.Value as string ?? "")
                 .Contains("pwn", System.StringComparison.OrdinalIgnoreCase));

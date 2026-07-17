@@ -96,20 +96,25 @@ public sealed class InvokeBashPsCommand : PSCmdlet
     /// <summary>
     /// Parses a bash <c>ps -p</c> operand: GNU accepts a comma- and/or
     /// space-separated list of PIDs (<c>-p 1,2</c>, <c>-p "1 2"</c>), not just
-    /// a single integer. Returns null (caller drops the filter, Directive 12)
-    /// when nothing in the operand parses as an integer.
+    /// a single integer. Returns <c>true</c> with the parsed PID set on success.
+    /// Returns <c>false</c> (a syntax error) when the operand contains any
+    /// non-integer token or yields no PID at all — GNU ps errors with
+    /// "process ID list syntax error" (exit 1) rather than silently listing
+    /// every process. Verified against the WSL oracle (<c>ps -p abc</c> /
+    /// <c>ps -p 1,abc</c> → that message, exit 1).
     /// </summary>
-    private static HashSet<int>? ParsePidList(string value)
+    private static bool TryParsePidList(string value, out HashSet<int> pids)
     {
-        HashSet<int>? result = null;
+        pids = new HashSet<int>();
         foreach (var token in value.Split(new[] { ',', ' ' }, StringSplitOptions.RemoveEmptyEntries))
         {
-            if (int.TryParse(token, NumberStyles.Integer, CultureInfo.InvariantCulture, out var pid))
+            if (!int.TryParse(token, NumberStyles.Integer, CultureInfo.InvariantCulture, out var pid))
             {
-                (result ??= new HashSet<int>()).Add(pid);
+                return false; // non-integer token → GNU "process ID list syntax error".
             }
+            pids.Add(pid);
         }
-        return result;
+        return pids.Count > 0; // an all-separator / empty operand is also a syntax error.
     }
 
     private static Process? TryGetProcessById(int pid)
@@ -159,12 +164,13 @@ public sealed class InvokeBashPsCommand : PSCmdlet
         string? sortKey = null;
         bool sortDescending = false;
         string? customFormat = O;
+        bool pidSyntaxError = false;
 
         // Pre-bind value flags from explicit parameters.
         if (!string.IsNullOrEmpty(P))
         {
-            var parsed = ParsePidList(P);
-            if (parsed != null) filterPidList = parsed;
+            if (TryParsePidList(P, out var parsed)) filterPidList = parsed;
+            else pidSyntaxError = true;
         }
 
         for (int i = 0; i < args.Length; i++)
@@ -215,9 +221,8 @@ public sealed class InvokeBashPsCommand : PSCmdlet
             if (string.Equals(arg, "-p", StringComparison.Ordinal) && i + 1 < args.Length)
             {
                 var pv = args[++i];
-                var parsed = ParsePidList(pv);
-                if (parsed != null) filterPidList = parsed;
-                // else: silently drop (Directive 12 — non-integer falls through).
+                if (TryParsePidList(pv, out var parsed)) filterPidList = parsed;
+                else pidSyntaxError = true; // GNU errors on a malformed list; never unfilter.
                 continue;
             }
             if (string.Equals(arg, "-o", StringComparison.Ordinal) && i + 1 < args.Length)
@@ -248,6 +253,18 @@ public sealed class InvokeBashPsCommand : PSCmdlet
                 continue;
             }
             // Unknown / unsupported flags: oracle silently drops them.
+        }
+
+        // GNU ps errors (exit 1, "error: process ID list syntax error" + usage)
+        // when a -p operand contains a non-integer token — it does NOT silently
+        // list every process. Verified against the WSL oracle
+        // (`ps -p abc` / `ps -p 1,abc`). Emit before enumerating anything so no
+        // process rows leak out.
+        if (pidSyntaxError)
+        {
+            FileSystemHelpers.WriteBashError(
+                this, "ps: error: process ID list syntax error\n\nUsage:\n ps [options]");
+            return;
         }
 
         // GNU ps errors (exit 1, "error: unknown sort specifier" + usage) on a
