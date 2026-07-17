@@ -1,0 +1,19 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 51
+stdout-length: 31
+stderr-length: 0
+==== SCRIPT ====
+cat <<'EOF'
+val="oops
+more )( ` stuff
+EOF
+echo DONE
+==== STDOUT ====
+val="oops
+more )( ` stuff
+DONE
+
+==== STDERR ====
+

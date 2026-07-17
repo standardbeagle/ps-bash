@@ -1,0 +1,14 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 42
+stdout-length: 5
+stderr-length: 0
+==== SCRIPT ====
+printf '1\n5\n10\n' | awk '$1 > 3 {print}'
+==== STDOUT ====
+5
+10
+
+==== STDERR ====
+

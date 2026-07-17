@@ -1,0 +1,16 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 83
+stdout-length: 17
+stderr-length: 0
+==== SCRIPT ====
+set -- a b c; for x in "$*"; do echo "<$x>"; done; for y in $@; do echo "-$y"; done
+==== STDOUT ====
+<a b c>
+-a
+-b
+-c
+
+==== STDERR ====
+

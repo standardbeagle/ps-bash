@@ -1,0 +1,12 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 28
+stdout-length: 0
+stderr-length: 0
+==== SCRIPT ====
+diff <(seq 1 10) <(seq 1 10)
+==== STDOUT ====
+
+==== STDERR ====
+

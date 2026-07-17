@@ -1,0 +1,13 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 41
+stdout-length: 2
+stderr-length: 0
+==== SCRIPT ====
+f() { v='y=7'; eval "$v"; echo "$y"; }; f
+==== STDOUT ====
+7
+
+==== STDERR ====
+

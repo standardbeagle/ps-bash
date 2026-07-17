@@ -1,0 +1,17 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 28
+stdout-length: 21
+stderr-length: 0
+==== SCRIPT ====
+paste <(seq 1 5) <(seq 6 10)
+==== STDOUT ====
+1	6
+2	7
+3	8
+4	9
+5	10
+
+==== STDERR ====
+

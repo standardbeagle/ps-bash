@@ -1,0 +1,13 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 62
+stdout-length: 4
+stderr-length: 0
+==== SCRIPT ====
+if [ 1 -eq 1 ] && [ 2 -eq 2 ]; then echo yes; else echo no; fi
+==== STDOUT ====
+yes
+
+==== STDERR ====
+

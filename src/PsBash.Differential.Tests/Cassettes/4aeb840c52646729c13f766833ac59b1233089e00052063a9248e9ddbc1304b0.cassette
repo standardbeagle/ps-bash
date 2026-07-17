@@ -1,0 +1,13 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 19
+stdout-length: 7
+stderr-length: 0
+==== SCRIPT ====
+echo before; exit 0
+==== STDOUT ====
+before
+
+==== STDERR ====
+

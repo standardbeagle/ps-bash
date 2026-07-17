@@ -1,0 +1,13 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 20
+stdout-length: 30
+stderr-length: 0
+==== SCRIPT ====
+echo file{1,2,3}.txt
+==== STDOUT ====
+file1.txt file2.txt file3.txt
+
+==== STDERR ====
+

@@ -1,0 +1,13 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 103
+stdout-length: 3
+stderr-length: 0
+==== SCRIPT ====
+fact() { if [ $1 -le 1 ]; then echo 1; return; fi; prev=$(fact $(($1-1))); echo $(($1*prev)); }; fact 4
+==== STDOUT ====
+24
+
+==== STDERR ====
+

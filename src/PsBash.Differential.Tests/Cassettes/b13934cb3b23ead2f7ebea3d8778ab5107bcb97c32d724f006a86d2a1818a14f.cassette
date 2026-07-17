@@ -1,0 +1,13 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 36
+stdout-length: 9
+stderr-length: 0
+==== SCRIPT ====
+set -e; false || true; echo survived
+==== STDOUT ====
+survived
+
+==== STDERR ====
+

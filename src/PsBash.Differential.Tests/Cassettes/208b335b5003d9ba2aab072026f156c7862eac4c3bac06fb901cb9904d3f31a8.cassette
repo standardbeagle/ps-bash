@@ -1,0 +1,16 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 72
+stdout-length: 8
+stderr-length: 0
+==== SCRIPT ====
+for i in 1 2 3 4 5; do if [ $i -eq 3 ]; then continue; fi; echo $i; done
+==== STDOUT ====
+1
+2
+4
+5
+
+==== STDERR ====
+

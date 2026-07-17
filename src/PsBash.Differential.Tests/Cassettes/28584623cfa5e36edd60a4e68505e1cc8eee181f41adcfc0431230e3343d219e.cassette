@@ -1,0 +1,16 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 63
+stdout-length: 8
+stderr-length: 0
+==== SCRIPT ====
+printf 'a\nb\n' | awk 'BEGIN{print "s"} {print} END{print "e"}'
+==== STDOUT ====
+s
+a
+b
+e
+
+==== STDERR ====
+

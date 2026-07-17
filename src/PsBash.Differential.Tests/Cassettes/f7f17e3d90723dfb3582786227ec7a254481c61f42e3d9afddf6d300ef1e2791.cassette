@@ -1,0 +1,13 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 111
+stdout-length: 6
+stderr-length: 0
+==== SCRIPT ====
+unset UNDEFINED_VAR_PSBASH_TEST; if [ -z "$UNDEFINED_VAR_PSBASH_TEST" ]; then echo empty; else echo defined; fi
+==== STDOUT ====
+empty
+
+==== STDERR ====
+

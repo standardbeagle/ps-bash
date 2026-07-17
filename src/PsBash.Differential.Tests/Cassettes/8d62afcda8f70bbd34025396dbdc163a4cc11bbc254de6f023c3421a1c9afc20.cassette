@@ -1,0 +1,13 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 71
+stdout-length: 6
+stderr-length: 0
+==== SCRIPT ====
+printf 'a,b,c\n' | awk '{n=split($0,arr,","); print n, arr[1], arr[3]}'
+==== STDOUT ====
+3 a c
+
+==== STDERR ====
+

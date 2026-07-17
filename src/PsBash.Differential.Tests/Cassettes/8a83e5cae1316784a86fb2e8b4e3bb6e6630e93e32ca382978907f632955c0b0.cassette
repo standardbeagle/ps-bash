@@ -1,0 +1,12 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 127
+script-length: 8
+stdout-length: 0
+stderr-length: 0
+==== SCRIPT ====
+exit 127
+==== STDOUT ====
+
+==== STDERR ====
+
