@@ -453,7 +453,8 @@ public class BashTranspilerTests
     public void TmpPathWithGrep_TransformsBoth()
     {
         var result = BashTranspiler.Transpile("cat /tmp/log.txt | grep error");
-        Assert.Equal("Invoke-BashCat $env:TEMP\\log.txt | Invoke-BashGrep error", result);
+        // All-mapped, terminal-bound pipeline → fused lane (PERF phase 2).
+        Assert.Equal("Invoke-BashFusedPipeline { Invoke-BashCat $env:TEMP\\log.txt | Invoke-BashGrep error }", result);
     }
 
     [Fact]
@@ -476,8 +477,9 @@ public class BashTranspilerTests
     public void ComplexPipeline_TransformsAll()
     {
         var result = BashTranspiler.Transpile("cat /tmp/data.csv | grep -v header | sort | uniq | wc -l");
+        // All-mapped, terminal-bound pipeline → fused lane (PERF phase 2).
         Assert.Equal(
-            "Invoke-BashCat $env:TEMP\\data.csv | Invoke-BashGrep -v header | Invoke-BashSort | Invoke-BashUniq | Invoke-BashWc -l",
+            "Invoke-BashFusedPipeline { Invoke-BashCat $env:TEMP\\data.csv | Invoke-BashGrep -v header | Invoke-BashSort | Invoke-BashUniq | Invoke-BashWc -l }",
             result);
     }
 

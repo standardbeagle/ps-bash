@@ -70,6 +70,111 @@ public static class PsEmitter
         "cp", "mv", "rm", "sort", "diff", "sleep",
     };
 
+    // ── Fused-pipeline lane (PERF phase 2) ───────────────────────────────────
+
+    /// <summary>
+    /// Line-oriented commands whose pipelines are eligible for the fused lane.
+    /// Every stage of an all-mapped pipeline must be one of these for the emitter
+    /// to wrap the whole pipeline in <c>Invoke-BashFusedPipeline { … }</c> (which
+    /// batches the terminal flush — the phase-1 profile's dominant bottleneck).
+    /// The runtime cmdlet runs the SAME <c>Invoke-Bash*</c> stages, so fidelity is
+    /// guaranteed by construction; this set is intentionally the line-oriented
+    /// text subset (no ls/find/awk/jq typed-object producers, whose boundary
+    /// object shape must survive `ls | grep .txt`).
+    /// </summary>
+    internal static readonly HashSet<string> FusePipelineAllowlist = new(StringComparer.Ordinal)
+    {
+        "cat", "grep", "sed", "head", "tail", "wc",
+        "sort", "uniq", "tr", "cut", "seq", "rev", "tac", "nl",
+    };
+
+    /// <summary>
+    /// Depth of the current command / process substitution nesting. Fusion only
+    /// applies to a terminal-bound pipeline (<c>_captureDepth == 0</c>): inside
+    /// <c>$(…)</c> / <c>&lt;(…)</c> the output never crosses the IPC return path,
+    /// so batching buys nothing and would change the captured object shape.
+    /// </summary>
+    [ThreadStatic]
+    private static int _captureDepth;
+
+    /// <summary>
+    /// Emit a command whose output is CAPTURED (command / process substitution),
+    /// not written to the terminal — suppresses fused-pipeline wrapping for the
+    /// duration so nested pipelines keep today's per-object shape.
+    /// </summary>
+    private static string EmitCaptured(Command body)
+    {
+        _captureDepth++;
+        try { return Emit(body); }
+        finally { _captureDepth--; }
+    }
+
+    /// <summary>
+    /// Test seam: force the fused lane on/off for the current thread, bypassing the
+    /// <c>PSBASH_FUSED</c> env read. <c>[ThreadStatic]</c> so a test toggling it
+    /// cannot race a fusable-pipeline transpile running on another xUnit thread.
+    /// </summary>
+    // Assigned only from the test assembly (InternalsVisibleTo); the compiler
+    // can't see that cross-assembly, hence the CS0649 suppression.
+#pragma warning disable CS0649
+    [ThreadStatic]
+    internal static bool? FusionEnabledOverride;
+#pragma warning restore CS0649
+
+    /// <summary>
+    /// The fused lane is ON by default; <c>PSBASH_FUSED</c> set to a falsy token
+    /// (<c>0</c> / <c>false</c> / <c>no</c> / <c>off</c>) disables detection so the
+    /// old PowerShell-pipeline path is used. (Read here rather than via
+    /// <c>PsBash.Core.Runtime.EnvFlags</c> because PsBash.Transpiler is a leaf
+    /// project that must not reference PsBash.Core — it would be a reference cycle.)
+    /// </summary>
+    private static bool FusionEnabled()
+    {
+        if (FusionEnabledOverride is bool forced) return forced;
+        return !IsFusionDisabledByEnvValue(
+            Environment.GetEnvironmentVariable("PSBASH_FUSED"));
+    }
+
+    /// <summary>
+    /// Pure kill-switch parse (env-value → disabled?), testable without touching
+    /// the process environment. A null/empty/unrecognized value keeps the lane ON
+    /// (default); only an explicit falsy token disables it.
+    /// </summary>
+    internal static bool IsFusionDisabledByEnvValue(string? value)
+    {
+        var v = value?.Trim();
+        if (string.IsNullOrEmpty(v)) return false;
+        return v.Equals("0", StringComparison.OrdinalIgnoreCase)
+            || v.Equals("false", StringComparison.OrdinalIgnoreCase)
+            || v.Equals("no", StringComparison.OrdinalIgnoreCase)
+            || v.Equals("off", StringComparison.OrdinalIgnoreCase);
+    }
+
+    /// <summary>
+    /// True when every stage of <paramref name="pipeline"/> maps to an allowlisted
+    /// line-oriented command with no per-stage redirect / heredoc / env-prefix, the
+    /// pipeline is a plain <c>|</c> chain (no <c>|&amp;</c>) of at least two stages,
+    /// and it is not negated — the conditions under which
+    /// <c>Invoke-BashFusedPipeline</c> is byte-identical to today's path.
+    /// </summary>
+    private static bool IsFusablePipeline(Command.Pipeline pipeline)
+    {
+        if (pipeline.Negated) return false;
+        if (pipeline.Commands.Length < 2) return false;
+        foreach (var op in pipeline.Ops)
+            if (op != "|") return false; // |& stderr-merge falls back this slice
+        foreach (var stage in pipeline.Commands)
+        {
+            if (stage is not Command.Simple s) return false;
+            if (!s.Redirects.IsEmpty || !s.HereDocs.IsEmpty || !s.EnvPairs.IsEmpty)
+                return false;
+            var name = s.Words.IsEmpty ? null : GetLiteralValue(s.Words[0]);
+            if (name is null || !FusePipelineAllowlist.Contains(name))
+                return false;
+        }
+        return true;
+    }
+
     public static string Emit(Command cmd) => cmd switch
     {
         Command.If ifCmd => EmitIf(ifCmd),
@@ -1854,7 +1959,7 @@ public static class PsEmitter
                 var fileArg = cmd.Words[1];
                 if (fileArg.Parts.Length == 1 && fileArg.Parts[0] is WordPart.ProcessSub procSub)
                 {
-                    string inner = Emit((Command)procSub.Body);
+                    string inner = EmitCaptured((Command)procSub.Body);
                     specialResult = $"Invoke-ProcessSubSource {{ {inner} }}";
                 }
                 else
@@ -2875,7 +2980,7 @@ public static class PsEmitter
     private static string EmitCommandSub(WordPart.CommandSub cs)
     {
         var body = (Command)cs.Body;
-        string inner = Emit(body);
+        string inner = EmitCaptured(body);
         bool pipeableHead = body is Command.Simple or Command.Pipeline;
         string head = pipeableHead ? inner : $"& {{ {inner} }}";
         return $"$({head} | ForEach-Object {{ Get-BashText $_ }})";
@@ -2894,7 +2999,7 @@ public static class PsEmitter
     private static string EmitCommandSubString(WordPart.CommandSub cs)
     {
         var body = (Command)cs.Body;
-        string inner = Emit(body);
+        string inner = EmitCaptured(body);
         bool pipeableHead = body is Command.Simple or Command.Pipeline;
         string head = pipeableHead ? inner : $"& {{ {inner} }}";
         return $"$((@({head} | ForEach-Object {{ Get-BashText $_ }}) -join \"`n\") -replace '(\\r?\\n)+$','')";
@@ -2902,13 +3007,13 @@ public static class PsEmitter
 
     private static string EmitProcessSub(WordPart.ProcessSub ps)
     {
-        string inner = Emit((Command)ps.Body);
+        string inner = EmitCaptured((Command)ps.Body);
         return $"(Invoke-ProcessSub {{ {inner} }})";
     }
 
     private static string EmitProcessSubPipeline(WordPart.ProcessSub ps)
     {
-        string inner = Emit((Command)ps.Body);
+        string inner = EmitCaptured((Command)ps.Body);
         return $"(Invoke-ProcessSubPipeline {{ {inner} }})";
     }
 
@@ -3851,14 +3956,24 @@ public static class PsEmitter
                 sb.Append(Emit(cmd));
         }
 
+        var body = sb.ToString();
+
+        // Fused lane: an all-mapped, terminal-bound, plain-`|` pipeline runs inside
+        // Invoke-BashFusedPipeline so its output returns to the launcher in a few
+        // large batched frames instead of one IPC frame per line. IsFusablePipeline
+        // already excludes negated pipelines, so this never collides with the
+        // negation tail below.
+        if (_captureDepth == 0 && FusionEnabled() && IsFusablePipeline(pipeline))
+            return $"Invoke-BashFusedPipeline {{ {body} }}";
+
         if (pipeline.Negated)
             // Negate the bash exit code stored in $global:LASTEXITCODE.
             // Using $global:LASTEXITCODE (not PowerShell's $?) ensures we check the bash
             // exit code set by the runtime (e.g. Invoke-BashGrep sets it to 1 on no-match)
             // rather than PowerShell's own cmdlet-success flag.
-            sb.Append("; $global:LASTEXITCODE = if ($global:LASTEXITCODE -eq 0) { 1 } else { 0 }");
+            body += "; $global:LASTEXITCODE = if ($global:LASTEXITCODE -eq 0) { 1 } else { 0 }";
 
-        return sb.ToString();
+        return body;
     }
 
     /// <summary>

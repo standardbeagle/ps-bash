@@ -77,7 +77,10 @@ public class PsEmitterTests
     {
         var result = PsEmitter.Transpile("cat file | head -n 5 | sort");
 
-        Assert.Equal("Invoke-BashCat file | Invoke-BashHead -n 5 | Invoke-BashSort", result);
+        // All-mapped, terminal-bound, plain-`|` pipeline → fused lane (PERF phase 2).
+        Assert.Equal(
+            "Invoke-BashFusedPipeline { Invoke-BashCat file | Invoke-BashHead -n 5 | Invoke-BashSort }",
+            result);
     }
 
     [Fact]
@@ -3505,7 +3508,8 @@ public class PsEmitterTests
     {
         var result = PsEmitter.Transpile("cat file | nl -ba");
 
-        Assert.Equal("Invoke-BashCat file | Invoke-BashNl -ba", result);
+        // All-mapped, terminal-bound pipeline → fused lane (PERF phase 2).
+        Assert.Equal("Invoke-BashFusedPipeline { Invoke-BashCat file | Invoke-BashNl -ba }", result);
     }
 
     [Fact]

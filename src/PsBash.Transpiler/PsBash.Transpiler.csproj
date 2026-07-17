@@ -40,4 +40,11 @@
     <PackageReference Include="Parlot" Version="1.5.7" />
   </ItemGroup>
 
+  <ItemGroup>
+    <!-- The emitter's fused-pipeline test seams (FusionEnabledOverride,
+         IsFusionDisabledByEnvValue) are internal; the transpiler test suite
+         lives in PsBash.Core.Tests. -->
+    <InternalsVisibleTo Include="PsBash.Core.Tests" />
+  </ItemGroup>
+
 </Project>
