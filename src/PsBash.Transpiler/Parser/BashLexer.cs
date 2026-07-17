@@ -142,8 +142,14 @@ public static class BashLexer
                         heredocDelimPending = 2;
                         continue;
                     }
-                    if (IsRedirectKind(BashTokenKind.DLess))
-                        TryReclassifyIoNumber(tokens, pos);
+                    // This branch only ever emits DLess (the `<<<`/`<<-` cases above
+                    // already returned), and DLess is always a redirect kind — so
+                    // `IsRedirectKind(BashTokenKind.DLess)` here was a compile-time
+                    // constant-true guard (unlike the dynamic `IsRedirectKind(op.Kind)`
+                    // checks elsewhere in this method, which gate over several possible
+                    // matched kinds). Reclassify unconditionally; this is the fd-redirect
+                    // case (`2<<EOF`) with no whitespace before `<<`.
+                    TryReclassifyIoNumber(tokens, pos);
                     tokens.Add(new BashToken(BashTokenKind.DLess, "<<", pos));
                     pos += 2;
                     heredocDelimPending = 1;

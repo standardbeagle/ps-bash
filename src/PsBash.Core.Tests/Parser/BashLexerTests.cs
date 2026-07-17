@@ -433,6 +433,34 @@ public class BashLexerTests
             (BashTokenKind.Word, "42"));
     }
 
+    // Proves the intent of the `<<` family's DLess reclassification (BashLexer.cs, the
+    // `if (c == '<' && c2 == '<')` branch): a digit adjacent to `<<` with no gap is an
+    // fd-redirect heredoc target and must reclassify to IoNumber, same as `<`/`>`/`>&`.
+    [Fact]
+    public void Tokenize_IoNumber_BeforeDLess_ReclassifiesAsIoNumber()
+    {
+        var tokens = Tokenize("cmd 2<<EOF");
+
+        Assert.Equal(BashTokenKind.IoNumber, tokens[1].Kind);
+        Assert.Equal("2", tokens[1].Value);
+        Assert.Equal(BashTokenKind.DLess, tokens[2].Kind);
+    }
+
+    // Distinguishes the DLess reclassification from a non-redirect two-char operator
+    // that starts with the same first character family (`&`/`<` neighbors like `&&`):
+    // a digit before a NON-redirect operator must stay a plain Word, never IoNumber.
+    // `IsRedirectKind` gates `&&`/`||`/`|&` out at the shared two-char dispatch (line
+    // ~191); this proves the DLess-specific branch doesn't collapse that distinction.
+    [Fact]
+    public void Tokenize_DigitWord_BeforeAndIf_StaysWord()
+    {
+        var tokens = Tokenize("cmd 2&&true");
+
+        Assert.Equal(BashTokenKind.Word, tokens[1].Kind);
+        Assert.Equal("2", tokens[1].Value);
+        Assert.Equal(BashTokenKind.AndIf, tokens[2].Kind);
+    }
+
     // --- Assignment ---
 
     [Fact]
