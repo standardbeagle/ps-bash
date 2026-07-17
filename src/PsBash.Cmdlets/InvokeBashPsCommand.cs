@@ -85,6 +85,39 @@ public sealed class InvokeBashPsCommand : PSCmdlet
     private const int ProcCmdlineMaxBytes = 128 * 1024;
     private const int ProcUptimeMaxBytes = 256;
 
+    /// <summary>Sort keys the propName switch below actually maps. Anything
+    /// else is a GNU ps error ("unknown sort specifier"), not a silent PID
+    /// fallback.</summary>
+    private static readonly HashSet<string> s_knownSortKeys = new(StringComparer.Ordinal)
+    {
+        "pid", "ppid", "cpu", "%cpu", "mem", "%mem", "rss", "vsz", "user", "comm", "time",
+    };
+
+    /// <summary>
+    /// Parses a bash <c>ps -p</c> operand: GNU accepts a comma- and/or
+    /// space-separated list of PIDs (<c>-p 1,2</c>, <c>-p "1 2"</c>), not just
+    /// a single integer. Returns null (caller drops the filter, Directive 12)
+    /// when nothing in the operand parses as an integer.
+    /// </summary>
+    private static HashSet<int>? ParsePidList(string value)
+    {
+        HashSet<int>? result = null;
+        foreach (var token in value.Split(new[] { ',', ' ' }, StringSplitOptions.RemoveEmptyEntries))
+        {
+            if (int.TryParse(token, NumberStyles.Integer, CultureInfo.InvariantCulture, out var pid))
+            {
+                (result ??= new HashSet<int>()).Add(pid);
+            }
+        }
+        return result;
+    }
+
+    private static Process? TryGetProcessById(int pid)
+    {
+        try { return Process.GetProcessById(pid); }
+        catch { return null; }
+    }
+
     /// <summary>
     /// The current process's Windows session id, cached. Calling
     /// <c>Process.GetCurrentProcess().SessionId</c> allocates a fresh Process and
@@ -122,16 +155,16 @@ public sealed class InvokeBashPsCommand : PSCmdlet
         bool bsdAux = false;
         bool fullFormat = false;
         string? filterUser = null;
-        int? filterPid = null;
+        HashSet<int>? filterPidList = null;
         string? sortKey = null;
         bool sortDescending = false;
         string? customFormat = O;
 
         // Pre-bind value flags from explicit parameters.
-        if (!string.IsNullOrEmpty(P) && int.TryParse(P, NumberStyles.Integer,
-                CultureInfo.InvariantCulture, out var ppid))
+        if (!string.IsNullOrEmpty(P))
         {
-            filterPid = ppid;
+            var parsed = ParsePidList(P);
+            if (parsed != null) filterPidList = parsed;
         }
 
         for (int i = 0; i < args.Length; i++)
@@ -182,11 +215,8 @@ public sealed class InvokeBashPsCommand : PSCmdlet
             if (string.Equals(arg, "-p", StringComparison.Ordinal) && i + 1 < args.Length)
             {
                 var pv = args[++i];
-                if (int.TryParse(pv, NumberStyles.Integer, CultureInfo.InvariantCulture,
-                        out var parsedPid))
-                {
-                    filterPid = parsedPid;
-                }
+                var parsed = ParsePidList(pv);
+                if (parsed != null) filterPidList = parsed;
                 // else: silently drop (Directive 12 — non-integer falls through).
                 continue;
             }
@@ -220,6 +250,16 @@ public sealed class InvokeBashPsCommand : PSCmdlet
             // Unknown / unsupported flags: oracle silently drops them.
         }
 
+        // GNU ps errors (exit 1, "error: unknown sort specifier" + usage) on a
+        // --sort key it doesn't recognize rather than silently falling back to
+        // PID order. Validate against the keys the switch below actually maps.
+        if (sortKey != null && !s_knownSortKeys.Contains(sortKey.ToLowerInvariant()))
+        {
+            FileSystemHelpers.WriteBashError(
+                this, "ps: error: unknown sort specifier\n\nUsage:\n ps [options]");
+            return;
+        }
+
         // Gather entries
         var entries = new List<PsEntry>();
 
@@ -236,12 +276,12 @@ public sealed class InvokeBashPsCommand : PSCmdlet
                 if (!int.TryParse(dirName, NumberStyles.Integer,
                         CultureInfo.InvariantCulture, out var ddpid))
                     continue;
-                if (filterPid.HasValue && ddpid != filterPid.Value) continue;
+                if (filterPidList != null && !filterPidList.Contains(ddpid)) continue;
 
                 var entry = GetLinuxProcEntry(dir, ddpid);
                 if (entry == null) continue;
 
-                if (!showAll && !bsdAux && !filterPid.HasValue && filterUser == null)
+                if (!showAll && !bsdAux && filterPidList == null && filterUser == null)
                 {
                     if (fullFormat || customFormat != null)
                     {
@@ -261,8 +301,8 @@ public sealed class InvokeBashPsCommand : PSCmdlet
             Process[] procs;
             try
             {
-                procs = filterPid.HasValue
-                    ? new[] { Process.GetProcessById(filterPid.Value) }
+                procs = filterPidList != null
+                    ? filterPidList.Select(TryGetProcessById).Where(p => p != null).Select(p => p!).ToArray()
                     : Process.GetProcesses();
             }
             catch
@@ -329,7 +369,7 @@ public sealed class InvokeBashPsCommand : PSCmdlet
                     }
                     if (entry == null) continue;
 
-                    if (!showAll && !bsdAux && !filterPid.HasValue && filterUser == null)
+                    if (!showAll && !bsdAux && filterPidList == null && filterUser == null)
                     {
                         if (currentUser == null)
                         {

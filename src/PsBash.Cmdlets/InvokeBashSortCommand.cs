@@ -371,10 +371,16 @@ public sealed class InvokeBashSortCommand : PSCmdlet
 
         // Collect items.
         var items = new List<object>();
+        // Parallel to items: the "sort -c" disorder message needs a GNU-style
+        // "<file>:<line>" locator per item — "-" for pipeline/stdin input, the
+        // operand path (with a per-file 1-based line counter) for file input.
+        var itemLabels = new List<string>();
+        var itemLineNo = new List<int>();
         bool hadError = false;
 
         if (_pipeline.Count > 0)
         {
+            int pipelineLine = 0;
             foreach (var item in _pipeline)
             {
                 string text = BashRuntime.GetBashText(item);
@@ -384,11 +390,15 @@ public sealed class InvokeBashSortCommand : PSCmdlet
                     foreach (var subLine in trimmed.Split('\n'))
                     {
                         items.Add(subLine);
+                        itemLabels.Add("-");
+                        itemLineNo.Add(++pipelineLine);
                     }
                 }
                 else
                 {
                     items.Add(item);
+                    itemLabels.Add("-");
+                    itemLineNo.Add(++pipelineLine);
                 }
             }
         }
@@ -399,9 +409,13 @@ public sealed class InvokeBashSortCommand : PSCmdlet
             {
                 try
                 {
+                    int fileLine = 0;
+                    string label = filePath.Replace('\\', '/');
                     foreach (var line in BashFileSystem.ReadLines(filePath))
                     {
                         items.Add(BashRuntime.NewBashObject(line));
+                        itemLabels.Add(label);
+                        itemLineNo.Add(++fileLine);
                     }
                 }
                 catch (Exception ex)
@@ -559,13 +573,18 @@ public sealed class InvokeBashSortCommand : PSCmdlet
             return Math.Sign(cmp2);
         }
 
-        // Check-only mode: walk pairs, exit 1 on first out-of-order pair.
+        // Check-only mode: walk pairs, exit 1 on first out-of-order pair. GNU
+        // sort -c reports "sort: <file>:<line>: disorder: <content>" to stderr
+        // on the first offending line (1-based line of the disordered line).
         if (checkOnly)
         {
             for (int idx = 1; idx < items.Count; idx++)
             {
                 if (Compare(idx - 1, idx) > 0)
                 {
+                    string content = BashRuntime.GetBashText(items[idx]).TrimEnd('\n');
+                    FileSystemHelpers.WriteBashError(
+                        this, $"sort: {itemLabels[idx]}:{itemLineNo[idx]}: disorder: {content}");
                     FileSystemHelpers.SetLastExitCode(this, 1);
                     return;
                 }

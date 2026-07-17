@@ -242,6 +242,40 @@ public class InvokeBashSortCommandTests : IDisposable, IClassFixture<SharedPwshF
     }
 
     [Fact]
+    public void Sort_CheckMode_Unordered_WritesGnuStyleDisorderMessage()
+    {
+        // GNU: `sort -c` on disorder prints
+        // "sort: <file>:<line>: disorder: <line>" to stderr (verified against
+        // the WSL oracle: `printf 'b\na\n' | sort -c` -> "sort: -:2: disorder: a").
+        // Pipeline input has no filename, so the locator is "-".
+        var (outLines, errs) = RunWithErrors("'b','a','c' | Invoke-BashSort -c");
+        Assert.Empty(outLines);
+        // WriteBashError emits both a WriteError record and a Write-BashError
+        // psm1-formatted echo (see FileSystemHelpers.WriteBashError) — same
+        // dual-emission pattern as Sort_UnrecognizedLongOption_BashParityMessage.
+        Assert.Contains(errs, m => m == "sort: -:2: disorder: a");
+    }
+
+    [Fact]
+    public void Sort_CheckMode_Ordered_WritesNoDisorderMessage()
+    {
+        var (outLines, errs) = RunWithErrors("'a','b','c' | Invoke-BashSort -c");
+        Assert.Empty(outLines);
+        Assert.Empty(errs);
+    }
+
+    [Fact]
+    public void Sort_CheckMode_FileMode_DisorderMessageIncludesFilePath()
+    {
+        var file = Path.Combine(_tmpDir, "s.txt");
+        File.WriteAllText(file, "b\na\n");
+        var normalized = file.Replace('\\', '/');
+        var (outLines, errs) = RunWithErrors($"Invoke-BashSort -c '{normalized}'");
+        Assert.Empty(outLines);
+        Assert.Contains(errs, m => m == $"sort: {normalized}:2: disorder: a");
+    }
+
+    [Fact]
     public void Sort_PipelineMode_EmptyEmitsNothing()
     {
         var lines = RunLines("Invoke-BashSort");

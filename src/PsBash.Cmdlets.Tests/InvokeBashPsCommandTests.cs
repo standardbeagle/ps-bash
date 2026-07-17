@@ -88,6 +88,45 @@ public class InvokeBashPsCommandTests : IClassFixture<SharedPwshFixture>
     }
 
     [Fact]
+    public void Ps_FilterByCommaSeparatedPidList_FiltersToBothPids()
+    {
+        // GNU ps -p accepts a comma-separated PID list, not just one integer.
+        // Verified against the WSL oracle: `ps -p 1,2` lists both PIDs. The
+        // second PID need not resolve to a live process — it just proves the
+        // comma-separated operand parses as two PIDs instead of failing
+        // int.TryParse and falling through to an unfiltered listing.
+        var currentPid = System.Diagnostics.Process.GetCurrentProcess().Id;
+        var other = currentPid + 1;
+
+        var results = RunRaw($"Invoke-BashPs -p '{currentPid},{other}'");
+        Assert.True(results.Count is >= 1 and <= 2,
+            $"Expected at most the two listed PIDs, got {results.Count}");
+        var pids = results
+            .Select(o => System.Convert.ToInt32(o.Properties["PID"]?.Value ?? 0))
+            .ToHashSet();
+        Assert.Contains(currentPid, pids);
+    }
+
+    [Fact]
+    public void Ps_UnknownSortSpecifier_ErrorsWithExit1AndNoEntries()
+    {
+        // GNU ps --sort=bogus errors ("error: unknown sort specifier", exit 1)
+        // rather than silently degrading to PID order. Verified against the
+        // WSL oracle: `ps --sort=bogus` -> exit 1, stderr "error: unknown sort specifier".
+        var pwsh = _fixture.AcquireFresh();
+        var results = pwsh.AddScript("Invoke-BashPs -e --sort=bogus; $LASTEXITCODE").Invoke();
+        var errs = pwsh.Streams.Error.ToArray();
+        pwsh.Commands.Clear();
+
+        Assert.NotEmpty(errs);
+        Assert.Contains(errs, e => (e.Exception?.Message ?? e.ToString())
+            .Contains("unknown sort specifier", System.StringComparison.OrdinalIgnoreCase));
+        // No process entries — just the trailing $LASTEXITCODE value.
+        Assert.Single(results);
+        Assert.Equal("1", results[0]?.ToString());
+    }
+
+    [Fact]
     public void Ps_CustomOutputColumns_ProducesCommaSeparatedFieldsInBashText()
     {
         // -o pid,comm — BashText carries the formatted columns joined with a space.
