@@ -107,15 +107,18 @@ public class ScaleTests
     /// <summary>
     /// Directive 7 (large input) / Failure-surface axis 2.
     /// seq 1 1000000 | sed 's/^/line: /' — output must have exactly 1,000,000 lines.
-    /// Timeout: 30s.
+    /// Timeout: 120s.
     ///
     /// Raised from 10k → 1M once the fused-pipeline lane landed (task
     /// 01KXQQ9QN4EVH1NA21EBE4PDZ8). This is the OUTPUT-HEAVY case: all 1M lines
-    /// stream back through the IPC return path, so it exercises the exact seam the
-    /// fused lane optimises. The 30s timeout is deliberately generous — these tests
-    /// measure SURVIVAL under scale, not speed. Reference costs: a warm host floors
-    /// around ~250ms and a cold daemon spawn adds ~3.8s, leaving ample headroom for
-    /// the streamed 1M-line body.
+    /// stream back through the IPC return path AND out the launcher's console, so it
+    /// exercises the exact seam the fused lane optimises. This test measures SURVIVAL
+    /// under scale, NOT speed — the throughput floor is asserted separately by
+    /// FusedStreamingBench.FusedStreaming_ThroughputRegression. The 30s timeout the
+    /// 10k version used is not enough for 1M output-heavy lines (the internal fused
+    /// stage alone is ~2.1s/100k, and 1M lines add IPC-return + console-drain +
+    /// cold-daemon spawn on top), so the spawn timeout is 120s here — generous
+    /// survival headroom, not a speed budget.
     ///
     /// ps-bash-specific assertion: line count is the oracle (bash and ps-bash
     /// must produce the same number of lines; content prefix is ps-bash-specific).
@@ -126,7 +129,7 @@ public class ScaleTests
 
         var (exitCode, stdout, stderr) = await ProcessRunHelper.RunAsync(
             new[] { "-c", "seq 1 1000000 | sed 's/^/line: /'" },
-            timeout: TimeSpan.FromSeconds(30));
+            timeout: TimeSpan.FromSeconds(120));
 
         Assert.Equal(0, exitCode);
 
