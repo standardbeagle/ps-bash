@@ -18,13 +18,31 @@ namespace PsBash.Core.Tests.Parser;
 /// </summary>
 public class PsEmitterFusedPipelineTests
 {
-    private const string Wrap = "Invoke-BashFusedPipeline { ";
+    // Both emitted forms start with this; the phase-2b literal-arg form adds
+    // `-Stages …` then `-Fallback { … }`, the non-literal form keeps `{ … }`.
+    private const string Wrap = "Invoke-BashFusedPipeline ";
 
     [Fact]
-    public void Fused_AllMappedTwoStage_WrapsWholePipeline()
+    public void Fused_AllMappedTwoStage_WrapsWholePipelineWithStages()
     {
+        // Phase-2b: literal args → a structured -Stages list plus the scriptblock
+        // Fallback (identical to the phase-2a body).
         var result = PsEmitter.Transpile("seq 1 100 | wc -l");
-        Assert.Equal("Invoke-BashFusedPipeline { Invoke-BashSeq 1 100 | Invoke-BashWc -l }", result);
+        Assert.Equal(
+            "Invoke-BashFusedPipeline -Stages @(@('seq', '1', '100'), @('wc', '-l')) "
+                + "-Fallback { Invoke-BashSeq 1 100 | Invoke-BashWc -l }",
+            result);
+    }
+
+    [Fact]
+    public void Fused_NonLiteralArg_FusesWithoutStages()
+    {
+        // A variable arg can't be a compile-time-static stage token, so the -Stages
+        // list is omitted and the pipeline uses the phase-2a scriptblock lane (which
+        // evaluates $x at runtime). Still fused (batched), just not streamed.
+        var result = PsEmitter.Transpile("seq 1 5 | grep $x");
+        Assert.StartsWith("Invoke-BashFusedPipeline { ", result);
+        Assert.DoesNotContain("-Stages", result);
     }
 
     [Fact]

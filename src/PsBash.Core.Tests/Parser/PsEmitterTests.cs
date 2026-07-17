@@ -77,9 +77,11 @@ public class PsEmitterTests
     {
         var result = PsEmitter.Transpile("cat file | head -n 5 | sort");
 
-        // All-mapped, terminal-bound, plain-`|` pipeline → fused lane (PERF phase 2).
+        // All-mapped, terminal-bound, plain-`|`, literal-arg pipeline → fused lane
+        // with a phase-2b streaming -Stages list + phase-2a scriptblock Fallback.
         Assert.Equal(
-            "Invoke-BashFusedPipeline { Invoke-BashCat file | Invoke-BashHead -n 5 | Invoke-BashSort }",
+            "Invoke-BashFusedPipeline -Stages @(@('cat', 'file'), @('head', '-n', '5'), @('sort')) "
+                + "-Fallback { Invoke-BashCat file | Invoke-BashHead -n 5 | Invoke-BashSort }",
             result);
     }
 
@@ -3508,8 +3510,12 @@ public class PsEmitterTests
     {
         var result = PsEmitter.Transpile("cat file | nl -ba");
 
-        // All-mapped, terminal-bound pipeline → fused lane (PERF phase 2).
-        Assert.Equal("Invoke-BashFusedPipeline { Invoke-BashCat file | Invoke-BashNl -ba }", result);
+        // All-mapped, terminal-bound, literal-arg pipeline → fused lane with a
+        // phase-2b streaming -Stages list + phase-2a scriptblock Fallback.
+        Assert.Equal(
+            "Invoke-BashFusedPipeline -Stages @(@('cat', 'file'), @('nl', '-ba')) "
+                + "-Fallback { Invoke-BashCat file | Invoke-BashNl -ba }",
+            result);
     }
 
     [Fact]

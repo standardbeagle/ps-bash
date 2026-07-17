@@ -219,6 +219,46 @@ public static class PsEmitter
         return false;
     }
 
+    /// <summary>
+    /// Build the runtime <c>-Stages</c> array for a fusable pipeline — one
+    /// <c>@('cmd', 'arg', …)</c> element per stage — or <c>null</c> when ANY stage
+    /// carries a non-literal argument. Only compile-time-static args
+    /// (<see cref="TryGetStaticArgValue"/>: literals, single/double-quoted literals,
+    /// escaped chars) are emitted; each is a PS single-quoted literal so the value
+    /// the streaming core receives is exactly what the unfused cmdlet's
+    /// <c>Arguments</c> would get. A variable / command-sub / glob / brace-expansion
+    /// arg returns null, so the pipeline falls back to the phase-2a scriptblock lane
+    /// (which evaluates those correctly). Called only on an already-validated
+    /// <see cref="IsFusablePipeline"/> pipeline (every stage is a mapped
+    /// <see cref="Command.Simple"/>).
+    /// </summary>
+    private static string? TryBuildFusedStages(Command.Pipeline pipeline)
+    {
+        var stageStrs = new List<string>(pipeline.Commands.Length);
+        foreach (var stageCmd in pipeline.Commands)
+        {
+            if (stageCmd is not Command.Simple s || s.Words.IsEmpty) return null;
+            var name = GetLiteralValue(s.Words[0]);
+            if (name is null) return null;
+            var parts = new List<string>(s.Words.Length) { PsBuild.SingleQuote(name) };
+            for (int i = 1; i < s.Words.Length; i++)
+            {
+                var val = TryGetStaticArgValue(s.Words[i]);
+                if (val is null) return null; // non-literal arg → no stage list, use fallback
+                // The fallback path runs the arg through TransformWordPath (operand
+                // path rewrites: /tmp/… → $env:TEMP\…, MSYS drive paths). The stage
+                // list carries the RAW literal, so if the transform would change the
+                // value the two paths would diverge — decline (conservatively also for
+                // a quoted path that the fallback would leave literal; correctness over
+                // the perf win on that rare shape).
+                if (TransformWordPath(val) != val) return null;
+                parts.Add(PsBuild.SingleQuote(val));
+            }
+            stageStrs.Add("@(" + string.Join(", ", parts) + ")");
+        }
+        return "@(" + string.Join(", ", stageStrs) + ")";
+    }
+
     public static string Emit(Command cmd) => cmd switch
     {
         Command.If ifCmd => EmitIf(ifCmd),
@@ -4008,7 +4048,17 @@ public static class PsEmitter
         // already excludes negated pipelines, so this never collides with the
         // negation tail below.
         if (_captureDepth == 0 && FusionEnabled() && IsFusablePipeline(pipeline))
-            return $"Invoke-BashFusedPipeline {{ {body} }}";
+        {
+            // Phase-2b: also emit a structured stage list when every stage's args are
+            // plain compile-time literals, so the runtime can run a true streaming
+            // line→line chain (no per-line PSObject). Any non-literal arg (variable,
+            // command-sub, glob, brace expansion) leaves the stage list off and the
+            // cmdlet uses the phase-2a scriptblock (still batched, still correct).
+            var stages = TryBuildFusedStages(pipeline);
+            return stages is null
+                ? $"Invoke-BashFusedPipeline {{ {body} }}"
+                : $"Invoke-BashFusedPipeline -Stages {stages} -Fallback {{ {body} }}";
+        }
 
         if (pipeline.Negated)
             // Negate the bash exit code stored in $global:LASTEXITCODE.
