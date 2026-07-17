@@ -289,6 +289,29 @@ general fallback path (`EmitSimple`) and the mapped passthrough path
 Note: standalone commands are also mapped via `EmitSimple` (see Section 2.2),
 so mapping applies to both pipe targets and standalone invocations.
 
+### Fused-pipeline lane (PERF phase 2)
+
+When **every** stage of a pipeline maps to an allowlisted line-oriented command
+(`FusePipelineAllowlist`: cat grep sed head tail wc sort uniq tr cut seq rev tac
+nl), the whole pipeline is **plain `|`** (no `|&`), has **no per-stage
+redirect / heredoc / env-prefix**, is **not negated**, and is **terminal-bound**
+(`_captureDepth == 0` — not inside a command / process substitution), `EmitPipeline`
+wraps the otherwise-identical emitted text in a single call:
+
+```
+Invoke-BashFusedPipeline { <inner pipeline text> }
+```
+
+The runtime cmdlet runs the inner pipeline host-side and returns its output in a
+few large batched frames instead of one IPC frame per line — the phase-1
+profile's dominant bottleneck (per-output-line framing back to the launcher).
+Because the wrapper runs the **identical** inner text, byte-fidelity is guaranteed
+by construction. Any non-allowlisted / external stage, `|&`, per-stage redirect,
+env-prefix, negation, or capture context keeps today's PowerShell-pipeline path.
+The kill switch `PSBASH_FUSED=0` (falsy tokens) disables detection; default ON.
+`ls | grep .txt` and other typed-object boundaries are unaffected — `ls` (and
+`find`/`awk`/`jq`) are deliberately **not** allowlisted.
+
 ---
 
 ## 6. Other Emitters
