@@ -357,7 +357,7 @@ public sealed partial class BashParser
 
     private (string Name, CompoundWord? Value, AssignOp Op) SplitAssignmentWord(string raw)
     {
-        int eqIndex = raw.IndexOf('=');
+        int eqIndex = FindAssignmentEquals(raw);
         bool isPlus = eqIndex > 0 && raw[eqIndex - 1] == '+';
         string name = isPlus ? raw[..(eqIndex - 1)] : raw[..eqIndex];
         string valueRaw = raw[(eqIndex + 1)..];
@@ -370,6 +370,29 @@ public sealed partial class BashParser
         // ':' (PATH-style), unlike ordinary words — use the assignment-aware path.
         var parts = DecomposeAssignmentValue(valueRaw);
         return (name, new CompoundWord(parts), op);
+    }
+
+    /// <summary>
+    /// Locate the '=' that starts an assignment word's value, skipping any '=' that
+    /// appears inside an unclosed <c>[...]</c> array subscript (e.g. <c>map[a=b]=c</c> is
+    /// the key <c>a=b</c> assigned <c>c</c>, not the key <c>map[a</c> assigned <c>b]=c</c>).
+    /// Falls back to the first '=' if brackets never close (defensive; keeps prior behavior
+    /// for malformed input rather than throwing).
+    /// </summary>
+    private static int FindAssignmentEquals(string raw)
+    {
+        int depth = 0;
+        for (int i = 0; i < raw.Length; i++)
+        {
+            char c = raw[i];
+            if (c == '[')
+                depth++;
+            else if (c == ']' && depth > 0)
+                depth--;
+            else if (c == '=' && depth == 0)
+                return i;
+        }
+        return raw.IndexOf('=');
     }
 
     private Redirect ParseRedirect(string? fdVar = null)

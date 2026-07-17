@@ -560,6 +560,45 @@ public class BashParserTests
     }
 
     [Fact]
+    public void Parse_AssignmentSubscriptContainingEquals_SplitsOnAssignmentEqualsNotSubscriptEquals()
+    {
+        // bash: map[a=b]=c assigns key "a=b" the value "c" (confirmed against real bash via
+        // WSL: `declare -A map; map[a=b]=c` yields KEY:[a=b] VAL:[c]). Splitting on the FIRST
+        // '=' instead (the old bug) produces name "map[a" / value "b]=c".
+        var result = Parse("map[a=b]=c");
+
+        var assign = Assert.IsType<Command.ShAssignment>(result);
+        var pair = Assert.Single(assign.Pairs);
+        Assert.Equal("map[a=b]", pair.Name);
+        var lit = Assert.IsType<WordPart.Literal>(Assert.Single(pair.Value!.Parts));
+        Assert.Equal("c", lit.Value);
+    }
+
+    [Fact]
+    public void Parse_AssignmentSubscriptContainingEquals_PlusEqualStillDetected()
+    {
+        var result = Parse("map[a=b]+=c");
+
+        var assign = Assert.IsType<Command.ShAssignment>(result);
+        var pair = Assert.Single(assign.Pairs);
+        Assert.Equal("map[a=b]", pair.Name);
+        Assert.Equal(AssignOp.PlusEqual, pair.Op);
+    }
+
+    [Fact]
+    public void Parse_PlainArraySubscriptAssignment_StillSplitsCorrectly()
+    {
+        // Regression guard: ordinary arr[0]=val (no '=' inside the subscript) must be unaffected.
+        var result = Parse("arr[0]=val");
+
+        var assign = Assert.IsType<Command.ShAssignment>(result);
+        var pair = Assert.Single(assign.Pairs);
+        Assert.Equal("arr[0]", pair.Name);
+        var lit = Assert.IsType<WordPart.Literal>(Assert.Single(pair.Value!.Parts));
+        Assert.Equal("val", lit.Value);
+    }
+
+    [Fact]
     public void Parse_AssignmentWithCommand_ReturnsSimpleWithEnvPairs()
     {
         var result = Parse("FOO=bar baz");

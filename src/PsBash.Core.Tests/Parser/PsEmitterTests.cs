@@ -1437,6 +1437,20 @@ public class PsEmitterTests
     }
 
     [Fact]
+    public void Transpile_CdTildeUser_QuotesUnresolvedTildeLiteral()
+    {
+        // `~user` has no PowerShell equivalent (WordPart.TildeSub degrades to the literal
+        // bareword `~user`, matching bash's own behavior of leaving an unknown-user tilde
+        // literal). The emitted PS assignment must quote it — an unquoted `~user` bareword
+        // is invalid PowerShell syntax at `$__psbash_cd_target = ~user`.
+        var result = PsEmitter.Transpile("cd ~missinguser");
+
+        Assert.StartsWith("$__psbash_cd_target = '~missinguser'", result);
+        // No unquoted bareword `= ~...` should survive.
+        Assert.DoesNotMatch(@"=\s*~[^'""\s]", result);
+    }
+
+    [Fact]
     public void Transpile_CdRecordsOldPwdOnSuccess()
     {
         // Every successful cd must stash the dir it leaves into $OLDPWD so `cd -` can return.
@@ -3872,6 +3886,19 @@ public class PsEmitterTests
     {
         var result = PsEmitter.Transpile("for dir in a b; do echo \"$dir: done\"; done");
         Assert.Contains("${dir}:", result);
+    }
+
+    [Fact]
+    public void Transpile_AssignmentFlattenVarFollowedByColon_EmitsBracedVar()
+    {
+        // Regression: EmitAssignmentValue's multi-part path (SingleQuoted + SimpleVarSub +
+        // Literal, e.g. 'a'$x:b) goes through FlattenPartsToDoubleQuotedString, a SEPARATE
+        // code path from AppendDoubleQuotedInner (which the "$x: world" test above already
+        // covers). The flatten path was missing the same drive-reference guard: unbraced
+        // "a$env:x:b" is a PowerShell drive-qualified path ($env:x:b), not string concatenation.
+        var result = PsEmitter.Transpile("x=hello; y='a'$x:b");
+        Assert.Contains("${env:x}:", result);
+        Assert.DoesNotContain("$env:x:b", result);
     }
 
     [Fact]

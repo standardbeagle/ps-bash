@@ -2402,8 +2402,9 @@ public static class PsEmitter
     {
         var sb = new StringBuilder();
         sb.Append('"');
-        foreach (var part in parts)
+        for (int i = 0; i < parts.Length; i++)
         {
+            var part = parts[i];
             if (part is WordPart.DoubleQuoted dq)
                 AppendDoubleQuotedInner(sb, dq.Parts);
             else if (part is WordPart.SingleQuoted sq)
@@ -2419,7 +2420,16 @@ public static class PsEmitter
             else if (part is WordPart.BracedVarSub nbvs)
                 sb.Append(EmitBracedVar(nbvs, inDoubleQuote: true));
             else if (part is WordPart.SimpleVarSub nvs)
-                sb.Append(EmitSimpleVar(nvs.Name, inDoubleQuote: true));
+            {
+                // Same drive-reference guard as AppendDoubleQuotedInner: a following literal
+                // starting with ':' (or '.') would fold into the variable token (`$env:x:b`
+                // misparses as a provider-qualified path), so brace it (${x}/${env:x}) — this
+                // flatten path was missing the bracing its double-quoted sibling applies.
+                bool needsBracing = i + 1 < parts.Length && NextPartNeedsBracing(parts[i + 1]);
+                sb.Append(needsBracing
+                    ? EmitSimpleVarBraced(nvs.Name)
+                    : EmitSimpleVar(nvs.Name, inDoubleQuote: true));
+            }
             else if (part is WordPart.CommandSub ncs)
                 // Assignment/flatten context (x=$(cmd)) preserves internal newlines and
                 // strips trailing ones, like bash — not the array $OFS-join a space.
@@ -4010,6 +4020,12 @@ public static class PsEmitter
             if (emitted.StartsWith("$HOME\\", StringComparison.Ordinal) ||
                 emitted.StartsWith("$HOME/", StringComparison.Ordinal))
                 targetExpr = "$HOME + " + QuotePsString("\\" + emitted["$HOME\\".Length..]);
+            else if (emitted.StartsWith('~'))
+                // Unresolved ~user / ~N (dirstack) has no PowerShell equivalent and degrades
+                // to the literal bareword text (WordPart.TildeSub's `_ => $"~{ts.User}"`
+                // branch) — quote it through PsBuild so the assignment is a valid PS string
+                // literal, not an invalid bareword (`$__psbash_cd_target = ~user`).
+                targetExpr = QuotePsString(emitted);
             else
                 targetExpr = emitted;
         }
