@@ -171,8 +171,52 @@ public static class PsEmitter
             var name = s.Words.IsEmpty ? null : GetLiteralValue(s.Words[0]);
             if (name is null || !FusePipelineAllowlist.Contains(name))
                 return false;
+            // Unbounded/streaming stage guard: the fused cmdlet runs the inner
+            // pipeline via InvokeScript, which only returns after the pipeline
+            // COMPLETES — so a never-ending stage (e.g. `tail -f`) would batch-buffer
+            // forever and hang silently where the unfused lane streams live. Any such
+            // stage forces the fallback. See StageIsUnbounded.
+            if (StageIsUnbounded(name, s.Words))
+                return false;
         }
         return true;
+    }
+
+    /// <summary>
+    /// True when an allowlisted stage's args put it into an UNBOUNDED / never-terminating
+    /// mode that the batched fused lane cannot serve (it buffers until the inner pipeline
+    /// completes). The fused chain must never hang where the unfused chain streams, so any
+    /// such stage forces the PowerShell-pipeline fallback.
+    /// <para>
+    /// General deny seam keyed by command so future allowlist additions inherit the check.
+    /// Today only <c>tail</c> has an unbounded flag (<c>-f</c>/<c>-F</c>/<c>--follow</c>).
+    /// For <c>tail</c>, a non-literal arg (variable / command-sub / glob) is treated as
+    /// potentially <c>-f</c> and is conservatively unsafe — correctness (no hang) over the
+    /// perf win on an uncommon shape.
+    /// </para>
+    /// </summary>
+    private static bool StageIsUnbounded(string command, ImmutableArray<CompoundWord> words)
+    {
+        if (command != "tail") return false;
+
+        // words[0] is the command name; scan the operands/flags after it.
+        for (int i = 1; i < words.Length; i++)
+        {
+            var lit = GetLiteralValue(words[i]);
+            if (lit is null)
+                return true; // non-literal arg could expand to -f → be safe, fall back
+
+            if (lit == "--follow" || lit.StartsWith("--follow=", StringComparison.Ordinal))
+                return true;
+            if (lit == "--")
+                break; // end of flags — remaining tokens are operands, not -f
+
+            // Short-flag group (`-f`, `-F`, `-qf`, `-fn`, …): any 'f'/'F' flag char = follow.
+            if (lit.Length >= 2 && lit[0] == '-' && lit[1] != '-'
+                && (lit.IndexOf('f') >= 0 || lit.IndexOf('F') >= 0))
+                return true;
+        }
+        return false;
     }
 
     public static string Emit(Command cmd) => cmd switch

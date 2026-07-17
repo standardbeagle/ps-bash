@@ -59,6 +59,19 @@ namespace PsBash.Cmdlets;
 /// batch there). The kill switch <c>PSBASH_FUSED=0</c> disables detection
 /// entirely.
 /// </para>
+///
+/// <para>
+/// <b>Bounded-output assumption.</b> <c>InvokeScript</c> only returns after the inner
+/// pipeline COMPLETES, so this cmdlet must never be handed a never-terminating stage.
+/// The emitter's <c>StageIsUnbounded</c> guard keeps <c>tail -f</c> / <c>--follow</c>
+/// (and any future unbounded flag) off the fused lane, so a follow chain streams on the
+/// unfused path rather than buffering here forever. The buffer is also unbounded in
+/// MEMORY for a very large FINITE output (the whole result Collection is held before the
+/// first flush), whereas the unfused lane streams per-line — extreme-scale
+/// (100M-line-class) outputs therefore remain best served by the deferred per-stage
+/// streaming contract (profile bottleneck #2). This slice fixes bottleneck #1 (the
+/// per-line IPC return framing) via output batching.
+/// </para>
 /// </summary>
 [Cmdlet(VerbsLifecycle.Invoke, "BashFusedPipeline")]
 [OutputType(typeof(PSObject))]

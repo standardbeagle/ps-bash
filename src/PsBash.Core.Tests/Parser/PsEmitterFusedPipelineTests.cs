@@ -90,6 +90,44 @@ public class PsEmitterFusedPipelineTests
         Assert.DoesNotContain("Invoke-BashFusedPipeline", result);
     }
 
+    // Unbounded-stage guard: `tail -f` never terminates, and the fused cmdlet buffers the
+    // inner pipeline until it completes — so fusing it would hang silently where the
+    // unfused lane streams live. Every follow form must fall back; plain tail still fuses.
+
+    [Theory]
+    [InlineData("tail -f x | grep y")]
+    [InlineData("tail --follow x | grep y")]
+    [InlineData("tail --follow=name x | grep y")]
+    [InlineData("tail -F x | grep y")]
+    [InlineData("tail -qf x | grep y")]
+    [InlineData("tail -fn5 x | grep y")]
+    [InlineData("grep y x | tail -f")]
+    public void Fallback_TailFollow_NotFused(string chain)
+    {
+        var result = PsEmitter.Transpile(chain);
+        Assert.DoesNotContain("Invoke-BashFusedPipeline", result);
+    }
+
+    [Fact]
+    public void Fallback_TailWithVariableArg_ConservativelyNotFused()
+    {
+        // A non-literal arg could expand to -f — the emitter can't prove it bounded, so
+        // it falls back (correctness over the perf win on an uncommon shape).
+        var result = PsEmitter.Transpile("tail $FLAGS x | grep y");
+        Assert.DoesNotContain("Invoke-BashFusedPipeline", result);
+    }
+
+    [Theory]
+    [InlineData("tail -n 5 x | grep y")]
+    [InlineData("tail -n5 x | grep y")]
+    [InlineData("tail -5 x | grep y")]
+    [InlineData("cat x | tail -n 20 | wc -l")]
+    public void Fused_TailBounded_StillFuses(string chain)
+    {
+        var result = PsEmitter.Transpile(chain);
+        Assert.StartsWith(Wrap, result);
+    }
+
     [Fact]
     public void Fallback_SingleMappedCommand_NotFused()
     {

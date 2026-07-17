@@ -308,6 +308,14 @@ profile's dominant bottleneck (per-output-line framing back to the launcher).
 Because the wrapper runs the **identical** inner text, byte-fidelity is guaranteed
 by construction. Any non-allowlisted / external stage, `|&`, per-stage redirect,
 env-prefix, negation, or capture context keeps today's PowerShell-pipeline path.
+
+**Unbounded-stage guard (`StageIsUnbounded`).** The fused cmdlet runs the inner
+pipeline via `InvokeScript`, which returns only after the pipeline *completes* —
+so a never-terminating stage would batch-buffer forever and hang silently where
+the unfused lane streams live. `tail -f` / `-F` / `--follow` (and, conservatively,
+`tail` with a non-literal arg that could expand to `-f`) therefore force the
+fallback; plain `tail -n 5` still fuses. The check is keyed by command name so a
+future allowlist addition with its own unbounded flag inherits the seam.
 The kill switch `PSBASH_FUSED=0` (falsy tokens) disables detection; default ON.
 `ls | grep .txt` and other typed-object boundaries are unaffected — `ls` (and
 `find`/`awk`/`jq`) are deliberately **not** allowlisted.
