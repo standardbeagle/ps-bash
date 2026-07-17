@@ -100,7 +100,16 @@ public static class BashLocator
                 // Warmup: boot WSL VM without blocking Find(). Tests pay cold-start
                 // only if they start before the warmup completes (~5-8s on first run).
                 _ = Task.Run(() => WarmupWsl(wslExe));
-                return new BashHost(BashHostKind.Wsl, "wsl.exe", "wsl", string.Empty);
+                // Resolve the REAL bash version (e.g. "5.2.21(1)-release"), not a
+                // "wsl" placeholder — oracle cassettes embed this so a bash-version
+                // bump produces a visible diff and forces a re-record. Falls back to
+                // "wsl" if the query fails (does not block host availability).
+                var (wslVersion, wslLocale) = QueryWslBash(wslExe);
+                return new BashHost(
+                    BashHostKind.Wsl,
+                    "wsl.exe",
+                    string.IsNullOrEmpty(wslVersion) ? "wsl" : wslVersion,
+                    wslLocale);
             }
         }
 
@@ -182,6 +191,63 @@ public static class BashLocator
                 var locale = lines.Length > 1 ? lines[1].Trim('\r').Trim() : string.Empty;
 
                 // Bash version strings start with digits; reject if empty or clearly wrong.
+                if (string.IsNullOrEmpty(version) || !char.IsDigit(version[0]))
+                    return (string.Empty, string.Empty);
+
+                return (version, locale);
+            }
+            finally
+            {
+                try { if (!proc.HasExited) proc.Kill(entireProcessTree: true); } catch { }
+            }
+        }
+        catch
+        {
+            return (string.Empty, string.Empty);
+        }
+    }
+
+    /// <summary>
+    /// Runs <c>wsl.exe -e bash -c 'echo $BASH_VERSION; echo ${LANG:-}'</c> and
+    /// returns (version, locale). Returns ("", "") on failure or a 5 s timeout.
+    /// Separate from <see cref="QueryBash"/> because WSL needs the
+    /// <c>-e bash -c</c> argument shape, not a bare <c>-c</c>.
+    /// </summary>
+    private static (string Version, string Locale) QueryWslBash(string wslExe)
+    {
+        try
+        {
+            var psi = new ProcessStartInfo
+            {
+                FileName = wslExe,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                UseShellExecute = false,
+            };
+            psi.ArgumentList.Add("-e");
+            psi.ArgumentList.Add("bash");
+            psi.ArgumentList.Add("-c");
+            psi.ArgumentList.Add("echo $BASH_VERSION; echo ${LANG:-}");
+
+            using var proc = Process.Start(psi);
+            if (proc is null) return (string.Empty, string.Empty);
+
+            try
+            {
+                var stdoutTask = proc.StandardOutput.ReadToEndAsync();
+                proc.StandardError.BaseStream.CopyToAsync(Stream.Null);
+
+                if (!proc.WaitForExit(5000))
+                {
+                    try { proc.Kill(entireProcessTree: true); } catch { }
+                    return (string.Empty, string.Empty);
+                }
+
+                var output = stdoutTask.GetAwaiter().GetResult();
+                var lines = output.Split('\n', StringSplitOptions.None);
+                var version = lines.Length > 0 ? lines[0].Trim('\r').Trim() : string.Empty;
+                var locale = lines.Length > 1 ? lines[1].Trim('\r').Trim() : string.Empty;
+
                 if (string.IsNullOrEmpty(version) || !char.IsDigit(version[0]))
                     return (string.Empty, string.Empty);
 

@@ -121,30 +121,31 @@ public static class AssertOracle
         Skip.If(!host.IsAvailable, "oracle: no bash available");
 
         var (bashResult, psBashResult) = await Fixture.RunBothAsync(script, timeout);
-        var (bashStdoutC, bashStderrC) = AssertMatches(script, bashResult, psBashResult);
 
-        // Record mode: freeze the (verified) bash oracle. liveOnly cases are
+        // Record mode: freeze the bash oracle BEFORE asserting, so the cassette
+        // captures the pure oracle even if ps-bash currently has a bug (the
+        // assertion below still reports that mismatch). liveOnly cases are
         // deliberately not cassetted — they must always run live.
         if (mode == OracleRunMode.Record && !liveOnly)
         {
             OracleCassette.Save(new OracleCassette.CassetteEntry(
                 Script: script,
                 BashVersion: host.Version,
-                Stdout: bashStdoutC,
-                Stderr: bashStderrC,
+                Stdout: Canonicalizer.Canonicalize(bashResult.Stdout),
+                Stderr: Canonicalizer.Canonicalize(bashResult.Stderr),
                 ExitCode: bashResult.ExitCode));
         }
+
+        AssertMatches(script, bashResult, psBashResult);
     }
 
     /// <summary>
     /// Canonicalizes both sides, compares stdout/stderr/exit, and throws a diff
-    /// bundle on mismatch. Returns the canonicalized bash stdout/stderr so a
-    /// caller (Record mode) can freeze exactly what was compared. The
-    /// <paramref name="bashResult"/> may be a live bash result or a replayed
-    /// cassette result — canonicalization is idempotent, so both paths are byte
-    /// equivalent.
+    /// bundle on mismatch. The <paramref name="bashResult"/> may be a live bash
+    /// result or a replayed cassette result — canonicalization is idempotent, so
+    /// both paths are byte equivalent.
     /// </summary>
-    private static (string BashStdout, string BashStderr) AssertMatches(
+    private static void AssertMatches(
         string script,
         OracleResult bashResult,
         OracleResult psBashResult)
@@ -163,7 +164,7 @@ public static class AssertOracle
         bool exitMatch = bashResult.ExitCode == psBashResult.ExitCode;
 
         if (stdoutMatch && stderrMatch && exitMatch)
-            return (bashStdout, bashStderr);
+            return;
 
         var bundle = BuildDiffBundle(
             script,
