@@ -387,17 +387,25 @@ public sealed class InvokeBashWcCommand : PSCmdlet
         return (lines, words, chars, maxLine);
     }
 
-    private PSObject BuildResult(
+    /// <summary>
+    /// Format the wc output line (the exact <c>BashText</c> the cmdlet emits),
+    /// shared with the fused-pipeline streaming stage so the fused lane's bytes
+    /// are identical to the unfused path by construction. Column selection +
+    /// 7/8-wide padding + leading-whitespace trim, then
+    /// <see cref="BashRuntime.NormalizeBashText"/>.
+    /// </summary>
+    internal static string FormatWcText(
+        bool linesOnly, bool wordsOnly, bool charsOnly, bool bytesOnly, bool maxLineOnly,
         int lines, int words, int bytes, int chars, int maxLine, string fileName)
     {
         // GNU prints the SELECTED columns in a fixed order: lines, words, chars,
         // bytes, max-line-length. With no selector, the default is lines/words/bytes.
         var cols = new List<int>(5);
-        if (_linesOnly) cols.Add(lines);
-        if (_wordsOnly) cols.Add(words);
-        if (_charsOnly) cols.Add(chars);
-        if (_bytesOnly) cols.Add(bytes);
-        if (_maxLineOnly) cols.Add(maxLine);
+        if (linesOnly) cols.Add(lines);
+        if (wordsOnly) cols.Add(words);
+        if (charsOnly) cols.Add(chars);
+        if (bytesOnly) cols.Add(bytes);
+        if (maxLineOnly) cols.Add(maxLine);
         if (cols.Count == 0) { cols.Add(lines); cols.Add(words); cols.Add(bytes); }
 
         var sb = new StringBuilder();
@@ -414,7 +422,21 @@ public sealed class InvokeBashWcCommand : PSCmdlet
 
         // psm1 oracle: ($parts -join '') -replace '^\s+', ' ' then TrimStart().
         // Net effect is a plain TrimStart of leading whitespace.
-        string bashText = sb.ToString().TrimStart();
+        return BashRuntime.NormalizeBashText(sb.ToString().TrimStart());
+    }
+
+    /// <summary>Count words (maximal non-whitespace runs) — shared with the fused stage.</summary>
+    internal static int CountWordsInLine(string text) => CountWords(text);
+
+    /// <summary>Count Unicode code points — shared with the fused stage.</summary>
+    internal static int CountCodePointsInLine(string s) => CountCodePoints(s);
+
+    private PSObject BuildResult(
+        int lines, int words, int bytes, int chars, int maxLine, string fileName)
+    {
+        string bashText = FormatWcText(
+            _linesOnly, _wordsOnly, _charsOnly, _bytesOnly, _maxLineOnly,
+            lines, words, bytes, chars, maxLine, fileName);
 
         var obj = new PSObject();
         obj.TypeNames.Insert(0, "PsBash.WcResult");

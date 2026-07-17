@@ -1082,7 +1082,7 @@ public sealed class InvokeBashGrepCommand : PSCmdlet
     /// backslash. Mirrors the oracle's <c>-replace</c> chain with
     /// <c>(?&lt;!\\)\(</c> etc.
     /// </summary>
-    private static string EscapeBreMetas(string pat)
+    internal static string EscapeBreMetas(string pat)
     {
         var escapeChars = new[] { '(', ')', '{', '}', '|', '+', '?' };
         foreach (var ch in escapeChars)
@@ -1097,7 +1097,7 @@ public sealed class InvokeBashGrepCommand : PSCmdlet
     /// invert applied to <paramref name="isMatch"/>. Shared by the streaming fast
     /// path and the context/-m fallback so match semantics stay identical.
     /// </summary>
-    private static Match? MatchLine(List<Regex> regexes, string line, bool invertMatch, out bool isMatch)
+    internal static Match? MatchLine(List<Regex> regexes, string line, bool invertMatch, out bool isMatch)
     {
         Match? mo = null;
         bool matched = false;

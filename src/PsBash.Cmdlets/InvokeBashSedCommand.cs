@@ -384,14 +384,14 @@ public sealed class InvokeBashSedCommand : PSCmdlet
 
     // ── sed command model ────────────────────────────────────────────────────
 
-    private enum AddressType
+    internal enum AddressType
     {
         None, Regex, Line, RangeNum, RangeRegex,
         Step,            // first~step
         RangeNumToRegex, // N,/re/  (incl. the 0,/re/ special case)
     }
 
-    private sealed class SedAddress
+    internal sealed class SedAddress
     {
         public AddressType Type;
         public string? Pattern;        // Regex
@@ -403,7 +403,7 @@ public sealed class InvokeBashSedCommand : PSCmdlet
         public string? EndPattern;     // RangeRegex / RangeNumToRegex
     }
 
-    private sealed class SedCommand
+    internal sealed class SedCommand
     {
         public char Type;
         public SedAddress? Address;
@@ -510,6 +510,60 @@ public sealed class InvokeBashSedCommand : PSCmdlet
     /// </summary>
     private SedCommand? ParseExpression(string expression, bool extendedRegex)
     {
+        var cmd = ParseExpressionCore(expression, extendedRegex, out string? err, out int code);
+        if (cmd == null && err != null)
+        {
+            EmitError(err);
+            SessionState.PSVariable.Set("global:LASTEXITCODE", code);
+        }
+        return cmd;
+    }
+
+    /// <summary>
+    /// Try to build the full command list from expressions WITHOUT emitting any
+    /// error (used by the fused-pipeline streaming stage — on any parse failure it
+    /// returns false so the fused lane declines and the real cmdlet reports the
+    /// error). Shares <see cref="ParseExpressionCore"/> with the cmdlet, so parse
+    /// semantics are identical.
+    /// </summary>
+    internal static bool TryBuildCommands(
+        IEnumerable<string> expressions, bool extendedRegex, out List<SedCommand> commands)
+    {
+        commands = new List<SedCommand>();
+        foreach (var expr in expressions)
+        {
+            var c = ParseExpressionCore(expr, extendedRegex, out _, out _);
+            if (c == null) return false;
+            commands.Add(c);
+        }
+        return true;
+    }
+
+    /// <summary>
+    /// Pure expression parser (no runspace / error emission). Returns the parsed
+    /// command, or <c>null</c> with <paramref name="errMsg"/> / <paramref name="errCode"/>
+    /// set on a parse failure. The instance <see cref="ParseExpression"/> wraps this
+    /// and emits the bash-style error; the fused stage uses the return value only.
+    /// </summary>
+    private static SedCommand? ParseExpressionCore(
+        string expression, bool extendedRegex, out string? errMsg, out int errCode)
+    {
+        string? err = null;
+        int code = 0;
+        SedCommand? Fail(string message, int exitCode)
+        {
+            err = message;
+            code = exitCode;
+            return null;
+        }
+
+        var result = Parse();
+        errMsg = err;
+        errCode = code;
+        return result;
+
+        SedCommand? Parse()
+        {
         SedAddress? addr = null;
         int pos = 0;
 
@@ -520,7 +574,7 @@ public sealed class InvokeBashSedCommand : PSCmdlet
             int endSlash = expression.IndexOf('/', pos);
             if (endSlash < 0)
             {
-                return ParseFail("sed: unterminated address regex", 2);
+                return Fail("sed: unterminated address regex", 2);
             }
             addr = new SedAddress
             {
@@ -539,7 +593,7 @@ public sealed class InvokeBashSedCommand : PSCmdlet
                     int endSlash2 = expression.IndexOf('/', pos);
                     if (endSlash2 < 0)
                     {
-                        return ParseFail("sed: unterminated address regex", 2);
+                        return Fail("sed: unterminated address regex", 2);
                     }
                     addr = new SedAddress
                     {
@@ -604,7 +658,7 @@ public sealed class InvokeBashSedCommand : PSCmdlet
                     int endSlashR = expression.IndexOf('/', pos);
                     if (endSlashR < 0)
                     {
-                        return ParseFail("sed: unterminated address regex", 2);
+                        return Fail("sed: unterminated address regex", 2);
                     }
                     addr = new SedAddress
                     {
@@ -652,7 +706,7 @@ public sealed class InvokeBashSedCommand : PSCmdlet
         string remaining = expression.Substring(pos);
         if (remaining.Length == 0)
         {
-            return ParseFail("sed: missing command", 2);
+            return Fail("sed: missing command", 2);
         }
 
         char cmdChar = remaining[0];
@@ -662,7 +716,7 @@ public sealed class InvokeBashSedCommand : PSCmdlet
             {
                 if (remaining.Length < 2)
                 {
-                    return ParseFail("sed: bad substitution", 2);
+                    return Fail("sed: bad substitution", 2);
                 }
                 char delim = remaining[1];
                 var parts = new List<string>();
@@ -698,7 +752,7 @@ public sealed class InvokeBashSedCommand : PSCmdlet
 
                 if (parts.Count < 2)
                 {
-                    return ParseFail("sed: bad substitution", 2);
+                    return Fail("sed: bad substitution", 2);
                 }
 
                 string searchPattern = parts[0];
@@ -729,7 +783,7 @@ public sealed class InvokeBashSedCommand : PSCmdlet
                 // it like GNU (exit 1) instead of silently mangling the input.
                 if (searchPattern.Length == 0)
                 {
-                    return ParseFail(
+                    return Fail(
                         "sed: -e expression #1, char 0: no previous regular expression", 1);
                 }
 
@@ -757,7 +811,7 @@ public sealed class InvokeBashSedCommand : PSCmdlet
                 }
                 catch (ArgumentException ex)
                 {
-                    return ParseFail($"sed: {ex.Message}", 2);
+                    return Fail($"sed: {ex.Message}", 2);
                 }
 
                 return new SedCommand
@@ -811,17 +865,17 @@ public sealed class InvokeBashSedCommand : PSCmdlet
             {
                 if (remaining.Length < 2)
                 {
-                    return ParseFail("sed: bad transliteration", 2);
+                    return Fail("sed: bad transliteration", 2);
                 }
                 char delim = remaining[1];
                 var parts = remaining.Substring(2).Split(delim);
                 if (parts.Length < 2)
                 {
-                    return ParseFail("sed: bad transliteration", 2);
+                    return Fail("sed: bad transliteration", 2);
                 }
                 if (parts[0].Length != parts[1].Length)
                 {
-                    return ParseFail(
+                    return Fail(
                         "sed: y: source and dest must be the same length", 2);
                 }
                 return new SedCommand
@@ -834,15 +888,9 @@ public sealed class InvokeBashSedCommand : PSCmdlet
                 };
             }
             default:
-                return ParseFail($"sed: unsupported command '{cmdChar}'", 2);
+                return Fail($"sed: unsupported command '{cmdChar}'", 2);
         }
-    }
-
-    private SedCommand? ParseFail(string message, int exitCode)
-    {
-        EmitError(message);
-        SessionState.PSVariable.Set("global:LASTEXITCODE", exitCode);
-        return null;
+        }
     }
 
     /// <summary>
@@ -932,7 +980,7 @@ public sealed class InvokeBashSedCommand : PSCmdlet
     /// <summary>
     /// Reproduces the psm1 <c>$processLines</c> closure: the sed cycle engine.
     /// </summary>
-    private static List<string> ProcessLines(
+    internal static List<string> ProcessLines(
         string[] inputLines, List<SedCommand> commands)
     {
         var outputLines = new List<string>();
@@ -1139,7 +1187,7 @@ public sealed class InvokeBashSedCommand : PSCmdlet
     /// in a single runspace, so a static carrier is safe here.
     /// </summary>
     [ThreadStatic]
-    private static bool SuppressDefault;
+    internal static bool SuppressDefault;
 
     // ── file IO + glob (psm1 Resolve-BashGlob / Read-BashFileBytes /
     //    Write-BashFileText slices reimplemented in C#) ───────────────────────

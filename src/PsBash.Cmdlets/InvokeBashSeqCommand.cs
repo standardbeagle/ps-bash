@@ -74,8 +74,67 @@ public sealed class InvokeBashSeqCommand : PSCmdlet
             return;
         }
 
-        string? separator = null;
-        bool equalWidth = w.IsPresent;
+        var status = SeqCore.Generate(args, w.IsPresent,
+            out var values, out string? separator, out bool isInteger, out string? badIncrement);
+
+        if (status == SeqCore.Status.ZeroIncrement)
+        {
+            FileSystemHelpers.WriteBashError(this, $"seq: invalid Zero increment value: '{badIncrement}'");
+            return;
+        }
+
+        if (separator != null)
+        {
+            WriteObject(BashRuntime.NewBashObject(string.Join(separator, values)));
+            return;
+        }
+
+        for (int j = 0; j < values.Count; j++)
+        {
+            var obj = new PSObject();
+            obj.TypeNames.Insert(0, "PsBash.SeqOutput");
+            object value = isInteger
+                ? (object)(long)Math.Round(
+                    double.Parse(values[j], CultureInfo.InvariantCulture))
+                : double.Parse(values[j], CultureInfo.InvariantCulture);
+            obj.Properties.Add(new PSNoteProperty("Value", value));
+            obj.Properties.Add(new PSNoteProperty("Index", j));
+            obj.Properties.Add(new PSNoteProperty("BashText", values[j]));
+            WriteObject(obj);
+        }
+    }
+}
+
+/// <summary>
+/// The pure value-generation core of <c>seq</c>, shared by
+/// <see cref="InvokeBashSeqCommand"/> and the fused-pipeline streaming stage
+/// (PERF phase-2b). It reproduces the cmdlet's exact parse + epsilon loop, so
+/// the fused lane's <c>BashText</c> sequence is identical to the unfused
+/// per-object path by construction. Version / <c>--help</c> are handled by the
+/// caller before this runs.
+/// </summary>
+internal static class SeqCore
+{
+    internal enum Status { Ok, ZeroIncrement }
+
+    /// <summary>
+    /// Produce the formatted value strings (the exact <c>BashText</c> the cmdlet
+    /// emits per line). <paramref name="separator"/> is non-null when <c>-s</c>
+    /// was given (the whole sequence is one joined string). Returns
+    /// <see cref="Status.ZeroIncrement"/> without producing values when an
+    /// explicit 3-operand step is zero (GNU error case).
+    /// </summary>
+    internal static Status Generate(
+        string[] args, bool equalWidthFlag,
+        out List<string> values, out string? separator, out bool isInteger,
+        out string? badIncrement)
+    {
+        values = new List<string>();
+        separator = null;
+        isInteger = true;
+        badIncrement = null;
+
+        bool equalWidth = equalWidthFlag;
         var operands = new List<string>();
 
         int i = 0;
@@ -129,16 +188,15 @@ public sealed class InvokeBashSeqCommand : PSCmdlet
         }
 
         // GNU seq rejects an explicit zero increment (exit 1) rather than looping
-        // forever; ps-bash previously broke out of the loop silently producing no
-        // output. Only an explicit step (3 operands) can be zero — the 1/2-operand
+        // forever. Only an explicit step (3 operands) can be zero — the 1/2-operand
         // forms default the increment to 1.
         if (operands.Count >= 3 && increment == 0)
         {
-            FileSystemHelpers.WriteBashError(this, $"seq: invalid Zero increment value: '{operands[1]}'");
-            return;
+            badIncrement = operands[1];
+            return Status.ZeroIncrement;
         }
 
-        bool isInteger = (first == Math.Floor(first))
+        isInteger = (first == Math.Floor(first))
             && (increment == Math.Floor(increment))
             && (last == Math.Floor(last));
 
@@ -163,17 +221,10 @@ public sealed class InvokeBashSeqCommand : PSCmdlet
             padWidth = ((long)maxVal).ToString(CultureInfo.InvariantCulture).Length;
         }
 
-        var values = new List<string>();
         bool ascending = increment > 0;
         int index = 0;
         double current = first;
 
-        // Match the psm1 oracle's epsilon comparison byte-for-byte. The
-        // oracle's `while` has no iteration cap; the only divergence here is
-        // the defensive `increment == 0` break at the bottom of the loop body
-        // to avoid an infinite loop on a zero step (the oracle would also
-        // hang in that case; we exit early instead — same caller-visible
-        // result of "no progress" rather than a true infinite loop).
         while ((ascending && current <= (last + 1e-9))
                || (!ascending && current >= (last - 1e-9)))
         {
@@ -198,25 +249,7 @@ public sealed class InvokeBashSeqCommand : PSCmdlet
             if (increment == 0) break;
         }
 
-        if (separator != null)
-        {
-            WriteObject(BashRuntime.NewBashObject(string.Join(separator, values)));
-            return;
-        }
-
-        for (int j = 0; j < values.Count; j++)
-        {
-            var obj = new PSObject();
-            obj.TypeNames.Insert(0, "PsBash.SeqOutput");
-            object value = isInteger
-                ? (object)(long)Math.Round(
-                    double.Parse(values[j], CultureInfo.InvariantCulture))
-                : double.Parse(values[j], CultureInfo.InvariantCulture);
-            obj.Properties.Add(new PSNoteProperty("Value", value));
-            obj.Properties.Add(new PSNoteProperty("Index", j));
-            obj.Properties.Add(new PSNoteProperty("BashText", values[j]));
-            WriteObject(obj);
-        }
+        return Status.Ok;
     }
 
     private static double ParseDouble(string s) =>
