@@ -119,7 +119,13 @@ CmdletsToExport = @(
     # semantics (** , / truncating, bitwise/shift, 1/0 comparisons & logicals,
     # ternary, bases) that PowerShell's $( ) subexpression mistranslated. Emitted
     # by the transpiler as $(Invoke-BashArith '<expr>'); not a bash command alias.
-    'Invoke-BashArith'
+    'Invoke-BashArith',
+    # Fused-pipeline lane (PERF phase 2): when every stage of a bash pipeline maps
+    # to our own line-oriented Invoke-Bash* commands, the transpiler wraps the whole
+    # emitted pipeline in Invoke-BashFusedPipeline { … } so the result returns to the
+    # launcher in a few large batched frames instead of one IPC frame per line
+    # (the phase-1 profile's dominant bottleneck). Not a bash command alias.
+    'Invoke-BashFusedPipeline'
 )
 
 VariablesToExport = @()
