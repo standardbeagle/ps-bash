@@ -1647,88 +1647,87 @@ function Invoke-JqFilter {
     return @()
 }
 
-function Split-JqPipe {
-    param([string]$Filter)
+# Shared quote-aware, depth-tracking char scanner used by every Jq top-level
+# scan (Split-JqPipe/Comma, Get-JqMatchingBracket, Find-JqTopLevelChar/Str,
+# Find-JqKeyword/BranchKeyword). Advances exactly one scan "unit" starting at
+# $Index: either a single character, or (inside a string) a backslash-escaped
+# pair consumed atomically. Returns the new Depth/InStr state, the NextIndex
+# the caller should resume from (the caller then does $i = NextIndex + 1),
+# the primary Char at $Index, and IsTopLevel = "not inside a string and depth
+# is 0 after applying this char's own bracket delta" -- the exact condition
+# every duplicated scanner tested inline. OpenChars/CloseChars default to all
+# three bracket kinds (used by 6 of the 7 callers); Get-JqMatchingBracket
+# passes a single Open/Close pair so only that bracket kind affects depth.
+function Get-JqScanStep {
+    param(
+        [string]$S,
+        [int]$Index,
+        [int]$Depth,
+        [bool]$InStr,
+        [string]$OpenChars = '([{',
+        [string]$CloseChars = ')]}'
+    )
+    $c = $S[$Index]
+    if ($InStr) {
+        if ($c -eq '\' -and ($Index + 1) -lt $S.Length) {
+            return @{ NextIndex = $Index + 1; Depth = $Depth; InStr = $InStr; IsTopLevel = $false; Char = $c }
+        }
+        if ($c -eq '"') { $InStr = $false }
+        return @{ NextIndex = $Index; Depth = $Depth; InStr = $InStr; IsTopLevel = $false; Char = $c }
+    }
+    if ($c -eq '"') {
+        return @{ NextIndex = $Index; Depth = $Depth; InStr = $true; IsTopLevel = $false; Char = $c }
+    }
+    if ($OpenChars.IndexOf($c) -ge 0) { $Depth++ }
+    if ($CloseChars.IndexOf($c) -ge 0) { $Depth-- }
+    return @{ NextIndex = $Index; Depth = $Depth; InStr = $false; IsTopLevel = ($Depth -eq 0); Char = $c }
+}
+
+function Split-JqOnTopLevelChar {
+    param([string]$Filter, [char]$Delimiter)
     $segments = [System.Collections.Generic.List[string]]::new()
+    $current = [System.Text.StringBuilder]::new()
     $depth = 0
     $inStr = $false
-    $current = [System.Text.StringBuilder]::new()
-
-    for ($i = 0; $i -lt $Filter.Length; $i++) {
-        $c = $Filter[$i]
-        if ($inStr) {
-            $current.Append($c) | Out-Null
-            if ($c -eq '\' -and ($i + 1) -lt $Filter.Length) {
-                $i++
-                $current.Append($Filter[$i]) | Out-Null
-            } elseif ($c -eq '"') {
-                $inStr = $false
-            }
-            continue
-        }
-        if ($c -eq '"') { $inStr = $true; $current.Append($c) | Out-Null; continue }
-        if ($c -eq '(' -or $c -eq '[' -or $c -eq '{') { $depth++ }
-        if ($c -eq ')' -or $c -eq ']' -or $c -eq '}') { $depth-- }
-        if ($c -eq '|' -and $depth -eq 0) {
+    $i = 0
+    while ($i -lt $Filter.Length) {
+        $step = Get-JqScanStep -S $Filter -Index $i -Depth $depth -InStr $inStr
+        $depth = $step.Depth
+        $inStr = $step.InStr
+        if ($step.IsTopLevel -and $step.Char -eq $Delimiter) {
             $segments.Add($current.ToString().Trim())
             $current = [System.Text.StringBuilder]::new()
-            continue
+        } else {
+            $current.Append($Filter.Substring($i, $step.NextIndex - $i + 1)) | Out-Null
         }
-        $current.Append($c) | Out-Null
+        $i = $step.NextIndex + 1
     }
     $last = $current.ToString().Trim()
     if ($last -ne '') { $segments.Add($last) }
     return @($segments)
 }
 
+function Split-JqPipe {
+    param([string]$Filter)
+    return Split-JqOnTopLevelChar -Filter $Filter -Delimiter '|'
+}
+
 function Split-JqComma {
     param([string]$Filter)
-    $segments = [System.Collections.Generic.List[string]]::new()
-    $depth = 0
-    $inStr = $false
-    $current = [System.Text.StringBuilder]::new()
-
-    for ($i = 0; $i -lt $Filter.Length; $i++) {
-        $c = $Filter[$i]
-        if ($inStr) {
-            $current.Append($c) | Out-Null
-            if ($c -eq '\' -and ($i + 1) -lt $Filter.Length) {
-                $i++
-                $current.Append($Filter[$i]) | Out-Null
-            } elseif ($c -eq '"') {
-                $inStr = $false
-            }
-            continue
-        }
-        if ($c -eq '"') { $inStr = $true; $current.Append($c) | Out-Null; continue }
-        if ($c -eq '(' -or $c -eq '[' -or $c -eq '{') { $depth++ }
-        if ($c -eq ')' -or $c -eq ']' -or $c -eq '}') { $depth-- }
-        if ($c -eq ',' -and $depth -eq 0) {
-            $segments.Add($current.ToString().Trim())
-            $current = [System.Text.StringBuilder]::new()
-            continue
-        }
-        $current.Append($c) | Out-Null
-    }
-    $last = $current.ToString().Trim()
-    if ($last -ne '') { $segments.Add($last) }
-    return @($segments)
+    return Split-JqOnTopLevelChar -Filter $Filter -Delimiter ','
 }
 
 function Get-JqMatchingBracket {
     param([string]$S, [char]$Open, [char]$Close, [int]$Start)
     $depth = 0
     $inStr = $false
-    for ($i = $Start; $i -lt $S.Length; $i++) {
-        $c = $S[$i]
-        if ($inStr) {
-            if ($c -eq '\' -and ($i + 1) -lt $S.Length) { $i++; continue }
-            if ($c -eq '"') { $inStr = $false }
-            continue
-        }
-        if ($c -eq '"') { $inStr = $true; continue }
-        if ($c -eq $Open) { $depth++ }
-        if ($c -eq $Close) { $depth--; if ($depth -eq 0) { return $i } }
+    $i = $Start
+    while ($i -lt $S.Length) {
+        $step = Get-JqScanStep -S $S -Index $i -Depth $depth -InStr $inStr -OpenChars ([string]$Open) -CloseChars ([string]$Close)
+        $depth = $step.Depth
+        $inStr = $step.InStr
+        if ($step.IsTopLevel -and $step.Char -eq $Close) { return $i }
+        $i = $step.NextIndex + 1
     }
     return -1
 }
@@ -1737,17 +1736,13 @@ function Find-JqTopLevelChar {
     param([string]$S, [char]$Ch)
     $depth = 0
     $inStr = $false
-    for ($i = 0; $i -lt $S.Length; $i++) {
-        $c = $S[$i]
-        if ($inStr) {
-            if ($c -eq '\' -and ($i + 1) -lt $S.Length) { $i++; continue }
-            if ($c -eq '"') { $inStr = $false }
-            continue
-        }
-        if ($c -eq '"') { $inStr = $true; continue }
-        if ($c -eq '(' -or $c -eq '[' -or $c -eq '{') { $depth++ }
-        if ($c -eq ')' -or $c -eq ']' -or $c -eq '}') { $depth-- }
-        if ($c -eq $Ch -and $depth -eq 0) { return $i }
+    $i = 0
+    while ($i -lt $S.Length) {
+        $step = Get-JqScanStep -S $S -Index $i -Depth $depth -InStr $inStr
+        $depth = $step.Depth
+        $inStr = $step.InStr
+        if ($step.IsTopLevel -and $step.Char -eq $Ch) { return $i }
+        $i = $step.NextIndex + 1
     }
     return -1
 }
@@ -1784,6 +1779,20 @@ function Resolve-JqDotPath {
                             if ($prop.Name -ne 'PSTypeName') { $next.Add($prop.Value) }
                         }
                     }
+                }
+            } elseif ($inner.Length -ge 2 -and $inner.StartsWith('"') -and $inner.EndsWith('"')) {
+                # .["key"] object-key access (quoted key, not an array index --
+                # [int]$inner used to crash on this before the key check existed)
+                $key = $inner.Substring(1, $inner.Length - 2)
+                foreach ($item in $current) {
+                    $val = $null
+                    if ($item -is [System.Collections.IDictionary]) {
+                        if ($item.Contains($key)) { $val = $item[$key] }
+                    } elseif ($item -is [PSCustomObject]) {
+                        $prop = $item.PSObject.Properties[$key]
+                        if ($null -ne $prop) { $val = $prop.Value }
+                    }
+                    $next.Add($val)
                 }
             } else {
                 # .[N] index
@@ -1926,58 +1935,48 @@ function Invoke-JqIf {
     return @()
 }
 
+# Word-boundary check shared by Find-JqKeyword / Find-JqBranchKeyword: is the
+# $Keyword occurrence at $Index a standalone token, not part of a longer word?
+function Test-JqKeywordBoundary {
+    param([string]$S, [int]$Index, [string]$Keyword)
+    if (($Index + $Keyword.Length) -gt $S.Length) { return $false }
+    if ($S.Substring($Index, $Keyword.Length) -ne $Keyword) { return $false }
+    $beforeOk = ($Index -eq 0) -or ($S[$Index - 1] -match '[\s\(\[\{,;]')
+    $afterIdx = $Index + $Keyword.Length
+    $afterOk = ($afterIdx -ge $S.Length) -or ($S[$afterIdx] -match '[\s\)\]\},;]')
+    return ($beforeOk -and $afterOk)
+}
+
 function Find-JqKeyword {
     param([string]$S, [string]$Keyword)
     $depth = 0
     $inStr = $false
-    for ($i = 0; $i -le ($S.Length - $Keyword.Length); $i++) {
-        $c = $S[$i]
-        if ($inStr) {
-            if ($c -eq '\' -and ($i + 1) -lt $S.Length) { $i++; continue }
-            if ($c -eq '"') { $inStr = $false }
-            continue
-        }
-        if ($c -eq '"') { $inStr = $true; continue }
-        if ($c -eq '(' -or $c -eq '[' -or $c -eq '{') { $depth++ }
-        if ($c -eq ')' -or $c -eq ']' -or $c -eq '}') { $depth-- }
-        if ($depth -eq 0 -and $S.Substring($i, $Keyword.Length) -eq $Keyword) {
-            # Ensure it's a word boundary (not part of a longer word)
-            $beforeOk = ($i -eq 0) -or ($S[$i - 1] -match '[\s\(\[\{,;]')
-            $afterIdx = $i + $Keyword.Length
-            $afterOk = ($afterIdx -ge $S.Length) -or ($S[$afterIdx] -match '[\s\)\]\},;]')
-            if ($beforeOk -and $afterOk) { return $i }
-        }
+    $i = 0
+    while ($i -lt $S.Length) {
+        $step = Get-JqScanStep -S $S -Index $i -Depth $depth -InStr $inStr
+        $depth = $step.Depth
+        $inStr = $step.InStr
+        if ($step.IsTopLevel -and (Test-JqKeywordBoundary -S $S -Index $i -Keyword $Keyword)) { return $i }
+        $i = $step.NextIndex + 1
     }
     return -1
 }
 
 function Find-JqBranchKeyword {
     param([string]$S)
-    $depth = 0
-    $inStr = $false
+    # Each keyword gets its OWN Find-JqKeyword call, which starts depth/inStr
+    # fresh at 0/false. Previously the three scans shared one $depth/$inStr
+    # pair declared outside the keyword loop, so an unbalanced bracket or
+    # unterminated quote inside one branch body corrupted the state seen by
+    # the NEXT keyword's scan, misclassifying elif/else/end. Delegating to
+    # Find-JqKeyword (which owns its own locals) fixes the leak by construction.
     $bestIdx = $S.Length
     $bestKw = 'end'
     foreach ($kw in @('elif', 'else', 'end')) {
-        for ($i = 0; $i -le ($S.Length - $kw.Length); $i++) {
-            $c = $S[$i]
-            if ($inStr) {
-                if ($c -eq '\' -and ($i + 1) -lt $S.Length) { $i++; continue }
-                if ($c -eq '"') { $inStr = $false }
-                continue
-            }
-            if ($c -eq '"') { $inStr = $true; continue }
-            if ($c -eq '(' -or $c -eq '[' -or $c -eq '{') { $depth++ }
-            if ($c -eq ')' -or $c -eq ']' -or $c -eq '}') { $depth-- }
-            if ($depth -eq 0 -and $S.Substring($i, $kw.Length) -eq $kw) {
-                $beforeOk = ($i -eq 0) -or ($S[$i - 1] -match '[\s\(\[\{,;]')
-                $afterIdx = $i + $kw.Length
-                $afterOk = ($afterIdx -ge $S.Length) -or ($S[$afterIdx] -match '[\s\)\]\},;]')
-                if ($beforeOk -and $afterOk -and $i -lt $bestIdx) {
-                    $bestIdx = $i
-                    $bestKw = $kw
-                    break
-                }
-            }
+        $idx = Find-JqKeyword -S $S -Keyword $kw
+        if ($idx -ge 0 -and $idx -lt $bestIdx) {
+            $bestIdx = $idx
+            $bestKw = $kw
         }
     }
     return @{ Index = $bestIdx; Keyword = $bestKw }
@@ -2010,19 +2009,15 @@ function Find-JqTopLevelStr {
     param([string]$S, [string]$Sub)
     $depth = 0
     $inStr = $false
-    for ($i = 0; $i -le ($S.Length - $Sub.Length); $i++) {
-        $c = $S[$i]
-        if ($inStr) {
-            if ($c -eq '\' -and ($i + 1) -lt $S.Length) { $i++; continue }
-            if ($c -eq '"') { $inStr = $false }
-            continue
-        }
-        if ($c -eq '"') { $inStr = $true; continue }
-        if ($c -eq '(' -or $c -eq '[' -or $c -eq '{') { $depth++ }
-        if ($c -eq ')' -or $c -eq ']' -or $c -eq '}') { $depth-- }
-        if ($depth -eq 0 -and $S.Substring($i, $Sub.Length) -eq $Sub) {
+    $i = 0
+    while ($i -lt $S.Length) {
+        $step = Get-JqScanStep -S $S -Index $i -Depth $depth -InStr $inStr
+        $depth = $step.Depth
+        $inStr = $step.InStr
+        if ($step.IsTopLevel -and ($i + $Sub.Length) -le $S.Length -and $S.Substring($i, $Sub.Length) -eq $Sub) {
             return $i
         }
+        $i = $step.NextIndex + 1
     }
     return -1
 }

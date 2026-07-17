@@ -246,4 +246,72 @@ try {
         // the critical assertion is no 'PWNED' exception propagated.
         Assert.NotNull(result);
     }
+
+    // --- Shared jq scanner consolidation regression tests (worktrack task
+    // 01KX8V6FFY912VG0BEDM8Y06RP): Split-JqPipe/Comma, Get-JqMatchingBracket,
+    // Find-JqTopLevelChar/Str, Find-JqKeyword/BranchKeyword were 7 duplicated
+    // quote-aware char walks, consolidated onto one shared Get-JqScanStep
+    // helper. These tests exercise the two latent bugs fixed in the same
+    // pass, end-to-end through Invoke-BashYq (the only surviving caller of
+    // the psm1 jq engine -- Invoke-BashJq is a separate C# JqEngine and does
+    // not touch these psm1 helpers).
+
+    [Fact]
+    public void Yq_IfElifElse_BracketBearingStringInEarlierBranch_StillClassifiesLaterKeywords()
+    {
+        // Bug 1: Find-JqBranchKeyword reused $depth/$inStr across its three
+        // sequential elif/else/end scans instead of resetting per keyword.
+        // A branch body containing bracket/quote characters (here inside a
+        // string literal in the untaken 'then' arm) must not corrupt
+        // classification of the 'elif' / 'else' / 'end' keywords that follow.
+        var path = WriteFile("cond.yaml", "flag: false\nflag2: true\n");
+        var lines = RunText(
+            $"Invoke-BashYq -r 'if .flag then \"a[b]c\" elif .flag2 then \"elif-taken\" else \"else-taken\" end' '{Esc(path)}'");
+        Assert.Single(lines);
+        Assert.Equal("elif-taken", lines[0]);
+    }
+
+    [Fact]
+    public void Yq_IfElifElse_BracketBearingStringInEarlierBranch_FallsThroughToElseWhenNoBranchMatches()
+    {
+        var path = WriteFile("cond2.yaml", "flag: false\nflag2: false\n");
+        var lines = RunText(
+            $"Invoke-BashYq -r 'if .flag then \"a[b]c\" elif .flag2 then \"elif-taken\" else \"else-taken\" end' '{Esc(path)}'");
+        Assert.Single(lines);
+        Assert.Equal("else-taken", lines[0]);
+    }
+
+    [Fact]
+    public void Yq_ObjectKeyIndex_QuotedKey_ReturnsMember()
+    {
+        // Bug 2: Resolve-JqDotPath did `$idx = [int]$inner` unconditionally
+        // for `.[...]`, crashing on a quoted object key like `.["foo"]`
+        // (only `.[N]` array indices were handled). A quoted-key path
+        // segment must resolve the member instead of throwing.
+        var path = WriteFile("keyidx.yaml", "foo: bar\n");
+        var lines = RunText($"Invoke-BashYq -r '.[\"foo\"]' '{Esc(path)}'");
+        Assert.Single(lines);
+        Assert.Equal("bar", lines[0]);
+    }
+
+    [Fact]
+    public void Yq_ObjectKeyIndex_MissingKey_ReturnsNull()
+    {
+        var path = WriteFile("keyidx2.yaml", "foo: bar\n");
+        var lines = RunText($"Invoke-BashYq '.[\"missing\"]' '{Esc(path)}'");
+        Assert.Single(lines);
+        Assert.Equal("null", lines[0]);
+    }
+
+    [Fact]
+    public void Yq_ArrayIndex_StillWorksAfterDotPathConsolidation()
+    {
+        // Directive-1-adjacent regression: the existing `.[N]` array-index
+        // path through the same Resolve-JqDotPath branch must be unchanged
+        // by the `.["key"]` fix.
+        var path = WriteFile("arridx.yaml", "items:\n  - a\n  - b\n  - c\n");
+        var lines = RunText($"Invoke-BashYq -r '.items[1]' '{Esc(path)}'");
+        Assert.Single(lines);
+        Assert.Equal("b", lines[0]);
+    }
 }
