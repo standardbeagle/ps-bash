@@ -393,7 +393,7 @@ public static class PsEmitter
             // Empty list means implicit $@ -> use BashPositional if set, else $args
             if (forIn.List.IsEmpty)
             {
-                sb.Append($"foreach (${forIn.Var} in $(if ($global:BashPositional) {{ $global:BashPositional }} else {{ $args }})) {{ ");
+                sb.Append($"foreach (${forIn.Var} in {PsBuild.BuildPositionalExpansion("@")}) {{ ");
             }
             else
             {
@@ -480,7 +480,7 @@ public static class PsEmitter
             // single space-separated word, so the loop would run once over the
             // whole join. Emit the positional array directly instead.
             if (IsPositionalAllWord(list[0]))
-                return "$(if ($global:BashPositional) { $global:BashPositional } else { $args })";
+                return PsBuild.BuildPositionalExpansion("@");
 
             // `for x in "${arr[@]}"` (and bare ${arr[@]}/${arr[*]}) iterates per
             // element. Quoted "${arr[@]}" would otherwise stringify the array into
@@ -3264,37 +3264,7 @@ public static class PsEmitter
         if (_loopVars is not null && _loopVars.Contains(name))
             return $"${name}";
 
-        return name switch
-        {
-            "null" or "true" or "false" or "HOME" or "LASTEXITCODE" or "PWD" => $"${name}",
-            "?" => "$global:LASTEXITCODE",
-            "RANDOM" => "$(Get-Random -Maximum 32768)",
-            "@" or "*" => "$(if ($global:BashPositional) { $global:BashPositional } else { $args })",
-            "#" => "$(if ($global:BashPositional) { $global:BashPositional.Count } else { $args.Count })",
-            "0" => inDoubleQuote ? "$($MyInvocation.MyCommand.Name)" : "$MyInvocation.MyCommand.Name",
-            "$" => "$PID",
-            "!" => "$global:BashBgLastPid",
-            "-" => "$global:BashFlags",
-            "_" => "$global:BashLastArg",
-            "SECONDS" => "$([math]::Floor(([DateTime]::UtcNow - $global:BashStartTime).TotalSeconds))",
-            "PPID" => "(Get-Process -Id $PID -ErrorAction SilentlyContinue).Parent.Id",
-            "BASH_VERSION" => "$global:BashVersion",
-            "BASH_VERSINFO" => "$global:BashVersionInfo",
-            var d when d.Length == 1 && d[0] is >= '1' and <= '9' =>
-                $"$(if ($global:BashPositional) {{ $global:BashPositional[{int.Parse(d) - 1}] }} else {{ $args[{int.Parse(d) - 1}] }})",
-            // Multi-digit positionals only arise from the braced form ${10}, ${11} — a
-            // bare $10 is $1 followed by a literal 0 (handled in ParseSimpleVar). A bash
-            // variable name can never be all-digits, so an all-digit name here is unambiguously
-            // a positional parameter, not an env var.
-            // ${10000000000} — a positional index beyond any possible arg count is
-            // an unset parameter → empty in bash. int.Parse overflowed here; guard
-            // with TryParse and emit the empty string for an out-of-range index.
-            var d when d.Length >= 2 && IsAllDigits(d) =>
-                int.TryParse(d, out int posIdx)
-                    ? $"$(if ($global:BashPositional) {{ $global:BashPositional[{posIdx - 1}] }} else {{ $args[{posIdx - 1}] }})"
-                    : "''",
-            _ => $"$env:{name}",
-        };
+        return PsBuild.TryMapSpecialVar(name, braced: false, inDoubleQuote) ?? $"$env:{name}";
     }
 
     // -- RC-7: unquoted variable word-splitting -------------------------------
@@ -3854,21 +3824,7 @@ public static class PsEmitter
         if (_loopVars is not null && _loopVars.Contains(name))
             return $"${{{name}}}";
 
-        return name switch
-        {
-            "null" or "true" or "false" or "HOME" or "LASTEXITCODE" => $"${{{name}}}",
-            "?" => "${global:LASTEXITCODE}",
-            "@" or "*" => "$(if ($global:BashPositional) { $global:BashPositional } else { $args })",
-            "#" => "$(if ($global:BashPositional) { $global:BashPositional.Count } else { $args.Count })",
-            "0" => "$($MyInvocation.MyCommand.Name)",
-            "$" => "${PID}",
-            "!" => "${global:BashBgLastPid}",
-            "-" => "${global:BashFlags}",
-            "_" => "${global:BashLastArg}",
-            var d when d.Length == 1 && d[0] is >= '1' and <= '9' =>
-                $"$(if ($global:BashPositional) {{ $global:BashPositional[{int.Parse(d) - 1}] }} else {{ $args[{int.Parse(d) - 1}] }})",
-            _ => $"${{env:{name}}}",
-        };
+        return PsBuild.TryMapSpecialVar(name, braced: true, inDoubleQuote: true) ?? $"${{env:{name}}}";
     }
 
     private static string EmitCommandList(Command.CommandList list)

@@ -181,4 +181,120 @@ public static class PsBuild
     /// </summary>
     public const string NullSafeBashText =
         "if ($null -ne $_ -and $_.PSObject.Properties['BashText']) { $_.BashText } else { \"$_\" }";
+
+    // ───────────────────────── Positional-parameter expansion ──────────────────────────
+
+    /// <summary>
+    /// The PowerShell subexpression for a bash positional-parameter expansion:
+    /// <c>$@</c>/<c>$*</c> (the whole list), <c>$#</c> (the count), or a 1-based
+    /// positional index (<c>$1</c>..<c>$9</c>, <c>${10}</c>, …). Every site prefers
+    /// <c>$global:BashPositional</c> — set inside function bodies (see
+    /// <c>EmitFunction</c> save/restore) and by <c>set --</c> — falling back to the
+    /// script's own <c>$args</c> at top level. This is the ONE source for that
+    /// preference-fallback shape; it used to be hand-copied at every positional call
+    /// site and had to change in lockstep.
+    /// </summary>
+    /// <param name="sigil"><c>"@"</c>, <c>"*"</c>, <c>"#"</c>, or a base-10 positional index string.</param>
+    public static string BuildPositionalExpansion(string sigil) =>
+        sigil switch
+        {
+            "@" or "*" => "$(if ($global:BashPositional) { $global:BashPositional } else { $args })",
+            "#" => "$(if ($global:BashPositional) { $global:BashPositional.Count } else { $args.Count })",
+            _ when int.TryParse(sigil, out int oneBased) =>
+                "$(if ($global:BashPositional) { $global:BashPositional[" + (oneBased - 1) + "] } "
+                + "else { $args[" + (oneBased - 1) + "] })",
+            _ => throw new System.ArgumentException($"Not a positional sigil: '{sigil}'", nameof(sigil)),
+        };
+
+    // ───────────────────────────── Special-variable mapping ────────────────────────────
+
+    /// <summary>
+    /// The single source of truth for how a bash special variable (<c>$?</c>, <c>$$</c>,
+    /// <c>$RANDOM</c>, positional params, …) maps to PowerShell. Returns <c>null</c> when
+    /// <paramref name="name"/> is not a recognized special variable OR when the braced
+    /// (<c>${name}</c>) form of a recognized special variable has no dedicated mapping —
+    /// in both cases the caller falls back to its own plain/braced <c>$env:</c> reference.
+    /// <para>
+    /// <paramref name="braced"/> selects between the plain-<c>$name</c> emission (used for
+    /// a bare <c>$name</c> word) and the brace-quoted <c>${name}</c> emission (used inside
+    /// double quotes when the following character would otherwise be misparsed, e.g.
+    /// <c>"$x:suffix"</c>). The two forms are NOT symmetric today — several special names
+    /// (<c>PWD</c>, <c>RANDOM</c>, <c>SECONDS</c>, <c>PPID</c>, <c>BASH_VERSION</c>,
+    /// <c>BASH_VERSINFO</c>, and multi-digit positionals) only have a plain mapping; a
+    /// braced reference to one of them falls through to <c>${env:name}</c>. This mirrors
+    /// the pre-existing (and pre-existing-buggy) behavior of the two call sites this
+    /// method replaces byte-for-byte — it is not a design choice made here.
+    /// </para>
+    /// <para>
+    /// <paramref name="inDoubleQuote"/> only affects <c>$0</c>: inside double quotes (or
+    /// always, for the braced form) it must be wrapped as <c>$(...)</c> so PowerShell's
+    /// string interpolation invokes the property access rather than treating
+    /// <c>$MyInvocation.MyCommand.Name</c> literally.
+    /// </para>
+    /// </summary>
+    public static string? TryMapSpecialVar(string name, bool braced, bool inDoubleQuote)
+    {
+        switch (name)
+        {
+            case "null":
+            case "true":
+            case "false":
+            case "HOME":
+            case "LASTEXITCODE":
+                return braced ? "${" + name + "}" : "$" + name;
+            case "PWD":
+                return braced ? null : "$" + name;
+            case "?":
+                return braced ? "${global:LASTEXITCODE}" : "$global:LASTEXITCODE";
+            case "RANDOM":
+                return braced ? null : "$(Get-Random -Maximum 32768)";
+            case "@":
+            case "*":
+            case "#":
+                return BuildPositionalExpansion(name);
+            case "0":
+                return (inDoubleQuote || braced) ? "$($MyInvocation.MyCommand.Name)" : "$MyInvocation.MyCommand.Name";
+            case "$":
+                return braced ? "${PID}" : "$PID";
+            case "!":
+                return braced ? "${global:BashBgLastPid}" : "$global:BashBgLastPid";
+            case "-":
+                return braced ? "${global:BashFlags}" : "$global:BashFlags";
+            case "_":
+                return braced ? "${global:BashLastArg}" : "$global:BashLastArg";
+            case "SECONDS":
+                return braced ? null : "$([math]::Floor(([DateTime]::UtcNow - $global:BashStartTime).TotalSeconds))";
+            case "PPID":
+                return braced ? null : "(Get-Process -Id $PID -ErrorAction SilentlyContinue).Parent.Id";
+            case "BASH_VERSION":
+                return braced ? null : "$global:BashVersion";
+            case "BASH_VERSINFO":
+                return braced ? null : "$global:BashVersionInfo";
+            default:
+                // Single-digit positional ($1..$9): identical in both plain and braced form.
+                if (name.Length == 1 && name[0] is >= '1' and <= '9')
+                    return BuildPositionalExpansion(name);
+
+                // Multi-digit positional (${10}, ${11}, …) only arises from the braced form
+                // — a bare $10 lexes as $1 followed by literal "0" (see BashParser.ParseSimpleVar)
+                // — and the plain-form call site is the only one that ever handles it. A bash
+                // variable name can never be all-digits, so an all-digit name here is
+                // unambiguously a positional index. An index beyond int range (e.g. a
+                // 10-billion-digit index) is an unset parameter -> empty string in bash.
+                if (!braced && name.Length >= 2 && IsAllDigits(name))
+                    return int.TryParse(name, out _) ? BuildPositionalExpansion(name) : "''";
+
+                return null;
+        }
+    }
+
+    private static bool IsAllDigits(string s)
+    {
+        foreach (char c in s)
+        {
+            if (c is < '0' or > '9')
+                return false;
+        }
+        return true;
+    }
 }
