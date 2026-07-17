@@ -515,60 +515,26 @@ public sealed class InvokeBashSortCommand : PSCmdlet
                 for (int s = 0; s < keySpecs.Count; s++)
                 {
                     var spec = keySpecs[s];
-                    int cmp;
-                    if (gHuman || gGeneral)
-                    {
-                        double aH = dKeyNum![ai][s], bH = dKeyNum![bi][s];
-                        cmp = aH < bH ? -1 : (aH > bH ? 1 : 0);
-                    }
-                    else if (spec.Numeric || gNumeric)
-                    {
-                        double aN = dKeyNum![ai][s], bN = dKeyNum![bi][s];
-                        cmp = aN < bN ? -1 : (aN > bN ? 1 : 0);
-                    }
-                    else if (gMonth)
-                    {
-                        cmp = Math.Sign(dKeyMonth![ai][s] - dKeyMonth![bi][s]);
-                    }
-                    else if (gFold)
-                    {
-                        cmp = string.Compare(dKeyText![ai][s], dKeyText![bi][s], StringComparison.OrdinalIgnoreCase);
-                    }
-                    else
-                    {
-                        cmp = string.CompareOrdinal(dKeyText![ai][s], dKeyText![bi][s]);
-                    }
+                    bool useNumeric = gHuman || gGeneral || spec.Numeric || gNumeric;
+                    int cmp = CompareByMode(
+                        useNumeric, gMonth, gFold,
+                        dKeyNum![ai][s], dKeyNum![bi][s],
+                        dKeyMonth![ai][s], dKeyMonth![bi][s],
+                        dKeyText![ai][s], dKeyText![bi][s]);
                     if (spec.Reverse || gReverse) cmp = -cmp;
                     if (cmp != 0) return Math.Sign(cmp);
                 }
                 return 0;
             }
 
-            int cmp2;
-            if (gHuman || gGeneral)
-            {
-                // SizeBytes-aware value precomputed per item (LsEntry from ls -lh),
-                // or general-numeric (-g) full double parse.
-                double aH = dGlobalNum![ai], bH = dGlobalNum![bi];
-                cmp2 = aH < bH ? -1 : (aH > bH ? 1 : 0);
-            }
-            else if (gNumeric)
-            {
-                double aN = dGlobalNum![ai], bN = dGlobalNum![bi];
-                cmp2 = aN < bN ? -1 : (aN > bN ? 1 : 0);
-            }
-            else if (gMonth)
-            {
-                cmp2 = Math.Sign(dGlobalMonth![ai] - dGlobalMonth![bi]);
-            }
-            else if (gFold)
-            {
-                cmp2 = string.Compare(dGlobalText![ai], dGlobalText![bi], StringComparison.OrdinalIgnoreCase);
-            }
-            else
-            {
-                cmp2 = string.CompareOrdinal(dGlobalText![ai], dGlobalText![bi]);
-            }
+            // (gHuman/gGeneral use a SizeBytes-aware or general-numeric value
+            // precomputed into dGlobalNum during decoration — same array as -n.)
+            bool useNumeric2 = gHuman || gGeneral || gNumeric;
+            int cmp2 = CompareByMode(
+                useNumeric2, gMonth, gFold,
+                dGlobalNum![ai], dGlobalNum![bi],
+                dGlobalMonth![ai], dGlobalMonth![bi],
+                dGlobalText![ai], dGlobalText![bi]);
             if (gReverse) cmp2 = -cmp2;
             return Math.Sign(cmp2);
         }
@@ -742,6 +708,24 @@ public sealed class InvokeBashSortCommand : PSCmdlet
         {
             FileSystemHelpers.SetLastExitCode(this, 1);
         }
+    }
+
+    /// <summary>
+    /// Shared comparator ladder used by both the per-key-spec branch and the
+    /// global (no <c>-k</c>) branch of <c>Compare</c>: numeric (covers
+    /// <c>-h</c>/<c>-g</c>/<c>-n</c>, which all resolve to a precomputed
+    /// double), then month (<c>-M</c>), then fold-case (<c>-f</c>), then
+    /// ordinal. Does not apply reverse — callers negate per their own
+    /// per-key or global <c>-r</c> flag.
+    /// </summary>
+    private static int CompareByMode(
+        bool useNumeric, bool useMonth, bool useFold,
+        double numA, double numB, int monthA, int monthB, string textA, string textB)
+    {
+        if (useNumeric) return numA < numB ? -1 : (numA > numB ? 1 : 0);
+        if (useMonth) return Math.Sign(monthA - monthB);
+        if (useFold) return string.Compare(textA, textB, StringComparison.OrdinalIgnoreCase);
+        return string.CompareOrdinal(textA, textB);
     }
 
     // ----- helpers (oracle parity, reimplemented in C#) -----
