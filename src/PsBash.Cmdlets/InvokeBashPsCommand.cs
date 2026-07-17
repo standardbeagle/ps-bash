@@ -140,6 +140,21 @@ public sealed class InvokeBashPsCommand : PSCmdlet
         return s_currentSessionId;
     }
 
+    /// <summary>Parsed flag state for one <c>ps</c> invocation -- output of the
+    /// arg-parse phase, input to gather/sort/format.</summary>
+    private sealed class PsOptions
+    {
+        public bool ShowAll;
+        public bool BsdAux;
+        public bool FullFormat;
+        public string? FilterUser;
+        public HashSet<int>? FilterPidList;
+        public string? SortKey;
+        public bool SortDescending;
+        public string? CustomFormat;
+        public bool PidSyntaxError;
+    }
+
     protected override void EndProcessing()
     {
         var args = Arguments ?? Array.Empty<string>();
@@ -156,21 +171,53 @@ public sealed class InvokeBashPsCommand : PSCmdlet
             return;
         }
 
-        bool showAll = E.IsPresent || A.IsPresent;
-        bool bsdAux = false;
-        bool fullFormat = false;
-        string? filterUser = null;
-        HashSet<int>? filterPidList = null;
-        string? sortKey = null;
-        bool sortDescending = false;
-        string? customFormat = O;
-        bool pidSyntaxError = false;
+        var options = ParseArgs(args);
+
+        // GNU ps errors (exit 1, "error: process ID list syntax error" + usage)
+        // when a -p operand contains a non-integer token — it does NOT silently
+        // list every process. Verified against the WSL oracle
+        // (`ps -p abc` / `ps -p 1,abc`). Emit before enumerating anything so no
+        // process rows leak out.
+        if (options.PidSyntaxError)
+        {
+            FileSystemHelpers.WriteBashError(
+                this, "ps: error: process ID list syntax error\n\nUsage:\n ps [options]");
+            return;
+        }
+
+        // GNU ps errors (exit 1, "error: unknown sort specifier" + usage) on a
+        // --sort key it doesn't recognize rather than silently falling back to
+        // PID order. Validate against the keys the switch below actually maps.
+        if (options.SortKey != null && !s_knownSortKeys.Contains(options.SortKey.ToLowerInvariant()))
+        {
+            FileSystemHelpers.WriteBashError(
+                this, "ps: error: unknown sort specifier\n\nUsage:\n ps [options]");
+            return;
+        }
+
+        var entries = GatherEntries(options);
+        entries = SortEntries(entries, options.SortKey, options.SortDescending);
+        WriteEntries(entries, options);
+    }
+
+    /// <summary>
+    /// Arg-parse phase: decodes flags (including the -e/-A/-f bundled forms
+    /// and the pre-bound -p/-o explicit parameters) into a <see cref="PsOptions"/>.
+    /// Unknown/unsupported flags are silently dropped (oracle parity).
+    /// </summary>
+    private PsOptions ParseArgs(string[] args)
+    {
+        var opts = new PsOptions
+        {
+            ShowAll = E.IsPresent || A.IsPresent,
+            CustomFormat = O,
+        };
 
         // Pre-bind value flags from explicit parameters.
         if (!string.IsNullOrEmpty(P))
         {
-            if (TryParsePidList(P, out var parsed)) filterPidList = parsed;
-            else pidSyntaxError = true;
+            if (TryParsePidList(P, out var parsed)) opts.FilterPidList = parsed;
+            else opts.PidSyntaxError = true;
         }
 
         for (int i = 0; i < args.Length; i++)
@@ -180,19 +227,19 @@ public sealed class InvokeBashPsCommand : PSCmdlet
             if (string.Equals(arg, "aux", StringComparison.Ordinal) ||
                 string.Equals(arg, "-aux", StringComparison.Ordinal))
             {
-                bsdAux = true;
-                showAll = true;
+                opts.BsdAux = true;
+                opts.ShowAll = true;
                 continue;
             }
             if (string.Equals(arg, "-e", StringComparison.Ordinal) ||
                 string.Equals(arg, "-A", StringComparison.Ordinal))
             {
-                showAll = true;
+                opts.ShowAll = true;
                 continue;
             }
             if (string.Equals(arg, "-f", StringComparison.Ordinal))
             {
-                fullFormat = true;
+                opts.FullFormat = true;
                 continue;
             }
             // Bundled short-flag forms (-ef / -Af / -fe / -fA) — decoded
@@ -208,26 +255,26 @@ public sealed class InvokeBashPsCommand : PSCmdlet
             {
                 foreach (var ch in arg.Substring(1))
                 {
-                    if (ch == 'e' || ch == 'A') showAll = true;
-                    else if (ch == 'f') fullFormat = true;
+                    if (ch == 'e' || ch == 'A') opts.ShowAll = true;
+                    else if (ch == 'f') opts.FullFormat = true;
                 }
                 continue;
             }
             if (string.Equals(arg, "-u", StringComparison.Ordinal) && i + 1 < args.Length)
             {
-                filterUser = args[++i];
+                opts.FilterUser = args[++i];
                 continue;
             }
             if (string.Equals(arg, "-p", StringComparison.Ordinal) && i + 1 < args.Length)
             {
                 var pv = args[++i];
-                if (TryParsePidList(pv, out var parsed)) filterPidList = parsed;
-                else pidSyntaxError = true; // GNU errors on a malformed list; never unfilter.
+                if (TryParsePidList(pv, out var parsed)) opts.FilterPidList = parsed;
+                else opts.PidSyntaxError = true; // GNU errors on a malformed list; never unfilter.
                 continue;
             }
             if (string.Equals(arg, "-o", StringComparison.Ordinal) && i + 1 < args.Length)
             {
-                customFormat = args[++i];
+                opts.CustomFormat = args[++i];
                 continue;
             }
             if (arg.StartsWith("--sort=", StringComparison.Ordinal))
@@ -235,10 +282,10 @@ public sealed class InvokeBashPsCommand : PSCmdlet
                 var sk = arg.Substring(7);
                 if (sk.StartsWith("-", StringComparison.Ordinal))
                 {
-                    sortDescending = true;
+                    opts.SortDescending = true;
                     sk = sk.Substring(1);
                 }
-                sortKey = sk;
+                opts.SortKey = sk;
                 continue;
             }
             if (string.Equals(arg, "--sort", StringComparison.Ordinal) && i + 1 < args.Length)
@@ -246,38 +293,25 @@ public sealed class InvokeBashPsCommand : PSCmdlet
                 var sk = args[++i];
                 if (sk.StartsWith("-", StringComparison.Ordinal))
                 {
-                    sortDescending = true;
+                    opts.SortDescending = true;
                     sk = sk.Substring(1);
                 }
-                sortKey = sk;
+                opts.SortKey = sk;
                 continue;
             }
             // Unknown / unsupported flags: oracle silently drops them.
         }
 
-        // GNU ps errors (exit 1, "error: process ID list syntax error" + usage)
-        // when a -p operand contains a non-integer token — it does NOT silently
-        // list every process. Verified against the WSL oracle
-        // (`ps -p abc` / `ps -p 1,abc`). Emit before enumerating anything so no
-        // process rows leak out.
-        if (pidSyntaxError)
-        {
-            FileSystemHelpers.WriteBashError(
-                this, "ps: error: process ID list syntax error\n\nUsage:\n ps [options]");
-            return;
-        }
+        return opts;
+    }
 
-        // GNU ps errors (exit 1, "error: unknown sort specifier" + usage) on a
-        // --sort key it doesn't recognize rather than silently falling back to
-        // PID order. Validate against the keys the switch below actually maps.
-        if (sortKey != null && !s_knownSortKeys.Contains(sortKey.ToLowerInvariant()))
-        {
-            FileSystemHelpers.WriteBashError(
-                this, "ps: error: unknown sort specifier\n\nUsage:\n ps [options]");
-            return;
-        }
-
-        // Gather entries
+    /// <summary>
+    /// Gather phase: enumerates processes (Linux <c>/proc</c> walk, or
+    /// <c>System.Diagnostics.Process</c> + platform metadata elsewhere) and
+    /// applies the current-user / pid / user filters.
+    /// </summary>
+    private List<PsEntry> GatherEntries(PsOptions options)
+    {
         var entries = new List<PsEntry>();
 
         if (RuntimeInformation.IsOSPlatform(OSPlatform.Linux))
@@ -293,14 +327,14 @@ public sealed class InvokeBashPsCommand : PSCmdlet
                 if (!int.TryParse(dirName, NumberStyles.Integer,
                         CultureInfo.InvariantCulture, out var ddpid))
                     continue;
-                if (filterPidList != null && !filterPidList.Contains(ddpid)) continue;
+                if (options.FilterPidList != null && !options.FilterPidList.Contains(ddpid)) continue;
 
                 var entry = GetLinuxProcEntry(dir, ddpid);
                 if (entry == null) continue;
 
-                if (!showAll && !bsdAux && filterPidList == null && filterUser == null)
+                if (!options.ShowAll && !options.BsdAux && options.FilterPidList == null && options.FilterUser == null)
                 {
-                    if (fullFormat || customFormat != null)
+                    if (options.FullFormat || options.CustomFormat != null)
                     {
                         if (entry.User != currentUser) continue;
                     }
@@ -309,7 +343,7 @@ public sealed class InvokeBashPsCommand : PSCmdlet
                         if (entry.User != currentUser || entry.TTY == "?") continue;
                     }
                 }
-                if (filterUser != null && entry.User != filterUser) continue;
+                if (options.FilterUser != null && entry.User != options.FilterUser) continue;
                 entries.Add(entry);
             }
         }
@@ -318,8 +352,8 @@ public sealed class InvokeBashPsCommand : PSCmdlet
             Process[] procs;
             try
             {
-                procs = filterPidList != null
-                    ? filterPidList.Select(TryGetProcessById).Where(p => p != null).Select(p => p!).ToArray()
+                procs = options.FilterPidList != null
+                    ? options.FilterPidList.Select(TryGetProcessById).Where(p => p != null).Select(p => p!).ToArray()
                     : Process.GetProcesses();
             }
             catch
@@ -340,15 +374,15 @@ public sealed class InvokeBashPsCommand : PSCmdlet
             Dictionary<int, (string CommandLine, string User, int PPID)>? winLookup = null;
             if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows) && procs.Length > 0)
             {
-                var cols = customFormat?.Split(',').Select(c => c.Trim().ToLowerInvariant()).ToArray();
+                var cols = options.CustomFormat?.Split(',').Select(c => c.Trim().ToLowerInvariant()).ToArray();
                 bool ColIs(params string[] names) => cols != null && cols.Any(names.Contains);
 
-                bool needUser = bsdAux || fullFormat || filterUser != null
-                    || string.Equals(sortKey, "user", StringComparison.OrdinalIgnoreCase)
+                bool needUser = options.BsdAux || options.FullFormat || options.FilterUser != null
+                    || string.Equals(options.SortKey, "user", StringComparison.OrdinalIgnoreCase)
                     || ColIs("user", "ruser", "euser");
-                bool needCmdLine = bsdAux || fullFormat || ColIs("args", "cmd", "command");
-                bool needPpid = fullFormat
-                    || string.Equals(sortKey, "ppid", StringComparison.OrdinalIgnoreCase)
+                bool needCmdLine = options.BsdAux || options.FullFormat || ColIs("args", "cmd", "command");
+                bool needPpid = options.FullFormat
+                    || string.Equals(options.SortKey, "ppid", StringComparison.OrdinalIgnoreCase)
                     || ColIs("ppid");
 
                 if (needUser || needCmdLine || needPpid)
@@ -386,7 +420,7 @@ public sealed class InvokeBashPsCommand : PSCmdlet
                     }
                     if (entry == null) continue;
 
-                    if (!showAll && !bsdAux && filterPidList == null && filterUser == null)
+                    if (!options.ShowAll && !options.BsdAux && options.FilterPidList == null && options.FilterUser == null)
                     {
                         if (currentUser == null)
                         {
@@ -401,7 +435,7 @@ public sealed class InvokeBashPsCommand : PSCmdlet
                         }
                         if (!string.IsNullOrEmpty(currentUser) && entry.User != currentUser) continue;
                     }
-                    if (filterUser != null && entry.User != filterUser) continue;
+                    if (options.FilterUser != null && entry.User != options.FilterUser) continue;
                     entries.Add(entry);
                 }
                 finally
@@ -411,43 +445,51 @@ public sealed class InvokeBashPsCommand : PSCmdlet
             }
         }
 
-        // Sort
-        if (sortKey != null)
-        {
-            string propName = sortKey.ToLowerInvariant() switch
-            {
-                "pid" => "PID",
-                "ppid" => "PPID",
-                "cpu" or "%cpu" => "CPU",
-                "mem" or "%mem" => "Memory",
-                "rss" => "RSS",
-                "vsz" => "VSZ",
-                "user" => "User",
-                "comm" => "ProcessName",
-                "time" => "Time",
-                _ => "PID",
-            };
-            IEnumerable<PsEntry> sorted = propName switch
-            {
-                "PID" => sortDescending ? entries.OrderByDescending(e => e.PID) : entries.OrderBy(e => e.PID),
-                "PPID" => sortDescending ? entries.OrderByDescending(e => e.PPID) : entries.OrderBy(e => e.PPID),
-                "CPU" => sortDescending ? entries.OrderByDescending(e => e.CPU) : entries.OrderBy(e => e.CPU),
-                "Memory" => sortDescending ? entries.OrderByDescending(e => e.Memory) : entries.OrderBy(e => e.Memory),
-                "RSS" => sortDescending ? entries.OrderByDescending(e => e.RSS) : entries.OrderBy(e => e.RSS),
-                "VSZ" => sortDescending ? entries.OrderByDescending(e => e.VSZ) : entries.OrderBy(e => e.VSZ),
-                "User" => sortDescending ? entries.OrderByDescending(e => e.User, StringComparer.Ordinal) : entries.OrderBy(e => e.User, StringComparer.Ordinal),
-                "ProcessName" => sortDescending ? entries.OrderByDescending(e => e.ProcessName, StringComparer.Ordinal) : entries.OrderBy(e => e.ProcessName, StringComparer.Ordinal),
-                "Time" => sortDescending ? entries.OrderByDescending(e => e.Time, StringComparer.Ordinal) : entries.OrderBy(e => e.Time, StringComparer.Ordinal),
-                _ => entries,
-            };
-            entries = sorted.ToList();
-        }
+        return entries;
+    }
 
-        string[]? columns = null;
-        if (customFormat != null)
+    /// <summary>Sort phase: maps the <c>--sort</c> key to a <see cref="PsEntry"/>
+    /// property and orders (ascending, or descending for a <c>-key</c> spec).
+    /// A null key is a no-op; passes entries through unchanged.</summary>
+    private static List<PsEntry> SortEntries(List<PsEntry> entries, string? sortKey, bool sortDescending)
+    {
+        if (sortKey == null) return entries;
+
+        string propName = sortKey.ToLowerInvariant() switch
         {
-            columns = customFormat.Split(',');
-        }
+            "pid" => "PID",
+            "ppid" => "PPID",
+            "cpu" or "%cpu" => "CPU",
+            "mem" or "%mem" => "Memory",
+            "rss" => "RSS",
+            "vsz" => "VSZ",
+            "user" => "User",
+            "comm" => "ProcessName",
+            "time" => "Time",
+            _ => "PID",
+        };
+        IEnumerable<PsEntry> sorted = propName switch
+        {
+            "PID" => sortDescending ? entries.OrderByDescending(e => e.PID) : entries.OrderBy(e => e.PID),
+            "PPID" => sortDescending ? entries.OrderByDescending(e => e.PPID) : entries.OrderBy(e => e.PPID),
+            "CPU" => sortDescending ? entries.OrderByDescending(e => e.CPU) : entries.OrderBy(e => e.CPU),
+            "Memory" => sortDescending ? entries.OrderByDescending(e => e.Memory) : entries.OrderBy(e => e.Memory),
+            "RSS" => sortDescending ? entries.OrderByDescending(e => e.RSS) : entries.OrderBy(e => e.RSS),
+            "VSZ" => sortDescending ? entries.OrderByDescending(e => e.VSZ) : entries.OrderBy(e => e.VSZ),
+            "User" => sortDescending ? entries.OrderByDescending(e => e.User, StringComparer.Ordinal) : entries.OrderBy(e => e.User, StringComparer.Ordinal),
+            "ProcessName" => sortDescending ? entries.OrderByDescending(e => e.ProcessName, StringComparer.Ordinal) : entries.OrderBy(e => e.ProcessName, StringComparer.Ordinal),
+            "Time" => sortDescending ? entries.OrderByDescending(e => e.Time, StringComparer.Ordinal) : entries.OrderBy(e => e.Time, StringComparer.Ordinal),
+            _ => entries,
+        };
+        return sorted.ToList();
+    }
+
+    /// <summary>Format/output phase: renders each entry's BashText (custom
+    /// <c>-o</c> columns, BSD aux, or the terse default) and writes the typed
+    /// <c>PsBash.PsEntry</c> PSObject.</summary>
+    private void WriteEntries(List<PsEntry> entries, PsOptions options)
+    {
+        string[]? columns = options.CustomFormat != null ? options.CustomFormat.Split(',') : null;
 
         foreach (var entry in entries)
         {
@@ -467,7 +509,7 @@ public sealed class InvokeBashPsCommand : PSCmdlet
             {
                 bashText = FormatPsCustomLine(entry, columns);
             }
-            else if (bsdAux || fullFormat)
+            else if (options.BsdAux || options.FullFormat)
             {
                 bashText = FormatPsAuxLine(entry);
             }
@@ -521,14 +563,38 @@ public sealed class InvokeBashPsCommand : PSCmdlet
         public long WorkingSet;
     }
 
-    private static PsEntry? GetLinuxProcEntry(string procDir, int pid)
+    /// <summary>
+    /// The <c>/proc/[pid]/stat</c> fields this cmdlet actually reads, named
+    /// instead of indexed off the whitespace-split tail (the man-page's
+    /// <c>restFields[9]</c>/<c>[17]</c>/<c>[19]</c> magic offsets). See
+    /// <c>man proc(5)</c> "/proc/pid/stat" for the full field list and index
+    /// numbering this maps from (utime=14, stime=15, starttime=22, vsize=23,
+    /// rss=24 in the man page's 1-based *whole-record* numbering; here they
+    /// are 0-based offsets into the fields AFTER "pid (comm) state ppid").
+    /// </summary>
+    private readonly struct ProcStat
     {
-        string statPath = Path.Combine(procDir, "stat");
-        string statRaw;
-        try { statRaw = ReadProcText(statPath, ProcStatMaxBytes); }
-        catch { return null; }
+        public required string Comm { get; init; }
+        public required string State { get; init; }
+        public required int Ppid { get; init; }
+        public required int TtyNr { get; init; }
+        public required long Utime { get; init; }
+        public required long Stime { get; init; }
+        public required long Starttime { get; init; }
+        public required long Vsize { get; init; }
+        public required long RssPages { get; init; }
+    }
 
-        // PID (comm) state PPID ... — comm can contain spaces and parens
+    /// <summary>
+    /// Parses one <c>/proc/[pid]/stat</c> record. The <c>comm</c> field is
+    /// parenthesized and can itself contain spaces/parens (e.g. a process
+    /// renamed via <c>prctl(PR_SET_NAME)</c> to something with a `)` in it),
+    /// so the split is anchored on the LAST `)` in the line, not the first —
+    /// everything between the first `(` and that last `)` is the comm value,
+    /// and everything after it is state/ppid/... in stable field order.
+    /// </summary>
+    private static ProcStat? ParseProcStat(string statRaw)
+    {
         var m = System.Text.RegularExpressions.Regex.Match(statRaw,
             @"^\d+\s+\((.+)\)\s+(\S+)\s+(\d+)\s+(.*)$");
         if (!m.Success) return null;
@@ -545,6 +611,41 @@ public sealed class InvokeBashPsCommand : PSCmdlet
         long starttime = restFields.Length > 17 && long.TryParse(restFields[17], out var st) ? st : 0;
         long vsize = restFields.Length > 18 && long.TryParse(restFields[18], out var v) ? v : 0;
         long rssPages = restFields.Length > 19 && long.TryParse(restFields[19], out var r) ? r : 0;
+
+        return new ProcStat
+        {
+            Comm = comm,
+            State = state,
+            Ppid = ppid,
+            TtyNr = ttyNr,
+            Utime = utime,
+            Stime = stime,
+            Starttime = starttime,
+            Vsize = vsize,
+            RssPages = rssPages,
+        };
+    }
+
+    private static PsEntry? GetLinuxProcEntry(string procDir, int pid)
+    {
+        string statPath = Path.Combine(procDir, "stat");
+        string statRaw;
+        try { statRaw = ReadProcText(statPath, ProcStatMaxBytes); }
+        catch { return null; }
+
+        // PID (comm) state PPID ... — comm can contain spaces and parens
+        var stat = ParseProcStat(statRaw);
+        if (stat == null) return null;
+
+        var comm = stat.Value.Comm;
+        var state = stat.Value.State;
+        var ppid = stat.Value.Ppid;
+        int ttyNr = stat.Value.TtyNr;
+        long utime = stat.Value.Utime;
+        long stime = stat.Value.Stime;
+        long starttime = stat.Value.Starttime;
+        long vsize = stat.Value.Vsize;
+        long rssPages = stat.Value.RssPages;
 
         int uid = 0;
         try
