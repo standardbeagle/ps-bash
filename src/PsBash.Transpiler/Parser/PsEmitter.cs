@@ -1755,329 +1755,428 @@ public static class PsEmitter
 
     private static string EmitSimple(Command.Simple cmd)
     {
-        // Env-var prefix (`VAR=val cmd`) must wrap the ENTIRE command — including
-        // the mapped (Invoke-Bash*), heredoc, and special-form paths, all of which
-        // return early below. The save/set/restore block further down only wraps
-        // the general fallback, so `IFS=, read ...`, `X=1 cat <<< ...`, and any
-        // `VAR=val <mapped-command>` silently DROPPED the assignment. Strip the
-        // pairs, re-emit the bare command through every path, then wrap once.
-        if (!cmd.EnvPairs.IsEmpty)
+        if (TryEmitEnvPairsWrap(cmd, out var envWrapResult))
+            return envWrapResult;
+
+        if (TryEmitHereDoc(cmd, out var hereDocResult))
+            return hereDocResult;
+
+        if (TryEmitStderrRedirect(cmd, out var stderrResult))
+            return stderrResult;
+
+        if (TryEmitInputRedirect(cmd, out var inputResult))
+            return inputResult;
+
+        if (TryEmitDeclare(cmd, out var declareResult))
+            return declareResult;
+
+        if (TryEmitSpecialBuiltins(cmd, out var builtinResult))
+            return builtinResult;
+
+        return EmitGeneralCommand(cmd);
+    }
+
+    // Env-var prefix (`VAR=val cmd`) must wrap the ENTIRE command — including
+    // the mapped (Invoke-Bash*), heredoc, and special-form paths, all of which
+    // return early below. The save/set/restore block further down only wraps
+    // the general fallback, so `IFS=, read ...`, `X=1 cat <<< ...`, and any
+    // `VAR=val <mapped-command>` silently DROPPED the assignment. Strip the
+    // pairs, re-emit the bare command through every path, then wrap once.
+    private static bool TryEmitEnvPairsWrap(Command.Simple cmd, out string result)
+    {
+        if (cmd.EnvPairs.IsEmpty)
         {
-            var bare = cmd with { EnvPairs = ImmutableArray<EnvPair>.Empty };
-            return WrapEnvPairs(cmd.EnvPairs, EmitSimple(bare));
+            result = "";
+            return false;
         }
 
-        // Heredoc: emit as @"body"@ | cmd (or @'body'@ for no-expand).
-        if (!cmd.HereDocs.IsDefaultOrEmpty)
+        var bare = cmd with { EnvPairs = ImmutableArray<EnvPair>.Empty };
+        result = WrapEnvPairs(cmd.EnvPairs, EmitSimple(bare));
+        return true;
+    }
+
+    // Heredoc: emit as @"body"@ | cmd (or @'body'@ for no-expand).
+    private static bool TryEmitHereDoc(Command.Simple cmd, out string result)
+    {
+        if (cmd.HereDocs.IsDefaultOrEmpty)
         {
-            // When multiple heredocs exist, use the last one for stdin (bash behavior).
-            var hereDoc = cmd.HereDocs[^1];
-            var innerCmd = new Command.Simple(cmd.Words, cmd.EnvPairs, cmd.Redirects);
-            string body = hereDoc.Body;
-            // <<-EOF: strip leading tabs from each line (bash semantics).
-            if (hereDoc.StripTabs)
-                body = StripLeadingTabs(body);
-            if (hereDoc.Expand)
-                body = TranslateHereDocVars(body);
-            // A PowerShell here-string ends at the first line that begins with its
-            // terminator (`"@` for @"..."@, `'@` for @'...'@). A heredoc body
-            // containing such a line would close the string early — bash prints
-            // the line literally, ps-bash threw "missing terminator". When that
-            // collision is present fall back to an ordinary quoted string (whose
-            // value is identical to the here-string content); otherwise keep the
-            // here-string, which is the readable common-case form.
-            string hereString = HereStringWouldBreak(body, hereDoc.Expand)
-                ? (hereDoc.Expand
-                    ? "\"" + EscapeForDoubleQuotedHereDocBody(body) + "\""
-                    : PsBuild.SingleQuote(body))
-                : (hereDoc.Expand
-                    ? $"@\"\n{body}\n\"@"
-                    : $"@'\n{body}\n'@");
-            string cmdText = EmitSimple(innerCmd);
-            return $"{hereString} | Emit-BashLine | {cmdText}";
+            result = "";
+            return false;
         }
 
-        // Stdout-to-stderr redirects (>&2 or 1>&2). REFACTOR-4: route through
-        // Write-BashHostStderr, which writes into the host's STDERR-tagged IPC
-        // frame, instead of [Console]::Error.WriteLine. The host's inherited
-        // fd 2 is detached to /dev/null (commit cc8bf88's hang fix), so a direct
-        // [Console]::Error write would be silently lost — all host output must
-        // travel the single IPC channel the launcher drains.
+        // When multiple heredocs exist, use the last one for stdin (bash behavior).
+        var hereDoc = cmd.HereDocs[^1];
+        var innerCmd = new Command.Simple(cmd.Words, cmd.EnvPairs, cmd.Redirects);
+        string body = hereDoc.Body;
+        // <<-EOF: strip leading tabs from each line (bash semantics).
+        if (hereDoc.StripTabs)
+            body = StripLeadingTabs(body);
+        if (hereDoc.Expand)
+            body = TranslateHereDocVars(body);
+        // A PowerShell here-string ends at the first line that begins with its
+        // terminator (`"@` for @"..."@, `'@` for @'...'@). A heredoc body
+        // containing such a line would close the string early — bash prints
+        // the line literally, ps-bash threw "missing terminator". When that
+        // collision is present fall back to an ordinary quoted string (whose
+        // value is identical to the here-string content); otherwise keep the
+        // here-string, which is the readable common-case form.
+        string hereString = HereStringWouldBreak(body, hereDoc.Expand)
+            ? (hereDoc.Expand
+                ? "\"" + EscapeForDoubleQuotedHereDocBody(body) + "\""
+                : PsBuild.SingleQuote(body))
+            : (hereDoc.Expand
+                ? $"@\"\n{body}\n\"@"
+                : $"@'\n{body}\n'@");
+        string cmdText = EmitSimple(innerCmd);
+        result = $"{hereString} | Emit-BashLine | {cmdText}";
+        return true;
+    }
+
+    // Stdout-to-stderr redirects (>&2 or 1>&2). REFACTOR-4: route through
+    // Write-BashHostStderr, which writes into the host's STDERR-tagged IPC
+    // frame, instead of [Console]::Error.WriteLine. The host's inherited
+    // fd 2 is detached to /dev/null (commit cc8bf88's hang fix), so a direct
+    // [Console]::Error write would be silently lost — all host output must
+    // travel the single IPC channel the launcher drains.
+    private static bool TryEmitStderrRedirect(Command.Simple cmd, out string result)
+    {
         var stderrRedirect = cmd.Redirects.FirstOrDefault(r =>
             r.Op == ">&" && r.Fd == 1 && GetLiteralValue(r.Target) == "2");
-        if (stderrRedirect is not null)
+        if (stderrRedirect is null)
         {
-            var remaining = cmd.Redirects.Remove(stderrRedirect);
-            var innerCmd = new Command.Simple(cmd.Words, cmd.EnvPairs, remaining);
-            return $"{EmitSimple(innerCmd)} | ForEach-Object {{ Write-BashHostStderr $_ }}";
+            result = "";
+            return false;
         }
 
-        // Input redirects (< file) become "Get-Content file | cmd".
-        // Special case: `< /dev/null` means "no input" — `Get-Content $null`
-        // throws in PowerShell, so just drop the redirect (the command runs
-        // with whatever stdin it would otherwise have).
+        var remaining = cmd.Redirects.Remove(stderrRedirect);
+        var innerCmd = new Command.Simple(cmd.Words, cmd.EnvPairs, remaining);
+        result = $"{EmitSimple(innerCmd)} | ForEach-Object {{ Write-BashHostStderr $_ }}";
+        return true;
+    }
+
+    // Input redirects (< file) become "Get-Content file | cmd".
+    // Special case: `< /dev/null` means "no input" — `Get-Content $null`
+    // throws in PowerShell, so just drop the redirect (the command runs
+    // with whatever stdin it would otherwise have).
+    private static bool TryEmitInputRedirect(Command.Simple cmd, out string result)
+    {
         var inputRedirect = cmd.Redirects.FirstOrDefault(r => r.Op == "<");
-        if (inputRedirect is not null)
+        if (inputRedirect is null)
         {
-            var remaining = cmd.Redirects.Remove(inputRedirect);
-            var innerCmd = new Command.Simple(cmd.Words, cmd.EnvPairs, remaining);
-            var target = TransformRedirectTarget(EmitWord(inputRedirect.Target));
-            if (target == "$null")
-                return EmitSimple(innerCmd);
-            return $"Get-Content {target} | {EmitSimple(innerCmd)}";
+            result = "";
+            return false;
         }
 
-        // declare/typeset -A map -> $map = @{} (associative array / hashtable declaration)
-        // declare/typeset -a arr -> $arr = @() (indexed array declaration)
-        if (cmd.Words.Length >= 2)
+        var remaining = cmd.Redirects.Remove(inputRedirect);
+        var innerCmd = new Command.Simple(cmd.Words, cmd.EnvPairs, remaining);
+        var target = TransformRedirectTarget(EmitWord(inputRedirect.Target));
+        result = target == "$null" ? EmitSimple(innerCmd) : $"Get-Content {target} | {EmitSimple(innerCmd)}";
+        return true;
+    }
+
+    // declare/typeset -A map -> $map = @{} (associative array / hashtable declaration)
+    // declare/typeset -a arr -> $arr = @() (indexed array declaration)
+    private static bool TryEmitDeclare(Command.Simple cmd, out string result)
+    {
+        result = "";
+        if (cmd.Words.Length < 2)
+            return false;
+
+        var name = GetLiteralValue(cmd.Words[0]);
+        if (name is not ("declare" or "typeset"))
+            return false;
+
+        bool isAssoc = false;
+        bool isPrint = false;
+        string? varName = null;
+        foreach (var word in cmd.Words.Skip(1))
         {
-            var name = GetLiteralValue(cmd.Words[0]);
-            if (name is "declare" or "typeset")
+            var val = GetLiteralValue(word);
+            if (val == "-A") isAssoc = true;
+            else if (val == "-i") { /* integer — handled below */ }
+            else if (val == "-p" || val == "-f" || val == "-F") isPrint = true;
+            else if (val is not null && !val.StartsWith('-')) varName = val;
+        }
+        if (isPrint)
+        {
+            result = EmitPassthrough("Invoke-BashType", cmd.Words.Skip(1).ToImmutableArray());
+            return true;
+        }
+        if (varName is null)
+            return false;
+
+        // An initializer (`declare -i n=5`, `declare x=hello`) arrives as a
+        // single literal `name=value`; split it so we never emit the broken
+        // `[int]$global:n=5 = 0`. No `=` → the bare-declaration defaults below.
+        int eq = varName.IndexOf('=');
+        bool isInt = cmd.Words.Skip(1).Any(w => GetLiteralValue(w) == "-i");
+        if (eq >= 0)
+        {
+            string declName = varName[..eq];
+            string rawVal = varName[(eq + 1)..];
+            if (isAssoc)
             {
-                bool isAssoc = false;
-                bool isPrint = false;
-                string? varName = null;
-                foreach (var word in cmd.Words.Skip(1))
-                {
-                    var val = GetLiteralValue(word);
-                    if (val == "-A") isAssoc = true;
-                    else if (val == "-i") { /* integer — handled below */ }
-                    else if (val == "-p" || val == "-f" || val == "-F") isPrint = true;
-                    else if (val is not null && !val.StartsWith('-')) varName = val;
-                }
-                if (isPrint) return EmitPassthrough("Invoke-BashType", cmd.Words.Skip(1).ToImmutableArray());
-                if (varName is not null)
-                {
-                    // An initializer (`declare -i n=5`, `declare x=hello`) arrives as a
-                    // single literal `name=value`; split it so we never emit the broken
-                    // `[int]$global:n=5 = 0`. No `=` → the bare-declaration defaults below.
-                    int eq = varName.IndexOf('=');
-                    bool isInt = cmd.Words.Skip(1).Any(w => GetLiteralValue(w) == "-i");
-                    if (eq >= 0)
-                    {
-                        string declName = varName[..eq];
-                        string rawVal = varName[(eq + 1)..];
-                        if (isAssoc) return "$global:" + declName + " = @{}";
-                        if (isInt)
-                        {
-                            // Integer attribute: bash evaluates the RHS arithmetically
-                            // (`declare -i n=2+3` -> 5, `declare -i n=x*2` reads $x). A plain
-                            // integer literal is emitted directly; any expression routes through
-                            // the shared arithmetic evaluator instead of silently collapsing to 0.
-                            string intVal = long.TryParse(rawVal, out _)
-                                ? rawVal
-                                : $"(Invoke-BashArith {PsBuild.SingleQuote(rawVal)})";
-                            return "[int]$global:" + declName + " = " + intVal;
-                        }
-                        return "$global:" + declName + " = " + PsBuild.SingleQuote(rawVal);
-                    }
-                    if (isAssoc) return "$global:" + varName + " = @{}";
-                    return isInt ? "[int]$global:" + varName + " = 0" : "$global:" + varName + " = @()";
-                }
+                result = "$global:" + declName + " = @{}";
+                return true;
             }
+            if (isInt)
+            {
+                // Integer attribute: bash evaluates the RHS arithmetically
+                // (`declare -i n=2+3` -> 5, `declare -i n=x*2` reads $x). A plain
+                // integer literal is emitted directly; any expression routes through
+                // the shared arithmetic evaluator instead of silently collapsing to 0.
+                string intVal = long.TryParse(rawVal, out _)
+                    ? rawVal
+                    : $"(Invoke-BashArith {PsBuild.SingleQuote(rawVal)})";
+                result = "[int]$global:" + declName + " = " + intVal;
+                return true;
+            }
+            result = "$global:" + declName + " = " + PsBuild.SingleQuote(rawVal);
+            return true;
+        }
+        if (isAssoc)
+        {
+            result = "$global:" + varName + " = @{}";
+            return true;
+        }
+        result = isInt ? "[int]$global:" + varName + " = 0" : "$global:" + varName + " = @()";
+        return true;
+    }
+
+    // Dispatch ladder for the bash-keyword / builtin branches that used to live
+    // in one ~200-line else-if chain inside EmitSimple. Order is preserved
+    // exactly (it is behavior): `unset`/`trap DEBUG` return immediately (outside
+    // the else-if chain, same as before) so other `unset`/`trap` forms still fall
+    // through to TryEmitMappedCommand; everything else sets specialResult.
+    private static bool TryEmitSpecialBuiltins(Command.Simple cmd, out string result)
+    {
+        result = "";
+        if (cmd.Words.Length < 1)
+            return false;
+
+        var cmd0 = GetLiteralValue(cmd.Words[0]);
+
+        // unset PROMPT_COMMAND -> Unregister-BashPromptHook -Name 'prompt-command'
+        // Checked early (outside the else-if chain) so that `unset OTHER_VAR` still
+        // falls through to TryEmitMappedCommand -> Invoke-BashUnset.
+        if (cmd0 == "unset" && cmd.Words.Length >= 2
+            && GetLiteralValue(cmd.Words[1]) == "PROMPT_COMMAND")
+        {
+            result = "Unregister-BashPromptHook -Name 'prompt-command'";
+            return true;
         }
 
-        if (cmd.Words.Length >= 1)
+        // trap 'CMD' DEBUG  -> Register-BashChpwdHook with first-use warning
+        // trap - DEBUG      -> Unregister-BashChpwdHook for the previously registered hook
+        // Checked early (outside the else-if chain) so that `trap 'CMD' EXIT` and
+        // other non-DEBUG signals still fall through to TryEmitMappedCommand -> Invoke-BashTrap.
+        if (cmd0 == "trap" && cmd.Words.Length >= 3
+            && GetLiteralValue(cmd.Words[^1]) == "DEBUG")
         {
-            var cmd0 = GetLiteralValue(cmd.Words[0]);
-            string? specialResult = null;
-
-            // unset PROMPT_COMMAND -> Unregister-BashPromptHook -Name 'prompt-command'
-            // Checked early (outside the else-if chain) so that `unset OTHER_VAR` still
-            // falls through to TryEmitMappedCommand -> Invoke-BashUnset.
-            if (cmd0 == "unset" && cmd.Words.Length >= 2
-                && GetLiteralValue(cmd.Words[1]) == "PROMPT_COMMAND")
+            var trapArgs = cmd.Words.Skip(1).Take(cmd.Words.Length - 2).ToList();
+            var rawCmd = string.Join(" ", trapArgs.Select(w =>
+                ExtractSingleQuotedOrLiteralValue(w) ?? EmitWord(w)));
+            var firstArg = GetLiteralValue(cmd.Words[1]);
+            if (firstArg == "-")
             {
-                return "Unregister-BashPromptHook -Name 'prompt-command'";
+                result = EmitTrapDebugUnregister(rawCmd);
+                return true;
             }
-
-            // trap 'CMD' DEBUG  -> Register-BashChpwdHook with first-use warning
-            // trap - DEBUG      -> Unregister-BashChpwdHook for the previously registered hook
-            // Checked early (outside the else-if chain) so that `trap 'CMD' EXIT` and
-            // other non-DEBUG signals still fall through to TryEmitMappedCommand -> Invoke-BashTrap.
-            if (cmd0 == "trap" && cmd.Words.Length >= 3
-                && GetLiteralValue(cmd.Words[^1]) == "DEBUG")
-            {
-                var trapArgs = cmd.Words.Skip(1).Take(cmd.Words.Length - 2).ToList();
-                var rawCmd = string.Join(" ", trapArgs.Select(w =>
-                    ExtractSingleQuotedOrLiteralValue(w) ?? EmitWord(w)));
-                var firstArg = GetLiteralValue(cmd.Words[1]);
-                if (firstArg == "-")
-                    return EmitTrapDebugUnregister(rawCmd);
-                var transpiledCmd = Transpile(rawCmd) ?? rawCmd;
-                return EmitTrapDebugRegister(rawCmd, transpiledCmd);
-            }
-
-            // return N -> capture exit code for $?
-            if (cmd0 == "return")
-            {
-                if (cmd.Words.Length >= 2)
-                {
-                    var retCode = EmitWord(cmd.Words[1]);
-                    specialResult = $"$global:LASTEXITCODE = {retCode}; return";
-                }
-                else
-                {
-                    specialResult = "return";
-                }
-            }
-            // true -> no-op success; false -> silent failure (sets $? = $false for && / ||)
-            // Wrapped in $(...) so the multi-statement body parses as a single
-            // expression — required when used as an operand of `||` or `&&`,
-            // e.g. `cmd || true` would otherwise emit `cmd || $g:LASTEXITCODE = 0; ...`
-            // and the `||` would only consume `$g:LASTEXITCODE`. Subexpression
-            // (not script block `& { }`) is required so Write-Error's $?=$false
-            // propagates to the outer pipeline; `& { }` invocation resets $? = $true.
-            else if (cmd0 == "true" && cmd.Words.Length == 1)
-                specialResult = "$($global:LASTEXITCODE = 0; [void]$true)";
-            else if (cmd0 == "false" && cmd.Words.Length == 1)
-            {
-                if (_context == TranspileContext.Eval)
-                    // try/catch on (1/0) is the mechanism that flips $? to $false so bash `&&` short-circuits;
-                    // Write-Error can't be used here because it propagates as a terminating error in eval scope.
-                    specialResult = "$($global:LASTEXITCODE = 1; try { [void](1/0) } catch { }; if ($global:__BashErrexit) { throw 'PsBash.FalseErrexit' })";
-                else
-                    specialResult = "$($global:LASTEXITCODE = 1; Write-Error '' -ErrorAction SilentlyContinue)";
-            }
-
-            else if (cmd0 == "cd")
-                specialResult = EmitCd(cmd.Words.RemoveAt(0));
-
-            // read [-r] [-p "prompt"] VAR -> Invoke-BashRead [-p "prompt"] VAR
-            else if (cmd0 == "read")
-                specialResult = EmitPassthrough("Invoke-BashRead", cmd.Words.RemoveAt(0));
-
-            // eval "cmd" -> inline-transpile the reconstructed bash source
-            // of the args at parse time. Command/arith/process substitutions
-            // inside the eval body raise a ParseException; there is no runtime
-            // eval path.
-            else if (cmd0 == "eval")
-                specialResult = EmitEval(cmd.Words.RemoveAt(0));
-
-            // readonly VAR=val -> Set-Variable -Name VAR -Value val -Option Constant
-            else if (cmd0 == "readonly")
-            {
-                var roSb = new StringBuilder();
-                for (int i = 1; i < cmd.Words.Length; i++)
-                {
-                    if (i > 1) roSb.Append("; ");
-                    var val = GetLiteralValue(cmd.Words[i]);
-                    if (val is null) continue;
-                    if (val.StartsWith('-')) continue; // skip flags like -p, -r
-                    int eq = val.IndexOf('=');
-                    if (eq > 0)
-                    {
-                        string varName = val[..eq];
-                        string varVal = val[(eq + 1)..];
-                        roSb.Append($"Set-Variable -Name {varName} -Value '{SqEsc(varVal)}' -Option Constant -Scope Global");
-                    }
-                    else
-                    {
-                        roSb.Append($"Set-Variable -Name {val} -Option Constant -Scope Global");
-                    }
-                }
-                specialResult = string.IsNullOrEmpty(roSb.ToString()) ? "[void]$true" : roSb.ToString();
-            }
-
-            // set -- a b c -> reset positional parameters
-            // set -e / set -o errexit -> $ErrorActionPreference = 'Stop'
-            // set -x / set -o xtrace -> Set-PSDebug -Trace 1
-            // set -u / set -o nounset -> Set-StrictMode -Version Latest
-            else if (cmd0 == "set" && cmd.Words.Length >= 2)
-            {
-                var literalArgs = cmd.Words.Skip(1).Select(w => GetLiteralValue(w)).ToList();
-                int dashDashIdx = literalArgs.IndexOf("--");
-                if (dashDashIdx >= 0)
-                {
-                    var positionalWords = cmd.Words.Skip(1 + dashDashIdx + 1).ToList();
-                    if (positionalWords.Count == 0)
-                        specialResult = "$global:BashPositional = @()";
-                    else
-                    {
-                        // Quote each element so that bare literals like `a`, `b`, `c`
-                        // are treated as strings, not variable/command references in PS.
-                        var items = string.Join(", ", positionalWords.Select(w =>
-                        {
-                            var emitted = EmitWord(w);
-                            // Already quoted (starts with ' or "), a variable ($), subexpr ((), or array (@): pass through.
-                            if (emitted.Length > 0 && emitted[0] is '\'' or '"' or '$' or '(' or '@')
-                                return emitted;
-                            // Bare literal — wrap in single quotes.
-                            return PsBuild.SingleQuote(emitted);
-                        }));
-                        specialResult = $"$global:BashPositional = @({items})";
-                    }
-                }
-                else
-                {
-                    var args = literalArgs;
-                    bool longOpt = args.Any(a => a == "-o");
-                    if (longOpt)
-                    {
-                        var optVal = args.SkipWhile(a => a != "-o").Skip(1).FirstOrDefault();
-                        if (optVal == "errexit") specialResult = "$ErrorActionPreference = 'Stop'; $global:__BashErrexit = $true";
-                        else if (optVal == "xtrace") specialResult = "Set-PSDebug -Trace 1";
-                        else if (optVal == "nounset") specialResult = "Set-StrictMode -Version Latest";
-                    }
-                    else
-                    {
-                        var flags = args.Where(a => a is not null && a.StartsWith('-') && !a.StartsWith("--")).ToList();
-                        bool e = flags.Any(f => f!.Contains('e'));
-                        bool x = flags.Any(f => f!.Contains('x'));
-                        bool u = flags.Any(f => f!.Contains('u'));
-                        var parts = new List<string>();
-                        if (e) parts.AddRange(new[]{"$ErrorActionPreference = 'Stop'", "$global:__BashErrexit = $true"});
-                        if (u) parts.Add("Set-StrictMode -Version Latest");
-                        if (x) parts.Add("Set-PSDebug -Trace 1");
-                        if (parts.Count > 0) specialResult = string.Join("; ", parts);
-                    }
-                }
-            }
-
-            // source FILE / . FILE -> Invoke-BashSource FILE @args
-            // source <(cmd) / . <(cmd) -> Invoke-ProcessSubSource { transpiled_cmd }
-            // The process-substitution form captures the producer's stdout as bash text,
-            // transpiles it, and executes the result in the caller's scope (source semantics).
-            else if ((cmd0 == "source" || cmd0 == ".") && cmd.Words.Length >= 2)
-            {
-                var fileArg = cmd.Words[1];
-                if (fileArg.Parts.Length == 1 && fileArg.Parts[0] is WordPart.ProcessSub procSub)
-                {
-                    string inner = EmitCaptured((Command)procSub.Body);
-                    specialResult = $"Invoke-ProcessSubSource {{ {inner} }}";
-                }
-                else
-                {
-                    specialResult = EmitPassthrough("Invoke-BashSource", cmd.Words.RemoveAt(0));
-                }
-            }
-
-            // Standalone mapped commands: rewrite through TryEmitMappedCommand.
-            // Under TranspileContext.Eval the rewrite is mandatory for every
-            // mapped command — including those in PsBuiltinAliases — because
-            // the in-process eval host (e.g. Invoke-BashEval cmdlet) MUST NOT
-            // depend on global PsBash aliases hijacking pwsh builtins.
-            // Under TranspileContext.Default the same rewrite happens today;
-            // the PsBuiltinAliases set is reserved as a forward-compat hook
-            // for a future optimization that would let those commands resolve
-            // through the host's existing aliases.
-            else if (cmd0 is not null
-                && TryEmitMappedCommand(cmd, out var mapped))
-            {
-                if (cmd.Redirects.IsEmpty)
-                    specialResult = mapped;
-                else
-                {
-                    var mappedSb = new StringBuilder(mapped);
-                    EmitPipeTargetRedirects(cmd, mappedSb);
-                    specialResult = mappedSb.ToString();
-                }
-            }
-
-            if (specialResult is not null)
-                return specialResult;
+            var transpiledCmd = Transpile(rawCmd) ?? rawCmd;
+            result = EmitTrapDebugRegister(rawCmd, transpiledCmd);
+            return true;
         }
 
+        string? specialResult = null;
+
+        // return N -> capture exit code for $?
+        if (cmd0 == "return")
+        {
+            if (cmd.Words.Length >= 2)
+            {
+                var retCode = EmitWord(cmd.Words[1]);
+                specialResult = $"$global:LASTEXITCODE = {retCode}; return";
+            }
+            else
+            {
+                specialResult = "return";
+            }
+        }
+        // true -> no-op success; false -> silent failure (sets $? = $false for && / ||)
+        // Wrapped in $(...) so the multi-statement body parses as a single
+        // expression — required when used as an operand of `||` or `&&`,
+        // e.g. `cmd || true` would otherwise emit `cmd || $g:LASTEXITCODE = 0; ...`
+        // and the `||` would only consume `$g:LASTEXITCODE`. Subexpression
+        // (not script block `& { }`) is required so Write-Error's $?=$false
+        // propagates to the outer pipeline; `& { }` invocation resets $? = $true.
+        else if (cmd0 == "true" && cmd.Words.Length == 1)
+            specialResult = "$($global:LASTEXITCODE = 0; [void]$true)";
+        else if (cmd0 == "false" && cmd.Words.Length == 1)
+        {
+            if (_context == TranspileContext.Eval)
+                // try/catch on (1/0) is the mechanism that flips $? to $false so bash `&&` short-circuits;
+                // Write-Error can't be used here because it propagates as a terminating error in eval scope.
+                specialResult = "$($global:LASTEXITCODE = 1; try { [void](1/0) } catch { }; if ($global:__BashErrexit) { throw 'PsBash.FalseErrexit' })";
+            else
+                specialResult = "$($global:LASTEXITCODE = 1; Write-Error '' -ErrorAction SilentlyContinue)";
+        }
+
+        else if (cmd0 == "cd")
+            specialResult = EmitCd(cmd.Words.RemoveAt(0));
+
+        // read [-r] [-p "prompt"] VAR -> Invoke-BashRead [-p "prompt"] VAR
+        else if (cmd0 == "read")
+            specialResult = EmitPassthrough("Invoke-BashRead", cmd.Words.RemoveAt(0));
+
+        // eval "cmd" -> inline-transpile the reconstructed bash source
+        // of the args at parse time. Command/arith/process substitutions
+        // inside the eval body raise a ParseException; there is no runtime
+        // eval path.
+        else if (cmd0 == "eval")
+            specialResult = EmitEval(cmd.Words.RemoveAt(0));
+
+        else if (cmd0 == "readonly")
+            specialResult = EmitReadonly(cmd);
+
+        else if (cmd0 == "set" && cmd.Words.Length >= 2)
+            specialResult = EmitSet(cmd);
+
+        else if ((cmd0 == "source" || cmd0 == ".") && cmd.Words.Length >= 2)
+            specialResult = EmitSourceOrDot(cmd);
+
+        // Standalone mapped commands: rewrite through TryEmitMappedCommand.
+        // Under TranspileContext.Eval the rewrite is mandatory for every
+        // mapped command — including those in PsBuiltinAliases — because
+        // the in-process eval host (e.g. Invoke-BashEval cmdlet) MUST NOT
+        // depend on global PsBash aliases hijacking pwsh builtins.
+        // Under TranspileContext.Default the same rewrite happens today;
+        // the PsBuiltinAliases set is reserved as a forward-compat hook
+        // for a future optimization that would let those commands resolve
+        // through the host's existing aliases.
+        else if (cmd0 is not null
+            && TryEmitMappedCommand(cmd, out var mapped))
+            specialResult = EmitMappedStandalone(cmd, mapped);
+
+        if (specialResult is not null)
+        {
+            result = specialResult;
+            return true;
+        }
+        return false;
+    }
+
+    // readonly VAR=val -> Set-Variable -Name VAR -Value val -Option Constant
+    private static string EmitReadonly(Command.Simple cmd)
+    {
+        var roSb = new StringBuilder();
+        for (int i = 1; i < cmd.Words.Length; i++)
+        {
+            if (i > 1) roSb.Append("; ");
+            var val = GetLiteralValue(cmd.Words[i]);
+            if (val is null) continue;
+            if (val.StartsWith('-')) continue; // skip flags like -p, -r
+            int eq = val.IndexOf('=');
+            if (eq > 0)
+            {
+                string varName = val[..eq];
+                string varVal = val[(eq + 1)..];
+                roSb.Append($"Set-Variable -Name {varName} -Value '{SqEsc(varVal)}' -Option Constant -Scope Global");
+            }
+            else
+            {
+                roSb.Append($"Set-Variable -Name {val} -Option Constant -Scope Global");
+            }
+        }
+        return string.IsNullOrEmpty(roSb.ToString()) ? "[void]$true" : roSb.ToString();
+    }
+
+    // set -- a b c -> reset positional parameters
+    // set -e / set -o errexit -> $ErrorActionPreference = 'Stop'
+    // set -x / set -o xtrace -> Set-PSDebug -Trace 1
+    // set -u / set -o nounset -> Set-StrictMode -Version Latest
+    private static string? EmitSet(Command.Simple cmd)
+    {
+        string? specialResult = null;
+        var literalArgs = cmd.Words.Skip(1).Select(w => GetLiteralValue(w)).ToList();
+        int dashDashIdx = literalArgs.IndexOf("--");
+        if (dashDashIdx >= 0)
+        {
+            var positionalWords = cmd.Words.Skip(1 + dashDashIdx + 1).ToList();
+            if (positionalWords.Count == 0)
+                specialResult = "$global:BashPositional = @()";
+            else
+            {
+                // Quote each element so that bare literals like `a`, `b`, `c`
+                // are treated as strings, not variable/command references in PS.
+                var items = string.Join(", ", positionalWords.Select(w =>
+                {
+                    var emitted = EmitWord(w);
+                    // Already quoted (starts with ' or "), a variable ($), subexpr ((), or array (@): pass through.
+                    if (emitted.Length > 0 && emitted[0] is '\'' or '"' or '$' or '(' or '@')
+                        return emitted;
+                    // Bare literal — wrap in single quotes.
+                    return PsBuild.SingleQuote(emitted);
+                }));
+                specialResult = $"$global:BashPositional = @({items})";
+            }
+        }
+        else
+        {
+            var args = literalArgs;
+            bool longOpt = args.Any(a => a == "-o");
+            if (longOpt)
+            {
+                var optVal = args.SkipWhile(a => a != "-o").Skip(1).FirstOrDefault();
+                if (optVal == "errexit") specialResult = "$ErrorActionPreference = 'Stop'; $global:__BashErrexit = $true";
+                else if (optVal == "xtrace") specialResult = "Set-PSDebug -Trace 1";
+                else if (optVal == "nounset") specialResult = "Set-StrictMode -Version Latest";
+            }
+            else
+            {
+                var flags = args.Where(a => a is not null && a.StartsWith('-') && !a.StartsWith("--")).ToList();
+                bool e = flags.Any(f => f!.Contains('e'));
+                bool x = flags.Any(f => f!.Contains('x'));
+                bool u = flags.Any(f => f!.Contains('u'));
+                var parts = new List<string>();
+                if (e) parts.AddRange(new[]{"$ErrorActionPreference = 'Stop'", "$global:__BashErrexit = $true"});
+                if (u) parts.Add("Set-StrictMode -Version Latest");
+                if (x) parts.Add("Set-PSDebug -Trace 1");
+                if (parts.Count > 0) specialResult = string.Join("; ", parts);
+            }
+        }
+        return specialResult;
+    }
+
+    // source FILE / . FILE -> Invoke-BashSource FILE @args
+    // source <(cmd) / . <(cmd) -> Invoke-ProcessSubSource { transpiled_cmd }
+    // The process-substitution form captures the producer's stdout as bash text,
+    // transpiles it, and executes the result in the caller's scope (source semantics).
+    private static string EmitSourceOrDot(Command.Simple cmd)
+    {
+        var fileArg = cmd.Words[1];
+        if (fileArg.Parts.Length == 1 && fileArg.Parts[0] is WordPart.ProcessSub procSub)
+        {
+            string inner = EmitCaptured((Command)procSub.Body);
+            return $"Invoke-ProcessSubSource {{ {inner} }}";
+        }
+        return EmitPassthrough("Invoke-BashSource", cmd.Words.RemoveAt(0));
+    }
+
+    private static string EmitMappedStandalone(Command.Simple cmd, string mapped)
+    {
+        if (cmd.Redirects.IsEmpty)
+            return mapped;
+
+        var mappedSb = new StringBuilder(mapped);
+        EmitPipeTargetRedirects(cmd, mappedSb);
+        return mappedSb.ToString();
+    }
+
+    // The general fallback: no special form matched, emit the command word(s),
+    // arguments (with env-prefix save/restore and unquoted-var splat handling),
+    // and any trailing redirects.
+    private static string EmitGeneralCommand(Command.Simple cmd)
+    {
         var sb = new StringBuilder();
 
         // Env-var prefix: VAR=value cmd — set VAR only for the duration of cmd,
