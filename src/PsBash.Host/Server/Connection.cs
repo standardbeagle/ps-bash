@@ -158,18 +158,46 @@ internal sealed class Connection
         // out so the next -c never sees this command's session state. Distinct
         // connections get distinct workers, so concurrent launchers run in parallel.
         WorkerPool<SdkWorker>.DiagLog("Connection: acquiring worker");
-        var worker = await _pool.AcquireAsync(ct).ConfigureAwait(false);
-        WorkerPool<SdkWorker>.DiagLog("Connection: acquired; executing command");
+        SdkWorker? worker = null;
         int exitCode;
         try
         {
+            worker = await _pool.AcquireAsync(ct).ConfigureAwait(false);
+            WorkerPool<SdkWorker>.DiagLog("Connection: acquired; executing command");
             exitCode = await worker.ExecuteWithOutputAsync(command, outputSink, errorSink, ct);
             WorkerPool<SdkWorker>.DiagLog($"Connection: executed, exit={exitCode}");
         }
+        catch (Exception ex) when (ex is not IpcOutputException
+                                   && !(ex is OperationCanceledException && ct.IsCancellationRequested))
+        {
+            // Worker construction (including assembly/module load) and failures
+            // before command execution used to escape to HostServer, which could
+            // only log and close the stream. Give the launcher a complete,
+            // actionable protocol response instead. Transport failures and caller
+            // cancellation still escape unchanged: attempting another write to a
+            // disconnected/cancelled client would only obscure the original event.
+            if (frameWriter is not null)
+                await frameWriter.CompleteAsync().ConfigureAwait(false);
+
+            var detail = string.IsNullOrWhiteSpace(ex.Message)
+                ? ex.GetType().Name
+                : ex.Message;
+            await HostProtocol.WriteResponseLineAsync(
+                _stream,
+                $"ps-bash-host worker failure: {detail}",
+                StreamTag.Stderr,
+                ct).ConfigureAwait(false);
+            await HostProtocol.WriteExitAsync(_stream, 1, ct).ConfigureAwait(false);
+            WorkerPool<SdkWorker>.DiagLog($"Connection: worker failure: {detail}");
+            return;
+        }
         finally
         {
-            _pool.Release(worker);
-            WorkerPool<SdkWorker>.DiagLog("Connection: released worker");
+            if (worker is not null)
+            {
+                _pool.Release(worker);
+                WorkerPool<SdkWorker>.DiagLog("Connection: released worker");
+            }
             if (frameWriter is not null)
             {
                 // CompleteAsync drains the queue and rethrows a writer failure so the
@@ -194,6 +222,18 @@ internal sealed class Connection
     }
 
     private readonly record struct IpcOutputFrame(StreamTag Tag, string Line);
+
+    /// <summary>
+    /// Marks failures of this connection's framed response transport. Worker
+    /// code may legitimately throw <see cref="IOException"/> (including
+    /// assembly/module loading failures), so IOException itself is not a safe
+    /// proxy for a disconnected client.
+    /// </summary>
+    private sealed class IpcOutputException : IOException
+    {
+        public IpcOutputException(string message, Exception? inner = null)
+            : base(message, inner) { }
+    }
 
     private sealed class IpcOutputQueue : IAsyncDisposable
     {
@@ -240,7 +280,7 @@ internal sealed class Connection
         public void Write(string line, StreamTag tag)
         {
             if (_failure is not null)
-                throw new IOException("IPC output writer failed.", _failure);
+                throw new IpcOutputException("IPC output writer failed.", _failure);
 
             try
             {
@@ -248,11 +288,17 @@ internal sealed class Connection
                 // On timeout the consumer is dead — fail THIS connection so RunCommand
                 // aborts and releases the gate, instead of wedging the whole daemon.
                 if (!_queue.TryAdd(new IpcOutputFrame(tag, line), StallTimeoutMs(), _ct))
-                    throw new IOException("IPC output consumer stalled; abandoning connection.");
+                    throw new IpcOutputException("IPC output consumer stalled; abandoning connection.");
             }
-            catch (Exception ex) when (ex is InvalidOperationException or OperationCanceledException)
+            catch (OperationCanceledException) when (_ct.IsCancellationRequested)
             {
-                throw new IOException("IPC output writer is closed.", ex);
+                // Preserve caller cancellation all the way through HandleAsync;
+                // it is lifecycle control, not a disconnected output transport.
+                throw;
+            }
+            catch (InvalidOperationException ex)
+            {
+                throw new IpcOutputException("IPC output writer is closed.", ex);
             }
         }
 
@@ -267,7 +313,7 @@ internal sealed class Connection
             try { _queue.CompleteAdding(); } catch { }
             await _drainTask.ConfigureAwait(false);
             if (_failure is not null)
-                throw new IOException("IPC output writer failed.", _failure);
+                throw new IpcOutputException("IPC output writer failed.", _failure);
         }
 
         public async ValueTask DisposeAsync()

@@ -10,6 +10,18 @@ namespace PsBash.Core.Runtime.Compaction;
 public static class FilterEngine
 {
     private const int DefaultMaxLines = 120;
+    private const string GitStageCommitPushRoute = "git.stage-commit-push.v1";
+
+    private static readonly IReadOnlyList<FilterSpec> RouteFilters =
+    [
+        new()
+        {
+            Name = "git/stage-commit-push",
+            Match = new FilterMatch { Command = "git", RouteKey = GitStageCommitPushRoute },
+            OnSuccess = "changes staged, committed, and pushed"
+            // On failure the unmodified body is retained; IpcWorker also writes its tee.
+        }
+    ];
 
     public static string Apply(
         string command,
@@ -18,12 +30,14 @@ public static class FilterEngine
         IReadOnlyList<OutputFrame> frames,
         IReadOnlyList<FilterSpec>? filters = null,
         int maxLines = DefaultMaxLines,
-        GenericFallback fallback = GenericFallback.None)
+        GenericFallback fallback = GenericFallback.None,
+        string? routeKey = null)
     {
         ArgumentNullException.ThrowIfNull(command);
         ArgumentNullException.ThrowIfNull(frames);
 
-        var spec = filters is null || filters.Count == 0 ? null : SelectFilter(command, filters);
+        var spec = SelectRouteFilter(routeKey)
+            ?? (filters is null || filters.Count == 0 ? null : SelectFilter(command, filters));
         if (spec is not null)
             return FilterStage.Run(spec, command, exitCode, timedOut, frames, maxLines);
 
@@ -32,6 +46,17 @@ public static class FilterEngine
         return fallback == GenericFallback.ErrorExtract
             ? GenericFallbacks.Apply(command, exitCode, timedOut, frames, maxLines)
             : OutputCompactor.CompactCommandOutput(command, exitCode, timedOut, frames, maxLines);
+    }
+
+    private static FilterSpec? SelectRouteFilter(string? routeKey)
+    {
+        if (string.IsNullOrEmpty(routeKey)) return null;
+        foreach (var filter in RouteFilters)
+        {
+            if (string.Equals(filter.Match.RouteKey, routeKey, StringComparison.Ordinal))
+                return filter;
+        }
+        return null;
     }
 
     /// <summary>First filter whose <see cref="FilterMatch"/> matches the command, else null.</summary>

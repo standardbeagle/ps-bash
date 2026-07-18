@@ -25,6 +25,22 @@ PSBASH_COVERAGE=1 ./scripts/test.sh
 ./scripts/coverage-report.sh --open
 ```
 
+`scripts/test.sh` bounds both phases: `PSBASH_BUILD_TIMEOUT` controls the
+explicit pre-build (600 seconds by default), and `PSBASH_TEST_TIMEOUT` controls
+test dispatch (1500 seconds by default). Set either value to `0` to disable its
+bound. A timed-out pre-build exits 124 before test dispatch.
+
+For worktrack runs that need a durable combined diagnostic while preserving the
+caller's stdout, stderr, and exit code, use:
+
+```powershell
+pwsh -File scripts/run-worktrack-test.ps1
+```
+
+The runner writes `artifacts/worktrack/test-all-<timestamp>.log`, reports that
+path on stdout, and returns the child test script's exit code. The log groups
+captured stdout before stderr; it does not preserve cross-stream temporal order.
+
 Coverage XML artifact: `coverage-<os>` uploaded per CI run (see Actions > workflow run > Artifacts).
 
 ---

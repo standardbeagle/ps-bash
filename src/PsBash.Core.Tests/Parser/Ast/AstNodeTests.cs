@@ -326,7 +326,7 @@ public class AstNodeTests
             WordPart.SimpleVarSub sv => sv.Name,
             WordPart.BracedVarSub bv => bv.Name,
             WordPart.CommandSub cs => cs.Body.ToString()!,
-            WordPart.ArithSub ar => ar.Expr,
+            WordPart.ArithSub ar => ar.Expr.Source,
             WordPart.TildeSub ts => ts.User ?? "~",
             WordPart.GlobPart gp => gp.Pattern,
             _ => throw new InvalidOperationException("Unknown word part type"),

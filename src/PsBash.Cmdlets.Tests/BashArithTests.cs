@@ -1,5 +1,7 @@
 using System.Collections.Generic;
 using PsBash.Cmdlets;
+using PsBash.Core.Parser;
+using PsBash.Core.Parser.Ast;
 using Xunit;
 
 namespace PsBash.Cmdlets.Tests;
@@ -94,6 +96,117 @@ public class BashArithTests
     }
 
     [Fact]
+    public void Evaluate_DollarNamedVariable_UsesLegacyBareVariableName()
+    {
+        var vars = new Dictionary<string, long> { ["value"] = 12 };
+
+        Assert.Equal(13, Eval("$value + 1", vars));
+    }
+
+    [Theory]
+    [InlineData("$1", "1")]
+    [InlineData("$0", "0")]
+    [InlineData("$9", "9")]
+    [InlineData("$#", "#")]
+    [InlineData("$?", "?")]
+    [InlineData("$@", "@")]
+    [InlineData("$*", "*")]
+    [InlineData("$$", "$")]
+    [InlineData("$!", "!")]
+    public void Evaluate_PositionalAndSpecialParameter_ReadsBareDelegateKey(string expression, string key)
+    {
+        string? requested = null;
+        long value = BashArith.Evaluate(expression,
+            name => { requested = name; return name == key ? 17 : 0; },
+            (_, _) => { });
+
+        Assert.Equal(17, value);
+        Assert.Equal(key, requested);
+    }
+
+    [Fact]
+    public void Evaluate_UnsetSpecialParameter_IsZeroWithoutThrowing()
+        => Assert.Equal(0, Eval("$?"));
+
+    [Theory]
+    [InlineData("$10", "1", 70)]
+    [InlineData("${1}", "1", 7)]
+    [InlineData("${10}", "10", 7)]
+    [InlineData("${x}", "x", 7)]
+    [InlineData("${?}", "?", 7)]
+    [InlineData("$1+2", "1", 9)]
+    public void Evaluate_ParameterSpelling_UsesNormalizedLookupKey(
+        string expression, string expectedKey, long expected)
+    {
+        string? requested = null;
+        long value = BashArith.Evaluate(expression,
+            key => { requested = key; return 7; },
+            (_, _) => { });
+
+        Assert.Equal(expected, value);
+        Assert.Equal(expectedKey, requested);
+    }
+
+    [Fact]
+    public void Evaluate_UnbracedDigitSuffix_ConcatenatesRawTextBeforeEvaluation()
+    {
+        long result = BashArith.Evaluate("$10",
+            key => key == "1" ? 5 : 0,
+            (_, _) => { },
+            key => key == "1" ? "2+3" : null);
+
+        Assert.Equal(32, result); // expansion is 2+30, not evaluated(2+3) + "0"
+    }
+
+    [Fact]
+    public void Evaluate_UnbracedDigitSuffix_ExpandsWholeSourceBeforeParsingPrecedence()
+    {
+        long result = BashArith.Evaluate("$10 * 2",
+            key => key == "1" ? 5 : 0,
+            (_, _) => { },
+            key => key == "1" ? "2+3" : null);
+
+        Assert.Equal(62, result); // expanded source is 2+30 * 2
+    }
+
+    [Fact]
+    public void Evaluate_UnbracedDigitSuffix_RawExpansionDepthGrowthThrowsControlledError()
+    {
+        var error = Assert.Throws<BashArith.BashArithException>(() =>
+            BashArith.Evaluate("$10",
+                _ => 0,
+                (_, _) => { },
+                key => key == "1" ? "$10" : null));
+
+        Assert.Contains("maximum depth", error.Message);
+    }
+
+    [Fact]
+    public void Evaluate_UnbracedDigitSuffix_RawAmplificationThrowsBeforeOversizedAllocation()
+    {
+        var error = Assert.Throws<BashArith.BashArithException>(() =>
+            BashArith.Evaluate("$10",
+                _ => 0,
+                (_, _) => { },
+                key => key == "1" ? "$10$10" : null));
+
+        Assert.Contains("maximum length", error.Message);
+    }
+
+    [Fact]
+    public void Evaluate_BracedMultiDigit_DoesNotUseUnbracedSuffixRule()
+    {
+        string? requested = null;
+        long result = BashArith.Evaluate("${10}",
+            key => { requested = key; return 11; },
+            (_, _) => { },
+            _ => "2+3");
+
+        Assert.Equal(11, result);
+        Assert.Equal("10", requested);
+    }
+
+    [Fact]
     public void Evaluate_UnsetVariable_IsZero()
         => Assert.Equal(7, Eval("nope + 7"));
 
@@ -150,5 +263,93 @@ public class BashArithTests
         var vars = new Dictionary<string, long>();
         Assert.Equal(1, Eval("1 || (a = 99)", vars));
         Assert.False(vars.ContainsKey("a"));
+    }
+
+    [Fact]
+    public void Parse_ProducesTypedReusableSyntaxAndPreservesSource()
+    {
+        ArithmeticSyntax syntax = BashArithmeticParser.Parse("x += 2 ** 3");
+
+        Assert.Equal("x += 2 ** 3", syntax.Source);
+        var assignment = Assert.IsType<ArithmeticExpr.Assignment>(syntax.Root);
+        Assert.Equal("x", assignment.Name);
+        Assert.Equal(ArithmeticAssignmentOp.Add, assignment.Op);
+        Assert.Equal(ArithmeticBinaryOp.Power,
+            Assert.IsType<ArithmeticExpr.Binary>(assignment.Value).Op);
+
+        var vars = new Dictionary<string, long> { ["x"] = 1 };
+        Assert.Equal(9, BashArith.Evaluate(syntax,
+            name => vars.TryGetValue(name, out long value) ? value : 0,
+            (name, value) => vars[name] = value));
+        Assert.Equal(9, vars["x"]);
+    }
+
+    [Fact]
+    public void Evaluate_TernaryTrueBranch_AcceptsCommaExpressionAndSideEffects()
+    {
+        var vars = new Dictionary<string, long>();
+
+        Assert.Equal(3, Eval("1 ? (x = 2), x + 1 : (x = 99)", vars));
+        Assert.Equal(2, vars["x"]);
+    }
+
+    [Fact]
+    public void Parse_Ternary_IsNestedAndFalseBranchIsRightAssociative()
+    {
+        var outer = Assert.IsType<ArithmeticExpr.Conditional>(
+            BashArithmeticParser.Parse("0 ? 1 : 1 ? 2 : 3").Root);
+
+        Assert.IsType<ArithmeticExpr.Conditional>(outer.WhenFalse);
+        Assert.Equal(2, Eval("0 ? 1 : 1 ? 2 : 3"));
+    }
+
+    [Fact]
+    public void Parse_PrecedenceAndPowerAssociativity_HaveExpectedShape()
+    {
+        var add = Assert.IsType<ArithmeticExpr.Binary>(BashArithmeticParser.Parse("2 + 3 * 4").Root);
+        Assert.Equal(ArithmeticBinaryOp.Add, add.Op);
+        Assert.Equal(ArithmeticBinaryOp.Multiply, Assert.IsType<ArithmeticExpr.Binary>(add.Right).Op);
+
+        var power = Assert.IsType<ArithmeticExpr.Binary>(BashArithmeticParser.Parse("2 ** 3 ** 2").Root);
+        Assert.Equal(ArithmeticBinaryOp.Power, power.Op);
+        Assert.Equal(ArithmeticBinaryOp.Power, Assert.IsType<ArithmeticExpr.Binary>(power.Right).Op);
+    }
+
+    [Fact]
+    public void Evaluate_LazyBranches_AreParsedButUntakenSideEffectsDoNotRun()
+    {
+        var vars = new Dictionary<string, long>();
+        Assert.Equal(7, Eval("1 ? 7 : (x = 9)", vars));
+        Assert.False(vars.ContainsKey("x"));
+
+        Assert.Throws<BashArith.BashArithException>(() => Eval("1 ? 7 : (x = )", vars));
+    }
+
+    [Theory]
+    [InlineData("")]
+    [InlineData("1 +")]
+    [InlineData("(1 + 2")]
+    public void Evaluate_EmptyOrMalformedInput_ThrowsBashArithException(string expression)
+        => Assert.Throws<BashArith.BashArithException>(() => Eval(expression));
+
+    [Fact]
+    public void Evaluate_NegativeExponent_PreservesZeroResult()
+        => Assert.Equal(0, Eval("2 ** -1"));
+}
+
+public class InvokeBashArithmeticRawReaderTests : IClassFixture<SharedPwshFixture>
+{
+    private readonly SharedPwshFixture _fixture;
+
+    public InvokeBashArithmeticRawReaderTests(SharedPwshFixture fixture) => _fixture = fixture;
+
+    [Fact]
+    public void InvokeBashArith_ExistingEmptyPowerShellVariable_WinsOverEnvironment()
+    {
+        var pwsh = _fixture.AcquireFresh();
+        var result = pwsh.AddScript(
+            "$env:x = '9'; $x = ''; Invoke-BashArith '$x'").Invoke();
+
+        Assert.Equal("0", Assert.Single(result).ToString());
     }
 }

@@ -576,11 +576,11 @@ public static class PsEmitter
                 var sb = new StringBuilder();
                 sb.Append(IterGuardPrefix(depth));
                 sb.Append("for (");
-                sb.Append(TranslateArithClause(forArith.Init, isInit: true));
+                sb.Append(EmitForArithClause(forArith.Init, initializeLoopVar: loopVar));
                 sb.Append("; ");
-                sb.Append(TranslateForArithCondition(forArith.Cond));
+                sb.Append(EmitForArithCondition(forArith.Cond));
                 sb.Append("; ");
-                sb.Append(TranslateArithClause(forArith.Step, isInit: false));
+                sb.Append(EmitForArithClause(forArith.Step, initializeLoopVar: null));
                 sb.Append(") { ");
                 sb.Append(IterGuardCheck(depth));
                 sb.Append(Emit(forArith.Body));
@@ -944,24 +944,14 @@ public static class PsEmitter
     /// <see cref="EmitCondition"/> via <see cref="EmitArithConditionExpr"/>.
     /// </summary>
     private static string EmitArithCommand(Command.ArithCommand arith)
-    {
-        string expr = arith.Expr.Trim();
-        if (!ReferencesPositional(expr))
-            return PsBuild.SilentExitFromBool($"(Invoke-BashArith {PsBuild.SingleQuote(expr)}) -ne 0");
-        return EmitArithCommandLegacy(expr);
-    }
+        => PsBuild.SilentExitFromBool($"({EmitArithmeticInvocation(arith.Expr)}) -ne 0");
 
     /// <summary>
     /// Boolean expression for <c>(( expr ))</c> used as an <c>if</c>/<c>while</c>
     /// condition: true iff the evaluated result is non-zero.
     /// </summary>
-    private static string EmitArithConditionExpr(string expr)
-    {
-        expr = expr.Trim();
-        if (!ReferencesPositional(expr))
-            return $"((Invoke-BashArith {PsBuild.SingleQuote(expr)}) -ne 0)";
-        return "(" + EmitArithCommandLegacy(expr) + ")";
-    }
+    private static string EmitArithConditionExpr(ArithmeticSyntax syntax)
+        => $"(({EmitArithmeticInvocation(syntax)}) -ne 0)";
 
     private static string EmitArithCommandLegacy(string expr)
     {
@@ -1127,12 +1117,16 @@ public static class PsEmitter
         return $"$input | ForEach-Object {{ {PsBuild.NullSafeBashText} }} | ForEach-Object {{ ($_ -replace \"`n$\",\"\") -split \"`n\" }} | ForEach-Object {{ ${{{varName}}} = $_; {bodyText} }}";
     }
 
-    private static string? ExtractArithVar(string init)
+    private static string? ExtractArithVar(ArithmeticSyntax? init) =>
+        init?.Root is ArithmeticExpr.Assignment assignment ? assignment.Name : null;
+
+    private static string EmitForArithClause(ArithmeticSyntax? syntax, string? initializeLoopVar)
     {
-        int eq = init.IndexOf('=');
-        if (eq > 0)
-            return init[..eq].Trim().TrimStart('$');
-        return null;
+        if (syntax is null) return "";
+        string invocation = EmitArithmeticInvocation(syntax);
+        return initializeLoopVar is null
+            ? $"$null = {invocation}"
+            : $"${{{initializeLoopVar}}} = $({invocation})";
     }
 
     private static string TranslateArithClause(string clause, bool isInit)
@@ -1182,12 +1176,8 @@ public static class PsEmitter
     /// invalid PowerShell parse). Mirrors how a standalone/if/while
     /// <c>(( … ))</c> condition is emitted.
     /// </summary>
-    private static string TranslateForArithCondition(string cond)
-    {
-        cond = cond.Trim();
-        if (cond.Length == 0) return "";
-        return EmitArithConditionExpr(cond);
-    }
+    private static string EmitForArithCondition(ArithmeticSyntax? syntax) =>
+        syntax is null ? "" : EmitArithConditionExpr(syntax);
 
     private static string TranslateArithCondition(string cond)
     {
@@ -3201,62 +3191,15 @@ public static class PsEmitter
     }
 
     private static string EmitArithSub(WordPart.ArithSub arith)
+        => $"$({EmitArithmeticInvocation(arith.Expr)})";
+
+    private static string EmitArithmeticInvocation(ArithmeticSyntax syntax)
     {
-        string expr = arith.Expr.Trim();
-
-        // Handle increment/decrement inside $((i++)) etc.
-        // For env vars, side-effects can't happen inside $(), so emit as a
-        // scriptblock that performs the side-effect and returns the value.
-        if (expr.EndsWith("++") || expr.EndsWith("--"))
-        {
-            string varName = expr[..^2].Trim();
-            string varRef = varName.StartsWith('$') ? varName : ArithVarRef(varName);
-            bool isInc = expr.EndsWith("++");
-            if (IsEnvVar(varRef))
-            {
-                // Post-increment: return old value, then increment.
-                // $( $__t = [int]$env:i; $env:i = [string]($__t + 1); $__t )
-                string delta = isInc ? "1" : "-1";
-                return $"$( $__t = [int]{varRef}; {varRef} = [string]($__t + {delta}); $__t )";
-            }
-            return $"$({varRef}{expr[^2..]})";
-        }
-        if (expr.StartsWith("++") || expr.StartsWith("--"))
-        {
-            string varName = expr[2..].Trim();
-            string varRef = varName.StartsWith('$') ? varName : ArithVarRef(varName);
-            bool isInc = expr.StartsWith("++");
-            if (IsEnvVar(varRef))
-            {
-                // Pre-increment: increment, then return new value.
-                string delta = isInc ? "1" : "-1";
-                return $"$( {varRef} = [string]([int]{varRef} + {delta}); [int]{varRef} )";
-            }
-            return $"$({expr[..2]}{varRef})";
-        }
-
-        // General arithmetic: hand the RAW expression to the runtime evaluator,
-        // which computes the bash-correct Int64 result. PowerShell's $( )
-        // subexpression mistranslated almost every non-trivial operator —
-        // ** (parse error), integer / (gave a float), bitwise & | ^ ~ and
-        // shifts << >>, C comparisons/logicals (True/False instead of 1/0),
-        // the ternary operator, octal/base#digits — so a verbatim hand-off was
-        // wrong 26 ways. Invoke-BashArith resolves bare variables itself
-        // (PowerShell variable / $env / 0), so no PrefixBareVar is needed.
-        //
-        // Positional/special parameters ($1..$9, $#, $@, $*, $?, $$, $!) have no
-        // representation in Invoke-BashArith's bare-identifier model — its lexer
-        // strips a leading $ and would read $1 as the literal 1, and $#/$@/$*
-        // as invalid arithmetic characters. So we substitute each reference with
-        // a PowerShell subexpression yielding its runtime value and hand the
-        // assembled string to Invoke-BashArith, which still resolves ordinary
-        // bare/$-prefixed variables and applies the bash-correct integer
-        // operators the legacy verbatim $() path mistranslated (** was a
-        // PowerShell parse error, integer / gave a float, C comparisons gave
-        // True/False, etc.).
-        if (ReferencesPositional(expr))
-            return EmitPositionalArith(expr);
-        return $"$(Invoke-BashArith {PsBuild.SingleQuote(expr)})";
+        string expr = syntax.Source.Trim();
+        string argument = ReferencesPositional(expr)
+            ? EmitPositionalArithArgument(expr)
+            : PsBuild.SingleQuote(expr);
+        return $"Invoke-BashArith {argument}";
     }
 
     /// <summary>
@@ -3264,11 +3207,14 @@ public static class PsEmitter
     /// parameter (<c>$1</c>..<c>$9</c>, <c>$#</c>, <c>$@</c>, <c>$*</c>,
     /// <c>$?</c>, <c>$$</c>, <c>$!</c>) — a <c>$</c> immediately followed by a
     /// digit or special-parameter sigil. These are substituted with their
-    /// runtime values by <see cref="EmitPositionalArith"/> before the string is
+    /// runtime values by <see cref="EmitPositionalArithArgument"/> before the string is
     /// handed to the bash-arithmetic evaluator.
     /// </summary>
     private static bool ReferencesPositional(string expr) =>
-        System.Text.RegularExpressions.Regex.IsMatch(expr, @"\$[0-9@#*?$!]");
+        ArithmeticParameterRegex().IsMatch(expr);
+
+    private static System.Text.RegularExpressions.Regex ArithmeticParameterRegex() =>
+        new(@"\$\{(?<braced>[0-9]+|[@#*?$!])\}|\$(?<plain>[0-9]|[@#*?$!])");
 
     /// <summary>
     /// Emit an arithmetic subexpression that references positional/special
@@ -3290,16 +3236,19 @@ public static class PsEmitter
     /// applies bash's expand-then-evaluate semantics — a non-numeric or unset
     /// positional degrades exactly as bash would.
     /// </summary>
-    private static string EmitPositionalArith(string expr)
+    private static string EmitPositionalArithArgument(string expr)
     {
-        var rx = new System.Text.RegularExpressions.Regex(@"\$([1-9]|#|@|\*|\?|\$|!)");
+        var rx = ArithmeticParameterRegex();
         var parts = new List<string>();
         int last = 0;
         foreach (System.Text.RegularExpressions.Match m in rx.Matches(expr))
         {
             if (m.Index > last)
                 parts.Add(PsBuild.SingleQuote(expr[last..m.Index]));
-            parts.Add(PositionalRefExpr(m.Groups[1].Value));
+            string key = m.Groups["braced"].Success
+                ? m.Groups["braced"].Value
+                : m.Groups["plain"].Value;
+            parts.Add(PositionalRefExpr(key));
             last = m.Index + m.Length;
         }
         if (last < expr.Length)
@@ -3307,7 +3256,7 @@ public static class PsEmitter
         if (parts.Count == 0)
             parts.Add("''");
         string joined = "'' + " + string.Join(" + ", parts);
-        return $"$(Invoke-BashArith ({joined}))";
+        return $"({joined})";
     }
 
     /// <summary>
@@ -3323,10 +3272,15 @@ public static class PsEmitter
     private static string PositionalRefExpr(string sigil)
     {
         string inner;
-        if (sigil.Length == 1 && sigil[0] is >= '1' and <= '9')
+        if (int.TryParse(sigil, out int position))
         {
-            int idx = sigil[0] - '1';
-            inner = $"if ($global:BashPositional) {{ $global:BashPositional[{idx}] }} else {{ $args[{idx}] }}";
+            if (position == 0)
+                inner = "$global:BashPositional0";
+            else
+            {
+                int idx = position - 1;
+                inner = $"if ($global:BashPositional) {{ $global:BashPositional[{idx}] }} else {{ $args[{idx}] }}";
+            }
         }
         else
         {

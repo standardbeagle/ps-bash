@@ -1,561 +1,207 @@
-using System.Globalization;
+using PsBash.Core.Parser;
+using PsBash.Core.Parser.Ast;
 
 namespace PsBash.Cmdlets;
 
-/// <summary>
-/// A faithful evaluator for bash arithmetic expressions (the language inside
-/// <c>$(( ))</c>, <c>(( ))</c>, and <c>for ((;;))</c>). Bash arithmetic is a
-/// C-like, <b>integer-only</b> (64-bit signed) expression language whose operator
-/// set and semantics differ from PowerShell's: integer (truncating) division,
-/// <c>**</c> exponentiation, C bitwise/shift operators, comparisons and logicals
-/// that yield <c>1</c>/<c>0</c> (not <c>True</c>/<c>False</c>), the ternary
-/// operator, comma sequencing, pre/post increment, and assignment forms. The old
-/// transpiler wrapped the raw expression in a PowerShell <c>$( )</c> subexpression,
-/// which mistranslated all of the above (e.g. <c>$((2**10))</c> was a parse error,
-/// <c>$((20/3))</c> gave <c>6.66…</c>, <c>$((5&gt;3))</c> gave <c>True</c>). This
-/// evaluator computes the bash-correct result directly.
-///
-/// Variable handling is supplied by the host via <see cref="Read"/> /
-/// <see cref="Write"/> delegates, so the same evaluator works against the live
-/// runspace (environment + PowerShell variables) and against an in-memory map in
-/// tests. Bash resolves a bare identifier to its value, treating unset (or
-/// non-numeric) as <c>0</c>, and recursively evaluates a value that is itself an
-/// arithmetic string — the <see cref="Read"/> delegate owns that policy.
-/// </summary>
+/// <summary>Evaluates the shared typed bash arithmetic syntax tree.</summary>
 public static class BashArith
 {
-    /// <summary>
-    /// Evaluate <paramref name="expression"/> and return the 64-bit integer
-    /// result. <paramref name="read"/> resolves a bare identifier to a value;
-    /// <paramref name="write"/> persists an assignment. Throws
-    /// <see cref="BashArithException"/> on a syntax error or a runtime error
-    /// (division by zero, negative exponent) — matching the conditions under
-    /// which bash itself fails an arithmetic evaluation.
-    /// </summary>
-    public static long Evaluate(string expression, Func<string, long> read, Action<string, long> write)
+    private const int MaxExpandedSourceLength = 64 * 1024;
+    private static readonly System.Text.RegularExpressions.Regex UnbracedDigitSuffix =
+        new(@"\$(?<key>[0-9])(?<suffix>[0-9]+)");
+
+    public static long Evaluate(string expression, Func<string, long> read, Action<string, long> write,
+        Func<string, string?>? readRaw = null)
     {
-        var parser = new Parser(expression ?? string.Empty, read, write);
-        long result = parser.ParseExpression();
-        parser.ExpectEnd();
+        try
+        {
+            return Evaluate(BashArithmeticParser.Parse(expression), read, write, readRaw);
+        }
+        catch (BashArithmeticParseException ex)
+        {
+            throw new BashArithException(ex.Message, ex);
+        }
+    }
+
+    /// <summary>Evaluates already-parsed syntax, allowing all arithmetic consumers to share one parse.</summary>
+    public static long Evaluate(ArithmeticSyntax syntax, Func<string, long> read, Action<string, long> write,
+        Func<string, string?>? readRaw = null)
+    {
+        string expanded = ExpandUnbracedDigitSuffixes(syntax.Source, read, readRaw);
+        ArithmeticExpr root = expanded == syntax.Source
+            ? syntax.Root
+            : BashArithmeticParser.Parse(expanded).Root;
+        return Eval(root, read, write, readRaw);
+    }
+
+    private static string ExpandUnbracedDigitSuffixes(string source, Func<string, long> read,
+        Func<string, string?>? readRaw)
+    {
+        if (source.Length > MaxExpandedSourceLength)
+            throw new BashArithException("expanded arithmetic source exceeded maximum length");
+        string current = source;
+        var seen = new HashSet<string>(StringComparer.Ordinal) { current };
+        for (int depth = 0; depth < 32; depth++)
+        {
+            if (!UnbracedDigitSuffix.IsMatch(current)) return current;
+            var builder = new System.Text.StringBuilder(Math.Min(current.Length, MaxExpandedSourceLength));
+            int copiedThrough = 0;
+            foreach (System.Text.RegularExpressions.Match match in UnbracedDigitSuffix.Matches(current))
+            {
+                string key = match.Groups["key"].Value;
+                string raw = readRaw?.Invoke(key)
+                    ?? read(key).ToString(System.Globalization.CultureInfo.InvariantCulture);
+                string suffix = match.Groups["suffix"].Value;
+                int literalLength = match.Index - copiedThrough;
+                long projected = (long)builder.Length + literalLength + raw.Length + suffix.Length;
+                if (projected > MaxExpandedSourceLength)
+                    throw new BashArithException("expanded arithmetic source exceeded maximum length");
+                builder.Append(current, copiedThrough, literalLength);
+                builder.Append(raw);
+                builder.Append(suffix);
+                copiedThrough = match.Index + match.Length;
+            }
+            int tailLength = current.Length - copiedThrough;
+            if ((long)builder.Length + tailLength > MaxExpandedSourceLength)
+                throw new BashArithException("expanded arithmetic source exceeded maximum length");
+            builder.Append(current, copiedThrough, tailLength);
+            string next = builder.ToString();
+            if (!seen.Add(next))
+                throw new BashArithException("cyclic arithmetic parameter expansion");
+            current = next;
+        }
+        throw new BashArithException("arithmetic parameter expansion exceeded maximum depth");
+    }
+
+    private static long Eval(ArithmeticExpr expression, Func<string, long> read, Action<string, long> write,
+        Func<string, string?>? readRaw)
+    {
+        switch (expression)
+        {
+            case ArithmeticExpr.Number number: return number.Value;
+            case ArithmeticExpr.Identifier identifier: return read(identifier.Name);
+            // The runtime variable contract historically receives bare names. Keep
+            // `$name` identical to `name`; positional/special parameters use the
+            // same stripped key and therefore naturally read as zero when unset.
+            case ArithmeticExpr.Parameter parameter:
+            {
+                if (parameter.UnbracedSuffix.Length == 0) return read(parameter.LookupKey);
+                // Normally eliminated by whole-source expansion before parsing.
+                // Retain a numeric fallback for manually constructed syntax nodes.
+                string expanded = read(parameter.LookupKey).ToString(System.Globalization.CultureInfo.InvariantCulture)
+                    + parameter.UnbracedSuffix;
+                return Evaluate(expanded, read, write, readRaw);
+            }
+            case ArithmeticExpr.Unary unary:
+            {
+                long value = Eval(unary.Operand, read, write, readRaw);
+                return unary.Op switch
+                {
+                    ArithmeticUnaryOp.Plus => value,
+                    ArithmeticUnaryOp.Negate => -value,
+                    ArithmeticUnaryOp.LogicalNot => value == 0 ? 1 : 0,
+                    ArithmeticUnaryOp.BitwiseNot => ~value,
+                    _ => value,
+                };
+            }
+            case ArithmeticExpr.Increment increment:
+            {
+                long old = read(increment.Name);
+                long value = old + increment.Delta;
+                write(increment.Name, value);
+                return increment.Prefix ? value : old;
+            }
+            case ArithmeticExpr.Assignment assignment:
+            {
+                long rhs = Eval(assignment.Value, read, write, readRaw);
+                long current = assignment.Op == ArithmeticAssignmentOp.Assign ? 0 : read(assignment.Name);
+                long value = assignment.Op switch
+                {
+                    ArithmeticAssignmentOp.Assign => rhs,
+                    ArithmeticAssignmentOp.Add => current + rhs,
+                    ArithmeticAssignmentOp.Subtract => current - rhs,
+                    ArithmeticAssignmentOp.Multiply => current * rhs,
+                    ArithmeticAssignmentOp.Divide => Divide(current, rhs),
+                    ArithmeticAssignmentOp.Modulo => Modulo(current, rhs),
+                    ArithmeticAssignmentOp.ShiftLeft => current << (int)rhs,
+                    ArithmeticAssignmentOp.ShiftRight => current >> (int)rhs,
+                    ArithmeticAssignmentOp.BitwiseAnd => current & rhs,
+                    ArithmeticAssignmentOp.BitwiseOr => current | rhs,
+                    ArithmeticAssignmentOp.BitwiseXor => current ^ rhs,
+                    ArithmeticAssignmentOp.Power => Power(current, rhs),
+                    _ => rhs,
+                };
+                write(assignment.Name, value);
+                return value;
+            }
+            case ArithmeticExpr.Conditional conditional:
+                return Eval(conditional.Condition, read, write, readRaw) != 0
+                    ? Eval(conditional.WhenTrue, read, write, readRaw)
+                    : Eval(conditional.WhenFalse, read, write, readRaw);
+            case ArithmeticExpr.Binary binary:
+                return EvalBinary(binary, read, write, readRaw);
+            default:
+                throw new BashArithException("unknown arithmetic syntax node");
+        }
+    }
+
+    private static long EvalBinary(ArithmeticExpr.Binary binary, Func<string, long> read, Action<string, long> write,
+        Func<string, string?>? readRaw)
+    {
+        long left = Eval(binary.Left, read, write, readRaw);
+        if (binary.Op == ArithmeticBinaryOp.LogicalOr)
+            return left != 0 ? 1 : Eval(binary.Right, read, write, readRaw) != 0 ? 1 : 0;
+        if (binary.Op == ArithmeticBinaryOp.LogicalAnd)
+            return left == 0 ? 0 : Eval(binary.Right, read, write, readRaw) != 0 ? 1 : 0;
+
+        long right = Eval(binary.Right, read, write, readRaw);
+        return binary.Op switch
+        {
+            ArithmeticBinaryOp.Comma => right,
+            ArithmeticBinaryOp.BitwiseOr => left | right,
+            ArithmeticBinaryOp.BitwiseXor => left ^ right,
+            ArithmeticBinaryOp.BitwiseAnd => left & right,
+            ArithmeticBinaryOp.Equal => left == right ? 1 : 0,
+            ArithmeticBinaryOp.NotEqual => left != right ? 1 : 0,
+            ArithmeticBinaryOp.Less => left < right ? 1 : 0,
+            ArithmeticBinaryOp.LessOrEqual => left <= right ? 1 : 0,
+            ArithmeticBinaryOp.Greater => left > right ? 1 : 0,
+            ArithmeticBinaryOp.GreaterOrEqual => left >= right ? 1 : 0,
+            ArithmeticBinaryOp.ShiftLeft => left << (int)right,
+            ArithmeticBinaryOp.ShiftRight => left >> (int)right,
+            ArithmeticBinaryOp.Add => left + right,
+            ArithmeticBinaryOp.Subtract => left - right,
+            ArithmeticBinaryOp.Multiply => left * right,
+            ArithmeticBinaryOp.Divide => Divide(left, right),
+            ArithmeticBinaryOp.Modulo => Modulo(left, right),
+            ArithmeticBinaryOp.Power => Power(left, right),
+            _ => right,
+        };
+    }
+
+    private static long Divide(long left, long right)
+    {
+        if (right == 0) throw new BashArithException("division by 0");
+        return left / right;
+    }
+
+    private static long Modulo(long left, long right)
+    {
+        if (right == 0) throw new BashArithException("division by 0");
+        return left % right;
+    }
+
+    private static long Power(long value, long exponent)
+    {
+        if (exponent < 0) return 0;
+        long result = 1;
+        for (long i = 0; i < exponent; i++) result *= value;
         return result;
     }
 
-    /// <summary>Thrown on a malformed or runtime-invalid arithmetic expression.</summary>
     public sealed class BashArithException : Exception
     {
         public BashArithException(string message) : base(message) { }
-    }
-
-    // ---- token kinds -------------------------------------------------------
-    private enum T
-    {
-        Num, Ident, End,
-        Plus, Minus, Star, Slash, Percent, StarStar,
-        Amp, Pipe, Caret, Tilde, Shl, Shr,
-        Lt, Le, Gt, Ge, EqEq, Ne,
-        AndAnd, OrOr, Bang,
-        Question, Colon, Comma,
-        Assign, PlusEq, MinusEq, StarEq, SlashEq, PercentEq,
-        ShlEq, ShrEq, AmpEq, PipeEq, CaretEq, StarStarEq,
-        Inc, Dec, LParen, RParen,
-    }
-
-    private readonly struct Tok
-    {
-        public readonly T Kind;
-        public readonly long Num;
-        public readonly string? Text;
-        public Tok(T kind, long num = 0, string? text = null) { Kind = kind; Num = num; Text = text; }
-    }
-
-    // ---- recursive-descent parser/evaluator --------------------------------
-    private sealed class Parser
-    {
-        private readonly string _s;
-        private readonly Func<string, long> _read;
-        private readonly Action<string, long> _write;
-        private readonly List<Tok> _toks;
-        private int _pos;
-
-        public Parser(string s, Func<string, long> read, Action<string, long> write)
-        {
-            _s = s;
-            _read = read;
-            _write = write;
-            _toks = Tokenize(s);
-            _pos = 0;
-        }
-
-        private Tok Cur => _toks[_pos];
-        private Tok Next() => _toks[_pos++];
-        private bool Accept(T k) { if (Cur.Kind == k) { _pos++; return true; } return false; }
-
-        public void ExpectEnd()
-        {
-            if (Cur.Kind != T.End)
-                throw new BashArithException($"unexpected token in arithmetic expression near '{_s}'");
-        }
-
-        // expression := comma  (lowest precedence)
-        public long ParseExpression() => ParseComma();
-
-        private long ParseComma()
-        {
-            long v = ParseAssignment();
-            while (Cur.Kind == T.Comma) { _pos++; v = ParseAssignment(); }
-            return v;
-        }
-
-        // assignment is right-associative and requires an lvalue (identifier).
-        private long ParseAssignment()
-        {
-            // Look ahead: IDENT followed by an assignment operator.
-            if (Cur.Kind == T.Ident)
-            {
-                var opKind = _toks[_pos + 1].Kind;
-                if (IsAssignOp(opKind))
-                {
-                    string name = Cur.Text!;
-                    _pos += 2; // consume ident + op
-                    long rhs = ParseAssignment();
-                    long cur = opKind == T.Assign ? 0 : _read(name);
-                    long val = opKind switch
-                    {
-                        T.Assign => rhs,
-                        T.PlusEq => cur + rhs,
-                        T.MinusEq => cur - rhs,
-                        T.StarEq => cur * rhs,
-                        T.SlashEq => Div(cur, rhs),
-                        T.PercentEq => Mod(cur, rhs),
-                        T.ShlEq => cur << (int)rhs,
-                        T.ShrEq => cur >> (int)rhs,
-                        T.AmpEq => cur & rhs,
-                        T.PipeEq => cur | rhs,
-                        T.CaretEq => cur ^ rhs,
-                        T.StarStarEq => Pow(cur, rhs),
-                        _ => rhs,
-                    };
-                    _write(name, val);
-                    return val;
-                }
-            }
-            return ParseTernary();
-        }
-
-        private long ParseTernary()
-        {
-            long cond = ParseLogicalOr();
-            if (Accept(T.Question))
-            {
-                // Both branches are full assignment-expressions; only the taken
-                // branch's side effects occur (bash evaluates lazily).
-                if (cond != 0)
-                {
-                    long t = ParseAssignment();
-                    Expect(T.Colon);
-                    ConsumeAssignment(); // discard untaken branch (no side effects)
-                    return t;
-                }
-                else
-                {
-                    ConsumeAssignment();
-                    Expect(T.Colon);
-                    return ParseAssignment();
-                }
-            }
-            return cond;
-        }
-
-        private long ParseLogicalOr()
-        {
-            long v = ParseLogicalAnd();
-            while (Cur.Kind == T.OrOr)
-            {
-                _pos++;
-                if (v != 0) { ConsumeBitOr(); v = 1; }
-                else { long r = ParseLogicalAnd(); v = r != 0 ? 1 : 0; }
-            }
-            return v;
-        }
-
-        private long ParseLogicalAnd()
-        {
-            long v = ParseBitOr();
-            while (Cur.Kind == T.AndAnd)
-            {
-                _pos++;
-                if (v == 0) { ConsumeBitOr(); v = 0; }
-                else { long r = ParseBitOr(); v = r != 0 ? 1 : 0; }
-            }
-            return v;
-        }
-
-        private long ParseBitOr()
-        {
-            long v = ParseBitXor();
-            while (Accept(T.Pipe)) v |= ParseBitXor();
-            return v;
-        }
-
-        private long ParseBitXor()
-        {
-            long v = ParseBitAnd();
-            while (Accept(T.Caret)) v ^= ParseBitAnd();
-            return v;
-        }
-
-        private long ParseBitAnd()
-        {
-            long v = ParseEquality();
-            while (Accept(T.Amp)) v &= ParseEquality();
-            return v;
-        }
-
-        private long ParseEquality()
-        {
-            long v = ParseRelational();
-            while (true)
-            {
-                if (Accept(T.EqEq)) v = v == ParseRelational() ? 1 : 0;
-                else if (Accept(T.Ne)) v = v != ParseRelational() ? 1 : 0;
-                else break;
-            }
-            return v;
-        }
-
-        private long ParseRelational()
-        {
-            long v = ParseShift();
-            while (true)
-            {
-                if (Accept(T.Lt)) v = v < ParseShift() ? 1 : 0;
-                else if (Accept(T.Le)) v = v <= ParseShift() ? 1 : 0;
-                else if (Accept(T.Gt)) v = v > ParseShift() ? 1 : 0;
-                else if (Accept(T.Ge)) v = v >= ParseShift() ? 1 : 0;
-                else break;
-            }
-            return v;
-        }
-
-        private long ParseShift()
-        {
-            long v = ParseAdditive();
-            while (true)
-            {
-                if (Accept(T.Shl)) v <<= (int)ParseAdditive();
-                else if (Accept(T.Shr)) v >>= (int)ParseAdditive();
-                else break;
-            }
-            return v;
-        }
-
-        private long ParseAdditive()
-        {
-            long v = ParseMultiplicative();
-            while (true)
-            {
-                if (Accept(T.Plus)) v += ParseMultiplicative();
-                else if (Accept(T.Minus)) v -= ParseMultiplicative();
-                else break;
-            }
-            return v;
-        }
-
-        private long ParseMultiplicative()
-        {
-            long v = ParseExponent();
-            while (true)
-            {
-                if (Accept(T.Star)) v *= ParseExponent();
-                else if (Accept(T.Slash)) v = Div(v, ParseExponent());
-                else if (Accept(T.Percent)) v = Mod(v, ParseExponent());
-                else break;
-            }
-            return v;
-        }
-
-        // ** is right-associative and binds tighter than * but looser than unary.
-        private long ParseExponent()
-        {
-            long b = ParseUnary();
-            if (Accept(T.StarStar))
-            {
-                long e = ParseExponent(); // right-assoc
-                return Pow(b, e);
-            }
-            return b;
-        }
-
-        private long ParseUnary()
-        {
-            switch (Cur.Kind)
-            {
-                case T.Plus: _pos++; return ParseUnary();
-                case T.Minus: _pos++; return -ParseUnary();
-                case T.Bang: _pos++; return ParseUnary() == 0 ? 1 : 0;
-                case T.Tilde: _pos++; return ~ParseUnary();
-                case T.Inc: _pos++; return PreIncDec(+1);
-                case T.Dec: _pos++; return PreIncDec(-1);
-                default: return ParsePostfix();
-            }
-        }
-
-        private long PreIncDec(int delta)
-        {
-            if (Cur.Kind != T.Ident)
-                throw new BashArithException("++/-- requires a variable");
-            string name = Next().Text!;
-            long v = _read(name) + delta;
-            _write(name, v);
-            return v;
-        }
-
-        private long ParsePostfix()
-        {
-            // ident++ / ident-- : value is the OLD value.
-            if (Cur.Kind == T.Ident && (_toks[_pos + 1].Kind == T.Inc || _toks[_pos + 1].Kind == T.Dec))
-            {
-                string name = Cur.Text!;
-                int delta = _toks[_pos + 1].Kind == T.Inc ? +1 : -1;
-                _pos += 2;
-                long old = _read(name);
-                _write(name, old + delta);
-                return old;
-            }
-            return ParsePrimary();
-        }
-
-        private long ParsePrimary()
-        {
-            var t = Cur;
-            switch (t.Kind)
-            {
-                case T.Num: _pos++; return t.Num;
-                case T.Ident: _pos++; return _read(t.Text!);
-                case T.LParen:
-                    _pos++;
-                    long v = ParseExpression();
-                    Expect(T.RParen);
-                    return v;
-                default:
-                    throw new BashArithException($"unexpected token in arithmetic expression near '{_s}'");
-            }
-        }
-
-        private void Expect(T k)
-        {
-            if (!Accept(k))
-                throw new BashArithException($"expected '{k}' in arithmetic expression near '{_s}'");
-        }
-
-        // ---- skip helpers for untaken short-circuit / ternary branches ----------
-        // An untaken branch must parse for STRUCTURE (to balance parens and find
-        // the right delimiter) but must NOT produce side effects, so we consume
-        // tokens without evaluating. The discarded value is irrelevant.
-        private void ConsumeAssignment()
-        {
-            // Stop at the end of a ternary branch / comma element / subexpression.
-            int depth = 0;
-            while (true)
-            {
-                var k = Cur.Kind;
-                if (depth == 0 && (k == T.Colon || k == T.Comma || k == T.End || k == T.RParen)) break;
-                if (k == T.LParen) depth++;
-                else if (k == T.RParen) depth--;
-                _pos++;
-            }
-        }
-        private void ConsumeBitOr()
-        {
-            // Stop at a lower-or-equal-precedence boundary (the skipped operand of
-            // a short-circuited && / ||).
-            int depth = 0;
-            while (true)
-            {
-                var k = Cur.Kind;
-                if (depth == 0 && (k == T.AndAnd || k == T.OrOr || k == T.Question || k == T.Colon
-                                   || k == T.Comma || k == T.End || k == T.RParen)) break;
-                if (k == T.LParen) depth++;
-                else if (k == T.RParen) depth--;
-                _pos++;
-            }
-        }
-
-        // ---- integer ops with bash semantics -----------------------------------
-        private static long Div(long a, long b)
-        {
-            if (b == 0) throw new BashArithException("division by 0");
-            return a / b; // C# long division truncates toward zero, matching bash
-        }
-        private static long Mod(long a, long b)
-        {
-            if (b == 0) throw new BashArithException("division by 0");
-            return a % b;
-        }
-        private static long Pow(long b, long e)
-        {
-            if (e < 0) return 0; // bash errors on negative exponent; degrade to 0
-            long r = 1;
-            for (long i = 0; i < e; i++) r *= b;
-            return r;
-        }
-
-        // ---- lexer -------------------------------------------------------------
-        private static bool IsAssignOp(T k) => k is T.Assign or T.PlusEq or T.MinusEq or T.StarEq
-            or T.SlashEq or T.PercentEq or T.ShlEq or T.ShrEq or T.AmpEq or T.PipeEq or T.CaretEq or T.StarStarEq;
-
-        private static List<Tok> Tokenize(string s)
-        {
-            var toks = new List<Tok>();
-            int i = 0, n = s.Length;
-            while (i < n)
-            {
-                char c = s[i];
-                if (char.IsWhiteSpace(c)) { i++; continue; }
-
-                // identifiers (and bare variable names)
-                if (c == '_' || char.IsLetter(c))
-                {
-                    int start = i;
-                    while (i < n && (s[i] == '_' || char.IsLetterOrDigit(s[i]))) i++;
-                    toks.Add(new Tok(T.Ident, text: s[start..i]));
-                    continue;
-                }
-
-                // numbers: base#digits, 0x.., 0.. (octal), decimal
-                if (char.IsDigit(c))
-                {
-                    int start = i;
-                    while (i < n && (char.IsLetterOrDigit(s[i]) || s[i] == '#')) i++;
-                    toks.Add(new Tok(T.Num, num: ParseNumber(s[start..i])));
-                    continue;
-                }
-
-                // multi-char operators (longest first)
-                T k;
-                if (Match3(s, i, "<<=", out k) || Match3(s, i, ">>=", out k) || Match3(s, i, "**=", out k))
-                { toks.Add(new Tok(k)); i += 3; continue; }
-                if (Match2(s, i, out k, out int len))
-                { toks.Add(new Tok(k)); i += len; continue; }
-
-                switch (c)
-                {
-                    case '+': toks.Add(new Tok(T.Plus)); break;
-                    case '-': toks.Add(new Tok(T.Minus)); break;
-                    case '*': toks.Add(new Tok(T.Star)); break;
-                    case '/': toks.Add(new Tok(T.Slash)); break;
-                    case '%': toks.Add(new Tok(T.Percent)); break;
-                    case '&': toks.Add(new Tok(T.Amp)); break;
-                    case '|': toks.Add(new Tok(T.Pipe)); break;
-                    case '^': toks.Add(new Tok(T.Caret)); break;
-                    case '~': toks.Add(new Tok(T.Tilde)); break;
-                    case '<': toks.Add(new Tok(T.Lt)); break;
-                    case '>': toks.Add(new Tok(T.Gt)); break;
-                    case '!': toks.Add(new Tok(T.Bang)); break;
-                    case '?': toks.Add(new Tok(T.Question)); break;
-                    case ':': toks.Add(new Tok(T.Colon)); break;
-                    case ',': toks.Add(new Tok(T.Comma)); break;
-                    case '=': toks.Add(new Tok(T.Assign)); break;
-                    case '(': toks.Add(new Tok(T.LParen)); break;
-                    case ')': toks.Add(new Tok(T.RParen)); break;
-                    case '$': i++; continue; // a stray $ before a name: ignore (var already a name)
-                    default:
-                        throw new BashArithException($"invalid arithmetic character '{c}'");
-                }
-                i++;
-            }
-            toks.Add(new Tok(T.End));
-            return toks;
-        }
-
-        private static bool Match3(string s, int i, string op, out T k)
-        {
-            k = default;
-            if (i + 3 > s.Length || s[i] != op[0] || s[i + 1] != op[1] || s[i + 2] != op[2]) return false;
-            k = op switch { "<<=" => T.ShlEq, ">>=" => T.ShrEq, "**=" => T.StarStarEq, _ => default };
-            return true;
-        }
-
-        private static bool Match2(string s, int i, out T k, out int len)
-        {
-            k = default; len = 2;
-            if (i + 2 > s.Length) return false;
-            string two = s.Substring(i, 2);
-            k = two switch
-            {
-                "**" => T.StarStar, "<<" => T.Shl, ">>" => T.Shr,
-                "<=" => T.Le, ">=" => T.Ge, "==" => T.EqEq, "!=" => T.Ne,
-                "&&" => T.AndAnd, "||" => T.OrOr,
-                "++" => T.Inc, "--" => T.Dec,
-                "+=" => T.PlusEq, "-=" => T.MinusEq, "*=" => T.StarEq, "/=" => T.SlashEq,
-                "%=" => T.PercentEq, "&=" => T.AmpEq, "|=" => T.PipeEq, "^=" => T.CaretEq,
-                _ => T.End,
-            };
-            return k != T.End;
-        }
-
-        internal static long ParseNumber(string tok)
-        {
-            // base#digits (base 2..64)
-            int hash = tok.IndexOf('#');
-            if (hash > 0)
-            {
-                if (!int.TryParse(tok[..hash], NumberStyles.None, CultureInfo.InvariantCulture, out int radix)
-                    || radix < 2 || radix > 64)
-                    throw new BashArithException($"invalid arithmetic base in '{tok}'");
-                long acc = 0;
-                foreach (char d in tok[(hash + 1)..])
-                {
-                    int dv = DigitValue(d);
-                    if (dv < 0 || dv >= radix) throw new BashArithException($"invalid digit '{d}' for base {radix}");
-                    acc = acc * radix + dv;
-                }
-                return acc;
-            }
-            if (tok.StartsWith("0x", StringComparison.OrdinalIgnoreCase))
-                return ParseRadix(tok[2..], 16, tok);
-            // leading-zero octal (but plain "0" is zero)
-            if (tok.Length > 1 && tok[0] == '0')
-                return ParseRadix(tok, 8, tok);
-            if (!long.TryParse(tok, NumberStyles.None, CultureInfo.InvariantCulture, out long val))
-                throw new BashArithException($"invalid arithmetic number '{tok}'");
-            return val;
-        }
-
-        // Parse a hex/octal digit run with 64-bit WRAPAROUND (bash arithmetic is
-        // 64-bit two's complement), not Convert.ToInt64 — which threw OverflowException
-        // on a >64-bit literal like 0xFFFFFFFFFFFFFFFFFF, a raw crash that escaped
-        // Evaluate's BashArithException contract.
-        private static long ParseRadix(string digits, int radix, string tok)
-        {
-            if (digits.Length == 0)
-                throw new BashArithException($"invalid arithmetic number '{tok}'");
-            long acc = 0;
-            foreach (char d in digits)
-            {
-                // Standard hex/octal digit value (case-insensitive a-f = 10-15) — NOT
-                // DigitValue, which uses bash's base#digits mapping where A-Z = 36-61.
-                int dv =
-                    d is >= '0' and <= '9' ? d - '0' :
-                    d is >= 'a' and <= 'f' ? d - 'a' + 10 :
-                    d is >= 'A' and <= 'F' ? d - 'A' + 10 :
-                    -1;
-                if (dv < 0 || dv >= radix)
-                    throw new BashArithException($"invalid digit '{d}' in '{tok}'");
-                acc = unchecked(acc * radix + dv); // wraps at 64 bits, matching bash
-            }
-            return acc;
-        }
-
-        // bash base#digits digit set: 0-9, a-z (10..35), A-Z (36..61), @ (62), _ (63)
-        private static int DigitValue(char d)
-        {
-            if (d >= '0' && d <= '9') return d - '0';
-            if (d >= 'a' && d <= 'z') return d - 'a' + 10;
-            if (d >= 'A' && d <= 'Z') return d - 'A' + 36;
-            if (d == '@') return 62;
-            if (d == '_') return 63;
-            return -1;
-        }
+        public BashArithException(string message, Exception innerException) : base(message, innerException) { }
     }
 }

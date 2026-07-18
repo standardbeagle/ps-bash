@@ -1189,9 +1189,12 @@ public class BashParserTests
         var result = Parse("for ((i=0; i<10; i++)); do echo $i; done");
 
         var forArith = Assert.IsType<Command.ForArith>(result);
-        Assert.Equal("i=0", forArith.Init);
-        Assert.Equal("i<10", forArith.Cond);
-        Assert.Equal("i++", forArith.Step);
+        Assert.Equal("i=0", Assert.IsType<ArithmeticSyntax>(forArith.Init).Source);
+        Assert.Equal(" i<10", Assert.IsType<ArithmeticSyntax>(forArith.Cond).Source);
+        Assert.Equal(" i++", Assert.IsType<ArithmeticSyntax>(forArith.Step).Source);
+        Assert.IsType<ArithmeticExpr.Assignment>(forArith.Init.Root);
+        Assert.IsType<ArithmeticExpr.Binary>(forArith.Cond.Root);
+        Assert.IsType<ArithmeticExpr.Increment>(forArith.Step.Root);
         Assert.IsType<Command.Simple>(forArith.Body);
     }
 
@@ -1255,21 +1258,45 @@ public class BashParserTests
         var result = Parse("for ((i=(a+b); i<n; i++)); do echo $i; done");
 
         var forArith = Assert.IsType<Command.ForArith>(result);
-        Assert.Equal("i=(a+b)", forArith.Init);
-        Assert.Equal("i<n", forArith.Cond);
-        Assert.Equal("i++", forArith.Step);
+        Assert.Equal("i=(a+b)", Assert.IsType<ArithmeticSyntax>(forArith.Init).Source);
+        Assert.Equal(" i<n", Assert.IsType<ArithmeticSyntax>(forArith.Cond).Source);
+        Assert.Equal(" i++", Assert.IsType<ArithmeticSyntax>(forArith.Step).Source);
+        var assignment = Assert.IsType<ArithmeticExpr.Assignment>(forArith.Init.Root);
+        Assert.IsType<ArithmeticExpr.Binary>(assignment.Value);
         Assert.IsType<Command.Simple>(forArith.Body);
     }
 
     [Fact]
-    public void Parse_ForArith_EmptyClauses_YieldEmptyStrings()
+    public void Parse_ForArith_NestedDoubleParens_DoNotCloseHeaderEarly()
+    {
+        var result = Parse("for ((i=((a+b)); i<n; i++)); do echo $i; done");
+
+        var forArith = Assert.IsType<Command.ForArith>(result);
+        Assert.Equal("i=((a+b))", Assert.IsType<ArithmeticSyntax>(forArith.Init).Source);
+        Assert.Equal(" i<n", Assert.IsType<ArithmeticSyntax>(forArith.Cond).Source);
+        Assert.Equal(" i++", Assert.IsType<ArithmeticSyntax>(forArith.Step).Source);
+        Assert.IsType<Command.Simple>(forArith.Body);
+    }
+
+    [Fact]
+    public void Parse_ForArith_PositionalParameter_ProducesTypedParameter()
+    {
+        var forArith = Assert.IsType<Command.ForArith>(Parse("for ((i=$1; i<$#; i++)); do echo $i; done"));
+
+        Assert.IsType<ArithmeticExpr.Parameter>(Assert.IsType<ArithmeticExpr.Assignment>(forArith.Init!.Root).Value);
+        var condition = Assert.IsType<ArithmeticExpr.Binary>(forArith.Cond!.Root);
+        Assert.Equal("$#", Assert.IsType<ArithmeticExpr.Parameter>(condition.Right).Name);
+    }
+
+    [Fact]
+    public void Parse_ForArith_EmptyClauses_YieldAbsentSyntax()
     {
         var result = Parse("for ((;;)); do echo hi; done");
 
         var forArith = Assert.IsType<Command.ForArith>(result);
-        Assert.Equal("", forArith.Init);
-        Assert.Equal("", forArith.Cond);
-        Assert.Equal("", forArith.Step);
+        Assert.Null(forArith.Init);
+        Assert.Null(forArith.Cond);
+        Assert.Null(forArith.Step);
     }
 
     [Fact]
@@ -1863,7 +1890,9 @@ public class BashParserTests
         var result = Parse("(( x + 1 ))");
 
         var arith = Assert.IsType<Command.ArithCommand>(result);
-        Assert.Equal("x + 1", arith.Expr);
+        Assert.Equal(" x + 1 ", arith.Expr.Source);
+        var binary = Assert.IsType<ArithmeticExpr.Binary>(arith.Expr.Root);
+        Assert.Equal(ArithmeticBinaryOp.Add, binary.Op);
     }
 
     [Fact]
@@ -1872,7 +1901,8 @@ public class BashParserTests
         var result = Parse("(( x++ ))");
 
         var arith = Assert.IsType<Command.ArithCommand>(result);
-        Assert.Equal("x++", arith.Expr);
+        Assert.Equal(" x++ ", arith.Expr.Source);
+        Assert.IsType<ArithmeticExpr.Increment>(arith.Expr.Root);
     }
 
     [Fact]
@@ -1881,7 +1911,8 @@ public class BashParserTests
         var result = Parse("(( x > 5 ))");
 
         var arith = Assert.IsType<Command.ArithCommand>(result);
-        Assert.Equal("x > 5", arith.Expr);
+        Assert.Equal(" x > 5 ", arith.Expr.Source);
+        Assert.Equal(ArithmeticBinaryOp.Greater, Assert.IsType<ArithmeticExpr.Binary>(arith.Expr.Root).Op);
     }
 
     [Fact]
@@ -1890,7 +1921,25 @@ public class BashParserTests
         var result = Parse("(( x = y + 2 ))");
 
         var arith = Assert.IsType<Command.ArithCommand>(result);
-        Assert.Equal("x = y + 2", arith.Expr);
+        Assert.Equal(" x = y + 2 ", arith.Expr.Source);
+        var assignment = Assert.IsType<ArithmeticExpr.Assignment>(arith.Expr.Root);
+        Assert.IsType<ArithmeticExpr.Binary>(assignment.Value);
+    }
+
+    [Theory]
+    [InlineData("$1")]
+    [InlineData("$#")]
+    [InlineData("$?")]
+    [InlineData("$@")]
+    [InlineData("$*")]
+    [InlineData("$$")]
+    [InlineData("$!")]
+    public void Parse_ArithCommand_PositionalAndSpecialParameters_AreTyped(string parameter)
+    {
+        var arith = Assert.IsType<Command.ArithCommand>(Parse($"(( {parameter} ))"));
+
+        Assert.Equal($" {parameter} ", arith.Expr.Source);
+        Assert.Equal(parameter, Assert.IsType<ArithmeticExpr.Parameter>(arith.Expr.Root).Name);
     }
 
     [Fact]
@@ -1902,6 +1951,72 @@ public class BashParserTests
         var list = Assert.IsType<Command.CommandList>(result);
         Assert.IsType<Command.ArithCommand>(list.Commands[0]);
         Assert.IsType<Command.Simple>(list.Commands[1]);
+    }
+
+    [Fact]
+    public void Parse_ArithCommand_NestedConsecutiveCloses_PreservesExpressionAndNextCommand()
+    {
+        var result = Assert.IsType<Command.CommandList>(Parse("(( ((1+2)) + 3 )); echo done"));
+
+        var arith = Assert.IsType<Command.ArithCommand>(result.Commands[0]);
+        Assert.Equal(" ((1+2)) + 3 ", arith.Expr.Source);
+        var add = Assert.IsType<ArithmeticExpr.Binary>(arith.Expr.Root);
+        Assert.Equal(ArithmeticBinaryOp.Add, add.Op);
+        Assert.IsType<ArithmeticExpr.Binary>(add.Left);
+        Assert.IsType<Command.Simple>(result.Commands[1]);
+    }
+
+    [Fact]
+    public void Parse_ArithSub_PreservesSourceAndProducesTypedNestedTree()
+    {
+        var result = Assert.IsType<Command.Simple>(Parse("echo $(( (x + 1) * 2 ))"));
+
+        var arith = Assert.IsType<WordPart.ArithSub>(Assert.Single(result.Words[1].Parts));
+        Assert.Equal(" (x + 1) * 2 ", arith.Expr.Source);
+        var multiply = Assert.IsType<ArithmeticExpr.Binary>(arith.Expr.Root);
+        Assert.Equal(ArithmeticBinaryOp.Multiply, multiply.Op);
+        Assert.Equal(ArithmeticBinaryOp.Add, Assert.IsType<ArithmeticExpr.Binary>(multiply.Left).Op);
+    }
+
+    [Fact]
+    public void Parse_ArithSub_SpecialParameter_ProducesTypedParameter()
+    {
+        var result = Assert.IsType<Command.Simple>(Parse("echo $(( $? ))"));
+
+        var arith = Assert.IsType<WordPart.ArithSub>(Assert.Single(result.Words[1].Parts));
+        Assert.Equal(" $? ", arith.Expr.Source);
+        Assert.Equal("$?", Assert.IsType<ArithmeticExpr.Parameter>(arith.Expr.Root).Name);
+    }
+
+    [Theory]
+    [InlineData("$10", "1", "$10", "0")]
+    [InlineData("${1}", "1", "${1}", "")]
+    [InlineData("${10}", "10", "${10}", "")]
+    [InlineData("${x}", "x", "${x}", "")]
+    [InlineData("${?}", "?", "${?}", "")]
+    public void Parse_ArithmeticParameter_NormalizesLookupAndPreservesSpelling(
+        string source, string key, string spelling, string suffix)
+    {
+        var parameter = Assert.IsType<ArithmeticExpr.Parameter>(BashArithmeticParser.Parse(source).Root);
+
+        Assert.Equal(key, parameter.LookupKey);
+        Assert.Equal(spelling, parameter.Spelling);
+        Assert.Equal(suffix, parameter.UnbracedSuffix);
+    }
+
+    [Fact]
+    public void ArithmeticNodes_LegacyStringConstruction_PreservesSourceAndTypedProperties()
+    {
+        var command = new Command.ArithCommand(" x + 1 ");
+        var substitution = new WordPart.ArithSub(" $1 ");
+        var body = new Command.Simple([], [], []);
+        var loop = new Command.ForArith("i=0", "", "i++", body);
+
+        Assert.Equal(" x + 1 ", command.Expr.Source);
+        Assert.Equal(" $1 ", substitution.Expr.Source);
+        Assert.Equal("i=0", loop.Init!.Source);
+        Assert.Equal("i++", loop.Step!.Source);
+        Assert.Null(loop.Cond);
     }
 
     // ── Additional error reporting tests ────────────────────────────────────

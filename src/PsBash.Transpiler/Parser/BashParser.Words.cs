@@ -608,7 +608,7 @@ public sealed partial class BashParser
         int innerEnd = end >= start + 2 && raw[end - 1] == ')' && raw[end - 2] == ')' ? end - 2 : end;
         string expr = raw[start..innerEnd];
 
-        parts.Add(new WordPart.ArithSub(expr.Trim()));
+        parts.Add(new WordPart.ArithSub(BashArithmeticParser.Parse(expr)));
         return end;
     }
 

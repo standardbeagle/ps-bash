@@ -1886,7 +1886,7 @@ public class PsEmitterTests
         // (( … )) condition) rather than the old naive </> string-replace, so the
         // full C operator set — including << / >> shifts — is honored. See
         // Transpile_ForArith_ShiftOperatorInCondition_NotShredded.
-        Assert.Equal("$__psbash_iter = 0; for ($i = 0; ((Invoke-BashArith 'i<10') -ne 0); $i++) { if (++$__psbash_iter -gt ($env:PSBASH_MAX_ITERATIONS ?? 100000)) { throw \"ps-bash: loop iteration limit exceeded ($(($env:PSBASH_MAX_ITERATIONS ?? 100000)))\" }; Invoke-BashEcho $i }", result);
+        Assert.Equal("$__psbash_iter = 0; for (${i} = $(Invoke-BashArith 'i=0'); ((Invoke-BashArith 'i<10') -ne 0); $null = Invoke-BashArith 'i++') { if (++$__psbash_iter -gt ($env:PSBASH_MAX_ITERATIONS ?? 100000)) { throw \"ps-bash: loop iteration limit exceeded ($(($env:PSBASH_MAX_ITERATIONS ?? 100000)))\" }; Invoke-BashEcho $i }", result);
     }
 
     // Regression: TranslateArithCondition string-replaced < and > unconditionally,
@@ -2404,6 +2404,51 @@ public class PsEmitterTests
         var result = PsEmitter.Transpile("echo \"result is $((x + 1))\"");
         Assert.Equal("Invoke-BashEcho \"result is $(Invoke-BashArith 'x + 1')\"", result);
     }
+
+    [Theory]
+    [InlineData("echo $(($0 + 1))", "$global:BashPositional0")]
+    [InlineData("echo $(($9 + 1))", "$global:BashPositional[8]")]
+    [InlineData("echo $(($# + $? + $$ + $!))", "$global:BashBgLastPid")]
+    public void Transpile_ArithSub_SpecialParameters_AreSplicedIntoUnifiedEvaluator(string source, string expected)
+    {
+        string result = PsEmitter.Transpile(source);
+
+        Assert.Contains("Invoke-BashArith", result);
+        Assert.Contains(expected, result);
+        Assert.DoesNotContain("$env:#", result);
+        Assert.DoesNotContain("$env:?", result);
+    }
+
+    [Fact]
+    public void Transpile_ArithCommand_WithPositional_UsesSameEvaluatorHandoff()
+    {
+        string result = PsEmitter.Transpile("(( $1 ** 2 ))");
+
+        Assert.Contains("Invoke-BashArith", result);
+        Assert.Contains("$global:BashPositional[0]", result);
+        Assert.Contains("$global:LASTEXITCODE", result);
+    }
+
+    [Theory]
+    [InlineData("echo $(($10 + 1))", "$global:BashPositional[0]", "'0 + 1'")]
+    [InlineData("echo $((${10} + 1))", "$global:BashPositional[9]", "' + 1'")]
+    [InlineData("echo $((${1}+1))", "$global:BashPositional[0]", "'+1'")]
+    [InlineData("(( ${1} > 0 ))", "$global:BashPositional[0]", "' > 0'")]
+    [InlineData("for ((i=${1}; i<${10}; i++)); do echo $i; done", "$global:BashPositional[9]", "'i<'")]
+    public void Transpile_ArithmeticParameters_PreserveExpansionBoundariesAcrossContexts(
+        string source, string expectedReference, string expectedLiteral)
+    {
+        string result = PsEmitter.Transpile(source);
+
+        Assert.Contains("Invoke-BashArith", result);
+        Assert.Contains(expectedReference, result);
+        Assert.Contains(expectedLiteral, result);
+    }
+
+    [Fact]
+    public void Transpile_BracedNamedArithmeticParameter_RemainsEvaluatorResolvedSource()
+        => Assert.Equal("Invoke-BashEcho $(Invoke-BashArith '${x} + 1')",
+            PsEmitter.Transpile("echo $((${x} + 1))"));
 
     [Fact]
     public void Transpile_GlobStar_PassesThrough()
@@ -4270,6 +4315,161 @@ public class PsEmitterTests
         Assert.Contains("$__bashsplat0", result);
         Assert.Contains("$__bashsplat1", result);
     }
+
+    [Fact]
+    public void CompactCommandChain_GitAddCommitPush_ReturnsStableRouteAndSummary()
+    {
+        var chain = MakeAndOrChain("&&", "&&",
+            MakeSimple("git", "add", "."),
+            MakeSimple("git", "commit", "-m", "message"),
+            MakeSimple("git", "push"));
+
+        Assert.True(CompactCommandChain.TryClassify(chain, out var result));
+        Assert.NotNull(result);
+        Assert.Equal("git.stage-commit-push.v1", result.RouteKey);
+        Assert.Equal("Stage changes, create a commit, and push it.", result.ActionSummary);
+    }
+
+    [Theory]
+    [InlineData("||", "&&")]
+    [InlineData("&&", "||")]
+    [InlineData("||", "||")]
+    public void CompactCommandChain_OrOrOrMixedOperators_IsRejected(string first, string second)
+    {
+        var chain = MakeAndOrChain(first, second,
+            MakeSimple("git", "add", "."), MakeSimple("git", "commit", "-m", "x"), MakeSimple("git", "push"));
+
+        Assert.False(CompactCommandChain.TryClassify(chain, out var result));
+        Assert.Null(result);
+    }
+
+    [Fact]
+    public void CompactCommandChain_PipelineNode_IsRejected()
+    {
+        var pipeline = new Command.Pipeline(
+            ImmutableArray.Create<Command>(MakeSimple("git", "add", "."), MakeSimple("cat")),
+            ImmutableArray.Create("|"), false);
+        var chain = MakeAndOrChain("&&", "&&", pipeline,
+            MakeSimple("git", "commit", "-m", "x"), MakeSimple("git", "push"));
+
+        Assert.False(CompactCommandChain.TryClassify(chain, out _));
+    }
+
+    [Fact]
+    public void CompactCommandChain_CompoundNode_IsRejected()
+    {
+        var subshell = new Command.Subshell(MakeSimple("git", "add", "."), ImmutableArray<Redirect>.Empty);
+        var chain = MakeAndOrChain("&&", "&&", subshell,
+            MakeSimple("git", "commit", "-m", "x"), MakeSimple("git", "push"));
+
+        Assert.False(CompactCommandChain.TryClassify(chain, out _));
+    }
+
+    [Fact]
+    public void CompactCommandChain_Redirect_IsRejected()
+    {
+        var add = MakeSimple("git", "add", ".") with
+        {
+            Redirects = ImmutableArray.Create(new Redirect(">", 1, MakeWord("log")))
+        };
+        var chain = MakeAndOrChain("&&", "&&", add,
+            MakeSimple("git", "commit", "-m", "x"), MakeSimple("git", "push"));
+
+        Assert.False(CompactCommandChain.TryClassify(chain, out _));
+    }
+
+    [Fact]
+    public void CompactCommandChain_EnvironmentPrefix_IsRejected()
+    {
+        var add = MakeSimple("git", "add", ".") with
+        {
+            EnvPairs = ImmutableArray.Create(new EnvPair("MODE", MakeWord("safe")))
+        };
+        var chain = MakeAndOrChain("&&", "&&", add,
+            MakeSimple("git", "commit", "-m", "x"), MakeSimple("git", "push"));
+
+        Assert.False(CompactCommandChain.TryClassify(chain, out _));
+    }
+
+    [Fact]
+    public void CompactCommandChain_HereDocument_IsRejected()
+    {
+        var add = MakeSimple("git", "add", ".") with
+        {
+            HereDocs = ImmutableArray.Create(new HereDoc("input", false, false))
+        };
+        var chain = MakeAndOrChain("&&", "&&", add,
+            MakeSimple("git", "commit", "-m", "x"), MakeSimple("git", "push"));
+
+        Assert.False(CompactCommandChain.TryClassify(chain, out _));
+    }
+
+    [Fact]
+    public void CompactCommandChain_ExtraCommand_IsRejected()
+    {
+        var chain = new Command.AndOrList(
+            ImmutableArray.Create<Command>(MakeSimple("git", "add", "."),
+                MakeSimple("git", "commit", "-m", "x"), MakeSimple("git", "push"), MakeSimple("echo", "done")),
+            ImmutableArray.Create("&&", "&&", "&&"));
+
+        Assert.False(CompactCommandChain.TryClassify(chain, out _));
+    }
+
+    [Fact]
+    public void CompactCommandChain_DynamicCommandWord_IsRejected()
+    {
+        var dynamicGit = new CompoundWord(ImmutableArray.Create<WordPart>(new WordPart.SimpleVarSub("git")));
+        var add = new Command.Simple(
+            ImmutableArray.Create(dynamicGit, MakeWord("add"), MakeWord(".")),
+            ImmutableArray<EnvPair>.Empty, ImmutableArray<Redirect>.Empty);
+        var chain = MakeAndOrChain("&&", "&&", add,
+            MakeSimple("git", "commit", "-m", "x"), MakeSimple("git", "push"));
+
+        Assert.False(CompactCommandChain.TryClassify(chain, out _));
+    }
+
+    [Fact]
+    public void CompactCommandChain_DynamicArgument_IsRejected()
+    {
+        var dynamicArg = new CompoundWord(ImmutableArray.Create<WordPart>(new WordPart.SimpleVarSub("files")));
+        var add = new Command.Simple(
+            ImmutableArray.Create(MakeWord("git"), MakeWord("add"), dynamicArg),
+            ImmutableArray<EnvPair>.Empty, ImmutableArray<Redirect>.Empty);
+        var chain = MakeAndOrChain("&&", "&&", add,
+            MakeSimple("git", "commit", "-m", "x"), MakeSimple("git", "push"));
+
+        Assert.False(CompactCommandChain.TryClassify(chain, out _));
+    }
+
+    [Theory]
+    [InlineData("status", "commit", "push")]
+    [InlineData("add", "status", "push")]
+    [InlineData("add", "commit", "fetch")]
+    public void CompactCommandChain_DifferentGitSequence_IsRejected(string first, string second, string third)
+    {
+        var chain = MakeAndOrChain("&&", "&&",
+            MakeSimple("git", first, "."), MakeSimple("git", second, "-m", "x"), MakeSimple("git", third));
+
+        Assert.False(CompactCommandChain.TryClassify(chain, out _));
+    }
+
+    [Fact]
+    public void CompactCommandChain_MissingRequiredAddOrCommitOperand_IsRejected()
+    {
+        var noAddOperand = MakeAndOrChain("&&", "&&",
+            MakeSimple("git", "add"), MakeSimple("git", "commit", "-m", "x"), MakeSimple("git", "push"));
+        var noCommitOperand = MakeAndOrChain("&&", "&&",
+            MakeSimple("git", "add", "."), MakeSimple("git", "commit"), MakeSimple("git", "push"));
+
+        Assert.False(CompactCommandChain.TryClassify(noAddOperand, out _));
+        Assert.False(CompactCommandChain.TryClassify(noCommitOperand, out _));
+    }
+
+    private static Command.Simple MakeSimple(params string[] words) =>
+        new(words.Select(MakeWord).ToImmutableArray(), ImmutableArray<EnvPair>.Empty, ImmutableArray<Redirect>.Empty);
+
+    private static Command.AndOrList MakeAndOrChain(string firstOp, string secondOp, params Command[] commands) =>
+        new(commands.ToImmutableArray(), ImmutableArray.Create(firstOp, secondOp));
 
     private static CompoundWord MakeWord(string value) =>
         new(ImmutableArray.Create<WordPart>(new WordPart.Literal(value)));

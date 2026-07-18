@@ -77,6 +77,12 @@ trap cleanup INT
 # warm cache after a clean bin/obj.
 timeout_secs="${PSBASH_TEST_TIMEOUT:-1500}"
 
+# Bound the explicit pre-build separately. The test timeout below cannot help
+# when MSBuild stalls before test dispatch, which previously left the suite
+# with only the "pre-build solution" marker and no actionable failure.
+# Override with PSBASH_BUILD_TIMEOUT=<seconds> or `0` to disable.
+build_timeout_secs="${PSBASH_BUILD_TIMEOUT:-600}"
+
 # Coverage: opt-in via PSBASH_COVERAGE=1.
 # Appends --collect and --results-directory to dotnet test args.
 coverage_enabled="${PSBASH_COVERAGE:-0}"
@@ -133,9 +139,21 @@ fi
 # steps that several suites depend on, regressing previously-green Host /
 # Escalation / Shell. The redundant build is cheap (incremental no-ops).
 echo "test.sh: pre-build solution to avoid fixture/build race..." >&2
-if ! dotnet build ps-bash.sln -nologo; then
-    echo "test.sh: pre-build failed — skipping test dispatch." >&2
-    exit 1
+if [[ "$build_timeout_secs" == "0" ]] || ! command -v timeout >/dev/null 2>&1; then
+    if ! dotnet build ps-bash.sln -nologo; then
+        echo "test.sh: pre-build failed — skipping test dispatch." >&2
+        exit 1
+    fi
+else
+    build_exit=0
+    timeout -k 10 "$build_timeout_secs" dotnet build ps-bash.sln -nologo || build_exit=$?
+    if [[ $build_exit -eq 124 ]]; then
+        echo "test.sh: pre-build exceeded PSBASH_BUILD_TIMEOUT=${build_timeout_secs}s — killed before test dispatch." >&2
+        exit 124
+    elif [[ $build_exit -ne 0 ]]; then
+        echo "test.sh: pre-build failed with exit ${build_exit} — skipping test dispatch." >&2
+        exit "$build_exit"
+    fi
 fi
 
 test_exit=0

@@ -71,9 +71,12 @@ public sealed partial class BashParser
     /// </summary>
     public static Command? Parse(string input)
     {
-        var tokens = BashLexer.Tokenize(input);
-        var parser = new BashParser(tokens, input);
-        return parser.ParseCommand();
+        return NormalizeArithmeticErrors(() =>
+        {
+            var tokens = BashLexer.Tokenize(input);
+            var parser = new BashParser(tokens, input);
+            return parser.ParseCommand();
+        });
     }
 
     /// <summary>
@@ -89,9 +92,26 @@ public sealed partial class BashParser
     /// </remarks>
     public static IReadOnlyList<(Command Command, int Position)> ParseTopLevelWithPositions(string input)
     {
-        var tokens = BashLexer.Tokenize(input);
-        var parser = new BashParser(tokens, input);
-        return parser.ParseTopLevelWithPositionsCore();
+        return NormalizeArithmeticErrors<IReadOnlyList<(Command Command, int Position)>>(() =>
+        {
+            var tokens = BashLexer.Tokenize(input);
+            var parser = new BashParser(tokens, input);
+            return parser.ParseTopLevelWithPositionsCore();
+        });
+    }
+
+    private static T NormalizeArithmeticErrors<T>(Func<T> parse)
+    {
+        try
+        {
+            return parse();
+        }
+        catch (BashArithmeticParseException ex)
+        {
+            // Arithmetic has its own typed parser, but every public bash-parser
+            // entry point must retain the clean, location-bearing error contract.
+            throw new ParseException(ex.Message, 1, 1, "arithmetic");
+        }
     }
 
     private List<(Command, int)> ParseTopLevelWithPositionsCore()
@@ -621,15 +641,18 @@ public sealed partial class BashParser
         // whitespace/quoting. Walk to the closing `))` (skipping inner single
         // `)`), then split the raw text on top-level `;`. Mirrors ParseArithCommand.
         int exprEnd = -1;
+        int nestedDepth = 0;
         while (Peek().Kind != BashTokenKind.Eof)
         {
-            if (Peek().Kind == BashTokenKind.RParen && IsDoubleRParen())
+            if (Peek().Kind == BashTokenKind.RParen && nestedDepth == 0 && IsDoubleRParen())
             {
                 exprEnd = Peek().Position;
                 Advance(); // consume first )
                 Advance(); // consume second )
                 break;
             }
+            if (Peek().Kind == BashTokenKind.LParen) nestedDepth++;
+            else if (Peek().Kind == BashTokenKind.RParen && nestedDepth > 0) nestedDepth--;
             Advance();
         }
         string header = exprEnd >= 0 ? _input[exprStart..exprEnd] : _input[exprStart..];
@@ -641,13 +664,19 @@ public sealed partial class BashParser
         var body = ParseCompoundBody("done");
         Expect("done");
 
-        return new Command.ForArith(init, cond, step, body, ParseTrailingRedirects());
+        return new Command.ForArith(
+            ParseOptionalArithmetic(init),
+            ParseOptionalArithmetic(cond),
+            ParseOptionalArithmetic(step),
+            body,
+            ParseTrailingRedirects());
     }
 
     /// <summary>
     /// Split a C-style for header (<c>init ; cond ; step</c>) on top-level
-    /// semicolons, ignoring <c>;</c> nested inside parens/brackets, and trimming
-    /// each clause. Fewer than three clauses yields empty strings for the rest.
+    /// semicolons, ignoring <c>;</c> nested inside parens/brackets. Clause slices
+    /// retain their exact source text. Fewer than three clauses yields empty strings
+    /// for the rest, which are subsequently modeled as absent clauses.
     /// </summary>
     private static (string Init, string Cond, string Step) SplitArithClauses(string header)
     {
@@ -661,19 +690,22 @@ public sealed partial class BashParser
 
             if (ch == ';' && depth == 0)
             {
-                clauses.Add(sb.ToString().Trim());
+                clauses.Add(sb.ToString());
                 sb.Clear();
                 continue;
             }
             sb.Append(ch);
         }
-        clauses.Add(sb.ToString().Trim());
+        clauses.Add(sb.ToString());
 
         string init = clauses.Count > 0 ? clauses[0] : string.Empty;
         string cond = clauses.Count > 1 ? clauses[1] : string.Empty;
         string step = clauses.Count > 2 ? clauses[2] : string.Empty;
         return (init, cond, step);
     }
+
+    private static ArithmeticSyntax? ParseOptionalArithmetic(string source) =>
+        string.IsNullOrWhiteSpace(source) ? null : BashArithmeticParser.Parse(source);
 
     private Command.While ParseWhile()
     {
@@ -917,24 +949,27 @@ public sealed partial class BashParser
         Advance(); // consume first (
         var secondParen = Advance(); // consume second (
         int exprStart = secondParen.Position + 1;
+        int nestedDepth = 0;
 
         while (Peek().Kind != BashTokenKind.Eof)
         {
-            if (Peek().Kind == BashTokenKind.RParen && IsDoubleRParen())
+            if (Peek().Kind == BashTokenKind.RParen && nestedDepth == 0 && IsDoubleRParen())
             {
                 int exprEnd = Peek().Position;
                 Advance(); // consume first )
                 Advance(); // consume second )
-                string expr = _input[exprStart..exprEnd].Trim();
-                return new Command.ArithCommand(expr);
+                string expr = _input[exprStart..exprEnd];
+                return new Command.ArithCommand(BashArithmeticParser.Parse(expr));
             }
 
+            if (Peek().Kind == BashTokenKind.LParen) nestedDepth++;
+            else if (Peek().Kind == BashTokenKind.RParen && nestedDepth > 0) nestedDepth--;
             Advance();
         }
 
         // Reached EOF without finding ))
-        string remaining = _input[exprStart..].Trim();
-        return new Command.ArithCommand(remaining);
+        string remaining = _input[exprStart..];
+        return new Command.ArithCommand(BashArithmeticParser.Parse(remaining));
     }
 
     private bool IsDoubleRParen() =>

@@ -6,6 +6,10 @@ the most recent releases to stay under the PSGallery ReleaseNotes size cap; this
 file is the complete history. See also the GitHub releases:
 https://github.com/standardbeagle/ps-bash/releases
 
+## v0.10.22
+
+Arithmetic, compact-output, and host reliability fixes. Arithmetic substitution (`$((...))`), arithmetic commands (`((...))`), and C-style `for ((...))` clauses now use one typed parser and runtime evaluator, preserving Bash precedence and side effects across all three forms. This also fixes nested parentheses and positional/special parameters such as `$0`, `$1`, `${10}`, `$#`, and `$?` (including Bash's `$10` versus `${10}` distinction), while malformed arithmetic consistently reports a parse error. In compact-output mode, a successful `git add ... && git commit ... && git push` chain is summarized once as a combined operation; failures retain their diagnostic output. Host worker acquisition/startup failures now return a complete stderr response and nonzero exit instead of silently closing the connection.
+
 ## v0.10.16
 
 Transpiler & host robustness. (1) ${VAR:-WORD} now recursively transpiles its WORD argument, so a default value containing further expansions or command substitutions is emitted correctly instead of being passed through raw — this unbroke the Bash-tool shell snapshot. (2) The Claude Code rg-shim startup snapshot now parses to valid PowerShell (a greedy $_ variable scan and missing [[ ]] unary file-test operators -x/-r/-w/-s/-L/-h were the cause). (3) UnaryFileTestOps.Contains is null-guarded so the AOT /warnaserror release build passes. (4) The host no longer crashes on a sidecar (.host.json) write race. (5) The IPC connect->command->exit path is streamlined to cut per-invocation overhead under heavy concurrent load. (6) New Register-BrowseAdapter, additional feature guides and examples, and a fix for ps aux error spam.

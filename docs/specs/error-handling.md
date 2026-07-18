@@ -6,11 +6,20 @@ matches real bash behavior, and where PowerShell semantics intentionally diverge
 Source files:
 - `src/PsBash.Module/PsBash.psm1` -- runtime error functions and file I/O helpers
 - `src/PsBash.Core/Runtime/Ipc/HostProtocol.cs` -- exit code protocol between worker and host
+- `src/PsBash.Host/Server/Connection.cs` -- host-side worker and framed-output failure handling
 - `src/PsBash.Transpiler/Parser/PsEmitter.cs` -- `set -e`/`-u`/`-x` translation
 
 ---
 
 ## 1. How Common Commands Handle Errors
+
+Failures while acquiring or initializing a host worker are returned as a
+tagged stderr response (`ps-bash-host worker failure: ...`) followed by exit 1,
+so the launcher receives a complete protocol result instead of an unexplained
+closed stream. Framed-output transport failures use a distinct internal
+exception and still escape for connection recovery; caller cancellation is
+also preserved as lifecycle control rather than converted into a command
+failure.
 
 All commands report errors via `Write-BashError`, which writes to stderr in
 the format `command: path: reason` -- matching bash conventions. Each error
@@ -323,9 +332,13 @@ variables (function locals, loop variables) are not resolved.
 **Bash**: `(( expr ))` is a fully parsed arithmetic expression with operator
 precedence, variable references without `$`, and assignment side effects.
 
-**ps-bash**: `(( expr ))` is stored as a raw string in `Command.ArithCommand`.
-The emitter passes it through with minimal transformation. Complex expressions
-with nested parentheses or comma operators may not evaluate correctly.
+**ps-bash**: arithmetic commands, arithmetic `for` clauses, and `$((...))`
+substitutions store an `ArithmeticSyntax` value with a typed `ArithmeticExpr`
+tree. The parser preserves precedence, associativity, assignments, and lazy
+conditional/logical branches. The original source is retained for the shared
+`Invoke-BashArith` runtime evaluator handoff; unsupported parameter-expansion
+forms fail during arithmetic parsing instead of being reinterpreted as
+PowerShell.
 
 ### 4.9 Exit vs Return
 

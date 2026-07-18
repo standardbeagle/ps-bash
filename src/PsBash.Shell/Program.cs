@@ -1,6 +1,7 @@
 using System.Text;
 using System.Reflection;
 using PsBash.Core.Parser;
+using PsBash.Core.Parser.Ast;
 using PsBash.Core.Runtime;
 using PsBash.Core.Runtime.Compaction;
 using PsBash.Core.Transpiler;
@@ -307,6 +308,24 @@ JobObjectWatchdog.StartParentDeathWatcher(parentPid);
 var bashCommand = shellArgs.Command;
 if (compactOutput)
     Environment.SetEnvironmentVariable("PSBASH_COMPACT_COMMAND", bashCommand);
+
+// A parsed chain may select a compact presentation without replacing the command
+// itself. Keep this opaque route separate so headers and failure tees retain the
+// exact user input. Raw PowerShell and non-compact runs never receive a route.
+Environment.SetEnvironmentVariable("PSBASH_COMPACT_ROUTE", null);
+if (compactOutput && !shellArgs.RawPowerShell)
+{
+    try
+    {
+        if (BashParser.Parse(bashCommand) is Command.AndOrList chain &&
+            CompactCommandChain.TryClassify(chain, out var compactChain))
+            Environment.SetEnvironmentVariable("PSBASH_COMPACT_ROUTE", compactChain!.RouteKey);
+    }
+    catch (ParseException)
+    {
+        // The normal transpilation path below owns parse diagnostics and fallback.
+    }
+}
 
 // Command-aware compact filters may provide a reduced argv. Apply it before bash
 // transpilation while retaining the user's command as the digest label.

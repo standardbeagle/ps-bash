@@ -61,10 +61,10 @@ Reserved words are recognized contextually by the parser, not as distinct token 
 | `Command.If` | `Arms: IfArm[]`, `ElseBody: Command?` | If/elif/else construct |
 | `Command.BoolExpr` | `Inner: CompoundWord[]`, `Extended: bool` | `[ ... ]` or `[[ ... ]]` test expression |
 | `Command.ForIn` | `Var: string`, `List: CompoundWord[]`, `Body: Command` | `for x in a b; do ...; done` |
-| `Command.ForArith` | `Init: string`, `Cond: string`, `Step: string`, `Body: Command` | `for ((i=0; i<n; i++)); do ...; done` |
+| `Command.ForArith` | `Init: ArithmeticSyntax?`, `Cond: ArithmeticSyntax?`, `Step: ArithmeticSyntax?`, `Body: Command` | `for ((i=0; i<n; i++)); do ...; done` |
 | `Command.While` | `IsUntil: bool`, `Cond: Command`, `Body: Command` | `while`/`until` loop |
 | `Command.Case` | `Expr: CompoundWord`, `Arms: CaseArm[]` | `case $x in ...) ;; esac` |
-| `Command.ArithCommand` | `Expr: string` | Standalone `(( expr ))` |
+| `Command.ArithCommand` | `Expr: ArithmeticSyntax` | Standalone `(( expr ))` |
 | `Command.ShFunction` | `Name: string`, `Body: Command` | `function f { ... }` or `f() { ... }` |
 | `Command.Subshell` | `Body: Command`, `Redirects: Redirect[]` | `( cmd1; cmd2 )` with optional trailing redirects |
 | `Command.BraceGroup` | `Body: Command` | `{ cmd1; cmd2; }` |
@@ -94,7 +94,7 @@ Reserved words are recognized contextually by the parser, not as distinct token 
 | `WordPart.SimpleVarSub` | `Name: string` | `$foo`, `$?`, `$!`, `$#`, `$$`, `$@`, `$*`, `$-`, `$0`-`$9`, `$SECONDS`, `$PPID`, `$BASH_VERSION` |
 | `WordPart.BracedVarSub` | `Name: string`, `Suffix: string?` | `${foo}`, `${foo:-default}`, `${#arr[@]}`, `${!arr[@]}` |
 | `WordPart.CommandSub` | `Body: BashNode` | `$(cmd)` or `` `cmd` `` -- body is recursively parsed |
-| `WordPart.ArithSub` | `Expr: string` | `$(( x + 1 ))` |
+| `WordPart.ArithSub` | `Expr: ArithmeticSyntax` | `$(( x + 1 ))` |
 | `WordPart.TildeSub` | `User: string?` | `~` (null user = current) or `~user` |
 | `WordPart.GlobPart` | `Pattern: string` | `*`, `?`, `[abc]`, `+(*.py\|*.js)` |
 | `WordPart.BracedTuple` | `Items: string[]` | `{a,b,c}` |
@@ -220,10 +220,22 @@ Inside `[[ ]]`, `&&` and `||` tokens are consumed as literal words (logical oper
 ### 3.11 Arithmetic Command
 
 ```
-arith_command -> '(' '(' raw_expr ')' ')'
+arith_command -> '(' '(' arithmetic_expr ')' ')'
 ```
 
-The expression between `((` and `))` is extracted as a raw string.
+The expression between `((` and `))` is parsed into `ArithmeticSyntax`, whose
+typed `ArithmeticExpr` root preserves precedence, associativity, assignments,
+and lazy conditional/logical branches. `ArithmeticSyntax.Source` retains the
+original text for the single `Invoke-BashArith` runtime handoff shared with
+arithmetic `for` clauses and `$((...))` substitution.
+
+The typed arithmetic parameter subset supports unbraced named parameters,
+single-digit positionals and special parameters (`$x`, `$0`-`$9`, `$#`, `$?`,
+`$@`, `$*`, `$$`, `$!`) plus their simple braced forms (`${x}`, `${10}`,
+`${?}`, and so on). Bash's unbraced rule is retained: `$10` expands `$1` and
+then the literal `0`, whereas `${10}` addresses positional parameter 10.
+Compound/default, length, indirect, substring, and array parameter expansions
+are outside this typed arithmetic subset.
 
 ### 3.12 Word Decomposition
 
@@ -335,17 +347,17 @@ echo "price: \$5"      # Literal($) Literal(5) -- backslash escapes $
 
 ## 7. Oils ASDL Gap Analysis
 
-Features present in Oils `syntax.asdl` that are **intentionally not implemented**:
+Oils `syntax.asdl` features that are absent, represented differently, or safely degraded:
 
 | Oils Feature | ASDL Type | Status |
 |-------------|-----------|--------|
-| Coproc | `command.CoProcess` | Not implemented |
-| `select` loop | `command.Select` | Not implemented (throws `ParseException`) |
-| `time` prefix | `command.TimeBlock` | Not implemented |
-| Arithmetic `for` with step expression in ASDL | `command.ForExpr` | Partially: `ForArith` stores clauses as raw strings, not sub-parsed |
-| Typed array `declare -a`/`declare -A` | `command.Declare` | Handled via `ShAssignment` with `ArrayWord`, no separate node |
-| Extended patterns `[[` regex `=~` | `BoolExpr` with typed ops | Inner words stored as `CompoundWord[]`, not typed operators |
-| `trap` / `exec` | special builtins | Parsed as `Command.Simple`, no dedicated node |
+| Coproc | `command.CoProcess` | No dedicated node or grammar; `coproc` is parsed as an ordinary `Command.Simple` |
+| `select` loop | `command.Select` | Parsed as `Command.Select`; emitter safely degrades the unsupported interactive menu loop to a comment |
+| `time` prefix | `command.TimeBlock` | No dedicated node or prefix grammar; `time` is parsed as an ordinary `Command.Simple` |
+| Arithmetic expressions | `arith_expr`, `command.ForExpr` | Represented by typed `ArithmeticSyntax`/`ArithmeticExpr` nodes for `ForArith`, `ArithCommand`, and `ArithSub`; original source is retained for the shared runtime evaluator handoff |
+| Typed array `declare -a`/`declare -A` | `command.Declare` | No dedicated node; `declare` is parsed as `Command.Simple`. Bare/local array assignments use `Command.ShAssignment` with `ArrayWord` |
+| Extended test operators such as `[[ ... =~ ... ]]` | `BoolExpr` with typed ops | Parsed as `Command.BoolExpr`, but inner operands/operators are stored as `CompoundWord[]`; the emitter interprets `=~` |
+| `trap` / `exec` | special builtins | Parsed as `Command.Simple`, with builtin-specific emitter handling where supported; no dedicated AST nodes |
 | Oil/YSH-specific syntax (`var`, `const`, `proc`, `func`) | various | Not applicable (bash only) |
 | Here-doc with multiple heredocs per line | `Redir[]` | Supported: `HereDocs` is an array; emitter uses last for stdin |
 

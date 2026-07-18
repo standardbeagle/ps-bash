@@ -766,6 +766,9 @@ public sealed class IpcWorker : IWorker
         var compactOutput = EnvFlags.IsTruthy("PSBASH_COMPACT_OUTPUT");
         var compactFrames = compactOutput ? new List<OutputFrame>() : null;
         var command = CommandLabel(mode);
+        var compactRouteKey = compactOutput
+            ? Environment.GetEnvironmentVariable("PSBASH_COMPACT_ROUTE")
+            : null;
 
         // Self-healing retry for a mid-command transport RESET (host killed,
         // endpoint gone stale, connection refused). The reset is recoverable —
@@ -785,7 +788,7 @@ public sealed class IpcWorker : IWorker
             try
             {
                 return await ExchangeOnceAsync(
-                    mode, command, idleTimeout, unbounded, compactFrames,
+                    mode, command, compactRouteKey, idleTimeout, unbounded, compactFrames,
                     () => framesDelivered = true, ct).ConfigureAwait(false);
             }
             catch (Exception ex) when (IsTransportReset(ex))
@@ -817,7 +820,7 @@ public sealed class IpcWorker : IWorker
                 // must not mask the original transport reset.
                 if (compactFrames is { Count: > 0 })
                 {
-                    try { EmitCompactedOutput(command, 125, timedOut: false, compactFrames); }
+                    try { EmitCompactedOutput(command, compactRouteKey, 125, timedOut: false, compactFrames); }
                     catch { /* partial flush is best-effort */ }
                     compactFrames = null;
                 }
@@ -859,7 +862,7 @@ public sealed class IpcWorker : IWorker
     /// invoked the first time any output frame is delivered.
     /// </summary>
     private async Task<int> ExchangeOnceAsync(
-        Mode mode, string command, TimeSpan idleTimeout, bool unbounded,
+        Mode mode, string command, string? compactRouteKey, TimeSpan idleTimeout, bool unbounded,
         List<OutputFrame>? compactFrames, Action onFirstFrame, CancellationToken ct)
     {
         long compactBytes = 0;
@@ -1005,7 +1008,7 @@ public sealed class IpcWorker : IWorker
 
                 if (compactFrames is not null)
                 {
-                    EmitCompactedOutput(command, exitCode, timedOut: false, compactFrames);
+                    EmitCompactedOutput(command, compactRouteKey, exitCode, timedOut: false, compactFrames);
                 }
 
                 return exitCode;
@@ -1031,7 +1034,7 @@ public sealed class IpcWorker : IWorker
             // and retire the host only if a re-probe confirms it is wedged.
             await RetireIfUnresponsiveAsync().ConfigureAwait(false);
             if (compactFrames is not null)
-                EmitCompactedOutput(command, 124, timedOut: true, compactFrames);
+                EmitCompactedOutput(command, compactRouteKey, 124, timedOut: true, compactFrames);
             throw new TimeoutException(
                 $"ps-bash: no output from host for {idleTimeout.TotalSeconds:0.##}s (idle timeout). " +
                 "Raise it with --timeout <seconds> / PSBASH_TIMEOUT, or --timeout none to disable.");
@@ -1359,14 +1362,14 @@ public sealed class IpcWorker : IWorker
         };
     }
 
-    private void EmitCompactedOutput(string command, int exitCode, bool timedOut, IReadOnlyList<OutputFrame> frames)
+    private void EmitCompactedOutput(string command, string? routeKey, int exitCode, bool timedOut, IReadOnlyList<OutputFrame> frames)
     {
         // FilterEngine routes to a command-aware filter when one matches; otherwise an
         // unrecognized FAILING command is trimmed to its error/summary lines (ErrorExtract),
         // and everything else falls back to the generic OutputCompactor digest.
         var compacted = FilterEngine.Apply(
             command, exitCode, timedOut, frames, FilterLibrary.ResolveActive(),
-            fallback: GenericFallback.ErrorExtract);
+            fallback: GenericFallback.ErrorExtract, routeKey: routeKey);
         if (exitCode != 0 || timedOut)
         {
             var teePath = TryWriteFailureTee(command, frames);

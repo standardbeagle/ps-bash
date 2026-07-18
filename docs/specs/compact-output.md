@@ -7,6 +7,8 @@ result instead of thousands of lines. Off by default; faithful streaming is the 
 Source files:
 - `src/PsBash.Core/Runtime/OutputCompactor.cs` — the pure summarizer (no I/O).
 - `src/PsBash.Core/Runtime/IpcWorker.cs` — buffers frames and emits the digest.
+- `src/PsBash.Transpiler/Parser/CompactCommandChain.cs` — conservatively
+  classifies eligible parsed command chains.
 - `src/PsBash.Core/Runtime/EnvFlags.cs` — shared truthy-env parsing.
 - `src/PsBash.Shell/Args.cs`, `Program.cs` — CLI flag → env normalization.
 
@@ -20,6 +22,7 @@ Source files:
 | `--no-compact-output` | disable, even if the env var is set |
 | `PSBASH_COMPACT_OUTPUT` | enable when truthy (`1`/`true`/`yes`/`on`, via `EnvFlags.IsTruthy`) |
 | `PSBASH_COMPACT_COMMAND` | override the command label shown in the digest header |
+| `PSBASH_COMPACT_ROUTE` | internal opaque route selected by the launcher from a parsed command shape |
 
 **Precedence:** the CLI flag wins over the env var. `Program.cs` resolves
 `shellArgs.CompactOutput ?? EnvFlags.IsTruthy("PSBASH_COMPACT_OUTPUT")` and re-writes
@@ -74,6 +77,16 @@ frame into a `List<OutputFrame>` instead of the normal per-frame console/callbac
 then calls `EmitCompactedOutput` once the command finishes (or on idle-timeout, with
 `exitCode = 124, timedOut = true`). `EmitCompactedOutput` sends the digest to
 `OutputCallback` if set, else `Console.Write`.
+
+Before transpilation, the launcher may classify an exact literal command-chain
+shape and set an opaque compact route independently of the displayed command.
+The initial route is `git add ... && git commit ... && git push ...`: on success
+its three command outputs become one `changes staged, committed, and pushed`
+confirmation. On failure the original framed body is retained. Classification
+requires three literal simple commands joined by `&&`; expansions, redirects,
+environment prefixes, alternate operators, or additional commands do not
+match. The full user source remains the digest header and failure-tee identity.
+Raw PowerShell and non-compact execution never receive a route.
 
 This deviates from the normal REFACTOR-4 frame routing in two deliberate ways (both
 commented at the buffering site in `IpcWorker.cs`):

@@ -1,4 +1,5 @@
 using System.Collections.Immutable;
+using PsBash.Core.Parser;
 
 namespace PsBash.Core.Parser.Ast;
 
@@ -46,7 +47,14 @@ public abstract record WordPart : BashNode
     public sealed record CommandSub(BashNode Body) : WordPart;
 
     /// <summary>An arithmetic substitution, e.g. <c>$(( x + 1 ))</c>.</summary>
-    public sealed record ArithSub(string Expr) : WordPart;
+    public sealed record ArithSub(ArithmeticSyntax Expr) : WordPart
+    {
+        /// <summary>
+        /// Legacy source-compatible constructor. Migration note: the typed <see cref="Expr"/>
+        /// property is intentional; use <c>Expr.Source</c> when source text is required.
+        /// </summary>
+        public ArithSub(string expr) : this(BashArithmeticParser.Parse(expr)) { }
+    }
 
     /// <summary>A tilde substitution, e.g. <c>~</c> or <c>~user</c>.</summary>
     public sealed record TildeSub(string? User) : WordPart;

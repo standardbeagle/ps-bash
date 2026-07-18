@@ -60,6 +60,12 @@ public sealed record FilterMatch
 {
     public required string Command { get; init; }
 
+    /// <summary>
+    /// Optional opaque route selected from a parsed command shape. Route matching is
+    /// independent of the display command, which remains the user's full source text.
+    /// </summary>
+    public string? RouteKey { get; init; }
+
     private readonly IReadOnlyList<string> _args = [];
     /// <summary>Argv prefix that must appear in order (e.g. <c>["status"]</c> for <c>git status</c>).</summary>
     public IReadOnlyList<string> Args { get => _args; init => _args = value ?? []; }

@@ -47,7 +47,7 @@ public sealed class InvokeBashArithmeticCommand : PSCmdlet
         FileSystemHelpers.SetLastExitCode(this, 0);
         try
         {
-            long result = BashArith.Evaluate(expr, ReadVar, WriteVar);
+            long result = BashArith.Evaluate(expr, ReadVar, WriteVar, ReadRawVar);
             WriteObject(result);
         }
         catch (BashArith.BashArithException ex)
@@ -69,19 +69,7 @@ public sealed class InvokeBashArithmeticCommand : PSCmdlet
     {
         if (!visiting.Add(name)) return 0; // cycle: bash also stops at 0
 
-        string? raw = null;
-        // PowerShell variable first (loop variables are emitted as $name).
-        try
-        {
-            var psv = GetVariableValue(name);
-            if (psv is not null) raw = psv.ToString();
-        }
-        catch { /* not a readable PS variable in scope */ }
-
-        // Environment variable (ordinary bash vars live in $env:NAME).
-        if (string.IsNullOrEmpty(raw))
-            raw = Environment.GetEnvironmentVariable(name);
-
+        string? raw = ReadRawVar(name);
         if (string.IsNullOrEmpty(raw)) return 0;
 
         var trimmed = raw.Trim();
@@ -93,12 +81,28 @@ public sealed class InvokeBashArithmeticCommand : PSCmdlet
         {
             return BashArith.Evaluate(trimmed,
                 n => ReadVar(n, visiting),
-                WriteVar);
+                WriteVar,
+                ReadRawVar);
         }
         catch (BashArith.BashArithException)
         {
             return 0; // unparseable value reads as 0, matching bash's leniency
         }
+    }
+
+    private string? ReadRawVar(string name)
+    {
+        // PowerShell variable first (loop variables are emitted as $name).
+        try
+        {
+            var variable = SessionState.PSVariable.Get(name);
+            if (variable is not null)
+                return variable.Value?.ToString() ?? string.Empty;
+        }
+        catch { /* not a readable PS variable in scope */ }
+
+        // Environment variable (ordinary bash vars live in $env:NAME).
+        return Environment.GetEnvironmentVariable(name);
     }
 
     /// <summary>

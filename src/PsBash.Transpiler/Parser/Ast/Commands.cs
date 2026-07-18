@@ -1,4 +1,5 @@
 using System.Collections.Immutable;
+using PsBash.Core.Parser;
 
 namespace PsBash.Core.Parser.Ast;
 
@@ -90,14 +91,27 @@ public abstract record Command : BashNode
 
     /// <summary>
     /// A C-style arithmetic for loop: <c>for ((init; cond; step)); do body; done</c>.
-    /// The three clauses are stored as raw strings.
+    /// Empty clauses are represented by <see langword="null"/>; non-empty clauses retain
+    /// both their typed arithmetic tree and exact source text.
     /// </summary>
     public sealed record ForArith(
-        string Init,
-        string Cond,
-        string Step,
+        ArithmeticSyntax? Init,
+        ArithmeticSyntax? Cond,
+        ArithmeticSyntax? Step,
         Command Body,
-        ImmutableArray<Redirect> Redirects = default) : Command;
+        ImmutableArray<Redirect> Redirects = default) : Command
+    {
+        /// <summary>
+        /// Legacy source-compatible constructor; empty clauses remain explicitly absent.
+        /// Migration note: the primary properties are intentionally typed; use <c>Init?.Source</c>,
+        /// <c>Cond?.Source</c>, and <c>Step?.Source</c> when source text is required.
+        /// </summary>
+        public ForArith(string init, string cond, string step, Command body, ImmutableArray<Redirect> redirects = default)
+            : this(ParseOptional(init), ParseOptional(cond), ParseOptional(step), body, redirects) { }
+
+        private static ArithmeticSyntax? ParseOptional(string source) =>
+            string.IsNullOrWhiteSpace(source) ? null : BashArithmeticParser.Parse(source);
+    }
 
     /// <summary>
     /// A while or until loop: <c>while cmd; do body; done</c> / <c>until cmd; do body; done</c>.
@@ -122,7 +136,14 @@ public abstract record Command : BashNode
     /// A standalone arithmetic command: <c>(( expr ))</c>.
     /// Maps to PowerShell arithmetic expression or comparison.
     /// </summary>
-    public sealed record ArithCommand(string Expr) : Command;
+    public sealed record ArithCommand(ArithmeticSyntax Expr) : Command
+    {
+        /// <summary>
+        /// Legacy source-compatible constructor. Migration note: the typed <see cref="Expr"/>
+        /// property is intentional; use <c>Expr.Source</c> when source text is required.
+        /// </summary>
+        public ArithCommand(string expr) : this(BashArithmeticParser.Parse(expr)) { }
+    }
 
     /// <summary>
     /// A function definition: <c>function name { body }</c> or <c>name() { body }</c>.
