@@ -79,6 +79,22 @@ public class OracleTests
         _ = fixture.PsBashPath;
     }
 
+    [Fact]
+    public void BashOracleFixture_ReplayMode_DoesNotResolveBash()
+    {
+        var resolverCalls = 0;
+        BashHost Resolver()
+        {
+            resolverCalls++;
+            return BashHost.None;
+        }
+
+        var fixture = new BashOracleFixture(OracleRunMode.Replay, Resolver);
+
+        Assert.Null(fixture.BashPath);
+        Assert.Equal(0, resolverCalls);
+    }
+
     [SkippableFact]
     public async Task BashOracleFixture_RunBash_EchoHello_CapturesOutput()
     {

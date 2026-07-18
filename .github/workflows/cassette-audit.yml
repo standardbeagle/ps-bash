@@ -1,0 +1,68 @@
+name: Cassette Audit
+
+# Re-records the frozen bash oracle periodically so bash upgrades and other
+# oracle drift cannot remain hidden behind replay-mode differential tests.
+on:
+  schedule:
+    - cron: '30 6 * * 1'
+  workflow_dispatch:
+
+concurrency:
+  group: cassette-audit
+  cancel-in-progress: false
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Re-record cassettes with live bash
+        id: record
+        continue-on-error: true
+        env:
+          PSBASH_ORACLE_RECORD: '1'
+        run: ./scripts/test.sh src/PsBash.Differential.Tests
+
+      - name: Capture cassette drift
+        id: diff
+        if: always()
+        run: |
+          # Intent-to-add makes brand-new cassettes visible to git diff while
+          # leaving the worktree content intact for the uploaded artifact.
+          git add --intent-to-add -- src/PsBash.Differential.Tests/Cassettes
+          git diff --no-color -- src/PsBash.Differential.Tests/Cassettes > /tmp/cassette-drift.diff || true
+          if [ -s /tmp/cassette-drift.diff ]; then
+            echo "drift=yes" >> "$GITHUB_OUTPUT"
+            head -200 /tmp/cassette-drift.diff
+          else
+            echo "drift=no" >> "$GITHUB_OUTPUT"
+            echo "No cassette drift."
+          fi
+
+      - uses: actions/upload-artifact@v4
+        if: always() && steps.diff.outputs.drift == 'yes'
+        with:
+          name: cassette-drift-${{ github.run_id }}
+          path: |
+            /tmp/cassette-drift.diff
+            src/PsBash.Differential.Tests/Cassettes/
+          retention-days: 30
+
+      - name: Report audit result
+        if: always()
+        run: |
+          failed=0
+          if [ "${{ steps.record.outcome }}" != "success" ]; then
+            echo "::error::Cassette re-record tests failed."
+            failed=1
+          fi
+          if [ "${{ steps.diff.outputs.drift }}" == "yes" ]; then
+            echo "::error::Cassette drift detected. Review artifact cassette-drift-${{ github.run_id }}."
+            failed=1
+          fi
+          exit "$failed"

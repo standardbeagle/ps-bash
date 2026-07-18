@@ -108,8 +108,11 @@ public static class AssertOracle
                 "oracle: live-only case (env/timing/PID/filesystem-dependent) — " +
                 "not reproducible from a cassette. Set PSBASH_ORACLE_LIVE=1 to run it.");
 
-            if (!OracleCassette.TryLoad(script, out var cassette))
+            var loadStatus = OracleCassette.Load(script, out var cassette);
+            if (loadStatus == CassetteLoadStatus.Missing)
                 throw new XunitException(OracleCassette.MissingMessage(script));
+            if (loadStatus == CassetteLoadStatus.Corrupt)
+                throw new XunitException(OracleCassette.CorruptMessage(script));
 
             var psReplay = await Fixture.RunPsBashAsync(script, timeout);
             AssertMatches(script, cassette!.ToOracleResult(), psReplay);

@@ -30,6 +30,14 @@ public enum OracleRunMode
     Record,
 }
 
+/// <summary>The result of looking up and parsing a cassette from disk.</summary>
+public enum CassetteLoadStatus
+{
+    Loaded,
+    Missing,
+    Corrupt,
+}
+
 /// <summary>
 /// Record/replay store for the bash oracle used by the differential suite.
 ///
@@ -143,24 +151,34 @@ public static class OracleCassette
     // ── Load / save ───────────────────────────────────────────────────────
 
     /// <summary>
-    /// Loads the cassette for <paramref name="script"/>. Returns false when no
-    /// cassette exists or it fails to parse (treated as missing so the caller
-    /// emits the record instruction).
+    /// Loads the cassette for <paramref name="script"/>, distinguishing an
+    /// absent file from a present file that cannot be read or parsed.
     /// </summary>
-    public static bool TryLoad(string script, out CassetteEntry? entry)
+    public static CassetteLoadStatus Load(string script, out CassetteEntry? entry)
     {
         entry = null;
         var path = PathFor(script);
-        if (!File.Exists(path)) return false;
+        if (!File.Exists(path)) return CassetteLoadStatus.Missing;
         try
         {
-            return TryParse(File.ReadAllText(path), out entry);
+            if (!TryParse(File.ReadAllText(path), out entry) ||
+                !string.Equals(entry!.Script, script, StringComparison.Ordinal))
+            {
+                entry = null;
+                return CassetteLoadStatus.Corrupt;
+            }
+
+            return CassetteLoadStatus.Loaded;
         }
         catch
         {
-            return false;
+            return CassetteLoadStatus.Corrupt;
         }
     }
+
+    /// <summary>Compatibility helper for callers that only need success/failure.</summary>
+    public static bool TryLoad(string script, out CassetteEntry? entry) =>
+        Load(script, out entry) == CassetteLoadStatus.Loaded;
 
     /// <summary>
     /// Writes (or overwrites) the cassette for <paramref name="entry"/>. The
@@ -292,5 +310,16 @@ public static class OracleCassette
             $"  dir    : {CassettesDir}\n" +
             "Record it (needs a bash host / WSL), then commit the cassette:\n" +
             "  PSBASH_ORACLE_RECORD=1 dotnet test src/PsBash.Differential.Tests -f net10.0";
+    }
+
+    /// <summary>The hard-failure message shown when a cassette exists but is invalid.</summary>
+    public static string CorruptMessage(string script)
+    {
+        var oneLine = script.Replace("\r", " ").Replace("\n", "\\n");
+        return
+            "oracle cassette corrupt — the cassette file exists but could not be parsed or read.\n" +
+            $"  script : {oneLine}\n" +
+            $"  file   : {PathFor(script)}\n" +
+            "Restore the file from git or inspect it for truncation; this is not a missing cassette.";
     }
 }

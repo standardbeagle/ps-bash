@@ -44,12 +44,19 @@ public sealed class BashOracleFixture
     /// </summary>
     public string? PsBashPath { get; }
 
-    public BashOracleFixture()
+    public BashOracleFixture(
+        OracleRunMode? mode = null,
+        Func<BashHost>? bashResolver = null)
     {
-        var host = BashLocator.Find();
-        // BashPath is used by legacy callers; expose the native path when available.
-        // For WSL, we expose "wsl.exe" so callers that check BashPath != null see it.
-        BashPath = host.IsAvailable ? host.Path : null;
+        // Replay reads the bash side from disk, so even host discovery is an
+        // unwanted WSL touch. Resolve bash only for modes that can spawn it.
+        if ((mode ?? OracleCassette.CurrentMode) != OracleRunMode.Replay)
+        {
+            var host = (bashResolver ?? BashLocator.Find)();
+            // BashPath is used by legacy callers; expose the native path when available.
+            // For WSL, expose "wsl.exe" so BashPath != null means available.
+            BashPath = host.IsAvailable ? host.Path : null;
+        }
         // Unified launcher resolution (REFACTOR-3) — replaces the bespoke
         // FindPsBash copy that previously lived here.
         PsBashPath = PsBashLocator.Resolve();

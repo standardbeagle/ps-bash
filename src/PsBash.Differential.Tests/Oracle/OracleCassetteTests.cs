@@ -149,4 +149,56 @@ public class OracleCassetteTests
         Assert.False(OracleCassette.TryLoad(script, out var loaded));
         Assert.Null(loaded);
     }
+
+    [Fact]
+    public void Load_CorruptCassette_DistinguishesItFromMissing()
+    {
+        var script = $"echo corrupt-cassette-{Guid.NewGuid():N}";
+        var path = Path.Combine(OracleCassette.CassettesDir, $"{OracleCassette.KeyFor(script)}.cassette");
+        try
+        {
+            File.WriteAllText(path, "PSBASH-ORACLE-CASSETTE v1\ntruncated");
+
+            var status = OracleCassette.Load(script, out var loaded);
+
+            Assert.Equal(CassetteLoadStatus.Corrupt, status);
+            Assert.Null(loaded);
+            var message = OracleCassette.CorruptMessage(script);
+            Assert.Contains("cassette corrupt", message);
+            Assert.Contains("truncation", message);
+            Assert.DoesNotContain("PSBASH_ORACLE_RECORD", message);
+        }
+        finally
+        {
+            try { File.Delete(path); } catch { /* best-effort */ }
+        }
+    }
+
+    [Fact]
+    public void Load_CassetteWhoseEmbeddedScriptDoesNotMatchKey_IsCorrupt()
+    {
+        var requestedScript = $"echo requested-{Guid.NewGuid():N}";
+        var path = Path.Combine(
+            OracleCassette.CassettesDir,
+            $"{OracleCassette.KeyFor(requestedScript)}.cassette");
+        var wrongEntry = new OracleCassette.CassetteEntry(
+            Script: "echo a different script",
+            BashVersion: "unit-test",
+            Stdout: "different\n",
+            Stderr: "",
+            ExitCode: 0);
+        try
+        {
+            File.WriteAllText(path, OracleCassette.Serialize(wrongEntry));
+
+            var status = OracleCassette.Load(requestedScript, out var loaded);
+
+            Assert.Equal(CassetteLoadStatus.Corrupt, status);
+            Assert.Null(loaded);
+        }
+        finally
+        {
+            try { File.Delete(path); } catch { /* best-effort */ }
+        }
+    }
 }
