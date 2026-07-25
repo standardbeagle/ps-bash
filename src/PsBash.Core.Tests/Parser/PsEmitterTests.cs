@@ -1724,6 +1724,45 @@ public class PsEmitterTests
         Assert.Equal("$(if (([long]($env:a) -eq [long]($env:b))) { $global:LASTEXITCODE = 0 } else { $global:LASTEXITCODE = 1 })", result);
     }
 
+    // ── a double-quoted test operand keeps its expansions live ───────────────
+
+    [Theory]
+    // `[ -z "${V:-}" ]` is everywhere in defensive shell scripts. EmitTestArg kept
+    // the unwrapped text only when it started with `$`, so every other expansion
+    // shape was single-quoted as a LITERAL: the test compared against the source
+    // text `($env:V ?? "")`, which is never empty — `-z` was always false and `-n`
+    // always true. Silent wrong answer, no error.
+    [InlineData("[ -z \"${V:-}\" ]", "[string]::IsNullOrEmpty(($env:V ?? ''))")]
+    [InlineData("[ -n \"${V:-}\" ]", "-not [string]::IsNullOrEmpty(($env:V ?? ''))")]
+    [InlineData("[ -z \"$V\" ]", "[string]::IsNullOrEmpty($env:V)")]
+    public void Transpile_TestOperand_QuotedExpansion_StaysAnExpression(
+        string bash, string expectedFragment)
+    {
+        var result = PsEmitter.Transpile(bash);
+
+        // Normalize the emitted double quotes so the InlineData stays readable.
+        Assert.Contains(expectedFragment.Replace("''", "\"\""), result);
+    }
+
+    [Fact]
+    public void Transpile_TestOperand_MixedLiteralAndExpansion_Interpolates()
+    {
+        // "pre$V" must stay a PowerShell double-quoted (interpolating) string; the
+        // single-quoted form froze $env:V as literal text.
+        var result = PsEmitter.Transpile("[ \"x\" = \"pre$V\" ]");
+
+        Assert.Contains("\"pre$env:V\"", result);
+        Assert.DoesNotContain("'pre$env:V'", result);
+    }
+
+    [Fact]
+    public void Transpile_TestOperand_PureLiteral_StaysSingleQuoted()
+    {
+        // Guard the narrow claim: a literal with no expansion is unchanged, so
+        // PowerShell does not try to run it as a command.
+        Assert.Contains("'abc'", PsEmitter.Transpile("[ \"abc\" = \"abc\" ]"));
+    }
+
     [Fact]
     public void Transpile_ExtendedRegex_EmitsMatch()
     {
@@ -2435,8 +2474,26 @@ public class PsEmitterTests
     {
         var result = PsEmitter.Transpile("(cd /tmp && pwd) && pwd");
 
-        Assert.StartsWith("try { Push-Location; $($__psbash_cd_target = '/tmp'", result);
-        Assert.Contains("&& Invoke-BashPwd } finally { Pop-Location } && Invoke-BashPwd", result);
+        // The subshell is a chain OPERAND, so it must be wrapped in `$( … )`.
+        // `&&` / `||` are pipeline-chain operators and require a pipeline; the
+        // previous bare `try { … } finally { … } && …` was not parseable
+        // PowerShell at all ("Unexpected token '&&'"), which this assertion used
+        // to pin. Same reason `while` / `case` operands are wrapped.
+        Assert.StartsWith("$(try { Push-Location; $($__psbash_cd_target = '/tmp'", result);
+        Assert.Contains("&& Invoke-BashPwd } finally { Pop-Location }) && Invoke-BashPwd", result);
+    }
+
+    [Theory]
+    // A compound command emits a PowerShell STATEMENT, which cannot be a
+    // pipeline-chain operand: `cmd || switch (…) {…}` and `cmd && while (…) {…}`
+    // were both parse errors that broke the whole file.
+    [InlineData("true || case $x in a) echo a;; esac", "|| $(switch")]
+    [InlineData("true && while false; do echo x; done", "&& $(")]
+    [InlineData("true || (echo a)", "|| $(try {")]
+    public void Transpile_CompoundCommandInAndOrChain_IsWrappedInSubexpression(
+        string bash, string expected)
+    {
+        Assert.Contains(expected, PsEmitter.Transpile(bash));
     }
 
     [Fact]

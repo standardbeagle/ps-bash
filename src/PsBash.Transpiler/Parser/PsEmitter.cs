@@ -1661,18 +1661,43 @@ public static class PsEmitter
     {
         if (word.Parts.Length == 1 && word.Parts[0] is WordPart.DoubleQuoted dq)
         {
+            // A lone expansion is unwrapped so it lands as a bare PowerShell value:
+            // "$HOME" -> $HOME, "${V:-}" -> ($env:V ?? "").
+            //
+            // The old rule was "keep it only if the emitted text starts with $",
+            // which single-quoted every OTHER expansion shape as a LITERAL. The very
+            // common `[ -z "${V:-}" ]` became
+            //     [string]::IsNullOrEmpty('($env:V ?? "")')
+            // — a test against that 17-character source text, never empty, so `-z` was
+            // always false and `-n` always true. Silent wrong answer, no error.
+            if (dq.Parts.Length == 1 && IsExpansionPart(dq.Parts[0]))
+                return EmitWordPart(dq.Parts[0]);
+
+            // Mixed literal + expansion ("prefix$V") must stay INTERPOLATING: the
+            // single-quoted form froze `$env:V` as literal text. EmitWord emits the
+            // proper PowerShell double-quoted string.
+            foreach (var part in dq.Parts)
+            {
+                if (IsExpansionPart(part))
+                    return EmitWord(word);
+            }
+
+            // Pure literal — single-quote it, or PowerShell treats it as a command.
             var sb = new StringBuilder();
             foreach (var part in dq.Parts)
                 sb.Append(EmitWordPart(part));
-            var inner = sb.ToString();
-            // Variable references (start with $) are valid PS expressions as-is.
-            // Bare literals must be quoted or PowerShell treats them as commands.
-            if (inner.Length == 0 || inner[0] != '$')
-                return "'" + inner.Replace("'", "''") + "'";
-            return inner;
+            return "'" + sb.ToString().Replace("'", "''") + "'";
         }
         return EmitWord(word);
     }
+
+    /// <summary>A word part whose emitted text is a PowerShell expression (it reads a
+    /// variable, runs a command, or evaluates arithmetic) rather than literal text.</summary>
+    private static bool IsExpansionPart(WordPart part)
+        => part is WordPart.SimpleVarSub
+            or WordPart.BracedVarSub
+            or WordPart.CommandSub
+            or WordPart.ArithSub;
 
     private static bool HasGlobChars(string value) =>
         value.Contains('*') || value.Contains('?') || value.Contains('[');
@@ -4033,7 +4058,18 @@ public static class PsEmitter
             }
             else
             {
-                sb.Append(Emit(cmd));
+                // A COMPOUND command (while / for / case / subshell / brace group …)
+                // emits a PowerShell *statement*, and `&&` / `||` are pipeline-chain
+                // operators that require a pipeline operand — `cmd || switch (…) {…}`
+                // and `cmd && while (…) {…}` are both parse errors. Wrapping in the
+                // subexpression `$( … )` makes it a valid operand; unlike `( … )` it
+                // can hold a statement list (the loop-guard prologue), and unlike
+                // `& { … }` it runs in the CURRENT scope, so assignments inside the
+                // body still persist the way bash's do.
+                var compoundText = Emit(cmd);
+                sb.Append(NeedsChainOperandSubexpression(compoundText)
+                    ? $"$({compoundText})"
+                    : compoundText);
             }
         }
 
