@@ -5263,7 +5263,28 @@ public static class PsEmitter
                     i++;
                 }
             }
-            else if ("\\^$.|+(){}".IndexOf(c) >= 0)
+            else if (c == '\\')
+            {
+                // In a bash pattern `\X` means the LITERAL character X (it strips X's
+                // glob meaning) — it does not mean "a backslash then X". Emitting `\\`
+                // here made `${value%\'}` compile to the regex `^(.*)\\'$`, which
+                // requires an actual backslash before the quote and so never matched:
+                // the quote-stripping idiom silently did nothing. Oracle-verified:
+                // `value="'hi'"; value="${value%\'}"` yields `'hi`.
+                if (i + 1 < glob.Length)
+                {
+                    sb.Append(System.Text.RegularExpressions.Regex.Escape(
+                        glob[i + 1].ToString()));
+                    i += 2;
+                }
+                else
+                {
+                    // Trailing lone backslash — the literal character itself.
+                    sb.Append("\\\\");
+                    i++;
+                }
+            }
+            else if ("^$.|+(){}".IndexOf(c) >= 0)
             {
                 // Regex metacharacter — escape it.
                 sb.Append('\\');

@@ -1296,6 +1296,35 @@ public class PsEmitterTests
         Assert.Equal("Invoke-BashEcho ($env:VAR -replace 'pattern$','')", result);
     }
 
+    [Theory]
+    // In a bash PATTERN, `\X` means the LITERAL character X — it strips X's glob
+    // meaning, it does not mean "a backslash then X". GlobToRegex escaped the
+    // backslash itself, so `${value%\'}` compiled to `^(.*)\\'$`, which requires an
+    // actual backslash before the quote and therefore NEVER matched: the standard
+    // quote-stripping idiom silently did nothing.
+    // Oracle: `value="'hi'"; value="${value%\'}"; value="${value#\'}"` -> `hi`.
+    [InlineData(@"echo ${VAR%\'}", @"-replace '^(.*)''$','$1'")]
+    [InlineData(@"echo ${VAR#\'}", @"-replace '^''',''")]
+    [InlineData(@"echo ${VAR%\""}", @"-replace '^(.*)""$','$1'")]
+    // An escaped glob metachar becomes a literal one, not a wildcard.
+    [InlineData(@"echo ${VAR%\*}", @"-replace '^(.*)\*$','$1'")]
+    [InlineData(@"echo ${VAR%\?}", @"-replace '^(.*)\?$','$1'")]
+    // An escaped backslash is one literal backslash.
+    [InlineData(@"echo ${VAR%\\}", @"-replace '^(.*)\\$','$1'")]
+    public void Transpile_BracedVarPatternWithEscape_TreatsNextCharAsLiteral(
+        string bash, string expected)
+    {
+        Assert.Contains(expected, PsEmitter.Transpile(bash));
+    }
+
+    [Fact]
+    public void Transpile_BracedVarPatternGlobChars_StillWildcards()
+    {
+        // Guard the narrow claim: only a BACKSLASH-escaped metachar becomes literal;
+        // an unescaped one keeps its glob meaning.
+        Assert.Contains("-replace '^(.*).*$','$1'", PsEmitter.Transpile("echo ${VAR%*}"));
+    }
+
     [Fact]
     public void Transpile_BracedVarPrefixRemoval_EmitsReplace()
     {
