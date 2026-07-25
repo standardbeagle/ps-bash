@@ -12,68 +12,38 @@ public sealed partial class BashParser
 {
     private Command ParseSimpleCommand()
     {
-        // Check for "export" keyword followed by assignment words or bare variable names.
-        if (Peek().Kind == BashTokenKind.Word && Peek().Value == "export")
+        // `export` / `local` NAME=VAL … — see ParseDeclarationPairs for the shape.
+        if (Peek().Kind == BashTokenKind.Word && Peek().Value is "export" or "local")
         {
+            bool isLocal = Peek().Value == "local";
             int saved = _pos;
-            Advance(); // consume "export"
+            Advance(); // consume the keyword
 
-            if (Peek().Kind == BashTokenKind.AssignmentWord || Peek().Kind == BashTokenKind.Word)
-            {
-                // Bash: `export` accepts an interleaved mix of NAME=VAL and bare NAME args
-                // in any order (e.g. `eval $(printf 'export A=1\nexport B=2\n')` field-splits
-                // to `export A=1 export B=2`). Consume both kinds in a single loop so a bare
-                // Word in the middle does not silently drop subsequent assignments.
-                var pairs = ImmutableArray.CreateBuilder<Assignment>();
-                while (Peek().Kind == BashTokenKind.AssignmentWord || Peek().Kind == BashTokenKind.Word)
-                {
-                    if (Peek().Kind == BashTokenKind.AssignmentWord)
-                    {
-                        pairs.Add(ParseAssignmentWord());
-                    }
-                    else
-                    {
-                        var name = Peek().Value;
-                        Advance();
-                        pairs.Add(new Assignment(name, AssignOp.Equal, null));
-                    }
-                }
-                if (pairs.Count > 0)
-                    return new Command.ShAssignment(pairs.ToImmutable());
-            }
+            if (ParseDeclarationPairs() is { } pairs)
+                return new Command.ShAssignment(pairs, IsLocal: isLocal);
 
-            // Not followed by assignment or names — rewind and parse as normal command.
+            // No assignment or name followed — rewind and parse as a normal command
+            // so forms like `export -p` still reach the general path.
             _pos = saved;
         }
 
-        // Check for "local" keyword followed by assignment words or bare variable names.
-        if (Peek().Kind == BashTokenKind.Word && Peek().Value == "local")
+        // `declare -a A=(x y)` / `readonly C=(m n)` — an ARRAY initializer only.
+        // Everything else about declare/typeset (the -i, -A, -p attribute handling)
+        // stays on the emitter's TryEmitDeclare path, which this must not disturb:
+        // it only claims the command when an actual `NAME=(` array literal is present.
+        // Without this the array was dropped entirely (`declare -a A=(x y)` emitted
+        // `$global:A = ''`) and the unconsumed `(x y)` desynced the parse, swallowing
+        // the command that followed.
+        if (Peek().Kind == BashTokenKind.Word
+            && Peek().Value is "declare" or "typeset" or "readonly"
+            && DeclarationHasArrayInitializer())
         {
             int saved = _pos;
-            Advance(); // consume "local"
+            Advance(); // consume the keyword
 
-            if (Peek().Kind == BashTokenKind.AssignmentWord || Peek().Kind == BashTokenKind.Word)
-            {
-                // Same interleaving rule as `export` above.
-                var pairs = ImmutableArray.CreateBuilder<Assignment>();
-                while (Peek().Kind == BashTokenKind.AssignmentWord || Peek().Kind == BashTokenKind.Word)
-                {
-                    if (Peek().Kind == BashTokenKind.AssignmentWord)
-                    {
-                        pairs.Add(ParseAssignmentWordWithArray());
-                    }
-                    else
-                    {
-                        var name = Peek().Value;
-                        Advance();
-                        pairs.Add(new Assignment(name, AssignOp.Equal, null));
-                    }
-                }
-                if (pairs.Count > 0)
-                    return new Command.ShAssignment(pairs.ToImmutable(), IsLocal: true);
-            }
+            if (ParseDeclarationPairs() is { } declPairs)
+                return new Command.ShAssignment(declPairs);
 
-            // Not followed by assignment or names — rewind and parse as normal command.
             _pos = saved;
         }
 
@@ -312,6 +282,72 @@ public sealed partial class BashParser
         return p;
     }
 
+    /// <summary>
+    /// Parse the operands of a declaration builtin (<c>export</c> / <c>local</c> /
+    /// <c>declare</c> / <c>readonly</c>): an interleaved run of <c>NAME=VAL</c>,
+    /// <c>NAME=(array)</c>, and bare <c>NAME</c> args, preceded or separated by
+    /// attribute flags. Returns null (consuming nothing beyond what the caller must
+    /// rewind) when no pair was found, so the caller can fall back to a normal command.
+    ///
+    /// Interleaving matters: <c>eval $(printf 'export A=1\nexport B=2\n')</c>
+    /// field-splits to <c>export A=1 export B=2</c>, so a bare Word in the middle must
+    /// not stop the loop and silently drop the assignments after it.
+    ///
+    /// Attribute flags are SKIPPED, not taken as variable names. Treating them as names
+    /// is what made `local -a A=(x y)` emit the junk statement `$-a = $-a`. ps-bash does
+    /// not model bash variable attributes, so dropping the flag is the honest mapping;
+    /// the initializer it decorates is what carries meaning.
+    /// </summary>
+    private ImmutableArray<Assignment>? ParseDeclarationPairs()
+    {
+        var pairs = ImmutableArray.CreateBuilder<Assignment>();
+
+        while (Peek().Kind is BashTokenKind.AssignmentWord or BashTokenKind.Word)
+        {
+            if (Peek().Kind == BashTokenKind.AssignmentWord)
+            {
+                pairs.Add(ParseAssignmentWordWithArray());
+                continue;
+            }
+
+            var value = Peek().Value;
+            // An attribute flag (-a, -r, -i, --) is an option, never a variable name.
+            // A lone "-" is not a flag; bash has no such option and a name cannot
+            // start with '-', so leaving it to the name branch keeps prior behavior.
+            if (value.Length > 1 && value[0] == '-')
+            {
+                Advance();
+                continue;
+            }
+
+            Advance();
+            pairs.Add(new Assignment(value, AssignOp.Equal, null));
+        }
+
+        return pairs.Count > 0 ? pairs.ToImmutable() : null;
+    }
+
+    /// <summary>
+    /// Look ahead (without consuming) for a <c>NAME=</c> immediately followed by
+    /// <c>(</c> in the current declaration command — the array-initializer form.
+    /// Scanning stops at the first token that cannot be part of a simple command so a
+    /// later, unrelated <c>(</c> never triggers a false positive.
+    /// </summary>
+    private bool DeclarationHasArrayInitializer()
+    {
+        for (int i = _pos + 1; i < _tokens.Count; i++)
+        {
+            var kind = _tokens[i].Kind;
+            if (kind == BashTokenKind.AssignmentWord)
+            {
+                return i + 1 < _tokens.Count
+                    && _tokens[i + 1].Kind == BashTokenKind.LParen;
+            }
+            if (kind != BashTokenKind.Word) return false;
+        }
+        return false;
+    }
+
     private Assignment ParseAssignmentWord()
     {
         var token = Advance();
@@ -336,6 +372,21 @@ public sealed partial class BashParser
             var elements = ImmutableArray.CreateBuilder<CompoundWord>();
             while (Peek().Kind != BashTokenKind.RParen && Peek().Kind != BashTokenKind.Eof)
             {
+                // Inside an array literal a newline is just whitespace — bash accepts
+                // the multi-line form that nearly every real script uses:
+                //     PATTERNS=(
+                //       "a.js" "b.js"
+                //       "c.js"
+                //     )
+                // Breaking here instead left the `)` unconsumed. Worse, for
+                // `A=(x\ny)` the caller then read `y` as a COMMAND and `A` silently
+                // lost an element — a wrong-output bug, not just a parse error.
+                if (Peek().Kind == BashTokenKind.Newline)
+                {
+                    Advance();
+                    continue;
+                }
+
                 if (Peek().Kind == BashTokenKind.Word)
                 {
                     var wordToken = Advance();

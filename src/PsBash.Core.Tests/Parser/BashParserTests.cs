@@ -1293,6 +1293,84 @@ public class BashParserTests
         Assert.Equal("-[0-9]*", c.Arms[1].Patterns[0]);
     }
 
+    // ── array literals span newlines; declaration builtins keep their initializer ──
+
+    [Fact]
+    public void Parse_MultiLineArrayLiteral_CollectsAllElements()
+    {
+        // Inside `( )` a newline is just whitespace — the form nearly every real
+        // script uses. The element loop used to break on Newline, leaving the `)`
+        // unconsumed.
+        var result = Parse("A=(\n  \"a.js\" \"b.js\"\n  c\n)");
+
+        var assign = Assert.IsType<Command.ShAssignment>(result);
+        Assert.NotNull(assign.Pairs[0].ArrayValue);
+        Assert.Equal(3, assign.Pairs[0].ArrayValue!.Elements.Length);
+    }
+
+    [Fact]
+    public void Parse_ArrayLiteralBrokenAcrossLines_DoesNotLoseElementToNextCommand()
+    {
+        // `A=(x\ny)` was the SILENT case: the parser closed the array after `x` and
+        // read `y` as a separate command, so A lost an element and a stray command
+        // ran. Oracle: ${#A[@]} is 2.
+        var result = Parse("A=(x\ny)");
+
+        var assign = Assert.IsType<Command.ShAssignment>(result);
+        Assert.Equal(2, assign.Pairs[0].ArrayValue!.Elements.Length);
+    }
+
+    [Theory]
+    [InlineData("declare -a A=(x y)")]
+    [InlineData("typeset -a A=(x y)")]
+    [InlineData("readonly A=(x y)")]
+    public void Parse_DeclarationBuiltinWithArrayInitializer_KeepsElements(string bash)
+    {
+        // These dropped the array entirely, and the unconsumed `(x y)` desynced the
+        // parse so the NEXT command was swallowed too.
+        var result = Parse(bash);
+
+        var assign = Assert.IsType<Command.ShAssignment>(result);
+        Assert.Equal("A", assign.Pairs[0].Name);
+        Assert.Equal(2, assign.Pairs[0].ArrayValue!.Elements.Length);
+    }
+
+    [Fact]
+    public void Parse_DeclareArrayInitializer_DoesNotSwallowFollowingCommand()
+    {
+        var result = Parse("declare -a A=(x y); echo hi");
+
+        var list = Assert.IsType<Command.CommandList>(result);
+        Assert.Equal(2, list.Commands.Length);
+        Assert.IsType<Command.ShAssignment>(list.Commands[0]);
+    }
+
+    [Theory]
+    [InlineData("local -a A=(x y)", "A")]
+    [InlineData("local -r X=5", "X")]
+    [InlineData("local -i N=5", "N")]
+    public void Parse_LocalWithAttributeFlag_FlagIsNotAVariableName(string bash, string name)
+    {
+        // The flag used to be taken as a bare variable name, emitting the junk
+        // statement `$-a = $-a` alongside the real assignment.
+        var result = Parse(bash);
+
+        var assign = Assert.IsType<Command.ShAssignment>(result);
+        Assert.True(assign.IsLocal);
+        Assert.Single(assign.Pairs);
+        Assert.Equal(name, assign.Pairs[0].Name);
+    }
+
+    [Fact]
+    public void Parse_DeclareWithoutArrayInitializer_StaysOnTheDeclareEmitterPath()
+    {
+        // Guard the narrow claim: only an actual `NAME=(` initializer diverts
+        // declare/typeset away from TryEmitDeclare's attribute handling.
+        Assert.IsType<Command.Simple>(Parse("declare -i n=5"));
+        Assert.IsType<Command.Simple>(Parse("declare -A m"));
+        Assert.IsType<Command.Simple>(Parse("declare -p foo"));
+    }
+
     [Fact]
     public void Parse_CaseEmptyPattern_Throws()
     {
