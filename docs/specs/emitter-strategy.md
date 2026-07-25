@@ -181,6 +181,25 @@ The heredoc body is piped into the command.
 Not handled as a separate case in `EmitSimple` -- here-strings are parsed as
 heredocs with the word as the body, so they follow the same heredoc path.
 
+On a **compound** command (`while …; done <<< "$x"`, `for`, `if`, `case`,
+`{ …; }`, a subshell) the here-string is parsed by `ParseTrailingRedirects` into a
+`Redirect` whose `Op` is `"<<<"` and whose `Here` field carries the already-built
+`HereDoc`. `ApplyCompoundRedirects` / `EmitSubshell` then treat it as the group's
+stdin, exactly like `<`:
+
+```
+@"\n{body}\n"@ | Emit-BashLine | & { <emitted compound> }
+```
+
+Both the simple-command and compound paths build the literal through the single
+`EmitHereDocLiteral` helper, so tab stripping, variable translation, and the
+here-string-terminator collision fallback cannot drift apart.
+
+> Before this, `<<<` was not a compound-redirect operator at all: the operator and
+> its word were left unconsumed, the here-string was silently dropped (the loop read
+> nothing), and in some surroundings the stray tokens emitted an empty PowerShell pipe
+> element that broke the parse of the whole file.
+
 ### Input redirect (`< file`)
 
 `< file` on a command becomes `Get-Content file | cmd`. The redirect is removed
@@ -193,10 +212,29 @@ recursive `EmitSimple`.
 - `declare -a name` -> `$name = @()` (empty array)
 - `declare -i name` -> `[int]$name = 0`
 
+An ARRAY INITIALIZER (`declare -a A=(x y)`, `readonly A=(x y)`) never reaches this
+path: the parser turns it into a `ShAssignment` so the elements survive. See
+`parser-grammar.md` §3.3. Trade-off: `readonly` then emits a plain assignment, so
+const-ness is lost where the value was previously lost entirely.
+
+### `for x in LIST`
+
+Every bare literal in the list is quoted through `FormatForItem`, including the
+**single-item** case (`for x in one` -> `foreach ($x in 'one')`). Emitting the bare
+word made PowerShell invoke it as a command ("one: command not found"); only the
+multi-item path used to quote, which is what hid the bug. Words `EmitWord` already
+rendered as PowerShell values (`$x`, `"a"`, `(…)`, `@(…)`, numbers) pass through.
+
 ### `read`
 
 - `read [-r] [-p "prompt"] VAR` -> `Invoke-BashRead [-p "prompt"] VAR` (the
   runtime cmdlet sets `$VAR` in the caller's scope via `Set-Variable -Scope 1`).
+- **`while read a b …` binds EVERY name**, not just the last. The line is trimmed and
+  split with `-split '\s+', N`, whose limit argument reproduces bash's rule that the
+  LAST variable absorbs the remainder; names past the end of the field list get `''`.
+  The field array must be built with `@( … )` — a `$( … )` subexpression collapses a
+  one-element split to a scalar string, and `$str[0]` is then its first *character*.
+  The single-variable form keeps the direct `${VAR} = $_` binding.
 - Flags `-r`, `-p PROMPT`, and `-a ARR` are recognized by the runtime; other
   flags are currently ignored.
 - Under an interactive PTY, `Invoke-BashRead` reads from

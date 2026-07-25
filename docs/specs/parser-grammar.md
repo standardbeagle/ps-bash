@@ -155,7 +155,20 @@ heredoc_op   -> ('<<' | '<<-') DELIMITER
 Special handling:
 - `export` / `local` followed by `ASSIGNMENT_WORD` produces `ShAssignment` (with `IsLocal` flag for `local`).
 - If only assignments appear with no command words, the result is `ShAssignment` instead of `Simple`.
-- Array assignments (`arr=(a b c)`) are detected when `ASSIGNMENT_WORD` has no value and is followed by `LParen`.
+- Array assignments (`arr=(a b c)`) are detected when `ASSIGNMENT_WORD` has no value and is followed by `LParen`. **Newlines inside `( )` are whitespace**, so the common multi-line form parses as one literal; breaking on the newline used to close the array early and read the next element as a command.
+
+**Declaration builtins** (`export`, `local`, `declare`, `typeset`, `readonly`) share
+`ParseDeclarationPairs`, which consumes an interleaved run of `NAME=VAL`, `NAME=(array)`,
+and bare `NAME` operands:
+- attribute flags (`-a`, `-r`, `-i`, `--`) are SKIPPED, never taken as variable names
+  (taking them as names emitted the junk statement `$-a = $-a`);
+- an operand that is not a valid bash NAME makes the whole path DECLINE, so the caller
+  rewinds to the general command path. `export PATH \`envsubst -v "$1"\`` exports names
+  computed at runtime — un-modelable statically — and taking the raw token as a name
+  emitted unparseable PowerShell, poisoning the whole file;
+- `declare` / `typeset` / `readonly` only route here when a `NAME=(` initializer is
+  actually present; every other form stays on the emitter's `TryEmitDeclare` attribute
+  path (`-i`, `-A`, `-p`).
 
 ### 3.4 If / Elif / Else
 
@@ -216,6 +229,26 @@ test_expr -> '[' inner_word* ']'
 ```
 
 Inside `[[ ]]`, `&&` and `||` tokens are consumed as literal words (logical operators, not shell operators). `<`, `>`, and `!` are also consumed as literal words inside both forms. `!=` is assembled from `Bang` + `Word` starting with `=`.
+
+**The `=~` right-hand side is a regex, not a token stream.** The lexer is context-free
+and splits `^(a|b)$` into `LParen` / `Pipe` / `RParen`, so consuming tokens would stop at
+the `(`. `ParseTestExpr` instead re-reads the word after `=~` straight from the source
+(`ConsumeRegexOperand`) as one whitespace-delimited, quote-aware word, then skips the
+tokens inside that span. This mirrors bash, where `(` groups in a `[[ ]]` condition
+*except* after `=~`.
+
+That word is decomposed by `DecomposeRegexWord`, not the ordinary word decomposer:
+
+- backslashes pass through verbatim (`\.` must stay an escaped dot — the ordinary
+  decomposer dropped it, silently widening the pattern to "any character");
+- a bare `$` is a regex anchor — `$` starts an expansion only before `{`, `(`, or a name
+  character, so `(\s|$)` survives while `$re` still expands;
+- POSIX bracket classes are translated for .NET (`TranslatePosixClassesForRegex`):
+  `[[:digit:]]` → `[0-9]`, `[[:space:]]` → `[\s]`. .NET regex has no POSIX classes and
+  would read `[[:digit:]]` as the set `[:digt`. Unknown class names are left alone.
+
+The emitter passes a **sole** expansion RHS through bare (`$x -match $env:re`) rather
+than single-quoting it, since `re='^a.b$'; [[ $x =~ $re ]]` is the idiomatic bash form.
 
 ### 3.11 Arithmetic Command
 
