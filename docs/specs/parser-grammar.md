@@ -204,6 +204,14 @@ pattern      -> token*   (collected as raw text until '|' or ')')
 
 The `;;` terminator is detected as two consecutive `Semi` tokens.
 
+After the pattern's `)` the parser skips **newlines only**, never semicolons. An arm
+with an EMPTY body (`x) ;;`) is legal bash, and skipping terminators there ate the `;;`
+— the parser then read the NEXT arm's pattern as a command word and threw on its `)`.
+A lone `;` immediately after `)` is a bash syntax error, so nothing else is skippable.
+
+An empty pattern (`case x in ) esac`, or an empty alternative `a|)`) is rejected rather
+than becoming a match-nothing arm.
+
 ### 3.8 Function Definition
 
 ```
@@ -229,6 +237,13 @@ test_expr -> '[' inner_word* ']'
 ```
 
 Inside `[[ ]]`, `&&` and `||` tokens are consumed as literal words (logical operators, not shell operators). `<`, `>`, and `!` are also consumed as literal words inside both forms. `!=` is assembled from `Bang` + `Word` starting with `=`.
+
+**Grouping parens.** Inside `[[ ]]`, `(` / `)` are consumed as literal words
+(`[[ ! -e $f || ( -f $f && ! -L $f ) ]]`). The emitter's `SplitLogical` only breaks on
+`&&` / `||` at paren **depth 0**, so a group stays one operand and its association is
+preserved, and `TryUnwrapTestGroup` strips one fully-enclosing pair before recursing.
+Previously the parser broke on the paren, dropping the group's operands so the clause
+silently collapsed to a constant.
 
 **The `=~` right-hand side is a regex, not a token stream.** The lexer is context-free
 and splits `^(a|b)$` into `LParen` / `Pipe` / `RParen`, so consuming tokens would stop at
