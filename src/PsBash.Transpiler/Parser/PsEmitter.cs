@@ -1453,6 +1453,12 @@ public static class PsEmitter
 
     private static string TranslateTestCondition(ImmutableArray<CompoundWord> words, bool extended)
     {
+        // Grouping: `[[ ( -f $f && ! -L $f ) ]]`. Unwrap one enclosing pair and
+        // re-enter the full extended-test path so the &&/|| inside the group are
+        // translated, then re-parenthesize for PowerShell precedence.
+        if (extended && TryUnwrapTestGroup(words, out var grouped))
+            return $"({EmitExtendedTest(grouped)})";
+
         // Handle leading ! negation: [ ! -f x ] → !(Test-Path ...)
         if (words.Length >= 1 && GetLiteralValue(words[0]) == "!")
         {
@@ -1569,15 +1575,27 @@ public static class PsEmitter
             return $"{lhs} {psOp} {EmitTestOperand(words[2])}";
         }
 
-        // Fallback (e.g. `[ str ]` = non-empty test): emit each operand quoted so
+        // No operands at all — bash's `[ ]` is false. This also catches a clause the
+        // splitter left empty, e.g. the unsupported `[[ ( … ) ]]` grouping form; the
+        // old loop returned "" for it, which emitted the unparseable `if (())`.
+        if (words.Length == 0)
+            return "$false";
+
+        // Fallback. `[ str ]` (one operand) is the non-empty test: emit it quoted so
         // a bare literal is a PowerShell string, not a command invocation.
-        var sb = new StringBuilder();
-        for (int i = 0; i < words.Length; i++)
-        {
-            if (i > 0) sb.Append(' ');
-            sb.Append(EmitTestOperand(words[i]));
-        }
-        return sb.ToString();
+        if (words.Length == 1)
+            return EmitTestOperand(words[0]);
+
+        // More than one operand with no recognized operator means an operator this
+        // emitter does not implement — `[ -o PROMPT_SUBST ]` (shell-option test) is
+        // the real-world case. Joining the operands with spaces emitted adjacent
+        // values (`'-o' 'PROMPT_SUBST'`), which is NEVER valid PowerShell, so one
+        // such line broke the parse of the entire file. Degrade to a false result
+        // plus a diagnostic on stderr: wrong-but-visible beats unparseable.
+        var opName = GetLiteralValue(words[0]) ?? "";
+        var message = PsBuild.SingleQuote(
+            $"ps-bash: [: {opName}: unsupported test operator");
+        return $"$(Write-BashHostStderr {message}; $false)";
     }
 
     // Split a `[ ]` clause list on a top-level POSIX combinator (`-a` / `-o`) and
@@ -1720,10 +1738,17 @@ public static class PsEmitter
         var segments = new List<LogicalSegment>();
         var current = ImmutableArray.CreateBuilder<CompoundWord>();
 
+        // Only split at paren depth 0. `[[ a || ( b && c ) ]]` must yield the two
+        // top-level operands `a` and `( b && c )`, not three flat ones — splitting
+        // inside the group would re-associate the expression and change its meaning.
+        int depth = 0;
         foreach (var word in inner)
         {
             var lit = GetLiteralValue(word);
-            if (lit is "&&" or "||")
+            if (lit == "(") depth++;
+            else if (lit == ")") depth--;
+
+            if (depth == 0 && lit is "&&" or "||")
             {
                 var psOp = lit == "&&" ? "-and" : "-or";
                 segments.Add(new LogicalSegment(current.ToImmutable(), psOp));
@@ -1737,6 +1762,36 @@ public static class PsEmitter
 
         segments.Add(new LogicalSegment(current.ToImmutable(), null));
         return segments;
+    }
+
+    /// <summary>
+    /// Strip one fully-enclosing pair of grouping parens from a <c>[[ ]]</c> clause,
+    /// e.g. <c>( -f $f &amp;&amp; ! -L $f )</c>. Returns false when the clause is not
+    /// wrapped, or when the leading <c>(</c> closes before the end (<c>( a ) || ( b )</c>
+    /// — already handled by the depth-aware split above).
+    /// </summary>
+    private static bool TryUnwrapTestGroup(
+        ImmutableArray<CompoundWord> words, out ImmutableArray<CompoundWord> innerWords)
+    {
+        innerWords = words;
+        if (words.Length < 2
+            || GetLiteralValue(words[0]) != "("
+            || GetLiteralValue(words[^1]) != ")")
+            return false;
+
+        int depth = 0;
+        for (int i = 0; i < words.Length; i++)
+        {
+            var lit = GetLiteralValue(words[i]);
+            if (lit == "(") depth++;
+            else if (lit == ")") depth--;
+            // The opening paren closes before the last word — not one enclosing group.
+            if (depth == 0 && i < words.Length - 1) return false;
+        }
+        if (depth != 0) return false;
+
+        innerWords = words[1..^1];
+        return true;
     }
 
 

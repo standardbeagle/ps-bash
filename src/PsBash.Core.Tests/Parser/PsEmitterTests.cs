@@ -1755,6 +1755,71 @@ public class PsEmitterTests
         Assert.DoesNotContain("'pre$env:V'", result);
     }
 
+    // ── [[ ( … ) ]] grouping ─────────────────────────────────────────────────
+    //
+    // The lexer emits grouping parens as LParen/RParen and ParseTestExpr used to
+    // BREAK on them, dropping the group's operands from the word list — so the
+    // clause silently collapsed to a constant (and once emitted `if (())`).
+
+    [Theory]
+    [InlineData("[[ ( -n $x ) ]]", "-not [string]::IsNullOrEmpty($env:x)")]
+    [InlineData("[[ (-n $x) ]]", "-not [string]::IsNullOrEmpty($env:x)")]
+    public void Transpile_ExtendedTestGrouping_TranslatesTheGroupedOperand(
+        string bash, string expected)
+    {
+        var result = PsEmitter.Transpile(bash);
+
+        Assert.Contains(expected, result);
+        Assert.DoesNotContain("(())", result);
+    }
+
+    [Fact]
+    public void Transpile_ExtendedTestGrouping_KeepsOperatorAssociation()
+    {
+        // `a || ( b && c )` must NOT flatten to `a || b && c` — the splitter only
+        // breaks at paren depth 0, so the group stays one operand.
+        var result = PsEmitter.Transpile("[[ -n $a || ( -n $b && -n $c ) ]]");
+
+        Assert.Contains("-or", result);
+        Assert.Contains("-and", result);
+        // The && belongs to the grouped sub-expression, so its operands are the
+        // b/c tests, not a/b.
+        Assert.Matches(@"env:b\)\).*-and.*env:c", result);
+    }
+
+    [Fact]
+    public void Transpile_ExtendedTestGrouping_SiblingGroups_SplitAtTopLevel()
+    {
+        // `( a ) || ( b )` — the leading paren closes before the end, so it is NOT
+        // one enclosing group; the depth-aware split handles it.
+        var result = PsEmitter.Transpile("[[ ( -n $a ) || ( -n $b ) ]]");
+
+        Assert.Contains("env:a", result);
+        Assert.Contains("env:b", result);
+        Assert.Contains("-or", result);
+    }
+
+    [Fact]
+    public void Transpile_UnsupportedTestOperator_DegradesToFalsePlusDiagnostic()
+    {
+        // `[ -o PROMPT_SUBST ]` (shell-option test) is not implemented. The old
+        // fallback joined the operands with spaces and emitted `'-o' 'PROMPT_SUBST'`
+        // — two adjacent values, never valid PowerShell — so one such line broke the
+        // parse of the ENTIRE file. Wrong-but-visible beats unparseable.
+        var result = PsEmitter.Transpile("[ -o PROMPT_SUBST ] && echo on");
+
+        Assert.Contains("unsupported test operator", result);
+        Assert.DoesNotContain("'-o' 'PROMPT_SUBST'", result);
+    }
+
+    [Fact]
+    public void Transpile_SingleOperandTest_StillTestsNonEmpty()
+    {
+        // Guard the narrow claim: the one-operand `[ str ]` non-empty test is
+        // unchanged by the multi-operand degradation.
+        Assert.Contains("$env:x", PsEmitter.Transpile("[ \"$x\" ] && echo y"));
+    }
+
     [Fact]
     public void Transpile_TestOperand_PureLiteral_StaysSingleQuoted()
     {

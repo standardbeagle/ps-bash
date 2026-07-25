@@ -411,6 +411,19 @@ public sealed partial class BashParser
                 continue;
             }
 
+            // Grouping parens: `[[ ! -e $f || ( -f $f && ! -L $f ) ]]`. The lexer emits
+            // them as LParen/RParen, and the loop used to BREAK on them — leaving the
+            // group's operands out of the word list, so the whole clause silently
+            // evaluated to a constant. Consume them as literal words; the emitter's
+            // depth-aware splitter turns them back into PowerShell grouping.
+            if (extended && Peek().Kind is BashTokenKind.LParen or BashTokenKind.RParen)
+            {
+                var parenToken = Advance();
+                inner.Add(new CompoundWord(ImmutableArray.Create<WordPart>(
+                    new WordPart.Literal(parenToken.Value))));
+                continue;
+            }
+
             // The right-hand side of =~ is a REGEX, not a shell token stream: in
             // `[[ $x =~ ^(a|b)$ ]]` the parens belong to the pattern. The lexer is
             // context-free and emits them as LParen/RParen, so consuming tokens here
