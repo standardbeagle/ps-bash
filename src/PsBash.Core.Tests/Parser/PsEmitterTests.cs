@@ -1703,6 +1703,70 @@ public class PsEmitterTests
         Assert.Equal("$(if (($env:a -match '^[0-9]+$')) { $global:LASTEXITCODE = 0 } else { $global:LASTEXITCODE = 1 })", result);
     }
 
+    // ── =~ right-hand side is a REGEX, not a shell token stream ──────────────
+    //
+    // The lexer is context-free and splits `^(a|b)$` into LParen/Pipe/RParen
+    // tokens. ParseTestExpr used to stop at the `(`, which silently truncated
+    // the pattern to `^` on the `&&` path and threw "Expected 'then'" inside an
+    // `if`. The RHS is now re-read from the raw source as one word.
+
+    [Theory]
+    // Alternation group — the shape that broke (7 real-world scripts in a
+    // 100-file corpus sweep).
+    [InlineData("[[ $a =~ ^(x|y)$ ]]", "^(x|y)$")]
+    [InlineData("[[ $a =~ ^(ls|pwd)(1|2) ]]", "^(ls|pwd)(1|2)")]
+    // Backslash escapes reach the regex engine verbatim. Oracle-verified:
+    // `[[ axb =~ ^a\.b$ ]]` does NOT match, so the backslash must survive —
+    // the ordinary word decomposer dropped it, widening `\.` to "any char".
+    [InlineData(@"[[ $a =~ ^a\.b$ ]]", @"^a\.b$")]
+    // POSIX bracket classes are valid ERE but not valid .NET regex.
+    [InlineData("[[ $a =~ ^[[:digit:]]+$ ]]", "^[0-9]+$")]
+    [InlineData("[[ $a =~ [^[:alpha:]] ]]", "[^a-zA-Z]")]
+    [InlineData("[[ $a =~ [[:space:]] ]]", @"[\s]")]
+    // An unknown class name is left alone rather than guessed at.
+    [InlineData("[[ $a =~ [[:zzz:]] ]]", "[[:zzz:]]")]
+    public void Transpile_ExtendedRegexRhs_PreservesPatternVerbatim(
+        string bash, string expectedPattern)
+    {
+        var result = PsEmitter.Transpile(bash);
+
+        Assert.Contains($"-match '{expectedPattern}'", result);
+    }
+
+    [Fact]
+    public void Transpile_ExtendedRegexInIfCondition_ParsesGroupedPattern()
+    {
+        // Same pattern inside an `if` — the context that threw before.
+        var result = PsEmitter.Transpile("if [[ $a =~ ^(x|y)$ ]]; then echo hit; fi");
+
+        Assert.Contains("-match '^(x|y)$'", result);
+        Assert.Contains("hit", result);
+    }
+
+    [Theory]
+    [InlineData("[[ $a =~ $re ]]", "$env:re")]
+    [InlineData("[[ $a =~ ${re} ]]", "$env:re")]
+    public void Transpile_ExtendedRegexRhs_SoleVariable_PassedBareNotQuoted(
+        string bash, string expected)
+    {
+        // `re='^a.b$'; [[ $x =~ $re ]]` is the idiomatic bash regex form.
+        // Single-quoting the emitted variable would match the literal text
+        // "$env:re" instead of the pattern the variable holds.
+        var result = PsEmitter.Transpile(bash);
+
+        Assert.Contains($"-match {expected}", result);
+        Assert.DoesNotContain($"-match '{expected}'", result);
+    }
+
+    [Fact]
+    public void Transpile_ExtendedRegexRhs_MixedLiteralAndVar_StaysQuoted()
+    {
+        // Only a SOLE expansion goes bare; a mixed word keeps the literal path.
+        var result = PsEmitter.Transpile("[[ $a =~ ^${p}[0-9]+$ ]]");
+
+        Assert.Contains("-match '", result);
+    }
+
     [Fact]
     public void Transpile_ExtendedGlob_EmitsLike()
     {

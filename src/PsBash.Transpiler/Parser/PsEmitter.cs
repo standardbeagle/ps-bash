@@ -1480,7 +1480,15 @@ public static class PsEmitter
             // Glob/regex RHS build their own single-quoted pattern from the
             // stripped literal; everything else compares two quoted operands.
             if (op == "=~")
+            {
+                // `re='^a.b$'; [[ $x =~ $re ]]` is THE idiomatic way to write a bash
+                // regex (it avoids bash's own quoting pitfalls). Single-quoting the
+                // emitted `$env:re` would match the literal text "$env:re" instead of
+                // the pattern it holds, so pass a lone expansion through bare.
+                if (IsSoleExpansionWord(words[2]))
+                    return $"{lhs} -match {EmitWord(words[2])}";
                 return $"{lhs} -match '{SqEsc(StripQuotes(EmitWord(words[2])))}'";
+            }
 
             if (op is "==" or "=")
             {
@@ -1575,6 +1583,18 @@ public static class PsEmitter
     /// </summary>
     private static string EmitTestOperand(CompoundWord word)
         => QuoteIfBareLiteral(EmitTestArg(word));
+
+    /// <summary>
+    /// True when the word is exactly ONE parameter/command expansion and nothing else
+    /// (<c>$re</c>, <c>${re}</c>, <c>$(cmd)</c>) — so its emitted text is already a
+    /// PowerShell expression and must not be wrapped in a single-quoted literal.
+    /// A mixed word (<c>^${p}[0-9]+$</c>) is not sole and keeps the literal path.
+    /// </summary>
+    private static bool IsSoleExpansionWord(CompoundWord word)
+        => word.Parts.Length == 1
+        && word.Parts[0] is WordPart.SimpleVarSub
+            or WordPart.BracedVarSub
+            or WordPart.CommandSub;
 
     private static string QuoteIfBareLiteral(string emitted)
     {

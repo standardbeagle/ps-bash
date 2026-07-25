@@ -411,6 +411,20 @@ public sealed partial class BashParser
                 continue;
             }
 
+            // The right-hand side of =~ is a REGEX, not a shell token stream: in
+            // `[[ $x =~ ^(a|b)$ ]]` the parens belong to the pattern. The lexer is
+            // context-free and emits them as LParen/RParen, so consuming tokens here
+            // would stop at the `(` — silently truncating the regex to `^` on the
+            // `&&` path, and throwing "Expected 'then'" from inside an `if`.
+            // Bash draws the same line: `(` groups in a [[ ]] condition, EXCEPT after
+            // =~ where it is regex syntax. So re-read the RHS straight from the source
+            // as one whitespace-delimited word.
+            if (extended && LastInnerWordIs(inner, "=~"))
+            {
+                inner.Add(ConsumeRegexOperand());
+                continue;
+            }
+
             if (Peek().Kind == BashTokenKind.Word)
             {
                 var token = Advance();
@@ -424,6 +438,189 @@ public sealed partial class BashParser
         }
 
         return new Command.BoolExpr(inner.ToImmutable(), extended);
+    }
+
+    /// <summary>True when the last collected test word is exactly <paramref name="op"/>.</summary>
+    private static bool LastInnerWordIs(
+        ImmutableArray<CompoundWord>.Builder inner, string op)
+    {
+        if (inner.Count == 0) return false;
+        var parts = inner[^1].Parts;
+        return parts.Length == 1
+            && parts[0] is WordPart.Literal lit
+            && lit.Value == op;
+    }
+
+    /// <summary>
+    /// Consume the =~ right-hand side as ONE raw, whitespace-delimited word starting at
+    /// the current token, then skip every token the lexer produced inside that span.
+    /// The scan is quote-aware so `[[ $x =~ "a b" ]]` keeps its quoted space, and it
+    /// stops at the first unquoted whitespace so the trailing `]]` is never absorbed.
+    /// A regex with no spaces (`[[:digit:]]+`, `^(a|b)$`) is therefore taken whole.
+    /// </summary>
+    private CompoundWord ConsumeRegexOperand()
+    {
+        int start = Peek().Position;
+        int i = start;
+        char quote = '\0';
+
+        while (i < _input.Length)
+        {
+            char c = _input[i];
+
+            if (quote == '\0' && c == '\\' && i + 1 < _input.Length) { i += 2; continue; }
+            if (quote == '\0' && (c == '"' || c == '\'')) { quote = c; i++; continue; }
+            if (quote != '\0')
+            {
+                // Inside single quotes a backslash is literal; inside double quotes it escapes.
+                if (quote == '"' && c == '\\' && i + 1 < _input.Length) { i += 2; continue; }
+                if (c == quote) quote = '\0';
+                i++;
+                continue;
+            }
+            if (c is ' ' or '\t' or '\n' or '\r') break;
+            i++;
+        }
+
+        var raw = _input[start..i];
+
+        // Skip the tokens the lexer split this span into. A token that starts at or
+        // past the span end is the next real word (`]]`), so it must survive.
+        while (_pos < _tokens.Count
+            && _tokens[_pos].Kind != BashTokenKind.Eof
+            && _tokens[_pos].Position < i)
+        {
+            _pos++;
+        }
+
+        return new CompoundWord(DecomposeRegexWord(raw));
+    }
+
+    /// <summary>
+    /// Decompose the =~ right-hand side. Parameter/command expansions still expand
+    /// (bash: <c>re='^a.b$'; [[ $x =~ $re ]]</c> matches), but EVERY other character —
+    /// crucially backslashes and <c>$</c> anchors — passes through verbatim to the
+    /// regex engine. Running the ordinary word decomposer here would turn <c>\.</c>
+    /// into an escaped literal <c>.</c> (which then matches ANY character, silently
+    /// widening the pattern) and would try to read <c>$)</c> as a variable.
+    /// Verified against the oracle: <c>[[ axb =~ ^a\.b$ ]]</c> does NOT match.
+    /// </summary>
+    private ImmutableArray<WordPart> DecomposeRegexWord(string raw)
+    {
+        var parts = ImmutableArray.CreateBuilder<WordPart>();
+        var literal = new System.Text.StringBuilder();
+
+        void FlushLiteral()
+        {
+            if (literal.Length == 0) return;
+            parts.Add(new WordPart.Literal(
+                TranslatePosixClassesForRegex(literal.ToString())));
+            literal.Clear();
+        }
+
+        for (int i = 0; i < raw.Length;)
+        {
+            if (raw[i] == '$' && i + 1 < raw.Length && IsExpansionStart(raw[i + 1]))
+            {
+                int end = FindExpansionEnd(raw, i);
+                if (end > i)
+                {
+                    FlushLiteral();
+                    parts.AddRange(DecomposeWord(raw[i..end]));
+                    i = end;
+                    continue;
+                }
+            }
+
+            literal.Append(raw[i]);
+            i++;
+        }
+
+        FlushLiteral();
+        return parts.ToImmutable();
+    }
+
+    /// <summary>
+    /// POSIX bracket classes (<c>[[:digit:]]</c>) are valid ERE but NOT valid .NET regex —
+    /// .NET would read <c>[[:digit:]]</c> as the character set <c>[:digt</c>. Rewrite the
+    /// inner <c>[:name:]</c> to its .NET equivalent, leaving the surrounding bracket
+    /// expression intact so <c>[^[:space:]]</c> and <c>[[:digit:]_-]</c> still work.
+    /// Unknown class names are left alone rather than guessed at.
+    /// </summary>
+    internal static string TranslatePosixClassesForRegex(string s)
+    {
+        if (!s.Contains("[:", StringComparison.Ordinal)) return s;
+
+        var sb = new System.Text.StringBuilder(s.Length);
+        for (int i = 0; i < s.Length;)
+        {
+            if (s[i] == '[' && i + 1 < s.Length && s[i + 1] == ':')
+            {
+                int close = s.IndexOf(":]", i + 2, StringComparison.Ordinal);
+                if (close > 0)
+                {
+                    string? repl = s[(i + 2)..close] switch
+                    {
+                        "alnum" => "a-zA-Z0-9",
+                        "alpha" => "a-zA-Z",
+                        "blank" => @" \t",
+                        "cntrl" => @"\x00-\x1f\x7f",
+                        "digit" => "0-9",
+                        "graph" => @"\x21-\x7e",
+                        "lower" => "a-z",
+                        "print" => @"\x20-\x7e",
+                        "punct" => @"\p{P}\p{S}",
+                        "space" => @"\s",
+                        "upper" => "A-Z",
+                        "word" => @"\w",
+                        "xdigit" => "A-Fa-f0-9",
+                        _ => null,
+                    };
+                    if (repl is not null)
+                    {
+                        sb.Append(repl);
+                        i = close + 2;
+                        continue;
+                    }
+                }
+            }
+
+            sb.Append(s[i]);
+            i++;
+        }
+
+        return sb.ToString();
+    }
+
+    /// <summary>A <c>$</c> starts an expansion only before <c>{</c>, <c>(</c>, or a name
+    /// character. A bare <c>$</c> (as in the anchor <c>(\s|$)</c>) is literal regex.</summary>
+    private static bool IsExpansionStart(char c) =>
+        c == '{' || c == '(' || c == '_' || char.IsLetter(c);
+
+    /// <summary>
+    /// Exclusive end index of the expansion starting at <paramref name="dollar"/>.
+    /// Brace/paren forms are matched with a depth counter; a bare <c>$name</c> runs to
+    /// the end of the name. Returns <paramref name="dollar"/> when unterminated, so the
+    /// caller falls back to treating the <c>$</c> as literal regex text.
+    /// </summary>
+    private static int FindExpansionEnd(string s, int dollar)
+    {
+        char open = s[dollar + 1];
+        if (open is '{' or '(')
+        {
+            char close = open == '{' ? '}' : ')';
+            int depth = 0;
+            for (int i = dollar + 1; i < s.Length; i++)
+            {
+                if (s[i] == open) depth++;
+                else if (s[i] == close && --depth == 0) return i + 1;
+            }
+            return dollar; // unterminated — treat as literal
+        }
+
+        int j = dollar + 1;
+        while (j < s.Length && (s[j] == '_' || char.IsLetterOrDigit(s[j]))) j++;
+        return j;
     }
 
     private static bool IsTestOperatorToken(BashTokenKind kind) =>
