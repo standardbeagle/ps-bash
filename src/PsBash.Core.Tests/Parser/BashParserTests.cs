@@ -1250,6 +1250,59 @@ public class BashParserTests
     }
 
     [Fact]
+    public void Parse_CaseEmptyArmBody_DoesNotSwallowTerminator()
+    {
+        // An empty arm body (`x) ;;`) is legal bash (verified against the oracle:
+        // `case x in x) ;; *) echo d ;; esac` runs clean, rc=0). ParseCaseArm used
+        // to call SkipTerminators() after `)`, which ate the `;;`; the parser then
+        // read the NEXT arm's pattern as a command word and died on its `)`.
+        // This shape is on line 30 of the Claude Code Bash-tool shell snapshot
+        // (`--signal=*|-e|--echo) ;;`), so it broke EVERY Bash-tool command.
+        var result = Parse("case $a in x) ;; *) echo d ;; esac");
+
+        var c = Assert.IsType<Command.Case>(result);
+        Assert.Equal(2, c.Arms.Length);
+        Assert.Equal("x", c.Arms[0].Patterns[0]);
+        Assert.Equal("*", c.Arms[1].Patterns[0]);
+    }
+
+    [Fact]
+    public void Parse_CaseEmptyArmBodies_MultipleConsecutive_AllArmsParsed()
+    {
+        var result = Parse("case $a in a) ;; b) ;; c) ;; *) echo d ;; esac");
+
+        var c = Assert.IsType<Command.Case>(result);
+        Assert.Equal(4, c.Arms.Length);
+        Assert.Equal("a", c.Arms[0].Patterns[0]);
+        Assert.Equal("b", c.Arms[1].Patterns[0]);
+        Assert.Equal("c", c.Arms[2].Patterns[0]);
+        Assert.Equal("*", c.Arms[3].Patterns[0]);
+    }
+
+    [Fact]
+    public void Parse_CaseEmptyArmBody_BracketGlobPattern_ParsesNextArm()
+    {
+        // The exact snapshot shape: a bracket-class pattern arm with an empty body
+        // followed by more arms.
+        var result = Parse(
+            "case \"$a\" in --signal=*|-e|--echo) ;; -[0-9]*) ;; *) echo p ;; esac");
+
+        var c = Assert.IsType<Command.Case>(result);
+        Assert.Equal(3, c.Arms.Length);
+        Assert.Equal(new[] { "--signal=*", "-e", "--echo" }, c.Arms[0].Patterns);
+        Assert.Equal("-[0-9]*", c.Arms[1].Patterns[0]);
+    }
+
+    [Fact]
+    public void Parse_CaseEmptyPattern_Throws()
+    {
+        // `case x in ) esac` is a bash syntax error; an empty pattern must not
+        // become a silently-match-nothing arm.
+        Assert.Throws<ParseException>(() => Parse("case x in ) esac"));
+        Assert.Throws<ParseException>(() => Parse("case x in a|) echo a;; esac"));
+    }
+
+    [Fact]
     public void Parse_ForArith_InnerParensInClause_NotTruncated()
     {
         // H2: the old per-token collector stopped at the FIRST `)`, truncating

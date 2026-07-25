@@ -757,6 +757,7 @@ public sealed partial class BashParser
         if (Peek().Kind == BashTokenKind.LParen)
             Advance();
 
+        var patternPos = Peek().Position;
         patterns.Add(ConsumeCasePattern());
 
         while (Peek().Kind == BashTokenKind.Pipe)
@@ -765,13 +766,27 @@ public sealed partial class BashParser
             patterns.Add(ConsumeCasePattern());
         }
 
+        // An arm with no pattern text (`case x in ) esac`, or an empty alternative
+        // `a|)`) is a bash syntax error. Reject it here: an empty pattern would
+        // otherwise silently become a match-nothing arm.
+        foreach (var p in patterns)
+        {
+            if (p.Length == 0)
+                throw MakeError("Empty case pattern before ')'", patternPos, "ParseCaseArm");
+        }
+
         if (Peek().Kind != BashTokenKind.RParen)
             throw MakeError(
                 $"Expected ')' after case pattern but got '{Peek().Value}' ({Peek().Kind})",
                 Peek().Position, "ParseCaseArm");
         Advance(); // consume )
 
-        SkipTerminators();
+        // Skip NEWLINES only — never semicolons. An empty arm body (`x) ;;`) is
+        // legal bash, and SkipTerminators() would eat the `;;` that terminates
+        // it, making the parser read the NEXT arm's pattern as a command word
+        // and die on its `)`. A lone `;` right after `)` is a bash syntax error,
+        // so there is nothing else here worth skipping.
+        SkipNewlines();
 
         // Parse body commands until a terminator (;; / ;& / ;;&) or esac.
         var body = ParseCaseBody();

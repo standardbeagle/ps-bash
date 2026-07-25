@@ -147,4 +147,52 @@ public class ShellSnapshotShimTests
         Assert.DoesNotContain("\"\"$@", result);
         Assert.DoesNotContain("$@", result);
     }
+
+    // ---- RC4: an EMPTY case-arm body must not swallow its own `;;` ----
+    //
+    // The snapshot's pkill guard (added 2026-07) classifies pkill flags with a
+    // `case` whose ignore-arms have empty bodies (`--signal=*|-e|--echo) ;;`).
+    // ParseCaseArm called SkipTerminators() after `)`, which ate the `;;`; the
+    // parser then read the NEXT arm's pattern as a command word and threw
+    // "Unexpected token ')' (RParen)" — on EVERY Bash-tool command, since the
+    // snapshot is sourced per invocation.
+
+    [Fact]
+    public void Transpile_PkillGuardFunction_ParsesAndEmitsAllCaseArms()
+    {
+        const string shim = """
+            function pkill {
+              if [ -n "${CLAUDE_PID:-}" ] && [ -r "/proc/${CLAUDE_PID}/comm" ]; then
+                local _cc_skip="" _cc_a
+                local -a _cc_probe=()
+                for _cc_a in ${1+"$@"}; do
+                  if [ -n "$_cc_skip" ]; then _cc_skip=""; continue; fi
+                  case "$_cc_a" in
+                    --signal) _cc_skip=1 ;;
+                    --signal=*|-e|--echo) ;;
+                    -[0-9]*) ;;
+                    -[PUGOF]?*) _cc_probe+=("$_cc_a") ;;
+                    *) _cc_probe+=("$_cc_a") ;;
+                  esac
+                done
+              fi
+              command pkill ${1+"$@"}
+            }
+            """;
+
+        // Must not throw a bash ParseException, and must keep every arm: the
+        // bug silently consumed the terminator rather than dropping an arm, so
+        // assert the last arm's action survived into the emitted PowerShell.
+        var result = BashTranspiler.Transpile(shim);
+        Assert.Contains("_cc_probe", result);
+        Assert.Contains("_cc_skip", result);
+    }
+
+    [Fact]
+    public void Transpile_CaseWithEmptyArmBody_FollowedByAnotherArm_DoesNotThrow()
+    {
+        // Minimal reduction of the snapshot failure.
+        var result = BashTranspiler.Transpile("case $a in x) ;; *) echo d ;; esac");
+        Assert.Contains("echo", result, System.StringComparison.OrdinalIgnoreCase);
+    }
 }
