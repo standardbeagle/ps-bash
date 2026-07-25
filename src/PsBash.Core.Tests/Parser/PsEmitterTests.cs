@@ -1767,6 +1767,89 @@ public class PsEmitterTests
         Assert.Contains("-match '", result);
     }
 
+    // ── here-string on a COMPOUND command, `for` single item, multi-var `read` ──
+
+    [Fact]
+    public void Transpile_WhileReadWithHereString_FeedsTheLoop()
+    {
+        // `done <<< "$x"` — `<<<` was not a compound redirect op, so the operator and
+        // its word were never consumed: the here-string was DROPPED and the loop read
+        // nothing. In some surroundings the stray tokens also emitted an empty
+        // PowerShell pipe element, breaking the parse of the whole file.
+        var result = PsEmitter.Transpile(
+            "while read -r l; do echo \"$l\"; done <<< \"$output\"");
+
+        Assert.Contains("Emit-BashLine", result);
+        Assert.Contains("env:output", result);
+        Assert.DoesNotContain("| ;", result);
+    }
+
+    [Fact]
+    public void Transpile_ForLoopWithHereString_FeedsTheLoop()
+    {
+        var result = PsEmitter.Transpile("for x in a; do echo $x; done <<< \"y\"");
+
+        Assert.Contains("Emit-BashLine", result);
+    }
+
+    [Theory]
+    // The bug: a ONE-item list emitted `foreach ($x in one)`, where PowerShell
+    // treats the bare word as a command to invoke ("one: command not found").
+    // The two-item form was correctly quoted, which is what hid it.
+    [InlineData("for x in one; do echo $x; done", "foreach ($x in 'one')")]
+    [InlineData("for x in one two; do echo $x; done", "foreach ($x in 'one','two')")]
+    public void Transpile_ForInList_QuotesBareLiterals(string bash, string expected)
+    {
+        Assert.Contains(expected, PsEmitter.Transpile(bash));
+    }
+
+    [Theory]
+    // Anything EmitWord already rendered as a PowerShell value must pass through.
+    [InlineData("for x in \"$list\"; do echo $x; done", "\"$env:list\"")]
+    [InlineData("for x in $list; do echo $x; done", "$env:list")]
+    public void Transpile_ForInSingleItem_LeavesPowerShellValuesUnquoted(
+        string bash, string expected)
+    {
+        Assert.Contains($"foreach ($x in {expected})", PsEmitter.Transpile(bash));
+    }
+
+    [Fact]
+    public void Transpile_WhileReadMultipleVars_BindsEveryVariable()
+    {
+        // `read a b` splits the line across BOTH: a=first field, b=the remainder.
+        // Only the LAST name used to be bound, so `$a` stayed unset and `$b` got the
+        // whole line. Oracle: `read a b` over "alpha beta gamma" -> a=alpha,
+        // b="beta gamma".
+        var result = PsEmitter.Transpile("while read -r a b; do echo \"$a\"; done < f");
+
+        Assert.Contains("${a} =", result);
+        Assert.Contains("${b} =", result);
+        // The limit argument is what gives the LAST variable the remainder.
+        Assert.Contains("-split '\\s+', 2", result);
+    }
+
+    [Fact]
+    public void Transpile_WhileReadMultipleVars_UsesArraySubexpressionNotDollar()
+    {
+        // `$( … )` collapses a ONE-element split to a scalar string, and `$str[0]`
+        // is then its first CHARACTER — a single-field line bound `a` to "s"
+        // instead of "solo". Must be the array subexpression `@( … )`.
+        var result = PsEmitter.Transpile("while read -r a b; do echo \"$a\"; done < f");
+
+        Assert.Contains("$__psbash_readf = @(", result);
+        Assert.DoesNotContain("$__psbash_readf = $(", result);
+    }
+
+    [Fact]
+    public void Transpile_WhileReadSingleVar_KeepsTheDirectBinding()
+    {
+        // Guard the narrow claim: the one-variable form is unchanged (no split).
+        var result = PsEmitter.Transpile("while read -r l; do echo \"$l\"; done < f");
+
+        Assert.Contains("${l} = $_", result);
+        Assert.DoesNotContain("__psbash_readf", result);
+    }
+
     [Fact]
     public void Transpile_ExtendedGlob_EmitsLike()
     {

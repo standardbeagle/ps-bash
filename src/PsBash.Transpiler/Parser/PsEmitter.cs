@@ -496,7 +496,13 @@ public static class PsEmitter
                 // Resolve-BashGlob expands matches but falls back to the literal word
                 // when there is no match, matching bash.
                 return $"(Resolve-BashGlob {single})";
-            return single;
+            // Quote a BARE literal exactly like the multi-item path does. Without this
+            // `for x in one` emitted `foreach ($x in one)`, where PowerShell treats the
+            // bare word as a COMMAND to invoke — "one: command not found" — while the
+            // two-item form `for x in one two` was correctly quoted. FormatForItem
+            // leaves anything EmitWord already rendered as a PS value ($x, "a", (…),
+            // @(…), a number) untouched.
+            return FormatForItem(single);
         }
 
         // Check for glob patterns
@@ -901,7 +907,7 @@ public static class PsEmitter
         var tailRedirects = new List<Redirect>(subshell.Redirects.Length);
         foreach (var redirect in subshell.Redirects)
         {
-            if (redirect.Fd == 0 && redirect.Op == "<")
+            if (redirect.Fd == 0 && redirect.Op is "<" or "<<<")
                 inputRedirect = redirect;
             else
                 tailRedirects.Add(redirect);
@@ -909,7 +915,11 @@ public static class PsEmitter
         AppendRedirectTail(sb, tailRedirects);
 
         string result = sb.ToString();
-        if (inputRedirect is not null)
+        if (inputRedirect is { Here: { } subshellHere })
+        {
+            result = $"{EmitHereDocLiteral(subshellHere)} | Emit-BashLine | & {{ {result} }}";
+        }
+        else if (inputRedirect is not null)
         {
             var inTarget = TransformRedirectTarget(EmitWord(inputRedirect.Target));
             // /dev/null maps to $null; `Get-Content $null` errors, and empty stdin
@@ -1059,38 +1069,40 @@ public static class PsEmitter
         return EmitCondition(cond);
     }
 
-    private static bool IsWhileRead(Command cond, out string varName)
+    private static bool IsWhileRead(Command cond, out List<string> varNames)
     {
-        varName = "";
+        varNames = new List<string>();
         if (cond is not Command.Simple simple)
             return false;
         if (simple.Words.Length < 2)
             return false;
         if (GetLiteralValue(simple.Words[0]) != "read")
             return false;
-        // Accept: read VAR  or  read -r VAR  or  read -r -a VAR etc.
-        // The variable name is the last non-flag word.
-        string? name = null;
+        // Accept: read VAR  or  read -r VAR  or  read -r a b c.
+        // EVERY non-flag word is a target variable — `read a b` splits the line
+        // across both. Keeping only the last one (the old behavior) left `$a`
+        // unset and dumped the whole line into `$b`.
         for (int i = 1; i < simple.Words.Length; i++)
         {
             var val = GetLiteralValue(simple.Words[i]);
             if (val is not null && !val.StartsWith('-'))
-                name = val;
+                varNames.Add(val);
         }
-        if (name is null)
-            return false;
-        varName = name;
-        return true;
+        return varNames.Count > 0;
     }
 
-    private static string EmitWhileRead(string varName, Command body)
+    private static string EmitWhileRead(List<string> varNames, Command body)
     {
-        // The `read` variable is the loop binding for this construct: register
-        // it as a loop var so the body emits it bare ($line, not $env:line) and
-        // RC-7 word-splitting does not splat it (a `read` var holds a single
-        // bound line, exactly like a for-loop variable).
+        // The `read` variables are the loop bindings for this construct: register
+        // them as loop vars so the body emits them bare ($line, not $env:line) and
+        // RC-7 word-splitting does not splat them (a `read` var holds a single
+        // bound field, exactly like a for-loop variable).
         var vars = _loopVars ??= new HashSet<string>();
-        bool added = vars.Add(varName);
+        var added = new List<string>(varNames.Count);
+        foreach (var name in varNames)
+        {
+            if (vars.Add(name)) added.Add(name);
+        }
 
         string bodyText;
         try
@@ -1099,8 +1111,8 @@ public static class PsEmitter
         }
         finally
         {
-            if (added)
-                vars.Remove(varName);
+            foreach (var name in added)
+                vars.Remove(name);
         }
 
         // Bind the read variable to the current line with a REAL PowerShell
@@ -1114,7 +1126,38 @@ public static class PsEmitter
         // drained explicitly via `$input`. Without it the chain got zero input and the leading
         // ForEach-Object ran once with a null `$_`, hitting "Cannot index into a null array" on the
         // property probe. The `$null -ne $_` guard makes that probe null-safe regardless.
-        return $"$input | ForEach-Object {{ {PsBuild.NullSafeBashText} }} | ForEach-Object {{ ($_ -replace \"`n$\",\"\") -split \"`n\" }} | ForEach-Object {{ ${{{varName}}} = $_; {bodyText} }}";
+        string bind = varNames.Count == 1
+            ? $"${{{varNames[0]}}} = $_; "
+            : BuildReadFieldBindings(varNames);
+
+        return $"$input | ForEach-Object {{ {PsBuild.NullSafeBashText} }} | ForEach-Object {{ ($_ -replace \"`n$\",\"\") -split \"`n\" }} | ForEach-Object {{ {bind}{bodyText} }}";
+    }
+
+    /// <summary>
+    /// Bind one input line across the several variables of `read a b c`. Bash splits
+    /// the line on IFS after stripping leading/trailing whitespace, gives one field to
+    /// each variable in turn, and the LAST variable absorbs everything remaining
+    /// (separators included). Variables past the end of the field list get "".
+    /// `-split '\s+', N` reproduces exactly that remainder rule with its limit
+    /// argument; the pre-trim is what stops a leading space from producing a spurious
+    /// empty first field.
+    /// </summary>
+    private static string BuildReadFieldBindings(List<string> varNames)
+    {
+        var sb = new StringBuilder();
+        sb.Append("$__psbash_readline = ($_ -replace '^\\s+|\\s+$',''); ");
+        // `@(...)`, never `$(...)`: a subexpression collapses a ONE-element result to a
+        // scalar string, and `$str[0]` is then its first CHARACTER — a line with a
+        // single field bound `a` to "s" instead of "solo". The array subexpression also
+        // keeps the empty branch an empty array rather than $null.
+        sb.Append("$__psbash_readf = @(if ($__psbash_readline -eq '') { @() } else { ");
+        sb.Append($"$__psbash_readline -split '\\s+', {varNames.Count} }}); ");
+        for (int i = 0; i < varNames.Count; i++)
+        {
+            sb.Append($"${{{varNames[i]}}} = $(if ($__psbash_readf.Count -gt {i}) ");
+            sb.Append($"{{ $__psbash_readf[{i}] }} else {{ '' }}); ");
+        }
+        return sb.ToString();
     }
 
     private static string? ExtractArithVar(ArithmeticSyntax? init) =>
@@ -1815,31 +1858,40 @@ public static class PsEmitter
         }
 
         // When multiple heredocs exist, use the last one for stdin (bash behavior).
-        var hereDoc = cmd.HereDocs[^1];
         var innerCmd = new Command.Simple(cmd.Words, cmd.EnvPairs, cmd.Redirects);
+        string cmdText = EmitSimple(innerCmd);
+        result = $"{EmitHereDocLiteral(cmd.HereDocs[^1])} | Emit-BashLine | {cmdText}";
+        return true;
+    }
+
+    /// <summary>
+    /// Render a here-doc / here-string body as a PowerShell string literal, ready to be
+    /// piped through <c>Emit-BashLine</c>. Shared by the simple-command heredoc path and
+    /// the compound-command <c>done &lt;&lt;&lt; "$x"</c> path so both agree on tab
+    /// stripping, variable translation, and terminator-collision escaping.
+    /// </summary>
+    private static string EmitHereDocLiteral(HereDoc hereDoc)
+    {
         string body = hereDoc.Body;
         // <<-EOF: strip leading tabs from each line (bash semantics).
         if (hereDoc.StripTabs)
             body = StripLeadingTabs(body);
         if (hereDoc.Expand)
             body = TranslateHereDocVars(body);
+
         // A PowerShell here-string ends at the first line that begins with its
-        // terminator (`"@` for @"..."@, `'@` for @'...'@). A heredoc body
-        // containing such a line would close the string early — bash prints
-        // the line literally, ps-bash threw "missing terminator". When that
-        // collision is present fall back to an ordinary quoted string (whose
-        // value is identical to the here-string content); otherwise keep the
-        // here-string, which is the readable common-case form.
-        string hereString = HereStringWouldBreak(body, hereDoc.Expand)
+        // terminator (`"@` for @"..."@, `'@` for @'...'@). A heredoc body containing
+        // such a line would close the string early — bash prints the line literally,
+        // ps-bash threw "missing terminator". When that collision is present fall back
+        // to an ordinary quoted string (whose value is identical to the here-string
+        // content); otherwise keep the here-string, the readable common-case form.
+        return HereStringWouldBreak(body, hereDoc.Expand)
             ? (hereDoc.Expand
                 ? "\"" + EscapeForDoubleQuotedHereDocBody(body) + "\""
                 : PsBuild.SingleQuote(body))
             : (hereDoc.Expand
                 ? $"@\"\n{body}\n\"@"
                 : $"@'\n{body}\n'@");
-        string cmdText = EmitSimple(innerCmd);
-        result = $"{hereString} | Emit-BashLine | {cmdText}";
-        return true;
     }
 
     // Stdout-to-stderr redirects (>&2 or 1>&2). REFACTOR-4: route through
@@ -4193,8 +4245,10 @@ public static class PsEmitter
         var tailRedirects = new List<Redirect>(redirects.Length);
         foreach (var redirect in redirects)
         {
-            if (redirect.Fd == 0 && redirect.Op == "<")
-                inputRedirect = redirect; // last input redirect wins (bash)
+            // `<` file and `<<<` here-string both supply the group's stdin; the last
+            // one wins (bash).
+            if (redirect.Fd == 0 && redirect.Op is "<" or "<<<")
+                inputRedirect = redirect;
             else
                 tailRedirects.Add(redirect);
         }
@@ -4205,7 +4259,11 @@ public static class PsEmitter
         AppendRedirectTail(sb, tailRedirects);
         string result = sb.ToString();
 
-        if (inputRedirect is not null)
+        if (inputRedirect is { Here: { } here })
+        {
+            result = $"{EmitHereDocLiteral(here)} | Emit-BashLine | {result}";
+        }
+        else if (inputRedirect is not null)
         {
             var inTarget = TransformRedirectTarget(EmitWord(inputRedirect.Target));
             // /dev/null maps to $null; `Get-Content $null` errors, and empty stdin is the

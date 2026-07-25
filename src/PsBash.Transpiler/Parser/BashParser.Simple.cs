@@ -137,32 +137,7 @@ public sealed partial class BashParser
             }
             else if (kind == BashTokenKind.TLess)
             {
-                // Here-string: <<< word — the word becomes the body directly.
-                Advance(); // consume <<<
-                var wordToken = Advance();
-                string raw = wordToken.Value;
-                // Strip surrounding quotes from the here-string word. Require at
-                // least two chars so a lone quote (`<<< '`) — where StartsWith and
-                // EndsWith both see the SAME single char — is not sliced to a
-                // start-past-end range (raw[1..^1] on length 1 threw
-                // ArgumentOutOfRangeException).
-                bool expand = true;
-                if (raw.Length >= 2
-                    && ((raw.StartsWith('\'') && raw.EndsWith('\''))
-                        || (raw.StartsWith('"') && raw.EndsWith('"'))))
-                {
-                    expand = raw[0] == '"';
-                    raw = raw[1..^1];
-                }
-                // bash: a here-string supplies the word PLUS a trailing
-                // newline to the command's stdin. `cat <<< "hello"` prints
-                // "hello\n", not "hello". The emitter wraps the body in a
-                // here-string @"..."@ which itself swallows the @-line
-                // newlines, so we have to encode the trailing newline by
-                // appending it to the body value here.
-                if (!raw.EndsWith('\n'))
-                    raw += "\n";
-                hereDocs.Add(new HereDoc(raw, expand, StripTabs: false));
+                hereDocs.Add(ParseHereString());
             }
             else if (kind is BashTokenKind.DLess or BashTokenKind.DLessDash)
             {
@@ -319,6 +294,16 @@ public sealed partial class BashParser
                 Advance();
                 continue;
             }
+
+            // The operand must be a real bash NAME. `export PATH `envsubst -v "$1"``
+            // (gettext.sh) exports whatever names the command prints — a dynamic form
+            // with no static equivalent. Taking the raw token as a name emitted
+            // ``$env:`envsubst -v "$1"` = ...``, which is not parseable PowerShell, so
+            // ONE such line broke the whole file. Decline instead and let the caller
+            // rewind to the general command path, where it fails loudly at runtime
+            // rather than silently poisoning the transpile.
+            if (!IsValidVariableName(value))
+                return null;
 
             Advance();
             pairs.Add(new Assignment(value, AssignOp.Equal, null));
@@ -519,9 +504,44 @@ public sealed partial class BashParser
     /// the simple-command loop, not by <see cref="ParseRedirect"/>, so a compound heredoc
     /// stays out of scope here rather than being mis-parsed as a plain redirect target.
     /// </summary>
+    /// <summary>
+    /// Consume <c>&lt;&lt;&lt; word</c> and turn the word into a here-doc body. Shared by
+    /// the simple-command path and the compound-command trailing-redirect path so both
+    /// agree on quote stripping, expansion, and the trailing newline.
+    /// </summary>
+    private HereDoc ParseHereString()
+    {
+        Advance(); // consume <<<
+        var wordToken = Advance();
+        string raw = wordToken.Value;
+
+        // Strip surrounding quotes from the here-string word. Require at least two
+        // chars so a lone quote (`<<< '`) — where StartsWith and EndsWith both see the
+        // SAME single char — is not sliced to a start-past-end range (raw[1..^1] on
+        // length 1 threw ArgumentOutOfRangeException).
+        bool expand = true;
+        if (raw.Length >= 2
+            && ((raw.StartsWith('\'') && raw.EndsWith('\''))
+                || (raw.StartsWith('"') && raw.EndsWith('"'))))
+        {
+            expand = raw[0] == '"';
+            raw = raw[1..^1];
+        }
+
+        // bash: a here-string supplies the word PLUS a trailing newline to the
+        // command's stdin. `cat <<< "hello"` prints "hello\n", not "hello". The emitter
+        // wraps the body in a here-string @"..."@ which itself swallows the @-line
+        // newlines, so encode the trailing newline into the body value here.
+        if (!raw.EndsWith('\n'))
+            raw += "\n";
+
+        return new HereDoc(raw, expand, StripTabs: false);
+    }
+
     private ImmutableArray<Redirect> ParseTrailingRedirects()
     {
         if (!IsNamedCompoundRedirect() && Peek().Kind != BashTokenKind.IoNumber
+            && Peek().Kind != BashTokenKind.TLess
             && !IsCompoundRedirectOp(Peek().Kind))
             return ImmutableArray<Redirect>.Empty;
 
@@ -532,6 +552,18 @@ public sealed partial class BashParser
             {
                 var fdVar = Advance().Value[1..^1];
                 redirects.Add(ParseRedirect(fdVar));
+            }
+            else if (Peek().Kind == BashTokenKind.TLess)
+            {
+                // `done <<< "$output"` — a here-string feeding a whole loop. Before
+                // this, `<<<` was not a compound redirect op at all, so the operator
+                // and its word were left unconsumed: the here-string was DROPPED and
+                // the loop silently read nothing (and in some surroundings the stray
+                // tokens emitted an empty PowerShell pipe element, breaking the parse
+                // of the entire file).
+                var here = ParseHereString();
+                redirects.Add(new Redirect("<<<", 0, new CompoundWord(
+                    ImmutableArray<WordPart>.Empty), FdVar: null, Here: here));
             }
             else if (Peek().Kind == BashTokenKind.IoNumber || IsCompoundRedirectOp(Peek().Kind))
             {

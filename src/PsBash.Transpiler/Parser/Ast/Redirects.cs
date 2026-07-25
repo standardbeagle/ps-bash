@@ -4,7 +4,18 @@ namespace PsBash.Core.Parser.Ast;
 /// A redirect operation, e.g. <c>&gt;file</c>, <c>2&gt;&amp;1</c>.
 /// Modeled after oils syntax.asdl Redir.
 /// </summary>
-public sealed record Redirect(string Op, int Fd, CompoundWord Target, string? FdVar = null) : BashNode;
+/// <param name="Here">
+/// Set only for a here-string (<c>&lt;&lt;&lt;</c>) attached to a COMPOUND command
+/// (<c>done &lt;&lt;&lt; "$x"</c>). A simple command carries its here-strings in
+/// <c>Command.Simple.HereDocs</c> instead; compound commands have no such list, so the
+/// already-parsed body rides along on the redirect. <c>Target</c> is the raw word.
+/// </param>
+public sealed record Redirect(
+    string Op,
+    int Fd,
+    CompoundWord Target,
+    string? FdVar = null,
+    HereDoc? Here = null) : BashNode;
 
 /// <summary>
 /// A here-document redirect, e.g. <c>&lt;&lt;EOF\ntext\nEOF</c>.

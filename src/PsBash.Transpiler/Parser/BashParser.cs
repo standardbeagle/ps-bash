@@ -732,7 +732,7 @@ public sealed partial class BashParser
 
     // A bash variable name: [A-Za-z_][A-Za-z0-9_]*. Used to reject `for $i` /
     // `for 1` before they reach the emitter as a broken foreach variable.
-    private static bool IsValidLoopVarName(string s)
+    private static bool IsValidVariableName(string s)
     {
         if (string.IsNullOrEmpty(s)) return false;
         if (!(char.IsLetter(s[0]) || s[0] == '_')) return false;
@@ -757,7 +757,7 @@ public sealed partial class BashParser
         // The loop variable must be a bare identifier. `for $i in ...` is a bash
         // syntax error; without this guard the `$i` word passed straight through
         // and the emitter produced the broken `foreach ($$i ...)`.
-        if (!IsValidLoopVarName(varName))
+        if (!IsValidVariableName(varName))
             throw MakeError($"`for': `{varName}' is not a valid variable name", varToken.Position, "for");
 
         var list = ImmutableArray.CreateBuilder<CompoundWord>();
