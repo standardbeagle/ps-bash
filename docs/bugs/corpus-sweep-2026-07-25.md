@@ -70,11 +70,24 @@ Still failing in the sweep; each needs its own diagnosis.
 
 ## Test-suite observations
 
-- `PromptRenderingIntegrationTests.CtrlC_MidInput_ShellRemainsAlive` timed out
-  (8 s prompt deadline, 0 chars received) during a run competing with 8 concurrent
-  SDK hosts, and passed both isolated and in a quiet full run. Load-sensitive PTY
-  timing, not a product break — but it is exactly the flake qa-rubric Directive 2
-  says to quarantine rather than ignore if it recurs.
+- **Three load-sensitive flakes**, each observed failing exactly once across five
+  full runs and each passing when re-run in isolation immediately afterwards:
+  - `PromptRenderingIntegrationTests.CtrlC_MidInput_ShellRemainsAlive` — 8 s
+    prompt deadline, 0 chars received.
+  - `WorkerPoolTests.Dispose_DisposesIdleWorkers` — "expected idle workers
+    disposed, got 2" (async disposal not yet observed).
+  - `CommandAssistProviderTests.GenerateAsync_CallerCancellationKillsProviderProcess`
+    — process-kill timing.
+
+  None is a product break, but qa-rubric Directive 2 is explicit that one flake
+  means quarantine-and-fix, not ignore. All three assert on a *deadline* rather
+  than on an observable event, which is the shape Directive 6 forbids; they need
+  a wait-for-condition with a generous bound instead.
+
+- `ProgramEndToEndTests.HangingCommand_TimesOutWithin35Seconds_AndKillsProcessTree`
+  is not isolated: it snapshots EVERY `pwsh` process on the machine and treats any
+  new one as leaked, so any concurrent test project or developer shell fails it.
+  It should scope to descendants of the process it spawned.
 - Running `PsBash.Host.Tests` immediately after another suite can hang the test
   harness: a persisted `ps-bash-host` inherits the runner's redirected stdout, so
   the parent never sees EOF (the `daemon-c-pipe-inheritance-hang` class). Killing
