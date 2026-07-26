@@ -108,10 +108,16 @@ public class InteractiveShellHarnessTests
 
         await using var harness = await StartAsync();
 
-        // Use printenv to read the HOME env var directly — this avoids the
-        // PowerShell $HOME automatic variable (which reflects the Windows user
-        // profile regardless of the HOME env var we inject).
-        await harness.SendLineAsync("printenv HOME");
+        // Read the HOME env var directly. NOT via `printenv`: on Windows with Git
+        // Bash's usr/bin on PATH that name resolves to the MSYS printenv.exe, whose
+        // runtime rewrites Windows paths into its POSIX mount table on the way out
+        // (`C:\Users\…\AppData\Local\Temp\x` -> `/tmp/x`) — so the test failed on a
+        // path the shell never produced. NOT via `$HOME` either: that is the
+        // PowerShell automatic variable, which reflects the Windows user profile
+        // regardless of the HOME env var we inject.
+        // `Invoke-BashEnv` by its cmdlet name is unambiguous: no PATH lookup, so no
+        // MSYS binary can intercept it.
+        await harness.SendLineAsync("Invoke-BashEnv HOME");
         await harness.WaitForPromptAsync();
 
         var output = harness.ReadSinceLastPrompt()
@@ -132,10 +138,14 @@ public class InteractiveShellHarnessTests
             string.Equals(reportedHome, realHome, StringComparison.OrdinalIgnoreCase),
             $"Expected HOME to differ from real user home ({realHome}), but got: {reportedHome}");
 
-        // It must be under the system temp path (the dir we created for this harness).
+        // It must be the isolated dir this harness created. Compare against the
+        // harness's OWN TempHome rather than re-deriving Path.GetTempPath(): that
+        // reads TMP/TEMP at call time, and under Git Bash on Windows (which exports
+        // TMPDIR=/tmp — and scripts/test.sh IS bash) the two reads disagree, failing
+        // the test for a reason that has nothing to do with HOME isolation.
         Assert.True(
-            reportedHome!.StartsWith(Path.GetTempPath(), StringComparison.OrdinalIgnoreCase),
-            $"Expected HOME under temp path ({Path.GetTempPath()}), got: {reportedHome}");
+            reportedHome!.StartsWith(harness.TempHome, StringComparison.OrdinalIgnoreCase),
+            $"Expected HOME under the harness temp home ({harness.TempHome}), got: {reportedHome}");
     }
 
     // ── Directive 6 env var verification ────────────────────────────────────
