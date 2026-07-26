@@ -3419,67 +3419,129 @@ public static class PsEmitter
     private static string EmitArithmeticInvocation(ArithmeticSyntax syntax)
     {
         string expr = syntax.Source.Trim();
-        string argument = ReferencesPositional(expr)
-            ? EmitPositionalArithArgument(expr)
-            : PsBuild.SingleQuote(expr);
+        var fragments = BuildArithFragments(expr);
+        string argument = fragments is null
+            ? PsBuild.SingleQuote(expr)
+            : $"('' + {string.Join(" + ", fragments)})";
         return $"Invoke-BashArith {argument}";
     }
 
     /// <summary>
-    /// True when an arithmetic expression references a positional or special
-    /// parameter (<c>$1</c>..<c>$9</c>, <c>$#</c>, <c>$@</c>, <c>$*</c>,
-    /// <c>$?</c>, <c>$$</c>, <c>$!</c>) — a <c>$</c> immediately followed by a
-    /// digit or special-parameter sigil. These are substituted with their
-    /// runtime values by <see cref="EmitPositionalArithArgument"/> before the string is
-    /// handed to the bash-arithmetic evaluator.
+    /// Split an arithmetic expression into PowerShell concatenation fragments, replacing
+    /// every span the evaluator cannot resolve itself with a subexpression yielding its
+    /// runtime value. Two kinds of span qualify:
+    /// <list type="bullet">
+    /// <item>positional / special parameters (<c>$1</c>, <c>$#</c>, <c>${?}</c>, …) — see
+    /// <see cref="PositionalRefExpr"/>;</item>
+    /// <item>command substitutions (<c>$(date +%s)</c>, <c>`date +%s`</c>) — bash expands
+    /// them to text and then evaluates, so the command must run BEFORE
+    /// <c>Invoke-BashArith</c> sees the string.</item>
+    /// </list>
+    /// Everything else (ordinary variables, numbers, operators) is preserved verbatim as a
+    /// single-quoted literal for the evaluator to resolve. Returns <c>null</c> when no span
+    /// needs substituting, so the common case still emits one plain quoted literal.
     /// </summary>
-    private static bool ReferencesPositional(string expr) =>
-        ArithmeticParameterRegex().IsMatch(expr);
+    private static List<string>? BuildArithFragments(string expr)
+    {
+        List<string>? parts = null;
+        int last = 0;
+        for (int i = 0; i < expr.Length; i++)
+        {
+            int spanEnd;
+            string replacement;
+            char c = expr[i];
 
-    private static System.Text.RegularExpressions.Regex ArithmeticParameterRegex() =>
-        new(@"\$\{(?<braced>[0-9]+|[@#*?$!])\}|\$(?<plain>[0-9]|[@#*?$!])");
+            if (c == '`')
+            {
+                int close = expr.IndexOf('`', i + 1);
+                if (close < 0) continue;
+                spanEnd = close + 1;
+                replacement = EmitArithCommandSubValue(expr[(i + 1)..close]);
+            }
+            else if (c == '$' && i + 1 < expr.Length && expr[i + 1] == '('
+                     && !(i + 2 < expr.Length && expr[i + 2] == '('))
+            {
+                // `$((…))` is a nested arithmetic expansion, not a command substitution;
+                // the typed parser strips the `$` and treats it as paren grouping.
+                int close = BashArithmeticParser.FindMatchingParen(expr, i + 1);
+                if (close < 0) continue;
+                spanEnd = close + 1;
+                replacement = EmitArithCommandSubValue(expr[(i + 2)..close]);
+            }
+            else if (c == '$' && TryMatchArithPositional(expr, i, out int length, out string key))
+            {
+                spanEnd = i + length;
+                replacement = PositionalRefExpr(key);
+            }
+            else continue;
+
+            parts ??= [];
+            if (i > last) parts.Add(PsBuild.SingleQuote(expr[last..i]));
+            parts.Add(replacement);
+            last = spanEnd;
+            i = spanEnd - 1;
+        }
+
+        if (parts is null) return null;
+        if (last < expr.Length) parts.Add(PsBuild.SingleQuote(expr[last..]));
+        return parts;
+    }
 
     /// <summary>
-    /// Emit an arithmetic subexpression that references positional/special
-    /// parameters. Each reference is replaced by a PowerShell subexpression
-    /// producing its runtime value; the surrounding text (ordinary variables,
-    /// numbers, operators) is preserved verbatim as single-quoted literal
-    /// fragments, and the whole is reassembled by string concatenation and
-    /// handed to <c>Invoke-BashArith</c>. This lets the evaluator resolve
-    /// ordinary <c>$var</c>/bare-name references itself while still seeing a
-    /// concrete numeric literal in place of each positional — so
-    /// <c>$(($1 ** 2))</c> becomes <c>$(Invoke-BashArith ('' + &lt;value-of-$1&gt; + ' ** 2'))</c>
-    /// and the bash-correct <c>**</c> operator is applied (the legacy verbatim
-    /// <c>$()</c> path emitted a literal <c>**</c>, which is not a PowerShell
-    /// operator and failed to parse).
-    ///
-    /// A leading <c>'' + </c> forces string concatenation so a positional whose
-    /// value happens to be an integer object does not trigger numeric addition.
-    /// Values are concatenated as text (not <c>[int]</c>-cast) so the evaluator
-    /// applies bash's expand-then-evaluate semantics — a non-numeric or unset
-    /// positional degrades exactly as bash would.
+    /// Match a positional or special parameter reference (<c>$1</c>, <c>$#</c>,
+    /// <c>${12}</c>, <c>${?}</c>) at <paramref name="start"/>. Ordinary named variables
+    /// are deliberately NOT matched — the evaluator resolves those itself.
+    /// <para>
+    /// Bash's unbraced rule is preserved: <c>$10</c> is <c>$1</c> followed by the literal
+    /// <c>0</c>, so only ONE digit is consumed unbraced; <c>${10}</c> addresses positional
+    /// parameter 10.
+    /// </para>
     /// </summary>
-    private static string EmitPositionalArithArgument(string expr)
+    private static bool TryMatchArithPositional(string expr, int start, out int length, out string key)
     {
-        var rx = ArithmeticParameterRegex();
-        var parts = new List<string>();
-        int last = 0;
-        foreach (System.Text.RegularExpressions.Match m in rx.Matches(expr))
+        length = 0;
+        key = "";
+        int i = start + 1;
+        if (i >= expr.Length) return false;
+        bool braced = expr[i] == '{';
+        if (braced) i++;
+        int keyStart = i;
+        if (i < expr.Length && char.IsAsciiDigit(expr[i]))
         {
-            if (m.Index > last)
-                parts.Add(PsBuild.SingleQuote(expr[last..m.Index]));
-            string key = m.Groups["braced"].Success
-                ? m.Groups["braced"].Value
-                : m.Groups["plain"].Value;
-            parts.Add(PositionalRefExpr(key));
-            last = m.Index + m.Length;
+            i++;
+            if (braced) while (i < expr.Length && char.IsAsciiDigit(expr[i])) i++;
         }
-        if (last < expr.Length)
-            parts.Add(PsBuild.SingleQuote(expr[last..]));
-        if (parts.Count == 0)
-            parts.Add("''");
-        string joined = "'' + " + string.Join(" + ", parts);
-        return $"({joined})";
+        else if (i < expr.Length && expr[i] is '@' or '#' or '*' or '?' or '$' or '!')
+            i++;
+        else return false;
+        if (i == keyStart) return false;
+        key = expr[keyStart..i];
+        if (braced)
+        {
+            if (i >= expr.Length || expr[i] != '}') return false;
+            i++;
+        }
+        length = i - start;
+        return true;
+    }
+
+    /// <summary>
+    /// A PowerShell subexpression yielding a command substitution's output as trimmed text,
+    /// for splicing into an arithmetic string. Deliberately built without a PowerShell
+    /// double-quoted string (the newline join uses <c>[char]10</c>): the fragment can land
+    /// inside an arbitrarily nested <c>"$( … )"</c>, where a literal <c>"</c> would need
+    /// per-level escaping (see <see cref="_dqNestDepth"/>). Trimming matches bash, which
+    /// strips surrounding whitespace before evaluating the expanded text.
+    /// </summary>
+    private static string EmitArithCommandSubValue(string commandText)
+    {
+        var body = BashParser.Parse(commandText);
+        // An empty substitution (`$(( $() + 1 ))`) expands to nothing, which bash then
+        // evaluates as the empty operand of a unary `+` — i.e. zero.
+        if (body is null) return "'0'";
+        string inner = EmitCaptured(body);
+        string head = body is Command.Simple or Command.Pipeline ? inner : $"& {{ {inner} }}";
+        return $"$((@({head} | ForEach-Object {{ Get-BashText $_ }}) -join [string][char]10).Trim())";
     }
 
     /// <summary>

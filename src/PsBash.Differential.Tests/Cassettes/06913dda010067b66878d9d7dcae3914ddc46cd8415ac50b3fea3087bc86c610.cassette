@@ -1,5 +1,5 @@
 PSBASH-ORACLE-CASSETTE v1
-bash-version: 5.2.21(1)-release
+bash-version: 4.4.23(1)-release
 exit-code: 0
 script-length: 15
 stdout-length: 2

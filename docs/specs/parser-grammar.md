@@ -285,6 +285,17 @@ then the literal `0`, whereas `${10}` addresses positional parameter 10.
 Compound/default, length, indirect, substring, and array parameter expansions
 are outside this typed arithmetic subset.
 
+**Command substitution as an operand** (`$(( $(date +%s) + 60 ))`, and the
+backtick spelling) parses to an opaque `ArithmeticExpr.CommandSub` node — the
+same "keep an unevaluable form for the runtime handoff" treatment as
+`${#arr[@]}`. It is opaque because bash expands the substitution to TEXT and only
+then evaluates, so the command must run before the arithmetic evaluator sees the
+expression at all. The emitter therefore splices each substitution's runtime value
+into the string it hands to `Invoke-BashArith` (see `emitter-strategy.md` §6);
+a `CommandSub` node reaching `BashArith.Evaluate` is an error, not a silent zero.
+`$((…))` nested inside arithmetic is NOT a command substitution: the lexer drops
+the `$`, leaving `((…))` for the existing paren grouping.
+
 ### 3.12 Word Decomposition
 
 `DecomposeWord` sub-parses a single `Word` token's raw text into `WordPart` nodes:

@@ -1,13 +1,13 @@
 PSBASH-ORACLE-CASSETTE v1
 bash-version: 4.4.23(1)-release
 exit-code: 0
-script-length: 32
-stdout-length: 4
+script-length: 26
+stdout-length: 3
 stderr-length: 0
 ==== SCRIPT ====
-echo $((1+2)) $( echo $((1+2)) )
+echo $(( $(echo 5) + 60 ))
 ==== STDOUT ====
-3 3
+65
 
 ==== STDERR ====
 

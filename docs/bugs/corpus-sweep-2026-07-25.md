@@ -6,10 +6,13 @@ Method: transpile every `.sh` file on the dev machine (Git-for-Windows +
 result reports zero errors. See the `real-world-sh-corpus-sweep` memory for the
 runner snippet.
 
-**Result: 72 → 98 files transpile to valid PowerShell, and PowerShell parse
-errors are ZERO.** The two remaining failures are clean bash-stage
-`ParseException`s with accurate messages — which is the intended contract:
-valid PowerShell or an honest error, never a crash and never broken output.
+**Result: 72 → 99 files transpile to valid PowerShell, and PowerShell parse
+errors are ZERO.** The single remaining failure is `sqlite3_analyzer.sh`, which
+is not shell at all (see Open, below) and which real `bash -n` rejects too — so
+every valid bash file in the corpus now transpiles. Failures that do occur are
+clean bash-stage `ParseException`s with accurate messages, which is the intended
+contract: valid PowerShell or an honest error, never a crash and never broken
+output.
 
 The sweep also led — via oracle-diffing each fix rather than stopping at
 "it parses now" — to three RUNTIME bugs it does not itself measure, the
@@ -43,6 +46,7 @@ the parse-error count badly understates the damage this sweep found.
 | `X="$(grep "a\"b" f)"` | backtick escape eaten by the enclosing string → unparseable | `ce1dd7d` |
 | `X="$(false \|\| echo "")"` | a nested EMPTY `""` closes the outer string → unparseable | `2d21944` |
 | `x=$(<file)` | bash's read-a-file shorthand emitted a dangling `\|` | `2d21944` |
+| `$(( $(date +%s) + 60 ))` | command substitution as an arithmetic operand rejected the WHOLE file ("invalid arithmetic parameter") | (this sweep's last gap) |
 
 ### Runtime bugs found while oracle-diffing the above
 
@@ -56,24 +60,25 @@ nothing, a basic-vs-extended regex mix-up made no visible difference.
 
 ## Open
 
-Still failing in the sweep; each needs its own diagnosis.
+One file still fails, and it is not a ps-bash gap.
 
-Both remaining failures are honest `ParseException`s, not broken output — and
-only ONE of them is actually a ps-bash gap.
-
-1. **`run-worktrack-vite-smoke.sh`** — `$(( $(date +%s) + 60 ))`: a command
-   substitution inside arithmetic is rejected by the typed arithmetic parser
-   ("invalid arithmetic parameter"). Bash accepts it, so this is a real feature
-   gap and the clearest next thing to fix. The typed arithmetic lexer
-   (`BashArithmeticParser`) handles `$name` / `${name}` / `$?`-style parameters
-   but has no `$(` branch; `${#arr[@]}` shows the established pattern of keeping
-   an unevaluable form as an opaque lookup for the runtime handoff.
+1. ~~**`run-worktrack-vite-smoke.sh`** — `$(( $(date +%s) + 60 ))`~~ **FIXED.**
+   A command substitution used as an arithmetic operand was rejected by the typed
+   arithmetic parser ("invalid arithmetic parameter"), failing the whole file.
+   `BashArithmeticParser` now lexes `$( … )` (quote- and nesting-aware) and
+   `` ` … ` `` into an opaque `ArithmeticExpr.CommandSub` — the `${#arr[@]}`
+   pattern — and the emitter's `BuildArithFragments` splices each substitution's
+   runtime value in before the string reaches `Invoke-BashArith`, matching bash's
+   expand-then-evaluate order. `$((…))` nested inside arithmetic keeps its
+   existing paren-grouping path rather than being mistaken for a subshell.
+   Four differential cases recorded against the bash oracle
+   (`CommandSubstitutionDifferentialTests`, section 7b).
 
 2. **`sqlite3_analyzer.sh`** — NOT a ps-bash bug. The file is a Tcl script
    behind a `#!/bin/sh` shim (`exec tclsh "$0" ${1+"$@"}`), so its body is Tcl,
    not shell. `bash -n` rejects it too ("unexpected EOF while looking for
    matching `''", line 887) — only the message differs. Nothing to fix; the
-   corpus is effectively 98 valid files, all of which transpile.
+   corpus is effectively 99 valid files, all of which transpile.
 
 ## Test-suite observations
 

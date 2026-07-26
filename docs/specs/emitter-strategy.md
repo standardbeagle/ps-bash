@@ -392,6 +392,34 @@ Handles `${VAR...}` parameter expansions:
 - `${arr[n]}` -> `$arr[n]`, `${arr[@]}` -> `$arr`, `${#arr[@]}` -> `$arr.Count`
 - `${!arr[@]}` -> `$arr.Keys`
 
+### Arithmetic operands the evaluator cannot resolve (`BuildArithFragments`)
+
+`$(( … ))` / `(( … ))` / the `for ((;;))` clauses all funnel through
+`EmitArithmeticInvocation`, which normally hands the expression to the runtime
+evaluator as ONE single-quoted literal (`Invoke-BashArith '2**10'`). Two kinds of
+span cannot survive that, because bash expands them to text *before* evaluating:
+
+- **positional / special parameters** (`$1`, `$#`, `${?}`) — the evaluator's lexer
+  would read `$1` as the literal `1`;
+- **command substitutions** (`$(date +%s)`, `` `date +%s` ``) — the command has to
+  actually run.
+
+`BuildArithFragments` scans the expression once and splits it into PowerShell
+concatenation fragments: each such span becomes a value-producing subexpression,
+everything else stays a single-quoted literal for the evaluator to resolve itself.
+`$(( $(echo 5) + 60 ))` emits
+
+```powershell
+Invoke-BashArith ('' + $((@(Invoke-BashEcho 5 | ForEach-Object { Get-BashText $_ }) -join [string][char]10).Trim()) + ' + 60')
+```
+
+The leading `'' +` forces string (not numeric) concatenation. The newline join uses
+`[char]10` rather than a `"`n"` literal deliberately: the fragment can land inside an
+arbitrarily nested `"$( … )"`, where a `"` would need escaping once per enclosing
+string level. The scan is quote-aware, so a `)` inside a quoted argument
+(`$(grep -c "a)b" f)`) does not end the substitution. Returns `null` when nothing
+needs substituting, so the common case keeps the cheap one-literal form.
+
 ### `EmitRedirect`
 
 Maps redirects to PowerShell: `>file`, `>>file`, `2>&1`, etc. Calls

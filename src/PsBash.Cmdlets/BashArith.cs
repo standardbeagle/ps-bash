@@ -92,6 +92,12 @@ public static class BashArith
                     + parameter.UnbracedSuffix;
                 return Evaluate(expanded, read, write, readRaw);
             }
+            // The emitter substitutes every `$( … )` operand with the command's
+            // runtime value before the expression string reaches this evaluator, so a
+            // surviving node means the string was built some other way. Report it
+            // rather than crashing on an unhandled case.
+            case ArithmeticExpr.CommandSub sub:
+                throw new BashArithException($"command substitution is not evaluable here: {sub.Spelling}");
             case ArithmeticExpr.Unary unary:
             {
                 long value = Eval(unary.Operand, read, write, readRaw);

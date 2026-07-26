@@ -132,6 +132,55 @@ public class PsEmitterTests
     }
 
     [Fact]
+    public void Transpile_ArithCommandSubOperand_RunsCommandBeforeEvaluating()
+    {
+        // Regression: the typed arithmetic lexer had no `$(` branch, so
+        // `$(( $(date +%s) + 60 ))` failed the whole transpile with "invalid
+        // arithmetic parameter" — the last real gap in the real-world .sh corpus
+        // sweep. bash expands the substitution to text and THEN evaluates, so the
+        // command must be spliced in as a value fragment ahead of Invoke-BashArith
+        // rather than left in the string the evaluator parses.
+        var result = PsEmitter.Transpile("echo $(( $(echo 5) + 60 ))");
+        Assert.Equal(
+            "Invoke-BashEcho $(Invoke-BashArith ('' + "
+            + "$((@(Invoke-BashEcho 5 | ForEach-Object { Get-BashText $_ }) -join [string][char]10).Trim())"
+            + " + ' + 60'))",
+            result);
+        // The evaluator must never receive the un-expanded substitution text.
+        Assert.DoesNotContain("Invoke-BashArith '$(", result);
+    }
+
+    [Fact]
+    public void Transpile_ArithBacktickCommandSubOperand_RunsCommandBeforeEvaluating()
+    {
+        var result = PsEmitter.Transpile("echo $(( `echo 7` - 1 ))");
+        Assert.Contains("Invoke-BashEcho 7 | ForEach-Object { Get-BashText $_ }", result);
+        Assert.Contains("+ ' - 1'", result);
+    }
+
+    [Fact]
+    public void Transpile_ArithNestedArithSub_StaysOnTheLiteralEvaluatorPath()
+    {
+        // `$((…))` inside arithmetic is a NESTED arithmetic expansion, not a
+        // subshell command substitution: dropping the `$` leaves `((…))`, which the
+        // evaluator's existing paren grouping already handles. It must NOT be
+        // mistaken for a command sub and shelled out.
+        var result = PsEmitter.Transpile("echo $(( $((2+3)) * 4 ))");
+        Assert.Equal("Invoke-BashEcho $(Invoke-BashArith '$((2+3)) * 4')", result);
+    }
+
+    [Fact]
+    public void Transpile_ArithCommandSubWithParenInString_DoesNotEndAtTheQuotedParen()
+    {
+        // The span scan is quote-aware: a `)` inside a quoted argument must not be
+        // taken as the substitution's closing paren (which would tear the command
+        // in half and emit unparseable PowerShell).
+        var result = PsEmitter.Transpile("echo $(( $(grep -c \"a)b\" f.txt) + 1 ))");
+        Assert.Contains("Invoke-BashGrep -c \"a)b\" f.txt", result);
+        Assert.Contains("+ ' + 1'", result);
+    }
+
+    [Fact]
     public void Transpile_ArithParamCount_RoutesToInvokeBashArith()
     {
         // $# (parameter count) is likewise substituted with its runtime value.

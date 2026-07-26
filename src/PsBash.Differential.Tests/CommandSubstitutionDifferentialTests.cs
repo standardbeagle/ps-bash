@@ -203,6 +203,61 @@ public class CommandSubstitutionDifferentialTests
     }
 
     // -----------------------------------------------------------------------
+    // 7b. Command substitution AS AN ARITHMETIC OPERAND — $(( $(cmd) + 1 ))
+    //
+    // bash expands the substitution to text and THEN evaluates, so the command
+    // must run before the arithmetic evaluator ever sees the expression string.
+    // Regression: the typed arithmetic lexer had no `$(` branch, so the whole
+    // file failed to transpile with "invalid arithmetic parameter" (the last
+    // real ps-bash gap in the 2026-07-25 real-world .sh corpus sweep).
+    // -----------------------------------------------------------------------
+
+    /// <summary>Verifies <c>$(( $(echo 5) + 60 ))</c> evaluates to 65.</summary>
+    [SkippableFact]
+    public async Task Differential_ArithSub_CommandSubOperand_ExpandsThenEvaluates()
+    {
+        await AssertOracle.EqualAsync(
+            "echo $(( $(echo 5) + 60 ))",
+            timeout: TimeSpan.FromSeconds(15));
+    }
+
+    /// <summary>
+    /// The backtick spelling of a command-substitution operand must behave identically.
+    /// </summary>
+    [SkippableFact]
+    public async Task Differential_ArithSub_BacktickCommandSubOperand_ExpandsThenEvaluates()
+    {
+        await AssertOracle.EqualAsync(
+            "echo $(( `echo 7` * 3 ))",
+            timeout: TimeSpan.FromSeconds(15));
+    }
+
+    /// <summary>
+    /// Two substitutions plus an ordinary variable in one expression: the emitter must
+    /// splice each command's value while leaving <c>n</c> for the evaluator to resolve.
+    /// </summary>
+    [SkippableFact]
+    public async Task Differential_ArithSub_MultipleCommandSubOperands_AllExpand()
+    {
+        await AssertOracle.EqualAsync(
+            "n=4; echo $(( $(echo 2) * n + $(echo 3) ))",
+            timeout: TimeSpan.FromSeconds(15));
+    }
+
+    /// <summary>
+    /// An arithmetic COMMAND (not a substitution) with a command-sub operand drives
+    /// control flow through the exit-status path rather than the value path.
+    /// Axis 8: exit-code propagation.
+    /// </summary>
+    [SkippableFact]
+    public async Task Differential_ArithCommand_CommandSubOperand_DrivesExitStatus()
+    {
+        await AssertOracle.EqualAsync(
+            "if (( $(echo 3) > 2 )); then echo bigger; else echo smaller; fi",
+            timeout: TimeSpan.FromSeconds(15));
+    }
+
+    // -----------------------------------------------------------------------
     // 8. Command sub inside double quotes — no word splitting
     //
     // Failure-surface: Axis 12 (quoting / injection).

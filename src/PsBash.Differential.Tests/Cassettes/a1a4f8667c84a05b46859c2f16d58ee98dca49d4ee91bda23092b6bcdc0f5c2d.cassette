@@ -1,13 +1,13 @@
 PSBASH-ORACLE-CASSETTE v1
 bash-version: 4.4.23(1)-release
 exit-code: 0
-script-length: 32
-stdout-length: 4
+script-length: 63
+stdout-length: 7
 stderr-length: 0
 ==== SCRIPT ====
-echo $((1+2)) $( echo $((1+2)) )
+if (( $(echo 3) > 2 )); then echo bigger; else echo smaller; fi
 ==== STDOUT ====
-3 3
+bigger
 
 ==== STDERR ====
 

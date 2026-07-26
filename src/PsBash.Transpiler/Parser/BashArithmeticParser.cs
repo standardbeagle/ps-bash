@@ -12,7 +12,7 @@ public sealed class BashArithmeticParser
         Amp, Pipe, Caret, Tilde, Shl, Shr, Lt, Le, Gt, Ge, EqEq, Ne,
         AndAnd, OrOr, Bang, Question, Colon, Comma, Assign, PlusEq,
         MinusEq, StarEq, SlashEq, PercentEq, ShlEq, ShrEq, AmpEq, PipeEq,
-        CaretEq, StarStarEq, Inc, Dec, LParen, RParen,
+        CaretEq, StarStarEq, Inc, Dec, LParen, RParen, CommandSub,
     }
 
     private readonly record struct Tok(T Kind, long Number = 0, string? Text = null, string? Key = null, string? Suffix = null);
@@ -137,6 +137,11 @@ public sealed class BashArithmeticParser
             Tok parameter = _tokens[_position++];
             return new ArithmeticExpr.Parameter(parameter.Key!, parameter.Text!, parameter.Suffix ?? "");
         }
+        if (Current.Kind == T.CommandSub)
+        {
+            Tok sub = _tokens[_position++];
+            return new ArithmeticExpr.CommandSub(sub.Key!, sub.Text!);
+        }
         if (Accept(T.LParen))
         {
             var value = ParseComma();
@@ -182,10 +187,28 @@ public sealed class BashArithmeticParser
                 string text = source[start..i];
                 result.Add(new Tok(T.Num, ParseNumber(text))); continue;
             }
+            if (c == '`')
+            {
+                int close = source.IndexOf('`', i + 1);
+                if (close < 0) throw new BashArithmeticParseException($"unterminated command substitution near '{source[i..]}'");
+                result.Add(new Tok(T.CommandSub, Text: source[i..(close + 1)], Key: source[(i + 1)..close]));
+                i = close + 1; continue;
+            }
             if (c == '$')
             {
                 int start = i++;
                 if (i >= source.Length) throw new BashArithmeticParseException("invalid arithmetic parameter '$'");
+                // `$(( … ))` is a NESTED arithmetic expansion, not a subshell command
+                // substitution. Dropping the `$` leaves `(( … ))`, which the existing
+                // paren grouping already parses correctly.
+                if (source[i] == '(' && i + 1 < source.Length && source[i + 1] == '(') continue;
+                if (source[i] == '(')
+                {
+                    int close = FindMatchingParen(source, i);
+                    if (close < 0) throw new BashArithmeticParseException($"unterminated command substitution near '{source[start..]}'");
+                    result.Add(new Tok(T.CommandSub, Text: source[start..(close + 1)], Key: source[(i + 1)..close]));
+                    i = close + 1; continue;
+                }
                 if (source[i] == '{')
                 {
                     int keyStart = ++i;
@@ -240,6 +263,32 @@ public sealed class BashArithmeticParser
         }
         result.Add(new Tok(T.End));
         return result;
+    }
+
+    /// <summary>
+    /// Index of the <c>)</c> closing the <c>(</c> at <paramref name="open"/>, honoring
+    /// nesting and skipping parens inside single/double quotes (a `)` in
+    /// <c>$(grep "a)b" f)</c> must not close the substitution); -1 if unbalanced.
+    /// </summary>
+    internal static int FindMatchingParen(string source, int open)
+    {
+        int depth = 0;
+        for (int i = open; i < source.Length; i++)
+        {
+            char c = source[i];
+            if (c == '\\') { i++; continue; }
+            if (c is '\'' or '"')
+            {
+                char quote = c;
+                for (i++; i < source.Length && source[i] != quote; i++)
+                    if (quote == '"' && source[i] == '\\') i++;
+                if (i >= source.Length) return -1;
+                continue;
+            }
+            if (c == '(') depth++;
+            else if (c == ')' && --depth == 0) return i;
+        }
+        return -1;
     }
 
     private static bool IsParameterKey(string key) =>

@@ -20,6 +20,16 @@ public abstract record ArithmeticExpr : BashNode
         private static string Normalize(string spelling) =>
             spelling.StartsWith("${", StringComparison.Ordinal) ? spelling[2..^1] : spelling[1..];
     }
+    /// <summary>
+    /// A command substitution used as an arithmetic operand — <c>$(( $(date +%s) + 60 ))</c>.
+    /// Bash expands it to text and then evaluates, so it is unevaluable by the typed
+    /// arithmetic evaluator alone: the node is an OPAQUE placeholder (same treatment as
+    /// <c>${#arr[@]}</c>) that the emitter substitutes with the command's runtime value
+    /// before the expression string ever reaches <c>Invoke-BashArith</c>.
+    /// <paramref name="CommandText"/> is the bash source between the delimiters;
+    /// <paramref name="Spelling"/> is the original text including them.
+    /// </summary>
+    public sealed record CommandSub(string CommandText, string Spelling) : ArithmeticExpr;
     public sealed record Unary(ArithmeticUnaryOp Op, ArithmeticExpr Operand) : ArithmeticExpr;
     public sealed record Binary(ArithmeticBinaryOp Op, ArithmeticExpr Left, ArithmeticExpr Right) : ArithmeticExpr;
     public sealed record Conditional(ArithmeticExpr Condition, ArithmeticExpr WhenTrue, ArithmeticExpr WhenFalse) : ArithmeticExpr;
