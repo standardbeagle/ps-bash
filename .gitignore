@@ -17,3 +17,6 @@ artifacts/
 # test-local.ps1 / CI Pester staging — never source. The module ships
 # .psd1/.psm1/.ps1xml only; the cmdlets DLL lives in PsBash.Cmdlets.
 src/PsBash.Module/*.dll
+
+# Cygwin/MSYS crash dumps — git-bash occasionally drops these in the repo root
+*.stackdump
