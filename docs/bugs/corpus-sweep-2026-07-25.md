@@ -133,11 +133,35 @@ CPU-saturating processes — the condition that produced every one of these flak
   grandchild holding the pipe blocked forever with no diagnostic. Now bounded by
   `ProcessSpawn.DrainGrace` and reported as `SpawnDrainTimeoutException`. Same doc.
 
+### Fixed (2026-07-26) — `Harness_IsolatesHome`
+
+Not a flake: a deterministic failure on the sanctioned route. The test read HOME with
+`printenv`, which on Windows with Git Bash's `usr/bin` on PATH resolves to the MSYS
+`printenv.exe`; that binary rewrites Windows paths through its POSIX mount table, so the
+injected `C:\…\Temp\ps-bash-harness-<guid>` came back as `/tmp/ps-bash-harness-<guid>`.
+`scripts/test.sh` IS bash, so this fired on every Windows dev run while `dotnet test`
+from PowerShell passed. Now read via `Invoke-BashEnv HOME` (no PATH lookup → nothing can
+intercept it) and asserted against `harness.TempHome` rather than a second
+`Path.GetTempPath()` read. Note the pre-existing `PSBASH_UNIX_PATHS=0` pin in the harness
+is NOT the mechanism — the failure reproduces with that variable unset entirely.
+
 ### Still open
 
 - `WorkerPoolTests.Dispose_DisposesIdleWorkers` — "expected idle workers disposed,
   got 2" (async disposal not yet observed). Seen once; not yet re-provoked, so the
   mechanism is unconfirmed.
+- **Load-sensitive flakes that still pass in isolation.** Each was seen once during a
+  full back-to-back suite run on a busy box and passed immediately when re-run alone:
+  `CommandAssistProviderTests.GenerateAsync_CallerCancellationKillsProviderProcess`
+  (the known family whose waits were already widened to 30 s in `017ffe3`), and three
+  differential cases — `Differential_AnsiCQuote_Newline`,
+  `Differential_AdjacentQuotes_DoubleThenDouble`,
+  `Differential_DoubleBracket_GlobMatch_Matches`. The differential three are the more
+  interesting ones: unlike the harness-bound family they compare OUTPUT, so if they are
+  timing-sensitive the mechanism is not yet identified and the assertion text was not
+  captured. Next step is to capture the full failure detail (expected-vs-actual) rather
+  than assume a bound — do not widen anything until that shows a timeout rather than a
+  genuine diff.
 
 ## Not a product bug
 
