@@ -58,14 +58,22 @@ nothing, a basic-vs-extended regex mix-up made no visible difference.
 
 Still failing in the sweep; each needs its own diagnosis.
 
-Both remaining failures are honest `ParseException`s, not broken output.
+Both remaining failures are honest `ParseException`s, not broken output — and
+only ONE of them is actually a ps-bash gap.
 
 1. **`run-worktrack-vite-smoke.sh`** — `$(( $(date +%s) + 60 ))`: a command
    substitution inside arithmetic is rejected by the typed arithmetic parser
    ("invalid arithmetic parameter"). Bash accepts it, so this is a real feature
-   gap — the clearest next thing to fix.
-2. **`sqlite3_analyzer.sh`** — "Expected `}` but got EOF" at line 900; a large
-   generated file, not yet reduced to a minimal case.
+   gap and the clearest next thing to fix. The typed arithmetic lexer
+   (`BashArithmeticParser`) handles `$name` / `${name}` / `$?`-style parameters
+   but has no `$(` branch; `${#arr[@]}` shows the established pattern of keeping
+   an unevaluable form as an opaque lookup for the runtime handoff.
+
+2. **`sqlite3_analyzer.sh`** — NOT a ps-bash bug. The file is a Tcl script
+   behind a `#!/bin/sh` shim (`exec tclsh "$0" ${1+"$@"}`), so its body is Tcl,
+   not shell. `bash -n` rejects it too ("unexpected EOF while looking for
+   matching `''", line 887) — only the message differs. Nothing to fix; the
+   corpus is effectively 98 valid files, all of which transpile.
 
 ## Test-suite observations
 
