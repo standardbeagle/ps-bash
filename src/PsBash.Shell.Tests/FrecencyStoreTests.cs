@@ -100,8 +100,28 @@ public class FrecencyStoreTests : IDisposable
         var dir = MakeDir("projects", "gone");
         await _store.AddAsync(dir);
         Directory.Delete(dir);
+        Assert.False(Directory.Exists(dir), "precondition: the directory must really be gone");
 
-        var first = await _store.QueryAsync(["gone"]);
+        // Retried within a bounded window, NOT asserted on the first query. The store's
+        // existence check (SqliteFrecencyStore.DirectoryExistsBounded) deliberately FAILS
+        // OPEN: it probes on a thread-pool task and returns "exists" if that probe misses
+        // its 200 ms bound, so a dead network path can never block the keystroke path or
+        // prune a real directory. Under a loaded box the probe can miss 200 ms purely from
+        // thread-pool scheduling, so a single query is allowed to still report the dead
+        // path — the contract is that it EVENTUALLY skips and prunes, which is what this
+        // asserts. (Observed as a full-suite-only failure: "Collection was not empty …
+        // projects\gone, Score = 4".)
+        IReadOnlyList<FrecencyMatch> first = [];
+        var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(30);
+        while (DateTime.UtcNow < deadline)
+        {
+            first = await _store.QueryAsync(["gone"]);
+            if (first.Count == 0) break;
+            // Poll interval, not a fixed settle-sleep: yields so the probe task can be
+            // scheduled, and keeps a genuine regression from hot-spinning for the whole
+            // window. Same shape as CommandAssistProviderTests.WaitForPidAsync.
+            await Task.Delay(25);
+        }
         Assert.Empty(first);
 
         // Recreate the path name in the DB-less sense: a fresh store over the same

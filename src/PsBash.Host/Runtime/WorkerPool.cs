@@ -240,10 +240,18 @@ public sealed class WorkerPool<TWorker> : IAsyncDisposable where TWorker : class
 
     /// <summary>
     /// How long <see cref="DisposeAsync"/> waits for in-flight warmers to finish tearing
-    /// their workers down. Generous enough for a psm1 import already under way, short
-    /// enough that host shutdown cannot wedge on one.
+    /// their workers down.
+    /// <para>
+    /// Deliberately SHORT. <see cref="CreateAsync"/> checks its token only before the
+    /// dedicated thread starts, so a warmer already running the psm1 import cannot be
+    /// interrupted and this wait is real. It must stay well under the host's graceful
+    /// shutdown deadline (<c>HostProtocol.DefaultShutdownDeadlineMs</c>, 5 s), which a
+    /// launcher is blocked on. Cheap to keep short because on a real host shutdown the
+    /// PROCESS exits and reclaims any runspace anyway — the deterministic-teardown
+    /// guarantee matters for a pool disposed while the process keeps running.
+    /// </para>
     /// </summary>
-    internal static TimeSpan WarmDrainGrace { get; set; } = TimeSpan.FromSeconds(10);
+    internal static TimeSpan WarmDrainGrace { get; set; } = TimeSpan.FromSeconds(3);
 
     public async ValueTask DisposeAsync()
     {

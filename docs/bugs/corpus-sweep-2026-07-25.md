@@ -160,6 +160,18 @@ The contract is now "when `DisposeAsync` returns, every worker the pool created 
 disposed", asserted directly. New test `Dispose_DisposesWorkerStillBeingWarmed` holds a
 warmer mid-create, disposes the pool, then releases it; verified red before the fix.
 
+### Fixed (2026-07-26) — `FrecencyStoreTests.Query_SkipsAndPrunesDeletedDirectory`
+
+Full-suite-only failure ("Collection was not empty … `projects\gone`, Score = 4"). The
+product is behaving as designed: `SqliteFrecencyStore.DirectoryExistsBounded` deliberately
+FAILS OPEN — it probes on a thread-pool task and reports "exists" if that probe misses its
+200 ms bound, so a dead network path can neither freeze the keystroke path nor prune a real
+directory. Under a loaded box the probe can miss 200 ms purely from thread-pool scheduling,
+so the skip-and-prune is best-effort per query by design. The test asserted it as immediate.
+It now retries within a bounded window (30 s, 25 ms poll), asserting the real contract —
+EVENTUALLY skips and prunes — plus an explicit precondition that the directory is really
+gone, so a genuine regression still fails with a clear message.
+
 ### Still open
 - **Flakes seen once in a back-to-back suite run, not reproduced since.**
   `CommandAssistProviderTests.GenerateAsync_CallerCancellationKillsProviderProcess`
