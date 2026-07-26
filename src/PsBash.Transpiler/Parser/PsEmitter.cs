@@ -2040,7 +2040,22 @@ public static class PsEmitter
         var remaining = cmd.Redirects.Remove(inputRedirect);
         var innerCmd = new Command.Simple(cmd.Words, cmd.EnvPairs, remaining);
         var target = TransformRedirectTarget(EmitWord(inputRedirect.Target));
-        result = target == "$null" ? EmitSimple(innerCmd) : $"Get-Content {target} | {EmitSimple(innerCmd)}";
+
+        if (target == "$null")
+        {
+            result = EmitSimple(innerCmd);
+            return true;
+        }
+
+        // `$(<file)` — bash's read-a-file shorthand: a redirect with NO command, whose
+        // value is the file's contents. Emitting the usual `Get-Content f | <cmd>` with
+        // an empty <cmd> produced a dangling `|` ("An empty pipe element is not
+        // allowed"), which failed the parse of the whole file. With no command the
+        // redirect IS the command.
+        var inner = EmitSimple(innerCmd);
+        result = inner.Length == 0
+            ? $"Get-Content {target}"
+            : $"Get-Content {target} | {inner}";
         return true;
     }
 
@@ -2865,7 +2880,7 @@ public static class PsEmitter
         // `'"'"'` single-quote idiom takes (`grep 'a'"'"'b'`), and it is what left
         // resolve-port.sh / backup.sh / stop-hook.sh unparseable.
         if (TryGetPureLiteralText(parts, out var literal)
-            && literal.AsSpan().IndexOfAny('"', '$', '`') >= 0)
+            && NeedsSingleQuotedLiteral(literal))
         {
             return PsBuild.SingleQuote(literal);
         }
@@ -4083,7 +4098,7 @@ public static class PsEmitter
         // Only take this path when an escape would actually be emitted, so the common
         // shape keeps its existing (more readable) double-quoted form.
         if (TryGetPureLiteralText(dq.Parts, out var literal)
-            && literal.AsSpan().IndexOfAny('"', '$', '`') >= 0)
+            && NeedsSingleQuotedLiteral(literal))
         {
             return PsBuild.SingleQuote(literal);
         }
@@ -4094,6 +4109,19 @@ public static class PsEmitter
         sb.Append('"');
         return sb.ToString();
     }
+
+    /// <summary>
+    /// Should a known-literal word be emitted as a SINGLE-quoted PowerShell string
+    /// rather than a double-quoted one? Yes when the double-quoted form would need a
+    /// backtick escape (the enclosing string would eat it), and yes for ANY literal
+    /// once nested inside another double-quoted string — notably the EMPTY one:
+    /// <c>X="$(echo "")"</c> is a parse error ("The string is missing the terminator")
+    /// because the inner <c>""</c> closes the outer string, while <c>''</c> is inert.
+    /// Un-nested, only a literal that would actually be escaped switches, so the
+    /// ordinary double-quoted shape stays readable.
+    /// </summary>
+    private static bool NeedsSingleQuotedLiteral(string literal)
+        => _dqNestDepth > 0 || literal.AsSpan().IndexOfAny('"', '$', '`') >= 0;
 
     /// <summary>
     /// Concatenate the parts when EVERY one is literal text (no parameter, command, or

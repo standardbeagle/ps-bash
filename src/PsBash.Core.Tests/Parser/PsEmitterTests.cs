@@ -307,9 +307,47 @@ public class PsEmitterTests
     [Fact]
     public void Transpile_PlainDoubleQuotedLiteral_KeepsDoubleQuotes()
     {
-        // Guard the narrow claim: only a literal that WOULD need an escape switches
-        // to single quotes; the ordinary shape keeps its readable double-quoted form.
+        // Guard the narrow claim: UN-NESTED, only a literal that would need an escape
+        // switches to single quotes; the ordinary shape keeps its readable form.
         Assert.Contains("\"plain text\"", PsEmitter.Transpile("echo \"plain text\""));
+    }
+
+    [Theory]
+    // `$(<file)` is bash's read-a-file shorthand: an input redirect with NO command,
+    // whose value is the file's contents. The usual `Get-Content f | <cmd>` shape left
+    // a dangling `|` when <cmd> was empty ("An empty pipe element is not allowed"),
+    // failing the parse of the entire file. With no command, the redirect IS the
+    // command. Oracle-verified: `x=$(<f)` equals `x=$(cat f)`.
+    [InlineData("x=$(<f.txt)", "Get-Content f.txt |")]
+    [InlineData("x=$(< f.txt)", "Get-Content f.txt |")]
+    public void Transpile_ReadFileShorthand_EmitsNoDanglingPipe(
+        string bash, string notExpected)
+    {
+        var result = PsEmitter.Transpile(bash);
+
+        Assert.Contains("Get-Content f.txt", result);
+        Assert.DoesNotContain("|  |", result);
+        Assert.DoesNotContain(notExpected + " |", result);
+    }
+
+    [Fact]
+    public void Transpile_InputRedirectWithCommand_StillPipes()
+    {
+        // Guard the narrow claim: a redirect that DOES have a command is unchanged.
+        Assert.Contains("Get-Content f.txt | Invoke-BashWc -l",
+            PsEmitter.Transpile("wc -l < f.txt"));
+    }
+
+    [Fact]
+    public void Transpile_NestedEmptyDoubleQuotedString_EmitsSingleQuotedEmpty()
+    {
+        // `X="$(cmd || echo "")"` — an inner `""` closes the OUTER string, so
+        // PowerShell reports "The string is missing the terminator" and the whole
+        // file fails. `''` is inert at any nesting depth. (stop-hook.sh)
+        var result = PsEmitter.Transpile("X=\"$(echo \"\")\"");
+
+        Assert.Contains("Invoke-BashEcho ''", result);
+        Assert.DoesNotContain("Invoke-BashEcho \"\"", result);
     }
 
     [Fact]
@@ -335,8 +373,10 @@ public class PsEmitterTests
     // A nested command substitution has its OWN quotes, so the region ended at the
     // INNER quote and the colon after it looked unquoted — the value was split
     // there, tearing `:b f)` out of the command and leaving a mangled pattern.
-    [InlineData("X=\"$(grep \"a:b\" f)\"", "\"a:b\" f")]
-    [InlineData("X=\"$(echo \"p\" | grep \"a:b\")\"", "\"a:b\"")]
+    // A nested pure literal emits SINGLE-quoted (safe at any depth); a word carrying
+    // an expansion stays double-quoted. Either way the colon must survive un-split.
+    [InlineData("X=\"$(grep \"a:b\" f)\"", "'a:b' f")]
+    [InlineData("X=\"$(echo \"p\" | grep \"a:b\")\"", "'a:b'")]
     [InlineData("X=\"$(grep \"^$v:\" f)\"", "\"^${env:v}:\" f")]
     public void Transpile_AssignmentWithNestedQuotedColonInCommandSub_NotSplit(
         string bash, string expectedFragment)
@@ -3438,8 +3478,11 @@ public class PsEmitterTests
     {
         var result = PsEmitter.Transpile("echo \"$(echo \"hi there\")\"");
 
+        // The nested literal is SINGLE-quoted: inside another double-quoted string a
+        // double-quoted literal is at best fragile and, when empty, an outright parse
+        // error (`X="$(echo "")"`). Single quotes are inert at any nesting depth.
         Assert.Equal(
-            "Invoke-BashEcho \"$((@(Invoke-BashEcho \"hi there\" | ForEach-Object { Get-BashText $_ }) -join \"`n\") -replace '(\\r?\\n)+$','')\"",
+            "Invoke-BashEcho \"$((@(Invoke-BashEcho 'hi there' | ForEach-Object { Get-BashText $_ }) -join \"`n\") -replace '(\\r?\\n)+$','')\"",
             result);
     }
 
