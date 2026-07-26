@@ -219,12 +219,31 @@ public class PsEmitterTests
     [Fact]
     public void Transpile_EscapedQuoteInsideDoubleQuotes_BacktickEscapesForPowerShell()
     {
-        // bash: echo "a\"b" -> literal a"b. The inner " is parsed as Literal("\"") and
-        // must be emitted as `" inside the PowerShell double-quoted string, else the PS
-        // string terminates early ("The string is missing the terminator").
+        // bash: echo "a\"b" -> literal a"b (oracle-verified).
+        //
+        // This used to be emitted as `" inside a PowerShell DOUBLE-quoted string. That
+        // is valid on its own but does not survive nesting: inside `X="$( … )"` the
+        // OUTER string scanner consumes the backtick escape, ending the inner string
+        // early ("The string is missing the terminator") and failing the whole file.
+        // A word with no expansion is a known literal, so it is emitted as a
+        // SINGLE-quoted PowerShell string, where " and ` are both ordinary characters.
         var result = PsEmitter.Transpile("echo \"a\\\"b\"");
-        Assert.Contains("a`\"b", result);
+        Assert.Contains("'a\"b'", result);
         Assert.DoesNotContain("\"a\"b\"", result);
+    }
+
+    [Fact]
+    public void Transpile_EscapedQuoteInsideCommandSubInsideString_EmitsNoNestedEscape()
+    {
+        // The shape the single-quoting exists for: a quoted literal nested two levels
+        // deep. The emitted inner literal must carry NO backtick escape, since the
+        // enclosing "$( … )" string would consume it ("The string is missing the
+        // terminator"). The parse-level guard lives in
+        // PsBash.Host.Tests WrapperParseabilityTests (that project has PowerShell).
+        var result = PsEmitter.Transpile("X=\"$(echo \"q\\\"r\")\"");
+
+        Assert.Contains("'q\"r'", result);
+        Assert.DoesNotContain("`\"", result);
     }
 
     [Fact]
@@ -277,11 +296,27 @@ public class PsEmitterTests
     [Fact]
     public void Transpile_EscapedBacktickInsideDoubleQuotes_DoublesBacktickForPowerShell()
     {
-        // bash: echo "a\`b" -> literal a`b. The inner ` is parsed as Literal("`") and
-        // must be doubled (``) inside the PowerShell double-quoted string, where backtick
-        // is the escape character.
+        // bash: echo "a\`b" -> literal a`b (oracle-verified). Same reasoning as the
+        // escaped-quote case above: a pure-literal word emits as a SINGLE-quoted
+        // PowerShell string, where a backtick is an ordinary character and no escape
+        // can be swallowed by an enclosing string.
         var result = PsEmitter.Transpile("echo \"a\\`b\"");
-        Assert.Contains("a``b", result);
+        Assert.Contains("'a`b'", result);
+    }
+
+    [Fact]
+    public void Transpile_PlainDoubleQuotedLiteral_KeepsDoubleQuotes()
+    {
+        // Guard the narrow claim: only a literal that WOULD need an escape switches
+        // to single quotes; the ordinary shape keeps its readable double-quoted form.
+        Assert.Contains("\"plain text\"", PsEmitter.Transpile("echo \"plain text\""));
+    }
+
+    [Fact]
+    public void Transpile_DoubleQuotedWithExpansion_KeepsDoubleQuotes()
+    {
+        // A word carrying an expansion must stay interpolating.
+        Assert.Contains("\"has $env:V var\"", PsEmitter.Transpile("echo \"has $V var\""));
     }
 
     [Fact]

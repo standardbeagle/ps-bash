@@ -85,11 +85,135 @@ public static class BashRuntime
             return line;
 
         int position = invocation.PipelinePosition;   // 1-based
-        if (invocation.PipelineLength <= 1 || position < 1)
+        int length = invocation.PipelineLength;
+        if (length <= 1 || position < 1)
             return line;
 
-        var segments = SplitPipelineSegments(line);
-        return position <= segments.Count ? segments[position - 1] : line;
+        return SelectPipelineSegment(
+            line, position, length, invocation.InvocationName, invocation.OffsetInLine);
+    }
+
+    /// <summary>
+    /// Pick this command's pipeline segment out of a raw invocation line.
+    /// <para>
+    /// <see cref="InvocationInfo.Line"/> is the whole LINE, which for transpiled bash
+    /// routinely holds several <c>;</c>-separated STATEMENTS — while
+    /// <see cref="InvocationInfo.PipelinePosition"/> counts within the current statement's
+    /// pipeline only. Splitting the entire line on <c>|</c> therefore indexed into the
+    /// wrong statement: for <c>printf … | grep 'a'; printf … | grep -E 'b'</c> the second
+    /// grep read the FIRST statement's text, missed its own <c>-E</c>, and silently ran in
+    /// basic-regex mode.
+    /// </para>
+    /// <para>
+    /// So: split into statements first and keep those whose pipeline has exactly
+    /// <paramref name="pipelineLength"/> stages AND whose stage at
+    /// <paramref name="position"/> actually names this command. Exactly one candidate is
+    /// the answer; zero or several are ambiguous, and it falls back to the previous
+    /// whole-line behavior rather than guessing. Pure, so it is unit-testable without an
+    /// <see cref="InvocationInfo"/> (which has no public constructor).
+    /// </para>
+    /// </summary>
+    public static string SelectPipelineSegment(
+        string line, int position, int pipelineLength, string? invocationName,
+        int offsetInLine = 0)
+    {
+        // OffsetInLine is the command's own character offset, so it names the statement
+        // outright — necessary because two statements on the same line may call the SAME
+        // command with the same pipeline shape, which no name/length heuristic can tell
+        // apart.
+        var statements = SplitTopLevelStatements(line);
+        if (offsetInLine > 0)
+        {
+            int cursor = 0;
+            foreach (var statement in statements)
+            {
+                // +1 for the ';' the split consumed.
+                int end = cursor + statement.Length;
+                if (offsetInLine >= cursor && offsetInLine <= end)
+                {
+                    var segments = SplitPipelineSegments(statement);
+                    if (segments.Count == pipelineLength && position <= segments.Count)
+                        return segments[position - 1];
+                    break;
+                }
+                cursor = end + 1;
+            }
+        }
+
+        // No usable offset: fall back to the unique statement whose pipeline shape and
+        // command name match. Zero or several candidates stay ambiguous.
+        string? match = null;
+        bool ambiguous = false;
+        foreach (var statement in statements)
+        {
+            var segments = SplitPipelineSegments(statement);
+            if (segments.Count != pipelineLength || position > segments.Count)
+                continue;
+
+            var candidate = segments[position - 1];
+            if (!string.IsNullOrEmpty(invocationName)
+                && candidate.IndexOf(invocationName, StringComparison.OrdinalIgnoreCase) < 0)
+                continue;
+
+            if (match is not null) { ambiguous = true; break; }
+            match = candidate;
+        }
+
+        if (match is not null && !ambiguous)
+            return match;
+
+        var wholeLine = SplitPipelineSegments(line);
+        return position <= wholeLine.Count ? wholeLine[position - 1] : line;
+    }
+
+    /// <summary>
+    /// Split a line on TOP-LEVEL <c>;</c> — the statement separators. Semicolons inside
+    /// quotes, inside a <c>(…)</c> / <c>{…}</c> / <c>[…]</c> group, or after a backtick
+    /// escape are part of a nested construct, not separators. Mirrors
+    /// <see cref="SplitPipelineSegments"/>'s scanning rules.
+    /// </summary>
+    public static List<string> SplitTopLevelStatements(string line)
+    {
+        var statements = new List<string>();
+        int start = 0;
+        char quote = '\0';
+        int depth = 0;
+        for (int i = 0; i < line.Length; i++)
+        {
+            char c = line[i];
+            if (quote != '\0')
+            {
+                if (c == quote) quote = '\0';
+                continue;
+            }
+            switch (c)
+            {
+                case '\'':
+                case '"':
+                    quote = c;
+                    break;
+                case '`':
+                    i++;   // backtick escape — skip the escaped char
+                    break;
+                case '(':
+                case '{':
+                case '[':
+                    depth++;
+                    break;
+                case ')':
+                case '}':
+                case ']':
+                    if (depth > 0) depth--;
+                    break;
+                case ';':
+                    if (depth > 0) break;
+                    statements.Add(line.Substring(start, i - start));
+                    start = i + 1;
+                    break;
+            }
+        }
+        statements.Add(line[start..]);
+        return statements;
     }
 
     /// <summary>
@@ -478,6 +602,69 @@ public static class BashRuntime
     public static string FormatBashError(string command, string message)
     {
         return $"{command}: {message}";
+    }
+
+    /// <summary>
+    /// Rewrite POSIX bracket classes (<c>[[:digit:]]</c>) into their .NET equivalents.
+    /// <para>
+    /// POSIX classes are valid in every regex dialect the coreutils use (BRE, ERE, awk)
+    /// but .NET has no such syntax — it reads <c>[[:digit:]]</c> as the character set
+    /// <c>[:digt</c> followed by a literal <c>]</c>. The result matched nothing and
+    /// produced NO error, so <c>grep '[[:digit:]]'</c>, <c>sed 's/[[:space:]]\+/_/g'</c>
+    /// and <c>awk '/[[:digit:]]/'</c> all silently returned empty where bash matched.
+    /// </para>
+    /// <para>
+    /// Only the inner <c>[:name:]</c> is replaced, so the surrounding bracket expression
+    /// keeps working (<c>[^[:space:]]</c>, <c>[[:digit:]_-]</c>). An unknown class name
+    /// is left untouched rather than guessed at. Call this on the pattern BEFORE any
+    /// dialect-specific escaping so a rewritten class is not itself escaped.
+    /// </para>
+    /// </summary>
+    public static string TranslatePosixClasses(string pattern)
+    {
+        if (string.IsNullOrEmpty(pattern)
+            || !pattern.Contains("[:", System.StringComparison.Ordinal))
+            return pattern;
+
+        var sb = new System.Text.StringBuilder(pattern.Length);
+        for (int i = 0; i < pattern.Length;)
+        {
+            if (pattern[i] == '[' && i + 1 < pattern.Length && pattern[i + 1] == ':')
+            {
+                int close = pattern.IndexOf(":]", i + 2, System.StringComparison.Ordinal);
+                if (close > 0)
+                {
+                    string? repl = pattern[(i + 2)..close] switch
+                    {
+                        "alnum" => "a-zA-Z0-9",
+                        "alpha" => "a-zA-Z",
+                        "blank" => @" \t",
+                        "cntrl" => @"\x00-\x1f\x7f",
+                        "digit" => "0-9",
+                        "graph" => @"\x21-\x7e",
+                        "lower" => "a-z",
+                        "print" => @"\x20-\x7e",
+                        "punct" => @"\p{P}\p{S}",
+                        "space" => @"\s",
+                        "upper" => "A-Z",
+                        "word" => @"\w",
+                        "xdigit" => "A-Fa-f0-9",
+                        _ => null,
+                    };
+                    if (repl is not null)
+                    {
+                        sb.Append(repl);
+                        i = close + 2;
+                        continue;
+                    }
+                }
+            }
+
+            sb.Append(pattern[i]);
+            i++;
+        }
+
+        return sb.ToString();
     }
 
     /// <summary>

@@ -799,6 +799,12 @@ public sealed class InvokeBashSedCommand : PSCmdlet
                     regexOpts |= RegexOptions.IgnoreCase;
                 }
 
+                // POSIX classes BEFORE the BRE translation: the rewrite introduces
+                // regex metacharacters (\s, \w) that the BRE pass must not re-escape.
+                // .NET has no POSIX classes, so `s/[[:space:]]\+/_/g` silently matched
+                // nothing (and reported no error) before this.
+                searchPattern = BashRuntime.TranslatePosixClasses(searchPattern);
+
                 if (!extendedRegex)
                 {
                     searchPattern = TranslateBasicRegexToNet(searchPattern);

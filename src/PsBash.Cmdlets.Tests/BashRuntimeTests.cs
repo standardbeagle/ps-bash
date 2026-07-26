@@ -52,6 +52,88 @@ public class BashRuntimeTests
     public void SplitPipelineSegments_CountsOnlyTopLevelPipes(string line, int expectedCount)
         => Assert.Equal(expectedCount, BashRuntime.SplitPipelineSegments(line).Count);
 
+    // ---- SplitTopLevelStatements / SelectPipelineSegment ----
+    //
+    // InvocationInfo.Line is the whole LINE, and transpiled bash routinely puts several
+    // `;`-separated STATEMENTS on one line — while PipelinePosition counts within the
+    // current statement only. Splitting the entire line on `|` indexed into the wrong
+    // statement, so a cmdlet recovering a binder-swallowed flag read a DIFFERENT
+    // command's text: `printf … | grep 'a'; printf … | grep -E 'b'` left the second grep
+    // without its own -E, silently running in basic-regex mode.
+
+    [Theory]
+    [InlineData("a; b", 2)]
+    [InlineData("a | b; c | d", 2)]
+    [InlineData("only", 1)]
+    [InlineData("a 'x; y' ; b", 2)]           // ; in single quotes is not a separator
+    [InlineData("a \"x; y\" ; b", 2)]         // ; in double quotes is not a separator
+    [InlineData("& { a; b } ; c", 2)]         // ; inside {} belongs to the nested block
+    [InlineData("$(a; b) ; c", 2)]            // ; inside $() likewise
+    public void SplitTopLevelStatements_CountsOnlyTopLevelSemicolons(
+        string line, int expectedCount)
+        => Assert.Equal(expectedCount, BashRuntime.SplitTopLevelStatements(line).Count);
+
+    [Fact]
+    public void SelectPipelineSegment_UsesOffsetToPickTheRightStatement()
+    {
+        // Two statements, SAME command, SAME pipeline shape — no name or length
+        // heuristic can separate them, so the command's own offset decides.
+        const string line = "printf 'a' | grep 'x'; printf 'b' | grep -E 'y'";
+        int secondGrep = line.LastIndexOf("grep", StringComparison.Ordinal);
+
+        var segment = BashRuntime.SelectPipelineSegment(
+            line, position: 2, pipelineLength: 2, invocationName: "grep",
+            offsetInLine: secondGrep);
+
+        Assert.Contains("-E", segment);
+        Assert.DoesNotContain("'x'", segment);
+    }
+
+    [Fact]
+    public void SelectPipelineSegment_FirstStatement_DoesNotSeeLaterFlags()
+    {
+        const string line = "printf 'a' | grep 'x'; printf 'b' | grep -E 'y'";
+        int firstGrep = line.IndexOf("grep", StringComparison.Ordinal);
+
+        var segment = BashRuntime.SelectPipelineSegment(
+            line, position: 2, pipelineLength: 2, invocationName: "grep",
+            offsetInLine: firstGrep);
+
+        Assert.DoesNotContain("-E", segment);
+        Assert.Contains("'x'", segment);
+    }
+
+    [Fact]
+    public void SelectPipelineSegment_NoOffset_FallsBackToUniqueNameMatch()
+    {
+        // Without an offset, a statement that uniquely names the command still resolves.
+        const string line = "printf 'a' | sort; printf 'b' | grep -E 'y'";
+
+        var segment = BashRuntime.SelectPipelineSegment(
+            line, position: 2, pipelineLength: 2, invocationName: "grep",
+            offsetInLine: 0);
+
+        Assert.Contains("-E", segment);
+    }
+
+    // ---- TranslatePosixClasses ----
+    //
+    // POSIX bracket classes are valid in BRE/ERE/awk but .NET reads `[[:digit:]]` as the
+    // set `[:digt` — matching nothing, with NO error. grep / sed / awk / rg all silently
+    // returned empty where bash matched.
+
+    [Theory]
+    [InlineData("[[:digit:]]", "[0-9]")]
+    [InlineData("[[:alpha:]]{2}", "[a-zA-Z]{2}")]
+    [InlineData("[^[:space:]]", @"[^\s]")]
+    [InlineData("[[:digit:]_-]", "[0-9_-]")]      // class inside a larger bracket set
+    [InlineData("[[:upper:]][[:lower:]]", "[A-Z][a-z]")]
+    [InlineData("[[:zzz:]]", "[[:zzz:]]")]        // unknown name left alone
+    [InlineData("plain", "plain")]
+    [InlineData("", "")]
+    public void TranslatePosixClasses_RewritesKnownClassesOnly(string input, string expected)
+        => Assert.Equal(expected, BashRuntime.TranslatePosixClasses(input));
+
     [Fact]
     public void SplitPipelineSegments_NestedPipe_IndexesTheOuterStage()
     {

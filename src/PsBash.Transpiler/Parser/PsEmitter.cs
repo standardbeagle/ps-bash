@@ -98,6 +98,34 @@ public static class PsEmitter
     private static int _captureDepth;
 
     /// <summary>
+    /// How many enclosing PowerShell DOUBLE-QUOTED strings the current text is being
+    /// emitted inside — incremented for the body of a command substitution that lands
+    /// in a <c>"…"</c> (see <see cref="EmitCommandSubString"/>).
+    /// <para>
+    /// PowerShell resolves backtick escapes at EVERY enclosing string level, so an
+    /// escape must be doubled once per level: verified directly against the parser,
+    /// <c>"$(cmd "a`"b")"</c> is an error ("The string is missing the terminator")
+    /// while <c>"$(cmd "a``"b")"</c> parses. Literal text emitted into a double-quoted
+    /// string therefore goes through <see cref="EscapeForDoubleQuoteNested"/>, not
+    /// <c>PsBuild.EscapeForDoubleQuote</c> directly.
+    /// </para>
+    /// </summary>
+    [ThreadStatic]
+    private static int _dqNestDepth;
+
+    /// <summary>
+    /// Escape literal text for a PowerShell double-quoted string, doubling the escape
+    /// character once per enclosing string level (see <see cref="_dqNestDepth"/>).
+    /// </summary>
+    private static string EscapeForDoubleQuoteNested(string value)
+    {
+        var escaped = PsBuild.EscapeForDoubleQuote(value);
+        for (int i = 0; i < _dqNestDepth; i++)
+            escaped = escaped.Replace("`", "``", StringComparison.Ordinal);
+        return escaped;
+    }
+
+    /// <summary>
     /// Emit a command whose output is CAPTURED (command / process substitution),
     /// not written to the terminal — suppresses fused-pipeline wrapping for the
     /// duration so nested pipelines keep today's per-object shape.
@@ -2830,6 +2858,18 @@ public static class PsEmitter
     /// </summary>
     private static string FlattenPartsToDoubleQuotedString(ImmutableArray<WordPart> parts)
     {
+        // Same rule as EmitDoubleQuoted: a word whose value is fully known at
+        // transpile time emits as a SINGLE-quoted PowerShell string when the
+        // double-quoted form would need a backtick escape. The escape does not
+        // survive nesting inside another double-quoted string — this is the path the
+        // `'"'"'` single-quote idiom takes (`grep 'a'"'"'b'`), and it is what left
+        // resolve-port.sh / backup.sh / stop-hook.sh unparseable.
+        if (TryGetPureLiteralText(parts, out var literal)
+            && literal.AsSpan().IndexOfAny('"', '$', '`') >= 0)
+        {
+            return PsBuild.SingleQuote(literal);
+        }
+
         var sb = new StringBuilder();
         sb.Append('"');
         for (int i = 0; i < parts.Length; i++)
@@ -2838,11 +2878,11 @@ public static class PsEmitter
             if (part is WordPart.DoubleQuoted dq)
                 AppendDoubleQuotedInner(sb, dq.Parts);
             else if (part is WordPart.SingleQuoted sq)
-                sb.Append(PsBuild.EscapeForDoubleQuote(sq.Value));
+                sb.Append(EscapeForDoubleQuoteNested(sq.Value));
             else if (part is WordPart.AnsiCQuoted aq)
-                sb.Append(PsBuild.EscapeForDoubleQuote(ExpandAnsiCEscapes(aq.Value)));
+                sb.Append(EscapeForDoubleQuoteNested(ExpandAnsiCEscapes(aq.Value)));
             else if (part is WordPart.Literal lit)
-                sb.Append(PsBuild.EscapeForDoubleQuote(lit.Value));
+                sb.Append(EscapeForDoubleQuoteNested(lit.Value));
             // A NESTED expansion (e.g. ${x:-${y:-z}}) must be emitted in double-quote
             // context: its bare form `($env:y ?? "z")` carries raw `"`, which would
             // break out of this surrounding "...". The inDoubleQuote form uses `$(...)`
@@ -3335,7 +3375,12 @@ public static class PsEmitter
     private static string EmitCommandSubString(WordPart.CommandSub cs)
     {
         var body = (Command)cs.Body;
-        string inner = EmitCaptured(body);
+        // This `$( … )` is emitted INTO a double-quoted string, so everything inside
+        // it sits one string level deeper (see _dqNestDepth).
+        _dqNestDepth++;
+        string inner;
+        try { inner = EmitCaptured(body); }
+        finally { _dqNestDepth--; }
         bool pipeableHead = body is Command.Simple or Command.Pipeline;
         string head = pipeableHead ? inner : $"& {{ {inner} }}";
         return $"$((@({head} | ForEach-Object {{ Get-BashText $_ }}) -join \"`n\") -replace '(\\r?\\n)+$','')";
@@ -4018,7 +4063,7 @@ public static class PsEmitter
                 // variable expansion, `"` ends the string, and backtick is the escape char, so
                 // each must be backtick-escaped. PsBuild.EscapeForDoubleQuote does this in the
                 // load-bearing order (backtick first). Mirrors FlattenPartsToDoubleQuotedString.
-                sb.Append(PsBuild.EscapeForDoubleQuote(lit.Value));
+                sb.Append(EscapeForDoubleQuoteNested(lit.Value));
             }
             else
                 sb.Append(EmitWordPart(part));
@@ -4027,11 +4072,56 @@ public static class PsEmitter
 
     private static string EmitDoubleQuoted(WordPart.DoubleQuoted dq)
     {
+        // A word with NO expansion is a plain literal, so a PowerShell SINGLE-quoted
+        // string carries it exactly — and, unlike the double-quoted form, survives
+        // being nested inside another double-quoted string.
+        //
+        // `X="$(grep "a\"b" f)"` emitted ... "a`"b" ... inside the outer "$( … )"
+        // string. PowerShell's OUTER string scanner consumes the backtick escape, so
+        // the inner string ended early and the file failed to parse ("The string is
+        // missing the terminator"). The same happens to an escaped `$` or backtick.
+        // Only take this path when an escape would actually be emitted, so the common
+        // shape keeps its existing (more readable) double-quoted form.
+        if (TryGetPureLiteralText(dq.Parts, out var literal)
+            && literal.AsSpan().IndexOfAny('"', '$', '`') >= 0)
+        {
+            return PsBuild.SingleQuote(literal);
+        }
+
         var sb = new StringBuilder();
         sb.Append('"');
         AppendDoubleQuotedInner(sb, dq.Parts);
         sb.Append('"');
         return sb.ToString();
+    }
+
+    /// <summary>
+    /// Concatenate the parts when EVERY one is literal text (no parameter, command, or
+    /// arithmetic expansion), so the word's value is known at transpile time.
+    /// </summary>
+    private static bool TryGetPureLiteralText(
+        ImmutableArray<WordPart> parts, out string text)
+    {
+        var sb = new StringBuilder();
+        foreach (var part in parts)
+        {
+            switch (part)
+            {
+                case WordPart.Literal lit: sb.Append(lit.Value); break;
+                case WordPart.EscapedLiteral el: sb.Append(el.Value); break;
+                case WordPart.SingleQuoted sq: sb.Append(sq.Value); break;
+                case WordPart.AnsiCQuoted aq: sb.Append(ExpandAnsiCEscapes(aq.Value)); break;
+                // A double-quoted part is literal only if ITS parts are.
+                case WordPart.DoubleQuoted dq when TryGetPureLiteralText(dq.Parts, out var inner):
+                    sb.Append(inner);
+                    break;
+                default:
+                    text = "";
+                    return false;
+            }
+        }
+        text = sb.ToString();
+        return true;
     }
 
     private static bool NextPartNeedsBracing(WordPart part)

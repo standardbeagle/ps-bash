@@ -1063,9 +1063,12 @@ public sealed class InvokeBashGrepCommand : PSCmdlet
         var opts = ignoreCase ? RegexOptions.IgnoreCase : RegexOptions.None;
         foreach (var pat in patterns)
         {
+            // POSIX classes first, before BRE escaping: the rewrite introduces regex
+            // metacharacters (\s, \w, \p{P}) that must NOT then be escaped as literals.
+            // -F is a literal search, so it keeps `[[:digit:]]` verbatim.
             string rp = fixedString ? Regex.Escape(pat)
-                      : !extendedRegex ? EscapeBreMetas(pat)
-                      : pat;
+                      : !extendedRegex ? EscapeBreMetas(BashRuntime.TranslatePosixClasses(pat))
+                      : BashRuntime.TranslatePosixClasses(pat);
             if (wholeWord) rp = "\\b" + rp + "\\b";
             if (lineRegexp) rp = "^(?:" + rp + ")$";
             try { regexes.Add(new Regex(rp, opts)); }

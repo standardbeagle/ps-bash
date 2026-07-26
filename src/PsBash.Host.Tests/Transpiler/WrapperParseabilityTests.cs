@@ -73,4 +73,22 @@ public class WrapperParseabilityTests
     {
         AssertTranspilesToValidPowerShell(bashInput);
     }
+
+    [Theory]
+    // A quoted literal nested inside `$( … )` inside a double-quoted assignment.
+    // The inner literal used to be emitted with a backtick escape (`" / ``), which
+    // the OUTER string scanner consumed — ending the inner string early and failing
+    // the whole file with "The string is missing the terminator". A pure-literal word
+    // is now emitted as a SINGLE-quoted PowerShell string, which nests safely.
+    // Found by sweeping real .sh files: backup.sh, stop-hook.sh, resolve-port.sh.
+    [InlineData(@"X=""$(grep ""a\""b"" f)""")]
+    [InlineData(@"X=""$(grep ""[\""x]"" f)""")]
+    [InlineData(@"X=""$(echo ""a\`b"")""")]
+    // The `'"'"'` single-quote-escape idiom inside a nested command substitution.
+    [InlineData(@"X=""$(grep 'a'""'""'b' f)""")]
+    public void Transpile_QuotedLiteralNestedInCommandSub_EmitsParseablePowerShell(
+        string bashInput)
+    {
+        AssertTranspilesToValidPowerShell(bashInput);
+    }
 }

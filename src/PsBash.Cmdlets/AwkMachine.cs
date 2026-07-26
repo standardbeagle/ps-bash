@@ -787,7 +787,11 @@ internal sealed class AwkMachine
         {
             try
             {
-                rx = new Regex(pattern, RegexOptions.None, RegexTimeout);
+                // awk's ERE has POSIX bracket classes; .NET does not, and would read
+                // `[[:digit:]]` as the set `[:digt` — matching nothing, with no error.
+                rx = new Regex(
+                    BashRuntime.TranslatePosixClasses(pattern),
+                    RegexOptions.None, RegexTimeout);
             }
             catch (ArgumentException ex)
             {

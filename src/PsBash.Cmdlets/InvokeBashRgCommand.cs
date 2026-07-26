@@ -323,7 +323,9 @@ public sealed class InvokeBashRgCommand : PSCmdlet
         Regex regex;
         try
         {
-            regex = new Regex(pattern, regexOpts);
+            // .NET has no POSIX bracket classes; without this `[[:digit:]]` matches
+            // nothing and reports no error (see BashRuntime.TranslatePosixClasses).
+            regex = new Regex(BashRuntime.TranslatePosixClasses(pattern), regexOpts);
         }
         catch (ArgumentException ex)
         {
