@@ -6,9 +6,10 @@ Method: transpile every `.sh` file on the dev machine (Git-for-Windows +
 result reports zero errors. See the `real-world-sh-corpus-sweep` memory for the
 runner snippet.
 
-**Result: 72 → 95 files transpile to valid PowerShell.** Bash-stage parse
-failures 14 → 2 (and both survivors are now clean `ParseException`s with an
-accurate message, not crashes).
+**Result: 72 → 98 files transpile to valid PowerShell, and PowerShell parse
+errors are ZERO.** The two remaining failures are clean bash-stage
+`ParseException`s with accurate messages — which is the intended contract:
+valid PowerShell or an honest error, never a crash and never broken output.
 
 The sweep also led — via oracle-diffing each fix rather than stopping at
 "it parses now" — to three RUNTIME bugs it does not itself measure, the
@@ -40,6 +41,8 @@ the parse-error count badly understates the damage this sweep found.
 | `grep "^${field}:"` | suffix-less `${name}` before `:` not braced → PS drive-reference misparse | `803645e` |
 | `eval "…" \| sort` | a statement-list SIMPLE command is not a valid pipeline stage | `803645e` |
 | `X="$(grep "a\"b" f)"` | backtick escape eaten by the enclosing string → unparseable | `ce1dd7d` |
+| `X="$(false \|\| echo "")"` | a nested EMPTY `""` closes the outer string → unparseable | `2d21944` |
+| `x=$(<file)` | bash's read-a-file shorthand emitted a dangling `\|` | `2d21944` |
 
 ### Runtime bugs found while oracle-diffing the above
 
@@ -55,39 +58,47 @@ nothing, a basic-vs-extended regex mix-up made no visible difference.
 
 Still failing in the sweep; each needs its own diagnosis.
 
-1. **`backup.sh`, `stop-hook.sh`** — "string is missing the terminator". The
-   sibling `resolve-port.sh` was fixed by `ce1dd7d` (nest-depth escaping); these
-   two still fail, so they carry a further variant of the nested-quote seam —
-   both embed multi-line `awk` / `sed` program text. Not yet reduced.
-2. **`test-worktrack-vite-smoke.sh`** — "An empty pipe element is not allowed".
-   The sibling `detect-project-type.sh` was fixed by `803645e`; this one has a
-   different shape, not yet reduced.
-3. **`sqlite3_analyzer.sh`** — "Expected `}` but got EOF" at line 900; a large
-   generated file, not yet reduced.
-4. **`run-worktrack-vite-smoke.sh`** — `$(( $(date +%s) + 60 ))`: a command
-   substitution inside arithmetic is rejected by the typed arithmetic parser.
-   Clean error, but bash accepts it.
+Both remaining failures are honest `ParseException`s, not broken output.
+
+1. **`run-worktrack-vite-smoke.sh`** — `$(( $(date +%s) + 60 ))`: a command
+   substitution inside arithmetic is rejected by the typed arithmetic parser
+   ("invalid arithmetic parameter"). Bash accepts it, so this is a real feature
+   gap — the clearest next thing to fix.
+2. **`sqlite3_analyzer.sh`** — "Expected `}` but got EOF" at line 900; a large
+   generated file, not yet reduced to a minimal case.
 
 ## Test-suite observations
 
-- **Three load-sensitive flakes**, each observed failing exactly once across five
-  full runs and each passing when re-run in isolation immediately afterwards:
-  - `PromptRenderingIntegrationTests.CtrlC_MidInput_ShellRemainsAlive` — 8 s
-    prompt deadline, 0 chars received.
-  - `WorkerPoolTests.Dispose_DisposesIdleWorkers` — "expected idle workers
-    disposed, got 2" (async disposal not yet observed).
-  - `CommandAssistProviderTests.GenerateAsync_CallerCancellationKillsProviderProcess`
-    — process-kill timing.
+### Fixed (`3d5907a`)
 
-  None is a product break, but qa-rubric Directive 2 is explicit that one flake
-  means quarantine-and-fix, not ignore. All three assert on a *deadline* rather
-  than on an observable event, which is the shape Directive 6 forbids; they need
-  a wait-for-condition with a generous bound instead.
+- `FilterLibraryTests.Load_CachesUntilFileMtimeChanges` — asserted `Assert.Same`
+  across two `FilterLibrary.Load` calls, but the library keeps a SINGLE-entry
+  static cache and xUnit runs classes in parallel, so another class (notably
+  `BuiltinFiltersTests`, which loads from a static field initializer) evicted the
+  entry in between. ~1 failure in 5 runs, with a misleading diff: the lists have
+  EQUAL content, so an identity failure reads as a data mismatch. Every class
+  reaching FilterLibrary now shares one non-parallel collection.
+- `HangingCommand_TimesOutWithin35Seconds_AndKillsProcessTree` — diffed EVERY
+  `pwsh` on the machine against a pre-run snapshot, so any concurrent test project
+  or developer shell counted as a leak. Now records only hosts parented by its own
+  launcher, collected while that launcher is alive. Verified against four
+  deliberately-spawned concurrent `pwsh` processes.
 
-- `ProgramEndToEndTests.HangingCommand_TimesOutWithin35Seconds_AndKillsProcessTree`
-  is not isolated: it snapshots EVERY `pwsh` process on the machine and treats any
-  new one as leaked, so any concurrent test project or developer shell fails it.
-  It should scope to descendants of the process it spawned.
+### Still open
+
+Two load-sensitive flakes, each seen failing exactly once across seven full runs
+and passing when re-run isolated immediately after:
+
+- `PromptRenderingIntegrationTests.CtrlC_MidInput_ShellRemainsAlive` — 8 s prompt
+  deadline, 0 chars received.
+- `CommandAssistProviderTests.GenerateAsync_CallerCancellationKillsProviderProcess`
+  — process-kill timing.
+- `WorkerPoolTests.Dispose_DisposesIdleWorkers` — "expected idle workers disposed,
+  got 2" (async disposal not yet observed).
+
+Each asserts on a *deadline* rather than on an observable event, the shape
+qa-rubric Directive 6 forbids; they want a wait-for-condition with a generous
+bound. Directive 2 says quarantine-and-fix rather than ignore.
 - Running `PsBash.Host.Tests` immediately after another suite can hang the test
   harness: a persisted `ps-bash-host` inherits the runner's redirected stdout, so
   the parent never sees EOF (the `daemon-c-pipe-inheritance-hang` class). Killing
