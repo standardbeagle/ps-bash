@@ -83,6 +83,54 @@ jobs:
             try { zip -r $absDst . } finally { Pop-Location }
           }
 
+      # Smoke the STAGED ARCHIVE before it can be uploaded. Every release from the
+      # introduction of <PrivateAssets>all</PrivateAssets> on the Microsoft.PowerShell.SDK
+      # reference up to v0.10.22 shipped a win-x64 zip with NO
+      # System.Management.Automation.dll: 195 DLLs instead of 265, and every command failed
+      # with "ps-bash-host did not accept connections within 20s" (exit 125). Nothing
+      # noticed, because this job only ever built and zipped — it never RAN the result —
+      # and the `publish` job does not `need:` this one, so PSGallery/NuGet shipped fine
+      # while the GitHub archives were dead.
+      #
+      # Runs the archive exactly as a user would: spawn the launcher, which spawns the host
+      # from the same directory, execute one command, and require the output. A structural
+      # check on the host's own deps.json comes first so a packaging regression names its
+      # cause instead of surfacing as an opaque connection timeout.
+      #
+      # See docs/bugs/publish-host-missing-sma.md.
+      - name: Smoke-test staged archive
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $stage = "./publish/stage"
+          $exe = Join-Path $stage "ps-bash${{ matrix.ext }}"
+
+          if (-not (Test-Path $exe)) { throw "staged launcher missing: $exe" }
+          $hostExe = Join-Path $stage "ps-bash-host${{ matrix.ext }}"
+          if (-not (Test-Path $hostExe)) { throw "staged host missing: $hostExe" }
+
+          # The host needs the PowerShell SDK runtime assets beside it. Assert on the
+          # managed assembly itself, not just deps.json, since that is what fails to load.
+          $sma = Join-Path $stage "System.Management.Automation.dll"
+          if (-not (Test-Path $sma)) {
+            throw ("staged archive has no System.Management.Automation.dll — the host " +
+                   "cannot start. Check that the Microsoft.PowerShell.SDK PackageReference " +
+                   "in src/PsBash.Host/PsBash.Host.csproj carries no PrivateAssets/ExcludeAssets.")
+          }
+
+          if (-not $IsWindows) { chmod +x $exe; chmod +x $hostExe }
+
+          # Isolate the endpoint so this can never adopt a stray host from another step.
+          $env:PSBASH_IPC_ENDPOINT = "pipe:psbash-smoke-" + [guid]::NewGuid().ToString('N').Substring(0, 8)
+          $out = & $exe -c 'echo smoke-ok; seq 1 3 | wc -l' 2>&1
+          $code = $LASTEXITCODE
+          $text = ($out | Out-String)
+          Write-Host "exit=$code output:`n$text"
+          if ($code -ne 0) { throw "staged archive failed to run a command (exit $code): $text" }
+          if ($text -notmatch 'smoke-ok') { throw "staged archive produced no 'smoke-ok': $text" }
+          if ($text -notmatch '3')        { throw "staged archive pipeline produced no count: $text" }
+          Write-Host "Staged archive smoke test passed."
+
       - name: Upload release asset
         if: github.event_name == 'release' || github.event_name == 'workflow_dispatch'
         env:

@@ -144,20 +144,27 @@ public class KnownBadRegressionTests
                         "-NoProfile", "-NonInteractive", "-Command",
                         // -NoNewWindow makes the grandchild inherit OUR stdout pipe; the
                         // parent exits at once, so only the grandchild holds the write end.
-                        "$p = Start-Process pwsh -ArgumentList '-NoProfile','-NonInteractive','-Command','Start-Sleep 60' "
+                        // Sleeps far longer than any bound below, so "the drain bound fired"
+                        // is distinguishable from "we simply waited the grandchild out" no
+                        // matter how slow the box is.
+                        "$p = Start-Process pwsh -ArgumentList '-NoProfile','-NonInteractive','-Command','Start-Sleep 600' "
                         + $"-NoNewWindow -PassThru; Set-Content -LiteralPath '{pidFile}' -Value $p.Id; exit 0",
                     },
                     // Generous exit timeout: the child exits immediately, so reaching the
                     // drain path is what is under test, not the exit bound.
-                    timeout: TimeSpan.FromSeconds(60),
+                    timeout: TimeSpan.FromSeconds(120),
                     drainGrace: grace);
             });
 
             sw.Stop();
 
-            // Must report shortly after the grace, not after the grandchild's sleep.
-            Assert.True(sw.Elapsed < TimeSpan.FromSeconds(20),
-                $"Drain bound did not fire promptly: {sw.Elapsed.TotalSeconds:F1}s");
+            // The claim is "bounded, not infinite" — NOT "fast". Elapsed is dominated by
+            // spawning two pwsh processes, which took 20.5 s on a loaded box and blew an
+            // earlier 20 s assert even though the 3 s grace had fired correctly. The bound
+            // therefore only has to sit far below the grandchild's 600 s sleep to prove the
+            // drain gave up rather than waiting the grandchild out.
+            Assert.True(sw.Elapsed < TimeSpan.FromSeconds(120),
+                $"Drain bound did not fire: {sw.Elapsed.TotalSeconds:F1}s");
             Assert.Equal(0, ex.ExitCode);
             Assert.Contains("never reached EOF", ex.Message);
         }

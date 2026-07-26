@@ -194,6 +194,23 @@ takes to report. Also confirms my WorkerPool change is not implicated: Host.Test
 1m52 s inside the full suite BEFORE it and 1m58 s after.
 
 ### Still open
+- **Timing-bound failures that appear only when the machine is heavily loaded.** On a run
+  where the Differential suite took 13m27s instead of its usual 5-9m (roughly 2x slower —
+  concurrent agents on the box, not the suite itself), four tests failed on bounds while
+  behaving correctly where behaviour is observable:
+  `SecurityProbeTests.Security_VarWithSemicolon_NoInjection` (its captured stdout shows the
+  injection payload echoed LITERALLY — the security property held, only the 15 s launcher
+  bound blew), `Differential_Redirect_IoNumber_Adjacent_IsStderrRedirect` and
+  `Differential_Redirect_Stderr_DevNull_SuppressesError` (oracle timeout at 15 s; the
+  transpiled PowerShell in the dump is correct), and
+  `BashRuntimeTests.RunChildProcess_OutputAboveCaptureLimit_IsTruncatedButStillDrained`.
+  All four pass in isolation (5 s / 13 s / 1 s).
+
+  Deliberately NOT widened. Each would need its own measurement first — the rule from the
+  escalation flake family is that a shared signature means one cause, but the cause may be a
+  product bug, and widening on a guess is how a real defect gets buried. Recorded here so
+  the next occurrence has a baseline rather than looking novel.
+
 - **Flakes seen once in a back-to-back suite run, not reproduced since.**
   `CommandAssistProviderTests.GenerateAsync_CallerCancellationKillsProviderProcess`
   (the known family whose waits were already widened to 30 s in `017ffe3`), and three

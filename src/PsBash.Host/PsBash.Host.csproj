@@ -24,9 +24,19 @@
     <ProjectReference Include="..\PsBash.Core\PsBash.Core.csproj" />
   </ItemGroup>
   <ItemGroup>
-    <PackageReference Include="Microsoft.PowerShell.SDK" Version="7.4.*">
-      <PrivateAssets>all</PrivateAssets>
-    </PackageReference>
+    <!-- Do NOT add <PrivateAssets>all</PrivateAssets> here. It is idiomatic on a bare
+         System.Management.Automation reference (which this used to be), but on the SDK
+         meta-package it EXCLUDES THE RUNTIME ASSETS FROM PUBLISH: a self-contained
+         `dotnet publish src/PsBash.Host` then emits a host with no
+         System.Management.Automation.dll at all, which dies at startup with
+         "Could not load file or assembly 'System.Management.Automation'". That is exactly
+         the command publish.yml ships with, and a local `dotnet build` hides it — a dev run
+         resolves SMA from the NuGet cache through runtimeconfig.dev.json probing paths, so
+         only a published/installed layout fails. The attribute was carried over when
+         bb8291f upgraded this reference to Microsoft.PowerShell.SDK precisely "so all
+         runtime DLLs are included in the output", silently defeating that intent.
+         Guarded by PublishRecipeGuardTests. -->
+    <PackageReference Include="Microsoft.PowerShell.SDK" Version="7.4.*" />
     <PackageReference Include="Microsoft.Data.Sqlite" Version="9.*" />
     <!-- Override the vulnerable SQLitePCLRaw.lib.e_sqlite3 that Microsoft.Data.Sqlite pulls
          transitively. GHSA-2m69-gcr7-jv3q (high severity, NU1903) covers the whole 2.1.x line
