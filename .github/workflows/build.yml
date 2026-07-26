@@ -130,6 +130,19 @@ jobs:
         shell: pwsh
         run: ./scripts/package-full.ps1 -RID ${{ matrix.rid }}
 
+      # RUN what was just packaged. Until this existed, this job built, packaged and uploaded
+      # without ever executing the result — which is how every archive from v0.9.1 to
+      # v0.10.22 shipped with no System.Management.Automation.dll and failed every command.
+      # The other workflows cannot cover this: ci.yml runs Pester in-process against the
+      # module, and canary.yml uses `dotnet build` output, which resolves SMA from the NuGet
+      # cache and so is structurally blind to a publish/packaging fault.
+      # Shared with publish.yml so the check cannot drift between them.
+      - name: Smoke-test packaged archives
+        shell: pwsh
+        run: |
+          ./scripts/smoke-archive.ps1 -StageDir dist/slim/${{ matrix.rid }}
+          ./scripts/smoke-archive.ps1 -StageDir dist/full/${{ matrix.rid }}
+
       - uses: actions/upload-artifact@v4
         with:
           name: ps-bash-slim-${{ matrix.rid }}

@@ -66,6 +66,32 @@ also meant staging the launcher's `.dll` alongside its apphost; `publish.yml` co
 stages only `ps-bash.exe` because a real AOT launcher is a single self-contained file. The
 host publish, which is what changed, was exercised unmodified.)
 
+## Blast radius and cleanup (2026-07-26)
+
+**Every** release archive of the two-binary era was non-functional, not just the recent ones.
+Audited all 28 releases that had assets, by reading each `win-x64` zip's entry list:
+**28/28 contained `ps-bash-host` but no `System.Management.Automation.dll`.** Cross-platform
+spot-checks at the earliest, middle and latest points (`v0.9.1`, `v0.10.13`, `v0.10.22` ×
+`linux-x64`, `osx-arm64`) were all broken too — expected, since the fault is in one host
+publish command per workflow run and is therefore RID-independent, but verified rather than
+assumed.
+
+Range: **v0.9.1 → v0.10.22**. The two-binary layout began at v0.9.0 (`19df856`, 2026-05-01)
+and `PrivateAssets` predates it (`edebbfc`, 2026-04-29), so no two-binary archive was ever
+correct. v0.7.x/v0.8.x archives are a single `ps-bash.exe` with no host and are unaffected —
+`v0.8.20`'s zip has exactly one entry.
+
+**All 84 assets were deleted** (28 releases × 3 platforms, zero failures) on the owner's
+instruction, leaving those releases with notes and no downloads. Repairing them was rejected
+on provenance grounds: an archive attached to tag `vX` must be built from `vX`'s source, and
+every affected tag still contains the bug, so a `gh workflow run publish.yml -f version=X
+--ref main` re-upload would hang main-built binaries off an old tag. The honest options were
+empty or misleading; empty won.
+
+Releases with no assets at all — v0.9.3-5, v0.9.8, v0.9.12, v0.10.5, v0.10.6, v0.10.17 —
+were already missing them, consistent with the historically flaky `build-binaries` legs (see
+`release-build-binaries-warnaserror`, `release-nu1903-warnaserror-binaries`).
+
 ## Confirmed: the shipped archives really were broken
 
 Not a theoretical risk. Downloaded the published `ps-bash-v0.10.22-win-x64.zip` (the latest
@@ -93,10 +119,24 @@ without. Core.Tests is a publish gate, so this now blocks a release rather than 
 A csproj-text assertion alone would be thin — it only catches this one spelling of the
 mistake — so the archive is now also smoke-tested for real (below).
 
-## Automatic archive check (`publish.yml`)
+## Automatic archive check (`scripts/smoke-archive.ps1`)
 
-A **Smoke-test staged archive** step runs in `build-binaries` after packaging and *before*
-either upload step, on every RID in the matrix. It:
+No workflow executed what it packaged. `build.yml` published, ran `package-slim` /
+`package-full`, and uploaded. `publish.yml` published, zipped, and uploaded. `ci.yml` runs
+Pester in-process against the module. `canary.yml` uses `dotnet build` output, which resolves
+SMA from the NuGet cache and is therefore structurally incapable of seeing a publish fault.
+So nothing anywhere ran a packaged artifact.
+
+`scripts/smoke-archive.ps1` is now that check, shared by both workflows (and runnable
+locally) so it cannot drift between them:
+
+- `publish.yml` → **Smoke-test staged archive** on `./publish/stage`, after packaging and
+  *before* either upload step, on every RID.
+- `build.yml` → **Smoke-test packaged archives** on `dist/slim/<rid>` and `dist/full/<rid>`,
+  before the artifact uploads. This runs on every push, so a regression surfaces there long
+  before a release.
+
+It:
 
 1. asserts the staged launcher and host binaries exist;
 2. asserts `System.Management.Automation.dll` is present, failing with a message that names
@@ -106,9 +146,19 @@ either upload step, on every RID in the matrix. It:
    letting the launcher spawn the host out of the same directory — and requires exit 0 plus
    both expected outputs. The endpoint is randomized so it can never adopt a stray host.
 
-This closes the structural hole: `build-binaries` previously only ever built and zipped, and
-never executed what it shipped.
+Verified both directions locally against the real artifacts: the script FAILS the downloaded,
+broken v0.10.22 archive (exit 1, with the actionable message) and PASSES a correct staged
+build (`smoke-ok`, `3`, exit 0).
 
-Verified both directions locally against the real artifacts: the step's logic FAILS the
-downloaded, broken v0.10.22 archive (exit 1, with the actionable message) and PASSES a
-correct staged build (`smoke-ok`, `3`, exit 0).
+## The same bug was in every local packaging script
+
+`pack-local.ps1`, `package-slim.ps1` and `package-full.ps1` all consume a **separately
+published** `PsBash.Host` (`dist/host/<rid>`), i.e. the identical broken pattern — so they
+produced broken output too, and the same one-line csproj fix repairs all of them.
+
+This also explains how a WORKING build came to be installed at `~/.local/bin` while every
+release archive was broken: its `ps-bash-host.deps.json` is 88829 bytes with 12
+`System.Management.Automation` mentions — the same as a fixed build, versus 33721 bytes and 0
+mentions for a broken one. So it came from a path that included the SDK assets (publishing
+`PsBash.Shell`, whose `PublishHostSidecar` builds the host `SelfContained=true` and copies
+that output), never from the standalone host publish those scripts use.
