@@ -2824,7 +2824,8 @@ public static class PsEmitter
             return EmitBraceExpandedWord(word.Parts);
 
         if (word.Parts.Length == 1)
-            return TransformWordPath(EmitWordPart(word.Parts[0]));
+            return EscapeLeadingSplatSigil(
+                word, TransformWordPath(EmitWordPart(word.Parts[0])));
 
         // Adjacent-quote concatenation. When a word's FIRST part is a
         // self-delimiting token ('...', "...", or $(...)), PowerShell tokenizes a
@@ -2849,8 +2850,28 @@ public static class PsEmitter
             if (part is WordPart.TildeSub && i + 1 < word.Parts.Length)
                 sb.Append('\\');
         }
-        return TransformWordPath(sb.ToString());
+        return EscapeLeadingSplatSigil(word, TransformWordPath(sb.ToString()));
     }
+
+    /// <summary>
+    /// Backtick-escapes a leading <c>@</c> that came from a bare bash LITERAL.
+    /// <c>@</c> is an ordinary character in bash but PowerShell's splat / array /
+    /// hashtable sigil, so an unquoted literal word starting with it is either a
+    /// parse error (<c>echo @</c> → "Unrecognized token", which poisons the whole
+    /// file) or — worse — silently WRONG: <c>cmd @arg</c> parsed fine but splatted
+    /// the PowerShell variable <c>$arg</c> instead of passing the literal text
+    /// <c>@arg</c>. Found in npm's completion.sh (<c>… -n = -n @ -n : …</c>).
+    /// <para>
+    /// Gated on the word's FIRST part being a <see cref="WordPart.Literal"/>: an
+    /// <c>@(…)</c> the emitter itself produced (brace expansion, splat hoist) is
+    /// real PowerShell syntax and must not be escaped. Bash's own escaped/quoted
+    /// forms (<c>\@</c>, <c>'@'</c>) already emit correctly and never reach here.
+    /// </para>
+    /// </summary>
+    private static string EscapeLeadingSplatSigil(CompoundWord word, string emitted) =>
+        emitted.StartsWith('@') && word.Parts is [WordPart.Literal, ..]
+            ? "`" + emitted
+            : emitted;
 
     /// <summary>
     /// True when a multi-part word's leading part is a self-delimiting PowerShell
@@ -3379,13 +3400,36 @@ public static class PsEmitter
     // ForEach-Object` is a parse error ("An empty pipe element is not allowed").
     // Wrap those in `& { ... }` so the statement runs in a child scope (matching
     // bash command-sub subshell semantics) and yields a pipeable result.
+    /// <summary>
+    /// Returns <paramref name="inner"/> in a form that can HEAD a PowerShell
+    /// pipeline, wrapping it in <c>&amp; { … }</c> when it cannot.
+    /// <para>
+    /// The AST node type alone is not enough. A compound body (if/for/case/…)
+    /// obviously emits a statement and needs wrapping — but so does a
+    /// <see cref="Command.Simple"/> whose emission is a statement LIST: an env
+    /// prefix (<c>$(LC_TIME=C date)</c> → <c>$__saved_X = …; try { … } finally
+    /// { … }</c>) or <c>cd</c> (an if/else block). Those used to be classified as
+    /// pipeable and emitted "An empty pipe element is not allowed", breaking the
+    /// parse of the whole file. Classify by the EMITTED TEXT via
+    /// <see cref="PsBuild.IsStatementList"/> so any current or future
+    /// statement-list emitter is covered without re-enumerating builtins.
+    /// </para>
+    /// The <c>&amp; { … }</c> child scope also matches bash's command-substitution
+    /// subshell semantics, so the wrap is never semantically wrong — only more
+    /// expensive, which is why the single-pipeline fast path is kept.
+    /// </summary>
+    private static string PipelineHead(Command body, string inner)
+    {
+        bool pipeable = body is Command.Simple or Command.Pipeline
+                        && !PsBuild.IsStatementList(inner);
+        return pipeable ? inner : PsBuild.Subshell(inner);
+    }
+
     private static string EmitCommandSub(WordPart.CommandSub cs)
     {
         var body = (Command)cs.Body;
         string inner = EmitCaptured(body);
-        bool pipeableHead = body is Command.Simple or Command.Pipeline;
-        string head = pipeableHead ? inner : $"& {{ {inner} }}";
-        return $"$({head} | ForEach-Object {{ Get-BashText $_ }})";
+        return $"$({PipelineHead(body, inner)} | ForEach-Object {{ Get-BashText $_ }})";
     }
 
     /// <summary>
@@ -3407,9 +3451,7 @@ public static class PsEmitter
         string inner;
         try { inner = EmitCaptured(body); }
         finally { _dqNestDepth--; }
-        bool pipeableHead = body is Command.Simple or Command.Pipeline;
-        string head = pipeableHead ? inner : $"& {{ {inner} }}";
-        return $"$((@({head} | ForEach-Object {{ Get-BashText $_ }}) -join \"`n\") -replace '(\\r?\\n)+$','')";
+        return $"$((@({PipelineHead(body, inner)} | ForEach-Object {{ Get-BashText $_ }}) -join \"`n\") -replace '(\\r?\\n)+$','')";
     }
 
     private static string EmitProcessSub(WordPart.ProcessSub ps)

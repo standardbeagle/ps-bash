@@ -4819,6 +4819,84 @@ public class PsEmitterTests
         Assert.Contains("$__bashexit[0]", result);
     }
 
+    // ---- command-sub pipeline head / bare @ sigil --------------------------
+
+    [Fact]
+    public void Transpile_CommandSubOfEnvPrefixedCommand_WrapsStatementListAsPipelineHead()
+    {
+        // `LC_TIME=C date` emits `$__saved… = …; try { … } finally { … }` — a
+        // statement LIST, which cannot head a pipeline. Unwrapped it emitted
+        // "An empty pipe element is not allowed" (Go's make.bash).
+        var result = PsEmitter.Transpile("echo $(LC_TIME=C date)");
+
+        Assert.Contains("$(& { $__saved_LC_TIME", result);
+        Assert.Contains("} | ForEach-Object { Get-BashText $_ })", result);
+    }
+
+    [Fact]
+    public void Transpile_CommandSubOfCd_WrapsStatementListAsPipelineHead()
+    {
+        // cd emits an if/else statement list from a Command.Simple node — the
+        // AST-type-only check called it pipeable and broke the parse.
+        var result = PsEmitter.Transpile("echo $(cd /tmp)");
+
+        Assert.Contains("$(& { $__psbash_cd_target", result);
+    }
+
+    [Fact]
+    public void Transpile_CommandSubOfPlainPipeline_KeepsUnwrappedFastPath()
+    {
+        // A genuine single pipeline must NOT pay for a redundant & { } wrap.
+        var result = PsEmitter.Transpile("x=$(grep a b | head -1)");
+
+        Assert.DoesNotContain("& {", result);
+    }
+
+    [Fact]
+    public void Transpile_CommandSubWithSemicolonInsideQuotedOperand_KeepsFastPath()
+    {
+        // The pipeline-head classifier is quote-aware: a ';' inside a string
+        // operand is not a statement separator.
+        var result = PsEmitter.Transpile("echo $(echo \"a;b\")");
+
+        Assert.DoesNotContain("& {", result);
+    }
+
+    [Fact]
+    public void Transpile_BareAtSignLiteral_EscapesPowerShellSplatSigil()
+    {
+        // `@` is an ordinary character in bash but PowerShell's splat sigil.
+        // Bare `echo @` emitted an unparseable "Unrecognized token".
+        var result = PsEmitter.Transpile("echo @");
+
+        Assert.Equal("Invoke-BashEcho `@", result);
+    }
+
+    [Fact]
+    public void Transpile_BareAtSignPrefixedLiteral_EscapesToAvoidSilentSplat()
+    {
+        // This one PARSED but was silently WRONG: `cmd @arg` splatted the
+        // PowerShell variable $arg instead of passing the literal text `@arg`.
+        var result = PsEmitter.Transpile("cmd @arg");
+
+        Assert.Equal("cmd `@arg", result);
+    }
+
+    [Fact]
+    public void Transpile_AtSignNotLeading_NotEscaped()
+    {
+        // Only a LEADING @ is a PowerShell sigil.
+        Assert.Equal("Invoke-BashEcho a@b", PsEmitter.Transpile("echo a@b"));
+    }
+
+    [Fact]
+    public void Transpile_BraceExpansionArray_NotEscapedAsSplatSigil()
+    {
+        // The emitter's OWN @(...) array is real PowerShell syntax — escaping it
+        // would break brace expansion.
+        Assert.Equal("Invoke-BashEcho @('a','b')", PsEmitter.Transpile("echo {a,b}"));
+    }
+
     [Theory]
     [InlineData("exit $code")]
     [InlineData("return $code")]

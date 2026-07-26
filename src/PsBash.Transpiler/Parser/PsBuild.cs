@@ -92,6 +92,67 @@ public static class PsBuild
             ? "[void]$(" + text + ")"
             : "[void](" + text + ")";
 
+    /// <summary>
+    /// True when <paramref name="psText"/> is a PowerShell statement LIST — i.e. it
+    /// contains a <c>;</c> at nesting depth 0, outside any quoted span. Such text
+    /// CANNOT head a pipeline: <c>$__saved = 1; try { … } finally { … } | Foo</c>
+    /// is the parse error "An empty pipe element is not allowed", because the
+    /// pipe binds only to the trailing <c>finally</c> block.
+    /// <para>
+    /// The scan is quote- and nesting-aware on purpose. A naive
+    /// <c>Contains(";")</c> misfires on a <c>;</c> inside a string operand
+    /// (<c>Invoke-BashEcho "a;b"</c>) or inside an already-wrapped child scope
+    /// (<c>&amp; { a; b }</c>) — both of which ARE valid pipeline heads. That
+    /// "quote-blind scan" is a recurring bug family in this transpiler, so this
+    /// helper is the single place the rule is expressed.
+    /// </para>
+    /// </summary>
+    public static bool IsStatementList(string psText)
+    {
+        int paren = 0, brace = 0, bracket = 0;
+        for (int i = 0; i < psText.Length; i++)
+        {
+            char c = psText[i];
+            switch (c)
+            {
+                case '\'':
+                    // Single-quoted: literal to the next ' ('' is an escaped quote,
+                    // which this loop handles naturally as close-then-reopen).
+                    i++;
+                    while (i < psText.Length && psText[i] != '\'') i++;
+                    break;
+
+                case '"':
+                    // Double-quoted: backtick escapes, and `$( … )` subexpressions
+                    // that may themselves contain quotes and semicolons.
+                    i++;
+                    for (int depth = 0; i < psText.Length; i++)
+                    {
+                        if (psText[i] == '`') { i++; continue; }
+                        if (psText[i] == '$' && i + 1 < psText.Length && psText[i + 1] == '(')
+                        { depth++; i++; continue; }
+                        if (psText[i] == ')' && depth > 0) { depth--; continue; }
+                        if (psText[i] == '"' && depth == 0) break;
+                    }
+                    break;
+
+                case '`': i++; break;               // escape: skip the escaped char
+                case '(': paren++; break;
+                case ')': if (paren > 0) paren--; break;
+                case '{': brace++; break;
+                case '}': if (brace > 0) brace--; break;
+                case '[': bracket++; break;
+                case ']': if (bracket > 0) bracket--; break;
+
+                case ';':
+                    if (paren == 0 && brace == 0 && bracket == 0)
+                        return true;
+                    break;
+            }
+        }
+        return false;
+    }
+
     // ───────────────────────────────── Exit-code tests ────────────────────────────────
 
     /// <summary>

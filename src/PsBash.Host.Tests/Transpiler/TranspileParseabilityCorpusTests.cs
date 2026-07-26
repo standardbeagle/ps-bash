@@ -186,6 +186,23 @@ public class TranspileParseabilityCorpusTests
     [InlineData("f() { return $rc; }")]
     [InlineData("for i in 1 2; do break $n; done")]
     [InlineData("for i in 1 2; do continue $n; done")]
+    // ── command-sub whose body emits a STATEMENT LIST ──────────────────
+    // A Command.Simple is not automatically a valid pipeline head: an env
+    // prefix or `cd` emits `stmt; stmt`, and `stmt; stmt | ForEach-Object`
+    // is "An empty pipe element is not allowed" (Go's make.bash, mkerrors.sh).
+    [InlineData("echo $(LC_TIME=C date)")]
+    [InlineData("x=$(FOO=bar cmd)")]
+    [InlineData("echo $(cd /tmp)")]
+    [InlineData("y=$(cd /tmp && pwd)")]
+    [InlineData("echo $(echo \"a;b\")")]
+    // ── bare `@` — bash literal, PowerShell splat sigil ────────────────
+    // `echo @` was "Unrecognized token"; `cmd @arg` PARSED but silently
+    // splatted $arg instead of passing the literal (npm's completion.sh).
+    [InlineData("echo @")]
+    [InlineData("cmd -n = -n @ -n : -w words")]
+    [InlineData("cmd @arg")]
+    [InlineData("echo a@b")]
+    [InlineData("echo @$x")]
     // ── Bash-tool wrapper fragments ────────────────────────────────────
     [InlineData("shopt -u extglob 2>/dev/null || true")]
     [InlineData("eval 'echo hi' < /dev/null")]

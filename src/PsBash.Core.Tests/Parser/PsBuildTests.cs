@@ -156,4 +156,57 @@ public class PsBuildTests
         int probe = PsBuild.NullSafeBashText.IndexOf("PSObject.Properties", System.StringComparison.Ordinal);
         Assert.True(guard >= 0 && probe >= 0 && guard < probe, "null guard must precede the property probe");
     }
+
+    // ─────────────── IsStatementList ───────────────
+    //
+    // Decides whether emitted text can HEAD a pipeline. A false NEGATIVE emits
+    // "An empty pipe element is not allowed" and breaks the whole file's parse;
+    // a false POSITIVE only costs a redundant `& { }` wrap. The scan must be
+    // quote- and nesting-aware — a quote-blind scan is a recurring bug family
+    // in this transpiler.
+
+    [Theory]
+    [InlineData("Invoke-BashCat f")]
+    [InlineData("Invoke-BashGrep a b | Invoke-BashHead -1")]
+    [InlineData("cmd")]
+    [InlineData("")]
+    public void IsStatementList_SinglePipeline_False(string text)
+        => Assert.False(PsBuild.IsStatementList(text));
+
+    [Theory]
+    [InlineData("$a = 1; cmd")]
+    [InlineData("cmd1; cmd2")]
+    [InlineData("$__saved = $env:X; try { cmd } finally { $env:X = $__saved; }")]
+    public void IsStatementList_StatementList_True(string text)
+        => Assert.True(PsBuild.IsStatementList(text));
+
+    [Theory]
+    // ';' inside a single-quoted operand is NOT a statement separator.
+    [InlineData("Invoke-BashEcho 'a;b'")]
+    // ...nor inside a double-quoted operand...
+    [InlineData("Invoke-BashEcho \"a;b\"")]
+    // ...nor inside a nested $( … ) within a double-quoted string...
+    [InlineData("Invoke-BashEcho \"$(cmd1; cmd2)\"")]
+    // ...nor inside an already-wrapped child scope or any bracket nesting.
+    [InlineData("& { a; b }")]
+    [InlineData("Foo -Bar @('a;b','c')")]
+    [InlineData("$x[0;1]")]
+    public void IsStatementList_SemicolonIsNested_False(string text)
+        => Assert.False(PsBuild.IsStatementList(text),
+            "quote-/nesting-blind scan misfired on: " + text);
+
+    [Fact]
+    public void IsStatementList_TopLevelSemicolonAfterQuotedSpan_True()
+    {
+        // The scanner must RESUME depth tracking after a quoted span closes —
+        // not treat everything past the first quote as quoted.
+        Assert.True(PsBuild.IsStatementList("Invoke-BashEcho 'a;b'; cmd2"));
+    }
+
+    [Fact]
+    public void IsStatementList_EscapedQuoteInsideDoubleQuotes_DoesNotEndTheString()
+    {
+        // `" is an escaped quote, so the ';' after it is still inside the string.
+        Assert.False(PsBuild.IsStatementList("Invoke-BashEcho \"a`\"b;c\""));
+    }
 }
