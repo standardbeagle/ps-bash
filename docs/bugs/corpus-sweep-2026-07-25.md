@@ -6,9 +6,13 @@ Method: transpile every `.sh` file on the dev machine (Git-for-Windows +
 result reports zero errors. See the `real-world-sh-corpus-sweep` memory for the
 runner snippet.
 
-**Result: 72 → 93 files transpile to valid PowerShell.** Bash-stage parse
+**Result: 72 → 95 files transpile to valid PowerShell.** Bash-stage parse
 failures 14 → 2 (and both survivors are now clean `ParseException`s with an
 accurate message, not crashes).
+
+The sweep also led — via oracle-diffing each fix rather than stopping at
+"it parses now" — to three RUNTIME bugs it does not itself measure, the
+largest being that POSIX bracket classes never worked in any command.
 
 Every fix below was confirmed byte-identical against the bash oracle before
 landing. Note how many were **silent wrong output** rather than parse errors —
@@ -35,18 +39,26 @@ the parse-error count badly understates the damage this sweep found.
 | `PATH=~/bin:~/x` | emitted `$HOMEbin` — not a valid variable reference | `9af314a` |
 | `grep "^${field}:"` | suffix-less `${name}` before `:` not braced → PS drive-reference misparse | `803645e` |
 | `eval "…" \| sort` | a statement-list SIMPLE command is not a valid pipeline stage | `803645e` |
+| `X="$(grep "a\"b" f)"` | backtick escape eaten by the enclosing string → unparseable | `ce1dd7d` |
+
+### Runtime bugs found while oracle-diffing the above
+
+| Shape | Symptom | Commit |
+|---|---|---|
+| `grep '[[:digit:]]'`, `sed 's/[[:space:]]\+//'`, `awk '/[[:digit:]]/'` | POSIX bracket classes never worked in ANY command — .NET reads `[[:digit:]]` as the set `[:digt`, so they matched nothing and reported no error (**silent**) | `ce1dd7d` |
+| `printf … \| grep 'a'; printf … \| grep -E 'b'` | binder-swallowed-flag recovery read a DIFFERENT statement's text, so the second grep lost its `-E` and ran as basic regex (**silent**) | `ce1dd7d` |
+
+The POSIX-class bug masked the flag-recovery one: with the classes matching
+nothing, a basic-vs-extended regex mix-up made no visible difference.
 
 ## Open
 
 Still failing in the sweep; each needs its own diagnosis.
 
-1. **`backup.sh`, `stop-hook.sh`, `resolve-port.sh`** — "string is missing the
-   terminator". All three nest a double-quoted argument inside `$( … )` inside a
-   double-quoted assignment value: the emitted inner argument carries a
-   backtick-escaped `"` (and, in `resolve-port.sh`, the `'"'"'` idiom) that the
-   OUTER string then re-interprets. This is the nested-quote seam — the same
-   class the memory `transpiler-port-gaps` flags as recurring, and the largest
-   remaining cluster.
+1. **`backup.sh`, `stop-hook.sh`** — "string is missing the terminator". The
+   sibling `resolve-port.sh` was fixed by `ce1dd7d` (nest-depth escaping); these
+   two still fail, so they carry a further variant of the nested-quote seam —
+   both embed multi-line `awk` / `sed` program text. Not yet reduced.
 2. **`test-worktrack-vite-smoke.sh`** — "An empty pipe element is not allowed".
    The sibling `detect-project-type.sh` was fixed by `803645e`; this one has a
    different shape, not yet reduced.
