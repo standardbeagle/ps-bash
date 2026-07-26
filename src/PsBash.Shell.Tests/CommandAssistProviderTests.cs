@@ -407,9 +407,19 @@ public sealed class CommandAssistProviderTests
         return null;
     }
 
+    /// <summary>
+    /// Bound for the two process-lifecycle waits below. These are NOT assertions about
+    /// speed — each loop exits the instant the condition holds, so the bound only caps
+    /// how long a genuine failure takes to report. A tight 5 s made
+    /// <c>GenerateAsync_CallerCancellationKillsProviderProcess</c> flake on a loaded
+    /// machine: the "fake provider" is itself a <c>pwsh</c> spawn, and starting one
+    /// under CPU saturation can take longer than that on its own.
+    /// </summary>
+    private static readonly TimeSpan ProcessWaitTimeout = TimeSpan.FromSeconds(30);
+
     private static async Task<int> WaitForPidAsync(string pidPath)
     {
-        var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(5);
+        var deadline = DateTime.UtcNow + ProcessWaitTimeout;
         while (DateTime.UtcNow < deadline)
         {
             if (File.Exists(pidPath)
@@ -427,7 +437,7 @@ public sealed class CommandAssistProviderTests
 
     private static async Task<bool> WaitForProcessExitAsync(int pid)
     {
-        var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(5);
+        var deadline = DateTime.UtcNow + ProcessWaitTimeout;
         while (DateTime.UtcNow < deadline)
         {
             if (!ProcessExists(pid))

@@ -92,21 +92,32 @@ only ONE of them is actually a ps-bash gap.
   launcher, collected while that launcher is alive. Verified against four
   deliberately-spawned concurrent `pwsh` processes.
 
+### Timeouts widened (`InteractiveShellHarness`, `CommandAssistProviderTests`)
+
+Four *different* interactive tests each failed exactly once across seven full
+runs, always with the same signature — `WaitForPromptAsync timed out after 8.0s`,
+`stdout received (0 chars)` — and always passed when re-run alone:
+`CtrlC_MidInput_ShellRemainsAlive`, `Unalias_RemovesAlias`, and others. One
+systemic cause, not four bugs: the harness's per-command prompt wait was a hard
+8 s, while a command's round-trip goes through the IPC socket to the SDK host and
+several shell-spawning suites can be competing for the machine.
+
+These bounds are not assertions — every loop exits the instant its condition
+holds, so the bound only caps how long a genuine failure takes to REPORT, and the
+harness dumps a full transcript when it fires. `DefaultPromptTimeout` is now 25 s
+with a `PSBASH_TEST_PROMPT_TIMEOUT_SEC` override, matching the pattern
+`DefaultStartTimeout` already used. `CommandAssistProviderTests`' two
+process-lifecycle waits went 5 s → 30 s for the same reason (its "fake provider"
+is itself a `pwsh` spawn, which alone can exceed 5 s on a saturated box).
+
+Verified by running the whole Shell suite against six deliberately-spawned
+CPU-saturating processes — the condition that produced every one of these flakes.
+
 ### Still open
 
-Two load-sensitive flakes, each seen failing exactly once across seven full runs
-and passing when re-run isolated immediately after:
-
-- `PromptRenderingIntegrationTests.CtrlC_MidInput_ShellRemainsAlive` — 8 s prompt
-  deadline, 0 chars received.
-- `CommandAssistProviderTests.GenerateAsync_CallerCancellationKillsProviderProcess`
-  — process-kill timing.
 - `WorkerPoolTests.Dispose_DisposesIdleWorkers` — "expected idle workers disposed,
-  got 2" (async disposal not yet observed).
-
-Each asserts on a *deadline* rather than on an observable event, the shape
-qa-rubric Directive 6 forbids; they want a wait-for-condition with a generous
-bound. Directive 2 says quarantine-and-fix rather than ignore.
+  got 2" (async disposal not yet observed). Seen once; not yet re-provoked, so the
+  mechanism is unconfirmed.
 - Running `PsBash.Host.Tests` immediately after another suite can hang the test
   harness: a persisted `ps-bash-host` inherits the runner's redirected stdout, so
   the parent never sees EOF (the `daemon-c-pipe-inheritance-hang` class). Killing

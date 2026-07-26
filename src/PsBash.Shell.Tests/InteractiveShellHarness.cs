@@ -27,7 +27,21 @@ internal sealed class InteractiveShellHarness : IAsyncDisposable
     public static readonly string PromptString = "PSBASH>";
     private static readonly Regex PromptRegex = new(Regex.Escape(PromptString), RegexOptions.Compiled);
 
-    public static readonly TimeSpan DefaultPromptTimeout = TimeSpan.FromSeconds(8);
+    // Per-command prompt wait. A command's round-trip goes through the IPC socket to
+    // the SDK host, so on a machine running several shell-spawning suites at once it
+    // can exceed a tight bound — 8 s produced a recurring family of one-off
+    // "WaitForPromptAsync timed out after 8.0s / stdout received (0 chars)" failures
+    // across DIFFERENT interactive tests, every one of which passed when re-run alone.
+    //
+    // A timeout only bounds how long a genuine failure takes to REPORT; it is not an
+    // assertion, and the harness dumps a full transcript when it fires. So the bound is
+    // generous, with the same env override the cold-start timeout below already uses.
+    public static readonly TimeSpan DefaultPromptTimeout = TimeSpan.FromSeconds(
+        int.TryParse(
+            Environment.GetEnvironmentVariable("PSBASH_TEST_PROMPT_TIMEOUT_SEC"),
+            out var promptTimeoutSec) && promptTimeoutSec > 0
+            ? promptTimeoutSec
+            : 25);
     // Cold-start: spawn ps-bash, locate + spawn the host child, open the IPC
     // socket, extract the embedded PowerShell module, import it, and emit the
     // first PS1. Under parallel test load on slow Linux CI runners (multiple
