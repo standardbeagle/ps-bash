@@ -309,6 +309,31 @@ public class PsEmitterTests
         Assert.Contains(expectedFragment, PsEmitter.Transpile(bash));
     }
 
+    [Theory]
+    // PowerShell reads `$field:` as a provider-qualified path, so a variable
+    // followed by ':' inside a double-quoted string must be braced. The guard
+    // existed for `$field:` but NOT for the equally common braced bash form
+    // `${field}:` — a suffix-less ${name} emits the same bare `$name`, so one
+    // `grep "^${field}:"` broke the parse of the whole file.
+    [InlineData("for f in a; do grep \"^${f}:\" x; done", "\"^${f}:\"")]
+    [InlineData("for f in a; do grep \"^$f:\" x; done", "\"^${f}:\"")]
+    [InlineData("grep \"^${nl}:\" x", "\"^${env:nl}:\"")]
+    public void Transpile_VarFollowedByColonInDoubleQuotes_IsBraced(
+        string bash, string expected)
+    {
+        Assert.Contains(expected, PsEmitter.Transpile(bash));
+    }
+
+    [Fact]
+    public void Transpile_BracedVarWithSuffix_KeepsItsOwnEmission()
+    {
+        // Guard the narrow claim: only a SUFFIX-LESS ${name} takes the bracing
+        // path; an operator form still routes through EmitBracedVar.
+        var result = PsEmitter.Transpile("echo \"${v:-d}:\"");
+
+        Assert.Contains("??", result);
+    }
+
     [Fact]
     public void Transpile_AssignmentPathColons_StillSplitForTildeExpansion()
     {

@@ -1595,7 +1595,7 @@ public static class PsEmitter
         var opName = GetLiteralValue(words[0]) ?? "";
         var message = PsBuild.SingleQuote(
             $"ps-bash: [: {opName}: unsupported test operator");
-        return $"$(Write-BashHostStderr {message}; $false)";
+        return PsBuild.Subexpr($"Write-BashHostStderr {message}; $false");
     }
 
     // Split a `[ ]` clause list on a top-level POSIX combinator (`-a` / `-o`) and
@@ -2847,6 +2847,10 @@ public static class PsEmitter
             // context: its bare form `($env:y ?? "z")` carries raw `"`, which would
             // break out of this surrounding "...". The inDoubleQuote form uses `$(...)`
             // with single-quoted inner literals, which is safe nested here.
+            // Same suffix-less-${name} drive-reference guard as AppendDoubleQuotedInner.
+            else if (part is WordPart.BracedVarSub { Suffix: null } plainNbvs
+                && i + 1 < parts.Length && NextPartNeedsBracing(parts[i + 1]))
+                sb.Append(EmitSimpleVarBraced(plainNbvs.Name));
             else if (part is WordPart.BracedVarSub nbvs)
                 sb.Append(EmitBracedVar(nbvs, inDoubleQuote: true));
             else if (part is WordPart.SimpleVarSub nvs)
@@ -3979,7 +3983,18 @@ public static class PsEmitter
         for (int i = 0; i < parts.Length; i++)
         {
             var part = parts[i];
-            if (part is WordPart.BracedVarSub bvs)
+            // A SUFFIX-LESS ${name} is just a variable read — EmitBracedVar returns the
+            // same bare `$name` a SimpleVarSub would, so it needs the same
+            // drive-reference guard. Without this `grep "^${field}:"` emitted
+            // `"^$field:"`, and PowerShell reads `$field:` as a provider-qualified
+            // path ("':' was not followed by a valid variable name character"), so the
+            // whole file failed to parse. The guard was on `$field:` but not `${field}:`.
+            if (part is WordPart.BracedVarSub { Suffix: null } plainBvs
+                && i + 1 < parts.Length && NextPartNeedsBracing(parts[i + 1]))
+            {
+                sb.Append(EmitSimpleVarBraced(plainBvs.Name));
+            }
+            else if (part is WordPart.BracedVarSub bvs)
                 sb.Append(EmitBracedVar(bvs, inDoubleQuote: true));
             else if (part is WordPart.SimpleVarSub vs)
             {
@@ -4130,7 +4145,7 @@ public static class PsEmitter
                 // body still persist the way bash's do.
                 var compoundText = Emit(cmd);
                 sb.Append(NeedsChainOperandSubexpression(compoundText)
-                    ? $"$({compoundText})"
+                    ? PsBuild.Subexpr(compoundText)
                     : compoundText);
             }
         }
@@ -4144,6 +4159,26 @@ public static class PsEmitter
             return false;
 
         return emitted.Contains(';') || emitted.StartsWith("if ", StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// A SIMPLE command can still emit a PowerShell statement LIST — the runtime-`eval`
+    /// block (`$__psbash_eval_src = …; …; Invoke-Expression …`), an env-pair prefix
+    /// (`$env:X = "1"; cmd`), a `cd` rewrite. None of those is a valid bare pipeline
+    /// segment, so `eval "find …" | sort` failed with "An empty pipe element is not
+    /// allowed". <see cref="IsCompoundPipelineStage"/> already handles loops / groups /
+    /// conditionals; this covers the statement-list SIMPLE commands it does not see.
+    /// `&amp; { … }` (not `$( … )`) keeps the stage streaming, and its child scope
+    /// matches bash, which runs every pipe stage in its own subshell.
+    /// </summary>
+    private static string WrapPipelineStageIfStatementList(string emitted)
+    {
+        if (emitted.StartsWith("& {", StringComparison.Ordinal)
+            || emitted.StartsWith("$(", StringComparison.Ordinal)
+            || !emitted.Contains("; ", StringComparison.Ordinal))
+            return emitted;
+
+        return $"& {{ {emitted} }}";
     }
 
     private static string EmitPipeline(Command.Pipeline pipeline)
@@ -4199,7 +4234,7 @@ public static class PsEmitter
                     EmitPipeTargetRedirects(simple, sb);
                 }
                 else
-                    sb.Append(Emit(cmd));
+                    sb.Append(WrapPipelineStageIfStatementList(Emit(cmd)));
             }
             else if (pipeline.Commands.Length > 1 && IsCompoundPipelineStage(cmd))
             {
@@ -4215,6 +4250,8 @@ public static class PsEmitter
                 // This applies at ANY position (incl. the first stage), not just i > 0.
                 sb.Append($"& {{ {Emit(cmd)} }}");
             }
+            else if (pipeline.Commands.Length > 1)
+                sb.Append(WrapPipelineStageIfStatementList(Emit(cmd)));
             else
                 sb.Append(Emit(cmd));
         }
