@@ -2206,6 +2206,10 @@ public static class PsEmitter
                 specialResult = "$($global:LASTEXITCODE = 1; Write-Error '' -ErrorAction SilentlyContinue)";
         }
 
+        else if (cmd0 == "exit" && cmd.Words.Length == 2
+                 && IsPureUnquotedVarWord(cmd.Words[1]))
+            specialResult = EmitExitWithUnquotedVar(cmd.Words[1]);
+
         else if (cmd0 == "cd")
             specialResult = EmitCd(cmd.Words.RemoveAt(0));
 
@@ -2402,7 +2406,14 @@ public static class PsEmitter
             : IsVariableCommandWord(cmd.Words[0]) ? "& "
             : "";
 
-        if (HasUnquotedVarSplatArg(commandArgs))
+        // A PowerShell statement keyword (exit/return/break/…) cannot take a
+        // splatted argument — `exit @__bashsplat0` is a parse error that poisons
+        // the whole emitted file. Fall back to plain emission for those.
+        bool splatSafeCommand = cmd.Words.Length == 0
+            || GetLiteralValue(cmd.Words[0]) is not string cw
+            || !PsStatementKeywordCommands.Contains(cw);
+
+        if (splatSafeCommand && HasUnquotedVarSplatArg(commandArgs))
         {
             // Hoist each unquoted-variable operand to a temp var and splat it.
             // The command word keeps its existing emission (incl. the `& `
@@ -3701,6 +3712,36 @@ public static class PsEmitter
         };
 
         return PsBuild.WordSplitArray(varRef);
+    }
+
+    /// <summary>
+    /// PowerShell statement keywords that the emitter can produce as a "command
+    /// word". They are parsed as STATEMENTS, not commands, so a splatted
+    /// argument (<c>@var</c>) after one is a hard PowerShell parse error
+    /// ("the splatting operator '@' … can be used only as an argument to a
+    /// command"). The RC-7 splat hoist must therefore never fire for them —
+    /// <c>exit $code</c> used to emit <c>exit @__bashsplat0</c> and broke the
+    /// whole file's parse.
+    /// </summary>
+    private static readonly HashSet<string> PsStatementKeywordCommands =
+        new(StringComparer.Ordinal) { "exit", "return", "break", "continue", "throw" };
+
+    /// <summary>
+    /// Emits <c>exit $var</c> for a pure unquoted ordinary variable while keeping
+    /// bash's word-splitting semantics WITHOUT the illegal splat (see
+    /// <see cref="PsStatementKeywordCommands"/>). In bash an empty unquoted
+    /// operand is elided entirely, so <c>x=; exit $x</c> is a bare <c>exit</c> —
+    /// which exits with the previous command's status. The value expression is a
+    /// <c>$( … )</c> subexpression so the whole thing stays ONE statement and
+    /// <c>exit</c> itself is never wrapped in a script block (a wrapped
+    /// <c>exit</c> would only leave the block when inside a function).
+    /// </summary>
+    private static string EmitExitWithUnquotedVar(CompoundWord word)
+    {
+        string split = EmitUnquotedVarSplitArray(word);
+        return "exit $(& { $__bashexit = " + split +
+               "; if ($__bashexit.Count) { $__bashexit[0] } " +
+               "else { $global:LASTEXITCODE } })";
     }
 
     /// <summary>

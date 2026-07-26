@@ -4793,6 +4793,51 @@ public class PsEmitterTests
     }
 
     [Fact]
+    public void Transpile_ExitWithUnquotedVar_DoesNotSplat()
+    {
+        // `exit` is a PowerShell STATEMENT keyword, not a command, so
+        // `exit @__bashsplat0` is a hard parse error that poisons the whole
+        // emitted file. Found by the real-world .sh corpus sweep on
+        // scripts/test.sh (`exit $test_exit`) and scripts/skip-report.sh.
+        var result = PsEmitter.Transpile("exit $code");
+
+        Assert.DoesNotContain("@__bashsplat", result);
+        Assert.StartsWith("exit $(", result);
+        // Empty unquoted operand is elided in bash, so `exit` keeps $? —
+        // modeled as the $global:LASTEXITCODE fallback.
+        Assert.Contains("$global:LASTEXITCODE", result);
+    }
+
+    [Fact]
+    public void Transpile_ExitWithUnquotedVar_EmitsParseableSplitValue()
+    {
+        var result = PsEmitter.Transpile("exit $code");
+
+        // The word-split array is still built (bash word-splitting semantics),
+        // it is just consumed as a VALUE rather than splatted.
+        Assert.Contains("$env:code -split '\\s+'", result);
+        Assert.Contains("$__bashexit[0]", result);
+    }
+
+    [Theory]
+    [InlineData("exit $code")]
+    [InlineData("return $code")]
+    [InlineData("code=1; exit $code")]
+    [InlineData("f() { return $rc; }")]
+    [InlineData("break $n")]
+    [InlineData("continue $n")]
+    public void Transpile_StatementKeywordWithUnquotedVar_NeverSplats(string bash)
+    {
+        // Regression guard for the whole PsStatementKeywordCommands set: a
+        // splatted argument after a PowerShell statement keyword never parses.
+        // The parse itself is asserted by the parseability contract suite
+        // (PsBash.Host.Tests/Transpiler) — Core.Tests has no PowerShell SDK.
+        var result = PsEmitter.Transpile(bash);
+
+        Assert.DoesNotContain("@__bashsplat", result);
+    }
+
+    [Fact]
     public void CompactCommandChain_GitAddCommitPush_ReturnsStableRouteAndSummary()
     {
         var chain = MakeAndOrChain("&&", "&&",

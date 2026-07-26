@@ -176,6 +176,16 @@ public class TranspileParseabilityCorpusTests
     [InlineData("declare -i count")]
     [InlineData("declare x=hello")]
     [InlineData("read -ra arr")]
+    // ── PowerShell statement keywords + RC-7 word-split splat ──────────
+    // `exit` / `return` / `break` / `continue` parse as STATEMENTS in
+    // PowerShell, so a splatted argument after one ("exit @__bashsplat0") is a
+    // hard parse error that poisons the ENTIRE emitted file. Found by the
+    // real-world .sh corpus sweep on scripts/test.sh + scripts/skip-report.sh.
+    [InlineData("exit $code")]
+    [InlineData("test_exit=0; exit $test_exit")]
+    [InlineData("f() { return $rc; }")]
+    [InlineData("for i in 1 2; do break $n; done")]
+    [InlineData("for i in 1 2; do continue $n; done")]
     // ── Bash-tool wrapper fragments ────────────────────────────────────
     [InlineData("shopt -u extglob 2>/dev/null || true")]
     [InlineData("eval 'echo hi' < /dev/null")]
