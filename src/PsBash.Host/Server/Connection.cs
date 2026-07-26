@@ -168,15 +168,15 @@ internal sealed class Connection
         // PRODUCE OUTPUT (the queue must fill to notice); a silent command like
         // `sleep 30` never writes a frame, so nothing noticed at all — a launcher
         // killed at 2 s still blocked the next command for the full 30 s.
+        //
+        // Installed only for a live duplex transport in framed mode. A SEEKABLE stream
+        // is an in-memory buffer (test doubles), where a read returning 0 means "end of
+        // buffer", not "peer gone" — watching one would abandon every command.
+        // Interactive sessions are excluded because their stream carries additional
+        // protocol traffic that this detector must not consume.
         using var clientGone = new CancellationTokenSource();
         using var watchStop = new CancellationTokenSource();
         using var execCts = CancellationTokenSource.CreateLinkedTokenSource(ct, clientGone.Token);
-        //
-        // Only for a live duplex transport in framed mode. A SEEKABLE stream is an
-        // in-memory buffer (test doubles), where a read returning 0 means "end of
-        // buffer", not "peer gone" — watching it would abandon every command.
-        // Interactive sessions are excluded because their stream carries additional
-        // protocol traffic that this detector must not consume.
         if (sessionMode == SessionMode.Framed && !_stream.CanSeek)
             _ = WatchForClientDisconnectAsync(_stream, clientGone, watchStop.Token);
 
@@ -251,6 +251,16 @@ internal sealed class Connection
                 }
             }
         }
+        // Belt-and-suspenders for the abandoned case: if the worker returned normally
+        // after its pipeline was stopped (rather than surfacing the cancellation), there
+        // is still nobody to write to. Skip the exit frame instead of throwing an
+        // IOException that would surface as a spurious "connection error" in the log.
+        if (clientGone.IsCancellationRequested)
+        {
+            WorkerPool<SdkWorker>.DiagLog("Connection: client disconnected; skipping exit frame");
+            return;
+        }
+
         await HostProtocol.WriteExitAsync(_stream, exitCode, ct);
         WorkerPool<SdkWorker>.DiagLog("Connection: wrote exit");
 
