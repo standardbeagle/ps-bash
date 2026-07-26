@@ -4,6 +4,7 @@ using Xunit;
 
 namespace PsBash.Core.Tests.Compaction;
 
+[Collection(FilterLibraryCacheCollection.Name)]
 public sealed class CompactChainRouteTests
 {
     private const string Route = "git.stage-commit-push.v1";

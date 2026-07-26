@@ -20,10 +20,16 @@ internal static class ProcessRunHelper
 {
     public static readonly TimeSpan DefaultTimeout = TimeSpan.FromSeconds(30);
 
+    /// <param name="onStarted">
+    /// Invoked once, immediately after the child starts. Lets a caller observe the
+    /// launcher's PID — needed to scope a leak assertion to THIS process's descendants
+    /// instead of every same-named process on the machine.
+    /// </param>
     public static async Task<(int ExitCode, string Stdout, string Stderr)> RunAsync(
         ProcessStartInfo psi,
         string? stdinContent = null,
-        TimeSpan? timeout = null)
+        TimeSpan? timeout = null,
+        Action<Process>? onStarted = null)
     {
         psi.RedirectStandardOutput = true;
         psi.RedirectStandardError = true;
@@ -35,6 +41,7 @@ internal static class ProcessRunHelper
         var effectiveTimeout = timeout ?? DefaultTimeout;
         var process = Process.Start(psi)
             ?? throw new InvalidOperationException("Failed to start process");
+        onStarted?.Invoke(process);
 
         // Start reading stdout/stderr concurrently so large outputs do not deadlock.
         var stdoutTask = process.StandardOutput.ReadToEndAsync();

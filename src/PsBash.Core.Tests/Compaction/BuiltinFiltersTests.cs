@@ -9,6 +9,7 @@ namespace PsBash.Core.Tests.Compaction;
 /// and run representative captured command output through <see cref="FilterEngine"/>.
 /// These are the per-command oracle cases (Directive 1/3) for P2.
 /// </summary>
+[Collection(FilterLibraryCacheCollection.Name)]
 public class BuiltinFiltersTests
 {
     private static OutputFrame Out(string text) => new(StreamTag.Stdout, text);

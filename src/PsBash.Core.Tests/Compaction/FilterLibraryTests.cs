@@ -4,6 +4,7 @@ using Xunit;
 
 namespace PsBash.Core.Tests.Compaction;
 
+[Collection(FilterLibraryCacheCollection.Name)]
 public class FilterLibraryTests
 {
     private static FilterSpec Spec(string name, string command, params string[] args) => new()

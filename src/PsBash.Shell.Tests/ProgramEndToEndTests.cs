@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using PsBash.Shell;
 using Xunit;
 
 namespace PsBash.Shell.Tests;
@@ -139,36 +140,78 @@ public class ProgramEndToEndTests
     public async Task HangingCommand_TimesOutWithin35Seconds_AndKillsProcessTree()
     {
 
-        var preWorkerPids = Process.GetProcessesByName("pwsh")
-            .Select(p => p.Id).ToHashSet();
+        // Track only the SDK hosts THIS launcher spawns. The previous version diffed
+        // every `pwsh` on the machine against a pre-run snapshot, so any concurrently
+        // running test project — or the developer's own shell — failed it. Descendants
+        // are collected while the launcher is alive, because once it is killed their
+        // parent PID no longer resolves to it.
+        int launcherPid = 0;
+        var ourHosts = new HashSet<int>();
+        using var stopCollecting = new CancellationTokenSource();
 
         var sw = Stopwatch.StartNew();
         var timeout = TimeSpan.FromSeconds(10);
         var ex = await Assert.ThrowsAsync<TimeoutException>(async () =>
         {
             var psi = PsBashTestProcess.Create(["-c", "Start-Sleep 60"]);
-            await ProcessRunHelper.RunAsync(psi, stdinContent: null, timeout: timeout);
+            await ProcessRunHelper.RunAsync(
+                psi, stdinContent: null, timeout: timeout,
+                onStarted: p =>
+                {
+                    launcherPid = p.Id;
+                    _ = Task.Run(() => CollectChildHosts(p.Id, ourHosts, stopCollecting.Token));
+                });
         });
         sw.Stop();
+        stopCollecting.Cancel();
 
         Assert.True(sw.Elapsed < TimeSpan.FromSeconds(20),
             $"Timeout took too long: {sw.Elapsed.TotalSeconds:F1}s");
         Assert.Contains("did not exit within", ex.Message);
+        Assert.NotEqual(0, launcherPid);
 
-        // Poll for child reap, bounded by a deadline. Replaces a 2s
-        // Task.Delay — usually completes in <100 ms.
+        // Poll for child reap, bounded by a deadline. Usually completes in <100 ms.
         var reapDeadline = DateTime.UtcNow + TimeSpan.FromSeconds(3);
         List<int> leaked;
         while (true)
         {
-            var postWorkerPids = Process.GetProcessesByName("pwsh")
-                .Select(p => p.Id).ToHashSet();
-            leaked = postWorkerPids.Except(preWorkerPids).ToList();
+            lock (ourHosts) leaked = ourHosts.Where(IsAlive).ToList();
             if (leaked.Count == 0 || DateTime.UtcNow >= reapDeadline) break;
             await Task.Delay(50);
         }
         Assert.True(leaked.Count == 0,
             $"Leaked SDK host PIDs after timeout: {string.Join(",", leaked)}");
+    }
+
+    /// <summary>Record every <c>pwsh</c> whose parent is <paramref name="parentPid"/>,
+    /// until cancelled. Runs while the launcher lives so the parent link still resolves.</summary>
+    private static void CollectChildHosts(
+        int parentPid, HashSet<int> sink, CancellationToken token)
+    {
+        while (!token.IsCancellationRequested)
+        {
+            foreach (var p in Process.GetProcessesByName("pwsh"))
+            {
+                try
+                {
+                    if (JobObjectWatchdog.GetParentProcessId(p.Handle) == parentPid)
+                    {
+                        lock (sink) sink.Add(p.Id);
+                    }
+                }
+                catch { /* exited mid-enumeration, or access denied */ }
+                finally { p.Dispose(); }
+            }
+
+            try { Task.Delay(50, token).Wait(token); }
+            catch (OperationCanceledException) { return; }
+        }
+    }
+
+    private static bool IsAlive(int pid)
+    {
+        try { using var p = Process.GetProcessById(pid); return !p.HasExited; }
+        catch (ArgumentException) { return false; }   // already gone
     }
 
     // Regression: `ps-bash -c 'echo a; echo b; echo c'` must produce three

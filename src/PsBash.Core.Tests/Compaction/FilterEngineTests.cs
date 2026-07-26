@@ -9,6 +9,7 @@ namespace PsBash.Core.Tests.Compaction;
 /// (Directive 1/2): with no matching filter, FilterEngine.Apply must be byte-equal to
 /// the generic OutputCompactor it wraps, so nothing regresses for unmatched commands.
 /// </summary>
+[Collection(FilterLibraryCacheCollection.Name)]
 public class FilterEngineTests
 {
     [Fact]

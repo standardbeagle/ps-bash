@@ -9,6 +9,7 @@ namespace PsBash.Core.Tests.Compaction;
 /// no dedicated filter to its error/summary lines, while leaving success and the
 /// default (<see cref="GenericFallback.None"/>) byte-identical to the plain digest.
 /// </summary>
+[Collection(FilterLibraryCacheCollection.Name)]
 public class GenericFallbackTests
 {
     private static OutputFrame Out(string text) => new(StreamTag.Stdout, text);
