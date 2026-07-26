@@ -118,16 +118,26 @@ is itself a `pwsh` spawn, which alone can exceed 5 s on a saturated box).
 Verified by running the whole Shell suite against six deliberately-spawned
 CPU-saturating processes — the condition that produced every one of these flakes.
 
+### Fixed (2026-07-26)
+
+- **The escalation-suite flake family** — ~1 failure per full run, a different test each
+  time, always `ps-bash.exe did not exit within 30s` with zero partial output. Root cause
+  was a PRODUCT bug, not a tight bound: a command whose launcher had been killed kept
+  running in the daemon and held the process-wide exec gate, so an unrelated test's
+  launcher queued behind it. Full diagnosis and fix in
+  [`abandoned-command-holds-exec-gate.md`](./abandoned-command-holds-exec-gate.md).
+  Escalation suite is now 22/22 across three consecutive runs, and its runtime dropped
+  from ~76 s to ~25–34 s.
+- **The `PsBash.Host.Tests`-after-another-suite hang** — `ProcessSpawn` bounded the wait
+  for process exit but NOT the stdout/stderr drain that follows it, so a surviving
+  grandchild holding the pipe blocked forever with no diagnostic. Now bounded by
+  `ProcessSpawn.DrainGrace` and reported as `SpawnDrainTimeoutException`. Same doc.
+
 ### Still open
 
 - `WorkerPoolTests.Dispose_DisposesIdleWorkers` — "expected idle workers disposed,
   got 2" (async disposal not yet observed). Seen once; not yet re-provoked, so the
   mechanism is unconfirmed.
-- Running `PsBash.Host.Tests` immediately after another suite can hang the test
-  harness: a persisted `ps-bash-host` inherits the runner's redirected stdout, so
-  the parent never sees EOF (the `daemon-c-pipe-inheritance-hang` class). Killing
-  stray hosts between suites avoids it. Worth checking whether a host spawn path
-  still leaks the inherited handle.
 
 ## Not a product bug
 

@@ -102,6 +102,79 @@ public class KnownBadRegressionTests
         Assert.Contains("did not exit within", ex.Message);
     }
 
+    // ── 3b. A surviving grandchild must not hang the drain forever ─────────────
+
+    /// <summary>
+    /// Known-bad: a spawn whose child EXITS but whose output pipe never reaches EOF.
+    /// <c>ReadToEndAsync</c> completes on pipe EOF, not on child exit, so a grandchild
+    /// that inherited the write end blocks the drain — AFTER the timeout has already
+    /// been satisfied by the child's exit, so no bound applied. That is how a persisted
+    /// <c>ps-bash-host</c> holding a launcher's stdout hung whole test runs with no
+    /// diagnostic ("running PsBash.Host.Tests immediately after another suite can hang
+    /// the test harness").
+    ///
+    /// The repro is exact rather than simulated: a pwsh that starts a long-lived
+    /// <c>-NoNewWindow</c> grandchild (which therefore inherits our stdout pipe) and
+    /// then exits 0 immediately. The contract is that this REPORTS within the drain
+    /// grace instead of hanging — if this test itself hangs, the contract is broken.
+    /// </summary>
+    [SkippableFact]
+    public async Task Regression_ProcessSpawnDrainBoundedWhenGrandchildHoldsPipe()
+    {
+        var pwsh = Environment.ProcessPath is { } p && p.Contains("pwsh", StringComparison.OrdinalIgnoreCase)
+            ? p
+            : "pwsh";
+
+        var grace = TimeSpan.FromSeconds(3);
+        // The grandchild records its PID so this test can kill it deterministically.
+        // Leaving a sleeping process behind is not acceptable: the escalation suite's
+        // scale//timeout tests are contention-sensitive, and a stray pwsh made two of
+        // them exceed their 30 s launcher bound.
+        var pidFile = Path.Combine(Path.GetTempPath(), $"psbash-draintest-{Guid.NewGuid():N}.pid");
+        var sw = Stopwatch.StartNew();
+
+        try
+        {
+            var ex = await Assert.ThrowsAsync<PsBash.Testing.SpawnDrainTimeoutException>(async () =>
+            {
+                await PsBash.Testing.ProcessSpawn.RunAsync(
+                    pwsh,
+                    new[]
+                    {
+                        "-NoProfile", "-NonInteractive", "-Command",
+                        // -NoNewWindow makes the grandchild inherit OUR stdout pipe; the
+                        // parent exits at once, so only the grandchild holds the write end.
+                        "$p = Start-Process pwsh -ArgumentList '-NoProfile','-NonInteractive','-Command','Start-Sleep 60' "
+                        + $"-NoNewWindow -PassThru; Set-Content -LiteralPath '{pidFile}' -Value $p.Id; exit 0",
+                    },
+                    // Generous exit timeout: the child exits immediately, so reaching the
+                    // drain path is what is under test, not the exit bound.
+                    timeout: TimeSpan.FromSeconds(60),
+                    drainGrace: grace);
+            });
+
+            sw.Stop();
+
+            // Must report shortly after the grace, not after the grandchild's sleep.
+            Assert.True(sw.Elapsed < TimeSpan.FromSeconds(20),
+                $"Drain bound did not fire promptly: {sw.Elapsed.TotalSeconds:F1}s");
+            Assert.Equal(0, ex.ExitCode);
+            Assert.Contains("never reached EOF", ex.Message);
+        }
+        finally
+        {
+            if (File.Exists(pidFile))
+            {
+                if (int.TryParse(File.ReadAllText(pidFile).Trim(), out var grandchildPid))
+                {
+                    try { Process.GetProcessById(grandchildPid).Kill(entireProcessTree: true); }
+                    catch { /* already gone */ }
+                }
+                try { File.Delete(pidFile); } catch { /* best effort */ }
+            }
+        }
+    }
+
     // ── 4. Concurrent daemon commands do not corrupt shared shell state ────────
 
     /// <summary>

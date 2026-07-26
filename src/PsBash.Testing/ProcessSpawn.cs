@@ -21,12 +21,31 @@ namespace PsBash.Testing;
 ///   5. Kill(entireProcessTree: true) runs in a finally block so a hung
 ///      child never orphans its process tree — fires even when the await is
 ///      cancelled or an exception unwinds.
+///   6. The drain that follows a NORMAL exit is bounded too (see
+///      <see cref="DrainGrace"/>). ReadToEndAsync completes on pipe EOF, not on
+///      child exit, so a surviving GRANDCHILD holding the write end blocks it
+///      forever — past the timeout, which has already been satisfied. That is
+///      the "test harness hangs after another suite" failure mode: a persisted
+///      ps-bash-host that inherited the launcher's stdout keeps the pipe open
+///      after the launcher exits.
 ///
 /// Every behaviour knob a suite needs (timeout, env, stdin) is a parameter
 /// here; suites do not re-implement the loop.
 /// </summary>
 public static class ProcessSpawn
 {
+    /// <summary>
+    /// How long to wait for stdout/stderr EOF AFTER the child has already exited.
+    /// The child's own writes are flushed into the pipe by the time it exits, so
+    /// this only ever waits on some OTHER process holding the write handle —
+    /// generous is fine, unbounded is not. Override with
+    /// <c>PSBASH_TEST_DRAIN_GRACE_SEC</c>.
+    /// </summary>
+    internal static TimeSpan DrainGrace =>
+        int.TryParse(Environment.GetEnvironmentVariable("PSBASH_TEST_DRAIN_GRACE_SEC"), out var s) && s > 0
+            ? TimeSpan.FromSeconds(s)
+            : TimeSpan.FromSeconds(20);
+
     /// <summary>
     /// Builds a <see cref="ProcessStartInfo"/> for <paramref name="executable"/>
     /// with the standard redirection flags already set, then appends
@@ -58,8 +77,9 @@ public static class ProcessSpawn
         TimeSpan timeout,
         string? stdinContent = null,
         IReadOnlyDictionary<string, string>? env = null,
-        bool canonicalizeEnv = false)
-        => RunAsync(BuildPsi(executable, arguments), timeout, stdinContent, env, canonicalizeEnv);
+        bool canonicalizeEnv = false,
+        TimeSpan? drainGrace = null)
+        => RunAsync(BuildPsi(executable, arguments), timeout, stdinContent, env, canonicalizeEnv, drainGrace);
 
     /// <summary>
     /// Runs a process from a pre-built <see cref="ProcessStartInfo"/> and
@@ -82,15 +102,26 @@ public static class ProcessSpawn
     /// When false (default), <paramref name="env"/> is layered on top of the
     /// inherited environment — matching the historical per-suite behaviour.
     /// </param>
+    /// <param name="drainGrace">
+    /// Overrides <see cref="DrainGrace"/> for this call — how long to wait for pipe
+    /// EOF after the child has already exited. A parameter (not just the env var) so a
+    /// test can drive the stalled-drain path without mutating process-global state that
+    /// parallel tests would race on.
+    /// </param>
     /// <exception cref="SpawnTimeoutException">
     /// Thrown when the process does not exit within <paramref name="timeout"/>.
+    /// </exception>
+    /// <exception cref="SpawnDrainTimeoutException">
+    /// Thrown when the process exits but its output pipes never reach EOF — a
+    /// surviving grandchild is holding the write end.
     /// </exception>
     public static async Task<SpawnResult> RunAsync(
         ProcessStartInfo psi,
         TimeSpan timeout,
         string? stdinContent = null,
         IReadOnlyDictionary<string, string>? env = null,
-        bool canonicalizeEnv = false)
+        bool canonicalizeEnv = false,
+        TimeSpan? drainGrace = null)
     {
         psi.RedirectStandardOutput = true;
         psi.RedirectStandardError = true;
@@ -158,9 +189,27 @@ public static class ProcessSpawn
             }
 
             stopwatch.Stop();
-            var stdout = await stdoutTask;
-            var stderr = await stderrTask;
-            return new SpawnResult(process.ExitCode, stdout, stderr, stopwatch.ElapsedMilliseconds);
+
+            // The child has exited, so its own output is already in the pipe. A
+            // drain that STILL does not see EOF means another process inherited
+            // the write end and outlived it. Bound the wait and say so, rather
+            // than hanging the whole test run with no diagnostic.
+            var grace = drainGrace ?? DrainGrace;
+            try
+            {
+                await Task.WhenAll(stdoutTask, stderrTask).WaitAsync(grace);
+            }
+            catch (TimeoutException)
+            {
+                throw new SpawnDrainTimeoutException(
+                    psi.FileName,
+                    string.Join(" ", psi.ArgumentList),
+                    process.ExitCode,
+                    grace);
+            }
+
+            return new SpawnResult(
+                process.ExitCode, await stdoutTask, await stderrTask, stopwatch.ElapsedMilliseconds);
         }
         finally
         {

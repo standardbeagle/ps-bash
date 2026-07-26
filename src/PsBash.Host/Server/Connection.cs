@@ -160,12 +160,41 @@ internal sealed class Connection
         WorkerPool<SdkWorker>.DiagLog("Connection: acquiring worker");
         SdkWorker? worker = null;
         int exitCode;
+
+        // Client-disconnect watchdog. Without it, a command whose launcher has gone
+        // away runs to completion while holding SdkWorker's PROCESS-WIDE exec gate,
+        // so every other session in this daemon queues behind work nobody will ever
+        // read. The IpcOutputQueue stall timeout only catches this for commands that
+        // PRODUCE OUTPUT (the queue must fill to notice); a silent command like
+        // `sleep 30` never writes a frame, so nothing noticed at all — a launcher
+        // killed at 2 s still blocked the next command for the full 30 s.
+        using var clientGone = new CancellationTokenSource();
+        using var watchStop = new CancellationTokenSource();
+        using var execCts = CancellationTokenSource.CreateLinkedTokenSource(ct, clientGone.Token);
+        //
+        // Only for a live duplex transport in framed mode. A SEEKABLE stream is an
+        // in-memory buffer (test doubles), where a read returning 0 means "end of
+        // buffer", not "peer gone" — watching it would abandon every command.
+        // Interactive sessions are excluded because their stream carries additional
+        // protocol traffic that this detector must not consume.
+        if (sessionMode == SessionMode.Framed && !_stream.CanSeek)
+            _ = WatchForClientDisconnectAsync(_stream, clientGone, watchStop.Token);
+
         try
         {
-            worker = await _pool.AcquireAsync(ct).ConfigureAwait(false);
+            worker = await _pool.AcquireAsync(execCts.Token).ConfigureAwait(false);
             WorkerPool<SdkWorker>.DiagLog("Connection: acquired; executing command");
-            exitCode = await worker.ExecuteWithOutputAsync(command, outputSink, errorSink, ct);
+            exitCode = await worker.ExecuteWithOutputAsync(command, outputSink, errorSink, execCts.Token);
             WorkerPool<SdkWorker>.DiagLog($"Connection: executed, exit={exitCode}");
+        }
+        catch (OperationCanceledException) when (clientGone.IsCancellationRequested && !ct.IsCancellationRequested)
+        {
+            // The launcher is gone: there is no one to receive a response, and the
+            // command has been stopped. Abandon quietly — the point of the cancel is
+            // to release the exec gate promptly for everyone else.
+            // The finally below cancels the watchdog and releases the worker.
+            WorkerPool<SdkWorker>.DiagLog("Connection: client disconnected; command abandoned");
+            return;
         }
         catch (Exception ex) when (ex is not IpcOutputException
                                    && !(ex is OperationCanceledException && ct.IsCancellationRequested))
@@ -193,6 +222,7 @@ internal sealed class Connection
         }
         finally
         {
+            watchStop.Cancel();
             if (worker is not null)
             {
                 _pool.Release(worker);
@@ -205,7 +235,20 @@ internal sealed class Connection
                 // swallow that failure ("best-effort" teardown), so CompleteAsync stays
                 // here on the normal exit path. DisposeAsync re-runs CompleteAdding
                 // (idempotent) on the already-drained queue and disposes it.
-                await frameWriter.CompleteAsync().ConfigureAwait(false);
+                //
+                // Exception: when the CLIENT is gone, a failed drain is the expected
+                // outcome, not news. Swallow it so an abandoned connection unwinds
+                // quietly instead of logging a transport error for something we
+                // deliberately cancelled.
+                if (clientGone.IsCancellationRequested)
+                {
+                    try { await frameWriter.CompleteAsync().ConfigureAwait(false); }
+                    catch { /* client already gone */ }
+                }
+                else
+                {
+                    await frameWriter.CompleteAsync().ConfigureAwait(false);
+                }
             }
         }
         await HostProtocol.WriteExitAsync(_stream, exitCode, ct);
@@ -218,6 +261,41 @@ internal sealed class Connection
             // Skipped in framed mode for back-compat — pre-PTY-4 launchers
             // would treat the unexpected line as a malformed response frame.
             await HostProtocol.WritePromptReadyAsync(_stream, ct);
+        }
+    }
+
+    /// <summary>
+    /// Trips <paramref name="clientGone"/> when the launcher closes or resets its end
+    /// of the connection while a command is running.
+    ///
+    /// A single pending 1-byte read is the transport-agnostic detector: in framed mode
+    /// the whole request (including any stdin/script body) is consumed by
+    /// <c>ReadRequestAsync</c> before this point and the client sends nothing further,
+    /// so this read only ever completes with EOF (clean close) or throws (reset). It
+    /// deliberately does NOT fire on a read returning data — that would mean an
+    /// unexpected protocol byte, which is not evidence of a disconnect.
+    ///
+    /// Never throws: the watchdog is advisory, and on some transports a pending read
+    /// is not truly cancellable, so it may instead be completed later by the stream's
+    /// disposal. Every outcome is swallowed.
+    /// </summary>
+    private static async Task WatchForClientDisconnectAsync(
+        Stream stream, CancellationTokenSource clientGone, CancellationToken stop)
+    {
+        try
+        {
+            var buffer = new byte[1];
+            if (await stream.ReadAsync(buffer.AsMemory(0, 1), stop).ConfigureAwait(false) == 0)
+                Trip(clientGone);
+        }
+        catch (OperationCanceledException) { /* command finished first */ }
+        catch (ObjectDisposedException) { /* connection already torn down */ }
+        catch (IOException) { Trip(clientGone); /* reset by peer */ }
+        catch (Exception) { /* advisory only — never fail the connection */ }
+
+        static void Trip(CancellationTokenSource cts)
+        {
+            try { cts.Cancel(); } catch (ObjectDisposedException) { }
         }
     }
 
