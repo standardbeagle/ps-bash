@@ -4,12 +4,21 @@ namespace PsBash.Core.Parser.Ast;
 /// A redirect operation, e.g. <c>&gt;file</c>, <c>2&gt;&amp;1</c>.
 /// Modeled after oils syntax.asdl Redir.
 /// </summary>
+/// <param name="Op">The redirect operator, e.g. <c>&gt;</c>, <c>&gt;&gt;</c>, <c>&lt;</c>, <c>&lt;&lt;&lt;</c>.</param>
+/// <param name="Fd">The file descriptor being redirected (default 0 for <c>&lt;</c>, 1 for <c>&gt;</c>).</param>
+/// <param name="Target">The redirect target word (a filename, or the raw word for a here-string).</param>
+/// <param name="FdVar">Set for <c>{var}&gt;file</c>, where the allocated fd is stored in <c>var</c>.</param>
 /// <param name="Here">
 /// Set only for a here-string (<c>&lt;&lt;&lt;</c>) attached to a COMPOUND command
 /// (<c>done &lt;&lt;&lt; "$x"</c>). A simple command carries its here-strings in
 /// <c>Command.Simple.HereDocs</c> instead; compound commands have no such list, so the
 /// already-parsed body rides along on the redirect. <c>Target</c> is the raw word.
 /// </param>
+// NOTE: every parameter must keep a <param> tag. Documenting only SOME of them triggers
+// CS1573, which is a harmless warning locally but a hard ERROR in publish.yml's
+// build-binaries leg (/warnaserror) — it failed all three RIDs of the v0.10.23 attempt and
+// the same class broke v0.10.15. Pre-check with:
+//   dotnet build ps-bash.sln -c Release /warnaserror
 public sealed record Redirect(
     string Op,
     int Fd,
