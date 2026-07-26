@@ -308,12 +308,37 @@ public sealed class HostServerTests : IAsyncLifetime
         Assert.DoesNotContain(stderr, l => l.Contains("on-stdout"));
     }
 
+    /// <summary>
+    /// Bound for the 16-connection concurrency probe. Override with
+    /// <c>PSBASH_TEST_CONCURRENCY_TIMEOUT_SEC</c>, mirroring the
+    /// <c>PSBASH_TEST_PROMPT_TIMEOUT_SEC</c> pattern the interactive harness uses.
+    /// </summary>
+    private static TimeSpan ConcurrencyTimeout =>
+        int.TryParse(Environment.GetEnvironmentVariable("PSBASH_TEST_CONCURRENCY_TIMEOUT_SEC"), out var s) && s > 0
+            ? TimeSpan.FromSeconds(s)
+            : TimeSpan.FromSeconds(180);
+
     [Fact]
     public async Task SixteenConcurrentConnections_AllCompleteWithoutInterleaving()
     {
         const int n = 16;
         using var cts = CancellationTokenSource.CreateLinkedTokenSource(_cts.Token);
-        cts.CancelAfter(TimeSpan.FromSeconds(60));
+        // 60 s was thin, not generous. Each connection gets an ISOLATED pooled worker that
+        // is DISCARDED on release, so this is 16 psm1 imports with in-use concurrency capped
+        // at (CPU count clamped to [2,8]) and execution serialized by SdkWorker's exec gate.
+        //
+        // Measured: 9-11 s standalone, and still only 12 s under six CPU hogs — so raw CPU
+        // load is NOT the cause. What is: `dotnet test` on the solution dispatches one vstest
+        // worker per project IN PARALLEL (see the comment in scripts/test.sh), so a full-suite
+        // run has all seven suites spawning processes and runspaces at once. That is
+        // creation/IO contention, not CPU, which is why hogs do not reproduce it. This test
+        // was seen once at 1m8 s there, failing on this CTS while every connection was still
+        // progressing — no product hang.
+        //
+        // This bound is not an assertion — Task.WhenAll returns the instant the last
+        // connection completes, so raising it costs no coverage and only caps how long a
+        // genuine hang takes to REPORT.
+        cts.CancelAfter(ConcurrencyTimeout);
 
         var tasks = Enumerable.Range(0, n)
             .Select(i => SendCommandAsync($"Invoke-BashEcho 'conn-{i}'", cts.Token))

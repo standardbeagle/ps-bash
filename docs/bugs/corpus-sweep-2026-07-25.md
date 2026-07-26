@@ -172,6 +172,27 @@ It now retries within a bounded window (30 s, 25 ms poll), asserting the real co
 EVENTUALLY skips and prunes — plus an explicit precondition that the directory is really
 gone, so a genuine regression still fails with a clear message.
 
+### Widened with a measurement (2026-07-26) — `SixteenConcurrentConnections`
+
+`HostServerTests.SixteenConcurrentConnections_AllCompleteWithoutInterleaving` hit its own
+60 s CTS at 1m8 s in a full-suite run. Not a product hang — every connection was still
+progressing, and the exception is the test's `CancelAfter`, not an assertion.
+
+Measured before touching the bound: **9-11 s standalone**, and still only **12 s under six
+CPU hogs** — so raw CPU load is not the cause. The cause is that `dotnet test` on the
+solution dispatches **one vstest worker per project in parallel** (stated in
+`scripts/test.sh`'s own comment), so a full-suite run has all seven suites spawning
+processes and runspaces simultaneously. That is creation/IO contention, which CPU hogs do
+not reproduce. The test is intrinsically expensive: each connection gets an isolated pooled
+worker that is DISCARDED on release, so it is 16 psm1 imports capped at
+`Clamp(ProcessorCount, 2, 8)` concurrent, with execution serialized by the exec gate.
+
+Raised to 180 s with a `PSBASH_TEST_CONCURRENCY_TIMEOUT_SEC` override (the
+`PSBASH_TEST_PROMPT_TIMEOUT_SEC` pattern). `Task.WhenAll` returns the instant the last
+connection completes, so this costs no coverage — it only caps how long a genuine hang
+takes to report. Also confirms my WorkerPool change is not implicated: Host.Tests took
+1m52 s inside the full suite BEFORE it and 1m58 s after.
+
 ### Still open
 - **Flakes seen once in a back-to-back suite run, not reproduced since.**
   `CommandAssistProviderTests.GenerateAsync_CallerCancellationKillsProviderProcess`
