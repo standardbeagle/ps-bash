@@ -187,7 +187,43 @@ public class WorkerPoolTests
 
         await pool.DisposeAsync();
 
+        // Asserted immediately after DisposeAsync ON PURPOSE: the contract is that
+        // disposal is COMPLETE when it returns, covering workers created but not yet
+        // enqueued. This assert used to race — CreatedCount is incremented when a worker
+        // is constructed, but a warmer that had not yet reached the idle queue disposed
+        // its worker on its own task AFTER DisposeAsync returned, so the count could be
+        // short ("expected idle workers disposed, got 2"). DisposeAsync now awaits
+        // in-flight warmers, so this is deterministic. Do NOT relax it into a
+        // WaitUntilAsync — that would hide a regression of the guarantee.
         Assert.True(f.DisposedCount >= 3, $"expected idle workers disposed, got {f.DisposedCount}");
+    }
+
+    [Fact]
+    public async Task Dispose_DisposesWorkerStillBeingWarmed()
+    {
+        // Directly targets the window the flake exposed: a worker whose creation is
+        // still in flight when the pool is disposed must still be disposed BY THE TIME
+        // DisposeAsync returns — no runspace outliving its pool.
+        var f = new FakeWorker.Factory();
+        using var releaseCreate = new SemaphoreSlim(0);
+        var creating = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        var pool = new WorkerPool<FakeWorker>(warmTarget: 1, max: 2, () =>
+        {
+            creating.TrySetResult();
+            releaseCreate.Wait();          // hold the warmer mid-create
+            return f.Create();
+        });
+
+        await creating.Task.WaitAsync(TimeSpan.FromSeconds(30));
+        var dispose = pool.DisposeAsync().AsTask();   // disposes while the warmer is stuck
+        releaseCreate.Release();                      // let creation finish post-disposal
+        await dispose.WaitAsync(TimeSpan.FromSeconds(30));
+
+        Assert.Equal(1, Volatile.Read(ref f.CreatedCount));
+        var disposed = Volatile.Read(ref f.DisposedCount);
+        Assert.True(disposed >= 1,
+            $"a worker created during disposal must be disposed before DisposeAsync returns, got {disposed}");
     }
 
     [Fact]

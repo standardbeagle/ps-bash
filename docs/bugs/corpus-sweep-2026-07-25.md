@@ -145,23 +145,41 @@ intercept it) and asserted against `harness.TempHome` rather than a second
 `Path.GetTempPath()` read. Note the pre-existing `PSBASH_UNIX_PATHS=0` pin in the harness
 is NOT the mechanism — the failure reproduces with that variable unset entirely.
 
-### Still open
+### Fixed (2026-07-26) — `WorkerPoolTests.Dispose_DisposesIdleWorkers`
 
-- `WorkerPoolTests.Dispose_DisposesIdleWorkers` — "expected idle workers disposed,
-  got 2" (async disposal not yet observed). Seen once; not yet re-provoked, so the
-  mechanism is unconfirmed.
-- **Load-sensitive flakes that still pass in isolation.** Each was seen once during a
-  full back-to-back suite run on a busy box and passed immediately when re-run alone:
+"expected idle workers disposed, got 2". The mechanism was a real (if small) product gap,
+not just a test race: `WorkerPool.DisposeAsync` drained only the workers already in
+`_idle`. A warmer still in flight observes `_disposed` under `_warmGate` and disposes its
+own worker — but on ITS task, after `DisposeAsync` had already returned. So a PowerShell
+runspace could briefly outlive its pool, and the count the test read was nondeterministic
+(`CreatedCount` is incremented at construction, before the worker reaches the idle queue).
+
+`DisposeAsync` now tracks in-flight warm tasks and awaits them, bounded by
+`WarmDrainGrace` (10 s) so a warmer caught mid-`psm1`-import cannot wedge host shutdown.
+The contract is now "when `DisposeAsync` returns, every worker the pool created has been
+disposed", asserted directly. New test `Dispose_DisposesWorkerStillBeingWarmed` holds a
+warmer mid-create, disposes the pool, then releases it; verified red before the fix.
+
+### Still open
+- **Flakes seen once in a back-to-back suite run, not reproduced since.**
   `CommandAssistProviderTests.GenerateAsync_CallerCancellationKillsProviderProcess`
   (the known family whose waits were already widened to 30 s in `017ffe3`), and three
   differential cases — `Differential_AnsiCQuote_Newline`,
   `Differential_AdjacentQuotes_DoubleThenDouble`,
-  `Differential_DoubleBracket_GlobMatch_Matches`. The differential three are the more
-  interesting ones: unlike the harness-bound family they compare OUTPUT, so if they are
-  timing-sensitive the mechanism is not yet identified and the assertion text was not
-  captured. Next step is to capture the full failure detail (expected-vs-actual) rather
-  than assume a bound — do not widen anything until that shows a timeout rather than a
-  genuine diff.
+  `Differential_DoubleBracket_GlobMatch_Matches`.
+
+  Status of the differential three: **unreproduced, mechanism unknown.** Since seen they
+  have passed a clean full-suite run (288/288) and six consecutive filtered runs. They
+  appeared only when `PsBash.Shell.Tests` had run immediately before in the same shell —
+  which points at cross-suite contamination (a leftover host, or process-global `$env:` /
+  cwd state) rather than a bound, since these compare OUTPUT rather than waiting on a
+  timeout. Do NOT widen anything here.
+
+  Note there is no observability gap to close first: `AssertOracle.AssertMatches` already
+  throws a full bundle (input script, expected vs actual stdout/stderr, exit code,
+  transpiled PowerShell, and a line diff). That detail WAS emitted in the failing run and
+  was lost only because the console output was grep-filtered and then overwritten — so the
+  next occurrence is diagnosable as-is, provided the raw log is kept.
 
 ## Not a product bug
 

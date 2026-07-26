@@ -49,6 +49,12 @@ public sealed class WorkerPool<TWorker> : IAsyncDisposable where TWorker : class
 
     private readonly object _warmGate = new();
     private readonly Queue<TWorker> _idle = new();
+    /// <summary>
+    /// In-flight <see cref="WarmOneAsync"/> tasks, so <see cref="DisposeAsync"/> can wait
+    /// for warmers that self-dispose their worker on the post-disposal path. Guarded by
+    /// <c>_warmGate</c>; completed entries are pruned on each top-up.
+    /// </summary>
+    private readonly List<Task> _warmTasks = new();
     private int _idleCount;
     private int _warming;
 
@@ -164,10 +170,17 @@ public sealed class WorkerPool<TWorker> : IAsyncDisposable where TWorker : class
         if (_shutdown.IsCancellationRequested) return;
         lock (_warmGate)
         {
+            // Drop finished warmers so the tracking list cannot grow without bound
+            // over a long-lived pool's many top-ups.
+            _warmTasks.RemoveAll(static t => t.IsCompleted);
             while (_idleCount + _warming < _warmTarget && !_shutdown.IsCancellationRequested)
             {
                 _warming++;
-                _ = WarmOneAsync();
+                // Tracked so DisposeAsync can await in-flight warmers: a warmer that
+                // finishes AFTER disposal self-disposes its worker (see WarmOneAsync),
+                // and without awaiting that, DisposeAsync could return while a live
+                // runspace was still being torn down.
+                _warmTasks.Add(WarmOneAsync());
             }
         }
     }
@@ -225,6 +238,13 @@ public sealed class WorkerPool<TWorker> : IAsyncDisposable where TWorker : class
         catch { /* teardown best-effort; process exit reclaims anything left */ }
     }
 
+    /// <summary>
+    /// How long <see cref="DisposeAsync"/> waits for in-flight warmers to finish tearing
+    /// their workers down. Generous enough for a psm1 import already under way, short
+    /// enough that host shutdown cannot wedge on one.
+    /// </summary>
+    internal static TimeSpan WarmDrainGrace { get; set; } = TimeSpan.FromSeconds(10);
+
     public async ValueTask DisposeAsync()
     {
         if (Interlocked.Exchange(ref _disposed, 1) != 0) return;
@@ -241,6 +261,27 @@ public sealed class WorkerPool<TWorker> : IAsyncDisposable where TWorker : class
         {
             try { await w.DisposeAsync().ConfigureAwait(false); } catch { }
         }
+
+        // Wait for warmers still in flight. Each observes _disposed under _warmGate and
+        // disposes its own worker, so without this DisposeAsync could return while a
+        // live runspace was still being torn down — making disposal nondeterministic
+        // (the `Dispose_DisposesIdleWorkers` flake) and briefly outliving its pool.
+        //
+        // Bounded: worker creation imports the psm1 on a dedicated thread and is not
+        // cancellable once started, so a warmer caught mid-create must not be able to
+        // stall host shutdown. On expiry the warmer still self-disposes, just unobserved.
+        List<Task> pending;
+        lock (_warmGate)
+        {
+            pending = _warmTasks.FindAll(static t => !t.IsCompleted);
+            _warmTasks.Clear();
+        }
+        if (pending.Count > 0)
+        {
+            try { await Task.WhenAll(pending).WaitAsync(WarmDrainGrace).ConfigureAwait(false); }
+            catch { /* warmer faults are recorded in _firstWarmError; grace expiry is not fatal */ }
+        }
+
         _shutdown.Dispose();
         _slots.Dispose();
     }
