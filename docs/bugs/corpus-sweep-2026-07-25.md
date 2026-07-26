@@ -6,7 +6,7 @@ Method: transpile every `.sh` file on the dev machine (Git-for-Windows +
 result reports zero errors. See the `real-world-sh-corpus-sweep` memory for the
 runner snippet.
 
-**Result: 72 → 89 files transpile to valid PowerShell.** Bash-stage parse
+**Result: 72 → 93 files transpile to valid PowerShell.** Bash-stage parse
 failures 14 → 2 (and both survivors are now clean `ParseException`s with an
 accurate message, not crashes).
 
@@ -33,25 +33,41 @@ the parse-error count badly understates the damage this sweep found.
 | `[ -o NAME ]` | unimplemented operator emitted adjacent values → parse error; now `$false` + stderr diagnostic | `d0f9d7a` |
 | `X="$(grep "a:b" f)"` | assignment split at the colon; `:b f)` torn out of the command (**silent**) | `9af314a` |
 | `PATH=~/bin:~/x` | emitted `$HOMEbin` — not a valid variable reference | `9af314a` |
+| `grep "^${field}:"` | suffix-less `${name}` before `:` not braced → PS drive-reference misparse | `803645e` |
+| `eval "…" \| sort` | a statement-list SIMPLE command is not a valid pipeline stage | `803645e` |
 
 ## Open
 
 Still failing in the sweep; each needs its own diagnosis.
 
 1. **`backup.sh`, `stop-hook.sh`, `resolve-port.sh`** — "string is missing the
-   terminator". Both files use the `'"'"'` single-quote-escape idiom and
-   multi-line embedded `awk` program text.
-2. **`detect-project-type.sh`, `test-worktrack-vite-smoke.sh`** — "An empty pipe
-   element is not allowed", from a runtime-`eval` block used as a pipeline stage.
-3. **`validate-settings.sh`** — a loop variable followed by `:` inside a
-   double-quoted string nested in a command substitution is emitted unbraced
-   (`"^$field:"`). The `${…}` drive-reference guard exists on the plain
-   double-quoted and flatten paths but not this nested one.
-4. **`sqlite3_analyzer.sh`** — "Expected `}` but got EOF" at line 900; a large
+   terminator". All three nest a double-quoted argument inside `$( … )` inside a
+   double-quoted assignment value: the emitted inner argument carries a
+   backtick-escaped `"` (and, in `resolve-port.sh`, the `'"'"'` idiom) that the
+   OUTER string then re-interprets. This is the nested-quote seam — the same
+   class the memory `transpiler-port-gaps` flags as recurring, and the largest
+   remaining cluster.
+2. **`test-worktrack-vite-smoke.sh`** — "An empty pipe element is not allowed".
+   The sibling `detect-project-type.sh` was fixed by `803645e`; this one has a
+   different shape, not yet reduced.
+3. **`sqlite3_analyzer.sh`** — "Expected `}` but got EOF" at line 900; a large
    generated file, not yet reduced.
-5. **`run-worktrack-vite-smoke.sh`** — `$(( $(date +%s) + 60 ))`: a command
+4. **`run-worktrack-vite-smoke.sh`** — `$(( $(date +%s) + 60 ))`: a command
    substitution inside arithmetic is rejected by the typed arithmetic parser.
    Clean error, but bash accepts it.
+
+## Test-suite observations
+
+- `PromptRenderingIntegrationTests.CtrlC_MidInput_ShellRemainsAlive` timed out
+  (8 s prompt deadline, 0 chars received) during a run competing with 8 concurrent
+  SDK hosts, and passed both isolated and in a quiet full run. Load-sensitive PTY
+  timing, not a product break — but it is exactly the flake qa-rubric Directive 2
+  says to quarantine rather than ignore if it recurs.
+- Running `PsBash.Host.Tests` immediately after another suite can hang the test
+  harness: a persisted `ps-bash-host` inherits the runner's redirected stdout, so
+  the parent never sees EOF (the `daemon-c-pipe-inheritance-hang` class). Killing
+  stray hosts between suites avoids it. Worth checking whether a host spawn path
+  still leaks the inherited handle.
 
 ## Not a product bug
 
