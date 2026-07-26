@@ -449,10 +449,21 @@ public sealed partial class BashParser
             return pos;
         }
 
-        // Read variable name
+        // Read variable name.
+        //
+        // `@` / `*` are NOT var chars, so a positional-list expansion carrying an
+        // OPERATOR — `${@:1}`, `${@: -1}`, `${@:1:2}`, `${*:2}` — read an EMPTY name
+        // here and emitted the bare `$env:`, which is not valid PowerShell ("':' was
+        // not followed by a valid variable name character") and broke the whole file.
+        // (The bare `${@}` / `${*}` forms are handled by the special-parameter branch
+        // above; only the with-operator forms reach this point.) Take the sigil as the
+        // name so the emitter's positional-slice path can see it.
         int varStart = pos;
-        while (pos < len && IsVarChar(raw[pos]))
+        if (pos < len && raw[pos] is '@' or '*')
             pos++;
+        else
+            while (pos < len && IsVarChar(raw[pos]))
+                pos++;
         string varName = raw[varStart..pos];
 
         // Check for array subscript: ${arr[0]}, ${arr[@]}, ${arr[key]}, and the

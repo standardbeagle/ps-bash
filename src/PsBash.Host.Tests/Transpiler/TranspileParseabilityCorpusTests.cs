@@ -203,6 +203,29 @@ public class TranspileParseabilityCorpusTests
     [InlineData("cmd @arg")]
     [InlineData("echo a@b")]
     [InlineData("echo @$x")]
+    // ── positional-parameter slices ────────────────────────────────────
+    // `@`/`*` are not var chars, so these read an EMPTY braced-var name and
+    // emitted the bare `$env:` (zoxide's shell hook uses `${@: -1}`).
+    [InlineData("echo \"${@: -1}\"")]
+    [InlineData("echo \"${@:1}\"")]
+    [InlineData("echo \"${@:1:2}\"")]
+    [InlineData("echo \"${*: -2}\"")]
+    [InlineData("[[ \"${@: -1}\" == \"${_ZO_ECHO:=0}\" ]]")]
+    // ── composed command words (need `&` AND one token) ────────────────
+    [InlineData("$gobin/go help")]
+    [InlineData("$dir/$name x")]
+    [InlineData("\"$d\"/go v")]
+    [InlineData("~/bin/foo a")]
+    [InlineData("$CMD hi")]
+    // ── subshell with a trailing redirect ──────────────────────────────
+    [InlineData("(echo a; echo b) > f")]
+    [InlineData("(cd /x) > f")]
+    [InlineData("(cat x) 2>&1")]
+    // ── file-comparison test operators ─────────────────────────────────
+    [InlineData("[ \"$a\" -ef \"$b\" ]")]
+    [InlineData("[ a -nt b ]")]
+    [InlineData("[ ! \"$x\" -ef \"$y\" ]")]
+    [InlineData("if [ f1 -ot f2 ]; then echo y; fi")]
     // ── Bash-tool wrapper fragments ────────────────────────────────────
     [InlineData("shopt -u extglob 2>/dev/null || true")]
     [InlineData("eval 'echo hi' < /dev/null")]

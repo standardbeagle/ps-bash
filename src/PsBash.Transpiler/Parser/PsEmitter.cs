@@ -940,6 +940,17 @@ public static class PsEmitter
             else
                 tailRedirects.Add(redirect);
         }
+        // A subshell body is `try { … } finally { … }` — a STATEMENT, which cannot
+        // head a pipeline. AppendRedirectTail pipes a stdout file redirect into
+        // Invoke-BashRedirect, so `( … ) > file` emitted
+        // `try { … } finally { … } | Invoke-BashRedirect` = "An empty pipe element
+        // is not allowed" (Go's mkerrors.sh). Wrap it into a pipeable child scope
+        // first. Only when a redirect will actually be appended, so the common
+        // redirect-less subshell keeps its cheaper emission.
+        if (tailRedirects.Count > 0)
+        {
+            sb.Insert(0, "& { ").Append(" }");
+        }
         AppendRedirectTail(sb, tailRedirects);
 
         string result = sb.ToString();
@@ -1592,6 +1603,12 @@ public static class PsEmitter
             // string operators == / = / != are handled above/below and stay string.)
             if (op is "-eq" or "-ne" or "-lt" or "-le" or "-gt" or "-ge")
                 return $"[long]({lhs}) {op} [long]({EmitTestOperand(words[2])})";
+
+            // File-comparison operators: mtime ordering (-nt/-ot) and same-file
+            // (-ef). Unimplemented, these fell through to the bare-operand join
+            // and emitted the unparseable `$env:a -ef $env:b`.
+            if (op is "-nt" or "-ot" or "-ef")
+                return PsBuild.FileComparisonTest(lhs, EmitTestOperand(words[2]), op);
 
             var psOp = op switch
             {
@@ -2400,11 +2417,27 @@ public static class PsEmitter
         // inner body of a malformed `<(` / `$(` / bare heredoc that the parser accepts).
         // Without the guard this threw IndexOutOfRange — a crash, not the clean
         // parseable-or-ParseException the fuzz invariant requires.
+        bool isScriptCommand =
+            cmd.Words.Length > 0 && IsLocalShellScriptCommand(cmd.Words[0]);
+        bool needsCallOperator =
+            !isScriptCommand && cmd.Words.Length > 0
+            && IsExpandedCommandWord(cmd.Words[0]);
         string leading = cmd.Words.Length == 0 ? ""
-            : IsLocalShellScriptCommand(cmd.Words[0]) ? "bash "
-            : IsQuotedCommandWord(cmd.Words[0]) ? "& "
-            : IsVariableCommandWord(cmd.Words[0]) ? "& "
+            : isScriptCommand ? "bash "
+            : needsCallOperator ? "& "
             : "";
+        // A command word that needs `& ` must also be ONE PowerShell token. A
+        // multi-part word like `$gobin/go`, `~/bin/foo`, `$dir/$name` or `"$d"/go`
+        // emits as bare concatenated parts, which PowerShell reads as an
+        // EXPRESSION (`$env:gobin/go` → "You must provide a value expression
+        // following the '/' operator") — unparseable. Flatten those into a single
+        // double-quoted string, the same form the already-working single-part
+        // quoted case (`"$gobin/go" help`) produced. Hit Go's clean.bash.
+        string commandWordText = cmd.Words.Length == 0 ? ""
+            : needsCallOperator && cmd.Words[0].Parts.Length > 1
+                ? TransformWordPath(
+                    FlattenPartsToDoubleQuotedString(cmd.Words[0].Parts))
+                : EmitWord(cmd.Words[0]);
 
         // A PowerShell statement keyword (exit/return/break/…) cannot take a
         // splatted argument — `exit @__bashsplat0` is a parse error that poisons
@@ -2419,7 +2452,7 @@ public static class PsEmitter
             // The command word keeps its existing emission (incl. the `& `
             // call-operator prefix for a quoted command word, or the `bash ` prefix for a script).
             sb.Append(EmitCommandWithSplatArgs(
-                leading + EmitWord(cmd.Words[0]),
+                leading + commandWordText,
                 commandArgs,
                 argIndex => EmitWord(commandArgs[argIndex])));
         }
@@ -2428,10 +2461,13 @@ public static class PsEmitter
             for (var i = 0; i < cmd.Words.Length; i++)
             {
                 if (i > 0)
+                {
                     sb.Append(' ');
-                else if (leading.Length > 0)
-                    sb.Append(leading);
-                sb.Append(EmitWord(cmd.Words[i]));
+                    sb.Append(EmitWord(cmd.Words[i]));
+                    continue;
+                }
+                sb.Append(leading);
+                sb.Append(commandWordText);
             }
         }
 
@@ -3451,7 +3487,13 @@ public static class PsEmitter
         string inner;
         try { inner = EmitCaptured(body); }
         finally { _dqNestDepth--; }
-        return $"$((@({PipelineHead(body, inner)} | ForEach-Object {{ Get-BashText $_ }}) -join \"`n\") -replace '(\\r?\\n)+$','')";
+        // The newline join uses [char]10, NOT a "`n" literal — the SAME reason
+        // EmitArithCommandSubValue does. This fragment can land inside an
+        // arbitrarily nested "$( … )", where the OUTER string scanner consumes
+        // the backtick escape and the inner string ends early ("The string is
+        // missing the terminator"). Hit git-completion.bash, where a command sub
+        // nested two double-quote levels deep broke the whole file's parse.
+        return $"$((@({PipelineHead(body, inner)} | ForEach-Object {{ Get-BashText $_ }}) -join [string][char]10) -replace '(\\r?\\n)+$','')";
     }
 
     private static string EmitProcessSub(WordPart.ProcessSub ps)
@@ -3593,8 +3635,7 @@ public static class PsEmitter
         // evaluates as the empty operand of a unary `+` — i.e. zero.
         if (body is null) return "'0'";
         string inner = EmitCaptured(body);
-        string head = body is Command.Simple or Command.Pipeline ? inner : $"& {{ {inner} }}";
-        return $"$((@({head} | ForEach-Object {{ Get-BashText $_ }}) -join [string][char]10).Trim())";
+        return $"$((@({PipelineHead(body, inner)} | ForEach-Object {{ Get-BashText $_ }}) -join [string][char]10).Trim())";
     }
 
     /// <summary>
@@ -3858,6 +3899,17 @@ public static class PsEmitter
     {
         if (bvs.Suffix is null)
             return EmitSimpleVar(bvs.Name);
+
+        // Positional-parameter SLICE: ${@:offset[:length]} / ${*:…}. Unhandled, this
+        // fell through to the ordinary-variable path and emitted the bare `$env:`
+        // (empty name) — "':' was not followed by a valid variable name character",
+        // which broke the whole file. `${@: -1}` (the last argument) is the common
+        // real-world spelling; it is how zoxide's shell hook reads its target dir.
+        if (bvs.Name is "@" or "*" && bvs.Suffix.StartsWith(':')
+            && EmitPositionalSlice(bvs.Suffix, inDoubleQuote) is { } posSlice)
+        {
+            return posSlice;
+        }
 
         // Array subscript access: ${arr[0]}, ${arr[@]}, ${arr[*]}, ${arr[key]}, plus
         // the subscript-PLUS-operator forms ${arr[@]:1:2}, ${arr[0]##*/}, ${arr[i]:-x}.
@@ -4133,6 +4185,39 @@ public static class PsEmitter
         }
 
         return null;
+    }
+
+    /// <summary>
+    /// Emit <c>${@:offset[:length]}</c> / <c>${*:…}</c> — a slice of the positional
+    /// parameters — by reusing the runtime-clamped <see cref="EmitArraySlice"/> over
+    /// the positional array. Returns null when the suffix is not a numeric slice, so
+    /// the caller degrades instead of emitting something broken.
+    /// <para>
+    /// One index adjustment, oracle-verified: bash counts positional parameters from
+    /// <c>$1</c>, so <c>${@:1}</c> is the WHOLE list, while the emitted array's index
+    /// 0 already holds <c>$1</c>. A positive offset therefore shifts down by one. A
+    /// NEGATIVE offset counts from the end in both models and passes through
+    /// unchanged (<c>${@: -1}</c> = last). <c>${@:0}</c> is the one lossy case: bash
+    /// prepends <c>$0</c> (the script name), which the positional array does not
+    /// carry, so it degrades to the whole list rather than inventing an element.
+    /// </para>
+    /// </summary>
+    private static string? EmitPositionalSlice(string suffix, bool inDoubleQuote)
+    {
+        var body = suffix[1..].Trim();
+        var parts = body.Split(':', 2);
+        if (!int.TryParse(parts[0].Trim(), out int offset))
+            return null;
+        if (parts.Length == 2 && !int.TryParse(parts[1].Trim(), out _))
+            return null;
+
+        int shifted = offset > 0 ? offset - 1 : offset;
+        string op = parts.Length == 2
+            ? $":{shifted}:{parts[1].Trim()}"
+            : $":{shifted}";
+
+        return EmitArraySlice(
+            PsBuild.BuildPositionalExpansion("@"), op, inDoubleQuote);
     }
 
     // Emit a bash array slice ${arr[@]:offset[:length]} as a PowerShell range index.
@@ -5285,6 +5370,31 @@ public static class PsEmitter
         if (word.Parts.Length != 1)
             return false;
         return word.Parts[0] is WordPart.SimpleVarSub or WordPart.BracedVarSub;
+    }
+
+    /// <summary>
+    /// True when the command word does not emit as a bare PowerShell command NAME
+    /// and therefore needs the <c>&amp;</c> call operator: it is quoted, or it
+    /// contains any expansion (variable, command/arith substitution, tilde).
+    /// <para>
+    /// Generalizes <see cref="IsQuotedCommandWord"/> / <see cref="IsVariableCommandWord"/>,
+    /// which both required a SINGLE part and so missed every composed word —
+    /// <c>$gobin/go</c>, <c>~/bin/foo</c>, <c>$dir/$name</c>, <c>"$d"/go</c> all
+    /// emitted unparseable PowerShell expressions. A word made only of literals /
+    /// escaped literals / globs stays a bare name, as in bash.
+    /// </para>
+    /// </summary>
+    private static bool IsExpandedCommandWord(CompoundWord word)
+    {
+        foreach (var part in word.Parts)
+        {
+            if (part is WordPart.SimpleVarSub or WordPart.BracedVarSub
+                     or WordPart.CommandSub or WordPart.ArithSub
+                     or WordPart.TildeSub
+                     or WordPart.SingleQuoted or WordPart.DoubleQuoted)
+                return true;
+        }
+        return false;
     }
 
     /// <summary>

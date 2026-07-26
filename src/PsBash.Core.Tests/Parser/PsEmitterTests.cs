@@ -1566,8 +1566,9 @@ public class PsEmitterTests
 
         // Assignment command-sub preserves internal newlines and strips trailing ones
         // (bash), instead of the array $OFS-joining with a space (which flattened the
-        // file to one line).
-        Assert.Equal("$env:VAR = \"$((@(Invoke-BashCat file | ForEach-Object { Get-BashText $_ }) -join \"`n\") -replace '(\\r?\\n)+$','')\"", result);
+        // file to one line). The newline join is [char]10, not a "`n" literal, so the
+        // fragment survives nesting inside another double-quoted string.
+        Assert.Equal("$env:VAR = \"$((@(Invoke-BashCat file | ForEach-Object { Get-BashText $_ }) -join [string][char]10) -replace '(\\r?\\n)+$','')\"", result);
     }
 
     [Fact]
@@ -1590,7 +1591,7 @@ public class PsEmitterTests
     {
         var result = PsEmitter.Transpile("dir=$(pwd)");
 
-        Assert.Equal("$env:dir = \"$((@(Invoke-BashPwd | ForEach-Object { Get-BashText $_ }) -join \"`n\") -replace '(\\r?\\n)+$','')\"", result);
+        Assert.Equal("$env:dir = \"$((@(Invoke-BashPwd | ForEach-Object { Get-BashText $_ }) -join [string][char]10) -replace '(\\r?\\n)+$','')\"", result);
     }
 
     [Fact]
@@ -2698,7 +2699,9 @@ public class PsEmitterTests
     {
         var result = PsEmitter.Transpile("(echo hello) > out.txt");
 
-        Assert.Equal("try { Push-Location; Invoke-BashEcho hello } finally { Pop-Location } | Invoke-BashRedirect -Path out.txt", result);
+        // The try/finally body is a STATEMENT and cannot head the redirect pipe
+        // ("An empty pipe element is not allowed"), so it is wrapped in `& { }`.
+        Assert.Equal("& { try { Push-Location; Invoke-BashEcho hello } finally { Pop-Location } } | Invoke-BashRedirect -Path out.txt", result);
     }
 
     [Fact]
@@ -3530,8 +3533,12 @@ public class PsEmitterTests
         // The nested literal is SINGLE-quoted: inside another double-quoted string a
         // double-quoted literal is at best fragile and, when empty, an outright parse
         // error (`X="$(echo "")"`). Single quotes are inert at any nesting depth.
+        // The newline join is [char]10, not a "`n" literal: the OUTER string scanner
+        // would consume the backtick escape and end the inner string early ("The
+        // string is missing the terminator") — which is exactly what broke
+        // git-completion.bash at two levels of nesting.
         Assert.Equal(
-            "Invoke-BashEcho \"$((@(Invoke-BashEcho 'hi there' | ForEach-Object { Get-BashText $_ }) -join \"`n\") -replace '(\\r?\\n)+$','')\"",
+            "Invoke-BashEcho \"$((@(Invoke-BashEcho 'hi there' | ForEach-Object { Get-BashText $_ }) -join [string][char]10) -replace '(\\r?\\n)+$','')\"",
             result);
     }
 
@@ -4817,6 +4824,115 @@ public class PsEmitterTests
         // it is just consumed as a VALUE rather than splatted.
         Assert.Contains("$env:code -split '\\s+'", result);
         Assert.Contains("$__bashexit[0]", result);
+    }
+
+    // ---- positional-parameter slices ${@:off[:len]} ------------------------
+
+    [Theory]
+    [InlineData("echo \"${@: -1}\"")]
+    [InlineData("echo \"${@:1}\"")]
+    [InlineData("echo \"${@:2}\"")]
+    [InlineData("echo \"${@:1:2}\"")]
+    [InlineData("echo \"${*: -2}\"")]
+    public void Transpile_PositionalSlice_DoesNotEmitEmptyEnvReference(string bash)
+    {
+        // `@`/`*` are not var chars, so the braced-var name read as EMPTY and the
+        // emitter produced the bare `$env:` — not valid PowerShell, and it broke
+        // the whole file's parse. `${@: -1}` is how zoxide's shell hook reads its
+        // target directory, so this hit every copy of that script.
+        var result = PsEmitter.Transpile(bash);
+
+        Assert.DoesNotContain("$env:\"", result);
+        Assert.DoesNotContain("$env: ", result);
+        Assert.Contains("$global:BashPositional", result);
+    }
+
+    [Theory]
+    // Oracle-verified index mapping: bash counts positionals from $1, but the
+    // emitted array's index 0 already holds $1, so a POSITIVE offset shifts down
+    // by one while a NEGATIVE offset (counting from the end) passes through.
+    [InlineData("echo \"${@:1}\"", "$__psbO = 0;")]
+    [InlineData("echo \"${@:2}\"", "$__psbO = 1;")]
+    [InlineData("echo \"${@: -1}\"", "$__psbO = -1;")]
+    [InlineData("echo \"${@: -2}\"", "$__psbO = -2;")]
+    public void Transpile_PositionalSlice_MapsOffsetToArrayIndex(
+        string bash, string expectedOffset)
+        => Assert.Contains(expectedOffset, PsEmitter.Transpile(bash));
+
+    [Fact]
+    public void Transpile_BarePositionalAll_UnaffectedBySliceParsing()
+    {
+        // The suffix-less ${@} must keep its dedicated expansion.
+        Assert.Equal(
+            "Invoke-BashEcho \"$(if ($global:BashPositional) { $global:BashPositional } else { $args })\"",
+            PsEmitter.Transpile("echo \"${@}\""));
+    }
+
+    // ---- composed command words / subshell redirect / file-compare tests ---
+
+    [Theory]
+    // A command word that is not a bare NAME needs the `&` call operator AND must
+    // be one PowerShell token. Every multi-part form below used to emit bare
+    // concatenated parts, which PowerShell read as an expression — unparseable.
+    [InlineData("$gobin/go help", "& \"$env:gobin/go\" help")]
+    [InlineData("$dir/$name x", "& \"$env:dir/$env:name\" x")]
+    [InlineData("\"$d\"/go v", "& \"$env:d/go\" v")]
+    [InlineData("~/bin/foo a", "& \"$HOME\\bin/foo\" a")]
+    public void Transpile_ComposedCommandWord_EmitsCallOperatorAndSingleToken(
+        string bash, string expected)
+        => Assert.Equal(expected, PsEmitter.Transpile(bash));
+
+    [Theory]
+    // A word made only of literals stays a bare command name, as in bash.
+    [InlineData("echo hi", "Invoke-BashEcho hi")]
+    [InlineData("ls -la", "Invoke-BashLs -la")]
+    public void Transpile_LiteralCommandWord_StaysBareName(string bash, string expected)
+        => Assert.Equal(expected, PsEmitter.Transpile(bash));
+
+    [Fact]
+    public void Transpile_SubshellWithStdoutRedirect_WrapsBodyAsPipelineHead()
+    {
+        // The subshell body is `try { … } finally { … }` — a statement, which
+        // cannot head the `| Invoke-BashRedirect` pipe. Hit Go's mkerrors.sh.
+        var result = PsEmitter.Transpile("(echo a; echo b) > f");
+
+        Assert.StartsWith("& { try { Push-Location;", result);
+        Assert.Contains("} | Invoke-BashRedirect -Path f", result);
+    }
+
+    [Fact]
+    public void Transpile_SubshellWithoutRedirect_KeepsUnwrappedFastPath()
+    {
+        var result = PsEmitter.Transpile("(echo a; echo b)");
+
+        Assert.DoesNotContain("& { try {", result);
+    }
+
+    [Theory]
+    [InlineData("-nt")]
+    [InlineData("-ot")]
+    [InlineData("-ef")]
+    public void Transpile_FileComparisonTestOperator_EmitsRealTest(string op)
+    {
+        // Previously unimplemented: the emitter joined the operands with spaces
+        // and produced the never-valid `$env:a -ef $env:b` (Go's etetest.sh).
+        var result = PsEmitter.Transpile($"[ \"$a\" {op} \"$b\" ]");
+
+        Assert.DoesNotContain($" {op} ", result);
+        Assert.Contains("Get-Item -LiteralPath $env:a", result);
+        Assert.Contains("Get-Item -LiteralPath $env:b", result);
+    }
+
+    [Fact]
+    public void Transpile_NewerThanTest_MissingOperandsFollowBash()
+    {
+        // Oracle-verified: `a -nt b` is true when a exists and b does not, and
+        // false when a does not exist (regardless of b).
+        var result = PsEmitter.Transpile("[ a -nt b ]");
+
+        Assert.Contains("if ($null -eq $__psbash_ftA) { $false }", result);
+        Assert.Contains("elseif ($null -eq $__psbash_ftB) { $true }", result);
+        Assert.Contains("LastWriteTimeUtc -gt", result);
     }
 
     // ---- command-sub pipeline head / bare @ sigil --------------------------

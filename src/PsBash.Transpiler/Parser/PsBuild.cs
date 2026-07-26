@@ -153,6 +153,49 @@ public static class PsBuild
         return false;
     }
 
+    /// <summary>
+    /// The bash file-comparison test operators <c>-nt</c> / <c>-ot</c> / <c>-ef</c>
+    /// as a PowerShell boolean expression. These were not implemented at all: the
+    /// emitter fell through to joining the operands with spaces, producing the
+    /// never-valid <c>$env:a -ef $env:b</c> (Go's etetest.sh).
+    /// <para>
+    /// Missing-operand semantics follow bash exactly (verified against the oracle):
+    /// <c>a -nt b</c> is true when a exists and b does not; <c>a -ot b</c> is true
+    /// when b exists and a does not; <c>a -ef b</c> is false unless BOTH exist.
+    /// </para>
+    /// <para>
+    /// <c>-ef</c> is "same file". bash compares device+inode; the portable .NET
+    /// equivalent is a resolved-path compare, so a symlink and its target match
+    /// (<c>ResolvedTarget</c>, null for a non-link, falls back to
+    /// <c>FullName</c>). Hard links to the same inode are NOT detected — a
+    /// documented approximation, not a silent wrong answer for the common case.
+    /// </para>
+    /// </summary>
+    public static string FileComparisonTest(string lhs, string rhs, string op)
+    {
+        const string a = "$__psbash_ftA";
+        const string b = "$__psbash_ftB";
+        string probe =
+            a + " = Get-Item -LiteralPath " + lhs + " -Force -ErrorAction SilentlyContinue; " +
+            b + " = Get-Item -LiteralPath " + rhs + " -Force -ErrorAction SilentlyContinue; ";
+
+        string body = op switch
+        {
+            "-nt" => "if ($null -eq " + a + ") { $false } elseif ($null -eq " + b + ") { $true } " +
+                     "else { " + a + ".LastWriteTimeUtc -gt " + b + ".LastWriteTimeUtc }",
+            "-ot" => "if ($null -eq " + b + ") { $false } elseif ($null -eq " + a + ") { $true } " +
+                     "else { " + a + ".LastWriteTimeUtc -lt " + b + ".LastWriteTimeUtc }",
+            _     => "if ($null -eq " + a + " -or $null -eq " + b + ") { $false } " +
+                     "else { (" + a + ".ResolvedTarget ?? " + a + ".FullName) -eq " +
+                     "(" + b + ".ResolvedTarget ?? " + b + ".FullName) }",
+        };
+
+        // `$( & { … } )`: the probe is a statement LIST, so it needs a subexpression,
+        // and the temp names stay inside the child scope (a top-level assignment
+        // would leak into the runspace and shadow a transpiled bash variable).
+        return "$(& { " + probe + body + " })";
+    }
+
     // ───────────────────────────────── Exit-code tests ────────────────────────────────
 
     /// <summary>
