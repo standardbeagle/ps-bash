@@ -294,6 +294,32 @@ public class PsEmitterTests
         Assert.True(homeCount >= 2, $"expected >= 2 $HOME, got {homeCount}: {result}");
     }
 
+    [Theory]
+    // SplitOnUnquotedColon (which finds the PATH-style `:` boundaries of an
+    // assignment value) scanned a double-quoted region by looking for the next `"`.
+    // A nested command substitution has its OWN quotes, so the region ended at the
+    // INNER quote and the colon after it looked unquoted — the value was split
+    // there, tearing `:b f)` out of the command and leaving a mangled pattern.
+    [InlineData("X=\"$(grep \"a:b\" f)\"", "\"a:b\" f")]
+    [InlineData("X=\"$(echo \"p\" | grep \"a:b\")\"", "\"a:b\"")]
+    [InlineData("X=\"$(grep \"^$v:\" f)\"", "\"^${env:v}:\" f")]
+    public void Transpile_AssignmentWithNestedQuotedColonInCommandSub_NotSplit(
+        string bash, string expectedFragment)
+    {
+        Assert.Contains(expectedFragment, PsEmitter.Transpile(bash));
+    }
+
+    [Fact]
+    public void Transpile_AssignmentPathColons_StillSplitForTildeExpansion()
+    {
+        // Guard the narrow claim: a genuinely unquoted PATH-style colon still
+        // separates segments, so each `~` expands.
+        var result = PsEmitter.Transpile("PATH=~/bin:~/x");
+        var homeCount = System.Text.RegularExpressions.Regex.Matches(result, @"\$HOME").Count;
+
+        Assert.True(homeCount >= 2, $"expected >= 2 $HOME, got {homeCount}: {result}");
+    }
+
     [Fact]
     public void Transpile_NonAssignmentColonTilde_NotExpanded()
     {

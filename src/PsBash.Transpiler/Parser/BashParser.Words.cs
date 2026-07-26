@@ -163,10 +163,34 @@ public sealed partial class BashParser
                 i = j;
                 continue;
             }
-            if (c == '"' || c == '`')
+            if (c == '"')
             {
                 int j = i + 1;
-                while (j < len && raw[j] != c)
+                while (j < len && raw[j] != '"')
+                {
+                    if (raw[j] == '\\' && j + 1 < len) { j += 2; continue; }
+                    // A nested command substitution may contain its OWN double quotes.
+                    // Scanning naively for the next `"` ended the region at the inner
+                    // quote, so `X="$(grep "a:b" f)"` looked like it had an UNQUOTED
+                    // colon and got split there — tearing `:b f)` out of the command
+                    // and leaving a mangled pattern. ScanBalancedParens is quote-aware,
+                    // so skip the whole substitution.
+                    if (raw[j] == '$' && j + 1 < len && raw[j + 1] == '(')
+                    {
+                        j = BashLexer.ScanBalancedParens(raw, j + 2, 1);
+                        continue;
+                    }
+                    j++;
+                }
+                j = j < len ? j + 1 : len;
+                sb.Append(raw, i, j - i);
+                i = j;
+                continue;
+            }
+            if (c == '`')
+            {
+                int j = i + 1;
+                while (j < len && raw[j] != '`')
                 {
                     if (raw[j] == '\\' && j + 1 < len) j++;
                     j++;
@@ -716,7 +740,9 @@ public sealed partial class BashParser
         string? user = pos > start ? raw[start..pos] : null;
         parts.Add(new WordPart.TildeSub(user));
 
-        // Consume the '/' separator so it doesn't appear in the following literal.
+        // Consume the '/' separator so it doesn't appear in the following literal;
+        // the emitter re-inserts a platform separator after a TildeSub (see
+        // PsEmitter.EmitWord / AppendTildeSeparator).
         if (pos < len && raw[pos] == '/')
             pos++;
 

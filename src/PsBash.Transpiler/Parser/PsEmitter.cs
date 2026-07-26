@@ -2866,6 +2866,13 @@ public static class PsEmitter
                 sb.Append(EmitCommandSubString(ncs));
             else
                 sb.Append(EmitWordPart(part));
+
+            // ParseTilde consumes the '/' after `~`, so the emitter owes the
+            // separator back. EmitWord does this; this flatten path did not, so
+            // `PATH=~/bin:~/x` emitted "$HOMEbin:$HOMEx" — and `$HOMEbin` is not a
+            // valid PowerShell variable reference, so the whole file failed to parse.
+            if (part is WordPart.TildeSub && i + 1 < parts.Length)
+                sb.Append('\\');
         }
         sb.Append('"');
         return sb.ToString();
