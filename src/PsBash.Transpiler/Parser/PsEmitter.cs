@@ -98,6 +98,43 @@ public static class PsEmitter
     private static int _captureDepth;
 
     /// <summary>
+    /// How many enclosing SUBSHELLS the current text is being emitted inside. In
+    /// bash, <c>exit</c> inside <c>( … )</c> terminates only the subshell and sets
+    /// <c>$?</c> in the parent, so at depth &gt; 0 <c>exit</c> must emit a SCOPED
+    /// <c>$LASTEXITCODE = N; return</c> instead of a real process exit.
+    /// </summary>
+    [ThreadStatic]
+    private static int _subshellDepth;
+
+    /// <summary>
+    /// True when <paramref name="command"/> lexically contains an <c>exit</c>
+    /// builtin, so <see cref="EmitSubshell"/> knows it must supply the script block
+    /// the scoped <c>return</c> returns from. A function DEFINITION inside the
+    /// subshell counts: in bash such a function cannot escape the subshell anyway.
+    /// </summary>
+    private static bool ContainsExitCommand(BashNode? command) => command switch
+    {
+        null => false,
+        Command.Simple s => s.Words.Length > 0 && GetLiteralValue(s.Words[0]) == "exit",
+        Command.Pipeline p => p.Commands.Any(ContainsExitCommand),
+        Command.AndOrList a => a.Commands.Any(ContainsExitCommand),
+        Command.CommandList l => l.Commands.Any(ContainsExitCommand),
+        Command.If i => i.Arms.Any(arm => ContainsExitCommand(arm.Cond)
+                                       || ContainsExitCommand(arm.Body))
+                        || ContainsExitCommand(i.ElseBody),
+        Command.ForIn f => ContainsExitCommand(f.Body),
+        Command.ForArith f => ContainsExitCommand(f.Body),
+        Command.While w => ContainsExitCommand(w.Cond) || ContainsExitCommand(w.Body),
+        Command.Case c => c.Arms.Any(arm => ContainsExitCommand(arm.Body)),
+        Command.ShFunction f => ContainsExitCommand(f.Body),
+        Command.BraceGroup b => ContainsExitCommand(b.Body),
+        // A NESTED subshell handles its own exit scoping, so it does not force a
+        // script block on the outer one.
+        Command.Subshell => false,
+        _ => false,
+    };
+
+    /// <summary>
     /// How many enclosing PowerShell DOUBLE-QUOTED strings the current text is being
     /// emitted inside — incremented for the body of a command substitution that lands
     /// in a <c>"…"</c> (see <see cref="EmitCommandSubString"/>).
@@ -516,6 +553,14 @@ public static class PsEmitter
             if (IsArrayAllWord(list[0], out var arrName))
                 return "$" + arrName;
 
+            // `for w in $x` — an UNQUOTED ordinary variable is word-split on IFS,
+            // so `x="a b c"` runs the loop THREE times. RC-7 applied this splitting
+            // to command arguments but not to a for-in list, so the loop ran ONCE
+            // over the whole string — a silent wrong result, not a parse error.
+            // (The quoted form `for w in "$x"` correctly stays one iteration.)
+            if (IsPureUnquotedVarWord(list[0]))
+                return EmitUnquotedVarSplitArray(list[0]);
+
             var single = EmitWord(list[0]);
             if (HasGlobChars(single))
                 // nullglob is OFF by default in bash: an unmatched glob iterates
@@ -561,12 +606,19 @@ public static class PsEmitter
             return sb.ToString();
         }
 
-        // Multiple items: join with commas, quoting strings
+        // Multiple items: join with commas, quoting strings. An unquoted ordinary
+        // variable still word-splits (`for w in $a $b`), and its split array must
+        // flatten into the comma list rather than becoming one element — hence the
+        // @( … ) wrapper, which PowerShell's comma operator splices.
         var items = new List<string>();
         foreach (var word in list)
         {
-            var val = EmitWord(word);
-            items.Add(FormatForItem(val));
+            if (IsPureUnquotedVarWord(word))
+            {
+                items.Add(EmitUnquotedVarSplitArray(word));
+                continue;
+            }
+            items.Add(FormatForItem(EmitWord(word)));
         }
         return string.Join(",", items);
     }
@@ -921,9 +973,23 @@ public static class PsEmitter
 
     private static string EmitSubshell(Command.Subshell subshell)
     {
+        // `exit` inside a subshell exits only the SUBSHELL and sets $? in the
+        // parent — `(exit 7); echo $?` prints 7 and keeps going. Emitted as a bare
+        // PowerShell `exit`, it terminated the WHOLE shell instead: the script
+        // stopped and the `echo $?` never ran. Emit the body with the subshell
+        // depth raised so `exit N` becomes a SCOPED `$LASTEXITCODE = N; return`,
+        // and give that `return` a script block to return from.
+        _subshellDepth++;
+        string body;
+        try { body = Emit(subshell.Body); }
+        finally { _subshellDepth--; }
+
+        bool scopedExit = ContainsExitCommand(subshell.Body);
         var sb = new StringBuilder("try { Push-Location; ");
-        sb.Append(Emit(subshell.Body));
+        sb.Append(body);
         sb.Append(" } finally { Pop-Location }");
+        if (scopedExit)
+            sb.Insert(0, "& { ").Append(" }");
 
         // Partition out the input redirect: `(cmd) < file` feeds the file to the
         // subshell's stdin and wraps the WHOLE result (`Get-Content file | & { … }`),
@@ -946,8 +1012,9 @@ public static class PsEmitter
         // `try { … } finally { … } | Invoke-BashRedirect` = "An empty pipe element
         // is not allowed" (Go's mkerrors.sh). Wrap it into a pipeable child scope
         // first. Only when a redirect will actually be appended, so the common
-        // redirect-less subshell keeps its cheaper emission.
-        if (tailRedirects.Count > 0)
+        // redirect-less subshell keeps its cheaper emission. (When the body has a
+        // scoped exit it is already wrapped above.)
+        if (tailRedirects.Count > 0 && !scopedExit)
         {
             sb.Insert(0, "& { ").Append(" }");
         }
@@ -2242,6 +2309,16 @@ public static class PsEmitter
                 specialResult = "$($global:LASTEXITCODE = 1; try { [void](1/0) } catch { }; if ($global:__BashErrexit) { throw 'PsBash.FalseErrexit' })";
             else
                 specialResult = "$($global:LASTEXITCODE = 1; Write-Error '' -ErrorAction SilentlyContinue)";
+        }
+
+        // Inside a subshell, `exit` leaves only the subshell and sets $? in the
+        // parent (`(exit 7); echo $?` prints 7 and continues). A bare PowerShell
+        // `exit` terminated the whole shell, so the rest of the script never ran.
+        else if (cmd0 == "exit" && _subshellDepth > 0)
+        {
+            specialResult = cmd.Words.Length >= 2
+                ? $"$global:LASTEXITCODE = {EmitExitCodeValue(cmd.Words[1])}; return"
+                : "return";
         }
 
         else if (cmd0 == "exit" && cmd.Words.Length == 2
@@ -3867,6 +3944,22 @@ public static class PsEmitter
     /// <c>exit</c> itself is never wrapped in a script block (a wrapped
     /// <c>exit</c> would only leave the block when inside a function).
     /// </summary>
+    /// <summary>
+    /// The exit-status VALUE of an <c>exit N</c> operand, for the scoped
+    /// subshell form. An unquoted variable keeps bash's elision rule (an empty
+    /// operand leaves <c>$?</c> alone), mirroring
+    /// <see cref="EmitExitWithUnquotedVar"/>.
+    /// </summary>
+    private static string EmitExitCodeValue(CompoundWord word)
+    {
+        if (!IsPureUnquotedVarWord(word))
+            return EmitWord(word);
+
+        return "$(& { $__bashexit = " + EmitUnquotedVarSplitArray(word) +
+               "; if ($__bashexit.Count) { $__bashexit[0] } " +
+               "else { $global:LASTEXITCODE } })";
+    }
+
     private static string EmitExitWithUnquotedVar(CompoundWord word)
     {
         string split = EmitUnquotedVarSplitArray(word);

@@ -811,6 +811,23 @@ public sealed partial class BashParser
         // Character class [...]
         if (c == '[')
         {
+            // A class body containing an EXPANSION is not a class we can model.
+            // bash expands first and globs second, so `echo [$x]` prints the value
+            // of x wrapped in brackets. Swallowing the whole raw slice into a
+            // GlobPart dropped the expansion entirely: the emitted pattern text
+            // `[$x]` made PowerShell read `$x` as ITS OWN (undefined) variable, so
+            // `x="a b"; echo [$x]` printed `[]` — total, silent data loss.
+            //
+            // Emit a plain literal `[` instead and let the ordinary word loop parse
+            // the expansion and the closing `]`. The value is then preserved. (The
+            // word is no longer treated as a glob — acceptable, since a bracket
+            // expression that matches no file is a literal word in bash anyway.)
+            if (ClassBodyHasExpansion(raw, pos))
+            {
+                parts.Add(new WordPart.Literal("["));
+                return pos + 1;
+            }
+
             int start = pos;
             pos++; // skip [
             // Allow leading ] or ! as part of the class
@@ -846,6 +863,24 @@ public sealed partial class BashParser
         // Shouldn't reach here, but treat as literal.
         parts.Add(new WordPart.Literal(c.ToString()));
         return pos + 1;
+    }
+
+    /// <summary>
+    /// True when the bracket expression starting at <paramref name="pos"/> (the
+    /// <c>[</c>) contains a parameter or command substitution before its closing
+    /// <c>]</c> — i.e. it is not a static character class. Returns false for an
+    /// UNTERMINATED bracket too, so a stray <c>[</c> keeps its existing handling.
+    /// </summary>
+    private static bool ClassBodyHasExpansion(string raw, int pos)
+    {
+        for (int i = pos + 1; i < raw.Length; i++)
+        {
+            if (raw[i] == ']')
+                return false;              // closed with no expansion: a real class
+            if (raw[i] is '$' or '`')
+                return true;
+        }
+        return false;                      // unterminated
     }
 
     private static int ParseExtGlob(string raw, int pos, ImmutableArray<WordPart>.Builder parts)

@@ -2135,12 +2135,35 @@ public class PsEmitterTests
 
     [Theory]
     // Anything EmitWord already rendered as a PowerShell value must pass through.
+    // NOTE the QUOTED form only: `for x in "$list"` is ONE iteration in bash.
     [InlineData("for x in \"$list\"; do echo $x; done", "\"$env:list\"")]
-    [InlineData("for x in $list; do echo $x; done", "$env:list")]
     public void Transpile_ForInSingleItem_LeavesPowerShellValuesUnquoted(
         string bash, string expected)
     {
         Assert.Contains($"foreach ($x in {expected})", PsEmitter.Transpile(bash));
+    }
+
+    [Fact]
+    public void Transpile_ForInUnquotedVar_WordSplits()
+    {
+        // This case previously asserted the bare `foreach ($x in $env:list)`, which
+        // iterates ONCE over the whole string. bash word-splits an UNQUOTED
+        // expansion, so `list="a b c"` runs the loop THREE times — a silent wrong
+        // result found by the oracle differential sweep, not by any parse check.
+        // RC-7 splitting applied to command arguments but not to a for-in list.
+        var result = PsEmitter.Transpile("for x in $list; do echo $x; done");
+
+        Assert.Contains("$env:list -split '\\s+'", result);
+        Assert.DoesNotContain("foreach ($x in $env:list)", result);
+    }
+
+    [Fact]
+    public void Transpile_ForInMultipleUnquotedVars_EachWordSplits()
+    {
+        var result = PsEmitter.Transpile("for x in $a $b; do echo $x; done");
+
+        Assert.Contains("$env:a -split '\\s+'", result);
+        Assert.Contains("$env:b -split '\\s+'", result);
     }
 
     [Fact]
@@ -4845,6 +4868,55 @@ public class PsEmitterTests
         // it is just consumed as a VALUE rather than splatted.
         Assert.Contains("$env:code -split '\\s+'", result);
         Assert.Contains("$__bashexit[0]", result);
+    }
+
+    // ---- subshell exit scoping / glob class with an expansion --------------
+
+    [Fact]
+    public void Transpile_ExitInsideSubshell_IsScopedNotProcessExit()
+    {
+        // bash: `exit` in `( … )` leaves only the SUBSHELL and sets $? in the
+        // parent, so `(exit 7); echo $?` prints 7 and keeps running. Emitted as a
+        // bare PowerShell `exit` it terminated the WHOLE shell and the `echo $?`
+        // never ran — found by the oracle differential sweep.
+        var result = PsEmitter.Transpile("(exit 7); echo $?");
+
+        Assert.StartsWith("& { try { Push-Location;", result);
+        Assert.Contains("$global:LASTEXITCODE = 7; return", result);
+        Assert.EndsWith("Invoke-BashEcho $global:LASTEXITCODE", result);
+    }
+
+    [Fact]
+    public void Transpile_ExitOutsideSubshell_StaysProcessExit()
+    {
+        Assert.Equal("exit 5", PsEmitter.Transpile("exit 5"));
+    }
+
+    [Fact]
+    public void Transpile_SubshellWithoutExit_NotWrappedInScriptBlock()
+    {
+        // The script block is only needed to give the scoped `return` something to
+        // return from; a plain subshell keeps its cheaper emission.
+        Assert.Equal("try { Push-Location; Invoke-BashEcho a } finally { Pop-Location }",
+            PsEmitter.Transpile("(echo a)"));
+    }
+
+    [Fact]
+    public void Transpile_GlobClassContainingExpansion_PreservesTheVariable()
+    {
+        // `[$x]` was swallowed whole into a GlobPart, so the emitted pattern text
+        // `[$x]` made PowerShell read `$x` as ITS OWN (undefined) variable and
+        // `x="a b"; echo [$x]` printed `[]` — total, silent data loss.
+        Assert.Equal("Invoke-BashEcho [$env:x]", PsEmitter.Transpile("echo [$x]"));
+        Assert.Equal("Invoke-BashEcho x[$env:y]z", PsEmitter.Transpile("echo x[$y]z"));
+    }
+
+    [Fact]
+    public void Transpile_StaticGlobClass_StillAGlob()
+    {
+        // A class with no expansion keeps its glob handling.
+        Assert.Equal("Invoke-BashEcho [abc]", PsEmitter.Transpile("echo [abc]"));
+        Assert.Equal("Invoke-BashEcho [0-9]", PsEmitter.Transpile("echo [[:digit:]]"));
     }
 
     // ---- redirect / test-operator / unmodelable-expansion degradations -----
