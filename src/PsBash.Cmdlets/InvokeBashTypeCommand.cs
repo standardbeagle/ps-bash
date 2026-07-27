@@ -183,7 +183,7 @@ public sealed class InvokeBashTypeCommand : PSCmdlet
 
         if (val == null)
         {
-            var envVal = Environment.GetEnvironmentVariable(name);
+            var envVal = BashVariableStore.Get(name);
             if (envVal != null) { val = envVal; source = "environment"; }
         }
         _ = source; // parity placeholder (oracle tracked it but did not surface it)

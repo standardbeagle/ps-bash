@@ -193,9 +193,32 @@ corruption. Any real fix has to make the environment per-invocation state
 (runspace-scoped `$env:` shim, or a serialized env epoch), not a save/restore
 bracket around a shared global.
 
-On Windows there is a second, independent divergence in the same area: the
-process environment block is **case-insensitive**, so `$x` and `$X` are the same
-variable, where bash treats them as distinct.
+Two further divergences share this root cause (bash variables modeled as
+environment variables):
+
+- **Non-exported variables are visible to `env`.** `Q=1; env | grep '^Q='` prints
+  `Q=1` here and nothing in bash, which lists only EXPORTED variables. ps-bash
+  has no export bit — every assignment lands in the same store.
+- **Windows environment names are case-insensitive**, so `$x` and `$X` are the
+  same variable where bash treats them as distinct.
+
+### Step 1 of the fix is in place: `BashVariableStore`
+
+Every cmdlet read/write of a bash VARIABLE now goes through
+`PsBash.Cmdlets.BashVariableStore`, and every child-process spawn calls
+`BashVariableStore.ApplyTo(startInfo)`. Today the store *is* the process
+environment and `ApplyTo` is a no-op, so behavior is byte-for-byte unchanged —
+the point is that the ~100-site audit is already done. Making the store
+per-invocation becomes a change to those two method bodies plus a `sessionMode`
+switch, instead of a tree-wide hunt.
+
+Two things keep it from rotting, both mutation-tested:
+`BashVariableStoreGuardTests.NoCmdlet_ReadsOrWritesABashVariable_ThroughEnvironmentDirectly`
+and `...EverySpawnSite_AppliesTheMaterializationSeam`. Host CONFIGURATION knobs
+(`PSBASH_*`, `NO_COLOR`, `USERNAME`, `PATH`) are deliberately exempt and must keep
+reading the real process environment — `BashRuntime.IsHostConfigTruthy` is named
+for that contract, which is how the guard tells the two apart when the variable
+name arrives as a parameter.
 
 ### Implementation (single-flight spawn)
 

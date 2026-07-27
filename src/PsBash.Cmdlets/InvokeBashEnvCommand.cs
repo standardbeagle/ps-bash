@@ -82,14 +82,14 @@ public sealed class InvokeBashEnvCommand : PSCmdlet
                 // contributes no line (bash exits 1 silently, no "env:" error).
                 foreach (var name in args)
                 {
-                    var v = Environment.GetEnvironmentVariable(name);
+                    var v = BashVariableStore.Get(name);
                     if (v != null) WriteObject(BuildEntry(name, v, valueOnly: true));
                 }
                 return;
             }
 
             var varName = args[0];
-            var val = Environment.GetEnvironmentVariable(varName);
+            var val = BashVariableStore.Get(varName);
             if (val == null)
             {
                 FileSystemHelpers.WriteBashError(this, $"env: '{varName}': not set");
@@ -99,19 +99,13 @@ public sealed class InvokeBashEnvCommand : PSCmdlet
             return;
         }
 
-        // No args: enumerate all environment variables, sorted by name
+        // No args: enumerate all bash variables, sorted by name
         // (the psm1 oracle's `Sort-Object` step).
-        var entries = Environment.GetEnvironmentVariables();
-        var names = new List<string>(entries.Count);
-        foreach (DictionaryEntry e in entries)
-        {
-            names.Add(e.Key?.ToString() ?? string.Empty);
-        }
-        names.Sort(StringComparer.Ordinal);
+        var all = new List<KeyValuePair<string, string>>(BashVariableStore.Enumerate());
+        all.Sort(static (a, b) => StringComparer.Ordinal.Compare(a.Key, b.Key));
 
-        foreach (var key in names)
+        foreach (var (key, v) in all)
         {
-            var v = entries[key]?.ToString() ?? string.Empty;
             WriteObject(BuildEntry(key, v));
         }
     }
@@ -189,23 +183,21 @@ public sealed class InvokeBashEnvCommand : PSCmdlet
         {
             if (ignoreEnv)
             {
-                foreach (DictionaryEntry e in Environment.GetEnvironmentVariables())
+                foreach (var (k, v) in BashVariableStore.Enumerate())
                 {
-                    var k = e.Key?.ToString();
-                    if (k == null) continue;
-                    saved.Add((k, e.Value?.ToString()));
-                    Environment.SetEnvironmentVariable(k, null);
+                    saved.Add((k, v));
+                    BashVariableStore.Set(k, null);
                 }
             }
             foreach (var u in unset)
             {
-                saved.Add((u, Environment.GetEnvironmentVariable(u)));
-                Environment.SetEnvironmentVariable(u, null);
+                saved.Add((u, BashVariableStore.Get(u)));
+                BashVariableStore.Set(u, null);
             }
             foreach (var (n, v) in assignments)
             {
-                saved.Add((n, Environment.GetEnvironmentVariable(n)));
-                Environment.SetEnvironmentVariable(n, v);
+                saved.Add((n, BashVariableStore.Get(n)));
+                BashVariableStore.Set(n, v);
             }
 
             try
@@ -227,7 +219,7 @@ public sealed class InvokeBashEnvCommand : PSCmdlet
             // the same name returns to the original value.
             for (int k = saved.Count - 1; k >= 0; k--)
             {
-                Environment.SetEnvironmentVariable(saved[k].Name, saved[k].Old);
+                BashVariableStore.Set(saved[k].Name, saved[k].Old);
             }
         }
     }
@@ -238,11 +230,8 @@ public sealed class InvokeBashEnvCommand : PSCmdlet
         var dict = new Dictionary<string, string>(StringComparer.Ordinal);
         if (!ignoreEnv)
         {
-            foreach (DictionaryEntry e in Environment.GetEnvironmentVariables())
-            {
-                var k = e.Key?.ToString();
-                if (k != null) dict[k] = e.Value?.ToString() ?? string.Empty;
-            }
+            foreach (var (k, v) in BashVariableStore.Enumerate())
+                dict[k] = v;
         }
         foreach (var u in unset) dict.Remove(u);
         foreach (var (n, v) in assignments) dict[n] = v;

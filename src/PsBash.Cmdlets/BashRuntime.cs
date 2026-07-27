@@ -46,14 +46,21 @@ public static class BashRuntime
     }
 
     /// <summary>
-    /// True when environment variable <paramref name="name"/> is set to a truthy token
-    /// (<c>1</c>, <c>true</c>, <c>yes</c>, or <c>on</c>, case-insensitive, surrounding
-    /// whitespace ignored). One implementation so every cmdlet-side boolean env flag
-    /// (<c>PSBASH_SEARCH_NO_IGNORE</c>, <c>PSBASH_RG_NATIVE</c>, …) agrees on what counts
-    /// as "on" — mirrors <c>PsBash.Core.Runtime.EnvFlags.IsTruthy</c>, duplicated here only
-    /// because the AOT-leaf Cmdlets assembly cannot reference Core (Core embeds it).
+    /// True when HOST CONFIGURATION variable <paramref name="name"/> is set to a truthy
+    /// token (<c>1</c>, <c>true</c>, <c>yes</c>, or <c>on</c>, case-insensitive,
+    /// surrounding whitespace ignored). One implementation so every cmdlet-side boolean
+    /// flag (<c>PSBASH_SEARCH_NO_IGNORE</c>, <c>PSBASH_RG_NATIVE</c>, …) agrees on what
+    /// counts as "on" — mirrors <c>PsBash.Core.Runtime.EnvFlags.IsTruthy</c>, duplicated
+    /// here only because the AOT-leaf Cmdlets assembly cannot reference Core.
+    ///
+    /// <para>Named "HostConfig", not "Env", deliberately: this reads ps-bash's own
+    /// process configuration, NEVER a bash script variable. Script variables go through
+    /// <see cref="BashVariableStore"/> so they can become per-invocation later; a config
+    /// knob must keep reading the real process environment or the launcher could not
+    /// configure the host at all. <c>BashVariableStoreGuardTests</c> enforces the split,
+    /// and the name is what lets it tell the two apart through a parameter.</para>
     /// </summary>
-    public static bool IsEnvTruthy(string name)
+    public static bool IsHostConfigTruthy(string name)
     {
         var value = Environment.GetEnvironmentVariable(name)?.Trim();
         return value is not null
@@ -724,6 +731,15 @@ public static class BashRuntime
     public static ChildProcessResult RunChildProcess(ProcessStartInfo startInfo, System.TimeSpan? timeout = null)
     {
         ArgumentNullException.ThrowIfNull(startInfo);
+
+        // Bash variables the script exported must reach the child — `export
+        // PATH=…` / `export NODE_ENV=…` are the whole point of export. While the
+        // store IS the process environment this is a no-op (the child inherits);
+        // it is called unconditionally so that moving the store off the process
+        // environment is a one-method change rather than an audit of every spawn
+        // site. See BashVariableStore.ApplyTo.
+        BashVariableStore.ApplyTo(startInfo);
+
         startInfo.UseShellExecute = false;
         startInfo.RedirectStandardOutput = true;
         startInfo.RedirectStandardError = true;

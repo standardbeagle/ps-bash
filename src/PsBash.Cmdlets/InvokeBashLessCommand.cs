@@ -193,6 +193,9 @@ public sealed class InvokeBashLessCommand : PSCmdlet
                 WorkingDirectory = SessionState.Path.CurrentLocation.Path,
             };
             foreach (var a in pagerArgs) psi.ArgumentList.Add(a);
+            // Raw Process.Start (interactive pager — exempt from RunChildProcess),
+            // so the bash-variable materialization seam must be applied here too.
+            BashVariableStore.ApplyTo(psi);
 
             using var proc = Process.Start(psi);
             if (proc == null)

@@ -43,7 +43,7 @@ namespace PsBash.Cmdlets;
 /// Variables are written via
 /// <see cref="PSVariableIntrinsics.Set(string, object)"/> (the runspace-scope
 /// equivalent of the oracle's <c>Set-Variable -Scope 1</c>) plus
-/// <c>Environment.SetEnvironmentVariable</c> so the emitted
+/// <c>BashVariableStore.Set</c> so the emitted
 /// <c>$env:NAME</c> expansion that follows a <c>read NAME</c> in transpiled
 /// bash resolves the just-read value (oracle parity — it set both).
 ///
@@ -303,7 +303,7 @@ public sealed class InvokeBashReadCommand : PSCmdlet
         {
             // -a ARR: split the line into an indexed array on $IFS (bash uses IFS,
             // not just whitespace — `IFS=, read -ra parts` must split on commas).
-            string[] parts = SplitByIfs(inputLine, Environment.GetEnvironmentVariable("IFS"));
+            string[] parts = SplitByIfs(inputLine, BashVariableStore.Get("IFS"));
             AssignVariable(arrayName, parts);
             // Also assign positional names (oracle parity — `-a` did not
             // suppress positional name assignment, though typical usage has
@@ -364,7 +364,7 @@ public sealed class InvokeBashReadCommand : PSCmdlet
             string[] arr => string.Join(' ', arr),
             _ => value?.ToString() ?? ""
         };
-        try { Environment.SetEnvironmentVariable(name, envVal); }
+        try { BashVariableStore.Set(name, envVal); }
         catch { /* env-set may fail for restricted names; non-fatal */ }
     }
 

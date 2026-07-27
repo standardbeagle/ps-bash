@@ -101,19 +101,19 @@ public sealed class InvokeBashArithmeticCommand : PSCmdlet
         }
         catch { /* not a readable PS variable in scope */ }
 
-        // Environment variable (ordinary bash vars live in $env:NAME).
-        return Environment.GetEnvironmentVariable(name);
+        // Ordinary bash variable (ps-bash stores them as $env:NAME).
+        return BashVariableStore.Get(name);
     }
 
     /// <summary>
-    /// Persist an assignment. Writes to the environment (ps-bash's store for
-    /// ordinary variables) and, when a PowerShell variable of that name already
-    /// exists in scope, updates it too so a loop variable stays consistent.
+    /// Persist an assignment. Writes to the bash-variable store and, when a
+    /// PowerShell variable of that name already exists in scope, updates it too
+    /// so a loop variable stays consistent.
     /// </summary>
     private void WriteVar(string name, long value)
     {
         var s = value.ToString(CultureInfo.InvariantCulture);
-        Environment.SetEnvironmentVariable(name, s);
+        BashVariableStore.Set(name, s);
         try
         {
             if (GetVariableValue(name) is not null)

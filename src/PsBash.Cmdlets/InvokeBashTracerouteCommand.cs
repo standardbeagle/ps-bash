@@ -91,6 +91,9 @@ public sealed class InvokeBashTracerouteCommand : PSCmdlet
         psi.ArgumentList.Add(hopFlag);
         psi.ArgumentList.Add(maxHops.ToString(System.Globalization.CultureInfo.InvariantCulture));
         psi.ArgumentList.Add(host);
+        // Raw Process.Start (streaming hop-by-hop — exempt from RunChildProcess),
+        // so the bash-variable materialization seam must be applied here too.
+        BashVariableStore.ApplyTo(psi);
 
         try
         {

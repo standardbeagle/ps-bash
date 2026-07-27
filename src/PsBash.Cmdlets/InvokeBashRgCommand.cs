@@ -433,7 +433,7 @@ public sealed class InvokeBashRgCommand : PSCmdlet
         }
     }
 
-    private static bool NativeRgPassthroughEnabled() => BashRuntime.IsEnvTruthy("PSBASH_RG_NATIVE");
+    private static bool NativeRgPassthroughEnabled() => BashRuntime.IsHostConfigTruthy("PSBASH_RG_NATIVE");
 
     private void RunPipelineMode(Regex regex, bool invertMatch, bool countOnly, bool onlyMatching)
     {
