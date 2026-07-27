@@ -81,7 +81,7 @@ public class BashTranspilerTests
     public void Transpile_ExpandingHeredocParamExpansion_ExpandsOperator()
     {
         var result = BashTranspiler.Transpile("cat <<EOF\nv=${x:-fallback}\nEOF");
-        Assert.Contains("$(($env:x ?? \"fallback\"))", result);
+        Assert.Contains("$(($env:x ? $env:x : \"fallback\"))", result);
         Assert.DoesNotContain("$env:x:-fallback", result);
     }
 

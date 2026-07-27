@@ -125,8 +125,8 @@ public class ShellSnapshotShimTests
         // inside "$( … )"; a nested EMPTY double-quoted string ("") makes PowerShell mis-parse
         // ("string is missing the terminator"). Must emit '' (single-quoted empty) instead.
         var result = BashTranspiler.Transpile("x=\"${CLAUDE_CODE_EXECPATH:-}\"");
-        Assert.Contains("?? '')", result);
-        Assert.DoesNotContain("?? \"\")", result);
+        Assert.Contains(": '')", result);
+        Assert.DoesNotContain(": \"\")", result);
     }
 
     // ---- Full snapshot rg-shim: every fragment must be present and well-formed ----

@@ -4185,23 +4185,36 @@ public static class PsEmitter
         if (suffix == "#")
             return inDoubleQuote ? $"$({varRef}.Length)" : $"{varRef}.Length";
 
+        // The `:`-prefixed forms act when the variable is unset OR EMPTY.
+        //
+        // These used to emit `??`, which only tests for $null — so a variable SET
+        // TO EMPTY skipped the operator entirely and `x=; echo ${x:-d}` printed
+        // nothing instead of `d`. That is the single most common parameter
+        // expansion in shell scripts, and the failure was silent (found by the
+        // oracle differential sweep, invisible to every parse check).
+        //
+        // The PowerShell ternary is exactly bash's test: `""` and `$null` are both
+        // falsy, while `"0"` — which bash also treats as set-and-non-empty — is
+        // TRUTHY in PowerShell (unlike in C). Verified directly against pwsh.
+        //
         // Default value: ${VAR:-default}
         if (suffix.StartsWith(":-"))
-            return $"{open}{varRef} ?? {ArgVal(suffix[2..])})";
+            return $"{open}{varRef} ? {varRef} : {ArgVal(suffix[2..])})";
         // Assign default: ${VAR:=default}
         if (suffix.StartsWith(":="))
-            return $"{open}{varRef} ?? ({varRef} = {ArgVal(suffix[2..])}))";
+            return $"{open}{varRef} ? {varRef} : ({varRef} = {ArgVal(suffix[2..])}))";
         // Use alternative: ${VAR:+alt}
         if (suffix.StartsWith(":+"))
             return $"{open}{varRef} ? {ArgVal(suffix[2..])} : {q}{q})";
         // Error if unset: ${VAR:?message}
         if (suffix.StartsWith(":?"))
-            return $"{open}{varRef} ?? $(throw {ArgVal(suffix[2..])}))";
+            return $"{open}{varRef} ? {varRef} : $(throw {ArgVal(suffix[2..])}))";
 
         // Colon-less unset-only variants: ${VAR-w} ${VAR=w} ${VAR+w} ${VAR?msg}.
         // Bash distinguishes these (act only when UNSET) from the `:`-prefixed forms
-        // (act when unset OR empty); ps-bash models vars as env vars where `$env:X`
-        // is $null when unset, so `??` already approximates the unset-only test.
+        // (act when unset OR empty). `$env:X` is $null when unset but "" when set to
+        // empty, so `??` is an EXACT match for the unset-only test — which is also
+        // precisely why it was WRONG for the `:` forms above.
         if (suffix.StartsWith("-"))
             return $"{open}{varRef} ?? {ArgVal(suffix[1..])})";
         if (suffix.StartsWith("="))
@@ -4572,8 +4585,52 @@ public static class PsEmitter
         return sb.ToString();
     }
 
+    /// <summary>
+    /// Rewrites <c>CMD &amp;&amp; break</c> / <c>CMD || exit 1</c> and friends into an
+    /// <c>if</c> statement, because PowerShell's <c>&amp;&amp;</c>/<c>||</c> chain
+    /// operators require a COMMAND on the right — a statement keyword there is
+    /// parsed as a command NAME.
+    /// <para>
+    /// Both failure modes are silent-ish and both are everyday bash: <c>&amp;&amp;
+    /// break</c> printed "The term 'break' is not recognized" and the loop ran on,
+    /// while <c>|| exit 1</c> simply DID NOT EXIT — the script kept going past the
+    /// guard it was written to enforce. Found by the oracle differential sweep.
+    /// </para>
+    /// Returns null when the chain does not end in a statement keyword.
+    /// </summary>
+    private static string? TryEmitAndOrEndingInStatementKeyword(Command.AndOrList andOr)
+    {
+        var last = andOr.Commands[^1];
+        if (last is not Command.Simple lastSimple || lastSimple.Words.Length == 0)
+            return null;
+        if (GetLiteralValue(lastSimple.Words[0]) is not { } name
+            || !PsStatementKeywordCommands.Contains(name))
+        {
+            return null;
+        }
+
+        // Everything before the final operator is the CONDITION. Re-emit it through
+        // the ordinary path so nested chains, pipelines and tests keep their
+        // existing exit-code bridging.
+        var prefixCommands = andOr.Commands.RemoveAt(andOr.Commands.Length - 1);
+        string condition = prefixCommands.Length == 1
+            ? Emit(prefixCommands[0])
+            : EmitAndOrList(andOr with
+            {
+                Commands = prefixCommands,
+                Ops = andOr.Ops.RemoveAt(andOr.Ops.Length - 1),
+            });
+
+        // `&&` runs the keyword when the condition SUCCEEDED, `||` when it failed.
+        bool negate = andOr.Ops[^1] == "||";
+        return $"if ({PsBuild.ExitCodeTest(condition, negate)}) {{ {Emit(last)} }}";
+    }
+
     private static string EmitAndOrList(Command.AndOrList andOr)
     {
+        if (TryEmitAndOrEndingInStatementKeyword(andOr) is { } keywordForm)
+            return keywordForm;
+
         var sb = new StringBuilder();
         for (int i = 0; i < andOr.Commands.Length; i++)
         {

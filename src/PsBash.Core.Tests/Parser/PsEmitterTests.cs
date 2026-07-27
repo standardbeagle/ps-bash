@@ -455,7 +455,9 @@ public class PsEmitterTests
         // path; an operator form still routes through EmitBracedVar.
         var result = PsEmitter.Transpile("echo \"${v:-d}:\"");
 
-        Assert.Contains("??", result);
+        // The `:-` operator form emits the empty-or-unset ternary, not a bare
+        // `${v}` bracing.
+        Assert.Contains("$env:v ? $env:v :", result);
     }
 
     [Fact]
@@ -1190,11 +1192,15 @@ public class PsEmitterTests
     }
 
     [Fact]
-    public void Transpile_BracedVarWithDefault_EmitsNullCoalescing()
+    public void Transpile_BracedVarWithDefault_EmitsEmptyOrUnsetTest()
     {
         var result = PsEmitter.Transpile("echo ${VAR:-fallback}");
 
-        Assert.Equal("Invoke-BashEcho ($env:VAR ?? \"fallback\")", result);
+        // The `:` forms act when the variable is unset OR EMPTY. This asserted
+        // `??`, which only tests $null, so `x=; echo ${x:-d}` printed NOTHING
+        // instead of `d` — the most common parameter expansion in shell, silently
+        // wrong. The ternary is exactly bash's test ("" and $null falsy, "0" truthy).
+        Assert.Equal("Invoke-BashEcho ($env:VAR ? $env:VAR : \"fallback\")", result);
     }
 
     [Fact]
@@ -1263,11 +1269,11 @@ public class PsEmitterTests
     }
 
     [Fact]
-    public void Transpile_BracedVarAssignDefault_EmitsNullCoalescingAssign()
+    public void Transpile_BracedVarAssignDefault_EmitsEmptyOrUnsetTest()
     {
         var result = PsEmitter.Transpile("echo ${VAR:=default}");
 
-        Assert.Equal("Invoke-BashEcho ($env:VAR ?? ($env:VAR = \"default\"))", result);
+        Assert.Equal("Invoke-BashEcho ($env:VAR ? $env:VAR : ($env:VAR = \"default\"))", result);
     }
 
     [Fact]
@@ -1283,7 +1289,7 @@ public class PsEmitterTests
     {
         var result = PsEmitter.Transpile("echo ${VAR:?error msg}");
 
-        Assert.Equal("Invoke-BashEcho ($env:VAR ?? $(throw \"error msg\"))", result);
+        Assert.Equal("Invoke-BashEcho ($env:VAR ? $env:VAR : $(throw \"error msg\"))", result);
     }
 
     [Fact]
@@ -1385,7 +1391,7 @@ public class PsEmitterTests
     {
         // ${arr[0]:-x} -> the operator must apply to the indexed value, not be dropped.
         var result = PsEmitter.Transpile("echo ${arr[0]:-x}");
-        Assert.Equal("Invoke-BashEcho ($arr[0] ?? \"x\")", result);
+        Assert.Equal("Invoke-BashEcho ($arr[0] ? $arr[0] : \"x\")", result);
     }
 
     [Fact]
@@ -1929,8 +1935,8 @@ public class PsEmitterTests
     // shape was single-quoted as a LITERAL: the test compared against the source
     // text `($env:V ?? "")`, which is never empty — `-z` was always false and `-n`
     // always true. Silent wrong answer, no error.
-    [InlineData("[ -z \"${V:-}\" ]", "[string]::IsNullOrEmpty(($env:V ?? ''))")]
-    [InlineData("[ -n \"${V:-}\" ]", "-not [string]::IsNullOrEmpty(($env:V ?? ''))")]
+    [InlineData("[ -z \"${V:-}\" ]", "[string]::IsNullOrEmpty(($env:V ? $env:V : ''))")]
+    [InlineData("[ -n \"${V:-}\" ]", "-not [string]::IsNullOrEmpty(($env:V ? $env:V : ''))")]
     [InlineData("[ -z \"$V\" ]", "[string]::IsNullOrEmpty($env:V)")]
     public void Transpile_TestOperand_QuotedExpansion_StaysAnExpression(
         string bash, string expectedFragment)
@@ -4147,7 +4153,7 @@ public class PsEmitterTests
         // RC3: the default word is decomposed, but a PURE LITERAL is emitted single-quoted
         // (EmitBracedArgWordValue) — a nested double-quoted string inside "$( … )" mis-parses
         // when empty or quote-bearing, so literals must stay single-quoted here.
-        Assert.Equal("Invoke-BashEcho \"$($env:UNSET_VAR ?? 'fallback')\"", result);
+        Assert.Equal("Invoke-BashEcho \"$($env:UNSET_VAR ? $env:UNSET_VAR : 'fallback')\"", result);
     }
 
     [Fact]
@@ -4868,6 +4874,53 @@ public class PsEmitterTests
         // it is just consumed as a VALUE rather than splatted.
         Assert.Contains("$env:code -split '\\s+'", result);
         Assert.Contains("$__bashexit[0]", result);
+    }
+
+    // ---- `:`-form empty test / statement keyword in a &&-|| chain ----------
+
+    [Theory]
+    // The `:` forms act on unset OR EMPTY, the colon-less forms on unset ONLY.
+    // `$env:X` is $null when unset but "" when set-to-empty, so `??` is EXACT for
+    // the colon-less forms and was WRONG for the `:` forms.
+    [InlineData("echo ${V:-d}", "($env:V ? $env:V : \"d\")")]
+    [InlineData("echo ${V-d}", "($env:V ?? \"d\")")]
+    [InlineData("echo ${V:=d}", "($env:V ? $env:V : ($env:V = \"d\"))")]
+    [InlineData("echo ${V=d}", "($env:V ?? ($env:V = \"d\"))")]
+    public void Transpile_ParamExpansionColonForm_TestsEmptyNotJustUnset(
+        string bash, string expected)
+        => Assert.Equal($"Invoke-BashEcho {expected}", PsEmitter.Transpile(bash));
+
+    [Theory]
+    // PowerShell's &&/|| chain wants a COMMAND on the right; a statement keyword
+    // there is parsed as a command NAME. `&& break` printed "The term 'break' is
+    // not recognized" and the loop ran on, and `|| exit 1` simply DID NOT EXIT —
+    // the script sailed past the guard it was written to enforce.
+    [InlineData("cmd || exit 1", "-ne 0 })) { exit 1 }")]
+    [InlineData("cmd && continue", "-eq 0 })) { continue }")]
+    [InlineData("cmd && break", "-eq 0 })) { break }")]
+    [InlineData("cmd || return", "-ne 0 })) { return }")]
+    public void Transpile_ChainEndingInStatementKeyword_RewritesToIf(
+        string bash, string expectedTail)
+    {
+        var result = PsEmitter.Transpile(bash);
+
+        Assert.StartsWith("if ((& { [void](cmd);", result);
+        Assert.EndsWith(expectedTail, result);
+    }
+
+    [Fact]
+    public void Transpile_ChainOfOrdinaryCommands_KeepsNativeChainOperator()
+    {
+        // Only a trailing statement KEYWORD forces the rewrite.
+        Assert.Equal("a && b", PsEmitter.Transpile("a && b"));
+    }
+
+    [Fact]
+    public void Transpile_LongerChainEndingInKeyword_ConditionIsTheWholePrefix()
+    {
+        var result = PsEmitter.Transpile("a && b || exit 1");
+
+        Assert.Equal("if ((& { [void](a && b); $global:LASTEXITCODE -ne 0 })) { exit 1 }", result);
     }
 
     // ---- subshell exit scoping / glob class with an expansion --------------
