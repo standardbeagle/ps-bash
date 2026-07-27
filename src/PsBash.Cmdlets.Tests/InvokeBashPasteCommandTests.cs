@@ -147,12 +147,31 @@ public class InvokeBashPasteCommandTests : IDisposable, IClassFixture<SharedPwsh
     }
 
     [Fact]
-    public void Paste_PipelineInputIgnored_NoOperands_NoOutput()
+    public void Paste_PipelineInput_NoOperands_ReadsStdin()
     {
-        // The psm1 oracle never consumed pipeline input — paste's domain is
-        // file operands. Pipeline input with no operands → nothing emitted.
+        // This previously asserted that pipeline input is IGNORED, inherited from
+        // the psm1 oracle. That is not what GNU paste does: with no file operands
+        // it reads standard input. The old behavior made the standard
+        // `… | paste -sd,` join-the-lines idiom emit NOTHING, silently, while the
+        // command reference documented paste as pipeline-capable.
         var lines = RunLines("'one','two' | Invoke-BashPaste");
-        Assert.Empty(lines);
+        Assert.Equal(new[] { "one", "two" }, lines);
+    }
+
+    [Fact]
+    public void Paste_PipelineInput_SerialJoinsLines()
+    {
+        var lines = RunLines("'one','two' | Invoke-BashPaste -s -d ','");
+        Assert.Equal(new[] { "one,two" }, lines);
+    }
+
+    [Fact]
+    public void Paste_BundledSerialAndDelimiter_Parsed()
+    {
+        // `paste -sd,` is the common spelling; the bundle used to fall through to
+        // the operand list and paste reported "invalid option -- 's'".
+        var lines = RunLines("'one','two' | Invoke-BashPaste '-sd,'");
+        Assert.Equal(new[] { "one,two" }, lines);
     }
 
     [Fact]

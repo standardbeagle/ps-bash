@@ -268,19 +268,35 @@ public sealed class InvokeBashTrCommand : PSCmdlet
         ParseOnce();
         if (_suppress) return;
 
-        // Stream the per-line transform instead of buffering the whole pipe.
-        // The buffered oracle joined items with '\n' and stripped one trailing
-        // '\n' before splitting on '\n'; that is exactly equivalent to
-        // splitting each record on '\n' (NO trailing trim) and transforming
-        // each sub-line — the inter-item join '\n' is the same separator the
-        // split would produce, so item boundaries are line boundaries. Squeeze
-        // / translate are already per-line (TransformLine takes one line), so
-        // no cross-record state is needed.
+        // `tr` is a BYTE-STREAM filter: the newline is an ordinary character it
+        // can translate or delete, not a record boundary to preserve. Transform
+        // each record's text WHOLE — including its trailing '\n' — and emit it as
+        // ONE object.
+        //
+        // The previous code split each record on '\n' and emitted one object per
+        // piece, which was wrong twice over:
+        //   * a record's BashText carries its trailing '\n', so "a\n" split into
+        //     ["a", ""] and tr ADDED a line — `printf "a\nb\n" | tr x y | wc -l`
+        //     answered 3 where bash says 2;
+        //   * the '\n' never reached TransformLine, so it could not be translated
+        //     at all — `tr "\n" ","` and `tr -d "\n"` were silent no-ops.
+        // Both are oracle-verified. Emitting the record whole fixes both and keeps
+        // the streaming (non-buffering) behavior.
+        //
+        // Known limitation, unchanged from before: `-s` squeezes only WITHIN a
+        // record, so a run of the squeezed character spanning a record boundary is
+        // not collapsed.
+        //
+        // REMAINING GAP (pre-existing, deliberately not papered over here):
+        // sources disagree about whether a record's BashText carries its trailing
+        // '\n' — `printf`/`cat` include it, `seq` does not — and the host appends
+        // one when it is absent. So `seq 1 3 | tr -d "\n"` still cannot see a
+        // newline to delete. Synthesizing the separator inside tr was tried and
+        // makes it WORSE (the host then adds its own newline on top, so
+        // `seq 1 3 | tr "\n" " "` produced "1\n 2\n 3"). The real fix belongs at
+        // the source/host contract, not in this cmdlet.
         string text = BashRuntime.GetBashText(InputObject);
-        foreach (var line in text.Split('\n'))
-        {
-            WriteObject(BashRuntime.NewBashObject(TransformLine(line)));
-        }
+        WriteObject(BashRuntime.NewBashObject(TransformLine(text)));
     }
 
     protected override void EndProcessing()

@@ -74,12 +74,22 @@ public sealed class InvokeBashPasteCommand : PSCmdlet
             "--zero-terminated",
         };
 
+    // Buffered stdin. GNU paste reads standard input when it has no file
+    // operands (or for a `-` operand), which is exactly the shape of the common
+    // `… | paste -sd,` join-the-lines idiom. The psm1 oracle ignored pipeline
+    // input entirely, so that idiom produced NOTHING — silently — even though
+    // the command reference documented paste as pipeline-capable.
+    private readonly List<string> _stdin = new();
+
     protected override void ProcessRecord()
     {
-        // paste in the psm1 oracle never consumes pipeline input — file
-        // operands are required. The pipeline param exists only to swallow
-        // accidental upstream items quietly, matching the oracle's
-        // ignore-pipeline-input semantics.
+        if (InputObject == null) return;
+        // A record may carry its trailing newline (printf/cat) or not (seq);
+        // split so each line is one field either way.
+        string text = BashRuntime.GetBashText(InputObject);
+        if (text.EndsWith('\n')) text = text[..^1];
+        foreach (var line in text.Split('\n'))
+            _stdin.Add(line);
     }
 
     protected override void EndProcessing()
@@ -151,6 +161,13 @@ public sealed class InvokeBashPasteCommand : PSCmdlet
                 continue;
             }
 
+            // BUNDLED short flags, e.g. the very common `paste -sd,` — `-s`
+            // followed by `-d` whose value is the rest of the token. Without this
+            // the whole token was taken as a FILE OPERAND and paste reported
+            // "invalid option -- 's'".
+            if (a.Length > 1 && a[0] == '-' && TryParseBundle(a, ref serial, ref delimiter, ref i, args))
+                continue;
+
             operands.Add(a);
         }
 
@@ -172,8 +189,19 @@ public sealed class InvokeBashPasteCommand : PSCmdlet
             }
         }
 
+        // No file operands: read STDIN, like GNU paste.
         if (filePaths.Count == 0)
         {
+            if (_stdin.Count == 0) return;
+            if (serial)
+            {
+                WriteObject(BashRuntime.NewBashObject(string.Join(delimiter, _stdin)));
+                return;
+            }
+            // Without -s, a single input source pastes one field per line, i.e.
+            // each line passes through unchanged.
+            foreach (var line in _stdin)
+                WriteObject(BashRuntime.NewBashObject(line));
             return;
         }
 
@@ -195,6 +223,39 @@ public sealed class InvokeBashPasteCommand : PSCmdlet
         // Normal mode: merge files line by line, padding short files with
         // empty strings up to the max line count.
         EmitParallelPaste(filePaths, delimiter);
+    }
+
+    /// <summary>
+    /// Parses a BUNDLED short-flag token (<c>-sd,</c>, <c>-sd</c> with the value in
+    /// the next arg, <c>-ds,</c>). Returns false — leaving the token to be treated
+    /// as an operand — the moment an unknown letter appears, so a real filename
+    /// that happens to start with <c>-</c> still reaches the operand classifier
+    /// and produces the oracle's error message rather than being silently eaten.
+    /// <c>d</c> consumes the REST of the token as the delimiter (or the next arg),
+    /// matching GNU's value-flag-ends-the-bundle rule.
+    /// </summary>
+    private static bool TryParseBundle(
+        string token, ref bool serial, ref string delimiter, ref int i, string[] args)
+    {
+        bool sawFlag = false;
+        for (int k = 1; k < token.Length; k++)
+        {
+            switch (token[k])
+            {
+                case 's':
+                    serial = true;
+                    sawFlag = true;
+                    break;
+                case 'd':
+                    // Rest of the token is the value; empty means "next arg".
+                    if (k + 1 < token.Length) delimiter = token[(k + 1)..];
+                    else if (i + 1 < args.Length) delimiter = args[++i];
+                    return true;
+                default:
+                    return false;   // unknown letter: not a bundle we understand
+            }
+        }
+        return sawFlag;
     }
 
     private void EmitParallelPaste(IReadOnlyList<string> filePaths, string delimiter)
