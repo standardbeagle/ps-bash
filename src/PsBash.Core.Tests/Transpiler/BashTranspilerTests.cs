@@ -99,7 +99,13 @@ public class BashTranspilerTests
     public void Transpile_GlobEqualsPatternWithQuote_EscapesSingleQuote()
     {
         var result = BashTranspiler.Transpile("[[ $x == \"a'*\" ]]");
-        Assert.Contains("-like 'a''*'", result);
+        // The embedded single quote is doubled so the PS clause literal does not
+        // break out. The `*` is inside DOUBLE QUOTES, so bash treats it as a
+        // LITERAL asterisk (oracle: `x="a'zzz"` does NOT match `"a'*"`), hence the
+        // backtick escape. This previously asserted an unescaped `*`, i.e. an
+        // active wildcard — a silent wrong-match that the quote-per-segment
+        // pattern normalization fixed.
+        Assert.Contains("-like 'a''`*'", result);
     }
 
     [Fact]

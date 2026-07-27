@@ -608,13 +608,34 @@ public class PsEmitterTests
     }
 
     [Fact]
-    public void Transpile_GreatAndNumericTarget_KeepsFdMerge()
+    public void Transpile_GreatAndUserFdTarget_DegradesToComment()
     {
-        // Numeric target is a genuine fd-merge, NOT a file: keep the `{fd}>&{n}` form.
-        // (`>&2` has its own dedicated stdout→stderr path; use fd 3 to exercise the
-        // digit branch of the >& arm directly.)
+        // This previously asserted `cmd 1>&3`, on the assumption that a numeric
+        // target is a genuine fd-merge worth keeping. But `1>&3` is NOT valid
+        // PowerShell — its `>&` operator accepts only `n>&1` with n != 1, so the
+        // emitted file failed to parse ENTIRELY ("Missing file specification after
+        // redirection operator"). Found in dotnet-install.sh and the Visual Studio
+        // prereq scripts, which use the `exec 3>&1` + `>&3` logging idiom.
+        //
+        // bash's user fds cannot be modeled (they are opened by `exec`), so this
+        // degrades to a visible inline no-op, as `<&-` already does.
         var result = PsEmitter.Transpile("cmd >&3");
-        Assert.Equal("cmd 1>&3", result);
+        Assert.Equal("cmd <# ps-bash: fd merge 1>&3 has no PowerShell equivalent #>", result);
+    }
+
+    [Fact]
+    public void Transpile_GreatAndUserFdFromStderr_DegradesToComment()
+    {
+        var result = PsEmitter.Transpile("cmd 2>&3");
+        Assert.Equal("cmd <# ps-bash: fd merge 2>&3 has no PowerShell equivalent #>", result);
+    }
+
+    [Fact]
+    public void Transpile_SupportedFdMergeIntoStdout_Kept()
+    {
+        // `n>&1` (n != 1) IS valid PowerShell and must keep the real merge.
+        Assert.Equal("cmd 2>&1", PsEmitter.Transpile("cmd 2>&1"));
+        Assert.Equal("cmd 3>&1", PsEmitter.Transpile("cmd 3>&1"));
     }
 
     [Fact]
@@ -4824,6 +4845,97 @@ public class PsEmitterTests
         // it is just consumed as a VALUE rather than splatted.
         Assert.Contains("$env:code -split '\\s+'", result);
         Assert.Contains("$__bashexit[0]", result);
+    }
+
+    // ---- redirect / test-operator / unmodelable-expansion degradations -----
+
+    [Fact]
+    public void Transpile_RedundantStderrMerge_EmittedOnce()
+    {
+        // `&>` already emits the 2>&1 merge, so the redundant-but-legal bash
+        // `cmd &>/dev/null 2>&1` emitted `>$null 2>&1 2>&1` — PowerShell rejects
+        // redirecting a stream twice ("The error stream ... already redirected").
+        Assert.Equal("cmd >$null 2>&1", PsEmitter.Transpile("cmd &>/dev/null 2>&1"));
+    }
+
+    [Fact]
+    public void Transpile_StdoutFileRedirectWithStderrMerge_KeepsBoth()
+    {
+        // The dedupe must drop ONLY a bare duplicate merge, never a fragment that
+        // also carries a stdout redirect.
+        Assert.Equal("cmd >$null 2>&1", PsEmitter.Transpile("cmd >/dev/null 2>&1"));
+    }
+
+    [Theory]
+    // Oracle-verified: inside [[ ]] both == and != GLOB-match, and quoting is
+    // per-SEGMENT — bash drops the quotes and the quoted chars stay literal.
+    [InlineData("[[ \"$x\" != \"http\"* ]]", "-notlike 'http*'")]
+    [InlineData("[[ \"$x\" == \"http\"* ]]", "-like 'http*'")]
+    [InlineData("[[ \"$x\" == http* ]]", "-like 'http*'")]
+    // A fully-quoted pattern is LITERAL: `*` must be escaped, not left active.
+    [InlineData("[[ \"$x\" == \"a*b\" ]]", "-like 'a`*b'")]
+    public void Transpile_ExtendedTestGlob_NormalizesPatternPerSegment(
+        string bash, string expected)
+        => Assert.Contains(expected, PsEmitter.Transpile(bash));
+
+    [Fact]
+    public void Transpile_UnmodelableExpansion_DegradesToEmptyStringNotBrokenEnvRef()
+    {
+        // ZSH-only syntax in a dual-shell script's dead branch (git-completion.bash
+        // guards it with [[ -n ${ZSH_VERSION-} ]]). bash PARSES the file fine, so
+        // rejecting it would be stricter than the oracle — but the bare `$env:` we
+        // used to emit is not valid PowerShell and killed the whole file's parse.
+        var result = PsEmitter.Transpile("unset ${(M)${(k)parameters[@]}:#pat*}");
+
+        Assert.DoesNotContain("$env:", result);
+    }
+
+    // ---- nested-context quoting / general-path arg quoting -----------------
+
+    [Fact]
+    public void Transpile_ParamExpansionInsideCommandSubInString_UsesInertSingleQuotes()
+    {
+        // A command substitution resets `inDoubleQuote` for its body but does NOT
+        // leave the enclosing double-quoted string. Keying the quote character on
+        // inDoubleQuote alone emitted `… ? "--dir=$env:x" : "" …` inside
+        // `"$( … )"`, and the empty `""` closed the OUTER string ("The string is
+        // missing the terminator") — it broke git-completion.bash.
+        var result = PsEmitter.Transpile("echo \"$(git ${x:+--dir=$x} rev-parse)\"");
+
+        Assert.Contains(" : '')", result);
+        Assert.DoesNotContain(" : \"\")", result);
+    }
+
+    [Fact]
+    public void Transpile_ParamExpansionUnnested_KeepsDoubleQuotedForm()
+    {
+        // Un-nested, the readable double-quoted shape is retained.
+        Assert.Equal("Invoke-BashEcho ($env:x ? \"alt\" : \"\")",
+            PsEmitter.Transpile("echo ${x:+alt}"));
+    }
+
+    [Fact]
+    public void Transpile_ExternalCommandCommaFlag_IsQuoted()
+    {
+        // `,` is PowerShell's array separator: `cc -Wp,-v` emitted "Missing
+        // argument in parameter list". The mapped-cmdlet path already quoted
+        // these; the general/external path did not (Loom's build script).
+        Assert.Equal("cc \"-Wp,-v\" -x c++ -", PsEmitter.Transpile("cc -Wp,-v -x c++ -"));
+    }
+
+    [Fact]
+    public void Transpile_ExternalCommandColonFlag_NotQuoted()
+    {
+        // Deliberately narrower than the passthrough rule: `-Foo:bar` PARSES, so
+        // quoting it would change named-parameter binding rather than fix a parse.
+        Assert.Equal("cmd -Foo:bar", PsEmitter.Transpile("cmd -Foo:bar"));
+    }
+
+    [Fact]
+    public void Transpile_ExternalCommandAlreadyQuotedFlag_NotDoubleWrapped()
+    {
+        // Re-wrapping an already-quoted arg is the `-F","` -> `"-F","` array-split trap.
+        Assert.Equal("cmd \"-a,b\"", PsEmitter.Transpile("cmd \"-a,b\""));
     }
 
     // ---- positional-parameter slices ${@:off[:len]} ------------------------

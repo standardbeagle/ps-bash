@@ -203,6 +203,30 @@ public class TranspileParseabilityCorpusTests
     [InlineData("cmd @arg")]
     [InlineData("echo a@b")]
     [InlineData("echo @$x")]
+    // ── redundant-but-legal double stderr merge (ZCode setup.sh) ───────
+    [InlineData("cmd &>/dev/null 2>&1")]
+    [InlineData("if python3 -m pip --version &>/dev/null 2>&1; then echo y; fi")]
+    // ── [[ != ]] with a glob RHS (dotnet-install.sh) ───────────────────
+    [InlineData("[[ \"$x\" != \"http\"* ]]")]
+    [InlineData("[[ \"$x\" == \"a*b\" ]]")]
+    // ── ZSH-only expansion in a dual-shell script's dead branch ────────
+    // bash parses git-completion.bash fine, so ps-bash must too.
+    [InlineData("unset ${(M)${(k)parameters[@]}:#__gitcomp_builtin_*}")]
+    // ── bash user fds (opened by `exec 3>&1`) ──────────────────────────
+    // PowerShell's `>&` accepts only `n>&1` with n != 1; `1>&3` / `2>&3` are
+    // parse errors (dotnet-install.sh, the VS prereq scripts).
+    [InlineData("printf \"x\" >&3")]
+    [InlineData("cmd >&4")]
+    [InlineData("cmd 2>&3")]
+    [InlineData("cmd 3>&1")]
+    [InlineData("echo x >&2")]
+    // ── nested-context quoting of parameter expansions ─────────────────
+    // A command sub resets inDoubleQuote but stays inside the enclosing
+    // string; an inner `""` closed it early (git-completion.bash).
+    [InlineData("echo \"$(git ${x:+--dir=$x} rev-parse)\"")]
+    [InlineData("echo \"$(cmd ${y:-def})\"")]
+    // ── comma flag on an EXTERNAL command (Loom's build script) ────────
+    [InlineData("cc -Wp,-v -x c++ -")]
     // ── positional-parameter slices ────────────────────────────────────
     // `@`/`*` are not var chars, so these read an EMPTY braced-var name and
     // emitted the bare `$env:` (zoxide's shell hook uses `${@: -1}`).

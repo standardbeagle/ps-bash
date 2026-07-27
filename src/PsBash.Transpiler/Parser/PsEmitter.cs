@@ -1580,10 +1580,31 @@ public static class PsEmitter
 
             if (op is "==" or "=")
             {
-                var unquoted = StripQuotes(EmitWord(words[2]));
-                if (HasGlobChars(unquoted))
-                    return $"{lhs} -like '{SqEsc(unquoted)}'";
+                // NormalizeCasePattern, not StripQuotes: the RHS is a bash WORD, so
+                // quoting is per-SEGMENT, not just around the whole thing. bash drops
+                // the quotes during expansion and the quoted chars stay literal —
+                // `"http"*` is the pattern http* — but StripQuotes only handles a
+                // fully-enclosing pair, so the inner quotes leaked into the pattern
+                // (`-like '"http"*'`, which can never match) and a fully-quoted
+                // `"a*b"` wrongly kept its `*` ACTIVE. Same rule as case patterns.
+                var pattern = NormalizeCasePattern(EmitWord(words[2]));
+                if (HasGlobChars(pattern))
+                    return $"{lhs} -like '{SqEsc(pattern)}'";
                 return $"{lhs} -eq {EmitTestOperand(words[2])}";
+            }
+
+            // `!=` is the exact mirror of `==`: inside [[ ]] bash GLOB-matches the
+            // right-hand pattern (oracle: `[[ https://a != "http"* ]]` is FALSE).
+            // Only `==` had the glob branch, so a glob RHS fell through to the bare
+            // operand join and emitted `$env:x -ne "http"*` — "You must provide a
+            // value expression following the '*' operator", which broke the parse of
+            // the whole file (dotnet-install.sh).
+            if (op == "!=")
+            {
+                var pattern = NormalizeCasePattern(EmitWord(words[2]));
+                if (HasGlobChars(pattern))
+                    return $"{lhs} -notlike '{SqEsc(pattern)}'";
+                return $"{lhs} -ne {EmitTestOperand(words[2])}";
             }
 
             // In [[ ]], < and > are lexicographic string comparisons.
@@ -2463,7 +2484,7 @@ public static class PsEmitter
                 if (i > 0)
                 {
                     sb.Append(' ');
-                    sb.Append(EmitWord(cmd.Words[i]));
+                    sb.Append(QuoteGeneralArgIfNeeded(EmitWord(cmd.Words[i])));
                     continue;
                 }
                 sb.Append(leading);
@@ -2532,6 +2553,19 @@ public static class PsEmitter
             // synonym for `&>file`. A prefixed `2>&file` is not that form, so it is
             // left to the fallback rather than wrongly redirecting stdout.
             ">&" when r.Fd == 1 && !IsAllDigits(target) => $">{target} 2>&1",
+            // PowerShell's fd-merge operator accepts ONLY `n>&1` with n != 1.
+            // Every other numeric merge is a parse error — `1>&3` / `2>&3`
+            // ("Missing file specification after redirection operator") and
+            // `1>&2` / `2>&2` ("reserved for future use") — which poisons the
+            // parse of the whole emitted file. bash's user fds (3, 4, …) have no
+            // PowerShell equivalent at all: they are opened by `exec 3>&1`, which
+            // we cannot model. Degrade to a visible inline no-op — the stream
+            // keeps its default destination — the same way `<&-` already does.
+            // (`>&2`, the common stderr idiom, never reaches here: EmitSimple
+            // routes it through the Write-BashHostStderr pipe.)
+            // Hit dotnet-install.sh and the Visual Studio prereq scripts.
+            ">&" when IsAllDigits(target) && (target != "1" || r.Fd == 1) =>
+                $"<# ps-bash: fd merge {r.Fd}>&{target} has no PowerShell equivalent #>",
             ">&" => $"{r.Fd}>&{target}",
             // `n<&-` (close stdin) — no PowerShell equivalent; degrade to a
             // documented inline no-op comment rather than the invalid `0<&-`.
@@ -3692,6 +3726,20 @@ public static class PsEmitter
 
     private static string EmitSimpleVar(string name, bool inDoubleQuote = false)
     {
+        // An EMPTY name is never a valid bash variable. It arises from a
+        // substitution this parser does not model — in practice ZSH-only syntax
+        // sitting in a `[[ -n ${ZSH_VERSION-} ]]` branch of a dual-shell script,
+        // e.g. git-completion.bash's `unset ${(M)${(k)parameters[@]}:#pat}`.
+        //
+        // bash PARSES such a file fine (it only errors as "bad substitution" if the
+        // dead branch ever runs), so rejecting the file would be stricter than the
+        // oracle. But emitting the bare `$env:` is not valid PowerShell ("':' was
+        // not followed by a valid variable name character") and killed the parse of
+        // the entire file. Degrade to the empty string: the expansion contributes
+        // nothing, which is what the unreachable branch would have wanted anyway.
+        if (name.Length == 0)
+            return "''";
+
         // Loop variables emit as $var, not $env:var
         if (_loopVars is not null && _loopVars.Contains(name))
             return $"${name}";
@@ -4006,7 +4054,23 @@ public static class PsEmitter
         ImmutableArray<WordPart>? argWord = null)
     {
         string open = inDoubleQuote ? "$(" : "(";
-        char q = inDoubleQuote ? '\'' : '"';
+
+        // Quote safety is NOT the same question as `inDoubleQuote`.
+        //
+        // `open` asks "am I being emitted directly into a PowerShell double-quoted
+        // string right now?" — that decides `$(` vs `(`.
+        //
+        // The QUOTE CHARACTER asks a wider question: "will this text end up inside
+        // SOME enclosing double-quoted string?" A command substitution resets
+        // inDoubleQuote to false for its body (a `$( … )` is a fresh expression
+        // scope) but does NOT leave the enclosing string — `_dqNestDepth` tracks
+        // that. Keying the quote on inDoubleQuote alone emitted
+        //   "$(git ($env:x ? "--dir=$env:x" : "") rev-parse)"
+        // whose inner `"` closed the outer string ("The string is missing the
+        // terminator"), breaking git-completion.bash. Single quotes are inert at
+        // any nesting depth — the same rule NeedsSingleQuotedLiteral already uses.
+        bool nested = inDoubleQuote || _dqNestDepth > 0;
+        char q = nested ? '\'' : '"';
 
         // The word-bearing operators (default/assign/alt/error message) carry a DECOMPOSED
         // argument word (parser populates BracedVarSub.ArgWord). Emit it through the normal
@@ -4019,8 +4083,9 @@ public static class PsEmitter
         // historical literal emission. Inside an outer "$( … )" string a nested double-quoted
         // value mis-parses when empty / quote-bearing, so use the single-quote-safe path there.
         string ArgVal(string rawSlice) =>
-            !argWord.HasValue ? $"{q}{rawSlice}{q}"
-            : inDoubleQuote ? EmitBracedArgWordValue(argWord.Value)
+            !argWord.HasValue
+                ? (nested ? PsBuild.SingleQuote(rawSlice) : $"\"{rawSlice}\"")
+            : nested ? EmitBracedArgWordValue(argWord.Value)
             : FlattenPartsToDoubleQuotedString(argWord.Value);
 
         // Length: ${#VAR}
@@ -4670,6 +4735,12 @@ public static class PsEmitter
     private static void AppendRedirectTail(StringBuilder sb, IEnumerable<Redirect> redirects)
     {
         Redirect? fileRedirect = null;
+        // PowerShell rejects redirecting the same stream twice ("The error stream
+        // for this command is already redirected"). bash tolerates it — the
+        // redundant-but-legal `cmd &>/dev/null 2>&1` appears in real scripts, and
+        // `&>` ALREADY emits the `2>&1` merge, so the explicit one made the whole
+        // file unparseable. Emit the stderr merge at most once.
+        bool stderrMerged = false;
         foreach (var redirect in redirects)
         {
             var target = TransformRedirectTarget(EmitWord(redirect.Target));
@@ -4678,12 +4749,24 @@ public static class PsEmitter
                 && target != "$null";
 
             if (isStdoutFile && fileRedirect is null)
-                fileRedirect = redirect;
-            else
             {
-                sb.Append(' ');
-                sb.Append(EmitRedirect(redirect));
+                fileRedirect = redirect;
+                continue;
             }
+
+            var emitted = EmitRedirect(redirect);
+            bool mergesStderr = emitted.Contains("2>&1", StringComparison.Ordinal);
+            if (mergesStderr && stderrMerged)
+            {
+                // Drop ONLY a redirect that is nothing but the duplicate merge; a
+                // fragment that also redirects stdout (`>file 2>&1`) still carries
+                // information and must not be lost.
+                if (emitted == "2>&1")
+                    continue;
+            }
+            stderrMerged |= mergesStderr;
+            sb.Append(' ');
+            sb.Append(emitted);
         }
 
         if (fileRedirect is not null)
@@ -5686,6 +5769,30 @@ public static class PsEmitter
         // through the pipeline would silently change its output shape
         // relative to bash's "<count> /dev/fd/N". Keep wc on the Tier-1
         // temp-file route so a filename is present (even if path differs).
+
+    /// <summary>
+    /// Quote a flag-shaped operand on the GENERAL (unmapped / external command)
+    /// emission path when PowerShell would otherwise fail to parse it. Only the
+    /// characters that actually break the parse are covered: <c>,</c> (the
+    /// PowerShell array separator — <c>cc -Wp,-v</c> emitted "Missing argument in
+    /// parameter list") and <c>{</c>/<c>}</c> (script-block delimiters).
+    /// <para>
+    /// Deliberately NARROWER than <see cref="NeedsPassthroughQuoting"/>, which also
+    /// quotes <c>:</c> for mapped <c>Invoke-Bash*</c> cmdlets. <c>-Foo:bar</c> PARSES
+    /// fine; quoting it here would change PowerShell's named-parameter binding for a
+    /// real cmdlet, which is a behavior change rather than a parse fix.
+    /// </para>
+    /// </summary>
+    private static string QuoteGeneralArgIfNeeded(string emitted)
+    {
+        if (emitted.Length < 2 || emitted[0] != '-')
+            return emitted;
+        // An already-quoted or expansion-bearing word is left alone: re-wrapping
+        // corrupts it (the `-F","` -> `"-F","` array-split trap).
+        if (emitted.IndexOfAny(['"', '\'', '$', '`']) >= 0)
+            return emitted;
+        return emitted.IndexOfAny([',', '{', '}']) >= 0 ? $"\"{emitted}\"" : emitted;
+    }
 
     private static bool NeedsPassthroughQuoting(string arg)
     {
