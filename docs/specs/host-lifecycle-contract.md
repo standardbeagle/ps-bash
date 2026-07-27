@@ -212,6 +212,35 @@ the point is that the ~100-site audit is already done. Making the store
 per-invocation becomes a change to those two method bodies plus a `sessionMode`
 switch, instead of a tree-wide hunt.
 
+### Step 3 feasibility — measured, not assumed
+
+The remaining step is making `$env:` itself per-invocation. The emitter renders
+bash variables as literal `$env:NAME` in ~67 places, so a C#-side overlay alone
+would be invisible to the emitted script — the *drive* has to change. Probed
+directly against pwsh:
+
+| Question | Answer |
+|---|---|
+| Is `$env:` resolved through a session-state PSDrive? | **Yes** — `Remove-PSDrive Env` makes `$env:X` read empty |
+| Does removing `Env:` break external command resolution? | **No** — PowerShell uses the real process PATH internally, not the drive |
+| Do child processes still inherit the real environment? | **Yes** — unaffected by the drive |
+| Can a replacement `Env:` drive be session-scoped? | **Yes** — writes to it do not reach the process environment |
+
+So the mechanism is sound and the two risks that would have killed it are
+cleared. What is NOT viable is the free version: backing the drive with the
+built-in **Variable** provider maps `Env:` onto the same table as PowerShell
+variables, so `$env:x` and `$x` become the same cell. ps-bash emits loop
+variables as bare `$i` and bash variables as `$env:i`, so that would collide them
+outright — the failure mode already on record as `psm1-toplevel-loopvar-leak`.
+
+Step 3 therefore needs a **custom provider** over a per-runspace dictionary,
+plus routing `BashVariableStore` through `SessionState` (cmdlets have it;
+the static helpers do not) and seeding the drive per invocation. Semantics it
+must preserve, all verified available on a replacement drive: unset reads as
+`$null` while set-to-empty reads as `""` (the `${X:-w}` vs `${X-w}` split),
+`Remove-Item` returns a name to null (`unset`), and enumeration (`env` /
+`printenv`).
+
 Two things keep it from rotting, both mutation-tested:
 `BashVariableStoreGuardTests.NoCmdlet_ReadsOrWritesABashVariable_ThroughEnvironmentDirectly`
 and `...EverySpawnSite_AppliesTheMaterializationSeam`. Host CONFIGURATION knobs
