@@ -166,6 +166,37 @@ available the endpoint degrades to the historical per-user name (`host-{user}`).
 The canonical endpoint remains stable for a given session; lifecycle metadata and
 the lock make replacement decisions explicit, scoped to that endpoint.
 
+### Known gap: the process environment is NOT per-invocation
+
+Each `-c` gets an isolated **runspace** (discarded on release), and
+`Connection.PerInvocationReset` clears the PowerShell globals a transpiled
+command may set. Neither covers `$env:`, which in .NET is **process-wide** state
+owned by the host, not the runspace. So an `export` outbound-escapes its
+invocation:
+
+```bash
+ps-bash -c 'export LEAKTEST=hello'
+ps-bash -c 'echo "${LEAKTEST-unset}"'   # ps-bash: hello   ·   bash: unset
+```
+
+Real bash cannot do this — each `bash -c` is a separate process. A env-prefixed
+command (`X=1 cmd`) is unaffected: the emitter already wraps it in an explicit
+save/restore `try/finally`, so only a bare `export` / assignment that bash would
+have confined to the invocation leaks.
+
+**Why the obvious fix is wrong.** Snapshotting the environment on connect and
+restoring it on release would race: the pool runs up to `PSBASH_POOL_MAX`
+connections *concurrently in one process*, and they all share the single process
+environment block. Two overlapping commands would restore each other's snapshot
+and corrupt both — trading a visible leak for intermittent, load-dependent
+corruption. Any real fix has to make the environment per-invocation state
+(runspace-scoped `$env:` shim, or a serialized env epoch), not a save/restore
+bracket around a shared global.
+
+On Windows there is a second, independent divergence in the same area: the
+process environment block is **case-insensitive**, so `$x` and `$X` are the same
+variable, where bash treats them as distinct.
+
 ### Implementation (single-flight spawn)
 
 Steps 1-6 are implemented by `IpcWorker.EnsureHostReachableAsync` (the

@@ -305,7 +305,24 @@ the word-split array and PowerShell-splats it:
 ```
 
 The `& { ... }` wrapper keeps the temp assignment from leaking into a
-surrounding pipeline or and-or list. The `@(...)` around the `if` is required:
+surrounding pipeline or and-or list.
+
+**Known gap — evaluation ORDER.** The hoisted temp assignments run in the
+prelude, i.e. *before the command*, whereas bash expands arguments strictly
+left to right. That is invisible unless an argument BEFORE the splatted one has
+a side effect, which in practice means an arithmetic substitution:
+
+```bash
+x=5; echo $((x++)) $x     # bash: "5 6"   ps-bash: "5 5"
+```
+
+`$x` is captured into `$__bashsplat0` in the prelude, before `Invoke-BashArith`
+increments it. Fixing this properly means hoisting *every* argument into an
+ordered temp whenever any operand needs the splat — which changes argument
+semantics for arrays and quoted words, so it is deliberately not done for a case
+this narrow. Only side-effecting expansions (`$((x++))`, `$((x=…))`) are
+affected; a plain command substitution earlier in the same command is fine
+because it does not mutate a variable the later operand reads. The `@(...)` around the `if` is required:
 assigning a bare `if (...) { @() }` collapses the empty branch to `$null`, and
 splatting `$null` injects one spurious empty argument. This applies to both the
 general fallback path (`EmitSimple`) and the mapped passthrough path
@@ -377,17 +394,24 @@ inside the quotes.
 
 Handles `${VAR...}` parameter expansions:
 
-- `${VAR:-default}` -> `($env:VAR ?? "default")`
-- `${VAR:=default}` -> `($env:VAR ?? ($env:VAR = "default"))`
+The `:`-prefixed forms act when the variable is unset **or empty**, so they use
+the PowerShell ternary — which is exactly bash's test, since `""` and `$null` are
+both falsy while `"0"` (set and non-empty in bash) is truthy in PowerShell.
+They previously emitted `??`, which only tests `$null`, so a variable set to the
+empty string skipped the operator entirely and `x=; echo ${x:-d}` printed nothing.
+
+- `${VAR:-default}` -> `($env:VAR ? $env:VAR : "default")`
+- `${VAR:=default}` -> `($env:VAR ? $env:VAR : ($env:VAR = "default"))`
 - `${VAR:+alt}` -> `($env:VAR ? "alt" : "")`
-- `${VAR:?msg}` -> `($env:VAR ?? $(throw "msg"))`
+- `${VAR:?msg}` -> `($env:VAR ? $env:VAR : $(throw "msg"))`
 - `${#VAR}` -> `$env:VAR.Length`
 - `${VAR%%pat}` / `${VAR%pat}` -> `-replace` suffix removal
 - `${VAR##pat}` / `${VAR#pat}` -> `-replace` prefix removal
 - `${VAR//find/rep}` / `${VAR/find/rep}` -> `-replace`
 - `${VAR:offset:length}` -> `.Substring(offset, length)`
 - `${VAR^^}` / `${VAR,,}` / `${VAR^}` / `${VAR,}` -> case conversion
-- `${VAR-w}` / `${VAR=w}` / `${VAR+w}` / `${VAR?msg}` -> colon-less unset-only forms, mapped to the same `??` / assign / `?:` / `throw` as the `:`-prefixed variants (ps-bash models bash vars as env vars where `$env:X` is `$null` only when unset, so `??` already approximates the unset-only test). The operator is never dropped.
+- `${VAR-w}` / `${VAR=w}` / `${VAR+w}` / `${VAR?msg}` -> colon-less **unset-only** forms, which KEEP `??`. `$env:X` is `$null` when unset but `""` when set to empty, so `??` is an EXACT match for the unset-only test — which is precisely why it was wrong for the `:` forms above. The operator is never dropped.
+- `${@:off}` / `${@:off:len}` / `${*:…}` -> a slice of the positional parameters, via the runtime-clamped array slicer. bash counts positionals from `$1` while the emitted array's index 0 already holds `$1`, so a POSITIVE offset shifts down by one and a NEGATIVE offset (counting from the end) passes through. `${@:0}` degrades to the whole list — bash prepends `$0`, which the array does not carry.
 - `${VAR@Q}` -> single-quote the value for reuse (`"'" + ($env:VAR -replace "'","'\''") + "'"`); `${VAR@U}` / `${VAR@L}` / `${VAR@u}` / `${VAR@l}` -> case transforms. `@E` (escape-expand), `@P` (prompt-expand), `@A` (assignment form), `@a` (attribute flags) have no faithful PowerShell mapping and degrade to the bare value — the transform is dropped, the value is preserved (documented gap, NOT a silent total drop).
 - `${arr[n]}` -> `$arr[n]`, `${arr[@]}` -> `$arr`, `${#arr[@]}` -> `$arr.Count`
 - `${!arr[@]}` -> `$arr.Keys`
@@ -518,6 +542,33 @@ The conversion happens at:
 This allows sed expressions to work correctly with PowerShell's `[regex]::Replace()` while preserving bash syntax in user scripts.
 
 ---
+
+## 7a. PowerShell statement keywords are not commands
+
+`exit`, `return`, `break`, `continue`, `throw` are PowerShell **statements**, not
+commands. Three separate emitter paths have to know this, and each one broke a
+different way before it did (`PsEmitter.PsStatementKeywordCommands` is the shared
+set):
+
+1. **Never splat into one.** `exit $code` emitted `exit @__bashsplat0`; `@var`
+   after a statement keyword is a hard parse error that poisons the ENTIRE
+   emitted file. `EmitExitWithUnquotedVar` keeps bash's word-splitting semantics
+   by consuming the split array as a VALUE inside `exit $( … )` — so an empty
+   operand still falls back to `$?`, the way bash elides the word.
+
+2. **Never make one the right operand of `&&` / `||`.** PowerShell's chain
+   operators require a command, so the keyword is parsed as a command NAME:
+   `cmd && break` printed "The term 'break' is not recognized", and `cmd || exit 1`
+   SILENTLY DID NOT EXIT. `TryEmitAndOrEndingInStatementKeyword` rewrites the
+   chain to `if (<exit-code test of the whole prefix>) { KEYWORD }`.
+
+3. **`exit` inside a subshell is scoped.** bash's `( … )` exits only the
+   subshell and sets `$?` in the parent, so `(exit 7); echo $?` prints 7 and
+   keeps running — a bare PowerShell `exit` killed the whole shell. At
+   `_subshellDepth > 0`, `exit N` emits `$global:LASTEXITCODE = N; return`, and
+   `EmitSubshell` supplies the `& { }` script block that `return` returns from
+   (only when the body actually contains an `exit`, so a plain subshell keeps its
+   cheaper emission).
 
 ## 8. Anti-patterns
 
