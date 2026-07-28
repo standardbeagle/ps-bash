@@ -442,7 +442,57 @@ public static class BashRuntime
             return prop.Value?.ToString() ?? string.Empty;
         }
 
-        return inputObject.ToString() ?? string.Empty;
+        return StringifyForeign(pso);
+    }
+
+    /// <summary>
+    /// Stringifies a pipeline object that carries no <c>BashText</c> — i.e. one
+    /// a FOREIGN producer fanned out (<c>Get-ChildItem</c>, <c>Invoke-SqlCmd</c>,
+    /// any unmapped PowerShell command).
+    ///
+    /// <see cref="PSObject.ToString()"/> runs PowerShell's extended-type-system
+    /// string-conversion machinery, which cost ~385 B per call on a wrapped
+    /// <see cref="FileInfo"/> while the wrapped object's OWN
+    /// <c>ToString()</c> cost ~1 B for the identical bytes. On a fan-out that is
+    /// once per LINE, so it dominated the consumer's per-item allocation (S4 of
+    /// the fan-out epic; the BashText probe above is only ~41 B).
+    ///
+    /// The base object's <c>ToString()</c> is byte-identical to the ETS result
+    /// EXCEPT for three shapes, which therefore keep the ETS path:
+    /// <list type="bullet">
+    /// <item>an EMPTY base (<see cref="PSCustomObject"/>) — ETS renders the
+    /// property bag as <c>@{a=1; b=2}</c>, the base renders nothing;</item>
+    /// <item>an ENUMERABLE base — ETS unravels it to its space-joined elements
+    /// (this is why <c>"$array"</c> prints <c>1 2 3</c>), the base renders
+    /// <c>System.Object[]</c>;</item>
+    /// <item>an instance- or type-table-defined <c>ToString</c> override
+    /// (<c>Add-Member ToString</c>, <c>Set-BashDisplayProperty</c>, a
+    /// types.ps1xml <c>ScriptMethod</c>/<c>CodeMethod</c>) — the whole point of
+    /// which is to replace the base's rendering.</item>
+    /// </list>
+    /// The override probe is what stops this from being a semantic change; it
+    /// costs ~105 B, so the fast path is a real ~3/4 cut rather than a total
+    /// one. Correctness over the last quarter: dropping a typed object's chosen
+    /// rendering to save an allocation is the trade this slice must not make.
+    /// </summary>
+    private static string StringifyForeign(PSObject pso)
+    {
+        object? baseObject = pso.ImmediateBaseObject;
+
+        if (baseObject is null || baseObject is PSCustomObject)
+        {
+            return pso.ToString();
+        }
+        if (baseObject is not string && baseObject is System.Collections.IEnumerable)
+        {
+            return pso.ToString();
+        }
+        if (pso.Methods["ToString"] is PSScriptMethod or PSCodeMethod)
+        {
+            return pso.ToString();
+        }
+
+        return baseObject.ToString() ?? string.Empty;
     }
 
     /// <summary>
