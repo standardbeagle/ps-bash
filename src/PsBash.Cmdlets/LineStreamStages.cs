@@ -112,8 +112,10 @@ internal sealed class SeqStage : ILineStreamStage
     }
 }
 
-/// <summary>Passthrough: bare <c>cat</c> (no flags, no file operands). Any flag or
-/// file operand needs the cmdlet's file/glob/numbering paths — decline.</summary>
+/// <summary>Passthrough: bare <c>cat</c> (no flags, no file operands). A FILE-operand
+/// invocation is handed to <see cref="CatFileStage"/> (the producer form that unblocks
+/// <c>cat f | grep x | sort</c>); flags still need the cmdlet's numbering/glob paths and
+/// decline there.</summary>
 internal sealed class CatStage : ILineStreamStage
 {
     private CatStage() { }
@@ -121,11 +123,13 @@ internal sealed class CatStage : ILineStreamStage
 
     internal static ILineStreamStage? TryCreate(string[] argv)
     {
-        // Only a bare `cat` (or `cat -`, the explicit stdin marker) is a pure
-        // line passthrough. Anything else (flags, files) → decline.
+        // A bare `cat` (or `cat -`, the explicit stdin marker) is a pure line
+        // passthrough. `cat FILE…` is a PRODUCER — a different stage entirely.
+        bool allStdin = true;
         foreach (var a in argv)
-            if (a != "-") return null;
-        return new CatStage();
+            if (a != "-") { allStdin = false; break; }
+        if (allStdin) return new CatStage();
+        return CatFileStage.TryCreate(argv);
     }
 
     public IEnumerable<string> Run(IEnumerable<string> input) => input;
