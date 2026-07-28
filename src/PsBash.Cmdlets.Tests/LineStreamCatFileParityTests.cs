@@ -16,6 +16,7 @@ namespace PsBash.Cmdlets.Tests;
 /// unicode, multiple files, missing file (exit code + stderr stay with the cmdlet), and
 /// a file plus a declined flag.</para>
 /// </summary>
+[Collection(ProcessWorkingDirectoryCollection.Name)]
 public class LineStreamCatFileParityTests : LineStreamParityHarness, IDisposable
 {
     private readonly string _dir;

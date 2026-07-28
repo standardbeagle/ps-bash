@@ -365,6 +365,35 @@ try {{ Set-BashErrorMode -Mode PowerShell -ErrorAction SilentlyContinue }} catch
         _pwsh.AddScript(resetScript).Invoke();
         _pwsh.Commands.Clear();
         _pwsh.Streams.ClearStreams();
+
+        // A bash working directory is BOTH halves — the runspace location (restored
+        // above) and the PROCESS-GLOBAL Environment.CurrentDirectory. Since
+        // pushd/popd keep the two in sync, a test that moved the location left the
+        // process cwd moved too, and unlike the runspace that leak is visible to
+        // every other test in the assembly. Restore it here for the same reason the
+        // location is restored — and note it is only half a guarantee: see
+        // ProcessWorkingDirectoryCollection for why the classes that move it must
+        // also be serialized against each other.
+        RestoreProcessWorkingDirectory(_baselinePwd);
+    }
+
+    /// <summary>
+    /// Point <see cref="Environment.CurrentDirectory"/> at <paramref name="path"/>,
+    /// best-effort. Tests that <c>pushd</c> into a temp directory MUST call this (or
+    /// <see cref="SharedPwshFixture.Reset"/>) before deleting that directory: on Windows
+    /// a process cannot remove the directory it is sitting in, so the delete fails with
+    /// a sharing violation that reads as an unrelated IOException.
+    /// </summary>
+    public static void RestoreProcessWorkingDirectory(string path)
+    {
+        try
+        {
+            if (Directory.Exists(path)) Environment.CurrentDirectory = path;
+        }
+        catch
+        {
+            // Vanished or inaccessible — leave the previous value.
+        }
     }
 
     public void Dispose()

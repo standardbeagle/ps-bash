@@ -6,6 +6,7 @@ namespace PsBash.Cmdlets.Tests;
 /// Behavioral-parity tests for the REFACTOR-2 dir-stack-batch migration of
 /// Invoke-BashDirs from PsBash.psm1 to a binary cmdlet.
 /// </summary>
+[Collection(ProcessWorkingDirectoryCollection.Name)]
 public class InvokeBashDirsCommandTests : IClassFixture<SharedPwshFixture>
 {
     private readonly SharedPwshFixture _fixture;
@@ -30,6 +31,18 @@ public class InvokeBashDirsCommandTests : IClassFixture<SharedPwshFixture>
     private System.Management.Automation.PowerShell NewPwsh()
     {
         return _fixture.AcquireFresh();
+    }
+
+    /// <summary>
+    /// Leave the temp directories a test pushd'd into, restoring BOTH halves of the
+    /// working directory before <c>Directory.Delete</c> — <c>pushd</c> now also writes
+    /// <see cref="Environment.CurrentDirectory"/>, and on Windows a process cannot
+    /// delete the directory it is sitting in.
+    /// </summary>
+    private static void LeaveTestDirs(System.Management.Automation.PowerShell pwsh, string tmp)
+    {
+        RunLines(pwsh, $"Set-Location '{tmp}'");
+        SharedPwshFixture.RestoreProcessWorkingDirectory(tmp);
     }
 
     [Fact]
@@ -64,6 +77,7 @@ public class InvokeBashDirsCommandTests : IClassFixture<SharedPwshFixture>
         }
         finally
         {
+            LeaveTestDirs(pwsh, tmp);
             Directory.Delete(subdir);
         }
     }
@@ -94,6 +108,7 @@ public class InvokeBashDirsCommandTests : IClassFixture<SharedPwshFixture>
         }
         finally
         {
+            LeaveTestDirs(pwsh, tmp);
             Directory.Delete(d1);
             Directory.Delete(d2);
         }
@@ -117,6 +132,7 @@ public class InvokeBashDirsCommandTests : IClassFixture<SharedPwshFixture>
         }
         finally
         {
+            LeaveTestDirs(pwsh, tmp);
             Directory.Delete(d1);
         }
     }
@@ -144,6 +160,7 @@ public class InvokeBashDirsCommandTests : IClassFixture<SharedPwshFixture>
         }
         finally
         {
+            LeaveTestDirs(pwsh, tmp);
             Directory.Delete(d1);
         }
     }

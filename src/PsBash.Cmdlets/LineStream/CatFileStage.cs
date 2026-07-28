@@ -47,20 +47,33 @@ namespace PsBash.Cmdlets;
 /// and a silent one-byte corruption on every no-final-newline file.</item>
 /// </list>
 ///
-/// <para><b>Path resolution — the one assumption, stated plainly.</b> The cmdlet resolves
-/// operands through <c>SessionState.Path.GetUnresolvedProviderPathFromPSPath</c> (the
-/// PowerShell current location). A stage receives no <c>PSCmdlet</c>, so a relative
-/// operand is resolved here against <see cref="Environment.CurrentDirectory"/>. Those
-/// agree everywhere the fused lane actually runs, by three independent constructions:
-/// a bash command's working directory IS <c>[System.Environment]::CurrentDirectory</c>
-/// (<c>SdkWorker.cs</c> §exec-gate remarks); <c>SdkRunspace.cs:126</c> seeds the
-/// runspace location FROM it at creation; and the emitter's <c>cd</c> writes BOTH on
-/// every change (<c>docs/specs/emitter-strategy.md</c> §4 <c>EmitCd</c>). The residual
-/// gap is a caller who moves the PS location with a bare <c>Set-Location</c> and never
-/// goes through bash <c>cd</c> — outside the lane's own runtime. Closing it properly
-/// means threading the <c>PSCmdlet</c> into <c>LineStreamRegistry.TryCreate</c>, a
-/// change to <c>InvokeBashFusedPipelineCommand</c> — outside this slice's file scope
-/// and recorded on the task rather than guessed at here.</para>
+/// <para><b>Path resolution — the one assumption, and what actually upholds it.</b> The
+/// cmdlet resolves operands through
+/// <c>SessionState.Path.GetUnresolvedProviderPathFromPSPath</c> (the PowerShell current
+/// location). A stage receives no <c>PSCmdlet</c>, so a relative operand is resolved
+/// here against <see cref="Environment.CurrentDirectory"/>. Those agree everywhere the
+/// fused lane runs because every bash-level way of moving the working directory writes
+/// BOTH: <c>SdkRunspace</c> seeds the runspace location FROM <c>CurrentDirectory</c> at
+/// creation, the emitter's <c>cd</c> writes both on every change
+/// (<c>docs/specs/emitter-strategy.md</c> §4 <c>EmitCd</c>), and
+/// <c>pushd</c>/<c>popd</c> write both via
+/// <c>InvokeBashPushdCommand.SyncProcessWorkingDirectory</c>.</para>
+///
+/// <para>That last one is not decoration. Until it landed, <c>pushd</c> moved ONLY the
+/// PowerShell location, and this paragraph claimed a divergence was "outside the lane's
+/// own runtime" while <c>pushd sub; cat data.txt | grep x | sort</c> streamed the
+/// PRE-<c>pushd</c> file at exit 0. The remarks were wrong, not merely optimistic. The
+/// regression test is
+/// <c>LineStreamCatFileParityTests.Streamed_CatRelative_AfterBashPushd_ByteIdenticalToUnfused</c>,
+/// which moves only the PowerShell location — its sibling that sets both cannot fail by
+/// construction, which is precisely how the gap survived.</para>
+///
+/// <para>The residual gap is now only a caller who moves the PS location with a bare
+/// <c>Set-Location</c> and never goes through a bash builtin at all — not a bash
+/// working-directory change, and not something this lane can observe. Closing even that
+/// would mean threading the <c>PSCmdlet</c> into <c>LineStreamRegistry.TryCreate</c>;
+/// keeping the two halves of the working directory in sync at the source is strictly
+/// better, because it fixes every other <c>CurrentDirectory</c> reader too.</para>
 /// </summary>
 internal sealed class CatFileStage : ILineStreamStage
 {

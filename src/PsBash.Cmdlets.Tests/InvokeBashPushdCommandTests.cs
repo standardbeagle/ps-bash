@@ -8,6 +8,7 @@ namespace PsBash.Cmdlets.Tests;
 /// a fresh fixture/runspace, so the location stack starts empty — push then
 /// inspect via Get-Location -Stack within the same runspace.
 /// </summary>
+[Collection(ProcessWorkingDirectoryCollection.Name)]
 public class InvokeBashPushdCommandTests : IClassFixture<SharedPwshFixture>
 {
     private readonly SharedPwshFixture _fixture;
@@ -42,6 +43,20 @@ public class InvokeBashPushdCommandTests : IClassFixture<SharedPwshFixture>
         return _fixture.AcquireFresh();
     }
 
+    /// <summary>
+    /// Leave the temp directories a test pushd'd into, restoring BOTH halves of the
+    /// working directory before <c>Directory.Delete</c>. The <c>Set-Location</c> alone
+    /// is no longer sufficient: <c>pushd</c> also writes
+    /// <see cref="Environment.CurrentDirectory"/> (required — moving only the PowerShell
+    /// half made the fused streaming lane read the wrong file at exit 0), and on Windows
+    /// a process cannot delete the directory it is sitting in.
+    /// </summary>
+    private static void LeaveTestDirs(System.Management.Automation.PowerShell pwsh, string tmp)
+    {
+        RunLines(pwsh, $"Set-Location '{tmp}'");
+        SharedPwshFixture.RestoreProcessWorkingDirectory(tmp);
+    }
+
     [Fact]
     public void Pushd_NoArgs_PushesCurrentAndStaysAtCurrent()
     {
@@ -73,9 +88,8 @@ public class InvokeBashPushdCommandTests : IClassFixture<SharedPwshFixture>
         }
         finally
         {
-            // Restore the runspace location out of subdir before deleting it
-            // (the runspace was chdir'd in by pushd).
-            RunLines(pwsh, $"Set-Location '{tmp}'");
+            // Restore the location out of subdir before deleting it (pushd chdir'd in).
+            LeaveTestDirs(pwsh, tmp);
             Directory.Delete(subdir);
         }
     }
@@ -110,7 +124,7 @@ public class InvokeBashPushdCommandTests : IClassFixture<SharedPwshFixture>
             // Same hazard as Pushd_WithPath: the runspace was chdir'd into d1/d2.
             // Restore the location before deleting so the process is not sitting
             // in a directory being removed (Windows wedge → suite hang).
-            RunLines(pwsh, $"Set-Location '{tmp}'");
+            LeaveTestDirs(pwsh, tmp);
             Directory.Delete(d1);
             Directory.Delete(d2);
         }
@@ -169,6 +183,7 @@ public class InvokeBashPushdCommandTests : IClassFixture<SharedPwshFixture>
         }
         finally
         {
+            LeaveTestDirs(pwsh, tmp);
             Directory.Delete(subdir);
         }
     }

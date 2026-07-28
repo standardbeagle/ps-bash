@@ -13,6 +13,12 @@ namespace PsBash.Cmdlets;
 /// <c>Pop-Location -Stack</c>. The cmdlet preserves that identity exactly —
 /// see <see cref="InvokeBashPushdCommand"/> for the state-ownership
 /// rationale. No PowerShell common-parameter prefix collision.
+///
+/// <para>Like <c>pushd</c>, every location change also writes
+/// <see cref="Environment.CurrentDirectory"/> via
+/// <see cref="InvokeBashPushdCommand.SyncProcessWorkingDirectory"/> — moving only the
+/// PowerShell half of a bash working directory produces silently wrong output in any
+/// consumer that resolves relative paths through raw .NET.</para>
 /// </summary>
 [Cmdlet(VerbsLifecycle.Invoke, "BashPopd")]
 public sealed class InvokeBashPopdCommand : PSCmdlet
@@ -46,6 +52,7 @@ public sealed class InvokeBashPopdCommand : PSCmdlet
                 @"param($n)
                 for ($i = 0; $i -le $n; $i++) { Pop-Location -Stack -ErrorAction SilentlyContinue }",
                 n);
+            SyncProcessWorkingDirectory();
             return;
         }
 
@@ -53,6 +60,7 @@ public sealed class InvokeBashPopdCommand : PSCmdlet
         try
         {
             InvokeCommand.InvokeScript("Pop-Location");
+            SyncProcessWorkingDirectory();
         }
         catch (System.Management.Automation.RuntimeException ex)
         {
@@ -60,4 +68,7 @@ public sealed class InvokeBashPopdCommand : PSCmdlet
             FileSystemHelpers.SetLastExitCode(this, 1);
         }
     }
+
+    private void SyncProcessWorkingDirectory()
+        => InvokeBashPushdCommand.SyncProcessWorkingDirectory(this);
 }

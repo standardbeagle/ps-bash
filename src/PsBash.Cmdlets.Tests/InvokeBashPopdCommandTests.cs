@@ -6,6 +6,7 @@ namespace PsBash.Cmdlets.Tests;
 /// Behavioral-parity tests for the REFACTOR-2 dir-stack-batch migration of
 /// Invoke-BashPopd from PsBash.psm1 to a binary cmdlet.
 /// </summary>
+[Collection(ProcessWorkingDirectoryCollection.Name)]
 public class InvokeBashPopdCommandTests : IClassFixture<SharedPwshFixture>
 {
     private readonly SharedPwshFixture _fixture;
@@ -30,6 +31,19 @@ public class InvokeBashPopdCommandTests : IClassFixture<SharedPwshFixture>
     private System.Management.Automation.PowerShell NewPwsh()
     {
         return _fixture.AcquireFresh();
+    }
+
+    /// <summary>
+    /// Leave the temp directories a test pushd'd into, restoring BOTH halves of the
+    /// working directory before <c>Directory.Delete</c>. <c>pushd</c> now also writes
+    /// <see cref="Environment.CurrentDirectory"/> (it must — moving only the PowerShell
+    /// half silently streams the wrong file in the fused lane), and on Windows a process
+    /// cannot delete the directory it is sitting in.
+    /// </summary>
+    private static void LeaveTestDirs(System.Management.Automation.PowerShell pwsh, string tmp)
+    {
+        RunLines(pwsh, $"Set-Location '{tmp}'");
+        SharedPwshFixture.RestoreProcessWorkingDirectory(tmp);
     }
 
     [Fact]
@@ -58,6 +72,7 @@ public class InvokeBashPopdCommandTests : IClassFixture<SharedPwshFixture>
         }
         finally
         {
+            LeaveTestDirs(pwsh, tmp);
             Directory.Delete(subdir);
         }
     }
@@ -97,6 +112,7 @@ public class InvokeBashPopdCommandTests : IClassFixture<SharedPwshFixture>
         }
         finally
         {
+            LeaveTestDirs(pwsh, tmp);
             Directory.Delete(d1);
             Directory.Delete(d2);
         }
@@ -119,6 +135,7 @@ public class InvokeBashPopdCommandTests : IClassFixture<SharedPwshFixture>
         }
         finally
         {
+            LeaveTestDirs(pwsh, tmp);
             Directory.Delete(subdir);
         }
     }
@@ -166,6 +183,7 @@ public class InvokeBashPopdCommandTests : IClassFixture<SharedPwshFixture>
         }
         finally
         {
+            LeaveTestDirs(pwsh, tmp);
             Directory.Delete(d1);
             Directory.Delete(d2);
         }
