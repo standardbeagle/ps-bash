@@ -65,6 +65,7 @@ public static class LineStreamRegistry
             // sort is the lane's first BLOCKING core — see its class remarks for what
             // that costs (no downstream early-exit past it).
             "sort" => SortStage.TryCreate(argv),
+            "uniq" => UniqStage.TryCreate(argv),
             _ => null,
         };
         if (s is null) return false;
