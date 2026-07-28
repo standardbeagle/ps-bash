@@ -66,6 +66,16 @@ public static class LineStreamRegistry
             // that costs (no downstream early-exit past it).
             "sort" => SortStage.TryCreate(argv),
             "uniq" => UniqStage.TryCreate(argv),
+            // S3: the remaining five names of PsEmitter.FusePipelineAllowlist, so no chain
+            // declines on an ARBITRARY stage any more. Two carry warnings worth reading at
+            // the call site: `tr` transforms each record WHOLE (the newline is an ordinary
+            // translatable character to tr, not a record boundary — see TrStage), and `tac`
+            // is BLOCKING like sort (reversal needs the last line first).
+            "tr" => TrStage.TryCreate(argv),
+            "cut" => CutStage.TryCreate(argv),
+            "tail" => TailStage.TryCreate(argv),
+            "tac" => TacStage.TryCreate(argv),
+            "nl" => NlStage.TryCreate(argv),
             _ => null,
         };
         if (s is null) return false;
