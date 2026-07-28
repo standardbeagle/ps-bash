@@ -47,9 +47,16 @@ param(
     [string]$PsBash    = "$PSScriptRoot/../src/PsBash.Shell/bin/Debug/net10.0/ps-bash.exe",
     [string]$BinDir    = "$PSScriptRoot/../src/PsBash.Cmdlets/bin/Debug/net10.0",
     [string]$TranspDir = "$PSScriptRoot/../src/PsBash.Transpiler/bin/Debug/net10.0",
-    [int]$Lines = 100000,
+    # 20000 is the size the recorded baseline in docs/specs/compiled-plan-lane.md
+    # was taken at - keep it as the default so the documented reproduce command
+    # actually reproduces the table.
+    [int]$Lines = 20000,
     [int]$Runs  = 3,
-    [switch]$SkipQuietCheck
+    [switch]$SkipQuietCheck,
+
+    # Skip section C (end-to-end throughput). C spawns ~24 `ps-bash -c` runs and
+    # dominates wall clock; skip it when you only want the fan-out object counts.
+    [switch]$SkipThroughput
 )
 
 $ErrorActionPreference = 'Stop'
@@ -190,9 +197,79 @@ try {
         Write-Host ''
     }
 
-    Measure-Shape -Name 'read/filter/sort' -Chain "cat $bashPath | grep x | sort" -OutLines $Lines
-    Measure-Shape -Name 'pure producer'    -Chain "cat $bashPath"                 -OutLines $Lines
-    Measure-Shape -Name 'foreign producer' -Chain "Get-ChildItem | grep -c ''"    -OutLines 1
+    if ($SkipThroughput) {
+        Write-Host '(skipped: -SkipThroughput)'
+        Write-Host ''
+    }
+    else {
+        Measure-Shape -Name 'read/filter/sort' -Chain "cat $bashPath | grep x | sort" -OutLines $Lines
+        Measure-Shape -Name 'pure producer'    -Chain "cat $bashPath"                 -OutLines $Lines
+        # NOTE: this shape emits ONE line, so its derived lines/sec is meaningless -
+        # it is 1 / fixed-overhead, not throughput. It is here to show the SHAPE never
+        # fuses (section B) and for its object count (section D), not for lines/sec.
+        Measure-Shape -Name 'foreign producer' -Chain "Get-ChildItem | grep -c ''"    -OutLines 1
+    }
+
+    # ------------------------------------------- D. PSObject fan-out (the point)
+    # Throughput above is an EFFECT. This is the cause: how many objects actually
+    # cross the pipeline, and how many bytes are allocated doing it. Measured
+    # IN-PROCESS (the transpiled text run in this runspace) because GC counters do
+    # not cross the launcher/host process boundary.
+    #
+    # Read `objects` as the fan-out factor: the unfused lane emits one PSObject per
+    # LINE; the fused lane emits one batched frame per ~32 KiB. That ratio is what
+    # the epic exists to change, and it is the baseline S1/S8 must beat.
+    Write-Host "--- D. PSObject fan-out (in-process; the metric the epic is named for) ---" -ForegroundColor Yellow
+
+    # MUST run in a CHILD pwsh. Section A did Add-Type on PsBash.Cmdlets.dll to
+    # reflect over LineStreamRegistry, so this process already has that assembly
+    # loaded; `Import-Module PsBash` then dies with "Assembly with same name is
+    # already loaded". A child process has a clean load context.
+    $childScript = @'
+param([string]$ModulePath, [string]$TranspDir, [string]$BashFile)
+Import-Module $ModulePath -Force -ErrorAction Stop -WarningAction SilentlyContinue
+$asm = [System.Reflection.Assembly]::LoadFrom((Join-Path $TranspDir 'PsBash.Transpiler.dll'))
+$tr  = $asm.GetType('PsBash.Core.Transpiler.BashTranspiler', $true)
+
+$shapes = @(
+    @{ n = 'read/filter/sort'; b = "cat $BashFile | grep x | sort" }
+    @{ n = 'pure producer';    b = "cat $BashFile" }
+    @{ n = 'foreign producer'; b = 'Get-ChildItem -Recurse -File src | grep .cs' }
+)
+foreach ($s in $shapes) {
+    foreach ($fused in @($true, $false)) {
+        $label = if ($fused) { 'FUSED  ' } else { 'unfused' }
+        # PSBASH_FUSED is read at TRANSPILE time (PsEmitter.FusionEnabled), not at
+        # run time, so the env var must be set BEFORE Transpile - transpiling once
+        # outside this loop silently measured the fused text twice.
+        if ($fused) { Remove-Item Env:PSBASH_FUSED -ErrorAction SilentlyContinue }
+        else        { $env:PSBASH_FUSED = '0' }
+        $sb = [scriptblock]::Create($tr::Transpile($s.b))
+        try {
+            $null = & $sb                       # warm: JIT + module paths
+            [System.GC]::Collect(); [System.GC]::WaitForPendingFinalizers()
+            $b0  = [System.GC]::GetTotalAllocatedBytes($true)
+            $out = @(& $sb)
+            $b1  = [System.GC]::GetTotalAllocatedBytes($true)
+            '{0,-20} {1}  objects={2,8}  allocated={3,8} MB' -f `
+                $s.n, $label, $out.Count, [math]::Round(($b1-$b0)/1MB,1) | Write-Output
+        }
+        catch {
+            '{0,-20} {1}  MEASUREMENT FAILED: {2}' -f $s.n, $label, $_.Exception.Message | Write-Output
+        }
+    }
+    Write-Output ''
+}
+'@
+    $childFile = Join-Path ([System.IO.Path]::GetTempPath()) "psbash-s0-fanout-$([Guid]::NewGuid().ToString('N')).ps1"
+    try {
+        Set-Content -Path $childFile -Value $childScript -Encoding UTF8
+        & pwsh -NoProfile -File $childFile `
+            -ModulePath (Resolve-Path "$PSScriptRoot/../src/PsBash.Module/PsBash.psd1").Path `
+            -TranspDir  (Resolve-Path $TranspDir).Path `
+            -BashFile   $bashPath
+    }
+    finally { Remove-Item $childFile -ErrorAction SilentlyContinue }
 }
 finally {
     Remove-Item $tmp -ErrorAction SilentlyContinue
