@@ -125,6 +125,61 @@ public class LineStreamCatFileParityTests : LineStreamParityHarness, IDisposable
         }
     }
 
+    /// <summary>
+    /// The relative-path test that can actually FAIL. Its sibling above
+    /// (<see cref="CatFile_RelativePath_ResolvesLikeTheCmdlet"/>) sets BOTH locations
+    /// before asserting, so it pins the resolution ROOT but is structurally incapable
+    /// of catching the two drifting apart — which is exactly how the
+    /// <c>pushd</c>/<c>popd</c> divergence survived review.
+    ///
+    /// <para>Here only the POWERSHELL location moves, and it moves through the real
+    /// <c>Invoke-BashPushd</c> — the actual bash builtin a user types, not a test
+    /// helper. Both directories hold a <c>data.txt</c> with DIFFERENT content, so a
+    /// stage that resolved against a stale <see cref="Environment.CurrentDirectory"/>
+    /// would stream the outer file at exit 0: wrong bytes, no error. That is the
+    /// failure mode this asserts against, and it fails loudly before the
+    /// <c>pushd</c>/<c>popd</c> cwd sync and passes after.</para>
+    /// </summary>
+    [Fact]
+    public void Streamed_CatRelative_AfterBashPushd_ByteIdenticalToUnfused()
+    {
+        var sub = Path.Combine(_dir, "sub");
+        Directory.CreateDirectory(sub);
+        // Same NAME in both dirs, different bytes — a wrong resolution cannot look right.
+        File.WriteAllText(Path.Combine(_dir, "data.txt"), "xouter2\nxouter1\n");
+        File.WriteAllText(Path.Combine(sub, "data.txt"), "xinner2\nxinner1\n");
+
+        var q = _dir.Replace("'", "''");
+        const string Inner = "Invoke-BashCat 'data.txt' | Invoke-BashGrep x | Invoke-BashSort";
+        // One invocation: the harness restores the location between invocations, so the
+        // pushd and the pipeline that depends on it must not be split apart.
+        var prologue = $"Set-Location -LiteralPath '{q}'; Invoke-BashPushd 'sub'; ";
+        const string Epilogue = "; Invoke-BashPopd";
+
+        var prevEnv = Environment.CurrentDirectory;
+        try
+        {
+            // Seed the host invariant the run STARTS from: both locations at _dir.
+            // Nothing after this line touches Environment.CurrentDirectory except the
+            // production code under test.
+            Environment.CurrentDirectory = _dir;
+            var unfused = RenderScript(prologue + Inner + Epilogue);
+
+            Environment.CurrentDirectory = _dir;
+            var fused = RenderScript(
+                prologue
+                + "Invoke-BashFusedPipeline -Stages @(@('cat','data.txt'),@('grep','x'),@('sort')) "
+                + "-Fallback { throw 'fell back to scriptblock lane' }"
+                + Epilogue);
+
+            Assert.Equal(unfused, fused);
+        }
+        finally
+        {
+            Environment.CurrentDirectory = prevEnv;
+        }
+    }
+
     // ── decline matrix ───────────────────────────────────────────────────────
 
     [Fact]
