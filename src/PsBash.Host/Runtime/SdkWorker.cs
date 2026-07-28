@@ -73,7 +73,7 @@ public sealed class SdkWorker : IWorker, ICompletionWorker
                 // Without this a runaway command holds _globalExecGate forever
                 // (Task.Run's ct only affects scheduling, not an in-flight delegate).
                 using var stopReg = ct.Register(() => _ps.Stop());
-                return await Task.Run(() => WithDefaultRunspace(() => RunCommand(command, callback, null)), ct);
+                return await Task.Run(() => WithDefaultRunspace(() => RunCommand(command, callback, null, batchOutput: false)), ct);
             }
             finally
             {
@@ -179,7 +179,7 @@ public sealed class SdkWorker : IWorker, ICompletionWorker
                 // When ct fires mid-command (e.g. parent-death watcher), stop the PS
                 // pipeline so Invoke() returns instead of blocking indefinitely.
                 using var stopReg = ct.Register(() => _ps.Stop());
-                return await Task.Run(() => WithDefaultRunspace(() => RunCommand(command, output, errorOutput)), ct);
+                return await Task.Run(() => WithDefaultRunspace(() => RunCommand(command, output, errorOutput, batchOutput: true)), ct);
             }
             finally
             {
@@ -206,7 +206,15 @@ public sealed class SdkWorker : IWorker, ICompletionWorker
         }
     }
 
-    private int RunCommand(string command, Action<string>? output, Action<string>? errorOutput)
+    /// <param name="batchOutput">
+    /// Coalesce stdout into large chunks (S1). Only the IPC path passes true. The
+    /// <see cref="OutputCallback"/> path must NOT batch: its documented convention is
+    /// ONE CALL PER LINE, and in-process consumers (and tests) index on that granularity —
+    /// batching there silently turned N line-callbacks into one multi-line callback. It
+    /// would also buy nothing, since that path has no IPC frame to amortize.
+    /// </param>
+    private int RunCommand(string command, Action<string>? output, Action<string>? errorOutput,
+                           bool batchOutput)
     {
         _host.Reset();
         _ps.Commands.Clear();
@@ -231,7 +239,7 @@ public sealed class SdkWorker : IWorker, ICompletionWorker
         // appends one to each formatter row. Use Console.Write here (not WriteLine)
         // so we don't double-newline BashText output — the visible symptom was
         // `ls` rendering a blank line between every entry.
-        Action<string> deliver = line =>
+        Action<string> writeThrough = line =>
         {
             try
             {
@@ -248,6 +256,34 @@ public sealed class SdkWorker : IWorker, ICompletionWorker
                 _ps.BeginStop(null, null);
             }
         };
+
+        // S1 (fan-out epic): coalesce stdout so the launcher gets a few large IPC
+        // frames instead of one per line — the S0 baseline put that per-line framing
+        // at ~1 ms/line, the dominant end-to-end cost, and it is the ONLY lever that
+        // reaches a pipeline whose producer we don't own (the fused lane requires
+        // every stage to be an allowlisted Invoke-Bash*, so `Get-Foo | grep x` never
+        // enters it).
+        //
+        // FRAMED IPC MODE ONLY, for two independent reasons:
+        //  1. Interactive/PTY passes a null sink — bytes go straight to the PTY slave
+        //     via Console.Write. No IPC frame to amortize, and interposing a buffer
+        //     risks TUI byte-timing fidelity (cursor moves, progress redraws).
+        //  2. The OutputCallback path (IWorker.ExecuteAsync, used in-process and by
+        //     tests) has a documented ONE CALL PER LINE convention that consumers
+        //     index on. Batching there is both useless (no frames) and BREAKING —
+        //     it turns N line-callbacks into one multi-line callback. Hence
+        //     batchOutput, set true only by ExecuteWithOutputAsync.
+        //
+        // Kill switch is opt-OUT shaped (PSBASH_NO_BATCH=1) rather than the
+        // PSBASH_FUSED=0 spelling used elsewhere, because EnvFlags exposes only
+        // IsTruthy; adding an IsFalsy helper is a shared-API change outside this
+        // slice's scope.
+        var batcher = batchOutput && output is not null
+                      && !PsBash.Core.Runtime.EnvFlags.IsTruthy("PSBASH_NO_BATCH")
+            ? new OutputBatcher(writeThrough, OutputBatcher.DefaultThresholdChars, OutputBatcher.DefaultDeadline)
+            : null;
+
+        Action<string> deliver = batcher is null ? writeThrough : batcher.Append;
         _host.HostUI.SetWriteLineForwarder(deliver);
 
         // REFACTOR-4: stderr sink. Every host stderr write — PowerShell error
@@ -260,6 +296,12 @@ public sealed class SdkWorker : IWorker, ICompletionWorker
         // newline; the IPC frame writer adds the record boundary.
         Action<string> deliverError = line =>
         {
+            // S1: stdout is batched, stderr is not. Without this flush the two
+            // streams would REORDER — buffered stdout would surface after an error
+            // written later. Draining stdout first preserves the relative order the
+            // unbatched path produced. This is the whole reason the batcher exposes
+            // Flush() as well as a size/deadline trigger.
+            batcher?.Flush();
             try
             {
                 if (errorOutput is not null) errorOutput(line);
@@ -572,6 +614,14 @@ public sealed class SdkWorker : IWorker, ICompletionWorker
         }
         finally
         {
+            // S1: flush before anything else. RunCommand has many exit paths (130,
+            // ExitException, parse error, command-not-found 127, $LASTEXITCODE), and
+            // the caller writes the EXIT sentinel as soon as we return — buffered
+            // bytes not drained here would arrive after it, or never. Dispose()
+            // flushes then stops the deadline timer, so this one call covers every
+            // return path including the exceptional ones.
+            batcher?.Dispose();
+
             // Detach the forwarders so a stray Out-Default / WriteErrorLine call
             // from another worker invocation can't leak into a previous caller's
             // output sink.

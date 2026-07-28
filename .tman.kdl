@@ -32,9 +32,18 @@ alias "build" {
 // Full suite across every test project.
 // Prefer `tman test-proj src/PsBash.Core.Tests` when a slice's blast radius is
 // genuinely local; use this before closing anything that touches production code.
+//
+// -m:1 is load-bearing, not tidiness. At solution level `dotnet test` runs test
+// PROJECTS in parallel, and the spawn-heavy suites (Shell PTY, Differential,
+// Escalation) all launch real ps-bash hosts. Running them concurrently produces
+// exactly the contention this repo's flakiness is documented to come from: a
+// first full run under default parallelism failed 38 tests, every sampled one of
+// which passed in isolation. Serializing projects is the whole point of
+// max-parallel 1 above; without -m:1 that guarantee stops at the process
+// boundary and is violated *inside* a single invocation.
 alias "test" {
     command "dotnet"
-    args "test" "-f" "net10.0" "--no-build" "--nologo"
+    args "test" "-f" "net10.0" "--no-build" "--nologo" "-m:1"
 }
 
 // One project: `tman test-proj src/PsBash.Cmdlets.Tests`
