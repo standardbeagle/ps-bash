@@ -123,6 +123,16 @@ define its own baseline that spans the process boundary, and compare against tha
 these numbers ARE good for is the object-count column, which is the fan-out factor and is
 lane-accurate.
 
+**Provenance caveat on the §1.4 figures (added after S2).** Section D imports the module,
+which loads the **beside-module** `PsBash.Cmdlets.dll` staged next to `PsBash.psd1` — a
+gitignored file refreshed by hand, not the build output. It was found to be ~2 days stale
+during S2, which means the table above was taken against a possibly-stale binary. The
+numbers are still believed representative of the pre-S1 baseline they describe (nothing
+touching the fused lane landed in that window), but they are NOT proof about any specific
+build. `scripts/profile-fanout-baseline.ps1` now hard-fails when the beside-module DLL and
+the build output disagree, so this cannot recur silently. Any future comparison against
+these figures should re-measure rather than trust them.
+
 **Measurement trap, recorded because it silently produced a wrong table first:**
 `PSBASH_FUSED` is read at **transpile** time (`PsEmitter.FusionEnabled`), not at run time.
 Transpiling once and then toggling the env var per iteration measures the fused text twice

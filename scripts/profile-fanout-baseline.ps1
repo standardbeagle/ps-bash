@@ -81,6 +81,27 @@ foreach ($p in @($PsBash, $BinDir, $TranspDir)) {
         throw "Not found: $p - build first: dotnet build src/PsBash.Shell -c Debug -f net10.0"
     }
 }
+
+# ---------------------------------------------------- stale beside-module guard
+# Section D imports src/PsBash.Module/PsBash.psd1, which loads the BESIDE-MODULE
+# PsBash.Cmdlets.dll staged next to the psd1 - NOT the build output. That file is
+# gitignored and is refreshed by hand, so it silently goes stale, and section D
+# then measures OLD code while reporting it as current. This actually happened: a
+# 2-day-stale DLL made a re-run show "no change at all" after a real change had
+# landed, and the S0 baseline in docs/specs/compiled-plan-lane.md was taken with a
+# possibly-stale copy. Fail loudly instead of quietly measuring the wrong binary.
+$besideDll = Join-Path $PSScriptRoot '../src/PsBash.Module/PsBash.Cmdlets.dll'
+$builtDll = Join-Path $BinDir 'PsBash.Cmdlets.dll'
+if ((Test-Path $besideDll) -and (Test-Path $builtDll)) {
+    $b = Get-Item $besideDll; $t = Get-Item $builtDll
+    if ($b.Length -ne $t.Length -or $b.LastWriteTimeUtc -lt $t.LastWriteTimeUtc.AddSeconds(-2)) {
+        throw ("STALE beside-module DLL - section D would measure the wrong binary.`n" +
+               "  beside: {0}  {1:yyyy-MM-dd HH:mm:ss}  ({2} bytes)`n" +
+               "  built : {3}  {4:yyyy-MM-dd HH:mm:ss}  ({5} bytes)`n" +
+               "Refresh it:  Copy-Item '{3}' '{0}' -Force" -f `
+               $besideDll, $b.LastWriteTime, $b.Length, $builtDll, $t.LastWriteTime, $t.Length)
+    }
+}
 $PsBash = (Resolve-Path $PsBash).Path
 
 Write-Host "=== S0 fan-out baseline ===" -ForegroundColor Cyan
