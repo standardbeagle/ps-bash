@@ -61,6 +61,10 @@ public static class LineStreamRegistry
             "wc" => WcStage.TryCreate(argv),
             "grep" => GrepStage.TryCreate(argv),
             "sed" => SedStage.TryCreate(argv),
+            // S2: sort + uniq (LineStream/SortStage.cs, LineStream/UniqStage.cs).
+            // sort is the lane's first BLOCKING core — see its class remarks for what
+            // that costs (no downstream early-exit past it).
+            "sort" => SortStage.TryCreate(argv),
             _ => null,
         };
         if (s is null) return false;
