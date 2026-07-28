@@ -91,6 +91,34 @@ public class FusedStreamingBench : IClassFixture<SharedPwshFixture>
             sb.AppendLine($"e2e seq|sed|wc-l 100k: 2a={a2.seconds * 1000:N0}ms  2b={b2.seconds * 1000:N0}ms  (2a alloc {a2.allocBytes / 1e6:N1}MB, 2b {b2.allocBytes / 1e6:N1}MB)");
         }
 
+        // S2 (sort + uniq cores): the read/filter/sort shape the fan-out epic is
+        // ordered around. Before S2 the `sort` stage had no core, so `-Stages` always
+        // declined and 2b WAS 2a (the fallback scriptblock) — these rows are the first
+        // time the shape has a streaming lane at all. 100k only: the 2a lane
+        // materializes one PSObject per line THEN sorts, so 1M would dominate the sweep.
+        //
+        // NOTE the shape here starts with `seq`, not `cat f`. `cat` with a FILE operand
+        // is still declined by CatStage (bare `cat` only), so the literal S0 chain
+        // `cat f | grep x | sort` continues to fall back — the blocker moved off `sort`
+        // and onto `cat FILE`. See the S2 task comment.
+        foreach (var (tag, innerFmt, stagesFmt) in new (string, string, string)[]
+                 {
+                     ("seq|grep|sort", "Invoke-BashSeq 1 {0} | Invoke-BashGrep 1 | Invoke-BashSort",
+                                       "@(@('seq','1','{0}'),@('grep','1'),@('sort'))"),
+                     ("seq|sort|uniq", "Invoke-BashSeq 1 {0} | Invoke-BashSort | Invoke-BashUniq",
+                                       "@(@('seq','1','{0}'),@('sort'),@('uniq'))"),
+                 })
+        {
+            int n = 100_000;
+            var inner = string.Format(innerFmt, n);
+            var stages = string.Format(stagesFmt, n);
+            var a2 = Time($"$null = (Invoke-BashFusedPipeline {{ {inner} }})");
+            var b2 = Time($"$null = (Invoke-BashFusedPipeline -Stages {stages} -Fallback {{ throw 'fb' }})");
+            sb.AppendLine();
+            sb.AppendLine($"S2 {tag} 100k: 2a={a2.seconds * 1000:N0}ms  2b={b2.seconds * 1000:N0}ms  "
+                        + $"({a2.seconds / b2.seconds:N1}x)  alloc 2a={a2.allocBytes / 1e6:N1}MB 2b={b2.allocBytes / 1e6:N1}MB");
+        }
+
         var outPath = Path.Combine(Path.GetTempPath(), "psbash-phase2b-bench.txt");
         File.WriteAllText(outPath, sb.ToString());
         // Also surface it if the run shows output.
