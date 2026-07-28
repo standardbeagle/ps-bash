@@ -19,16 +19,36 @@ The emitter maps command names (e.g., `head` → `Invoke-BashHead`) and forwards
 
 ## Running Tests
 
-Always use `scripts/test.sh` instead of `dotnet test` directly.
-It shuts down MSBuild server nodes and testhost processes on exit.
+Run builds and tests through **`tman`** (config: `.tman.kdl`). Never bare `dotnet build` /
+`dotnet test` — they leak MSBuild worker nodes and testhost processes, and two of them at
+once corrupt the shared `src/*/bin` outputs.
 
 ```bash
-./scripts/test.sh                          # all tests
-./scripts/test.sh --filter "MyTest"        # specific test
-./scripts/test.sh src/PsBash.Core.Tests    # specific project
+tman build                                        # dotnet build -c Debug -f net10.0
+tman test                                         # full suite
+tman test-proj src/PsBash.Core.Tests              # one project
+tman test-proj src/PsBash.Cmdlets.Tests --filter "FullyQualifiedName~Fused"
+tman ls --all | tman status <id> | tman kill all  # inspect / stop runs
 ```
 
-Do NOT use bare `dotnet test ...` — it leaks MSBuild worker nodes and testhost processes.
+Why tman and not `dotnet` directly:
+
+1. **Kill-tree on exit** — no orphaned MSBuild/testhost survives a run (the job
+   `scripts/test.sh` was written for; that script still works but is not the default).
+2. **`max-parallel 1`** — serializes build/test in this directory. Concurrent builds
+   against the shared `src/*/bin/Debug/net10.0` outputs are the documented root cause of
+   this repo's suite flakiness: a half-written test bin can't start a runspace, so spawned
+   hosts die with "stream closed before EXIT sentinel" or hang 30s with no output. Never
+   raise this to chase speed.
+3. **`stall 5m` / `max-time 45m`** — a wedged run is killed instead of hanging the session.
+
+**Never trust suite results gathered while another build was running.** If you must check,
+`tman ls` shows live runs. Quote any `--filter` containing `|` — an unquoted pipe becomes a
+shell pipe and hangs.
+
+Orphaned DEV-BUILD `ps-bash-host` / `ps-bash` processes (path under the repo's `bin`) lock
+output DLLs and cause MSB3021 on the next build. Kill only those — **never** the
+`~/.local/bin` ones, which serve the Bash tool.
 
 ## CI Push Discipline
 

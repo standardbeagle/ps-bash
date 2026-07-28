@@ -1,0 +1,46 @@
+// tman supervision for ps-bash builds and test runs.
+//
+// Why this exists: bare `dotnet build` / `dotnet test` leak MSBuild worker nodes
+// and testhost processes, and CONCURRENT builds against the shared
+// src/*/bin/Debug/net10.0 outputs are the documented root cause of this repo's
+// suite flakiness (a half-written test bin can't start a runspace, so spawned
+// hosts fail with "stream closed before EXIT sentinel" or 30s zero-output hangs).
+// tman gives us the kill-tree + the mutual exclusion in one place.
+
+defaults {
+    // max-parallel 1 is the load-bearing setting: ONE build-or-test at a time in
+    // this directory. Raising it re-opens the concurrent-build corruption above.
+    max-parallel 1
+
+    // Suites here are minutes, not tens of minutes. A run with no output and no
+    // cpu/io for this long is wedged (the classic symptom is a spawned ps-bash
+    // host waiting forever on a runspace that never came up).
+    stall "5m"
+
+    // Hard ceiling. The full suite is well under this; anything longer is a hang.
+    max-time "45m"
+
+    retain "24h"
+}
+
+// Full solution build. Everything else assumes this ran.
+alias "build" {
+    command "dotnet"
+    args "build" "-c" "Debug" "-f" "net10.0" "--nologo"
+}
+
+// Full suite across every test project.
+// Prefer `tman test-proj src/PsBash.Core.Tests` when a slice's blast radius is
+// genuinely local; use this before closing anything that touches production code.
+alias "test" {
+    command "dotnet"
+    args "test" "-f" "net10.0" "--no-build" "--nologo"
+}
+
+// One project: `tman test-proj src/PsBash.Cmdlets.Tests`
+// Append xunit filters after the path, e.g. --filter "FullyQualifiedName~Fused"
+// (quote any filter containing | — an unquoted pipe becomes a shell pipe and hangs).
+alias "test-proj" {
+    command "dotnet"
+    args "test" "-f" "net10.0" "--no-build" "--nologo"
+}
