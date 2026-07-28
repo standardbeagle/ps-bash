@@ -1001,9 +1001,15 @@ public static class PsEmitter
         finally { _subshellDepth--; }
 
         bool scopedExit = ContainsExitCommand(subshell.Body);
+        // The `finally` restores BOTH halves of the working directory (PowerShell
+        // location + [System.Environment]::CurrentDirectory) — see
+        // PsBuild.PopLocationRestoringProcessCwd for why a bare `Pop-Location` silently
+        // made `(cd sub); cat data.txt | …` stream the wrong file. It is a `finally`, so
+        // it also runs on the scoped-exit path below (`$LASTEXITCODE = N; return`) and on
+        // any exception out of the body.
         var sb = new StringBuilder("try { Push-Location; ");
         sb.Append(body);
-        sb.Append(" } finally { Pop-Location }");
+        sb.Append(" } finally { ").Append(PsBuild.PopLocationRestoringProcessCwd).Append(" }");
         if (scopedExit)
             sb.Insert(0, "& { ").Append(" }");
 

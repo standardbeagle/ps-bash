@@ -253,6 +253,45 @@ public static class PsBuild
     public static string SilentExitFromBool(string boolExpr) =>
         "$(if (" + boolExpr + ") { $global:LASTEXITCODE = 0 } else { $global:LASTEXITCODE = 1 })";
 
+    // ────────────────────────── Subshell working-directory restore ─────────────────────
+
+    /// <summary>
+    /// The <c>finally</c> body of a subshell wrapper: pop the PowerShell location AND put
+    /// the process working directory back with it.
+    ///
+    /// <para><b>Why a bare <c>Pop-Location</c> is a correctness bug, not a style nit.</b>
+    /// A bash working directory is BOTH halves — the PowerShell location (what
+    /// <c>SessionState.Path</c>-based cmdlets resolve against) and
+    /// <c>[System.Environment]::CurrentDirectory</c> (what every raw .NET path API
+    /// resolves against, including the fused streaming lane's <c>CatFileStage</c>).
+    /// <c>EmitCd</c> writes both, and so do <c>pushd</c>/<c>popd</c>; a bare
+    /// <c>Pop-Location</c> restored only the first, so after <c>(cd sub)</c> the process
+    /// cwd was still pointing INSIDE <c>sub</c>. <c>(cd sub); cat data.txt | …</c> then
+    /// streamed <c>sub/data.txt</c> at exit 0 while the unfused pipeline read the outer
+    /// one — wrong file, no error anywhere.</para>
+    ///
+    /// <para><b>Nesting.</b> Subshells nest and so does this wrapper, but the temp is
+    /// assigned and consumed within one straight-line statement sequence with no nested
+    /// emission in between: an inner subshell's <c>finally</c> has fully run before an
+    /// outer one starts, so the levels cannot interleave on the name. It is namespaced
+    /// <c>$__psbash*</c> regardless, per the emitter-temp convention.</para>
+    ///
+    /// <para><c>-PassThru</c> output is CAPTURED into the temp rather than left on the
+    /// pipeline — the <c>finally</c> sits inside the subshell's own output scope, so an
+    /// uncaptured <c>PathInfo</c> would be emitted as subshell stdout.
+    /// <c>-ErrorAction SilentlyContinue</c> keeps an empty stack (only reachable if
+    /// <c>Push-Location</c> itself failed) from throwing out of a <c>finally</c> under
+    /// <c>set -e</c>, and <c>Directory.Exists</c> guards a non-filesystem provider whose
+    /// <c>ProviderPath</c> is not a process working directory.</para>
+    /// </summary>
+    public const string PopLocationRestoringProcessCwd =
+        "$__psbash_subshell_pop = Pop-Location -PassThru -ErrorAction SilentlyContinue; "
+        + "if ($__psbash_subshell_pop -and "
+        + "[System.IO.Directory]::Exists($__psbash_subshell_pop.ProviderPath)) { "
+        + "[System.Environment]::CurrentDirectory = $__psbash_subshell_pop.ProviderPath; "
+        + "$global:__PsBashCwd = $__psbash_subshell_pop.ProviderPath; "
+        + "$env:PWD = $__psbash_subshell_pop.ProviderPath }";
+
     // ─────────────────────────── RC-7 unquoted word-split splat ────────────────────────
 
     /// <summary>

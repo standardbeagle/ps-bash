@@ -7,6 +7,35 @@ namespace PsBash.Core.Tests.Parser;
 
 public class PsEmitterTests
 {
+    /// <summary>
+    /// The subshell wrapper's <c>finally</c>. Referenced through <see cref="PsBuild"/>
+    /// rather than re-typed so a change to the restore fragment cannot leave five
+    /// assertions asserting a stale copy of it.
+    /// </summary>
+    private const string SubshellPop = "finally { " + PsBuild.PopLocationRestoringProcessCwd + " }";
+
+    [Fact]
+    public void Transpile_SubshellExit_RestoresProcessWorkingDirectoryNotJustPsLocation()
+    {
+        // REGRESSION. A bash working directory is BOTH the PowerShell location and
+        // [System.Environment]::CurrentDirectory; `cd` writes both. The subshell wrapper
+        // popped only the PowerShell half, so after `(cd sub)` the PROCESS cwd was still
+        // inside `sub` — and the fused streaming lane, which resolves relative operands
+        // against CurrentDirectory, then read `sub/data.txt` at exit 0 while the unfused
+        // pipeline read the outer one. Runtime proof:
+        // LineStreamCatFileParityTests.Streamed_CatRelative_AfterBashSubshellCd_*.
+        var result = PsEmitter.Transpile("(cd sub)")!;
+
+        Assert.Contains("[System.Environment]::CurrentDirectory = $__psbash_subshell_pop.ProviderPath",
+            result);
+        // The restore must be in the FINALLY, so it also runs when the body throws or
+        // takes the scoped-`exit` return.
+        Assert.EndsWith(SubshellPop, result);
+        Assert.Contains("$global:LASTEXITCODE = 7; return",
+            PsEmitter.Transpile("(cd sub; exit 7)")!);
+        Assert.EndsWith(SubshellPop + " }", PsEmitter.Transpile("(cd sub; exit 7)")!);
+    }
+
     [Fact]
     public void Emit_SimpleCommand_EchoHello_Passthrough()
     {
@@ -2733,7 +2762,7 @@ public class PsEmitterTests
     {
         var result = PsEmitter.Transpile("(Invoke-BashEcho hello; Invoke-BashEcho world)");
 
-        Assert.Equal("try { Push-Location; Invoke-BashEcho hello; Invoke-BashEcho world } finally { Pop-Location }", result);
+        Assert.Equal("try { Push-Location; Invoke-BashEcho hello; Invoke-BashEcho world } " + SubshellPop, result);
     }
 
     [Fact]
@@ -2751,7 +2780,7 @@ public class PsEmitterTests
 
         // The try/finally body is a STATEMENT and cannot head the redirect pipe
         // ("An empty pipe element is not allowed"), so it is wrapped in `& { }`.
-        Assert.Equal("& { try { Push-Location; Invoke-BashEcho hello } finally { Pop-Location } } | Invoke-BashRedirect -Path out.txt", result);
+        Assert.Equal("& { try { Push-Location; Invoke-BashEcho hello } " + SubshellPop + " } | Invoke-BashRedirect -Path out.txt", result);
     }
 
     [Fact]
@@ -2759,7 +2788,11 @@ public class PsEmitterTests
     {
         var result = PsEmitter.Transpile("(echo a; (echo b))");
 
-        Assert.Equal("try { Push-Location; Invoke-BashEcho a; try { Push-Location; Invoke-BashEcho b } finally { Pop-Location } } finally { Pop-Location }", result);
+        // Nesting: the SAME `$__psbash_subshell_pop` temp appears at both levels, which is
+        // safe because the inner `finally` runs to completion inside the outer body — the
+        // assignment and its reads never interleave across levels.
+        Assert.Equal("try { Push-Location; Invoke-BashEcho a; try { Push-Location; Invoke-BashEcho b } "
+            + SubshellPop + " } " + SubshellPop, result);
     }
 
     [Fact]
@@ -2773,7 +2806,7 @@ public class PsEmitterTests
         // PowerShell at all ("Unexpected token '&&'"), which this assertion used
         // to pin. Same reason `while` / `case` operands are wrapped.
         Assert.StartsWith("$(try { Push-Location; $($__psbash_cd_target = '/tmp'", result);
-        Assert.Contains("&& Invoke-BashPwd } finally { Pop-Location }) && Invoke-BashPwd", result);
+        Assert.Contains("&& Invoke-BashPwd } " + SubshellPop + ") && Invoke-BashPwd", result);
     }
 
     [Theory]
@@ -4950,7 +4983,7 @@ public class PsEmitterTests
     {
         // The script block is only needed to give the scoped `return` something to
         // return from; a plain subshell keeps its cheaper emission.
-        Assert.Equal("try { Push-Location; Invoke-BashEcho a } finally { Pop-Location }",
+        Assert.Equal("try { Push-Location; Invoke-BashEcho a } " + SubshellPop,
             PsEmitter.Transpile("(echo a)"));
     }
 
