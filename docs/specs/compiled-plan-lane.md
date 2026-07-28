@@ -114,6 +114,15 @@ the object level what §1.2 and §1.3 established structurally. Row 3 also shows
 producers are their own problem — 1 561 objects cost 65 MB, an order of magnitude more per
 object than our text lines, because they are real `FileInfo` objects. S4 targets that.
 
+**Scoping warning for S1 — do NOT score S1 against these allocation figures.** They are
+measured **in-process**: the transpiled text runs inside the measuring runspace, so the
+numbers structurally EXCLUDE the launcher/host IPC framing allocation — which is precisely
+the cost S1 exists to remove. The figures are therefore conservative (real end-to-end
+allocation is higher), and a reduction S1 delivers would be partly invisible here. S1 must
+define its own baseline that spans the process boundary, and compare against that. What
+these numbers ARE good for is the object-count column, which is the fan-out factor and is
+lane-accurate.
+
 **Measurement trap, recorded because it silently produced a wrong table first:**
 `PSBASH_FUSED` is read at **transpile** time (`PsEmitter.FusionEnabled`), not at run time.
 Transpiling once and then toggling the env var per iteration measures the fused text twice
