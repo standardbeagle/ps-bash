@@ -81,6 +81,14 @@ public static class PsEmitter
     /// guaranteed by construction; this set is intentionally the line-oriented
     /// text subset (no ls/find/awk/jq typed-object producers, whose boundary
     /// object shape must survive `ls | grep .txt`).
+    /// <para>
+    /// As of S3 of the fan-out epic EVERY name here has a streaming core in
+    /// <c>LineStreamRegistry</c> (S1: cat/seq/rev/head/wc/grep/sed; S2: sort/uniq
+    /// + the <c>cat FILE</c> producer; S3: tr/cut/tail/tac/nl), so a chain no longer
+    /// declines because of an ARBITRARY missing stage. The lane is still
+    /// all-or-nothing PER ARGV: a core accepts only its certified argv subset and
+    /// declines the rest to the real cmdlet, and this list is only the first gate.
+    /// </para>
     /// </summary>
     internal static readonly HashSet<string> FusePipelineAllowlist = new(StringComparer.Ordinal)
     {
@@ -258,6 +266,14 @@ public static class PsEmitter
     /// For <c>tail</c>, a non-literal arg (variable / command-sub / glob) is treated as
     /// potentially <c>-f</c> and is conservatively unsafe — correctness (no hang) over the
     /// perf win on an uncommon shape.
+    /// </para>
+    /// <para>
+    /// <b>This is one of TWO independent barriers, deliberately.</b> Until S3 it was the
+    /// only one, and it held partly by ACCIDENT: <c>tail</c> had no streaming core, so a
+    /// follow argv had nothing to reach. S3 gave <c>tail</c> a core, so
+    /// <c>TailStage.IsFollowToken</c> now refuses every follow spelling itself. Keep both:
+    /// a hang produces no error message to debug, and this check also covers the
+    /// phase-2a scriptblock lane, which never consults a core at all.
     /// </para>
     /// </summary>
     private static bool StageIsUnbounded(string command, ImmutableArray<CompoundWord> words)
