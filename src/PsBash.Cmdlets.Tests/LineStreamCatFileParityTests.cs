@@ -1,4 +1,5 @@
 using System.Text;
+using PsBash.Core.Parser;
 using Xunit;
 
 namespace PsBash.Cmdlets.Tests;
@@ -179,6 +180,54 @@ public class LineStreamCatFileParityTests : LineStreamParityHarness, IDisposable
         {
             Environment.CurrentDirectory = prevEnv;
         }
+    }
+
+    /// <summary>
+    /// The same silent-wrong-file failure as
+    /// <see cref="Streamed_CatRelative_AfterBashPushd_ByteIdenticalToUnfused"/>, from a
+    /// DIFFERENT source: an ordinary bash SUBSHELL. <c>EmitSubshell</c> wrapped every
+    /// subshell in <c>try { Push-Location; … } finally { Pop-Location }</c>; the <c>cd</c>
+    /// inside correctly wrote both halves of the working directory, but the bare
+    /// <c>Pop-Location</c> restored only the PowerShell half, leaving
+    /// <see cref="Environment.CurrentDirectory"/> inside the subshell's directory after it
+    /// exited. <c>(cd sub); cat data.txt | grep x | sort</c> is all-literal, so
+    /// <c>-Stages</c> IS emitted and <c>CatFileStage</c> streamed <c>sub/data.txt</c> at
+    /// exit 0 while the unfused pipeline read the outer one.
+    ///
+    /// <para>Both the subshell prologue and the fused pipeline come from the REAL emitter
+    /// (<see cref="PsEmitter.Transpile(string)"/>) — the bug lived in the emitted text, so
+    /// a hand-written stand-in for it could not have caught this.</para>
+    /// </summary>
+    [Fact]
+    public void Streamed_CatRelative_AfterBashSubshellCd_ByteIdenticalToUnfused()
+    {
+        var sub = Path.Combine(_dir, "sub");
+        Directory.CreateDirectory(sub);
+        // Same NAME in both dirs, different bytes — a wrong resolution cannot look right.
+        File.WriteAllText(Path.Combine(_dir, "data.txt"), "xouter2\nxouter1\n");
+        File.WriteAllText(Path.Combine(sub, "data.txt"), "xinner2\nxinner1\n");
+
+        var q = _dir.Replace("'", "''");
+        // Seed BOTH halves INSIDE the script: the harness's Reset() restores the process
+        // cwd right before each invocation, so seeding it from C# would be undone.
+        var seed = $"[System.Environment]::CurrentDirectory = '{q}'; Set-Location -LiteralPath '{q}'; ";
+
+        var subshell = PsEmitter.Transpile("(cd sub)")!;
+        var fusedScript = PsEmitter.Transpile("(cd sub); cat data.txt | grep x | sort")!;
+        // Pin the shape this test is about: all-literal args, so the emitter really does
+        // hand the pipeline to the streaming lane rather than the scriptblock lane.
+        Assert.Contains("Invoke-BashFusedPipeline -Stages", fusedScript);
+
+        const string Inner = "Invoke-BashCat 'data.txt' | Invoke-BashGrep x | Invoke-BashSort";
+
+        var unfused = RenderScript(seed + subshell + "; " + Inner);
+        var fused = RenderScript(seed + fusedScript);
+
+        // Not just "the two agree": pin WHICH file, so a future change that broke both
+        // lanes the same way could not pass this.
+        Assert.Contains("xouter", unfused);
+        Assert.DoesNotContain("xinner", unfused);
+        Assert.Equal(unfused, fused);
     }
 
     // ── decline matrix ───────────────────────────────────────────────────────
