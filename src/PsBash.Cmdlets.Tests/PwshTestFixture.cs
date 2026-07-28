@@ -267,6 +267,16 @@ public class SharedPwshFixture : IDisposable
     private readonly HashSet<string> _baselineVariableNames;
     private readonly string _baselinePwd;
 
+    /// <summary>
+    /// The working directory the TEST PROCESS started in. Captured by a module
+    /// initializer — before any test, any fixture, and any cwd-moving test — so it is
+    /// the one value no test can have polluted.
+    /// </summary>
+    private static string _processStartPwd = Environment.CurrentDirectory;
+
+    [System.Runtime.CompilerServices.ModuleInitializer]
+    internal static void CaptureProcessStartPwd() => _processStartPwd = Environment.CurrentDirectory;
+
     public SharedPwshFixture()
     {
         _pwsh = PwshTestFixture.CreateInternal();
@@ -280,10 +290,13 @@ public class SharedPwshFixture : IDisposable
             StringComparer.Ordinal);
         _pwsh.Commands.Clear();
 
-        // Capture starting PWD so Reset() can restore it.
-        var pwdResult = _pwsh.AddScript("(Get-Location).Path").Invoke();
-        _baselinePwd = pwdResult.FirstOrDefault()?.ToString() ?? Environment.CurrentDirectory;
-        _pwsh.Commands.Clear();
+        // The baseline is the PROCESS-START working directory, captured once by
+        // CaptureProcessStartPwd below — NOT this runspace's current location. Reset()
+        // now writes Environment.CurrentDirectory process-wide, and a new runspace seeds
+        // its location FROM that, so a fixture constructed while a serialized member of
+        // another class sat in a temp dir used to capture that temp dir as "baseline" and
+        // then restore every later test to it.
+        _baselinePwd = _processStartPwd;
     }
 
     /// <summary>

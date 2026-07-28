@@ -113,10 +113,16 @@ public sealed class InvokeBashPushdCommand : PSCmdlet
     /// making one consumer defensive against a working directory that is half-moved.</para>
     ///
     /// <para><c>dirs</c> is deliberately NOT included: none of its paths move the
-    /// location. <c>-c</c> drains the stack with <c>Pop-Location -Stack</c>, which is a
-    /// silent no-op (<c>-Stack</c> prefix-matches <c>-StackName</c> and throws
-    /// "missing an argument", swallowed by <c>-ErrorAction SilentlyContinue</c>) — an
-    /// oracle-inherited quirk, not something to fix under a cwd-sync change.</para>
+    /// location. <c>-c</c> drains the stack with <c>Pop-Location -Stack</c>, which never
+    /// pops anything — <c>-Stack</c> prefix-matches the <c>-StackName</c> PARAMETER and
+    /// binds "missing an argument". That failure is a <c>ParameterBindingException</c>
+    /// thrown at bind time, which ESCAPES <c>-ErrorAction SilentlyContinue</c> (the
+    /// preference applies to the cmdlet's own error records, not to binder failures) — so
+    /// it surfaces, it is not swallowed. Either way the location does not move and
+    /// <c>dirs</c> needs no cwd sync; the earlier "silent no-op, swallowed" wording named
+    /// the wrong mechanism. Probed in
+    /// <c>InvokeBashPushdCommandTests</c>. An oracle-inherited quirk, not something to fix
+    /// under a cwd-sync change.</para>
     ///
     /// <para>Best-effort by design. <c>CurrentFileSystemLocation</c> throws when the
     /// session is on a non-filesystem provider (<c>HKLM:</c>), and there is no meaningful

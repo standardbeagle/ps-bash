@@ -57,23 +57,37 @@ namespace PsBash.Cmdlets;
 /// creation, the emitter's <c>cd</c> writes both on every change
 /// (<c>docs/specs/emitter-strategy.md</c> §4 <c>EmitCd</c>), and
 /// <c>pushd</c>/<c>popd</c> write both via
-/// <c>InvokeBashPushdCommand.SyncProcessWorkingDirectory</c>.</para>
+/// <c>InvokeBashPushdCommand.SyncProcessWorkingDirectory</c>, and the emitter's SUBSHELL
+/// wrapper restores both on exit via <c>PsBuild.PopLocationRestoringProcessCwd</c>.</para>
 ///
-/// <para>That last one is not decoration. Until it landed, <c>pushd</c> moved ONLY the
-/// PowerShell location, and this paragraph claimed a divergence was "outside the lane's
-/// own runtime" while <c>pushd sub; cat data.txt | grep x | sort</c> streamed the
-/// PRE-<c>pushd</c> file at exit 0. The remarks were wrong, not merely optimistic. The
-/// regression test is
-/// <c>LineStreamCatFileParityTests.Streamed_CatRelative_AfterBashPushd_ByteIdenticalToUnfused</c>,
-/// which moves only the PowerShell location — its sibling that sets both cannot fail by
-/// construction, which is precisely how the gap survived.</para>
+/// <para><b>Those last two are not decoration, and this paragraph has been WRONG TWICE.</b>
+/// First <c>pushd</c> moved only the PowerShell location, so
+/// <c>pushd sub; cat data.txt | grep x | sort</c> streamed the PRE-<c>pushd</c> file at
+/// exit 0. Then — with these remarks already claiming the only residual gap was a caller
+/// using a bare <c>Set-Location</c> — <c>EmitSubshell</c> was found emitting
+/// <c>finally { Pop-Location }</c>, restoring only the PowerShell half, so the ORDINARY
+/// bash line <c>(cd sub); cat data.txt | grep x | sort</c> streamed <c>sub/data.txt</c>
+/// after the subshell had exited. Regression tests:
+/// <c>LineStreamCatFileParityTests.Streamed_CatRelative_AfterBashPushd_ByteIdenticalToUnfused</c>
+/// and <c>…_AfterBashSubshellCd_ByteIdenticalToUnfused</c>. Both move the working
+/// directory through REAL emitted / builtin code; a test that sets both halves itself
+/// cannot fail by construction, which is precisely how each gap survived review.</para>
 ///
-/// <para>The residual gap is now only a caller who moves the PS location with a bare
-/// <c>Set-Location</c> and never goes through a bash builtin at all — not a bash
-/// working-directory change, and not something this lane can observe. Closing even that
-/// would mean threading the <c>PSCmdlet</c> into <c>LineStreamRegistry.TryCreate</c>;
-/// keeping the two halves of the working directory in sync at the source is strictly
-/// better, because it fixes every other <c>CurrentDirectory</c> reader too.</para>
+/// <para><b>What is actually true about the residual gap.</b> This lane resolves against
+/// <c>CurrentDirectory</c> and has no way to observe the PowerShell location, so it is
+/// correct exactly as far as the "both halves move together" invariant holds — and that
+/// invariant is upheld by an OPEN SET of writers (<c>SdkRunspace</c> seeding, <c>cd</c>,
+/// <c>pushd</c>/<c>popd</c>, the subshell wrapper, <c>PsBash.Shell/Program.cs</c>'s
+/// per-invocation cwd), not by anything structural. Any present or FUTURE construct that
+/// moves the PowerShell location without writing <c>CurrentDirectory</c> reintroduces the
+/// same silent wrong-file read — including a caller's bare <c>Set-Location</c>, the
+/// module-mode <c>cd</c> alias in <c>PsBash.psm1</c> (aliased straight to
+/// <c>Set-Location</c>, so <c>Import-Module PsBash</c> in a plain pwsh has the divergence
+/// today), and any new emitter or cmdlet path. Closing it structurally would mean
+/// threading the <c>PSCmdlet</c> into <c>LineStreamRegistry.TryCreate</c> so stages
+/// resolve through <c>SessionState.Path</c> like the cmdlets do; until that is done, the
+/// invariant is a convention every location-moving writer must honor, and each new one is
+/// a place this can silently break again.</para>
 /// </summary>
 internal sealed class CatFileStage : ILineStreamStage
 {
