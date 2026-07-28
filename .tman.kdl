@@ -10,6 +10,23 @@
 defaults {
     // max-parallel 1 is the load-bearing setting: ONE build-or-test at a time in
     // this directory. Raising it re-opens the concurrent-build corruption above.
+    //
+    // SCOPE OF THIS GUARANTEE - know the gap before you rely on it. tman buckets by
+    // NAME-OR-COMMAND @ dir, and an alias's bucket is its OWN NAME. So:
+    //   `tman test` twice      -> second queues/refuses. PROTECTED.
+    //   `tman test` + `tman test-proj` -> DIFFERENT buckets, they RUN CONCURRENTLY.
+    // Measured, not theoretical: a coordinator full-suite run and a subagent's
+    // project run overlapped for 16 minutes and contaminated the result.
+    //
+    // A `name` node inside an alias block does NOT fix this - tman only honors
+    // --name on `tman run`, and `tman ls` shows such runs still named after the
+    // alias. That was tried and reverted rather than left in as a guarantee that
+    // does not hold.
+    //
+    // So the cross-alias case is DISCIPLINE, not enforcement: never start a suite
+    // while an implementer subagent is active, and check `tman ls` if unsure.
+    // To enforce it for a one-off, use the flag form directly:
+    //   tman run --name psbash-buildtest --max-parallel 1 -- dotnet test ...
     max-parallel 1
 
     // Suites here are minutes, not tens of minutes. A run with no output and no
