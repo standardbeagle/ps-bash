@@ -140,6 +140,29 @@ and yields identical rows. The env var must be set *before* `Transpile`. Section
 `Add-Type` of `PsBash.Cmdlets.dll` also poisons an in-process `Import-Module PsBash`
 ("Assembly with same name is already loaded"), which is why section D runs in a child pwsh.
 
+### 1.4a What S1–S3 actually changed (measured, with the caveats attached)
+
+| Slice | Shape | Result |
+|---|---|---|
+| S1 delivery batching | `cat f` (20k) | 23.02 s → 8.16 s, **2.82×** |
+| S1 delivery batching | `Get-ChildItem -Recurse \| grep` | 9.75 s → 6.89 s, **1.41×** |
+| S2+S3 streaming cores | `cat f \| grep x \| sort` (20k, in-process) | 400 ms / 26.9 MB → 127 ms / 3.9 MB — **3.1× time, 6.9× allocation** |
+
+**A withdrawn claim, recorded so it is not re-quoted.** An earlier S2 report cited
+"35.9 MB → 6.5 MB" for the read/filter/sort shape. The 6.5 MB figure could not be
+reproduced and is **unsupported**; it is withdrawn. The defensible number is the
+same-harness 26.9 → 3.9 MB above. Comparing the streaming result against §1.4's 35.9 MB
+crosses harnesses (different corpus, different measurement path) and is order-of-magnitude
+evidence only — do not present it as a before/after pair.
+
+**Coverage caveat on all three rows.** Every chain measured here has ALL-LITERAL
+arguments, because those are the only chains that can currently stream:
+`PsEmitter.TryBuildFusedStages` emits no `-Stages` at all when any stage carries a
+variable, command substitution, glob, or `TransformWordPath` operand. So
+`grep "$pat" f | sort` — an entirely ordinary line — still cannot reach the streaming lane
+regardless of core coverage. That gap is tracked as its own slice and is plausibly larger
+in real-world effect than the cores added in S2 and S3 combined.
+
 ### 1.5 Why phase-2b's "1M lines/sec" cores are invisible end-to-end
 
 The phase-2b streaming cores were benchmarked in-process and hit ~1.04M lines/sec (grep)
