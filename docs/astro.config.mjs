@@ -2,7 +2,7 @@ import { defineConfig } from 'astro/config';
 import starlight from '@astrojs/starlight';
 
 export default defineConfig({
-  site: 'https://standardbeagle.github.io',
+  site: 'https://dev.standardbeagle.com',
   base: '/ps-bash',
   integrations: [
     starlight({
@@ -26,7 +26,7 @@ export default defineConfig({
         },
         {
           tag: 'meta',
-          attrs: { property: 'og:url', content: 'https://standardbeagle.github.io/ps-bash/' },
+          attrs: { property: 'og:url', content: 'https://dev.standardbeagle.com/ps-bash/' },
         },
         {
           tag: 'meta',
