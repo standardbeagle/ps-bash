@@ -451,8 +451,24 @@ Maps redirects to PowerShell: `>file`, `>>file`, `2>&1`, etc. Calls
 
 ### `TransformWordPath` / `TransformRedirectTarget`
 
-- `/dev/null` -> `$null`
-- `/tmp/file` -> `$env:TEMP\file`
+- `/tmp/file` -> `$env:TEMP\file` (both)
+- `/dev/null` -> `$null` — **redirect targets ONLY**. As a command *operand*, bash's
+  `/dev/null` is an empty FILE (`grep x /dev/null` reads it and exits 1), not the `$null`
+  discard sink — mapping it in `TransformWordPath` crashed cmdlets with "Value cannot be
+  null". The literal flows to the runtime, where `BashFileSystem.OpenRead` (via
+  `FileSystemHelpers.IsNullDevice`) serves it as empty.
+- **Unix drive paths** (`/c/Users/...`, `/mnt/c/...`) -> `C:\Users\...`, via
+  `TryTranslateMsysDrivePath` → `WindowsPath.TryMapUnixDrivePath`. Applied uniformly to
+  redirect targets, command operands, and `cd` targets so an absolute drive path resolves
+  the same way everywhere (otherwise `cat /c/x` resolves `\c\x` against the current drive
+  and becomes `C:\c\x`). Paths with no drive component (`/home/x`) are left alone.
+
+  This is **opt-in**: it fires only under `PSBASH_UNIX_PATHS=1`, set by the Shell layer
+  from `--unix-paths`. Off by default so direct ps-bash users don't get surprise rewrites;
+  **on for wrappers** (Claude Code, OpenCode) that emit unix-shaped paths assuming a POSIX
+  filesystem. It is the first thing to check when an operand path "isn't there" — and note
+  the rewrite targets the **Windows** filesystem, so a path meant to be consumed inside a
+  WSL distro is broken by it.
 
 ### `EmitSimpleVar`
 

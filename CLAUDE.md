@@ -17,6 +17,40 @@ bash input → BashLexer → BashParser → PsEmitter → IpcWorker → ps-bash-
 
 The emitter maps command names (e.g., `head` → `Invoke-BashHead`) and forwards all arguments unchanged. The runtime functions handle all flag parsing. Never translate bash flags to PowerShell parameters in the emitter.
 
+## The Bash tool IS ps-bash (dogfood)
+
+The Bash tool runs `~/.local/bin/ps-bash.exe` — the **installed release, not your build**
+(`BASH_VERSION` reports `0.8.0(1)-release`). Consequences:
+
+- **It is not WSL and not Git Bash.** `$PATH` is a native Windows path string
+  (`C:\...;C:\...`), never `/mingw64/bin`. Anything installed only inside the distro
+  (docker, `wslpath`, `cygpath`) is absent — reach it via `wsl.exe -d Ubuntu-24.04`,
+  not the Bash tool.
+- **`PSBASH_UNIX_PATHS=1` is set by the wrapper**, so `/c/…` and `/mnt/c/…` operands are
+  rewritten to `C:\…` before any cmdlet sees them (`PsEmitter.TryTranslateMsysDrivePath`
+  → `WindowsPath.TryMapUnixDrivePath`). Paths with no drive component (`/home/x`) are NOT
+  rewritten. Correct for Windows-side tools; wrong if the path is meant to be consumed
+  *inside* the distro.
+- **cwd persists across Bash-tool calls and is tracked separately from the PowerShell
+  tool's cwd.** A relative path built under one and used in the other resolves wrong — and
+  `git log -- <bad path>` returns empty rather than erroring, so it reads as "no history".
+  Use absolute paths when crossing tools.
+- **For `wsl.exe -- bash -lc "…"`, invoke from the Bash tool, not PowerShell.** PowerShell
+  interpolates `$VAR` inside double quotes and leaves a bare `\`, producing
+  `line N: \: command not found`. ps-bash passes `\$` through correctly. Prefer
+  single-quoted `-lc '…'` either way.
+
+### Before reporting a ps-bash bug
+
+1. **Confirm against the oracle**: `wsl.exe -d Ubuntu-24.04 -- bash -c '<snippet>'`.
+   Faithful bash behavior is not a bug — e.g. `alias <missing-name>` writing
+   `alias: NAME: not found` to stderr is exactly what bash does.
+2. **Confirm the symbol/commit exists HERE**: `git cat-file -t <sha>`, `git grep <sym>`.
+   Consumer projects that embed PsBash keep their own memory; their notes are not ps-bash
+   facts.
+3. **Re-run the repro against the current build.** Several long-"known broken" items
+   (for-loop pipes, `/c/` path handling) now pass.
+
 ## Running Tests
 
 Run builds and tests through **`tman`** (config: `.tman.kdl`). Never bare `dotnet build` /
