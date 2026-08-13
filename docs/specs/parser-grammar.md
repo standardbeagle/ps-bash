@@ -36,6 +36,8 @@ Source files:
 | `DGreat`        | `>>`                 | `>>`            |
 | `LessAnd`       | `<&`                 | `<&`            |
 | `GreatAnd`      | `>&`                 | `>&`            |
+| `AmpGreat`      | `&>`                 | `&>file`        |
+| `AmpDGreat`     | `&>>`                | `&>>file`       |
 | `DLessDash`     | `<<-`                | `<<-`           |
 | `TLess`         | `<<<`                | `<<<`           |
 | `Bang`          | `!`                  | `!`             |
@@ -147,7 +149,7 @@ assignment_prefix -> ASSIGNMENT_WORD ('(' word* ')')?
 word_or_redirect  -> WORD | redirect | here_string | heredoc_operator
 
 redirect     -> IO_NUMBER? redirect_op WORD
-redirect_op  -> '<' | '>' | '>>' | '<&' | '>&' | '<<' | '<<-'
+redirect_op  -> '<' | '>' | '>>' | '<&' | '>&' | '&>' | '&>>' | '<<' | '<<-'
 here_string  -> '<<<' WORD
 heredoc_op   -> ('<<' | '<<-') DELIMITER
 ```

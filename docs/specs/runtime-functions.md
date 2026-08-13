@@ -22,9 +22,33 @@ Key layers:
 1. **PsEmitter** (C#) -- transpiles bash AST nodes into PowerShell expressions.
 2. **SdkWorker** (C#) -- owns the PowerShell runspace, imports the module, and
    evaluates transpiled expressions on behalf of the host server.
-3. **PsBash.psm1** (PowerShell) -- the runtime library providing 76 `Invoke-Bash*`
-   functions (75 commands + 1 internal helper), the BashObject model, escape handling,
-   glob expansion, and tab completion.
+3. **PsBash.Cmdlets.dll** (C#) -- **where the commands now live**: ~100 binary
+   `Invoke-Bash*` cmdlets, the compiled line-stream cores behind the fused lane,
+   `Format-Styled` / `Show-Styled`, and the shared `BashRuntime` helpers.
+4. **PsBash.psm1** (PowerShell) -- what did **not** migrate: the BashObject model,
+   escape handling, glob expansion, tab-completion registration, the jq/YAML engines,
+   `ls` formatting, the `browse` adapter registry, and the job-control commands.
+
+### Where a command actually lives (REFACTOR-2 is essentially complete)
+
+The psm1 is no longer the bulk of the runtime. Of its 88 top-level functions, only
+**six** are leaf `Invoke-Bash*` commands; every other emulated command is a binary
+cmdlet in `PsBash.Cmdlets.dll`.
+
+| Still a psm1 function | Why it did not migrate |
+|---|---|
+| `Invoke-BashBackground`, `Invoke-BashWait`, `Invoke-BashJobs`, `Invoke-BashFg`, `Invoke-BashBg` | Job control owns runspace-pool state (`Get-BashBgRunspacePool`, `$script:` job table) that a stateless cmdlet cannot hold. |
+| `Invoke-BashSed` | **A proxy, not the implementation.** `InvokeBashSedCommand` is the real sed; the psm1 function exists only to bundle repeated `-e A -e B` into one call, because the binder rejects a repeated array parameter *before* the cmdlet body runs. It has no `[CmdletBinding()]` on purpose — common parameters would prefix-match `-e` and defeat it. |
+
+A handful of cmdlets still call **back into** psm1 helpers via parameter-bound
+`InvokeScript` (`jq`/`yq` reuse the psm1 jq filter + YAML engines; `alias`/`trap` reach
+`$script:`-scoped state; `browse` uses the psm1 adapter registry). Those are delegation
+seams, not psm1 implementations of the command.
+
+Consequence for the tables that follow: **every row in
+[runtime-command-reference.md](./runtime-command-reference.md) is a binary cmdlet
+unless the row says otherwise.** An "Arg Parsing" cell reading `Manual loop` /
+`Positional` describes the *strategy* inside the cmdlet, not a psm1 function.
 
 ### Alias Architecture (Two-Tier)
 
@@ -272,7 +296,17 @@ is cleaned up. On success, the caller is responsible for cleanup.
 
 ## Adding a New Command
 
-To add a new `Invoke-Bash*` function:
+> **Default: write a binary cmdlet**, not a psm1 function — `src/PsBash.Cmdlets/InvokeBash{Name}Command.cs`,
+> using the `BashRuntime` helpers below. Reach for a psm1 function only when the command
+> needs runspace/script scope a static cmdlet cannot hold (the job-control case above).
+> Either way you still add the emitter switch case (`PsEmitter.TryEmitMappedCommand`),
+> the `Set-Alias` in the psm1, the `BashFlagSpecs.json` entry, and the reference-table row.
+> Check the colliding-flag rules in
+> [runtime-migrated-cmdlets.md](./runtime-migrated-cmdlets.md) **before** picking flag
+> letters — a bare `-e`/`-i`/`-o`/`-p`/`-w` hard-crashes the binder and `-c`/`-d`/`-v` is
+> silently swallowed.
+
+The psm1-function recipe (for the rare case that is the right answer):
 
 1. **Define the function** following the naming convention `Invoke-Bash{Name}`.
 

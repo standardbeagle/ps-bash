@@ -39,11 +39,11 @@ command uses the same `EmitPassthrough` path (a few force-quote specific collidi
 flags — `echo`, `find` — but still via `EmitPassthrough`).
 
 **Source of truth:** the `switch (name)` in `PsEmitter.TryEmitMappedCommand`
-(~99 command-name cases as of this writing). The table below is a representative
-subset for orientation and is not exhaustively kept in sync — consult the switch
-for the authoritative, current list.
+(**99 command-name cases**). The table below is the complete list as of this
+writing — `validate-specs` check 2 diffs it against the switch, so a new case
+belongs here in the same commit.
 
-### 2.1 Mapped Commands (representative subset)
+### 2.1 Mapped Commands (complete, 99 names)
 
 | Bash command | PowerShell function      |
 |--------------|--------------------------|
@@ -114,6 +114,38 @@ for the authoritative, current list.
 | `ping`       | `Invoke-BashPing`        |
 | `tracert`    | `Invoke-BashTraceroute`  |
 | `traceroute` | `Invoke-BashTraceroute`  |
+| `uname`      | `Invoke-BashUname`       |
+| `less`       | `Invoke-BashLess`        |
+| `more`       | `Invoke-BashMore`        |
+| `browse`     | `Invoke-BashBrowse`      |
+| `readlink`   | `Invoke-BashReadlink`    |
+| `mktemp`     | `Invoke-BashMktemp`      |
+| `realpath`   | `Invoke-BashRealpath`    |
+| `install`    | `Invoke-BashInstall`     |
+| `shuf`       | `Invoke-BashShuf`        |
+| `id`         | `Invoke-BashId`          |
+| `kill`       | `Invoke-BashKill`        |
+| `type`       | `Invoke-BashType`        |
+| `command`    | `Invoke-BashCommand`     |
+| `test`       | `Invoke-BashTest`        |
+| `let`        | `Invoke-BashLet`         |
+| `eval`       | `Invoke-BashEval`        |
+| `trap`       | `Invoke-BashTrap`        |
+| `unset`      | `Invoke-BashUnset`       |
+| `shift`      | `Invoke-BashShift`       |
+| `shopt`      | `Invoke-BashShopt`       |
+| `tput`       | `Invoke-BashTput`        |
+| `yes`        | `Invoke-BashYes`         |
+| `pushd`      | `Invoke-BashPushd`       |
+| `popd`       | `Invoke-BashPopd`        |
+| `dirs`       | `Invoke-BashDirs`        |
+| `mapfile`    | `Invoke-BashMapfile`     |
+| `readarray`  | `Invoke-BashMapfile`     |
+| `bash`       | `Invoke-BashBash`        |
+| `wait`       | `Invoke-BashWait`        |
+| `jobs`       | `Invoke-BashJobs`        |
+| `fg`         | `Invoke-BashFg`          |
+| `bg`         | `Invoke-BashBg`          |
 
 Commands not in this table are emitted via the general `Emit` path (i.e., they
 are not rewritten).
@@ -346,9 +378,16 @@ so mapping applies to both pipe targets and standalone invocations.
 
 ### Fused-pipeline lane (PERF phase 2)
 
+> **Where the code lives.** Detection is `Parser/FusedLane.cs` (allowlist, the
+> `PSBASH_FUSED` kill switch, the unbounded-stage guard, the inner-text builder) —
+> extracted from `PsEmitter.cs` so the emitter file stays navigable. The two
+> `[ThreadStatic]` fields the decision reads (`_captureDepth`, the
+> `FusionEnabledOverride` test seam) stay on `PsEmitter`, which is what mutates
+> them, and are **passed in** — so "when does fusion apply" has exactly one home.
+
 When **every** stage of a pipeline maps to an allowlisted line-oriented command
-(`FusePipelineAllowlist`: cat grep sed head tail wc sort uniq tr cut seq rev tac
-nl), the whole pipeline is **plain `|`** (no `|&`), has **no per-stage
+(`FusedLane.FusePipelineAllowlist`: cat grep sed head tail wc sort uniq tr cut seq
+rev tac nl), the whole pipeline is **plain `|`** (no `|&`), has **no per-stage
 redirect / heredoc / env-prefix**, is **not negated**, and is **terminal-bound**
 (`_captureDepth == 0` — not inside a command / process substitution), `EmitPipeline`
 wraps the otherwise-identical emitted text in a single call:
@@ -361,7 +400,42 @@ The runtime cmdlet runs the inner pipeline host-side and returns its output in a
 few large batched frames instead of one IPC frame per line — the phase-1
 profile's dominant bottleneck (per-output-line framing back to the launcher).
 Because the wrapper runs the **identical** inner text, byte-fidelity is guaranteed
-by construction. Any non-allowlisted / external stage, `|&`, per-stage redirect,
+by construction.
+
+#### Compiled line-stream cores (phase 2b) — the *fully compiled* lane
+
+Batching the frames (phase 2a) still ran the inner **PowerShell pipeline**: one
+`PSCustomObject` per line, plus per-stage pipeline dispatch. Phase 2b removes the
+pipeline engine from the hot path entirely. Each allowlisted command has a
+**compiled C# streaming core** — an `ILineStreamStage` (`src/PsBash.Cmdlets/LineStreamStages.cs`
++ `src/PsBash.Cmdlets/LineStream/*.cs`) that consumes `IEnumerable<string>` and
+yields `IEnumerable<string>`. No per-line object allocation, no pipeline dispatch,
+no ETS.
+
+- **Dispatch** — `LineStreamRegistry.TryCreate(name, argv, out stage)`. All 14
+  allowlisted names now have a core (S1 cat/seq/rev/head/wc/grep/sed; S2 sort/uniq
+  + the `cat FILE` producer; S3 tr/cut/tail/tac/nl), so a chain no longer declines
+  because of an *arbitrary* missing stage.
+- **Per-argv certification, not per-command.** A core accepts only the argv subset
+  whose byte-parity against the real cmdlet is proven by test; **any** argv outside
+  that subset returns `false`, and then the *whole* chain declines back to phase-2a's
+  delegate+batch fallback. Correctness always wins — the streaming lane is a pure
+  speedup for the cases it covers, never a behavior fork.
+- **Laziness buys SIGPIPE semantics for free.** When a downstream stage stops pulling
+  (`head` after N lines), the upstream generators are abandoned mid-iteration and the
+  producer stops producing — the early-exit a real pipe gets from SIGPIPE.
+  **Exception:** `sort` is a *blocking* core (it must see every line), so nothing
+  downstream of a `sort` can early-exit.
+- **Serialization is identical by construction.** The executor renders each yielded
+  string as `line + Environment.NewLine`, which is exactly how a `PsBash.TextOutput`
+  object or a bare string renders on the unfused path
+  (`InvokeBashFusedPipelineCommand.RenderItem`).
+- **Exit codes.** Each stage exposes `ExitCode` valid after full enumeration (grep
+  sets 1 on no-match); the executor propagates only the **last** stage's code to
+  `$global:LASTEXITCODE`, matching an unfused pipe.
+- **Guard** — the fused-vs-unfused parity tests
+  (`src/PsBash.Cmdlets.Tests/LineStream*ParityTests.cs`, `LineStreamParityHarness`)
+  are what keep the two lanes byte-identical. Any non-allowlisted / external stage, `|&`, per-stage redirect,
 env-prefix, negation, or capture context keeps today's PowerShell-pipeline path.
 
 **Unbounded-stage guard (`StageIsUnbounded`).** The fused cmdlet runs the inner

@@ -40,9 +40,10 @@ This document provides a high-level overview of the ps-bash interactive shell ar
 │  │  ┌──────────────────────────────────────────────────────────────────────┐  │   │
 │  │  │  ps-bash-host process (IPC protocol)                                  │  │   │
 │  │  │                                                                        │  │   │
-│  │  │  Embedded: PsBash.psm1 runtime module                                  │  │   │
-│  │  │    ├── 76 Invoke-Bash* functions                                      │  │   │
-│  │  │    ├── BashObject model (BashText pipeline)                           │  │   │
+│  │  │  Embedded: PsBash.Cmdlets.dll + PsBash.psm1                            │  │   │
+│  │  │    ├── ~100 binary Invoke-Bash* cmdlets (the commands)                │  │   │
+│  │  │    ├── compiled line-stream cores (fused-pipeline lane)               │  │   │
+│  │  │    ├── psm1: BashObject model, glob, jq/YAML, job control             │  │   │
 │  │  │    └── $script:BashFlagSpecs (completion data)                        │  │   │
 │  │  └──────────────────────────────────────────────────────────────────────┘  │   │
 │  └─────────────────────────────────────────────────────────────────────────────┘   │

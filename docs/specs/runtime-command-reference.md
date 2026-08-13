@@ -1,6 +1,8 @@
 # Command Reference
 
-> Part of the [Runtime Functions Specification](./runtime-functions.md). One row per emulated command: the `Invoke-Bash*` function, key flags, arg-parsing strategy, and whether it accepts pipeline / file input. Commands implemented as binary cmdlets are documented in detail in [Migrated Binary Cmdlets](./runtime-migrated-cmdlets.md).
+> Part of the [Runtime Functions Specification](./runtime-functions.md). One row per emulated command: the `Invoke-Bash*` command, key flags, arg-parsing strategy, and whether it accepts pipeline / file input. Binary cmdlets are documented in detail in [Migrated Binary Cmdlets](./runtime-migrated-cmdlets.md).
+>
+> **Every command here is a binary cmdlet in `PsBash.Cmdlets.dll` unless its row says otherwise.** An "Arg Parsing" cell reading `Manual loop` / `Positional` / `ConvertFrom-BashArgs` names the strategy *inside* the cmdlet, not a psm1 function. The only leaf commands still implemented in `PsBash.psm1` are the job-control set (`wait`, `jobs`, `fg`, `bg`, and the internal `Invoke-BashBackground`), which needs runspace-pool state; `sed`'s psm1 function is a `-e`-bundling proxy in front of the real cmdlet. See [runtime-functions.md](./runtime-functions.md#where-a-command-actually-lives-refactor-2-is-essentially-complete).
 
 | Command | Function | Key Flags | Arg Parsing | Pipeline | File |
 |---|---|---|---|---|---|
@@ -90,7 +92,28 @@
 | more | Invoke-BashMore | `-N`, `+NUM` | Binary cmdlet (`-N` declared as `SwitchParameter N`; `+NUM` positional stays in `Arguments`. Non-interactive: emits all input lines as `PsBash.TextOutput`; the oracle's interactive paging loop is not exercised in SDK runspaces) | Yes | Yes |
 | test / `[` | Invoke-BashTest | `-e -f -d -r -w -x -s -L -h -z -n`, `= != -eq -ne -lt -le -gt -ge`, `! -a -o` | Binary cmdlet (colliding bare flags `-e` / `-d` / `-w` / `-a` / `-o` declared as `SwitchParameter`s `E` / `D` / `W` / `A` / `O` and re-injected into the operand list post-parse; rest stay in `Arguments`) | No | No |
 | read | Invoke-BashRead | `-r`, `-p`, `-a`, `-n`, `-N`, `-t`, `-s` | Binary cmdlet (`-p` declared as `string? P`, `-a` declared as `string? A`; `-r`/`-n`/`-N`/`-t`/`-s` stay in `Arguments`) | Yes | No |
+| uname | Invoke-BashUname | `-a`, `-s`, `-n`, `-r`, `-m` | Binary cmdlet (case-sensitive bundle scan; no colliding flags) | No | No |
+| readlink | Invoke-BashReadlink | `-f`, `-e`, `-m`, `-v` | Binary cmdlet (`-e` / `-v` declared as `SwitchParameter`s `E` / `V` — both collide with common parameters; `-f` / `-m` stay in `Arguments`) | No | Yes |
+| mktemp | Invoke-BashMktemp | `-d` (directory), TEMPLATE operand | Binary cmdlet (manual scan). Creates under the `ps-bash/` temp subtree | No | No |
+| install | Invoke-BashInstall | `-d`, `-D`, `-m`, `-t`, `-s`, `-v`, `-S` | Binary cmdlet (manual scan; case-sensitive `-d` vs `-D` and `-s` vs `-S`). Windows in-use-binary swap: rename-to-`.old` + `MoveFileEx` deferred delete — see [runtime-functions.md](./runtime-functions.md#install-command) | No | Yes |
+| shuf | Invoke-BashShuf | `-e` (echo args), `-i LO-HI` (range), `-n N` | Binary cmdlet (`-e` / `-i` declared as `EchoMode` / `Range` — bare `-e`/`-i` hard-crash the binder; `-n` stays in `Arguments`) | Yes | Yes |
+| kill | Invoke-BashKill | `-s SIG`, `-l`/`--list`, `--signal`, `-SIGNAME`/`-N` | Binary cmdlet (manual scan). No SIGHUP on Windows — termination maps to `Kill(entireProcessTree)` | No | No |
+| let | Invoke-BashLet | (arithmetic expressions) | Binary cmdlet (positional; delegates to the `Invoke-BashArith` Int64 evaluator). Exit 1 when the last expression evaluates to 0, per bash | No | No |
+| eval | Invoke-BashEval | `-PassThru`, `-NoLocalScope` | Binary cmdlet (positional `Source`). Re-enters the transpiler at runtime; also the site that fires `$global:__BashTrapERR` on a non-zero result | No | No |
+| bash | Invoke-BashBash | `-c CMD`, `--version` | Binary cmdlet (`-c` declared as `string? C`). Re-enters ps-bash itself rather than spawning a foreign shell — this is what makes `bash -c '…'` inside a script work | No | Yes |
+| wait | Invoke-BashWait | `%N` job number, PID | **psm1 function** (job-control state) | No | No |
+| jobs | Invoke-BashJobs | `-l`, `-p` | **psm1 function** (job-control state) | No | No |
+| fg | Invoke-BashFg | `%N` job number | **psm1 function** (job-control state). `%N` is the `[N]` from `jobs`, NOT the `$!` id | No | No |
+| bg | Invoke-BashBg | `%N` job number | **psm1 function** (job-control state) | No | No |
 | browse | Invoke-BashBrowse | `--list`, `-PassThru`, `-Inspect`, `-Select`, `-Action`, `-Exec`, `-Force` | Binary cmdlet (all long-name flags; no colliding short flags. Non-interactive list path renders typed `PsBash.BrowseRow` PSObjects via psm1 `ConvertTo-BrowseRow`; interactive TTY path hands off to psm1 `Invoke-BrowseInteractive`; optional `Out-GridView` enhancement when present and stdin is a real terminal) | Yes | No |
 
 Additional aliases: `printenv` -> `Invoke-BashEnv`, `gunzip` -> `Invoke-BashGzip`,
-`zcat` -> `Invoke-BashGzip`, `.` -> `Invoke-BashSource`.
+`zcat` -> `Invoke-BashGzip`, `.` -> `Invoke-BashSource`, `unalias` / `balias` ->
+`Invoke-BashAlias`, `readarray` -> `Invoke-BashMapfile`, `[` -> `Invoke-BashTest`,
+`tracert` -> `Invoke-BashTraceroute`, `cd` -> `Set-Location` (PowerShell's own — the
+emitter handles `cd` itself via `EmitCd`, so the alias only serves module mode).
+
+**Not bash commands** (ps-bash extensions, aliased but deliberately absent from the
+table above): `psgit` -> `Invoke-BashGit` and `gtui` -> `Invoke-BashGitTui`, the git
+porcelain / TUI. They are namespaced away from `git` on purpose — native `git` stays
+un-aliased.
