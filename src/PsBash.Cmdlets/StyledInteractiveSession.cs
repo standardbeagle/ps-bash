@@ -251,6 +251,132 @@ public static class StyledInteractiveSession
         }
     }
 
+    /// <summary>
+    /// Interactive media gallery (<c>avtui</c>): the media files under <paramref name="target"/> as a
+    /// navigable list, with single-key capture — <c>s</c> grabs a still from the middle of the focused
+    /// clip, <c>g</c> builds a demo GIF, <c>c</c> a browser-safe MP4, Enter expands a row's full probe
+    /// detail, <c>r</c> rescans, <c>q</c> quits. Same alt-screen +
+    /// <see cref="Console.ReadKey(bool)"/> loop as <see cref="RunGitStatus"/>, coloured by the
+    /// <c>av</c> sheet. Returns 0 normally, or -1 when there is no interactive terminal.
+    /// </summary>
+    public static int RunMediaGallery(string target, string? workingDir)
+    {
+        if (Console.IsInputRedirected || Console.IsOutputRedirected)
+        {
+            return -1;
+        }
+
+        var css = ResolveCss("av");
+        var registry = StylingProperties.CreateRegistry();
+        LayoutProperties.RegisterAll(registry);
+        InteractionProperties.RegisterAll(registry);
+        var stylesheet = new CssStylesheetParser(new CssSelectorLanguage(), registry).Parse(css);
+        var cascade = new Cascade(registry);
+        var projection = new SpectreProjection { TextSelector = NodeText };
+
+        var rows = Media.AvGallery.FetchMedia(target, workingDir);
+        var expanded = new HashSet<StyledNode>();
+        var focus = 0;
+        var status = $"{rows.Count} media file(s) in {target}";
+
+        List<StyledNode> BuildRows()
+        {
+            expanded.Clear();
+            var nodes = rows.Select(r =>
+            {
+                var n = new StyledNode(KindOf(r), id: null, classes: ClassesOf(r, "class")) { Source = r };
+                n.SetAttribute("Name", r.Properties["BashText"]?.Value?.ToString() ?? string.Empty);
+                return n;
+            }).ToList();
+            if (nodes.Count > 0)
+            {
+                focus = Math.Clamp(focus, 0, nodes.Count - 1);
+                nodes[focus].AddPseudoState("focused");
+            }
+
+            return nodes;
+        }
+
+        var rowNodes = BuildRows();
+        var surface = new StyledNode("Surface");
+
+        void Rebuild()
+        {
+            var children = new List<StyledNode>(rowNodes.Count * 2);
+            foreach (var row in rowNodes)
+            {
+                children.Add(row);
+                if (expanded.Contains(row))
+                {
+                    children.Add(BuildDetail(row.Source, property: null, classProperty: "class"));
+                }
+            }
+
+            surface.SetChildren(children);
+        }
+
+        try
+        {
+            Console.Write("\x1b[?1049h");
+            try { Console.CursorVisible = false; } catch { /* unsupported host */ }
+
+            while (true)
+            {
+                Rebuild();
+                var result = cascade.Compute(surface, stylesheet);
+                var frame = RenderToAnsi(projection.Project(surface, result));
+                var footer = rowNodes.Count == 0
+                    ? $"\n{status}   r rescan · q quit"
+                    : $"\n[{focus + 1}/{rowNodes.Count}] {status}\n↑↓/jk move · Enter detail · s shot · g gif · c clip · r rescan · q quit";
+                Console.Write("\x1b[2J\x1b[H" + frame + footer);
+
+                var key = Console.ReadKey(intercept: true);
+                var action = Media.AvGallery.Decide(key.Key, key.KeyChar);
+                switch (action)
+                {
+                    case Media.AvGallery.AvTuiAction.Quit:
+                        return 0;
+                    case Media.AvGallery.AvTuiAction.Down when rowNodes.Count > 0:
+                        MoveFocus(rowNodes, ref focus, +1);
+                        break;
+                    case Media.AvGallery.AvTuiAction.Up when rowNodes.Count > 0:
+                        MoveFocus(rowNodes, ref focus, -1);
+                        break;
+                    case Media.AvGallery.AvTuiAction.ToggleExpand when rowNodes.Count > 0:
+                    {
+                        var row = rowNodes[focus];
+                        if (!expanded.Remove(row)) { expanded.Add(row); row.AddPseudoState("expanded"); }
+                        else { row.RemovePseudoState("expanded"); }
+                        break;
+                    }
+                    case Media.AvGallery.AvTuiAction.Screenshot when rowNodes.Count > 0:
+                    case Media.AvGallery.AvTuiAction.Gif when rowNodes.Count > 0:
+                    case Media.AvGallery.AvTuiAction.Clip when rowNodes.Count > 0:
+                    {
+                        // An encode blocks the loop; say so before it starts, so a multi-second GIF
+                        // build does not read as a frozen terminal.
+                        Console.Write($"\n  working… ({action.ToString().ToLowerInvariant()})");
+                        var outcome = Media.AvGallery.Act(action, rowNodes[focus].Source, workingDir);
+                        status = (outcome.Ok ? "✔ " : "✘ ") + outcome.Message;
+                        rows = Media.AvGallery.FetchMedia(target, workingDir);   // the new artifact joins the list
+                        rowNodes = BuildRows();
+                        break;
+                    }
+                    case Media.AvGallery.AvTuiAction.Refresh:
+                        rows = Media.AvGallery.FetchMedia(target, workingDir);
+                        rowNodes = BuildRows();
+                        status = $"{rows.Count} media file(s) in {target}";
+                        break;
+                }
+            }
+        }
+        finally
+        {
+            Console.Write("\x1b[2J\x1b[H\x1b[?1049l");
+            try { Console.CursorVisible = true; } catch { /* unsupported host */ }
+        }
+    }
+
     private static void MoveFocus(List<StyledNode> rowNodes, ref int focus, int delta)
     {
         rowNodes[focus].RemovePseudoState("focused");

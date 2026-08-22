@@ -115,5 +115,9 @@ emitter handles `cd` itself via `EmitCd`, so the alias only serves module mode).
 
 **Not bash commands** (ps-bash extensions, aliased but deliberately absent from the
 table above): `psgit` -> `Invoke-BashGit` and `gtui` -> `Invoke-BashGitTui`, the git
-porcelain / TUI. They are namespaced away from `git` on purpose — native `git` stays
-un-aliased.
+porcelain / TUI; `psav` / `psffmpeg` -> `Invoke-BashFfmpeg` and `avtui` ->
+`Invoke-BashFfmpegTui`, the ffmpeg wrapper (probe / shot / frames / sheet / gif / clip / record,
+emitting typed `PsBash.MediaInfo` / `PsBash.MediaArtifact` objects) and its interactive media
+gallery. Both pairs are namespaced away from the tool they wrap on purpose — native `git` and
+native `ffmpeg` stay un-aliased and fully interactive; `psav raw -- <args>` reaches ffmpeg
+verbatim.

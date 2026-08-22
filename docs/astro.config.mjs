@@ -62,12 +62,15 @@ export default defineConfig({
             { label: 'Jump Anywhere: z & zi', slug: 'guides/directory-jumping' },
             { label: 'Styled Output & CSS', slug: 'guides/styled-output' },
             { label: 'Interactive TUIs', slug: 'guides/interactive-tui' },
+            { label: 'Media: psav & avtui', slug: 'commands/media' },
           ],
         },
         {
           label: 'Guides',
           items: [
             { label: 'Pipeline Cookbook', slug: 'guides/cookbook' },
+            { label: 'Build a CLI Wrapper', slug: 'guides/build-a-cli-wrapper' },
+            { label: 'Style It & Make It Interactive', slug: 'guides/build-a-styled-media-tui' },
           ],
         },
       ],

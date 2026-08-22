@@ -76,6 +76,7 @@
     <Compile Remove="StyledNode.cs" />
     <Compile Remove="StyledStyles.cs" />
     <Compile Remove="InvokeBashGitTuiCommand.cs" />
+    <Compile Remove="InvokeBashFfmpegTuiCommand.cs" />
   </ItemGroup>
 
   <ItemGroup>

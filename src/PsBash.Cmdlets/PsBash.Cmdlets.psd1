@@ -115,6 +115,13 @@ CmdletsToExport = @(
     # Interactive git-status TUI (gtui): navigate + stage/unstage via the Strata Show-Styled loop.
     # Strata-gated (compiled out without the styling cmdlets), like Show-Styled.
     'Invoke-BashGitTui',
+    # ffmpeg as task-shaped subcommands (psav): probe/shot/frames/sheet/gif/clip/record emit typed
+    # PsBash.MediaInfo / PsBash.MediaArtifact objects; `psav raw --` passes through to native ffmpeg.
+    # No Strata dependency, so it ships even without the styling cmdlets.
+    'Invoke-BashFfmpeg',
+    # Interactive media gallery (avtui): probe + capture stills/GIFs/clips via the Strata Show-Styled
+    # loop. Strata-gated (compiled out without the styling cmdlets), like Show-Styled.
+    'Invoke-BashFfmpegTui',
     # Bash arithmetic evaluator backing $(( )) / (( )). Integer (Int64) C-operator
     # semantics (** , / truncating, bitwise/shift, 1/0 comparisons & logicals,
     # ternary, bases) that PowerShell's $( ) subexpression mistranslated. Emitted

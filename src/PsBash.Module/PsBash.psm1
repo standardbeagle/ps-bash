@@ -3072,6 +3072,12 @@ Set-Alias -Name 'traceroute' -Value 'Invoke-BashTraceroute' -Force -Scope Global
 Set-Alias -Name 'psgit'      -Value 'Invoke-BashGit'        -Force -Scope Global -Option AllScope
 # gtui: interactive git-status TUI (Strata-gated; resolves only when the styling cmdlets are built).
 Set-Alias -Name 'gtui'       -Value 'Invoke-BashGitTui'     -Force -Scope Global -Option AllScope
+# psav: ffmpeg wrapper (screenshots / demo GIFs / clips / screen recordings) emitting typed objects.
+# Deliberately NOT aliased to `ffmpeg` — the native binary stays available and fully interactive.
+Set-Alias -Name 'psav'       -Value 'Invoke-BashFfmpeg'     -Force -Scope Global -Option AllScope
+Set-Alias -Name 'psffmpeg'   -Value 'Invoke-BashFfmpeg'     -Force -Scope Global -Option AllScope
+# avtui: interactive media gallery (Strata-gated; resolves only when the styling cmdlets are built).
+Set-Alias -Name 'avtui'      -Value 'Invoke-BashFfmpegTui'  -Force -Scope Global -Option AllScope
 Set-Alias -Name 'alias'    -Value 'Invoke-BashAlias'    -Force -Scope Global -Option AllScope
 Set-Alias -Name 'unalias'  -Value 'Invoke-BashAlias'    -Force -Scope Global -Option AllScope
 Set-Alias -Name 'balias'   -Value 'Invoke-BashAlias'    -Force -Scope Global -Option AllScope

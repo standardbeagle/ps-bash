@@ -1,0 +1,359 @@
+---
+title: "Build a structured CLI wrapper, from scratch"
+description: "How psav was built: turn any command-line tool into task-shaped subcommands that emit typed PowerShell objects — with pure argv builders you can unit-test even with the tool uninstalled."
+head:
+  - tag: meta
+    attrs:
+      name: keywords
+      content: wrap cli tool powershell, ffmpeg wrapper tutorial, binary cmdlet powershell, typed objects pipeline, testable process spawn, ps-bash psav
+---
+
+import { Aside, Card, CardGrid, Steps, Tabs, TabItem } from '@astrojs/starlight/components';
+
+Most CLI tools are excellent and unmemorable. You know `ffmpeg` can take a screenshot; you do not
+know, today, whether `-ss` goes before or after `-i`, and you will look it up again next month.
+
+This article builds the fix from scratch: a wrapper that speaks in **tasks** ("give me a screenshot
+at 1:30") instead of flags, and returns **objects** instead of text. The worked example is
+[`psav`](/ps-bash/commands/media/) — the ffmpeg wrapper ps-bash ships — but nothing here is about
+ffmpeg. Substitute `docker`, `kubectl`, `terraform`, `openssl`, or whatever you look up every month.
+
+<Aside type="tip" title="Follow along">
+Every file mentioned is in the ps-bash repo under `src/PsBash.Cmdlets/`. Read this with
+`Media/FfmpegPlan.cs` open in a split pane and it will go faster.
+</Aside>
+
+## The shape we are building
+
+<CardGrid>
+  <Card title="Task-shaped, not flag-shaped" icon="rocket">
+    `psav shot demo.mp4 --at 1m30s` — a verb and a want, not a filter graph.
+  </Card>
+  <Card title="Objects out, not text" icon="list-format">
+    Every result is a typed object with a `class`, so it filters, sorts, and styles.
+  </Card>
+  <Card title="Plan, then run" icon="approve-check">
+    Building the command and executing it are separate steps. That one split buys you `--dry-run`,
+    exact tests, and honest error messages.
+  </Card>
+  <Card title="Escape hatch" icon="external">
+    `psav raw -- …` passes through. Wrapping a tool must never take it away.
+  </Card>
+</CardGrid>
+
+---
+
+## Step 1 — Decide what the wrapper is *for*
+
+Before any code, write the command lines you wish existed. For a media tool the honest list was
+short:
+
+```bash
+psav probe FILE            # what is this?
+psav shot  FILE --at 1:30  # a screenshot
+psav gif   FILE --dur 6    # a demo GIF
+psav clip  FILE --from 1:05 --to 1:30
+psav record --seconds 20
+```
+
+Five verbs cover the work; everything else is `raw`. Resist adding a subcommand for a flag you have
+used once. **The wrapper's value is the subset**, not the coverage.
+
+<Aside type="caution" title="Never shadow the tool">
+Alias your wrapper to a *new* name (`psav`, `psgit`), never over `ffmpeg` or `git`. The moment a
+wrapper shadows the real binary, every unmodelled workflow becomes your bug report.
+</Aside>
+
+---
+
+## Step 2 — Parse options in a way PowerShell will not eat
+
+Here is the trap that shapes the whole design. A ps-bash cmdlet collects its arguments with:
+
+```csharp
+[Parameter(ValueFromRemainingArguments = true)]
+public string[]? Arguments { get; set; }
+```
+
+and PowerShell's binder gets first look at every token. A **single-dash** token is a parameter name:
+
+- `-i` collides with nothing and *hard-crashes* the binder as an ambiguous parameter,
+- `-o` prefix-matches the common parameters `-OutVariable` / `-OutBuffer` and is **silently
+  swallowed**,
+- `-c`, `-d`, `-v` behave the same way.
+
+A **double-dash** token is parsed as the parameter name `-out` — with the dash still in it. No real
+parameter name contains a dash, so it matches nothing and lands in `Arguments` intact.
+
+> **Rule: a wrapper cmdlet speaks long flags.** `--at`, `--out`, `--fps`. Not `-i`, `-t`, `-o`.
+
+The parser itself is ordinary (`Media/AvOptions.cs`): first non-option token is the subcommand,
+`--name value` and `--name=value` both work, a known switch never consumes the next token, and a
+literal `--` sends the rest to passthrough.
+
+```csharp
+public static AvOptions Parse(IReadOnlyList<string> args)
+{
+    var subcommand = args.Count > 0 && !args[0].StartsWith('-') ? args[0].ToLowerInvariant() : "";
+    // …then: "--" → passthrough, "--name=value" → split, switch → flag, else consume next token
+}
+```
+
+Two decisions worth copying:
+
+**Switches are declared, not inferred.** `--dry-run clip.mp4` must not eat `clip.mp4` as the value
+of `--dry-run`. A `HashSet` of switch names is all it takes, and it is the difference between a flag
+that works and one that silently steals your filename.
+
+**A value flag with no value is an error, not a shrug.** `--fps` at the end of the line sets
+`UnknownOption`, and the cmdlet fails with exit 2. Silently defaulting to 12 fps would be worse than
+crashing.
+
+---
+
+## Step 3 — Separate the *plan* from the *run*
+
+This is the step that makes everything else possible.
+
+A plan is a small record: the tool, the exact argv, what it will produce, and how long it may take.
+
+```csharp
+internal sealed record AvPlan(
+    string Tool,
+    IReadOnlyList<string> Arguments,
+    string Kind,
+    string? OutputPath = null,
+    double? At = null,
+    TimeSpan? Timeout = null)
+{
+    public string CommandLine => Tool + " " + string.Join(" ", Arguments.Select(Quote));
+}
+```
+
+And every subcommand is a **pure function** from options to a plan. No process, no filesystem:
+
+```csharp
+public static AvPlan Shot(string input, double at, string output, int width = 0)
+{
+    var args = new List<string>(Common) { "-ss", AvTime.Format(at), "-i", input };
+    AddVideoFilter(args, ScaleFilter(width, evenHeight: false));
+    args.Add("-frames:v"); args.Add("1"); args.Add(output);
+    return new AvPlan("ffmpeg", args, "screenshot", output, at);
+}
+```
+
+You get three things for the price of one split:
+
+1. **`--dry-run` for free.** Print `plan.CommandLine` and return. It is *the same* command, not a
+   reconstruction, so it cannot drift from what runs.
+2. **Tests with the tool uninstalled.** `FfmpegPlan.Shot(…)` is a function call. The entire
+   ffmpeg-knowledge surface is assertable on a machine that has never had ffmpeg on it.
+3. **A place to put the hard-won knowledge.** Every non-obvious flag gets a comment at the one site
+   that emits it — which is the only documentation that survives a refactor.
+
+<Aside type="note" title="What hard-won knowledge looks like">
+The three comments that pay for the whole file:
+
+- **`-ss` before `-i`.** Input seeking jumps to a keyframe instead of decoding from the start — a
+  screenshot from an hour-long recording in 0.1s instead of 20s.
+- **`scale=W:-2`, not `-1`.** libx264 rejects odd dimensions; `-2` rounds the auto height to even.
+  `-1` is fine for PNG, fatal for MP4.
+- **The palette route for GIFs.** `split` + `palettegen` + `paletteuse` in one graph, instead of
+  ffmpeg's fixed web palette.
+</Aside>
+
+---
+
+## Step 4 — Normalise the human inputs
+
+Users type `90s`, `1:30`, `00:01:30.000`, and `1m30s` and mean the same thing. Tools accept a subset.
+Put the conversion in one pure helper (`Media/AvTime.cs`) and normalise **once, at the edge**:
+
+```csharp
+AvTime.TryParse("1m30s", out var seconds);   // 90
+AvTime.Format(90);                           // "00:01:30.000"  ← the only shape ffmpeg ever sees
+```
+
+Then make it defensive where it matters: `Format(-4)` returns `00:00:00.000`, because a negative
+seek is an argv the tool rejects outright and there is no useful behaviour on the other side of that
+error.
+
+---
+
+## Step 5 — Emit objects, not lines
+
+A wrapper that prints text has thrown away the thing PowerShell is good at. Every result gets a
+type name, real properties, a `class` for styling, and a `BashText` line so it still *reads* like a
+native tool in a pipe:
+
+```csharp
+var o = new PSObject();
+o.TypeNames.Insert(0, "PsBash.MediaInfo");
+o.Properties.Add(new PSNoteProperty("Duration", 12.5));
+o.Properties.Add(new PSNoteProperty("Width", 1920));
+o.Properties.Add(new PSNoteProperty("class", "video"));      // the styling hook
+o.Properties.Add(new PSNoteProperty("BashText", "demo.mp4  12.5s  h264 1920x1080  1 MB"));
+SetColumns(o, "Name", "Length", "Video", "Width", "Height", "Fps", "SizeText");
+```
+
+`SetColumns` declares a `DefaultDisplayPropertySet`, which is what stops a fifteen-property object
+from vomiting fifteen columns at the terminal. Pick the six a person actually wants.
+
+### Where the properties come from
+
+Most tools have a machine-readable mode hiding behind a flag. Find it before you write a parser:
+`ffprobe -print_format json`, `docker inspect --format '{{json .}}'`, `kubectl -o json`,
+`git status --porcelain`. Then parse it in a pure function against captured fixtures:
+
+```csharp
+public static MediaSummary? Parse(string path, string? json) { … }
+```
+
+Two habits worth stealing from `Media/FfprobeReport.cs`:
+
+- **Return `null`, never a row of zeroes.** Unparseable input is a real error the caller should
+  report, not a media file with duration 0 that quietly poisons a `Measure-Object`.
+- **Respect the tool's own encoding.** ffprobe reports frame rate as the exact rational
+  `30000/1001`. Parsing it as an int gives 30; dividing gives the true 29.97. Whatever your tool
+  does with rationals, durations, or "N/A", handle it once, here.
+
+---
+
+## Step 6 — Spawn safely
+
+The host runspace is single-threaded. A child that hangs — or that fills a pipe buffer while you
+drain only one stream — wedges it forever. ps-bash has exactly one blessed spawn:
+
+```csharp
+BashRuntime.RunChildProcess(startInfo, plan.Timeout);
+```
+
+which drains stdout and stderr **concurrently**, bounds the wait, and on timeout kills the
+**entire process tree** and returns exit 124. Never hand-roll `Process.Start` for a buffered
+command.
+
+The one place a wrapper must think about this is a subcommand that legitimately runs long:
+
+```csharp
+// A screen grab runs for its full wall-clock duration; give the spawn budget real headroom
+// on top of it or the kill-tree timeout truncates the recording.
+return new AvPlan("ffmpeg", args, "recording", output, Timeout: TimeSpan.FromSeconds(seconds + 60));
+```
+
+And the one error worth special-casing is a missing binary, because it is the only failure with an
+obvious fix:
+
+```csharp
+catch (System.ComponentModel.Win32Exception)
+{
+    Fail($"psav: {plan.Tool} is not on PATH. Install it: " +
+         "winget install Gyan.FFmpeg  |  brew install ffmpeg  |  apt install ffmpeg", 127);
+}
+```
+
+---
+
+## Step 7 — Test the knowledge, not the tool
+
+Here is the payoff of Step 3. These tests are fast, deterministic, and pass on a machine with no
+ffmpeg installed — including in CI:
+
+```csharp
+[Fact]
+public void Shot_SeeksBeforeTheInputSoAGrabIsFastNotAFullDecode()
+{
+    var plan = FfmpegPlan.Shot("in.mp4", 5, "out.png");
+
+    var ss = plan.Arguments.ToList().IndexOf("-ss");
+    var i  = plan.Arguments.ToList().IndexOf("-i");
+    Assert.True(ss >= 0 && i > ss, "the seek must precede -i (input seeking)");
+}
+
+[Fact]
+public void Clip_ProducesABrowserPlayableMp4()
+{
+    var plan = FfmpegPlan.Clip("in.mov", null, 10, 1280, 22, mute: true, "out.mp4");
+
+    Assert.Contains("yuv420p", plan.Arguments);      // plays in a browser, not just VLC
+    Assert.Contains("+faststart", plan.Arguments);
+    Assert.Equal("scale=1280:-2", …);                // libx264 rejects an odd height
+}
+```
+
+Each one encodes a *reason*, not a string. If someone "simplifies" `-2` back to `-1`, the test that
+fails tells them why it was `-2`.
+
+Then test the cmdlet end to end through `--dry-run`, which still spawns nothing:
+
+```csharp
+var rows = Run($"Invoke-BashFfmpeg gif '{file}' --from 2 --dur 5 --fps 20 --dry-run");
+Assert.Equal("planned", Prop(rows[0], "Status"));
+Assert.Contains("palettegen", Prop(rows[0], "Command"));
+```
+
+That single test proves the option parser, the plan builder, the object projection, **and** that
+PowerShell's binder let `--dry-run` through — the one risk that no unit test can cover.
+
+<Aside type="tip" title="The bug this design caught">
+The first smoke run of `psav shot clip.mp4 --count 2 --dry-run` planned **two identical output
+paths**. When the duration cannot be probed, every sample point collapses to 0 — so a 6-shot run
+would have silently overwritten its own output five times. Two fixes landed with regression tests:
+an index in the default filename so collision is impossible, and a hard error telling you to use
+`--at` when the duration is unknown. The plan/run split is what made that visible *before* anything
+was written to disk.
+</Aside>
+
+---
+
+## Step 8 — Wire it up
+
+Six edits, all mechanical:
+
+<Steps>
+
+1. **The cmdlet** — `src/PsBash.Cmdlets/InvokeBashFfmpegCommand.cs`, `[Cmdlet(VerbsLifecycle.Invoke, "BashFfmpeg")]`.
+
+2. **Export it** — add `'Invoke-BashFfmpeg'` to `CmdletsToExport` in `PsBash.Cmdlets.psd1`.
+
+3. **Alias it** — in `PsBash.psm1`, next to the other non-bash tools:
+
+   ```powershell
+   Set-Alias -Name 'psav' -Value 'Invoke-BashFfmpeg' -Force -Scope Global -Option AllScope
+   ```
+
+4. **Declare the alias** — add `'psav'` to `AliasesToExport` in `PsBash.psd1`.
+
+5. **Do *not* touch the emitter.** `psav` is not a bash command, so it needs no entry in
+   `PsEmitter.TryEmitMappedCommand`. Unmapped names pass through and the alias resolves them. Only
+   real coreutils get mapped.
+
+6. **Document it** — a page under `docs/src/content/docs/commands/` and a line in `CODE_MAP.md`.
+
+</Steps>
+
+---
+
+## The checklist
+
+Anything you wrap, in any language, should end up with:
+
+- [ ] A short verb list of the tasks you actually do — plus a `raw` passthrough.
+- [ ] Long flags only, if a shell binder gets first look at your arguments.
+- [ ] Human input normalised once, at the edge.
+- [ ] **A plan type**: pure options → argv, no side effects.
+- [ ] `--dry-run` printing that exact plan.
+- [ ] Typed objects out, with a `class` and a curated column set.
+- [ ] A bounded, kill-tree spawn — never a raw `Process.Start`.
+- [ ] `null` on unparseable input, never a fabricated row.
+- [ ] Tests that assert the *reasons*, and pass with the tool uninstalled.
+
+---
+
+## Next
+
+The wrapper emits objects with a `class`. That is already everything the styling engine needs —
+Part 2 turns it into colour and an interactive gallery in about eighty lines:
+
+<Card title="Part 2 — Style it and make it interactive" icon="seti:css">
+  [Build a styled, interactive media browser](/ps-bash/guides/build-a-styled-media-tui/)
+</Card>

@@ -33,6 +33,7 @@
 
   <ItemGroup Condition="'$(UseStrata)' != 'true'">
     <Compile Remove="FormatStyledCommandTests.cs" />
+    <Compile Remove="MediaStyleSheetTests.cs" />
   </ItemGroup>
 
   <ItemGroup>

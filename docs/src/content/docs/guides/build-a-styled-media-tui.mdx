@@ -1,0 +1,337 @@
+---
+title: "Style it and make it interactive"
+description: "Part 2 of building psav: give your typed objects a CSS stylesheet, auto-select it by object kind, and turn the list into a full-screen interactive gallery with single-key actions."
+head:
+  - tag: meta
+    attrs:
+      name: keywords
+      content: terminal css powershell, strata cascade, build terminal ui dotnet, show-styled, interactive tui cmdlet, ps-bash avtui
+---
+
+import { Aside, Card, CardGrid, Steps, Tabs, TabItem } from '@astrojs/starlight/components';
+
+[Part 1](/ps-bash/guides/build-a-cli-wrapper/) ended with a wrapper that emits typed objects
+carrying a `class` property. That is already the whole contract the styling engine needs. This part
+spends it twice: once on a **stylesheet** (about thirty lines of CSS) and once on a **full-screen
+interactive gallery** (about eighty lines of C#).
+
+```bash
+psav probe *.mp4 | Format-Styled     # coloured by media kind
+psav probe *.mp4 | Show-Styled       # navigable, expandable
+avtui                                 # the gallery: browse, then s / g / c to capture
+```
+
+---
+
+## The contract, restated
+
+`Format-Styled` and `Show-Styled` treat each object as a tiny DOM node and run a real CSS cascade
+over it ([Strata](/ps-bash/guides/styled-output/)). Three selectors match:
+
+| Selector | Matches |
+|----------|---------|
+| `Kind { … }` | the object's first type name, namespace stripped — `PsBash.MediaInfo` → `MediaInfo` |
+| `#id { … }` | its `Id`, then `Name` |
+| `.class { … }` | labels from its `class` property (space-separated) |
+
+So the entire styling API for a wrapper is: **pick good type names, and put a good `class` on every
+object.** Part 1 already did both:
+
+```csharp
+o.TypeNames.Insert(0, "PsBash.MediaInfo");
+o.Properties.Add(new PSNoteProperty("class", "video"));    // video · audio · image · unknown
+```
+
+---
+
+## Step 1 — Design the class vocabulary before the CSS
+
+This is the only design decision that matters, and it is not a colour decision.
+
+A wrapper naturally has **two** independent vocabularies, and conflating them produces a stylesheet
+nobody can reason about:
+
+| Vocabulary | Answers | Values |
+|------------|---------|--------|
+| **what the thing is** | what kind of media? | `video` `audio` `image` `unknown` |
+| **how the run went** | did the encode work? | `ok` `failed` `planned` |
+
+They never appear on the same object — `MediaInfo` rows carry the first, `MediaArtifact` rows the
+second — so they can share one sheet without colliding.
+
+The subtle one is `planned`, the `--dry-run` state. It is tempting to leave it unstyled or to reuse
+`ok`. Both are wrong: a dry run *did nothing*, so it must read as **inert**, never as success. It
+gets gray italic, and that single rule is the difference between a dry run you trust and one you
+misread at 2am.
+
+---
+
+## Step 2 — Write the sheet
+
+Built-in sheets live in `src/PsBash.Cmdlets/styles/<name>.pcss` and are embedded into the DLL by one
+glob already in the csproj — adding a file is the whole registration step.
+
+<Aside type="note">
+`.pcss` marks the ps-bash dialect: CSS-like, but with Strata **Kind** selectors and `command:`
+bindings instead of a browser DOM.
+</Aside>
+
+```css
+/* av — media files and the artifacts psav produces. */
+
+MediaInfo     { color: white }
+MediaArtifact { color: white }
+
+/* Media kind: what the file IS. */
+.video   { color: brightcyan }
+.audio   { color: brightmagenta }
+.image   { color: brightgreen }
+.unknown { color: gray }
+
+/* Run state: how the produce-a-file step WENT. */
+.ok      { color: brightgreen }
+.failed  { color: brightred; font-weight: bold }
+.planned { color: gray; font-style: italic }
+
+/* Expandable detail + focus cursor — shared with every other sheet. */
+Detail      { color: gray }
+Detail .key { color: cyan }
+:expanded > Detail { color: white }
+
+:focused { color: black; background: brightcyan }
+Surface {
+    command: "navigate-down" when "key.ArrowDown";
+    command: "navigate-up"   when "key.ArrowUp";
+    command: "navigate-down" when "key.j";
+    command: "navigate-up"   when "key.k";
+    command: "toggle-expand" when "key.Enter";
+}
+```
+
+Three conventions worth copying from the existing sheets:
+
+- **Style the Kind neutrally, the class semantically.** `MediaInfo { color: white }` is a baseline;
+  every meaningful colour comes from a class. That keeps the sheet readable and lets a user override
+  one class without unpicking a cascade.
+- **Keep the `Detail` / `:focused` / `Surface` block identical across sheets.** It is the shared
+  interaction chrome. Copy it verbatim from `net.pcss` and move on.
+- **Comment the vocabulary at the top of the file.** The person reading the sheet is trying to learn
+  what classes exist. Tell them there.
+
+---
+
+## Step 3 — Auto-select the sheet by object kind
+
+`Show-Styled` with no argument picks a sheet from the first row's kind. One line in
+`StyledStyles.AutoStyleForKind`:
+
+```csharp
+public static string AutoStyleForKind(string kind) => kind switch
+{
+    "FileInfo" or "DirectoryInfo" => "fs",
+    "Process" or "Service"        => "procsvc",
+    "PingReply" or "TraceHop"     => "net",
+    "MediaInfo" or "MediaArtifact" => "av",     // ← new
+    _ => "object",
+};
+```
+
+Now `psav probe *.mp4 | Show-Styled` is styled with zero ceremony, and so is
+`PSBASH_DEFAULT_FORMAT=interactive; psav probe demo.mp4`.
+
+Guard it with a test — it is a switch arm, which is exactly the kind of thing a refactor drops:
+
+```csharp
+[Theory]
+[InlineData("MediaInfo")]
+[InlineData("MediaArtifact")]
+internal void MediaKinds_AutoSelectTheAvSheet(string kind)
+    => Assert.Equal("av", StyledStyles.AutoStyleForKind(kind));
+```
+
+### User overrides come free
+
+`StyledStyles.Resolve` loads the embedded sheet **then appends** any `av.pcss` found in
+`$PSBASH_STYLE_PATH` or `~/.config/ps-bash/styles/`. Later rules win, so a user retheming one class
+does not have to fork your sheet:
+
+```css
+/* ~/.config/ps-bash/styles/av.pcss */
+.video { color: brightyellow }
+```
+
+You do not implement this. You get it by putting the sheet in the right place.
+
+---
+
+## Step 4 — The interactive gallery
+
+`Show-Styled` already gives you navigation and expansion for free. You write your own loop when the
+list needs **actions** — here, "take a screenshot of the thing I am looking at".
+
+The proven pattern in this codebase (`StyledInteractiveSession`) is deliberately **not** a TUI
+framework:
+
+```text
+alt-screen on
+  loop:
+    rebuild the node tree     (rows, plus a Detail block under each expanded row)
+    run the Strata cascade
+    project to a Spectre frame, print it with a footer
+    Console.ReadKey(intercept: true)  →  mutate state
+alt-screen off (in a finally)
+```
+
+<Aside type="caution" title="Why not Terminal.Gui">
+Terminal.Gui v2 drives the tty through its own input loop and native termios calls, and leaves the
+host's stdin unusable after it exits — which breaks the REPL you were launched from. A
+`Console.ReadKey` loop over a Spectre frame shares the exact terminal path the line editor uses and
+exits cleanly. Pick the boring one.
+</Aside>
+
+### Split the keymap out, and test it
+
+The loop itself is untestable without a terminal. The **decisions** are not, so they live in a
+plain static class with no Strata reference at all (`Media/AvGallery.cs`):
+
+```csharp
+public static AvTuiAction Decide(ConsoleKey key, char ch) => (key, ch) switch
+{
+    (ConsoleKey.Q, _) or (ConsoleKey.Escape, _) => AvTuiAction.Quit,
+    (ConsoleKey.DownArrow, _) or (_, 'j')       => AvTuiAction.Down,
+    (ConsoleKey.UpArrow, _)   or (_, 'k')       => AvTuiAction.Up,
+    (ConsoleKey.Enter, _) or (ConsoleKey.Spacebar, _) => AvTuiAction.ToggleExpand,
+    (_, 's') => AvTuiAction.Screenshot,
+    (_, 'g') => AvTuiAction.Gif,
+    (_, 'c') => AvTuiAction.Clip,
+    (_, 'r') => AvTuiAction.Refresh,
+    _        => AvTuiAction.None,
+};
+```
+
+```csharp
+[Theory]
+[InlineData(ConsoleKey.J, 'j', AvGallery.AvTuiAction.Down)]
+[InlineData(ConsoleKey.S, 's', AvGallery.AvTuiAction.Screenshot)]
+[InlineData(ConsoleKey.X, 'x', AvGallery.AvTuiAction.None)]
+internal void Gallery_MapsKeysToActions(ConsoleKey k, char c, AvGallery.AvTuiAction expected)
+    => Assert.Equal(expected, AvGallery.Decide(k, c));
+```
+
+That is the whole testing strategy for a TUI: **pure decisions, tested; pixels, not.**
+
+### Actions reuse the wrapper, not a copy of it
+
+An action is a plan plus the same runner the cmdlet uses. `s` is four lines:
+
+```csharp
+AvTuiAction.Screenshot => FfmpegPlan.Shot(
+    path,
+    duration > 0 ? duration / 2 : 0,
+    FfmpegPlan.DefaultOutput(path, "shot", ".png", duration / 2)),
+```
+
+Because Part 1 kept plan-building free of any `PSCmdlet` dependency, the gallery gets identical
+behaviour — same filter graphs, same naming, same bounded spawn — without a second implementation
+to keep in sync.
+
+Refuse impossible actions with a *reason*, not a black frame:
+
+```csharp
+if (kind is "audio" or "unknown")
+    return new ActionResult(false, $"{Path.GetFileName(path)} has no video track");
+```
+
+### Three small manners that make it feel finished
+
+```csharp
+// 1. An encode blocks the loop; say so before it starts, so a multi-second GIF build
+//    does not read as a frozen terminal.
+Console.Write($"\n  working… ({action})");
+
+// 2. The new artifact joins the list immediately — press s, then Enter, and see the still.
+rows = AvGallery.FetchMedia(target, workingDir);
+
+// 3. Always restore the terminal, on every exit path.
+finally { Console.Write("\x1b[2J\x1b[H\x1b[?1049l"); Console.CursorVisible = true; }
+```
+
+The `finally` is not optional. A TUI that leaves the alt-screen buffer on after an exception has
+destroyed the user's shell session, and they will not thank you for the feature.
+
+---
+
+## Step 5 — Degrade honestly when there is no terminal
+
+Every interactive surface in ps-bash follows one rule: **under redirected I/O, do something useful
+and return** — never block a test, a CI job, or a pipe.
+
+```csharp
+if (Console.IsInputRedirected || Console.IsOutputRedirected)
+    return -1;   // caller prints a hint instead
+```
+
+```csharp
+if (StyledInteractiveSession.RunMediaGallery(target, cwd) < 0)
+    WriteObject(BashRuntime.NewBashObject(
+        "avtui: needs an interactive terminal. Use `psav probe *.mp4 | Format-Styled av` for a static view."));
+```
+
+The hint names the command that *does* work headless. That is the difference between an error and
+an answer.
+
+---
+
+## Step 6 — Gate it on the styling engine
+
+The styled cmdlets compile only when Strata is available (CI has no local feed), so an interactive
+cmdlet joins the same gate — one line in the csproj:
+
+```xml
+<ItemGroup Condition="'$(UseStrata)' != 'true'">
+  <Compile Remove="InvokeBashGitTuiCommand.cs" />
+  <Compile Remove="InvokeBashFfmpegTuiCommand.cs" />
+</ItemGroup>
+```
+
+Keep the **non-interactive** cmdlet ungated. `psav` ships everywhere; `avtui` ships where the
+styling engine does. Objects always flow; colour is the enhancement.
+
+---
+
+## The checklist
+
+- [ ] Two class vocabularies, named before any colour is chosen.
+- [ ] A `.pcss` in `styles/` — neutral Kind rules, semantic class rules, the shared `Detail` /
+      `:focused` / `Surface` block copied verbatim.
+- [ ] One arm in `AutoStyleForKind`, with a test.
+- [ ] User overrides: free, because the sheet is in the right directory.
+- [ ] A gallery only if the list needs **actions**; otherwise `Show-Styled` is already the answer.
+- [ ] Keymap in a pure `Decide`, unit-tested; the ReadKey loop, not.
+- [ ] Actions reuse the wrapper's plan builders — never a second implementation.
+- [ ] Progress line before a blocking action, refreshed list after it.
+- [ ] `finally` restores the terminal on every path.
+- [ ] Redirected I/O returns a hint naming the headless command.
+
+---
+
+## Where to go next
+
+<CardGrid>
+  <Card title="psav reference" icon="document">
+    Every subcommand, option, and object property.
+    [Media: psav & avtui](/ps-bash/commands/media/)
+  </Card>
+  <Card title="Styled output" icon="seti:css">
+    The full cascade, all built-in sheets, and how the engine works.
+    [Styled Output & CSS](/ps-bash/guides/styled-output/)
+  </Card>
+  <Card title="Interactive TUIs" icon="list-format">
+    The other workbench: `browse`, extended from a plain .psm1.
+    [Interactive TUIs](/ps-bash/guides/interactive-tui/)
+  </Card>
+  <Card title="Part 1" icon="rocket">
+    The wrapper itself: options, plans, typed objects, tests.
+    [Build a structured CLI wrapper](/ps-bash/guides/build-a-cli-wrapper/)
+  </Card>
+</CardGrid>

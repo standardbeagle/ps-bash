@@ -34,6 +34,11 @@ There are two complementary surfaces:
   </Card>
 </CardGrid>
 
+A third, `avtui`, is a worked example of both ideas at once: a media gallery built on the
+`Show-Styled` loop with single-key capture actions. See
+[Media: psav & avtui](/ps-bash/commands/media/), and
+[Style it and make it interactive](/ps-bash/guides/build-a-styled-media-tui/) for how it is built.
+
 <Aside type="caution">
 Both need a **real terminal**. Under redirected I/O (tests, CI, a pipe) `browse` falls back
 to a line-mode list and `Show-Styled` prints a one-line summary — they never block a

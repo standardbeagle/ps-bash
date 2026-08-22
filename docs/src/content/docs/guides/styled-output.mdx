@@ -66,7 +66,7 @@ your semantic colors always win the cascade.
 
 ## Built-in stylesheets
 
-Ten sheets ship embedded in the cmdlet. Name them with `-Style <name>`:
+Eleven sheets ship embedded in the cmdlet. Name them with `-Style <name>`:
 
 | Sheet | For | What it does |
 |-------|-----|--------------|
@@ -76,6 +76,7 @@ Ten sheets ship embedded in the cmdlet. Name them with `-Style <name>`:
 | `table` | grid structure | header bold+underline, `.primary` bold, `.num` right-aligned |
 | `list` | property lists | `.property-name` cyan+bold |
 | `net` | `ping` / `traceroute` | `.ok` under 80ms green, `.slow` under 200ms yellow, `.high` red+bold, `.timeout` strikethrough |
+| `av` | `psav` media + artifacts | `.video` cyan, `.audio` magenta, `.image` green; `.ok` green, `.failed` red+bold, `.planned` gray italic |
 | `fs` | files (interactive) | adds `open`/`cd` buttons + size/dates/attrs/acl expansion |
 | `procsvc` | processes (interactive) | adds `stop`/`restart` buttons + path/memory/threads expansion |
 | `object` | any PSObject (interactive) | `copy`/`inspect` buttons + full property list |

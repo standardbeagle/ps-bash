@@ -1,0 +1,415 @@
+---
+title: "Media: psav & avtui"
+description: "psav wraps ffmpeg as task-shaped subcommands — screenshots, contact sheets, demo GIFs, browser-safe clips, screen recordings — returning typed objects you can filter, sort, and style. avtui is the interactive media gallery."
+head:
+  - tag: meta
+    attrs:
+      name: keywords
+      content: ffmpeg wrapper powershell, ffmpeg screenshot, ffmpeg gif from video, screen recording cli, ffprobe json powershell, ps-bash psav, demo gif
+---
+
+import { Aside, Card, CardGrid, Steps, Tabs, TabItem } from '@astrojs/starlight/components';
+
+`psav` is ffmpeg with the ceremony removed. Instead of assembling a filter graph, you ask for the
+**artifact you actually want** — a screenshot, a contact sheet, a demo GIF, a trimmed clip, a screen
+recording — and get back **typed objects** carrying the exact ffmpeg command that produced them.
+
+```bash
+psav shot demo.mp4 --at 1m30s                 # one still, straight out of the middle of a talk
+psav gif demo.mp4 --from 12 --dur 6           # a palette-optimised GIF for a PR description
+psav record --seconds 20 --out feature.mp4    # record the screen while you demo the feature
+psav probe *.mp4 | Show-Styled                # every clip's vitals, in a navigable styled viewer
+avtui                                          # the interactive gallery: browse, then s / g / c to capture
+```
+
+<Aside type="note">
+`psav` needs **ffmpeg** and **ffprobe** on your `PATH`. Install with
+`winget install Gyan.FFmpeg`, `brew install ffmpeg`, or `apt install ffmpeg`. Everything except the
+actual encode — argument building, timecode parsing, output naming — runs without them, which is
+what `--dry-run` is for.
+</Aside>
+
+## Native `ffmpeg` is left alone
+
+Like [`psgit`](/ps-bash/guides/interactive-tui/), `psav` is **deliberately not aliased over
+`ffmpeg`**. The real binary stays exactly where it is, fully interactive, for everything this
+wrapper does not model. When you want it with your own arguments, `psav raw` hands them over
+untouched:
+
+```bash
+psav raw -- -i in.mov -vf "hue=s=0" -y grayscale.mp4
+```
+
+<Aside type="caution" title="Long flags only">
+`psav` speaks `--at`, `--out`, `--fps` — never `-i`, `-t`, `-o`. A single-dash token is a
+**PowerShell parameter name**: bare `-i` crashes the binder and `-o` is silently eaten by
+`-OutVariable`. A `--name` token is parsed as the parameter `-name`, matches nothing, and arrives
+intact. ffmpeg's own single-dash flags are reachable only after the `--` in `psav raw`.
+</Aside>
+
+---
+
+## Subcommands
+
+| Subcommand | Produces | Typical use |
+|------------|----------|-------------|
+| `probe FILE...` | `PsBash.MediaInfo` | What is this file? How long, how big, what codec? |
+| `shot FILE` | PNG still(s) | A screenshot for docs, a thumbnail, N stills across a clip |
+| `frames FILE` | numbered PNGs | Every Nth second, for frame-by-frame inspection |
+| `sheet FILE` | one tiled PNG | A contact sheet: the whole video at a glance |
+| `gif FILE` | animated GIF | A demo GIF for a PR, an issue, a README |
+| `clip FILE` | H.264 MP4 | A trimmed, browser-safe demo video |
+| `record` | H.264 MP4 | Record your screen while you demo something |
+| `to FILE --out X` | anything | Convert / rescale by output extension |
+| `raw -- ARGS` | whatever ffmpeg does | Passthrough |
+
+### Common options
+
+| Option | Applies to | Meaning |
+|--------|-----------|---------|
+| `--out PATH` | all producers | Output file (or, for multi-file runs, the output **directory**) |
+| `--width PX` | shot, frames, sheet, gif, clip, to | Rescale to this width, height auto |
+| `--at TIME` | shot | Grab exactly here |
+| `--from TIME` | frames, gif, clip | Start of the window |
+| `--to TIME` | frames, gif, clip | End of the window |
+| `--dur SECONDS` | frames, gif, clip | Length of the window (wins over `--to`) |
+| `--count N` | shot | N stills, evenly spread across the clip |
+| `--fps N` | frames, gif, record | Frames per second (gif default 12, record 30) |
+| `--tiles CxR` | sheet | Grid shape, default `4x3` |
+| `--crf N` | clip, record | Quality: lower is better/bigger. Default 22 (clip), 20 (record) |
+| `--mute` | clip | Drop the audio track |
+| `--seconds N` | record | Recording length, default 10 |
+| `--window TITLE` | record | Record one window instead of the whole desktop (Windows) |
+| `--display SPEC` | record | X11 display (`:0.0`) or avfoundation device index |
+| `--no-loop` | gif | Play once instead of looping forever |
+| `--dry-run` | all | Print the ffmpeg command; run nothing |
+
+### TIME accepts what you would actually type
+
+`7` · `7.5` · `1:02` · `00:01:02.500` · `90s` · `1m30s` · `1h2m3s` · `250ms`
+
+Everything is normalised to ffmpeg's canonical `HH:MM:SS.mmm` before it reaches an argument.
+
+---
+
+## `probe` — vitals as objects
+
+```bash
+psav probe demo.mp4
+```
+
+```text
+demo.mp4  12.5s  h264 1920x1080 @29.97fps  aac 2ch 48000Hz  1 MB
+```
+
+That line is the object's `BashText`, so `psav probe` pipes like a native tool. The object itself
+carries the fields:
+
+| Property | Type | Notes |
+|----------|------|-------|
+| `Path` / `Name` | `string` | Full path / filename |
+| `Format` | `string` | Container (`mov,mp4,m4a`) |
+| `Duration` | `double` | Seconds |
+| `Length` | `string` | Human form (`12.5s`, `1:07`) |
+| `Size` / `SizeText` | `long` / `string` | Bytes / `1 MB` |
+| `Bitrate` | `long` | bits per second |
+| `Video` | `string?` | Video codec, `null` for audio-only |
+| `Width` / `Height` | `int` | Pixels |
+| `Fps` | `double` | Exact — `29.97`, not `30` (ffprobe reports `30000/1001`) |
+| `Audio` | `string?` | Audio codec |
+| `Channels` / `SampleRate` | `int` | |
+| `class` | `string` | `video` · `audio` · `image` · `unknown` — the styling hook |
+
+Because they are objects, the usual pipeline works:
+
+```bash
+# Every clip over 100 MB, biggest first
+psav probe *.mp4 | Where-Object Size -gt 100MB | Sort-Object Size -Descending
+
+# Total runtime of a folder of recordings
+psav probe *.mp4 | Measure-Object Duration -Sum
+
+# Anything not 1080p
+psav probe *.mp4 | Where-Object { $_.Height -ne 1080 } | Select-Object Name, Width, Height
+```
+
+---
+
+## `shot` — screenshots
+
+```bash
+psav shot demo.mp4 --at 1m30s                    # one frame at 1:30
+psav shot demo.mp4 --at 12 --out cover.png       # explicit name
+psav shot demo.mp4 --count 6 --width 800         # six stills spread across the clip
+psav shot demo.mp4 --count 6 --out ./stills      # ...into a directory
+```
+
+Two details that matter:
+
+- **The seek goes before the input.** ffmpeg jumps to the nearest keyframe instead of decoding up to
+  that point — a screenshot from an hour-long recording lands in a fraction of a second, not twenty.
+- **`--count` needs the duration**, which `psav` gets from ffprobe. If the file cannot be probed it
+  says so and points you at `--at`, rather than quietly grabbing frame 0 six times.
+
+Default names are derived from the source, so a run never overwrites its input:
+`demo.mp4` → `demo-shot-01-00-00-12.500.png`.
+
+---
+
+## `frames` and `sheet` — the whole clip at a glance
+
+```bash
+psav frames demo.mp4 --fps 1 --out ./frames      # one PNG per second
+psav frames demo.mp4 --from 30 --dur 10 --fps 4  # 4 fps over a ten-second window
+
+psav sheet demo.mp4                              # 4x3 contact sheet
+psav sheet demo.mp4 --tiles 6x4 --width 240      # denser grid, smaller tiles
+```
+
+`sheet` derives its sampling rate from the clip's real duration, so the tiles span the whole video
+instead of the first few seconds. `frames` reports every file that landed, not just the pattern:
+
+```bash
+psav frames demo.mp4 --fps 1 | Measure-Object   # how many frames did we get?
+```
+
+---
+
+## `gif` — the demo GIF
+
+```bash
+psav gif demo.mp4                                # whole clip, 12 fps, 800px wide
+psav gif demo.mp4 --from 12 --dur 6 --fps 15     # just the interesting six seconds
+psav gif demo.mp4 --width 600 --out pr-demo.gif
+```
+
+`psav` builds GIFs the **palette** way: `palettegen` derives an optimal 256-colour table for
+*this* clip and `paletteuse` maps the frames onto it, in a single filter graph. Straight GIF
+encoding uses a fixed web palette and turns terminal gradients and antialiased text into mud. This
+is the difference between a demo GIF that looks like your terminal and one that does not.
+
+<Aside type="tip">
+GIFs get large fast. `--width 600 --fps 12` is usually the sweet spot for a PR description; drop to
+`--fps 10` before you drop resolution — motion smoothness costs less than legibility.
+</Aside>
+
+---
+
+## `clip` — a browser-safe demo video
+
+```bash
+psav clip demo.mp4 --from 1:05 --to 1:30         # trim
+psav clip demo.mp4 --width 1280 --crf 24 --mute  # rescale, compress, drop audio
+```
+
+The output is H.264 in `yuv420p` with `+faststart` — the combination that plays in a browser, in
+Slack, and in a GitHub PR body rather than only in VLC. Rescaling uses `scale=W:-2`, not `-1`,
+because libx264 rejects an odd height.
+
+---
+
+## `record` — capture the screen
+
+```bash
+psav record --seconds 20                              # 20s of the desktop
+psav record --seconds 30 --fps 24 --out feature.mp4
+psav record --seconds 15 --window "ps-bash"           # one window (Windows)
+psav record --seconds 15 --display :0.0               # a specific X display (Linux)
+```
+
+The grabber is chosen per-OS — `gdigrab` on Windows, `x11grab` on Linux, `avfoundation` on macOS —
+and the spawn budget is the recording length plus real headroom, so the bounded-wait watchdog can
+never truncate your recording.
+
+<Aside type="caution">
+Recording is the one subcommand that blocks for its full duration by design. `psav` warns you
+before it starts (silence it with `--quiet`).
+</Aside>
+
+---
+
+## Artifacts are objects too
+
+Every producing subcommand returns `PsBash.MediaArtifact` rows:
+
+| Property | Notes |
+|----------|-------|
+| `Path` / `Name` | The file that was written |
+| `Kind` | `screenshot` · `frames` · `sheet` · `gif` · `clip` · `recording` · `convert` |
+| `At` | Source timecode, when the artifact came from one |
+| `Size` / `SizeText` | How big it turned out |
+| `Elapsed` | Seconds the encode took |
+| `Status` | `ok` · `failed` · `planned` |
+| `Detail` | ffmpeg's first error line, on failure |
+| `Command` | **The exact ffmpeg invocation** |
+| `class` | Same as `Status` — the styling hook |
+
+Which makes ordinary pipeline work possible:
+
+```bash
+# Grab six stills, keep the ones big enough to be a real frame
+psav shot demo.mp4 --count 6 | Where-Object Size -gt 50KB
+
+# What did that actually run?
+psav gif demo.mp4 --dry-run | Select-Object -ExpandProperty Command
+
+# Batch a folder, then report only the failures
+ls *.mov | ForEach-Object { psav clip $_.FullName --width 1280 } |
+  Where-Object Status -eq failed | Select-Object Name, Detail
+```
+
+### `--dry-run` is the documentation
+
+Because the plan is built before anything is spawned, `--dry-run` prints the identical command that
+*would* have run — no ffmpeg required:
+
+```bash
+psav gif demo.mp4 --from 2 --dur 5 --fps 20 --dry-run |
+  Select-Object -ExpandProperty Command
+```
+
+```text
+ffmpeg -hide_banner -loglevel error -y -nostdin -ss 00:00:02.000 -t 00:00:05.000 -i demo.mp4
+  -filter_complex "fps=20,scale=800:-1:flags=lanczos,split[a][b];[a]palettegen=stats_mode=diff[p];[b][p]paletteuse=dither=bayer:bayer_scale=5"
+  -loop 0 demo-demo.gif
+```
+
+Copy it, tweak it, run it by hand. That is also how the wrapper is tested — see
+[Build a structured CLI wrapper](/ps-bash/guides/build-a-cli-wrapper/).
+
+---
+
+## Styled output: the `av` stylesheet
+
+Media objects carry a `class`, so [`Format-Styled` / `Show-Styled`](/ps-bash/guides/styled-output/)
+colour them without any extra work. The `av` sheet is **auto-selected** for `PsBash.MediaInfo` and
+`PsBash.MediaArtifact`:
+
+```bash
+psav probe *.mp4 | Format-Styled          # static, coloured by media kind
+psav probe *.mp4 | Show-Styled            # navigable; Enter expands a row
+psav shot demo.mp4 --count 4 | Format-Styled av
+```
+
+| Class | Meaning | Style |
+|-------|---------|-------|
+| `.video` | has a video stream | bright cyan |
+| `.audio` | audio only | bright magenta |
+| `.image` | a still, not a zero-length video | bright green |
+| `.unknown` | ffprobe could not classify it | gray |
+| `.ok` | artifact written | bright green |
+| `.failed` | encode failed | bright red, bold |
+| `.planned` | `--dry-run` — nothing ran | gray italic |
+
+That last distinction is the point of a dry run: a plan reads as *inert*, never as success.
+
+Override any of it by dropping your own `av.pcss` in `~/.config/ps-bash/styles/` — it is appended
+after the built-in, so later rules win:
+
+```css
+/* ~/.config/ps-bash/styles/av.pcss */
+.video  { color: brightyellow }
+.failed { color: brightred; text-decoration: underline }
+```
+
+---
+
+## `avtui` — the interactive media gallery
+
+```bash
+avtui              # the current directory
+avtui ./recordings # somewhere else
+```
+
+Every media file in the directory, probed and listed, with capture on a single keystroke:
+
+| Key | Action |
+|-----|--------|
+| `↑` `↓` / `j` `k` | Move |
+| `Enter` / `Space` | Expand the row's full probe detail |
+| `s` | Screenshot from the middle of the focused clip |
+| `g` | Demo GIF from the first 5 seconds |
+| `c` | Browser-safe MP4 from the first 10 seconds |
+| `r` | Rescan |
+| `q` / `Esc` | Quit |
+
+New artifacts join the list as soon as they are written, so `s` then `Enter` shows you the still you
+just took. Audio-only rows refuse a capture with a reason rather than producing a black frame.
+
+<Aside type="caution">
+`avtui` needs a **real terminal**. Under redirected I/O it prints a one-line hint pointing at
+`psav probe … | Format-Styled av` instead of blocking a non-interactive run — the same contract
+`browse` and `Show-Styled` follow.
+</Aside>
+
+---
+
+## Recipes
+
+<Tabs>
+<TabItem label="PR demo GIF">
+
+```bash
+# Record the feature, trim to the good part, ship a GIF
+psav record --seconds 30 --out raw.mp4
+psav gif raw.mp4 --from 4 --dur 8 --width 700 --out pr-demo.gif
+psav probe pr-demo.gif | Select-Object Name, SizeText
+```
+
+</TabItem>
+<TabItem label="Docs screenshots">
+
+```bash
+# Six evenly spaced stills at doc width, into an assets folder
+psav shot walkthrough.mp4 --count 6 --width 1200 --out ./docs/assets |
+  Select-Object Name, At, SizeText
+```
+
+</TabItem>
+<TabItem label="Triage a folder">
+
+```bash
+# What's in here, and what's oversized?
+psav probe *.mp4 | Show-Styled
+psav probe *.mp4 | Where-Object Size -gt 200MB |
+  ForEach-Object { psav clip $_.Path --width 1280 --crf 26 }
+```
+
+</TabItem>
+<TabItem label="Contact sheet index">
+
+```bash
+# One sheet per recording, all in ./index
+ls *.mp4 | ForEach-Object { psav sheet $_.FullName --tiles 5x4 --out "./index/$($_.BaseName).png" }
+```
+
+</TabItem>
+</Tabs>
+
+---
+
+## Exit codes
+
+| Code | Meaning |
+|------|---------|
+| `0` | Success |
+| `1` | Input missing / unreadable, or ffmpeg failed |
+| `2` | Usage error (unknown subcommand, option without a value, missing `--out`) |
+| `124` | The encode exceeded its wait budget and was killed (whole process tree) |
+| `127` | ffmpeg / ffprobe not on `PATH` |
+
+## Building your own
+
+`psav` is ~600 lines and nothing in it is special-cased. The two how-to articles walk through
+building the same thing from scratch for any CLI tool you use:
+
+<CardGrid>
+  <Card title="Part 1 — the wrapper" icon="seti:powershell">
+    Options, argv plans, typed objects, and tests that pass with the tool uninstalled.
+    [Build a structured CLI wrapper](/ps-bash/guides/build-a-cli-wrapper/)
+  </Card>
+  <Card title="Part 2 — the styling & TUI" icon="seti:css">
+    A stylesheet, auto-selection by object kind, and an interactive gallery.
+    [Style it and make it interactive](/ps-bash/guides/build-a-styled-media-tui/)
+  </Card>
+</CardGrid>

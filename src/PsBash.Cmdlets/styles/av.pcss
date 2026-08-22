@@ -1,0 +1,41 @@
+/* av — media files and the artifacts psav produces (screenshots, GIFs, clips, recordings).
+ *
+ * Auto-selected for PsBash.MediaInfo / PsBash.MediaArtifact objects (StyledStyles.AutoStyleForKind), so
+ *   psav probe *.mp4 | Show-Styled          and       psav shot demo.mp4 --count 4 | Format-Styled
+ * both render styled; in the interactive viewer, Enter expands a row for its full detail — for an
+ * artifact that includes `Command`, the exact ffmpeg invocation that produced the file.
+ *
+ * The cmdlet projects two class vocabularies:
+ *   media kind  — video · audio · image · unknown
+ *   run state   — ok · failed · planned (--dry-run)
+ */
+
+MediaInfo     { color: white }
+MediaArtifact { color: white }
+
+/* Media kind: what the file IS. */
+.video   { color: brightcyan }
+.audio   { color: brightmagenta }
+.image   { color: brightgreen }
+.unknown { color: gray }
+
+/* Run state: how the produce-a-file step WENT. `planned` is --dry-run — nothing ran, so it reads
+ * as inert rather than successful; that distinction is the whole point of a dry run. */
+.ok      { color: brightgreen }
+.failed  { color: brightred; font-weight: bold }
+.planned { color: gray; font-style: italic }
+
+/* Expandable detail (codec / geometry / fps / the ffmpeg command line) + focus cursor,
+ * shared with the other sheets. */
+Detail      { color: gray }
+Detail .key { color: cyan }
+:expanded > Detail { color: white }
+
+:focused { color: black; background: brightcyan }
+Surface {
+    command: "navigate-down" when "key.ArrowDown";
+    command: "navigate-up"   when "key.ArrowUp";
+    command: "navigate-down" when "key.j";
+    command: "navigate-up"   when "key.k";
+    command: "toggle-expand" when "key.Enter";
+}
