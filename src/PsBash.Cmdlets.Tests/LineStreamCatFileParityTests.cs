@@ -230,6 +230,59 @@ public class LineStreamCatFileParityTests : LineStreamParityHarness, IDisposable
         Assert.Equal(unfused, fused);
     }
 
+    /// <summary>
+    /// The THIRD instance of the same silent-wrong-file failure, from the last writer
+    /// that had it: the MODULE-MODE <c>cd</c> alias. <c>PsBash.psm1</c> aliased <c>cd</c>
+    /// straight to <c>Set-Location</c>, so <c>Import-Module PsBash</c> in a plain pwsh
+    /// moved only the PowerShell location and left <see cref="Environment.CurrentDirectory"/>
+    /// behind — <c>cd sub; cat data.txt | grep x | sort</c> then streamed the OUTER
+    /// <c>data.txt</c> at exit 0 while the unfused pipeline read <c>sub/data.txt</c>.
+    ///
+    /// <para>The exercised path is the alias and ONLY the alias: not
+    /// <c>PsEmitter.EmitCd</c> (the transpiled <c>ps-bash</c> lane, already correct) and
+    /// not <c>pushd</c> (already covered above). A test that moved both halves itself
+    /// could not fail by construction — which is how the first two gaps survived review —
+    /// so the directory move here goes through the real user-facing command.</para>
+    /// </summary>
+    [Fact]
+    public void Streamed_CatRelative_AfterModuleModeCdAlias_ByteIdenticalToUnfused()
+    {
+        var sub = Path.Combine(_dir, "sub");
+        Directory.CreateDirectory(sub);
+        // Same NAME in both dirs, different bytes — a wrong resolution cannot look right.
+        File.WriteAllText(Path.Combine(_dir, "data.txt"), "xouter2\nxouter1\n");
+        File.WriteAllText(Path.Combine(sub, "data.txt"), "xinner2\nxinner1\n");
+
+        var q = _dir.Replace("'", "''");
+        // Seed BOTH halves INSIDE the script: the harness's Reset() restores the process
+        // cwd right before each invocation, so seeding it from C# would be undone.
+        var seed = $"[System.Environment]::CurrentDirectory = '{q}'; Set-Location -LiteralPath '{q}'; ";
+        const string Cd = "cd sub; ";
+        const string Inner = "Invoke-BashCat 'data.txt' | Invoke-BashGrep x | Invoke-BashSort";
+
+        var prevEnv = Environment.CurrentDirectory;
+        try
+        {
+            var unfused = RenderScript(seed + Cd + Inner);
+            var fused = RenderScript(
+                seed + Cd
+                + "Invoke-BashFusedPipeline -Stages @(@('cat','data.txt'),@('grep','x'),@('sort')) "
+                + "-Fallback { throw 'fell back to scriptblock lane' }");
+
+            // Pin WHICH file, so a future change breaking both lanes the same way could
+            // not pass this.
+            Assert.Contains("xinner", unfused);
+            Assert.DoesNotContain("xouter", unfused);
+            Assert.Equal(unfused, fused);
+        }
+        finally
+        {
+            // `cd` leaves the process cwd inside _dir/sub; Windows cannot delete the
+            // directory tree a process is sitting in, so Dispose() would silently leak it.
+            SharedPwshFixture.RestoreProcessWorkingDirectory(prevEnv);
+        }
+    }
+
     // ── decline matrix ───────────────────────────────────────────────────────
 
     [Fact]

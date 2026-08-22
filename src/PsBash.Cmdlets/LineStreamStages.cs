@@ -49,13 +49,22 @@ public static class LineStreamRegistry
 {
     /// <summary>Commands with a streaming core in this wave. A fused pipeline streams
     /// only when EVERY stage is here AND accepts its argv.</summary>
-    public static bool TryCreate(string name, string[] argv, out ILineStreamStage stage)
+    /// <param name="resolvePath">
+    /// How a stage turns a relative FILE operand into a full path. The fused cmdlet passes
+    /// PowerShell's own resolver (<c>SessionState.Path</c>), which is what the real
+    /// <c>Invoke-Bash*</c> cmdlets use — so a stage and the cmdlet it stands in for can
+    /// never disagree about which file a relative operand names. Omitted (unit tests,
+    /// direct callers) → <see cref="Path.GetFullPath(string)"/> against the process cwd.
+    /// See <see cref="PsBash.Cmdlets.LineStream.CatFileStage"/> for the three silent
+    /// wrong-file bugs this parameter exists to end.
+    /// </param>
+    public static bool TryCreate(string name, string[] argv, out ILineStreamStage stage, Func<string, string>? resolvePath = null)
     {
         stage = null!;
         ILineStreamStage? s = name switch
         {
             "seq" => SeqStage.TryCreate(argv),
-            "cat" => CatStage.TryCreate(argv),
+            "cat" => CatStage.TryCreate(argv, resolvePath),
             "rev" => RevStage.TryCreate(argv),
             "head" => HeadStage.TryCreate(argv),
             "wc" => WcStage.TryCreate(argv),
@@ -131,7 +140,7 @@ internal sealed class CatStage : ILineStreamStage
     private CatStage() { }
     public int ExitCode => 0;
 
-    internal static ILineStreamStage? TryCreate(string[] argv)
+    internal static ILineStreamStage? TryCreate(string[] argv, Func<string, string>? resolvePath = null)
     {
         // A bare `cat` (or `cat -`, the explicit stdin marker) is a pure line
         // passthrough. `cat FILE…` is a PRODUCER — a different stage entirely.
@@ -139,7 +148,7 @@ internal sealed class CatStage : ILineStreamStage
         foreach (var a in argv)
             if (a != "-") { allStdin = false; break; }
         if (allStdin) return new CatStage();
-        return CatFileStage.TryCreate(argv);
+        return CatFileStage.TryCreate(argv, resolvePath);
     }
 
     public IEnumerable<string> Run(IEnumerable<string> input) => input;

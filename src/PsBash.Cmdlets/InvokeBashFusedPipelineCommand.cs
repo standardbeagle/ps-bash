@@ -154,10 +154,35 @@ public sealed class InvokeBashFusedPipelineCommand : PSCmdlet
             if (argv is null || argv.Length == 0) return false;
             var name = argv[0];
             var rest = argv.Length > 1 ? argv[1..] : System.Array.Empty<string>();
-            if (!LineStreamRegistry.TryCreate(name, rest, out var stage)) return false;
+            if (!LineStreamRegistry.TryCreate(name, rest, out var stage, ResolveOperandPath)) return false;
             stages.Add(stage);
         }
         return stages.Count > 0;
+    }
+
+    /// <summary>
+    /// Resolve a relative file operand exactly as the cmdlet the stage stands in for would:
+    /// through PowerShell's current location, not the process working directory.
+    /// <para>The two used to be assumed equal, upheld only by the convention that every
+    /// writer of the working directory moves BOTH halves. That convention broke three
+    /// times — <c>pushd</c>, the subshell <c>Pop-Location</c>, and the module-mode
+    /// <c>cd</c> alias — and each break was a SILENT wrong-file read at exit 0. Resolving
+    /// through <see cref="PSCmdlet.SessionState"/> makes the two agree by construction, so
+    /// a future location-moving writer cannot reintroduce the bug.</para>
+    /// <para>Falls back to the process cwd if the provider path is unavailable (a rare host
+    /// state); a stage that resolves to a missing file simply declines, so the worst case is
+    /// the fallback lane, never wrong output.</para>
+    /// </summary>
+    private string ResolveOperandPath(string operand)
+    {
+        try
+        {
+            return SessionState.Path.GetUnresolvedProviderPathFromPSPath(operand);
+        }
+        catch
+        {
+            return System.IO.Path.GetFullPath(operand);
+        }
     }
 
     /// <summary>Coerce one stage element (a PS <c>@('cmd','a','b')</c> literal) into a

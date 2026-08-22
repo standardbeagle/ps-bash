@@ -47,47 +47,41 @@ namespace PsBash.Cmdlets;
 /// and a silent one-byte corruption on every no-final-newline file.</item>
 /// </list>
 ///
-/// <para><b>Path resolution — the one assumption, and what actually upholds it.</b> The
-/// cmdlet resolves operands through
+/// <para><b>Path resolution — now structural, after failing as a convention three times.</b>
+/// The cmdlet resolves operands through
 /// <c>SessionState.Path.GetUnresolvedProviderPathFromPSPath</c> (the PowerShell current
-/// location). A stage receives no <c>PSCmdlet</c>, so a relative operand is resolved
-/// here against <see cref="Environment.CurrentDirectory"/>. Those agree everywhere the
-/// fused lane runs because every bash-level way of moving the working directory writes
-/// BOTH: <c>SdkRunspace</c> seeds the runspace location FROM <c>CurrentDirectory</c> at
-/// creation, the emitter's <c>cd</c> writes both on every change
-/// (<c>docs/specs/emitter-strategy.md</c> §4 <c>EmitCd</c>), and
-/// <c>pushd</c>/<c>popd</c> write both via
-/// <c>InvokeBashPushdCommand.SyncProcessWorkingDirectory</c>, and the emitter's SUBSHELL
-/// wrapper restores both on exit via <c>PsBuild.PopLocationRestoringProcessCwd</c>.</para>
+/// location). A stage receives no <c>PSCmdlet</c>, so <see cref="TryCreate"/> takes a
+/// <c>resolvePath</c> delegate and <c>InvokeBashFusedPipelineCommand</c> passes that same
+/// PowerShell resolver (<c>ResolveOperandPath</c>). The stage and the cmdlet it stands in
+/// for therefore name the same file BY CONSTRUCTION. Direct callers that pass nothing
+/// (unit tests) still resolve against <see cref="Environment.CurrentDirectory"/>.</para>
 ///
-/// <para><b>Those last two are not decoration, and this paragraph has been WRONG TWICE.</b>
-/// First <c>pushd</c> moved only the PowerShell location, so
-/// <c>pushd sub; cat data.txt | grep x | sort</c> streamed the PRE-<c>pushd</c> file at
-/// exit 0. Then — with these remarks already claiming the only residual gap was a caller
-/// using a bare <c>Set-Location</c> — <c>EmitSubshell</c> was found emitting
-/// <c>finally { Pop-Location }</c>, restoring only the PowerShell half, so the ORDINARY
-/// bash line <c>(cd sub); cat data.txt | grep x | sort</c> streamed <c>sub/data.txt</c>
-/// after the subshell had exited. Regression tests:
-/// <c>LineStreamCatFileParityTests.Streamed_CatRelative_AfterBashPushd_ByteIdenticalToUnfused</c>
-/// and <c>…_AfterBashSubshellCd_ByteIdenticalToUnfused</c>. Both move the working
-/// directory through REAL emitted / builtin code; a test that sets both halves itself
-/// cannot fail by construction, which is precisely how each gap survived review.</para>
+/// <para><b>Why it had to become structural.</b> This lane used to resolve against
+/// <c>CurrentDirectory</c> unconditionally, correct only as far as the convention that
+/// every writer of the working directory moves BOTH halves. That convention broke three
+/// times, and every break was a SILENT wrong-file read at exit 0:
+/// <list type="number">
+/// <item><c>pushd</c> moved only the PowerShell location, so
+/// <c>pushd sub; cat data.txt | grep x | sort</c> streamed the PRE-<c>pushd</c> file.</item>
+/// <item><c>EmitSubshell</c> emitted a bare <c>finally { Pop-Location }</c>, so the
+/// ordinary bash line <c>(cd sub); cat data.txt | grep x | sort</c> streamed
+/// <c>sub/data.txt</c> after the subshell had already exited.</item>
+/// <item>The module-mode <c>cd</c> alias in <c>PsBash.psm1</c> (aliased straight to
+/// <c>Set-Location</c>) left <c>CurrentDirectory</c> behind, so under
+/// <c>Import-Module PsBash</c> in a plain pwsh, <c>cd sub; cat data.txt | …</c> streamed
+/// the OUTER file.</item>
+/// </list>
+/// Each time, the remarks here were rewritten to claim the remaining gap was narrow; each
+/// time another writer was found. Threading the resolver in removes the whole family —
+/// a future construct that moves the PowerShell location without writing
+/// <c>CurrentDirectory</c> no longer changes which file this stage reads.</para>
 ///
-/// <para><b>What is actually true about the residual gap.</b> This lane resolves against
-/// <c>CurrentDirectory</c> and has no way to observe the PowerShell location, so it is
-/// correct exactly as far as the "both halves move together" invariant holds — and that
-/// invariant is upheld by an OPEN SET of writers (<c>SdkRunspace</c> seeding, <c>cd</c>,
-/// <c>pushd</c>/<c>popd</c>, the subshell wrapper, <c>PsBash.Shell/Program.cs</c>'s
-/// per-invocation cwd), not by anything structural. Any present or FUTURE construct that
-/// moves the PowerShell location without writing <c>CurrentDirectory</c> reintroduces the
-/// same silent wrong-file read — including a caller's bare <c>Set-Location</c>, the
-/// module-mode <c>cd</c> alias in <c>PsBash.psm1</c> (aliased straight to
-/// <c>Set-Location</c>, so <c>Import-Module PsBash</c> in a plain pwsh has the divergence
-/// today), and any new emitter or cmdlet path. Closing it structurally would mean
-/// threading the <c>PSCmdlet</c> into <c>LineStreamRegistry.TryCreate</c> so stages
-/// resolve through <c>SessionState.Path</c> like the cmdlets do; until that is done, the
-/// invariant is a convention every location-moving writer must honor, and each new one is
-/// a place this can silently break again.</para>
+/// <para>Regression tests, one per instance, in <c>LineStreamCatFileParityTests</c>:
+/// <c>Streamed_CatRelative_AfterBashPushd_ByteIdenticalToUnfused</c>,
+/// <c>…_AfterBashSubshellCd_…</c>, <c>…_AfterModuleModeCdAlias_…</c>. Each moves the
+/// working directory through REAL emitted / builtin / module code and pins WHICH file the
+/// output came from — a test that sets both halves itself cannot fail by construction,
+/// which is precisely how each gap survived review.</para>
 /// </summary>
 internal sealed class CatFileStage : ILineStreamStage
 {
@@ -112,7 +106,7 @@ internal sealed class CatFileStage : ILineStreamStage
     /// or does not end in a newline, both of which are checked HERE so the decline
     /// happens before any output is produced.
     /// </summary>
-    internal static ILineStreamStage? TryCreate(string[] argv)
+    internal static ILineStreamStage? TryCreate(string[] argv, Func<string, string>? resolvePath = null)
     {
         if (argv.Length == 0) return null;                 // bare cat: CatStage's job
 
@@ -129,9 +123,13 @@ internal sealed class CatFileStage : ILineStreamStage
             try
             {
                 // NormalizeOperandPath is the same unix→drive translation the cmdlet
-                // applies before resolving. See the class remarks for why the relative
-                // root is Environment.CurrentDirectory.
-                full = Path.GetFullPath(FileSystemHelpers.NormalizeOperandPath(raw));
+                // applies before resolving. `resolvePath` is PowerShell's own resolver
+                // when the fused cmdlet supplied one — the SAME resolution the real
+                // Invoke-BashCat performs — so the stage cannot name a different file
+                // than the cmdlet it stands in for. Without one (unit tests, direct
+                // callers) the relative root is the process cwd.
+                var normalized = FileSystemHelpers.NormalizeOperandPath(raw);
+                full = resolvePath is null ? Path.GetFullPath(normalized) : resolvePath(normalized);
             }
             catch
             {

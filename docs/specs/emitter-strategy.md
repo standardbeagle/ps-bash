@@ -412,7 +412,7 @@ pipeline engine from the hot path entirely. Each allowlisted command has a
 yields `IEnumerable<string>`. No per-line object allocation, no pipeline dispatch,
 no ETS.
 
-- **Dispatch** — `LineStreamRegistry.TryCreate(name, argv, out stage)`. All 14
+- **Dispatch** — `LineStreamRegistry.TryCreate(name, argv, out stage, resolvePath)`. All 14
   allowlisted names now have a core (S1 cat/seq/rev/head/wc/grep/sed; S2 sort/uniq
   + the `cat FILE` producer; S3 tr/cut/tail/tac/nl), so a chain no longer declines
   because of an *arbitrary* missing stage.
@@ -426,6 +426,12 @@ no ETS.
   producer stops producing — the early-exit a real pipe gets from SIGPIPE.
   **Exception:** `sort` is a *blocking* core (it must see every line), so nothing
   downstream of a `sort` can early-exit.
+- **Relative file operands resolve through PowerShell's location**, not the process cwd:
+  the fused cmdlet passes its `SessionState.Path` resolver into `TryCreate`, so a producer
+  stage (`cat FILE`) and the cmdlet it stands in for can never name different files. This
+  replaced a convention — "every writer of the working directory moves both halves" —
+  that broke three times (`pushd`, the subshell `Pop-Location`, the module-mode `cd`
+  alias), each time as a SILENT wrong-file read at exit 0. See `CatFileStage` remarks.
 - **Serialization is identical by construction.** The executor renders each yielded
   string as `line + Environment.NewLine`, which is exactly how a `PsBash.TextOutput`
   object or a bare string renders on the unfused path
