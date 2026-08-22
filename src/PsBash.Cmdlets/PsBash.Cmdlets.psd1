@@ -118,6 +118,9 @@ CmdletsToExport = @(
     # ffmpeg as task-shaped subcommands (psav): probe/shot/frames/sheet/gif/clip/record emit typed
     # PsBash.MediaInfo / PsBash.MediaArtifact objects; `psav raw --` passes through to native ffmpeg.
     # No Strata dependency, so it ships even without the styling cmdlets.
+    # Module-mode `cd`: Set-Location PLUS the process working directory, so both halves of
+    # the bash working directory move together (the psm1 alias used to drop the second).
+    'Invoke-BashCd',
     'Invoke-BashFfmpeg',
     # Interactive media gallery (avtui): probe + capture stills/GIFs/clips via the Strata Show-Styled
     # loop. Strata-gated (compiled out without the styling cmdlets), like Show-Styled.

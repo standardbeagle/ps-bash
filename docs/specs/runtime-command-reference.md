@@ -110,8 +110,12 @@
 Additional aliases: `printenv` -> `Invoke-BashEnv`, `gunzip` -> `Invoke-BashGzip`,
 `zcat` -> `Invoke-BashGzip`, `.` -> `Invoke-BashSource`, `unalias` / `balias` ->
 `Invoke-BashAlias`, `readarray` -> `Invoke-BashMapfile`, `[` -> `Invoke-BashTest`,
-`tracert` -> `Invoke-BashTraceroute`, `cd` -> `Set-Location` (PowerShell's own — the
-emitter handles `cd` itself via `EmitCd`, so the alias only serves module mode).
+`tracert` -> `Invoke-BashTraceroute`, `cd` -> `Invoke-BashCd` (module mode only — the
+emitter handles `cd` itself via `EmitCd`). `Invoke-BashCd` forwards to `Set-Location` and
+then syncs `Environment.CurrentDirectory` via
+`InvokeBashPushdCommand.SyncProcessWorkingDirectory`: the bare `Set-Location` alias it
+replaced moved only the PowerShell half of the working directory, so a relative read
+through any .NET path API resolved against the pre-`cd` directory.
 
 **Not bash commands** (ps-bash extensions, aliased but deliberately absent from the
 table above): `psgit` -> `Invoke-BashGit` and `gtui` -> `Invoke-BashGitTui`, the git

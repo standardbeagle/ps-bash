@@ -3039,7 +3039,11 @@ Set-Alias -Name 'env'      -Value 'Invoke-BashEnv'      -Force -Scope Global -Op
 Set-Alias -Name 'printenv' -Value 'Invoke-BashEnv'      -Force -Scope Global -Option AllScope
 Set-Alias -Name 'basename' -Value 'Invoke-BashBasename' -Force -Scope Global -Option AllScope
 Set-Alias -Name 'dirname'  -Value 'Invoke-BashDirname'  -Force -Scope Global -Option AllScope
-Set-Alias -Name 'cd'       -Value 'Set-Location'        -Force -Scope Global -Option AllScope
+# cd: module-mode only (the transpiler emits its own cd via EmitCd). Routed through
+# Invoke-BashCd rather than straight to Set-Location so BOTH halves of the working
+# directory move - Set-Location alone leaves Environment.CurrentDirectory behind, which
+# made relative reads resolve against the pre-cd directory. See InvokeBashCdCommand.
+Set-Alias -Name 'cd'       -Value 'Invoke-BashCd'       -Force -Scope Global -Option AllScope
 Set-Alias -Name 'pwd'      -Value 'Invoke-BashPwd'      -Force -Scope Global -Option AllScope
 Set-Alias -Name 'hostname' -Value 'Invoke-BashHostname' -Force -Scope Global -Option AllScope
 Set-Alias -Name 'whoami'   -Value 'Invoke-BashWhoami'   -Force -Scope Global -Option AllScope

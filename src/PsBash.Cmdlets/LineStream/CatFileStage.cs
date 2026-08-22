@@ -69,7 +69,8 @@ namespace PsBash.Cmdlets;
 /// <item>The module-mode <c>cd</c> alias in <c>PsBash.psm1</c> (aliased straight to
 /// <c>Set-Location</c>) left <c>CurrentDirectory</c> behind, so under
 /// <c>Import-Module PsBash</c> in a plain pwsh, <c>cd sub; cat data.txt | …</c> streamed
-/// the OUTER file.</item>
+/// the OUTER file. That alias now routes through <c>Invoke-BashCd</c>, which syncs both
+/// halves — but the lane no longer depends on it having been fixed.</item>
 /// </list>
 /// Each time, the remarks here were rewritten to claim the remaining gap was narrow; each
 /// time another writer was found. Threading the resolver in removes the whole family —
