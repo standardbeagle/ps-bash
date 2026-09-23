@@ -2,8 +2,10 @@ bin/
 obj/
 dist/
 artifacts/
-.worktrack/
-.dartai/
+# worktrack: commit the workspace binding + template manifest, ignore loop state
+.worktrack/*
+!.worktrack/mcp.json
+!.worktrack/templates.json
 *.user
 *.suo
 .vs/

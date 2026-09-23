@@ -1,0 +1,245 @@
+[
+  {
+    "name": "docs-review",
+    "description": "Documentation-only: implement (task-context) -> optional scope -> docs correctness review. No build/test - doc edits do not compile.",
+    "autoAttachOnTags": [
+      "docs-spec"
+    ],
+    "steps": [
+      {
+        "kind": "subagent",
+        "name": "implement",
+        "specJson": "{\"subagent_type\": \"worktrack-loop:worktrack-loop:task-context\", \"produces_changes\": true}",
+        "required": true,
+        "allowSkip": false,
+        "maxAttempts": 3
+      },
+      {
+        "kind": "file_scope",
+        "name": "scope-check",
+        "specJson": "{}",
+        "required": false,
+        "allowSkip": true,
+        "outcomeSchemaRef": "builtin:file_scope_eval_v1",
+        "maxAttempts": 3
+      },
+      {
+        "kind": "subagent",
+        "name": "docs-correctness-review",
+        "specJson": "{\"subagent_type\": \"worktrack-loop:worktrack-loop:review-context\"}",
+        "required": true,
+        "allowSkip": false,
+        "outcomeSchemaRef": "builtin:reviewer_verdict_v1",
+        "maxAttempts": 3
+      }
+    ]
+  },
+  {
+    "name": "high-risk",
+    "description": "ps-bash high-risk (shadows the library high-risk, whose gate ran track.sln): implement (task-context) -> required scope -> tman build -> full tman test -> review. Build/test run through tman (.tman.kdl: kill-tree, max-parallel 1, stall/max-time) - never bare dotnet build/test, which CLAUDE.md forbids.",
+    "autoAttachOnTags": [
+      "correctness",
+      "security",
+      "sync"
+    ],
+    "steps": [
+      {
+        "kind": "subagent",
+        "name": "implement",
+        "specJson": "{\"subagent_type\": \"worktrack-loop:worktrack-loop:task-context\", \"produces_changes\": true}",
+        "required": true,
+        "allowSkip": false,
+        "maxAttempts": 3
+      },
+      {
+        "kind": "file_scope",
+        "name": "scope-check",
+        "specJson": "{\"requireScope\": true}",
+        "required": true,
+        "allowSkip": false,
+        "outcomeSchemaRef": "builtin:file_scope_eval_v1",
+        "maxAttempts": 3
+      },
+      {
+        "kind": "command",
+        "name": "tman-build",
+        "specJson": "{\"argv\": [\"tman\", \"build\"], \"expect_exit\": 0, \"timeout_seconds\": 900}",
+        "required": true,
+        "allowSkip": false,
+        "outcomeSchemaRef": "builtin:command_result_v1",
+        "maxAttempts": 3
+      },
+      {
+        "kind": "command",
+        "name": "tman-test",
+        "specJson": "{\"argv\": [\"tman\", \"test\"], \"expect_exit\": 0, \"timeout_seconds\": 2700}",
+        "required": true,
+        "allowSkip": false,
+        "outcomeSchemaRef": "builtin:command_result_v1",
+        "maxAttempts": 3
+      },
+      {
+        "kind": "subagent",
+        "name": "review",
+        "specJson": "{\"subagent_type\": \"worktrack-loop:worktrack-loop:review-context\"}",
+        "required": true,
+        "allowSkip": false,
+        "outcomeSchemaRef": "builtin:reviewer_verdict_v1",
+        "maxAttempts": 3
+      }
+    ]
+  },
+  {
+    "name": "slice-default",
+    "description": "ps-bash slice (shadows the library slice-default): implement (task-context) -> scope -> tman build -> tman test -> correctness review. Build/test run through tman (.tman.kdl: kill-tree, max-parallel 1, stall/max-time) - never bare dotnet build/test, which CLAUDE.md forbids.",
+    "autoAttachOnTags": [
+      "slice"
+    ],
+    "steps": [
+      {
+        "kind": "subagent",
+        "name": "implement",
+        "specJson": "{\"subagent_type\": \"worktrack-loop:worktrack-loop:task-context\", \"produces_changes\": true}",
+        "required": true,
+        "allowSkip": false,
+        "maxAttempts": 3
+      },
+      {
+        "kind": "file_scope",
+        "name": "scope-check",
+        "specJson": "{}",
+        "required": true,
+        "allowSkip": false,
+        "outcomeSchemaRef": "builtin:file_scope_eval_v1",
+        "maxAttempts": 3
+      },
+      {
+        "kind": "command",
+        "name": "tman-build",
+        "specJson": "{\"argv\": [\"tman\", \"build\"], \"expect_exit\": 0, \"timeout_seconds\": 900}",
+        "required": true,
+        "allowSkip": false,
+        "outcomeSchemaRef": "builtin:command_result_v1",
+        "maxAttempts": 3
+      },
+      {
+        "kind": "command",
+        "name": "tman-test",
+        "specJson": "{\"argv\": [\"tman\", \"test\"], \"expect_exit\": 0, \"timeout_seconds\": 2700}",
+        "required": true,
+        "allowSkip": false,
+        "outcomeSchemaRef": "builtin:command_result_v1",
+        "maxAttempts": 3
+      },
+      {
+        "kind": "subagent",
+        "name": "correctness-review",
+        "specJson": "{\"subagent_type\": \"worktrack-loop:worktrack-loop:review-context\"}",
+        "required": true,
+        "allowSkip": false,
+        "outcomeSchemaRef": "builtin:reviewer_verdict_v1",
+        "maxAttempts": 3
+      }
+    ]
+  },
+  {
+    "name": "slice-guarded",
+    "description": "Legacy name, converted: formerly scripts/test.sh; now identical to slice-default (tman). Kept only so older attachments resolve. Build/test run through tman (.tman.kdl: kill-tree, max-parallel 1, stall/max-time) - never bare dotnet build/test, which CLAUDE.md forbids.",
+    "steps": [
+      {
+        "kind": "subagent",
+        "name": "implement",
+        "specJson": "{\"subagent_type\": \"worktrack-loop:worktrack-loop:task-context\", \"produces_changes\": true}",
+        "required": true,
+        "allowSkip": false,
+        "maxAttempts": 3
+      },
+      {
+        "kind": "file_scope",
+        "name": "scope-check",
+        "specJson": "{}",
+        "required": true,
+        "allowSkip": false,
+        "outcomeSchemaRef": "builtin:file_scope_eval_v1",
+        "maxAttempts": 3
+      },
+      {
+        "kind": "command",
+        "name": "tman-build",
+        "specJson": "{\"argv\": [\"tman\", \"build\"], \"expect_exit\": 0, \"timeout_seconds\": 900}",
+        "required": true,
+        "allowSkip": false,
+        "outcomeSchemaRef": "builtin:command_result_v1",
+        "maxAttempts": 3
+      },
+      {
+        "kind": "command",
+        "name": "tman-test",
+        "specJson": "{\"argv\": [\"tman\", \"test\"], \"expect_exit\": 0, \"timeout_seconds\": 2700}",
+        "required": true,
+        "allowSkip": false,
+        "outcomeSchemaRef": "builtin:command_result_v1",
+        "maxAttempts": 3
+      },
+      {
+        "kind": "subagent",
+        "name": "correctness-review",
+        "specJson": "{\"subagent_type\": \"worktrack-loop:worktrack-loop:review-context\"}",
+        "required": true,
+        "allowSkip": false,
+        "outcomeSchemaRef": "builtin:reviewer_verdict_v1",
+        "maxAttempts": 3
+      }
+    ]
+  },
+  {
+    "name": "slice-tman",
+    "description": "Explicit-opt-in alias of ps-bash slice-default (same gates), kept so tasks attached by name keep resolving. Build/test run through tman (.tman.kdl: kill-tree, max-parallel 1, stall/max-time) - never bare dotnet build/test, which CLAUDE.md forbids.",
+    "steps": [
+      {
+        "kind": "subagent",
+        "name": "implement",
+        "specJson": "{\"subagent_type\": \"worktrack-loop:worktrack-loop:task-context\", \"produces_changes\": true}",
+        "required": true,
+        "allowSkip": false,
+        "maxAttempts": 3
+      },
+      {
+        "kind": "file_scope",
+        "name": "scope-check",
+        "specJson": "{}",
+        "required": true,
+        "allowSkip": false,
+        "outcomeSchemaRef": "builtin:file_scope_eval_v1",
+        "maxAttempts": 3
+      },
+      {
+        "kind": "command",
+        "name": "tman-build",
+        "specJson": "{\"argv\": [\"tman\", \"build\"], \"expect_exit\": 0, \"timeout_seconds\": 900}",
+        "required": true,
+        "allowSkip": false,
+        "outcomeSchemaRef": "builtin:command_result_v1",
+        "maxAttempts": 3
+      },
+      {
+        "kind": "command",
+        "name": "tman-test",
+        "specJson": "{\"argv\": [\"tman\", \"test\"], \"expect_exit\": 0, \"timeout_seconds\": 2700}",
+        "required": true,
+        "allowSkip": false,
+        "outcomeSchemaRef": "builtin:command_result_v1",
+        "maxAttempts": 3
+      },
+      {
+        "kind": "subagent",
+        "name": "correctness-review",
+        "specJson": "{\"subagent_type\": \"worktrack-loop:worktrack-loop:review-context\"}",
+        "required": true,
+        "allowSkip": false,
+        "outcomeSchemaRef": "builtin:reviewer_verdict_v1",
+        "maxAttempts": 3
+      }
+    ]
+  }
+]
