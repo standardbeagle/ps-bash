@@ -94,7 +94,7 @@ and CI minutes evaporate fast. Rules:
    one commit before pushing.
 2. **Bookkeeping-only commits are auto-skipped** via `paths-ignore` in
    `.github/workflows/{build,ci,canary}.yml`. Paths that DO NOT trigger CI:
-   - `.dartai/**`, `.dartai-locks.json` (loop state, claims)
+   - `.worktrack/**` (workspace binding `mcp.json` + template manifest `templates.json`)
    - `docs/spikes/**`, `docs/solutions/**`
    - `**/*.md` (READMEs, changelogs, plans)
 
@@ -103,10 +103,12 @@ and CI minutes evaporate fast. Rules:
    .cs file). Default: trust `paths-ignore` and don't add `[skip ci]`.
 3. **Concurrency cancels superseded runs** — pushing a new commit cancels the
    in-progress run for the same ref. Don't push hot loops of fixup commits.
-4. **Loop driver commit pattern** (claim → work → release): the claim and release
-   commits touch only `.dartai-locks.json` and are filtered out automatically. Only
-   the work commit (which touches actual code) triggers CI. Keep it that way — do
-   not add other paths to claim/release commits.
+4. **Worktrack loop state is not in git.** Claims/leases live in the worktrack DB
+   (workspace `ps-bash`, bound by `.worktrack/mcp.json`), so the loop makes no
+   bookkeeping commits — only work commits, which touch code and trigger CI.
+   Template edits go in `.worktrack/templates.json` and are committed: the daemon
+   applies the manifest at start and on a repo's first binding, and it overwrites
+   edits made through the template verbs. `worktrack-mcp doctor` reports drift.
 
 If you're unsure whether a change needs CI, ask before pushing.
 
