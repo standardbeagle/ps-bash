@@ -40,4 +40,12 @@ public class IpcWorkerResetTests
     [Fact]
     public void IsTransportReset_GenericException_IsNotReset()
         => Assert.False(IpcWorker.IsTransportReset(new InvalidOperationException()));
+
+    // R04 (01M37WN0F4QPXGZMBH51CVHYVE): an oversized IPC frame is a protocol/data
+    // error, not a broken connection. Retrying it would re-run a no-output
+    // side-effecting command, which is exactly the double-execution observed when
+    // a >768 KB output line tripped the reader's 1 MB cap.
+    [Fact]
+    public void IsTransportReset_InvalidDataException_IsNotReset()
+        => Assert.False(IpcWorker.IsTransportReset(new System.IO.InvalidDataException("oversized frame")));
 }

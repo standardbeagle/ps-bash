@@ -51,6 +51,36 @@ public class ProgramEndToEndTests
         Assert.Contains("deliberate failure", stdout + stderr);
     }
 
+    // R04 (01M37WN0F4QPXGZMBH51CVHYVE): a single output line over the IPC frame
+    // cap used to make the reader throw IOException, which IpcWorker treated as a
+    // retryable transport reset — re-running the whole command (side effect twice)
+    // and exiting 125 with no output. The command below writes a side-effect
+    // counter AND emits one >1 MB line, so it proves both: the line round-trips
+    // and the command ran exactly once.
+    [SkippableFact]
+    public async Task Command_OutputLineOverOneMegabyte_RunsOnceAndRoundTrips()
+    {
+        var side = Path.Combine(Path.GetTempPath(), $"ps-bash-bigline-{Guid.NewGuid():N}.txt");
+        var escaped = side.Replace("\\", "/");
+        try
+        {
+            var (exitCode, stdout, stderr) = await RunShellAsync(
+                new[] { "-c", $"echo run >> '{escaped}'; printf '%0900000d\\n' 0" },
+                TimeSpan.FromSeconds(60));
+
+            Assert.Equal(0, exitCode);
+            var counter = File.ReadAllLines(side);
+            Assert.Single(counter);
+            var body = stdout.TrimEnd('\r', '\n');
+            Assert.Equal(900000, body.Length);
+            Assert.All(body.ToCharArray(), c => Assert.Equal('0', c));
+        }
+        finally
+        {
+            try { File.Delete(side); } catch { /* best effort */ }
+        }
+    }
+
     // Regression: a host that cannot start (or hangs) must surface a one-line
     // "ps-bash:" diagnostic and a defined exit code — never an unhandled-exception
     // managed stack trace with exit 82, which is what an embedding parent (the
