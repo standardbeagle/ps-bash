@@ -1,18 +1,17 @@
 {
+  "stack": "dotnet",
   "templates": [
     {
       "name": "slice-default",
       "description": "ps-bash standard slice: server-run ACP implementer -> scope disclosure -> tman build -> tman test (full suite, -m:1) -> headless claude_agent review. Claims the work-kind tags the planners here actually write (bugfix, feature, refactor, ...) and the derived tier tags t1/t2, so a task tagged only by topic still attaches through its size and scope.",
       "autoAttachOnTags": [
-        "slice",
+        "feature",
         "t1",
         "t2",
-        "bug",
         "bugfix",
-        "feature",
         "refactor",
         "docs",
-        "testing"
+        "test"
       ],
       "steps": [
         {
