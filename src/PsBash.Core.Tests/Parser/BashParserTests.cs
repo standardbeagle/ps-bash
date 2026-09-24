@@ -2312,4 +2312,60 @@ public class BashParserTests
         var forIn = Assert.IsType<Command.ForIn>(result);
         Assert.True(forIn.Redirects.IsDefaultOrEmpty);
     }
+
+    // ── leftover-token guard: a parse must end at Eof (or a caller stop token),
+    //    never silently truncate the tail after a construct the parser stops on. ──
+    // Every input below used to parse "successfully" and DROP everything after the
+    // early stop (`after` was lost, exit 0). The parser must now reject the leftover
+    // token with a located ParseException instead of returning a truncated script.
+
+    [Theory]
+    [InlineData("echo a; time { echo hi; }; echo after")]
+    [InlineData("f() { echo in; } >/dev/null; echo after")]
+    [InlineData("echo hi }; echo after")]
+    [InlineData("rm -f !(keep).txt; echo after")]
+    [InlineData("arr=(k=v other); echo after")]
+    [InlineData("export PATH 2>/dev/null; echo after")]
+    [InlineData("coproc { echo x; }; echo after")]
+    public void Parse_LeftoverTokenAfterStatement_ThrowsInsteadOfDroppingTail(string input)
+    {
+        Assert.Throws<ParseException>(() => Parse(input));
+    }
+
+    [Theory]
+    [InlineData("echo a; time { echo hi; }; echo after")]
+    [InlineData("f() { echo in; } >/dev/null; echo after")]
+    [InlineData("echo hi }; echo after")]
+    [InlineData("rm -f !(keep).txt; echo after")]
+    [InlineData("arr=(k=v other); echo after")]
+    [InlineData("export PATH 2>/dev/null; echo after")]
+    [InlineData("coproc { echo x; }; echo after")]
+    public void ParseTopLevelWithPositions_LeftoverTokenAfterStatement_ThrowsInsteadOfDroppingTail(string input)
+    {
+        // The other top-level loop (used by TranspileWithMap) must share the same
+        // end-of-input rule; the two paths must not disagree on what is a syntax error.
+        Assert.Throws<ParseException>(() => BashParser.ParseTopLevelWithPositions(input));
+    }
+
+    [Fact]
+    public void Parse_LeftoverTokenError_NamesTokenAndPosition()
+    {
+        var ex = Assert.Throws<ParseException>(() => Parse("echo hi }; echo after"));
+
+        Assert.Contains("}", ex.Message);
+        Assert.Equal(1, ex.Line);
+    }
+
+    [Fact]
+    public void Parse_BackgroundAmpersandPermitsNextCommandWithoutSeparator()
+    {
+        // A background `&` is itself a terminator: `a & b` is two statements, and the
+        // guard must not reject the command that follows the `&`.
+        var result = Parse("sleep 1 & echo done");
+
+        var list = Assert.IsType<Command.CommandList>(result);
+        Assert.Equal(2, list.Commands.Length);
+        Assert.IsType<Command.Background>(list.Commands[0]);
+        Assert.Equal(["echo", "done"], GetWordValues(Assert.IsType<Command.Simple>(list.Commands[1])));
+    }
 }
