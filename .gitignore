@@ -2,7 +2,11 @@ bin/
 obj/
 dist/
 artifacts/
-.worktrack/
+# worktrack loop state is per-clone; the workspace binding and the workflow
+# template manifest are project-owned and committed so every host drains alike
+.worktrack/*
+!.worktrack/mcp.json
+!.worktrack/templates.json
 .dartai/
 *.user
 *.suo

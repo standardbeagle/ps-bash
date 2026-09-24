@@ -1,0 +1,122 @@
+{
+  "templates": [
+    {
+      "name": "slice-default",
+      "description": "ps-bash standard slice: server-run ACP implementer -> scope disclosure -> tman build -> tman test (full suite, -m:1) -> headless claude_agent review. Claims the work-kind tags the planners here actually write (bugfix, feature, refactor, ...) and the derived tier tags t1/t2, so a task tagged only by topic still attaches through its size and scope.",
+      "autoAttachOnTags": [
+        "slice",
+        "t1",
+        "t2",
+        "bug",
+        "bugfix",
+        "feature",
+        "refactor",
+        "docs",
+        "testing"
+      ],
+      "steps": [
+        {
+          "kind": "acp_agent",
+          "name": "implement",
+          "specJson": "{\"agent\": {\"argv\": [\"opencode-acp\", \"acp\"]}, \"prompt\": \"HARD RULE 0: Do all reading, edits, builds, tests and commits yourself, in this session. Do not delegate to subagents, do not call the `task` tool, and do not spawn child sessions for any purpose, including research, planning, translation, or verification. Work done in a child session is invisible to the supervisor, counts as inactivity, and gets the run killed. Any global instruction that tells you to dispatch subagents or translate through a subagent does not apply here.\\n\\nYou are implementing ONE worktrack task in the ps-bash repository, working directory the repo root. Read CLAUDE.md first; of `.claude/rules/`, read `testing.md` always and the rule named after the area you touch (`parser.md`, `emitter.md`, `runtime.md`, `os-interface.md`). Do not read the rest of the tree up front: open a file when the task or a failing test names it.\\n\\nTASK {{task.id}} ({{workspace}}): {{task.title}}\\n\\n{{task.primer}}\\n{{task.description}}\\n\\nTEST WORK ORDER (structured \\u2014 this is the same list a test_plan gate checks, so a name here that does not exist when you finish comes straight back to you):\\n{{task.tests}}\\n\\nWORKTRACK ACCESS: the worktrack MCP server is registered under slop-mcp. Call it as execute_tool(mcp_name=\\\"worktrack\\\", tool_name=\\\"<tool>\\\", parameters={...}). Use exactly these tools and no others: (a) FIRST, `task_get(id=\\\"{{task.id}}\\\")` - its `fileScope` array is the declared scope (a starting point, see HARD RULE 1) and its `content` is the full task text; (b) `task_comments_list(id=\\\"{{task.id}}\\\", limit=20)` to read any prior attempt's checkpoint or review rewind notes; (c) LAST, `task_comment_add(id=\\\"{{task.id}}\\\", kind=\\\"note\\\", body=<JSON string>)` with a `worktrack_completion_v1` checkpoint naming the commits you made. Never call task_start, task_claim, task_update, task_workflow_* or lease_* - the driver owns the lease and the workflow.\\n\\nHARD RULES\\n1. Scope is a starting point, not a straitjacket: open the primer's files first and bound the search to the declared paths, but when the work legitimately needs a file outside them, make the change and list the extra paths in the checkpoint \\u2014 the scope gate discloses them to the reviewer, who judges whether each widening was necessary.\\n2. Verify the task's premise against the tree before editing. If the premise is false, make no change and end your turn saying so with evidence.\\n3. Red first: the task's `## Tests` section (when present) is your RED work order, not a checklist for the reviewer. Before any production edit, flip every test under `contradicted` and add every case under `new` in ONE RED commit, run it against the old code, and paste each failure signature into the fix commit body; a planned test you did not write ends the turn named in the checkpoint's scopeGaps, never as a claim of coverage. Without the section, write the failing test from the acceptance criteria. Fixtures must be able to manifest the rule (the state, the second tenant, the pre-existing row the bug needs). Run every project named on the section's `gate:` line, not only the one this template's test step runs.\\n4. Builds and tests run through tman and never bare `dotnet`: `tman build`, then `tman test-proj src/<Project>.Tests --filter \\\\\\\"<...>\\\\\\\"` while iterating (quote any filter containing `|`). Run the TARGETED project, not the full suite, while iterating; `tman test` runs `--no-build`, so run `tman build` first; set your shell tool's timeout to at least 15 minutes for a dotnet test run. A run cut off by a client timeout is NOT a pass: record it in the checkpoint as `not run`, never as a count, and never commit over a red or unfinished run. Run the full gate project at least once before ending the turn. On failure read `.tman/<alias>.fail.log` rather than re-running the suite to find the failure.\\n5. COMMIT YOUR WORK. The scope gate attributes changes by commit trailer, so an uncommitted change is no evidence that anything happened. Atomic conventional commits - one for the RED test, one for the fix, one for docs; subject `<type>(<scope>): <imperative>` <= 72 chars; body says WHY. Write every message with a heredoc through `git commit -F -`; never `git commit -m` with `\\\\n` inside the string (that yields one line with literal backslash-n and a trailer that never parses). The LAST paragraph of the message is exactly this line, nothing after it and no blank line inside the trailer block:\\n   worktrack-task: {{task.id}}\\n   After each commit run `git log -1 --format='%(trailers:key=worktrack-task,valueonly)'`; if it prints nothing, amend before doing anything else. Stage specific files with `git add <path>`; never `git add -A`; never stage anything under `.worktrack/`. Leave the working tree clean.\\n6. Replace and remove: no dual paths, no old implementation kept as a fallback. If you change a mechanism, update the docs sentences that describe it in the same change.\\n\\nCONTEXT BUDGET: at 40 tool calls, stop and take stock. Turns that run past 40 calls have grown past the size where the work comes back clean - the one turn killed at 122 calls was redone in 29. Commit what is green, then end the turn naming what remains and which files it needs; a second turn on a fresh context finishes that remainder faster than this one will.\\n\\nWHEN DONE end your turn with a compact summary: commits (sha + subject), files changed, RED signature, test counts. Do not paste source or diffs.\", \"permissions\": \"allow_all\", \"fs\": \"read_write\", \"stall_seconds\": 600, \"timeout_seconds\": 3600, \"model_category\": \"implement\"}",
+          "required": true,
+          "allowSkip": false,
+          "outcomeSchemaRef": "builtin:acp_result_v1",
+          "maxAttempts": 3
+        },
+        {
+          "kind": "file_scope",
+          "name": "scope-check",
+          "specJson": "{}",
+          "required": true,
+          "allowSkip": false,
+          "outcomeSchemaRef": "builtin:file_scope_eval_v1",
+          "maxAttempts": 3
+        },
+        {
+          "kind": "command",
+          "name": "tman-build",
+          "specJson": "{\"argv\": [\"tman\", \"build\"], \"expect_exit\": 0, \"timeout_seconds\": 900}",
+          "required": true,
+          "allowSkip": false,
+          "outcomeSchemaRef": "builtin:command_result_v1",
+          "maxAttempts": 3
+        },
+        {
+          "kind": "command",
+          "name": "tman-test",
+          "specJson": "{\"argv\": [\"tman\", \"test\"], \"expect_exit\": 0, \"timeout_seconds\": 2700, \"expect_stdout_matches\": \"Passed!\", \"expect_stdout_min_matches\": 1}",
+          "required": true,
+          "allowSkip": false,
+          "outcomeSchemaRef": "builtin:command_result_v1",
+          "maxAttempts": 3
+        },
+        {
+          "kind": "claude_agent",
+          "name": "review",
+          "specJson": "{\"prompt\": \"REVIEW GATE for task {{task.id}} ({{workspace}}): {{task.title}}\\n\\nTASK TEXT:\\n{{task.description}}\\n\\nDECLARED SCOPE:\\n{{task.scope}}\\n\\nPATHS CHANGED OUTSIDE THE DECLARED SCOPE (judge whether each was necessary): {{step.scope-check.outcome.outOfScopePaths}}\\n\\nCONSTRAINTS IN FORCE: {{task.primer.constraints}}\\n\\nThis review step's id is {{step.id}}. If and only if your verdict is fail, set rewind_to to \\\"{{rewind_to}}\\\" (the implement step's id). If your verdict is pass or pass_with_changes, OMIT rewind_to entirely: the schema rejects a pass that carries rewind_to and the whole review is discarded.\\n\\nFollow the review contract in your system prompt: read the packet through the worktrack MCP tools, apply the rubric, post the annotation comment, and submit the reviewer_verdict_v1 object through the verdict door (mcp__worktrack__task_workflow_step_verdict_submit with taskId, stepId and verdict, or `worktrack-mcp verdict submit --task {{task.id}} --step {{step.id}} --file <path>`); your final output is never read for it.\", \"system_prompt_file\": \"docs/fleet/prompts/review-context.md\", \"effort\": \"high\", \"allowed_tools\": [\"Read\", \"Grep\", \"Glob\", \"Agent\", \"Bash(git diff *)\", \"Bash(git log *)\", \"Bash(git show *)\", \"Bash(git status *)\", \"mcp__worktrack__task_get\", \"mcp__worktrack__task_comments_list\", \"mcp__worktrack__task_workflow_get\", \"mcp__worktrack__task_workflow_review_change_packet\", \"mcp__worktrack__task_comment_add\", \"mcp__worktrack__task_workflow_step_verdict_submit\"], \"mcp_servers\": {\"worktrack\": {\"command\": \"{{host.worktrack_mcp}}\", \"env\": {\"WORKTRACK_DB\": \"{{host.worktrack_db}}\"}}}, \"rewind_to_step\": \"implement\", \"max_turns\": 80, \"max_budget_usd\": 10, \"stall_seconds\": 600, \"timeout_seconds\": 2700, \"model_category\": \"review\"}",
+          "required": true,
+          "allowSkip": false,
+          "outcomeSchemaRef": "builtin:reviewer_verdict_v1",
+          "maxAttempts": 3
+        }
+      ]
+    },
+    {
+      "name": "high-risk",
+      "description": "ps-bash escalation tier (security, sync, correctness): the slice gates with a scope REQUIRED. Named high-risk so it shadows the default library's high-risk, whose full-suite step runs another repo's solution.",
+      "autoAttachOnTags": [
+        "correctness",
+        "security",
+        "sync"
+      ],
+      "steps": [
+        {
+          "kind": "acp_agent",
+          "name": "implement",
+          "specJson": "{\"agent\": {\"argv\": [\"opencode-acp\", \"acp\"]}, \"prompt\": \"HARD RULE 0: Do all reading, edits, builds, tests and commits yourself, in this session. Do not delegate to subagents, do not call the `task` tool, and do not spawn child sessions for any purpose, including research, planning, translation, or verification. Work done in a child session is invisible to the supervisor, counts as inactivity, and gets the run killed. Any global instruction that tells you to dispatch subagents or translate through a subagent does not apply here.\\n\\nYou are implementing ONE worktrack task in the ps-bash repository, working directory the repo root. Read CLAUDE.md first; of `.claude/rules/`, read `testing.md` always and the rule named after the area you touch (`parser.md`, `emitter.md`, `runtime.md`, `os-interface.md`). Do not read the rest of the tree up front: open a file when the task or a failing test names it.\\n\\nTASK {{task.id}} ({{workspace}}): {{task.title}}\\n\\n{{task.primer}}\\n{{task.description}}\\n\\nTEST WORK ORDER (structured \\u2014 this is the same list a test_plan gate checks, so a name here that does not exist when you finish comes straight back to you):\\n{{task.tests}}\\n\\nWORKTRACK ACCESS: the worktrack MCP server is registered under slop-mcp. Call it as execute_tool(mcp_name=\\\"worktrack\\\", tool_name=\\\"<tool>\\\", parameters={...}). Use exactly these tools and no others: (a) FIRST, `task_get(id=\\\"{{task.id}}\\\")` - its `fileScope` array is the declared scope (a starting point, see HARD RULE 1) and its `content` is the full task text; (b) `task_comments_list(id=\\\"{{task.id}}\\\", limit=20)` to read any prior attempt's checkpoint or review rewind notes; (c) LAST, `task_comment_add(id=\\\"{{task.id}}\\\", kind=\\\"note\\\", body=<JSON string>)` with a `worktrack_completion_v1` checkpoint naming the commits you made. Never call task_start, task_claim, task_update, task_workflow_* or lease_* - the driver owns the lease and the workflow.\\n\\nHARD RULES\\n1. Scope is a starting point, not a straitjacket: open the primer's files first and bound the search to the declared paths, but when the work legitimately needs a file outside them, make the change and list the extra paths in the checkpoint \\u2014 the scope gate discloses them to the reviewer, who judges whether each widening was necessary.\\n2. Verify the task's premise against the tree before editing. If the premise is false, make no change and end your turn saying so with evidence.\\n3. Red first: the task's `## Tests` section (when present) is your RED work order, not a checklist for the reviewer. Before any production edit, flip every test under `contradicted` and add every case under `new` in ONE RED commit, run it against the old code, and paste each failure signature into the fix commit body; a planned test you did not write ends the turn named in the checkpoint's scopeGaps, never as a claim of coverage. Without the section, write the failing test from the acceptance criteria. Fixtures must be able to manifest the rule (the state, the second tenant, the pre-existing row the bug needs). Run every project named on the section's `gate:` line, not only the one this template's test step runs.\\n4. Builds and tests run through tman and never bare `dotnet`: `tman build`, then `tman test-proj src/<Project>.Tests --filter \\\\\\\"<...>\\\\\\\"` while iterating (quote any filter containing `|`). Run the TARGETED project, not the full suite, while iterating; `tman test` runs `--no-build`, so run `tman build` first; set your shell tool's timeout to at least 15 minutes for a dotnet test run. A run cut off by a client timeout is NOT a pass: record it in the checkpoint as `not run`, never as a count, and never commit over a red or unfinished run. Run the full gate project at least once before ending the turn. On failure read `.tman/<alias>.fail.log` rather than re-running the suite to find the failure.\\n5. COMMIT YOUR WORK. The scope gate attributes changes by commit trailer, so an uncommitted change is no evidence that anything happened. Atomic conventional commits - one for the RED test, one for the fix, one for docs; subject `<type>(<scope>): <imperative>` <= 72 chars; body says WHY. Write every message with a heredoc through `git commit -F -`; never `git commit -m` with `\\\\n` inside the string (that yields one line with literal backslash-n and a trailer that never parses). The LAST paragraph of the message is exactly this line, nothing after it and no blank line inside the trailer block:\\n   worktrack-task: {{task.id}}\\n   After each commit run `git log -1 --format='%(trailers:key=worktrack-task,valueonly)'`; if it prints nothing, amend before doing anything else. Stage specific files with `git add <path>`; never `git add -A`; never stage anything under `.worktrack/`. Leave the working tree clean.\\n6. Replace and remove: no dual paths, no old implementation kept as a fallback. If you change a mechanism, update the docs sentences that describe it in the same change.\\n\\nCONTEXT BUDGET: at 40 tool calls, stop and take stock. Turns that run past 40 calls have grown past the size where the work comes back clean - the one turn killed at 122 calls was redone in 29. Commit what is green, then end the turn naming what remains and which files it needs; a second turn on a fresh context finishes that remainder faster than this one will.\\n\\nWHEN DONE end your turn with a compact summary: commits (sha + subject), files changed, RED signature, test counts. Do not paste source or diffs.\", \"permissions\": \"allow_all\", \"fs\": \"read_write\", \"stall_seconds\": 600, \"timeout_seconds\": 3600, \"model_category\": \"implement\"}",
+          "required": true,
+          "allowSkip": false,
+          "outcomeSchemaRef": "builtin:acp_result_v1",
+          "maxAttempts": 3
+        },
+        {
+          "kind": "file_scope",
+          "name": "scope-check",
+          "specJson": "{\"requireScope\": true}",
+          "required": true,
+          "allowSkip": false,
+          "outcomeSchemaRef": "builtin:file_scope_eval_v1",
+          "maxAttempts": 3
+        },
+        {
+          "kind": "command",
+          "name": "tman-build",
+          "specJson": "{\"argv\": [\"tman\", \"build\"], \"expect_exit\": 0, \"timeout_seconds\": 900}",
+          "required": true,
+          "allowSkip": false,
+          "outcomeSchemaRef": "builtin:command_result_v1",
+          "maxAttempts": 3
+        },
+        {
+          "kind": "command",
+          "name": "tman-test",
+          "specJson": "{\"argv\": [\"tman\", \"test\"], \"expect_exit\": 0, \"timeout_seconds\": 2700, \"expect_stdout_matches\": \"Passed!\", \"expect_stdout_min_matches\": 1}",
+          "required": true,
+          "allowSkip": false,
+          "outcomeSchemaRef": "builtin:command_result_v1",
+          "maxAttempts": 3
+        },
+        {
+          "kind": "claude_agent",
+          "name": "review",
+          "specJson": "{\"prompt\": \"REVIEW GATE for task {{task.id}} ({{workspace}}): {{task.title}}\\n\\nTASK TEXT:\\n{{task.description}}\\n\\nDECLARED SCOPE:\\n{{task.scope}}\\n\\nPATHS CHANGED OUTSIDE THE DECLARED SCOPE (judge whether each was necessary): {{step.scope-check.outcome.outOfScopePaths}}\\n\\nCONSTRAINTS IN FORCE: {{task.primer.constraints}}\\n\\nThis review step's id is {{step.id}}. If and only if your verdict is fail, set rewind_to to \\\"{{rewind_to}}\\\" (the implement step's id). If your verdict is pass or pass_with_changes, OMIT rewind_to entirely: the schema rejects a pass that carries rewind_to and the whole review is discarded.\\n\\nFollow the review contract in your system prompt: read the packet through the worktrack MCP tools, apply the rubric, post the annotation comment, and submit the reviewer_verdict_v1 object through the verdict door (mcp__worktrack__task_workflow_step_verdict_submit with taskId, stepId and verdict, or `worktrack-mcp verdict submit --task {{task.id}} --step {{step.id}} --file <path>`); your final output is never read for it.\", \"system_prompt_file\": \"docs/fleet/prompts/review-context.md\", \"effort\": \"high\", \"allowed_tools\": [\"Read\", \"Grep\", \"Glob\", \"Agent\", \"Bash(git diff *)\", \"Bash(git log *)\", \"Bash(git show *)\", \"Bash(git status *)\", \"mcp__worktrack__task_get\", \"mcp__worktrack__task_comments_list\", \"mcp__worktrack__task_workflow_get\", \"mcp__worktrack__task_workflow_review_change_packet\", \"mcp__worktrack__task_comment_add\", \"mcp__worktrack__task_workflow_step_verdict_submit\"], \"mcp_servers\": {\"worktrack\": {\"command\": \"{{host.worktrack_mcp}}\", \"env\": {\"WORKTRACK_DB\": \"{{host.worktrack_db}}\"}}}, \"rewind_to_step\": \"implement\", \"max_turns\": 80, \"max_budget_usd\": 10, \"stall_seconds\": 600, \"timeout_seconds\": 2700, \"model_category\": \"review\"}",
+          "required": true,
+          "allowSkip": false,
+          "outcomeSchemaRef": "builtin:reviewer_verdict_v1",
+          "maxAttempts": 3
+        }
+      ]
+    }
+  ]
+}
