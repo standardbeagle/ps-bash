@@ -132,11 +132,38 @@ public sealed partial class BashParser
 
             result.Add((bg ? new Command.Background(cmd) : cmd, startPos));
 
-            // Skip statement terminators (; and newlines).
-            while (Peek().Kind is BashTokenKind.Semi or BashTokenKind.Newline)
-                Advance();
+            // After a statement only `;`/newline, a background `&` (which lets the
+            // next command start immediately), or end of input may follow.
+            if (Peek().Kind is BashTokenKind.Semi or BashTokenKind.Newline)
+            {
+                while (Peek().Kind is BashTokenKind.Semi or BashTokenKind.Newline)
+                    Advance();
+            }
+            else
+            {
+                RejectLeftoverToken(bg, "ParseTopLevelWithPositions");
+            }
         }
         return result;
+    }
+
+    // After a complete top-level statement only a command terminator (`;`/newline),
+    // a background `&` (consumed just before this check), or end of input may
+    // follow. Any other token means the statement parser stopped early and the
+    // remaining input would be silently discarded — reject it with a located
+    // error. Both top-level loops (ParseList and ParseTopLevelWithPositionsCore)
+    // call this so they cannot disagree on what counts as a syntax error.
+    private void RejectLeftoverToken(bool backgrounded, string rule)
+    {
+        var kind = Peek().Kind;
+        if (kind == BashTokenKind.Eof
+            || kind is BashTokenKind.Semi or BashTokenKind.Newline
+            || backgrounded)
+            return;
+
+        throw MakeError(
+            $"Unexpected token '{Peek().Value}' ({kind})",
+            Peek().Position, rule);
     }
 
     private ParseException MakeError(string message, int position, string rule)
@@ -197,12 +224,15 @@ public sealed partial class BashParser
             firstBg = true;
         }
 
-        // If no separator follows and the first command is not backgrounded
-        // (or it is backgrounded but there's no next command), return single.
+        // After the first command (and optional `&`) only a terminator, end of
+        // input, or — when backgrounded — the next command without a separator
+        // may follow. Anything else is a syntax error; returning `first` here
+        // used to silently discard every token after the early stop.
         if (Peek().Kind is not BashTokenKind.Semi and not BashTokenKind.Newline)
         {
-            if (!firstBg || Peek().Kind == BashTokenKind.Eof)
-                return firstBg ? new Command.Background(first) : first;
+            RejectLeftoverToken(firstBg, "ParseList");
+            if (!firstBg)
+                return first;
         }
 
         var commands = ImmutableArray.CreateBuilder<Command>();
@@ -213,9 +243,15 @@ public sealed partial class BashParser
             bool prevBg = commands[^1] is Command.Background;
 
             if (Peek().Kind is BashTokenKind.Semi or BashTokenKind.Newline)
+            {
                 SkipTerminators();
-            else if (!prevBg)
-                break;
+            }
+            else
+            {
+                RejectLeftoverToken(prevBg, "ParseList");
+                if (Peek().Kind == BashTokenKind.Eof)
+                    break;
+            }
 
             if (Peek().Kind == BashTokenKind.Eof)
                 break;
