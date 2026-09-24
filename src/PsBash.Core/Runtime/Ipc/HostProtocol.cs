@@ -49,6 +49,25 @@ public static class HostProtocol
     /// </summary>
     public const int ProtocolVersion = 3;
     public const int HealthStartingExitCode = 75;
+
+    /// <summary>
+    /// Hard per-frame line cap enforced by <see cref="StreamLineReader"/>. A frame
+    /// whose raw bytes exceed this is a malformed/foreign-host protocol error, NOT
+    /// a broken connection, so it is surfaced as
+    /// <see cref="FrameSizeExceededException"/> rather than a plain
+    /// <see cref="IOException"/> (which the launcher retries as a transport reset).
+    /// <see cref="WriteResponseLineAsync(Stream, string, StreamTag, CancellationToken)"/>
+    /// keeps every emitted frame well below it by splitting oversized payloads.
+    /// </summary>
+    internal const int MaxLineBytes = 1 * 1024 * 1024; // 1 MB
+
+    /// <summary>
+    /// Largest response payload (in UTF-16 chars) written as a single frame. 128K
+    /// chars base64-encode to at most ~683 KB even in the worst case (every char
+    /// is a 4-byte astral code point) — comfortably under
+    /// <see cref="MaxLineBytes"/>, so a chunked line can never trip the reader cap.
+    /// </summary>
+    internal const int MaxResponseChunkChars = 128 * 1024;
     public const string EndSentinel = "<<<END>>>";
     public const string ExitPrefix = "<<<EXIT:";
     public const string ExitSuffix = ">>>";
@@ -262,7 +281,7 @@ public static class HostProtocol
     public static async Task<Mode> ReadRequestAsync(Stream stream, CancellationToken ct = default)
     {
         ArgumentNullException.ThrowIfNull(stream);
-        var reader = new StreamLineReader(stream);
+        var reader = new StreamLineReader(stream, readAhead: false);
 
         var header = await reader.ReadLineAsync(ct).ConfigureAwait(false)
             ?? throw new IOException("Request stream closed before MODE header");
@@ -456,7 +475,33 @@ public static class HostProtocol
     {
         ArgumentNullException.ThrowIfNull(stream);
         ArgumentNullException.ThrowIfNull(line);
-        var encoded = Convert.ToBase64String(Utf8NoBom.GetBytes(line));
+
+        // A single item can exceed the reader's hard frame cap once base64 grows
+        // it by 4/3 (batched stdout especially: the batcher coalesces up to a
+        // whole 10 MB output line into one item). Split it into frames that each
+        // stay under the cap; the reader delivers them in order and the launcher
+        // concatenates, so the byte stream is preserved exactly. Never slice
+        // BETWEEN the halves of a surrogate pair.
+        if (line.Length <= MaxResponseChunkChars)
+        {
+            await WriteResponseFrameAsync(stream, line, tag, ct).ConfigureAwait(false);
+            return;
+        }
+
+        int offset = 0;
+        while (offset < line.Length)
+        {
+            int len = Math.Min(MaxResponseChunkChars, line.Length - offset);
+            if (len < line.Length - offset && char.IsHighSurrogate(line[offset + len - 1]))
+                len--;
+            await WriteResponseFrameAsync(stream, line.Substring(offset, len), tag, ct).ConfigureAwait(false);
+            offset += len;
+        }
+    }
+
+    private static async Task WriteResponseFrameAsync(Stream stream, string payload, StreamTag tag, CancellationToken ct)
+    {
+        var encoded = Convert.ToBase64String(Utf8NoBom.GetBytes(payload));
         var framed = tag == StreamTag.Stderr ? StderrPrefix + encoded : encoded;
         var bytes = Utf8NoBom.GetBytes(framed + "\n");
         await stream.WriteAsync(bytes, ct).ConfigureAwait(false);
@@ -736,36 +781,99 @@ public static class HostProtocol
     }
 
     /// <summary>
-    /// UTF-8 line reader that tolerates CRLF or LF, reads byte-by-byte (so the
-    /// underlying stream isn't over-buffered past a frame boundary), and
-    /// returns null at EOF.
+    /// UTF-8 line reader that tolerates CRLF or LF and returns null at EOF.
+    ///
+    /// <para>In the default read-ahead mode it reads into a shared buffer and
+    /// scans for the LF terminator, so a long line costs a handful of reads
+    /// rather than one per byte. This is used for the response stream, which is
+    /// read by a single consumer start-to-finish: buffering past a frame boundary
+    /// is safe because later calls resume from the unconsumed region.</para>
+    ///
+    /// <para>The request reader passes <c>readAhead: false</c>. The request and the
+    /// response share one duplex channel, so the request reader must NOT pull bytes
+    /// past the END sentinel into its own buffer — the response is written after the
+    /// request is fully consumed, and an over-read would both steal nothing in
+    /// production and break single-buffer/duplex test doubles. Exact mode keeps the
+    /// historical one-byte-per-read frame-boundary guarantee.</para>
     /// </summary>
     private sealed class StreamLineReader
     {
-        private const int MaxLineBytes = 1 * 1024 * 1024; // 1 MB — guards against malformed/malicious frames
+        private const int ReadChunkBytes = 64 * 1024;
         private readonly Stream _stream;
+        private readonly bool _readAhead;
+        private readonly byte[] _buf = new byte[ReadChunkBytes];
         private readonly byte[] _one = new byte[1];
+        private int _start; // first unconsumed byte in _buf
+        private int _end;   // one past the last valid byte in _buf
+        private readonly List<byte> _line = new(256);
 
-        public StreamLineReader(Stream stream) { _stream = stream; }
+        public StreamLineReader(Stream stream, bool readAhead = true)
+        {
+            _stream = stream;
+            _readAhead = readAhead;
+        }
 
         public async Task<string?> ReadLineAsync(CancellationToken ct)
         {
-            var buf = new List<byte>(64);
+            _line.Clear();
+            if (!_readAhead) return await ReadLineExactAsync(ct).ConfigureAwait(false);
+
+            while (true)
+            {
+                while (_start < _end)
+                {
+                    byte b = _buf[_start++];
+                    if (b == (byte)'\n')
+                    {
+                        if (_line.Count > 0 && _line[^1] == (byte)'\r') _line.RemoveAt(_line.Count - 1);
+                        return Utf8NoBom.GetString(_line.ToArray());
+                    }
+                    _line.Add(b);
+                    if (_line.Count > MaxLineBytes)
+                        throw new FrameSizeExceededException(
+                            $"IPC line exceeded {MaxLineBytes / 1024} KB limit — possible malformed frame");
+                }
+
+                int n = await _stream.ReadAsync(_buf.AsMemory(), ct).ConfigureAwait(false);
+                if (n == 0)
+                    return _line.Count == 0 ? null : Utf8NoBom.GetString(_line.ToArray());
+                _start = 0;
+                _end = n;
+            }
+        }
+
+        private async Task<string?> ReadLineExactAsync(CancellationToken ct)
+        {
             while (true)
             {
                 int n = await _stream.ReadAsync(_one.AsMemory(), ct).ConfigureAwait(false);
                 if (n == 0)
-                    return buf.Count == 0 ? null : Utf8NoBom.GetString(buf.ToArray());
+                    return _line.Count == 0 ? null : Utf8NoBom.GetString(_line.ToArray());
                 byte b = _one[0];
                 if (b == (byte)'\n')
                 {
-                    if (buf.Count > 0 && buf[^1] == (byte)'\r') buf.RemoveAt(buf.Count - 1);
-                    return Utf8NoBom.GetString(buf.ToArray());
+                    if (_line.Count > 0 && _line[^1] == (byte)'\r') _line.RemoveAt(_line.Count - 1);
+                    return Utf8NoBom.GetString(_line.ToArray());
                 }
-                buf.Add(b);
-                if (buf.Count > MaxLineBytes)
-                    throw new IOException($"IPC line exceeded {MaxLineBytes / 1024} KB limit — possible malformed frame");
+                _line.Add(b);
+                if (_line.Count > MaxLineBytes)
+                    throw new FrameSizeExceededException(
+                        $"IPC line exceeded {MaxLineBytes / 1024} KB limit — possible malformed frame");
             }
         }
+    }
+
+    /// <summary>
+    /// A frame violated the wire's <see cref="MaxLineBytes"/> cap. This is a
+    /// protocol/data error — the connection itself is fine — so it must NOT be
+    /// treated as a retryable transport reset: <c>IpcWorker.IsTransportReset</c>
+    /// excludes this type explicitly. The launcher surfaces it as a one-line
+    /// diagnostic instead of re-running a side-effecting command. It derives from
+    /// <see cref="System.IO.IOException"/> so existing stream-error handling still
+    /// sees it as an I/O failure.
+    /// </summary>
+    public sealed class FrameSizeExceededException : System.IO.IOException
+    {
+        public FrameSizeExceededException(string message) : base(message) { }
     }
 }

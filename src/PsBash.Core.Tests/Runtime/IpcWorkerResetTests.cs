@@ -48,4 +48,9 @@ public class IpcWorkerResetTests
     [Fact]
     public void IsTransportReset_InvalidDataException_IsNotReset()
         => Assert.False(IpcWorker.IsTransportReset(new System.IO.InvalidDataException("oversized frame")));
+
+    [Fact]
+    public void IsTransportReset_FrameSizeExceeded_IsNotReset()
+        => Assert.False(IpcWorker.IsTransportReset(
+            new PsBash.Core.Runtime.Ipc.HostProtocol.FrameSizeExceededException("oversized frame")));
 }

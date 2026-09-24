@@ -741,10 +741,14 @@ public sealed class IpcWorker : IWorker
     /// non-zero exit. A <c>NetworkStream</c> read/write surfaces a reset as an
     /// <c>IOException</c> (often wrapping a <c>SocketException</c>); a connect to
     /// a missing/listener-less endpoint surfaces a bare <c>SocketException</c>.
-    /// Both are recoverable by retiring the host and reconnecting.
+    /// Both are recoverable by retiring the host and reconnecting. An oversized
+    /// frame (<see cref="HostProtocol.FrameSizeExceededException"/>) is a
+    /// protocol/data error, not a reset, and is excluded here so it can never
+    /// re-run a side-effecting command.
     /// </summary>
     internal static bool IsTransportReset(Exception ex)
-        => ex is System.IO.IOException or System.Net.Sockets.SocketException;
+        => ex is not HostProtocol.FrameSizeExceededException
+           && (ex is System.IO.IOException or System.Net.Sockets.SocketException);
 
     /// <summary>
     /// The host PROCESS the liveness watchdog was observing exited mid-exchange.
