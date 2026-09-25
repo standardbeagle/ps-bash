@@ -151,6 +151,10 @@ public class ProcessLifecycleTests
             UseShellExecute = false,
             CreateNoWindow = true,
         };
+        // cmd.exe passes this to ps-bash: a private host that dies with the launcher.
+        // Under the default shared daemon the host kept running Start-Sleep and then
+        // idled for 600 s after the launcher this test is about had exited.
+        psi.Environment["PSBASH_PER_INVOCATION"] = "1";
         using var parent = Process.Start(psi)!;
         int? psBashPid = null;
         try

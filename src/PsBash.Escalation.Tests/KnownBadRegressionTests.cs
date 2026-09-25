@@ -215,9 +215,11 @@ public class KnownBadRegressionTests
         const int concurrency = 8;
         const int rounds = 3;
 
-        // Warm the daemon so the concurrent batch hits a live host (keeps the
-        // test focused on execution-serialization, not cold-start spawn).
-        await ProcessRunHelper.RunAsync(new[] { "-c", "echo warmup" });
+        // One daemon private to this test, killed on dispose. Warm it so the
+        // concurrent batch hits a live host (keeps the test focused on
+        // execution-serialization, not cold-start spawn).
+        await using var daemon = new IsolatedDaemon();
+        await daemon.WarmAsync();
 
         int successes = 0;
         var corrupted = new List<string>();
@@ -226,7 +228,7 @@ public class KnownBadRegressionTests
         {
             var tasks = Enumerable.Range(0, concurrency)
                 .Select(_ => ProcessRunHelper.RunAsync(
-                    new[] { "-c", loop }, timeout: TimeSpan.FromSeconds(30)))
+                    new[] { "-c", loop }, timeout: TimeSpan.FromSeconds(30), env: daemon.Env))
                 .ToArray();
             var results = await Task.WhenAll(tasks);
 

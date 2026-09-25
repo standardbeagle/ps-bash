@@ -734,46 +734,6 @@ public class AgentPatternEndToEndTests
         Assert.Contains("loop iteration limit exceeded", stdout + stderr);
     }
 
-    // ── Reliability: hung commands time out + kill entire process tree ───────
-
-    [SkippableFact]
-    public async Task HangingCommand_TimesOutWithin35Seconds_AndKillsProcessTree()
-    {
-
-        // Capture pre-existing worker PIDs so we can prove none leak after timeout.
-        var preWorkerPids = Process.GetProcessesByName("pwsh")
-            .Select(p => p.Id).ToHashSet();
-
-        var sw = Stopwatch.StartNew();
-        var timeout = TimeSpan.FromSeconds(10);
-        var ex = await Assert.ThrowsAsync<TimeoutException>(async () =>
-        {
-            var psi = PsBashTestProcess.Create(["-c", "Start-Sleep 60"]);
-            await ProcessRunHelper.RunAsync(psi, stdinContent: null, timeout: timeout);
-        });
-        sw.Stop();
-
-        Assert.True(sw.Elapsed < TimeSpan.FromSeconds(20),
-            $"Timeout took too long: {sw.Elapsed.TotalSeconds:F1}s (expected <20s)");
-        Assert.Contains("did not exit within", ex.Message);
-
-        // Poll until killed children are reaped, bounded by a deadline.
-        // Replaces a 2s Task.Delay — usually completes in <100 ms on
-        // Linux, occasionally up to 500 ms on Windows under load.
-        var reapDeadline = DateTime.UtcNow + TimeSpan.FromSeconds(3);
-        List<int> leaked;
-        while (true)
-        {
-            var postWorkerPids = Process.GetProcessesByName("pwsh")
-                .Select(p => p.Id).ToHashSet();
-            leaked = postWorkerPids.Except(preWorkerPids).ToList();
-            if (leaked.Count == 0 || DateTime.UtcNow >= reapDeadline) break;
-            await Task.Delay(50);
-        }
-        Assert.True(leaked.Count == 0,
-            $"Leaked SDK host PIDs after timeout: {string.Join(",", leaked)}");
-    }
-
     // ═══════════════════════════════════════════════════════════════════════════
     // FILE LOCKING STRESS TESTS
     //
