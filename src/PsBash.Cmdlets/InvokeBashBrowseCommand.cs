@@ -137,8 +137,7 @@ public sealed class InvokeBashBrowseCommand : PSCmdlet
         // Default dispatch matches the oracle: if stdin is a real terminal
         // and the user did NOT pass --list, hand off to the single-key
         // workbench; otherwise emit one BrowseRow per object.
-        bool inputRedirected = Console.IsInputRedirected;
-        if (!List.IsPresent && !inputRedirected)
+        if (IsInteractiveDispatch(List.IsPresent, args, Console.IsInputRedirected))
         {
             // Optional Out-GridView enhancement: only when the cmdlet is
             // actually present (Windows desktop with the GridView module).
@@ -162,6 +161,17 @@ public sealed class InvokeBashBrowseCommand : PSCmdlet
                 _objects[i], i, selectedIdx);
         }
     }
+
+    /// <summary>
+    /// True when browse should open the interactive workbench (or Out-GridView)
+    /// instead of emitting list rows. The bash spelling <c>--list</c> never binds
+    /// the <c>-List</c> switch: PowerShell leaves it in <see cref="Arguments"/>, so
+    /// it has to be honored there. Missing that meant <c>browse --list</c> in a
+    /// console-attached session went interactive, which opened an Out-GridView
+    /// window inside a test host and crashed it.
+    /// </summary>
+    internal static bool IsInteractiveDispatch(bool listSwitch, string[] args, bool inputRedirected)
+        => !inputRedirected && !listSwitch && Array.IndexOf(args, "--list") < 0;
 
     private bool TryOutGridView()
     {

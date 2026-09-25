@@ -105,6 +105,21 @@ public class InvokeBashBrowseCommandTests : IClassFixture<SharedPwshFixture>
         Assert.Contains("aliased", display);
     }
 
+    // The list-vs-interactive decision, pinned without faking a console. Every
+    // other browse test runs with redirected stdin, where both lanes emit rows,
+    // so none of them could see `--list` being ignored on a real terminal.
+    [Theory]
+    [InlineData(false, new string[0], false, true)]       // terminal, no list flag: interactive
+    [InlineData(false, new[] { "--list" }, false, false)] // bash spelling: never binds -List
+    [InlineData(true, new string[0], false, false)]       // -List switch
+    [InlineData(false, new string[0], true, false)]       // redirected stdin: always list
+    public void Browse_IsInteractiveDispatch_HonorsDoubleDashList(
+        bool listSwitch, string[] args, bool inputRedirected, bool expected)
+    {
+        Assert.Equal(expected,
+            InvokeBashBrowseCommand.IsInteractiveDispatch(listSwitch, args, inputRedirected));
+    }
+
     [Fact]
     public void Browse_HelpFlag_EmitsUsageLine()
     {
