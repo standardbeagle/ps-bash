@@ -1,5 +1,6 @@
 {
   "stack": "dotnet",
+  "delivery": "internal-tool",
   "templates": [
     {
       "name": "slice-default",
