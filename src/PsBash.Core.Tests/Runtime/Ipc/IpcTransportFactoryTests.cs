@@ -194,4 +194,95 @@ public class IpcTransportFactoryTests : IDisposable
         Assert.Equal("unix", scheme);
         Assert.Equal(@"C:\Users\x\sock", endpoint);
     }
+
+    // Longest path allowed by AF_UNIX sun_path. .NET rejects any Unix
+    // domain-socket path longer than 107 chars (108 bytes incl. the NUL).
+    private const int SunPathBudget = 107;
+
+    private static string LongTempRoot()
+        => System.IO.Path.Combine(
+            System.IO.Path.GetTempPath(), "psb-g12345678-0123456789abcdef");
+
+    [Fact]
+    public void ResolvePerInvocationEndpoint_SixDigitPidAndLongTempRoot_FitsSunPathBudget()
+    {
+        // Reproduces the failed Differential gate: a 6-digit launcher pid under
+        // the canonical long temp root produced a 108-char socket path and the
+        // host died in UnixDomainSocketEndPoint construction.
+        IpcTransportFactory.UnixSocketSupportedOverride = () => true;
+        IpcTransportFactory.ProcessIdOverride = () => 291088;
+        IpcTransportFactory.TempPathOverride = LongTempRoot;
+        try
+        {
+            var (scheme, endpoint) = IpcTransportFactory.ResolvePerInvocationEndpoint();
+
+            Assert.Equal("unix", scheme);
+            Assert.True(
+                endpoint.Length <= SunPathBudget,
+                $"endpoint is {endpoint.Length} chars, exceeds the {SunPathBudget}-char sun_path budget: {endpoint}");
+            Assert.Contains("291088", endpoint);
+        }
+        finally
+        {
+            ResetSeams();
+        }
+    }
+
+    [Fact]
+    public void ResolvePerInvocationEndpoint_SamePid_TwoCalls_AreDistinct()
+    {
+        // Shortening the random suffix must not lose the per-invocation
+        // uniqueness that lets two concurrent launchers of the same pid
+        // (e.g. a forked -c fan-out) each bind their own private socket.
+        IpcTransportFactory.UnixSocketSupportedOverride = () => true;
+        IpcTransportFactory.ProcessIdOverride = () => 291088;
+        IpcTransportFactory.TempPathOverride = LongTempRoot;
+        try
+        {
+            var (s1, e1) = IpcTransportFactory.ResolvePerInvocationEndpoint();
+            var (s2, e2) = IpcTransportFactory.ResolvePerInvocationEndpoint();
+
+            Assert.Equal("unix", s1);
+            Assert.Equal(s1, s2);
+            Assert.NotEqual(e1, e2);
+            Assert.Contains("291088", e1);
+            Assert.True(e1.Length <= SunPathBudget, $"e1 is {e1.Length} chars: {e1}");
+            Assert.True(e2.Length <= SunPathBudget, $"e2 is {e2.Length} chars: {e2}");
+        }
+        finally
+        {
+            ResetSeams();
+        }
+    }
+
+    [Fact]
+    public void ResolveEndpoint_LongTempRoot_FallsBackToPipeWithinBudget()
+    {
+        // The canonical per-session socket carries the user and session token;
+        // a long temp root (or user/session token) must not overflow sun_path.
+        // It falls back to the named-pipe scheme, which has no such limit.
+        IpcTransportFactory.UnixSocketSupportedOverride = () => true;
+        IpcTransportFactory.TempPathOverride =
+            () => System.IO.Path.Combine(System.IO.Path.GetTempPath(), new string('x', 120));
+        IpcTransportFactory.SessionTokenOverride = () => new string('9', 40);
+        try
+        {
+            var (scheme, endpoint) = IpcTransportFactory.ResolveEndpoint();
+
+            Assert.Equal("pipe", scheme);
+            Assert.False(string.IsNullOrEmpty(endpoint));
+        }
+        finally
+        {
+            ResetSeams();
+        }
+    }
+
+    private static void ResetSeams()
+    {
+        IpcTransportFactory.UnixSocketSupportedOverride = null;
+        IpcTransportFactory.ProcessIdOverride = null;
+        IpcTransportFactory.TempPathOverride = null;
+        IpcTransportFactory.SessionTokenOverride = () => null;
+    }
 }

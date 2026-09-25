@@ -44,6 +44,14 @@ public static class IpcTransportFactory
     // selects the per-user canonical endpoint (the pre-per-session behavior).
     internal static Func<string?>? SessionTokenOverride { get; set; }
 
+    // Test seam: override the launcher process id used in the per-invocation
+    // endpoint name, so the sun_path budget can be exercised with a 6-digit pid.
+    internal static Func<int>? ProcessIdOverride { get; set; }
+
+    // Test seam: override Path.GetTempPath() so the sun_path budget can be
+    // exercised with a long temp root without touching process-wide env vars.
+    internal static Func<string>? TempPathOverride { get; set; }
+
 
     public static bool IsUnixSocketSupported()
     {
