@@ -184,6 +184,19 @@ internal sealed class Connection
         {
             worker = await _pool.AcquireAsync(execCts.Token).ConfigureAwait(false);
             WorkerPool<SdkWorker>.DiagLog("Connection: acquired; executing command");
+
+            // R05: acknowledge execution-start on the framed channel BEFORE the
+            // command runs and before any output frame. The launcher retries a
+            // pre-output transport reset ONLY when it never saw this frame, so a
+            // reset after a silent command completed (`echo x >> f`, `rm`,
+            // `mkdir`) can no longer re-run it. Emitted directly on the stream
+            // (not via the output queue) so it cannot interleave with output; the
+            // queue is empty here because execution has not started. Interactive
+            // sessions are excluded — their launcher uses the PTY, not this
+            // framed-retry reader.
+            if (sessionMode == SessionMode.Framed)
+                await HostProtocol.WriteStartedAsync(_stream, execCts.Token).ConfigureAwait(false);
+
             exitCode = await worker.ExecuteWithOutputAsync(command, outputSink, errorSink, execCts.Token);
             WorkerPool<SdkWorker>.DiagLog($"Connection: executed, exit={exitCode}");
         }

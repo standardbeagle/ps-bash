@@ -163,6 +163,44 @@ public static class HostProtocol
     public const string HostExitingSentinel = "<<<HOST-EXITING>>>";
 
     /// <summary>
+    /// R05 execution-start acknowledgement: emitted by the host on the framed
+    /// response stream <b>immediately before it starts executing</b> a
+    /// Command/Stdin/Script request, and before any output frame. It is the
+    /// launcher's proof that the request reached execution, so a transport
+    /// reset observed AFTER it must NOT be retried (the command may have
+    /// completed with no observable output — <c>echo x &gt;&gt; f</c>,
+    /// <c>rm</c>, <c>mkdir</c>). Before this, the launcher inferred "not yet
+    /// executed" from "no output frame received", which is false for any
+    /// silent command: a reset after the host ran it re-ran the whole command.
+    /// </summary>
+    /// <remarks>
+    /// Only emitted in <see cref="SessionMode.Framed"/> (the mode whose
+    /// launcher applies the pre-output-retry policy). Like the other
+    /// <c>&lt;&lt;&lt;EVENT&gt;&gt;&gt;</c> tokens, <c>&lt;</c> is outside the
+    /// base64 alphabet, so a <see cref="StreamTag.Stdout"/> data frame can
+    /// never collide with it. A reader that predates this token must consume
+    /// it as a lifecycle event, not deliver it as a data line — a new host is
+    /// only ever paired with a matching launcher (the build-identity gate
+    /// retires obsolete hosts), so a matching reader is always present.
+    /// </remarks>
+    public const string StartedSentinel = "<<<STARTED>>>";
+
+    /// <summary>
+    /// Write the R05 <see cref="StartedSentinel"/> to the framed response
+    /// stream and flush, so the launcher observes the execution-start
+    /// acknowledgement before any output. Callers MUST only invoke this in
+    /// <see cref="SessionMode.Framed"/>, and MUST do so before executing the
+    /// command.
+    /// </summary>
+    public static async Task WriteStartedAsync(Stream stream, CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(stream);
+        var bytes = Utf8NoBom.GetBytes(StartedSentinel + "\n");
+        await stream.WriteAsync(bytes, ct).ConfigureAwait(false);
+        await stream.FlushAsync(ct).ConfigureAwait(false);
+    }
+
+    /// <summary>
     /// Write the optional PTY-6 <see cref="BusySentinel"/> to the interactive
     /// response stream and flush. Callers MUST only invoke this in
     /// <see cref="SessionMode.Interactive"/>.
@@ -568,6 +606,25 @@ public static class HostProtocol
     }
 
     /// <summary>
+    /// R05: tag-aware read that additionally reports the host's execution-start
+    /// acknowledgement. <paramref name="onStarted"/> is invoked once, when the
+    /// <see cref="StartedSentinel"/> is observed (before any output frame), and
+    /// the sentinel is never delivered to <paramref name="onLine"/>. The
+    /// launcher uses this to gate its pre-output retry: a reset after STARTED
+    /// is never retried.
+    /// </summary>
+    public static async Task<int> ReadResponseAsync(
+        Stream stream,
+        Action<string, StreamTag> onLine,
+        Action onStarted,
+        CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(onStarted);
+        var (exit, _) = await ReadResponseWithLifecycleAsync(stream, onLine, onStarted, ct).ConfigureAwait(false);
+        return exit;
+    }
+
+    /// <summary>
     /// PTY-4 lifecycle-aware read. Like <see cref="ReadResponseAsync(System.IO.Stream, System.Action{string}, System.Threading.CancellationToken)"/> but also
     /// observes a trailing <see cref="PromptReadySentinel"/> if the host
     /// emits one (interactive sessions). Returns <c>(exitCode, promptReady)</c>
@@ -603,9 +660,22 @@ public static class HostProtocol
     /// but each data line is delivered with the <see cref="StreamTag"/> it was
     /// framed with so the caller can route stdout and stderr independently.
     /// </summary>
+    public static Task<(int ExitCode, bool PromptReady)> ReadResponseWithLifecycleAsync(
+        Stream stream,
+        Action<string, StreamTag> onLine,
+        CancellationToken ct = default)
+        => ReadResponseWithLifecycleAsync(stream, onLine, onStarted: null, ct);
+
+    /// <summary>
+    /// R05: lifecycle-aware read that also observes the
+    /// <see cref="StartedSentinel"/>. <paramref name="onStarted"/> (optional) is
+    /// invoked once when the execution-start acknowledgement arrives; the
+    /// sentinel is consumed and never surfaced as data.
+    /// </summary>
     public static async Task<(int ExitCode, bool PromptReady)> ReadResponseWithLifecycleAsync(
         Stream stream,
         Action<string, StreamTag> onLine,
+        Action? onStarted,
         CancellationToken ct = default)
     {
         ArgumentNullException.ThrowIfNull(stream);
@@ -662,6 +732,13 @@ public static class HostProtocol
                 // If EXIT hasn't been seen yet, this is a protocol bug — treat as
                 // garbled stream and continue scanning for EXIT defensively.
                 if (exitCode is not null) return (exitCode.Value, promptReady);
+                continue;
+            }
+            if (line == StartedSentinel)
+            {
+                // R05: execution-start acknowledgement. Consume it (never a data
+                // line) and let the launcher gate its pre-output retry on it.
+                onStarted?.Invoke();
                 continue;
             }
             if (exitCode is not null)

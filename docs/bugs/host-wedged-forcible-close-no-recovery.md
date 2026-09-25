@@ -117,10 +117,14 @@ the chaos burn-in harness (`scripts/burn-in.ps1`):
 1. **Mid-command reset recovery (safe pre-output retry)** — `IpcWorker.SendRequestAsync`
    now wraps the connect→write→read exchange in a retry loop. On a transport RESET
    (`IsTransportReset`: `IOException`/`SocketException`) it retires the broken host and,
-   **only if no output frame was delivered**, respawns (reuse-if-healthy else fresh, via
-   `EnsureHostReachableAsync`/`RetireAndRespawnAsync`) and retries once. If output already
-   streamed, it does not retry (no double-execute of a side-effecting command) but still
-   retires so the next call self-heals.
+   **only if the host never acknowledged execution-start (`<<<STARTED>>>`, R05) and no output
+   frame was delivered**, respawns (reuse-if-healthy else fresh, via
+   `EnsureHostReachableAsync`/`RetireAndRespawnAsync`) and retries once. The host emits
+   `STARTED` immediately before it runs the command and before any output, so a reset after a
+   silent command completed (`echo x >> f`, `rm`, `mkdir`) surfaces as an error (exit 125)
+   instead of re-running it. If output already streamed — or `STARTED` was seen — it does not
+   retry (no double-execute of a side-effecting command) but still retires so the next call
+   self-heals.
 2. **Host-liveness watchdog** — while connected, a background loop polls the host PID
    (owned handle for PerInvocation, sidecar for Daemon). If the host process dies, it trips
    `hostDeadCts`, converting the death into the recoverable reset path. This fixes the

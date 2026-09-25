@@ -130,6 +130,18 @@ public sealed class IpcWorker : IWorker
     }
 
     /// <summary>
+    /// Test seam (R05): build a worker bound to <paramref name="scheme"/>:<paramref name="endpoint"/>
+    /// WITHOUT the <see cref="StartAsync"/> discovery/spawn handshake, so a
+    /// scripted in-process host double — served over a real
+    /// <see cref="IIpcTransport"/> speaking <see cref="HostProtocol"/> frames —
+    /// can be dialed directly and exercised through <see cref="SendRequestAsync"/>.
+    /// Never used in production.
+    /// </summary>
+    internal static IpcWorker ConnectForTest(
+        string scheme, string endpoint, string hostBinaryPath, Lifetime lifetime = Lifetime.Daemon)
+        => new(scheme, endpoint, hostBinaryPath, TimeSpan.FromSeconds(5), TimeSpan.FromMilliseconds(50), lifetime);
+
+    /// <summary>
     /// Start a worker against <c>ps-bash-host</c>. With
     /// <see cref="Lifetime.PerInvocation"/> (default) a fresh private host is
     /// spawned on a process-local endpoint and owned by the returned worker;
@@ -776,24 +788,31 @@ public sealed class IpcWorker : IWorker
 
         // Self-healing retry for a mid-command transport RESET (host killed,
         // endpoint gone stale, connection refused). The reset is recoverable —
-        // but ONLY when no output frame escaped on the failed attempt, so a
-        // side-effecting command can never double-execute (the user-chosen
-        // "safe pre-output retry" policy). Any reset, retried or not, also
-        // retires/respawns the host so the NEXT invocation starts clean rather
-        // than re-hanging on the corpse. Timeouts are NOT retried here: they
-        // throw TimeoutException from ExchangeOnceAsync (see below).
+        // but ONLY when the host never ACKNOWLEDGED that execution started (R05),
+        // so a side-effecting command can never double-execute. The host emits
+        // HostProtocol.StartedSentinel immediately before it runs the command and
+        // before any output; a reset observed after it — even for a command that
+        // produced no stdout (`echo x >> f`, `rm`, `mkdir`) — may mean the
+        // command already ran, and is surfaced as an error instead of retried.
+        // `framesDelivered` remains a second guard for output-observed (still
+        // unsafe) resets. Any reset, retried or not, also retires/respawns the
+        // host so the NEXT invocation starts clean rather than re-hanging on the
+        // corpse. Timeouts are NOT retried here: they throw TimeoutException from
+        // ExchangeOnceAsync (see below).
         const int maxAttempts = 2;
         for (int attempt = 1; ; attempt++)
         {
-            // framesDelivered is flipped by the line handler on the FIRST frame
-            // (any mode). Read in the catch filter to gate the retry: no frame
-            // delivered ⇒ nothing observed downstream ⇒ safe to re-run.
+            // startedReceived is flipped by the response reader on the STARTED
+            // acknowledgement (R05); framesDelivered on the FIRST output frame.
+            // Both are read in the catch filter to gate the retry: only a reset
+            // with neither observed is safe to re-run.
+            bool startedReceived = false;
             bool framesDelivered = false;
             try
             {
                 return await ExchangeOnceAsync(
                     mode, command, compactRouteKey, idleTimeout, unbounded, compactFrames,
-                    () => framesDelivered = true, ct).ConfigureAwait(false);
+                    () => framesDelivered = true, () => startedReceived = true, ct).ConfigureAwait(false);
             }
             catch (Exception ex) when (IsTransportReset(ex))
             {
@@ -807,12 +826,13 @@ public sealed class IpcWorker : IWorker
                 // reset — observed directly on our own read as a SocketException/plain
                 // IOException — still retries pre-output (the common self-healing path).
                 bool watchdogDeath = ex is HostProcessExitedException;
-                if (attempt < maxAttempts && !framesDelivered && !watchdogDeath)
+                if (attempt < maxAttempts && !startedReceived && !framesDelivered && !watchdogDeath)
                 {
-                    // Pre-output reset: retire the broken host, bring up a
-                    // healthy one (reuse if it still answers, else spawn fresh),
-                    // and retry. A genuine inability to get a host (re-spawn
-                    // fails) surfaces as HostUnavailableException — let it out.
+                    // Pre-output, pre-STARTED reset: retire the broken host, bring
+                    // up a healthy one (reuse if it still answers, else spawn
+                    // fresh), and retry. A genuine inability to get a host
+                    // (re-spawn fails) surfaces as HostUnavailableException — let
+                    // it out.
                     await RetireAndRespawnAsync(ct).ConfigureAwait(false);
                     continue;
                 }
@@ -832,6 +852,16 @@ public sealed class IpcWorker : IWorker
                 // retire so the next invocation self-heals, then surface the
                 // failure (Program.cs maps it to a one-line diagnostic + exit 125).
                 await RetireIfUnresponsiveAsync().ConfigureAwait(false);
+                if (startedReceived)
+                {
+                    // R05: the host acknowledged execution-start, so the command
+                    // may already have run (silently) before the reset. Surface a
+                    // clear error (Program.cs maps it to exit 125) rather than
+                    // re-running it and doubling its side effect.
+                    throw new IOException(
+                        "host connection reset after the command started executing; " +
+                        "not retrying because the command may already have run.", ex);
+                }
                 throw;
             }
         }
@@ -867,7 +897,7 @@ public sealed class IpcWorker : IWorker
     /// </summary>
     private async Task<int> ExchangeOnceAsync(
         Mode mode, string command, string? compactRouteKey, TimeSpan idleTimeout, bool unbounded,
-        List<OutputFrame>? compactFrames, Action onFirstFrame, CancellationToken ct)
+        List<OutputFrame>? compactFrames, Action onFirstFrame, Action onStarted, CancellationToken ct)
     {
         long compactBytes = 0;
         // INACTIVITY (idle) timeout, not a total wall-clock cap: the deadline is
@@ -1008,6 +1038,7 @@ public sealed class IpcWorker : IWorker
 
                         StreamFrame(line, tag);
                     },
+                    onStarted,
                     linked.Token).ConfigureAwait(false);
 
                 if (compactFrames is not null)
