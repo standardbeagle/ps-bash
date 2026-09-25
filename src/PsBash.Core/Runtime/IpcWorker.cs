@@ -540,118 +540,30 @@ public sealed class IpcWorker : IWorker
 
     private async Task SpawnAndWaitAsync(CancellationToken ct)
     {
-        var isWindows = System.Runtime.InteropServices.RuntimeInformation.IsOSPlatform(
-            System.Runtime.InteropServices.OSPlatform.Windows);
-
-        var psi = new ProcessStartInfo
-        {
-            FileName = _hostBinaryPath,
-            // UseShellExecute=false uniformly so we can set per-process env
-            // vars (PSBASH_HOST_DETACH=1 on POSIX) and so we never go through
-            // ShellExecuteEx, which requires Shell COM / STA and fails with
-            // Win32 error 126 when ps-bash.exe is spawned by vstest (whose
-            // testhost runs tests on MTA threads).
-            //
-            // RedirectStandardInput=true: the host's stdin is given a fresh
-            // pipe from the launcher rather than being left inherited from
-            // the launcher's own stdin. We close the parent side immediately
-            // after spawn (see below), so the host sees an EOF-closed stdin.
-            // Without this, a launcher that was itself spawned by a test
-            // runner with redirected stdio (vstest's testhost) would pass
-            // vstest's stdin handle straight through to the host, and the
-            // host would block trying to read it — surfacing as
-            // HostUnavailableException("did not accept connections within
-            // startup timeout"). The Windows equivalent of POSIX's
-            // PSBASH_HOST_DETACH dup2(/dev/null) replacement.
-            //
-            // We MUST redirect stdout/stderr (not leave them inherited). Because
-            // RedirectStandardInput=true forces CreateProcess bInheritHandles=true,
-            // a host with un-redirected stdout/stderr INHERITS the launcher's own
-            // stdout/stderr handles. For a Daemon host — which outlives the
-            // launcher — that is fatal: the persisted host keeps the launcher's
-            // stdout pipe open forever, so the launcher's PARENT (e.g. the Claude
-            // Code Bash tool) never sees stdout EOF and hangs after every command,
-            // even though the launcher process itself has exited. Redirecting binds
-            // the host's stdout/stderr to launcher-owned pipes instead; we drain
-            // them to null below so the host never blocks on a full pipe and the
-            // launcher's real parent stdout/stderr are never shared with the host.
-            // (PerInvocation killed its host on dispose, masking this; Daemon does
-            // not — and Daemon never ran a -c command before it became the -c
-            // default, so this latent hazard had never fired.)
-            UseShellExecute = false,
-            CreateNoWindow = true,
-            WindowStyle = ProcessWindowStyle.Hidden,
-            RedirectStandardInput = true,
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
-        };
-        psi.ArgumentList.Add($"--ipc-endpoint={_scheme}:{_endpoint}");
+        var args = new List<string> { $"--ipc-endpoint={_scheme}:{_endpoint}" };
         // REFACTOR-7: a PerInvocation host is private to this launcher — pass
         // our PID so the host's ParentDeathWatcher self-terminates if the
         // launcher is force-killed before DisposeAsync can run. The Daemon path
         // intentionally does NOT pass a launcher PID: a shared daemon must
         // outlive any single launcher.
         if (_lifetime == Lifetime.PerInvocation)
-            psi.ArgumentList.Add($"--launcher-pid={Environment.ProcessId}");
-        // POSIX-only: signal the host to dup2 /dev/null over the inherited
-        // stdio fds at startup so it can never write into the launcher's pipes.
-        // On Windows the equivalent is structural: stdin is redirected + closed
-        // (above), and stdout/stderr are redirected to launcher-owned pipes that
-        // are drained to null (below) — so the host never shares the launcher's
-        // real parent stdout/stderr, the hazard that hangs a persisted Daemon.
-        //
-        // REFACTOR-7 note: this detach is the daemon-era hang fix. PerInvocation
-        // contains the pipe-inheritance hazard within the launcher's lifetime
-        // (host killed on dispose), but it is still load-bearing for Daemon, where
-        // the host outlives the launcher. Kept for both lifetimes.
-        if (!isWindows)
-        {
-            psi.Environment["PSBASH_HOST_DETACH"] = "1";
-        }
-        // Windows: clear HANDLE_FLAG_INHERIT on our OWN std handles before spawn.
-        // RedirectStandardInput forces CreateProcess bInheritHandles=true, which
-        // otherwise leaks a copy of the launcher's real stdout/stderr handles into
-        // the child as stray inherited handles (separate from the redirect pipes
-        // it uses as StdOut/StdErr). A persisted Daemon holding those stray copies
-        // keeps the launcher's PARENT pipe open after the launcher exits → the
-        // parent (Bash tool) hangs with no EOF. Clearing inherit means the child
-        // inherits ONLY the redirect pipes. (POSIX handles the equivalent via
-        // PSBASH_HOST_DETACH dup2 + pipe-fd close in InheritedFdDetach.)
-        if (isWindows)
-            ClearStdHandleInheritanceWindows();
+            args.Add($"--launcher-pid={Environment.ProcessId}");
 
         Process? proc = null;
         bool spawnSucceeded = false;
         try
         {
-            proc = Process.Start(psi)
-                ?? throw new HostUnavailableException(
-                    $"Process.Start returned null for '{_hostBinaryPath}'.");
+            // The host must never hold a handle to any of the launcher's pipes: a
+            // Daemon outlives the launcher, so an inherited copy keeps the launcher's
+            // PARENT from ever seeing EOF (the Bash tool hanging after every command;
+            // `tman test` hanging after the suite). Each platform severs inheritance
+            // at spawn — see StartHostProcess.
+            proc = StartHostProcess(args);
 
             // Test seam: record that this launcher actually spawned a host on this
             // endpoint. Single-flight (EnsureHostReachableAsync) must keep this at
             // exactly one per shared endpoint under a concurrent cold-start race.
             SpawnCounts.AddOrUpdate($"{_scheme}:{_endpoint}", 1, static (_, n) => n + 1);
-
-            // Close our end of the redirected stdin pipe. The host now sees
-            // an EOF-closed stdin instead of whatever stdin the launcher
-            // inherited (e.g. vstest's redirected pipe). Without this the
-            // host would block on a read of vstest's stream that never
-            // produces data — the failure mode that broke the prior
-            // UseShellExecute=false attempt.
-            try { proc.StandardInput.Close(); }
-            catch { /* harmless — already closed if host exited fast */ }
-
-            // Drain the host's redirected stdout/stderr to null on background
-            // tasks. This keeps the host from ever blocking on a full pipe (it is
-            // near-silent in framed mode, but a stray banner/error must not wedge
-            // it) and, crucially, means the host's stdout/stderr are launcher-owned
-            // pipes — NOT the launcher's real parent handles. When the launcher
-            // exits, these pipes close; a persisted daemon writing afterward just
-            // gets a broken pipe (swallowed). Fire-and-forget: process exit does
-            // not wait on these.
-            DrainToNull(proc.StandardOutput);
-            DrainToNull(proc.StandardError);
 
             var deadline = DateTime.UtcNow + _startupTimeout;
             while (DateTime.UtcNow < deadline)
@@ -1444,37 +1356,51 @@ public sealed class IpcWorker : IWorker
             ? "ps-bash-host.exe"
             : "ps-bash-host";
 
-    [DllImport("kernel32.dll", SetLastError = true)]
-    private static extern IntPtr GetStdHandle(int nStdHandle);
-
-    [DllImport("kernel32.dll", SetLastError = true)]
-    [return: MarshalAs(UnmanagedType.Bool)]
-    private static extern bool SetHandleInformation(IntPtr hObject, uint dwMask, uint dwFlags);
-
-    private const uint HANDLE_FLAG_INHERIT = 0x1;
-
-    // Clear the inherit flag on this process's stdin/stdout/stderr so a spawned
-    // child (with CreateProcess bInheritHandles=true, forced by stream redirection)
-    // does NOT inherit stray copies of them. See call site in SpawnAndWaitAsync.
-    private static void ClearStdHandleInheritanceWindows()
+    // Spawn the host so it can never hold a handle to the launcher's own stdio.
+    //
+    // Windows: WindowsHostSpawn restricts inheritance to the NUL device via
+    // PROC_THREAD_ATTRIBUTE_HANDLE_LIST. Process.Start cannot do this — it always
+    // passes bInheritHandles=TRUE, leaking every inheritable handle the launcher
+    // holds (including stray copies of a .NET parent's stdout).
+    //
+    // POSIX: stdin is a fresh pipe closed at once (EOF — the host must never block
+    // on the launcher's stdin), stdout/stderr are launcher-owned pipes drained to
+    // null, and PSBASH_HOST_DETACH makes the host dup2 /dev/null over its stdio and
+    // close any other inherited pipe fds at startup (InheritedFdDetach).
+    //
+    // UseShellExecute=false: ShellExecuteEx needs Shell COM / STA and fails with
+    // Win32 error 126 under vstest's MTA threads.
+    private Process StartHostProcess(IReadOnlyList<string> args)
     {
-        foreach (var id in stackalloc[] { -10, -11, -12 }) // STD_INPUT/OUTPUT/ERROR
+        if (OperatingSystem.IsWindows())
+            return WindowsHostSpawn.Start(_hostBinaryPath, args);
+
+        var psi = new ProcessStartInfo
         {
-            try
-            {
-                var h = GetStdHandle(id);
-                // Skip null/invalid (-1) handles — a launcher with no console.
-                if (h != IntPtr.Zero && h != new IntPtr(-1))
-                    SetHandleInformation(h, HANDLE_FLAG_INHERIT, 0);
-            }
-            catch { /* best effort — never block spawn on this */ }
-        }
+            FileName = _hostBinaryPath,
+            UseShellExecute = false,
+            CreateNoWindow = true,
+            RedirectStandardInput = true,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+        };
+        foreach (var arg in args)
+            psi.ArgumentList.Add(arg);
+        psi.Environment["PSBASH_HOST_DETACH"] = "1";
+
+        var proc = Process.Start(psi)
+            ?? throw new HostUnavailableException(
+                $"Process.Start returned null for '{_hostBinaryPath}'.");
+        try { proc.StandardInput.Close(); }
+        catch { /* harmless — already closed if host exited fast */ }
+        DrainToNull(proc.StandardOutput);
+        DrainToNull(proc.StandardError);
+        return proc;
     }
 
     // Read a child stream to completion and discard it, on a background task that
-    // never blocks process exit. Used to absorb a spawned host's redirected
-    // stdout/stderr (see SpawnAndWaitAsync) so the host neither blocks on a full
-    // pipe nor holds the launcher's real parent stdout/stderr open.
+    // never blocks process exit, so the host neither blocks on a full pipe nor
+    // shares the launcher's real parent stdout/stderr.
     private static void DrainToNull(StreamReader reader)
     {
         _ = Task.Run(async () =>
