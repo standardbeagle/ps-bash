@@ -54,7 +54,12 @@ public sealed class ModeRunner
 
     public ModeRunner()
     {
-        _baseRunner = PsBashRunner.Create().WithTimeout(DefaultTimeout);
+        // Keep the warm shared daemon (per-invocation cold-starts a host for every
+        // test x mode: 6 min instead of ~1.5), but let it idle out 30 s after the
+        // last canary instead of the default 600 s, so a run leaves no host behind.
+        _baseRunner = PsBashRunner.Create()
+            .WithTimeout(DefaultTimeout)
+            .WithEnv(new Dictionary<string, string> { ["PSBASH_HOST_IDLE_SECS"] = "30" });
         _psBashPath = _baseRunner.TryResolveBinary();
     }
 
