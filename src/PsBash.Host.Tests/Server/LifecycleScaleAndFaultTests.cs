@@ -805,6 +805,77 @@ public sealed class LifecycleScaleAndFaultTests
     }
 
     /// <summary>
+    /// A persisted <see cref="Lifetime.Daemon"/> host must inherit ONLY its own
+    /// redirect pipes — never a stray inheritable handle the launcher happened to
+    /// hold. .NET's Process.Start always calls CreateProcess with
+    /// bInheritHandles=TRUE, so without an explicit handle list the daemon gets a
+    /// copy of every inheritable handle in the launcher. A launcher spawned by a
+    /// .NET parent (vstest's testhost, any C# tool) carries that parent's
+    /// inheritable stdout; the daemon then holds it after everyone else exits and
+    /// the reader never sees EOF. That is the full-suite `tman test` hang: the
+    /// suite finished, an orphaned Escalation-spawned daemon kept the pipe open,
+    /// and killing that one process released the client at once
+    /// (task 01M3AQ4TFDYASNFAFK2HB7WNSM).
+    ///
+    /// Reproduced here in-process: this test IS the launcher. An inheritable pipe
+    /// stands in for the parent's stdout; after the daemon is up we drop our copy
+    /// and require EOF while the daemon is still alive.
+    ///
+    /// Oracle note (Directive 1): no bash oracle — host handle inheritance is
+    /// outside the bash compatibility surface.
+    /// </summary>
+    [SkippableFact]
+    [Trait("Category", "Stress")] // spawns a real ps-bash-host process
+    public async Task Daemon_Spawn_DoesNotInheritStrayLauncherHandles()
+    {
+        // POSIX gets the equivalent guarantee from PSBASH_HOST_DETACH
+        // (InheritedFdDetach); this pins the Windows CreateProcess path.
+        Skip.IfNot(OperatingSystem.IsWindows(), "Windows handle-inheritance path");
+        var hostBinary = TryLocateHostBinary();
+        Skip.If(hostBinary is null, "ps-bash-host binary not found — build src/PsBash.Host first");
+
+        var (spec, scheme, endpoint) = NewIsolatedEndpoint("stray-handle");
+        var prior = Environment.GetEnvironmentVariable(IpcTransportFactory.EndpointEnvVar);
+        Environment.SetEnvironmentVariable(IpcTransportFactory.EndpointEnvVar, spec);
+
+        using var stray = new AnonymousPipeServerStream(PipeDirection.In, HandleInheritability.Inheritable);
+        int hostPid = 0;
+        try
+        {
+            using var startCts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+            await using (var worker = await IpcWorker.StartAsync(
+                hostBinary!, startupTimeout: TimeSpan.FromSeconds(20),
+                lifetime: Lifetime.Daemon, ct: startCts.Token))
+            {
+                var pidText = await worker.QueryAsync("$PID", startCts.Token);
+                Assert.True(int.TryParse(pidText.Trim(), out hostPid),
+                    $"expected a numeric host PID from $PID, got: '{pidText}'");
+            }
+            Assert.True(IsProcessAlive(hostPid), "a Daemon host must outlive its worker");
+
+            // Ours was the only legitimate write end. Any EOF delay now means
+            // some other process — the daemon — holds a copy.
+            stray.DisposeLocalCopyOfClientHandle();
+            var buffer = new byte[1];
+            var read = stray.ReadAsync(buffer).AsTask();
+            var finished = await Task.WhenAny(read, Task.Delay(TimeSpan.FromSeconds(10)));
+
+            Assert.True(finished == read,
+                $"stray launcher pipe never reached EOF: daemon host PID {hostPid} inherited it");
+            Assert.Equal(0, await read);
+        }
+        finally
+        {
+            if (hostPid != 0)
+            {
+                try { using var p = Process.GetProcessById(hostPid); p.Kill(entireProcessTree: true); } catch { }
+            }
+            Environment.SetEnvironmentVariable(IpcTransportFactory.EndpointEnvVar, prior);
+            CleanupEndpoint(scheme, endpoint);
+        }
+    }
+
+    /// <summary>
     /// REFACTOR-7 acceptance: two concurrent <see cref="Lifetime.PerInvocation"/>
     /// workers each get their OWN private host on a process-local endpoint — they
     /// do NOT share the canonical (per-session) daemon socket. Proven by asking each host for
