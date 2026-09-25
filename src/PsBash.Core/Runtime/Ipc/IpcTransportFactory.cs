@@ -91,9 +91,18 @@ public static class IpcTransportFactory
         var suffix = session.Length > 0 ? $"-s{session}" : "";
         if (IsUnixSocketSupported())
         {
-            var sockDir = Path.Combine(Path.GetTempPath(), "ps-bash");
-            Directory.CreateDirectory(sockDir);
-            return ("unix", Path.Combine(sockDir, $"host-{user}{suffix}.sock"));
+            var sockDir = SocketDirectory();
+            var candidate = Path.Combine(sockDir, $"host-{user}{suffix}.sock");
+            // A long temp root / user / session token can overflow sun_path.
+            // Fall back to the named-pipe scheme, which has no path-length cap
+            // (NamedPipeTransport applies its own macOS budget on POSIX). The
+            // scheme is deterministic given the same inputs, so launcher and
+            // host agree.
+            if (candidate.Length <= UnixSocketPathBudget())
+            {
+                Directory.CreateDirectory(sockDir);
+                return ("unix", candidate);
+            }
         }
         return ("pipe", $"psbash-host-{user}{suffix}");
     }
@@ -135,14 +144,45 @@ public static class IpcTransportFactory
     /// </remarks>
     public static (string Scheme, string Endpoint) ResolvePerInvocationEndpoint()
     {
-        var unique = $"{Environment.ProcessId}-{Guid.NewGuid():N}";
+        var pid = ProcessIdOverride is { } pidSeam ? pidSeam() : Environment.ProcessId;
+        var guid = Guid.NewGuid().ToString("N");
         if (IsUnixSocketSupported())
         {
-            var sockDir = Path.Combine(Path.GetTempPath(), "ps-bash");
-            Directory.CreateDirectory(sockDir);
-            return ("unix", Path.Combine(sockDir, $"host-pi-{unique}.sock"));
+            var sockDir = SocketDirectory();
+            var prefix = Path.Combine(sockDir, $"host-pi-{pid}-");
+            const string ext = ".sock";
+            // sun_path caps the WHOLE path, so the random suffix gets whatever
+            // room the temp root + pid leave. 12 hex chars (48 bits) is ample
+            // to keep two concurrent launchers of the same pid distinct; below
+            // that the path is pathological, so use the pipe scheme instead.
+            var room = UnixSocketPathBudget() - prefix.Length - ext.Length;
+            if (room >= MinInvocationSuffixHexChars)
+            {
+                Directory.CreateDirectory(sockDir);
+                var unique = guid[..Math.Min(guid.Length, room)];
+                return ("unix", prefix + unique + ext);
+            }
         }
-        return ("pipe", $"psbash-host-pi-{unique}");
+        return ("pipe", $"psbash-host-pi-{pid}-{guid}");
+    }
+
+    /// <summary>
+    /// Longest AF_UNIX path .NET accepts. <c>sun_path</c> is a 108-byte buffer
+    /// including the terminating NUL on Linux/Windows, so the path itself is
+    /// capped at 107 chars; macOS uses a 104-byte buffer (103 chars).
+    /// </summary>
+    internal const int UnixSocketPathMaxChars = 107;
+
+    /// <summary>Minimum random hex chars kept for per-invocation uniqueness.</summary>
+    internal const int MinInvocationSuffixHexChars = 12;
+
+    private static int UnixSocketPathBudget()
+        => OperatingSystem.IsMacOS() ? 103 : UnixSocketPathMaxChars;
+
+    private static string SocketDirectory()
+    {
+        var temp = TempPathOverride is { } seam ? seam() : Path.GetTempPath();
+        return Path.Combine(temp, "ps-bash");
     }
 
     /// <summary>

@@ -216,9 +216,11 @@ public class IpcTransportFactoryTests : IDisposable
         {
             var (scheme, endpoint) = IpcTransportFactory.ResolvePerInvocationEndpoint();
 
-            Assert.Equal("unix", scheme);
+            // Either the unix path was shortened to fit, or it fell back to the
+            // named-pipe scheme; both keep the launcher pid and never overflow.
+            Assert.True(scheme is "unix" or "pipe", $"unexpected scheme '{scheme}'");
             Assert.True(
-                endpoint.Length <= SunPathBudget,
+                scheme != "unix" || endpoint.Length <= SunPathBudget,
                 $"endpoint is {endpoint.Length} chars, exceeds the {SunPathBudget}-char sun_path budget: {endpoint}");
             Assert.Contains("291088", endpoint);
         }
@@ -242,12 +244,12 @@ public class IpcTransportFactoryTests : IDisposable
             var (s1, e1) = IpcTransportFactory.ResolvePerInvocationEndpoint();
             var (s2, e2) = IpcTransportFactory.ResolvePerInvocationEndpoint();
 
-            Assert.Equal("unix", s1);
             Assert.Equal(s1, s2);
             Assert.NotEqual(e1, e2);
             Assert.Contains("291088", e1);
-            Assert.True(e1.Length <= SunPathBudget, $"e1 is {e1.Length} chars: {e1}");
-            Assert.True(e2.Length <= SunPathBudget, $"e2 is {e2.Length} chars: {e2}");
+            Assert.Contains("291088", e2);
+            Assert.True(s1 != "unix" || e1.Length <= SunPathBudget, $"e1 is {e1.Length} chars: {e1}");
+            Assert.True(s1 != "unix" || e2.Length <= SunPathBudget, $"e2 is {e2.Length} chars: {e2}");
         }
         finally
         {
