@@ -219,12 +219,14 @@ public static class AssertOracle
         // values ($USER, $HOME, locale) are byte-stable across dev boxes and CI
         // runners. HOME is isolated to a per-test temp directory.
         //
-        // The directory name is kept SHORT and placed directly under the system
-        // temp root: TMPDIR points here, and the ps-bash host derives its Unix
-        // domain socket path as "{TMPDIR}/ps-bash/host-pi-{pid}-{guid}.sock".
-        // A UDS path is capped at 108 chars on Linux — a long nested home dir
-        // (e.g. "/tmp/ps-bash/golden-home-{32hex}") blows that limit and the
-        // host fails to bind. An 8-hex suffix leaves ample headroom.
+        // The directory name is kept SHORT: TMPDIR points here, and the ps-bash
+        // host derives its Unix domain socket path as
+        // "{TMPDIR}/ps-bash/host-pi-{pid}-{guid}.sock". sun_path is a 108-byte
+        // buffer INCLUDING the terminating NUL on Linux/Windows (104 on macOS),
+        // so the whole path must stay within 107 chars (103 on macOS) or the
+        // host cannot bind. IpcTransportFactory now shortens the random suffix
+        // to fit and falls back to a named pipe when even that will not fit,
+        // but a short root keeps these golden runs on the fast unix path.
         var canonicalHome = Path.Combine(
             Path.GetTempPath(), $"psb-g{Guid.NewGuid():N}".Substring(0, 13));
         Directory.CreateDirectory(canonicalHome);
