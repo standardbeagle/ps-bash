@@ -20,12 +20,15 @@ Measured on Windows, named-pipe transport:
 
 ## Why the existing guards missed it
 
-The design already anticipates a dead client wedging the gate — `IpcOutputQueue`'s
-`DefaultStallTimeoutMs` exists precisely for that, and its comment says so. But it can only
-fire when the command **produces output**: the detector is the output queue filling up
-because nobody is draining it. A command that writes nothing (`sleep`, a long `find` before
-its first hit, a build step) never enqueues a frame, so nothing ever noticed the client was
-gone.
+The design originally anticipated a dead client wedging the gate with `IpcOutputQueue`'s
+`DefaultStallTimeoutMs`: a queue that stayed full because nobody drained it was treated as
+death. That signal is wrong twice over (R09). It can only fire when the command **produces
+output** — a command that writes nothing (`sleep`, a long `find` before its first hit, a
+build step) never enqueues a frame, so nothing noticed. And a live-but-slow reader (a `less`
+paused on a page) is indistinguishable from a dead one, so the timeout aborted a healthy
+command under ordinary back-pressure. The stall timeout is gone: a full queue now blocks
+(back-pressure) and death is decided only by the disconnect watchdog below, whose single
+pending read is true liveness evidence.
 
 Nothing else watched the connection: the `CancellationToken` reaching
 `SdkWorker.ExecuteWithOutputAsync` is the *server lifetime* token, not a per-connection
