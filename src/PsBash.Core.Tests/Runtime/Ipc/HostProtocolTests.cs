@@ -383,6 +383,47 @@ public class HostProtocolTests
         Assert.Equal("2", map["B"]);
     }
 
+    /// <summary>
+    /// R06: ENV header lines are only recognized in the header position (before
+    /// the first body line). A Command body that happens to contain a line
+    /// starting with <c>ENV:</c> (e.g. a heredoc) must reach the command
+    /// unchanged, not be consumed as an environment header.
+    /// </summary>
+    [Fact]
+    public async Task RoundTrip_Command_BodyLineStartingWithEnv_PreservedAsBody()
+    {
+        var body = "cat <<'EOF'\nENV: this is data, not a header\nEOF";
+
+        await using var ms = new MemoryStream();
+        await HostProtocol.WriteRequestAsync(ms, new Mode.Command(body));
+        ms.Position = 0;
+        var decoded = await HostProtocol.ReadRequestAsync(ms);
+
+        var cmd = Assert.IsType<Mode.Command>(decoded);
+        Assert.Equal(body, cmd.Body);
+        Assert.Null(cmd.Environment);
+    }
+
+    /// <summary>
+    /// R06: a Script body that contains an <c>ENV:</c> line must round-trip
+    /// unchanged; only the leading header block carries environment entries.
+    /// </summary>
+    [Fact]
+    public async Task RoundTrip_Script_BodyLineStartingWithEnv_PreservedAsBody()
+    {
+        var body = "echo hi\nENV: not a header";
+
+        await using var ms = new MemoryStream();
+        await HostProtocol.WriteRequestAsync(
+            ms, new Mode.Script("/tmp/x.sh", new[] { "a" }, body));
+        ms.Position = 0;
+        var decoded = await HostProtocol.ReadRequestAsync(ms);
+
+        var script = Assert.IsType<Mode.Script>(decoded);
+        Assert.Equal(body, script.Body);
+        Assert.Null(script.Environment);
+    }
+
     // -- PTY-4 ----------------------------------------------------------------
 
     /// <summary>

@@ -110,6 +110,39 @@ public class SdkWorkerEnvironmentTests : IAsyncLifetime
         Assert.Contains(read.Lines, l => l.Contains("leaked=[]"));
     }
 
+    // On Windows variable names are case-insensitive. A launcher block whose
+    // entry differs from the daemon's existing instance only in casing must be
+    // retained (set to the launcher's casing/value), NOT set-then-deleted by the
+    // keep-set comparison. Regression: an Ordinal keep-set treated the two
+    // casings as distinct, so the just-set entry was immediately removed.
+    [Fact]
+    public async Task Environment_DivergentCasingFromDaemon_RetainedOnWindows()
+    {
+        var worker = _fixture.CreateWorker();
+        var upper = "PSBASH_CASING_PROBE";
+        var lower = upper.ToLowerInvariant();
+
+        var seeded = await RunAsync(worker, $"$env:{upper} = 'seed'; Invoke-BashEcho seeded", null);
+        // Minimal block: ONLY the lower-cased entry, so the reset must not keep the
+        // daemon's pre-existing upper-cased instance. A launcher that has renamed
+        // its casing sends its whole block, just this one entry here.
+        var onlyLower = new List<KeyValuePair<string, string>>
+        {
+            new(lower, "fromlauncher"),
+        };
+        var reset = await RunAsync(worker, $"Invoke-BashEcho \"seen=[$env:{upper}]\"", onlyLower);
+
+        Assert.Equal(0, seeded.ExitCode);
+        Assert.Equal(0, reset.ExitCode);
+        if (OperatingSystem.IsWindows())
+        {
+            Assert.Contains(reset.Lines, l => l.Contains("seen=[fromlauncher]"));
+        }
+
+        // Restore so later tests in the shared collection are not polluted.
+        await RunAsync(worker, $"Remove-Item Env:{upper} -ErrorAction SilentlyContinue", null);
+    }
+
     // The legacy null block must NOT wipe the environment: in-process
     // interactive callers (InteractiveShell) pass null and rely on the host
     // process environment (their own forwarded config) staying intact.
