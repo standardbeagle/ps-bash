@@ -12,6 +12,30 @@ public class BashTranspilerTests
         Assert.Equal("Invoke-BashEcho hello", BashTranspiler.Transpile("echo hello"));
     }
 
+    [Fact]
+    public void Transpile_ScriptWithExitTrap_WrapsInTryFinallyEpilogue()
+    {
+        // REGRESSION (R16): the transpiler emitted no script epilogue, so
+        // `trap ... EXIT` only fired from the eval path. A script carrying an EXIT
+        // trap must be wrapped so the handler fires on normal end, `exit N`, and
+        // errexit (all of which run a PowerShell `finally`).
+        var result = BashTranspiler.Transpile("trap 'echo bye' EXIT; echo main");
+
+        Assert.Contains("finally", result);
+        Assert.Contains("__BashTrapEXIT", result);
+    }
+
+    [Fact]
+    public void Transpile_ScriptWithoutExitTrap_IsNotWrapped()
+    {
+        // The wrapper is terse-because-rare: a script with no EXIT/ERR trap keeps
+        // the historical bare emission (many tests assert exact output).
+        var result = BashTranspiler.Transpile("echo hello");
+
+        Assert.DoesNotContain("__BashTrapEXIT", result);
+        Assert.DoesNotContain("finally", result);
+    }
+
     // Regression: Claude Code's Bash-tool prelude wraps every command in
     // `shopt ... 2>/dev/null || true && eval ... && pwd -P >| /tmp/x`.
     // Two bugs surfaced live:

@@ -188,6 +188,43 @@ public class InvokeBashReadCommandTests : IClassFixture<SharedPwshFixture>
         Assert.NotEqual("PWNED", v);
     }
 
+    [Fact]
+    public void Read_MultiVariable_HonorsCustomIfs()
+    {
+        // REGRESSION (R16): the multi-variable path split on `\s+` regardless of
+        // IFS, so `IFS=,` never split. bash splits on IFS with the last variable
+        // absorbing the remainder (separators included).
+        var pwsh = _fixture.AcquireFresh();
+        pwsh.AddScript(
+            "$env:IFS = ','; try { '1,2,3' | Invoke-BashRead v1 v2 v3 } finally { Remove-Item Env:\\IFS }")
+            .Invoke();
+        pwsh.Commands.Clear();
+        var v1 = pwsh.AddScript("$v1").Invoke();
+        pwsh.Commands.Clear();
+        var v2 = pwsh.AddScript("$v2").Invoke();
+        pwsh.Commands.Clear();
+        var v3 = pwsh.AddScript("$v3").Invoke();
+        Assert.Equal("1", v1[0]?.ToString());
+        Assert.Equal("2", v2[0]?.ToString());
+        Assert.Equal("3", v3[0]?.ToString());
+    }
+
+    [Fact]
+    public void Read_MultiVariable_HonorsCustomIfs_LastAbsorbsRemainder()
+    {
+        // Last variable gets the remainder including the IFS separators.
+        var pwsh = _fixture.AcquireFresh();
+        pwsh.AddScript(
+            "$env:IFS = ','; try { '1,2,3' | Invoke-BashRead a b } finally { Remove-Item Env:\\IFS }")
+            .Invoke();
+        pwsh.Commands.Clear();
+        var a = pwsh.AddScript("$a").Invoke();
+        pwsh.Commands.Clear();
+        var b = pwsh.AddScript("$b").Invoke();
+        Assert.Equal("1", a[0]?.ToString());
+        Assert.Equal("2,3", b[0]?.ToString());
+    }
+
     // ---- Directive 12 injection probe ----
 
     [Fact]

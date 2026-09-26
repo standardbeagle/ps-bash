@@ -5450,6 +5450,44 @@ public class PsEmitterTests
         Assert.False(CompactCommandChain.TryClassify(noCommitOperand, out _));
     }
 
+    // -----------------------------------------------------------------------
+    // R16 lowering regressions: IFS in while-read, brace group pipe stdin,
+    // BASH_REMATCH population.
+    // -----------------------------------------------------------------------
+
+    [Fact]
+    public void Transpile_WhileReadWithIfsPrefix_SplitsOnIfs()
+    {
+        // REGRESSION. The while-read fast path hard-coded `-split '\s+'` and never
+        // looked at the `IFS=` env prefix on the read command, so `while IFS=: read`
+        // gave the whole line to the first variable.
+        var result = PsEmitter.Transpile("while IFS=: read -r a b; do echo $a; done")!;
+
+        Assert.Contains("-split ':'", result);
+        Assert.DoesNotContain("-split '\\s+', 2", result);
+    }
+
+    [Fact]
+    public void Transpile_BraceGroupPipeTarget_ForwardsInput()
+    {
+        // REGRESSION. A brace group as a pipe target was emitted as `& { }` with no
+        // `$input` forwarding, so `read` inside the body saw no stdin.
+        var result = PsEmitter.Transpile("echo hi | { read y; echo y=$y; }")!;
+
+        Assert.Contains("$input |", result);
+    }
+
+    [Fact]
+    public void Transpile_RegexMatch_PopulatesBashRematch()
+    {
+        // REGRESSION. `=~` emitted `-match` but nothing copied `$Matches` into
+        // `$global:BASH_REMATCH`, so `${BASH_REMATCH[1]}` indexed a null array.
+        var result = PsEmitter.Transpile("[[ $s =~ (a)(b) ]]")!;
+
+        Assert.Contains("-match", result);
+        Assert.Contains("BASH_REMATCH", result);
+    }
+
     private static Command.Simple MakeSimple(params string[] words) =>
         new(words.Select(MakeWord).ToImmutableArray(), ImmutableArray<EnvPair>.Empty, ImmutableArray<Redirect>.Empty);
 
