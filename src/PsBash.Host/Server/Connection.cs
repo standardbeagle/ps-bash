@@ -35,12 +35,27 @@ internal sealed class Connection
         _server = server;
     }
 
+    // Bound on how long a connection may sit half-open before its request arrives.
+    // Without it an idle client that connects and sends nothing holds a connection
+    // task (and, once the cap below is reached, an accept slot) forever. Generous
+    // relative to a launcher that dials and immediately writes its request.
+    private const int DefaultRequestReadTimeoutMs = 30_000;
+
     internal async Task HandleAsync(CancellationToken ct)
     {
         Mode mode;
         try
         {
-            mode = await HostProtocol.ReadRequestAsync(_stream, ct);
+            using var requestRead = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            requestRead.CancelAfter(RequestReadTimeoutMs());
+            mode = await HostProtocol.ReadRequestAsync(_stream, requestRead.Token);
+        }
+        catch (OperationCanceledException) when (!ct.IsCancellationRequested)
+        {
+            // The read deadline elapsed with no complete request: the client is
+            // idle or gone. Unwind quietly; caller cancellation still propagates.
+            WorkerPool<SdkWorker>.DiagLog("Connection: request read timed out; closing idle connection");
+            return;
         }
         catch (Exception ex) when (ex is IOException or InvalidDataException or FormatException)
         {
@@ -114,16 +129,37 @@ internal sealed class Connection
         // leak into the next invocation on the shared SdkWorker runspace.
         command = PerInvocationReset + command;
 
+        // Client-disconnect watchdog. Back-pressure must BLOCK on a live-but-slow
+        // reader (a downstream `less` paused on a page), so write latency can no
+        // longer be the liveness signal. This pending 1-byte read is: it only ever
+        // completes on EOF/reset, never on a slow consumer. On disconnect it trips
+        // execCts, which unblocks both the command and any blocked output write.
+        // A silent command (`sleep 30`) never writes a frame, so the output path
+        // alone could not notice a dead launcher — this watchdog covers both.
+        //
+        // Installed only for a live duplex transport in framed mode. A SEEKABLE stream
+        // is an in-memory buffer (test doubles), where a read returning 0 means "end of
+        // buffer", not "peer gone" — watching one would abandon every command.
+        // Interactive sessions are excluded because their stream carries additional
+        // protocol traffic that this detector must not consume.
+        using var clientGone = new CancellationTokenSource();
+        using var watchStop = new CancellationTokenSource();
+        using var execCts = CancellationTokenSource.CreateLinkedTokenSource(ct, clientGone.Token);
+        if (sessionMode == SessionMode.Framed && !_stream.CanSeek)
+            _ = WatchForClientDisconnectAsync(_stream, clientGone, watchStop.Token);
+
         // `await using` binds disposal to the whole remaining scope, so ANY exit
         // after construction — including a throw from _pool.AcquireAsync below
         // (cancellation / pool disposed / worker-spawn failure) — disposes the
         // queue and unpins its drain task. Disposing an unwritten/never-faulted
         // queue is safe: DisposeAsync → CompleteAsync → CompleteAdding on an empty
         // queue lets the drain foreach exit immediately (no hang). In interactive
-        // mode frameWriter is null and `await using` on null is a no-op.
+        // mode frameWriter is null and `await using` on null is a no-op. The queue
+        // is built on execCts so a client disconnect still unblocks a full-queue
+        // write (back-pressure) — without aborting on mere slowness.
         await using IpcOutputQueue? frameWriter = sessionMode == SessionMode.Interactive
             ? null
-            : new IpcOutputQueue(_stream, ct);
+            : new IpcOutputQueue(_stream, execCts.Token);
 
         // PTY-4: in interactive mode the host runspace's Console.Out is the PTY
         // slave (PtySpawner wired stdio inheritance). Bypass the IPC writer so
@@ -160,25 +196,6 @@ internal sealed class Connection
         WorkerPool<SdkWorker>.DiagLog("Connection: acquiring worker");
         SdkWorker? worker = null;
         int exitCode;
-
-        // Client-disconnect watchdog. Without it, a command whose launcher has gone
-        // away runs to completion while holding SdkWorker's PROCESS-WIDE exec gate,
-        // so every other session in this daemon queues behind work nobody will ever
-        // read. The IpcOutputQueue stall timeout only catches this for commands that
-        // PRODUCE OUTPUT (the queue must fill to notice); a silent command like
-        // `sleep 30` never writes a frame, so nothing noticed at all — a launcher
-        // killed at 2 s still blocked the next command for the full 30 s.
-        //
-        // Installed only for a live duplex transport in framed mode. A SEEKABLE stream
-        // is an in-memory buffer (test doubles), where a read returning 0 means "end of
-        // buffer", not "peer gone" — watching one would abandon every command.
-        // Interactive sessions are excluded because their stream carries additional
-        // protocol traffic that this detector must not consume.
-        using var clientGone = new CancellationTokenSource();
-        using var watchStop = new CancellationTokenSource();
-        using var execCts = CancellationTokenSource.CreateLinkedTokenSource(ct, clientGone.Token);
-        if (sessionMode == SessionMode.Framed && !_stream.CanSeek)
-            _ = WatchForClientDisconnectAsync(_stream, clientGone, watchStop.Token);
 
         try
         {
@@ -339,13 +356,6 @@ internal sealed class Connection
     private sealed class IpcOutputQueue : IAsyncDisposable
     {
         private const int DefaultCapacity = 4096;
-        // Upper bound on how long a single frame may wait for a queue slot before we
-        // declare the consumer dead. Write() runs inside RunCommand under the
-        // PROCESS-WIDE exec gate, so an unbounded block here (queue full because the
-        // launcher stopped reading its stdout) wedges every OTHER session behind the
-        // gate. A live-but-slow consumer keeps the drain moving so a slot frees long
-        // before this elapses; only a truly dead consumer exhausts it.
-        private const int DefaultStallTimeoutMs = 30_000;
 
         private readonly BlockingCollection<IpcOutputFrame> _queue;
         private readonly CancellationToken _ct;
@@ -385,11 +395,13 @@ internal sealed class Connection
 
             try
             {
-                // Bounded add, NOT an unbounded blocking Add: see DefaultStallTimeoutMs.
-                // On timeout the consumer is dead — fail THIS connection so RunCommand
-                // aborts and releases the gate, instead of wedging the whole daemon.
-                if (!_queue.TryAdd(new IpcOutputFrame(tag, line), StallTimeoutMs(), _ct))
-                    throw new IpcOutputException("IPC output consumer stalled; abandoning connection.");
+                // Back-pressure, not a liveness verdict. A full queue means the
+                // consumer is slow (a `less` paused on a page), not dead, so block
+                // until a slot frees. Death is signalled by the client-disconnect
+                // watchdog cancelling _ct (execCts), which unblocks this Add with an
+                // OperationCanceledException; a failed drain also completes the queue
+                // and makes Add throw InvalidOperationException.
+                _queue.Add(new IpcOutputFrame(tag, line), _ct);
             }
             catch (OperationCanceledException) when (_ct.IsCancellationRequested)
             {
@@ -401,12 +413,6 @@ internal sealed class Connection
             {
                 throw new IpcOutputException("IPC output writer is closed.", ex);
             }
-        }
-
-        private static int StallTimeoutMs()
-        {
-            var raw = Environment.GetEnvironmentVariable("PSBASH_IPC_OUTPUT_STALL_TIMEOUT_MS");
-            return int.TryParse(raw, out var value) && value > 0 ? value : DefaultStallTimeoutMs;
         }
 
         public async Task CompleteAsync()
@@ -431,5 +437,11 @@ internal sealed class Connection
                 ? Math.Max(value, 16)
                 : DefaultCapacity;
         }
+    }
+
+    private static int RequestReadTimeoutMs()
+    {
+        var raw = Environment.GetEnvironmentVariable("PSBASH_REQUEST_READ_TIMEOUT_MS");
+        return int.TryParse(raw, out var value) && value > 0 ? value : DefaultRequestReadTimeoutMs;
     }
 }

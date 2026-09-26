@@ -17,9 +17,16 @@ namespace PsBash.Host.Server;
 /// </summary>
 public sealed class HostServer : IAsyncDisposable
 {
+    // Upper bound on concurrently-handled connections. Before this, one
+    // Task.Run per accepted connection let a herd of idle clients spawn an
+    // unbounded number of handler tasks; the cap makes the accept loop stop
+    // taking work until a slot frees (see RunAsync).
+    private const int DefaultMaxConcurrentConnections = 64;
+
     private readonly IIpcTransport _transport;
     private readonly WorkerPool<SdkWorker> _pool;
     private readonly IdleShutdown? _idle;
+    private readonly SemaphoreSlim _connectionSlots;
     private readonly TaskCompletionSource _ready = new(TaskCreationOptions.RunContinuationsAsynchronously);
     private readonly CancellationTokenSource _acceptStop = new();
     private readonly object _gate = new();
@@ -32,6 +39,13 @@ public sealed class HostServer : IAsyncDisposable
         _transport = transport;
         _pool = pool;
         _idle = idle;
+        _connectionSlots = new SemaphoreSlim(MaxConcurrentConnections());
+    }
+
+    private static int MaxConcurrentConnections()
+    {
+        var raw = Environment.GetEnvironmentVariable("PSBASH_MAX_CONCURRENT_CONNECTIONS");
+        return int.TryParse(raw, out var value) && value > 0 ? value : DefaultMaxConcurrentConnections;
     }
 
     /// <summary>Completes once <see cref="RunAsync"/> has called ListenAsync and is ready to accept.</summary>
@@ -106,7 +120,26 @@ public sealed class HostServer : IAsyncDisposable
                 continue;
             }
 
-            _ = Task.Run(() => HandleConnectionAsync(stream, ct), CancellationToken.None);
+            // Cap concurrent handlers: block the accept loop until a slot frees
+            // rather than spawning an unbounded handler per idle client.
+            try
+            {
+                await _connectionSlots.WaitAsync(linked.Token).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException)
+            {
+                await stream.DisposeAsync().ConfigureAwait(false);
+                break;
+            }
+
+            _ = Task.Run(async () =>
+            {
+                try { await HandleConnectionAsync(stream, ct).ConfigureAwait(false); }
+                finally
+                {
+                    try { _connectionSlots.Release(); } catch (ObjectDisposedException) { }
+                }
+            }, CancellationToken.None);
         }
     }
 
@@ -191,6 +224,7 @@ public sealed class HostServer : IAsyncDisposable
             try { _acceptStop.Cancel(); } catch { }
             try { _acceptStop.Dispose(); } catch { }
             await _transport.DisposeAsync();
+            try { _connectionSlots.Dispose(); } catch { }
         }
     }
 
