@@ -84,6 +84,19 @@ internal sealed class Connection
             _ => SessionMode.Framed,
         };
 
+        // R06: the launcher's environment block. Non-null for every Command/Stdin/
+        // Script frame from a R06+ launcher; null for legacy launchers and the
+        // in-process interactive path. The worker resets its process environment
+        // to exactly this block before running, so env/cwd-like state cannot leak
+        // between invocations on the shared daemon.
+        var environment = mode switch
+        {
+            Mode.Command c => c.Environment,
+            Mode.Stdin s => s.Environment,
+            Mode.Script sc => sc.Environment,
+            _ => null,
+        };
+
         if (mode is Mode.Shutdown sd)
         {
             await HostProtocol.WriteResponseLineAsync(_stream, HostProtocol.ShutdownAcceptedPayload, ct);
@@ -214,7 +227,7 @@ internal sealed class Connection
             if (sessionMode == SessionMode.Framed)
                 await HostProtocol.WriteStartedAsync(_stream, execCts.Token).ConfigureAwait(false);
 
-            exitCode = await worker.ExecuteWithOutputAsync(command, outputSink, errorSink, execCts.Token);
+            exitCode = await worker.ExecuteWithOutputAsync(command, outputSink, errorSink, execCts.Token, environment);
             WorkerPool<SdkWorker>.DiagLog($"Connection: executed, exit={exitCode}");
         }
         catch (OperationCanceledException) when (clientGone.IsCancellationRequested && !ct.IsCancellationRequested)

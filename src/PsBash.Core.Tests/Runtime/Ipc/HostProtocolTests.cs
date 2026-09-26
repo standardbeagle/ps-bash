@@ -299,6 +299,90 @@ public class HostProtocolTests
         Assert.Equal("MODE:Command\necho hello\n<<<END>>>\n", text);
     }
 
+    // -- R06: launcher environment forwarding --------------------------------
+
+    /// <summary>
+    /// R06: a Command frame carrying an environment block round-trips the block
+    /// exactly, including an empty value (set-to-empty, distinct from absent) and
+    /// a value containing a newline/unicode (the base64 envelope keeps it one
+    /// physical line).
+    /// </summary>
+    [Fact]
+    public async Task RoundTrip_Command_WithEnvironment_PreservesBlock()
+    {
+        var environment = new List<KeyValuePair<string, string>>
+        {
+            new("PATH", "/usr/bin:/bin"),
+            new("EMPTY", ""),
+            new("MULTILINE", "a\nb\tc"),
+            new("UNICODE", "日本語 🦀"),
+        };
+
+        await using var ms = new MemoryStream();
+        await HostProtocol.WriteRequestAsync(ms, new Mode.Command("echo hi", SessionMode.Framed, environment));
+        ms.Position = 0;
+        var decoded = await HostProtocol.ReadRequestAsync(ms);
+
+        var cmd = Assert.IsType<Mode.Command>(decoded);
+        Assert.Equal("echo hi", cmd.Body);
+        Assert.NotNull(cmd.Environment);
+        // Writer sorts by name; compare as a dictionary to be order-independent.
+        var map = cmd.Environment!.ToDictionary(e => e.Key, e => e.Value, StringComparer.Ordinal);
+        Assert.Equal("/usr/bin:/bin", map["PATH"]);
+        Assert.Equal("", map["EMPTY"]);
+        Assert.Equal("a\nb\tc", map["MULTILINE"]);
+        Assert.Equal("日本語 🦀", map["UNICODE"]);
+    }
+
+    /// <summary>
+    /// R06 back-compat: a Command without an environment block emits no ENV line
+    /// and decodes to a null block, so pre-R06 launchers and the byte-exact
+    /// fixture keep working.
+    /// </summary>
+    [Fact]
+    public async Task RoundTrip_Command_WithoutEnvironment_DecodesNull()
+    {
+        await using var ms = new MemoryStream();
+        await HostProtocol.WriteRequestAsync(ms, new Mode.Command("echo hi"));
+        var wire = Utf8NoBom.GetString(ms.ToArray());
+        Assert.DoesNotContain(HostProtocol.EnvironmentHeaderPrefix, wire);
+
+        ms.Position = 0;
+        var decoded = await HostProtocol.ReadRequestAsync(ms);
+        Assert.Null(Assert.IsType<Mode.Command>(decoded).Environment);
+    }
+
+    [Fact]
+    public async Task RoundTrip_Stdin_WithEnvironment_PreservesBlock()
+    {
+        var environment = new List<KeyValuePair<string, string>> { new("X", "y") };
+        await using var ms = new MemoryStream();
+        await HostProtocol.WriteRequestAsync(ms, new Mode.Stdin("read x", SessionMode.Framed, environment));
+        ms.Position = 0;
+        var decoded = await HostProtocol.ReadRequestAsync(ms);
+
+        var stdin = Assert.IsType<Mode.Stdin>(decoded);
+        Assert.Equal("read x", stdin.Body);
+        Assert.Equal("y", Assert.Single(stdin.Environment!).Value);
+    }
+
+    [Fact]
+    public async Task RoundTrip_Script_WithEnvironment_PreservesBlock()
+    {
+        var environment = new List<KeyValuePair<string, string>> { new("A", "1"), new("B", "2") };
+        await using var ms = new MemoryStream();
+        await HostProtocol.WriteRequestAsync(
+            ms, new Mode.Script("/tmp/x.sh", new[] { "arg" }, "echo hi", SessionMode.Framed, environment));
+        ms.Position = 0;
+        var decoded = await HostProtocol.ReadRequestAsync(ms);
+
+        var script = Assert.IsType<Mode.Script>(decoded);
+        var map = script.Environment!.ToDictionary(e => e.Key, e => e.Value, StringComparer.Ordinal);
+        Assert.Equal(2, map.Count);
+        Assert.Equal("1", map["A"]);
+        Assert.Equal("2", map["B"]);
+    }
+
     // -- PTY-4 ----------------------------------------------------------------
 
     /// <summary>

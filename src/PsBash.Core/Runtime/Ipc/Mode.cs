@@ -70,7 +70,17 @@ public abstract record Mode
     /// </summary>
     /// <param name="Body">Bash command string.</param>
     /// <param name="Session">Session mode (<see cref="SessionMode.Framed"/> by default).</param>
-    public sealed record Command(string Body, SessionMode Session = SessionMode.Framed) : Mode;
+    /// <param name="Environment">
+    /// The launcher's full environment block, or <c>null</c> when the caller does
+    /// not manage it (in-process workers, pre-R06 launchers). When non-null the
+    /// host resets its process environment to EXACTLY these entries before the
+    /// command runs, so a var changed or removed in the launcher is observed by
+    /// this invocation and no var set by a previous invocation survives.
+    /// </param>
+    public sealed record Command(
+        string Body,
+        SessionMode Session = SessionMode.Framed,
+        IReadOnlyList<KeyValuePair<string, string>>? Environment = null) : Mode;
 
     /// <summary>
     /// Bash script body read from launcher's stdin, evaluated as a sequence of
@@ -78,7 +88,11 @@ public abstract record Mode
     /// </summary>
     /// <param name="Body">Bash script body.</param>
     /// <param name="Session">Session mode (<see cref="SessionMode.Framed"/> by default).</param>
-    public sealed record Stdin(string Body, SessionMode Session = SessionMode.Framed) : Mode;
+    /// <param name="Environment">Launcher environment block; see <see cref="Command"/>.</param>
+    public sealed record Stdin(
+        string Body,
+        SessionMode Session = SessionMode.Framed,
+        IReadOnlyList<KeyValuePair<string, string>>? Environment = null) : Mode;
 
     /// <summary>
     /// Script-file invocation. <paramref name="Path"/> is the absolute script
@@ -92,7 +106,13 @@ public abstract record Mode
     /// <param name="Argv">Positional argument vector.</param>
     /// <param name="Body">Full script contents.</param>
     /// <param name="Session">Session mode (<see cref="SessionMode.Framed"/> by default).</param>
-    public sealed record Script(string Path, IReadOnlyList<string> Argv, string Body, SessionMode Session = SessionMode.Framed) : Mode;
+    /// <param name="Environment">Launcher environment block; see <see cref="Command"/>.</param>
+    public sealed record Script(
+        string Path,
+        IReadOnlyList<string> Argv,
+        string Body,
+        SessionMode Session = SessionMode.Framed,
+        IReadOnlyList<KeyValuePair<string, string>>? Environment = null) : Mode;
 
     /// <summary>
     /// Begin an interactive REPL session. Phase-1 sends header + END only with

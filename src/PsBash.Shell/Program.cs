@@ -156,7 +156,9 @@ if (shellArgs.ScriptPath is not null)
             Environment.SetEnvironmentVariable("PSBASH_COMPACT_COMMAND", $"{shellArgs.ScriptPath} {string.Join(' ', shellArgs.ScriptArgs)}");
         var ps1Preamble = BuildPositionalPreamble(shellArgs.ScriptPath, shellArgs.ScriptArgs);
         var escapedPath = shellArgs.ScriptPath.Replace("'", "''");
-        return await ps1Worker.ExecuteAsync(BuildInvocationCwdPreamble() + ps1Preamble + ". '" + escapedPath + "'");
+        return await ps1Worker.ExecuteAsync(
+            BuildInvocationCwdPreamble() + ps1Preamble + ". '" + escapedPath + "'",
+            environment: CaptureLauncherEnvironment());
     }
 
     // .sh execution: read, transpile, build positional preamble, execute.
@@ -192,7 +194,9 @@ if (shellArgs.ScriptPath is not null)
     if (compactOutput)
         Environment.SetEnvironmentVariable("PSBASH_COMPACT_COMMAND", $"{shellArgs.ScriptPath} {string.Join(' ', shellArgs.ScriptArgs)}");
     var preamble = BuildPositionalPreamble(shellArgs.ScriptPath, shellArgs.ScriptArgs);
-    return await scriptWorker.ExecuteAsync(BuildInvocationCwdPreamble() + preamble + pwshScriptCommand);
+    return await scriptWorker.ExecuteAsync(
+        BuildInvocationCwdPreamble() + preamble + pwshScriptCommand,
+        environment: CaptureLauncherEnvironment());
 }
 
 // Auto-detect piped stdin: if no command given and stdin is redirected, try reading it.
@@ -415,7 +419,9 @@ int exitCode;
 try
 {
     await using IWorker worker = await workerFactory();
-    exitCode = await worker.ExecuteAsync(BuildInvocationCwdPreamble() + pwshCommand);
+    exitCode = await worker.ExecuteAsync(
+        BuildInvocationCwdPreamble() + pwshCommand,
+        environment: CaptureLauncherEnvironment());
 }
 catch (TimeoutException ex)
 {
@@ -526,6 +532,21 @@ static bool LooksLikePowerShell(string input)
         return true;
 
     return false;
+}
+
+// Captures the launcher's FULL environment block to forward with each request.
+// The host is a shared daemon whose environment is process-global, so without
+// this a `-c` invocation inherits the env of whichever launcher spawned the
+// daemon plus every `$env:`/`export` write from earlier requests. R06.
+static IReadOnlyList<KeyValuePair<string, string>> CaptureLauncherEnvironment()
+{
+    var entries = new List<KeyValuePair<string, string>>();
+    foreach (System.Collections.DictionaryEntry e in Environment.GetEnvironmentVariables())
+    {
+        if (e.Key is string name)
+            entries.Add(new KeyValuePair<string, string>(name, e.Value as string ?? string.Empty));
+    }
+    return entries;
 }
 
 static string BuildInvocationCwdPreamble()

@@ -37,8 +37,22 @@ public interface IWorker : IAsyncDisposable
     /// through <see cref="OutputCallback"/> when set, otherwise to the
     /// implementation's default sink (console).
     /// </summary>
+    /// <param name="command">The command to run.</param>
+    /// <param name="ct">Cancellation token.</param>
+    /// <param name="environment">
+    /// R06: the caller's full environment block, or <c>null</c> to leave the
+    /// worker's environment untouched. When non-null the worker resets its
+    /// process environment to EXACTLY these entries before running
+    /// <paramref name="command"/>, so a var changed or removed by the caller is
+    /// observed and no var written by a prior invocation survives. Required for
+    /// shared long-lived workers (the daemon) whose process environment would
+    /// otherwise leak across invocations.
+    /// </param>
     /// <exception cref="ObjectDisposedException">If called after dispose.</exception>
-    Task<int> ExecuteAsync(string command, CancellationToken ct = default);
+    Task<int> ExecuteAsync(
+        string command,
+        CancellationToken ct = default,
+        IReadOnlyList<KeyValuePair<string, string>>? environment = null);
 
     /// <summary>
     /// Execute a command and return captured stdout as a single newline-joined

@@ -619,14 +619,17 @@ public sealed class IpcWorker : IWorker
         }
     }
 
-    public async Task<int> ExecuteAsync(string command, CancellationToken ct = default)
+    public async Task<int> ExecuteAsync(
+        string command,
+        CancellationToken ct = default,
+        IReadOnlyList<KeyValuePair<string, string>>? environment = null)
     {
         ObjectDisposedException.ThrowIf(_disposed != 0, this);
         ArgumentNullException.ThrowIfNull(command);
         await _requestGate.WaitAsync(ct).ConfigureAwait(false);
         try
         {
-            return await SendRequestAsync(new Mode.Command(command), ct).ConfigureAwait(false);
+            return await SendRequestAsync(new Mode.Command(command, SessionMode.Framed, environment), ct).ConfigureAwait(false);
         }
         finally
         {

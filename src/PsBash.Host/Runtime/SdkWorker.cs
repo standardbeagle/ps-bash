@@ -58,7 +58,10 @@ public sealed class SdkWorker : IWorker, ICompletionWorker
         return new SdkWorker(runspace);
     }
 
-    public async Task<int> ExecuteAsync(string command, CancellationToken ct = default)
+    public async Task<int> ExecuteAsync(
+        string command,
+        CancellationToken ct = default,
+        IReadOnlyList<KeyValuePair<string, string>>? environment = null)
     {
         ObjectDisposedException.ThrowIf(_disposed != 0, this);
         var callback = OutputCallback;
@@ -73,7 +76,7 @@ public sealed class SdkWorker : IWorker, ICompletionWorker
                 // Without this a runaway command holds _globalExecGate forever
                 // (Task.Run's ct only affects scheduling, not an in-flight delegate).
                 using var stopReg = ct.Register(() => _ps.Stop());
-                return await Task.Run(() => WithDefaultRunspace(() => RunCommand(command, callback, null, batchOutput: false)), ct);
+                return await Task.Run(() => WithDefaultRunspace(() => RunCommand(command, callback, null, batchOutput: false, environment)), ct);
             }
             finally
             {
@@ -167,7 +170,8 @@ public sealed class SdkWorker : IWorker, ICompletionWorker
         string command,
         Action<string>? output,
         Action<string>? errorOutput,
-        CancellationToken ct = default)
+        CancellationToken ct = default,
+        IReadOnlyList<KeyValuePair<string, string>>? environment = null)
     {
         ObjectDisposedException.ThrowIf(_disposed != 0, this);
         await _globalExecGate.WaitAsync(ct);
@@ -179,7 +183,7 @@ public sealed class SdkWorker : IWorker, ICompletionWorker
                 // When ct fires mid-command (e.g. parent-death watcher), stop the PS
                 // pipeline so Invoke() returns instead of blocking indefinitely.
                 using var stopReg = ct.Register(() => _ps.Stop());
-                return await Task.Run(() => WithDefaultRunspace(() => RunCommand(command, output, errorOutput, batchOutput: true)), ct);
+                return await Task.Run(() => WithDefaultRunspace(() => RunCommand(command, output, errorOutput, batchOutput: true, environment)), ct);
             }
             finally
             {
@@ -214,8 +218,19 @@ public sealed class SdkWorker : IWorker, ICompletionWorker
     /// would also buy nothing, since that path has no IPC frame to amortize.
     /// </param>
     private int RunCommand(string command, Action<string>? output, Action<string>? errorOutput,
-                           bool batchOutput)
+                           bool batchOutput,
+                           IReadOnlyList<KeyValuePair<string, string>>? environment = null)
     {
+        // R06: reset the process environment to the caller's block BEFORE running.
+        // The environment is process-global and shared by every pooled runspace,
+        // so this is only safe because _globalExecGate serialises command
+        // execution in this process (see the field's comment): no other command
+        // is running while we swap the environment. A null block means the caller
+        // does not manage the environment (in-process interactive/legacy paths) —
+        // leave it untouched for back-compat.
+        if (environment is not null)
+            ResetEnvironment(environment);
+
         _host.Reset();
         _ps.Commands.Clear();
         _ps.Streams.Error.Clear();
@@ -660,6 +675,36 @@ public sealed class SdkWorker : IWorker, ICompletionWorker
         if (item.BaseObject is string) return true;
         if (item.Properties["BashText"] is not null) return true;
         return false;
+    }
+
+    /// <summary>
+    /// R06: replace the process environment with EXACTLY <paramref name="environment"/>.
+    /// Every variable currently set that is not in the block is removed, so a var
+    /// unset in the launcher reads as unset here, and every entry in the block is
+    /// set to the launcher's value (empty string is set-to-empty, distinct from
+    /// absent). Must be called while holding <see cref="_globalExecGate"/> — the
+    /// environment is process-global and pooled runspaces share it.
+    /// </summary>
+    private static void ResetEnvironment(IReadOnlyList<KeyValuePair<string, string>> environment)
+    {
+        var keep = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var entry in environment)
+        {
+            keep.Add(entry.Key);
+            Environment.SetEnvironmentVariable(entry.Key, entry.Value);
+        }
+
+        // Remove anything not in the launcher block (vars written by an earlier
+        // invocation such as `export Y=leak`, and host-only vars the launcher
+        // never saw). Snapshot first: mutating while enumerating throws.
+        var stale = new List<string>();
+        foreach (System.Collections.DictionaryEntry e in Environment.GetEnvironmentVariables())
+        {
+            if (e.Key is string name && !keep.Contains(name))
+                stale.Add(name);
+        }
+        foreach (var name in stale)
+            Environment.SetEnvironmentVariable(name, null);
     }
 
     private static int UnwrapExitCode(object? arg)

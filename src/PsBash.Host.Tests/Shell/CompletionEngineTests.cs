@@ -26,7 +26,8 @@ public class CompletionEngineTests
         public Action<string>? OutputCallback { get; set; }
         public bool HasExited { get; set; }
 
-        public Task<int> ExecuteAsync(string command, CancellationToken ct = default) => Task.FromResult(0);
+        public Task<int> ExecuteAsync(string command, CancellationToken ct = default,
+            IReadOnlyList<KeyValuePair<string, string>>? environment = null) => Task.FromResult(0);
 
         public Task<string> QueryAsync(string expression, CancellationToken ct = default)
         {

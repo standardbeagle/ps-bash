@@ -77,6 +77,17 @@ public static class HostProtocol
     public const string BodyHeaderPrefix = "BODY:";
     public const string DeadlineHeaderPrefix = "DEADLINE:";
     /// <summary>
+    /// R06: request header carrying one launcher environment entry,
+    /// <c>ENV:&lt;base64 name&gt;,&lt;base64 value&gt;</c>. Emitted once per entry,
+    /// immediately after the MODE/SESSION header for Command/Stdin/Script frames.
+    /// The comma separator is outside the base64 alphabet, and both fields are
+    /// base64 so a name or value containing a newline stays on one physical line.
+    /// A frame with no ENV lines decodes to <c>null</c> (the caller does not
+    /// manage the environment), keeping pre-R06 launchers and fixtures
+    /// wire-compatible.
+    /// </summary>
+    public const string EnvironmentHeaderPrefix = "ENV:";
+    /// <summary>
     /// PTY-4: optional <c>SESSION:Framed</c> / <c>SESSION:Interactive</c> header
     /// emitted between <see cref="ModeHeaderPrefix"/> and the body for
     /// Command/Stdin/Script frames. Absent header decodes to
@@ -275,18 +286,21 @@ public static class HostProtocol
             case Mode.Command cmd:
                 sb.Append(ModeHeaderPrefix).Append("Command").Append('\n');
                 AppendSessionHeader(sb, cmd.Session);
+                AppendEnvironmentHeaders(sb, cmd.Environment);
                 sb.Append(cmd.Body);
                 if (!cmd.Body.EndsWith('\n')) sb.Append('\n');
                 break;
             case Mode.Stdin stdin:
                 sb.Append(ModeHeaderPrefix).Append("Stdin").Append('\n');
                 AppendSessionHeader(sb, stdin.Session);
+                AppendEnvironmentHeaders(sb, stdin.Environment);
                 sb.Append(stdin.Body);
                 if (!stdin.Body.EndsWith('\n')) sb.Append('\n');
                 break;
             case Mode.Script script:
                 sb.Append(ModeHeaderPrefix).Append("Script").Append('\n');
                 AppendSessionHeader(sb, script.Session);
+                AppendEnvironmentHeaders(sb, script.Environment);
                 sb.Append(PathHeaderPrefix).Append(EncodeBase64(script.Path)).Append('\n');
                 sb.Append(ArgvHeaderPrefix).Append(EncodeArgv(script.Argv)).Append('\n');
                 sb.Append(BodyHeaderPrefix).Append(EncodeBase64(script.Body)).Append('\n');
@@ -331,13 +345,13 @@ public static class HostProtocol
         {
             case "Command":
                 {
-                    var (body, session) = await ReadBodyAndSessionAsync(reader, ct).ConfigureAwait(false);
-                    return new Mode.Command(body, session);
+                    var (body, session, environment) = await ReadBodyAndSessionAsync(reader, ct).ConfigureAwait(false);
+                    return new Mode.Command(body, session, environment);
                 }
             case "Stdin":
                 {
-                    var (body, session) = await ReadBodyAndSessionAsync(reader, ct).ConfigureAwait(false);
-                    return new Mode.Stdin(body, session);
+                    var (body, session, environment) = await ReadBodyAndSessionAsync(reader, ct).ConfigureAwait(false);
+                    return new Mode.Stdin(body, session, environment);
                 }
             case "Script":
                 return await ReadScriptAsync(reader, ct).ConfigureAwait(false);
@@ -378,6 +392,61 @@ public static class HostProtocol
     }
 
     /// <summary>
+    /// R06: emit one <see cref="EnvironmentHeaderPrefix"/> line per entry. A null
+    /// block emits nothing (back-compat). Names are sorted so the wire form is
+    /// deterministic for byte-exact fixtures.
+    /// </summary>
+    private static void AppendEnvironmentHeaders(
+        StringBuilder sb, IReadOnlyList<KeyValuePair<string, string>>? environment)
+    {
+        if (environment is null) return;
+        foreach (var entry in environment.OrderBy(static e => e.Key, StringComparer.Ordinal))
+        {
+            sb.Append(EnvironmentHeaderPrefix)
+              .Append(EncodeBase64(entry.Key))
+              .Append(',')
+              .Append(EncodeBase64(entry.Value))
+              .Append('\n');
+        }
+    }
+
+    /// <summary>
+    /// R06: parse one <see cref="EnvironmentHeaderPrefix"/> line into its
+    /// (name, value) pair. Both fields are base64; the separator is the first
+    /// comma (base64 never contains one). Throws <see cref="IOException"/> on a
+    /// malformed line so a corrupt frame cannot silently produce a partial
+    /// environment block.
+    /// </summary>
+    private static KeyValuePair<string, string> ParseEnvironmentLine(string line)
+    {
+        var payload = line[EnvironmentHeaderPrefix.Length..];
+        var comma = payload.IndexOf(',');
+        if (comma < 0)
+            throw new IOException($"Malformed {EnvironmentHeaderPrefix} line: missing separator");
+        try
+        {
+            var name = DecodeBase64(payload[..comma]);
+            var value = DecodeBase64(payload[(comma + 1)..]);
+            return new KeyValuePair<string, string>(name, value);
+        }
+        catch (FormatException ex)
+        {
+            throw new IOException($"Malformed {EnvironmentHeaderPrefix} line: invalid base64", ex);
+        }
+    }
+
+    /// <summary>
+    /// R06: finalize the accumulated <see cref="EnvironmentHeaderPrefix"/> lines
+    /// into a block, or null when none were present (back-compat). Sorted to a
+    /// stable order matching the writer.
+    /// </summary>
+    private static IReadOnlyList<KeyValuePair<string, string>>? BuildEnvironmentBlock(
+        List<KeyValuePair<string, string>>? entries)
+        => entries is null || entries.Count == 0
+            ? null
+            : entries.OrderBy(static e => e.Key, StringComparer.Ordinal).ToList();
+
+    /// <summary>
     /// Read the optional <see cref="SessionHeaderPrefix"/> header. Returns
     /// <see cref="SessionMode.Framed"/> if the first line is not a SESSION
     /// header and pushes the line back into <paramref name="firstBodyLine"/>
@@ -401,25 +470,35 @@ public static class HostProtocol
         return SessionMode.Framed;
     }
 
-    private static async Task<(string Body, SessionMode Session)> ReadBodyAndSessionAsync(StreamLineReader reader, CancellationToken ct)
+    private static async Task<(string Body, SessionMode Session, IReadOnlyList<KeyValuePair<string, string>>? Environment)>
+        ReadBodyAndSessionAsync(StreamLineReader reader, CancellationToken ct)
     {
         var first = await reader.ReadLineAsync(ct).ConfigureAwait(false)
             ?? throw new IOException("Request stream closed before END sentinel");
         var session = ParseOptionalSessionHeader(first, out var carryover);
         var lines = new List<string>();
+        List<KeyValuePair<string, string>>? environment = null;
         if (carryover is not null)
         {
-            if (carryover == EndSentinel) return (string.Empty, session);
-            lines.Add(carryover);
+            if (carryover == EndSentinel) return (string.Empty, session, null);
+            if (carryover.StartsWith(EnvironmentHeaderPrefix, StringComparison.Ordinal))
+                (environment ??= new()).Add(ParseEnvironmentLine(carryover));
+            else
+                lines.Add(carryover);
         }
         while (true)
         {
             var line = await reader.ReadLineAsync(ct).ConfigureAwait(false)
                 ?? throw new IOException("Request stream closed before END sentinel");
             if (line == EndSentinel) break;
+            if (line.StartsWith(EnvironmentHeaderPrefix, StringComparison.Ordinal))
+            {
+                (environment ??= new()).Add(ParseEnvironmentLine(line));
+                continue;
+            }
             lines.Add(line);
         }
-        return (string.Join('\n', lines), session);
+        return (string.Join('\n', lines), session, BuildEnvironmentBlock(environment));
     }
 
     private static async Task<string> ReadBodyUntilEndAsync(StreamLineReader reader, CancellationToken ct)
@@ -464,6 +543,7 @@ public static class HostProtocol
     {
         string? path = null, argvLine = null, body = null;
         var session = SessionMode.Framed;
+        List<KeyValuePair<string, string>>? environment = null;
         while (true)
         {
             var line = await reader.ReadLineAsync(ct).ConfigureAwait(false)
@@ -471,6 +551,8 @@ public static class HostProtocol
             if (line == EndSentinel) break;
             if (line.StartsWith(SessionHeaderPrefix, StringComparison.Ordinal))
                 session = ParseOptionalSessionHeader(line, out _);
+            else if (line.StartsWith(EnvironmentHeaderPrefix, StringComparison.Ordinal))
+                (environment ??= new()).Add(ParseEnvironmentLine(line));
             else if (line.StartsWith(PathHeaderPrefix, StringComparison.Ordinal))
                 path = DecodeBase64(line[PathHeaderPrefix.Length..]);
             else if (line.StartsWith(ArgvHeaderPrefix, StringComparison.Ordinal))
@@ -483,7 +565,7 @@ public static class HostProtocol
 
         if (path is null || argvLine is null || body is null)
             throw new IOException("Script frame missing PATH, ARGV, or BODY field");
-        return new Mode.Script(path, DecodeArgv(argvLine), body, session);
+        return new Mode.Script(path, DecodeArgv(argvLine), body, session, BuildEnvironmentBlock(environment));
     }
 
     /// <summary>
