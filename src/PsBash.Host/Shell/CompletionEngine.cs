@@ -1,3 +1,4 @@
+using System.Management.Automation.Language;
 using PsBash.Core.Runtime;
 using PsBash.Host.Runtime;
 
@@ -174,6 +175,14 @@ internal sealed class CompletionEngine
     private static IReadOnlyList<CompletionItem> AsItems(IReadOnlyList<string> texts)
         => texts.Count == 0 ? Array.Empty<CompletionItem>() : texts.Select(t => new CompletionItem(t)).ToList();
 
+    // Escape a value for interpolation into a PowerShell single-quoted string. A naive
+    // Replace("'", "''") is an injection hole: the parser also ends the string at the
+    // Unicode curly single quotes U+2018..U+201B, so a pasted token containing one closes
+    // the literal and the remainder executes via AddScript on every keystroke.
+    // CodeGeneration escapes every terminator the parser recognizes.
+    private static string EscapePsSingleQuoted(string value)
+        => CodeGeneration.EscapeSingleQuotedStringContent(value);
+
     // Frecency directory candidates for a cd/z/zi argument: the token is a single
     // keyword (empty → all tracked dirs, ranked); inserts the full directory path.
     private async Task<IReadOnlyList<CompletionItem>> QueryFrecencyDirsAsync(string token, CancellationToken ct)
@@ -231,8 +240,8 @@ internal sealed class CompletionEngine
             return Array.Empty<FlagHint>();
 
         var prefix = token.TrimStart('-');
-        var cmdEsc = cmd.Replace("'", "''");
-        var prefixEsc = prefix.Replace("'", "''");
+        var cmdEsc = EscapePsSingleQuoted(cmd);
+        var prefixEsc = EscapePsSingleQuoted(prefix);
 
         // For each parameter whose name starts with the prefix, emit "name|type|v1,v2,...".
         // Value-set is a [ValidateSet] if present, else the enum names for an enum-typed parameter.
@@ -272,7 +281,7 @@ internal sealed class CompletionEngine
         {
             // Single-quote the prefix so wildcard/quote characters in the token can neither
             // break the query nor inject; Get-Command -Name '<prefix>*' is prefix-filtered.
-            var escaped = token.Replace("'", "''");
+            var escaped = EscapePsSingleQuoted(token);
             var expr =
                 $"Get-Command -Name '{escaped}*' -All -ErrorAction SilentlyContinue " +
                 "| Select-Object -ExpandProperty Name -Unique";
@@ -317,7 +326,7 @@ internal sealed class CompletionEngine
 
     private async Task<IReadOnlyList<CompletionItem>> QueryParameterNameItemsAsync(string cmd, string token, CancellationToken ct)
     {
-        var escaped = cmd.Replace("'", "''");
+        var escaped = EscapePsSingleQuoted(cmd);
         var expr =
             $"$c = Get-Command -Name '{escaped}' -ErrorAction SilentlyContinue | Select-Object -First 1; " +
             "if ($c -and $c.Parameters) { $c.Parameters.GetEnumerator() | Sort-Object Key | ForEach-Object { " +
@@ -517,8 +526,8 @@ internal sealed class CompletionEngine
 
     private async Task<IReadOnlyList<CompletionItem>> QueryParameterValueItemsAsync(string cmd, string paramFlag, string token, CancellationToken ct)
     {
-        var cmdEsc = cmd.Replace("'", "''");
-        var paramEsc = paramFlag.TrimStart('-').Replace("'", "''");
+        var cmdEsc = EscapePsSingleQuoted(cmd);
+        var paramEsc = EscapePsSingleQuoted(paramFlag.TrimStart('-'));
         if (paramEsc.Length == 0)
         {
             return Array.Empty<CompletionItem>();
