@@ -393,7 +393,14 @@ general fallback path (`EmitSimple`) and the mapped passthrough path
    (not mapped).
 2. **Subsequent** commands (pipe targets) are first tried through
    `TryEmitMappedCommand`. If the command is recognized, the mapped form is
-   used. Otherwise, the general `Emit` path is used.
+   used. Otherwise, the general `Emit` path is used, prefixed with the shared
+   text conversion `ForEach-Object { Get-BashText $_ } | `. PowerShell's native
+   binder *formats* objects piped to a native program, so a BashObject would
+   reach it as its property table (`BashText NoTrai…`) rather than its text;
+   bash pipes bytes, so every upstream object is converted first. `Get-BashText`
+   is identity on a string and on any object with no `BashText`, so the rule is
+   safe for every non-mapped pipe target (native tool, PowerShell cmdlet, or a
+   transpiled bash function).
 3. Pipe operators: `|` emits as ` | `, `|&` emits as ` 2>&1 | `.
 4. A **compound** stage (`subshell` / `brace group` / loop / `if` / `case`) emits
    PowerShell *statements*, not a pipeable expression, so it is wrapped in
