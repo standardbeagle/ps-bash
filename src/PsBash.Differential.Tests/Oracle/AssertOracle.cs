@@ -18,8 +18,9 @@ public enum OracleMode
 
     /// <summary>
     /// Compares ps-bash output against a frozen golden file.
-    /// When UPDATE_GOLDENS=1 is set, records the golden instead of comparing.
-    /// Never skips due to bash unavailability.
+    /// When recording is enabled (UPDATE_GOLDENS=1 at process start, or
+    /// <see cref="AssertOracle.BeginUpdateGoldens"/>), records the golden
+    /// instead of comparing. Never skips due to bash unavailability.
     /// </summary>
     Golden,
 }
@@ -53,6 +54,74 @@ public static class AssertOracle
 
     // Directory where golden files are stored, relative to repo root.
     private static readonly string GoldensDir = FindGoldensDir();
+
+    // ── Recording flag ────────────────────────────────────────────────────────
+    //
+    // Recording is deliberately NOT process-global. There are two entry points:
+    //   1. UPDATE_GOLDENS=1 set before the process starts (the CLI recording
+    //      run). It is read ONCE here, so a test that mutates the environment
+    //      mid-run cannot leak recording mode into another test's comparison.
+    //   2. BeginUpdateGoldens(), an AsyncLocal scope only the current async flow
+    //      observes. A concurrently running test captured its own
+    //      ExecutionContext and stays in compare mode.
+    private static readonly bool EnvUpdateGoldens = string.Equals(
+        Environment.GetEnvironmentVariable("UPDATE_GOLDENS"),
+        "1",
+        StringComparison.Ordinal);
+
+    private static readonly AsyncLocal<bool> ScopedUpdateGoldens = new();
+
+    /// <summary>
+    /// Enters golden-recording mode for the current async flow only; dispose to
+    /// leave. Use for the self-tests and any in-process recording workflow.
+    /// Other tests running concurrently in their own flows are unaffected.
+    /// </summary>
+    public static IDisposable BeginUpdateGoldens()
+    {
+        var prior = ScopedUpdateGoldens.Value;
+        ScopedUpdateGoldens.Value = true;
+        return new RecordingScope(prior);
+    }
+
+    private sealed class RecordingScope : IDisposable
+    {
+        private readonly bool _prior;
+        private bool _disposed;
+
+        public RecordingScope(bool prior) => _prior = prior;
+
+        public void Dispose()
+        {
+            if (_disposed) return;
+            _disposed = true;
+            ScopedUpdateGoldens.Value = _prior;
+        }
+    }
+
+    /// <summary>
+    /// The absolute path of the golden file for <paramref name="testName"/>.
+    /// Shared with the self-tests so each can delete what it writes.
+    /// </summary>
+    internal static string GoldenFilePath(string testName) =>
+        Path.Combine(GoldensDir, $"{testName}.golden.txt");
+
+    /// <summary>
+    /// Returns why a recording-mode spawn must NOT be written as a golden, or
+    /// null when the spawn is healthy. A spawn that failed at startup (non-zero
+    /// exit, or an unhandled exception / oracle timeout on stderr) prints empty
+    /// stdout; recording that would overwrite a tracked golden with an empty
+    /// file and hide the crash.
+    /// </summary>
+    internal static string? RecordableSpawnFailure(OracleResult result)
+    {
+        if (result.ExitCode != 0)
+            return $"ps-bash exited with code {result.ExitCode}";
+        if (result.Stderr.Contains("Unhandled exception", StringComparison.OrdinalIgnoreCase))
+            return "ps-bash reported an unhandled exception on stderr";
+        if (result.Stderr.Contains("OracleTimeoutException", StringComparison.OrdinalIgnoreCase))
+            return "ps-bash reported an oracle timeout on stderr";
+        return null;
+    }
 
     private static string FindGoldensDir()
     {
@@ -183,8 +252,12 @@ public static class AssertOracle
     /// Compares ps-bash output against a golden file stored in
     /// <c>src/PsBash.Differential.Tests/Goldens/{testName}.golden.txt</c>.
     ///
-    /// When the <c>UPDATE_GOLDENS=1</c> environment variable is set, writes
-    /// the current ps-bash output as the golden and passes unconditionally.
+    /// Recording is enabled per call by <paramref name="updateGoldens"/> when it
+    /// is not null, otherwise by the current recording mode: the
+    /// <c>UPDATE_GOLDENS=1</c> environment variable read at process start, or an
+    /// active <see cref="BeginUpdateGoldens"/> scope. Recording refuses a failed
+    /// spawn (non-zero exit or crash stderr) rather than overwrite a tracked
+    /// golden with empty output.
     ///
     /// Never skips due to bash unavailability — golden mode is designed for
     /// platforms without live bash.
@@ -196,22 +269,24 @@ public static class AssertOracle
     /// <c>src/PsBash.Differential.Tests/Goldens/EchoHello.golden.txt</c>.
     /// </param>
     /// <param name="timeout">Per-process timeout; defaults to 5 s.</param>
+    /// <param name="updateGoldens">
+    /// Overrides recording mode for this call: <c>true</c> records, <c>false</c>
+    /// compares, <c>null</c> (default) uses the ambient recording mode.
+    /// </param>
     /// <exception cref="XunitException">When output does not match the golden.</exception>
     /// <exception cref="SkipException">
-    /// When no golden file exists and UPDATE_GOLDENS is not set.
+    /// When no golden file exists and recording is not active.
     /// </exception>
     public static async Task GoldenAsync(
         string script,
         string testName,
-        TimeSpan? timeout = null)
+        TimeSpan? timeout = null,
+        bool? updateGoldens = null)
     {
         Skip.If(Fixture.PsBashPath is null, "ps-bash binary not found -- build PsBash.Shell first");
 
-        var goldenPath = Path.Combine(GoldensDir, $"{testName}.golden.txt");
-        var updateGoldens = string.Equals(
-            Environment.GetEnvironmentVariable("UPDATE_GOLDENS"),
-            "1",
-            StringComparison.Ordinal);
+        var goldenPath = GoldenFilePath(testName);
+        var recording = updateGoldens ?? (ScopedUpdateGoldens.Value || EnvUpdateGoldens);
 
         // QA rubric Directive 6: golden output must be machine-independent.
         // Spawn ps-bash under a canonical environment — the inherited block is
@@ -252,8 +327,31 @@ public static class AssertOracle
         var canonicalized = Canonicalizer.Canonicalize(
             StripDebugLines(psBashResult.Stdout));
 
-        if (updateGoldens)
+        if (recording)
         {
+            // A crashed spawn prints empty stdout; writing it over a tracked
+            // golden is silent corruption. Refuse and report the spawn instead.
+            var failure = RecordableSpawnFailure(psBashResult);
+            if (failure is not null)
+            {
+                var sb = new System.Text.StringBuilder();
+                sb.AppendLine("=== Golden Recording Refused ===");
+                sb.AppendLine();
+                sb.AppendLine($"Golden file: {goldenPath}");
+                sb.AppendLine($"Reason: {failure}");
+                sb.AppendLine();
+                sb.AppendLine("--- Input Script ---");
+                sb.AppendLine(script);
+                sb.AppendLine();
+                sb.AppendLine("--- ps-bash stdout (canonicalized, NOT written) ---");
+                sb.AppendLine(canonicalized);
+                sb.AppendLine();
+                sb.AppendLine($"--- ps-bash exit code: {psBashResult.ExitCode} ---");
+                sb.AppendLine("--- ps-bash stderr ---");
+                sb.AppendLine(psBashResult.Stderr);
+                throw new XunitException(sb.ToString());
+            }
+
             Directory.CreateDirectory(GoldensDir);
             await File.WriteAllTextAsync(goldenPath, canonicalized);
             return; // Recording mode — always pass
