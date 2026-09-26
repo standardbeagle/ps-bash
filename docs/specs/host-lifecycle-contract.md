@@ -67,6 +67,28 @@ Two host populations are explicitly **out of scope**:
   `PtySpawnTests.InteractiveLaunchPath_NeverSelectsDaemonLifetime`. See also
   `docs/specs/pty.md` §10.5.
 
+## Runtime Directory
+
+All per-user runtime artifacts — extracted module, IPC sockets, `.host.json`
+sidecars, spawn locks and failure-tee logs — live under one runtime directory
+resolved by `PsBashRuntimeDirectory`:
+
+- **Windows**: `%TEMP%\ps-bash`. `%TEMP%` is already per-user and ACL-protected,
+  so the fixed name is not attacker-reachable.
+- **POSIX**: `$XDG_RUNTIME_DIR/ps-bash` when `XDG_RUNTIME_DIR` is a non-blank
+  absolute path, else `$TMPDIR/ps-bash-<uid>`. `$TMPDIR` (usually `/tmp`) is
+  world-writable, so a fixed `ps-bash` name would let another local user
+  pre-create the extraction dir, replace the socket, or plant a sidecar.
+
+On POSIX the directory is created 0700 and **validated on every use**: it must
+be a directory, be owned by the current uid, and have no group/world write bit
+(a symlink is judged by `lstat`, not its target). Any other state raises
+`InsecureRuntimeDirectoryException` (an `IOException`) and the launcher refuses
+to use the path. Sockets are bound only after this check, inside the 0700
+directory, then narrowed to 0600. The sidecar kill gate additionally probes the
+recorded PID's live uid (`/proc/<pid>/status` on Linux) so a planted
+`owner=<victim>` record cannot authorize killing another user's process.
+
 ## Metadata Record
 
 Each host owns a JSON metadata record beside the endpoint identity:
@@ -87,7 +109,7 @@ Each host owns a JSON metadata record beside the endpoint identity:
 The record path is derived from the canonical endpoint:
 
 - `unix`: `<endpoint>.host.json`, next to the socket path.
-- `pipe`: `<temp>/ps-bash/<pipe-name>.host.json`, because a Windows named pipe
+- `pipe`: `<runtime-dir>/<pipe-name>.host.json`, because a Windows named pipe
   endpoint is a kernel name under `\\.\pipe\`, not a removable filesystem
   object.
 
@@ -256,7 +278,7 @@ Steps 1-6 are implemented by `IpcWorker.EnsureHostReachableAsync` (the
 (`src/PsBash.Core/Runtime/Ipc/HostSpawnLock.cs`):
 
 - The lock is an exclusively-opened file (`FileShare.None`) under
-  `{TEMP}/ps-bash/spawn-{scheme}-{hash(endpoint)}.lock`. It is **endpoint-scoped**,
+  `<runtime-dir>/spawn-{scheme}-{hash(endpoint)}.lock`. It is **endpoint-scoped**,
   so an isolated test endpoint (`PSBASH_IPC_ENDPOINT`) never serializes against the
   real per-user daemon, and the `Lifetime.PerInvocation` path — whose endpoints are
   process-local and uncontended — never acquires it.
