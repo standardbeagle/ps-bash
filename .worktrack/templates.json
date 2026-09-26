@@ -1,6 +1,10 @@
 {
   "stack": "dotnet",
   "delivery": "internal-tool",
+  "deploy": {
+    "via": "tag",
+    "bump": "patch"
+  },
   "templates": [
     {
       "name": "slice-default",
