@@ -12,7 +12,8 @@ namespace PsBash.Core.Runtime.Ipc;
 /// concurrent-cold-start thundering herd). This lock lets exactly one launcher
 /// run the spawn path; the others wait for its host and connect.
 ///
-/// <para>Backed by an exclusively-opened file under <c>{TEMP}/ps-bash/</c>.
+/// <para>Backed by an exclusively-opened file under the per-user
+/// <see cref="PsBashRuntimeDirectory"/>.
 /// <see cref="FileShare.None"/> is the deliberate exception to
 /// <c>temp-files.md</c>'s "shared temp files use FileShare.ReadWrite" rule — a
 /// lock's entire purpose is mutual exclusion. The OS drops the handle on
@@ -53,8 +54,7 @@ internal sealed class HostSpawnLock : IDisposable
         string path;
         try
         {
-            var dir = Path.Combine(Path.GetTempPath(), "ps-bash");
-            Directory.CreateDirectory(dir);
+            var dir = PsBashRuntimeDirectory.EnsureDirectory();
             path = Path.Combine(dir, $"spawn-{scheme}-{ShortHash(endpoint)}.lock");
         }
         catch

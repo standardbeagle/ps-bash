@@ -48,10 +48,6 @@ public static class IpcTransportFactory
     // endpoint name, so the sun_path budget can be exercised with a 6-digit pid.
     internal static Func<int>? ProcessIdOverride { get; set; }
 
-    // Test seam: override Path.GetTempPath() so the sun_path budget can be
-    // exercised with a long temp root without touching process-wide env vars.
-    internal static Func<string>? TempPathOverride { get; set; }
-
 
     public static bool IsUnixSocketSupported()
     {
@@ -100,7 +96,10 @@ public static class IpcTransportFactory
             // host agree.
             if (candidate.Length <= UnixSocketPathBudget())
             {
-                Directory.CreateDirectory(sockDir);
+                // Create AND validate the per-user 0700 socket directory before
+                // the host binds: a shared, attacker-writable socket directory
+                // would let another user pre-create or replace the socket file.
+                PsBashRuntimeDirectory.EnsureDirectory();
                 return ("unix", candidate);
             }
         }
@@ -138,9 +137,10 @@ public static class IpcTransportFactory
     /// just spawned.
     /// </summary>
     /// <remarks>
-    /// On POSIX the endpoint is a socket file under <c>{TEMP}/ps-bash/</c>;
-    /// on pre-1803 Windows it is a named pipe. Either way the launcher owns the
-    /// host process and unlinks the socket artifact when it disposes.
+    /// On POSIX the endpoint is a socket file inside the per-user
+    /// <see cref="PsBashRuntimeDirectory"/> (0700); on pre-1803 Windows it is a
+    /// named pipe. Either way the launcher owns the host process and unlinks
+    /// the socket artifact when it disposes.
     /// </remarks>
     public static (string Scheme, string Endpoint) ResolvePerInvocationEndpoint()
     {
@@ -158,7 +158,7 @@ public static class IpcTransportFactory
             var room = UnixSocketPathBudget() - prefix.Length - ext.Length;
             if (room >= MinInvocationSuffixHexChars)
             {
-                Directory.CreateDirectory(sockDir);
+                PsBashRuntimeDirectory.EnsureDirectory();
                 var unique = guid[..Math.Min(guid.Length, room)];
                 return ("unix", prefix + unique + ext);
             }
@@ -179,11 +179,7 @@ public static class IpcTransportFactory
     private static int UnixSocketPathBudget()
         => OperatingSystem.IsMacOS() ? 103 : UnixSocketPathMaxChars;
 
-    private static string SocketDirectory()
-    {
-        var temp = TempPathOverride is { } seam ? seam() : Path.GetTempPath();
-        return Path.Combine(temp, "ps-bash");
-    }
+    private static string SocketDirectory() => PsBashRuntimeDirectory.GetPath();
 
     /// <summary>
     /// Build a fresh transport instance bound to the resolved endpoint. Each

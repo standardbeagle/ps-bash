@@ -1334,7 +1334,7 @@ public sealed class IpcWorker : IWorker
     {
         try
         {
-            var dir = Path.Combine(Path.GetTempPath(), "ps-bash", "tee");
+            var dir = Path.Combine(PsBashRuntimeDirectory.EnsureDirectory(), "tee");
             Directory.CreateDirectory(dir);
             var leaf = FilterEngine.SplitCommand(command).Command;
             var safe = string.Concat((string.IsNullOrWhiteSpace(leaf) ? "command" : leaf)

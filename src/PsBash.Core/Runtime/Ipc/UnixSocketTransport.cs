@@ -36,7 +36,18 @@ public sealed class UnixSocketTransport : IIpcTransport
         }
 
         var dir = Path.GetDirectoryName(_socketPath);
-        if (!string.IsNullOrEmpty(dir)) Directory.CreateDirectory(dir);
+        if (!string.IsNullOrEmpty(dir))
+        {
+            // The canonical socket lives in the per-user runtime directory:
+            // validate owner + 0700 BEFORE bind so another local user cannot
+            // pre-create the path or replace the socket. An explicit
+            // PSBASH_IPC_ENDPOINT override is the user's own choice and is left
+            // to plain creation.
+            if (string.Equals(dir, PsBashRuntimeDirectory.GetPath(), StringComparison.Ordinal))
+                PsBashRuntimeDirectory.EnsureDirectory();
+            else
+                Directory.CreateDirectory(dir);
+        }
 
         var sock = new Socket(AddressFamily.Unix, SocketType.Stream, ProtocolType.Unspecified);
         var ep = new UnixDomainSocketEndPoint(_socketPath);

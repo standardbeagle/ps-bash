@@ -9,14 +9,8 @@ namespace PsBash.Core.Tests.Runtime.Ipc;
 /// unrelated process after PID reuse. Covers the "verify PID still refers to
 /// expected ps-bash host before killing" acceptance bullet of SNlQPegASmvs.
 /// </summary>
-public class HostOwnershipTests : IDisposable
+public class HostOwnershipTests
 {
-    public void Dispose()
-    {
-        HostOwnership.ProcessUidProbeOverride = null;
-        HostOwnership.CurrentUidOverride = null;
-    }
-
     private static HostMetadata Meta(int pid, string exe, string owner = "tester") =>
         new(
             Pid: pid,
@@ -167,11 +161,12 @@ public class HostOwnershipTests : IDisposable
         var ownExe = Environment.ProcessPath ?? Process.GetCurrentProcess().MainModule?.FileName;
         Skip.If(string.IsNullOrEmpty(ownExe), "cannot read own executable path");
 
-        HostOwnership.ProcessUidProbeOverride = _ => 1001u;
-        HostOwnership.CurrentUidOverride = () => 1000u;
-
         var meta = Meta(pid: ownPid, exe: ownExe!, owner: Environment.UserName);
-        var d = HostOwnership.Classify(meta, Environment.UserName, out var reason);
+        var d = HostOwnership.Classify(
+            meta, Environment.UserName,
+            processUidProbe: _ => 1001u,
+            currentUidProbe: () => 1000u,
+            out var reason);
 
         Assert.Equal(HostOwnership.CleanupDecision.UnsafeToTouch, d);
         Assert.Contains("uid", reason);
@@ -185,11 +180,12 @@ public class HostOwnershipTests : IDisposable
         var ownExe = Environment.ProcessPath ?? Process.GetCurrentProcess().MainModule?.FileName;
         Skip.If(string.IsNullOrEmpty(ownExe), "cannot read own executable path");
 
-        HostOwnership.ProcessUidProbeOverride = _ => 4242u;
-        HostOwnership.CurrentUidOverride = () => 4242u;
-
         var meta = Meta(pid: ownPid, exe: ownExe!, owner: Environment.UserName);
-        var d = HostOwnership.Classify(meta, Environment.UserName, out _);
+        var d = HostOwnership.Classify(
+            meta, Environment.UserName,
+            processUidProbe: _ => 4242u,
+            currentUidProbe: () => 4242u,
+            out _);
 
         Assert.Equal(HostOwnership.CleanupDecision.SafeProcessShutdown, d);
     }
@@ -203,10 +199,12 @@ public class HostOwnershipTests : IDisposable
         var ownExe = Environment.ProcessPath ?? Process.GetCurrentProcess().MainModule?.FileName;
         Skip.If(string.IsNullOrEmpty(ownExe), "cannot read own executable path");
 
-        HostOwnership.ProcessUidProbeOverride = _ => null;
-
         var meta = Meta(pid: ownPid, exe: ownExe!, owner: Environment.UserName);
-        var d = HostOwnership.Classify(meta, Environment.UserName, out _);
+        var d = HostOwnership.Classify(
+            meta, Environment.UserName,
+            processUidProbe: _ => null,
+            currentUidProbe: () => 1000u,
+            out _);
 
         Assert.Equal(HostOwnership.CleanupDecision.SafeProcessShutdown, d);
     }

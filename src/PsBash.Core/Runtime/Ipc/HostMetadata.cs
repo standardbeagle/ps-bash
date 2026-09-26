@@ -12,10 +12,12 @@ namespace PsBash.Core.Runtime.Ipc;
 /// <c>docs/specs/host-lifecycle-contract.md</c>.
 /// </summary>
 /// <remarks>
-/// Owner identity is stored as a plain user name in this revision; SID/uid
-/// support is a known gap deferred to a follow-on task. The launcher still
-/// matches against <see cref="Environment.UserName"/>, which is sufficient
-/// for the current single-user-per-machine assumption.
+/// The record's <c>owner</c> is a display user name; it is advisory and, like
+/// the rest of the sidecar, is no longer the ownership proof on its own. The
+/// runtime directory (0700, per-user) gates who can write the record at all,
+/// and the kill gate (<see cref="HostOwnership.Classify"/>) additionally probes
+/// the live process uid on POSIX. The user name is still matched against
+/// <see cref="Environment.UserName"/>.
 /// </remarks>
 public sealed record HostMetadata(
     [property: JsonPropertyName("pid")] int Pid,
@@ -34,17 +36,14 @@ public sealed record HostMetadata(
     /// <c>unix</c>, the sidecar lives next to the socket so a single ownership
     /// check covers both. For <c>pipe</c>, Windows named pipes are kernel
     /// namespace objects with no filesystem location, so the sidecar is parked
-    /// under <c>%TEMP%/ps-bash/&lt;pipe-name&gt;.host.json</c>.
+    /// under the per-user <see cref="PsBashRuntimeDirectory"/>
+    /// (<c>&lt;runtime-dir&gt;/&lt;pipe-name&gt;.host.json</c>).
     /// </summary>
     public static string PathFor(string scheme, string endpoint)
     {
         if (scheme == "unix") return endpoint + ".host.json";
         if (scheme == "pipe")
-        {
-            var dir = Path.Combine(Path.GetTempPath(), "ps-bash");
-            Directory.CreateDirectory(dir);
-            return Path.Combine(dir, endpoint + ".host.json");
-        }
+            return Path.Combine(PsBashRuntimeDirectory.GetPath(), endpoint + ".host.json");
         throw new ArgumentException($"Unknown scheme '{scheme}' (expected unix or pipe).", nameof(scheme));
     }
 
@@ -78,6 +77,9 @@ public sealed record HostMetadata(
         {
             try
             {
+                // Pipe sidecars live in the per-user runtime dir; validate it
+                // before writing so a hostile dir is refused (caught below).
+                if (scheme == "pipe") PsBashRuntimeDirectory.EnsureDirectory();
                 if (!string.IsNullOrEmpty(dir)) Directory.CreateDirectory(dir);
                 File.WriteAllText(tmp, JsonSerializer.Serialize(this, HostMetadataJsonContext.Default.HostMetadata));
                 try { File.Move(tmp, path, overwrite: true); }

@@ -11,88 +11,55 @@ namespace PsBash.Core.Tests.Runtime;
 /// and every use must verify the owner is the current uid and the mode is not
 /// group/world-writable. Windows <c>%TEMP%</c> is already per-user and unaffected.
 /// </summary>
+[Collection("EnvVar")]
 public class PsBashRuntimeDirectoryTests : IDisposable
 {
     private static readonly UnixFileMode PrivateMode =
         UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute;
 
-    public void Dispose() => Reset();
-
-    private static void Reset()
-    {
-        PsBashRuntimeDirectory.IsPosixOverride = null;
-        PsBashRuntimeDirectory.XdgRuntimeDirOverride = null;
-        PsBashRuntimeDirectory.TempPathOverride = null;
-        PsBashRuntimeDirectory.CurrentUidOverride = null;
-        PsBashRuntimeDirectory.StatProbeOverride = null;
-    }
+    public void Dispose() => PsBashRuntimeDirectory.TempPathOverride = null;
 
     [Fact]
-    public void GetPath_XdgSet_UsesPsBashSubdirUnderXdg()
-    {
-        PsBashRuntimeDirectory.IsPosixOverride = () => true;
-        PsBashRuntimeDirectory.XdgRuntimeDirOverride = () => "/run/user/1000";
-        PsBashRuntimeDirectory.CurrentUidOverride = () => 1000;
-
-        Assert.Equal(
+    public void ResolvePath_XdgAbsolute_UsesPsBashSubdirUnderXdg()
+        => Assert.Equal(
             Path.Combine("/run/user/1000", "ps-bash"),
-            PsBashRuntimeDirectory.GetPath());
-    }
+            PsBashRuntimeDirectory.ResolvePath("/run/user/1000", "/tmp", uid: 1000, isPosix: true));
 
     [Fact]
-    public void GetPath_NoXdg_UsesPerUidTempDir()
-    {
-        PsBashRuntimeDirectory.IsPosixOverride = () => true;
-        PsBashRuntimeDirectory.XdgRuntimeDirOverride = () => null;
-        PsBashRuntimeDirectory.TempPathOverride = () => "/tmp";
-        PsBashRuntimeDirectory.CurrentUidOverride = () => 1000;
-
-        Assert.Equal(
+    public void ResolvePath_NoXdg_UsesPerUidTempDir()
+        => Assert.Equal(
             Path.Combine("/tmp", "ps-bash-1000"),
-            PsBashRuntimeDirectory.GetPath());
-    }
+            PsBashRuntimeDirectory.ResolvePath(null, "/tmp", uid: 1000, isPosix: true));
 
     [Fact]
-    public void GetPath_BlankXdg_FallsBackToPerUidTempDir()
-    {
-        PsBashRuntimeDirectory.IsPosixOverride = () => true;
-        PsBashRuntimeDirectory.XdgRuntimeDirOverride = () => "   ";
-        PsBashRuntimeDirectory.TempPathOverride = () => "/tmp";
-        PsBashRuntimeDirectory.CurrentUidOverride = () => 7;
-
-        Assert.Equal(Path.Combine("/tmp", "ps-bash-7"), PsBashRuntimeDirectory.GetPath());
-    }
+    public void ResolvePath_BlankXdg_FallsBackToPerUidTempDir()
+        => Assert.Equal(
+            Path.Combine("/tmp", "ps-bash-7"),
+            PsBashRuntimeDirectory.ResolvePath("   ", "/tmp", uid: 7, isPosix: true));
 
     [Fact]
-    public void GetPath_NonRootedXdg_FallsBackToPerUidTempDir()
-    {
-        PsBashRuntimeDirectory.IsPosixOverride = () => true;
-        PsBashRuntimeDirectory.XdgRuntimeDirOverride = () => "relative/runtime";
-        PsBashRuntimeDirectory.TempPathOverride = () => "/tmp";
-        PsBashRuntimeDirectory.CurrentUidOverride = () => 7;
-
-        Assert.Equal(Path.Combine("/tmp", "ps-bash-7"), PsBashRuntimeDirectory.GetPath());
-    }
+    public void ResolvePath_NonRootedXdg_FallsBackToPerUidTempDir()
+        => Assert.Equal(
+            Path.Combine("/tmp", "ps-bash-7"),
+            PsBashRuntimeDirectory.ResolvePath("relative/runtime", "/tmp", uid: 7, isPosix: true));
 
     [Fact]
-    public void GetPath_Windows_UsesTempPsBashNestedDir()
-    {
-        PsBashRuntimeDirectory.IsPosixOverride = () => false;
-        PsBashRuntimeDirectory.TempPathOverride = () => @"C:\Users\x\AppData\Local\Temp";
-
-        Assert.Equal(
+    public void ResolvePath_Windows_UsesTempPsBashNestedDir()
+        => Assert.Equal(
             Path.Combine(@"C:\Users\x\AppData\Local\Temp", "ps-bash"),
-            PsBashRuntimeDirectory.GetPath());
-    }
+            PsBashRuntimeDirectory.ResolvePath(
+                xdgRuntimeDir: "/run/user/1000",
+                tempPath: @"C:\Users\x\AppData\Local\Temp",
+                uid: 1000,
+                isPosix: false));
 
     [Fact]
-    public void ValidateDirectory_ForeignOwner_Refuses()
+    public void ValidateOwnership_ForeignOwner_Refuses()
     {
-        PsBashRuntimeDirectory.CurrentUidOverride = () => 1000u;
-        PsBashRuntimeDirectory.StatProbeOverride = _ => (1001u, PrivateMode, true);
-
         var ex = Assert.Throws<InsecureRuntimeDirectoryException>(
-            () => PsBashRuntimeDirectory.ValidateDirectory("/tmp/ps-bash-1000"));
+            () => PsBashRuntimeDirectory.ValidateOwnership(
+                "/tmp/ps-bash-1000", actualUid: 1001, PrivateMode, isDir: true, expectedUid: 1000));
+
         Assert.Contains("1001", ex.Message);
         Assert.Contains("1000", ex.Message);
     }
@@ -101,33 +68,27 @@ public class PsBashRuntimeDirectoryTests : IDisposable
     [InlineData(UnixFileMode.GroupWrite)]
     [InlineData(UnixFileMode.OtherWrite)]
     [InlineData(UnixFileMode.GroupWrite | UnixFileMode.OtherWrite)]
-    public void ValidateDirectory_GroupOrWorldWritable_Refuses(UnixFileMode unsafeBit)
+    public void ValidateOwnership_GroupOrWorldWritable_Refuses(UnixFileMode unsafeBit)
     {
-        PsBashRuntimeDirectory.CurrentUidOverride = () => 1000u;
-        PsBashRuntimeDirectory.StatProbeOverride = _ => (1000u, PrivateMode | unsafeBit, true);
-
         var ex = Assert.Throws<InsecureRuntimeDirectoryException>(
-            () => PsBashRuntimeDirectory.ValidateDirectory("/tmp/ps-bash-1000"));
+            () => PsBashRuntimeDirectory.ValidateOwnership(
+                "/tmp/ps-bash-1000", actualUid: 1000, PrivateMode | unsafeBit, isDir: true, expectedUid: 1000));
+
         Assert.Contains("writable", ex.Message);
     }
 
     [Fact]
-    public void ValidateDirectory_OwnerOnly_Passes()
-    {
-        PsBashRuntimeDirectory.CurrentUidOverride = () => 1000u;
-        PsBashRuntimeDirectory.StatProbeOverride = _ => (1000u, PrivateMode, true);
-
-        PsBashRuntimeDirectory.ValidateDirectory("/tmp/ps-bash-1000");
-    }
+    public void ValidateOwnership_OwnerOnly_Passes()
+        => PsBashRuntimeDirectory.ValidateOwnership(
+            "/tmp/ps-bash-1000", actualUid: 1000, PrivateMode, isDir: true, expectedUid: 1000);
 
     [Fact]
-    public void ValidateDirectory_NotADirectory_Refuses()
+    public void ValidateOwnership_NotADirectory_Refuses()
     {
-        PsBashRuntimeDirectory.CurrentUidOverride = () => 1000u;
-        PsBashRuntimeDirectory.StatProbeOverride = _ => (1000u, PrivateMode, false);
-
         var ex = Assert.Throws<InsecureRuntimeDirectoryException>(
-            () => PsBashRuntimeDirectory.ValidateDirectory("/tmp/ps-bash-1000"));
+            () => PsBashRuntimeDirectory.ValidateOwnership(
+                "/tmp/ps-bash-1000", actualUid: 1000, PrivateMode, isDir: false, expectedUid: 1000));
+
         Assert.Contains("not a directory", ex.Message);
     }
 
@@ -140,7 +101,6 @@ public class PsBashRuntimeDirectoryTests : IDisposable
 
         var root = Path.Combine(Path.GetTempPath(), "psb-rtdir-" + Guid.NewGuid().ToString("N"));
         PsBashRuntimeDirectory.TempPathOverride = () => root;
-        PsBashRuntimeDirectory.XdgRuntimeDirOverride = () => null;
         try
         {
             var dir = PsBashRuntimeDirectory.EnsureDirectory();
@@ -152,7 +112,7 @@ public class PsBashRuntimeDirectoryTests : IDisposable
         }
         finally
         {
-            Reset();
+            PsBashRuntimeDirectory.TempPathOverride = null;
             try { Directory.Delete(root, recursive: true); } catch { }
         }
     }
@@ -167,7 +127,6 @@ public class PsBashRuntimeDirectoryTests : IDisposable
         var root = Path.Combine(Path.GetTempPath(), "psb-rtdir-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(root);
         PsBashRuntimeDirectory.TempPathOverride = () => root;
-        PsBashRuntimeDirectory.XdgRuntimeDirOverride = () => null;
         try
         {
             var dir = PsBashRuntimeDirectory.GetPath();
@@ -179,7 +138,7 @@ public class PsBashRuntimeDirectoryTests : IDisposable
         }
         finally
         {
-            Reset();
+            PsBashRuntimeDirectory.TempPathOverride = null;
             try { Directory.Delete(root, recursive: true); } catch { }
         }
     }

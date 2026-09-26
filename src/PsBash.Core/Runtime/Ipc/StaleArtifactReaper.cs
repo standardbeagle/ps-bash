@@ -3,8 +3,8 @@ using System.Diagnostics;
 namespace PsBash.Core.Runtime.Ipc;
 
 /// <summary>
-/// One-shot janitor for the <c>%TEMP%/ps-bash</c> (or <c>$TMPDIR/ps-bash</c>)
-/// directory. Over time this dir accumulates per-session endpoint sockets
+/// One-shot janitor for the per-user <see cref="PsBashRuntimeDirectory"/>.
+/// Over time this dir accumulates per-session endpoint sockets
 /// (<c>host-*.sock</c>), their metadata sidecars (<c>*.host.json</c>), and
 /// spawn locks (<c>spawn-*.lock</c>) from hosts/launchers that were killed
 /// (OOM, SIGKILL, machine reboot) before they could clean up after themselves —
@@ -28,8 +28,8 @@ public static class StaleArtifactReaper
 {
     private const string HostProcessName = "ps-bash-host";
 
-    /// <summary>Reap stale artifacts under the canonical ps-bash temp dir.</summary>
-    public static void Reap() => Reap(Path.Combine(Path.GetTempPath(), "ps-bash"));
+    /// <summary>Reap stale artifacts under the per-user runtime dir.</summary>
+    public static void Reap() => Reap(PsBashRuntimeDirectory.GetPath());
 
     /// <summary>Reap stale artifacts under <paramref name="dir"/> (test seam).</summary>
     public static int Reap(string dir)

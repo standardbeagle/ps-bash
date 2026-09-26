@@ -61,6 +61,24 @@ public static class HostOwnership
         HostMetadata? metadata,
         string currentUser,
         out string reason)
+        => Classify(
+            metadata,
+            currentUser,
+            pid => PosixIdentity.TryGetProcessUid(pid, out var uid) ? uid : null,
+            PosixIdentity.CurrentUid,
+            out reason);
+
+    /// <summary>
+    /// Injection seam for <see cref="ProcessOwnerIsCurrentUser"/>: the process
+    /// uid probe is Linux-only (/proc), so tests pass a synthetic probe to
+    /// exercise the foreign-owner branch without a second local user.
+    /// </summary>
+    internal static CleanupDecision Classify(
+        HostMetadata? metadata,
+        string currentUser,
+        Func<int, uint?> processUidProbe,
+        Func<uint> currentUidProbe,
+        out string reason)
     {
         reason = "";
         if (metadata is null) return CleanupDecision.SafeArtifactCleanup;
@@ -73,6 +91,17 @@ public static class HostOwnership
 
         var (alive, runningExe) = ProbeProcess(metadata.Pid);
         if (!alive) return CleanupDecision.SafeArtifactCleanup;
+
+        // POSIX defense-in-depth: the sidecar's owner string is attacker-writable
+        // if the runtime dir is ever compromised, so probe the recorded PID's
+        // real uid directly. A foreign-owned process is never safe to kill.
+        if (!ProcessOwnerIsCurrentUser(metadata.Pid, processUidProbe, currentUidProbe, out var ownerUid))
+        {
+            reason =
+                $"recorded PID {metadata.Pid} is owned by uid {ownerUid}, " +
+                "not the current user; refusing to touch it";
+            return CleanupDecision.UnsafeToTouch;
+        }
 
         if (!ExecutablesMatch(runningExe, metadata.ExecutablePath))
         {
@@ -127,6 +156,23 @@ public static class HostOwnership
 
     private static bool OwnerMatches(string recorded, string current)
         => string.Equals(recorded, current, StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// True when the live <paramref name="pid"/> is owned by the current uid.
+    /// On platforms without a process-uid probe (Windows, macOS) returns true
+    /// with <paramref name="ownerUid"/> 0 — no opinion, so the other gates
+    /// still decide. On Linux a foreign uid returns false with the uid set.
+    /// </summary>
+    private static bool ProcessOwnerIsCurrentUser(
+        int pid, Func<int, uint?> processUidProbe, Func<uint> currentUidProbe, out uint ownerUid)
+    {
+        ownerUid = 0;
+        var probed = processUidProbe(pid);
+        if (probed is null) return true;
+
+        ownerUid = probed.Value;
+        return ownerUid == currentUidProbe();
+    }
 
     /// <summary>
     /// Public entry point for <see cref="ExecutablesMatch"/> used by callers

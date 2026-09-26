@@ -45,7 +45,9 @@ public static class ModuleExtractor
 
     /// <summary>
     /// The version- AND content-stamped extraction directory:
-    /// <c>{tmp}/ps-bash/module-{version}-{hash}</c>. The content hash in the directory NAME is what
+    /// <c>{runtime-dir}/module-{version}-{hash}</c>, where the runtime directory
+    /// is <see cref="PsBashRuntimeDirectory"/> (per-user and owner-only on POSIX).
+    /// The content hash in the directory NAME is what
     /// keeps two builds that share a version string — most importantly a dev build running next to an
     /// installed ps-bash (which the Claude Code Bash tool spawns constantly) — from extracting into the
     /// SAME directory and clobbering each other. Without it, both invalidate the shared marker on every
@@ -62,7 +64,8 @@ public static class ModuleExtractor
             var asm = typeof(ModuleExtractor).Assembly;
             var version = asm.GetName().Version?.ToString() ?? "0.0.0";
             var hash = ComputeEmbeddedHash(asm).Substring(0, 12).ToLowerInvariant();
-            _cachedDir = Path.Combine(Path.GetTempPath(), "ps-bash", $"module-{version}-{hash}");
+            _cachedDir = Path.Combine(
+                PsBashRuntimeDirectory.GetPath(), $"module-{version}-{hash}");
             return _cachedDir;
         }
     }
@@ -159,6 +162,10 @@ public static class ModuleExtractor
     public static string ExtractEmbedded()
     {
         var asm = typeof(ModuleExtractor).Assembly;
+        // Create AND validate the per-user runtime directory before reading the
+        // marker or laying the module down: on POSIX a pre-existing dir owned by
+        // another user — or one they can still write — must refuse, not load.
+        PsBashRuntimeDirectory.EnsureDirectory();
         var dir = ExtractionDir();
         var marker = Path.Combine(dir, ".extracted");
         var psd1Path = Path.Combine(dir, "PsBash.psd1");
