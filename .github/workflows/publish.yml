@@ -8,6 +8,11 @@ name: Publish Release
 # Recognized reasons: see scripts/skip-report.sh ALLOW_LIST.
 
 on:
+  # A pushed v* tag is the standard deploy (worktrack delivery profile: deploy via
+  # tag). The release-tag job creates the GitHub release for it; a release published
+  # by hand still works, and so does a manual dispatch.
+  push:
+    tags: ['v*']
   release:
     types: [published]
   workflow_dispatch:
@@ -20,7 +25,35 @@ env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 jobs:
+  # One place decides the release tag every later job uses, and makes sure the
+  # GitHub release exists before binaries are uploaded to it. A release created
+  # here with GITHUB_TOKEN does not re-trigger the release event, so a tag push
+  # runs this workflow once.
+  release-tag:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    outputs:
+      tag: ${{ steps.tag.outputs.tag }}
+    steps:
+      - id: tag
+        shell: bash
+        run: |
+          case "${{ github.event_name }}" in
+            release) tag='${{ github.event.release.tag_name }}' ;;
+            push) tag='${{ github.ref_name }}' ;;
+            *) tag='v${{ github.event.inputs.version }}' ;;
+          esac
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+      - name: Create the GitHub release for a pushed tag
+        if: github.event_name == 'push'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release view '${{ steps.tag.outputs.tag }}' --repo '${{ github.repository }}' >/dev/null 2>&1             || gh release create '${{ steps.tag.outputs.tag }}' --repo '${{ github.repository }}' --verify-tag --generate-notes
+
   build-binaries:
+    needs: release-tag
     strategy:
       matrix:
         include:
@@ -63,7 +96,7 @@ jobs:
       - name: Package binary
         shell: pwsh
         run: |
-          $version = '${{ github.event_name }}' -eq 'release' ? '${{ github.event.release.tag_name }}' : 'v${{ github.event.inputs.version }}'
+          $version = '${{ needs.release-tag.outputs.tag }}'
           $name = "ps-bash-${version}-${{ matrix.archive }}"
           $stage = "./publish/stage"
           $dst = "./artifacts/${name}.zip"
@@ -103,22 +136,17 @@ jobs:
         run: ./scripts/smoke-archive.ps1 -StageDir ./publish/stage
 
       - name: Upload release asset
-        if: github.event_name == 'release' || github.event_name == 'workflow_dispatch'
         env:
           GH_TOKEN: ${{ github.token }}
         shell: pwsh
         run: |
-          $version = if ('${{ github.event_name }}' -eq 'release') {
-              '${{ github.event.release.tag_name }}'
-          } else {
-              'v${{ github.event.inputs.version }}'
-          }
+          $version = '${{ needs.release-tag.outputs.tag }}'
           $archive = '${{ matrix.archive }}'
           $file = "./artifacts/ps-bash-${version}-${archive}.zip"
           gh release upload $version $file --clobber
 
       - name: Upload artifact
-        if: github.event_name != 'release'
+        if: github.event_name == 'workflow_dispatch'
         uses: actions/upload-artifact@v4
         with:
           name: ps-bash-${{ matrix.archive }}
@@ -352,7 +380,7 @@ jobs:
     # alone let releases ship to PSGallery/NuGet while the win-x64/linux/osx zips
     # were missing (v0.10.15/16). A release that can't produce its binaries must
     # not publish the module either.
-    needs: [test, build-binaries]
+    needs: [release-tag, test, build-binaries]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -360,11 +388,7 @@ jobs:
       - name: Set version from release tag
         shell: pwsh
         run: |
-          $version = if ('${{ github.event_name }}' -eq 'release') {
-              '${{ github.event.release.tag_name }}' -replace '^v', ''
-          } else {
-              '${{ github.event.inputs.version }}'
-          }
+          $version = '${{ needs.release-tag.outputs.tag }}' -replace '^v', ''
           Write-Host "Publishing version: $version"
           $manifest = Get-Content ./src/PsBash.Module/PsBash.psd1 -Raw
           $manifest = $manifest -replace "ModuleVersion = '.*'", "ModuleVersion = '$version'"
@@ -439,11 +463,7 @@ jobs:
         env:
           NUGET_API_KEY: ${{ secrets.NUGET_API_KEY }}
         run: |
-          $version = if ('${{ github.event_name }}' -eq 'release') {
-              '${{ github.event.release.tag_name }}' -replace '^v', ''
-          } else {
-              '${{ github.event.inputs.version }}'
-          }
+          $version = '${{ needs.release-tag.outputs.tag }}' -replace '^v', ''
           # Sync BOTH package versions to the release. PsBash.Core takes a
           # ProjectReference to PsBash.Transpiler, so Core's nupkg declares a
           # dependency on PsBash.Transpiler at this version — both MUST be packed
