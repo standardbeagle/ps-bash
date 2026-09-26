@@ -220,4 +220,156 @@ public class InvokeBashXargsCommandTests : IClassFixture<SharedPwshFixture>
         var joined = JoinBashText(result);
         Assert.Contains("prefix-echo;rm-suffix", joined);
     }
+
+    // ---- R23b: GNU parity gaps ----
+    // Oracle: GNU xargs (coreutils 9.x). Every case below was verified against
+    // `bash -c` via WSL; the differential suite freezes the same scripts.
+
+    [Fact]
+    public void Xargs_NoCommand_DefaultsToEcho()
+    {
+        // GNU: `printf 'a b c\n' | xargs` runs the default command `echo`,
+        // so the items are echoed space-joined. The old "no command
+        // specified" error diverges from GNU.
+        var (result, _) = Run("'a b c' | Invoke-BashXargs; $LASTEXITCODE");
+        // Last emitted object is the exit code string.
+        Assert.Equal("0", result[^1]?.ToString());
+        Assert.Contains("a b c", JoinBashText(result));
+    }
+
+    [Fact]
+    public void Xargs_DashI_SplitsOnWholeLinesNotWhitespace()
+    {
+        // GNU -I reads WHOLE LINES: `printf 'a b\nc d\n' | xargs -I{} echo
+        // '[{}]'` prints `[a b]` then `[c d]`. The old tokenizer reused the
+        // whitespace split even in -I mode, yielding four invocations.
+        var (result, _) = Run("\"a b`nc d\" | Invoke-BashXargs -I '{}' echo '[{}]'");
+        var joined = JoinBashText(result);
+        Assert.Contains("[a b]", joined);
+        Assert.Contains("[c d]", joined);
+        Assert.DoesNotContain("[a]", joined);
+    }
+
+    [Fact]
+    public void Xargs_DashLowerI_DefaultsReplaceTokenToBraces()
+    {
+        // GNU `-i` (no VALUE) is `-I` with the default replace string `{}`.
+        // It takes NO separate value token: `xargs -i echo '[{}]'` runs echo
+        // once per line. Route it through Arguments (emitter force-quotes it)
+        // so the binder cannot swallow the following token.
+        var (result, _) = Run("\"a b`nc\" | Invoke-BashXargs '-i' echo '[{}]'; $LASTEXITCODE");
+        Assert.Equal("0", result[^1]?.ToString());
+        Assert.Contains("[a b]", JoinBashText(result));
+        Assert.Contains("[c]", JoinBashText(result));
+    }
+
+    [Fact]
+    public void Xargs_DashLowerIAttached_ReadsReplaceStringFromTail()
+    {
+        // GNU `-i{}` is the attached form of `-i` (default `{}`); `-iX`
+        // replaces the literal `X`.
+        var (result, _) = Run("\"a b\" | Invoke-BashXargs '-iX' echo '[X]'; $LASTEXITCODE");
+        Assert.Equal("0", result[^1]?.ToString());
+        Assert.Contains("[a b]", JoinBashText(result));
+    }
+
+    [Fact]
+    public void Xargs_DashLowerI_Bare_DoesNotCrashTheBinder()
+    {
+        // Regression: `-i` bare used to raise "Missing an argument for
+        // parameter 'I'" because the declared string parameter consumed the
+        // next token (or nothing). It must behave as `-I {}`.
+        var (result, errors) = Run("'x' | Invoke-BashXargs '-i'; $LASTEXITCODE");
+        Assert.Empty(errors);
+        Assert.Equal("0", result[^1]?.ToString());
+    }
+
+    [Fact]
+    public void Xargs_DefaultInput_DoubleQuotedTokenStaysOneItem()
+    {
+        // GNU default tokenizer honors quotes: `a "b c" d` splits into
+        // a, b c, d. The old splitter dropped the quotes and split on the
+        // space inside them.
+        var (result, _) = Run("'a \"b c\" d' | Invoke-BashXargs echo; $LASTEXITCODE");
+        Assert.Contains("a b c d", JoinBashText(result));
+    }
+
+    [Fact]
+    public void Xargs_DefaultInput_BackslashEscapedSpaceStaysOneItem()
+    {
+        // GNU: `a\ b` is one item `a b`.
+        var (result, _) = Run("'a\\ b' | Invoke-BashXargs echo; $LASTEXITCODE");
+        Assert.Contains("a b", JoinBashText(result));
+    }
+
+    [Fact]
+    public void Xargs_DefaultInput_UnmatchedDoubleQuote_DropsToken()
+    {
+        // GNU with an unmatched double quote warns and emits nothing for the
+        // malformed token. At minimum it must not treat the raw quote as data.
+        var (result, _) = Run("'a \"b' | Invoke-BashXargs echo 2>$null; $LASTEXITCODE");
+        var joined = JoinBashText(result);
+        Assert.DoesNotContain("\"", joined);
+    }
+
+    [Fact]
+    public void Xargs_ExitCode_InvocationFailure_Is123()
+    {
+        // GNU: any invocation exiting 1..125 makes xargs exit 123.
+        var exit = RunAndReadExitCode(
+            "Invoke-BashXargs -n 1 Invoke-BashFalse 2>$null; $LASTEXITCODE");
+        Assert.Equal(123, exit);
+    }
+
+    [Fact]
+    public void Xargs_ExitCode_InvocationExit255_Is124()
+    {
+        // GNU: an invocation exiting 255 makes xargs exit 124.
+        var exit = RunAndReadExitCode(
+            "Invoke-BashXargs -n 1 Invoke-BashSh -c 'exit 255' 2>$null; $LASTEXITCODE");
+        Assert.Equal(124, exit);
+    }
+
+    [Fact]
+    public void Xargs_ExitCode_CommandNotFound_Is127()
+    {
+        // GNU: command cannot be found -> 127 and "No such file or directory".
+        var exit = RunAndReadExitCode(
+            "Invoke-BashXargs -n 1 no-such-command-xyz 2>$null; $LASTEXITCODE");
+        Assert.Equal(127, exit);
+    }
+
+    [Fact]
+    public void Xargs_ExitCode_AllInvocationsSucceed_Is0()
+    {
+        var exit = RunAndReadExitCode("Invoke-BashXargs -n 1 true; $LASTEXITCODE");
+        Assert.Equal(0, exit);
+    }
+
+    [Fact]
+    public void Xargs_ExitCode_InvocationExit126_Is123()
+    {
+        // GNU: exit status 126 from the invocation is treated like any other
+        // 1..125 failure -> xargs exits 123 (126 is reserved for xargs itself
+        // failing to run the command).
+        var exit = RunAndReadExitCode(
+            "Invoke-BashXargs -n 1 Invoke-BashSh -c 'exit 126' 2>$null; $LASTEXITCODE");
+        Assert.Equal(123, exit);
+    }
+
+    [Fact]
+    public void Xargs_ExitCode_InvocationExit125_Is123()
+    {
+        var exit = RunAndReadExitCode(
+            "Invoke-BashXargs -n 1 Invoke-BashSh -c 'exit 125' 2>$null; $LASTEXITCODE");
+        Assert.Equal(123, exit);
+    }
+
+    private int RunAndReadExitCode(string script)
+    {
+        var (result, _) = Run(script);
+        var last = result.Count > 0 ? result[^1]?.ToString() : null;
+        Assert.True(int.TryParse(last, out var code), $"expected exit code, got '{last}'");
+        return code;
+    }
 }

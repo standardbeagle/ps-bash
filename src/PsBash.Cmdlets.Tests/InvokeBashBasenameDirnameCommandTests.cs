@@ -183,6 +183,74 @@ public class InvokeBashBasenameDirnameCommandTests : IClassFixture<SharedPwshFix
         Assert.Contains(lines, l => l.Contains("Usage: basename"));
     }
 
+    // ---- R23b: GNU two-operand SUFFIX, -a, -s ----
+    // Oracle: GNU coreutils basename, verified against WSL bash.
+
+    [Fact]
+    public void Basename_TwoOperands_SecondIsSuffix()
+    {
+        // GNU `basename NAME [SUFFIX]`: `basename /a/b.txt .txt` -> `b`.
+        // The old operand loop treated `.txt` as a second NAME, printing
+        // `b.txt` then `.txt`.
+        var lines = RunLines("Invoke-BashBasename '/a/b.txt' '.txt'");
+        Assert.Equal(new[] { "b" }, lines);
+    }
+
+    [Fact]
+    public void Basename_TwoOperands_SuffixNotPresent_NameUnchanged()
+    {
+        var lines = RunLines("Invoke-BashBasename '/a/b.txt' '.log'");
+        Assert.Equal(new[] { "b.txt" }, lines);
+    }
+
+    [Fact]
+    public void Basename_TwoOperands_SuffixEqualsName_NotStripped()
+    {
+        // GNU: a suffix equal to the whole basename is NOT removed.
+        var lines = RunLines("Invoke-BashBasename '/a/b.txt' 'b.txt'");
+        Assert.Equal(new[] { "b.txt" }, lines);
+    }
+
+    [Fact]
+    public void Basename_SuffixAfterDoubleDash_StillSuffix()
+    {
+        var lines = RunLines("Invoke-BashBasename -- '/a/b.txt' '.txt'");
+        Assert.Equal(new[] { "b" }, lines);
+    }
+
+    [Fact]
+    public void Basename_DashA_TreatsEveryOperandAsName()
+    {
+        // GNU -a: each operand is a NAME (no suffix interpretation), so
+        // `basename -a /a/b.txt /x/y.txt` -> `b.txt`, `y.txt`.
+        var lines = RunLines("Invoke-BashBasename -a '/a/b.txt' '/x/y.txt'");
+        Assert.Equal(new[] { "b.txt", "y.txt" }, lines);
+    }
+
+    [Fact]
+    public void Basename_DashS_ImpliesA_AcrossAllOperands()
+    {
+        // GNU: `-s SUFFIX` implies `-a`; every operand gets the suffix stripped.
+        var lines = RunLines("Invoke-BashBasename -s '.txt' '/a/b.txt' '/x/y.txt'");
+        Assert.Equal(new[] { "b", "y" }, lines);
+    }
+
+    [Fact]
+    public void Basename_DashADashS_BothAcceptedTogether()
+    {
+        var lines = RunLines("Invoke-BashBasename -a -s '.txt' '/a/b.txt' '/x/y.txt'");
+        Assert.Equal(new[] { "b", "y" }, lines);
+    }
+
+    [Fact]
+    public void Basename_SingleOperand_NotTreatedAsSuffix()
+    {
+        // One operand only: SUFFIX form needs two operands, so a lone
+        // operand is just a NAME (`basename .txt` -> `.txt`).
+        var lines = RunLines("Invoke-BashBasename '.txt'");
+        Assert.Equal(new[] { ".txt" }, lines);
+    }
+
     [Fact]
     public void Dirname_Help_DelegatesToShowBashHelp()
     {
