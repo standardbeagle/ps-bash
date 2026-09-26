@@ -133,6 +133,18 @@ metadata file, or pipe name can be stale, spoofed, or left by a crashing process
 The health handshake is required for reuse; ownership validation is required
 before cleanup.
 
+### Stale-artifact reaping is compare-then-delete
+
+`StaleArtifactReaper` is the janitor that removes artifacts left by hosts killed
+before they could clean up. It deletes **only** artifacts whose owner is provably
+gone, and it re-reads the sidecar immediately before deleting: it reads the
+sidecar, classifies the owner dead, then re-reads and requires the sidecar to
+**still** name that same dead PID. If a new host rebound the endpoint in the race
+window and rewrote the sidecar, the re-read sees a different PID and the reaper
+leaves the sidecar and its companion socket untouched. Without this
+compare-then-delete step a rebinding host's freshly bound socket could be unlinked
+under it.
+
 ## Endpoint Cleanup vs Process Cleanup
 
 Endpoint cleanup means removing bind artifacts so a replacement can claim the
@@ -177,12 +189,24 @@ through a short-lived lifecycle lock beside the metadata record:
 
 This gives single-host-per-**session** behavior: one daemon per `(user, session)`,
 where the session token is an explicit `PSBASH_SESSION` or, when unset, the
-launcher's parent process id (`ProcessAncestry.GetParentProcessId`). Repeated `-c`
-invocations from one shell / agent share a parent → resolve the same endpoint →
-reuse one warm daemon; independent shells / agents resolve distinct endpoints, so
-load spreads instead of contending on a single per-user host (the contention that
-serializes N callers behind one warm pool and starves it under multi-agent load).
-The session token is **per-session, not per-invocation** — warm reuse within a
+launcher's **stable session anchor** — the nearest shell/agent ancestor of the
+launcher, folded with that ancestor's process start time
+(`ProcessAncestry.FindSessionAnchor`). The immediate parent is deliberately **not**
+used as-is: a Bash-tool call may be launched through a fresh short-lived shim, so
+using the parent verbatim spawns a new daemon per call and never reuses a warm
+host. The anchor walk climbs past such transient launchers to the nearest
+recognized shell (`bash`, `pwsh`, …) or agent (`node`, `opencode`, `claude`, …),
+stopping at a shared service/build host (e.g. `dotnet`) that is not a per-session
+owner, and falls back to the immediate parent when nothing is recognized. Repeated
+`-c` invocations from one shell / agent share an anchor → resolve the same
+endpoint → reuse one warm daemon; independent shells / agents resolve distinct
+anchors, so load spreads instead of contending on a single per-user host.
+
+The token is `<anchorPid>-<anchorStartTimeUtcTicks>`, not a bare PID: a PID is not
+unique **over time**, and Windows reuses PIDs. Folding in the anchor's start time
+makes a recycled PID a distinct session key, so an unrelated process can never
+attach to a previous session's stale daemon (and inherit its stale environment —
+see R06). The token is **per-session, not per-invocation** — warm reuse within a
 session is preserved; only independent sessions diverge. When no session token is
 available the endpoint degrades to the historical per-user name (`host-{user}`).
 The canonical endpoint remains stable for a given session; lifecycle metadata and
@@ -320,13 +344,14 @@ racer steals the socket path) and the Windows named pipe allows 16 server instan
 
 `IpcTransportFactory.ResolveEndpoint()` continues to be the source of truth for
 the endpoint and transport scheme. The resolved name now carries a per-**session**
-segment (`host-{user}-s{token}`, token = `PSBASH_SESSION` or parent pid); lifecycle
-code derives metadata and lock paths from the resolved `(scheme, endpoint)` pair, so
-each session's metadata/lock are naturally isolated. The session segment is the
-**only** discriminator added — a per-*process* (per-invocation) suffix must NOT be
-added to the canonical endpoint, because that would defeat warm-pool reuse (every
-command would cold-start its own daemon). `Lifetime.PerInvocation` is the dedicated
-path for process-local endpoints (`ResolvePerInvocationEndpoint`).
+segment (`host-{user}-s{token}`, token = `PSBASH_SESSION` or
+`{anchorPid}-{anchorStartTicks}`); lifecycle code derives metadata and lock paths
+from the resolved `(scheme, endpoint)` pair, so each session's metadata/lock are
+naturally isolated. The session segment is the **only** discriminator added — a
+per-*process* (per-invocation) suffix must NOT be added to the canonical endpoint,
+because that would defeat warm-pool reuse (every command would cold-start its own
+daemon). `Lifetime.PerInvocation` is the dedicated path for process-local
+endpoints (`ResolvePerInvocationEndpoint`).
 
 `IpcTransportFactory.RetireEndpoint()` remains endpoint cleanup only. For `unix`
 it may unlink the socket path after lifecycle validation has decided cleanup is
