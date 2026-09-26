@@ -1428,7 +1428,8 @@ public sealed class IpcWorker : IWorker
 
             // The host's metadata sidecar and (on POSIX) the socket file are
             // process-local artifacts of a host we just killed — remove them so
-            // {TEMP}/ps-bash does not accumulate dead per-invocation sockets.
+            // the per-user runtime dir does not accumulate dead per-invocation
+            // sockets (see PsBashRuntimeDirectory).
             try { IpcTransportFactory.RetireEndpoint(_scheme, _endpoint); } catch { }
             try { HostMetadata.Remove(_scheme, _endpoint); } catch { }
         }
