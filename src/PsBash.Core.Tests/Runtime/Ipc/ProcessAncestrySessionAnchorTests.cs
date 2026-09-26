@@ -18,13 +18,18 @@ public class ProcessAncestrySessionAnchorTests
     private sealed record ChainNode(string Name, long StartTicks, int Parent);
 
     /// <summary>
-    /// Build a synthetic ancestry rooted at <paramref name="launcherPid"/>.
+    /// Build a synthetic ancestry: <paramref name="immediateParent"/> is the
+    /// launcher's parent, and <paramref name="nodes"/> describes the rest.
     /// Parent 0 terminates the chain.
     /// </summary>
     private static ProcessAncestry.ProcessIdentity? SelectFrom(
-        int launcherPid, Dictionary<int, ChainNode> nodes)
+        int launcherPid, int immediateParent, Dictionary<int, ChainNode> nodes)
     {
-        Func<int, int?> parentOf = pid => nodes.TryGetValue(pid, out var n) && n.Parent != 0 ? n.Parent : null;
+        Func<int, int?> parentOf = pid =>
+        {
+            if (pid == launcherPid) return immediateParent;
+            return nodes.TryGetValue(pid, out var n) && n.Parent != 0 ? n.Parent : null;
+        };
         Func<int, (string? Name, long StartTicks)?> infoOf = pid =>
             nodes.TryGetValue(pid, out var n) ? (n.Name, n.StartTicks) : null;
         return ProcessAncestry.SelectSessionAnchor(launcherPid, parentOf, infoOf);
@@ -42,7 +47,7 @@ public class ProcessAncestrySessionAnchorTests
             [30] = new ChainNode("dotnet", 1, 0),
         };
 
-        var anchor = SelectFrom(launcherPid: 5, nodes);
+        var anchor = SelectFrom(launcherPid: 5, immediateParent: 10, nodes);
 
         Assert.NotNull(anchor);
         Assert.Equal(20, anchor.Value.Pid);
@@ -59,7 +64,7 @@ public class ProcessAncestrySessionAnchorTests
             [20] = new ChainNode("dotnet", 1, 0),
         };
 
-        var anchor = SelectFrom(launcherPid: 5, nodes);
+        var anchor = SelectFrom(launcherPid: 5, immediateParent: 10, nodes);
 
         Assert.NotNull(anchor);
         Assert.Equal(10, anchor.Value.Pid);
@@ -75,7 +80,7 @@ public class ProcessAncestrySessionAnchorTests
             [10] = new ChainNode("some-tool", 7, 0),
         };
 
-        var anchor = SelectFrom(launcherPid: 5, nodes);
+        var anchor = SelectFrom(launcherPid: 5, immediateParent: 10, nodes);
 
         Assert.NotNull(anchor);
         Assert.Equal(10, anchor.Value.Pid);
@@ -84,7 +89,7 @@ public class ProcessAncestrySessionAnchorTests
 
     [Fact]
     public void SelectSessionAnchor_NoParentAtAll_ReturnsNull()
-        => Assert.Null(SelectFrom(launcherPid: 5, new Dictionary<int, ChainNode>()));
+        => Assert.Null(SelectFrom(launcherPid: 5, immediateParent: 10, new Dictionary<int, ChainNode>()));
 
     [Fact]
     public void SelectSessionAnchor_SameChainSameAnchor_SameIdentity()
@@ -95,8 +100,8 @@ public class ProcessAncestrySessionAnchorTests
             [20] = new ChainNode("node", 50, 0),
         };
 
-        var a = SelectFrom(5, nodes);
-        var b = SelectFrom(5, nodes);
+        var a = SelectFrom(5, immediateParent: 10, nodes);
+        var b = SelectFrom(5, immediateParent: 10, nodes);
 
         Assert.Equal(a, b);
         Assert.Equal(20, a.Value.Pid);
@@ -107,11 +112,11 @@ public class ProcessAncestrySessionAnchorTests
     {
         // Same anchor PID, different start time => a different daemon key, so a
         // recycled PID can never attach to the previous session's stale daemon.
-        var first = SelectFrom(5, new Dictionary<int, ChainNode>
+        var first = SelectFrom(5, immediateParent: 20, new Dictionary<int, ChainNode>
         {
             [20] = new ChainNode("opencode", 50, 0),
         });
-        var second = SelectFrom(5, new Dictionary<int, ChainNode>
+        var second = SelectFrom(5, immediateParent: 20, new Dictionary<int, ChainNode>
         {
             [20] = new ChainNode("opencode", 999, 0),
         });
@@ -121,3 +126,4 @@ public class ProcessAncestrySessionAnchorTests
         Assert.NotEqual(first.Value.StartTimeUtcTicks, second.Value.StartTimeUtcTicks);
     }
 }
+

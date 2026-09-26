@@ -236,4 +236,78 @@ public class ProcessLifecycleTests
             }
         }
     }
+
+    [SkippableFact]
+    public async Task SequentialCalls_FromOneParent_ReuseOneHost()
+    {
+        Skip.IfNot(CanRun, "Windows + built ps-bash.exe required");
+
+        // R07 acceptance: N sequential Bash-tool-style calls from ONE logical
+        // session must reuse ONE warm daemon. Here the test process is the stable
+        // ancestor of every child, so all children resolve the same session anchor
+        // (<pid>-<startTicks>) and the same endpoint. No PSBASH_SESSION and no
+        // PSBASH_IPC_ENDPOINT are set — this exercises the automatic fallback.
+        var tempRoot = Path.Combine(Path.GetTempPath(), "psb-reuse-" + Guid.NewGuid().ToString("N"));
+        var runtimeDir = Path.Combine(tempRoot, "ps-bash");
+        Directory.CreateDirectory(runtimeDir);
+        try
+        {
+            async Task<(int Exit, int? HostPid)> RunOnceAsync()
+            {
+                var psi = new ProcessStartInfo
+                {
+                    FileName = PsBashExe,
+                    Arguments = "-c \"echo ok\"",
+                    RedirectStandardOutput = true,
+                    RedirectStandardError = true,
+                    UseShellExecute = false,
+                    CreateNoWindow = true,
+                };
+                // Isolate the runtime dir so we neither read nor disturb the
+                // user's real daemon.
+                psi.Environment["TEMP"] = tempRoot;
+                psi.Environment["TMP"] = tempRoot;
+                psi.Environment["PSBASH_SESSION"] = null;
+                psi.Environment["PSBASH_IPC_ENDPOINT"] = null;
+                psi.Environment["PSBASH_PER_INVOCATION"] = "0";
+                psi.Environment["PSBASH_HOST_IDLE_SECS"] = "30";
+
+                using var child = Process.Start(psi)!;
+                using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(40));
+                await child.WaitForExitAsync(cts.Token);
+
+                int? hostPid = null;
+                var sidecars = Directory.GetFiles(runtimeDir, "*.host.json");
+                if (sidecars.Length > 0)
+                {
+                    var pidText = sidecars
+                        .Select(f => HostMetadata.TryRead(
+                            "unix", f[..^".host.json".Length])?.Pid)
+                        .FirstOrDefault(p => p is > 0);
+                    hostPid = pidText;
+                }
+                return (child.ExitCode, hostPid);
+            }
+
+            var first = await RunOnceAsync();
+            Assert.Equal(0, first.Exit);
+            Assert.NotNull(first.HostPid);
+
+            var second = await RunOnceAsync();
+            Assert.Equal(0, second.Exit);
+
+            Assert.Equal(first.HostPid, second.HostPid);
+            Assert.Single(Directory.GetFiles(runtimeDir, "*.host.json"));
+
+            // The reused host is genuinely alive (warm), not a fresh spawn.
+            using var host = Process.GetProcessById(second.HostPid!.Value);
+            Assert.False(host.HasExited);
+            Assert.Equal("ps-bash-host", host.ProcessName, ignoreCase: true);
+            try { host.Kill(entireProcessTree: true); } catch { }
+        }
+        finally
+        {
+            try { Directory.Delete(tempRoot, recursive: true); } catch { }
+        }
+    }
 }

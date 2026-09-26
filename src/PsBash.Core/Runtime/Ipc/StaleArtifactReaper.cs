@@ -28,6 +28,13 @@ public static class StaleArtifactReaper
 {
     private const string HostProcessName = "ps-bash-host";
 
+    /// <summary>
+    /// Test seam: invoked with the sidecar path immediately after its first read
+    /// and liveness classification, before the compare-then-delete re-read. Lets a
+    /// test simulate a rebinding host rewriting the sidecar in the race window.
+    /// </summary>
+    internal static Action<string>? AfterSidecarReadForTest { get; set; }
+
     /// <summary>Reap stale artifacts under the per-user runtime dir.</summary>
     public static void Reap() => Reap(PsBashRuntimeDirectory.GetPath());
 
@@ -64,8 +71,17 @@ public static class StaleArtifactReaper
                 if (meta is null) continue;
                 if (IsHostAlive(meta.Pid)) continue;
 
-                // Owner is gone. Delete the sidecar and, for a unix endpoint, the
-                // companion socket file (sidecar path == endpoint + ".host.json").
+                AfterSidecarReadForTest?.Invoke(sidecar);
+
+                // Compare-then-delete: between the liveness check above and the
+                // unlink below, a NEW host may rebind and rewrite this sidecar.
+                // Re-read and require it to STILL name the same dead PID; if it
+                // changed, a live replacement owns these artifacts — leave them.
+                var recheck = ReadSidecar(sidecar);
+                if (recheck is null || recheck.Pid != meta.Pid) continue;
+
+                // Owner is gone (and unchanged). Delete the sidecar and, for a unix
+                // endpoint, the companion socket file (sidecar path == endpoint + ".host.json").
                 TryDelete(sidecar);
                 removed++;
                 if (sidecar.EndsWith(".host.json", StringComparison.Ordinal))
