@@ -1,3 +1,4 @@
+using System.Collections.Generic;
 using System.Diagnostics;
 using PsBash.Shell;
 using Xunit;
@@ -646,6 +647,87 @@ public class ProgramEndToEndTests
         // The exact pre-fix failure must never reappear.
         Assert.DoesNotContain("parse error", stderr);
         Assert.DoesNotContain("Missing closing", stderr);
+    }
+
+    // R06 (01M3F77T4SM4M9T6B9DF8CCE0K): each request must carry the launcher's
+    // own environment block, and the daemon must reset to exactly that block
+    // before running the command. Without this the shared daemon keeps the
+    // environment of whichever launcher spawned it plus every `$env:` write from
+    // earlier requests — so a var CHANGED in a later launcher was not observed
+    // (all three runs printed the first value), and exported bash variables
+    // leaked across invocations.
+    //
+    // A DEDICATED endpoint per test makes the daemon-spawn deterministic: the
+    // FIRST invocation spawns the daemon under its own environment, and the
+    // second must still observe its own (different) value.
+    [SkippableFact]
+    public async Task Command_ChangedEnvVarAcrossInvocations_EachRunSeesItsOwnValue()
+    {
+        var endpoint = PsBashTestProcess.CreateEndpoint();
+        var psiFirst = PsBashTestProcess.Create(
+            new[] { "-c", "echo \"X=$REVIEW_X\"" },
+            env: new Dictionary<string, string?> { ["REVIEW_X"] = "first" },
+            ipcEndpoint: endpoint);
+        var psiSecond = PsBashTestProcess.Create(
+            new[] { "-c", "echo \"X=$REVIEW_X\"" },
+            env: new Dictionary<string, string?> { ["REVIEW_X"] = "second" },
+            ipcEndpoint: endpoint);
+
+        var first = await ProcessRunHelper.RunAsync(psiFirst, timeout: TimeSpan.FromSeconds(60));
+        var second = await ProcessRunHelper.RunAsync(psiSecond, timeout: TimeSpan.FromSeconds(60));
+
+        Assert.Equal(0, first.ExitCode);
+        Assert.Equal(0, second.ExitCode);
+        Assert.Contains("X=first", first.Stdout);
+        Assert.Contains("X=second", second.Stdout);
+    }
+
+    // A variable UNSET in the launcher must be UNSET in the host: the reset is to
+    // exactly the launcher block, not "apply the launcher block on top of the
+    // daemon's current environment".
+    [SkippableFact]
+    public async Task Command_RemovedEnvVarAcrossInvocations_SecondRunSeesItUnset()
+    {
+        var endpoint = PsBashTestProcess.CreateEndpoint();
+        var psiWithVar = PsBashTestProcess.Create(
+            new[] { "-c", "echo \"V=$REMOVED_ENV_PROBE\"" },
+            env: new Dictionary<string, string?> { ["REMOVED_ENV_PROBE"] = "present" },
+            ipcEndpoint: endpoint);
+        var psiWithoutVar = PsBashTestProcess.Create(
+            new[] { "-c", "echo \"V=[$REMOVED_ENV_PROBE]\"" },
+            ipcEndpoint: endpoint);
+
+        var withVar = await ProcessRunHelper.RunAsync(psiWithVar, timeout: TimeSpan.FromSeconds(60));
+        var withoutVar = await ProcessRunHelper.RunAsync(psiWithoutVar, timeout: TimeSpan.FromSeconds(60));
+
+        Assert.Equal(0, withVar.ExitCode);
+        Assert.Equal(0, withoutVar.ExitCode);
+        Assert.Contains("V=present", withVar.Stdout);
+        Assert.Contains("V=[]", withoutVar.Stdout);
+    }
+
+    // `export` in one -c must not be visible to the next -c on the same daemon:
+    // export reaches the following command's environment in a single bash process,
+    // but a fresh `bash -c` never inherits it.
+    [SkippableFact]
+    public async Task Command_ExportInOneInvocation_NotVisibleToNext()
+    {
+        var endpoint = PsBashTestProcess.CreateEndpoint();
+        var exportName = "PSBASH_LEAK_" + Guid.NewGuid().ToString("N")[..8].ToUpperInvariant();
+        var psiExport = PsBashTestProcess.Create(
+            new[] { "-c", $"export {exportName}=leak; echo exported" },
+            ipcEndpoint: endpoint);
+        var psiRead = PsBashTestProcess.Create(
+            new[] { "-c", $"echo \"leaked=[${exportName}]\"" },
+            ipcEndpoint: endpoint);
+
+        var exported = await ProcessRunHelper.RunAsync(psiExport, timeout: TimeSpan.FromSeconds(60));
+        var read = await ProcessRunHelper.RunAsync(psiRead, timeout: TimeSpan.FromSeconds(60));
+
+        Assert.Equal(0, exported.ExitCode);
+        Assert.Equal(0, read.ExitCode);
+        Assert.Contains("exported", exported.Stdout);
+        Assert.Contains("leaked=[]", read.Stdout);
     }
 
     // --unix-paths / --windows-paths are accepted as leading flags and the -c
