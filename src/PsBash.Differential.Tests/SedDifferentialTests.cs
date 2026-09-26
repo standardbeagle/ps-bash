@@ -51,4 +51,16 @@ public class SedDifferentialTests
     [SkippableFact]
     public Task Sed_DollarAddress_AppendAfterLastLine()
         => Eq("printf '1\\n2\\n3\\n' | sed '$a\\\nAPP'");
+
+    [SkippableFact]
+    public Task Sed_AddressRegex_Semicolon_DeletesMatchingLines()
+        => Eq("printf 'a;b\\nc\\n' | sed '/;/d'");
+
+    [SkippableFact]
+    public Task Sed_AddressRegex_EscapedSemicolon_DeletesMatchingLines()
+        => Eq("printf 'a;b\\nc\\n' | sed '/\\;/d'");
+
+    [SkippableFact]
+    public Task Sed_RangeAddress_EndRegexSemicolonAnchor()
+        => Eq("printf 'a;b\\nc;d\\ne\\n' | sed '1,/;$/d'");
 }

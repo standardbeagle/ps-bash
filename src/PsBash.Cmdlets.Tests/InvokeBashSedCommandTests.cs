@@ -673,4 +673,46 @@ public class InvokeBashSedCommandTests : IDisposable, IClassFixture<SharedPwshFi
         var lines = RunText($"Invoke-BashSed -f '{Esc(script)}' '{Esc(data)}'");
         Assert.Equal(new[] { "1", "2", "3", "APP" }, lines);
     }
+
+    // ===================== R21 review: address-regex semicolons =====================
+
+    [Fact]
+    public void Sed_AddressRegex_ContainingSemicolon_ParsesAsOneCommand()
+    {
+        // Review attempt 1 blocker: SplitSedCommands split at ANY ';' not inside
+        // an s/y substitution or a/i/c text — address regexes were never skipped,
+        // so '/;/d' was shredded into '/' + '/d' and failed "unterminated address
+        // regex". A ';' inside an address regex is literal.
+        // Oracle: printf 'a;b\nc\n' | sed '/;/d' -> c
+        var lines = RunText("'a;b','c' | Invoke-BashSed '/;/d'");
+        Assert.Equal(new[] { "c" }, lines);
+    }
+
+    [Fact]
+    public void Sed_AddressRegex_ContainingEscapedSemicolon_ParsesAsOneCommand()
+    {
+        // The escaped form '/\;/d' is likewise one command.
+        // Oracle: printf 'a;b\nc\n' | sed '/\;/d' -> c
+        var lines = RunText("'a;b','c' | Invoke-BashSed '/\\;/d'");
+        Assert.Equal(new[] { "c" }, lines);
+    }
+
+    [Fact]
+    public void Sed_RangeAddress_EndRegexContainingSemicolonAndAnchor()
+    {
+        // Range end regex may hold ';' and an anchor: '1,/;$/d'.
+        // Oracle: printf 'a;b\nc;d\ne\n' | sed '1,/;$/d' -> (no output)
+        var lines = RunText("'a;b','c;d','e' | Invoke-BashSed '1,/;$/d'");
+        Assert.Empty(lines);
+    }
+
+    [Fact]
+    public void Sed_AddressRegex_Semicolon_SubstitutionStillRuns()
+    {
+        // A regex address holding ';' followed by another command with its own
+        // delimiter boundary must still split at the real command separator.
+        // Oracle: printf 'a;b\nc\n' | sed '/;/s/;/Z/' -> aZb / c
+        var lines = RunText("'a;b','c' | Invoke-BashSed '/;/s/;/Z/'");
+        Assert.Equal(new[] { "aZb", "c" }, lines);
+    }
 }
