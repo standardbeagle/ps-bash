@@ -101,4 +101,38 @@ public class StaleArtifactReaperTests : IDisposable
     [Fact]
     public void Reap_MissingDirectory_ReturnsZero()
         => Assert.Equal(0, StaleArtifactReaper.Reap(Path.Combine(_dir, "does-not-exist")));
+
+    [Fact]
+    public void Reap_SidecarRewrittenToLiveOwnerBeforeDelete_LeavesArtifacts()
+    {
+        // R07 compare-then-delete: between the reaper's liveness check and its
+        // unlink, a NEW host can rebind and rewrite the sidecar. The reaper must
+        // re-read before deleting and skip when the sidecar no longer names the
+        // dead PID it classified — otherwise it unlinks the fresh host's socket.
+        var endpoint = Path.Combine(_dir, "host-rebound.sock");
+        File.WriteAllText(endpoint, "");
+        MetaFor(endpoint, pid: 0x3FFFFFFF).Write("unix", endpoint); // dead owner
+
+        try
+        {
+            // Simulate the interleaving: the sidecar is rewritten to a different
+            // owner (a live rebind) after the reaper's first read.
+            StaleArtifactReaper.AfterSidecarReadForTest = sidecar =>
+            {
+                if (sidecar.EndsWith("host-rebound.sock.host.json", StringComparison.Ordinal))
+                    MetaFor(endpoint, pid: Environment.ProcessId).Write("unix", endpoint);
+            };
+
+            StaleArtifactReaper.Reap(_dir);
+        }
+        finally
+        {
+            StaleArtifactReaper.AfterSidecarReadForTest = null;
+        }
+
+        Assert.True(File.Exists(endpoint + ".host.json"),
+            "a sidecar rewritten to a different owner before delete must be left");
+        Assert.True(File.Exists(endpoint),
+            "the rebinding host's socket must not be unlinked");
+    }
 }

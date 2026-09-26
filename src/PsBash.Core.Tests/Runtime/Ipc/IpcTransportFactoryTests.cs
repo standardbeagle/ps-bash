@@ -23,17 +23,20 @@ public class IpcTransportFactoryTests : IDisposable
         Environment.SetEnvironmentVariable(IpcTransportFactory.EndpointEnvVar, null);
         Environment.SetEnvironmentVariable(IpcTransportFactory.SessionEnvVar, null);
         // Pin the automatic session token off by default so the canonical-fallback
-        // tests are deterministic regardless of the test runner's real parent pid;
-        // per-session tests set this seam (or PSBASH_SESSION) explicitly.
-        IpcTransportFactory.SessionTokenOverride = () => null;
+        // tests are deterministic regardless of the test runner's real parent
+        // ancestry; per-session tests set this seam (or PSBASH_SESSION) explicitly.
+        IpcTransportFactory.SessionAnchorOverride = () => null;
     }
 
     public void Dispose()
     {
         Environment.SetEnvironmentVariable(IpcTransportFactory.EndpointEnvVar, _priorEnv);
         Environment.SetEnvironmentVariable(IpcTransportFactory.SessionEnvVar, _priorSession);
-        IpcTransportFactory.SessionTokenOverride = null;
+        IpcTransportFactory.SessionAnchorOverride = null;
     }
+
+    private static ProcessAncestry.ProcessIdentity Anchor(int pid, long startTicks)
+        => new(pid, startTicks);
 
     private static void SetEnv(string? value)
         => Environment.SetEnvironmentVariable(IpcTransportFactory.EndpointEnvVar, value);
@@ -122,9 +125,9 @@ public class IpcTransportFactoryTests : IDisposable
     [Fact]
     public void ResolveEndpoint_ExplicitSessionBeatsAutomaticToken()
     {
-        // Even when the automatic (parent-pid) token is available, an explicit
-        // PSBASH_SESSION takes precedence.
-        IpcTransportFactory.SessionTokenOverride = () => "9999";
+        // Even when the automatic (ancestor-identity) token is available, an
+        // explicit PSBASH_SESSION takes precedence.
+        IpcTransportFactory.SessionAnchorOverride = () => Anchor(9999, 111);
         SetSession("explicit");
         var (_, endpoint) = IpcTransportFactory.ResolveEndpoint();
         Assert.Contains("-sexplicit", endpoint);
@@ -132,11 +135,34 @@ public class IpcTransportFactoryTests : IDisposable
     }
 
     [Fact]
-    public void ResolveEndpoint_AutomaticToken_UsedWhenNoExplicitSession()
+    public void ResolveEndpoint_AutomaticToken_IncludesAnchorStartTime()
     {
-        IpcTransportFactory.SessionTokenOverride = () => "12345";
+        // R07: the automatic token is "<pid>-<startTicks>", so a recycled PID is a
+        // distinct key and a stable ancestor reuses one warm daemon.
+        IpcTransportFactory.SessionAnchorOverride = () => Anchor(12345, 987654321);
         var (_, endpoint) = IpcTransportFactory.ResolveEndpoint();
-        Assert.Contains("-s12345", endpoint);
+        Assert.Contains("-s12345-987654321", endpoint);
+    }
+
+    [Fact]
+    public void ResolveEndpoint_SameAnchorIdentity_ProducesSameEndpoint()
+    {
+        IpcTransportFactory.SessionAnchorOverride = () => Anchor(12345, 987);
+        var (_, a) = IpcTransportFactory.ResolveEndpoint();
+        var (_, b) = IpcTransportFactory.ResolveEndpoint();
+        Assert.Equal(a, b);
+    }
+
+    [Fact]
+    public void ResolveEndpoint_RecycledPidWithNewStartTime_ProducesDistinctEndpoint()
+    {
+        // R07: the same PID with a different start time is a different session —
+        // PID reuse can never attach an unrelated invocation to a stale daemon.
+        IpcTransportFactory.SessionAnchorOverride = () => Anchor(12345, 1000);
+        var (_, a) = IpcTransportFactory.ResolveEndpoint();
+        IpcTransportFactory.SessionAnchorOverride = () => Anchor(12345, 2000);
+        var (_, b) = IpcTransportFactory.ResolveEndpoint();
+        Assert.NotEqual(a, b);
     }
 
     [Fact]
@@ -267,7 +293,7 @@ public class IpcTransportFactoryTests : IDisposable
         IpcTransportFactory.UnixSocketSupportedOverride = () => true;
         PsBashRuntimeDirectory.TempPathOverride =
             () => System.IO.Path.Combine(System.IO.Path.GetTempPath(), new string('x', 120));
-        IpcTransportFactory.SessionTokenOverride = () => new string('9', 40);
+        IpcTransportFactory.SessionAnchorOverride = () => Anchor(12345, 1);
         try
         {
             var (scheme, endpoint) = IpcTransportFactory.ResolveEndpoint();
@@ -286,6 +312,6 @@ public class IpcTransportFactoryTests : IDisposable
         IpcTransportFactory.UnixSocketSupportedOverride = null;
         IpcTransportFactory.ProcessIdOverride = null;
         PsBashRuntimeDirectory.TempPathOverride = null;
-        IpcTransportFactory.SessionTokenOverride = () => null;
+        IpcTransportFactory.SessionAnchorOverride = () => null;
     }
 }
