@@ -241,7 +241,7 @@ public class PsEmitterTests
     {
         var result = PsEmitter.Transpile("cmd |& other");
 
-        Assert.Equal("cmd 2>&1 | other", result);
+        Assert.Equal("cmd 2>&1 | ForEach-Object { Get-BashText $_ } | other", result);
     }
 
     [Fact]
@@ -729,10 +729,11 @@ public class PsEmitterTests
     public void Transpile_DoubleNegatedPipeline_IsIdentity()
     {
         // `! ! cmd1 | cmd2` — double negation applies to the whole pipeline =
-        // identity. No exit-code negation suffix; pipeline runs as-is.
+        // identity. No exit-code negation suffix; pipeline runs as-is. The
+        // non-mapped pipe target carries the shared Get-BashText conversion.
         var result = PsEmitter.Transpile("! ! cmd1 | cmd2");
 
-        Assert.Equal("cmd1 | cmd2", result);
+        Assert.Equal("cmd1 | ForEach-Object { Get-BashText $_ } | cmd2", result);
     }
 
     [Fact]
@@ -752,7 +753,7 @@ public class PsEmitterTests
 
         // Negation checks $global:LASTEXITCODE (bash exit code) not PowerShell's $?.
         Assert.Equal(
-            "cmd1 | cmd2; $global:LASTEXITCODE = if ($global:LASTEXITCODE -eq 0) { 1 } else { 0 }",
+            "cmd1 | ForEach-Object { Get-BashText $_ } | cmd2; $global:LASTEXITCODE = if ($global:LASTEXITCODE -eq 0) { 1 } else { 0 }",
             result);
     }
 

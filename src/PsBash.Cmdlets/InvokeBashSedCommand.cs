@@ -241,14 +241,16 @@ public sealed class InvokeBashSedCommand : PSCmdlet
 
             try
             {
-                foreach (var scriptLine in BashFileSystem.ReadLines(resolved))
-                {
-                    string trimmed = scriptLine.Trim();
-                    if (trimmed.Length > 0)
-                    {
-                        expressions.Add(trimmed);
-                    }
-                }
+                // A script FILE is ONE sed script: commands are separated by
+                // newlines, and a trailing backslash continues onto the next line
+                // (the multi-line `a\`/`i\`/`c\` text form). Adding each trimmed
+                // line as its own expression shredded those continuations — a
+                // `$a\` line lost its text to the next "expression" and reported
+                // "unsupported command 'APP'". Join the raw lines instead;
+                // SplitSedCommands then splits real command boundaries and keeps
+                // the text runs intact.
+                var raw = BashFileSystem.ReadAllText(resolved);
+                expressions.Add(raw.TrimEnd('\n'));
             }
             catch
             {
@@ -275,13 +277,16 @@ public sealed class InvokeBashSedCommand : PSCmdlet
         var commands = new List<SedCommand>();
         foreach (var expr in expressions)
         {
-            var parsed = ParseExpression(expr, extendedRegex);
-            if (parsed == null)
+            foreach (var part in SplitSedCommands(expr))
             {
-                // ParseExpression already emitted a bash-style error + exit code.
-                return;
+                var parsed = ParseExpression(part, extendedRegex);
+                if (parsed == null)
+                {
+                    // ParseExpression already emitted a bash-style error + exit code.
+                    return;
+                }
+                commands.Add(parsed);
             }
-            commands.Add(parsed);
         }
 
         // Thread the -n flag into the (static, pure-transform) cycle engine.
@@ -322,9 +327,19 @@ public sealed class InvokeBashSedCommand : PSCmdlet
                 }
                 else
                 {
-                    foreach (var outLine in outputLines)
+                    for (int oi = 0; oi < outputLines.Count; oi++)
                     {
-                        WriteObject(BashRuntime.NewBashObject(outLine + "\n"));
+                        bool isLast = oi == outputLines.Count - 1;
+                        if (isLast && !hadTrailingNewline)
+                        {
+                            WriteObject(BashRuntime.NewBashObject(
+                                outputLines[oi], "PsBash.TextOutput",
+                                noTrailingNewline: true));
+                        }
+                        else
+                        {
+                            WriteObject(BashRuntime.NewBashObject(outputLines[oi] + "\n"));
+                        }
                     }
                 }
             }
@@ -338,7 +353,6 @@ public sealed class InvokeBashSedCommand : PSCmdlet
         }
 
         var allLines = new List<string>();
-        var origItems = new List<object?>();
         foreach (var item in _pipeline)
         {
             string text = BashRuntime.GetBashText(item);
@@ -348,37 +362,49 @@ public sealed class InvokeBashSedCommand : PSCmdlet
                 foreach (var subLine in trimmed.Split('\n'))
                 {
                     allLines.Add(subLine);
-                    origItems.Add(null);
                 }
             }
             else
             {
                 allLines.Add(trimmed);
-                origItems.Add(item);
             }
+        }
+
+        // Whether the pipeline's last record ends in a newline in the emitted
+        // byte stream. A record is NOT newline-terminated only when it is an
+        // explicit NoTrailingNewline object AND its BashText does not already end
+        // in \n (printf '%s' with no newline). Everything else — a plain string,
+        // a normal BashObject, or a NoTrailingNewline object whose text DOES end
+        // in \n (printf '%s\n', which embeds the newline) — is terminated. Reusing
+        // the input object (the old code) copied its flag onto REWRITTEN text, so
+        // a single-line `printf 'x.y\n' | sed 's/\./-/'` lost its newline and the
+        // next command concatenated (`x-yZ`).
+        bool inputTrailingNewline = true;
+        if (_pipeline.Count > 0 && _pipeline[^1] is PSObject tailPso
+            && tailPso.Properties["NoTrailingNewline"]?.Value is true
+            && !BashRuntime.GetBashText(tailPso).EndsWith("\n"))
+        {
+            inputTrailingNewline = false;
         }
 
         var pipeOutput = ProcessLines(allLines.ToArray(), commands);
 
         for (int oi = 0; oi < pipeOutput.Count; oi++)
         {
-            if (oi < origItems.Count && origItems[oi] is PSObject orig
-                && orig.Properties["BashText"] != null)
+            bool isLast = oi == pipeOutput.Count - 1;
+            // Every emitted record gets a newline except the FINAL one when the
+            // input itself had no trailing newline. NewBashObject normalizes away
+            // the newline on the default path, so pass it explicitly as the
+            // no-trailing-newline byte-exact form for that last record.
+            if (isLast && !inputTrailingNewline)
             {
-                try
-                {
-                    orig.Properties["BashText"].Value =
-                        BashRuntime.NormalizeBashText(pipeOutput[oi] + "\n");
-                    WriteObject(orig);
-                    continue;
-                }
-                catch (System.Management.Automation.SetValueException)
-                {
-                    // Read-only BashText (e.g. ScriptProperty on bare string).
-                    // Fall through to emit a fresh BashObject.
-                }
+                WriteObject(BashRuntime.NewBashObject(
+                    pipeOutput[oi], "PsBash.TextOutput", noTrailingNewline: true));
             }
-            WriteObject(BashRuntime.NewBashObject(pipeOutput[oi] + "\n"));
+            else
+            {
+                WriteObject(BashRuntime.NewBashObject(pipeOutput[oi] + "\n"));
+            }
         }
     }
 
@@ -389,6 +415,7 @@ public sealed class InvokeBashSedCommand : PSCmdlet
         None, Regex, Line, RangeNum, RangeRegex,
         Step,            // first~step
         RangeNumToRegex, // N,/re/  (incl. the 0,/re/ special case)
+        Last,            // `$` — the last input line
     }
 
     internal sealed class SedAddress
@@ -504,6 +531,109 @@ public sealed class InvokeBashSedCommand : PSCmdlet
     }
 
     /// <summary>
+    /// Split one sed script expression into its individual commands. GNU sed
+    /// accepts several commands in ONE expression separated by <c>;</c> or a
+    /// newline (<c>sed 'N;s/\n/+/'</c>, <c>sed 'N;p'</c>). The old parser treated
+    /// the whole expression as a single command and silently ignored everything
+    /// after the first, so <c>N;s/\n/+/</c> never joined its lines.
+    /// <para>
+    /// The split is delimiter-aware: a <c>;</c> inside an <c>s###</c> /
+    /// <c>y###</c> substitution (any delimiter) or inside the text of an
+    /// <c>a\</c>/<c>i\</c>/<c>c\</c> command is part of that command, not a
+    /// separator. Text commands run to the end of the expression (a literal
+    /// newline after the leading backslash is part of the text), so once one is
+    /// seen the remainder is emitted whole.
+    /// </para>
+    /// </summary>
+    internal static List<string> SplitSedCommands(string expression)
+    {
+        var parts = new List<string>();
+        int start = 0;
+        int i = 0;
+        while (i < expression.Length)
+        {
+            char c = expression[i];
+
+            // A command character at the start of a segment. If it is s/y, the
+            // next char is a delimiter and we must skip to its closing delimiter(s).
+            // If it is a/i/c, the rest (including any following `;`) is its text.
+            if (c == 's' || c == 'y')
+            {
+                // Only treat as a substitution when this is the command position
+                // (start of the segment, ignoring an address prefix — the address
+                // has no `;` and no delimiter that would confuse the scan).
+                if (i + 1 < expression.Length)
+                {
+                    char delim = expression[i + 1];
+                    int segEnd = ScanDelimited(expression, i + 2, delim, 2);
+                    if (segEnd >= 0)
+                    {
+                        i = segEnd;
+                        continue;
+                    }
+                }
+            }
+            else if (c == 'a' || c == 'i' || c == 'c')
+            {
+                // Text command: everything to the end of the expression is its text.
+                // (A following `;` inside the text is literal, matching GNU.)
+                // Only when followed by `\` or end/space is it the text form; a bare
+                // `c` is a complete command and `;` after it separates commands.
+                if (i + 1 >= expression.Length || expression[i + 1] == '\\'
+                    || expression[i + 1] == '\n' || expression[i + 1] == ' ')
+                {
+                    parts.Add(expression.Substring(start));
+                    return TrimParts(parts);
+                }
+            }
+
+            if (c == ';' || c == '\n')
+            {
+                parts.Add(expression.Substring(start, i - start));
+                start = i + 1;
+            }
+            i++;
+        }
+
+        parts.Add(expression.Substring(start));
+        return TrimParts(parts);
+    }
+
+    /// <summary>
+    /// From <paramref name="pos"/>, scan past <paramref name="fields"/> occurrences
+    /// of <paramref name="delim"/>, honoring a backslash escape. Returns the index
+    /// just past the final delimiter, or -1 when the delimiter run is unterminated.
+    /// </summary>
+    private static int ScanDelimited(string s, int pos, char delim, int fields)
+    {
+        int seen = 0;
+        for (int i = pos; i < s.Length; i++)
+        {
+            char c = s[i];
+            if (c == '\\') { i++; continue; }
+            if (c == delim)
+            {
+                seen++;
+                if (seen == fields) return i + 1;
+            }
+        }
+        return -1;
+    }
+
+    private static List<string> TrimParts(List<string> parts)
+    {
+        var result = new List<string>(parts.Count);
+        foreach (var p in parts)
+        {
+            var t = p;
+            // A leading newline is a command separator artifact, not part of any
+            // command; trailing whitespace around the separator is likewise noise.
+            if (t.Length > 0) result.Add(t);
+        }
+        return result;
+    }
+
+    /// <summary>
     /// Reproduces the psm1 <c>ConvertFrom-SedExpression</c>. Returns
     /// <c>null</c> after emitting a bash-style error and setting
     /// <c>$global:LASTEXITCODE</c> on a parse failure.
@@ -532,9 +662,12 @@ public sealed class InvokeBashSedCommand : PSCmdlet
         commands = new List<SedCommand>();
         foreach (var expr in expressions)
         {
-            var c = ParseExpressionCore(expr, extendedRegex, out _, out _);
-            if (c == null) return false;
-            commands.Add(c);
+            foreach (var part in SplitSedCommands(expr))
+            {
+                var c = ParseExpressionCore(part, extendedRegex, out _, out _);
+                if (c == null) return false;
+                commands.Add(c);
+            }
         }
         return true;
     }
@@ -604,6 +737,12 @@ public sealed class InvokeBashSedCommand : PSCmdlet
                     pos = endSlash2 + 1;
                 }
             }
+        }
+        else if (expression.Length > 0 && expression[pos] == '$')
+        {
+            // `$` is the last-input-line address (`$a\`, `$d`, `$,/re/`).
+            addr = new SedAddress { Type = AddressType.Last };
+            pos++;
         }
         else if (expression.Length > 0 && char.IsDigit(expression[pos]))
         {
@@ -917,6 +1056,8 @@ public sealed class InvokeBashSedCommand : PSCmdlet
                 return Regex.IsMatch(line, addr.Pattern!);
             case AddressType.Line:
                 return lineNum == addr.Line;
+            case AddressType.Last:
+                return lineNum == allLines.Length;
             case AddressType.RangeNum:
                 return lineNum >= addr.Start && lineNum <= addr.End;
             case AddressType.Step:
@@ -981,6 +1122,33 @@ public sealed class InvokeBashSedCommand : PSCmdlet
             }
         }
         return false;
+    }
+
+    /// <summary>
+    /// True when a <c>c</c> command's address is a RANGE and the line after
+    /// <paramref name="lineNum"/> is still inside that range. Used so the change
+    /// text is emitted once per range rather than once per line. A non-range
+    /// address always returns false (emit on every matching line).
+    /// </summary>
+    private static bool RangeContinuesPast(
+        SedCommand cmd, string firstLine, int lineNum, string[] allLines)
+    {
+        var addr = cmd.Address;
+        if (addr is null) { return false; }
+        switch (addr.Type)
+        {
+            case AddressType.RangeNum:
+            case AddressType.RangeRegex:
+            case AddressType.RangeNumToRegex:
+                break;
+            default:
+                return false;
+        }
+
+        if (lineNum >= allLines.Length) { return false; }
+        string nextFirst = allLines[lineNum];
+        bool nextMatched = TestAddress(cmd, nextFirst, lineNum + 1, allLines);
+        return cmd.Negate ? !nextMatched : nextMatched;
     }
 
     /// <summary>
@@ -1090,6 +1258,15 @@ public sealed class InvokeBashSedCommand : PSCmdlet
                             {
                                 patternSpace += "\n" + inputLines[li];
                             }
+                            else
+                            {
+                                // No next line: GNU sed ends the run here without
+                                // executing later commands. Auto-print still
+                                // applies (so `N;s…` emits the final line), but
+                                // -n suppresses it (so `-n 'N;p'` emits nothing
+                                // more). Later commands are skipped via `quit`.
+                                quit = true;
+                            }
                             break;
                         case 'q':
                             quit = true;
@@ -1111,7 +1288,14 @@ public sealed class InvokeBashSedCommand : PSCmdlet
                             break;
                         case 'c':
                             deleted = true;
-                            appendTexts.Add(cmd.Text!);
+                            // A range `c` prints its text ONCE for the whole range,
+                            // at the range's final line (GNU); a per-line `c` prints
+                            // it on every matching line. TestAddress matched this
+                            // line, so emit unless a LATER line is still in range.
+                            if (!RangeContinuesPast(cmd, firstLine, lineNum, inputLines))
+                            {
+                                appendTexts.Add(cmd.Text!);
+                            }
                             break;
                         case 'y':
                         {

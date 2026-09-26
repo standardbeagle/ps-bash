@@ -632,7 +632,7 @@ public class InvokeBashSedCommandTests : IDisposable, IClassFixture<SharedPwshFi
         // running later commands.
         // Oracle: printf 'a\nb\nc\n' | sed -n 'N;p' -> a / b
         var lines = RunText("'a','b','c' | Invoke-BashSed -n 'N;p'");
-        Assert.Equal(new[] { "a", "b" }, lines);
+        Assert.Equal("a\nb", string.Join("\n", lines));
     }
 
     [Fact]

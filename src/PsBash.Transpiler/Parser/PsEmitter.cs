@@ -4772,7 +4772,19 @@ public static class PsEmitter
                     EmitPipeTargetRedirects(simple, sb);
                 }
                 else
+                {
+                    // A non-mapped pipe target (native/external program, or a
+                    // PowerShell command ps-bash does not wrap) receives the
+                    // pipeline through PowerShell's native binder, which FORMATS
+                    // each object — a BashObject renders as its property table
+                    // ("BashText NoTrai…"), not its text. bash pipes bytes, so
+                    // convert every upstream object to its bash text first. This
+                    // is the ONE shared rule for cmdlet-output → native stdin;
+                    // Get-BashText is identity on a string and on any object with
+                    // no BashText, so it is safe for every pipe target.
+                    sb.Append("ForEach-Object { Get-BashText $_ } | ");
                     sb.Append(WrapPipelineStageIfStatementList(Emit(cmd)));
+                }
             }
             else if (pipeline.Commands.Length > 1 && IsCompoundPipelineStage(cmd))
             {
