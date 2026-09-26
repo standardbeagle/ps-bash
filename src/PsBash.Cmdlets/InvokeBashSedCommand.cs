@@ -538,65 +538,173 @@ public sealed class InvokeBashSedCommand : PSCmdlet
     /// after the first, so <c>N;s/\n/+/</c> never joined its lines.
     /// <para>
     /// The split is delimiter-aware: a <c>;</c> inside an <c>s###</c> /
-    /// <c>y###</c> substitution (any delimiter) or inside the text of an
-    /// <c>a\</c>/<c>i\</c>/<c>c\</c> command is part of that command, not a
-    /// separator. Text commands run to the end of the expression (a literal
-    /// newline after the leading backslash is part of the text), so once one is
-    /// seen the remainder is emitted whole.
+    /// <c>y###</c> substitution (any delimiter), inside the text of an
+    /// <c>a\</c>/<c>i\</c>/<c>c\</c> command, or inside an address regex
+    /// (<c>/;/d</c>, <c>1,/;$/d</c>) is part of that command, not a separator.
+    /// Text commands run to the end of the expression (a literal newline after
+    /// the leading backslash is part of the text), so once one is seen the
+    /// remainder is emitted whole.
     /// </para>
     /// </summary>
     internal static List<string> SplitSedCommands(string expression)
     {
         var parts = new List<string>();
         int start = 0;
-        int i = 0;
-        while (i < expression.Length)
-        {
-            char c = expression[i];
 
-            // A command character at the start of a segment. If it is s/y, the
-            // next char is a delimiter and we must skip to its closing delimiter(s).
-            // If it is a/i/c, the rest (including any following `;`) is its text.
+        // Each iteration begins at a command position (`start`): skip the
+        // address prefix (if any), then dispatch on the command character. The
+        // address may itself contain `;` / newline inside a `/re/`, which
+        // <see cref="SkipSedAddress"/> consumes before any separator check.
+        while (start < expression.Length)
+        {
+            int cmdPos = SkipSedAddress(expression, start);
+
+            // Optional negation / spaces between the address and the command.
+            while (cmdPos < expression.Length
+                   && (expression[cmdPos] == '!' || expression[cmdPos] == ' '))
+            {
+                cmdPos++;
+            }
+
+            if (cmdPos >= expression.Length)
+            {
+                parts.Add(expression.Substring(start));
+                break;
+            }
+
+            char c = expression[cmdPos];
+
             if (c == 's' || c == 'y')
             {
-                // Only treat as a substitution when this is the command position
-                // (start of the segment, ignoring an address prefix — the address
-                // has no `;` and no delimiter that would confuse the scan).
-                if (i + 1 < expression.Length)
+                if (cmdPos + 1 < expression.Length)
                 {
-                    char delim = expression[i + 1];
-                    int segEnd = ScanDelimited(expression, i + 2, delim, 2);
+                    char delim = expression[cmdPos + 1];
+                    int segEnd = ScanDelimited(expression, cmdPos + 2, delim, 2);
                     if (segEnd >= 0)
                     {
-                        i = segEnd;
+                        int sep = FindSeparator(expression, segEnd);
+                        parts.Add(expression.Substring(start, sep - start));
+                        start = sep < expression.Length ? sep + 1 : expression.Length;
                         continue;
                     }
                 }
             }
             else if (c == 'a' || c == 'i' || c == 'c')
             {
-                // Text command: everything to the end of the expression is its text.
-                // (A following `;` inside the text is literal, matching GNU.)
-                // Only when followed by `\` or end/space is it the text form; a bare
-                // `c` is a complete command and `;` after it separates commands.
-                if (i + 1 >= expression.Length || expression[i + 1] == '\\'
-                    || expression[i + 1] == '\n' || expression[i + 1] == ' ')
+                // Text command: everything to the end of the expression is its
+                // text (a following `;` inside the text is literal, matching
+                // GNU). Only the `\`/newline/space/end form is the text form; a
+                // bare `c` is a complete command and `;` after it separates.
+                if (cmdPos + 1 >= expression.Length || expression[cmdPos + 1] == '\\'
+                    || expression[cmdPos + 1] == '\n' || expression[cmdPos + 1] == ' ')
                 {
                     parts.Add(expression.Substring(start));
                     return TrimParts(parts);
                 }
             }
 
-            if (c == ';' || c == '\n')
-            {
-                parts.Add(expression.Substring(start, i - start));
-                start = i + 1;
-            }
-            i++;
+            // A plain command: emit up to the next real separator.
+            int next = FindSeparator(expression, cmdPos + 1);
+            parts.Add(expression.Substring(start, next - start));
+            start = next < expression.Length ? next + 1 : expression.Length;
         }
 
-        parts.Add(expression.Substring(start));
         return TrimParts(parts);
+    }
+
+    /// <summary>
+    /// Returns the index of the next top-level <c>;</c> or newline at or after
+    /// <paramref name="pos"/>, or the length of <paramref name="s"/> when none.
+    /// Used once a command's own delimited / text body has been consumed, so the
+    /// scan is a plain separator search.
+    /// </summary>
+    private static int FindSeparator(string s, int pos)
+    {
+        for (int i = pos; i < s.Length; i++)
+        {
+            if (s[i] == ';' || s[i] == '\n') return i;
+        }
+        return s.Length;
+    }
+
+    /// <summary>
+    /// From a command position, returns the index just past an address prefix,
+    /// or <paramref name="pos"/> when there is none. Recognizes the same grammar
+    /// as <see cref="ParseExpressionCore"/>: <c>/re/</c> (optionally
+    /// <c>,/re/</c>), <c>$</c>, an optional <c>,/re/</c> / <c>,$</c> / <c>,N</c>
+    /// range tail. A <c>;</c> or newline inside the regex is consumed here, so
+    /// the caller never mistakes it for a command separator.
+    /// </summary>
+    private static int SkipSedAddress(string s, int pos)
+    {
+        if (pos >= s.Length) return pos;
+
+        if (s[pos] == '/')
+        {
+            pos = SkipRegex(s, pos);
+            if (pos < 0) return 0; // unterminated — let the parser report it
+            if (pos < s.Length && s[pos] == ','
+                && pos + 1 < s.Length && s[pos + 1] == '/')
+            {
+                int end = SkipRegex(s, pos + 1);
+                if (end >= 0) return end;
+            }
+            return pos;
+        }
+
+        if (s[pos] == '$')
+        {
+            int p = pos + 1;
+            if (p < s.Length && s[p] == ',' && p + 1 < s.Length && s[p + 1] == '/')
+            {
+                int end = SkipRegex(s, p + 1);
+                if (end >= 0) return end;
+            }
+            return p;
+        }
+
+        if (char.IsDigit(s[pos]))
+        {
+            int p = pos;
+            while (p < s.Length && char.IsDigit(s[p])) p++;
+            if (p < s.Length && s[p] == '~')
+            {
+                p++;
+                while (p < s.Length && char.IsDigit(s[p])) p++;
+                return p;
+            }
+            if (p < s.Length && s[p] == ',')
+            {
+                p++;
+                if (p < s.Length && s[p] == '/')
+                {
+                    int end = SkipRegex(s, p);
+                    if (end >= 0) return end;
+                    return p;
+                }
+                if (p < s.Length && s[p] == '$') return p + 1;
+                while (p < s.Length && char.IsDigit(s[p])) p++;
+                return p;
+            }
+            return p;
+        }
+
+        return pos;
+    }
+
+    /// <summary>
+    /// <paramref name="pos"/> must point at an opening <c>/</c>. Returns the
+    /// index just past the closing <c>/</c>, honoring a backslash escape, or -1
+    /// when unterminated.
+    /// </summary>
+    private static int SkipRegex(string s, int pos)
+    {
+        for (int i = pos + 1; i < s.Length; i++)
+        {
+            if (s[i] == '\\') { i++; continue; }
+            if (s[i] == '/') return i + 1;
+        }
+        return -1;
     }
 
     /// <summary>
