@@ -201,19 +201,31 @@ ps-bash -c 'export LEAKTEST=hello'
 ps-bash -c 'echo "${LEAKTEST-unset}"'   # ps-bash: hello   ·   bash: unset
 ```
 
-Real bash cannot do this — each `bash -c` is a separate process. A env-prefixed
-command (`X=1 cmd`) is unaffected: the emitter already wraps it in an explicit
-save/restore `try/finally`, so only a bare `export` / assignment that bash would
-have confined to the invocation leaks.
+Real bash cannot do this — each `bash -c` is a separate process.
 
-**Why the obvious fix is wrong.** Snapshotting the environment on connect and
-restoring it on release would race: the pool runs up to `PSBASH_POOL_MAX`
-connections *concurrently in one process*, and they all share the single process
-environment block. Two overlapping commands would restore each other's snapshot
-and corrupt both — trading a visible leak for intermittent, load-dependent
-corruption. Any real fix has to make the environment per-invocation state
-(runspace-scoped `$env:` shim, or a serialized env epoch), not a save/restore
-bracket around a shared global.
+**Fixed in R06.** The launcher now captures its full environment block and sends
+it with every framed request (`HostProtocol` `ENV:<base64 name>,<base64 value>`
+lines; a pre-R06 frame has none and decodes to `null`). The host resets its
+process environment to **exactly** that block before running the command —
+entries are set to the launcher's value and every variable *not* in the block is
+removed — so a var changed or unset in the launcher is observed, and an
+`export` from a previous invocation does not survive. A `null` block (the
+in-process interactive path, or a legacy launcher) leaves the environment
+untouched. End-to-end coverage: `ProgramEndToEndTests.Command_{Changed,Removed}EnvVar…`
+and `…ExportInOneInvocation_NotVisibleToNext`; protocol/worker coverage in
+`HostProtocolTests.RoundTrip_*WithEnvironment_*` and
+`SdkWorkerEnvironmentTests`.
+
+**Why a naive save/restore bracket would be wrong.** Snapshotting the environment
+on connect and restoring it on release would race: the pool runs up to
+`PSBASH_POOL_MAX` connections *concurrently in one process*, and they all share
+the single process environment block. Two overlapping commands would restore
+each other's snapshot and corrupt both. The R06 implementation sidesteps the race
+by reusing the **existing process-wide execution gate**: `SdkWorker` already
+serialises command execution through `_globalExecGate` because bash variables and
+cwd are process-global (see the field's comment), so the environment reset runs
+inside that gate and no other runspace is executing during the swap — the
+"serialized env epoch" the earlier analysis called for.
 
 Two further divergences share this root cause (bash variables modeled as
 environment variables):

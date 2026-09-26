@@ -40,13 +40,12 @@ public enum Lifetime
     /// daemon. Each connection gets its OWN runspace from a discard-on-release
     /// pool (<c>WorkerPool</c>), so <b>runspace-scoped</b> state (functions,
     /// variables, imported modules) does not leak across commands.
-    /// <b>Process-global</b> state is NOT isolated, however: environment
-    /// variables (<c>$env:*</c>) and the current directory are owned by the host
-    /// process, shared by every pooled runspace, and only partially reset between
-    /// commands (<c>Connection.PerInvocationReset</c> resets errexit /
-    /// <c>$ErrorActionPreference</c> / <c>$LASTEXITCODE</c> / positionals — not
-    /// env or cwd). So <c>cd</c> and <c>export</c> in one <c>-c</c> are visible to
-    /// the next on the same daemon, unlike a fresh <c>bash -c</c>. Other callers:
+    /// <b>Process-global</b> state is handled too: the current directory is set
+    /// per invocation by the launcher's cwd preamble, and as of R06 the launcher's
+    /// full environment block travels with each request and the host resets its
+    /// process environment to exactly that block before running (serialized by
+    /// <c>SdkWorker._globalExecGate</c>), so <c>export</c> in one <c>-c</c> is NOT
+    /// visible to the next — matching a fresh <c>bash -c</c>. Other callers:
     /// <c>ps-bash host restart</c> (<c>HostCommands.cs</c>).</para>
     /// <para>It is <b>not</b> used by the interactive REPL. The interactive
     /// launcher path (<c>Program.RunHostUnderPtyAsync</c> and the legacy
