@@ -262,17 +262,40 @@ rendered as PowerShell values (`$x`, `"a"`, `(…)`, `@(…)`, numbers) pass thr
 - `read [-r] [-p "prompt"] VAR` -> `Invoke-BashRead [-p "prompt"] VAR` (the
   runtime cmdlet sets `$VAR` in the caller's scope via `Set-Variable -Scope 1`).
 - **`while read a b …` binds EVERY name**, not just the last. The line is trimmed and
-  split with `-split '\s+', N`, whose limit argument reproduces bash's rule that the
-  LAST variable absorbs the remainder; names past the end of the field list get `''`.
-  The field array must be built with `@( … )` — a `$( … )` subexpression collapses a
-  one-element split to a scalar string, and `$str[0]` is then its first *character*.
-  The single-variable form keeps the direct `${VAR} = $_` binding.
+  split with a count limit, whose last field reproduces bash's rule that the LAST
+  variable absorbs the remainder; names past the end of the field list get `''`.
+  The splitter is built from the command's `IFS=` prefix: `null` or an all-whitespace
+  IFS folds runs of whitespace (`-split '\s+', N`); a custom IFS becomes the same
+  delimiter regex the runtime read cmdlet builds (`InvokeBashReadCommand.SplitByIfsForRead`),
+  so `while IFS=: read -r a b` splits on `:` and the fast path cannot drift from the
+  `read` builtin. The field array must be built with `@( … )` — a `$( … )`
+  subexpression collapses a one-element split to a scalar string, and `$str[0]` is
+  then its first *character*. The single-variable form keeps the direct
+  `${VAR} = $_` binding.
+- A bare `IFS=, read -r a b c` (not a loop) is a normal simple command; the
+  `IFS=` env pair wraps it, and the runtime cmdlet reads `$IFS` and applies
+  `SplitByIfsForRead` for the multi-variable remainder rule.
+- A **brace group used as a pipe target** (`echo hi | { read y; …; }`) emits
+  `& { $global:__BashStdIn = [Queue[string]]::new(); foreach (… in $input) { … }; BODY }`
+  so the body runs ONCE with the piped lines available to `read` (bash's fd-0
+  semantics). `Invoke-BashRead` dequeues one line from `$global:__BashStdIn` when
+  it has no pipeline input. A per-line `ForEach-Object` envelope would run a
+  multi-command body once per line, which is not bash.
 - Flags `-r`, `-p PROMPT`, and `-a ARR` are recognized by the runtime; other
   flags are currently ignored.
 - Under an interactive PTY, `Invoke-BashRead` reads from
   `[Console]::In.ReadLine()` so it blocks on the PTY slave fd. `Read-Host` is
   not usable in the interactive PTY host runspace because
   `ExitTrackingHost.ReadLine()` throws `NotSupportedException`.
+
+### `[[ … =~ … ]]` and `BASH_REMATCH`
+
+`[[ $s =~ PATTERN ]]` emits a subexpression that evaluates `-match` AND copies the
+automatic `$Matches` hashtable into `$global:BASH_REMATCH`, so `${BASH_REMATCH[1]}`
+and friends resolve — bash fills `BASH_REMATCH` on a successful `=~` and clears it on
+failure. The parser reads the whole right-hand side as a raw regex operand BEFORE the
+grouping-paren branch, so a pattern that STARTS with `(` (`(a)(b)`) is not mistaken
+for a test grouping.
 
 ### `set`
 
@@ -372,6 +395,12 @@ general fallback path (`EmitSimple`) and the mapped passthrough path
    `TryEmitMappedCommand`. If the command is recognized, the mapped form is
    used. Otherwise, the general `Emit` path is used.
 3. Pipe operators: `|` emits as ` | `, `|&` emits as ` 2>&1 | `.
+4. A **compound** stage (`subshell` / `brace group` / loop / `if` / `case`) emits
+   PowerShell *statements*, not a pipeable expression, so it is wrapped in
+   `& { … }` (PowerShell rejects `foreach (…) {} | sort` with "An empty pipe
+   element is not allowed"). A **brace group** additionally drains `$input` into
+   `$global:__BashStdIn` before its body so `read` inside the group sees the
+   piped lines (see the `read` section).
 
 Note: standalone commands are also mapped via `EmitSimple` (see Section 2.2),
 so mapping applies to both pipe targets and standalone invocations.
@@ -723,6 +752,16 @@ interact with hook execution:
 `InvokeBashEvalCommand` when a command returns non-zero. It is **not** managed by the
 hook registry and does not interact with `Register-BashPromptHook` or
 `Register-BashChpwdHook`.
+
+### 9.5 trap EXIT
+
+`trap '...' EXIT` is emitted as `$global:__BashTrapEXIT = { ... }`. `BashTranspiler`
+wraps any script whose source registers an EXIT (or ERR) trap in a
+`try { … } finally { … & $global:__BashTrapEXIT … }` epilogue, so the handler fires
+on normal end, on `exit N`, and under errexit — PowerShell runs `finally` in all
+three cases. Scripts with no such trap keep the historical bare emission.
+`InvokeBashEvalCommand` no longer fires EXIT itself (the transpiled epilogue owns it)
+and fires only ERR.
 
 ### 9.4 trap DEBUG
 
