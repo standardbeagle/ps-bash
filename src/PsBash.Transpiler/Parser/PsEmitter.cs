@@ -94,6 +94,16 @@ public static class PsEmitter
     private static int _subshellDepth;
 
     /// <summary>
+    /// Non-zero while emitting an operand of an <c>&amp;&amp;</c>/<c>||</c> list.
+    /// bash exempts every command in such a list from errexit (except the last),
+    /// so a standalone <c>false</c> aborts under <c>set -e</c> but <c>false || true</c>
+    /// must not — the emitter reads this to decide whether to throw the errexit
+    /// terminating error.
+    /// </summary>
+    [ThreadStatic]
+    private static int _andOrChainDepth;
+
+    /// <summary>
     /// True when <paramref name="command"/> lexically contains an <c>exit</c>
     /// builtin, so <see cref="EmitSubshell"/> knows it must supply the script block
     /// the scoped <c>return</c> returns from. A function DEFINITION inside the
@@ -546,8 +556,8 @@ public static class PsEmitter
         // Special case: while read VAR -> ForEach-Object pipeline (no infinite loop risk).
         // The classic `while read line; do ...; done < input.txt` idiom attaches its input
         // redirect here; ApplyCompoundRedirects feeds it in via Get-Content | & { $input | ... }.
-        if (IsWhileRead(whileCmd.Cond, out var readVar))
-            return ApplyCompoundRedirects(EmitWhileRead(readVar, whileCmd.Body), whileCmd.Redirects);
+        if (IsWhileRead(whileCmd.Cond, out var readVar, out var readIfs))
+            return ApplyCompoundRedirects(EmitWhileRead(readVar, readIfs, whileCmd.Body), whileCmd.Redirects);
 
         int depth = _loopDepth++;
         try
@@ -905,6 +915,17 @@ public static class PsEmitter
         return ApplyCompoundRedirects(Emit(braceGroup.Body), braceGroup.Redirects);
     }
 
+    /// <summary>
+    /// Prelude emitted at the head of a brace group used as a pipeline stage: it
+    /// drains the PowerShell pipeline (<c>$input</c>) into the shared bash stdin
+    /// queue the <c>read</c> builtin consumes from, so the group's body sees the
+    /// piped lines exactly as bash's fd 0 would. The queue is replaced (not
+    /// appended) per stage, matching a fresh pipe connection.
+    /// </summary>
+    private const string BraceGroupStdinPrelude =
+        "$global:__BashStdIn = [System.Collections.Generic.Queue[string]]::new(); " +
+        "foreach ($__psbash_stdin_line in $input) { $global:__BashStdIn.Enqueue([string]$__psbash_stdin_line) }; ";
+
     private static string EmitBackground(Command.Background bg)
     {
         string inner = Emit(bg.Inner);
@@ -1038,15 +1059,24 @@ public static class PsEmitter
         return EmitCondition(cond);
     }
 
-    private static bool IsWhileRead(Command cond, out List<string> varNames)
+    private static bool IsWhileRead(Command cond, out List<string> varNames, out string? ifs)
     {
         varNames = new List<string>();
+        ifs = null;
         if (cond is not Command.Simple simple)
             return false;
         if (simple.Words.Length < 2)
             return false;
         if (GetLiteralValue(simple.Words[0]) != "read")
             return false;
+        // The `while IFS=: read ...` idiom carries its field separator as an
+        // EnvPair prefix on the read command, not as a word. Capture it so the
+        // loop's field splitter uses the caller's IFS instead of whitespace.
+        foreach (var pair in simple.EnvPairs)
+        {
+            if (pair.Name == "IFS" && pair.Value is not null)
+                ifs = GetLiteralValue(pair.Value);
+        }
         // Accept: read VAR  or  read -r VAR  or  read -r a b c.
         // EVERY non-flag word is a target variable — `read a b` splits the line
         // across both. Keeping only the last one (the old behavior) left `$a`
@@ -1060,7 +1090,7 @@ public static class PsEmitter
         return varNames.Count > 0;
     }
 
-    private static string EmitWhileRead(List<string> varNames, Command body)
+    private static string EmitWhileRead(List<string> varNames, string? ifs, Command body)
     {
         // The `read` variables are the loop bindings for this construct: register
         // them as loop vars so the body emits them bare ($line, not $env:line) and
@@ -1097,7 +1127,7 @@ public static class PsEmitter
         // property probe. The `$null -ne $_` guard makes that probe null-safe regardless.
         string bind = varNames.Count == 1
             ? $"${{{varNames[0]}}} = $_; "
-            : BuildReadFieldBindings(varNames);
+            : BuildReadFieldBindings(varNames, ifs);
 
         return $"$input | ForEach-Object {{ {PsBuild.NullSafeBashText} }} | ForEach-Object {{ ($_ -replace \"`n$\",\"\") -split \"`n\" }} | ForEach-Object {{ {bind}{bodyText} }}";
     }
@@ -1107,26 +1137,80 @@ public static class PsEmitter
     /// the line on IFS after stripping leading/trailing whitespace, gives one field to
     /// each variable in turn, and the LAST variable absorbs everything remaining
     /// (separators included). Variables past the end of the field list get "".
-    /// `-split '\s+', N` reproduces exactly that remainder rule with its limit
+    /// `-split &lt;ifs&gt;, N` reproduces exactly that remainder rule with its limit
     /// argument; the pre-trim is what stops a leading space from producing a spurious
     /// empty first field.
+    ///
+    /// <paramref name="ifs"/> is the literal separator from the `IFS=` prefix on the
+    /// read command (`null` when absent → default whitespace splitting). A
+    /// non-whitespace IFS is compiled into the same delimiter regex the runtime read
+    /// cmdlet builds (<c>InvokeBashReadCommand.SplitByIfsForRead</c>), so the fast
+    /// path and the `read` builtin cannot drift.
     /// </summary>
-    private static string BuildReadFieldBindings(List<string> varNames)
+    private static string BuildReadFieldBindings(List<string> varNames, string? ifs)
     {
         var sb = new StringBuilder();
         sb.Append("$__psbash_readline = ($_ -replace '^\\s+|\\s+$',''); ");
-        // `@(...)`, never `$(...)`: a subexpression collapses a ONE-element result to a
-        // scalar string, and `$str[0]` is then its first CHARACTER — a line with a
-        // single field bound `a` to "s" instead of "solo". The array subexpression also
-        // keeps the empty branch an empty array rather than $null.
-        sb.Append("$__psbash_readf = @(if ($__psbash_readline -eq '') { @() } else { ");
-        sb.Append($"$__psbash_readline -split '\\s+', {varNames.Count} }}); ");
+        if (string.IsNullOrEmpty(ifs) || IsAllWhitespaceIfs(ifs))
+        {
+            // Default (or all-whitespace) IFS: fold runs of whitespace, trim ends.
+            // `@(...)`, never `$(...)`: a subexpression collapses a ONE-element result
+            // to a scalar string, and `$str[0]` is then its first CHARACTER — a line
+            // with a single field bound `a` to "s" instead of "solo". The array
+            // subexpression also keeps the empty branch an empty array rather than $null.
+            sb.Append("$__psbash_readf = @(if ($__psbash_readline -eq '') { @() } else { ");
+            sb.Append($"$__psbash_readline -split '\\s+', {varNames.Count} }}); ");
+        }
+        else
+        {
+            // Custom (non-whitespace) IFS: build the same delimiter regex the
+            // runtime read cmdlet uses (`SplitByIfsForRead`) and split with a count
+            // limit so the LAST variable keeps every remaining character,
+            // separators included — bash `IFS=, read a b` on `1,2,3` gives b="2,3".
+            // A whitespace IFS char folds runs; a non-whitespace IFS char is its own
+            // delimiter (empty fields preserved between adjacent ones).
+            sb.Append("$__psbash_readf = @(if ($__psbash_readline -eq '') { @() } else { ");
+            sb.Append($"$__psbash_readline -split {PsBuild.SingleQuote(BuildIfsReadDelimiterRegex(ifs))}, {varNames.Count} }}); ");
+        }
         for (int i = 0; i < varNames.Count; i++)
         {
             sb.Append($"${{{varNames[i]}}} = $(if ($__psbash_readf.Count -gt {i}) ");
             sb.Append($"{{ $__psbash_readf[{i}] }} else {{ '' }}); ");
         }
         return sb.ToString();
+    }
+
+    /// <summary>
+    /// The PowerShell regex that splits a line on a custom (non-whitespace) IFS,
+    /// mirroring the runtime <c>InvokeBashReadCommand.SplitByIfsForRead</c>
+    /// delimiter construction. Whitespace IFS chars come through as a character
+    /// class with run-folding (<c>[ \t]+</c>); each non-whitespace IFS char is a
+    /// single-character delimiter that may be padded by whitespace IFS.
+    /// </summary>
+    private static string BuildIfsReadDelimiterRegex(string ifs)
+    {
+        var ws = new StringBuilder();
+        var nonWs = new StringBuilder();
+        foreach (var c in ifs)
+        {
+            if (char.IsWhiteSpace(c)) ws.Append(System.Text.RegularExpressions.Regex.Escape(c.ToString()));
+            else nonWs.Append(System.Text.RegularExpressions.Regex.Escape(c.ToString()));
+        }
+        string? wsCls = ws.Length > 0 ? "[" + ws + "]" : null;
+        string nonWsCls = "[" + nonWs + "]";
+        if (wsCls is null)
+            return nonWsCls;
+        if (nonWs.Length == 0)
+            return wsCls + "+";
+        return $"{wsCls}*{nonWsCls}{wsCls}*|{wsCls}+";
+    }
+
+    /// <summary>True when every char of <paramref name="ifs"/> is whitespace.</summary>
+    private static bool IsAllWhitespaceIfs(string ifs)
+    {
+        foreach (var c in ifs)
+            if (!char.IsWhiteSpace(c)) return false;
+        return ifs.Length > 0;
     }
 
     private static string? ExtractArithVar(ArithmeticSyntax? init) =>
@@ -1503,9 +1587,17 @@ public static class PsEmitter
                 // regex (it avoids bash's own quoting pitfalls). Single-quoting the
                 // emitted `$env:re` would match the literal text "$env:re" instead of
                 // the pattern it holds, so pass a lone expansion through bare.
-                if (IsSoleExpansionWord(words[2]))
-                    return $"{lhs} -match {EmitWord(words[2])}";
-                return $"{lhs} -match '{SqEsc(StripQuotes(EmitWord(words[2])))}'";
+                string matchExpr = IsSoleExpansionWord(words[2])
+                    ? $"{lhs} -match {EmitWord(words[2])}"
+                    : $"{lhs} -match '{SqEsc(StripQuotes(EmitWord(words[2])))}'";
+                // Bash's `=~` also fills BASH_REMATCH with the whole match and each
+                // capture group. `-match` fills the automatic $Matches hashtable, so
+                // copy it across ($Matches[0] is the whole match, same as bash).
+                // The subexpression keeps the result ONE expression usable in an
+                // `if ( ( … ) )` condition while the assignment is a side effect.
+                return "$( $__psbash_m = " + matchExpr +
+                       "; if ($__psbash_m) { $global:BASH_REMATCH = $Matches } " +
+                       "else { $global:BASH_REMATCH = $null }; $__psbash_m )";
             }
 
             if (op is "==" or "=")
@@ -2170,8 +2262,21 @@ public static class PsEmitter
                 // try/catch on (1/0) is the mechanism that flips $? to $false so bash `&&` short-circuits;
                 // Write-Error can't be used here because it propagates as a terminating error in eval scope.
                 specialResult = "$($global:LASTEXITCODE = 1; try { [void](1/0) } catch { }; if ($global:__BashErrexit) { throw 'PsBash.FalseErrexit' })";
-            else
+            else if (_andOrChainDepth > 0)
+                // Inside an && / || list: bash exempts every list member from
+                // errexit, so `set -e; false || true` must survive. Non-terminating
+                // Write-Error still flips $? for the chain operator.
                 specialResult = "$($global:LASTEXITCODE = 1; Write-Error '' -ErrorAction SilentlyContinue)";
+            else
+                // A standalone `false` under errexit must ABORT the script (bash
+                // `set -e; false; echo after` prints nothing) AND leave no trace on
+                // stderr. A `throw` would be caught by the worker and printed as
+                // "ps-bash: PsBash.FalseErrexit" (bash prints nothing), so abort
+                // with `exit $?` instead — outside a subshell this ends the script
+                // with the failing status, and the EXIT trap's try/finally still
+                // runs. Without errexit, keep the non-terminating Write-Error that
+                // flips $? for a following && / || use.
+                specialResult = "$($global:LASTEXITCODE = 1; if ($global:__BashErrexit) { exit $global:LASTEXITCODE } else { Write-Error '' -ErrorAction SilentlyContinue })";
         }
 
         // Inside a subshell, `exit` leaves only the subshell and sets $? in the
@@ -4499,6 +4604,9 @@ public static class PsEmitter
         var sb = new StringBuilder();
         for (int i = 0; i < andOr.Commands.Length; i++)
         {
+            _andOrChainDepth++;
+            try
+            {
             if (i > 0)
             {
                 sb.Append(' ');
@@ -4576,6 +4684,8 @@ public static class PsEmitter
                     ? PsBuild.Subexpr(compoundText)
                     : compoundText);
             }
+            }
+            finally { _andOrChainDepth--; }
         }
 
         return sb.ToString();
@@ -4676,7 +4786,22 @@ public static class PsEmitter
                 // turns the statement list into a single pipeable command, and
                 // matches bash, which runs every pipe stage in its own subshell.
                 // This applies at ANY position (incl. the first stage), not just i > 0.
-                sb.Append($"& {{ {Emit(cmd)} }}");
+                //
+                // A BRACE GROUP additionally needs the piped lines on its stdin: bash
+                // connects the pipe to the group's fd 0, so `echo hi | { read y; ... }`
+                // reads "hi". PowerShell's `& { }` does not auto-bind `$input`, so we
+                // drain it into the shared stdin queue the read builtin consumes from
+                // (Set-BashStdinQueue). The group body still runs ONCE — only `read`
+                // advances the queue — which is bash's semantics, unlike a per-line
+                // ForEach-Object envelope.
+                if (cmd is Command.BraceGroup)
+                {
+                    sb.Append("& { ").Append(BraceGroupStdinPrelude).Append(Emit(cmd)).Append(" }");
+                }
+                else
+                {
+                    sb.Append($"& {{ {Emit(cmd)} }}");
+                }
             }
             else if (pipeline.Commands.Length > 1)
                 sb.Append(WrapPipelineStageIfStatementList(Emit(cmd)));

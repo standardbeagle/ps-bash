@@ -70,7 +70,8 @@ public static class BashTranspiler
         bool debug = IsDebug;
         try
         {
-            return PsEmitter.Transpile(bashCommand, context) ?? bashCommand;
+            var emitted = PsEmitter.Transpile(bashCommand, context) ?? bashCommand;
+            return WrapWithTrapEpilogue(bashCommand, emitted);
         }
         catch (ParseException ex)
         {
@@ -128,7 +129,20 @@ public static class BashTranspiler
                 map.Add(new LineMapping(pwshLine, bashLine, bashCol));
             }
 
-            return new TranspileResult(sb.ToString(), map);
+            var body = sb.ToString();
+            if (!ScriptHasExitOrErrTrap(bashCommand))
+                return new TranspileResult(body, map);
+
+            // The epilogue adds fixed prelude lines before the body, so every
+            // statement's PowerShell line shifts by that many.
+            int preludeLines = TrapEpiloguePreludeLineCount;
+            var shifted = new List<LineMapping>(map.Count);
+            foreach (var entry in map)
+                shifted.Add(entry with { PwshLine = entry.PwshLine + preludeLines });
+
+            return new TranspileResult(
+                TrapEpilogueOpen + "\n" + body + "\n" + TrapEpilogueClose,
+                shifted);
         }
         catch (ParseException ex)
         {
@@ -144,4 +158,58 @@ public static class BashTranspiler
         Console.Error.WriteLine($"[ps-bash] parser location: line {ex.Line}, col {ex.Column}");
         Console.Error.WriteLine($"[ps-bash] parser rule:     {ex.Rule}");
     }
+
+    // ── EXIT/ERR trap epilogue ───────────────────────────────────────────────
+    //
+    // bash fires a `trap … EXIT` handler when the shell terminates, however it
+    // terminates. The handler was only invoked by InvokeBashEvalCommand's own
+    // try/finally, so a plain `-c` run or script file never fired it. Wrap any
+    // script that registers an EXIT/ERR trap in a try/finally that fires the
+    // handler; PowerShell runs a try/finally on normal end, on `exit N`, and on
+    // an errexit terminating error, which is exactly bash's surface. Scripts
+    // with no such trap keep the historical bare emission.
+    //
+    // TrapEpilogueOpen is ONE line so the line-map shift is a constant.
+
+    private const string TrapEpilogueOpen =
+        "try {";
+
+    private const int TrapEpiloguePreludeLineCount = 1;
+
+    private const string TrapEpilogueClose =
+        "} finally { " +
+        "try { if ((Test-Path Variable:Global:__BashTrapEXIT) -and $global:__BashTrapEXIT) { & $global:__BashTrapEXIT } } catch { } " +
+        "}";
+
+    /// <summary>
+    /// True when <paramref name="bash"/> registers a trap on EXIT (or its
+    /// synonyms <c>0</c> / <c>ERR</c> — the eval path fires both from the same
+    /// epilogue). A <c>trap ACTION</c> with no signal defaults to EXIT. The scan
+    /// is source-level and deliberately conservative: it only decides whether to
+    /// add the wrapper, so a false positive is harmless (the handler fires only
+    /// if the runtime variable is set) and a false negative is a plain untrapped
+    /// script.
+    /// </summary>
+    internal static bool ScriptHasExitOrErrTrap(string bash)
+    {
+        if (string.IsNullOrEmpty(bash)) return false;
+        // `trap 'body' EXIT` / `trap handler ERR` / `trap - 0` etc.
+        if (System.Text.RegularExpressions.Regex.IsMatch(
+                bash, @"\btrap\b[^\n;|&]*\b(EXIT|EXIT_SIGNAL|ERR|0)\b",
+                System.Text.RegularExpressions.RegexOptions.IgnoreCase))
+            return true;
+        // `trap 'body'` with no signal operand (defaults to EXIT).
+        return System.Text.RegularExpressions.Regex.IsMatch(
+            bash, @"\btrap\s+(['""])[^\n;|&]*\1\s*(;|\n|$)",
+            System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+    }
+
+    /// <summary>
+    /// Wraps <paramref name="emitted"/> in the EXIT/ERR trap epilogue when the
+    /// source registers such a trap; otherwise returns it unchanged.
+    /// </summary>
+    private static string WrapWithTrapEpilogue(string bashSource, string emitted)
+        => ScriptHasExitOrErrTrap(bashSource)
+            ? TrapEpilogueOpen + "\n" + emitted + "\n" + TrapEpilogueClose
+            : emitted;
 }

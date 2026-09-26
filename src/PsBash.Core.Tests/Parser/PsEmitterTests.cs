@@ -2065,7 +2065,11 @@ public class PsEmitterTests
     {
         var result = PsEmitter.Transpile("[[ $a =~ ^[0-9]+$ ]]");
 
-        Assert.Equal("$(if (($env:a -match '^[0-9]+$')) { $global:LASTEXITCODE = 0 } else { $global:LASTEXITCODE = 1 })", result);
+        // The match is wrapped in a subexpression that also copies $Matches into
+        // BASH_REMATCH (bash fills it on =~), so the emitted form is no longer a
+        // bare `-match` boolean.
+        Assert.Contains("$env:a -match '^[0-9]+$'", result);
+        Assert.Contains("$global:BASH_REMATCH = $Matches", result);
     }
 
     // ── =~ right-hand side is a REGEX, not a shell token stream ──────────────
@@ -5463,7 +5467,7 @@ public class PsEmitterTests
         // gave the whole line to the first variable.
         var result = PsEmitter.Transpile("while IFS=: read -r a b; do echo $a; done")!;
 
-        Assert.Contains("-split ':'", result);
+        Assert.Contains("-split '[:]'", result);
         Assert.DoesNotContain("-split '\\s+', 2", result);
     }
 
@@ -5471,10 +5475,12 @@ public class PsEmitterTests
     public void Transpile_BraceGroupPipeTarget_ForwardsInput()
     {
         // REGRESSION. A brace group as a pipe target was emitted as `& { }` with no
-        // `$input` forwarding, so `read` inside the body saw no stdin.
+        // stdin forwarding, so `read` inside the body saw no stdin. The fix drains
+        // `$input` into the shared bash stdin queue the read builtin consumes.
         var result = PsEmitter.Transpile("echo hi | { read y; echo y=$y; }")!;
 
-        Assert.Contains("$input |", result);
+        Assert.Contains("$global:__BashStdIn", result);
+        Assert.Contains("in $input", result);
     }
 
     [Fact]

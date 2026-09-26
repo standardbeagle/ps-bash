@@ -447,6 +447,25 @@ public sealed partial class BashParser
                 continue;
             }
 
+            // The right-hand side of =~ is a REGEX, not a shell token stream: in
+            // `[[ $x =~ ^(a|b)$ ]]` the parens belong to the pattern. The lexer is
+            // context-free and emits them as LParen/RParen, so consuming tokens here
+            // would stop at the `(` — silently truncating the regex to `^` on the
+            // `&&` path, and throwing "Expected 'then'" from inside an `if`.
+            // Bash draws the same line: `(` groups in a [[ ]] condition, EXCEPT after
+            // =~ where it is regex syntax. So re-read the RHS straight from the source
+            // as one whitespace-delimited word.
+            //
+            // This MUST run before the grouping-paren branch below: a regex that
+            // STARTS with `(` (e.g. `(a)(b)`) was otherwise grabbed by that branch as
+            // a test group, splitting the pattern and leaving the `=~` with no RHS
+            // (emitted the "unsupported test operator" diagnostic and matched nothing).
+            if (extended && LastInnerWordIs(inner, "=~"))
+            {
+                inner.Add(ConsumeRegexOperand());
+                continue;
+            }
+
             // Grouping parens: `[[ ! -e $f || ( -f $f && ! -L $f ) ]]`. The lexer emits
             // them as LParen/RParen, and the loop used to BREAK on them — leaving the
             // group's operands out of the word list, so the whole clause silently
@@ -457,20 +476,6 @@ public sealed partial class BashParser
                 var parenToken = Advance();
                 inner.Add(new CompoundWord(ImmutableArray.Create<WordPart>(
                     new WordPart.Literal(parenToken.Value))));
-                continue;
-            }
-
-            // The right-hand side of =~ is a REGEX, not a shell token stream: in
-            // `[[ $x =~ ^(a|b)$ ]]` the parens belong to the pattern. The lexer is
-            // context-free and emits them as LParen/RParen, so consuming tokens here
-            // would stop at the `(` — silently truncating the regex to `^` on the
-            // `&&` path, and throwing "Expected 'then'" from inside an `if`.
-            // Bash draws the same line: `(` groups in a [[ ]] condition, EXCEPT after
-            // =~ where it is regex syntax. So re-read the RHS straight from the source
-            // as one whitespace-delimited word.
-            if (extended && LastInnerWordIs(inner, "=~"))
-            {
-                inner.Add(ConsumeRegexOperand());
                 continue;
             }
 

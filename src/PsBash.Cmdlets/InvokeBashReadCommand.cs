@@ -218,6 +218,14 @@ public sealed class InvokeBashReadCommand : PSCmdlet
             inputLine = sb.ToString().Replace("\r\n", "\n");
             if (inputLine.EndsWith('\n')) inputLine = inputLine.Substring(0, inputLine.Length - 1);
         }
+        else if (TryDequeueSharedStdin(out var queuedLine))
+        {
+            // A brace group used as a pipe target drains the incoming pipeline
+            // into $global:__BashStdIn (the emitter's BraceGroupStdinPrelude), so
+            // `echo hi | { read y; ...; }` reaches this branch. Consume ONE line —
+            // bash's `read` takes a single line from the group's fd 0.
+            inputLine = queuedLine;
+        }
         else
         {
             // Interactive fallback — write prompt then [Console]::In.ReadLine().
@@ -316,35 +324,37 @@ public sealed class InvokeBashReadCommand : PSCmdlet
         }
         else if (varNames.Count > 1)
         {
-            // Multi-variable: whitespace-split; last variable gets the
-            // remainder (joined with single space) — oracle parity.
-            var parts = System.Text.RegularExpressions.Regex.Split(inputLine, @"\s+");
+            // Multi-variable: split the line on $IFS into at most varNames.Count
+            // fields, with the last field keeping every remaining character
+            // (separators included) — bash `read a b` on `1,2,3` gives b="2,3".
+            var parts = SplitByIfsForRead(inputLine, BashVariableStore.Get("IFS"), varNames.Count);
             for (int j = 0; j < varNames.Count; j++)
-            {
-                string val;
-                if (j < varNames.Count - 1)
-                {
-                    val = j < parts.Length ? parts[j] : "";
-                }
-                else
-                {
-                    // Last variable gets the rest.
-                    if (j < parts.Length)
-                    {
-                        var rest = new string[parts.Length - j];
-                        Array.Copy(parts, j, rest, 0, rest.Length);
-                        val = string.Join(" ", rest);
-                    }
-                    else
-                    {
-                        val = "";
-                    }
-                }
-                AssignVariable(varNames[j], val);
-            }
+                AssignVariable(varNames[j], j < parts.Length ? parts[j] : "");
         }
 
         FileSystemHelpers.SetLastExitCode(this, 0);
+    }
+
+    /// <summary>
+    /// Dequeue one line from the shared bash stdin queue (<c>$global:__BashStdIn</c>)
+    /// when a brace-group pipe stage populated it. Returns false when the queue is
+    /// absent, empty, or not a queue, so the caller falls through to the console
+    /// read. The cast goes through <see cref="PSObject.Base(object)"/> so a
+    /// PSObject-wrapped value still resolves.
+    /// </summary>
+    private bool TryDequeueSharedStdin(out string? line)
+    {
+        line = null;
+        var raw = SessionState.PSVariable.GetValue("global:__BashStdIn");
+        if (raw is null) return false;
+        if (System.Management.Automation.PSObject.AsPSObject(raw).BaseObject
+            is System.Collections.Generic.Queue<string> queue)
+        {
+            if (queue.Count == 0) return false;
+            line = queue.Dequeue();
+            return true;
+        }
+        return false;
     }
 
     /// <summary>
@@ -415,6 +425,55 @@ public sealed class InvokeBashReadCommand : PSCmdlet
             ? nonWsCls
             : $"{wsCls}*{nonWsCls}{wsCls}*|{wsCls}+";
         return System.Text.RegularExpressions.Regex.Split(body, delim);
+    }
+
+    /// <summary>
+    /// Split a line into AT MOST <paramref name="count"/> fields for the
+    /// multi-variable <c>read a b c</c> form. Unlike <see cref="SplitByIfs"/>
+    /// (which returns every field), the split stops after
+    /// <paramref name="count"/> − 1 delimiters; the final field keeps every
+    /// remaining character, separators included — exactly bash's
+    /// "last variable absorbs the rest" rule (<c>IFS=, read a b</c> on
+    /// <c>1,2,3</c> gives <c>a=1</c>, <c>b=2,3</c>).
+    ///
+    /// Built on the same delimiter regex as <see cref="SplitByIfs"/> so the two
+    /// cannot drift: leading/trailing whitespace-IFS is trimmed, a whitespace
+    /// run is one delimiter, and a non-whitespace IFS char is its own delimiter.
+    /// </summary>
+    internal static string[] SplitByIfsForRead(string line, string? ifs, int count)
+    {
+        if (count <= 0) return Array.Empty<string>();
+        if (count == 1) return line.Length == 0 ? Array.Empty<string>() : new[] { line };
+        if (ifs is null)
+            return line.Length == 0 ? Array.Empty<string>()
+                : new System.Text.RegularExpressions.Regex(@"\s+").Split(line.Trim(), count);
+        if (ifs.Length == 0)
+            return line.Length == 0 ? Array.Empty<string>() : new[] { line };
+
+        var ws = new System.Text.StringBuilder();
+        var nonWs = new System.Text.StringBuilder();
+        foreach (var c in ifs)
+            (char.IsWhiteSpace(c) ? ws : nonWs).Append(
+                System.Text.RegularExpressions.Regex.Escape(c.ToString()));
+
+        string wsCls = ws.Length > 0 ? "[" + ws + "]" : null!;
+        if (line.Length == 0) return Array.Empty<string>();
+
+        if (nonWs.Length == 0)
+        {
+            var trimmed = System.Text.RegularExpressions.Regex.Replace(
+                line, $"^{wsCls}+|{wsCls}+$", "");
+            return trimmed.Length == 0 ? Array.Empty<string>()
+                : new System.Text.RegularExpressions.Regex(wsCls + "+").Split(trimmed, count);
+        }
+
+        string body = wsCls is null ? line
+            : System.Text.RegularExpressions.Regex.Replace(line, $"^{wsCls}+|{wsCls}+$", "");
+        string nonWsCls = "[" + nonWs + "]";
+        string delim = wsCls is null
+            ? nonWsCls
+            : $"{wsCls}*{nonWsCls}{wsCls}*|{wsCls}+";
+        return new System.Text.RegularExpressions.Regex(delim).Split(body, count);
     }
 
     /// <summary>

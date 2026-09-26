@@ -1,0 +1,13 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 1
+script-length: 47
+stdout-length: 4
+stderr-length: 0
+==== SCRIPT ====
+set -e; trap 'echo bye' EXIT; false; echo after
+==== STDOUT ====
+bye
+
+==== STDERR ====
+

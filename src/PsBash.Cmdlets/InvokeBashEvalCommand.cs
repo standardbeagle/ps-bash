@@ -89,14 +89,17 @@ public sealed class InvokeBashEvalCommand : PSCmdlet
         // Test-Path on the Variable: provider is strict-mode-safe AND does not write
         // to $error, so callers running under Set-StrictMode -Version Latest don't
         // see spurious errors when the trap variables have never been set.
+        //
+        // The EXIT handler is fired by the transpiler's own epilogue
+        // (BashTranspiler.WrapWithTrapEpilogue), emitted whenever the eval source
+        // registers an EXIT/ERR trap — so it must NOT be fired again here or it
+        // would run twice. This wrapper keeps only the non-EXIT concerns: the
+        // positional-args default and the ERR handler on a non-zero exit code.
         var wrappedScript = $@"
 if (-not (Test-Path Variable:Global:BashPositional)) {{ $global:BashPositional = @() }}
 try {{
     {result.PowerShell}
 }} finally {{
-    try {{
-        if ((Test-Path Variable:Global:__BashTrapEXIT) -and $global:__BashTrapEXIT) {{ & $global:__BashTrapEXIT }}
-    }} catch {{ }}
     if ($global:LASTEXITCODE) {{
         try {{
             if ((Test-Path Variable:Global:__BashTrapERR) -and $global:__BashTrapERR) {{ & $global:__BashTrapERR }}
