@@ -123,13 +123,14 @@ public class SdkWorkerEnvironmentTests : IAsyncLifetime
         var lower = upper.ToLowerInvariant();
 
         var seeded = await RunAsync(worker, $"$env:{upper} = 'seed'; Invoke-BashEcho seeded", null);
-        // Minimal block: ONLY the lower-cased entry, so the reset must not keep the
-        // daemon's pre-existing upper-cased instance. A launcher that has renamed
-        // its casing sends its whole block, just this one entry here.
-        var onlyLower = new List<KeyValuePair<string, string>>
-        {
-            new(lower, "fromlauncher"),
-        };
+        // Realistic launcher block (essential vars such as TEMP survive) with
+        // BOTH casings of the probe removed, then ONLY the lower-cased entry
+        // added — the reset must not keep the daemon's pre-existing upper-cased
+        // instance. A launcher that has renamed its casing sends its whole
+        // block, just with the new casing.
+        var onlyLower = Block(
+            new[] { new KeyValuePair<string, string>(lower, "fromlauncher") },
+            upper, lower);
         var reset = await RunAsync(worker, $"Invoke-BashEcho \"seen=[$env:{upper}]\"", onlyLower);
 
         Assert.Equal(0, seeded.ExitCode);
