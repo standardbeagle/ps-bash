@@ -211,7 +211,13 @@ entries are set to the launcher's value and every variable *not* in the block is
 removed — so a var changed or unset in the launcher is observed, and an
 `export` from a previous invocation does not survive. A `null` block (the
 in-process interactive path, or a legacy launcher) leaves the environment
-untouched. End-to-end coverage: `ProgramEndToEndTests.Command_{Changed,Removed}EnvVar…`
+untouched. `ENV:` lines are recognised only in the frame's leading header
+position (before the first body line), so a Command/Stdin body that contains an
+`ENV:`-prefixed line — heredoc data, say — is delivered to the command verbatim.
+On Windows the reset's keep-set comparison is case-insensitive to match the OS,
+so a launcher entry whose casing differs from the daemon's existing instance is
+retained rather than set-then-deleted. End-to-end coverage:
+`ProgramEndToEndTests.Command_{Changed,Removed}EnvVar…`
 and `…ExportInOneInvocation_NotVisibleToNext`; protocol/worker coverage in
 `HostProtocolTests.RoundTrip_*WithEnvironment_*` and
 `SdkWorkerEnvironmentTests`.

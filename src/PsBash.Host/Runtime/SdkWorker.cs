@@ -687,7 +687,12 @@ public sealed class SdkWorker : IWorker, ICompletionWorker
     /// </summary>
     private static void ResetEnvironment(IReadOnlyList<KeyValuePair<string, string>> environment)
     {
-        var keep = new HashSet<string>(StringComparer.Ordinal);
+        // R06: variable names are case-insensitive on Windows, so compare the
+        // keep-set the same way the OS does. An Ordinal set makes a launcher
+        // entry whose casing differs from the daemon's existing instance look
+        // stale, and the sweep below then deletes the value just set.
+        var comparer = OperatingSystem.IsWindows() ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal;
+        var keep = new HashSet<string>(comparer);
         foreach (var entry in environment)
         {
             keep.Add(entry.Key);

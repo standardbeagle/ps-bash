@@ -478,25 +478,33 @@ public static class HostProtocol
         var session = ParseOptionalSessionHeader(first, out var carryover);
         var lines = new List<string>();
         List<KeyValuePair<string, string>>? environment = null;
+        // R06: ENV: lines are headers and may only appear before the first body
+        // line. After the body starts, an `ENV: ...` line is command data (e.g.
+        // a heredoc) and must be delivered verbatim, never parsed as a header.
+        var inHeaderBlock = true;
         if (carryover is not null)
         {
             if (carryover == EndSentinel) return (string.Empty, session, null);
             if (carryover.StartsWith(EnvironmentHeaderPrefix, StringComparison.Ordinal))
                 (environment ??= new()).Add(ParseEnvironmentLine(carryover));
             else
+            {
                 lines.Add(carryover);
+                inHeaderBlock = false;
+            }
         }
         while (true)
         {
             var line = await reader.ReadLineAsync(ct).ConfigureAwait(false)
                 ?? throw new IOException("Request stream closed before END sentinel");
             if (line == EndSentinel) break;
-            if (line.StartsWith(EnvironmentHeaderPrefix, StringComparison.Ordinal))
+            if (inHeaderBlock && line.StartsWith(EnvironmentHeaderPrefix, StringComparison.Ordinal))
             {
                 (environment ??= new()).Add(ParseEnvironmentLine(line));
                 continue;
             }
             lines.Add(line);
+            inHeaderBlock = false;
         }
         return (string.Join('\n', lines), session, BuildEnvironmentBlock(environment));
     }
