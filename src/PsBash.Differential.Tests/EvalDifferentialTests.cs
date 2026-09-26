@@ -234,6 +234,14 @@ public class EvalDifferentialTests
     /// Goldens the stdout so the test runs even on platforms without bash.
     /// Records the raw elapsed milliseconds in the failure message so a
     /// regression that doubles eval latency is visible without re-running.
+    ///
+    /// <para>Runs the same launcher + per-invocation host path as every other
+    /// Differential spawn: <see cref="BashOracleFixture.RunOneAsync"/> now
+    /// defaults <c>PSBASH_PER_INVOCATION=1</c> for the ps-bash launcher, so this
+    /// probe cannot leave a 600 s shared daemon holding
+    /// <c>src/PsBash.Shell/bin</c> DLLs (the MSB3027 build-lock bug). The
+    /// 15 s budget still measures the cold per-invocation host, not a warm
+    /// daemon, so it stays a faithful hang detector.</para>
     /// </summary>
     [SkippableFact]
     public async Task PsBash_Eval_CmdSubMultiline_WallTimeUnder15000ms()

@@ -5,6 +5,19 @@ using Xunit.Sdk;
 namespace PsBash.Differential.Tests.Oracle;
 
 /// <summary>
+/// Serializes the host-lifetime guard tests. They exercise
+/// <see cref="BashOracleFixture.RunOneSpawnOverride"/> (an
+/// <see cref="AsyncLocal{T}"/> seam), and disabling parallelization keeps the
+/// guard cases from interleaving with the rest of the suite even if a future
+/// change reintroduces a process-wide slot.
+/// </summary>
+[CollectionDefinition(Name, DisableParallelization = true)]
+public sealed class HostLifetimeGuardCollection
+{
+    public const string Name = "HostLifetimeGuard";
+}
+
+/// <summary>
 /// Differential oracle tests: bash is truth, ps-bash is verified against it.
 ///
 /// All tests use AssertOracle.EqualAsync which:
@@ -12,6 +25,7 @@ namespace PsBash.Differential.Tests.Oracle;
 ///   - Fails with a structured diff bundle when outputs differ.
 ///   - Enforces 5 s timeout with Kill(entireProcessTree: true).
 /// </summary>
+[Collection(HostLifetimeGuardCollection.Name)]
 [Trait("Category", "Oracle")]
 public class OracleTests
 {
@@ -195,8 +209,8 @@ public class OracleTests
         Func<Task<OracleResult>> spawn)
     {
         Dictionary<string, string>? captured = null;
-        var saved = BashOracleFixture.RunOneSpawnOverride;
-        BashOracleFixture.RunOneSpawnOverride = (_, _, _, env, _) =>
+        var saved = BashOracleFixture.RunOneSpawnOverride.Value;
+        BashOracleFixture.RunOneSpawnOverride.Value = (_, _, _, env, _) =>
         {
             captured = env is null ? new Dictionary<string, string>() : new Dictionary<string, string>(env);
             return Task.FromResult(new SpawnResult(0, string.Empty, string.Empty, 1));
@@ -207,7 +221,7 @@ public class OracleTests
         }
         finally
         {
-            BashOracleFixture.RunOneSpawnOverride = saved;
+            BashOracleFixture.RunOneSpawnOverride.Value = saved;
         }
         Assert.NotNull(captured);
         return captured!;

@@ -33,9 +33,16 @@ public sealed class BashOracleFixture
     /// test assert the effective environment (e.g. the PSBASH_PER_INVOCATION
     /// host-lifetime default) without starting a real host. The signature is
     /// <c>(executable, arguments, timeout, mergedEnv, canonicalizeEnv)</c>.
+    ///
+    /// <para><b>AsyncLocal, not a plain static.</b> xunit runs test
+    /// collections in parallel (<c>parallelizeTestCollections: true</c>), so a
+    /// process-wide slot would let one test's fake spawn swallow a concurrent
+    /// <see cref="RunOneAsync"/> caller and turn its real spawn into an
+    /// exit-0 no-op. <see cref="AsyncLocal{T}"/> flows the override with the
+    /// async call chain that set it, so no other collection can observe it.</para>
     /// </summary>
-    internal static Func<string, IReadOnlyList<string>, TimeSpan,
-        IReadOnlyDictionary<string, string>?, bool, Task<SpawnResult>>? RunOneSpawnOverride;
+    internal static readonly AsyncLocal<Func<string, IReadOnlyList<string>, TimeSpan,
+        IReadOnlyDictionary<string, string>?, bool, Task<SpawnResult>>?> RunOneSpawnOverride = new();
 
     // Limits concurrent bash (WSL) invocations so the WSL VM stays responsive
     // under parallel test execution. Permit count of 2 allows meaningful
@@ -200,8 +207,7 @@ public sealed class BashOracleFixture
 
         var isPsBashLauncher = PsBashLocator.Resolve() is { } launcher
             && string.Equals(Path.GetFullPath(executable), Path.GetFullPath(launcher), StringComparison.OrdinalIgnoreCase);
-        _ = isPsBashLauncher;
-        if (false && isPsBashLauncher)
+        if (isPsBashLauncher)
         {
             merged ??= new Dictionary<string, string>();
             if (!merged.ContainsKey("PSBASH_PER_INVOCATION"))
@@ -210,8 +216,9 @@ public sealed class BashOracleFixture
 
         try
         {
-            var result = RunOneSpawnOverride is not null
-                ? await RunOneSpawnOverride(executable, new[] { firstArg, script }, timeout, merged, canonicalizeEnv)
+            var spawnOverride = RunOneSpawnOverride.Value;
+            var result = spawnOverride is not null
+                ? await spawnOverride(executable, new[] { firstArg, script }, timeout, merged, canonicalizeEnv)
                 : await ProcessSpawn.RunAsync(
                     executable, new[] { firstArg, script }, timeout, stdinContent: null,
                     env: merged, canonicalizeEnv: canonicalizeEnv);
