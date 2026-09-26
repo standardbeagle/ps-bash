@@ -588,4 +588,89 @@ public class InvokeBashSedCommandTests : IDisposable, IClassFixture<SharedPwshFi
         var lines = RunText("'a','b','a' | Invoke-BashSed -n 's/a/X/p'");
         Assert.Equal(new[] { "X", "X" }, lines);
     }
+
+    // ===================== R21 regressions =====================
+
+    private static bool HasNoTrailingNewline(PSObject o) =>
+        o.Properties["NoTrailingNewline"]?.Value is true;
+
+    [Fact]
+    public void Sed_Pipeline_SingleLineInput_KeepsNewlineSourceDidToo()
+    {
+        // R21-1. A producer that already embedded a newline (printf '%s\n') emits
+        // a NoTrailingNewline BashObject whose BashText ends in \n. sed must treat
+        // that as a newline-terminated record: the old code reused the input
+        // object, copying the stale flag onto the REWRITTEN text, so `printf
+        // 'x.y\n' | sed 's/\./-/'; echo Z` printed `x-yZ`. Build such an object
+        // and assert the output is a plain string (newline-terminated).
+        var pwsh = _fixture.AcquireFresh();
+        var result = pwsh.AddScript(
+            "$o = [PsBash.Cmdlets.BashRuntime]::NewBashObject(\"x.y`n\", " +
+            "'PsBash.TextOutput', $true, $null); " +
+            "$o | Invoke-BashSed 's/\\./-/'").Invoke();
+        pwsh.Commands.Clear();
+
+        Assert.Single(result);
+        Assert.False(HasNoTrailingNewline(result[0]!));
+        Assert.Equal("x-y", result[0]?.ToString());
+    }
+
+    [Fact]
+    public void Sed_Pipeline_MultiCommandExpression_SplitOnSemicolon()
+    {
+        // R21-3. `N;s/\n/+/` is ONE expression holding two commands. The parser
+        // used to treat it as a single `N` and silently drop `;s/\n/+/`.
+        // Oracle: printf 'a\nb\nc\n' | sed 'N;s/\n/+/' -> a+b / c
+        var lines = RunText("'a','b','c' | Invoke-BashSed 'N;s/\\n/+/'");
+        Assert.Equal(new[] { "a+b", "c" }, lines);
+    }
+
+    [Fact]
+    public void Sed_NextCommand_LastLine_StopsWithoutExtraPrint()
+    {
+        // R21-3b. N on the last input line ends the run without auto-printing or
+        // running later commands.
+        // Oracle: printf 'a\nb\nc\n' | sed -n 'N;p' -> a / b
+        var lines = RunText("'a','b','c' | Invoke-BashSed -n 'N;p'");
+        Assert.Equal(new[] { "a", "b" }, lines);
+    }
+
+    [Fact]
+    public void Sed_Change_RangeAddress_EmitsTextOnce()
+    {
+        // R21-4. `c` over a range prints its text ONCE for the whole range.
+        // Oracle: printf '1\n2\n3\n' | sed '1,2c\REPL' -> REPL / 3
+        var lines = RunText("'1','2','3' | Invoke-BashSed '1,2c\\REPL'");
+        Assert.Equal(new[] { "REPL", "3" }, lines);
+    }
+
+    [Fact]
+    public void Sed_Change_PerLineAddress_EmitsTextPerMatchingLine()
+    {
+        // A non-range `c` still emits once per MATCHING line (GNU).
+        // Oracle: printf 'x\nx\ny\n' | sed '/x/c\Y' -> Y / Y / y
+        var lines = RunText("'x','x','y' | Invoke-BashSed '/x/c\\Y'");
+        Assert.Equal(new[] { "Y", "Y", "y" }, lines);
+    }
+
+    [Fact]
+    public void Sed_DollarAddress_AppendsAfterLastLine()
+    {
+        // R21-5. `$` is the last-line address; the parser rejected it with
+        // "unsupported command '$'".
+        // Oracle: printf '1\n2\n3\n' | sed '$a\APP' -> 1 / 2 / 3 / APP
+        var lines = RunText("'1','2','3' | Invoke-BashSed '$a\\APP'");
+        Assert.Equal(new[] { "1", "2", "3", "APP" }, lines);
+    }
+
+    [Fact]
+    public void Sed_ScriptFile_BackslashContinuation_KeepsText()
+    {
+        // R21-5b. A `-f` script with `$a\` on one line and the text on the next
+        // is ONE command; splitting per line produced "unsupported command 'APP'".
+        var script = WriteFile("cont.sed", "$a\\\nAPP\n");
+        var data = WriteFile("cont.txt", "1\n2\n3\n");
+        var lines = RunText($"Invoke-BashSed -f '{Esc(script)}' '{Esc(data)}'");
+        Assert.Equal(new[] { "1", "2", "3", "APP" }, lines);
+    }
 }

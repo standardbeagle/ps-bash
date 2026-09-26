@@ -5494,6 +5494,21 @@ public class PsEmitterTests
         Assert.Contains("BASH_REMATCH", result);
     }
 
+    [Fact]
+    public void Transpile_PipeToNativeCommand_ConvertsObjectsToBashText()
+    {
+        // R21-2. A pipe target ps-bash does not map (a native/external program
+        // such as od) receives the pipeline through PowerShell's native binder,
+        // which FORMATS each object — a BashObject rendered as its property
+        // table ("BashText NoTrai…"), so `printf 'a\n' | sed s/a/b/ | od -c`
+        // saw a table, not "b\n". bash pipes bytes, so every upstream object must
+        // be converted to its bash text first. This is the ONE shared rule for
+        // cmdlet-output → native stdin.
+        var result = PsEmitter.Transpile("printf 'a\\n' | sed s/a/b/ | od -c")!;
+
+        Assert.Contains("| ForEach-Object { Get-BashText $_ } | od -c", result);
+    }
+
     private static Command.Simple MakeSimple(params string[] words) =>
         new(words.Select(MakeWord).ToImmutableArray(), ImmutableArray<EnvPair>.Empty, ImmutableArray<Redirect>.Empty);
 
