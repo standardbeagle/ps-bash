@@ -1,3 +1,4 @@
+using PsBash.Core.Runtime;
 using PsBash.Core.Runtime.Ipc;
 using Xunit;
 
@@ -211,7 +212,7 @@ public class IpcTransportFactoryTests : IDisposable
         // host died in UnixDomainSocketEndPoint construction.
         IpcTransportFactory.UnixSocketSupportedOverride = () => true;
         IpcTransportFactory.ProcessIdOverride = () => 291088;
-        IpcTransportFactory.TempPathOverride = LongTempRoot;
+        PsBashRuntimeDirectory.TempPathOverride = LongTempRoot;
         try
         {
             var (scheme, endpoint) = IpcTransportFactory.ResolvePerInvocationEndpoint();
@@ -238,7 +239,7 @@ public class IpcTransportFactoryTests : IDisposable
         // (e.g. a forked -c fan-out) each bind their own private socket.
         IpcTransportFactory.UnixSocketSupportedOverride = () => true;
         IpcTransportFactory.ProcessIdOverride = () => 291088;
-        IpcTransportFactory.TempPathOverride = LongTempRoot;
+        PsBashRuntimeDirectory.TempPathOverride = LongTempRoot;
         try
         {
             var (s1, e1) = IpcTransportFactory.ResolvePerInvocationEndpoint();
@@ -264,7 +265,7 @@ public class IpcTransportFactoryTests : IDisposable
         // a long temp root (or user/session token) must not overflow sun_path.
         // It falls back to the named-pipe scheme, which has no such limit.
         IpcTransportFactory.UnixSocketSupportedOverride = () => true;
-        IpcTransportFactory.TempPathOverride =
+        PsBashRuntimeDirectory.TempPathOverride =
             () => System.IO.Path.Combine(System.IO.Path.GetTempPath(), new string('x', 120));
         IpcTransportFactory.SessionTokenOverride = () => new string('9', 40);
         try
@@ -284,7 +285,7 @@ public class IpcTransportFactoryTests : IDisposable
     {
         IpcTransportFactory.UnixSocketSupportedOverride = null;
         IpcTransportFactory.ProcessIdOverride = null;
-        IpcTransportFactory.TempPathOverride = null;
+        PsBashRuntimeDirectory.TempPathOverride = null;
         IpcTransportFactory.SessionTokenOverride = () => null;
     }
 }

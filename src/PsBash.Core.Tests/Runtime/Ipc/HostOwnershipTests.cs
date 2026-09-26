@@ -9,8 +9,14 @@ namespace PsBash.Core.Tests.Runtime.Ipc;
 /// unrelated process after PID reuse. Covers the "verify PID still refers to
 /// expected ps-bash host before killing" acceptance bullet of SNlQPegASmvs.
 /// </summary>
-public class HostOwnershipTests
+public class HostOwnershipTests : IDisposable
 {
+    public void Dispose()
+    {
+        HostOwnership.ProcessUidProbeOverride = null;
+        HostOwnership.CurrentUidOverride = null;
+    }
+
     private static HostMetadata Meta(int pid, string exe, string owner = "tester") =>
         new(
             Pid: pid,
@@ -149,5 +155,59 @@ public class HostOwnershipTests
         };
 
         Assert.True(HostOwnership.MetadataMatchesLauncher(meta, currentHost, HostProtocol.BuildIdentity));
+    }
+
+    [Fact]
+    public void Classify_LivePidForeignOwner_UnsafeToTouch()
+    {
+        // R03: a sidecar planted with owner=<victim> and a PID belonging to
+        // another user must NOT authorize a kill. The recorded PID's live owner
+        // is probed independently of the (attacker-writable) sidecar string.
+        var ownPid = Environment.ProcessId;
+        var ownExe = Environment.ProcessPath ?? Process.GetCurrentProcess().MainModule?.FileName;
+        Skip.If(string.IsNullOrEmpty(ownExe), "cannot read own executable path");
+
+        HostOwnership.ProcessUidProbeOverride = _ => 1001u;
+        HostOwnership.CurrentUidOverride = () => 1000u;
+
+        var meta = Meta(pid: ownPid, exe: ownExe!, owner: Environment.UserName);
+        var d = HostOwnership.Classify(meta, Environment.UserName, out var reason);
+
+        Assert.Equal(HostOwnership.CleanupDecision.UnsafeToTouch, d);
+        Assert.Contains("uid", reason);
+        Assert.Contains("1001", reason);
+    }
+
+    [Fact]
+    public void Classify_LivePidSameOwner_SafeProcessShutdown()
+    {
+        var ownPid = Environment.ProcessId;
+        var ownExe = Environment.ProcessPath ?? Process.GetCurrentProcess().MainModule?.FileName;
+        Skip.If(string.IsNullOrEmpty(ownExe), "cannot read own executable path");
+
+        HostOwnership.ProcessUidProbeOverride = _ => 4242u;
+        HostOwnership.CurrentUidOverride = () => 4242u;
+
+        var meta = Meta(pid: ownPid, exe: ownExe!, owner: Environment.UserName);
+        var d = HostOwnership.Classify(meta, Environment.UserName, out _);
+
+        Assert.Equal(HostOwnership.CleanupDecision.SafeProcessShutdown, d);
+    }
+
+    [Fact]
+    public void Classify_LivePidOwnerProbeUnavailable_DoesNotRefuse()
+    {
+        // No POSIX process-uid probe (Windows/macOS): the gate has no opinion and
+        // must fall through to the executable check rather than block a legit host.
+        var ownPid = Environment.ProcessId;
+        var ownExe = Environment.ProcessPath ?? Process.GetCurrentProcess().MainModule?.FileName;
+        Skip.If(string.IsNullOrEmpty(ownExe), "cannot read own executable path");
+
+        HostOwnership.ProcessUidProbeOverride = _ => null;
+
+        var meta = Meta(pid: ownPid, exe: ownExe!, owner: Environment.UserName);
+        var d = HostOwnership.Classify(meta, Environment.UserName, out _);
+
+        Assert.Equal(HostOwnership.CleanupDecision.SafeProcessShutdown, d);
     }
 }

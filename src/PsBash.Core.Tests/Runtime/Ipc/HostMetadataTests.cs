@@ -1,3 +1,4 @@
+using PsBash.Core.Runtime;
 using PsBash.Core.Runtime.Ipc;
 using Xunit;
 
@@ -47,7 +48,7 @@ public class HostMetadataTests : IDisposable
     {
         var path = HostMetadata.PathFor("pipe", "psbash-host-andy");
         Assert.Equal(
-            Path.Combine(Path.GetTempPath(), "ps-bash", "psbash-host-andy.host.json"),
+            Path.Combine(PsBashRuntimeDirectory.GetPath(), "psbash-host-andy.host.json"),
             path);
     }
 
