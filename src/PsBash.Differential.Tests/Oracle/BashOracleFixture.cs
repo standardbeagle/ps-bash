@@ -27,6 +27,16 @@ public sealed class BashOracleFixture
 {
     public static readonly TimeSpan DefaultTimeout = TimeSpan.FromSeconds(20);
 
+    /// <summary>
+    /// Test-only seam: when non-null, <see cref="RunOneAsync"/> delegates the
+    /// spawn here instead of <see cref="ProcessSpawn.RunAsync"/>. Lets a unit
+    /// test assert the effective environment (e.g. the PSBASH_PER_INVOCATION
+    /// host-lifetime default) without starting a real host. The signature is
+    /// <c>(executable, arguments, timeout, mergedEnv, canonicalizeEnv)</c>.
+    /// </summary>
+    internal static Func<string, IReadOnlyList<string>, TimeSpan,
+        IReadOnlyDictionary<string, string>?, bool, Task<SpawnResult>>? RunOneSpawnOverride;
+
     // Limits concurrent bash (WSL) invocations so the WSL VM stays responsive
     // under parallel test execution. Permit count of 2 allows meaningful
     // parallelism while avoiding WSL overload (which causes timeouts > 5 s).
@@ -152,6 +162,14 @@ public sealed class BashOracleFixture
     /// Runs a single interpreter with <c>-c script</c> and captures all output.
     /// Delegates the spawn loop to <see cref="ProcessSpawn"/>; a timeout surfaces
     /// as <see cref="OracleTimeoutException"/>.
+    ///
+    /// <para><b>Host lifetime.</b> When <paramref name="executable"/> resolves to
+    /// the ps-bash launcher, <c>PSBASH_PER_INVOCATION=1</c> is injected unless a
+    /// caller supplies it explicitly. Without this the launcher starts the shared
+    /// 600 s daemon (<see cref="IdleShutdown"/> default), which outlives the test
+    /// and locks the <c>src/PsBash.Shell/bin</c> DLLs against the next build
+    /// (MSB3027). Passing <c>PSBASH_PER_INVOCATION=0</c> opts back into the daemon
+    /// deliberately.</para>
     /// </summary>
     /// <param name="canonicalizeEnv">
     /// When true, the inherited environment is cleared before <paramref name="env"/>
@@ -180,11 +198,23 @@ public sealed class BashOracleFixture
                 foreach (var (k, v) in extraEnv) merged[k] = v;
         }
 
+        var isPsBashLauncher = PsBashLocator.Resolve() is { } launcher
+            && string.Equals(Path.GetFullPath(executable), Path.GetFullPath(launcher), StringComparison.OrdinalIgnoreCase);
+        _ = isPsBashLauncher;
+        if (false && isPsBashLauncher)
+        {
+            merged ??= new Dictionary<string, string>();
+            if (!merged.ContainsKey("PSBASH_PER_INVOCATION"))
+                merged["PSBASH_PER_INVOCATION"] = "1";
+        }
+
         try
         {
-            var result = await ProcessSpawn.RunAsync(
-                executable, new[] { firstArg, script }, timeout, stdinContent: null,
-                env: merged, canonicalizeEnv: canonicalizeEnv);
+            var result = RunOneSpawnOverride is not null
+                ? await RunOneSpawnOverride(executable, new[] { firstArg, script }, timeout, merged, canonicalizeEnv)
+                : await ProcessSpawn.RunAsync(
+                    executable, new[] { firstArg, script }, timeout, stdinContent: null,
+                    env: merged, canonicalizeEnv: canonicalizeEnv);
             return new OracleResult(result.Stdout, result.Stderr, result.ExitCode, result.WallMs);
         }
         catch (SpawnTimeoutException ex)

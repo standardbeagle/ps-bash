@@ -1,3 +1,4 @@
+using PsBash.Testing;
 using Xunit;
 using Xunit.Sdk;
 
@@ -169,5 +170,87 @@ public class OracleTests
             await AssertOracle.EqualAsync("echo hello");
         });
         Assert.Null(ex); // passes when outputs agree
+    }
+
+    // ── Host-lifetime guard: every ps-bash spawn is per-invocation ────────
+    //
+    // The launcher default is a shared daemon that idles for 600 s
+    // (IdleShutdown.DefaultTimeout) and keeps PsBash.Core.dll / PsBash.Transpiler.dll
+    // / ps-bash.dll under src/PsBash.Shell/bin/<config> locked, so an
+    // immediate `tman build` fails with MSB3027. Differential spawn helpers
+    // must therefore default PSBASH_PER_INVOCATION=1; the wall-time eval probe
+    // previously bypassed RunPsBashAsync and started the launcher without it.
+    //
+    // The guard drives the env-building seam directly: a fake spawn capture
+    // stands in for ProcessSpawn, so the test asserts the effective env handed
+    // to the launcher without spawning a host.
+
+    /// <summary>
+    /// Test-only stand-in for the launcher's ProcessSpawn call. Captures the
+    /// env dictionary the fixture would have applied, then reports a
+    /// successful no-op spawn. Restored in <c>finally</c> even on failure so a
+    /// real spawn never runs and no test is left observing the capture.
+    /// </summary>
+    private static async Task<Dictionary<string, string>> CaptureRunOneAsyncEnv(
+        Func<Task<OracleResult>> spawn)
+    {
+        Dictionary<string, string>? captured = null;
+        var saved = BashOracleFixture.RunOneSpawnOverride;
+        BashOracleFixture.RunOneSpawnOverride = (_, _, _, env, _) =>
+        {
+            captured = env is null ? new Dictionary<string, string>() : new Dictionary<string, string>(env);
+            return Task.FromResult(new SpawnResult(0, string.Empty, string.Empty, 1));
+        };
+        try
+        {
+            _ = await spawn();
+        }
+        finally
+        {
+            BashOracleFixture.RunOneSpawnOverride = saved;
+        }
+        Assert.NotNull(captured);
+        return captured!;
+    }
+
+    [Fact]
+    public async Task RunOneAsync_PsBashLauncher_DefaultsPerInvocation()
+    {
+        var psBashPath = PsBashLocator.Resolve();
+        Skip.If(psBashPath is null, "ps-bash binary not built");
+
+        var env = await CaptureRunOneAsyncEnv(() =>
+            BashOracleFixture.RunOneAsync(
+                psBashPath!, "-c", "echo hi", TimeSpan.FromSeconds(20)));
+
+        Assert.Equal("1", env.TryGetValue("PSBASH_PER_INVOCATION", out var v) ? v : null);
+    }
+
+    [Fact]
+    public async Task RunOneAsync_PsBashLauncher_CallerCanOverridePerInvocation()
+    {
+        var psBashPath = PsBashLocator.Resolve();
+        Skip.If(psBashPath is null, "ps-bash binary not built");
+
+        // An explicit opt-out (e.g. a future shared-daemon test) must win over
+        // the default, so the guard does not forbid the deliberate case.
+        var env = await CaptureRunOneAsyncEnv(() =>
+            BashOracleFixture.RunOneAsync(
+                psBashPath!, "-c", "echo hi", TimeSpan.FromSeconds(20),
+                extraEnv: new Dictionary<string, string> { ["PSBASH_PER_INVOCATION"] = "0" }));
+
+        Assert.Equal("0", env["PSBASH_PER_INVOCATION"]);
+    }
+
+    [Fact]
+    public async Task RunOneAsync_NonLauncherExecutable_DoesNotSetPerInvocation()
+    {
+        // The default is scoped to the ps-bash launcher: a bash spawn must not
+        // receive a ps-bash host-lifetime variable it has no use for.
+        var env = await CaptureRunOneAsyncEnv(() =>
+            BashOracleFixture.RunOneAsync(
+                "not-the-psbash-launcher", "-c", "echo hi", TimeSpan.FromSeconds(20)));
+
+        Assert.False(env.ContainsKey("PSBASH_PER_INVOCATION"));
     }
 }
