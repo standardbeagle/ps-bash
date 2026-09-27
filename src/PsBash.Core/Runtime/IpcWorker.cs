@@ -1251,11 +1251,29 @@ public sealed class IpcWorker : IWorker
     };
 
     private static TimeSpan GetStartupTimeout()
+        => ParseStartupTimeout(
+            Environment.GetEnvironmentVariable("PSBASH_STARTUP_TIMEOUT"),
+            Environment.GetEnvironmentVariable("PSBASH_TIMEOUT"));
+
+    /// <summary>Default host-startup deadline when no env var overrides it.</summary>
+    internal static readonly TimeSpan DefaultStartupTimeout = TimeSpan.FromSeconds(60);
+
+    /// <summary>
+    /// Pure parser for the host-startup deadline (spawn → accepting connections).
+    /// <c>PSBASH_STARTUP_TIMEOUT</c> (positive integer seconds) wins; otherwise a
+    /// positive <c>PSBASH_TIMEOUT</c> is honored for backward compatibility; otherwise
+    /// <see cref="DefaultStartupTimeout"/>. The default is generous because runspace
+    /// init + module import can exceed 20s on a slow machine (OneDrive-synced
+    /// <c>PSModulePath</c>, heavy profile modules — GitHub issue #6). A host that DIES
+    /// during startup still fails fast: the wait loop checks <c>HasExited</c>.
+    /// </summary>
+    internal static TimeSpan ParseStartupTimeout(string? startupEnv, string? timeoutEnv)
     {
-        var envValue = Environment.GetEnvironmentVariable("PSBASH_TIMEOUT");
-        if (envValue is not null && int.TryParse(envValue, out var seconds) && seconds > 0)
-            return TimeSpan.FromSeconds(seconds);
-        return TimeSpan.FromSeconds(20);
+        if (int.TryParse(startupEnv, out var s) && s > 0)
+            return TimeSpan.FromSeconds(s);
+        if (int.TryParse(timeoutEnv, out var t) && t > 0)
+            return TimeSpan.FromSeconds(t);
+        return DefaultStartupTimeout;
     }
 
     /// <summary>

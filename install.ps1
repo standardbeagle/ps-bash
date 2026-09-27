@@ -96,8 +96,13 @@ if (-not $NoAddToPath) {
                 (Join-Path $env:HOME '.zshrc'),
                 (Join-Path $env:HOME '.config/fish/config.fish')
             )
-            $exportLine = "export PATH=`"\"$InstallDir`"\":`$PATH"
             foreach ($pf in $profileFiles) {
+                # fish has no POSIX `export PATH=a:$PATH` (its PATH is a list)
+                $exportLine = if ($pf -like '*.fish') {
+                    "fish_add_path `"$InstallDir`""
+                } else {
+                    "export PATH=`"${InstallDir}:`$PATH`""
+                }
                 if (Test-Path $pf) {
                     $content = Get-Content -Raw -Path $pf -ErrorAction SilentlyContinue
                     if ($content -notlike "*$InstallDir*") {

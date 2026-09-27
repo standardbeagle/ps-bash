@@ -205,3 +205,14 @@ Describe 'Cross-command pipeline integrity' {
         $result[0] | Should -Be 'xbc'
     }
 }
+
+# GitHub issue #6: install.ps1 is fetched and run via `iwr ... | iex`, which parses the
+# WHOLE script first — a syntax error in the Linux-only branch aborted the install on Windows.
+Describe 'install.ps1 — parses cleanly' {
+    It 'has no parse errors' {
+        $errors = $null
+        [System.Management.Automation.Language.Parser]::ParseFile(
+            (Join-Path $PSScriptRoot '..' 'install.ps1'), [ref]$null, [ref]$errors) | Out-Null
+        $errors | Should -BeNullOrEmpty
+    }
+}

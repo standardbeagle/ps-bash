@@ -59,4 +59,27 @@ public class IpcWorkerTimeoutTests
         // An unparseable value falls back to the default, which is now unbounded.
         Assert.Equal(TimeSpan.Zero, IpcWorker.ParseCallTimeout(raw));
     }
+
+    // GitHub issue #6: runspace init can exceed the old fixed 20s on a slow machine.
+    [Theory]
+    [InlineData(null, null)]
+    [InlineData("", "")]
+    [InlineData("garbage", "0")]    // unparseable / non-positive fall through
+    [InlineData("-3", "none")]
+    public void ParseStartupTimeout_Unset_IsSixtySecondDefault(string? startup, string? timeout)
+    {
+        Assert.Equal(TimeSpan.FromSeconds(60), IpcWorker.ParseStartupTimeout(startup, timeout));
+    }
+
+    [Fact]
+    public void ParseStartupTimeout_StartupVar_WinsOverTimeoutVar()
+    {
+        Assert.Equal(TimeSpan.FromSeconds(120), IpcWorker.ParseStartupTimeout("120", "5"));
+    }
+
+    [Fact]
+    public void ParseStartupTimeout_TimeoutVar_HonoredForBackwardCompat()
+    {
+        Assert.Equal(TimeSpan.FromSeconds(45), IpcWorker.ParseStartupTimeout(null, "45"));
+    }
 }

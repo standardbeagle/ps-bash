@@ -187,6 +187,11 @@ through a short-lived lifecycle lock beside the metadata record:
    when the lock owner process is dead or the lock timestamp is beyond the
    startup timeout and no healthy host answers.
 
+The **startup timeout** is `PSBASH_STARTUP_TIMEOUT` seconds, else a positive
+`PSBASH_TIMEOUT` (legacy), else **60s** (`IpcWorker.ParseStartupTimeout`). It was 20s
+until runspace init was observed to exceed that on a slow machine (OneDrive-synced
+`PSModulePath`; GitHub #6). A host that exits during startup still fails immediately.
+
 This gives single-host-per-**session** behavior: one daemon per `(user, session)`,
 where the session token is an explicit `PSBASH_SESSION` or, when unset, the
 launcher's **stable session anchor** — the nearest shell/agent ancestor of the
