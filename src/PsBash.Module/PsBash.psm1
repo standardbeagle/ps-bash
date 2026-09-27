@@ -2937,6 +2937,99 @@ Set-Alias -Name 'rmdir'   -Value 'Invoke-BashRmdir'   -Force -Scope Global -Opti
 Set-Alias -Name 'touch'   -Value 'Invoke-BashTouch'   -Force -Scope Global -Option AllScope
 Set-Alias -Name 'ln'      -Value 'Invoke-BashLn'      -Force -Scope Global -Option AllScope
 Set-Alias -Name 'ps'      -Value 'Invoke-BashPs'      -Force -Scope Global -Option AllScope
+# Wrapper for Invoke-BashGrep: same binder limitations as sed. PowerShell
+# rejects a repeated value parameter with "parameter 'E' is specified more
+# than once", so `grep -e A -e B` dies before the cmdlet body runs. And a
+# bundle whose letters prefix-match a common parameter is captured by the
+# binder instead of reaching the cmdlet: `-ve` binds -Verbose, `-ie` /
+# `-we` fall through with 'e' unconsumed ("invalid option -- 'e'"). This
+# proxy pre-processes $args (no [CmdletBinding()] so the common parameters
+# do not exist and every token arrives verbatim), case-sensitively:
+#   - `-e VALUE` / `--regexp VALUE` / `--regexp=VALUE` / `-eVALUE` and a
+#     bundle ending in `e` (`-ie VALUE`, `-ve VALUE`, `-we VALUE`, `-iePAT`)
+#     accumulate the pattern(s) into one list;
+#   - `-E` / `--extended-regexp` (case-sensitive) is the extended-regex
+#     FLAG (GNU), forwarded as --extended-regexp — it is NOT a pattern value,
+#     which the cmdlet's case-insensitive binder could not tell apart;
+#   - everything else is forwarded unchanged.
+# The patterns are then handed to the cmdlet's -E (values) in one shot.
+function Invoke-BashGrep {
+    $piped = @($input)
+
+    $eValues = [System.Collections.Generic.List[string]]::new()
+    $other = [System.Collections.Generic.List[object]]::new()
+    $i = 0
+    while ($i -lt $args.Count) {
+        $a = $args[$i]
+        if ($a -ceq '-E' -or $a -ceq '--extended-regexp') {
+            $other.Add('--extended-regexp')
+            $i++
+            continue
+        }
+        if ($a -ceq '-e' -or $a -ceq '--regexp') {
+            if (($i + 1) -lt $args.Count) {
+                # The value may be a single string OR a PowerShell array when
+                # passed as the idiomatic comma-list (`-e a,b,c`). A bare
+                # [string] cast on an array space-joins it into one bogus
+                # pattern, so add each element.
+                $eVal = $args[$i + 1]
+                if ($eVal -isnot [string] -and $eVal -is [System.Collections.IEnumerable]) {
+                    foreach ($ev in $eVal) { $eValues.Add([string]$ev) }
+                } else {
+                    $eValues.Add([string]$eVal)
+                }
+            }
+            $i += 2
+            continue
+        }
+        if ($a -is [string] -and $a.StartsWith('--regexp=', [System.StringComparison]::Ordinal)) {
+            $eValues.Add($a.Substring('--regexp='.Length))
+            $i++
+            continue
+        }
+        # A short bundle (single dash, len > 1, not --) may end in `e`.
+        if ($a -is [string] -and $a.Length -gt 2 -and $a[0] -eq '-' -and $a[1] -ne '-') {
+            $bundle = $a.Substring(1)
+            $ePos = $bundle.IndexOf('e')   # case-sensitive: -E already handled above
+            if ($ePos -ge 0) {
+                $flags = $bundle.Substring(0, $ePos)
+                if ($flags.Length -gt 0) { $other.Add('-' + $flags) }
+                if ($ePos + 1 -lt $bundle.Length) {
+                    # -ePAT: the tail is the pattern.
+                    $eValues.Add($bundle.Substring($ePos + 1))
+                } elseif (($i + 1) -lt $args.Count) {
+                    # -ie VALUE: the next argument is the pattern.
+                    $eValues.Add([string]$args[$i + 1])
+                    $i++
+                }
+                $i++
+                continue
+            }
+        }
+        $other.Add($a)
+        $i++
+    }
+
+    $cmd = Microsoft.PowerShell.Core\Get-Command `
+        -Name Invoke-BashGrep -CommandType Cmdlet -ErrorAction Stop |
+        Select-Object -First 1
+
+    if ($eValues.Count -gt 0) {
+        $patternArr = $eValues.ToArray()
+        if ($piped.Count -gt 0) {
+            $piped | & $cmd -E $patternArr @other
+        } else {
+            & $cmd -E $patternArr @other
+        }
+    } else {
+        if ($piped.Count -gt 0) {
+            $piped | & $cmd @other
+        } else {
+            & $cmd @other
+        }
+    }
+}
+
 # Wrapper for Invoke-BashSed: PowerShell's binder rejects `-e A -e B` with
 # "parameter Expression specified more than once" because Expression is
 # declared as a single array parameter (the case-insensitive binder ate -e

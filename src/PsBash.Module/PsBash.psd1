@@ -117,6 +117,10 @@ FunctionsToExport = @(
     # Wrapper: normalizes 'sed -e A -e B' to '-e @(A,B)' so the underlying
     # binary cmdlet's array Expression parameter accepts repeated -e.
     'Invoke-BashSed',
+    # Wrapper: bundles repeated -e patterns and split bundles whose letters
+    # prefix-match common parameters (-ie / -ve / -we) before the cmdlet
+    # binder sees them; also disambiguates -E (extended regex flag).
+    'Invoke-BashGrep',
     'Invoke-BashWait',
     'Invoke-BrowseAction',
     'Invoke-BrowseCommand',

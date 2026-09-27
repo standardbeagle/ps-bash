@@ -420,10 +420,16 @@ public sealed class InvokeBashGrepCommand : PSCmdlet
 
             // Short-flag bundle (single dash, length > 1, not --). Walk per-char
             // case-sensitively, matching the oracle's switch -CaseSensitive.
+            // Indexed (not foreach) so a lower-case 'e' can take the REST of the
+            // bundle as its pattern (GNU -ePAT), or the NEXT argument when it is
+            // the bundle's last letter (GNU -ie PATTERN): getopt treats the
+            // option's argument as the remainder of the token, else the next argv.
             if (a.Length > 1 && a[0] == '-' && a[1] != '-')
             {
-                foreach (var ch in a.Substring(1))
+                string bundle = a.Substring(1);
+                for (int bi = 0; bi < bundle.Length; bi++)
                 {
+                    char ch = bundle[bi];
                     switch (ch)
                     {
                         case 'i': ignoreCase = true; break;
@@ -445,6 +451,20 @@ public sealed class InvokeBashGrepCommand : PSCmdlet
                         case 'x': lineRegexp = true; break;
                         case 's': noMessages = true; break;
                         case 'P': extendedRegex = true; break; // PCRE → .NET regex (see --perl-regexp note)
+                        case 'e':
+                            // -e takes a value. Attached tail is the pattern
+                            // (-ePAT); a bare trailing e takes the next arg.
+                            if (bi + 1 < bundle.Length)
+                            {
+                                patterns.Add(bundle.Substring(bi + 1));
+                                bi = bundle.Length;   // rest of bundle consumed
+                            }
+                            else
+                            {
+                                i++;
+                                if (i < args.Length) patterns.Add(args[i]);
+                            }
+                            break;
                         default:
                             // Unknown short flag: a valid-but-unsupported grep
                             // option gets a specific refusal; anything else is
@@ -511,7 +531,8 @@ public sealed class InvokeBashGrepCommand : PSCmdlet
         if (fileOperands.Count == 0 && !recursive)
         {
             RunPipelineMode(regexes, invertMatch, showLineNumbers, countOnly,
-                quietMode, outputMatchOnly, forceFileName, maxMatches);
+                quietMode, outputMatchOnly, forceFileName, maxMatches,
+                beforeContext, afterContext);
             return;
         }
 
@@ -632,8 +653,21 @@ public sealed class InvokeBashGrepCommand : PSCmdlet
     private void RunPipelineMode(
         List<Regex> regexes, bool invertMatch, bool showLineNumbers,
         bool countOnly, bool quietMode, bool outputMatchOnly, bool forceFileName,
-        int maxMatches)
+        int maxMatches, int beforeContext, int afterContext)
     {
+        // Context (-A/-B/-C) needs look-back / look-ahead across the whole
+        // stream, so it takes a buffered path: flatten the pipeline into lines,
+        // locate matches, then emit the windowed set — the same shape as file
+        // mode. Without context the original streaming pass is kept (typed
+        // single-line objects pass through untouched).
+        if (beforeContext > 0 || afterContext > 0)
+        {
+            RunPipelineModeWithContext(regexes, invertMatch, showLineNumbers,
+                countOnly, quietMode, outputMatchOnly, forceFileName, maxMatches,
+                beforeContext, afterContext);
+            return;
+        }
+
         int matchCount = 0;
         int lineNum = 0;
 
@@ -689,6 +723,86 @@ public sealed class InvokeBashGrepCommand : PSCmdlet
         if (countOnly)
         {
             WriteObject(BashRuntime.NewBashObject(matchCount.ToString()));
+        }
+    }
+
+    /// <summary>
+    /// Pipeline-mode context path: flatten every pipeline item's BashText into
+    /// one line list (a multi-line item contributes one entry per line), mark
+    /// the matching lines, then emit each match plus the <c>-A</c>/<c>-B</c>
+    /// window around it — deduplicated and in input order, exactly like the
+    /// file-mode fallback. Context lines are emitted as <c>GrepMatch</c>
+    /// objects (GNU prints context as plain text), so typed single-line objects
+    /// pass through only as context here, never as matches.
+    /// </summary>
+    private void RunPipelineModeWithContext(
+        List<Regex> regexes, bool invertMatch, bool showLineNumbers,
+        bool countOnly, bool quietMode, bool outputMatchOnly, bool forceFileName,
+        int maxMatches, int beforeContext, int afterContext)
+    {
+        var lines = new List<string>();
+        foreach (var item in _pipeline)
+        {
+            string text = BashRuntime.GetBashText(item);
+            string trimmed = text.TrimEnd('\n');
+            if (trimmed.Contains('\n'))
+                lines.AddRange(trimmed.Split('\n'));
+            else
+                lines.Add(trimmed);
+        }
+
+        var matchIndices = new List<int>();
+        for (int li = 0; li < lines.Count; li++)
+        {
+            MatchLine(regexes, lines[li], invertMatch, out bool isMatch);
+            if (isMatch) matchIndices.Add(li);
+        }
+
+        int matchCount = matchIndices.Count;
+
+        if (quietMode)
+        {
+            FileSystemHelpers.SetLastExitCode(this, matchCount == 0 ? 1 : 0);
+            return;
+        }
+
+        FileSystemHelpers.SetLastExitCode(this, matchCount == 0 ? 1 : 0);
+
+        if (countOnly)
+        {
+            WriteObject(BashRuntime.NewBashObject(matchCount.ToString()));
+            return;
+        }
+
+        var emitLines = new SortedSet<int>();
+        int emitCount = 0;
+        foreach (var mi in matchIndices)
+        {
+            if (emitCount >= maxMatches) break;
+            int start = Math.Max(0, mi - beforeContext);
+            int end = Math.Min(lines.Count - 1, mi + afterContext);
+            for (int li = start; li <= end; li++) emitLines.Add(li);
+            emitCount++;
+        }
+
+        foreach (var li in emitLines)
+        {
+            string lineText = lines[li];
+            int lineNum = li + 1;
+            string prefix = "";
+            if (forceFileName) prefix = "<stdin>:";
+            if (showLineNumbers) prefix = prefix + lineNum + ":";
+
+            if (outputMatchOnly && matchIndices.Contains(li))
+            {
+                foreach (var mv in AllMatchValues(regexes, lineText))
+                    WriteObject(BuildGrepMatch("<stdin>", lineNum, lineText, prefix + mv));
+                continue;
+            }
+
+            // Context lines and matches alike emit a fresh GrepMatch (GNU
+            // prints context as plain text with no object identity).
+            WriteObject(BuildGrepMatch("<stdin>", lineNum, lineText, prefix + lineText));
         }
     }
 
