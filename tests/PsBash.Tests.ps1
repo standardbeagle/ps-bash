@@ -747,6 +747,32 @@ Describe 'Invoke-BashGrep — File Mode' {
         "$($results[0])" | Should -Be $results[0].BashText
     }
 
+    It 'grep -e a -e b (repeated -e) matches either pattern' {
+        $results = @(Invoke-BashGrep -e 'hello' -e 'baz' $grepFile)
+        $results.Count | Should -Be 2
+    }
+
+    It 'grep -ie pattern (lowercase e bundle) is ignore-case' {
+        $results = @(Invoke-BashGrep -ie 'HELLO' $grepFile)
+        $results.Count | Should -Be 2
+    }
+
+    It 'grep -ve pattern inverts using the next arg as pattern' {
+        $results = @(Invoke-BashGrep -ve 'skip' $grepFile)
+        $results.Count | Should -Be 4
+        $results | ForEach-Object { $_.Line | Should -Not -Match 'skip' }
+    }
+
+    It 'grep -we pattern applies word-regexp' {
+        $results = @(Invoke-BashGrep -we 'foo' $grepFile)
+        $results.Count | Should -Be 2
+    }
+
+    It 'grep -E is extended-regex flag, not a pattern' {
+        $results = @(Invoke-BashGrep -E '(foo|alpha)' $grepFile)
+        $results.Count | Should -Be 2
+    }
+
     It 'grep -n with multiple files includes filename in BashText' {
         $results = @(Invoke-BashGrep -n 'alpha' $grepFile $grepFile2)
         $match = $results | Where-Object { $_.Line -eq 'alpha' }

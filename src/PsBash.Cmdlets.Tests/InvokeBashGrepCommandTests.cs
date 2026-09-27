@@ -212,6 +212,75 @@ public class InvokeBashGrepCommandTests : IDisposable, IClassFixture<SharedPwshF
     }
 
     [Fact]
+    public void Grep_RepeatedDashE_TwoPatterns_OrMatch()
+    {
+        // GNU: grep -e a -e b searches for either. PowerShell's binder rejects a
+        // repeated value parameter ("parameter 'E' is specified more than once"),
+        // so the psm1 proxy must bundle the values before dispatch.
+        var lines = RunLines("'apple','banana','cherry' | Invoke-BashGrep -e apple -e cherry");
+        Assert.Equal(new[] { "apple", "cherry" }, lines);
+    }
+
+    [Fact]
+    public void Grep_DashIeBundle_IgnoreCasePattern()
+    {
+        // -ie: i (ignore-case) + e as the LAST bundle letter consumes the next
+        // argument as the pattern. GNU: grep -ie apple → matches Apple/APPLE.
+        var lines = RunLines("'Apple','banana','APPLE' | Invoke-BashGrep -ie apple");
+        Assert.Equal(new[] { "Apple", "APPLE" }, lines);
+    }
+
+    [Fact]
+    public void Grep_DashVeBundle_InvertsAndUsesNextArgAsPattern()
+    {
+        // -ve: must behave like GNU grep -v -e PATTERN, NOT silently bind
+        // -Verbose and print non-inverted matches.
+        var lines = RunLines("'apple','banana','cherry' | Invoke-BashGrep -ve apple");
+        Assert.Equal(new[] { "banana", "cherry" }, lines);
+    }
+
+    [Fact]
+    public void Grep_DashWeBundle_WordRegexpWithNextArgPattern()
+    {
+        // -we: w (word-regexp) + e consumes the next argument as the pattern.
+        var lines = RunLines("'cat','catastrophe','wildcat' | Invoke-BashGrep -we cat");
+        Assert.Single(lines);
+        Assert.Equal("cat", lines[0]);
+    }
+
+    [Fact]
+    public void Grep_DashE_UpperCase_IsExtendedRegexNotPattern()
+    {
+        // GNU: -E is the extended-regex flag (no argument). It must not be
+        // consumed as a pattern value (the case-insensitive binder used to).
+        var lines = RunLines("'foo','bar','baz' | Invoke-BashGrep -E 'foo|baz'");
+        Assert.Equal(new[] { "foo", "baz" }, lines);
+    }
+
+    [Fact]
+    public void Grep_PipelineContextA_EmitsLineAfterMatch()
+    {
+        // Regression: RunPipelineMode was called without the -A/-B/-C values,
+        // so context flags were silently ignored on pipe input.
+        var lines = RunLines("@('a','b','c') | Invoke-BashGrep -A1 a");
+        Assert.Equal(new[] { "a", "b" }, lines);
+    }
+
+    [Fact]
+    public void Grep_PipelineContextB_EmitsLineBeforeMatch()
+    {
+        var lines = RunLines("@('a','b','c') | Invoke-BashGrep -B1 c");
+        Assert.Equal(new[] { "b", "c" }, lines);
+    }
+
+    [Fact]
+    public void Grep_PipelineContextC_EmitsBeforeAndAfter()
+    {
+        var lines = RunLines("@('a','b','c','d','e') | Invoke-BashGrep -C1 c");
+        Assert.Equal(new[] { "b", "c", "d" }, lines);
+    }
+
+    [Fact]
     public void Grep_FileMode_MultipleFiles_PrefixesFileName()
     {
         var f1 = MakeFile("a.txt", "apple\n");
