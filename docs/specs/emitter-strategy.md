@@ -188,6 +188,14 @@ EmitPassthrough(cmdlet, args) -> "cmdlet arg1 arg2 ..."
 Example: `awk -F,` emits as `Invoke-BashAwk "-F,"` to prevent PowerShell from
 splitting on the comma. `xargs -I{}` emits as `Invoke-BashXargs "-I{}"`.
 
+`xargs` additionally force-quotes the obsolete `-i` / `-iTOK` replacement forms
+(via `XargsForceQuoteFlags` plus an inline `-i` prefix check). The cmdlet
+declares a value-bearing `I` parameter for `-I`, whose prefix also matches
+`-i`; without force-quoting the binder either consumes the following command
+token as `I`'s value or raises "Missing an argument for parameter 'I'". The
+whole token reaches `Invoke-BashXargs`'s `Arguments`, where the manual scan
+reads it as replacement mode with the default `{}`.
+
 ---
 
 ## 4. `EmitSimple` -- The Main Command Emitter

@@ -39,7 +39,7 @@
 | join | Invoke-BashJoin | `-t`, `-1`, `-2` | Binary cmdlet (manual value-flag scan) | No | Yes |
 | paste | Invoke-BashPaste | `-d`, `-s`, bundled `-sd,` | Binary cmdlet (manual scan + short-bundle de-bundling; `d` consumes the rest of the bundle as its value). With NO file operands it reads STDIN, like GNU paste — the `… \| paste -sd,` join-the-lines idiom. (It previously ignored pipeline input entirely, so that idiom emitted nothing.) | Yes | Yes |
 | tee | Invoke-BashTee | `-a`/`--append` | Binary cmdlet (`-a` is a declared SwitchParameter; `--append` long form + `--` end-of-flags handled in the manual scan). Valid-but-unsupported: `--ignore-interrupts`, `--output-error`, `-p` (classifier → exit 2). | Yes | Yes |
-| xargs | Invoke-BashXargs | `-I`, `-n`, `-L`, `-r`, `-t`, `-0`, `-P` | Binary cmdlet (`-I REPLACE` declared as value-bearing parameter `I`; `-P N` declared as `int? P`; `-n`/`-L`/`-r`/`-t`/`-0`/`-p` stay in `Arguments`) | Yes | No |
+| xargs | Invoke-BashXargs | `-I`, `-i`, `-n`, `-L`, `-r`, `-t`, `-0`, `-P` | Binary cmdlet (`-I REPLACE` declared as value-bearing parameter `I`; `-P N` declared as `int? P`; `-n`/`-L`/`-r`/`-t`/`-0`/`-p` and the `-i[REPLACE]` obsolete form stay in `Arguments`). With no command operand it runs the GNU default `echo`. Default input splits on blanks honoring quotes/backslash escapes; `-I`/`-i` read whole lines. Exit aggregate: child 1..125 → 123, 255 → 124, not-found → 127, cannot-run → 126. Emitter force-quotes `-i[TOK]` so the binder does not consume the following command token. | Yes | No |
 | jq | Invoke-BashJq | `-r`, `-c`, `-S`, `-s` | Manual loop | Yes | Yes |
 | date | Invoke-BashDate | `-d`, `-u`, `-r`, `+FORMAT` | Binary cmdlet (`-d` declared as value-bearing parameter `D`; `-u` / `-r` / `+FORMAT` stay in `Arguments`) | No | No |
 | seq | Invoke-BashSeq | `-s`, `-w` | Manual loop | No | No |
@@ -47,7 +47,7 @@
 | du | Invoke-BashDu | `-h`, `-s`, `-a`, `-c`, `-d`/`--max-depth`, `--exclude=GLOB` | Binary cmdlet (`-a` / `-c` declared as `SwitchParameter`s; `-d N` as nullable `int? D`; `-h` / `-s` and joined `-dN` stay in `Arguments`). `--exclude=GLOB` prunes matching files/dirs (any path segment match prunes the subtree). | No | Yes |
 | tree | Invoke-BashTree | `-a`, `-d`, `-L`, `-I`, `--dirsfirst` | Binary cmdlet (`-a` / `-d` declared as SwitchParameters; `-I` declared as a value-bearing string parameter; `-L` and `--dirsfirst` stay in `Arguments`) | No | Yes |
 | env | Invoke-BashEnv | (none) | Positional | No | No |
-| basename | Invoke-BashBasename | `-s` | Manual loop | No | No |
+| basename | Invoke-BashBasename | `-a`, `-s` | Manual loop (binary cmdlet). `-a`/`--multiple` = every operand is a NAME (decoy `SwitchParameter A` so the bare token does not bind to `-Arguments`); `-s SUFFIX` implies `-a`; without `-a`, two operands are GNU's `NAME [SUFFIX]` and >2 is the "extra operand" error. | No | No |
 | dirname | Invoke-BashDirname | (none) | Positional | No | No |
 | pwd | Invoke-BashPwd | `-P` | Binary cmdlet (`-P` is a declared SwitchParameter) | No | No |
 | hostname | Invoke-BashHostname | (none) | None | No | No |

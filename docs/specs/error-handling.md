@@ -83,7 +83,7 @@ does not exist.
 | `rg` | `rg: path: No such file or directory` | 2 | Exit 1 = no match (like grep) |
 | `gzip` | `gzip: missing file operand` | 1 | Also: file not found |
 | `tar` | `tar: you must specify -f archive` | 1 | Also: missing `-c`/`-x`/`-t`, file not found |
-| `xargs` | `xargs: no command specified` | 1 | No command to execute |
+| `xargs` | `xargs: CMD: No such file or directory` | 127 | Command not found (no default-command error any more: a bare `xargs` runs `echo`). Also `xargs: CMD: <msg>` / 126 when found but not runnable |
 | `split` | `split: missing operand` | 1 | Missing input |
 | `sleep` | `sleep: invalid time interval 'arg'` | 1 | Non-numeric or negative duration |
 | `time` | `time: missing command` | 1 | No command to time |
