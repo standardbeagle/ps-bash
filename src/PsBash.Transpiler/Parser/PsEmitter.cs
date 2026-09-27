@@ -5183,7 +5183,7 @@ public static class PsEmitter
                 result = EmitPassthrough("Invoke-BashCut", args);
                 return true;
             case "xargs":
-                result = EmitPassthrough("Invoke-BashXargs", args);
+                result = EmitPassthrough("Invoke-BashXargs", args, XargsForceQuoteFlags);
                 return true;
             case "tr":
                 result = EmitPassthrough("Invoke-BashTr", args);
@@ -5830,6 +5830,19 @@ public static class PsEmitter
     private static readonly IReadOnlySet<string> EchoForceQuoteFlags =
         new HashSet<string>(StringComparer.Ordinal) { "-e", "-E", "--" };
 
+    /// <summary>
+    /// xargs's <c>-i[REPLACE]</c> (obsolete GNU replacement flag) collides with
+    /// the <c>-Information*</c> common parameters and, because the cmdlet also
+    /// declares a value-bearing <c>I</c> parameter for <c>-I</c>, the binder
+    /// would silently consume the following command token (or fail with
+    /// "Missing an argument for parameter 'I'"). Force-quoting routes the whole
+    /// token to <c>Invoke-BashXargs</c>'s Arguments, where the manual scan
+    /// reads it as replacement mode with the default <c>{}</c>. The prefix form
+    /// (<c>-iTOK</c>) is matched separately.
+    /// </summary>
+    private static readonly IReadOnlySet<string> XargsForceQuoteFlags =
+        new HashSet<string>(StringComparer.Ordinal) { "-i" };
+
     private static string EmitPassthrough(
         string cmdlet,
         ImmutableArray<CompoundWord> args,
@@ -5855,6 +5868,13 @@ public static class PsEmitter
             // switch decoy on the cmdlet would resolve the crash but lose the
             // operator's position. See docs/solutions on common-param collisions.
             bool force = forceQuoteFlags is not null && forceQuoteFlags.Contains(emitted);
+            // xargs -iTOK prefix form (attached replace string, e.g. -i{} / -iX).
+            // Must survive binding as one literal token, not be split into -i + value.
+            if (!force && cmdlet == "Invoke-BashXargs"
+                && emitted.Length > 2 && emitted[0] == '-' && emitted[1] == 'i')
+            {
+                force = true;
+            }
             if (NeedsPassthroughQuoting(emitted) || force)
             {
                 // If the emitted text ALREADY contains a quote char, wrapping it in

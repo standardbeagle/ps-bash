@@ -43,6 +43,10 @@
   ],
   "basename": [
     {
+      "flag": "-a",
+      "desc": "all operands are names"
+    },
+    {
       "flag": "-s",
       "desc": "suffix"
     }
@@ -1250,6 +1254,10 @@
     {
       "flag": "-I",
       "desc": "replace string"
+    },
+    {
+      "flag": "-i",
+      "desc": "replace string (default: {})"
     },
     {
       "flag": "-n",

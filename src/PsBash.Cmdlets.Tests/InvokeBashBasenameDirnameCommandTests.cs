@@ -84,7 +84,9 @@ public class InvokeBashBasenameDirnameCommandTests : IClassFixture<SharedPwshFix
     [Fact]
     public void Basename_MultipleOperands_OneLineEach()
     {
-        var lines = RunLines("Invoke-BashBasename '/a/b/c' '/x/y' 'z'");
+        // GNU: more than one NAME requires -a; otherwise the second operand is
+        // a SUFFIX and a third is an "extra operand" error.
+        var lines = RunLines("Invoke-BashBasename -a '/a/b/c' '/x/y' 'z'");
         Assert.Equal(new[] { "c", "y", "z" }, lines);
     }
 

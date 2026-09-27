@@ -171,9 +171,12 @@ public class InvokeBashXargsCommandTests : IClassFixture<SharedPwshFixture>
     [Fact]
     public void Xargs_NoCommand_EmitsMissingCommandError()
     {
-        var (result, _) = Run("'x' | Invoke-BashXargs");
-        // No output object; the error sink got the bash-style error.
-        Assert.Empty(result);
+        // Superseded by GNU parity: bare `xargs` runs the default command
+        // `echo`, it does NOT error. Kept as a named regression that the old
+        // error path is gone (see Xargs_NoCommand_DefaultsToEcho).
+        var (result, errors) = Run("'x' | Invoke-BashXargs; $LASTEXITCODE");
+        Assert.Empty(errors);
+        Assert.Equal("0", result[^1]?.ToString());
     }
 
     [Fact]
@@ -317,7 +320,7 @@ public class InvokeBashXargsCommandTests : IClassFixture<SharedPwshFixture>
     {
         // GNU: any invocation exiting 1..125 makes xargs exit 123.
         var exit = RunAndReadExitCode(
-            "Invoke-BashXargs -n 1 Invoke-BashFalse 2>$null; $LASTEXITCODE");
+            "Invoke-BashXargs -n 1 Invoke-BashAwk 'BEGIN{exit 3}' 2>$null; $LASTEXITCODE");
         Assert.Equal(123, exit);
     }
 
@@ -326,7 +329,7 @@ public class InvokeBashXargsCommandTests : IClassFixture<SharedPwshFixture>
     {
         // GNU: an invocation exiting 255 makes xargs exit 124.
         var exit = RunAndReadExitCode(
-            "Invoke-BashXargs -n 1 Invoke-BashSh -c 'exit 255' 2>$null; $LASTEXITCODE");
+            "Invoke-BashXargs -n 1 Invoke-BashAwk 'BEGIN{exit 255}' 2>$null; $LASTEXITCODE");
         Assert.Equal(124, exit);
     }
 
@@ -342,7 +345,8 @@ public class InvokeBashXargsCommandTests : IClassFixture<SharedPwshFixture>
     [Fact]
     public void Xargs_ExitCode_AllInvocationsSucceed_Is0()
     {
-        var exit = RunAndReadExitCode("Invoke-BashXargs -n 1 true; $LASTEXITCODE");
+        var exit = RunAndReadExitCode(
+            "Invoke-BashXargs -n 1 Invoke-BashAwk 'BEGIN{}'; $LASTEXITCODE");
         Assert.Equal(0, exit);
     }
 
@@ -353,7 +357,7 @@ public class InvokeBashXargsCommandTests : IClassFixture<SharedPwshFixture>
         // 1..125 failure -> xargs exits 123 (126 is reserved for xargs itself
         // failing to run the command).
         var exit = RunAndReadExitCode(
-            "Invoke-BashXargs -n 1 Invoke-BashSh -c 'exit 126' 2>$null; $LASTEXITCODE");
+            "Invoke-BashXargs -n 1 Invoke-BashAwk 'BEGIN{exit 126}' 2>$null; $LASTEXITCODE");
         Assert.Equal(123, exit);
     }
 
@@ -361,7 +365,7 @@ public class InvokeBashXargsCommandTests : IClassFixture<SharedPwshFixture>
     public void Xargs_ExitCode_InvocationExit125_Is123()
     {
         var exit = RunAndReadExitCode(
-            "Invoke-BashXargs -n 1 Invoke-BashSh -c 'exit 125' 2>$null; $LASTEXITCODE");
+            "Invoke-BashXargs -n 1 Invoke-BashAwk 'BEGIN{exit 125}' 2>$null; $LASTEXITCODE");
         Assert.Equal(123, exit);
     }
 

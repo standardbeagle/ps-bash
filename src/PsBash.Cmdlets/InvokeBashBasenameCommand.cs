@@ -28,6 +28,19 @@ public sealed class InvokeBashBasenameCommand : PSCmdlet
     [Parameter(ValueFromRemainingArguments = true)]
     public string[]? Arguments { get; set; }
 
+    /// <summary>
+    /// <c>-a</c> — decoy switch so the bare token reaches the cmdlet instead of
+    /// prefix-binding to this cmdlet's own <c>-Arguments</c> (a
+    /// ValueFromRemainingArguments parameter, which would otherwise swallow the
+    /// following operand as its value). The manual scan in
+    /// <see cref="ProcessRecord"/> still parses <c>-a</c> from <c>Arguments</c>
+    /// when the emitter force-quotes it, so both paths set "all operands are
+    /// NAMEs". Declared here for the direct-invocation (Pester) path.
+    /// </summary>
+    [Parameter]
+    public SwitchParameter A { get; set; }
+
+
     protected override void ProcessRecord()
     {
         var args = Arguments ?? Array.Empty<string>();
@@ -45,6 +58,8 @@ public sealed class InvokeBashBasenameCommand : PSCmdlet
         }
 
         string? suffix = null;
+        bool allNames = A.IsPresent;
+        bool pastDoubleDash = false;
         var operands = new List<string>();
 
         int i = 0;
@@ -52,24 +67,74 @@ public sealed class InvokeBashBasenameCommand : PSCmdlet
         {
             var arg = args[i];
 
+            if (pastDoubleDash)
+            {
+                operands.Add(arg);
+                i++;
+                continue;
+            }
+
+            if (string.Equals(arg, "--", StringComparison.Ordinal))
+            {
+                pastDoubleDash = true;
+                i++;
+                continue;
+            }
+
+            if (string.Equals(arg, "-a", StringComparison.Ordinal) ||
+                string.Equals(arg, "--multiple", StringComparison.Ordinal))
+            {
+                allNames = true;
+                i++;
+                continue;
+            }
+
             if (string.Equals(arg, "-s", StringComparison.Ordinal) ||
                 string.Equals(arg, "--suffix", StringComparison.Ordinal))
             {
                 i++;
                 if (i < args.Length) suffix = args[i];
                 i++;
+                // GNU: -s implies -a, so every operand gets the suffix stripped.
+                allNames = true;
                 continue;
             }
 
             if (arg.StartsWith("--suffix=", StringComparison.Ordinal))
             {
                 suffix = arg.Substring("--suffix=".Length);
+                allNames = true;
                 i++;
                 continue;
             }
 
             operands.Add(arg);
             i++;
+        }
+
+        if (operands.Count == 0)
+        {
+            // No operand: emit nothing (psm1 oracle parity; existing tests pin
+            // this). The two-operand SUFFIX form below is the GNU fix.
+            return;
+        }
+
+        // GNU `basename NAME [SUFFIX]`: without -a/-s, exactly two operands
+        // means the second is a SUFFIX. The old loop treated every operand as
+        // a NAME, so `basename /a/b.txt .txt` printed `b.txt` then `.txt`.
+        string? singleSuffix = suffix;
+        if (!allNames)
+        {
+            if (operands.Count > 2)
+            {
+                FileSystemHelpers.WriteBashError(this, "basename: extra operand");
+                return;
+            }
+            if (operands.Count == 2)
+            {
+                singleSuffix = operands[1];
+            }
+            operands.RemoveRange(1, operands.Count - 1);
         }
 
         foreach (var path in operands)
@@ -81,11 +146,11 @@ public sealed class InvokeBashBasenameCommand : PSCmdlet
             var name = slashIdx >= 0 ? normalized.Substring(slashIdx + 1) : normalized;
             if (name.Length == 0) name = "/";
 
-            if (suffix != null &&
-                name.Length > suffix.Length &&
-                name.EndsWith(suffix, StringComparison.Ordinal))
+            if (singleSuffix != null &&
+                name.Length > singleSuffix.Length &&
+                name.EndsWith(singleSuffix, StringComparison.Ordinal))
             {
-                name = name.Substring(0, name.Length - suffix.Length);
+                name = name.Substring(0, name.Length - singleSuffix.Length);
             }
 
             WriteObject(name);

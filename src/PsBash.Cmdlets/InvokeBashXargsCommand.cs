@@ -91,6 +91,15 @@ public sealed class InvokeBashXargsCommand : PSCmdlet
 
     private readonly List<PSObject?> _pipelineItems = new();
 
+    /// <summary>
+    /// GNU exit-status aggregation across all invocations. 0 = all succeeded.
+    /// 1..125 from a child maps to 123; 255 maps to 124; command-not-found maps
+    /// to 127; command-found-but-not-runnable maps to 126. The first failing
+    /// invocation sticks (matching GNU, which reports the aggregate, not the
+    /// last child).
+    /// </summary>
+    private int _aggregateExit;
+
     protected override void ProcessRecord()
     {
         _pipelineItems.Add(InputObject);
@@ -136,7 +145,7 @@ public sealed class InvokeBashXargsCommand : PSCmdlet
             return;
         }
 
-        string? replaceStr = I;  // may also be set by -IREPLACE joined form
+        string? replaceStr = I;  // -I VALUE (declared param) or -IREPLACE joined
         int maxArgs = 0;
         int maxLines = 0;
         bool nullDelim = false;
@@ -239,6 +248,25 @@ public sealed class InvokeBashXargsCommand : PSCmdlet
                 continue;
             }
 
+            // -i[REPLACE] — GNU's obsolete replacement form. Bare `-i` means
+            // `-I {}`; `-iTOK` sets TOK as the replace string. It is
+            // case-sensitive against `-I` and is routed here as a whole token
+            // (the emitter force-quotes it, since a declared string `I`
+            // parameter would otherwise swallow the following command token).
+            // It NEVER consumes a separate argument.
+            if (string.Equals(arg, "-i", System.StringComparison.Ordinal))
+            {
+                replaceStr = "{}";
+                i++;
+                continue;
+            }
+            if (arg.Length > 2 && arg[0] == '-' && arg[1] == 'i')
+            {
+                replaceStr = arg.Substring(2);
+                i++;
+                continue;
+            }
+
             if (string.Equals(arg, "-n", System.StringComparison.Ordinal))
             {
                 i++;
@@ -282,10 +310,11 @@ public sealed class InvokeBashXargsCommand : PSCmdlet
             i++;
         }
 
+        // GNU: with no command operand, xargs runs `echo`. The old
+        // "no command specified" error diverged from every real xargs.
         if (operands.Count == 0)
         {
-            FileSystemHelpers.WriteBashError(this, "xargs: no command specified");
-            return;
+            operands.Add("echo");
         }
 
         // Resolve command: if the leading token matches an Invoke-Bash*
@@ -315,31 +344,43 @@ public sealed class InvokeBashXargsCommand : PSCmdlet
         for (int k = 1; k < operands.Count; k++) cmdArgs.Add(operands[k]);
 
         // Split pipeline input into items. GNU xargs splits the DEFAULT input
-        // stream on BLANKS (spaces, tabs) AND newlines — so `printf "a b c\n"`
-        // yields three items, and `xargs -n1` runs the command three times. The
-        // old psm1 oracle split on newlines only, which silently merged
-        // space-separated tokens into one item (so `-n1`/`-L1` appeared to do
-        // nothing). This now matches the real-bash oracle. `-d DELIM` (custom,
-        // with \n \t \r \0 \\ escapes) and `-0` (NUL) are the explicit overrides
-        // that switch to single-delimiter splitting and suppress whitespace
-        // segmentation — exactly as GNU xargs documents.
+        // stream on BLANKS (spaces, tabs) AND newlines, honoring single quotes,
+        // double quotes, and backslash escapes so `a "b c" d` yields a, `b c`,
+        // d and `a\ b` yields `a b`. `-d DELIM` (custom, with \n \t \r \0 \\
+        // escapes) and `-0` (NUL) are the explicit single-delimiter overrides.
+        //
+        // `-I`/`-i` replacement mode reads WHOLE LINES instead: the line,
+        // including internal blanks, is the replacement value. The old
+        // implementation reused the whitespace tokenizer here, so
+        // `printf 'a b\n' | xargs -I{} echo '[{}]'` wrongly produced two runs.
         var inputLines = new List<string>();
         bool whitespaceSplit = customDelim == null && !nullDelim;
         var delim = customDelim != null ? ExpandDelimEscapes(customDelim) : "\0";
         if (!whitespaceSplit && delim.Length == 0) whitespaceSplit = true; // empty -d is meaningless
 
+        bool replaceMode = !string.IsNullOrEmpty(replaceStr);
+
         foreach (var item in _pipelineItems)
         {
             var text = BashRuntime.GetBashText(item);
+
+            if (replaceMode)
+            {
+                // Whole-line mode: every line is one item. A trailing newline
+                // is not an item. Leading/trailing blanks are trimmed (GNU
+                // strips the delimiter run around the line). Internal blanks
+                // are kept verbatim.
+                foreach (var rawLine in text.Split('\n'))
+                {
+                    var line = rawLine.TrimEnd('\r').Trim(' ', '\t');
+                    if (line.Length > 0) inputLines.Add(line);
+                }
+                continue;
+            }
+
             if (whitespaceSplit)
             {
-                // Split on any run of whitespace (space, tab, CR, LF, FF, VT),
-                // dropping empty fields — leading/trailing/embedded blank runs
-                // never produce empty items, matching GNU xargs.
-                foreach (var part in text.Split((char[]?)null, System.StringSplitOptions.RemoveEmptyEntries))
-                {
-                    inputLines.Add(part);
-                }
+                TokenizeWhitespace(text, inputLines);
                 continue;
             }
 
@@ -368,8 +409,7 @@ public sealed class InvokeBashXargsCommand : PSCmdlet
             return;
         }
 
-        // Batch dispatch.
-        if (!string.IsNullOrEmpty(replaceStr))
+        if (replaceMode)
         {
             // Replacement mode: one invocation per input line.
             foreach (var line in inputLines)
@@ -403,6 +443,80 @@ public sealed class InvokeBashXargsCommand : PSCmdlet
                 InvokeOne(cmd, allArgs, traceCmd);
             }
         }
+
+        // GNU exit-status aggregation: 1..125 -> 123, 255 -> 124, killed by
+        // signal -> 125 (not observable here), command not found -> 127,
+        // command found but cannot be run -> 126. Any invocation failure sticks.
+        ApplyExitStatus();
+    }
+
+    /// <summary>
+    /// Splits <paramref name="text"/> on whitespace, honoring GNU xargs quote
+    /// rules: a run of blanks separates items; single quotes, double quotes,
+    /// and backslash escapes protect blanks from splitting. Quote characters
+    /// are removed. An unterminated quote ends the current item and the
+    /// remainder is discarded (GNU warns and stops at the malformed token).
+    /// </summary>
+    private static void TokenizeWhitespace(string text, List<string> output)
+    {
+        var current = new System.Text.StringBuilder();
+        bool inItem = false;
+        int i = 0;
+        while (i < text.Length)
+        {
+            char ch = text[i];
+
+            if (ch == '\'' || ch == '"')
+            {
+                char quote = ch;
+                inItem = true;
+                i++;
+                bool closed = false;
+                while (i < text.Length)
+                {
+                    char c = text[i];
+                    if (c == quote) { closed = true; i++; break; }
+                    if (quote == '"' && c == '\\' && i + 1 < text.Length
+                        && (text[i + 1] == '"' || text[i + 1] == '\\'))
+                    {
+                        current.Append(text[i + 1]);
+                        i += 2;
+                        continue;
+                    }
+                    current.Append(c);
+                    i++;
+                }
+                if (!closed) break; // unterminated quote — drop the tail
+                continue;
+            }
+
+            if (ch == '\\' && i + 1 < text.Length)
+            {
+                current.Append(text[i + 1]);
+                inItem = true;
+                i += 2;
+                continue;
+            }
+
+            if (ch == ' ' || ch == '\t' || ch == '\n' || ch == '\r'
+                || ch == '\f' || ch == '\v')
+            {
+                if (inItem)
+                {
+                    output.Add(current.ToString());
+                    current.Clear();
+                    inItem = false;
+                }
+                i++;
+                continue;
+            }
+
+            current.Append(ch);
+            inItem = true;
+            i++;
+        }
+
+        if (inItem) output.Add(current.ToString());
     }
 
     /// <summary>
@@ -423,11 +537,16 @@ public sealed class InvokeBashXargsCommand : PSCmdlet
 
         // Build $args: [cmd, arg1, arg2, ...]. The body splats $args[1..] to
         // the command at $args[0]. No user-controlled string is ever embedded
-        // in the body.
+        // in the body. A command that cannot be resolved yields 127 (GNU's
+        // "command not found" status); `Get-Command -ErrorAction Stop` makes
+        // the miss terminating so it is caught here rather than silently
+        // leaving LASTEXITCODE stale.
         const string invokeBody =
             "$c = $args[0]; $rest = @(); " +
             "if ($args.Count -gt 1) { $rest = $args[1..($args.Count - 1)] }; " +
-            "& $c @rest";
+            "try { $null = Get-Command -Name $c -ErrorAction Stop } " +
+            "catch [System.Management.Automation.CommandNotFoundException] { -127; return }; " +
+            "& $c @rest; $global:LASTEXITCODE";
 
         var allInvokeArgs = new object[callArgs.Count + 1];
         allInvokeArgs[0] = cmd;
@@ -436,14 +555,73 @@ public sealed class InvokeBashXargsCommand : PSCmdlet
         try
         {
             var output = InvokeCommand.InvokeScript(invokeBody, allInvokeArgs);
-            foreach (var o in output)
+
+            // The body emits the child's stdout objects, then the child's
+            // exit code as the FINAL object. Write everything but that last
+            // object; read the last one as the exit status.
+            int childExit = 0;
+            int lastIndex = output.Count - 1;
+            if (lastIndex >= 0)
             {
-                WriteObject(o);
+                var baseObj = output[lastIndex] is PSObject pso
+                    ? pso.BaseObject
+                    : output[lastIndex];
+                if (baseObj is int code) childExit = code;
             }
+            for (int j = 0; j < lastIndex; j++)
+            {
+                WriteObject(output[j]);
+            }
+            if (childExit == -127)
+            {
+                FileSystemHelpers.WriteBashError(
+                    this, $"xargs: {cmd}: No such file or directory");
+                RecordNotFound();
+                return;
+            }
+            _lastChildExit = childExit;
+            RecordExit(childExit);
+        }
+        catch (System.Management.Automation.CommandNotFoundException)
+        {
+            FileSystemHelpers.WriteBashError(this, $"xargs: {cmd}: No such file or directory");
+            RecordNotFound();
         }
         catch (System.Exception ex)
         {
-            FileSystemHelpers.WriteBashError(this, ex.Message);
+            // A command that exists but cannot be executed is 126.
+            FileSystemHelpers.WriteBashError(this, $"xargs: {cmd}: {ex.Message}");
+            RecordExit(126);
         }
+    }
+
+    /// <summary>Exit code seen from the most recent child invocation.</summary>
+    private int _lastChildExit;
+
+    /// <summary>Folds a child exit code into the GNU aggregate status.</summary>
+    private void RecordExit(int childExit)
+    {
+        int mapped;
+        if (childExit == 0) return;
+        else if (childExit == 255) mapped = 124;
+        else mapped = 123; // 1..125, including a child's own 126/127 exit
+
+        // The first failure wins — GNU reports the aggregate, not the last.
+        if (_aggregateExit == 0) _aggregateExit = mapped;
+    }
+
+    /// <summary>
+    /// Records GNU's "command not found" status (127) directly. Unlike a child
+    /// that exits 127, this is xargs itself failing to resolve the command, so
+    /// it must NOT be folded into the generic 123 aggregate.
+    /// </summary>
+    private void RecordNotFound()
+    {
+        if (_aggregateExit == 0) _aggregateExit = 127;
+    }
+
+    private void ApplyExitStatus()
+    {
+        FileSystemHelpers.SetLastExitCode(this, _aggregateExit);
     }
 }

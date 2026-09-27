@@ -39,7 +39,11 @@ public class CommonParameterCollisionGuardTests
     /// MUST stay in sync with <c>PsEmitter.FindForceQuoteFlags</c>.
     /// </summary>
     private static readonly Dictionary<string, HashSet<char>> EmitterForceQuoted =
-        new(StringComparer.Ordinal) { ["find"] = new() { 'o', 'a' } };
+        new(StringComparer.Ordinal)
+        {
+            ["find"] = new() { 'o', 'a' },
+            ["xargs"] = new() { 'i' },
+        };
 
     [Fact]
     public void NoBinaryCmdlet_HasUnguardedCommonParameterCollidingShortFlag()
