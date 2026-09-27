@@ -591,7 +591,7 @@ public sealed class InvokeBashXargsCommand : PSCmdlet
         {
             // A command that exists but cannot be executed is 126.
             FileSystemHelpers.WriteBashError(this, $"xargs: {cmd}: {ex.Message}");
-            RecordExit(126);
+            RecordCannotRun();
         }
     }
 
@@ -618,6 +618,14 @@ public sealed class InvokeBashXargsCommand : PSCmdlet
     private void RecordNotFound()
     {
         if (_aggregateExit == 0) _aggregateExit = 127;
+    }
+
+    /// <summary>
+    /// Records GNU's "command found but cannot be run" status (126) directly.
+    /// </summary>
+    private void RecordCannotRun()
+    {
+        if (_aggregateExit == 0) _aggregateExit = 126;
     }
 
     private void ApplyExitStatus()
