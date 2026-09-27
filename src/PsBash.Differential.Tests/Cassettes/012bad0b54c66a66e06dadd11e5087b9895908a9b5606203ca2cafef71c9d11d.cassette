@@ -1,0 +1,13 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 68
+stdout-length: 4
+stderr-length: 0
+==== SCRIPT ====
+printf 'x\n' | xargs -n 1 awk 'BEGIN{exit 255}' 2>/dev/null; echo $?
+==== STDOUT ====
+124
+
+==== STDERR ====
+
