@@ -149,10 +149,13 @@ public class FaultInjectionTests
         var timeout = TimeSpan.FromSeconds(5);
 
         // Pass empty stdin — ProcessRunHelper closes stdin right after writing "".
+        // Per-invocation: without -c the launcher reads the script from stdin, so a
+        // private host is the right isolation (a shared daemon would ignore stdin).
         var (exitCode, _, _) = await ProcessRunHelper.RunWithStdinAsync(
             stdinContent: "",
             arguments: Array.Empty<string>(),
-            timeout: timeout);
+            timeout: timeout,
+            env: ProcessRunHelper.PerInvocationEnv);
 
         Assert.Equal(0, exitCode);
     }

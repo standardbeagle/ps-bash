@@ -16,18 +16,23 @@ namespace PsBash.Escalation.Tests;
 /// every spawn uses a timeout + Kill(entireProcessTree: true) in finally so a
 /// hung command never orphans the process tree.
 ///
-/// HOST LIFETIME: every launch runs per-invocation (a private host killed with its
-/// launcher), as Differential does via CanonicalEnv. The launcher default is a
-/// shared daemon that idles for 600 s, so each test run left a dev-build host alive
-/// that locked the bin DLLs for the next build, and a cold shared daemon under
-/// full-suite load blew a test's spawn budget. A test that NEEDS a shared daemon
-/// passes <see cref="IsolatedDaemon.Env"/>, which it owns and kills.
+/// HOST LIFETIME: spawns run on ONE shared warm daemon per suite by default
+/// (the same decision the differential/oracle suites made for
+/// 01M3GWY9AX7BY4MDB7YFVWP4BZ). A ps-bash cold start is ~3 s idle and exceeds a
+/// test's spawn budget under full-suite load, which is how the added-criteria
+/// cases (`MissingCommand_Exits127` 30 s SpawnTimeout,
+/// `Scale_LargePipe_WcCount`/`Regression_LastExitcodeNotPollutedBetweenCommands`
+/// wrong exit value) failed. Warming once removes that cost. A test that NEEDS
+/// isolation (concurrent-daemon corruption, per-invocation host behavior) passes
+/// its own <see cref="IsolatedDaemon.Env"/> or
+/// <see cref="PerInvocationEnv"/> explicitly, which wins over the warm default.
 /// </summary>
 internal static class ProcessRunHelper
 {
     public static readonly TimeSpan DefaultTimeout = TimeSpan.FromSeconds(30);
 
-    private static readonly IReadOnlyDictionary<string, string> PerInvocationEnv =
+    /// <summary>Cold-host env: a private host killed with its launcher.</summary>
+    public static readonly IReadOnlyDictionary<string, string> PerInvocationEnv =
         new Dictionary<string, string> { ["PSBASH_PER_INVOCATION"] = "1" };
 
     // Hard-fail on a missing binary: the escalation suite treats an unbuilt
@@ -35,24 +40,47 @@ internal static class ProcessRunHelper
     private static readonly string LauncherPath =
         PsBashLocator.ResolveRequired();
 
+    // One shared warm daemon for the whole suite. Created lazily on first spawn
+    // so a run that never spawns pays nothing; the host idles out at process
+    // end (its idle window is short) so it does not lock the build's DLLs.
+    private static readonly Lazy<IsolatedDaemon> _sharedDaemon = new(() => new IsolatedDaemon());
+
+    /// <summary>Env for the suite's shared warm daemon (endpoint + no per-invocation).</summary>
+    public static IReadOnlyDictionary<string, string> SharedDaemonEnv => _sharedDaemon.Value.Env;
+
+    /// <summary>
+    /// Builds the env for a default spawn: on the shared warm daemon, layering
+    /// the caller's <paramref name="env"/> on top (caller wins) so an explicit
+    /// per-invocation or isolated-daemon request overrides the warm default.
+    /// </summary>
+    private static IReadOnlyDictionary<string, string> ResolveEnv(
+        IReadOnlyDictionary<string, string>? env)
+    {
+        var merged = new Dictionary<string, string>(SharedDaemonEnv);
+        if (env is not null)
+            foreach (var (k, v) in env) merged[k] = v;
+        return merged;
+    }
+
     public static async Task<(int ExitCode, string Stdout, string Stderr)> RunAsync(
         string[] arguments,
         TimeSpan? timeout = null,
         IReadOnlyDictionary<string, string>? env = null)
     {
         var result = await ProcessSpawn.RunAsync(
-            LauncherPath, arguments, timeout ?? DefaultTimeout, env: env ?? PerInvocationEnv);
+            LauncherPath, arguments, timeout ?? DefaultTimeout, env: ResolveEnv(env));
         return (result.ExitCode, result.Stdout, result.Stderr);
     }
 
     public static async Task<(int ExitCode, string Stdout, string Stderr)> RunWithStdinAsync(
         string stdinContent,
         string[] arguments,
-        TimeSpan? timeout = null)
+        TimeSpan? timeout = null,
+        IReadOnlyDictionary<string, string>? env = null)
     {
         var result = await ProcessSpawn.RunAsync(
             LauncherPath, arguments, timeout ?? DefaultTimeout,
-            stdinContent: stdinContent, env: PerInvocationEnv);
+            stdinContent: stdinContent, env: ResolveEnv(env));
         return (result.ExitCode, result.Stdout, result.Stderr);
     }
 }
@@ -74,7 +102,15 @@ internal sealed class IsolatedDaemon : IAsyncDisposable
         var spec = OperatingSystem.IsWindows()
             ? $"pipe:psbash-esc-{id}"
             : $"unix:{Path.Combine(Path.GetTempPath(), "ps-bash", $"esc-{id}.sock")}";
-        Env = new Dictionary<string, string> { ["PSBASH_IPC_ENDPOINT"] = spec };
+        Env = new Dictionary<string, string>
+        {
+            ["PSBASH_IPC_ENDPOINT"] = spec,
+            // Idle out shortly after the suite rather than the 600 s default, so
+            // the warm daemon cannot outlive the run and lock src/PsBash.Shell/bin
+            // DLLs against the next build (the original reason per-invocation was
+            // forced). Same value as the differential fixture's warm host.
+            ["PSBASH_HOST_IDLE_SECS"] = "20",
+        };
     }
 
     /// <summary>Starts the daemon and records its PID (<c>$$</c> is the host's PID).</summary>

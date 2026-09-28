@@ -178,3 +178,23 @@ Under the same heavy oversubscription, `BashRuntimeTests.RunChildProcess_*`
 `..._LargeStderr_DrainsConcurrentlyWithoutDeadlock`) failed on their fixed 30 s
 budget. These are `RunChildProcess` timeout-under-load cases, not the three named
 surfaces; they are left for a follow-up rather than widened into this change.
+
+## Escalation suite: same cold-host cost (added-criteria review)
+
+The escalation suite's `ProcessRunHelper` spawned `PSBASH_PER_INVOCATION=1` — a
+cold host per launch — so under full-suite load its 30 s spawn budget was blown
+the same way (review-added cases: `FaultInjectionTests.MissingCommand_Exits127`
+→ `SpawnTimeoutException ... within 30s`;
+`ScaleTests.Scale_LargePipe_WcCount` and
+`KnownBadRegressionTests.Regression_LastExitcodeNotPollutedBetweenCommands` →
+`Assert.Equal` value differences on a launcher that never reached a clean exit).
+
+**Fix (same decision as root cause 2):** the suite now spawns on ONE shared warm
+daemon (`ProcessRunHelper._sharedDaemon`, a `PSBASH_HOST_IDLE_SECS=20`
+`IsolatedDaemon`) by default. A test that needs isolation passes its own env,
+which wins: the deliberate kill-tree timeout test and the stdin-as-script test
+pass `PerInvocationEnv`; the concurrent-daemon corruption test passes its own
+`IsolatedDaemon.Env`. Cost: the suite dropped from 44 s to 33 s cold→warm and no
+longer leaves a leaked dev-build host per launch (those leaks were a second
+flakiness source — they lock `src/PsBash.Shell/bin` DLLs and turn the next build
+into MSB3027).

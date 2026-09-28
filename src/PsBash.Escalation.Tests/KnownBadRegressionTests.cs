@@ -88,9 +88,12 @@ public class KnownBadRegressionTests
 
         var ex = await Assert.ThrowsAsync<PsBash.Testing.SpawnTimeoutException>(async () =>
         {
+            // Per-invocation: this deliberately kills the launcher's process tree,
+            // so it must not run against the suite's shared warm daemon.
             await ProcessRunHelper.RunAsync(
                 new[] { "-c", "Start-Sleep 60" },
-                timeout: timeout);
+                timeout: timeout,
+                env: ProcessRunHelper.PerInvocationEnv);
         });
 
         sw.Stop();
