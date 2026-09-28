@@ -206,19 +206,27 @@ public class OracleTests
     /// successful no-op spawn. Restored in <c>finally</c> even on failure so a
     /// real spawn never runs and no test is left observing the capture.
     /// </summary>
+    private sealed record CapturedSpawn(Dictionary<string, string> Env, bool CanonicalizeEnv);
+
     private static async Task<Dictionary<string, string>> CaptureRunOneAsyncEnv(
         Func<Task<OracleResult>> spawn)
+        => (await CaptureRunOneSpawnAsync(spawn)).Env;
+
+    private static async Task<CapturedSpawn> CaptureRunOneSpawnAsync(
+        Func<Task> spawn)
     {
-        Dictionary<string, string>? captured = null;
+        CapturedSpawn? captured = null;
         var saved = BashOracleFixture.RunOneSpawnOverride.Value;
-        BashOracleFixture.RunOneSpawnOverride.Value = (_, _, _, env, _) =>
+        BashOracleFixture.RunOneSpawnOverride.Value = (_, _, _, env, canonicalize) =>
         {
-            captured = env is null ? new Dictionary<string, string>() : new Dictionary<string, string>(env);
+            captured = new CapturedSpawn(
+                env is null ? new Dictionary<string, string>() : new Dictionary<string, string>(env),
+                canonicalize);
             return Task.FromResult(new SpawnResult(0, string.Empty, string.Empty, 1));
         };
         try
         {
-            _ = await spawn();
+            await spawn();
         }
         finally
         {
@@ -291,5 +299,42 @@ public class OracleTests
         // daemon (a cold host per spawn would reintroduce the timeout).
         Assert.True(env.ContainsKey(IpcTransportFactory.EndpointEnvVar),
             $"warm-host spawn env must carry {IpcTransportFactory.EndpointEnvVar}");
+    }
+
+    // Regression (01M3GWY9AX7BY4MDB7YFVWP4BZ, residual): GoldenAsync was the one
+    // ps-bash spawn left on a COLD host per call. It reached
+    // BashOracleFixture.RunOneAsync directly (AssertOracle.cs) with
+    // CanonicalEnv.ForPsBash — which pins PSBASH_PER_INVOCATION=1 — and no
+    // endpoint, so every golden paid the ~3 s cold start and blew the 15 s
+    // per-spawn timeout under load (SeedDifferentialTests.
+    // Differential_CommandSubstitution_NestedQuoting:
+    // OracleTimeoutException "did not exit within 15s"). The fix routes GoldenAsync
+    // through a canonical WARM host: PSBASH_PER_INVOCATION=0 plus a dedicated
+    // canonical endpoint, kept SEPARATE from the differential fixture's endpoint so
+    // the daemon's frozen env (canonical whitelist) can never be warmed by a
+    // non-canonical EqualAsync spawn and leak the runner's $USER into a golden.
+    // Pre-fix this observed PSBASH_PER_INVOCATION="1" and no endpoint.
+    [Fact]
+    public async Task GoldenAsync_PsBashSpawn_UsesCanonicalWarmHost()
+    {
+        Skip.If(new BashOracleFixture().PsBashPath is null, "ps-bash binary not built");
+
+        var testName = $"GoldenWarmHost_{Guid.NewGuid():N}";
+        try
+        {
+            var captured = await CaptureRunOneSpawnAsync(() =>
+                AssertOracle.GoldenAsync("echo golden_warm", testName, updateGoldens: true));
+
+            Assert.True(captured.CanonicalizeEnv,
+                "golden spawn must clear the inherited env (canonical whitelist)");
+            Assert.Equal("0",
+                captured.Env.TryGetValue("PSBASH_PER_INVOCATION", out var v) ? v : null);
+            Assert.True(captured.Env.ContainsKey(IpcTransportFactory.EndpointEnvVar),
+                $"golden spawn must carry a warm-host {IpcTransportFactory.EndpointEnvVar}");
+        }
+        finally
+        {
+            try { File.Delete(AssertOracle.GoldenFilePath(testName)); } catch { /* best-effort */ }
+        }
     }
 }
