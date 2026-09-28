@@ -28,8 +28,30 @@ internal sealed class SdkRunspace : IAsyncDisposable
 
     public ExitTrackingHost Host { get; }
 
+    /// <summary>
+    /// Pin the PROCESS-scope execution policy to Bypass before any runspace is
+    /// opened. SMA resolves the effective policy from a process-global cache that
+    /// is populated lazily on the first runspace open; the warm pool opens several
+    /// runspaces CONCURRENTLY (WorkerPool.TopUpWarm on dedicated threads) and that
+    /// concurrent first init is racy. When it loses, a runspace resolves to
+    /// Restricted, a dot-sourced <c>.ps1</c> (script-file mode) fails to load as a
+    /// NON-terminating error, and the host reports exit 0 for a script that calls
+    /// <c>exit 42</c>. <c>iss.ExecutionPolicy</c> is per-ISS and does not seed the
+    /// process-global cache, so it cannot prevent the race.
+    /// <c>PSExecutionPolicyPreference</c> is the documented process-scope source
+    /// SMA reads; seeding it once here is deterministic. The launcher also exports
+    /// it (PsBash.Shell/Program.cs) so a spawned host inherits it from process
+    /// start — SMA snapshots the policy then, so a host that only sets it in its
+    /// own Main can still lose the race.
+    /// See docs/bugs/script-exit-code-lost-execution-policy-race.md.
+    /// </summary>
+    internal static void PinProcessExecutionPolicy()
+        => Environment.SetEnvironmentVariable("PSExecutionPolicyPreference", "Bypass");
+
     public static SdkRunspace Create()
     {
+        PinProcessExecutionPolicy();
+
         // Per-phase instrumentation. Enabled with PSBASH_TRACE_STARTUP=1.
         // Writes "[ps-bash-host trace] <phase> +<ms>ms cum=<ms>ms pid=<pid>"
         // to stderr. Used to diagnose host-startup time under parallel test

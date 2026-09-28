@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using PsBash.Core.Runtime.Ipc;
 using PsBash.Testing;
 
 namespace PsBash.Differential.Tests.Oracle;
@@ -60,6 +61,38 @@ public sealed class BashOracleFixture
     /// Null when the binary has not been built yet.
     /// </summary>
     public string? PsBashPath { get; }
+
+    /// <summary>
+    /// Per-fixture isolated IPC endpoint. The differential suite reuses ONE warm
+    /// host across all its ps-bash spawns instead of forcing
+    /// <c>PSBASH_PER_INVOCATION=1</c> (a cold host per spawn). Rationale
+    /// (01M3GWY9AX7BY4MDB7YFVWP4BZ): a ps-bash host cold start is ~3 s of runspace
+    /// + psm1 import; under host load it exceeds the suite's fixed 15 s per-spawn
+    /// timeout, so trivial scripts (`x=hello; echo ${x}`) failed with
+    /// OracleTimeoutException. A warm host removes the cold-start cost entirely
+    /// rather than chasing a timeout derived from a measured startup. The idle
+    /// window is short so the daemon does not outlive the suite and lock the
+    /// build's DLLs (the original reason per-invocation was forced).
+    /// </summary>
+    private readonly string _endpoint = CreateEndpoint();
+
+    private static string CreateEndpoint()
+        => OperatingSystem.IsWindows()
+            ? "pipe:psbash-oracle-" + Guid.NewGuid().ToString("N")
+            : "unix:" + Path.Combine(Path.GetTempPath(), "ps-bash", "oracle-" + Guid.NewGuid().ToString("N") + ".sock");
+
+    /// <summary>Idle window (seconds) for the fixture's warm daemon.</summary>
+    private const int WarmHostIdleSecs = 20;
+
+    /// <summary>
+    /// Env layered onto the differential ps-bash spawn: point at the fixture's
+    /// shared endpoint and let the daemon idle out shortly after the suite.
+    /// </summary>
+    private Dictionary<string, string> WarmHostEnv() => new()
+    {
+        [IpcTransportFactory.EndpointEnvVar] = _endpoint,
+        ["PSBASH_HOST_IDLE_SECS"] = WarmHostIdleSecs.ToString(),
+    };
 
     public BashOracleFixture(
         OracleRunMode? mode = null,
@@ -126,13 +159,16 @@ public sealed class BashOracleFixture
         TimeSpan? timeout = null,
         IReadOnlyDictionary<string, string>? env = null)
     {
+        var extra = WarmHostEnv();
+        extra["PSBASH_DEBUG"] = "1";
+        extra["PSBASH_TIMEOUT"] = "15";
+        // Deliberately NOT PSBASH_PER_INVOCATION=1: the fixture keeps one warm
+        // host for all its spawns. The endpoint-scoped daemon is shared across the
+        // fixture's concurrent spawns, which the host serializes internally via
+        // its pooled runspaces (one per connection) — no cross-talk.
+        extra["PSBASH_PER_INVOCATION"] = "0";
         return RunOneAsync(PsBashPath!, "-c", script, timeout ?? DefaultTimeout, env,
-            extraEnv: new Dictionary<string, string>
-            {
-                ["PSBASH_DEBUG"] = "1",
-                ["PSBASH_TIMEOUT"] = "15",
-                ["PSBASH_PER_INVOCATION"] = "1",
-            });
+            extraEnv: extra);
     }
 
     /// <summary>

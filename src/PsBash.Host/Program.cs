@@ -10,6 +10,12 @@ internal sealed class Program
 {
     static async Task<int> Main(string[] args)
     {
+        // Seed the process-scope execution policy before ANY runspace opens (the
+        // warm pool opens several concurrently). Idempotent with SdkRunspace.Create.
+        // The launcher also exports this so a spawned host inherits it at process
+        // start; see docs/bugs/script-exit-code-lost-execution-policy-race.md.
+        SdkRunspace.PinProcessExecutionPolicy();
+
         // Raise the thread-pool floor. The pool may have runspaces warming while
         // accepted connections and IPC output writer tasks are active; a too-small
         // starting pool can make the runtime slow-grow under bursty launchers. A

@@ -22,6 +22,17 @@ JobObjectWatchdog.AttachCurrentProcess();
 // Console.OutputEncoding).
 ConsoleEncoding.EnsureUtf8Output();
 
+// Pin the process-scope execution policy before any host is spawned. The host
+// is a separate process, so the value must be in the environment at Process.Start
+// time for it to inherit; setting it inside the host (Program.cs, host side) is
+// too late because SMA snapshots the policy when the host process starts. The
+// per-invocation AND daemon hosts both inherit this launcher environment.
+// Without it, the host's concurrently-warmed runspaces race SMA's process-global
+// policy init, and a loser resolves to Restricted — so a dot-sourced .ps1 (the
+// script-file mode) silently fails to load and the host reports exit 0 for a
+// script that calls `exit 42`. See docs/bugs/script-exit-code-lost-execution-policy-race.md.
+Environment.SetEnvironmentVariable("PSExecutionPolicyPreference", "Bypass");
+
 var debug = Environment.GetEnvironmentVariable("PSBASH_DEBUG") == "1";
 
 // Diagnostic: when PSBASH_TRACE=<path> is set, append a line per invocation
