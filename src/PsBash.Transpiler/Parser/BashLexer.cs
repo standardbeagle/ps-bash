@@ -30,10 +30,11 @@ public static class BashLexer
         // Heredoc bodies are RAW LINE TEXT, not shell tokens. We must not tokenize
         // them: a body line with an unbalanced quote/backtick/paren would otherwise
         // make a word scanner swallow the delimiter line and every following command
-        // into one token. So we record each `<<`/`<<-` delimiter as it is seen and,
-        // at the newline that ends the command line, skip past the bodies in raw
-        // source — the parser re-reads the same raw region to build the body text.
-        var pendingHeredocs = new List<(string Delim, bool StripTabs)>();
+        // into one token. So we record each `<<`/`<<-` delimiter (with its token
+        // index) as it is seen and, at the newline that ends the command line, skip
+        // past the bodies in raw source — recording each body's exact span on its
+        // delimiter token so the parser never has to recompute it.
+        var pendingHeredocs = new List<(string Delim, bool StripTabs, int DelimTokenIndex)>();
         // The next word token is a heredoc delimiter: 0 = none, 1 = `<<`, 2 = `<<-`.
         int heredocDelimPending = 0;
 
@@ -64,7 +65,7 @@ public static class BashLexer
                 heredocDelimPending = 0;
                 if (pendingHeredocs.Count > 0)
                 {
-                    pos = SkipHeredocBodies(input, pos, pendingHeredocs);
+                    pos = SkipHeredocBodies(input, pos, pendingHeredocs, tokens);
                     pendingHeredocs.Clear();
                 }
                 continue;
@@ -81,7 +82,7 @@ public static class BashLexer
                 heredocDelimPending = 0;
                 if (pendingHeredocs.Count > 0)
                 {
-                    pos = SkipHeredocBodies(input, pos, pendingHeredocs);
+                    pos = SkipHeredocBodies(input, pos, pendingHeredocs, tokens);
                     pendingHeredocs.Clear();
                 }
                 continue;
@@ -279,12 +280,13 @@ public static class BashLexer
             tokens.Add(new BashToken(wordKind, value, wordStart));
 
             // The word immediately following `<<`/`<<-` is the heredoc delimiter.
-            // Record it (with the strip-tabs flag from the operator) so the next
-            // newline knows which line ends each body.
+            // Record it (with the strip-tabs flag from the operator and the index of
+            // the delimiter token, which we stamp with the body span at the newline)
+            // so the body skip knows which line ends each body.
             if (heredocDelimPending != 0)
             {
                 var (delim, _) = ParseHeredocDelimiter(value);
-                pendingHeredocs.Add((delim, heredocDelimPending == 2));
+                pendingHeredocs.Add((delim, heredocDelimPending == 2, tokens.Count - 1));
                 heredocDelimPending = 0;
             }
         }
@@ -295,19 +297,33 @@ public static class BashLexer
 
     /// <summary>
     /// Skip past one or more heredoc bodies in raw source, consuming each body up
-    /// to and including its delimiter line. <paramref name="pos"/> is the offset of
-    /// the first body line (just past the command-line newline); the return value
-    /// is the offset where normal tokenizing resumes (the line after the last
-    /// delimiter, or end of input if a delimiter never appears — bash's
-    /// "here-document delimited by end-of-file"). Matches bash exactly: the
-    /// delimiter is compared against whole physical lines with no quote or comment
-    /// interpretation; <c>&lt;&lt;-</c> strips leading tabs before the comparison.
+    /// to and including its delimiter line, and stamp each body's exact source span
+    /// onto its delimiter token. <paramref name="pos"/> is the offset of the first
+    /// body line (just past the command-line newline); the return value is the
+    /// offset where normal tokenizing resumes (the line after the last delimiter,
+    /// or end of input if a delimiter never appears — bash's "here-document
+    /// delimited by end-of-file"). Matches bash exactly: the delimiter is compared
+    /// against whole physical lines with no quote or comment interpretation;
+    /// <c>&lt;&lt;-</c> strips leading tabs before the comparison.
+    ///
+    /// The recorded span is <c>[bodyStart, delimLineStart)</c>: it covers the body
+    /// lines (each including its trailing newline) and stops before the delimiter
+    /// line, so the delimiter line's leading tabs are never part of the body. This
+    /// is the single source of the body text; the parser no longer re-derives the
+    /// span from its token cursor, which is what made a same-line
+    /// <c>|</c>/<c>&amp;&amp;</c>/<c>;</c> tail land in the body.
     /// </summary>
-    private static int SkipHeredocBodies(string input, int pos, List<(string Delim, bool StripTabs)> pending)
+    private static int SkipHeredocBodies(
+        string input,
+        int pos,
+        List<(string Delim, bool StripTabs, int DelimTokenIndex)> pending,
+        List<BashToken> tokens)
     {
         int len = input.Length;
-        foreach (var (delim, stripTabs) in pending)
+        foreach (var (delim, stripTabs, delimTokenIndex) in pending)
         {
+            int bodyStart = pos;
+            int bodyEnd = pos;
             while (pos < len)
             {
                 int nlPos = input.IndexOf('\n', pos);
@@ -316,9 +332,20 @@ public static class BashLexer
                 string line = input.Substring(pos, textEnd - pos);
                 string trimmed = stripTabs ? line.TrimStart('\t') : line;
                 bool isDelim = trimmed == delim;
-                pos = nlPos < 0 ? len : nlPos + 1;
-                if (isDelim) break;
+                if (isDelim)
+                {
+                    bodyEnd = pos;
+                    pos = nlPos < 0 ? len : nlPos + 1;
+                    break;
+                }
+                bodyEnd = nlPos < 0 ? len : nlPos + 1;
+                pos = bodyEnd;
             }
+            tokens[delimTokenIndex] = tokens[delimTokenIndex] with
+            {
+                BodyStart = bodyStart,
+                BodyEnd = bodyEnd,
+            };
         }
         return pos;
     }

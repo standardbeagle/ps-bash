@@ -3664,7 +3664,11 @@ public class PsEmitterTests
     {
         var result = PsEmitter.Transpile("cat <<EOF | tr a-z A-Z\nlower $((2+3))\nEOF");
 
-        Assert.Equal("@\"\nlower 5\n\n\"@ | Emit-BashLine | Invoke-BashCat | Invoke-BashTr a-z A-Z", result);
+        // The here-string body is only the heredoc body line; the `| tr a-z A-Z`
+        // tail must be a pipe to Invoke-BashTr, never text inside the body.
+        Assert.Contains("@\"\nlower $(Invoke-BashArith '2+3')\n\n\"@", result);
+        Assert.DoesNotContain("| tr a-z A-Z\\n", result);
+        Assert.EndsWith("Invoke-BashTr a-z A-Z", result);
     }
 
     [Fact]

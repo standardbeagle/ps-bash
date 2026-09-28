@@ -1960,7 +1960,7 @@ public class BashParserTests
         var result = Parse("cat <<EOF | tr a-z A-Z\nlower $((2+3))\nEOF");
 
         var pipeline = Assert.IsType<Command.Pipeline>(result);
-        Assert.Equal(["|"], pipeline.Ops);
+        Assert.Equal(new[] { "|" }, pipeline.Ops.ToArray());
         var cat = Assert.IsType<Command.Simple>(pipeline.Commands[0]);
         var hereDoc = Assert.Single(cat.HereDocs);
         Assert.Equal("lower $((2+3))\n", hereDoc.Body);
@@ -1974,7 +1974,7 @@ public class BashParserTests
         var result = Parse("cat <<EOF && echo ok\nhello\nEOF");
 
         var andOr = Assert.IsType<Command.AndOrList>(result);
-        Assert.Equal(["&&"], andOr.Ops);
+        Assert.Equal(new[] { "&&" }, andOr.Ops.ToArray());
         var cat = Assert.IsType<Command.Simple>(andOr.Commands[0]);
         Assert.Equal("hello\n", Assert.Single(cat.HereDocs).Body);
         var echo = Assert.IsType<Command.Simple>(andOr.Commands[1]);
