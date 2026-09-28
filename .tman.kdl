@@ -49,8 +49,9 @@ defaults {
 // cannot name them (no ps-bash module loaded), so it reports a locked build
 // output whose holder it cannot identify and the task is set aside. A killed
 // build followed by a fresh one then fails on files it writes itself
-// (sourcelink.json, CS2012 on ps-bash.dll). Both settings keep compilers
-// in-proc, so process exit releases the handles. Measured on beagle-ab2: a
+// (sourcelink.json, CS2012 on ps-bash.dll). -nodeReuse:false makes worker
+// nodes exit with the build and UseSharedCompilation=false keeps csc in-proc
+// (no VBCSCompiler), so process exit releases the handles. Measured on beagle-ab2: a
 // full cold rebuild is 78 s with shared compilation (leaves one VBCSCompiler)
 // and 134 s without (leaves none); warm incremental builds are ~12 s either
 // way. tman 0.5.0 has no alias `env` node, so the flag form is the only

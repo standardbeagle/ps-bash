@@ -64,7 +64,8 @@ $ErrorActionPreference = 'Stop'
 # ---------------------------------------------------------------- quiet guard
 if (-not $SkipQuietCheck) {
     # VBCSCompiler is deliberately NOT in this list: the Roslyn compiler server
-    # lingers idle for minutes after any build, so treating it as "busy" would
+    # lingers idle for minutes after any build that uses shared compilation
+    # (bare `dotnet build`; the tman aliases disable it), so treating it as "busy" would
     # make the guard fire on every quiet box right after a build. MSBuild and
     # testhost only exist while work is actually in flight.
     $busy = @(Get-Process -Name MSBuild, testhost -ErrorAction SilentlyContinue)
