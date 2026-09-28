@@ -395,6 +395,53 @@ public class ProgramEndToEndTests
         finally { File.Delete(script); }
     }
 
+    // Regression (01M3GWY9AX7BY4MDB7YFVWP4BZ): a .ps1 that calls `exit 42` must
+    // report 42, but the host's warm pool opens runspaces CONCURRENTLY and races
+    // SMA's process-global execution-policy init. A loser resolves to Restricted,
+    // the dot-source of the .ps1 fails to LOAD as a non-terminating error, and
+    // the host returns $LASTEXITCODE=0 — a silent success for a script that never
+    // ran. Reproduced at ~27% per cold host (8/30) before the fix; the fix seeds
+    // PSExecutionPolicyPreference=Bypass in the launcher so every spawned host
+    // inherits it at process start.
+    //
+    // Each iteration spawns a FRESH private host (PSBASH_PER_INVOCATION=1), so
+    // the race is re-rolled every time. 12 iterations makes a pre-fix pass
+    // ~0.73^12 ≈ 2% likely — reliably red before the fix, green after. This is
+    // not a retry: every iteration MUST succeed; the loop only widens exposure to
+    // the concurrency the defect needs. An iteration that fails for an UNRELATED
+    // reason (host startup contention under load) is reported distinctly below so
+    // the policy signature is unambiguous.
+    [SkippableFact]
+    public async Task ScriptFile_Ps1_ExitCodePropagates_AcrossConcurrentColdHosts()
+    {
+        var script = WriteTempPs1("exit 42");
+        try
+        {
+            var policyFailures = new List<string>();
+            var otherFailures = new List<string>();
+            for (int i = 0; i < 12; i++)
+            {
+                var psi = PsBashTestProcess.Create(
+                    new[] { script }, ipcEndpoint: null, isolatedIpc: true);
+                var (exitCode, _, stderr) = await ProcessRunHelper.RunAsync(
+                    psi, timeout: TimeSpan.FromSeconds(120));
+                if (exitCode == 42) continue;
+                var detail = $"iteration {i}: exit={exitCode} stderr={stderr.Trim()}";
+                if (stderr.Contains("running scripts is disabled", StringComparison.OrdinalIgnoreCase))
+                    policyFailures.Add(detail);
+                else
+                    otherFailures.Add(detail);
+            }
+
+            Assert.True(policyFailures.Count == 0 && otherFailures.Count == 0,
+                $"ps-bash reported a non-42 exit for `exit 42` in "
+                + $"{policyFailures.Count} policy-race and {otherFailures.Count} other cold hosts:\n"
+                + string.Join("\n", policyFailures)
+                + (otherFailures.Count > 0 ? "\n[other]\n" + string.Join("\n", otherFailures) : ""));
+        }
+        finally { File.Delete(script); }
+    }
+
     [SkippableFact]
     public async Task ScriptFile_Sh_ExecutesTranspiled()
     {

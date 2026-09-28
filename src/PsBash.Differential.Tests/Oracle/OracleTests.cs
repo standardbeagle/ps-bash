@@ -1,3 +1,4 @@
+using PsBash.Core.Runtime.Ipc;
 using PsBash.Testing;
 using Xunit;
 using Xunit.Sdk;
@@ -266,5 +267,29 @@ public class OracleTests
                 "not-the-psbash-launcher", "-c", "echo hi", TimeSpan.FromSeconds(20)));
 
         Assert.False(env.ContainsKey("PSBASH_PER_INVOCATION"));
+    }
+
+    // Regression (01M3GWY9AX7BY4MDB7YFVWP4BZ): the differential fixture must run
+    // ps-bash on ONE warm host for the whole fixture, NOT a cold host per spawn.
+    // A ps-bash cold start (runspace + psm1 import) is ~3 s idle and exceeds the
+    // fixture's fixed 15 s per-spawn timeout under host load, so trivial scripts
+    // (`x=hello; echo ${x}`) failed with OracleTimeoutException. The fix pins
+    // PSBASH_PER_INVOCATION=0 and a per-fixture endpoint so the first spawn warms
+    // the daemon and every later spawn reuses it. This guard asserts the fixture's
+    // spawn env keeps the warm-host choice; before the fix it spawned with =1.
+    [Fact]
+    public async Task RunPsBashAsync_PsBashLauncher_UsesWarmSharedHost()
+    {
+        var fixture = new BashOracleFixture();
+        Skip.If(fixture.PsBashPath is null, "ps-bash binary not built");
+
+        var env = await CaptureRunOneAsyncEnv(() =>
+            fixture.RunPsBashAsync("echo hi", TimeSpan.FromSeconds(20)));
+
+        Assert.Equal("0", env.TryGetValue("PSBASH_PER_INVOCATION", out var v) ? v : null);
+        // The endpoint must be explicit so every spawn in the fixture shares ONE
+        // daemon (a cold host per spawn would reintroduce the timeout).
+        Assert.True(env.ContainsKey(IpcTransportFactory.EndpointEnvVar),
+            $"warm-host spawn env must carry {IpcTransportFactory.EndpointEnvVar}");
     }
 }

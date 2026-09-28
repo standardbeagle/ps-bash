@@ -155,6 +155,39 @@ public class SdkWorkerTests : IAsyncLifetime
         Assert.Equal(7, exitCode);
     }
 
+    // Regression (01M3GWY9AX7BY4MDB7YFVWP4BZ): script-file mode dot-sources a
+    // .ps1, and `exit 42` inside it must propagate as the host exit code.
+    // Concurrent creation here reaches the same SMA init path the pool does; a
+    // Restricted resolution surfaces as the dot-source error text / exit 0.
+    [Fact]
+    public async Task ExecuteAsync_DotSourcePs1WithExitCode_ConcurrentRunspaces_PropagateExitCode()
+    {
+        var script = Path.Combine(Path.GetTempPath(), $"psb-exitcode-{Guid.NewGuid():N}.ps1");
+        await File.WriteAllTextAsync(script, "exit 42");
+        try
+        {
+            var escaped = script.Replace("'", "''");
+            var results = await Task.WhenAll(Enumerable.Range(0, 8).Select(_ => Task.Run(async () =>
+            {
+                var worker = _fixture.CreateWorker();
+                var lines = new List<string>();
+                worker.OutputCallback = lines.Add;
+                var exit = await worker.ExecuteAsync($". '{escaped}'");
+                return (Exit: exit, Output: string.Join("\n", lines));
+            })));
+
+            foreach (var (exit, output) in results)
+            {
+                Assert.DoesNotContain("running scripts is disabled", output, StringComparison.OrdinalIgnoreCase);
+                Assert.Equal(42, exit);
+            }
+        }
+        finally
+        {
+            try { File.Delete(script); } catch { /* best effort */ }
+        }
+    }
+
     // Native PSObject pipeline rendering: Select-Object on a custom object
     // must produce a formatted table (header + separator + columns), matching
     // how native pwsh + Out-Default would render it. Regression for the
