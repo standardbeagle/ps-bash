@@ -41,6 +41,20 @@ defaults {
 }
 
 // Full solution build. Everything else assumes this ran.
+//
+// -nodeReuse:false and -p:UseSharedCompilation=false are load-bearing, not
+// tidiness. An ABORTED build must leave no process holding obj/bin: reusable
+// MSBuild worker nodes (MSBuild.dll /nodemode:1 /nodeReuse:true) and the
+// VBCSCompiler server outlive the aborted `dotnet`, and the drain's lock probe
+// cannot name them (no ps-bash module loaded), so it reports a locked build
+// output whose holder it cannot identify and the task is set aside. A killed
+// build followed by a fresh one then fails on files it writes itself
+// (sourcelink.json, CS2012 on ps-bash.dll). Both settings keep compilers
+// in-proc, so process exit releases the handles. Measured on beagle-ab2: a
+// full cold rebuild is 78 s with shared compilation (leaves one VBCSCompiler)
+// and 134 s without (leaves none); warm incremental builds are ~12 s either
+// way. tman 0.5.0 has no alias `env` node, so the flag form is the only
+// mechanism available; see docs/bugs/drain-build-leaves-locked-obj.md.
 alias "build" {
     command "dotnet"
     args "build" "-c" "Debug" "-f" "net10.0" "--nologo" "-m:1" "-nodeReuse:false" "-p:UseSharedCompilation=false"
@@ -60,7 +74,7 @@ alias "build" {
 // boundary and is violated *inside* a single invocation.
 alias "test" {
     command "dotnet"
-    args "test" "-f" "net10.0" "--no-build" "--nologo" "-m:1" "-nodeReuse:false"
+    args "test" "-f" "net10.0" "--no-build" "--nologo" "-m:1" "-nodeReuse:false" "-p:UseSharedCompilation=false"
 }
 
 // One project: `tman test-proj src/PsBash.Cmdlets.Tests`
@@ -68,5 +82,5 @@ alias "test" {
 // (quote any filter containing | — an unquoted pipe becomes a shell pipe and hangs).
 alias "test-proj" {
     command "dotnet"
-    args "test" "-f" "net10.0" "--no-build" "--nologo" "-nodeReuse:false"
+    args "test" "-f" "net10.0" "--no-build" "--nologo" "-nodeReuse:false" "-p:UseSharedCompilation=false"
 }
