@@ -43,7 +43,7 @@ defaults {
 // Full solution build. Everything else assumes this ran.
 alias "build" {
     command "dotnet"
-    args "build" "-c" "Debug" "-f" "net10.0" "--nologo"
+    args "build" "-c" "Debug" "-f" "net10.0" "--nologo" "-m:1" "-nodeReuse:false" "-p:UseSharedCompilation=false"
 }
 
 // Full suite across every test project.
@@ -60,7 +60,7 @@ alias "build" {
 // boundary and is violated *inside* a single invocation.
 alias "test" {
     command "dotnet"
-    args "test" "-f" "net10.0" "--no-build" "--nologo" "-m:1"
+    args "test" "-f" "net10.0" "--no-build" "--nologo" "-m:1" "-nodeReuse:false"
 }
 
 // One project: `tman test-proj src/PsBash.Cmdlets.Tests`
@@ -68,5 +68,5 @@ alias "test" {
 // (quote any filter containing | — an unquoted pipe becomes a shell pipe and hangs).
 alias "test-proj" {
     command "dotnet"
-    args "test" "-f" "net10.0" "--no-build" "--nologo"
+    args "test" "-f" "net10.0" "--no-build" "--nologo" "-nodeReuse:false"
 }
