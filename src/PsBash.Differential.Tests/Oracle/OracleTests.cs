@@ -331,6 +331,11 @@ public class OracleTests
                 captured.Env.TryGetValue("PSBASH_PER_INVOCATION", out var v) ? v : null);
             Assert.True(captured.Env.ContainsKey(IpcTransportFactory.EndpointEnvVar),
                 $"golden spawn must carry a warm-host {IpcTransportFactory.EndpointEnvVar}");
+            // The canonical daemon must not share the differential fixture's endpoint:
+            // a non-canonical EqualAsync spawn would warm it first and freeze the
+            // runner's environment into the daemon the golden scripts observe.
+            Assert.NotEqual(AssertOracle.DifferentialEndpointForTest,
+                captured.Env[IpcTransportFactory.EndpointEnvVar]);
         }
         finally
         {

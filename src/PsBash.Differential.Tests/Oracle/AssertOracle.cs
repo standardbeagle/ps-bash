@@ -43,6 +43,37 @@ public static class AssertOracle
 {
     private static readonly BashOracleFixture Fixture = new();
 
+    /// <summary>
+    /// Separate warm host for golden spawns. The daemon freezes its environment
+    /// when it starts (one host serves every spawn on its endpoint), so golden
+    /// scripts — which must observe the CANONICAL whitelist so <c>$USER</c>/locale
+    /// are byte-stable — cannot share the differential fixture's endpoint: a
+    /// non-canonical <see cref="EqualAsync"/> spawn could warm that daemon first
+    /// and freeze the runner's environment into what the golden observes. Two
+    /// fixtures, two endpoints, no cross-talk.
+    /// </summary>
+    private static readonly BashOracleFixture CanonicalFixture = new();
+
+    /// <summary>Test seam: the differential fixture's warm-host endpoint.</summary>
+    internal static string DifferentialEndpointForTest => Fixture.EndpointForTest;
+
+    /// <summary>
+    /// One stable canonical HOME/TEMP for the whole process, matching the
+    /// canonical fixture's single warm daemon. Created on first use and
+    /// deliberately never deleted here: the daemon owns it (Windows module
+    /// extraction lives under <c>{TEMP}/ps-bash</c>) and outlives individual
+    /// golden calls. OS temp cleanup reaps it after the test process exits.
+    /// </summary>
+    private static readonly Lazy<string> _goldenCanonicalHome = new(() =>
+    {
+        var dir = Path.Combine(
+            Path.GetTempPath(), $"psb-g{Guid.NewGuid():N}".Substring(0, 13));
+        Directory.CreateDirectory(dir);
+        return dir;
+    });
+
+    private static string GoldenCanonicalHome => _goldenCanonicalHome.Value;
+
     // Environment variable names that are safe to include in the bundle
     private static readonly HashSet<string> AllowedEnvKeys = new(StringComparer.OrdinalIgnoreCase)
     {
@@ -292,7 +323,17 @@ public static class AssertOracle
         // Spawn ps-bash under a canonical environment — the inherited block is
         // cleared and only the CanonicalEnv whitelist is applied — so env-derived
         // values ($USER, $HOME, locale) are byte-stable across dev boxes and CI
-        // runners. HOME is isolated to a per-test temp directory.
+        // runners.
+        //
+        // HOME/TEMP are one STABLE per-process directory, not a fresh one per
+        // call. The canonical fixture keeps ONE warm daemon, and a daemon freezes
+        // its environment (including TEMP, which on Windows is the root of the
+        // `{TEMP}/ps-bash/module-{version}-{hash}` extraction dir) when it first
+        // starts. A per-call HOME would be deleted by this method's cleanup while
+        // the daemon still references it, so the next golden spawn races the
+        // daemon over a vanished module directory ("PsBash.Cmdlets.dll ... being
+        // used by another process"). One stable root matches the daemon's
+        // lifetime and is left for OS temp cleanup.
         //
         // The directory name is kept SHORT: TMPDIR points here, and the ps-bash
         // host derives its Unix domain socket path as
@@ -302,27 +343,21 @@ public static class AssertOracle
         // host cannot bind. IpcTransportFactory now shortens the random suffix
         // to fit and falls back to a named pipe when even that will not fit,
         // but a short root keeps these golden runs on the fast unix path.
-        var canonicalHome = Path.Combine(
-            Path.GetTempPath(), $"psb-g{Guid.NewGuid():N}".Substring(0, 13));
-        Directory.CreateDirectory(canonicalHome);
-        OracleResult psBashResult;
-        try
-        {
-            var canonicalEnv = CanonicalEnv.ForPsBash(canonicalHome);
-            canonicalEnv["PSBASH_TIMEOUT"] = "15";
+        var canonicalHome = GoldenCanonicalHome;
+        var canonicalEnv = CanonicalEnv.ForPsBash(canonicalHome);
+        canonicalEnv["PSBASH_TIMEOUT"] = "15";
 
-            psBashResult = await BashOracleFixture.RunOneAsync(
-                Fixture.PsBashPath!,
-                "-c",
-                script,
-                timeout ?? BashOracleFixture.DefaultTimeout,
-                env: canonicalEnv,
-                canonicalizeEnv: true);
-        }
-        finally
-        {
-            try { Directory.Delete(canonicalHome, recursive: true); } catch { /* best-effort */ }
-        }
+        // Route through the canonical fixture's ONE warm host rather than a
+        // cold host per golden. A cold ps-bash start is ~3 s idle and exceeds
+        // this call's 15 s timeout under host load (01M3GWY9AX7BY4MDB7YFVWP4BZ).
+        // The fixture layers its warm-host env over canonicalEnv and pins
+        // PSBASH_PER_INVOCATION=0; canonicalizeEnv keeps the inherited block
+        // cleared so only the whitelist reaches the daemon.
+        var psBashResult = await CanonicalFixture.RunPsBashAsync(
+            script,
+            timeout ?? BashOracleFixture.DefaultTimeout,
+            canonicalEnv,
+            canonicalizeEnv: true);
 
         var canonicalized = Canonicalizer.Canonicalize(
             StripDebugLines(psBashResult.Stdout));

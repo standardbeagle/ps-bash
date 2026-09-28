@@ -157,7 +157,8 @@ public sealed class BashOracleFixture
     public Task<OracleResult> RunPsBashAsync(
         string script,
         TimeSpan? timeout = null,
-        IReadOnlyDictionary<string, string>? env = null)
+        IReadOnlyDictionary<string, string>? env = null,
+        bool canonicalizeEnv = false)
     {
         var extra = WarmHostEnv();
         extra["PSBASH_DEBUG"] = "1";
@@ -165,11 +166,22 @@ public sealed class BashOracleFixture
         // Deliberately NOT PSBASH_PER_INVOCATION=1: the fixture keeps one warm
         // host for all its spawns. The endpoint-scoped daemon is shared across the
         // fixture's concurrent spawns, which the host serializes internally via
-        // its pooled runspaces (one per connection) — no cross-talk.
+        // its pooled runspaces (one per connection) — no cross-talk. extraEnv wins
+        // over env, so a canonical caller (GoldenAsync) that pins
+        // PSBASH_PER_INVOCATION=1 in its whitelist is overridden to 0 here.
         extra["PSBASH_PER_INVOCATION"] = "0";
         return RunOneAsync(PsBashPath!, "-c", script, timeout ?? DefaultTimeout, env,
-            extraEnv: extra);
+            extraEnv: extra, canonicalizeEnv: canonicalizeEnv);
     }
+
+    /// <summary>
+    /// The endpoint env var value this fixture's warm daemon binds. Exposed so a
+    /// test can prove the canonical (golden) fixture uses a DIFFERENT endpoint
+    /// than the differential fixture — the daemon freezes its environment at
+    /// start, so sharing one endpoint across canonical and non-canonical spawns
+    /// would leak the runner's environment into a golden.
+    /// </summary>
+    internal string EndpointForTest => _endpoint;
 
     /// <summary>
     /// Runs a process from a pre-built <see cref="ProcessStartInfo"/> and captures output.

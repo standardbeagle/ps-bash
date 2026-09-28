@@ -84,18 +84,15 @@ spawn that does not opt out.
 fixture's spawn env keeps `PSBASH_PER_INVOCATION=0` and carries the shared
 endpoint. Pre-fix it observed `"1"`; post-fix `"0"`.
 
-### Residual (INCOMPLETE — discovered in the full `tman run --alias test`)
+### Residual (CLOSED — golden path routed to a canonical warm host)
 
-The warm-host fix covered `BashOracleFixture.RunPsBashAsync` (the
+The warm-host fix initially covered `BashOracleFixture.RunPsBashAsync` (the
 `EqualAsync`/`RunBothAsync` differential path) but **not**
-`AssertOracle.GoldenAsync`. `GoldenAsync` (AssertOracle.cs:314) calls
-`BashOracleFixture.RunOneAsync` directly with `CanonicalEnv.ForPsBash(...)` and
-no `extraEnv`; `CanonicalEnv.ForPsBash` sets `PSBASH_PER_INVOCATION=1`
-(CanonicalEnv.cs:101) and `RunOneAsync`'s guard leaves it at 1. So every golden
-spawn still pays a **cold host start**, and a golden that passes
-`timeout: 15 s` (e.g. `SeedDifferentialTests.Differential_CommandSubstitution_NestedQuoting`,
-SeedDifferentialTests.cs:102) times out under load with the exact reported
-signature. Observed in the full gate:
+`AssertOracle.GoldenAsync`. `GoldenAsync` called `BashOracleFixture.RunOneAsync`
+directly with `CanonicalEnv.ForPsBash(...)` and no `extraEnv`;
+`CanonicalEnv.ForPsBash` sets `PSBASH_PER_INVOCATION=1` (CanonicalEnv.cs:101), so
+every golden spawn paid a **cold host start** and a golden with a 15 s timeout
+under load failed with the exact reported signature:
 
 ```
 SeedDifferentialTests.Differential_CommandSubstitution_NestedQuoting [FAIL]
@@ -103,11 +100,28 @@ OracleTimeoutException : oracle timeout: ps-bash.exe did not exit within 15s
 running script: echo "today is $(date +%Y)"
 ```
 
-**Remainder (next turn):** route `GoldenAsync` through the fixture's warm host
-too (add `canonicalizeEnv` support to `RunPsBashAsync`, or a golden-specific
-warm spawn that layers `WarmHostEnv()` over the canonical block), then reconcile
-the golden `$HOME` determinism the canonical-home-per-test currently provides.
-`docs/bugs/` records this so the fix is not mistaken for complete.
+**Closed:** `GoldenAsync` now routes through a **separate canonical warm fixture**
+(`AssertOracle.CanonicalFixture`) via `BashOracleFixture.RunPsBashAsync(..., canonicalizeEnv: true)`.
+
+Two design points, each a bug the first attempt would have hit:
+
+1. **Separate endpoint from the differential fixture.** A daemon freezes its
+   environment when it starts, so if a golden shared the differential fixture's
+   endpoint, a non-canonical `EqualAsync` spawn could warm that daemon first and
+   freeze the runner's `$USER`/locale into what the golden observes. The
+   canonical fixture has its own endpoint; a test asserts the two differ.
+2. **One stable canonical HOME/TEMP per process, not per call.** On Windows the
+   module extraction dir is `{TEMP}/ps-bash/module-{version}-{hash}`. A per-call
+   canonical HOME was deleted by `GoldenAsync`'s `finally` while the warm daemon
+   still referenced it, so the next golden spawn raced the daemon over a vanished
+   module directory (`PsBash.Cmdlets.dll ... being used by another process`).
+   HOME/TEMP is now a single lazily-created, process-lifetime `psb-g<13hex>` root
+   that matches the daemon's lifetime and is left for OS temp cleanup.
+
+**Regression test:** `OracleTests.GoldenAsync_PsBashSpawn_UsesCanonicalWarmHost`
+— the spawn seam must show `canonicalizeEnv: true`, `PSBASH_PER_INVOCATION="0"`,
+a warm-host endpoint, and an endpoint distinct from the differential fixture's.
+Pre-fix it observed `PSBASH_PER_INVOCATION="1"` and no endpoint.
 
 ## Root cause 1 — uniq file mode (premise false; hardened + guarded)
 
