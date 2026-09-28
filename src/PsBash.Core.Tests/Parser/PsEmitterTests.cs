@@ -3655,6 +3655,36 @@ public class PsEmitterTests
         Assert.Equal("@\"\nhello foo\nbar\n\n\"@ | Emit-BashLine | Invoke-BashGrep -i foo", result);
     }
 
+    // Bug: a heredoc followed by `| && ;` on the SAME line had its body computed
+    // from the parser's token cursor, so the operator tail landed in the body AND
+    // was parsed as code. The lexer already knows the exact body span; these pin
+    // the three bash-oracle repros for that.
+    [Fact]
+    public void Transpile_HeredocFollowedByPipe_TailIsNotInBody()
+    {
+        var result = PsEmitter.Transpile("cat <<EOF | tr a-z A-Z\nlower $((2+3))\nEOF");
+
+        Assert.Equal("@\"\nlower 5\n\n\"@ | Emit-BashLine | Invoke-BashCat | Invoke-BashTr a-z A-Z", result);
+    }
+
+    [Fact]
+    public void Transpile_HeredocFollowedByAndIf_TailIsNotInBody()
+    {
+        var result = PsEmitter.Transpile("cat <<EOF && echo ok\nhello\nEOF");
+
+        Assert.Equal("@\"\nhello\n\n\"@ | Emit-BashLine | Invoke-BashCat && Invoke-BashEcho ok", result);
+    }
+
+    [Fact]
+    public void Transpile_TwoHeredocsOnSameLineSemicolon_BothBodiesCorrect()
+    {
+        var result = PsEmitter.Transpile("cat <<A; cat <<B\nfirst\nA\nsecond\nB");
+
+        Assert.Contains("@\"\nfirst\n\n\"@", result);
+        Assert.Contains("@\"\nsecond\n\n\"@", result);
+        Assert.DoesNotContain("second\nB", result);
+    }
+
     // ── Regression tests: bugs found in integration testing ─────────────────
 
     // Bug: BraceExpansionTransform/parser expanded awk '{print $1, $3}' as

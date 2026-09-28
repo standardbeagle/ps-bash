@@ -1948,6 +1948,90 @@ public class BashParserTests
         Assert.True(simple.HereDocs[1].Expand);
     }
 
+    // ── Heredoc followed by same-line operators (body span) ─────────────────
+    // The body must end at the delimiter line even when `| && ;` follow the
+    // heredoc operator on the command line. Pre-fix the parser re-scanned from
+    // the next token, so the tail of the line landed in the body AND was parsed
+    // as code.
+
+    [Fact]
+    public void Parse_HeredocFollowedByPipe_BodyExcludesPipeTail()
+    {
+        var result = Parse("cat <<EOF | tr a-z A-Z\nlower $((2+3))\nEOF");
+
+        var pipeline = Assert.IsType<Command.Pipeline>(result);
+        Assert.Equal(["|"], pipeline.Ops);
+        var cat = Assert.IsType<Command.Simple>(pipeline.Commands[0]);
+        var hereDoc = Assert.Single(cat.HereDocs);
+        Assert.Equal("lower $((2+3))\n", hereDoc.Body);
+        var tr = Assert.IsType<Command.Simple>(pipeline.Commands[1]);
+        Assert.Equal(["tr", "a-z", "A-Z"], GetWordValues(tr));
+    }
+
+    [Fact]
+    public void Parse_HeredocFollowedByAndIf_BodyExcludesAndTail()
+    {
+        var result = Parse("cat <<EOF && echo ok\nhello\nEOF");
+
+        var andOr = Assert.IsType<Command.AndOrList>(result);
+        Assert.Equal(["&&"], andOr.Ops);
+        var cat = Assert.IsType<Command.Simple>(andOr.Commands[0]);
+        Assert.Equal("hello\n", Assert.Single(cat.HereDocs).Body);
+        var echo = Assert.IsType<Command.Simple>(andOr.Commands[1]);
+        Assert.Equal(["echo", "ok"], GetWordValues(echo));
+    }
+
+    [Fact]
+    public void Parse_TwoHeredocsOnSameLineSemicolon_BothBodiesCorrect()
+    {
+        var result = Parse("cat <<A; cat <<B\nfirst\nA\nsecond\nB");
+
+        var list = Assert.IsType<Command.CommandList>(result);
+        var first = Assert.IsType<Command.Simple>(list.Commands[0]);
+        var second = Assert.IsType<Command.Simple>(list.Commands[1]);
+        Assert.Equal("first\n", Assert.Single(first.HereDocs).Body);
+        Assert.Equal("second\n", Assert.Single(second.HereDocs).Body);
+    }
+
+    [Fact]
+    public void Parse_StackedHeredocsOnSameLineWithPipe_AllBodiesCorrect()
+    {
+        var result = Parse("cat <<A <<B | tr a-z A-Z\nfirst\nA\nsecond\nB");
+
+        var pipeline = Assert.IsType<Command.Pipeline>(result);
+        var cat = Assert.IsType<Command.Simple>(pipeline.Commands[0]);
+        Assert.Equal(2, cat.HereDocs.Length);
+        Assert.Equal("first\n", cat.HereDocs[0].Body);
+        Assert.Equal("second\n", cat.HereDocs[1].Body);
+        Assert.Equal(["tr", "a-z", "A-Z"], GetWordValues(
+            Assert.IsType<Command.Simple>(pipeline.Commands[1])));
+    }
+
+    [Fact]
+    public void Parse_DLessDashHeredocFollowedByPipe_StripsTabsAndExcludesTail()
+    {
+        var result = Parse("cat <<-EOF | tr a-z A-Z\n\tline 1\n\tline 2\n\tEOF");
+
+        var pipeline = Assert.IsType<Command.Pipeline>(result);
+        var cat = Assert.IsType<Command.Simple>(pipeline.Commands[0]);
+        var hereDoc = Assert.Single(cat.HereDocs);
+        Assert.Equal("line 1\nline 2\n", hereDoc.Body);
+        Assert.True(hereDoc.StripTabs);
+    }
+
+    [Fact]
+    public void Parse_StackedDLessDashHeredocsOnSameLine_StripsTabsBothBodies()
+    {
+        var result = Parse("cat <<-A <<-B\n\tfirst\n\tA\n\tsecond\n\tB");
+
+        var cat = Assert.IsType<Command.Simple>(result);
+        Assert.Equal(2, cat.HereDocs.Length);
+        Assert.Equal("first\n", cat.HereDocs[0].Body);
+        Assert.Equal("second\n", cat.HereDocs[1].Body);
+        Assert.True(cat.HereDocs[0].StripTabs);
+        Assert.True(cat.HereDocs[1].StripTabs);
+    }
+
     // ── Case/esac parser tests ──────────────────────────────────────────────
 
     [Fact]
