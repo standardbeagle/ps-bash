@@ -84,19 +84,78 @@ spawn that does not opt out.
 fixture's spawn env keeps `PSBASH_PER_INVOCATION=0` and carries the shared
 endpoint. Pre-fix it observed `"1"`; post-fix `"0"`.
 
-## Root cause 1 — uniq file mode (not reproduced; residual)
+### Residual (INCOMPLETE — discovered in the full `tman run --alias test`)
 
-The reported `Uniq_FileMode_*` empty read was **not reproduced** in this
-investigation: ~10 heavy full-project runs of `PsBash.Cmdlets.Tests` (with the
-host at 2–3× CPU oversubscription, which reproduced other load-sensitive
-failures — see below) never failed any uniq test. The test writes its file with
-`File.WriteAllText` (flushed + closed) into a per-test GUID temp dir and reads it
-back by **absolute path**, so there is no write/read race and no shared temp path
-between the three cases. The acceptance criterion "deterministic reproducing test"
-cannot be met for a mechanism that does not reproduce, so **no change is made**:
-a speculative fixture "fix" would be an unverifiable retry, which the task
-forbids. If this resurfaces it needs a captured raw failure (the reported "garbled
-char at pos 0" suggests an encoding/BOM artifact, not an empty file).
+The warm-host fix covered `BashOracleFixture.RunPsBashAsync` (the
+`EqualAsync`/`RunBothAsync` differential path) but **not**
+`AssertOracle.GoldenAsync`. `GoldenAsync` (AssertOracle.cs:314) calls
+`BashOracleFixture.RunOneAsync` directly with `CanonicalEnv.ForPsBash(...)` and
+no `extraEnv`; `CanonicalEnv.ForPsBash` sets `PSBASH_PER_INVOCATION=1`
+(CanonicalEnv.cs:101) and `RunOneAsync`'s guard leaves it at 1. So every golden
+spawn still pays a **cold host start**, and a golden that passes
+`timeout: 15 s` (e.g. `SeedDifferentialTests.Differential_CommandSubstitution_NestedQuoting`,
+SeedDifferentialTests.cs:102) times out under load with the exact reported
+signature. Observed in the full gate:
+
+```
+SeedDifferentialTests.Differential_CommandSubstitution_NestedQuoting [FAIL]
+OracleTimeoutException : oracle timeout: ps-bash.exe did not exit within 15s
+running script: echo "today is $(date +%Y)"
+```
+
+**Remainder (next turn):** route `GoldenAsync` through the fixture's warm host
+too (add `canonicalizeEnv` support to `RunPsBashAsync`, or a golden-specific
+warm spawn that layers `WarmHostEnv()` over the canonical block), then reconcile
+the golden `$HOME` determinism the canonical-home-per-test currently provides.
+`docs/bugs/` records this so the fix is not mistaken for complete.
+
+## Root cause 1 — uniq file mode (premise false; hardened + guarded)
+
+The reported `Uniq_FileMode_*` empty read is **not a shared-temp-path race on
+this tree**. The reported mechanism ("shared temp path between parallel tests",
+"concurrent delete") cannot occur, and each of the three candidate mechanisms
+was ruled out at the code level:
+
+1. **Temp dir is per-instance and unique.** `InvokeBashUniqCommandTests.cs`
+   computes `Path.Combine(Path.GetTempPath(), $"psb-uniq-{Guid.NewGuid():N}".Substring(0, 22))`.
+   The `.Substring(0, 22)` binds to the **interpolated string** (member access
+   precedence), not to the `Path.Combine(...)` call, so the GUID survives:
+   the name is `psb-uniq-<13 hex>`. This matches the other 19 cmdlet test
+   fixtures verbatim. (The failure would require the form
+   `Path.Combine(...).Substring(0, 22)`, which would collapse the dir to
+   `C:\Users\<user>\AppData` — not what the source says.)
+2. **The write is flushed and closed before the read.** `File.WriteAllText`
+   returns only after the handle is closed; the read uses the **absolute** path.
+3. **No concurrent delete inside the class.** xUnit runs methods of one test
+   class serially (one collection = one class); the shared `SharedPwshFixture`
+   is per-class. `Dispose()` (per-test instance) deletes only that instance's
+   unique directory.
+
+**Evidence (this tree):** the three file-mode tests were run 15× against the
+full `PsBash.Cmdlets.Tests` assembly with 8 background CPU-burner jobs pinning
+the box — 15/15 passed (45/45 test cases). A prior ~10-run heavy oversubscription
+sweep (see `## Observed residual` below) also never failed a uniq test.
+
+### Change made (no speculative "fix", no retry)
+
+- **Hardened the fixture delete.** `Dispose()` now routes through the shared
+  `FileSystemHelpers.DeleteDirectoryForce` instead of a raw
+  `Directory.Delete(recursive: true)` — the os-interface rule requires the
+  force-delete helper for any destructive delete (raw delete throws on a
+  Windows read-only descendant). This removes the raw-delete surface the report
+  named without altering behavior on the current inputs.
+- **Added a deterministic isolation guard,**
+  `InvokeBashUniqCommandTests.TmpDir_PerInstance_IsUniqueAndGuidNamed`: two
+  constructed instances must get distinct directories of the form
+  `psb-uniq-<13 hex>` under `Path.GetTempPath()`. It passes on this tree and
+  fails if a future edit truncates the COMBINED path (the exact hazard the
+  report's "garbled char / shared path" symptom pointed at), so the isolation
+  contract is now pinned rather than assumed.
+
+If the failure resurfaces it needs a **captured raw failure** (the reported
+"garbled char at pos 0" reads as an encoding/BOM rendering artifact, not proof
+of an empty file); the isolation invariant above will be the first thing ruled
+out.
 
 ## Observed residual (separate, in scope of the same load story)
 
