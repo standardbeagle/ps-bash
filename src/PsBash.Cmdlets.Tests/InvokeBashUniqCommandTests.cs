@@ -31,9 +31,18 @@ public class InvokeBashUniqCommandTests : IClassFixture<SharedPwshFixture>, IDis
         Directory.CreateDirectory(_tmpDir);
     }
 
+    /// <summary>
+    /// The per-instance temp directory. Exposed so the isolation regression test
+    /// (01M3GWY9AX7BY4MDB7YFVWP4BZ) can assert two instances never share one.
+    /// </summary>
+    internal string TmpDir => _tmpDir;
+
     public void Dispose()
     {
-        try { Directory.Delete(_tmpDir, recursive: true); } catch { /* best-effort */ }
+        // Route through the shared force-delete helper (os-interface rule): a raw
+        // recursive Directory.Delete throws on a Windows read-only descendant and
+        // would leave the temp tree behind. Best-effort on failure.
+        try { FileSystemHelpers.DeleteDirectoryForce(_tmpDir); } catch { /* best-effort */ }
     }
 
     private string[] RunLines(string script)
@@ -66,6 +75,41 @@ public class InvokeBashUniqCommandTests : IClassFixture<SharedPwshFixture>, IDis
     {
         var lines = RunLines("Invoke-BashUniq");
         Assert.Empty(lines);
+    }
+
+    // Regression guard (01M3GWY9AX7BY4MDB7YFVWP4BZ): the file-mode tests
+    // (Uniq_FileMode_ReadsAndCollapses / _CrlfNormalized / _Unicode_NonAscii)
+    // were reported to intermittently read an empty file ("Expected [a,b,c],
+    // Actual []"). The only way a file-mode test can read another test's file is
+    // if two instances share a temp directory. This pins the isolation invariant:
+    // two instances must get DISTINCT directories, each of the 22-char
+    // `psb-uniq-<13 hex>` form, under Path.GetTempPath(). A future edit that
+    // truncated the COMBINED Path.Combine result (a real hazard the reported
+    // symptom suggested) would collapse every instance onto one shared dir and
+    // fail here.
+    [Fact]
+    public void TmpDir_PerInstance_IsUniqueAndGuidNamed()
+    {
+        var a = new InvokeBashUniqCommandTests(_fixture);
+        var b = new InvokeBashUniqCommandTests(_fixture);
+        try
+        {
+            Assert.NotEqual(a.TmpDir, b.TmpDir);
+
+            string temp = Path.GetTempPath();
+            foreach (var dir in new[] { a.TmpDir, b.TmpDir })
+            {
+                Assert.StartsWith(temp, dir, StringComparison.OrdinalIgnoreCase);
+                string name = Path.GetFileName(dir.TrimEnd('/'));
+                Assert.Matches("^psb-uniq-[0-9a-f]{13}$", name);
+                Assert.True(Directory.Exists(dir), $"temp dir must exist: {dir}");
+            }
+        }
+        finally
+        {
+            a.Dispose();
+            b.Dispose();
+        }
     }
 
     [Fact]
