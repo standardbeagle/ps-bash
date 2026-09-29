@@ -335,9 +335,12 @@ public static class AssertOracle
         // used by another process"). One stable root matches the daemon's
         // lifetime and is left for OS temp cleanup.
         //
-        // The directory name is kept SHORT: TMPDIR points here, and the ps-bash
-        // host derives its Unix domain socket path as
-        // "{TMPDIR}/ps-bash/host-pi-{pid}-{guid}.sock". sun_path is a 108-byte
+        // The directory name is kept SHORT: TEMP/TMPDIR point here, and the
+        // ps-bash host derives its Unix domain socket path under the per-user
+        // runtime dir (PsBashRuntimeDirectory) as
+        // "{runtimeDir}/host-pi-{pid}-{guid}.sock", where runtimeDir is
+        // "{TEMP}\ps-bash" on Windows and, on POSIX, "$XDG_RUNTIME_DIR/ps-bash"
+        // when set, else "{TMPDIR}/ps-bash-{uid}". sun_path is a 108-byte
         // buffer INCLUDING the terminating NUL on Linux/Windows (104 on macOS),
         // so the whole path must stay within 107 chars (103 on macOS) or the
         // host cannot bind. IpcTransportFactory now shortens the random suffix
