@@ -238,6 +238,82 @@ public class ProcessLifecycleTests
     }
 
     [SkippableFact]
+    public async Task IdleDaemon_AfterBackgroundJob_ExitsInsteadOfLingering()
+    {
+        Skip.IfNot(CanRun, "Windows + built ps-bash.exe required");
+
+        // A background job (`&`) runs in the psm1's lazily created runspace pool,
+        // whose pipeline threads are FOREGROUND threads and are never closed. The
+        // daemon's idle timer fired and Main returned, but those threads kept the
+        // process alive indefinitely: every Differential run leaked its two oracle
+        // hosts (~450 MB each) this way. After idling out, the host must be gone.
+        var endpoint = PsBashTestProcess.CreateEndpoint();
+        var psi = new ProcessStartInfo
+        {
+            FileName = PsBashExe,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            UseShellExecute = false,
+            CreateNoWindow = true,
+        };
+        psi.ArgumentList.Add("-c");
+        psi.ArgumentList.Add("sleep 1 & wait; echo bgdone");
+        psi.Environment[IpcTransportFactory.EndpointEnvVar] = endpoint;
+        psi.Environment["PSBASH_HOST_IDLE_SECS"] = "2";
+        psi.Environment["PSBASH_PER_INVOCATION"] = "0";
+
+        var colon = endpoint.IndexOf(':');
+        var scheme = endpoint[..colon];
+        var name = endpoint[(colon + 1)..];
+        int? hostPid = null;
+        try
+        {
+            using (var launcher = Process.Start(psi)!)
+            {
+                var stdoutTask = launcher.StandardOutput.ReadToEndAsync();
+                // The sidecar exists only while the host serves; read the pid now.
+                var pidDeadline = DateTime.UtcNow + TimeSpan.FromSeconds(30);
+                while (hostPid is null && DateTime.UtcNow < pidDeadline && !launcher.HasExited)
+                {
+                    hostPid = HostMetadata.TryRead(scheme, name)?.Pid;
+                    if (hostPid is null) await Task.Delay(50);
+                }
+                using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(40));
+                await launcher.WaitForExitAsync(cts.Token);
+                Assert.Contains("bgdone", await stdoutTask);
+            }
+            Assert.NotNull(hostPid);
+
+            // Idle window is 2 s; allow generous slack for a loaded box.
+            var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(20);
+            bool exited = false;
+            while (DateTime.UtcNow < deadline)
+            {
+                try
+                {
+                    using var host = Process.GetProcessById(hostPid!.Value);
+                    if (host.HasExited) { exited = true; break; }
+                }
+                catch (ArgumentException) { exited = true; break; }
+                await Task.Delay(200);
+            }
+            Assert.True(exited, $"ps-bash-host (pid {hostPid}) still alive 20 s after a 2 s idle window following a background job");
+        }
+        finally
+        {
+            if (hostPid is not null)
+            {
+                try
+                {
+                    using var leftover = Process.GetProcessById(hostPid.Value);
+                    leftover.Kill(entireProcessTree: true);
+                }
+                catch { }
+            }
+        }
+    }
+
+    [SkippableFact]
     public async Task SequentialCalls_FromOneParent_ReuseOneHost()
     {
         Skip.IfNot(CanRun, "Windows + built ps-bash.exe required");
