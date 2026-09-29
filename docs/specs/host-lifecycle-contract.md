@@ -67,6 +67,15 @@ Two host populations are explicitly **out of scope**:
   `PtySpawnTests.InteractiveLaunchPath_NeverSelectsDaemonLifetime`. See also
   `docs/specs/pty.md` §10.5.
 
+**Process exit is explicit.** Every host path ends in `Environment.Exit` once
+`Main`'s work is done (`PsBash.Host/Program.cs`). Returning from `Main` is not
+enough: PowerShell runs runspace pipelines on FOREGROUND threads, and a runspace
+that a user command leaves open (a background job `&` opens the psm1's runspace
+pool; nothing closes it) keeps the process alive after the idle timer fired and
+the server drained. Before this, every daemon that had run a background job
+lingered indefinitely. Regression-pinned by
+`ProcessLifecycleTests.IdleDaemon_AfterBackgroundJob_ExitsInsteadOfLingering`.
+
 ## Runtime Directory
 
 All per-user runtime artifacts — extracted module, IPC sockets, `.host.json`

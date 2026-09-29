@@ -10,6 +10,20 @@ internal sealed class Program
 {
     static async Task<int> Main(string[] args)
     {
+        var exitCode = await MainCoreAsync(args);
+        // End the process explicitly. Returning from Main is not enough: the
+        // process lives until its last FOREGROUND thread ends, and PowerShell
+        // creates foreground PipelineThreads for runspaces that user commands
+        // leave open — a background job (`&`) opens the psm1's runspace pool and
+        // nothing closes it. The host has already drained, disposed its pool and
+        // removed its sidecar by now, so those stray threads hold nothing worth
+        // keeping; without this, an idled-out daemon lingered forever.
+        Environment.Exit(exitCode);
+        return exitCode;
+    }
+
+    private static async Task<int> MainCoreAsync(string[] args)
+    {
         // Seed the process-scope execution policy before ANY runspace opens (the
         // warm pool opens several concurrently). Idempotent with SdkRunspace.Create.
         // The launcher also exports this so a spawned host inherits it at process
