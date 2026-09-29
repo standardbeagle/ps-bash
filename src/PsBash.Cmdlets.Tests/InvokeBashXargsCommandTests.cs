@@ -376,13 +376,16 @@ public class InvokeBashXargsCommandTests : IClassFixture<SharedPwshFixture>
         // xargs options end at the command name; the old loop kept scanning and
         // took grep's `-il` as xargs `-i` with replace string `l`, so grep ran
         // with no file operand and printed nothing.
-        var file = Path.Combine(Path.GetTempPath(), "psbash-xargs-il-" + Guid.NewGuid().ToString("N") + ".txt");
+        // Forward slashes: xargs' default tokenizer treats `\` as an escape (GNU),
+        // so a backslash path would be mangled before grep ever saw it.
+        var file = Path.Combine(Path.GetTempPath(), "psbash-xargs-il-" + Guid.NewGuid().ToString("N") + ".txt")
+            .Replace('\\', '/');
         File.WriteAllText(file, "foo\n");
         try
         {
             var (result, _) = Run($"'{file}' | Invoke-BashXargs grep '-il' FOO; $LASTEXITCODE");
             Assert.Equal("0", result[^1]?.ToString());
-            Assert.Contains(file, JoinBashText(result));
+            Assert.Contains(Path.GetFileName(file), JoinBashText(result));
         }
         finally
         {
@@ -432,12 +435,17 @@ public class InvokeBashXargsCommandTests : IClassFixture<SharedPwshFixture>
     [Fact]
     public void Xargs_CommandNotFound_ReportsOnceAndStops()
     {
-        // GNU (wsl bash): with two items, `xargs -n1 nosuchcmd` prints ONE
-        // "No such file or directory" and exits 127.
-        var (result, errors) = Run(
+        // GNU (wsl bash): with two items, `xargs -n1 nosuchcmd` reports the miss
+        // ONCE and exits 127 — it stops instead of retrying per item. Compare with
+        // the one-item run rather than counting records: WriteBashError emits each
+        // message on two channels.
+        var (one, oneErrors) = Run(
+            "@('1') | Invoke-BashXargs -n 1 no-such-command-xyz; $LASTEXITCODE");
+        var (two, twoErrors) = Run(
             "@('1','2') | Invoke-BashXargs -n 1 no-such-command-xyz; $LASTEXITCODE");
-        Assert.Equal("127", result[^1]?.ToString());
-        Assert.Single(errors);
+        Assert.Equal("127", one[^1]?.ToString());
+        Assert.Equal("127", two[^1]?.ToString());
+        Assert.Equal(oneErrors.Count, twoErrors.Count);
     }
 
     private int RunAndReadExitCode(string script)

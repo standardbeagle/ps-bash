@@ -93,12 +93,15 @@ public sealed class InvokeBashXargsCommand : PSCmdlet
 
     /// <summary>
     /// GNU exit-status aggregation across all invocations. 0 = all succeeded.
-    /// 1..125 from a child maps to 123; 255 maps to 124; command-not-found maps
-    /// to 127; command-found-but-not-runnable maps to 126. The first failing
-    /// invocation sticks (matching GNU, which reports the aggregate, not the
-    /// last child).
+    /// 1..125 from a child maps to 123 and xargs keeps going. A child exiting
+    /// 255 (-> 124), a command that cannot be found (-> 127) or run (-> 126)
+    /// makes xargs stop at once, and that status replaces an earlier 123
+    /// (GNU, verified with wsl bash).
     /// </summary>
     private int _aggregateExit;
+
+    /// <summary>The command name as the user typed it, for messages and -t.</summary>
+    private string _displayCmd = "";
 
     protected override void ProcessRecord()
     {
@@ -306,7 +309,11 @@ public sealed class InvokeBashXargsCommand : PSCmdlet
                 continue;
             }
 
+            // The first operand is the command: xargs options end there, and
+            // every later token belongs to the command (GNU). Scanning on took
+            // `grep -il` as xargs `-i` with replace string `l`.
             operands.Add(arg);
+            pastDoubleDash = true;
             i++;
         }
 
@@ -318,8 +325,10 @@ public sealed class InvokeBashXargsCommand : PSCmdlet
         }
 
         // Resolve command: if the leading token matches an Invoke-Bash*
-        // function, route through it (oracle parity).
+        // function, route through it (oracle parity). Messages and the -t trace
+        // keep the name the user typed (`awk`, not `Invoke-BashAwk`), as GNU does.
         var cmd = operands[0];
+        _displayCmd = cmd;
         var bashCmdCandidate = "Invoke-Bash" +
             char.ToUpperInvariant(cmd[0]) + cmd.Substring(1);
         bool bashCmdExists = false;
@@ -366,13 +375,12 @@ public sealed class InvokeBashXargsCommand : PSCmdlet
 
             if (replaceMode)
             {
-                // Whole-line mode: every line is one item. A trailing newline
-                // is not an item. Leading/trailing blanks are trimmed (GNU
-                // strips the delimiter run around the line). Internal blanks
-                // are kept verbatim.
+                // Whole-line mode: every line is one item and blanks do not
+                // split it. GNU strips LEADING blanks only (trailing ones are
+                // data) and still honors quotes and backslash escapes.
                 foreach (var rawLine in text.Split('\n'))
                 {
-                    var line = rawLine.TrimEnd('\r').Trim(' ', '\t');
+                    var line = UnquoteReplaceLine(rawLine.TrimEnd('\r').TrimStart(' ', '\t'));
                     if (line.Length > 0) inputLines.Add(line);
                 }
                 continue;
@@ -419,7 +427,7 @@ public sealed class InvokeBashXargsCommand : PSCmdlet
                 {
                     replaced.Add(a.Replace(replaceStr, line));
                 }
-                InvokeOne(cmd, replaced, traceCmd);
+                if (!InvokeOne(cmd, replaced, traceCmd)) break;
             }
         }
         else
@@ -432,7 +440,7 @@ public sealed class InvokeBashXargsCommand : PSCmdlet
                     var end = System.Math.Min(bi + batchSize, inputLines.Count);
                     var batchArgs = new List<string>(cmdArgs);
                     for (int j = bi; j < end; j++) batchArgs.Add(inputLines[j]);
-                    InvokeOne(cmd, batchArgs, traceCmd);
+                    if (!InvokeOne(cmd, batchArgs, traceCmd)) break;
                 }
             }
             else
@@ -520,19 +528,70 @@ public sealed class InvokeBashXargsCommand : PSCmdlet
     }
 
     /// <summary>
+    /// Applies GNU's quote rules to one <c>-I</c> line WITHOUT splitting on
+    /// blanks: single/double quotes are removed (their content kept verbatim,
+    /// <c>\"</c> and <c>\\</c> escaped inside double quotes, as in
+    /// <see cref="TokenizeWhitespace"/>) and a backslash escapes the next
+    /// character. An unterminated quote keeps the rest of the line.
+    /// </summary>
+    private static string UnquoteReplaceLine(string line)
+    {
+        if (line.IndexOfAny(QuoteOrEscapeChars) < 0) return line;
+
+        var sb = new System.Text.StringBuilder(line.Length);
+        int i = 0;
+        while (i < line.Length)
+        {
+            char ch = line[i];
+            if (ch == '\'' || ch == '"')
+            {
+                char quote = ch;
+                i++;
+                while (i < line.Length && line[i] != quote)
+                {
+                    if (quote == '"' && line[i] == '\\' && i + 1 < line.Length
+                        && (line[i + 1] == '"' || line[i + 1] == '\\'))
+                    {
+                        i++;
+                    }
+                    sb.Append(line[i]);
+                    i++;
+                }
+                i++; // closing quote (or past the end)
+                continue;
+            }
+            if (ch == '\\' && i + 1 < line.Length)
+            {
+                sb.Append(line[i + 1]);
+                i += 2;
+                continue;
+            }
+            sb.Append(ch);
+            i++;
+        }
+        return sb.ToString();
+    }
+
+    private static readonly char[] QuoteOrEscapeChars = { '\'', '"', '\\' };
+
+    /// <summary>
     /// Invokes <paramref name="cmd"/> with <paramref name="callArgs"/> bound
     /// positionally through <c>$args</c>. The script body is a fixed string
     /// (Directive 12). When <paramref name="trace"/> is true, writes the
     /// command + args to stderr first (xargs <c>-t</c>).
     /// </summary>
-    private void InvokeOne(string cmd, List<string> callArgs, bool trace)
+    /// <returns>
+    /// <c>false</c> when xargs must stop running further invocations (GNU aborts
+    /// on a child exiting 255, and on a command it cannot find or run).
+    /// </returns>
+    private bool InvokeOne(string cmd, List<string> callArgs, bool trace)
     {
         if (trace)
         {
             System.Console.Error.WriteLine(
                 callArgs.Count == 0
-                    ? cmd
-                    : cmd + " " + string.Join(" ", callArgs));
+                    ? _displayCmd
+                    : _displayCmd + " " + string.Join(" ", callArgs));
         }
 
         // Build $args: [cmd, arg1, arg2, ...]. The body splats $args[1..] to
@@ -575,57 +634,35 @@ public sealed class InvokeBashXargsCommand : PSCmdlet
             if (childExit == -127)
             {
                 FileSystemHelpers.WriteBashError(
-                    this, $"xargs: {cmd}: No such file or directory");
-                RecordNotFound();
-                return;
+                    this, $"xargs: {_displayCmd}: No such file or directory");
+                _aggregateExit = 127;
+                return false;
             }
-            _lastChildExit = childExit;
-            RecordExit(childExit);
+            if (childExit == 255)
+            {
+                FileSystemHelpers.WriteBashError(
+                    this, $"xargs: {_displayCmd}: exited with status 255; aborting");
+                _aggregateExit = 124;
+                return false;
+            }
+            // 1..125, including a child's own 126/127 exit, is GNU's 123. It
+            // does not stop xargs, and a later abort status replaces it.
+            if (childExit != 0 && _aggregateExit == 0) _aggregateExit = 123;
+            return true;
         }
         catch (System.Management.Automation.CommandNotFoundException)
         {
-            FileSystemHelpers.WriteBashError(this, $"xargs: {cmd}: No such file or directory");
-            RecordNotFound();
+            FileSystemHelpers.WriteBashError(this, $"xargs: {_displayCmd}: No such file or directory");
+            _aggregateExit = 127;
+            return false;
         }
         catch (System.Exception ex)
         {
             // A command that exists but cannot be executed is 126.
-            FileSystemHelpers.WriteBashError(this, $"xargs: {cmd}: {ex.Message}");
-            RecordCannotRun();
+            FileSystemHelpers.WriteBashError(this, $"xargs: {_displayCmd}: {ex.Message}");
+            _aggregateExit = 126;
+            return false;
         }
-    }
-
-    /// <summary>Exit code seen from the most recent child invocation.</summary>
-    private int _lastChildExit;
-
-    /// <summary>Folds a child exit code into the GNU aggregate status.</summary>
-    private void RecordExit(int childExit)
-    {
-        int mapped;
-        if (childExit == 0) return;
-        else if (childExit == 255) mapped = 124;
-        else mapped = 123; // 1..125, including a child's own 126/127 exit
-
-        // The first failure wins — GNU reports the aggregate, not the last.
-        if (_aggregateExit == 0) _aggregateExit = mapped;
-    }
-
-    /// <summary>
-    /// Records GNU's "command not found" status (127) directly. Unlike a child
-    /// that exits 127, this is xargs itself failing to resolve the command, so
-    /// it must NOT be folded into the generic 123 aggregate.
-    /// </summary>
-    private void RecordNotFound()
-    {
-        if (_aggregateExit == 0) _aggregateExit = 127;
-    }
-
-    /// <summary>
-    /// Records GNU's "command found but cannot be run" status (126) directly.
-    /// </summary>
-    private void RecordCannotRun()
-    {
-        if (_aggregateExit == 0) _aggregateExit = 126;
     }
 
     private void ApplyExitStatus()
