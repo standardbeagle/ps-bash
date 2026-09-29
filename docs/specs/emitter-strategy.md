@@ -232,8 +232,10 @@ stdin, exactly like `<`:
 ```
 
 Both the simple-command and compound paths build the literal through the single
-`EmitHereDocLiteral` helper, so tab stripping, variable translation, and the
-here-string-terminator collision fallback cannot drift apart.
+`EmitHereDocLiteral` helper, so variable translation and the
+here-string-terminator collision fallback cannot drift apart. (`<<-` tab
+stripping is not an emitter concern: the parser strips the tabs before it builds
+the `HereDoc`, so `Body` already holds exactly what bash stores.)
 
 > Before this, `<<<` was not a compound-redirect operator at all: the operator and
 > its word were left unconsumed, the here-string was silently dropped (the loop read

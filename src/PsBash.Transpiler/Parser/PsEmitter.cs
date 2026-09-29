@@ -2035,8 +2035,9 @@ public static class PsEmitter
     /// <summary>
     /// Render a here-doc / here-string body as a PowerShell string literal, ready to be
     /// piped through <c>Emit-BashLine</c>. Shared by the simple-command heredoc path and
-    /// the compound-command <c>done &lt;&lt;&lt; "$x"</c> path so both agree on tab
-    /// stripping, variable translation, and terminator-collision escaping.
+    /// the compound-command <c>done &lt;&lt;&lt; "$x"</c> path so both agree on
+    /// variable translation and terminator-collision escaping (<c>&lt;&lt;-</c> tab
+    /// stripping is done by the parser, not here).
     /// </summary>
     private static string EmitHereDocLiteral(HereDoc hereDoc)
     {

@@ -375,6 +375,11 @@ Heredoc delimiter quoting controls expansion:
 - Unquoted `<<EOF` -> `Expand=true` (variables expanded)
 - Quoted `<<'EOF'` or `<<"EOF"` -> `Expand=false` (literal body)
 
+The body is sliced from the raw source by the parser (`CollectHereDocBodies`), which
+also applies `<<-` tab stripping there — `HereDoc.Body` is final; the emitter does not
+strip again. A body delimited by end of input (no delimiter line, no trailing newline)
+still gets the final `\n` bash gives every body line.
+
 ### 6.3 Brace Expansion vs Literal Braces
 
 `{` is classified as a brace expansion word (not `LBrace`) when `IsBraceExpansion` detects content with `,` or `..` before the closing `}` with no unquoted whitespace inside:
