@@ -5177,7 +5177,7 @@ public static class PsEmitter
                 result = EmitPassthrough("Invoke-BashTr", args);
                 return true;
             case "tee":
-                result = EmitPassthrough("Invoke-BashTee", args);
+                result = EmitPassthrough("Invoke-BashTee", args, TeeForceQuoteFlags);
                 return true;
             case "less":
                 result = EmitPassthrough("Invoke-BashLess", args);
@@ -5828,6 +5828,9 @@ public static class PsEmitter
     /// reads it as replacement mode with the default <c>{}</c>. The prefix form
     /// (<c>-iTOK</c>) is matched separately.
     /// </summary>
+    private static readonly IReadOnlySet<string> TeeForceQuoteFlags =
+        new HashSet<string>(StringComparer.Ordinal) { "--" };
+
     private static readonly IReadOnlySet<string> XargsForceQuoteFlags =
         new HashSet<string>(StringComparer.Ordinal) { "-i" };
 

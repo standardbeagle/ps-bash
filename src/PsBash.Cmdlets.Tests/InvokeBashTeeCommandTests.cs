@@ -251,6 +251,63 @@ $b = [PSCustomObject]@{{ BashText = ""b`n"" }}
         // would have been preserved if -a leaked through.
     }
 
+    [Theory]
+    [InlineData("x", "x")]
+    [InlineData("a\\nb", "a\nb")]
+    [InlineData("a\\n", "a\n")]
+    public void Tee_PrintfInput_FileBytesMatchGnu(string printfFormat, string expectedBytes)
+    {
+        // GNU oracle: `printf x | tee f` writes exactly "x" (no invented newline).
+        string target = Path.Combine(_tmpDir, "printf.txt");
+        RunLines($"Invoke-BashPrintf '{printfFormat}' | Invoke-BashTee '{Q(target)}' | Out-Null");
+        Assert.Equal(expectedBytes, File.ReadAllText(target));
+    }
+
+    [Fact]
+    public void Tee_PrintfInput_StdoutAndFileAreIdentical()
+    {
+        string target = Path.Combine(_tmpDir, "same.txt");
+        var lines = RunLines(
+            $"Invoke-BashPrintf 'a\\nb' | Invoke-BashTee '{Q(target)}'");
+        // printf yields ONE NoTrailingNewline record "a\nb"; stdout text == file bytes.
+        Assert.Equal(new[] { "a\nb" }, lines);
+        Assert.Equal("a\nb", File.ReadAllText(target));
+    }
+
+    [Fact]
+    public void Tee_DoubleDashThenDashOperand_CreatesFileNamedLikeAnOption()
+    {
+        // `tee -- -zz` must create a file named "-zz"; the classifier must stop at `--`.
+        var lines = RunLines(
+            $"Set-Location '{Q(_tmpDir)}'; 'x' | Invoke-BashTee '--' '-zz'");
+        Assert.Equal(new[] { "x" }, lines);
+        Assert.Equal("x\n", File.ReadAllText(Path.Combine(_tmpDir, "-zz")));
+    }
+
+    [Fact]
+    public void Tee_Streaming_FileHasFirstRecordBeforeUpstreamFinishes()
+    {
+        // Upstream inspects the file between records; a buffering tee would still
+        // have an empty file at that point.
+        string target = Path.Combine(_tmpDir, "stream.txt");
+        var pwsh = _fixture.AcquireFresh();
+        pwsh.AddScript($@"
+$global:teeSeen = $null
+& {{
+  'one'
+  $fs = [IO.File]::Open('{Q(target)}', 'Open', 'Read', 'ReadWrite')
+  $global:teeSeen = (New-Object IO.StreamReader $fs).ReadToEnd()
+  $fs.Dispose()
+  'two'
+}} | Invoke-BashTee '{Q(target)}' | Out-Null
+").Invoke();
+        pwsh.Commands.Clear();
+        var seen = pwsh.AddScript("$global:teeSeen").Invoke();
+        pwsh.Commands.Clear();
+        Assert.Equal("one\n", seen[0].BaseObject as string);
+        Assert.Equal("one\ntwo\n", File.ReadAllText(target));
+    }
+
     [Fact]
     public void Tee_UnrecognizedOption_WritesError()
     {
