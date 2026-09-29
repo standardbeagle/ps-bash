@@ -140,6 +140,52 @@ public sealed class LifecycleScaleAndFaultTests
         }
     }
 
+    // ─── 2b. warm=0 host is health-ready and runs a command ─────────────────
+
+    /// <summary>
+    /// Regression: PSBASH_POOL_WARM=0 (no spares, create on demand) used to leave the
+    /// pool never "ready", so the launcher's startup health wait timed out before it
+    /// could submit the command that would create the first worker. A warm=0 host must
+    /// answer Health immediately and serve a command. Hand-written assert: the IPC
+    /// lifecycle has no bash oracle.
+    /// </summary>
+    [Fact]
+    public async Task WarmZeroPool_StartAsync_IsReadyAndRunsCommand()
+    {
+        var (spec, scheme, endpoint) = NewIsolatedEndpoint("warm0");
+        var prior = Environment.GetEnvironmentVariable(IpcTransportFactory.EndpointEnvVar);
+        Environment.SetEnvironmentVariable(IpcTransportFactory.EndpointEnvVar, spec);
+
+        await using var transport = NewTransport(scheme, endpoint);
+        await using var pool = new WorkerPool<SdkWorker>(0, 2, SdkWorker.Create);
+        await using var server = new HostServer(transport, pool);
+        using var serverCts = new CancellationTokenSource();
+        Task? serverTask = null;
+        try
+        {
+            serverTask = server.RunAsync(serverCts.Token);
+            await server.WhenListening.WaitAsync(TimeSpan.FromSeconds(5));
+
+            var bogusBinary = Path.Combine(Path.GetTempPath(), $"does-not-exist-{Guid.NewGuid():N}");
+            using var startCts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+            await using var ipc = await IpcWorker.StartAsync(
+                bogusBinary,
+                startupTimeout: TimeSpan.FromSeconds(10),
+                lifetime: Lifetime.Daemon,
+                ct: startCts.Token);
+
+            var output = await ipc.QueryAsync("Invoke-BashEcho 'hi'", startCts.Token);
+            Assert.Contains("hi", output);
+        }
+        finally
+        {
+            try { serverCts.Cancel(); } catch { }
+            try { if (serverTask is not null) await serverTask.WaitAsync(TimeSpan.FromSeconds(3)); } catch { }
+            Environment.SetEnvironmentVariable(IpcTransportFactory.EndpointEnvVar, prior);
+            CleanupEndpoint(scheme, endpoint);
+        }
+    }
+
     // ─── 4. Stale endpoint with no live host is removed ─────────────────────
 
     /// <summary>

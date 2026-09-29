@@ -205,7 +205,8 @@ internal sealed class Connection
 
         // Check out an isolated worker for this one command; discard it on the way
         // out so the next -c never sees this command's session state. Distinct
-        // connections get distinct workers, so concurrent launchers run in parallel.
+        // connections get distinct (isolated) workers; execution itself is still
+        // serialized process-wide by SdkWorker's exec gate.
         WorkerPool<SdkWorker>.DiagLog("Connection: acquiring worker");
         SdkWorker? worker = null;
         int exitCode;

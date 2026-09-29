@@ -27,11 +27,23 @@ as well as the `ps-bash host restart` subcommand (`src/PsBash.Shell/HostCommands
 runspace, drawn from a warm `WorkerPool` (`src/PsBash.Host/Runtime/WorkerPool.cs`)
 and **discarded on release**. So daemon reuse is fast (no per-command runspace
 cold-start) without leaking session state between commands — each `-c` still gets a
-structurally clean PowerShell session, and concurrent launchers run in parallel on
-distinct runspaces (bounded by `PSBASH_POOL_MAX`). Warm spares are created on
+structurally clean PowerShell session, and concurrent launchers each hold their own
+distinct runspace (bounded by `PSBASH_POOL_MAX`). Warm spares are created on
 dedicated (LongRunning) threads so warm-up never starves the host's async accept /
 health-handshake loop. Pool size: `PSBASH_POOL_WARM` (default 2) warm spares,
-`PSBASH_POOL_MAX` (default: CPU count clamped to [2, 8]) concurrency cap.
+`PSBASH_POOL_MAX` (default: CPU count clamped to [2, 8]) cap on in-use runspaces.
+`PSBASH_POOL_WARM=0` is valid: the host reports ready immediately (there is no
+warm-up to wait for) and each connection builds its runspace on demand.
+
+**Isolated runspaces, serialized execution.** Isolation is per connection (own
+runspace, discarded on release); command *execution* is NOT parallel. `SdkWorker`
+holds a static, process-wide exec gate (`_globalExecGate`) across every command,
+because bash variables (`$env:NAME`) and the working directory
+(`Environment.CurrentDirectory`) are process-global and shared by all runspaces.
+Concurrent launchers therefore queue on the gate (output drains after release, so a
+slow consumer does not block the next command). True concurrency would need
+invocation-scoped env/cwd, or separate processes (`PSBASH_PER_INVOCATION=1` gives
+each launcher its own host).
 
 Two host populations are explicitly **out of scope**:
 

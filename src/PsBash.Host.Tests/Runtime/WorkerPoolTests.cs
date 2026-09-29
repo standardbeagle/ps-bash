@@ -90,6 +90,34 @@ public class WorkerPoolTests
     }
 
     [Fact]
+    public async Task WarmZero_IsReadyImmediately_WithoutCreatingWorkers()
+    {
+        var f = new FakeWorker.Factory();
+        await using var pool = new WorkerPool<FakeWorker>(warmTarget: 0, max: 2, f.Create);
+
+        // Ready with no warm-up: the launcher waits for this before submitting the
+        // command that creates the first worker on demand.
+        Assert.True(pool.IsReady);
+        Assert.True(pool.WhenFirstWarm.IsCompletedSuccessfully);
+        Assert.Null(pool.FirstWarmError);
+        Assert.False(pool.IsWarming);
+        Assert.Equal(0, Volatile.Read(ref f.CreatedCount));
+    }
+
+    [Fact]
+    public async Task WarmZero_AcquireCreatesWorkerOnDemand()
+    {
+        var f = new FakeWorker.Factory();
+        await using var pool = new WorkerPool<FakeWorker>(warmTarget: 0, max: 2, f.Create);
+
+        var w = await pool.AcquireAsync();
+
+        Assert.NotNull(w);
+        Assert.Equal(1, Volatile.Read(ref f.CreatedCount));
+        pool.Release(w);
+    }
+
+    [Fact]
     public async Task Acquire_ReturnsWarmSpare_WithoutCreatingNew()
     {
         var f = new FakeWorker.Factory();

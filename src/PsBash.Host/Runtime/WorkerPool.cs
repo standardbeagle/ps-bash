@@ -15,9 +15,15 @@ namespace PsBash.Host.Runtime;
 /// serialized every command on one runspace and leaked user state (variables,
 /// functions, cwd) between invocations — only the separate per-invocation host
 /// <i>process</i> gave true isolation. A pool restores isolation (fresh runspace
-/// per command) and adds concurrency (N launchers run in parallel on N runspaces)
-/// while keeping <c>_warmTarget</c> spares hot so steady-state latency is near
-/// zero.</para>
+/// per command) and lets N connections hold N isolated runspaces at once, while
+/// keeping <c>_warmTarget</c> spares hot so steady-state latency is near zero.</para>
+///
+/// <para><b>Isolation is not parallel execution.</b> Runspaces are isolated per
+/// connection, but command <i>execution</i> is serialized process-wide by
+/// <see cref="SdkWorker"/>'s static exec gate, because bash variables
+/// (<c>$env:NAME</c>) and the cwd are process-global. Concurrent launchers queue on
+/// that gate. Real concurrency would need invocation-scoped env/cwd or separate
+/// processes (<c>PSBASH_PER_INVOCATION=1</c>).</para>
 ///
 /// <para><b>Sizing.</b> <c>warmTarget</c> idle runspaces are kept hot; total live
 /// runspaces are bounded by <c>warmTarget + max</c> (idle ≤ warmTarget, in-use ≤
@@ -75,13 +81,21 @@ public sealed class WorkerPool<TWorker> : IAsyncDisposable where TWorker : class
         _max = Math.Max(1, max);
         _factory = factory;
         _slots = new SemaphoreSlim(_max, _max);
+        // warm=0 means "no spares; build a worker on demand in AcquireAsync". There is
+        // then no warm-up to wait for, so the pool is ready immediately. Without this the
+        // health handshake never succeeds and the launcher (which waits for readiness
+        // BEFORE submitting the command that would create the first worker) times out.
+        if (_warmTarget == 0) _firstWarm.TrySetResult();
         TopUpWarm();
     }
 
-    /// <summary>Completes once at least one worker has finished warming.</summary>
+    /// <summary>
+    /// Completes once at least one worker has finished warming — or immediately when
+    /// the warm target is 0 (workers are created on demand, so there is nothing to warm).
+    /// </summary>
     public Task WhenFirstWarm => _firstWarm.Task;
 
-    /// <summary>True once at least one runspace is built (health-ready).</summary>
+    /// <summary>True once at least one runspace is built, or always when warm target is 0 (health-ready).</summary>
     public bool IsReady => _firstWarm.Task.IsCompletedSuccessfully;
 
     /// <summary>True while at least one runspace is mid-warm-up.</summary>
