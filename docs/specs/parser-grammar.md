@@ -120,6 +120,23 @@ pipeline    -> compound_or_simple (('|' | '|&') compound_or_simple)*
 
 `|&` (stderr-merge pipe) is a distinct `PipeAmp` token; the ops array stores `"|&"`.
 
+**Leftover-token rule (every statement list).** A statement is an `and_or` plus an
+optional `&`. After it only a terminator (`;` / newline), end of input, or the
+enclosing construct's own closing token may follow: `}` in a brace group, `)` in a
+subshell, the body's stop word (`fi`/`elif`/`else`, `done`) in if/loop bodies, and
+`;;` / `;&` / `;;&` / `esac` in a case arm. A `&` is itself a terminator, so anything
+may follow it (also inside bodies: `{ cmd & }`). Any other token means the statement
+parser stopped early, and `ParseListStatement` throws a `ParseException` naming the
+token and its line/column. The top-level loops (`ParseList`,
+`ParseTopLevelWithPositions`) and all body loops share this one helper. Before it,
+the top level silently dropped the rest of the script and a body re-read the
+leftover as a new command (`rm -f !(keep).txt` → `rm -f !`, a subshell, `.txt`).
+
+Constructs that still end in this error by design (unsupported grammar, loud rather
+than truncated): the `time` / `coproc` keywords before a compound (`time { …; }`),
+extglob `!(…)` / `@(…)` in a command word, and a `}` argument (`echo hi }` — bash
+prints `hi }`, but the lexer splits `}x` and the emitter does not quote a bare `}`).
+
 ### 3.2 Compound-or-Simple Dispatch
 
 `ParseCompoundOrSimple` dispatches on the current token:
@@ -157,7 +174,7 @@ heredoc_op   -> ('<<' | '<<-') DELIMITER
 Special handling:
 - `export` / `local` followed by `ASSIGNMENT_WORD` produces `ShAssignment` (with `IsLocal` flag for `local`).
 - If only assignments appear with no command words, the result is `ShAssignment` instead of `Simple`.
-- Array assignments (`arr=(a b c)`) are detected when `ASSIGNMENT_WORD` has no value and is followed by `LParen`. **Newlines inside `( )` are whitespace**, so the common multi-line form parses as one literal; breaking on the newline used to close the array early and read the next element as a command.
+- Array assignments (`arr=(a b c)`) are detected when `ASSIGNMENT_WORD` has no value and is followed by `LParen`. **Newlines inside `( )` are whitespace**, so the common multi-line form parses as one literal; breaking on the newline used to close the array early and read the next element as a command. An assignment-shaped element (`arr=(k=v other)`) is an ordinary element. Any other token before the `)` (`arr=(a ; b)`, end of input) throws.
 
 **Declaration builtins** (`export`, `local`, `declare`, `typeset`, `readonly`) share
 `ParseDeclarationPairs`, which consumes an interleaved run of `NAME=VAL`, `NAME=(array)`,
@@ -168,6 +185,10 @@ and bare `NAME` operands:
   rewinds to the general command path. `export PATH \`envsubst -v "$1"\`` exports names
   computed at runtime — un-modelable statically — and taking the raw token as a name
   emitted unparseable PowerShell, poisoning the whole file;
+- redirects among the operands (`export PATH 2>/dev/null`, `local x=1 >/dev/null`)
+  are consumed and dropped. A successful declaration writes nothing, and a value's
+  command substitution is expanded before redirections, so its stderr is not covered
+  (oracle-checked). Known gap: bash still creates/truncates a `> file` target;
 - `declare` / `typeset` / `readonly` only route here when a `NAME=(` initializer is
   actually present; every other form stays on the emitter's `TryEmitDeclare` attribute
   path (`-i`, `-A`, `-p`).
@@ -222,7 +243,10 @@ parens_function  -> WORD '(' ')' TERM brace_group
 brace_group      -> '{' body '}'
 ```
 
-Both forms produce `Command.ShFunction`.
+Both forms produce `Command.ShFunction`. The body may be any compound command. A
+redirect after a `{ … }` body (`f() { …; } >/dev/null`) belongs to the definition and
+applies on every call; the body then becomes a `Command.BraceGroup` carrying those
+redirects (other compound bodies consume their own trailing redirects).
 
 ### 3.9 Subshell and Brace Group
 
