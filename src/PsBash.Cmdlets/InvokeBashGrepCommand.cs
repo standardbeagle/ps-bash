@@ -129,6 +129,13 @@ public sealed class InvokeBashGrepCommand : PSCmdlet
     private readonly List<PSObject> _pipeline = new();
 
     /// <summary>
+    /// An input operand could not be read (missing / unreadable). GNU grep then exits 2
+    /// whatever else matched — even under <c>-s</c> — except <c>-q</c> with a selected
+    /// line (0). Sticky, because the final match-count status would otherwise overwrite it.
+    /// </summary>
+    private bool _operandReadError;
+
+    /// <summary>
     /// GNU grep options that are valid but not (yet) implemented by ps-bash.
     /// Hitting one yields a specific "recognized but not supported" message
     /// (via <see cref="FileSystemHelpers.WriteOptionError"/>) instead of the
@@ -961,6 +968,7 @@ public sealed class InvokeBashGrepCommand : PSCmdlet
                         string normalized = raw.Replace('\\', '/');
                         FileSystemHelpers.WriteBashError(this, $"grep: {normalized}: No such file or directory");
                     }
+                    _operandReadError = true;
                     FileSystemHelpers.SetLastExitCode(this, 2);
                 }
             }
@@ -1089,11 +1097,11 @@ public sealed class InvokeBashGrepCommand : PSCmdlet
 
         if (quietMode)
         {
-            FileSystemHelpers.SetLastExitCode(this, 1);
+            FileSystemHelpers.SetLastExitCode(this, _operandReadError ? 2 : 1);
             return;
         }
 
-        FileSystemHelpers.SetLastExitCode(this, totalMatchCount == 0 ? 1 : 0);
+        FileSystemHelpers.SetLastExitCode(this, _operandReadError ? 2 : totalMatchCount == 0 ? 1 : 0);
 
         if (filesOnly)
         {
@@ -1301,6 +1309,7 @@ public sealed class InvokeBashGrepCommand : PSCmdlet
         string msg = notFound ? "No such file or directory" : ex.Message;
         string normalized = path.Replace('\\', '/');
         FileSystemHelpers.WriteBashError(this, $"grep: {normalized}: {msg}");
+        _operandReadError = true;
         FileSystemHelpers.SetLastExitCode(this, 2);
     }
 }

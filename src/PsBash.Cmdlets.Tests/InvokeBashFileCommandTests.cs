@@ -233,7 +233,7 @@ public class InvokeBashFileCommandTests : IDisposable, IClassFixture<SharedPwshF
         // It must not be silently ignored or treated as a filename.
         var f = Path.Combine(_tmpDir, "kgsrc.txt");
         File.WriteAllText(f, "hello\n");
-        var (_, errs) = RunWithErrors($"Invoke-BashFile --keep-going '{Esc(f)}' 2>$null");
+        var (_, errs) = RunWithErrors($"Invoke-BashFile --keep-going '{Esc(f)}'");
         Assert.Contains(errs, m => m.Contains("not supported", StringComparison.OrdinalIgnoreCase));
     }
 
@@ -242,7 +242,7 @@ public class InvokeBashFileCommandTests : IDisposable, IClassFixture<SharedPwshF
     {
         var f = Path.Combine(_tmpDir, "unrecsrc.txt");
         File.WriteAllText(f, "hello\n");
-        var (_, errs) = RunWithErrors($"Invoke-BashFile --bogus '{Esc(f)}' 2>$null");
+        var (_, errs) = RunWithErrors($"Invoke-BashFile --bogus '{Esc(f)}'");
         Assert.Contains(errs, m =>
             m.Contains("unrecognized option", StringComparison.OrdinalIgnoreCase)
             && m.Contains("--bogus", StringComparison.Ordinal));

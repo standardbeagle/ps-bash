@@ -314,7 +314,7 @@ public class InvokeBashStatCommandTests : IDisposable, IClassFixture<SharedPwshF
         // It must not be treated as a filename — the classifier catches it and
         // emits "recognized but not supported", exit 2.
         var f = Mk("derefsrc.txt", "x");
-        var (_, errs) = RunWithErrors($"Invoke-BashStat --dereference '{Esc(f)}' 2>$null");
+        var (_, errs) = RunWithErrors($"Invoke-BashStat --dereference '{Esc(f)}'");
         Assert.Contains(errs, m => m.Contains("not supported", StringComparison.OrdinalIgnoreCase));
     }
 
@@ -324,7 +324,7 @@ public class InvokeBashStatCommandTests : IDisposable, IClassFixture<SharedPwshF
         // A completely unknown flag gets the "unrecognized option" message and
         // must include the token in the error so the caller knows what to fix.
         var f = Mk("unrecsrc.txt", "x");
-        var (_, errs) = RunWithErrors($"Invoke-BashStat --bogus '{Esc(f)}' 2>$null");
+        var (_, errs) = RunWithErrors($"Invoke-BashStat --bogus '{Esc(f)}'");
         Assert.Contains(errs, m =>
             m.Contains("unrecognized option", StringComparison.OrdinalIgnoreCase)
             && m.Contains("--bogus", StringComparison.Ordinal));

@@ -67,4 +67,16 @@ public class SdkWorkerCmdletErrorTests : IAsyncLifetime
             new[] { $"E:cat: {missing}: No such file or directory", "O:after" },
             r.Order);
     }
+
+    [Fact]
+    public async Task CmdletError_MergedIntoStdout_RendersAsOneTextLine()
+    {
+        // bash: `cat nz 2>&1 | grep nz` prints the diagnostic line. The merged
+        // ErrorRecord used to reach the table formatter (PSMessageDetails ... header).
+        var missing = MissingPath();
+
+        var r = await RunAsync($"Invoke-BashCat '{missing}' 2>&1 | Invoke-BashGrep missing");
+
+        Assert.Equal(new[] { $"O:cat: {missing}: No such file or directory" }, r.Order);
+    }
 }

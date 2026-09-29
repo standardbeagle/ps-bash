@@ -328,7 +328,7 @@ public class InvokeBashGzipCommandTests : IDisposable, IClassFixture<SharedPwshF
         RunLines($"Invoke-BashGzip '{PsQuote(file)}'");
         Assert.True(File.Exists(file + ".gz"));
 
-        var (_, errs) = RunWithErrors($"Invoke-BashGzip '{PsQuote(file + ".gz")}' 2>$null");
+        var (_, errs) = RunWithErrors($"Invoke-BashGzip '{PsQuote(file + ".gz")}'");
         Assert.False(File.Exists(file + ".gz.gz"), "must not double-compress");
         Assert.True(File.Exists(file + ".gz"), "must not delete the already-compressed file");
         Assert.Contains(errs, m => m.Contains("already has", StringComparison.OrdinalIgnoreCase));
@@ -378,7 +378,7 @@ public class InvokeBashGzipCommandTests : IDisposable, IClassFixture<SharedPwshF
         // (must NOT error). The compress still happens.
         string file = Path.Combine(_tmpDir, "n.txt");
         File.WriteAllText(file, "x");
-        var (_, errs) = RunWithErrors($"Invoke-BashGzip -n '{PsQuote(file)}' 2>$null");
+        var (_, errs) = RunWithErrors($"Invoke-BashGzip -n '{PsQuote(file)}'");
         Assert.Empty(errs);
         Assert.True(File.Exists(file + ".gz"));
     }
@@ -388,7 +388,7 @@ public class InvokeBashGzipCommandTests : IDisposable, IClassFixture<SharedPwshF
     [Fact]
     public void Gzip_UnrecognizedLongOption_BashParityMessage()
     {
-        var (_, errs) = RunWithErrors("Invoke-BashGzip --bogus 2>$null");
+        var (_, errs) = RunWithErrors("Invoke-BashGzip --bogus");
         Assert.Contains(errs, m =>
             m.Contains("unrecognized option", StringComparison.OrdinalIgnoreCase)
             && m.Contains("--bogus", StringComparison.Ordinal));
@@ -398,7 +398,7 @@ public class InvokeBashGzipCommandTests : IDisposable, IClassFixture<SharedPwshF
     public void Gzip_UnrecognizedShortOption_BashParityMessage()
     {
         // A bundled unknown short char is rejected with "invalid option -- 'X'".
-        var (_, errs) = RunWithErrors("Invoke-BashGzip -dQ 2>$null");
+        var (_, errs) = RunWithErrors("Invoke-BashGzip -dQ");
         Assert.Contains(errs, m =>
             m.Contains("invalid option", StringComparison.OrdinalIgnoreCase)
             && m.Contains("Q", StringComparison.Ordinal));

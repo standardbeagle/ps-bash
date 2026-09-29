@@ -529,6 +529,33 @@ public sealed class SdkWorker : IWorker, ICompletionWorker
             }
         };
 
+        // Error records stream INLINE, like stdout — not after the run. A cmdlet
+        // diagnostic (FileSystemHelpers.WriteBashError) is an ErrorRecord only, so
+        // PowerShell redirection decides its fate: `2>$null` discards it before it
+        // reaches this collection, `2>&1` merges it into output. Delivering here
+        // (under outputLock, flushing pending formatter output first) keeps it in
+        // order with the stdout around it; deliverError flushes the batcher.
+        var errorStream = _ps.Streams.Error;
+        int deliveredErrorCount = 0;
+        void DrainErrorStreamCore()
+        {
+            while (deliveredErrorCount < errorStream.Count)
+            {
+                var record = errorStream[deliveredErrorCount];
+                deliveredErrorCount++;
+                FlushFormatBufferCore();
+                deliverError(record.ToString());
+            }
+        }
+        EventHandler<System.Management.Automation.DataAddedEventArgs> onErrorAdded = (_, _) =>
+        {
+            lock (outputLock)
+            {
+                DrainErrorStreamCore();
+            }
+        };
+        errorStream.DataAdded += onErrorAdded;
+
         try
         {
             try
@@ -565,6 +592,8 @@ public sealed class SdkWorker : IWorker, ICompletionWorker
             {
                 DrainOutputCollectionCore(outputCollection);
                 FlushFormatBufferCore();
+                // Same lag guard for records the DataAdded handler has not seen.
+                DrainErrorStreamCore();
             }
 
             // Map PowerShell terminating errors that mirror bash exit codes:
@@ -579,14 +608,11 @@ public sealed class SdkWorker : IWorker, ICompletionWorker
             //      CommandNotFoundException, so a script that throws then
             //      recovers + writes a different error still returns the
             //      script's chosen exit code (or 0).
-            // We still write every error to Console.Error so diagnostics
-            // surface even when the script exits 0.
+            // Every error record has already been delivered inline (see
+            // DrainErrorStreamCore), so diagnostics surface even when the
+            // script exits 0.
             bool sawCommandNotFoundAsLastError = false;
-            var errors = _ps.Streams.Error;
-            for (int i = 0; i < errors.Count; i++)
-            {
-                deliverError(errors[i].ToString());
-            }
+            var errors = errorStream;
             if (_ps.HadErrors && errors.Count > 0)
             {
                 var last = errors[errors.Count - 1];
@@ -637,6 +663,10 @@ public sealed class SdkWorker : IWorker, ICompletionWorker
             // return path including the exceptional ones.
             batcher?.Dispose();
 
+            // _ps (and its Streams.Error) is reused by the next invocation, which
+            // subscribes its own handler — drop this run's.
+            errorStream.DataAdded -= onErrorAdded;
+
             // Detach the forwarders so a stray Out-Default / WriteErrorLine call
             // from another worker invocation can't leak into a previous caller's
             // output sink.
@@ -658,6 +688,8 @@ public sealed class SdkWorker : IWorker, ICompletionWorker
             return noTrailingNewline ? text : text + Environment.NewLine;
         }
 
+        if (item.BaseObject is System.Management.Automation.ErrorRecord record)
+            return record.ToString() + Environment.NewLine;
         return item.BaseObject is string s ? s + Environment.NewLine : item.ToString() + Environment.NewLine;
     }
 
@@ -673,6 +705,9 @@ public sealed class SdkWorker : IWorker, ICompletionWorker
     {
         if (item is null) return true;
         if (item.BaseObject is string) return true;
+        // A diagnostic merged into stdout (`cmd 2>&1`) is one line of text, as in
+        // bash — not an object for the table formatter.
+        if (item.BaseObject is System.Management.Automation.ErrorRecord) return true;
         if (item.Properties["BashText"] is not null) return true;
         return false;
     }

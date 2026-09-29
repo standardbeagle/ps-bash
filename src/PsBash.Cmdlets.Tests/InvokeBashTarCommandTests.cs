@@ -452,7 +452,7 @@ public class InvokeBashTarCommandTests : IDisposable, IClassFixture<SharedPwshFi
         // "recognized but not supported" rather than treating it as a filename.
         // (Short -j is silently consumed by the bundle handler — only long form reachable here.)
         string arc = Path.Combine(_tmpDir, "dummy.tar");
-        var (_, errs) = RunWithErrors($"Invoke-BashTar -xf '{PsQuote(arc)}' --bzip2 2>$null");
+        var (_, errs) = RunWithErrors($"Invoke-BashTar -xf '{PsQuote(arc)}' --bzip2");
         Assert.Contains(errs, m => m.Contains("not supported", StringComparison.OrdinalIgnoreCase));
     }
 
@@ -460,7 +460,7 @@ public class InvokeBashTarCommandTests : IDisposable, IClassFixture<SharedPwshFi
     public void Tar_UnrecognizedLongOption_BashParityMessage()
     {
         string arc = Path.Combine(_tmpDir, "dummy2.tar");
-        var (_, errs) = RunWithErrors($"Invoke-BashTar -xf '{PsQuote(arc)}' --bogus 2>$null");
+        var (_, errs) = RunWithErrors($"Invoke-BashTar -xf '{PsQuote(arc)}' --bogus");
         Assert.Contains(errs, m =>
             m.Contains("unrecognized option", StringComparison.OrdinalIgnoreCase)
             && m.Contains("--bogus", StringComparison.Ordinal));
@@ -475,7 +475,7 @@ public class InvokeBashTarCommandTests : IDisposable, IClassFixture<SharedPwshFi
         File.WriteAllText(src, "x");
         string arc = Path.Combine(_tmpDir, "z.tar.bz2");
         var (_, errs) = RunWithErrors(
-            $"Invoke-BashTar -cjf '{PsQuote(arc)}' '{PsQuote(src)}' 2>$null");
+            $"Invoke-BashTar -cjf '{PsQuote(arc)}' '{PsQuote(src)}'");
         Assert.Contains(errs, m => m.Contains("not supported", StringComparison.OrdinalIgnoreCase));
         Assert.False(File.Exists(arc), "no archive should be written when the codec is unsupported");
     }
@@ -511,7 +511,7 @@ public class InvokeBashTarCommandTests : IDisposable, IClassFixture<SharedPwshFi
         File.WriteAllText(Path.Combine(dest, "keep.txt"), "preexisting");
 
         var (_, errs) = RunWithErrors(
-            $"Invoke-BashTar -xkf '{PsQuote(arc)}' --directory='{PsQuote(dest)}' 2>$null");
+            $"Invoke-BashTar -xkf '{PsQuote(arc)}' --directory='{PsQuote(dest)}'");
         Assert.Equal("preexisting", File.ReadAllText(Path.Combine(dest, "keep.txt")));
         Assert.Contains(errs, m => m.Contains("File exists", StringComparison.OrdinalIgnoreCase));
     }

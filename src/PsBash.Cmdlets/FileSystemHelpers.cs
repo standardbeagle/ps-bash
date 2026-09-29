@@ -61,8 +61,8 @@ internal static class FileSystemHelpers
     /// <summary>
     /// Emit a bash-style error to the cmdlet's error stream so that callers
     /// using <c>2&gt;$null</c> can suppress it, <c>2&gt;&amp;1</c> can merge
-    /// it into the pipeline, and bash-mode production code prints to host
-    /// stderr. Sets <c>$global:LASTEXITCODE = 1</c>.
+    /// it into the pipeline, and the ps-bash host (SdkWorker) prints it to
+    /// stderr inline, exactly once. Sets <c>$global:LASTEXITCODE = 1</c>.
     /// <para>
     /// Pester sets <c>$ErrorActionPreference = Stop</c> inside <c>It</c>
     /// blocks. The PowerShell runtime translates a non-terminating
@@ -123,13 +123,13 @@ internal static class FileSystemHelpers
             }
         }
 
-        // Bash-mode formatting for the production host launcher path.
-        try
-        {
-            cmdlet.InvokeCommand.InvokeScript(
-                "param($m) Write-BashError -Message $m", message);
-        }
-        catch { /* benign — already emitted via WriteError */ }
+        // The ErrorRecord above is the ONLY channel. Do not also call the psm1
+        // Write-BashError here: in Bash error mode it writes through
+        // $Host.UI.WriteErrorLine, which PowerShell redirection cannot see — so
+        // `cat missing 2>/dev/null` still printed, and an unredirected error
+        // printed twice (host line inline + the record SdkWorker delivers).
+        // The host renders the record itself, inline (SdkWorker streams
+        // Streams.Error as records arrive).
     }
 
     /// <summary>
