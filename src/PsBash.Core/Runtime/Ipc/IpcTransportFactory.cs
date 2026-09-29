@@ -147,7 +147,9 @@ public static class IpcTransportFactory
     /// </summary>
     /// <remarks>
     /// On POSIX the endpoint is a socket file inside the per-user
-    /// <see cref="PsBashRuntimeDirectory"/> (0700); on pre-1803 Windows it is a
+    /// <see cref="PsBashRuntimeDirectory"/> (0700); on pre-1803 Windows, or when
+    /// the socket path would not fit the sun_path budget with at least
+    /// <see cref="MinInvocationSuffixHexChars"/> random hex chars, it is a
     /// named pipe. Either way the launcher owns the host process and unlinks
     /// the socket artifact when it disposes.
     /// </remarks>
