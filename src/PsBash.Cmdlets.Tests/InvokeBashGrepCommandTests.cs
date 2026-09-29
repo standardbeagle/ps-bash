@@ -511,6 +511,30 @@ public class InvokeBashGrepCommandTests : IDisposable, IClassFixture<SharedPwshF
         Assert.Empty(result);
     }
 
+    // Oracle (wsl bash, GNU grep): an unreadable operand makes the status 2 even when
+    // another operand matched or -s hid the message; only -q with a selected line is 0.
+    [Theory]
+    [InlineData("x {missing}", 2)]
+    [InlineData("x {missing} {hit}", 2)]
+    [InlineData("y {missing} {hit}", 2)]
+    [InlineData("-s x {missing}", 2)]
+    [InlineData("-q x {missing} {hit}", 0)]
+    public void Grep_FileMode_MissingOperand_ExitStatusMatchesGnu(string args, int expected)
+    {
+        var hit = Path.Combine(_tmpDir, "hit.txt");
+        File.WriteAllText(hit, "x\n");
+        var missing = Path.Combine(_tmpDir, "nope.txt");
+        var argv = args.Replace("{missing}", $"'{Q(missing)}'").Replace("{hit}", $"'{Q(hit)}'");
+
+        var pwsh = _fixture.AcquireFresh();
+        pwsh.AddScript("$ErrorActionPreference='Continue'").Invoke();
+        pwsh.Commands.Clear();
+        var result = pwsh.AddScript($"Invoke-BashGrep {argv} 2>$null | Out-Null; $global:LASTEXITCODE").Invoke();
+        pwsh.Commands.Clear();
+
+        Assert.Equal(expected, Convert.ToInt32(result.Last().BaseObject));
+    }
+
     [Fact]
     public void Grep_HelpFlag_EmitsUsage()
     {
