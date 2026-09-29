@@ -5544,6 +5544,29 @@ public class PsEmitterTests
         Assert.Contains("| ForEach-Object { Get-BashText $_ } | od -c", result);
     }
 
+    [Fact]
+    public void Transpile_FunctionBodyWithTrailingRedirect_AppliesRedirectInsideFunction()
+    {
+        // bash applies `f() { …; } >/dev/null` on every CALL, so the redirect belongs
+        // inside the emitted function, and the statement after the definition survives.
+        var result = PsEmitter.Transpile("f() { echo in; } >/dev/null; echo after")!;
+
+        var fnStart = result.IndexOf("function f {", StringComparison.Ordinal);
+        Assert.True(fnStart >= 0, result);
+        var nullAt = result.IndexOf("$null", fnStart, StringComparison.Ordinal);
+        var afterAt = result.IndexOf("after", StringComparison.Ordinal);
+        Assert.True(nullAt > fnStart && nullAt < afterAt, result);
+    }
+
+    [Fact]
+    public void Transpile_ExportWithStderrRedirect_KeepsAssignmentAndTail()
+    {
+        var result = PsEmitter.Transpile("export A=1 2>/dev/null; echo after")!;
+
+        Assert.Contains("$env:A", result);
+        Assert.Contains("after", result);
+    }
+
     private static Command.Simple MakeSimple(params string[] words) =>
         new(words.Select(MakeWord).ToImmutableArray(), ImmutableArray<EnvPair>.Empty, ImmutableArray<Redirect>.Empty);
 

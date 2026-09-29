@@ -2424,13 +2424,12 @@ public class BashParserTests
     // early stop (`after` was lost, exit 0). The parser must now reject the leftover
     // token with a located ParseException instead of returning a truncated script.
 
+    // Unsupported grammar (the `time`/`coproc` keywords, extglob `!(…)`) must fail
+    // LOUDLY. The four other original repros are valid bash and are fixed at their
+    // root instead — see the *_ParsesWholeScript tests below.
     [Theory]
     [InlineData("echo a; time { echo hi; }; echo after")]
-    [InlineData("f() { echo in; } >/dev/null; echo after")]
-    [InlineData("echo hi }; echo after")]
     [InlineData("rm -f !(keep).txt; echo after")]
-    [InlineData("arr=(k=v other); echo after")]
-    [InlineData("export PATH 2>/dev/null; echo after")]
     [InlineData("coproc { echo x; }; echo after")]
     public void Parse_LeftoverTokenAfterStatement_ThrowsInsteadOfDroppingTail(string input)
     {
@@ -2439,11 +2438,7 @@ public class BashParserTests
 
     [Theory]
     [InlineData("echo a; time { echo hi; }; echo after")]
-    [InlineData("f() { echo in; } >/dev/null; echo after")]
-    [InlineData("echo hi }; echo after")]
     [InlineData("rm -f !(keep).txt; echo after")]
-    [InlineData("arr=(k=v other); echo after")]
-    [InlineData("export PATH 2>/dev/null; echo after")]
     [InlineData("coproc { echo x; }; echo after")]
     public void ParseTopLevelWithPositions_LeftoverTokenAfterStatement_ThrowsInsteadOfDroppingTail(string input)
     {
@@ -2455,10 +2450,105 @@ public class BashParserTests
     [Fact]
     public void Parse_LeftoverTokenError_NamesTokenAndPosition()
     {
-        var ex = Assert.Throws<ParseException>(() => Parse("echo hi }; echo after"));
+        var ex = Assert.Throws<ParseException>(() => Parse("echo a\nrm -f !(keep).txt; echo after"));
 
-        Assert.Contains("}", ex.Message);
-        Assert.Equal(1, ex.Line);
+        Assert.Contains("(", ex.Message);
+        Assert.Equal(2, ex.Line);
+    }
+
+    // A leftover token inside a NESTED statement list (compound bodies) used to be
+    // re-read as the start of a new command with no separator: `!(keep).txt` became
+    // `rm -f !`, a subshell `(keep)`, and a command `.txt`. Every body loop must
+    // apply the same rule as the top level — after a statement only `;`/newline,
+    // `&`, end of input, or that body's own closing token may follow.
+    [Theory]
+    [InlineData("{ rm -f !(keep).txt; }")]
+    [InlineData("( rm -f !(keep).txt )")]
+    [InlineData("if true; then rm -f !(keep).txt; fi")]
+    [InlineData("if true; then :; else rm -f !(keep).txt; fi")]
+    [InlineData("while true; do rm -f !(keep).txt; done")]
+    [InlineData("for x in a; do rm -f !(keep).txt; done")]
+    [InlineData("case a in a) rm -f !(keep).txt ;; esac")]
+    [InlineData("f() { rm -f !(keep).txt; }")]
+    [InlineData("if true; then time { echo hi; }; fi")]
+    public void Parse_LeftoverTokenInNestedBody_Throws(string input)
+    {
+        Assert.Throws<ParseException>(() => Parse(input));
+        Assert.Throws<ParseException>(() => BashParser.ParseTopLevelWithPositions(input));
+    }
+
+    // Valid bash that the first cut of the guard wrongly rejected. Each must parse
+    // the WHOLE script (the trailing `echo after` survives). Oracle-checked against
+    // bash 5.2.
+    [Theory]
+    [InlineData("f() { echo in; } >/dev/null; echo after")]
+    [InlineData("function f { echo in; } 2>&1 >log; echo after")]
+    [InlineData("export PATH 2>/dev/null; echo after")]
+    [InlineData("export A=1 2>/dev/null B=2; echo after")]
+    [InlineData("f() { local z=5 2>/dev/null; }; echo after")]
+    [InlineData("arr=(k=v other); echo after")]
+    [InlineData("echo hi }; echo after")]
+    [InlineData("if true; then k() { echo in; } >/dev/null; fi; echo after")]
+    [InlineData("for i in 1; do export W=2 2>/dev/null; done; echo after")]
+    [InlineData("if true; then (echo a) fi; echo after")]
+    [InlineData("while false; do { echo a; } done; echo after")]
+    [InlineData("{ true & }; echo after")]
+    [InlineData("if true; then sleep 1 & fi; echo after")]
+    [InlineData("(sleep 1 & echo x); echo after")]
+    [InlineData("case a in a) sleep 1 & ;; esac; echo after")]
+    public void Parse_ValidTrailingForms_ParsesWholeScript(string input)
+    {
+        var list = Assert.IsType<Command.CommandList>(Parse(input));
+        var last = Assert.IsType<Command.Simple>(list.Commands[^1]);
+        Assert.Equal(["echo", "after"], GetWordValues(last));
+
+        var top = BashParser.ParseTopLevelWithPositions(input);
+        Assert.Equal(list.Commands.Length, top.Count);
+    }
+
+    [Fact]
+    public void Parse_FunctionBodyTrailingRedirect_AttachesToBody()
+    {
+        // bash applies a redirect written after a function body on EVERY call:
+        // `f() { echo in; } >/dev/null; f` prints nothing.
+        var list = Assert.IsType<Command.CommandList>(Parse("f() { echo in; } >/dev/null; f"));
+        var func = Assert.IsType<Command.ShFunction>(list.Commands[0]);
+        var group = Assert.IsType<Command.BraceGroup>(func.Body);
+        var redirect = Assert.Single(group.Redirects);
+        Assert.Equal(">", redirect.Op);
+        Assert.Equal(1, redirect.Fd);
+    }
+
+    [Fact]
+    public void Parse_ExportWithRedirect_KeepsAssignment()
+    {
+        var list = Assert.IsType<Command.CommandList>(Parse("export A=1 2>/dev/null B=2; echo after"));
+        var assign = Assert.IsType<Command.ShAssignment>(list.Commands[0]);
+        Assert.Equal(["A", "B"], assign.Pairs.Select(p => p.Name).ToArray());
+    }
+
+    [Fact]
+    public void Parse_ArrayLiteralWithAssignmentLikeElement_KeepsElement()
+    {
+        // bash: `arr=(k=v other)` has the two elements "k=v" and "other".
+        var list = Assert.IsType<Command.CommandList>(Parse("arr=(k=v other); echo after"));
+        var assign = Assert.IsType<Command.ShAssignment>(list.Commands[0]);
+        var array = Assert.IsType<ArrayWord>(Assert.Single(assign.Pairs).ArrayValue);
+        Assert.Equal(2, array.Elements.Length);
+    }
+
+    [Fact]
+    public void Parse_CloseBraceAfterCommandWord_IsLiteralArgument()
+    {
+        // bash: `echo hi }` prints "hi }" — `}` is reserved only in command position.
+        var list = Assert.IsType<Command.CommandList>(Parse("echo hi }; echo after"));
+        Assert.Equal(["echo", "hi", "}"], GetWordValues(Assert.IsType<Command.Simple>(list.Commands[0])));
+    }
+
+    [Fact]
+    public void Parse_UnclosedArrayLiteral_Throws()
+    {
+        Assert.Throws<ParseException>(() => Parse("arr=(a ; b); echo after"));
     }
 
     [Fact]
