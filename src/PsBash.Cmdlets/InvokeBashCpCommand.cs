@@ -18,8 +18,11 @@ namespace PsBash.Cmdlets;
 /// error and $LASTEXITCODE=1.</item>
 /// <item>Destination is an existing directory → copy each source as a child
 /// of the dest dir (preserving the source's basename).</item>
-/// <item>With <c>-n</c>, skip if target already exists. With <c>-f</c>, an
-/// existing target directory is removed before recursive copy.</item>
+/// <item>With <c>-n</c>, skip a target FILE that already exists (a directory
+/// source is still traversed, skipping only conflicting files). Recursive copy
+/// MERGES into an existing target directory — nothing there is ever deleted;
+/// <c>-f</c> only clears the read-only bit of a file it is about to replace.
+/// Pre-mutation checks live in <see cref="TransferValidation"/>.</item>
 /// <item>Verbose mode emits <c>'src' -> 'dest'\n</c> per copy.</item>
 /// </list>
 /// <para>
@@ -183,6 +186,15 @@ public sealed class InvokeBashCpCommand : PSCmdlet
         var destAbs = SessionState.Path.GetUnresolvedProviderPathFromPSPath(destRaw);
         bool destIsExistingDir = Directory.Exists(destAbs);
 
+        // Validate the operand shape BEFORE any write: several sources need an existing
+        // directory (`cp a b result` used to leave only b's bytes in a file named result).
+        var shapeError = TransferValidation.CheckOperandShape("cp", sources.Count, destRaw, destAbs);
+        if (shapeError != null)
+        {
+            FileSystemHelpers.WriteBashError(this, shapeError);
+            return;
+        }
+
         foreach (var src in sources)
         {
             bool srcIsFile = File.Exists(src);
@@ -204,13 +216,29 @@ public sealed class InvokeBashCpCommand : PSCmdlet
                 continue;
             }
 
-            string targetPath = destAbs;
-            if (destIsExistingDir)
+            var targetPath = TransferValidation.ResolveTarget(src, destAbs, destIsExistingDir);
+
+            var identityError = TransferValidation.CheckIdentity("cp", src, srcIsDir, targetPath);
+            if (identityError != null)
             {
-                targetPath = Path.Combine(destAbs, Path.GetFileName(src.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar)));
+                FileSystemHelpers.WriteBashError(this, identityError);
+                hadError = true;
+                continue;
             }
 
-            if (noClobber && (File.Exists(targetPath) || Directory.Exists(targetPath)))
+            // Type conflicts (dir over file / file over dir) are errors; an existing target
+            // DIRECTORY is not — cp merges into it (replaceEmptyDirOnly: false).
+            var occupancyError = TransferValidation.CheckOccupancy("cp", src, srcIsDir, targetPath, replaceEmptyDirOnly: false);
+            if (occupancyError != null)
+            {
+                FileSystemHelpers.WriteBashError(this, occupancyError);
+                hadError = true;
+                continue;
+            }
+
+            // -n skips a conflicting FILE. A directory source is traversed regardless: only the
+            // individual files that already exist are skipped (handled per file below).
+            if (noClobber && !srcIsDir && File.Exists(targetPath))
             {
                 continue;
             }
@@ -219,13 +247,15 @@ public sealed class InvokeBashCpCommand : PSCmdlet
             {
                 if (srcIsDir)
                 {
-                    if (Directory.Exists(targetPath) && force)
+                    // Merge: never delete the existing target tree. Same-named files are replaced
+                    // (unless -n), destination-only files survive.
+                    var errors = new List<string>();
+                    CopyDirectoryRecursive(src, targetPath, preserve, update, noClobber, force, errors);
+                    if (errors.Count > 0)
                     {
-                        // Read-only-aware force delete (Windows .git packs / node_modules)
-                        // — was a plain Directory.Delete that threw on read-only descendants.
-                        FileSystemHelpers.DeleteDirectoryForce(targetPath);
+                        foreach (var e in errors) FileSystemHelpers.WriteBashError(this, e);
+                        hadError = true;
                     }
-                    CopyDirectoryRecursive(src, targetPath, preserve, update);
                 }
                 else
                 {
@@ -240,6 +270,7 @@ public sealed class InvokeBashCpCommand : PSCmdlet
                     {
                         Directory.CreateDirectory(parent);
                     }
+                    if (force) FileSystemHelpers.ClearReadOnly(targetPath);
                     File.Copy(src, targetPath, overwrite: true);
                     if (preserve) PreserveMetadata(src, targetPath, isDir: false);
                 }
@@ -274,16 +305,26 @@ public sealed class InvokeBashCpCommand : PSCmdlet
         return true;
     }
 
-    private static void CopyDirectoryRecursive(string src, string dest, bool preserve, bool update)
+    /// <summary>
+    /// Merge-copies <paramref name="src"/> into <paramref name="dest"/> (created if absent). Existing
+    /// destination entries are never deleted: a same-named file is overwritten (skipped under
+    /// <paramref name="noClobber"/> / <paramref name="update"/>), a same-named directory is descended
+    /// into, and a file/dir type clash is appended to <paramref name="errors"/> and skipped.
+    /// </summary>
+    private static void CopyDirectoryRecursive(string src, string dest, bool preserve, bool update,
+        bool noClobber, bool force, List<string> errors)
     {
         Directory.CreateDirectory(dest);
         foreach (var file in Directory.EnumerateFiles(src))
         {
             var target = Path.Combine(dest, Path.GetFileName(file));
-            if (update && File.Exists(target)
-                && File.GetLastWriteTimeUtc(file) <= File.GetLastWriteTimeUtc(target))
+            var clash = TransferValidation.CheckOccupancy("cp", file, srcIsDir: false, target, replaceEmptyDirOnly: false);
+            if (clash != null) { errors.Add(clash); continue; }
+            if (File.Exists(target))
             {
-                continue;
+                if (noClobber) continue;
+                if (update && File.GetLastWriteTimeUtc(file) <= File.GetLastWriteTimeUtc(target)) continue;
+                if (force) FileSystemHelpers.ClearReadOnly(target);
             }
             File.Copy(file, target, overwrite: true);
             if (preserve) PreserveMetadata(file, target, isDir: false);
@@ -299,7 +340,9 @@ public sealed class InvokeBashCpCommand : PSCmdlet
                 FileSystemHelpers.TryCopyDirectoryLink(sub, subDest);
                 continue;
             }
-            CopyDirectoryRecursive(sub, subDest, preserve, update);
+            var subClash = TransferValidation.CheckOccupancy("cp", sub, srcIsDir: true, subDest, replaceEmptyDirOnly: false);
+            if (subClash != null) { errors.Add(subClash); continue; }
+            CopyDirectoryRecursive(sub, subDest, preserve, update, noClobber, force, errors);
         }
         // Apply directory timestamps LAST — writing children bumps the dir mtime,
         // so GNU cp -p restores it after the contents are in place.

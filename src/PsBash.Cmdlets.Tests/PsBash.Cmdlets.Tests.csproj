@@ -15,16 +15,12 @@
     <IsTestProject>true</IsTestProject>
     <EnableExperimentalBashEval Condition="'$(EnableExperimentalBashEval)' == ''">false</EnableExperimentalBashEval>
 
-    <!-- Mirror PsBash.Cmdlets: build the Format-Styled tests only when the Strata
-         local feed is present (auto) or -p:UseStrata=true. CI lacks the feed, so
-         the cmdlet is not built there and its tests would fail at runtime. -->
-    <StrataLocalFeed Condition="'$(StrataLocalFeed)' == ''">$([System.IO.Path]::GetFullPath('$(MSBuildThisFileDirectory)..\..\..\strata\local-feed'))</StrataLocalFeed>
-    <UseStrata Condition="'$(UseStrata)' == '' and Exists('$(StrataLocalFeed)')">true</UseStrata>
-    <UseStrata Condition="'$(UseStrata)' == ''">false</UseStrata>
-    <!-- This project pulls Strata.* transitively via the Cmdlets ProjectReference
-         when UseStrata=true, so it needs the feed as a restore source too. -->
-    <RestoreAdditionalProjectSources Condition="'$(UseStrata)' == 'true'">$(RestoreAdditionalProjectSources);$(StrataLocalFeed)</RestoreAdditionalProjectSources>
+    <!-- Mirror PsBash.Cmdlets: the Format-Styled tests build only when Strata resolves (see ../Strata.props).
+         This project pulls Strata.* transitively via the Cmdlets ProjectReference, so it needs the same feed
+         source and the same UseStrata decision. -->
   </PropertyGroup>
+
+  <Import Project="..\Strata.props" />
 
   <ItemGroup Condition="'$(EnableExperimentalBashEval)' != 'true'">
     <Compile Remove="InvokeBashEvalCommandTests.cs" />

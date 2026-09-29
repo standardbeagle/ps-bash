@@ -322,8 +322,11 @@ internal static class FileSystemHelpers
         {
             Directory.Delete(dir, recursive: true);
         }
-        catch (UnauthorizedAccessException)
+        catch (Exception ex) when (ex is UnauthorizedAccessException or IOException)
         {
+            // IOException too: a read-only DIRECTORY itself (not just a read-only descendant) makes
+            // the native recursive delete throw IOException on Windows. The fallback clears the bit
+            // and retries; a genuine failure resurfaces from the fallback.
             ForceDeleteDirectoryRecursive(dir);
         }
     }

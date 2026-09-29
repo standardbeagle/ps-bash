@@ -1,0 +1,78 @@
+<Project>
+  <!--
+    Shared Strata (Format-Styled) opt-in logic, imported by PsBash.Cmdlets and PsBash.Cmdlets.Tests
+    so the two can never disagree about UseStrata / StrataVersion / the feed source.
+
+    Strata is OPTIONAL. The default build must work without it (CI has no feed).
+
+    Inputs (all overridable with -p:):
+      StrataLocalFeed  the feed directory (default ../strata/local-feed beside the ps-bash checkout)
+      StrataVersion    the exact Strata.* package version. If set, discovery is skipped.
+      UseStrata        true | false. Unset = auto: ON only when a concrete version resolved.
+
+    Outputs: StrataLocalFeed, StrataVersion, UseStrata, RestoreAdditionalProjectSources.
+
+    The feed (../strata/scripts/pack-local.sh) packs UNPREFIXED Strata.* ids at a MinVer-stamped
+    *-dev version. Discovery is best-effort: it reads the Strata.Css.<version>.nupkg names and picks
+    the NEWEST BY VERSION COMPARISON (never file/ordinal order: 0.10.0 sorts before 0.9.0 as text).
+    MSBuild property functions cannot sort, so it folds VersionGreaterThan over at most
+    _StrataMaxCandidates versions; with more than that, discovery declines (pass -p:StrataVersion=X).
+  -->
+  <PropertyGroup>
+    <StrataLocalFeed Condition="'$(StrataLocalFeed)' == ''">$([System.IO.Path]::GetFullPath('$(MSBuildThisFileDirectory)..\..\strata\local-feed'))</StrataLocalFeed>
+    <_StrataMaxCandidates>8</_StrataMaxCandidates>
+  </PropertyGroup>
+
+  <!-- Discovery: only when no explicit version, Strata is not forced off, and the feed exists. -->
+  <PropertyGroup Condition="'$(StrataVersion)' == '' and '$(UseStrata)' != 'false' and Exists('$(StrataLocalFeed)')">
+    <!-- GetFiles returns String[] (rendered ';'-joined). Strip everything but the version. Entries that are
+         not Strata.Css.<digit>... keep their path and fail the shape check below, so they are ignored. -->
+    <_StrataCssFiles>$([System.IO.Directory]::GetFiles('$(StrataLocalFeed)', 'Strata.Css.*.nupkg'))</_StrataCssFiles>
+    <_StrataCssVersions>$([System.Text.RegularExpressions.Regex]::Replace('$(_StrataCssFiles)', '(^|(?&lt;=;))[^;]*Strata\.Css\.(?=\d)|\.nupkg(?=;|$)', ''))</_StrataCssVersions>
+    <_StrataCssCount>$(_StrataCssVersions.Split(';').Length)</_StrataCssCount>
+  </PropertyGroup>
+
+  <PropertyGroup Condition="'$(_StrataCssVersions)' != '' and $(_StrataCssCount) &lt;= $(_StrataMaxCandidates)">
+    <_C0>$(_StrataCssVersions.Split(';')[0])</_C0>
+    <_C1 Condition="$(_StrataCssCount) &gt; 1">$(_StrataCssVersions.Split(';')[1])</_C1>
+    <_C2 Condition="$(_StrataCssCount) &gt; 2">$(_StrataCssVersions.Split(';')[2])</_C2>
+    <_C3 Condition="$(_StrataCssCount) &gt; 3">$(_StrataCssVersions.Split(';')[3])</_C3>
+    <_C4 Condition="$(_StrataCssCount) &gt; 4">$(_StrataCssVersions.Split(';')[4])</_C4>
+    <_C5 Condition="$(_StrataCssCount) &gt; 5">$(_StrataCssVersions.Split(';')[5])</_C5>
+    <_C6 Condition="$(_StrataCssCount) &gt; 6">$(_StrataCssVersions.Split(';')[6])</_C6>
+    <_C7 Condition="$(_StrataCssCount) &gt; 7">$(_StrataCssVersions.Split(';')[7])</_C7>
+
+    <!-- Fold: keep the greater of the running best and each well-formed candidate. -->
+    <_StrataBest Condition="$([System.Text.RegularExpressions.Regex]::IsMatch('$(_C0)', '^\d+\.\d+\.\d+'))">$(_C0)</_StrataBest>
+    <_StrataBest Condition="'$(_C1)' != '' and $([System.Text.RegularExpressions.Regex]::IsMatch('$(_C1)', '^\d+\.\d+\.\d+')) and ('$(_StrataBest)' == '' or $([MSBuild]::VersionGreaterThan('$(_C1)', '$(_StrataBest)')))">$(_C1)</_StrataBest>
+    <_StrataBest Condition="'$(_C2)' != '' and $([System.Text.RegularExpressions.Regex]::IsMatch('$(_C2)', '^\d+\.\d+\.\d+')) and ('$(_StrataBest)' == '' or $([MSBuild]::VersionGreaterThan('$(_C2)', '$(_StrataBest)')))">$(_C2)</_StrataBest>
+    <_StrataBest Condition="'$(_C3)' != '' and $([System.Text.RegularExpressions.Regex]::IsMatch('$(_C3)', '^\d+\.\d+\.\d+')) and ('$(_StrataBest)' == '' or $([MSBuild]::VersionGreaterThan('$(_C3)', '$(_StrataBest)')))">$(_C3)</_StrataBest>
+    <_StrataBest Condition="'$(_C4)' != '' and $([System.Text.RegularExpressions.Regex]::IsMatch('$(_C4)', '^\d+\.\d+\.\d+')) and ('$(_StrataBest)' == '' or $([MSBuild]::VersionGreaterThan('$(_C4)', '$(_StrataBest)')))">$(_C4)</_StrataBest>
+    <_StrataBest Condition="'$(_C5)' != '' and $([System.Text.RegularExpressions.Regex]::IsMatch('$(_C5)', '^\d+\.\d+\.\d+')) and ('$(_StrataBest)' == '' or $([MSBuild]::VersionGreaterThan('$(_C5)', '$(_StrataBest)')))">$(_C5)</_StrataBest>
+    <_StrataBest Condition="'$(_C6)' != '' and $([System.Text.RegularExpressions.Regex]::IsMatch('$(_C6)', '^\d+\.\d+\.\d+')) and ('$(_StrataBest)' == '' or $([MSBuild]::VersionGreaterThan('$(_C6)', '$(_StrataBest)')))">$(_C6)</_StrataBest>
+    <_StrataBest Condition="'$(_C7)' != '' and $([System.Text.RegularExpressions.Regex]::IsMatch('$(_C7)', '^\d+\.\d+\.\d+')) and ('$(_StrataBest)' == '' or $([MSBuild]::VersionGreaterThan('$(_C7)', '$(_StrataBest)')))">$(_C7)</_StrataBest>
+
+    <StrataVersion Condition="'$(StrataVersion)' == ''">$(_StrataBest)</StrataVersion>
+  </PropertyGroup>
+
+  <!-- Auto-enable ONLY with a concrete version AND an existing feed. An explicit UseStrata wins as given
+       (true without a version is rejected by _StrataRequireVersion below, before restore). -->
+  <PropertyGroup>
+    <UseStrata Condition="'$(UseStrata)' == '' and '$(StrataVersion)' != '' and Exists('$(StrataLocalFeed)')">true</UseStrata>
+    <UseStrata Condition="'$(UseStrata)' == ''">false</UseStrata>
+    <!-- The feed is deliberately not in nuget.config: a missing local source is a hard NU1301 for CI. -->
+    <RestoreAdditionalProjectSources Condition="'$(UseStrata)' == 'true'">$(RestoreAdditionalProjectSources);$(StrataLocalFeed)</RestoreAdditionalProjectSources>
+  </PropertyGroup>
+
+  <Target Name="_StrataAutoOffNotice" BeforeTargets="Restore;_GenerateRestoreGraph;CoreCompile" Condition="'$(UseStrata)' != 'true'">
+    <Message Importance="low" Text="Strata disabled (UseStrata=$(UseStrata)): feed '$(StrataLocalFeed)' exists=$([System.IO.Directory]::Exists('$(StrataLocalFeed)')), resolved StrataVersion='$(StrataVersion)'. Format-Styled is excluded; pass -p:StrataVersion=X (and -p:StrataLocalFeed=DIR) to enable." />
+  </Target>
+
+  <!-- Explicit -p:UseStrata=true that cannot be satisfied: fail clearly BEFORE restore, not with NU1015 / NU1301. -->
+  <Target Name="_StrataRequireVersion" BeforeTargets="Restore;_GenerateRestoreGraph;CollectPackageReferences" Condition="'$(UseStrata)' == 'true'">
+    <Error Condition="'$(StrataVersion)' == ''"
+           Text="UseStrata=true but no Strata version could be resolved from feed '$(StrataLocalFeed)' (no Strata.Css.&lt;version&gt;.nupkg found, or more than $(_StrataMaxCandidates) candidates). Pass -p:StrataVersion=X (and -p:StrataLocalFeed=DIR), or drop UseStrata." />
+    <Error Condition="!Exists('$(StrataLocalFeed)')"
+           Text="UseStrata=true but the Strata local feed '$(StrataLocalFeed)' does not exist. Pass -p:StrataLocalFeed=DIR, or drop UseStrata." />
+  </Target>
+</Project>

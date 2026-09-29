@@ -1,0 +1,16 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 131
+stdout-length: 17
+stderr-length: 0
+==== SCRIPT ====
+d=$(mktemp -d) && cd "$d" && { echo 1 > m1; echo 2 > m2; mv m1 m2 nope 2>/dev/null; echo rc=$?; find . | sort; }; cd /; rm -rf "$d"
+==== STDOUT ====
+rc=1
+.
+./m1
+./m2
+
+==== STDERR ====
+

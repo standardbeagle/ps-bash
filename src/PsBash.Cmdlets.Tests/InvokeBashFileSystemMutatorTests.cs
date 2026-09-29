@@ -339,38 +339,38 @@ public class InvokeBashFileSystemMutatorTests : IDisposable, IClassFixture<Share
     }
 
     [Fact]
-    public void Cp_Recursive_OverwritesReadOnlyTarget()
+    public void Cp_Recursive_ForceMergesAndOverwritesReadOnlyTargetFile()
     {
-        // Sibling of the rm read-only fix: cp -rf into an existing dir resolves the target to
-        // dst/basename(src) and force-deletes it first when it already exists. A read-only
-        // descendant in that target threw UnauthorizedAccessException on Windows before cp routed
-        // through the shared FileSystemHelpers.DeleteDirectoryForce.
+        // GNU cp -rf MERGES into an existing dst/basename(src): same-named files are replaced (a
+        // read-only one included: -f unlinks and retries), destination-only files survive. It used
+        // to delete the whole existing subtree first (data loss).
         var src = Path.Combine(_tmpRoot, "cpsrc");
         Directory.CreateDirectory(src);
         File.WriteAllText(Path.Combine(src, "new.txt"), "new");
+        File.WriteAllText(Path.Combine(src, "locked.txt"), "fresh");
 
-        // Existing dest dir already holds a "cpsrc" subtree (same basename) with a read-only file.
         var dst = Path.Combine(_tmpRoot, "cpdst");
         var collision = Path.Combine(dst, "cpsrc");
         Directory.CreateDirectory(collision);
         var ro = Path.Combine(collision, "locked.txt");
         File.WriteAllText(ro, "old");
         File.SetAttributes(ro, File.GetAttributes(ro) | FileAttributes.ReadOnly);
+        var only = Path.Combine(collision, "dest-only.txt");
+        File.WriteAllText(only, "keep");
 
         // cp's flag parser matches exact tokens (no bundling), so pass -r -f separately.
         Run($"Invoke-BashCp -r -f {Q(src)} {Q(dst)}");
 
-        // The read-only target subtree was force-deleted and replaced by the source.
-        Assert.True(File.Exists(Path.Combine(collision, "new.txt")));
-        Assert.False(File.Exists(ro));
+        Assert.Equal("new", File.ReadAllText(Path.Combine(collision, "new.txt")));
+        Assert.Equal("fresh", File.ReadAllText(ro));
+        Assert.Equal("keep", File.ReadAllText(only));
     }
 
     [Fact]
-    public void Mv_OverwritesReadOnlyTargetDirectory()
+    public void Mv_DirOntoEmptyTargetDirectory_ReplacesIt()
     {
-        // Sibling of the rm read-only fix: mv into an existing dir resolves to dst/basename(src)
-        // and does remove-then-move when it already exists. A read-only descendant in the target
-        // threw on Windows before mv routed through FileSystemHelpers.DeleteDirectoryForce.
+        // GNU mv lets a directory replace an EMPTY directory (rename over it). A read-only
+        // attribute on the empty target must not block that (DeleteDirectoryForce).
         var src = Path.Combine(_tmpRoot, "mvsrc");
         Directory.CreateDirectory(src);
         File.WriteAllText(Path.Combine(src, "moved.txt"), "moved");
@@ -378,15 +378,224 @@ public class InvokeBashFileSystemMutatorTests : IDisposable, IClassFixture<Share
         var dst = Path.Combine(_tmpRoot, "mvdst");
         var collision = Path.Combine(dst, "mvsrc");
         Directory.CreateDirectory(collision);
-        var ro = Path.Combine(collision, "locked.txt");
-        File.WriteAllText(ro, "old");
-        File.SetAttributes(ro, File.GetAttributes(ro) | FileAttributes.ReadOnly);
+        File.SetAttributes(collision, File.GetAttributes(collision) | FileAttributes.ReadOnly);
 
         Run($"Invoke-BashMv {Q(src)} {Q(dst)}");
 
         Assert.True(File.Exists(Path.Combine(collision, "moved.txt")));
-        Assert.False(File.Exists(ro));
         Assert.False(Directory.Exists(src));
+    }
+
+    [Fact]
+    public void Mv_DirOntoNonEmptyTargetDirectory_RefusesAndKeepsBoth()
+    {
+        // GNU: "mv: cannot overwrite 't/s': Directory not empty", exit 1. The old code
+        // recursively deleted the destination's contents first.
+        var src = Path.Combine(_tmpRoot, "mvsrc");
+        Directory.CreateDirectory(src);
+        File.WriteAllText(Path.Combine(src, "moved.txt"), "moved");
+
+        var dst = Path.Combine(_tmpRoot, "mvdst");
+        var collision = Path.Combine(dst, "mvsrc");
+        Directory.CreateDirectory(collision);
+        var keep = Path.Combine(collision, "keep.txt");
+        File.WriteAllText(keep, "old");
+
+        var lines = Run($"Invoke-BashMv {Q(src)} {Q(dst)} *> $null; $global:LASTEXITCODE");
+
+        Assert.Equal("1", lines[^1]);
+        Assert.Equal("old", File.ReadAllText(keep));
+        Assert.True(File.Exists(Path.Combine(src, "moved.txt")), "source must survive a refused mv");
+    }
+
+    // ───────────── mv / cp pre-mutation validation (GNU oracle-checked) ─────────────
+
+    private string LastExit(string script) => Run($"{script} *> $null; $global:LASTEXITCODE")[^1];
+
+    [Fact]
+    public void Mv_SourceIntoItsOwnParent_KeepsSourceAndFails()
+    {
+        // `mv p/src p` resolves the target to p/src == the source. It used to delete p/src
+        // (data loss) and THEN report "must differ". GNU: "'p/src' and 'p/src' are the same file".
+        var src = Path.Combine(_tmpRoot, "p", "src");
+        Directory.CreateDirectory(src);
+        File.WriteAllText(Path.Combine(src, "f"), "payload");
+
+        Assert.Equal("1", LastExit($"Invoke-BashMv {Q(src)} {Q(Path.Combine(_tmpRoot, "p"))}"));
+
+        Assert.Equal("payload", File.ReadAllText(Path.Combine(src, "f")));
+    }
+
+    [Fact]
+    public void Mv_FileOntoItself_KeepsFileAndFails()
+    {
+        var f = Path.Combine(_tmpRoot, "same.txt");
+        File.WriteAllText(f, "x");
+        Assert.Equal("1", LastExit($"Invoke-BashMv {Q(f)} {Q(f)}"));
+        Assert.Equal("x", File.ReadAllText(f));
+    }
+
+    [Fact]
+    public void Mv_DirIntoItsOwnSubdirectory_RefusesAndKeepsTree()
+    {
+        var s = Path.Combine(_tmpRoot, "s11");
+        Directory.CreateDirectory(Path.Combine(s, "sub"));
+        File.WriteAllText(Path.Combine(s, "f"), "x");
+
+        Assert.Equal("1", LastExit($"Invoke-BashMv {Q(s)} {Q(Path.Combine(s, "sub"))}"));
+
+        Assert.True(File.Exists(Path.Combine(s, "f")));
+        Assert.True(Directory.Exists(Path.Combine(s, "sub")));
+    }
+
+    [Fact]
+    public void Mv_DirOntoExistingFile_RefusesAndKeepsBoth()
+    {
+        var d = Path.Combine(_tmpRoot, "d");
+        var f = Path.Combine(_tmpRoot, "f");
+        Directory.CreateDirectory(d);
+        File.WriteAllText(f, "file");
+        Assert.Equal("1", LastExit($"Invoke-BashMv {Q(d)} {Q(f)}"));
+        Assert.True(Directory.Exists(d));
+        Assert.Equal("file", File.ReadAllText(f));
+    }
+
+    [Fact]
+    public void Mv_FileOntoExistingDirectoryEntry_RefusesAndKeepsBoth()
+    {
+        // mv f tgt where tgt/f is a DIRECTORY: GNU "cannot overwrite directory 'tgt/f' with non-directory".
+        var f = Path.Combine(_tmpRoot, "f10");
+        var tgt = Path.Combine(_tmpRoot, "tgt10");
+        File.WriteAllText(f, "q");
+        Directory.CreateDirectory(Path.Combine(tgt, "f10"));
+        Assert.Equal("1", LastExit($"Invoke-BashMv {Q(f)} {Q(tgt)}"));
+        Assert.True(File.Exists(f));
+        Assert.True(Directory.Exists(Path.Combine(tgt, "f10")));
+    }
+
+    [Fact]
+    public void Mv_SeveralSourcesToMissingDestination_MovesNothing()
+    {
+        var a = Path.Combine(_tmpRoot, "m1");
+        var b = Path.Combine(_tmpRoot, "m2");
+        File.WriteAllText(a, "1");
+        File.WriteAllText(b, "2");
+        Assert.Equal("1", LastExit($"Invoke-BashMv {Q(a)} {Q(b)} {Q(Path.Combine(_tmpRoot, "nonexist"))}"));
+        Assert.True(File.Exists(a));
+        Assert.True(File.Exists(b));
+    }
+
+    [Fact]
+    public void Cp_RecursiveForce_KeepsDestinationOnlyFiles()
+    {
+        // `cp -rf src/proj dst` with dst/proj already present: GNU merges. It used to delete
+        // dst/proj wholesale first, losing every destination-only file.
+        var src = Path.Combine(_tmpRoot, "src", "proj");
+        var dstProj = Path.Combine(_tmpRoot, "dst", "proj");
+        Directory.CreateDirectory(src);
+        Directory.CreateDirectory(Path.Combine(dstProj, "nested"));
+        File.WriteAllText(Path.Combine(src, "new"), "n");
+        File.WriteAllText(Path.Combine(dstProj, "new"), "old-version");
+        File.WriteAllText(Path.Combine(dstProj, "only"), "keep");
+        File.WriteAllText(Path.Combine(dstProj, "nested", "deep"), "keep-deep");
+
+        Run($"Invoke-BashCp -rf {Q(src)} {Q(Path.Combine(_tmpRoot, "dst"))}");
+
+        Assert.Equal("n", File.ReadAllText(Path.Combine(dstProj, "new")));
+        Assert.Equal("keep", File.ReadAllText(Path.Combine(dstProj, "only")));
+        Assert.Equal("keep-deep", File.ReadAllText(Path.Combine(dstProj, "nested", "deep")));
+    }
+
+    [Fact]
+    public void Cp_SeveralSourcesToMissingDestination_ErrorsAndWritesNothing()
+    {
+        // `cp a b result` (result absent): GNU "target 'result': No such file or directory".
+        // It used to succeed and leave only b's contents in a file named result.
+        var a = Path.Combine(_tmpRoot, "a");
+        var b = Path.Combine(_tmpRoot, "b");
+        var result = Path.Combine(_tmpRoot, "result");
+        File.WriteAllText(a, "A");
+        File.WriteAllText(b, "B");
+
+        Assert.Equal("1", LastExit($"Invoke-BashCp {Q(a)} {Q(b)} {Q(result)}"));
+
+        Assert.False(File.Exists(result));
+        Assert.False(Directory.Exists(result));
+    }
+
+    [Fact]
+    public void Cp_SeveralSourcesToRegularFile_ErrorsAndKeepsFile()
+    {
+        var a = Path.Combine(_tmpRoot, "a");
+        var b = Path.Combine(_tmpRoot, "b");
+        var result = Path.Combine(_tmpRoot, "result2");
+        File.WriteAllText(a, "A");
+        File.WriteAllText(b, "B");
+        File.WriteAllText(result, "R");
+
+        Assert.Equal("1", LastExit($"Invoke-BashCp {Q(a)} {Q(b)} {Q(result)}"));
+
+        Assert.Equal("R", File.ReadAllText(result));
+    }
+
+    [Fact]
+    public void Cp_RecursiveNoClobber_TraversesExistingSubtreeAndSkipsOnlyConflicts()
+    {
+        // `cp -rn s t` with t/s/x/f1 present: GNU descends and copies f2, leaving f1 alone.
+        // It used to skip the whole s tree because t/s existed.
+        var s = Path.Combine(_tmpRoot, "s3");
+        var t = Path.Combine(_tmpRoot, "t3");
+        Directory.CreateDirectory(Path.Combine(s, "x"));
+        Directory.CreateDirectory(Path.Combine(t, "s3", "x"));
+        File.WriteAllText(Path.Combine(s, "x", "f1"), "new1");
+        File.WriteAllText(Path.Combine(s, "x", "f2"), "new2");
+        File.WriteAllText(Path.Combine(t, "s3", "x", "f1"), "old1");
+
+        Run($"Invoke-BashCp -r -n {Q(s)} {Q(t)}");
+
+        Assert.Equal("old1", File.ReadAllText(Path.Combine(t, "s3", "x", "f1")));
+        Assert.Equal("new2", File.ReadAllText(Path.Combine(t, "s3", "x", "f2")));
+    }
+
+    [Fact]
+    public void Cp_FileOntoItself_FailsAndKeepsFile()
+    {
+        var f = Path.Combine(_tmpRoot, "sf");
+        File.WriteAllText(f, "x");
+        Assert.Equal("1", LastExit($"Invoke-BashCp {Q(f)} {Q(f)}"));
+        Assert.Equal("x", File.ReadAllText(f));
+    }
+
+    [Fact]
+    public void Cp_DirIntoItself_RefusesAndDoesNotRecurse()
+    {
+        var se = Path.Combine(_tmpRoot, "se");
+        var x = Path.Combine(se, "x");
+        Directory.CreateDirectory(x);
+        Assert.Equal("1", LastExit($"Invoke-BashCp -r {Q(se)} {Q(x)}"));
+        Assert.False(Directory.Exists(Path.Combine(x, "se")), "copy into itself must not start");
+    }
+
+    [Fact]
+    public void Cp_DirOntoExistingFile_RefusesAndKeepsFile()
+    {
+        var d = Path.Combine(_tmpRoot, "dd");
+        var f = Path.Combine(_tmpRoot, "ff");
+        Directory.CreateDirectory(d);
+        File.WriteAllText(f, "F");
+        Assert.Equal("1", LastExit($"Invoke-BashCp -r {Q(d)} {Q(f)}"));
+        Assert.Equal("F", File.ReadAllText(f));
+    }
+
+    [Fact]
+    public void Cp_FileOntoExistingDirectoryEntry_RefusesAndKeepsDirectory()
+    {
+        var f = Path.Combine(_tmpRoot, "fx");
+        var tg = Path.Combine(_tmpRoot, "tg");
+        File.WriteAllText(f, "q");
+        Directory.CreateDirectory(Path.Combine(tg, "fx"));
+        Assert.Equal("1", LastExit($"Invoke-BashCp {Q(f)} {Q(tg)}"));
+        Assert.True(Directory.Exists(Path.Combine(tg, "fx")));
     }
 
     [Fact]

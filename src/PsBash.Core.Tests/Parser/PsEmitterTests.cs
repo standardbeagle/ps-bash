@@ -766,6 +766,15 @@ public class PsEmitterTests
     }
 
     [Fact]
+    public void Transpile_TeeDoubleDash_QuotesDoubleDashSoBinderDoesNotEatIt()
+    {
+        // The PS binder swallows a bare `--`, so tee could not tell `-zz` (after `--`) from an option.
+        var result = PsEmitter.Transpile("echo x | tee -- -zz");
+
+        Assert.Matches(@"Invoke-BashTee ['""]--['""] ", result);
+    }
+
+    [Fact]
     public void Transpile_PsPipeBrowse_EmitsBrowseMappedCommand()
     {
         var result = PsEmitter.Transpile("ps | browse");

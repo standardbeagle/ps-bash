@@ -1,0 +1,23 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 249
+stdout-length: 93
+stderr-length: 0
+==== SCRIPT ====
+d=$(mktemp -d) && cd "$d" && { mkdir -p src/proj dst/proj && echo n > src/proj/new && echo old > dst/proj/only && echo o > dst/proj/new; cp -rf src/proj dst 2>/dev/null; echo rc=$?; cat dst/proj/new dst/proj/only; find . | sort; }; cd /; rm -rf "$d"
+==== STDOUT ====
+rc=0
+n
+old
+.
+./dst
+./dst/proj
+./dst/proj/new
+./dst/proj/only
+./src
+./src/proj
+./src/proj/new
+
+==== STDERR ====
+
