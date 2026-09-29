@@ -161,7 +161,7 @@ PowerShell's `Tee-Object` passes objects through and writes their `ToString()` r
 
 ## xargs
 
-Build and execute commands from standard input. Each input line becomes an argument to the specified command.
+Build and execute commands from standard input. Input is split into arguments on blanks and newlines (quotes and backslashes protect blanks), and the arguments are appended to the specified command.
 
 ### Syntax
 
@@ -183,7 +183,7 @@ xargs [OPTIONS] COMMAND [INITIAL-ARGS...]
 <Tabs>
 <TabItem label="Default mode">
 
-All input lines are collected and passed as arguments to a single invocation of the command.
+All input items are collected and passed as arguments to a single invocation of the command.
 
 ```powershell
 echo -e 'one\ntwo\nthree' | xargs echo 'items:'
@@ -214,7 +214,7 @@ Two commands run: `echo 'Hello, alice!'` and `echo 'Hello, bob!'`.
 </TabItem>
 <TabItem label="-n batch">
 
-Input lines are split into batches of N, and the command runs once per batch.
+Input items are split into batches of N, and the command runs once per batch.
 
 ```powershell
 echo -e 'a\nb\nc\nd' | xargs -n 2 echo 'pair:'
@@ -232,7 +232,7 @@ Two commands run: `echo 'pair:' a b` and `echo 'pair:' c d`.
 
 ### Input handling
 
-**xargs** converts each piped object to its `BashText` representation, splits on newlines, and discards empty lines. Each non-empty line becomes one argument.
+**xargs** converts each piped object to its `BashText` representation and splits it on blanks and newlines, as GNU xargs does; single quotes, double quotes, and backslashes keep blanks inside one argument. With `-I`/`-i`, each input line is one argument instead (leading blanks are stripped, quotes and backslashes are still applied).
 
 ```powershell
 ls | xargs echo 'files:'
@@ -292,12 +292,14 @@ Copies each file listed in `manifest.txt` to the backup directory, one at a time
 
 ### Error handling
 
-Calling `xargs` with no command produces an error:
+Calling `xargs` with no command runs `echo`, as GNU xargs does:
 
 ```powershell
 echo 'hello' | xargs
-# xargs: no command specified
+# hello
 ```
+
+Exit status follows GNU: `123` if any invocation exited 1-125, `124` if the command exited 255 (xargs stops), `127` if the command was not found and `126` if it could not be run (both stop xargs at once).
 
 ### Comparison
 
@@ -317,7 +319,7 @@ Bash `xargs` supports many additional flags (`-0` for null-delimited input, `-P`
 find . -name '*.tmp' | xargs rm -f
 ```
 
-PsBash `xargs` supports `-I` and `-n`. It extracts `BashText` from typed pipeline objects and splits on newlines. Commands are invoked via PowerShell's `&` operator.
+PsBash `xargs` supports `-I`/`-i`, `-n`, `-L`, `-0`, `-d`, `-r`, and `-t` (`-p` and `-P` are accepted but ignored). It extracts `BashText` from typed pipeline objects and splits on blanks and newlines. Commands are invoked via PowerShell's `&` operator.
 
 </TabItem>
 <TabItem label="PowerShell">

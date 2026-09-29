@@ -24,8 +24,8 @@ namespace PsBash.Cmdlets;
 /// <c>--no-run-if-empty</c> (skip the invocation entirely when no items
 /// were read), <c>-t</c> (echo the command + args to stderr before each
 /// run), and <c>-L N</c> (run command per N input lines — synonymous with
-/// <c>-n N</c> in this implementation since the oracle's input is
-/// already line-segmented). <c>-p</c> (interactive prompt), <c>-P N</c>
+/// <c>-n N</c> in this implementation: it counts input items, not
+/// lines — a divergence from GNU now that default input splits on blanks). <c>-p</c> (interactive prompt), <c>-P N</c>
 /// (parallel) are accepted but ignored — the oracle had no concept of
 /// either, and a PowerShell runspace cannot prompt nor fork.
 ///
