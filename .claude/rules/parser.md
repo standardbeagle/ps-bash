@@ -15,7 +15,7 @@ paths:
 
 ## PARSER (BashParser.cs)
 - `ParseSimple` is core: collects words + redirects + heredocs + here-strings + env pairs in ONE loop.
-- here-string `<<<` sets `hereDoc` directly (word = body); heredoc `<<` sets `heredocDelimiter` for post-loop body collection.
+- here-string `<<<` sets `hereDoc` directly (word = body); heredoc `<<` queues the delimiter in `pendingHeredocs`; post-loop `CollectHereDocBodies` slices each body from the `[BodyStart, BodyEnd)` span the LEXER stamped on the delimiter token (`BashLexer.SkipHeredocBodies`). Never re-derive the body from the token cursor.
 - reserved words (`if then do done fi` …) break the word loop via `IsCompoundDelimiter`.
 - NEW GRAMMAR pipeline: token kind → lexer → AST node → parser production → emitter case → tests at EACH layer.
 
