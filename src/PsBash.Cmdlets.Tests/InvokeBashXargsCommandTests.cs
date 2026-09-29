@@ -369,6 +369,77 @@ public class InvokeBashXargsCommandTests : IClassFixture<SharedPwshFixture>
         Assert.Equal(123, exit);
     }
 
+    [Fact]
+    public void Xargs_FlagsAfterTheCommand_BelongToTheCommand()
+    {
+        // GNU (wsl bash): `echo f | xargs grep -il foo` prints the matching file.
+        // xargs options end at the command name; the old loop kept scanning and
+        // took grep's `-il` as xargs `-i` with replace string `l`, so grep ran
+        // with no file operand and printed nothing.
+        var file = Path.Combine(Path.GetTempPath(), "psbash-xargs-il-" + Guid.NewGuid().ToString("N") + ".txt");
+        File.WriteAllText(file, "foo\n");
+        try
+        {
+            var (result, _) = Run($"'{file}' | Invoke-BashXargs grep '-il' FOO; $LASTEXITCODE");
+            Assert.Equal("0", result[^1]?.ToString());
+            Assert.Contains(file, JoinBashText(result));
+        }
+        finally
+        {
+            File.Delete(file);
+        }
+    }
+
+    [Fact]
+    public void Xargs_DashI_KeepsTrailingBlanksAndStripsQuotes()
+    {
+        // GNU (wsl bash): -I strips LEADING blanks only and still processes
+        // quotes and backslashes: `  a b  ` -> `[a b  ]`, `"x y" z` -> `[x y z]`,
+        // `back\ slash` -> `[back slash]`.
+        var (result, _) = Run(
+            "\"  a b  `n`\"x y`\" z`nback\\ slash\" | Invoke-BashXargs -I '{}' echo '[{}]'");
+        var joined = JoinBashText(result);
+        Assert.Contains("[a b  ]", joined);
+        Assert.Contains("[x y z]", joined);
+        Assert.Contains("[back slash]", joined);
+    }
+
+    [Fact]
+    public void Xargs_InvocationExit255_AbortsRemainingInvocations()
+    {
+        // GNU: a child exiting 255 makes xargs stop at once ("exited with status
+        // 255; aborting") and exit 124; later items never run.
+        var (result, _) = Run(
+            "function t255 { Write-Output \"run $($args[0])\"; $global:LASTEXITCODE = 255 }; " +
+            "@('1','2','3') | Invoke-BashXargs -n 1 t255 2>$null; $LASTEXITCODE");
+        var joined = JoinBashText(result);
+        Assert.Contains("run 1", joined);
+        Assert.DoesNotContain("run 2", joined);
+        Assert.Equal("124", result[^1]?.ToString());
+    }
+
+    [Fact]
+    public void Xargs_Exit255AfterAnEarlierFailure_Is124()
+    {
+        // GNU (wsl bash): an earlier 1..125 failure (123) does not win over a
+        // later 255 abort; xargs exits 124.
+        var exit = RunAndReadExitCode(
+            "function tmix { $global:LASTEXITCODE = if ($args[0] -eq '1') { 3 } else { 255 } }; " +
+            "@('1','2') | Invoke-BashXargs -n 1 tmix 2>$null; $LASTEXITCODE");
+        Assert.Equal(124, exit);
+    }
+
+    [Fact]
+    public void Xargs_CommandNotFound_ReportsOnceAndStops()
+    {
+        // GNU (wsl bash): with two items, `xargs -n1 nosuchcmd` prints ONE
+        // "No such file or directory" and exits 127.
+        var (result, errors) = Run(
+            "@('1','2') | Invoke-BashXargs -n 1 no-such-command-xyz; $LASTEXITCODE");
+        Assert.Equal("127", result[^1]?.ToString());
+        Assert.Single(errors);
+    }
+
     private int RunAndReadExitCode(string script)
     {
         var (result, _) = Run(script);
