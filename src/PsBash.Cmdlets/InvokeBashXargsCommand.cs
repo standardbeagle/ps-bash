@@ -417,7 +417,7 @@ public sealed class InvokeBashXargsCommand : PSCmdlet
             return;
         }
 
-        if (replaceMode)
+        if (replaceMode && replaceStr is { } replaceToken)
         {
             // Replacement mode: one invocation per input line.
             foreach (var line in inputLines)
@@ -425,7 +425,7 @@ public sealed class InvokeBashXargsCommand : PSCmdlet
                 var replaced = new List<string>(cmdArgs.Count);
                 foreach (var a in cmdArgs)
                 {
-                    replaced.Add(a.Replace(replaceStr, line));
+                    replaced.Add(a.Replace(replaceToken, line));
                 }
                 if (!InvokeOne(cmd, replaced, traceCmd)) break;
             }
