@@ -25,13 +25,11 @@ namespace PsBash.Cmdlets;
 /// <see cref="BashRuntime.NewBashObject"/>.</item>
 /// </list>
 ///
-/// The usage-error path (<c>printf</c> with no format) delegates to the psm1
-/// <c>Write-BashError</c> function via <c>InvokeCommand.InvokeScript</c>. That
-/// function reads the script-scoped <c>$script:BashErrorMode</c> switch (host
-/// IPC stderr vs <c>Write-Error</c>) which lives in psm1 module scope, so
-/// keeping it as the public error sink preserves exact parity. The invoke is
-/// string-bodied — no ScriptBlock construction — so the cmdlet stays AOT-safe.
-/// The <c>--help</c> path likewise delegates to <c>Show-BashHelp</c>.
+/// The usage-error path (<c>printf</c> with no format) reports through
+/// <see cref="FileSystemHelpers.WriteBashError"/> — one ErrorRecord, which the
+/// host prints to stderr inline and which <c>2&gt;/dev/null</c> can discard.
+/// The <c>--help</c> path delegates to the psm1 <c>Show-BashHelp</c> via a
+/// string-bodied <c>InvokeCommand.InvokeScript</c> (AOT-safe).
 /// </summary>
 [Cmdlet(VerbsLifecycle.Invoke, "BashPrintf")]
 [OutputType(typeof(PSObject))]

@@ -24,8 +24,8 @@ namespace PsBash.Cmdlets;
 /// Input: with no file operands, records come from the pipeline (stdin mode);
 /// otherwise each operand is a data file read via the streaming
 /// <see cref="BashFileSystem"/> primitive with NR cumulative across files and
-/// FNR reset per file. File-open errors emit through the psm1
-/// <c>Write-BashError</c> sink. Output is one BashObject per output line.
+/// FNR reset per file. File-open errors emit through
+/// <see cref="FileSystemHelpers.WriteBashError"/> (one ErrorRecord). Output is one BashObject per output line.
 ///
 /// Oracle: GNU awk via <c>AwkDifferentialTests</c> (byte-level bash parity) and
 /// the hand-asserted <c>InvokeBashAwkFileModeTests</c>.

@@ -43,9 +43,8 @@ namespace PsBash.Cmdlets;
 /// <c>Resolve-BashGlob</c> needs the <c>$PWD</c> path provider, reachable from a
 /// <see cref="PSCmdlet"/> via <see cref="PSCmdlet.SessionState"/>; its glob
 /// slice is reimplemented here in C#. A file-read error sets
-/// <c>$global:LASTEXITCODE = 1</c> and emits a bash-style error through the
-/// psm1 <c>Write-BashError</c> sink (string-bodied
-/// <c>InvokeCommand.InvokeScript</c>, no ScriptBlock construction — AOT-safe).
+/// <c>$global:LASTEXITCODE = 1</c> and emits a bash-style error through
+/// <see cref="FileSystemHelpers.WriteBashError"/> (one ErrorRecord).
 /// The <c>--help</c> path delegates to <c>Show-BashHelp</c>.
 ///
 /// Common-parameter collision: the bash flag <c>-E</c> prefix-collides with the

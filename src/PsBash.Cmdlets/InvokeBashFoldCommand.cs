@@ -43,10 +43,8 @@ namespace PsBash.Cmdlets;
 /// No PowerShell common-parameter prefix collision: <c>-w</c> / <c>-s</c> /
 /// <c>-b</c> have no common-parameter prefix overlap and stay in
 /// <see cref="Arguments"/>; the manual scan parses them. On a file-read
-/// failure the cmdlet emits a bash-style error through the psm1
-/// <c>Write-BashError</c> sink (parameter-bound
-/// <see cref="CommandInvocationIntrinsics.InvokeScript(string, object[])"/>,
-/// no <c>ScriptBlock</c> construction — AOT-safe) and sets
+/// failure the cmdlet emits a bash-style error through
+/// <see cref="FileSystemHelpers.WriteBashError"/> and sets
 /// <c>$global:LASTEXITCODE = 1</c>.
 /// </summary>
 [Cmdlet(VerbsLifecycle.Invoke, "BashFold")]

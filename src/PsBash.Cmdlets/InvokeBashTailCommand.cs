@@ -36,9 +36,8 @@ namespace PsBash.Cmdlets;
 /// Operands are resolved via the psm1 <c>Resolve-BashGlob</c> slice
 /// reimplemented in C# (a <see cref="PSCmdlet"/> reaches
 /// <see cref="PSCmdlet.SessionState"/>). The <c>--help</c> path delegates to
-/// the psm1 <c>Show-BashHelp</c>; a follow-mode error delegates to the psm1
-/// <c>Write-BashError</c> — both via string-bodied
-/// <c>InvokeCommand.InvokeScript</c>, no ScriptBlock construction (AOT-safe).
+/// the psm1 <c>Show-BashHelp</c>; a follow-mode error goes through
+/// <see cref="FileSystemHelpers.WriteBashError"/> (one ErrorRecord).
 /// </summary>
 [Cmdlet(VerbsLifecycle.Invoke, "BashTail")]
 [OutputType(typeof(PSObject))]
@@ -686,8 +685,8 @@ public sealed class InvokeBashTailCommand : PSCmdlet
     /// <summary>
     /// psm1 oracle: <c>Open-BashFileReader</c> — sequential-scan
     /// <see cref="FileStream"/>, BOM skip, BOM-less UTF-8
-    /// <see cref="StreamReader"/>. On failure emits a bash-style error via the
-    /// psm1 <c>Write-BashError</c> sink and returns <c>null</c>.
+    /// <see cref="StreamReader"/>. On failure emits a bash-style error via
+    /// <see cref="FileSystemHelpers.WriteBashError"/> and returns <c>null</c>.
     /// </summary>
     private StreamReader? OpenReader(string path, string command)
     {

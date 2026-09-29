@@ -26,9 +26,8 @@ namespace PsBash.Cmdlets;
 /// <c>ValueFromRemainingArguments</c> captures them and the manual loop in
 /// <see cref="EndProcessing"/> distinguishes case.
 ///
-/// File-input errors emit through the psm1 <c>Write-BashError</c> sink via
-/// <see cref="PSCmdlet.InvokeCommand"/> (string-bodied — no ScriptBlock
-/// construction). Output is one <c>BashObject</c> per filter result (matching
+/// File-input errors emit through <see cref="FileSystemHelpers.WriteBashError"/>
+/// (one ErrorRecord). Output is one <c>BashObject</c> per filter result (matching
 /// the oracle's <c>New-BashObject</c> calls).
 ///
 /// Yq dependency: the psm1 <c>Invoke-BashYq</c> still calls <c>Invoke-JqFilter</c>

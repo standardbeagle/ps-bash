@@ -60,8 +60,8 @@ namespace PsBash.Cmdlets;
 ///
 /// <para><b>Directive 12:</b> all operand and value tokens flow through
 /// <see cref="System.IO"/> APIs directly. No <see cref="ScriptBlock"/> is
-/// constructed; the only call back to psm1 is the parameter-bound
-/// <c>Write-BashError</c> shim via <see cref="FileSystemHelpers.WriteBashError"/>.
+/// constructed; errors go through <see cref="FileSystemHelpers.WriteBashError"/>
+/// (one ErrorRecord, no psm1 callback).
 /// A path containing <c>$(throw 'pwn')</c> reaches <see cref="File.Copy(string,string,bool)"/>
 /// as a literal string and either succeeds or fails the usual no-such-file
 /// branch.</para>

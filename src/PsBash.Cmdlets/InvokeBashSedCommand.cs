@@ -35,8 +35,7 @@ namespace PsBash.Cmdlets;
 /// with CRLF normalization, and supports <c>-i</c> in-place rewrite; pipeline
 /// mode preserves original typed objects where a one-to-one line mapping holds,
 /// matching the oracle. File-read / file-write errors emit a bash-style error
-/// through the psm1 <c>Write-BashError</c> sink via a string-bodied
-/// <c>InvokeCommand.InvokeScript</c> (no ScriptBlock construction — AOT-safe);
+/// through <see cref="FileSystemHelpers.WriteBashError"/> (one ErrorRecord);
 /// <c>--help</c> delegates to <c>Show-BashHelp</c>.
 ///
 /// Common-parameter collision: the bash flag <c>-e</c> (expression) prefix-

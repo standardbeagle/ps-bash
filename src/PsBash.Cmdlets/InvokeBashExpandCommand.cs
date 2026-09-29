@@ -47,8 +47,8 @@ namespace PsBash.Cmdlets;
 /// <see cref="EndProcessing"/>. No <c>SwitchParameter</c> declarations are
 /// needed.
 ///
-/// On a file-read failure the cmdlet emits a bash-style error through the
-/// psm1 <c>Write-BashError</c> sink and sets <c>$global:LASTEXITCODE = 1</c>,
+/// On a file-read failure the cmdlet emits a bash-style error through
+/// <see cref="FileSystemHelpers.WriteBashError"/> and sets <c>$global:LASTEXITCODE = 1</c>,
 /// matching the oracle's behavior (the oracle relied on
 /// <c>Read-BashFileLines</c> to do the same thing).
 /// </summary>

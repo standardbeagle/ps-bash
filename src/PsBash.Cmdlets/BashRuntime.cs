@@ -647,14 +647,10 @@ public static class BashRuntime
     }
 
     /// <summary>
-    /// Emits a bash-style error: sets <c>$global:LASTEXITCODE</c> and writes the
-    /// message to the appropriate sink. Because the error sink is a script-scoped
-    /// concern (the psm1 <c>$script:BashErrorMode</c> switch between the host
-    /// IPC stderr frame and <c>Write-Error</c>), the psm1 <c>Write-BashError</c>
-    /// wrapper stays the public entry point; this method only owns the pieces a
-    /// binary cmdlet can do without script scope. A migrated cmdlet calls
-    /// <see cref="FormatBashError"/> for the message text and sets the exit code
-    /// via the runspace variable itself.
+    /// Formats a bash-style error message (<c>command: message</c>). This is only
+    /// the runspace-free text piece: a binary cmdlet emits the error through
+    /// <c>FileSystemHelpers.WriteBashError</c> (one ErrorRecord, which also sets
+    /// <c>$global:LASTEXITCODE</c>); psm1 code uses <c>Write-BashError</c>.
     /// </summary>
     public static string FormatBashError(string command, string message)
     {

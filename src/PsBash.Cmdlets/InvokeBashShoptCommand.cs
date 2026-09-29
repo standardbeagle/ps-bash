@@ -26,7 +26,7 @@ namespace PsBash.Cmdlets;
 /// prefix-matching). <c>-s</c> / <c>-u</c> / <c>-q</c> have no PowerShell
 /// common-parameter prefix overlap and stay in <c>Arguments</c>.
 ///
-/// Unknown option name routes through psm1 <c>Write-BashError</c> matching
+/// Unknown option name routes through <see cref="FileSystemHelpers.WriteBashError"/> matching
 /// the oracle byte-for-byte. <c>--help</c> delegates to psm1
 /// <c>Show-BashHelp</c> via parameter-bound <c>InvokeCommand.InvokeScript</c>
 /// (AOT-safe). The <c>shopt</c> alias stays in psm1 and resolves to this

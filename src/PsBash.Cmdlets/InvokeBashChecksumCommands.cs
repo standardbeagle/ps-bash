@@ -14,7 +14,7 @@ namespace PsBash.Cmdlets;
 /// typed <c>PsBash.TextOutput</c> PSObject per file with
 /// <c>BashText = "&lt;hex&gt;  &lt;path&gt;"</c> and side properties
 /// <c>Hash</c> / <c>FileName</c> / <c>Algorithm</c>. Missing files emit a
-/// bash-style error via psm1 <c>Write-BashError</c> and continue.</item>
+/// bash-style error via <see cref="FileSystemHelpers.WriteBashError"/> and continue.</item>
 /// <item>Pipeline mode (no operands): concatenate every upstream item's
 /// BashText with <c>\n</c> separators plus a final <c>\n</c>, hash the
 /// UTF-8 bytes, emit a single PSObject with <c>FileName = "-"</c>.</item>

@@ -37,9 +37,8 @@ namespace PsBash.Cmdlets;
 /// the psm1 oracle byte-for-byte. The oracle also accepts the split form
 /// <c>-b a</c> (two consecutive tokens) — preserved here.
 ///
-/// On a file-read failure the cmdlet emits a bash-style error through the
-/// psm1 <c>Write-BashError</c> sink (parameter-bound <c>InvokeScript</c> —
-/// no <c>ScriptBlock</c> construction, AOT-safe) and continues with the next
+/// On a file-read failure the cmdlet emits a bash-style error through
+/// <see cref="FileSystemHelpers.WriteBashError"/> and continues with the next
 /// operand. The psm1 oracle did not set <c>$LASTEXITCODE = 1</c> for nl (the
 /// internal <c>Read-BashFileLines</c> returns <c>$null</c> silently on miss);
 /// parity is preserved.

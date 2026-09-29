@@ -32,9 +32,8 @@ namespace PsBash.Cmdlets;
 /// any PowerShell common parameter, so they are safely scanned out of
 /// <see cref="Arguments"/> rather than declared as parameters (matching the
 /// psm1 oracle's <c>$args</c> scan). The <c>--help</c> path delegates to the
-/// psm1 <c>Show-BashHelp</c>; a file-read error delegates to the psm1
-/// <c>Write-BashError</c> — both via string-bodied
-/// <c>InvokeCommand.InvokeScript</c>, no ScriptBlock construction (AOT-safe).
+/// psm1 <c>Show-BashHelp</c>; a file-read error goes through
+/// <see cref="FileSystemHelpers.WriteBashError"/> (one ErrorRecord).
 /// </summary>
 [Cmdlet(VerbsLifecycle.Invoke, "BashHead")]
 [OutputType(typeof(PSObject))]
@@ -527,7 +526,7 @@ public sealed class InvokeBashHeadCommand : PSCmdlet
     /// psm1 oracle: <c>Open-BashFileReader</c> — opens a sequential-scan
     /// <see cref="FileStream"/>, skips a UTF-8 BOM if present, and wraps it in a
     /// BOM-less UTF-8 <see cref="StreamReader"/>. On failure emits a bash-style
-    /// error via the psm1 <c>Write-BashError</c> sink and returns <c>null</c>.
+    /// error via <see cref="FileSystemHelpers.WriteBashError"/> and returns <c>null</c>.
     /// </summary>
     private StreamReader? OpenReader(string path, string command)
     {

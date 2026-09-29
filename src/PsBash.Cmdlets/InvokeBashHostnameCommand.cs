@@ -10,9 +10,8 @@ namespace PsBash.Cmdlets;
 /// Behavioral parity oracle: the original psm1 function. The hostname surface is
 /// trivial — no flags besides <c>--help</c>, no pipeline input. The cmdlet calls
 /// <see cref="System.Net.Dns.GetHostName"/>, which is the same call the psm1
-/// oracle dispatched to. On failure the cmdlet emits a bash-style error via the
-/// psm1 <c>Write-BashError</c> function (it owns the script-scoped error-mode
-/// switch) and returns, exactly as the oracle did.
+/// oracle dispatched to. On failure the cmdlet emits a bash-style error via
+/// <see cref="FileSystemHelpers.WriteBashError"/> and returns, exactly as the oracle did.
 ///
 /// Output goes through <see cref="BashRuntime.NewBashObject"/> with the default
 /// <c>PsBash.TextOutput</c> type, which short-circuits to a bare

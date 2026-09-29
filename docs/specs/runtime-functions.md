@@ -101,6 +101,17 @@ runspace/script scope (`$script:BashErrorMode`, the PowerShell path provider)
 that a plain static helper cannot reach — only `BashRuntime.FormatBashError`
 (the runspace-free message-formatting piece) is shared.
 
+**Binary cmdlets do not call `Write-BashError`.** They report through
+`FileSystemHelpers.WriteBashError`, which emits exactly ONE `ErrorRecord` on the
+cmdlet's error stream (and sets `$LASTEXITCODE`). PowerShell redirection then
+decides its fate — `2>/dev/null` discards it, `2>&1` merges it into stdout as its
+one-line message — and the host (`SdkWorker`) streams the surviving records to
+stderr **inline, in order with the surrounding stdout** (via `Streams.Error`
+`DataAdded`), not after the run. Calling `Write-BashError` as well used to print
+every diagnostic twice and made it immune to `2>/dev/null`, because Bash mode
+writes through `$Host.UI.WriteErrorLine`. `Write-BashError` remains only for the
+psm1 helpers (`Get-BashItem`, `Read-BashFile*`) and the job-control functions.
+
 ### Migrated Binary Cmdlets
 
 Leaf `Invoke-Bash*` commands are progressively migrated from psm1 functions to

@@ -27,11 +27,10 @@ namespace PsBash.Cmdlets;
 /// psm1-only dependencies, and why a clean migration is still possible:
 /// a <see cref="PSCmdlet"/> has <see cref="PSCmdlet.SessionState"/> access, so
 /// it can read <c>$global:__PsBashCwd</c> and the current location directly —
-/// no script callback on the hot path. The <c>-P</c> failure path delegates
-/// to the psm1 <c>Write-BashError</c> function (which owns the script-scoped
-/// error-sink switch) via a string-bodied <c>InvokeCommand.InvokeScript</c>,
-/// so the cmdlet stays AOT-safe. The <c>--help</c> path likewise delegates to
-/// <c>Show-BashHelp</c>.
+/// no script callback on the hot path. The <c>-P</c> failure path reports
+/// through <see cref="FileSystemHelpers.WriteBashError"/> (one ErrorRecord).
+/// The <c>--help</c> path delegates to the psm1 <c>Show-BashHelp</c> via a
+/// string-bodied <c>InvokeCommand.InvokeScript</c> (AOT-safe).
 /// </summary>
 [Cmdlet(VerbsLifecycle.Invoke, "BashPwd")]
 [OutputType(typeof(PSObject))]

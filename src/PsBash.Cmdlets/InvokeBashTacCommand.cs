@@ -33,10 +33,8 @@ namespace PsBash.Cmdlets;
 /// colliding common parameter (no <c>-S*</c> common params), so it stays in
 /// <see cref="Arguments"/> and is parsed by the manual value-flag scan.
 ///
-/// On a file-read failure the cmdlet emits a bash-style error through the
-/// psm1 <c>Write-BashError</c> sink (parameter-bound
-/// <see cref="CommandInvocationIntrinsics.InvokeScript(string, object[])"/>,
-/// no <see cref="ScriptBlock"/> construction — AOT-safe) and sets
+/// On a file-read failure the cmdlet emits a bash-style error through
+/// <see cref="FileSystemHelpers.WriteBashError"/> and sets
 /// <c>$global:LASTEXITCODE = 1</c>, matching the oracle's behavior for missing
 /// targets.
 /// </summary>

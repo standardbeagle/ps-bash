@@ -31,9 +31,8 @@ namespace PsBash.Cmdlets;
 ///
 /// File reads route through <see cref="FileSystemHelpers.ResolveOperandPaths"/>
 /// (glob expansion via <c>SessionState.Path</c>, same slice cat/rev use); a
-/// failure emits a bash-style error via the psm1 <c>Write-BashError</c> sink
-/// (parameter-bound <see cref="CommandInvocationIntrinsics.InvokeScript(string, object[])"/>,
-/// AOT-safe) and the cmdlet returns early — matching the oracle's behavior
+/// failure emits a bash-style error via <see cref="FileSystemHelpers.WriteBashError"/>
+/// and the cmdlet returns early — matching the oracle's behavior
 /// where a <c>Read-BashFileLines</c> failure returned <c>$null</c> and the
 /// outer function returned with no output.
 ///

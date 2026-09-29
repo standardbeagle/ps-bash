@@ -30,10 +30,8 @@ namespace PsBash.Cmdlets;
 /// No PowerShell common-parameter prefix collision: <c>rev</c> has no short
 /// flags. The <see cref="Arguments"/> catch-all suffices.
 ///
-/// On a file-read failure the cmdlet emits a bash-style error through the
-/// psm1 <c>Write-BashError</c> sink (parameter-bound
-/// <see cref="CommandInvocationIntrinsics.InvokeScript(string, object[])"/>,
-/// no <c>ScriptBlock</c> construction — AOT-safe) and sets
+/// On a file-read failure the cmdlet emits a bash-style error through
+/// <see cref="FileSystemHelpers.WriteBashError"/> and sets
 /// <c>$global:LASTEXITCODE = 1</c>, matching the oracle's behavior for missing
 /// targets.
 /// </summary>

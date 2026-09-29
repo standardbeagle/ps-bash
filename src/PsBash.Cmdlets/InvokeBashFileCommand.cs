@@ -28,9 +28,8 @@ namespace PsBash.Cmdlets;
 /// follows symlinks by default via <see cref="File.OpenRead"/>; the flag is a
 /// no-op there).</item>
 /// <item>Missing operands emit a bash-style <c>file: cannot open 'PATH' (No
-/// such file or directory)</c> error via psm1 <c>Write-BashError</c>
-/// (parameter-bound <see cref="CommandInvocationIntrinsics.InvokeScript(string,object[])"/>,
-/// AOT-safe) and continue.</item>
+/// such file or directory)</c> error via <see cref="FileSystemHelpers.WriteBashError"/>
+/// and continue.</item>
 /// </list>
 ///
 /// Output: typed <c>PsBash.TextOutput</c> PSObject with <c>BashText</c>,
@@ -45,9 +44,8 @@ namespace PsBash.Cmdlets;
 /// psm1-only dependencies: glob expansion via
 /// <see cref="FileSystemHelpers.ResolveOperandPaths"/> (same slice
 /// cat/strings/checksum use); <c>--help</c> delegates to psm1
-/// <c>Show-BashHelp</c>; bash-style errors delegate to psm1
-/// <c>Write-BashError</c> via
-/// <see cref="FileSystemHelpers.WriteBashError"/>.
+/// <c>Show-BashHelp</c>; bash-style errors go through
+/// <see cref="FileSystemHelpers.WriteBashError"/> (one ErrorRecord).
 /// </summary>
 [Cmdlet(VerbsLifecycle.Invoke, "BashFile")]
 [OutputType(typeof(PSObject))]

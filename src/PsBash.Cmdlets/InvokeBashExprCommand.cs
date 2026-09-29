@@ -25,8 +25,8 @@ namespace PsBash.Cmdlets;
 ///
 /// Output is a typed <c>PsBash.ExprOutput</c> PSObject with <c>Value</c>
 /// (long when numeric, else string) and <c>BashText</c> properties — exact
-/// oracle shape. Error paths route through psm1 <c>Write-BashError</c> with
-/// <c>-ExitCode 2</c> (the GNU <c>expr</c> "error in expression" code).
+/// oracle shape. Error paths route through <see cref="FileSystemHelpers.WriteBashError"/> with
+/// exit code 2 (the GNU <c>expr</c> "error in expression" code).
 ///
 /// No PowerShell common-parameter prefix collisions: expr operands are
 /// digits, operators, and arbitrary user strings — none of the short flags
@@ -248,12 +248,10 @@ public sealed class InvokeBashExprCommand : PSCmdlet
     }
 
     /// <summary>
-    /// Emit a bash-style error with the oracle's <c>-ExitCode 2</c>. The psm1
-    /// <c>Write-BashError</c> sets <c>$global:LASTEXITCODE</c>; we delegate
-    /// via a parameter-bound script body so the error-mode switch
-    /// (<c>$script:BashErrorMode</c>) — psm1-scoped — applies. No
-    /// <see cref="ScriptBlock"/> construction; user text binds through
-    /// <c>$args</c> (Directive 12).
+    /// Emit a bash-style error with the oracle's exit code 2: one ErrorRecord via
+    /// <see cref="FileSystemHelpers.WriteBashError"/> (which sets 1), then the
+    /// status is overwritten with <paramref name="exitCode"/>. No script callback;
+    /// user text never reaches a script body (Directive 12).
     /// </summary>
     private void WriteBashErrorWithExitCode(string message, int exitCode)
     {

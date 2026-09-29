@@ -53,11 +53,10 @@ namespace PsBash.Cmdlets;
 /// <c>FileName</c>, <c>LineNumber</c>, <c>Line</c>, and <c>BashText</c>
 /// properties (oracle parity). <c>-c</c>/<c>-l</c> emit bare-string PSObjects
 /// via <see cref="BashRuntime.NewBashObject"/>. Exit code: <c>$LASTEXITCODE</c>
-/// is set to 0 on any match, 1 on no match (matches grep semantics) via
-/// <see cref="FileSystemHelpers.SetLastExitCode"/>. Errors route through the
-/// psm1 <c>Write-BashError</c> sink via parameter-bound
-/// <see cref="CommandInvocationIntrinsics.InvokeScript(string, object[])"/>
-/// (AOT-safe — no <see cref="ScriptBlock"/> construction).
+/// is set to 0 on any match, 1 on no match, 2 on an unreadable operand (grep semantics) via
+/// <see cref="FileSystemHelpers.SetLastExitCode"/>. Errors route through
+/// <see cref="FileSystemHelpers.WriteBashError"/> (one ErrorRecord); an unreadable operand makes
+/// the status 2 even if another operand matched.
 /// </summary>
 [Cmdlet(VerbsLifecycle.Invoke, "BashGrep")]
 [OutputType("PsBash.GrepMatch")]

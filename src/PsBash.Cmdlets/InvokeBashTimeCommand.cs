@@ -11,9 +11,9 @@ namespace PsBash.Cmdlets;
 /// <c>time</c> builtin / GNU <c>time</c> semantic.
 ///
 /// Behavioral parity oracle: the original psm1 function. Reproduces:
-/// no-args → "time: missing command" error via psm1 <c>Write-BashError</c>;
+/// no-args → "time: missing command" error via <see cref="FileSystemHelpers.WriteBashError"/>;
 /// happy path → invoke command, collect <c>ErrorRecord</c> output as bash
-/// errors (each routed through <c>Write-BashError</c>), accumulate
+/// errors (each re-emitted through <see cref="FileSystemHelpers.WriteBashError"/>), accumulate
 /// non-error output's <c>BashText</c> joined with <c>\n</c> as the result's
 /// <c>BashText</c>, set <c>ExitCode = 1</c> if any error surfaced; finally
 /// emit a typed <c>PsBash.TimeOutput</c> PSObject (<c>RealTime</c>,

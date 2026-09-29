@@ -22,7 +22,7 @@ namespace PsBash.Cmdlets;
 /// read with CRLF normalization (matching the oracle's
 /// <c>Read-BashFileLines</c> / <c>StreamReader.ReadLine()</c> semantics — a
 /// trailing newline does NOT yield a spurious empty final line). Missing
-/// files emit a bash-style error via the psm1 <c>Write-BashError</c> sink
+/// files emit a bash-style error via <see cref="FileSystemHelpers.WriteBashError"/>
 /// and are skipped (the oracle's <c>$null</c>-from-Read-BashFileLines branch
 /// continues to the next operand).</item>
 /// </list>

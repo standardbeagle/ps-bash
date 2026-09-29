@@ -21,9 +21,15 @@ exception and still escape for connection recovery; caller cancellation is
 also preserved as lifecycle control rather than converted into a command
 failure.
 
-All commands report errors via `Write-BashError`, which writes to stderr in
-the format `command: path: reason` -- matching bash conventions. Each error
-sets `$global:LASTEXITCODE` to the appropriate exit code.
+Binary cmdlets (nearly every command) report errors via
+`FileSystemHelpers.WriteBashError`, which emits exactly one `ErrorRecord` in the
+format `command: path: reason` -- matching bash conventions. Because it is an
+ordinary error record, PowerShell redirection applies: `2>/dev/null` discards it
+and `2>&1` merges it into stdout as its one-line message. The host (`SdkWorker`)
+prints the surviving records to stderr inline, in order with the surrounding
+stdout, as they are written. The psm1 helpers and job-control functions still
+use `Write-BashError` (Section 2.2). Each error sets `$global:LASTEXITCODE` to
+the appropriate exit code.
 
 ### 1.1 File Operations
 
@@ -47,7 +53,7 @@ Section 3).
 
 | Command | Error Format | Exit Code | Notes |
 |---------|-------------|-----------|-------|
-| `grep` | `grep: path: No such file or directory` | 2 | Exit 1 = no match, 2 = error |
+| `grep` | `grep: path: No such file or directory` | 2 | Exit 1 = no match, 2 = error. Any unreadable operand makes it 2 even if another operand matched (also under `-s`); only `-q` with a selected line stays 0 |
 | `sed` | `sed: bad substitution` | 2 | Syntax errors in expressions |
 | `awk` | `awk: usage: awk [options] program [file ...]` | 2 | Missing program argument |
 | `sort` | (via file helpers) | 1 | File not found |
@@ -137,8 +143,11 @@ function Write-BashError {
 }
 ```
 
-All `Invoke-Bash*` functions should use `Write-BashError` instead of `Write-Error`
-directly. This ensures consistent stderr formatting and exit code setting.
+psm1 functions should use `Write-BashError` instead of `Write-Error` directly.
+Binary cmdlets must NOT call it: they use `FileSystemHelpers.WriteBashError`
+(one `ErrorRecord`). Calling both printed every diagnostic twice, and the
+`Write-BashError` copy -- written through `$Host.UI.WriteErrorLine` in Bash mode
+-- could not be silenced by `2>/dev/null`.
 
 ### 2.3 Exit Code Flow
 
@@ -355,14 +364,21 @@ from dot-sourced scripts.
 **Bash**: Stderr is a separate file descriptor (fd 2) that can be redirected,
 piped (`|&`), or captured independently.
 
-**ps-bash**: The worker process starts with `RedirectStandardError = false`.
-Stderr from `[Console]::Error.WriteLine` flows directly to the parent console's
-stderr. It cannot be captured or redirected by the C# host. `|&` is emitted as
-`2>&1 |`, which merges stderr into the PowerShell pipeline.
+**ps-bash**: Cmdlet diagnostics are PowerShell `ErrorRecord`s, so `2>/dev/null`
+discards them and `2>&1` / `|&` (emitted as `2>&1 |`) merge them into the
+pipeline as one line of text each. Records that survive redirection are streamed
+by `SdkWorker` to a STDERR-tagged IPC frame inline, in order with stdout. Text
+written through `$Host.UI.WriteErrorLine` (`Write-BashHostStderr`, the psm1
+`Write-BashError` in Bash mode) goes straight to that stderr frame and is NOT
+subject to PowerShell redirection.
 
 ---
 
 ## 5. Error Handling Migration Status
+
+> Historical (psm1-era) table. Most of these commands are now binary cmdlets
+> that report via `FileSystemHelpers.WriteBashError` (one `ErrorRecord`), not
+> `Write-BashError`; read "Yes" below as "uses the bash-style error sink".
 
 Functions using `Write-BashError` are fully migrated. Functions using bare
 `Write-Error` need migration. Functions marked N/A have no error paths (pure

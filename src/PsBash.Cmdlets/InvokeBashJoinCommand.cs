@@ -29,8 +29,8 @@ namespace PsBash.Cmdlets;
 /// line. Paths resolve via
 /// <c>SessionState.Path.GetUnresolvedProviderPathFromPSPath</c> (no glob
 /// expansion — matching the oracle exactly). Missing files emit a bash-style
-/// <c>join: PATH: No such file or directory</c> error via the psm1
-/// <c>Write-BashError</c> shim and return with no further output. Missing
+/// <c>join: PATH: No such file or directory</c> error via
+/// <see cref="FileSystemHelpers.WriteBashError"/> and return with no further output. Missing
 /// operand (&lt; 2 file operands) emits <c>join: missing operand</c> and
 /// returns.
 ///
