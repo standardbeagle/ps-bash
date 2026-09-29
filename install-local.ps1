@@ -13,7 +13,11 @@ if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 dotnet publish src/PsBash.Shell -c Release -r win-x64 -p:PublishAot=false --self-contained
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
-dotnet test src/PsBash.Core.Tests/PsBash.Core.Tests.csproj
+# Release, not the default Debug: tman's build/test (and any drain running
+# alongside this install) own the shared src/*/bin/Debug outputs, and a second
+# writer there is the documented cause of half-written test bins. The flags
+# mirror .tman.kdl so no MSBuild node or compiler server outlives the install.
+dotnet test src/PsBash.Core.Tests/PsBash.Core.Tests.csproj -c Release -m:1 -nodeReuse:false -p:UseSharedCompilation=false
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
 $publishDir = "src/PsBash.Shell/bin/Release/net10.0/win-x64/publish"
@@ -34,9 +38,22 @@ if (Test-Path $managementClient) {
 # outlives its launcher by design. After a rebuild those leftovers POISON reuse:
 # a new-build launcher sees an old-build host, treats it as obsolete, and does the
 # slow retire-and-replace cycle on every -c (observed as 12-19s/call + exit-125
-# "connection forcibly closed"). Force-kill every remaining host so the freshly
-# deployed build starts from a clean slate.
-$strays = @(Get-Process ps-bash-host -ErrorAction SilentlyContinue)
+# "connection forcibly closed"). Force-kill the remaining DAEMON hosts so the
+# freshly deployed build starts from a clean slate.
+#
+# Only hosts running from $destDir, and never an --interactive host: an
+# interactive host IS a user's open terminal (it may even be the parent of the
+# shell running this script, or of an agent session), and killing it kills that
+# session. Dev-build hosts under the repo's src/*/bin belong to a test run that
+# may be in progress and are not this install's business either.
+$destHostPath = Join-Path "$env:USERPROFILE\.local\bin" 'ps-bash-host.exe'
+$strays = @(Get-CimInstance Win32_Process -Filter "Name='ps-bash-host.exe'" -ErrorAction SilentlyContinue |
+    Where-Object {
+        $_.ExecutablePath -and
+        [string]::Equals($_.ExecutablePath, $destHostPath, [StringComparison]::OrdinalIgnoreCase) -and
+        $_.CommandLine -notmatch '--interactive'
+    } |
+    ForEach-Object { Get-Process -Id $_.ProcessId -ErrorAction SilentlyContinue })
 if ($strays.Count -gt 0) {
     Write-Host "Force-killing $($strays.Count) leftover ps-bash-host process(es) so the new build starts clean..." -ForegroundColor DarkGray
     $strays | Stop-Process -Force -ErrorAction SilentlyContinue
@@ -84,9 +101,19 @@ if (Test-Path $destDir) {
 
 Copy-Item "$publishDir\*" "$destDir\" -Force -Recurse
 
+# bash.exe: the same launcher under the name agents accept as a shell. Claude
+# Code ignores CLAUDE_CODE_GIT_BASH_PATH unless the file is named bash.exe /
+# sh.exe (and CLAUDE_CODE_SHELL only takes a working bash/zsh), then silently
+# falls back to Git Bash. The .NET apphost resolves its app by the ps-bash.dll
+# name embedded at build time, so a plain copy placed beside the runtime works;
+# a copy anywhere else would miss the self-contained runtime DLLs.
+$bashShim = Join-Path $destDir 'bash.exe'
+Move-OutOfTheWay $bashShim
+Copy-Item (Join-Path $destDir 'ps-bash.exe') $bashShim -Force
+
 Remove-Item "$env:TEMP\ps-bash\module-*" -Recurse -Force -ErrorAction SilentlyContinue
 
-Write-Host "Deployed ps-bash to $destDir\ps-bash.exe" -ForegroundColor Green
+Write-Host "Deployed ps-bash to $destDir\ps-bash.exe (agent shell alias: $bashShim)" -ForegroundColor Green
 
 # ---------------------------------------------------------------------------
 # Module install to PSModulePath

@@ -170,20 +170,28 @@ ps-bash --no-compact-output -c "git status"
 
 ### Quick Setup for Claude Code
 
+Claude Code only accepts a Windows shell whose file is named `bash.exe` (or
+`sh.exe`); it silently falls back to Git Bash for any other name. So give it
+ps-bash under that name — a copy of `ps-bash.exe` placed **in the same folder**
+(it keeps loading `ps-bash.dll` beside it). `install-local.ps1` creates it for you:
+
 ```powershell
-# Add to $PROFILE or set before launching claude
-$env:CLAUDE_CODE_SHELL = 'C:\Users\you\.local\bin\ps-bash.exe'
+Copy-Item $env:USERPROFILE\.local\bin\ps-bash.exe $env:USERPROFILE\.local\bin\bash.exe
 ```
 
-Or in `~/.claude/settings.json`:
+Then in `~/.claude/settings.json`, and restart Claude Code (it picks its shell at startup):
 
 ```json
 {
   "env": {
-    "CLAUDE_CODE_SHELL": "C:\\Users\\you\\.local\\bin\\ps-bash.exe"
+    "CLAUDE_CODE_GIT_BASH_PATH": "C:\\Users\\you\\.local\\bin\\bash.exe",
+    "PSBASH_UNIX_PATHS": "1"
   }
 }
 ```
+
+Verify from a new session: `echo $BASH_VERSION` in the Bash tool prints
+`0.x.0(1)-release` (ps-bash), not `4.4.x`/`5.x` (Git Bash).
 
 ### Quick Setup for OpenCode
 
@@ -211,7 +219,7 @@ In VS Code `settings.json`:
 
 | Agent | Config Method | Setting |
 |-------|--------------|---------|
-| **Claude Code** | `CLAUDE_CODE_SHELL` env var or `settings.json` | `CLAUDE_CODE_SHELL=C:\path\to\ps-bash.exe` |
+| **Claude Code** | `settings.json` env (restart after) | `CLAUDE_CODE_GIT_BASH_PATH=C:\path\to\bash.exe` (a copy of `ps-bash.exe`, same folder) |
 | **OpenCode** | `$SHELL` environment variable | `$env:SHELL = 'C:\path\to\ps-bash.exe'` |
 | **GitHub Copilot** | VS Code terminal profile | `terminal.integrated.defaultProfile.windows` |
 | **Gemini CLI** | Not configurable (hardcoded shell) | Run inside ps-bash interactive shell |

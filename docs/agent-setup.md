@@ -21,42 +21,36 @@ ps-bash -c "echo hello"
 
 ## Claude Code
 
-Claude Code supports a `CLAUDE_CODE_SHELL` environment variable that overrides shell detection. Set it to the full path of `ps-bash.exe`.
+On Windows, Claude Code's Bash tool runs the shell named by `CLAUDE_CODE_GIT_BASH_PATH` — but **only if the file is named `bash.exe`, `sh.exe`, `bash` or `sh`**. Any other name (including `ps-bash.exe`) is silently ignored and Claude Code auto-detects Git Bash instead. `CLAUDE_CODE_SHELL` is no way around it: it is only accepted when it points at a working bash or zsh.
 
-You also need `PSBASH_UNIX_PATHS=1` because Claude Code's Bash tool emits MSYS-style paths (e.g. `/c/Users/...` instead of `C:\Users\...`) in its prelude. Without this flag, redirect targets land in the wrong directory.
+So expose ps-bash under the name `bash.exe`:
 
-**Option 1: Environment variable (PowerShell profile)**
+**Step 1: create `bash.exe` next to `ps-bash.exe`**
+
+`install-local.ps1` does this on every install. By hand:
 
 ```powershell
-# Add to $PROFILE
-$env:CLAUDE_CODE_SHELL = 'C:\Users\you\.local\bin\ps-bash.exe'
-$env:PSBASH_UNIX_PATHS  = '1'
+Copy-Item $env:USERPROFILE\.local\bin\ps-bash.exe $env:USERPROFILE\.local\bin\bash.exe
 ```
 
-**Option 2: Claude Code settings.json**
+It must be a copy **in the same folder**: the launcher finds `ps-bash.dll` (and, for a self-contained install, the .NET runtime files) beside itself, so a copy elsewhere fails to start. It does not change what `bash` resolves to on your `PATH` as long as `System32` comes first.
+
+**Step 2: point Claude Code at it** (`~/.claude/settings.json`, or per project in `.claude/settings.local.json`)
 
 ```jsonc
-// ~/.claude/settings.json
 {
   "env": {
-    "CLAUDE_CODE_SHELL": "C:\\Users\\you\\.local\\bin\\ps-bash.exe",
+    "CLAUDE_CODE_GIT_BASH_PATH": "C:\\Users\\you\\.local\\bin\\bash.exe",
     "PSBASH_UNIX_PATHS": "1"
   }
 }
 ```
 
-**Option 3: Per-project (.claude/settings.local.json)**
+`PSBASH_UNIX_PATHS=1` is required because Claude Code's Bash tool emits MSYS-style paths (e.g. `/c/Users/...` instead of `C:\Users\...`) in its prelude. Without it, redirect targets land in the wrong directory.
 
-```jsonc
-{
-  "env": {
-    "CLAUDE_CODE_SHELL": "C:\\Users\\you\\.local\\bin\\ps-bash.exe",
-    "PSBASH_UNIX_PATHS": "1"
-  }
-}
-```
+**Step 3: restart Claude Code and verify.** The shell is chosen at startup, so an already-running session keeps its old shell. In a new session, `echo $BASH_VERSION` in the Bash tool prints `0.x.0(1)-release` for ps-bash; `4.4.x`/`5.x` means it fell back to Git Bash. `claude -p 'Use the Bash tool to run: echo $BASH_VERSION' --allowedTools Bash` checks it non-interactively.
 
-Claude Code invokes the shell as `<shell> -c "command"`, which is exactly the ps-bash interface. Once configured, Claude Code will transpile all bash commands through ps-bash.
+Claude Code invokes the shell as `<shell> -c "command"` (sourcing its shell snapshot first), which is exactly the ps-bash interface. Once configured, Claude Code will transpile all bash commands through ps-bash.
 
 ### Path Mode
 
@@ -161,7 +155,7 @@ RUN ps-bash -c "echo ready"
 
 | Agent | Config Method | Setting |
 |-------|--------------|---------|
-| **Claude Code** | Env var or settings.json | `CLAUDE_CODE_SHELL=C:\path\to\ps-bash.exe` |
+| **Claude Code** | settings.json env (restart after) | `CLAUDE_CODE_GIT_BASH_PATH=C:\path\to\bash.exe` (a copy of `ps-bash.exe`, same folder) |
 | **OpenCode** | `$SHELL` env var | `$env:SHELL = 'C:\path\to\ps-bash.exe'` |
 | **GitHub Copilot** | VS Code terminal profile | `terminal.integrated.defaultProfile.windows` |
 | **Gemini CLI** | Not configurable | Run inside ps-bash interactive shell |

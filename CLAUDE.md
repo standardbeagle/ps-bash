@@ -19,8 +19,12 @@ The emitter maps command names (e.g., `head` → `Invoke-BashHead`) and forwards
 
 ## The Bash tool IS ps-bash (dogfood)
 
-The Bash tool runs `~/.local/bin/ps-bash.exe` — the **installed release, not your build**
-(`BASH_VERSION` reports `0.8.0(1)-release`). Consequences:
+The Bash tool runs `~/.local/bin/bash.exe` — a copy of the installed `ps-bash.exe`, the
+**installed release, not your build** (`BASH_VERSION` reports `0.x.0(1)-release`). Claude Code
+only honours `CLAUDE_CODE_GIT_BASH_PATH` for a file named `bash.exe`; pointed at `ps-bash.exe`
+it silently falls back to Git Bash (`BASH_VERSION` `4.4.x`). **Check `echo $BASH_VERSION`
+before trusting Bash-tool output as ps-bash behavior** — setup: `docs/agent-setup.md`.
+Consequences:
 
 - **It is not WSL and not Git Bash.** `$PATH` is a native Windows path string
   (`C:\...;C:\...`), never `/mingw64/bin`. Anything installed only inside the distro
