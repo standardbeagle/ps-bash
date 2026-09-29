@@ -2425,10 +2425,13 @@ public class BashParserTests
     // token with a located ParseException instead of returning a truncated script.
 
     // Unsupported grammar (the `time`/`coproc` keywords, extglob `!(…)`) must fail
-    // LOUDLY. The four other original repros are valid bash and are fixed at their
-    // root instead — see the *_ParsesWholeScript tests below.
+    // LOUDLY. So must a `}` argument: bash prints "hi }", but the lexer splits `}x`
+    // into two tokens and the emitter does not quote a bare `}`, so accepting it
+    // would trade a loud error for wrong output. The three other original repros
+    // are valid bash and are fixed at their root — see *_ParsesWholeScript below.
     [Theory]
     [InlineData("echo a; time { echo hi; }; echo after")]
+    [InlineData("echo hi }; echo after")]
     [InlineData("rm -f !(keep).txt; echo after")]
     [InlineData("coproc { echo x; }; echo after")]
     public void Parse_LeftoverTokenAfterStatement_ThrowsInsteadOfDroppingTail(string input)
@@ -2438,6 +2441,7 @@ public class BashParserTests
 
     [Theory]
     [InlineData("echo a; time { echo hi; }; echo after")]
+    [InlineData("echo hi }; echo after")]
     [InlineData("rm -f !(keep).txt; echo after")]
     [InlineData("coproc { echo x; }; echo after")]
     public void ParseTopLevelWithPositions_LeftoverTokenAfterStatement_ThrowsInsteadOfDroppingTail(string input)
@@ -2487,7 +2491,6 @@ public class BashParserTests
     [InlineData("export A=1 2>/dev/null B=2; echo after")]
     [InlineData("f() { local z=5 2>/dev/null; }; echo after")]
     [InlineData("arr=(k=v other); echo after")]
-    [InlineData("echo hi }; echo after")]
     [InlineData("if true; then k() { echo in; } >/dev/null; fi; echo after")]
     [InlineData("for i in 1; do export W=2 2>/dev/null; done; echo after")]
     [InlineData("if true; then (echo a) fi; echo after")]
@@ -2535,14 +2538,6 @@ public class BashParserTests
         var assign = Assert.IsType<Command.ShAssignment>(list.Commands[0]);
         var array = Assert.IsType<ArrayWord>(Assert.Single(assign.Pairs).ArrayValue);
         Assert.Equal(2, array.Elements.Length);
-    }
-
-    [Fact]
-    public void Parse_CloseBraceAfterCommandWord_IsLiteralArgument()
-    {
-        // bash: `echo hi }` prints "hi }" — `}` is reserved only in command position.
-        var list = Assert.IsType<Command.CommandList>(Parse("echo hi }; echo after"));
-        Assert.Equal(["echo", "hi", "}"], GetWordValues(Assert.IsType<Command.Simple>(list.Commands[0])));
     }
 
     [Fact]

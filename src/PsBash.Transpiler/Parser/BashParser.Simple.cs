@@ -255,8 +255,22 @@ public sealed partial class BashParser
     {
         var pairs = ImmutableArray.CreateBuilder<Assignment>();
 
-        while (Peek().Kind is BashTokenKind.AssignmentWord or BashTokenKind.Word)
+        while (Peek().Kind is BashTokenKind.AssignmentWord or BashTokenKind.Word
+            || Peek().Kind == BashTokenKind.IoNumber || IsCompoundRedirectOp(Peek().Kind))
         {
+            // A redirect on a declaration builtin (`export PATH 2>/dev/null`,
+            // `local x=1 >/dev/null`) is valid bash. It covers only the builtin's own
+            // output — a value's command substitution is expanded BEFORE redirections,
+            // so its stderr is not redirected (oracle-checked) — and a successful
+            // declaration writes nothing. Consuming it here keeps the assignment;
+            // leaving it unconsumed made the statement end early. Known gap: bash
+            // still creates/truncates a `> file` target, which this does not.
+            if (Peek().Kind == BashTokenKind.IoNumber || IsCompoundRedirectOp(Peek().Kind))
+            {
+                ParseRedirect();
+                continue;
+            }
+
             if (Peek().Kind == BashTokenKind.AssignmentWord)
             {
                 pairs.Add(ParseAssignmentWordWithArray());
@@ -350,7 +364,9 @@ public sealed partial class BashParser
                     continue;
                 }
 
-                if (Peek().Kind == BashTokenKind.Word)
+                // `k=v` inside the literal is lexed as an AssignmentWord but is an
+                // ordinary element to bash: `arr=(k=v other)` has two elements.
+                if (Peek().Kind is BashTokenKind.Word or BashTokenKind.AssignmentWord)
                 {
                     var wordToken = Advance();
                     elements.Add(new CompoundWord(DecomposeWord(wordToken.Value)));
@@ -360,8 +376,14 @@ public sealed partial class BashParser
                     break;
                 }
             }
-            if (Peek().Kind == BashTokenKind.RParen)
-                Advance(); // consume )
+            // Anything but `)` here (`arr=(a ; b)`, or end of input) is a bash syntax
+            // error. Returning the partial array used to leave the tail as leftover
+            // tokens that silently re-parsed as commands.
+            if (Peek().Kind != BashTokenKind.RParen)
+                throw MakeError(
+                    $"Expected ')' to close array literal but got '{Peek().Value}' ({Peek().Kind})",
+                    Peek().Position, "ArrayLiteral");
+            Advance(); // consume )
             return new Assignment(name, op, null,
                 new ArrayWord(elements.ToImmutable()));
         }

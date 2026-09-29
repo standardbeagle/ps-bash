@@ -121,45 +121,43 @@ public sealed partial class BashParser
         while (Peek().Kind != BashTokenKind.Eof)
         {
             int startPos = Peek().Position;
-            var cmd = ParseAndOrProgress();
-
-            bool bg = false;
-            if (Peek().Kind == BashTokenKind.Amp)
-            {
-                Advance();
-                bg = true;
-            }
-
-            result.Add((bg ? new Command.Background(cmd) : cmd, startPos));
-
-            // After a statement only `;`/newline, a background `&` (which lets the
-            // next command start immediately), or end of input may follow.
-            if (Peek().Kind is BashTokenKind.Semi or BashTokenKind.Newline)
-            {
-                while (Peek().Kind is BashTokenKind.Semi or BashTokenKind.Newline)
-                    Advance();
-            }
-            else
-            {
-                RejectLeftoverToken(bg, "ParseTopLevelWithPositions");
-            }
+            result.Add((ParseListStatement(AtEndOfInputOnly, "ParseTopLevelWithPositions"), startPos));
+            SkipTerminators();
         }
         return result;
     }
 
-    // After a complete top-level statement only a command terminator (`;`/newline),
-    // a background `&` (consumed just before this check), or end of input may
-    // follow. Any other token means the statement parser stopped early and the
-    // remaining input would be silently discarded — reject it with a located
-    // error. Both top-level loops (ParseList and ParseTopLevelWithPositionsCore)
-    // call this so they cannot disagree on what counts as a syntax error.
-    private void RejectLeftoverToken(bool backgrounded, string rule)
+    private static bool AtEndOfInputOnly() => false;
+
+    /// <summary>
+    /// Parse ONE statement of a statement list — an and-or list plus an optional
+    /// background <c>&amp;</c> — and enforce the one rule every list shares: after a
+    /// statement only a terminator (<c>;</c> / newline), end of input, or the
+    /// enclosing construct's own closing token (<paramref name="atStop"/>: <c>}</c>,
+    /// <c>)</c>, <c>fi</c>, <c>done</c>, <c>esac</c>, <c>;;</c>) may follow. A background
+    /// <c>&amp;</c> is itself a terminator, so anything may follow it.
+    /// </summary>
+    /// <remarks>
+    /// Any other token means the statement parser stopped early. Before this rule the
+    /// top level silently DROPPED the rest of the script, and every compound body
+    /// re-read the leftover as the start of a new command with no separator
+    /// (<c>rm -f !(keep).txt</c> became <c>rm -f !</c>, a subshell and a <c>.txt</c>
+    /// command). The top-level loops and every body loop call this, so none can
+    /// disagree on what counts as a syntax error.
+    /// </remarks>
+    private Command ParseListStatement(Func<bool> atStop, string rule)
     {
+        var cmd = ParseAndOrProgress();
+
+        if (Peek().Kind == BashTokenKind.Amp)
+        {
+            Advance(); // consume &
+            return new Command.Background(cmd);
+        }
+
         var kind = Peek().Kind;
-        if (kind == BashTokenKind.Eof
-            || kind is BashTokenKind.Semi or BashTokenKind.Newline
-            || backgrounded)
-            return;
+        if (kind is BashTokenKind.Eof or BashTokenKind.Semi or BashTokenKind.Newline || atStop())
+            return cmd;
 
         throw MakeError(
             $"Unexpected token '{Peek().Value}' ({kind})",
@@ -208,63 +206,19 @@ public sealed partial class BashParser
     private Command ParseList()
     {
         // ParseList is only entered with a non-Eof token (Parse() short-circuits
-        // empty input), so a first ParseAndOr that consumes nothing means a
-        // leading stray close-token (`)`/`}`) — a syntax error, not an empty
-        // command. Guard it so such input throws instead of silently returning
-        // an empty command (and so the top-level path matches the body loops).
-        var first = ParseAndOrProgress();
-
-        // Check for & (background) after the first command.
-        // In bash, & is a command terminator like ; or newline — the next
-        // command can start immediately without a separator.
-        bool firstBg = false;
-        if (Peek().Kind == BashTokenKind.Amp)
-        {
-            Advance(); // consume &
-            firstBg = true;
-        }
-
-        // After the first command (and optional `&`) only a terminator, end of
-        // input, or — when backgrounded — the next command without a separator
-        // may follow. Anything else is a syntax error; returning `first` here
-        // used to silently discard every token after the early stop.
-        if (Peek().Kind is not BashTokenKind.Semi and not BashTokenKind.Newline)
-        {
-            RejectLeftoverToken(firstBg, "ParseList");
-            if (!firstBg)
-                return first;
-        }
-
+        // empty input). A first statement that consumes nothing (a leading stray
+        // `)`/`}`) throws inside ParseAndOrProgress rather than yielding an empty
+        // command.
         var commands = ImmutableArray.CreateBuilder<Command>();
-        commands.Add(firstBg ? new Command.Background(first) : first);
+        commands.Add(ParseListStatement(AtEndOfInputOnly, "ParseList"));
 
         while (true)
         {
-            bool prevBg = commands[^1] is Command.Background;
-
-            if (Peek().Kind is BashTokenKind.Semi or BashTokenKind.Newline)
-            {
-                SkipTerminators();
-            }
-            else
-            {
-                RejectLeftoverToken(prevBg, "ParseList");
-                if (Peek().Kind == BashTokenKind.Eof)
-                    break;
-            }
-
+            SkipTerminators();
             if (Peek().Kind == BashTokenKind.Eof)
                 break;
 
-            var cmd = ParseAndOrProgress();
-
-            if (Peek().Kind == BashTokenKind.Amp)
-            {
-                Advance(); // consume &
-                cmd = new Command.Background(cmd);
-            }
-
-            commands.Add(cmd);
+            commands.Add(ParseListStatement(AtEndOfInputOnly, "ParseList"));
         }
 
         if (commands.Count == 1)
@@ -727,17 +681,17 @@ public sealed partial class BashParser
     private Command ParseCompoundBody(params string[] stopWords)
     {
         var commands = ImmutableArray.CreateBuilder<Command>();
+        bool AtStopWord() => Peek().Kind == BashTokenKind.Word && stopWords.Contains(Peek().Value);
 
         while (true)
         {
             SkipTerminators();
             if (Peek().Kind == BashTokenKind.Eof)
                 break;
-            if (Peek().Kind == BashTokenKind.Word && stopWords.Contains(Peek().Value))
+            if (AtStopWord())
                 break;
 
-            commands.Add(ParseAndOrProgress());
-            SkipTerminators();
+            commands.Add(ParseListStatement(AtStopWord, "ParseCompoundBody"));
         }
 
         if (commands.Count == 1)
@@ -1103,7 +1057,10 @@ public sealed partial class BashParser
             if (IsCaseArmTerminator())
                 break;
 
-            commands.Add(ParseAndOrProgress());
+            commands.Add(ParseListStatement(
+                () => IsCaseArmTerminator()
+                    || (Peek().Kind == BashTokenKind.Word && Peek().Value == "esac"),
+                "ParseCaseBody"));
 
             // After a command, consume a single ; separator if present, but stop
             // at an arm terminator (;;, ;&, or ;;&).
@@ -1176,11 +1133,21 @@ public sealed partial class BashParser
     /// is unchanged (unwrapped); other compound forms go through
     /// ParseCompoundOrSimple (subshell, loops, conditionals).
     /// </summary>
+    /// <remarks>
+    /// A redirect written after the body (<c>f() { …; } &gt;/dev/null</c>) is part of
+    /// the definition and applies on EVERY call (bash). The non-brace compound bodies
+    /// already consume their trailing redirects; a brace body keeps its unwrapped
+    /// shape unless it carries some, in which case it becomes a redirected
+    /// <see cref="Command.BraceGroup"/> so the emitter applies them inside the function.
+    /// </remarks>
     private Command ParseFunctionBody()
     {
-        if (Peek().Kind == BashTokenKind.LBrace)
-            return ParseBraceGroup();
-        return ParseCompoundOrSimple();
+        if (Peek().Kind != BashTokenKind.LBrace)
+            return ParseCompoundOrSimple();
+
+        var body = ParseBraceGroup();
+        var redirects = ParseTrailingRedirects();
+        return redirects.IsEmpty ? body : new Command.BraceGroup(body, redirects);
     }
 
     /// <summary>
@@ -1257,8 +1224,7 @@ public sealed partial class BashParser
             if (Peek().Kind == BashTokenKind.RParen)
                 break;
 
-            commands.Add(ParseAndOrProgress());
-            SkipTerminators();
+            commands.Add(ParseListStatement(() => Peek().Kind == BashTokenKind.RParen, "ParseSubshell"));
         }
 
         if (Peek().Kind != BashTokenKind.RParen)
@@ -1322,8 +1288,7 @@ public sealed partial class BashParser
             if (Peek().Kind == BashTokenKind.RBrace)
                 break;
 
-            commands.Add(ParseAndOrProgress());
-            SkipTerminators();
+            commands.Add(ParseListStatement(() => Peek().Kind == BashTokenKind.RBrace, "ParseBraceGroup"));
         }
 
         if (Peek().Kind != BashTokenKind.RBrace)
