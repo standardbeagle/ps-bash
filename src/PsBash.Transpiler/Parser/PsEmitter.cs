@@ -2040,10 +2040,9 @@ public static class PsEmitter
     /// </summary>
     private static string EmitHereDocLiteral(HereDoc hereDoc)
     {
+        // <<-EOF tab stripping already happened in the parser
+        // (BashParser.CollectHereDocBodies), so Body is exactly what bash stores.
         string body = hereDoc.Body;
-        // <<-EOF: strip leading tabs from each line (bash semantics).
-        if (hereDoc.StripTabs)
-            body = StripLeadingTabs(body);
         if (hereDoc.Expand)
             body = TranslateHereDocVars(body);
 
@@ -2678,18 +2677,6 @@ public static class PsEmitter
     /// Translate bash variable references ($VAR, ${VAR}) in heredoc body text
     /// to PowerShell equivalents ($env:VAR).
     /// </summary>
-    /// <summary>
-    /// Strips leading tab characters from each line of a heredoc body.
-    /// Used for <c>&lt;&lt;-EOF</c> (DLessDash) heredocs where bash strips leading tabs.
-    /// </summary>
-    private static string StripLeadingTabs(string body)
-    {
-        var lines = body.Split('\n');
-        for (int i = 0; i < lines.Length; i++)
-            lines[i] = lines[i].TrimStart('\t');
-        return string.Join('\n', lines);
-    }
-
     /// <summary>
     /// True when <paramref name="body"/> contains a line that begins with the
     /// PowerShell here-string terminator (<c>"@</c> for an expanding heredoc,

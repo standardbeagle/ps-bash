@@ -212,6 +212,11 @@ public sealed partial class BashParser
                 // The span is raw source, so a folded CRLF line ending arrives as
                 // "\r\n"; bash bodies are LF-only, so normalize before storing.
                 body = _input.Substring(bodyStart, bodyEnd - bodyStart).Replace("\r\n", "\n");
+                // A body that runs to end of input with no delimiter line and no
+                // final newline ("here-document delimited by end-of-file") still
+                // ends its last line with "\n" in bash, like every other line.
+                if (!body.EndsWith('\n'))
+                    body += "\n";
                 if (stripTabs)
                     body = StripHereDocTabs(body);
             }
