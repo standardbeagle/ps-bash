@@ -1925,6 +1925,27 @@ public class BashParserTests
     }
 
     [Fact]
+    public void Parse_UnterminatedHeredocAtEofWithoutNewline_BodyEndsWithNewline()
+    {
+        // bash (od -c): `cat <<EOF\nabc` with no delimiter line and no final
+        // newline prints "abc\n" — the body is newline-terminated like every line.
+        var simple = Assert.IsType<Command.Simple>(Parse("cat <<EOF\nabc"));
+
+        var hereDoc = Assert.Single(simple.HereDocs);
+        Assert.Equal("abc\n", hereDoc.Body);
+    }
+
+    [Fact]
+    public void Parse_UnterminatedStripTabsHeredocAtEof_StripsTabsAndEndsWithNewline()
+    {
+        // bash (od -c): `cat <<-EOF\n\tx\n\ty` prints "x\ny\n".
+        var simple = Assert.IsType<Command.Simple>(Parse("cat <<-EOF\n\tx\n\ty"));
+
+        var hereDoc = Assert.Single(simple.HereDocs);
+        Assert.Equal("x\ny\n", hereDoc.Body);
+    }
+
+    [Fact]
     public void Parse_HeredocAsStdin_CommandWordsPreserved()
     {
         var simple = Assert.IsType<Command.Simple>(Parse("grep -i foo <<EOF\nhello foo\nbar\nEOF"));
