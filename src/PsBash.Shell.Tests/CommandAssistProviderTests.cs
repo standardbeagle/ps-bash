@@ -417,22 +417,62 @@ public sealed class CommandAssistProviderTests
     /// </summary>
     private static readonly TimeSpan ProcessWaitTimeout = TimeSpan.FromSeconds(30);
 
-    private static async Task<int> WaitForPidAsync(string pidPath)
+    [Fact]
+    public async Task WaitForPidAsync_ReadsPidWhileWriterStillHoldsTheFile()
+    {
+        // The fake provider writes its PID and keeps the file open for a moment. A
+        // reader that demands FileShare.Read collides with that write handle and
+        // throws "being used by another process" instead of polling again, which
+        // failed GenerateAsync_CallerCancellationKillsProviderProcess on a loaded box.
+        var pidPath = Path.Combine(Path.GetTempPath(), "psbash-ai-pid-" + Guid.NewGuid().ToString("N") + ".txt");
+        try
+        {
+            using (var writer = new FileStream(pidPath, FileMode.Create, FileAccess.Write, FileShare.Read))
+            {
+                var bytes = System.Text.Encoding.ASCII.GetBytes("4242");
+                writer.Write(bytes, 0, bytes.Length);
+                writer.Flush();
+
+                Assert.Equal(4242, await WaitForPidAsync(pidPath));
+            }
+        }
+        finally
+        {
+            try { File.Delete(pidPath); } catch { }
+        }
+    }
+
+    internal static async Task<int> WaitForPidAsync(string pidPath)
     {
         var deadline = DateTime.UtcNow + ProcessWaitTimeout;
         while (DateTime.UtcNow < deadline)
         {
-            if (File.Exists(pidPath)
-                && int.TryParse((await File.ReadAllTextAsync(pidPath)).Trim(), out var pid)
-                && pid > 0)
-            {
+            if (TryReadPid(pidPath) is { } pid)
                 return pid;
-            }
 
             await Task.Delay(25).ConfigureAwait(false);
         }
 
         throw new TimeoutException("fake provider did not write its PID.");
+    }
+
+    /// <summary>
+    /// Reads the PID without demanding exclusive-ish access: the provider may still
+    /// hold its write handle, so share ReadWrite|Delete and treat a transient
+    /// IOException as "not written yet" rather than a failure.
+    /// </summary>
+    private static int? TryReadPid(string pidPath)
+    {
+        try
+        {
+            using var stream = new FileStream(pidPath, FileMode.Open, FileAccess.Read,
+                FileShare.ReadWrite | FileShare.Delete);
+            using var reader = new StreamReader(stream);
+            return int.TryParse(reader.ReadToEnd().Trim(), out var pid) && pid > 0 ? pid : null;
+        }
+        catch (FileNotFoundException) { return null; }
+        catch (IOException) { return null; }
+        catch (UnauthorizedAccessException) { return null; }
     }
 
     private static async Task<bool> WaitForProcessExitAsync(int pid)
