@@ -116,7 +116,9 @@ the chaos burn-in harness (`scripts/burn-in.ps1`):
 
 1. **Mid-command reset recovery (safe pre-output retry)** — `IpcWorker.SendRequestAsync`
    now wraps the connect→write→read exchange in a retry loop. On a transport RESET
-   (`IsTransportReset`: `IOException`/`SocketException`) it retires the broken host and,
+   (`IsTransportReset`: `IOException`/`SocketException`, except
+   `HostProtocol.FrameSizeExceededException` — an oversized frame is a protocol error, never
+   retried, R04) it retires the broken host and,
    **only if the host never acknowledged execution-start (`<<<STARTED>>>`, R05) and no output
    frame was delivered**, respawns (reuse-if-healthy else fresh, via
    `EnsureHostReachableAsync`/`RetireAndRespawnAsync`) and retries once. The host emits
