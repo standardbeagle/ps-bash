@@ -384,9 +384,10 @@ try {{ Set-BashErrorMode -Mode PowerShell -ErrorAction SilentlyContinue }} catch
         // pushd/popd keep the two in sync, a test that moved the location left the
         // process cwd moved too, and unlike the runspace that leak is visible to
         // every other test in the assembly. Restore it here for the same reason the
-        // location is restored — and note it is only half a guarantee: see
-        // ProcessWorkingDirectoryCollection for why the classes that move it must
-        // also be serialized against each other.
+        // location is restored. This write is itself process-global, so it would
+        // race a class that is mid-test on the process cwd; that cannot happen
+        // because ProcessWorkingDirectoryCollection disables parallelization and
+        // runs alone, after every parallel collection has finished.
         RestoreProcessWorkingDirectory(_baselinePwd);
     }
 
