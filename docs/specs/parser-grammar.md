@@ -198,8 +198,8 @@ and bare `NAME` operands:
 ```
 if_command -> 'if' if_arm ('elif' if_arm)* ('else' body)? 'fi'
 if_arm     -> and_or TERM 'then' TERM body
-body       -> and_or (TERM and_or)*
-TERM       -> ';' | NEWLINE
+body       -> and_or (TERM and_or)* '&'?
+TERM       -> ';' | NEWLINE | '&'        ('&' also backgrounds the preceding and_or)
 ```
 
 ### 3.5 For Loops
