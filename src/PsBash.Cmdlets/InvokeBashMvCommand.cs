@@ -17,6 +17,9 @@ namespace PsBash.Cmdlets;
 /// <item>Destination is an existing directory → move source into it,
 /// preserving the source's basename.</item>
 /// <item>With <c>-n</c>, skip if target already exists.</item>
+/// <item>Validated before any mutation (<see cref="TransferValidation"/>): same
+/// file, directory into itself, several sources onto a non-directory, and
+/// type clashes are refused; a directory replaces only an EMPTY directory.</item>
 /// <item>Verbose mode emits <c>'src' -> 'dest'\n</c> per move.</item>
 /// </list>
 /// <para>
@@ -113,6 +116,14 @@ public sealed class InvokeBashMvCommand : PSCmdlet
         var destAbs = SessionState.Path.GetUnresolvedProviderPathFromPSPath(destRaw);
         bool destIsExistingDir = Directory.Exists(destAbs);
 
+        // Validate the operand shape BEFORE any mutation (several sources need a directory).
+        var shapeError = TransferValidation.CheckOperandShape("mv", sources.Count, destRaw, destAbs);
+        if (shapeError != null)
+        {
+            FileSystemHelpers.WriteBashError(this, shapeError);
+            return;
+        }
+
         foreach (var src in sources)
         {
             bool srcIsFile = File.Exists(src);
@@ -126,10 +137,16 @@ public sealed class InvokeBashMvCommand : PSCmdlet
                 continue;
             }
 
-            string targetPath = destAbs;
-            if (destIsExistingDir)
+            var targetPath = TransferValidation.ResolveTarget(src, destAbs, destIsExistingDir);
+
+            // Identity first (same file / dir into itself): must run before ANY delete, since the
+            // resolved target can BE the source (`mv p/src p`).
+            var identityError = TransferValidation.CheckIdentity("mv", src, srcIsDir, targetPath);
+            if (identityError != null)
             {
-                targetPath = Path.Combine(destAbs, Path.GetFileName(src.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar)));
+                FileSystemHelpers.WriteBashError(this, identityError);
+                hadError = true;
+                continue;
             }
 
             if (noClobber && (File.Exists(targetPath) || Directory.Exists(targetPath)))
@@ -137,16 +154,26 @@ public sealed class InvokeBashMvCommand : PSCmdlet
                 continue;
             }
 
+            bool caseOnlyRename = TransferValidation.IsCaseOnlyRename(src, targetPath);
+            var occupancyError = caseOnlyRename
+                ? null
+                : TransferValidation.CheckOccupancy("mv", src, srcIsDir, targetPath, replaceEmptyDirOnly: true);
+            if (occupancyError != null)
+            {
+                FileSystemHelpers.WriteBashError(this, occupancyError);
+                hadError = true;
+                continue;
+            }
+
             try
             {
                 if (srcIsDir)
                 {
-                    // Directory.Move doesn't take an overwrite param; do the
-                    // remove-then-move dance only when target exists.
-                    if (Directory.Exists(targetPath))
+                    // Directory.Move doesn't take an overwrite param. CheckOccupancy already proved
+                    // an existing target is an EMPTY directory (GNU lets that be replaced), so this
+                    // delete can never destroy content. Force variant: the empty dir may be read-only.
+                    if (!caseOnlyRename && Directory.Exists(targetPath))
                     {
-                        // Read-only-aware force delete (Windows .git packs / node_modules)
-                        // — was a plain Directory.Delete that threw on read-only descendants.
                         FileSystemHelpers.DeleteDirectoryForce(targetPath);
                     }
                     Directory.Move(src, targetPath);
