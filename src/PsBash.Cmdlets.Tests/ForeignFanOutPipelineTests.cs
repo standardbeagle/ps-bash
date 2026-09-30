@@ -73,8 +73,10 @@ public class ForeignFanOutPipelineTests : IDisposable, IClassFixture<SharedPwshF
         var result = Run(
             "New-BashObject -BashText \"one`ntwo`nthree`n\" | Invoke-BashGrep 'two'");
 
+        // The split piece is a fresh text record (grep over stdin no longer builds a typed
+        // GrepMatch): its text is what a native consumer would receive.
         var row = Assert.Single(result);
-        Assert.Equal("two", row.Properties["BashText"]?.Value);
+        Assert.Equal("two", BashRuntime.GetBashText(row));
     }
 
     /// <summary>

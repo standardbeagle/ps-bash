@@ -138,6 +138,10 @@ public sealed class InvokeBashTacCommand : PSCmdlet
         string? separator = plan.Separator;
         var operands = plan.Operands;
         var lines = new List<string>();
+        // Pipeline mode only: the records themselves, so the default-separator path can emit
+        // the ORIGINAL objects reversed (GNU: a missing final newline stays glued to that
+        // record, so `printf 'b\na' | tac` is `ab\n` — the flagged record just comes first).
+        var pipelineRecords = new List<object>();
         bool hadError = false;
 
         if (operands.Count == 0 && _pipeline.Count > 0)
@@ -149,14 +153,20 @@ public sealed class InvokeBashTacCommand : PSCmdlet
                 string trimmed = text.TrimEnd('\n');
                 if (trimmed.Contains('\n'))
                 {
-                    foreach (var subLine in trimmed.Split('\n'))
+                    bool unterminated = BashRuntime.IsUnterminated(item);
+                    var pieces = trimmed.Split('\n');
+                    for (int p = 0; p < pieces.Length; p++)
                     {
-                        lines.Add(subLine);
+                        lines.Add(pieces[p]);
+                        pipelineRecords.Add(BashRuntime.TextRecord(
+                            pieces[p], unterminated && p == pieces.Length - 1));
                     }
                 }
                 else
                 {
                     lines.Add(trimmed);
+                    // tac is a FILTER: a single-line record is emitted as itself.
+                    pipelineRecords.Add(item);
                 }
             }
         }
@@ -212,6 +222,11 @@ public sealed class InvokeBashTacCommand : PSCmdlet
                     WriteObject(BashRuntime.NewBashObject(chunk));
                 }
             }
+        }
+        else if (pipelineRecords.Count > 0)
+        {
+            for (int r = pipelineRecords.Count - 1; r >= 0; r--)
+                WriteObject(pipelineRecords[r]);
         }
         else
         {

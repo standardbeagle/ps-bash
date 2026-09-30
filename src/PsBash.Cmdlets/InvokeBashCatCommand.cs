@@ -226,10 +226,11 @@ public sealed class InvokeBashCatCommand : PSCmdlet
             string trimmed = text.TrimEnd('\n');
             if (trimmed.Contains('\n'))
             {
-                foreach (var subLine in trimmed.Split('\n'))
-                {
-                    WriteObject(subLine);
-                }
+                // Multi-line record: split into text lines, last keeps the missing newline.
+                bool unterminated = BashRuntime.IsUnterminated(InputObject);
+                var pieces = trimmed.Split('\n');
+                for (int p = 0; p < pieces.Length; p++)
+                    WriteObject(BashRuntime.TextRecord(pieces[p], unterminated && p == pieces.Length - 1));
             }
             else
             {
@@ -238,9 +239,22 @@ public sealed class InvokeBashCatCommand : PSCmdlet
             return;
         }
 
-        // Flagged path: one CatLine per stdin item (no multi-line split — the
-        // oracle's flagged stdin path numbered each pipeline item as one line).
-        EmitLine(BashRuntime.GetBashText(InputObject), string.Empty);
+        // Flagged path (-n/-b/-E/-T/-s) TRANSFORMS the line, so it emits fresh CatLine
+        // text records, never the upstream object. A multi-line record (printf 'b\na') is
+        // numbered line by line; the last line keeps the source's missing newline.
+        string flagged = BashRuntime.GetBashText(InputObject);
+        string flaggedTrimmed = flagged.TrimEnd('\n');
+        if (flaggedTrimmed.Contains('\n'))
+        {
+            bool unterminated = BashRuntime.IsUnterminated(InputObject);
+            var pieces = flaggedTrimmed.Split('\n');
+            for (int p = 0; p < pieces.Length; p++)
+                EmitLine(pieces[p], string.Empty, unterminated && p == pieces.Length - 1);
+        }
+        else
+        {
+            EmitLine(flaggedTrimmed, string.Empty, BashRuntime.IsUnterminated(InputObject));
+        }
     }
 
     protected override void EndProcessing()
@@ -325,7 +339,7 @@ public sealed class InvokeBashCatCommand : PSCmdlet
     /// end marker. Counters are instance state so a stdin stream and trailing
     /// file reads number continuously.
     /// </summary>
-    private void EmitLine(string content, string fileName)
+    private void EmitLine(string content, string fileName, bool unterminated = false)
     {
         bool isBlank = content.Length == 0;
 
@@ -370,6 +384,7 @@ public sealed class InvokeBashCatCommand : PSCmdlet
         obj.Properties.Add(new PSNoteProperty("FileName", fileName));
         obj.Properties.Add(new PSNoteProperty(
             "BashText", BashRuntime.NormalizeBashText(text + "\n")));
+        if (unterminated) obj.Properties.Add(new PSNoteProperty("NoTrailingNewline", true));
         WriteObject(obj);
     }
 

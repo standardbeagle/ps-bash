@@ -252,6 +252,7 @@ public sealed class InvokeBashUniqCommand : PSCmdlet
     // Adjacent-dedup state — uniq only needs the current run, never the whole
     // pipe. Instance state so a streamed stdin run carries across records.
     private string? _prevLine;
+    private object? _prevObject;   // the upstream record of _prevLine (single-line pipeline items only)
     private string? _prevKey;
     private int _runCount;
     private bool _hadError;
@@ -318,11 +319,16 @@ public sealed class InvokeBashUniqCommand : PSCmdlet
         }
         else
         {
-            WriteObject(BashRuntime.NewBashObject(_prevLine));
+            // Plain uniq / -d / -u is a FILTER: the output line IS the first line of its run,
+            // so the ORIGINAL upstream object passes through (uniq always terminates the line,
+            // hence PassTerminated strips a stale missing-newline flag).
+            WriteObject(_prevObject != null
+                ? BashRuntime.PassTerminated(_prevObject)
+                : BashRuntime.NewBashObject(_prevLine));
         }
     }
 
-    private void ProcessLine(string line)
+    private void ProcessLine(string line, object? original = null)
     {
         string key = GetUniqKey(line, _skipFields, _skipChars, _checkChars);
         bool same;
@@ -347,6 +353,7 @@ public sealed class InvokeBashUniqCommand : PSCmdlet
 
         FlushRun();
         _prevLine = line;
+        _prevObject = original;
         _prevKey = key;
         _runCount = 1;
     }
@@ -371,7 +378,7 @@ public sealed class InvokeBashUniqCommand : PSCmdlet
         }
         else
         {
-            ProcessLine(trimmed);
+            ProcessLine(trimmed, InputObject);
         }
     }
 

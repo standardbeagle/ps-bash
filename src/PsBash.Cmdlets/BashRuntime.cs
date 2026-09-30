@@ -438,6 +438,74 @@ public static class BashRuntime
         return noNl || text.EndsWith('\n') ? text : text + "\n";
     }
 
+    // ---- Pipeline record kinds (docs/specs/runtime-functions.md "Pipeline record kinds") ----
+    // FILTERS (output line == an input line) pass the upstream object through; TRANSFORMERS
+    // emit fresh text. These helpers are the ONE definition of "does this record end in a
+    // newline" so no cmdlet re-derives the sed-R21 rule.
+
+    /// <summary>
+    /// True when <paramref name="item"/> is a record whose bytes end WITHOUT a newline: it is
+    /// marked <c>NoTrailingNewline</c> (printf / <c>echo -n</c>) AND its BashText does not
+    /// itself end in <c>\n</c> (<c>printf '%s\n'</c> embeds the terminator and passes the
+    /// flag only so none is appended). A record may be multi-line (<c>printf 'b\na'</c> is one
+    /// object); then only its LAST line is unterminated.
+    /// </summary>
+    public static bool IsUnterminated(object? item)
+        => item is PSObject pso
+           && pso.Properties["NoTrailingNewline"]?.Value is true
+           && !GetBashText(pso).EndsWith('\n');
+
+    /// <summary>
+    /// A fresh text record: a bare string (rendered with a record boundary), or — when
+    /// <paramref name="unterminated"/> — a <c>NoTrailingNewline</c> object whose bytes are
+    /// emitted EXACTLY. The one way a TRANSFORMER (or a filter splitting a multi-line record)
+    /// emits a line; never carries the upstream object's type or flag.
+    /// </summary>
+    public static object TextRecord(string text, bool unterminated)
+        => unterminated
+            ? NewBashObject(text, "PsBash.TextOutput", noTrailingNewline: true)
+            : NewBashObject(text);
+
+    /// <summary>
+    /// The record a passed-through FILTER may emit when the command always terminates its
+    /// last line (grep, sort, uniq, shuf …): the original object, unless it carries the
+    /// missing-newline flag, in which case a fresh terminated text record — the stale flag
+    /// would glue it to whatever follows (<c>printf 'b\na' | sort</c> must end <c>b\n</c>).
+    /// </summary>
+    public static object PassTerminated(object item)
+        => IsUnterminated(item) ? NewBashObject(GetBashText(item)) : item;
+
+    /// <summary>
+    /// Fresh text records for an exact byte slice (<c>head -c</c> / <c>tail -c</c>): one record
+    /// per line, every line terminated except the last when the slice does not end in
+    /// <c>\n</c> — so the rendered bytes are exactly the slice.
+    /// </summary>
+    public static IEnumerable<object> ByteSliceRecords(string slice)
+    {
+        if (slice.Length == 0) yield break;
+        bool endsNl = slice[^1] == '\n';
+        var lines = (endsNl ? slice[..^1] : slice).Split('\n');
+        for (int i = 0; i < lines.Length; i++)
+            yield return TextRecord(lines[i], unterminated: !endsNl && i == lines.Length - 1);
+    }
+
+    /// <summary>
+    /// The exact byte-stream text of a record sequence: each record's BashText plus a
+    /// boundary <c>\n</c> unless it is unterminated or already ends in one. What a
+    /// byte-oriented consumer (<c>head -c</c>, <c>tail -c</c>) must slice.
+    /// </summary>
+    public static string RecordStreamText(IEnumerable<object> items)
+    {
+        var sb = new StringBuilder();
+        foreach (var item in items)
+        {
+            string text = GetBashText(item);
+            sb.Append(text);
+            if (!text.EndsWith('\n') && !IsUnterminated(item)) sb.Append('\n');
+        }
+        return sb.ToString();
+    }
+
     public static string GetBashText(object? inputObject)
     {
         if (inputObject is null)

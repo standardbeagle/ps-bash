@@ -296,7 +296,8 @@ public sealed class InvokeBashTrCommand : PSCmdlet
         // `seq 1 3 | tr "\n" " "` produced "1\n 2\n 3"). The real fix belongs at
         // the source/host contract, not in this cmdlet.
         string text = BashRuntime.GetBashText(InputObject);
-        WriteObject(BashRuntime.NewBashObject(TransformLine(text)));
+        // TRANSFORMER: fresh text, and tr copies a missing final newline through.
+        WriteObject(BashRuntime.TextRecord(TransformLine(text), BashRuntime.IsUnterminated(InputObject)));
     }
 
     protected override void EndProcessing()

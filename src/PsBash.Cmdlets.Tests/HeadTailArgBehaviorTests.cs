@@ -73,7 +73,7 @@ public class HeadTailArgBehaviorTests : IClassFixture<SharedPwshFixture>, IDispo
     [InlineData("'-n' '-1'", "a,b,c")]            // all but the last 1
     [InlineData("'-n' '+2'", "a,b")]
     [InlineData("'-n1K'", "a,b,c,d")]             // multiplier suffix
-    [InlineData("'-n5' '-c3'", "a\nb")]           // last of -c/-n wins: -c3 = first 3 bytes
+    [InlineData("'-n5' '-c3'", "a,b")]            // last of -c/-n wins: -c3 = first 3 bytes "a\nb" (now two text records, same bytes)
     [InlineData("'-c3' '-n2'", "a,b")]            // ... and here -n2
     public void Head_Pipeline_MatchesGnu(string args, string expected)
     {

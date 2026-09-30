@@ -125,7 +125,8 @@ awk / jq / find / echo / ls / sed migration decisions are in
 ```
 Source produces text with \n  →  Emit-BashLine  →  one BashObject per line in pipeline
 Source produces typed object  →  New-BashObject  →  one typed object in pipeline
-Consumer receives items      →  pass through original objects (preserves type)
+Filter receives items        →  pass the original objects through (preserves type)
+Transformer receives items   →  fresh text objects (BashRuntime.TextRecord)
 ```
 
 ### Example
@@ -140,35 +141,54 @@ $obj = New-BashObject -BashText "hello world`n"
 # Emits ONE object with BashText="hello world\n"
 ```
 
-## Pipeline Object Preservation
+## Pipeline record kinds (filters vs transformers)
 
-Consumer commands (grep, sed, tail, awk, sort, etc.) should **pass original objects
-through** the pipeline, NOT create new BashObjects. This preserves typed properties
-(e.g., `LsEntry.Name`, `CatLine.Content`) through pipe chains like `ls | grep .txt`.
+**Producers keep their typed objects** (`ls` -> `PsBash.LsEntry`, `find`, `ps`, `stat`, `du`,
+`date`, `ping`, ...). What a **consumer** emits depends on what it does to a line. The rule is
+about identity, not about "text vs objects":
 
-Sources are responsible for emitting one object per line using `Emit-BashLine`. This
-matches bash semantics where stdout is a byte stream and `\n` is the record separator.
-The "pipe" (PowerShell pipeline) delivers individual line-objects to consumers.
+| Kind | Definition | Emits | Commands |
+|---|---|---|---|
+| **Filter** | every output line IS one of its input lines (selected, reordered, deduplicated, passed as-is) | the **original upstream object** | `grep` (plain match), `rg` (plain), `head`/`tail` (`-n`), `sort`, `uniq` (plain, `-d`, `-u`), `tac`, `shuf`, `cat` (no flags), `tee`, `less`, `more` |
+| **Transformer** | the line's text changes | a **fresh text record** (`BashRuntime.TextRecord`: a bare string, or a `NoTrailingNewline` object), never the upstream object, whose type no longer describes the text | `sed`, `tr`, `cut`, `awk`, `rev`, `nl`, `grep -o/-n/-H/context`, `uniq -c`, `cat -n/-b/-E/-T`, `head -c`/`tail -c` |
 
-**Defensive split for edge cases:** If a consumer receives a multi-line BashText item
-(from an external source or legacy code), it should split only that item while passing
-single-line items through unchanged:
+`ls | grep .txt` therefore still yields `PsBash.LsEntry`; `ls | cut -c1-3` yields plain text. A
+mode of a filter command that rewrites the line (`grep -n`, `cat -n`, `uniq -c`) is a
+transformer for that invocation. Only a command that operates on the object itself (mutates file
+attributes, say) may pass a *modified* object on; none of the bash commands do.
 
-```powershell
-foreach ($item in $pipelineInput) {
-    $text = Get-BashText -InputObject $item
-    if ($text -match "`n" -and $text -ne "`n") {
-        # Multi-line edge case: split into new BashObjects
-        foreach ($subLine in ($text -replace "`n$",'' -split "`n")) {
-            # process $subLine
-        }
-    } else {
-        # Single-line: pass original $item (preserves LsEntry, CatLine, etc.)
-    }
-}
-```
+Sources emit one object per line via `Emit-BashLine`; `printf` is the exception and emits ONE
+multi-line object. A consumer that receives a multi-line BashText item splits **that item** into
+text lines and passes single-line items through unchanged (never flatten the whole input: that
+destroys the typed objects of a filter).
 
-**DO NOT** unconditionally flatten all input into `$allLines` — this destroys typed objects.
+### Line terminators must survive the object choice
+
+A record renders as `BashText` + `\n` unless it carries `NoTrailingNewline` (`printf`,
+`echo -n`: the bytes are exact). The one definition of "unterminated" is
+`BashRuntime.IsUnterminated(item)`: flag set **and** text not already ending in `\n`
+(`printf '%s\n'` embeds its terminator). A multi-line record is unterminated only on its LAST
+line. GNU tools differ on the missing final newline (oracle: `printf 'b\na' | cmd | od -c`):
+
+| Copy it through (`b\na`) | Always terminate the last line |
+|---|---|
+| head, tail, cat, tee, rev, tr, sed, less, more, `head -c`, `tail -c` (exact slice) | grep, sort, uniq, shuf, cut, nl, awk, `uniq -c` |
+| `tac` glues: `ab\n` (the unterminated record is emitted first, keeping its flag) | |
+
+Helpers (all in `BashRuntime`, never re-derive): `IsUnterminated`, `TextRecord(text,
+unterminated)` (fresh text; the last piece of a split record inherits the flag),
+`PassTerminated(item)` (the original object minus a stale flag, for filters that always
+terminate: `sort`/`shuf` can move a flagged record anywhere), `ByteSliceRecords(slice)`
+(`head -c`/`tail -c`), `RecordStreamText(items)` (the byte stream of a record sequence). The sed
+rewrite (R21, `printf 'x.y\n' | sed ...; echo Z` printing `x-yZ`) is the bug class: a flag copied
+onto text that no longer means "no newline".
+
+Tests: `PipelineRecordKindTests` (per-command bytes vs GNU, filter keeps `LsEntry`, transformer
+emits text).
+
+The fused lane (`Invoke-BashFusedPipeline`) and `Invoke-ProcessSubPipeline` are unaffected: the
+fused lane only ever carries strings (its allowlist has no typed producer), and the process-sub
+route hands the producer's objects to a consumer that follows the rules above.
 
 ## Command Reference
 
@@ -401,9 +421,9 @@ The psm1-function recipe (for the rare case that is the right answer):
    $pipelineInput = @($input)
    ```
 
-4. **Preserve pipeline objects**: when processing pipeline input, pass original
-   objects through (preserving typed properties like LsEntry.Name). Use the
-   defensive split pattern for multi-line edge cases (see Pipeline Object Preservation).
+4. **Pick the record kind**: a filter passes original objects through (preserving typed
+   properties like LsEntry.Name); a transformer emits fresh text. Split multi-line items
+   defensively and honor the missing final newline (see Pipeline record kinds).
 
 5. **Support file mode** if applicable: use `Resolve-BashGlob` on operands, read files
    with BOM-aware UTF-8 decoding, normalize `\r\n` to `\n`.

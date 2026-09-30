@@ -85,6 +85,8 @@ $top[0].Memory                      # 2.1 -- real double
 $top[0].Command                     # "node server.js" -- real string
 ```
 
+Bridge commands are **filters**: every line they output is one of their input lines. Commands (or modes) that change a line's text -- `sed`, `tr`, `cut`, `awk`, `rev`, `nl`, `grep -o`/`-n`, `uniq -c`, `cat -n`, `head -c`/`tail -c` -- are transformers and emit plain text, because the upstream typed object no longer describes the line. `ls | grep .txt` keeps `LsEntry`; `ls | cut -c1-3` yields text.
+
 Each bridge command preserves types in its own way:
 
 | Command | Text operation | Object behavior |

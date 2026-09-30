@@ -313,9 +313,12 @@ public sealed class InvokeBashTailCommand : PSCmdlet
                     string trimmed = text.TrimEnd('\n');
                     if (trimmed.Contains('\n'))
                     {
-                        foreach (var subLine in trimmed.Split('\n'))
+                        bool unterminated = BashRuntime.IsUnterminated(item);
+                        var pieces = trimmed.Split('\n');
+                        for (int p = 0; p < pieces.Length; p++)
                         {
-                            if (idx >= skip) WriteObject(subLine);
+                            if (idx >= skip)
+                                WriteObject(BashRuntime.TextRecord(pieces[p], unterminated && p == pieces.Length - 1));
                             idx++;
                         }
                     }
@@ -337,9 +340,11 @@ public sealed class InvokeBashTailCommand : PSCmdlet
                     string trimmed = text.TrimEnd('\n');
                     if (trimmed.Contains('\n'))
                     {
-                        foreach (var subLine in trimmed.Split('\n'))
+                        bool unterminated = BashRuntime.IsUnterminated(item);
+                        var pieces = trimmed.Split('\n');
+                        for (int p = 0; p < pieces.Length; p++)
                         {
-                            buf[pos] = subLine;
+                            buf[pos] = BashRuntime.TextRecord(pieces[p], unterminated && p == pieces.Length - 1);
                             pos = (pos + 1) % cap;
                             if (bufLen < cap) bufLen++;
                         }
@@ -553,24 +558,14 @@ public sealed class InvokeBashTailCommand : PSCmdlet
     /// </summary>
     private void EmitPipelineBytes(int byteCount, bool fromByte)
     {
-        var sb = new StringBuilder();
-        for (int k = 0; k < _pipeline.Count; k++)
-        {
-            sb.Append(BashRuntime.GetBashText(_pipeline[k]));
-            bool last = k == _pipeline.Count - 1;
-            bool noNewline = last && _pipeline[k].Properties["NoTrailingNewline"]?.Value is true;
-            if (!noNewline) sb.Append('\n');
-        }
-        byte[] all = Encoding.UTF8.GetBytes(sb.ToString());
+        byte[] all = Encoding.UTF8.GetBytes(BashRuntime.RecordStreamText(_pipeline));
         long safeCount = Math.Max(byteCount, 0);
         long start = fromByte
             ? Math.Min(Math.Max(safeCount - 1, 0), all.Length)
             : Math.Max(0, all.Length - safeCount);
         string text = Encoding.UTF8.GetString(all, (int)start, (int)(all.Length - start));
-        if (text.Length == 0) return;
-        var lines = text.Split('\n');
-        int n = text.EndsWith('\n') ? lines.Length - 1 : lines.Length;
-        for (int k = 0; k < n; k++) WriteObject(lines[k]);
+        // Byte slice: a TRANSFORMER — fresh text records carrying exactly the slice's bytes.
+        foreach (var rec in BashRuntime.ByteSliceRecords(text)) WriteObject(rec);
     }
 
     private void EmitFileBytes(string path, int byteCount, bool fromByte, string command)
