@@ -83,6 +83,9 @@ public sealed class InvokeBashTailCommand : PSCmdlet
     private const string OptLines = "lines", OptBytes = "bytes", OptQuiet = "quiet", OptNum = "num",
         OptFollow = "follow", OptSleep = "sleep";
 
+    /// <summary>GNU tail long_options[] order; getopt_long lists ambiguous-prefix candidates in it.</summary>
+    private static readonly string[] TailLongOptionOrder = { "silent", "sleep-interval", "verbose", "version" };
+
     /// <summary>
     /// tail's option surface (GNU coreutils 9.4: -c -f -F -n -q -s -v -z + long forms; -NUM
     /// obsolete shorthand). <c>--follow</c> takes an OPTIONAL attached value (<c>name</c> /
@@ -101,8 +104,9 @@ public sealed class InvokeBashTailCommand : PSCmdlet
         },
         validButUnsupported: TailValidButUnsupported,
         allowAbbrev: true,
-        numericShorthandId: OptNum,
-        gnuInfoOptions: true);
+        gnuInfoOptions: true,
+        digitOptionWording: "option used in invalid context",
+        longOptionOrder: TailLongOptionOrder);
 
     /// <summary>Pure argv scan (unit-test seam): options, operands and the first error.</summary>
     internal static ParsedArgs ScanArgs(string[] args) => ArgParser.Parse(args, TailSpec);
@@ -141,6 +145,10 @@ public sealed class InvokeBashTailCommand : PSCmdlet
     /// </summary>
     internal static TailArgs Plan(string[] args)
     {
+        // A valid obsolete first argument (-NUM[bcl][f] / +NUM[bcl][f]) is rewritten to the options
+        // it stands for; anything else digit-shaped is an "invalid context" error from the scan.
+        if (TryExpandObsolete(args, out var expanded)) args = expanded;
+
         var t = new TailArgs { Parsed = ScanArgs(args) };
         t.Operands = t.Parsed.Operands();
         if (t.Parsed.HasError) return t;
@@ -150,12 +158,6 @@ public sealed class InvokeBashTailCommand : PSCmdlet
             if (tok.Kind != ArgTokKind.Option) continue;
             switch (tok.OptId)
             {
-                // GNU: the obsolete -NUM is only valid as the FIRST argument and not combined with
-                // any other option (`tail -5 -n1`, `tail -n1 -5` are both "invalid context").
-                case OptNum when tok.ArgIndex != 0 || t.Parsed.Tokens.Any(x => x.Kind == ArgTokKind.Option && x.OptId != OptNum):
-                    t.Error = $"tail: option used in invalid context -- {tok.Value![0]}";
-                    return t;
-                case OptNum:
                 case OptLines:
                     if (!GnuNumber.TryParse(tok.Value!, out int lines, out char lsign))
                     {
@@ -197,30 +199,67 @@ public sealed class InvokeBashTailCommand : PSCmdlet
             }
         }
 
-        // Legacy operand forms, on the FIRST operand only and never after `--`:
-        //   tail +2  -> GNU obsolete -n +2 (only as the very first argument)
-        //   tail 5   -> ps-bash extension: line count 5 (Pester-pinned)
+        // Legacy ps-bash extension, on the FIRST operand only and never after `--`:
+        //   tail 5   -> line count 5 (Pester-pinned)
         foreach (var tok in t.Parsed.Tokens)
         {
             if (tok.Kind != ArgTokKind.Operand) continue;
-            if (!tok.AfterDoubleDash)
+            if (!tok.AfterDoubleDash && IsAllDigits(tok.Raw))
             {
-                if (tok.ArgIndex == 0 && tok.Raw.Length > 1 && tok.Raw[0] == '+' && IsAllDigits(tok.Raw.AsSpan(1)))
-                {
-                    t.Count = BashRuntime.ParseCountClamped(tok.Raw.AsSpan(1));
-                    t.FromLine = true;
-                    t.BytesMode = false;
-                    t.Operands.RemoveAt(0);
-                }
-                else if (IsAllDigits(tok.Raw))
-                {
-                    t.Count = BashRuntime.ParseCountClamped(tok.Raw.AsSpan());
-                    t.Operands.RemoveAt(0);
-                }
+                t.Count = BashRuntime.ParseCountClamped(tok.Raw.AsSpan());
+                t.Operands.RemoveAt(0);
             }
             break; // only the first operand qualifies
         }
         return t;
+    }
+
+    /// <summary>
+    /// GNU tail's obsolete first argument <c>-NUM[bcl][f]</c> / <c>+NUM[bcl][f]</c> (oracle-checked,
+    /// coreutils 9.4): <c>c</c> = bytes, <c>l</c> = lines, <c>b</c> = 512-byte blocks (bytes), a trailing
+    /// <c>f</c> follows. It is honoured only when nothing else could be an option: at most one further
+    /// argument (a file, <c>-</c>, or <c>--</c>) or exactly <c>-- FILE</c>; otherwise <c>-2 -q</c>,
+    /// <c>-2 a b</c>, <c>-2 a --</c> are "option used in invalid context" (a <c>+NUM</c> then stays an
+    /// ordinary file operand). Rewrites to the equivalent <c>-n</c>/<c>-c</c> [+ <c>-f</c>] options.
+    /// </summary>
+    internal static bool TryExpandObsolete(string[] args, out string[] expanded)
+    {
+        expanded = args;
+        if (args.Length == 0) return false;
+
+        string a = args[0];
+        if (a.Length < 2 || (a[0] != '-' && a[0] != '+') || !char.IsAsciiDigit(a[1])) return false;
+
+        int i = 1;
+        while (i < a.Length && char.IsAsciiDigit(a[i])) i++;
+        string digits = a.Substring(1, i - 1);
+        bool bytes = false;
+        string suffix = "";
+        if (i < a.Length && a[i] is 'b' or 'c' or 'l')
+        {
+            bytes = a[i] != 'l';
+            if (a[i] == 'b') suffix = "b";
+            i++;
+        }
+        bool follow = false;
+        if (i < a.Length && a[i] == 'f') { follow = true; i++; }
+        if (i != a.Length) return false; // not the obsolete shape (`-2x`: a digit-in-bundle error)
+
+        // Arity rule: the rest is nothing, one non-option word, `-`, `--`, or `-- WORD`.
+        var rest = args.AsSpan(1);
+        if (rest.Length > 0 && rest[0] == "--") rest = rest.Slice(1);
+        else if (rest.Length == 1 && rest[0].Length > 1 && rest[0][0] == '-') return false;
+        if (rest.Length > 1) return false;
+
+        var list = new List<string>
+        {
+            bytes ? "-c" : "-n",
+            (a[0] == '+' ? "+" : "") + digits + suffix,
+        };
+        if (follow) list.Add("-f");
+        list.AddRange(args.Skip(1));
+        expanded = list.ToArray();
+        return true;
     }
 
     /// <summary>GNU argmatch: any non-empty prefix of <c>name</c> or <c>descriptor</c>.</summary>

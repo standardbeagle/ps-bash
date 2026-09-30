@@ -302,6 +302,61 @@ public class ArgParserTests
     }
 
     [Fact]
+    public void Abbrev_AmbiguousCandidates_FollowLongOptionOrder_NotAlphabetical()
+    {
+        // GNU cp: `--re` lists '--recursive' '--remove-destination' '--reflink' (its long_options[] order).
+        var spec = new OptSpecSet(
+            new[]
+            {
+                new OptSpec("recursive", 'r', "recursive"),
+                new OptSpec("remove", '\0', "remove-destination"),
+            },
+            validButUnsupported: new[] { "--reflink" },
+            allowAbbrev: true,
+            longOptionOrder: new[] { "recursive", "remove-destination", "reflink" });
+        Assert.Equal(
+            "x: option '--re' is ambiguous; possibilities: '--recursive' '--remove-destination' '--reflink'",
+            ArgParser.Parse(new[] { "--re" }, spec).Error!.Value.Message("x"));
+    }
+
+    [Fact]
+    public void Abbrev_AmbiguousCandidates_WithoutLongOptionOrder_UseDeclarationOrder()
+    {
+        // Specs in declaration order, then unsupported names, then the implicit --help/--version.
+        var spec = new OptSpecSet(
+            new[]
+            {
+                new OptSpec("z", '\0', "zeta-b"),
+                new OptSpec("a", '\0', "zeta-a"),
+            },
+            validButUnsupported: new[] { "--zeta-0" },
+            allowAbbrev: true);
+        Assert.Equal(
+            "x: option '--zeta' is ambiguous; possibilities: '--zeta-b' '--zeta-a' '--zeta-0'",
+            ArgParser.Parse(new[] { "--zeta" }, spec).Error!.Value.Message("x"));
+    }
+
+    [Theory]
+    [InlineData("invalid trailing option", "-q5", '5')]
+    [InlineData("option used in invalid context", "-x12", '1')]  // the FIRST digit, as getopt returns it
+    public void DigitOptionWording_DigitInOptionPosition_IsGnuHeadTailStyleError(string wording, string arg, char digit)
+    {
+        var spec = new OptSpecSet(
+            new[] { new OptSpec("quiet", 'q', "quiet"), new OptSpec("x", 'x', null) },
+            digitOptionWording: wording);
+        var err = ArgParser.Parse(new[] { arg }, spec).Error!.Value;
+        Assert.Equal(ArgErrorKind.MisplacedDigit, err.Kind);
+        Assert.Equal($"t: {wording} -- {digit}", err.Message("t"));
+    }
+
+    [Fact]
+    public void DigitOptionWording_OffByDefault_DigitIsAnOrdinaryInvalidOption()
+    {
+        var spec = new OptSpecSet(new[] { new OptSpec("quiet", 'q', "quiet") });
+        Assert.Equal("t: invalid option -- '5'", ArgParser.Parse(new[] { "-q5" }, spec).Error!.Value.Message("t"));
+    }
+
+    [Fact]
     public void Abbrev_ExactNameBeatsLongerCandidates()
     {
         var spec = new OptSpecSet(new[]

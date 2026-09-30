@@ -90,11 +90,14 @@ public sealed class InvokeBashCpCommand : PSCmdlet
         "--attributes-only", "-d",
         // valid GNU long options (the `-p` short is implemented; its long spellings are not)
         "--preserve", "--no-preserve", "--parents", "--remove-destination",
-        "--copy-contents", "--debug",
+        "--copy-contents", "--debug", "-S", "--suffix",
     };
 
     private const string OptRecursive = "recursive", OptNoClobber = "no-clobber", OptForce = "force",
         OptVerbose = "verbose", OptPreserve = "preserve", OptUpdate = "update", OptArchive = "archive";
+
+    /// <summary>GNU cp long_options[] order; getopt_long lists ambiguous-prefix candidates in it.</summary>
+    private static readonly string[] CpLongOptionOrder = { "archive", "attributes-only", "copy-contents", "context", "debug", "dereference", "no-clobber", "no-dereference", "no-preserve", "no-target-directory", "parents", "preserve", "recursive", "remove-destination", "reflink", "sparse", "strip-trailing-slashes", "suffix", "symbolic-link", "verbose", "version" };
 
     /// <summary>cp's whole option surface, built once for the shared ordered parser.</summary>
     private static readonly OptSpecSet CpSpec = new(
@@ -113,7 +116,8 @@ public sealed class InvokeBashCpCommand : PSCmdlet
         },
         validButUnsupported: CpValidButUnsupported,
         allowAbbrev: true,
-        gnuInfoOptions: true);
+        gnuInfoOptions: true,
+        longOptionOrder: CpLongOptionOrder);
 
     /// <summary>Pure argv scan (unit-test seam): options, operands and the first error.</summary>
     internal static ParsedArgs ScanArgs(string[] args) => ArgParser.Parse(args, CpSpec);

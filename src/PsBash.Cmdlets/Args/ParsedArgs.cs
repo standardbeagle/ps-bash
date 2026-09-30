@@ -36,6 +36,13 @@ public enum ArgErrorKind
 
     /// <summary><c>--append=x</c>: an attached value on an option that takes none.</summary>
     UnexpectedValue,
+
+    /// <summary>
+    /// A digit where an option letter was expected (<c>head -q5</c>, <c>tail -12x</c>), for the tools
+    /// whose getopt string lists the digits only to reject them. <see cref="ArgError.Detail"/> carries
+    /// the tool's wording ("invalid trailing option" for head, "option used in invalid context" for tail).
+    /// </summary>
+    MisplacedDigit,
 }
 
 /// <summary>
@@ -70,6 +77,8 @@ public readonly record struct ArgError(
             $"{command}: option '{Token}' is ambiguous; possibilities:{Detail}",
         ArgErrorKind.UnexpectedValue =>
             $"{command}: option '{Token}' doesn't allow an argument",
+        ArgErrorKind.MisplacedDigit =>
+            $"{command}: {Detail} -- {BadChar}",
         _ => $"{command}: invalid option",
     };
 }

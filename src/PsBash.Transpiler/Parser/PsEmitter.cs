@@ -3386,7 +3386,9 @@ public static class PsEmitter
     /// </summary>
     private static string ExpandAnsiCEscapes(string s)
     {
-        var sb = new StringBuilder(s.Length);
+        // \xHH / \nnn name BYTES: runs of them are UTF-8 decoded (EscapedTextBuilder), so
+        // $'\xe2\x82\xac' is the euro sign, not three Latin-1 characters.
+        var sb = new EscapedTextBuilder(s.Length);
         int i = 0;
         while (i < s.Length)
         {
@@ -3423,7 +3425,7 @@ public static class PsEmitter
                         j++; cnt++;
                     }
                     if (cnt == 0) { sb.Append('\\').Append('x'); i += 2; }
-                    else { sb.Append((char)val); i = j; }
+                    else { sb.AppendByte(val); i = j; }
                     break;
                 }
 
@@ -3469,7 +3471,7 @@ public static class PsEmitter
                         val = val * 8 + (s[j] - '0');
                         j++; cnt++;
                     }
-                    sb.Append((char)(val & 0xFF));
+                    sb.AppendByte(val);
                     i = j;
                     break;
                 }
@@ -3482,8 +3484,9 @@ public static class PsEmitter
         }
         // bash words are NUL-terminated C strings: $'a\0b' is just "a" (oracle-verified).
         // Truncate instead of smuggling a NUL into an argv/PowerShell literal.
-        int nul = sb.ToString().IndexOf('\0');
-        return nul >= 0 ? sb.ToString(0, nul) : sb.ToString();
+        string expanded = sb.ToString();
+        int nul = expanded.IndexOf('\0');
+        return nul >= 0 ? expanded.Substring(0, nul) : expanded;
     }
 
     private static int HexValue(char c)

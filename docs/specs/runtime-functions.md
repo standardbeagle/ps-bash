@@ -285,7 +285,10 @@ untouched — its contract (unknown flag becomes an operand) differs.
   may share an `Id` (`-r`/`-R` = "recursive"). `Short` is `'\0'` for none; `Long` has no `--`.
 - `OptSpecSet` — built ONCE as `static readonly`: the specs, `validButUnsupported` names (as typed:
   `"-i"`, `"--interactive"`), `allowAbbrev` (getopt_long unique-prefix long options; an ambiguous
-  prefix is an error listing candidates), `numericShorthandId` (`head -5`), `gnuInfoOptions`
+  prefix is an error listing candidates in GNU's `long_options[]` TABLE order, not alphabetical:
+  `--re` in cp is `'--recursive' '--remove-destination' '--reflink'`. Pass `longOptionOrder:` (the full
+  long-name order, read from the oracle by probing `cmd --<letter>`); names it omits follow in
+  declaration order: specs, then valid-but-unsupported, then `help`/`version`), `numericShorthandId` (`head -5`), `gnuInfoOptions`
   (`--help`/`--version` join abbreviation, so `--ver` is ambiguous with `--verbose`).
 - `ArgParser.Parse(ReadOnlySpan<string> argv, OptSpecSet)` → `ParsedArgs`: `Tokens` in ORIGINAL
   order (`ArgTokKind` Operand/Option/DoubleDash; a bundle `-abc` is one token per letter), the
@@ -320,7 +323,7 @@ colliding bare letter that has NO decoy (`Invoke-BashTee -i`) still fails in the
 
 **Also in `Args/`:** `GnuNumber.TryParse` (head/tail `NUM`: sign, digits, multiplier suffix `b k K m M G T ... kB MB KiB`; lowercase only b/k/m; saturates at int.MaxValue).
 
-**Batch 3a (head, tail, wc, cat, tac, nl, uniq) and the fused lane.** Each cmdlet exposes `internal static <Cmd>Args Plan(string[])` (ScanArgs + value validation: NUM, `-s`, nl style/format/width, uniq `-f/-s/-w`/METHOD) and the compiled line-stream core (`LineStreamRegistry.TryCreate`) calls it FIRST, then applies its own narrower certification — so a core can never accept an argv its cmdlet rejects (`LineStreamArgAgreementTests`). `FusedLane.StageIsUnbounded` treats every `--follow` abbreviation as unbounded (`IsFollowSpelling`), since `tail --fo` now parses as follow. The emitter builds the `-Stages` argv from static values, so single-quoting in the fallback text never reaches the cores. Legacy ps-bash extensions kept (Pester-pinned): a bare leading number is the count for head/tail (`head 5`, `tail 5`).
+**Batch 3a (head, tail, wc, cat, tac, nl, uniq) and the fused lane.** Each cmdlet exposes `internal static <Cmd>Args Plan(string[])` (ScanArgs + value validation: NUM, `-s`, nl style/format/width, uniq `-f/-s/-w`/METHOD) and the compiled line-stream core (`LineStreamRegistry.TryCreate`) calls it FIRST, then applies its own narrower certification — so a core can never accept an argv its cmdlet rejects (`LineStreamArgAgreementTests`). `FusedLane.StageIsUnbounded` treats every `--follow` abbreviation as unbounded (`IsFollowSpelling`), since `tail --fo` now parses as follow. The emitter builds the `-Stages` argv from static values, so single-quoting in the fallback text never reaches the cores. head/tail declare `digitOptionWording:` so a digit in option position (`-q5`, `-12x`) is GNU's `invalid trailing option -- N` / `option used in invalid context -- N` (`ArgErrorKind.MisplacedDigit`), and rewrite the obsolete first argument (`-NUM[bkmlcqvz]*` for head, `[-+]NUM[bcl][f]` for tail, with tail's arity rule) into ordinary options BEFORE the scan (`TryExpandObsoleteNum` / `TryExpandObsolete`). Legacy ps-bash extensions kept (Pester-pinned): a bare leading number is the count for head/tail (`head 5`, `tail 5`).
 
 **Batch 3b (fold, expand, unexpand, paste, join, comm, split, strings, base64).** Same `Plan(argv)` / `ScanArgs` seam per cmdlet (pure, tested by `<Cmd>ArgScanTests`); end-to-end behavior incl. direct-call decoys in `Batch3bArgBehaviorTests`. Usage errors exit **1** (GNU coreutils; `strings` = binutils, also 1); valid-but-unsupported exit 2. Notable rules: counts/widths are decimal-only where GNU says so (`fold -w`, `base64 -w`, `strings -n`, `split -a/-l`), GNU SIZE suffixes only where GNU allows them (`split -b` via `GnuNumber`); `expand`/`unexpand` `-t` goes through `TabStopList` (uniform N, ascending list, last element `/N` or `+N`, several `-t` concatenate; past the last plain stop `expand` emits one space and `unexpand` converts nothing); `unexpand -t` implies `-a`, `--first-only` overrides it in any order, obsolete `-NUM` does not imply `-a`; `paste -d LIST` cycles single-character delimiters per column (serial: per line, restarting per file) with `\n \t \r \b \f \v \\ \0` escapes, and a `-` operand shares ONE stdin cursor (`paste - -` pairs lines); `join -o/-e` and `comm --check-order/--nocheck-order` are refused (they were silently ignored / swallowed); `comm --output-delimiter=STR` is implemented (an empty STR is NUL, as GNU 9.4). Value decoys (`fold -w`, `split -a`, `base64 -w`, `paste -d`, `join -a/-v`) are re-injected as `-x VALUE` pairs by each cmdlet's `ArgsWithDecoys`. `stat` and `file` are not migrated yet.
 **Migrating a command:**
@@ -354,16 +357,51 @@ The dialects differ exactly where bash's builtins do (oracle-checked, bash 5.2):
 | `Echo` (`echo -e`) | `\0NNN` only (0 + up to 3 digits); `\101` stays literal | `\xHH \uHHHH \UHHHHHHHH \e \E`; `\"` stays literal | stops ALL output incl. the newline |
 | `PrintfB` (`printf %b` arg) | `\0NNN` and `\NNN` | as Echo | stops all output, including the rest of the format |
 | `PrintfFormat` (printf format) | `\NNN` = 1-3 digits INCLUDING the first (`\0101` = `\010` + `1`) | `\xHH \u \U \e \" \' \?` | literal (not special) |
-| `Tr` (tr SETs) | `\NNN` 1-3 digits | single-char escapes only; no `\x`/`\e` | n/a |
 
 All dialects: `\\ \a \b \f \n \r \t \v`; an unknown escape keeps its backslash. `\0` yields a
-real NUL char, which survives pipes, `tee` and `>` (`printf 'x\0' > f` is 2 bytes). Values above
-`\177` become the corresponding Unicode char (not a raw byte) — known gap. `$'…'` is expanded by the
+real NUL char, which survives pipes, `tee` and `>` (`printf 'x\0' > f` is 2 bytes). `\xHH` / `\NNN` name
+BYTES: a run of bytes >= 0x80 that is valid UTF-8 becomes that character (`EscapedTextBuilder` in
+Transpiler; `printf '\xe2\x82\xac'` is U+20AC and every output boundary writes E2 82 AC, exactly bash's
+bytes). A run that is not valid UTF-8 (a lone `\xe9`/`\351`, overlong, truncated) becomes one Latin-1 char
+per byte — KNOWN GAP, see "Raw bytes" below. `$'…'` is expanded by the
 emitter's own `ExpandAnsiCEscapes` (Transpiler cannot reference Cmdlets); it truncates the word at
 the first NUL, as bash's C strings do.
 
+`tr` SETs are not a dialect of `Expand`: `BashEscapes.ExpandTrSet` does escapes, `[:class:]` and `a-z`
+ranges in ONE pass so an escaped `-`/`[` stays a literal. `\NNN` is 1-3 octal digits, every other unknown
+escape (`\q \x \e \c`) DROPS the backslash (oracle: GNU tr 9.4 — `tr '\q' X` translates `q`), and a lone
+trailing backslash is literal plus `tr: warning: an unescaped backslash at end of string is not portable`
+on stderr. How `tr` sees the record terminator is in `runtime-command-reference.md` (tr row).
+
 `printf %b` reads the RAW argument text (not the int/double coercion used by `%d`), so `\0101`
 keeps its leading zero.
+
+### Raw bytes (design note — NOT implemented)
+
+`printf '\351' | wc -c` is 1 in bash (the single byte E9); ps-bash answers 2 (U+00E9, which every
+boundary encodes as C3 A9), and `printf '\xe9' > f` writes 2 bytes. Only a byte that is not part of a
+valid UTF-8 run hits this (valid runs are decoded, see above). Investigation: text is a .NET `string`
+(UTF-16) end to end, and UTF-8 is hard-wired at every boundary — `HostProtocol` frames, the launcher's
+`ConsoleEncoding`/PTY writers, `File.WriteAllText` in `Invoke-BashRedirect`, tee, split, gzip, `BashFileSystem`
+readers (`StreamReader(UTF8)`, which turns an invalid input byte into U+FFFD — so `cat` of a binary file is
+lossy too), and `wc -c` (`GetByteCount`) — roughly 55 sites. A fix needs a byte model, not an escape fix.
+Options:
+
+1. **Escaped-byte markers** (Python `surrogateescape` / Cygwin style). Escapes and invalid input bytes map to
+   U+F780..U+F7FF; every OUTPUT boundary maps them back to single bytes (host stdout frame -> launcher ->
+   stdout/PTY, redirect/tee/split writers, `wc -c`, external-process stdin) and every INPUT boundary maps
+   invalid UTF-8 to markers. Pipeline stays strings; the cost is the ~55 sites, the launcher, and deciding
+   that a literal PUA character in user text is ambiguous. Smallest total change, lossless round trip.
+2. **Byte-carrying records**: a `Bytes` (`byte[]`) member on the BashObject (next to `NoTrailingNewline`) that
+   only binary-aware consumers (redirect, tee, cat, wc -c, base64, gzip, tr) read; `BashText` keeps a
+   Latin-1 view for text consumers. Needs a binary `HostProtocol` frame and breaks the "every record is a
+   string" fast path.
+3. **Status quo** (chosen): Latin-1 char per invalid byte; valid UTF-8 runs exact. Covers the real-world uses
+   of `\x`/octal in scripts (accented letters, currency signs, emoji, ANSI `\x1b`) and leaves only genuinely
+   non-UTF-8 payloads (raw Latin-1 text, binary) wrong.
+
+Pick option 1 if a consumer needs binary-safe pipelines; it should land as one change touching all boundaries
+with `printf '\351' | wc -c` (1) and `printf '\xe9' > f` (1 byte) as the acceptance tests.
 
 ## Temp File Strategy
 

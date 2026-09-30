@@ -119,6 +119,9 @@ public class PsEmitterFusedPipelineTests
     [InlineData("tail -F x | grep y")]
     [InlineData("tail -qf x | grep y")]
     [InlineData("tail -fn5 x | grep y")]
+    [InlineData("tail -2f x | grep y")]  // obsolete -NUM[bcl]f
+    [InlineData("tail +2f x | grep y")]  // obsolete +NUM[bcl]f
+    [InlineData("tail +2cf x | grep y")]
     [InlineData("grep y x | tail -f")]
     public void Fallback_TailFollow_NotFused(string chain)
     {

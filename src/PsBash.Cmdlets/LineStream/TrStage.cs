@@ -100,7 +100,10 @@ internal sealed class TrStage : ILineStreamStage
                 continue;
             }
 
-            operands.Add(BashEscapes.Expand(arg, EscapeDialect.Tr));
+            // A SET ending in a lone backslash warns on stderr, which the cmdlet owns.
+            try { BashEscapes.ExpandTrSet(arg, out bool trailing); if (trailing) return null; }
+            catch (TrSetException) { return null; }
+            operands.Add(arg);
         }
 
         // ---- table construction (port of BuildTablesCore) ----
@@ -159,15 +162,53 @@ internal sealed class TrStage : ILineStreamStage
                 if (squeezeMode) squeezeSet2 = new HashSet<char>(set2);
             }
         }
-        catch (TrRangeError)
+        catch (TrSetException)
         {
             // `tr 'z-a' x` is exit 1 plus a stderr message. The streaming lane has neither,
             // so the cmdlet must own it.
             return null;
         }
 
+        // A transform that touches the record terminator needs the real byte stream (terminators
+        // included), which only the cmdlet reconstructs: `seq 1 3 | tr -d '\n'` is "123".
+        if (NewlineIsModified(deleteMode, complementMode, squeezeMode, operands.Count,
+                              membership, translateMap, translateDrop, squeezeSet2))
+            return null;
+
         return new TrStage(deleteMode, complementMode, squeezeMode, operands.Count,
                            membership, translateMap, translateDrop, squeezeSet2);
+    }
+
+    /// <summary>
+    /// True when the tables delete, translate or squeeze <c>\n</c>. Records reach tr WITHOUT their
+    /// terminator (seq, cat, echo emit bare lines; the serializer adds the <c>\n</c>), so a
+    /// newline-touching transform only gives bash's answer on the whole byte stream. Shared by the
+    /// cmdlet (which then buffers the stream) and this core (which then declines).
+    /// </summary>
+    internal static bool NewlineIsModified(
+        bool deleteMode, bool complementMode, bool squeezeMode, int operandCount,
+        HashSet<char>? membership, Dictionary<char, char>? translateMap,
+        HashSet<char>? translateDrop, HashSet<char>? squeezeSet2)
+    {
+        if (deleteMode)
+        {
+            if (membership is null) return false;
+            bool inSet = membership.Contains('\n');
+            return complementMode ? !inSet : inSet;
+        }
+        if (squeezeMode && operandCount == 1)
+        {
+            if (membership is null) return false;
+            bool inSet = membership.Contains('\n');
+            return complementMode ? !inSet : inSet;
+        }
+        if (translateMap is not null)
+        {
+            if (translateMap.TryGetValue('\n', out char mapped) && mapped != '\n') return true;
+            if (translateDrop is not null && translateDrop.Contains('\n')) return true;
+            if (squeezeMode && squeezeSet2 is not null && squeezeSet2.Contains('\n')) return true;
+        }
+        return false;
     }
 
     /// <summary>Per-record transform. NO trim, NO split — see the class remarks.</summary>
@@ -247,43 +288,6 @@ internal sealed class TrStage : ILineStreamStage
         return text;
     }
 
-    private sealed class TrRangeError : Exception
-    {
-        public TrRangeError(string message) : base(message) { }
-    }
-
-    /// <summary>Port of the cmdlet's class expander: POSIX class names first, then ranges.</summary>
-    private static string ExpandClass(string spec)
-    {
-        spec = ExpandPosixClasses(spec);
-        var sb = new StringBuilder();
-        int i = 0;
-        while (i < spec.Length)
-        {
-            if (i + 2 < spec.Length && spec[i + 1] == '-')
-            {
-                int start = spec[i];
-                int end = spec[i + 2];
-                if (start > end) throw new TrRangeError("reverse range");
-                for (int c = start; c <= end; c++) sb.Append((char)c);
-                i += 3;
-            }
-            else
-            {
-                sb.Append(spec[i]);
-                i++;
-            }
-        }
-        return sb.ToString();
-    }
-
-    private static string ExpandPosixClasses(string spec)
-        => spec
-            .Replace("[:alnum:]", "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789")
-            .Replace("[:alpha:]", "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ")
-            .Replace("[:digit:]", "0123456789")
-            .Replace("[:upper:]", "ABCDEFGHIJKLMNOPQRSTUVWXYZ")
-            .Replace("[:lower:]", "abcdefghijklmnopqrstuvwxyz")
-            .Replace("[:space:]", " \t\n\r\f\v")
-            .Replace("[:punct:]", "!\"#$%&'()*+,-./:;<=>?@[\\]^_`{|}~");
+    /// <summary>One expanded SET operand — the cmdlet's own expander, so the two lanes cannot drift.</summary>
+    private static string ExpandClass(string spec) => BashEscapes.ExpandTrSet(spec, out _);
 }

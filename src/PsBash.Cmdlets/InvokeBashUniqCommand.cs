@@ -89,6 +89,9 @@ public sealed class InvokeBashUniqCommand : PSCmdlet
         OptSkipFields = "skipfields", OptSkipChars = "skipchars", OptIgnoreCase = "ignorecase",
         OptUnique = "unique", OptCheckChars = "checkchars";
 
+    /// <summary>GNU uniq long_options[] order; getopt_long lists ambiguous-prefix candidates in it.</summary>
+    private static readonly string[] UniqLongOptionOrder = { "count", "check-chars", "skip-fields", "skip-chars" };
+
     /// <summary>
     /// uniq's option surface (GNU coreutils 9.4: -c -d -D -f -i -s -u -w -z + --count --repeated
     /// --all-repeated[=METHOD] --skip-fields --group[=METHOD] --ignore-case --skip-chars --unique
@@ -112,7 +115,8 @@ public sealed class InvokeBashUniqCommand : PSCmdlet
         validButUnsupported: UniqValidButUnsupported,
         allowAbbrev: true,
         numericShorthandId: OptSkipFields,
-        gnuInfoOptions: true);
+        gnuInfoOptions: true,
+        longOptionOrder: UniqLongOptionOrder);
 
     /// <summary>Pure argv scan (unit-test seam): options, operands and the first error.</summary>
     internal static ParsedArgs ScanArgs(string[] args) => ArgParser.Parse(args, UniqSpec);
@@ -158,8 +162,28 @@ public sealed class InvokeBashUniqCommand : PSCmdlet
         };
         if (p.HasError) return u;
 
+        // Operands in order. GNU: a non-option word `+N` (not after `--`) is the obsolete skip-chars
+        // (-s N) — later of it and -s wins, like any option — and a third real operand is an error
+        // (uniq takes INPUT [OUTPUT]).
+        bool plusOk = ObsoletePlusAllowed(BashVariableStore.Get("_POSIX2_VERSION"));
+        u.Operands = new List<string>();
         foreach (var tok in p.Tokens)
         {
+            if (tok.Kind == ArgTokKind.Operand)
+            {
+                if (plusOk && !tok.AfterDoubleDash && TryParseObsoletePlus(tok.Raw, out int plusSkip))
+                {
+                    u.SkipChars = plusSkip;
+                    continue;
+                }
+                if (u.Operands.Count == 2)
+                {
+                    u.Error = $"uniq: extra operand '{tok.Raw}'";
+                    return u;
+                }
+                u.Operands.Add(tok.Raw);
+                continue;
+            }
             if (tok.Kind != ArgTokKind.Option) continue;
             switch (tok.OptId)
             {
@@ -191,6 +215,35 @@ public sealed class InvokeBashUniqCommand : PSCmdlet
         if (u.AllRepeated && u.Count)
             u.Error = "uniq: printing all duplicated lines and repeat counts is meaningless";
         return u;
+    }
+
+    /// <summary>
+    /// GNU uniq accepts the obsolete <c>+N</c> (skip N chars) unless <c>_POSIX2_VERSION</c> names a
+    /// POSIX level that dropped it: oracle-checked, it is honoured for versions below 200112 and from
+    /// 200809 up (and when unset), refused for 200112..200808, where <c>+N</c> is a file name.
+    /// </summary>
+    internal static bool ObsoletePlusAllowed(string? posix2Version)
+    {
+        if (string.IsNullOrEmpty(posix2Version)) return true;
+        if (!long.TryParse(posix2Version, System.Globalization.NumberStyles.None,
+                System.Globalization.CultureInfo.InvariantCulture, out long v)) return true;
+        return v < 200112 || v >= 200809;
+    }
+
+    /// <summary><c>+DIGITS</c>: an unsigned decimal that fits 64 bits (a larger one is a file name, as in GNU); saturates to int.</summary>
+    private static bool TryParseObsoletePlus(string raw, out int skip)
+    {
+        skip = 0;
+        if (raw.Length < 2 || raw[0] != '+') return false;
+        var digits = raw.AsSpan(1);
+        foreach (char c in digits)
+        {
+            if (c < '0' || c > '9') return false;
+        }
+        if (!ulong.TryParse(digits, System.Globalization.NumberStyles.None,
+                System.Globalization.CultureInfo.InvariantCulture, out ulong n)) return false;
+        skip = n > int.MaxValue ? int.MaxValue : (int)n;
+        return true;
     }
 
     /// <summary>Non-negative decimal (no sign, no suffix); values beyond int saturate.</summary>

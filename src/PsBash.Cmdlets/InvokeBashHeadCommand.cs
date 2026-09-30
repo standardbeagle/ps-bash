@@ -86,8 +86,8 @@ public sealed class InvokeBashHeadCommand : PSCmdlet
         },
         validButUnsupported: HeadValidButUnsupported,
         allowAbbrev: true,
-        numericShorthandId: OptNum,
-        gnuInfoOptions: true);
+        gnuInfoOptions: true,
+        digitOptionWording: "invalid trailing option");
 
     /// <summary>Pure argv scan (unit-test seam): options, operands and the first error.</summary>
     internal static ParsedArgs ScanArgs(string[] args) => ArgParser.Parse(args, HeadSpec);
@@ -121,6 +121,15 @@ public sealed class InvokeBashHeadCommand : PSCmdlet
     /// </summary>
     internal static HeadArgs Plan(string[] args)
     {
+        // The obsolete first argument -NUM[bkmlcqvz]* is rewritten to the options it stands for;
+        // every later digit is a "trailing option" error from the scan itself.
+        if (args.Length > 0 && TryExpandObsoleteNum(args[0], out var expanded, out var obsoleteError))
+        {
+            if (obsoleteError is not null)
+                return new HeadArgs { Parsed = ScanArgs(Array.Empty<string>()), Error = obsoleteError };
+            args = expanded.Concat(args.Skip(1)).ToArray();
+        }
+
         var h = new HeadArgs { Parsed = ScanArgs(args) };
         h.Operands = h.Parsed.Operands();
         if (h.Parsed.HasError) return h;
@@ -130,10 +139,6 @@ public sealed class InvokeBashHeadCommand : PSCmdlet
             if (tok.Kind != ArgTokKind.Option) continue;
             switch (tok.OptId)
             {
-                case OptNum when tok.ArgIndex != 0:
-                    h.Error = $"head: invalid trailing option -- {tok.Value![0]}";
-                    return h;
-                case OptNum:
                 case OptLines:
                     if (!GnuNumber.TryParse(tok.Value!, out int lines, out char lsign))
                     {
@@ -167,6 +172,51 @@ public sealed class InvokeBashHeadCommand : PSCmdlet
             break; // only the first operand qualifies
         }
         return h;
+    }
+
+    /// <summary>
+    /// GNU head's obsolete first argument <c>-NUM[bkmlcqvz]*</c> (oracle-checked, coreutils 9.4):
+    /// <c>b</c>/<c>k</c>/<c>m</c> multiply by 512/1024/1M AND select bytes, <c>c</c> selects bytes with no
+    /// multiplier, <c>l</c> selects lines (keeping any multiplier: <c>-2kl</c> = 2048 lines), and
+    /// <c>q</c>/<c>v</c>/<c>z</c> are the ordinary flags; the last letter of each kind wins. Any other
+    /// letter is "invalid trailing option". Returns false when <paramref name="arg"/> is not of this shape.
+    /// </summary>
+    internal static bool TryExpandObsoleteNum(string arg, out List<string> tokens, out string? error)
+    {
+        tokens = new List<string>();
+        error = null;
+        if (arg.Length < 2 || arg[0] != '-' || !char.IsAsciiDigit(arg[1])) return false;
+
+        int i = 1;
+        while (i < arg.Length && char.IsAsciiDigit(arg[i])) i++;
+        string digits = arg.Substring(1, i - 1);
+
+        bool bytes = false, quiet = false, verbose = false, zero = false;
+        string suffix = "";
+        for (; i < arg.Length; i++)
+        {
+            switch (arg[i])
+            {
+                case 'b': suffix = "b"; bytes = true; break;
+                case 'k': suffix = "k"; bytes = true; break;
+                case 'm': suffix = "m"; bytes = true; break;
+                case 'c': suffix = ""; bytes = true; break;
+                case 'l': bytes = false; break;
+                case 'q': quiet = true; break;
+                case 'v': verbose = true; break;
+                case 'z': zero = true; break;
+                default:
+                    error = $"head: invalid trailing option -- {arg[i]}";
+                    return true;
+            }
+        }
+
+        tokens.Add(bytes ? "-c" : "-n");
+        tokens.Add(digits + suffix);
+        if (quiet) tokens.Add("-q");
+        if (verbose) tokens.Add("-v");
+        if (zero) tokens.Add("-z");
+        return true;
     }
 
     private readonly List<PSObject> _pipeline = new();

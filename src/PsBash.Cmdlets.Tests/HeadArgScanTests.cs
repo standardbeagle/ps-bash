@@ -13,7 +13,7 @@ namespace PsBash.Cmdlets.Tests;
 /// of -c/-n wins; the obsolete -NUM is only valid as the FIRST argument. Accepted here: -c -n -q
 /// (+ long forms). Refused loudly as valid-but-unsupported (exit 2): -v/--verbose (no per-file
 /// headers), -z/--zero-terminated. Usage errors are exit 1 (GNU EXIT_FAILURE).
-/// Known gap: GNU's `-5q` (obsolete NUM followed by option letters) is a usage error here.
+/// The obsolete `-NUM[bkmlcqvz]*` first argument follows GNU's letter grammar (see TryExpandObsoleteNum).
 /// The legacy ps-bash extension `head 5` (bare leading number = line count) is preserved because
 /// the Pester gate pins it.
 /// </summary>
@@ -106,7 +106,39 @@ public class HeadArgScanTests
     [InlineData("ERR head: option '--quiet' doesn't allow an argument", "--quiet=1")]
     [InlineData("ERR head: invalid option -- 'x'", "-x")]  // FIX (was: operands [-x] -> file error)
     [InlineData("ERR head: invalid option -- 'l'", "-l")]
-    [InlineData("ERR head: invalid option -- '5'", "-q5")]  // GNU words it "invalid trailing option -- 5"; both exit 1
+    [InlineData("ERR head: invalid trailing option -- 5", "-q5")]
+    [InlineData("ERR head: invalid trailing option -- 5", "-c1", "-q5")]
+    [InlineData("ERR head: invalid trailing option -- 2", "-q", "-q", "-2")]
+    // Obsolete first argument -NUM[bkmlcqvz]*, every row checked against GNU head 9.4 (byte/line counts measured).
+    [InlineData("n=2 q=1 ops=[]", "-2q")]  // FIX (was: invalid option -- '2'... a usage error)
+    [InlineData("n=2 q=1 ops=[]", "-2qq")]
+    [InlineData("c=2 q=0 ops=[]", "-2c")]
+    [InlineData("c=2 q=1 ops=[]", "-2cq")]
+    [InlineData("c=2 q=1 ops=[]", "-2qc")]
+    [InlineData("n=2 q=1 ops=[]", "-2ql")]
+    [InlineData("n=2 q=0 ops=[]", "-2l")]
+    [InlineData("c=1024 q=0 ops=[]", "-2b")]  // b/k/m multiply AND select bytes
+    [InlineData("c=2048 q=0 ops=[]", "-2k")]
+    [InlineData("c=2097152 q=0 ops=[]", "-2m")]
+    [InlineData("n=2048 q=0 ops=[]", "-2kl")]  // l selects lines, keeps the multiplier
+    [InlineData("n=1024 q=0 ops=[]", "-2bl")]
+    [InlineData("c=2 q=0 ops=[]", "-2kc")]  // c resets the multiplier
+    [InlineData("c=2048 q=0 ops=[]", "-2ck")]
+    [InlineData("n=2 q=0 ops=[]", "-2cl")]
+    [InlineData("c=1024 q=0 ops=[]", "-2kb")]  // last multiplier wins
+    [InlineData("c=2048 q=0 ops=[]", "-2bk")]
+    [InlineData("n=2147483647 q=1 ops=[]", "-12345678901234567890q")]  // saturates (GNU prints everything)
+    [InlineData("n=1 q=0 ops=[]", "-2", "-n1")]  // later options still apply
+    [InlineData("c=1 q=0 ops=[]", "-5", "-c1")]
+    [InlineData("n=2 q=0 ops=[f,g]", "-2", "f", "g")]
+    [InlineData("ERR head: option '-v' is recognized but not supported by ps-bash", "-2v")]
+    [InlineData("ERR head: option '-z' is recognized but not supported by ps-bash", "-2z")]
+    [InlineData("ERR head: invalid trailing option -- n", "-5n")]  // FIX
+    [InlineData("ERR head: invalid trailing option -- x", "-2x")]
+    [InlineData("ERR head: invalid trailing option -- x", "-2cx")]
+    [InlineData("ERR head: invalid trailing option -- x", "-2qx")]
+    [InlineData("ERR head: invalid trailing option -- x", "-2xq")]  // the first offending letter
+    [InlineData("ERR head: invalid trailing option -- x", "-2x", "-3")]  // the obsolete argument is judged first
     public void Plan_MatchesGnuHead(string expected, params string[] argv)
     {
         Assert.Equal(expected, Scan(argv));
