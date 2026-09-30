@@ -256,7 +256,7 @@ PowerShell's `$PWD`.
 
 The ordered getopt-style parser that replaces per-cmdlet hand scans. Pure and AOT-safe (no
 `PSCmdlet`/`SessionState`/reflection), so it is unit-tested in isolation
-(`ArgParserTests`). **Migrated so far: `tee`, `cp`, `mv`, `rm`, `mkdir`, `rmdir`, `ln`, `touch`.** `BashRuntime.ConvertFromBashArgs` is
+(`ArgParserTests`). **Migrated so far: `tee`, `cp`, `mv`, `rm`, `mkdir`, `rmdir`, `ln`, `touch`, `head`, `tail`, `wc`, `cat`, `tac`, `nl`, `uniq`.** `BashRuntime.ConvertFromBashArgs` is
 untouched — its contract (unknown flag becomes an operand) differs.
 
 **API** (`src/PsBash.Cmdlets/Args/`):
@@ -283,7 +283,7 @@ untouched — its contract (unknown flag becomes an operand) differs.
   so scripts can tell "ps-bash cannot do this" from "you typed it wrong". `TryHandleInfoOptions` acts on an abbreviated
   `--vers`/`--he`.
 
-**Emitter opt-in.** `PsEmitter.OrderedArgCommands` (tee, cp, mv, rm, mkdir, rmdir, ln, touch): for these, `EmitPassthrough`
+**Emitter opt-in.** `PsEmitter.OrderedArgCommands` (tee, cp, mv, rm, mkdir, rmdir, ln, touch, head, tail, wc, cat, tac, nl, uniq): for these, `EmitPassthrough`
 single-quotes EVERY dash-leading literal word and `--` (via `PsBuild.SingleQuote`; quoted and mixed
 words like `--x="a b"` collapse to one literal). No flag is then a PowerShell parameter token, so
 each reaches `[ValueFromRemainingArguments] Arguments` verbatim and in order — no prefix collision
@@ -297,6 +297,10 @@ the set only AFTER its cmdlet is migrated, and add it to
 transpiler never does). Re-inject them with `BashRuntime.PrependDecoys(Arguments, ...)` BEFORE
 `Parse`; prepending is safe because a decoy can only bind ahead of any `--`. A direct call with a
 colliding bare letter that has NO decoy (`Invoke-BashTee -i`) still fails in the binder — quote it.
+
+**Also in `Args/`:** `GnuNumber.TryParse` (head/tail `NUM`: sign, digits, multiplier suffix `b k K m M G T ... kB MB KiB`; lowercase only b/k/m; saturates at int.MaxValue).
+
+**Batch 3a (head, tail, wc, cat, tac, nl, uniq) and the fused lane.** Each cmdlet exposes `internal static <Cmd>Args Plan(string[])` (ScanArgs + value validation: NUM, `-s`, nl style/format/width, uniq `-f/-s/-w`/METHOD) and the compiled line-stream core (`LineStreamRegistry.TryCreate`) calls it FIRST, then applies its own narrower certification — so a core can never accept an argv its cmdlet rejects (`LineStreamArgAgreementTests`). `FusedLane.StageIsUnbounded` treats every `--follow` abbreviation as unbounded (`IsFollowSpelling`), since `tail --fo` now parses as follow. The emitter builds the `-Stages` argv from static values, so single-quoting in the fallback text never reaches the cores. Legacy ps-bash extensions kept (Pester-pinned): a bare leading number is the count for head/tail (`head 5`, `tail 5`).
 
 **Migrating a command:**
 
