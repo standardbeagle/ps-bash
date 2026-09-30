@@ -66,7 +66,7 @@ The CLI flag overrides the env var. Use `--windows-paths` to force the default o
 When unix-paths mode is on:
 - `/c/Users/foo` → `C:\Users\foo` (any drive letter; case-folded uppercase)
 - `/dev/null` → `$null` (always, mode-independent)
-- `/tmp/x` → `$env:TEMP\x` (always, mode-independent)
+- `/tmp/x` → the temp dir on Windows, literal `/tmp/x` on Linux/macOS (resolved at runtime; mode-independent)
 
 ## OpenCode
 

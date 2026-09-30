@@ -216,4 +216,27 @@ public class EscapeExpansionTests : IClassFixture<SharedPwshFixture>
         }
         finally { Directory.Delete(dir, true); }
     }
-}
+
+    [Fact]
+    public void TmpPath_WriteThenRead_RoundTripsOnThisOs()
+    {
+        // /tmp must resolve on whichever OS runs the transpiled text: Windows maps it to the
+        // temp dir, Linux/macOS keep the literal /tmp ($env:TEMP is unset there, which used
+        // to turn /tmp/x into \x at the filesystem root).
+        var name = "psbash-x-" + Guid.NewGuid().ToString("N")[..8];
+        var p = "/tmp/" + name;
+        try
+        {
+            Assert.Equal("hi\n", Stdout($"echo hi > {p}; cat {p}"));
+            var real = OperatingSystem.IsWindows()
+                ? Path.Combine(Environment.GetEnvironmentVariable("TEMP")!, name)
+                : p;
+            Assert.True(File.Exists(real), real);
+        }
+        finally
+        {
+            var real = OperatingSystem.IsWindows()
+                ? Path.Combine(Environment.GetEnvironmentVariable("TEMP")!, name) : p;
+            if (File.Exists(real)) File.Delete(real);
+        }
+    }}

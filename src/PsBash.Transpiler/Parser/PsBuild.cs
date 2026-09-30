@@ -30,6 +30,30 @@ namespace PsBash.Core.Parser;
 /// </summary>
 public static class PsBuild
 {
+    // ─────────────────────────────── Portable /tmp ───────────────────────────────
+
+    /// <summary>
+    /// Runtime-evaluated temp directory for a bash <c>/tmp</c> operand. The transpiled text
+    /// may run on any OS: Windows has no <c>/tmp</c> (map to <c>$env:TEMP</c>), while on
+    /// Linux/macOS <c>$env:TEMP</c> is usually unset (keep the literal <c>/tmp</c>).
+    /// <c>$env:OS</c> is <c>Windows_NT</c> only on Windows.
+    /// </summary>
+    public const string TempDirExpr = "$($env:OS -eq 'Windows_NT' ? $env:TEMP : '/tmp')";
+
+    /// <summary>Bare-word form of <c>/tmp/REST</c>: <c>TempDirExpr/REST</c> (Windows accepts <c>/</c>).</summary>
+    public static string TempPath(string rest) => TempDirExpr + "/" + rest;
+
+    /// <summary>If <paramref name="emitted"/> was produced by <see cref="TempPath"/>, return the REST.</summary>
+    public static bool TryGetTempPathRest(string emitted, out string rest)
+    {
+        if (emitted.StartsWith(TempDirExpr + "/", StringComparison.Ordinal))
+        {
+            rest = emitted[(TempDirExpr.Length + 1)..];
+            return true;
+        }
+        rest = "";
+        return false;
+    }
     // ─────────────────────────────── Quoting / escaping ───────────────────────────────
 
     /// <summary>The chars that must be escaped inside a PowerShell double-quoted string.</summary>

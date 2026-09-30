@@ -1290,7 +1290,7 @@ public class PsEmitterTests
     {
         var result = PsEmitter.Transpile("cmd > /tmp/out.log");
 
-        Assert.Equal("cmd | Invoke-BashRedirect -Path $env:TEMP\\out.log", result);
+        Assert.Equal("cmd | Invoke-BashRedirect -Path $($env:OS -eq 'Windows_NT' ? $env:TEMP : '/tmp')/out.log", result);
     }
 
     [Fact]
@@ -1822,7 +1822,7 @@ public class PsEmitterTests
     {
         var result = PsEmitter.Transpile("cat /tmp/log.txt");
 
-        Assert.Equal("Invoke-BashCat $env:TEMP\\log.txt", result);
+        Assert.Equal("Invoke-BashCat $($env:OS -eq 'Windows_NT' ? $env:TEMP : '/tmp')/log.txt", result);
     }
 
     [Fact]
@@ -4528,8 +4528,8 @@ public class PsEmitterTests
     {
         var result = PsEmitter.Transpile("echo line1 > /tmp/test.txt && echo append >> /tmp/test.txt");
 
-        Assert.Contains("Invoke-BashEcho line1 | Invoke-BashRedirect -Path $env:TEMP\\test.txt", result);
-        Assert.Contains("Invoke-BashEcho append | Invoke-BashRedirect -Path $env:TEMP\\test.txt -Append", result);
+        Assert.Contains("Invoke-BashEcho line1 | Invoke-BashRedirect -Path $($env:OS -eq 'Windows_NT' ? $env:TEMP : '/tmp')/test.txt", result);
+        Assert.Contains("Invoke-BashEcho append | Invoke-BashRedirect -Path $($env:OS -eq 'Windows_NT' ? $env:TEMP : '/tmp')/test.txt -Append", result);
     }
 
     [Fact]
@@ -5362,7 +5362,7 @@ public class PsEmitterTests
 
     [Theory]
     [InlineData("echo hi > a,b", "Invoke-BashEcho hi | Invoke-BashRedirect -Path 'a,b'")]
-    [InlineData("echo /tmp/a,b", "Invoke-BashEcho \"$env:TEMP\\a,b\"")]
+    [InlineData("echo /tmp/a,b", "Invoke-BashEcho \"$($env:OS -eq 'Windows_NT' ? $env:TEMP : '/tmp')/a,b\"")]
     [InlineData("echo a\\,b", "Invoke-BashEcho a`,b")]
     [InlineData("x=a,b", "$env:x = \"a,b\"")]
     [InlineData("arr=(a,b c)", "$arr = @(\"a,b\",\"c\")")]

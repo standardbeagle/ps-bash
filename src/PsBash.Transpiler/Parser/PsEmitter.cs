@@ -2646,7 +2646,7 @@ public static class PsEmitter
         if (target == "/dev/null")
             return "$null";
         if (target.StartsWith("/tmp/"))
-            return $"$env:TEMP\\{target[5..]}";
+            return PsBuild.TempPath(target[5..]);
         if (TryTranslateMsysDrivePath(target, out var translated))
             return translated;
         return target;
@@ -3274,7 +3274,7 @@ public static class PsEmitter
         // runtime, where BashFileSystem.OpenRead (via FileSystemHelpers.IsNullDevice) serves it
         // from the OS-native null device as empty.
         if (value.StartsWith("/tmp/"))
-            return $"$env:TEMP\\{value[5..]}";
+            return PsBuild.TempPath(value[5..]);
         if (TryTranslateMsysDrivePath(value, out var translated))
             return translated;
         return value;
@@ -6074,8 +6074,8 @@ public static class PsEmitter
             && TryGetPureLiteralText(word.Parts, out var text))
         {
             var transformed = TransformWordPath(text);
-            if (transformed.StartsWith("$env:TEMP\\", StringComparison.Ordinal))
-                return "\"$env:TEMP\\" + PsBuild.EscapeForDoubleQuote(transformed["$env:TEMP\\".Length..]) + "\"";
+            if (PsBuild.TryGetTempPathRest(transformed, out var tmpRest))
+                return "\"" + PsBuild.TempDirExpr + "/" + PsBuild.EscapeForDoubleQuote(tmpRest) + "\"";
             return PsBuild.SingleQuote(transformed);
         }
         return TransformWordPath(FlattenPartsToDoubleQuotedString(word.Parts));

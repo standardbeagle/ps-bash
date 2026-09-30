@@ -259,6 +259,7 @@ public class OnCdIntegrationTests : IDisposable
         // Allow the .envrc via the direnv CLI before the test runs.
         var allowed = AllowDirenv(tempC);
         Skip.If(!allowed, "direnv allow failed — possibly sandboxed or direnv config blocked");
+        Skip.If(!DirenvSupportsPwshExport(tempC), "installed direnv lacks `direnv export pwsh` support (added after 2.32)");
 
         using var pwsh = PwshTestFixture.Create();
         var hookName = N("direnv-load");
@@ -449,6 +450,31 @@ public class OnCdIntegrationTests : IDisposable
         {
             return false;
         }
+    }
+
+    /// <summary>True when `direnv export pwsh` exits 0 in <paramref name="dir"/> (older direnv rejects the target shell).</summary>
+    private static bool DirenvSupportsPwshExport(string dir)
+    {
+        try
+        {
+            using var proc = new System.Diagnostics.Process();
+            proc.StartInfo = new System.Diagnostics.ProcessStartInfo
+            {
+                FileName = "direnv",
+                Arguments = "export pwsh",
+                WorkingDirectory = dir,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                UseShellExecute = false,
+                CreateNoWindow = true,
+            };
+            proc.Start();
+            proc.StandardOutput.ReadToEnd();
+            proc.StandardError.ReadToEnd();
+            if (!proc.WaitForExit(5_000)) { try { proc.Kill(true); } catch { } return false; }
+            return proc.ExitCode == 0;
+        }
+        catch { return false; }
     }
 
     /// <summary>Escapes a path for embedding in a single-quoted PowerShell string.</summary>
