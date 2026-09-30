@@ -82,6 +82,15 @@ public class InvokeBashPrintfPwdCommandTests : IClassFixture<SharedPwshFixture>
     }
 
     [Fact]
+    public void Printf_PercentS_NumericLookingArgs_PrintAsTyped()
+    {
+        // bash (oracle-checked): printf '[%s][%s][%s][%c][%5s]' 007 1.50 1e3 007 0x1F
+        //   -> [007][1.50][1e3][0][ 0x1F]. %s/%c must not reformat through a numeric coercion.
+        var lines = RunBashText("Invoke-BashPrintf '[%s][%s][%s][%c][%5s]' '007' '1.50' '1e3' '007' '0x1F'");
+        Assert.Equal(new[] { "[007][1.50][1e3][0][ 0x1F]" }, lines);
+    }
+
+    [Fact]
     public void Printf_IntConversion()
     {
         var lines = RunBashText("Invoke-BashPrintf '%d' '42'");

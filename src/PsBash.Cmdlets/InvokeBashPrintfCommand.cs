@@ -140,7 +140,8 @@ public sealed class InvokeBashPrintfCommand : PSCmdlet
                     case 's':
                         if (argIdx < converted.Count)
                         {
-                            string val = converted[argIdx]?.ToString() ?? string.Empty;
+                            // Raw text: %s must not reformat numerics (`007`, `1.50`, `1e3` print as typed).
+                            string val = argList[argIdx];
                             if (widthStr.Length > 0 && hasPrecision && precStr.Length > 0)
                             {
                                 val = val.PadLeft(ParseFieldWidth(widthStr));
@@ -290,7 +291,7 @@ public sealed class InvokeBashPrintfCommand : PSCmdlet
                             // bash %c prints the FIRST CHARACTER of the argument's
                             // string form (`printf '%c' 65` -> '6'), NOT the ASCII
                             // code of a numeric value (which would give 'A').
-                            string s = converted[argIdx]?.ToString() ?? string.Empty;
+                            string s = argList[argIdx];
                             if (s.Length > 0) sb.Append(s[0]);
                         }
                         argIdx++;
