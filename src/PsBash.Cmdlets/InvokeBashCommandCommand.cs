@@ -1,112 +1,129 @@
 using System.Management.Automation;
+using System.Management.Automation.Runspaces;
 
 namespace PsBash.Cmdlets;
 
 /// <summary>
-/// Binary cmdlet replacement for the psm1 <c>Invoke-BashCommand</c> function
-/// (REFACTOR-2 follow-on). Implements the bash <c>command</c> builtin.
+/// Binary cmdlet for the bash <c>command</c> builtin (originally the psm1 function, REFACTOR-2).
 ///
-/// Behavioral parity oracle: the original psm1 function. Behavior (matches
-/// the oracle byte-for-byte):
+/// <para>
+/// <b>Argument shape</b> (oracle: bash 5.2, <c>wsl bash</c>): <c>command [-pVv] [--] NAME [ARG...]</c>.
+/// The option scan stops at the first non-option (or after <c>--</c>); EVERYTHING after NAME is the
+/// inner command's argv, verbatim — <c>command ls -d .</c>, <c>command grep -i x f</c> and
+/// <c>command echo -v</c> pass <c>-d</c>/<c>-i</c>/<c>-v</c> to the inner command, never to
+/// <c>command</c> itself. An unknown option letter is <c>command: -x: invalid option</c> plus the
+/// usage line (exit 2). <c>--help</c>/<c>--version</c> are honoured only as leading options.
+/// </para>
 /// <list type="bullet">
-/// <item><c>--help</c> → <c>Show-BashHelp 'command'</c>.</item>
-/// <item>Walks every <c>-</c>-prefixed token; if any token contains <c>v</c> or
-/// <c>V</c> (i.e. <c>-v</c>, <c>-V</c>, <c>-pv</c>, ...), enables verbose mode.
-/// All other dash tokens (including <c>-p</c>) are accepted but ignored — the
-/// oracle treated every dash token uniformly.</item>
-/// <item>For each non-flag operand, runs <c>Get-Command NAME</c>: on a hit emit
-/// the definition (alias) / name (function) / source (else) via
-/// <see cref="BashRuntime.EmitBashLines"/> if verbose was set; on a miss set
-/// <c>$global:LASTEXITCODE = 1</c> and return immediately (no further
-/// operands processed — exact oracle parity).</item>
+/// <item><c>-v</c>/<c>-V</c> (also in a bundle: <c>-pv</c>) select the lookup form: for each operand
+/// run <c>Get-Command NAME</c> and emit the alias definition / function name / source; the first miss
+/// sets <c>$LASTEXITCODE = 1</c> and stops (parity with the psm1 oracle; -v and -V are identical).</item>
+/// <item>Without them NAME is RUN with the remaining args, bypassing shell FUNCTIONS (bash: functions
+/// are skipped; <c>f() { …; }; command f</c> is "command not found", exit 127). Resolution is
+/// alias, then cmdlet, then external application/script, so <c>command ls</c> reaches the runtime's
+/// own ls. Pipeline input is forwarded to the inner command. <c>-p</c> (default PATH) is accepted and
+/// ignored.</item>
 /// </list>
 ///
-/// <b>Documented gap:</b> the psm1 oracle never implemented the bash semantics
-/// of <c>command NAME ARGS</c> (run <c>NAME</c> bypassing alias/function
-/// lookup). It only ever did a metadata lookup. This cmdlet preserves the
-/// oracle's exact behavior — any "run-command" form falls into the no-verbose
-/// branch and produces no output, matching the oracle byte-for-byte.
+/// <para>
+/// <b>Flag collisions</b>: the transpiler puts <c>command</c> on <c>PsEmitter.OrderedArgCommands</c>, so
+/// every dash literal arrives single-quoted in <see cref="Arguments"/>, in order, and the binder never
+/// sees them. The <c>V</c>/<c>P</c> decoy switches exist for DIRECT PowerShell calls only
+/// (<c>Invoke-BashCommand -v ls</c>) and are re-injected first via
+/// <see cref="BashRuntime.PrependDecoys"/>; the case-insensitive binder makes <c>-V</c> land on <c>V</c>
+/// too (same as the oracle, which treated the two identically).
+/// </para>
 ///
-/// Flag collisions per the playbook table:
-/// <list type="bullet">
-/// <item><c>-v</c> — prefix-collides with <c>-Verbose</c>; declared as an
-/// explicit <see cref="SwitchParameter"/> named <c>V</c>. Exact-name match
-/// beats common-parameter prefix-match.</item>
-/// <item><c>-V</c> — under the case-insensitive cmdlet binder, <c>-V</c>
-/// collapses onto the same <c>V</c> switch. This matches the oracle exactly:
-/// the psm1 oracle treated <c>-v</c> and <c>-V</c> identically (both just set
-/// verbose).</item>
-/// <item><c>-p</c> — prefix-collides with <c>-PipelineVariable</c> /
-/// <c>-ProgressAction</c>; declared as an explicit
-/// <see cref="SwitchParameter"/> named <c>P</c>. The oracle accepted but
-/// ignored <c>-p</c> (use default PATH), and this cmdlet preserves that
-/// — the bound switch is silently dropped.</item>
-/// </list>
-///
-/// Directive 12: command names are passed only to <c>Get-Command -Name</c>
-/// via a parameter-bound <see cref="PSCmdlet.InvokeCommand"/> script body —
-/// never concatenated into the body — so a name containing <c>;</c> /
-/// <c>$()</c> / scriptblock chars / backticks stays a literal string and is
-/// not re-parsed as PowerShell. A miss lands in the not-found branch.
+/// Directive 12: command names are passed only as bound parameters/arguments of a fixed
+/// <see cref="PSCmdlet.InvokeCommand"/> script body — never concatenated into it — so a name
+/// containing <c>;</c> / <c>$()</c> / scriptblock chars / backticks stays a literal string.
 /// </summary>
 [Cmdlet(VerbsLifecycle.Invoke, "BashCommand")]
 [OutputType(typeof(PSObject))]
 public sealed class InvokeBashCommandCommand : PSCmdlet
 {
     // Declared because the bare token -v prefix-matches the -Verbose common
-    // parameter. Captures both -v and -V (binder is case-insensitive — same
-    // shape the oracle had since it treated -v and -V identically).
+    // parameter. Captures both -v and -V (binder is case-insensitive).
     [Parameter] public SwitchParameter V { get; set; }
 
     // Declared because the bare token -p prefix-matches -PipelineVariable /
-    // -ProgressAction. The oracle accepted -p as a no-op — preserved here.
+    // -ProgressAction. Accepted and ignored (use default PATH).
     [Parameter] public SwitchParameter P { get; set; }
 
     [Parameter(ValueFromRemainingArguments = true)]
     public string[]? Arguments { get; set; }
 
+    /// <summary>Upstream pipeline objects, forwarded to the inner command as its stdin.</summary>
+    [Parameter(ValueFromPipeline = true)]
+    public PSObject? StdinObject { get; set; }
+
+    private readonly List<object> _stdin = new();
+
     protected override void ProcessRecord()
     {
-        var args = Arguments ?? Array.Empty<string>();
+        if (StdinObject != null) _stdin.Add(StdinObject);
+    }
+
+    protected override void EndProcessing()
+    {
+        var args = BashRuntime.PrependDecoys(Arguments, (V.IsPresent, "-v"), (P.IsPresent, "-p"));
 
         FileSystemHelpers.SetLastExitCode(this, 0);
-        if (FileSystemHelpers.TryHandleVersion(this, "command", args)) return;
-        if (Array.IndexOf(args, "--help") >= 0)
+
+        // Leading option scan: stops at the first non-option; `--` ends it. Everything after is the
+        // inner argv (or, under -v/-V, the names to look up).
+        bool verbose = false;
+        int i = 0;
+        for (; i < args.Length; i++)
         {
-            foreach (var line in InvokeCommand.InvokeScript(
-                         "param($n) Show-BashHelp $n", "command"))
+            var a = args[i];
+            if (a == "--") { i++; break; }
+            if (a.Length < 2 || a[0] != '-') break;
+
+            if (a == "--version")
             {
-                WriteObject(line);
+                FileSystemHelpers.TryHandleVersion(this, "command", new[] { a });
+                return;
             }
-            return;
-        }
-
-        // Match the oracle's loop exactly: any dash-prefixed token is a flag;
-        // verbose iff any flag token contains 'v' or 'V' (so -v / -V / -pv all
-        // light up verbose). Non-flag tokens become operands.
-        bool verbose = V.IsPresent;
-        _ = P; // -p is accepted but ignored, matching the oracle.
-
-        var operands = new List<string>();
-        foreach (var arg in args)
-        {
-            if (arg.Length > 0 && arg[0] == '-')
+            if (a == "--help")
             {
-                // Oracle: `$flags -contains '-v' -or $flags -contains '-V'`.
-                // The bundled-flag form (e.g. -pv) was not in the oracle so we
-                // do not synthesize it here; preserve byte-for-byte parity.
-                if (string.Equals(arg, "-v", StringComparison.Ordinal) ||
-                    string.Equals(arg, "-V", StringComparison.Ordinal))
+                foreach (var line in InvokeCommand.InvokeScript(
+                             "param($n) Show-BashHelp $n", "command"))
                 {
-                    verbose = true;
+                    WriteObject(line);
+                }
+                return;
+            }
+
+            for (int k = 1; k < a.Length; k++)
+            {
+                switch (a[k])
+                {
+                    case 'v':
+                    case 'V':
+                        verbose = true;
+                        break;
+                    case 'p':
+                        break; // default PATH: accepted, ignored
+                    default:
+                        FileSystemHelpers.WriteBashError(this, $"command: -{a[k]}: invalid option\n" +
+                            "command: usage: command [-pVv] command [arg ...]");
+                        FileSystemHelpers.SetLastExitCode(this, 2);
+                        return;
                 }
             }
-            else
-            {
-                operands.Add(arg);
-            }
         }
 
+        if (i >= args.Length) return; // bash: `command` alone is a no-op, exit 0
+
+        var rest = args.AsSpan(i).ToArray();
+        if (verbose) LookUp(rest);
+        else RunInner(rest);
+    }
+
+    /// <summary>The -v/-V form: describe each operand (first miss = exit 1, stop).</summary>
+    private void LookUp(string[] operands)
+    {
         foreach (var name in operands)
         {
             string? output = null;
@@ -131,12 +148,9 @@ public sealed class InvokeBashCommandCommand : PSCmdlet
 
             if (output != null)
             {
-                if (verbose)
+                foreach (var line in BashRuntime.EmitBashLines(output))
                 {
-                    foreach (var line in BashRuntime.EmitBashLines(output))
-                    {
-                        WriteObject(line);
-                    }
+                    WriteObject(line);
                 }
             }
             else
@@ -144,6 +158,63 @@ public sealed class InvokeBashCommandCommand : PSCmdlet
                 FileSystemHelpers.SetLastExitCode(this, 1);
                 return;
             }
+        }
+    }
+
+    /// <summary>
+    /// Run <c>NAME ARGS...</c> bypassing shell functions. <paramref name="argv"/>[0] is the name; the
+    /// rest is splatted as an array of strings, which PowerShell binds as positional ARGUMENTS (never as
+    /// parameter tokens) — the same shape the transpiler's single-quoted flags have.
+    /// </summary>
+    private void RunInner(string[] argv)
+    {
+        var name = argv[0];
+        CommandInfo? target = null;
+        try
+        {
+            var found = InvokeCommand.InvokeScript(
+                "param($n) Get-Command $n -CommandType Alias,Cmdlet,Application,ExternalScript " +
+                "-ErrorAction SilentlyContinue | Select-Object -First 1", name);
+            foreach (var r in found)
+            {
+                if (r?.BaseObject is CommandInfo ci) { target = ci; break; }
+            }
+        }
+        catch (Exception ex)
+        {
+            if (FileSystemHelpers.IsPipelineStop(ex)) throw;
+        }
+
+        if (target == null)
+        {
+            FileSystemHelpers.WriteBashError(this, $"bash: {name}: command not found");
+            FileSystemHelpers.SetLastExitCode(this, 127);
+            return;
+        }
+
+        // Fixed body: $args[0] is the resolved command, the rest is splatted. No user text is ever
+        // part of the script.
+        const string prologue =
+            "$c = $args[0]; $rest = @(); " +
+            "if ($args.Count -gt 1) { $rest = $args[1..($args.Count - 1)] }; ";
+        // With upstream input the inner command must be fed it explicitly (`$input` is the list
+        // handed to InvokeScript); without, it inherits the caller's stdin untouched.
+        var invokeBody = _stdin.Count > 0 ? prologue + "$input | & $c @rest" : prologue + "& $c @rest";
+        var invokeArgs = new object[argv.Length];
+        invokeArgs[0] = target;
+        for (int k = 1; k < argv.Length; k++) invokeArgs[k] = argv[k];
+
+        try
+        {
+            var output = _stdin.Count > 0
+                ? InvokeCommand.InvokeScript(invokeBody, false, PipelineResultTypes.None, _stdin, invokeArgs)
+                : InvokeCommand.InvokeScript(invokeBody, invokeArgs);
+            foreach (var item in output) WriteObject(item);
+        }
+        catch (Exception ex)
+        {
+            if (FileSystemHelpers.IsPipelineStop(ex)) throw;
+            FileSystemHelpers.WriteBashError(this, $"command: {name}: {ex.Message}");
         }
     }
 

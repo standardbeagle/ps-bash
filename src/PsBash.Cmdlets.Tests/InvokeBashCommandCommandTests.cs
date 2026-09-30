@@ -110,14 +110,23 @@ public class InvokeBashCommandCommandTests : IClassFixture<SharedPwshFixture>
     }
 
     [Fact]
-    public void Command_NoVerbose_KnownName_NoOutput()
+    public void Command_NoVerbose_KnownName_RunsTheCommand()
     {
-        // Without -v / -V the oracle's lookup runs but emit-bash-line is
-        // skipped — the run-command form. The oracle never actually executed
-        // the wrapped command (documented gap); we preserve that by emitting
-        // no output here.
-        var lines = RunLines("Invoke-BashCommand ls");
-        Assert.Empty(lines);
+        // Without -v / -V this is the run form (`command echo hi` prints hi). The psm1 oracle
+        // never executed the wrapped command (it only looked it up); the bash builtin does.
+        var lines = RunLines("Invoke-BashCommand echo hi");
+        Assert.Single(lines);
+        Assert.Equal("hi", lines[0].TrimEnd('\n'));
+    }
+
+    [Fact]
+    public void Command_DirectCall_DeclaredSwitchesStillWork()
+    {
+        // Pester / interactive PowerShell binds -v and -p to the declared decoy switches; they are
+        // re-injected ahead of the operands (`-pv` needs the quoted form, the binder eats bare -pv).
+        Assert.Equal("Invoke-BashLs", RunLines("Invoke-BashCommand -v ls")[0]);
+        Assert.Equal("Invoke-BashLs", RunLines("Invoke-BashCommand -p -v ls")[0]);
+        Assert.Equal("Invoke-BashLs", RunLines("Invoke-BashCommand '-pv' ls")[0]);
     }
 
     [Fact]

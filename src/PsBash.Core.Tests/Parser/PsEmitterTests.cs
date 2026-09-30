@@ -782,7 +782,7 @@ public class PsEmitterTests
         // Batch 1 of the shared ordered parser. Adding a command here also means adding it to
         // CommonParameterCollisionGuardTests.EmitterForceQuoted (Cmdlets.Tests) — that map is
         // how the guard knows the emitter, not a decoy, protects the colliding letters.
-        Assert.Equal(new[] { "cat", "cp", "env", "head", "ln", "mkdir", "mv", "nl", "rm", "rmdir", "tac", "tail", "tee", "time", "touch", "uniq", "wc", "xargs" }, PsEmitter.OrderedArgCommands.OrderBy(x => x).ToArray());
+        Assert.Equal(new[] { "cat", "command", "cp", "env", "head", "ln", "mkdir", "mv", "nl", "rm", "rmdir", "tac", "tail", "tee", "time", "touch", "uniq", "wc", "xargs" }, PsEmitter.OrderedArgCommands.OrderBy(x => x).ToArray());
     }
 
     [Theory]
@@ -852,6 +852,12 @@ public class PsEmitterTests
     [InlineData("uniq -f 1 -s 2 -w 3 f", "Invoke-BashUniq '-f' 1 '-s' 2 '-w' 3 f")]
     [InlineData("uniq --all-repeated=prepend f", "Invoke-BashUniq '--all-repeated=prepend' f")]
     [InlineData("uniq -cdi -- -z", "Invoke-BashUniq '-cdi' '--' '-z'")]
+    [InlineData("command -v ls", "Invoke-BashCommand '-v' ls")]
+    [InlineData("command -pv ls", "Invoke-BashCommand '-pv' ls")]
+    [InlineData("command ls -d .", "Invoke-BashCommand ls '-d' .")]
+    [InlineData("command -p echo -e x", "Invoke-BashCommand '-p' echo '-e' x")]
+    [InlineData("command grep -i x f", "Invoke-BashCommand grep '-i' x f")]
+    [InlineData("command -- ls -d", "Invoke-BashCommand '--' ls '-d'")]
     public void Transpile_OrderedArgCommand_QuotesEveryDashLiteral(string bash, string expected)
     {
         Assert.Equal(expected, PsEmitter.Transpile(bash));

@@ -2159,7 +2159,8 @@ Describe 'Invoke-BashLn' {
     }
 
     It 'ln missing operand emits error' {
-        $result = Invoke-BashLn -s (Join-Path $lnDir 'only.txt') 2>&1
+        # No operands at all: a single operand is GNU form 2 (`ln TARGET` links basename(TARGET) into cwd).
+        $result = Invoke-BashLn -s 2>&1
         $errMsgs = @($result | Where-Object { $_ -is [System.Management.Automation.ErrorRecord] })
         $errMsgs.Count | Should -BeGreaterOrEqual 1
         "$($errMsgs[0])" | Should -Match 'missing file operand'

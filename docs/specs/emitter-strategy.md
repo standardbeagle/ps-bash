@@ -218,8 +218,8 @@ as env's own decoy switch. `xargs`, `time` and `env` are therefore on
 The cmdlets' scans stop parsing their own options at the first operand (the command name);
 everything after is the inner argv. Ordered-arg commands also single-quote a bare literal
 containing a comma (`xargs -d , echo`): unquoted it is a PowerShell array / parse error.
-Not covered: `command` (declared `-v/-V/-p` switches would have to move into `Arguments`) and
-`bash SCRIPT -flags` — inner flags of those can still collide.
+`command` is on the set too: its cmdlet reads `-p -v -V` only up to the first operand and runs the
+rest as the inner command's argv. Not covered: `bash SCRIPT -flags` — inner flags can still collide.
 
 ---
 

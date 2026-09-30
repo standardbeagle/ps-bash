@@ -51,6 +51,9 @@ public class CommonParameterCollisionGuardTests
             // cmdlets still keep decoys for DIRECT calls (Pester: `Invoke-BashTee -a f`).
             ["time"] = new(CollidingLetters),
             ["env"] = new(CollidingLetters),
+            // command: emitter single-quotes every dash literal (its own -v/-V/-p AND the inner
+            // command's flags); the cmdlet scans options only up to the first operand.
+            ["command"] = new(CollidingLetters),
             ["tee"] = new(CollidingLetters),
             ["cp"] = new(CollidingLetters),
             ["mv"] = new(CollidingLetters),

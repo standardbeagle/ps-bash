@@ -84,7 +84,7 @@
 | tput | Invoke-BashTput | `CAPNAME` | Manual loop | No | No |
 | shopt | Invoke-BashShopt | `-s`, `-u`, `-p`, `-q` | Manual loop | No | No |
 | type | Invoke-BashType | `-t`, `-a`, `-p` | Binary cmdlet (`-a` and `-p` are declared SwitchParameters `A` / `P`; `-t` stays in `Arguments`) | No | No |
-| command | Invoke-BashCommand | `-v`, `-V`, `-p` | Binary cmdlet (`-v` declared as `SwitchParameter V` — `-V` collapses onto same switch under case-insensitive binder, matching the oracle which treated them identically; `-p` declared as `SwitchParameter P` — accepted but ignored, oracle parity) | No | No |
+| command | Invoke-BashCommand | `-v`, `-V`, `-p` | Binary cmdlet, on `OrderedArgCommands`: every dash literal arrives single-quoted in `Arguments`. Options (`-p -v -V`, bundles like `-pv`, `--`) are read only up to the first operand; everything after the command name is the inner command's argv verbatim (`command ls -d f`, `command grep -i x f`, `command echo -v`). `-v`/`-V` = lookup form (alias definition / function name / source; first miss exit 1, `-v` and `-V` identical). No `-v`: RUNS the command, bypassing shell functions (`command f` for a function `f` = "command not found", exit 127; alias, cmdlet, then external application), forwarding pipeline input; unknown option letter = `command: -x: invalid option` + usage, exit 2; bare `command` is a no-op. `-p` accepted and ignored. `V`/`P` decoy switches remain for DIRECT PowerShell calls (re-injected via `PrependDecoys`). | Yes | No |
 | source | Invoke-BashSource | (none) | Positional | No | Yes |
 | shift | Invoke-BashShift | `N` | Manual loop | No | No |
 | realpath | Invoke-BashRealpath | (none) | Positional | No | No |
