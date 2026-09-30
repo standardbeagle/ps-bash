@@ -1,4 +1,6 @@
+using System.Linq;
 using System.Management.Automation;
+using PsBash.Cmdlets.Args;
 
 namespace PsBash.Cmdlets;
 
@@ -43,22 +45,135 @@ namespace PsBash.Cmdlets;
 public sealed class InvokeBashSplitCommand : PSCmdlet
 {
     /// <summary>
-    /// Valid GNU <c>split</c> options ps-bash does not implement (representative).
-    /// An option-looking token in this set yields "recognized but not supported"
-    /// instead of the misleading "No such file or directory".
+    /// Valid GNU <c>split</c> options ps-bash does not implement, refused loudly (exit 2) instead of
+    /// the misleading "No such file or directory". (A string[] on purpose:
+    /// CommonParameterCollisionGuardTests enumerates static string sets.)
     /// </summary>
-    private static readonly HashSet<string> SplitValidButUnsupported =
-        new(StringComparer.Ordinal)
-        {
-            "-n", "--number",
-            "-C", "--line-bytes",
-            "-t", "--separator",
-            "--filter",
-            "--verbose",
-            "-z", "--null-data",
-            "-e", "--elide-empty-files",
-        };
+    private static readonly string[] SplitValidButUnsupported =
+    {
+        "-n", "--number",
+        "-C", "--line-bytes",
+        "-t", "--separator",
+        "--filter",
+        "--verbose",
+        "-e", "--elide-empty-files",
+        "-x", "--hex-suffixes",
+        "-u", "--unbuffered",
+    };
 
+    private const string OptLines = "lines", OptBytes = "bytes", OptSuffixLen = "suffixlen",
+        OptNumeric = "numeric", OptAddSuffix = "addsuffix";
+
+    /// <summary>
+    /// split's option surface (GNU coreutils 9.4). Implemented: -l/--lines, -b/--bytes (GNU SIZE
+    /// suffixes), -a/--suffix-length, -d and --numeric-suffixes[=FROM], --additional-suffix, and the
+    /// obsolete <c>-NUM</c> (= <c>-l NUM</c>).
+    /// </summary>
+    private static readonly OptSpecSet SplitSpec = new(
+        new[]
+        {
+            new OptSpec(OptLines, 'l', "lines", OptKind.Value),
+            new OptSpec(OptBytes, 'b', "bytes", OptKind.Value),
+            new OptSpec(OptSuffixLen, 'a', "suffix-length", OptKind.Value),
+            new OptSpec(OptNumeric, 'd', null),
+            new OptSpec(OptNumeric, '\0', "numeric-suffixes", OptKind.OptionalValue),
+            new OptSpec(OptAddSuffix, '\0', "additional-suffix", OptKind.Value),
+        },
+        validButUnsupported: SplitValidButUnsupported,
+        allowAbbrev: true,
+        numericShorthandId: OptLines,
+        gnuInfoOptions: true);
+
+    /// <summary>Pure argv scan (unit-test seam).</summary>
+    internal static ParsedArgs ScanArgs(string[] args) => ArgParser.Parse(args, SplitSpec);
+
+    internal sealed class SplitArgs
+    {
+        public ParsedArgs Parsed = null!;
+        public int Lines = 1000;
+        public long? Bytes;
+        public int SuffixLength = 2;
+        public bool Numeric;
+        public int NumericStart;
+        public string AdditionalSuffix = string.Empty;
+        public List<string> Operands = new();
+        public string? Error;
+    }
+
+    /// <summary>
+    /// Scan + validate like GNU (exit 1): counts are positive (<c>-l 0</c>, <c>-l x</c>, <c>-b 1x</c>
+    /// are errors — the old scan silently used 1000 lines), <c>-b</c> takes GNU SIZE suffixes
+    /// (K M G ... KB MB ...; the old scan knew only K/M/G and read <c>1KB</c> as 1),
+    /// <c>-l</c> together with <c>-b</c> is "cannot split in more than one way", and a third operand
+    /// is "extra operand".
+    /// </summary>
+    internal static SplitArgs Plan(string[] args)
+    {
+        var s = new SplitArgs { Parsed = ScanArgs(args) };
+        s.Operands = s.Parsed.Operands();
+        if (s.Parsed.HasError) return s;
+
+        foreach (var tok in s.Parsed.Tokens)
+        {
+            if (tok.Kind != ArgTokKind.Option) continue;
+            string v = tok.Value ?? string.Empty;
+            switch (tok.OptId)
+            {
+                case OptLines:
+                    if (!TryPositive(v, out int lines)) { s.Error = $"split: invalid number of lines: '{v}'"; return s; }
+                    s.Lines = lines;
+                    break;
+                case OptBytes:
+                    if (!GnuNumber.TryParse(v, out int bytes, out char sign) || sign != '\0' || bytes < 1)
+                    { s.Error = $"split: invalid number of bytes: '{v}'"; return s; }
+                    s.Bytes = bytes;
+                    break;
+                case OptSuffixLen:
+                    if (!TryDigits(v, out int len)) { s.Error = $"split: invalid suffix length: '{v}'"; return s; }
+                    s.SuffixLength = len < 1 ? 2 : len;
+                    break;
+                case OptNumeric:
+                    s.Numeric = true;
+                    if (tok.Value is { Length: > 0 } from)
+                    {
+                        if (!TryDigits(from, out int start)) { s.Error = $"split: invalid suffix start: '{from}'"; return s; }
+                        s.NumericStart = start;
+                    }
+                    break;
+                case OptAddSuffix:
+                    s.AdditionalSuffix = v;
+                    break;
+            }
+        }
+
+        if (s.Parsed.Has(OptLines) && s.Parsed.Has(OptBytes))
+        {
+            s.Error = "split: cannot split in more than one way";
+            return s;
+        }
+        if (s.Operands.Count > 2)
+        {
+            s.Error = $"split: extra operand '{s.Operands[2]}'";
+            return s;
+        }
+        return s;
+    }
+
+    private static bool TryDigits(string s, out int n)
+    {
+        n = 0;
+        if (s.Length == 0) return false;
+        long v = 0;
+        foreach (char c in s)
+        {
+            if (c < '0' || c > '9') return false;
+            v = Math.Min(v * 10 + (c - '0'), int.MaxValue);
+        }
+        n = (int)v;
+        return true;
+    }
+
+    private static bool TryPositive(string s, out int n) => TryDigits(s, out n) && n >= 1;
     /// <summary>The bash <c>-d</c> (numeric suffixes) switch.</summary>
     [Parameter]
     public SwitchParameter D { get; set; }
@@ -83,6 +198,7 @@ public sealed class InvokeBashSplitCommand : PSCmdlet
     public PSObject? InputObject { get; set; }
 
     private readonly List<PSObject> _pipeline = new();
+    private int _numericStart;
 
     protected override void ProcessRecord()
     {
@@ -94,9 +210,15 @@ public sealed class InvokeBashSplitCommand : PSCmdlet
 
     protected override void EndProcessing()
     {
-        // Re-inject decoy-bound classifier flags so the classifier fires exit 2
-        // (bare -e/-C never reach Arguments — the binder eats/crashes them).
-        var args = BashRuntime.PrependDecoys(Arguments, (E.IsPresent, "-e"), (C.IsPresent, "-C"));
+        // Re-inject the decoy-bound flags (bare -d/-a/-e/-C never reach Arguments: the binder
+        // eats or crashes them) so the shared parser sees the whole argv.
+        var raw = Arguments ?? Array.Empty<string>();
+        var pre = new List<string>();
+        if (D.IsPresent) pre.Add("-d");
+        if (A.HasValue) { pre.Add("-a"); pre.Add(A.Value.ToString(System.Globalization.CultureInfo.InvariantCulture)); }
+        if (E.IsPresent) pre.Add("-e");
+        if (C.IsPresent) pre.Add("-C");
+        var args = pre.Count == 0 ? raw : pre.Concat(raw).ToArray();
 
         FileSystemHelpers.SetLastExitCode(this, 0);
         if (FileSystemHelpers.TryHandleVersion(this, "split", args)) return;
@@ -110,89 +232,22 @@ public sealed class InvokeBashSplitCommand : PSCmdlet
             return;
         }
 
-        int? lineCount = null;
-        long? byteSize = null;
-        string additionalSuffix = string.Empty;
-        bool numericSuffix = D.IsPresent;
-        int suffixLength = A ?? 2;
-        var operands = new List<string>();
-
-        for (int i = 0; i < args.Length; i++)
+        var plan = Plan(args);
+        if (FileSystemHelpers.TryWriteParseError(this, "split", plan.Parsed)) return;
+        if (FileSystemHelpers.TryHandleInfoOptions(this, "split", plan.Parsed)) return;
+        if (plan.Error is { } planError)
         {
-            var arg = args[i];
-            // -b SIZE / --bytes=SIZE: split by byte size (K/M/G suffixes).
-            if (arg == "-b" && (i + 1) < args.Length)
-            {
-                byteSize = ParseByteSize(args[i + 1]);
-                i++;
-                continue;
-            }
-            if (arg.StartsWith("--bytes=", StringComparison.Ordinal))
-            {
-                byteSize = ParseByteSize(arg.Substring("--bytes=".Length));
-                continue;
-            }
-            if (arg.StartsWith("--additional-suffix=", StringComparison.Ordinal))
-            {
-                additionalSuffix = arg.Substring("--additional-suffix=".Length);
-                continue;
-            }
-            if (arg == "-l" && (i + 1) < args.Length)
-            {
-                if (int.TryParse(args[i + 1], out var parsed))
-                {
-                    lineCount = parsed;
-                }
-                i++;
-                continue;
-            }
-            if (arg.StartsWith("--lines=", StringComparison.Ordinal))
-            {
-                if (int.TryParse(arg.Substring("--lines=".Length), out var parsed))
-                {
-                    lineCount = parsed;
-                }
-                continue;
-            }
-            if (arg == "-d" || arg == "--numeric-suffixes")
-            {
-                numericSuffix = true;
-                continue;
-            }
-            if (arg == "-a" && (i + 1) < args.Length)
-            {
-                if (int.TryParse(args[i + 1], out var parsed))
-                {
-                    suffixLength = parsed;
-                }
-                i++;
-                continue;
-            }
-            if (arg.StartsWith("--suffix-length=", StringComparison.Ordinal))
-            {
-                if (int.TryParse(arg.Substring("--suffix-length=".Length), out var parsed))
-                {
-                    suffixLength = parsed;
-                }
-                continue;
-            }
-            operands.Add(arg);
-        }
-
-        if (lineCount is null || lineCount <= 0)
-        {
-            lineCount = 1000;
-        }
-        if (suffixLength < 1)
-        {
-            suffixLength = 2;
-        }
-
-        // Any remaining option-looking operand is an unknown flag that fell
-        // through the parser — classify it instead of reporting "No such file".
-        if (FileSystemHelpers.TryWriteOperandOptionError(this, "split", operands, SplitValidButUnsupported))
+            FileSystemHelpers.WriteBashError(this, planError);
             return;
+        }
 
+        int? lineCount = plan.Lines;
+        long? byteSize = plan.Bytes;
+        string additionalSuffix = plan.AdditionalSuffix;
+        bool numericSuffix = plan.Numeric;
+        _numericStart = plan.NumericStart;
+        int suffixLength = plan.SuffixLength;
+        var operands = plan.Operands;
         IEnumerable<string> lines;
         string? fileReadPath = null;
         string prefix = "x";
@@ -268,7 +323,7 @@ public sealed class InvokeBashSplitCommand : PSCmdlet
         {
             int len = (int)Math.Min(byteSize, bytes.Length - offset);
             string suffix = numericSuffix
-                ? chunkIndex.ToString().PadLeft(suffixLength, '0')
+                ? (chunkIndex + _numericStart).ToString().PadLeft(suffixLength, '0')
                 : BuildAlphaSuffix(chunkIndex, suffixLength);
             string outName = prefix + suffix + additionalSuffix;
             string outPath = Path.IsPathRooted(outName) ? outName : Path.Combine(cwd, outName);
@@ -285,21 +340,6 @@ public sealed class InvokeBashSplitCommand : PSCmdlet
             }
             chunkIndex++;
         }
-    }
-
-    /// <summary>Parse a split SIZE: plain number, or K/M/G (1024-based) suffix.</summary>
-    private static long? ParseByteSize(string s)
-    {
-        if (string.IsNullOrEmpty(s)) return null;
-        long mult = 1;
-        string num = s;
-        char last = char.ToUpperInvariant(s[s.Length - 1]);
-        if (last is 'K' or 'M' or 'G')
-        {
-            mult = last switch { 'K' => 1024L, 'M' => 1048576L, _ => 1073741824L };
-            num = s.Substring(0, s.Length - 1);
-        }
-        return long.TryParse(num, out var n) ? n * mult : null;
     }
 
     private void WritePieces(
@@ -356,7 +396,7 @@ public sealed class InvokeBashSplitCommand : PSCmdlet
         string additionalSuffix)
     {
         string suffix = numericSuffix
-            ? chunkIndex.ToString().PadLeft(suffixLength, '0')
+            ? (chunkIndex + _numericStart).ToString().PadLeft(suffixLength, '0')
             : BuildAlphaSuffix(chunkIndex, suffixLength);
 
         string outName = prefix + suffix + additionalSuffix;
