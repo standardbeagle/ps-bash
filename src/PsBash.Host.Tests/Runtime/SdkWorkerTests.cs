@@ -238,9 +238,13 @@ public class SdkWorkerTests : IAsyncLifetime
     // so the output carries ANSI SGR escapes and NOT the stock formatter's dashed separator.
     // Oracle note (Directive 1): ps-bash-specific (no bash equivalent) — asserts on the
     // cmdlet surface. Env-gated and restored so no other test sees the flag.
-    [Fact]
+    [SkippableFact]
     public async Task ExecuteAsync_StyledDefaultFlag_RendersNativePSObjectsWithAnsi()
     {
+        Skip.IfNot(
+            PsBash.Core.Runtime.ModuleExtractor.ExtractEmbedded() is not null
+            && Directory.GetFiles(Path.GetDirectoryName(PsBash.Core.Runtime.ModuleExtractor.GetCmdletsDllPath())!, "Strata.*.dll").Length > 0,
+            "Strata is not built in (UseStrata=false): Format-Styled is compiled out.");
         var priorFormat = Environment.GetEnvironmentVariable("PSBASH_DEFAULT_FORMAT");
         var priorNoColor = Environment.GetEnvironmentVariable("NO_COLOR");
         try

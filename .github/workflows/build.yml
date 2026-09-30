@@ -95,11 +95,21 @@ jobs:
         timeout-minutes: 15
         run: dotnet test src/PsBash.Escalation.Tests/PsBash.Escalation.Tests.csproj --no-build -c Release --filter "Category=Security" --blame-hang-timeout 180s --blame-hang-dump-type none
 
+      # Cmdlets.Tests gate the build. The cmdlets are the runtime surface, and Pester
+      # (the publish gate) cannot cover the fused lane, arg parsers, or filesystem
+      # mutators. Strata-backed tests (Show-Styled etc.) SKIP with a reason when the
+      # Strata feed is absent (StrataBuild.Enabled), which is always the case on CI.
+      # --blame-hang-timeout turns a hang into a failure; timeout-minutes backstops.
+      - name: Cmdlets tests (gates the build)
+        timeout-minutes: 15
+        run: dotnet test src/PsBash.Cmdlets.Tests/PsBash.Cmdlets.Tests.csproj --no-build -c Release --blame-hang-timeout 180s --blame-hang-dump-type none
+
       # Full xUnit suite for visibility — NON-BLOCKING. The Differential suite
       # needs a bash oracle that GitHub runners lack (even `echo hello` fails),
-      # the Shell/PTY suite needs TTY primitives (setsid) they lack, and a Cmdlets
-      # test intermittently hangs. These fail/flake on CI but pass locally via
-      # ./scripts/test.sh, so they must not gate the build. (Mirrors publish.yml.)
+      # and the Shell/PTY suite needs TTY primitives (setsid) they lack. These
+      # fail/flake on CI but pass locally via ./scripts/test.sh, so they must not
+      # gate the build. (Cmdlets.Tests is gated by the step above; it re-runs here
+      # only as part of the solution-wide sweep.)
       - name: Unit tests — full suite (non-blocking, visibility)
         continue-on-error: true
         timeout-minutes: 20
