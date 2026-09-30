@@ -174,9 +174,59 @@ public static class PwshTestFixture
         return CreateInternal();
     }
 
-    // Shared implementation used by both Create() and SharedPwshFixture.
-    internal static PowerShell CreateInternal()
+    // Runs one load step; any terminating exception or error record aborts with the step named.
+    // `tolerateErrorRecords`: the psm1 is run as a SCRIPT body (see step 1), so its module-scope
+    // probes of $PSScriptRoot emit a fixed set of benign non-terminating "Path is empty string"
+    // records. Only a terminating failure (parse error, throw) aborts that step; the command
+    // probe in CreateInternal is what proves the load actually registered the module.
+    private static void RunLoadStep(PowerShell pwsh, string step, Func<PowerShell, PowerShell> build,
+        bool tolerateErrorRecords = false)
     {
+        pwsh.Commands.Clear();
+        pwsh.Streams.ClearStreams();
+        try
+        {
+            build(pwsh).Invoke();
+        }
+        catch (Exception ex)
+        {
+            throw new InvalidOperationException($"PwshTestFixture: '{step}' failed: {ex.Message}", ex);
+        }
+        var errors = pwsh.Streams.Error.Select(e => e.ToString()).ToArray();
+        pwsh.Commands.Clear();
+        pwsh.Streams.ClearStreams();
+        if (errors.Length > 0 && !tolerateErrorRecords)
+            throw new InvalidOperationException(
+                $"PwshTestFixture: '{step}' reported errors: {string.Join(" | ", errors)}");
+    }
+
+    // Shared implementation used by both Create() and SharedPwshFixture.
+    internal static PowerShell CreateInternal() => CreateInternal(AppContext.BaseDirectory);
+
+    /// <summary>
+    /// Files the fixture cannot run without. A missing one used to be skipped silently (the
+    /// load steps were <c>if (File.Exists(...))</c>), so every test then ran against a bare
+    /// runspace and failed with a confusing "command not found" — or passed vacuously. Now
+    /// the fixture fails immediately and names the file.
+    /// </summary>
+    private static readonly string[] RequiredModuleFiles =
+        { "PsBash.psm1", "PsBash.Cmdlets.dll", "PsBash.Format.ps1xml" };
+
+    /// <summary>
+    /// Builds the runspace from the module files in <paramref name="baseDir"/>. Throws
+    /// <see cref="InvalidOperationException"/> naming the file / step when a required module
+    /// file is missing or a load step fails — it never continues with a half-loaded module.
+    /// (<paramref name="baseDir"/> is a parameter so the fail-fast paths are testable against
+    /// a deliberately broken directory.)
+    /// </summary>
+    internal static PowerShell CreateInternal(string baseDir)
+    {
+        var missing = RequiredModuleFiles.Where(f => !File.Exists(Path.Combine(baseDir, f))).ToArray();
+        if (missing.Length > 0)
+            throw new InvalidOperationException(
+                $"PwshTestFixture: required module file(s) missing from '{baseDir}': {string.Join(", ", missing)}. " +
+                "Build the module (tman build) so the test output directory contains the PsBash module files.");
+
         // Prepend SDK module path to PSModulePath so built-in modules can be loaded.
         var sdkModules = FindSdkModulePath();
         if (sdkModules != null)
@@ -206,8 +256,8 @@ public static class PwshTestFixture
         //    so the module-load self-import and later test commands resolve to our copy.
         CleanInstalledPsBash(pwsh);
 
-        var baseDir = AppContext.BaseDirectory;
-
+        try
+        {
         // 1. Load the script module by reading the .psm1 contents and running
         //    them as a script. We can't:
         //    - Import-Module on the .psd1 manifest (RequiredModules / NestedModules
@@ -221,30 +271,42 @@ public static class PwshTestFixture
         //    scope (REFACTOR-6); strict mode is opted into per-function only.
         //    Running the psm1 body as a script therefore does not leak strict
         //    semantics into the global scope.
-        var psm1Path = Path.Combine(baseDir, "PsBash.psm1");
-        if (File.Exists(psm1Path))
-        {
-            var psm1Content = File.ReadAllText(psm1Path);
-            pwsh.AddScript(psm1Content).Invoke();
-            pwsh.Commands.Clear();
-        }
+        RunLoadStep(pwsh, "load PsBash.psm1",
+            p => p.AddScript(File.ReadAllText(Path.Combine(baseDir, "PsBash.psm1"))),
+            tolerateErrorRecords: true);
 
         // 2. Load the binary module DLL directly.
         //    Import-Module on the .psd1 would fail due to RequiredModules / NestedModules
         //    referencing other manifests. Loading the DLL directly registers the cmdlets.
-        var dllPath = Path.Combine(baseDir, "PsBash.Cmdlets.dll");
-        if (File.Exists(dllPath))
-        {
-            pwsh.AddCommand("Import-Module").AddParameter("Name", dllPath).Invoke();
-            pwsh.Commands.Clear();
-        }
+        RunLoadStep(pwsh, "Import-Module PsBash.Cmdlets.dll",
+            p => p.AddCommand("Import-Module")
+                  .AddParameter("Name", Path.Combine(baseDir, "PsBash.Cmdlets.dll"))
+                  .AddParameter("ErrorAction", "Stop"));
 
         // 3. Import the format file so output formatting works correctly.
-        var formatPath = Path.Combine(baseDir, "PsBash.Format.ps1xml");
-        if (File.Exists(formatPath))
+        RunLoadStep(pwsh, "Update-FormatData PsBash.Format.ps1xml",
+            p => p.AddCommand("Update-FormatData")
+                  .AddParameter("AppendPath", Path.Combine(baseDir, "PsBash.Format.ps1xml"))
+                  .AddParameter("ErrorAction", "Stop"));
+
+        // 4. Sanity probe: one command from each half of the module must resolve, or the
+        //    load "succeeded" without registering anything (e.g. an empty psm1).
+        foreach (var expected in new[] { "Emit-BashLine", "Invoke-BashEcho" })
         {
-            pwsh.AddCommand("Update-FormatData").AddParameter("AppendPath", formatPath).Invoke();
             pwsh.Commands.Clear();
+            var found = pwsh.AddScript($"[bool](Get-Command '{expected}' -ErrorAction SilentlyContinue)").Invoke();
+            pwsh.Commands.Clear();
+            if (found.Count == 0 || found[0]?.BaseObject is not true)
+                throw new InvalidOperationException(
+                    $"PwshTestFixture: module loaded from '{baseDir}' but '{expected}' is not defined.");
+        }
+        }
+        catch
+        {
+            // Never hand back (or leak) a half-loaded runspace.
+            try { pwsh.Runspace?.Dispose(); } catch { }
+            try { pwsh.Dispose(); } catch { }
+            throw;
         }
 
         return pwsh;
