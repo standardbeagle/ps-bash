@@ -85,14 +85,16 @@ public class LnArgScanTests
     [InlineData("ERR ln: option '-S' is recognized but not supported by ps-bash", "-S", ".bak", "a", "b")]  // FIX (was: operands)
     [InlineData("ERR ln: option '--suffix' is recognized but not supported by ps-bash", "--suffix=.bak", "a", "b")]  // FIX (was: operands)
     [InlineData("ERR ln: option '--suffix' is recognized but not supported by ps-bash", "--suf", "a", "b")]  // FIX (was: operands)
-    [InlineData("ERR ln: option '-t' is recognized but not supported by ps-bash", "-t", "dir", "a")]  // FIX (was: operands)
-    [InlineData("ERR ln: option '--target-directory' is recognized but not supported by ps-bash", "--target-directory=dir", "a")]  // FIX (was: operands)
-    [InlineData("ERR ln: option '--target-directory' is recognized but not supported by ps-bash", "--t", "dir", "a")]  // FIX (was: operands)
-    [InlineData("ERR ln: option '-T' is recognized but not supported by ps-bash", "-T", "a", "b")]  // FIX (was: operands)
-    [InlineData("ERR ln: option '--no-target-directory' is recognized but not supported by ps-bash", "--no-target-directory", "a", "b")]  // FIX (was: operands)
-    [InlineData("ERR ln: option '--no-target-directory' is recognized but not supported by ps-bash", "--no-t", "a", "b")]  // FIX (was: operands)
+    // -t DIR / -T are IMPLEMENTED now (operand forms 3/4): the scan accepts them; -t consumes DIR.
+    [InlineData("s=0 f=0 v=0 n=0 ops=[a]", "-t", "dir", "a")]
+    [InlineData("s=0 f=0 v=0 n=0 ops=[a]", "-tdir", "a")]
+    [InlineData("s=0 f=0 v=0 n=0 ops=[a]", "--target-directory=dir", "a")]
+    [InlineData("s=0 f=0 v=0 n=0 ops=[a]", "--t", "dir", "a")]
+    [InlineData("s=0 f=0 v=0 n=0 ops=[a,b]", "-T", "a", "b")]
+    [InlineData("s=0 f=0 v=0 n=0 ops=[a,b]", "--no-target-directory", "a", "b")]
+    [InlineData("s=0 f=0 v=0 n=0 ops=[a,b]", "--no-t", "a", "b")]
     [InlineData("ERR ln: option '-r' is recognized but not supported by ps-bash", "-sr", "a", "b")]  // FIX (was: operands [-sr,a,b])
-    [InlineData("ERR ln: option '-T' is recognized but not supported by ps-bash", "-sfT", "a", "b")]  // FIX (was: operands)
+    [InlineData("s=1 f=1 v=0 n=0 ops=[a,b]", "-sfT", "a", "b")]
     [InlineData("ERR ln: invalid option -- 'Z'", "-Z", "a", "b")]  // FIX (was: operands) — GNU ln 9.4 has no -Z
     [InlineData("ERR ln: unrecognized option '--context'", "--context", "a", "b")]  // FIX (was: operands)
     [InlineData("ERR ln: invalid option -- 'z'", "-z", "a", "b")]  // FIX (was: operands)
@@ -129,7 +131,7 @@ public class LnArgScanTests
     [InlineData("-z", 1)]
     [InlineData("--symbolic=1", 1)]
     [InlineData("--s", 1)]
-    [InlineData("-T", 2)]
+    [InlineData("-r", 2)]
     [InlineData("--backup", 2)]
     public void ScanError_ExitStatus_IsGnuUsageStatusExceptOurOwnRefusal(string arg, int exit)
     {

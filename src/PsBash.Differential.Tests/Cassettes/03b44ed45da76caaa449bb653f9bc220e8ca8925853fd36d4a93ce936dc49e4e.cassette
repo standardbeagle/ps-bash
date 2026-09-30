@@ -1,0 +1,37 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 401
+stdout-length: 127
+stderr-length: 0
+==== SCRIPT ====
+__fs_snap() { find . | LC_ALL=C sort | while IFS= read -r p; do if [ -d "$p" ]; then echo "D $p"; else echo "F $p $(base64 -w0 "$p")"; fi; done; }
+d=$(mktemp -d) && cd "$d" && { :
+printf '%s\n' 'A' > 'a'
+printf '%s\n' 'B' > 'b'
+mkdir -p 'd'
+printf '%s\n' 'C' > 'd/c'
+mkdir -p 'e'
+} >/dev/null 2>&1
+echo '== stdout'
+{ :
+ln a 2>&1
+} 2>/dev/null
+echo "== exit $?"
+echo '== fs'
+__fs_snap
+cd /; rm -rf "$d"
+==== STDOUT ====
+== stdout
+ln: failed to create hard link './a': File exists
+== exit 1
+== fs
+D .
+F ./a QQo=
+F ./b Qgo=
+D ./d
+F ./d/c Qwo=
+D ./e
+
+==== STDERR ====
+

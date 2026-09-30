@@ -42,6 +42,59 @@ public class FsStateDifferentialTests
             Tree(("s/moved", "moved"), ("t/s/keep", "old")),
             "mv s t");
 
+    // ───────────── ln operand forms (hard links: no symlink privilege needed) ─────────────
+
+    private static string LnTree() =>
+        Tree(("a", "A"), ("b", "B"), ("d/c", "C"), ("e", null));
+
+    [SkippableFact] public Task Ln_SingleOperand_LinksBasenameIntoCwd() =>
+        EqualAsync(LnTree(), "ln -v d/c");
+
+    [SkippableFact] public Task Ln_SingleOperand_ExistingName_Fails() =>
+        EqualAsync(LnTree(), "ln a 2>&1");
+
+    [SkippableFact] public Task Ln_SeveralTargets_IntoDirectory() =>
+        EqualAsync(LnTree(), "ln -v a b e");
+
+    [SkippableFact] public Task Ln_SeveralTargets_TrailingSlashDirectory() =>
+        EqualAsync(LnTree(), "ln -v a b d/");
+
+    [SkippableFact] public Task Ln_SeveralTargets_LastOperandMissing() =>
+        EqualAsync(LnTree(), "ln a b nodir 2>&1");
+
+    [SkippableFact] public Task Ln_SeveralTargets_LastOperandIsFile() =>
+        EqualAsync(LnTree(), "ln a b b 2>&1");
+
+    [SkippableFact] public Task Ln_SeveralTargets_OneExists_OthersStillLinked() =>
+        EqualAsync(Tree(("a", "A"), ("b", "B"), ("e/a", "OLD")), "ln a b e 2>&1");
+
+    [SkippableFact] public Task Ln_TwoOperands_LinkNameIsDirectory_LinksInside() =>
+        EqualAsync(LnTree(), "ln -v a e");
+
+    [SkippableFact] public Task Ln_TargetDirectoryOption() =>
+        EqualAsync(LnTree(), "ln -v -t e a b");
+
+    [SkippableFact] public Task Ln_TargetDirectoryOption_MissingDirectory() =>
+        EqualAsync(LnTree(), "ln -t nodir a 2>&1");
+
+    [SkippableFact] public Task Ln_NoTargetDirectory_DoesNotDescendIntoDirectory() =>
+        EqualAsync(LnTree(), "ln -T a d 2>&1");
+
+    [SkippableFact] public Task Ln_NoTargetDirectory_PlainName() =>
+        EqualAsync(LnTree(), "ln -Tv a z");
+
+    [SkippableFact] public Task Ln_NoTargetDirectory_ExtraOperand() =>
+        EqualAsync(LnTree(), "ln -T a z y 2>&1");
+
+    [SkippableFact] public Task Ln_TargetAndNoTargetDirectory_Conflict() =>
+        EqualAsync(LnTree(), "ln -t e -T a 2>&1");
+
+    [SkippableFact] public Task Ln_HardLink_MissingTarget() =>
+        EqualAsync(LnTree(), "ln missing z 2>&1");
+
+    [SkippableFact] public Task Ln_HardLink_DirectoryTarget() =>
+        EqualAsync(LnTree(), "ln d z 2>&1");
+
     // ───────────── tee ─────────────
 
     [SkippableFact] public Task Tee_PrintfWithoutNewline_FileBytesAreExactlyTheInput() =>
