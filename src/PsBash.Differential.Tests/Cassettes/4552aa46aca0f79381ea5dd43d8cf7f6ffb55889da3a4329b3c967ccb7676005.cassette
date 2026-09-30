@@ -1,0 +1,13 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 37
+stdout-length: 5
+stderr-length: 0
+==== SCRIPT ====
+printf '-n\n' 2>/dev/null; echo rc=$?
+==== STDOUT ====
+rc=2
+
+==== STDERR ====
+

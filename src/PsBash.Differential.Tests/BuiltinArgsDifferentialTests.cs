@@ -37,4 +37,27 @@ public class BuiltinArgsDifferentialTests
     [InlineData("echo -e-n x")]
     [InlineData("echo hello -n")]
     public Task Echo_BuiltinOptionScan(string script) => Eq(script);
+
+    [SkippableTheory]
+    [InlineData("printf -x 2>/dev/null; echo rc=$?")]
+    [InlineData("printf -v 2>/dev/null; echo rc=$?")]
+    [InlineData("printf -- 2>/dev/null; echo rc=$?")]
+    [InlineData("printf 2>/dev/null; echo rc=$?")]
+    [InlineData("printf -- -x; echo")]
+    [InlineData("printf -- '%s\\n' -n")]
+    [InlineData("printf '%s\\n' -n -v --")]
+    [InlineData("printf -- --; echo")]
+    [InlineData("printf -; echo")]
+    [InlineData("printf -xv 2>/dev/null; echo rc=$?")]
+    [InlineData("printf '-n\\n' 2>/dev/null; echo rc=$?")]
+    [InlineData("printf -v 1bad x 2>/dev/null; echo rc=$?")]
+    [InlineData("printf -v x '%s-%d' a 5; echo \"x=[$x]\"")]
+    [InlineData("printf -v x '%s\\n' a; echo \"x=[$x]\"")]
+    [InlineData("printf -v x -- '-%s' a; echo \"x=[$x]\"")]
+    [InlineData("printf -vx '%s' hi; echo \"x=[$x]\"")]
+    [InlineData("printf -v x -v y z; echo \"x=[$x] y=[$y]\"")]
+    [InlineData("x=keep; printf -v x 2>/dev/null; echo \"x=[$x] rc=$?\"")]
+    [InlineData("printf -v x ''; echo \"x=[$x]\"")]
+    [InlineData("printf -v x '%s %s' a b c d; echo \"x=[$x]\"")]
+    public Task Printf_BuiltinOptionScan(string script) => Eq(script);
 }
