@@ -44,6 +44,16 @@ public class InvokeBashFileSystemMutatorTests : IDisposable, IClassFixture<Share
     /// <summary>Runs a script that must succeed (exit 0, no error records); returns stdout lines.</summary>
     private string[] Ok(string script) => RunResult(script).AssertSuccess().Lines.ToArray();
 
+    /// <summary>cp -n succeeds (exit 0) but coreutils 9.4 warns on stderr: that warning is the ONLY diagnostic.</summary>
+    private void OkWithNoClobberWarning(string script)
+    {
+        var r = RunResult(script);
+        Assert.Equal(0, r.ExitCode);
+        Assert.Equal(
+            "cp: warning: behavior of -n is non-portable and may change in future; use --update=none instead",
+            r.Stderr);
+    }
+
     /// <summary>Runs a script that must fail with <paramref name="exit"/> (and the stderr fragments).</summary>
     private CmdResult Fail(string script, int exit, params string[] stderrContains) =>
         RunResult(script).AssertFailed(exit, stderrContains);
@@ -230,7 +240,7 @@ public class InvokeBashFileSystemMutatorTests : IDisposable, IClassFixture<Share
         var dst = Path.Combine(_tmpRoot, "dst.txt");
         File.WriteAllText(src, "new");
         File.WriteAllText(dst, "old");
-        Ok($"Invoke-BashCp -n {Q(src)} {Q(dst)}");
+        OkWithNoClobberWarning($"Invoke-BashCp -n {Q(src)} {Q(dst)}");
         Assert.Equal("old", File.ReadAllText(dst));
     }
 
@@ -277,7 +287,7 @@ public class InvokeBashFileSystemMutatorTests : IDisposable, IClassFixture<Share
         var dst = Path.Combine(_tmpRoot, "dst.txt");
         File.WriteAllText(src, "new");
         File.WriteAllText(dst, "old");
-        Ok($"Invoke-BashMv -n {Q(src)} {Q(dst)}");
+        Fail($"Invoke-BashMv -n {Q(src)} {Q(dst)}", 1, "not replacing");
         Assert.Equal("old", File.ReadAllText(dst));
         // Source must remain since the move was skipped.
         Assert.True(File.Exists(src));
@@ -555,7 +565,7 @@ public class InvokeBashFileSystemMutatorTests : IDisposable, IClassFixture<Share
         File.WriteAllText(Path.Combine(s, "x", "f2"), "new2");
         File.WriteAllText(Path.Combine(t, "s3", "x", "f1"), "old1");
 
-        Ok($"Invoke-BashCp -r -n {Q(s)} {Q(t)}");
+        OkWithNoClobberWarning($"Invoke-BashCp -r -n {Q(s)} {Q(t)}");
 
         Assert.Equal("old1", File.ReadAllText(Path.Combine(t, "s3", "x", "f1")));
         Assert.Equal("new2", File.ReadAllText(Path.Combine(t, "s3", "x", "f2")));
@@ -882,7 +892,7 @@ public class InvokeBashFileSystemMutatorTests : IDisposable, IClassFixture<Share
         Fail($"Invoke-BashMv {Q(src)} {Q(dst)} '--no-c'", 1, "ambiguous");
         // `--no-c` is ambiguous with --no-copy (GNU), so nothing moved and the destination is intact.
         Assert.Equal("old", File.ReadAllText(dst));
-        Ok($"Invoke-BashMv {Q(src)} {Q(dst)} '--no-cl'");
+        Fail($"Invoke-BashMv {Q(src)} {Q(dst)} '--no-cl'", 1, "not replacing");
         Assert.Equal("old", File.ReadAllText(dst));
         Assert.True(File.Exists(src));
     }
