@@ -1052,7 +1052,7 @@ public static class PsEmitter
             && simple.EnvPairs.IsEmpty && simple.Redirects.IsEmpty)
         {
             var word = GetLiteralValue(simple.Words[0]);
-            if (word is "true") return "$true";
+            if (word is "true" or ":") return "$true";
             if (word is "false") return "$false";
         }
 
@@ -1359,7 +1359,7 @@ public static class PsEmitter
             && simple.EnvPairs.IsEmpty && simple.Redirects.IsEmpty)
         {
             var word = GetLiteralValue(simple.Words[0]);
-            if (word is "true") return "$true";
+            if (word is "true" or ":") return "$true";
             if (word is "false") return "$false";
         }
 
@@ -1413,7 +1413,7 @@ public static class PsEmitter
             && simple.EnvPairs.IsEmpty && simple.Redirects.IsEmpty)
         {
             var word = GetLiteralValue(simple.Words[0]);
-            if (word is "true") return "$true";
+            if (word is "true" or ":") return "$true";
             if (word is "false") return "$false";
         }
 
@@ -2210,6 +2210,21 @@ public static class PsEmitter
         return true;
     }
 
+    // Arguments of `:` / `true` / `false` are ignored but still expanded (side effects
+    // of `${x:=v}`, `$(cmd)`, `$((i++))`). Plain literals have no effect and are skipped
+    // (so a `--help` word can never be parsed as a PowerShell operator).
+    private static string EmitNoOpArgPrelude(Command.Simple cmd)
+    {
+        var sb = new StringBuilder();
+        for (int i = 1; i < cmd.Words.Length; i++)
+        {
+            var lit = GetLiteralValue(cmd.Words[i]);
+            if (lit is not null) continue; // a plain literal has no side effects
+            sb.Append("[void](").Append(EmitWord(cmd.Words[i])).Append("); ");
+        }
+        return sb.ToString();
+    }
+
     // Dispatch ladder for the bash-keyword / builtin branches that used to live
     // in one ~200-line else-if chain inside EmitSimple. Order is preserved
     // exactly (it is behavior): `unset`/`trap DEBUG` return immediately (outside
@@ -2276,19 +2291,23 @@ public static class PsEmitter
         // and the `||` would only consume `$g:LASTEXITCODE`. Subexpression
         // (not script block `& { }`) is required so Write-Error's $?=$false
         // propagates to the outer pipeline; `& { }` invocation resets $? = $true.
-        else if (cmd0 == "true" && cmd.Words.Length == 1)
-            specialResult = "$($global:LASTEXITCODE = 0; [void]$true)";
-        else if (cmd0 == "false" && cmd.Words.Length == 1)
+        // `:` is the same builtin as `true`; all three ignore their arguments but
+        // bash still EXPANDS them first (`: ${x:=5}` assigns, `: $(cmd)` runs cmd),
+        // so the expansions run as `[void](word)` statements ahead of the status.
+        else if (cmd0 is "true" or ":")
+            specialResult = "$(" + EmitNoOpArgPrelude(cmd) + "$global:LASTEXITCODE = 0; [void]$true)";
+        else if (cmd0 == "false")
         {
+            var argPrelude = EmitNoOpArgPrelude(cmd);
             if (_context == TranspileContext.Eval)
                 // try/catch on (1/0) is the mechanism that flips $? to $false so bash `&&` short-circuits;
                 // Write-Error can't be used here because it propagates as a terminating error in eval scope.
-                specialResult = "$($global:LASTEXITCODE = 1; try { [void](1/0) } catch { }; if ($global:__BashErrexit) { throw 'PsBash.FalseErrexit' })";
+                specialResult = "$(" + argPrelude + "$global:LASTEXITCODE = 1; try { [void](1/0) } catch { }; if ($global:__BashErrexit) { throw 'PsBash.FalseErrexit' })";
             else if (_andOrChainDepth > 0)
                 // Inside an && / || list: bash exempts every list member from
                 // errexit, so `set -e; false || true` must survive. Non-terminating
                 // Write-Error still flips $? for the chain operator.
-                specialResult = "$($global:LASTEXITCODE = 1; Write-Error '' -ErrorAction SilentlyContinue)";
+                specialResult = "$(" + argPrelude + "$global:LASTEXITCODE = 1; Write-Error '' -ErrorAction SilentlyContinue)";
             else
                 // A standalone `false` under errexit must ABORT the script (bash
                 // `set -e; false; echo after` prints nothing) AND leave no trace on
@@ -2298,7 +2317,7 @@ public static class PsEmitter
                 // with the failing status, and the EXIT trap's try/finally still
                 // runs. Without errexit, keep the non-terminating Write-Error that
                 // flips $? for a following && / || use.
-                specialResult = "$($global:LASTEXITCODE = 1; if ($global:__BashErrexit) { exit $global:LASTEXITCODE } else { Write-Error '' -ErrorAction SilentlyContinue })";
+                specialResult = "$(" + argPrelude + "$global:LASTEXITCODE = 1; if ($global:__BashErrexit) { exit $global:LASTEXITCODE } else { Write-Error '' -ErrorAction SilentlyContinue })";
         }
 
         // Inside a subshell, `exit` leaves only the subshell and sets $? in the
@@ -4892,14 +4911,15 @@ public static class PsEmitter
             {
                 // true/false as pipe targets need a cmdlet form, not a subexpression.
                 // $($global:LASTEXITCODE = 0; [void]$true) cannot be a pipeline segment.
-                var word0 = simple.Words.Length == 1 ? GetLiteralValue(simple.Words[0]) : null;
+                var word0 = simple.Words.Length >= 1 ? GetLiteralValue(simple.Words[0]) : null;
                 // Redirects are allowed here (e.g. `… | true 2>&1`): `true`/`false` ignore
                 // stdin, so we emit Out-Null and append any redirects. Excluding the redirect
                 // case sent it to the Emit fallback, which emitted the bare subexpression
                 // `$($global:LASTEXITCODE = 0; [void]$true)` — not a valid pipeline segment.
-                if (simple.Words.Length == 1 && simple.EnvPairs.IsEmpty)
+                if (simple.Words.Length >= 1 && simple.EnvPairs.IsEmpty
+                    && word0 is "true" or ":" or "false")
                 {
-                    if (word0 == "true")
+                    if (word0 is "true" or ":")
                     {
                         // Consume all piped input and succeed (exit 0).
                         // Out-Null is a valid pipeline cmdlet; after the pipeline set LASTEXITCODE=0.

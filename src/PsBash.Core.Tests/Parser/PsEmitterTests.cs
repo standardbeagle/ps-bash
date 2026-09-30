@@ -37,6 +37,24 @@ public class PsEmitterTests
     }
 
     [Fact]
+    public void Transpile_ColonBuiltin_ExpandsArgumentsAndSucceeds_NoCommandLookup()
+    {
+        var result = PsEmitter.Transpile(": ${x:=5}")!;
+        Assert.DoesNotContain("Invoke-Expression", result);
+        Assert.Contains("[void](", result);
+        Assert.Contains("$global:LASTEXITCODE = 0", result);
+        Assert.DoesNotMatch(@"(^|;)\s*:\s", result);
+    }
+
+    [Fact]
+    public void Transpile_ColonAsWhileCondition_IsTrueConstant() =>
+        Assert.Contains("while ($true)", PsEmitter.Transpile("while :; do echo a; break; done")!);
+
+    [Fact]
+    public void Transpile_TrueWithArguments_IgnoresThemWithStatusZero() =>
+        Assert.Contains("$global:LASTEXITCODE = 0", PsEmitter.Transpile("true --help")!);
+
+    [Fact]
     public void Emit_SimpleCommand_EchoHello_Passthrough()
     {
         var cmd = new Command.Simple(
