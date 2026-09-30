@@ -1,59 +1,35 @@
+using System.Linq;
 using System.Management.Automation;
+using System.Text;
+using PsBash.Cmdlets.Args;
 
 namespace PsBash.Cmdlets;
 
 /// <summary>
-/// Binary cmdlet replacement for the psm1 <c>Invoke-BashPaste</c> function
-/// (REFACTOR-2 follow-on). Merges corresponding lines from multiple files,
-/// joined by a delimiter (tab by default).
+/// Binary cmdlet replacement for the psm1 <c>Invoke-BashPaste</c> function. Merges corresponding
+/// lines from multiple files, separated by TABs (or the <c>-d</c> delimiter LIST, cycled per
+/// column exactly like GNU coreutils paste).
 ///
-/// Behavioral parity oracle: the original psm1 function. Flag surface:
-/// <list type="bullet">
-/// <item><c>-d DELIM</c> / <c>-dDELIM</c> — set the delimiter. Multi-char
-/// delimiters cycle through their characters in the row direction (per GNU
-/// coreutils paste). The psm1 oracle stored the whole string in
-/// <c>$delimiter</c> and joined fields with <c>-join $delimiter</c> in normal
-/// mode — i.e. the oracle did NOT cycle. We reproduce that exactly (bit-for-bit
-/// parity, not GNU-correct cycling). A future fix to add real cycling should
-/// land in the oracle first.</item>
-/// <item><c>-s</c> — serial mode: each file's lines are concatenated into one
-/// line using the delimiter. One emitted line per file.</item>
-/// <item><c>--</c> — end of flags; remaining args are operands.</item>
-/// <item><c>--help</c> — delegate to psm1 <c>Show-BashHelp paste</c>.</item>
-/// </list>
+/// Options (shared ordered parser, GNU coreutils 9.4): <c>-d LIST</c> / <c>-dLIST</c> /
+/// <c>--delimiters=LIST</c> (a bundle such as <c>-sd,</c> works: <c>d</c> takes the rest of the
+/// bundle), <c>-s</c> / <c>--serial</c>, unique long prefixes, <c>--</c>. <c>-z</c> /
+/// <c>--zero-terminated</c> is refused (exit 2). A <c>-</c> operand reads stdin.
 ///
-/// No PowerShell common-parameter prefix collisions. <c>-d</c> / <c>-s</c> do
-/// not match any common-parameter prefix (<c>-Debug</c> starts with 'D' but
-/// PSCmdlet binder requires <c>-d</c> to disambiguate <c>-Debug</c> vs
-/// <c>-Arguments</c>; here <c>-d</c> is consumed by the manual scan from
-/// <see cref="Arguments"/> via the catch-all). The <see cref="Arguments"/>
-/// catch-all suffices for the entire flag surface.
+/// Delimiter list: each CHARACTER is one delimiter, used in turn between the columns of a row
+/// (parallel) or between the lines of a file (serial, restarting per file). Escapes
+/// <c>\n \t \r \b \f \v \\ \0</c> (<c>\0</c> = empty delimiter); any other <c>\x</c> is <c>x</c>;
+/// a trailing lone backslash is an error (exit 1). An empty list means <c>\0</c>.
+/// The pre-migration cmdlet used the whole list as ONE multi-character delimiter, so
+/// <c>paste -d ',;' a b c</c> printed <c>a,;b,;c</c> instead of GNU's <c>a,b;c</c>.
 ///
-/// File reads route through <see cref="FileSystemHelpers.ResolveOperandPaths"/>
-/// (glob expansion via <c>SessionState.Path</c>, same slice cat/rev use); a
-/// failure emits a bash-style error via <see cref="FileSystemHelpers.WriteBashError"/>
-/// and the cmdlet returns early — matching the oracle's behavior
-/// where a <c>Read-BashFileLines</c> failure returned <c>$null</c> and the
-/// outer function returned with no output.
-///
-/// Output: bare strings via <see cref="BashRuntime.NewBashObject(string)"/>
-/// (default <c>PsBash.TextOutput</c>).
+/// Decoy: bare <c>-d</c> binds the <c>-Debug</c> common parameter for DIRECT PowerShell calls, so
+/// <see cref="Delimiter"/> is declared and re-injected as <c>-d VALUE</c> (PsEmitter quotes every
+/// dash word for the transpiler, which never binds it).
 /// </summary>
 [Cmdlet(VerbsLifecycle.Invoke, "BashPaste")]
 [OutputType(typeof(string))]
 public sealed class InvokeBashPasteCommand : PSCmdlet
 {
-    /// <summary>
-    /// Explicit value-bearing parameter for <c>-d DELIM</c>. The bare token
-    /// <c>-d</c> prefix-collides with the PowerShell common parameter
-    /// <c>-Debug</c> under <see cref="PSCmdlet"/> binding (same hazard the
-    /// <c>sed</c> migration documented for <c>-e</c>): without an explicit
-    /// declaration the binder would route <c>-d</c> to <c>-Debug</c> and the
-    /// delimiter argument would land as the first operand. Aliased
-    /// <c>d</c> so the binder accepts both <c>-d</c> and the long form
-    /// equivalent. The joined form <c>-dDELIM</c> (no whitespace) still flows
-    /// through <see cref="Arguments"/> and is recovered post-parse.
-    /// </summary>
     [Parameter]
     [Alias("d")]
     public string? Delimiter { get; set; }
@@ -64,20 +40,95 @@ public sealed class InvokeBashPasteCommand : PSCmdlet
     [Parameter(ValueFromPipeline = true)]
     public PSObject? InputObject { get; set; }
 
-    // Valid GNU paste flags not implemented by ps-bash. Implemented flags
-    // (-d/-s) are NOT in this set.
-    private static readonly HashSet<string> PasteValidButUnsupported =
-        new(StringComparer.Ordinal)
-        {
-            "-z",
-            "--zero-terminated",
-        };
+    /// <summary>
+    /// Valid GNU paste options ps-bash does not implement (NUL-terminated records).
+    /// (A string[] on purpose: CommonParameterCollisionGuardTests enumerates static string sets.)
+    /// </summary>
+    private static readonly string[] PasteValidButUnsupported = { "-z", "--zero-terminated" };
 
-    // Buffered stdin. GNU paste reads standard input when it has no file
-    // operands (or for a `-` operand), which is exactly the shape of the common
-    // `… | paste -sd,` join-the-lines idiom. The psm1 oracle ignored pipeline
-    // input entirely, so that idiom produced NOTHING — silently — even though
-    // the command reference documented paste as pipeline-capable.
+    private const string OptDelimiters = "delim", OptSerial = "serial";
+
+    private static readonly OptSpecSet PasteSpec = new(
+        new[]
+        {
+            new OptSpec(OptDelimiters, 'd', "delimiters", OptKind.Value),
+            new OptSpec(OptSerial, 's', "serial"),
+        },
+        validButUnsupported: PasteValidButUnsupported,
+        allowAbbrev: true,
+        gnuInfoOptions: true);
+
+    /// <summary>Pure argv scan (unit-test seam).</summary>
+    internal static ParsedArgs ScanArgs(string[] args) => ArgParser.Parse(args, PasteSpec);
+
+    internal sealed class PasteArgs
+    {
+        public ParsedArgs Parsed = null!;
+        /// <summary>The delimiter characters (as strings; <c>\0</c> = empty), cycled per column.</summary>
+        public string[] Delimiters = { "\t" };
+        public bool Serial;
+        public List<string> Operands = new();
+        public string? Error;
+    }
+
+    internal static PasteArgs Plan(string[] args)
+    {
+        var p = new PasteArgs { Parsed = ScanArgs(args) };
+        p.Operands = p.Parsed.Operands();
+        if (p.Parsed.HasError) return p;
+
+        p.Serial = p.Parsed.Has(OptSerial);
+        if (p.Parsed.Last(OptDelimiters) is { } d)
+        {
+            if (!TryParseDelimiterList(d.Value!, out var list, out var err))
+            {
+                p.Error = err;
+                return p;
+            }
+            p.Delimiters = list;
+        }
+        return p;
+    }
+
+    /// <summary>Expand a GNU paste delimiter LIST into its per-column delimiters.</summary>
+    internal static bool TryParseDelimiterList(string spec, out string[] list, out string? error)
+    {
+        error = null;
+        var items = new List<string>();
+        for (int i = 0; i < spec.Length; i++)
+        {
+            char c = spec[i];
+            if (c != '\\')
+            {
+                items.Add(c.ToString());
+                continue;
+            }
+            if (i + 1 >= spec.Length)
+            {
+                list = Array.Empty<string>();
+                error = $"paste: delimiter list ends with an unescaped backslash: {spec}";
+                return false;
+            }
+            char n = spec[++i];
+            items.Add(n switch
+            {
+                'n' => "\n",
+                't' => "\t",
+                'r' => "\r",
+                'b' => "\b",
+                'f' => "\f",
+                'v' => "\v",
+                '0' => string.Empty,
+                _ => n.ToString(),   // includes \\ ; any other \x is x
+            });
+        }
+        if (items.Count == 0) items.Add(string.Empty);
+        list = items.ToArray();
+        return true;
+    }
+
+    // Buffered stdin. GNU paste reads standard input when it has no file operands (or for a `-`
+    // operand), which is exactly the shape of the common `... | paste -sd,` idiom.
     private readonly List<string> _stdin = new();
 
     protected override void ProcessRecord()
@@ -91,9 +142,17 @@ public sealed class InvokeBashPasteCommand : PSCmdlet
             _stdin.Add(line);
     }
 
-    protected override void EndProcessing()
+    /// <summary>Arguments with the decoy-bound <c>-d VALUE</c> re-injected.</summary>
+    private string[] ArgsWithDecoys()
     {
         var args = Arguments ?? Array.Empty<string>();
+        if (Delimiter is null) return args;
+        return new[] { "-d", Delimiter }.Concat(args).ToArray();
+    }
+
+    protected override void EndProcessing()
+    {
+        var args = ArgsWithDecoys();
 
         FileSystemHelpers.SetLastExitCode(this, 0);
         if (FileSystemHelpers.TryHandleVersion(this, "paste", args)) return;
@@ -107,181 +166,85 @@ public sealed class InvokeBashPasteCommand : PSCmdlet
             return;
         }
 
-        // Delimiter source precedence:
-        //   1. Explicit -d DELIM bound to the typed Delimiter parameter (the
-        //      binder beats Arguments here because of the prefix collision
-        //      with -Debug — see the parameter's docstring).
-        //   2. Joined form -dDELIM, still landing in Arguments.
-        //   3. Default tab.
-        string delimiter = Delimiter ?? "\t";
-        bool serial = false;
-        var operands = new List<string>();
-        bool pastDoubleDash = false;
-
-        for (int i = 0; i < args.Length; i++)
+        var plan = Plan(args);
+        if (FileSystemHelpers.TryWriteParseError(this, "paste", plan.Parsed)) return;
+        if (FileSystemHelpers.TryHandleInfoOptions(this, "paste", plan.Parsed)) return;
+        if (plan.Error is { } planError)
         {
-            string a = args[i];
-
-            if (pastDoubleDash)
-            {
-                operands.Add(a);
-                continue;
-            }
-
-            if (a == "--")
-            {
-                pastDoubleDash = true;
-                continue;
-            }
-
-            // Case-sensitive (-ceq in oracle): "-S" is not "-s".
-            if (string.Equals(a, "-s", StringComparison.Ordinal))
-            {
-                serial = true;
-                continue;
-            }
-
-            // Defensive: if the binder did NOT consume -d (e.g. it appeared
-            // after --), fall back to the oracle's manual scan so the value
-            // is not treated as an operand.
-            if (string.Equals(a, "-d", StringComparison.Ordinal))
-            {
-                if (i + 1 < args.Length)
-                {
-                    delimiter = args[++i];
-                }
-                continue;
-            }
-
-            // Joined form: -d<chars> (case-sensitive on the 'd').
-            if (a.Length > 2 && a[0] == '-' && a[1] == 'd')
-            {
-                delimiter = a.Substring(2);
-                continue;
-            }
-
-            // BUNDLED short flags, e.g. the very common `paste -sd,` — `-s`
-            // followed by `-d` whose value is the rest of the token. Without this
-            // the whole token was taken as a FILE OPERAND and paste reported
-            // "invalid option -- 's'".
-            if (a.Length > 1 && a[0] == '-' && TryParseBundle(a, ref serial, ref delimiter, ref i, args))
-                continue;
-
-            operands.Add(a);
+            FileSystemHelpers.WriteBashError(this, planError);
+            FileSystemHelpers.SetLastExitCode(this, 1);
+            return;
         }
 
-        // GNU paste interprets backslash escapes in the delimiter (`\n` `\t`
-        // `\\` `\0`). The oracle stored the raw string, so `paste -d'\n'` joined
-        // with a literal backslash-n instead of a newline. Expanding here is a
-        // no-op for the default tab (a real \x09 with no backslash).
-        delimiter = ExpandPasteDelimiter(delimiter);
+        var delimiters = plan.Delimiters;
+        bool serial = plan.Serial;
 
-        if (FileSystemHelpers.TryWriteOperandOptionError(
-                this, "paste", operands, PasteValidButUnsupported)) return;
-
-        var filePaths = new List<string>();
-        foreach (var raw in operands)
+        // Sources in operand order. A `-` operand (or no operand at all) is stdin.
+        var sources = new List<(string Name, string? Path)>();
+        foreach (var raw in plan.Operands)
         {
+            if (raw == "-") { sources.Add(("-", null)); continue; }
             foreach (var filePath in FileSystemHelpers.ResolveOperandPaths(this, raw))
-            {
-                filePaths.Add(filePath);
-            }
+                sources.Add((filePath, filePath));
         }
-
-        // No file operands: read STDIN, like GNU paste.
-        if (filePaths.Count == 0)
+        if (sources.Count == 0)
         {
             if (_stdin.Count == 0) return;
-            if (serial)
-            {
-                WriteObject(BashRuntime.NewBashObject(string.Join(delimiter, _stdin)));
-                return;
-            }
-            // Without -s, a single input source pastes one field per line, i.e.
-            // each line passes through unchanged.
-            foreach (var line in _stdin)
-                WriteObject(BashRuntime.NewBashObject(line));
-            return;
+            sources.Add(("-", null));
         }
 
         if (serial)
         {
-            // Serial mode: each file becomes one line with its fields joined.
-            foreach (var filePath in filePaths)
+            // Serial mode: each source becomes one line, its fields joined by the cycling list.
+            foreach (var (name, path) in sources)
             {
-                string? line = ReadSerialLine(filePath, delimiter);
-                if (line is null)
-                {
-                    return;
-                }
+                string? line = ReadSerialLine(name, path, delimiters);
+                if (line is null) return;
                 WriteObject(BashRuntime.NewBashObject(line));
             }
             return;
         }
 
-        // Normal mode: merge files line by line, padding short files with
-        // empty strings up to the max line count.
-        EmitParallelPaste(filePaths, delimiter);
+        // Normal mode: merge sources line by line, padding short ones with empty strings.
+        EmitParallelPaste(sources, delimiters);
     }
 
-    /// <summary>
-    /// Parses a BUNDLED short-flag token (<c>-sd,</c>, <c>-sd</c> with the value in
-    /// the next arg, <c>-ds,</c>). Returns false — leaving the token to be treated
-    /// as an operand — the moment an unknown letter appears, so a real filename
-    /// that happens to start with <c>-</c> still reaches the operand classifier
-    /// and produces the oracle's error message rather than being silently eaten.
-    /// <c>d</c> consumes the REST of the token as the delimiter (or the next arg),
-    /// matching GNU's value-flag-ends-the-bundle rule.
-    /// </summary>
-    private static bool TryParseBundle(
-        string token, ref bool serial, ref string delimiter, ref int i, string[] args)
-    {
-        bool sawFlag = false;
-        for (int k = 1; k < token.Length; k++)
-        {
-            switch (token[k])
-            {
-                case 's':
-                    serial = true;
-                    sawFlag = true;
-                    break;
-                case 'd':
-                    // Rest of the token is the value; empty means "next arg".
-                    if (k + 1 < token.Length) delimiter = token[(k + 1)..];
-                    else if (i + 1 < args.Length) delimiter = args[++i];
-                    return true;
-                default:
-                    return false;   // unknown letter: not a bundle we understand
-            }
-        }
-        return sawFlag;
-    }
+    private IEnumerable<string> Lines(string? path) => path is null ? _stdin : BashFileSystem.ReadLines(path);
 
-    private void EmitParallelPaste(IReadOnlyList<string> filePaths, string delimiter)
+    private void EmitParallelPaste(IReadOnlyList<(string Name, string? Path)> sources, string[] delimiters)
     {
-        var enumerators = new List<IEnumerator<string>>(filePaths.Count);
-        var current = new string?[filePaths.Count];
+        var enumerators = new List<IEnumerator<string>>(sources.Count);
+        // Every `-` operand shares ONE stdin cursor, so `paste - -` alternates lines (pairs them).
+        IEnumerator<string>? stdinCursor = null;
+        var current = new string?[sources.Count];
+        string currentName = string.Empty;
 
         try
         {
-            for (int i = 0; i < filePaths.Count; i++)
+            for (int i = 0; i < sources.Count; i++)
             {
-                var e = BashFileSystem.ReadLines(filePaths[i]).GetEnumerator();
+                currentName = sources[i].Name;
+                var e = sources[i].Path is null
+                    ? (stdinCursor ??= ((IEnumerable<string>)_stdin).GetEnumerator())
+                    : BashFileSystem.ReadLines(sources[i].Path!).GetEnumerator();
                 enumerators.Add(e);
                 current[i] = e.MoveNext() ? e.Current : null;
             }
 
+            var sb = new StringBuilder();
             while (AnyNonNull(current))
             {
-                var parts = new string[filePaths.Count];
+                sb.Clear();
                 for (int i = 0; i < current.Length; i++)
                 {
-                    parts[i] = current[i] ?? string.Empty;
+                    if (i > 0) sb.Append(delimiters[(i - 1) % delimiters.Length]);
+                    sb.Append(current[i] ?? string.Empty);
                 }
-                WriteObject(BashRuntime.NewBashObject(string.Join(delimiter, parts)));
+                WriteObject(BashRuntime.NewBashObject(sb.ToString()));
 
                 for (int i = 0; i < enumerators.Count; i++)
                 {
+                    currentName = sources[i].Name;
                     current[i] = current[i] is not null && enumerators[i].MoveNext()
                         ? enumerators[i].Current
                         : null;
@@ -291,10 +254,7 @@ public sealed class InvokeBashPasteCommand : PSCmdlet
         catch (Exception ex)
         {
             if (FileSystemHelpers.IsPipelineStop(ex)) throw;
-            string path = enumerators.Count < filePaths.Count
-                ? filePaths[enumerators.Count]
-                : filePaths[Math.Max(0, enumerators.Count - 1)];
-            WriteReadError(path, ex);
+            WriteReadError(currentName, ex);
         }
         finally
         {
@@ -305,8 +265,7 @@ public sealed class InvokeBashPasteCommand : PSCmdlet
         }
     }
 
-    // Allocation-free replacement for `current.Any(l => l is not null)` — that
-    // LINQ form built an enumerator + closure on every merged output line.
+    // Allocation-free replacement for `current.Any(l => l is not null)`.
     private static bool AnyNonNull(string?[] items)
     {
         for (int i = 0; i < items.Length; i++)
@@ -314,24 +273,24 @@ public sealed class InvokeBashPasteCommand : PSCmdlet
         return false;
     }
 
-    private string? ReadSerialLine(string path, string delimiter)
+    private string? ReadSerialLine(string name, string? path, string[] delimiters)
     {
         try
         {
-            var sb = new System.Text.StringBuilder();
-            bool first = true;
-            foreach (var line in BashFileSystem.ReadLines(path))
+            var sb = new StringBuilder();
+            int n = 0;
+            foreach (var line in Lines(path))
             {
-                if (!first) sb.Append(delimiter);
+                if (n > 0) sb.Append(delimiters[(n - 1) % delimiters.Length]);
                 sb.Append(line);
-                first = false;
+                n++;
             }
             return sb.ToString();
         }
         catch (Exception ex)
         {
             if (FileSystemHelpers.IsPipelineStop(ex)) throw;
-            WriteReadError(path, ex);
+            WriteReadError(name, ex);
             return null;
         }
     }
@@ -343,39 +302,5 @@ public sealed class InvokeBashPasteCommand : PSCmdlet
         string msg = notFound ? "No such file or directory" : ex.Message;
         string normalized = path.Replace('\\', '/');
         FileSystemHelpers.WriteBashError(this, $"paste: {normalized}: {msg}");
-    }
-
-    /// <summary>
-    /// Expand GNU paste's recognized delimiter backslash escapes: <c>\n</c>
-    /// (newline), <c>\t</c> (tab), <c>\\</c> (backslash), <c>\0</c> (empty / no
-    /// separator). An unrecognized <c>\x</c> degrades to the literal char
-    /// <c>x</c>. No backslash → returned unchanged (so a real tab default is a
-    /// no-op).
-    /// </summary>
-    private static string ExpandPasteDelimiter(string d)
-    {
-        if (d.IndexOf('\\') < 0) return d;
-        var sb = new System.Text.StringBuilder(d.Length);
-        for (int i = 0; i < d.Length; i++)
-        {
-            if (d[i] == '\\' && i + 1 < d.Length)
-            {
-                char n = d[++i];
-                switch (n)
-                {
-                    case 'n': sb.Append('\n'); break;
-                    case 't': sb.Append('\t'); break;
-                    case 'r': sb.Append('\r'); break;
-                    case '\\': sb.Append('\\'); break;
-                    case '0': break; // \0 → empty separator
-                    default: sb.Append(n); break;
-                }
-            }
-            else
-            {
-                sb.Append(d[i]);
-            }
-        }
-        return sb.ToString();
     }
 }

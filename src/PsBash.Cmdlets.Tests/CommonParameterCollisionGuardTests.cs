@@ -69,6 +69,7 @@ public class CommonParameterCollisionGuardTests
             ["fold"] = new(CollidingLetters),
             ["expand"] = new(CollidingLetters),
             ["unexpand"] = new(CollidingLetters),
+            ["paste"] = new(CollidingLetters),
         };
 
     [Fact]

@@ -782,7 +782,7 @@ public class PsEmitterTests
         // Batch 1 of the shared ordered parser. Adding a command here also means adding it to
         // CommonParameterCollisionGuardTests.EmitterForceQuoted (Cmdlets.Tests) — that map is
         // how the guard knows the emitter, not a decoy, protects the colliding letters.
-        Assert.Equal(new[] { "cat", "cp", "env", "expand", "fold", "head", "ln", "mkdir", "mv", "nl", "rm", "rmdir", "tac", "tail", "tee", "time", "touch", "unexpand", "uniq", "wc", "xargs" }, PsEmitter.OrderedArgCommands.OrderBy(x => x).ToArray());
+        Assert.Equal(new[] { "cat", "cp", "env", "expand", "fold", "head", "ln", "mkdir", "mv", "nl", "paste", "rm", "rmdir", "tac", "tail", "tee", "time", "touch", "unexpand", "uniq", "wc", "xargs" }, PsEmitter.OrderedArgCommands.OrderBy(x => x).ToArray());
     }
 
     [Theory]
@@ -832,6 +832,11 @@ public class PsEmitterTests
     [InlineData("expand -i --tabs=3 f", "Invoke-BashExpand '-i' '--tabs=3' f")]
     [InlineData("unexpand -a -t 4 f", "Invoke-BashUnexpand '-a' '-t' 4 f")]
     [InlineData("unexpand -t 2,/4 f", "Invoke-BashUnexpand '-t' '2,/4' f")]
+    [InlineData("paste -d, a b", "Invoke-BashPaste '-d,' a b")]
+    [InlineData("paste -sd, f", "Invoke-BashPaste '-sd,' f")]
+    [InlineData("paste -d ',;' a b", "Invoke-BashPaste '-d' ',;' a b")]
+    [InlineData("paste -d '\\n' a b", "Invoke-BashPaste '-d' '\\n' a b")]
+    [InlineData("paste - - f", "Invoke-BashPaste '-' '-' f")]
     [InlineData("head -v -z f", "Invoke-BashHead '-v' '-z' f")]
     [InlineData("tail -n 5 f", "Invoke-BashTail '-n' 5 f")]
     [InlineData("tail -n +3 f", "Invoke-BashTail '-n' +3 f")]
@@ -4545,7 +4550,7 @@ public class PsEmitterTests
     public void Transpile_PasteAsPipeTarget()
     {
         var result = PsEmitter.Transpile("cat file.txt | paste -d, -s");
-        Assert.Equal("Invoke-BashCat file.txt | Invoke-BashPaste \"-d,\" -s", result);
+        Assert.Equal("Invoke-BashCat file.txt | Invoke-BashPaste '-d,' '-s'", result);
     }
 
     [Fact]
