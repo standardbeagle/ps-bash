@@ -105,8 +105,12 @@
          Embedding them next to PsBash.Cmdlets.dll lets ModuleExtractor lay them
          down together so the cmdlet's LoadFrom context resolves them at runtime
          (without this, Format-Styled fails: "Could not load Strata.Abstractions").
-         Parlot / PsBash.Transpiler are already loaded by the host process, so they
-         are intentionally not re-embedded. A dedicated _StrataDep item with
+         PsBash.Transpiler + Parlot (the Cmdlets' non-framework runtime deps) are embedded too (below):
+         the host process happens to have them loaded already, but the extracted module dir must be
+         self-sufficient for any other importer (a plain pwsh Import-Module of the extracted psd1, a
+         consumer of the PsBash.Core package whose app dir lacks them). The guard test
+         ModuleExtractorTests.EmbeddedCmdletsFolder_CoversEveryNonFrameworkReference fails if a new
+         dependency is added to Cmdlets and not embedded. A dedicated _StrataDep item with
          qualified %(_StrataDep.Filename) metadata keeps the per-file LogicalName
          batching from cross-contaminating the cmdlets-DLL item above. -->
     <ItemGroup>
@@ -116,6 +120,11 @@
            missing, and CSC then fails with CS1566 "Error reading resource … could not find file".
            The Strata.*.dll glob is already safe (empty when nothing matches). This is what broke
            the publish build (0.9.12/0.9.13 never reached PSGallery). -->
+      <!-- Non-Strata runtime deps of PsBash.Cmdlets (guarded: explicit Include of a missing file = CS1566). -->
+      <_StrataDep Include="$(_PsBashCmdletsBin)\PsBash.Transpiler.dll"
+                  Condition="Exists('$(_PsBashCmdletsBin)\PsBash.Transpiler.dll')" />
+      <_StrataDep Include="$(_PsBashCmdletsBin)\Parlot.dll"
+                  Condition="Exists('$(_PsBashCmdletsBin)\Parlot.dll')" />
       <_StrataDep Include="$(_PsBashCmdletsBin)\Strata.*.dll" />
       <_StrataDep Include="$(_PsBashCmdletsBin)\Spectre.Console.dll"
                   Condition="Exists('$(_PsBashCmdletsBin)\Spectre.Console.dll')" />

@@ -79,4 +79,43 @@ public class ModuleExtractorTests
 
         Assert.NotEmpty(cmdletsResources);
     }
+
+    [Fact]
+    public void EmbeddedCmdletsFolder_CoversEveryNonFrameworkReference()
+    {
+        // The embedded PsBash.Cmdlets.dll is extracted into a module dir that must hold every
+        // non-framework assembly it references (Parlot, PsBash.Transpiler, Strata.* ...), or an
+        // importer that does not already have them loaded fails at first use. Read references
+        // from metadata only, so nothing is loaded.
+        var asm = typeof(ModuleExtractor).Assembly;
+        var tfm = $"net{Environment.Version.Major}.0";
+        var prefix = $"PsBash.Module/cmdlets/{tfm}/";
+        var names = asm.GetManifestResourceNames();
+        var cmdletsRes = prefix + "PsBash.Cmdlets.dll";
+        Assert.Contains(cmdletsRes, names);
+
+        var embedded = names.Where(n => n.StartsWith(prefix, StringComparison.Ordinal))
+            .Select(n => Path.GetFileNameWithoutExtension(n.Substring(prefix.Length)))
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+        using var stream = asm.GetManifestResourceStream(cmdletsRes)!;
+        using var pe = new System.Reflection.PortableExecutable.PEReader(stream);
+        var md = System.Reflection.Metadata.PEReaderExtensions.GetMetadataReader(pe);
+
+        var runtimeDir = System.Runtime.InteropServices.RuntimeEnvironment.GetRuntimeDirectory();
+        var missing = new List<string>();
+        foreach (var handle in md.AssemblyReferences)
+        {
+            var name = md.GetString(md.GetAssemblyReference(handle).Name);
+            // Framework (shared runtime dir) and the PowerShell host (System.Management.Automation,
+            // provided by the importing process) are not ours to ship.
+            if (File.Exists(Path.Combine(runtimeDir, name + ".dll"))) continue;
+            if (name == "System.Management.Automation" || name == "netstandard" || name == "mscorlib") continue;
+            if (!embedded.Contains(name)) missing.Add(name);
+        }
+
+        Assert.True(missing.Count == 0,
+            "PsBash.Cmdlets references assemblies that are not embedded next to it (extracted module would " +
+            "lack them): " + string.Join(", ", missing) + ". Add them to EmbedCmdletsDll in PsBash.Core.csproj.");
+    }
 }
