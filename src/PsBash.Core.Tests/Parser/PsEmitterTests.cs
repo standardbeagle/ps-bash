@@ -782,7 +782,7 @@ public class PsEmitterTests
         // Batch 1 of the shared ordered parser. Adding a command here also means adding it to
         // CommonParameterCollisionGuardTests.EmitterForceQuoted (Cmdlets.Tests) — that map is
         // how the guard knows the emitter, not a decoy, protects the colliding letters.
-        Assert.Equal(new[] { "awk", "base64", "bash", "cat", "comm", "command", "cp", "env", "expand", "fold", "head", "join", "ln", "mkdir", "mv", "nl", "paste", "rm", "rmdir", "split", "strings", "tac", "tail", "tee", "time", "touch", "unexpand", "uniq", "wc", "xargs" }, PsEmitter.OrderedArgCommands.OrderBy(x => x).ToArray());
+        Assert.Equal(new[] { "awk", "base64", "bash", "cat", "comm", "command", "cp", "cut", "env", "expand", "file", "fold", "head", "join", "ln", "mkdir", "mv", "nl", "paste", "rm", "rmdir", "sort", "split", "stat", "strings", "tac", "tail", "tee", "time", "touch", "unexpand", "uniq", "wc", "xargs" }, PsEmitter.OrderedArgCommands.OrderBy(x => x).ToArray());
     }
 
     // `bash` is on OrderedArgCommands: the script's own args (`bash s.sh -v -e -c x`) and the
@@ -3496,7 +3496,7 @@ public class PsEmitterTests
     public void Transpile_SortWithInputProcessSub_RoutesToPipelineObjectPath()
     {
         var result = PsEmitter.Transpile("sort -u <(cat foo)");
-        Assert.Equal("Invoke-BashSort -u (Invoke-ProcessSubPipeline { Invoke-BashCat foo })", result);
+        Assert.Equal("Invoke-BashSort '-u' (Invoke-ProcessSubPipeline { Invoke-BashCat foo })", result);
     }
 
     [Fact]
@@ -4786,7 +4786,7 @@ public class PsEmitterTests
     public void Transpile_SortWithColonDelimiter_QuotesColonFlag()
     {
         var result = PsEmitter.Transpile("echo test | sort -t: -k2");
-        Assert.Contains("Invoke-BashSort \"-t:\"", result);
+        Assert.Contains("Invoke-BashSort '-t:' '-k2'", result);
     }
 
     [Fact]
@@ -5411,8 +5411,8 @@ public class PsEmitterTests
         var result = PsEmitter.Transpile(bash);
         if (bash.StartsWith("cut"))
         {
-            // `-f1,3` is flag-shaped: the historical double-quote wrap is kept.
-            Assert.Equal("Invoke-BashCut \"-f1,3\" f", result);
+            // cut is on OrderedArgCommands: every dash literal is single-quoted.
+            Assert.Equal("Invoke-BashCut '-f1,3' f", result);
             return;
         }
         Assert.Equal(expected, result);

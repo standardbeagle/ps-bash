@@ -303,13 +303,14 @@ public class InvokeBashSortCommandTests : IDisposable, IClassFixture<SharedPwshF
     }
 
     [Fact]
-    public void Sort_MissingFile_ContinuesWithExitCode1()
+    public void Sort_MissingFile_IsFatalExit2_NoOutput()
     {
         var missing = Path.Combine(_tmpDir, "does-not-exist.txt").Replace('\\', '/');
+        // GNU: an unreadable input is fatal — "sort: cannot read: F: ...", exit 2, nothing is written.
         var lines = RunLines(
             $"Invoke-BashSort '{missing}' 2>$null; $LASTEXITCODE");
         Assert.Single(lines);
-        Assert.Equal("1", lines[0]);
+        Assert.Equal("2", lines[0]);
     }
 
     [Fact]

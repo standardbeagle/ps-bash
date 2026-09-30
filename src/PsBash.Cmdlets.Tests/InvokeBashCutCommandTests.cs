@@ -130,7 +130,7 @@ public class InvokeBashCutCommandTests : IClassFixture<SharedPwshFixture>, IDisp
     public void Cut_UnrecognizedLongOption_StillRefused()
     {
         // A genuinely unsupported flag must still be refused, not treated as a file.
-        var (_, errs) = RunWithErrors("'a,b' | Invoke-BashCut --complement -d ',' -f 1");
+        var (_, errs) = RunWithErrors("'a,b' | Invoke-BashCut --zero-terminated -d ',' -f 1");
         Assert.Contains(errs, m => m.Contains("not supported", StringComparison.OrdinalIgnoreCase)
                                    || m.Contains("unrecognized", StringComparison.OrdinalIgnoreCase));
     }
@@ -210,15 +210,14 @@ public class InvokeBashCutCommandTests : IClassFixture<SharedPwshFixture>, IDisp
     [Fact]
     public void Cut_Pipeline_MissingDelim_Field1_ReturnsWholeLine()
     {
-        // A line without the delimiter: Split returns the whole line as one
-        // field. `-f 1` returns it; `-f 2` returns nothing (no field 2).
+        // GNU: a line without the delimiter is printed WHOLE for any -f list (unless -s).
         var f1 = RunLines("'no-tab-here' | Invoke-BashCut -d ',' -f 1");
         Assert.Single(f1);
         Assert.Equal("no-tab-here", f1[0]);
 
         var f2 = RunLines("'no-tab-here' | Invoke-BashCut -d ',' -f 2");
         Assert.Single(f2);
-        Assert.Equal("", f2[0]);
+        Assert.Equal("no-tab-here", f2[0]);
     }
 
     [Fact]

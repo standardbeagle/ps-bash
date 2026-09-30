@@ -36,6 +36,7 @@ public class LineStreamArgAgreementTests
         new[] { "-s:" }, new[] { "--number-format=rz" },
         new[] { "-c" }, new[] { "-d" }, new[] { "-D" }, new[] { "-cD" }, new[] { "--count" }, new[] { "--all-repeated=x" }, new[] { "-z" }, new[] { "--group" },
         new[] { "-f", "1" }, new[] { "-f", "x" }, new[] { "-f1" }, new[] { "-5" }, new[] { "-w", "0" }, new[] { "-ic" }, new[] { "-cdui" },
+        new[] { "-d:", "-f1" }, new[] { "-d", ":", "-f2-" }, new[] { "-c1-3" }, new[] { "-b", "1" }, new[] { "-f1", "-c1" }, new[] { "-s", "-f1" }, new[] { "-f0" }, new[] { "-f3-1" }, new[] { "--complement", "-f1" }, new[] { "--output-delimiter=x", "-f1" }, new[] { "-f1", "file" },
         new[] { "--skip-fields=1" }, new[] { "--check-chars=2" }, new[] { "--ignore-case" },
     };
 
@@ -48,10 +49,11 @@ public class LineStreamArgAgreementTests
         "tac" => !InvokeBashTacCommand.Plan(argv).Declined,
         "nl" => !InvokeBashNlCommand.Plan(argv).Declined,
         "uniq" => !InvokeBashUniqCommand.Plan(argv).Declined,
+        "cut" => !InvokeBashCutCommand.Plan(argv).Declined,
         _ => throw new ArgumentException(name),
     };
 
-    public static IEnumerable<object[]> Commands => new[] { new object[] { "head" }, new object[] { "tail" }, new object[] { "wc" }, new object[] { "cat" }, new object[] { "tac" }, new object[] { "nl" }, new object[] { "uniq" } };
+    public static IEnumerable<object[]> Commands => new[] { new object[] { "head" }, new object[] { "tail" }, new object[] { "wc" }, new object[] { "cat" }, new object[] { "tac" }, new object[] { "nl" }, new object[] { "uniq" }, new object[] { "cut" } };
 
     [Theory]
     [MemberData(nameof(Commands))]

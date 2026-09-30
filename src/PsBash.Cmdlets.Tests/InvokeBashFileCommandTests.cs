@@ -92,16 +92,16 @@ public class InvokeBashFileCommandTests : IDisposable, IClassFixture<SharedPwshF
     }
 
     [Fact]
-    public void File_EmptyFile_EmitsAsciiText()
+    public void File_EmptyFile_EmitsEmpty()
     {
-        // psm1 oracle: empty byte[] passes the foreach text-check ($allText
-        // stays true), so an empty file reports as ASCII text.
+        // GNU file: an empty regular file is "empty" (the psm1 oracle said "ASCII text").
         var f = Path.Combine(_tmpDir, "empty.dat");
         File.WriteAllBytes(f, Array.Empty<byte>());
         var (_, lines) = Run($"Invoke-BashFile '{Esc(f)}'");
         Assert.Single(lines);
-        Assert.EndsWith(": ASCII text", lines[0]);
+        Assert.EndsWith(": empty", lines[0]);
     }
+
 
     [Fact]
     public void File_PngMagic_EmitsPngImageData()
@@ -135,7 +135,7 @@ public class InvokeBashFileCommandTests : IDisposable, IClassFixture<SharedPwshF
         File.WriteAllText(f, "abc\n");
         var (_, lines) = Run($"Invoke-BashFile -i '{Esc(f)}'");
         Assert.Single(lines);
-        Assert.EndsWith(": text/plain", lines[0]);
+        Assert.EndsWith(": text/plain; charset=us-ascii", lines[0]); // GNU -i = --mime-type + --mime-encoding
     }
 
     [Fact]
@@ -148,7 +148,7 @@ public class InvokeBashFileCommandTests : IDisposable, IClassFixture<SharedPwshF
         });
         var (_, lines) = Run($"Invoke-BashFile -b -i '{Esc(f)}'");
         Assert.Single(lines);
-        Assert.Equal("image/png", lines[0]);
+        Assert.Equal("image/png; charset=binary", lines[0]);
     }
 
     [Fact]
@@ -246,5 +246,52 @@ public class InvokeBashFileCommandTests : IDisposable, IClassFixture<SharedPwshF
         Assert.Contains(errs, m =>
             m.Contains("unrecognized option", StringComparison.OrdinalIgnoreCase)
             && m.Contains("--bogus", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void File_Directory_EmitsDirectoryAndMime()
+    {
+        var d = Path.Combine(_tmpDir, "adir"); Directory.CreateDirectory(d);
+        Assert.Equal("directory", Run($"Invoke-BashFile -b '{Esc(d)}'").Item2[0]);
+        Assert.Equal("inode/directory; charset=binary", Run($"Invoke-BashFile -b -i '{Esc(d)}'").Item2[0]);
+    }
+
+    [Fact]
+    public void File_MimeTypeAndMimeEncoding_AreSeparateOutputs()
+    {
+        var f = Path.Combine(_tmpDir, "enc.txt");
+        File.WriteAllBytes(f, System.Text.Encoding.UTF8.GetBytes("café\n"));
+        Assert.Equal("text/plain", Run($"Invoke-BashFile -b --mime-type '{Esc(f)}'").Item2[0]);
+        Assert.Equal("utf-8", Run($"Invoke-BashFile -b --mime-encoding '{Esc(f)}'").Item2[0]);
+        Assert.Equal("text/plain; charset=utf-8", Run($"Invoke-BashFile -b -i '{Esc(f)}'").Item2[0]);
+        Assert.Equal("Unicode text, UTF-8 text", Run($"Invoke-BashFile -b '{Esc(f)}'").Item2[0]);
+    }
+
+    [Fact]
+    public void File_SeparatorAndPrint0_ShapeTheNamePrefix()
+    {
+        var f = Path.Combine(_tmpDir, "sep.txt");
+        File.WriteAllText(f, "abc\n");
+        Assert.EndsWith("sep.txt@ ASCII text", Run($"Invoke-BashFile -F '@' '{Esc(f)}'").Item2[0]);
+        Assert.EndsWith("sep.txt\0: ASCII text", Run($"Invoke-BashFile -0 '{Esc(f)}'").Item2[0]);
+    }
+
+    [Fact]
+    public void File_NoOperand_IsUsageError()
+    {
+        var (_, errs) = RunWithErrors("Invoke-BashFile");
+        Assert.Contains(errs, m => m.Contains("Usage: file", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void File_Symlink_ReportedUnlessDereferenced()
+    {
+        var target = Path.Combine(_tmpDir, "tgt.txt"); File.WriteAllText(target, "abc\n");
+        var link = Path.Combine(_tmpDir, "lnk");
+        try { File.CreateSymbolicLink(link, "tgt.txt"); }
+        catch (Exception) { return; } // no symlink privilege on this host (Windows without developer mode)
+        Assert.Equal("symbolic link to tgt.txt", Run($"Invoke-BashFile -b '{Esc(link)}'").Item2[0]);
+        Assert.Equal("ASCII text", Run($"Invoke-BashFile -b -L '{Esc(link)}'").Item2[0]);
+        Assert.Equal("symbolic link to tgt.txt", Run($"Invoke-BashFile -b -h '{Esc(link)}'").Item2[0]);
     }
 }

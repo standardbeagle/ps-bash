@@ -1,6 +1,7 @@
 using System.Globalization;
 using System.Management.Automation;
 using System.Text;
+using PsBash.Cmdlets.Args;
 
 namespace PsBash.Cmdlets;
 
@@ -71,12 +72,85 @@ namespace PsBash.Cmdlets;
 [OutputType(typeof(PSObject))]
 public sealed class InvokeBashStatCommand : PSCmdlet
 {
-    /// <summary>Valid GNU <c>stat</c> options ps-bash does not implement (see
-    /// <see cref="FileSystemHelpers.TryWriteOperandOptionError"/>).</summary>
-    private static readonly HashSet<string> StatValidButUnsupported = new(StringComparer.Ordinal)
+    private const string OptFormat = "format", OptPrintf = "printf", OptTerse = "terse", OptCached = "cached";
+
+    /// <summary>GNU <c>stat</c> options ps-bash refuses (follow-links and file-system status need a
+    /// different probe); classified by the shared parser, exit 2.</summary>
+    private static readonly string[] StatValidButUnsupported =
+        { "-L", "--dereference", "-f", "--file-system" };
+
+    /// <summary>
+    /// stat's option surface (GNU coreutils 9.4): <c>-c</c>/<c>--format=FMT</c>, <c>--printf=FMT</c>,
+    /// <c>-t</c>/<c>--terse</c>, <c>--cached=MODE</c> (a hint for remote file systems; validated, no
+    /// effect on a local stat). <c>-L</c>/<c>-f</c> (and their long forms) are valid-but-unsupported.
+    /// Abbreviations take part as in getopt_long; the ambiguity list follows GNU's table order
+    /// (<c>--f</c> = <c>'--file-system' '--format'</c>).
+    /// </summary>
+    private static readonly OptSpecSet StatSpec = new(
+        new[]
+        {
+            new OptSpec(OptFormat, 'c', "format", OptKind.Value),
+            new OptSpec(OptPrintf, '\0', "printf", OptKind.Value),
+            new OptSpec(OptTerse, 't', "terse"),
+            new OptSpec(OptCached, '\0', "cached", OptKind.Value),
+        },
+        StatValidButUnsupported,
+        allowAbbrev: true,
+        gnuInfoOptions: true,
+        longOptionOrder: new[] { "dereference", "file-system", "format", "printf", "terse", "cached" });
+
+    /// <summary>Pure argv scan (unit-test seam).</summary>
+    internal static ParsedArgs ScanArgs(string[] args) => ArgParser.Parse(args, StatSpec);
+
+    internal sealed class StatArgs
     {
-        "-L", "--dereference", "-f", "--file-system", "--cached", "-Z", "--context",
-    };
+        public ParsedArgs Parsed = null!;
+        /// <summary>The effective format: the LAST of <c>-c</c>/<c>--format</c>/<c>--printf</c> wins (GNU).</summary>
+        public string? Format;
+        /// <summary>True when <see cref="Format"/> came from <c>--printf</c> (escapes expanded, no newline added).</summary>
+        public bool FormatIsPrintf;
+        /// <summary><c>-t</c>: only used when no format was given (GNU: a format beats terse).</summary>
+        public bool Terse;
+        public List<string> Operands = new();
+        public string? Error;
+    }
+
+    /// <summary>
+    /// Scan + validate. Fixes over the old hand scan: <c>-tc FMT</c>/<c>-cFMT</c> bundles, unique long
+    /// prefixes (<c>--form</c>, <c>--term</c>), last format wins (the old scan preferred <c>--printf</c>
+    /// over any <c>-c</c> regardless of order), a format given alongside <c>-t</c> wins, a dangling
+    /// <c>-c</c> is "option requires an argument" (it was a file name), any unknown option is a usage
+    /// error (exit 1; unknown long options used to be treated as file names), options after operands.
+    /// </summary>
+    internal static StatArgs Plan(string[] args)
+    {
+        var s = new StatArgs { Parsed = ScanArgs(args) };
+        s.Operands = s.Parsed.Operands();
+        if (s.Parsed.HasError) return s;
+
+        foreach (var tok in s.Parsed.Tokens)
+        {
+            if (tok.Kind != ArgTokKind.Option) continue;
+            switch (tok.OptId)
+            {
+                case OptFormat: s.Format = tok.Value; s.FormatIsPrintf = false; break;
+                case OptPrintf: s.Format = tok.Value; s.FormatIsPrintf = true; break;
+                case OptTerse: s.Terse = true; break;
+                case OptCached:
+                    if (tok.Value is not ("default" or "never" or "always"))
+                    {
+                        s.Error = $"stat: invalid argument '{tok.Value}' for '--cached'\n"
+                            + "Valid arguments are:\n  - 'default'\n  - 'never'\n  - 'always'\n"
+                            + "Try 'stat --help' for more information.";
+                        return s;
+                    }
+                    break;
+            }
+        }
+        if (s.Operands.Count == 0)
+            s.Error = "stat: missing operand\nTry 'stat --help' for more information.";
+        return s;
+    }
 
     [Parameter(ValueFromRemainingArguments = true)]
     public string[]? Arguments { get; set; }
@@ -87,7 +161,9 @@ public sealed class InvokeBashStatCommand : PSCmdlet
     /// <c>-Confirm</c> common parameter. The parameter is literally named
     /// <c>C</c> so the binder routes by exact name (which beats a common-
     /// parameter prefix match; an <c>[Alias("c")]</c> on a longer name would
-    /// not be sufficient).
+    /// not be sufficient). Re-injected as <c>-c VALUE</c> before parsing; from the
+    /// transpiler (<c>PsEmitter.OrderedArgCommands</c>) every flag arrives in
+    /// <see cref="Arguments"/> instead.
     /// </summary>
     [Parameter]
     public string? C { get; set; }
@@ -95,6 +171,14 @@ public sealed class InvokeBashStatCommand : PSCmdlet
     protected override void EndProcessing()
     {
         var args = Arguments ?? Array.Empty<string>();
+        if (C is not null)
+        {
+            var withC = new string[args.Length + 2];
+            withC[0] = "-c";
+            withC[1] = C;
+            args.CopyTo(withC, 2);
+            args = withC;
+        }
 
         FileSystemHelpers.SetLastExitCode(this, 0);
         if (FileSystemHelpers.TryHandleVersion(this, "stat", args)) return;
@@ -108,60 +192,20 @@ public sealed class InvokeBashStatCommand : PSCmdlet
             return;
         }
 
-        string? formatString = C;
-        string? printfString = null;
-        bool terseMode = false;
-        var operands = new List<string>();
-
-        int i = 0;
-        while (i < args.Length)
+        var plan = Plan(args);
+        if (FileSystemHelpers.TryWriteParseError(this, "stat", plan.Parsed)) return;
+        if (FileSystemHelpers.TryHandleInfoOptions(this, "stat", plan.Parsed)) return;
+        if (plan.Error is { } planError)
         {
-            string a = args[i];
-            if (a == "-c" && i + 1 < args.Length)
-            {
-                formatString = args[i + 1];
-                i += 2;
-                continue;
-            }
-            // --format=FMT / --format FMT — GNU long form of -c.
-            if (a.StartsWith("--format=", StringComparison.Ordinal))
-            {
-                formatString = a.Substring("--format=".Length);
-                i++;
-                continue;
-            }
-            if (a == "--format" && i + 1 < args.Length)
-            {
-                formatString = args[i + 1];
-                i += 2;
-                continue;
-            }
-            if (a.StartsWith("--printf=", StringComparison.Ordinal))
-            {
-                printfString = a.Substring("--printf=".Length);
-                i++;
-                continue;
-            }
-            if (a == "-t")
-            {
-                terseMode = true;
-                i++;
-                continue;
-            }
-            operands.Add(a);
-            i++;
-        }
-
-        if (operands.Count == 0)
-        {
-            FileSystemHelpers.WriteBashError(this, "stat: missing operand");
+            FileSystemHelpers.WriteBashError(this, planError);
             FileSystemHelpers.SetLastExitCode(this, 1);
             return;
         }
 
-        if (FileSystemHelpers.TryWriteOperandOptionError(this, "stat", operands, StatValidButUnsupported))
-            return;
-
+        string? formatString = plan.FormatIsPrintf ? null : plan.Format;
+        string? printfString = plan.FormatIsPrintf ? plan.Format : null;
+        bool terseMode = plan.Terse;
+        var operands = plan.Operands;
         bool hadError = false;
 
         foreach (var target in operands)

@@ -62,8 +62,6 @@ public class BinderDecoyClassifierTests : IClassFixture<SharedPwshFixture>
     [InlineData("'x' | Invoke-BashTail -v")]
     // grep directories / devices
     [InlineData("'x' | Invoke-BashGrep -d skip")]
-    // sort ignore-nonprinting
-    [InlineData("'b','a' | Invoke-BashSort -i")]
     public void CollidingClassifierFlag_FiresExit2_WithoutBinderCrash(string script)
     {
         var (err, exit) = Run(script);
