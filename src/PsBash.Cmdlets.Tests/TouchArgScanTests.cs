@@ -76,17 +76,6 @@ public class TouchArgScanTests
     [InlineData("a=1 m=0 c=0 f=0 d=- r=- ops=[]", "-a")]
     [InlineData("ERR touch: invalid option -- 'v'", "-v", "f")]  // FIX (was: accepted as a silent no-op) — GNU touch has no -v
     [InlineData("ERR touch: invalid option -- 'v'", "-cv", "f")]  // FIX (was: operands)
-    [InlineData("ERR touch: option '-t' is recognized but not supported by ps-bash", "-t", "202401011200", "f")]  // FIX (was: operands — created files "-t" and "202401011200")
-    [InlineData("ERR touch: option '-t' is recognized but not supported by ps-bash", "-t202401011200", "f")]  // FIX (was: operands)
-    [InlineData("ERR touch: option '-t' is recognized but not supported by ps-bash", "-at", "202401011200", "f")]  // FIX (was: operands)
-    [InlineData("ERR touch: option '-h' is recognized but not supported by ps-bash", "-h", "f")]  // FIX (was: operands)
-    [InlineData("ERR touch: option '-h' is recognized but not supported by ps-bash", "-ha", "f")]  // FIX (was: operands)
-    [InlineData("ERR touch: option '--no-dereference' is recognized but not supported by ps-bash", "--no-dereference", "f")]  // FIX (was: operands)
-    [InlineData("ERR touch: option '--no-dereference' is recognized but not supported by ps-bash", "--no-d", "f")]  // FIX (was: operands)
-    [InlineData("ERR touch: option '--time' is recognized but not supported by ps-bash", "--time=atime", "f")]  // FIX (was: operands)
-    [InlineData("ERR touch: option '--time' is recognized but not supported by ps-bash", "--time", "mtime", "f")]  // FIX (was: operands)
-    [InlineData("ERR touch: option '--time' is recognized but not supported by ps-bash", "--ti", "atime", "f")]  // FIX (was: operands)
-    [InlineData("ERR touch: option '--time' is recognized but not supported by ps-bash", "--t", "atime", "f")]  // FIX (was: operands)
     [InlineData("ERR touch: option '--no' is ambiguous; possibilities: '--no-create' '--no-dereference'", "--no", "f")]  // FIX (was: operands)
     [InlineData("ERR touch: option '--n' is ambiguous; possibilities: '--no-create' '--no-dereference'", "--n", "f")]  // FIX (was: operands)
     [InlineData("ERR touch: option '--no-create' doesn't allow an argument", "--no-create=1", "f")]  // FIX (was: operands)
@@ -108,6 +97,55 @@ public class TouchArgScanTests
         Assert.Equal(expected, Scan(argv));
     }
 
+    // -t STAMP / -h (--no-dereference) / --time=WORD are implemented: the scan records them, the
+    // cmdlet interprets them (TouchStampTests / TouchOptionsTests).
+    [Theory]
+    [InlineData("202401011200", "-t", "202401011200", "f")]
+    [InlineData("202401011200", "-t202401011200", "f")]
+    [InlineData("202401011200", "-at", "202401011200", "f")]
+    [InlineData("202401011201", "-t", "202401011200", "-t", "202401011201", "f")]   // last wins
+    public void ScanArgs_RecordsTheStamp(string expected, params string[] argv)
+    {
+        var p = InvokeBashTouchCommand.ScanArgs(argv);
+        Assert.Null(p.Error);
+        Assert.Equal(expected, p.Last("stamp")?.Value);
+        Assert.Equal(new[] { "f" }, p.Operands());
+    }
+
+    [Theory]
+    [InlineData("-h")]
+    [InlineData("-ha")]
+    [InlineData("--no-dereference")]
+    [InlineData("--no-d")]
+    public void ScanArgs_AcceptsNoDereference(string flag)
+    {
+        var p = InvokeBashTouchCommand.ScanArgs(new[] { flag, "f" });
+        Assert.Null(p.Error);
+        Assert.True(p.Has("no-dereference"));
+    }
+
+    [Theory]
+    [InlineData("atime", "--time=atime", "f")]
+    [InlineData("mtime", "--time", "mtime", "f")]
+    [InlineData("atime", "--ti", "atime", "f")]
+    [InlineData("access", "--t", "access", "f")]
+    [InlineData("use", "--tim=use", "f")]
+    public void ScanArgs_RecordsTheTimeWord(string expected, params string[] argv)
+    {
+        var p = InvokeBashTouchCommand.ScanArgs(argv);
+        Assert.Null(p.Error);
+        Assert.Equal(expected, p.Last("time")?.Value);
+        Assert.Equal(new[] { "f" }, p.Operands());
+    }
+
+    [Theory]
+    [InlineData("ERR touch: option requires an argument -- 't'", "-t")]
+    [InlineData("ERR touch: option '--time' requires an argument", "--time")]
+    public void ScanArgs_MissingArgumentIsAUsageError(string expected, params string[] argv)
+    {
+        Assert.Equal(expected, Scan(argv));
+        Assert.Equal(1, InvokeBashTouchCommand.ScanArgs(argv).ErrorExitCode);
+    }
     [Theory]
     [InlineData("--version", "version")]
     [InlineData("--vers", "version")]
@@ -128,9 +166,6 @@ public class TouchArgScanTests
     [InlineData("-v", 1)]
     [InlineData("--no", 1)]
     [InlineData("-d", 1)]
-    [InlineData("-t", 2)]
-    [InlineData("--time", 2)]
-    [InlineData("-h", 2)]
     public void ScanError_ExitStatus_IsGnuUsageStatusExceptOurOwnRefusal(string arg, int exit)
     {
         Assert.Equal(exit, InvokeBashTouchCommand.ScanArgs(new[] { arg }).ErrorExitCode);

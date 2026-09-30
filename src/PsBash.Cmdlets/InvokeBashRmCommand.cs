@@ -128,34 +128,18 @@ public sealed class InvokeBashRmCommand : PSCmdlet
     /// </summary>
     internal static bool TryParseInteractiveWhen(string? arg, out RmPrompt mode, out string? error)
     {
-        (string Name, RmPrompt Mode)[] table =
-        {
-            ("never", RmPrompt.Never), ("no", RmPrompt.Never), ("none", RmPrompt.Never),
-            ("once", RmPrompt.Once),
-            ("always", RmPrompt.Always), ("yes", RmPrompt.Always),
-        };
-
         error = null;
         if (arg is null) { mode = RmPrompt.Always; return true; }
-
-        foreach (var (name, m) in table)
-        {
-            if (name == arg) { mode = m; return true; }
-        }
-
-        var hits = table.Where(e => e.Name.StartsWith(arg, StringComparison.Ordinal)).ToArray();
-        if (hits.Length > 0 && hits.All(h => h.Mode == hits[0].Mode)) { mode = hits[0].Mode; return true; }
-
-        mode = RmPrompt.Never;
-        var kind = hits.Length == 0 ? "invalid" : "ambiguous";
-        error = $"rm: {kind} argument '{arg}' for '--interactive'\n"
-            + "Valid arguments are:\n"
-            + "  - 'never', 'no', 'none'\n"
-            + "  - 'once'\n"
-            + "  - 'always', 'yes'\n"
-            + "Try 'rm --help' for more information.";
-        return false;
+        return GnuArgMatch.TryMatch("rm", "interactive", arg, InteractiveWords,
+            "  - 'never', 'no', 'none'\n  - 'once'\n  - 'always', 'yes'", out mode, out error);
     }
+
+    private static readonly (string Name, RmPrompt Value)[] InteractiveWords =
+    {
+        ("never", RmPrompt.Never), ("no", RmPrompt.Never), ("none", RmPrompt.Never),
+        ("once", RmPrompt.Once),
+        ("always", RmPrompt.Always), ("yes", RmPrompt.Always),
+    };
 
     private void Execute()
     {

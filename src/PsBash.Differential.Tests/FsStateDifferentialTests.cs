@@ -165,6 +165,33 @@ public class FsStateDifferentialTests
             Tree(("d/f", "x")),
             "mkdir -m 700 d; echo \"rc=$?\"");
 
+    // ───────────── touch -t / -h / --time ─────────────
+    //
+    // The snapshot has no timestamps (and the two shells may disagree on the local zone), so the
+    // stamp is observed through an ORDERING (`ls -t`), which is zone-independent, plus exit status
+    // and which files exist.
+
+    [SkippableFact] public Task Touch_Stamp_OrdersFilesByModificationTime() =>
+        EqualAsync(
+            "",
+            "touch -t 202401021530 a; touch -t 202401021531 b; touch -t 202401021529.30 c; touch -t 2401021532 d; ls -t");
+
+    [SkippableFact] public Task Touch_InvalidStampOrConflictingSources_ExitOneAndCreateNothing() =>
+        EqualAsync(
+            Tree(("keep", "k")),
+            "touch -t bad f; echo r1=$?; touch -t 202401021530 -d 2020-01-01 g; echo r2=$?; " +
+            "touch --time=bogus h; echo r3=$?; touch -t 202401021530.61 i; echo r4=$?; touch -t 202302291200 j; echo r5=$?");
+
+    [SkippableFact] public Task Touch_TimeWord_OnlyTheNamedTimeMoves() =>
+        EqualAsync(
+            Tree(("old", "o"), ("mid", "m")),
+            "touch -t 200101010000 old mid; touch --time=mtime -t 202401021530 mid; ls -t; echo r=$?");
+
+    [SkippableFact] public Task Touch_NoDereference_DoesNotCreateAMissingName() =>
+        EqualAsync(
+            "",
+            "touch -h nosuch; echo r1=$?; touch -hc nosuch2; echo r2=$?; touch --no-dereference plain; echo r3=$?");
+
     // ───────────── redirect byte fidelity ─────────────
 
     // `printf x > f` leaves f = "x" (1 byte): Invoke-BashRedirect honours the NoTrailingNewline

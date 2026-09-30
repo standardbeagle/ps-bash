@@ -711,8 +711,8 @@ public class InvokeBashFileSystemMutatorTests : IDisposable, IClassFixture<Share
     [Theory]
     [InlineData("Invoke-BashCp --reflink a b")]      // valid GNU cp flag, unimplemented
     [InlineData("Invoke-BashMv --backup a b")]       // valid GNU mv flag, unimplemented
-    [InlineData("Invoke-BashRm --interactive a")]    // valid GNU rm flag, unimplemented
-    [InlineData("Invoke-BashMkdir -m 755 d")]        // valid GNU mkdir flag, unimplemented
+    [InlineData("Invoke-BashRm --one-file-system a")] // valid GNU rm flag, unimplemented
+    [InlineData("Invoke-BashMkdir --context d")]     // valid GNU mkdir flag (SELinux), unimplemented
     [InlineData("Invoke-BashRmdir --ignore-fail-on-non-empty d")]
     public void Mover_ValidButUnsupportedFlag_ExitsTwo(string cmd)
     {
@@ -743,7 +743,7 @@ public class InvokeBashFileSystemMutatorTests : IDisposable, IClassFixture<Share
     {
         // GNU rm -f suppresses missing-file errors but NOT a usage error for a
         // bad option. The classifier still fires (exit 2) under -f.
-        Fail("Invoke-BashRm -f --interactive ghost.txt", 2);
+        Fail("Invoke-BashRm -f --one-file-system ghost.txt", 2);
     }
 
     [Fact]
@@ -972,13 +972,14 @@ public class InvokeBashFileSystemMutatorTests : IDisposable, IClassFixture<Share
     }
 
     [Fact]
-    public void Touch_UnsupportedT_IsRefusedAndCreatesNothing()
+    public void Touch_T_SetsTheStamp_AndCreatesNoStrayFiles()
     {
-        // REGRESSION: `touch -t 202401011200 f` created files named "-t" and "202401011200" (exit 0).
+        // REGRESSION: `touch -t 202401011200 f` created files named "-t" and "202401011200" (exit 0);
+        // it was then refused (exit 2); now -t is implemented.
         var stamp = Path.Combine(_tmpRoot, "202401011200");
         var f = Path.Combine(_tmpRoot, "tt.txt");
-        Assert.Equal("2", LastExit($"Set-Location {Q(_tmpRoot)}; Invoke-BashTouch '-t' '202401011200' {Q(f)}"));
-        Assert.False(File.Exists(f));
+        Assert.Equal("0", LastExit($"Set-Location {Q(_tmpRoot)}; Invoke-BashTouch '-t' '202401011200' {Q(f)}"));
+        Assert.Equal(new DateTime(2024, 1, 1, 12, 0, 0), File.GetLastWriteTime(f));
         Assert.False(File.Exists(stamp));
         Assert.False(File.Exists(Path.Combine(_tmpRoot, "-t")));
     }
@@ -1136,11 +1137,12 @@ public class InvokeBashFileSystemMutatorTests : IDisposable, IClassFixture<Share
     }
 
     [Fact]
-    public void Mkdir_QuotedMode_IsRefusedAndCreatesNothing()
+    public void Mkdir_QuotedMode_IsAppliedNotRefused()
     {
+        // -m was refused (exit 2) before it was implemented; the transpiler-style quoted form now works.
         var d = Path.Combine(_tmpRoot, "moded");
-        Assert.Equal("2", LastExit($"Invoke-BashMkdir '-m' '755' {Q(d)}"));
-        Assert.False(Directory.Exists(d));
+        Assert.Equal("0", LastExit($"Invoke-BashMkdir '-m' '755' {Q(d)}"));
+        Assert.True(Directory.Exists(d));
     }
 
     [Fact]
@@ -1204,11 +1206,12 @@ public class InvokeBashFileSystemMutatorTests : IDisposable, IClassFixture<Share
     }
 
     [Fact]
-    public void Rm_QuotedBareI_IsRefusedAndDeletesNothing()
+    public void Rm_QuotedBareI_PromptsAndAnEmptyStdinAnswersNo_SoNothingIsDeleted()
     {
+        // -i is implemented now (was refused with exit 2): no answer on stdin is GNU's EOF = "no".
         var f = Path.Combine(_tmpRoot, "keep.txt");
         File.WriteAllText(f, "x");
-        Assert.Equal("2", LastExit($"Invoke-BashRm '-i' {Q(f)}"));
+        Assert.Equal("0", LastExit($"Invoke-BashRm '-i' {Q(f)}"));
         Assert.True(File.Exists(f));
     }
 
@@ -1219,7 +1222,7 @@ public class InvokeBashFileSystemMutatorTests : IDisposable, IClassFixture<Share
         // options), so the earlier operand must survive too.
         var f = Path.Combine(_tmpRoot, "first.txt");
         File.WriteAllText(f, "x");
-        Assert.Equal("2", LastExit($"Invoke-BashRm {Q(f)} '-I'"));
+        Assert.Equal("2", LastExit($"Invoke-BashRm {Q(f)} '--one-file-system'"));
         Assert.True(File.Exists(f));
     }
 

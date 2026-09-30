@@ -63,13 +63,11 @@ public sealed class InvokeBashTouchCommand : PSCmdlet
     /// symlink itself) and <c>--time=WORD</c> have no implementation here. (A string[] on purpose:
     /// CommonParameterCollisionGuardTests enumerates each cmdlet's static string sets.)
     /// </summary>
-    private static readonly string[] TouchValidButUnsupported =
-    {
-        "-t", "-h", "--no-dereference", "--time",
-    };
+    private static readonly string[] TouchValidButUnsupported = Array.Empty<string>();
 
     private const string OptAccess = "access", OptModify = "modify", OptNoCreate = "no-create",
-        OptIgnored = "ignored", OptDate = "date", OptReference = "reference";
+        OptIgnored = "ignored", OptDate = "date", OptReference = "reference",
+        OptStamp = "stamp", OptNoDereference = "no-dereference", OptTime = "time";
 
     /// <summary>
     /// touch's whole option surface, built once for the shared ordered parser. GNU touch has NO
@@ -86,6 +84,9 @@ public sealed class InvokeBashTouchCommand : PSCmdlet
             new OptSpec(OptIgnored, 'f', null),
             new OptSpec(OptDate, 'd', "date", OptKind.Value),
             new OptSpec(OptReference, 'r', "reference", OptKind.Value),
+            new OptSpec(OptStamp, 't', null, OptKind.Value),
+            new OptSpec(OptNoDereference, 'h', "no-dereference"),
+            new OptSpec(OptTime, '\0', "time", OptKind.Value),
         },
         validButUnsupported: TouchValidButUnsupported,
         allowAbbrev: true,
@@ -126,17 +127,40 @@ public sealed class InvokeBashTouchCommand : PSCmdlet
 
         // GNU: -a alone = access time only, -m alone = modification time only, and BOTH (-a -m /
         // -am) = both — the old scan set the two "only" flags together and updated NOTHING.
+        // --time=WORD names a timestamp exactly like -a / -m, and all three ACCUMULATE
+        // (`--time=atime -m` changes both). An invalid WORD is a usage error before anything is touched.
         bool wantAccess = parsed.Has(OptAccess);
         bool wantModify = parsed.Has(OptModify);
+        foreach (var t in parsed.All(OptTime))
+        {
+            if (!TouchStamp.TryParseTimeWord(t.Value ?? "", out var word, out var wordError))
+            {
+                FileSystemHelpers.WriteBashError(this, wordError!);
+                return;
+            }
+            if (word == TouchTimeWord.Access) wantAccess = true; else wantModify = true;
+        }
         bool accessOnly = wantAccess && !wantModify;
         bool modOnly = wantModify && !wantAccess;
         bool noCreate = parsed.Has(OptNoCreate);
+        bool noDereference = parsed.Has(OptNoDereference);
 
         // Last occurrence wins, as in getopt_long.
         string? dateStr = parsed.Last(OptDate)?.Value;
         // -r FILE / --reference=FILE: take timestamps from a reference file.
         string? refFile = parsed.Last(OptReference)?.Value;
+        // -t [[CC]YY]MMDDhhmm[.ss]
+        string? stampStr = parsed.Last(OptStamp)?.Value;
         var operands = parsed.Operands();
+
+        // GNU: -t cannot be combined with another time source (-d / -r), and it says so before it
+        // creates or touches anything.
+        if (stampStr is not null && (dateStr is not null || refFile is not null))
+        {
+            FileSystemHelpers.WriteBashError(this,
+                "touch: cannot specify times from more than one source\nTry 'touch --help' for more information.");
+            return;
+        }
 
         if (operands.Count == 0)
         {
@@ -161,6 +185,15 @@ public sealed class InvokeBashTouchCommand : PSCmdlet
             mtime = File.GetLastWriteTime(refAbs);
             atime = File.GetLastAccessTime(refAbs);
         }
+        else if (stampStr is not null)
+        {
+            if (!TouchStamp.TryParse(stampStr, DateTime.Now, out mtime))
+            {
+                FileSystemHelpers.WriteBashError(this, $"touch: invalid date format '{stampStr}'");
+                return;
+            }
+            atime = mtime;
+        }
         else if (dateStr is not null)
         {
             if (!DateTime.TryParse(dateStr, out mtime))
@@ -174,11 +207,21 @@ public sealed class InvokeBashTouchCommand : PSCmdlet
         foreach (var file in operands)
         {
             var absolute = SessionState.Path.GetUnresolvedProviderPathFromPSPath(file);
-            bool exists = File.Exists(absolute) || Directory.Exists(absolute);
+            bool isLink = FileTimes.IsLink(absolute);
+            // A dangling link is a real entry for -h (it stamps the link), but not otherwise.
+            bool exists = File.Exists(absolute) || Directory.Exists(absolute) || (noDereference && isLink);
 
             if (!exists)
             {
                 if (noCreate) continue;
+
+                // -h never creates: GNU reports the failed stamping of the missing name instead.
+                if (noDereference)
+                {
+                    FileSystemHelpers.WriteBashError(this,
+                        $"touch: setting times of '{file}': No such file or directory");
+                    continue;
+                }
 
                 var parent = Path.GetDirectoryName(absolute);
                 if (!string.IsNullOrEmpty(parent) && !Directory.Exists(parent))
@@ -203,20 +246,14 @@ public sealed class InvokeBashTouchCommand : PSCmdlet
                 }
             }
 
-            // Set timestamps. Directories use Directory.* setters; files use
-            // File.* setters. Either is fine — we already filtered.
+            // Set timestamps. FileTimes follows a link to its target (the default) or stamps the link
+            // itself (-h); a null time leaves that timestamp alone (-a / -m / --time).
             try
             {
-                if (Directory.Exists(absolute))
-                {
-                    if (!accessOnly) Directory.SetLastWriteTime(absolute, mtime);
-                    if (!modOnly) Directory.SetLastAccessTime(absolute, atime);
-                }
-                else
-                {
-                    if (!accessOnly) File.SetLastWriteTime(absolute, mtime);
-                    if (!modOnly) File.SetLastAccessTime(absolute, atime);
-                }
+                FileTimes.Set(absolute,
+                    access: modOnly ? null : atime,
+                    modify: accessOnly ? null : mtime,
+                    noFollow: noDereference);
             }
             catch (Exception ex)
             {
