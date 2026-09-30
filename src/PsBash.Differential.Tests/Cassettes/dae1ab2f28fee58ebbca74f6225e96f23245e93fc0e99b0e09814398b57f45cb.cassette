@@ -1,0 +1,36 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 422
+stdout-length: 263
+stderr-length: 0
+==== SCRIPT ====
+__fs_snap() { find . | LC_ALL=C sort | while IFS= read -r p; do if [ -d "$p" ]; then echo "D $p"; else echo "F $p $(base64 -w0 "$p")"; fi; done; }
+d=$(mktemp -d) && cd "$d" && { :
+printf '%s\n' 'S' > 's'
+mkdir -p 'd'
+printf '%s\n' 'x' > 'd/f'
+} >/dev/null 2>&1
+echo '== stdout'
+{ :
+mv nosuch dst 2>&1; mv s ./s 2>&1; mv d d/x 2>&1; mv s nodir/x 2>&1
+} 2>/dev/null
+echo "== exit $?"
+echo '== fs'
+__fs_snap
+cd /; rm -rf "$d"
+==== STDOUT ====
+== stdout
+mv: cannot stat 'nosuch': No such file or directory
+mv: 's' and './s' are the same file
+mv: cannot move 'd' to a subdirectory of itself, 'd/x'
+mv: cannot move 's' to 'nodir/x': No such file or directory
+== exit 1
+== fs
+D .
+D ./d
+F ./d/f eAo=
+F ./s Uwo=
+
+==== STDERR ====
+

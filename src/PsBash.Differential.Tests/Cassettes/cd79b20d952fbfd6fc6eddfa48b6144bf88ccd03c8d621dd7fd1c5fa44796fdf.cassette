@@ -1,0 +1,33 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 507
+stdout-length: 69
+stderr-length: 0
+==== SCRIPT ====
+__fs_snap() { find . | LC_ALL=C sort | while IFS= read -r p; do if [ -d "$p" ]; then echo "D $p"; else echo "F $p $(base64 -w0 "$p")"; fi; done; }
+d=$(mktemp -d) && cd "$d" && { :
+printf '%s\n' 'k' > 'keep'
+} >/dev/null 2>&1
+echo '== stdout'
+{ :
+touch -t bad f; echo r1=$?; touch -t 202401021530 -d 2020-01-01 g; echo r2=$?; touch --time=bogus h; echo r3=$?; touch -t 202401021530.61 i; echo r4=$?; touch -t 202302291200 j; echo r5=$?
+} 2>/dev/null
+echo "== exit $?"
+echo '== fs'
+__fs_snap
+cd /; rm -rf "$d"
+==== STDOUT ====
+== stdout
+r1=1
+r2=1
+r3=1
+r4=1
+r5=1
+== exit 0
+== fs
+D .
+F ./keep awo=
+
+==== STDERR ====
+

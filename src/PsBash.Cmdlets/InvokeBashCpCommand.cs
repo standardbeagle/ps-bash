@@ -67,6 +67,13 @@ public sealed class InvokeBashCpCommand : PSCmdlet
     /// </summary>
     [Parameter] public SwitchParameter D { get; set; }
 
+    /// <summary>
+    /// Decoy for <c>-a</c> (archive). The bare token prefix-matches this cmdlet's own
+    /// <c>-Arguments</c> parameter, which swallowed the flag AND the operands silently, so a direct
+    /// <c>Invoke-BashCp -a src dst</c> degraded to a plain non-recursive copy.
+    /// </summary>
+    [Parameter] public SwitchParameter A { get; set; }
+
     [Parameter(ValueFromRemainingArguments = true)]
     public string[]? Arguments { get; set; }
 
@@ -88,13 +95,13 @@ public sealed class InvokeBashCpCommand : PSCmdlet
         "-T", "--no-target-directory", "-x", "--one-file-system",
         "--sparse", "--strip-trailing-slashes", "-Z", "--context",
         "--attributes-only", "-d",
-        // valid GNU long options (the `-p` short is implemented; its long spellings are not)
-        "--preserve", "--no-preserve", "--parents", "--remove-destination",
-        "--copy-contents", "--debug", "-S", "--suffix",
+        // valid GNU long options
+        "--parents", "--remove-destination", "--copy-contents", "--debug", "-S", "--suffix",
     };
 
     private const string OptRecursive = "recursive", OptNoClobber = "no-clobber", OptForce = "force",
-        OptVerbose = "verbose", OptPreserve = "preserve", OptUpdate = "update", OptArchive = "archive";
+        OptVerbose = "verbose", OptPreserve = "preserve", OptUpdate = "update", OptArchive = "archive",
+        OptPreserveList = "preserve-list", OptNoPreserve = "no-preserve";
 
     /// <summary>GNU cp long_options[] order; getopt_long lists ambiguous-prefix candidates in it.</summary>
     private static readonly string[] CpLongOptionOrder = { "archive", "attributes-only", "copy-contents", "context", "debug", "dereference", "no-clobber", "no-dereference", "no-preserve", "no-target-directory", "parents", "preserve", "recursive", "remove-destination", "reflink", "sparse", "strip-trailing-slashes", "suffix", "symbolic-link", "verbose", "version" };
@@ -109,6 +116,10 @@ public sealed class InvokeBashCpCommand : PSCmdlet
             new OptSpec(OptForce, 'f', "force"),
             new OptSpec(OptVerbose, 'v', "verbose"),
             new OptSpec(OptPreserve, 'p', null),
+            // --preserve[=ATTR_LIST] (argument optional, attached only) and --no-preserve=ATTR_LIST
+            // (argument required): resolved in command-line order by CpPreserve.
+            new OptSpec(OptPreserveList, '\0', "preserve", OptKind.OptionalValue),
+            new OptSpec(OptNoPreserve, '\0', "no-preserve", OptKind.Value),
             new OptSpec(OptUpdate, 'u', null),
             // GNU >= 9.3: --update[=older|all|none|none-fail]; bare / =older is -u.
             new OptSpec(OptUpdate, '\0', "update", OptKind.OptionalValue),
@@ -130,7 +141,7 @@ public sealed class InvokeBashCpCommand : PSCmdlet
         // crash the binder or be silently swallowed as common parameters. Prepending is safe:
         // a decoy can only have been bound before any `--`.
         var args = BashRuntime.PrependDecoys(Arguments,
-            (v.IsPresent, "-v"), (p.IsPresent, "-p"), (I.IsPresent, "-i"), (D.IsPresent, "-d"));
+            (v.IsPresent, "-v"), (p.IsPresent, "-p"), (I.IsPresent, "-i"), (D.IsPresent, "-d"), (A.IsPresent, "-a"));
 
         FileSystemHelpers.SetLastExitCode(this, 0);
         if (FileSystemHelpers.TryHandleVersion(this, "cp", args)) return;
@@ -172,7 +183,18 @@ public sealed class InvokeBashCpCommand : PSCmdlet
         bool noClobber = parsed.Has(OptNoClobber);
         bool force = parsed.Has(OptForce);
         bool verbose = parsed.Has(OptVerbose);
-        bool preserve = archive || parsed.Has(OptPreserve);
+        // -p / -a / --preserve[=LIST] / --no-preserve=LIST, resolved in command-line order. A bad
+        // attribute word is a usage error; naming `context` needs SELinux, which is never present here.
+        if (!CpPreserve.TryFrom(parsed, OptPreserve, OptArchive, OptPreserveList, OptNoPreserve, out var preserve, out var preserveError))
+        {
+            FileSystemHelpers.WriteBashError(this, preserveError!);
+            return;
+        }
+        if (preserve.ContextRequested)
+        {
+            FileSystemHelpers.WriteBashError(this, "cp: cannot preserve security context without an SELinux-enabled kernel");
+            return;
+        }
         bool update = parsed.Has(OptUpdate);
         var operands = parsed.Operands();
 
@@ -186,10 +208,10 @@ public sealed class InvokeBashCpCommand : PSCmdlet
         var sourceOperands = operands.GetRange(0, operands.Count - 1);
 
         // Expand globs on the source list, preserving order.
-        var sources = new List<string>();
+        var sources = new List<FileSystemHelpers.OperandPath>();
         foreach (var s in sourceOperands)
         {
-            foreach (var expanded in FileSystemHelpers.ResolveOperandPaths(this, s))
+            foreach (var expanded in FileSystemHelpers.ResolveOperands(this, s))
             {
                 sources.Add(expanded);
             }
@@ -208,15 +230,17 @@ public sealed class InvokeBashCpCommand : PSCmdlet
             return;
         }
 
-        foreach (var src in sources)
+        foreach (var operand in sources)
         {
+            var src = operand.Path;
+            var srcDisplay = operand.Display;
             bool srcIsFile = File.Exists(src);
             bool srcIsDir = !srcIsFile && Directory.Exists(src);
 
             if (!srcIsFile && !srcIsDir)
             {
                 FileSystemHelpers.WriteBashError(this,
-                    $"cp: cannot stat '{src}': No such file or directory");
+                    $"cp: cannot stat '{srcDisplay}': No such file or directory");
                 hadError = true;
                 continue;
             }
@@ -224,14 +248,23 @@ public sealed class InvokeBashCpCommand : PSCmdlet
             if (srcIsDir && !recursive)
             {
                 FileSystemHelpers.WriteBashError(this,
-                    $"cp: -r not specified; omitting directory '{src}'");
+                    $"cp: -r not specified; omitting directory '{srcDisplay}'");
                 hadError = true;
                 continue;
             }
 
             var targetPath = TransferValidation.ResolveTarget(src, destAbs, destIsExistingDir);
+            // Diagnostics name the destination as typed (GNU): `cp f d/` reports 'd/f', not the full path.
+            var targetDisplay = destIsExistingDir ? FileSystemHelpers.JoinDisplay(destRaw, srcDisplay) : destRaw;
 
-            var identityError = TransferValidation.CheckIdentity("cp", src, srcIsDir, targetPath);
+            // -n skips an existing destination FILE before anything else is asked — even when it is
+            // the same file (GNU: `cp -n a a` and `cp -n a hardlink-of-a` are silent no-ops, exit 0).
+            if (noClobber && !srcIsDir && File.Exists(targetPath))
+            {
+                continue;
+            }
+
+            var identityError = TransferValidation.CheckIdentity("cp", src, srcIsDir, targetPath, srcDisplay, targetDisplay);
             if (identityError != null)
             {
                 FileSystemHelpers.WriteBashError(this, identityError);
@@ -241,10 +274,23 @@ public sealed class InvokeBashCpCommand : PSCmdlet
 
             // Type conflicts (dir over file / file over dir) are errors; an existing target
             // DIRECTORY is not — cp merges into it (replaceEmptyDirOnly: false).
-            var occupancyError = TransferValidation.CheckOccupancy("cp", src, srcIsDir, targetPath, replaceEmptyDirOnly: false);
+            var occupancyError = TransferValidation.CheckOccupancy("cp", src, srcIsDir, targetPath, replaceEmptyDirOnly: false,
+                srcDisplay, targetDisplay);
             if (occupancyError != null)
             {
                 FileSystemHelpers.WriteBashError(this, occupancyError);
+                hadError = true;
+                continue;
+            }
+
+            // GNU never creates missing parent directories for the destination
+            // (`cp f nodir/x` -> "cannot create regular file 'nodir/x': No such file or directory");
+            // only an explicit mkdir -p does. Refuse before any write.
+            var targetParent = Path.GetDirectoryName(targetPath);
+            if (!string.IsNullOrEmpty(targetParent) && !Directory.Exists(targetParent))
+            {
+                FileSystemHelpers.WriteBashError(this,
+                    $"cp: cannot create {(srcIsDir ? "directory" : "regular file")} '{targetDisplay}': No such file or directory");
                 hadError = true;
                 continue;
             }
@@ -263,7 +309,8 @@ public sealed class InvokeBashCpCommand : PSCmdlet
                     // Merge: never delete the existing target tree. Same-named files are replaced
                     // (unless -n), destination-only files survive.
                     var errors = new List<string>();
-                    CopyDirectoryRecursive(src, targetPath, preserve, update, noClobber, force, errors);
+                    CopyDirectoryRecursive(src, targetPath, preserve, update, noClobber, force, errors,
+                        srcDisplay, targetDisplay);
                     if (errors.Count > 0)
                     {
                         foreach (var e in errors) FileSystemHelpers.WriteBashError(this, e);
@@ -278,21 +325,15 @@ public sealed class InvokeBashCpCommand : PSCmdlet
                     {
                         continue;
                     }
-                    var parent = Path.GetDirectoryName(targetPath);
-                    if (!string.IsNullOrEmpty(parent) && !Directory.Exists(parent))
-                    {
-                        Directory.CreateDirectory(parent);
-                    }
                     if (force) FileSystemHelpers.ClearReadOnly(targetPath);
-                    File.Copy(src, targetPath, overwrite: true);
-                    if (preserve) PreserveMetadata(src, targetPath, isDir: false);
+                    CopyFile(src, targetPath, preserve);
                 }
             }
             catch (Exception ex)
             {
                 if (FileSystemHelpers.IsPipelineStop(ex)) throw;
                 FileSystemHelpers.WriteBashError(this,
-                    $"cp: cannot copy '{src}' to '{targetPath}': {ex.Message}");
+                    $"cp: cannot copy '{srcDisplay}' to '{targetDisplay}': {ex.Message}");
                 hadError = true;
                 continue;
             }
@@ -300,7 +341,7 @@ public sealed class InvokeBashCpCommand : PSCmdlet
             if (verbose)
             {
                 WriteObject(BashRuntime.NewBashObject(
-                    $"'{FileSystemHelpers.ToBashPath(src)}' -> '{FileSystemHelpers.ToBashPath(targetPath)}'\n"));
+                    $"'{FileSystemHelpers.ToBashPath(srcDisplay)}' -> '{FileSystemHelpers.ToBashPath(targetDisplay)}'\n"));
             }
         }
 
@@ -313,14 +354,18 @@ public sealed class InvokeBashCpCommand : PSCmdlet
     /// <paramref name="noClobber"/> / <paramref name="update"/>), a same-named directory is descended
     /// into, and a file/dir type clash is appended to <paramref name="errors"/> and skipped.
     /// </summary>
-    private static void CopyDirectoryRecursive(string src, string dest, bool preserve, bool update,
-        bool noClobber, bool force, List<string> errors)
+    private static void CopyDirectoryRecursive(string src, string dest, CpPreserve preserve, bool update,
+        bool noClobber, bool force, List<string> errors, string srcDisplay, string destDisplay)
     {
+        bool destExisted = Directory.Exists(dest);
+        int? previousMode = destExisted ? PlatformMode.TryGet(dest) : null;
         Directory.CreateDirectory(dest);
         foreach (var file in Directory.EnumerateFiles(src))
         {
-            var target = Path.Combine(dest, Path.GetFileName(file));
-            var clash = TransferValidation.CheckOccupancy("cp", file, srcIsDir: false, target, replaceEmptyDirOnly: false);
+            var name = Path.GetFileName(file);
+            var target = Path.Combine(dest, name);
+            var clash = TransferValidation.CheckOccupancy("cp", file, srcIsDir: false, target, replaceEmptyDirOnly: false,
+                FileSystemHelpers.JoinDisplay(srcDisplay, name), FileSystemHelpers.JoinDisplay(destDisplay, name));
             if (clash != null) { errors.Add(clash); continue; }
             if (File.Exists(target))
             {
@@ -328,8 +373,7 @@ public sealed class InvokeBashCpCommand : PSCmdlet
                 if (update && File.GetLastWriteTimeUtc(file) <= File.GetLastWriteTimeUtc(target)) continue;
                 if (force) FileSystemHelpers.ClearReadOnly(target);
             }
-            File.Copy(file, target, overwrite: true);
-            if (preserve) PreserveMetadata(file, target, isDir: false);
+            CopyFile(file, target, preserve);
         }
         foreach (var sub in Directory.EnumerateDirectories(src))
         {
@@ -342,46 +386,97 @@ public sealed class InvokeBashCpCommand : PSCmdlet
                 FileSystemHelpers.TryCopyDirectoryLink(sub, subDest);
                 continue;
             }
-            var subClash = TransferValidation.CheckOccupancy("cp", sub, srcIsDir: true, subDest, replaceEmptyDirOnly: false);
+            var subName = Path.GetFileName(sub);
+            var subSrcDisplay = FileSystemHelpers.JoinDisplay(srcDisplay, subName);
+            var subDestDisplay = FileSystemHelpers.JoinDisplay(destDisplay, subName);
+            var subClash = TransferValidation.CheckOccupancy("cp", sub, srcIsDir: true, subDest, replaceEmptyDirOnly: false,
+                subSrcDisplay, subDestDisplay);
             if (subClash != null) { errors.Add(subClash); continue; }
-            CopyDirectoryRecursive(sub, subDest, preserve, update, noClobber, force, errors);
+            CopyDirectoryRecursive(sub, subDest, preserve, update, noClobber, force, errors, subSrcDisplay, subDestDisplay);
         }
-        // Apply directory timestamps LAST — writing children bumps the dir mtime,
-        // so GNU cp -p restores it after the contents are in place.
-        if (preserve) PreserveMetadata(src, dest, isDir: true);
+        // Apply the directory's mode and timestamps LAST — writing children bumps the dir mtime
+        // (GNU cp -p restores it after the contents are in place) and a read-only directory must
+        // not block its own children.
+        ApplyAttributes(src, dest, isDir: true, preserve, destExisted, previousMode);
     }
 
     /// <summary>
-    /// Best-effort <c>cp -p</c>: copy timestamps and attributes from source to
-    /// destination. Unix mode bits and ownership have no faithful Windows
-    /// representation, so those parts of <c>--preserve=all</c> are silently not
-    /// applied; timestamps and the read-only/hidden/archive attributes are.
+    /// Copies one file and then applies the requested attribute policy (see
+    /// <see cref="CpPreserve"/>). The destination's prior Unix mode is captured BEFORE the copy
+    /// because <see cref="File.Copy(string, string, bool)"/> overwrites it with the source's.
     /// </summary>
-    private static void PreserveMetadata(string src, string dest, bool isDir)
+    private static void CopyFile(string src, string dest, CpPreserve preserve)
+    {
+        bool existed = File.Exists(dest);
+        int? previousMode = existed ? PlatformMode.TryGet(dest) : null;
+        File.Copy(src, dest, overwrite: true);
+        ApplyAttributes(src, dest, isDir: false, preserve, existed, previousMode);
+    }
+
+    /// <summary>
+    /// Applies the attribute policy to a finished copy, best-effort (a locked attribute or an
+    /// unsupported timestamp must not fail the copy itself). <b>Mode</b> is the Unix permission bits
+    /// on Linux/macOS — GNU semantics: preserved exactly, cleared to 0666/0777 masked by the umask, or
+    /// by default the source's bits masked by the umask for a NEW file while an existing destination
+    /// keeps its own; on Windows, where there are no mode bits, the read-only / hidden / archive
+    /// attributes stand in (copied when preserving, read-only cleared by <c>--no-preserve=mode</c>).
+    /// <b>Timestamps</b> (creation too on Windows) are real on every OS. Ownership, links and xattr
+    /// have nothing to do.
+    /// </summary>
+    private static void ApplyAttributes(string src, string dest, bool isDir, CpPreserve preserve,
+        bool destExisted, int? previousMode)
     {
         try
         {
-            if (isDir)
+            if (OperatingSystem.IsWindows())
             {
-                var s = new DirectoryInfo(src);
-                var d = new DirectoryInfo(dest);
-                d.CreationTimeUtc = s.CreationTimeUtc;
-                d.LastWriteTimeUtc = s.LastWriteTimeUtc;
-                d.LastAccessTimeUtc = s.LastAccessTimeUtc;
-                d.Attributes = s.Attributes;
+                if (preserve.Mode == CpModePolicy.Preserve)
+                {
+                    if (isDir) new DirectoryInfo(dest).Attributes = new DirectoryInfo(src).Attributes;
+                    else new FileInfo(dest).Attributes = new FileInfo(src).Attributes;
+                }
+                else if (preserve.Mode == CpModePolicy.Clear)
+                {
+                    FileSystemHelpers.ClearReadOnly(dest);
+                }
             }
             else
             {
-                File.SetCreationTimeUtc(dest, File.GetCreationTimeUtc(src));
-                File.SetLastWriteTimeUtc(dest, File.GetLastWriteTimeUtc(src));
-                File.SetLastAccessTimeUtc(dest, File.GetLastAccessTimeUtc(src));
-                new FileInfo(dest) { Attributes = new FileInfo(src).Attributes };
+                PlatformMode.Apply(src, dest, isDir, preserve.Mode, destExisted, previousMode);
+            }
+
+            if (!preserve.Timestamps)
+            {
+                // Windows CopyFile carries the source's modification time over; GNU stamps the
+                // copy with "now" unless timestamps are preserved. (Linux/macOS already do.)
+                if (OperatingSystem.IsWindows() && !isDir)
+                {
+                    var now = DateTime.UtcNow;
+                    File.SetLastWriteTimeUtc(dest, now);
+                    File.SetLastAccessTimeUtc(dest, now);
+                }
+            }
+            else
+            {
+                if (isDir)
+                {
+                    var s = new DirectoryInfo(src);
+                    var d = new DirectoryInfo(dest);
+                    d.CreationTimeUtc = s.CreationTimeUtc;
+                    d.LastWriteTimeUtc = s.LastWriteTimeUtc;
+                    d.LastAccessTimeUtc = s.LastAccessTimeUtc;
+                }
+                else
+                {
+                    File.SetCreationTimeUtc(dest, File.GetCreationTimeUtc(src));
+                    File.SetLastWriteTimeUtc(dest, File.GetLastWriteTimeUtc(src));
+                    File.SetLastAccessTimeUtc(dest, File.GetLastAccessTimeUtc(src));
+                }
             }
         }
         catch
         {
-            // Preservation is best-effort; a locked attribute or unsupported
-            // timestamp must not fail the copy itself.
+            // Preservation is best-effort; see above.
         }
     }
 }

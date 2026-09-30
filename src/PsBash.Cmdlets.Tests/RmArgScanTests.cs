@@ -61,19 +61,6 @@ public class RmArgScanTests
     [InlineData("r=1 f=0 v=0 ops=[-,b]", "-r", "-", "b")]
     [InlineData("r=0 f=0 v=0 ops=[]")]
     [InlineData("r=0 f=1 v=0 ops=[]", "-f")]
-    [InlineData("ERR rm: option '-i' is recognized but not supported by ps-bash", "-i", "a")]
-    [InlineData("ERR rm: option '-I' is recognized but not supported by ps-bash", "-I", "a")]
-    [InlineData("ERR rm: option '-d' is recognized but not supported by ps-bash", "-d", "a")]
-    [InlineData("ERR rm: option '-i' is recognized but not supported by ps-bash", "-fi", "a")]
-    [InlineData("ERR rm: option '-i' is recognized but not supported by ps-bash", "-if", "a")]
-    [InlineData("ERR rm: option '-d' is recognized but not supported by ps-bash", "-rd", "a")]
-    [InlineData("ERR rm: option '-i' is recognized but not supported by ps-bash", "-f", "-i", "a")]
-    [InlineData("ERR rm: option '--interactive' is recognized but not supported by ps-bash", "--interactive", "a")]
-    [InlineData("ERR rm: option '--interactive' is recognized but not supported by ps-bash", "--interactive=never", "a")]
-    [InlineData("ERR rm: option '--interactive' is recognized but not supported by ps-bash", "--inter", "a")]  // FIX (was: ERR rm: unrecognized option '--inter')
-    [InlineData("ERR rm: option '--interactive' is recognized but not supported by ps-bash", "--i", "a")]  // FIX (was: ERR rm: unrecognized option '--i')
-    [InlineData("ERR rm: option '--dir' is recognized but not supported by ps-bash", "--dir", "a")]
-    [InlineData("ERR rm: option '--dir' is recognized but not supported by ps-bash", "--d", "a")]  // FIX (was: ERR rm: unrecognized option '--d')
     [InlineData("ERR rm: option '--one-file-system' is recognized but not supported by ps-bash", "--one-file-system", "a")]
     [InlineData("ERR rm: option '--one-file-system' is recognized but not supported by ps-bash", "--one", "a")]  // FIX (was: ERR rm: unrecognized option '--one')
     [InlineData("ERR rm: option '--preserve-root' is recognized but not supported by ps-bash", "--preserve-root", "a")]
@@ -95,6 +82,77 @@ public class RmArgScanTests
         Assert.Equal(expected, Scan(argv));
     }
 
+    // The newly implemented options (-d/--dir, -i, -I, --interactive[=WHEN]): ids in ORIGINAL order,
+    // because the last of -f/-i/-I/--interactive wins (`-if` differs from `-fi`).
+    private static string OptionIds(params string[] argv)
+    {
+        var p = InvokeBashRmCommand.ScanArgs(argv);
+        if (p.Error is { } e) return "ERR " + e.Message("rm");
+        return string.Join(",", p.Tokens.Where(t => t.Kind == PsBash.Cmdlets.Args.ArgTokKind.Option)
+            .Select(t => t.Value is null ? t.OptId : $"{t.OptId}={t.Value}"));
+    }
+
+    [Theory]
+    [InlineData("dir", "-d", "a")]
+    [InlineData("dir", "--dir", "a")]
+    [InlineData("dir", "--d", "a")]
+    [InlineData("recursive,dir", "-rd", "a")]
+    [InlineData("prompt-always", "-i", "a")]
+    [InlineData("prompt-once", "-I", "a")]
+    [InlineData("force,prompt-always", "-fi", "a")]
+    [InlineData("prompt-always,force", "-if", "a")]
+    [InlineData("prompt-always,verbose", "-iv", "a")]
+    [InlineData("interactive", "--interactive", "a")]
+    [InlineData("interactive", "--inter", "a")]
+    [InlineData("interactive", "--i", "a")]
+    [InlineData("interactive=never", "--interactive=never", "a")]
+    [InlineData("interactive=", "--interactive=", "a")]
+    public void ScanArgs_ParsesTheInteractiveAndDirOptionsInOrder(string expected, params string[] argv)
+    {
+        Assert.Equal(expected, OptionIds(argv));
+    }
+
+    [Fact]
+    public void ScanArgs_InteractiveTakesNoDetachedValue_SoTheNextWordIsAnOperand()
+    {
+        var p = InvokeBashRmCommand.ScanArgs(new[] { "--interactive", "never", "a" });
+        Assert.Null(p.Error);
+        Assert.Equal(new[] { "never", "a" }, p.Operands());
+    }
+
+    [Theory]
+    [InlineData("never", "never", true)]
+    [InlineData("no", "never", true)]
+    [InlineData("none", "never", true)]
+    [InlineData("n", "never", true)]      // prefix of never/no/none: one meaning, so accepted
+    [InlineData("once", "once", true)]
+    [InlineData("o", "once", true)]
+    [InlineData("always", "always", true)]
+    [InlineData("yes", "always", true)]
+    [InlineData("a", "always", true)]
+    [InlineData("y", "always", true)]
+    [InlineData(null, "always", true)]    // bare --interactive
+    [InlineData("bogus", null, false)]
+    [InlineData("", null, false)]         // prefix of every name, several meanings: ambiguous
+    [InlineData("nx", null, false)]
+    public void TryParseInteractiveWhen_MatchesGnuXargmatch(string? arg, string? expectedMode, bool ok)
+    {
+        Assert.Equal(ok, InvokeBashRmCommand.TryParseInteractiveWhen(arg, out var mode, out var error));
+        if (ok) Assert.Equal(expectedMode, mode.ToString().ToLowerInvariant());
+        else Assert.Contains("for '--interactive'", error);
+    }
+
+    [Theory]
+    [InlineData("bogus", "invalid argument 'bogus'")]
+    [InlineData("", "ambiguous argument ''")]
+    public void TryParseInteractiveWhen_ErrorNamesTheKindAndListsTheValidArguments(string arg, string fragment)
+    {
+        InvokeBashRmCommand.TryParseInteractiveWhen(arg, out _, out var error);
+        Assert.Contains(fragment, error);
+        Assert.Contains("'never', 'no', 'none'", error);
+        Assert.EndsWith("Try 'rm --help' for more information.", error);
+    }
+
     [Theory]
     [InlineData("--version", "version")]
     [InlineData("--vers", "version")]
@@ -113,8 +171,6 @@ public class RmArgScanTests
     [InlineData("-z", 1)]
     [InlineData("--recursive=1", 1)]
     [InlineData("--ver", 1)]
-    [InlineData("-i", 2)]
-    [InlineData("--interactive", 2)]
     public void ScanError_ExitStatus_IsGnuUsageStatusExceptOurOwnRefusal(string arg, int exit)
     {
         Assert.Equal(exit, InvokeBashRmCommand.ScanArgs(new[] { arg, "a" }).ErrorExitCode);

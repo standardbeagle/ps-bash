@@ -44,34 +44,37 @@ public sealed class InvokeBashRmCommand : PSCmdlet
     [Parameter] public SwitchParameter v { get; set; }
 
     /// <summary>
-    /// Decoy for the valid-but-unsupported <c>-i</c>/<c>-I</c> (interactive). Bare
-    /// <c>-i</c> prefix-collides with <c>-InformationAction</c>/<c>-InformationVariable</c>
-    /// and crashed the binder — so "rm -i fires even under -f" (the spec) was impossible.
-    /// Re-injected below so the classifier fires exit 2.
+    /// Decoy for <c>-i</c>/<c>-I</c> (interactive). Bare <c>-i</c> prefix-collides with
+    /// <c>-InformationAction</c>/<c>-InformationVariable</c> and crashed the binder. The binder is
+    /// case-insensitive, so this one switch receives both spellings; the typed case is recovered
+    /// from the command's own pipeline segment and re-injected in <see cref="Execute"/>.
     /// </summary>
     [Parameter] public SwitchParameter I { get; set; }
 
     /// <summary>
-    /// Decoy for the valid-but-unsupported <c>-d</c> (remove empty dirs). Bare <c>-d</c>
-    /// silently bound <c>-Debug</c>, so the classifier never fired.
+    /// Decoy for <c>-d</c> (remove empty dirs). Bare <c>-d</c> silently bound <c>-Debug</c>.
+    /// Re-injected so a direct call behaves like the transpiled one.
     /// </summary>
     [Parameter] public SwitchParameter D { get; set; }
 
     [Parameter(ValueFromRemainingArguments = true)]
     public string[]? Arguments { get; set; }
 
-    /// <summary>Valid GNU <c>rm</c> flags ps-bash does not implement. See
+    /// <summary>Valid GNU <c>rm</c> flags ps-bash does not implement (only the root-protection
+    /// and mount-boundary options are left: <c>-i</c>/<c>-I</c>/<c>--interactive</c>/<c>-d</c> are
+    /// implemented). See
     /// <see cref="FileSystemHelpers.TryWriteOperandOptionError"/> /
     /// <see cref="InvokeBashCpCommand"/> for the classification contract.</summary>
     // (A string[] on purpose: CommonParameterCollisionGuardTests enumerates each cmdlet's static
     // string sets to find short flags the binder could eat.)
     private static readonly string[] RmValidButUnsupported =
     {
-        "-i", "-I", "--interactive", "-d", "--dir",
         "--one-file-system", "--no-preserve-root", "--preserve-root",
     };
 
-    private const string OptRecursive = "recursive", OptForce = "force", OptVerbose = "verbose";
+    private const string OptRecursive = "recursive", OptForce = "force", OptVerbose = "verbose",
+        OptDir = "dir", OptPromptAlways = "prompt-always", OptPromptOnce = "prompt-once",
+        OptInteractive = "interactive";
 
     /// <summary>rm's whole option surface, built once for the shared ordered parser.</summary>
     private static readonly OptSpecSet RmSpec = new(
@@ -81,6 +84,11 @@ public sealed class InvokeBashRmCommand : PSCmdlet
             new OptSpec(OptRecursive, 'R', null),
             new OptSpec(OptForce, 'f', "force"),
             new OptSpec(OptVerbose, 'v', "verbose"),
+            new OptSpec(OptDir, 'd', "dir"),
+            new OptSpec(OptPromptAlways, 'i', null),
+            new OptSpec(OptPromptOnce, 'I', null),
+            // --interactive[=WHEN]: the argument is optional and only ever attached.
+            new OptSpec(OptInteractive, '\0', "interactive", OptKind.OptionalValue),
         },
         validButUnsupported: RmValidButUnsupported,
         allowAbbrev: true,
@@ -96,13 +104,56 @@ public sealed class InvokeBashRmCommand : PSCmdlet
         "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9",
     };
 
+    /// <summary>
+    /// The command's stdin. Only read for an interactive answer (<c>rm -i</c>/<c>-I</c>); collected
+    /// here and acted on in <see cref="EndProcessing"/> so the whole command runs ONCE, not per record.
+    /// </summary>
+    [Parameter(ValueFromPipeline = true)]
+    public PSObject? InputObject { get; set; }
+
+    private readonly List<PSObject> _stdin = new();
+
     protected override void ProcessRecord()
+    {
+        if (InputObject != null) _stdin.Add(InputObject);
+    }
+
+    protected override void EndProcessing() => Execute();
+
+    /// <summary>
+    /// GNU <c>--interactive[=WHEN]</c> argument (<c>XARGMATCH</c>): <c>never|no|none</c>,
+    /// <c>once</c>, <c>always|yes</c>; a bare <c>--interactive</c> means <c>always</c>. An exact
+    /// name wins; otherwise a unique prefix does (<c>n</c> is fine — all three spellings mean the same
+    /// thing); a prefix shared by different meanings (<c>''</c>) is ambiguous. Pure: unit-tested.
+    /// </summary>
+    internal static bool TryParseInteractiveWhen(string? arg, out RmPrompt mode, out string? error)
+    {
+        error = null;
+        if (arg is null) { mode = RmPrompt.Always; return true; }
+        return GnuArgMatch.TryMatch("rm", "interactive", arg, InteractiveWords,
+            "  - 'never', 'no', 'none'\n  - 'once'\n  - 'always', 'yes'", out mode, out error);
+    }
+
+    private static readonly (string Name, RmPrompt Value)[] InteractiveWords =
+    {
+        ("never", RmPrompt.Never), ("no", RmPrompt.Never), ("none", RmPrompt.Never),
+        ("once", RmPrompt.Once),
+        ("always", RmPrompt.Always), ("yes", RmPrompt.Always),
+    };
+
+    private void Execute()
     {
         // Re-inject every decoy-bound flag. The transpiler single-quotes each dash-leading word
         // for rm (PsEmitter.OrderedArgCommands) so they arrive in Arguments in order; a DIRECT
         // call (`Invoke-BashRm -v f`, Pester) binds the decoys instead (bare -v/-i/-d never reach
         // Arguments). Prepending is safe: a decoy can only have been bound before any `--`.
-        var args = BashRuntime.PrependDecoys(Arguments, (v.IsPresent, "-v"), (I.IsPresent, "-i"), (D.IsPresent, "-d"));
+        // The case-insensitive binder cannot tell a bare `-i` (ask each) from `-I` (ask once): one
+        // decoy binds both, so recover the typed case from THIS command's own pipeline segment.
+        var interactiveFlag = I.IsPresent
+            && System.Text.RegularExpressions.Regex.IsMatch(
+                BashRuntime.CurrentPipelineSegment(MyInvocation), @"(?<![\w-])-I(?![\w])")
+            ? "-I" : "-i";
+        var args = BashRuntime.PrependDecoys(Arguments, (v.IsPresent, "-v"), (I.IsPresent, interactiveFlag), (D.IsPresent, "-d"));
 
         FileSystemHelpers.SetLastExitCode(this, 0);
         if (FileSystemHelpers.TryHandleVersion(this, "rm", args)) return;
@@ -126,34 +177,87 @@ public sealed class InvokeBashRmCommand : PSCmdlet
         if (FileSystemHelpers.TryHandleInfoOptions(this, "rm", parsed)) return;
 
         bool recursive = parsed.Has(OptRecursive);
-        bool force = parsed.Has(OptForce);
         bool verbose = parsed.Has(OptVerbose);
+        bool dirOnly = parsed.Has(OptDir);
         var operands = parsed.Operands();
+
+        // -f / -i / -I / --interactive[=WHEN] share ONE setting and the LAST one wins (`-if` does not
+        // ask, `-fi` does), exactly as in GNU rm.c. Only -f (and -i/-I/--interactive=once|always)
+        // touch "ignore missing operands"; `--interactive=never` leaves it as it was.
+        var mode = RmPrompt.Never;
+        bool ignoreMissing = false;
+        foreach (var t in parsed.Tokens)
+        {
+            if (t.Kind != ArgTokKind.Option) continue;
+            switch (t.OptId)
+            {
+                case OptForce:
+                    mode = RmPrompt.Never; ignoreMissing = true; break;
+                case OptPromptAlways:
+                    mode = RmPrompt.Always; ignoreMissing = false; break;
+                case OptPromptOnce:
+                    mode = RmPrompt.Once; ignoreMissing = false; break;
+                case OptInteractive:
+                    if (!TryParseInteractiveWhen(t.Value, out var when, out var whenError))
+                    {
+                        FileSystemHelpers.WriteBashError(this, whenError!);
+                        return;
+                    }
+                    mode = when;
+                    if (when != RmPrompt.Never) ignoreMissing = false;
+                    break;
+            }
+        }
+        bool promptEach = mode == RmPrompt.Always;
 
         if (operands.Count == 0)
         {
-            if (!force)
+            if (!ignoreMissing)
             {
                 FileSystemHelpers.WriteBashError(this, "rm: missing operand");
             }
             return;
         }
 
-        var resolved = new List<string>();
+        var resolved = new List<FileSystemHelpers.OperandPath>();
         foreach (var op in operands)
         {
-            foreach (var expanded in FileSystemHelpers.ResolveOperandPaths(this, op))
+            foreach (var expanded in FileSystemHelpers.ResolveOperands(this, op))
             {
                 resolved.Add(expanded);
             }
         }
 
+        // Answers to prompts come from this command's stdin (the pipeline); none at all is EOF = "no".
+        var stdin = new StdinLineSource(this, _stdin);
+        bool Confirm(string prompt)
+        {
+            FileSystemHelpers.WriteStderr(this, prompt);
+            return StdinLineSource.IsYes(stdin.ReadLine());
+        }
+
+        // -I: ask ONCE, up front, when removing more than three operands or anything recursively.
+        if (mode == RmPrompt.Once && resolved.Count > 0 && (recursive || resolved.Count > 3))
+        {
+            var n = resolved.Count;
+            if (!Confirm($"rm: remove {n} argument{(n == 1 ? "" : "s")}{(recursive ? " recursively" : "")}? "))
+                return;
+        }
+
+        var remover = new RmRemover(recursive, dirOnly, promptEach, verbose, Confirm,
+            say: text => WriteObject(BashRuntime.NewBashObject(text)),
+            error: message => FileSystemHelpers.WriteBashError(this, message));
+
         bool hadError = false;
         bool isWindows = RuntimeInformation.IsOSPlatform(OSPlatform.Windows);
         var homeDir = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
 
-        foreach (var target in resolved)
+        foreach (var operand in resolved)
         {
+            var target = operand.Path;
+            // Diagnostics quote the operand AS TYPED (GNU: `rm: cannot remove 'nosuch'`), never the
+            // resolved full path.
+            var display = operand.Display;
             // Windows reserved-device-name guard (psm1 oracle parity).
             if (isWindows)
             {
@@ -165,7 +269,7 @@ public sealed class InvokeBashRmCommand : PSCmdlet
                 if (WinReservedNames.Contains(baseName))
                 {
                     FileSystemHelpers.WriteBashError(this,
-                        $"rm: cannot remove '{target}': Windows reserved device name");
+                        $"rm: cannot remove '{display}': Windows reserved device name");
                     hadError = true;
                     continue;
                 }
@@ -202,7 +306,7 @@ public sealed class InvokeBashRmCommand : PSCmdlet
                 if (string.IsNullOrEmpty(normalized) && !string.IsNullOrEmpty(pathRoot))
                 {
                     FileSystemHelpers.WriteBashError(this,
-                        $"rm: refusing to remove '{target}': protected path");
+                        $"rm: refusing to remove '{display}': protected path");
                     hadError = true;
                     isProtected = true;
                 }
@@ -210,7 +314,7 @@ public sealed class InvokeBashRmCommand : PSCmdlet
                          string.Equals(normalized, normalizedRoot, StringComparison.OrdinalIgnoreCase))
                 {
                     FileSystemHelpers.WriteBashError(this,
-                        $"rm: refusing to remove '{target}': protected path");
+                        $"rm: refusing to remove '{display}': protected path");
                     hadError = true;
                     isProtected = true;
                 }
@@ -222,7 +326,7 @@ public sealed class InvokeBashRmCommand : PSCmdlet
                         string.Equals(normalized, normalizedHome, StringComparison.OrdinalIgnoreCase))
                     {
                         FileSystemHelpers.WriteBashError(this,
-                            $"rm: refusing to remove '{target}': protected path");
+                            $"rm: refusing to remove '{display}': protected path");
                         hadError = true;
                         isProtected = true;
                     }
@@ -235,37 +339,29 @@ public sealed class InvokeBashRmCommand : PSCmdlet
 
             if (!isFile && !isDir)
             {
-                if (!force)
+                if (!ignoreMissing)
                 {
                     FileSystemHelpers.WriteBashError(this,
-                        $"rm: cannot remove '{target}': No such file or directory");
+                        $"rm: cannot remove '{display}': No such file or directory");
                     hadError = true;
                 }
+                continue;
+            }
+
+            // Anything rm has to SAY while it works (a prompt, -v lines, -d on a directory) goes
+            // through the step-by-step walk; a quiet removal keeps the native fast path below.
+            if (promptEach || verbose || (dirOnly && isDir && !recursive))
+            {
+                if (!remover.Remove(target, display)) hadError = true;
                 continue;
             }
 
             if (isDir && !recursive)
             {
                 FileSystemHelpers.WriteBashError(this,
-                    $"rm: cannot remove '{target}': Is a directory");
+                    $"rm: cannot remove '{display}': Is a directory");
                 hadError = true;
                 continue;
-            }
-
-            if (verbose && isDir && recursive)
-            {
-                foreach (var child in Directory.EnumerateFileSystemEntries(
-                             target, "*", SearchOption.AllDirectories))
-                {
-                    WriteObject(BashRuntime.NewBashObject(
-                        $"removed '{FileSystemHelpers.ToBashPath(child)}'\n"));
-                }
-            }
-
-            if (verbose)
-            {
-                WriteObject(BashRuntime.NewBashObject(
-                    $"removed '{FileSystemHelpers.ToBashPath(target)}'\n"));
             }
 
             try
@@ -278,7 +374,7 @@ public sealed class InvokeBashRmCommand : PSCmdlet
             {
                 if (FileSystemHelpers.IsPipelineStop(ex)) throw;
                 FileSystemHelpers.WriteBashError(this,
-                    $"rm: cannot remove '{target}': {ex.Message}");
+                    $"rm: cannot remove '{display}': {ex.Message}");
                 hadError = true;
                 continue;
             }

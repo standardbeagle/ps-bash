@@ -1,0 +1,42 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 614
+stdout-length: 171
+stderr-length: 0
+==== SCRIPT ====
+__fs_snap() { find . | LC_ALL=C sort | while IFS= read -r p; do if [ -d "$p" ]; then echo "D $p"; else echo "F $p $(base64 -w0 "$p")"; fi; done; }
+d=$(mktemp -d) && cd "$d" && { :
+printf '%s\n' 'S' > 's'
+} >/dev/null 2>&1
+echo '== stdout'
+{ :
+touch -t 200101010000 s; cp s d1; cp --preserve=timestamps s d2; cp --no-preserve=all s d3; cp -p --no-preserve=timestamps s d4; cp --no-preserve=timestamps -p s d5; cp --preserve s d6; cp --preserve=mode s d7; cp --preserve=t s d8; cp --preserve=all --no-preserve=mode s d9; find . -newer s | sort
+} 2>/dev/null
+echo "== exit $?"
+echo '== fs'
+__fs_snap
+cd /; rm -rf "$d"
+==== STDOUT ====
+== stdout
+.
+./d1
+./d3
+./d4
+./d7
+== exit 0
+== fs
+D .
+F ./d1 Uwo=
+F ./d2 Uwo=
+F ./d3 Uwo=
+F ./d4 Uwo=
+F ./d5 Uwo=
+F ./d6 Uwo=
+F ./d7 Uwo=
+F ./d8 Uwo=
+F ./d9 Uwo=
+F ./s Uwo=
+
+==== STDERR ====
+

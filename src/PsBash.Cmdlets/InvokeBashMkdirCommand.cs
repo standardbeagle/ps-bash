@@ -45,17 +45,17 @@ public sealed class InvokeBashMkdirCommand : PSCmdlet
     public string[]? Arguments { get; set; }
 
     /// <summary>Valid GNU <c>mkdir</c> flags ps-bash does not implement
-    /// (<c>-m MODE</c> has no faithful Windows ACL mapping; <c>-Z</c>/SELinux is
-    /// Linux-only). Classified via
+    /// (<c>-Z</c>/SELinux is Linux-only; <c>-m MODE</c> IS implemented — see
+    /// <see cref="FileModeSpec"/> and <see cref="FileSystemHelpers.ApplyDirectoryMode"/>). Classified via
     /// <see cref="FileSystemHelpers.TryWriteOperandOptionError"/>.</summary>
     // (A string[] on purpose: CommonParameterCollisionGuardTests enumerates each cmdlet's static
     // string sets to find short flags the binder could eat.)
     private static readonly string[] MkdirValidButUnsupported =
     {
-        "-m", "--mode", "-Z", "--context",
+        "-Z", "--context",
     };
 
-    private const string OptParents = "parents", OptVerbose = "verbose";
+    private const string OptParents = "parents", OptVerbose = "verbose", OptMode = "mode";
 
     /// <summary>mkdir's whole option surface, built once for the shared ordered parser.</summary>
     private static readonly OptSpecSet MkdirSpec = new(
@@ -63,6 +63,7 @@ public sealed class InvokeBashMkdirCommand : PSCmdlet
         {
             new OptSpec(OptParents, 'p', "parents"),
             new OptSpec(OptVerbose, 'v', "verbose"),
+            new OptSpec(OptMode, 'm', "mode", OptKind.Value),
         },
         validButUnsupported: MkdirValidButUnsupported,
         allowAbbrev: true,
@@ -101,6 +102,20 @@ public sealed class InvokeBashMkdirCommand : PSCmdlet
         bool parents = parsed.Has(OptParents);
         bool verbose = parsed.Has(OptVerbose);
         var operands = parsed.Operands();
+
+        // -m MODE: compiled ONCE, before any operand is touched, against GNU's base mode 0777 and the
+        // process umask. A bad mode is a usage error and creates nothing. Last -m wins (getopt).
+        int? requestedMode = null;
+        if (parsed.Last(OptMode) is { } modeToken)
+        {
+            var spec = modeToken.Value ?? "";
+            if (!FileModeSpec.TryParse(spec, isDirectory: true, FileModeSpec.CurrentUmask(), baseMode: 0x1FF, out var compiled))
+            {
+                FileSystemHelpers.WriteBashError(this, $"mkdir: invalid mode '{spec}'");
+                return;
+            }
+            requestedMode = compiled;
+        }
 
         if (operands.Count == 0)
         {
@@ -144,6 +159,9 @@ public sealed class InvokeBashMkdirCommand : PSCmdlet
                 // and the no-flag (parent exists) cases — it's a no-op on
                 // existing dirs which we already filtered above.
                 Directory.CreateDirectory(absolute);
+                // Only the FINAL directory gets the mode, even with -p (intermediates keep the umask
+                // default, as in GNU).
+                if (requestedMode is { } m) FileSystemHelpers.ApplyDirectoryMode(absolute, m);
             }
             catch (Exception ex)
             {

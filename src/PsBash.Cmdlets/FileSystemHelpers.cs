@@ -59,6 +59,64 @@ internal static class FileSystemHelpers
     }
 
     /// <summary>
+    /// A resolved operand: <see cref="Path"/> is what the cmdlet touches (absolute, provider-resolved),
+    /// <see cref="Display"/> is what a diagnostic must show — the operand AS TYPED, because GNU
+    /// quotes the argv element (<c>rm: cannot remove 'nosuch'</c>), never the resolved full path.
+    /// </summary>
+    public readonly record struct OperandPath(string Path, string Display);
+
+    /// <summary>
+    /// <see cref="ResolveOperandPaths"/> plus the name to print for each result. A literal operand
+    /// (or a wildcard that matched nothing) displays exactly as typed; a wildcard match displays as
+    /// the shell would have expanded it — relative to the working directory for a relative pattern,
+    /// full path for an absolute one — with forward slashes.
+    /// </summary>
+    public static IEnumerable<OperandPath> ResolveOperands(PSCmdlet cmdlet, string raw)
+    {
+        bool wildcard = raw.IndexOf('*') >= 0 || raw.IndexOf('?') >= 0 || raw.IndexOf('[') >= 0;
+        var paths = new List<string>(ResolveOperandPaths(cmdlet, raw));
+        string? cwd = null;
+        try { cwd = cmdlet.SessionState.Path.CurrentFileSystemLocation.ProviderPath; } catch { /* non-filesystem location */ }
+
+        foreach (var p in paths)
+        {
+            // Literal operand, or a wildcard nothing matched (ResolveOperandPaths passes it through
+            // normalized, not resolved): show what was typed.
+            if (!wildcard || !System.IO.Path.IsPathRooted(p))
+            {
+                yield return new OperandPath(p, raw);
+                continue;
+            }
+
+            string display = p;
+            if (!System.IO.Path.IsPathRooted(raw) && cwd is not null)
+            {
+                try { display = System.IO.Path.GetRelativePath(cwd, p); } catch { display = p; }
+            }
+            yield return new OperandPath(p, ToBashPath(display));
+        }
+    }
+
+    /// <summary>
+    /// The diagnostic name of <paramref name="src"/> landing inside the directory operand
+    /// <paramref name="destDisplay"/>: GNU joins the destination AS TYPED with the source's basename
+    /// (<c>cp f dir/</c> reports <c>'dir/f'</c>, <c>cp f .</c> reports <c>'./f'</c>).
+    /// </summary>
+    public static string JoinDisplay(string destDisplay, string srcDisplay) =>
+        AppendDisplay(destDisplay, System.IO.Path.GetFileName(srcDisplay.TrimEnd('/', '\\')));
+
+    /// <summary>
+    /// <paramref name="relative"/> below the directory operand <paramref name="dirDisplay"/> as typed
+    /// (<c>rm -rv d</c> reports <c>'d/sub/f'</c>): one slash between, forward slashes throughout.
+    /// </summary>
+    public static string AppendDisplay(string dirDisplay, string relative)
+    {
+        var dir = dirDisplay.Length > 1 ? dirDisplay.TrimEnd('/', '\\') : dirDisplay;
+        relative = relative.Replace('\\', '/');
+        return dir.EndsWith('/') ? dir + relative : dir + "/" + relative;
+    }
+
+    /// <summary>
     /// Emit a bash-style error to the cmdlet's error stream so that callers
     /// using <c>2&gt;$null</c> can suppress it, <c>2&gt;&amp;1</c> can merge
     /// it into the pipeline, and the ps-bash host (SdkWorker) prints it to
@@ -80,7 +138,16 @@ internal static class FileSystemHelpers
     public static void WriteBashError(PSCmdlet cmdlet, string message)
     {
         SetLastExitCode(cmdlet, 1);
+        WriteStderr(cmdlet, message);
+    }
 
+    /// <summary>
+    /// One line on the command's stderr WITHOUT touching the exit status: the error stream is the
+    /// only channel the host delivers to stderr, so an interactive prompt (<c>rm -i</c>) that GNU
+    /// writes there rides it too. The host ends the line; GNU's prompt has no newline.
+    /// </summary>
+    public static void WriteStderr(PSCmdlet cmdlet, string message)
+    {
         var record = new ErrorRecord(
             new System.IO.IOException(message),
             "BashError",
@@ -449,6 +516,30 @@ internal static class FileSystemHelpers
                 || slashed.EndsWith("/NUL", StringComparison.OrdinalIgnoreCase)))
             return true;
         return false;
+    }
+
+    /// <summary>
+    /// Applies a compiled chmod mode (<see cref="FileModeSpec"/>) to a directory. Unix sets the exact
+    /// permission bits (<see cref="File.SetUnixFileMode(string, UnixFileMode)"/>, which also carries
+    /// setuid/setgid/sticky). Windows has no mode bits and no faithful ACL mapping, so only the
+    /// representable part is honoured: a mode WITHOUT the owner-write bit sets the read-only
+    /// attribute, one with it clears it. <see cref="DeleteDirectoryForce"/> / <see cref="ClearReadOnly"/>
+    /// already cope with a read-only directory.
+    /// </summary>
+    public static void ApplyDirectoryMode(string path, int mode)
+    {
+        if (OperatingSystem.IsWindows())
+        {
+            var attrs = File.GetAttributes(path);
+            var wanted = FileModeSpec.OwnerCanWrite(mode)
+                ? attrs & ~FileAttributes.ReadOnly
+                : attrs | FileAttributes.ReadOnly;
+            if (wanted != attrs) File.SetAttributes(path, wanted);
+        }
+        else
+        {
+            File.SetUnixFileMode(path, (UnixFileMode)mode);
+        }
     }
 
     /// <summary>Clear the read-only attribute on <paramref name="path"/> if set. Best-effort.</summary>

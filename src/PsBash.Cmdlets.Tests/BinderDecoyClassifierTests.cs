@@ -37,13 +37,10 @@ public class BinderDecoyClassifierTests : IClassFixture<SharedPwshFixture>
     }
 
     [Theory]
-    // cp / mv / rm interactive + copy-as-is (the "impossible under -f" cases)
+    // cp / mv interactive + copy-as-is (rm -i/-d are implemented now: see RmInteractiveTests)
     [InlineData("Invoke-BashCp -i a b")]
     [InlineData("Invoke-BashCp -d a b")]
     [InlineData("Invoke-BashMv -i a b")]
-    [InlineData("Invoke-BashRm -i x")]
-    [InlineData("Invoke-BashRm -f -i x")]   // classifier fires EVEN under -f (GNU parity)
-    [InlineData("Invoke-BashRm -d x")]
     // cat show-all / show-nonprinting
     [InlineData("'x' | Invoke-BashCat -A")]
     [InlineData("'x' | Invoke-BashCat -v")]

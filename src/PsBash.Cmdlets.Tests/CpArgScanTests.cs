@@ -143,4 +143,23 @@ public class CpArgScanTests
         Assert.True(p.Has("archive"));
         Assert.False(p.Has("recursive"));
     }
+
+    // --preserve[=LIST] / --no-preserve=LIST are implemented: the scan records the raw list in
+    // command-line order (CpPreserveTests covers the semantics). --preserve's argument is OPTIONAL
+    // (attached only); --no-preserve's is REQUIRED (it takes the next word).
+    [Theory]
+    [InlineData("preserve-list", "", "--preserve", "a", "b")]
+    [InlineData("preserve-list", "all", "--preserve=all", "a", "b")]
+    [InlineData("preserve-list", "mode,timestamps", "--preserve=mode,timestamps", "a", "b")]
+    [InlineData("preserve-list", "", "--pre", "a", "b")]
+    [InlineData("no-preserve", "mode", "--no-preserve=mode", "a", "b")]
+    [InlineData("no-preserve", "mode", "--no-preserve", "mode", "a", "b")]
+    [InlineData("no-preserve", "all", "--no-p=all", "a", "b")]
+    public void ScanArgs_RecordsThePreserveLists(string id, string value, params string[] argv)
+    {
+        var p = InvokeBashCpCommand.ScanArgs(argv);
+        Assert.Null(p.Error);
+        Assert.Equal(value, p.Last(id)?.Value ?? "");
+        Assert.Equal(new[] { "a", "b" }, p.Operands());
+    }
 }

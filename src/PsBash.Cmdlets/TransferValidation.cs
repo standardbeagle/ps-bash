@@ -64,14 +64,26 @@ internal static class TransferValidation
     /// Identity checks that apply before any skip logic: same file, or a directory into itself.
     /// Returns the GNU-style diagnostic, or null when the pair is acceptable.
     /// </summary>
-    public static string? CheckIdentity(string cmd, string src, bool srcIsDir, string target)
+    public static string? CheckIdentity(string cmd, string src, bool srcIsDir, string target,
+        string? srcDisplay = null, string? targetDisplay = null)
     {
+        // Diagnostics quote the operands AS TYPED (GNU), not the resolved full paths.
+        srcDisplay ??= src;
+        targetDisplay ??= target;
         if (IsSamePath(src, target) && !(cmd == "mv" && IsCaseOnlyRename(src, target)))
-            return $"{cmd}: '{src}' and '{target}' are the same file";
+            return $"{cmd}: '{srcDisplay}' and '{targetDisplay}' are the same file";
+
+        // Different NAMES for one file: a hard link, or a symlink leading to the other operand. Only
+        // files — a directory cannot be hard-linked, and recursion guards cover directory aliases.
+        if (!srcIsDir && !(cmd == "mv" && IsCaseOnlyRename(src, target))
+            && (cmd == "mv"
+                ? FileIdentity.SameEntryNotFollowing(src, target)
+                : FileIdentity.SameFileFollowingLinks(src, target)))
+            return $"{cmd}: '{srcDisplay}' and '{targetDisplay}' are the same file";
         if (srcIsDir && IsStrictlyInside(target, src))
             return cmd == "mv"
-                ? $"mv: cannot move '{src}' to a subdirectory of itself, '{target}'"
-                : $"cp: cannot copy a directory, '{src}', into itself, '{target}'";
+                ? $"mv: cannot move '{srcDisplay}' to a subdirectory of itself, '{targetDisplay}'"
+                : $"cp: cannot copy a directory, '{srcDisplay}', into itself, '{targetDisplay}'";
         return null;
     }
 
@@ -80,18 +92,21 @@ internal static class TransferValidation
     /// <paramref name="replaceEmptyDirOnly"/> is true for mv (a directory may only replace
     /// an empty one) and false for cp (directories merge).
     /// </summary>
-    public static string? CheckOccupancy(string cmd, string src, bool srcIsDir, string target, bool replaceEmptyDirOnly)
+    public static string? CheckOccupancy(string cmd, string src, bool srcIsDir, string target, bool replaceEmptyDirOnly,
+        string? srcDisplay = null, string? targetDisplay = null)
     {
         bool targetIsDir = Directory.Exists(target);
         bool targetIsFile = !targetIsDir && File.Exists(target);
         if (!targetIsDir && !targetIsFile) return null;
 
+        srcDisplay ??= src;
+        targetDisplay ??= target;
         if (srcIsDir && targetIsFile)
-            return $"{cmd}: cannot overwrite non-directory '{target}' with directory '{src}'";
+            return $"{cmd}: cannot overwrite non-directory '{targetDisplay}' with directory '{srcDisplay}'";
         if (!srcIsDir && targetIsDir)
-            return $"{cmd}: cannot overwrite directory '{target}' with non-directory";
+            return $"{cmd}: cannot overwrite directory '{targetDisplay}' with non-directory";
         if (srcIsDir && targetIsDir && replaceEmptyDirOnly && !IsEmptyDirectory(target))
-            return $"{cmd}: cannot overwrite '{target}': Directory not empty";
+            return $"{cmd}: cannot overwrite '{targetDisplay}': Directory not empty";
         return null;
     }
 
