@@ -199,4 +199,191 @@ public class PipelineRecordKindTests : IDisposable, IClassFixture<SharedPwshFixt
         var text = Render(Run(LsIn("Invoke-BashCut '-c1-2'")));
         Assert.Equal("a.\nb.\nc.\n", text);
     }
+
+    // ---- group 1: transformers (fold/expand/unexpand/paste/strings/base64), GNU oracle ----
+    // Bytes captured from GNU in WSL Ubuntu 24.04: `printf 'b\na' | CMD | od -c`.
+
+    [Theory]
+    [InlineData("Invoke-BashPrintf 'b\\na' | Invoke-BashFold '-w1'", "b\na")]
+    [InlineData("Invoke-BashPrintf 'abc\\nd' | Invoke-BashFold '-w2'", "ab\nc\nd")]
+    [InlineData("Invoke-BashPrintf 'b\\na' | Invoke-BashExpand", "b\na")]
+    [InlineData("Invoke-BashPrintf 'b\\n\\ta' | Invoke-BashExpand", "b\n        a")]
+    [InlineData("Invoke-BashPrintf 'b\\n        a' | Invoke-BashUnexpand", "b\n\ta")]
+    [InlineData("Invoke-BashPrintf 'b\\na' | Invoke-BashPaste '-s'", "b\ta\n")]
+    [InlineData("Invoke-BashPrintf 'b\\na' | Invoke-BashPaste '-sd,'", "b,a\n")]
+    [InlineData("Invoke-BashPrintf 'b\\na' | Invoke-BashPaste - -", "b\ta\n")]
+    [InlineData("Invoke-BashPrintf 'b\\na' | Invoke-BashPaste -", "b\na\n")]
+    [InlineData("Invoke-BashPrintf 'b\\na' | Invoke-BashStrings '-n1'", "b\na\n")]
+    [InlineData("Invoke-BashPrintf 'b\\na' | Invoke-BashBase64", "Ygph\n")]
+    [InlineData("Invoke-BashPrintf 'b\\na' | Invoke-BashBase64 '-w0'", "Ygph")]
+    [InlineData("Invoke-BashPrintf 'Ygph' | Invoke-BashBase64 '-d'", "b\na")]
+    public void Group1Transformer_StdinRendersGnuBytes(string script, string expected)
+    {
+        Assert.Equal(expected, Render(Run(script)));
+    }
+
+    [Fact]
+    public void Group1_FileOperandsRenderGnuBytes()
+    {
+        var u1 = Path.Combine(_dir, "u1"); var u2 = Path.Combine(_dir, "u2");
+        var j1 = Path.Combine(_dir, "j1"); var j2 = Path.Combine(_dir, "j2");
+        File.WriteAllText(u1, "a\nb"); File.WriteAllText(u2, "a\nc");
+        File.WriteAllText(j1, "a 1\nb 2"); File.WriteAllText(j2, "a x\nb y");
+        Assert.Equal("a\nb", Render(Run($"Invoke-BashFold '-w1' {Q(u1)}")));
+        Assert.Equal("a\nb", Render(Run($"Invoke-BashExpand {Q(u1)}")));
+        Assert.Equal("a\tb\n", Render(Run($"Invoke-BashPaste '-s' {Q(u1)}")));
+        Assert.Equal("a\ta\nb\tc\n", Render(Run($"Invoke-BashPaste {Q(u1)} {Q(u2)}")));
+        Assert.Equal("\t\ta\nb\n\tc\n", Render(Run($"Invoke-BashComm {Q(u1)} {Q(u2)}")));
+        Assert.Equal("c\n", Render(Run($"Invoke-BashComm '-13' {Q(u1)} {Q(u2)}")));
+        Assert.Equal("a 1 x\nb 2 y\n", Render(Run($"Invoke-BashJoin {Q(j1)} {Q(j2)}")));
+    }
+
+    [Fact]
+    public void Group1_Split_PartFilesMatchGnu()
+    {
+        var prefix = Path.Combine(_dir, "spl_");
+        Run($"Invoke-BashPrintf 'a b\\nc d' | Invoke-BashSplit '-l1' - {Q(prefix)}");
+        Assert.Equal("a b\n", File.ReadAllText(prefix + "aa"));
+        Assert.Equal("c d", File.ReadAllText(prefix + "ab"));
+    }
+
+    // ---- group 2: column / xargs / jq / yq / diff, GNU oracle ----------------------------
+
+    [Theory]
+    [InlineData("Invoke-BashPrintf 'b\\na' | Invoke-BashColumn '-t'", "b\na\n")]
+    [InlineData("Invoke-BashPrintf 'b\\na' | Invoke-BashXargs", "b a\n")]
+    [InlineData("Invoke-BashPrintf 'b\\na' | Invoke-BashXargs echo", "b a\n")]
+    [InlineData("Invoke-BashPrintf 'b\\na' | Invoke-BashXargs '-n1' echo", "b\na\n")]
+    [InlineData("Invoke-BashPrintf 'b\\na' | Invoke-BashXargs '-I{}' echo '{}'", "b\na\n")]
+    [InlineData("Invoke-BashPrintf '{\"a\":1}' | Invoke-BashJq '.'", "{\n  \"a\": 1\n}\n")]
+    [InlineData("Invoke-BashPrintf '{\"a\":1}' | Invoke-BashJq '-r' '.a'", "1\n")]
+    [InlineData("Invoke-BashPrintf '{\"a\":\"x\"}' | Invoke-BashJq '-j' '.a'", "x")]
+    [InlineData("Invoke-BashPrintf 'b\\na' | Invoke-BashJq '-R' '.'", "\"b\"\n\"a\"\n")]
+    [InlineData("Invoke-BashPrintf 'b\\na' | Invoke-BashJq '-Rr' '.'", "b\na\n")]
+    public void Group2_StdinRendersGnuBytes(string script, string expected)
+    {
+        Assert.Equal(expected, Render(Run(script)));
+    }
+
+    [Fact]
+    public void Group2_Diff_NoNewlineAtEndOfFile_MatchesGnu()
+    {
+        var u1 = Path.Combine(_dir, "d1"); var u2 = Path.Combine(_dir, "d2");
+        File.WriteAllText(u1, "a\nb"); File.WriteAllText(u2, "a\nc");
+        Assert.Equal(
+            "2c2\n< b\n\\ No newline at end of file\n---\n> c\n\\ No newline at end of file\n",
+            Render(Run($"Invoke-BashDiff {Q(u1)} {Q(u2)}")));
+    }
+
+    [Fact]
+    public void Group2_DiffUnified_NoNewlineAtEndOfFile_MatchesGnu()
+    {
+        var u1 = Path.Combine(_dir, "e1"); var u2 = Path.Combine(_dir, "e2");
+        File.WriteAllText(u1, "a\nb"); File.WriteAllText(u2, "a\nc");
+        // GNU `diff -u a b | tail -n +3` (the two header lines carry timestamps).
+        var body = string.Concat(Render(Run($"Invoke-BashDiff '-u' {Q(u1)} {Q(u2)}"))
+            .Split('\n').Skip(2).Select(l => l + "\n")).TrimEnd('\n') + "\n";
+        Assert.Equal(
+            "@@ -1,2 +1,2 @@\n a\n-b\n\\ No newline at end of file\n+c\n\\ No newline at end of file\n", body);
+    }
+
+    [Fact]
+    public void Group2_Diff_SameTextTerminatedVsNot_Differs()
+    {
+        // GNU: `printf 'a\nb' > x; printf 'a\nb\n' > y; diff x y` reports 2c2 (exit 1).
+        var u1 = Path.Combine(_dir, "f1"); var u2 = Path.Combine(_dir, "f2");
+        File.WriteAllText(u1, "a\nb"); File.WriteAllText(u2, "a\nb\n");
+        Assert.Equal(
+            "2c2\n< b\n\\ No newline at end of file\n---\n> b\n",
+            Render(Run($"Invoke-BashDiff {Q(u1)} {Q(u2)}")));
+    }
+
+    // ---- group 3: leftovers (tail -c FILE, uniq -D, fused cat FILE) -----------------------
+
+    [Theory]
+    // GNU: printf 'a\nc' > f; tail -c 1 f -> "c"; tail -c 3 f -> "a\nc"; printf 'a\nc\n': tail -c 2 -> "c\n"
+    [InlineData("a\nc", "'-c1'", "c")]
+    [InlineData("a\nc", "'-c3'", "a\nc")]
+    [InlineData("a\nc\n", "'-c2'", "c\n")]
+    [InlineData("a\nc\n", "'-c3'", "\nc\n")]
+    [InlineData("a\nb\n", "'-c+3'", "b\n")]
+    public void Group3_TailBytesFile_RendersExactSlice(string content, string arg, string expected)
+    {
+        var f = Path.Combine(_dir, "tailc-" + Guid.NewGuid().ToString("N")[..6]);
+        File.WriteAllText(f, content);
+        Assert.Equal(expected, Render(Run($"Invoke-BashTail {arg} {Q(f)}")));
+    }
+
+    [Theory]
+    // GNU: printf 'b\nb\na' | uniq -D -> "b\nb\n"; printf 'b\na\na' | uniq -D -> "a\na\n"
+    [InlineData("Invoke-BashPrintf 'b\\nb\\na' | Invoke-BashUniq '-D'", "b\nb\n")]
+    [InlineData("Invoke-BashPrintf 'b\\na\\na' | Invoke-BashUniq '-D'", "a\na\n")]
+    public void Group3_UniqAllRepeated_RendersGnuBytes(string script, string expected)
+    {
+        Assert.Equal(expected, Render(Run(script)));
+    }
+
+    [Fact]
+    public void Group3_UniqAllRepeated_IsAFilter_KeepsTheUpstreamObject()
+    {
+        var records = Run($"Invoke-BashLs {Q(_dir)} | ForEach-Object {{ $_; $_ }} | Invoke-BashUniq '-D'");
+        Assert.NotEmpty(records);
+        Assert.All(records, r => Assert.Contains("PsBash.LsEntry", r.TypeNames));
+    }
+
+    [Fact]
+    public void Group3_CatFiles_ConcatenateRawBytes_NoSeparatorInserted()
+    {
+        // GNU: printf 'a\nb' > u1; printf 'a\nc' > u2; cat u1 u2 -> "a\nba\nc"
+        var u1 = Path.Combine(_dir, "g3u1"); var u2 = Path.Combine(_dir, "g3u2");
+        File.WriteAllText(u1, "a\nb"); File.WriteAllText(u2, "a\nc");
+        Assert.Equal("a\nba\nc", Render(Run($"Invoke-BashCat {Q(u1)} {Q(u2)}")));
+    }
+
+    [Fact]
+    public void Group3_FusedCatFile_WithoutFinalNewline_DeclinesToTheCmdletAndKeepsGnuBytes()
+    {
+        // GNU: printf 'a\nb' > u1; cat u1 | head -n5 -> "a\nb" (no added byte);
+        //      cat u1 | head -n1 -> "a\n". The fused lane cannot express "no terminator", so
+        //      CatFileStage declines and the real cmdlets run (fallback).
+        var u1 = Path.Combine(_dir, "g3f1");
+        File.WriteAllText(u1, "a\nb");
+        string Fused(string head) =>
+            $"Invoke-BashFusedPipeline -Stages @(@('cat',{Q(u1)}),@('head','{head}')) " +
+            $"-Fallback {{ Invoke-BashCat {Q(u1)} | Invoke-BashHead '{head}' }}";
+        // The fused cmdlet renders record boundaries as Environment.NewLine (what the host
+        // does); normalize so the assertion is about the bytes, not the platform newline.
+        Assert.Equal("a\nb", Render(Run(Fused("-n5"))).Replace("\r\n", "\n"));
+        Assert.Equal("a\n", Render(Run(Fused("-n1"))).Replace("\r\n", "\n"));
+    }
+
+    [Fact]
+    public void Group2_Yq_MatchesJqTerminators()
+    {
+        Assert.Equal("1\n", Render(Run("Invoke-BashPrintf 'a:\\n  b: 1\\n' | Invoke-BashYq '.a.b'")));
+        Assert.Equal("1\n", Render(Run("Invoke-BashPrintf 'a:\\n  b: 1' | Invoke-BashYq '.a.b'")));
+    }
+
+    [Fact]
+    public void Group2_Transformers_EmitTextNotLsEntry()
+    {
+        foreach (var cmd in new[] { "Invoke-BashColumn '-t'", "Invoke-BashXargs echo", "Invoke-BashJq '-R' '.'" })
+        {
+            var records = Run(LsIn(cmd));
+            Assert.NotEmpty(records);
+            Assert.All(records, r => Assert.DoesNotContain("PsBash.LsEntry", r.TypeNames));
+        }
+    }
+
+    [Fact]
+    public void Group1_Transformers_EmitTextNotLsEntry()
+    {
+        foreach (var cmd in new[] { "Invoke-BashFold '-w3'", "Invoke-BashExpand", "Invoke-BashUnexpand",
+                                    "Invoke-BashPaste -", "Invoke-BashStrings '-n1'" })
+        {
+            var records = Run(LsIn(cmd));
+            Assert.NotEmpty(records);
+            Assert.All(records, r => Assert.DoesNotContain("PsBash.LsEntry", r.TypeNames));
+        }
+    }
 }

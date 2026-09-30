@@ -163,19 +163,9 @@ public sealed class InvokeBashExpandCommand : PSCmdlet
 
         // Pipeline mode: expand each stdin sub-line as it arrives instead of
         // buffering the whole pipe.
-        string text = BashRuntime.GetBashText(InputObject);
-        string trimmed = text.TrimEnd('\n');
-        if (trimmed.Contains('\n'))
-        {
-            foreach (var subLine in trimmed.Split('\n'))
-            {
-                WriteObject(BashRuntime.NewBashObject(ExpandTabs(subLine, _tabs, _initialOnly)));
-            }
-        }
-        else
-        {
-            WriteObject(BashRuntime.NewBashObject(ExpandTabs(trimmed, _tabs, _initialOnly)));
-        }
+        // TRANSFORMER: fresh text; the missing final newline is copied through (GNU).
+        foreach (var (subLine, unterminated) in BashRuntime.RecordLines(InputObject))
+            WriteObject(BashRuntime.TextRecord(ExpandTabs(subLine, _tabs, _initialOnly), unterminated));
     }
 
     protected override void EndProcessing()
@@ -218,9 +208,10 @@ public sealed class InvokeBashExpandCommand : PSCmdlet
             {
                 try
                 {
-                    foreach (var line in BashFileSystem.ReadLines(filePath))
+                    foreach (var line in BashFileSystem.ReadTextLines(filePath))
                     {
-                        WriteObject(BashRuntime.NewBashObject(ExpandTabs(line, _tabs, _initialOnly)));
+                        WriteObject(BashRuntime.TextRecord(
+                            ExpandTabs(line.Text, _tabs, _initialOnly), !line.HasTrailingNewline));
                     }
                 }
                 catch (Exception ex)

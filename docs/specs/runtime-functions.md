@@ -149,8 +149,8 @@ about identity, not about "text vs objects":
 
 | Kind | Definition | Emits | Commands |
 |---|---|---|---|
-| **Filter** | every output line IS one of its input lines (selected, reordered, deduplicated, passed as-is) | the **original upstream object** | `grep` (plain match), `rg` (plain), `head`/`tail` (`-n`), `sort`, `uniq` (plain, `-d`, `-u`), `tac`, `shuf`, `cat` (no flags), `tee`, `less`, `more` |
-| **Transformer** | the line's text changes | a **fresh text record** (`BashRuntime.TextRecord`: a bare string, or a `NoTrailingNewline` object), never the upstream object, whose type no longer describes the text | `sed`, `tr`, `cut`, `awk`, `rev`, `nl`, `grep -o/-n/-H/context`, `uniq -c`, `cat -n/-b/-E/-T`, `head -c`/`tail -c` |
+| **Filter** | every output line IS one of its input lines (selected, reordered, deduplicated, passed as-is) | the **original upstream object** | `grep` (plain match), `rg` (plain), `head`/`tail` (`-n`), `sort`, `uniq` (plain, `-d`, `-u`, `-D` — each run member is emitted as its own original object), `tac`, `shuf`, `cat` (no flags), `tee`, `less`, `more` |
+| **Transformer** | the line's text changes | a **fresh text record** (`BashRuntime.TextRecord`: a bare string, or a `NoTrailingNewline` object), never the upstream object, whose type no longer describes the text | `sed`, `tr`, `cut`, `awk`, `rev`, `nl`, `fold`, `expand`, `unexpand`, `paste`, `join`, `comm`, `strings`, `base64`, `grep -o/-n/-H/context`, `uniq -c`, `cat -n/-b/-E/-T`, `head -c`/`tail -c` |
 
 `ls | grep .txt` therefore still yields `PsBash.LsEntry`; `ls | cut -c1-3` yields plain text. A
 mode of a filter command that rewrites the line (`grep -n`, `cat -n`, `uniq -c`) is a
@@ -172,8 +172,27 @@ line. GNU tools differ on the missing final newline (oracle: `printf 'b\na' | cm
 
 | Copy it through (`b\na`) | Always terminate the last line |
 |---|---|
-| head, tail, cat, tee, rev, tr, sed, less, more, `head -c`, `tail -c` (exact slice) | grep, sort, uniq, shuf, cut, nl, awk, `uniq -c` |
-| `tac` glues: `ab\n` (the unterminated record is emitted first, keeping its flag) | |
+| head, tail, cat, tee, rev, tr, sed, less, more, `head -c`, `tail -c` (exact slice), `fold`, `expand`, `unexpand` | grep, sort, uniq, shuf, cut, nl, awk, `uniq -c`, `strings`, `paste`, `join`, `comm`, `column` |
+| `tac` glues: `ab\n` (the unterminated record is emitted first, keeping its flag) | `base64`: bytes in = bytes out (`printf 'b\na' \| base64` is `Ygph`, not `YgphCg==`); `-w0` writes no final newline; `-d` writes the decoded bytes exactly |
+| `split` writes no stdout; its LAST piece file copies the input's missing final newline (`printf 'a b\nc d' \| split -l1` leaves `xab` = `c d`) | |
+
+Group 2 audit (oracle-checked): `column -t`, `xargs` (its own stdout; the child's objects pass through
+unchanged, exactly as the child emitted them), `xan`, `yq` already terminate like GNU/jq and emit fresh
+text. `jq` is a transformer: fresh text; new `-j`/`--join-output` (no newline after each result, exact
+bytes), `-R`/`--raw-input` (each line a string; `-Rs` = the exact bytes as one string) and bundled
+short flags (`-Rr`). `diff` tracks the unterminated last line of each file: it compares unequal to the
+same text with a newline and is followed by GNU's `\ No newline at end of file` line (normal, `-u`, `-c`).
+
+Group 3: `tail -c N FILE` now uses `ByteSliceRecords` like the pipeline form and `head -c FILE` (it
+used to terminate every line: `printf 'a\nc' > f; tail -c 1 f` printed `c\n`, GNU `c`). `uniq -D` used
+to print the run's FIRST line N times as fresh text; it now emits every member's original object
+(differs with `-f/-s/-w`). Fused `cat FILE` needed no change: `CatFileStage` declines a file without a
+final newline, so the real cmdlets run and the bytes match GNU (`cat u1 u2` concatenates raw bytes,
+`cat u1 | head -n5` adds no byte); pinned by `Group3_FusedCatFile_*`.
+
+`BashRuntime.RecordLines(item)` is the one record splitter for transformers (each line + whether
+it is the unterminated last line); file readers use `BashFileSystem.ReadTextLines`
+(`HasTrailingNewline`) for the same flag.
 
 Helpers (all in `BashRuntime`, never re-derive): `IsUnterminated`, `TextRecord(text,
 unterminated)` (fresh text; the last piece of a split record inherits the flag),

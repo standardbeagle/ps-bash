@@ -3190,14 +3190,24 @@ Describe 'Invoke-BashDiff — Normal Format' {
     BeforeAll {
         $testDir = Join-Path ([System.IO.Path]::GetTempPath()) "psbash-diff-$([guid]::NewGuid().ToString('N').Substring(0,8))"
         New-Item -ItemType Directory -Path $testDir -Force | Out-Null
-        Set-Content -Path (Join-Path $testDir 'file1.txt') -Value "alpha`nbeta`ngamma" -NoNewline
-        Set-Content -Path (Join-Path $testDir 'file2.txt') -Value "alpha`nBETA`ngamma" -NoNewline
-        Set-Content -Path (Join-Path $testDir 'identical.txt') -Value "alpha`nbeta`ngamma" -NoNewline
-        Set-Content -Path (Join-Path $testDir 'added.txt') -Value "alpha`nbeta`ngamma`ndelta" -NoNewline
-        Set-Content -Path (Join-Path $testDir 'deleted.txt') -Value "alpha`ngamma" -NoNewline
+        # Files END in a newline (Set-Content default): GNU diff treats a last line WITHOUT one as
+        # different from the same text with one (`\ No newline at end of file`), so the
+        # add/delete cases below are only pure additions/deletions when both sides terminate.
+        Set-Content -Path (Join-Path $testDir 'file1.txt') -Value "alpha`nbeta`ngamma"
+        Set-Content -Path (Join-Path $testDir 'file2.txt') -Value "alpha`nBETA`ngamma"
+        Set-Content -Path (Join-Path $testDir 'identical.txt') -Value "alpha`nbeta`ngamma"
+        Set-Content -Path (Join-Path $testDir 'added.txt') -Value "alpha`nbeta`ngamma`ndelta"
+        Set-Content -Path (Join-Path $testDir 'deleted.txt') -Value "alpha`ngamma"
+        Set-Content -Path (Join-Path $testDir 'nonl.txt') -Value "alpha`nbeta`ngamma" -NoNewline
     }
     AfterAll {
         Remove-Item -Recurse -Force $testDir -ErrorAction SilentlyContinue
+    }
+
+    It 'reports a missing final newline like GNU diff' {
+        $results = @(Invoke-BashDiff (Join-Path $testDir 'file1.txt') (Join-Path $testDir 'nonl.txt'))
+        ($results | ForEach-Object { $_.BashText }) | Should -Be @(
+            '3c3', '< gamma', '---', '> gamma', '\ No newline at end of file')
     }
 
     It 'shows normal diff output for changed line' {

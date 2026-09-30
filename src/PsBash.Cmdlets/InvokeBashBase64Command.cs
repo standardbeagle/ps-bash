@@ -230,7 +230,7 @@ public sealed class InvokeBashBase64Command : PSCmdlet
                     WriteReadError(filePath, ex, normalizeNotFound: true);
                     return;
                 }
-                WriteObject(BashRuntime.NewBashObject(output));
+                WriteDecoded(output);
                 return;
             }
             else
@@ -246,7 +246,7 @@ public sealed class InvokeBashBase64Command : PSCmdlet
                     WriteReadError(filePath, ex, normalizeNotFound: false);
                     return;
                 }
-                WriteObject(BashRuntime.NewBashObject(output));
+                WriteEncoded(output, wrapCol);
                 return;
             }
         }
@@ -257,17 +257,9 @@ public sealed class InvokeBashBase64Command : PSCmdlet
             return;
         }
 
-        string pipelineText;
-        {
-            var sb = new StringBuilder();
-            for (int p = 0; p < _pipeline.Count; p++)
-            {
-                if (p > 0) sb.Append('\n');
-                sb.Append(BashRuntime.GetBashText(_pipeline[p]));
-            }
-            pipelineText = sb.ToString();
-            if (!pipelineText.EndsWith("\n", StringComparison.Ordinal)) pipelineText += "\n";
-        }
+        // The exact byte stream the upstream wrote (base64 is byte-oriented): a missing final
+        // newline stays missing, so `printf 'b\na' | base64` is `Ygph`, not `YgphCg==`.
+        string pipelineText = BashRuntime.RecordStreamText(_pipeline.Cast<object>());
 
         if (decode)
         {
@@ -281,13 +273,28 @@ public sealed class InvokeBashBase64Command : PSCmdlet
                 FileSystemHelpers.WriteBashError(this, $"base64: invalid input: {ex.Message}");
                 return;
             }
-            WriteObject(BashRuntime.NewBashObject(output));
+            WriteDecoded(output);
         }
         else
         {
             string output = EncodeBytesToBase64String(Encoding.UTF8.GetBytes(pipelineText), wrapCol);
-            WriteObject(BashRuntime.NewBashObject(output));
+            WriteEncoded(output, wrapCol);
         }
+    }
+
+    // base64 is a TRANSFORMER: one fresh text record carrying exactly GNU's bytes.
+    // Decoded bytes are written as-is (no newline added); encoded text gets GNU's final
+    // newline only when wrapping (`-w 0` writes none).
+    private void WriteDecoded(string output)
+    {
+        if (output.Length == 0) return;
+        WriteObject(BashRuntime.TextRecord(output, unterminated: !output.EndsWith('\n')));
+    }
+
+    private void WriteEncoded(string output, int wrapCol)
+    {
+        if (output.Length == 0) return;
+        WriteObject(BashRuntime.TextRecord(output, unterminated: wrapCol <= 0));
     }
 
     private static string EncodeFileToBase64String(string path, int wrapCol)

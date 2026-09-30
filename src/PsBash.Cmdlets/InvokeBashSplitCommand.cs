@@ -269,7 +269,7 @@ public sealed class InvokeBashSplitCommand : PSCmdlet
             }
             else
             {
-                lines = BashFileSystem.ReadLines(filePath);
+                lines = ReadLinesTrackingTerminator(filePath);
                 fileReadPath = filePath;
             }
             if (operands.Count >= 2)
@@ -301,6 +301,37 @@ public sealed class InvokeBashSplitCommand : PSCmdlet
         }
 
         WritePieces(lines, cwd, prefix, lineCount.Value, suffixLength, numericSuffix, fileReadPath, additionalSuffix);
+        TrimLastPieceTerminator();
+    }
+
+    // split copies its input byte-for-byte into the pieces, so an input whose last line has
+    // no newline leaves its LAST piece without one (GNU: `printf 'a\nb' | split -l1` -> "b").
+    // Every piece is written terminated; this undoes that for the final one.
+    private bool _inputUnterminated;
+    private string? _lastPiecePath;
+
+    private IEnumerable<string> ReadLinesTrackingTerminator(string path)
+    {
+        foreach (var line in BashFileSystem.ReadTextLines(path))
+        {
+            _inputUnterminated = !line.HasTrailingNewline;
+            yield return line.Text;
+        }
+    }
+
+    private void TrimLastPieceTerminator()
+    {
+        if (!_inputUnterminated || _lastPiecePath is null) return;
+        try
+        {
+            using var fs = new FileStream(_lastPiecePath, FileMode.Open, FileAccess.ReadWrite);
+            if (fs.Length > 0) fs.SetLength(fs.Length - 1);
+        }
+        catch (Exception ex)
+        {
+            if (FileSystemHelpers.IsPipelineStop(ex)) throw;
+            FileSystemHelpers.WriteBashError(this, $"split: {_lastPiecePath.Replace('\\', '/')}: {ex.Message}");
+        }
     }
 
     private void WriteByteePieces(
@@ -310,7 +341,8 @@ public sealed class InvokeBashSplitCommand : PSCmdlet
         byte[] bytes;
         try
         {
-            var content = string.Join("\n", lines) + "\n";
+            var content = string.Join("\n", lines);
+            if (!_inputUnterminated) content += "\n";
             bytes = System.Text.Encoding.UTF8.GetBytes(content);
         }
         catch (Exception ex)
@@ -410,6 +442,7 @@ public sealed class InvokeBashSplitCommand : PSCmdlet
         try
         {
             File.WriteAllText(outPath, content);
+            _lastPiecePath = outPath;
             return true;
         }
         catch (Exception ex)
@@ -447,18 +480,10 @@ public sealed class InvokeBashSplitCommand : PSCmdlet
     {
         foreach (var item in _pipeline)
         {
-            string text = BashRuntime.GetBashText(item);
-            string trimmed = text.TrimEnd('\n');
-            if (trimmed.Contains('\n'))
+            foreach (var (text, unterminated) in BashRuntime.RecordLines(item))
             {
-                foreach (var subLine in trimmed.Split('\n'))
-                {
-                    lines.Add(subLine);
-                }
-            }
-            else
-            {
-                lines.Add(trimmed);
+                lines.Add(text);
+                _inputUnterminated = unterminated;
             }
         }
     }

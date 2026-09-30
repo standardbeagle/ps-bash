@@ -308,6 +308,9 @@ public sealed class InvokeBashUniqCommand : PSCmdlet
     private object? _prevObject;   // the upstream record of _prevLine (single-line pipeline items only)
     private string? _prevKey;
     private int _runCount;
+    // -D only: every line of the current run with its upstream record (null for a split
+    // multi-line record or a file line), so the run is emitted as the input lines themselves.
+    private readonly List<(string Line, object? Obj)> _runMembers = new();
     private bool _hadError;
 
     private void ParseOnce()
@@ -355,9 +358,13 @@ public sealed class InvokeBashUniqCommand : PSCmdlet
             if (_allRepeatedMethod == "prepend" || (_allRepeatedMethod == "separate" && _groupsEmitted > 0))
                 WriteObject(BashRuntime.NewBashObject(string.Empty));
             _groupsEmitted++;
-            for (int k = 0; k < _runCount; k++)
+            // -D is a FILTER too: every member of the run is one of the input lines (with
+            // -f/-s/-w they may differ textually), so emit each member's ORIGINAL object.
+            foreach (var (memberLine, memberObj) in _runMembers)
             {
-                WriteObject(BashRuntime.NewBashObject(_prevLine));
+                WriteObject(memberObj != null
+                    ? BashRuntime.PassTerminated(memberObj)
+                    : BashRuntime.NewBashObject(memberLine));
             }
             return;
         }
@@ -401,6 +408,7 @@ public sealed class InvokeBashUniqCommand : PSCmdlet
         if (same)
         {
             _runCount++;
+            if (_allRepeated) _runMembers.Add((line, original));
             return;
         }
 
@@ -409,6 +417,11 @@ public sealed class InvokeBashUniqCommand : PSCmdlet
         _prevObject = original;
         _prevKey = key;
         _runCount = 1;
+        if (_allRepeated)
+        {
+            _runMembers.Clear();
+            _runMembers.Add((line, original));
+        }
     }
 
     protected override void ProcessRecord()

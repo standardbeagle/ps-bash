@@ -128,21 +128,33 @@ public sealed class InvokeBashDiffCommand : PSCmdlet
         string path1 = SessionState.Path.GetUnresolvedProviderPathFromPSPath(operands[0]);
         string path2 = SessionState.Path.GetUnresolvedProviderPathFromPSPath(operands[1]);
 
-        string[]? lines1 = ReadFileLines(path1);
+        string[]? lines1 = ReadFileLines(path1, out bool noNl1);
         if (lines1 == null) return;
-        string[]? lines2 = ReadFileLines(path2);
+        string[]? lines2 = ReadFileLines(path2, out bool noNl2);
         if (lines2 == null) return;
 
-        // Build comparison keys applying whitespace/case flags.
+        // Build comparison keys applying whitespace/case flags. An unterminated last line gets a
+        // marker so it never equals the same text with a newline (GNU).
+        const string NoNlMark = "\u0000<no-newline>";
         var cmp1 = new string[lines1.Length];
         for (int xi = 0; xi < lines1.Length; xi++)
         {
             cmp1[xi] = NormalizeKey(lines1[xi], ignoreAllSpace, ignoreSpaceChange, ignoreCase);
+            if (noNl1 && xi == lines1.Length - 1) cmp1[xi] += NoNlMark;
         }
         var cmp2 = new string[lines2.Length];
         for (int yi = 0; yi < lines2.Length; yi++)
         {
             cmp2[yi] = NormalizeKey(lines2[yi], ignoreAllSpace, ignoreSpaceChange, ignoreCase);
+            if (noNl2 && yi == lines2.Length - 1) cmp2[yi] += NoNlMark;
+        }
+        bool Unterminated1(int line) => noNl1 && line == lines1.Length - 1;
+        bool Unterminated2(int line) => noNl2 && line == lines2.Length - 1;
+        // One diff output line, plus GNU's marker when that source line had no newline.
+        void Emit(string text, bool unterminated)
+        {
+            WriteObject(BashRuntime.NewBashObject(text));
+            if (unterminated) WriteObject(BashRuntime.NewBashObject("\\ No newline at end of file"));
         }
 
         // Build filtered indices (skip blank lines if -B is set).
@@ -263,7 +275,7 @@ public sealed class InvokeBashDiffCommand : PSCmdlet
                 foreach (var group in hunkGroups)
                 {
                     int l1Start = -1, l1Count = 0, l2Start = -1, l2Count = 0;
-                    var hunkLines = new List<string>();
+                    var hunkLines = new List<(string Text, bool Unterminated)>();
                     foreach (var e in group)
                     {
                         switch (e.Op)
@@ -272,24 +284,24 @@ public sealed class InvokeBashDiffCommand : PSCmdlet
                                 if (l1Start == -1) l1Start = e.Line1 + 1;
                                 if (l2Start == -1) l2Start = e.Line2 + 1;
                                 l1Count++; l2Count++;
-                                hunkLines.Add(" " + lines1[e.Line1]);
+                                hunkLines.Add((" " + lines1[e.Line1], Unterminated1(e.Line1)));
                                 break;
                             case '-':
                                 if (l1Start == -1) l1Start = e.Line1 + 1;
                                 if (l2Start == -1) l2Start = e.Line1 + 1;
                                 l1Count++;
-                                hunkLines.Add("-" + lines1[e.Line1]);
+                                hunkLines.Add(("-" + lines1[e.Line1], Unterminated1(e.Line1)));
                                 break;
                             case '+':
                                 if (l1Start == -1) l1Start = e.Line2 + 1;
                                 if (l2Start == -1) l2Start = e.Line2 + 1;
                                 l2Count++;
-                                hunkLines.Add("+" + lines2[e.Line2]);
+                                hunkLines.Add(("+" + lines2[e.Line2], Unterminated2(e.Line2)));
                                 break;
                         }
                     }
                     WriteObject(BashRuntime.NewBashObject($"@@ -{l1Start},{l1Count} +{l2Start},{l2Count} @@"));
-                    foreach (var hl in hunkLines) WriteObject(BashRuntime.NewBashObject(hl));
+                    foreach (var (text, unterminated) in hunkLines) Emit(text, unterminated);
                 }
             }
             else // context
@@ -333,12 +345,10 @@ public sealed class InvokeBashDiffCommand : PSCmdlet
                     {
                         switch (e.Op)
                         {
-                            case '=': WriteObject(BashRuntime.NewBashObject("  " + lines1[e.Line1])); break;
+                            case '=': Emit("  " + lines1[e.Line1], Unterminated1(e.Line1)); break;
                             case '-':
-                                if (changeLine1.Contains(e.Line1))
-                                    WriteObject(BashRuntime.NewBashObject("! " + lines1[e.Line1]));
-                                else
-                                    WriteObject(BashRuntime.NewBashObject("- " + lines1[e.Line1]));
+                                Emit((changeLine1.Contains(e.Line1) ? "! " : "- ") + lines1[e.Line1],
+                                    Unterminated1(e.Line1));
                                 break;
                         }
                     }
@@ -355,12 +365,10 @@ public sealed class InvokeBashDiffCommand : PSCmdlet
                     {
                         switch (e.Op)
                         {
-                            case '=': WriteObject(BashRuntime.NewBashObject("  " + lines2[e.Line2])); break;
+                            case '=': Emit("  " + lines2[e.Line2], Unterminated2(e.Line2)); break;
                             case '+':
-                                if (changeLine2.Contains(e.Line2))
-                                    WriteObject(BashRuntime.NewBashObject("! " + lines2[e.Line2]));
-                                else
-                                    WriteObject(BashRuntime.NewBashObject("+ " + lines2[e.Line2]));
+                                Emit((changeLine2.Contains(e.Line2) ? "! " : "+ ") + lines2[e.Line2],
+                                    Unterminated2(e.Line2));
                                 break;
                         }
                     }
@@ -376,8 +384,8 @@ public sealed class InvokeBashDiffCommand : PSCmdlet
                 if (edits[ei].Op == '=') { ei++; continue; }
 
                 int delStart = -1, delEnd = -1, addStart = -1, addEnd = -1;
-                var delLines = new List<string>();
-                var addLines = new List<string>();
+                var delLines = new List<(string Text, bool Unterminated)>();
+                var addLines = new List<(string Text, bool Unterminated)>();
 
                 while (ei < edits.Count && edits[ei].Op != '=')
                 {
@@ -386,13 +394,13 @@ public sealed class InvokeBashDiffCommand : PSCmdlet
                     {
                         if (delStart == -1) delStart = e.Line1 + 1;
                         delEnd = e.Line1 + 1;
-                        delLines.Add(lines1[e.Line1]);
+                        delLines.Add((lines1[e.Line1], Unterminated1(e.Line1)));
                     }
                     else if (e.Op == '+')
                     {
                         if (addStart == -1) addStart = e.Line2 + 1;
                         addEnd = e.Line2 + 1;
-                        addLines.Add(lines2[e.Line2]);
+                        addLines.Add((lines2[e.Line2], Unterminated2(e.Line2)));
                     }
                     ei++;
                 }
@@ -403,21 +411,21 @@ public sealed class InvokeBashDiffCommand : PSCmdlet
                 if (delLines.Count > 0 && addLines.Count > 0)
                 {
                     WriteObject(BashRuntime.NewBashObject($"{delRange}c{addRange}"));
-                    foreach (var dl in delLines) WriteObject(BashRuntime.NewBashObject("< " + dl));
+                    foreach (var dl in delLines) Emit("< " + dl.Text, dl.Unterminated);
                     WriteObject(BashRuntime.NewBashObject("---"));
-                    foreach (var al in addLines) WriteObject(BashRuntime.NewBashObject("> " + al));
+                    foreach (var al in addLines) Emit("> " + al.Text, al.Unterminated);
                 }
                 else if (delLines.Count > 0)
                 {
                     int addPos = addStart == -1 ? (delStart > 1 ? delStart - 1 : 0) : addStart;
                     WriteObject(BashRuntime.NewBashObject($"{delRange}d{addPos}"));
-                    foreach (var dl in delLines) WriteObject(BashRuntime.NewBashObject("< " + dl));
+                    foreach (var dl in delLines) Emit("< " + dl.Text, dl.Unterminated);
                 }
                 else if (addLines.Count > 0)
                 {
                     int delPos = delStart == -1 ? (addStart > 1 ? addStart - 1 : 0) : delStart;
                     WriteObject(BashRuntime.NewBashObject($"{delPos}a{addRange}"));
-                    foreach (var al in addLines) WriteObject(BashRuntime.NewBashObject("> " + al));
+                    foreach (var al in addLines) Emit("> " + al.Text, al.Unterminated);
                 }
             }
         }
@@ -440,11 +448,21 @@ public sealed class InvokeBashDiffCommand : PSCmdlet
         return key;
     }
 
-    private string[]? ReadFileLines(string path)
+    // GNU diff treats a last line WITHOUT a newline as different from the same text WITH one, and
+    // prints `\ No newline at end of file` after it. Returns the lines and whether the last one
+    // was unterminated.
+    private string[]? ReadFileLines(string path, out bool lastUnterminated)
     {
+        lastUnterminated = false;
         try
         {
-            return BashFileSystem.ReadLines(path).ToArray();
+            var lines = new List<string>();
+            foreach (var l in BashFileSystem.ReadTextLines(path))
+            {
+                lines.Add(l.Text);
+                lastUnterminated = !l.HasTrailingNewline;
+            }
+            return lines.ToArray();
         }
         catch (Exception ex)
         {
