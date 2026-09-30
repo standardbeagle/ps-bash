@@ -38,7 +38,7 @@ A string-only helper lets a FAILING command pass any test that just checks the f
 Use `FsStateOracle.EqualAsync(setup, command)` (`Differential.Tests/Oracle/FsStateOracle.cs`, cases in
 `FsStateDifferentialTests`): same fixture tree, real bash vs ps-bash, compares stdout + exit + resulting tree
 (paths, file/dir, exact bytes). Snapshot is stdout → cassette → replays without WSL. Record: `PSBASH_ORACLE_RECORD=1`.
-Fixture files end in one `\n` (ps-bash `> f` redirect adds one to `printf x > f`; known bug).
+Fixture files end in one `\n` (`Tree` writes them with `printf '%s\n'`).
 
 ## BUG FIX = REGRESSION TEST (mandatory)
 Repro test (fails pre-fix) → fix → passes → add at the right layer (PsEmitterTests for transpile, psm1 for runtime).

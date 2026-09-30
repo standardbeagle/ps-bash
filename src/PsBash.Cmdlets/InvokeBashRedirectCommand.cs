@@ -27,21 +27,21 @@ public sealed class InvokeBashRedirectCommand : PSCmdlet
     [Parameter(ValueFromPipeline = true)]
     public PSObject? InputObject { get; set; }
 
-    private readonly List<string> _lines = new();
+    private readonly System.Text.StringBuilder _content = new();
 
     protected override void ProcessRecord()
     {
         if (InputObject is null) return;
-        _lines.Add(BashRuntime.GetBashText(InputObject).TrimEnd('\n'));
+        // Same per-record rule as tee: record boundary "\n" unless the record is marked
+        // NoTrailingNewline (printf x / echo -n x), so `printf x > f` writes exactly "x".
+        _content.Append(BashRuntime.RecordFilePayload(InputObject));
     }
 
     protected override void EndProcessing()
     {
         if (Path is null) return;
 
-        var content = string.Join("\n", _lines);
-        if (_lines.Count > 0) content += "\n";
-
+        var content = _content.ToString();
         if (Append) File.AppendAllText(Path, content);
         else File.WriteAllText(Path, content);
     }
