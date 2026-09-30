@@ -16,7 +16,7 @@ namespace PsBash.Cmdlets;
 /// <list type="bullet">
 /// <item>Default: <c>Thu Jan  2 15:04:05 MST 2006</c>-style local datetime.</item>
 /// <item><c>-d STRING</c> / <c>--date STRING</c> / <c>--date=STRING</c> parses
-/// the date via <c>DateTimeOffset.Parse</c> (invariant culture).</item>
+/// the date with <see cref="GnuDateParser"/> (the GNU <c>parse_datetime</c> grammar).</item>
 /// <item><c>-u</c> / <c>--utc</c> / <c>--universal</c> emits in UTC.</item>
 /// <item><c>-r FILE</c> / <c>--reference FILE</c> / <c>--reference=FILE</c>
 /// uses the file's <c>LastWriteTime</c>.</item>
@@ -157,24 +157,12 @@ public sealed class InvokeBashDateCommand : PSCmdlet
         }
         else if (dateString != null)
         {
-            // -d @EPOCH: interpret the value as Unix seconds.
-            if (dateString.StartsWith("@", StringComparison.Ordinal)
-                && long.TryParse(dateString.Substring(1), out var epochIn))
+            // GNU parse_datetime grammar (relative items, weekdays, @epoch, zones ...).
+            // The result is shown in the LOCAL zone, like GNU, whatever zone the text named.
+            if (!GnuDateParser.TryParse(dateString, DateTimeOffset.Now, TimeZoneInfo.Local, out dto))
             {
-                dto = DateTimeOffset.FromUnixTimeSeconds(epochIn).ToLocalTime();
-            }
-            else
-            {
-                try
-                {
-                    dto = DateTimeOffset.Parse(dateString,
-                        CultureInfo.InvariantCulture);
-                }
-                catch
-                {
-                    WriteBashError($"date: invalid date '{dateString}'");
-                    return;
-                }
+                WriteBashError($"date: invalid date '{dateString}'");
+                return;
             }
         }
         else
