@@ -1,0 +1,43 @@
+PSBASH-ORACLE-CASSETTE v1
+bash-version: 5.2.21(1)-release
+exit-code: 0
+script-length: 560
+stdout-length: 205
+stderr-length: 0
+==== SCRIPT ====
+__fs_snap() { find . | LC_ALL=C sort | while IFS= read -r p; do if [ -d "$p" ]; then echo "D $p"; else echo "F $p $(base64 -w0 "$p")"; fi; done; }
+d=$(mktemp -d) && cd "$d" && { :
+mkdir -p 'src/proj'
+printf '%s\n' 'n' > 'src/proj/new'
+mkdir -p 'dst/proj'
+printf '%s\n' 'old' > 'dst/proj/new'
+mkdir -p 'dst/proj'
+printf '%s\n' 'keep' > 'dst/proj/only'
+mkdir -p 'dst/proj/nested'
+printf '%s\n' 'keep-deep' > 'dst/proj/nested/deep'
+} >/dev/null 2>&1
+echo '== stdout'
+{ :
+cp -rf src/proj dst
+} 2>/dev/null
+echo "== exit $?"
+echo '== fs'
+__fs_snap
+cd /; rm -rf "$d"
+==== STDOUT ====
+== stdout
+== exit 0
+== fs
+D .
+D ./dst
+D ./dst/proj
+D ./dst/proj/nested
+F ./dst/proj/nested/deep a2VlcC1kZWVwCg==
+F ./dst/proj/new bgo=
+F ./dst/proj/only a2VlcAo=
+D ./src
+D ./src/proj
+F ./src/proj/new bgo=
+
+==== STDERR ====
+

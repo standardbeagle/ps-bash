@@ -131,6 +131,18 @@ public class InvokeBashBase64CommandTests : IClassFixture<SharedPwshFixture>, ID
     }
 
     [Fact]
+    public void Base64_JoinedWrapZero_DisablesLineBreaks()
+    {
+        // REGRESSION: `base64 -w0` (the joined form, the common idiom for one unwrapped line)
+        // died with "invalid option -- 'w'"; only the spaced `-w 0` worked. GNU accepts both.
+        var payload = new string('A', 200);
+        var r = CmdResult.Run(_fixture.AcquireFresh(), $"'{payload}' | Invoke-BashBase64 -w0").AssertSuccess();
+        Assert.Single(r.Lines);
+        Assert.DoesNotContain("\n", r.Lines[0]);
+        Assert.Equal(Convert.ToBase64String(Encoding.UTF8.GetBytes(payload + "\n")).Length, r.Lines[0].Length);
+    }
+
+    [Fact]
     public void Base64_WrapTen_NarrowWrap_EmbedsLineBreaks()
     {
         // Pipeline payload long enough to span multiple wrap-lines.

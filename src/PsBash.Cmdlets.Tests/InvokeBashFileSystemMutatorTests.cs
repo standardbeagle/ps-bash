@@ -4,7 +4,7 @@ namespace PsBash.Cmdlets.Tests;
 
 /// <summary>
 /// Behavioral-parity tests for the REFACTOR-2 migration of the file-system
-/// mutator family — mkdir / rmdir / cp / mv / rm — from PsBash.psm1 to binary
+/// mutator family ╬ô├ç├╢ mkdir / rmdir / cp / mv / rm ╬ô├ç├╢ from PsBash.psm1 to binary
 /// cmdlets sharing <c>FileSystemHelpers</c>.
 ///
 /// Oracle: GNU coreutils plus the psm1 oracle's added safety guards (rm's
@@ -37,13 +37,20 @@ public class InvokeBashFileSystemMutatorTests : IDisposable, IClassFixture<Share
         try { Directory.Delete(_tmpRoot, recursive: true); } catch { /* best-effort */ }
     }
 
-    private string[] Run(string script)
-    {
-        var pwsh = _fixture.AcquireFresh();
-        var result = pwsh.AddScript(script).Invoke();
-        pwsh.Commands.Clear();
-        return result.Select(o => o?.ToString() ?? "").ToArray();
-    }
+    // Structured runner: stdout + stderr + exit code + error records (see CmdResult). Prefer
+    // Ok()/Fail() so a failing command cannot pass a test that only inspects the filesystem.
+    private CmdResult RunResult(string script) => CmdResult.Run(_fixture.AcquireFresh(), script);
+
+    /// <summary>Runs a script that must succeed (exit 0, no error records); returns stdout lines.</summary>
+    private string[] Ok(string script) => RunResult(script).AssertSuccess().Lines.ToArray();
+
+    /// <summary>Runs a script that must fail with <paramref name="exit"/> (and the stderr fragments).</summary>
+    private CmdResult Fail(string script, int exit, params string[] stderrContains) =>
+        RunResult(script).AssertFailed(exit, stderrContains);
+
+    // Legacy non-asserting helper: returns only stdout lines and IGNORES the exit status, so it
+    // cannot detect a failing command. Kept so older call sites compile; new tests use Ok/Fail.
+    private string[] Run(string script) => RunResult(script).Lines.ToArray();
 
     private string Q(string path) => "'" + path.Replace("'", "''") + "'";
 
@@ -57,8 +64,7 @@ public class InvokeBashFileSystemMutatorTests : IDisposable, IClassFixture<Share
         // Bash sets $? on EVERY command; a successful cmdlet must not leak the prior command's exit
         // code. Regression for `nonexistent; pwd` reporting 127 (and the Bash-tool wrapper's trailing
         // pwd surfacing a stale 127).
-        var lines = Run($"$global:LASTEXITCODE = 127; {cmdlet} *> $null; $global:LASTEXITCODE");
-        Assert.Equal("0", lines[^1]);
+        Ok($"$global:LASTEXITCODE = 127; {cmdlet}");
     }
 
     [Theory]
@@ -72,17 +78,17 @@ public class InvokeBashFileSystemMutatorTests : IDisposable, IClassFixture<Share
     {
         // --version must identify ps-bash across commands so tooling can detect the runtime,
         // instead of refusing the flag or treating it as a file operand.
-        var lines = Run($"{cmdlet} --version");
+        var lines = Ok($"{cmdlet} --version");
         Assert.Contains(lines, l => l.StartsWith($"{name} (ps-bash) ", StringComparison.Ordinal));
     }
 
-    // ─────────────────────────── mkdir ───────────────────────────
+    // ╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç mkdir ╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç
 
     [Fact]
     public void Mkdir_CreatesDir()
     {
         var dir = Path.Combine(_tmpRoot, "newdir");
-        Run($"Invoke-BashMkdir {Q(dir)}");
+        Ok($"Invoke-BashMkdir {Q(dir)}");
         Assert.True(Directory.Exists(dir));
     }
 
@@ -91,9 +97,8 @@ public class InvokeBashFileSystemMutatorTests : IDisposable, IClassFixture<Share
     {
         var dir = Path.Combine(_tmpRoot, "exists");
         Directory.CreateDirectory(dir);
-        Run($"Invoke-BashMkdir {Q(dir)}");
-        // psm1 oracle sets $LASTEXITCODE=1 and emits a Write-BashError;
-        // the cmdlet mirrors that. We check the filesystem is unchanged.
+        Fail($"Invoke-BashMkdir {Q(dir)}", 1, "File exists");
+        // GNU: "mkdir: cannot create directory 'x': File exists", exit 1. Filesystem unchanged.
         Assert.True(Directory.Exists(dir));
     }
 
@@ -101,7 +106,7 @@ public class InvokeBashFileSystemMutatorTests : IDisposable, IClassFixture<Share
     public void Mkdir_WithP_CreatesChain()
     {
         var deep = Path.Combine(_tmpRoot, "a", "b", "c", "d");
-        Run($"Invoke-BashMkdir -p {Q(deep)}");
+        Ok($"Invoke-BashMkdir -p {Q(deep)}");
         Assert.True(Directory.Exists(deep));
     }
 
@@ -110,7 +115,7 @@ public class InvokeBashFileSystemMutatorTests : IDisposable, IClassFixture<Share
     {
         var dir = Path.Combine(_tmpRoot, "exists");
         Directory.CreateDirectory(dir);
-        Run($"Invoke-BashMkdir -p {Q(dir)}");
+        Ok($"Invoke-BashMkdir -p {Q(dir)}");
         Assert.True(Directory.Exists(dir));
     }
 
@@ -118,18 +123,18 @@ public class InvokeBashFileSystemMutatorTests : IDisposable, IClassFixture<Share
     public void Mkdir_Verbose_EmitsCreationLine()
     {
         var dir = Path.Combine(_tmpRoot, "verbose");
-        var lines = Run($"Invoke-BashMkdir -v {Q(dir)}");
+        var lines = Ok($"Invoke-BashMkdir -v {Q(dir)}");
         Assert.Contains(lines, l => l.Contains("created directory") && l.Contains("verbose"));
     }
 
-    // ─────────────────────────── rmdir ───────────────────────────
+    // ╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç rmdir ╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç
 
     [Fact]
     public void Rmdir_EmptyDir_RemovesIt()
     {
         var dir = Path.Combine(_tmpRoot, "empty");
         Directory.CreateDirectory(dir);
-        Run($"Invoke-BashRmdir {Q(dir)}");
+        Ok($"Invoke-BashRmdir {Q(dir)}");
         Assert.False(Directory.Exists(dir));
     }
 
@@ -139,7 +144,7 @@ public class InvokeBashFileSystemMutatorTests : IDisposable, IClassFixture<Share
         var dir = Path.Combine(_tmpRoot, "full");
         Directory.CreateDirectory(dir);
         File.WriteAllText(Path.Combine(dir, "x"), "x");
-        Run($"Invoke-BashRmdir {Q(dir)}");
+        Fail($"Invoke-BashRmdir {Q(dir)}", 1, "Directory not empty");
         Assert.True(Directory.Exists(dir));
     }
 
@@ -148,11 +153,11 @@ public class InvokeBashFileSystemMutatorTests : IDisposable, IClassFixture<Share
     {
         var leaf = Path.Combine(_tmpRoot, "x", "y", "z");
         Directory.CreateDirectory(leaf);
-        Run($"Invoke-BashRmdir -p {Q(leaf)}");
+        Ok($"Invoke-BashRmdir -p {Q(leaf)}");
         Assert.False(Directory.Exists(Path.Combine(_tmpRoot, "x")));
     }
 
-    // ─────────────────────────── cp ───────────────────────────
+    // ╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç cp ╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç
 
     [Fact]
     public void Cp_Preserve_KeepsTimestampAndDoesNotLeakFlagAsOperand()
@@ -165,7 +170,7 @@ public class InvokeBashFileSystemMutatorTests : IDisposable, IClassFixture<Share
         File.WriteAllText(src, "x");
         var oldTime = new DateTime(2020, 1, 2, 3, 4, 5, DateTimeKind.Utc);
         File.SetLastWriteTimeUtc(src, oldTime);
-        Run($"Invoke-BashCp -p {Q(src)} {Q(dst)}");
+        Ok($"Invoke-BashCp -p {Q(src)} {Q(dst)}");
         Assert.True(File.Exists(dst), "cp -p must copy (regression: -p leaked as operand)");
         Assert.Equal(oldTime, File.GetLastWriteTimeUtc(dst));
     }
@@ -179,8 +184,8 @@ public class InvokeBashFileSystemMutatorTests : IDisposable, IClassFixture<Share
         File.WriteAllText(dst, "DST");
         File.SetLastWriteTimeUtc(src, new DateTime(2020, 1, 1, 0, 0, 0, DateTimeKind.Utc));
         File.SetLastWriteTimeUtc(dst, new DateTime(2021, 1, 1, 0, 0, 0, DateTimeKind.Utc));
-        Run($"Invoke-BashCp -u {Q(src)} {Q(dst)}");
-        Assert.Equal("DST", File.ReadAllText(dst)); // dest newer → not overwritten
+        Ok($"Invoke-BashCp -u {Q(src)} {Q(dst)}");
+        Assert.Equal("DST", File.ReadAllText(dst)); // dest newer ╬ô├Ñ├å not overwritten
     }
 
     [Fact]
@@ -192,8 +197,8 @@ public class InvokeBashFileSystemMutatorTests : IDisposable, IClassFixture<Share
         File.WriteAllText(dst, "DST");
         File.SetLastWriteTimeUtc(dst, new DateTime(2020, 1, 1, 0, 0, 0, DateTimeKind.Utc));
         File.SetLastWriteTimeUtc(src, new DateTime(2021, 1, 1, 0, 0, 0, DateTimeKind.Utc));
-        Run($"Invoke-BashCp -u {Q(src)} {Q(dst)}");
-        Assert.Equal("SRC", File.ReadAllText(dst)); // src newer → overwritten
+        Ok($"Invoke-BashCp -u {Q(src)} {Q(dst)}");
+        Assert.Equal("SRC", File.ReadAllText(dst)); // src newer ╬ô├Ñ├å overwritten
     }
 
     [Fact]
@@ -202,7 +207,7 @@ public class InvokeBashFileSystemMutatorTests : IDisposable, IClassFixture<Share
         var src = Path.Combine(_tmpRoot, "src.txt");
         var dst = Path.Combine(_tmpRoot, "dst.txt");
         File.WriteAllText(src, "payload");
-        Run($"Invoke-BashCp {Q(src)} {Q(dst)}");
+        Ok($"Invoke-BashCp {Q(src)} {Q(dst)}");
         Assert.Equal("payload", File.ReadAllText(dst));
         Assert.True(File.Exists(src), "source must remain after cp");
     }
@@ -214,7 +219,7 @@ public class InvokeBashFileSystemMutatorTests : IDisposable, IClassFixture<Share
         var destDir = Path.Combine(_tmpRoot, "dest");
         File.WriteAllText(src, "x");
         Directory.CreateDirectory(destDir);
-        Run($"Invoke-BashCp {Q(src)} {Q(destDir)}");
+        Ok($"Invoke-BashCp {Q(src)} {Q(destDir)}");
         Assert.True(File.Exists(Path.Combine(destDir, "src.txt")));
     }
 
@@ -225,7 +230,7 @@ public class InvokeBashFileSystemMutatorTests : IDisposable, IClassFixture<Share
         var dst = Path.Combine(_tmpRoot, "dst.txt");
         File.WriteAllText(src, "new");
         File.WriteAllText(dst, "old");
-        Run($"Invoke-BashCp -n {Q(src)} {Q(dst)}");
+        Ok($"Invoke-BashCp -n {Q(src)} {Q(dst)}");
         Assert.Equal("old", File.ReadAllText(dst));
     }
 
@@ -237,7 +242,7 @@ public class InvokeBashFileSystemMutatorTests : IDisposable, IClassFixture<Share
         Directory.CreateDirectory(Path.Combine(srcDir, "sub"));
         File.WriteAllText(Path.Combine(srcDir, "a.txt"), "a");
         File.WriteAllText(Path.Combine(srcDir, "sub", "b.txt"), "b");
-        Run($"Invoke-BashCp -r {Q(srcDir)} {Q(dstDir)}");
+        Ok($"Invoke-BashCp -r {Q(srcDir)} {Q(dstDir)}");
         Assert.True(File.Exists(Path.Combine(dstDir, "a.txt")));
         Assert.True(File.Exists(Path.Combine(dstDir, "sub", "b.txt")));
     }
@@ -248,11 +253,11 @@ public class InvokeBashFileSystemMutatorTests : IDisposable, IClassFixture<Share
         var srcDir = Path.Combine(_tmpRoot, "tree");
         var dstDir = Path.Combine(_tmpRoot, "tree-copy");
         Directory.CreateDirectory(srcDir);
-        Run($"Invoke-BashCp {Q(srcDir)} {Q(dstDir)}");
+        Fail($"Invoke-BashCp {Q(srcDir)} {Q(dstDir)}", 1, "-r not specified");
         Assert.False(Directory.Exists(dstDir));
     }
 
-    // ─────────────────────────── mv ───────────────────────────
+    // ╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç mv ╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç
 
     [Fact]
     public void Mv_File_MovesIt()
@@ -260,7 +265,7 @@ public class InvokeBashFileSystemMutatorTests : IDisposable, IClassFixture<Share
         var src = Path.Combine(_tmpRoot, "src.txt");
         var dst = Path.Combine(_tmpRoot, "dst.txt");
         File.WriteAllText(src, "x");
-        Run($"Invoke-BashMv {Q(src)} {Q(dst)}");
+        Ok($"Invoke-BashMv {Q(src)} {Q(dst)}");
         Assert.False(File.Exists(src));
         Assert.True(File.Exists(dst));
     }
@@ -272,7 +277,7 @@ public class InvokeBashFileSystemMutatorTests : IDisposable, IClassFixture<Share
         var dst = Path.Combine(_tmpRoot, "dst.txt");
         File.WriteAllText(src, "new");
         File.WriteAllText(dst, "old");
-        Run($"Invoke-BashMv -n {Q(src)} {Q(dst)}");
+        Ok($"Invoke-BashMv -n {Q(src)} {Q(dst)}");
         Assert.Equal("old", File.ReadAllText(dst));
         // Source must remain since the move was skipped.
         Assert.True(File.Exists(src));
@@ -285,19 +290,19 @@ public class InvokeBashFileSystemMutatorTests : IDisposable, IClassFixture<Share
         var destDir = Path.Combine(_tmpRoot, "dest");
         File.WriteAllText(src, "x");
         Directory.CreateDirectory(destDir);
-        Run($"Invoke-BashMv {Q(src)} {Q(destDir)}");
+        Ok($"Invoke-BashMv {Q(src)} {Q(destDir)}");
         Assert.True(File.Exists(Path.Combine(destDir, "src.txt")));
         Assert.False(File.Exists(src));
     }
 
-    // ─────────────────────────── rm ───────────────────────────
+    // ╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç rm ╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç
 
     [Fact]
     public void Rm_File_DeletesIt()
     {
         var file = Path.Combine(_tmpRoot, "doomed.txt");
         File.WriteAllText(file, "x");
-        Run($"Invoke-BashRm {Q(file)}");
+        Ok($"Invoke-BashRm {Q(file)}");
         Assert.False(File.Exists(file));
     }
 
@@ -306,7 +311,7 @@ public class InvokeBashFileSystemMutatorTests : IDisposable, IClassFixture<Share
     {
         var dir = Path.Combine(_tmpRoot, "dir");
         Directory.CreateDirectory(dir);
-        Run($"Invoke-BashRm {Q(dir)}");
+        Fail($"Invoke-BashRm {Q(dir)}", 1, "Is a directory");
         Assert.True(Directory.Exists(dir));
     }
 
@@ -316,7 +321,7 @@ public class InvokeBashFileSystemMutatorTests : IDisposable, IClassFixture<Share
         var dir = Path.Combine(_tmpRoot, "tree");
         Directory.CreateDirectory(Path.Combine(dir, "sub"));
         File.WriteAllText(Path.Combine(dir, "sub", "x.txt"), "x");
-        Run($"Invoke-BashRm -r {Q(dir)}");
+        Ok($"Invoke-BashRm -r {Q(dir)}");
         Assert.False(Directory.Exists(dir));
     }
 
@@ -326,14 +331,14 @@ public class InvokeBashFileSystemMutatorTests : IDisposable, IClassFixture<Share
         // Regression: a read-only file in the tree (e.g. .git pack/object files) made the native
         // recursive delete throw UnauthorizedAccessException on Windows, leaving a half-deleted
         // tree. Non-interactive rm should remove it. (On Linux the read-only bit doesn't block
-        // unlink, so this also passes there — the fallback is simply not exercised.)
+        // unlink, so this also passes there ╬ô├ç├╢ the fallback is simply not exercised.)
         var dir = Path.Combine(_tmpRoot, "rotree");
         Directory.CreateDirectory(Path.Combine(dir, "sub"));
         var ro = Path.Combine(dir, "sub", "locked.txt");
         File.WriteAllText(ro, "x");
         File.SetAttributes(ro, File.GetAttributes(ro) | FileAttributes.ReadOnly);
 
-        Run($"Invoke-BashRm -rf {Q(dir)}");
+        Ok($"Invoke-BashRm -rf {Q(dir)}");
 
         Assert.False(Directory.Exists(dir));
     }
@@ -359,7 +364,7 @@ public class InvokeBashFileSystemMutatorTests : IDisposable, IClassFixture<Share
         File.WriteAllText(only, "keep");
 
         // cp's flag parser matches exact tokens (no bundling), so pass -r -f separately.
-        Run($"Invoke-BashCp -r -f {Q(src)} {Q(dst)}");
+        Ok($"Invoke-BashCp -r -f {Q(src)} {Q(dst)}");
 
         Assert.Equal("new", File.ReadAllText(Path.Combine(collision, "new.txt")));
         Assert.Equal("fresh", File.ReadAllText(ro));
@@ -380,7 +385,7 @@ public class InvokeBashFileSystemMutatorTests : IDisposable, IClassFixture<Share
         Directory.CreateDirectory(collision);
         File.SetAttributes(collision, File.GetAttributes(collision) | FileAttributes.ReadOnly);
 
-        Run($"Invoke-BashMv {Q(src)} {Q(dst)}");
+        Ok($"Invoke-BashMv {Q(src)} {Q(dst)}");
 
         Assert.True(File.Exists(Path.Combine(collision, "moved.txt")));
         Assert.False(Directory.Exists(src));
@@ -401,16 +406,15 @@ public class InvokeBashFileSystemMutatorTests : IDisposable, IClassFixture<Share
         var keep = Path.Combine(collision, "keep.txt");
         File.WriteAllText(keep, "old");
 
-        var lines = Run($"Invoke-BashMv {Q(src)} {Q(dst)} *> $null; $global:LASTEXITCODE");
-
-        Assert.Equal("1", lines[^1]);
+        Fail($"Invoke-BashMv {Q(src)} {Q(dst)}", 1);
         Assert.Equal("old", File.ReadAllText(keep));
         Assert.True(File.Exists(Path.Combine(src, "moved.txt")), "source must survive a refused mv");
     }
 
-    // ───────────── mv / cp pre-mutation validation (GNU oracle-checked) ─────────────
+    // ╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç mv / cp pre-mutation validation (GNU oracle-checked) ╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç
 
-    private string LastExit(string script) => Run($"{script} *> $null; $global:LASTEXITCODE")[^1];
+    // Legacy: exit status only (stderr is ignored). Prefer Fail(script, exit, stderrFragment).
+    private string LastExit(string script) => RunResult(script).ExitCode.ToString();
 
     [Fact]
     public void Mv_SourceIntoItsOwnParent_KeepsSourceAndFails()
@@ -421,7 +425,7 @@ public class InvokeBashFileSystemMutatorTests : IDisposable, IClassFixture<Share
         Directory.CreateDirectory(src);
         File.WriteAllText(Path.Combine(src, "f"), "payload");
 
-        Assert.Equal("1", LastExit($"Invoke-BashMv {Q(src)} {Q(Path.Combine(_tmpRoot, "p"))}"));
+        Fail($"Invoke-BashMv {Q(src)} {Q(Path.Combine(_tmpRoot, "p"))}", 1);
 
         Assert.Equal("payload", File.ReadAllText(Path.Combine(src, "f")));
     }
@@ -431,7 +435,7 @@ public class InvokeBashFileSystemMutatorTests : IDisposable, IClassFixture<Share
     {
         var f = Path.Combine(_tmpRoot, "same.txt");
         File.WriteAllText(f, "x");
-        Assert.Equal("1", LastExit($"Invoke-BashMv {Q(f)} {Q(f)}"));
+        Fail($"Invoke-BashMv {Q(f)} {Q(f)}", 1);
         Assert.Equal("x", File.ReadAllText(f));
     }
 
@@ -442,7 +446,7 @@ public class InvokeBashFileSystemMutatorTests : IDisposable, IClassFixture<Share
         Directory.CreateDirectory(Path.Combine(s, "sub"));
         File.WriteAllText(Path.Combine(s, "f"), "x");
 
-        Assert.Equal("1", LastExit($"Invoke-BashMv {Q(s)} {Q(Path.Combine(s, "sub"))}"));
+        Fail($"Invoke-BashMv {Q(s)} {Q(Path.Combine(s, "sub"))}", 1);
 
         Assert.True(File.Exists(Path.Combine(s, "f")));
         Assert.True(Directory.Exists(Path.Combine(s, "sub")));
@@ -455,7 +459,7 @@ public class InvokeBashFileSystemMutatorTests : IDisposable, IClassFixture<Share
         var f = Path.Combine(_tmpRoot, "f");
         Directory.CreateDirectory(d);
         File.WriteAllText(f, "file");
-        Assert.Equal("1", LastExit($"Invoke-BashMv {Q(d)} {Q(f)}"));
+        Fail($"Invoke-BashMv {Q(d)} {Q(f)}", 1);
         Assert.True(Directory.Exists(d));
         Assert.Equal("file", File.ReadAllText(f));
     }
@@ -468,7 +472,7 @@ public class InvokeBashFileSystemMutatorTests : IDisposable, IClassFixture<Share
         var tgt = Path.Combine(_tmpRoot, "tgt10");
         File.WriteAllText(f, "q");
         Directory.CreateDirectory(Path.Combine(tgt, "f10"));
-        Assert.Equal("1", LastExit($"Invoke-BashMv {Q(f)} {Q(tgt)}"));
+        Fail($"Invoke-BashMv {Q(f)} {Q(tgt)}", 1);
         Assert.True(File.Exists(f));
         Assert.True(Directory.Exists(Path.Combine(tgt, "f10")));
     }
@@ -480,7 +484,7 @@ public class InvokeBashFileSystemMutatorTests : IDisposable, IClassFixture<Share
         var b = Path.Combine(_tmpRoot, "m2");
         File.WriteAllText(a, "1");
         File.WriteAllText(b, "2");
-        Assert.Equal("1", LastExit($"Invoke-BashMv {Q(a)} {Q(b)} {Q(Path.Combine(_tmpRoot, "nonexist"))}"));
+        Fail($"Invoke-BashMv {Q(a)} {Q(b)} {Q(Path.Combine(_tmpRoot, "nonexist"))}", 1);
         Assert.True(File.Exists(a));
         Assert.True(File.Exists(b));
     }
@@ -499,7 +503,7 @@ public class InvokeBashFileSystemMutatorTests : IDisposable, IClassFixture<Share
         File.WriteAllText(Path.Combine(dstProj, "only"), "keep");
         File.WriteAllText(Path.Combine(dstProj, "nested", "deep"), "keep-deep");
 
-        Run($"Invoke-BashCp -rf {Q(src)} {Q(Path.Combine(_tmpRoot, "dst"))}");
+        Ok($"Invoke-BashCp -rf {Q(src)} {Q(Path.Combine(_tmpRoot, "dst"))}");
 
         Assert.Equal("n", File.ReadAllText(Path.Combine(dstProj, "new")));
         Assert.Equal("keep", File.ReadAllText(Path.Combine(dstProj, "only")));
@@ -517,7 +521,7 @@ public class InvokeBashFileSystemMutatorTests : IDisposable, IClassFixture<Share
         File.WriteAllText(a, "A");
         File.WriteAllText(b, "B");
 
-        Assert.Equal("1", LastExit($"Invoke-BashCp {Q(a)} {Q(b)} {Q(result)}"));
+        Fail($"Invoke-BashCp {Q(a)} {Q(b)} {Q(result)}", 1);
 
         Assert.False(File.Exists(result));
         Assert.False(Directory.Exists(result));
@@ -533,7 +537,7 @@ public class InvokeBashFileSystemMutatorTests : IDisposable, IClassFixture<Share
         File.WriteAllText(b, "B");
         File.WriteAllText(result, "R");
 
-        Assert.Equal("1", LastExit($"Invoke-BashCp {Q(a)} {Q(b)} {Q(result)}"));
+        Fail($"Invoke-BashCp {Q(a)} {Q(b)} {Q(result)}", 1);
 
         Assert.Equal("R", File.ReadAllText(result));
     }
@@ -551,7 +555,7 @@ public class InvokeBashFileSystemMutatorTests : IDisposable, IClassFixture<Share
         File.WriteAllText(Path.Combine(s, "x", "f2"), "new2");
         File.WriteAllText(Path.Combine(t, "s3", "x", "f1"), "old1");
 
-        Run($"Invoke-BashCp -r -n {Q(s)} {Q(t)}");
+        Ok($"Invoke-BashCp -r -n {Q(s)} {Q(t)}");
 
         Assert.Equal("old1", File.ReadAllText(Path.Combine(t, "s3", "x", "f1")));
         Assert.Equal("new2", File.ReadAllText(Path.Combine(t, "s3", "x", "f2")));
@@ -562,7 +566,7 @@ public class InvokeBashFileSystemMutatorTests : IDisposable, IClassFixture<Share
     {
         var f = Path.Combine(_tmpRoot, "sf");
         File.WriteAllText(f, "x");
-        Assert.Equal("1", LastExit($"Invoke-BashCp {Q(f)} {Q(f)}"));
+        Fail($"Invoke-BashCp {Q(f)} {Q(f)}", 1);
         Assert.Equal("x", File.ReadAllText(f));
     }
 
@@ -572,7 +576,7 @@ public class InvokeBashFileSystemMutatorTests : IDisposable, IClassFixture<Share
         var se = Path.Combine(_tmpRoot, "se");
         var x = Path.Combine(se, "x");
         Directory.CreateDirectory(x);
-        Assert.Equal("1", LastExit($"Invoke-BashCp -r {Q(se)} {Q(x)}"));
+        Fail($"Invoke-BashCp -r {Q(se)} {Q(x)}", 1);
         Assert.False(Directory.Exists(Path.Combine(x, "se")), "copy into itself must not start");
     }
 
@@ -583,7 +587,7 @@ public class InvokeBashFileSystemMutatorTests : IDisposable, IClassFixture<Share
         var f = Path.Combine(_tmpRoot, "ff");
         Directory.CreateDirectory(d);
         File.WriteAllText(f, "F");
-        Assert.Equal("1", LastExit($"Invoke-BashCp -r {Q(d)} {Q(f)}"));
+        Fail($"Invoke-BashCp -r {Q(d)} {Q(f)}", 1);
         Assert.Equal("F", File.ReadAllText(f));
     }
 
@@ -594,7 +598,7 @@ public class InvokeBashFileSystemMutatorTests : IDisposable, IClassFixture<Share
         var tg = Path.Combine(_tmpRoot, "tg");
         File.WriteAllText(f, "q");
         Directory.CreateDirectory(Path.Combine(tg, "fx"));
-        Assert.Equal("1", LastExit($"Invoke-BashCp {Q(f)} {Q(tg)}"));
+        Fail($"Invoke-BashCp {Q(f)} {Q(tg)}", 1);
         Assert.True(Directory.Exists(Path.Combine(tg, "fx")));
     }
 
@@ -609,7 +613,7 @@ public class InvokeBashFileSystemMutatorTests : IDisposable, IClassFixture<Share
         File.WriteAllText(ro, "x");
         File.SetAttributes(ro, File.GetAttributes(ro) | FileAttributes.ReadOnly);
 
-        Run($"Invoke-BashFind {Q(dir)} -name '*.tmp' -delete");
+        Ok($"Invoke-BashFind {Q(dir)} -name '*.tmp' -delete");
 
         Assert.False(File.Exists(ro));
     }
@@ -624,7 +628,7 @@ public class InvokeBashFileSystemMutatorTests : IDisposable, IClassFixture<Share
         File.WriteAllText(Path.Combine(src, "sub", "f.txt"), "x");
         var dst = Path.Combine(_tmpRoot, "bdst");
 
-        Run($"Invoke-BashCp -rf {Q(src)} {Q(dst)}");
+        Ok($"Invoke-BashCp -rf {Q(src)} {Q(dst)}");
 
         Assert.True(File.Exists(Path.Combine(dst, "sub", "f.txt")));
     }
@@ -638,23 +642,21 @@ public class InvokeBashFileSystemMutatorTests : IDisposable, IClassFixture<Share
         // Regression: /dev/null as a file OPERAND mapped to $null and crashed cmdlets
         // ("Value cannot be null"). It is now an empty file served from the OS null device.
         // (wc -l prints "0 /dev/null"; the point is it does not error / set a failure code.)
-        var lines = Run($"{cmd} *> $null; $global:LASTEXITCODE");
-        Assert.Equal("0", lines[^1]);
+        Ok(cmd);
     }
 
     [Fact]
     public void NullDevice_GrepEmptyFile_ExitsOne()
     {
-        // grep on an empty file finds nothing → exit 1 (bash parity), no "No such file" error.
-        var lines = Run("Invoke-BashGrep needle /dev/null *> $null; $global:LASTEXITCODE");
-        Assert.Equal("1", lines[^1]);
+        // grep on an empty file finds nothing ╬ô├Ñ├å exit 1 (bash parity), no "No such file" error.
+        Fail("Invoke-BashGrep needle /dev/null", 1);
     }
 
     [Fact]
     public void Rm_MissingWithoutF_EmitsError()
     {
         var ghost = Path.Combine(_tmpRoot, "ghost.txt");
-        Run($"Invoke-BashRm {Q(ghost)}");
+        Fail($"Invoke-BashRm {Q(ghost)}", 1, "No such file or directory");
         // Filesystem unchanged; error went to the error sink.
         Assert.False(File.Exists(ghost));
     }
@@ -663,7 +665,7 @@ public class InvokeBashFileSystemMutatorTests : IDisposable, IClassFixture<Share
     public void Rm_MissingWithF_Silent()
     {
         var ghost = Path.Combine(_tmpRoot, "ghost.txt");
-        var lines = Run($"Invoke-BashRm -f {Q(ghost)}");
+        var lines = Ok($"Invoke-BashRm -f {Q(ghost)}");
         // -f suppresses the missing-file error entirely. No output.
         Assert.Empty(lines);
     }
@@ -671,21 +673,21 @@ public class InvokeBashFileSystemMutatorTests : IDisposable, IClassFixture<Share
     [Fact]
     public void Rm_DriveRoot_RefusesAsProtected()
     {
-        // We're not going to actually delete C:\ — but the cmdlet must
+        // We're not going to actually delete C:\ ╬ô├ç├╢ but the cmdlet must
         // refuse to attempt it. Use a path that resolves to the drive root.
         var rootCandidate = Path.GetPathRoot(_tmpRoot) ?? "C:\\";
-        Run($"Invoke-BashRm -rf {Q(rootCandidate)}");
+        RunResult($"Invoke-BashRm -rf {Q(rootCandidate)}").AssertFailed(1, "refusing");
         // _tmpRoot is on the drive root, so the drive must still exist.
         Assert.True(Directory.Exists(_tmpRoot));
     }
 
-    // ─────────────────────────── injection probes (Directive 12) ───────────────────────────
+    // ╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç injection probes (Directive 12) ╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç
 
     [Fact]
     public void Mkdir_FilenameWithScriptblockChars_TreatedLiterally()
     {
         var weird = Path.Combine(_tmpRoot, "$(throw'pwn')dir");
-        Run($"Invoke-BashMkdir {Q(weird)}");
+        Ok($"Invoke-BashMkdir {Q(weird)}");
         Assert.True(Directory.Exists(weird));
     }
 
@@ -694,14 +696,14 @@ public class InvokeBashFileSystemMutatorTests : IDisposable, IClassFixture<Share
     {
         var weird = Path.Combine(_tmpRoot, "a;rm -rf b.txt");
         File.WriteAllText(weird, "x");
-        Run($"Invoke-BashRm {Q(weird)}");
+        Ok($"Invoke-BashRm {Q(weird)}");
         Assert.False(File.Exists(weird));
         // No other file in the temp root should have been affected.
         Assert.True(Directory.Exists(_tmpRoot));
     }
 
-    // ─────────────────────── unsupported-flag classifier ───────────────────────
-    // Every valid bash flag must map to *something* — never silently mistaken for
+    // ╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç unsupported-flag classifier ╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç
+    // Every valid bash flag must map to *something* ╬ô├ç├╢ never silently mistaken for
     // a file operand. The mover family routes unknown / valid-but-unsupported
     // option-looking tokens through FileSystemHelpers.TryWriteOperandOptionError
     // (exit 2), like grep/cut/sort/etc.
@@ -714,8 +716,7 @@ public class InvokeBashFileSystemMutatorTests : IDisposable, IClassFixture<Share
     [InlineData("Invoke-BashRmdir --ignore-fail-on-non-empty d")]
     public void Mover_ValidButUnsupportedFlag_ExitsTwo(string cmd)
     {
-        var lines = Run($"{cmd} *> $null; $global:LASTEXITCODE");
-        Assert.Equal("2", lines[^1]);
+        Fail($"{cmd}", 2);
     }
 
     [Theory]
@@ -734,8 +735,7 @@ public class InvokeBashFileSystemMutatorTests : IDisposable, IClassFixture<Share
     [InlineData("Invoke-BashRmdir '-Z' d")]         // GNU rmdir has no -Z: a plain usage error
     public void Mover_ParserUsageError_ExitsOne(string cmd)
     {
-        var lines = Run($"{cmd} *> $null; $global:LASTEXITCODE");
-        Assert.Equal("1", lines[^1]);
+        Fail($"{cmd}", 1);
     }
 
     [Fact]
@@ -743,8 +743,7 @@ public class InvokeBashFileSystemMutatorTests : IDisposable, IClassFixture<Share
     {
         // GNU rm -f suppresses missing-file errors but NOT a usage error for a
         // bad option. The classifier still fires (exit 2) under -f.
-        var lines = Run("Invoke-BashRm -f --interactive ghost.txt *> $null; $global:LASTEXITCODE");
-        Assert.Equal("2", lines[^1]);
+        Fail("Invoke-BashRm -f --interactive ghost.txt", 2);
     }
 
     [Fact]
@@ -754,8 +753,7 @@ public class InvokeBashFileSystemMutatorTests : IDisposable, IClassFixture<Share
         // not leak into the operand list because a later `--` appeared. (--reflink
         // is a catalog flag that reaches Arguments; bare -i would be eaten by the
         // -InformationAction binder collision before the cmdlet runs.)
-        var lines = Run("Invoke-BashCp --reflink -- a b *> $null; $global:LASTEXITCODE");
-        Assert.Equal("2", lines[^1]);
+        Fail("Invoke-BashCp --reflink -- a b", 2);
     }
 
     [Fact]
@@ -764,7 +762,7 @@ public class InvokeBashFileSystemMutatorTests : IDisposable, IClassFixture<Share
         // After `--`, a token starting with '-' is a real filename, not a flag.
         var dashFile = Path.Combine(_tmpRoot, "-weird.txt");
         File.WriteAllText(dashFile, "x");
-        Run($"Invoke-BashRm -- {Q(dashFile)}");
+        Ok($"Invoke-BashRm -- {Q(dashFile)}");
         Assert.False(File.Exists(dashFile), "-- should let a dash-leading filename through to deletion");
     }
 
@@ -774,14 +772,14 @@ public class InvokeBashFileSystemMutatorTests : IDisposable, IClassFixture<Share
         // -vp must de-bundle to verbose+parents, not be misclassified as an
         // unknown flag now that mkdir parses its short bundle. (The reverse form
         // -pv is the PowerShell -PipelineVariable alias and is eaten by the
-        // binder before the cmdlet runs — a documented common-parameter collision.)
+        // binder before the cmdlet runs ╬ô├ç├╢ a documented common-parameter collision.)
         var nested = Path.Combine(_tmpRoot, "x", "y", "z");
-        var lines = Run($"Invoke-BashMkdir -vp {Q(nested)}");
+        var lines = Ok($"Invoke-BashMkdir -vp {Q(nested)}");
         Assert.True(Directory.Exists(nested));
         Assert.Contains(lines, l => l.Contains("created directory", StringComparison.OrdinalIgnoreCase));
     }
 
-    // ─────────── shared ordered parser: cp as the transpiler delivers it ───────────
+    // ╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç shared ordered parser: cp as the transpiler delivers it ╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç
     // PsEmitter.OrderedArgCommands single-quotes every dash-leading word, so flags arrive in
     // Arguments as plain strings, in order (the direct-call decoy path is covered above).
 
@@ -792,7 +790,7 @@ public class InvokeBashFileSystemMutatorTests : IDisposable, IClassFixture<Share
         Directory.CreateDirectory(src);
         File.WriteAllText(Path.Combine(src, "f.txt"), "payload");
         var dst = Path.Combine(_tmpRoot, "qdst");
-        var lines = Run($"Invoke-BashCp '-rfv' {Q(src)} {Q(dst)}");
+        var lines = Ok($"Invoke-BashCp '-rfv' {Q(src)} {Q(dst)}");
         Assert.Equal("payload", File.ReadAllText(Path.Combine(dst, "f.txt")));
         Assert.Contains(lines, l => l.Contains("->"));
     }
@@ -806,7 +804,7 @@ public class InvokeBashFileSystemMutatorTests : IDisposable, IClassFixture<Share
         Directory.CreateDirectory(src);
         File.WriteAllText(Path.Combine(src, "f.txt"), "x");
         var dst = Path.Combine(_tmpRoot, "ldst");
-        Run($"Invoke-BashCp '{flag}' {Q(src)} {Q(dst)}");
+        Ok($"Invoke-BashCp '{flag}' {Q(src)} {Q(dst)}");
         Assert.True(File.Exists(Path.Combine(dst, "f.txt")));
     }
 
@@ -815,7 +813,7 @@ public class InvokeBashFileSystemMutatorTests : IDisposable, IClassFixture<Share
     {
         // `cp -- -a dst` copies a file literally named "-a" (the classifier must stop at `--`).
         File.WriteAllText(Path.Combine(_tmpRoot, "-a"), "dash");
-        Run($"Set-Location {Q(_tmpRoot)}; Invoke-BashCp '--' '-a' 'out.txt'");
+        Ok($"Set-Location {Q(_tmpRoot)}; Invoke-BashCp '--' '-a' 'out.txt'");
         Assert.Equal("dash", File.ReadAllText(Path.Combine(_tmpRoot, "out.txt")));
     }
 
@@ -825,7 +823,7 @@ public class InvokeBashFileSystemMutatorTests : IDisposable, IClassFixture<Share
         var src = Path.Combine(_tmpRoot, "isrc.txt");
         File.WriteAllText(src, "x");
         var dst = Path.Combine(_tmpRoot, "idst.txt");
-        Assert.Equal("2", LastExit($"Invoke-BashCp '-i' {Q(src)} {Q(dst)}"));
+        Fail($"Invoke-BashCp '-i' {Q(src)} {Q(dst)}", 2);
         Assert.False(File.Exists(dst));
     }
 
@@ -836,7 +834,7 @@ public class InvokeBashFileSystemMutatorTests : IDisposable, IClassFixture<Share
         Directory.CreateDirectory(src);
         File.WriteAllText(Path.Combine(src, "f"), "x");
         var dst = Path.Combine(_tmpRoot, "odst");
-        Run($"Invoke-BashCp {Q(src)} {Q(dst)} '-r'");
+        Ok($"Invoke-BashCp {Q(src)} {Q(dst)} '-r'");
         Assert.True(File.Exists(Path.Combine(dst, "f")));
     }
 
@@ -848,7 +846,7 @@ public class InvokeBashFileSystemMutatorTests : IDisposable, IClassFixture<Share
         var src = Path.Combine(_tmpRoot, "mvsrc.txt");
         File.WriteAllText(src, "x");
         var dst = Path.Combine(_tmpRoot, "mvdst.txt");
-        var lines = Run($"Invoke-BashMv '-fv' {Q(src)} {Q(dst)}");
+        var lines = Ok($"Invoke-BashMv '-fv' {Q(src)} {Q(dst)}");
         Assert.False(File.Exists(src));
         Assert.Equal("x", File.ReadAllText(dst));
         Assert.Contains(lines, l => l.Contains("->"));
@@ -858,7 +856,7 @@ public class InvokeBashFileSystemMutatorTests : IDisposable, IClassFixture<Share
     public void Mv_DoubleDash_DashNamedSourceIsAnOperandNotAnOption()
     {
         File.WriteAllText(Path.Combine(_tmpRoot, "-n"), "dash");
-        Run($"Set-Location {Q(_tmpRoot)}; Invoke-BashMv '--' '-n' 'moved.txt'");
+        Ok($"Set-Location {Q(_tmpRoot)}; Invoke-BashMv '--' '-n' 'moved.txt'");
         Assert.Equal("dash", File.ReadAllText(Path.Combine(_tmpRoot, "moved.txt")));
         Assert.False(File.Exists(Path.Combine(_tmpRoot, "-n")));
     }
@@ -869,7 +867,7 @@ public class InvokeBashFileSystemMutatorTests : IDisposable, IClassFixture<Share
         var src = Path.Combine(_tmpRoot, "misrc.txt");
         File.WriteAllText(src, "x");
         var dst = Path.Combine(_tmpRoot, "midst.txt");
-        Assert.Equal("2", LastExit($"Invoke-BashMv '-i' {Q(src)} {Q(dst)}"));
+        Fail($"Invoke-BashMv '-i' {Q(src)} {Q(dst)}", 2);
         Assert.True(File.Exists(src));
         Assert.False(File.Exists(dst));
     }
@@ -881,10 +879,10 @@ public class InvokeBashFileSystemMutatorTests : IDisposable, IClassFixture<Share
         var dst = Path.Combine(_tmpRoot, "ndst.txt");
         File.WriteAllText(src, "new");
         File.WriteAllText(dst, "old");
-        Run($"Invoke-BashMv {Q(src)} {Q(dst)} '--no-c' *> $null");
+        Fail($"Invoke-BashMv {Q(src)} {Q(dst)} '--no-c'", 1, "ambiguous");
         // `--no-c` is ambiguous with --no-copy (GNU), so nothing moved and the destination is intact.
         Assert.Equal("old", File.ReadAllText(dst));
-        Run($"Invoke-BashMv {Q(src)} {Q(dst)} '--no-cl'");
+        Ok($"Invoke-BashMv {Q(src)} {Q(dst)} '--no-cl'");
         Assert.Equal("old", File.ReadAllText(dst));
         Assert.True(File.Exists(src));
     }
@@ -895,14 +893,14 @@ public class InvokeBashFileSystemMutatorTests : IDisposable, IClassFixture<Share
         var src = Path.Combine(_tmpRoot, "usrc.txt");
         File.WriteAllText(src, "x");
         var dst = Path.Combine(_tmpRoot, "udst.txt");
-        Assert.Equal("2", LastExit($"Invoke-BashCp '--update=none' {Q(src)} {Q(dst)}"));
+        Fail($"Invoke-BashCp '--update=none' {Q(src)} {Q(dst)}", 2);
         Assert.False(File.Exists(dst));
         // `--update=older` is -u: copies when the destination is missing.
-        Run($"Invoke-BashCp '--update=older' {Q(src)} {Q(dst)}");
+        Ok($"Invoke-BashCp '--update=older' {Q(src)} {Q(dst)}");
         Assert.True(File.Exists(dst));
     }
 
-    // ─────────── shared ordered parser: touch as the transpiler delivers it ───────────
+    // ╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç shared ordered parser: touch as the transpiler delivers it ╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç
 
     private static readonly DateTime OldStamp = new(2001, 2, 3, 4, 5, 6, DateTimeKind.Utc);
 
@@ -1032,7 +1030,7 @@ public class InvokeBashFileSystemMutatorTests : IDisposable, IClassFixture<Share
         Assert.Equal(new DateTime(2020, 1, 1), File.GetLastWriteTime(g).Date);
     }
 
-    // ─────────── shared ordered parser: rmdir as the transpiler delivers it ───────────
+    // ╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç shared ordered parser: rmdir as the transpiler delivers it ╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç
 
     [Fact]
     public void Rmdir_QuotedPv_RemovesChainAndReportsEachDirectory()
@@ -1098,7 +1096,7 @@ public class InvokeBashFileSystemMutatorTests : IDisposable, IClassFixture<Share
         Assert.Contains(lines, l => l.Contains("removing directory"));
     }
 
-    // ─────────── shared ordered parser: mkdir as the transpiler delivers it ───────────
+    // ╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç shared ordered parser: mkdir as the transpiler delivers it ╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç
 
     [Fact]
     public void Mkdir_QuotedPv_ReachesTheParserIntact_CreatesNestedWithVerbose()
@@ -1162,7 +1160,7 @@ public class InvokeBashFileSystemMutatorTests : IDisposable, IClassFixture<Share
         Assert.Contains(lines, l => l.Contains("created directory", StringComparison.OrdinalIgnoreCase));
     }
 
-    // ─────────── shared ordered parser: rm as the transpiler delivers it ───────────
+    // ╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç shared ordered parser: rm as the transpiler delivers it ╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç╬ô├╢├ç
 
     [Fact]
     public void Rm_EmitterStyleQuotedBundle_RecursiveForceVerbose_RemovesTree()

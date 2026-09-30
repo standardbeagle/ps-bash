@@ -26,6 +26,18 @@ Arguments string). So a binary `Invoke-Bash*` with a common-param-colliding shor
 break only shows up in the publish Pester gate. Manifest invariants (ReleaseNotes ≤10600) live
 in Core.Tests. Run Pester locally before tagging — see the release-pester-gate-local memory.
 
+## CMDLET TESTS: ASSERT THE EXIT, NOT JUST THE OUTPUT
+Run scripts via `CmdResult.Run(pwsh, script)` (`Cmdlets.Tests/CmdResult.cs`: Stdout, Stderr, ExitCode, Errors).
+Success test → `.AssertSuccess()` (exit 0 + no error records). Failure test → `.AssertFailed(exit, "stderr fragment")`.
+A string-only helper lets a FAILING command pass any test that just checks the filesystem. `PwshTestFixture` fails fast
+(throws) on missing module files / failed import — never continue on a bare runspace.
+
+## MUTATING COMMANDS (cp mv rm tee ...): DIFF THE FILESYSTEM vs GNU
+Use `FsStateOracle.EqualAsync(setup, command)` (`Differential.Tests/Oracle/FsStateOracle.cs`, cases in
+`FsStateDifferentialTests`): same fixture tree, real bash vs ps-bash, compares stdout + exit + resulting tree
+(paths, file/dir, exact bytes). Snapshot is stdout → cassette → replays without WSL. Record: `PSBASH_ORACLE_RECORD=1`.
+Fixture files end in one `\n` (ps-bash `> f` redirect adds one to `printf x > f`; known bug).
+
 ## BUG FIX = REGRESSION TEST (mandatory)
 Repro test (fails pre-fix) → fix → passes → add at the right layer (PsEmitterTests for transpile, psm1 for runtime).
 
