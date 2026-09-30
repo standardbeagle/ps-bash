@@ -85,6 +85,10 @@ if ((-not $script:__psbashLoadedCmdletsAssembly) -and
 if (-not (Get-Variable -Name BashPositional -Scope global -ErrorAction SilentlyContinue)) {
     $global:BashPositional = $null
 }
+# $0: the `-c` NAME / script path the launcher was given; unset -> the emitted $0 defaults to 'bash'.
+if (-not (Get-Variable -Name BashPositional0 -Scope global -ErrorAction SilentlyContinue)) {
+    $global:BashPositional0 = $null
+}
 
 # --- Error Mode ---
 # Controls how errors are reported:

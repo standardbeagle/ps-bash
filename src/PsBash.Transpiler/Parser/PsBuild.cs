@@ -416,7 +416,11 @@ public static class PsBuild
             case "#":
                 return BuildPositionalExpansion(name);
             case "0":
-                return (inDoubleQuote || braced) ? "$($MyInvocation.MyCommand.Name)" : "$MyInvocation.MyCommand.Name";
+                // $0 is the name the launcher was given (`-c CMD NAME`, or the script path as typed;
+                // $global:BashPositional0), default `bash`. $MyInvocation.MyCommand.Name was the
+                // CALLING function/script's command name: empty at top level, the function's name in
+                // a function. Always a $(...) subexpression, so quoted and bare uses share one text.
+                return "$(if ($global:BashPositional0) { $global:BashPositional0 } else { 'bash' })";
             case "$":
                 return braced ? "${PID}" : "$PID";
             case "!":

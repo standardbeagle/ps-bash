@@ -1470,11 +1470,11 @@ public class PsEmitterTests
     }
 
     [Fact]
-    public void Transpile_SpecialVar0_EmitsMyCommand()
+    public void Transpile_SpecialVar0_EmitsLauncherNameDefaultingToBash()
     {
         var result = PsEmitter.Transpile("echo $0");
 
-        Assert.Equal("Invoke-BashEcho $MyInvocation.MyCommand.Name", result);
+        Assert.Equal("Invoke-BashEcho $(if ($global:BashPositional0) { $global:BashPositional0 } else { 'bash' })", result);
     }
 
     [Fact]
@@ -4769,7 +4769,7 @@ public class PsEmitterTests
     public void Transpile_Var0InDoubleQuotes_EmitsSubexpression()
     {
         var result = PsEmitter.Transpile("echo \"script: $0\"");
-        Assert.Equal("Invoke-BashEcho \"script: $($MyInvocation.MyCommand.Name)\"", result);
+        Assert.Equal("Invoke-BashEcho \"script: $(if ($global:BashPositional0) { $global:BashPositional0 } else { 'bash' })\"", result);
     }
 
     [Fact]
