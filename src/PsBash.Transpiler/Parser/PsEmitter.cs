@@ -3480,7 +3480,10 @@ public static class PsEmitter
                     break;
             }
         }
-        return sb.ToString();
+        // bash words are NUL-terminated C strings: $'a\0b' is just "a" (oracle-verified).
+        // Truncate instead of smuggling a NUL into an argv/PowerShell literal.
+        int nul = sb.ToString().IndexOf('\0');
+        return nul >= 0 ? sb.ToString(0, nul) : sb.ToString();
     }
 
     private static int HexValue(char c)

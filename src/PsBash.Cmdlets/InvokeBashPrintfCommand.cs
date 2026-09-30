@@ -88,10 +88,11 @@ public sealed class InvokeBashPrintfCommand : PSCmdlet
         }
 
         format = format.Replace("%%", EscapedPercentSentinel);
-        format = BashRuntime.ExpandEscapeSequences(format);
+        format = BashEscapes.Expand(format, EscapeDialect.PrintfFormat);
 
         var sb = new StringBuilder();
         int argIdx = 0;
+        bool stoppedByC = false; // %b hit \c: bash suppresses ALL further output
         // bash reuses (recycles) the format string until the argument list is
         // exhausted: `printf '%s\n' a b c` prints three lines. We repeat the
         // whole format while a pass consumes at least one more argument; a format
@@ -298,9 +299,11 @@ public sealed class InvokeBashPrintfCommand : PSCmdlet
                     case 'b':
                         if (argIdx < converted.Count)
                         {
-                            string expanded = BashRuntime.ExpandEscapeSequences(
-                                converted[argIdx]?.ToString() ?? string.Empty);
+                            // Raw text, not the numeric coercion: `%b` of `0101` keeps its zero.
+                            string expanded = BashEscapes.Expand(
+                                argList[argIdx], EscapeDialect.PrintfB, out bool bStop);
                             sb.Append(expanded);
+                            if (bStop) stoppedByC = true;
                         }
                         argIdx++;
                         i = j + 1;
@@ -310,6 +313,7 @@ public sealed class InvokeBashPrintfCommand : PSCmdlet
                         i++;
                         break;
                 }
+                if (stoppedByC) break;
             }
             else
             {
@@ -318,7 +322,7 @@ public sealed class InvokeBashPrintfCommand : PSCmdlet
             }
         }
         // Recycle only while we keep consuming arguments.
-        if (argIdx <= passStartArgIdx) break;
+        if (stoppedByC || argIdx <= passStartArgIdx) break;
         }
         while (argIdx < converted.Count);
 

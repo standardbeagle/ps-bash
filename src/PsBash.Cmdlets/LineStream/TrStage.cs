@@ -100,7 +100,7 @@ internal sealed class TrStage : ILineStreamStage
                 continue;
             }
 
-            operands.Add(BashRuntime.ExpandEscapeSequences(arg));
+            operands.Add(BashEscapes.Expand(arg, EscapeDialect.Tr));
         }
 
         // ---- table construction (port of BuildTablesCore) ----

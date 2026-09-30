@@ -319,25 +319,26 @@ colliding bare letter that has NO decoy (`Invoke-BashTee -i`) still fails in the
 
 ## Escape Sequence Handling
 
-`Expand-EscapeSequences` converts C-style escape sequences in string literals. It is
-used by `echo -e`, `printf`, and `tr` operands.
+ONE left-to-right scanner, `BashEscapes.Expand(text, EscapeDialect[, out stopped])`
+(`src/PsBash.Cmdlets/BashEscapes.cs`), serves every builtin; the psm1
+`Expand-EscapeSequences` / `BashRuntime.ExpandEscapeSequences` are the Echo-dialect wrapper.
+The dialects differ exactly where bash's builtins do (oracle-checked, bash 5.2):
 
-### Replacement Chain
+| Dialect (used by) | Octal | Also | `\c` |
+|---|---|---|---|
+| `Echo` (`echo -e`) | `\0NNN` only (0 + up to 3 digits); `\101` stays literal | `\xHH \uHHHH \UHHHHHHHH \e \E`; `\"` stays literal | stops ALL output incl. the newline |
+| `PrintfB` (`printf %b` arg) | `\0NNN` and `\NNN` | as Echo | stops all output, including the rest of the format |
+| `PrintfFormat` (printf format) | `\NNN` = 1-3 digits INCLUDING the first (`\0101` = `\010` + `1`) | `\xHH \u \U \e \" \' \?` | literal (not special) |
+| `Tr` (tr SETs) | `\NNN` 1-3 digits | single-char escapes only; no `\x`/`\e` | n/a |
 
-1. Replace `\\` with a sentinel: `\0ESCAPED_BACKSLASH\0`
-2. Replace `\n` -> newline, `\t` -> tab, `\r` -> CR, `\a` -> bell, `\b` -> backspace,
-   `\f` -> form feed, `\v` -> vertical tab
-3. Replace sentinel back to literal `\`
+All dialects: `\\ \a \b \f \n \r \t \v`; an unknown escape keeps its backslash. `\0` yields a
+real NUL char, which survives pipes, `tee` and `>` (`printf 'x\0' > f` is 2 bytes). Values above
+`\177` become the corresponding Unicode char (not a raw byte) — known gap. `$'…'` is expanded by the
+emitter's own `ExpandAnsiCEscapes` (Transpiler cannot reference Cmdlets); it truncates the word at
+the first NUL, as bash's C strings do.
 
-The sentinel pattern uses NUL characters (`\0`) as delimiters to avoid collisions with
-any valid input text. This two-pass approach ensures that `\\n` produces a literal
-backslash followed by `n` rather than a newline.
-
-### Usage in Commands
-
-- **echo -e**: Expands escapes in the joined operand text.
-- **printf**: Expands escapes in the format string (after `%%` sentinel replacement).
-- **tr**: Expands escapes in both SET1 and SET2 operands before character class expansion.
+`printf %b` reads the RAW argument text (not the int/double coercion used by `%d`), so `\0101`
+keeps its leading zero.
 
 ## Temp File Strategy
 

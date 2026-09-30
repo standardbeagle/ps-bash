@@ -637,28 +637,13 @@ public static class BashRuntime
         return new BashArgs(flags, operands);
     }
 
-    private const string EscapedBackslashSentinel = "\0ESCAPED_BACKSLASH\0";
-
     /// <summary>
-    /// Converts C-style escape sequences in a string literal, matching the psm1
-    /// <c>Expand-EscapeSequences</c>: a sentinel-based two-pass scheme protects
-    /// <c>\\</c> so it becomes a literal backslash rather than seeding a later
-    /// expansion (<c>\\n</c> -&gt; literal <c>\n</c>, not a newline). Used by
-    /// <c>echo -e</c>, <c>printf</c>, and <c>tr</c>.
+    /// Converts C-style escape sequences (echo -e dialect). Thin wrapper over the single
+    /// expander <see cref="BashEscapes"/>; callers needing another builtin's grammar
+    /// (printf format / %b, tr) call it with their <see cref="EscapeDialect"/>.
     /// </summary>
     public static string ExpandEscapeSequences(string text)
-    {
-        text = text.Replace("\\\\", EscapedBackslashSentinel);
-        text = text.Replace("\\n", "\n");
-        text = text.Replace("\\t", "\t");
-        text = text.Replace("\\r", "\r");
-        text = text.Replace("\\a", "\a");
-        text = text.Replace("\\b", "\b");
-        text = text.Replace("\\f", "\f");
-        text = text.Replace("\\v", "\v");
-        text = text.Replace(EscapedBackslashSentinel, "\\");
-        return text;
-    }
+        => BashEscapes.Expand(text, EscapeDialect.Echo);
 
     /// <summary>
     /// Formats a bash-style error message (<c>command: message</c>). This is only

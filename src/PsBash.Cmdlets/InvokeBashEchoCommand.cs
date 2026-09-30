@@ -89,9 +89,11 @@ public sealed class InvokeBashEchoCommand : PSCmdlet
         var parsed = BashRuntime.ConvertFromBashArgs(args, defs);
 
         var text = string.Join(" ", parsed.Operands);
+        bool stopped = false;
         if (parsed.Flags["-e"])
-            text = BashRuntime.ExpandEscapeSequences(text);
-        if (!parsed.Flags["-n"])
+            text = BashEscapes.Expand(text, EscapeDialect.Echo, out stopped);
+        // \c stops ALL output, including the trailing newline.
+        if (!parsed.Flags["-n"] && !stopped)
             text += "\n";
 
         foreach (var obj in BashRuntime.EmitBashLines(text, "echo"))

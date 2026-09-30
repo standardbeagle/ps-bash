@@ -55,8 +55,9 @@ public class XargsInnerCommandFlagTests : IClassFixture<SharedPwshFixture>
     /// <summary>Pipe two NUL-terminated records into the transpiled xargs command.</summary>
     private string[] FeedNul(string a, string b, string xargsBash)
     {
-        var ps = PsEmitter.Transpile(xargsBash)!;
-        var (lines, errors) = Run($"\"{a}`0{b}`0\" | {ps}");
+        // Real bash text: printf's own `\0` escape supplies the NULs (it used to be built in PowerShell).
+        var ps = PsEmitter.Transpile($"printf '{a}\\0{b}\\0' | {xargsBash}")!;
+        var (lines, errors) = Run(ps);
         Assert.True(errors == 0, $"errors while running: {ps} => {LastErrors}");
         return lines;
     }
@@ -67,7 +68,6 @@ public class XargsInnerCommandFlagTests : IClassFixture<SharedPwshFixture>
     public void InnerBasenameDashA_WithNullDelim_ReachesBasename()
     {
         // GNU: b / d
-        // (Input is built in PowerShell: ps-bash's own printf has no `\0` escape yet.)
         Assert.Equal(new[] { "b", "d" }, FeedNul("a/b", "c/d", "xargs -0 basename -a"));
     }
 
