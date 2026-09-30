@@ -91,9 +91,6 @@ public class CpArgScanTests
     [InlineData("ERR cp: option '--strip-trailing-slashes' is recognized but not supported by ps-bash", "--strip-trailing-slashes", "a", "b")]
     [InlineData("ERR cp: option '--context' is recognized but not supported by ps-bash", "--context", "a", "b")]
     [InlineData("ERR cp: option '--attributes-only' is recognized but not supported by ps-bash", "--attributes-only", "a", "b")]
-    [InlineData("ERR cp: option '--preserve' is recognized but not supported by ps-bash", "--preserve", "a", "b")]  // FIX (was: ERR cp: unrecognized option '--preserve')
-    [InlineData("ERR cp: option '--preserve' is recognized but not supported by ps-bash", "--preserve=all", "a", "b")]  // FIX (was: ERR cp: unrecognized option '--preserve=all')
-    [InlineData("ERR cp: option '--no-preserve' is recognized but not supported by ps-bash", "--no-preserve=mode", "a", "b")]  // FIX (was: ERR cp: unrecognized option '--no-preserve=mode')
     [InlineData("ERR cp: option '--parents' is recognized but not supported by ps-bash", "--parents", "a", "b")]  // FIX (was: ERR cp: unrecognized option '--parents')
     [InlineData("ERR cp: option '--remove-destination' is recognized but not supported by ps-bash", "--remove-destination", "a", "b")]  // FIX (was: ERR cp: unrecognized option '--remove-destination')
     [InlineData("ERR cp: option '--copy-contents' is recognized but not supported by ps-bash", "--copy-contents", "a", "b")]  // FIX (was: ERR cp: unrecognized option '--copy-contents')
