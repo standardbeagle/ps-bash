@@ -102,7 +102,7 @@
 | kill | Invoke-BashKill | `-s SIG`, `-l`/`--list`, `--signal`, `-SIGNAME`/`-N` | Binary cmdlet (manual scan). No SIGHUP on Windows — termination maps to `Kill(entireProcessTree)` | No | No |
 | let | Invoke-BashLet | (arithmetic expressions) | Binary cmdlet (positional; delegates to the `Invoke-BashArith` Int64 evaluator). Exit 1 when the last expression evaluates to 0, per bash | No | No |
 | eval | Invoke-BashEval | `-PassThru`, `-NoLocalScope` | Binary cmdlet (positional `Source`). Re-enters the transpiler at runtime; also the site that fires `$global:__BashTrapERR` on a non-zero result | No | No |
-| bash | Invoke-BashBash | `-c CMD`, `--version` | Binary cmdlet (`-c` declared as `string? C`). Re-enters ps-bash itself rather than spawning a foreign shell — this is what makes `bash -c '…'` inside a script work | No | Yes |
+| bash | Invoke-BashBash | `-c CMD`, `--version` | Binary cmdlet (`-c` declared as `string? C` for DIRECT PowerShell calls; from the transpiler bash is on `OrderedArgCommands`, so the script's own args and the args after `-c CMD NAME` arrive single-quoted and are forwarded verbatim as positionals; `--help`/`--version` count only before the first operand). Re-enters ps-bash itself rather than spawning a foreign shell — this is what makes `bash -c '…'` inside a script work | No | Yes |
 | wait | Invoke-BashWait | `%N` job number, PID | **psm1 function** (job-control state) | No | No |
 | jobs | Invoke-BashJobs | `-l`, `-p` | **psm1 function** (job-control state) | No | No |
 | fg | Invoke-BashFg | `%N` job number | **psm1 function** (job-control state). `%N` is the `[N]` from `jobs`, NOT the `$!` id | No | No |

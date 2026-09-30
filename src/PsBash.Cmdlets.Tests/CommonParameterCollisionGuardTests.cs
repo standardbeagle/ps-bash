@@ -51,6 +51,8 @@ public class CommonParameterCollisionGuardTests
             // cmdlets still keep decoys for DIRECT calls (Pester: `Invoke-BashTee -a f`).
             ["time"] = new(CollidingLetters),
             ["env"] = new(CollidingLetters),
+            // bash: the script's own args / args after `-c CMD NAME` are positional; C stays declared for direct calls.
+            ["bash"] = new(CollidingLetters),
             ["tee"] = new(CollidingLetters),
             ["cp"] = new(CollidingLetters),
             ["mv"] = new(CollidingLetters),

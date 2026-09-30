@@ -222,8 +222,13 @@ as env's own decoy switch. `xargs`, `time` and `env` are therefore on
 The cmdlets' scans stop parsing their own options at the first operand (the command name);
 everything after is the inner argv. Ordered-arg commands also single-quote a bare literal
 containing a comma (`xargs -d , echo`): unquoted it is a PowerShell array / parse error.
-Not covered: `command` (declared `-v/-V/-p` switches would have to move into `Arguments`) and
-`bash SCRIPT -flags` — inner flags of those can still collide.
+`bash` is on the same set: the script's own args (`bash s.sh -v -e -c x` → `$1=-v $2=-e $3=-c $4=x`)
+and the args after `-c CMD NAME` are positional in bash, so they arrive single-quoted; the
+cmdlet recognises `--help`/`--version` only in bash's option zone (before the script /
+command string; `InvokeBashBashCommand.OptionZoneHas`) and forwards the rest verbatim to a
+child ps-bash, whose launcher (`ShellArgs.Parse`) ends option parsing at the script path.
+Not covered: `command` (declared `-v/-V/-p` switches would have to move into `Arguments`) —
+inner flags of it can still collide.
 
 ---
 

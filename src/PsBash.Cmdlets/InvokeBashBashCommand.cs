@@ -71,7 +71,9 @@ public sealed class InvokeBashBashCommand : PSCmdlet
             forwarded.AddRange(Arguments);
         }
 
-        if (forwarded.Contains("--help", StringComparer.Ordinal))
+        // Only flags in bash's OPTION zone (before the script path / -c string) are bash's own;
+        // `bash s.sh --version` hands --version to the script.
+        if (OptionZoneHas(forwarded, "--help"))
         {
             foreach (var line in InvokeCommand.InvokeScript(
                          "param($n) Show-BashHelp $n", "bash"))
@@ -84,7 +86,7 @@ public sealed class InvokeBashBashCommand : PSCmdlet
         // --version short-circuit: emit the ps-bash version banner without
         // spawning a child. Matches the oracle's `Emit-BashLine -Text`
         // shape (one bare TextOutput per line of the banner).
-        if (forwarded.Contains("--version", StringComparer.Ordinal))
+        if (OptionZoneHas(forwarded, "--version"))
         {
             var version = ResolveModuleVersion() ?? "0.7.6";
             var banner = $"ps-bash, version {version}\nBash-to-PowerShell transpiler";
@@ -167,6 +169,28 @@ public sealed class InvokeBashBashCommand : PSCmdlet
                 WriteObject(obj);
             }
         }
+    }
+
+    /// <summary>
+    /// True when <paramref name="flag"/> appears in bash's OPTION zone: the leading run of
+    /// dash-words, ending at the first operand (the script path, or the <c>-c</c> command
+    /// string) or at <c>--</c>. Everything after that is a positional parameter of the script
+    /// (<c>bash s.sh --version</c> gives the script <c>$1=--version</c>; oracle bash 5.2).
+    /// <c>-o</c>/<c>+o</c> take a value, which is skipped.
+    /// </summary>
+    internal static bool OptionZoneHas(IReadOnlyList<string> args, string flag)
+    {
+        for (int i = 0; i < args.Count; i++)
+        {
+            var a = args[i];
+            if (a == "--" || a.Length == 0 || (a[0] != '-' && a[0] != '+') || a == "-")
+                return false;
+            if (a == flag)
+                return true;
+            if (a is "-o" or "+o")
+                i++;
+        }
+        return false;
     }
 
     private string? ResolveModuleVersion()

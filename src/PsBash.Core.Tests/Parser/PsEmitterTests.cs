@@ -782,7 +782,19 @@ public class PsEmitterTests
         // Batch 1 of the shared ordered parser. Adding a command here also means adding it to
         // CommonParameterCollisionGuardTests.EmitterForceQuoted (Cmdlets.Tests) — that map is
         // how the guard knows the emitter, not a decoy, protects the colliding letters.
-        Assert.Equal(new[] { "cat", "cp", "env", "head", "ln", "mkdir", "mv", "nl", "rm", "rmdir", "tac", "tail", "tee", "time", "touch", "uniq", "wc", "xargs" }, PsEmitter.OrderedArgCommands.OrderBy(x => x).ToArray());
+        Assert.Equal(new[] { "bash", "cat", "cp", "env", "head", "ln", "mkdir", "mv", "nl", "rm", "rmdir", "tac", "tail", "tee", "time", "touch", "uniq", "wc", "xargs" }, PsEmitter.OrderedArgCommands.OrderBy(x => x).ToArray());
+    }
+
+    // `bash` is on OrderedArgCommands: the script's own args (`bash s.sh -v -e -c x`) and the
+    // args after `-c CMD NAME` are positional parameters in bash, so none may become a
+    // PowerShell parameter token (`-c` is a declared parameter of Invoke-BashBash).
+    [Theory]
+    [InlineData("bash s.sh -v -e -c x", "Invoke-BashBash s.sh '-v' '-e' '-c' x")]
+    [InlineData("bash -c 'echo hi' zero -d", "Invoke-BashBash '-c' 'echo hi' zero '-d'")]
+    [InlineData("bash -c 'echo \"$0\"' zero -Verbose", "Invoke-BashBash '-c' 'echo \"$0\"' zero '-Verbose'")]
+    public void Transpile_BashScriptArgs_AreSingleQuotedPositionals(string bash, string expected)
+    {
+        Assert.Equal(expected, PsEmitter.Transpile(bash));
     }
 
     [Theory]
@@ -4760,7 +4772,7 @@ public class PsEmitterTests
     public void Transpile_BashWithDashC_EmitsInvokeBashBash()
     {
         var result = PsEmitter.Transpile("bash -c \"echo hello\"");
-        Assert.Equal("Invoke-BashBash -c \"echo hello\"", result);
+        Assert.Equal("Invoke-BashBash '-c' \"echo hello\"", result);
     }
 
     [Fact]
@@ -4774,14 +4786,14 @@ public class PsEmitterTests
     public void Transpile_BashVersion_EmitsInvokeBashBash()
     {
         var result = PsEmitter.Transpile("bash --version");
-        Assert.Equal("Invoke-BashBash --version", result);
+        Assert.Equal("Invoke-BashBash '--version'", result);
     }
 
     [Fact]
     public void Transpile_BashPipeToGrep_EmitsMappedPipeline()
     {
         var result = PsEmitter.Transpile("bash -c \"echo hello\" | grep hello");
-        Assert.Equal("Invoke-BashBash -c \"echo hello\" | Invoke-BashGrep hello", result);
+        Assert.Equal("Invoke-BashBash '-c' \"echo hello\" | Invoke-BashGrep hello", result);
     }
 
     [Fact]
