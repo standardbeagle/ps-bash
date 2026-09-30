@@ -257,11 +257,10 @@ internal sealed class WcStage : ILineStreamStage
     }
 }
 
-/// <summary><c>grep</c> pipeline mode. Certified subset: exactly ONE pattern (the
-/// first non-flag operand or a single <c>-e</c>) with the SINGLE boolean flags
-/// <c>-i -v -n -c -w -F -E</c>. Declines flag bundles (`-in`, `-vc`: a bundle can
-/// prefix-collide with the cmdlet binder, e.g. `-InputObject`), multiple patterns,
-/// <c>-o/-A/-B/-C/-m/-q/-r/-l/-L/-x/-s/-H/-h/-f/-P</c>, file operands, long forms,
+/// <summary><c>grep</c> pipeline mode. The cmdlet's <c>Plan</c> decides first; certified subset
+/// within it: exactly ONE pattern (the first non-flag operand or a single <c>-e</c>) with the
+/// boolean flags <c>-i -v -n -c -w -F -E -G</c> (bundles included). Declines multiple patterns,
+/// <c>-o/-A/-B/-C/-m/-q/-r/-l/-L/-x/-s/-H/-h/-f/-P</c>, file operands, other long forms,
 /// and <c>--</c> — all handled by the cmdlet on fallback. Regex assembly + matching
 /// are the cmdlet's own shared helpers
 /// (<see cref="InvokeBashGrepCommand.TryBuildRegexes"/> /
@@ -281,51 +280,37 @@ internal sealed class GrepStage : ILineStreamStage
 
     internal static ILineStreamStage? TryCreate(string[] argv)
     {
-        bool ignoreCase = false, invert = false, lineNumbers = false, countOnly = false;
-        bool wholeWord = false, fixedString = false, extended = false;
-        var patterns = new List<string>();
-        var operands = new List<string>();
+        // The cmdlet's own resolver (shared ordered parser, GNU option table) decides first, so this
+        // core can NEVER accept an argv the cmdlet would reject or read differently
+        // (LineStreamArgAgreementTests).
+        var plan = InvokeBashGrepCommand.Plan(argv);
+        if (plan.Declined) return null;
 
-        int i = 0;
-        while (i < argv.Length)
+        // Certified subset within that: -i -v -n -c -w -F -E -G (bundles fine: one token per letter)
+        // with exactly ONE pattern (first operand or a single -e) and no file operand. Everything else
+        // (-o/-A/-B/-C/-m/-q/-r/-l/-L/-x/-s/-H/-h/-f/-P, --include/..., `--`, --color) runs the cmdlet.
+        foreach (var tok in plan.Parsed.Tokens)
         {
-            var a = argv[i];
-            if (a == "-e")
+            if (tok.Kind == ArgTokKind.DoubleDash) return null;
+            if (tok.Kind != ArgTokKind.Option) continue;
+            switch (tok.OptId)
             {
-                i++;
-                if (i >= argv.Length) return null;
-                patterns.Add(argv[i]);
-                i++;
-                continue;
+                case "ignore-case": case "invert": case "line-number": case "count": case "word":
+                case "F": case "E": case "G": case "regexp":
+                    break;
+                default:
+                    return null;
             }
-            // A SINGLE supported boolean flag only. Bundles (`-in`, `-vc`, …) are
-            // declined: a bundle can prefix-collide with the cmdlet's binder (e.g.
-            // `-in` prefix-matches `-InputObject`), so its unfused behavior isn't the
-            // simple char-by-char union — decline and let the cmdlet's decoy handling
-            // run on fallback, keeping the two paths byte-identical.
-            if (a.Length == 2 && a[0] == '-')
-            {
-                switch (a[1])
-                {
-                    case 'i': ignoreCase = true; break;
-                    case 'v': invert = true; break;
-                    case 'n': lineNumbers = true; break;
-                    case 'c': countOnly = true; break;
-                    case 'w': wholeWord = true; break;
-                    case 'F': fixedString = true; break;
-                    case 'E': extended = true; break;
-                    default: return null; // unsupported single flag → decline
-                }
-                i++;
-                continue;
-            }
-            if (a.Length > 1 && a[0] == '-' && a[1] != '-') return null; // bundle → decline
-            // Non-flag operand: the pattern (first) — a second operand is a file → decline.
-            operands.Add(a);
-            i++;
         }
 
-        if (patterns.Count == 0)
+        var patterns = new List<string>();
+        foreach (var (isFile, value) in plan.PatternSources)
+        {
+            if (isFile) return null;
+            patterns.Add(value);
+        }
+        var operands = plan.Operands;
+        if (plan.PatternSources.Count == 0)
         {
             if (operands.Count == 0) return null; // no pattern → usage error path
             patterns.Add(operands[0]);
@@ -336,11 +321,11 @@ internal sealed class GrepStage : ILineStreamStage
 
         // Shared ladder with the cmdlet (lineRegexp=false — -x is declined above).
         if (!InvokeBashGrepCommand.TryBuildRegexes(
-                patterns, fixedString, extended, wholeWord, lineRegexp: false, ignoreCase,
+                patterns, plan.Fixed, plan.Extended, plan.Word, lineRegexp: false, plan.IgnoreCase,
                 out var regexes, out _))
             return null; // invalid regex → decline; the cmdlet emits the error
 
-        return new GrepStage(regexes, invert, lineNumbers, countOnly);
+        return new GrepStage(regexes, plan.Invert, plan.LineNumbers, plan.Count);
     }
 
     public IEnumerable<string> Run(IEnumerable<string> input)
@@ -384,57 +369,47 @@ internal sealed class SedStage : ILineStreamStage
 
     internal static ILineStreamStage? TryCreate(string[] argv)
     {
-        bool suppress = false, extended = false;
-        var expressions = new List<string>();
-        var operands = new List<string>();
+        // The cmdlet's own resolver (shared ordered parser, GNU option table) decides first, so this
+        // core can NEVER accept an argv the cmdlet would reject or read differently
+        // (LineStreamArgAgreementTests).
+        var plan = InvokeBashSedCommand.Plan(argv);
+        if (plan.Declined) return null;
 
-        int i = 0;
-        while (i < argv.Length)
+        // Certified subset within that: -n, -E/-r, -e EXPR (repeatable, bundles fine) or one script
+        // operand. Declines -i -f -s -z and the accepted no-ops (they are the cmdlet's), `--`, file
+        // operands, and a script starting with `#n` (the cmdlet owns that magic comment).
+        foreach (var tok in plan.Parsed.Tokens)
         {
-            var a = argv[i];
-            if (a == "--help" || a == "--version") return null;
-            if (a == "-e")
-            {
-                i++;
-                if (i >= argv.Length) return null;
-                expressions.Add(argv[i]);
-                i++;
-                continue;
-            }
-            // Script-file / end-of-options / any long flag → cmdlet paths, decline.
-            if (a == "-f" || a == "--" || a.StartsWith("--", StringComparison.Ordinal))
+            if (tok.Kind == ArgTokKind.DoubleDash) return null;
+            if (tok.Kind != ArgTokKind.Option) continue;
+            if (tok.OptId != InvokeBashSedCommand.OptQuiet && tok.OptId != InvokeBashSedCommand.OptExpr
+                && tok.OptId != InvokeBashSedCommand.OptExtended)
                 return null;
-            // A SINGLE supported flag only. Bundles (`-nE`, `-i.bak`, …) are declined —
-            // as in grep, a bundle's unfused behavior may not be the char-by-char union
-            // under the cmdlet binder, so let the cmdlet handle it on fallback.
-            if (a.Length == 2 && a[0] == '-')
-            {
-                switch (a[1])
-                {
-                    case 'n': suppress = true; break;
-                    case 'E': case 'r': extended = true; break;
-                    default: return null; // -i (in-place) / unknown single flag → decline
-                }
-                i++;
-                continue;
-            }
-            if (a.Length > 1 && a[0] == '-' && a[1] != '-') return null; // bundle / -i.bak → decline
-            operands.Add(a);
-            i++;
         }
 
-        if (expressions.Count == 0)
+        var expressions = new List<string>();
+        foreach (var (isFile, value) in plan.Sources)
+        {
+            if (isFile) return null;
+            expressions.Add(value);
+        }
+        var operands = plan.Operands;
+        if (plan.Sources.Count == 0)
         {
             if (operands.Count == 0) return null;
             expressions.Add(operands[0]);
             operands.RemoveAt(0);
         }
         if (operands.Count > 0) return null; // file operand(s) → file mode, decline
+        if (expressions[0].StartsWith("#n", StringComparison.Ordinal)) return null;
+        // `-e 'a\' -e text`: the cmdlet joins such chunks into one command, so leave them to it.
+        foreach (var expr in expressions)
+            if (expr.EndsWith('\\')) return null;
 
-        if (!InvokeBashSedCommand.TryBuildCommands(expressions, extended, out var commands))
+        if (!InvokeBashSedCommand.TryBuildCommands(expressions, plan.Extended, out var commands))
             return null; // parse error → cmdlet reports it
 
-        return new SedStage(commands, suppress);
+        return new SedStage(commands, plan.Quiet);
     }
 
     public IEnumerable<string> Run(IEnumerable<string> input)

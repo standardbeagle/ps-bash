@@ -34,14 +34,15 @@ public class CommonParameterCollisionGuardTests
         new() { 'a', 'c', 'd', 'e', 'i', 'o', 'p', 'v', 'w' };
 
     /// <summary>
-    /// Flags the EMITTER force-quotes instead of declaring a cmdlet decoy, because
-    /// they are position-critical infix operators a switch decoy would displace.
-    /// MUST stay in sync with <c>PsEmitter.FindForceQuoteFlags</c>.
+    /// Flags the EMITTER single-quotes instead of the cmdlet declaring a decoy. MUST stay in sync with
+    /// <c>PsEmitter.OrderedArgCommands</c> (and, for echo, its force-quote set).
     /// </summary>
     private static readonly Dictionary<string, HashSet<char>> EmitterForceQuoted =
         new(StringComparer.Ordinal)
         {
-            ["find"] = new() { 'o', 'a' },
+            // find: on OrderedArgCommands — every dash word of the expression (-o/-a operators, the argv of
+            // -exec) is single-quoted and reaches Arguments verbatim and in order.
+            ["find"] = new(CollidingLetters),
             // xargs: single-quoted like the ordered set below, so the INNER command's flags
             // (`xargs basename -a`) reach Arguments verbatim too. The manual scan stops at the
             // first operand; I/P/D stay declared for direct calls.
@@ -86,6 +87,12 @@ public class CommonParameterCollisionGuardTests
             ["file"] = new(CollidingLetters),
             ["cut"] = new(CollidingLetters),
             ["sort"] = new(CollidingLetters),
+            // grep: GNU getopt via the shared parser; direct calls go through the psm1 literal-args proxy.
+            ["grep"] = new(CollidingLetters),
+            // sed: GNU getopt via the shared parser; direct calls go through the psm1 literal-args proxy.
+            ["sed"] = new(CollidingLetters),
+            // rg: ripgrep-flavoured ordered parser; the native passthrough receives the argv verbatim.
+            ["rg"] = new(CollidingLetters),
         };
 
     [Fact]
@@ -154,7 +161,7 @@ public class CommonParameterCollisionGuardTests
             + string.Join("\n  ", violations.OrderBy(v => v, StringComparer.Ordinal))
             + "\n\nFix each by declaring a single-letter [Parameter] decoy on the cmdlet (and reading it "
             + "like the existing I/V/C/W/O switches), or — for a position-critical infix operator — by "
-            + "adding it to PsEmitter.FindForceQuoteFlags and this test's EmitterForceQuoted map. "
+            + "putting the command on PsEmitter.OrderedArgCommands and this test's EmitterForceQuoted map. "
             + "See docs/solutions/common-parameter-flag-collisions.md.");
     }
 

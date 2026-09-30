@@ -616,11 +616,11 @@ public class InvokeBashGrepCommandTests : IDisposable, IClassFixture<SharedPwshF
     [Fact]
     public void Grep_UnsupportedFlagInBundle_ReportsFirstOffender()
     {
-        // -i is honored, then -y (a real but unsupported grep flag) is the offending
-        // char getopt would stop on. (-y is used rather than -x/-P now that those are
+        // -i is honored, then -T (a real but unsupported grep flag) is the offending
+        // char getopt would stop on. (-T is used rather than -y/-x/-P now that those are
         // implemented.)
-        var (_, errs) = RunWithErrors("'x' | Invoke-BashGrep -iy foo");
-        Assert.Contains(errs, m => m.Contains("-y", StringComparison.Ordinal)
+        var (_, errs) = RunWithErrors("'x' | Invoke-BashGrep -iT foo");
+        Assert.Contains(errs, m => m.Contains("-T", StringComparison.Ordinal)
                                    && m.Contains("not supported", StringComparison.OrdinalIgnoreCase));
     }
 

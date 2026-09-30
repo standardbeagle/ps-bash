@@ -69,6 +69,15 @@ public sealed class OptSpecSet
     /// <summary>Id produced by <c>-NUM</c>, or null when the shorthand is off.</summary>
     public string? NumericShorthandId { get; }
 
+    /// <summary>
+    /// When set, a run of digits ANYWHERE in a short bundle (<c>-5</c>, <c>-1n</c>, <c>-n12</c>,
+    /// <c>-A1 -12</c>) is a <see cref="OptKind.Value"/> option with this Id whose value is the
+    /// contiguous digit run (grep's <c>-NUM</c> context shorthand: each argv element's digits form
+    /// ONE number; a later element starts a new one). Takes precedence over
+    /// <see cref="NumericShorthandId"/> and over a digit that is also a declared short option.
+    /// </summary>
+    public string? BundleDigitsId { get; }
+
     /// <summary>Id of the implicit GNU <c>--help</c> option (see <c>gnuInfoOptions</c>).</summary>
     public const string HelpId = "help";
 
@@ -91,8 +100,10 @@ public sealed class OptSpecSet
         bool gnuInfoOptions = false,
         int usageExitCode = 1,
         IEnumerable<string>? longOptionOrder = null,
-        string? digitOptionWording = null)
+        string? digitOptionWording = null,
+        string? bundleDigitsId = null)
     {
+        BundleDigitsId = bundleDigitsId;
         UsageExitCode = usageExitCode;
         DigitOptionWording = digitOptionWording;
         var declared = new List<string>();

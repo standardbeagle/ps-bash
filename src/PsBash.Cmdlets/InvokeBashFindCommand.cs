@@ -1,3 +1,4 @@
+using System.Linq;
 using System.Management.Automation;
 using System.Text;
 
@@ -131,7 +132,39 @@ public sealed class InvokeBashFindCommand : PSCmdlet
         // here as before. An empty token list matches everything (bash: `find .`).
         var exprTokens = new List<FindTok>();
 
+        // GNU find is NOT getopt: `find [-H|-L|-P] [-D opts] [-Olevel] [PATH...] [EXPRESSION]`. Leading global
+        // options, then every word up to the first one that starts an expression is a search path, and a
+        // word after the expression has begun is "paths must precede expression".
         int i = 0;
+        while (i < args.Length)
+        {
+            string o = args[i];
+            if (o == "-H" || o == "-P") { i++; continue; }          // symlink policy: nothing to follow here
+            if (o == "-L")
+            {
+                EmitError("find: unsupported option '-L'", 1);
+                i++;
+                continue;
+            }
+            if (o == "-D") { i += 2; continue; }                      // debug options: accepted, ignored
+            if (o.Length >= 2 && o[0] == '-' && o[1] == 'O' && o.Skip(2).All(char.IsDigit)) { i++; continue; }
+            break;
+        }
+        while (i < args.Length && !StartsExpression(args[i]))
+        {
+            operands.Add(args[i]);
+            i++;
+        }
+
+        // A value-bearing predicate whose argument is missing is GNU's `missing argument to `-name'`.
+        bool TryArg(string predicate, out string value)
+        {
+            if (++i < args.Length) { value = args[i]; return true; }
+            EmitError($"find: missing argument to `{predicate}'", 1);
+            value = string.Empty;
+            return false;
+        }
+
         while (i < args.Length)
         {
             string arg = args[i];
@@ -139,13 +172,18 @@ public sealed class InvokeBashFindCommand : PSCmdlet
             {
                 // ── global options (not part of the boolean expression) ──
                 case "-maxdepth":
-                    if (++i < args.Length && int.TryParse(args[i], out var md)) maxDepth = md;
-                    i++;
-                    continue;
                 case "-mindepth":
-                    if (++i < args.Length && int.TryParse(args[i], out var mnd)) minDepth = mnd;
+                {
+                    if (!TryArg(arg, out var depthText)) return;
+                    if (depthText.Length == 0 || !depthText.All(char.IsDigit) || !int.TryParse(depthText, out var depthValue))
+                    {
+                        EmitError($"find: Expected a positive decimal integer argument to {arg}, but got ‘{depthText}’", 1);
+                        return;
+                    }
+                    if (arg == "-maxdepth") maxDepth = depthValue; else minDepth = depthValue;
                     i++;
                     continue;
+                }
                 // ── actions ──
                 case "-delete":
                     doDelete = true;
@@ -167,6 +205,7 @@ public sealed class InvokeBashFindCommand : PSCmdlet
                     continue;
                 case "-exec":
                     i++;
+                    execTerminator = null;
                     execCmd = new List<string>();
                     while (i < args.Length)
                     {
@@ -179,6 +218,11 @@ public sealed class InvokeBashFindCommand : PSCmdlet
                         }
                         execCmd.Add(ea);
                         i++;
+                    }
+                    if (execTerminator == null || execCmd.Count == 0)
+                    {
+                        EmitError("find: missing argument to `-exec'", 1);
+                        return;
                     }
                     continue;
                 // ── boolean operators ──
@@ -208,14 +252,14 @@ public sealed class InvokeBashFindCommand : PSCmdlet
                 // ── predicate leaves ──
                 case "-name":
                 {
-                    string p = (++i < args.Length) ? args[i] : string.Empty;
+                    if (!TryArg(arg, out var p)) return;
                     exprTokens.Add(new FindTok(FTk.Leaf, c => GlobMatch(c.Item.Name, p, ci: false)));
                     i++;
                     continue;
                 }
                 case "-iname":
                 {
-                    string p = (++i < args.Length) ? args[i] : string.Empty;
+                    if (!TryArg(arg, out var p)) return;
                     exprTokens.Add(new FindTok(FTk.Leaf, c => GlobMatch(c.Item.Name, p, ci: true)));
                     i++;
                     continue;
@@ -223,7 +267,7 @@ public sealed class InvokeBashFindCommand : PSCmdlet
                 case "-path":
                 case "-wholename":
                 {
-                    string p = (++i < args.Length) ? args[i] : string.Empty;
+                    if (!TryArg(arg, out var p)) return;
                     exprTokens.Add(new FindTok(FTk.Leaf, c => PathGlobMatch(c.DisplayPath, p, false)));
                     i++;
                     continue;
@@ -231,7 +275,7 @@ public sealed class InvokeBashFindCommand : PSCmdlet
                 case "-ipath":
                 case "-iwholename":
                 {
-                    string p = (++i < args.Length) ? args[i] : string.Empty;
+                    if (!TryArg(arg, out var p)) return;
                     exprTokens.Add(new FindTok(FTk.Leaf, c => PathGlobMatch(c.DisplayPath, p, true)));
                     i++;
                     continue;
@@ -240,7 +284,7 @@ public sealed class InvokeBashFindCommand : PSCmdlet
                 case "-iregex":
                 {
                     bool ci = arg == "-iregex";
-                    string p = (++i < args.Length) ? args[i] : string.Empty;
+                    if (!TryArg(arg, out var p)) return;
                     System.Text.RegularExpressions.Regex rxLeaf;
                     try
                     {
@@ -260,14 +304,32 @@ public sealed class InvokeBashFindCommand : PSCmdlet
                 }
                 case "-type":
                 {
-                    string tf = (++i < args.Length) ? args[i] : string.Empty;
-                    exprTokens.Add(new FindTok(FTk.Leaf, c => tf switch
+                    if (!TryArg(arg, out var tf)) return;
+                    foreach (var tc in tf.Split(','))
                     {
-                        "f" => !c.IsDir,
-                        "d" => c.IsDir,
-                        // -type l: symlink / junction (a reparse point on Windows).
-                        "l" => (c.Item.Attributes & System.IO.FileAttributes.ReparsePoint) != 0,
-                        _ => false, // b/c/p/s special files: no Windows analogue
+                        if (tc.Length != 1 || "bcdflpsD".IndexOf(tc[0]) < 0)
+                        {
+                            EmitError($"find: Unknown argument to -type: {tc}", 1);
+                            return;
+                        }
+                    }
+                    // GNU: `-type f,d` is any of the listed types.
+                    var typeLetters = tf.Split(',');
+                    exprTokens.Add(new FindTok(FTk.Leaf, c =>
+                    {
+                        foreach (var letter in typeLetters)
+                        {
+                            bool hit = letter switch
+                            {
+                                "f" => !c.IsDir,
+                                "d" => c.IsDir,
+                                // -type l: symlink / junction (a reparse point on Windows).
+                                "l" => (c.Item.Attributes & System.IO.FileAttributes.ReparsePoint) != 0,
+                                _ => false, // b/c/p/s/D special files: no Windows analogue
+                            };
+                            if (hit) return true;
+                        }
+                        return false;
                     }));
                     i++;
                     continue;
@@ -280,7 +342,7 @@ public sealed class InvokeBashFindCommand : PSCmdlet
                     continue;
                 case "-size":
                 {
-                    string e = (++i < args.Length) ? args[i] : string.Empty;
+                    if (!TryArg(arg, out var e)) return;
                     var (op, units, unitSize) = ParseSizeExpr(e);
                     exprTokens.Add(new FindTok(FTk.Leaf, c => SizeMatch(c.Item, c.IsDir, op, units, unitSize)));
                     i++;
@@ -288,7 +350,7 @@ public sealed class InvokeBashFindCommand : PSCmdlet
                 }
                 case "-mtime":
                 {
-                    string e = (++i < args.Length) ? args[i] : string.Empty;
+                    if (!TryArg(arg, out var e)) return;
                     var (op, days) = ParseMtimeExpr(e);
                     exprTokens.Add(new FindTok(FTk.Leaf, c => MtimeMatch(c, op, days)));
                     i++;
@@ -296,7 +358,7 @@ public sealed class InvokeBashFindCommand : PSCmdlet
                 }
                 case "-newer":
                 {
-                    string f = (++i < args.Length) ? args[i] : string.Empty;
+                    if (!TryArg(arg, out var f)) return;
                     DateTime newerThan;
                     try
                     {
@@ -346,12 +408,11 @@ public sealed class InvokeBashFindCommand : PSCmdlet
                     // a non-dash token is a genuine search-path operand.
                     if (FileSystemHelpers.IsOptionLike(arg))
                     {
-                        EmitError($"find: unknown predicate '{arg}'", 1);
+                        EmitError($"find: unknown predicate `{arg}'", 1);
                         return;
                     }
-                    operands.Add(arg);
-                    i++;
-                    continue;
+                    EmitError($"find: paths must precede expression: `{arg}'", 1);
+                    return;
             }
         }
 
@@ -949,6 +1010,13 @@ public sealed class InvokeBashFindCommand : PSCmdlet
     }
 
     // ── error sink ───────────────────────────────────────────────────────────
+
+    /// <summary>
+    /// GNU find: the path list ends at the first word that starts an expression — anything beginning with
+    /// a dash, or one of <c>( ) ! ,</c>.
+    /// </summary>
+    internal static bool StartsExpression(string word) =>
+        word.Length > 0 && (word[0] == '-' || word is "(" or ")" or "!" or ",");
 
     private void EmitError(string message, int exitCode)
     {
