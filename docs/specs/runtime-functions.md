@@ -256,7 +256,7 @@ PowerShell's `$PWD`.
 
 The ordered getopt-style parser that replaces per-cmdlet hand scans. Pure and AOT-safe (no
 `PSCmdlet`/`SessionState`/reflection), so it is unit-tested in isolation
-(`ArgParserTests`). **Migrated so far: `tee`, `cp`, `mv`.** `BashRuntime.ConvertFromBashArgs` is
+(`ArgParserTests`). **Migrated so far: `tee`, `cp`, `mv`, `rm`, `mkdir`, `rmdir`, `ln`, `touch`.** `BashRuntime.ConvertFromBashArgs` is
 untouched — its contract (unknown flag becomes an operand) differs.
 
 **API** (`src/PsBash.Cmdlets/Args/`):
@@ -283,7 +283,7 @@ untouched — its contract (unknown flag becomes an operand) differs.
   so scripts can tell "ps-bash cannot do this" from "you typed it wrong". `TryHandleInfoOptions` acts on an abbreviated
   `--vers`/`--he`.
 
-**Emitter opt-in.** `PsEmitter.OrderedArgCommands` (tee, cp, mv): for these, `EmitPassthrough`
+**Emitter opt-in.** `PsEmitter.OrderedArgCommands` (tee, cp, mv, rm, mkdir, rmdir, ln, touch): for these, `EmitPassthrough`
 single-quotes EVERY dash-leading literal word and `--` (via `PsBuild.SingleQuote`; quoted and mixed
 words like `--x="a b"` collapse to one literal). No flag is then a PowerShell parameter token, so
 each reaches `[ValueFromRemainingArguments] Arguments` verbatim and in order — no prefix collision
@@ -306,10 +306,15 @@ colliding bare letter that has NO decoy (`Invoke-BashTee -i`) still fails in the
 2. Add `internal static ParsedArgs ScanArgs(string[] args)` as the test seam.
 3. In the cmdlet: `PrependDecoys` → keep the exact `--help`/`--version` early exits →
    `ScanArgs` → `TryWriteParseError` → `TryHandleInfoOptions` → read `Has/Last/Operands`.
+   A value-bearing decoy (`touch`'s `D` for `-d`) is re-injected as the two elements `"-d", value`.
 4. Before deleting the old scan, diff old vs new over an argv corpus (bundles, `--`, long forms,
    abbreviations, unknown and unsupported flags, lone `-`, dash operands after `--`) and check
    every divergence against GNU (`wsl bash`); pin the result as an expected-value table
-   (`TeeArgScanTests`, `CpArgScanTests`, `MvArgScanTests`).
+   (`TeeArgScanTests`, `CpArgScanTests`, `MvArgScanTests`, `RmArgScanTests`, `MkdirArgScanTests`,
+   `RmdirArgScanTests`, `LnArgScanTests`, `TouchArgScanTests`). Check the exit status too: set
+   `usageExitCode:` only for tools whose GNU usage status is not 1. **Oracle-check the option
+   TABLE itself** — batch 2 found ln and touch had no classifier at all (flags became link targets
+   / file names) and that rmdir's "unsupported" `-Z`/`--context` do not exist in GNU 9.4.
 5. Add the command to `OrderedArgCommands` and the guard map; add emitter tests.
 
 ## Escape Sequence Handling
