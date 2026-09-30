@@ -1,6 +1,8 @@
+using System.Linq;
 using System.Management.Automation;
 using System.Text;
 using System.Text.RegularExpressions;
+using PsBash.Cmdlets.Args;
 
 namespace PsBash.Cmdlets;
 
@@ -30,28 +32,25 @@ namespace PsBash.Cmdlets;
 /// restart-cycle semantics, <c>p</c>/<c>P</c> printing, <c>a</c>/<c>i</c>/<c>c</c>
 /// insert/append, <c>q</c> early-quit, and <c>y</c> transliteration.</item>
 /// </list>
-/// File mode resolves operands via the same <c>Resolve-BashGlob</c> slice the
-/// other migrated cmdlets reimplement in C# (<see cref="ResolveGlob"/>), reads
-/// with CRLF normalization, and supports <c>-i</c> in-place rewrite; pipeline
+/// File mode resolves operands through <see cref="FileSystemHelpers.ResolveOperandPaths"/> (so a
+/// diagnostic names the operand as typed), reads with CRLF normalization, and supports
+/// <c>-i[SUFFIX]</c> in-place rewrite with a backup; without <c>-i</c>/<c>-s</c> the files are ONE
+/// continuous stream like GNU (line numbers and <c>$</c> span them). Pipeline
 /// mode preserves original typed objects where a one-to-one line mapping holds,
 /// matching the oracle. File-read / file-write errors emit a bash-style error
 /// through <see cref="FileSystemHelpers.WriteBashError"/> (one ErrorRecord);
 /// <c>--help</c> delegates to <c>Show-BashHelp</c>.
 ///
-/// Common-parameter collision: the bash flag <c>-e</c> (expression) prefix-
-/// collides with the PowerShell common parameters <c>-ErrorAction</c> /
-/// <c>-ErrorVariable</c> — an unbound <c>-e</c> would be rejected as ambiguous
-/// before reaching <see cref="Arguments"/>. It is therefore declared as an
-/// explicit value-bearing <see cref="Expression"/> parameter (named <c>-e</c>):
-/// an exact parameter-name match beats a common-parameter prefix match. Because
-/// PowerShell parameter names are case-insensitive, <c>-E</c> also binds here;
-/// the psm1 oracle treated <c>-E</c> (extended regex) and <c>-e</c>
-/// (expression) case-sensitively, so the extended-regex flag is recovered
-/// independently: <c>-r</c> is an explicit <see cref="R"/> switch (no colliding
-/// prefix), and a bundled short-flag form such as <c>-rn</c> or <c>-nE</c> is
-/// recovered from <see cref="Arguments"/> by <see cref="EndProcessing"/>. The
-/// remaining flags <c>-n</c>, <c>-i</c>, and <c>-f</c> have no colliding prefix
-/// and stay in <see cref="Arguments"/>.
+/// Option parsing is the shared ORDERED parser (<see cref="ArgParser"/>, GNU sed 4.9 option table —
+/// see <see cref="Plan"/>): repeated <c>-e</c>/<c>-f</c>, bundles (<c>-ne</c>, <c>-nE</c>, <c>-i.bak</c>),
+/// unique-prefix long options, the first operand is the script only when no <c>-e</c>/<c>-f</c> was
+/// given, usage errors exit 1. The transpiler single-quotes every flag
+/// (<c>PsEmitter.OrderedArgCommands</c>), so the whole argv reaches <see cref="Arguments"/> verbatim and
+/// in order. Typed directly at PowerShell the binder still intercepts <c>-e</c> (prefix of
+/// <c>-ErrorAction</c>; case-insensitive, so <c>-E</c> too), <c>-r</c> and <c>-i</c>: they are declared
+/// as <see cref="Expression"/> / <see cref="R"/> / <see cref="I"/> and re-injected as ordinary tokens
+/// before parsing, and the psm1 <c>Invoke-BashSed</c> proxy hands every argument over as a literal string
+/// so a repeated <c>-e</c> never meets the binder.
 /// </summary>
 [Cmdlet(VerbsLifecycle.Invoke, "BashSed")]
 [OutputType(typeof(PSObject))]
@@ -103,164 +102,168 @@ public sealed class InvokeBashSedCommand : PSCmdlet
         }
     }
 
+    internal const string OptQuiet = "quiet", OptExpr = "expression", OptFile = "file",
+        OptExtended = "extended", OptInPlace = "in-place", OptSeparate = "separate",
+        OptNullData = "null-data", OptLineLen = "line-length", OptNoop = "noop";
+
+    /// <summary>GNU sed options ps-bash refuses (exit 2): <c>--debug</c> annotates program execution.</summary>
+    private static readonly string[] SedValidButUnsupported = { "--debug" };
+
+    /// <summary>
+    /// sed's option surface (GNU sed 4.9). <c>-i[SUFFIX]</c> / <c>--in-place[=SUFFIX]</c> take an
+    /// ATTACHED suffix only (<c>-i.bak</c>; <c>-i -e x</c> means no suffix). <c>-u -b -l N --posix
+    /// --sandbox --follow-symlinks</c> are accepted no-ops. Usage errors exit 1. Ambiguity lists follow
+    /// GNU's <c>longopts[]</c> table order (<c>--s</c> = silent, sandbox, separate).
+    /// </summary>
+    private static readonly OptSpecSet SedSpec = new(
+        new[]
+        {
+            new OptSpec(OptQuiet, 'n', "quiet"),
+            new OptSpec(OptQuiet, '\0', "silent"),
+            new OptSpec(OptExpr, 'e', "expression", OptKind.Value),
+            new OptSpec(OptFile, 'f', "file", OptKind.Value),
+            new OptSpec(OptExtended, 'E', "regexp-extended"),
+            new OptSpec(OptExtended, 'r', null),
+            new OptSpec(OptInPlace, 'i', "in-place", OptKind.OptionalValue),
+            new OptSpec(OptSeparate, 's', "separate"),
+            new OptSpec(OptNullData, 'z', "null-data"),
+            new OptSpec(OptNullData, '\0', "zero-terminated"),
+            new OptSpec(OptLineLen, 'l', "line-length", OptKind.Value),
+            new OptSpec(OptNoop, 'u', "unbuffered"),
+            new OptSpec(OptNoop, 'b', "binary"),
+            new OptSpec(OptNoop, '\0', "posix"),
+            new OptSpec(OptNoop, '\0', "sandbox"),
+            new OptSpec(OptNoop, '\0', "follow-symlinks"),
+        },
+        SedValidButUnsupported,
+        allowAbbrev: true,
+        gnuInfoOptions: true,
+        usageExitCode: 1,
+        longOptionOrder: new[]
+        {
+            "binary", "regexp-extended", "debug", "in-place", "expression", "file", "line-length",
+            "null-data", "zero-terminated", "quiet", "posix", "silent", "sandbox", "separate",
+            "unbuffered", "version", "help", "follow-symlinks",
+        });
+
+    /// <summary>Pure argv scan (unit-test seam).</summary>
+    internal static ParsedArgs ScanArgs(string[] args) => ArgParser.Parse(args, SedSpec);
+
+    internal sealed class SedArgs
+    {
+        public ParsedArgs Parsed = null!;
+        public bool Quiet, Extended, Separate, NullData, InPlace;
+
+        /// <summary>The <c>-i</c> backup suffix (null = edit without a backup).</summary>
+        public string? Suffix;
+
+        /// <summary>Every <c>-e SCRIPT</c> / <c>-f FILE</c> in command-line order.</summary>
+        public List<(bool IsFile, string Value)> Sources = new();
+
+        public List<string> Operands = new();
+
+        public bool Declined =>
+            Parsed.HasError || Parsed.Has(OptSpecSet.HelpId) || Parsed.Has(OptSpecSet.VersionId);
+    }
+
+    /// <summary>
+    /// Scan + interpret. The first non-option operand is the script only when no <c>-e</c>/<c>-f</c>
+    /// was given; <c>-s</c> and <c>-i</c> treat each file as its own stream (the EndProcessing caller
+    /// reads <see cref="SedArgs.Sources"/>/<see cref="SedArgs.Operands"/>; the fused core reads the same).
+    /// </summary>
+    internal static SedArgs Plan(string[] args)
+    {
+        var s = new SedArgs { Parsed = ScanArgs(args) };
+        s.Operands = s.Parsed.Operands();
+        if (s.Parsed.HasError) return s;
+        if (s.Parsed.Has(OptSpecSet.HelpId) || s.Parsed.Has(OptSpecSet.VersionId)) return s;
+
+        foreach (var tok in s.Parsed.Tokens)
+        {
+            if (tok.Kind != ArgTokKind.Option) continue;
+            switch (tok.OptId)
+            {
+                case OptQuiet: s.Quiet = true; break;
+                case OptExpr: s.Sources.Add((false, tok.Value!)); break;
+                case OptFile: s.Sources.Add((true, tok.Value!)); break;
+                case OptExtended: s.Extended = true; break;
+                case OptSeparate: s.Separate = true; break;
+                case OptNullData: s.NullData = true; break;
+                case OptInPlace:
+                    s.InPlace = true;
+                    s.Suffix = string.IsNullOrEmpty(tok.Value) ? null : tok.Value;
+                    break;
+                // OptLineLen, OptNoop: accepted, no effect (only the `l` command wraps; nothing buffers).
+            }
+        }
+        return s;
+    }
+
     protected override void EndProcessing()
     {
-        var args = Arguments ?? Array.Empty<string>();
-
         FileSystemHelpers.SetLastExitCode(this, 0);
-        if (FileSystemHelpers.TryHandleVersion(this, "sed", args)) return;
-        if (Array.IndexOf(args, "--help") >= 0)
+
+        // Direct PowerShell calls: -e (value-bearing decoy, also what `-E` binds case-insensitively),
+        // -r and -i bind declared parameters instead of reaching Arguments. Re-inject them as the
+        // ordinary tokens they stand for. Transpiled bash never gets here: the emitter single-quotes
+        // every flag (OrderedArgCommands), so the whole argv arrives verbatim and in order.
+        var args = BashRuntime.PrependDecoys(Arguments, (R.IsPresent, "-r"), (I.IsPresent, "-i"));
+        if (Expression is { Length: > 0 })
         {
-            foreach (var line in InvokeCommand.InvokeScript(
-                         "param($n) Show-BashHelp $n", "sed"))
-            {
-                WriteObject(line);
-            }
-            return;
+            var extra = new List<string>();
+            foreach (var e in Expression) { extra.Add("-e"); extra.Add(e); }
+            extra.AddRange(args);
+            args = extra.ToArray();
         }
 
-        bool suppressDefault = false;
-        bool inPlace = I.IsPresent;
-        bool extendedRegex = R.IsPresent;
-        string? scriptFile = null;
+        var plan = Plan(args);
+        if (FileSystemHelpers.TryWriteParseError(this, "sed", plan.Parsed)) return;
+        if (FileSystemHelpers.TryHandleInfoOptions(this, "sed", plan.Parsed)) return;
+
+        var operands = plan.Operands;
+        bool suppressDefault = plan.Quiet;
         var expressions = new List<string>();
-        var operands = new List<string>();
 
-        // -e expressions arrive via the explicit Expression parameter (the
-        // common-parameter collision fix). Preserve their order.
-        if (Expression != null)
+        foreach (var (isFile, value) in plan.Sources)
         {
-            expressions.AddRange(Expression);
-        }
-
-        // Workaround for `sed -e A -e B`: PowerShell's binder rejects
-        // repeated -e because Expression is a single array parameter
-        // ("specified more than once"). If MyInvocation.Line shows
-        // multiple `-e <value>` occurrences, reparse them ourselves and
-        // replace the binder's view of Expression.
-        // Scope the raw-line scan to sed's own pipeline segment so another command's
-        // `-e`/`-E` (e.g. `sed -e … f | grep -e foo`) cannot be swallowed as sed scripts.
-        var rawLine = BashRuntime.CurrentPipelineSegment(MyInvocation);
-        if (!string.IsNullOrEmpty(rawLine))
-        {
-            // Match `-e` followed by either a quoted or whitespace-delimited
-            // value. Handles single/double quotes and bare tokens.
-            var eMatches = System.Text.RegularExpressions.Regex.Matches(
-                rawLine,
-                @"(?<![A-Za-z0-9])-e\s+(?:'([^']*)'|""([^""]*)""|([^\s]+))");
-            if (eMatches.Count >= 2)
+            if (!isFile)
             {
-                expressions.Clear();
-                foreach (System.Text.RegularExpressions.Match m in eMatches)
-                {
-                    var v = m.Groups[1].Success ? m.Groups[1].Value
-                          : m.Groups[2].Success ? m.Groups[2].Value
-                          : m.Groups[3].Value;
-                    expressions.Add(v);
-                }
-            }
-
-            // PowerShell's case-insensitive binder treats `-E` as `-e`, so
-            // `sed -E PATTERN` ends up binding Expression=PATTERN and never
-            // sets extended-regex mode. Detect literal uppercase `-E` in the
-            // raw line and switch on extended-regex.
-            if (System.Text.RegularExpressions.Regex.IsMatch(
-                    rawLine, @"(?<![A-Za-z0-9])-E(?![a-zA-Z0-9])"))
-            {
-                extendedRegex = true;
-            }
-        }
-
-        // Parse the residual Arguments. -e / -E never appear here (bound by the
-        // Expression parameter); -n / -i / -f / -r / bundled short flags do.
-        bool pastDoubleDash = false;
-        for (int i = 0; i < args.Length; i++)
-        {
-            string arg = args[i];
-
-            if (pastDoubleDash)
-            {
-                operands.Add(arg);
+                string chunk = value;
+                if (expressions.Count == 0 && TryStripHashN(ref chunk))
+                    suppressDefault = true;   // `#n` on the first line of the first script acts like -n
+                // GNU joins -e chunks with a newline, so `-e 'a\' -e text` is one multi-line command.
+                if (chunk.Length == 0 && expressions.Count == 0) continue;
+                if (expressions.Count > 0 && expressions[^1].EndsWith('\\'))
+                    expressions[^1] = expressions[^1] + "\n" + chunk;
+                else
+                    expressions.Add(chunk);
                 continue;
             }
 
-            if (arg == "--")
+            // -f script file: ONE sed script; newlines separate commands and a trailing backslash
+            // continues onto the next line (the multi-line `a\`/`i\`/`c\` text form).
+            string? resolved = ResolveExistingPath(value);
+            string? raw = null;
+            if (resolved != null)
             {
-                pastDoubleDash = true;
-                continue;
+                try { raw = BashFileSystem.ReadAllText(resolved); }
+                catch (Exception ex) when (!FileSystemHelpers.IsPipelineStop(ex)) { raw = null; }
             }
-
-            if (arg == "-f")
+            if (raw == null)
             {
-                if (i + 1 < args.Length)
-                {
-                    scriptFile = args[++i];
-                }
-                continue;
-            }
-
-            if (arg.Length > 1 && arg[0] == '-' && !arg.StartsWith("--"))
-            {
-                // Bundled short-flag form: -n, -i, -E, -r, -f recovered from the
-                // bundle, matching the psm1 oracle's per-char scan.
-                bool fConsumed = false;
-                foreach (char ch in arg.Substring(1))
-                {
-                    switch (ch)
-                    {
-                        case 'n': suppressDefault = true; break;
-                        case 'i': inPlace = true; break;
-                        case 'E': extendedRegex = true; break;
-                        case 'r': extendedRegex = true; break;
-                        case 'f':
-                            if (!fConsumed && i + 1 < args.Length)
-                            {
-                                scriptFile = args[++i];
-                                fConsumed = true;
-                            }
-                            break;
-                    }
-                }
-                continue;
-            }
-
-            operands.Add(arg);
-        }
-
-        // -f script file: each non-empty trimmed line is a separate command.
-        if (scriptFile != null)
-        {
-            string? resolved = ResolveExistingPath(scriptFile);
-            if (resolved == null)
-            {
-                EmitError($"sed: can't read {scriptFile}");
-                SessionState.PSVariable.Set("global:LASTEXITCODE", 2);
+                EmitError($"sed: couldn't open file {value}: No such file or directory");
+                FileSystemHelpers.SetLastExitCode(this, 4);   // GNU: panic, exit 4
                 return;
             }
-
-            try
-            {
-                // A script FILE is ONE sed script: commands are separated by
-                // newlines, and a trailing backslash continues onto the next line
-                // (the multi-line `a\`/`i\`/`c\` text form). Adding each trimmed
-                // line as its own expression shredded those continuations — a
-                // `$a\` line lost its text to the next "expression" and reported
-                // "unsupported command 'APP'". Join the raw lines instead;
-                // SplitSedCommands then splits real command boundaries and keeps
-                // the text runs intact.
-                var raw = BashFileSystem.ReadAllText(resolved);
-                expressions.Add(raw.TrimEnd('\n'));
-            }
-            catch
-            {
-                EmitError($"sed: can't read {scriptFile}");
-                SessionState.PSVariable.Set("global:LASTEXITCODE", 2);
-                return;
-            }
+            raw = raw.TrimEnd('\n');
+            if (expressions.Count == 0 && TryStripHashN(ref raw))
+                suppressDefault = true;
+            if (raw.Length == 0 && expressions.Count == 0) continue;
+            expressions.Add(raw);
         }
 
-        // First operand is the expression when no -e / -f was given.
-        if (expressions.Count == 0 && operands.Count > 0)
+        // First operand is the script when no -e / -f was given.
+        if (plan.Sources.Count == 0 && operands.Count > 0)
         {
             expressions.Add(operands[0]);
             operands.RemoveAt(0);
@@ -268,8 +271,8 @@ public sealed class InvokeBashSedCommand : PSCmdlet
 
         if (expressions.Count == 0)
         {
-            EmitError("sed: usage: sed [options] expression [file ...]");
-            SessionState.PSVariable.Set("global:LASTEXITCODE", 2);
+            EmitError("Usage: sed [OPTION]... {script-only-if-no-other-script} [input-file]...");
+            FileSystemHelpers.SetLastExitCode(this, 1);
             return;
         }
 
@@ -278,7 +281,7 @@ public sealed class InvokeBashSedCommand : PSCmdlet
         {
             foreach (var part in SplitSedCommands(expr))
             {
-                var parsed = ParseExpression(part, extendedRegex);
+                var parsed = ParseExpression(part, plan.Extended);
                 if (parsed == null)
                 {
                     // ParseExpression already emitted a bash-style error + exit code.
@@ -291,63 +294,170 @@ public sealed class InvokeBashSedCommand : PSCmdlet
         // Thread the -n flag into the (static, pure-transform) cycle engine.
         SuppressDefault = suppressDefault;
 
-        // File mode (including in-place).
-        if (operands.Count > 0)
+        if (plan.InPlace && operands.Count == 0)
         {
-            foreach (var filePath in ResolveGlob(operands))
-            {
-                string? rawText = ReadFileText(filePath);
-                if (rawText == null)
-                {
-                    continue;
-                }
-
-                bool hadTrailingNewline = rawText.EndsWith("\n");
-                if (hadTrailingNewline)
-                {
-                    rawText = rawText.Substring(0, rawText.Length - 1);
-                }
-                var lines = rawText.Split('\n');
-
-                var outputLines = ProcessLines(lines, commands);
-
-                if (inPlace)
-                {
-                    var sb = new StringBuilder();
-                    sb.Append(string.Join("\n", outputLines));
-                    if (hadTrailingNewline)
-                    {
-                        sb.Append('\n');
-                    }
-                    if (!WriteFileText(filePath, sb.ToString()))
-                    {
-                        return;
-                    }
-                }
-                else
-                {
-                    for (int oi = 0; oi < outputLines.Count; oi++)
-                    {
-                        bool isLast = oi == outputLines.Count - 1;
-                        if (isLast && !hadTrailingNewline)
-                        {
-                            WriteObject(BashRuntime.NewBashObject(
-                                outputLines[oi], "PsBash.TextOutput",
-                                noTrailingNewline: true));
-                        }
-                        else
-                        {
-                            WriteObject(BashRuntime.NewBashObject(outputLines[oi] + "\n"));
-                        }
-                    }
-                }
-            }
+            EmitError("sed: no input files");
+            FileSystemHelpers.SetLastExitCode(this, 4);
             return;
         }
 
-        // Pipeline mode.
+        if (operands.Count > 0)
+        {
+            RunFiles(plan, operands, commands);
+            return;
+        }
+
+        RunPipeline(plan, commands);
+    }
+
+    /// <summary>
+    /// GNU: when the first two characters of the first script are <c>#n</c> followed by a newline (or the
+    /// script ends there), the script acts as if <c>-n</c> was given. Removes that line; true when it was there.
+    /// </summary>
+    internal static bool TryStripHashN(ref string script)
+    {
+        if (script == "#n") { script = ""; return true; }
+        if (!script.StartsWith("#n\n", StringComparison.Ordinal)) return false;
+        script = script.Substring(3);
+        return true;
+    }
+
+    /// <summary>
+    /// The records of a text: split on <paramref name="term"/>, the terminator after the last record
+    /// removed (and remembered), an empty text having no records at all.
+    /// </summary>
+    private static List<string> SplitRecords(string text, char term, out bool trailingTerminator)
+    {
+        trailingTerminator = true;
+        if (text.Length == 0) return new List<string>();
+        trailingTerminator = text[^1] == term;
+        if (trailingTerminator) text = text.Substring(0, text.Length - 1);
+        return new List<string>(text.Split(term));
+    }
+
+    /// <summary>Emit each output record + its terminator; the LAST has none when the input had none.</summary>
+    private void EmitRecords(List<string> records, bool trailingTerminator, char term)
+    {
+        for (int oi = 0; oi < records.Count; oi++)
+        {
+            bool terminated = oi < records.Count - 1 || trailingTerminator;
+            if (term == '\n')
+            {
+                WriteObject(terminated
+                    ? BashRuntime.NewBashObject(records[oi] + "\n")
+                    : BashRuntime.NewBashObject(records[oi], "PsBash.TextOutput", noTrailingNewline: true));
+            }
+            else
+            {
+                // -z: the record terminator is NUL; a NoTrailingNewline record carries exact bytes.
+                WriteObject(BashRuntime.NewBashObject(
+                    terminated ? records[oi] + term : records[oi], "PsBash.TextOutput", noTrailingNewline: true));
+            }
+        }
+    }
+
+    /// <summary>
+    /// File operands. GNU treats the files as ONE continuous stream (line numbers and <c>$</c> span
+    /// them; a missing final newline is supplied between files) unless <c>-s</c> / <c>-i</c> makes each
+    /// file its own. A <c>-</c> operand is the pipeline input. An unreadable operand is reported and
+    /// skipped and the status becomes 2 once everything else ran.
+    /// </summary>
+    private void RunFiles(SedArgs plan, List<string> operands, List<SedCommand> commands)
+    {
+        char term = plan.NullData ? '\0' : '\n';
+        bool separate = plan.Separate || plan.InPlace;
+        bool readError = false;
+        var units = new List<(string? Path, List<string> Records, bool Trailing)>();
+
+        foreach (var operand in operands)
+        {
+            if (operand == "-")
+            {
+                if (plan.InPlace)
+                {
+                    EmitError("sed: couldn't edit -: not a regular file");
+                    FileSystemHelpers.SetLastExitCode(this, 4);
+                    return;
+                }
+                var stdin = SplitRecords(BashRuntime.RecordStreamText(_pipeline.Cast<object>()), term, out bool stdinTrailing);
+                units.Add((null, stdin, stdinTrailing));
+                continue;
+            }
+
+            foreach (var filePath in FileSystemHelpers.ResolveOperandPaths(this, operand))
+            {
+                string? rawText = ReadFileText(filePath);
+                if (rawText == null) { readError = true; continue; }
+                units.Add((filePath, SplitRecords(rawText, term, out bool trailing), trailing));
+            }
+        }
+
+        if (!separate)
+        {
+            if (units.Count > 0)
+            {
+                var all = new List<string>();
+                foreach (var u in units) all.AddRange(u.Records);
+                EmitRecords(ProcessLines(all.ToArray(), commands), units[^1].Trailing, term);
+            }
+        }
+        else
+        {
+            foreach (var (path, records, trailing) in units)
+            {
+                var output = ProcessLines(records.ToArray(), commands);
+                if (!plan.InPlace || path == null)
+                {
+                    EmitRecords(output, trailing, term);
+                    continue;
+                }
+
+                var sb = new StringBuilder();
+                sb.Append(string.Join(term, output));
+                if (output.Count > 0 && trailing) sb.Append(term);
+                if (plan.Suffix != null && !BackUp(path, plan.Suffix)) { readError = true; continue; }
+                if (!WriteFileText(path, sb.ToString())) return;
+            }
+        }
+
+        if (readError) FileSystemHelpers.SetLastExitCode(this, 2);
+    }
+
+    /// <summary>
+    /// GNU <c>-i SUFFIX</c> backup: the copy is <c>NAME+SUFFIX</c>, or, when SUFFIX contains
+    /// <c>*</c>, SUFFIX with every <c>*</c> replaced by the file's base name; a result containing
+    /// a directory part is relative to the edited file's directory.
+    /// </summary>
+    private bool BackUp(string path, string suffix)
+    {
+        try
+        {
+            string baseName = Path.GetFileName(path);
+            string name = suffix.Contains('*') ? suffix.Replace("*", baseName) : baseName + suffix;
+            string dir = Path.GetDirectoryName(path) ?? "";
+            string target = Path.IsPathRooted(name) ? name : Path.Combine(dir, name);
+            File.Copy(path, target, overwrite: true);
+            return true;
+        }
+        catch (Exception ex)
+        {
+            if (FileSystemHelpers.IsPipelineStop(ex)) throw;
+            EmitError($"sed: cannot rename {path.Replace('\\', '/')}: {ex.Message}");
+            return false;
+        }
+    }
+
+    private void RunPipeline(SedArgs plan, List<SedCommand> commands)
+    {
         if (_pipeline.Count == 0)
         {
+            return;
+        }
+
+        if (plan.NullData)
+        {
+            var records = SplitRecords(BashRuntime.RecordStreamText(_pipeline.Cast<object>()), '\0', out bool trailingNul);
+            EmitRecords(ProcessLines(records.ToArray(), commands), trailingNul, '\0');
             return;
         }
 
@@ -386,25 +496,7 @@ public sealed class InvokeBashSedCommand : PSCmdlet
             inputTrailingNewline = false;
         }
 
-        var pipeOutput = ProcessLines(allLines.ToArray(), commands);
-
-        for (int oi = 0; oi < pipeOutput.Count; oi++)
-        {
-            bool isLast = oi == pipeOutput.Count - 1;
-            // Every emitted record gets a newline except the FINAL one when the
-            // input itself had no trailing newline. NewBashObject normalizes away
-            // the newline on the default path, so pass it explicitly as the
-            // no-trailing-newline byte-exact form for that last record.
-            if (isLast && !inputTrailingNewline)
-            {
-                WriteObject(BashRuntime.NewBashObject(
-                    pipeOutput[oi], "PsBash.TextOutput", noTrailingNewline: true));
-            }
-            else
-            {
-                WriteObject(BashRuntime.NewBashObject(pipeOutput[oi] + "\n"));
-            }
-        }
+        EmitRecords(ProcessLines(allLines.ToArray(), commands), inputTrailingNewline, '\n');
     }
 
     // ── sed command model ────────────────────────────────────────────────────
@@ -814,7 +906,7 @@ public sealed class InvokeBashSedCommand : PSCmdlet
             int endSlash = expression.IndexOf('/', pos);
             if (endSlash < 0)
             {
-                return Fail("sed: unterminated address regex", 2);
+                return Fail("sed: unterminated address regex", 1);
             }
             addr = new SedAddress
             {
@@ -833,7 +925,7 @@ public sealed class InvokeBashSedCommand : PSCmdlet
                     int endSlash2 = expression.IndexOf('/', pos);
                     if (endSlash2 < 0)
                     {
-                        return Fail("sed: unterminated address regex", 2);
+                        return Fail("sed: unterminated address regex", 1);
                     }
                     addr = new SedAddress
                     {
@@ -904,7 +996,7 @@ public sealed class InvokeBashSedCommand : PSCmdlet
                     int endSlashR = expression.IndexOf('/', pos);
                     if (endSlashR < 0)
                     {
-                        return Fail("sed: unterminated address regex", 2);
+                        return Fail("sed: unterminated address regex", 1);
                     }
                     addr = new SedAddress
                     {
@@ -952,7 +1044,7 @@ public sealed class InvokeBashSedCommand : PSCmdlet
         string remaining = expression.Substring(pos);
         if (remaining.Length == 0)
         {
-            return Fail("sed: missing command", 2);
+            return Fail("sed: missing command", 1);
         }
 
         char cmdChar = remaining[0];
@@ -962,7 +1054,7 @@ public sealed class InvokeBashSedCommand : PSCmdlet
             {
                 if (remaining.Length < 2)
                 {
-                    return Fail("sed: bad substitution", 2);
+                    return Fail("sed: bad substitution", 1);
                 }
                 char delim = remaining[1];
                 var parts = new List<string>();
@@ -998,7 +1090,7 @@ public sealed class InvokeBashSedCommand : PSCmdlet
 
                 if (parts.Count < 2)
                 {
-                    return Fail("sed: bad substitution", 2);
+                    return Fail("sed: bad substitution", 1);
                 }
 
                 string searchPattern = parts[0];
@@ -1063,7 +1155,7 @@ public sealed class InvokeBashSedCommand : PSCmdlet
                 }
                 catch (ArgumentException ex)
                 {
-                    return Fail($"sed: {ex.Message}", 2);
+                    return Fail($"sed: {ex.Message}", 1);
                 }
 
                 return new SedCommand
@@ -1117,18 +1209,18 @@ public sealed class InvokeBashSedCommand : PSCmdlet
             {
                 if (remaining.Length < 2)
                 {
-                    return Fail("sed: bad transliteration", 2);
+                    return Fail("sed: bad transliteration", 1);
                 }
                 char delim = remaining[1];
                 var parts = remaining.Substring(2).Split(delim);
                 if (parts.Length < 2)
                 {
-                    return Fail("sed: bad transliteration", 2);
+                    return Fail("sed: bad transliteration", 1);
                 }
                 if (parts[0].Length != parts[1].Length)
                 {
                     return Fail(
-                        "sed: y: source and dest must be the same length", 2);
+                        "sed: y: source and dest must be the same length", 1);
                 }
                 return new SedCommand
                 {
@@ -1140,7 +1232,11 @@ public sealed class InvokeBashSedCommand : PSCmdlet
                 };
             }
             default:
-                return Fail($"sed: unsupported command '{cmdChar}'", 2);
+                // A real GNU command ps-bash does not run is ps-bash's own refusal (exit 2); anything
+                // else is a script error, which GNU reports with exit 1.
+                if ("{}=abcdDeFgGhHilnNpPqQrRstTvwWxyz:#".Contains(cmdChar))
+                    return Fail($"sed: unsupported command '{cmdChar}'", 2);
+                return Fail($"sed: -e expression #1, char {pos + 1}: unknown command: `{cmdChar}'", 1);
         }
         }
     }
@@ -1536,46 +1632,6 @@ public sealed class InvokeBashSedCommand : PSCmdlet
         catch
         {
             return null;
-        }
-    }
-
-    private IEnumerable<string> ResolveGlob(IReadOnlyList<string> paths)
-    {
-        foreach (var p in paths)
-        {
-            if (p.IndexOf('*') >= 0 || p.IndexOf('?') >= 0)
-            {
-                var matched = new List<string>();
-                try
-                {
-                    foreach (var resolved in SessionState.Path
-                                 .GetResolvedProviderPathFromPSPath(p, out _))
-                    {
-                        matched.Add(resolved);
-                    }
-                }
-                catch
-                {
-                    // No matches — literal passthrough.
-                }
-
-                if (matched.Count == 0)
-                {
-                    yield return p;
-                }
-                else
-                {
-                    foreach (var m in matched)
-                    {
-                        yield return m;
-                    }
-                }
-            }
-            else
-            {
-                yield return SessionState.Path
-                    .GetUnresolvedProviderPathFromPSPath(p);
-            }
         }
     }
 }

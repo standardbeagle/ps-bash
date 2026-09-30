@@ -2987,84 +2987,14 @@ function Invoke-BashGrep {
     if ($piped.Count -gt 0) { $piped | & $cmd @literal } else { & $cmd @literal }
 }
 
-# Wrapper for Invoke-BashSed: PowerShell's binder rejects `-e A -e B` with
-# "parameter Expression specified more than once" because Expression is
-# declared as a single array parameter (the case-insensitive binder ate -e
-# from the test-side, then sees the second -e and errors at bind time —
-# before our cmdlet body runs, so MyInvocation.Line reparsing can't help).
-# Pre-process $args here to bundle repeated -e values into one -e @(...)
-# call, then dispatch to the underlying cmdlet by fully-qualified name.
 function Invoke-BashSed {
-    # No [CmdletBinding()] — that would add -ErrorAction / -ErrorVariable
-    # common parameters which then ambiguously prefix-match `-e` and
-    # block the entire purpose of this proxy. Without CmdletBinding we
-    # take everything verbatim via $args, and $input gives us pipeline
-    # input as an enumerator that we materialize and replay into the
-    # underlying cmdlet.
-
-    # Materialize pipeline (if any). $input is an enumerator that's
-    # consumable once.
     $piped = @($input)
-
-    # Walk $args, pull out every "-e <value>" pair, keep the rest as-is.
-    # `-eq` is case-insensitive, so `-E` (uppercase, the extended-regex
-    # flag in GNU sed) collapses to `-e` here. Distinguish via a
-    # case-sensitive `-ceq` comparison and set a flag instead of
-    # treating -E as an expression-value flag.
-    $eValues = [System.Collections.Generic.List[string]]::new()
-    $other = [System.Collections.Generic.List[object]]::new()
-    $extendedRegex = $false
-    $i = 0
-    while ($i -lt $args.Count) {
-        $a = $args[$i]
-        if ($a -ceq '-E' -or $a -ceq '--extended-regexp' -or $a -ceq '--regexp-extended') {
-            $extendedRegex = $true
-            $i++
-            continue
-        }
-        if (($a -ceq '-e' -or $a -ceq '--expression') -and ($i + 1) -lt $args.Count) {
-            # The value may be a single string (`-e 's/a/b/'`, and the repeated
-            # `-e A -e B` form) OR a PowerShell array when expressions are passed
-            # as the idiomatic comma-list (`-e 's/a/1/','s/b/2/','s/c/3/'`). A
-            # bare [string] cast on an array space-joins it into ONE bogus
-            # expression, so only the first s/// would apply. Add each element.
-            $eVal = $args[$i + 1]
-            if ($eVal -isnot [string] -and $eVal -is [System.Collections.IEnumerable]) {
-                foreach ($ev in $eVal) { $eValues.Add([string]$ev) }
-            } else {
-                $eValues.Add([string]$eVal)
-            }
-            $i += 2
-            continue
-        }
-        $other.Add($args[$i])
-        $i++
-    }
-    if ($extendedRegex) { $other.Add('-r') }
-
-    # Look up the cmdlet (NOT the function we're inside — same name).
+    $literal = ConvertTo-BashLiteralArgs $args -RepeatFlags '-e', '--expression'
     $cmd = Microsoft.PowerShell.Core\Get-Command `
         -Name Invoke-BashSed -CommandType Cmdlet -ErrorAction Stop |
         Select-Object -First 1
-
-    if ($eValues.Count -gt 0) {
-        $exprArr = $eValues.ToArray()
-        # -Expression (full name) to avoid the -e/-ErrorAction ambiguity.
-        if ($piped.Count -gt 0) {
-            $piped | & $cmd -Expression $exprArr @other
-        } else {
-            & $cmd -Expression $exprArr @other
-        }
-    } else {
-        # No -e flags, but we may have rewritten -E -> -r in $other.
-        if ($piped.Count -gt 0) {
-            $piped | & $cmd @other
-        } else {
-            & $cmd @other
-        }
-    }
+    if ($piped.Count -gt 0) { $piped | & $cmd @literal } else { & $cmd @literal }
 }
-
 Set-Alias -Name 'sed'     -Value 'Invoke-BashSed'     -Force -Scope Global -Option AllScope
 Set-Alias -Name 'awk'     -Value 'Invoke-BashAwk'     -Force -Scope Global -Option AllScope
 Set-Alias -Name 'cut'     -Value 'Invoke-BashCut'     -Force -Scope Global -Option AllScope

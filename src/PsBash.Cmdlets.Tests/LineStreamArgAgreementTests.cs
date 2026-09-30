@@ -62,10 +62,11 @@ public class LineStreamArgAgreementTests
         "uniq" => !InvokeBashUniqCommand.Plan(argv).Declined,
         "cut" => !InvokeBashCutCommand.Plan(argv).Declined,
         "grep" => !InvokeBashGrepCommand.Plan(argv).Declined,
+        "sed" => !InvokeBashSedCommand.Plan(argv).Declined,
         _ => throw new ArgumentException(name),
     };
 
-    public static IEnumerable<object[]> Commands => new[] { new object[] { "head" }, new object[] { "tail" }, new object[] { "wc" }, new object[] { "cat" }, new object[] { "tac" }, new object[] { "nl" }, new object[] { "uniq" }, new object[] { "cut" }, new object[] { "grep" } };
+    public static IEnumerable<object[]> Commands => new[] { new object[] { "head" }, new object[] { "tail" }, new object[] { "wc" }, new object[] { "cat" }, new object[] { "tac" }, new object[] { "nl" }, new object[] { "uniq" }, new object[] { "cut" }, new object[] { "grep" }, new object[] { "sed" } };
 
     [Theory]
     [MemberData(nameof(Commands))]

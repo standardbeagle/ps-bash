@@ -782,7 +782,7 @@ public class PsEmitterTests
         // Batch 1 of the shared ordered parser. Adding a command here also means adding it to
         // CommonParameterCollisionGuardTests.EmitterForceQuoted (Cmdlets.Tests) — that map is
         // how the guard knows the emitter, not a decoy, protects the colliding letters.
-        Assert.Equal(new[] { "awk", "base64", "bash", "cat", "comm", "command", "cp", "cut", "env", "expand", "file", "fold", "grep", "head", "join", "ln", "mkdir", "mv", "nl", "paste", "rm", "rmdir", "sort", "split", "stat", "strings", "tac", "tail", "tee", "time", "touch", "unexpand", "uniq", "wc", "xargs" }, PsEmitter.OrderedArgCommands.OrderBy(x => x).ToArray());
+        Assert.Equal(new[] { "awk", "base64", "bash", "cat", "comm", "command", "cp", "cut", "env", "expand", "file", "fold", "grep", "head", "join", "ln", "mkdir", "mv", "nl", "paste", "rm", "rmdir", "sed", "sort", "split", "stat", "strings", "tac", "tail", "tee", "time", "touch", "unexpand", "uniq", "wc", "xargs" }, PsEmitter.OrderedArgCommands.OrderBy(x => x).ToArray());
     }
 
     // `bash` is on OrderedArgCommands: the script's own args (`bash s.sh -v -e -c x`) and the
@@ -808,6 +808,22 @@ public class PsEmitterTests
     [InlineData("grep -- -x f", "Invoke-BashGrep '--' '-x' f")]
     [InlineData("grep --color=auto --include='*.c' -r x .", "Invoke-BashGrep '--color=auto' '--include=*.c' '-r' x .")]
     public void Transpile_GrepFlags_AreSingleQuotedAndReachTheCmdletInOrder(string bash, string expected)
+    {
+        Assert.Equal(expected, PsEmitter.Transpile(bash));
+    }
+
+    // sed is on OrderedArgCommands too: repeated -e, -ne/-nE bundles, -i.bak, -s/-z and `--` arrive
+    // verbatim; the script text itself is never a flag.
+    [Theory]
+    [InlineData("sed -e 's/a/b/' -e 's/c/d/' f", "Invoke-BashSed '-e' 's/a/b/' '-e' 's/c/d/' f")]
+    [InlineData("sed -ne 2p f", "Invoke-BashSed '-ne' 2p f")]
+    [InlineData("sed -nE 's/(a)/\\1/p' f", "Invoke-BashSed '-nE' 's/(a)/\\1/p' f")]
+    [InlineData("sed -i.bak s/a/b/ f", "Invoke-BashSed '-i.bak' s/a/b/ f")]
+    [InlineData("sed -s -n '$p' a b", "Invoke-BashSed '-s' '-n' '$p' a b")]
+    [InlineData("sed -z 's/\\n/,/g' f", "Invoke-BashSed '-z' 's/\\n/,/g' f")]
+    [InlineData("sed -n -- 2p f", "Invoke-BashSed '-n' '--' 2p f")]
+    [InlineData("sed --in-place=.b --expression=p f", "Invoke-BashSed '--in-place=.b' '--expression=p' f")]
+    public void Transpile_SedFlags_AreSingleQuotedAndReachTheCmdletInOrder(string bash, string expected)
     {
         Assert.Equal(expected, PsEmitter.Transpile(bash));
     }
@@ -5415,7 +5431,7 @@ public class PsEmitterTests
     // ---- bare `,` literal in an ARGUMENT word (PowerShell array separator) ----
 
     [Theory]
-    [InlineData("sed -n 725,750p f", "Invoke-BashSed -n '725,750p' f")]
+    [InlineData("sed -n 725,750p f", "Invoke-BashSed '-n' '725,750p' f")]
     [InlineData("cut -f1,3 f", "Invoke-BashCut -f1,3 f")]   // placeholder, asserted below
     [InlineData("echo a,b", "Invoke-BashEcho 'a,b'")]
     [InlineData("printf '%s\\n' x,y", "Invoke-BashPrintf '%s\\n' 'x,y'")]

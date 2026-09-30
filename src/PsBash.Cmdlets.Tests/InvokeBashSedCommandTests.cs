@@ -402,8 +402,7 @@ public class InvokeBashSedCommandTests : IDisposable, IClassFixture<SharedPwshFi
         // Empty-input axis.
         var f = WriteFile("empty.txt", "");
         var lines = RunText($"Invoke-BashSed 's/x/y/' '{Esc(f)}'");
-        Assert.Single(lines); // one empty line (the split of "")
-        Assert.Equal("", lines[0]);
+        Assert.Empty(lines); // GNU: an empty file has no lines, so nothing is printed (was one empty line)
     }
 
     [Fact]
@@ -454,45 +453,45 @@ public class InvokeBashSedCommandTests : IDisposable, IClassFixture<SharedPwshFi
     }
 
     [Fact]
-    public void Sed_MissingScriptFile_EmitsErrorAndExitCode2()
+    public void Sed_MissingScriptFile_EmitsErrorAndExitCode4()
     {
         var missing = Path.Combine(_tmpDir, "no-script.sed");
         var pwsh = _fixture.AcquireFresh();
         pwsh.AddScript(
             $"Invoke-BashSed -f '{Esc(missing)}' ; $global:LASTEXITCODE").Invoke();
         var ec = pwsh.AddScript("$global:LASTEXITCODE").Invoke();
-        Assert.Equal(2, (int)ec[0].BaseObject);
+        Assert.Equal(4, (int)ec[0].BaseObject); // GNU: "couldn't open file" is a panic, exit 4
     }
 
     [Fact]
-    public void Sed_BadSubstitution_EmitsErrorAndExitCode2()
+    public void Sed_BadSubstitution_EmitsErrorAndExitCode1()
     {
         var pwsh = _fixture.AcquireFresh();
         // "s/x" has only one delimiter section — bad substitution.
         pwsh.AddScript("'a' | Invoke-BashSed 's/x'").Invoke();
         pwsh.Commands.Clear();
         var ec = pwsh.AddScript("$global:LASTEXITCODE").Invoke();
-        Assert.Equal(2, (int)ec[0].BaseObject);
+        Assert.Equal(1, (int)ec[0].BaseObject); // GNU: a script error exits 1
     }
 
     [Fact]
-    public void Sed_UnsupportedCommand_EmitsErrorAndExitCode2()
+    public void Sed_UnknownCommand_EmitsErrorAndExitCode1()
     {
         var pwsh = _fixture.AcquireFresh();
         pwsh.AddScript("'a' | Invoke-BashSed 'Z'").Invoke();
         pwsh.Commands.Clear();
         var ec = pwsh.AddScript("$global:LASTEXITCODE").Invoke();
-        Assert.Equal(2, (int)ec[0].BaseObject);
+        Assert.Equal(1, (int)ec[0].BaseObject); // unknown command `Z` (a real GNU command ps-bash lacks would be exit 2)
     }
 
     [Fact]
-    public void Sed_NoExpression_EmitsUsageErrorAndExitCode2()
+    public void Sed_NoExpression_EmitsUsageErrorAndExitCode1()
     {
         var pwsh = _fixture.AcquireFresh();
         pwsh.AddScript("@() | Invoke-BashSed").Invoke();
         pwsh.Commands.Clear();
         var ec = pwsh.AddScript("$global:LASTEXITCODE").Invoke();
-        Assert.Equal(2, (int)ec[0].BaseObject);
+        Assert.Equal(1, (int)ec[0].BaseObject); // GNU: usage error exits 1
     }
 
     // ===================== security (Directive 12) =====================

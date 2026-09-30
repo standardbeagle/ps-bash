@@ -369,57 +369,47 @@ internal sealed class SedStage : ILineStreamStage
 
     internal static ILineStreamStage? TryCreate(string[] argv)
     {
-        bool suppress = false, extended = false;
-        var expressions = new List<string>();
-        var operands = new List<string>();
+        // The cmdlet's own resolver (shared ordered parser, GNU option table) decides first, so this
+        // core can NEVER accept an argv the cmdlet would reject or read differently
+        // (LineStreamArgAgreementTests).
+        var plan = InvokeBashSedCommand.Plan(argv);
+        if (plan.Declined) return null;
 
-        int i = 0;
-        while (i < argv.Length)
+        // Certified subset within that: -n, -E/-r, -e EXPR (repeatable, bundles fine) or one script
+        // operand. Declines -i -f -s -z and the accepted no-ops (they are the cmdlet's), `--`, file
+        // operands, and a script starting with `#n` (the cmdlet owns that magic comment).
+        foreach (var tok in plan.Parsed.Tokens)
         {
-            var a = argv[i];
-            if (a == "--help" || a == "--version") return null;
-            if (a == "-e")
-            {
-                i++;
-                if (i >= argv.Length) return null;
-                expressions.Add(argv[i]);
-                i++;
-                continue;
-            }
-            // Script-file / end-of-options / any long flag → cmdlet paths, decline.
-            if (a == "-f" || a == "--" || a.StartsWith("--", StringComparison.Ordinal))
+            if (tok.Kind == ArgTokKind.DoubleDash) return null;
+            if (tok.Kind != ArgTokKind.Option) continue;
+            if (tok.OptId != InvokeBashSedCommand.OptQuiet && tok.OptId != InvokeBashSedCommand.OptExpr
+                && tok.OptId != InvokeBashSedCommand.OptExtended)
                 return null;
-            // A SINGLE supported flag only. Bundles (`-nE`, `-i.bak`, …) are declined —
-            // as in grep, a bundle's unfused behavior may not be the char-by-char union
-            // under the cmdlet binder, so let the cmdlet handle it on fallback.
-            if (a.Length == 2 && a[0] == '-')
-            {
-                switch (a[1])
-                {
-                    case 'n': suppress = true; break;
-                    case 'E': case 'r': extended = true; break;
-                    default: return null; // -i (in-place) / unknown single flag → decline
-                }
-                i++;
-                continue;
-            }
-            if (a.Length > 1 && a[0] == '-' && a[1] != '-') return null; // bundle / -i.bak → decline
-            operands.Add(a);
-            i++;
         }
 
-        if (expressions.Count == 0)
+        var expressions = new List<string>();
+        foreach (var (isFile, value) in plan.Sources)
+        {
+            if (isFile) return null;
+            expressions.Add(value);
+        }
+        var operands = plan.Operands;
+        if (plan.Sources.Count == 0)
         {
             if (operands.Count == 0) return null;
             expressions.Add(operands[0]);
             operands.RemoveAt(0);
         }
         if (operands.Count > 0) return null; // file operand(s) → file mode, decline
+        if (expressions[0].StartsWith("#n", StringComparison.Ordinal)) return null;
+        // `-e 'a\' -e text`: the cmdlet joins such chunks into one command, so leave them to it.
+        foreach (var expr in expressions)
+            if (expr.EndsWith('\\')) return null;
 
-        if (!InvokeBashSedCommand.TryBuildCommands(expressions, extended, out var commands))
+        if (!InvokeBashSedCommand.TryBuildCommands(expressions, plan.Extended, out var commands))
             return null; // parse error → cmdlet reports it
 
-        return new SedStage(commands, suppress);
+        return new SedStage(commands, plan.Quiet);
     }
 
     public IEnumerable<string> Run(IEnumerable<string> input)
