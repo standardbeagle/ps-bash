@@ -164,6 +164,10 @@ internal static class FusedLane
             if (lit.Length >= 2 && lit[0] == '-' && lit[1] != '-'
                 && (lit.IndexOf('f') >= 0 || lit.IndexOf('F') >= 0))
                 return true;
+
+            // Obsolete `+NUM[bcl]f` (tail +2f FILE) is follow mode too.
+            if (lit.Length >= 3 && lit[0] == '+' && char.IsAsciiDigit(lit[1]) && lit[^1] == 'f')
+                return true;
         }
         return false;
     }

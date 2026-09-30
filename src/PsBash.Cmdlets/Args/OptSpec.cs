@@ -58,6 +58,14 @@ public sealed class OptSpecSet
     /// </summary>
     public int UsageExitCode { get; }
 
+    /// <summary>
+    /// When set, a digit in option position (<c>-q5</c>, <c>-12x</c>) is an
+    /// <see cref="ArgErrorKind.MisplacedDigit"/> error worded "{command}: {this} -- {digit}", as GNU
+    /// head ("invalid trailing option") and tail ("option used in invalid context") do because
+    /// their getopt strings list the digits only to reject them.
+    /// </summary>
+    public string? DigitOptionWording { get; }
+
     /// <summary>Id produced by <c>-NUM</c>, or null when the shorthand is off.</summary>
     public string? NumericShorthandId { get; }
 
@@ -82,9 +90,11 @@ public sealed class OptSpecSet
         string? numericShorthandId = null,
         bool gnuInfoOptions = false,
         int usageExitCode = 1,
-        IEnumerable<string>? longOptionOrder = null)
+        IEnumerable<string>? longOptionOrder = null,
+        string? digitOptionWording = null)
     {
         UsageExitCode = usageExitCode;
+        DigitOptionWording = digitOptionWording;
         var declared = new List<string>();
         foreach (var s in specs)
         {

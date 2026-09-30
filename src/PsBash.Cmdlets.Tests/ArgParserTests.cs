@@ -336,6 +336,26 @@ public class ArgParserTests
             ArgParser.Parse(new[] { "--zeta" }, spec).Error!.Value.Message("x"));
     }
 
+    [Theory]
+    [InlineData("invalid trailing option", "-q5", '5')]
+    [InlineData("option used in invalid context", "-x12", '1')]  // the FIRST digit, as getopt returns it
+    public void DigitOptionWording_DigitInOptionPosition_IsGnuHeadTailStyleError(string wording, string arg, char digit)
+    {
+        var spec = new OptSpecSet(
+            new[] { new OptSpec("quiet", 'q', "quiet"), new OptSpec("x", 'x', null) },
+            digitOptionWording: wording);
+        var err = ArgParser.Parse(new[] { arg }, spec).Error!.Value;
+        Assert.Equal(ArgErrorKind.MisplacedDigit, err.Kind);
+        Assert.Equal($"t: {wording} -- {digit}", err.Message("t"));
+    }
+
+    [Fact]
+    public void DigitOptionWording_OffByDefault_DigitIsAnOrdinaryInvalidOption()
+    {
+        var spec = new OptSpecSet(new[] { new OptSpec("quiet", 'q', "quiet") });
+        Assert.Equal("t: invalid option -- '5'", ArgParser.Parse(new[] { "-q5" }, spec).Error!.Value.Message("t"));
+    }
+
     [Fact]
     public void Abbrev_ExactNameBeatsLongerCandidates()
     {

@@ -144,6 +144,9 @@ public static class ArgParser
 
             if (!spec.TryGetShort(c, out var opt))
             {
+                if (spec.DigitOptionWording is { } wording && c is >= '0' and <= '9')
+                    return new ArgError(ArgErrorKind.MisplacedDigit, arg, c, argIndex, wording);
+
                 string single = "-" + c;
                 if (spec.IsUnsupported(single))
                     return new ArgError(ArgErrorKind.ValidButUnsupported, single, c, argIndex);

@@ -15,8 +15,8 @@ namespace PsBash.Cmdlets.Tests;
 /// only valid as the first argument and alone; the obsolete `+NUM` first argument means -n +NUM.
 /// Accepted here: -c -f -n -q -s (+ long forms). Refused loudly as valid-but-unsupported (exit 2):
 /// -v/--verbose, -z/--zero-terminated, -F, --retry, --pid, --max-unchanged-stats. Usage errors are
-/// exit 1 (GNU EXIT_FAILURE). Known gap: GNU words `-1n` as "option used in invalid context"; here
-/// it is "invalid option -- '1'" (both exit 1). The legacy ps-bash extension `tail 5` (bare
+/// exit 1 (GNU EXIT_FAILURE). A digit in option position (`-1n`, `-q5`) is GNU's "option used in
+/// invalid context -- N". The legacy ps-bash extension `tail 5` (bare
 /// leading number = line count) is preserved because the Pester gate pins it.
 /// </summary>
 public class TailArgScanTests
@@ -126,7 +126,40 @@ public class TailArgScanTests
     [InlineData("ERR tail: unrecognized option '--bogus'", "--bogus")]
     [InlineData("ERR tail: option '--quiet' doesn't allow an argument", "--quiet=1")]
     [InlineData("ERR tail: invalid option -- 'x'", "-x")]  // FIX (was: operands [-x] -> file error)
-    [InlineData("ERR tail: invalid option -- '1'", "-1n")]  // GNU words it "option used in invalid context -- 1"; both exit 1
+    [InlineData("ERR tail: option used in invalid context -- 1", "-1n")]  // FIX (was: invalid option -- '1')
+    [InlineData("ERR tail: option used in invalid context -- 1", "-1q")]
+    [InlineData("ERR tail: option used in invalid context -- 1", "-12x")]  // the FIRST digit, as getopt returns it
+    [InlineData("ERR tail: option used in invalid context -- 2", "-2k")]  // GNU tail has no k/m multiplier letters
+    [InlineData("ERR tail: option used in invalid context -- 2", "-2bx")]
+    [InlineData("ERR tail: option used in invalid context -- 5", "-q5")]
+    [InlineData("ERR tail: option used in invalid context -- 5", "-f5")]
+    [InlineData("ERR tail: option used in invalid context -- 2", "-2", "-q")]  // obsolete only when nothing else is an option
+    [InlineData("ERR tail: option used in invalid context -- 2", "-2", "-f")]
+    [InlineData("ERR tail: option used in invalid context -- 2", "-2", "a", "b")]  // ... and at most one file
+    [InlineData("ERR tail: option used in invalid context -- 2", "-2", "a", "--")]
+    [InlineData("ERR tail: option used in invalid context -- 2", "-2", "--", "a", "b")]
+    [InlineData("ERR tail: option used in invalid context -- 2", "-2c", "a", "b")]
+    [InlineData("ERR tail: invalid option -- 'x'", "-x", "-2")]  // getopt order: the earlier error wins
+    [InlineData("ERR tail: option used in invalid context -- 2", "-2", "-x")]
+    // Obsolete -NUM[bcl][f] / +NUM[bcl][f] (every row checked against GNU tail 9.4).
+    [InlineData("c=2 f=0 s=1 q=0 ops=[]", "-2c")]
+    [InlineData("n=2 f=0 s=1 q=0 ops=[]", "-2l")]
+    [InlineData("c=1024 f=0 s=1 q=0 ops=[]", "-2b")]  // b = 512-byte blocks, bytes mode
+    [InlineData("n=2 f=1 s=1 q=0 ops=[]", "-2f")]
+    [InlineData("c=2 f=1 s=1 q=0 ops=[]", "-2cf")]
+    [InlineData("n=2 f=1 s=1 q=0 ops=[f]", "-2lf", "f")]
+    [InlineData("c=1024 f=1 s=1 q=0 ops=[]", "-2bf")]
+    [InlineData("c=+2 f=0 s=1 q=0 ops=[]", "+2c")]
+    [InlineData("n=+2 f=0 s=1 q=0 ops=[]", "+2l")]
+    [InlineData("c=+1024 f=0 s=1 q=0 ops=[]", "+2b")]
+    [InlineData("n=+2 f=1 s=1 q=0 ops=[f]", "+2f", "f")]
+    [InlineData("n=2 f=0 s=1 q=0 ops=[]", "-2", "--")]
+    [InlineData("n=2 f=0 s=1 q=0 ops=[-]", "-2", "-")]
+    [InlineData("n=2 f=0 s=1 q=0 ops=[f]", "-2", "--", "f")]
+    [InlineData("n=2 f=0 s=1 q=0 ops=[-x]", "-2", "--", "-x")]
+    [InlineData("n=10 f=0 s=1 q=0 ops=[+2,f,g]", "+2", "f", "g")]  // +NUM with 2+ files is a FILE named +2
+    [InlineData("n=1 f=0 s=1 q=0 ops=[+2]", "+2", "-n1")]  // ... and so is +NUM followed by an option
+    [InlineData("n=10 f=0 s=1 q=1 ops=[+2]", "+2", "-q")]
     public void Plan_MatchesGnuTail(string expected, params string[] argv)
     {
         Assert.Equal(expected, Scan(argv));

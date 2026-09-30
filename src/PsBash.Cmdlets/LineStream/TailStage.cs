@@ -87,8 +87,10 @@ internal sealed class TailStage : ILineStreamStage
         }
         if (a == "--retry" || a == "--follow-retry") return true;
         // Any short-flag group carrying f/F: -f, -F, -qf, -fn, …
-        return a.Length >= 2 && a[0] == '-' && a[1] != '-'
-            && (a.IndexOf('f') >= 0 || a.IndexOf('F') >= 0);
+        if (a.Length >= 2 && a[0] == '-' && a[1] != '-'
+            && (a.IndexOf('f') >= 0 || a.IndexOf('F') >= 0)) return true;
+        // Obsolete `+NUM[bcl]f`.
+        return a.Length >= 3 && a[0] == '+' && char.IsAsciiDigit(a[1]) && a[^1] == 'f';
     }
 
     /// <summary>

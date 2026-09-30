@@ -12,10 +12,12 @@ namespace PsBash.Cmdlets.Tests;
 /// --repeated --all-repeated[=none|prepend|separate] --skip-fields --group[=METHOD] --ignore-case
 /// --skip-chars --unique --check-chars --zero-terminated (+ --help --version); obsolete `-N` =
 /// `-f N`; unique long prefixes are accepted; usage errors exit 1. Refused loudly as
-/// valid-but-unsupported (exit 2): -z/--zero-terminated, --group. Known gaps: GNU's obsolete `+N`
-/// (= -s N) and its "extra operand" error for a third operand are not implemented; `--all-repeated`
-/// with a METHOD is implemented (prepend/separate group separators).
+/// valid-but-unsupported (exit 2): -z/--zero-terminated, --group. GNU's obsolete `+N` (= -s N; off only for
+/// _POSIX2_VERSION 200112..200808) and its "extra operand" error for a third operand are
+/// implemented; `--all-repeated` with a METHOD is implemented (prepend/separate group separators).
+/// Known gap: the second operand is GNU's OUTPUT file, ps-bash reads it as another input.
 /// </summary>
+/// <remarks>Env-dependent only through _POSIX2_VERSION, which must be unset here.</remarks>
 public class UniqArgScanTests
 {
     private static string Scan(string[] argv)
@@ -101,6 +103,26 @@ public class UniqArgScanTests
     [InlineData("ERR uniq: option '--group' is recognized but not supported by ps-bash", "--gr")]  // FIX
     [InlineData("ERR uniq: option '--s' is ambiguous; possibilities: '--skip-fields' '--skip-chars'", "--s", "1")]  // GNU long_options[] order
     [InlineData("ERR uniq: option '--c' is ambiguous; possibilities: '--count' '--check-chars'", "--c")]
+    // Obsolete +N (= -s N) and the third-operand error, every row checked against GNU uniq 9.4.
+    [InlineData("----- m=none f=0 s=1 w=- ops=[]", "+1")]  // FIX (was: a file named +1)
+    [InlineData("c---- m=none f=0 s=1 w=- ops=[]", "-c", "+1")]
+    [InlineData("----- m=none f=0 s=1 w=- ops=[a]", "a", "+1")]  // anywhere among the operands
+    [InlineData("----- m=none f=0 s=1 w=- ops=[a,b]", "a", "b", "+1")]  // +N is not an operand: no extra-operand error
+    [InlineData("----- m=none f=0 s=2 w=- ops=[]", "+1", "+2")]  // later wins
+    [InlineData("----- m=none f=0 s=2 w=- ops=[]", "-s", "1", "+2")]  // ... against -s too
+    [InlineData("----- m=none f=0 s=1 w=- ops=[]", "+2", "-s1")]
+    [InlineData("----- m=none f=0 s=2147483647 w=- ops=[]", "+18446744073709551615")]  // fits 64 bits: saturates
+    [InlineData("----- m=none f=0 s=0 w=- ops=[+18446744073709551616]", "+18446744073709551616")]  // 2^64: a file
+    [InlineData("----- m=none f=0 s=0 w=- ops=[+x]", "+x")]  // not +DIGITS: a file
+    [InlineData("----- m=none f=0 s=0 w=- ops=[+]", "+")]
+    [InlineData("----- m=none f=0 s=0 w=- ops=[+1x]", "+1x")]
+    [InlineData("----- m=none f=0 s=0 w=- ops=[+-1]", "+-1")]
+    [InlineData("----- m=none f=0 s=0 w=- ops=[+99999999999999999999999]", "+99999999999999999999999")]  // > 64 bits: a file
+    [InlineData("----- m=none f=0 s=0 w=- ops=[+1]", "--", "+1")]  // after `--` it is a file
+    [InlineData("ERR uniq: extra operand 'c'", "a", "b", "c")]
+    [InlineData("ERR uniq: extra operand 'c'", "-c", "a", "b", "c", "d")]
+    [InlineData("ERR uniq: extra operand 'c'", "--", "a", "b", "c")]
+    [InlineData("ERR uniq: extra operand 'c'", "a", "b", "+1", "c")]
     [InlineData("ERR uniq: option '--count' doesn't allow an argument", "--count=1")]  // FIX
     [InlineData("ERR uniq: option '--ignore-case' doesn't allow an argument", "--ignore-case=1")]
     [InlineData("ERR uniq: unrecognized option '--bogus'", "--bogus")]
@@ -110,6 +132,22 @@ public class UniqArgScanTests
     public void Plan_MatchesGnuUniq(string expected, params string[] argv)
     {
         Assert.Equal(expected, Scan(argv));
+    }
+
+    [Theory]
+    [InlineData(null, true)]
+    [InlineData("", true)]
+    [InlineData("199209", true)]
+    [InlineData("200111", true)]
+    [InlineData("200112", false)]  // oracle: +N is a file name for 2001..2008
+    [InlineData("200113", false)]
+    [InlineData("200808", false)]
+    [InlineData("200809", true)]
+    [InlineData("999999", true)]
+    [InlineData("junk", true)]
+    public void ObsoletePlus_FollowsPosix2Version(string? env, bool allowed)
+    {
+        Assert.Equal(allowed, InvokeBashUniqCommand.ObsoletePlusAllowed(env));
     }
 
     [Theory]
