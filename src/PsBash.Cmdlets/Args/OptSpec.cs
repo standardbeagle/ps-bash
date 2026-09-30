@@ -53,16 +53,36 @@ public sealed class OptSpecSet
     /// <summary>Id produced by <c>-NUM</c>, or null when the shorthand is off.</summary>
     public string? NumericShorthandId { get; }
 
+    /// <summary>Id of the implicit GNU <c>--help</c> option (see <c>gnuInfoOptions</c>).</summary>
+    public const string HelpId = "help";
+
+    /// <summary>Id of the implicit GNU <c>--version</c> option (see <c>gnuInfoOptions</c>).</summary>
+    public const string VersionId = "version";
+
+    /// <param name="gnuInfoOptions">
+    /// Every GNU tool has <c>--help</c> and <c>--version</c>, and they take part in abbreviation:
+    /// <c>--ver</c> is AMBIGUOUS (<c>--verbose</c> / <c>--version</c>) and <c>--vers</c> is
+    /// <c>--version</c>. When true they are registered as flags with ids <see cref="HelpId"/> /
+    /// <see cref="VersionId"/>; the cmdlet acts on them via
+    /// <c>FileSystemHelpers.TryHandleInfoOptions</c>.
+    /// </param>
     public OptSpecSet(
         IEnumerable<OptSpec> specs,
         IEnumerable<string>? validButUnsupported = null,
         bool allowAbbrev = false,
-        string? numericShorthandId = null)
+        string? numericShorthandId = null,
+        bool gnuInfoOptions = false)
     {
         foreach (var s in specs)
         {
             if (s.Short != '\0') _byShort[s.Short] = s;
             if (s.Long is not null) _byLong[s.Long] = s;
+        }
+
+        if (gnuInfoOptions)
+        {
+            _byLong.TryAdd(HelpId, new OptSpec(HelpId, '\0', "help"));
+            _byLong.TryAdd(VersionId, new OptSpec(VersionId, '\0', "version"));
         }
 
         _unsupported = new HashSet<string>(validButUnsupported ?? Array.Empty<string>(), StringComparer.Ordinal);

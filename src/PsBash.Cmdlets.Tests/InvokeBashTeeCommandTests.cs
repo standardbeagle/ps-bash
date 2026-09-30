@@ -379,6 +379,15 @@ $global:teeSeen = $null
     }
 
     [Fact]
+    public void Tee_AbbreviatedVersionOption_PrintsVersionAndWritesNothing()
+    {
+        string target = Path.Combine(_tmpDir, "ver.txt");
+        var lines = RunLines($"'x' | Invoke-BashTee '--vers' '{Q(target)}'");
+        Assert.Contains("tee (ps-bash)", lines[0]);
+        Assert.False(File.Exists(target));
+    }
+
+    [Fact]
     public void Tee_OptionAfterOperand_IsStillAnOption()
     {
         // GNU permutes: `tee f -a` appends to f.
@@ -445,6 +454,8 @@ public class TeeArgScanTests
     [InlineData("ERR tee: option '--ignore-interrupts' is recognized but not supported by ps-bash", "--ignore", "f")]
     [InlineData("ERR tee: invalid option -- 'z'", "-az", "f")]                     // was invalid option -- 'a'
     [InlineData("ERR tee: invalid option -- '-'", "-a-", "f")]                     // was invalid option -- 'a'
+    [InlineData("append=0 ops=[f]", "--vers", "f")]                                // --version by prefix (cmdlet prints it)
+    [InlineData("append=0 ops=[f]", "--he", "f")]
     public void ScanArgs_MatchesGnuTee(string expected, params string[] argv)
     {
         Assert.Equal(expected, Scan(argv));

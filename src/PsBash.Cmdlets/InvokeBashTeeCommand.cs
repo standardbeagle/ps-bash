@@ -84,7 +84,8 @@ public sealed class InvokeBashTeeCommand : PSCmdlet
     private static readonly OptSpecSet TeeSpec = new(
         new[] { new OptSpec(OptAppend, 'a', "append") },
         validButUnsupported: TeeValidButUnsupported,
-        allowAbbrev: true);
+        allowAbbrev: true,
+        gnuInfoOptions: true);
 
     /// <summary>Pure argv scan (unit-test seam): options, operands and the first error.</summary>
     internal static ParsedArgs ScanArgs(string[] args) => ArgParser.Parse(args, TeeSpec);
@@ -117,6 +118,7 @@ public sealed class InvokeBashTeeCommand : PSCmdlet
 
         var parsed = ScanArgs(args);
         if (FileSystemHelpers.TryWriteParseError(this, "tee", parsed)) { _done = true; return; }
+        if (FileSystemHelpers.TryHandleInfoOptions(this, "tee", parsed)) { _done = true; return; }
 
         bool append = parsed.Has(OptAppend);
         var operands = parsed.Operands();

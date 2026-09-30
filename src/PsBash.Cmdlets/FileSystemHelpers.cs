@@ -271,6 +271,26 @@ internal static class FileSystemHelpers
         return true;
     }
 
+    /// <summary>
+    /// Act on a <c>--help</c> / <c>--version</c> the shared parser resolved from an ABBREVIATION
+    /// (<c>--vers</c>); the exact spellings are handled earlier by each cmdlet. Requires the
+    /// command's <see cref="Args.OptSpecSet"/> to be built with <c>gnuInfoOptions: true</c>.
+    /// Returns true when it produced the output and the cmdlet should return.
+    /// </summary>
+    public static bool TryHandleInfoOptions(PSCmdlet cmdlet, string cmd, Args.ParsedArgs parsed)
+    {
+        if (parsed.Has(Args.OptSpecSet.VersionId))
+            return TryHandleVersion(cmdlet, cmd, new[] { "--version" });
+
+        if (parsed.Has(Args.OptSpecSet.HelpId))
+        {
+            foreach (var line in cmdlet.InvokeCommand.InvokeScript("param($n) Show-BashHelp $n", cmd))
+                cmdlet.WriteObject(line);
+            return true;
+        }
+        return false;
+    }
+
     public static void WriteOptionError(
         PSCmdlet cmdlet, string cmd, string token,
         ISet<string> validButUnsupported)

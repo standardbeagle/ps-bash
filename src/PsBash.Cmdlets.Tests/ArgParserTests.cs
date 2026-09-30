@@ -322,6 +322,28 @@ public class ArgParserTests
     }
 
     [Fact]
+    public void GnuInfoOptions_TakePartInAbbreviation_LikeRealGnuTools()
+    {
+        // GNU cp: `--ver` is ambiguous (--verbose/--version); `--vers` is --version; `--he` is --help.
+        var spec = new OptSpecSet(
+            new[] { new OptSpec("verbose", 'v', "verbose") }, allowAbbrev: true, gnuInfoOptions: true);
+
+        var amb = ArgParser.Parse(new[] { "--ver" }, spec).Error!.Value;
+        Assert.Equal(ArgErrorKind.Ambiguous, amb.Kind);
+        Assert.Equal("x: option '--ver' is ambiguous; possibilities: '--verbose' '--version'", amb.Message("x"));
+
+        Assert.True(ArgParser.Parse(new[] { "--vers" }, spec).Has(OptSpecSet.VersionId));
+        Assert.True(ArgParser.Parse(new[] { "--he" }, spec).Has(OptSpecSet.HelpId));
+        Assert.True(ArgParser.Parse(new[] { "--verb" }, spec).Has("verbose"));
+    }
+
+    [Fact]
+    public void GnuInfoOptions_OffByDefault()
+    {
+        Assert.Equal(ArgErrorKind.Unrecognized, P("--vers").Error!.Value.Kind);
+    }
+
+    [Fact]
     public void Abbrev_OffMeansPrefixesAreUnrecognized()
     {
         var spec = new OptSpecSet(new[] { new OptSpec("append", 'a', "append") });
