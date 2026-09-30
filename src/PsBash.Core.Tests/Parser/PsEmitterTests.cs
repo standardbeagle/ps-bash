@@ -5305,6 +5305,24 @@ public class PsEmitterTests
         Assert.Equal(expected, result);
     }
 
+    // A glob word that also carries a bare `,` was emitted bare: PowerShell bound it as an
+    // ARRAY (`*.c,x` -> @('*.c','x')). Bash keeps the comma literal inside the pattern.
+    [Theory]
+    [InlineData("ls *.c,x", "Invoke-BashLs '*.c,x'")]
+    [InlineData("echo a*,b", "Invoke-BashEcho 'a*,b'")]
+    [InlineData("cat f*,g", "Invoke-BashCat 'f*,g'")]
+    [InlineData("cat f?,g[12]", "Invoke-BashCat 'f?,g[12]'")]
+    public void Transpile_GlobWordWithCommaLiteral_IsOneQuotedPattern(string bash, string expected)
+    {
+        Assert.Equal(expected, PsEmitter.Transpile(bash));
+    }
+
+    [Fact]
+    public void Transpile_GlobWordWithoutComma_StaysBare()
+    {
+        Assert.Equal("Invoke-BashLs *.c", PsEmitter.Transpile("ls *.c"));
+    }
+
     [Fact]
     public void Transpile_CommaWordMixedWithVariable_FlattensToOneString()
     {

@@ -6054,6 +6054,7 @@ public static class PsEmitter
             return emitted;
 
         bool hasCommaLiteral = false;
+        bool hasGlob = false;
         foreach (var part in word.Parts)
         {
             switch (part)
@@ -6062,13 +6063,31 @@ public static class PsEmitter
                     if (lit.Value.Contains(','))
                         hasCommaLiteral = true;
                     break;
-                case WordPart.GlobPart or WordPart.ProcessSub
-                    or WordPart.BracedTuple or WordPart.BracedRange:
+                case WordPart.GlobPart:
+                    hasGlob = true;
+                    break;
+                case WordPart.ProcessSub or WordPart.BracedTuple or WordPart.BracedRange:
                     return emitted;
             }
         }
         if (!hasCommaLiteral)
             return emitted;
+
+        if (hasGlob)
+        {
+            // `ls *.c,x`: the comma is literal inside the glob pattern (bash), but bare it is a
+            // PowerShell array. The mapped cmdlets expand glob operands themselves from the
+            // literal string, so ONE single-quoted pattern keeps globbing AND the comma. Only
+            // the plain literal+glob shape is handled; anything richer (variables, escapes,
+            // quotes mixed into a glob) keeps its bare emission.
+            if (word.Parts.All(p => p is WordPart.Literal or WordPart.GlobPart))
+            {
+                var globText = TransformWordPath(emitted);
+                if (!globText.StartsWith("$env:TEMP\\", StringComparison.Ordinal))
+                    return PsBuild.SingleQuote(globText);
+            }
+            return emitted;
+        }
 
         if (word.Parts.All(p => p is WordPart.Literal or WordPart.EscapedLiteral)
             && TryGetPureLiteralText(word.Parts, out var text))

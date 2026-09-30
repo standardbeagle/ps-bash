@@ -198,9 +198,13 @@ any argument word whose `WordPart.Literal` parts contain `,`:
 - word mixing the comma literal with variables / quoted parts (`$x,y`, `a,"b"`)
   → flattened to ONE double-quoted string (`"$env:x,y"`);
 - flag-shaped words keep the historical `"-F,"` double-quote wrap above;
-- words with a glob, process-sub or brace part are left alone (quoting would kill
-  globbing; `{a,b}` is a `BracedTuple`, never a comma literal) — a glob word that
-  also contains a bare comma (`ls *.c,x`) remains a known gap;
+- a plain literal+glob word (`ls *.c,x`, `cat f*,g`) becomes ONE single-quoted pattern
+  (`'*.c,x'`): the comma stays literal as in bash, and globbing still happens because the
+  mapped cmdlets expand their glob operands from the literal string (no match keeps the
+  literal word, nullglob-off). Glob words mixing in variables/escapes/quotes keep the bare
+  emission;
+- words with a process-sub or brace part are left alone (`{a,b}` is a `BracedTuple`,
+  never a comma literal);
 - already-quoted words (`"a,b"`, `'a,b'`) and backslash-escaped commas are untouched.
 
 Example: `awk -F,` emits as `Invoke-BashAwk "-F,"` to prevent PowerShell from
