@@ -208,4 +208,37 @@ public class HeadTailArgBehaviorTests : IClassFixture<SharedPwshFixture>, IDispo
     {
         Run("'x' | Invoke-BashCat '--' '-n'").AssertFailed(1, "-n: No such file or directory"); // a FILE named -n, not a flag
     }
+
+    // ── tac ─────────────────────────────────────────────────────────────────
+
+    [Fact]
+    public void Tac_JoinedAbbreviatedAndDanglingSeparator()
+    {
+        // GNU: -sX / --sep X are the separator (were: file operands); a dangling -s is a usage error.
+        Assert.Equal(new[] { "c", "b", "a" }, Run("'a,b,c' | Invoke-BashTac '-s,'" + Text).AssertSuccess().Lines);
+        Assert.Equal(new[] { "c", "b", "a" }, Run("'a,b,c' | Invoke-BashTac '--sep' ','" + Text).AssertSuccess().Lines);
+        Run("'a' | Invoke-BashTac '-s'").AssertFailed(1, "option requires an argument -- 's'");
+        Run("'a' | Invoke-BashTac '-b'").AssertFailed(2, "not supported");
+        Run("'a' | Invoke-BashTac '--bogus'").AssertFailed(1, "unrecognized option '--bogus'");
+    }
+
+    // ── nl ──────────────────────────────────────────────────────────────────
+
+    [Fact]
+    public void Nl_ValuesAreValidated_LikeGnu()
+    {
+        Run("'a' | Invoke-BashNl '-n' xx").AssertFailed(1, "invalid line numbering format: 'xx'");
+        Run("'a' | Invoke-BashNl '-w' x").AssertFailed(1, "invalid line number field width: 'x'");
+        Run("'a' | Invoke-BashNl '-bx'").AssertFailed(1, "invalid body numbering style: 'x'");
+        Run("'a' | Invoke-BashNl '-bpfoo'").AssertFailed(2, "not supported");
+        Run("'a' | Invoke-BashNl '-h' a").AssertFailed(2, "option '-h' is recognized but not supported");
+        Run("'a' | Invoke-BashNl '--bogus'").AssertFailed(1, "unrecognized option '--bogus'");
+    }
+
+    [Fact]
+    public void Nl_LongOptionsAndAbbreviations()
+    {
+        var r = Run("'a','','b' | Invoke-BashNl '--body' a '--number-f' rz '--number-w' 3 '-v' 5 '-i' 2" + Text).AssertSuccess();
+        Assert.Equal(new[] { "005\ta", "007\t", "009\tb" }, r.Lines);
+    }
 }

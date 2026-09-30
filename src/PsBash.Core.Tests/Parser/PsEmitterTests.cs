@@ -782,7 +782,7 @@ public class PsEmitterTests
         // Batch 1 of the shared ordered parser. Adding a command here also means adding it to
         // CommonParameterCollisionGuardTests.EmitterForceQuoted (Cmdlets.Tests) — that map is
         // how the guard knows the emitter, not a decoy, protects the colliding letters.
-        Assert.Equal(new[] { "cat", "cp", "head", "ln", "mkdir", "mv", "rm", "rmdir", "tail", "tee", "touch", "wc" }, PsEmitter.OrderedArgCommands.OrderBy(x => x).ToArray());
+        Assert.Equal(new[] { "cat", "cp", "head", "ln", "mkdir", "mv", "nl", "rm", "rmdir", "tac", "tail", "tee", "touch", "wc" }, PsEmitter.OrderedArgCommands.OrderBy(x => x).ToArray());
     }
 
     [Theory]
@@ -840,6 +840,13 @@ public class PsEmitterTests
     [InlineData("cat -e -v -A f", "Invoke-BashCat '-e' '-v' '-A' f")]
     [InlineData("cat - f -n", "Invoke-BashCat '-' f '-n'")]
     [InlineData("cat -- -n", "Invoke-BashCat '--' '-n'")]
+    [InlineData("tac -s x f", "Invoke-BashTac '-s' x f")]
+    [InlineData("tac -sx f", "Invoke-BashTac '-sx' f")]
+    [InlineData("tac --separator=, f", "Invoke-BashTac '--separator=,' f")]
+    [InlineData("nl -ba f", "Invoke-BashNl '-ba' f")]
+    [InlineData("nl -w 3 -v 5 -i 2 f", "Invoke-BashNl '-w' 3 '-v' 5 '-i' 2 f")]
+    [InlineData("nl -s: -nrz f", "Invoke-BashNl '-s:' '-nrz' f")]
+    [InlineData("nl --number-width=3 f", "Invoke-BashNl '--number-width=3' f")]
     public void Transpile_OrderedArgCommand_QuotesEveryDashLiteral(string bash, string expected)
     {
         Assert.Equal(expected, PsEmitter.Transpile(bash));
@@ -4279,7 +4286,7 @@ public class PsEmitterTests
         // phase-2b streaming -Stages list + phase-2a scriptblock Fallback.
         Assert.Equal(
             "Invoke-BashFusedPipeline -Stages @(@('cat', 'file'), @('nl', '-ba')) "
-                + "-Fallback { Invoke-BashCat file | Invoke-BashNl -ba }",
+                + "-Fallback { Invoke-BashCat file | Invoke-BashNl '-ba' }",
             result);
     }
 

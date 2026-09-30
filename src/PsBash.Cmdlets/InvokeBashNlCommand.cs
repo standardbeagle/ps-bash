@@ -1,4 +1,6 @@
+using System.Linq;
 using System.Management.Automation;
+using PsBash.Cmdlets.Args;
 
 namespace PsBash.Cmdlets;
 
@@ -60,15 +62,139 @@ public sealed class InvokeBashNlCommand : PSCmdlet
     /// <summary>-i N (increment) decoy: bare -i is ambiguous with -Information*.</summary>
     [Parameter] public string? I { get; set; }
 
-    // Valid GNU nl flags recognized but not implemented by ps-bash.
-    private static readonly HashSet<string> NlValidButUnsupported =
-        new(StringComparer.Ordinal)
+    /// <summary>
+    /// Valid GNU <c>nl</c> options ps-bash does not implement, refused loudly (exit 2) by the
+    /// shared parser. They all concern logical pages / sections (<c>-d</c> delimiter, <c>-f</c>
+    /// footer and <c>-h</c> header styles, <c>-p</c> no-renumber) or blank-line grouping
+    /// (<c>-l</c>) — ps-bash nl numbers a single body section. (A string[] on purpose:
+    /// CommonParameterCollisionGuardTests enumerates static string sets.)
+    /// </summary>
+    private static readonly string[] NlValidButUnsupported =
+    {
+        "-d", "--section-delimiter",
+        "-f", "--footer-numbering",
+        "-h", "--header-numbering",
+        "-l", "--join-blank-lines",
+        "-p", "--no-renumber",
+    };
+
+    private const string OptBody = "body", OptFormat = "format", OptSeparator = "sep",
+        OptWidth = "width", OptStart = "start", OptIncrement = "incr";
+
+    /// <summary>
+    /// nl's option surface (GNU coreutils 9.4: -b -d -f -h -i -l -n -p -s -v -w + long forms).
+    /// Implemented: -b (a/t/n), -n (ln/rn/rz), -s, -w, -v, -i. Built once for the shared parser.
+    /// </summary>
+    private static readonly OptSpecSet NlSpec = new(
+        new[]
         {
-            "-bt", "-bn", "--body-numbering", "--header-numbering",
-            "--footer-numbering", "--starting-line-number", "--line-increment",
-            "--join-blank-lines", "--number-format", "--number-width",
-            "--number-separator", "--section-delimiter",
-        };
+            new OptSpec(OptBody, 'b', "body-numbering", OptKind.Value),
+            new OptSpec(OptFormat, 'n', "number-format", OptKind.Value),
+            new OptSpec(OptSeparator, 's', "number-separator", OptKind.Value),
+            new OptSpec(OptWidth, 'w', "number-width", OptKind.Value),
+            new OptSpec(OptStart, 'v', "starting-line-number", OptKind.Value),
+            new OptSpec(OptIncrement, 'i', "line-increment", OptKind.Value),
+        },
+        validButUnsupported: NlValidButUnsupported,
+        allowAbbrev: true,
+        gnuInfoOptions: true);
+
+    /// <summary>Pure argv scan (unit-test seam): options, operands and the first error.</summary>
+    internal static ParsedArgs ScanArgs(string[] args) => ArgParser.Parse(args, NlSpec);
+
+    /// <summary>The resolved meaning of an nl argv (shared by the cmdlet and the fused core).</summary>
+    internal sealed class NlArgs
+    {
+        public ParsedArgs Parsed = null!;
+        public bool NumberAll, NumberNone;
+        public string Style = "rn"; // rn=right, ln=left, rz=right zero-padded
+        public string Sep = "\t";
+        public int Width = 6, Start = 1, Incr = 1;
+        public List<string> Operands = new();
+        /// <summary>A value error the scan itself cannot see (bad style/format/number); see <see cref="ErrorExit"/>.</summary>
+        public string? Error;
+        /// <summary>1 for a usage error (GNU), 2 for a valid-but-unsupported value (<c>-bp&lt;RE&gt;</c>).</summary>
+        public int ErrorExit = 1;
+
+        /// <summary>True when nothing further should execute: scan error, value error, --help/--version.</summary>
+        public bool Declined =>
+            Parsed.HasError || Error is not null
+            || Parsed.Has(OptSpecSet.HelpId) || Parsed.Has(OptSpecSet.VersionId);
+    }
+
+    /// <summary>
+    /// Scan + resolve, validating every value like GNU (last occurrence of an option wins, but a
+    /// bad value anywhere is an error): <c>-b</c> a|t|n (or the unsupported <c>pREGEX</c>), <c>-n</c>
+    /// ln|rn|rz, <c>-w</c> a positive width, <c>-v</c>/<c>-i</c> integers. The old scan silently
+    /// ignored bad values (<c>nl -n xx</c> = right-aligned, <c>-w x</c> = width 6).
+    /// </summary>
+    internal static NlArgs Plan(string[] args)
+    {
+        var n = new NlArgs { Parsed = ScanArgs(args) };
+        n.Operands = n.Parsed.Operands();
+        if (n.Parsed.HasError) return n;
+
+        foreach (var tok in n.Parsed.Tokens)
+        {
+            if (tok.Kind != ArgTokKind.Option) continue;
+            string v = tok.Value!;
+            switch (tok.OptId)
+            {
+                case OptBody:
+                    switch (v)
+                    {
+                        case "a": n.NumberAll = true; n.NumberNone = false; break;
+                        case "n": n.NumberNone = true; n.NumberAll = false; break;
+                        case "t": n.NumberAll = false; n.NumberNone = false; break;
+                        default:
+                            if (v.Length > 0 && v[0] == 'p')
+                            {
+                                n.Error = $"nl: body numbering style '{v}' (regex numbering) is recognized but not supported by ps-bash";
+                                n.ErrorExit = ArgError.UnsupportedExitCode;
+                            }
+                            else n.Error = $"nl: invalid body numbering style: '{v}'";
+                            return n;
+                    }
+                    break;
+                case OptFormat:
+                    if (v is "ln" or "rn" or "rz") n.Style = v;
+                    else { n.Error = $"nl: invalid line numbering format: '{v}'"; return n; }
+                    break;
+                case OptSeparator:
+                    n.Sep = v;
+                    break;
+                case OptWidth:
+                    if (!TryInt(v, out int w) || w < 1) { n.Error = $"nl: invalid line number field width: '{v}'"; return n; }
+                    n.Width = w;
+                    break;
+                case OptStart:
+                    if (!TryInt(v, out int start)) { n.Error = $"nl: invalid starting line number: '{v}'"; return n; }
+                    n.Start = start;
+                    break;
+                case OptIncrement:
+                    if (!TryInt(v, out int incr)) { n.Error = $"nl: invalid line number increment: '{v}'"; return n; }
+                    n.Incr = incr;
+                    break;
+            }
+        }
+        return n;
+    }
+
+    private static bool TryInt(string s, out int value) =>
+        int.TryParse(s, System.Globalization.NumberStyles.AllowLeadingSign,
+            System.Globalization.CultureInfo.InvariantCulture, out value);
+
+    /// <summary>Arguments with the value decoys re-injected (bare -w/-v/-i bind -WarningAction /
+    /// -Verbose / -Information*): each becomes the two elements <c>-x VALUE</c>.</summary>
+    private string[] ArgsWithDecoys()
+    {
+        var args = Arguments ?? Array.Empty<string>();
+        var pre = new List<string>();
+        if (W is not null) { pre.Add("-w"); pre.Add(W); }
+        if (V is not null) { pre.Add("-v"); pre.Add(V); }
+        if (I is not null) { pre.Add("-i"); pre.Add(I); }
+        return pre.Count == 0 ? args : pre.Concat(args).ToArray();
+    }
 
     // Parsed-once state.
     private bool _parsed;
@@ -80,20 +206,22 @@ public sealed class InvokeBashNlCommand : PSCmdlet
     private int _incr = 1;
     private string _style = "rn"; // rn=right, ln=left, rz=right zero-padded
     private List<string> _operands = new();
-    // True when stdin must NOT be streamed: file operands present, or a
-    // --help / --version request (both short-circuit the scan in the oracle).
+    // True when stdin must NOT be streamed: file operands present, a scan/value error, or a
+    // --help / --version request (all short-circuit in EndProcessing).
     private bool _suppressStdin;
     // Numbering counter — instance state so a streamed stdin run and any
     // trailing file reads number continuously.
     private int _lineNum;
     private string? _blankNum;   // cached `-b n` blank number field (width is fixed post-parse)
 
+    private NlArgs? _plan;
+
     private void ParseOnce()
     {
         if (_parsed) return;
         _parsed = true;
 
-        var args = Arguments ?? Array.Empty<string>();
+        var args = ArgsWithDecoys();
 
         // --help / --version short-circuit before flag scanning (oracle order).
         if (Array.IndexOf(args, "--version") >= 0 || Array.IndexOf(args, "--help") >= 0)
@@ -102,89 +230,24 @@ public sealed class InvokeBashNlCommand : PSCmdlet
             return;
         }
 
-        // Bare -w/-v/-i arrive via the decoy parameters (common-param collisions).
-        _width = ParseIntOr(W, _width);
-        _start = ParseIntOr(V, _start);
-        _incr = ParseIntOr(I, _incr);
-
-        // Parse flags manually (mirrors the psm1 oracle's while loop).
-        bool pastDoubleDash = false;
-        int i = 0;
-        while (i < args.Length)
-        {
-            string arg = args[i];
-
-            if (pastDoubleDash)
-            {
-                _operands.Add(arg);
-                i++;
-                continue;
-            }
-
-            if (arg == "--")
-            {
-                pastDoubleDash = true;
-                i++;
-                continue;
-            }
-
-            // -b STYLE (a=all, t=non-empty[default], n=none) — `-ba` joined or `-b a` split.
-            if (arg.Length == 3 && arg[0] == '-' && arg[1] == 'b')
-            {
-                ApplyBodyStyle(arg[2]);
-                i++;
-                continue;
-            }
-            if (string.Equals(arg, "-b", StringComparison.Ordinal))
-            {
-                i++;
-                if (i < args.Length && args[i].Length == 1) ApplyBodyStyle(args[i][0]);
-                i++;
-                continue;
-            }
-
-            // -n FORMAT (ln / rn / rz) — number style.
-            if (arg == "-n" && i + 1 < args.Length) { _style = NormalizeStyle(args[i + 1]); i += 2; continue; }
-            if (arg.Length > 2 && arg.StartsWith("-n", StringComparison.Ordinal)) { _style = NormalizeStyle(arg.Substring(2)); i++; continue; }
-
-            // -s SEP (separator between number and line).
-            if (arg == "-s" && i + 1 < args.Length) { _sep = args[i + 1]; i += 2; continue; }
-            if (arg.Length > 2 && arg.StartsWith("-s", StringComparison.Ordinal)) { _sep = arg.Substring(2); i++; continue; }
-
-            // Joined -wN / -vN / -iN (the bare forms came through W/V/I).
-            if (arg.Length > 2 && arg.StartsWith("-w", StringComparison.Ordinal) && int.TryParse(arg.Substring(2), out var w)) { _width = w; i++; continue; }
-            if (arg.Length > 2 && arg.StartsWith("-v", StringComparison.Ordinal) && int.TryParse(arg.Substring(2), out var v)) { _start = v; i++; continue; }
-            if (arg.Length > 2 && arg.StartsWith("-i", StringComparison.Ordinal) && int.TryParse(arg.Substring(2), out var inc)) { _incr = inc; i++; continue; }
-
-            _operands.Add(arg);
-            i++;
-        }
+        // Shared ordered parser: bundles (-ba), attached values (-w3, -s:), long forms and
+        // unique-prefix abbreviations, `--`, and the unsupported/unknown classifier in ONE scan.
+        // A scan or value error is reported from EndProcessing; stdin is not streamed for it.
+        var plan = Plan(args);
+        _plan = plan;
+        _numberAll = plan.NumberAll;
+        _numberNone = plan.NumberNone;
+        _width = plan.Width;
+        _start = plan.Start;
+        _incr = plan.Incr;
+        _sep = plan.Sep;
+        _style = plan.Style;
+        _operands = plan.Operands;
 
         // Seed the counter so the first numbered line is exactly _start.
         _lineNum = _start - _incr;
-        _suppressStdin = _operands.Count > 0;
+        _suppressStdin = plan.Declined || _operands.Count > 0;
     }
-
-    private void ApplyBodyStyle(char s)
-    {
-        switch (s)
-        {
-            case 'a': _numberAll = true; _numberNone = false; break;
-            case 'n': _numberNone = true; _numberAll = false; break;
-            case 't': _numberAll = false; _numberNone = false; break;
-            // 'p<BRE>' regex numbering is not supported; ignore.
-        }
-    }
-
-    private static int ParseIntOr(string? s, int def) =>
-        !string.IsNullOrEmpty(s) && int.TryParse(s, out var v) ? v : def;
-
-    private static string NormalizeStyle(string s) => s switch
-    {
-        "ln" or "rn" or "rz" => s,
-        _ => "rn",
-    };
-
     private void EmitNumbered(string line)
     {
         // -b n: never number; GNU still prints the blank number field + separator.
@@ -239,7 +302,7 @@ public sealed class InvokeBashNlCommand : PSCmdlet
     {
         ParseOnce();
 
-        var args = Arguments ?? Array.Empty<string>();
+        var args = ArgsWithDecoys();
 
         FileSystemHelpers.SetLastExitCode(this, 0);
         if (FileSystemHelpers.TryHandleVersion(this, "nl", args)) return;
@@ -253,8 +316,17 @@ public sealed class InvokeBashNlCommand : PSCmdlet
             return;
         }
 
-        if (FileSystemHelpers.TryWriteOperandOptionError(
-                this, "nl", _operands, NlValidButUnsupported)) return;
+        if (_plan is { } plan)
+        {
+            if (FileSystemHelpers.TryWriteParseError(this, "nl", plan.Parsed)) return;
+            if (FileSystemHelpers.TryHandleInfoOptions(this, "nl", plan.Parsed)) return;
+            if (plan.Error is { } planError)
+            {
+                FileSystemHelpers.WriteBashError(this, planError);
+                FileSystemHelpers.SetLastExitCode(this, plan.ErrorExit);
+                return;
+            }
+        }
 
         // Pipeline mode (no operands) was already streamed in ProcessRecord.
         if (_operands.Count == 0) return;

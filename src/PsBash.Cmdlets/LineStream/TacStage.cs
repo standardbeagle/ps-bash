@@ -18,12 +18,12 @@ namespace PsBash.Cmdlets;
 /// time, and a <c>head</c> BEFORE the tac still stops its own producer.</item>
 /// </list>
 ///
-/// <para><b>Certified argv subset:</b> nothing at all, <c>-s SEP</c>, or
-/// <c>--separator=SEP</c>. DECLINED: file operands (file mode), <c>-r</c>/<c>--regex</c> and
-/// <c>-b</c>/<c>--before</c> (valid-but-unsupported — the cmdlet owns the refusal text and its
-/// exit code), <c>--help</c> / <c>--version</c>, a dangling <c>-s</c>, and every other flag.
-/// The joined <c>-sSEP</c> spelling is NOT certified because the cmdlet does not parse it
-/// either — it falls through to the operand list and becomes a file.</para>
+/// <para><b>Certified argv subset:</b> every argv the cmdlet accepts with no file operands —
+/// nothing at all, or <c>-s SEP</c> / <c>-sSEP</c> / <c>--separator=SEP</c> (and unique-prefix
+/// abbreviations). The cmdlet's own <see cref="InvokeBashTacCommand.Plan"/> resolves the argv for both
+/// lanes. DECLINED: file operands (file mode), <c>-r</c>/<c>--regex</c> and <c>-b</c>/<c>--before</c>
+/// (valid-but-unsupported — the cmdlet owns the refusal text and its exit code), <c>--help</c> /
+/// <c>--version</c>, a dangling <c>-s</c>, and every other flag.</para>
 ///
 /// <para>Parity oracle is <see cref="InvokeBashTacCommand"/>: an EMPTY <c>-s</c> value falls
 /// through to the plain reverse branch (PowerShell's <c>if ($separator)</c> is false for the
@@ -42,35 +42,12 @@ internal sealed class TacStage : ILineStreamStage
 
     internal static ILineStreamStage? TryCreate(string[] argv)
     {
-        string? separator = null;
-
-        int i = 0;
-        while (i < argv.Length)
-        {
-            var a = argv[i];
-
-            if (a == "-s")
-            {
-                i++;
-                if (i >= argv.Length) return null;   // the cmdlet treats a dangling -s as an operand
-                separator = argv[i];
-                i++;
-                continue;
-            }
-            if (a.StartsWith("--separator=", StringComparison.Ordinal))
-            {
-                separator = a.Substring("--separator=".Length);
-                i++;
-                continue;
-            }
-
-            // Any flag (-r, -b, --help, --version, unknown) or file operand.
-            return null;
-        }
-
-        return new TacStage(separator);
+        // The cmdlet's own resolver (shared ordered parser) decides, so this core can NEVER accept
+        // an argv the cmdlet would reject or read differently. File operands (file mode) decline.
+        var plan = InvokeBashTacCommand.Plan(argv);
+        if (plan.Declined || plan.Operands.Count > 0) return null;
+        return new TacStage(plan.Separator);
     }
-
     public IEnumerable<string> Run(IEnumerable<string> input)
     {
         // ---- the buffer: the WHOLE stream, materialized before the first yield ----

@@ -58,6 +58,8 @@ public class CommonParameterCollisionGuardTests
             ["tail"] = new(CollidingLetters),
             ["wc"] = new(CollidingLetters),
             ["cat"] = new(CollidingLetters),
+            ["tac"] = new(CollidingLetters),
+            ["nl"] = new(CollidingLetters),
         };
 
     [Fact]

@@ -13,17 +13,14 @@ namespace PsBash.Cmdlets;
 /// (no number, no separator) and does NOT consume a number, while under <c>-b n</c> the blank
 /// number field plus the separator are still printed.</para>
 ///
-/// <para><b>Certified argv subset:</b> nothing at all, <c>-b STYLE</c> / <c>-bSTYLE</c>
-/// (<c>a</c>/<c>t</c>/<c>n</c>), <c>-n STYLE</c> / <c>-nSTYLE</c> (<c>ln</c>/<c>rn</c>/<c>rz</c>),
-/// <c>-s SEP</c> / <c>-sSEP</c>, and the JOINED numeric forms <c>-wN</c> / <c>-vN</c> /
-/// <c>-iN</c>. DECLINED: the BARE <c>-w</c> / <c>-v</c> / <c>-i</c> value flags — on the cmdlet
-/// those are declared decoy parameters (each prefix-collides with a common parameter:
-/// <c>-WarningAction</c>, <c>-Verbose</c>, <c>-Information*</c>), so their values are consumed
-/// by the binder and never appear in the cmdlet's own scan. A stage has no binder to model, so
-/// certifying them would mean guessing; the joined spellings, which both lanes resolve from the
-/// same token, are certified instead. Also declined: file operands (file mode), <c>--</c>,
-/// <c>--help</c> / <c>--version</c>, every long form, and any unknown flag.</para>
-/// </summary>
+/// <para><b>Certified argv subset:</b> every argv the cmdlet accepts with no file operands. The
+/// cmdlet's own <see cref="InvokeBashNlCommand.Plan"/> resolves and VALIDATES the argv for both
+/// lanes — <c>-b a|t|n</c>, <c>-n ln|rn|rz</c>, <c>-s SEP</c>, <c>-w N</c>, <c>-v N</c>, <c>-i N</c>,
+/// in any bundling / joined / long / abbreviated spelling — so a bad value or an unsupported
+/// option (<c>-h -f -d -l -p</c>, <c>-bp&lt;RE&gt;</c>) declines here exactly when the cmdlet
+/// refuses it. (Bare <c>-w</c>/<c>-v</c>/<c>-i</c> used to decline because the cmdlet only saw them
+/// through binder-bound decoys; the transpiler now quotes every flag, so both lanes read the
+/// same argv.) Also declined: file operands (file mode), <c>--help</c> / <c>--version</c>.</para>/// </summary>
 internal sealed class NlStage : ILineStreamStage
 {
     private readonly bool _numberAll, _numberNone;
@@ -42,89 +39,13 @@ internal sealed class NlStage : ILineStreamStage
 
     internal static ILineStreamStage? TryCreate(string[] argv)
     {
-        bool numberAll = false, numberNone = false;
-        int width = 6, start = 1, incr = 1;
-        string sep = "\t", style = "rn";
-
-        int i = 0;
-        while (i < argv.Length)
-        {
-            var a = argv[i];
-
-            // -bSTYLE (joined, the cmdlet's length-3 branch) and -b STYLE (split).
-            if (a.Length == 3 && a[0] == '-' && a[1] == 'b')
-            {
-                if (!ApplyBodyStyle(a[2], ref numberAll, ref numberNone)) return null;
-                i++;
-                continue;
-            }
-            if (a == "-b")
-            {
-                i++;
-                if (i >= argv.Length || argv[i].Length != 1) return null;
-                if (!ApplyBodyStyle(argv[i][0], ref numberAll, ref numberNone)) return null;
-                i++;
-                continue;
-            }
-
-            if (a == "-n")
-            {
-                i++;
-                if (i >= argv.Length) return null;
-                style = NormalizeStyle(argv[i]);
-                i++;
-                continue;
-            }
-            if (a.Length > 2 && a.StartsWith("-n", StringComparison.Ordinal))
-            { style = NormalizeStyle(a.Substring(2)); i++; continue; }
-
-            if (a == "-s")
-            {
-                i++;
-                if (i >= argv.Length) return null;
-                sep = argv[i];
-                i++;
-                continue;
-            }
-            if (a.Length > 2 && a.StartsWith("-s", StringComparison.Ordinal))
-            { sep = a.Substring(2); i++; continue; }
-
-            // Joined -wN / -vN / -iN only; the bare forms are binder-bound decoys on the
-            // cmdlet (see the class remarks) and are NOT certified.
-            if (a.Length > 2 && a.StartsWith("-w", StringComparison.Ordinal) && int.TryParse(a.Substring(2), out var w))
-            { width = w; i++; continue; }
-            if (a.Length > 2 && a.StartsWith("-v", StringComparison.Ordinal) && int.TryParse(a.Substring(2), out var v))
-            { start = v; i++; continue; }
-            if (a.Length > 2 && a.StartsWith("-i", StringComparison.Ordinal) && int.TryParse(a.Substring(2), out var inc))
-            { incr = inc; i++; continue; }
-
-            // Bare -w/-v/-i, --, --help/--version, long forms, unknown flags, file operands.
-            return null;
-        }
-
-        return new NlStage(numberAll, numberNone, width, start, incr, sep, style);
+        // The cmdlet's own resolver (shared ordered parser + value validation) decides, so this
+        // core can NEVER accept an argv the cmdlet would reject or read differently. File
+        // operands (file mode) decline.
+        var plan = InvokeBashNlCommand.Plan(argv);
+        if (plan.Declined || plan.Operands.Count > 0) return null;
+        return new NlStage(plan.NumberAll, plan.NumberNone, plan.Width, plan.Start, plan.Incr, plan.Sep, plan.Style);
     }
-
-    /// <summary>The cmdlet SILENTLY IGNORES an unrecognized body style (its <c>switch</c> has
-    /// no default). Rather than reproduce a silent ignore, decline it — the fallback cmdlet
-    /// then produces exactly whatever it produces, and the two lanes cannot disagree.</summary>
-    private static bool ApplyBodyStyle(char s, ref bool numberAll, ref bool numberNone)
-    {
-        switch (s)
-        {
-            case 'a': numberAll = true; numberNone = false; return true;
-            case 'n': numberNone = true; numberAll = false; return true;
-            case 't': numberAll = false; numberNone = false; return true;
-            default: return false;      // 'p<BRE>' regex numbering and anything else
-        }
-    }
-
-    private static string NormalizeStyle(string s) => s switch
-    {
-        "ln" or "rn" or "rz" => s,
-        _ => "rn",
-    };
-
     public IEnumerable<string> Run(IEnumerable<string> input)
     {
         // Seeded so the FIRST numbered line is exactly _start (the cmdlet's own seeding).
