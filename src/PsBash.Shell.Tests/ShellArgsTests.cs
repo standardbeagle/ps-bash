@@ -396,6 +396,42 @@ public class ShellArgsTests
         Assert.Empty(result.ScriptArgs);
     }
 
+    // Bash: everything after the script path is positional ($1..), flags included.
+    // Oracle: `bash s.sh -v -e -c x` -> $1=-v $2=-e $3=-c $4=x; `bash s.sh --version --help`
+    // hands both to the script instead of printing anything.
+    [Fact]
+    public void Parse_FlagsAfterScriptPath_AreScriptArgs()
+    {
+        var result = ShellArgs.Parse(["s.sh", "-v", "-e", "-c", "x"]);
+
+        Assert.Equal("s.sh", result.ScriptPath);
+        Assert.Equal(["-v", "-e", "-c", "x"], result.ScriptArgs);
+        Assert.Null(result.Command);
+    }
+
+    [Fact]
+    public void Parse_InfoFlagsAfterScriptPath_AreScriptArgsNotInfoRequests()
+    {
+        var result = ShellArgs.Parse(["s.sh", "--version", "--help", "--verbose", "-lc"]);
+
+        Assert.Equal("s.sh", result.ScriptPath);
+        Assert.Equal(["--version", "--help", "--verbose", "-lc"], result.ScriptArgs);
+        Assert.False(result.ShowVersion);
+        Assert.False(result.ShowHelp);
+        Assert.False(result.Verbose);
+        Assert.False(result.Login);
+    }
+
+    [Fact]
+    public void Parse_OptionsBeforeScriptPath_StillParsed_BundleAfterTimeoutValueStillExpands()
+    {
+        var result = ShellArgs.Parse(["--timeout", "5", "-lc", "echo hi"]);
+
+        Assert.Equal("5", result.Timeout);
+        Assert.True(result.Login);
+        Assert.Equal("echo hi", result.Command);
+    }
+
     // PTY-9 follow-on: `--ps` / `--raw-ps` flag — bypasses bash transpile and
     // forwards the command body to the host runspace as raw PowerShell. The
     // in-band entry point for tests that need to drive raw PS probes

@@ -76,6 +76,7 @@ public sealed class InvokeBashAwkCommand : PSCmdlet
         string? programText = null;
         var files = new List<string>();
         bool pastDoubleDash = false;
+        bool optionsEnded = false;
 
         if (V != null) varAssignments.AddRange(V);
 
@@ -83,8 +84,11 @@ public sealed class InvokeBashAwkCommand : PSCmdlet
         {
             string arg = args[i];
 
-            if (pastDoubleDash) { AddOperand(arg, ref programText, programFiles, files); continue; }
+            if (pastDoubleDash || optionsEnded) { AddOperand(arg, ref programText, programFiles, files); continue; }
             if (arg == "--") { pastDoubleDash = true; continue; }
+            // POSIX: option parsing ends at the first operand (the program text, or the first
+            // file when -f supplied the program). `awk '{print}' -v x=1` names a FILE `-v`.
+            if (arg.Length == 0 || arg[0] != '-' || arg == "-") { optionsEnded = true; AddOperand(arg, ref programText, programFiles, files); continue; }
 
             if (arg == "-F")
             {

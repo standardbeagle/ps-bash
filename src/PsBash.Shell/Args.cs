@@ -171,7 +171,12 @@ public record ShellArgs(
                     if (command is null && !expanded[i].StartsWith('-'))
                     {
                         if (scriptPath is null)
+                        {
                             scriptPath = expanded[i];
+                            // bash: everything after the script path is positional ($1..),
+                            // dash-words included (`bash s.sh -v -c x`), so option parsing ends.
+                            endOfOptions = true;
+                        }
                         else
                             scriptArgs = [..scriptArgs, expanded[i]];
                     }
@@ -189,10 +194,16 @@ public record ShellArgs(
     {
         var result = new List<string>(args.Length);
         bool past = false;
+        bool valueNext = false;
         foreach (var a in args)
         {
             if (past) { result.Add(a); continue; }
             if (a == "--") { past = true; result.Add(a); continue; }
+            if (valueNext) { valueNext = false; result.Add(a); continue; }
+            if (a == "--timeout") { valueNext = true; result.Add(a); continue; }
+            // The first non-dash word is the script path (or, after -c, the command string);
+            // everything after it is positional and must not be bundle-expanded.
+            if (a.Length == 0 || a[0] != '-') { past = true; result.Add(a); continue; }
 
             if (a.Length > 2 && a[0] == '-' && a[1] != '-' && a.Skip(1).All(c => KnownShortFlags.Contains(c)))
             {

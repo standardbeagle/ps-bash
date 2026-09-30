@@ -54,6 +54,10 @@ public class CommonParameterCollisionGuardTests
             // command: emitter single-quotes every dash literal (its own -v/-V/-p AND the inner
             // command's flags); the cmdlet scans options only up to the first operand.
             ["command"] = new(CollidingLetters),
+            // bash: the script's own args / args after `-c CMD NAME` are positional; C stays declared for direct calls.
+            ["bash"] = new(CollidingLetters),
+            // awk: -v/-F/-f parsed from Arguments (repeated -v crashed the declared string[] V); V stays for one direct -v.
+            ["awk"] = new(CollidingLetters),
             ["tee"] = new(CollidingLetters),
             ["cp"] = new(CollidingLetters),
             ["mv"] = new(CollidingLetters),

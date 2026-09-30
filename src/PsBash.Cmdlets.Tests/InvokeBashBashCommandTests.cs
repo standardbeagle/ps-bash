@@ -169,6 +169,22 @@ public class InvokeBashBashCommandTests : IClassFixture<SharedPwshFixture>
         Assert.Contains(lines, l => l.Trim() == "True");
     }
 
+    // ---- option zone: bash stops option parsing at the first operand ----
+    // Oracle (bash 5.2): `bash s.sh --version --help` runs the script with $1=--version $2=--help;
+    // `bash -c 'echo $0' zero --help` prints `zero`. Only flags BEFORE the script / command
+    // string are bash's own.
+
+    [Theory]
+    [InlineData(new[] { "--version" }, "--version", true)]
+    [InlineData(new[] { "-x", "--help" }, "--help", true)]
+    [InlineData(new[] { "s.sh", "--version" }, "--version", false)]
+    [InlineData(new[] { "-c", "echo hi", "zero", "--help" }, "--help", false)]
+    [InlineData(new[] { "--", "--version" }, "--version", false)]
+    public void OptionZoneHas_OnlyBeforeFirstOperand(string[] args, string flag, bool expected)
+    {
+        Assert.Equal(expected, InvokeBashBashCommand.OptionZoneHas(args, flag));
+    }
+
     // ---- End-to-end tests (skip when no ps-bash binary is available) ----
 
     [SkippableFact]

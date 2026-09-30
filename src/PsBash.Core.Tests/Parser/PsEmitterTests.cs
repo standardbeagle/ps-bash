@@ -782,7 +782,28 @@ public class PsEmitterTests
         // Batch 1 of the shared ordered parser. Adding a command here also means adding it to
         // CommonParameterCollisionGuardTests.EmitterForceQuoted (Cmdlets.Tests) — that map is
         // how the guard knows the emitter, not a decoy, protects the colliding letters.
-        Assert.Equal(new[] { "base64", "cat", "comm", "command", "cp", "env", "expand", "fold", "head", "join", "ln", "mkdir", "mv", "nl", "paste", "rm", "rmdir", "split", "strings", "tac", "tail", "tee", "time", "touch", "unexpand", "uniq", "wc", "xargs" }, PsEmitter.OrderedArgCommands.OrderBy(x => x).ToArray());
+        Assert.Equal(new[] { "awk", "base64", "bash", "cat", "comm", "command", "cp", "env", "expand", "fold", "head", "join", "ln", "mkdir", "mv", "nl", "paste", "rm", "rmdir", "split", "strings", "tac", "tail", "tee", "time", "touch", "unexpand", "uniq", "wc", "xargs" }, PsEmitter.OrderedArgCommands.OrderBy(x => x).ToArray());
+    }
+
+    // `bash` is on OrderedArgCommands: the script's own args (`bash s.sh -v -e -c x`) and the
+    // args after `-c CMD NAME` are positional parameters in bash, so none may become a
+    // PowerShell parameter token (`-c` is a declared parameter of Invoke-BashBash).
+    [Theory]
+    [InlineData("awk -v a=1 -v b=2 'BEGIN{print a+b}'", "Invoke-BashAwk '-v' a=1 '-v' b=2 'BEGIN{print a+b}'")]
+    [InlineData("awk -F: -va=1 '{print $1}' f", "Invoke-BashAwk '-F:' '-va=1' '{print $1}' f")]
+    [InlineData("awk -- '{print}' f", "Invoke-BashAwk '--' '{print}' f")]
+    public void Transpile_AwkFlags_AreSingleQuotedSoRepeatedDashVReachesTheCmdlet(string bash, string expected)
+    {
+        Assert.Equal(expected, PsEmitter.Transpile(bash));
+    }
+
+    [Theory]
+    [InlineData("bash s.sh -v -e -c x", "Invoke-BashBash s.sh '-v' '-e' '-c' x")]
+    [InlineData("bash -c 'echo hi' zero -d", "Invoke-BashBash '-c' 'echo hi' zero '-d'")]
+    [InlineData("bash -c 'echo \"$0\"' zero -Verbose", "Invoke-BashBash '-c' 'echo \"$0\"' zero '-Verbose'")]
+    public void Transpile_BashScriptArgs_AreSingleQuotedPositionals(string bash, string expected)
+    {
+        Assert.Equal(expected, PsEmitter.Transpile(bash));
     }
 
     [Theory]
@@ -3865,7 +3886,7 @@ public class PsEmitterTests
     {
         // awk in a pipeline gets Invoke-BashAwk; braces+comma still must not be expanded
         var result = PsEmitter.Transpile("echo \"a,b,c\" | awk -F, '{print $1, $3}'");
-        Assert.Equal("Invoke-BashEcho \"a,b,c\" | Invoke-BashAwk \"-F,\" '{print $1, $3}'", result);
+        Assert.Equal("Invoke-BashEcho \"a,b,c\" | Invoke-BashAwk '-F,' '{print $1, $3}'", result);
         Assert.DoesNotContain("@(", result);
     }
 
@@ -4093,7 +4114,7 @@ public class PsEmitterTests
         var result = PsEmitter.Transpile("echo test | awk -F, '{print $1, $3}'");
 
         Assert.Contains("Invoke-BashAwk", result);
-        Assert.Contains("\"-F,\"", result);
+        Assert.Contains("'-F,'", result);
     }
 
     [Fact]
@@ -4711,7 +4732,7 @@ public class PsEmitterTests
     public void Transpile_AwkWithColonDelimiter_QuotesColonFlag()
     {
         var result = PsEmitter.Transpile("cat file | awk -F: '{print}'");
-        Assert.Contains("Invoke-BashAwk \"-F:\"", result);
+        Assert.Contains("Invoke-BashAwk '-F:'", result);
     }
 
     [Fact]
@@ -4791,7 +4812,7 @@ public class PsEmitterTests
     public void Transpile_BashWithDashC_EmitsInvokeBashBash()
     {
         var result = PsEmitter.Transpile("bash -c \"echo hello\"");
-        Assert.Equal("Invoke-BashBash -c \"echo hello\"", result);
+        Assert.Equal("Invoke-BashBash '-c' \"echo hello\"", result);
     }
 
     [Fact]
@@ -4805,14 +4826,14 @@ public class PsEmitterTests
     public void Transpile_BashVersion_EmitsInvokeBashBash()
     {
         var result = PsEmitter.Transpile("bash --version");
-        Assert.Equal("Invoke-BashBash --version", result);
+        Assert.Equal("Invoke-BashBash '--version'", result);
     }
 
     [Fact]
     public void Transpile_BashPipeToGrep_EmitsMappedPipeline()
     {
         var result = PsEmitter.Transpile("bash -c \"echo hello\" | grep hello");
-        Assert.Equal("Invoke-BashBash -c \"echo hello\" | Invoke-BashGrep hello", result);
+        Assert.Equal("Invoke-BashBash '-c' \"echo hello\" | Invoke-BashGrep hello", result);
     }
 
     [Fact]
@@ -5334,6 +5355,24 @@ public class PsEmitterTests
             return;
         }
         Assert.Equal(expected, result);
+    }
+
+    // A glob word that also carries a bare `,` was emitted bare: PowerShell bound it as an
+    // ARRAY (`*.c,x` -> @('*.c','x')). Bash keeps the comma literal inside the pattern.
+    [Theory]
+    [InlineData("ls *.c,x", "Invoke-BashLs '*.c,x'")]
+    [InlineData("echo a*,b", "Invoke-BashEcho 'a*,b'")]
+    [InlineData("cat f*,g", "Invoke-BashCat 'f*,g'")]
+    [InlineData("cat f?,g[12]", "Invoke-BashCat 'f?,g[12]'")]
+    public void Transpile_GlobWordWithCommaLiteral_IsOneQuotedPattern(string bash, string expected)
+    {
+        Assert.Equal(expected, PsEmitter.Transpile(bash));
+    }
+
+    [Fact]
+    public void Transpile_GlobWordWithoutComma_StaysBare()
+    {
+        Assert.Equal("Invoke-BashLs *.c", PsEmitter.Transpile("ls *.c"));
     }
 
     [Fact]

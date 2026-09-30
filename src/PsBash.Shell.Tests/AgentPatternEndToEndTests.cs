@@ -58,6 +58,70 @@ public class AgentPatternEndToEndTests
     }
 
     [SkippableFact]
+    public async Task GlobWordWithComma_MatchesLiteralCommaAndKeepsWordWhenNoMatch()
+    {
+        // bash oracle: the comma is literal inside the glob; `ls f*,g` lists `fx,g`, and an
+        // unmatched pattern (nullglob off) reaches the command as the literal word.
+        var tempDir = Path.Combine(Path.GetTempPath(), "ps-bash-globc-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(tempDir);
+        try
+        {
+            File.WriteAllText(Path.Combine(tempDir, "fx,g"), "");
+            File.WriteAllText(Path.Combine(tempDir, "a.c,x"), "A\n");
+            File.WriteAllText(Path.Combine(tempDir, "b.c,x"), "B\n");
+            var (exitCode, stdout, stderr) = await RunShellAsync(
+                ["-c", "ls f*,g; cat *.c,x; ls nomatch*,zz"],
+                timeout: null,
+                env: null,
+                workingDirectory: tempDir);
+
+            var lines = stdout.Replace("\r", "").TrimEnd('\n').Split('\n');
+            Assert.Equal(new[] { "fx,g", "A", "B" }, lines);
+            Assert.Contains("nomatch*,zz", stderr);
+            Assert.NotEqual(0, exitCode);
+        }
+        finally
+        {
+            try { Directory.Delete(tempDir, recursive: true); } catch { }
+        }
+    }
+
+    [SkippableFact]
+    public async Task NestedBash_ScriptAndDashCArgs_ArePositionalVerbatim()
+    {
+        // bash oracle: `bash s.sh -v -e -c x` -> $1=-v $2=-e $3=-c $4=x;
+        // `bash -c 'echo "$0 $1"' zero -d` -> `zero -d`; `bash s.sh --version --help` -> both are $1 $2.
+        var tempDir = Path.Combine(Path.GetTempPath(), "ps-bash-bargs-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(tempDir);
+        try
+        {
+            File.WriteAllText(Path.Combine(tempDir, "s.sh"), "echo \"$1|$2|$3|$4\"\n");
+            // The nested `bash` cmdlet forwards its argv to a child ps-bash; drive that child
+            // (the launcher) directly with the same argv.
+            var lines = new List<string>();
+            foreach (var argv in new[]
+            {
+                new[] { "s.sh", "-v", "-e", "-c", "x" },
+                // ($0 in -c mode is a separate pre-existing gap: it emits MyInvocation, not the NAME.)
+                new[] { "-c", "echo \"$1 $2\"", "zero", "-d", "-x" },
+                new[] { "s.sh", "--version", "--help" },
+            })
+            {
+                var (exitCode, stdout, stderr) = await RunShellAsync(
+                    argv, timeout: null, env: null, workingDirectory: tempDir);
+                Assert.Equal("", stderr.Trim());
+                Assert.Equal(0, exitCode);
+                lines.AddRange(stdout.Replace("\r", "").TrimEnd('\n').Split('\n'));
+            }
+            Assert.Equal(new[] { "-v|-e|-c|x", "-d -x", "--version|--help||" }, lines);
+        }
+        finally
+        {
+            try { Directory.Delete(tempDir, recursive: true); } catch { }
+        }
+    }
+
+    [SkippableFact]
     public async Task Pwd_AfterHomeRelativeCd_PrintsDirectory()
     {
         var tempHome = Path.Combine(Path.GetTempPath(), "ps-bash-home-" + Guid.NewGuid().ToString("N"));
