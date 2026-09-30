@@ -36,7 +36,7 @@ path.
 
 It inspects the command name and dispatches to `EmitPassthrough`. Every mapped
 command uses the same `EmitPassthrough` path (a few force-quote specific colliding
-flags — `echo`, `find` — but still via `EmitPassthrough`).
+flags — `find` only since echo moved to the ordered-arg set — but still via `EmitPassthrough`).
 
 **Source of truth:** the `switch (name)` in `PsEmitter.TryEmitMappedCommand`
 (**99 command-name cases**). The table below is the complete list as of this
@@ -232,6 +232,10 @@ and the args after `-c CMD NAME` are positional in bash, so they arrive single-q
 cmdlet recognises `--help`/`--version` only in bash's option zone (before the script /
 command string; `InvokeBashBashCommand.OptionZoneHas`) and forwards the rest verbatim to a
 child ps-bash, whose launcher (`ShellArgs.Parse`) ends option parsing at the script path.
+`echo`, `printf`, `test` and `ls` are on the set as well (batch 5): the three builtins keep bash's OWN option
+rules in their scanners (echo: leading `-[neE]+` run only; printf: `-v VAR` / `--`; test: no options at all), and
+the emitter no longer special-cases echo (the old `-e`/`-E`/`--` force-quote set is gone — `find`'s infix
+`-o`/`-a` is the only force-quote left).
 
 ---
 
@@ -343,6 +347,16 @@ and friends resolve — bash fills `BASH_REMATCH` on a successful `=~` and clear
 failure. The parser reads the whole right-hand side as a raw regex operand BEFORE the
 grouping-paren branch, so a pattern that STARTS with `(` (`(a)(b)`) is not mistaken
 for a test grouping.
+
+### `[ … ]` (single bracket) vs the `test` cmdlet
+
+`[ ]` is translated natively (`TranslateTestCondition`) for the common shapes, but bash picks a 3-word
+list's shape from the MIDDLE word, so `arity3` (`A op B` with `=`, `==`, `!=`, `-eq…-ge`, `-nt -ot -ef`, `-a`,
+`-o`) is decided before any word-0 heuristic (negation, unary file test): `[ -f = -f ]` compares two strings,
+`[ -z -a -z ]` is the AND of two non-empty words. A single-bracket list the translator does not model
+(`\( … \)` grouping, `-o NAME`, `-v`, any unknown unary) runs `Invoke-BashTest` with the words verbatim through
+`PsBuild.ExitCodeTest` instead of degrading to `$false` plus a diagnostic; `[[ ]]` keeps the diagnostic (the
+cmdlet has no `[[` grammar).
 
 ### `set`
 

@@ -90,7 +90,7 @@ public class PsEmitterTests
 
         var result = PsEmitter.Emit(cmd);
 
-        Assert.Equal("Invoke-BashLs -la /tmp", result);
+        Assert.Equal("Invoke-BashLs '-la' /tmp", result);
     }
 
     [Fact]
@@ -782,7 +782,7 @@ public class PsEmitterTests
         // Batch 1 of the shared ordered parser. Adding a command here also means adding it to
         // CommonParameterCollisionGuardTests.EmitterForceQuoted (Cmdlets.Tests) — that map is
         // how the guard knows the emitter, not a decoy, protects the colliding letters.
-        Assert.Equal(new[] { "awk", "base64", "bash", "cat", "comm", "command", "cp", "cut", "echo", "env", "expand", "file", "fold", "head", "join", "ln", "mkdir", "mv", "nl", "paste", "printf", "rm", "rmdir", "sort", "split", "stat", "strings", "tac", "tail", "tee", "test", "time", "touch", "unexpand", "uniq", "wc", "xargs" }, PsEmitter.OrderedArgCommands.OrderBy(x => x).ToArray());
+        Assert.Equal(new[] { "awk", "base64", "bash", "cat", "comm", "command", "cp", "cut", "echo", "env", "expand", "file", "fold", "head", "join", "ln", "ls", "mkdir", "mv", "nl", "paste", "printf", "rm", "rmdir", "sort", "split", "stat", "strings", "tac", "tail", "tee", "test", "time", "touch", "unexpand", "uniq", "wc", "xargs" }, PsEmitter.OrderedArgCommands.OrderBy(x => x).ToArray());
     }
 
     // `bash` is on OrderedArgCommands: the script's own args (`bash s.sh -v -e -c x`) and the
@@ -5543,7 +5543,7 @@ public class PsEmitterTests
     [Theory]
     // A word made only of literals stays a bare command name, as in bash.
     [InlineData("echo hi", "Invoke-BashEcho hi")]
-    [InlineData("ls -la", "Invoke-BashLs -la")]
+    [InlineData("ls -la", "Invoke-BashLs '-la'")]
     public void Transpile_LiteralCommandWord_StaysBareName(string bash, string expected)
         => Assert.Equal(expected, PsEmitter.Transpile(bash));
 
