@@ -1,4 +1,5 @@
 using System.Management.Automation;
+using PsBash.Cmdlets.Args;
 
 namespace PsBash.Cmdlets;
 
@@ -69,31 +70,45 @@ public sealed class InvokeBashTreeCommand : PSCmdlet
     [Parameter(ValueFromRemainingArguments = true)]
     public string[]? Arguments { get; set; }
 
-    // Valid GNU tree flags not implemented by ps-bash. Implemented flags
-    // (-a/-d/-I/-L/--dirsfirst/--noreport/-f) are NOT in this set.
-    // Note: unrecognized short flags that hit the bundle decoder's default
-    // case are passed through to operands and caught here.
-    private static readonly HashSet<string> TreeValidButUnsupported =
-        new(StringComparer.Ordinal)
+    private const string OptAll = "all", OptDirsOnly = "dirs-only", OptLevel = "level", OptIgnore = "ignore",
+        OptFullPath = "full-path", OptDirsFirst = "dirsfirst", OptNoReport = "noreport", OptNoOp = "noop";
+
+    /// <summary>tree(1) 2.1 options ps-bash refuses (exit 2). tree is NOT getopt_long: long options
+    /// are exact names only, so there is no abbreviation.</summary>
+    private static readonly string[] TreeValidButUnsupported =
+    {
+        "-l", "-x", "-P", "-R", "-q", "-N", "-Q", "-p", "-u", "-g", "-s", "-h", "-D", "-F", "-v", "-t", "-c",
+        "-U", "-r", "-i", "-A", "-S", "-C", "-X", "-J", "-H", "-T", "-o",
+        "--prune", "--sort", "--charset", "--fromfile", "--fromtabfile", "--gitignore", "--gitfile",
+        "--ignore-case", "--matchdirs", "--metafirst", "--info", "--filelimit", "--si", "--du", "--timefmt",
+        "--inodes", "--device", "--filesfirst", "--nolinks", "--hintro", "--houtro",
+    };
+
+    /// <summary>
+    /// tree's option surface. Implemented: -a -d -f -L N -I PAT (repeatable, <c>|</c> alternatives)
+    /// --dirsfirst --noreport; <c>-n</c> (no colour) is an accepted no-op since colour is never on.
+    /// </summary>
+    private static readonly OptSpecSet TreeSpec = new(
+        new[]
         {
-            "--prune",
-            "--sort",
-            "--noreport",
-            "--charset",
-            "--fromfile",
-            "--gitignore",
-            "-C",
-            "-J",
-            "-X",
-            "-F",
-            "-p",
-        };
+            new OptSpec(OptAll, 'a', null),
+            new OptSpec(OptDirsOnly, 'd', null),
+            new OptSpec(OptFullPath, 'f', null),
+            new OptSpec(OptLevel, 'L', null, OptKind.Value),
+            new OptSpec(OptIgnore, 'I', null, OptKind.Value),
+            new OptSpec(OptNoOp, 'n', null),
+            new OptSpec(OptDirsFirst, '\0', "dirsfirst"),
+            new OptSpec(OptNoReport, '\0', "noreport"),
+        },
+        TreeValidButUnsupported,
+        allowAbbrev: false,
+        gnuInfoOptions: true);
 
     private int _dirCount;
     private int _fileCount;
     private string _resolvedRoot = string.Empty;
     private int _maxDepth = int.MaxValue;
-    private string? _excludePattern;
+    private List<string> _excludePatterns = new();
     private bool _showAll;
     private bool _dirsOnly;
     private bool _dirsFirst;
@@ -101,117 +116,130 @@ public sealed class InvokeBashTreeCommand : PSCmdlet
     private bool _fullPath;
     private string _normTarget = ".";
 
+    /// <summary>Pure argv scan (unit-test seam).</summary>
+    internal static ParsedArgs ScanArgs(string[] args) => ArgParser.Parse(args, TreeSpec);
+
+    internal sealed class TreeArgs
+    {
+        public ParsedArgs Parsed = null!;
+        public bool ShowAll, DirsOnly, FullPath, DirsFirst, NoReport;
+        public int MaxDepth = int.MaxValue;
+        public List<string> Excludes = new();
+        public List<string> Operands = new();
+        public string? Error;
+    }
+
+    /// <summary>
+    /// Scan + validate. Fixes over the old hand scan: an unknown option or a dangling <c>-L</c>/<c>-I</c>
+    /// was a directory operand / silently ignored, <c>-L abc</c> / <c>-L 0</c> were ignored (tree: "Invalid
+    /// level, must be greater than 0.", exit 1), <c>-I</c> could not be joined (<c>-I*.o</c>) or repeated
+    /// or use <c>|</c> alternatives, <c>--</c> was not honoured, every operand past the first was dropped.
+    /// </summary>
+    internal static TreeArgs Plan(string[] args)
+    {
+        var p = new TreeArgs { Parsed = ScanArgs(args) };
+        p.Operands = p.Parsed.Operands();
+        if (p.Parsed.HasError) return p;
+        if (p.Parsed.Has(OptSpecSet.HelpId) || p.Parsed.Has(OptSpecSet.VersionId)) return p;
+
+        foreach (var tok in p.Parsed.Tokens)
+        {
+            if (tok.Kind != ArgTokKind.Option) continue;
+            switch (tok.OptId)
+            {
+                case OptAll: p.ShowAll = true; break;
+                case OptDirsOnly: p.DirsOnly = true; break;
+                case OptFullPath: p.FullPath = true; break;
+                case OptDirsFirst: p.DirsFirst = true; break;
+                case OptNoReport: p.NoReport = true; break;
+                case OptIgnore: p.Excludes.AddRange(tok.Value!.Split('|')); break;
+                case OptLevel:
+                    {
+                        string v = tok.Value!;
+                        bool digits = v.Length > 0;
+                        foreach (char ch in v) if (ch < '0' || ch > '9') { digits = false; break; }
+                        int level = digits ? (int.TryParse(v, out int n) ? n : int.MaxValue) : 0;
+                        if (level < 1) { p.Error = "tree: Invalid level, must be greater than 0."; return p; }
+                        p.MaxDepth = level;
+                        break;
+                    }
+            }
+        }
+        return p;
+    }
+
     protected override void EndProcessing()
     {
-        // Re-inject decoy-bound classifier flags so TryWriteOperandOptionError fires
-        // (bare -C/-p never reach Arguments — the binder eats/crashes them).
-        var args = BashRuntime.PrependDecoys(Arguments, (C.IsPresent, "-C"), (P.IsPresent, "-p"));
+        // Decoy-bound flags (bare -d/-a/-C/-p/-I never reach Arguments) are re-injected; the
+        // transpiler single-quotes every flag so only DIRECT calls bind them.
+        var raw = Arguments ?? Array.Empty<string>();
+        var pre = new List<string>();
+        if (D.IsPresent) pre.Add("-d");
+        if (A.IsPresent) pre.Add("-a");
+        if (C.IsPresent) pre.Add("-C");
+        if (P.IsPresent) pre.Add("-p");
+        if (I is not null) { pre.Add("-I"); pre.Add(I); }
+        var args = pre.Count == 0 ? raw : pre.Concat(raw).ToArray();
 
         FileSystemHelpers.SetLastExitCode(this, 0);
-        if (FileSystemHelpers.TryHandleVersion(this, "tree", args)) return;
-        if (Array.IndexOf(args, "--help") >= 0)
+        var plan = Plan(args);
+        if (FileSystemHelpers.TryWriteParseError(this, "tree", plan.Parsed)) return;
+        if (FileSystemHelpers.TryHandleInfoOptions(this, "tree", plan.Parsed)) return;
+        if (plan.Error is { } planError)
         {
-            foreach (var line in InvokeCommand.InvokeScript(
-                         "param($n) Show-BashHelp $n", "tree"))
-            {
-                WriteObject(line);
-            }
+            FileSystemHelpers.WriteBashError(this, planError);
+            FileSystemHelpers.SetLastExitCode(this, 1);
             return;
         }
 
-        _showAll = A.IsPresent;
-        _dirsOnly = D.IsPresent;
-        _excludePattern = I;
-        _dirsFirst = false;
-        _maxDepth = int.MaxValue;
+        _showAll = plan.ShowAll;
+        _dirsOnly = plan.DirsOnly;
+        _excludePatterns = plan.Excludes;
+        _dirsFirst = plan.DirsFirst;
+        _noReport = plan.NoReport;
+        _fullPath = plan.FullPath;
+        _maxDepth = plan.MaxDepth;
         _dirCount = 0;
         _fileCount = 0;
 
-        var operands = new List<string>();
-
-        // Manual scan, matching the oracle's flag parsing order: -L (joined or
-        // separated), -I (separated), --dirsfirst, then short-bundle decode of
-        // -a / -d, then operand.
-        for (int i = 0; i < args.Length; i++)
-        {
-            var arg = args[i];
-
-            // -LN joined form
-            if (arg.Length > 2 && arg.StartsWith("-L", StringComparison.Ordinal))
-            {
-                var rest = arg.Substring(2);
-                if (int.TryParse(rest, out var depth))
-                {
-                    _maxDepth = depth;
-                    continue;
-                }
-            }
-            if (arg == "-L" && (i + 1) < args.Length)
-            {
-                if (int.TryParse(args[i + 1], out var depth))
-                {
-                    _maxDepth = depth;
-                }
-                i++;
-                continue;
-            }
-            if (arg == "-I" && (i + 1) < args.Length)
-            {
-                _excludePattern = args[i + 1];
-                i++;
-                continue;
-            }
-            if (arg == "--dirsfirst")
-            {
-                _dirsFirst = true;
-                continue;
-            }
-            if (arg == "--noreport")
-            {
-                _noReport = true;
-                continue;
-            }
-            // -f: print the full (target-relative) path for each entry. No
-            // common-parameter collision; handled before the bundle decoder.
-            if (arg == "-f")
-            {
-                _fullPath = true;
-                continue;
-            }
-
-            // Short-bundle decoder for -a / -d that arrived via the catch-all
-            // (e.g. PowerShell may forward "-ad" as a single token, or the
-            // user may write -a / -d explicitly when binder didn't claim).
-            if (arg.Length > 1 && arg[0] == '-' && !arg.StartsWith("--", StringComparison.Ordinal))
-            {
-                bool recognized = true;
-                foreach (var ch in arg.Substring(1))
-                {
-                    switch (ch)
-                    {
-                        case 'a': _showAll = true; break;
-                        case 'd': _dirsOnly = true; break;
-                        default: recognized = false; break;
-                    }
-                }
-                if (recognized)
-                {
-                    continue;
-                }
-            }
-
-            operands.Add(arg);
-        }
-
-        if (FileSystemHelpers.TryWriteOperandOptionError(
-                this, "tree", operands, TreeValidButUnsupported)) return;
-
+        var operands = plan.Operands;
         if (operands.Count == 0)
         {
             operands.Add(".");
         }
 
-        string target = operands[0];
+        foreach (var target in operands)
+        {
+            WriteRoot(target);
+        }
+
+        WriteSummary();
+    }
+
+    private void WriteSummary()
+    {
+        // Summary line — suppressed by --noreport.
+        if (_noReport) return;
+
+        string dirLabel = _dirCount == 1 ? "directory" : "directories";
+        string fileLabel = _fileCount == 1 ? "file" : "files";
+        string summaryText = _dirsOnly
+            ? $"{_dirCount} {dirLabel}"
+            : $"{_dirCount} {dirLabel}, {_fileCount} {fileLabel}";
+
+        var summaryObj = new PSObject();
+        summaryObj.TypeNames.Insert(0, "PsBash.TreeEntry");
+        summaryObj.Properties.Add(new PSNoteProperty("Name", ""));
+        summaryObj.Properties.Add(new PSNoteProperty("Path", ""));
+        summaryObj.Properties.Add(new PSNoteProperty("Depth", 0));
+        summaryObj.Properties.Add(new PSNoteProperty("IsDirectory", false));
+        summaryObj.Properties.Add(new PSNoteProperty("TreePrefix", ""));
+        summaryObj.Properties.Add(new PSNoteProperty("BashText", summaryText));
+        WriteObject(summaryObj);
+    }
+
+    private void WriteRoot(string target)
+    {
         _normTarget = target.Replace('\\', '/').TrimEnd('/');
         if (_normTarget.Length == 0) _normTarget = "/";
 
@@ -266,25 +294,15 @@ public sealed class InvokeBashTreeCommand : PSCmdlet
         {
             WriteTreeLevel(resolved, currentDepth: 1, prefix: "");
         }
+    }
 
-        // Summary line — suppressed by --noreport.
-        if (_noReport) return;
-
-        string dirLabel = _dirCount == 1 ? "directory" : "directories";
-        string fileLabel = _fileCount == 1 ? "file" : "files";
-        string summaryText = _dirsOnly
-            ? $"{_dirCount} {dirLabel}"
-            : $"{_dirCount} {dirLabel}, {_fileCount} {fileLabel}";
-
-        var summaryObj = new PSObject();
-        summaryObj.TypeNames.Insert(0, "PsBash.TreeEntry");
-        summaryObj.Properties.Add(new PSNoteProperty("Name", ""));
-        summaryObj.Properties.Add(new PSNoteProperty("Path", ""));
-        summaryObj.Properties.Add(new PSNoteProperty("Depth", 0));
-        summaryObj.Properties.Add(new PSNoteProperty("IsDirectory", false));
-        summaryObj.Properties.Add(new PSNoteProperty("TreePrefix", ""));
-        summaryObj.Properties.Add(new PSNoteProperty("BashText", summaryText));
-        WriteObject(summaryObj);
+    private bool IsExcluded(string name)
+    {
+        foreach (var pat in _excludePatterns)
+        {
+            if (WildcardMatch(name, pat)) return true;
+        }
+        return false;
     }
 
     private void WriteTreeLevel(string dirPath, int currentDepth, string prefix)
@@ -310,7 +328,7 @@ public sealed class InvokeBashTreeCommand : PSCmdlet
         foreach (var it in items)
         {
             if (!_showAll && it.Name.StartsWith(".", StringComparison.Ordinal)) continue;
-            if (_excludePattern != null && WildcardMatch(it.Name, _excludePattern)) continue;
+            if (IsExcluded(it.Name)) continue;
             if (_dirsOnly && it is not DirectoryInfo) continue;
             filtered.Add(it);
         }

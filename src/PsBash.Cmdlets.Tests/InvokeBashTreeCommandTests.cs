@@ -235,7 +235,7 @@ public class InvokeBashTreeCommandTests : IClassFixture<SharedPwshFixture>, IDis
     [Fact]
     public void Tree_UnrecognizedOption_WritesError()
     {
-        // Unrecognized option-like token: classified as "unrecognized option", exit 2.
+        // Unknown long option: usage error, exit 1 (tree exits 1; valid-but-unsupported is exit 2).
         var pwsh = _fixture.AcquireFresh();
         pwsh.AddScript("$ErrorActionPreference='Continue'").Invoke();
         pwsh.Commands.Clear();
@@ -243,7 +243,7 @@ public class InvokeBashTreeCommandTests : IClassFixture<SharedPwshFixture>, IDis
             "Invoke-BashTree --bogus 2>$null; $LASTEXITCODE").Invoke();
         pwsh.Commands.Clear();
         Assert.Single(result);
-        Assert.Equal(2, (int)result[0].BaseObject);
+        Assert.Equal(1, (int)result[0].BaseObject);
     }
 
     [Fact]
