@@ -373,9 +373,9 @@ public sealed class InvokeBashXargsCommand : PSCmdlet
         {
             var text = BashRuntime.GetBashText(item);
 
-            if (replaceMode)
+            if (replaceMode && whitespaceSplit)
             {
-                // Whole-line mode: every line is one item and blanks do not
+                // Whole-line mode (no -0/-d): every line is one item and blanks do not
                 // split it. GNU strips LEADING blanks only (trailing ones are
                 // data) and still honors quotes and backslash escapes.
                 foreach (var rawLine in text.Split('\n'))
