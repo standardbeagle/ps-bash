@@ -782,7 +782,7 @@ public class PsEmitterTests
         // Batch 1 of the shared ordered parser. Adding a command here also means adding it to
         // CommonParameterCollisionGuardTests.EmitterForceQuoted (Cmdlets.Tests) — that map is
         // how the guard knows the emitter, not a decoy, protects the colliding letters.
-        Assert.Equal(new[] { "awk", "base64", "bash", "cat", "comm", "command", "cp", "cut", "env", "expand", "file", "fold", "head", "join", "ln", "mkdir", "mv", "nl", "paste", "rm", "rmdir", "sort", "split", "stat", "strings", "tac", "tail", "tee", "time", "touch", "unexpand", "uniq", "wc", "xargs" }, PsEmitter.OrderedArgCommands.OrderBy(x => x).ToArray());
+        Assert.Equal(new[] { "awk", "base64", "bash", "cat", "comm", "command", "cp", "cut", "echo", "env", "expand", "file", "fold", "head", "join", "ln", "mkdir", "mv", "nl", "paste", "printf", "rm", "rmdir", "sort", "split", "stat", "strings", "tac", "tail", "tee", "test", "time", "touch", "unexpand", "uniq", "wc", "xargs" }, PsEmitter.OrderedArgCommands.OrderBy(x => x).ToArray());
     }
 
     // `bash` is on OrderedArgCommands: the script's own args (`bash s.sh -v -e -c x`) and the
@@ -1330,7 +1330,7 @@ public class PsEmitterTests
     {
         var result = PsEmitter.Transpile("test -f file || echo missing");
 
-        Assert.Equal("Invoke-BashTest -f file || Invoke-BashEcho missing", result);
+        Assert.Equal("Invoke-BashTest '-f' file || Invoke-BashEcho missing", result);
     }
 
     [Fact]
@@ -1358,7 +1358,7 @@ public class PsEmitterTests
 
         var result = PsEmitter.Emit(andOr);
 
-        Assert.Equal("Invoke-BashTest -f file || Invoke-BashEcho missing", result);
+        Assert.Equal("Invoke-BashTest '-f' file || Invoke-BashEcho missing", result);
     }
 
     [Fact]
@@ -2273,18 +2273,26 @@ public class PsEmitterTests
     }
 
     [Fact]
-    public void Transpile_UnsupportedTestOperator_DegradesToFalsePlusDiagnostic()
+    public void Transpile_ShellOptionTest_RunsTheTestCmdlet()
     {
-        // `[ -o PROMPT_SUBST ]` (shell-option test) is not implemented. The old
-        // fallback joined the operands with spaces and emitted `'-o' 'PROMPT_SUBST'`
-        // — two adjacent values, never valid PowerShell — so one such line broke the
-        // parse of the ENTIRE file. Wrong-but-visible beats unparseable.
+        // `[ -o PROMPT_SUBST ]` (shell-option test) has no PowerShell equivalent. The old fallback
+        // joined the operands with spaces and emitted `'-o' 'PROMPT_SUBST'` — two adjacent values,
+        // never valid PowerShell — so one such line broke the parse of the ENTIRE file. A `[ ]` the
+        // translator does not model now runs the `test` cmdlet (bash's own argument grammar).
         var result = PsEmitter.Transpile("[ -o PROMPT_SUBST ] && echo on");
 
-        Assert.Contains("unsupported test operator", result);
-        Assert.DoesNotContain("'-o' 'PROMPT_SUBST'", result);
+        Assert.Contains("Invoke-BashTest '-o' PROMPT_SUBST", result);
+        Assert.DoesNotContain("unsupported test operator", result);
     }
 
+    [Theory]
+    [InlineData("[ -f = -f ]", "'-f' -eq '-f'")]            // arity 3: the middle operator wins
+    public void Transpile_BracketArity3_OperatorInTheMiddleWins(string script, string expected)
+        => Assert.Contains(expected, PsEmitter.Transpile(script));
+
+    [Fact]
+    public void Transpile_BracketParens_RunTheTestCmdlet()
+        => Assert.Contains("Invoke-BashTest `( '-n' x `)", PsEmitter.Transpile(@"[ \( -n x \) -a -n y ]"));
     [Fact]
     public void Transpile_SingleOperandTest_StillTestsNonEmpty()
     {
